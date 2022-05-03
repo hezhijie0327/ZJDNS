@@ -56,20 +56,20 @@ function CleanupExpiredImage() {
 }
 
 ## Process
-# Call GetLatestImage
-GetLatestImage
-# Call CleanupCurrentContainer
-CleanupCurrentContainer
 # Call SetProxyServer
 #SetProxyServer
 # Call UnsetProxyServer
 UnsetProxyServer
+# Call GetLatestImage
+GetLatestImage
 # Call UpdateGeoIPSiteRule
 UpdateGeoIPSiteRule
 # Call UpdateGFWList2AGHRule
 UpdateGFWList2AGHRule
 # Call UpdateCNIPDBRule
 UpdateCNIPDBRule
+# Call CleanupCurrentContainer
+CleanupCurrentContainer
 # Call CreateNewContainer
 CreateNewContainer
 # Call CleanupExpiredImage
