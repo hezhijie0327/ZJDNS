@@ -37,6 +37,10 @@ function UpdateGFWList2AGHRule() {
     curl -s --connect-timeout 15 "https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/blacklist_full.txt" > "${DOCKER_PATH}/config/GFWList2AGH_blacklist_full.txt"
     curl -s --connect-timeout 15 "https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/whitelist_full.txt" > "${DOCKER_PATH}/config/GFWList2AGH_whitelist_full.txt"
 }
+# Update CNIPDB Rule
+function UpdateCNIPDBRule() {
+    curl -s --connect-timeout 15 "https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb_combine.txt" > "${DOCKER_PATH}/config/CNIPDB.txt"
+}
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
@@ -64,6 +68,8 @@ UnsetProxyServer
 UpdateGeoIPSiteRule
 # Call UpdateGFWList2AGHRule
 UpdateGFWList2AGHRule
+# Call UpdateCNIPDBRule
+UpdateCNIPDBRule
 # Call CreateNewContainer
 CreateNewContainer
 # Call CleanupExpiredImage
