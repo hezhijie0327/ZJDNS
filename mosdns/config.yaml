@@ -1,0 +1,256 @@
+log:
+  level: info
+plugin:
+  - tag: main_server
+    type: server
+    args:
+      entry:
+        - _enable_response_padding
+        - _pad_query
+        - set_ecs
+        - set_edns0_bufsize
+        - main_sequence
+        - secondary_sequence
+        - modify_ttl
+        - store_response_to_memory
+      server:
+        - protocol: tcp
+          addr: 127.0.0.1:5353
+        - protocol: udp
+          addr: 127.0.0.1:5353
+  - tag: main_sequence
+    type: sequence
+    args:
+      exec:
+        - if:
+            - '!_query_is_common'
+            - query_is_local_domain
+          exec:
+            - forward_query_to_local_dns
+            - _return
+        - if:
+            - query_is_not_local_domain
+          exec:
+            - forward_query_to_remote_dns
+            - _return
+        - primary:
+          - forward_query_to_local_dns
+          - if:
+              - '!response_is_local_cname_ip'
+            exec:
+              - _drop_response
+          secondary:
+            - forward_query_to_remote_dns
+          always_standby: true
+          fast_fallback: 150
+  - tag: secondary_sequence
+    type: sequence
+    args:
+      exec:
+        - if:
+            - '_response_rcode_success'
+          exec:
+            - _return
+          else_exec:
+            - _drop_response
+        - primary:
+            - forward_query_to_backup_dns
+          secondary:
+            - forward_query_to_local_dns
+          always_standby: true
+          fast_fallback: 450
+  - tag: modify_ttl
+    type: ttl
+    args:
+      maximum_ttl: 86400
+      minimal_ttl: 10
+  - tag: set_ecs
+    type: ecs
+    args:
+      auto: true
+  - tag: set_edns0_bufsize
+    type: bufsize
+    args:
+      size: 1232
+  - tag: store_response_to_memory
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_reply_ttl: 30
+      lazy_cache_ttl: 86400
+      size: 65536
+  - tag: forward_query_to_backup_dns
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+          - forward_to_cloudflaredns_doh
+          - forward_to_cloudflaredns_dot
+  - tag: forward_query_to_local_dns
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+          - forward_to_alidns_doh
+          - forward_to_alidns_dot
+          - forward_to_dnspod_doh
+          - forward_to_dnspod_dot
+  - tag: forward_query_to_remote_dns
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+          - forward_to_googledns_doh
+          - forward_to_googledns_dot
+          - forward_to_opendns_doh
+          - forward_to_opendns_dot
+  - tag: forward_to_alidns_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.alidns.com:443/dns-query'
+          dial_addr: '223.5.5.5:443'
+          enable_pipeline: false
+          idle_timeout: 30
+        - addr: 'https://dns.alidns.com:443/dns-query'
+          dial_addr: '223.6.6.6:443'
+          enable_pipeline: false
+          idle_timeout: 30
+  - tag: forward_to_alidns_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.alidns.com:853'
+          dial_addr: '223.5.5.5:853'
+          enable_pipeline: true
+          idle_timeout: 10
+        - addr: 'tls://dns.alidns.com:853'
+          dial_addr: '223.6.6.6:853'
+          enable_pipeline: true
+          idle_timeout: 10
+  - tag: forward_to_cloudflaredns_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://cloudflare-dns.com:443/dns-query'
+          dial_addr: '1.0.0.1:443'
+          enable_pipeline: false
+          idle_timeout: 30
+        - addr: 'https://cloudflare-dns.com:443/dns-query'
+          dial_addr: '1.1.1.1:443'
+          enable_pipeline: false
+          idle_timeout: 30
+  - tag: forward_to_cloudflaredns_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://cloudflare-dns.com:853'
+          dial_addr: '1.0.0.1:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          socks5: '127.0.0.1:7890'
+        - addr: 'tls://cloudflare-dns.com:853'
+          dial_addr: '1.1.1.1:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          socks5: '127.0.0.1:7890'
+  - tag: forward_to_dnspod_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.pub:443/dns-query'
+          dial_addr: '1.12.12.12:443'
+          enable_pipeline: false
+          idle_timeout: 30
+        - addr: 'https://doh.pub:443/dns-query'
+          dial_addr: '120.53.53.53:443'
+          enable_pipeline: false
+          idle_timeout: 30
+  - tag: forward_to_dnspod_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.pub:853'
+          dial_addr: '1.12.12.12:853'
+          enable_pipeline: true
+          idle_timeout: 10
+        - addr: 'tls://dot.pub:853'
+          dial_addr: '120.53.53.53:853'
+          enable_pipeline: true
+          idle_timeout: 10
+  - tag: forward_to_googledns_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.google:443/dns-query'
+          dial_addr: '8.8.4.4:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          socks5: '127.0.0.1:7890'
+        - addr: 'https://dns.google:443/dns-query'
+          dial_addr: '8.8.8.8:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          socks5: '127.0.0.1:7890'
+  - tag: forward_to_googledns_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.google:853'
+          dial_addr: '8.8.4.4:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          socks5: '127.0.0.1:7890'
+        - addr: 'tls://dns.google:853'
+          dial_addr: '8.8.8.8:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          socks5: '127.0.0.1:7890'
+  - tag: forward_to_opendns_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.opendns.com:443/dns-query'
+          dial_addr: '208.67.220.220'
+          enable_pipeline: false
+          idle_timeout: 30
+          socks5: '127.0.0.1:7890'
+        - addr: 'https://dns.opendns.com:443/dns-query'
+          dial_addr: '208.67.222.222'
+          enable_pipeline: false
+          idle_timeout: 30
+          socks5: '127.0.0.1:7890'
+  - tag: forward_to_opendns_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.opendns.com:853'
+          dial_addr: '208.67.220.220:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          socks5: '127.0.0.1:7890'
+        - addr: 'tls://dns.opendns.com:853'
+          dial_addr: '208.67.222.222:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          socks5: '127.0.0.1:7890'
+  - tag: query_is_local_domain
+    type: query_matcher
+    args:
+      domain:
+        - 'ext:./geosite.dat:cn'
+        - 'ext:./GFWList2AGH_whitelist_full.txt'
+  - tag: query_is_not_local_domain
+    type: query_matcher
+    args:
+      domain:
+        - 'ext:./geosite.dat:geolocation-!cn'
+        - 'ext:./GFWList2AGH_blacklist_full.txt'
+  - tag: response_is_local_cname_ip
+    type: response_matcher
+    args:
+      cname:
+        - 'ext:./geosite.dat:cn'
+        - 'ext:./GFWList2AGH_whitelist_full.txt'
+      ip:
+        - 'ext:./geoip.dat:cn'
