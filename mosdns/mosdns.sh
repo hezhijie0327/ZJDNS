@@ -22,6 +22,11 @@ function SetProxyServer() {
     export http_proxy="http://127.0.0.1:7890"
     export https_proxy="http://127.0.0.1:7890"
 }
+# Unset Proxy Server
+function UnsetProxyServer() {
+    export http_proxy=""
+    export https_proxy=""
+}
 # Update GeoIP & GeoSite Rule
 function UpdateGeoIPSiteRule() {
     curl -s --connect-timeout 15 "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat" > "${DOCKER_PATH}/config/geoip.dat"
@@ -52,7 +57,9 @@ GetLatestImage
 # Call CleanupCurrentContainer
 CleanupCurrentContainer
 # Call SetProxyServer
-SetProxyServer
+#SetProxyServer
+# Call UnsetProxyServer
+UnsetProxyServer
 # Call UpdateGeoIPSiteRule
 UpdateGeoIPSiteRule
 # Call UpdateGFWList2AGHRule
