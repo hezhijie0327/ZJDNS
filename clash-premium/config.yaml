@@ -1,0 +1,5 @@
+log-level: info
+mixed-port: 7890
+mode: global
+proxies:
+proxy-groups:
