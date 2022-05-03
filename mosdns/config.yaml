@@ -55,6 +55,10 @@ plugin:
             - _drop_response
         - primary:
             - forward_query_to_backup_dns
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_query_to_local_dns
           always_standby: true
