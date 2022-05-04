@@ -51,7 +51,7 @@ plugin:
           secondary:
             - forward_query_to_remote_dns
           always_standby: true
-          fast_fallback: 200
+          fast_fallback: 250
   - tag: secondary_sequence
     type: sequence
     args:
