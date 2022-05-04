@@ -10,7 +10,6 @@ plugin:
         - set_ecs
         - set_edns0_bufsize
         - main_sequence
-        - modify_response
         - modify_ttl
         - store_response_to_memory
       server:
@@ -30,6 +29,7 @@ plugin:
                 - _drop_response
           secondary:
             - forward_query_to_wan_dns
+            - modify_response
           always_standby: true
           fast_fallback: 500
   - tag: modify_response
