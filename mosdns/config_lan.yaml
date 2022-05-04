@@ -74,28 +74,28 @@ plugin:
     args:
       exec:
         - load_balance:
-          - forward_to_lan_dns53
+            - forward_to_lan_dns53
   - tag: forward_query_to_wan_dns
     type: sequence
     args:
       exec:
         - load_balance:
-          - forward_to_alidns
-          - forward_to_dnspod
+            - forward_to_alidns
+            - forward_to_dnspod
   - tag: forward_to_alidns
     type: sequence
     args:
       exec:
         - parallel:
-          - forward_to_alidns_doh
-          - forward_to_alidns_dot
+            - forward_to_alidns_doh
+            - forward_to_alidns_dot
   - tag: forward_to_dnspod
     type: sequence
     args:
       exec:
         - parallel:
-          - forward_to_dnspod_doh
-          - forward_to_dnspod_dot
+            - forward_to_dnspod_doh
+            - forward_to_dnspod_dot
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
