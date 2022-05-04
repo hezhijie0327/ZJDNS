@@ -11,6 +11,7 @@ plugin:
         - set_edns0_bufsize
         - main_sequence
         - secondary_sequence
+        - final_sequence
         - modify_ttl
         - store_response_to_memory
       server:
@@ -69,12 +70,23 @@ plugin:
                 - _drop_response
           secondary:
             - forward_query_to_local_dns
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _block_with_servfail
           always_standby: true
           fast_fallback: 450
+  - tag: final_sequence
+    type: sequence
+    args:
+      exec:
+#        - if:
+#            - response_is_bogus_ip
+#          exec:
+#            - _block_with_servfail
+#            - _return
+        - if:
+            - _response_rcode_success
+          exec:
+            - _return
+          else_exec:
+            - _block_with_servfail
   - tag: modify_ttl
     type: ttl
     args:
