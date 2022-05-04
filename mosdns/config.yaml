@@ -59,7 +59,7 @@ plugin:
 #            - response_is_bogus_ip
 #          exec:
 #            - _block_with_servfail
-#             - _return
+#            - _return
         - if:
             - _response_rcode_success
           exec:
