@@ -30,7 +30,7 @@ plugin:
           secondary:
             - forward_query_to_wan_dns
           always_standby: true
-          fast_fallback: 150
+          fast_fallback: 500
   - tag: modify_ttl
     type: ttl
     args:
