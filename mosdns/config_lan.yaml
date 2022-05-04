@@ -22,6 +22,7 @@ plugin:
     type: sequence
     args:
       exec:
+        - modify_response
         - primary:
             - forward_query_to_lan_dns
             - if:
@@ -30,7 +31,6 @@ plugin:
                 - _drop_response
           secondary:
             - forward_query_to_wan_dns
-            - modify_response
           always_standby: true
           fast_fallback: 500
   - tag: final_sequence
