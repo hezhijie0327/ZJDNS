@@ -10,6 +10,7 @@ plugin:
         - set_ecs
         - set_edns0_bufsize
         - main_sequence
+        - final_sequence
         - modify_ttl
         - store_response_to_memory
       server:
@@ -32,6 +33,16 @@ plugin:
             - modify_response
           always_standby: true
           fast_fallback: 500
+  - tag: final_sequence
+    type: sequence
+    args:
+      exec:
+        - if:
+            - _response_rcode_success
+          exec:
+            - _return
+          else_exec:
+            - _block_with_servfail
   - tag: modify_response
     type: arbitrary
     args:
