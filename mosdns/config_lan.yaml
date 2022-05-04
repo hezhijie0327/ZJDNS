@@ -10,6 +10,7 @@ plugin:
         - set_ecs
         - set_edns0_bufsize
         - main_sequence
+        - modify_response
         - modify_ttl
         - store_response_to_memory
       server:
@@ -31,6 +32,12 @@ plugin:
             - forward_query_to_wan_dns
           always_standby: true
           fast_fallback: 500
+  - tag: modify_response
+    type: arbitrary
+    args:
+      rr:
+        - 'localhost.zhijie.online IN A ANSWER localhost.zhijie.online. IN A 127.0.0.1'
+        - 'localhost.zhijie.online IN AAAA ANSWER localhost.zhijie.online. IN AAAA ::1'
   - tag: modify_ttl
     type: ttl
     args:
