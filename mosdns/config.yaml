@@ -22,6 +22,11 @@ plugin:
     type: sequence
     args:
       exec:
+#        - if:
+#            - query_is_ad_domain
+#          exec:
+#            - _block_with_servfail
+#            - _return
         - if:
             - '!_query_is_common'
             - query_is_local_domain
@@ -290,11 +295,19 @@ plugin:
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
+#  - tag: query_is_ad_domain
+#    type: query_matcher
+#    args:
+#      domain:
+#        - 'ext:./geosite.dat:category-ads-all'
+#        - 'ext:./AdFilter.txt'
   - tag: query_is_local_domain
     type: query_matcher
     args:
       domain:
+        - 'ext:./geosite.dat:apple-cn'
         - 'ext:./geosite.dat:cn'
+        - 'ext:./geosite.dat:google-cn'
         - 'ext:./GFWList2AGH_whitelist_full.txt'
   - tag: query_is_not_local_domain
     type: query_matcher
@@ -306,8 +319,11 @@ plugin:
     type: response_matcher
     args:
       cname:
+        - 'ext:./geosite.dat:apple-cn'
         - 'ext:./geosite.dat:cn'
+        - 'ext:./geosite.dat:google-cn'
         - 'ext:./GFWList2AGH_whitelist_full.txt'
       ip:
         - 'ext:./geoip.dat:cn'
+        - 'ext:./geoip.dat:private'
         - 'ext:./CNIPDB.txt'
