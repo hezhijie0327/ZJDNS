@@ -308,6 +308,7 @@ plugin:
         - 'ext:./geosite.dat:apple-cn'
         - 'ext:./geosite.dat:cn'
         - 'ext:./geosite.dat:google-cn'
+        - 'ext:./geosite.dat:private'
         - 'ext:./GFWList2AGH_whitelist_full.txt'
   - tag: query_is_not_local_domain
     type: query_matcher
@@ -322,6 +323,7 @@ plugin:
         - 'ext:./geosite.dat:apple-cn'
         - 'ext:./geosite.dat:cn'
         - 'ext:./geosite.dat:google-cn'
+        - 'ext:./geosite.dat:private'
         - 'ext:./GFWList2AGH_whitelist_full.txt'
       ip:
         - 'ext:./geoip.dat:cn'
