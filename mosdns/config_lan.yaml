@@ -10,7 +10,6 @@ plugin:
         - set_ecs
         - set_edns0_bufsize
         - main_sequence
-        - secondary_sequence
         - modify_ttl
         - store_response_to_memory
       server:
@@ -22,21 +21,14 @@ plugin:
     type: sequence
     args:
       exec:
-        - forward_query_to_lan_dns
-        - if:
-            - '_response_rcode_success'
-          exec:
-            - _return
-          else_exec:
-            - _drop_response
         - primary:
-            - forward_query_to_wan_dns
+            - forward_query_to_lan_dns
             - if:
                 - '!_response_rcode_success'
               exec:
                 - _drop_response
           secondary:
-            - forward_query_to_wan_fallback_dns
+            - forward_query_to_wan_dns
           always_standby: true
           fast_fallback: 150
   - tag: modify_ttl
@@ -72,13 +64,6 @@ plugin:
         - load_balance:
           - forward_to_alidns
           - forward_to_dnspod
-  - tag: forward_query_to_wan_fallback_dns
-    type: sequence
-    args:
-      exec:
-        - parallel:
-          - forward_to_alidns_dns53
-          - forward_to_dnspod_dns53
   - tag: forward_to_alidns
     type: sequence
     args:
@@ -93,16 +78,6 @@ plugin:
         - parallel:
           - forward_to_dnspod_doh
           - forward_to_dnspod_dot
-  - tag: forward_to_alidns_dns53
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'udpme://223.5.5.5'
-          enable_pipeline: false
-          max_conns: 16
-        - addr: 'udpme://223.6.6.6'
-          enable_pipeline: false
-          max_conns: 16
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
@@ -130,13 +105,6 @@ plugin:
           dial_addr: '223.6.6.6:853'
           enable_pipeline: true
           idle_timeout: 10
-          max_conns: 16
-  - tag: forward_to_dnspod_dns53
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'udpme://119.29.29.29'
-          enable_pipeline: false
           max_conns: 16
   - tag: forward_to_dnspod_doh
     type: fast_forward
@@ -170,6 +138,11 @@ plugin:
     type: fast_forward
     args:
       upstream:
-        - addr: 'udpme://<LAN_DNS_IP_ADDRESS>'
+        - addr: 'tcp://LAN_DNS_IP_ADDRESS'
+          dial_addr: 'LAN_DNS_IP_ADDRESS:53'
+          enable_pipeline: true
+          max_conns: 16
+        - addr: 'udpme://LAN_DNS_IP_ADDRESS'
+          dial_addr: 'LAN_DNS_IP_ADDRESS:53'
           enable_pipeline: false
           max_conns: 16
