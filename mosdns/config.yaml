@@ -42,9 +42,9 @@ plugin:
           - forward_query_to_local_dns
           - if:
               - '!response_is_local_cname_ip'
-              - 'response_is_bogus_ip'
-              - 'response_is_private_cname_ip'
-              - 'response_is_reserved_ip'
+              - response_is_bogus_ip
+              - response_is_private_cname_ip
+              - response_is_reserved_ip
             exec:
               - _drop_response
           secondary:
@@ -55,8 +55,13 @@ plugin:
     type: sequence
     args:
       exec:
+#        - if:
+#            - response_is_bogus_ip
+#          exec:
+#            - _block_with_servfail
+#             - _return
         - if:
-            - '_response_rcode_success'
+            - _response_rcode_success
           exec:
             - _return
           else_exec:
@@ -69,6 +74,10 @@ plugin:
                 - _drop_response
           secondary:
             - forward_query_to_local_dns
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _block_with_servfail
           always_standby: true
           fast_fallback: 450
   - tag: modify_ttl
