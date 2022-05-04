@@ -40,18 +40,18 @@ plugin:
             - forward_query_to_remote_dns
             - _return
         - primary:
-          - forward_query_to_local_dns
-          - if:
-              - '!response_is_local_cname_ip'
-              - response_is_bogus_ip
-              - response_is_private_cname_ip
-              - response_is_reserved_ip
-            exec:
-              - _drop_response
+            - forward_query_to_local_dns
+            - if:
+                - '!response_is_local_cname_ip'
+                - response_is_bogus_ip
+                - response_is_private_cname_ip
+                - response_is_reserved_ip
+              exec:
+                - _drop_response
           secondary:
             - forward_query_to_remote_dns
           always_standby: true
-          fast_fallback: 150
+          fast_fallback: 200
   - tag: secondary_sequence
     type: sequence
     args:
@@ -71,7 +71,7 @@ plugin:
           secondary:
             - forward_query_to_local_dns
           always_standby: true
-          fast_fallback: 450
+          fast_fallback: 500
   - tag: final_sequence
     type: sequence
     args:
@@ -112,56 +112,56 @@ plugin:
     args:
       exec:
         - load_balance:
-          - forward_to_cloudflaredns
+            - forward_to_cloudflaredns
   - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - load_balance:
-          - forward_to_alidns
-          - forward_to_dnspod
+            - forward_to_alidns
+            - forward_to_dnspod
   - tag: forward_query_to_remote_dns
     type: sequence
     args:
       exec:
         - load_balance:
-          - forward_to_googledns
-          - forward_to_opendns
+            - forward_to_googledns
+            - forward_to_opendns
   - tag: forward_to_alidns
     type: sequence
     args:
       exec:
         - parallel:
-          - forward_to_alidns_doh
-          - forward_to_alidns_dot
+            - forward_to_alidns_doh
+            - forward_to_alidns_dot
   - tag: forward_to_cloudflaredns
     type: sequence
     args:
       exec:
         - parallel:
-          - forward_to_cloudflaredns_doh
-          - forward_to_cloudflaredns_dot
+            - forward_to_cloudflaredns_doh
+            - forward_to_cloudflaredns_dot
   - tag: forward_to_dnspod
     type: sequence
     args:
       exec:
         - parallel:
-          - forward_to_dnspod_doh
-          - forward_to_dnspod_dot
+            - forward_to_dnspod_doh
+            - forward_to_dnspod_dot
   - tag: forward_to_googledns
     type: sequence
     args:
       exec:
         - parallel:
-          - forward_to_googledns_doh
-          - forward_to_googledns_dot
+            - forward_to_googledns_doh
+            - forward_to_googledns_dot
   - tag: forward_to_opendns
     type: sequence
     args:
       exec:
         - parallel:
-          - forward_to_opendns_doh
-          - forward_to_opendns_dot
+            - forward_to_opendns_doh
+            - forward_to_opendns_dot
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
