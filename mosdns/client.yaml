@@ -10,6 +10,7 @@ plugin:
         - set_ecs
         - set_edns0_bufsize
         - main_sequence
+        - secondary_sequence
         - final_sequence
       server:
         - protocol: tcp
@@ -31,6 +32,16 @@ plugin:
             - forward_query_to_wan_dns
           always_standby: true
           fast_fallback: 500
+  - tag: secondary_sequence
+    type: sequence
+    args:
+      exec:
+        - if:
+            - _response_rcode_success
+          exec:
+            - _return
+          else_exec:
+            - forward_query_to_isp_dns
   - tag: final_sequence
     type: sequence
     args:
@@ -139,6 +150,18 @@ plugin:
           dial_addr: '120.53.53.53:853'
           enable_pipeline: true
           idle_timeout: 10
+          max_conns: 16
+  - tag: forward_to_isp_dns53
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tcp://ISP_DNS_IP_ADDRESS'
+          dial_addr: 'ISP_DNS_IP_ADDRESS:53'
+          enable_pipeline: true
+          max_conns: 16
+        - addr: 'udpme://ISP_DNS_IP_ADDRESS'
+          dial_addr: 'ISP_DNS_IP_ADDRESS:53'
+          enable_pipeline: false
           max_conns: 16
   - tag: forward_to_lan_dns53
     type: fast_forward
