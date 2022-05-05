@@ -41,10 +41,6 @@ function UpdateGFWList2AGHRule() {
 function UpdateCNIPDBRule() {
     curl -s --connect-timeout 15 "https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb_combine.txt" > "${DOCKER_PATH}/config/CNIPDB.txt"
 }
-# Update AdFilter Rule
-function UpdateAdFilterRule() {
-    curl -s --connect-timeout 15 "https://raw.githubusercontent.com/hezhijie0327/AdFilter/main/adfilter_domains.txt" > "${DOCKER_PATH}/config/AdFilter.txt"
-}
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
@@ -72,8 +68,6 @@ UpdateGeoIPSiteRule
 UpdateGFWList2AGHRule
 # Call UpdateCNIPDBRule
 UpdateCNIPDBRule
-# Call UpdateAdFilterRule
-#UpdateAdFilterRule
 # Call CleanupCurrentContainer
 CleanupCurrentContainer
 # Call CreateNewContainer
