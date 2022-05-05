@@ -11,7 +11,6 @@ plugin:
         - set_edns0_bufsize
         - main_sequence
         - final_sequence
-        - store_response_to_memory
       server:
         - protocol: tcp
           addr: 127.0.0.1:5353
@@ -56,13 +55,6 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: store_response_to_memory
-    type: cache
-    args:
-      cache_everything: true
-      lazy_cache_reply_ttl: 30
-      lazy_cache_ttl: 86400
-      size: 65536
   - tag: forward_query_to_lan_dns
     type: sequence
     args:
