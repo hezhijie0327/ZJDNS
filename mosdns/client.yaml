@@ -41,6 +41,7 @@ plugin:
           exec:
             - _return
           else_exec:
+            - _drop_response
             - forward_query_to_isp_dns
   - tag: final_sequence
     type: sequence
