@@ -12,7 +12,6 @@ plugin:
         - main_sequence
         - secondary_sequence
         - final_sequence
-        - modify_ttl
         - store_response_to_memory
       server:
         - protocol: tcp
@@ -87,11 +86,6 @@ plugin:
             - _return
           else_exec:
             - _block_with_servfail
-  - tag: modify_ttl
-    type: ttl
-    args:
-      maximum_ttl: 86400
-      minimal_ttl: 10
   - tag: set_ecs
     type: ecs
     args:
