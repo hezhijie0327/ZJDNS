@@ -1,0 +1,160 @@
+log:
+  level: info
+plugin:
+  - tag: main_server
+    type: server
+    args:
+      entry:
+        - _enable_response_padding
+        - _pad_query
+        - set_ecs
+        - set_edns0_bufsize
+        - main_sequence
+        - final_sequence
+        - store_response_to_memory
+      server:
+        - protocol: tcp
+          addr: 127.0.0.1:5353
+        - protocol: udp
+          addr: 127.0.0.1:5353
+  - tag: main_sequence
+    type: sequence
+    args:
+      exec:
+        - modify_response
+        - primary:
+            - forward_query_to_lan_dns
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
+          secondary:
+            - forward_query_to_wan_dns
+          always_standby: true
+          fast_fallback: 500
+  - tag: final_sequence
+    type: sequence
+    args:
+      exec:
+        - if:
+            - _response_rcode_success
+          exec:
+            - _return
+          else_exec:
+            - _block_with_servfail
+  - tag: modify_response
+    type: arbitrary
+    args:
+      rr:
+        - 'vpn.zhijie.online IN A ANSWER vpn.zhijie.online. IN A 127.0.0.1'
+        - 'vpn.zhijie.online IN AAAA ANSWER vpn.zhijie.online. IN AAAA ::1'
+  - tag: set_ecs
+    type: ecs
+    args:
+      auto: true
+  - tag: set_edns0_bufsize
+    type: bufsize
+    args:
+      size: 1232
+  - tag: store_response_to_memory
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_reply_ttl: 30
+      lazy_cache_ttl: 86400
+      size: 65536
+  - tag: forward_query_to_lan_dns
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - forward_to_lan_dns53
+  - tag: forward_query_to_wan_dns
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - forward_to_alidns
+            - forward_to_dnspod
+  - tag: forward_to_alidns
+    type: sequence
+    args:
+      exec:
+        - parallel:
+            - forward_to_alidns_doh
+            - forward_to_alidns_dot
+  - tag: forward_to_dnspod
+    type: sequence
+    args:
+      exec:
+        - parallel:
+            - forward_to_dnspod_doh
+            - forward_to_dnspod_dot
+  - tag: forward_to_alidns_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.alidns.com/dns-query'
+          dial_addr: '223.5.5.5:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+        - addr: 'https://dns.alidns.com/dns-query'
+          dial_addr: '223.6.6.6:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+  - tag: forward_to_alidns_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.alidns.com'
+          dial_addr: '223.5.5.5:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+        - addr: 'tls://dns.alidns.com'
+          dial_addr: '223.6.6.6:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+  - tag: forward_to_dnspod_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.pub/dns-query'
+          dial_addr: '1.12.12.12:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+        - addr: 'https://doh.pub/dns-query'
+          dial_addr: '120.53.53.53:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+  - tag: forward_to_dnspod_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.pub'
+          dial_addr: '1.12.12.12:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+        - addr: 'tls://dot.pub'
+          dial_addr: '120.53.53.53:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+  - tag: forward_to_lan_dns53
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tcp://LAN_DNS_IP_ADDRESS'
+          dial_addr: 'LAN_DNS_IP_ADDRESS:53'
+          enable_pipeline: true
+          max_conns: 16
+        - addr: 'udpme://LAN_DNS_IP_ADDRESS'
+          dial_addr: 'LAN_DNS_IP_ADDRESS:53'
+          enable_pipeline: false
+          max_conns: 16
