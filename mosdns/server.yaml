@@ -96,9 +96,9 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_to_dnspod
-          secondary:
             - forward_to_alidns
+          secondary:
+            - forward_to_dnspod
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_remote_dns
