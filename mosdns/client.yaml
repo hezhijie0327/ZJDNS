@@ -66,6 +66,11 @@ plugin:
     type: bufsize
     args:
       size: 1232
+  - tag: forward_query_to_isp_dns
+    type: sequence
+    args:
+      exec:
+        - forward_to_isp_dns53
   - tag: forward_query_to_lan_dns
     type: sequence
     args:
