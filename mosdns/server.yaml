@@ -23,10 +23,6 @@ plugin:
       exec:
         - if:
             - '!_query_is_common'
-          exec:
-            - forward_query_to_backup_dns
-            - _return
-        - if:
             - query_is_local_domain
           exec:
             - forward_query_to_local_dns
