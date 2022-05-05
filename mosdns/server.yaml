@@ -35,8 +35,7 @@ plugin:
         - primary:
             - forward_query_to_local_dns
             - if:
-                - '!response_is_local_cname_ip'
-                - response_is_private_cname_ip
+                - '!response_is_local_ip'
                 - response_is_reserved_ip
               exec:
                 - _drop_response
@@ -352,28 +351,17 @@ plugin:
       domain:
         - 'ext:./geosite.dat:geolocation-!cn'
         - 'ext:./GFWList2AGH_blacklist_full.txt'
-  - tag: response_is_local_cname_ip
+  - tag: response_is_local_ip
     type: response_matcher
     args:
-      cname:
-        - 'ext:./geosite.dat:apple-cn'
-        - 'ext:./geosite.dat:cn'
-        - 'ext:./geosite.dat:google-cn'
-        - 'ext:./GFWList2AGH_whitelist_full.txt'
       ip:
         - 'ext:./geoip.dat:cn'
         - 'ext:./CNIPDB.txt'
-  - tag: response_is_private_cname_ip
-    type: response_matcher
-    args:
-      cname:
-        - 'ext:./geosite.dat:private'
-      ip:
-        - 'ext:./geoip.dat:private'
   - tag: response_is_reserved_ip
     type: response_matcher
     args:
       ip:
+        - 'ext:./geoip.dat:private'
         - '0.0.0.0/8'
         - '10.0.0.0/8'
         - '100.64.0.0/10'
