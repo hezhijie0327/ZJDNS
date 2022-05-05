@@ -11,7 +11,6 @@ plugin:
         - set_edns0_bufsize
         - main_sequence
         - final_sequence
-        - modify_ttl
         - store_response_to_memory
       server:
         - protocol: tcp
@@ -59,11 +58,6 @@ plugin:
       rr:
         - 'vpn.zhijie.online IN A ANSWER vpn.zhijie.online. IN A 127.0.0.1'
         - 'vpn.zhijie.online IN AAAA ANSWER vpn.zhijie.online. IN AAAA ::1'
-  - tag: modify_ttl
-    type: ttl
-    args:
-      maximum_ttl: 86400
-      minimal_ttl: 10
   - tag: set_ecs
     type: ecs
     args:
