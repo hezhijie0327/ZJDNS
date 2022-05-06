@@ -5,10 +5,6 @@ plugin:
     type: server
     args:
       entry:
-        - _enable_response_padding
-        - _pad_query
-        - set_ecs
-        - set_edns0_bufsize
         - main_sequence
         - secondary_sequence
         - final_sequence
@@ -21,7 +17,12 @@ plugin:
     type: sequence
     args:
       exec:
+        - _enable_response_padding
+        - _pad_query
         - modify_response
+        - query_is_in_cache
+        - set_ecs
+        - set_edns0_bufsize
         - primary:
             - forward_query_to_lan_dns
             - if:
@@ -53,6 +54,7 @@ plugin:
             - _return
           else_exec:
             - _block_with_servfail
+          - modify_ttl
   - tag: modify_response
     type: arbitrary
     args:
@@ -67,6 +69,11 @@ plugin:
     type: bufsize
     args:
       size: 1232
+  - tag: modify_ttl
+    type: ttl
+    args:
+      maximum_ttl: 3600
+      minimal_ttl: 300
   - tag: forward_query_to_isp_dns
     type: sequence
     args:
@@ -181,3 +188,10 @@ plugin:
           dial_addr: 'LAN_DNS_IP_ADDRESS:53'
           enable_pipeline: false
           max_conns: 16
+  - tag: query_is_in_cache
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_reply_ttl: 30
+      lazy_cache_ttl: 86400
+      size: 65536
