@@ -19,6 +19,8 @@ plugin:
       exec:
         - _enable_response_padding
         - _pad_query
+        - _single_flight
+        - modify_response
         - query_is_in_cache
         - set_ecs
         - set_edns0_bufsize
@@ -75,6 +77,17 @@ plugin:
           else_exec:
             - _block_with_servfail
         - modify_ttl
+  - tag: modify_response
+    type: arbitrary
+    args:
+      rr:
+        - 'vpn.zhijie.online IN A ANSWER vpn.zhijie.online. IN A 127.0.0.1'
+        - 'vpn.zhijie.online IN AAAA ANSWER vpn.zhijie.online. IN AAAA ::1'
+  - tag: modify_ttl
+    type: ttl
+    args:
+      maximum_ttl: 3600
+      minimal_ttl: 300
   - tag: set_ecs
     type: ecs
     args:
@@ -83,11 +96,6 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: modify_ttl
-    type: ttl
-    args:
-      maximum_ttl: 3600
-      minimal_ttl: 300
   - tag: forward_query_to_backup_dns
     type: sequence
     args:
