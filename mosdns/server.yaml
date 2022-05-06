@@ -5,10 +5,6 @@ plugin:
     type: server
     args:
       entry:
-        - _enable_response_padding
-        - _pad_query
-        - set_ecs
-        - set_edns0_bufsize
         - main_sequence
         - secondary_sequence
         - final_sequence
@@ -21,6 +17,11 @@ plugin:
     type: sequence
     args:
       exec:
+        - _enable_response_padding
+        - _pad_query
+        - query_is_in_cache
+        - set_ecs
+        - set_edns0_bufsize
         - if:
             - '!_query_is_common'
             - query_is_local_domain
@@ -73,6 +74,7 @@ plugin:
             - _return
           else_exec:
             - _block_with_servfail
+        - modify_ttl
   - tag: set_ecs
     type: ecs
     args:
@@ -81,6 +83,11 @@ plugin:
     type: bufsize
     args:
       size: 1232
+  - tag: modify_ttl
+    type: ttl
+    args:
+      maximum_ttl: 3600
+      minimal_ttl: 300
   - tag: forward_query_to_backup_dns
     type: sequence
     args:
@@ -337,6 +344,13 @@ plugin:
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
+  - tag: query_is_in_cache
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_reply_ttl: 30
+      lazy_cache_ttl: 86400
+      size: 65536
   - tag: query_is_local_domain
     type: query_matcher
     args:
