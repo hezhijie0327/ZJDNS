@@ -11,8 +11,6 @@ plugin:
       server:
         - protocol: tcp
           addr: 127.0.0.1:5353
-        - protocol: udp
-          addr: 127.0.0.1:5353
   - tag: main_sequence
     type: sequence
     args:
