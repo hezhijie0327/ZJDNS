@@ -81,6 +81,7 @@ plugin:
         - primary:
             - forward_query_to_remote_ecs_dns
           secondary:
+            - _no_ecs
             - forward_query_to_remote_non_ecs_dns
           always_standby: true
           fast_fallback: 375
