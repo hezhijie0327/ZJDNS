@@ -60,7 +60,7 @@ plugin:
         - secondary:
             - forward_to_lan_dns53_udp
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 62.5
   - tag: forward_query_to_wan_dns
     type: sequence
     args:
