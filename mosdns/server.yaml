@@ -21,6 +21,7 @@ plugin:
     type: sequence
     args:
       exec:
+        - _single_flight
         - query_is_in_cache
         - if:
             - '!_query_is_common'
