@@ -24,13 +24,19 @@ plugin:
       exec:
         - primary:
             - if:
-                - '!_query_is_common'
                 - query_is_local_domain
               exec:
                 - forward_query_to_local_dns
                 - _return
             - if:
                 - query_is_not_local_domain
+              exec:
+                - forward_query_to_remote_dns
+                - _return
+              else_exec:
+                - forward_query_to_local_dns
+            - if:
+                - '!_query_is_common'
               exec:
                 - forward_query_to_remote_dns
                 - _return
