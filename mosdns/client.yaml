@@ -21,6 +21,7 @@ plugin:
     type: sequence
     args:
       exec:
+        - _single_flight
         - query_is_in_cache
         - primary:
             - forward_query_to_lan_dns
