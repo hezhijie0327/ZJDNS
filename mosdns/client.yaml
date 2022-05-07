@@ -24,10 +24,6 @@ plugin:
       exec:
         - primary:
             - forward_query_to_lan_dns
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
           secondary:
             - forward_query_to_wan_dns
           always_standby: true
