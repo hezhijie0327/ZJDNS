@@ -22,8 +22,6 @@ plugin:
     type: sequence
     args:
       exec:
-        - _single_flight
-        - query_is_in_cache
         - if:
             - '!_query_is_common'
             - query_is_local_domain
@@ -154,12 +152,10 @@ plugin:
       upstream:
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.5.5.5:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.6.6.6:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
   - tag: forward_to_alidns_dot
@@ -168,12 +164,10 @@ plugin:
       upstream:
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
   - tag: forward_to_cloudflaredns_doh
@@ -182,13 +176,11 @@ plugin:
       upstream:
         - addr: 'https://cloudflare-dns.com/dns-query'
           dial_addr: '1.0.0.1:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           socks5: '127.0.0.1:7890'
         - addr: 'https://cloudflare-dns.com/dns-query'
           dial_addr: '1.1.1.1:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           socks5: '127.0.0.1:7890'
@@ -198,13 +190,11 @@ plugin:
       upstream:
         - addr: 'tls://cloudflare-dns.com'
           dial_addr: '1.0.0.1:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
         - addr: 'tls://cloudflare-dns.com'
           dial_addr: '1.1.1.1:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
@@ -214,12 +204,10 @@ plugin:
       upstream:
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '1.12.12.12:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '120.53.53.53:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
   - tag: forward_to_dnspod_dot
@@ -228,12 +216,10 @@ plugin:
       upstream:
         - addr: 'tls://dot.pub'
           dial_addr: '1.12.12.12:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
         - addr: 'tls://dot.pub'
           dial_addr: '120.53.53.53:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
   - tag: forward_to_googledns_doh
@@ -242,13 +228,11 @@ plugin:
       upstream:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           socks5: '127.0.0.1:7890'
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.8.8:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           socks5: '127.0.0.1:7890'
@@ -258,13 +242,11 @@ plugin:
       upstream:
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
@@ -274,13 +256,11 @@ plugin:
       upstream:
         - addr: 'https://dns.opendns.com/dns-query'
           dial_addr: '208.67.220.220:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           socks5: '127.0.0.1:7890'
         - addr: 'https://dns.opendns.com/dns-query'
           dial_addr: '208.67.222.222:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           socks5: '127.0.0.1:7890'
@@ -290,13 +270,11 @@ plugin:
       upstream:
         - addr: 'tls://dns.opendns.com'
           dial_addr: '208.67.220.220:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
         - addr: 'tls://dns.opendns.com'
           dial_addr: '208.67.222.222:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
@@ -306,13 +284,11 @@ plugin:
       upstream:
         - addr: 'https://dns10.quad9.net/dns-query'
           dial_addr: '149.112.112.10:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           socks5: '127.0.0.1:7890'
         - addr: 'https://dns10.quad9.net/dns-query'
           dial_addr: '9.9.9.10:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           socks5: '127.0.0.1:7890'
@@ -322,23 +298,14 @@ plugin:
       upstream:
         - addr: 'tls://dns10.quad9.net'
           dial_addr: '149.112.112.10:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
         - addr: 'tls://dns10.quad9.net'
           dial_addr: '9.9.9.10:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
-  - tag: query_is_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      lazy_cache_reply_ttl: 30
-      lazy_cache_ttl: 86400
-      size: 65536
   - tag: query_is_local_domain
     type: query_matcher
     args:
