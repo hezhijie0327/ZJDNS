@@ -20,7 +20,7 @@ function CleanupCurrentContainer() {
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
-        -v ${DOCKER_PATH}/cert:/etc/adguardhome/cert:ro \
+        -v /docker/ssl:/etc/adguardhome/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/adguardhome/conf \
         -v ${DOCKER_PATH}/work:/etc/adguardhome/work \
         -d ${OWNER}/${REPO}:${TAG} \
