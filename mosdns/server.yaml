@@ -43,7 +43,6 @@ plugin:
           secondary:
             - forward_query_to_remote_dns
           always_standby: true
-          fast_fallback: 250
   - tag: modify_response
     type: arbitrary
     args:
@@ -72,7 +71,6 @@ plugin:
           secondary:
             - forward_to_dnspod
           always_standby: true
-          fast_fallback: 125
   - tag: forward_query_to_remote_dns
     type: sequence
     args:
@@ -83,7 +81,6 @@ plugin:
             - _no_ecs
             - forward_query_to_remote_non_ecs_dns
           always_standby: true
-          fast_fallback: 375
   - tag: forward_query_to_remote_ecs_dns
     type: sequence
     args:
@@ -93,7 +90,6 @@ plugin:
           secondary:
             - forward_to_opendns
           always_standby: true
-          fast_fallback: 250
   - tag: forward_query_to_remote_non_ecs_dns
     type: sequence
     args:
@@ -103,49 +99,60 @@ plugin:
           secondary:
             - forward_to_quad9
           always_standby: true
-          fast_fallback: 250
   - tag: forward_to_alidns
     type: sequence
     args:
       exec:
-        - load_balance:
+        - primary:
             - forward_to_alidns_doh
+          secondary:
             - forward_to_alidns_dot
+          always_standby: true
   - tag: forward_to_cloudflaredns
     type: sequence
     args:
       exec:
-        - load_balance:
+        - primary:
             - forward_to_cloudflaredns_doh
+          secondary:
             - forward_to_cloudflaredns_dot
+          always_standby: true
   - tag: forward_to_dnspod
     type: sequence
     args:
       exec:
-        - load_balance:
+        - primary:
             - forward_to_dnspod_doh
+          secondary:
             - forward_to_dnspod_dot
+          always_standby: true
   - tag: forward_to_googledns
     type: sequence
     args:
       exec:
-        - load_balance:
+        - primary:
             - forward_to_googledns_doh
+          secondary:
             - forward_to_googledns_dot
+          always_standby: true
   - tag: forward_to_opendns
     type: sequence
     args:
       exec:
-        - load_balance:
+        - primary:
             - forward_to_opendns_doh
+          secondary:
             - forward_to_opendns_dot
+          always_standby: true
   - tag: forward_to_quad9
     type: sequence
     args:
       exec:
-        - load_balance:
+        - primary:
             - forward_to_quad9_doh
+          secondary:
             - forward_to_quad9_dot
+          always_standby: true
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
