@@ -57,7 +57,7 @@ plugin:
       exec:
         - primary:
             - forward_to_lan_dns53_tcp
-        - secondary:
+          secondary:
             - forward_to_lan_dns53_udp
           always_standby: true
           fast_fallback: 62.5
@@ -67,7 +67,7 @@ plugin:
       exec:
         - primary:
             - forward_query_to_wan_secure_dns
-        - secondary:
+          secondary:
             - forward_query_to_wan_insecure_dns
           always_standby: true
           fast_fallback: 250
@@ -77,7 +77,7 @@ plugin:
       exec:
         - primary:
             - forward_to_isp_dns53_tcp
-        - secondary:
+          secondary:
             - forward_to_isp_dns53_udp
           always_standby: true
           fast_fallback: 125
