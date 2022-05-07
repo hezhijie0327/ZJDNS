@@ -55,7 +55,12 @@ plugin:
     type: sequence
     args:
       exec:
-        - forward_to_lan_dns53
+        - primary:
+            - forward_to_lan_dns53_tcp
+        - secondary:
+            - forward_to_lan_dns53_udp
+          always_standby: true
+          fast_fallback: 125
   - tag: forward_query_to_wan_dns
     type: sequence
     args:
@@ -70,7 +75,12 @@ plugin:
     type: sequence
     args:
       exec:
-        - forward_to_isp_dns53
+        - primary:
+            - forward_to_isp_dns53_tcp
+        - secondary:
+            - forward_to_isp_dns53_udp
+          always_standby: true
+          fast_fallback: 125
   - tag: forward_query_to_wan_secure_dns
     type: sequence
     args:
@@ -151,7 +161,7 @@ plugin:
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
-  - tag: forward_to_isp_dns53
+  - tag: forward_to_isp_dns53_tcp
     type: fast_forward
     args:
       upstream:
@@ -159,11 +169,15 @@ plugin:
           dial_addr: 'ISP_DNS_IP_ADDRESS:53'
           enable_pipeline: true
           max_conns: 16
+  - tag: forward_to_isp_dns53_udp
+    type: fast_forward
+    args:
+      upstream:
         - addr: 'udpme://ISP_DNS_IP_ADDRESS'
           dial_addr: 'ISP_DNS_IP_ADDRESS:53'
           enable_pipeline: false
           max_conns: 16
-  - tag: forward_to_lan_dns53
+  - tag: forward_to_lan_dns53_tcp
     type: fast_forward
     args:
       upstream:
@@ -171,6 +185,10 @@ plugin:
           dial_addr: 'LAN_DNS_IP_ADDRESS:53'
           enable_pipeline: true
           max_conns: 16
+  - tag: forward_to_lan_dns53_udp
+    type: fast_forward
+    args:
+      upstream:
         - addr: 'udpme://LAN_DNS_IP_ADDRESS'
           dial_addr: 'LAN_DNS_IP_ADDRESS:53'
           enable_pipeline: false
