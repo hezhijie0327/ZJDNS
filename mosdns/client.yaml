@@ -22,8 +22,6 @@ plugin:
     type: sequence
     args:
       exec:
-        - _single_flight
-        - query_is_in_cache
         - primary:
             - forward_query_to_lan_dns
             - if:
@@ -113,12 +111,10 @@ plugin:
       upstream:
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.5.5.5:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.6.6.6:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
   - tag: forward_to_alidns_dot
@@ -127,12 +123,10 @@ plugin:
       upstream:
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
   - tag: forward_to_dnspod_doh
@@ -141,12 +135,10 @@ plugin:
       upstream:
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '1.12.12.12:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '120.53.53.53:443'
-          enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
   - tag: forward_to_dnspod_dot
@@ -155,12 +147,10 @@ plugin:
       upstream:
         - addr: 'tls://dot.pub'
           dial_addr: '1.12.12.12:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
         - addr: 'tls://dot.pub'
           dial_addr: '120.53.53.53:853'
-          enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
   - tag: forward_to_isp_dns53_tcp
@@ -169,7 +159,6 @@ plugin:
       upstream:
         - addr: 'tcp://ISP_DNS_IP_ADDRESS'
           dial_addr: 'ISP_DNS_IP_ADDRESS:53'
-          enable_pipeline: true
           max_conns: 16
   - tag: forward_to_isp_dns53_udp
     type: fast_forward
@@ -177,7 +166,6 @@ plugin:
       upstream:
         - addr: 'udpme://ISP_DNS_IP_ADDRESS'
           dial_addr: 'ISP_DNS_IP_ADDRESS:53'
-          enable_pipeline: false
           max_conns: 16
   - tag: forward_to_lan_dns53_tcp
     type: fast_forward
@@ -185,7 +173,6 @@ plugin:
       upstream:
         - addr: 'tcp://LAN_DNS_IP_ADDRESS'
           dial_addr: 'LAN_DNS_IP_ADDRESS:53'
-          enable_pipeline: true
           max_conns: 16
   - tag: forward_to_lan_dns53_udp
     type: fast_forward
@@ -193,12 +180,4 @@ plugin:
       upstream:
         - addr: 'udpme://LAN_DNS_IP_ADDRESS'
           dial_addr: 'LAN_DNS_IP_ADDRESS:53'
-          enable_pipeline: false
           max_conns: 16
-  - tag: query_is_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      lazy_cache_reply_ttl: 30
-      lazy_cache_ttl: 86400
-      size: 65536
