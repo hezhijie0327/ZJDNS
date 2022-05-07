@@ -44,9 +44,10 @@ function UpdateCNIPDBRule() {
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
-        -v ${DOCKER_PATH}/config:/etc/mosdns \
+        -v /docker/ssl:/etc/mosdns/cert:ro \
+        -v ${DOCKER_PATH}/config:/etc/mosdns/conf \
         -d ${OWNER}/${REPO}:${TAG} \
-        -dir /etc/mosdns
+        -dir /etc/mosdns/conf
 }
 # Cleanup Expired Image
 function CleanupExpiredImage() {
