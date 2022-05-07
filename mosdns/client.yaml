@@ -159,6 +159,7 @@ plugin:
       upstream:
         - addr: 'tcp://ISP_DNS_IP_ADDRESS'
           dial_addr: 'ISP_DNS_IP_ADDRESS:53'
+          idle_timeout: 10
           max_conns: 16
   - tag: forward_to_isp_dns53_udp
     type: fast_forward
@@ -173,6 +174,7 @@ plugin:
       upstream:
         - addr: 'tcp://LAN_DNS_IP_ADDRESS'
           dial_addr: 'LAN_DNS_IP_ADDRESS:53'
+          idle_timeout: 10
           max_conns: 16
   - tag: forward_to_lan_dns53_udp
     type: fast_forward
