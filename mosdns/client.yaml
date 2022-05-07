@@ -5,25 +5,23 @@ plugin:
     type: server
     args:
       entry:
-        - main_sequence
-        - secondary_sequence
-        - final_sequence
+        - _enable_response_padding
+        - _pad_query
+        - set_ecs
+        - set_edns0_bufsize
+        - modify_response
+        - query_sequence
+        - modify_ttl
       server:
         - protocol: tcp
           addr: 127.0.0.1:5353
         - protocol: udp
           addr: 127.0.0.1:5353
-  - tag: main_sequence
+  - tag: query_sequence
     type: sequence
     args:
       exec:
-        - _enable_response_padding
-        - _pad_query
-        - _single_flight
-        - modify_response
         - query_is_in_cache
-        - set_ecs
-        - set_edns0_bufsize
         - primary:
             - forward_query_to_lan_dns
             - if:
@@ -34,28 +32,6 @@ plugin:
             - forward_query_to_wan_dns
           always_standby: true
           fast_fallback: 500
-  - tag: secondary_sequence
-    type: sequence
-    args:
-      exec:
-        - if:
-            - _response_rcode_success
-          exec:
-            - _return
-          else_exec:
-            - _drop_response
-            - forward_query_to_isp_dns
-  - tag: final_sequence
-    type: sequence
-    args:
-      exec:
-        - if:
-            - _response_rcode_success
-          exec:
-            - _return
-          else_exec:
-            - _block_with_servfail
-          - modify_ttl
   - tag: modify_response
     type: arbitrary
     args:
@@ -75,17 +51,27 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: forward_query_to_isp_dns
-    type: sequence
-    args:
-      exec:
-        - forward_to_isp_dns53
   - tag: forward_query_to_lan_dns
     type: sequence
     args:
       exec:
         - forward_to_lan_dns53
   - tag: forward_query_to_wan_dns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_query_to_wan_secure_dns
+        - secondary:
+            - forward_query_to_wan_insecure_dns
+          always_standby: true
+          fast_fallback: 250
+  - tag: forward_query_to_wan_insecure_dns
+    type: sequence
+    args:
+      exec:
+        - forward_to_isp_dns53
+  - tag: forward_query_to_wan_secure_dns
     type: sequence
     args:
       exec:
