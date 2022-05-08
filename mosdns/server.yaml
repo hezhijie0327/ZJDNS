@@ -37,7 +37,7 @@ plugin:
               else_exec:
                 - forward_query_to_local_dns
             - if:
-                - '!response_is_local_ip'
+                - '!response_is_local_cname_ip'
                 - response_is_polluted_ip
                 - response_is_reserved_ip
               exec:
@@ -517,9 +517,14 @@ plugin:
       domain:
         - 'ext:./geosite.dat:geolocation-!cn'
         - 'ext:./GFWList2AGH_blacklist_full.txt'
-  - tag: response_is_local_ip
+  - tag: response_is_local_cname_ip
     type: response_matcher
     args:
+      cname:
+        - 'ext:./geosite.dat:apple-cn'
+        - 'ext:./geosite.dat:cn'
+        - 'ext:./geosite.dat:google-cn'
+        - 'ext:./GFWList2AGH_whitelist_full.txt'
       ip:
         - 'ext:./geoip.dat:cn'
         - 'ext:./CNIPDB.txt'
