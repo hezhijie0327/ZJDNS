@@ -22,6 +22,8 @@ plugin:
     type: sequence
     args:
       exec:
+        - _single_flight
+        - query_is_stored_in_cache
         - primary:
             - if:
                 - query_is_local_domain
@@ -65,15 +67,25 @@ plugin:
     type: bufsize
     args:
       size: 1232
+  - tag: verify_response
+    type: sequence
+    args:
+      exec:
+        - if:
+            - '!_response_rcode_success'
+          exec:
+            - _block_with_servfail
   - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_query_to_local_ecs_dns
+            - verify_response
           secondary:
             - _no_ecs
             - forward_query_to_local_non_ecs_dns
+            - verify_response
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_remote_dns
@@ -82,9 +94,11 @@ plugin:
       exec:
         - primary:
             - forward_query_to_remote_ecs_dns
+            - verify_response
           secondary:
             - _no_ecs
             - forward_query_to_remote_non_ecs_dns
+            - verify_response
           always_standby: true
           fast_fallback: 375
   - tag: forward_query_to_local_ecs_dns
@@ -517,6 +531,13 @@ plugin:
       domain:
         - 'ext:./geosite.dat:geolocation-!cn'
         - 'ext:./GFWList2AGH_blacklist_full.txt'
+  - tag: query_is_stored_in_cache
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_ttl: 86400
+      lazy_cache_reply_ttl: 30
+      size: 65536
   - tag: response_is_local_cname_ip
     type: response_matcher
     args:
