@@ -22,10 +22,14 @@ plugin:
     type: sequence
     args:
       exec:
+        - _single_flight
+        - query_is_stored_in_cache
         - primary:
             - forward_query_to_lan_dns
+            - verify_response
           secondary:
             - forward_query_to_wan_dns
+            - verify_response
           always_standby: true
           fast_fallback: 125
   - tag: modify_response
@@ -47,6 +51,14 @@ plugin:
     type: bufsize
     args:
       size: 1232
+  - tag: verify_response
+    type: sequence
+    args:
+      exec:
+        - if:
+            - '!_response_rcode_success'
+          exec:
+            - _block_with_servfail
   - tag: forward_query_to_lan_dns
     type: sequence
     args:
@@ -209,3 +221,10 @@ plugin:
           enable_pipeline: false
           max_conns: 16
           trusted: true
+  - tag: query_is_stored_in_cache
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_ttl: 86400
+      lazy_cache_reply_ttl: 30
+      size: 65536
