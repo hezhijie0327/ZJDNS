@@ -67,25 +67,23 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: verify_response
-    type: sequence
-    args:
-      exec:
-        - if:
-            - '!_response_rcode_success'
-          exec:
-            - _block_with_servfail
   - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_query_to_local_ecs_dns
-            - verify_response
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - _no_ecs
             - forward_query_to_local_non_ecs_dns
-            - verify_response
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _block_with_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_remote_dns
@@ -94,11 +92,17 @@ plugin:
       exec:
         - primary:
             - forward_query_to_remote_ecs_dns
-            - verify_response
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - _no_ecs
             - forward_query_to_remote_non_ecs_dns
-            - verify_response
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _block_with_servfail
           always_standby: true
           fast_fallback: 375
   - tag: forward_query_to_local_ecs_dns
