@@ -26,10 +26,16 @@ plugin:
         - query_is_stored_in_cache
         - primary:
             - forward_query_to_lan_dns
-            - verify_response
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_query_to_wan_dns
-            - verify_response
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _block_with_servfail
           always_standby: true
           fast_fallback: 125
   - tag: modify_response
@@ -51,14 +57,6 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: verify_response
-    type: sequence
-    args:
-      exec:
-        - if:
-            - '!_response_rcode_success'
-          exec:
-            - _block_with_servfail
   - tag: forward_query_to_lan_dns
     type: sequence
     args:
