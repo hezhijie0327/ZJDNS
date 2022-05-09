@@ -91,6 +91,19 @@ plugin:
             - verify_response_servfail
           always_standby: true
           fast_fallback: 250
+  - tag: forward_query_to_wan_secure_dns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_query_to_wan_secure_ecs_dns
+            - verify_response_dropresp
+          secondary:
+            - _no_ecs
+            - forward_query_to_wan_secure_non_ecs_dns
+            - verify_response_servfail
+          always_standby: true
+          fast_fallback: 125
   - tag: forward_query_to_wan_insecure_dns
     type: sequence
     args:
@@ -103,7 +116,7 @@ plugin:
             - verify_response_servfail
           always_standby: true
           fast_fallback: 125
-  - tag: forward_query_to_wan_secure_dns
+  - tag: forward_query_to_wan_secure_ecs_dns
     type: sequence
     args:
       exec:
@@ -115,6 +128,30 @@ plugin:
             - verify_response_servfail
           always_standby: true
           fast_fallback: 125
+  - tag: forward_query_to_wan_secure_non_ecs_dns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_to_360sdns
+            - verify_response_dropresp
+          secondary:
+            - forward_to_cfiecdns
+            - verify_response_servfail
+          always_standby: true
+          fast_fallback: 125
+  - tag: forward_to_360sdns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_to_360sdns_doh
+            - verify_response_dropresp
+          secondary:
+            - forward_to_360sdns_dot
+            - verify_response_servfail
+          always_standby: true
+          fast_fallback: 62.5
   - tag: forward_to_alidns
     type: sequence
     args:
@@ -124,6 +161,18 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_alidns_dot
+            - verify_response_servfail
+          always_standby: true
+          fast_fallback: 62.5
+  - tag: forward_to_cfiecdns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_to_cfiecdns_doh
+            - verify_response_dropresp
+          secondary:
+            - forward_to_cfiecdns_dot
             - verify_response_servfail
           always_standby: true
           fast_fallback: 62.5
@@ -139,6 +188,74 @@ plugin:
             - verify_response_servfail
           always_standby: true
           fast_fallback: 62.5
+  - tag: forward_to_360sdns_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '101.198.192.33:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '101.198.193.29:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '101.199.113.208:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '180.163.249.75:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '36.99.170.86:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+  - tag: forward_to_360sdns_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '101.198.192.33:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '101.198.193.29:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '101.199.113.208:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '180.163.249.75:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '36.99.170.86:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
@@ -167,6 +284,26 @@ plugin:
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
+  - tag: forward_to_cfiecdns_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.ipv6dns.com/dns-query'
+          dial_addr: '221.228.217.28:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+  - tag: forward_to_cfiecdns_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.ipv6dns.com'
+          dial_addr: '221.228.217.28:853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
