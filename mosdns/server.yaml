@@ -67,23 +67,33 @@ plugin:
     type: bufsize
     args:
       size: 1232
+  - tag: verify_response_dropresp
+    type: sequence
+    args:
+      exec:
+        - if:
+            - '!_response_rcode_success'
+          exec:
+            - _drop_response
+  - tag: verify_response_servfail
+    type: sequence
+    args:
+      exec:
+        - if:
+            - '!_response_rcode_success'
+          exec:
+            - _block_with_servfail
   - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_query_to_local_ecs_dns
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
+            - verify_response_dropresp
           secondary:
             - _no_ecs
             - forward_query_to_local_non_ecs_dns
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _block_with_servfail
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_remote_dns
@@ -92,17 +102,11 @@ plugin:
       exec:
         - primary:
             - forward_query_to_remote_ecs_dns
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
+            - verify_response_dropresp
           secondary:
             - _no_ecs
             - forward_query_to_remote_non_ecs_dns
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _block_with_servfail
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 375
   - tag: forward_query_to_local_ecs_dns
@@ -111,8 +115,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns
+            - verify_response_dropresp
           secondary:
             - forward_to_dnspod
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_local_non_ecs_dns
@@ -121,8 +127,10 @@ plugin:
       exec:
         - primary:
             - forward_to_360sdns
+            - verify_response_dropresp
           secondary:
             - forward_to_cfiecdns
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_remote_ecs_dns
@@ -131,8 +139,10 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns
+            - verify_response_dropresp
           secondary:
             - forward_to_opendns
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 250
   - tag: forward_query_to_remote_non_ecs_dns
@@ -141,8 +151,10 @@ plugin:
       exec:
         - primary:
             - forward_to_cloudflaredns
+            - verify_response_dropresp
           secondary:
             - forward_to_quad9
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 250
   - tag: forward_to_360sdns
@@ -151,8 +163,10 @@ plugin:
       exec:
         - primary:
             - forward_to_360sdns_doh
+            - verify_response_dropresp
           secondary:
             - forward_to_360sdns_dot
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns
@@ -161,8 +175,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns_doh
+            - verify_response_dropresp
           secondary:
             - forward_to_alidns_dot
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_cfiecdns
@@ -171,8 +187,10 @@ plugin:
       exec:
         - primary:
             - forward_to_cfiecdns_doh
+            - verify_response_dropresp
           secondary:
             - forward_to_cfiecdns_dot
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_cloudflaredns
@@ -181,8 +199,10 @@ plugin:
       exec:
         - primary:
             - forward_to_cloudflaredns_doh
+            - verify_response_dropresp
           secondary:
             - forward_to_cloudflaredns_dot
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_dnspod
@@ -191,8 +211,10 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod_doh
+            - verify_response_dropresp
           secondary:
             - forward_to_dnspod_dot
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_googledns
@@ -201,8 +223,10 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns_doh
+            - verify_response_dropresp
           secondary:
             - forward_to_googledns_dot
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_opendns
@@ -211,8 +235,10 @@ plugin:
       exec:
         - primary:
             - forward_to_opendns_doh
+            - verify_response_dropresp
           secondary:
             - forward_to_opendns_dot
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_quad9
@@ -221,8 +247,10 @@ plugin:
       exec:
         - primary:
             - forward_to_quad9_doh
+            - verify_response_dropresp
           secondary:
             - forward_to_quad9_dot
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_360sdns_doh
