@@ -67,6 +67,8 @@ plugin:
     type: ecs
     args:
       auto: true
+      mask4: 24
+      mask6: 56
   - tag: set_edns0_bufsize
     type: bufsize
     args:
