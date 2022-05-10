@@ -5,7 +5,7 @@ FAKE_DNS="11.45.1.4"
 GHPROXY_URL="https://ghproxy.com/"
 TOTAL_TIME="300"
 
-rm -rf ./gfw_polluted_ipv*.txt
+rm -rf ./gfw_polluted_ipv*.tmp ./gfw_polluted_ipv*.txt
 
 curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/gfw_polluted_ipv4.txt" > "./gfw_polluted_ipv4.tmp"
 curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/gfw_polluted_ipv6.txt" > "./gfw_polluted_ipv6.tmp"
