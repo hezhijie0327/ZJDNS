@@ -29,16 +29,19 @@ plugin:
                 - query_is_local_domain
               exec:
                 - forward_query_to_local_dns
+                - verify_response_servfail
                 - _return
             - if:
                 - '!_query_is_common'
                 - query_is_not_local_domain
               exec:
                 - forward_query_to_remote_dns
+                - verify_response_servfail
                 - _return
               else_exec:
                 - forward_query_to_local_dns
             - if:
+                - '!_response_rcode_success'
                 - '!response_is_local_cname_ip'
                 - response_is_polluted_ip
                 - response_is_reserved_ip
@@ -46,6 +49,7 @@ plugin:
                 - _drop_response
           secondary:
             - forward_query_to_remote_dns
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 250
   - tag: modify_response
