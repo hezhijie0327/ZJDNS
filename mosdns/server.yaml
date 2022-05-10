@@ -52,8 +52,8 @@ plugin:
     type: arbitrary
     args:
       rr:
-        - 'vpn.zhijie.online IN A ANSWER vpn.zhijie.online. IN A 127.0.0.1'
-        - 'vpn.zhijie.online IN AAAA ANSWER vpn.zhijie.online. IN AAAA ::1'
+        - 'localhost.zhijie.online IN A ANSWER localhost.zhijie.online. IN A 127.0.0.1'
+        - 'localhost.zhijie.online IN AAAA ANSWER localhost.zhijie.online. IN AAAA ::1'
   - tag: modify_ttl
     type: ttl
     args:
