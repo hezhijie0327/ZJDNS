@@ -557,16 +557,16 @@ plugin:
     type: query_matcher
     args:
       domain:
-        - 'ext:./geosite.dat:apple-cn'
-        - 'ext:./geosite.dat:cn'
-        - 'ext:./geosite.dat:google-cn'
-        - 'ext:./GFWList2AGH_whitelist_full.txt'
+        - 'ext:/etc/mosdns/data/geosite.dat:apple-cn'
+        - 'ext:/etc/mosdns/data/geosite.dat:cn'
+        - 'ext:/etc/mosdns/data/geosite.dat:google-cn'
+        - 'ext:/etc/mosdns/data/GFWList2AGH_whitelist_full.txt'
   - tag: query_is_not_local_domain
     type: query_matcher
     args:
       domain:
-        - 'ext:./geosite.dat:geolocation-!cn'
-        - 'ext:./GFWList2AGH_blacklist_full.txt'
+        - 'ext:/etc/mosdns/data/geosite.dat:geolocation-!cn'
+        - 'ext:/etc/mosdns/data/GFWList2AGH_blacklist_full.txt'
   - tag: query_is_stored_in_cache
     type: cache
     args:
@@ -578,23 +578,23 @@ plugin:
     type: response_matcher
     args:
       cname:
-        - 'ext:./geosite.dat:apple-cn'
-        - 'ext:./geosite.dat:cn'
-        - 'ext:./geosite.dat:google-cn'
-        - 'ext:./GFWList2AGH_whitelist_full.txt'
+        - 'ext:/etc/mosdns/data/geosite.dat:apple-cn'
+        - 'ext:/etc/mosdns/data/geosite.dat:cn'
+        - 'ext:/etc/mosdns/data/geosite.dat:google-cn'
+        - 'ext:/etc/mosdns/data/GFWList2AGH_whitelist_full.txt'
       ip:
-        - 'ext:./geoip.dat:cn'
-        - 'ext:./CNIPDB.txt'
+        - 'ext:/etc/mosdns/data/geoip.dat:cn'
+        - 'ext:/etc/mosdns/data/CNIPDB.txt'
   - tag: response_is_polluted_ip
     type: response_matcher
     args:
       ip:
-        - 'ext:./gfw_polluted_ipv4.txt'
-        - 'ext:./gfw_polluted_ipv6.txt'
+        - 'ext:/etc/mosdns/data/gfw_polluted_ipv4.txt'
+        - 'ext:/etc/mosdns/data/gfw_polluted_ipv6.txt'
   - tag: response_is_reserved_ip
     type: response_matcher
     args:
       ip:
-        - 'ext:./geoip.dat:private'
-        - 'ext:./reserved_ipv4.txt'
-        - 'ext:./reserved_ipv6.txt'
+        - 'ext:/etc/mosdns/data/geoip.dat:private'
+        - 'ext:/etc/mosdns/data/reserved_ipv4.txt'
+        - 'ext:/etc/mosdns/data/reserved_ipv6.txt'
