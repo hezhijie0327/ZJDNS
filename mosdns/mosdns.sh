@@ -56,9 +56,11 @@ function UpdateGFWPollutedIPRule() {
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/mosdns/cert:ro \
-        -v ${DOCKER_PATH}/config:/etc/mosdns/conf \
+        -v ${DOCKER_PATH}/conf:/etc/mosdns/conf \
+        -v ${DOCKER_PATH}/data:/etc/mosdns/data \
         -d ${OWNER}/${REPO}:${TAG} \
-        -dir /etc/mosdns/conf
+        -c /etc/mosdns/conf/config.yaml \
+        -dir /etc/mosdns/data
 }
 # Cleanup Expired Image
 function CleanupExpiredImage() {
