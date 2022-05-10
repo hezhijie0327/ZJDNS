@@ -30,27 +30,27 @@ function UnsetProxyServer() {
 }
 # Update GeoIP & GeoSite Rule
 function UpdateGeoIPSiteRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat" > "${DOCKER_PATH}/conf/geoip.dat"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat" > "${DOCKER_PATH}/conf/geosite.dat"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat" > "${DOCKER_PATH}/data/geoip.dat"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat" > "${DOCKER_PATH}/data/geosite.dat"
 }
 # Update GFWList2AGH Rule
 function UpdateGFWList2AGHRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/blacklist_full.txt" > "${DOCKER_PATH}/conf/GFWList2AGH_blacklist_full.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/whitelist_full.txt" > "${DOCKER_PATH}/conf/GFWList2AGH_whitelist_full.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/blacklist_full.txt" > "${DOCKER_PATH}/data/GFWList2AGH_blacklist_full.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/whitelist_full.txt" > "${DOCKER_PATH}/data/GFWList2AGH_whitelist_full.txt"
 }
 # Update CNIPDB Rule
 function UpdateCNIPDBRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb_combine.txt" > "${DOCKER_PATH}/conf/CNIPDB.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb_combine.txt" > "${DOCKER_PATH}/data/CNIPDB.txt"
 }
 # Update Reserved IP Rule
 function UpdateReservedIPRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/reserved_ipv4.txt" > "${DOCKER_PATH}/conf/reserved_ipv4.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/reserved_ipv6.txt" > "${DOCKER_PATH}/conf/reserved_ipv6.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/reserved_ipv4.txt" > "${DOCKER_PATH}/data/reserved_ipv4.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/reserved_ipv6.txt" > "${DOCKER_PATH}/data/reserved_ipv6.txt"
 }
 # Update GFW Polluted IP Rule
 function UpdateGFWPollutedIPRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/gfw_polluted_ipv4.txt" > "${DOCKER_PATH}/conf/gfw_polluted_ipv4.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/gfw_polluted_ipv6.txt" > "${DOCKER_PATH}/conf/gfw_polluted_ipv6.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/gfw_polluted_ipv4.txt" > "${DOCKER_PATH}/data/gfw_polluted_ipv4.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/gfw_polluted_ipv6.txt" > "${DOCKER_PATH}/data/gfw_polluted_ipv6.txt"
 }
 # Create New Container
 function CreateNewContainer() {
