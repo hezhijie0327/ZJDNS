@@ -144,13 +144,19 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_to_googledns
+            - forward_to_quad9
             - verify_response_dropresp
           secondary:
-            - forward_to_opendns
-            - verify_response_servfail
+            - primary:
+                - forward_to_googledns
+                - verify_response_dropresp
+              secondary:
+                - forward_to_opendns
+                - verify_response_servfail
+              always_standby: true
+              fast_fallback: 250
           always_standby: true
-          fast_fallback: 250
+          fast_fallback: 125
   - tag: forward_query_to_remote_non_ecs_dns
     type: sequence
     args:
@@ -256,6 +262,18 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_opendns_dot
+            - verify_response_servfail
+          always_standby: true
+          fast_fallback: 125
+  - tag: forward_to_quad9
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_to_quad9_doh
+            - verify_response_dropresp
+          secondary:
+            - forward_to_quad9_dot
             - verify_response_servfail
           always_standby: true
           fast_fallback: 125
@@ -550,6 +568,42 @@ plugin:
           trusted: true
         - addr: 'tls://dns.opendns.com'
           dial_addr: '208.67.222.222:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_to_quad9_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns11.quad9.net/dns-query'
+          dial_addr: '149.112.112.11:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns11.quad9.net/dns-query'
+          dial_addr: '9.9.9.11:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_to_quad9_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns11.quad9.net'
+          dial_addr: '149.112.112.11:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns11.quad9.net'
+          dial_addr: '9.9.9.11:853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
