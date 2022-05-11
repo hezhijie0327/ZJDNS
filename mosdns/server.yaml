@@ -159,7 +159,7 @@ plugin:
             - forward_to_cloudflaredns
             - verify_response_dropresp
           secondary:
-            - forward_to_quad9
+            - forward_to_adguarddns
             - verify_response_servfail
           always_standby: true
           fast_fallback: 250
@@ -247,15 +247,15 @@ plugin:
             - verify_response_servfail
           always_standby: true
           fast_fallback: 125
-  - tag: forward_to_quad9
+  - tag: forward_to_adguarddns
     type: sequence
     args:
       exec:
         - primary:
-            - forward_to_quad9_doh
+            - forward_to_adguarddns_doh
             - verify_response_dropresp
           secondary:
-            - forward_to_quad9_dot
+            - forward_to_adguarddns_dot
             - verify_response_servfail
           always_standby: true
           fast_fallback: 125
@@ -326,6 +326,42 @@ plugin:
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
+          trusted: true
+  - tag: forward_to_adguarddns_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '94.140.14.140:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '94.140.14.141:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_to_adguarddns_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '94.140.14.140:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '94.140.14.141:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_alidns_doh
     type: fast_forward
@@ -514,42 +550,6 @@ plugin:
           trusted: true
         - addr: 'tls://dns.opendns.com'
           dial_addr: '208.67.222.222:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_to_quad9_doh
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '149.112.112.10:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '9.9.9.10:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_to_quad9_dot
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '149.112.112.10:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '9.9.9.10:853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
