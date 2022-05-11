@@ -20,7 +20,7 @@ function CleanupCurrentContainer() {
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
-        -v /etc/resolv.conf:/etc/resolv.conf \
+        -v /etc/resolv.conf:/etc/resolv.conf:ro \
         -v ${DOCKER_PATH}/config/config.yaml:/root/.config/clash/config.yaml \
         -d ${OWNER}/${REPO}:${TAG}
 }
