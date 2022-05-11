@@ -156,10 +156,10 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_to_cloudflaredns
+            - forward_to_adguarddns
             - verify_response_dropresp
           secondary:
-            - forward_to_adguarddns
+            - forward_to_cloudflaredns
             - verify_response_servfail
           always_standby: true
           fast_fallback: 250
@@ -172,6 +172,18 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_360sdns_dot
+            - verify_response_servfail
+          always_standby: true
+          fast_fallback: 125
+  - tag: forward_to_adguarddns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_to_adguarddns_doh
+            - verify_response_dropresp
+          secondary:
+            - forward_to_adguarddns_dot
             - verify_response_servfail
           always_standby: true
           fast_fallback: 125
@@ -244,18 +256,6 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_opendns_dot
-            - verify_response_servfail
-          always_standby: true
-          fast_fallback: 125
-  - tag: forward_to_adguarddns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_adguarddns_doh
-            - verify_response_dropresp
-          secondary:
-            - forward_to_adguarddns_dot
             - verify_response_servfail
           always_standby: true
           fast_fallback: 125
