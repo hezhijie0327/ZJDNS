@@ -34,14 +34,14 @@ plugin:
                 - query_is_local_domain
               exec:
                 - forward_query_to_local_dns
-                - verify_response_servfail
+                - verify_response_needs_format
                 - _return
             - if:
                 - '!_query_is_common'
                 - query_is_not_local_domain
               exec:
                 - forward_query_to_remote_dns
-                - verify_response_servfail
+                - verify_response_needs_format
                 - _return
               else_exec:
                 - forward_query_to_local_dns
@@ -54,9 +54,13 @@ plugin:
                 - _drop_response
           secondary:
             - forward_query_to_remote_dns
-            - verify_response_servfail
+            - verify_response_needs_format
           always_standby: true
           fast_fallback: 250
+  - tag: _block_with_formerr
+    type: blackhole
+    args:
+      rcode: 1
   - tag: modify_response
     type: arbitrary
     args:
@@ -73,7 +77,7 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: verify_response_dropresp
+  - tag: verify_response_needs_drop
     type: sequence
     args:
       exec:
@@ -81,12 +85,20 @@ plugin:
             - '!_response_rcode_success'
           exec:
             - _drop_response
-  - tag: verify_response_servfail
+  - tag: verify_response_needs_format
     type: sequence
     args:
       exec:
         - if:
-            - '!_response_rcode_success'
+            - _response_rcode_formerr
+          exec:
+            - _block_with_formerr
+        - if:
+            - _response_rcode_nxdomain
+          exec:
+            - _block_with_nxdomain
+        - if:
+            - _response_rcode_servfail
           exec:
             - _block_with_servfail
   - tag: forward_query_to_local_dns
@@ -95,10 +107,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns
-            - verify_response_dropresp
+            - verify_response_needs_drop
           secondary:
             - forward_to_dnspod
-            - verify_response_dropresp
+            - verify_response_needs_drop
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_remote_dns
@@ -107,10 +119,10 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns
-            - verify_response_dropresp
+            - verify_response_needs_drop
           secondary:
             - forward_to_opendns
-            - verify_response_dropresp
+            - verify_response_needs_drop
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns
@@ -119,10 +131,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns_doh
-            - verify_response_dropresp
+            - verify_response_needs_drop
           secondary:
             - forward_to_alidns_dot
-            - verify_response_dropresp
+            - verify_response_needs_drop
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_dnspod
@@ -131,10 +143,10 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod_doh
-            - verify_response_dropresp
+            - verify_response_needs_drop
           secondary:
             - forward_to_dnspod_dot
-            - verify_response_dropresp
+            - verify_response_needs_drop
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_googledns
@@ -143,10 +155,10 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns_doh
-            - verify_response_dropresp
+            - verify_response_needs_drop
           secondary:
             - forward_to_googledns_dot
-            - verify_response_dropresp
+            - verify_response_needs_drop
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_opendns
@@ -155,10 +167,10 @@ plugin:
       exec:
         - primary:
             - forward_to_opendns_doh
-            - verify_response_dropresp
+            - verify_response_needs_drop
           secondary:
             - forward_to_opendns_dot
-            - verify_response_dropresp
+            - verify_response_needs_drop
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns_doh
@@ -311,6 +323,18 @@ plugin:
       domain:
         - 'ext:/etc/mosdns/data/geosite.dat:geolocation-!cn'
         - 'ext:/etc/mosdns/data/GFWList2AGH_blacklist_full.txt'
+  - tag: _response_rcode_formerr
+    type: response_matcher
+    args:
+      rcode: 1
+  - tag: _response_rcode_nxdomain
+    type: response_matcher
+    args:
+      rcode: 3
+  - tag: _response_rcode_servfail
+    type: response_matcher
+    args:
+      rcode: 2
   - tag: response_is_local_cname_ip
     type: response_matcher
     args:
