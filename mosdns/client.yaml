@@ -31,16 +31,12 @@ plugin:
         - set_edns0_bufsize
         - primary:
             - forward_query_to_lan_dns
-            - verify_response_needs_drop
+            - verify_response_dropresp
           secondary:
             - forward_query_to_wan_dns
-            - verify_response_needs_format
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 250
-  - tag: _block_with_formerr
-    type: blackhole
-    args:
-      rcode: 1
   - tag: modify_response
     type: arbitrary
     args:
@@ -57,7 +53,7 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: verify_response_needs_drop
+  - tag: verify_response_dropresp
     type: sequence
     args:
       exec:
@@ -65,20 +61,12 @@ plugin:
             - '!_response_rcode_success'
           exec:
             - _drop_response
-  - tag: verify_response_needs_format
+  - tag: verify_response_servfail
     type: sequence
     args:
       exec:
         - if:
-            - _response_rcode_formerr
-          exec:
-            - _block_with_formerr
-        - if:
-            - _response_rcode_nxdomain
-          exec:
-            - _block_with_nxdomain
-        - if:
-            - _response_rcode_servfail
+            - '!_response_rcode_success'
           exec:
             - _block_with_servfail
   - tag: forward_query_to_lan_dns
@@ -87,10 +75,10 @@ plugin:
       exec:
         - primary:
             - forward_to_lan_dns53_tcp
-            - verify_response_needs_drop
+            - verify_response_dropresp
           secondary:
             - forward_to_lan_dns53_udp
-            - verify_response_needs_drop
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_wan_dns
@@ -99,10 +87,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns
-            - verify_response_needs_drop
+            - verify_response_dropresp
           secondary:
             - forward_to_dnspod
-            - verify_response_needs_drop
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns
@@ -111,10 +99,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns_doh
-            - verify_response_needs_drop
+            - verify_response_dropresp
           secondary:
             - forward_to_alidns_dot
-            - verify_response_needs_drop
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_dnspod
@@ -123,10 +111,10 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod_doh
-            - verify_response_needs_drop
+            - verify_response_dropresp
           secondary:
             - forward_to_dnspod_dot
-            - verify_response_needs_drop
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns_doh
@@ -212,15 +200,3 @@ plugin:
           enable_pipeline: false
           max_conns: 16
           trusted: true
-  - tag: _response_rcode_formerr
-    type: response_matcher
-    args:
-      rcode: 1
-  - tag: _response_rcode_nxdomain
-    type: response_matcher
-    args:
-      rcode: 3
-  - tag: _response_rcode_servfail
-    type: response_matcher
-    args:
-      rcode: 2
