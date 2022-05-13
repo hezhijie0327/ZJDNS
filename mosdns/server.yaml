@@ -68,18 +68,39 @@ plugin:
     type: bufsize
     args:
       size: 1232
+  - tag: verify_response_needs_drop
+    type: sequence
+    args:
+      exec:
+        - if_and:
+            - '!response_is_cname_success'
+            - '!response_is_ip_success'
+          exec:
+            - _drop_response
+  - tag: verify_response_needs_format
+    type: sequence
+    args:
+      exec:
+        - if_and:
+            - '!response_is_cname_success'
+            - '!response_is_ip_success'
+          exec:
+            - if:
+                - _response_rcode_nxdomain
+              exec:
+                - _block_with_nxdomain
+              else_exec:
+                - _block_with_servfail
   - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_alidns
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
+            - verify_response_needs_drop
           secondary:
             - forward_to_dnspod
+            - verify_response_needs_format
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_remote_dns
@@ -88,12 +109,10 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
+            - verify_response_needs_drop
           secondary:
             - forward_to_opendns
+            - verify_response_needs_format
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns
@@ -102,12 +121,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns_doh
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
+            - verify_response_needs_drop
           secondary:
             - forward_to_alidns_dot
+            - verify_response_needs_drop
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_dnspod
@@ -116,12 +133,10 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod_doh
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
+            - verify_response_needs_drop
           secondary:
             - forward_to_dnspod_dot
+            - verify_response_needs_drop
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_googledns
@@ -130,12 +145,10 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns_doh
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
+            - verify_response_needs_drop
           secondary:
             - forward_to_googledns_dot
+            - - verify_response_needs_drop
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_opendns
@@ -144,12 +157,10 @@ plugin:
       exec:
         - primary:
             - forward_to_opendns_doh
-            - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
+            - verify_response_needs_drop
           secondary:
             - forward_to_opendns_dot
+            - verify_response_needs_drop
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns_doh
@@ -302,6 +313,25 @@ plugin:
       domain:
         - 'ext:/etc/mosdns/data/geosite.dat:geolocation-!cn'
         - 'ext:/etc/mosdns/data/GFWList2AGH_blacklist_full.txt'
+  - tag: _response_rcode_nxdomain
+    type: response_matcher
+    args:
+      rcode: 3
+  - tag: response_is_cname_success
+    type: response_matcher
+    args:
+      cname:
+        - 'regexp:^([a-zA-Z0-9][a-zA-Z0-9-_]*\.)*[a-zA-Z0-9]*[a-zA-Z0-9-_]*[[a-zA-Z0-9]+$'
+      rcode: 0
+      logical_and: true
+  - tag: response_is_ip_success
+    type: response_matcher
+    args:
+      ip:
+        - '0.0.0.0/0'
+        - '::/0'
+      rcode: 0
+      logical_and: true
   - tag: response_is_local_cname_ip
     type: response_matcher
     args:
