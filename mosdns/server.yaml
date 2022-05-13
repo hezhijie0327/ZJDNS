@@ -108,7 +108,7 @@ plugin:
                 - verify_response_dropresp
               secondary:
                 - forward_to_dnspod
-                - verify_response_servfail
+                - verify_response_dropresp
               always_standby: true
               fast_fallback: 250
           always_standby: true
@@ -126,7 +126,7 @@ plugin:
                 - verify_response_dropresp
               secondary:
                 - forward_to_opendns
-                - verify_response_servfail
+                - verify_response_dropresp
               always_standby: true
               fast_fallback: 250
           always_standby: true
@@ -140,7 +140,7 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_360sdns_dot
-            - verify_response_servfail
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns
@@ -152,7 +152,7 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_alidns_dot
-            - verify_response_servfail
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_cfiecdns
@@ -164,7 +164,7 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_cfiecdns_dot
-            - verify_response_servfail
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_dnspod
@@ -176,7 +176,7 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_dnspod_dot
-            - verify_response_servfail
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_googledns
@@ -188,7 +188,7 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_googledns_dot
-            - verify_response_servfail
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_opendns
@@ -200,7 +200,7 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_opendns_dot
-            - verify_response_servfail
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_quad9
@@ -212,7 +212,7 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_quad9_dot
-            - verify_response_servfail
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_360sdns_doh
