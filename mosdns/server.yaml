@@ -88,7 +88,7 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns
-            - - if:
+            - if:
                 - '!_response_rcode_success'
               exec:
                 - _drop_response
@@ -102,16 +102,12 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns_doh
-            - - if:
+            - if:
                 - '!_response_rcode_success'
               exec:
                 - _drop_response
           secondary:
             - forward_to_alidns_dot
-            - - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_dnspod
@@ -120,16 +116,12 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod_doh
-            - - if:
+            - if:
                 - '!_response_rcode_success'
               exec:
                 - _drop_response
           secondary:
             - forward_to_dnspod_dot
-            - - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_googledns
@@ -138,16 +130,12 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns_doh
-            - - if:
+            - if:
                 - '!_response_rcode_success'
               exec:
                 - _drop_response
           secondary:
             - forward_to_googledns_dot
-            - - - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_opendns
@@ -156,16 +144,12 @@ plugin:
       exec:
         - primary:
             - forward_to_opendns_doh
-            - - if:
+            - if:
                 - '!_response_rcode_success'
               exec:
                 - _drop_response
           secondary:
             - forward_to_opendns_dot
-            - - if:
-                - '!_response_rcode_success'
-              exec:
-                - _drop_response
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns_doh
