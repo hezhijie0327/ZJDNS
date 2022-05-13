@@ -22,7 +22,6 @@ plugin:
     args:
       exec:
         - _single_flight
-        - query_is_stored_in_cache
         - primary:
             - if:
                 - query_is_local_domain
@@ -305,14 +304,6 @@ plugin:
       domain:
         - 'ext:/etc/mosdns/data/geosite.dat:geolocation-!cn'
         - 'ext:/etc/mosdns/data/GFWList2AGH_blacklist_full.txt'
-  - tag: query_is_stored_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      lazy_cache_ttl: 86400
-      lazy_cache_reply_ttl: 30
-      redis: 'redis://127.0.0.1:6379/0'
-      redis_timeout: 125
   - tag: response_is_local_cname_ip
     type: response_matcher
     args:
