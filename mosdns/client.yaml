@@ -5,6 +5,7 @@ plugin:
     type: server
     args:
       entry:
+        - _enable_response_padding
         - modify_response
       server:
         - protocol: udp
