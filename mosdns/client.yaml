@@ -61,6 +61,10 @@ plugin:
       exec:
         - primary:
             - forward_to_lan_dns53_tcp
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_lan_dns53_udp
           always_standby: true
@@ -71,6 +75,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_dnspod
           always_standby: true
@@ -81,6 +89,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns_doh
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_alidns_dot
           always_standby: true
@@ -91,6 +103,10 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod_doh
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_dnspod_dot
           always_standby: true
