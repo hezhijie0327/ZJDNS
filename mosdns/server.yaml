@@ -74,6 +74,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_dnspod
           always_standby: true
@@ -84,6 +88,10 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_opendns
           always_standby: true
@@ -94,6 +102,10 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns_doh
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_alidns_dot
           always_standby: true
@@ -104,6 +116,10 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod_doh
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_dnspod_dot
           always_standby: true
@@ -114,6 +130,10 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns_doh
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_googledns_dot
           always_standby: true
@@ -124,6 +144,10 @@ plugin:
       exec:
         - primary:
             - forward_to_opendns_doh
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_opendns_dot
           always_standby: true
