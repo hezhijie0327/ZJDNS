@@ -94,8 +94,14 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_to_cfiecdns
-            - verify_response_dropresp
+            - primary:
+                - forward_to_360sdns
+                - verify_response_dropresp
+              secondary:
+                - forward_to_cfiecdns
+                - verify_response_dropresp
+              always_standby: true
+              fast_fallback: 250
           secondary:
             - primary:
                 - forward_to_alidns
@@ -123,6 +129,18 @@ plugin:
                 - verify_response_servfail
               always_standby: true
               fast_fallback: 250
+          always_standby: true
+          fast_fallback: 125
+  - tag: forward_to_360sdns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_to_360sdns_doh
+            - verify_response_dropresp
+          secondary:
+            - forward_to_360sdns_dot
+            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns
@@ -197,6 +215,74 @@ plugin:
             - verify_response_servfail
           always_standby: true
           fast_fallback: 125
+  - tag: forward_to_360sdns_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '101.198.192.33:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '101.198.193.29:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '101.199.113.208:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '180.163.249.75:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '36.99.170.86:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          trusted: true
+  - tag: forward_to_360sdns_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '101.198.192.33:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '101.198.193.29:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '101.199.113.208:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '180.163.249.75:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '36.99.170.86:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          trusted: true
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
