@@ -78,7 +78,7 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_lan_dns53_udp
-            - verify_response_servfail
+            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_wan_dns
@@ -86,84 +86,11 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_query_to_wan_secure_dns
+            - forward_to_alidns
             - verify_response_dropresp
           secondary:
-            - forward_query_to_wan_insecure_dns
-            - verify_response_servfail
-          always_standby: true
-          fast_fallback: 375
-  - tag: forward_query_to_wan_secure_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_query_to_wan_secure_ecs_dns
+            - forward_to_dnspod
             - verify_response_dropresp
-          secondary:
-            - _no_ecs
-            - forward_query_to_wan_secure_non_ecs_dns
-            - verify_response_servfail
-          always_standby: true
-          fast_fallback: 125
-  - tag: forward_query_to_wan_insecure_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_isp_dns53_tcp
-            - verify_response_dropresp
-          secondary:
-            - forward_to_isp_dns53_udp
-            - verify_response_servfail
-          always_standby: true
-          fast_fallback: 125
-  - tag: forward_query_to_wan_secure_ecs_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_cfiecdns
-            - verify_response_dropresp
-          secondary:
-            - primary:
-                - forward_to_alidns
-                - verify_response_dropresp
-              secondary:
-                - forward_to_dnspod
-                - verify_response_servfail
-              always_standby: true
-              fast_fallback: 250
-          always_standby: true
-          fast_fallback: 125
-  - tag: forward_query_to_wan_secure_non_ecs_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_360sdns
-            - verify_response_dropresp
-          secondary:
-            - primary:
-                - forward_to_geekdns
-                - verify_response_dropresp
-              secondary:
-                - forward_to_rubyfish
-                - verify_response_servfail
-              always_standby: true
-              fast_fallback: 250
-          always_standby: true
-          fast_fallback: 125
-  - tag: forward_to_360sdns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_360sdns_doh
-            - verify_response_dropresp
-          secondary:
-            - forward_to_360sdns_dot
-            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns
@@ -175,19 +102,7 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_alidns_dot
-            - verify_response_servfail
-          always_standby: true
-          fast_fallback: 125
-  - tag: forward_to_cfiecdns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_cfiecdns_doh
             - verify_response_dropresp
-          secondary:
-            - forward_to_cfiecdns_dot
-            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_dnspod
@@ -199,101 +114,9 @@ plugin:
             - verify_response_dropresp
           secondary:
             - forward_to_dnspod_dot
-            - verify_response_servfail
-          always_standby: true
-          fast_fallback: 125
-  - tag: forward_to_geekdns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_geekdns_doh
             - verify_response_dropresp
-          secondary:
-            - forward_to_geekdns_dot
-            - verify_response_servfail
           always_standby: true
           fast_fallback: 125
-  - tag: forward_to_rubyfish
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_rubyfish_doh
-            - verify_response_dropresp
-          secondary:
-            - forward_to_rubyfish_dot
-            - verify_response_servfail
-          always_standby: true
-          fast_fallback: 125
-  - tag: forward_to_360sdns_doh
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '101.198.192.33:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '101.198.193.29:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '101.199.113.208:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '180.163.249.75:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '36.99.170.86:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_360sdns_dot
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '101.198.192.33:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '101.198.193.29:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '101.199.113.208:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '180.163.249.75:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '36.99.170.86:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
@@ -322,26 +145,6 @@ plugin:
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_cfiecdns_doh
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns.ipv6dns.com/dns-query'
-          dial_addr: '221.228.217.28:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_cfiecdns_dot
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns.ipv6dns.com'
-          dial_addr: '221.228.217.28:853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
@@ -376,65 +179,6 @@ plugin:
           dial_addr: '120.53.53.53:853'
           enable_pipeline: true
           idle_timeout: 10
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_geekdns_doh
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://i.233py.com/dns-query'
-          dial_addr: '101.35.161.25:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_geekdns_dot
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://i.233py.com'
-          dial_addr: '101.35.161.25:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_rubyfish_doh
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns.rubyfish.cn/dns-query'
-          dial_addr: '175.24.154.66:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_rubyfish_dot
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns.rubyfish.cn'
-          dial_addr: '175.24.154.66:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_isp_dns53_tcp
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tcp://ISP_DNS_IP_ADDRESS'
-          dial_addr: 'ISP_DNS_IP_ADDRESS:53'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_isp_dns53_udp
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'udpme://ISP_DNS_IP_ADDRESS'
-          dial_addr: 'ISP_DNS_IP_ADDRESS:53'
-          enable_pipeline: false
           max_conns: 16
           trusted: true
   - tag: forward_to_lan_dns53_tcp
