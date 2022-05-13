@@ -12,8 +12,9 @@ plugin:
         - protocol: dot
           addr: 127.0.0.1:8853
           cert: '/etc/mosdns/cert/fullchain.cer'
-          idle_timeout: 10
           key: '/etc/mosdns/cert/zhijie.online.key'
+        - protocol: udp
+          addr: 127.0.0.1:8853
   - tag: query_sequence
     type: sequence
     args:
