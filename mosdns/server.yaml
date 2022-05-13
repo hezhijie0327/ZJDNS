@@ -1,6 +1,15 @@
 log:
   level: info
 plugin:
+  - tag: bootstrap_server
+    type: server
+    args:
+      entry:
+        - _enable_response_padding
+        - modify_response
+      server:
+        - protocol: udp
+          addr: 127.0.0.1:8853
   - tag: main_server
     type: server
     args:
@@ -13,8 +22,6 @@ plugin:
           addr: 127.0.0.1:8853
           cert: '/etc/mosdns/cert/fullchain.cer'
           key: '/etc/mosdns/cert/zhijie.online.key'
-        - protocol: udp
-          addr: 127.0.0.1:8853
   - tag: query_sequence
     type: sequence
     args:
