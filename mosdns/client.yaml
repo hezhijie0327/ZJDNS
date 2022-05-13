@@ -31,10 +31,12 @@ plugin:
         - set_edns0_bufsize
         - primary:
             - forward_query_to_lan_dns
-            - verify_response_dropresp
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_query_to_wan_dns
-            - verify_response_servfail
           always_standby: true
           fast_fallback: 250
   - tag: modify_response
@@ -53,32 +55,14 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: verify_response_dropresp
-    type: sequence
-    args:
-      exec:
-        - if:
-            - '!_response_rcode_success'
-          exec:
-            - _drop_response
-  - tag: verify_response_servfail
-    type: sequence
-    args:
-      exec:
-        - if:
-            - '!_response_rcode_success'
-          exec:
-            - _block_with_servfail
   - tag: forward_query_to_lan_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_lan_dns53_tcp
-            - verify_response_dropresp
           secondary:
             - forward_to_lan_dns53_udp
-            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_wan_dns
@@ -87,10 +71,8 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns
-            - verify_response_dropresp
           secondary:
             - forward_to_dnspod
-            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns
@@ -99,10 +81,8 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns_doh
-            - verify_response_dropresp
           secondary:
             - forward_to_alidns_dot
-            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_dnspod
@@ -111,10 +91,8 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod_doh
-            - verify_response_dropresp
           secondary:
             - forward_to_dnspod_dot
-            - verify_response_dropresp
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns_doh
