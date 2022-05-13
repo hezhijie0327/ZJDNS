@@ -68,37 +68,18 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: verify_response_needs_drop
-    type: sequence
-    args:
-      exec:
-        - if:
-            - '!_response_rcode_success'
-          exec:
-            - _drop_response
-  - tag: verify_response_needs_format
-    type: sequence
-    args:
-      exec:
-        - if:
-            - '!_response_rcode_success'
-          exec:
-            - if:
-                - _response_rcode_nxdomain
-              exec:
-                - _block_with_nxdomain
-              else_exec:
-                - _block_with_servfail
   - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_alidns
-            - verify_response_needs_drop
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_dnspod
-            - verify_response_needs_format
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_remote_dns
@@ -107,10 +88,12 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns
-            - verify_response_needs_drop
+            - - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_opendns
-            - verify_response_needs_format
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns
@@ -119,10 +102,16 @@ plugin:
       exec:
         - primary:
             - forward_to_alidns_doh
-            - verify_response_needs_drop
+            - - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_alidns_dot
-            - verify_response_needs_drop
+            - - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_dnspod
@@ -131,10 +120,16 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod_doh
-            - verify_response_needs_drop
+            - - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_dnspod_dot
-            - verify_response_needs_drop
+            - - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_googledns
@@ -143,10 +138,16 @@ plugin:
       exec:
         - primary:
             - forward_to_googledns_doh
-            - verify_response_needs_drop
+            - - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_googledns_dot
-            - - verify_response_needs_drop
+            - - - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_opendns
@@ -155,10 +156,16 @@ plugin:
       exec:
         - primary:
             - forward_to_opendns_doh
-            - verify_response_needs_drop
+            - - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_opendns_dot
-            - verify_response_needs_drop
+            - - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns_doh
