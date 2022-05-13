@@ -11,7 +11,6 @@ plugin:
         - set_edns0_bufsize
         - modify_response
         - query_sequence
-        - modify_ttl
       server:
         - protocol: dot
           addr: 127.0.0.1:8853
@@ -58,11 +57,6 @@ plugin:
       rr:
         - 'localhost.zhijie.online IN A ANSWER localhost.zhijie.online. IN A 127.0.0.1'
         - 'localhost.zhijie.online IN AAAA ANSWER localhost.zhijie.online. IN AAAA ::1'
-  - tag: modify_ttl
-    type: ttl
-    args:
-      maximum_ttl: 3600
-      minimal_ttl: 300
   - tag: set_ecs
     type: ecs
     args:
