@@ -5,10 +5,7 @@ plugin:
     type: server
     args:
       entry:
-        - _enable_response_padding
-        - _pad_query
-        - set_ecs
-        - set_edns0_bufsize
+        - _single_flight
         - modify_response
         - query_sequence
       server:
@@ -21,7 +18,10 @@ plugin:
     type: sequence
     args:
       exec:
-        - _single_flight
+        - _enable_response_padding
+        - _pad_query
+        - set_ecs
+        - set_edns0_bufsize
         - primary:
             - if:
                 - query_is_local_domain
