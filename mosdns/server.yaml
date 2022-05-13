@@ -29,25 +29,36 @@ plugin:
         - _pad_query
         - set_ecs
         - set_edns0_bufsize
-        - if:
-            - query_is_local_domain
-          exec:
-            - forward_query_to_local_dns
-            - _return
-        - if:
-            - query_is_not_local_domain
-          exec:
-            - forward_query_to_remote_dns
-            - _return
         - primary:
-            - forward_query_to_local_dns
             - if:
-                - '!_response_rcode_success'
-                - '!response_is_local_cname_ip'
-                - response_is_polluted_ip
-                - response_is_reserved_ip
+                - query_is_local_domain
               exec:
-                - _drop_response
+                - forward_query_to_local_dns
+                - if:
+                    - '!_response_rcode_success'
+                  exec:
+                    - _drop_response
+                  else_exec:
+                    - _return
+            - if:
+                - query_is_not_local_domain
+              exec:
+                - forward_query_to_remote_dns
+                - if:
+                    - '!_response_rcode_success'
+                  exec:
+                    - _drop_response
+                  else_exec:
+                    - _return
+              else_exec:
+                - forward_query_to_local_dns
+                - if:
+                    - '!_response_rcode_success'
+                    - '!response_is_local_cname_ip'
+                    - response_is_polluted_ip
+                    - response_is_reserved_ip
+                  exec:
+                    - _drop_response
           secondary:
             - forward_query_to_remote_dns
           always_standby: true
