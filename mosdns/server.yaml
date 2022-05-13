@@ -72,18 +72,16 @@ plugin:
     type: sequence
     args:
       exec:
-        - if_and:
-            - '!response_is_cname_success'
-            - '!response_is_ip_success'
+        - if:
+            - '!_response_rcode_success'
           exec:
             - _drop_response
   - tag: verify_response_needs_format
     type: sequence
     args:
       exec:
-        - if_and:
-            - '!response_is_cname_success'
-            - '!response_is_ip_success'
+        - if:
+            - '!_response_rcode_success'
           exec:
             - if:
                 - _response_rcode_nxdomain
@@ -317,21 +315,6 @@ plugin:
     type: response_matcher
     args:
       rcode: 3
-  - tag: response_is_cname_success
-    type: response_matcher
-    args:
-      cname:
-        - 'regexp:^([a-zA-Z0-9][a-zA-Z0-9-_]*\.)*[a-zA-Z0-9]*[a-zA-Z0-9-_]*[[a-zA-Z0-9]+$'
-      rcode: 0
-      logical_and: true
-  - tag: response_is_ip_success
-    type: response_matcher
-    args:
-      ip:
-        - '0.0.0.0/0'
-        - '::/0'
-      rcode: 0
-      logical_and: true
   - tag: response_is_local_cname_ip
     type: response_matcher
     args:
