@@ -34,33 +34,19 @@ plugin:
                 - query_is_local_domain
               exec:
                 - forward_query_to_local_dns
-                - verify_response_needs_format
                 - _return
             - if:
                 - '!_query_is_common'
                 - query_is_not_local_domain
               exec:
                 - forward_query_to_remote_dns
-                - verify_response_needs_format
                 - _return
               else_exec:
                 - forward_query_to_local_dns
-            - if:
-                - '!_response_rcode_success'
-                - '!response_is_local_cname_ip'
-                - response_is_polluted_ip
-                - response_is_reserved_ip
-              exec:
-                - _drop_response
           secondary:
             - forward_query_to_remote_dns
-            - verify_response_needs_format
           always_standby: true
           fast_fallback: 250
-  - tag: _block_with_formerr
-    type: blackhole
-    args:
-      rcode: 1
   - tag: modify_response
     type: arbitrary
     args:
@@ -83,24 +69,10 @@ plugin:
       exec:
         - if:
             - '!_response_rcode_success'
+            - response_is_polluted_ip
+            - response_is_reserved_ip
           exec:
             - _drop_response
-  - tag: verify_response_needs_format
-    type: sequence
-    args:
-      exec:
-        - if:
-            - _response_rcode_formerr
-          exec:
-            - _block_with_formerr
-        - if:
-            - _response_rcode_nxdomain
-          exec:
-            - _block_with_nxdomain
-        - if:
-            - _response_rcode_servfail
-          exec:
-            - _block_with_servfail
   - tag: forward_query_to_local_dns
     type: sequence
     args:
@@ -323,18 +295,6 @@ plugin:
       domain:
         - 'ext:/etc/mosdns/data/geosite.dat:geolocation-!cn'
         - 'ext:/etc/mosdns/data/GFWList2AGH_blacklist_full.txt'
-  - tag: _response_rcode_formerr
-    type: response_matcher
-    args:
-      rcode: 1
-  - tag: _response_rcode_nxdomain
-    type: response_matcher
-    args:
-      rcode: 3
-  - tag: _response_rcode_servfail
-    type: response_matcher
-    args:
-      rcode: 2
   - tag: response_is_local_cname_ip
     type: response_matcher
     args:
