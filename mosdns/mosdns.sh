@@ -36,8 +36,7 @@ function UpdateGeoIPCNRule() {
 }
 # Update Suspicious IP Rule
 function UpdateSuspiciousIPRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/POLLUTED.txt" > "${DOCKER_PATH}/data/GeoIP_POLLUTED.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/RESERVED.txt" > "${DOCKER_PATH}/data/GeoIP_RESERVED.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/GFW_Polluted_IP.txt" > "${DOCKER_PATH}/data/SuspiciousIP_GFW_Polluted_IP.txt"
 }
 # Create New Container
 function CreateNewContainer() {
