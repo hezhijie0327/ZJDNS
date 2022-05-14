@@ -31,17 +31,13 @@ function UnsetProxyServer() {
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
     curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/geoip/release/cn.dat" > "${DOCKER_PATH}/data/GeoIP_CN_IPIP.dat"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/POLLUTED.txt" > "${DOCKER_PATH}/data/GeoIP_POLLUTED.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/RESERVED.txt" > "${DOCKER_PATH}/data/GeoIP_RESERVED.txt"
     curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb_combine.txt" > "${DOCKER_PATH}/data/GeoIP_CN_IANA.txt"
     curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/v2fly/geoip/release/cn.dat" > "${DOCKER_PATH}/data/GeoIP_CN_MaxMind.dat"
 }
-# Update GeoSite Rule
-function UpdateGeoSiteRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat" > "${DOCKER_PATH}/data/GeoSite_Loyalsoldier.dat"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/blacklist_full.txt" > "${DOCKER_PATH}/data/GeoSite_hezhijie0327_PROXY.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/whitelist_full.txt" > "${DOCKER_PATH}/data/GeoSite_hezhijie0327_DIRECT.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/v2fly/domain-list-community/release/dlc.dat" > "${DOCKER_PATH}/data/GeoSite_v2fly.dat"
+# Update Suspicious IP Rule
+function UpdateSuspiciousIPRule() {
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/POLLUTED.txt" > "${DOCKER_PATH}/data/GeoIP_POLLUTED.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/RESERVED.txt" > "${DOCKER_PATH}/data/GeoIP_RESERVED.txt"
 }
 # Create New Container
 function CreateNewContainer() {
@@ -71,6 +67,8 @@ GetLatestImage
 UpdateGeoIPCNRule
 # Call UpdateGeoSiteRule
 UpdateGeoSiteRule
+# Call UpdateSuspiciousIPRule
+UpdateSuspiciousIPRule
 # Call CleanupCurrentContainer
 CleanupCurrentContainer
 # Call CreateNewContainer
