@@ -73,13 +73,13 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_to_alidns
+            - forward_to_dnspod
             - if:
                 - '!_response_rcode_success'
               exec:
                 - _drop_response
           secondary:
-            - forward_to_dnspod
+            - forward_to_alidns
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_remote_dns
@@ -87,13 +87,13 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_to_googledns
+            - forward_to_opendns
             - if:
                 - '!_response_rcode_success'
               exec:
                 - _drop_response
           secondary:
-            - forward_to_opendns
+            - forward_to_googledns
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_alidns
