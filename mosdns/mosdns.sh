@@ -65,8 +65,6 @@ UnsetProxyServer
 GetLatestImage
 # Call UpdateGeoIPRule
 UpdateGeoIPCNRule
-# Call UpdateGeoSiteRule
-UpdateGeoSiteRule
 # Call UpdateSuspiciousIPRule
 UpdateSuspiciousIPRule
 # Call CleanupCurrentContainer
