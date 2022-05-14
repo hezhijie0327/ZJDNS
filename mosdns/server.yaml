@@ -302,10 +302,6 @@ plugin:
       domain:
         - 'ext:/etc/mosdns/data/geosite.dat:geolocation-!cn'
         - 'ext:/etc/mosdns/data/GFWList2AGH_blacklist_full.txt'
-  - tag: _response_rcode_nxdomain
-    type: response_matcher
-    args:
-      rcode: 3
   - tag: response_is_local_cname_ip
     type: response_matcher
     args:
