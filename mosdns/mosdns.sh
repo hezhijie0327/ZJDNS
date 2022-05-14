@@ -28,29 +28,20 @@ function UnsetProxyServer() {
     export http_proxy=""
     export https_proxy=""
 }
-# Update GeoIP & GeoSite Rule
-function UpdateGeoIPSiteRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat" > "${DOCKER_PATH}/data/geoip.dat"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat" > "${DOCKER_PATH}/data/geosite.dat"
+# Update GeoIP CN Rule
+function UpdateGeoIPCNRule() {
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/geoip/release/cn.dat" > "${DOCKER_PATH}/data/GeoIP_CN_IPIP.dat"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/POLLUTED.txt" > "${DOCKER_PATH}/data/GeoIP_POLLUTED.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/RESERVED.txt" > "${DOCKER_PATH}/data/GeoIP_RESERVED.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb_combine.txt" > "${DOCKER_PATH}/data/GeoIP_CN_IANA.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/v2fly/geoip/release/cn.dat" > "${DOCKER_PATH}/data/GeoIP_CN_MaxMind.dat"
 }
-# Update GFWList2AGH Rule
-function UpdateGFWList2AGHRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/blacklist_full.txt" > "${DOCKER_PATH}/data/GFWList2AGH_blacklist_full.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/whitelist_full.txt" > "${DOCKER_PATH}/data/GFWList2AGH_whitelist_full.txt"
-}
-# Update CNIPDB Rule
-function UpdateCNIPDBRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb_combine.txt" > "${DOCKER_PATH}/data/CNIPDB.txt"
-}
-# Update Reserved IP Rule
-function UpdateReservedIPRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/reserved_ipv4.txt" > "${DOCKER_PATH}/data/reserved_ipv4.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/reserved_ipv6.txt" > "${DOCKER_PATH}/data/reserved_ipv6.txt"
-}
-# Update GFW Polluted IP Rule
-function UpdateGFWPollutedIPRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/gfw_polluted_ipv4.txt" > "${DOCKER_PATH}/data/gfw_polluted_ipv4.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/gfw_polluted_ipv6.txt" > "${DOCKER_PATH}/data/gfw_polluted_ipv6.txt"
+# Update GeoSite Rule
+function UpdateGeoSiteRule() {
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat" > "${DOCKER_PATH}/data/GeoSite_Loyalsoldier.dat"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/blacklist_full.txt" > "${DOCKER_PATH}/data/GeoSite_hezhijie0327_PROXY.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/GFWList2AGH/main/gfwlist2domain/whitelist_full.txt" > "${DOCKER_PATH}/data/GeoSite_hezhijie0327_DIRECT.txt"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/v2fly/domain-list-community/release/dlc.dat" > "${DOCKER_PATH}/data/GeoSite_v2fly.dat"
 }
 # Create New Container
 function CreateNewContainer() {
@@ -76,16 +67,10 @@ function CleanupExpiredImage() {
 UnsetProxyServer
 # Call GetLatestImage
 GetLatestImage
-# Call UpdateGeoIPSiteRule
-UpdateGeoIPSiteRule
-# Call UpdateGFWList2AGHRule
-UpdateGFWList2AGHRule
-# Call UpdateCNIPDBRule
-UpdateCNIPDBRule
-# Call UpdateReservedIPRule
-UpdateReservedIPRule
-# Call UpdateGFWPollutedIPRule
-UpdateGFWPollutedIPRule
+# Call UpdateGeoIPRule
+UpdateGeoIPCNRule
+# Call UpdateGeoSiteRule
+UpdateGeoSiteRule
 # Call CleanupCurrentContainer
 CleanupCurrentContainer
 # Call CreateNewContainer
