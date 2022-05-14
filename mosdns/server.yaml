@@ -43,7 +43,7 @@ plugin:
             - forward_query_to_local_dns
             - if:
                 - '!_response_rcode_success'
-                - '!response_is_local_cname_ip'
+                - '!response_is_local_ip'
                 - response_is_suspicious_ip
               exec:
                 - _drop_response
@@ -441,15 +441,9 @@ plugin:
         - 'ext:/etc/mosdns/data/GeoSite_Loyalsoldier.dat:geolocation-!cn'
         - 'ext:/etc/mosdns/data/GeoSite_v2fly.dat:geolocation-!cn'
         - 'ext:/etc/mosdns/data/GeoSite_hezhijie0327_PROXY.txt'
-  - tag: response_is_local_cname_ip
+  - tag: response_is_local_ip
     type: response_matcher
     args:
-      cname:
-        - 'ext:/etc/mosdns/data/GeoSite_Loyalsoldier.dat:apple-cn'
-        - 'ext:/etc/mosdns/data/GeoSite_Loyalsoldier.dat:cn'
-        - 'ext:/etc/mosdns/data/GeoSite_Loyalsoldier.dat:google-cn'
-        - 'ext:/etc/mosdns/data/GeoSite_v2fly.dat:cn'
-        - 'ext:/etc/mosdns/data/GeoSite_hezhijie0327_DIRECT.txt'
       ip:
         - 'ext:/etc/mosdns/data/GeoIP_CN_IPIP.dat:cn'
         - 'ext:/etc/mosdns/data/GeoIP_CN_MaxMind.dat:cn'
