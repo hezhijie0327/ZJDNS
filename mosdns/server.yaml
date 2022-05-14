@@ -203,31 +203,25 @@ plugin:
     args:
       upstream:
         - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '101.198.192.33:443'
+          dial_addr: '101.226.4.6:443'
           enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           trusted: true
         - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '101.198.193.29:443'
+          dial_addr: '123.125.81.6:443'
           enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           trusted: true
         - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '101.199.113.208:443'
+          dial_addr: '140.207.198.6 :443'
           enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           trusted: true
         - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '180.163.249.75:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '36.99.170.86:443'
+          dial_addr: '218.30.118.6:443'
           enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
@@ -237,31 +231,25 @@ plugin:
     args:
       upstream:
         - addr: 'tls://dot.360.cn'
-          dial_addr: '101.198.192.33:853'
+          dial_addr: '101.226.4.6:853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           trusted: true
         - addr: 'tls://dot.360.cn'
-          dial_addr: '101.198.193.29:853'
+          dial_addr: '123.125.81.6:853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           trusted: true
         - addr: 'tls://dot.360.cn'
-          dial_addr: '101.199.113.208:853'
+          dial_addr: '140.207.198.6 :853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           trusted: true
         - addr: 'tls://dot.360.cn'
-          dial_addr: '180.163.249.75:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '36.99.170.86:853'
+          dial_addr: '218.30.118.6:853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
