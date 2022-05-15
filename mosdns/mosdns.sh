@@ -32,10 +32,6 @@ function UnsetProxyServer() {
 function UpdateGeoIPCNRule() {
     curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb_combine.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
 }
-# Update Suspicious IP Rule
-function UpdateSuspiciousIPRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CMA_DNS/main/mosdns/GFW_Polluted_IP.txt" > "${DOCKER_PATH}/data/SuspiciousIP_GFW_Polluted_IP.txt"
-}
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
@@ -62,8 +58,6 @@ UnsetProxyServer
 GetLatestImage
 # Call UpdateGeoIPRule
 UpdateGeoIPCNRule
-# Call UpdateSuspiciousIPRule
-UpdateSuspiciousIPRule
 # Call CleanupCurrentContainer
 CleanupCurrentContainer
 # Call CreateNewContainer
