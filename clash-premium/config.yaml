@@ -1,5 +1,6 @@
 log-level: info
 mixed-port: 7890
+ipv6: true
 mode: rule
 proxies:
 proxy-groups:
