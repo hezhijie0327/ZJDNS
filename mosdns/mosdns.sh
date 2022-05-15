@@ -30,9 +30,7 @@ function UnsetProxyServer() {
 }
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/Loyalsoldier/geoip/release/cn.dat" > "${DOCKER_PATH}/data/GeoIP_CN_IPIP.dat"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb_combine.txt" > "${DOCKER_PATH}/data/GeoIP_CN_IANA.txt"
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/v2fly/geoip/release/cn.dat" > "${DOCKER_PATH}/data/GeoIP_CN_MaxMind.dat"
+    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb_combine.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
 }
 # Update Suspicious IP Rule
 function UpdateSuspiciousIPRule() {
