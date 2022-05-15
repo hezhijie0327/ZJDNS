@@ -419,9 +419,7 @@ plugin:
     type: response_matcher
     args:
       ip:
-        - 'ext:/etc/mosdns/data/GeoIP_CN_IPIP.dat:cn'
-        - 'ext:/etc/mosdns/data/GeoIP_CN_MaxMind.dat:cn'
-        - 'ext:/etc/mosdns/data/GeoIP_CN_IANA.txt'
+        - 'ext:/etc/mosdns/data/GeoIP_CNIPDb.txt'
   - tag: response_is_suspicious_ip
     type: response_matcher
     args:
