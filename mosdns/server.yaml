@@ -34,6 +34,7 @@ plugin:
             - if:
                 - '!_response_rcode_success'
                 - '!response_is_local_ip'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -64,6 +65,7 @@ plugin:
             - forward_to_360sdns
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -71,6 +73,7 @@ plugin:
                 - forward_to_dnspod
                 - if:
                     - '!_response_rcode_success'
+                    - _response_empty_answer
                   exec:
                     - _drop_response
               secondary:
@@ -87,6 +90,7 @@ plugin:
             - forward_to_quad9
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -94,6 +98,7 @@ plugin:
                 - forward_to_opendns
                 - if:
                     - '!_response_rcode_success'
+                    - _response_empty_answer
                   exec:
                     - _drop_response
               secondary:
@@ -110,6 +115,7 @@ plugin:
             - forward_to_360sdns_doh
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -124,6 +130,7 @@ plugin:
             - forward_to_alidns_doh
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -138,6 +145,7 @@ plugin:
             - forward_to_dnspod_doh
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -152,6 +160,7 @@ plugin:
             - forward_to_googledns_doh
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -166,6 +175,7 @@ plugin:
             - forward_to_opendns_doh
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -180,6 +190,7 @@ plugin:
             - forward_to_quad9_doh
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
