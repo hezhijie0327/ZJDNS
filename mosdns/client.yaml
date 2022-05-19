@@ -33,6 +33,7 @@ plugin:
             - forward_query_to_lan_dns
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -63,6 +64,7 @@ plugin:
             - forward_to_lan_dns53_tcp
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -77,6 +79,7 @@ plugin:
             - forward_to_360sdns
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -84,6 +87,7 @@ plugin:
                 - forward_to_dnspod
                 - if:
                     - '!_response_rcode_success'
+                    - _response_empty_answer
                   exec:
                     - _drop_response
               secondary:
@@ -100,6 +104,7 @@ plugin:
             - forward_to_360sdns_doh
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -114,6 +119,7 @@ plugin:
             - forward_to_alidns_doh
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -128,6 +134,7 @@ plugin:
             - forward_to_dnspod_doh
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
