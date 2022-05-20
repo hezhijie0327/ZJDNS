@@ -72,7 +72,7 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_to_adgaurd
+            - forward_to_dnssb
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
@@ -80,7 +80,7 @@ plugin:
                 - _drop_response
           secondary:
             - primary:
-                - forward_to_dnssb
+                - forward_to_adgaurd
                 - if:
                     - '!_response_rcode_success'
                     - _response_empty_answer
