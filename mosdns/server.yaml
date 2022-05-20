@@ -79,7 +79,17 @@ plugin:
               exec:
                 - _drop_response
           secondary:
-            - forward_to_cloudflare
+            - primary:
+                - forward_to_dnssb
+                - if:
+                    - '!_response_rcode_success'
+                    - _response_empty_answer
+                  exec:
+                    - _drop_response
+              secondary:
+                - forward_to_cloudflare
+              always_standby: true
+              fast_fallback: 125
           always_standby: true
           fast_fallback: 125
   - tag: forward_query_to_local_dns
@@ -205,6 +215,21 @@ plugin:
                 - _drop_response
           secondary:
             - forward_to_dnspod_dot
+          always_standby: true
+          fast_fallback: 125
+  - tag: forward_to_dnssb
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_to_dnssb_doh
+            - if:
+                - '!_response_rcode_success'
+                - _response_empty_answer
+              exec:
+                - _drop_response
+          secondary:
+            - forward_to_dnssb_dot
           always_standby: true
           fast_fallback: 125
   - tag: forward_to_googledns
@@ -443,6 +468,42 @@ plugin:
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
+          trusted: true
+  - tag: forward_to_dnssb_doh
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '185.222.222.222:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '45.11.45.11:443'
+          enable_pipeline: false
+          idle_timeout: 30
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_to_dnssb_dot
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.sb'
+          dial_addr: '185.222.222.222:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '45.11.45.11:853'
+          enable_pipeline: true
+          idle_timeout: 10
+          max_conns: 16
+          socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_googledns_doh
     type: fast_forward
