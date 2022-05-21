@@ -34,7 +34,6 @@ plugin:
             - if:
                 - '!_response_rcode_success'
                 - '!response_is_local_ip'
-                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
