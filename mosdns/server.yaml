@@ -49,7 +49,7 @@ plugin:
               always_standby: true
               fast_fallback: 250
           always_standby: true
-          fast_fallback: 250
+          fast_fallback: 375
   - tag: modify_response
     type: arbitrary
     args:
@@ -80,7 +80,7 @@ plugin:
           secondary:
             - forward_to_cloudflare
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 375
   - tag: forward_query_to_local_dns
     type: sequence
     args:
@@ -95,7 +95,7 @@ plugin:
           secondary:
             - forward_to_alidns
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 375
   - tag: forward_query_to_remote_dns
     type: sequence
     args:
@@ -110,7 +110,7 @@ plugin:
           secondary:
             - forward_to_googledns
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 375
   - tag: forward_to_adguard
     type: sequence
     args:
@@ -125,7 +125,7 @@ plugin:
           secondary:
             - forward_to_adguard_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_alidns
     type: sequence
     args:
@@ -140,7 +140,7 @@ plugin:
           secondary:
             - forward_to_alidns_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_cloudflare
     type: sequence
     args:
@@ -155,7 +155,7 @@ plugin:
           secondary:
             - forward_to_cloudflare_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_dnspod
     type: sequence
     args:
@@ -170,7 +170,7 @@ plugin:
           secondary:
             - forward_to_dnspod_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_googledns
     type: sequence
     args:
@@ -185,7 +185,7 @@ plugin:
           secondary:
             - forward_to_googledns_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_opendns
     type: sequence
     args:
@@ -200,7 +200,7 @@ plugin:
           secondary:
             - forward_to_opendns_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_adguard_doh
     type: fast_forward
     args:
