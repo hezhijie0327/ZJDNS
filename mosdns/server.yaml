@@ -71,7 +71,7 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_to_adgaurd
+            - forward_to_adguard
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
@@ -108,7 +108,7 @@ plugin:
               exec:
                 - _drop_response
           secondary:
-            - forward_to_googledns
+            - forward_to_google
           always_standby: true
           fast_fallback: 375
   - tag: forward_to_adguard
@@ -171,19 +171,19 @@ plugin:
             - forward_to_dnspod_dot
           always_standby: true
           fast_fallback: 250
-  - tag: forward_to_googledns
+  - tag: forward_to_google
     type: sequence
     args:
       exec:
         - primary:
-            - forward_to_googledns_doh
+            - forward_to_google_doh
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
-            - forward_to_googledns_dot
+            - forward_to_google_dot
           always_standby: true
           fast_fallback: 250
   - tag: forward_to_opendns
@@ -337,7 +337,7 @@ plugin:
           idle_timeout: 10
           max_conns: 16
           trusted: true
-  - tag: forward_to_googledns_doh
+  - tag: forward_to_google_doh
     type: fast_forward
     args:
       upstream:
@@ -355,7 +355,7 @@ plugin:
           max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_to_googledns_dot
+  - tag: forward_to_google_dot
     type: fast_forward
     args:
       upstream:
