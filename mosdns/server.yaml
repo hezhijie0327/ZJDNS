@@ -71,56 +71,6 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_to_adguard
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - primary:
-                - forward_to_dnssb
-                - if:
-                    - '!_response_rcode_success'
-                    - _response_empty_answer
-                  exec:
-                    - _drop_response
-              secondary:
-                - forward_to_cloudflare
-              always_standby: true
-              fast_fallback: 250
-          always_standby: true
-          fast_fallback: 375
-  - tag: forward_query_to_local_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_360
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - primary:
-                - forward_to_dnspod
-                - if:
-                    - '!_response_rcode_success'
-                    - _response_empty_answer
-                  exec:
-                    - _drop_response
-              secondary:
-                - forward_to_alidns
-              always_standby: true
-              fast_fallback: 250
-          always_standby: true
-          fast_fallback: 375
-  - tag: forward_query_to_remote_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
             - forward_to_quad9
             - if:
                 - '!_response_rcode_success'
@@ -128,49 +78,39 @@ plugin:
               exec:
                 - _drop_response
           secondary:
-            - primary:
-                - forward_to_opendns
-                - if:
-                    - '!_response_rcode_success'
-                    - _response_empty_answer
-                  exec:
-                    - _drop_response
-              secondary:
-                - forward_to_google
-              always_standby: true
-              fast_fallback: 250
+            - forward_to_cloudflare
           always_standby: true
           fast_fallback: 375
-  - tag: forward_to_360
+  - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - primary:
-            - forward_to_360_doh
+            - forward_to_dnspod
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
-            - forward_to_360_dot
+            - forward_to_alidns
           always_standby: true
-          fast_fallback: 250
-  - tag: forward_to_adguard
+          fast_fallback: 375
+  - tag: forward_query_to_remote_dns
     type: sequence
     args:
       exec:
         - primary:
-            - forward_to_adguard_doh
+            - forward_to_opendns
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
-            - forward_to_adguard_dot
+            - forward_to_google
           always_standby: true
-          fast_fallback: 250
+          fast_fallback: 375
   - tag: forward_to_alidns
     type: sequence
     args:
@@ -214,21 +154,6 @@ plugin:
                 - _drop_response
           secondary:
             - forward_to_dnspod_dot
-          always_standby: true
-          fast_fallback: 250
-  - tag: forward_to_dnssb
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_dnssb_doh
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_dnssb_dot
           always_standby: true
           fast_fallback: 250
   - tag: forward_to_google
@@ -276,98 +201,6 @@ plugin:
             - forward_to_quad9_dot
           always_standby: true
           fast_fallback: 250
-  - tag: forward_to_360_doh
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '101.226.4.6:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '123.125.81.6:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '140.207.198.6 :443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '218.30.118.6:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_360_dot
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '101.226.4.6:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '123.125.81.6:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '140.207.198.6 :853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '218.30.118.6:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_adguard_doh
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
-          dial_addr: '94.140.14.140:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
-          dial_addr: '94.140.14.141:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_to_adguard_dot
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '94.140.14.140:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '94.140.14.141:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
@@ -468,42 +301,6 @@ plugin:
           idle_timeout: 10
           max_conns: 16
           trusted: true
-  - tag: forward_to_dnssb_doh
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://doh.sb/dns-query'
-          dial_addr: '185.222.222.222:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://doh.sb/dns-query'
-          dial_addr: '45.11.45.11:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_to_dnssb_dot
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dot.sb'
-          dial_addr: '185.222.222.222:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dot.sb'
-          dial_addr: '45.11.45.11:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_to_google_doh
     type: fast_forward
     args:
@@ -580,15 +377,15 @@ plugin:
     type: fast_forward
     args:
       upstream:
-        - addr: 'https://dns11.quad9.net/dns-query'
-          dial_addr: '149.112.112.11:443'
+        - addr: 'https://dns.quad9.net/dns-query'
+          dial_addr: '149.112.112.112:443'
           enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
-        - addr: 'https://dns11.quad9.net/dns-query'
-          dial_addr: '9.9.9.11:443'
+        - addr: 'https://dns.quad9.net/dns-query'
+          dial_addr: '9.9.9.9:443'
           enable_pipeline: false
           idle_timeout: 30
           max_conns: 16
@@ -598,15 +395,15 @@ plugin:
     type: fast_forward
     args:
       upstream:
-        - addr: 'tls://dns11.quad9.net'
-          dial_addr: '149.112.112.11:853'
+        - addr: 'tls://dns.quad9.net'
+          dial_addr: '149.112.112.112:853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
-        - addr: 'tls://dns11.quad9.net'
-          dial_addr: '9.9.9.11:853'
+        - addr: 'tls://dns.quad9.net'
+          dial_addr: '9.9.9.9:853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
