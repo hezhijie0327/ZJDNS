@@ -10,10 +10,13 @@ GHPROXY_URL="https://ghproxy.com/"
 ## Function
 # Get Latest Image
 function GetLatestImage() {
-    docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
+    docker pull redis:latest && docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
 # Cleanup Current Container
 function CleanupCurrentContainer() {
+    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^redis$") ]; then
+        docker stop redis && docker rm redis
+    fi
     if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REPO}$") ]; then
         docker stop ${REPO} && docker rm ${REPO}
     fi
@@ -34,6 +37,12 @@ function UpdateGeoIPCNRule() {
 }
 # Create New Container
 function CreateNewContainer() {
+    docker run --name redis --net host --restart=always \
+        -v ${DOCKER_PATH}/data:/data \
+        -d redis:latest \
+        --appendonly yes \
+        --maxmemory 0 \
+        --maxmemory-policy allkeys-lru
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/mosdns/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/mosdns/conf \
