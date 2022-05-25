@@ -29,6 +29,8 @@ plugin:
                 - '!response_is_local_ip'
               exec:
                 - _drop_response
+              else_exec:
+                - modify_ttl
           secondary:
             - primary:
                 - forward_query_to_remote_dns
@@ -37,12 +39,20 @@ plugin:
                     - _response_empty_answer
                   exec:
                     - _drop_response
+                  else_exec:
+                    - modify_ttl
               secondary:
                 - forward_query_to_fallback_dns
+                - modify_ttl
               always_standby: true
               fast_fallback: 250
           always_standby: true
           fast_fallback: 375
+  - tag: modify_ttl
+    type: ttl
+    args:
+      minimal_ttl: 300
+      maximum_ttl: 3600
   - tag: set_ecs
     type: ecs
     args:
@@ -402,7 +412,7 @@ plugin:
     args:
       cache_everything: true
       lazy_cache_ttl: 259200
-      lazy_cache_reply_ttl: 30
+      lazy_cache_reply_ttl: 10
       redis: 'redis://127.0.0.1:6379/0'
       redis_timeout: 250
   - tag: query_is_stored_in_preresponse
