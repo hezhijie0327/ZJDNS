@@ -33,11 +33,6 @@ plugin:
             - forward_query_to_wan_dns
           always_standby: true
           fast_fallback: 375
-  - tag: modify_ttl
-    type: ttl
-    args:
-      maximum_ttl: 3600
-      minimal_ttl: 300
   - tag: set_ecs
     type: ecs
     args:
@@ -59,11 +54,8 @@ plugin:
                 - _response_empty_answer
               exec:
                 - _drop_response
-              else_exec:
-                - modify_ttl
           secondary:
             - forward_to_lan_dns53_udp
-            - modify_ttl
           always_standby: true
           fast_fallback: 250
   - tag: forward_query_to_wan_dns
@@ -77,11 +69,8 @@ plugin:
                 - _response_empty_answer
               exec:
                 - _drop_response
-              else_exec:
-                - modify_ttl
           secondary:
             - forward_to_alidns
-            - modify_ttl
           always_standby: true
           fast_fallback: 375
   - tag: forward_to_alidns
