@@ -25,29 +25,19 @@ plugin:
         - primary:
             - forward_query_to_local_dns
             - if:
-                - '!_response_rcode_success'
-                - '!response_is_local_ip'
+                - '!verify_response_is_local_ip'
               exec:
                 - _drop_response
           secondary:
             - primary:
                 - forward_query_to_remote_dns
-                - if:
-                    - '!_response_rcode_success'
-                    - _response_empty_answer
-                  exec:
-                    - _drop_response
+                - verify_response_is_valid
               secondary:
                 - forward_query_to_fallback_dns
               always_standby: true
-              fast_fallback: 250
+              fast_fallback: 375
           always_standby: true
           fast_fallback: 375
-  - tag: modify_ttl
-    type: ttl
-    args:
-      minimal_ttl: 300
-      maximum_ttl: 3600
   - tag: set_ecs
     type: ecs
     args:
@@ -58,17 +48,41 @@ plugin:
     type: bufsize
     args:
       size: 1232
+  - tag: query_is_stored_in_cache
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_ttl: 259200
+      lazy_cache_reply_ttl: 30
+      redis: 'redis://127.0.0.1:6379/0'
+      redis_timeout: 125
+  - tag: query_is_stored_in_preresponse
+    type: arbitrary
+    args:
+      rr:
+        - 'localhost.zhijie.online IN A ANSWER localhost.zhijie.online. IN A 127.0.0.1'
+        - 'localhost.zhijie.online IN AAAA ANSWER localhost.zhijie.online. IN AAAA ::1'
+  - tag: verify_response_is_local_ip
+    type: response_matcher
+    args:
+      ip:
+        - 'ext:/etc/mosdns/data/GeoIP_CNIPDb.txt'
+  - tag: verify_response_is_valid
+    type: sequence
+    args:
+      exec:
+        - if:
+            - '!_response_rcode_success'
+            - _response_empty_answer
+          exec:
+            - _drop_response
   - tag: forward_query_to_fallback_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_quad9
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
+            - verify_response_is_valid
           secondary:
             - forward_to_cloudflare
           always_standby: true
@@ -79,11 +93,7 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
+            - verify_response_is_valid
           secondary:
             - forward_to_alidns
           always_standby: true
@@ -94,12 +104,7 @@ plugin:
       exec:
         - primary:
             - forward_to_opendns
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-              else_exec:
+            - verify_response_is_valid
           secondary:
             - forward_to_google
           always_standby: true
@@ -108,56 +113,68 @@ plugin:
     type: sequence
     args:
       exec:
-        - parallel:
-            - - forward_to_alidns_doh
-              - modify_ttl
-            - - forward_to_alidns_dot
-              - modify_ttl
+        - primary:
+            - forward_to_alidns_doh
+            - verify_response_is_valid
+          secondary:
+            - forward_to_alidns_dot
+          always_standby: true
+          fast_fallback: 125
   - tag: forward_to_cloudflare
     type: sequence
     args:
       exec:
-        - parallel:
-            - - forward_to_cloudflare_doh
-              - modify_ttl
-            - - forward_to_cloudflare_dot
-              - modify_ttl
+        - primary:
+            - forward_to_cloudflare_doh
+            - verify_response_is_valid
+          secondary:
+            - forward_to_cloudflare_dot
+          always_standby: true
+          fast_fallback: 125
   - tag: forward_to_dnspod
     type: sequence
     args:
       exec:
-        - parallel:
-            - - forward_to_dnspod_doh
-              - modify_ttl
-            - - forward_to_dnspod_dot
-              - modify_ttl
+        - primary:
+            - forward_to_dnspod_doh
+            - verify_response_is_valid
+          secondary:
+            - forward_to_dnspod_dot
+          always_standby: true
+          fast_fallback: 125
   - tag: forward_to_google
     type: sequence
     args:
       exec:
-        - parallel:
-            - - forward_to_google_doh
-              - modify_ttl
-            - - forward_to_google_dot
-              - modify_ttl
+        - primary:
+            - forward_to_google_doh
+            - verify_response_is_valid
+          secondary:
+            - forward_to_google_dot
+          always_standby: true
+          fast_fallback: 125
   - tag: forward_to_opendns
     type: sequence
     args:
       exec:
-        - parallel:
-            - - forward_to_opendns_doh
-              - modify_ttl
-            - - forward_to_opendns_dot
-              - modify_ttl
+        - primary:
+            - forward_to_opendns_doh
+            - verify_response_is_valid
+          secondary:
+            - forward_to_opendns_dot
+          always_standby: true
+          fast_fallback: 125
   - tag: forward_to_quad9
     type: sequence
     args:
       exec:
-        - parallel:
-            - - forward_to_quad9_doh
-              - modify_ttl
-            - - forward_to_quad9_dot
-              - modify_ttl
+        - primary:
+            - forward_to_quad9_doh
+            - verify_response_is_valid
+          secondary:
+            - forward_to_quad9_dot
+          always_standby: true
+          fast_fallback: 125
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
@@ -366,22 +383,3 @@ plugin:
           max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: query_is_stored_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      lazy_cache_ttl: 259200
-      lazy_cache_reply_ttl: 30
-      redis: 'redis://127.0.0.1:6379/0'
-      redis_timeout: 250
-  - tag: query_is_stored_in_preresponse
-    type: arbitrary
-    args:
-      rr:
-        - 'localhost.zhijie.online IN A ANSWER localhost.zhijie.online. IN A 127.0.0.1'
-        - 'localhost.zhijie.online IN AAAA ANSWER localhost.zhijie.online. IN AAAA ::1'
-  - tag: response_is_local_ip
-    type: response_matcher
-    args:
-      ip:
-        - 'ext:/etc/mosdns/data/GeoIP_CNIPDb.txt'
