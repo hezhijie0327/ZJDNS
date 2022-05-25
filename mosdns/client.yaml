@@ -29,11 +29,8 @@ plugin:
                 - _response_empty_answer
               exec:
                 - _drop_response
-              else_exec:
-                - modify_ttl
           secondary:
             - forward_query_to_wan_dns
-            - modify_ttl
           always_standby: true
           fast_fallback: 375
   - tag: modify_ttl
@@ -57,6 +54,7 @@ plugin:
       exec:
         - primary:
             - forward_to_lan_dns53_tcp
+            - modify_ttl
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
@@ -64,6 +62,7 @@ plugin:
                 - _drop_response
           secondary:
             - forward_to_lan_dns53_udp
+            - modify_ttl
           always_standby: true
           fast_fallback: 250
   - tag: forward_query_to_wan_dns
@@ -72,6 +71,7 @@ plugin:
       exec:
         - primary:
             - forward_to_dnspod
+            - modify_ttl
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
@@ -79,6 +79,7 @@ plugin:
                 - _drop_response
           secondary:
             - forward_to_alidns
+            - modify_ttl
           always_standby: true
           fast_fallback: 375
   - tag: forward_to_alidns
