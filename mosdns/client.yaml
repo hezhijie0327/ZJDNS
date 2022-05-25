@@ -199,7 +199,7 @@ plugin:
     args:
       cache_everything: true
       lazy_cache_ttl: 259200
-      lazy_cache_reply_ttl: 10
+      lazy_cache_reply_ttl: 30
       redis: 'redis://127.0.0.1:6379/0'
       redis_timeout: 250
   - tag: query_is_stored_in_preresponse
