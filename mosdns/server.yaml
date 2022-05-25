@@ -40,9 +40,9 @@ plugin:
               secondary:
                 - forward_query_to_fallback_dns
               always_standby: true
-              fast_fallback: 250
+              fast_fallback: 375
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 500
   - tag: modify_ttl
     type: ttl
     args:
@@ -64,7 +64,6 @@ plugin:
       exec:
         - primary:
             - forward_to_quad9
-            - modify_ttl
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
@@ -72,16 +71,14 @@ plugin:
                 - _drop_response
           secondary:
             - forward_to_cloudflare
-            - modify_ttl
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 250
   - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_dnspod
-            - modify_ttl
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
@@ -89,16 +86,14 @@ plugin:
                 - _drop_response
           secondary:
             - forward_to_alidns
-            - modify_ttl
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 250
   - tag: forward_query_to_remote_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_opendns
-            - modify_ttl
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
@@ -107,99 +102,62 @@ plugin:
               else_exec:
           secondary:
             - forward_to_google
-            - modify_ttl
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 250
   - tag: forward_to_alidns
     type: sequence
     args:
       exec:
-        - primary:
-            - forward_to_alidns_doh
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_alidns_dot
-          always_standby: true
-          fast_fallback: 250
+        - parallel:
+            - - forward_to_alidns_doh
+              - modify_ttl
+            - - forward_to_alidns_dot
+              - modify_ttl
   - tag: forward_to_cloudflare
     type: sequence
     args:
       exec:
-        - primary:
-            - forward_to_cloudflare_doh
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_cloudflare_dot
-          always_standby: true
-          fast_fallback: 250
+        - parallel:
+            - - forward_to_cloudflare_doh
+              - modify_ttl
+            - - forward_to_cloudflare_dot
+              - modify_ttl
   - tag: forward_to_dnspod
     type: sequence
     args:
       exec:
-        - primary:
-            - forward_to_dnspod_doh
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_dnspod_dot
-          always_standby: true
-          fast_fallback: 250
+        - parallel:
+            - - forward_to_dnspod_doh
+              - modify_ttl
+            - - forward_to_dnspod_dot
+              - modify_ttl
   - tag: forward_to_google
     type: sequence
     args:
       exec:
-        - primary:
-            - forward_to_google_doh
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_google_dot
-          always_standby: true
-          fast_fallback: 250
+        - parallel:
+            - - forward_to_google_doh
+              - modify_ttl
+            - - forward_to_google_dot
+              - modify_ttl
   - tag: forward_to_opendns
     type: sequence
     args:
       exec:
-        - primary:
-            - forward_to_opendns_doh
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_opendns_dot
-          always_standby: true
-          fast_fallback: 250
+        - parallel:
+            - - forward_to_opendns_doh
+              - modify_ttl
+            - - forward_to_opendns_dot
+              - modify_ttl
   - tag: forward_to_quad9
     type: sequence
     args:
       exec:
-        - primary:
-            - forward_to_quad9_doh
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_quad9_dot
-          always_standby: true
-          fast_fallback: 250
+        - parallel:
+            - - forward_to_quad9_doh
+              - modify_ttl
+            - - forward_to_quad9_dot
+              - modify_ttl
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
