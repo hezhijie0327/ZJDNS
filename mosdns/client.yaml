@@ -71,7 +71,7 @@ plugin:
           secondary:
             - forward_to_alidns
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 250
   - tag: forward_to_alidns
     type: sequence
     args:
