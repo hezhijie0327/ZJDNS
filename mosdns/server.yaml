@@ -40,9 +40,9 @@ plugin:
               secondary:
                 - forward_query_to_fallback_dns
               always_standby: true
-              fast_fallback: 375
+              fast_fallback: 250
           always_standby: true
-          fast_fallback: 500
+          fast_fallback: 375
   - tag: modify_ttl
     type: ttl
     args:
