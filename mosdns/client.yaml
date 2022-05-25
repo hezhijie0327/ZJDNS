@@ -52,26 +52,17 @@ plugin:
     type: sequence
     args:
       exec:
-        - primary:
-            - forward_to_lan_dns53_tcp
-            - modify_ttl
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_lan_dns53_udp
-            - modify_ttl
-          always_standby: true
-          fast_fallback: 250
+        - parallel:
+            - - forward_to_lan_dns53_tcp
+              - modify_ttl
+            - - forward_to_lan_dns53_udp
+              - modify_ttl
   - tag: forward_query_to_wan_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_dnspod
-            - modify_ttl
             - if:
                 - '!_response_rcode_success'
                 - _response_empty_answer
@@ -79,39 +70,26 @@ plugin:
                 - _drop_response
           secondary:
             - forward_to_alidns
-            - modify_ttl
           always_standby: true
           fast_fallback: 375
   - tag: forward_to_alidns
     type: sequence
     args:
       exec:
-        - primary:
-            - forward_to_alidns_doh
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_alidns_dot
-          always_standby: true
-          fast_fallback: 250
+        - parallel:
+            - - forward_to_alidns_doh
+              - modify_ttl
+            - - forward_to_alidns_dot
+              - modify_ttl
   - tag: forward_to_dnspod
     type: sequence
     args:
       exec:
-        - primary:
-            - forward_to_dnspod_doh
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_dnspod_dot
-          always_standby: true
-          fast_fallback: 250
+        - parallel:
+            - - forward_to_dnspod_doh
+              - modify_ttl
+            - - forward_to_dnspod_dot
+              - modify_ttl
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
