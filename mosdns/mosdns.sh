@@ -41,7 +41,7 @@ function CreateNewContainer() {
         -v ${DOCKER_PATH}/data:/data \
         -d redis:latest \
         --appendonly yes \
-        --maxmemory 64m \
+        --maxmemory 0 \
         --maxmemory-policy allkeys-lru \
         --maxmemory-samples 10
     docker run --name ${REPO} --net host --restart=always \
