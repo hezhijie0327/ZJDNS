@@ -37,7 +37,7 @@ plugin:
               always_standby: true
               fast_fallback: 375
           always_standby: true
-          fast_fallback: 500
+          fast_fallback: 375
   - tag: modify_ttl
     type: ttl
     args:
