@@ -23,12 +23,12 @@ plugin:
         - query_is_stored_in_cache
         - query_is_stored_in_preresponse
         - primary:
-            - forward_query_to_lan_dns
+            - forward_to_dnspod
             - verify_response_is_valid
           secondary:
-            - forward_query_to_wan_dns
+            - forward_to_alidns
           always_standby: true
-          fast_fallback: 500
+          fast_fallback: 250
   - tag: modify_ttl
     type: ttl
     args:
@@ -67,30 +67,6 @@ plugin:
             - _response_empty_answer
           exec:
             - _drop_response
-  - tag: forward_query_to_lan_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_lan_dns53_tcp
-            - verify_response_is_valid
-          secondary:
-            - forward_to_lan_dns53_udp
-          always_standby: true
-          fast_fallback: 125
-        - modify_ttl
-  - tag: forward_query_to_wan_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_dnspod
-            - verify_response_is_valid
-          secondary:
-            - forward_to_alidns
-          always_standby: true
-          fast_fallback: 250
-        - modify_ttl
   - tag: forward_to_alidns
     type: sequence
     args:
@@ -102,6 +78,7 @@ plugin:
             - forward_to_alidns_dot
           always_standby: true
           fast_fallback: 125
+        - modify_ttl
   - tag: forward_to_dnspod
     type: sequence
     args:
@@ -113,6 +90,7 @@ plugin:
             - forward_to_dnspod_dot
           always_standby: true
           fast_fallback: 125
+        - modify_ttl
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
@@ -175,24 +153,5 @@ plugin:
           dial_addr: '120.53.53.53:853'
           enable_pipeline: true
           idle_timeout: 10
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_lan_dns53_tcp
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tcp://LAN_DNS_IP_ADDRESS'
-          dial_addr: 'LAN_DNS_IP_ADDRESS:53'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          trusted: true
-  - tag: forward_to_lan_dns53_udp
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'udpme://LAN_DNS_IP_ADDRESS'
-          dial_addr: 'LAN_DNS_IP_ADDRESS:53'
-          enable_pipeline: false
           max_conns: 16
           trusted: true
