@@ -29,13 +29,7 @@ plugin:
               exec:
                 - _drop_response
           secondary:
-            - primary:
-                - forward_query_to_remote_dns
-                - verify_response_is_valid
-              secondary:
-                - forward_query_to_fallback_dns
-              always_standby: true
-              fast_fallback: 375
+            - forward_query_to_remote_dns
           always_standby: true
           fast_fallback: 375
   - tag: modify_ttl
@@ -81,18 +75,6 @@ plugin:
             - _response_empty_answer
           exec:
             - _drop_response
-  - tag: forward_query_to_fallback_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_quad9
-            - verify_response_is_valid
-          secondary:
-            - forward_to_cloudflare
-          always_standby: true
-          fast_fallback: 250
-        - modify_ttl
   - tag: forward_query_to_local_dns
     type: sequence
     args:
@@ -128,17 +110,6 @@ plugin:
             - forward_to_alidns_dot
           always_standby: true
           fast_fallback: 125
-  - tag: forward_to_cloudflare
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_cloudflare_doh
-            - verify_response_is_valid
-          secondary:
-            - forward_to_cloudflare_dot
-          always_standby: true
-          fast_fallback: 125
   - tag: forward_to_dnspod
     type: sequence
     args:
@@ -172,17 +143,6 @@ plugin:
             - forward_to_opendns_dot
           always_standby: true
           fast_fallback: 125
-  - tag: forward_to_quad9
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_quad9_doh
-            - verify_response_is_valid
-          secondary:
-            - forward_to_quad9_dot
-          always_standby: true
-          fast_fallback: 125
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
@@ -214,42 +174,6 @@ plugin:
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
-          trusted: true
-  - tag: forward_to_cloudflare_doh
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://cloudflare-dns.com/dns-query'
-          dial_addr: '1.0.0.1:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://cloudflare-dns.com/dns-query'
-          dial_addr: '1.1.1.1:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_to_cloudflare_dot
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://cloudflare-dns.com'
-          dial_addr: '1.0.0.1:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://cloudflare-dns.com'
-          dial_addr: '1.1.1.1:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_dnspod_doh
     type: fast_forward
@@ -350,42 +274,6 @@ plugin:
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_to_quad9_doh
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns.quad9.net/dns-query'
-          dial_addr: '149.112.112.112:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns.quad9.net/dns-query'
-          dial_addr: '9.9.9.9:443'
-          enable_pipeline: false
-          idle_timeout: 30
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_to_quad9_dot
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns.quad9.net'
-          dial_addr: '149.112.112.112:853'
-          enable_pipeline: true
-          idle_timeout: 10
-          max_conns: 16
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns.quad9.net'
-          dial_addr: '9.9.9.9:853'
           enable_pipeline: true
           idle_timeout: 10
           max_conns: 16
