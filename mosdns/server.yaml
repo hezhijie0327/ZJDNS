@@ -37,7 +37,13 @@ plugin:
               always_standby: true
               fast_fallback: 375
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 500
+        - modify_ttl
+  - tag: modify_ttl
+    type: ttl
+    args:
+      minimal_ttl: 300
+      maximum_ttl: 3600
   - tag: set_ecs
     type: ecs
     args:
