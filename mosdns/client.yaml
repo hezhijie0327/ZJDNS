@@ -17,8 +17,8 @@ plugin:
     args:
       exec:
         - _enable_response_padding
+        - _no_ecs
         - _pad_query
-        - set_ecs
         - set_edns0_bufsize
         - query_is_stored_in_cache
         - query_is_stored_in_preresponse
@@ -34,12 +34,6 @@ plugin:
     args:
       minimal_ttl: 300
       maximum_ttl: 3600
-  - tag: set_ecs
-    type: ecs
-    args:
-      auto: true
-      mask4: 24
-      mask6: 56
   - tag: set_edns0_bufsize
     type: bufsize
     args:
