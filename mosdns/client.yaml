@@ -29,7 +29,6 @@ plugin:
             - forward_query_to_wan_dns
           always_standby: true
           fast_fallback: 500
-        - modify_ttl
   - tag: modify_ttl
     type: ttl
     args:
@@ -79,6 +78,7 @@ plugin:
             - forward_to_lan_dns53_udp
           always_standby: true
           fast_fallback: 125
+        - modify_ttl
   - tag: forward_query_to_wan_dns
     type: sequence
     args:
@@ -90,6 +90,7 @@ plugin:
             - forward_to_alidns
           always_standby: true
           fast_fallback: 250
+        - modify_ttl
   - tag: forward_to_alidns
     type: sequence
     args:
