@@ -29,11 +29,6 @@ plugin:
             - forward_to_alidns
           always_standby: true
           fast_fallback: 250
-  - tag: modify_ttl
-    type: ttl
-    args:
-      minimal_ttl: 300
-      maximum_ttl: 3600
   - tag: set_edns0_bufsize
     type: bufsize
     args:
@@ -70,7 +65,6 @@ plugin:
             - forward_to_alidns_dot
           always_standby: true
           fast_fallback: 125
-        - modify_ttl
   - tag: forward_to_dnspod
     type: sequence
     args:
@@ -82,7 +76,6 @@ plugin:
             - forward_to_dnspod_dot
           always_standby: true
           fast_fallback: 125
-        - modify_ttl
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
