@@ -20,8 +20,6 @@ plugin:
         - _pad_query
         - set_ecs
         - set_edns0_bufsize
-        - query_is_stored_in_cache
-        - query_is_stored_in_preresponse
         - primary:
             - forward_query_to_local_dns
             - if:
@@ -42,18 +40,6 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: query_is_stored_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      redis: 'redis://127.0.0.1:6379/0'
-      redis_timeout: 125
-  - tag: query_is_stored_in_preresponse
-    type: arbitrary
-    args:
-      rr:
-        - 'localhost.zhijie.online IN A ANSWER localhost.zhijie.online. IN A 127.0.0.1'
-        - 'localhost.zhijie.online IN AAAA ANSWER localhost.zhijie.online. IN AAAA ::1'
   - tag: verify_response_is_local_ip
     type: response_matcher
     args:
