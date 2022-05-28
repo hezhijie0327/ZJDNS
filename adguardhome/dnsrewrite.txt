@@ -3,44 +3,46 @@
 ! Homepage: https://github.com/hezhijie0327/AGHCustomRule
 !
 ! HOMESHAGW01 - START
-|homeshaap01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.2
-|homeshaap02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.4
-|homeshaap03.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.6
-|homeshaap04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.8
-|homeshacp02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.6
-|homeshacp04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.8
-|homeshals02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.10
-|homeshanp01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.1
-|homeshanp02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.3
-|homeshanp03.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.5
-|homeshanp04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.7
-|homesharc02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.2
-|homesharc03.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.3
-|homesharc04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.4
-|homeshasw01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.0.2
-|homeshatvbox01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.11.1
-|homeshatvbox04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.11.4
+|homeshaap01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.2,dnstype=~A
+|homeshaap02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.4,dnstype=~A
+|homeshaap03.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.6,dnstype=~A
+|homeshaap04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.8,dnstype=~A
+|homeshacp02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.6,dnstype=~A
+|homeshacp04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.8,dnstype=~A
+|homeshals02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.10,dnstype=~A
+|homeshanp01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.1,dnstype=~A
+|homeshanp02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.3,dnstype=~A
+|homeshanp03.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.5,dnstype=~A
+|homeshanp04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.1.7,dnstype=~A
+|homesharc02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.2,dnstype=~A
+|homesharc03.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.3,dnstype=~A
+|homesharc04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.8.4,dnstype=~A
+|homeshasw01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.0.2,dnstype=~A
+|homeshatvbox01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.11.1,dnstype=~A
+|homeshatvbox04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.11.4,dnstype=~A
 ! HOMESHAGW01 - END
 !
 ! HOMESHAGW02 - START
-|homeshaap05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.33.2
-|homeshana02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.32.3
-|homeshanp05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.33.1
-|homeshanp06.zhijie.online^$dnsrewrite=NOERROR;A;192.168.33.3
-|homeshanp07.zhijie.online^$dnsrewrite=NOERROR;A;192.168.33.5
-|homeshasw02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.32.2
-|homeshatv05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.42.1
-|homeshatv06.zhijie.online^$dnsrewrite=NOERROR;A;192.168.42.2
-|homeshatvbox05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.43.1
-|homeshatvbox06.zhijie.online^$dnsrewrite=NOERROR;A;192.168.43.2
+|homeshaap05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.33.2,dnstype=~A
+|homeshana02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.32.3,dnstype=~A
+|homeshanp05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.33.1,dnstype=~A
+|homeshanp06.zhijie.online^$dnsrewrite=NOERROR;A;192.168.33.3,dnstype=~A
+|homeshanp07.zhijie.online^$dnsrewrite=NOERROR;A;192.168.33.5,dnstype=~A
+|homeshasw02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.32.2,dnstype=~A
+|homeshatv05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.42.1,dnstype=~A
+|homeshatv06.zhijie.online^$dnsrewrite=NOERROR;A;192.168.42.2,dnstype=~A
+|homeshatvbox05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.43.1,dnstype=~A
+|homeshatvbox06.zhijie.online^$dnsrewrite=NOERROR;A;192.168.43.2,dnstype=~A
 ! HOMESHAGW02 - END
 !
 ! DNSREWRITE - START
-|homeshagw01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.0.1
-|homeshagw02.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.32.1
-|homeshanas01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.2.1
-|homeshavpc01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.5.1
-|homeshavpc02.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.37.1
-|vpn.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;A;192.168.5.1
-|vpn.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.37.1
+|homeshagw01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.0.1,dnstype=~A
+|homeshagw02.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.32.1,dnstype=~A
+|homeshanas01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.2.1,dnstype=~A
+|homeshavpc01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.5.1,dnstype=~A
+|homeshavpc02.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.37.1,dnstype=~A
+|vpn.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;A;192.168.5.1,dnstype=~A
+|vpn.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.37.1,dnstype=~A
+!|vpn.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;CNAME;homeshavpc01.zhijie.online
+!|vpn.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;CNAME;homeshavpc02.zhijie.online
 ! DNSREWRITE - END
