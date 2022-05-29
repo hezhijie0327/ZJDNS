@@ -81,7 +81,7 @@ plugin:
           secondary:
             - forward_to_cloudflare
           always_standby: true
-          fast_fallback: 250
+          fast_fallback: 375
   - tag: forward_to_alidns
     type: sequence
     args:
@@ -97,7 +97,6 @@ plugin:
     type: sequence
     args:
       exec:
-        - _no_ecs
         - primary:
             - forward_to_cloudflare_doh
             - verify_response_is_valid
