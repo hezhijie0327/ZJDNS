@@ -97,6 +97,7 @@ plugin:
     type: sequence
     args:
       exec:
+        - _no_ecs
         - primary:
             - forward_to_cloudflare_doh
             - verify_response_is_valid
