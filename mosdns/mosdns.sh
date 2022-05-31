@@ -5,7 +5,6 @@ OWNER="hezhijie0327"
 REPO="mosdns"
 TAG="latest"
 DOCKER_PATH="/docker/mosdns"
-GHPROXY_URL="https://ghproxy.com/"
 
 ## Function
 # Get Latest Image
@@ -30,7 +29,7 @@ function UnsetProxyServer() {
 }
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
-    curl -s --connect-timeout 15 "${GHPROXY_URL}https://raw.githubusercontent.com/hezhijie0327/CNIPDb/main/cnipdb/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
+    curl -s --connect-timeout 15 "https://source.zhijie.online/CNIPDb/main/cnipdb/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
 }
 # Create New Container
 function CreateNewContainer() {
