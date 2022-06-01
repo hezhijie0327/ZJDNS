@@ -17,16 +17,6 @@ function CleanupCurrentContainer() {
         docker stop ${REPO} && docker rm ${REPO}
     fi
 }
-# Set Proxy Server
-function SetProxyServer() {
-    export http_proxy="http://127.0.0.1:7890"
-    export https_proxy="http://127.0.0.1:7890"
-}
-# Unset Proxy Server
-function UnsetProxyServer() {
-    export http_proxy=""
-    export https_proxy=""
-}
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
     curl -s --connect-timeout 15 "https://source.zhijie.online/CNIPDb/main/cnipdb/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
@@ -49,10 +39,6 @@ function CleanupExpiredImage() {
 }
 
 ## Process
-# Call SetProxyServer
-#SetProxyServer
-# Call UnsetProxyServer
-UnsetProxyServer
 # Call GetLatestImage
 GetLatestImage
 # Call UpdateGeoIPRule
