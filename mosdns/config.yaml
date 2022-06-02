@@ -7,11 +7,13 @@ plugin:
       entry:
         - _single_flight
         - query_sequence
+      max_concurrent_queries: 0
       server:
         - protocol: dot
           addr: 127.0.0.1:8853
           cert: '/etc/mosdns/cert/fullchain.cer'
           key: '/etc/mosdns/cert/zhijie.online.key'
+      timeout: 1
   - tag: query_sequence
     type: sequence
     args:
