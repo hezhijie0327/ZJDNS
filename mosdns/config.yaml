@@ -25,7 +25,8 @@ plugin:
         - primary:
             - forward_query_to_local_dns
             - if:
-                - '!verify_response_is_local_ip'
+                - '!response_is_local_ip'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -42,7 +43,7 @@ plugin:
     type: bufsize
     args:
       size: 1232
-  - tag: verify_response_is_local_ip
+  - tag: response_is_local_ip
     type: response_matcher
     args:
       ip:
