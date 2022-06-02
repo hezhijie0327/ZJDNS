@@ -81,13 +81,7 @@ plugin:
               always_standby: true
               fast_fallback: 250
           secondary:
-            - primary:
-                - forward_to_cloudflare
-                - verify_response_is_valid
-              secondary:
-                - forward_query_to_local_dns
-              always_standby: true
-              fast_fallback: 250
+            - forward_to_cloudflare
           always_standby: true
           fast_fallback: 375
   - tag: forward_to_alidns
