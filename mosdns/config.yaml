@@ -31,7 +31,7 @@ plugin:
           secondary:
             - forward_query_to_remote_dns
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 500
   - tag: set_ecs
     type: ecs
     args:
@@ -66,7 +66,7 @@ plugin:
           secondary:
             - forward_to_alidns
           always_standby: true
-          fast_fallback: 250
+          fast_fallback: 375
   - tag: forward_query_to_remote_dns
     type: sequence
     args:
@@ -79,11 +79,11 @@ plugin:
                 - forward_to_google
                 - verify_response_is_valid
               always_standby: true
-              fast_fallback: 250
+              fast_fallback: 375
           secondary:
             - forward_to_cloudflare
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 500
   - tag: forward_to_alidns
     type: sequence
     args:
@@ -94,7 +94,7 @@ plugin:
           secondary:
             - forward_to_alidns_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_cloudflare
     type: sequence
     args:
@@ -105,7 +105,7 @@ plugin:
           secondary:
             - forward_to_cloudflare_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_dnspod
     type: sequence
     args:
@@ -116,7 +116,7 @@ plugin:
           secondary:
             - forward_to_dnspod_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_google
     type: sequence
     args:
@@ -127,7 +127,7 @@ plugin:
           secondary:
             - forward_to_google_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_opendns
     type: sequence
     args:
@@ -138,7 +138,7 @@ plugin:
           secondary:
             - forward_to_opendns_dot
           always_standby: true
-          fast_fallback: 125
+          fast_fallback: 250
   - tag: forward_to_alidns_doh
     type: fast_forward
     args:
