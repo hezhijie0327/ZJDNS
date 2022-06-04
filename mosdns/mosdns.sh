@@ -27,7 +27,7 @@ function UpdateGeoIPCNRule() {
 # Create New Container
 function CreateNewContainer() {
     docker run --name redis --net host --restart=always \
-        -v ${DOCKER_PATH}/data:/data \
+        -v ${DOCKER_PATH}/data/redis:/data \
         -d redis:latest \
         --appendonly yes \
         --maxmemory 64m \
