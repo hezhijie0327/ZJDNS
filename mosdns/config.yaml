@@ -22,6 +22,7 @@ plugin:
         - _pad_query
         - set_ecs
         - set_edns0_bufsize
+        - query_is_in_cache
         - primary:
             - forward_query_to_local_dns
             - if:
@@ -43,6 +44,14 @@ plugin:
     type: bufsize
     args:
       size: 1232
+  - tag: query_is_in_cache
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_ttl: 259200
+      lazy_cache_reply_ttl: 30
+      redis: 'redis://127.0.0.1:6379/0'
+      redis_timeout: 250
   - tag: response_is_local_ip
     type: response_matcher
     args:
