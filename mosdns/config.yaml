@@ -160,10 +160,12 @@ plugin:
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
           enable_pipeline: true
+          max_conns: 16
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
           enable_pipeline: true
+          max_conns: 16
           trusted: true
   - tag: forward_to_dnspod_doh
     type: fast_forward
@@ -172,10 +174,12 @@ plugin:
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '1.12.12.12:443'
           enable_http3: false
+          max_conns: 16
           trusted: true
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '120.53.53.53:443'
           enable_http3: false
+          max_conns: 16
           trusted: true
   - tag: forward_to_dnspod_dot
     type: fast_forward
@@ -184,10 +188,12 @@ plugin:
         - addr: 'tls://dot.pub'
           dial_addr: '1.12.12.12:853'
           enable_pipeline: true
+          max_conns: 16
           trusted: true
         - addr: 'tls://dot.pub'
           dial_addr: '120.53.53.53:853'
           enable_pipeline: true
+          max_conns: 16
           trusted: true
   - tag: forward_to_google_doh
     type: fast_forward
@@ -196,11 +202,13 @@ plugin:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
           enable_http3: false
+          max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.8.8:443'
           enable_http3: false
+          max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_google_dot
@@ -210,11 +218,13 @@ plugin:
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
           enable_pipeline: true
+          max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
           enable_pipeline: true
+          max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_opendns_doh
@@ -224,11 +234,13 @@ plugin:
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.220.2:443'
           enable_http3: false
+          max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.222.2:443'
           enable_http3: false
+          max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_opendns_dot
@@ -238,10 +250,12 @@ plugin:
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
           enable_pipeline: true
+          max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
           enable_pipeline: true
+          max_conns: 16
           socks5: '127.0.0.1:7890'
           trusted: true
