@@ -30,6 +30,7 @@ function CreateNewContainer() {
         -v ${DOCKER_PATH}/data/redis:/data \
         -d redis:latest \
         --aof-use-rdb-preamble yes \
+        --appendfsync everysec \
         --appendonly yes \
         --lazyfree-lazy-eviction yes \
         --lazyfree-lazy-expire yes \
