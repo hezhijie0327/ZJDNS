@@ -5,6 +5,7 @@ plugin:
     type: server
     args:
       entry:
+        - _enable_response_padding
         - _single_flight
         - query_sequence
       server:
@@ -17,7 +18,6 @@ plugin:
     type: sequence
     args:
       exec:
-        - _enable_response_padding
         - _pad_query
         - set_ecs
         - set_edns0_bufsize
@@ -33,6 +33,7 @@ plugin:
             - forward_query_to_remote_dns
           always_standby: true
           fast_fallback: 500
+        - rewrite_max_min_ttl
   - tag: rewrite_max_min_ttl
     type: ttl
     args:
@@ -61,83 +62,35 @@ plugin:
     args:
       ip:
         - 'ext:/etc/mosdns/data/GeoIP_CNIPDb.txt'
-  - tag: verify_response_is_valid
-    type: sequence
-    args:
-      exec:
-        - if:
-            - '!_response_rcode_success'
-          exec:
-            - _drop_response
   - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_dnspod
-            - verify_response_is_valid
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_alidns
           always_standby: true
           fast_fallback: 375
-        - rewrite_max_min_ttl
   - tag: forward_query_to_remote_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_opendns
-            - verify_response_is_valid
+            - if:
+                - '!_response_rcode_success'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_google
           always_standby: true
           fast_fallback: 375
-        - rewrite_max_min_ttl
   - tag: forward_to_alidns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_alidns_doh
-            - verify_response_is_valid
-          secondary:
-            - forward_to_alidns_dot
-          always_standby: true
-          fast_fallback: 250
-  - tag: forward_to_dnspod
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_dnspod_doh
-            - verify_response_is_valid
-          secondary:
-            - forward_to_dnspod_dot
-          always_standby: true
-          fast_fallback: 250
-  - tag: forward_to_google
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_google_doh
-            - verify_response_is_valid
-          secondary:
-            - forward_to_google_dot
-          always_standby: true
-          fast_fallback: 250
-  - tag: forward_to_opendns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_opendns_doh
-            - verify_response_is_valid
-          secondary:
-            - forward_to_opendns_dot
-          always_standby: true
-          fast_fallback: 250
-  - tag: forward_to_alidns_doh
     type: fast_forward
     args:
       upstream:
@@ -145,15 +98,11 @@ plugin:
           dial_addr: '223.5.5.5:443'
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.6.6.6:443'
-  - tag: forward_to_alidns_dot
-    type: fast_forward
-    args:
-      upstream:
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
-  - tag: forward_to_dnspod_doh
+  - tag: forward_to_dnspod
     type: fast_forward
     args:
       upstream:
@@ -161,15 +110,11 @@ plugin:
           dial_addr: '1.12.12.12:443'
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '120.53.53.53:443'
-  - tag: forward_to_dnspod_dot
-    type: fast_forward
-    args:
-      upstream:
         - addr: 'tls://dot.pub'
           dial_addr: '1.12.12.12:853'
         - addr: 'tls://dot.pub'
           dial_addr: '120.53.53.53:853'
-  - tag: forward_to_google_doh
+  - tag: forward_to_google
     type: fast_forward
     args:
       upstream:
@@ -179,17 +124,13 @@ plugin:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.8.8:443'
           socks5: '127.0.0.1:7890'
-  - tag: forward_to_google_dot
-    type: fast_forward
-    args:
-      upstream:
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
           socks5: '127.0.0.1:7890'
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
           socks5: '127.0.0.1:7890'
-  - tag: forward_to_opendns_doh
+  - tag: forward_to_opendns
     type: fast_forward
     args:
       upstream:
@@ -199,10 +140,6 @@ plugin:
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.222.2:443'
           socks5: '127.0.0.1:7890'
-  - tag: forward_to_opendns_dot
-    type: fast_forward
-    args:
-      upstream:
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
           socks5: '127.0.0.1:7890'
