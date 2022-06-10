@@ -96,24 +96,32 @@ plugin:
       upstream:
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.5.5.5:443'
+          trusted: true
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.6.6.6:443'
+          trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
+          trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
+          trusted: true
   - tag: forward_to_dnspod
     type: fast_forward
     args:
       upstream:
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '1.12.12.12:443'
+          trusted: true
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '120.53.53.53:443'
+          trusted: true
         - addr: 'tls://dot.pub'
           dial_addr: '1.12.12.12:853'
+          trusted: true
         - addr: 'tls://dot.pub'
           dial_addr: '120.53.53.53:853'
+          trusted: true
   - tag: forward_to_google
     type: fast_forward
     args:
@@ -121,15 +129,19 @@ plugin:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
           socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.8.8:443'
           socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
           socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
           socks5: '127.0.0.1:7890'
+          trusted: true
   - tag: forward_to_opendns
     type: fast_forward
     args:
@@ -137,12 +149,16 @@ plugin:
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.220.2:443'
           socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.222.2:443'
           socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
           socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
           socks5: '127.0.0.1:7890'
+          trusted: true
