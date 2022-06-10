@@ -33,6 +33,8 @@ plugin:
             - forward_query_to_remote_dns
           always_standby: true
           fast_fallback: 500
+          stat_length: 5
+          threshold: 3
         - rewrite_max_min_ttl
   - tag: rewrite_max_min_ttl
     type: ttl
@@ -76,6 +78,8 @@ plugin:
             - forward_to_alidns
           always_standby: true
           fast_fallback: 375
+          stat_length: 5
+          threshold: 3
   - tag: forward_query_to_remote_dns
     type: sequence
     args:
@@ -90,6 +94,8 @@ plugin:
             - forward_to_google
           always_standby: true
           fast_fallback: 375
+          stat_length: 5
+          threshold: 3
   - tag: forward_to_alidns
     type: fast_forward
     args:
