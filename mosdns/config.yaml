@@ -32,13 +32,7 @@ plugin:
             - forward_query_to_remote_dns
           always_standby: true
           fast_fallback: 500
-        - if:
-            - '!_response_rcode_success'
-            - _response_empty_answer
-          exec:
-            - _block_with_servfail
-          else_exec:
-            - rewrite_max_min_ttl
+        - rewrite_max_min_ttl
   - tag: rewrite_max_min_ttl
     type: ttl
     args:
