@@ -22,7 +22,7 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
-    curl -s --connect-timeout 15 "https://source.zhijie.online/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/config/config.yaml"
+    curl -s --connect-timeout 15 "https://source.zhijie.online/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 }
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
