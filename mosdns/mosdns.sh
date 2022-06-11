@@ -39,7 +39,7 @@ function CreateNewContainer() {
         --lazyfree-lazy-eviction yes \
         --lazyfree-lazy-expire yes \
         --lazyfree-lazy-server-del yes \
-        --maxmemory 128m \
+        --maxmemory 64m \
         --maxmemory-policy allkeys-lru \
         --maxmemory-samples 10
     docker run --name ${REPO} --net host --restart=always \
