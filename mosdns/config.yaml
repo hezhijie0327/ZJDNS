@@ -89,6 +89,12 @@ plugin:
                 - _drop_response
           secondary:
             - forward_to_google
+            - if:
+                - '!_response_rcode_success'
+                - _response_empty_answer
+              exec:
+                - _no_ecs
+                - forward_to_cloudflare
           always_standby: true
           fast_fallback: 375
   - tag: forward_to_alidns
@@ -106,6 +112,26 @@ plugin:
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
+          trusted: true
+  - tag: forward_to_cloudflare
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://one.one.one.one/dns-query'
+          dial_addr: '1.0.0.1:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://one.one.one.one/dns-query'
+          dial_addr: '1.1.1.1:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://one.one.one.one'
+          dial_addr: '1.0.0.1:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://one.one.one.one'
+          dial_addr: '1.1.1.1:853'
+          socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_dnspod
     type: fast_forward
