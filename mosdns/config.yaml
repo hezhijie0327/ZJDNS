@@ -32,7 +32,13 @@ plugin:
             - forward_query_to_remote_dns
           always_standby: true
           fast_fallback: 500
-        - rewrite_max_min_ttl
+        - if:
+            - '!_response_rcode_success'
+            - _response_empty_answer
+          exec:
+            - _block_with_nxdomain
+          else_exec:
+            - rewrite_max_min_ttl
   - tag: rewrite_max_min_ttl
     type: ttl
     args:
@@ -88,14 +94,18 @@ plugin:
               exec:
                 - _drop_response
           secondary:
-            - forward_to_google
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-                - _no_ecs
-                - forward_to_cloudflare
+            - primary:
+                - forward_to_google
+                - if:
+                    - '!_response_rcode_success'
+                    - _response_empty_answer
+                  exec:
+                    - _drop_response
+              secondary:
+                    - _no_ecs
+                    - forward_to_cloudflare
+              always_standby: true
+              fast_fallback: 375
           always_standby: true
           fast_fallback: 375
   - tag: forward_to_alidns
