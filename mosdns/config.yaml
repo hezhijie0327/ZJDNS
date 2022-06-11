@@ -36,7 +36,7 @@ plugin:
             - '!_response_rcode_success'
             - _response_empty_answer
           exec:
-            - _block_with_nxdomain
+            - _block_with_servfail
           else_exec:
             - rewrite_max_min_ttl
   - tag: rewrite_max_min_ttl
@@ -102,8 +102,8 @@ plugin:
                   exec:
                     - _drop_response
               secondary:
-                    - _no_ecs
-                    - forward_to_cloudflare
+                - _no_ecs
+                - forward_to_cloudflare
               always_standby: true
               fast_fallback: 375
           always_standby: true
