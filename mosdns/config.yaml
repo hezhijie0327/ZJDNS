@@ -26,7 +26,6 @@ plugin:
             - forward_query_to_local_dns
             - if:
                 - '!response_is_local_ip'
-                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -70,6 +69,7 @@ plugin:
             - forward_to_dnspod
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
@@ -84,6 +84,7 @@ plugin:
             - forward_to_opendns
             - if:
                 - '!_response_rcode_success'
+                - _response_empty_answer
               exec:
                 - _drop_response
           secondary:
