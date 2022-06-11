@@ -88,13 +88,18 @@ plugin:
               exec:
                 - _drop_response
           secondary:
-            - forward_to_google
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _no_ecs
-                - forward_to_cloudflare
+            - primary:
+                - forward_to_google
+                - if:
+                    - '!_response_rcode_success'
+                    - _response_empty_answer
+                  exec:
+                    - _drop_response
+              secondary:
+                    - _no_ecs
+                    - forward_to_cloudflare
+              always_standby: true
+              fast_fallback: 375
           always_standby: true
           fast_fallback: 375
   - tag: forward_to_alidns
