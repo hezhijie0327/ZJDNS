@@ -20,6 +20,10 @@ function CleanupCurrentContainer() {
         docker stop ${REPO} && docker rm ${REPO}
     fi
 }
+# Download mosDNS Configuration
+function DownloadmosDNSConfiguration() {
+    curl -s --connect-timeout 15 "https://source.zhijie.online/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/config/config.yaml"
+}
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
     curl -s --connect-timeout 15 "https://source.zhijie.online/CNIPDb/main/cnipdb/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
@@ -35,7 +39,7 @@ function CreateNewContainer() {
         --lazyfree-lazy-eviction yes \
         --lazyfree-lazy-expire yes \
         --lazyfree-lazy-server-del yes \
-        --maxmemory 64m \
+        --maxmemory 128m \
         --maxmemory-policy allkeys-lru \
         --maxmemory-samples 10
     docker run --name ${REPO} --net host --restart=always \
@@ -56,6 +60,8 @@ function CleanupExpiredImage() {
 ## Process
 # Call GetLatestImage
 GetLatestImage
+# Call DownloadmosDNSConfiguration
+DownloadmosDNSConfiguration
 # Call UpdateGeoIPRule
 UpdateGeoIPCNRule
 # Call CleanupCurrentContainer
