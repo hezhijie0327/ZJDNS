@@ -1,19 +1,21 @@
 log:
   level: error
-plugin:
-  - tag: main_server
-    type: server
-    args:
-      entry:
-        - _enable_response_padding
-        - _single_flight
-        - query_sequence
-      server:
-        - protocol: dot
-          addr: 127.0.0.1:8853
-          cert: '/etc/mosdns/cert/fullchain.cer'
-          key: '/etc/mosdns/cert/zhijie.online.key'
-      timeout: 1
+servers:
+  - exec:
+      - _enable_response_padding
+      - _single_flight
+      - query_sequence
+    timeout: 1
+    listener:
+      - protocol: tls
+        addr: '127.0.0.1:8853'
+        cert: '/etc/mosdns/cert/fullchain.cer'
+        key: '/etc/mosdns/cert/zhijie.online.key'
+data_providers:
+  - tag: cnipdb
+    auto_reload: true
+    file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
+plugins:
   - tag: query_sequence
     type: sequence
     args:
@@ -24,8 +26,7 @@ plugin:
         - query_is_in_cache
         - primary:
             - forward_query_to_local_dns
-            - if:
-                - '!response_is_local_ip'
+            - if: '! response_is_local_ip'
               exec:
                 - _drop_response
           secondary:
@@ -60,16 +61,14 @@ plugin:
     type: response_matcher
     args:
       ip:
-        - 'ext:/etc/mosdns/data/GeoIP_CNIPDb.txt'
+        - 'provider:cnipdb'
   - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_dnspod
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
+            - if: '! [_response_valid_answer]'
               exec:
                 - _drop_response
           secondary:
@@ -83,16 +82,12 @@ plugin:
         - primary:
             - primary:
                 - forward_to_opendns
-                - if:
-                    - '!_response_rcode_success'
-                    - _response_empty_answer
+                - if: '! [_response_valid_answer]'
                   exec:
                     - _drop_response
               secondary:
                 - forward_to_google
-                - if:
-                    - '!_response_rcode_success'
-                    - _response_empty_answer
+                - if: '! [_response_valid_answer]'
                   exec:
                     - _drop_response
               always_standby: true
