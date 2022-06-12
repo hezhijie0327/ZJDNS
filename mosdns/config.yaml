@@ -102,11 +102,13 @@ plugins:
     args:
       exec:
         - primary:
+            - _enable_response_padding
             - forward_to_dnspod
             - if: '! [_response_valid_answer]'
               exec:
                 - _drop_response
           secondary:
+            - _enable_response_padding
             - forward_to_alidns
           always_standby: true
           fast_fallback: 375
@@ -116,11 +118,13 @@ plugins:
       exec:
         - primary:
             - primary:
+                - _enable_response_padding
                 - forward_to_opendns
                 - if: '! [_response_valid_answer]'
                   exec:
                     - _drop_response
               secondary:
+                - _enable_response_padding
                 - forward_to_google
                 - if: '! [_response_valid_answer]'
                   exec:
@@ -128,6 +132,7 @@ plugins:
               always_standby: true
               fast_fallback: 375
           secondary:
+            - _enable_response_padding
             - forward_to_cloudflare
           always_standby: true
           fast_fallback: 500
@@ -163,11 +168,10 @@ plugins:
     type: sequence
     args:
       exec:
-        - _enable_response_padding
-        - _pad_query
         - _single_flight
         - set_ecs
         - set_edns0_bufsize
+        - _pad_query
         - query_is_in_cache
         - primary:
             - forward_query_to_local_dns
