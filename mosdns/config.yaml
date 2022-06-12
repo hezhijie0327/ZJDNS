@@ -1,20 +1,20 @@
 log:
   level: error
+data_providers:
+  - tag: cnipdb
+    auto_reload: true
+    file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
 servers:
   - exec:
       - _enable_response_padding
       - _single_flight
       - query_sequence
-    timeout: 1
     listener:
       - protocol: tls
         addr: '127.0.0.1:8853'
         cert: '/etc/mosdns/cert/fullchain.cer'
         key: '/etc/mosdns/cert/zhijie.online.key'
-data_providers:
-  - tag: cnipdb
-    auto_reload: true
-    file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
+    timeout: 1
 plugins:
   - tag: query_sequence
     type: sequence
