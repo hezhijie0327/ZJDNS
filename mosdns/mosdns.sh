@@ -47,8 +47,9 @@ function CreateNewContainer() {
         -v ${DOCKER_PATH}/conf:/etc/mosdns/conf \
         -v ${DOCKER_PATH}/data:/etc/mosdns/data \
         -d ${OWNER}/${REPO}:${TAG} \
+        start \
         -c "/etc/mosdns/conf/config.yaml" \
-        -dir "/etc/mosdns/data"
+        -d "/etc/mosdns/data"
 }
 # Cleanup Expired Image
 function CleanupExpiredImage() {
