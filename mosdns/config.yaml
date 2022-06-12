@@ -5,34 +5,6 @@ data_providers:
     auto_reload: true
     file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
 plugins:
-  - tag: rewrite_max_min_ttl
-    type: ttl
-    args:
-      maximum_ttl: 3600
-      minimal_ttl: 300
-  - tag: set_ecs
-    type: ecs
-    args:
-      auto: true
-      mask4: 24
-      mask6: 56
-  - tag: set_edns0_bufsize
-    type: bufsize
-    args:
-      size: 1232
-  - tag: query_is_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      lazy_cache_ttl: 86400
-      lazy_cache_reply_ttl: 30
-      redis: 'redis://127.0.0.1:6379/0'
-      redis_timeout: 250
-  - tag: response_is_local_ip
-    type: response_matcher
-    args:
-      ip:
-        - 'provider:data_provider_cnipdb'
   - tag: forward_to_alidns
     type: fast_forward
     args:
@@ -159,6 +131,34 @@ plugins:
             - forward_to_cloudflare
           always_standby: true
           fast_fallback: 500
+  - tag: query_is_in_cache
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_ttl: 86400
+      lazy_cache_reply_ttl: 30
+      redis: 'redis://127.0.0.1:6379/0'
+      redis_timeout: 250
+  - tag: response_is_local_ip
+    type: response_matcher
+    args:
+      ip:
+        - 'provider:data_provider_cnipdb'
+  - tag: rewrite_max_min_ttl
+    type: ttl
+    args:
+      maximum_ttl: 3600
+      minimal_ttl: 300
+  - tag: set_ecs
+    type: ecs
+    args:
+      auto: true
+      mask4: 24
+      mask6: 56
+  - tag: set_edns0_bufsize
+    type: bufsize
+    args:
+      size: 1232
   - tag: main_server
     type: sequence
     args:
