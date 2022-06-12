@@ -1,7 +1,7 @@
 log:
   level: error
 data_providers:
-  - tag: cnipdb
+  - tag: data_provider_cnipdb
     auto_reload: true
     file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
 servers:
@@ -61,7 +61,7 @@ plugins:
     type: response_matcher
     args:
       ip:
-        - 'provider:cnipdb'
+        - 'provider:data_provider_cnipdb'
   - tag: forward_query_to_local_dns
     type: sequence
     args:
