@@ -81,26 +81,26 @@ plugin:
     args:
       exec:
         - primary:
-            - forward_to_opendns
-            - if:
-                - '!_response_rcode_success'
-                - _response_empty_answer
-              exec:
-                - _drop_response
-          secondary:
             - primary:
-                - forward_to_google
+                - forward_to_opendns
                 - if:
                     - '!_response_rcode_success'
                     - _response_empty_answer
                   exec:
                     - _drop_response
               secondary:
-                - forward_to_cloudflare
+                - forward_to_google
+                - if:
+                    - '!_response_rcode_success'
+                    - _response_empty_answer
+                  exec:
+                    - _drop_response
               always_standby: true
               fast_fallback: 375
+          secondary:
+            - forward_to_cloudflare
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 500
   - tag: forward_to_alidns
     type: fast_forward
     args:
