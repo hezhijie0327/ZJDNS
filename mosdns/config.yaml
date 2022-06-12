@@ -4,36 +4,7 @@ data_providers:
   - tag: data_provider_cnipdb
     auto_reload: true
     file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
-servers:
-  - exec:
-      - _enable_response_padding
-      - _single_flight
-      - query_sequence
-    listener:
-      - protocol: tls
-        addr: '127.0.0.1:8853'
-        cert: '/etc/mosdns/cert/fullchain.cer'
-        key: '/etc/mosdns/cert/zhijie.online.key'
-    timeout: 1
 plugins:
-  - tag: query_sequence
-    type: sequence
-    args:
-      exec:
-        - _pad_query
-        - set_ecs
-        - set_edns0_bufsize
-        - query_is_in_cache
-        - primary:
-            - forward_query_to_local_dns
-            - if: '! response_is_local_ip'
-              exec:
-                - _drop_response
-          secondary:
-            - forward_query_to_remote_dns
-          always_standby: true
-          fast_fallback: 500
-        - rewrite_max_min_ttl
   - tag: rewrite_max_min_ttl
     type: ttl
     args:
@@ -62,40 +33,6 @@ plugins:
     args:
       ip:
         - 'provider:data_provider_cnipdb'
-  - tag: forward_query_to_local_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_dnspod
-            - if: '! [_response_valid_answer]'
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_alidns
-          always_standby: true
-          fast_fallback: 375
-  - tag: forward_query_to_remote_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - primary:
-                - forward_to_opendns
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
-              secondary:
-                - forward_to_google
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
-              always_standby: true
-              fast_fallback: 375
-          secondary:
-            - forward_to_cloudflare
-          always_standby: true
-          fast_fallback: 500
   - tag: forward_to_alidns
     type: fast_forward
     args:
@@ -188,3 +125,65 @@ plugins:
           dial_addr: '208.67.222.2:853'
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_local_dns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_to_dnspod
+            - if: '! [_response_valid_answer]'
+              exec:
+                - _drop_response
+          secondary:
+            - forward_to_alidns
+          always_standby: true
+          fast_fallback: 375
+  - tag: forward_query_to_remote_dns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - primary:
+                - forward_to_opendns
+                - if: '! [_response_valid_answer]'
+                  exec:
+                    - _drop_response
+              secondary:
+                - forward_to_google
+                - if: '! [_response_valid_answer]'
+                  exec:
+                    - _drop_response
+              always_standby: true
+              fast_fallback: 375
+          secondary:
+            - forward_to_cloudflare
+          always_standby: true
+          fast_fallback: 500
+  - tag: main_server
+    type: sequence
+    args:
+      exec:
+        - _enable_response_padding
+        - _pad_query
+        - _single_flight
+        - set_ecs
+        - set_edns0_bufsize
+        - query_is_in_cache
+        - primary:
+            - forward_query_to_local_dns
+            - if: '! response_is_local_ip'
+              exec:
+                - _drop_response
+          secondary:
+            - forward_query_to_remote_dns
+          always_standby: true
+          fast_fallback: 500
+        - rewrite_max_min_ttl
+servers:
+  - exec: main_server
+    listeners:
+      - protocol: tls
+        addr: '127.0.0.1:8853'
+        cert: '/etc/mosdns/cert/fullchain.cer'
+        key: '/etc/mosdns/cert/zhijie.online.key'
+    timeout: 1
