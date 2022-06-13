@@ -108,6 +108,9 @@ plugins:
                 - _drop_response
           secondary:
             - forward_to_alidns
+            - if: '! [_response_valid_answer]'
+              exec:
+                - _drop_response
           always_standby: true
           fast_fallback: 375
   - tag: forward_query_to_remote_dns
