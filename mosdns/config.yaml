@@ -164,7 +164,6 @@ plugins:
     args:
       exec:
         - _single_flight
-        - _enable_response_padding
         - set_ecs
         - set_edns0_bufsize
         - _pad_query
