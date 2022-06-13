@@ -166,6 +166,7 @@ plugins:
         - _single_flight
         - set_ecs
         - set_edns0_bufsize
+        - _pad_query
         - query_is_in_cache
         - primary:
             - forward_query_to_local_dns
