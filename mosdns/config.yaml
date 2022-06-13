@@ -169,7 +169,9 @@ plugins:
         - _single_flight
         - set_ecs
         - set_edns0_bufsize
+        - _pad_query
         - query_is_in_cache
+        - _enable_response_padding
         - primary:
             - forward_query_to_local_dns
             - if: '! response_is_local_ip'
