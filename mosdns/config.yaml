@@ -61,31 +61,57 @@ plugins:
           dial_addr: '208.67.222.2:443'
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_to_quad9
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns10.quad9.net/dns-query'
+          dial_addr: '149.112.112.10:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns10.quad9.net/dns-query'
+          dial_addr: '9.9.9.10:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_dns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - forward_to_quad9
+            - if: '! [_response_valid_answer]'
+              exec:
+                - _drop_response
+          secondary:
+            - forward_to_cloudflare
+          always_standby: true
+          fast_fallback: 250
   - tag: forward_query_to_local_dns
     type: sequence
     args:
       exec:
         - primary:
             - forward_to_dnspod
+            - if: '! [_response_valid_answer]'
+              exec:
+                - _drop_response
           secondary:
             - forward_to_alidns
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 250
   - tag: forward_query_to_remote_dns
     type: sequence
     args:
       exec:
         - primary:
-            - primary:
-                - forward_to_opendns
-              secondary:
-                - forward_to_google
-              always_standby: true
-              fast_fallback: 375
+            - forward_to_opendns
+            - if: '! [_response_valid_answer]'
+              exec:
+                - _drop_response
           secondary:
-            - forward_to_cloudflare
+            - forward_to_google
           always_standby: true
-          fast_fallback: 500
+          fast_fallback: 250
   - tag: query_is_in_cache
     type: cache
     args:
@@ -93,7 +119,7 @@ plugins:
       lazy_cache_ttl: 86400
       lazy_cache_reply_ttl: 30
       redis: 'redis://127.0.0.1:6379/0'
-      redis_timeout: 250
+      redis_timeout: 125
   - tag: response_has_local_ip
     type: response_matcher
     args:
@@ -123,12 +149,20 @@ plugins:
         - set_edns0_bufsize
         - query_is_in_cache
         - primary:
-            - forward_query_to_local_dns
-            - if: '(! response_has_local_ip) && [_response_valid_answer]'
-              exec:
-                - _drop_response
+            - primary:
+                - forward_query_to_local_dns
+                - if: '! response_has_local_ip'
+                  exec:
+                    - _drop_response
+              secondary:
+                - forward_query_to_remote_dns
+                - if: '! [_response_valid_answer]'
+                  exec:
+                    - _drop_response
+              always_standby: true
+              fast_fallback: 375
           secondary:
-            - forward_query_to_remote_dns
+            - forward_query_to_fallback_dns
           always_standby: true
           fast_fallback: 500
         - rewrite_max_min_ttl
