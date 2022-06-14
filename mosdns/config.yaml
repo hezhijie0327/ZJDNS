@@ -67,9 +67,6 @@ plugins:
       exec:
         - primary:
             - forward_to_dnspod
-            - if: '! [_response_valid_answer]'
-              exec:
-                - _drop_response
           secondary:
             - forward_to_alidns
           always_standby: true
@@ -81,14 +78,8 @@ plugins:
         - primary:
             - primary:
                 - forward_to_opendns
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
               secondary:
                 - forward_to_google
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
               always_standby: true
               fast_fallback: 375
           secondary:
@@ -103,7 +94,7 @@ plugins:
       lazy_cache_reply_ttl: 30
       redis: 'redis://127.0.0.1:6379/0'
       redis_timeout: 250
-  - tag: response_is_local_ip
+  - tag: response_has_local_ip
     type: response_matcher
     args:
       ip:
@@ -133,7 +124,7 @@ plugins:
         - query_is_in_cache
         - primary:
             - forward_query_to_local_dns
-            - if: '! response_is_local_ip'
+            - if: '(! response_has_local_ip) && [_response_valid_answer]'
               exec:
                 - _drop_response
           secondary:
