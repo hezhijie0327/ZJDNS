@@ -85,7 +85,7 @@ plugins:
           secondary:
             - forward_to_cloudflare
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 250
   - tag: forward_query_to_local_dns
     type: sequence
     args:
@@ -98,7 +98,7 @@ plugins:
           secondary:
             - forward_to_alidns
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 250
   - tag: forward_query_to_remote_dns
     type: sequence
     args:
@@ -111,7 +111,7 @@ plugins:
           secondary:
             - forward_to_google
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 250
   - tag: query_is_in_cache
     type: cache
     args:
@@ -119,7 +119,7 @@ plugins:
       lazy_cache_ttl: 86400
       lazy_cache_reply_ttl: 30
       redis: 'redis://127.0.0.1:6379/0'
-      redis_timeout: 250
+      redis_timeout: 125
   - tag: response_has_local_ip
     type: response_matcher
     args:
@@ -163,11 +163,11 @@ plugins:
                   exec:
                     - _drop_response
               always_standby: true
-              fast_fallback: 500
+              fast_fallback: 375
           secondary:
             - forward_query_to_fallback_dns
           always_standby: true
-          fast_fallback: 625
+          fast_fallback: 500
         - rewrite_max_min_ttl
 servers:
   - exec: main_server
