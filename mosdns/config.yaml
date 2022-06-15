@@ -65,12 +65,12 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '149.112.112.10:443'
+        - addr: 'https://dns.quad9.net/dns-query'
+          dial_addr: '149.112.112.112:443'
           socks5: '127.0.0.1:7890'
           trusted: true
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '9.9.9.10:443'
+        - addr: 'https://dns.quad9.net/dns-query'
+          dial_addr: '9.9.9.9:443'
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_fallback_dns
@@ -176,3 +176,4 @@ servers:
         addr: '127.0.0.1:8853'
         cert: '/etc/mosdns/cert/fullchain.cer'
         key: '/etc/mosdns/cert/zhijie.online.key'
+    timeout: 1
