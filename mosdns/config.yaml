@@ -194,12 +194,8 @@ plugins:
         - _enable_response_padding
         - _misc_optm
         - _single_flight
-        - if: '! [_query_edns0]'
-          exec:
-            - _no_ecs
-          else_exec:
-            - set_edns0_bufsize
-            - set_edns0_client_subnet
+        - set_edns0_bufsize
+        - set_edns0_client_subnet
         - _pad_query
         - query_is_in_cache
         - primary:
