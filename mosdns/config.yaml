@@ -81,10 +81,6 @@ plugins:
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8888]:853'
           trusted: true
-  - tag: forward_to_google_proxy
-    type: fast_forward
-    args:
-      upstream:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
           socks5: '127.0.0.1:7890'
@@ -145,10 +141,6 @@ plugins:
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '[2620:0:ccd::2]:853'
           trusted: true
-  - tag: forward_to_opendns_proxy
-    type: fast_forward
-    args:
-      upstream:
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.220.2:443'
           socks5: '127.0.0.1:7890'
@@ -199,28 +191,12 @@ plugins:
     args:
       exec:
         - primary:
-            - primary:
-                - forward_to_opendns_proxy
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
-              secondary:
-                - forward_to_opendns
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
-              always_standby: true
-              fast_fallback: 250
+            - forward_to_opendns
+            - if: '! [_response_valid_answer]'
+              exec:
+                - _drop_response
           secondary:
-            - primary:
-                - forward_to_google_proxy
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
-              secondary:
-                - forward_to_google
-              always_standby: true
-              fast_fallback: 250
+            - forward_to_google
           always_standby: true
           fast_fallback: 375
   - tag: query_is_in_cache
@@ -264,7 +240,7 @@ plugins:
         - query_is_in_cache
         - primary:
             - forward_query_to_local_dns
-            - if: '(! response_has_local_ip) && [_response_valid_answer]'
+            - if: '! response_has_local_ip'
               exec:
                 - _drop_response
           secondary:
