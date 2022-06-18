@@ -15,12 +15,26 @@ plugins:
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.6.6.6:443'
           trusted: true
+        - addr: 'https://dns.alidns.com/dns-query'
+          dial_addr: '[2400:3200::1]:443'
+          trusted: true
+        - addr: 'https://dns.alidns.com/dns-query'
+          dial_addr: '[2400:3200:baba::1]:443'
+          trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
           enable_pipeline: false
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
+          enable_pipeline: false
+          trusted: true
+        - addr: 'tls://dns.alidns.com'
+          dial_addr: '[2400:3200::1]:853'
+          enable_pipeline: false
+          trusted: true
+        - addr: 'tls://dns.alidns.com'
+          dial_addr: '[2400:3200:baba::1]:853'
           enable_pipeline: false
           trusted: true
   - tag: forward_to_cloudflare
@@ -33,11 +47,23 @@ plugins:
         - addr: 'https://one.one.one.one/dns-query'
           dial_addr: '1.1.1.1:443'
           trusted: true
+        - addr: 'https://one.one.one.one/dns-query'
+          dial_addr: '[2606:4700:4700::1001]:443'
+          trusted: true
+        - addr: 'https://one.one.one.one/dns-query'
+          dial_addr: '[2606:4700:4700::1111]:443'
+          trusted: true
         - addr: 'tls://one.one.one.one'
           dial_addr: '1.0.0.1:853'
           trusted: true
         - addr: 'tls://one.one.one.one'
           dial_addr: '1.1.1.1:853'
+          trusted: true
+        - addr: 'tls://one.one.one.one'
+          dial_addr: '[2606:4700:4700::1001]:853'
+          trusted: true
+        - addr: 'tls://one.one.one.one'
+          dial_addr: '[2606:4700:4700::1111]:853'
           trusted: true
   - tag: forward_to_cloudflare_proxy
     type: fast_forward
@@ -51,12 +77,28 @@ plugins:
           dial_addr: '1.1.1.1:443'
           socks5: '127.0.0.1:7890'
           trusted: true
+        - addr: 'https://one.one.one.one/dns-query'
+          dial_addr: '[2606:4700:4700::1001]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://one.one.one.one/dns-query'
+          dial_addr: '[2606:4700:4700::1111]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'tls://one.one.one.one'
           dial_addr: '1.0.0.1:853'
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://one.one.one.one'
           dial_addr: '1.1.1.1:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://one.one.one.one'
+          dial_addr: '[2606:4700:4700::1001]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://one.one.one.one'
+          dial_addr: '[2606:4700:4700::1111]:853'
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_dnspod
@@ -85,11 +127,23 @@ plugins:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.8.8:443'
           trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8844]:443'
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8888]:443'
+          trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '[2001:4860:4860::8844]:853'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '[2001:4860:4860::8888]:853'
           trusted: true
   - tag: forward_to_google_proxy
     type: fast_forward
@@ -103,12 +157,28 @@ plugins:
           dial_addr: '8.8.8.8:443'
           socks5: '127.0.0.1:7890'
           trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8844]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8888]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '[2001:4860:4860::8844]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '[2001:4860:4860::8888]:853'
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_opendns
@@ -121,11 +191,23 @@ plugins:
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.222.2:443'
           trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '[2620:0:ccc::2]:443'
+          trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '[2620:0:ccd::2]:443'
+          trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '[2620:0:ccc::2]:853'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '[2620:0:ccd::2]:853'
           trusted: true
   - tag: forward_to_opendns_proxy
     type: fast_forward
@@ -139,12 +221,28 @@ plugins:
           dial_addr: '208.67.222.2:443'
           socks5: '127.0.0.1:7890'
           trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '[2620:0:ccc::2]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '[2620:0:ccd::2]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '[2620:0:ccc::2]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '[2620:0:ccd::2]:853'
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_quad9
@@ -157,11 +255,23 @@ plugins:
         - addr: 'https://dns.quad9.net/dns-query'
           dial_addr: '9.9.9.9:443'
           trusted: true
+        - addr: 'https://dns.quad9.net/dns-query'
+          dial_addr: '[2620:fe::9]:443'
+          trusted: true
+        - addr: 'https://dns.quad9.net/dns-query'
+          dial_addr: '[2620:fe::fe]:443'
+          trusted: true
         - addr: 'tls://dns.quad9.net'
           dial_addr: '149.112.112.112:853'
           trusted: true
         - addr: 'tls://dns.quad9.net'
           dial_addr: '9.9.9.9:853'
+          trusted: true
+        - addr: 'tls://dns.quad9.net'
+          dial_addr: '[2620:fe::9]:853'
+          trusted: true
+        - addr: 'tls://dns.quad9.net'
+          dial_addr: '[2620:fe::fe]:853'
           trusted: true
   - tag: forward_to_quad9_proxy
     type: fast_forward
@@ -175,12 +285,28 @@ plugins:
           dial_addr: '9.9.9.9:443'
           socks5: '127.0.0.1:7890'
           trusted: true
+        - addr: 'https://dns.quad9.net/dns-query'
+          dial_addr: '[2620:fe::9]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns.quad9.net/dns-query'
+          dial_addr: '[2620:fe::fe]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'tls://dns.quad9.net'
           dial_addr: '149.112.112.112:853'
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.quad9.net'
           dial_addr: '9.9.9.9:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns.quad9.net'
+          dial_addr: '[2620:fe::9]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns.quad9.net'
+          dial_addr: '[2620:fe::fe]:853'
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_local_dns
