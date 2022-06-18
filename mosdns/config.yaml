@@ -439,3 +439,4 @@ servers:
         addr: '127.0.0.1:8853'
         cert: '/etc/mosdns/cert/fullchain.cer'
         key: '/etc/mosdns/cert/zhijie.online.key'
+    timeout: 1
