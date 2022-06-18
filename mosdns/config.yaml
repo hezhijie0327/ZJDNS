@@ -199,28 +199,16 @@ plugins:
     args:
       exec:
         - primary:
-            - primary:
-                - forward_to_opendns_proxy
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
-              secondary:
-                - forward_to_opendns
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
-              always_standby: true
-              fast_fallback: 250
+            - parallel:
+                - - forward_to_opendns
+                - - forward_to_opendns_proxy
+            - if: '! [_response_valid_answer]'
+              exec:
+                - _drop_response
           secondary:
-            - primary:
-                - forward_to_google_proxy
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
-              secondary:
-                - forward_to_google
-              always_standby: true
-              fast_fallback: 250
+            - parallel:
+                - - forward_to_google
+                - - forward_to_google_proxy
           always_standby: true
           fast_fallback: 375
   - tag: query_is_in_cache
