@@ -178,11 +178,11 @@ plugins:
                     - _drop_response
               secondary:
                 - forward_query_to_remote_dns
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
               always_standby: true
               fast_fallback: 375
+            - if: '! [_response_valid_answer]'
+              exec:
+                - _drop_response
           secondary:
             - forward_query_to_fallback_dns
           always_standby: true
