@@ -45,6 +45,10 @@ plugins:
           dial_addr: '1.1.1.1:853'
           enable_pipeline: true
           trusted: true
+  - tag: forward_to_cloudflare_proxy
+    type: fast_forward
+    args:
+      upstream:
         - addr: 'https://one.one.one.one/dns-query'
           dial_addr: '1.0.0.1:443'
           enable_http3: false
@@ -105,6 +109,10 @@ plugins:
           dial_addr: '8.8.8.8:853'
           enable_pipeline: true
           trusted: true
+  - tag: forward_to_google_proxy
+    type: fast_forward
+    args:
+      upstream:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
           enable_http3: false
@@ -145,6 +153,10 @@ plugins:
           dial_addr: '208.67.222.2:853'
           enable_pipeline: true
           trusted: true
+  - tag: forward_to_opendns_proxy
+    type: fast_forward
+    args:
+      upstream:
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.220.2:443'
           enable_http3: false
@@ -185,6 +197,10 @@ plugins:
           dial_addr: '9.9.9.9:853'
           enable_pipeline: true
           trusted: true
+  - tag: forward_to_quad9_proxy
+    type: fast_forward
+    args:
+      upstream:
         - addr: 'https://dns.quad9.net/dns-query'
           dial_addr: '149.112.112.112:443'
           enable_http3: false
@@ -224,25 +240,57 @@ plugins:
       exec:
         - primary:
             - primary:
-                - forward_to_opendns
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
+                - primary:
+                    - forward_to_opendns_proxy
+                    - if: '! [_response_valid_answer]'
+                      exec:
+                        - _drop_response
+                  secondary:
+                    - forward_to_opendns
+                    - if: '! [_response_valid_answer]'
+                      exec:
+                        - _drop_response
+                  always_standby: true
+                  fast_fallback: 250
               secondary:
-                - forward_to_google
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
+                - primary:
+                    - forward_to_google_proxy
+                    - if: '! [_response_valid_answer]'
+                      exec:
+                        - _drop_response
+                  secondary:
+                    - forward_to_google
+                    - if: '! [_response_valid_answer]'
+                      exec:
+                        - _drop_response
+                  always_standby: true
+                  fast_fallback: 250
               always_standby: true
               fast_fallback: 375
           secondary:
             - primary:
-                - forward_to_quad9
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
+                - primary:
+                    - forward_to_quad9_proxy
+                    - if: '! [_response_valid_answer]'
+                      exec:
+                        - _drop_response
+                  secondary:
+                    - forward_to_quad9
+                    - if: '! [_response_valid_answer]'
+                      exec:
+                        - _drop_response
+                  always_standby: true
+                  fast_fallback: 250
               secondary:
-                - forward_to_cloudflare
+                - primary:
+                    - forward_to_cloudflare_proxy
+                    - if: '! [_response_valid_answer]'
+                      exec:
+                        - _drop_response
+                  secondary:
+                    - forward_to_cloudflare
+                  always_standby: true
+                  fast_fallback: 250
               always_standby: true
               fast_fallback: 375
           always_standby: true
