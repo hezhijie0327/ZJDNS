@@ -5,21 +5,33 @@ data_providers:
     auto_reload: true
     file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
 plugins:
-  - tag: forward_to_alidns
+  - tag: forward_query_to_local_dns
     type: fast_forward
     args:
       upstream:
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.5.5.5:443'
+          enable_http3: false
           trusted: true
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.6.6.6:443'
+          enable_http3: false
           trusted: true
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '[2400:3200::1]:443'
+          enable_http3: false
           trusted: true
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '[2400:3200:baba::1]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://doh.pub/dns-query'
+          dial_addr: '1.12.12.12:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://doh.pub/dns-query'
+          dial_addr: '120.53.53.53:443'
+          enable_http3: false
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
@@ -37,168 +49,162 @@ plugins:
           dial_addr: '[2400:3200:baba::1]:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_to_dnspod
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://doh.pub/dns-query'
-          dial_addr: '1.12.12.12:443'
-          trusted: true
-        - addr: 'https://doh.pub/dns-query'
-          dial_addr: '120.53.53.53:443'
-          trusted: true
         - addr: 'tls://doh.pub'
           dial_addr: '1.12.12.12:853'
+          enable_pipeline: true
           trusted: true
         - addr: 'tls://doh.pub'
           dial_addr: '120.53.53.53:853'
+          enable_pipeline: true
           trusted: true
-  - tag: forward_to_google
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '8.8.4.4:443'
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '8.8.8.8:443'
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '[2001:4860:4860::8844]:443'
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '[2001:4860:4860::8888]:443'
-          trusted: true
-        - addr: 'tls://dns.google'
-          dial_addr: '8.8.4.4:853'
-          trusted: true
-        - addr: 'tls://dns.google'
-          dial_addr: '8.8.8.8:853'
-          trusted: true
-        - addr: 'tls://dns.google'
-          dial_addr: '[2001:4860:4860::8844]:853'
-          trusted: true
-        - addr: 'tls://dns.google'
-          dial_addr: '[2001:4860:4860::8888]:853'
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '8.8.4.4:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '8.8.8.8:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '[2001:4860:4860::8844]:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '[2001:4860:4860::8888]:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns.google'
-          dial_addr: '8.8.4.4:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns.google'
-          dial_addr: '8.8.8.8:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns.google'
-          dial_addr: '[2001:4860:4860::8844]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns.google'
-          dial_addr: '[2001:4860:4860::8888]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_to_opendns
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://sandbox.opendns.com/dns-query'
-          dial_addr: '208.67.220.2:443'
-          trusted: true
-        - addr: 'https://sandbox.opendns.com/dns-query'
-          dial_addr: '208.67.222.2:443'
-          trusted: true
-        - addr: 'https://sandbox.opendns.com/dns-query'
-          dial_addr: '[2620:0:ccc::2]:443'
-          trusted: true
-        - addr: 'https://sandbox.opendns.com/dns-query'
-          dial_addr: '[2620:0:ccd::2]:443'
-          trusted: true
-        - addr: 'tls://sandbox.opendns.com'
-          dial_addr: '208.67.220.2:853'
-          trusted: true
-        - addr: 'tls://sandbox.opendns.com'
-          dial_addr: '208.67.222.2:853'
-          trusted: true
-        - addr: 'tls://sandbox.opendns.com'
-          dial_addr: '[2620:0:ccc::2]:853'
-          trusted: true
-        - addr: 'tls://sandbox.opendns.com'
-          dial_addr: '[2620:0:ccd::2]:853'
-          trusted: true
-        - addr: 'https://sandbox.opendns.com/dns-query'
-          dial_addr: '208.67.220.2:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://sandbox.opendns.com/dns-query'
-          dial_addr: '208.67.222.2:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://sandbox.opendns.com/dns-query'
-          dial_addr: '[2620:0:ccc::2]:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://sandbox.opendns.com/dns-query'
-          dial_addr: '[2620:0:ccd::2]:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://sandbox.opendns.com'
-          dial_addr: '208.67.220.2:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://sandbox.opendns.com'
-          dial_addr: '208.67.222.2:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://sandbox.opendns.com'
-          dial_addr: '[2620:0:ccc::2]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://sandbox.opendns.com'
-          dial_addr: '[2620:0:ccd::2]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_local_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_to_dnspod
-            - if: '! [_response_valid_answer]'
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_alidns
-          always_standby: true
-          fast_fallback: 375
   - tag: forward_query_to_remote_dns
-    type: sequence
+    type: fast_forward
     args:
-      exec:
-        - primary:
-            - forward_to_opendns
-            - if: '! [_response_valid_answer]'
-              exec:
-                - _drop_response
-          secondary:
-            - forward_to_google
-          always_standby: true
-          fast_fallback: 375
+      upstream:
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '8.8.4.4:443'
+          enable_http3: true
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '8.8.4.4:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '8.8.8.8:443'
+          enable_http3: true
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '8.8.8.8:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8844]:443'
+          enable_http3: true
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8844]:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8888]:443'
+          enable_http3: true
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8888]:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '208.67.220.2:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '208.67.220.2:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '208.67.222.2:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '208.67.222.2:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '[2620:0:ccc::2]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '[2620:0:ccc::2]:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '[2620:0:ccd::2]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://sandbox.opendns.com/dns-query'
+          dial_addr: '[2620:0:ccd::2]:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '8.8.4.4:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '8.8.4.4:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '8.8.8.8:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '8.8.8.8:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '[2001:4860:4860::8844]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '[2001:4860:4860::8844]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '[2001:4860:4860::8888]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '[2001:4860:4860::8888]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '208.67.220.2:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '208.67.220.2:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '208.67.222.2:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '208.67.222.2:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '[2620:0:ccc::2]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '[2620:0:ccc::2]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '[2620:0:ccd::2]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '[2620:0:ccd::2]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
   - tag: query_is_in_cache
     type: cache
     args:
@@ -246,7 +252,7 @@ plugins:
           secondary:
             - forward_query_to_remote_dns
           always_standby: true
-          fast_fallback: 500
+          fast_fallback: 375
         - rewrite_max_min_ttl
 servers:
   - exec: main_server
