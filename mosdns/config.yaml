@@ -11,15 +11,23 @@ plugins:
       upstream:
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.5.5.5:443'
+          enable_http3: false
+          max_conns: 4
           trusted: true
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.6.6.6:443'
+          enable_http3: false
+          max_conns: 4
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
+          enable_pipeline: false
+          max_conns: 4
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
+          enable_pipeline: false
+          max_conns: 4
           trusted: true
   - tag: forward_to_cloudflare
     type: fast_forward
@@ -27,18 +35,26 @@ plugins:
       upstream:
         - addr: 'https://one.one.one.one/dns-query'
           dial_addr: '1.0.0.1:443'
+          enable_http3: false
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://one.one.one.one/dns-query'
           dial_addr: '1.1.1.1:443'
+          enable_http3: false
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://one.one.one.one'
           dial_addr: '1.0.0.1:853'
+          enable_pipeline: true
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://one.one.one.one'
           dial_addr: '1.1.1.1:853'
+          enable_pipeline: true
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_dnspod
@@ -47,15 +63,23 @@ plugins:
       upstream:
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '1.12.12.12:443'
+          enable_http3: false
+          max_conns: 4
           trusted: true
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '120.53.53.53:443'
+          enable_http3: false
+          max_conns: 4
           trusted: true
         - addr: 'tls://doh.pub'
           dial_addr: '1.12.12.12:853'
+          enable_pipeline: true
+          max_conns: 4
           trusted: true
         - addr: 'tls://doh.pub'
           dial_addr: '120.53.53.53:853'
+          enable_pipeline: true
+          max_conns: 4
           trusted: true
   - tag: forward_to_google
     type: fast_forward
@@ -63,18 +87,26 @@ plugins:
       upstream:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
+          enable_http3: false
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.8.8:443'
+          enable_http3: false
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
+          enable_pipeline: true
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
+          enable_pipeline: true
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_opendns
@@ -83,18 +115,26 @@ plugins:
       upstream:
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.220.2:443'
+          enable_http3: false
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.222.2:443'
+          enable_http3: false
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
+          enable_pipeline: true
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
+          enable_pipeline: true
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_to_quad9
@@ -103,18 +143,26 @@ plugins:
       upstream:
         - addr: 'https://dns.quad9.net/dns-query'
           dial_addr: '149.112.112.112:443'
+          enable_http3: false
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://dns.quad9.net/dns-query'
           dial_addr: '9.9.9.9:443'
+          enable_http3: false
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.quad9.net'
           dial_addr: '149.112.112.112:853'
+          enable_pipeline: true
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.quad9.net'
           dial_addr: '9.9.9.9:853'
+          enable_pipeline: true
+          max_conns: 4
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_local_dns
