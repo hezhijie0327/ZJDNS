@@ -25,6 +25,22 @@ plugins:
           dial_addr: '[2606:4700:4700::1111]:443'
           socks5: '127.0.0.1:7890'
           trusted: true
+        - addr: 'https://dns10.quad9.net/dns-query'
+          dial_addr: '149.112.112.10:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns10.quad9.net/dns-query'
+          dial_addr: '9.9.9.10:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns10.quad9.net/dns-query'
+          dial_addr: '[2620:fe::10]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns10.quad9.net/dns-query'
+          dial_addr: '[2620:fe::fe:10]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'https://doh.sb/dns-query'
           dial_addr: '185.222.222.222:443'
           socks5: '127.0.0.1:7890'
@@ -97,22 +113,6 @@ plugins:
           trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '[2001:4860:4860::8888]:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns11.quad9.net/dns-query'
-          dial_addr: '149.112.112.11:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns11.quad9.net/dns-query'
-          dial_addr: '9.9.9.11:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns11.quad9.net/dns-query'
-          dial_addr: '[2620:fe::11]:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns11.quad9.net/dns-query'
-          dial_addr: '[2620:fe::fe:11]:443'
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://sandbox.opendns.com/dns-query'
