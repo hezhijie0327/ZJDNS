@@ -219,9 +219,6 @@ plugins:
                     - _drop_response
               secondary:
                 - forward_to_google
-                - if: '! [_response_valid_answer]'
-                  exec:
-                    - _drop_response
               always_standby: true
               fast_fallback: 250
           always_standby: true
@@ -230,7 +227,7 @@ plugins:
     type: cache
     args:
       cache_everything: true
-      lazy_cache_ttl: 259200
+      lazy_cache_ttl: 86400
       lazy_cache_reply_ttl: 30
       redis: 'redis://127.0.0.1:6379/0'
       redis_timeout: 125
