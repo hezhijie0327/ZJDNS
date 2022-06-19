@@ -5,6 +5,22 @@ data_providers:
     auto_reload: true
     file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
 plugins:
+  - tag: forward_query_to_local_360
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '101.226.4.6:853'
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '123.125.81.6:853'
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '140.207.198.6:853'
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '218.30.118.6:853'
+          trusted: true
   - tag: forward_query_to_local_alidns
     type: fast_forward
     args:
@@ -227,7 +243,7 @@ plugins:
     type: cache
     args:
       cache_everything: true
-      lazy_cache_ttl: 86400
+      lazy_cache_ttl: 259200
       lazy_cache_reply_ttl: 30
       redis: 'redis://127.0.0.1:6379/0'
       redis_timeout: 125
@@ -264,6 +280,7 @@ plugins:
         - query_is_in_cache
         - primary:
             - parallel:
+                - - forward_query_to_local_360
                 - - forward_query_to_local_alidns
                 - - forward_query_to_local_dnspod
             - if: '! response_has_local_ip'
@@ -284,9 +301,9 @@ plugins:
                     - - forward_query_to_remote_dnssb
                     - - forward_query_to_remote_quad9
               always_standby: true
-              fast_fallback: 375
+              fast_fallback: 500
           always_standby: true
-          fast_fallback: 500
+          fast_fallback: 375
         - rewrite_max_min_ttl
 servers:
   - exec: main_server
