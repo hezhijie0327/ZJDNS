@@ -33,6 +33,18 @@ plugins:
         - addr: 'https://dns10.quad9.net/dns-query'
           dial_addr: '[2620:fe::fe:10]:443'
           trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '185.222.222.222:443'
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '45.11.45.11:443'
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '[2a09::]:443'
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '[2a11::]:443'
+          trusted: true
         - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '1.0.0.1:853'
           trusted: true
@@ -56,6 +68,18 @@ plugins:
           trusted: true
         - addr: 'tls://dns10.quad9.net'
           dial_addr: '[2620:fe::fe:10]:853'
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '185.222.222.222:853'
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '45.11.45.11:853'
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '[2a09::]:853'
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '[2a11::]:853'
           trusted: true
   - tag: forward_query_to_fallback_dns_proxy
     type: fast_forward
@@ -93,6 +117,22 @@ plugins:
           dial_addr: '[2620:fe::fe:10]:443'
           socks5: '127.0.0.1:7890'
           trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '185.222.222.222:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '45.11.45.11:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '[2a09::]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '[2a11::]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '1.0.0.1:853'
           socks5: '127.0.0.1:7890'
@@ -125,6 +165,22 @@ plugins:
           dial_addr: '[2620:fe::fe:10]:853'
           socks5: '127.0.0.1:7890'
           trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '185.222.222.222:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '45.11.45.11:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '[2a09::]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '[2a11::]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
   - tag: forward_query_to_local_dns
     type: fast_forward
     args:
@@ -140,6 +196,18 @@ plugins:
           trusted: true
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '[2400:3200:baba::1]:443'
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '101.226.4.6:443'
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '123.125.81.6:443'
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '140.207.198.6:443'
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '218.30.118.6:443'
           trusted: true
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '1.12.12.12:443'
@@ -159,6 +227,18 @@ plugins:
         - addr: 'tls://dns.alidns.com'
           dial_addr: '[2400:3200:baba::1]:853'
           trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '101.226.4.6:853'
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '123.125.81.6:853'
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '140.207.198.6:853'
+          trusted: true
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '218.30.118.6:853'
+          trusted: true
         - addr: 'tls://dot.pub'
           dial_addr: '1.12.12.12:853'
           trusted: true
@@ -169,6 +249,18 @@ plugins:
     type: fast_forward
     args:
       upstream:
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '94.140.14.140:443'
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '94.140.14.141:443'
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '[2a10:50c0::1:ff]:443'
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '[2a10:50c0::2:ff]:443'
+          trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
           trusted: true
@@ -192,6 +284,18 @@ plugins:
           trusted: true
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '[2620:0:ccd::2]:443'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '94.140.14.140:853'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '94.140.14.141:853'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '[2a10:50c0::1:ff]:853'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '[2a10:50c0::2:ff]:853'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
@@ -221,6 +325,22 @@ plugins:
     type: fast_forward
     args:
       upstream:
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '94.140.14.140:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '94.140.14.141:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '[2a10:50c0::1:ff]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '[2a10:50c0::2:ff]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
           socks5: '127.0.0.1:7890'
@@ -251,6 +371,22 @@ plugins:
           trusted: true
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '[2620:0:ccd::2]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '94.140.14.140:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '94.140.14.141:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '[2a10:50c0::1:ff]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '[2a10:50c0::2:ff]:853'
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
