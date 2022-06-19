@@ -183,20 +183,20 @@ plugins:
         - _pad_query
         - query_is_in_cache
         - primary:
-            - primary:
-                - forward_query_to_local_dns
-                - if: '! response_has_local_ip'
-                  exec:
-                    - _drop_response
-              secondary:
-                - forward_query_to_remote_dns
-              always_standby: true
-              fast_fallback: 375
-            - if: '! [_response_valid_answer]'
+            - forward_query_to_local_dns
+            - if: '! response_has_local_ip'
               exec:
                 - _drop_response
           secondary:
-            - forward_query_to_fallback_dns
+            - primary:
+                - forward_query_to_remote_dns
+                - if: '! [_response_valid_answer]'
+                  exec:
+                    - _drop_response
+              secondary:
+                - forward_query_to_fallback_dns
+              always_standby: true
+              fast_fallback: 375
           always_standby: true
           fast_fallback: 500
         - rewrite_max_min_ttl
