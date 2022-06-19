@@ -11,19 +11,15 @@ plugins:
       upstream:
         - addr: 'tls://dot.360.cn'
           dial_addr: '101.226.4.6:853'
-          enable_pipeline: false
           trusted: true
         - addr: 'tls://dot.360.cn'
           dial_addr: '123.125.81.6:853'
-          enable_pipeline: false
           trusted: true
         - addr: 'tls://dot.360.cn'
           dial_addr: '140.207.198.6:853'
-          enable_pipeline: false
           trusted: true
         - addr: 'tls://dot.360.cn'
           dial_addr: '218.30.118.6:853'
-          enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_alidns
     type: fast_forward
@@ -31,19 +27,15 @@ plugins:
       upstream:
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
-          enable_pipeline: false
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
-          enable_pipeline: false
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '[2400:3200::1]:853'
-          enable_pipeline: false
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '[2400:3200:baba::1]:853'
-          enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_cfiec
     type: fast_forward
@@ -51,11 +43,9 @@ plugins:
       upstream:
         - addr: 'tls://dns.ipv6dns.com'
           dial_addr: '221.228.217.28:853'
-          enable_pipeline: false
           trusted: true
         - addr: 'tls://dns.ipv6dns.com'
           dial_addr: '[240e:e9:900b::5]:853'
-          enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_dnspod
     type: fast_forward
@@ -63,11 +53,9 @@ plugins:
       upstream:
         - addr: 'tls://dot.pub'
           dial_addr: '1.12.12.12:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dot.pub'
           dial_addr: '120.53.53.53:853'
-          enable_pipeline: true
           trusted: true
   - tag: forward_query_to_remote_adguard
     type: fast_forward
@@ -75,38 +63,30 @@ plugins:
       upstream:
         - addr: 'tls://dns-unfiltered.adguard.com'
           dial_addr: '94.140.14.140:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns-unfiltered.adguard.com'
           dial_addr: '94.140.14.141:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns-unfiltered.adguard.com'
           dial_addr: '[2a10:50c0::1:ff]:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns-unfiltered.adguard.com'
           dial_addr: '[2a10:50c0::2:ff]:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns-unfiltered.adguard.com'
           dial_addr: '94.140.14.140:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns-unfiltered.adguard.com'
           dial_addr: '94.140.14.141:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns-unfiltered.adguard.com'
           dial_addr: '[2a10:50c0::1:ff]:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns-unfiltered.adguard.com'
           dial_addr: '[2a10:50c0::2:ff]:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_google
@@ -115,38 +95,30 @@ plugins:
       upstream:
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8844]:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8888]:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8844]:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8888]:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_opendns
@@ -155,38 +127,30 @@ plugins:
       upstream:
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '[2620:0:ccc::2]:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '[2620:0:ccd::2]:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '[2620:0:ccc::2]:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '[2620:0:ccd::2]:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_quad9
@@ -195,38 +159,30 @@ plugins:
       upstream:
         - addr: 'tls://dns11.quad9.net'
           dial_addr: '149.112.112.11:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns11.quad9.net'
           dial_addr: '9.9.9.11:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns11.quad9.net'
           dial_addr: '[2620:fe::11]:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns11.quad9.net'
           dial_addr: '[2620:fe::fe:11]:853'
-          enable_pipeline: true
           trusted: true
         - addr: 'tls://dns11.quad9.net'
           dial_addr: '149.112.112.11:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns11.quad9.net'
           dial_addr: '9.9.9.11:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns11.quad9.net'
           dial_addr: '[2620:fe::11]:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns11.quad9.net'
           dial_addr: '[2620:fe::fe:11]:853'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: query_is_in_cache
@@ -281,7 +237,7 @@ plugins:
                     - - forward_query_to_local_alidns
                     - - forward_query_to_local_dnspod
               always_standby: true
-              fast_fallback: 250
+              fast_fallback: 375
             - if: '! response_has_local_ip'
               exec:
                 - _drop_response
@@ -295,12 +251,12 @@ plugins:
                     - _drop_response
               secondary:
                 - parallel:
-                    - - forward_query_to_local_google
-                    - - forward_query_to_local_opendns
+                    - - forward_query_to_remote_google
+                    - - forward_query_to_remote_opendns
               always_standby: true
-              fast_fallback: 250
+              fast_fallback: 375
           always_standby: true
-          fast_fallback: 375
+          fast_fallback: 500
         - rewrite_max_min_ttl
 servers:
   - exec: main_server
