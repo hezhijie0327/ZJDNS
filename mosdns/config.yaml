@@ -73,6 +73,18 @@ plugins:
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '[2400:3200:baba::1]:443'
           trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '101.226.4.6:443'
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '123.125.81.6:443'
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '140.207.198.6:443'
+          trusted: true
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '218.30.118.6:443'
+          trusted: true
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '1.12.12.12:443'
           trusted: true
