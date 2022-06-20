@@ -95,6 +95,12 @@ plugins:
         - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '[2606:4700:4700::1111]:853'
           trusted: true
+        - addr: 'tls://dns64.cloudflare-dns.com'
+          dial_addr: '[2606:4700:4700::64]:853'
+          trusted: true
+        - addr: 'tls://dns64.cloudflare-dns.com'
+          dial_addr: '[2606:4700:4700::6400]:853'
+          trusted: true
         - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '1.0.0.1:853'
           socks5: '127.0.0.1:7890'
@@ -109,6 +115,14 @@ plugins:
           trusted: true
         - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '[2606:4700:4700::1111]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns64.cloudflare-dns.com'
+          dial_addr: '[2606:4700:4700::64]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns64.cloudflare-dns.com'
+          dial_addr: '[2606:4700:4700::6400]:853'
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_dnssb
@@ -159,6 +173,12 @@ plugins:
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8888]:853'
           trusted: true
+        - addr: 'tls://dns64.dns.google'
+          dial_addr: '[2001:4860:4860::64]:853'
+          trusted: true
+        - addr: 'tls://dns64.dns.google'
+          dial_addr: '[2001:4860:4860::6464]:853'
+          trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
           socks5: '127.0.0.1:7890'
@@ -173,6 +193,14 @@ plugins:
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8888]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns64.dns.google'
+          dial_addr: '[2001:4860:4860::64]:853'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://dns64.dns.google'
+          dial_addr: '[2001:4860:4860::6464]:853'
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_opendns
