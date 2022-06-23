@@ -309,7 +309,7 @@ servers:
   - exec: main_server
     listeners:
       - protocol: tcp
-        addr: '127.0.0.1:5533'
+        addr: ':5533'
       - protocol: udp
-        addr: '127.0.0.1:5533'
+        addr: ':5533'
     timeout: 1
