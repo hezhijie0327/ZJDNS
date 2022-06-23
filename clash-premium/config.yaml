@@ -1,3 +1,4 @@
+allow-lan: true
 log-level: error
 mixed-port: 7890
 ipv6: true
