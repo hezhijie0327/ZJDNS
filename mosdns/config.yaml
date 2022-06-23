@@ -308,7 +308,11 @@ plugins:
 servers:
   - exec: main_server
     listeners:
-      - protocol: tls
+      - protocol: doh
+        addr: '127.0.0.1:8443'
+        cert: '/etc/mosdns/cert/fullchain.cer'
+        key: '/etc/mosdns/cert/zhijie.online.key'
+      - protocol: dot
         addr: '127.0.0.1:8853'
         cert: '/etc/mosdns/cert/fullchain.cer'
         key: '/etc/mosdns/cert/zhijie.online.key'
