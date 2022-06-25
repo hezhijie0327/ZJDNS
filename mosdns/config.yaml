@@ -244,7 +244,7 @@ plugins:
     args:
       cache_everything: true
       lazy_cache_ttl: 86400
-      lazy_cache_reply_ttl: 10
+      lazy_cache_reply_ttl: 30
       redis: 'redis://localhost:6379/0'
       redis_timeout: 125
   - tag: response_has_local_ip
