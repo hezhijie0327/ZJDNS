@@ -277,7 +277,6 @@ plugins:
       exec:
         - _enable_response_padding
         - _misc_optm
-        - _single_flight
         - set_edns0_bufsize
         - set_edns0_client_subnet
         - _pad_query
