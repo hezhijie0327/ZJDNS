@@ -252,6 +252,10 @@ plugins:
     args:
       ip:
         - 'provider:data_provider_cnipdb'
+  - tag: response_has_valid_rcode
+    type: response_matcher
+    args:
+      rcode: [0]
   - tag: rewrite_max_min_ttl
     type: ttl
     args:
@@ -283,7 +287,7 @@ plugins:
                 - - forward_query_to_local_360
                 - - forward_query_to_local_alidns
                 - - forward_query_to_local_dnspod
-            - if: '(! [_response_valid_answer]) || ([_response_valid_answer] && (! response_has_local_ip))'
+            - if: '(! response_has_valid_rcode) || (response_has_valid_rcode && (! response_has_local_ip))'
               exec:
                 - _drop_response
           secondary:
@@ -292,7 +296,7 @@ plugins:
                     - - forward_query_to_remote_adguard
                     - - forward_query_to_remote_google
                     - - forward_query_to_remote_opendns
-                - if: '! [_response_valid_answer]'
+                - if: '! response_has_valid_rcode'
                   exec:
                     - _drop_response
               secondary:
