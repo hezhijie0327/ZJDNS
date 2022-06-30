@@ -137,7 +137,7 @@ plugins:
             - parallel:
                 - - forward_query_to_local_alidns
                 - - forward_query_to_local_dnspod
-            - if: '! response_has_local_ip'
+            - if: '[_response_valid_answer] && (! response_has_local_ip)'
               exec:
                 - _drop_response
           secondary:
