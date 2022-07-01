@@ -123,7 +123,7 @@ plugins:
             - parallel:
                 - - forward_query_to_local_alidns
                 - - forward_query_to_local_dnspod
-            - if: '! response_has_local_ip'
+            - if: '(! response_has_local_ip) && [_response_valid_answer]'
               exec:
                 - _drop_response
           secondary:
