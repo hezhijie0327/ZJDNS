@@ -79,70 +79,6 @@ plugins:
           dial_addr: '[2a10:50c0::2:ff]:853'
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_cloudflare
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
-          dial_addr: '1.0.0.1:853'
-          trusted: true
-        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
-          dial_addr: '1.1.1.1:853'
-          trusted: true
-        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
-          dial_addr: '[2606:4700:4700::1001]:853'
-          trusted: true
-        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
-          dial_addr: '[2606:4700:4700::1111]:853'
-          trusted: true
-        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
-          dial_addr: '1.0.0.1:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
-          dial_addr: '1.1.1.1:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
-          dial_addr: '[2606:4700:4700::1001]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
-          dial_addr: '[2606:4700:4700::1111]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_dnssb
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dot.sb'
-          dial_addr: '185.222.222.222:853'
-          trusted: true
-        - addr: 'tls://dot.sb'
-          dial_addr: '45.11.45.11:853'
-          trusted: true
-        - addr: 'tls://dot.sb'
-          dial_addr: '[2a09::]:853'
-          trusted: true
-        - addr: 'tls://dot.sb'
-          dial_addr: '[2a11::]:853'
-          trusted: true
-        - addr: 'tls://dot.sb'
-          dial_addr: '185.222.222.222:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dot.sb'
-          dial_addr: '45.11.45.11:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dot.sb'
-          dial_addr: '[2a09::]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dot.sb'
-          dial_addr: '[2a11::]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_remote_google
     type: fast_forward
     args:
@@ -207,38 +143,6 @@ plugins:
           dial_addr: '[2620:0:ccd::2]:853'
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_quad9
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '149.112.112.10:853'
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '9.9.9.10:853'
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '[2620:fe::10]:853'
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '[2620:fe::fe:10]:853'
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '149.112.112.10:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '9.9.9.10:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '[2620:fe::10]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '[2620:fe::fe:10]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: response_has_local_ip
     type: response_matcher
     args:
@@ -248,11 +152,6 @@ plugins:
     type: response_matcher
     args:
       rcode: [0]
-  - tag: rewrite_max_min_ttl
-    type: ttl
-    args:
-      maximum_ttl: 3600
-      minimal_ttl: 300
   - tag: set_edns0_bufsize
     type: bufsize
     args:
@@ -281,24 +180,12 @@ plugins:
               exec:
                 - _drop_response
           secondary:
-            - primary:
-                - parallel:
-                    - - forward_query_to_remote_adguard
-                    - - forward_query_to_remote_google
-                    - - forward_query_to_remote_opendns
-                - if: '! response_has_valid_rcode'
-                  exec:
-                    - _drop_response
-              secondary:
-                - parallel:
-                    - - forward_query_to_remote_cloudflare
-                    - - forward_query_to_remote_dnssb
-                    - - forward_query_to_remote_quad9
-              always_standby: true
-              fast_fallback: 500
+            - parallel:
+                - - forward_query_to_remote_adguard
+                - - forward_query_to_remote_google
+                - - forward_query_to_remote_opendns
           always_standby: true
           fast_fallback: 375
-        - rewrite_max_min_ttl
 servers:
   - exec: main_server
     listeners:
