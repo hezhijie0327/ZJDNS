@@ -28,7 +28,7 @@ function UpdateGeoIPCNRule() {
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
-        -v /docker/ssl:/etc/adguardhome/cert:ro \
+        -v /docker/ssl:/etc/mosdns/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/mosdns/conf \
         -v ${DOCKER_PATH}/data:/etc/mosdns/data \
         -d ${OWNER}/${REPO}:${TAG} \
