@@ -5,22 +5,6 @@ data_providers:
     auto_reload: true
     file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
 plugins:
-  - tag: forward_query_to_local_360
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '101.226.4.6:853'
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '123.125.81.6:853'
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '140.207.198.6:853'
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '218.30.118.6:853'
-          trusted: true
   - tag: forward_query_to_local_alidns
     type: fast_forward
     args:
@@ -46,38 +30,6 @@ plugins:
           trusted: true
         - addr: 'tls://dot.pub'
           dial_addr: '120.53.53.53:853'
-          trusted: true
-  - tag: forward_query_to_remote_adguard
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '94.140.14.140:853'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '94.140.14.141:853'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '[2a10:50c0::1:ff]:853'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '[2a10:50c0::2:ff]:853'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '94.140.14.140:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '94.140.14.141:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '[2a10:50c0::1:ff]:853'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '[2a10:50c0::2:ff]:853'
-          socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_google
     type: fast_forward
@@ -169,7 +121,6 @@ plugins:
         - _pad_query
         - primary:
             - parallel:
-                - - forward_query_to_local_360
                 - - forward_query_to_local_alidns
                 - - forward_query_to_local_dnspod
             - if: '(! response_has_local_ip) && [_response_valid_answer]'
@@ -177,10 +128,8 @@ plugins:
                 - _drop_response
           secondary:
             - parallel:
-                - - forward_query_to_remote_adguard
                 - - forward_query_to_remote_google
                 - - forward_query_to_remote_opendns
-          always_standby: true
           fast_fallback: 375
 servers:
   - exec: main_server
