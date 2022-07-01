@@ -53,6 +53,18 @@ plugins:
       upstream:
         - addr: 'tls://dns-unfiltered.adguard.com'
           dial_addr: '94.140.14.140:853'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '94.140.14.141:853'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '[2a10:50c0::1:ff]:853'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '[2a10:50c0::2:ff]:853'
+          trusted: true
+        - addr: 'tls://dns-unfiltered.adguard.com'
+          dial_addr: '94.140.14.140:853'
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns-unfiltered.adguard.com'
@@ -73,6 +85,18 @@ plugins:
       upstream:
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '8.8.8.8:853'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '[2001:4860:4860::8844]:853'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '[2001:4860:4860::8888]:853'
+          trusted: true
+        - addr: 'tls://dns.google'
+          dial_addr: '8.8.4.4:853'
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
@@ -91,6 +115,18 @@ plugins:
     type: fast_forward
     args:
       upstream:
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '208.67.220.2:853'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '208.67.222.2:853'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '[2620:0:ccc::2]:853'
+          trusted: true
+        - addr: 'tls://sandbox.opendns.com'
+          dial_addr: '[2620:0:ccd::2]:853'
+          trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
           socks5: '127.0.0.1:7890'
