@@ -297,14 +297,6 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: query_is_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      lazy_cache_ttl: 86400
-      lazy_cache_reply_ttl: 30
-      redis: 'redis://127.0.0.1:6379/0'
-      redis_timeout: 125
   - tag: response_has_local_ip
     type: response_matcher
     args:
@@ -338,7 +330,6 @@ plugins:
         - set_edns0_bufsize
         - set_edns0_client_subnet
         - _pad_query
-        - query_is_in_cache
         - primary:
             - parallel:
                 - - forward_query_to_local_360
