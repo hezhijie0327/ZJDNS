@@ -6,34 +6,6 @@ data_providers:
   - tag: data_provider_cnipdb
     file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
 plugins:
-  - tag: forward_query_to_local_360
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '101.226.4.6:853'
-          enable_pipeline: false
-          idle_timeout: 5
-          max_conns: 8
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '123.125.81.6:853'
-          enable_pipeline: false
-          idle_timeout: 5
-          max_conns: 8
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '140.207.198.6:853'
-          enable_pipeline: false
-          idle_timeout: 5
-          max_conns: 8
-          trusted: true
-        - addr: 'tls://dot.360.cn'
-          dial_addr: '218.30.118.6:853'
-          enable_pipeline: false
-          idle_timeout: 5
-          max_conns: 8
-          trusted: true
   - tag: forward_query_to_local_alidns
     type: fast_forward
     args:
@@ -42,25 +14,25 @@ plugins:
           dial_addr: '223.5.5.5:853'
           enable_pipeline: false
           idle_timeout: 5
-          max_conns: 8
+          max_conns: 4
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
           enable_pipeline: false
           idle_timeout: 5
-          max_conns: 8
+          max_conns: 4
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '[2400:3200::1]:853'
           enable_pipeline: false
           idle_timeout: 5
-          max_conns: 8
+          max_conns: 4
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '[2400:3200:baba::1]:853'
           enable_pipeline: false
           idle_timeout: 5
-          max_conns: 8
+          max_conns: 4
           trusted: true
   - tag: forward_query_to_local_dnspod
     type: fast_forward
@@ -70,69 +42,14 @@ plugins:
           dial_addr: '1.12.12.12:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 16
+          max_conns: 8
           trusted: true
         - addr: 'tls://dot.pub'
           dial_addr: '120.53.53.53:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 16
+          max_conns: 8
           trusted: true
-  - tag: forward_query_to_remote_adguard
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '94.140.14.140:853'
-          enable_pipeline: true
-          idle_timeout: 5
-          max_conns: 4
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '94.140.14.141:853'
-          enable_pipeline: true
-          idle_timeout: 5
-          max_conns: 4
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '[2a10:50c0::1:ff]:853'
-          enable_pipeline: true
-          idle_timeout: 5
-          max_conns: 4
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '[2a10:50c0::2:ff]:853'
-          enable_pipeline: true
-          idle_timeout: 5
-          max_conns: 4
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '94.140.14.140:853'
-          enable_pipeline: true
-          idle_timeout: 5
-          max_conns: 4
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '94.140.14.141:853'
-          enable_pipeline: true
-          idle_timeout: 5
-          max_conns: 4
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '[2a10:50c0::1:ff]:853'
-          enable_pipeline: true
-          idle_timeout: 5
-          max_conns: 4
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          dial_addr: '[2a10:50c0::2:ff]:853'
-          enable_pipeline: true
-          idle_timeout: 5
-          max_conns: 4
-          socks5: '127.0.0.1:7890'
   - tag: forward_query_to_remote_google
     type: fast_forward
     args:
@@ -141,52 +58,52 @@ plugins:
           dial_addr: '8.8.4.4:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8844]:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8888]:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8844]:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.google'
           dial_addr: '[2001:4860:4860::8888]:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_opendns
@@ -197,52 +114,52 @@ plugins:
           dial_addr: '208.67.220.2:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '[2620:0:ccc::2]:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '[2620:0:ccd::2]:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '[2620:0:ccc::2]:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '[2620:0:ccd::2]:853'
           enable_pipeline: true
           idle_timeout: 5
-          max_conns: 4
+          max_conns: 2
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: response_has_local_ip
@@ -275,7 +192,6 @@ plugins:
         - _pad_query
         - primary:
             - parallel:
-                - - forward_query_to_local_360
                 - - forward_query_to_local_alidns
                 - - forward_query_to_local_dnspod
             - if: '(! response_has_local_ip) || (! response_has_valid_rcode)'
@@ -283,7 +199,6 @@ plugins:
                 - _drop_response
           secondary:
             - parallel:
-                - - forward_query_to_remote_adguard
                 - - forward_query_to_remote_google
                 - - forward_query_to_remote_opendns
           fast_fallback: 250
