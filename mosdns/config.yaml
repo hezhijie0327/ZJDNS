@@ -298,13 +298,6 @@ plugins:
           idle_timeout: -1
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: query_is_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      lazy_cache_ttl: 86400
-      lazy_cache_reply_ttl: 30
-      redis: 'redis://127.0.0.1:6379/0'
   - tag: response_has_local_ip
     type: response_matcher
     args:
@@ -314,11 +307,6 @@ plugins:
     type: response_matcher
     args:
       rcode: [0]
-  - tag: rewrite_max_min_ttl
-    type: ttl
-    args:
-      maximum_ttl: 3600
-      minimal_ttl: 300
   - tag: set_edns0_bufsize
     type: bufsize
     args:
@@ -338,13 +326,12 @@ plugins:
         - set_edns0_bufsize
         - set_edns0_client_subnet
         - _pad_query
-        - query_is_in_cache
         - primary:
             - parallel:
                 - - forward_query_to_local_360
                 - - forward_query_to_local_alidns
                 - - forward_query_to_local_dnspod
-            - if: '((! response_has_local_ip) && [_response_valid_answer]) || (! response_has_valid_rcode)'
+            - if: '(! response_has_local_ip) || (! response_has_valid_rcode)'
               exec:
                 - _drop_response
           secondary:
@@ -363,9 +350,8 @@ plugins:
                     - - forward_query_to_fallback_quad9
               always_standby: true
               fast_fallback: 750
-          always_standby: false
+          always_standby: true
           fast_fallback: 250
-        - rewrite_max_min_ttl
 servers:
   - exec: main_server
     listeners:
