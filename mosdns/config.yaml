@@ -344,7 +344,7 @@ plugins:
                 - - forward_query_to_local_360
                 - - forward_query_to_local_alidns
                 - - forward_query_to_local_dnspod
-            - if: '(! response_has_local_ip) || (! response_has_valid_rcode)'
+            - if: '((! response_has_local_ip) && [_response_valid_answer]) || (! response_has_valid_rcode)'
               exec:
                 - _drop_response
           secondary:
@@ -363,7 +363,7 @@ plugins:
                     - - forward_query_to_fallback_quad9
               always_standby: true
               fast_fallback: 750
-          always_standby: true
+          always_standby: false
           fast_fallback: 250
         - rewrite_max_min_ttl
 servers:
