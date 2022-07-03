@@ -351,7 +351,7 @@ plugins:
               always_standby: true
               fast_fallback: 750
           always_standby: true
-          fast_fallback: 250
+          fast_fallback: 500
 servers:
   - exec: main_server
     listeners:
