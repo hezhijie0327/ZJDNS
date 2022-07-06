@@ -4,7 +4,7 @@ log:
   level: error
 data_providers:
   - tag: data_provider_cnipdb
-    file: '/etc/mosdns/data/GeoIP_CNIPDb.txt'
+    file: '/etc/mosdns/data/GeoIP_CNIPDb.dat'
 plugins:
   - tag: forward_query_to_fallback_cloudflare
     type: fast_forward
@@ -302,7 +302,7 @@ plugins:
     type: response_matcher
     args:
       ip:
-        - 'provider:data_provider_cnipdb'
+        - 'provider:data_provider_cnipdb:cnipdb'
   - tag: response_has_valid_rcode
     type: response_matcher
     args:
