@@ -385,8 +385,8 @@ plugins:
                     - - forward_query_to_fallback_quad9
               always_standby: true
               fast_fallback: 750
-          always_standby: true
-          fast_fallback: 375
+          always_standby: false
+          fast_fallback: 250
 servers:
   - exec: main_server
     listeners:
