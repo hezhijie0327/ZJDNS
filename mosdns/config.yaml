@@ -146,19 +146,19 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'https://dot.360.cn/dns-query'
+        - addr: 'https://doh.360.cn/dns-query'
           dial_addr: '101.226.4.6:443'
           enable_http3: false
           trusted: true
-        - addr: 'https://dot.360.cn/dns-query'
+        - addr: 'https://doh.360.cn/dns-query'
           dial_addr: '123.125.81.6:443'
           enable_http3: false
           trusted: true
-        - addr: 'https://dot.360.cn/dns-query'
+        - addr: 'https://doh.360.cn/dns-query'
           dial_addr: '140.207.198.6:443'
           enable_http3: false
           trusted: true
-        - addr: 'https://dot.360.cn/dns-query'
+        - addr: 'https://doh.360.cn/dns-query'
           dial_addr: '218.30.118.6:443'
           enable_http3: false
           trusted: true
