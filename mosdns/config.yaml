@@ -109,18 +109,22 @@ plugins:
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.5.5.5:443'
           enable_http3: false
+          socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.6.6.6:443'
           enable_http3: false
+          socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '[2400:3200::1]:443'
           enable_http3: false
+          socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '[2400:3200:baba::1]:443'
           enable_http3: false
+          socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
@@ -145,10 +149,12 @@ plugins:
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '1.12.12.12:443'
           enable_http3: false
+          socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'https://doh.pub/dns-query'
           dial_addr: '120.53.53.53:443'
           enable_http3: false
+          socks5: '127.0.0.1:7890'
           trusted: true
         - addr: 'tls://dot.pub'
           dial_addr: '1.12.12.12:853'
