@@ -150,19 +150,19 @@ plugins:
           trusted: true
         - addr: 'tls://dot.360.cn'
           dial_addr: '101.226.4.6:853'
-          enable_pipeline: true
+          enable_pipeline: false
           trusted: true
         - addr: 'tls://dot.360.cn'
           dial_addr: '123.125.81.6:853'
-          enable_pipeline: true
+          enable_pipeline: false
           trusted: true
         - addr: 'tls://dot.360.cn'
           dial_addr: '140.207.198.6:853'
-          enable_pipeline: true
+          enable_pipeline: false
           trusted: true
         - addr: 'tls://dot.360.cn'
           dial_addr: '218.30.118.6:853'
-          enable_pipeline: true
+          enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_alidns
     type: fast_forward
@@ -186,19 +186,19 @@ plugins:
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.5.5.5:853'
-          enable_pipeline: true
+          enable_pipeline: false
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '223.6.6.6:853'
-          enable_pipeline: true
+          enable_pipeline: false
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '[2400:3200::1]:853'
-          enable_pipeline: true
+          enable_pipeline: false
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '[2400:3200:baba::1]:853'
-          enable_pipeline: true
+          enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_dnspod
     type: fast_forward
