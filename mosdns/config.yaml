@@ -129,61 +129,89 @@ plugins:
           enable_pipeline: true
           trusted: true
   - tag: forward_query_to_local_360
-    type: fast_forward
+    type: forward
     args:
       upstream:
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '101.226.4.6:443'
-          socks5: '127.0.0.1:7890'
+        - addr: 'https://doh.360.cn:443/dns-query'
+          ip_addr:
+            - '101.226.4.6'
+            - '123.125.81.6'
+            - '140.207.198.6'
+            - '218.30.118.6'
           trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '123.125.81.6:443'
-          socks5: '127.0.0.1:7890'
+        - addr: 'tls://dot.360.cn:853'
+          ip_addr:
+            - '101.226.4.6'
+            - '123.125.81.6'
+            - '140.207.198.6'
+            - '218.30.118.6'
           trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '140.207.198.6:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://doh.360.cn/dns-query'
-          dial_addr: '218.30.118.6:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-#        - addr: 'https://dot.360.cn'
+#        - addr: 'https://doh.360.cn/dns-query'
+#          dial_addr: '101.226.4.6:443'
+#          socks5: '127.0.0.1:7890'
+#          trusted: true
+#        - addr: 'https://doh.360.cn/dns-query'
+#          dial_addr: '123.125.81.6:443'
+#          socks5: '127.0.0.1:7890'
+#          trusted: true
+#        - addr: 'https://doh.360.cn/dns-query'
+#          dial_addr: '140.207.198.6:443'
+#          socks5: '127.0.0.1:7890'
+#          trusted: true
+#        - addr: 'https://doh.360.cn/dns-query'
+#          dial_addr: '218.30.118.6:443'
+#          socks5: '127.0.0.1:7890'
+#          trusted: true
+#        - addr: 'tls://dot.360.cn'
 #          dial_addr: '101.226.4.6:853'
 #          enable_pipeline: false
 #          trusted: true
-#        - addr: 'https://dot.360.cn'
+#        - addr: 'tls://dot.360.cn'
 #          dial_addr: '123.125.81.6:853'
 #          enable_pipeline: false
 #          trusted: true
-#        - addr: 'https://dot.360.cn'
+#        - addr: 'tls://dot.360.cn'
 #          dial_addr: '140.207.198.6:853'
 #          enable_pipeline: false
 #          trusted: true
-#        - addr: 'https://dot.360.cn'
+#        - addr: 'tls://dot.360.cn'
 #          dial_addr: '218.30.118.6:853'
 #          enable_pipeline: false
 #          trusted: true
   - tag: forward_query_to_local_alidns
-    type: fast_forward
+    type: forward
     args:
       upstream:
-        - addr: 'https://dns.alidns.com/dns-query'
-          dial_addr: '223.5.5.5:443'
-          socks5: '127.0.0.1:7890'
+        - addr: 'https://dns.alidns.com:443/dns-query'
+          ip_addr:
+            - '223.5.5.5'
+            - '223.6.6.6'
+            - '2400:3200::1'
+            - '2400:3200:baba::1'
           trusted: true
-        - addr: 'https://dns.alidns.com/dns-query'
-          dial_addr: '223.6.6.6:443'
-          socks5: '127.0.0.1:7890'
+        - addr: 'tls://dns.alidns.com:853'
+          ip_addr:
+            - '223.5.5.5'
+            - '223.6.6.6'
+            - '2400:3200::1'
+            - '2400:3200:baba::1'
           trusted: true
-        - addr: 'https://dns.alidns.com/dns-query'
-          dial_addr: '[2400:3200::1]:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns.alidns.com/dns-query'
-          dial_addr: '[2400:3200:baba::1]:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
+#        - addr: 'https://dns.alidns.com/dns-query'
+#          dial_addr: '223.5.5.5:443'
+#          socks5: '127.0.0.1:7890'
+#          trusted: true
+#        - addr: 'https://dns.alidns.com/dns-query'
+#          dial_addr: '223.6.6.6:443'
+#          socks5: '127.0.0.1:7890'
+#          trusted: true
+#        - addr: 'https://dns.alidns.com/dns-query'
+#          dial_addr: '[2400:3200::1]:443'
+#          socks5: '127.0.0.1:7890'
+#          trusted: true
+#        - addr: 'https://dns.alidns.com/dns-query'
+#          dial_addr: '[2400:3200:baba::1]:443'
+#          socks5: '127.0.0.1:7890'
+#          trusted: true
 #        - addr: 'tls://dns.alidns.com'
 #          dial_addr: '223.5.5.5:853'
 #          enable_pipeline: false
