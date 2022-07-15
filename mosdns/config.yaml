@@ -401,7 +401,7 @@ plugins:
 servers:
   - exec: main_server
     listeners:
-      - protocol: tls
-        addr: ':8853'
-        cert: '/etc/mosdns/cert/fullchain.cer'
-        key: '/etc/mosdns/cert/zhijie.online.key'
+      - protocol: tcp
+        addr: ':5533'
+      - protocol: udp
+        addr: ':5533'
