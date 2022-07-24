@@ -348,7 +348,7 @@ plugins:
     type: response_matcher
     args:
       ip:
-        - 'provider:data_provider_cnipdb:cnipdb'
+        - 'provider:data_provider_cnipdb:cn'
   - tag: response_has_valid_rcode
     type: response_matcher
     args:
