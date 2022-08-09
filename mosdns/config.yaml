@@ -430,9 +430,7 @@ plugins:
                     - - forward_query_to_fallback_cloudflare
                     - - forward_query_to_fallback_dnssb
                     - - forward_query_to_fallback_quad9
-              always_standby: true
               fast_fallback: 625
-          always_standby: false
           fast_fallback: 375
 servers:
   - exec: main_server
