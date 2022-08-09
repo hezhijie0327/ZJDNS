@@ -389,10 +389,18 @@ plugins:
     type: bufsize
     args:
       size: 1232
-  - tag: set_edns0_client_subnet
+  - tag: set_edns0_client_subnet_auto
     type: ecs
     args:
       auto: true
+      mask4: 24
+      mask6: 56
+  - tag: set_edns0_client_subnet_manual
+    type: ecs
+    args:
+      force_overwrite: true
+      ipv4: "119.29.29.29"
+      ipv6: "2402:4e00::"
       mask4: 24
       mask6: 56
   - tag: main_server
@@ -404,9 +412,9 @@ plugins:
         - set_edns0_bufsize
         - if: '(! query_has_reserved_ip)'
           exec:
-            - set_edns0_client_subnet
+            - set_edns0_client_subnet_auto
           else_exec:
-            - _no_ecs
+            - set_edns0_client_subnet_manual
         - _pad_query
         - primary:
             - parallel:
