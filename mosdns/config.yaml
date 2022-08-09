@@ -417,11 +417,11 @@ plugins:
             - primary:
                 - load_balance:
                     - - parallel:
-                        - - forward_query_to_remote_adguard
-                        - - forward_query_to_remote_quad9
+                          - - forward_query_to_remote_adguard
+                          - - forward_query_to_remote_quad9
                     - - parallel:
-                        - - forward_query_to_remote_google
-                        - - forward_query_to_remote_opendns
+                          - - forward_query_to_remote_google
+                          - - forward_query_to_remote_opendns
                 - if: '(! response_has_valid_rcode)'
                   exec:
                     - _drop_response
