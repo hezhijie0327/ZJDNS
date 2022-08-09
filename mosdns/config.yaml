@@ -344,7 +344,7 @@ plugins:
           dial_addr: '[2620:0:ccd::2]:853'
           enable_pipeline: true
           trusted: true
-  - tag: query_has_lan_ip
+  - tag: query_has_reserved_ip
     type: query_matcher
     args:
       ecs:
@@ -402,7 +402,7 @@ plugins:
         - _enable_response_padding
         - _misc_optm
         - set_edns0_bufsize
-        - if: '(! query_has_lan_ip)'
+        - if: '(! query_has_reserved_ip)'
           exec:
             - set_edns0_client_subnet
           else_exec:
