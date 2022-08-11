@@ -172,6 +172,74 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_fallback_nextdns
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '45.90.28.0:443'
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '45.90.30.0:443'
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '[2a07:a8c0::]:443'
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '[2a07:a8c1::]:443'
+          trusted: true
+        - addr: 'tls://anycast.dns.nextdns.io'
+          dial_addr: '45.90.28.0:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://anycast.dns.nextdns.io'
+          dial_addr: '45.90.30.0:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://anycast.dns.nextdns.io'
+          dial_addr: '[2a07:a8c0::]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://anycast.dns.nextdns.io'
+          dial_addr: '[2a07:a8c1::]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '45.90.28.0:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '45.90.30.0:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '[2a07:a8c0::]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '[2a07:a8c1::]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://anycast.dns.nextdns.io'
+          dial_addr: '45.90.28.0:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://anycast.dns.nextdns.io'
+          dial_addr: '45.90.30.0:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://anycast.dns.nextdns.io'
+          dial_addr: '[2a07:a8c0::]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://anycast.dns.nextdns.io'
+          dial_addr: '[2a07:a8c1::]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
   - tag: forward_query_to_local_360
     type: fast_forward
     args:
@@ -644,6 +712,7 @@ plugins:
                 - parallel:
                     - - forward_query_to_fallback_cloudflare
                     - - forward_query_to_fallback_dnssb
+                    - - forward_query_to_fallback_nextdns
               always_standby: true
               fast_fallback: 875
           always_standby: false
