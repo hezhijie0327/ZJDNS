@@ -591,7 +591,7 @@ plugins:
                 - - forward_query_to_local_360
                 - - forward_query_to_local_alidns
                 - - forward_query_to_local_dnspod
-            - if: '(! response_has_local_ip)'
+            - if: '(! response_has_local_ip) || (! response_has_valid_rcode)'
               exec:
                 - _drop_response
           secondary:
@@ -610,7 +610,7 @@ plugins:
                     - - forward_query_to_fallback_quad9
               always_standby: true
               fast_fallback: 625
-          always_standby: false
+          always_standby: true
           fast_fallback: 375
 servers:
   - exec: main_server
