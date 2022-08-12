@@ -591,7 +591,7 @@ plugins:
                 - - forward_query_to_local_360
                 - - forward_query_to_local_alidns
                 - - forward_query_to_local_dnspod
-            - if: '(! response_has_local_ip) || (! response_has_valid_rcode)'
+            - if: '(! response_has_local_ip)'
               exec:
                 - _drop_response
           secondary:
