@@ -596,13 +596,16 @@ plugins:
                     - - forward_query_to_remote_adguard
                     - - forward_query_to_remote_google
                     - - forward_query_to_remote_opendns
+                - if: '(! [_response_valid_answer])'
+                  exec:
+                    - _drop_response
               secondary:
                 - parallel:
                     - - forward_query_to_fallback_cloudflare
                     - - forward_query_to_fallback_nextdns
                     - - forward_query_to_fallback_quad9
               always_standby: true
-              fast_fallback: 875
+              fast_fallback: 625
           always_standby: false
           fast_fallback: 375
 servers:
