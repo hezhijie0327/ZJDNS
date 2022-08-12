@@ -108,67 +108,35 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'https://freedns.controld.com/uncensored'
-          dial_addr: '76.76.10.5:443'
+        - addr: 'https://freedns.controld.com/p0'
+          dial_addr: '76.76.2.11:443'
           trusted: true
-        - addr: 'https://freedns.controld.com/uncensored'
-          dial_addr: '76.76.2.5:443'
+        - addr: 'https://freedns.controld.com/p0'
+          dial_addr: '[2606:1a40::11]:443'
           trusted: true
-        - addr: 'https://freedns.controld.com/uncensored'
-          dial_addr: '[2606:1a40:1::5]:443'
-          trusted: true
-        - addr: 'https://freedns.controld.com/uncensored'
-          dial_addr: '[2606:1a40::5]:443'
-          trusted: true
-        - addr: 'tls://uncensored.freedns.controld.com'
-          dial_addr: '76.76.10.5:853'
+        - addr: 'tls://p0.freedns.controld.com'
+          dial_addr: '76.76.2.11:853'
           enable_pipeline: true
           trusted: true
-        - addr: 'tls://uncensored.freedns.controld.com'
-          dial_addr: '76.76.2.5:853'
+        - addr: 'tls://p0.freedns.controld.com'
+          dial_addr: '[2606:1a40::11]:853'
           enable_pipeline: true
           trusted: true
-        - addr: 'tls://uncensored.freedns.controld.com'
-          dial_addr: '[2606:1a40:1::5]:853'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://uncensored.freedns.controld.com'
-          dial_addr: '[2606:1a40::5]:853'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'https://freedns.controld.com/uncensored'
-          dial_addr: '76.76.10.5:443'
+        - addr: 'https://freedns.controld.com/p0'
+          dial_addr: '76.76.2.11:443'
           socks5: '127.0.0.1:7890'
           trusted: true
-        - addr: 'https://freedns.controld.com/uncensored'
-          dial_addr: '76.76.2.5:443'
+        - addr: 'https://freedns.controld.com/p0'
+          dial_addr: '[2606:1a40::11]:443'
           socks5: '127.0.0.1:7890'
           trusted: true
-        - addr: 'https://freedns.controld.com/uncensored'
-          dial_addr: '[2606:1a40:1::5]:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://freedns.controld.com/uncensored'
-          dial_addr: '[2606:1a40::5]:443'
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://uncensored.freedns.controld.com'
-          dial_addr: '76.76.10.5:853'
+        - addr: 'tls://p0.freedns.controld.com'
+          dial_addr: '76.76.2.11:853'
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-        - addr: 'tls://uncensored.freedns.controld.com'
-          dial_addr: '76.76.2.5:853'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://uncensored.freedns.controld.com'
-          dial_addr: '[2606:1a40:1::5]:853'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'tls://uncensored.freedns.controld.com'
-          dial_addr: '[2606:1a40::5]:853'
+        - addr: 'tls://p0.freedns.controld.com'
+          dial_addr: '[2606:1a40::11]:853'
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
