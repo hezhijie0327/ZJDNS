@@ -104,6 +104,74 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_fallback_controld
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://freedns.controld.com/uncensored'
+          dial_addr: '76.76.10.5:443'
+          trusted: true
+        - addr: 'https://freedns.controld.com/uncensored'
+          dial_addr: '76.76.2.5:443'
+          trusted: true
+        - addr: 'https://freedns.controld.com/uncensored'
+          dial_addr: '[2606:1a40:1::5]:443'
+          trusted: true
+        - addr: 'https://freedns.controld.com/uncensored'
+          dial_addr: '[2606:1a40::5]:443'
+          trusted: true
+        - addr: 'tls://uncensored.freedns.controld.com'
+          dial_addr: '76.76.10.5:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://uncensored.freedns.controld.com'
+          dial_addr: '76.76.2.5:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://uncensored.freedns.controld.com'
+          dial_addr: '[2606:1a40:1::5]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://uncensored.freedns.controld.com'
+          dial_addr: '[2606:1a40::5]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'https://freedns.controld.com/uncensored'
+          dial_addr: '76.76.10.5:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://freedns.controld.com/uncensored'
+          dial_addr: '76.76.2.5:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://freedns.controld.com/uncensored'
+          dial_addr: '[2606:1a40:1::5]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://freedns.controld.com/uncensored'
+          dial_addr: '[2606:1a40::5]:443'
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://uncensored.freedns.controld.com'
+          dial_addr: '76.76.10.5:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://uncensored.freedns.controld.com'
+          dial_addr: '76.76.2.5:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://uncensored.freedns.controld.com'
+          dial_addr: '[2606:1a40:1::5]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'tls://uncensored.freedns.controld.com'
+          dial_addr: '[2606:1a40::5]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
   - tag: forward_query_to_fallback_dnssb
     type: fast_forward
     args:
@@ -302,6 +370,24 @@ plugins:
           trusted: true
         - addr: 'tls://dns.alidns.com'
           dial_addr: '[2400:3200:baba::1]:853'
+          enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_local_cfiec
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.ipv6dns.com/dns-query'
+          dial_addr: '221.228.217.28:443'
+          trusted: true
+        - addr: 'https://dns.ipv6dns.com/dns-query'
+          dial_addr: '[240e:e9:900b::5]:443'
+          trusted: true
+        - addr: 'tls://dns.ipv6dns.com'
+          dial_addr: '221.228.217.28:853'
+          enable_pipeline: false
+          trusted: true
+        - addr: 'tls://dns.ipv6dns.com'
+          dial_addr: '[240e:e9:900b::5]:853'
           enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_dnspod
@@ -694,6 +780,7 @@ plugins:
             - parallel:
                 - - forward_query_to_local_360
                 - - forward_query_to_local_alidns
+                - - forward_query_to_local_cfiec
                 - - forward_query_to_local_dnspod
             - if: '((! response_has_local_ip) && [_response_valid_answer]) || (! response_has_valid_rcode)'
               exec:
@@ -711,6 +798,7 @@ plugins:
               secondary:
                 - parallel:
                     - - forward_query_to_fallback_cloudflare
+                    - - forward_query_to_fallback_controld
                     - - forward_query_to_fallback_dnssb
                     - - forward_query_to_fallback_nextdns
               always_standby: true
