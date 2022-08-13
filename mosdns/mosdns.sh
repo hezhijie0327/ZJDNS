@@ -19,19 +19,30 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
-    ENABLE_SSL="false"
-    SSL_CONFIG=(
-        "  - exec: secure_server"
-        "    listeners:"
+    ENABLE_HTTPS="false"
+    ENABLE_TLS="false"
+    HTTPS_CONFIG=(
+        "      - protocol: https"
+        "        addr: ':8443'"
+        "        cert: '/etc/adguardhome/cert/fullchain.cer'"
+        "        key: '/etc/adguardhome/cert/zhijie.online.key'"
+        "        url_path: '/dns-query'"
+    )
+    TLS_CONFIG=(
         "      - protocol: tls"
         "        addr: ':8853'"
         "        cert: '/etc/adguardhome/cert/fullchain.cer'"
         "        key: '/etc/adguardhome/cert/zhijie.online.key'"
     )
     curl -s --connect-timeout 15 "https://source.zhijie.online/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
-    if [ "${ENABLE_SSL}" == "true" ]; then
-        for SSL_CONFIG_TASK in "${!SSL_CONFIG[@]}"; do
-            echo "${SSL_CONFIG[$SSL_CONFIG_TASK]}" >> "${DOCKER_PATH}/conf/config.yaml"
+    if [ "${ENABLE_HTTPS}" == "true" ]; then
+        for HTTPS_CONFIG_TASK in "${!HTTPS_CONFIG[@]}"; do
+            echo "${HTTPS_CONFIG[$HTTPS_CONFIG_TASK]}" >> "${DOCKER_PATH}/conf/config.yaml"
+        done
+    fi
+    if [ "${ENABLE_TLS}" == "true" ]; then
+        for TLS_CONFIG_TASK in "${!TLS_CONFIG[@]}"; do
+            echo "${TLS_CONFIG[$TLS_CONFIG_TASK]}" >> "${DOCKER_PATH}/conf/config.yaml"
         done
     fi
 }
