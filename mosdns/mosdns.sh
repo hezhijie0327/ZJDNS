@@ -26,15 +26,15 @@ function DownloadmosDNSConfiguration() {
     HTTPS_CONFIG=(
         "      - protocol: https"
         "        addr: ':8443'"
-        "        cert: '/etc/adguardhome/cert/${SSL_CERT}'"
-        "        key: '/etc/adguardhome/cert/${SSL_KEY}'"
+        "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
+        "        key: '/etc/mosdns/cert/${SSL_KEY}'"
         "        url_path: '/dns-query'"
     )
     TLS_CONFIG=(
         "      - protocol: tls"
         "        addr: ':8853'"
-        "        cert: '/etc/adguardhome/cert/${SSL_CERT}'"
-        "        key: '/etc/adguardhome/cert/${SSL_KEY}'"
+        "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
+        "        key: '/etc/mosdns/cert/${SSL_KEY}'"
     )
     curl -s --connect-timeout 15 "https://source.zhijie.online/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
     if [ "${ENABLE_HTTPS}" == "true" ]; then
@@ -56,7 +56,7 @@ function UpdateGeoIPCNRule() {
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
-        -v /docker/ssl:/etc/adguardhome/cert:ro \
+        -v /docker/ssl:/etc/mosdns/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/mosdns/conf \
         -v ${DOCKER_PATH}/data:/etc/mosdns/data \
         -d ${OWNER}/${REPO}:${TAG} \
