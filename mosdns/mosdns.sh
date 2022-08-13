@@ -21,18 +21,20 @@ function CleanupCurrentContainer() {
 function DownloadmosDNSConfiguration() {
     ENABLE_HTTPS="false"
     ENABLE_TLS="false"
+    SSL_CERT="fullchain.cer"
+    SSL_KEY="zhijie.online.key"
     HTTPS_CONFIG=(
         "      - protocol: https"
         "        addr: ':8443'"
-        "        cert: '/etc/adguardhome/cert/fullchain.cer'"
-        "        key: '/etc/adguardhome/cert/zhijie.online.key'"
+        "        cert: '/etc/adguardhome/cert/${SSL_CERT}'"
+        "        key: '/etc/adguardhome/cert/${SSL_KEY}'"
         "        url_path: '/dns-query'"
     )
     TLS_CONFIG=(
         "      - protocol: tls"
         "        addr: ':8853'"
-        "        cert: '/etc/adguardhome/cert/fullchain.cer'"
-        "        key: '/etc/adguardhome/cert/zhijie.online.key'"
+        "        cert: '/etc/adguardhome/cert/${SSL_CERT}'"
+        "        key: '/etc/adguardhome/cert/${SSL_KEY}'"
     )
     curl -s --connect-timeout 15 "https://source.zhijie.online/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
     if [ "${ENABLE_HTTPS}" == "true" ]; then
