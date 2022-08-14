@@ -4,7 +4,7 @@ data_providers:
   - tag: data_provider_cnipdb
     file: '/etc/mosdns/data/GeoIP_CNIPDb.dat'
 plugins:
-  - tag: forward_query_to_fallback_cloudflare_a
+  - tag: forward_query_to_fallback_cloudflare_doh_a
     type: fast_forward
     args:
       upstream:
@@ -17,7 +17,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_b
+  - tag: forward_query_to_fallback_cloudflare_doh_b
     type: fast_forward
     args:
       upstream:
@@ -30,7 +30,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_c
+  - tag: forward_query_to_fallback_cloudflare_doh_c
     type: fast_forward
     args:
       upstream:
@@ -43,7 +43,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_d
+  - tag: forward_query_to_fallback_cloudflare_doh_d
     type: fast_forward
     args:
       upstream:
@@ -56,7 +56,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_e
+  - tag: forward_query_to_fallback_cloudflare_doh_e
     type: fast_forward
     args:
       upstream:
@@ -69,7 +69,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_f
+  - tag: forward_query_to_fallback_cloudflare_doh_f
     type: fast_forward
     args:
       upstream:
@@ -82,7 +82,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_g
+  - tag: forward_query_to_fallback_cloudflare_dot_a
     type: fast_forward
     args:
       upstream:
@@ -95,7 +95,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_h
+  - tag: forward_query_to_fallback_cloudflare_dot_b
     type: fast_forward
     args:
       upstream:
@@ -108,7 +108,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_i
+  - tag: forward_query_to_fallback_cloudflare_dot_c
     type: fast_forward
     args:
       upstream:
@@ -121,7 +121,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_j
+  - tag: forward_query_to_fallback_cloudflare_dot_d
     type: fast_forward
     args:
       upstream:
@@ -134,7 +134,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_k
+  - tag: forward_query_to_fallback_cloudflare_dot_e
     type: fast_forward
     args:
       upstream:
@@ -147,7 +147,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare_l
+  - tag: forward_query_to_fallback_cloudflare_dot_f
     type: fast_forward
     args:
       upstream:
@@ -160,7 +160,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_nextdns_a
+  - tag: forward_query_to_fallback_nextdns_doh_a
     type: fast_forward
     args:
       upstream:
@@ -173,7 +173,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_nextdns_b
+  - tag: forward_query_to_fallback_nextdns_doh_b
     type: fast_forward
     args:
       upstream:
@@ -186,7 +186,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_nextdns_c
+  - tag: forward_query_to_fallback_nextdns_doh_c
     type: fast_forward
     args:
       upstream:
@@ -199,7 +199,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_nextdns_d
+  - tag: forward_query_to_fallback_nextdns_doh_d
     type: fast_forward
     args:
       upstream:
@@ -212,7 +212,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_nextdns_e
+  - tag: forward_query_to_fallback_nextdns_dot_a
     type: fast_forward
     args:
       upstream:
@@ -225,7 +225,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_nextdns_f
+  - tag: forward_query_to_fallback_nextdns_dot_b
     type: fast_forward
     args:
       upstream:
@@ -238,7 +238,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_nextdns_g
+  - tag: forward_query_to_fallback_nextdns_dot_c
     type: fast_forward
     args:
       upstream:
@@ -251,7 +251,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_nextdns_h
+  - tag: forward_query_to_fallback_nextdns_dot_d
     type: fast_forward
     args:
       upstream:
@@ -264,7 +264,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_quad9_a
+  - tag: forward_query_to_fallback_quad9_doh_a
     type: fast_forward
     args:
       upstream:
@@ -277,7 +277,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_quad9_b
+  - tag: forward_query_to_fallback_quad9_doh_b
     type: fast_forward
     args:
       upstream:
@@ -290,7 +290,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_quad9_c
+  - tag: forward_query_to_fallback_quad9_doh_c
     type: fast_forward
     args:
       upstream:
@@ -303,7 +303,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_quad9_d
+  - tag: forward_query_to_fallback_quad9_doh_d
     type: fast_forward
     args:
       upstream:
@@ -316,7 +316,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_quad9_e
+  - tag: forward_query_to_fallback_quad9_dot_a
     type: fast_forward
     args:
       upstream:
@@ -329,7 +329,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_quad9_f
+  - tag: forward_query_to_fallback_quad9_dot_b
     type: fast_forward
     args:
       upstream:
@@ -342,7 +342,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_quad9_g
+  - tag: forward_query_to_fallback_quad9_dot_c
     type: fast_forward
     args:
       upstream:
@@ -355,7 +355,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_quad9_h
+  - tag: forward_query_to_fallback_quad9_dot_d
     type: fast_forward
     args:
       upstream:
@@ -368,7 +368,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_local_360_a
+  - tag: forward_query_to_local_360_doh_a
     type: fast_forward
     args:
       upstream:
@@ -376,7 +376,7 @@ plugins:
           dial_addr: '101.226.4.6:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_360_b
+  - tag: forward_query_to_local_360_doh_b
     type: fast_forward
     args:
       upstream:
@@ -384,7 +384,7 @@ plugins:
           dial_addr: '123.125.81.6:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_360_c
+  - tag: forward_query_to_local_360_doh_c
     type: fast_forward
     args:
       upstream:
@@ -392,7 +392,7 @@ plugins:
           dial_addr: '140.207.198.6:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_360_d
+  - tag: forward_query_to_local_360_doh_d
     type: fast_forward
     args:
       upstream:
@@ -400,7 +400,7 @@ plugins:
           dial_addr: '218.30.118.6:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_360_e
+  - tag: forward_query_to_local_360_dot_a
     type: fast_forward
     args:
       upstream:
@@ -408,7 +408,7 @@ plugins:
           dial_addr: '101.226.4.6:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_query_to_local_360_f
+  - tag: forward_query_to_local_360_dot_b
     type: fast_forward
     args:
       upstream:
@@ -416,7 +416,7 @@ plugins:
           dial_addr: '123.125.81.6:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_query_to_local_360_g
+  - tag: forward_query_to_local_360_dot_c
     type: fast_forward
     args:
       upstream:
@@ -424,7 +424,7 @@ plugins:
           dial_addr: '140.207.198.6:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_query_to_local_360_h
+  - tag: forward_query_to_local_360_dot_d
     type: fast_forward
     args:
       upstream:
@@ -432,7 +432,7 @@ plugins:
           dial_addr: '218.30.118.6:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_query_to_local_alidns_a
+  - tag: forward_query_to_local_alidns_doh_a
     type: fast_forward
     args:
       upstream:
@@ -440,7 +440,7 @@ plugins:
           dial_addr: '223.5.5.5:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_alidns_b
+  - tag: forward_query_to_local_alidns_doh_b
     type: fast_forward
     args:
       upstream:
@@ -448,7 +448,7 @@ plugins:
           dial_addr: '223.6.6.6:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_alidns_c
+  - tag: forward_query_to_local_alidns_doh_c
     type: fast_forward
     args:
       upstream:
@@ -456,7 +456,7 @@ plugins:
           dial_addr: '[2400:3200::1]:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_alidns_d
+  - tag: forward_query_to_local_alidns_doh_d
     type: fast_forward
     args:
       upstream:
@@ -464,7 +464,7 @@ plugins:
           dial_addr: '[2400:3200:baba::1]:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_alidns_e
+  - tag: forward_query_to_local_alidns_dot_a
     type: fast_forward
     args:
       upstream:
@@ -472,7 +472,7 @@ plugins:
           dial_addr: '223.5.5.5:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_query_to_local_alidns_f
+  - tag: forward_query_to_local_alidns_dot_b
     type: fast_forward
     args:
       upstream:
@@ -480,7 +480,7 @@ plugins:
           dial_addr: '223.6.6.6:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_query_to_local_alidns_g
+  - tag: forward_query_to_local_alidns_dot_c
     type: fast_forward
     args:
       upstream:
@@ -488,7 +488,7 @@ plugins:
           dial_addr: '[2400:3200::1]:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_query_to_local_alidns_h
+  - tag: forward_query_to_local_alidns_dot_d
     type: fast_forward
     args:
       upstream:
@@ -496,7 +496,7 @@ plugins:
           dial_addr: '[2400:3200:baba::1]:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_query_to_local_dnspod_a
+  - tag: forward_query_to_local_dnspod_doh_a
     type: fast_forward
     args:
       upstream:
@@ -504,7 +504,7 @@ plugins:
           dial_addr: '1.12.12.12:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_dnspod_b
+  - tag: forward_query_to_local_dnspod_doh_b
     type: fast_forward
     args:
       upstream:
@@ -512,7 +512,7 @@ plugins:
           dial_addr: '120.53.53.53:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_dnspod_c
+  - tag: forward_query_to_local_dnspod_dot_a
     type: fast_forward
     args:
       upstream:
@@ -520,7 +520,7 @@ plugins:
           dial_addr: '1.12.12.12:853'
           enable_pipeline: true
           trusted: true
-  - tag: forward_query_to_local_dnspod_d
+  - tag: forward_query_to_local_dnspod_dot_b
     type: fast_forward
     args:
       upstream:
@@ -528,7 +528,7 @@ plugins:
           dial_addr: '120.53.53.53:853'
           enable_pipeline: true
           trusted: true
-  - tag: forward_query_to_remote_adguard_a
+  - tag: forward_query_to_remote_adguard_doh_a
     type: fast_forward
     args:
       upstream:
@@ -541,7 +541,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_adguard_b
+  - tag: forward_query_to_remote_adguard_doh_b
     type: fast_forward
     args:
       upstream:
@@ -554,7 +554,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_adguard_c
+  - tag: forward_query_to_remote_adguard_doh_c
     type: fast_forward
     args:
       upstream:
@@ -567,7 +567,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_adguard_d
+  - tag: forward_query_to_remote_adguard_doh_d
     type: fast_forward
     args:
       upstream:
@@ -580,7 +580,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_adguard_e
+  - tag: forward_query_to_remote_adguard_dot_a
     type: fast_forward
     args:
       upstream:
@@ -593,7 +593,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_adguard_f
+  - tag: forward_query_to_remote_adguard_dot_b
     type: fast_forward
     args:
       upstream:
@@ -606,7 +606,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_adguard_g
+  - tag: forward_query_to_remote_adguard_dot_c
     type: fast_forward
     args:
       upstream:
@@ -619,7 +619,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_adguard_h
+  - tag: forward_query_to_remote_adguard_dot_d
     type: fast_forward
     args:
       upstream:
@@ -632,7 +632,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_a
+  - tag: forward_query_to_remote_google_doh_a
     type: fast_forward
     args:
       upstream:
@@ -645,7 +645,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_b
+  - tag: forward_query_to_remote_google_doh_b
     type: fast_forward
     args:
       upstream:
@@ -658,7 +658,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_c
+  - tag: forward_query_to_remote_google_doh_c
     type: fast_forward
     args:
       upstream:
@@ -671,7 +671,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_d
+  - tag: forward_query_to_remote_google_doh_d
     type: fast_forward
     args:
       upstream:
@@ -684,7 +684,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_e
+  - tag: forward_query_to_remote_google_doh_e
     type: fast_forward
     args:
       upstream:
@@ -697,7 +697,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_f
+  - tag: forward_query_to_remote_google_doh_f
     type: fast_forward
     args:
       upstream:
@@ -710,7 +710,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_g
+  - tag: forward_query_to_remote_google_dot_a
     type: fast_forward
     args:
       upstream:
@@ -723,7 +723,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_h
+  - tag: forward_query_to_remote_google_dot_b
     type: fast_forward
     args:
       upstream:
@@ -736,7 +736,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_i
+  - tag: forward_query_to_remote_google_dot_c
     type: fast_forward
     args:
       upstream:
@@ -749,7 +749,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_j
+  - tag: forward_query_to_remote_google_dot_d
     type: fast_forward
     args:
       upstream:
@@ -762,7 +762,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_k
+  - tag: forward_query_to_remote_google_dot_e
     type: fast_forward
     args:
       upstream:
@@ -775,7 +775,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_google_l
+  - tag: forward_query_to_remote_google_dot_f
     type: fast_forward
     args:
       upstream:
@@ -788,7 +788,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_opendns_a
+  - tag: forward_query_to_remote_opendns_doh_a
     type: fast_forward
     args:
       upstream:
@@ -801,7 +801,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_opendns_b
+  - tag: forward_query_to_remote_opendns_doh_b
     type: fast_forward
     args:
       upstream:
@@ -814,7 +814,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_opendns_c
+  - tag: forward_query_to_remote_opendns_doh_c
     type: fast_forward
     args:
       upstream:
@@ -827,7 +827,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_opendns_d
+  - tag: forward_query_to_remote_opendns_doh_d
     type: fast_forward
     args:
       upstream:
@@ -840,7 +840,7 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_opendns_e
+  - tag: forward_query_to_remote_opendns_dot_a
     type: fast_forward
     args:
       upstream:
@@ -853,7 +853,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_opendns_f
+  - tag: forward_query_to_remote_opendns_dot_b
     type: fast_forward
     args:
       upstream:
@@ -866,7 +866,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_opendns_g
+  - tag: forward_query_to_remote_opendns_dot_c
     type: fast_forward
     args:
       upstream:
@@ -879,7 +879,7 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_opendns_h
+  - tag: forward_query_to_remote_opendns_dot_d
     type: fast_forward
     args:
       upstream:
@@ -897,122 +897,122 @@ plugins:
     args:
       exec:
         - load_balance:
-            - - forward_query_to_fallback_cloudflare_a
-            - - forward_query_to_fallback_cloudflare_b
-            - - forward_query_to_fallback_cloudflare_c
-            - - forward_query_to_fallback_cloudflare_d
-            - - forward_query_to_fallback_cloudflare_e
-            - - forward_query_to_fallback_cloudflare_f
-            - - forward_query_to_fallback_cloudflare_g
-            - - forward_query_to_fallback_cloudflare_h
-            - - forward_query_to_fallback_cloudflare_i
-            - - forward_query_to_fallback_cloudflare_j
-            - - forward_query_to_fallback_cloudflare_k
-            - - forward_query_to_fallback_cloudflare_l
+            - - forward_query_to_fallback_cloudflare_doh_a
+            - - forward_query_to_fallback_cloudflare_doh_b
+            - - forward_query_to_fallback_cloudflare_doh_c
+            - - forward_query_to_fallback_cloudflare_doh_d
+            - - forward_query_to_fallback_cloudflare_doh_e
+            - - forward_query_to_fallback_cloudflare_doh_f
+            - - forward_query_to_fallback_cloudflare_dot_a
+            - - forward_query_to_fallback_cloudflare_dot_b
+            - - forward_query_to_fallback_cloudflare_dot_c
+            - - forward_query_to_fallback_cloudflare_dot_d
+            - - forward_query_to_fallback_cloudflare_dot_e
+            - - forward_query_to_fallback_cloudflare_dot_f
   - tag: forward_query_to_fallback_nextdns
     type: sequence
     args:
       exec:
         - load_balance:
-            - - forward_query_to_fallback_nextdns_a
-            - - forward_query_to_fallback_nextdns_b
-            - - forward_query_to_fallback_nextdns_c
-            - - forward_query_to_fallback_nextdns_d
-            - - forward_query_to_fallback_nextdns_e
-            - - forward_query_to_fallback_nextdns_f
-            - - forward_query_to_fallback_nextdns_g
-            - - forward_query_to_fallback_nextdns_h
+            - - forward_query_to_fallback_nextdns_doh_a
+            - - forward_query_to_fallback_nextdns_doh_b
+            - - forward_query_to_fallback_nextdns_doh_c
+            - - forward_query_to_fallback_nextdns_doh_d
+            - - forward_query_to_fallback_nextdns_dot_a
+            - - forward_query_to_fallback_nextdns_dot_b
+            - - forward_query_to_fallback_nextdns_dot_c
+            - - forward_query_to_fallback_nextdns_dot_d
   - tag: forward_query_to_fallback_quad9
     type: sequence
     args:
       exec:
         - load_balance:
-            - - forward_query_to_fallback_quad9_a
-            - - forward_query_to_fallback_quad9_b
-            - - forward_query_to_fallback_quad9_c
-            - - forward_query_to_fallback_quad9_d
-            - - forward_query_to_fallback_quad9_e
-            - - forward_query_to_fallback_quad9_f
-            - - forward_query_to_fallback_quad9_g
-            - - forward_query_to_fallback_quad9_h
+            - - forward_query_to_fallback_quad9_doh_a
+            - - forward_query_to_fallback_quad9_doh_b
+            - - forward_query_to_fallback_quad9_doh_c
+            - - forward_query_to_fallback_quad9_doh_d
+            - - forward_query_to_fallback_quad9_dot_a
+            - - forward_query_to_fallback_quad9_dot_b
+            - - forward_query_to_fallback_quad9_dot_c
+            - - forward_query_to_fallback_quad9_dot_d
   - tag: forward_query_to_local_360
     type: sequence
     args:
       exec:
         - load_balance:
-            - - forward_query_to_local_360_a
-            - - forward_query_to_local_360_b
-            - - forward_query_to_local_360_c
-            - - forward_query_to_local_360_d
-            - - forward_query_to_local_360_e
-            - - forward_query_to_local_360_f
-            - - forward_query_to_local_360_g
-            - - forward_query_to_local_360_h
+            - - forward_query_to_local_360_doh_a
+            - - forward_query_to_local_360_doh_b
+            - - forward_query_to_local_360_doh_c
+            - - forward_query_to_local_360_doh_d
+            - - forward_query_to_local_360_dot_a
+            - - forward_query_to_local_360_dot_b
+            - - forward_query_to_local_360_dot_c
+            - - forward_query_to_local_360_dot_d
   - tag: forward_query_to_local_alidns
     type: sequence
     args:
       exec:
         - load_balance:
-            - - forward_query_to_local_alidns_a
-            - - forward_query_to_local_alidns_b
-            - - forward_query_to_local_alidns_c
-            - - forward_query_to_local_alidns_d
-            - - forward_query_to_local_alidns_e
-            - - forward_query_to_local_alidns_f
-            - - forward_query_to_local_alidns_g
-            - - forward_query_to_local_alidns_h
+            - - forward_query_to_local_alidns_doh_a
+            - - forward_query_to_local_alidns_doh_b
+            - - forward_query_to_local_alidns_doh_c
+            - - forward_query_to_local_alidns_doh_d
+            - - forward_query_to_local_alidns_dot_a
+            - - forward_query_to_local_alidns_dot_b
+            - - forward_query_to_local_alidns_dot_c
+            - - forward_query_to_local_alidns_dot_d
   - tag: forward_query_to_local_dnspod
     type: sequence
     args:
       exec:
         - load_balance:
-            - - forward_query_to_local_dnspod_a
-            - - forward_query_to_local_dnspod_b
-            - - forward_query_to_local_dnspod_c
-            - - forward_query_to_local_dnspod_d
+            - - forward_query_to_local_dnspod_doh_a
+            - - forward_query_to_local_dnspod_doh_b
+            - - forward_query_to_local_dnspod_dot_a
+            - - forward_query_to_local_dnspod_dot_b
   - tag: forward_query_to_remote_adguard
     type: sequence
     args:
       exec:
         - load_balance:
-            - - forward_query_to_remote_adguard_a
-            - - forward_query_to_remote_adguard_b
-            - - forward_query_to_remote_adguard_c
-            - - forward_query_to_remote_adguard_d
-            - - forward_query_to_remote_adguard_e
-            - - forward_query_to_remote_adguard_f
-            - - forward_query_to_remote_adguard_g
-            - - forward_query_to_remote_adguard_h
+            - - forward_query_to_remote_adguard_doh_a
+            - - forward_query_to_remote_adguard_doh_b
+            - - forward_query_to_remote_adguard_doh_c
+            - - forward_query_to_remote_adguard_doh_d
+            - - forward_query_to_remote_adguard_dot_a
+            - - forward_query_to_remote_adguard_dot_b
+            - - forward_query_to_remote_adguard_dot_c
+            - - forward_query_to_remote_adguard_dot_d
   - tag: forward_query_to_remote_google
     type: sequence
     args:
       exec:
         - load_balance:
-            - - forward_query_to_remote_google_a
-            - - forward_query_to_remote_google_b
-            - - forward_query_to_remote_google_c
-            - - forward_query_to_remote_google_d
-            - - forward_query_to_remote_google_e
-            - - forward_query_to_remote_google_f
-            - - forward_query_to_remote_google_g
-            - - forward_query_to_remote_google_h
-            - - forward_query_to_remote_google_i
-            - - forward_query_to_remote_google_j
-            - - forward_query_to_remote_google_k
-            - - forward_query_to_remote_google_l
+            - - forward_query_to_remote_google_doh_a
+            - - forward_query_to_remote_google_doh_b
+            - - forward_query_to_remote_google_doh_c
+            - - forward_query_to_remote_google_doh_d
+            - - forward_query_to_remote_google_doh_e
+            - - forward_query_to_remote_google_doh_f
+            - - forward_query_to_remote_google_dot_a
+            - - forward_query_to_remote_google_dot_b
+            - - forward_query_to_remote_google_dot_c
+            - - forward_query_to_remote_google_dot_d
+            - - forward_query_to_remote_google_dot_e
+            - - forward_query_to_remote_google_dot_f
   - tag: forward_query_to_remote_opendns
     type: sequence
     args:
       exec:
         - load_balance:
-            - - forward_query_to_remote_opendns_a
-            - - forward_query_to_remote_opendns_b
-            - - forward_query_to_remote_opendns_c
-            - - forward_query_to_remote_opendns_d
-            - - forward_query_to_remote_opendns_e
-            - - forward_query_to_remote_opendns_f
-            - - forward_query_to_remote_opendns_g
-            - - forward_query_to_remote_opendns_h
+            - - forward_query_to_remote_opendns_doh_a
+            - - forward_query_to_remote_opendns_doh_b
+            - - forward_query_to_remote_opendns_doh_c
+            - - forward_query_to_remote_opendns_doh_d
+            - - forward_query_to_remote_opendns_dot_a
+            - - forward_query_to_remote_opendns_dot_b
+            - - forward_query_to_remote_opendns_dot_c
+            - - forward_query_to_remote_opendns_dot_d
   - tag: response_has_local_ip
     type: response_matcher
     args:
