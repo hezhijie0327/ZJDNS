@@ -160,6 +160,110 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_fallback_dnssb_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '185.222.222.222:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '185.222.222.222:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_dnssb_doh_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '45.11.45.11:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '45.11.45.11:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_dnssb_doh_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '[2a09::]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '[2a09::]:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_dnssb_doh_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '[2a11::]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://doh.sb/dns-query'
+          dial_addr: '[2a11::]:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_dnssb_dot_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.sb'
+          dial_addr: '185.222.222.222:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '185.222.222.222:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_dnssb_dot_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.sb'
+          dial_addr: '45.11.45.11:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '45.11.45.11:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_dnssb_dot_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.sb'
+          dial_addr: '[2a09::]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '[2a09::]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_dnssb_dot_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.sb'
+          dial_addr: '[2a11::]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dot.sb'
+          dial_addr: '[2a11::]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
   - tag: forward_query_to_fallback_nextdns_doh_a
     type: fast_forward
     args:
@@ -495,6 +599,38 @@ plugins:
         - addr: 'tls://dns.alidns.com'
           dial_addr: '[2400:3200:baba::1]:853'
           enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_local_cfiec_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.ipv6dns.com/dns-query'
+          dial_addr: '221.228.217.28:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_local_cfiec_doh_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.ipv6dns.com/dns-query'
+          dial_addr: '[240e:e9:900b::5]:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_local_cfiec_dot_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.ipv6dns.com'
+          dial_addr: '221.228.217.28:853'
+          enable_pipeline: true
+          trusted: true
+  - tag: forward_query_to_local_cfiec_dot_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.ipv6dns.com'
+          dial_addr: '[240e:e9:900b::5]:853'
+          enable_pipeline: true
           trusted: true
   - tag: forward_query_to_local_dnspod_doh_a
     type: fast_forward
@@ -909,6 +1045,19 @@ plugins:
             - - forward_query_to_fallback_cloudflare_dot_d
             - - forward_query_to_fallback_cloudflare_dot_e
             - - forward_query_to_fallback_cloudflare_dot_f
+  - tag: forward_query_to_fallback_dnssb
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - - forward_query_to_fallback_dnssb_doh_a
+            - - forward_query_to_fallback_dnssb_doh_b
+            - - forward_query_to_fallback_dnssb_doh_c
+            - - forward_query_to_fallback_dnssb_doh_d
+            - - forward_query_to_fallback_dnssb_dot_a
+            - - forward_query_to_fallback_dnssb_dot_b
+            - - forward_query_to_fallback_dnssb_dot_c
+            - - forward_query_to_fallback_dnssb_dot_d
   - tag: forward_query_to_fallback_nextdns
     type: sequence
     args:
@@ -961,6 +1110,15 @@ plugins:
             - - forward_query_to_local_alidns_dot_b
             - - forward_query_to_local_alidns_dot_c
             - - forward_query_to_local_alidns_dot_d
+  - tag: forward_query_to_local_cfiec
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - - forward_query_to_local_cfiec_doh_a
+            - - forward_query_to_local_cfiec_doh_b
+            - - forward_query_to_local_cfiec_dot_a
+            - - forward_query_to_local_cfiec_dot_b
   - tag: forward_query_to_local_dnspod
     type: sequence
     args:
@@ -1045,6 +1203,7 @@ plugins:
             - parallel:
                 - - forward_query_to_local_360
                 - - forward_query_to_local_alidns
+                - - forward_query_to_local_cfiec
                 - - forward_query_to_local_dnspod
             - if: '(! response_has_local_ip)'
               exec:
@@ -1061,6 +1220,7 @@ plugins:
               secondary:
                 - parallel:
                     - - forward_query_to_fallback_cloudflare
+                    - - forward_query_to_fallback_dnssb
                     - - forward_query_to_fallback_nextdns
                     - - forward_query_to_fallback_quad9
               always_standby: true
