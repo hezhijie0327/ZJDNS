@@ -368,110 +368,6 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_quad9_doh_a
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '149.112.112.10:443'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '149.112.112.10:443'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_fallback_quad9_doh_b
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '9.9.9.10:443'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '9.9.9.10:443'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_fallback_quad9_doh_c
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '[2620:fe::10]:443'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '[2620:fe::10]:443'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_fallback_quad9_doh_d
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '[2620:fe::fe:10]:443'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://dns10.quad9.net/dns-query'
-          dial_addr: '[2620:fe::fe:10]:443'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_fallback_quad9_dot_a
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '149.112.112.10:853'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '149.112.112.10:853'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_fallback_quad9_dot_b
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '9.9.9.10:853'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '9.9.9.10:853'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_fallback_quad9_dot_c
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '[2620:fe::10]:853'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '[2620:fe::10]:853'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_fallback_quad9_dot_d
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '[2620:fe::fe:10]:853'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://dns10.quad9.net'
-          dial_addr: '[2620:fe::fe:10]:853'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_local_360_doh_a
     type: fast_forward
     args:
@@ -1028,6 +924,110 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_remote_quad9_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns12.quad9.net/dns-query'
+          dial_addr: '149.112.112.12:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://dns12.quad9.net/dns-query'
+          dial_addr: '149.112.112.12:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_remote_quad9_doh_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns12.quad9.net/dns-query'
+          dial_addr: '9.9.9.12:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://dns12.quad9.net/dns-query'
+          dial_addr: '9.9.9.12:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_remote_quad9_doh_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns12.quad9.net/dns-query'
+          dial_addr: '[2620:fe::12]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://dns12.quad9.net/dns-query'
+          dial_addr: '[2620:fe::12]:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_remote_quad9_doh_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns12.quad9.net/dns-query'
+          dial_addr: '[2620:fe::fe:12]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://dns12.quad9.net/dns-query'
+          dial_addr: '[2620:fe::fe:12]:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_remote_quad9_dot_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns12.quad9.net'
+          dial_addr: '149.112.112.12:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dns12.quad9.net'
+          dial_addr: '149.112.112.12:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_remote_quad9_dot_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns12.quad9.net'
+          dial_addr: '9.9.9.12:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dns12.quad9.net'
+          dial_addr: '9.9.9.12:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_remote_quad9_dot_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns12.quad9.net'
+          dial_addr: '[2620:fe::12]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dns12.quad9.net'
+          dial_addr: '[2620:fe::12]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_remote_quad9_dot_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns12.quad9.net'
+          dial_addr: '[2620:fe::fe:12]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dns12.quad9.net'
+          dial_addr: '[2620:fe::fe:12]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
   - tag: forward_query_to_fallback_cloudflare
     type: sequence
     args:
@@ -1071,19 +1071,6 @@ plugins:
             - - forward_query_to_fallback_nextdns_dot_b
             - - forward_query_to_fallback_nextdns_dot_c
             - - forward_query_to_fallback_nextdns_dot_d
-  - tag: forward_query_to_fallback_quad9
-    type: sequence
-    args:
-      exec:
-        - load_balance:
-            - - forward_query_to_fallback_quad9_doh_a
-            - - forward_query_to_fallback_quad9_doh_b
-            - - forward_query_to_fallback_quad9_doh_c
-            - - forward_query_to_fallback_quad9_doh_d
-            - - forward_query_to_fallback_quad9_dot_a
-            - - forward_query_to_fallback_quad9_dot_b
-            - - forward_query_to_fallback_quad9_dot_c
-            - - forward_query_to_fallback_quad9_dot_d
   - tag: forward_query_to_local_360
     type: sequence
     args:
@@ -1171,6 +1158,19 @@ plugins:
             - - forward_query_to_remote_opendns_dot_b
             - - forward_query_to_remote_opendns_dot_c
             - - forward_query_to_remote_opendns_dot_d
+  - tag: forward_query_to_remote_quad9
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - - forward_query_to_remote_quad9_doh_a
+            - - forward_query_to_remote_quad9_doh_b
+            - - forward_query_to_remote_quad9_doh_c
+            - - forward_query_to_remote_quad9_doh_d
+            - - forward_query_to_remote_quad9_dot_a
+            - - forward_query_to_remote_quad9_dot_b
+            - - forward_query_to_remote_quad9_dot_c
+            - - forward_query_to_remote_quad9_dot_d
   - tag: response_has_local_ip
     type: response_matcher
     args:
@@ -1214,6 +1214,7 @@ plugins:
                     - - forward_query_to_remote_adguard
                     - - forward_query_to_remote_google
                     - - forward_query_to_remote_opendns
+                    - - forward_query_to_remote_quad9
                 - if: '(! response_has_valid_rcode)'
                   exec:
                     - _drop_response
@@ -1222,7 +1223,6 @@ plugins:
                     - - forward_query_to_fallback_cloudflare
                     - - forward_query_to_fallback_dnssb
                     - - forward_query_to_fallback_nextdns
-                    - - forward_query_to_fallback_quad9
               always_standby: true
               fast_fallback: 625
           always_standby: false
