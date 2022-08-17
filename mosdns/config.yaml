@@ -264,6 +264,110 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_fallback_iij_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://public.dns.iij.jp/dns-query'
+          dial_addr: '103.2.57.5:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://public.dns.iij.jp/dns-query'
+          dial_addr: '103.2.57.5:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_iij_doh_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://public.dns.iij.jp/dns-query'
+          dial_addr: '103.2.57.6:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://public.dns.iij.jp/dns-query'
+          dial_addr: '103.2.57.6:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_iij_doh_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://public.dns.iij.jp/dns-query'
+          dial_addr: '[2001:300::5]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://public.dns.iij.jp/dns-query'
+          dial_addr: '[2001:300::5]:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_iij_doh_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://public.dns.iij.jp/dns-query'
+          dial_addr: '[2001:300::6]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://public.dns.iij.jp/dns-query'
+          dial_addr: '[2001:300::6]:443'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_iij_dot_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://public.dns.iij.jp'
+          dial_addr: '103.2.57.5:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://public.dns.iij.jp'
+          dial_addr: '103.2.57.5:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_iij_dot_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://public.dns.iij.jp'
+          dial_addr: '103.2.57.6:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://public.dns.iij.jp'
+          dial_addr: '103.2.57.6:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_iij_dot_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://public.dns.iij.jp'
+          dial_addr: '[2001:300::5]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://public.dns.iij.jp'
+          dial_addr: '[2001:300::5]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_fallback_iij_dot_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://public.dns.iij.jp'
+          dial_addr: '[2001:300::6]:853'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://public.dns.iij.jp'
+          dial_addr: '[2001:300::6]:853'
+          enable_pipeline: true
+          socks5: '127.0.0.1:7890'
+          trusted: true
   - tag: forward_query_to_fallback_nextdns_doh_a
     type: fast_forward
     args:
@@ -1058,6 +1162,19 @@ plugins:
             - - forward_query_to_fallback_dnssb_dot_b
             - - forward_query_to_fallback_dnssb_dot_c
             - - forward_query_to_fallback_dnssb_dot_d
+  - tag: forward_query_to_fallback_iij
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - - forward_query_to_fallback_iij_doh_a
+            - - forward_query_to_fallback_iij_doh_b
+            - - forward_query_to_fallback_iij_doh_c
+            - - forward_query_to_fallback_iij_doh_d
+            - - forward_query_to_fallback_iij_dot_a
+            - - forward_query_to_fallback_iij_dot_b
+            - - forward_query_to_fallback_iij_dot_c
+            - - forward_query_to_fallback_iij_dot_d
   - tag: forward_query_to_fallback_nextdns
     type: sequence
     args:
@@ -1222,6 +1339,7 @@ plugins:
                 - parallel:
                     - - forward_query_to_fallback_cloudflare
                     - - forward_query_to_fallback_dnssb
+                    - - forward_query_to_fallback_iij
                     - - forward_query_to_fallback_nextdns
               always_standby: true
               fast_fallback: 625
