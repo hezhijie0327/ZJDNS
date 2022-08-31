@@ -9,10 +9,13 @@ DOCKER_PATH="/docker/unbound"
 ## Function
 # Get Latest Image
 function GetLatestImage() {
-    docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
+    docker pull redis:latest && docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
 # Cleanup Current Container
 function CleanupCurrentContainer() {
+    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^redis$") ]; then
+        docker stop redis && docker rm redis
+    fi
     if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REPO}$") ]; then
         docker stop ${REPO} && docker rm ${REPO}
     fi
@@ -23,9 +26,21 @@ function UpdateRootHints() {
 }
 # Create New Container
 function CreateNewContainer() {
+    docker run --name redis --net host --restart=always \
+        -v ${DOCKER_PATH}/redis:/data \
+        -d redis:latest \
+        --aof-use-rdb-preamble yes \
+        --appendfsync everysec \
+        --appendonly yes \
+        --lazyfree-lazy-eviction yes \
+        --lazyfree-lazy-expire yes \
+        --lazyfree-lazy-server-del yes \
+        --maxmemory 64MB \
+        --maxmemory-policy allkeys-lru \
+        --maxmemory-samples 10
     docker run -it --rm --entrypoint=/unbound-anchor \
         -v ${DOCKER_PATH}:/usr/local/etc/unbound \
-        ${OWNER}/${REPO}:${TAG}
+           ${OWNER}/${REPO}:${TAG}
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/usr/local/etc/ssl:ro \
         -v ${DOCKER_PATH}:/usr/local/etc/unbound \
