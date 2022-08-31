@@ -1132,16 +1132,6 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_wireguard
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'udpme://192.168.232.95'
-          dial_addr: '192.168.232.95:53'
-          trusted: true
-        - addr: 'udpme://192.168.252.105'
-          dial_addr: '192.168.252.105:53'
-          trusted: true
   - tag: forward_query_to_fallback_cloudflare
     type: sequence
     args:
@@ -1298,11 +1288,6 @@ plugins:
             - - forward_query_to_remote_quad9_dot_b
             - - forward_query_to_remote_quad9_dot_c
             - - forward_query_to_remote_quad9_dot_d
-  - tag: query_has_owned_domain
-    type: query_matcher
-    args:
-      domain:
-        - 'regexp:.+\.zhijie\.online$'
   - tag: response_has_local_ip
     type: response_matcher
     args:
@@ -1332,24 +1317,14 @@ plugins:
         - set_edns0_client_subnet
         - _pad_query
         - primary:
-            - primary:
-                - if: 'query_has_owned_domain'
-                  exec:
-                    - forward_query_to_wireguard
-                    - if: '(! response_has_valid_rcode)'
-                      exec:
-                        - _drop_response
-              secondary:
-                - parallel:
-                    - - forward_query_to_local_360
-                    - - forward_query_to_local_alidns
-                    - - forward_query_to_local_cfiec
-                    - - forward_query_to_local_dnspod
-                - if: '(! response_has_local_ip)'
-                  exec:
-                    - _drop_response
-              always_standby: true
-              fast_fallback: 125
+            - parallel:
+                - - forward_query_to_local_360
+                - - forward_query_to_local_alidns
+                - - forward_query_to_local_cfiec
+                - - forward_query_to_local_dnspod
+            - if: '(! response_has_local_ip)'
+              exec:
+                - _drop_response
           secondary:
             - primary:
                 - parallel:
