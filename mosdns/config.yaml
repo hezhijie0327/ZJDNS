@@ -1132,7 +1132,21 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_fallback_cloudflare
+  - tag: response_has_dns64_ip
+    type: response_matcher
+    args:
+      ip:
+        - '64:ff9b::/96'
+  - tag: response_has_local_ip
+    type: response_matcher
+    args:
+      ip:
+        - 'provider:data_provider_cnipdb:cn'
+  - tag: response_has_valid_rcode
+    type: response_matcher
+    args:
+      rcode: [0]
+  - tag: sequence_forward_query_to_fallback_cloudflare
     type: sequence
     args:
       exec:
@@ -1149,7 +1163,10 @@ plugins:
             - - forward_query_to_fallback_cloudflare_dot_d
             - - forward_query_to_fallback_cloudflare_dot_e
             - - forward_query_to_fallback_cloudflare_dot_f
-  - tag: forward_query_to_fallback_dnssb
+        - if: '(response_has_dns64_ip)'
+          exec:
+            - _drop_response
+  - tag: sequence_forward_query_to_fallback_dnssb
     type: sequence
     args:
       exec:
@@ -1162,7 +1179,7 @@ plugins:
             - - forward_query_to_fallback_dnssb_dot_b
             - - forward_query_to_fallback_dnssb_dot_c
             - - forward_query_to_fallback_dnssb_dot_d
-  - tag: forward_query_to_fallback_iij
+  - tag: sequence_forward_query_to_fallback_iij
     type: sequence
     args:
       exec:
@@ -1175,7 +1192,7 @@ plugins:
             - - forward_query_to_fallback_iij_dot_b
             - - forward_query_to_fallback_iij_dot_c
             - - forward_query_to_fallback_iij_dot_d
-  - tag: forward_query_to_fallback_nextdns
+  - tag: sequence_forward_query_to_fallback_nextdns
     type: sequence
     args:
       exec:
@@ -1188,7 +1205,7 @@ plugins:
             - - forward_query_to_fallback_nextdns_dot_b
             - - forward_query_to_fallback_nextdns_dot_c
             - - forward_query_to_fallback_nextdns_dot_d
-  - tag: forward_query_to_local_360
+  - tag: sequence_forward_query_to_local_360
     type: sequence
     args:
       exec:
@@ -1201,7 +1218,7 @@ plugins:
             - - forward_query_to_local_360_dot_b
             - - forward_query_to_local_360_dot_c
             - - forward_query_to_local_360_dot_d
-  - tag: forward_query_to_local_alidns
+  - tag: sequence_forward_query_to_local_alidns
     type: sequence
     args:
       exec:
@@ -1214,7 +1231,7 @@ plugins:
             - - forward_query_to_local_alidns_dot_b
             - - forward_query_to_local_alidns_dot_c
             - - forward_query_to_local_alidns_dot_d
-  - tag: forward_query_to_local_cfiec
+  - tag: sequence_forward_query_to_local_cfiec
     type: sequence
     args:
       exec:
@@ -1223,7 +1240,7 @@ plugins:
             - - forward_query_to_local_cfiec_doh_b
             - - forward_query_to_local_cfiec_dot_a
             - - forward_query_to_local_cfiec_dot_b
-  - tag: forward_query_to_local_dnspod
+  - tag: sequence_forward_query_to_local_dnspod
     type: sequence
     args:
       exec:
@@ -1232,7 +1249,7 @@ plugins:
             - - forward_query_to_local_dnspod_doh_b
             - - forward_query_to_local_dnspod_dot_a
             - - forward_query_to_local_dnspod_dot_b
-  - tag: forward_query_to_remote_adguard
+  - tag: sequence_forward_query_to_remote_adguard
     type: sequence
     args:
       exec:
@@ -1245,7 +1262,7 @@ plugins:
             - - forward_query_to_remote_adguard_dot_b
             - - forward_query_to_remote_adguard_dot_c
             - - forward_query_to_remote_adguard_dot_d
-  - tag: forward_query_to_remote_google
+  - tag: sequence_forward_query_to_remote_google
     type: sequence
     args:
       exec:
@@ -1262,7 +1279,10 @@ plugins:
             - - forward_query_to_remote_google_dot_d
             - - forward_query_to_remote_google_dot_e
             - - forward_query_to_remote_google_dot_f
-  - tag: forward_query_to_remote_opendns
+        - if: '(response_has_dns64_ip)'
+          exec:
+            - _drop_response
+  - tag: sequence_forward_query_to_remote_opendns
     type: sequence
     args:
       exec:
@@ -1275,7 +1295,7 @@ plugins:
             - - forward_query_to_remote_opendns_dot_b
             - - forward_query_to_remote_opendns_dot_c
             - - forward_query_to_remote_opendns_dot_d
-  - tag: forward_query_to_remote_quad9
+  - tag: sequence_forward_query_to_remote_quad9
     type: sequence
     args:
       exec:
@@ -1288,20 +1308,6 @@ plugins:
             - - forward_query_to_remote_quad9_dot_b
             - - forward_query_to_remote_quad9_dot_c
             - - forward_query_to_remote_quad9_dot_d
-  - tag: response_has_dns64_ip
-    type: response_matcher
-    args:
-      ip:
-        - '64:ff9b::/96'
-  - tag: response_has_local_ip
-    type: response_matcher
-    args:
-      ip:
-        - 'provider:data_provider_cnipdb:cn'
-  - tag: response_has_valid_rcode
-    type: response_matcher
-    args:
-      rcode: [0]
   - tag: set_edns0_bufsize
     type: bufsize
     args:
@@ -1323,35 +1329,29 @@ plugins:
         - _pad_query
         - primary:
             - parallel:
-                - - forward_query_to_local_360
-                - - forward_query_to_local_alidns
-                - - forward_query_to_local_cfiec
-                - - forward_query_to_local_dnspod
+                - - sequence_forward_query_to_local_360
+                - - sequence_forward_query_to_local_alidns
+                - - sequence_forward_query_to_local_cfiec
+                - - sequence_forward_query_to_local_dnspod
             - if: '(! response_has_local_ip)'
               exec:
                 - _drop_response
           secondary:
             - primary:
                 - parallel:
-                    - - forward_query_to_remote_adguard
-                    - - forward_query_to_remote_google
-                      - if: '(response_has_dns64_ip)'
-                        exec:
-                          - _drop_response
-                    - - forward_query_to_remote_opendns
-                    - - forward_query_to_remote_quad9
+                    - - sequence_forward_query_to_remote_adguard
+                    - - sequence_forward_query_to_remote_google
+                    - - sequence_forward_query_to_remote_opendns
+                    - - sequence_forward_query_to_remote_quad9
                 - if: '(! response_has_valid_rcode)'
                   exec:
                     - _drop_response
               secondary:
                 - parallel:
-                    - - forward_query_to_fallback_cloudflare
-                      - if: '(response_has_dns64_ip)'
-                        exec:
-                          - _drop_response
-                    - - forward_query_to_fallback_dnssb
-                    - - forward_query_to_fallback_iij
-                    - - forward_query_to_fallback_nextdns
+                    - - sequence_forward_query_to_fallback_cloudflare
+                    - - sequence_forward_query_to_fallback_dnssb
+                    - - sequence_forward_query_to_fallback_iij
+                    - - sequence_forward_query_to_fallback_nextdns
               always_standby: true
               fast_fallback: 625
           always_standby: false
