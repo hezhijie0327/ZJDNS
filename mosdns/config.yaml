@@ -1288,6 +1288,11 @@ plugins:
             - - forward_query_to_remote_quad9_dot_b
             - - forward_query_to_remote_quad9_dot_c
             - - forward_query_to_remote_quad9_dot_d
+  - tag: response_has_dns64_ip
+    type: response_matcher
+    args:
+      ip:
+        - '64:ff9b::/96'
   - tag: response_has_local_ip
     type: response_matcher
     args:
@@ -1330,6 +1335,9 @@ plugins:
                 - parallel:
                     - - forward_query_to_remote_adguard
                     - - forward_query_to_remote_google
+                      - if: '(response_has_dns64_ip)'
+                        exec:
+                          - _drop_response
                     - - forward_query_to_remote_opendns
                     - - forward_query_to_remote_quad9
                 - if: '(! response_has_valid_rcode)'
@@ -1338,6 +1346,9 @@ plugins:
               secondary:
                 - parallel:
                     - - forward_query_to_fallback_cloudflare
+                      - if: '(response_has_dns64_ip)'
+                        exec:
+                          - _drop_response
                     - - forward_query_to_fallback_dnssb
                     - - forward_query_to_fallback_iij
                     - - forward_query_to_fallback_nextdns
