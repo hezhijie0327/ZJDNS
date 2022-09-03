@@ -19,16 +19,10 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
-    CLIENT_MODE="false"
     ENABLE_HTTPS="false"
     ENABLE_TLS="false"
     SSL_CERT="fullchain.cer"
     SSL_KEY="zhijie.online.key"
-    CUSTOM_SERVER_DOMAIN="localhost.zhijie.online"
-    CUSTOM_SERVER_DOHPARH="/dohpath"
-    CUSTOM_SERVER_DOHPORT="443"
-    CUSTOM_SERVER_IPV4="127.0.0.1"
-    CUSTOM_SERVER_IPV6="::1"
     HTTPS_CONFIG=(
         "      - protocol: https"
         "        addr: ':8443'"
@@ -42,12 +36,7 @@ function DownloadmosDNSConfiguration() {
         "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
         "        key: '/etc/mosdns/cert/${SSL_KEY}'"
     )
-    if [ "${CLIENT_MODE}" == "true" ]; then
-        CLIENT_SERVER="client"
-    else
-        CLIENT_SERVER="server"
-    fi
-    curl -s --connect-timeout 15 "https://source.zhijie.online/CMA_DNS/main/mosdns/${CLIENT_SERVER}.yaml" | sed "s/\{CUSTOM\_SERVER\_DOMAIN\}/${CUSTOM_SERVER_DOMAIN}/g;s/\{CUSTOM\_SERVER\_DOHPARH\}/${CUSTOM_SERVER_DOHPARH}/g;s/\{CUSTOM\_SERVER\_DOHPORT\}/${CUSTOM_SERVER_DOHPORT}/g;s/\{CUSTOM\_SERVER\_IPV4\}/${CUSTOM_SERVER_IPV4}/g;s/\{CUSTOM\_SERVER\_IPV6\}/${CUSTOM_SERVER_IPV6}/g" > "${DOCKER_PATH}/conf/config.yaml"
+    curl -s --connect-timeout 15 "https://source.zhijie.online/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
     if [ "${ENABLE_HTTPS}" == "true" ]; then
         for HTTPS_CONFIG_TASK in "${!HTTPS_CONFIG[@]}"; do
             echo "${HTTPS_CONFIG[$HTTPS_CONFIG_TASK]}" >> "${DOCKER_PATH}/conf/config.yaml"
@@ -62,9 +51,7 @@ function DownloadmosDNSConfiguration() {
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
     CNIPDB_SOURCE="geolite2"
-    if [ "${CLIENT_MODE}" != "true" ]; then
-        curl -s --connect-timeout 15 "https://source.zhijie.online/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.dat" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.dat"
-    fi
+    curl -s --connect-timeout 15 "https://source.zhijie.online/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.dat" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.dat"
 }
 # Create New Container
 function CreateNewContainer() {
