@@ -1,0 +1,299 @@
+log:
+  level: error
+plugins:
+  - tag: forward_query_to_fallback_360_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '101.226.4.6:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_360_doh_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '123.125.81.6:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_360_doh_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '140.207.198.6:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_360_doh_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '218.30.118.6:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_360_dot_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '101.226.4.6:853'
+          enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_fallback_360_dot_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '123.125.81.6:853'
+          enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_fallback_360_dot_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '140.207.198.6:853'
+          enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_fallback_360_dot_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '218.30.118.6:853'
+          enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_fallback_alidns_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.alidns.com/dns-query'
+          dial_addr: '223.5.5.5:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_alidns_doh_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.alidns.com/dns-query'
+          dial_addr: '223.6.6.6:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_alidns_doh_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.alidns.com/dns-query'
+          dial_addr: '[2400:3200::1]:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_alidns_doh_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.alidns.com/dns-query'
+          dial_addr: '[2400:3200:baba::1]:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_alidns_dot_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.alidns.com'
+          dial_addr: '223.5.5.5:853'
+          enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_fallback_alidns_dot_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.alidns.com'
+          dial_addr: '223.6.6.6:853'
+          enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_fallback_alidns_dot_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.alidns.com'
+          dial_addr: '[2400:3200::1]:853'
+          enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_fallback_alidns_dot_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.alidns.com'
+          dial_addr: '[2400:3200:baba::1]:853'
+          enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_fallback_cfiec_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.ipv6dns.com/dns-query'
+          dial_addr: '221.228.217.28:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_cfiec_doh_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.ipv6dns.com/dns-query'
+          dial_addr: '[240e:e9:900b::5]:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_cfiec_dot_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.ipv6dns.com'
+          dial_addr: '221.228.217.28:853'
+          enable_pipeline: true
+          trusted: true
+  - tag: forward_query_to_fallback_cfiec_dot_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.ipv6dns.com'
+          dial_addr: '[240e:e9:900b::5]:853'
+          enable_pipeline: true
+          trusted: true
+  - tag: forward_query_to_fallback_dnspod_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.pub/dns-query'
+          dial_addr: '1.12.12.12:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_dnspod_doh_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.pub/dns-query'
+          dial_addr: '120.53.53.53:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_dnspod_dot_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.pub'
+          dial_addr: '1.12.12.12:853'
+          enable_pipeline: true
+          trusted: true
+  - tag: forward_query_to_fallback_dnspod_dot_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.pub'
+          dial_addr: '120.53.53.53:853'
+          enable_pipeline: true
+          trusted: true
+  - tag: forward_query_to_local_custom_dns_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://{CUSTOM_SERVER_DOMAIN}/dns-query{CUSTOM_SERVER_DOHPARH}'
+          dial_addr: '{CUSTOM_SERVER_IPV4}:{CUSTOM_SERVER_DOHPORT}'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_local_custom_dns_doh_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://{CUSTOM_SERVER_DOMAIN}/dns-query{CUSTOM_SERVER_DOHPARH}'
+          dial_addr: '[{CUSTOM_SERVER_IPV6}]:{CUSTOM_SERVER_DOHPORT}'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_fallback_360
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - - forward_query_to_fallback_360_doh_a
+            - - forward_query_to_fallback_360_doh_b
+            - - forward_query_to_fallback_360_doh_c
+            - - forward_query_to_fallback_360_doh_d
+            - - forward_query_to_fallback_360_dot_a
+            - - forward_query_to_fallback_360_dot_b
+            - - forward_query_to_fallback_360_dot_c
+            - - forward_query_to_fallback_360_dot_d
+  - tag: forward_query_to_fallback_alidns
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - - forward_query_to_fallback_alidns_doh_a
+            - - forward_query_to_fallback_alidns_doh_b
+            - - forward_query_to_fallback_alidns_doh_c
+            - - forward_query_to_fallback_alidns_doh_d
+            - - forward_query_to_fallback_alidns_dot_a
+            - - forward_query_to_fallback_alidns_dot_b
+            - - forward_query_to_fallback_alidns_dot_c
+            - - forward_query_to_fallback_alidns_dot_d
+  - tag: forward_query_to_fallback_cfiec
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - - forward_query_to_fallback_cfiec_doh_a
+            - - forward_query_to_fallback_cfiec_doh_b
+            - - forward_query_to_fallback_cfiec_dot_a
+            - - forward_query_to_fallback_cfiec_dot_b
+  - tag: forward_query_to_fallback_dnspod
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - - forward_query_to_fallback_dnspod_doh_a
+            - - forward_query_to_fallback_dnspod_doh_b
+            - - forward_query_to_fallback_dnspod_dot_a
+            - - forward_query_to_fallback_dnspod_dot_b
+  - tag: forward_query_to_local_custom_dns
+    type: sequence
+    args:
+      exec:
+        - load_balance:
+            - - forward_query_to_local_custom_dns_doh_a
+            - - forward_query_to_local_custom_dns_doh_b
+  - tag: response_has_valid_rcode
+    type: response_matcher
+    args:
+      rcode: [0]
+  - tag: set_edns0_bufsize
+    type: bufsize
+    args:
+      size: 1232
+  - tag: main_server
+    type: sequence
+    args:
+      exec:
+        - _enable_response_padding
+        - _misc_optm
+        - set_edns0_bufsize
+        - _no_ecs
+        - _pad_query
+        - primary:
+            - forward_query_to_local_custom_dns
+            - if: '(! response_has_valid_rcode)'
+              exec:
+                - _drop_response
+          secondary:
+            - parallel:
+                - - forward_query_to_fallback_360
+                - - forward_query_to_fallback_alidns
+                - - forward_query_to_fallback_cfiec
+                - - forward_query_to_fallback_dnspod
+          always_standby: true
+          fast_fallback: 375
+servers:
+  - exec: main_server
+    listeners:
+      - protocol: tcp
+        addr: ':5533'
+      - protocol: udp
+        addr: ':5533'
