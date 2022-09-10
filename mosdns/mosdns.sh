@@ -20,7 +20,7 @@ function CleanupCurrentContainer() {
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
     ENABLE_HTTPS="false"
-    ENABLE_TLS="false"
+    ENABLE_TLS="true"
     SSL_CERT="fullchain.cer"
     SSL_KEY="zhijie.online.key"
     HTTPS_CONFIG=(
