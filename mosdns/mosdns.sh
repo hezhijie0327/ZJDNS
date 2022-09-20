@@ -5,6 +5,7 @@ OWNER="hezhijie0327"
 REPO="mosdns"
 TAG="latest"
 DOCKER_PATH="/docker/mosdns"
+USE_CDN="true"
 
 ## Function
 # Get Latest Image
@@ -19,6 +20,11 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
+    if [ "${USE_CDN}" == true ]; then
+        CDN_PATH="source.zhijie.online"
+    else
+        CDN_PATH="raw.githubusercontent.com/hezhijie0327"
+    fi
     ENABLE_HTTPS="false"
     ENABLE_TLS="true"
     SSL_CERT="fullchain.cer"
@@ -36,7 +42,7 @@ function DownloadmosDNSConfiguration() {
         "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
         "        key: '/etc/mosdns/cert/${SSL_KEY}'"
     )
-    curl -s --connect-timeout 15 "https://source.zhijie.online/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
+    curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
     if [ "${ENABLE_HTTPS}" == "true" ]; then
         for HTTPS_CONFIG_TASK in "${!HTTPS_CONFIG[@]}"; do
             echo "${HTTPS_CONFIG[$HTTPS_CONFIG_TASK]}" >> "${DOCKER_PATH}/conf/config.yaml"
@@ -51,7 +57,7 @@ function DownloadmosDNSConfiguration() {
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
     CNIPDB_SOURCE="geolite2"
-    curl -s --connect-timeout 15 "https://source.zhijie.online/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.dat" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.dat"
+    curl -s --connect-timeout 15 "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.dat" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.dat"
 }
 # Create New Container
 function CreateNewContainer() {
