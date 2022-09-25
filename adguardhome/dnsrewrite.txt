@@ -1,5 +1,5 @@
 ! Title: Zhijie's Custom Rule for AdGuard Home (DNS Rewrite)
-! Version: 1.0.202209041543
+! Version: 1.0.202209251840
 ! Homepage: https://github.com/hezhijie0327/AGHCustomRule
 !
 ! HOMESHAGW01 - A - START
@@ -33,10 +33,12 @@
 |homeshanas01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.4.1
 |homeshavpc01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.6.1
 |homeshavpc02.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.38.1
-|ntp.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;A;192.168.6.1
-|ntp.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.38.1
-|vpn.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;A;192.168.6.1
-|vpn.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.38.1
+|dns.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;A;192.168.224.1
+|dns.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.226.1
+|ntp.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;A;192.168.0.1
+|ntp.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.32.1
+|vpn.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;A;192.168.224.2
+|vpn.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.226.2
 ! DNSREWRITE - A - END
 !
 ! HOMESHAGW01 - PTR - START
