@@ -1389,7 +1389,7 @@ plugins:
                     - - sequence_forward_query_to_remote_ecs_opendns
                     - - sequence_forward_query_to_remote_ecs_quad9
               always_standby: false
-              fast_fallback: 375
+              fast_fallback: 1500
             - if: '(! response_has_valid_rcode)'
               exec:
                 - _drop_response
@@ -1409,9 +1409,9 @@ plugins:
                     - - sequence_forward_query_to_remote_no_ecs_iij
                     - - sequence_forward_query_to_remote_no_ecs_nextdns
               always_standby: false
-              fast_fallback: 375
+              fast_fallback: 1500
           always_standby: true
-          fast_fallback: 625
+          fast_fallback: 2000
 servers:
   - exec: main_server
     listeners:
