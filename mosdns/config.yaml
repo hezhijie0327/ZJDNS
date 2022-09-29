@@ -1361,5 +1361,7 @@ servers:
     listeners:
       - protocol: tcp
         addr: ':5533'
+        proxy_protocol: true
       - protocol: udp
         addr: ':5533'
+        proxy_protocol: true
