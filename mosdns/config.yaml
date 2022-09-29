@@ -1132,6 +1132,19 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: generate_reverse_response_from_cache
+    type: reverse_lookup
+    args:
+      handle_ptr: true
+      ttl: 3600
+      redis: 'redis://127.0.0.1:6379/0'
+  - tag: query_has_response_in_cache
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_ttl: 86400
+      lazy_cache_reply_ttl: 30
+      redis: 'redis://127.0.0.1:6379/0'
   - tag: response_has_dns64_ip
     type: response_matcher
     args:
@@ -1146,6 +1159,11 @@ plugins:
     type: response_matcher
     args:
       rcode: [0]
+  - tag: rewrite_max_min_ttl
+    type: ttl
+    args:
+      maximum_ttl: 3600
+      minimal_ttl: 300
   - tag: sequence_forward_query_to_local_ecs_360
     type: sequence
     args:
@@ -1327,6 +1345,8 @@ plugins:
         - set_edns0_bufsize
         - set_edns0_client_subnet
         - _pad_query
+        - generate_reverse_response_from_cache
+        - query_has_response_in_cache
         - primary:
             - primary:
                 - parallel:
@@ -1356,6 +1376,7 @@ plugins:
               - - sequence_forward_query_to_remote_no_ecs_nextdns
           always_standby: true
           fast_fallback: 5000
+        - rewrite_max_min_ttl
 servers:
   - exec: main_server
     listeners:
