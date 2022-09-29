@@ -35,14 +35,12 @@ function DownloadmosDNSConfiguration() {
         "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
         "        key: '/etc/mosdns/cert/${SSL_KEY}'"
         "        url_path: '/dns-query'"
-        "        proxy_protocol: true"
     )
     TLS_CONFIG=(
         "      - protocol: tls"
         "        addr: ':8853'"
         "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
         "        key: '/etc/mosdns/cert/${SSL_KEY}'"
-        "        proxy_protocol: true"
     )
     curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
     if [ "${ENABLE_HTTPS}" == "true" ]; then
