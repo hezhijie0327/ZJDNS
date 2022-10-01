@@ -1375,7 +1375,7 @@ plugins:
         - _enable_response_padding
         - _misc_optm
         - set_edns0_bufsize
-        - if: '(! query_has_invalid_ecs_ip) && [_query_edns0]'
+        - if: '(! query_has_invalid_ecs_ip)'
           exec:
             - set_edns0_client_subnet
           else_exec:
