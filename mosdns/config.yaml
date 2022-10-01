@@ -1132,11 +1132,43 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: generate_reverse_response_from_cache
+  - tag: query_has_invalid_ecs_ip
+    type: query_matcher
+    args:
+      ecs:
+        - '0.0.0.0/8'
+        - '10.0.0.0/8'
+        - '100.64.0.0/10'
+        - '127.0.0.0/8'
+        - '169.254.0.0/16'
+        - '172.16.0.0/12'
+        - '192.0.0.0/24'
+        - '192.0.2.0/24'
+        - '192.168.0.0/16'
+        - '192.88.99.0/24'
+        - '198.18.0.0/15'
+        - '198.51.100.0/24'
+        - '203.0.113.0/24'
+        - '224.0.0.0/4'
+        - '233.252.0.0/24'
+        - '240.0.0.0/4'
+        - '255.255.255.255/32'
+        - '100::/64'
+        - '2001:10::/28'
+        - '2001:20::/28'
+        - '2001::/32'
+        - '2001:db8::/32'
+        - '2002::/16'
+        - '::/128'
+        - '::1/128'
+        - 'fc00::/7'
+        - 'fe80::/10'
+        - 'ff00::/8'
+  - tag: query_has_ptr_in_cache
     type: reverse_lookup
     args:
       handle_ptr: true
-      ttl: 300
+      ttl: 259200
       redis: 'redis://127.0.0.1:6379/0'
   - tag: query_has_response_in_cache
     type: cache
@@ -1343,9 +1375,13 @@ plugins:
         - _enable_response_padding
         - _misc_optm
         - set_edns0_bufsize
-        - set_edns0_client_subnet
+        - if: '(! query_has_invalid_ecs_ip) && [_query_edns0]'
+          exec:
+            - set_edns0_client_subnet
+          else_exec:
+            - _no_ecs
         - _pad_query
-        - generate_reverse_response_from_cache
+        - query_has_ptr_in_cache
         - query_has_response_in_cache
         - primary:
             - primary:
