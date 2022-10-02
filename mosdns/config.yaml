@@ -398,7 +398,16 @@ plugins:
           bootstrap: '127.0.0.1:5533'
           enable_http3: true
           trusted: true
+        - addr: 'https://dns64.dns.google/dns-query'
+          bootstrap: '127.0.0.1:5533'
+          enable_http3: true
+          trusted: true
         - addr: 'https://dns.google/dns-query'
+          bootstrap: '127.0.0.1:5533'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns64.dns.google/dns-query'
           bootstrap: '127.0.0.1:5533'
           enable_http3: false
           socks5: '127.0.0.1:7890'
@@ -840,7 +849,16 @@ plugins:
           bootstrap: '127.0.0.1:5533'
           enable_http3: false
           trusted: true
+        - addr: 'https://dns64.cloudflare-dns.com/dns-query'
+          bootstrap: '127.0.0.1:5533'
+          enable_http3: false
+          trusted: true
         - addr: 'https://cloudflare-dns.com/dns-query'
+          bootstrap: '127.0.0.1:5533'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+        - addr: 'https://dns64.cloudflare-dns.com/dns-query'
           bootstrap: '127.0.0.1:5533'
           enable_http3: false
           socks5: '127.0.0.1:7890'
