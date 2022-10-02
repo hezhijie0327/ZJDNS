@@ -390,6 +390,19 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_remote_ecs_google_dns64_doh_bootstrap
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns64.dns.google/dns-query'
+          bootstrap: '127.0.0.1:5533'
+          enable_http3: true
+          trusted: true
+        - addr: 'https://dns64.dns.google/dns-query'
+          bootstrap: '127.0.0.1:5533'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
   - tag: forward_query_to_remote_ecs_google_doh_bootstrap
     type: fast_forward
     args:
@@ -398,16 +411,7 @@ plugins:
           bootstrap: '127.0.0.1:5533'
           enable_http3: true
           trusted: true
-        - addr: 'https://dns64.dns.google/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: true
-          trusted: true
         - addr: 'https://dns.google/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns64.dns.google/dns-query'
           bootstrap: '127.0.0.1:5533'
           enable_http3: false
           socks5: '127.0.0.1:7890'
@@ -488,6 +492,19 @@ plugins:
         - addr: 'https://dns64.dns.google/dns-query'
           dial_addr: '[2001:4860:4860::6464]:443'
           enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_remote_ecs_google_dns64_dot_bootstrap
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns64.dns.google'
+          bootstrap: '127.0.0.1:5533'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dns64.dns.google'
+          bootstrap: '127.0.0.1:5533'
+          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_ecs_google_dot_bootstrap
@@ -841,6 +858,19 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_remote_no_ecs_cloudflare_dns64_doh_bootstrap
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns64.cloudflare-dns.com/dns-query'
+          bootstrap: '127.0.0.1:5533'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://dns64.cloudflare-dns.com/dns-query'
+          bootstrap: '127.0.0.1:5533'
+          enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
   - tag: forward_query_to_remote_no_ecs_cloudflare_doh_bootstrap
     type: fast_forward
     args:
@@ -849,16 +879,7 @@ plugins:
           bootstrap: '127.0.0.1:5533'
           enable_http3: false
           trusted: true
-        - addr: 'https://dns64.cloudflare-dns.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
         - addr: 'https://cloudflare-dns.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-        - addr: 'https://dns64.cloudflare-dns.com/dns-query'
           bootstrap: '127.0.0.1:5533'
           enable_http3: false
           socks5: '127.0.0.1:7890'
@@ -939,6 +960,19 @@ plugins:
         - addr: 'https://dns64.cloudflare-dns.com/dns-query'
           dial_addr: '[2606:4700:4700::6400]:443'
           enable_http3: false
+          socks5: '127.0.0.1:7890'
+          trusted: true
+  - tag: forward_query_to_remote_no_ecs_cloudflare_dns64_dot_bootstrap
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns64.cloudflare-dns.com'
+          bootstrap: '127.0.0.1:5533'
+          enable_pipeline: true
+          trusted: true
+        - addr: 'tls://dns64.cloudflare-dns.com'
+          bootstrap: '127.0.0.1:5533'
+          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_no_ecs_cloudflare_dot_bootstrap
@@ -1598,6 +1632,8 @@ plugins:
                 - - forward_query_to_remote_ecs_google_dot_f
           secondary:
             - load_balance:
+                - - forward_query_to_remote_ecs_google_dns64_doh_bootstrap
+                - - forward_query_to_remote_ecs_google_dns64_dot_bootstrap
                 - - forward_query_to_remote_ecs_google_doh_bootstrap
                 - - forward_query_to_remote_ecs_google_dot_bootstrap
           always_standby: true
@@ -1665,6 +1701,8 @@ plugins:
                 - - forward_query_to_remote_no_ecs_cloudflare_dot_f
           secondary:
             - load_balance:
+                - - forward_query_to_remote_no_ecs_cloudflare_dns64_doh_bootstrap
+                - - forward_query_to_remote_no_ecs_cloudflare_dns64_dot_bootstrap
                 - - forward_query_to_remote_no_ecs_cloudflare_doh_bootstrap
                 - - forward_query_to_remote_no_ecs_cloudflare_dot_bootstrap
           always_standby: true
