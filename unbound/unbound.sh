@@ -19,7 +19,7 @@ function CleanupCurrentContainer() {
 }
 # Update Root Hints
 function UpdateRootHints() {
-    curl -s --connect-timeout 15 "https://www.internic.net/domain/named.cache" > "${DOCKER_PATH}/root.hints"
+    curl -s --connect-timeout 15 "https://www.internic.net/domain/named.cache" > "${DOCKER_PATH}/data/root.hints"
 }
 # Create New Container
 function CreateNewContainer() {
