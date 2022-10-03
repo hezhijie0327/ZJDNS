@@ -24,7 +24,7 @@ function UpdateRootHints() {
 # Create New Container
 function CreateNewContainer() {
     docker run -it --rm --entrypoint=/unbound-anchor \
-        -v ${DOCKER_PATH}:/usr/local/etc/unbound \
+        -v ${DOCKER_PATH}/data:/usr/local/etc/unbound \
            ${OWNER}/${REPO}:${TAG}
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/usr/local/etc/ssl:ro \
