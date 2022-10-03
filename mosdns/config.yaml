@@ -4,14 +4,6 @@ data_providers:
   - tag: data_provider_cnipdb
     file: '/etc/mosdns/data/GeoIP_CNIPDb.dat'
 plugins:
-  - tag: forward_query_to_local_ecs_360_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://doh.360.cn/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
   - tag: forward_query_to_local_ecs_360_doh_a
     type: fast_forward
     args:
@@ -43,14 +35,6 @@ plugins:
         - addr: 'https://doh.360.cn/dns-query'
           dial_addr: '218.30.118.6:443'
           enable_http3: false
-          trusted: true
-  - tag: forward_query_to_local_ecs_360_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dot.360.cn'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_ecs_360_dot_a
     type: fast_forward
@@ -84,14 +68,6 @@ plugins:
           dial_addr: '218.30.118.6:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_query_to_local_ecs_alidns_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns.alidns.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
   - tag: forward_query_to_local_ecs_alidns_doh_a
     type: fast_forward
     args:
@@ -123,14 +99,6 @@ plugins:
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '[2400:3200:baba::1]:443'
           enable_http3: false
-          trusted: true
-  - tag: forward_query_to_local_ecs_alidns_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns.alidns.com'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_ecs_alidns_dot_a
     type: fast_forward
@@ -164,14 +132,6 @@ plugins:
           dial_addr: '[2400:3200:baba::1]:853'
           enable_pipeline: false
           trusted: true
-  - tag: forward_query_to_local_ecs_cfiec_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns.ipv6dns.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
   - tag: forward_query_to_local_ecs_cfiec_doh_a
     type: fast_forward
     args:
@@ -187,14 +147,6 @@ plugins:
         - addr: 'https://dns.ipv6dns.com/dns-query'
           dial_addr: '[240e:e9:900b::5]:443'
           enable_http3: false
-          trusted: true
-  - tag: forward_query_to_local_ecs_cfiec_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns.ipv6dns.com'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
           trusted: true
   - tag: forward_query_to_local_ecs_cfiec_dot_a
     type: fast_forward
@@ -212,14 +164,6 @@ plugins:
           dial_addr: '[240e:e9:900b::5]:853'
           enable_pipeline: true
           trusted: true
-  - tag: forward_query_to_local_ecs_dnspod_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://doh.pub/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
   - tag: forward_query_to_local_ecs_dnspod_doh_a
     type: fast_forward
     args:
@@ -236,14 +180,6 @@ plugins:
           dial_addr: '120.53.53.53:443'
           enable_http3: false
           trusted: true
-  - tag: forward_query_to_local_ecs_dnspod_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dot.pub'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
   - tag: forward_query_to_local_ecs_dnspod_dot_a
     type: fast_forward
     args:
@@ -259,19 +195,6 @@ plugins:
         - addr: 'tls://dot.pub'
           dial_addr: '120.53.53.53:853'
           enable_pipeline: true
-          trusted: true
-  - tag: forward_query_to_remote_ecs_adguard_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_ecs_adguard_doh_a
     type: fast_forward
@@ -325,19 +248,6 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_ecs_adguard_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://dns-unfiltered.adguard.com'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_remote_ecs_adguard_dot_a
     type: fast_forward
     args:
@@ -388,32 +298,6 @@ plugins:
         - addr: 'tls://dns-unfiltered.adguard.com'
           dial_addr: '[2a10:50c0::2:ff]:853'
           enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_ecs_google_dns64_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns64.dns.google/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: true
-          trusted: true
-        - addr: 'https://dns64.dns.google/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_ecs_google_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns.google/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: true
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_ecs_google_doh_a
@@ -494,32 +378,6 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_ecs_google_dns64_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns64.dns.google'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://dns64.dns.google'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_ecs_google_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns.google'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://dns.google'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_remote_ecs_google_dot_a
     type: fast_forward
     args:
@@ -598,19 +456,6 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_ecs_opendns_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://sandbox.opendns.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://sandbox.opendns.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_remote_ecs_opendns_doh_a
     type: fast_forward
     args:
@@ -661,19 +506,6 @@ plugins:
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '[2620:0:ccd::2]:443'
           enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_ecs_opendns_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://sandbox.opendns.com'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://sandbox.opendns.com'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_ecs_opendns_dot_a
@@ -728,19 +560,6 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_ecs_quad9_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns12.quad9.net/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://dns12.quad9.net/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_remote_ecs_quad9_doh_a
     type: fast_forward
     args:
@@ -793,19 +612,6 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_ecs_quad9_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns12.quad9.net'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://dns12.quad9.net'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_remote_ecs_quad9_dot_a
     type: fast_forward
     args:
@@ -856,32 +662,6 @@ plugins:
         - addr: 'tls://dns12.quad9.net'
           dial_addr: '[2620:fe::fe:12]:853'
           enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_no_ecs_cloudflare_dns64_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://dns64.cloudflare-dns.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://dns64.cloudflare-dns.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_no_ecs_cloudflare_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://cloudflare-dns.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://cloudflare-dns.com/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_no_ecs_cloudflare_doh_a
@@ -962,32 +742,6 @@ plugins:
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_no_ecs_cloudflare_dns64_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dns64.cloudflare-dns.com'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://dns64.cloudflare-dns.com'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_no_ecs_cloudflare_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://cloudflare-dns.com'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://cloudflare-dns.com'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_remote_no_ecs_cloudflare_dot_a
     type: fast_forward
     args:
@@ -1066,19 +820,6 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_no_ecs_dnssb_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://doh.sb/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://doh.sb/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_remote_no_ecs_dnssb_doh_a
     type: fast_forward
     args:
@@ -1129,19 +870,6 @@ plugins:
         - addr: 'https://doh.sb/dns-query'
           dial_addr: '[2a11::]:443'
           enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_no_ecs_dnssb_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://dot.sb'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://dot.sb'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_no_ecs_dnssb_dot_a
@@ -1196,19 +924,6 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_no_ecs_iij_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://public.dns.iij.jp/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://public.dns.iij.jp/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_remote_no_ecs_iij_doh_a
     type: fast_forward
     args:
@@ -1259,19 +974,6 @@ plugins:
         - addr: 'https://public.dns.iij.jp/dns-query'
           dial_addr: '[2001:300::6]:443'
           enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_no_ecs_iij_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://public.dns.iij.jp'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://public.dns.iij.jp'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_no_ecs_iij_dot_a
@@ -1326,19 +1028,6 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_remote_no_ecs_nextdns_doh_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://anycast.dns.nextdns.io/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          trusted: true
-        - addr: 'https://anycast.dns.nextdns.io/dns-query'
-          bootstrap: '127.0.0.1:5533'
-          enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
   - tag: forward_query_to_remote_no_ecs_nextdns_doh_a
     type: fast_forward
     args:
@@ -1389,19 +1078,6 @@ plugins:
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '[2a07:a8c1::]:443'
           enable_http3: false
-          socks5: '127.0.0.1:7890'
-          trusted: true
-  - tag: forward_query_to_remote_no_ecs_nextdns_dot_bootstrap
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://anycast.dns.nextdns.io'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
-          trusted: true
-        - addr: 'tls://anycast.dns.nextdns.io'
-          bootstrap: '127.0.0.1:5533'
-          enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
   - tag: forward_query_to_remote_no_ecs_nextdns_dot_a
@@ -1488,19 +1164,6 @@ plugins:
         - 'fc00::/7'
         - 'fe80::/10'
         - 'ff00::/8'
-  - tag: query_has_ptr_in_cache
-    type: reverse_lookup
-    args:
-      handle_ptr: true
-      ttl: 259200
-      redis: 'redis://127.0.0.1:6379/0'
-  - tag: query_has_response_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      lazy_cache_ttl: 259200
-      lazy_cache_reply_ttl: 30
-      redis: 'redis://127.0.0.1:6379/0'
   - tag: response_has_dns64_ip
     type: response_matcher
     args:
@@ -1530,14 +1193,12 @@ plugins:
                 - - forward_query_to_local_ecs_360_doh_b
                 - - forward_query_to_local_ecs_360_doh_c
                 - - forward_query_to_local_ecs_360_doh_d
+          secondary:
+            - load_balance:
                 - - forward_query_to_local_ecs_360_dot_a
                 - - forward_query_to_local_ecs_360_dot_b
                 - - forward_query_to_local_ecs_360_dot_c
                 - - forward_query_to_local_ecs_360_dot_d
-          secondary:
-            - load_balance:
-                - - forward_query_to_local_ecs_360_doh_bootstrap
-                - - forward_query_to_local_ecs_360_dot_bootstrap
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_local_ecs_alidns
@@ -1550,14 +1211,12 @@ plugins:
                 - - forward_query_to_local_ecs_alidns_doh_b
                 - - forward_query_to_local_ecs_alidns_doh_c
                 - - forward_query_to_local_ecs_alidns_doh_d
+          secondary:
+            - load_balance:
                 - - forward_query_to_local_ecs_alidns_dot_a
                 - - forward_query_to_local_ecs_alidns_dot_b
                 - - forward_query_to_local_ecs_alidns_dot_c
                 - - forward_query_to_local_ecs_alidns_dot_d
-          secondary:
-            - load_balance:
-                - - forward_query_to_local_ecs_alidns_doh_bootstrap
-                - - forward_query_to_local_ecs_alidns_dot_bootstrap
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_local_ecs_cfiec
@@ -1568,12 +1227,10 @@ plugins:
             - load_balance:
                 - - forward_query_to_local_ecs_cfiec_doh_a
                 - - forward_query_to_local_ecs_cfiec_doh_b
-                - - forward_query_to_local_ecs_cfiec_dot_a
-                - - forward_query_to_local_ecs_cfiec_dot_b
           secondary:
             - load_balance:
-                - - forward_query_to_local_ecs_cfiec_doh_bootstrap
-                - - forward_query_to_local_ecs_cfiec_dot_bootstrap
+                - - forward_query_to_local_ecs_cfiec_dot_a
+                - - forward_query_to_local_ecs_cfiec_dot_b
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_local_ecs_dnspod
@@ -1584,12 +1241,10 @@ plugins:
             - load_balance:
                 - - forward_query_to_local_ecs_dnspod_doh_a
                 - - forward_query_to_local_ecs_dnspod_doh_b
-                - - forward_query_to_local_ecs_dnspod_dot_a
-                - - forward_query_to_local_ecs_dnspod_dot_b
           secondary:
             - load_balance:
-                - - forward_query_to_local_ecs_dnspod_doh_bootstrap
-                - - forward_query_to_local_ecs_dnspod_dot_bootstrap
+                - - forward_query_to_local_ecs_dnspod_dot_a
+                - - forward_query_to_local_ecs_dnspod_dot_b
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_remote_ecs_adguard
@@ -1602,14 +1257,12 @@ plugins:
                 - - forward_query_to_remote_ecs_adguard_doh_b
                 - - forward_query_to_remote_ecs_adguard_doh_c
                 - - forward_query_to_remote_ecs_adguard_doh_d
+          secondary:
+            - load_balance:
                 - - forward_query_to_remote_ecs_adguard_dot_a
                 - - forward_query_to_remote_ecs_adguard_dot_b
                 - - forward_query_to_remote_ecs_adguard_dot_c
                 - - forward_query_to_remote_ecs_adguard_dot_d
-          secondary:
-            - load_balance:
-                - - forward_query_to_remote_ecs_adguard_doh_bootstrap
-                - - forward_query_to_remote_ecs_adguard_dot_bootstrap
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_remote_ecs_google
@@ -1624,18 +1277,14 @@ plugins:
                 - - forward_query_to_remote_ecs_google_doh_d
                 - - forward_query_to_remote_ecs_google_doh_e
                 - - forward_query_to_remote_ecs_google_doh_f
+          secondary:
+            - load_balance:
                 - - forward_query_to_remote_ecs_google_dot_a
                 - - forward_query_to_remote_ecs_google_dot_b
                 - - forward_query_to_remote_ecs_google_dot_c
                 - - forward_query_to_remote_ecs_google_dot_d
                 - - forward_query_to_remote_ecs_google_dot_e
                 - - forward_query_to_remote_ecs_google_dot_f
-          secondary:
-            - load_balance:
-                - - forward_query_to_remote_ecs_google_dns64_doh_bootstrap
-                - - forward_query_to_remote_ecs_google_dns64_dot_bootstrap
-                - - forward_query_to_remote_ecs_google_doh_bootstrap
-                - - forward_query_to_remote_ecs_google_dot_bootstrap
           always_standby: true
           fast_fallback: 2500
         - if: '(response_has_dns64_ip)'
@@ -1651,14 +1300,12 @@ plugins:
                 - - forward_query_to_remote_ecs_opendns_doh_b
                 - - forward_query_to_remote_ecs_opendns_doh_c
                 - - forward_query_to_remote_ecs_opendns_doh_d
+          secondary:
+            - load_balance:
                 - - forward_query_to_remote_ecs_opendns_dot_a
                 - - forward_query_to_remote_ecs_opendns_dot_b
                 - - forward_query_to_remote_ecs_opendns_dot_c
                 - - forward_query_to_remote_ecs_opendns_dot_d
-          secondary:
-            - load_balance:
-                - - forward_query_to_remote_ecs_opendns_doh_bootstrap
-                - - forward_query_to_remote_ecs_opendns_dot_bootstrap
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_remote_ecs_quad9
@@ -1671,14 +1318,12 @@ plugins:
                 - - forward_query_to_remote_ecs_quad9_doh_b
                 - - forward_query_to_remote_ecs_quad9_doh_c
                 - - forward_query_to_remote_ecs_quad9_doh_d
+          secondary:
+            - load_balance:
                 - - forward_query_to_remote_ecs_quad9_dot_a
                 - - forward_query_to_remote_ecs_quad9_dot_b
                 - - forward_query_to_remote_ecs_quad9_dot_c
                 - - forward_query_to_remote_ecs_quad9_dot_d
-          secondary:
-            - load_balance:
-                - - forward_query_to_remote_ecs_quad9_doh_bootstrap
-                - - forward_query_to_remote_ecs_quad9_dot_bootstrap
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_remote_no_ecs_cloudflare
@@ -1693,18 +1338,14 @@ plugins:
                 - - forward_query_to_remote_no_ecs_cloudflare_doh_d
                 - - forward_query_to_remote_no_ecs_cloudflare_doh_e
                 - - forward_query_to_remote_no_ecs_cloudflare_doh_f
+          secondary:
+            - load_balance:
                 - - forward_query_to_remote_no_ecs_cloudflare_dot_a
                 - - forward_query_to_remote_no_ecs_cloudflare_dot_b
                 - - forward_query_to_remote_no_ecs_cloudflare_dot_c
                 - - forward_query_to_remote_no_ecs_cloudflare_dot_d
                 - - forward_query_to_remote_no_ecs_cloudflare_dot_e
                 - - forward_query_to_remote_no_ecs_cloudflare_dot_f
-          secondary:
-            - load_balance:
-                - - forward_query_to_remote_no_ecs_cloudflare_dns64_doh_bootstrap
-                - - forward_query_to_remote_no_ecs_cloudflare_dns64_dot_bootstrap
-                - - forward_query_to_remote_no_ecs_cloudflare_doh_bootstrap
-                - - forward_query_to_remote_no_ecs_cloudflare_dot_bootstrap
           always_standby: true
           fast_fallback: 2500
         - if: '(response_has_dns64_ip)'
@@ -1720,14 +1361,12 @@ plugins:
                 - - forward_query_to_remote_no_ecs_dnssb_doh_b
                 - - forward_query_to_remote_no_ecs_dnssb_doh_c
                 - - forward_query_to_remote_no_ecs_dnssb_doh_d
+          secondary:
+            - load_balance:
                 - - forward_query_to_remote_no_ecs_dnssb_dot_a
                 - - forward_query_to_remote_no_ecs_dnssb_dot_b
                 - - forward_query_to_remote_no_ecs_dnssb_dot_c
                 - - forward_query_to_remote_no_ecs_dnssb_dot_d
-          secondary:
-            - load_balance:
-                - - forward_query_to_remote_no_ecs_dnssb_doh_bootstrap
-                - - forward_query_to_remote_no_ecs_dnssb_dot_bootstrap
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_remote_no_ecs_iij
@@ -1740,14 +1379,12 @@ plugins:
                 - - forward_query_to_remote_no_ecs_iij_doh_b
                 - - forward_query_to_remote_no_ecs_iij_doh_c
                 - - forward_query_to_remote_no_ecs_iij_doh_d
+          secondary:
+            - load_balance:
                 - - forward_query_to_remote_no_ecs_iij_dot_a
                 - - forward_query_to_remote_no_ecs_iij_dot_b
                 - - forward_query_to_remote_no_ecs_iij_dot_c
                 - - forward_query_to_remote_no_ecs_iij_dot_d
-          secondary:
-            - load_balance:
-                - - forward_query_to_remote_no_ecs_iij_doh_bootstrap
-                - - forward_query_to_remote_no_ecs_iij_dot_bootstrap
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_remote_no_ecs_nextdns
@@ -1760,14 +1397,12 @@ plugins:
                 - - forward_query_to_remote_no_ecs_nextdns_doh_b
                 - - forward_query_to_remote_no_ecs_nextdns_doh_c
                 - - forward_query_to_remote_no_ecs_nextdns_doh_d
+          secondary:
+            - load_balance:
                 - - forward_query_to_remote_no_ecs_nextdns_dot_a
                 - - forward_query_to_remote_no_ecs_nextdns_dot_b
                 - - forward_query_to_remote_no_ecs_nextdns_dot_c
                 - - forward_query_to_remote_no_ecs_nextdns_dot_d
-          secondary:
-            - load_balance:
-                - - forward_query_to_remote_no_ecs_nextdns_doh_bootstrap
-                - - forward_query_to_remote_no_ecs_nextdns_dot_bootstrap
           always_standby: true
           fast_fallback: 2500
   - tag: set_edns0_bufsize
@@ -1793,8 +1428,6 @@ plugins:
           else_exec:
             - _no_ecs
         - _pad_query
-        - query_has_ptr_in_cache
-        - query_has_response_in_cache
         - primary:
             - primary:
                 - parallel:
