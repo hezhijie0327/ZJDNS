@@ -1,5 +1,5 @@
 ! Title: Zhijie's Custom Rule for AdGuard Home (DNS Rewrite)
-! Version: 1.0.202210030615
+! Version: 1.0.202210042312
 ! Homepage: https://github.com/hezhijie0327/AGHCustomRule
 !
 ! HOMESHAGW01 - A - START
@@ -9,7 +9,6 @@
 |homeshaap04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.2.4
 |homeshacp02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.12.6
 |homeshacp04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.12.8
-|homeshadns01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.224.1
 |homeshals02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.12.10
 |homesharc02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.12.1
 |homesharc02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.12.2
@@ -18,17 +17,14 @@
 |homeshatvbox01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.10.1
 |homeshatvbox04.zhijie.online^$dnsrewrite=NOERROR;A;192.168.10.4
 |homeshawm01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.13.254
-|homeshavpn01.zhijie.online^$dnsrewrite=NOERROR;A;192.168.224.2
 ! HOMESHAGW01 - A - END
 !
 ! HOMESHAGW02 - A - START
 |homeshaap05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.34.1
-|homeshadns02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.226.1
 |homeshatv05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.40.1
 |homeshatv06.zhijie.online^$dnsrewrite=NOERROR;A;192.168.40.2
 |homeshatvbox05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.42.1
 |homeshatvbox06.zhijie.online^$dnsrewrite=NOERROR;A;192.168.42.2
-|homeshavpn02.zhijie.online^$dnsrewrite=NOERROR;A;192.168.226.2
 ! HOMESHAGW02 - END
 !
 ! DNSREWRITE - A - START
@@ -37,8 +33,6 @@
 |homeshanas01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.4.1
 |ntp.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;A;192.168.0.1
 |ntp.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.32.1
-|vpn.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;A;192.168.224.2
-|vpn.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.226.2
 ! DNSREWRITE - A - END
 !
 ! HOMESHAGW01 - PTR - START
@@ -48,7 +42,6 @@
 |4.2.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshaap04.zhijie.online.
 |6.12.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshacp02.zhijie.online.
 |8.12.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshacp04.zhijie.online.
-|1.224.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshadns01.zhijie.online.
 |10.12.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshals02.zhijie.online.
 |1.12.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homesharc01.zhijie.online.
 |2.12.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homesharc02.zhijie.online.
@@ -57,17 +50,14 @@
 |1.10.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshatvbox01.zhijie.online.
 |4.10.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshatvbox04.zhijie.online.
 |254.13.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshawm01.zhijie.online.
-|2.224.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshavpn01.zhijie.online.
 ! HOMESHAGW01 - PTR - END
 !
 ! HOMESHAGW02 - PTR - START
 |1.34.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshaap05.zhijie.online.
-|1.226.168.192.in-addr.arpa^$snsrewrite=NOERROR;PTR;homeshadns02.zhijie.online.
 |1.40.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshatv05.zhijie.online.
 |2.40.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshatv06.zhijie.online.
 |1.42.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshatvbox05.zhijie.online.
 |2.42.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshatvbox06.zhijie.online.
-|2.226.168.192.in-addr.arpa^$snsrewrite=NOERROR;PTR;homeshavpn02.zhijie.online.
 ! HOMESHAGW02 - PTR - END
 !
 ! DNSREWRITE - PTR - START
