@@ -1473,16 +1473,16 @@ plugins:
                 - _drop_response
           secondary:
             - primary:
+                - forward_query_to_unbound_recursive_dns
+                - if: '(! response_has_valid_rcode)'
+                  exec:
+                    - _drop_response
+              secondary:
                 - parallel:
                     - - sequence_forward_query_to_remote_no_ecs_cloudflare
                     - - sequence_forward_query_to_remote_no_ecs_dnssb
                     - - sequence_forward_query_to_remote_no_ecs_iij
                     - - sequence_forward_query_to_remote_no_ecs_nextdns
-                - if: '(! response_has_valid_rcode)'
-                  exec:
-                    - _drop_response
-              secondary:
-                - forward_query_to_unbound_recursive_dns
               always_standby: true
               fast_fallback: 3750
           always_standby: true
