@@ -216,16 +216,32 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'https://101.6.6.6:8443/dns-query'
+        - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
           dial_addr: '101.6.6.6:8443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_local_no_ecs_tuna_doh_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
+          dial_addr: '[2402:f000:1:416:101:6:6:6]:8443'
           enable_http3: false
           trusted: true
   - tag: forward_query_to_local_no_ecs_tuna_dot_a
     type: fast_forward
     args:
       upstream:
-        - addr: 'tls://101.6.6.6:8853'
+        - addr: 'tls://dns.tuna.tsinghua.edu.cn'
           dial_addr: '101.6.6.6:8853'
+          enable_pipeline: true
+          trusted: true
+  - tag: forward_query_to_local_no_ecs_tuna_dot_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dns.tuna.tsinghua.edu.cn'
+          dial_addr: '[2402:f000:1:416:101:6:6:6]:8853'
           enable_pipeline: true
           trusted: true
   - tag: forward_query_to_remote_ecs_adguard_doh_a
@@ -1311,9 +1327,11 @@ plugins:
         - primary:
             - load_balance:
                 - - forward_query_to_local_no_ecs_tuna_doh_a
+                - - forward_query_to_local_no_ecs_tuna_doh_b
           secondary:
             - load_balance:
                 - - forward_query_to_local_no_ecs_tuna_dot_a
+                - - forward_query_to_local_no_ecs_tuna_dot_b
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_remote_ecs_adguard
