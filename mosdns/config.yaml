@@ -196,6 +196,38 @@ plugins:
           dial_addr: '120.53.53.53:853'
           enable_pipeline: true
           trusted: true
+  - tag: forward_query_to_local_no_ecs_onedns_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.onedns.net/dns-query'
+          dial_addr: '52.80.109.59:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_local_no_ecs_onedns_dot_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.onedns.net'
+          dial_addr: '52.80.248.44:853'
+          enable_pipeline: false
+          trusted: true
+  - tag: forward_query_to_local_no_ecs_tuna_doh_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://101.6.6.6:8443/dns-query'
+          dial_addr: '101.6.6.6:8443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_local_no_ecs_tuna_dot_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://101.6.6.6:8853'
+          dial_addr: '101.6.6.6:8853'
+          enable_pipeline: true
+          trusted: true
   - tag: forward_query_to_remote_ecs_adguard_doh_a
     type: fast_forward
     args:
@@ -1260,6 +1292,30 @@ plugins:
                 - - forward_query_to_local_ecs_dnspod_dot_b
           always_standby: true
           fast_fallback: 2500
+  - tag: sequence_forward_query_to_local_no_ecs_onedns
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - load_balance:
+                - - forward_query_to_local_no_ecs_onedns_doh_a
+          secondary:
+            - load_balance:
+                - - forward_query_to_local_no_ecs_onedns_dot_a
+          always_standby: true
+          fast_fallback: 2500
+  - tag: sequence_forward_query_to_local_no_ecs_tuna
+    type: sequence
+    args:
+      exec:
+        - primary:
+            - load_balance:
+                - - forward_query_to_local_no_ecs_tuna_doh_a
+          secondary:
+            - load_balance:
+                - - forward_query_to_local_no_ecs_tuna_dot_a
+          always_standby: true
+          fast_fallback: 2500
   - tag: sequence_forward_query_to_remote_ecs_adguard
     type: sequence
     args:
@@ -1465,11 +1521,21 @@ plugins:
               exec:
                 - _drop_response
           secondary:
-            - parallel:
-                - - sequence_forward_query_to_remote_no_ecs_cloudflare
-                - - sequence_forward_query_to_remote_no_ecs_dnssb
-                - - sequence_forward_query_to_remote_no_ecs_iij
-                - - sequence_forward_query_to_remote_no_ecs_nextdns
+            - primary:
+                - parallel:
+                    - - sequence_forward_query_to_local_no_ecs_onedns
+                    - - sequence_forward_query_to_local_no_ecs_tuna
+                - if: '(! response_has_local_ip)'
+                  exec:
+                    - _drop_response
+              secondary:
+                - parallel:
+                    - - sequence_forward_query_to_remote_no_ecs_cloudflare
+                    - - sequence_forward_query_to_remote_no_ecs_dnssb
+                    - - sequence_forward_query_to_remote_no_ecs_iij
+                    - - sequence_forward_query_to_remote_no_ecs_nextdns
+              always_standby: true
+              fast_fallback: 3750
           always_standby: true
           fast_fallback: 5000
         - rewrite_max_min_ttl
