@@ -35,7 +35,7 @@ function DownloadUnboundConfiguration() {
     if [ "${ENABLE_TLS}" == "true" ]; then
         SED_ENABLE_TLS="s/\#\ \ \ \ interface\:\ 0\.0\.0\.0\@5853/\ \ \ \ interface\:\ 0\.0\.0\.0\@5853/g;s/\#\ \ \ \ interface\:\ \:\:\@5853/\ \ \ \ interface\:\ \:\:\@5853/g;"
     fi
-    curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g;${SED_ENABLE_HTTPS}${ENABLE_TLS}" > "${DOCKER_PATH}/data/unbound.conf"
+    curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g;${SED_ENABLE_HTTPS}${SED_ENABLE_TLS}" > "${DOCKER_PATH}/data/unbound.conf"
 }
 # Update Root Hints
 function UpdateRootHints() {
