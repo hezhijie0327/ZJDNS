@@ -1132,6 +1132,13 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_unbound_recursive_dns
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tcp://127.0.0.1:5553'
+          enable_pipeline: true
+          trusted: true
   - tag: query_has_invalid_ecs_ip
     type: query_matcher
     args:
@@ -1164,6 +1171,19 @@ plugins:
         - 'fc00::/7'
         - 'fe80::/10'
         - 'ff00::/8'
+  - tag: query_has_ptr_in_cache
+    type: reverse_lookup
+    args:
+      handle_ptr: true
+      ttl: 259200
+      redis: 'redis://127.0.0.1:6379/0'
+  - tag: query_has_response_in_cache
+    type: cache
+    args:
+      cache_everything: true
+      lazy_cache_ttl: 259200
+      lazy_cache_reply_ttl: 30
+      redis: 'redis://127.0.0.1:6379/0'
   - tag: response_has_dns64_ip
     type: response_matcher
     args:
@@ -1428,6 +1448,8 @@ plugins:
           else_exec:
             - _no_ecs
         - _pad_query
+        - query_has_ptr_in_cache
+        - query_has_response_in_cache
         - primary:
             - primary:
                 - parallel:
@@ -1450,11 +1472,19 @@ plugins:
               exec:
                 - _drop_response
           secondary:
-            - parallel:
-              - - sequence_forward_query_to_remote_no_ecs_cloudflare
-              - - sequence_forward_query_to_remote_no_ecs_dnssb
-              - - sequence_forward_query_to_remote_no_ecs_iij
-              - - sequence_forward_query_to_remote_no_ecs_nextdns
+            - primary:
+                - parallel:
+                    - - sequence_forward_query_to_remote_no_ecs_cloudflare
+                    - - sequence_forward_query_to_remote_no_ecs_dnssb
+                    - - sequence_forward_query_to_remote_no_ecs_iij
+                    - - sequence_forward_query_to_remote_no_ecs_nextdns
+                - if: '(! response_has_valid_rcode)'
+                  exec:
+                    - _drop_response
+              secondary:
+                - forward_query_to_unbound_recursive_dns
+              always_standby: true
+              fast_fallback: 3750
           always_standby: true
           fast_fallback: 5000
         - rewrite_max_min_ttl
