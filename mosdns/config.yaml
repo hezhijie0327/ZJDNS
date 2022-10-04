@@ -1132,19 +1132,6 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
-  - tag: forward_query_to_unbound_recursive_dns_a
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tcp://127.0.0.1:5553'
-          enable_pipeline: true
-          trusted: true
-  - tag: forward_query_to_unbound_recursive_dns_b
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'udpme://127.0.0.1:5553'
-          trusted: true
   - tag: query_has_invalid_ecs_ip
     type: query_matcher
     args:
@@ -1431,16 +1418,6 @@ plugins:
                 - - forward_query_to_remote_no_ecs_nextdns_dot_d
           always_standby: true
           fast_fallback: 2500
-  - tag: sequence_forward_query_to_unbound_recursive_dns
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - forward_query_to_unbound_recursive_dns_a
-          secondary:
-            - forward_query_to_unbound_recursive_dns_b
-          always_standby: true
-          fast_fallback: 2500
   - tag: set_edns0_bufsize
     type: bufsize
     args:
@@ -1488,19 +1465,11 @@ plugins:
               exec:
                 - _drop_response
           secondary:
-            - primary:
-                - parallel:
-                    - - sequence_forward_query_to_remote_no_ecs_cloudflare
-                    - - sequence_forward_query_to_remote_no_ecs_dnssb
-                    - - sequence_forward_query_to_remote_no_ecs_iij
-                    - - sequence_forward_query_to_remote_no_ecs_nextdns
-                - if: '(! response_has_valid_rcode)'
-                  exec:
-                    - _drop_response
-              secondary:
-                - sequence_forward_query_to_unbound_recursive_dns
-              always_standby: true
-              fast_fallback: 3750
+            - parallel:
+                - - sequence_forward_query_to_remote_no_ecs_cloudflare
+                - - sequence_forward_query_to_remote_no_ecs_dnssb
+                - - sequence_forward_query_to_remote_no_ecs_iij
+                - - sequence_forward_query_to_remote_no_ecs_nextdns
           always_standby: true
           fast_fallback: 5000
         - rewrite_max_min_ttl
