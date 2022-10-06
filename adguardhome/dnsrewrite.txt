@@ -1,5 +1,5 @@
 ! Title: Zhijie's Custom Rule for AdGuard Home (DNS Rewrite)
-! Version: 1.0.202210042312
+! Version: 1.0.202210061108
 ! Homepage: https://github.com/hezhijie0327/AGHCustomRule
 !
 ! HOMESHAGW01 - A - START
@@ -28,11 +28,9 @@
 ! HOMESHAGW02 - END
 !
 ! DNSREWRITE - A - START
-|homeshagw01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.0.1
-|homeshagw02.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.32.1
 |homeshanas01.zhijie.online^$client=HOMESHAGW01|HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.4.1
-|ntp.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;A;192.168.0.1
-|ntp.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;A;192.168.32.1
+|ntp.zhijie.online^$client=HOMESHAGW01,dnsrewrite=NOERROR;CNAME;homeshagw01.zhijie.online
+|ntp.zhijie.online^$client=HOMESHAGW02,dnsrewrite=NOERROR;CNAME;homeshagw02.zhijie.online
 ! DNSREWRITE - A - END
 !
 ! HOMESHAGW01 - PTR - START
