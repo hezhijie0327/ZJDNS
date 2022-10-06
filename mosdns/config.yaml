@@ -4,38 +4,6 @@ data_providers:
   - tag: data_provider_cnipdb
     file: '/etc/mosdns/data/GeoIP_CNIPDb.dat'
 plugins:
-  - tag: forward_query_to_localhost_doh_a
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://localhost.zhijie.online/dns-query'
-          dial_addr: '127.0.0.1:443'
-          enable_http3: true
-          trusted: true
-  - tag: forward_query_to_localhost_doh_b
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'https://localhost.zhijie.online/dns-query'
-          dial_addr: '[::1]:443'
-          enable_http3: true
-          trusted: true
-  - tag: forward_query_to_localhost_dot_a
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://localhost.zhijie.online'
-          dial_addr: '127.0.0.1:853'
-          enable_pipeline: true
-          trusted: true
-  - tag: forward_query_to_localhost_dot_b
-    type: fast_forward
-    args:
-      upstream:
-        - addr: 'tls://localhost.zhijie.online'
-          dial_addr: '[::1]:853'
-          enable_pipeline: true
-          trusted: true
   - tag: forward_query_to_local_ecs_360_doh_a
     type: fast_forward
     args:
@@ -1244,12 +1212,6 @@ plugins:
         - 'fc00::/7'
         - 'fe80::/10'
         - 'ff00::/8'
-  - tag: query_has_ptr_domain
-    type: query_matcher
-    args:
-      domain:
-        - 'in-addr.arpa'
-        - 'ip6.arpa'
   - tag: query_has_ptr_response_in_cache
     type: reverse_lookup
     args:
@@ -1282,20 +1244,6 @@ plugins:
     args:
       maximum_ttl: 3600
       minimal_ttl: 300
-  - tag: sequence_forward_query_to_localhost
-    type: sequence
-    args:
-      exec:
-        - primary:
-            - load_balance:
-                - - forward_query_to_localhost_doh_a
-                - - forward_query_to_localhost_doh_b
-          secondary:
-            - load_balance:
-                - - forward_query_to_localhost_dot_a
-                - - forward_query_to_localhost_dot_b
-          always_standby: true
-          fast_fallback: 2500
   - tag: sequence_forward_query_to_local_ecs_360
     type: sequence
     args:
@@ -1570,27 +1518,23 @@ plugins:
         - query_has_ptr_response_in_cache
         - query_has_response_in_cache
         - primary:
-            - if: '(! query_has_ptr_domain)'
-              exec:
-                - primary:
-                    - parallel:
-                        - - sequence_forward_query_to_local_ecs_360
-                        - - sequence_forward_query_to_local_ecs_alidns
-                        - - sequence_forward_query_to_local_ecs_cfiec
-                        - - sequence_forward_query_to_local_ecs_dnspod
-                    - if: '(! response_has_local_ip)'
-                      exec:
-                        - _drop_response
-                  secondary:
-                    - parallel:
-                        - - sequence_forward_query_to_remote_ecs_adguard
-                        - - sequence_forward_query_to_remote_ecs_google
-                        - - sequence_forward_query_to_remote_ecs_opendns
-                        - - sequence_forward_query_to_remote_ecs_quad9
-                  always_standby: true
-                  fast_fallback: 3750
-              else_exec:
-                - sequence_forward_query_to_localhost
+            - primary:
+                - parallel:
+                    - - sequence_forward_query_to_local_ecs_360
+                    - - sequence_forward_query_to_local_ecs_alidns
+                    - - sequence_forward_query_to_local_ecs_cfiec
+                    - - sequence_forward_query_to_local_ecs_dnspod
+                - if: '(! response_has_local_ip)'
+                  exec:
+                    - _drop_response
+              secondary:
+                - parallel:
+                    - - sequence_forward_query_to_remote_ecs_adguard
+                    - - sequence_forward_query_to_remote_ecs_google
+                    - - sequence_forward_query_to_remote_ecs_opendns
+                    - - sequence_forward_query_to_remote_ecs_quad9
+              always_standby: true
+              fast_fallback: 3750
             - if: '(! response_has_valid_rcode)'
               exec:
                 - _drop_response
