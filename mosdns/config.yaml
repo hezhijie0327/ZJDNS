@@ -1212,12 +1212,6 @@ plugins:
         - 'fc00::/7'
         - 'fe80::/10'
         - 'ff00::/8'
-  - tag: query_has_ptr_response_in_cache
-    type: reverse_lookup
-    args:
-      handle_ptr: true
-      ttl: 259200
-      redis: 'redis://127.0.0.1:6379/0'
   - tag: query_has_response_in_cache
     type: cache
     args:
@@ -1516,7 +1510,6 @@ plugins:
           else_exec:
             - _no_ecs
         - _pad_query
-        - query_has_ptr_response_in_cache
         - query_has_response_in_cache
         - primary:
             - primary:
