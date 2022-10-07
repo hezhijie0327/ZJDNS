@@ -1501,10 +1501,11 @@ plugins:
     type: sequence
     args:
       exec:
+        - _edns0_filter_ecs_only
         - _enable_response_padding
         - _misc_optm
         - set_edns0_bufsize
-        - if: '(! query_has_invalid_ecs_ip)'
+        - if: '(! query_has_invalid_ecs_ip) && [_query_edns0]'
           exec:
             - set_edns0_client_subnet
           else_exec:
@@ -1518,7 +1519,7 @@ plugins:
                     - - sequence_forward_query_to_local_ecs_alidns
                     - - sequence_forward_query_to_local_ecs_cfiec
                     - - sequence_forward_query_to_local_ecs_dnspod
-                - if: '(! response_has_local_ip)'
+                - if: '(! response_has_local_ip) && [_response_valid_answer]'
                   exec:
                     - _drop_response
               secondary:
@@ -1537,7 +1538,7 @@ plugins:
                 - parallel:
                     - - sequence_forward_query_to_local_no_ecs_onedns
                     - - sequence_forward_query_to_local_no_ecs_tuna
-                - if: '(! response_has_local_ip)'
+                - if: '(! response_has_local_ip) && [_response_valid_answer]'
                   exec:
                     - _drop_response
               secondary:
