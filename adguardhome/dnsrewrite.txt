@@ -1,5 +1,5 @@
 ! Title: Zhijie's Custom Rule for AdGuard Home (DNS Rewrite)
-! Version: 1.0.202210062316
+! Version: 1.0.202210071016
 ! Homepage: https://github.com/hezhijie0327/AGHCustomRule
 !
 ! HOMESHAGW01 - A - START
@@ -21,6 +21,8 @@
 !
 ! HOMESHAGW02 - A - START
 |homeshaap05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.34.1
+|homeshaap06.zhijie.online^$dnsrewrite=NOERROR;A;192.168.34.2
+|homeshaap07.zhijie.online^$dnsrewrite=NOERROR;A;192.168.34.3
 |homeshatv05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.40.1
 |homeshatv06.zhijie.online^$dnsrewrite=NOERROR;A;192.168.40.2
 |homeshatvbox05.zhijie.online^$dnsrewrite=NOERROR;A;192.168.42.1
@@ -54,6 +56,8 @@
 !
 ! HOMESHAGW02 - PTR - START
 |1.34.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshaap05.zhijie.online.
+|2.34.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshaap06.zhijie.online.
+|3.34.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshaap07.zhijie.online.
 |1.40.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshatv05.zhijie.online.
 |2.40.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshatv06.zhijie.online.
 |1.42.168.192.in-addr.arpa^$dnsrewrite=NOERROR;PTR;homeshatvbox05.zhijie.online.
