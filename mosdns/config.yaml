@@ -254,6 +254,10 @@ plugins:
           trusted: true
         - addr: 'https://dns-unfiltered.adguard.com/dns-query'
           dial_addr: '94.140.14.140:443'
+          enable_http3: true
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '94.140.14.140:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -264,6 +268,10 @@ plugins:
         - addr: 'https://dns-unfiltered.adguard.com/dns-query'
           dial_addr: '94.140.14.141:443'
           enable_http3: false
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '94.140.14.141:443'
+          enable_http3: true
           trusted: true
         - addr: 'https://dns-unfiltered.adguard.com/dns-query'
           dial_addr: '94.140.14.141:443'
@@ -280,6 +288,10 @@ plugins:
           trusted: true
         - addr: 'https://dns-unfiltered.adguard.com/dns-query'
           dial_addr: '[2a10:50c0::1:ff]:443'
+          enable_http3: true
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '[2a10:50c0::1:ff]:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -290,6 +302,10 @@ plugins:
         - addr: 'https://dns-unfiltered.adguard.com/dns-query'
           dial_addr: '[2a10:50c0::2:ff]:443'
           enable_http3: false
+          trusted: true
+        - addr: 'https://dns-unfiltered.adguard.com/dns-query'
+          dial_addr: '[2a10:50c0::2:ff]:443'
+          enable_http3: true
           trusted: true
         - addr: 'https://dns-unfiltered.adguard.com/dns-query'
           dial_addr: '[2a10:50c0::2:ff]:443'
