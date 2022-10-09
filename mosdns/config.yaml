@@ -354,6 +354,10 @@ plugins:
       upstream:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '8.8.4.4:443'
           enable_http3: true
           trusted: true
         - addr: 'https://dns.google/dns-query'
@@ -365,6 +369,10 @@ plugins:
     type: fast_forward
     args:
       upstream:
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '8.8.8.8:443'
+          enable_http3: false
+          trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.8.8:443'
           enable_http3: true
@@ -380,6 +388,10 @@ plugins:
       upstream:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '[2001:4860:4860::8844]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8844]:443'
           enable_http3: true
           trusted: true
         - addr: 'https://dns.google/dns-query'
@@ -391,6 +403,10 @@ plugins:
     type: fast_forward
     args:
       upstream:
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8888]:443'
+          enable_http3: false
+          trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '[2001:4860:4860::8888]:443'
           enable_http3: true
@@ -406,6 +422,10 @@ plugins:
       upstream:
         - addr: 'https://dns64.dns.google/dns-query'
           dial_addr: '[2001:4860:4860::64]:443'
+          enable_http3: false
+          trusted: true
+        - addr: 'https://dns64.dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::64]:443'
           enable_http3: true
           trusted: true
         - addr: 'https://dns64.dns.google/dns-query'
@@ -417,6 +437,10 @@ plugins:
     type: fast_forward
     args:
       upstream:
+        - addr: 'https://dns64.dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::6464]:443'
+          enable_http3: false
+          trusted: true
         - addr: 'https://dns64.dns.google/dns-query'
           dial_addr: '[2001:4860:4860::6464]:443'
           enable_http3: true
