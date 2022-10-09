@@ -180,6 +180,22 @@ plugins:
           dial_addr: '120.53.53.53:443'
           enable_http3: false
           trusted: true
+  - tag: forward_query_to_local_ecs_dnspod_doh_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.pub/dns-query'
+          dial_addr: '162.14.21.178:443'
+          enable_http3: false
+          trusted: true
+  - tag: forward_query_to_local_ecs_dnspod_doh_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://doh.pub/dns-query'
+          dial_addr: '162.14.21.56:443'
+          enable_http3: false
+          trusted: true
   - tag: forward_query_to_local_ecs_dnspod_dot_a
     type: fast_forward
     args:
@@ -194,6 +210,22 @@ plugins:
       upstream:
         - addr: 'tls://dot.pub'
           dial_addr: '120.53.53.53:853'
+          enable_pipeline: true
+          trusted: true
+  - tag: forward_query_to_local_ecs_dnspod_dot_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.pub'
+          dial_addr: '162.14.21.178:853'
+          enable_pipeline: true
+          trusted: true
+  - tag: forward_query_to_local_ecs_dnspod_dot_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'tls://dot.pub'
+          dial_addr: '162.14.21.56:853'
           enable_pipeline: true
           trusted: true
   - tag: forward_query_to_local_no_ecs_onedns_doh_a
@@ -1337,10 +1369,14 @@ plugins:
             - load_balance:
                 - - forward_query_to_local_ecs_dnspod_doh_a
                 - - forward_query_to_local_ecs_dnspod_doh_b
+                - - forward_query_to_local_ecs_dnspod_doh_c
+                - - forward_query_to_local_ecs_dnspod_doh_d
           secondary:
             - load_balance:
                 - - forward_query_to_local_ecs_dnspod_dot_a
                 - - forward_query_to_local_ecs_dnspod_dot_b
+                - - forward_query_to_local_ecs_dnspod_dot_c
+                - - forward_query_to_local_ecs_dnspod_dot_d
           always_standby: true
           fast_fallback: 2500
   - tag: sequence_forward_query_to_local_no_ecs_onedns
