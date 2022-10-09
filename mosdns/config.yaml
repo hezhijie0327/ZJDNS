@@ -1558,6 +1558,9 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_local_ecs_cfiec
                         - - sequence_forward_query_to_local_ecs_dnspod
+                    - if: '(! response_has_valid_rcode)'
+                      exec:
+                        - _drop_response
                   secondary:
                     - parallel:
                         - - sequence_forward_query_to_local_ecs_360
@@ -1572,6 +1575,9 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_remote_ecs_google
                         - - sequence_forward_query_to_remote_ecs_quad9
+                    - if: '(! response_has_valid_rcode)'
+                      exec:
+                        - _drop_response
                   secondary:
                     - parallel:
                         - - sequence_forward_query_to_remote_ecs_adguard
@@ -1588,6 +1594,9 @@ plugins:
                 - primary:
                     - parallel:
                         - - sequence_forward_query_to_local_no_ecs_onedns
+                    - if: '(! response_has_valid_rcode)'
+                      exec:
+                        - _drop_response
                   secondary:
                     - parallel:
                         - - sequence_forward_query_to_local_no_ecs_tuna
@@ -1601,6 +1610,9 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_remote_no_ecs_cloudflare
                         - - sequence_forward_query_to_remote_no_ecs_nextdns
+                    - if: '(! response_has_valid_rcode)'
+                      exec:
+                        - _drop_response
                   secondary:
                     - parallel:
                         - - sequence_forward_query_to_remote_no_ecs_dnssb
