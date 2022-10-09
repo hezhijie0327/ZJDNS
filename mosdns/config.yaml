@@ -1567,7 +1567,7 @@ plugins:
                         - - sequence_forward_query_to_local_ecs_alidns
                   always_standby: true
                   fast_fallback: 2500
-                - if: '(! response_has_valid_rcode) || ((! response_has_local_ip) && [_response_valid_answer])'
+                - if: '(! response_has_local_ip) && [_response_valid_answer]'
                   exec:
                     - _drop_response
               secondary:
@@ -1602,7 +1602,7 @@ plugins:
                         - - sequence_forward_query_to_local_no_ecs_tuna
                   always_standby: true
                   fast_fallback: 2500
-                - if: '(! response_has_valid_rcode) || ((! response_has_local_ip) && [_response_valid_answer])'
+                - if: '(! response_has_local_ip) && [_response_valid_answer]'
                   exec:
                     - _drop_response
               secondary:
