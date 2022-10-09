@@ -1296,7 +1296,7 @@ plugins:
                 - - forward_query_to_local_ecs_360_dot_c
                 - - forward_query_to_local_ecs_360_dot_d
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_local_ecs_alidns
     type: sequence
     args:
@@ -1314,7 +1314,7 @@ plugins:
                 - - forward_query_to_local_ecs_alidns_dot_c
                 - - forward_query_to_local_ecs_alidns_dot_d
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_local_ecs_cfiec
     type: sequence
     args:
@@ -1328,7 +1328,7 @@ plugins:
                 - - forward_query_to_local_ecs_cfiec_dot_a
                 - - forward_query_to_local_ecs_cfiec_dot_b
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_local_ecs_dnspod
     type: sequence
     args:
@@ -1342,7 +1342,7 @@ plugins:
                 - - forward_query_to_local_ecs_dnspod_dot_a
                 - - forward_query_to_local_ecs_dnspod_dot_b
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_local_no_ecs_onedns
     type: sequence
     args:
@@ -1354,7 +1354,7 @@ plugins:
             - load_balance:
                 - - forward_query_to_local_no_ecs_onedns_dot_a
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_local_no_ecs_tuna
     type: sequence
     args:
@@ -1368,7 +1368,7 @@ plugins:
                 - - forward_query_to_local_no_ecs_tuna_dot_a
                 - - forward_query_to_local_no_ecs_tuna_dot_b
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_remote_ecs_adguard
     type: sequence
     args:
@@ -1386,7 +1386,7 @@ plugins:
                 - - forward_query_to_remote_ecs_adguard_dot_c
                 - - forward_query_to_remote_ecs_adguard_dot_d
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_remote_ecs_google
     type: sequence
     args:
@@ -1408,7 +1408,7 @@ plugins:
                 - - forward_query_to_remote_ecs_google_dot_e
                 - - forward_query_to_remote_ecs_google_dot_f
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
         - if: '(response_has_dns64_ip)'
           exec:
             - _drop_response
@@ -1429,7 +1429,7 @@ plugins:
                 - - forward_query_to_remote_ecs_opendns_dot_c
                 - - forward_query_to_remote_ecs_opendns_dot_d
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_remote_ecs_quad9
     type: sequence
     args:
@@ -1447,7 +1447,7 @@ plugins:
                 - - forward_query_to_remote_ecs_quad9_dot_c
                 - - forward_query_to_remote_ecs_quad9_dot_d
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_remote_no_ecs_cloudflare
     type: sequence
     args:
@@ -1469,7 +1469,7 @@ plugins:
                 - - forward_query_to_remote_no_ecs_cloudflare_dot_e
                 - - forward_query_to_remote_no_ecs_cloudflare_dot_f
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
         - if: '(response_has_dns64_ip)'
           exec:
             - _drop_response
@@ -1490,7 +1490,7 @@ plugins:
                 - - forward_query_to_remote_no_ecs_dnssb_dot_c
                 - - forward_query_to_remote_no_ecs_dnssb_dot_d
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_remote_no_ecs_iij
     type: sequence
     args:
@@ -1508,7 +1508,7 @@ plugins:
                 - - forward_query_to_remote_no_ecs_iij_dot_c
                 - - forward_query_to_remote_no_ecs_iij_dot_d
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: sequence_forward_query_to_remote_no_ecs_nextdns
     type: sequence
     args:
@@ -1526,7 +1526,7 @@ plugins:
                 - - forward_query_to_remote_no_ecs_nextdns_dot_c
                 - - forward_query_to_remote_no_ecs_nextdns_dot_d
           always_standby: true
-          fast_fallback: 2500
+          fast_fallback: 1250
   - tag: set_edns0_bufsize
     type: bufsize
     args:
@@ -1554,40 +1554,60 @@ plugins:
         - query_has_response_in_cache
         - primary:
             - primary:
-                - parallel:
-                    - - sequence_forward_query_to_local_ecs_360
-                    - - sequence_forward_query_to_local_ecs_alidns
-                    - - sequence_forward_query_to_local_ecs_cfiec
-                    - - sequence_forward_query_to_local_ecs_dnspod
+                - primary:
+                    - parallel:
+                        - - sequence_forward_query_to_local_ecs_cfiec
+                        - - sequence_forward_query_to_local_ecs_dnspod
+                  secondary:
+                    - parallel:
+                        - - sequence_forward_query_to_local_ecs_360
+                        - - sequence_forward_query_to_local_ecs_alidns
+                  always_standby: true
+                  fast_fallback: 2500
                 - if: '(! response_has_local_ip) && [_response_valid_answer]'
                   exec:
                     - _drop_response
               secondary:
-                - parallel:
-                    - - sequence_forward_query_to_remote_ecs_adguard
-                    - - sequence_forward_query_to_remote_ecs_google
-                    - - sequence_forward_query_to_remote_ecs_opendns
-                    - - sequence_forward_query_to_remote_ecs_quad9
-              always_standby: true
+                - primary:
+                    - parallel:
+                        - - sequence_forward_query_to_remote_ecs_google
+                        - - sequence_forward_query_to_remote_ecs_quad9
+                  secondary:
+                    - parallel:
+                        - - sequence_forward_query_to_remote_ecs_adguard
+                        - - sequence_forward_query_to_remote_ecs_opendns
+                  always_standby: true
+                  fast_fallback: 2500
+              always_standby: false
               fast_fallback: 3750
             - if: '(! response_has_valid_rcode)'
               exec:
                 - _drop_response
           secondary:
             - primary:
-                - parallel:
-                    - - sequence_forward_query_to_local_no_ecs_onedns
-                    - - sequence_forward_query_to_local_no_ecs_tuna
+                - primary:
+                    - parallel:
+                        - - sequence_forward_query_to_local_no_ecs_onedns
+                  secondary:
+                    - parallel:
+                        - - sequence_forward_query_to_local_no_ecs_tuna
+                  always_standby: true
+                  fast_fallback: 2500
                 - if: '(! response_has_local_ip) && [_response_valid_answer]'
                   exec:
                     - _drop_response
               secondary:
-                - parallel:
-                    - - sequence_forward_query_to_remote_no_ecs_cloudflare
-                    - - sequence_forward_query_to_remote_no_ecs_dnssb
-                    - - sequence_forward_query_to_remote_no_ecs_iij
-                    - - sequence_forward_query_to_remote_no_ecs_nextdns
-              always_standby: true
+                - primary:
+                    - parallel:
+                        - - sequence_forward_query_to_remote_no_ecs_cloudflare
+                        - - sequence_forward_query_to_remote_no_ecs_nextdns
+                  secondary:
+                    - parallel:
+                        - - sequence_forward_query_to_remote_no_ecs_dnssb
+                        - - sequence_forward_query_to_remote_no_ecs_iij
+                  always_standby: true
+                  fast_fallback: 2500
+              always_standby: false
               fast_fallback: 3750
           always_standby: true
           fast_fallback: 5000
