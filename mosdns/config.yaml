@@ -1126,6 +1126,10 @@ plugins:
           trusted: true
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '45.90.28.0:443'
+          enable_http3: true
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '45.90.28.0:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -1136,6 +1140,10 @@ plugins:
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '45.90.30.0:443'
           enable_http3: false
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '45.90.30.0:443'
+          enable_http3: true
           trusted: true
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '45.90.30.0:443'
@@ -1152,6 +1160,10 @@ plugins:
           trusted: true
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '[2a07:a8c0::]:443'
+          enable_http3: true
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '[2a07:a8c0::]:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -1162,6 +1174,10 @@ plugins:
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '[2a07:a8c1::]:443'
           enable_http3: false
+          trusted: true
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '[2a07:a8c1::]:443'
+          enable_http3: true
           trusted: true
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '[2a07:a8c1::]:443'
