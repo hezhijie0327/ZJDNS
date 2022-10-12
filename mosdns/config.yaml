@@ -180,6 +180,14 @@ plugins:
           dial_addr: '120.53.53.53:443'
           enable_http3: false
           trusted: true
+  - tag: forward_query_to_local_ecs_dnspod_doh_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://sm2.doh.pub/dns-query'
+          dial_addr: '106.55.91.174:443'
+          enable_http3: false
+          trusted: true
   - tag: forward_query_to_local_ecs_dnspod_dot_a
     type: fast_forward
     args:
@@ -1353,6 +1361,7 @@ plugins:
             - load_balance:
                 - - forward_query_to_local_ecs_dnspod_doh_a
                 - - forward_query_to_local_ecs_dnspod_doh_b
+                - - forward_query_to_local_ecs_dnspod_doh_c
           secondary:
             - load_balance:
                 - - forward_query_to_local_ecs_dnspod_dot_a
