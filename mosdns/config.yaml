@@ -252,6 +252,38 @@ plugins:
           dial_addr: '[2402:f000:1:416:101:6:6:6]:8853'
           enable_pipeline: true
           trusted: true
+  - tag: forward_query_to_remote_ecs_adguard_doh3_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://unfiltered.adguard-dns.com/dns-query'
+          dial_addr: '94.140.14.140:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_ecs_adguard_doh3_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://unfiltered.adguard-dns.com/dns-query'
+          dial_addr: '94.140.14.141:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_ecs_adguard_doh3_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://unfiltered.adguard-dns.com/dns-query'
+          dial_addr: '[2a10:50c0::1:ff]:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_ecs_adguard_doh3_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://unfiltered.adguard-dns.com/dns-query'
+          dial_addr: '[2a10:50c0::2:ff]:443'
+          enable_http3: true
+          trusted: true
   - tag: forward_query_to_remote_ecs_adguard_doh_a
     type: fast_forward
     args:
@@ -259,10 +291,6 @@ plugins:
         - addr: 'https://unfiltered.adguard-dns.com/dns-query'
           dial_addr: '94.140.14.140:443'
           enable_http3: false
-          trusted: true
-        - addr: 'https://unfiltered.adguard-dns.com/dns-query'
-          dial_addr: '94.140.14.140:443'
-          enable_http3: true
           trusted: true
         - addr: 'https://unfiltered.adguard-dns.com/dns-query'
           dial_addr: '94.140.14.140:443'
@@ -279,10 +307,6 @@ plugins:
           trusted: true
         - addr: 'https://unfiltered.adguard-dns.com/dns-query'
           dial_addr: '94.140.14.141:443'
-          enable_http3: true
-          trusted: true
-        - addr: 'https://unfiltered.adguard-dns.com/dns-query'
-          dial_addr: '94.140.14.141:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -296,10 +320,6 @@ plugins:
           trusted: true
         - addr: 'https://unfiltered.adguard-dns.com/dns-query'
           dial_addr: '[2a10:50c0::1:ff]:443'
-          enable_http3: true
-          trusted: true
-        - addr: 'https://unfiltered.adguard-dns.com/dns-query'
-          dial_addr: '[2a10:50c0::1:ff]:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -310,10 +330,6 @@ plugins:
         - addr: 'https://unfiltered.adguard-dns.com/dns-query'
           dial_addr: '[2a10:50c0::2:ff]:443'
           enable_http3: false
-          trusted: true
-        - addr: 'https://unfiltered.adguard-dns.com/dns-query'
-          dial_addr: '[2a10:50c0::2:ff]:443'
-          enable_http3: true
           trusted: true
         - addr: 'https://unfiltered.adguard-dns.com/dns-query'
           dial_addr: '[2a10:50c0::2:ff]:443'
@@ -372,6 +388,54 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_remote_ecs_google_doh3_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '8.8.4.4:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_ecs_google_doh3_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '8.8.8.8:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_ecs_google_doh3_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8844]:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_ecs_google_doh3_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::8888]:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_ecs_google_doh3_e
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns64.dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::64]:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_ecs_google_doh3_f
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://dns64.dns.google/dns-query'
+          dial_addr: '[2001:4860:4860::6464]:443'
+          enable_http3: true
+          trusted: true
   - tag: forward_query_to_remote_ecs_google_doh_a
     type: fast_forward
     args:
@@ -379,10 +443,6 @@ plugins:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
           enable_http3: false
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '8.8.4.4:443'
-          enable_http3: true
           trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
@@ -399,10 +459,6 @@ plugins:
           trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.8.8:443'
-          enable_http3: true
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '8.8.8.8:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -413,10 +469,6 @@ plugins:
         - addr: 'https://dns.google/dns-query'
           dial_addr: '[2001:4860:4860::8844]:443'
           enable_http3: false
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '[2001:4860:4860::8844]:443'
-          enable_http3: true
           trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '[2001:4860:4860::8844]:443'
@@ -433,10 +485,6 @@ plugins:
           trusted: true
         - addr: 'https://dns.google/dns-query'
           dial_addr: '[2001:4860:4860::8888]:443'
-          enable_http3: true
-          trusted: true
-        - addr: 'https://dns.google/dns-query'
-          dial_addr: '[2001:4860:4860::8888]:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -450,10 +498,6 @@ plugins:
           trusted: true
         - addr: 'https://dns64.dns.google/dns-query'
           dial_addr: '[2001:4860:4860::64]:443'
-          enable_http3: true
-          trusted: true
-        - addr: 'https://dns64.dns.google/dns-query'
-          dial_addr: '[2001:4860:4860::64]:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -464,10 +508,6 @@ plugins:
         - addr: 'https://dns64.dns.google/dns-query'
           dial_addr: '[2001:4860:4860::6464]:443'
           enable_http3: false
-          trusted: true
-        - addr: 'https://dns64.dns.google/dns-query'
-          dial_addr: '[2001:4860:4860::6464]:443'
-          enable_http3: true
           trusted: true
         - addr: 'https://dns64.dns.google/dns-query'
           dial_addr: '[2001:4860:4860::6464]:443'
@@ -1124,6 +1164,38 @@ plugins:
           enable_pipeline: true
           socks5: '127.0.0.1:7890'
           trusted: true
+  - tag: forward_query_to_remote_no_ecs_nextdns_doh3_a
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '45.90.28.0:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_no_ecs_nextdns_doh3_b
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '45.90.30.0:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_no_ecs_nextdns_doh3_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '[2a07:a8c0::]:443'
+          enable_http3: true
+          trusted: true
+  - tag: forward_query_to_remote_no_ecs_nextdns_doh3_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'https://anycast.dns.nextdns.io/dns-query'
+          dial_addr: '[2a07:a8c1::]:443'
+          enable_http3: true
+          trusted: true
   - tag: forward_query_to_remote_no_ecs_nextdns_doh_a
     type: fast_forward
     args:
@@ -1131,10 +1203,6 @@ plugins:
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '45.90.28.0:443'
           enable_http3: false
-          trusted: true
-        - addr: 'https://anycast.dns.nextdns.io/dns-query'
-          dial_addr: '45.90.28.0:443'
-          enable_http3: true
           trusted: true
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '45.90.28.0:443'
@@ -1151,10 +1219,6 @@ plugins:
           trusted: true
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '45.90.30.0:443'
-          enable_http3: true
-          trusted: true
-        - addr: 'https://anycast.dns.nextdns.io/dns-query'
-          dial_addr: '45.90.30.0:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -1168,10 +1232,6 @@ plugins:
           trusted: true
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '[2a07:a8c0::]:443'
-          enable_http3: true
-          trusted: true
-        - addr: 'https://anycast.dns.nextdns.io/dns-query'
-          dial_addr: '[2a07:a8c0::]:443'
           enable_http3: false
           socks5: '127.0.0.1:7890'
           trusted: true
@@ -1182,10 +1242,6 @@ plugins:
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '[2a07:a8c1::]:443'
           enable_http3: false
-          trusted: true
-        - addr: 'https://anycast.dns.nextdns.io/dns-query'
-          dial_addr: '[2a07:a8c1::]:443'
-          enable_http3: true
           trusted: true
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '[2a07:a8c1::]:443'
@@ -1400,6 +1456,10 @@ plugins:
       exec:
         - primary:
             - load_balance:
+                - - forward_query_to_remote_ecs_adguard_doh3_a
+                - - forward_query_to_remote_ecs_adguard_doh3_b
+                - - forward_query_to_remote_ecs_adguard_doh3_c
+                - - forward_query_to_remote_ecs_adguard_doh3_d
                 - - forward_query_to_remote_ecs_adguard_doh_a
                 - - forward_query_to_remote_ecs_adguard_doh_b
                 - - forward_query_to_remote_ecs_adguard_doh_c
@@ -1418,6 +1478,12 @@ plugins:
       exec:
         - primary:
             - load_balance:
+                - - forward_query_to_remote_ecs_google_doh3_a
+                - - forward_query_to_remote_ecs_google_doh3_b
+                - - forward_query_to_remote_ecs_google_doh3_c
+                - - forward_query_to_remote_ecs_google_doh3_d
+                - - forward_query_to_remote_ecs_google_doh3_e
+                - - forward_query_to_remote_ecs_google_doh3_f
                 - - forward_query_to_remote_ecs_google_doh_a
                 - - forward_query_to_remote_ecs_google_doh_b
                 - - forward_query_to_remote_ecs_google_doh_c
@@ -1540,6 +1606,10 @@ plugins:
       exec:
         - primary:
             - load_balance:
+                - - forward_query_to_remote_no_ecs_nextdns_doh3_a
+                - - forward_query_to_remote_no_ecs_nextdns_doh3_b
+                - - forward_query_to_remote_no_ecs_nextdns_doh3_c
+                - - forward_query_to_remote_no_ecs_nextdns_doh3_d
                 - - forward_query_to_remote_no_ecs_nextdns_doh_a
                 - - forward_query_to_remote_no_ecs_nextdns_doh_b
                 - - forward_query_to_remote_no_ecs_nextdns_doh_c
