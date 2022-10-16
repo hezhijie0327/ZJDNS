@@ -26,7 +26,7 @@ function DownloadmosDNSConfiguration() {
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
     fi
     ENABLE_HTTPS="false"
-    ENABLE_TLS="true"
+    ENABLE_TLS="false"
     SSL_CERT="fullchain.cer"
     SSL_KEY="zhijie.online.key"
     HTTPS_CONFIG=(
