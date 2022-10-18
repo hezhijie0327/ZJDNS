@@ -30,10 +30,10 @@ function DownloadUnboundConfiguration() {
     SSL_CERT="fullchain.cer"
     SSL_KEY="zhijie.online.key"
     if [ "${ENABLE_HTTPS}" == "true" ]; then
-        SED_ENABLE_HTTPS="s/\#\ \ \ \ interface\:\ 0\.0\.0\.0\@443/\ \ \ \ interface\:\ 0\.0\.0\.0\@443/g;s/\#\ \ \ \ interface\:\ \:\:\@443/\ \ \ \ interface\:\ \:\:\@443/g;"
+        SED_ENABLE_HTTPS="s/\#\ \ \ \ interface\:\ 0\.0\.0\.0\@5443/\ \ \ \ interface\:\ 0\.0\.0\.0\@5443/g;s/\#\ \ \ \ interface\:\ \:\:\@5443/\ \ \ \ interface\:\ \:\:\@5443/g;"
     fi
     if [ "${ENABLE_TLS}" == "true" ]; then
-        SED_ENABLE_TLS="s/\#\ \ \ \ interface\:\ 0\.0\.0\.0\@853/\ \ \ \ interface\:\ 0\.0\.0\.0\@853/g;s/\#\ \ \ \ interface\:\ \:\:\@853/\ \ \ \ interface\:\ \:\:\@853/g;"
+        SED_ENABLE_TLS="s/\#\ \ \ \ interface\:\ 0\.0\.0\.0\@5853/\ \ \ \ interface\:\ 0\.0\.0\.0\@5853/g;s/\#\ \ \ \ interface\:\ \:\:\@5853/\ \ \ \ interface\:\ \:\:\@5853/g;"
     fi
     curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g;${SED_ENABLE_HTTPS}${SED_ENABLE_TLS}" > "${DOCKER_PATH}/data/unbound.conf"
 }
