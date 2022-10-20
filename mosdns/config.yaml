@@ -1459,7 +1459,7 @@ plugins:
             - - forward_query_to_remote_ecs_google_dot_c
             - - forward_query_to_remote_ecs_google_dot_d
             - - forward_query_to_remote_ecs_google_dot_e
-             - - forward_query_to_remote_ecs_google_dot_f
+            - - forward_query_to_remote_ecs_google_dot_f
         - if: '(response_has_dns64_ip)'
           exec:
             - _drop_response
