@@ -222,25 +222,25 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'udpme://114.114.114.114:53' # public1.114dns.com
+        - addr: 'udpme://114.114.114.114:53'
           trusted: true
   - tag: forward_query_to_local_no_ecs_114_udp_b
     type: fast_forward
     args:
       upstream:
-        - addr: 'udpme://114.114.115.115:53' # public2.114dns.com
+        - addr: 'udpme://114.114.115.115:53'
           trusted: true
-  - tag: forward_query_to_local_no_ecs_cnnic_udp_a
+  - tag: forward_query_to_local_no_ecs_baidu_udp_a
     type: fast_forward
     args:
       upstream:
-        - addr: 'udpme://1.2.4.8:53' # public1.sdns.cn
+        - addr: 'udpme://180.76.76.76:53'
           trusted: true
-  - tag: forward_query_to_local_no_ecs_cnnic_udp_b
+  - tag: forward_query_to_local_no_ecs_baidu_udp_b
     type: fast_forward
     args:
       upstream:
-        - addr: 'udpme://210.2.4.8:53' # public2.sdns.cn
+        - addr: 'udpme://2400:da00::6666:53'
           trusted: true
   - tag: forward_query_to_local_no_ecs_onedns_doh_a
     type: fast_forward
@@ -1451,13 +1451,13 @@ plugins:
             - - forward_query_to_local_no_ecs_114_tcp_b
             - - forward_query_to_local_no_ecs_114_udp_a
             - - forward_query_to_local_no_ecs_114_udp_b
-  - tag: sequence_forward_query_to_local_no_ecs_cnnic
+  - tag: sequence_forward_query_to_local_no_ecs_baidu
     type: sequence
     args:
       exec:
         - load_balance:
-            - - forward_query_to_local_no_ecs_cnnic_udp_a
-            - - forward_query_to_local_no_ecs_cnnic_udp_b
+            - - forward_query_to_local_no_ecs_baidu_udp_a
+            - - forward_query_to_local_no_ecs_baidu_udp_b
   - tag: sequence_forward_query_to_local_no_ecs_onedns
     type: sequence
     args:
