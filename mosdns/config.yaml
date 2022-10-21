@@ -1683,13 +1683,13 @@ plugins:
                 - primary:
                     - parallel:
                         - - sequence_forward_query_to_local_no_ecs_114
-                        - - sequence_forward_query_to_local_no_ecs_onedns
+                        - - sequence_forward_query_to_local_no_ecs_baidu
                     - if: '(! response_has_valid_rcode)'
                       exec:
                         - _drop_response
                   secondary:
                     - parallel:
-                        - - sequence_forward_query_to_local_no_ecs_baidu
+                        - - sequence_forward_query_to_local_no_ecs_onedns
                         - - sequence_forward_query_to_local_no_ecs_tuna
                   always_standby: true
                   fast_fallback: 1250
