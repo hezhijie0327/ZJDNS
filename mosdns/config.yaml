@@ -208,43 +208,39 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'tcp://public1.114dns.com'
-          dial_addr: '114.114.114.114:53'
+        - addr: 'tcp://114.114.114.114:53' # public1.114dns.com
+          enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_no_ecs_114_tcp_b
     type: fast_forward
     args:
       upstream:
-        - addr: 'tcp://public2.114dns.com'
-          dial_addr: '114.114.115.115:53'
+        - addr: 'tcp://114.114.115.115:53' # public2.114dns.com
+          enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_no_ecs_114_udp_a
     type: fast_forward
     args:
       upstream:
-        - addr: 'udpme://public1.114dns.com'
-          dial_addr: '114.114.114.114:53'
+        - addr: 'udpme://114.114.114.114:53' # public1.114dns.com
           trusted: true
   - tag: forward_query_to_local_no_ecs_114_udp_b
     type: fast_forward
     args:
       upstream:
-        - addr: 'udpme://public2.114dns.com'
-          dial_addr: '114.114.115.115:53'
+        - addr: 'udpme://114.114.115.115:53' # public2.114dns.com
           trusted: true
   - tag: forward_query_to_local_no_ecs_cnnic_udp_a
     type: fast_forward
     args:
       upstream:
-        - addr: 'udpme://public1.sdns.cn'
-          dial_addr: '1.2.4.8:53'
+        - addr: 'udpme://1.2.4.8:53' # public1.sdns.cn
           trusted: true
   - tag: forward_query_to_local_no_ecs_cnnic_udp_b
     type: fast_forward
     args:
       upstream:
-        - addr: 'udpme://public2.sdns.cn'
-          dial_addr: '210.2.4.8:53'
+        - addr: 'udpme://210.2.4.8:5' # public2.sdns.cn
           trusted: true
   - tag: forward_query_to_local_no_ecs_onedns_doh_a
     type: fast_forward
