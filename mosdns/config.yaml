@@ -242,21 +242,29 @@ plugins:
       upstream:
         - addr: 'udpme://2400:da00::6666:53'
           trusted: true
-  - tag: forward_query_to_local_no_ecs_onedns_doh_a
+  - tag: forward_query_to_local_no_ecs_onedns_udp_a
     type: fast_forward
     args:
       upstream:
-        - addr: 'https://doh.onedns.net/dns-query'
-          dial_addr: '52.80.109.59:443'
-          enable_http3: false
+        - addr: 'udpme://117.50.10.10:53'
           trusted: true
-  - tag: forward_query_to_local_no_ecs_onedns_dot_a
+  - tag: forward_query_to_local_no_ecs_onedns_udp_b
     type: fast_forward
     args:
       upstream:
-        - addr: 'tls://dot.onedns.net'
-          dial_addr: '52.80.248.44:853'
-          enable_pipeline: false
+        - addr: 'udpme://52.80.52.52:53'
+          trusted: true
+  - tag: forward_query_to_local_no_ecs_onedns_udp_c
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'udpme://[2400:7fc0:849e:200::4]:53'
+          trusted: true
+  - tag: forward_query_to_local_no_ecs_onedns_udp_d
+    type: fast_forward
+    args:
+      upstream:
+        - addr: 'udpme://[2404:c2c0:85d8:901::4]:53'
           trusted: true
   - tag: forward_query_to_local_no_ecs_tuna_doh_a
     type: fast_forward
@@ -1463,8 +1471,10 @@ plugins:
     args:
       exec:
         - load_balance:
-            - - forward_query_to_local_no_ecs_onedns_doh_a
-            - - forward_query_to_local_no_ecs_onedns_dot_a
+            - - forward_query_to_local_no_ecs_onedns_udp_a
+            - - forward_query_to_local_no_ecs_onedns_udp_b
+            - - forward_query_to_local_no_ecs_onedns_udp_c
+            - - forward_query_to_local_no_ecs_onedns_udp_d
   - tag: sequence_forward_query_to_local_no_ecs_tuna
     type: sequence
     args:
@@ -1672,15 +1682,15 @@ plugins:
             - primary:
                 - primary:
                     - parallel:
+                        - - sequence_forward_query_to_local_no_ecs_114
                         - - sequence_forward_query_to_local_no_ecs_onedns
-                        - - sequence_forward_query_to_local_no_ecs_tuna
                     - if: '(! response_has_valid_rcode)'
                       exec:
                         - _drop_response
                   secondary:
                     - parallel:
-                        - - sequence_forward_query_to_local_no_ecs_114
-                        - - sequence_forward_query_to_local_no_ecs_cnnic
+                        - - sequence_forward_query_to_local_no_ecs_baidu
+                        - - sequence_forward_query_to_local_no_ecs_tuna
                   always_standby: true
                   fast_fallback: 1250
                 - if: '(! response_has_local_ip) && [_response_valid_answer]'
