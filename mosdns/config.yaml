@@ -240,7 +240,7 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'udpme://210.2.4.8:5' # public2.sdns.cn
+        - addr: 'udpme://210.2.4.8:53' # public2.sdns.cn
           trusted: true
   - tag: forward_query_to_local_no_ecs_onedns_doh_a
     type: fast_forward
