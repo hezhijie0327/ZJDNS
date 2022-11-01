@@ -1378,14 +1378,6 @@ plugins:
         - 'fc00::/7'
         - 'fe80::/10'
         - 'ff00::/8'
-  - tag: query_has_response_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      compress_resp: true
-      lazy_cache_ttl: 259200
-      lazy_cache_reply_ttl: 30
-      redis: 'redis://127.0.0.1:6379/0'
   - tag: response_has_dns64_ip
     type: response_matcher
     args:
@@ -1400,11 +1392,6 @@ plugins:
     type: response_matcher
     args:
       rcode: [0]
-  - tag: rewrite_max_min_ttl
-    type: ttl
-    args:
-      maximum_ttl: 3600
-      minimal_ttl: 300
   - tag: sequence_forward_query_to_local_ecs_360
     type: sequence
     args:
@@ -1640,7 +1627,6 @@ plugins:
           else_exec:
             - _no_ecs
         - _pad_query
-        - query_has_response_in_cache
         - primary:
             - primary:
                 - primary:
@@ -1714,7 +1700,6 @@ plugins:
               fast_fallback: 2500
           always_standby: true
           fast_fallback: 3750
-        - rewrite_max_min_ttl
 servers:
   - exec: main_server
     listeners:
