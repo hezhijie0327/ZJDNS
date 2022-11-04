@@ -1378,6 +1378,12 @@ plugins:
         - 'fc00::/7'
         - 'fe80::/10'
         - 'ff00::/8'
+  - tag: query_has_ptr_response_in_cache
+    type: reverse_lookup
+    args:
+      handle_ptr: true
+      redis: 'redis://127.0.0.1:6379/0'
+      ttl: 300
   - tag: query_has_response_in_cache
     type: cache
     args:
@@ -1385,13 +1391,7 @@ plugins:
       compress_resp: true
       lazy_cache_ttl: 259200
       lazy_cache_reply_ttl: 30
-      redis: 'redis://127.0.0.1:6379/0'
-  - tag: query_has_ptr_response_in_cache
-    type: reverse_lookup
-    args:
-      handle_ptr: true
       redis: 'redis://127.0.0.1:6379/1'
-      ttl: 300
   - tag: response_has_dns64_ip
     type: response_matcher
     args:
