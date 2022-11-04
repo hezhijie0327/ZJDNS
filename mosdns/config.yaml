@@ -1623,9 +1623,17 @@ plugins:
                 - _drop_response
           secondary:
             - primary:
-                - parallel:
-                    - - sequence_forward_query_to_local_no_ecs_onedns
-                    - - sequence_forward_query_to_local_no_ecs_tuna
+                - primary:
+                    - parallel:
+                        - - sequence_forward_query_to_local_no_ecs_onedns
+                    - if: '(! response_has_valid_rcode)'
+                      exec:
+                        - _drop_response
+                  secondary:
+                    - parallel:
+                        - - sequence_forward_query_to_local_no_ecs_tuna
+                  always_standby: true
+                  fast_fallback: 1250
                 - if: '(! response_has_local_ip) && [_response_valid_answer]'
                   exec:
                     - _drop_response
