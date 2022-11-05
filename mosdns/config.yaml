@@ -1337,7 +1337,7 @@ plugins:
     args:
       handle_ptr: true
       redis: 'redis://127.0.0.1:6379/0'
-      ttl: 300
+      ttl: 259200
   - tag: query_has_response_in_cache
     type: cache
     args:
