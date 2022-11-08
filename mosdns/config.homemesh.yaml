@@ -1354,6 +1354,8 @@ plugins:
     type: query_matcher
     args:
       domain:
+        - 'in-addr.arpa'
+        - 'ip6.arpa'
         - 'zhijie.online'
   - tag: query_has_ptr_response_in_cache
     type: reverse_lookup
