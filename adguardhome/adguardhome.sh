@@ -44,4 +44,3 @@ CleanupCurrentContainer
 CreateNewContainer
 # Call CleanupExpiredImage
 CleanupExpiredImage
-
