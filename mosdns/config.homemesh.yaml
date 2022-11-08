@@ -12,6 +12,8 @@ plugins:
           trusted: true
         - addr: 'udpme://192.168.32.1'
           trusted: true
+        - addr: 'udpme://192.168.236.227'
+          trusted: true
   - tag: forward_query_to_lan_dns_b
     type: fast_forward
     args:
@@ -20,6 +22,9 @@ plugins:
           enable_pipeline: false
           trusted: true
         - addr: 'tcp://192.168.32.1'
+          enable_pipeline: false
+          trusted: true
+        - addr: 'tcp://192.168.236.227'
           enable_pipeline: false
           trusted: true
   - tag: forward_query_to_local_ecs_360_doh_a
