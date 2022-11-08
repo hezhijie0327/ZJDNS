@@ -1392,7 +1392,7 @@ plugins:
     type: sequence
     args:
       exec:
-        - parallel:
+        - load_balance:
             - - forward_query_to_lan_dns_a
             - - forward_query_to_lan_dns_b
   - tag: sequence_forward_query_to_local_ecs_360
