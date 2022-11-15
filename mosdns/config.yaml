@@ -1344,7 +1344,7 @@ plugins:
       cache_everything: true
       compress_resp: true
       lazy_cache_reply_ttl: 30
-      lazy_cache_ttl: 86400
+      lazy_cache_ttl: 259200
       redis: 'redis://127.0.0.1:6379/1'
   - tag: response_has_dns64_ip
     type: response_matcher
@@ -1363,8 +1363,8 @@ plugins:
   - tag: rewrite_max_min_ttl
     type: ttl
     args:
-      maximum_ttl: 3600
-      minimal_ttl: 300
+      maximum_ttl: 86400
+      minimal_ttl: 0
   - tag: sequence_forward_query_to_local_ecs_360
     type: sequence
     args:
