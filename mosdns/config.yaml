@@ -1563,11 +1563,11 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_local_ecs_360
                         - - sequence_forward_query_to_local_ecs_alidns
+                    - if: '(! response_has_noerror_rcode)'
+                      exec:
+                        - _drop_response
                   always_standby: true
                   fast_fallback: 1250
-                - if: '(! response_has_noerror_rcode)'
-                  exec:
-                    - _drop_response
               secondary:
                 - primary:
                     - parallel:
@@ -1578,6 +1578,9 @@ plugins:
                   secondary:
                     - parallel:
                         - - sequence_forward_query_to_local_no_ecs_tuna
+                    - if: '(! response_has_noerror_rcode)'
+                      exec:
+                        - _drop_response
                   always_standby: true
                   fast_fallback: 1250
               always_standby: false
@@ -1598,23 +1601,23 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_remote_ecs_adguard
                         - - sequence_forward_query_to_remote_ecs_opendns
+                    - if: '(! response_has_noerror_rcode)'
+                      exec:
+                        - _drop_response
                   always_standby: true
                   fast_fallback: 1250
-                - if: '(! response_has_noerror_rcode)'
-                  exec:
-                    - _drop_response
               secondary:
                 - primary:
                     - parallel:
-                        - - sequence_forward_query_to_remote_no_ecs_cloudflare
-                        - - sequence_forward_query_to_remote_no_ecs_nextdns
+                        - - sequence_forward_query_to_remote_no_ecs_dnssb
+                        - - sequence_forward_query_to_remote_no_ecs_iij
                     - if: '(! response_has_noerror_rcode)'
                       exec:
                         - _drop_response
                   secondary:
                     - parallel:
-                        - - sequence_forward_query_to_remote_no_ecs_dnssb
-                        - - sequence_forward_query_to_remote_no_ecs_iij
+                        - - sequence_forward_query_to_remote_no_ecs_cloudflare
+                        - - sequence_forward_query_to_remote_no_ecs_nextdns
                   always_standby: true
                   fast_fallback: 1250
               always_standby: false
