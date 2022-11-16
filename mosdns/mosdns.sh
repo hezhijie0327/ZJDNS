@@ -42,7 +42,7 @@ function DownloadmosDNSConfiguration() {
         "        key: '/etc/mosdns/cert/${SSL_KEY}'"
     )
 
-    if [ "${USE_CDN}" == true ]; then
+    if [ "${USE_CDN}" == "true" ]; then
         CDN_PATH="source.zhijie.online"
     else
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
