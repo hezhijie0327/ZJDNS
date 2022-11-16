@@ -1356,7 +1356,7 @@ plugins:
     args:
       ip:
         - 'provider:data_provider_cnipdb:cn'
-  - tag: response_has_valid_rcode
+  - tag: response_has_noerror_rcode
     type: response_matcher
     args:
       rcode: [0]
@@ -1576,7 +1576,7 @@ plugins:
         - _enable_response_padding
         - _misc_optm
         - set_edns0_bufsize
-        - if: '(! query_has_invalid_ecs_ip) && [_query_edns0]'
+        - if: '(! query_has_invalid_ecs_ip)'
           exec:
             - set_edns0_client_subnet
           else_exec:
@@ -1590,7 +1590,7 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_local_ecs_cfiec
                         - - sequence_forward_query_to_local_ecs_dnspod
-                    - if: '(! response_has_valid_rcode)'
+                    - if: '(! response_has_noerror_rcode)'
                       exec:
                         - _drop_response
                   secondary:
@@ -1599,14 +1599,14 @@ plugins:
                         - - sequence_forward_query_to_local_ecs_alidns
                   always_standby: true
                   fast_fallback: 1250
-                - if: '(! response_has_valid_rcode)'
+                - if: '(! response_has_noerror_rcode)'
                   exec:
                     - _drop_response
               secondary:
                 - primary:
                     - parallel:
                         - - sequence_forward_query_to_local_no_ecs_onedns
-                    - if: '(! response_has_valid_rcode)'
+                    - if: '(! response_has_noerror_rcode)'
                       exec:
                         - _drop_response
                   secondary:
@@ -1616,7 +1616,7 @@ plugins:
                   fast_fallback: 1250
               always_standby: false
               fast_fallback: 2500
-            - if: '(! response_has_local_ip) && [_response_valid_answer]'
+            - if: '(! response_has_local_ip)'
               exec:
                 - _drop_response
           secondary:
@@ -1625,7 +1625,7 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_remote_ecs_google
                         - - sequence_forward_query_to_remote_ecs_quad9
-                    - if: '(! response_has_valid_rcode)'
+                    - if: '(! response_has_noerror_rcode)'
                       exec:
                         - _drop_response
                   secondary:
@@ -1634,7 +1634,7 @@ plugins:
                         - - sequence_forward_query_to_remote_ecs_opendns
                   always_standby: true
                   fast_fallback: 1250
-                - if: '(! response_has_valid_rcode)'
+                - if: '(! response_has_noerror_rcode)'
                   exec:
                     - _drop_response
               secondary:
@@ -1642,7 +1642,7 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_remote_no_ecs_cloudflare
                         - - sequence_forward_query_to_remote_no_ecs_nextdns
-                    - if: '(! response_has_valid_rcode)'
+                    - if: '(! response_has_noerror_rcode)'
                       exec:
                         - _drop_response
                   secondary:
