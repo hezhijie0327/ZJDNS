@@ -20,12 +20,10 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
-    if [ "${USE_CDN}" == true ]; then
-        CDN_PATH="source.zhijie.online"
-    else
-        CDN_PATH="raw.githubusercontent.com/hezhijie0327"
-    fi
-    ENABLE_HTTP3="false"
+    ENABLE_HTTP3_UPSTREAM="false"
+    ENABLE_PROXY_UPSTREAM="false"
+    ENABLE_REDIS_CACHE="false"
+
     ENABLE_HTTPS="false"
     ENABLE_TLS="false"
     SSL_CERT="fullchain.cer"
@@ -43,9 +41,21 @@ function DownloadmosDNSConfiguration() {
         "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
         "        key: '/etc/mosdns/cert/${SSL_KEY}'"
     )
-    curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
-    if [ "${ENABLE_HTTP3}" == "true" ]; then
-        sed -i "s/\#//g" "${DOCKER_PATH}/conf/config.yaml"
+
+    if [ "${USE_CDN}" == true ]; then
+        CDN_PATH="source.zhijie.online"
+    else
+        CDN_PATH="raw.githubusercontent.com/hezhijie0327"
+    fi && curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
+
+    if [ "${ENABLE_HTTP3_UPSTREAM}" == "true" ]; then
+        sed -i "s/\#\#/\ \ /g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${ENABLE_PROXY_UPSTREAM}" == "true" ]; then
+        sed -i "s/\#\@/\ \ /g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${ENABLE_REDIS_CACHE}" == "true" ]; then
+        sed -i "s/\#\*/\ \ /g;s/\ \ \ \ \ \ size/\#\*\ \ \ \ size/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_HTTPS}" == "true" ]; then
         for HTTPS_CONFIG_TASK in "${!HTTPS_CONFIG[@]}"; do
