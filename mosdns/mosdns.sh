@@ -27,6 +27,7 @@ function DownloadmosDNSConfiguration() {
 
     ENABLE_HTTPS="false"
     ENABLE_TLS="false"
+    ENABLE_UNENCRYPTED_DNS="true"
     SSL_CERT="fullchain.cer"
     SSL_KEY="zhijie.online.key"
     HTTPS_CONFIG=(
@@ -60,6 +61,13 @@ function DownloadmosDNSConfiguration() {
     fi
     if [ "${ENABLE_REDIS_CACHE}" == "true" ]; then
         sed -i "s/\#\*/\ \ /g;s/\ \ \ \ \ \ size/\#\*\ \ \ \ size/g;s/\#\*\ \ \ \ size\:\ 1232/\ \ \ \ \ \ size\:\ 1232/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
+        if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_TLS}" == "true" ]; then
+            for i in $(seq 1 4); do
+                sed -i '$d' "${DOCKER_PATH}/conf/config.yaml"
+            done
+        fi
     fi
     if [ "${ENABLE_HTTPS}" == "true" ]; then
         for HTTPS_CONFIG_TASK in "${!HTTPS_CONFIG[@]}"; do
