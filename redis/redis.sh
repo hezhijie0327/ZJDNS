@@ -5,6 +5,7 @@ OWNER="library"
 REPO="redis"
 TAG="latest"
 DOCKER_PATH="/docker/redis"
+REDIS_MAXMEMORY="64MB"
 
 ## Function
 # Get Latest Image
@@ -28,7 +29,7 @@ function CreateNewContainer() {
         --lazyfree-lazy-eviction yes \
         --lazyfree-lazy-expire yes \
         --lazyfree-lazy-server-del yes \
-        --maxmemory 64MB \
+        --maxmemory ${REDIS_MAXMEMORY} \
         --maxmemory-policy allkeys-lru \
         --maxmemory-samples 10
 }
