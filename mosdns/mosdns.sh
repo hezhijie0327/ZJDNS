@@ -49,7 +49,7 @@ function DownloadmosDNSConfiguration() {
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
     fi && curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 
-    if [ "${ENABLE_ECS}" == "true" ]; then
+    if [ "${ENABLE_ECS}" == "false" ]; then
         sed -i "s/\#\%/\ \ /g;s/\ \ \ \ \ \ \ \ \-\ set\_edns0\_client\_subnet/\#\%\ \ \ \ \ \ \-\ set\_edns0\_client\_subnet/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_HTTP3_UPSTREAM}" == "true" ]; then
