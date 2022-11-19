@@ -1345,7 +1345,7 @@ plugins:
             - _drop_response
         - if: '[_qtype_A_AAAA]'
           exec:
-            - if: '(! response_has_valid_ip) || (response_has_dns64_ip)'
+            - if: '(! response_has_valid_ip)'
               exec:
                 - _drop_response
   - tag: rewrite_max_min_ttl
@@ -1454,6 +1454,9 @@ plugins:
             - - forward_query_to_remote_ecs_google_dot_d
             - - forward_query_to_remote_ecs_google_dot_e
             - - forward_query_to_remote_ecs_google_dot_f
+        - if: '(response_has_dns64_ip)'
+          exec:
+            - _drop_response
   - tag: sequence_forward_query_to_remote_ecs_opendns
     type: sequence
     args:
@@ -1497,6 +1500,9 @@ plugins:
             - - forward_query_to_remote_no_ecs_cloudflare_dot_d
             - - forward_query_to_remote_no_ecs_cloudflare_dot_e
             - - forward_query_to_remote_no_ecs_cloudflare_dot_f
+        - if: '(response_has_dns64_ip)'
+          exec:
+            - _drop_response
   - tag: sequence_forward_query_to_remote_no_ecs_dnssb
     type: sequence
     args:
