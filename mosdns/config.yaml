@@ -882,11 +882,11 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'tls://cloudflare-dns.com'
+        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '1.0.0.1:853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://cloudflare-dns.com'
+#@      - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
 #@        dial_addr: '1.0.0.1:853'
 #@        enable_pipeline: true
 #@        socks5: '127.0.0.1:7890'
@@ -895,11 +895,11 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'tls://cloudflare-dns.com'
+        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '1.1.1.1:853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://cloudflare-dns.com'
+#@      - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
 #@        dial_addr: '1.1.1.1:853'
 #@        enable_pipeline: true
 #@        socks5: '127.0.0.1:7890'
@@ -908,11 +908,11 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'tls://cloudflare-dns.com'
+        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '[2606:4700:4700::1001]:853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://cloudflare-dns.com'
+#@      - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
 #@        dial_addr: '[2606:4700:4700::1001]:853'
 #@        enable_pipeline: true
 #@        socks5: '127.0.0.1:7890'
@@ -921,11 +921,11 @@ plugins:
     type: fast_forward
     args:
       upstream:
-        - addr: 'tls://cloudflare-dns.com'
+        - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '[2606:4700:4700::1111]:853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://cloudflare-dns.com'
+#@      - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
 #@        dial_addr: '[2606:4700:4700::1111]:853'
 #@        enable_pipeline: true
 #@        socks5: '127.0.0.1:7890'
