@@ -1326,13 +1326,28 @@ plugins:
     args:
       ip:
         - 'provider:data_provider_cnipdb:cn'
-  - tag: response_has_valid_answer
+  - tag: response_has_valid_ip
     type: response_matcher
     args:
       ip:
         - '0.0.0.0/0'
         - '::/0'
+  - tag: response_has_valid_rcode
+    type: response_matcher
+    args:
       rcode: [0]
+  - tag: response_has_valid_answer
+    type: sequence
+    args:
+      exec:
+        - if: '(! response_has_valid_rcode)'
+          exec:
+            - _drop_response
+        - if: '[_qtype_A_AAAA]'
+          exec:
+            - if: '(! response_has_valid_ip) || (response_has_dns64_ip)'
+              exec:
+                - _drop_response
   - tag: rewrite_max_min_ttl
     type: ttl
     args:
@@ -1439,9 +1454,6 @@ plugins:
             - - forward_query_to_remote_ecs_google_dot_d
             - - forward_query_to_remote_ecs_google_dot_e
             - - forward_query_to_remote_ecs_google_dot_f
-        - if: '(response_has_dns64_ip)'
-          exec:
-            - _drop_response
   - tag: sequence_forward_query_to_remote_ecs_opendns
     type: sequence
     args:
@@ -1485,9 +1497,6 @@ plugins:
             - - forward_query_to_remote_no_ecs_cloudflare_dot_d
             - - forward_query_to_remote_no_ecs_cloudflare_dot_e
             - - forward_query_to_remote_no_ecs_cloudflare_dot_f
-        - if: '(response_has_dns64_ip)'
-          exec:
-            - _drop_response
   - tag: sequence_forward_query_to_remote_no_ecs_dnssb
     type: sequence
     args:
@@ -1560,31 +1569,23 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_local_ecs_cfiec
                         - - sequence_forward_query_to_local_ecs_dnspod
-                    - if: '(! response_has_valid_answer)'
-                      exec:
-                        - _drop_response
+                    - response_has_valid_answer
                   secondary:
                     - parallel:
                         - - sequence_forward_query_to_local_ecs_360
                         - - sequence_forward_query_to_local_ecs_alidns
-                    - if: '(! response_has_valid_answer)'
-                      exec:
-                        - _drop_response
+                    - response_has_valid_answer
                   always_standby: true
                   fast_fallback: 1250
               secondary:
                 - primary:
                     - parallel:
                         - - sequence_forward_query_to_local_no_ecs_onedns
-                    - if: '(! response_has_valid_answer)'
-                      exec:
-                        - _drop_response
+                    - response_has_valid_answer
                   secondary:
                     - parallel:
                         - - sequence_forward_query_to_local_no_ecs_tuna
-                    - if: '(! response_has_valid_answer)'
-                      exec:
-                        - _drop_response
+                    - response_has_valid_answer
                   always_standby: true
                   fast_fallback: 1250
               always_standby: false
@@ -1598,16 +1599,12 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_remote_ecs_google
                         - - sequence_forward_query_to_remote_ecs_quad9
-                    - if: '(! response_has_valid_answer)'
-                      exec:
-                        - _drop_response
+                    - response_has_valid_answer
                   secondary:
                     - parallel:
                         - - sequence_forward_query_to_remote_ecs_adguard
                         - - sequence_forward_query_to_remote_ecs_opendns
-                    - if: '(! response_has_valid_answer)'
-                      exec:
-                        - _drop_response
+                    - response_has_valid_answer
                   always_standby: true
                   fast_fallback: 1250
               secondary:
@@ -1615,9 +1612,7 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_remote_no_ecs_dnssb
                         - - sequence_forward_query_to_remote_no_ecs_iij
-                    - if: '(! response_has_valid_answer)'
-                      exec:
-                        - _drop_response
+                    - response_has_valid_answer
                   secondary:
                     - parallel:
                         - - sequence_forward_query_to_remote_no_ecs_cloudflare
