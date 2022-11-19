@@ -1596,7 +1596,7 @@ plugins:
                   fast_fallback: 1250
               always_standby: false
               fast_fallback: 2500
-            - if: '(! response_has_local_ip)'
+            - if: '(! response_has_local_ip) && [_qtype_A_AAAA]'
               exec:
                 - _drop_response
           secondary:
