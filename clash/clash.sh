@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Parameter
-OWNER="hezhijie"
+OWNER="hezhijie0327"
 REPO="clash"
 TAG="latest"
 DOCKER_PATH="/docker/clash"
