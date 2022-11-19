@@ -3,10 +3,9 @@ log-level: error
 mixed-port: 7890
 ipv6: true
 mode: rule
-proxies:
 proxy-groups:
+proxy-providers:
 rules:
-  - GEOIP,CN,DIRECT
   - IP-CIDR,0.0.0.0/8,DIRECT
   - IP-CIDR,10.0.0.0/8,DIRECT
   - IP-CIDR,100.64.0.0/10,DIRECT
@@ -35,4 +34,5 @@ rules:
   - IP-CIDR6,fc00::/7,DIRECT
   - IP-CIDR6,fe80::/10,DIRECT
   - IP-CIDR6,ff00::/8,DIRECT
+  - GEOIP,CN,DIRECT
   - MATCH,PROXY
