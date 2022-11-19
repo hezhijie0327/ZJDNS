@@ -1442,7 +1442,6 @@ plugins:
             - - forward_query_to_remote_ecs_google_dot_d
             - - forward_query_to_remote_ecs_google_dot_e
             - - forward_query_to_remote_ecs_google_dot_f
-        - verify_response_has_dns64_ip
   - tag: sequence_forward_query_to_remote_ecs_opendns
     type: sequence
     args:
@@ -1486,7 +1485,6 @@ plugins:
             - - forward_query_to_remote_no_ecs_cloudflare_dot_d
             - - forward_query_to_remote_no_ecs_cloudflare_dot_e
             - - forward_query_to_remote_no_ecs_cloudflare_dot_f
-        - verify_response_has_dns64_ip
   - tag: sequence_forward_query_to_remote_no_ecs_dnssb
     type: sequence
     args:
@@ -1610,6 +1608,7 @@ plugins:
                 - primary:
                     - parallel:
                         - - sequence_forward_query_to_remote_ecs_google
+                          - verify_response_has_dns64_ip
                         - - sequence_forward_query_to_remote_ecs_quad9
                     - verify_response_has_valid_answer
                   secondary:
@@ -1628,6 +1627,7 @@ plugins:
                   secondary:
                     - parallel:
                         - - sequence_forward_query_to_remote_no_ecs_cloudflare
+                          - verify_response_has_dns64_ip
                         - - sequence_forward_query_to_remote_no_ecs_nextdns
                   always_standby: true
                   fast_fallback: 1250
