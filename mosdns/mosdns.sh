@@ -106,12 +106,12 @@ function CleanupExpiredImage() {
 ## Process
 # Call GetLatestImage
 GetLatestImage
+# Call CleanupCurrentContainer
+CleanupCurrentContainer
 # Call DownloadmosDNSConfiguration
 DownloadmosDNSConfiguration
 # Call UpdateGeoIPRule
 UpdateGeoIPCNRule
-# Call CleanupCurrentContainer
-CleanupCurrentContainer
 # Call CreateNewContainer
 CreateNewContainer
 # Call CleanupExpiredImage
