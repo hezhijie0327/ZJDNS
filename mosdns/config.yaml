@@ -1300,22 +1300,15 @@ plugins:
 #@        enable_pipeline: true
 #@        socks5: '127.0.0.1:7890'
 #@        trusted: true
-  - tag: query_has_ptr_response_in_cache
-    type: reverse_lookup
-    args:
-      handle_ptr: true
-#*    redis: 'redis://127.0.0.1:6379/0'
-      size: 16384
-      ttl: 3600
   - tag: query_has_response_in_cache
     type: cache
     args:
       cache_everything: true
       compress_resp: true
       lazy_cache_reply_ttl: 30
-      lazy_cache_ttl: 259200
-#*    redis: 'redis://127.0.0.1:6379/1'
-      size: 49152
+      lazy_cache_ttl: 86400
+#*    redis: 'redis://127.0.0.1:6379/0'
+      size: 65536
   - tag: response_has_dns64_ip
     type: response_matcher
     args:
@@ -1573,7 +1566,6 @@ plugins:
         - set_edns0_bufsize
         - set_edns0_client_subnet
         - _pad_query
-        - query_has_ptr_response_in_cache
         - query_has_response_in_cache
         - primary:
             - primary:
