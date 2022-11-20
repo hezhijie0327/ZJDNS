@@ -60,7 +60,7 @@ function DownloadmosDNSConfiguration() {
         sed -i "s/\#\@/\ \ /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_REDIS_CACHE}" == "true" ]; then
-        sed -i "s/\#\*/\ \ /g;s/\ \ \ \ \ \ size/\#\*\ \ \ \ size/g;s/\#\*\ \ \ \ size\:\ 1232/\ \ \ \ \ \ size\:\ 1232/g" "${DOCKER_PATH}/conf/config.yaml"
+        sed -i "s/\#\*/\ \ /g;s/\ \ \ \ \ \ size/\#\*\ \ \ \ size/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
         if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_TLS}" == "true" ]; then
