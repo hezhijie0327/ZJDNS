@@ -1521,10 +1521,6 @@ plugins:
             - - forward_query_to_remote_no_ecs_nextdns_dot_b
             - - forward_query_to_remote_no_ecs_nextdns_dot_c
             - - forward_query_to_remote_no_ecs_nextdns_dot_d
-  - tag: set_edns0_bufsize
-    type: bufsize
-    args:
-      size: 1232
   - tag: set_edns0_client_subnet
     type: ecs
     args:
@@ -1563,7 +1559,6 @@ plugins:
         - _enable_response_padding
         - _misc_optm
 #%      - _no_ecs
-        - set_edns0_bufsize
         - set_edns0_client_subnet
         - _pad_query
         - query_has_response_in_cache
