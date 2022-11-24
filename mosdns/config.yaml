@@ -1300,15 +1300,6 @@ plugins:
 #@        enable_pipeline: true
 #@        socks5: '127.0.0.1:7890'
 #@        trusted: true
-  - tag: query_has_response_in_cache
-    type: cache
-    args:
-      cache_everything: true
-      compress_resp: true
-      lazy_cache_reply_ttl: 30
-      lazy_cache_ttl: 86400
-#*    redis: 'redis://127.0.0.1:6379/0'
-      size: 65536
   - tag: response_has_dns64_ip
     type: response_matcher
     args:
@@ -1527,6 +1518,15 @@ plugins:
       auto: true
       mask4: 24
       mask6: 56
+  - tag: store_fetch_result_to_from_cache
+    type: cache
+    args:
+      cache_everything: true
+      compress_resp: true
+      lazy_cache_reply_ttl: 30
+      lazy_cache_ttl: 86400
+#*    redis: 'redis://127.0.0.1:6379/0'
+      size: 65536
   - tag: verify_response_has_dns64_ip
     type: sequence
     args:
@@ -1561,7 +1561,7 @@ plugins:
 #%      - _no_ecs
         - set_edns0_client_subnet
         - _pad_query
-        - query_has_response_in_cache
+        - store_fetch_result_to_from_cache
         - primary:
             - primary:
                 - primary:
