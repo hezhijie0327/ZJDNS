@@ -23,6 +23,7 @@ function DownloadmosDNSConfiguration() {
     ENABLE_ECS="true"
     ENABLE_HTTP3_UPSTREAM="false"
     ENABLE_PROXY_UPSTREAM="false"
+    ENABLE_CACHE="true"
     ENABLE_REDIS_CACHE="false"
 
     ENABLE_HTTPS="false"
@@ -58,6 +59,9 @@ function DownloadmosDNSConfiguration() {
     fi
     if [ "${ENABLE_PROXY_UPSTREAM}" == "true" ]; then
         sed -i "s/\#\@/\ \ /g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${ENABLE_CACHE}" == "true" ]; then
+        sed -i "s/\#\&/\ \ /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_REDIS_CACHE}" == "true" ]; then
         sed -i "s/\#\*/\ \ /g;s/\ \ \ \ \ \ size/\#\*\ \ \ \ size/g" "${DOCKER_PATH}/conf/config.yaml"
