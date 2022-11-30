@@ -1561,7 +1561,7 @@ plugins:
 #%      - _no_ecs
         - set_edns0_client_subnet
         - _pad_query
-        - store_fetch_result_to_from_cache
+#&      - store_fetch_result_to_from_cache
         - primary:
             - primary:
                 - primary:
