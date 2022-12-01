@@ -20,9 +20,15 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
-    ENABLE_ECS="true"
     ENABLE_HTTP3_UPSTREAM="false"
     ENABLE_PROXY_UPSTREAM="false"
+
+    ENABLE_ECS="true"
+    FORCE_ECS_AUTO="true"
+    FORCE_ECS_IPV4="119.29.29.29"
+    FORCE_ECS_IPV6="2402:4e00::"
+    FORCE_ECS_OVERWRITE="false"
+
     ENABLE_CACHE="true"
     ENABLE_REDIS_CACHE="false"
 
@@ -51,21 +57,36 @@ function DownloadmosDNSConfiguration() {
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
     fi && curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 
-    if [ "${ENABLE_ECS}" == "false" ]; then
-        sed -i "s/\#\%/\ \ /g;s/\ \ \ \ \ \ \ \ \-\ set\_edns0\_client\_subnet/\#\%\ \ \ \ \ \ \-\ set\_edns0\_client\_subnet/g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
     if [ "${ENABLE_HTTP3_UPSTREAM}" == "true" ]; then
         sed -i "s/\#\#/\ \ /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_PROXY_UPSTREAM}" == "true" ]; then
         sed -i "s/\#\@/\ \ /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
+
+    if [ "${ENABLE_ECS}" == "false" ]; then
+        sed -i "s/\#\%/\ \ /g;s/\ \ \ \ \ \ \ \ \-\ set\_edns0\_client\_subnet/\#\%\ \ \ \ \ \ \-\ set\_edns0\_client\_subnet/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${FORCE_ECS_AUTO}" == "false" ]; then
+        sed -i "s/\#\+/\ \ /g;s/auto\:\ true/auto\:\ false/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${FORCE_ECS_IPV4}" != "" ]; then
+        sed -i "s/119.29.29.29/${FORCE_ECS_IPV4}/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${FORCE_ECS_IPV6}" != "" ]; then
+        sed -i "s/2402:4e00::/${FORCE_ECS_IPV6}/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${FORCE_ECS_OVERWRITE}" == "true" ]; then
+        sed -i "s/force\_overwrite\:\ false/force\_overwrite\:\ true/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+
     if [ "${ENABLE_CACHE}" == "true" ]; then
         sed -i "s/\#\&/\ \ /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_REDIS_CACHE}" == "true" ]; then
         sed -i "s/\#\*/\ \ /g;s/\ \ \ \ \ \ size/\#\*\ \ \ \ size/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
+
     if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
         if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_TLS}" == "true" ]; then
             for i in $(seq 1 4); do
