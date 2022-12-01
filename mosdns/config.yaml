@@ -1517,8 +1517,8 @@ plugins:
     args:
       auto: true
 #+    force_overwrite: false
-#+    ipv4: "119.29.29.29"
-#+    ipv6: "2402:4e00::"
+#+    ipv4: '255.255.255.255'
+#+    ipv6: 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'
       mask4: 24
       mask6: 56
   - tag: store_fetch_result_to_from_cache
