@@ -1516,6 +1516,9 @@ plugins:
     type: ecs
     args:
       auto: true
+#+    force_overwrite: false
+#+    ipv4: "119.29.29.29"
+#+    ipv6: "2402:4e00::"
       mask4: 24
       mask6: 56
   - tag: store_fetch_result_to_from_cache
