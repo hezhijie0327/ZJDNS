@@ -71,10 +71,10 @@ function DownloadmosDNSConfiguration() {
         sed -i "s/#+/  /g;s/auto: true/auto: false/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${FORCE_ECS_IPV4}" != "" ]; then
-        sed -i "s/119.29.29.29/${FORCE_ECS_IPV4}/g" "${DOCKER_PATH}/conf/config.yaml"
+        sed -i "s/255.255.255.255/${FORCE_ECS_IPV4}/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${FORCE_ECS_IPV6}" != "" ]; then
-        sed -i "s/2402:4e00::/${FORCE_ECS_IPV6}/g" "${DOCKER_PATH}/conf/config.yaml"
+        sed -i "s/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/${FORCE_ECS_IPV6}/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${FORCE_ECS_OVERWRITE}" == "true" ]; then
         sed -i "s/force_overwrite: false/force_overwrite: true/g" "${DOCKER_PATH}/conf/config.yaml"
