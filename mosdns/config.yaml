@@ -1590,7 +1590,7 @@ plugins:
                     - verify_response_has_valid_answer
                   always_standby: true
                   fast_fallback: 1250
-              always_standby: true
+              always_standby: false
               fast_fallback: 2500
             - verify_response_has_local_ip
           secondary:
@@ -1621,7 +1621,7 @@ plugins:
                         - - sequence_forward_query_to_remote_no_ecs_nextdns
                   always_standby: true
                   fast_fallback: 1250
-              always_standby: true
+              always_standby: false
               fast_fallback: 2500
           always_standby: true
           fast_fallback: 3750
