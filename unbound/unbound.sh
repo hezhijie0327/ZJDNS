@@ -20,7 +20,7 @@ function CleanupCurrentContainer() {
 }
 # Download Unbound Configuration
 function DownloadUnboundConfiguration() {
-    ENABLE_DNSSEC="false"
+    ENABLE_DNSSEC="true"
 
     ENABLE_LOGFILE="false"
 
