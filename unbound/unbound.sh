@@ -22,6 +22,10 @@ function CleanupCurrentContainer() {
 function DownloadUnboundConfiguration() {
     ENABLE_LOGFILE="false"
 
+    ENABLE_RATELIMIT="false"
+
+    ENABLE_TLS_UPSTREAM="false"
+
     ENABLE_HTTPS="false"
     ENABLE_TLS="false"
     SSL_CERT="fullchain.cer"
@@ -35,6 +39,14 @@ function DownloadUnboundConfiguration() {
 
     if [ "${ENABLE_LOGFILE}" == "true" ]; then
         sed -i "s/##/  /g" "${DOCKER_PATH}/data/unbound.conf"
+    fi
+
+    if [ "${ENABLE_RATELIMIT}" == "false" ]; then
+        sed -i "s/ratelimit\: 1000/ratelimit\: 0/g" "${DOCKER_PATH}/data/unbound.conf"
+    fi
+
+    if [ "${ENABLE_TLS_UPSTREAM}" == "true" ]; then
+        sed -i "s/@5533/@5553/g;s/forward-tcp-upstream\: yes/forward-tcp-upstream\: no/g;s/forward-tls-upstream\: no/forward-tls-upstream\: yes/g" "${DOCKER_PATH}/data/unbound.conf"
     fi
 
     if [ "${ENABLE_HTTPS}" == "true" ]; then
