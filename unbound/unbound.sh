@@ -58,9 +58,9 @@ function DownloadUnboundConfiguration() {
 
     if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
         if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_TLS}" == "true" ]; then
-            sed -i "s/    interface\: 0.0.0.0@5335/#+  interface\: 0.0.0.0@5335/g;s/    interface\: \:\:@5335/#+  interface\: \:\:@5335/g" "${DOCKER_PATH}/data/unbound.conf"
+            sed -i "s/    interface/#+  interface/g" "${DOCKER_PATH}/data/unbound.conf"
         fi
-    if
+    fi
 
     if [ "${ENABLE_HTTPS}" == "true" ]; then
         sed -i "s/#@/  /g" "${DOCKER_PATH}/data/unbound.conf"
