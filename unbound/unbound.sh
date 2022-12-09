@@ -22,6 +22,7 @@ function CleanupCurrentContainer() {
 function DownloadUnboundConfiguration() {
     ENABLE_DNSSEC="false"
     ENABLE_ECS="true"
+    ENABLE_REDIS_CACHE="false"
 
     ENABLE_LOGFILE="false"
 
@@ -44,9 +45,11 @@ function DownloadUnboundConfiguration() {
     if [ "${ENABLE_DNSSEC}" == "false" ]; then
         sed -i "s/validator //g" "${DOCKER_PATH}/data/unbound.conf"
     fi
-
     if [ "${ENABLE_ECS}" == "false" ]; then
         sed -i "s/subnetcache //g" "${DOCKER_PATH}/data/unbound.conf"
+    fi
+    if [ "${ENABLE_REDIS_CACHE}" == "false" ]; then
+        sed -i "s/cachedb //g" "${DOCKER_PATH}/data/unbound.conf"
     fi
 
     if [ "${ENABLE_LOGFILE}" == "true" ]; then
