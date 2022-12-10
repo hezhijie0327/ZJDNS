@@ -1345,21 +1345,21 @@ plugins:
         - load_balance:
             - - forward_query_to_local_ecs_alidns_doh_a
             - - forward_query_to_local_ecs_alidns_doh_b
-            - - forward_query_to_local_ecs_alidns_doh_c
-            - - forward_query_to_local_ecs_alidns_doh_d
+#-          - - forward_query_to_local_ecs_alidns_doh_c
+#-          - - forward_query_to_local_ecs_alidns_doh_d
             - - forward_query_to_local_ecs_alidns_dot_a
             - - forward_query_to_local_ecs_alidns_dot_b
-            - - forward_query_to_local_ecs_alidns_dot_c
-            - - forward_query_to_local_ecs_alidns_dot_d
+#-          - - forward_query_to_local_ecs_alidns_dot_c
+#-          - - forward_query_to_local_ecs_alidns_dot_d
   - tag: sequence_forward_query_to_local_ecs_cfiec
     type: sequence
     args:
       exec:
         - load_balance:
             - - forward_query_to_local_ecs_cfiec_doh_a
-            - - forward_query_to_local_ecs_cfiec_doh_b
+#-          - - forward_query_to_local_ecs_cfiec_doh_b
             - - forward_query_to_local_ecs_cfiec_dot_a
-            - - forward_query_to_local_ecs_cfiec_dot_b
+#-          - - forward_query_to_local_ecs_cfiec_dot_b
   - tag: sequence_forward_query_to_local_ecs_dnspod
     type: sequence
     args:
@@ -1383,9 +1383,9 @@ plugins:
       exec:
         - load_balance:
             - - forward_query_to_local_no_ecs_tuna_doh_a
-            - - forward_query_to_local_no_ecs_tuna_doh_b
+#-          - - forward_query_to_local_no_ecs_tuna_doh_b
             - - forward_query_to_local_no_ecs_tuna_dot_a
-            - - forward_query_to_local_no_ecs_tuna_dot_b
+#-          - - forward_query_to_local_no_ecs_tuna_dot_b
   - tag: sequence_forward_query_to_remote_ecs_adguard
     type: sequence
     args:
@@ -1393,16 +1393,16 @@ plugins:
         - load_balance:
 ##          - - forward_query_to_remote_ecs_adguard_doh3_a
 ##          - - forward_query_to_remote_ecs_adguard_doh3_b
-##          - - forward_query_to_remote_ecs_adguard_doh3_c
-##          - - forward_query_to_remote_ecs_adguard_doh3_d
+###-        - - forward_query_to_remote_ecs_adguard_doh3_c
+###-        - - forward_query_to_remote_ecs_adguard_doh3_d
             - - forward_query_to_remote_ecs_adguard_doh_a
             - - forward_query_to_remote_ecs_adguard_doh_b
-            - - forward_query_to_remote_ecs_adguard_doh_c
-            - - forward_query_to_remote_ecs_adguard_doh_d
+#-          - - forward_query_to_remote_ecs_adguard_doh_c
+#-          - - forward_query_to_remote_ecs_adguard_doh_d
             - - forward_query_to_remote_ecs_adguard_dot_a
             - - forward_query_to_remote_ecs_adguard_dot_b
-            - - forward_query_to_remote_ecs_adguard_dot_c
-            - - forward_query_to_remote_ecs_adguard_dot_d
+#-          - - forward_query_to_remote_ecs_adguard_dot_c
+#-          - - forward_query_to_remote_ecs_adguard_dot_d
   - tag: sequence_forward_query_to_remote_ecs_google
     type: sequence
     args:
@@ -1410,22 +1410,22 @@ plugins:
         - load_balance:
 ##          - - forward_query_to_remote_ecs_google_doh3_a
 ##          - - forward_query_to_remote_ecs_google_doh3_b
-##          - - forward_query_to_remote_ecs_google_doh3_c
-##          - - forward_query_to_remote_ecs_google_doh3_d
-##          - - forward_query_to_remote_ecs_google_doh3_e
-##          - - forward_query_to_remote_ecs_google_doh3_f
+###-        - - forward_query_to_remote_ecs_google_doh3_c
+###-        - - forward_query_to_remote_ecs_google_doh3_d
+###-        - - forward_query_to_remote_ecs_google_doh3_e
+###-        - - forward_query_to_remote_ecs_google_doh3_f
             - - forward_query_to_remote_ecs_google_doh_a
             - - forward_query_to_remote_ecs_google_doh_b
-            - - forward_query_to_remote_ecs_google_doh_c
-            - - forward_query_to_remote_ecs_google_doh_d
-            - - forward_query_to_remote_ecs_google_doh_e
-            - - forward_query_to_remote_ecs_google_doh_f
+#-          - - forward_query_to_remote_ecs_google_doh_c
+#-          - - forward_query_to_remote_ecs_google_doh_d
+#-          - - forward_query_to_remote_ecs_google_doh_e
+#-          - - forward_query_to_remote_ecs_google_doh_f
             - - forward_query_to_remote_ecs_google_dot_a
             - - forward_query_to_remote_ecs_google_dot_b
-            - - forward_query_to_remote_ecs_google_dot_c
-            - - forward_query_to_remote_ecs_google_dot_d
-            - - forward_query_to_remote_ecs_google_dot_e
-            - - forward_query_to_remote_ecs_google_dot_f
+#-          - - forward_query_to_remote_ecs_google_dot_c
+#-          - - forward_query_to_remote_ecs_google_dot_d
+#-          - - forward_query_to_remote_ecs_google_dot_e
+#-          - - forward_query_to_remote_ecs_google_dot_f
   - tag: sequence_forward_query_to_remote_ecs_opendns
     type: sequence
     args:
@@ -1433,12 +1433,12 @@ plugins:
         - load_balance:
             - - forward_query_to_remote_ecs_opendns_doh_a
             - - forward_query_to_remote_ecs_opendns_doh_b
-            - - forward_query_to_remote_ecs_opendns_doh_c
-            - - forward_query_to_remote_ecs_opendns_doh_d
+#-          - - forward_query_to_remote_ecs_opendns_doh_c
+#-          - - forward_query_to_remote_ecs_opendns_doh_d
             - - forward_query_to_remote_ecs_opendns_dot_a
             - - forward_query_to_remote_ecs_opendns_dot_b
-            - - forward_query_to_remote_ecs_opendns_dot_c
-            - - forward_query_to_remote_ecs_opendns_dot_d
+#-          - - forward_query_to_remote_ecs_opendns_dot_c
+#-          - - forward_query_to_remote_ecs_opendns_dot_d
   - tag: sequence_forward_query_to_remote_ecs_quad9
     type: sequence
     args:
@@ -1446,12 +1446,12 @@ plugins:
         - load_balance:
             - - forward_query_to_remote_ecs_quad9_doh_a
             - - forward_query_to_remote_ecs_quad9_doh_b
-            - - forward_query_to_remote_ecs_quad9_doh_c
-            - - forward_query_to_remote_ecs_quad9_doh_d
+#-          - - forward_query_to_remote_ecs_quad9_doh_c
+#-          - - forward_query_to_remote_ecs_quad9_doh_d
             - - forward_query_to_remote_ecs_quad9_dot_a
             - - forward_query_to_remote_ecs_quad9_dot_b
-            - - forward_query_to_remote_ecs_quad9_dot_c
-            - - forward_query_to_remote_ecs_quad9_dot_d
+#-          - - forward_query_to_remote_ecs_quad9_dot_c
+#-          - - forward_query_to_remote_ecs_quad9_dot_d
   - tag: sequence_forward_query_to_remote_no_ecs_cloudflare
     type: sequence
     args:
@@ -1459,16 +1459,16 @@ plugins:
         - load_balance:
             - - forward_query_to_remote_no_ecs_cloudflare_doh_a
             - - forward_query_to_remote_no_ecs_cloudflare_doh_b
-            - - forward_query_to_remote_no_ecs_cloudflare_doh_c
-            - - forward_query_to_remote_no_ecs_cloudflare_doh_d
-            - - forward_query_to_remote_no_ecs_cloudflare_doh_e
-            - - forward_query_to_remote_no_ecs_cloudflare_doh_f
+#-          - - forward_query_to_remote_no_ecs_cloudflare_doh_c
+#-          - - forward_query_to_remote_no_ecs_cloudflare_doh_d
+#-          - - forward_query_to_remote_no_ecs_cloudflare_doh_e
+#-          - - forward_query_to_remote_no_ecs_cloudflare_doh_f
             - - forward_query_to_remote_no_ecs_cloudflare_dot_a
             - - forward_query_to_remote_no_ecs_cloudflare_dot_b
-            - - forward_query_to_remote_no_ecs_cloudflare_dot_c
-            - - forward_query_to_remote_no_ecs_cloudflare_dot_d
-            - - forward_query_to_remote_no_ecs_cloudflare_dot_e
-            - - forward_query_to_remote_no_ecs_cloudflare_dot_f
+#-          - - forward_query_to_remote_no_ecs_cloudflare_dot_c
+#-          - - forward_query_to_remote_no_ecs_cloudflare_dot_d
+#-          - - forward_query_to_remote_no_ecs_cloudflare_dot_e
+#-          - - forward_query_to_remote_no_ecs_cloudflare_dot_f
   - tag: sequence_forward_query_to_remote_no_ecs_dnssb
     type: sequence
     args:
@@ -1476,12 +1476,12 @@ plugins:
         - load_balance:
             - - forward_query_to_remote_no_ecs_dnssb_doh_a
             - - forward_query_to_remote_no_ecs_dnssb_doh_b
-            - - forward_query_to_remote_no_ecs_dnssb_doh_c
-            - - forward_query_to_remote_no_ecs_dnssb_doh_d
+#-          - - forward_query_to_remote_no_ecs_dnssb_doh_c
+#-          - - forward_query_to_remote_no_ecs_dnssb_doh_d
             - - forward_query_to_remote_no_ecs_dnssb_dot_a
             - - forward_query_to_remote_no_ecs_dnssb_dot_b
-            - - forward_query_to_remote_no_ecs_dnssb_dot_c
-            - - forward_query_to_remote_no_ecs_dnssb_dot_d
+#-          - - forward_query_to_remote_no_ecs_dnssb_dot_c
+#-          - - forward_query_to_remote_no_ecs_dnssb_dot_d
   - tag: sequence_forward_query_to_remote_no_ecs_iij
     type: sequence
     args:
@@ -1489,12 +1489,12 @@ plugins:
         - load_balance:
             - - forward_query_to_remote_no_ecs_iij_doh_a
             - - forward_query_to_remote_no_ecs_iij_doh_b
-            - - forward_query_to_remote_no_ecs_iij_doh_c
-            - - forward_query_to_remote_no_ecs_iij_doh_d
+#-          - - forward_query_to_remote_no_ecs_iij_doh_c
+#-          - - forward_query_to_remote_no_ecs_iij_doh_d
             - - forward_query_to_remote_no_ecs_iij_dot_a
             - - forward_query_to_remote_no_ecs_iij_dot_b
-            - - forward_query_to_remote_no_ecs_iij_dot_c
-            - - forward_query_to_remote_no_ecs_iij_dot_d
+#-          - - forward_query_to_remote_no_ecs_iij_dot_c
+#-          - - forward_query_to_remote_no_ecs_iij_dot_d
   - tag: sequence_forward_query_to_remote_no_ecs_nextdns
     type: sequence
     args:
@@ -1502,16 +1502,16 @@ plugins:
         - load_balance:
 ##          - - forward_query_to_remote_no_ecs_nextdns_doh3_a
 ##          - - forward_query_to_remote_no_ecs_nextdns_doh3_b
-##          - - forward_query_to_remote_no_ecs_nextdns_doh3_c
-##          - - forward_query_to_remote_no_ecs_nextdns_doh3_d
+###-        - - forward_query_to_remote_no_ecs_nextdns_doh3_c
+###-        - - forward_query_to_remote_no_ecs_nextdns_doh3_d
             - - forward_query_to_remote_no_ecs_nextdns_doh_a
             - - forward_query_to_remote_no_ecs_nextdns_doh_b
-            - - forward_query_to_remote_no_ecs_nextdns_doh_c
-            - - forward_query_to_remote_no_ecs_nextdns_doh_d
+#-          - - forward_query_to_remote_no_ecs_nextdns_doh_c
+#-          - - forward_query_to_remote_no_ecs_nextdns_doh_d
             - - forward_query_to_remote_no_ecs_nextdns_dot_a
             - - forward_query_to_remote_no_ecs_nextdns_dot_b
-            - - forward_query_to_remote_no_ecs_nextdns_dot_c
-            - - forward_query_to_remote_no_ecs_nextdns_dot_d
+#-          - - forward_query_to_remote_no_ecs_nextdns_dot_c
+#-          - - forward_query_to_remote_no_ecs_nextdns_dot_d
   - tag: set_edns0_client_subnet
     type: ecs
     args:
