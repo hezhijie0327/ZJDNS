@@ -6,6 +6,7 @@ mode: rule
 proxy-groups:
 proxy-providers:
 rules:
+  - GEOIP,CN,DIRECT
   - IP-CIDR,0.0.0.0/8,DIRECT
   - IP-CIDR,10.0.0.0/8,DIRECT
   - IP-CIDR,100.64.0.0/10,DIRECT
@@ -24,7 +25,6 @@ rules:
   - IP-CIDR,203.0.113.0/24,DIRECT
   - IP-CIDR,240.0.0.0/4,DIRECT
   - IP-CIDR6,::/127,DIRECT
-  - IP-CIDR6,::ffff:0:0/96,DIRECT
   - IP-CIDR6,64:ff9b::/96,DIRECT
   - IP-CIDR6,64:ff9b:1::/48,DIRECT
   - IP-CIDR6,100::/64,DIRECT
@@ -34,5 +34,4 @@ rules:
   - IP-CIDR6,2620:4f:8000::/48,DIRECT
   - IP-CIDR6,fc00::/7,DIRECT
   - IP-CIDR6,fe80::/10,DIRECT
-  - GEOIP,CN,DIRECT
   - MATCH,PROXY
