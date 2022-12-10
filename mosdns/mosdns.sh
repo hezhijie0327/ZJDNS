@@ -39,14 +39,14 @@ function DownloadmosDNSConfiguration() {
     SSL_KEY="zhijie.online.key"
     HTTPS_CONFIG=(
         "      - protocol: https"
-        "        addr: ':5333'"
+        "        addr: ':5553'"
         "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
         "        key: '/etc/mosdns/cert/${SSL_KEY}'"
         "        url_path: '/dns-query'"
     )
     TLS_CONFIG=(
         "      - protocol: tls"
-        "        addr: ':5553'"
+        "        addr: ':5535'"
         "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
         "        key: '/etc/mosdns/cert/${SSL_KEY}'"
     )
