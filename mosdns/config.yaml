@@ -1455,6 +1455,37 @@ plugins:
 #@        enable_pipeline: true
 #@        socks5: '127.0.0.1:7890'
 #@        trusted: true
+  - tag: query_has_invalid_edns0_client_subnet
+    type: query_matcher
+    args:
+      ecs:
+        - '0.0.0.0/8'
+        - '10.0.0.0/8'
+        - '100.64.0.0/10'
+        - '127.0.0.0/8'
+        - '169.254.0.0/16'
+        - '172.16.0.0/12'
+        - '192.0.0.0/24'
+        - '192.0.2.0/24'
+        - '192.31.196.0/24'
+        - '192.52.193.0/24'
+        - '192.88.99.0/24'
+        - '192.168.0.0/16'
+        - '192.175.48.0/24'
+        - '198.18.0.0/15'
+        - '198.51.100.0/24'
+        - '203.0.113.0/24'
+        - '240.0.0.0/4'
+        - '::/127'
+        - '64:ff9b::/96'
+        - '64:ff9b:1::/48'
+        - '100::/64'
+        - '2001::/23'
+        - '2001:db8::/32'
+        - '2002::/16'
+        - '2620:4f:8000::/48'
+        - 'fc00::/7'
+        - 'fe80::/10'
   - tag: response_has_dns64_ip
     type: response_matcher
     args:
@@ -1671,9 +1702,15 @@ plugins:
     type: ecs
     args:
       auto: true
-#+    force_overwrite: false
-#+    ipv4: '255.255.255.255'
-#+    ipv6: 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'
+      mask4: 24
+      mask6: 56
+  - tag: set_edns0_client_subnet_overwrite
+    type: ecs
+    args:
+      auto: false
+      force_overwrite: true
+      ipv4: '255.255.255.255'
+      ipv6: 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'
       mask4: 24
       mask6: 56
   - tag: store_fetch_result_to_from_cache
@@ -1685,6 +1722,15 @@ plugins:
       lazy_cache_ttl: 86400
 #*    redis: 'redis://127.0.0.1:6379/0'
       size: 65536
+  - tag: verify_query_has_edns0_client_subnet
+    type: sequence
+    args:
+      exec:
+        - if: '([_query_edns0]) && (! query_has_invalid_edns0_client_subnet)'
+          exec:
+            - set_edns0_client_subnet
+          else_exec:
+            - set_edns0_client_subnet_overwrite
   - tag: verify_response_has_dns64_ip
     type: sequence
     args:
@@ -1717,7 +1763,7 @@ plugins:
         - _enable_response_padding
         - _misc_optm
 #%      - _no_ecs
-        - set_edns0_client_subnet
+        - verify_query_has_edns0_client_subnet
         - _pad_query
 #&      - store_fetch_result_to_from_cache
         - primary:
