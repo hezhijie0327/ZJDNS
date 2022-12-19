@@ -1478,7 +1478,7 @@ plugins:
   - tag: rewrite_max_min_ttl
     type: ttl
     args:
-      maximum_ttl: 3600
+      maximum_ttl: 86400
       minimal_ttl: 0
   - tag: sequence_forward_query_to_local_ecs_360
     type: sequence
@@ -1780,7 +1780,7 @@ plugins:
               fast_fallback: 2500
           always_standby: true
           fast_fallback: 3750
-        - rewrite_max_min_ttl
+#=      - rewrite_max_min_ttl
 servers:
   - exec: main_server
     listeners:
