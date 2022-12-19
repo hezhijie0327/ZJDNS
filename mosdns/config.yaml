@@ -1478,7 +1478,7 @@ plugins:
   - tag: rewrite_max_min_ttl
     type: ttl
     args:
-      maximum_ttl: 86400
+      maximum_ttl: 3600
       minimal_ttl: 0
   - tag: sequence_forward_query_to_local_ecs_360
     type: sequence
@@ -1682,7 +1682,7 @@ plugins:
       cache_everything: true
       compress_resp: true
       lazy_cache_reply_ttl: 30
-      lazy_cache_ttl: 259200
+      lazy_cache_ttl: 86400
 #*    redis: 'redis://127.0.0.1:6379/0'
       size: 65536
   - tag: verify_response_has_dns64_ip
