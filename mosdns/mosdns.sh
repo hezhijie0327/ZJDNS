@@ -33,6 +33,8 @@ function DownloadmosDNSConfiguration() {
     ENABLE_CACHE="true"
     ENABLE_REDIS_CACHE="false"
 
+    ENABLE_TTL_MODIFY="false"
+
     ENABLE_HTTPS="false"
     ENABLE_TLS="false"
     ENABLE_UNENCRYPTED_DNS="true"
@@ -89,6 +91,10 @@ function DownloadmosDNSConfiguration() {
     fi
     if [ "${ENABLE_REDIS_CACHE}" == "true" ]; then
         sed -i "s/#\*/  /g;s/      size/#\*    size/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+
+    if [ "${ENABLE_TTL_MODIFY}" == "true" ]; then
+        sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
