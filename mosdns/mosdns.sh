@@ -25,10 +25,8 @@ function DownloadmosDNSConfiguration() {
     ENABLE_PROXY_UPSTREAM="false"
 
     ENABLE_ECS="true"
-    FORCE_ECS_AUTO="true"
     FORCE_ECS_IPV4="119.29.29.29"
     FORCE_ECS_IPV6="2402:4e00::"
-    FORCE_ECS_OVERWRITE="false"
 
     ENABLE_CACHE="true"
     ENABLE_REDIS_CACHE="false"
@@ -71,19 +69,13 @@ function DownloadmosDNSConfiguration() {
     fi
 
     if [ "${ENABLE_ECS}" == "false" ]; then
-        sed -i "s/#%/  /g;s/        - set_edns0_client_subnet/#%      - set_edns0_client_subnet/g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
-    if [ "${FORCE_ECS_AUTO}" == "false" ]; then
-        sed -i "s/#+/  /g;s/auto: true/auto: false/g" "${DOCKER_PATH}/conf/config.yaml"
+        sed -i "s/#%/  /g;s/        - verify_query_has_edns0_client_subnet/#%      - verify_query_has_edns0_client_subnet/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${FORCE_ECS_IPV4}" != "" ]; then
         sed -i "s/255.255.255.255/${FORCE_ECS_IPV4}/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${FORCE_ECS_IPV6}" != "" ]; then
         sed -i "s/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/${FORCE_ECS_IPV6}/g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
-    if [ "${FORCE_ECS_OVERWRITE}" == "true" ]; then
-        sed -i "s/force_overwrite: false/force_overwrite: true/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ "${ENABLE_CACHE}" == "true" ]; then
