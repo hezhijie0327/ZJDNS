@@ -1623,8 +1623,8 @@ plugins:
                         - - sequence_forward_query_to_local_ecs_360
                         - - sequence_forward_query_to_local_ecs_alidns
                     - verify_response_has_valid_answer
-                  always_standby: true
-                  fast_fallback: 1250
+                  always_standby: false
+                  fast_fallback: 625
               secondary:
                 - primary:
                     - parallel:
@@ -1634,10 +1634,10 @@ plugins:
                     - parallel:
                         - - sequence_forward_query_to_local_no_ecs_tuna
                     - verify_response_has_valid_answer
-                  always_standby: true
-                  fast_fallback: 1250
+                  always_standby: false
+                  fast_fallback: 625
               always_standby: false
-              fast_fallback: 2500
+              fast_fallback: 1250
             - verify_response_has_local_ip
           secondary:
             - primary:
@@ -1653,7 +1653,7 @@ plugins:
                         - - sequence_forward_query_to_remote_ecs_opendns
                     - verify_response_has_valid_answer
                   always_standby: true
-                  fast_fallback: 1250
+                  fast_fallback: 625
               secondary:
                 - primary:
                     - parallel:
@@ -1666,11 +1666,11 @@ plugins:
                           - verify_response_has_dns64_ip
                         - - sequence_forward_query_to_remote_no_ecs_nextdns
                   always_standby: true
-                  fast_fallback: 1250
+                  fast_fallback: 625
               always_standby: false
-              fast_fallback: 2500
-          always_standby: true
-          fast_fallback: 3750
+              fast_fallback: 1250
+          always_standby: false
+          fast_fallback: 2500
 #=      - rewrite_max_min_ttl
 servers:
   - exec: main_server
