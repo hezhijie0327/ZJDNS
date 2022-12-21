@@ -22,7 +22,7 @@ function CleanupCurrentContainer() {
 function DownloadmosDNSConfiguration() {
     ENABLE_IPV6_UPSTREAM="true"
     ENABLE_HTTP3_UPSTREAM="false"
-    ENABLE_PIPELINE="false"
+    ENABLE_PIPELINE="true"
     ENABLE_PROXY_UPSTREAM="false"
 
     ENABLE_ECS="true"
