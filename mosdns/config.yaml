@@ -2,22 +2,6 @@ log:
   level: error
   production: true
 plugins:
-  - tag: ip_set_dns64
-    type: ip_set
-    args:
-      ips:
-        - '64:ff9b::/96'
-  - tag: ip_set_local
-    type: ip_set
-    args:
-      files:
-        - '/etc/mosdns/data/GeoIP_CNIPDb.txt'
-  - tag: ip_set_valid
-    type: ip_set
-    args:
-      ips:
-        - '0.0.0.0/0'
-        - '::/0'
   - tag: forward_query_to_local_ecs
     type: forward
     args:
@@ -461,70 +445,82 @@ plugins:
 #-        dial_addr: '[2a07:a8c1::]:853'
 #-        enable_pipeline: true
 #-#@      socks5: '127.0.0.1:7890'
-  - tag: sequence_forward_query_to_local_ecs
+  - tag: ip_set_dns64
+    type: ip_set
+    args:
+      ips:
+        - '64:ff9b::/96'
+  - tag: ip_set_local
+    type: ip_set
+    args:
+      files:
+        - '/etc/mosdns/data/GeoIP_CNIPDb.txt'
+  - tag: ip_set_valid
+    type: ip_set
+    args:
+      ips:
+        - '0.0.0.0/0'
+        - '::/0'
+  - tag: match_response_has_dns64_ip
     type: sequence
     args:
-      - exec: $forward_query_to_local_ecs
-      - matches:
-          - '!rcode 0'
-        exec: drop_resp
-      - matches:
-          - 'qtype 1 28'
-          - '!resp_ip $ip_set_valid'
-        exec: drop_resp
-  - tag: sequence_forward_query_to_local_no_ecs
-    type: sequence
-    args:
-      - exec: $forward_query_to_local_no_ecs
-      - matches:
-          - '!rcode 0'
-        exec: drop_resp
-      - matches:
-          - 'qtype 1 28'
-          - '!resp_ip $ip_set_valid'
-        exec: drop_resp
-  - tag: sequence_forward_query_to_remote_ecs
-    type: sequence
-    args:
-      - exec: $forward_query_to_remote_ecs
-      - matches:
-          - '!rcode 0'
-        exec: drop_resp
-      - matches:
-          - 'qtype 1 28'
-          - '!resp_ip $ip_set_valid'
-        exec: drop_resp
-      - matches:
-          - qtype 28
-          - resp_ip $ip_set_dns64
-        exec: drop_resp
-  - tag: sequence_forward_query_to_remote_no_ecs
-    type: sequence
-    args:
-      - exec: $forward_query_to_remote_no_ecs
       - matches:
           - qtype 28
           - resp_ip $ip_set_dns64
         exec: reject 0
+  - tag: match_response_has_local_ip
+    type: sequence
+    args:
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_local'
+        exec: drop_resp
+  - tag: match_response_has_valid_answer
+    type: sequence
+    args:
+      - matches:
+          - '!rcode 0'
+        exec: drop_resp
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_valid'
+        exec: drop_resp
+  - tag: sequence_forward_query_to_local_ecs
+    type: sequence
+    args:
+      - exec: $forward_query_to_local_ecs
+      - exec: $match_response_has_valid_answer
+  - tag: sequence_forward_query_to_local_no_ecs
+    type: sequence
+    args:
+      - exec: $forward_query_to_local_no_ecs
+      - exec: $match_response_has_valid_answer
+  - tag: sequence_forward_query_to_remote_ecs
+    type: sequence
+    args:
+      - exec: $forward_query_to_remote_ecs
+      - exec: $match_response_has_dns64_ip
+      - exec: $match_response_has_valid_answer
+  - tag: sequence_forward_query_to_remote_no_ecs
+    type: sequence
+    args:
+      - exec: $forward_query_to_remote_no_ecs
+      - exec: $match_response_has_dns64_ip
   - tag: primary_server
     type: sequence
     args:
 #%    - exec: ecs
       - exec: $sequence_forward_query_to_local_ecs
-      - matches:
-          - 'qtype 1 28'
-          - '!resp_ip $ip_set_local'
-        exec: $sequence_forward_query_to_remote_ecs
+      - exec: $match_response_has_local_ip
+      - exec: $sequence_forward_query_to_remote_ecs
 #=    - exec: ttl 0-86400
   - tag: secondary_server
     type: sequence
     args:
 #%    - exec: ecs
       - exec: $sequence_forward_query_to_local_no_ecs
-      - matches:
-          - 'qtype 1 28'
-          - '!resp_ip $ip_set_local'
-        exec: $sequence_forward_query_to_remote_no_ecs
+      - exec: $match_response_has_local_ip
+      - exec: $sequence_forward_query_to_remote_no_ecs
 #=    - exec: ttl 0-86400
   - tag: main_server
     type: fallback
