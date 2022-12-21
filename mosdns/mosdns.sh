@@ -103,7 +103,7 @@ function DownloadmosDNSConfiguration() {
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
     CNIPDB_SOURCE="geolite2"
-    curl -s --connect-timeout 15 "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.dat" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.dat"
+    curl -s --connect-timeout 15 "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
 }
 # Create New Container
 function CreateNewContainer() {
