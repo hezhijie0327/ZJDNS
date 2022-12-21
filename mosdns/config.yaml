@@ -21,7 +21,7 @@ plugins:
   - tag: forward_query_to_local_ecs
     type: forward
     args:
-      concurrent: 2
+      concurrent: 3
       upstreams:
         - addr: 'https://doh.360.cn/dns-query'
           dial_addr: '101.226.4.6:443'
@@ -101,7 +101,7 @@ plugins:
   - tag: forward_query_to_local_no_ecs
     type: forward
     args:
-      concurrent: 2
+      concurrent: 3
       upstreams:
         - addr: 'https://doh.onedns.net/dns-query'
           dial_addr: '52.80.109.59:443'
@@ -124,7 +124,7 @@ plugins:
   - tag: forward_query_to_remote_ecs
     type: forward
     args:
-      concurrent: 2
+      concurrent: 3
       upstreams:
         - addr: 'https://unfiltered.adguard-dns.com/dns-query'
           dial_addr: '94.140.14.140:443'
@@ -303,7 +303,7 @@ plugins:
   - tag: forward_query_to_remote_no_ecs
     type: forward
     args:
-      concurrent: 2
+      concurrent: 3
       upstreams:
         - addr: 'https://cloudflare-dns.com/dns-query'
           dial_addr: '1.0.0.1:443'
