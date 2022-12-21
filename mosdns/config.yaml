@@ -461,23 +461,10 @@ plugins:
       ips:
         - '0.0.0.0/0'
         - '::/0'
-  - tag: match_response_has_dns64_ip
+  - tag: sequence_forward_query_to_local_ecs
     type: sequence
     args:
-      - matches:
-          - qtype 28
-          - resp_ip $ip_set_dns64
-        exec: reject 0
-  - tag: match_response_has_local_ip
-    type: sequence
-    args:
-      - matches:
-          - 'qtype 1 28'
-          - '!resp_ip $ip_set_local'
-        exec: drop_resp
-  - tag: match_response_has_valid_answer
-    type: sequence
-    args:
+      - exec: $forward_query_to_local_ecs
       - matches:
           - '!rcode 0'
         exec: drop_resp
@@ -485,42 +472,59 @@ plugins:
           - 'qtype 1 28'
           - '!resp_ip $ip_set_valid'
         exec: drop_resp
-  - tag: sequence_forward_query_to_local_ecs
-    type: sequence
-    args:
-      - exec: $forward_query_to_local_ecs
-      - exec: $match_response_has_valid_answer
   - tag: sequence_forward_query_to_local_no_ecs
     type: sequence
     args:
       - exec: $forward_query_to_local_no_ecs
-      - exec: $match_response_has_valid_answer
+      - matches:
+          - '!rcode 0'
+        exec: drop_resp
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_valid'
+        exec: drop_resp
   - tag: sequence_forward_query_to_remote_ecs
     type: sequence
     args:
       - exec: $forward_query_to_remote_ecs
-      - exec: $match_response_has_dns64_ip
-      - exec: $match_response_has_valid_answer
+      - matches:
+          - '!rcode 0'
+        exec: drop_resp
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_valid'
+        exec: drop_resp
+      - matches:
+          - qtype 28
+          - resp_ip $ip_set_dns64
+        exec: drop_resp
   - tag: sequence_forward_query_to_remote_no_ecs
     type: sequence
     args:
       - exec: $forward_query_to_remote_no_ecs
-      - exec: $match_response_has_dns64_ip
+      - matches:
+          - qtype 28
+          - resp_ip $ip_set_dns64
+        exec: reject 0
   - tag: primary_server
     type: sequence
     args:
 #%    - exec: ecs
       - exec: $sequence_forward_query_to_local_ecs
-      - exec: $match_response_has_local_ip
-      - exec: $sequence_forward_query_to_remote_ecs
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_local'
+        exec: $sequence_forward_query_to_remote_ecs
 #=    - exec: ttl 0-86400
   - tag: secondary_server
     type: sequence
     args:
 #%    - exec: ecs
       - exec: $sequence_forward_query_to_local_no_ecs
-      - exec: $match_response_has_local_ip
-      - exec: $sequence_forward_query_to_remote_no_ecs
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_local'
+        exec: $sequence_forward_query_to_remote_no_ecs
 #=    - exec: ttl 0-86400
   - tag: main_server
     type: fallback
