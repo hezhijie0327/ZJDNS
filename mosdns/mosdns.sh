@@ -26,11 +26,6 @@ function DownloadmosDNSConfiguration() {
     ENABLE_PROXY_UPSTREAM="false"
 
     ENABLE_ECS="true"
-    FORCE_ECS_IPV4="119.29.29.29"
-    FORCE_ECS_IPV6="2402:4e00::"
-
-    ENABLE_CACHE="true"
-    ENABLE_REDIS_CACHE="false"
 
     ENABLE_TTL_MODIFY="false"
 
@@ -40,17 +35,24 @@ function DownloadmosDNSConfiguration() {
     SSL_CERT="fullchain.cer"
     SSL_KEY="zhijie.online.key"
     HTTPS_CONFIG=(
-        "      - protocol: https"
-        "        addr: ':5553'"
-        "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
-        "        key: '/etc/mosdns/cert/${SSL_KEY}'"
-        "        url_path: '/dns-query'"
+        "  - tag: create_https_server"
+        "    type: tcp_server"
+        "    args:"
+        "      entries:"
+        "        - path: '/dns-query'"
+        "          exec: main_server"
+        "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
+        "      key: '/etc/mosdns/cert/${SSL_KEY}'"
+        "      listen: :5553"
     )
     TLS_CONFIG=(
-        "      - protocol: tls"
-        "        addr: ':5535'"
-        "        cert: '/etc/mosdns/cert/${SSL_CERT}'"
-        "        key: '/etc/mosdns/cert/${SSL_KEY}'"
+        "  - tag: create_tls_server"
+        "    type: tcp_server"
+        "    args:"
+        "      entry: main_server"
+        "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
+        "      key: '/etc/mosdns/cert/${SSL_KEY}'"
+        "      listen: :5535"
     )
 
     if [ "${USE_CDN}" == "true" ]; then
@@ -72,21 +74,8 @@ function DownloadmosDNSConfiguration() {
         sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
-    if [ "${ENABLE_ECS}" == "false" ]; then
-        sed -i "s/#%/  /g;s/        - verify_query_has_edns0_client_subnet/#%      - verify_query_has_edns0_client_subnet/g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
-    if [ "${FORCE_ECS_IPV4}" != "" ]; then
-        sed -i "s/255.255.255.255/${FORCE_ECS_IPV4}/g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
-    if [ "${FORCE_ECS_IPV6}" != "" ]; then
-        sed -i "s/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/${FORCE_ECS_IPV6}/g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
-
-    if [ "${ENABLE_CACHE}" == "true" ]; then
-        sed -i "s/#&/  /g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
-    if [ "${ENABLE_REDIS_CACHE}" == "true" ]; then
-        sed -i "s/#\*/  /g;s/      size/#\*    size/g" "${DOCKER_PATH}/conf/config.yaml"
+    if [ "${ENABLE_ECS}" == "true" ]; then
+        sed -i "s/#%/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ "${ENABLE_TTL_MODIFY}" == "true" ]; then
