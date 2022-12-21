@@ -12,11 +12,6 @@ plugins:
           dial_addr: '101.226.4.6:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://doh.360.cn/dns-query'
-#@        dial_addr: '101.226.4.6:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_360_doh_b
     type: fast_forward
     args:
@@ -25,11 +20,6 @@ plugins:
           dial_addr: '123.125.81.6:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://doh.360.cn/dns-query'
-#@        dial_addr: '123.125.81.6:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_360_doh_c
     type: fast_forward
     args:
@@ -38,11 +28,6 @@ plugins:
           dial_addr: '140.207.198.6:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://doh.360.cn/dns-query'
-#@        dial_addr: '140.207.198.6:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_360_doh_d
     type: fast_forward
     args:
@@ -51,11 +36,6 @@ plugins:
           dial_addr: '218.30.118.6:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://doh.360.cn/dns-query'
-#@        dial_addr: '218.30.118.6:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_360_dot_a
     type: fast_forward
     args:
@@ -64,11 +44,6 @@ plugins:
           dial_addr: '101.226.4.6:853'
           enable_pipeline: false
           trusted: true
-#@      - addr: 'tls://dot.360.cn'
-#@        dial_addr: '101.226.4.6:853'
-#@        enable_pipeline: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_360_dot_b
     type: fast_forward
     args:
@@ -77,11 +52,6 @@ plugins:
           dial_addr: '123.125.81.6:853'
           enable_pipeline: false
           trusted: true
-#@      - addr: 'tls://dot.360.cn'
-#@        dial_addr: '123.125.81.6:853'
-#@        enable_pipeline: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_360_dot_c
     type: fast_forward
     args:
@@ -90,11 +60,6 @@ plugins:
           dial_addr: '140.207.198.6:853'
           enable_pipeline: false
           trusted: true
-#@      - addr: 'tls://dot.360.cn'
-#@        dial_addr: '140.207.198.6:853'
-#@        enable_pipeline: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_360_dot_d
     type: fast_forward
     args:
@@ -103,11 +68,6 @@ plugins:
           dial_addr: '218.30.118.6:853'
           enable_pipeline: false
           trusted: true
-#@      - addr: 'tls://dot.360.cn'
-#@        dial_addr: '218.30.118.6:853'
-#@        enable_pipeline: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_alidns_doh_a
     type: fast_forward
     args:
@@ -116,11 +76,6 @@ plugins:
           dial_addr: '223.5.5.5:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://dns.alidns.com/dns-query'
-#@        dial_addr: '223.5.5.5:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_alidns_doh_b
     type: fast_forward
     args:
@@ -129,11 +84,6 @@ plugins:
           dial_addr: '223.6.6.6:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://dns.alidns.com/dns-query'
-#@        dial_addr: '223.6.6.6:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_alidns_doh_c
     type: fast_forward
     args:
@@ -142,11 +92,6 @@ plugins:
           dial_addr: '[2400:3200::1]:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://dns.alidns.com/dns-query'
-#@        dial_addr: '[2400:3200::1]:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_alidns_doh_d
     type: fast_forward
     args:
@@ -155,11 +100,6 @@ plugins:
           dial_addr: '[2400:3200:baba::1]:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://dns.alidns.com/dns-query'
-#@        dial_addr: '[2400:3200:baba::1]:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_alidns_dot_a
     type: fast_forward
     args:
@@ -168,11 +108,6 @@ plugins:
           dial_addr: '223.5.5.5:853'
           enable_pipeline: false
           trusted: true
-#@      - addr: 'tls://dns.alidns.com'
-#@        dial_addr: '223.5.5.5:853'
-#@        enable_pipeline: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_alidns_dot_b
     type: fast_forward
     args:
@@ -181,11 +116,6 @@ plugins:
           dial_addr: '223.6.6.6:853'
           enable_pipeline: false
           trusted: true
-#@      - addr: 'tls://dns.alidns.com'
-#@        dial_addr: '223.6.6.6:853'
-#@        enable_pipeline: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_alidns_dot_c
     type: fast_forward
     args:
@@ -194,11 +124,6 @@ plugins:
           dial_addr: '[2400:3200::1]:853'
           enable_pipeline: false
           trusted: true
-#@      - addr: 'tls://dns.alidns.com'
-#@        dial_addr: '[2400:3200::1]:853'
-#@        enable_pipeline: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_alidns_dot_d
     type: fast_forward
     args:
@@ -207,11 +132,6 @@ plugins:
           dial_addr: '[2400:3200:baba::1]:853'
           enable_pipeline: false
           trusted: true
-#@      - addr: 'tls://dns.alidns.com'
-#@        dial_addr: '[2400:3200:baba::1]:853'
-#@        enable_pipeline: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_cfiec_doh_a
     type: fast_forward
     args:
@@ -220,11 +140,6 @@ plugins:
           dial_addr: '221.228.217.28:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://dns.ipv6dns.com/dns-query'
-#@        dial_addr: '221.228.217.28:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_cfiec_doh_b
     type: fast_forward
     args:
@@ -233,11 +148,6 @@ plugins:
           dial_addr: '[240e:e9:900b::5]:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://dns.ipv6dns.com/dns-query'
-#@        dial_addr: '[240e:e9:900b::5]:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_cfiec_dot_a
     type: fast_forward
     args:
@@ -246,11 +156,6 @@ plugins:
           dial_addr: '221.228.217.28:853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://dns.ipv6dns.com'
-#@        dial_addr: '221.228.217.28:853'
-#@        enable_pipeline: true
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_cfiec_dot_b
     type: fast_forward
     args:
@@ -259,11 +164,6 @@ plugins:
           dial_addr: '[240e:e9:900b::5]:853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://dns.ipv6dns.com'
-#@        dial_addr: '[240e:e9:900b::5]:853'
-#@        enable_pipeline: true
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_dnspod_doh_a
     type: fast_forward
     args:
@@ -272,11 +172,6 @@ plugins:
           dial_addr: '1.12.12.12:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://doh.pub/dns-query'
-#@        dial_addr: '1.12.12.12:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_dnspod_doh_b
     type: fast_forward
     args:
@@ -285,11 +180,6 @@ plugins:
           dial_addr: '120.53.53.53:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://doh.pub/dns-query'
-#@        dial_addr: '120.53.53.53:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_dnspod_doh_c
     type: fast_forward
     args:
@@ -298,11 +188,6 @@ plugins:
           dial_addr: '106.55.91.174:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://sm2.doh.pub/dns-query'
-#@        dial_addr: '106.55.91.174:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_dnspod_dot_a
     type: fast_forward
     args:
@@ -311,11 +196,6 @@ plugins:
           dial_addr: '1.12.12.12:853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://dot.pub'
-#@        dial_addr: '1.12.12.12:853'
-#@        enable_pipeline: true
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_ecs_dnspod_dot_b
     type: fast_forward
     args:
@@ -324,11 +204,6 @@ plugins:
           dial_addr: '120.53.53.53:853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://dot.pub'
-#@        dial_addr: '120.53.53.53:853'
-#@        enable_pipeline: true
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_no_ecs_onedns_doh_a
     type: fast_forward
     args:
@@ -337,11 +212,6 @@ plugins:
           dial_addr: '52.80.109.59:443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://doh.onedns.net/dns-query'
-#@        dial_addr: '52.80.109.59:443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_no_ecs_onedns_dot_a
     type: fast_forward
     args:
@@ -350,11 +220,6 @@ plugins:
           dial_addr: '52.80.248.44:853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://dot.onedns.net'
-#@        dial_addr: '52.80.248.44:853'
-#@        enable_pipeline: true
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_no_ecs_tuna_doh_a
     type: fast_forward
     args:
@@ -363,11 +228,6 @@ plugins:
           dial_addr: '101.6.6.6:8443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
-#@        dial_addr: '101.6.6.6:8443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_no_ecs_tuna_doh_b
     type: fast_forward
     args:
@@ -376,11 +236,6 @@ plugins:
           dial_addr: '[2402:f000:1:416:101:6:6:6]:8443'
           enable_http3: false
           trusted: true
-#@      - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
-#@        dial_addr: '[2402:f000:1:416:101:6:6:6]:8443'
-#@        enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_no_ecs_tuna_dot_a
     type: fast_forward
     args:
@@ -389,11 +244,6 @@ plugins:
           dial_addr: '101.6.6.6:8853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://dns.tuna.tsinghua.edu.cn'
-#@        dial_addr: '101.6.6.6:8853'
-#@        enable_pipeline: true
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_local_no_ecs_tuna_dot_b
     type: fast_forward
     args:
@@ -402,11 +252,6 @@ plugins:
           dial_addr: '[2402:f000:1:416:101:6:6:6]:8853'
           enable_pipeline: true
           trusted: true
-#@      - addr: 'tls://dns.tuna.tsinghua.edu.cn'
-#@        dial_addr: '[2402:f000:1:416:101:6:6:6]:8853'
-#@        enable_pipeline: true
-#@        socks5: '127.0.0.1:7890'
-#@        trusted: true
   - tag: forward_query_to_remote_ecs_adguard_doh3_a
     type: fast_forward
     args:
