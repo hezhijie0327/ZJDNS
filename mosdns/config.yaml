@@ -1652,7 +1652,7 @@ plugins:
                         - - sequence_forward_query_to_remote_ecs_adguard
                         - - sequence_forward_query_to_remote_ecs_opendns
                     - verify_response_has_valid_answer
-                  always_standby: true
+                  always_standby: false
                   fast_fallback: 625
               secondary:
                 - primary:
@@ -1665,7 +1665,7 @@ plugins:
                         - - sequence_forward_query_to_remote_no_ecs_cloudflare
                           - verify_response_has_dns64_ip
                         - - sequence_forward_query_to_remote_no_ecs_nextdns
-                  always_standby: true
+                  always_standby: false
                   fast_fallback: 625
               always_standby: false
               fast_fallback: 1250
