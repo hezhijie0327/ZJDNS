@@ -751,7 +751,7 @@ plugins:
       - matches:
           - 'has_resp'
         exec: accept
-#@    - exec: $forward_query_to_proxy_remote_ecs
+#@    - exec: $forward_query_to_proxy_remote_no_ecs
 #@    - matches:
 #@        - '!rcode 0'
 #@      exec: drop_resp
