@@ -518,9 +518,6 @@ plugins:
           - qtype 28
           - resp_ip $ip_set_dns64
         exec: drop_resp
-      - matches:
-          - 'has_resp'
-        exec: accept
   - tag: main_server
     type: fallback
     args:
