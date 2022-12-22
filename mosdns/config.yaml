@@ -532,7 +532,7 @@ plugins:
       primary: sequence_forward_query_to_ecs_upstream
       secondary: sequence_forward_query_to_no_ecs_upstream
       threshold: 3750
-      always_standby: true
+      always_standby: false
   - tag: create_tcp_server
     type: tcp_server
     args:
