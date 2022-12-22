@@ -506,7 +506,7 @@ plugins:
           - qtype 28
           - resp_ip $ip_set_dns64
         exec: reject 0
-  - tag: sequence_forward_query_to_ecs
+  - tag: sequence_forward_query_to_ecs_upstream
     type: sequence
     args:
 #%    - exec: ecs
@@ -516,7 +516,7 @@ plugins:
           - '!resp_ip $ip_set_local'
         exec: $sequence_forward_query_to_remote_ecs
 #=    - exec: ttl 0-86400
-  - tag: sequence_forward_query_to_no_ecs
+  - tag: sequence_forward_query_to_no_ecs_upstream
     type: sequence
     args:
 #%    - exec: ecs
@@ -529,8 +529,8 @@ plugins:
   - tag: main_server
     type: fallback
     args:
-      primary: sequence_forward_query_to_ecs
-      secondary: sequence_forward_query_to_no_ecs
+      primary: sequence_forward_query_to_ecs_upstream
+      secondary: sequence_forward_query_to_no_ecs_upstream
       threshold: 2500
       always_standby: false
   - tag: create_tcp_server
