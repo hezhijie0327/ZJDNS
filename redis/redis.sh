@@ -23,6 +23,7 @@ function CreateNewContainer() {
     docker run --name redis --net host --restart=always \
         -v ${DOCKER_PATH}/data:/data \
         -d ${OWNER}/${REPO}:${TAG} \
+        --activedefrag yes \
         --aof-use-rdb-preamble yes \
         --appendfsync everysec \
         --appendonly yes \
