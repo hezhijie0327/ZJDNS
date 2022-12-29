@@ -31,7 +31,7 @@ function CreateNewContainer() {
         --lazyfree-lazy-eviction yes \
         --lazyfree-lazy-expire yes \
         --lazyfree-lazy-server-del yes \
-        --maxmemory ${REDIS_MAXMEMORY:-64M} \
+        --maxmemory ${REDIS_MAXMEMORY:-64MB} \
         --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-volatile-ttl} \
         --maxmemory-samples 10
 }
