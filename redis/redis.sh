@@ -31,8 +31,10 @@ function CreateNewContainer() {
         --lazyfree-lazy-eviction yes \
         --lazyfree-lazy-expire yes \
         --lazyfree-lazy-server-del yes \
+        --lfu-decay-time 1 \
+        --lfu-log-factor 10 \
         --maxmemory ${REDIS_MAXMEMORY:-64MB} \
-        --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-volatile-lfu} \
+        --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-volatile-ttl} \
         --maxmemory-samples 10
 }
 # Cleanup Expired Image
