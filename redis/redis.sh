@@ -25,13 +25,13 @@ function CreateNewContainer() {
         -d ${OWNER}/${REPO}:${TAG} \
         --activedefrag yes \
         --aof-use-rdb-preamble yes \
-        --appendfsync everysec \
+        --appendfsync always \
         --appendonly yes \
         --lazyfree-lazy-eviction yes \
         --lazyfree-lazy-expire yes \
         --lazyfree-lazy-server-del yes \
         --maxmemory ${REDIS_MAXMEMORY} \
-        --maxmemory-policy allkeys-lru \
+        --maxmemory-policy volatile-ttl \
         --maxmemory-samples 10
 }
 # Cleanup Expired Image
