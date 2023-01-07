@@ -28,6 +28,8 @@ function DownloadmosDNSConfiguration() {
     ENABLE_PROXY_UPSTREAM="false"
 
     ENABLE_ECS="true"
+    ECS_IPV4_OVERWRITE="255.255.255.255"
+    ECS_IPV6_OVERWRITE="ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
 
     ENABLE_HTTPS="false"
     ENABLE_TLS="false"
@@ -79,6 +81,12 @@ function DownloadmosDNSConfiguration() {
 
     if [ "${ENABLE_ECS}" == "true" ]; then
         sed -i "s/#%/  /g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${ECS_IPV4_OVERWRITE}" != "255.255.255.255" ]; then
+        sed -i "s/- exec: ecs/- exec: ecs ${ECS_IPV4_OVERWRITE}\/24/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${ECS_IPV6_OVERWRITE}" != "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" ]; then
+        sed -i "s/- exec: ecs/- exec: ecs ${ECS_IPV6_OVERWRITE//:/\:}\/56/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
