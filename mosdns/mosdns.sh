@@ -20,6 +20,7 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
+    ENABLE_ALWAYS_STANDBY='false'
     ENABLE_IPV6_UPSTREAM="false"
     ENABLE_HTTP3_UPSTREAM="false"
     ENABLE_PIPELINE="false"
@@ -63,6 +64,9 @@ function DownloadmosDNSConfiguration() {
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
     fi && curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 
+    if [ "${ENABLE_ALWAYS_STANDBY}" == "true" ]; then
+        sed -i 's/#!/  /g' "${DOCKER_PATH}/conf/config.yaml"
+    fi
     if [ "${ENABLE_IPV6_UPSTREAM}" == "true" ]; then
         sed -i "s/#-/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
