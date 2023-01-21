@@ -27,6 +27,8 @@ function DownloadmosDNSConfiguration() {
 
     ENABLE_PROXY_IPV6_UPSTREAM="false"
     ENABLE_PROXY_UPSTREAM="false"
+
+    ENABLE_REMOTE_IPV6_UPSTREAM="false"
     ENABLE_REMOTE_UPSTREAM="false"
 
     ENABLE_ECS="true"
@@ -77,11 +79,16 @@ function DownloadmosDNSConfiguration() {
     if [ "${ENABLE_PIPELINE}" == "false" ]; then
         sed -i "s/enable_pipeline: true/enable_pipeline: false/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
+    
     if [ "${ENABLE_PROXY_IPV6_UPSTREAM}" == "true" ] && [ "${ENABLE_IPV6_UPSTREAM}" == "true" ]; then
         sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_PROXY_UPSTREAM}" == "true" ] && [ "${ENABLE_REMOTE_UPSTREAM}" == "true" ]; then
         sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+
+    if [ "${ENABLE_REMOTE_IPV6_UPSTREAM}" == "true" ] || [ "${ENABLE_REMOTE_UPSTREAM}" == "true" ]; then
+        sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_REMOTE_UPSTREAM}" == "true" ]; then
         sed -i "s/#?/  /g" "${DOCKER_PATH}/conf/config.yaml"
