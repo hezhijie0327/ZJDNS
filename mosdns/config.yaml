@@ -802,10 +802,6 @@ plugins:
 #@        - '!resp_ip $ip_set_valid'
 #@      exec: drop_resp
 #@    - matches:
-#@        - 'qtype 1 28'
-#@        - 'resp_ip $ip_set_reserved_ip'
-#@      exec: drop_resp
-#@    - matches:
 #@        - qtype 28
 #@        - resp_ip $ip_set_dns64
 #@      exec: drop_resp
