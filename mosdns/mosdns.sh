@@ -106,7 +106,7 @@ function DownloadmosDNSConfiguration() {
 
     if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
         if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_TLS}" == "true" ]; then
-            for i in $(seq 1 4); do
+            for i in $(seq 1 10); do
                 sed -i '$d' "${DOCKER_PATH}/conf/config.yaml"
             done
         fi
