@@ -735,6 +735,9 @@ plugins:
 #?        - '!resp_ip $ip_set_local'
 #?      exec: drop_resp
       - matches:
+          - '!has_wanted_ans'
+        exec: drop_resp
+      - matches:
           - 'has_resp'
         exec: accept
 #@    - exec: $forward_query_to_proxy_remote_ecs
@@ -752,6 +755,9 @@ plugins:
 #@    - matches:
 #@        - qtype 28
 #@        - resp_ip $ip_set_dns64
+#@      exec: drop_resp
+#@    - matches:
+#@        - '!has_wanted_ans'
 #@      exec: drop_resp
 #@    - matches:
 #@        - 'has_resp'
@@ -773,6 +779,9 @@ plugins:
 #?        - resp_ip $ip_set_dns64
 #?      exec: drop_resp
 #?    - matches:
+#?        - '!has_wanted_ans'
+#?      exec: drop_resp
+#?    - matches:
 #?        - 'has_resp'
 #?      exec: accept
   - tag: sequence_forward_query_to_no_ecs_upstream
@@ -791,6 +800,9 @@ plugins:
 #?        - '!resp_ip $ip_set_local'
 #?      exec: drop_resp
       - matches:
+          - '!has_wanted_ans'
+        exec: drop_resp
+      - matches:
           - 'has_resp'
         exec: accept
 #@    - exec: $forward_query_to_proxy_remote_no_ecs
@@ -804,6 +816,9 @@ plugins:
 #@    - matches:
 #@        - qtype 28
 #@        - resp_ip $ip_set_dns64
+#@      exec: drop_resp
+#@    - matches:
+#@        - '!has_wanted_ans'
 #@      exec: drop_resp
 #@    - matches:
 #@        - 'has_resp'
