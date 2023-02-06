@@ -718,119 +718,69 @@ plugins:
       ips:
         - '0.0.0.0/0'
         - '::/0'
+  - tag: sequence_check_response_has_any_answer
+    type: sequence
+    args:
+      - matches:
+          - 'has_resp'
+        exec: accept
+  - tag: sequence_check_response_has_dns64_ip
+    type: sequence
+    args:
+      - matches:
+          - qtype 28
+          - resp_ip $ip_set_dns64
+        exec: drop_resp
+  - tag: sequence_check_response_has_local_ip
+    type: sequence
+    args:
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_local'
+        exec: drop_resp
+  - tag: sequence_check_response_has_valid_answer
+    type: sequence
+    args:
+      - matches:
+          - '!has_wanted_ans'
+        exec: drop_resp
+      - matches:
+          - '!rcode 0'
+        exec: drop_resp
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_valid'
+        exec: drop_resp
   - tag: sequence_forward_query_to_ecs_upstream
     type: sequence
     args:
 #%    - exec: ecs
       - exec: $forward_query_to_local_ecs
-      - matches:
-          - '!rcode 0'
-        exec: drop_resp
-      - matches:
-          - 'qtype 1 28'
-          - '!resp_ip $ip_set_valid'
-        exec: drop_resp
-#?    - matches:
-#?        - 'qtype 1 28'
-#?        - '!resp_ip $ip_set_local'
-#?      exec: drop_resp
-      - matches:
-          - '!has_wanted_ans'
-        exec: drop_resp
-      - matches:
-          - 'has_resp'
-        exec: accept
+#?    - exec: jump sequence_check_response_has_local_ip
+      - exec: jump sequence_check_response_has_valid_answer
+      - exec: jump sequence_check_response_has_any_answer
 #@    - exec: $forward_query_to_proxy_remote_ecs
-#@    - matches:
-#@        - '!rcode 0'
-#@      exec: drop_resp
-#@    - matches:
-#@        - 'qtype 1 28'
-#@        - '!resp_ip $ip_set_valid'
-#@      exec: drop_resp
-#@    - matches:
-#@        - 'qtype 1 28'
-#@        - 'resp_ip $ip_set_reserved_ip'
-#@      exec: drop_resp
-#@    - matches:
-#@        - qtype 28
-#@        - resp_ip $ip_set_dns64
-#@      exec: drop_resp
-#@    - matches:
-#@        - '!has_wanted_ans'
-#@      exec: drop_resp
-#@    - matches:
-#@        - 'has_resp'
-#@      exec: accept
+#@    - exec: jump sequence_check_response_has_dns64_ip
+#@    - exec: jump sequence_check_response_has_valid_answer
+#@    - exec: jump sequence_check_response_has_any_answer
 #?    - exec: $forward_query_to_remote_ecs
-#?    - matches:
-#?        - '!rcode 0'
-#?      exec: drop_resp
-#?    - matches:
-#?        - 'qtype 1 28'
-#?        - '!resp_ip $ip_set_valid'
-#?      exec: drop_resp
-#?    - matches:
-#?        - 'qtype 1 28'
-#?        - 'resp_ip $ip_set_reserved_ip'
-#?      exec: drop_resp
-#?    - matches:
-#?        - qtype 28
-#?        - resp_ip $ip_set_dns64
-#?      exec: drop_resp
-#?    - matches:
-#?        - '!has_wanted_ans'
-#?      exec: drop_resp
-#?    - matches:
-#?        - 'has_resp'
-#?      exec: accept
+#?    - exec: jump sequence_check_response_has_dns64_ip
+#?    - exec: jump sequence_check_response_has_valid_answer
+#?    - exec: jump sequence_check_response_has_any_answer
   - tag: sequence_forward_query_to_no_ecs_upstream
     type: sequence
     args:
       - exec: $forward_query_to_local_no_ecs
-      - matches:
-          - '!rcode 0'
-        exec: drop_resp
-      - matches:
-          - 'qtype 1 28'
-          - '!resp_ip $ip_set_valid'
-        exec: drop_resp
-#?    - matches:
-#?        - 'qtype 1 28'
-#?        - '!resp_ip $ip_set_local'
-#?      exec: drop_resp
-      - matches:
-          - '!has_wanted_ans'
-        exec: drop_resp
-      - matches:
-          - 'has_resp'
-        exec: accept
+#?    - exec: jump sequence_check_response_has_local_ip
+      - exec: jump sequence_check_response_has_valid_answer
+      - exec: jump sequence_check_response_has_any_answer
 #@    - exec: $forward_query_to_proxy_remote_no_ecs
-#@    - matches:
-#@        - '!rcode 0'
-#@      exec: drop_resp
-#@    - matches:
-#@        - 'qtype 1 28'
-#@        - '!resp_ip $ip_set_valid'
-#@      exec: drop_resp
-#@    - matches:
-#@        - qtype 28
-#@        - resp_ip $ip_set_dns64
-#@      exec: drop_resp
-#@    - matches:
-#@        - '!has_wanted_ans'
-#@      exec: drop_resp
-#@    - matches:
-#@        - 'has_resp'
-#@      exec: accept
+#@    - exec: jump sequence_check_response_has_dns64_ip
+#@    - exec: jump sequence_check_response_has_valid_answer
+#@    - exec: jump sequence_check_response_has_any_answer
 #?    - exec: $forward_query_to_remote_no_ecs
-#?    - matches:
-#?        - qtype 28
-#?        - resp_ip $ip_set_dns64
-#?      exec: drop_resp
-#?    - matches:
-#?        - 'has_resp'
-#?      exec: accept
+#?    - exec: jump sequence_check_response_has_dns64_ip
+#?    - exec: jump sequence_check_response_has_any_answer
   - tag: main_server
     type: fallback
     args:
