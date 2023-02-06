@@ -742,14 +742,18 @@ plugins:
     type: sequence
     args:
       - matches:
-          - '!has_wanted_ans'
+          - '!rcode 0'
         exec: drop_resp
       - matches:
-          - '!rcode 0'
+          - '!has_wanted_ans'
         exec: drop_resp
       - matches:
           - 'qtype 1 28'
           - '!resp_ip $ip_set_valid'
+        exec: drop_resp
+      - matches:
+          - 'qtype 1 28'
+          - 'resp_ip $ip_set_reserved_ip'
         exec: drop_resp
   - tag: sequence_forward_query_to_ecs_upstream
     type: sequence
