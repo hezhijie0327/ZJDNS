@@ -768,18 +768,42 @@ plugins:
           - 'qtype 1 28'
           - 'resp_ip $ip_set_reserved_ip'
         exec: drop_resp
+  - tag: sequence_forward_query_to_remote_ecs
+    type: sequence
+    args:
+      - exec: $forward_query_to_remote_ecs
+      - exec: jump sequence_check_response_has_valid_answer
+      - exec: jump sequence_check_response_has_any_answer
+  - tag: sequence_forward_query_to_remote_no_ecs
+    type: sequence
+    args:
+      - exec: $forward_query_to_remote_no_ecs
+      - exec: jump sequence_check_response_has_valid_answer
+      - exec: jump sequence_check_response_has_any_answer
+  - tag: sequence_forward_query_to_proxy_remote_ecs
+    type: sequence
+    args:
+      - exec: $forward_query_to_proxy_remote_ecs
+      - exec: jump sequence_check_response_has_valid_answer
+      - exec: jump sequence_check_response_has_any_answer
+  - tag: sequence_forward_query_to_proxy_remote_no_ecs
+    type: sequence
+    args:
+      - exec: $forward_query_to_proxy_remote_no_ecs
+      - exec: jump sequence_check_response_has_valid_answer
+      - exec: jump sequence_check_response_has_any_answer
   - tag: fallback_forward_query_to_remote_ecs
     type: fallback
     args:
-      primary: $forward_query_to_proxy_remote_ecs
-      secondary: $forward_query_to_remote_ecs
+      primary: $sequence_forward_query_to_proxy_remote_ecs
+      secondary: $sequence_forward_query_to_remote_ecs
       threshold: 1250
 #!    always_standby: true
   - tag: fallback_forward_query_to_remote_no_ecs
     type: fallback
     args:
-      primary: $forward_query_to_proxy_remote_no_ecs
-      secondary: $forward_query_to_remote_no_ecs
+      primary: $sequence_forward_query_to_proxy_remote_no_ecs
+      secondary: $sequence_forward_query_to_remote_no_ecs
       threshold: 1250
 #!    always_standby: true
   - tag: sequence_forward_query_to_ecs_upstream
