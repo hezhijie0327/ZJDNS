@@ -768,6 +768,20 @@ plugins:
           - 'qtype 1 28'
           - 'resp_ip $ip_set_reserved_ip'
         exec: drop_resp
+  - tag: sequence_forward_query_to_local_ecs
+    type: sequence
+    args:
+      - exec: $forward_query_to_local_ecs
+#?    - exec: jump sequence_check_response_has_local_answer
+      - exec: jump sequence_check_response_has_valid_answer
+      - exec: jump sequence_check_response_has_any_answer
+  - tag: sequence_forward_query_to_local_no_ecs
+    type: sequence
+    args:
+      - exec: $forward_query_to_local_no_ecs
+#?    - exec: jump sequence_check_response_has_local_answer
+      - exec: jump sequence_check_response_has_valid_answer
+      - exec: jump sequence_check_response_has_any_answer
   - tag: sequence_forward_query_to_remote_ecs
     type: sequence
     args:
@@ -810,23 +824,13 @@ plugins:
     type: sequence
     args:
 #%    - exec: ecs
-      - exec: $forward_query_to_local_ecs
-#?    - exec: jump sequence_check_response_has_local_answer
-      - exec: jump sequence_check_response_has_valid_answer
-      - exec: jump sequence_check_response_has_any_answer
+      - exec: jump sequence_forward_query_to_local_ecs
 #?    - exec: jump fallback_forward_query_to_remote_ecs
-#?    - exec: jump sequence_check_response_has_valid_answer
-#?    - exec: jump sequence_check_response_has_any_answer
   - tag: sequence_forward_query_to_no_ecs_upstream
     type: sequence
     args:
-      - exec: $forward_query_to_local_no_ecs
-#?    - exec: jump sequence_check_response_has_local_answer
-      - exec: jump sequence_check_response_has_valid_answer
-      - exec: jump sequence_check_response_has_any_answer
+      - exec: jump sequence_forward_query_to_local_no_ecs
 #?    - exec: jump fallback_forward_query_to_remote_no_ecs
-#?    - exec: jump sequence_check_response_has_valid_answer
-#?    - exec: jump sequence_check_response_has_any_answer
   - tag: main_server
     type: fallback
     args:
