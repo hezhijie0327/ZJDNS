@@ -676,6 +676,7 @@ plugins:
     args:
       ips:
         - '64:ff9b::/96'
+        - '64:ff9b:1::/48'
   - tag: ip_set_local
     type: ip_set
     args:
