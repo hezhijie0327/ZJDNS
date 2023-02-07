@@ -722,7 +722,6 @@ plugins:
     type: sequence
     args:
       - matches:
-          - 'rcode 0'
           - 'qtype 28'
           - 'resp_ip $ip_set_dns64'
         exec: reject 0
