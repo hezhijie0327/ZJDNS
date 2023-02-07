@@ -722,14 +722,34 @@ plugins:
     type: sequence
     args:
       - matches:
+          - 'rcode 0'
+          - 'qtype 28'
+          - 'resp_ip $ip_set_dns64'
+        exec: reject 0
+      - matches:
+          - 'rcode 1'
+        exec: reject 1
+      - matches:
+          - 'rcode 2'
+        exec: reject 2
+      - matches:
+          - 'rcode 3'
+        exec: reject 3
+      - matches:
+          - 'rcode 4'
+        exec: reject 4
+      - matches:
+          - 'rcode 5'
+        exec: reject 5
+      - matches:
           - 'has_resp'
         exec: accept
   - tag: sequence_check_response_has_dns64_ip
     type: sequence
     args:
       - matches:
-          - qtype 28
-          - resp_ip $ip_set_dns64
+          - 'qtype 28'
+          - 'resp_ip $ip_set_dns64'
         exec: drop_resp
   - tag: sequence_check_response_has_local_ip
     type: sequence
