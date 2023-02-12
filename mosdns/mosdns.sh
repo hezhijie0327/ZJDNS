@@ -20,7 +20,7 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
-    ENABLE_ALWAYS_STANDBY='false'
+    ENABLE_ALWAYS_STANDBY="false"
     ENABLE_IPV6_UPSTREAM="false"
     ENABLE_HTTP3_UPSTREAM="false"
     ENABLE_PIPELINE="false"
