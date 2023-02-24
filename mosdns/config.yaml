@@ -87,6 +87,26 @@ plugins:
     args:
       concurrent: 3
       upstreams:
+        - addr: 'public1.114dns.com'
+          dial_addr: '114.114.114.114:53'
+        - addr: 'public2.114dns.com'
+          dial_addr: '114.114.115.115:53'
+        - addr: 'tcp://public1.114dns.com'
+          dial_addr: '114.114.114.114:53'
+          enable_pipeline: false
+        - addr: 'tcp://public2.114dns.com'
+          dial_addr: '114.114.115.115:53'
+          enable_pipeline: false
+        - addr: 'public1.sdns.cn'
+          dial_addr: '1.2.4.8:53'
+        - addr: 'public2.sdns.cn'
+          dial_addr: '210.2.4.8:53'
+        - addr: 'tcp://public1.sdns.cn'
+          dial_addr: '1.2.4.8:53'
+          enable_pipeline: false
+        - addr: 'tcp://public2.sdns.cn'
+          dial_addr: '210.2.4.8:53'
+          enable_pipeline: false
         - addr: 'https://doh.onedns.net/dns-query'
           dial_addr: '52.80.109.59:443'
           enable_http3: false
