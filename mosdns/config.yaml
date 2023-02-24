@@ -107,6 +107,8 @@ plugins:
         - addr: 'tcp://public2.sdns.cn'
           dial_addr: '210.2.4.8:53'
           enable_pipeline: false
+        - addr: 'public-dns-a.baidu.com'
+          dial_addr: '180.76.76.76:53'
         - addr: 'https://doh.onedns.net/dns-query'
           dial_addr: '52.80.109.59:443'
           enable_http3: false
