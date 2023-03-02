@@ -20,6 +20,7 @@ function CleanupCurrentContainer() {
 }
 # Download Unbound Configuration
 function DownloadUnboundConfiguration() {
+    ENABLE_CACHE="true"
     ENABLE_DNSSEC="false"
     ENABLE_ECS="true"
     ENABLE_RECURSIVE_DNS="false"
@@ -43,6 +44,9 @@ function DownloadUnboundConfiguration() {
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
     fi && curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/data/unbound.conf"
 
+    if [ "${ENABLE_CACHE}" == "false" ]; then
+        sed -i "s/forward-no-cache: no/forward-no-cache: yes/g" "${DOCKER_PATH}/data/unbound.conf"
+    fi
     if [ "${ENABLE_DNSSEC}" == "false" ]; then
         sed -i "s/validator //g" "${DOCKER_PATH}/data/unbound.conf"
     fi
