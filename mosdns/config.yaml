@@ -87,24 +87,24 @@ plugins:
     args:
       concurrent: 3
       upstreams:
-        - addr: '114.114.114.114:53'
-        - addr: '114.114.115.115:53'
+        - addr: 'udp://114.114.114.114:53'
+        - addr: 'udp://114.114.115.115:53'
         - addr: 'tcp://114.114.114.114:53'
           enable_pipeline: false
         - addr: 'tcp://114.114.115.115:53'
           enable_pipeline: false
-        - addr: '1.2.4.8:53'
-        - addr: '210.2.4.8:53'
+        - addr: 'udp://1.2.4.8:53'
+        - addr: 'udp://210.2.4.8:53'
         - addr: 'tcp://1.2.4.8:53'
           enable_pipeline: false
         - addr: 'tcp://210.2.4.8:53'
           enable_pipeline: false
-        - addr: '180.76.76.76:53'
-#-      - addr: '[2400:da00::6666]:53'
-        - addr: '117.50.10.10:53'
-        - addr: '52.80.52.52:53'
-#-      - addr: '[2400:7fc0:849e:200::8]:53'
-#-      - addr: '[2404:c2c0:85d8:901::8]:53'
+        - addr: 'udp://180.76.76.76:53'
+#-      - addr: 'udp://[2400:da00::6666]:53'
+        - addr: 'udp://117.50.10.10:53'
+        - addr: 'udp://52.80.52.52:53'
+#-      - addr: 'udp://[2400:7fc0:849e:200::8]:53'
+#-      - addr: 'udp://[2404:c2c0:85d8:901::8]:53'
         - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
           dial_addr: '101.6.6.6:8443'
           enable_http3: false
