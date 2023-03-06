@@ -19,6 +19,7 @@ jobs:
                   ls -alh
                   cd unbound
                   sudo wget "https://www.internic.net/domain/named.cache"
+                  sudo mv named.cache root.hints
                   cd ..
             - name: Step 3 - Release CMA_DNS
               run: |
