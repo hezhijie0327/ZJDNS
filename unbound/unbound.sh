@@ -95,7 +95,13 @@ function DownloadUnboundConfiguration() {
 }
 # Update Root Hints
 function UpdateRootHints() {
-    curl -s --connect-timeout 15 "https://www.internic.net/domain/named.cache" > "${DOCKER_PATH}/data/root.hints"
+    if [ "${USE_CDN}" == true ]; then
+        ROOT_HINTS_DOMAIN="source.zhijie.online"
+        ROOT_HINTS_PATH="CMA_DNS/main/unbound/root.hints"
+    else
+        ROOT_HINTS_DOMAIN="www.internic.net"
+        ROOT_HINTS_PATH="domain/named.cache"
+    fi && curl -s --connect-timeout 15 "https://${ROOT_HINTS_DOMAIN}/${ROOT_HINTS_PATH}" > "${DOCKER_PATH}/data/root.hints"
 }
 # Create New Container
 function CreateNewContainer() {
