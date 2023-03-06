@@ -22,6 +22,7 @@ function CleanupCurrentContainer() {
 function DownloadUnboundConfiguration() {
     ENABLE_CACHE="true"
     ENABLE_DNSSEC="false"
+    ENABLE_DNSSEC_PERMISSIVE_MODE="false"
     ENABLE_ECS="true"
     ENABLE_RECURSIVE_DNS="false"
     ENABLE_REDIS_CACHE="false"
@@ -50,6 +51,9 @@ function DownloadUnboundConfiguration() {
     fi
     if [ "${ENABLE_DNSSEC}" == "false" ]; then
         sed -i "s/validator //g" "${DOCKER_PATH}/data/unbound.conf"
+    fi
+    if [ "${ENABLE_DNSSEC}" == "true" ] && [ "${ENABLE_DNSSEC_PERMISSIVE_MODE}" == "true" ]; then
+        sed -i "s/val-permissive-mode\: no/val-permissive-mode\: yes/g" "${DOCKER_PATH}/data/unbound.conf"
     fi
     if [ "${ENABLE_ECS}" == "false" ]; then
         sed -i "s/subnetcache //g" "${DOCKER_PATH}/data/unbound.conf"
