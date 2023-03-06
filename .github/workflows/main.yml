@@ -1,4 +1,4 @@
-# Current Version: 1.0.1
+# Current Version: 1.0.2
 
 name: Build & Release hezhijie0327/CMA_DNS
 
@@ -18,7 +18,7 @@ jobs:
               run: |
                   ls -alh
                   cd unbound
-                  wget "https://www.internic.net/domain/named.cache"
+                  sudo wget "https://www.internic.net/domain/named.cache"
                   cd ..
             - name: Step 3 - Release Patch
               run: |
