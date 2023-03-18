@@ -87,12 +87,24 @@ plugins:
     args:
       concurrent: 3
       upstreams:
+        - addr: 'https://cn-east.iqiqzz.com/dns-query'
+          dial_addr: '112.132.212.159:443'
+          enable_http3: false
+        - addr: 'https://cn-east-rsa.iqiqzz.com/dns-query'
+          dial_addr: '112.132.212.159:443'
+          enable_http3: false
+        - addr: 'https://cn-south.iqiqzz.com/dns-query'
+          dial_addr: '59.34.148.98:443'
+          enable_http3: false
+        - addr: 'https://cn-south-rsa.iqiqzz.com/dns-query'
+          dial_addr: '59.34.148.98:443'
+          enable_http3: false
         - addr: 'https://doh.onedns.net/dns-query'
           dial_addr: '52.80.248.44:443'
           enable_http3: false
         - addr: 'tls://dot.onedns.net'
           dial_addr: '52.80.248.44:853'
-          enable_pipeline: true
+          enable_pipeline: false
         - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
           dial_addr: '101.6.6.6:8443'
           enable_http3: false
