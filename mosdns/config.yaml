@@ -87,12 +87,6 @@ plugins:
     args:
       concurrent: 3
       upstreams:
-        - addr: 'https://doh.18bit.cn/dns-query'
-          dial_addr: '101.33.235.10:443'
-          enable_http3: false
-        - addr: 'tls://dns.18bit.cn'
-          dial_addr: '101.33.235.10:853'
-          enable_pipeline: false
         - addr: 'https://cn-east.iqiqzz.com/dns-query'
           dial_addr: '112.132.212.159:443'
           enable_http3: false
