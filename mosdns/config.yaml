@@ -87,18 +87,18 @@ plugins:
     args:
       concurrent: 3
       upstreams:
-        - addr: 'https://cn-east.iqiqzz.com/dns-query'
-          dial_addr: '112.132.212.159:443'
-          enable_http3: false
-        - addr: 'https://cn-east-rsa.iqiqzz.com/dns-query'
-          dial_addr: '112.132.212.159:443'
-          enable_http3: false
-        - addr: 'https://cn-south.iqiqzz.com/dns-query'
-          dial_addr: '59.34.148.98:443'
-          enable_http3: false
-        - addr: 'https://cn-south-rsa.iqiqzz.com/dns-query'
-          dial_addr: '59.34.148.98:443'
-          enable_http3: false
+        - addr: 'tcp://public1.114dns.com'
+          dial_addr: '114.114.114.114:53'
+          enable_pipeline: false
+        - addr: 'tcp://public2.114dns.com'
+          dial_addr: '114.114.115.115:53'
+          enable_pipeline: false
+        - addr: 'udp://public1.114dns.com'
+          dial_addr: '114.114.114.114:53'
+        - addr: 'udp://public2.114dns.com'
+          dial_addr: '114.114.115.115:53'
+        - addr: 'udp://public-dns-a.baidu.com'
+          dial_addr: '180.76.76.76:53'
         - addr: 'https://doh.onedns.net/dns-query'
           dial_addr: '52.80.248.44:443'
           enable_http3: false
