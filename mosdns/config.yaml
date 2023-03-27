@@ -109,6 +109,10 @@ plugins:
 #-        dial_addr: '[2400:7fc0:849e:200::8]:53'
 #-      - addr: 'udp://dns-pure-d.onedns.net'
 #-        dial_addr: '[2404:c2c0:85d8:901::8]:53'
+        - addr: 'udp://public1.sdns.cn'
+          dial_addr: '1.2.4.8:53'
+        - addr: 'udp://public2.sdns.cn'
+          dial_addr: '210.2.4.8:53'
         - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
           dial_addr: '101.6.6.6:8443'
           enable_http3: false
