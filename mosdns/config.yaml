@@ -99,6 +99,8 @@ plugins:
           dial_addr: '114.114.115.115:53'
         - addr: 'udp://public-dns-a.baidu.com'
           dial_addr: '180.76.76.76:53'
+#-      - addr: 'udp://public-dns-b.baidu.com'
+#-        dial_addr: '[2400:da00::6666]:53'
         - addr: 'udp://dns-pure-a.onedns.net'
           dial_addr: '117.50.10.10:53'
         - addr: 'udp://dns-pure-b.onedns.net'
