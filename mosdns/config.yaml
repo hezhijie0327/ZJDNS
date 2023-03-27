@@ -301,6 +301,24 @@ plugins:
 #-#=    - addr: 'tls://dns64.cloudflare-dns.com'
 #-#=      dial_addr: '[2606:4700:4700::6400]:853'
 #-#=      enable_pipeline: true
+        - addr: 'https://freedns.controld.com/p0'
+          dial_addr: '76.76.2.11:443'
+          enable_http3: false
+##      - addr: 'https://freedns.controld.com/p0'
+##        dial_addr: '76.76.2.11:443'
+##        enable_http3: true
+#-#=    - addr: 'https://freedns.controld.com/p0'
+#-#=      dial_addr: '[2606:1a40::11]:443'
+#-#=      enable_http3: false
+###-#=  - addr: 'https://freedns.controld.com/p0'
+###-#=    dial_addr: '[2606:1a40::11]:443'
+###-#=    enable_http3: true
+        - addr: 'tls://p0.freedns.controld.com'
+          dial_addr: '76.76.2.11:853'
+          enable_pipeline: true
+#-#=    - addr: 'tls://p0.freedns.controld.com'
+#-#=      dial_addr: '[2606:1a40::11]:853'
+#-#=      enable_pipeline: true
         - addr: 'https://doh.sb/dns-query'
           dial_addr: '185.222.222.222:443'
           enable_http3: false
@@ -324,30 +342,6 @@ plugins:
 #-#=      enable_pipeline: true
 #-#=    - addr: 'tls://dot.sb'
 #-#=      dial_addr: '[2a11::]:853'
-#-#=      enable_pipeline: true
-        - addr: 'https://public.dns.iij.jp/dns-query'
-          dial_addr: '103.2.57.5:443'
-          enable_http3: false
-        - addr: 'https://public.dns.iij.jp/dns-query'
-          dial_addr: '103.2.57.6:443'
-          enable_http3: false
-#-#=    - addr: 'https://public.dns.iij.jp/dns-query'
-#-#=      dial_addr: '[2001:300::5]:443'
-#-#=      enable_http3: false
-#-#=    - addr: 'https://public.dns.iij.jp/dns-query'
-#-#=      dial_addr: '[2001:300::6]:443'
-#-#=      enable_http3: false
-        - addr: 'tls://public.dns.iij.jp'
-          dial_addr: '103.2.57.5:853'
-          enable_pipeline: true
-        - addr: 'tls://public.dns.iij.jp'
-          dial_addr: '103.2.57.6:853'
-          enable_pipeline: true
-#-#=    - addr: 'tls://public.dns.iij.jp'
-#-#=      dial_addr: '[2001:300::5]:853'
-#-#=      enable_pipeline: true
-#-#=    - addr: 'tls://public.dns.iij.jp'
-#-#=      dial_addr: '[2001:300::6]:853'
 #-#=      enable_pipeline: true
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '45.90.28.0:443'
@@ -587,6 +581,22 @@ plugins:
 #+#=      dial_addr: '[2606:4700:4700::6400]:853'
 #+#=      enable_pipeline: true
 #+#=#@    socks5: '127.0.0.1:7890'
+        - addr: 'https://freedns.controld.com/p0'
+          dial_addr: '76.76.2.11:443'
+          enable_http3: false
+#@        socks5: '127.0.0.1:7890'
+#+#=    - addr: 'https://freedns.controld.com/p0'
+#+#=      dial_addr: '[2606:1a40::11]:443'
+#+#=      enable_http3: false
+#+#=#@    socks5: '127.0.0.1:7890'
+        - addr: 'tls://p0.freedns.controld.com'
+          dial_addr: '76.76.2.11:853'
+          enable_pipeline: true
+#@        socks5: '127.0.0.1:7890'
+#+#=    - addr: 'tls://p0.freedns.controld.com'
+#+#=      dial_addr: '[2606:1a40::11]:853'
+#+#=      enable_pipeline: true
+#+#=#@    socks5: '127.0.0.1:7890'
         - addr: 'https://doh.sb/dns-query'
           dial_addr: '185.222.222.222:443'
           enable_http3: false
@@ -617,38 +627,6 @@ plugins:
 #+#=#@    socks5: '127.0.0.1:7890'
 #+#=    - addr: 'tls://dot.sb'
 #+#=      dial_addr: '[2a11::]:853'
-#+#=      enable_pipeline: true
-#+#=#@    socks5: '127.0.0.1:7890'
-        - addr: 'https://public.dns.iij.jp/dns-query'
-          dial_addr: '103.2.57.5:443'
-          enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-        - addr: 'https://public.dns.iij.jp/dns-query'
-          dial_addr: '103.2.57.6:443'
-          enable_http3: false
-#@        socks5: '127.0.0.1:7890'
-#+#=    - addr: 'https://public.dns.iij.jp/dns-query'
-#+#=      dial_addr: '[2001:300::5]:443'
-#+#=      enable_http3: false
-#+#=#@    socks5: '127.0.0.1:7890'
-#+#=    - addr: 'https://public.dns.iij.jp/dns-query'
-#+#=      dial_addr: '[2001:300::6]:443'
-#+#=      enable_http3: false
-#+#=#@    socks5: '127.0.0.1:7890'
-        - addr: 'tls://public.dns.iij.jp'
-          dial_addr: '103.2.57.5:853'
-          enable_pipeline: true
-#@        socks5: '127.0.0.1:7890'
-        - addr: 'tls://public.dns.iij.jp'
-          dial_addr: '103.2.57.6:853'
-          enable_pipeline: true
-#@        socks5: '127.0.0.1:7890'
-#+#=    - addr: 'tls://public.dns.iij.jp'
-#+#=      dial_addr: '[2001:300::5]:853'
-#+#=      enable_pipeline: true
-#+#=#@    socks5: '127.0.0.1:7890'
-#+#=    - addr: 'tls://public.dns.iij.jp'
-#+#=      dial_addr: '[2001:300::6]:853'
 #+#=      enable_pipeline: true
 #+#=#@    socks5: '127.0.0.1:7890'
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
