@@ -99,12 +99,14 @@ plugins:
           dial_addr: '114.114.115.115:53'
         - addr: 'udp://public-dns-a.baidu.com'
           dial_addr: '180.76.76.76:53'
-        - addr: 'https://doh.onedns.net/dns-query'
-          dial_addr: '52.80.248.44:443'
-          enable_http3: false
-        - addr: 'tls://dot.onedns.net'
-          dial_addr: '52.80.248.44:853'
-          enable_pipeline: false
+        - addr: 'udp://dns-pure-a.onedns.net'
+          dial_addr: '117.50.10.10:53'
+        - addr: 'udp://dns-pure-b.onedns.net'
+          dial_addr: '52.80.52.52:53'
+#-      - addr: 'udp://dns-pure-c.onedns.net'
+#-        dial_addr: '[2400:7fc0:849e:200::8]:53'
+#-      - addr: 'udp://dns-pure-d.onedns.net'
+#-        dial_addr: '[2404:c2c0:85d8:901::8]:53'
         - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
           dial_addr: '101.6.6.6:8443'
           enable_http3: false
