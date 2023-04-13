@@ -28,6 +28,8 @@ function DownloadmosDNSConfiguration() {
     ENABLE_PROXY_IPV6_UPSTREAM="false"
     ENABLE_PROXY_UPSTREAM="false"
 
+    ENABLE_RECURSIVE_UPSTREAM="false"
+
     ENABLE_REMOTE_IPV6_UPSTREAM="false"
     ENABLE_REMOTE_UPSTREAM="false"
 
@@ -85,6 +87,10 @@ function DownloadmosDNSConfiguration() {
     fi
     if [ "${ENABLE_PROXY_UPSTREAM}" == "true" ]; then
         sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+
+    if [ "${ENABLE_RECURSIVE_UPSTREAM}" == "true" ]; then
+        sed -i "s/#~/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ "${ENABLE_REMOTE_IPV6_UPSTREAM}" == "true" ]; then
