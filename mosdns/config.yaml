@@ -2,6 +2,24 @@ log:
   level: error
   production: true
 plugins:
+  - tag: forward_query_to_recursive_dns
+    type: forward
+    args:
+      concurrent: 3
+      upstreams:
+        - addr: 'tcp://localhost'
+          dial_addr: '127.0.0.1:5335'
+          enable_pipeline: true
+        - addr: 'udp://localhost'
+          dial_addr: '127.0.0.1:5335'
+        - addr: 'https://localhost/dns-query'
+          dial_addr: '127.0.0.1:5333'
+          enable_http3: false
+          insecure_skip_verify: true
+        - addr: 'tls://localhost'
+          dial_addr: '127.0.0.1:5355'
+          enable_pipeline: true
+          insecure_skip_verify: true
   - tag: forward_query_to_local_ecs
     type: forward
     args:
@@ -782,7 +800,10 @@ plugins:
       - exec: jump sequence_check_response_has_valid_answer
       - exec: jump sequence_check_response_has_any_answer
 #?    - exec: $forward_query_to_remote_no_ecs
+#?#~  - exec: jump sequence_check_response_has_valid_answer
 #?    - exec: jump sequence_check_response_has_any_answer
+#~    - exec: $forward_query_to_recursive_dns
+#~    - exec: jump sequence_check_response_has_any_answer
   - tag: sequence_forward_query_to_proxy_upstream
     type: sequence
     args:
@@ -799,7 +820,10 @@ plugins:
       - exec: jump sequence_check_response_has_valid_answer
       - exec: jump sequence_check_response_has_any_answer
 #@    - exec: $forward_query_to_proxy_remote_no_ecs
+#@#~  - exec: jump sequence_check_response_has_valid_answer
 #@    - exec: jump sequence_check_response_has_any_answer
+#~    - exec: $forward_query_to_recursive_dns
+#~    - exec: jump sequence_check_response_has_any_answer
   - tag: main_server
     type: fallback
     args:
