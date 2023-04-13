@@ -60,7 +60,9 @@ function DownloadUnboundConfiguration() {
         sed -i "s/subnetcache //g" "${DOCKER_PATH}/data/unbound.conf"
     fi
     if [ "${ENABLE_FORWARD}" == "true" ]; then
-        sed -i "/forward-zone:/d;s/#+/  /g" "${DOCKER_PATH}/data/unbound.conf"
+        sed -i "s/#+/  /g" "${DOCKER_PATH}/data/unbound.conf"
+    else
+        sed -i "/forward-zone:/d;/#+/d" "${DOCKER_PATH}/data/unbound.conf"
     fi
     if [ "${ENABLE_RECURSIVE_DNS}" == "true" ]; then
         sed -i "s/forward-first: no/forward-first: yes/g" "${DOCKER_PATH}/data/unbound.conf"
