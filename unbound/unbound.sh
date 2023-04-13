@@ -24,6 +24,7 @@ function DownloadUnboundConfiguration() {
     ENABLE_DNSSEC="false"
     ENABLE_DNSSEC_PERMISSIVE_MODE="false"
     ENABLE_ECS="true"
+    ENABLE_FORWARD="true"
     ENABLE_RECURSIVE_DNS="false"
     ENABLE_REDIS_CACHE="false"
 
@@ -57,6 +58,9 @@ function DownloadUnboundConfiguration() {
     fi
     if [ "${ENABLE_ECS}" == "false" ]; then
         sed -i "s/subnetcache //g" "${DOCKER_PATH}/data/unbound.conf"
+    fi
+    if [ "${ENABLE_FORWARD}" == "true" ]; then
+        sed -i "s/#+/  /g" "${DOCKER_PATH}/data/unbound.conf"
     fi
     if [ "${ENABLE_RECURSIVE_DNS}" == "true" ]; then
         sed -i "s/forward-first: no/forward-first: yes/g" "${DOCKER_PATH}/data/unbound.conf"
