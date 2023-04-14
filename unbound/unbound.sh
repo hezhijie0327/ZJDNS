@@ -5,6 +5,8 @@ OWNER="hezhijie0327"
 REPO="unbound"
 TAG="latest"
 DOCKER_PATH="/docker/unbound"
+
+CURL_OPTION=""
 USE_CDN="true"
 
 ## Function
@@ -45,7 +47,7 @@ function DownloadUnboundConfiguration() {
         CDN_PATH="source.zhijie.online"
     else
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
-    fi && curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/data/unbound.conf"
+    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/data/unbound.conf"
 
     if [ "${ENABLE_CACHE}" == "false" ]; then
         sed -i "s/forward-no-cache: no/forward-no-cache: yes/g" "${DOCKER_PATH}/data/unbound.conf"
@@ -107,7 +109,7 @@ function UpdateRootHints() {
     else
         ROOT_HINTS_DOMAIN="www.internic.net"
         ROOT_HINTS_PATH="domain/named.cache"
-    fi && curl -s --connect-timeout 15 "https://${ROOT_HINTS_DOMAIN}/${ROOT_HINTS_PATH}" > "${DOCKER_PATH}/data/root.hints"
+    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${ROOT_HINTS_DOMAIN}/${ROOT_HINTS_PATH}" > "${DOCKER_PATH}/data/root.hints"
 }
 # Create New Container
 function CreateNewContainer() {
