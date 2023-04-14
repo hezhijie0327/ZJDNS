@@ -5,6 +5,8 @@ OWNER="hezhijie0327"
 REPO="mosdns"
 TAG="latest"
 DOCKER_PATH="/docker/mosdns"
+
+CURL_OPTION=""
 USE_CDN="true"
 
 ## Function
@@ -67,7 +69,7 @@ function DownloadmosDNSConfiguration() {
         CDN_PATH="source.zhijie.online"
     else
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
-    fi && curl -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
+    fi && curl ${CURL_OPTION:--4} -s --connect-timeout 15 "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${ENABLE_ALWAYS_STANDBY}" == "true" ]; then
         sed -i 's/#!/  /g' "${DOCKER_PATH}/conf/config.yaml"
@@ -131,7 +133,7 @@ function DownloadmosDNSConfiguration() {
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
     CNIPDB_SOURCE="geolite2"
-    curl -s --connect-timeout 15 "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
+    curl ${CURL_OPTION:--4} -s --connect-timeout 15 "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
 }
 # Create New Container
 function CreateNewContainer() {
