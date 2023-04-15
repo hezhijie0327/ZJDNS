@@ -751,12 +751,6 @@ plugins:
         - '2620:4f:8000::/48'
         - 'fc00::/7'
         - 'fe80::/10'
-  - tag: ip_set_valid
-    type: ip_set
-    args:
-      ips:
-        - '0.0.0.0/0'
-        - '::/0'
   - tag: sequence_check_response_has_local_answer
     type: sequence
     args:
@@ -768,14 +762,10 @@ plugins:
     type: sequence
     args:
       - matches:
-          - '!rcode 0'
-        exec: drop_resp
-      - matches:
           - '!has_wanted_ans'
         exec: drop_resp
       - matches:
-          - 'qtype 1 28'
-          - '!resp_ip $ip_set_valid'
+          - '!rcode 0'
         exec: drop_resp
       - matches:
           - 'qtype 1 28'
