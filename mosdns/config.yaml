@@ -687,6 +687,34 @@ plugins:
 #+#=      dial_addr: '[2a07:a8c1::]:853'
 #+#=      enable_pipeline: true
 #+#=#@    socks5: '127.0.0.1:7890'
+  - tag: fallback_forward_query_to_remote_ecs
+    type: fallback
+    args:
+      primary: $forward_query_to_proxy_remote_ecs
+      secondary: $forward_query_to_remote_ecs
+      threshold: 1250
+#!    always_standby: true
+  - tag: fallback_forward_query_to_remote_no_ecs
+    type: fallback
+    args:
+      primary: $forward_query_to_proxy_remote_no_ecs
+      secondary: $forward_query_to_remote_no_ecs
+      threshold: 1250
+#!    always_standby: true
+  - tag: fallback_forward_query_to_local
+    type: fallback
+    args:
+      primary: $forward_query_to_local_ecs
+      secondary: $forward_query_to_local_no_ecs
+      threshold: 2500
+#!    always_standby: true
+  - tag: fallback_forward_query_to_remote
+    type: fallback
+    args:
+      primary: fallback_forward_query_to_remote_ecs
+      secondary: fallback_forward_query_to_remote_no_ecs
+      threshold: 2500
+#!    always_standby: true
   - tag: ip_set_dns64
     type: ip_set
     args:
@@ -784,51 +812,22 @@ plugins:
           - 'qtype 1 28'
           - 'resp_ip $ip_set_reserved_ip'
         exec: drop_resp
-  - tag: sequence_forward_query_to_direct_upstream
+  - tag: sequence_forward_query_to_forward_dns
     type: sequence
     args:
 #%    - exec: ecs
-      - exec: $forward_query_to_local_ecs
+      - exec: jump fallback_forward_query_to_local
 #?    - exec: jump sequence_check_response_has_local_answer
       - exec: jump sequence_check_response_has_valid_answer
       - exec: jump sequence_check_response_has_any_answer
-#?    - exec: $forward_query_to_remote_ecs
+#?    - exec: jump fallback_forward_query_to_remote
 #?    - exec: jump sequence_check_response_has_valid_answer
 #?    - exec: jump sequence_check_response_has_any_answer
-      - exec: $forward_query_to_local_no_ecs
-#?    - exec: jump sequence_check_response_has_local_answer
-      - exec: jump sequence_check_response_has_valid_answer
-      - exec: jump sequence_check_response_has_any_answer
-#?    - exec: $forward_query_to_remote_no_ecs
-#?#~  - exec: jump sequence_check_response_has_valid_answer
-#?    - exec: jump sequence_check_response_has_any_answer
-#~    - exec: $forward_query_to_recursive_dns
-#~    - exec: jump sequence_check_response_has_any_answer
-  - tag: sequence_forward_query_to_proxy_upstream
-    type: sequence
-    args:
-#%    - exec: ecs
-      - exec: $forward_query_to_local_ecs
-#?    - exec: jump sequence_check_response_has_local_answer
-      - exec: jump sequence_check_response_has_valid_answer
-      - exec: jump sequence_check_response_has_any_answer
-#@    - exec: $forward_query_to_proxy_remote_ecs
-#@    - exec: jump sequence_check_response_has_valid_answer
-#@    - exec: jump sequence_check_response_has_any_answer
-      - exec: $forward_query_to_local_no_ecs
-#?    - exec: jump sequence_check_response_has_local_answer
-      - exec: jump sequence_check_response_has_valid_answer
-      - exec: jump sequence_check_response_has_any_answer
-#@    - exec: $forward_query_to_proxy_remote_no_ecs
-#@#~  - exec: jump sequence_check_response_has_valid_answer
-#@    - exec: jump sequence_check_response_has_any_answer
-#~    - exec: $forward_query_to_recursive_dns
-#~    - exec: jump sequence_check_response_has_any_answer
   - tag: main_server
     type: fallback
     args:
-      primary: sequence_forward_query_to_proxy_upstream
-      secondary: sequence_forward_query_to_direct_upstream
+      primary: sequence_forward_query_to_forward_dns
+      secondary: $forward_query_to_recursive_dns
       threshold: 3750
 #!    always_standby: true
   - tag: create_tcp_server
