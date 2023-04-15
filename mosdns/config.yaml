@@ -715,12 +715,6 @@ plugins:
       secondary: fallback_forward_query_to_remote_no_ecs
       threshold: 2500
 #!    always_standby: true
-  - tag: ip_set_dns64
-    type: ip_set
-    args:
-      ips:
-        - '64:ff9b::/96'
-        - '64:ff9b:1::/48'
   - tag: ip_set_local
     type: ip_set
     args:
@@ -766,10 +760,6 @@ plugins:
   - tag: sequence_check_response_has_any_answer
     type: sequence
     args:
-      - matches:
-          - 'qtype 28'
-          - 'resp_ip $ip_set_dns64'
-        exec: reject 0
       - matches:
           - 'rcode 1'
         exec: reject 1
