@@ -22,6 +22,8 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
+    RUNNING_MODE="" # default, forward, recursive
+
     ENABLE_ALWAYS_STANDBY="false"
     ENABLE_IPV6_UPSTREAM="false"
     ENABLE_HTTP3_UPSTREAM="false"
@@ -29,8 +31,6 @@ function DownloadmosDNSConfiguration() {
 
     ENABLE_PROXY_IPV6_UPSTREAM="false"
     ENABLE_PROXY_UPSTREAM="false"
-
-    ENABLE_RECURSIVE_UPSTREAM="false"
 
     ENABLE_REMOTE_IPV6_UPSTREAM="false"
     ENABLE_REMOTE_UPSTREAM="false"
@@ -71,6 +71,13 @@ function DownloadmosDNSConfiguration() {
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 
+    if [ "${RUNNING_MODE}" == "" ]; then
+        RUNNING_MODE=${RUNNING_MODE:-default}
+    fi
+    if [ "${RUNNING_MODE}" == "default" ] || [ "${RUNNING_MODE}" == "forward" ] || [ "${RUNNING_MODE}" == "recursive" ]; then
+        sed -i 's/entry: default_server/entry: ${RUNNING_MODE}_server/g' "${DOCKER_PATH}/conf/config.yaml"
+    fi
+
     if [ "${ENABLE_ALWAYS_STANDBY}" == "true" ]; then
         sed -i 's/#!/  /g' "${DOCKER_PATH}/conf/config.yaml"
     fi
@@ -89,10 +96,6 @@ function DownloadmosDNSConfiguration() {
     fi
     if [ "${ENABLE_PROXY_UPSTREAM}" == "true" ]; then
         sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
-
-    if [ "${ENABLE_RECURSIVE_UPSTREAM}" == "true" ]; then
-        sed -i "s/#~/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ "${ENABLE_REMOTE_IPV6_UPSTREAM}" == "true" ]; then
