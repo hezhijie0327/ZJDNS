@@ -690,22 +690,22 @@ plugins:
   - tag: fallback_forward_query_to_remote_ecs
     type: fallback
     args:
-      primary: $forward_query_to_proxy_remote_ecs
-      secondary: $forward_query_to_remote_ecs
+      primary: forward_query_to_proxy_remote_ecs
+      secondary: forward_query_to_remote_ecs
       threshold: 1250
 #!    always_standby: true
   - tag: fallback_forward_query_to_remote_no_ecs
     type: fallback
     args:
-      primary: $forward_query_to_proxy_remote_no_ecs
-      secondary: $forward_query_to_remote_no_ecs
+      primary: forward_query_to_proxy_remote_no_ecs
+      secondary: forward_query_to_remote_no_ecs
       threshold: 1250
 #!    always_standby: true
   - tag: fallback_forward_query_to_local
     type: fallback
     args:
-      primary: $forward_query_to_local_ecs
-      secondary: $forward_query_to_local_no_ecs
+      primary: forward_query_to_local_ecs
+      secondary: forward_query_to_local_no_ecs
       threshold: 2500
 #!    always_standby: true
   - tag: fallback_forward_query_to_remote
@@ -816,18 +816,18 @@ plugins:
     type: sequence
     args:
 #%    - exec: ecs
-      - exec: jump fallback_forward_query_to_local
+      - exec: $fallback_forward_query_to_local
 #?    - exec: jump sequence_check_response_has_local_answer
       - exec: jump sequence_check_response_has_valid_answer
       - exec: jump sequence_check_response_has_any_answer
-#?    - exec: jump fallback_forward_query_to_remote
+#?    - exec: $fallback_forward_query_to_remote
 #?    - exec: jump sequence_check_response_has_valid_answer
 #?    - exec: jump sequence_check_response_has_any_answer
   - tag: main_server
     type: fallback
     args:
       primary: sequence_forward_query_to_forward_dns
-      secondary: $forward_query_to_recursive_dns
+      secondary: forward_query_to_recursive_dns
       threshold: 3750
 #!    always_standby: true
   - tag: create_tcp_server
