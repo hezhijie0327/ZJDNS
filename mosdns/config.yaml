@@ -550,35 +550,35 @@ plugins:
 #-#=      dial_addr: '[2a07:a8c1::]:853'
 #-#=      enable_pipeline: true
 #-#=      insecure_skip_verify: true
-        - addr: 'https://twnic-public-dns.twnic.tw/dns-query'
+        - addr: 'https://dns.twnic.tw/dns-query'
           dial_addr: '101.101.101.101:443'
           enable_http3: false
           insecure_skip_verify: true
-        - addr: 'https://twnic-public-dns.twnic.tw/dns-query'
+        - addr: 'https://dns.twnic.tw/dns-query'
           dial_addr: '101.102.103.104:443'
           enable_http3: false
           insecure_skip_verify: true
-#-#=    - addr: 'https://twnic-public-dns.twnic.tw/dns-query'
+#-#=    - addr: 'https://dns.twnic.tw/dns-query'
 #-#=      dial_addr: '[2001:de4::101]:443'
 #-#=      enable_http3: false
 #-#=      insecure_skip_verify: true
-#-#=    - addr: 'https://twnic-public-dns.twnic.tw/dns-query'
+#-#=    - addr: 'https://dns.twnic.tw/dns-query'
 #-#=      dial_addr: '[2001:de4::102]:443'
 #-#=      enable_http3: false
 #-#=      insecure_skip_verify: true
-        - addr: 'tls://twnic-public-dns.twnic.tw'
+        - addr: 'tls://dns.twnic.tw'
           dial_addr: '101.101.101.101:853'
           enable_pipeline: true
           insecure_skip_verify: true
-        - addr: 'tls://twnic-public-dns.twnic.tw'
+        - addr: 'tls://dns.twnic.tw'
           dial_addr: '101.102.103.104:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#-#=    - addr: 'tls://twnic-public-dns.twnic.tw'
+#-#=    - addr: 'tls://dns.twnic.tw'
 #-#=      dial_addr: '[2001:de4::101]:853'
 #-#=      enable_pipeline: true
 #-#=      insecure_skip_verify: true
-#-#=    - addr: 'tls://twnic-public-dns.twnic.tw'
+#-#=    - addr: 'tls://dns.twnic.tw'
 #-#=      dial_addr: '[2001:de4::102]:853'
 #-#=      enable_pipeline: true
 #-#=      insecure_skip_verify: true
@@ -972,42 +972,42 @@ plugins:
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
 #+#=#@    socks5: '127.0.0.1:7890'
-        - addr: 'https://twnic-public-dns.twnic.tw/dns-query'
+        - addr: 'https://dns.twnic.tw/dns-query'
           dial_addr: '101.101.101.101:443'
           enable_http3: false
           insecure_skip_verify: true
 #@        socks5: '127.0.0.1:7890'
-        - addr: 'https://twnic-public-dns.twnic.tw/dns-query'
+        - addr: 'https://dns.twnic.tw/dns-query'
           dial_addr: '101.102.103.104:443'
           enable_http3: false
           insecure_skip_verify: true
 #@        socks5: '127.0.0.1:7890'
-#+#=    - addr: 'https://twnic-public-dns.twnic.tw/dns-query'
+#+#=    - addr: 'https://dns.twnic.tw/dns-query'
 #+#=      dial_addr: '[2001:de4::101]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
 #+#=#@    socks5: '127.0.0.1:7890'
-#+#=    - addr: 'https://twnic-public-dns.twnic.tw/dns-query'
+#+#=    - addr: 'https://dns.twnic.tw/dns-query'
 #+#=      dial_addr: '[2001:de4::102]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
 #+#=#@    socks5: '127.0.0.1:7890'
-        - addr: 'tls://twnic-public-dns.twnic.tw'
+        - addr: 'tls://dns.twnic.tw'
           dial_addr: '101.101.101.101:853'
           enable_pipeline: true
           insecure_skip_verify: true
 #@        socks5: '127.0.0.1:7890'
-        - addr: 'tls://twnic-public-dns.twnic.tw'
+        - addr: 'tls://dns.twnic.tw'
           dial_addr: '101.102.103.104:853'
           enable_pipeline: true
           insecure_skip_verify: true
 #@        socks5: '127.0.0.1:7890'
-#+#=    - addr: 'tls://twnic-public-dns.twnic.tw'
+#+#=    - addr: 'tls://dns.twnic.tw'
 #+#=      dial_addr: '[2001:de4::101]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
 #+#=#@    socks5: '127.0.0.1:7890'
-#+#=    - addr: 'tls://twnic-public-dns.twnic.tw'
+#+#=    - addr: 'tls://dns.twnic.tw'
 #+#=      dial_addr: '[2001:de4::102]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
