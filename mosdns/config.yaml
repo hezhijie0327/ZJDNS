@@ -1191,10 +1191,10 @@ plugins:
     type: sequence
     args:
       - matches:
-          - '!has_wanted_ans'
+          - '!rcode 0'
         exec: drop_resp
       - matches:
-          - '!rcode 0'
+          - '!has_wanted_ans'
         exec: drop_resp
   - tag: sequence_check_response_has_any_answer
     type: sequence
@@ -1208,7 +1208,7 @@ plugins:
 #%    - exec: ecs
       - exec: $fallback_forward_query_to_local
 #?    - exec: jump sequence_check_response_has_local_answer
-      - exec: jump sequence_check_response_has_dns64_answer
+#?    - exec: jump sequence_check_response_has_dns64_answer
 #?    - exec: jump sequence_check_response_has_reserved_answer
 #?    - exec: jump sequence_check_response_has_valid_answer
       - exec: jump sequence_check_response_has_any_answer
