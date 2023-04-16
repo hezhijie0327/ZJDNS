@@ -525,6 +525,7 @@ plugins:
 ###-#=  - addr: 'https://anycast.dns.nextdns.io/dns-query'
 ###-#=    dial_addr: '[2a07:a8c0::]:443'
 ###-#=    enable_http3: true
+###-#=    insecure_skip_verify: true
 #-#=    - addr: 'https://anycast.dns.nextdns.io/dns-query'
 #-#=      dial_addr: '[2a07:a8c1::]:443'
 #-#=      enable_http3: false
