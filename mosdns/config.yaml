@@ -380,6 +380,38 @@ plugins:
     args:
       concurrent: 3
       upstreams:
+        - addr: 'https://private.canadianshield.cira.ca/dns-query'
+          dial_addr: '149.112.121.10:443'
+          enable_http3: false
+          insecure_skip_verify: true
+        - addr: 'https://private.canadianshield.cira.ca/dns-query'
+          dial_addr: '149.112.122.10:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#-#=    - addr: 'https://private.canadianshield.cira.ca/dns-query'
+#-#=      dial_addr: '[2620:10a:80bb::10]:443'
+#-#=      enable_http3: false
+#-#=      insecure_skip_verify: true
+#-#=    - addr: 'https://private.canadianshield.cira.ca/dns-query'
+#-#=      dial_addr: '[2620:10a:80bc::10]:443'
+#-#=      enable_http3: false
+#-#=      insecure_skip_verify: true
+        - addr: 'tls://private.canadianshield.cira.ca'
+          dial_addr: '149.112.121.10:853'
+          enable_pipeline: true
+          insecure_skip_verify: true
+        - addr: 'tls://private.canadianshield.cira.ca'
+          dial_addr: '149.112.122.10:853'
+          enable_pipeline: true
+          insecure_skip_verify: true
+#-#=    - addr: 'tls://private.canadianshield.cira.ca'
+#-#=      dial_addr: '[2620:10a:80bb::10]:853'
+#-#=      enable_pipeline: true
+#-#=      insecure_skip_verify: true
+#-#=    - addr: 'tls://private.canadianshield.cira.ca'
+#-#=      dial_addr: '[2620:10a:80bc::10]:853'
+#-#=      enable_pipeline: true
+#-#=      insecure_skip_verify: true
         - addr: 'https://cloudflare-dns.com/dns-query'
           dial_addr: '1.0.0.1:443'
           enable_http3: false
@@ -786,6 +818,46 @@ plugins:
     args:
       concurrent: 3
       upstreams:
+        - addr: 'https://private.canadianshield.cira.ca/dns-query'
+          dial_addr: '149.112.121.10:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7890'
+        - addr: 'https://private.canadianshield.cira.ca/dns-query'
+          dial_addr: '149.112.122.10:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7890'
+#+#=    - addr: 'https://private.canadianshield.cira.ca/dns-query'
+#+#=      dial_addr: '[2620:10a:80bb::10]:443'
+#+#=      enable_http3: false
+#+#=      insecure_skip_verify: true
+#+#=#@    socks5: '127.0.0.1:7890'
+#+#=    - addr: 'https://private.canadianshield.cira.ca/dns-query'
+#+#=      dial_addr: '[2620:10a:80bc::10]:443'
+#+#=      enable_http3: false
+#+#=      insecure_skip_verify: true
+#+#=#@    socks5: '127.0.0.1:7890'
+        - addr: 'tls://private.canadianshield.cira.ca'
+          dial_addr: '149.112.121.10:853'
+          enable_pipeline: true
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7890'
+        - addr: 'tls://private.canadianshield.cira.ca'
+          dial_addr: '149.112.122.10:853'
+          enable_pipeline: true
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7890'
+#+#=    - addr: 'tls://private.canadianshield.cira.ca'
+#+#=      dial_addr: '[2620:10a:80bb::10]:853'
+#+#=      enable_pipeline: true
+#+#=      insecure_skip_verify: true
+#+#=#@    socks5: '127.0.0.1:7890'
+#+#=    - addr: 'tls://private.canadianshield.cira.ca'
+#+#=      dial_addr: '[2620:10a:80bc::10]:853'
+#+#=      enable_pipeline: true
+#+#=      insecure_skip_verify: true
+#+#=#@    socks5: '127.0.0.1:7890'
         - addr: 'https://cloudflare-dns.com/dns-query'
           dial_addr: '1.0.0.1:443'
           enable_http3: false
