@@ -44,26 +44,6 @@ function DownloadmosDNSConfiguration() {
     ENABLE_UNENCRYPTED_DNS="true"
     SSL_CERT="fullchain.cer"
     SSL_KEY="zhijie.online.key"
-    HTTPS_CONFIG=(
-        "  - tag: create_https_server"
-        "    type: tcp_server"
-        "    args:"
-        "      entries:"
-        "        - path: '/dns-query'"
-        "          exec: main_server"
-        "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
-        "      key: '/etc/mosdns/cert/${SSL_KEY}'"
-        "      listen: :5553"
-    )
-    TLS_CONFIG=(
-        "  - tag: create_tls_server"
-        "    type: tcp_server"
-        "    args:"
-        "      entry: main_server"
-        "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
-        "      key: '/etc/mosdns/cert/${SSL_KEY}'"
-        "      listen: :5535"
-    )
 
     if [ "${USE_CDN}" == "true" ]; then
         CDN_PATH="source.zhijie.online"
@@ -76,6 +56,26 @@ function DownloadmosDNSConfiguration() {
     fi
     if [ "${RUNNING_MODE}" == "default" ] || [ "${RUNNING_MODE}" == "forward" ] || [ "${RUNNING_MODE}" == "recursive" ]; then
         sed -i 's/entry: default_server/entry: ${RUNNING_MODE}_server/g' "${DOCKER_PATH}/conf/config.yaml"
+        HTTPS_CONFIG=(
+            "  - tag: create_https_server"
+            "    type: tcp_server"
+            "    args:"
+            "      entries:"
+            "        - path: '/dns-query'"
+            "          exec: ${RUNNING_MODE}_server"
+            "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
+            "      key: '/etc/mosdns/cert/${SSL_KEY}'"
+            "      listen: :5553"
+        )
+        TLS_CONFIG=(
+            "  - tag: create_tls_server"
+            "    type: tcp_server"
+            "    args:"
+            "      entry: ${RUNNING_MODE}_server"
+            "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
+            "      key: '/etc/mosdns/cert/${SSL_KEY}'"
+            "      listen: :5535"
+        )
     fi
 
     if [ "${ENABLE_ALWAYS_STANDBY}" == "true" ]; then
