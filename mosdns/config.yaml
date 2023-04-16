@@ -152,6 +152,12 @@ plugins:
 #-        dial_addr: '[2400:7fc0:849e:200::8]:53'
 #-      - addr: 'udp://dns-pure-d.onedns.net'
 #-        dial_addr: '[2404:c2c0:85d8:901::8]:53'
+        - addr: 'tcp://public1.sdns.cn'
+          dial_addr: '1.2.4.8:53'
+          enable_pipeline: false
+        - addr: 'tcp://public2.sdns.cn'
+          dial_addr: '210.2.4.8:53'
+          enable_pipeline: false
         - addr: 'udp://public1.sdns.cn'
           dial_addr: '1.2.4.8:53'
         - addr: 'udp://public2.sdns.cn'
@@ -172,6 +178,14 @@ plugins:
 #-        dial_addr: '[2402:f000:1:416:101:6:6:6]:8853'
 #-        enable_pipeline: true
 #-        insecure_skip_verify: true
+        - addr: 'udp://dns.volcengine.com'
+          dial_addr: '180.184.1.1:53'
+        - addr: 'udp://dns.volcengine.com'
+          dial_addr: '180.184.2.2:53'
+        - addr: 'udp://dns.yamu.com'
+          dial_addr: '1.1.8.8:53'
+        - addr: 'udp://dns.yamu.com'
+          dial_addr: '1.1.8.9:53'
   - tag: forward_query_to_remote_ecs
     type: forward
     args:
