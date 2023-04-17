@@ -22,7 +22,7 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
-    RUNNING_MODE="" # default, forward, recursive
+    RUNNING_MODE="" # forward_first, forward_only, recursive_first, recursive_only
 
     ENABLE_ALWAYS_STANDBY="false"
     ENABLE_IPV6_UPSTREAM="false"
@@ -52,9 +52,9 @@ function DownloadmosDNSConfiguration() {
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${RUNNING_MODE}" == "" ]; then
-        RUNNING_MODE=${RUNNING_MODE:-default}
+        RUNNING_MODE=${RUNNING_MODE:-forward_first}
     fi
-    if [ "${RUNNING_MODE}" == "default" ] || [ "${RUNNING_MODE}" == "forward" ] || [ "${RUNNING_MODE}" == "recursive" ]; then
+    if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "forward_only" ] || [ "${RUNNING_MODE}" == "recursive_first" ] || [ "${RUNNING_MODE}" == "recursive_only" ]; then
         sed -i 's/entry: default_server/entry: ${RUNNING_MODE}_server/g' "${DOCKER_PATH}/conf/config.yaml"
         HTTPS_CONFIG=(
             "  - tag: create_https_server"
