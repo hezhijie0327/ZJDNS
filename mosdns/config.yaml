@@ -1215,21 +1215,28 @@ plugins:
 #?    - exec: $fallback_forward_query_to_remote
 #?    - exec: jump sequence_check_response_has_dns64_answer
 #?    - exec: jump sequence_check_response_has_any_answer
-  - tag: default_server
+  - tag: forward_first_server
     type: fallback
     args:
       primary: sequence_forward_query_to_forward_dns
       secondary: forward_query_to_recursive_dns
       threshold: 3750
 #!    always_standby: true
-  - tag: forward_server
+  - tag: forward_only_server
     type: fallback
     args:
       primary: sequence_forward_query_to_forward_dns
       secondary: sequence_forward_query_to_forward_dns
       threshold: 3750
 #!    always_standby: true
-  - tag: recursive_server
+  - tag: recursive_first_server
+    type: fallback
+    args:
+      primary: forward_query_to_recursive_dns
+      secondary: sequence_forward_query_to_forward_dns
+      threshold: 3750
+#!    always_standby: true
+  - tag: recursive_only_server
     type: fallback
     args:
       primary: forward_query_to_recursive_dns
@@ -1239,10 +1246,10 @@ plugins:
   - tag: create_tcp_server
     type: tcp_server
     args:
-      entry: default_server
+      entry: forward_first_server
       listen: :5533
   - tag: create_udp_server
     type: udp_server
     args:
-      entry: default_server
+      entry: forward_first_server
       listen: :5533
