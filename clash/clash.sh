@@ -22,19 +22,22 @@ function CleanupCurrentContainer() {
 }
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
+    CNIPDB_SOURCE="geolite2"
     if [ "${USE_CDN}" == "true" ]; then
         CDN_PATH="source.zhijie.online"
     else
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
-    fi
-    if [ ! -d "${DOCKER_PATH}/data" ]; then
+    fi && if [ ! -d "${DOCKER_PATH}/data" ]; then
         mkdir -p "${DOCKER_PATH}/data"
-    fi
-    CNIPDB_SOURCE="geolite2"
-    curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.mmdb" > "${DOCKER_PATH}/data/Country.mmdb"
+    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.mmdb" > "${DOCKER_PATH}/data/Country.mmdb"
 }
 # Create New Container
 function CreateNewContainer() {
+
+    if [ ! -d "${DOCKER_PATH}/conf" ]; then
+        mkdir -p "${DOCKER_PATH}/conf"
+    fi
+
     docker run --name ${REPO} --net host --restart=always \
         -v /etc/resolv.conf:/etc/resolv.conf:ro \
         -v ${DOCKER_PATH}/data:/etc/clash/data \
