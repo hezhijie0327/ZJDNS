@@ -21,6 +21,11 @@ function CleanupCurrentContainer() {
 }
 # Create New Container
 function CreateNewContainer() {
+
+    if [ ! -d "${DOCKER_PATH}/data" ]; then
+        mkdir -p "${DOCKER_PATH}/data"
+    fi
+
     docker run --name redis --net host --restart=always \
         -v ${DOCKER_PATH}/data:/data \
         -d ${OWNER}/${REPO}:${TAG} \
