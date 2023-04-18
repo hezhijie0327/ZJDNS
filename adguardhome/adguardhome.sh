@@ -19,6 +19,14 @@ function CleanupCurrentContainer() {
 }
 # Create New Container
 function CreateNewContainer() {
+
+    if [ ! -d "${DOCKER_PATH}/conf" ]; then
+        mkdir -p "${DOCKER_PATH}/conf"
+    fi
+    if [ ! -d "${DOCKER_PATH}/work" ]; then
+        mkdir -p "${DOCKER_PATH}/work"
+    fi
+
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/adguardhome/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/adguardhome/conf \
