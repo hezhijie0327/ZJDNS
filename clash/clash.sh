@@ -35,6 +35,11 @@ function UpdateGeoIPCNRule() {
 }
 # Create New Container
 function CreateNewContainer() {
+
+    if [ ! -d "${DOCKER_PATH}/conf" ]; then
+        mkdir -p "${DOCKER_PATH}/conf"
+    fi
+
     docker run --name ${REPO} --net host --restart=always \
         -v /etc/resolv.conf:/etc/resolv.conf:ro \
         -v ${DOCKER_PATH}/data:/etc/clash/data \
