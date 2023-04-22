@@ -54,7 +54,7 @@ function DownloadmosDNSConfiguration() {
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${RUNNING_MODE}" == "" ]; then
-        RUNNING_MODE=${RUNNING_MODE:-forward_first}
+        RUNNING_MODE=${RUNNING_MODE:-forward_only}
     fi
     if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "forward_only" ] || [ "${RUNNING_MODE}" == "recursive_first" ] || [ "${RUNNING_MODE}" == "recursive_only" ]; then
         if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "recursive_first" ]; then
