@@ -59,8 +59,7 @@ function DownloadmosDNSConfiguration() {
     if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "forward_only" ] || [ "${RUNNING_MODE}" == "recursive_first" ] || [ "${RUNNING_MODE}" == "recursive_only" ]; then
         if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "recursive_first" ]; then
             sed -i 's/#~/  /g' "${DOCKER_PATH}/conf/config.yaml"
-        fi
-        sed -i 's/entry: forward_first_server/entry: ${RUNNING_MODE}_server/g' "${DOCKER_PATH}/conf/config.yaml"
+        fi && sed -i 's/entry: forward_first_server/entry: ${RUNNING_MODE}_server/g' "${DOCKER_PATH}/conf/config.yaml"
         HTTPS_CONFIG=(
             "  - tag: create_https_server"
             "    type: tcp_server"
