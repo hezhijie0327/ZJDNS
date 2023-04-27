@@ -68,7 +68,7 @@ plugins:
 #-      - addr: 'https://dns.alidns.com/dns-query'
 #-        dial_addr: '[2400:3200::1]:443'
 #-        enable_http3: false
-#—        insecure_skip_verify: true
+#-        insecure_skip_verify: true
 #-      - addr: 'https://dns.alidns.com/dns-query'
 #-        dial_addr: '[2400:3200:baba::1]:443'
 #-        enable_http3: false
