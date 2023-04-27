@@ -7,19 +7,19 @@ plugins:
     args:
       concurrent: 3
       upstreams:
-        - addr: 'tcp://localhost'
-          dial_addr: '127.0.0.1:5335'
-          enable_pipeline: true
-        - addr: 'udp://localhost'
-          dial_addr: '127.0.0.1:5335'
-        - addr: 'https://localhost/dns-query'
-          dial_addr: '127.0.0.1:5333'
-          enable_http3: false
-          insecure_skip_verify: true
-        - addr: 'tls://localhost'
-          dial_addr: '127.0.0.1:5355'
-          enable_pipeline: true
-          insecure_skip_verify: true
+#$      - addr: 'tcp://localhost'
+#$        dial_addr: '127.0.0.1:5335'
+#$        enable_pipeline: true
+#$      - addr: 'udp://localhost'
+#$        dial_addr: '127.0.0.1:5335'
+#(      - addr: 'https://localhost/dns-query'
+#(        dial_addr: '127.0.0.1:5333'
+#(        enable_http3: false
+#(        insecure_skip_verify: true
+#)      - addr: 'tls://localhost'
+#)        dial_addr: '127.0.0.1:5355'
+#)        enable_pipeline: true
+#)        insecure_skip_verify: true
   - tag: forward_query_to_local_ecs
     type: forward
     args:
