@@ -32,6 +32,10 @@ function DownloadmosDNSConfiguration() {
     ENABLE_PROXY_IPV6_UPSTREAM="false"
     ENABLE_PROXY_UPSTREAM="false"
 
+    ENABLE_RECURSIVE_HTTPS_UPSTREAM="false"
+    ENABLE_RECURSIVE_TLS_UPSTREAM="false"
+    ENABLE_RECURSIVE_UNENCRYPTED_UPSTREAM="true"
+
     ENABLE_REMOTE_IPV6_UPSTREAM="false"
     ENABLE_REMOTE_UPSTREAM="false"
 
@@ -100,6 +104,23 @@ function DownloadmosDNSConfiguration() {
     fi
     if [ "${ENABLE_PROXY_UPSTREAM}" == "true" ]; then
         sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+
+    if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "true" ] || [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "true" ] || [ "${ENABLE_RECURSIVE_UNENCRYPTED_UPSTREAM}" == "true" ]; then
+        sed -i 's/#^/  /g' "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "true" ]; then
+        sed -i "s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "true" ]; then
+        sed -i "s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${ENABLE_RECURSIVE_UNENCRYPTED_UPSTREAM}" == "false" ]; then
+        if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "false" ] && [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "false" ]; then
+            sed -i 's/#$/  /g' "${DOCKER_PATH}/conf/config.yaml"
+        fi
+    else
+        sed -i 's/#$/  /g' "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ "${ENABLE_REMOTE_IPV6_UPSTREAM}" == "true" ]; then
