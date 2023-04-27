@@ -61,6 +61,21 @@ function DownloadmosDNSConfiguration() {
         RUNNING_MODE=${RUNNING_MODE:-forward_only}
     fi
     if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "forward_only" ] || [ "${RUNNING_MODE}" == "recursive_first" ] || [ "${RUNNING_MODE}" == "recursive_only" ]; then
+        if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "recursive_first" ] || [ "${RUNNING_MODE}" == "recursive_only" ]; then
+            if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "true" ]; then
+                sed -i "s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            fi
+            if [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "true" ]; then
+                sed -i "s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            fi
+            if [ "${ENABLE_RECURSIVE_UNENCRYPTED_UPSTREAM}" == "false" ]; then
+                if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "false" ] && [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "false" ]; then
+                    sed -i "s/#\\$/  /g" "${DOCKER_PATH}/conf/config.yaml"
+                fi
+            else
+                sed -i "s/#\\$/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            fi && sed -i "s/#\\^/  /g" "${DOCKER_PATH}/conf/config.yaml"
+        fi
         if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "recursive_first" ]; then
             sed -i 's/#~/  /g' "${DOCKER_PATH}/conf/config.yaml"
         fi && sed -i 's/entry: forward_first_server/entry: ${RUNNING_MODE}_server/g' "${DOCKER_PATH}/conf/config.yaml"
@@ -105,20 +120,6 @@ function DownloadmosDNSConfiguration() {
     if [ "${ENABLE_PROXY_UPSTREAM}" == "true" ]; then
         sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
-
-    if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "true" ]; then
-        sed -i "s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
-    if [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "true" ]; then
-        sed -i "s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
-    if [ "${ENABLE_RECURSIVE_UNENCRYPTED_UPSTREAM}" == "false" ]; then
-        if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "false" ] && [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "false" ]; then
-            sed -i "s/#\\$/  /g" "${DOCKER_PATH}/conf/config.yaml"
-        fi
-    else
-        sed -i "s/#\\$/  /g" "${DOCKER_PATH}/conf/config.yaml"
-    fi && sed -i "s/#\\^/  /g" "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${ENABLE_REMOTE_IPV6_UPSTREAM}" == "true" ]; then
         sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/config.yaml"
