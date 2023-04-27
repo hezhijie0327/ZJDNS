@@ -106,9 +106,6 @@ function DownloadmosDNSConfiguration() {
         sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
-    if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "true" ] || [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "true" ] || [ "${ENABLE_RECURSIVE_UNENCRYPTED_UPSTREAM}" == "true" ]; then
-        sed -i "s/#\\^/  /g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
     if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "true" ]; then
         sed -i "s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
@@ -121,7 +118,7 @@ function DownloadmosDNSConfiguration() {
         fi
     else
         sed -i "s/#\\$/  /g" "${DOCKER_PATH}/conf/config.yaml"
-    fi
+    fi && sed -i "s/#\\^/  /g" "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${ENABLE_REMOTE_IPV6_UPSTREAM}" == "true" ]; then
         sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/config.yaml"
