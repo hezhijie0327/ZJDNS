@@ -1172,7 +1172,7 @@ plugins:
       - matches:
           - 'qtype 1 28'
           - 'resp_ip $ip_set_dns64_ip'
-        exec: drop_resp
+        exec: reject 3
   - tag: sequence_check_response_has_local_answer
     type: sequence
     args:
@@ -1187,7 +1187,16 @@ plugins:
           - 'qtype 1 28'
           - 'resp_ip $ip_set_reserved_ip'
         exec: drop_resp
-  - tag: sequence_check_response_has_valid_answer
+  - tag: sequence_check_response_has_any_answer
+    type: sequence
+    args:
+      - matches:
+          - '!rcode 0 3'
+        exec: drop_resp
+      - matches:
+          - 'has_resp'
+        exec: accept
+  - tag: sequence_check_response_has_invalid_answer
     type: sequence
     args:
       - matches:
@@ -1196,12 +1205,6 @@ plugins:
       - matches:
           - '!has_wanted_ans'
         exec: drop_resp
-  - tag: sequence_check_response_has_any_answer
-    type: sequence
-    args:
-      - matches:
-          - 'has_resp'
-        exec: accept
   - tag: sequence_forward_query_to_forward_dns
     type: sequence
     args:
@@ -1210,11 +1213,11 @@ plugins:
 #?    - exec: jump sequence_check_response_has_local_answer
 #?    - exec: jump sequence_check_response_has_dns64_answer
 #?    - exec: jump sequence_check_response_has_reserved_answer
-#?    - exec: jump sequence_check_response_has_valid_answer
+#?    - exec: jump sequence_check_response_has_invalid_answer
 #?    - exec: jump sequence_check_response_has_any_answer
 #?    - exec: $fallback_forward_query_to_remote
 #?    - exec: jump sequence_check_response_has_dns64_answer
-#~    - exec: jump sequence_check_response_has_valid_answer
+#~    - exec: jump sequence_check_response_has_invalid_answer
 #~    - exec: jump sequence_check_response_has_any_answer
 #~#^  - exec: $forward_query_to_recursive_dns
       - exec: jump sequence_check_response_has_any_answer
@@ -1223,13 +1226,13 @@ plugins:
     args:
 #%    - exec: ecs
 #^    - exec: $forward_query_to_recursive_dns
-#~    - exec: jump sequence_check_response_has_valid_answer
+#~    - exec: jump sequence_check_response_has_invalid_answer
 #~    - exec: jump sequence_check_response_has_any_answer
 #~    - exec: $fallback_forward_query_to_local
 #?#~  - exec: jump sequence_check_response_has_local_answer
 #?#~  - exec: jump sequence_check_response_has_dns64_answer
 #?#~  - exec: jump sequence_check_response_has_reserved_answer
-#?#~  - exec: jump sequence_check_response_has_valid_answer
+#?#~  - exec: jump sequence_check_response_has_invalid_answer
 #?#~  - exec: jump sequence_check_response_has_any_answer
 #?#~  - exec: $fallback_forward_query_to_remote
 #?#~  - exec: jump sequence_check_response_has_dns64_answer
