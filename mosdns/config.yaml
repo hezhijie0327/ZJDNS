@@ -144,24 +144,14 @@ plugins:
           dial_addr: '180.76.76.76:53'
 #-      - addr: 'udp://public-dns-b.baidu.com'
 #-        dial_addr: '[2400:da00::6666]:53'
-        - addr: 'udp://dns-pure-a.onedns.net'
-          dial_addr: '117.50.10.10:53'
-        - addr: 'udp://dns-pure-b.onedns.net'
-          dial_addr: '52.80.52.52:53'
-#-      - addr: 'udp://dns-pure-c.onedns.net'
-#-        dial_addr: '[2400:7fc0:849e:200::8]:53'
-#-      - addr: 'udp://dns-pure-d.onedns.net'
-#-        dial_addr: '[2404:c2c0:85d8:901::8]:53'
-        - addr: 'tcp://public1.sdns.cn'
-          dial_addr: '1.2.4.8:53'
-          enable_pipeline: false
-        - addr: 'tcp://public2.sdns.cn'
-          dial_addr: '210.2.4.8:53'
-          enable_pipeline: false
-        - addr: 'udp://public1.sdns.cn'
-          dial_addr: '1.2.4.8:53'
-        - addr: 'udp://public2.sdns.cn'
-          dial_addr: '210.2.4.8:53'
+        - addr: 'https://doh-pure.onedns.net/dns-query'
+          dial_addr: '54.223.159.81:443'
+          enable_pipeline: true
+          insecure_skip_verify: true
+        - addr: 'tls://dot-pure.onedns.net'
+          dial_addr: '54.223.159.81:853'
+          enable_pipeline: true
+          insecure_skip_verify: true
         - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
           dial_addr: '101.6.6.6:8443'
           enable_http3: false
