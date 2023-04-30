@@ -166,6 +166,16 @@ plugins:
 #-        dial_addr: '[2402:f000:1:416:101:6:6:6]:8853'
 #-        enable_pipeline: true
 #-        insecure_skip_verify: true
+        - addr: 'tcp://dns-a.volcengine.com'
+          dial_addr: '180.184.1.1:53'
+          enable_pipeline: false
+        - addr: 'tcp://dns-b.volcengine.com'
+          dial_addr: '180.184.2.2:53'
+          enable_pipeline: false
+        - addr: 'udp://dns-a.volcengine.com'
+          dial_addr: '180.184.1.1:53'
+        - addr: 'udp://dns-b.volcengine.com'
+          dial_addr: '180.184.2.2:53'
   - tag: forward_query_to_remote_ecs
     type: forward
     args:
