@@ -130,18 +130,6 @@ plugins:
     args:
       concurrent: 3
       upstreams:
-        - addr: 'tcp://public1.114dns.com'
-          dial_addr: '114.114.114.114:53'
-          enable_pipeline: false
-        - addr: 'tcp://public2.114dns.com'
-          dial_addr: '114.114.115.115:53'
-          enable_pipeline: false
-        - addr: 'udp://public1.114dns.com'
-          dial_addr: '114.114.114.114:53'
-        - addr: 'udp://public2.114dns.com'
-          dial_addr: '114.114.115.115:53'
-        - addr: 'udp://public-dns-a.baidu.com'
-          dial_addr: '180.76.76.76:53'
         - addr: 'https://doh-pure.onedns.net/dns-query'
           dial_addr: '54.223.159.81:443'
           enable_pipeline: true
@@ -166,16 +154,6 @@ plugins:
 #-        dial_addr: '[2402:f000:1:416:101:6:6:6]:8853'
 #-        enable_pipeline: true
 #-        insecure_skip_verify: true
-        - addr: 'tcp://dns-a.volcengine.com'
-          dial_addr: '180.184.1.1:53'
-          enable_pipeline: false
-        - addr: 'tcp://dns-b.volcengine.com'
-          dial_addr: '180.184.2.2:53'
-          enable_pipeline: false
-        - addr: 'udp://dns-a.volcengine.com'
-          dial_addr: '180.184.1.1:53'
-        - addr: 'udp://dns-b.volcengine.com'
-          dial_addr: '180.184.2.2:53'
   - tag: forward_query_to_remote_ecs
     type: forward
     args:
