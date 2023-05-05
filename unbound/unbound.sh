@@ -128,7 +128,7 @@ function CreateNewContainer() {
         -r "/etc/unbound/data/root.hints" \
         -R
     docker run --name ${REPO} --net host --restart=always \
-        -v /docker/ssl:/usr/local/etc/ssl:ro \
+        -v /docker/ssl:/etc/unbound/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/unbound/conf \
         -v ${DOCKER_PATH}/data:/etc/unbound/data \
         -d ${OWNER}/${REPO}:${TAG} \
