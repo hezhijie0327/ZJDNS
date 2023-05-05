@@ -104,6 +104,10 @@ function DownloadUnboundConfiguration() {
     if [ "${ENABLE_TLS}" == "true" ]; then
         sed -i "s/#%/  /g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
+    
+    if [ -f "${DOCKER_PATH}/conf/unbound.conf" ]; then
+        sed -i "/#/d" "${DOCKER_PATH}/conf/unbound.conf"
+    fi
 }
 # Update Root Hints
 function UpdateRootHints() {
