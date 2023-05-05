@@ -49,6 +49,8 @@ function DownloadUnboundConfiguration() {
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
     fi && if [ ! -d "${DOCKER_PATH}/conf" ]; then
         mkdir -p "${DOCKER_PATH}/conf"
+    fi && if [ ! -d "${DOCKER_PATH}/work" ]; then
+        mkdir -p "${DOCKER_PATH}/work"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/unbound.conf"
 
     if [ "${ENABLE_CACHE}" == "false" ]; then
