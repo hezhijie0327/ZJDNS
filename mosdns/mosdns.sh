@@ -152,6 +152,10 @@ function DownloadmosDNSConfiguration() {
             echo "${TLS_CONFIG[$TLS_CONFIG_TASK]}" >> "${DOCKER_PATH}/conf/config.yaml"
         done
     fi
+    
+    if [ -f "${DOCKER_PATH}/conf/config.yaml" ]; then
+        sed -i "/#/d" "${DOCKER_PATH}/conf/config.yaml"
+    fi
 }
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
