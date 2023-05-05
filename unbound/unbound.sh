@@ -84,10 +84,10 @@ function DownloadUnboundConfiguration() {
     fi
 
     if [ "${ENABLE_TCP_UPSTREAM}" == "false" ]; then
-        sed -i "s/forward-tcp-upstream\: yes/forward-tcp-upstream\: no/g;s/forward-tls-upstream\: no/forward-tls-upstream\: no/g" "${DOCKER_PATH}/data/unbound.conf"
+        sed -i "s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: no/g" "${DOCKER_PATH}/data/unbound.conf"
     fi
     if [ "${ENABLE_TLS_UPSTREAM}" == "true" ]; then
-        sed -i "s/@5533/@5535/g;s/forward-tcp-upstream\: yes/forward-tcp-upstream\: no/g;s/forward-tls-upstream\: no/forward-tls-upstream\: yes/g" "${DOCKER_PATH}/data/unbound.conf"
+        sed -i "s/@5533/@5535/g;s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: yes/g" "${DOCKER_PATH}/data/unbound.conf"
     fi
 
     if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
