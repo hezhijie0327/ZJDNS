@@ -1199,25 +1199,11 @@ plugins:
       secondary: sequence_forward_query_to_recursive_dns
       threshold: 3750
 #!    always_standby: true
-  - tag: forward_only_server
-    type: fallback
-    args:
-      primary: sequence_forward_query_to_forward_dns
-      secondary: sequence_forward_query_to_forward_dns
-      threshold: 3750
-#!    always_standby: true
   - tag: recursive_first_server
     type: fallback
     args:
       primary: sequence_forward_query_to_recursive_dns
       secondary: sequence_forward_query_to_forward_dns
-      threshold: 3750
-#!    always_standby: true
-  - tag: recursive_only_server
-    type: fallback
-    args:
-      primary: sequence_forward_query_to_recursive_dns
-      secondary: sequence_forward_query_to_recursive_dns
       threshold: 3750
 #!    always_standby: true
   - tag: create_tcp_server
