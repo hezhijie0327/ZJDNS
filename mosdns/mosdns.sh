@@ -75,7 +75,14 @@ function DownloadmosDNSConfiguration() {
             else
                 sed -i "s/#\\$/  /g" "${DOCKER_PATH}/conf/config.yaml"
             fi && sed -i "s/#\\^/  /g" "${DOCKER_PATH}/conf/config.yaml"
-        fi && sed -i 's/entry: forward_first_server/entry: ${RUNNING_MODE}_server/g' "${DOCKER_PATH}/conf/config.yaml"
+        fi
+        if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "recursive_first" ]; then
+            sed -i 's/entry: forward_first_server/entry: ${RUNNING_MODE}_server/g' "${DOCKER_PATH}/conf/config.yaml"
+        else if [ "${RUNNING_MODE}" == "forward_only" ]; then
+            sed -i 's/entry: forward_first_server/entry: sequence_forward_query_to_forward_dns/g' "${DOCKER_PATH}/conf/config.yaml"
+        else if [ "${RUNNING_MODE}" == "recursive_only" ]; then
+            sed -i 's/entry: forward_first_server/entry: sequence_forward_query_to_recursive_dns/g' "${DOCKER_PATH}/conf/config.yaml"
+        fi
         HTTPS_CONFIG=(
             "  - tag: create_https_server"
             "    type: tcp_server"
@@ -152,7 +159,7 @@ function DownloadmosDNSConfiguration() {
             echo "${TLS_CONFIG[$TLS_CONFIG_TASK]}" >> "${DOCKER_PATH}/conf/config.yaml"
         done
     fi
-    
+
     if [ -f "${DOCKER_PATH}/conf/config.yaml" ]; then
         sed -i "/#/d" "${DOCKER_PATH}/conf/config.yaml"
     fi
