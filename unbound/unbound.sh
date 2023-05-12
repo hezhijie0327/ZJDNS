@@ -87,7 +87,7 @@ function DownloadUnboundConfiguration() {
     fi
 
     if [ "${CUSTOM_UPSTREAM}" != "" ]; then
-        sed -i "s/127.0.0.1@5533/${CUSTOM_UPSTREAM}/g;s/127.0.0.1@5535/${CUSTOM_UPSTREAM}/g"
+        sed -i "s/127.0.0.1@5533/${CUSTOM_UPSTREAM}/g;s/127.0.0.1@5535/${CUSTOM_UPSTREAM}/g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
     if [ "${ENABLE_TCP_UPSTREAM}" == "false" ]; then
         sed -i "s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
