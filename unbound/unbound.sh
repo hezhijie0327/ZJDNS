@@ -34,6 +34,7 @@ function DownloadUnboundConfiguration() {
 
     ENABLE_RATELIMIT="false"
 
+    CUSTOM_UPSTREAM="" # 127.0.0.1@5533
     ENABLE_TCP_UPSTREAM="false"
     ENABLE_TLS_UPSTREAM="false"
 
@@ -85,6 +86,9 @@ function DownloadUnboundConfiguration() {
         sed -i "s/ratelimit\: 1000/ratelimit\: 0/g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
 
+    if [ "${CUSTOM_UPSTREAM}" != "" ]; then
+        sed -i "s/127.0.0.1@5533/${CUSTOM_UPSTREAM}/g;s/127.0.0.1@5535/${CUSTOM_UPSTREAM}/g"
+    fi
     if [ "${ENABLE_TCP_UPSTREAM}" == "false" ]; then
         sed -i "s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
@@ -104,7 +108,7 @@ function DownloadUnboundConfiguration() {
     if [ "${ENABLE_TLS}" == "true" ]; then
         sed -i "s/#%/  /g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
-    
+
     if [ -f "${DOCKER_PATH}/conf/unbound.conf" ]; then
         sed -i "/#/d" "${DOCKER_PATH}/conf/unbound.conf"
     fi
