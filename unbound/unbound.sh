@@ -179,7 +179,7 @@ function CreateNewContainer() {
     if [ "${ENABLE_REMOTE_CONTROL}" == "true" ]; then
         docker run -it --rm --entrypoint=/unbound-control --net host \
             -v ${DOCKER_PATH}/conf:/etc/unbound/conf \
-            -d ${OWNER}/${REPO}:${TAG} \
+               ${OWNER}/${REPO}:${TAG} \
             -c "/etc/unbound/conf/unbound.conf" \
             -s "127.0.0.1@8953" \
             stats
