@@ -22,17 +22,24 @@ function CleanupCurrentContainer() {
 }
 # Download Unbound Configuration
 function DownloadUnboundConfiguration() {
-    ENABLE_CACHE="true"
     ENABLE_DNSSEC="false"
     ENABLE_DNSSEC_PERMISSIVE_MODE="false"
+
     ENABLE_ECS="true"
+
     ENABLE_FORWARD="true"
+    ENABLE_FORWARD_CACHE="true"
     ENABLE_RECURSIVE_DNS="false"
-    ENABLE_REDIS_CACHE="false"
 
     ENABLE_LOGFILE="false"
 
     ENABLE_RATELIMIT="false"
+
+    CACHE_SIZE_KEY="" # 4m
+    CACHE_SIZE_MSG="" # 4m
+    CACHE_SIZE_NEG="" # 1m
+    CACHE_SIZE_RRSET="" # 4m
+    ENABLE_REDIS_CACHE="false"
 
     CUSTOM_UPSTREAM="" # 127.0.0.1@5533
     ENABLE_TCP_UPSTREAM="false"
@@ -54,28 +61,27 @@ function DownloadUnboundConfiguration() {
         mkdir -p "${DOCKER_PATH}/work"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/unbound.conf"
 
-    if [ "${ENABLE_CACHE}" == "false" ]; then
-        sed -i "s/forward-no-cache: no/forward-no-cache: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
     if [ "${ENABLE_DNSSEC}" == "false" ]; then
         sed -i "s/validator //g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
     if [ "${ENABLE_DNSSEC}" == "true" ] && [ "${ENABLE_DNSSEC_PERMISSIVE_MODE}" == "true" ]; then
         sed -i "s/val-permissive-mode\: no/val-permissive-mode\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
+
     if [ "${ENABLE_ECS}" == "false" ]; then
         sed -i "s/subnetcache //g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
+
     if [ "${ENABLE_FORWARD}" == "true" ]; then
         sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ "${ENABLE_FORWARD_CACHE}" == "false" ]; then
+            sed -i "s/forward-no-cache: no/forward-no-cache: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
     else
         sed -i "/forward-zone:/d;/#+/d" "${DOCKER_PATH}/conf/unbound.conf"
     fi
     if [ "${ENABLE_RECURSIVE_DNS}" == "true" ]; then
         sed -i "s/forward-first: no/forward-first: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-    if [ "${ENABLE_REDIS_CACHE}" == "false" ]; then
-        sed -i "s/cachedb //g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
 
     if [ "${ENABLE_LOGFILE}" == "true" ]; then
@@ -84,6 +90,24 @@ function DownloadUnboundConfiguration() {
 
     if [ "${ENABLE_RATELIMIT}" == "false" ]; then
         sed -i "s/ratelimit\: 1000/ratelimit\: 0/g" "${DOCKER_PATH}/conf/unbound.conf"
+    fi
+
+    if [ "${ENABLE_REDIS_CACHE}" == "false" ]; then
+        sed -i "/cachedb:/d;/#-/d;s/cachedb //g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ "${CACHE_SIZE_KEY}" != "" ]; then
+            sed -i "s/key-cache-size: 4m/key-cache-size: ${CACHE_SIZE_KEY}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CACHE_SIZE_MSG}" != "" ]; then
+            sed -i "s/msg-cache-size: 4m/msg-cache-size: ${CACHE_SIZE_MSG}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CACHE_SIZE_NEG}" != "" ]; then
+            sed -i "s/neg-cache-size: 1m/neg-cache-size: ${CACHE_SIZE_NEG}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CACHE_SIZE_RRSET}" != "" ]; then
+            sed -i "s/rrset-cache-size: 4m/rrset-cache-size: ${CACHE_SIZE_RRSET}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+    else
+        sed -i "s/#-/  /g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
 
     if [ "${CUSTOM_UPSTREAM}" != "" ]; then
