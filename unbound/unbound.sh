@@ -41,6 +41,8 @@ function DownloadUnboundConfiguration() {
     CACHE_SIZE_RRSET="" # 4m
     ENABLE_REDIS_CACHE="false"
 
+    ENABLE_REMOTE_CONTROL="false"
+
     CUSTOM_UPSTREAM="" # 127.0.0.1@5533
     ENABLE_TCP_UPSTREAM="false"
     ENABLE_TLS_UPSTREAM="false"
@@ -110,6 +112,12 @@ function DownloadUnboundConfiguration() {
         sed -i "s/#-/  /g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
 
+    if [ "${ENABLE_REMOTE_CONTROL}" == "false" ]; then
+        sed -i "/remote-control:/d;/#=/d" "${DOCKER_PATH}/conf/unbound.conf"
+    else
+        sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/unbound.conf"
+    fi
+
     if [ "${CUSTOM_UPSTREAM}" != "" ]; then
         sed -i "s/127.0.0.1@5533/${CUSTOM_UPSTREAM}/g;s/127.0.0.1@5535/${CUSTOM_UPSTREAM}/g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
@@ -168,6 +176,14 @@ function CreateNewContainer() {
         -d ${OWNER}/${REPO}:${TAG} \
         -c "/etc/unbound/conf/unbound.conf" \
         -d
+    if [ "${ENABLE_REMOTE_CONTROL}" == "true" ]; then
+        docker run -it --rm --entrypoint=/unbound-control --net host \
+            -v ${DOCKER_PATH}/conf:/etc/unbound/conf \
+            -d ${OWNER}/${REPO}:${TAG} \
+            -c "/etc/unbound/conf/unbound.conf" \
+            -s "127.0.0.1@8953" \
+            stats
+    fi
 }
 # Cleanup Expired Image
 function CleanupExpiredImage() {
