@@ -41,7 +41,7 @@ function DownloadUnboundConfiguration() {
     CACHE_SIZE_RRSET="" # 4m
     ENABLE_REDIS_CACHE="false"
 
-    ENABLE_REMOTE_CONTROL="false"
+    ENABLE_REMOTE_CONTROL="true"
 
     CUSTOM_UPSTREAM="" # 127.0.0.1@5533
     ENABLE_TCP_UPSTREAM="false"
