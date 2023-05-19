@@ -5,6 +5,7 @@ OWNER="library"
 REPO="redis"
 TAG="latest"
 DOCKER_PATH="/docker/redis"
+
 REDIS_MAXMEMORY=""
 REDIS_MAXMEMORY_POLICY=""
 
