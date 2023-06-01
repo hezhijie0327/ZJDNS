@@ -1134,6 +1134,12 @@ plugins:
         - '2620:4f:8000::/48'
         - 'fc00::/7'
         - 'fe80::/10'
+  - tag: ip_set_valid_ip
+    type: ip_set
+    args:
+      ips:
+        - '0.0.0.0/0'
+        - '::/0'
   - tag: sequence_check_response_has_any_answer
     type: sequence
     args:
@@ -1155,6 +1161,10 @@ plugins:
     args:
       - matches:
           - '!rcode 0'
+        exec: drop_resp
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_valid_ip'
         exec: drop_resp
       - matches:
           - '!has_wanted_ans'
@@ -1191,6 +1201,7 @@ plugins:
     args:
 #%    - exec: ecs
 #^    - exec: $forward_query_to_recursive_dns
+#*    - exec: jump sequence_check_response_has_invalid_answer
       - exec: jump sequence_check_response_has_any_answer
   - tag: forward_first_server
     type: fallback
