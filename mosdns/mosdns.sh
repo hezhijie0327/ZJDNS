@@ -74,6 +74,9 @@ function DownloadmosDNSConfiguration() {
                 fi
             else
                 sed -i "s/#\\$/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            fi
+            if [ "${RUNNING_MODE}" == "recursive_first" ]; then
+                sed -i "s/#\\*/  /g" "${DOCKER_PATH}/conf/config.yaml"
             fi && sed -i "s/#\\^/  /g" "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "recursive_first" ]; then
