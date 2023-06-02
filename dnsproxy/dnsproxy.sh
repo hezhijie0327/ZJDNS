@@ -6,8 +6,6 @@ REPO="dnsproxy"
 TAG="latest"
 DOCKER_PATH="/docker/dnsproxy"
 
-CURL_OPTION=""
-
 ## Function
 # Get WAN IP
 function GetWANIP() {
@@ -56,6 +54,8 @@ function CreateNewContainer() {
 
     UPSTREAM_DNS="127.0.0.1:5533"
 
+    EDNS_RESULT="A"
+
     HTTPS_PORT="443"
     QUIC_PORT="853"
     TLS_PORT="853"
@@ -81,7 +81,7 @@ function CreateNewContainer() {
         --fallback=tls://[2400:3200::1]:853 \
         --fallback=tls://[2400:3200:baba::1]:853 \
         --upstream=${UPSTREAM_DNS} \
-        --edns-addr=$(Type="A" && GetWANIP) \
+        --edns-addr=$(Type="${EDNS_RESULT:-A}" && GetWANIP) \
         --edns \
         --http3 \
         --insecure \
