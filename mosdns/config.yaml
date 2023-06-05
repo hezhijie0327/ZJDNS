@@ -1144,8 +1144,8 @@ plugins:
     type: reverse_lookup
     args:
       handle_ptr: true
-      size: 4096
-      ttl: 10
+#_    size: 4096
+#_    ttl: 10
   - tag: sequence_check_response_has_any_answer
     type: sequence
     args:
