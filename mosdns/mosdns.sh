@@ -43,6 +43,9 @@ function DownloadmosDNSConfiguration() {
     ECS_IPV4_OVERWRITE="255.255.255.255"
     ECS_IPV6_OVERWRITE="ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
 
+    ENABLE_REVERSE_LOOKUP="false"
+    CACHE_SIZE_REVERSE_LOOKUP="" # 4096
+
     ENABLE_HTTPS="false"
     ENABLE_TLS="false"
     ENABLE_UNENCRYPTED_DNS="true"
@@ -143,6 +146,10 @@ function DownloadmosDNSConfiguration() {
     fi
     if [ "${ECS_IPV6_OVERWRITE}" != "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" ]; then
         sed -i "s/- exec: ecs/- exec: ecs ${ECS_IPV6_OVERWRITE//:/\:}\/56/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+
+    if [ "${ENABLE_REVERSE_LOOKUP}" == "true" ]; then
+        sed -i "s/#_    size: 4096/#_    size: ${CACHE_SIZE_REVERSE_LOOKUP:4096}/g;s/#_/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
