@@ -40,6 +40,7 @@ function DownloadConfiguration() {
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/v2ray/cert:ro \
+        -v /etc/resolv.conf:/etc/resolv.conf:ro \
         -v ${DOCKER_PATH}/conf:/etc/v2ray/conf \
         -d ${OWNER}/${REPO}:${TAG} \
         run \
