@@ -1,0 +1,37 @@
+{
+    "inbounds": [
+        {
+            "listen": "0.0.0.0",
+            "port": 443,
+            "protocol": "vmess",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
+                    }
+                ]
+            },
+            "streamSettings": {
+                "headers": {
+                    "Host": "demo.zhijie.online"
+                },
+                "network": "ws",
+                "path": "/",
+                "security": "tls",
+                "tlsSettings": {
+                    "certificates": [
+                        {
+                            "certificateFile": "/etc/v2ray/cert/fullchain.cer",
+                            "keyFile": "/etc/v2ray/cert/zhijie.online.key"
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "protocol": "freedom"
+        }
+    ]
+}
