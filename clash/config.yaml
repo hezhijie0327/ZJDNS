@@ -1,10 +1,10 @@
 allow-lan: true
+ipv6: true
 log-level: error
 mixed-port: 7890
-ipv6: true
 mode: rule
-proxy-groups:
-proxy-providers:
+proxies:
+  - { name: PROXY, server: demo.zhijie.online, port: 443, type: vmess, cipher: auto, alterId: 0, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, udp: true, skip-cert-verify: true, tls: true, network: ws, ws-opts: { headers: { Host: demo.zhijie.online }, path: / } }
 rules:
   - GEOIP,CN,DIRECT
   - IP-CIDR,0.0.0.0/8,DIRECT
