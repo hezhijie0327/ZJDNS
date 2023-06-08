@@ -1,4 +1,7 @@
 {
+    "log": {
+        "loglevel": "error"
+    },
     "inbounds": [
         {
             "listen": "0.0.0.0",
