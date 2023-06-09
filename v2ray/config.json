@@ -11,7 +11,8 @@
                 "clients": [
                     {
                         "alterId": 0,
-                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
+                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "security": "auto"
                     }
                 ]
             },
@@ -34,6 +35,6 @@
         }
     ],
     "outbounds": [
-        { "protocol": "freedom" }
+        { "mux": { "concurrency": 8, "enable": true }, "protocol": "freedom" }
     ]
 }
