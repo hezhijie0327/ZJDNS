@@ -42,7 +42,7 @@ function DownloadConfiguration() {
     if [ "${ENABLE_WARP}" == "true" ]; then
         sed -i "s/\\/\\/##/    /g" "${DOCKER_PATH}/conf/config.json"
     fi
-    
+
     if [ -f "${DOCKER_PATH}/conf/config.json" ]; then
         sed -i "/\\/\\/#/d" "${DOCKER_PATH}/conf/config.json"
     fi
