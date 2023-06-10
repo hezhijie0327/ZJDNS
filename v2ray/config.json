@@ -17,9 +17,12 @@
                 ]
             },
             "streamSettings": {
+                "acceptProxyProtocol": true,
+                "earlyDataHeaderName": "Sec-WebSocket-Protocol",
                 "headers": {
                     "Host": "demo.zhijie.online"
                 },
+                "maxEarlyData": 4096,
                 "network": "ws",
                 "path": "/",
                 "security": "tls",
@@ -30,7 +33,8 @@
                             "keyFile": "/etc/v2ray/cert/zhijie.online.key"
                         }
                     ]
-                }
+                },
+                "useBrowserForwarding": true
             }
         }
     ],
