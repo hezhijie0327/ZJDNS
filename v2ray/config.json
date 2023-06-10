@@ -46,7 +46,7 @@
                 },
                 "wsSettings": {
                     "acceptProxyProtocol": false,
-                    "earlyDataHeaderName": "",
+                    "earlyDataHeaderName": "Sec-WebSocket-Protocol",
                     "headers": {
                         "Host": "demo.zhijie.online"
                     },
