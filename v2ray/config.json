@@ -26,13 +26,24 @@
                 "network": "ws",
                 "path": "/",
                 "security": "tls",
+                "sockopt": {
+                    "tcpFastOpen": true
+                },
                 "tlsSettings": {
+                    "allowInsecure": false,
+                    "allowInsecureCiphers": false,
+                    "alpn": [
+                        "h2",
+                        "http/1.1"
+                    ],
                     "certificates": [
                         {
                             "certificateFile": "/etc/v2ray/cert/fullchain.cer",
-                            "keyFile": "/etc/v2ray/cert/zhijie.online.key"
+                            "keyFile": "/etc/v2ray/cert/zhijie.online.key",
+                            "usage": "encipherment"
                         }
-                    ]
+                    ],
+                    "serverName": "demo.zhijie.online"
                 },
                 "useBrowserForwarding": true
             }
