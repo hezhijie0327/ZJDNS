@@ -4,7 +4,7 @@ log-level: error
 mixed-port: 7890
 mode: rule
 proxies:
-  - { name: PROXY, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: ws, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { headers: { Host: demo.zhijie.online }, path: / } }
+  - { name: PROXY, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: ws, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { early-data-header-name: Sec-WebSocket-Protocol, headers: { Host: demo.zhijie.online }, max-early-data: 4096, path: / } }
 rules:
   - GEOIP,CN,DIRECT
   - IP-CIDR,0.0.0.0/8,DIRECT
