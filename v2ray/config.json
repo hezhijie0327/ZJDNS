@@ -43,12 +43,13 @@
                 },
                 "wsSettings": {
                     "acceptProxyProtocol": false,
-                    "earlyDataHeaderName": "Sec-WebSocket-Protocol",
+                    "earlyDataHeaderName": "",
                     "headers": {
                         "Host": "demo.zhijie.online"
                     },
                     "maxEarlyData": 4096,
                     "path": "/",
+                    "pinnedPeerCertificateChainSha256": "",
                     "useBrowserForwarding": true
                 }
             }
