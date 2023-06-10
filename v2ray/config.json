@@ -14,7 +14,7 @@
                 "default": {
                     "alterId": 0,
                     "level": 0
-                }
+                },
                 "disableInsecureEncryption": true
             },
             "streamSettings": {
