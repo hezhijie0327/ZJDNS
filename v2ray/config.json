@@ -1,20 +1,79 @@
 {
     "inbounds": [
         {
+            "port": 8443,
+            "protocol": "vless",
+            "settings": {
+                "clients": [
+                    {
+                        "encryption": "none",
+                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "level": 0
+                    }
+                ],
+                "decryption": "none",
+                "fallbacks": [
+                    {
+                        "alpn": "",
+                        "path": "/wss-vmess",
+                        "dest": 443,
+                        "xver": 0
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "tls",
+                "sockopt": {
+                    "mark": 0,
+                    "tcpFastOpen": true,
+                    "tcpFastOpenQueueLength": 4096,
+                    "tcpKeepAliveInterval": 0,
+                    "tproxy": "tproxy"
+                },
+                "tlsSettings": {
+                    "allowInsecure": false,
+                    "alpn": [
+                        "h2",
+                        "http/1.1"
+                    ],
+                    "certificates": [
+                        {
+                            "certificateFile": "/etc/v2ray/cert/fullchain.cer",
+                            "keyFile": "/etc/v2ray/cert/zhijie.online.key",
+                            "usage": "encipherment"
+                        }
+                    ],
+                    "disableSystemRoot": false,
+                    "serverName": "demo.zhijie.online",
+                    "verifyClientCertificate": false
+                },
+                "wsSettings": {
+                    "acceptProxyProtocol": false,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-vless",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
+                }
+            }
+        },
+        {
             "listen": "0.0.0.0",
             "port": 443,
             "protocol": "vmess",
             "settings": {
                 "clients": [
                     {
+                        "alterId": 0,
                         "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "level": 0,
                         "security": "auto"
                     }
                 ],
-                "default": {
-                    "alterId": 0,
-                    "level": 0
-                },
                 "disableInsecureEncryption": true
             },
             "streamSettings": {
@@ -51,7 +110,7 @@
                         "Host": "demo.zhijie.online"
                     },
                     "maxEarlyData": 4096,
-                    "path": "/",
+                    "path": "/wss-vmess",
                     "pinnedPeerCertificateChainSha256": "",
                     "useBrowserForwarding": false
                 }
