@@ -3,7 +3,7 @@
 # Parameter
 OWNER="hezhijie0327"
 REPO="v2ray"
-TAG="latest"
+TAG="latest" # latest, xray
 DOCKER_PATH="/docker/v2ray"
 
 CURL_OPTION=""
