@@ -7,11 +7,14 @@
             "settings": {
                 "clients": [
                     {
-                        "alterId": 0,
                         "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
                         "security": "auto"
                     }
                 ],
+                "default": {
+                    "alterId": 0,
+                    "level": 0
+                }
                 "disableInsecureEncryption": true
             },
             "streamSettings": {
@@ -50,7 +53,7 @@
                     "maxEarlyData": 4096,
                     "path": "/",
                     "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": true
+                    "useBrowserForwarding": false
                 }
             }
         }
