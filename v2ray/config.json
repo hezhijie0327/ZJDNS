@@ -1,7 +1,4 @@
 {
-    "log": {
-        "loglevel": "error"
-    },
     "inbounds": [
         {
             "listen": "0.0.0.0",
@@ -14,22 +11,20 @@
                         "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
                         "security": "auto"
                     }
-                ]
+                ],
+                "disableInsecureEncryption": false
             },
             "streamSettings": {
-                "acceptProxyProtocol": true,
-                "headers": {
-                    "Host": "demo.zhijie.online"
-                },
                 "network": "ws",
-                "path": "/",
                 "security": "tls",
                 "sockopt": {
-                    "tcpFastOpen": true
+                    "tcpFastOpen": true,
+                    "tcpFastOpenQueueLength": 4096,
+                    "tcpKeepAliveInterval": 0,
+                    "tproxy": "tproxy"
                 },
                 "tlsSettings": {
                     "allowInsecure": false,
-                    "allowInsecureCiphers": false,
                     "alpn": [
                         "h2",
                         "http/1.1"
@@ -41,9 +36,18 @@
                             "usage": "encipherment"
                         }
                     ],
-                    "serverName": "demo.zhijie.online"
+                    "disableSystemRoot": false,
+                    "serverName": "demo.zhijie.online",
+                    "verifyClientCertificate": false
                 },
-                "useBrowserForwarding": true
+                "wsSettings": {
+                    "acceptProxyProtocol": true,
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "path": "/",
+                    "useBrowserForwarding": true
+                }
             }
         }
     ],
