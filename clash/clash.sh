@@ -3,7 +3,7 @@
 # Parameter
 OWNER="hezhijie0327"
 REPO="clash"
-TAG="latest"
+TAG="latest" # meta
 DOCKER_PATH="/docker/clash"
 
 CURL_OPTION=""
