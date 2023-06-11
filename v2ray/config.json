@@ -63,122 +63,128 @@
                     "serverName": "demo.zhijie.online",
                     "verifyClientCertificate": false
                 }
+            }
+        },
+        {
+            "listen": "127.0.0.1",
+            "port": 2053,
+            "protocol": "shadowsocks",
+            "settings": {
+                "method": "chacha20-ietf-poly1305",
+                "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
             },
-            {
-                "listen": "127.0.0.1",
-                "port": 2053,
-                "protocol": "shadowsocks",
-                "settings": {
-                    "method": "chacha20-ietf-poly1305",
-                    "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "security": "none",
-                    "wsSettings": {
-                        "acceptProxyProtocol": true,
-                        "earlyDataHeaderName": "",
-                        "headers": {
-                            "Host": "demo.zhijie.online"
-                        },
-                        "maxEarlyData": 4096,
-                        "path": "/wss-shadowsocks",
-                        "pinnedPeerCertificateChainSha256": "",
-                        "useBrowserForwarding": false
-                    }
+            "streamSettings": {
+                "network": "ws",
+                "security": "none",
+                "wsSettings": {
+                    "acceptProxyProtocol": true,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-shadowsocks",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
                 }
-            },
-            {
-                "listen": "127.0.0.1",
-                "port": 2087,
-                "protocol": "trojan",
-                "settings": {
-                    "clients": [
-                        {
-                            "level": 0,
-                            "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
-                        }
-                    ]
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "security": "none",
-                    "wsSettings": {
-                        "acceptProxyProtocol": true,
-                        "earlyDataHeaderName": "",
-                        "headers": {
-                            "Host": "demo.zhijie.online"
-                        },
-                        "maxEarlyData": 4096,
-                        "path": "/wss-trojan",
-                        "pinnedPeerCertificateChainSha256": "",
-                        "useBrowserForwarding": false
+            }
+        },
+        {
+            "listen": "127.0.0.1",
+            "port": 2087,
+            "protocol": "trojan",
+            "settings": {
+                "clients": [
+                    {
+                        "level": 0,
+                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
                     }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "none",
+                "wsSettings": {
+                    "acceptProxyProtocol": true,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-trojan",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
                 }
-            },
-            {
-                "port": 2087,
-                "listen": "127.0.0.1",
-                "protocol": "vless",
-                "settings": {
-                    "clients": [
-                        {
-                            "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                            "level": 0
-                        }
-                    ],
-                    "decryption": "none"
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "security": "none",
-                    "wsSettings": {
-                        "acceptProxyProtocol": true,
-                        "earlyDataHeaderName": "",
-                        "headers": {
-                            "Host": "demo.zhijie.online"
-                        },
-                        "maxEarlyData": 4096,
-                        "path": "/wss-vless",
-                        "pinnedPeerCertificateChainSha256": "",
-                        "useBrowserForwarding": false
+            }
+        },
+        {
+            "port": 2087,
+            "listen": "127.0.0.1",
+            "protocol": "vless",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "level": 0
                     }
+                ],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "none",
+                "wsSettings": {
+                    "acceptProxyProtocol": true,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-vless",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
                 }
-            },
-            {
-                "listen": "127.0.0.1",
-                "port": 2096,
-                "protocol": "vmess",
-                "settings": {
-                    "clients": [
-                        {
-                            "alterId": 0,
-                            "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                            "level": 0,
-                            "security": "auto"
-                        }
-                    ],
-                    "disableInsecureEncryption": true
-                },
-                "streamSettings": {
-                    "network": "ws",
-                    "security": "none",
-                    "wsSettings": {
-                        "acceptProxyProtocol": true,
-                        "earlyDataHeaderName": "",
-                        "headers": {
-                            "Host": "demo.zhijie.online"
-                        },
-                        "maxEarlyData": 4096,
-                        "path": "/wss-vmess",
-                        "pinnedPeerCertificateChainSha256": "",
-                        "useBrowserForwarding": false
+            }
+        },
+        {
+            "listen": "127.0.0.1",
+            "port": 2096,
+            "protocol": "vmess",
+            "settings": {
+                "clients": [
+                    {
+                        "alterId": 0,
+                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "level": 0,
+                        "security": "auto"
                     }
+                ],
+                "disableInsecureEncryption": true
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "none",
+                "wsSettings": {
+                    "acceptProxyProtocol": true,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-vmess",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
                 }
             }
         }
     ],
     "outbounds": [
-        { "mux": { "concurrency": 8, "enable": true }, "protocol": "freedom" }
+        {
+            "mux": {
+                "concurrency": 8,
+                "enable": true
+            },
+            "protocol": "freedom"
+        }
     ]
 }
