@@ -26,7 +26,7 @@ RUNNING_MODE="" # fallback, load-balance, url-test
 ## Function
 # Get Latest Image
 function GetLatestImage() {
-    if [ "${ENABLE_VLESS}" == "true" ]; then
+    if [ "${ENABLE_VLESS_GRPC}" == "true" ] || [ "${ENABLE_VLESS_WSS}" == "true" ]; then
         TAG="meta"
     fi && docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
