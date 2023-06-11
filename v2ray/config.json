@@ -43,7 +43,7 @@
                         "Host": "demo.zhijie.online"
                     },
                     "maxEarlyData": 4096,
-                    "path": "/wss-vless",
+                    "path": "/wss-shadowsocks",
                     "pinnedPeerCertificateChainSha256": "",
                     "useBrowserForwarding": false
                 }
@@ -93,7 +93,7 @@
                         "Host": "demo.zhijie.online"
                     },
                     "maxEarlyData": 4096,
-                    "path": "/wss-vless",
+                    "path": "/wss-trojan",
                     "pinnedPeerCertificateChainSha256": "",
                     "useBrowserForwarding": false
                 }
