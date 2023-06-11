@@ -3,55 +3,6 @@
         {
             "listen": "0.0.0.0",
             "port": 2053,
-            "protocol": "shadowsocks",
-            "settings": {
-                "ivCheck": true,
-                "level": 0,
-                "method": "chacha20-ietf-poly1305",
-                "networks": "tcp,udp",
-                "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "tls",
-                "sockopt": {
-                    "tcpFastOpen": true,
-                    "tcpFastOpenQueueLength": 4096,
-                    "tcpKeepAliveInterval": 0
-                },
-                "tlsSettings": {
-                    "allowInsecure": false,
-                    "alpn": [
-                        "h2",
-                        "http/1.1"
-                    ],
-                    "certificates": [
-                        {
-                            "certificateFile": "/etc/v2ray/cert/fullchain.cer",
-                            "keyFile": "/etc/v2ray/cert/zhijie.online.key",
-                            "usage": "encipherment"
-                        }
-                    ],
-                    "disableSystemRoot": false,
-                    "serverName": "demo.zhijie.online",
-                    "verifyClientCertificate": false
-                },
-                "wsSettings": {
-                    "acceptProxyProtocol": false,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-shadowsocks",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            }
-        },
-        {
-            "listen": "0.0.0.0",
-            "port": 2083,
             "protocol": "trojan",
             "settings": {
                 "clients": [
