@@ -18,6 +18,8 @@ CUSTOM_UUID="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
 ENABLE_VLESS="true"
 ENABLE_VMESS="true"
 
+RUNNING_MODE="" # fallback, load-balance, url-test
+
 ## Function
 # Get Latest Image
 function GetLatestImage() {
@@ -47,6 +49,13 @@ function DownloadConfiguration() {
     fi
     if [ "${ENABLE_VMESS}" == "false" ] && [ "${ENABLE_VLESS}" != "false" ]; then
         sed -i 's/  - { name: VMESS/##- { name: VMESS/g;s/VMESS]/]/g;s/, ]/]/g' "${DOCKER_PATH}/conf/config.yaml"
+    fi
+
+    if [ "${RUNNING_MODE}" == "" ]; then
+        RUNNING_MODE="url-test"
+    fi
+    if [ "${RUNNING_MODE}" == "fallback" ] || [ "${RUNNING_MODE}" == "load-balance" ]; then
+        sed -i 's/url-test/${RUNNING_MODE}/g' "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ -f "${DOCKER_PATH}/conf/config.yaml" ]; then
