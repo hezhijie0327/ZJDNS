@@ -4,11 +4,11 @@ log-level: error
 mixed-port: 7890
 mode: rule
 proxies:
-#[- { name: TROJAN_GRPC, server: demo.zhijie.online, port: 2096, type: trojan, network: grpc, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, grpc-opts: { grpc-service-name: gRPC.TROJAN } }
-#]- { name: TROJAN_WSS, server: demo.zhijie.online, port: 2087, type: trojan, network: ws, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-trojan } }
-#(- { name: VLESS_GRPC, server: demo.zhijie.online, port: 2083, type: vless, network: grpc, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, grpc-opts: { grpc-service-name: gRPC.VLESS } }
-#)- { name: VLESS_WSS, server: demo.zhijie.online, port: 8443, type: vless, network: ws, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-vless } }
-#<- { name: VMESS_GRPC, server: demo.zhijie.online, port: 2053, type: vmess, alterId: 0, cipher: auto, network: grpc, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, grpc-opts: { grpc-service-name: gRPC.VMESS } }
+#[- { name: TROJAN_GRPC, server: demo.zhijie.online, port: 443, type: trojan, network: grpc, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, grpc-opts: { grpc-service-name: gRPC.TROJAN } }
+#]- { name: TROJAN_WSS, server: demo.zhijie.online, port: 443, type: trojan, network: ws, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-trojan } }
+#(- { name: VLESS_GRPC, server: demo.zhijie.online, port: 443, type: vless, network: grpc, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, grpc-opts: { grpc-service-name: gRPC.VLESS } }
+#)- { name: VLESS_WSS, server: demo.zhijie.online, port: 443, type: vless, network: ws, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-vless } }
+#<- { name: VMESS_GRPC, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: grpc, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, grpc-opts: { grpc-service-name: gRPC.VMESS } }
   - { name: VMESS_WSS, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: ws, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-vmess } }
 proxy-groups:
   - {name: PROXY, interval: 75, proxies: [VMESS_WSS], type: url-test, url: 'https://www.google.com/generate_204'}
