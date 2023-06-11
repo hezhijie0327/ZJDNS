@@ -1,3 +1,4 @@
+{
     "inbounds": [
         {
             "listen": "0.0.0.0",
@@ -175,7 +176,8 @@
                     }
                 }
             }
-        ],
+        }
+    ],
     "outbounds": [
         { "mux": { "concurrency": 8, "enable": true }, "protocol": "freedom" }
     ]
