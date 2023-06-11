@@ -16,9 +16,8 @@ CUSTOM_SERVERNAME="" # demo.zhijie.online
 CUSTOM_UUID="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
 
 ENABLE_VLESS_GRPC="true"
-ENABLE_VMESS_GRPC="true"
-
 ENABLE_VLESS_WSS="true"
+ENABLE_VMESS_GRPC="true"
 ENABLE_VMESS_WSS="true"
 
 RUNNING_MODE="" # fallback, load-balance, url-test
@@ -48,17 +47,26 @@ function DownloadConfiguration() {
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/clash/config.yaml" > "${DOCKER_PATH}/conf/config.yaml" && sed -i "s/server: demo.zhijie.online/server: ${CUSTOM_SERVER:-demo.zhijie.online}/g;s/Host: demo.zhijie.online/Host: ${CUSTOM_SERVERNAME:-${CUSTOM_SERVER:-demo.zhijie.online}}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID:-$(uuidgen | tr 'A-Z' 'a-z')}/g" "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${ENABLE_VLESS_GRPC}" == "true" ]; then
-        sed -i 's/#</  /g;s/VMESS_WSS]/VLESS_GRPC, VMESS_WSS]/g' "${DOCKER_PATH}/conf/config.yaml"
-    fi
-    if [ "${ENABLE_VMESS_GRPC}" == "true" ]; then
-        sed -i 's/#>/  /g;s/VMESS_WSS]/VMESS_GRPC, VMESS_WSS]/g' "${DOCKER_PATH}/conf/config.yaml"
+        sed -i 's/#</  /g' "${DOCKER_PATH}/conf/config.yaml"
+        PROXY_VLESS_GRPC="VLESS_GRPC"
     fi
     if [ "${ENABLE_VLESS_WSS}" == "true" ]; then
-        sed -i 's/#(/  /g;s/VMESS_WSS]/VLESS_WSS, VMESS_WSS]/g' "${DOCKER_PATH}/conf/config.yaml"
+        sed -i 's/#(/  /g' "${DOCKER_PATH}/conf/config.yaml"
+        PROXY_VLESS_WSS="VLESS_WSS"
+    fi
+    if [ "${ENABLE_VMESS_GRPC}" == "true" ]; then
+        sed -i 's/#>/  /g' "${DOCKER_PATH}/conf/config.yaml"
+        PROXY_VMESS_GRPC="VMESS_GRPC"
     fi
     if [ "${ENABLE_VMESS_WSS}" == "false" ] && [ "${ENABLE_VMESS_GRPC}" != "false" ] && [ "${ENABLE_VLESS_GRPC}" != "false" ] && [ "${ENABLE_VLESS_WSS}" != "false" ]; then
-        sed -i 's/  - { name: VMESS_WSS/#)- { name: VMESS_WSS/g;s/VMESS_WSS]/]/g;s/, ]/]/g' "${DOCKER_PATH}/conf/config.yaml"
+        sed -i 's/  - { name: VMESS_WSS/#)- { name: VMESS_WSS/g' "${DOCKER_PATH}/conf/config.yaml"
+        PROXY_VMESS_WSS=""
+    else
+        PROXY_VMESS_WSS="VMESS_WSS"
     fi
+
+    PROXY_GROUP=( "${PROXY_VLESS_WSS}" "${PROXY_VMESS_WSS}" "${PROXY_VLESS_GRPC}" "${PROXY_VMESS_GRPC}" )
+    sed -i "s/[VMESS_WSS]/[$(echo ${PROXY_GROUP[*]} | sed 's/ /, /g')]/g" "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${RUNNING_MODE}" == "" ]; then
         RUNNING_MODE="url-test"
