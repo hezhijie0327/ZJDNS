@@ -6,7 +6,6 @@
             "settings": {
                 "clients": [
                     {
-                        "encryption": "none",
                         "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
                         "level": 0
                     }
