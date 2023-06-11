@@ -14,7 +14,7 @@
                 "decryption": "none",
                 "fallbacks": [
                     {
-                        "dest": 80
+                        "dest": 8080
                     },
                     {
                         "dest": 2053,
@@ -91,7 +91,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 2087,
+            "port": 2083,
             "protocol": "trojan",
             "settings": {
                 "clients": [
