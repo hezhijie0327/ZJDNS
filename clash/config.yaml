@@ -8,7 +8,7 @@ proxies:
 #)- { name: VLESS, server: demo.zhijie.online, port: 8443, type: vless, network: ws, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-vless } }
   - { name: VMESS, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: ws, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-vmess } }
 proxy-groups:
-  - {name: PROXY, interval: 75, proxies: [VMESS], type: url-test, url: 'https://www.gstatic.com/generate_204'}
+  - {name: PROXY, interval: 75, proxies: [VMESS], type: url-test, url: 'https://www.google.com/generate_204'}
 rules:
   - GEOIP,CN,DIRECT
   - IP-CIDR,0.0.0.0/8,DIRECT
