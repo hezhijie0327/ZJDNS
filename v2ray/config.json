@@ -52,7 +52,7 @@
         },
         {
             "listen": "0.0.0.0",
-            "port": 2083,
+            "port": 8443,
             "protocol": "vless",
             "settings": {
                 "clients": [
@@ -103,7 +103,7 @@
         },
         {
             "listen": "0.0.0.0",
-            "port": 2053,
+            "port": 443,
             "protocol": "vmess",
             "settings": {
                 "clients": [
@@ -198,7 +198,7 @@
         },
         {
             "listen": "0.0.0.0",
-            "port": 8443,
+            "port": 2083,
             "protocol": "vless",
             "settings": {
                 "clients": [
@@ -241,7 +241,7 @@
         },
         {
             "listen": "0.0.0.0",
-            "port": 443,
+            "port": 2053,
             "protocol": "vmess",
             "settings": {
                 "clients": [
