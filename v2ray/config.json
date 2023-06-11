@@ -164,7 +164,7 @@
             },
             "streamSettings": {
                 "grpcSettings": {
-                    "serviceName": "99235a6e05d42afe29905bc5cf1f5c52"
+                    "serviceName": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
                 },
                 "network": "grpc",
                 "security": "tls",
