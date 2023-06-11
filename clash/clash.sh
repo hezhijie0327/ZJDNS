@@ -20,7 +20,7 @@ ENABLE_TROJAN="true"
 ENABLE_VLESS="true"
 ENABLE_VMESS="true"
 
-RUNNING_MODE="" # fallback, load-balance, url-test
+RUNNING_MODE="fallback" # fallback, load-balance, url-test
 
 ## Function
 # Get Latest Image
@@ -48,7 +48,7 @@ function DownloadConfiguration() {
 
     if [ "${ENABLE_SHADOWSOCKS}" == "true" ]; then
         sed -i 's/#(/  /g' "${DOCKER_PATH}/conf/config.yaml"
-        ENABLE_SHADOWSOCKS="SHADOWSOCKS"
+        PROXY_SHADOWSOCKS="SHADOWSOCKS"
     fi
     if [ "${ENABLE_TROJAN}" == "true" ]; then
         sed -i 's/#)/  /g' "${DOCKER_PATH}/conf/config.yaml"
@@ -65,7 +65,7 @@ function DownloadConfiguration() {
         PROXY_VMESS="VMESS"
     fi
 
-    PROXY_GROUP=( "${PROXY_TROJAN}" "${PROXY_VLESS}" "${PROXY_VMESS}" "${PROXY_TROJAN_GRPC}" "${PROXY_VLESS_GRPC}" "${PROXY_VMESS_GRPC}" )
+    PROXY_GROUP=( "${PROXY_SHADOWSOCKS}" "${PROXY_TROJAN}" "${PROXY_VLESS}" "${PROXY_VMESS}" )
     sed -i "s/\[VMESS\]/\[$(echo ${PROXY_GROUP[*]} | sed 's/ /, /g')\]/g" "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${RUNNING_MODE}" == "" ]; then
