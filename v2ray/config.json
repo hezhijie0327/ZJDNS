@@ -119,7 +119,7 @@
             },
             "streamSettings": {
                 "grpcSettings": {
-                    "serviceName": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
+                    "serviceName": "gRPC.VLESS"
                 },
                 "network": "grpc",
                 "security": "tls",
@@ -164,7 +164,7 @@
             },
             "streamSettings": {
                 "grpcSettings": {
-                    "serviceName": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
+                    "serviceName": "gRPC.VMESS"
                 },
                 "network": "grpc",
                 "security": "tls",
