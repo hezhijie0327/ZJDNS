@@ -15,7 +15,6 @@ CUSTOM_SERVER="" # demo.zhijie.online
 CUSTOM_SERVERNAME="" # demo.zhijie.online
 CUSTOM_UUID="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
 
-ENABLE_SHADOWSOCKS="false"
 ENABLE_TROJAN="false"
 ENABLE_VLESS="false"
 ENABLE_VMESS="true"
@@ -44,9 +43,6 @@ function DownloadConfiguration() {
         mkdir -p "${DOCKER_PATH}/conf"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/clash/config.yaml" > "${DOCKER_PATH}/conf/config.yaml" && sed -i "s/server: demo.zhijie.online/server: ${CUSTOM_SERVER:-demo.zhijie.online}/g;s/Host: demo.zhijie.online/Host: ${CUSTOM_SERVERNAME:-${CUSTOM_SERVER:-demo.zhijie.online}}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID:-$(uuidgen | tr 'A-Z' 'a-z')}/g" "${DOCKER_PATH}/conf/config.yaml"
 
-    if [ "${ENABLE_SHADOWSOCKS}" == "true" ]; then
-        sed -i 's/#(/  /g;s/VMESS]/SHADOWSOCKS, VMESS]/g' "${DOCKER_PATH}/conf/config.yaml"
-    fi
     if [ "${ENABLE_TROJAN}" == "true" ]; then
         sed -i 's/#)/  /g;s/VMESS]/TROJAN, VMESS]/g' "${DOCKER_PATH}/conf/config.yaml"
     fi
@@ -54,7 +50,9 @@ function DownloadConfiguration() {
         sed -i 's/#</  /g;s/VMESS]/VLESS, VMESS]/g' "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_VMESS}" == "false" ]; then
-        sed -i 's/  - { name: VMESS/#>- { name: VMESS/g;s/VMESS]/]/g;s/, ]/]/g' "${DOCKER_PATH}/conf/config.yaml"
+        if [ "${ENABLE_TROJAN}" != "false" ] || [ "${ENABLE_VLESS}" != "false" ]; then
+            sed -i 's/  - { name: VMESS/#>- { name: VMESS/g;s/VMESS]/]/g;s/, ]/]/g' "${DOCKER_PATH}/conf/config.yaml"
+        fi
     fi
 
     if [ -f "${DOCKER_PATH}/conf/config.yaml" ]; then
