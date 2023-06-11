@@ -55,7 +55,7 @@ function DownloadConfiguration() {
         RUNNING_MODE="url-test"
     fi
     if [ "${RUNNING_MODE}" == "fallback" ] || [ "${RUNNING_MODE}" == "load-balance" ]; then
-        sed -i 's/url-test/${RUNNING_MODE}/g' "${DOCKER_PATH}/conf/config.yaml"
+        sed -i "s/url-test/${RUNNING_MODE}/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ -f "${DOCKER_PATH}/conf/config.yaml" ]; then
