@@ -66,7 +66,7 @@ function DownloadConfiguration() {
     fi
 
     PROXY_GROUP=( "${PROXY_VLESS_WSS}" "${PROXY_VMESS_WSS}" "${PROXY_VLESS_GRPC}" "${PROXY_VMESS_GRPC}" )
-    sed -i "s/[VMESS_WSS]/[$(echo ${PROXY_GROUP[*]} | sed 's/ /, /g')]/g" "${DOCKER_PATH}/conf/config.yaml"
+    sed -i "s/\[VMESS_WSS\]/\[$(echo ${PROXY_GROUP[*]} | sed 's/ /, /g')\]/g" "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${RUNNING_MODE}" == "" ]; then
         RUNNING_MODE="url-test"
