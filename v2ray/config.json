@@ -10,15 +10,7 @@
                         "level": 0
                     }
                 ],
-                "decryption": "none",
-                "fallbacks": [
-                    {
-                        "alpn": "",
-                        "path": "/wss-vmess",
-                        "dest": 443,
-                        "xver": 0
-                    }
-                ]
+                "decryption": "none"
             },
             "streamSettings": {
                 "network": "ws",
