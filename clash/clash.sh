@@ -50,7 +50,7 @@ function DownloadConfiguration() {
     if [ "${ENABLE_VLESS_GRPC}" == "true" ]; then
         sed -i 's/#</  /g;s/VMESS_WSS]/VLESS_GRPC, VMESS_WSS]/g' "${DOCKER_PATH}/conf/config.yaml"
     fi
-    if [ "${ENABLE_VMESS_GRPC}" == "false" ] && [ "${ENABLE_VLESS}" != "false" ]; then
+    if [ "${ENABLE_VMESS_GRPC}" == "true" ]; then
         sed -i 's/#>/  /g;s/VMESS_WSS]/VMESS_GRPC, VMESS_WSS]/g' "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_VLESS_WSS}" == "true" ]; then
