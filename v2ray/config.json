@@ -14,9 +14,6 @@
                 "decryption": "none",
                 "fallbacks": [
                     {
-                        "dest": 7890
-                    },
-                    {
                         "dest": 7891,
                         "path": "/wss-shadowsocks",
                         "xver": 2
