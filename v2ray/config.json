@@ -14,7 +14,7 @@
                 "decryption": "none",
                 "fallbacks": [
                     {
-                        "dest": 8080
+                        "dest": 7890
                     },
                     {
                         "dest": 2053,
@@ -74,6 +74,16 @@
                     "useBrowserForwarding": false
                 }
             }
+        },
+        {
+            "listen": "127.0.0.1",
+            "port": 7890,
+            "protocol": "http",
+            "settings": {
+                "allowTransparent": true,
+                "timeout": 0,
+                "userLevel": 0
+            },
         },
         {
             "listen": "127.0.0.1",
@@ -157,12 +167,6 @@
         }
     ],
     "outbounds": [
-        {
-            "mux": {
-                "concurrency": 8,
-                "enable": true
-            },
-            "protocol": "freedom"
-        }
+        { "mux": { "concurrency": 8, "enable": true }, "protocol": "freedom" }
     ]
 }
