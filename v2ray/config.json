@@ -80,7 +80,10 @@
             "port": 7891,
             "protocol": "shadowsocks",
             "settings": {
+                "ivCheck": true,
+                "level": 0,
                 "method": "chacha20-ietf-poly1305",
+                "network": "tcp,udp",
                 "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
             },
             "streamSettings": {
