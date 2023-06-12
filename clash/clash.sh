@@ -55,11 +55,8 @@ function DownloadConfiguration() {
         sed -i 's/  - { name: VMESS/##- { name: VMESS/g;s/VMESS]/]/g;s/, ]/]/g' "${DOCKER_PATH}/conf/config.yaml"
     fi
 
-    if [ "${RUNNING_MODE}" == "" ]; then
-        RUNNING_MODE="url-test"
-    fi
-    if [ "${RUNNING_MODE}" == "fallback" ] || [ "${RUNNING_MODE}" == "load-balance" ]; then
-        sed -i "s/url-test/${RUNNING_MODE}/g" "${DOCKER_PATH}/conf/config.yaml"
+    if [ "${RUNNING_MODE}" == "fallback" ] || [ "${RUNNING_MODE}" == "load-balance" ] || [ "${RUNNING_MODE}" == "url-test" ]; then
+        sed -i "s/fallback/${RUNNING_MODE}/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
     if [ -f "${DOCKER_PATH}/conf/config.yaml" ]; then
