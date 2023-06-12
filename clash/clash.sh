@@ -15,8 +15,8 @@ CUSTOM_SERVER="" # demo.zhijie.online
 CUSTOM_SERVERNAME="" # demo.zhijie.online
 CUSTOM_UUID="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
 
-ENABLE_TROJAN="true"
-ENABLE_VLESS="true"
+ENABLE_TROJAN="false"
+ENABLE_VLESS="false"
 ENABLE_VMESS="true"
 
 RUNNING_MODE="" # fallback, load-balance, url-test
@@ -51,8 +51,10 @@ function DownloadConfiguration() {
     if [ "${ENABLE_VLESS}" == "true" ]; then
         sed -i 's/#)/  /g;s/VMESS]/VLESS, VMESS]/g' "${DOCKER_PATH}/conf/config.yaml"
     fi
-    if [ "${ENABLE_VMESS}" == "false" ] && [ "${ENABLE_VLESS}" != "false" ] && [ "${ENABLE_TROJAN}" != "false" ]; then
-        sed -i 's/  - { name: VMESS/##- { name: VMESS/g;s/VMESS]/]/g;s/, ]/]/g' "${DOCKER_PATH}/conf/config.yaml"
+    if [ "${ENABLE_VMESS}" == "false" ]; then
+        if [ "${ENABLE_VLESS}" != "false" ] || [ "${ENABLE_TROJAN}" != "false" ]; then
+            sed -i 's/  - { name: VMESS/##- { name: VMESS/g;s/VMESS]/]/g;s/, ]/]/g' "${DOCKER_PATH}/conf/config.yaml"
+        fi
     fi
 
     if [ "${RUNNING_MODE}" == "fallback" ] || [ "${RUNNING_MODE}" == "load-balance" ] || [ "${RUNNING_MODE}" == "url-test" ]; then
