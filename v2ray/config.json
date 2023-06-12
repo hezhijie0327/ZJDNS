@@ -62,16 +62,6 @@
                     "disableSystemRoot": false,
                     "serverName": "demo.zhijie.online",
                     "verifyClientCertificate": false
-                },
-                "wsSettings": {
-                    "acceptProxyProtocol": true,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
                 }
             }
         },
@@ -83,7 +73,7 @@
                 "allowTransparent": true,
                 "timeout": 0,
                 "userLevel": 0
-            },
+            }
         },
         {
             "listen": "127.0.0.1",
@@ -97,7 +87,15 @@
                 "network": "ws",
                 "security": "none",
                 "wsSettings": {
-                    "path": "/wss-shadowsocks"
+                    "acceptProxyProtocol": true,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-shadowsocks",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
                 }
             }
         },
@@ -117,7 +115,15 @@
                 "network": "ws",
                 "security": "none",
                 "wsSettings": {
-                    "path": "/wss-trojan"
+                    "acceptProxyProtocol": true,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-trojan",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
                 }
             }
         },
@@ -138,7 +144,15 @@
                 "network": "ws",
                 "security": "none",
                 "wsSettings": {
-                    "path": "/wss-vless"
+                    "acceptProxyProtocol": true,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-vless",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
                 }
             }
         },
@@ -161,12 +175,41 @@
                 "network": "ws",
                 "security": "none",
                 "wsSettings": {
-                    "path": "/wss-vmess"
+                    "acceptProxyProtocol": true,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-vmess",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
                 }
             }
         }
     ],
     "outbounds": [
-        { "mux": { "concurrency": 8, "enable": true }, "protocol": "freedom" }
+        {
+            "mux": {
+                "concurrency": 8,
+                "enable": true
+            },
+            "protocol": "socks",
+            "settings": {
+                "servers": [
+                    {
+                        "address": "127.0.0.1",
+                        "port": 40000
+                    }
+                ]
+            }
+        },
+        {
+            "mux": {
+                "concurrency": 8,
+                "enable": true
+            },
+            "protocol": "freedom"
+        }
     ]
 }
