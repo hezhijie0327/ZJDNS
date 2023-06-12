@@ -3,20 +3,18 @@
         {
             "listen": "0.0.0.0",
             "port": 443,
-            "protocol": "vless",
+            "protocol": "trojan",
             "settings": {
                 "clients": [
                     {
-                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                        "level": 0
+                        "level": 0,
+                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
                     }
                 ],
-                "decryption": "none",
                 "fallbacks": [
                     { "dest": 7890 },
                     { "dest": 7891, "path": "/wss-trojan", "xver": 2 },
-                    { "dest": 7892, "path": "/wss-vless", "xver": 2 },
-                    { "dest": 7893, "path": "/wss-vmess", "xver": 2 }
+                    { "dest": 7892, "path": "/wss-vmess", "xver": 2 }
                 ]
             },
             "streamSettings": {
@@ -85,37 +83,8 @@
             }
         },
         {
+            "listen": "127.0.0.1",
             "port": 7892,
-            "listen": "127.0.0.1",
-            "protocol": "vless",
-            "settings": {
-                "clients": [
-                    {
-                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                        "level": 0
-                    }
-                ],
-                "decryption": "none"
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "none",
-                "wsSettings": {
-                    "acceptProxyProtocol": true,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-vless",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            }
-        },
-        {
-            "listen": "127.0.0.1",
-            "port": 7893,
             "protocol": "vmess",
             "settings": {
                 "clients": [
