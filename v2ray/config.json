@@ -15,21 +15,11 @@
                 "fallbacks": [
                     {
                         "dest": 7891,
-                        "path": "/wss-shadowsocks",
-                        "xver": 2
-                    },
-                    {
-                        "dest": 7892,
-                        "path": "/wss-trojan",
-                        "xver": 2
-                    },
-                    {
-                        "dest": 7893,
                         "path": "/wss-vless",
                         "xver": 2
                     },
                     {
-                        "dest": 7894,
+                        "dest": 7892,
                         "path": "/wss-vmess",
                         "xver": 2
                     }
@@ -73,62 +63,7 @@
             }
         },
         {
-            "listen": "127.0.0.1",
             "port": 7891,
-            "protocol": "shadowsocks",
-            "settings": {
-                "ivCheck": true,
-                "level": 0,
-                "method": "chacha20-ietf-poly1305",
-                "network": "tcp,udp",
-                "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "none",
-                "wsSettings": {
-                    "acceptProxyProtocol": true,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-shadowsocks",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            }
-        },
-        {
-            "listen": "127.0.0.1",
-            "port": 7892,
-            "protocol": "trojan",
-            "settings": {
-                "clients": [
-                    {
-                        "level": 0,
-                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
-                    }
-                ]
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "none",
-                "wsSettings": {
-                    "acceptProxyProtocol": true,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-trojan",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            }
-        },
-        {
-            "port": 7893,
             "listen": "127.0.0.1",
             "protocol": "vless",
             "settings": {
@@ -158,7 +93,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7894,
+            "port": 7892,
             "protocol": "vmess",
             "settings": {
                 "clients": [
