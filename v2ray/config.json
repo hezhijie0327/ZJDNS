@@ -14,21 +14,16 @@
                 "decryption": "none",
                 "fallbacks": [
                     {
-                        "dest": 8080
-                    },
-                    {
                         "dest": 2053,
-                        "path": "/wss-shadowsocks",
                         "xver": 1
                     },
                     {
                         "dest": 2083,
-                        "path": "/wss-trojan",
+                        "path": "/wss-vless",
                         "xver": 1
                     },
                     {
                         "dest": 2087,
-                        "path": "/wss-vless",
                         "xver": 1
                     },
                     {
@@ -66,59 +61,28 @@
             }
         },
         {
-            "listen": "127.0.0.1",
+            "listen": "0.0.0.0",
             "port": 2053,
-            "protocol": "shadowsocks",
-            "settings": {
-                "method": "chacha20-ietf-poly1305",
-                "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "none",
-                "wsSettings": {
-                    "acceptProxyProtocol": true,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-shadowsocks",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            }
-        },
-        {
-            "listen": "127.0.0.1",
-            "port": 2083,
-            "protocol": "trojan",
+            "protocol": "vless",
             "settings": {
                 "clients": [
                     {
-                        "level": 0,
-                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
+                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "level": 0
                     }
-                ]
+                ],
+                "decryption": "none"
             },
             "streamSettings": {
-                "network": "ws",
-                "security": "none",
-                "wsSettings": {
-                    "acceptProxyProtocol": true,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-trojan",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
+                "grpcSettings": {
+                    "serviceName": "gRPC.VLESS"
+                },
+                "network": "grpc",
+                "security": "none"
             }
         },
         {
-            "port": 2087,
+            "port": 2083,
             "listen": "127.0.0.1",
             "protocol": "vless",
             "settings": {
@@ -144,6 +108,29 @@
                     "pinnedPeerCertificateChainSha256": "",
                     "useBrowserForwarding": false
                 }
+            }
+        },
+        {
+            "listen": "0.0.0.0",
+            "port": 2087,
+            "protocol": "vmess",
+            "settings": {
+                "clients": [
+                    {
+                        "alterId": 0,
+                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "level": 0,
+                        "security": "auto"
+                    }
+                ],
+                "disableInsecureEncryption": true
+            },
+            "streamSettings": {
+                "grpcSettings": {
+                    "serviceName": "gRPC.VMESS"
+                },
+                "network": "grpc",
+                "security": "none"
             }
         },
         {
