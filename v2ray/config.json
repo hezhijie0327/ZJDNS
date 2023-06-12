@@ -13,21 +13,10 @@
                 ],
                 "decryption": "none",
                 "fallbacks": [
-                    {
-                        "dest": 7891,
-                        "path": "/wss-trojan",
-                        "xver": 2
-                    },
-                    {
-                        "dest": 7892,
-                        "path": "/wss-vless",
-                        "xver": 2
-                    },
-                    {
-                        "dest": 7893,
-                        "path": "/wss-vmess",
-                        "xver": 2
-                    }
+                    { "dest": 7890 },
+                    { "dest": 7891, "path": "/wss-trojan", "xver": 2 },
+                    { "dest": 7892, "path": "/wss-vless", "xver": 2 },
+                    { "dest": 7893, "path": "/wss-vmess", "xver": 2 }
                 ]
             },
             "streamSettings": {
