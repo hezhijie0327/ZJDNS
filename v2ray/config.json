@@ -17,22 +17,22 @@
                         "dest": 7890
                     },
                     {
-                        "dest": 2053,
+                        "dest": 7891,
                         "path": "/wss-shadowsocks",
                         "xver": 2
                     },
                     {
-                        "dest": 2083,
+                        "dest": 7892,
                         "path": "/wss-trojan",
                         "xver": 2
                     },
                     {
-                        "dest": 2087,
+                        "dest": 7893,
                         "path": "/wss-vless",
                         "xver": 2
                     },
                     {
-                        "dest": 2096,
+                        "dest": 7894,
                         "path": "/wss-vmess",
                         "xver": 2
                     }
@@ -77,7 +77,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 2053,
+            "port": 7891,
             "protocol": "shadowsocks",
             "settings": {
                 "method": "chacha20-ietf-poly1305",
@@ -101,7 +101,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 2083,
+            "port": 7892,
             "protocol": "trojan",
             "settings": {
                 "clients": [
@@ -128,7 +128,7 @@
             }
         },
         {
-            "port": 2087,
+            "port": 7893,
             "listen": "127.0.0.1",
             "protocol": "vless",
             "settings": {
@@ -158,7 +158,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 2096,
+            "port": 7894,
             "protocol": "vmess",
             "settings": {
                 "clients": [
@@ -189,27 +189,6 @@
         }
     ],
     "outbounds": [
-        {
-            "mux": {
-                "concurrency": 8,
-                "enable": true
-            },
-            "protocol": "socks",
-            "settings": {
-                "servers": [
-                    {
-                        "address": "127.0.0.1",
-                        "port": 40000
-                    }
-                ]
-            }
-        },
-        {
-            "mux": {
-                "concurrency": 8,
-                "enable": true
-            },
-            "protocol": "freedom"
-        }
+        { "mux": { "concurrency": 8, "enable": true }, "protocol": "freedom" }
     ]
 }
