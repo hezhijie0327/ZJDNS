@@ -15,12 +15,11 @@ CUSTOM_SERVER="" # demo.zhijie.online
 CUSTOM_SERVERNAME="" # demo.zhijie.online
 CUSTOM_UUID="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
 
-ENABLE_SHADOWSOCKS="true"
 ENABLE_TROJAN="true"
 ENABLE_VLESS="true"
 ENABLE_VMESS="true"
 
-RUNNING_MODE="fallback" # fallback, load-balance, url-test
+RUNNING_MODE="" # fallback, load-balance, url-test
 
 ## Function
 # Get Latest Image
@@ -44,29 +43,17 @@ function DownloadConfiguration() {
     fi
     if [ ! -d "${DOCKER_PATH}/conf" ]; then
         mkdir -p "${DOCKER_PATH}/conf"
-    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/clash/config.yaml" > "${DOCKER_PATH}/conf/config.yaml" && sed -i "s/server: demo.zhijie.online/server: ${CUSTOM_SERVER:-demo.zhijie.online}/g;s/Host: demo.zhijie.online/Host: ${CUSTOM_SERVERNAME:-${CUSTOM_SERVER:-demo.zhijie.online}}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID:-$(uuidgen | tr 'A-Z' 'a-z')}/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/clash/config.yaml" > "${DOCKER_PATH}/conf/config.yaml" && sed -i "s/server: demo.zhijie.online/server: ${CUSTOM_SERVER:-demo.zhijie.online}/g;s/Host: demo.zhijie.online/Host: ${CUSTOM_SERVERNAME:-${CUSTOM_SERVER:-demo.zhijie.online}}/g;s/sni: demo.zhijie.online/sni: ${CUSTOM_SERVERNAME:-${CUSTOM_SERVER:-demo.zhijie.online}}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID:-$(uuidgen | tr 'A-Z' 'a-z')}/g" "${DOCKER_PATH}/conf/config.yaml"
 
-    if [ "${ENABLE_SHADOWSOCKS}" == "true" ]; then
-        sed -i 's/#(/  /g' "${DOCKER_PATH}/conf/config.yaml"
-        PROXY_SHADOWSOCKS="SHADOWSOCKS"
-    fi
     if [ "${ENABLE_TROJAN}" == "true" ]; then
-        sed -i 's/#)/  /g' "${DOCKER_PATH}/conf/config.yaml"
-        PROXY_TROJAN="TROJAN"
+        sed -i 's/#(/  /g;s/VMESS]/TROJAN, VMESS]/g' "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_VLESS}" == "true" ]; then
-        sed -i 's/#</  /g' "${DOCKER_PATH}/conf/config.yaml"
-        PROXY_VLESS="VLESS"
+        sed -i 's/#)/  /g;s/VMESS]/VLESS, VMESS]/g' "${DOCKER_PATH}/conf/config.yaml"
     fi
-    if [ "${ENABLE_VMESS}" == "false" ] && [ "${ENABLE_VLESS}" != "false" ] && [ "${ENABLE_TROJAN}" != "false" ] && [ "${ENABLE_SHADOWSOCKS}" != "false" ]; then
-        sed -i 's/  - { name: VMESS/#>- { name: VMESS/g' "${DOCKER_PATH}/conf/config.yaml"
-        PROXY_VMESS=""
-    else
-        PROXY_VMESS="VMESS"
+    if [ "${ENABLE_VMESS}" == "false" ] && [ "${ENABLE_VLESS}" != "false" ] && [ "${ENABLE_TROJAN}" != "false" ]; then
+        sed -i 's/  - { name: VMESS/##- { name: VMESS/g;s/VMESS]/]/g;s/, ]/]/g' "${DOCKER_PATH}/conf/config.yaml"
     fi
-
-    PROXY_GROUP=( "${PROXY_SHADOWSOCKS}" "${PROXY_TROJAN}" "${PROXY_VLESS}" "${PROXY_VMESS}" )
-    sed -i "s/\[VMESS\]/\[$(echo ${PROXY_GROUP[*]} | sed 's/ /, /g')\]/g" "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${RUNNING_MODE}" == "" ]; then
         RUNNING_MODE="url-test"
