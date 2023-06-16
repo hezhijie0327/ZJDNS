@@ -1,19 +1,13 @@
 :443 {
-    tls /etc/caddy/cert/fullchain.cer /etc/caddy/cert/zhijie.online.key
-    @wss_trojan {
-        path /wss-trojan
-        header Connection Upgrade
-        header Upgrade websocket
-    }
-    @wss_vmess {
-        path /wss-vmess
+    @wss {
         header Connection Upgrade
         header Upgrade websocket
     }
     handle /wss-trojan {
-        reverse_proxy @wss_trojan localhost:7891
+        reverse_proxy @wss localhost:7891 /wss-trojan
     }
     handle /wss-vmess {
-        reverse_proxy @wss_vmess localhost:7892
+        reverse_proxy @wss localhost:7892 /wss-vmess
     }
+    tls /etc/caddy/cert/fullchain.cer /etc/caddy/cert/zhijie.online.key
 }
