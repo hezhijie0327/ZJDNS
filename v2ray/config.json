@@ -2,7 +2,7 @@
     "inbounds": [
         {
             "listen": "0.0.0.0",
-            "port": 2053,
+            "port": 443,
             "protocol": "trojan",
             "settings": {
                 "clients": [
