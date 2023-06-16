@@ -1,52 +1,6 @@
 {
     "inbounds": [
         {
-            "listen": "0.0.0.0",
-            "port": 443,
-            "protocol": "trojan",
-            "settings": {
-                "clients": [
-                    {
-                        "level": 0,
-                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
-                    }
-                ],
-                "fallbacks": [
-                    { "dest": 7891, "path": "/wss-trojan" },
-                    { "dest": 7892, "path": "/wss-vmess" }
-                ]
-            },
-            "streamSettings": {
-                "network": "tcp",
-                "security": "tls",
-                "sockopt": {
-                    "tcpFastOpen": true,
-                    "tcpFastOpenQueueLength": 4096,
-                    "tcpKeepAliveInterval": 0
-                },
-                "tcpSettings": {
-                    "acceptProxyProtocol": false
-                },
-                "tlsSettings": {
-                    "allowInsecure": false,
-                    "alpn": [
-                        "h2",
-                        "http/1.1"
-                    ],
-                    "certificates": [
-                        {
-                            "certificateFile": "/etc/v2ray/cert/fullchain.cer",
-                            "keyFile": "/etc/v2ray/cert/zhijie.online.key",
-                            "usage": "encipherment"
-                        }
-                    ],
-                    "disableSystemRoot": false,
-                    "serverName": "demo.zhijie.online",
-                    "verifyClientCertificate": false
-                }
-            }
-        },
-        {
             "listen": "127.0.0.1",
             "port": 7890,
             "protocol": "http",
