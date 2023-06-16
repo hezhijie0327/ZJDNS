@@ -12,8 +12,6 @@ USE_CDN="true"
 CUSTOM_SERVERNAME="" # demo.zhijie.online
 CUSTOM_UUID="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
 
-ENABLE_HTTPS_PROXY="false"
-
 ENABLE_WARP="false"
 
 ## Function
@@ -37,10 +35,6 @@ function DownloadConfiguration() {
     if [ ! -d "${DOCKER_PATH}/conf" ]; then
         mkdir -p "${DOCKER_PATH}/conf"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/v2ray/config.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/demo.zhijie.online/${CUSTOM_SERVERNAME:-demo.zhijie.online}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID:-$(uuidgen | tr 'A-Z' 'a-z')}/g" "${DOCKER_PATH}/conf/config.json"
-
-    if [ "${ENABLE_HTTPS_PROXY}" == "false" ]; then
-        sed -i '/"dest": 7890/d' "${DOCKER_PATH}/conf/config.json"
-    fi
 
     if [ "${ENABLE_WARP}" == "true" ]; then
         sed -i "s/{ \"mux\": { \"concurrency\": 8, \"enable\": true }, \"protocol\": \"freedom\" }/{ \"mux\": { \"concurrency\": 8, \"enable\": true }, \"protocol\": \"socks\", \"settings\": { \"servers\": [ { \"address\": \"127.0.0.1\", \"port\": 40000 } ] } }/g" "${DOCKER_PATH}/conf/config.json"
