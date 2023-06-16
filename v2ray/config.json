@@ -24,6 +24,9 @@
                     "tcpFastOpenQueueLength": 4096,
                     "tcpKeepAliveInterval": 0
                 },
+                "tcpSettings": {
+                    "acceptProxyProtocol": true
+                },
                 "tlsSettings": {
                     "allowInsecure": false,
                     "alpn": [
