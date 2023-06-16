@@ -2,7 +2,7 @@
     "inbounds": [
         {
             "listen": "0.0.0.0",
-            "port": 2053,
+            "port": 443,
             "protocol": "trojan",
             "settings": {
                 "clients": [
@@ -10,11 +10,23 @@
                         "level": 0,
                         "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
                     }
+                ],
+                "fallbacks": [
+                    { "dest": 7891, "path": "/wss-trojan" },
+                    { "dest": 7892, "path": "/wss-vmess" }
                 ]
             },
             "streamSettings": {
-                "network": "ws",
+                "network": "tcp",
                 "security": "tls",
+                "sockopt": {
+                    "tcpFastOpen": true,
+                    "tcpFastOpenQueueLength": 4096,
+                    "tcpKeepAliveInterval": 0
+                },
+                "tcpSettings": {
+                    "acceptProxyProtocol": false
+                },
                 "tlsSettings": {
                     "allowInsecure": false,
                     "alpn": [
@@ -31,7 +43,34 @@
                     "disableSystemRoot": false,
                     "serverName": "demo.zhijie.online",
                     "verifyClientCertificate": false
-                },
+                }
+            }
+        },
+        {
+            "listen": "127.0.0.1",
+            "port": 7890,
+            "protocol": "http",
+            "settings": {
+                "allowTransparent": true,
+                "timeout": 0,
+                "userLevel": 0
+            }
+        },
+        {
+            "listen": "127.0.0.1",
+            "port": 7891,
+            "protocol": "trojan",
+            "settings": {
+                "clients": [
+                    {
+                        "level": 0,
+                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "none",
                 "wsSettings": {
                     "acceptProxyProtocol": false,
                     "earlyDataHeaderName": "",
@@ -46,8 +85,8 @@
             }
         },
         {
-            "listen": "0.0.0.0",
-            "port": 2083,
+            "listen": "127.0.0.1",
+            "port": 7892,
             "protocol": "vmess",
             "settings": {
                 "clients": [
@@ -62,24 +101,7 @@
             },
             "streamSettings": {
                 "network": "ws",
-                "security": "tls",
-                "tlsSettings": {
-                    "allowInsecure": false,
-                    "alpn": [
-                        "h2",
-                        "http/1.1"
-                    ],
-                    "certificates": [
-                        {
-                            "certificateFile": "/etc/v2ray/cert/fullchain.cer",
-                            "keyFile": "/etc/v2ray/cert/zhijie.online.key",
-                            "usage": "encipherment"
-                        }
-                    ],
-                    "disableSystemRoot": false,
-                    "serverName": "demo.zhijie.online",
-                    "verifyClientCertificate": false
-                },
+                "security": "none",
                 "wsSettings": {
                     "acceptProxyProtocol": false,
                     "earlyDataHeaderName": "",
@@ -90,83 +112,6 @@
                     "path": "/wss-vmess",
                     "pinnedPeerCertificateChainSha256": "",
                     "useBrowserForwarding": false
-                }
-            }
-        },
-        {
-            "listen": "0.0.0.0",
-            "port": 2087,
-            "protocol": "trojan",
-            "settings": {
-                "clients": [
-                    {
-                        "level": 0,
-                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
-                    }
-                ]
-            },
-            "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPC.TROJAN"
-                },
-                "network": "grpc",
-                "security": "tls",
-                "tlsSettings": {
-                    "allowInsecure": false,
-                    "alpn": [
-                        "h2",
-                        "http/1.1"
-                    ],
-                    "certificates": [
-                        {
-                            "certificateFile": "/etc/v2ray/cert/fullchain.cer",
-                            "keyFile": "/etc/v2ray/cert/zhijie.online.key",
-                            "usage": "encipherment"
-                        }
-                    ],
-                    "disableSystemRoot": false,
-                    "serverName": "demo.zhijie.online",
-                    "verifyClientCertificate": false
-                }
-            }
-        },
-        {
-            "listen": "0.0.0.0",
-            "port": 2096,
-            "protocol": "vmess",
-            "settings": {
-                "clients": [
-                    {
-                        "alterId": 0,
-                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                        "level": 0,
-                        "security": "auto"
-                    }
-                ],
-                "disableInsecureEncryption": false
-            },
-            "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPC.VMESS"
-                },
-                "network": "grpc",
-                "security": "tls",
-                "tlsSettings": {
-                    "allowInsecure": false,
-                    "alpn": [
-                        "h2",
-                        "http/1.1"
-                    ],
-                    "certificates": [
-                        {
-                            "certificateFile": "/etc/v2ray/cert/fullchain.cer",
-                            "keyFile": "/etc/v2ray/cert/zhijie.online.key",
-                            "usage": "encipherment"
-                        }
-                    ],
-                    "disableSystemRoot": false,
-                    "serverName": "demo.zhijie.online",
-                    "verifyClientCertificate": false
                 }
             }
         }
