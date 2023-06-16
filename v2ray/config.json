@@ -12,8 +12,8 @@
                     }
                 ],
                 "fallbacks": [
-                    { "dest": 7891, "path": "/wss-trojan", "xver": 2 },
-                    { "dest": 7892, "path": "/wss-vmess", "xver": 2 }
+                    { "dest": 7891, "path": "/wss-trojan" },
+                    { "dest": 7892, "path": "/wss-vmess" }
                 ]
             },
             "streamSettings": {
@@ -25,7 +25,7 @@
                     "tcpKeepAliveInterval": 0
                 },
                 "tcpSettings": {
-                    "acceptProxyProtocol": true
+                    "acceptProxyProtocol": false
                 },
                 "tlsSettings": {
                     "allowInsecure": false,
@@ -72,7 +72,7 @@
                 "network": "ws",
                 "security": "none",
                 "wsSettings": {
-                    "acceptProxyProtocol": true,
+                    "acceptProxyProtocol": false,
                     "earlyDataHeaderName": "",
                     "headers": {
                         "Host": "demo.zhijie.online"
@@ -103,7 +103,7 @@
                 "network": "ws",
                 "security": "none",
                 "wsSettings": {
-                    "acceptProxyProtocol": true,
+                    "acceptProxyProtocol": false,
                     "earlyDataHeaderName": "",
                     "headers": {
                         "Host": "demo.zhijie.online"
