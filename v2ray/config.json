@@ -19,11 +19,6 @@
             "streamSettings": {
                 "network": "tcp",
                 "security": "tls",
-                "sockopt": {
-                    "tcpFastOpen": true,
-                    "tcpFastOpenQueueLength": 4096,
-                    "tcpKeepAliveInterval": 0
-                },
                 "tcpSettings": {
                     "acceptProxyProtocol": false
                 },
