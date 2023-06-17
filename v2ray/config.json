@@ -23,6 +23,49 @@
                 ]
             },
             "streamSettings": {
+                "grpcSettings": {
+                    "serviceName": "gRPCTROJAN"
+                },
+                "network": "grpc",
+                "security": "none"
+            }
+        },
+        {
+            "listen": "127.0.0.1",
+            "port": 7892,
+            "protocol": "vmess",
+            "settings": {
+                "clients": [
+                    {
+                        "alterId": 0,
+                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "level": 0,
+                        "security": "auto"
+                    }
+                ],
+                "disableInsecureEncryption": false
+            },
+            "streamSettings": {
+                "grpcSettings": {
+                    "serviceName": "gRPCVMESS"
+                },
+                "network": "grpc",
+                "security": "none"
+            }
+        },
+        {
+            "listen": "127.0.0.1",
+            "port": 7893,
+            "protocol": "trojan",
+            "settings": {
+                "clients": [
+                    {
+                        "level": 0,
+                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
+                    }
+                ]
+            },
+            "streamSettings": {
                 "network": "ws",
                 "security": "none",
                 "wsSettings": {
@@ -40,7 +83,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7892,
+            "port": 7894,
             "protocol": "vmess",
             "settings": {
                 "clients": [
@@ -67,49 +110,6 @@
                     "pinnedPeerCertificateChainSha256": "",
                     "useBrowserForwarding": false
                 }
-            }
-        },
-        {
-            "listen": "127.0.0.1",
-            "port": 7893,
-            "protocol": "trojan",
-            "settings": {
-                "clients": [
-                    {
-                        "level": 0,
-                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
-                    }
-                ]
-            },
-            "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPCTROJAN"
-                },
-                "network": "grpc",
-                "security": "none"
-            }
-        },
-        {
-            "listen": "127.0.0.1",
-            "port": 7894,
-            "protocol": "vmess",
-            "settings": {
-                "clients": [
-                    {
-                        "alterId": 0,
-                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                        "level": 0,
-                        "security": "auto"
-                    }
-                ],
-                "disableInsecureEncryption": false
-            },
-            "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPCVMESS"
-                },
-                "network": "grpc",
-                "security": "none"
             }
         }
     ],
