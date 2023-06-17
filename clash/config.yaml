@@ -4,12 +4,12 @@ log-level: error
 mixed-port: 7890
 mode: rule
 proxies:
-##- { name: TROJAN, server: demo.zhijie.online, port: 443, type: trojan, network: ws, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-trojan } }
-##- { name: TROJAN_GRPC, server: demo.zhijie.online, port: 443, type: trojan, network: grpc, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, grpc-opts: { grpc-service-name: gRPCTROJAN } }
-  - { name: VMESS, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: ws, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-vmess } }
-  - { name: VMESS_GRPC, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: grpc, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, grpc-opts: { grpc-service-name: gRPCVMESS } }
+#(- { name: TROJAN_GRPC, server: demo.zhijie.online, port: 443, type: trojan, network: grpc, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, grpc-opts: { grpc-service-name: gRPCTROJAN } }
+#)- { name: TROJAN_WSS, server: demo.zhijie.online, port: 443, type: trojan, network: ws, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-trojan } }
+##- { name: VMESS_GRPC, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: grpc, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, grpc-opts: { grpc-service-name: gRPCVMESS } }
+  - { name: VMESS_WSS, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: ws, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-vmess } }
 proxy-groups:
-  - {name: PROXY, interval: 75, proxies: [VMESS], type: fallback, url: 'https://www.google.com/generate_204'}
+  - {name: PROXY, interval: 75, proxies: [VMESS_WSS], type: fallback, url: 'https://www.google.com/generate_204'}
 rules:
   - GEOIP,CN,DIRECT
   - IP-CIDR,0.0.0.0/8,DIRECT
