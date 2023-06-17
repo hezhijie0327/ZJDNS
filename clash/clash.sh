@@ -66,7 +66,7 @@ function DownloadConfiguration() {
         PROXY_LIST="VMESS_WSS ${PROXY_LIST}"
     fi
 
-    sed -i "s/\[PROXY\]/\[$(echo ${PROXY_LIST} | sed 's/ $//g;s/ /, /g')\]/g" "${DOCKER_PATH}/conf/config.yaml"
+    sed -i "s/\[VMESS_WSS\]/\[$(echo ${PROXY_LIST} | sed 's/ $//g;s/ /, /g')\]/g" "${DOCKER_PATH}/conf/config.yaml"
 
     if [ "${RUNNING_MODE}" == "fallback" ] || [ "${RUNNING_MODE}" == "load-balance" ] || [ "${RUNNING_MODE}" == "url-test" ]; then
         sed -i "s/fallback/${RUNNING_MODE}/g" "${DOCKER_PATH}/conf/config.yaml"
