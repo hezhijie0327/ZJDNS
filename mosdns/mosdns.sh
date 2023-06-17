@@ -29,6 +29,7 @@ function DownloadmosDNSConfiguration() {
     ENABLE_HTTP3_UPSTREAM="false"
     ENABLE_PIPELINE="false"
 
+    CUSTOM_PROXY_SERVER="" # 127.0.0.1:7890
     ENABLE_PROXY_IPV6_UPSTREAM="false"
     ENABLE_PROXY_UPSTREAM="false"
 
@@ -125,6 +126,9 @@ function DownloadmosDNSConfiguration() {
         sed -i "s/enable_pipeline: true/enable_pipeline: false/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
 
+    if [ "${CUSTOM_PROXY_SERVER}" != "" ]; then
+        sed -i "s/127.0.0.1:7890/${CUSTOM_PROXY_SERVER}/g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
     if [ "${ENABLE_PROXY_IPV6_UPSTREAM}" == "true" ]; then
         sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
