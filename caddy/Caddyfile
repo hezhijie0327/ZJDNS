@@ -1,28 +1,31 @@
 :443 {
+    @grpc {
+        header Content-Type *grpc*
+    }
     @wss {
         header Connection Upgrade
         header Upgrade websocket
     }
     handle /wss-trojan {
-        reverse_proxy @wss 127.0.0.1:7891 /wss-trojan
+        reverse_proxy @wss /wss-trojan 127.0.0.1:7891
     }
     handle /wss-vmess {
-        reverse_proxy @wss 127.0.0.1:7892 /wss-vmess
+        reverse_proxy @wss /wss-vmess 127.0.0.1:7892
     }
     handle /gRPCTROJAN/* {
-        reverse_proxy /gRPCTROJAN/* 127.0.0.1:7893 {
+        reverse_proxy @grpc /gRPCTROJAN/* 127.0.0.1:7893 {
             flush_interval -1
             transport http {
                 versions h2c
-             }
+            }
         }
     }
     handle /gRPCVMESS/* {
-        reverse_proxy /gRPCVMESS/* 127.0.0.1:7894 {
+        reverse_proxy @grpc /gRPCVMESS/* 127.0.0.1:7894 {
             flush_interval -1
             transport http {
                 versions h2c
-             }
+            }
         }
     }
     tls /etc/caddy/cert/fullchain.cer /etc/caddy/cert/zhijie.online.key
