@@ -4,8 +4,11 @@ log-level: error
 mixed-port: 7890
 mode: rule
 proxies:
+#+- { name: SHADOWSOCKS_WSS, server: demo.zhijie.online, port: 443, type: ss, cipher: chacha20-ietf-poly1305, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, plugin: v2ray-plugin, plugin-opts: { header: { Host: demo.zhijie.online }, host: demo.zhijie.online, mode: websocket, skip-cert-verify: true, tls: true, path: /wss-shadowsocks, mux: true } }
 #(- { name: TROJAN_GRPC, server: demo.zhijie.online, port: 443, type: trojan, network: grpc, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, grpc-opts: { grpc-service-name: gRPCTROJAN } }
 #)- { name: TROJAN_WSS, server: demo.zhijie.online, port: 443, type: trojan, network: ws, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-trojan } }
+#<- { name: VLESS_GRPC, server: demo.zhijie.online, port: 443, type: vless, network: grpc, servername: demo.zhijie.online, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, grpc-opts: { grpc-service-name: gRPCVLESS } }
+#>- { name: VLESS_WSS, server: demo.zhijie.online, port: 443, type: vless, network: ws, servername: demo.zhijie.online, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-vless }
 ##- { name: VMESS_GRPC, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: grpc, servername: demo.zhijie.online, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, grpc-opts: { grpc-service-name: gRPCVMESS } }
   - { name: VMESS_WSS, server: demo.zhijie.online, port: 443, type: vmess, alterId: 0, cipher: auto, network: ws, servername: demo.zhijie.online, skip-cert-verify: true, tls: true, udp: true, uuid: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, ws-opts: { headers: { Host: demo.zhijie.online }, path: /wss-vmess } }
 proxy-groups:
