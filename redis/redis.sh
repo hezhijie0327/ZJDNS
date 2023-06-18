@@ -22,7 +22,6 @@ function CleanupCurrentContainer() {
 }
 # Create New Container
 function CreateNewContainer() {
-
     if [ ! -d "${DOCKER_PATH}/data" ]; then
         mkdir -p "${DOCKER_PATH}/data"
     fi
