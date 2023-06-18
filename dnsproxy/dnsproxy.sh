@@ -50,43 +50,51 @@ function CleanupCurrentContainer() {
 }
 # Create New Container
 function CreateNewContainer() {
-    LISTEN_IP="0.0.0.0"
+    LISTEN_IP="" # 0.0.0.0
 
-    UPSTREAM_DNS="127.0.0.1:5533"
+    UPSTREAM_DNS="" # 127.0.0.1:5533
 
-    EDNS_RESULT="A"
+    CACHE_SIZE="" # 4194304
 
-    HTTPS_PORT="443"
-    QUIC_PORT="853"
-    TLS_PORT="853"
-    UNENCRYPTED_PORT="53"
+    EDNS_ADDR_TYPE="" # A, AAAA
 
-    SSL_CERT="fullchain.cer"
-    SSL_KEY="zhijie.online.key"
+    HTTPS_PORT="" # 443
+    QUIC_PORT="" # 853
+    TLS_PORT="" # 853
+    UNENCRYPTED_PORT="" # 53
+
+    SSL_CERT="" # fullchain.cer
+    SSL_KEY="" # zhijie.online.key
 
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/dnsproxy/cert:ro \
         -d ${OWNER}/${REPO}:${TAG} \
         --listen=${LISTEN_IP:-0.0.0.0} \
         --port=${UNENCRYPTED_PORT:-53} \
-        --https-port=${HTTPS_PORT:-0} \
-        --quic-port=${QUIC_PORT:-0} \
-        --tls-port=${TLS_PORT:-0} \
-        --tls-crt=/etc/dnsproxy/cert/${SSL_CERT} \
-        --tls-key=/etc/dnsproxy/cert/${SSL_KEY} \
+        --https-port=${HTTPS_PORT:-443} \
+        --quic-port=${QUIC_PORT:-853} \
+        --tls-port=${TLS_PORT:-853} \
+        --tls-crt=/etc/dnsproxy/cert/${SSL_CERT:-fullchain.cer} \
+        --tls-key=/etc/dnsproxy/cert/${SSL_KEY:-zhijie.online.key} \
         --tls-max-version=1.3 \
         --tls-min-version=1.2 \
         --fallback=tls://223.5.5.5:853 \
         --fallback=tls://223.6.6.6:853 \
         --fallback=tls://[2400:3200::1]:853 \
         --fallback=tls://[2400:3200:baba::1]:853 \
-        --upstream=${UPSTREAM_DNS} \
-        --edns-addr=$(Type="${EDNS_RESULT:-A}" && GetWANIP) \
+        --upstream=${UPSTREAM_DNS:-127.0.0.1:5533} \
+        --cache \
+        --cache-size= ${CACHE_SIZE:-4194304}\
+        --cache-max-ttl=86400 \
+        --cache-min-ttl=0 \
+        --cache-optimistic \
+        --edns-addr=$(Type="${EDNS_ADDR_TYPE:-A}" && GetWANIP) \
         --edns \
         --http3 \
         --insecure \
         --ratelimit=1000 \
-        --refuse-any
+        --refuse-any \
+        --timeout=5s
 }
 # Cleanup Expired Image
 function CleanupExpiredImage() {
