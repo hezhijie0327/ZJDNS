@@ -19,10 +19,10 @@ function CleanupCurrentContainer() {
 }
 # Create New Container
 function CreateNewContainer() {
-
     if [ ! -d "${DOCKER_PATH}/conf" ]; then
         mkdir -p "${DOCKER_PATH}/conf"
     fi
+
     if [ ! -d "${DOCKER_PATH}/work" ]; then
         mkdir -p "${DOCKER_PATH}/work"
     fi
