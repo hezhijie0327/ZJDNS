@@ -605,182 +605,182 @@ plugins:
           dial_addr: '94.140.14.140:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'https://unfiltered.adguard-dns.com/dns-query'
           dial_addr: '94.140.14.141:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://unfiltered.adguard-dns.com/dns-query'
 #+#=      dial_addr: '[2a10:50c0::1:ff]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://unfiltered.adguard-dns.com/dns-query'
 #+#=      dial_addr: '[2a10:50c0::2:ff]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://unfiltered.adguard-dns.com'
           dial_addr: '94.140.14.140:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'tls://unfiltered.adguard-dns.com'
           dial_addr: '94.140.14.141:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://unfiltered.adguard-dns.com'
 #+#=      dial_addr: '[2a10:50c0::1:ff]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://unfiltered.adguard-dns.com'
 #+#=      dial_addr: '[2a10:50c0::2:ff]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.4.4:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'https://dns.google/dns-query'
           dial_addr: '8.8.8.8:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://dns.google/dns-query'
 #+#=      dial_addr: '[2001:4860:4860::8844]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://dns.google/dns-query'
 #+#=      dial_addr: '[2001:4860:4860::8888]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://dns64.dns.google/dns-query'
 #+#=      dial_addr: '[2001:4860:4860::64]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://dns64.dns.google/dns-query'
 #+#=      dial_addr: '[2001:4860:4860::6464]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://dns.google'
           dial_addr: '8.8.4.4:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'tls://dns.google'
           dial_addr: '8.8.8.8:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dns.google'
 #+#=      dial_addr: '[2001:4860:4860::8844]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dns.google'
 #+#=      dial_addr: '[2001:4860:4860::8888]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dns64.dns.google'
 #+#=      dial_addr: '[2001:4860:4860::64]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dns64.dns.google'
 #+#=      dial_addr: '[2001:4860:4860::6464]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.220.2:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'https://sandbox.opendns.com/dns-query'
           dial_addr: '208.67.222.2:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://sandbox.opendns.com/dns-query'
 #+#=      dial_addr: '[2620:0:ccc::2]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://sandbox.opendns.com/dns-query'
 #+#=      dial_addr: '[2620:0:ccd::2]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.220.2:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'tls://sandbox.opendns.com'
           dial_addr: '208.67.222.2:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://sandbox.opendns.com'
 #+#=      dial_addr: '[2620:0:ccc::2]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://sandbox.opendns.com'
 #+#=      dial_addr: '[2620:0:ccd::2]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'https://dns12.quad9.net/dns-query'
           dial_addr: '149.112.112.12:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'https://dns12.quad9.net/dns-query'
           dial_addr: '9.9.9.12:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://dns12.quad9.net/dns-query'
 #+#=      dial_addr: '[2620:fe::12]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://dns12.quad9.net/dns-query'
 #+#=      dial_addr: '[2620:fe::fe:12]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://dns12.quad9.net'
           dial_addr: '149.112.112.12:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'tls://dns12.quad9.net'
           dial_addr: '9.9.9.12:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dns12.quad9.net'
 #+#=      dial_addr: '[2620:fe::12]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dns12.quad9.net'
 #+#=      dial_addr: '[2620:fe::fe:12]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
   - tag: forward_query_to_proxy_remote_no_ecs
     type: forward
     args:
@@ -790,282 +790,282 @@ plugins:
           dial_addr: '149.112.121.10:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'https://private.canadianshield.cira.ca/dns-query'
           dial_addr: '149.112.122.10:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://private.canadianshield.cira.ca/dns-query'
 #+#=      dial_addr: '[2620:10a:80bb::10]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://private.canadianshield.cira.ca/dns-query'
 #+#=      dial_addr: '[2620:10a:80bc::10]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://private.canadianshield.cira.ca'
           dial_addr: '149.112.121.10:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'tls://private.canadianshield.cira.ca'
           dial_addr: '149.112.122.10:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://private.canadianshield.cira.ca'
 #+#=      dial_addr: '[2620:10a:80bb::10]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://private.canadianshield.cira.ca'
 #+#=      dial_addr: '[2620:10a:80bc::10]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'https://cloudflare-dns.com/dns-query'
           dial_addr: '1.0.0.1:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'https://cloudflare-dns.com/dns-query'
           dial_addr: '1.1.1.1:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://cloudflare-dns.com/dns-query'
 #+#=      dial_addr: '[2606:4700:4700::1001]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://cloudflare-dns.com/dns-query'
 #+#=      dial_addr: '[2606:4700:4700::1111]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://dns64.cloudflare-dns.com/dns-query'
 #+#=      dial_addr: '[2606:4700:4700::64]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://dns64.cloudflare-dns.com/dns-query'
 #+#=      dial_addr: '[2606:4700:4700::6400]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '1.0.0.1:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
           dial_addr: '1.1.1.1:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
 #+#=      dial_addr: '[2606:4700:4700::1001]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://1dot1dot1dot1.cloudflare-dns.com'
 #+#=      dial_addr: '[2606:4700:4700::1111]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dns64.cloudflare-dns.com'
 #+#=      dial_addr: '[2606:4700:4700::64]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dns64.cloudflare-dns.com'
 #+#=      dial_addr: '[2606:4700:4700::6400]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'https://freedns.controld.com/p0'
           dial_addr: '76.76.2.11:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://freedns.controld.com/p0'
 #+#=      dial_addr: '[2606:1a40::11]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://p0.freedns.controld.com'
           dial_addr: '76.76.2.11:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://p0.freedns.controld.com'
 #+#=      dial_addr: '[2606:1a40::11]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'https://doh.sb/dns-query'
           dial_addr: '185.222.222.222:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'https://doh.sb/dns-query'
           dial_addr: '45.11.45.11:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://doh.sb/dns-query'
 #+#=      dial_addr: '[2a09::]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://doh.sb/dns-query'
 #+#=      dial_addr: '[2a11::]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://dot.sb'
           dial_addr: '185.222.222.222:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'tls://dot.sb'
           dial_addr: '45.11.45.11:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dot.sb'
 #+#=      dial_addr: '[2a09::]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dot.sb'
 #+#=      dial_addr: '[2a11::]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'https://public.dns.iij.jp/dns-query'
           dial_addr: '103.2.57.5:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'https://public.dns.iij.jp/dns-query'
           dial_addr: '103.2.57.6:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://public.dns.iij.jp/dns-query'
 #+#=      dial_addr: '[2001:300::5]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://public.dns.iij.jp/dns-query'
 #+#=      dial_addr: '[2001:300::6]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://public.dns.iij.jp'
           dial_addr: '103.2.57.5:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'tls://public.dns.iij.jp'
           dial_addr: '103.2.57.6:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://public.dns.iij.jp'
 #+#=      dial_addr: '[2001:300::5]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://public.dns.iij.jp'
 #+#=      dial_addr: '[2001:300::6]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '45.90.28.0:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'https://anycast.dns.nextdns.io/dns-query'
           dial_addr: '45.90.30.0:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://anycast.dns.nextdns.io/dns-query'
 #+#=      dial_addr: '[2a07:a8c0::]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://anycast.dns.nextdns.io/dns-query'
 #+#=      dial_addr: '[2a07:a8c1::]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://anycast.dns.nextdns.io'
           dial_addr: '45.90.28.0:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'tls://anycast.dns.nextdns.io'
           dial_addr: '45.90.30.0:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://anycast.dns.nextdns.io'
 #+#=      dial_addr: '[2a07:a8c0::]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://anycast.dns.nextdns.io'
 #+#=      dial_addr: '[2a07:a8c1::]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'https://dns.twnic.tw/dns-query'
           dial_addr: '101.101.101.101:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'https://dns.twnic.tw/dns-query'
           dial_addr: '101.102.103.104:443'
           enable_http3: false
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://dns.twnic.tw/dns-query'
 #+#=      dial_addr: '[2001:de4::101]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'https://dns.twnic.tw/dns-query'
 #+#=      dial_addr: '[2001:de4::102]:443'
 #+#=      enable_http3: false
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
         - addr: 'tls://dns.twnic.tw'
           dial_addr: '101.101.101.101:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
         - addr: 'tls://dns.twnic.tw'
           dial_addr: '101.102.103.104:853'
           enable_pipeline: true
           insecure_skip_verify: true
-#@        socks5: '127.0.0.1:7890'
+#@        socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dns.twnic.tw'
 #+#=      dial_addr: '[2001:de4::101]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
 #+#=    - addr: 'tls://dns.twnic.tw'
 #+#=      dial_addr: '[2001:de4::102]:853'
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
-#+#=#@    socks5: '127.0.0.1:7890'
+#+#=#@    socks5: '127.0.0.1:7891'
   - tag: fallback_forward_query_to_remote_ecs
     type: fallback
     args:
