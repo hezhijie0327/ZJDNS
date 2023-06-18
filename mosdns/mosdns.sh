@@ -9,7 +9,7 @@ DOCKER_PATH="/docker/mosdns"
 CURL_OPTION=""
 USE_CDN="true"
 
-CNIPDB_SOURCE="geolite2"
+CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, vxlink, zjdb
 
 RUNNING_MODE="" # forward_first, forward_only, recursive_first, recursive_only
 
@@ -187,7 +187,7 @@ function DownloadmosDNSConfiguration() {
 function UpdateGeoIPCNRule() {
     if [ ! -d "${DOCKER_PATH}/data" ]; then
         mkdir -p "${DOCKER_PATH}/data"
-    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
+    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE:-geolite2}/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
 }
 # Create New Container
 function CreateNewContainer() {
