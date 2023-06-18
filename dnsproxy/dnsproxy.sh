@@ -21,13 +21,17 @@ function GetWANIP() {
     else
         IPv4_v6="6"
     fi
-    IP_RESULT=$(dig -${IPv4_v6:-4} +short TXT @ns1.google.com o-o.myaddr.l.google.com | tr -d '"')
-    if [ $(CheckIPValid) == "" ]; then
-        IP_RESULT=$(dig -${IPv4_v6:-4} +short ANY @resolver1.opendns.com myip.opendns.com)
-        if [ $(CheckIPValid) == "" ]; then
-            IP_RESULT=$(curl -${IPv4_v6:-4} -s --connect-timeout 15 "https://api64.ipify.org")
-            if [ $(CheckIPValid) == "" ]; then
-                echo "invalid"
+    if [ "${StaticIP}" == "auto" ]; then
+        IP_RESULT=$(dig -${IPv4_v6:-4} +short TXT @ns1.google.com o-o.myaddr.l.google.com | tr -d '"')
+        if [[ $(CheckIPValid) = "" ]]; then
+            IP_RESULT=$(dig -${IPv4_v6:-4} +short ANY @resolver1.opendns.com myip.opendns.com)
+            if [[ $(CheckIPValid) = "" ]]; then
+                IP_RESULT=$(curl -${IPv4_v6:-4} -s --connect-timeout 15 "https://api64.ipify.org")
+                if [[ $(CheckIPValid) = "" ]]; then
+                    echo "invalid"
+                else
+                    echo "${IP_RESULT}"
+                fi
             else
                 echo "${IP_RESULT}"
             fi
@@ -35,7 +39,25 @@ function GetWANIP() {
             echo "${IP_RESULT}"
         fi
     else
-        echo "${IP_RESULT}"
+        if [ $(echo "${StaticIP}" | grep ",") != "" ]; then
+            if [ "${Type}" == "A" ]; then
+                IP_RESULT=$(echo "${StaticIP}" | cut -d ',' -f 1)
+            else
+                IP_RESULT=$(echo "${StaticIP}" | cut -d ',' -f 2)
+            fi
+            if [[ $(CheckIPValid) = "" ]]; then
+                echo "invalid"
+            else
+                echo "${IP_RESULT}"
+            fi
+        else
+            IP_RESULT="${StaticIP}"
+            if [[ $(CheckIPValid) = "" ]]; then
+                echo "invalid"
+            else
+                echo "${IP_RESULT}"
+            fi
+        fi
     fi
 }
 # Get Latest Image
@@ -56,6 +78,7 @@ function CreateNewContainer() {
 
     CACHE_SIZE="" # 4194304
 
+    EDNS_ADDR="" # auto, 127.0.0.1, ::1
     EDNS_ADDR_TYPE="" # A, AAAA
 
     HTTPS_PORT="" # 443
@@ -88,7 +111,7 @@ function CreateNewContainer() {
         --cache-max-ttl=86400 \
         --cache-min-ttl=0 \
         --cache-optimistic \
-        --edns-addr=$(Type="${EDNS_ADDR_TYPE:-A}" && GetWANIP) \
+        --edns-addr=$(StaticIP="${EDNS_ADDR:-auto}" && Type="${EDNS_ADDR_TYPE:-A}" && GetWANIP) \
         --edns \
         --http3 \
         --insecure \
