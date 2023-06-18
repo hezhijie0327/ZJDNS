@@ -9,6 +9,42 @@ DOCKER_PATH="/docker/unbound"
 CURL_OPTION=""
 USE_CDN="true"
 
+ENABLE_DNSSEC="false"
+ENABLE_DNSSEC_PERMISSIVE_MODE="false"
+
+ENABLE_ECS="true"
+
+ENABLE_FORWARD="true"
+ENABLE_FORWARD_CACHE="true"
+ENABLE_RECURSIVE_DNS="false"
+
+ENABLE_LOGFILE="false"
+
+ENABLE_RATELIMIT="false"
+
+CACHE_SIZE_KEY="" # 4m
+CACHE_SIZE_MSG="" # 4m
+CACHE_SIZE_NEG="" # 1m
+CACHE_SIZE_RRSET="" # 4m
+
+CUSTOM_REDIS_SERVER_HOST="" # 127.0.0.1
+CUSTOM_REDIS_SERVER_PASSWORD=""
+CUSTOM_REDIS_SERVER_PATH=""
+CUSTOM_REDIS_SERVER_PORT="" # 6379
+ENABLE_REDIS_CACHE="false"
+
+ENABLE_REMOTE_CONTROL="true"
+
+CUSTOM_UPSTREAM="" # 127.0.0.1@5533
+ENABLE_TCP_UPSTREAM="false"
+ENABLE_TLS_UPSTREAM="false"
+
+ENABLE_HTTPS="false"
+ENABLE_TLS="false"
+ENABLE_UNENCRYPTED_DNS="true"
+SSL_CERT="fullchain.cer"
+SSL_KEY="zhijie.online.key"
+
 ## Function
 # Get Latest Image
 function GetLatestImage() {
@@ -22,42 +58,6 @@ function CleanupCurrentContainer() {
 }
 # Download Unbound Configuration
 function DownloadUnboundConfiguration() {
-    ENABLE_DNSSEC="false"
-    ENABLE_DNSSEC_PERMISSIVE_MODE="false"
-
-    ENABLE_ECS="true"
-
-    ENABLE_FORWARD="true"
-    ENABLE_FORWARD_CACHE="true"
-    ENABLE_RECURSIVE_DNS="false"
-
-    ENABLE_LOGFILE="false"
-
-    ENABLE_RATELIMIT="false"
-
-    CACHE_SIZE_KEY="" # 4m
-    CACHE_SIZE_MSG="" # 4m
-    CACHE_SIZE_NEG="" # 1m
-    CACHE_SIZE_RRSET="" # 4m
-
-    CUSTOM_REDIS_SERVER_HOST="" # 127.0.0.1
-    CUSTOM_REDIS_SERVER_PASSWORD=""
-    CUSTOM_REDIS_SERVER_PATH=""
-    CUSTOM_REDIS_SERVER_PORT="" # 6379
-    ENABLE_REDIS_CACHE="false"
-
-    ENABLE_REMOTE_CONTROL="true"
-
-    CUSTOM_UPSTREAM="" # 127.0.0.1@5533
-    ENABLE_TCP_UPSTREAM="false"
-    ENABLE_TLS_UPSTREAM="false"
-
-    ENABLE_HTTPS="false"
-    ENABLE_TLS="false"
-    ENABLE_UNENCRYPTED_DNS="true"
-    SSL_CERT="fullchain.cer"
-    SSL_KEY="zhijie.online.key"
-
     if [ "${USE_CDN}" == true ]; then
         CDN_PATH="source.zhijie.online"
     else
