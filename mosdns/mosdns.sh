@@ -9,6 +9,8 @@ DOCKER_PATH="/docker/mosdns"
 CURL_OPTION=""
 USE_CDN="true"
 
+CNIPDB_SOURCE="geolite2"
+
 RUNNING_MODE="" # forward_first, forward_only, recursive_first, recursive_only
 
 ENABLE_ALWAYS_STANDBY="false"
@@ -16,7 +18,7 @@ ENABLE_IPV6_UPSTREAM="false"
 ENABLE_HTTP3_UPSTREAM="false"
 ENABLE_PIPELINE="false"
 
-CUSTOM_PROXY_SERVER="" # 127.0.0.1:7890
+CUSTOM_PROXY_SERVER="" # 127.0.0.1:7891
 ENABLE_PROXY_IPV6_UPSTREAM="false"
 ENABLE_PROXY_UPSTREAM="false"
 
@@ -129,7 +131,7 @@ function DownloadmosDNSConfiguration() {
     fi
 
     if [ "${CUSTOM_PROXY_SERVER}" != "" ]; then
-        sed -i "s/127.0.0.1:7890/${CUSTOM_PROXY_SERVER}/g" "${DOCKER_PATH}/conf/config.yaml"
+        sed -i "s/127.0.0.1:7891/${CUSTOM_PROXY_SERVER}/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_PROXY_IPV6_UPSTREAM}" == "true" ]; then
         sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/config.yaml"
@@ -183,7 +185,6 @@ function DownloadmosDNSConfiguration() {
 }
 # Update GeoIP CN Rule
 function UpdateGeoIPCNRule() {
-    CNIPDB_SOURCE="geolite2"
     if [ ! -d "${DOCKER_PATH}/data" ]; then
         mkdir -p "${DOCKER_PATH}/data"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE}/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.txt"
