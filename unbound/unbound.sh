@@ -62,11 +62,15 @@ function DownloadUnboundConfiguration() {
         CDN_PATH="source.zhijie.online"
     else
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
-    fi && if [ ! -d "${DOCKER_PATH}/conf" ]; then
+    fi
+
+    if [ ! -d "${DOCKER_PATH}/conf" ]; then
         mkdir -p "${DOCKER_PATH}/conf"
-    fi && if [ ! -d "${DOCKER_PATH}/work" ]; then
-        mkdir -p "${DOCKER_PATH}/work"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/unbound.conf"
+
+    if [ ! -d "${DOCKER_PATH}/work" ]; then
+        mkdir -p "${DOCKER_PATH}/work"
+    fi 
 
     if [ "${ENABLE_DNSSEC}" == "false" ]; then
         sed -i "s/validator //g" "${DOCKER_PATH}/conf/unbound.conf"
@@ -170,7 +174,9 @@ function UpdateRootHints() {
     else
         ROOT_HINTS_DOMAIN="www.internic.net"
         ROOT_HINTS_PATH="domain/named.cache"
-    fi && if [ ! -d "${DOCKER_PATH}/data" ]; then
+    fi
+
+    if [ ! -d "${DOCKER_PATH}/data" ]; then
         mkdir -p "${DOCKER_PATH}/data"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${ROOT_HINTS_DOMAIN}/${ROOT_HINTS_PATH}" > "${DOCKER_PATH}/data/root.hints"
 }
