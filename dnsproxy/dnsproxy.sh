@@ -39,7 +39,7 @@ function GetWANIP() {
             echo "${IP_RESULT}"
         fi
     else
-        if [ $(echo "${StaticIP}" | grep ",") != "" ]; then
+        if [[ $(echo "${StaticIP}" | grep ",") != "" ]]; then
             if [ "${Type}" == "A" ]; then
                 IP_RESULT=$(echo "${StaticIP}" | cut -d ',' -f 1)
             else
@@ -107,7 +107,7 @@ function CreateNewContainer() {
         --fallback=tls://[2400:3200:baba::1]:853 \
         --upstream=${UPSTREAM_DNS:-127.0.0.1:5533} \
         --cache \
-        --cache-size= ${CACHE_SIZE:-4194304}\
+        --cache-size=${CACHE_SIZE:-4194304} \
         --cache-max-ttl=86400 \
         --cache-min-ttl=0 \
         --cache-optimistic \
