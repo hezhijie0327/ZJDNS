@@ -70,7 +70,7 @@ function DownloadUnboundConfiguration() {
 
     if [ ! -d "${DOCKER_PATH}/work" ]; then
         mkdir -p "${DOCKER_PATH}/work"
-    fi 
+    fi
 
     if [ "${ENABLE_DNSSEC}" == "false" ]; then
         sed -i "s/validator //g" "${DOCKER_PATH}/conf/unbound.conf"
