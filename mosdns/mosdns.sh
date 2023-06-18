@@ -9,6 +9,38 @@ DOCKER_PATH="/docker/mosdns"
 CURL_OPTION=""
 USE_CDN="true"
 
+RUNNING_MODE="" # forward_first, forward_only, recursive_first, recursive_only
+
+ENABLE_ALWAYS_STANDBY="false"
+ENABLE_IPV6_UPSTREAM="false"
+ENABLE_HTTP3_UPSTREAM="false"
+ENABLE_PIPELINE="false"
+
+CUSTOM_PROXY_SERVER="" # 127.0.0.1:7890
+ENABLE_PROXY_IPV6_UPSTREAM="false"
+ENABLE_PROXY_UPSTREAM="false"
+
+ENABLE_RECURSIVE_HTTPS_UPSTREAM="false"
+ENABLE_RECURSIVE_TLS_UPSTREAM="false"
+ENABLE_RECURSIVE_UNENCRYPTED_UPSTREAM="true"
+
+ENABLE_REMOTE_IPV6_UPSTREAM="false"
+ENABLE_REMOTE_UPSTREAM="false"
+
+ENABLE_ECS="true"
+ECS_IPV4_OVERWRITE="255.255.255.255"
+ECS_IPV6_OVERWRITE="ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+
+ENABLE_REVERSE_LOOKUP="false"
+CACHE_SIZE_REVERSE_LOOKUP="" # 4096
+TTL_REVERSE_LOOKUP="" # 10
+
+ENABLE_HTTPS="false"
+ENABLE_TLS="false"
+ENABLE_UNENCRYPTED_DNS="true"
+SSL_CERT="fullchain.cer"
+SSL_KEY="zhijie.online.key"
+
 ## Function
 # Get Latest Image
 function GetLatestImage() {
@@ -22,38 +54,6 @@ function CleanupCurrentContainer() {
 }
 # Download mosDNS Configuration
 function DownloadmosDNSConfiguration() {
-    RUNNING_MODE="" # forward_first, forward_only, recursive_first, recursive_only
-
-    ENABLE_ALWAYS_STANDBY="false"
-    ENABLE_IPV6_UPSTREAM="false"
-    ENABLE_HTTP3_UPSTREAM="false"
-    ENABLE_PIPELINE="false"
-
-    CUSTOM_PROXY_SERVER="" # 127.0.0.1:7890
-    ENABLE_PROXY_IPV6_UPSTREAM="false"
-    ENABLE_PROXY_UPSTREAM="false"
-
-    ENABLE_RECURSIVE_HTTPS_UPSTREAM="false"
-    ENABLE_RECURSIVE_TLS_UPSTREAM="false"
-    ENABLE_RECURSIVE_UNENCRYPTED_UPSTREAM="true"
-
-    ENABLE_REMOTE_IPV6_UPSTREAM="false"
-    ENABLE_REMOTE_UPSTREAM="false"
-
-    ENABLE_ECS="true"
-    ECS_IPV4_OVERWRITE="255.255.255.255"
-    ECS_IPV6_OVERWRITE="ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
-
-    ENABLE_REVERSE_LOOKUP="false"
-    CACHE_SIZE_REVERSE_LOOKUP="" # 4096
-    TTL_REVERSE_LOOKUP="" # 10
-
-    ENABLE_HTTPS="false"
-    ENABLE_TLS="false"
-    ENABLE_UNENCRYPTED_DNS="true"
-    SSL_CERT="fullchain.cer"
-    SSL_KEY="zhijie.online.key"
-
     if [ "${USE_CDN}" == "true" ]; then
         CDN_PATH="source.zhijie.online"
     else
