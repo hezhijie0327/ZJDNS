@@ -39,6 +39,11 @@ function DownloadUnboundConfiguration() {
     CACHE_SIZE_MSG="" # 4m
     CACHE_SIZE_NEG="" # 1m
     CACHE_SIZE_RRSET="" # 4m
+
+    CUSTOM_REDIS_SERVER_HOST="" # 127.0.0.1
+    CUSTOM_REDIS_SERVER_PASSWORD=""
+    CUSTOM_REDIS_SERVER_PATH=""
+    CUSTOM_REDIS_SERVER_PORT="" # 6379
     ENABLE_REDIS_CACHE="false"
 
     ENABLE_REMOTE_CONTROL="true"
@@ -94,6 +99,18 @@ function DownloadUnboundConfiguration() {
         sed -i "s/ratelimit\: 1000/ratelimit\: 0/g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
 
+    if [ "${CUSTOM_REDIS_SERVER_HOST}" != "" ]; then
+        sed -i "s/redis-server-host: 127.0.0.1/redis-server-host: ${CUSTOM_REDIS_SERVER_HOST}/g" "${DOCKER_PATH}/conf/unbound.conf"
+    fi
+    if [ "${CUSTOM_REDIS_SERVER_PASSWORD}" != "" ]; then
+        sed -i "s/redis-server-password: ''/redis-server-password: '${CUSTOM_REDIS_SERVER_PASSWORD}'/g" "${DOCKER_PATH}/conf/unbound.conf"
+    fi
+    if [ "${CUSTOM_REDIS_SERVER_PATH}" != "" ]; then
+        sed -i "s/redis-server-path: ''/redis-server-path: '${CUSTOM_REDIS_SERVER_PATH}'/g" "${DOCKER_PATH}/conf/unbound.conf"
+    fi
+    if [ "${CUSTOM_REDIS_SERVER_PORT}" != "" ]; then
+        sed -i "s/redis-server-port: 6379/redis-server-port: ${CUSTOM_REDIS_SERVER_PORT}/g" "${DOCKER_PATH}/conf/unbound.conf"
+    fi
     if [ "${ENABLE_REDIS_CACHE}" == "false" ]; then
         sed -i "/cachedb:/d;/#-/d;s/cachedb //g" "${DOCKER_PATH}/conf/unbound.conf"
         if [ "${CACHE_SIZE_KEY}" != "" ]; then
