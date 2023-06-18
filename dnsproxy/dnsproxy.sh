@@ -6,6 +6,23 @@ REPO="dnsproxy"
 TAG="latest"
 DOCKER_PATH="/docker/dnsproxy"
 
+LISTEN_IP="" # 0.0.0.0
+
+UPSTREAM_DNS="" # 127.0.0.1:5533
+
+CACHE_SIZE="" # 4194304
+
+EDNS_ADDR="" # auto, 127.0.0.1, ::1
+EDNS_ADDR_TYPE="" # A, AAAA
+
+HTTPS_PORT="" # 443
+QUIC_PORT="" # 853
+TLS_PORT="" # 853
+UNENCRYPTED_PORT="" # 53
+
+SSL_CERT="" # fullchain.cer
+SSL_KEY="" # zhijie.online.key
+
 ## Function
 # Get WAN IP
 function GetWANIP() {
@@ -72,23 +89,6 @@ function CleanupCurrentContainer() {
 }
 # Create New Container
 function CreateNewContainer() {
-    LISTEN_IP="" # 0.0.0.0
-
-    UPSTREAM_DNS="" # 127.0.0.1:5533
-
-    CACHE_SIZE="" # 4194304
-
-    EDNS_ADDR="" # auto, 127.0.0.1, ::1
-    EDNS_ADDR_TYPE="" # A, AAAA
-
-    HTTPS_PORT="" # 443
-    QUIC_PORT="" # 853
-    TLS_PORT="" # 853
-    UNENCRYPTED_PORT="" # 53
-
-    SSL_CERT="" # fullchain.cer
-    SSL_KEY="" # zhijie.online.key
-
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/dnsproxy/cert:ro \
         -d ${OWNER}/${REPO}:${TAG} \
