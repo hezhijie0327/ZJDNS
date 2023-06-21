@@ -10,8 +10,6 @@ LISTEN_IP="" # 0.0.0.0
 
 UPSTREAM_DNS="" # 127.0.0.1:5533
 
-CACHE_SIZE="" # 4194304
-
 EDNS_ADDR="" # auto, 127.0.0.1, ::1
 EDNS_ADDR_TYPE="" # A, AAAA
 
@@ -106,11 +104,6 @@ function CreateNewContainer() {
         --fallback=tls://[2400:3200::1]:853 \
         --fallback=tls://[2400:3200:baba::1]:853 \
         --upstream=${UPSTREAM_DNS:-127.0.0.1:5533} \
-        --cache \
-        --cache-size=${CACHE_SIZE:-4194304} \
-        --cache-max-ttl=86400 \
-        --cache-min-ttl=0 \
-        --cache-optimistic \
         --edns-addr=$(StaticIP="${EDNS_ADDR:-auto}" && Type="${EDNS_ADDR_TYPE:-A}" && GetWANIP) \
         --edns \
         --http3 \
