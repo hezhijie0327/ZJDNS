@@ -154,6 +154,171 @@ plugins:
 #-        dial_addr: '[2402:f000:1:416:101:6:6:6]:8853'
 #-        enable_pipeline: true
 #-        insecure_skip_verify: true
+  - tag: forward_query_to_proxy_local_ecs
+    type: forward
+    args:
+      concurrent: 3
+      upstreams:
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '101.226.4.6:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '123.125.81.6:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '140.207.198.6:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'https://doh.360.cn/dns-query'
+          dial_addr: '218.30.118.6:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '101.226.4.6:853'
+          enable_pipeline: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '123.125.81.6:853'
+          enable_pipeline: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '140.207.198.6:853'
+          enable_pipeline: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'tls://dot.360.cn'
+          dial_addr: '218.30.118.6:853'
+          enable_pipeline: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'https://dns.alidns.com/dns-query'
+          dial_addr: '223.5.5.5:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'https://dns.alidns.com/dns-query'
+          dial_addr: '223.6.6.6:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+#-      - addr: 'https://dns.alidns.com/dns-query'
+#-        dial_addr: '[2400:3200::1]:443'
+#-        enable_http3: false
+#-        insecure_skip_verify: true
+#-#@      socks5: '127.0.0.1:7891'
+#-      - addr: 'https://dns.alidns.com/dns-query'
+#-        dial_addr: '[2400:3200:baba::1]:443'
+#-        enable_http3: false
+#-        insecure_skip_verify: true
+#-#@      socks5: '127.0.0.1:7891'
+        - addr: 'tls://dns.alidns.com'
+          dial_addr: '223.5.5.5:853'
+          enable_pipeline: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'tls://dns.alidns.com'
+          dial_addr: '223.6.6.6:853'
+          enable_pipeline: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+#-      - addr: 'tls://dns.alidns.com'
+#-        dial_addr: '[2400:3200::1]:853'
+#-        enable_pipeline: false
+#-        insecure_skip_verify: true
+#-#@      socks5: '127.0.0.1:7891'
+#-      - addr: 'tls://dns.alidns.com'
+#-        dial_addr: '[2400:3200:baba::1]:853'
+#-        enable_pipeline: false
+#-        insecure_skip_verify: true
+#-#@      socks5: '127.0.0.1:7891'
+        - addr: 'https://dns.ipv6dns.com/dns-query'
+          dial_addr: '221.228.217.28:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+#-      - addr: 'https://dns.ipv6dns.com/dns-query'
+#-        dial_addr: '[240e:e9:900b::5]:443'
+#-        enable_http3: false
+#-        insecure_skip_verify: true
+#-#@      socks5: '127.0.0.1:7891'
+        - addr: 'tls://dns.ipv6dns.com'
+          dial_addr: '221.228.217.28:853'
+          enable_pipeline: true
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+#-      - addr: 'tls://dns.ipv6dns.com'
+#-        dial_addr: '[240e:e9:900b::5]:853'
+#-        enable_pipeline: true
+#-        insecure_skip_verify: true
+#-#@      socks5: '127.0.0.1:7891'
+        - addr: 'https://doh.pub/dns-query'
+          dial_addr: '1.12.12.12:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'https://doh.pub/dns-query'
+          dial_addr: '120.53.53.53:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'https://sm2.doh.pub/dns-query'
+          dial_addr: '106.55.91.174:443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'tls://dot.pub'
+          dial_addr: '1.12.12.12:853'
+          enable_pipeline: true
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'tls://dot.pub'
+          dial_addr: '120.53.53.53:853'
+          enable_pipeline: true
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+  - tag: forward_query_to_proxy_local_no_ecs
+    type: forward
+    args:
+      concurrent: 3
+      upstreams:
+        - addr: 'https://doh-pure.onedns.net/dns-query'
+          dial_addr: '54.223.159.81:443'
+          enable_pipeline: true
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'tls://dot-pure.onedns.net'
+          dial_addr: '54.223.159.81:853'
+          enable_pipeline: true
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+        - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
+          dial_addr: '101.6.6.6:8443'
+          enable_http3: false
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+#-      - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
+#-        dial_addr: '[2402:f000:1:416:101:6:6:6]:8443'
+#-        enable_http3: false
+#-        insecure_skip_verify: true
+#-#@      socks5: '127.0.0.1:7891'
+        - addr: 'tls://dns.tuna.tsinghua.edu.cn'
+          dial_addr: '101.6.6.6:8853'
+          enable_pipeline: true
+          insecure_skip_verify: true
+#@        socks5: '127.0.0.1:7891'
+#-      - addr: 'tls://dns.tuna.tsinghua.edu.cn'
+#-        dial_addr: '[2402:f000:1:416:101:6:6:6]:8853'
+#-        enable_pipeline: true
+#-        insecure_skip_verify: true
+#-#@      socks5: '127.0.0.1:7891'
   - tag: forward_query_to_remote_ecs
     type: forward
     args:
@@ -1066,6 +1231,20 @@ plugins:
 #+#=      enable_pipeline: true
 #+#=      insecure_skip_verify: true
 #+#=#@    socks5: '127.0.0.1:7891'
+  - tag: fallback_forward_query_to_local_ecs
+    type: fallback
+    args:
+      primary: forward_query_to_proxy_local_ecs
+      secondary: forward_query_to_local_ecs
+      threshold: 1250
+#!    always_standby: true
+  - tag: fallback_forward_query_to_local_no_ecs
+    type: fallback
+    args:
+      primary: forward_query_to_proxy_local_no_ecs
+      secondary: forward_query_to_local_no_ecs
+      threshold: 1250
+#!    always_standby: true
   - tag: fallback_forward_query_to_remote_ecs
     type: fallback
     args:
@@ -1083,8 +1262,8 @@ plugins:
   - tag: fallback_forward_query_to_local
     type: fallback
     args:
-      primary: forward_query_to_local_ecs
-      secondary: forward_query_to_local_no_ecs
+      primary: forward_query_to_proxy_local_ecs
+      secondary: forward_query_to_proxy_local_no_ecs
       threshold: 2500
 #!    always_standby: true
   - tag: fallback_forward_query_to_remote
