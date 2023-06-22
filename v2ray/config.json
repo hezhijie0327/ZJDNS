@@ -2,27 +2,7 @@
     "inbounds": [
         {
             "listen": "127.0.0.1",
-            "port": 7890,
-            "protocol": "http",
-            "settings": {
-                "allowTransparent": true,
-                "timeout": 0,
-                "userLevel": 0
-            }
-        },
-        {
-            "listen": "127.0.0.1",
             "port": 7891,
-            "protocol": "socks",
-            "settings": {
-                "auth": "noauth",
-                "udp": true,
-                "userLevel": 0
-            }
-        },
-        {
-            "listen": "127.0.0.1",
-            "port": 7892,
             "protocol": "shadowsocks",
             "settings": {
                 "method": "chacha20-ietf-poly1305",
@@ -38,7 +18,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7893,
+            "port": 7892,
             "protocol": "trojan",
             "settings": {
                 "clients": [
@@ -57,7 +37,7 @@
             }
         },
         {
-            "port": 7894,
+            "port": 7893,
             "listen": "127.0.0.1",
             "protocol": "vless",
             "settings": {
@@ -79,7 +59,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7895,
+            "port": 7894,
             "protocol": "vmess",
             "settings": {
                 "clients": [
@@ -102,7 +82,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7896,
+            "port": 7895,
             "protocol": "shadowsocks",
             "settings": {
                 "method": "chacha20-ietf-poly1305",
@@ -126,7 +106,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7897,
+            "port": 7896,
             "protocol": "trojan",
             "settings": {
                 "clients": [
@@ -153,7 +133,7 @@
             }
         },
         {
-            "port": 7898,
+            "port": 7897,
             "listen": "127.0.0.1",
             "protocol": "vless",
             "settings": {
@@ -183,7 +163,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7899,
+            "port": 7898,
             "protocol": "vmess",
             "settings": {
                 "clients": [
