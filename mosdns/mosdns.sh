@@ -132,7 +132,7 @@ function DownloadmosDNSConfiguration() {
     fi
 
     if [ "${CUSTOM_PROXY_SERVER}" != "" ]; then
-        sed -i "s/127.0.0.1:7891/${CUSTOM_PROXY_SERVER}/g" "${DOCKER_PATH}/conf/config.yaml"
+        sed -i "s/127.0.0.1:7890/${CUSTOM_PROXY_SERVER}/g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_PROXY_IPV6_UPSTREAM}" == "true" ]; then
         sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/config.yaml"
