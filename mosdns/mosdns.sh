@@ -18,8 +18,9 @@ ENABLE_IPV6_UPSTREAM="false"
 ENABLE_HTTP3_UPSTREAM="false"
 ENABLE_PIPELINE="false"
 
-CUSTOM_PROXY_SERVER="" # 127.0.0.1:7891
+CUSTOM_PROXY_SERVER="" # 127.0.0.1:7890
 ENABLE_PROXY_IPV6_UPSTREAM="false"
+ENABLE_PROXY_LOCAL_UPSTREAM="false"
 ENABLE_PROXY_UPSTREAM="false"
 
 ENABLE_RECURSIVE_HTTPS_UPSTREAM="false"
@@ -135,6 +136,9 @@ function DownloadmosDNSConfiguration() {
     fi
     if [ "${ENABLE_PROXY_IPV6_UPSTREAM}" == "true" ]; then
         sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/config.yaml"
+    fi
+    if [ "${ENABLE_PROXY_LOCAL_UPSTREAM}" == "true" ]; then
+        sed -i "s/#~/  /g" "${DOCKER_PATH}/conf/config.yaml"
     fi
     if [ "${ENABLE_PROXY_UPSTREAM}" == "true" ]; then
         sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
