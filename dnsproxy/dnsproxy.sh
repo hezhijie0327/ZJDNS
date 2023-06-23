@@ -109,6 +109,7 @@ function CreateNewContainer() {
         "--cache-optimistic"
         "--edns-addr=$(StaticIP="${EDNS_ADDR}" && Type="${EDNS_ADDR_TYPE:-A}" && GetWANIP)"
         "--edns"
+        "--http3"
         "--insecure"
         "--ratelimit=1000"
         "--refuse-any"
