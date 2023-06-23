@@ -39,9 +39,14 @@ CUSTOM_UPSTREAM="" # 127.0.0.1@5533
 ENABLE_TCP_UPSTREAM="false"
 ENABLE_TLS_UPSTREAM="false"
 
+HTTPS_PORT="" # 5333
+TLS_PORT="" # 5355
+UNENCRYPTED_PORT="" # 5335
+
 ENABLE_HTTPS="false"
 ENABLE_TLS="false"
 ENABLE_UNENCRYPTED_DNS="true"
+
 SSL_CERT="fullchain.cer"
 SSL_KEY="zhijie.online.key"
 
@@ -153,13 +158,17 @@ function DownloadUnboundConfiguration() {
         if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_TLS}" == "true" ]; then
             sed -i "s/    interface/#+  interface/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
+    else
+        if [ "${UNENCRYPTED_PORT:-5335}" != "5335" ]; then
+            sed "s/port: 5335/port: :${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
+        fi
     fi
 
     if [ "${ENABLE_HTTPS}" == "true" ]; then
-        sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/unbound.conf"
+        sed -i "s/#@/  /g;s/https-port: 5333/https-port: ${HTTPS_PORT:-5333}/g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
     if [ "${ENABLE_TLS}" == "true" ]; then
-        sed -i "s/#%/  /g" "${DOCKER_PATH}/conf/unbound.conf"
+        sed -i "s/#%/  /g;s/tls-port: 5355/tls-port: ${TLS_PORT:-5355}/g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
 
     if [ -f "${DOCKER_PATH}/conf/unbound.conf" ]; then
