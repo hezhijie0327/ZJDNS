@@ -89,35 +89,34 @@ function CleanupCurrentContainer() {
 }
 # Create New Container
 function CreateNewContainer() {
+    RUNTIME_CONFIG=(
+        "--listen=${LISTEN_IP:-0.0.0.0}"
+        "--port=${UNENCRYPTED_PORT:-3355}"
+        "--https-port=${HTTPS_PORT:-3335}"
+        "--quic-port=${QUIC_PORT:-3555}"
+        "--tls-port=${TLS_PORT:-3555}"
+        "--tls-crt=/etc/dnsproxy/cert/${SSL_CERT:-fullchain.cer}"
+        "--tls-key=/etc/dnsproxy/cert/${SSL_KEY:-zhijie.online.key}"
+        "--fallback=tls://223.5.5.5:853"
+        "--fallback=tls://223.6.6.6:853"
+        "--fallback=tls://[2400:3200::1]:853"
+        "--fallback=tls://[2400:3200:baba::1]:853"
+        "--upstream=${UPSTREAM_DNS:-127.0.0.1:5533}"
+        "--cache"
+        "--cache-size=${CACHE_SIZE:-4194304}"
+        "--cache-max-ttl=86400"
+        "--cache-min-ttl=0"
+        "--cache-optimistic"
+        "${EDNS_CONFIG[*]}"
+        "--insecure"
+        "--ratelimit=1000"
+        "--refuse-any"
+        "--timeout=5s"
+    )
+
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/dnsproxy/cert:ro \
-        -d ${OWNER}/${REPO}:${TAG} \
-        --listen=${LISTEN_IP:-0.0.0.0} \
-        --port=${UNENCRYPTED_PORT:-3355} \
-        --https-port=${HTTPS_PORT:-3335} \
-        --quic-port=${QUIC_PORT:-3555} \
-        --tls-port=${TLS_PORT:-3555} \
-        --tls-crt=/etc/dnsproxy/cert/${SSL_CERT:-fullchain.cer} \
-        --tls-key=/etc/dnsproxy/cert/${SSL_KEY:-zhijie.online.key} \
-        --tls-max-version=1.3 \
-        --tls-min-version=1.2 \
-        --fallback=tls://223.5.5.5:853 \
-        --fallback=tls://223.6.6.6:853 \
-        --fallback=tls://[2400:3200::1]:853 \
-        --fallback=tls://[2400:3200:baba::1]:853 \
-        --upstream=${UPSTREAM_DNS:-127.0.0.1:5533} \
-        --cache \
-        --cache-size=${CACHE_SIZE:-4194304} \
-        --cache-max-ttl=86400 \
-        --cache-min-ttl=0 \
-        --cache-optimistic \
-        --edns-addr=$(StaticIP="${EDNS_ADDR:-auto}" && Type="${EDNS_ADDR_TYPE:-A}" && GetWANIP) \
-        --edns \
-        --http3 \
-        --insecure \
-        --ratelimit=1000 \
-        --refuse-any \
-        --timeout=5s
+        -d ${OWNER}/${REPO}:${TAG} ${RUNTIME_CONFIG[*]}
 }
 # Cleanup Expired Image
 function CleanupExpiredImage() {
