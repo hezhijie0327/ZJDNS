@@ -160,15 +160,15 @@ function DownloadUnboundConfiguration() {
         fi
     else
         if [ "${UNENCRYPTED_PORT:-5335}" != "5335" ]; then
-            sed "s/port: 5335/port: :${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
+            sed "s/port: 5335/port: :${UNENCRYPTED_PORT}/g;s/@5335/@${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
     fi
 
     if [ "${ENABLE_HTTPS}" == "true" ]; then
-        sed -i "s/#@/  /g;s/https-port: 5333/https-port: ${HTTPS_PORT:-5333}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        sed -i "s/#@/  /g;s/https-port: 5333/https-port: ${HTTPS_PORT:-5333}/g;s/@5333/@${HTTPS_PORT:-5333}/g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
     if [ "${ENABLE_TLS}" == "true" ]; then
-        sed -i "s/#%/  /g;s/tls-port: 5355/tls-port: ${TLS_PORT:-5355}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        sed -i "s/#%/  /g;s/tls-port: 5355/tls-port: ${TLS_PORT:-5355}/g;s/@5355/@${TLS_PORT:-5355}/g" "${DOCKER_PATH}/conf/unbound.conf"
     fi
 
     if [ -f "${DOCKER_PATH}/conf/unbound.conf" ]; then
