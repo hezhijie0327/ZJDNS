@@ -15,10 +15,10 @@ CACHE_SIZE="" # 4194304
 EDNS_ADDR="" # auto, 127.0.0.1, ::1
 EDNS_ADDR_TYPE="" # A, AAAA
 
-HTTPS_PORT="" # 443
-QUIC_PORT="" # 853
-TLS_PORT="" # 853
-UNENCRYPTED_PORT="" # 53
+HTTPS_PORT="" # 3335
+QUIC_PORT="" # 3555
+TLS_PORT="" # 3555
+UNENCRYPTED_PORT="" # 3355
 
 SSL_CERT="" # fullchain.cer
 SSL_KEY="" # zhijie.online.key
@@ -93,10 +93,10 @@ function CreateNewContainer() {
         -v /docker/ssl:/etc/dnsproxy/cert:ro \
         -d ${OWNER}/${REPO}:${TAG} \
         --listen=${LISTEN_IP:-0.0.0.0} \
-        --port=${UNENCRYPTED_PORT:-53} \
-        --https-port=${HTTPS_PORT:-443} \
-        --quic-port=${QUIC_PORT:-853} \
-        --tls-port=${TLS_PORT:-853} \
+        --port=${UNENCRYPTED_PORT:-3355} \
+        --https-port=${HTTPS_PORT:-3335} \
+        --quic-port=${QUIC_PORT:-3555} \
+        --tls-port=${TLS_PORT:-3555} \
         --tls-crt=/etc/dnsproxy/cert/${SSL_CERT:-fullchain.cer} \
         --tls-key=/etc/dnsproxy/cert/${SSL_KEY:-zhijie.online.key} \
         --tls-max-version=1.3 \
