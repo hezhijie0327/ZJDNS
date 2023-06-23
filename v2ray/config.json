@@ -194,6 +194,6 @@
         }
     ],
     "outbounds": [
-        { "mux": { "concurrency": 8, "enable": true }, "protocol": "freedom" }
+        { "protocol": "freedom" }
     ]
 }
