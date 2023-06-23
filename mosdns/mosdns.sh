@@ -38,9 +38,14 @@ ENABLE_REVERSE_LOOKUP="false"
 CACHE_SIZE_REVERSE_LOOKUP="" # 4096
 TTL_REVERSE_LOOKUP="" # 10
 
+HTTPS_PORT=""
+TLS_PORT=""
+UNENCRYPTED_PORT=""
+
 ENABLE_HTTPS="false"
 ENABLE_TLS="false"
 ENABLE_UNENCRYPTED_DNS="true"
+
 SSL_CERT="fullchain.cer"
 SSL_KEY="zhijie.online.key"
 
@@ -105,7 +110,7 @@ function DownloadmosDNSConfiguration() {
             "          exec: ${RUNNING_MODE}_server"
             "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
             "      key: '/etc/mosdns/cert/${SSL_KEY}'"
-            "      listen: :5553"
+            "      listen: :${HTTPS_PORT:-5553}"
         )
         TLS_CONFIG=(
             "  - tag: create_tls_server"
@@ -114,7 +119,7 @@ function DownloadmosDNSConfiguration() {
             "      entry: ${RUNNING_MODE}_server"
             "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
             "      key: '/etc/mosdns/cert/${SSL_KEY}'"
-            "      listen: :5535"
+            "      listen: :${TLS_PORT:-5535}"
         )
     fi
 
@@ -170,6 +175,10 @@ function DownloadmosDNSConfiguration() {
             for i in $(seq 1 10); do
                 sed -i '$d' "${DOCKER_PATH}/conf/config.yaml"
             done
+        fi
+    else
+        if [ "${UNENCRYPTED_PORT:-5533}" != "5533" ]; then
+            sed "s/listen: :5533/listen: :${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
     fi
     if [ "${ENABLE_HTTPS}" == "true" ]; then
