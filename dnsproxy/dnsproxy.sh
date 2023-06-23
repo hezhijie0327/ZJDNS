@@ -106,7 +106,6 @@ function CreateNewContainer() {
         --upstream=${UPSTREAM_DNS:-127.0.0.1:5533} \
         --edns-addr=$(StaticIP="${EDNS_ADDR:-auto}" && Type="${EDNS_ADDR_TYPE:-A}" && GetWANIP) \
         --edns \
-        --http3 \
         --insecure \
         --ratelimit=1000 \
         --refuse-any \
