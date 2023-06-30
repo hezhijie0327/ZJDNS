@@ -168,7 +168,7 @@ plugins:
           dial_addr: '123.125.81.6:443'
           enable_http3: false
           insecure_skip_verify: true
-#@#~     socks5: '127.0.0.1:7890'
+#@#~      socks5: '127.0.0.1:7890'
         - addr: 'https://doh.360.cn/dns-query'
           dial_addr: '140.207.198.6:443'
           enable_http3: false
