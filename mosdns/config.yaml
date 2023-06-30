@@ -1262,8 +1262,8 @@ plugins:
   - tag: fallback_forward_query_to_local
     type: fallback
     args:
-      primary: forward_query_to_proxy_local_ecs
-      secondary: forward_query_to_proxy_local_no_ecs
+      primary: fallback_forward_query_to_local_ecs
+      secondary: fallback_forward_query_to_local_no_ecs
       threshold: 2500
 #!    always_standby: true
   - tag: fallback_forward_query_to_remote
