@@ -7,6 +7,7 @@ TAG="latest"
 DOCKER_PATH="/docker/caddy"
 
 CURL_OPTION=""
+DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
 SSL_CERT="fullchain.cer"
@@ -33,7 +34,11 @@ function DownloadConfiguration() {
 
     if [ ! -d "${DOCKER_PATH}/conf" ]; then
         mkdir -p "${DOCKER_PATH}/conf"
-    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/caddy/Caddyfile" > "${DOCKER_PATH}/conf/Caddyfile" && sed -i "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/Caddyfile"
+    fi
+
+    if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/caddy/Caddyfile" > "${DOCKER_PATH}/conf/Caddyfile" && sed -i "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/Caddyfile"
+    fi
 }
 # Create New Container
 function CreateNewContainer() {
