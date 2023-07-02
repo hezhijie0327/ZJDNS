@@ -7,6 +7,7 @@ TAG="latest"
 DOCKER_PATH="/docker/unbound"
 
 CURL_OPTION=""
+DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
 ENABLE_DNSSEC="false"
@@ -61,132 +62,130 @@ function CleanupCurrentContainer() {
         docker stop ${REPO} && docker rm ${REPO}
     fi
 }
-# Download Unbound Configuration
-function DownloadUnboundConfiguration() {
-    if [ "${USE_CDN}" == true ]; then
-        CDN_PATH="source.zhijie.online"
-    else
-        CDN_PATH="raw.githubusercontent.com/hezhijie0327"
-    fi
-
+# Download Configuration
+function DownloadConfiguration() {
     if [ ! -d "${DOCKER_PATH}/conf" ]; then
         mkdir -p "${DOCKER_PATH}/conf"
-    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/unbound.conf"
-
-    if [ ! -d "${DOCKER_PATH}/work" ]; then
-        mkdir -p "${DOCKER_PATH}/work"
     fi
 
-    if [ "${ENABLE_DNSSEC}" == "false" ]; then
-        sed -i "s/validator //g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-    if [ "${ENABLE_DNSSEC}" == "true" ] && [ "${ENABLE_DNSSEC_PERMISSIVE_MODE}" == "true" ]; then
-        sed -i "s/val-permissive-mode\: no/val-permissive-mode\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
+    if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
+        if [ "${USE_CDN}" == true ]; then
+            CDN_PATH="source.zhijie.online"
+        else
+            CDN_PATH="raw.githubusercontent.com/hezhijie0327"
+        fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/unbound.conf"
 
-    if [ "${ENABLE_ECS}" == "false" ]; then
-        sed -i "s/subnetcache //g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-
-    if [ "${ENABLE_FORWARD}" == "true" ]; then
-        sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/unbound.conf"
-        if [ "${ENABLE_FORWARD_CACHE}" == "false" ]; then
-            sed -i "s/forward-no-cache: no/forward-no-cache: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ ! -d "${DOCKER_PATH}/work" ]; then
+            mkdir -p "${DOCKER_PATH}/work"
         fi
-    else
-        sed -i "/forward-zone:/d;/#+/d" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-    if [ "${ENABLE_RECURSIVE_DNS}" == "true" ]; then
-        sed -i "s/forward-first: no/forward-first: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
 
-    if [ "${ENABLE_LOGFILE}" == "true" ]; then
-        sed -i "s/##/  /g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-
-    if [ "${ENABLE_RATELIMIT}" == "false" ]; then
-        sed -i "s/ratelimit\: 1000/ratelimit\: 0/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-
-    if [ "${CUSTOM_REDIS_SERVER_HOST}" != "" ]; then
-        sed -i "s/redis-server-host: 127.0.0.1/redis-server-host: ${CUSTOM_REDIS_SERVER_HOST}/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-    if [ "${CUSTOM_REDIS_SERVER_PASSWORD}" != "" ]; then
-        sed -i "s/redis-server-password: ''/redis-server-password: '${CUSTOM_REDIS_SERVER_PASSWORD}'/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-    if [ "${CUSTOM_REDIS_SERVER_PATH}" != "" ]; then
-        sed -i "s/redis-server-path: ''/redis-server-path: '${CUSTOM_REDIS_SERVER_PATH}'/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-    if [ "${CUSTOM_REDIS_SERVER_PORT}" != "" ]; then
-        sed -i "s/redis-server-port: 6379/redis-server-port: ${CUSTOM_REDIS_SERVER_PORT}/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-    if [ "${ENABLE_REDIS_CACHE}" == "false" ]; then
-        sed -i "/cachedb:/d;/#-/d;s/cachedb //g" "${DOCKER_PATH}/conf/unbound.conf"
-        if [ "${CACHE_SIZE_KEY}" != "" ]; then
-            sed -i "s/key-cache-size: 4m/key-cache-size: ${CACHE_SIZE_KEY}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ "${ENABLE_DNSSEC}" == "false" ]; then
+            sed -i "s/validator //g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-        if [ "${CACHE_SIZE_MSG}" != "" ]; then
-            sed -i "s/msg-cache-size: 4m/msg-cache-size: ${CACHE_SIZE_MSG}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ "${ENABLE_DNSSEC}" == "true" ] && [ "${ENABLE_DNSSEC_PERMISSIVE_MODE}" == "true" ]; then
+            sed -i "s/val-permissive-mode\: no/val-permissive-mode\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-        if [ "${CACHE_SIZE_NEG}" != "" ]; then
-            sed -i "s/neg-cache-size: 1m/neg-cache-size: ${CACHE_SIZE_NEG}/g" "${DOCKER_PATH}/conf/unbound.conf"
+
+        if [ "${ENABLE_ECS}" == "false" ]; then
+            sed -i "s/subnetcache //g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-        if [ "${CACHE_SIZE_RRSET}" != "" ]; then
-            sed -i "s/rrset-cache-size: 4m/rrset-cache-size: ${CACHE_SIZE_RRSET}/g" "${DOCKER_PATH}/conf/unbound.conf"
+
+        if [ "${ENABLE_FORWARD}" == "true" ]; then
+            sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/unbound.conf"
+            if [ "${ENABLE_FORWARD_CACHE}" == "false" ]; then
+                sed -i "s/forward-no-cache: no/forward-no-cache: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
+            fi
+        else
+            sed -i "/forward-zone:/d;/#+/d" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-    else
-        sed -i "s/#-/  /g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ "${ENABLE_RECURSIVE_DNS}" == "true" ]; then
+            sed -i "s/forward-first: no/forward-first: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ "${ENABLE_LOGFILE}" == "true" ]; then
+            sed -i "s/##/  /g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ "${ENABLE_RATELIMIT}" == "false" ]; then
+            sed -i "s/ratelimit\: 1000/ratelimit\: 0/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ "${CUSTOM_REDIS_SERVER_HOST}" != "" ]; then
+            sed -i "s/redis-server-host: 127.0.0.1/redis-server-host: ${CUSTOM_REDIS_SERVER_HOST}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CUSTOM_REDIS_SERVER_PASSWORD}" != "" ]; then
+            sed -i "s/redis-server-password: ''/redis-server-password: '${CUSTOM_REDIS_SERVER_PASSWORD}'/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CUSTOM_REDIS_SERVER_PATH}" != "" ]; then
+            sed -i "s/redis-server-path: ''/redis-server-path: '${CUSTOM_REDIS_SERVER_PATH}'/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CUSTOM_REDIS_SERVER_PORT}" != "" ]; then
+            sed -i "s/redis-server-port: 6379/redis-server-port: ${CUSTOM_REDIS_SERVER_PORT}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_REDIS_CACHE}" == "false" ]; then
+            sed -i "/cachedb:/d;/#-/d;s/cachedb //g" "${DOCKER_PATH}/conf/unbound.conf"
+            if [ "${CACHE_SIZE_KEY}" != "" ]; then
+                sed -i "s/key-cache-size: 4m/key-cache-size: ${CACHE_SIZE_KEY}/g" "${DOCKER_PATH}/conf/unbound.conf"
+            fi
+            if [ "${CACHE_SIZE_MSG}" != "" ]; then
+                sed -i "s/msg-cache-size: 4m/msg-cache-size: ${CACHE_SIZE_MSG}/g" "${DOCKER_PATH}/conf/unbound.conf"
+            fi
+            if [ "${CACHE_SIZE_NEG}" != "" ]; then
+                sed -i "s/neg-cache-size: 1m/neg-cache-size: ${CACHE_SIZE_NEG}/g" "${DOCKER_PATH}/conf/unbound.conf"
+            fi
+            if [ "${CACHE_SIZE_RRSET}" != "" ]; then
+                sed -i "s/rrset-cache-size: 4m/rrset-cache-size: ${CACHE_SIZE_RRSET}/g" "${DOCKER_PATH}/conf/unbound.conf"
+            fi
+        else
+            sed -i "s/#-/  /g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ "${ENABLE_REMOTE_CONTROL}" == "false" ]; then
+            sed -i "/remote-control:/d;/#=/d" "${DOCKER_PATH}/conf/unbound.conf"
+        else
+            sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ "${CUSTOM_UPSTREAM}" != "" ]; then
+            sed -i "s/127.0.0.1@5533/${CUSTOM_UPSTREAM}/g;s/127.0.0.1@5535/${CUSTOM_UPSTREAM}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_TCP_UPSTREAM}" == "false" ]; then
+            sed -i "s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_TLS_UPSTREAM}" == "true" ]; then
+            sed -i "s/127.0.0.1@5533/127.0.0.1@5535/g;s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
+            if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_TLS}" == "true" ]; then
+                sed -i "s/    interface/#+  interface/g" "${DOCKER_PATH}/conf/unbound.conf"
+            fi
+        else
+            if [ "${UNENCRYPTED_PORT:-5335}" != "5335" ]; then
+                sed "s/port: 5335/port: :${UNENCRYPTED_PORT}/g;s/@5335/@${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
+            fi
+        fi
+
+        if [ "${ENABLE_HTTPS}" == "true" ]; then
+            sed -i "s/#@/  /g;s/https-port: 5333/https-port: ${HTTPS_PORT:-5333}/g;s/@5333/@${HTTPS_PORT:-5333}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_TLS}" == "true" ]; then
+            sed -i "s/#%/  /g;s/tls-port: 5355/tls-port: ${TLS_PORT:-5355}/g;s/@5355/@${TLS_PORT:-5355}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ -f "${DOCKER_PATH}/conf/unbound.conf" ]; then
+            sed -i "/#/d" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
     fi
 
-    if [ "${ENABLE_REMOTE_CONTROL}" == "false" ]; then
-        sed -i "/remote-control:/d;/#=/d" "${DOCKER_PATH}/conf/unbound.conf"
-    else
-        sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-
-    if [ "${CUSTOM_UPSTREAM}" != "" ]; then
-        sed -i "s/127.0.0.1@5533/${CUSTOM_UPSTREAM}/g;s/127.0.0.1@5535/${CUSTOM_UPSTREAM}/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-    if [ "${ENABLE_TCP_UPSTREAM}" == "false" ]; then
-        sed -i "s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-    if [ "${ENABLE_TLS_UPSTREAM}" == "true" ]; then
-        sed -i "s/127.0.0.1@5533/127.0.0.1@5535/g;s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-
-    if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
-        if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_TLS}" == "true" ]; then
-            sed -i "s/    interface/#+  interface/g" "${DOCKER_PATH}/conf/unbound.conf"
-        fi
-    else
-        if [ "${UNENCRYPTED_PORT:-5335}" != "5335" ]; then
-            sed "s/port: 5335/port: :${UNENCRYPTED_PORT}/g;s/@5335/@${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
-        fi
-    fi
-
-    if [ "${ENABLE_HTTPS}" == "true" ]; then
-        sed -i "s/#@/  /g;s/https-port: 5333/https-port: ${HTTPS_PORT:-5333}/g;s/@5333/@${HTTPS_PORT:-5333}/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-    if [ "${ENABLE_TLS}" == "true" ]; then
-        sed -i "s/#%/  /g;s/tls-port: 5355/tls-port: ${TLS_PORT:-5355}/g;s/@5355/@${TLS_PORT:-5355}/g" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-
-    if [ -f "${DOCKER_PATH}/conf/unbound.conf" ]; then
-        sed -i "/#/d" "${DOCKER_PATH}/conf/unbound.conf"
-    fi
-}
-# Update Root Hints
-function UpdateRootHints() {
-    if [ "${USE_CDN}" == true ]; then
+    if [ ! -d "${DOCKER_PATH}/data" ]; then
+        mkdir -p "${DOCKER_PATH}/data"
+    fi && if [ "${USE_CDN}" == true ]; then
         ROOT_HINTS_DOMAIN="source.zhijie.online"
         ROOT_HINTS_PATH="CMA_DNS/main/unbound/root.hints"
     else
         ROOT_HINTS_DOMAIN="www.internic.net"
         ROOT_HINTS_PATH="domain/named.cache"
-    fi
-
-    if [ ! -d "${DOCKER_PATH}/data" ]; then
-        mkdir -p "${DOCKER_PATH}/data"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${ROOT_HINTS_DOMAIN}/${ROOT_HINTS_PATH}" > "${DOCKER_PATH}/data/root.hints"
 }
 # Create New Container
@@ -229,10 +228,8 @@ function CleanupExpiredImage() {
 GetLatestImage
 # Call CleanupCurrentContainer
 CleanupCurrentContainer
-#Call DownloadUnboundConfiguration
-DownloadUnboundConfiguration
-# Call UpdateRootHints
-UpdateRootHints
+#Call DownloadConfiguration
+DownloadConfiguration
 # Call CreateNewContainer
 CreateNewContainer
 # Call CleanupExpiredImage
