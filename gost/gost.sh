@@ -15,6 +15,9 @@ GOST_HOST="" # demo.zhijie.online
 WG_LOCAL_PORT="" # 51821
 WG_REMOTE_PORT="" # 51820
 
+SSL_CERT="" # fullchain.cer
+SSL_KEY="" # zhijie.online.key
+
 ## Function
 # Get Latest Image
 function GetLatestImage() {
@@ -30,8 +33,8 @@ function CleanupCurrentContainer() {
 function CreateNewContainer() {
     if [ "${RUNNING_MODE:-server}" == "server" ]; then
         docker run --name ${CONTAINER_NAME:-${REPO}} --net host --restart=always \
-            -v /docker/ssl/fullchain.cer:/cert.pem:ro \
-            -v /docker/ssl/zhijie.online.key:/key.pem:ro \
+            -v /docker/ssl/${SSL_CERT:-fullchain.cer}:/cert.pem:ro \
+            -v /docker/ssl/${SSL_KEY:-zhijie.online.key}:/key.pem:ro \
             -d ${OWNER}/${REPO}:${TAG} \
             -L relay+grpc://:${GOST_PORT:-8443}
     else
