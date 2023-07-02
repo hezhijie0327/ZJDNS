@@ -9,8 +9,9 @@ RUNNING_MODE="" # client, server
 
 CONTAINER_NAME="" # gost
 
-GOST_PORT="" # 8443
 GOST_HOST="" # demo.zhijie.online
+GOST_IP=() # ("1.0.0.1" "1.1.1.1")
+GOST_PORT="" # 8443
 
 WG_LOCAL_PORT="" # 51821
 WG_REMOTE_PORT="" # 51820
@@ -38,10 +39,17 @@ function CreateNewContainer() {
             -d ${OWNER}/${REPO}:${TAG} \
             -L relay+grpc://:${GOST_PORT:-8443}
     else
+        if [ "${GOST_IP[*]}" != "" ]; then
+            GOST_HOSTS_LIST="" && for GOST_IP_TASK in "${!GOST_IP[@]}"; do
+                GOST_HOSTS_LIST="${GOST_HOSTS_LIST} ${GOST_HOST}:${GOST_IP[$GOST_IP_TASK]},"
+                GOST_HOSTS_LIST=$(echo "${GOST_HOSTS_LIST}" | sed "s/^\ //g")
+            done && GOST_HOSTS_LIST="?hosts=$(echo ${GOST_HOSTS_LIST} | sed 's/\ //g;s/,$//g')"
+        fi
+
         docker run --name ${CONTAINER_NAME:-${REPO}} --net host --restart=always \
             -d ${OWNER}/${REPO}:${TAG} \
             -L "udp://:${WG_LOCAL_PORT:-51821}/127.0.0.1:${WG_REMOTE_PORT:-51820}?keepAlive=true&ttl=5s" \
-            -F "relay+grpc://${GOST_HOST:-demo.zhijie.online}:${GOST_PORT:-8443}"
+            -F "relay+grpc://${GOST_HOST:-demo.zhijie.online}:${GOST_PORT:-8443}${GOST_HOSTS_LIST}"
     fi
 }
 # Cleanup Expired Image
