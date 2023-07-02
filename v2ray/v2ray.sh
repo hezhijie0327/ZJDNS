@@ -7,6 +7,7 @@ TAG="latest" # latest, xray
 DOCKER_PATH="/docker/v2ray"
 
 CURL_OPTION=""
+DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
 CUSTOM_SERVERNAME="" # demo.zhijie.online
@@ -27,20 +28,21 @@ function CleanupCurrentContainer() {
 }
 # Download Configuration
 function DownloadConfiguration() {
-    if [ "${USE_CDN}" == "true" ]; then
-        CDN_PATH="source.zhijie.online"
-    else
-        CDN_PATH="raw.githubusercontent.com/hezhijie0327"
-    fi
-
     if [ ! -d "${DOCKER_PATH}/conf" ]; then
         mkdir -p "${DOCKER_PATH}/conf"
-    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/v2ray/config.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/demo.zhijie.online/${CUSTOM_SERVERNAME:-demo.zhijie.online}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID:-$(uuidgen | tr 'A-Z' 'a-z')}/g" "${DOCKER_PATH}/conf/config.json"
-
-    if [ "${ENABLE_WARP:-false}" == "true" ]; then
-        sed -i "s/{ \"protocol\": \"freedom\" }/{ \"protocol\": \"socks\", \"settings\": { \"servers\": [ { \"address\": \"127.0.0.1\", \"port\": 40000 } ] } }/g" "${DOCKER_PATH}/conf/config.json"
     fi
 
+    if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
+        if [ "${USE_CDN}" == "true" ]; then
+            CDN_PATH="source.zhijie.online"
+        else
+            CDN_PATH="raw.githubusercontent.com/hezhijie0327"
+        fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/v2ray/config.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/demo.zhijie.online/${CUSTOM_SERVERNAME:-demo.zhijie.online}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID:-$(uuidgen | tr 'A-Z' 'a-z')}/g" "${DOCKER_PATH}/conf/config.json"
+
+        if [ "${ENABLE_WARP:-false}" == "true" ]; then
+            sed -i "s/{ \"protocol\": \"freedom\" }/{ \"protocol\": \"socks\", \"settings\": { \"servers\": [ { \"address\": \"127.0.0.1\", \"port\": 40000 } ] } }/g" "${DOCKER_PATH}/conf/config.json"
+        fi
+    fi
 }
 # Create New Container
 function CreateNewContainer() {
