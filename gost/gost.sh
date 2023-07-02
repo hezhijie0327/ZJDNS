@@ -11,6 +11,7 @@ CONTAINER_NAME="" # gost
 
 GOST_HOST="" # demo.zhijie.online
 GOST_IP=() # ("1.0.0.1" "1.1.1.1")
+GOST_DYNAMIC_IP="" # cdn.jsdelivr.net.cdn.cloudflare.net, cdn.cloudflare.steamstatic.com
 GOST_PORT="" # 8443
 
 GRPC_USERNAME="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
@@ -42,6 +43,14 @@ function CreateNewContainer() {
             -d ${OWNER}/${REPO}:${TAG} \
             -L "relay+grpc://${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52}:${GRPC_PASSWORD:-$(echo ${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52} | base64)}@:${GOST_PORT:-8443}?probeResistance=code:403"
     else
+        if [ "${GOST_DYNAMIC_IP}" != "" ]; then
+            GOST_IP=(
+                $(dig +short A ${CDN_ENDPOINT} | grep -E "^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$" | sort -n | uniq | awk "{ print $2 }")
+                $(dig +short AAAA ${CDN_ENDPOINT} | grep -E "^(([0-9a-f]{1,4}:){7,7}[0-9a-f]{1,4}|([0-9a-f]{1,4}:){1,7}:|([0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|([0-9a-f]{1,4}:){1,5}(:[0-9a-f]{1,4}){1,2}|([0-9a-f]{1,4}:){1,4}(:[0-9a-f]{1,4}){1,3}|([0-9a-f]{1,4}:){1,3}(:[0-9a-f]{1,4}){1,4}|([0-9a-f]{1,4}:){1,2}(:[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:((:[0-9a-f]{1,4}){1,6})|:((:[0-9a-f]{1,4}){1,7}|:)|fe80:(:[0-9a-f]{0,4}){0,4}%[0-9a-z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-f]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$" | sort -n | uniq | awk "{ print $2 }")
+                ${GOST_IP[@]}
+            )
+        fi
+
         if [ "${GOST_IP[*]}" != "" ]; then
             GOST_HOSTS_LIST="" && for GOST_IP_TASK in "${!GOST_IP[@]}"; do
                 GOST_HOSTS_LIST="${GOST_HOSTS_LIST} ${GOST_HOST}:${GOST_IP[$GOST_IP_TASK]},"
