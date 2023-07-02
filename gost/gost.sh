@@ -13,6 +13,9 @@ GOST_HOST="" # demo.zhijie.online
 GOST_IP=() # ("1.0.0.1" "1.1.1.1")
 GOST_PORT="" # 8443
 
+GRPC_USERNAME="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
+GRPC_PASSWORD="" # $(echo "${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52}" | base64)
+
 WG_LOCAL_PORT="" # 51821
 WG_REMOTE_PORT="" # 51820
 
@@ -37,7 +40,7 @@ function CreateNewContainer() {
             -v /docker/ssl/${SSL_CERT:-fullchain.cer}:/cert.pem:ro \
             -v /docker/ssl/${SSL_KEY:-zhijie.online.key}:/key.pem:ro \
             -d ${OWNER}/${REPO}:${TAG} \
-            -L relay+grpc://:${GOST_PORT:-8443}
+            -L "relay+grpc://${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52}:${GRPC_PASSWORD:-$(echo ${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52} | base64)}@:${GOST_PORT:-8443}?probeResistance=code:403"
     else
         if [ "${GOST_IP[*]}" != "" ]; then
             GOST_HOSTS_LIST="" && for GOST_IP_TASK in "${!GOST_IP[@]}"; do
@@ -49,7 +52,7 @@ function CreateNewContainer() {
         docker run --name ${CONTAINER_NAME:-${REPO}} --net host --restart=always \
             -d ${OWNER}/${REPO}:${TAG} \
             -L "udp://:${WG_LOCAL_PORT:-51821}/127.0.0.1:${WG_REMOTE_PORT:-51820}?keepAlive=true&ttl=5s" \
-            -F "relay+grpc://${GOST_HOST:-demo.zhijie.online}:${GOST_PORT:-8443}${GOST_HOSTS_LIST}"
+            -F "relay+grpc://${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52}:${GRPC_PASSWORD:-$(echo ${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52} | base64)}@${GOST_HOST:-demo.zhijie.online}:${GOST_PORT:-8443}${GOST_HOSTS_LIST}"
     fi
 }
 # Cleanup Expired Image
