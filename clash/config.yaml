@@ -1,8 +1,9 @@
 allow-lan: true
 ipv6: true
 log-level: error
-mixed-port: 7890
 mode: rule
+port: 7890
+socks-port: 7891
 proxies:
 #+- { name: SHADOWSOCKS_WSS, server: demo.zhijie.online, port: 443, type: ss, cipher: chacha20-ietf-poly1305, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, plugin: v2ray-plugin, plugin-opts: { header: { Host: demo.zhijie.online }, host: demo.zhijie.online, mode: websocket, skip-cert-verify: true, tls: true, path: /wss-shadowsocks } }
 #(- { name: TROJAN_GRPC, server: demo.zhijie.online, port: 443, type: trojan, network: grpc, password: 99235a6e-05d4-2afe-2990-5bc5cf1f5c52, skip-cert-verify: true, sni: demo.zhijie.online, udp: true, grpc-opts: { grpc-service-name: gRPCTROJAN } }
