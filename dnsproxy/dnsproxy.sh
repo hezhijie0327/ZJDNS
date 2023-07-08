@@ -35,11 +35,11 @@ function GetWANIP() {
     fi
     if [ "${StaticIP:-auto}" == "auto" ]; then
         IP_RESULT=$(dig -${IPv4_v6:-4} +short TXT @ns1.google.com o-o.myaddr.l.google.com | tr -d '"' | grep -E "${IP_REGEX}")
-        if [[ "${IP_RESULT}" = "" ]]; then
+        if [ "${IP_RESULT}" == "" ]; then
             IP_RESULT=$(dig -${IPv4_v6:-4} +short ANY @resolver1.opendns.com myip.opendns.com | grep -E "${IP_REGEX}")
-            if [[ "${IP_RESULT}" = "" ]]; then
+            if [ "${IP_RESULT}" == "" ]; then
                 IP_RESULT=$(curl -${IPv4_v6:-4} -s --connect-timeout 15 "https://api64.ipify.org" | grep -E "${IP_REGEX}")
-                if [[ "${IP_RESULT}" = "" ]]; then
+                if [ "${IP_RESULT}" == "" ]; then
                     echo "invalid"
                 else
                     echo "${IP_RESULT}"
@@ -57,14 +57,14 @@ function GetWANIP() {
             else
                 IP_RESULT=$(echo "${StaticIP}" | cut -d ',' -f 2 | grep -E "${IP_REGEX}")
             fi
-            if [[ "${IP_RESULT}" = "" ]]; then
+            if [ "${IP_RESULT}" == "" ]; then
                 echo "invalid"
             else
                 echo "${IP_RESULT}"
             fi
         else
             IP_RESULT=$(echo "${StaticIP}" | grep -E "${IP_REGEX}")
-            if [[ "${IP_RESULT}" = "" ]]; then
+            if [ "${IP_RESULT}" == "" ]; then
                 echo "invalid"
             else
                 echo "${IP_RESULT}"
