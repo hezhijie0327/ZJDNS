@@ -51,7 +51,7 @@ function GetWANIP() {
             echo "${IP_RESULT}"
         fi
     else
-        if [[ $(echo "${StaticIP}" | grep ",") != "" ]]; then
+        if [ "$(echo ${StaticIP} | grep ',')" != "" ]; then
             if [ "${Type}" == "A" ]; then
                 IP_RESULT=$(echo "${StaticIP}" | cut -d ',' -f 1 | grep -E "${IP_REGEX}")
             else
