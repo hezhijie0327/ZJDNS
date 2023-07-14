@@ -786,7 +786,7 @@ plugins:
   - tag: fallback_forward_query_to_remote
     type: fallback
     args:
-      primary: fallback_forward_query_to_remote_no_ecs_ipv64
+      primary: fallback_forward_query_to_remote_ecs_ipv64
       secondary: fallback_forward_query_to_remote_no_ecs_ipv64
       threshold: 3750
       always_standby: true
