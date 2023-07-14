@@ -5,7 +5,7 @@ plugins:
   - tag: forward_query_to_local_ecs_doh_ipv4
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'https://doh.360.cn/dns-query'
           dial_addr: '101.226.4.6:443'
@@ -60,7 +60,7 @@ plugins:
   - tag: forward_query_to_local_ecs_doh_ipv6
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '[2400:3200::1]:443'
@@ -80,7 +80,7 @@ plugins:
   - tag: forward_query_to_local_ecs_dot_ipv4
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'tls://dot.360.cn'
           dial_addr: '101.226.4.6:853'
@@ -125,7 +125,7 @@ plugins:
   - tag: forward_query_to_local_ecs_dot_ipv6
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'tls://dns.alidns.com'
           dial_addr: '[2400:3200::1]:853'
@@ -145,7 +145,7 @@ plugins:
   - tag: forward_query_to_local_no_ecs_doh_ipv4
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'https://doh-pure.onedns.net/dns-query'
           dial_addr: '54.223.159.81:443'
@@ -160,7 +160,7 @@ plugins:
   - tag: forward_query_to_local_no_ecs_doh_ipv6
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'https://dns.tuna.tsinghua.edu.cn/dns-query'
           dial_addr: '[2402:f000:1:416:101:6:6:6]:8443'
@@ -170,7 +170,7 @@ plugins:
   - tag: forward_query_to_local_no_ecs_dot_ipv4
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'tls://dot-pure.onedns.net'
           dial_addr: '54.223.159.81:853'
@@ -185,7 +185,7 @@ plugins:
   - tag: forward_query_to_local_no_ecs_dot_ipv6
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'tls://dns.tuna.tsinghua.edu.cn'
           dial_addr: '[2402:f000:1:416:101:6:6:6]:8853'
@@ -195,7 +195,7 @@ plugins:
   - tag: forward_query_to_remote_ecs_doh_ipv4
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'https://unfiltered.adguard-dns.com/dns-query'
           dial_addr: '94.140.14.140:443'
@@ -240,7 +240,7 @@ plugins:
   - tag: forward_query_to_remote_ecs_doh_ipv6
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'https://unfiltered.adguard-dns.com/dns-query'
           dial_addr: '[2a10:50c0::1:ff]:443'
@@ -295,7 +295,7 @@ plugins:
   - tag: forward_query_to_remote_ecs_dot_ipv4
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'tls://unfiltered.adguard-dns.com'
           dial_addr: '94.140.14.140:853'
@@ -340,7 +340,7 @@ plugins:
   - tag: forward_query_to_remote_ecs_dot_ipv6
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'tls://unfiltered.adguard-dns.com'
           dial_addr: '[2a10:50c0::1:ff]:853'
@@ -395,7 +395,7 @@ plugins:
   - tag: forward_query_to_remote_no_ecs_doh_ipv4
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'https://private.canadianshield.cira.ca/dns-query'
           dial_addr: '149.112.121.10:443'
@@ -465,7 +465,7 @@ plugins:
   - tag: forward_query_to_remote_no_ecs_doh_ipv6
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'https://private.canadianshield.cira.ca/dns-query'
           dial_addr: '[2620:10a:80bb::10]:443'
@@ -545,7 +545,7 @@ plugins:
   - tag: forward_query_to_remote_no_ecs_dot_ipv4
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'tls://private.canadianshield.cira.ca'
           dial_addr: '149.112.121.10:853'
@@ -615,7 +615,7 @@ plugins:
   - tag: forward_query_to_remote_no_ecs_dot_ipv6
     type: forward
     args:
-      concurrent: 3
+      concurrent: 1
       upstreams:
         - addr: 'tls://private.canadianshield.cira.ca'
           dial_addr: '[2620:10a:80bb::10]:853'
