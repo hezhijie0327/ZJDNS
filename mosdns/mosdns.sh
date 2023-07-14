@@ -12,12 +12,12 @@ USE_CDN="true"
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, vxlink, zjdb
 
-ENABLE_ALWAYS_STANDBY="false"
+ENABLE_ALWAYS_STANDBY="true"
 ENABLE_HTTP3_UPSTREAM="false"
-ENABLE_PIPELINE="false"
+ENABLE_PIPELINE="true"
 
-ENABLE_LOCAL_UPSTREAM="false" # false, ipv4, ipv6, ipv64
-ENABLE_REMOTE_UPSTREAM="false" # false, ipv4, ipv6, ipv64
+ENABLE_LOCAL_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
+ENABLE_REMOTE_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 
 ENABLE_LOCAL_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 ENABLE_REMOTE_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
