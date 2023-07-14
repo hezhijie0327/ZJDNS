@@ -15,6 +15,7 @@ CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, 
 ENABLE_ALWAYS_STANDBY="true"
 ENABLE_HTTP3_UPSTREAM="false"
 ENABLE_PIPELINE="true"
+SET_CONCURRENT="1" # 1, 2, 3 (MAX)
 
 ENABLE_LOCAL_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 ENABLE_REMOTE_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
@@ -88,6 +89,9 @@ function DownloadConfiguration() {
         fi
         if [ "${ENABLE_PIPELINE}" == "false" ]; then
             sed -i "s/enable_pipeline: true/enable_pipeline: false/g" "${DOCKER_PATH}/conf/config.yaml"
+        fi
+        if [ "${SET_CONCURRENT}" != "1" ]; then
+            sed -i "s/concurrent: 1/concurrent: ${SET_CONCURRENT}/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
 
         if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ]; then
