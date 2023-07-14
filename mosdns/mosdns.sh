@@ -100,14 +100,14 @@ function DownloadConfiguration() {
             sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
         fi
 
-        if [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" != "false" ]; then
+        if [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" != "false" ] && [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ]; then
             if [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" != "true" ]; then
                 sed -i "s/#+        socks5: '127.0.0.1:7891'/#+        socks5: '${ENABLE_LOCAL_UPSTREAM_PROXY}'/g" "${DOCKER_PATH}/conf/config.yaml"
             else
                 sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/config.yaml"
             fi
         fi
-        if [ "${ENABLE_REMOTE_UPSTREAM_PROXY}" != "false" ]; then
+        if [ "${ENABLE_REMOTE_UPSTREAM_PROXY}" != "false" ] && [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
             if [ "${ENABLE_REMOTE_UPSTREAM_PROXY}" != "true" ]; then
                 sed -i "s/#-        socks5: '127.0.0.1:7891'/#-        socks5: '${ENABLE_REMOTE_UPSTREAM_PROXY}'/g" "${DOCKER_PATH}/conf/config.yaml"
             else
