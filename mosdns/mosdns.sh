@@ -13,7 +13,7 @@ USE_CDN="true"
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, vxlink, zjdb
 
 ENABLE_ALWAYS_STANDBY="true"
-ENABLE_HTTP3_UPSTREAM="false"
+ENABLE_HTTP3_UPSTREAM="true"
 ENABLE_PIPELINE="true"
 SET_CONCURRENT="1" # 1, 2, 3 (MAX)
 
