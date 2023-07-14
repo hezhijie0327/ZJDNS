@@ -12,32 +12,15 @@ USE_CDN="true"
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, vxlink, zjdb
 
-RUNNING_MODE="" # forward_first, forward_only, recursive_first, recursive_only
-
-ENABLE_ALWAYS_STANDBY="false"
-ENABLE_IPV6_UPSTREAM="false"
+ENABLE_ALWAYS_STANDBY="true"
 ENABLE_HTTP3_UPSTREAM="false"
-ENABLE_PIPELINE="false"
+ENABLE_PIPELINE="true"
 
-CUSTOM_PROXY_SERVER="" # 127.0.0.1:7890
-ENABLE_PROXY_IPV6_UPSTREAM="false"
-ENABLE_PROXY_LOCAL_UPSTREAM="false"
-ENABLE_PROXY_UPSTREAM="false"
+ENABLE_LOCAL_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
+ENABLE_REMOTE_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 
-ENABLE_RECURSIVE_HTTPS_UPSTREAM="false"
-ENABLE_RECURSIVE_TLS_UPSTREAM="false"
-ENABLE_RECURSIVE_UNENCRYPTED_UPSTREAM="true"
-
-ENABLE_REMOTE_IPV6_UPSTREAM="false"
-ENABLE_REMOTE_UPSTREAM="false"
-
-ENABLE_ECS="true"
-ECS_IPV4_OVERWRITE="255.255.255.255"
-ECS_IPV6_OVERWRITE="ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
-
-ENABLE_REVERSE_LOOKUP="false"
-CACHE_SIZE_REVERSE_LOOKUP="" # 4096
-TTL_REVERSE_LOOKUP="" # 10
+ENABLE_LOCAL_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
+ENABLE_REMOTE_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 
 HTTPS_PORT="" # 5553
 TLS_PORT="" # 5535
@@ -76,102 +59,60 @@ function DownloadConfiguration() {
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 
-        if [ "${RUNNING_MODE}" == "" ]; then
-            RUNNING_MODE=${RUNNING_MODE:-forward_only}
-        fi
-        if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "forward_only" ] || [ "${RUNNING_MODE}" == "recursive_first" ] || [ "${RUNNING_MODE}" == "recursive_only" ]; then
-            if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "recursive_first" ] || [ "${RUNNING_MODE}" == "recursive_only" ]; then
-                if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "true" ]; then
-                    sed -i "s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
-                fi
-                if [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "true" ]; then
-                    sed -i "s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
-                fi
-                if [ "${ENABLE_RECURSIVE_UNENCRYPTED_UPSTREAM}" == "false" ]; then
-                    if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "false" ] && [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "false" ]; then
-                        sed -i "s/#\\$/  /g" "${DOCKER_PATH}/conf/config.yaml"
-                    fi
-                else
-                    sed -i "s/#\\$/  /g" "${DOCKER_PATH}/conf/config.yaml"
-                fi
-                if [ "${RUNNING_MODE}" == "recursive_first" ]; then
-                    sed -i "s/#\\*/  /g" "${DOCKER_PATH}/conf/config.yaml"
-                fi && sed -i "s/#\\^/  /g" "${DOCKER_PATH}/conf/config.yaml"
-            fi
-            if [ "${RUNNING_MODE}" == "forward_first" ] || [ "${RUNNING_MODE}" == "recursive_first" ]; then
-                sed -i "s/entry: forward_first_server/entry: ${RUNNING_MODE}_server/g" "${DOCKER_PATH}/conf/config.yaml"
-            elif [ "${RUNNING_MODE}" == "forward_only" ]; then
-                sed -i 's/entry: forward_first_server/entry: sequence_forward_query_to_forward_dns/g' "${DOCKER_PATH}/conf/config.yaml"
-            elif [ "${RUNNING_MODE}" == "recursive_only" ]; then
-                sed -i 's/entry: forward_first_server/entry: sequence_forward_query_to_recursive_dns/g' "${DOCKER_PATH}/conf/config.yaml"
-            fi
-            HTTPS_CONFIG=(
-                "  - tag: create_https_server"
-                "    type: tcp_server"
-                "    args:"
-                "      entries:"
-                "        - path: '/dns-query'"
-                "          exec: ${RUNNING_MODE}_server"
-                "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
-                "      key: '/etc/mosdns/cert/${SSL_KEY}'"
-                "      listen: :${HTTPS_PORT:-5553}"
-            )
-            TLS_CONFIG=(
-                "  - tag: create_tls_server"
-                "    type: tcp_server"
-                "    args:"
-                "      entry: ${RUNNING_MODE}_server"
-                "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
-                "      key: '/etc/mosdns/cert/${SSL_KEY}'"
-                "      listen: :${TLS_PORT:-5535}"
-            )
-        fi
+        HTTPS_CONFIG=(
+            "  - tag: create_https_server"
+            "    type: tcp_server"
+            "    args:"
+            "      entries:"
+            "        - path: '/dns-query'"
+            "          exec: sequence_forward_query_to_forward_dns"
+            "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
+            "      key: '/etc/mosdns/cert/${SSL_KEY}'"
+            "      listen: :${HTTPS_PORT:-5553}"
+        )
+        TLS_CONFIG=(
+            "  - tag: create_tls_server"
+            "    type: tcp_server"
+            "    args:"
+            "      entry: sequence_forward_query_to_forward_dns"
+            "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
+            "      key: '/etc/mosdns/cert/${SSL_KEY}'"
+            "      listen: :${TLS_PORT:-5535}"
+        )
 
-        if [ "${ENABLE_ALWAYS_STANDBY}" == "true" ]; then
-            sed -i 's/#!/  /g' "${DOCKER_PATH}/conf/config.yaml"
+        if [ "${ENABLE_ALWAYS_STANDBY}" == "false" ]; then
+            sed -i 's/always_standby: true/always_standby: false/g' "${DOCKER_PATH}/conf/config.yaml"
         fi
-        if [ "${ENABLE_IPV6_UPSTREAM}" == "true" ]; then
-            sed -i "s/#-/  /g" "${DOCKER_PATH}/conf/config.yaml"
-        fi
-        if [ "${ENABLE_HTTP3_UPSTREAM}" == "true" ]; then
-            sed -i "s/##/  /g" "${DOCKER_PATH}/conf/config.yaml"
+        if [ "${ENABLE_HTTP3_UPSTREAM}" == "false" ] || [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" != "false" ] || [ "${ENABLE_REMOTE_UPSTREAM_PROXY}" != "false" ]; then
+            sed -i "s/enable_http3: true/enable_http3: false/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_PIPELINE}" == "false" ]; then
             sed -i "s/enable_pipeline: true/enable_pipeline: false/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
 
-        if [ "${CUSTOM_PROXY_SERVER}" != "" ]; then
-            sed -i "s/127.0.0.1:7890/${CUSTOM_PROXY_SERVER}/g" "${DOCKER_PATH}/conf/config.yaml"
+        if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ]; then
+            sed -i "s/primary: fallback_forward_query_to_local_ecs_ipv64/primary: fallback_forward_query_to_local_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/secondary: fallback_forward_query_to_local_no_ecs_ipv64/secondary: fallback_forward_query_to_local_no_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
         fi
-        if [ "${ENABLE_PROXY_IPV6_UPSTREAM}" == "true" ]; then
-            sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/config.yaml"
+        if [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
+            sed -i "s/primary: fallback_forward_query_to_remote_ecs_ipv64/primary: fallback_forward_query_to_remote_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/secondary: fallback_forward_query_to_remote_no_ecs_ipv64/secondary: fallback_forward_query_to_remote_no_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
         fi
-        if [ "${ENABLE_PROXY_LOCAL_UPSTREAM}" == "true" ]; then
-            sed -i "s/#~/  /g" "${DOCKER_PATH}/conf/config.yaml"
-        fi
-        if [ "${ENABLE_PROXY_UPSTREAM}" == "true" ]; then
+        if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ] && [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
             sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
         fi
 
-        if [ "${ENABLE_REMOTE_IPV6_UPSTREAM}" == "true" ]; then
-            sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/config.yaml"
+        if [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" != "false" ]; then
+            if [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" != "true" ]; then
+                sed -i "s/#+        socks5: '127.0.0.1:7891'/#+        socks5: '${ENABLE_LOCAL_UPSTREAM_PROXY}'/g" "${DOCKER_PATH}/conf/config.yaml"
+            else
+                sed -i "s/#+/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            fi
         fi
-        if [ "${ENABLE_REMOTE_UPSTREAM}" == "true" ]; then
-            sed -i "s/#?/  /g" "${DOCKER_PATH}/conf/config.yaml"
-        fi
-
-        if [ "${ENABLE_ECS}" == "true" ]; then
-            sed -i "s/#%/  /g" "${DOCKER_PATH}/conf/config.yaml"
-        fi
-        if [ "${ECS_IPV4_OVERWRITE}" != "255.255.255.255" ]; then
-            sed -i "s/- exec: ecs/- exec: ecs ${ECS_IPV4_OVERWRITE}\/24/g" "${DOCKER_PATH}/conf/config.yaml"
-        fi
-        if [ "${ECS_IPV6_OVERWRITE}" != "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" ]; then
-            sed -i "s/- exec: ecs/- exec: ecs ${ECS_IPV6_OVERWRITE//:/\:}\/56/g" "${DOCKER_PATH}/conf/config.yaml"
-        fi
-
-        if [ "${ENABLE_REVERSE_LOOKUP}" == "true" ]; then
-            sed -i "s/#_    size: 4096/#_    size: ${CACHE_SIZE_REVERSE_LOOKUP:-4096}/g;s/#_    ttl: 10/#_    ttl: ${TTL_REVERSE_LOOKUP:-10}/g;s/#_/  /g" "${DOCKER_PATH}/conf/config.yaml"
+        if [ "${ENABLE_REMOTE_UPSTREAM_PROXY}" != "false" ]; then
+            if [ "${ENABLE_REMOTE_UPSTREAM_PROXY}" != "true" ]; then
+                sed -i "s/#-        socks5: '127.0.0.1:7891'/#-        socks5: '${ENABLE_REMOTE_UPSTREAM_PROXY}'/g" "${DOCKER_PATH}/conf/config.yaml"
+            else
+                sed -i "s/#-/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            fi
         fi
 
         if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
