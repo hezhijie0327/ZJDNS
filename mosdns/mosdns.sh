@@ -60,27 +60,6 @@ function DownloadConfiguration() {
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 
-        HTTPS_CONFIG=(
-            "  - tag: create_https_server"
-            "    type: tcp_server"
-            "    args:"
-            "      entries:"
-            "        - path: '/dns-query'"
-            "          exec: sequence_forward_query_to_forward_dns"
-            "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
-            "      key: '/etc/mosdns/cert/${SSL_KEY}'"
-            "      listen: :${HTTPS_PORT:-5553}"
-        )
-        TLS_CONFIG=(
-            "  - tag: create_tls_server"
-            "    type: tcp_server"
-            "    args:"
-            "      entry: sequence_forward_query_to_forward_dns"
-            "      cert: '/etc/mosdns/cert/${SSL_CERT}'"
-            "      key: '/etc/mosdns/cert/${SSL_KEY}'"
-            "      listen: :${TLS_PORT:-5535}"
-        )
-
         if [ "${ENABLE_ALWAYS_STANDBY}" == "false" ]; then
             sed -i 's/always_standby: true/always_standby: false/g' "${DOCKER_PATH}/conf/config.yaml"
         fi
@@ -131,14 +110,10 @@ function DownloadConfiguration() {
             fi
         fi
         if [ "${ENABLE_HTTPS}" == "true" ]; then
-            for HTTPS_CONFIG_TASK in "${!HTTPS_CONFIG[@]}"; do
-                echo "${HTTPS_CONFIG[$HTTPS_CONFIG_TASK]}" >> "${DOCKER_PATH}/conf/config.yaml"
-            done
+            echo "  - tag: create_https_server\n    type: tcp_server\n    args:\n      entries:\n        - path: '/dns-query'\n          exec: sequence_forward_query_to_forward_dns\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${HTTPS_PORT:-5553}" >> "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_TLS}" == "true" ]; then
-            for TLS_CONFIG_TASK in "${!TLS_CONFIG[@]}"; do
-                echo "${TLS_CONFIG[$TLS_CONFIG_TASK]}" >> "${DOCKER_PATH}/conf/config.yaml"
-            done
+            echo "  - tag: create_tls_server\n    type: tcp_server\n    args:\n      entry: sequence_forward_query_to_forward_dns\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${TLS_PORT:-5535}" >> "${DOCKER_PATH}/conf/config.yaml"
         fi
 
         if [ -f "${DOCKER_PATH}/conf/config.yaml" ]; then
