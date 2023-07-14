@@ -710,3 +710,244 @@ plugins:
           enable_pipeline: true
           insecure_skip_verify: true
 #-        socks5: '127.0.0.1:7890'
+  - tag: fallback_forward_query_to_local_ecs_ipv4
+    type: fallback
+    args:
+      primary: forward_query_to_local_ecs_dot_ipv4
+      secondary: forward_query_to_local_ecs_doh_ipv4
+      threshold: 1250
+      always_standby: true
+  - tag: fallback_forward_query_to_local_ecs_ipv6
+    type: fallback
+    args:
+      primary: forward_query_to_local_ecs_dot_ipv6
+      secondary: forward_query_to_local_ecs_doh_ipv6
+      threshold: 1250
+      always_standby: true
+  - tag: fallback_forward_query_to_local_ecs_ipv64
+    type: fallback
+    args:
+      primary: fallback_forward_query_to_local_ecs_ipv4
+      secondary: fallback_forward_query_to_local_ecs_ipv6
+      threshold: 2500
+      always_standby: true
+  - tag: fallback_forward_query_to_local_no_ecs_ipv4
+    type: fallback
+    args:
+      primary: forward_query_to_local_no_ecs_dot_ipv4
+      secondary: forward_query_to_local_no_ecs_doh_ipv4
+      threshold: 1250
+      always_standby: true
+  - tag: fallback_forward_query_to_local_no_ecs_ipv6
+    type: fallback
+    args:
+      primary: forward_query_to_local_no_ecs_dot_ipv6
+      secondary: forward_query_to_local_no_ecs_doh_ipv6
+      threshold: 1250
+      always_standby: true
+  - tag: fallback_forward_query_to_local_no_ecs_ipv64
+    type: fallback
+    args:
+      primary: fallback_forward_query_to_local_no_ecs_ipv4
+      secondary: fallback_forward_query_to_local_no_ecs_ipv6
+      threshold: 2500
+      always_standby: true
+  - tag: fallback_forward_query_to_remote_ecs_ipv4
+    type: fallback
+    args:
+      primary: forward_query_to_remote_ecs_dot_ipv4
+      secondary: forward_query_to_remote_ecs_doh_ipv4
+      threshold: 1250
+      always_standby: true
+  - tag: fallback_forward_query_to_remote_ecs_ipv6
+    type: fallback
+    args:
+      primary: forward_query_to_remote_ecs_dot_ipv6
+      secondary: forward_query_to_remote_ecs_doh_ipv6
+      threshold: 1250
+      always_standby: true
+  - tag: fallback_forward_query_to_remote_ecs_ipv64
+    type: fallback
+    args:
+      primary: fallback_forward_query_to_remote_ecs_ipv4
+      secondary: fallback_forward_query_to_remote_ecs_ipv6
+      threshold: 2500
+      always_standby: true
+  - tag: fallback_forward_query_to_remote_no_ecs_ipv4
+    type: fallback
+    args:
+      primary: forward_query_to_remote_no_ecs_dot_ipv4
+      secondary: forward_query_to_remote_no_ecs_doh_ipv4
+      threshold: 1250
+      always_standby: true
+  - tag: fallback_forward_query_to_remote_no_ecs_ipv6
+    type: fallback
+    args:
+      primary: forward_query_to_remote_no_ecs_dot_ipv6
+      secondary: forward_query_to_remote_no_ecs_doh_ipv6
+      threshold: 1250
+      always_standby: true
+  - tag: fallback_forward_query_to_remote_no_ecs_ipv64
+    type: fallback
+    args:
+      primary: fallback_forward_query_to_remote_no_ecs_ipv4
+      secondary: fallback_forward_query_to_remote_no_ecs_ipv6
+      threshold: 2500
+      always_standby: true
+  - tag: fallback_forward_query_to_local
+    type: fallback
+    args:
+      primary: fallback_forward_query_to_local_ecs_ipv64
+      secondary: fallback_forward_query_to_local_no_ecs_ipv64
+      threshold: 3750
+      always_standby: true
+  - tag: fallback_forward_query_to_remote
+    type: fallback
+    args:
+      primary: fallback_forward_query_to_remote_no_ecs_ipv64
+      secondary: fallback_forward_query_to_remote_no_ecs_ipv64
+      threshold: 3750
+      always_standby: true
+  - tag: ip_set_dns64_ip
+    type: ip_set
+    args:
+      ips:
+        - '64:ff9b::/96'
+        - '64:ff9b:1::/48'
+  - tag: ip_set_local
+    type: ip_set
+    args:
+      files:
+        - '/etc/mosdns/data/GeoIP_CNIPDb.txt'
+  - tag: ip_set_reserved_ip
+    type: ip_set
+    args:
+      ips:
+        - '0.0.0.0/8'
+        - '10.0.0.0/8'
+        - '100.64.0.0/10'
+        - '127.0.0.0/8'
+        - '169.254.0.0/16'
+        - '172.16.0.0/12'
+        - '192.0.0.0/24'
+        - '192.0.2.0/24'
+        - '192.31.196.0/24'
+        - '192.52.193.0/24'
+        - '192.88.99.0/24'
+        - '192.168.0.0/16'
+        - '192.175.48.0/24'
+        - '198.18.0.0/15'
+        - '198.51.100.0/24'
+        - '203.0.113.0/24'
+        - '240.0.0.0/4'
+        - '::/127'
+        - '100::/64'
+        - '2001::/23'
+        - '2001:db8::/32'
+        - '2002::/16'
+        - '2620:4f:8000::/48'
+        - 'fc00::/7'
+        - 'fe80::/10'
+  - tag: ip_set_valid_ip
+    type: ip_set
+    args:
+      ips:
+        - '0.0.0.0/0'
+        - '::/0'
+  - tag: reverse_lookup_ptr_record
+    type: reverse_lookup
+    args:
+      handle_ptr: true
+      size: 4096
+      ttl: 10
+  - tag: sequence_check_response_has_any_answer
+    type: sequence
+    args:
+      - matches:
+          - '!rcode 0 3'
+        exec: drop_resp
+      - matches:
+          - 'has_resp'
+        exec: accept
+  - tag: sequence_check_response_has_dns64_answer
+    type: sequence
+    args:
+      - matches:
+          - 'qtype 1 28'
+          - 'resp_ip $ip_set_dns64_ip'
+        exec: drop_resp
+  - tag: sequence_check_response_has_invalid_answer
+    type: sequence
+    args:
+      - matches:
+          - '!rcode 0'
+        exec: drop_resp
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_valid_ip'
+        exec: drop_resp
+      - matches:
+          - '!has_wanted_ans'
+        exec: drop_resp
+  - tag: sequence_check_response_has_remote_answer
+    type: sequence
+    args:
+      - matches:
+          - 'qtype 1 28'
+          - '!resp_ip $ip_set_local'
+        exec: drop_resp
+  - tag: sequence_check_response_has_reserved_answer
+    type: sequence
+    args:
+      - matches:
+          - 'qtype 1 28'
+          - 'resp_ip $ip_set_reserved_ip'
+        exec: drop_resp
+  - tag: sequence_forward_query_to_forward_dns
+    type: sequence
+    args:
+      - exec: $reverse_lookup_ptr_record
+      - exec: jump sequence_check_response_has_invalid_answer
+      - exec: jump sequence_check_response_has_any_answer
+      - exec: $fallback_forward_query_to_local
+      - exec: jump sequence_check_response_has_dns64_answer
+      - exec: jump sequence_check_response_has_remote_answer
+      - exec: jump sequence_check_response_has_reserved_answer
+      - exec: jump sequence_check_response_has_invalid_answer
+      - exec: jump sequence_check_response_has_any_answer
+      - exec: $fallback_forward_query_to_remote
+      - exec: jump sequence_check_response_has_dns64_answer
+      - exec: jump sequence_check_response_has_any_answer
+  - tag: sequence_forward_query_to_recursive_dns
+    type: sequence
+    args:
+      - exec: $reverse_lookup_ptr_record
+      - exec: jump sequence_check_response_has_invalid_answer
+      - exec: jump sequence_check_response_has_any_answer
+      - exec: $forward_query_to_recursive_dns
+      - exec: jump sequence_check_response_has_invalid_answer
+      - exec: jump sequence_check_response_has_any_answer
+  - tag: forward_first_server
+    type: fallback
+    args:
+      primary: sequence_forward_query_to_forward_dns
+      secondary: sequence_forward_query_to_recursive_dns
+      threshold: 5000
+      always_standby: true
+  - tag: recursive_first_server
+    type: fallback
+    args:
+      primary: sequence_forward_query_to_recursive_dns
+      secondary: sequence_forward_query_to_forward_dns
+      threshold: 5000
+      always_standby: true
+  - tag: create_tcp_server
+    type: tcp_server
+    args:
+      entry: forward_first_server
+      listen: :5533
+  - tag: create_udp_server
+    type: udp_server
+    args:
+      entry: forward_first_server
+      listen: :5533
