@@ -91,14 +91,10 @@ function DownloadConfiguration() {
         fi
 
         if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ]; then
-            if [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
-                sed -i "s/primary: fallback_forward_query_to_local_ecs_ipv64/primary: fallback_forward_query_to_local_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/secondary: fallback_forward_query_to_local_no_ecs_ipv64/secondary: fallback_forward_query_to_local_no_ecs_${ENABLE_LOCAL_UPSTREAM}/g" "${DOCKER_PATH}/conf/config.yaml"
-            fi
-        else
-            sed -i 's/      - exec: $fallback_forward_query_to_local/##    - exec: $fallback_forward_query_to_local/g' "${DOCKER_PATH}/conf/config.yaml"
+            sed -i "s/primary: fallback_forward_query_to_local_ecs_ipv64/primary: fallback_forward_query_to_local_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/secondary: fallback_forward_query_to_local_no_ecs_ipv64/secondary: fallback_forward_query_to_local_no_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
-            sed -i "s/primary: fallback_forward_query_to_remote_ecs_ipv64/primary: fallback_forward_query_to_remote_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/secondary: fallback_forward_query_to_remote_no_ecs_ipv64/secondary: fallback_forward_query_to_remote_no_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/##/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            sed -i "s/primary: fallback_forward_query_to_remote_ecs_ipv64/primary: fallback_forward_query_to_remote_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/secondary: fallback_forward_query_to_remote_no_ecs_ipv64/secondary: fallback_forward_query_to_remote_no_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ] && [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
             sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
