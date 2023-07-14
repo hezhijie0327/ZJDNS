@@ -83,7 +83,7 @@ function DownloadConfiguration() {
         if [ "${ENABLE_ALWAYS_STANDBY}" == "false" ]; then
             sed -i 's/always_standby: true/always_standby: false/g' "${DOCKER_PATH}/conf/config.yaml"
         fi
-        if [ "${ENABLE_HTTP3_UPSTREAM}" == "false" ]; then
+        if [ "${ENABLE_HTTP3_UPSTREAM}" == "false" ] || [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" != "false" ] || [ "${ENABLE_REMOTE_UPSTREAM_PROXY}" != "false" ]; then
             sed -i "s/enable_http3: true/enable_http3: false/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_PIPELINE}" == "false" ]; then
