@@ -2,24 +2,6 @@ log:
   level: error
   production: true
 plugins:
-#^- tag: forward_query_to_recursive_dns
-#^  type: forward
-#^  args:
-#^    concurrent: 3
-#^    upstreams:
-#$      - addr: 'tcp://localhost'
-#$        dial_addr: '127.0.0.1:5335'
-#$        enable_pipeline: true
-#$      - addr: 'udp://localhost'
-#$        dial_addr: '127.0.0.1:5335'
-#(      - addr: 'https://localhost/dns-query'
-#(        dial_addr: '127.0.0.1:5333'
-#(        enable_http3: false
-#(        insecure_skip_verify: true
-#)      - addr: 'tls://localhost'
-#)        dial_addr: '127.0.0.1:5355'
-#)        enable_pipeline: true
-#)        insecure_skip_verify: true
   - tag: forward_query_to_local_ecs_doh_ipv4
     type: forward
     args:
@@ -716,98 +698,98 @@ plugins:
       primary: forward_query_to_local_ecs_dot_ipv4
       secondary: forward_query_to_local_ecs_doh_ipv4
       threshold: 1250
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_local_ecs_ipv6
     type: fallback
     args:
       primary: forward_query_to_local_ecs_dot_ipv6
       secondary: forward_query_to_local_ecs_doh_ipv6
       threshold: 1250
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_local_ecs_ipv64
     type: fallback
     args:
       primary: fallback_forward_query_to_local_ecs_ipv4
       secondary: fallback_forward_query_to_local_ecs_ipv6
       threshold: 2500
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_local_no_ecs_ipv4
     type: fallback
     args:
       primary: forward_query_to_local_no_ecs_dot_ipv4
       secondary: forward_query_to_local_no_ecs_doh_ipv4
       threshold: 1250
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_local_no_ecs_ipv6
     type: fallback
     args:
       primary: forward_query_to_local_no_ecs_dot_ipv6
       secondary: forward_query_to_local_no_ecs_doh_ipv6
       threshold: 1250
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_local_no_ecs_ipv64
     type: fallback
     args:
       primary: fallback_forward_query_to_local_no_ecs_ipv4
       secondary: fallback_forward_query_to_local_no_ecs_ipv6
       threshold: 2500
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_remote_ecs_ipv4
     type: fallback
     args:
       primary: forward_query_to_remote_ecs_dot_ipv4
       secondary: forward_query_to_remote_ecs_doh_ipv4
       threshold: 1250
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_remote_ecs_ipv6
     type: fallback
     args:
       primary: forward_query_to_remote_ecs_dot_ipv6
       secondary: forward_query_to_remote_ecs_doh_ipv6
       threshold: 1250
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_remote_ecs_ipv64
     type: fallback
     args:
       primary: fallback_forward_query_to_remote_ecs_ipv4
       secondary: fallback_forward_query_to_remote_ecs_ipv6
       threshold: 2500
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_remote_no_ecs_ipv4
     type: fallback
     args:
       primary: forward_query_to_remote_no_ecs_dot_ipv4
       secondary: forward_query_to_remote_no_ecs_doh_ipv4
       threshold: 1250
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_remote_no_ecs_ipv6
     type: fallback
     args:
       primary: forward_query_to_remote_no_ecs_dot_ipv6
       secondary: forward_query_to_remote_no_ecs_doh_ipv6
       threshold: 1250
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_remote_no_ecs_ipv64
     type: fallback
     args:
       primary: fallback_forward_query_to_remote_no_ecs_ipv4
       secondary: fallback_forward_query_to_remote_no_ecs_ipv6
       threshold: 2500
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_local
     type: fallback
     args:
       primary: fallback_forward_query_to_local_ecs_ipv64
       secondary: fallback_forward_query_to_local_no_ecs_ipv64
       threshold: 3750
-##    always_standby: true
+      always_standby: true
   - tag: fallback_forward_query_to_remote
     type: fallback
     args:
       primary: fallback_forward_query_to_remote_no_ecs_ipv64
       secondary: fallback_forward_query_to_remote_no_ecs_ipv64
       threshold: 3750
-##    always_standby: true
+      always_standby: true
   - tag: ip_set_dns64_ip
     type: ip_set
     args:
@@ -901,41 +883,21 @@ plugins:
     type: sequence
     args:
       - exec: $fallback_forward_query_to_local
+#@    - exec: jump sequence_check_response_has_dns64_answer
+#@    - exec: jump sequence_check_response_has_remote_answer
+#@    - exec: jump sequence_check_response_has_reserved_answer
+#@    - exec: jump sequence_check_response_has_invalid_answer
+#@    - exec: jump sequence_check_response_has_any_answer
+##    - exec: $fallback_forward_query_to_remote
       - exec: jump sequence_check_response_has_dns64_answer
-      - exec: jump sequence_check_response_has_remote_answer
-      - exec: jump sequence_check_response_has_reserved_answer
-      - exec: jump sequence_check_response_has_invalid_answer
       - exec: jump sequence_check_response_has_any_answer
-      - exec: $fallback_forward_query_to_remote
-      - exec: jump sequence_check_response_has_dns64_answer
-      - exec: jump sequence_check_response_has_any_answer
-  - tag: sequence_forward_query_to_recursive_dns
-    type: sequence
-    args:
-      - exec: $forward_query_to_recursive_dns
-      - exec: jump sequence_check_response_has_invalid_answer
-      - exec: jump sequence_check_response_has_any_answer
-  - tag: forward_first_server
-    type: fallback
-    args:
-      primary: sequence_forward_query_to_forward_dns
-      secondary: sequence_forward_query_to_recursive_dns
-      threshold: 5000
-##    always_standby: true
-  - tag: recursive_first_server
-    type: fallback
-    args:
-      primary: sequence_forward_query_to_recursive_dns
-      secondary: sequence_forward_query_to_forward_dns
-      threshold: 5000
-##    always_standby: true
   - tag: create_tcp_server
     type: tcp_server
     args:
-      entry: forward_first_server
+      entry: sequence_forward_query_to_forward_dns
       listen: :5533
   - tag: create_udp_server
     type: udp_server
     args:
-      entry: forward_first_server
+      entry: sequence_forward_query_to_forward_dns
       listen: :5533
