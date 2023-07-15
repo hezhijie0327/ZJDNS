@@ -865,6 +865,13 @@ plugins:
       - matches:
           - '!has_wanted_ans'
         exec: drop_resp
+  - tag: sequence_check_response_has_local_answer
+    type: sequence
+    args:
+      - matches:
+          - 'qtype 1 28'
+          - 'resp_ip $ip_set_local'
+        exec: drop_resp
   - tag: sequence_check_response_has_remote_answer
     type: sequence
     args:
