@@ -71,7 +71,7 @@ function DownloadConfiguration() {
             sed -i "s/enable_pipeline: true/enable_pipeline: false/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${PREFER_REMOTE_UPSTREAM}" == "true" ]; then
-            sed -i 's/#(    - exec: $fallback_forward_query_to_local/##)   - exec: $fallback_forward_query_to_remote/g;s/#)    - exec: $fallback_forward_query_to_remote/##(   - exec: $fallback_forward_query_to_local/g;s/!resp_ip $ip_set_local/resp_ip $ip_set_local/g;/jump sequence_check_response_has_reserved_answer/d;/jump sequence_check_response_has_invalid_answer/d' "${DOCKER_PATH}/conf/config.yaml"
+            sed -i 's/#(    - exec: $fallback_forward_query_to_local/##)   - exec: $fallback_forward_query_to_remote/g;s/#)    - exec: $fallback_forward_query_to_remote/##(   - exec: $fallback_forward_query_to_local/g;s/!resp_ip $ip_set_cnipdb/resp_ip $ip_set_cnipdb/g;/jump sequence_check_response_has_reserved_answer/d;/jump sequence_check_response_has_invalid_answer/d' "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${SET_CONCURRENT}" != "1" ]; then
             sed -i "s/concurrent: 1/concurrent: ${SET_CONCURRENT}/g" "${DOCKER_PATH}/conf/config.yaml"
