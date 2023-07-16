@@ -790,17 +790,17 @@ plugins:
       secondary: fallback_forward_query_to_remote_no_ecs_ipv64
       threshold: 3750
       always_standby: true
+  - tag: ip_set_cnipdb
+    type: ip_set
+    args:
+      files:
+        - '/etc/mosdns/data/GeoIP_CNIPDb.txt'
   - tag: ip_set_dns64_ip
     type: ip_set
     args:
       ips:
         - '64:ff9b::/96'
         - '64:ff9b:1::/48'
-  - tag: ip_set_local
-    type: ip_set
-    args:
-      files:
-        - '/etc/mosdns/data/GeoIP_CNIPDb.txt'
   - tag: ip_set_reserved_ip
     type: ip_set
     args:
@@ -877,7 +877,7 @@ plugins:
     args:
       - matches:
           - 'qtype 1 28'
-          - '!resp_ip $ip_set_local'
+          - '!resp_ip $ip_set_cnipdb'
         exec: drop_resp
   - tag: sequence_forward_query_to_forward_dns
     type: sequence
