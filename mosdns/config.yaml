@@ -906,10 +906,10 @@ plugins:
   - tag: create_tcp_server
     type: tcp_server
     args:
-      entry: fallback_sequence_forward_query_to_dns
+      entry: fallback_sequence_forward_query_to_prefer_ecs
       listen: :5533
   - tag: create_udp_server
     type: udp_server
     args:
-      entry: fallback_sequence_forward_query_to_dns
+      entry: fallback_sequence_forward_query_to_prefer_ecs
       listen: :5533
