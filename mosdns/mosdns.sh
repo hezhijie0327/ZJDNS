@@ -117,10 +117,10 @@ function DownloadConfiguration() {
             fi
         fi
         if [ "${ENABLE_HTTPS}" == "true" ]; then
-            echo -e "  - tag: create_https_server\n    type: tcp_server\n    args:\n      entries:\n        - path: '/dns-query'\n          exec: sequence_forward_query_to_forward_dns\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${HTTPS_PORT:-5553}" >> "${DOCKER_PATH}/conf/config.yaml"
+            echo -e "  - tag: create_https_server\n    type: tcp_server\n    args:\n      entries:\n        - path: '/dns-query'\n          exec: fallback_sequence_forward_query_to_prefer_ecs\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${HTTPS_PORT:-5553}" >> "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_TLS}" == "true" ]; then
-            echo -e "  - tag: create_tls_server\n    type: tcp_server\n    args:\n      entry: sequence_forward_query_to_forward_dns\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${TLS_PORT:-5535}" >> "${DOCKER_PATH}/conf/config.yaml"
+            echo -e "  - tag: create_tls_server\n    type: tcp_server\n    args:\n      entry: fallback_sequence_forward_query_to_prefer_ecs\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${TLS_PORT:-5535}" >> "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${PREFER_NO_ECS_UPSTREAM}" == "true" ]; then
             sed -i "s/entry: fallback_sequence_forward_query_to_prefer_ecs/entry: fallback_sequence_forward_query_to_prefer_no_ecs/g" "${DOCKER_PATH}/conf/config.yaml"
