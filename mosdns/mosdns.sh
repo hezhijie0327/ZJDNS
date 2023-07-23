@@ -122,6 +122,7 @@ function DownloadConfiguration() {
         if [ "${ENABLE_TLS}" == "true" ]; then
             echo -e "  - tag: create_tls_server\n    type: tcp_server\n    args:\n      entry: fallback_sequence_forward_query_to_prefer_ecs\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${TLS_PORT:-5535}" >> "${DOCKER_PATH}/conf/config.yaml"
         fi
+
         if [ "${PREFER_NO_ECS_UPSTREAM}" == "true" ]; then
             sed -i "s/entry: fallback_sequence_forward_query_to_prefer_ecs/entry: fallback_sequence_forward_query_to_prefer_no_ecs/g" "${DOCKER_PATH}/conf/config.yaml"
         elif [ "${PREFER_NO_ECS_UPSTREAM}" == "ecs" ]; then
