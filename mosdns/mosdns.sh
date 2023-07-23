@@ -15,9 +15,12 @@ CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, 
 ENABLE_ALWAYS_STANDBY="true"
 ENABLE_HTTP3_UPSTREAM="true"
 ENABLE_PIPELINE="true"
-PREFER_REMOTE_UPSTREAM="false"
 SET_CONCURRENT="1" # 1, 2, 3 (MAX)
 
+PREFER_REMOTE_UPSTREAM="false"
+
+ENABLE_ECS_UPSTREAM="true"
+ENABLE_NO_ECS_UPSTREAM="true"
 ENABLE_LOCAL_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 ENABLE_REMOTE_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 
@@ -70,18 +73,35 @@ function DownloadConfiguration() {
         if [ "${ENABLE_PIPELINE}" == "false" ]; then
             sed -i "s/enable_pipeline: true/enable_pipeline: false/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
-        if [ "${PREFER_REMOTE_UPSTREAM}" == "true" ]; then
-            sed -i 's/#(    - exec: $fallback_forward_query_to_local/##)   - exec: $fallback_forward_query_to_remote/g;s/#)    - exec: $fallback_forward_query_to_remote/##(   - exec: $fallback_forward_query_to_local/g;s/!resp_ip $ip_set_cnipdb/resp_ip $ip_set_cnipdb/g;/jump sequence_check_response_has_reserved_answer/d;/jump sequence_check_response_has_invalid_answer/d' "${DOCKER_PATH}/conf/config.yaml"
-        fi
         if [ "${SET_CONCURRENT}" != "1" ]; then
             sed -i "s/concurrent: 1/concurrent: ${SET_CONCURRENT}/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
 
+        if [ "${PREFER_REMOTE_UPSTREAM}" == "true" ]; then
+            sed -i 's/#(    - exec: $fallback_forward_query_to_local/##)   - exec: $fallback_forward_query_to_remote/g;s/#)    - exec: $fallback_forward_query_to_remote/##(   - exec: $fallback_forward_query_to_local/g;s/!resp_ip $ip_set_cnipdb/resp_ip $ip_set_cnipdb/g;/jump sequence_check_response_has_reserved_answer/d;/jump sequence_check_response_has_invalid_answer/d' "${DOCKER_PATH}/conf/config.yaml"
+        fi
+
         if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ]; then
-            sed -i "s/primary: fallback_forward_query_to_local_ecs_ipv64/primary: fallback_forward_query_to_local_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/secondary: fallback_forward_query_to_local_no_ecs_ipv64/secondary: fallback_forward_query_to_local_no_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/##(/#( /g;s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            if [ "${ENABLE_ECS_UPSTREAM}" != "false" ] && [ "${ENABLE_NO_ECS_UPSTREAM}" != "false" ]; then
+                sed -i "s/primary: fallback_forward_query_to_local_ecs_ipv64/primary: fallback_forward_query_to_local_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/secondary: fallback_forward_query_to_local_no_ecs_ipv64/secondary: fallback_forward_query_to_local_no_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/##(/#( /g;s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            else
+                if [ "${ENABLE_ECS_UPSTREAM}" == "false" ]; then
+                    sed -i "s/\$fallback_forward_query_to_local/\$fallback_forward_query_to_local_no_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/##(/#( /g;s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
+                elif [ "${ENABLE_NO_ECS_UPSTREAM}" == "false" ]; then
+                    sed -i "s/\$fallback_forward_query_to_local/\$fallback_forward_query_to_local_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/##(/#( /g;s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
+                fi
+            fi
         fi
         if [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
-            sed -i "s/primary: fallback_forward_query_to_remote_ecs_ipv64/primary: fallback_forward_query_to_remote_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/secondary: fallback_forward_query_to_remote_no_ecs_ipv64/secondary: fallback_forward_query_to_remote_no_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/##)/#) /g;s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            if [ "${ENABLE_ECS_UPSTREAM}" != "false" ] && [ "${ENABLE_NO_ECS_UPSTREAM}" != "false" ]; then
+                sed -i "s/primary: fallback_forward_query_to_remote_ecs_ipv64/primary: fallback_forward_query_to_remote_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/secondary: fallback_forward_query_to_remote_no_ecs_ipv64/secondary: fallback_forward_query_to_remote_no_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/##)/#) /g;s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
+            else
+                if [ "${ENABLE_ECS_UPSTREAM}" == "false" ]; then
+                    sed -i "s/\$fallback_forward_query_to_remote/\$fallback_forward_query_to_remote_no_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/##)/#) /g;s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
+                elif [ "${ENABLE_NO_ECS_UPSTREAM}" == "false" ]; then
+                    sed -i "s/\$fallback_forward_query_to_remote/\$fallback_forward_query_to_remote_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/##)/#) /g;s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
+                fi
+            fi
         fi
         if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ] && [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
             sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
