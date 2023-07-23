@@ -776,20 +776,6 @@ plugins:
       secondary: fallback_forward_query_to_remote_no_ecs_ipv6
       threshold: 2500
       always_standby: true
-  - tag: fallback_forward_query_to_local
-    type: fallback
-    args:
-      primary: fallback_forward_query_to_local_ecs_ipv64
-      secondary: fallback_forward_query_to_local_no_ecs_ipv64
-      threshold: 3750
-      always_standby: true
-  - tag: fallback_forward_query_to_remote
-    type: fallback
-    args:
-      primary: fallback_forward_query_to_remote_ecs_ipv64
-      secondary: fallback_forward_query_to_remote_no_ecs_ipv64
-      threshold: 3750
-      always_standby: true
   - tag: ip_set_cnipdb
     type: ip_set
     args:
@@ -879,25 +865,51 @@ plugins:
           - 'qtype 1 28'
           - '!resp_ip $ip_set_cnipdb'
         exec: drop_resp
-  - tag: sequence_forward_query_to_forward_dns
+  - tag: sequence_forward_query_to_ecs
     type: sequence
     args:
-#(    - exec: $fallback_forward_query_to_local
+#(    - exec: $fallback_forward_query_to_local_ecs_ipv64
 #@    - exec: jump sequence_check_response_has_dns64_answer
 #@    - exec: jump sequence_check_response_has_specific_answer
 #@    - exec: jump sequence_check_response_has_reserved_answer
 #@    - exec: jump sequence_check_response_has_invalid_answer
 #@    - exec: jump sequence_check_response_has_any_answer
-#)    - exec: $fallback_forward_query_to_remote
+#)    - exec: $fallback_forward_query_to_remote_ecs_ipv64
       - exec: jump sequence_check_response_has_dns64_answer
       - exec: jump sequence_check_response_has_any_answer
+  - tag: sequence_forward_query_to_no_ecs
+    type: sequence
+    args:
+#(    - exec: $fallback_forward_query_to_local_no_ecs_ipv64
+#@    - exec: jump sequence_check_response_has_dns64_answer
+#@    - exec: jump sequence_check_response_has_specific_answer
+#@    - exec: jump sequence_check_response_has_reserved_answer
+#@    - exec: jump sequence_check_response_has_invalid_answer
+#@    - exec: jump sequence_check_response_has_any_answer
+#)    - exec: $fallback_forward_query_to_remote_no_ecs_ipv64
+      - exec: jump sequence_check_response_has_dns64_answer
+      - exec: jump sequence_check_response_has_any_answer
+  - tag: fallback_sequence_forward_query_to_prefer_ecs
+    type: fallback
+    args:
+      primary: sequence_forward_query_to_ecs
+      secondary: sequence_forward_query_to_no_ecs
+      threshold: 3750
+      always_standby: true
+  - tag: fallback_sequence_forward_query_to_prefer_no_ecs
+    type: fallback
+    args:
+      primary: sequence_forward_query_to_no_ecs
+      secondary: sequence_forward_query_to_ecs
+      threshold: 3750
+      always_standby: true
   - tag: create_tcp_server
     type: tcp_server
     args:
-      entry: sequence_forward_query_to_forward_dns
+      entry: fallback_sequence_forward_query_to_prefer_ecs
       listen: :5533
   - tag: create_udp_server
     type: udp_server
     args:
-      entry: sequence_forward_query_to_forward_dns
+      entry: fallback_sequence_forward_query_to_prefer_ecs
       listen: :5533

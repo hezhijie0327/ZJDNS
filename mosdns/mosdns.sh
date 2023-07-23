@@ -17,13 +17,11 @@ ENABLE_HTTP3_UPSTREAM="true"
 ENABLE_PIPELINE="true"
 SET_CONCURRENT="1" # 1, 2, 3 (MAX)
 
+PREFER_NO_ECS_UPSTREAM="false" # false, true, ecs, noecs
 PREFER_REMOTE_UPSTREAM="false"
 
 ENABLE_LOCAL_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 ENABLE_REMOTE_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
-
-ENABLE_LOCAL_UPSTREAM_ECS="both" # both, false, true
-ENABLE_REMOTE_UPSTREAM_ECS="both" # both, false, true
 
 ENABLE_LOCAL_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 ENABLE_REMOTE_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
@@ -79,26 +77,14 @@ function DownloadConfiguration() {
         fi
 
         if [ "${PREFER_REMOTE_UPSTREAM}" == "true" ]; then
-            sed -i 's/#(    - exec: $fallback_forward_query_to_local/##)   - exec: $fallback_forward_query_to_remote/g;s/#)    - exec: $fallback_forward_query_to_remote/##(   - exec: $fallback_forward_query_to_local/g;s/!resp_ip $ip_set_cnipdb/resp_ip $ip_set_cnipdb/g;/jump sequence_check_response_has_reserved_answer/d;/jump sequence_check_response_has_invalid_answer/d' "${DOCKER_PATH}/conf/config.yaml"
+            sed -i 's/#(    - exec: $fallback_forward_query_to_local_ecs_ipv64/##)   - exec: $fallback_forward_query_to_remote_ecs_ipv64/g;s/#)    - exec: $fallback_forward_query_to_remote_ecs_ipv64/##(   - exec: $fallback_forward_query_to_local_ecs_ipv64/g;s/#(    - exec: $fallback_forward_query_to_local_no_ecs_ipv64/##)   - exec: $fallback_forward_query_to_remote_no_ecs_ipv64/g;s/#)    - exec: $fallback_forward_query_to_remote_no_ecs_ipv64/##(   - exec: $fallback_forward_query_to_local_no_ecs_ipv64/g;s/!resp_ip $ip_set_cnipdb/resp_ip $ip_set_cnipdb/g;/jump sequence_check_response_has_reserved_answer/d;/jump sequence_check_response_has_invalid_answer/d' "${DOCKER_PATH}/conf/config.yaml"
         fi
 
         if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ]; then
-            if [ "${ENABLE_LOCAL_UPSTREAM_ECS}" == "both" ]; then
-                sed -i "s/primary: fallback_forward_query_to_local_ecs_ipv64/primary: fallback_forward_query_to_local_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/secondary: fallback_forward_query_to_local_no_ecs_ipv64/secondary: fallback_forward_query_to_local_no_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/##(/#( /g;s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
-            elif [ "${ENABLE_LOCAL_UPSTREAM_ECS}" == "true" ]; then
-                sed -i "s/\$fallback_forward_query_to_local/\$fallback_forward_query_to_local_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/##(/#( /g;s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
-            else
-                sed -i "s/\$fallback_forward_query_to_local/\$fallback_forward_query_to_local_no_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/##(/#( /g;s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
-            fi
+            sed -i "s/\$fallback_forward_query_to_local_ecs_ipv64/\$fallback_forward_query_to_local_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/\$fallback_forward_query_to_local_no_ecs_ipv64/\$fallback_forward_query_to_local_no_ecs_${ENABLE_LOCAL_UPSTREAM}/g;s/##(/#( /g;s/#(/  /g" "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
-            if [ "${ENABLE_REMOTE_UPSTREAM_ECS}" == "both" ]; then
-                sed -i "s/primary: fallback_forward_query_to_remote_ecs_ipv64/primary: fallback_forward_query_to_remote_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/secondary: fallback_forward_query_to_remote_no_ecs_ipv64/secondary: fallback_forward_query_to_remote_no_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/##)/#) /g;s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
-            elif [ "${ENABLE_REMOTE_UPSTREAM_ECS}" == "true" ]; then
-                sed -i "s/\$fallback_forward_query_to_remote/\$fallback_forward_query_to_remote_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/##)/#) /g;s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
-            else
-                sed -i "s/\$fallback_forward_query_to_remote/\$fallback_forward_query_to_remote_no_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/##)/#) /g;s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
-            fi
+            sed -i "s/\$fallback_forward_query_to_remote_ecs_ipv64/\$fallback_forward_query_to_remote_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/\$fallback_forward_query_to_remote_no_ecs_ipv64/\$fallback_forward_query_to_remote_no_ecs_${ENABLE_REMOTE_UPSTREAM}/g;s/##)/#) /g;s/#)/  /g" "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ] && [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
             sed -i "s/#@/  /g" "${DOCKER_PATH}/conf/config.yaml"
@@ -131,10 +117,18 @@ function DownloadConfiguration() {
             fi
         fi
         if [ "${ENABLE_HTTPS}" == "true" ]; then
-            echo -e "  - tag: create_https_server\n    type: tcp_server\n    args:\n      entries:\n        - path: '/dns-query'\n          exec: sequence_forward_query_to_forward_dns\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${HTTPS_PORT:-5553}" >> "${DOCKER_PATH}/conf/config.yaml"
+            echo -e "  - tag: create_https_server\n    type: tcp_server\n    args:\n      entries:\n        - path: '/dns-query'\n          exec: fallback_sequence_forward_query_to_prefer_ecs\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${HTTPS_PORT:-5553}" >> "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_TLS}" == "true" ]; then
-            echo -e "  - tag: create_tls_server\n    type: tcp_server\n    args:\n      entry: sequence_forward_query_to_forward_dns\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${TLS_PORT:-5535}" >> "${DOCKER_PATH}/conf/config.yaml"
+            echo -e "  - tag: create_tls_server\n    type: tcp_server\n    args:\n      entry: fallback_sequence_forward_query_to_prefer_ecs\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${TLS_PORT:-5535}" >> "${DOCKER_PATH}/conf/config.yaml"
+        fi
+
+        if [ "${PREFER_NO_ECS_UPSTREAM}" == "true" ]; then
+            sed -i "s/entry: fallback_sequence_forward_query_to_prefer_ecs/entry: fallback_sequence_forward_query_to_prefer_no_ecs/g" "${DOCKER_PATH}/conf/config.yaml"
+        elif [ "${PREFER_NO_ECS_UPSTREAM}" == "ecs" ]; then
+            sed -i "s/entry: fallback_sequence_forward_query_to_prefer_ecs/entry: sequence_forward_query_to_ecs/g" "${DOCKER_PATH}/conf/config.yaml"
+        elif [ "${PREFER_NO_ECS_UPSTREAM}" == "noecs" ]; then
+            sed -i "s/entry: fallback_sequence_forward_query_to_prefer_ecs/entry: sequence_forward_query_to_no_ecs/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
 
         if [ -f "${DOCKER_PATH}/conf/config.yaml" ]; then
