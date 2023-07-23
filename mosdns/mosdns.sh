@@ -131,10 +131,10 @@ function DownloadConfiguration() {
             fi
         fi
         if [ "${ENABLE_HTTPS}" == "true" ]; then
-            echo "  - tag: create_https_server\n    type: tcp_server\n    args:\n      entries:\n        - path: '/dns-query'\n          exec: sequence_forward_query_to_forward_dns\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${HTTPS_PORT:-5553}" >> "${DOCKER_PATH}/conf/config.yaml"
+            echo -e "  - tag: create_https_server\n    type: tcp_server\n    args:\n      entries:\n        - path: '/dns-query'\n          exec: sequence_forward_query_to_forward_dns\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${HTTPS_PORT:-5553}" >> "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_TLS}" == "true" ]; then
-            echo "  - tag: create_tls_server\n    type: tcp_server\n    args:\n      entry: sequence_forward_query_to_forward_dns\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${TLS_PORT:-5535}" >> "${DOCKER_PATH}/conf/config.yaml"
+            echo -e "  - tag: create_tls_server\n    type: tcp_server\n    args:\n      entry: sequence_forward_query_to_forward_dns\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${TLS_PORT:-5535}" >> "${DOCKER_PATH}/conf/config.yaml"
         fi
 
         if [ -f "${DOCKER_PATH}/conf/config.yaml" ]; then
