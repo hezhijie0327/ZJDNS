@@ -19,6 +19,10 @@ ENABLE_FORWARD="true"
 ENABLE_FORWARD_CACHE="true"
 ENABLE_RECURSIVE_DNS="false"
 
+ENABLE_IPV4="true"
+ENABLE_IPV6="true"
+ENABLE_IP64="false"
+
 ENABLE_LOGFILE="false"
 
 ENABLE_RATELIMIT="false"
@@ -106,6 +110,16 @@ function DownloadConfiguration() {
         fi
         if [ "${ENABLE_RECURSIVE_DNS}" == "true" ]; then
             sed -i "s/forward-first: no/forward-first: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ "${ENABLE_IPV4}" == "false" ]; then
+            sed -i "s/do\-ip4\: yes/do\-ip4\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_IPV6}" == "false" ]; then
+            sed -i "s/do\-ip6\: yes/do\-ip6\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_IP64}" == "true" ]; then
+            sed -i "s/do\-nat64\: no/do\-nat64\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_LOGFILE}" == "true" ]; then
