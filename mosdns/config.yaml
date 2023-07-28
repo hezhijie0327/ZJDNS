@@ -2,6 +2,16 @@ log:
   level: error
   production: true
 plugins:
+  - tag: forward_query_to_recursive
+    type: forward
+    args:
+      concurrent: 1
+      upstreams:
+        - addr: 'tcp://localhost'
+          dial_addr: '127.0.0.1:5335'
+          enable_http3: false
+          enable_pipeline: true
+          insecure_skip_verify: true
   - tag: forward_query_to_local_ecs_doh_ipv4
     type: forward
     args:
@@ -876,6 +886,9 @@ plugins:
 #@    - exec: jump sequence_check_response_has_any_answer
 #)    - exec: $fallback_forward_query_to_remote_ecs_ipv64
       - exec: jump sequence_check_response_has_dns64_answer
+#!    - exec: jump sequence_check_response_has_invalid_answer
+#!    - exec: jump sequence_check_response_has_any_answer
+#!    - exec: $forward_query_to_recursive
       - exec: jump sequence_check_response_has_any_answer
   - tag: sequence_forward_query_to_no_ecs
     type: sequence
@@ -888,6 +901,9 @@ plugins:
 #@    - exec: jump sequence_check_response_has_any_answer
 #)    - exec: $fallback_forward_query_to_remote_no_ecs_ipv64
       - exec: jump sequence_check_response_has_dns64_answer
+#!    - exec: jump sequence_check_response_has_invalid_answer
+#!    - exec: jump sequence_check_response_has_any_answer
+#!    - exec: $forward_query_to_recursive
       - exec: jump sequence_check_response_has_any_answer
   - tag: fallback_sequence_forward_query_to_prefer_ecs
     type: fallback
