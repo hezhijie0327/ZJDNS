@@ -26,10 +26,10 @@ ENABLE_REMOTE_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 ENABLE_LOCAL_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 ENABLE_REMOTE_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 
-CUSTOM_UPSTREAM="" # 127.0.0.1:5335
-ENABLE_HTTPS_UPSTREAM="false"
-ENABLE_TCP_UPSTREAM="false"
-ENABLE_TLS_UPSTREAM="false"
+CUSTOM_RECURSIVE_UPSTREAM="" # default, 127.0.0.1:5335
+ENABLE_RECURSIVE_HTTPS_UPSTREAM="false"
+ENABLE_RECURSIVE_TCP_UPSTREAM="false"
+ENABLE_RECURSIVE_TLS_UPSTREAM="false"
 
 HTTPS_PORT="" # 5553
 TLS_PORT="" # 5535
@@ -110,16 +110,18 @@ function DownloadConfiguration() {
             fi
         fi
 
-        if [ "${CUSTOM_UPSTREAM}" != "" ]; then
-            sed -i "s/127.0.0.1:5335/${CUSTOM_UPSTREAM}/g" "${DOCKER_PATH}/conf/config.yaml"
+        if [ "${CUSTOM_RECURSIVE_UPSTREAM}" != "" ]; then
+            if [ "${CUSTOM_RECURSIVE_UPSTREAM}" != "default" ]; then
+                sed -i "s/127.0.0.1:5335/${CUSTOM_RECURSIVE_UPSTREAM}/g" "${DOCKER_PATH}/conf/config.yaml"
+            fi && sed -i 's/#!/  /g' "${DOCKER_PATH}/conf/config.yaml"
         fi
-        if [ "${ENABLE_HTTPS_UPSTREAM}" == "true" ]; then
+        if [ "${ENABLE_RECURSIVE_HTTPS_UPSTREAM}" == "true" ]; then
             sed -i "s|tcp://localhost|https://localhost/dns-query|g" "${DOCKER_PATH}/conf/config.yaml"
         fi
-        if [ "${ENABLE_TCP_UPSTREAM}" == "false" ]; then
+        if [ "${ENABLE_RECURSIVE_TCP_UPSTREAM}" == "false" ]; then
             sed -i "s|tcp://localhost|udp://localhost|g" "${DOCKER_PATH}/conf/config.yaml"
         fi
-        if [ "${ENABLE_TLS_UPSTREAM}" == "true" ]; then
+        if [ "${ENABLE_RECURSIVE_TLS_UPSTREAM}" == "true" ]; then
             sed -i "s|tcp://localhost|tls://localhost|g" "${DOCKER_PATH}/conf/config.yaml"
         fi
 
