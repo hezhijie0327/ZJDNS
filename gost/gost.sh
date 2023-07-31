@@ -60,7 +60,7 @@ function CreateNewContainer() {
 
         docker run --name ${CONTAINER_NAME:-${REPO}} --net host --restart=always \
             -d ${OWNER}/${REPO}:${TAG} \
-            -L "udp://:${WG_LOCAL_PORT:-51821}/127.0.0.1:${WG_REMOTE_PORT:-51820}?keepAlive=true&ttl=5s" \
+            -L "udp://:${WG_LOCAL_PORT:-51821}/127.0.0.1:${WG_REMOTE_PORT:-51820}?keepAlive=true&ttl=1s" \
             -F "relay+grpc://${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52}:${GRPC_PASSWORD:-$(echo ${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52} | base64)}@${GOST_HOST:-demo.zhijie.online}:${GOST_PORT:-8443}${GOST_HOSTS_LIST}"
     fi
 }
