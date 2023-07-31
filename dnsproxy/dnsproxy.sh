@@ -8,10 +8,16 @@ DOCKER_PATH="/docker/dnsproxy"
 
 LISTEN_IP="" # 0.0.0.0
 
-UPSTREAM_DNS="" # 127.0.0.1:5533
+RUNNING_MODE="" # all-servers, fastest-addr
 
+BOOTSTRAP_DNS=()
+FALLBACK_DNS=()
+UPSTREAM_DNS=() # 127.0.0.1:5533
+
+ENABLE_CACHE="true"
 CACHE_SIZE="" # 4194304
 
+ENABLE_EDNS="false"
 EDNS_ADDR="" # auto, 127.0.0.1, ::1
 EDNS_ADDR_TYPE="" # A, AAAA
 
@@ -19,6 +25,12 @@ HTTPS_PORT="" # 3335
 QUIC_PORT="" # 3555
 TLS_PORT="" # 3555
 UNENCRYPTED_PORT="" # 3355
+
+ENABLE_HTTP3="false"
+ENABLE_HTTPS="false"
+ENABLE_QUIC="false"
+ENABLE_TLS="false"
+ENABLE_UNENCRYPTED_DNS="true"
 
 SSL_CERT="" # fullchain.cer
 SSL_KEY="" # zhijie.online.key
@@ -91,34 +103,61 @@ function CleanupCurrentContainer() {
 function CreateNewContainer() {
     RUNTIME_CONFIG=(
         "--listen=${LISTEN_IP:-0.0.0.0}"
-        "--port=${UNENCRYPTED_PORT:-3355}"
-        "--https-port=${HTTPS_PORT:-3335}"
-        "--quic-port=${QUIC_PORT:-3555}"
-        "--tls-port=${TLS_PORT:-3555}"
-        "--tls-crt=/etc/dnsproxy/cert/${SSL_CERT:-fullchain.cer}"
-        "--tls-key=/etc/dnsproxy/cert/${SSL_KEY:-zhijie.online.key}"
-        "--bootstrap=tls://223.5.5.5:853"
-        "--bootstrap=tls://223.6.6.6:853"
-        "--bootstrap=tls://[2400:3200::1]:853"
-        "--bootstrap=tls://[2400:3200:baba::1]:853"
-        "--fallback=tls://223.5.5.5:853"
-        "--fallback=tls://223.6.6.6:853"
-        "--fallback=tls://[2400:3200::1]:853"
-        "--fallback=tls://[2400:3200:baba::1]:853"
-        "--upstream=${UPSTREAM_DNS:-127.0.0.1:5533}"
-        "--cache"
-        "--cache-size=${CACHE_SIZE:-4194304}"
-        "--cache-max-ttl=86400"
-        "--cache-min-ttl=0"
-        "--cache-optimistic"
-        "--edns-addr=$(StaticIP="${EDNS_ADDR}" && Type="${EDNS_ADDR_TYPE:-A}" && GetWANIP)"
-        "--edns"
-        "--http3"
         "--insecure"
         "--ratelimit=1000"
         "--refuse-any"
         "--timeout=5s"
     )
+
+    for BOOTSTRAP_DNS_TASK in "${!BOOTSTRAP_DNS[@]}"; do
+        RUNTIME_CONFIG+=("--bootstrap=${BOOTSTRAP_DNS[$BOOTSTRAP_DNS_TASK]}")
+    done
+
+    for FALLBACK_DNS_TASK in "${!FALLBACK_DNS[@]}"; do
+        RUNTIME_CONFIG+=("--fallback=${FALLBACK_DNS[$FALLBACK_DNS_TASK]}")
+    done
+
+    for UPSTREAM_DNS_TASK in "${!UPSTREAM_DNS[@]}"; do
+        RUNTIME_CONFIG+=("--upstream=${UPSTREAM_DNS[$UPSTREAM_DNS_TASK]}")
+    done
+
+    if [ "${RUNNING_MODE}" == "all-servers" ]; then
+        RUNTIME_CONFIG+=("--all-servers")
+    elif [ "${RUNNING_MODE}" == "fastest-addr" ]; then
+        RUNTIME_CONFIG+=("--fastest-addr")
+    fi
+
+    if [ "${ENABLE_CACHE}" == "true" ]; then
+        RUNTIME_CONFIG+=("--cache" "--cache-size=${CACHE_SIZE:-4194304}" "--cache-max-ttl=86400" "--cache-min-ttl=0" "--cache-optimistic")
+    fi
+
+    if [ "${ENABLE_EDNS}" == "true" ]; then
+        RUNTIME_CONFIG+=("--edns" "--edns-addr=$(StaticIP=${EDNS_ADDR} && Type=${EDNS_ADDR_TYPE:-A} && GetWANIP)")
+    fi
+
+    if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
+        if [ "${ENABLE_HTTPS}" == "false" ] && [ "${ENABLE_TLS}" == "false" ]; then
+            RUNTIME_CONFIG+=("--port=${UNENCRYPTED_PORT:-3355}")
+        fi
+    else
+        RUNTIME_CONFIG+=("--port=${UNENCRYPTED_PORT:-3355}")
+    fi
+
+    if [ "${ENABLE_HTTP3}" == "true" ]; then
+        RUNTIME_CONFIG+=("--http3")
+    fi
+    if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_HTTP3}" == "true" ]; then
+        RUNTIME_CONFIG+=("--https-port=${HTTPS_PORT:-3335}")
+    fi
+    if [ "${ENABLE_QUIC}" == "true" ]; then
+        RUNTIME_CONFIG+=("--quic-port=${QUIC_PORT:-3555}")
+    fi
+    if [ "${ENABLE_TLS}" == "true" ]; then
+        RUNTIME_CONFIG+=("--tls-port=${TLS_PORT:-3335}")
+    fi
+    if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_QUIC}" == "true" ] || [ "${ENABLE_TLS}" == "true" ]; then
+        RUNTIME_CONFIG+=("--tls-crt=/etc/dnsproxy/cert/${SSL_CERT:-fullchain.cer}" "--tls-key=/etc/dnsproxy/cert/${SSL_KEY:-zhijie.online.key}")
+    fi
 
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/dnsproxy/cert:ro \
