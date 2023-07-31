@@ -143,11 +143,11 @@ function CreateNewContainer() {
         RUNTIME_CONFIG+=("--port=${UNENCRYPTED_PORT:-3355}")
     fi
 
-    if [ "${ENABLE_HTTP3}" == "true" ]; then
-        RUNTIME_CONFIG+=("--http3")
-    fi
-    if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_HTTP3}" == "true" ]; then
+    if [ "${ENABLE_HTTPS}" == "true" ]; then
         RUNTIME_CONFIG+=("--https-port=${HTTPS_PORT:-3335}")
+        if [ "${ENABLE_HTTP3}" == "true" ]; then
+            RUNTIME_CONFIG+=("--http3")
+        fi
     fi
     if [ "${ENABLE_QUIC}" == "true" ]; then
         RUNTIME_CONFIG+=("--quic-port=${QUIC_PORT:-3555}")
