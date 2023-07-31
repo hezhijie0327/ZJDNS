@@ -10,9 +10,9 @@ LISTEN_IP="" # 0.0.0.0
 
 RUNNING_MODE="" # all-servers, fastest-addr
 
-BOOTSTRAP_DNS=()
-FALLBACK_DNS=()
-UPSTREAM_DNS=() # 127.0.0.1:5533
+BOOTSTRAP_DNS=() # ("tls://8.8.4.4:853" "tls://8.8.8.8:853" "tls://[2001:4860:4860::8844]:853" "tls://[2001:4860:4860::8888]:853")
+FALLBACK_DNS=() # ("tls://223.5.5.5:853" "tls://223.6.6.6:853" "tls://[2400:3200::1]:853" "tls://[2400:3200:baba::1]:853")
+UPSTREAM_DNS=() # ("127.0.0.1:5533")
 
 ENABLE_CACHE="true"
 CACHE_SIZE="" # 4194304
@@ -20,6 +20,8 @@ CACHE_SIZE="" # 4194304
 ENABLE_EDNS="false"
 EDNS_ADDR="" # auto, 127.0.0.1, ::1
 EDNS_ADDR_TYPE="" # A, AAAA
+
+ENABLE_IPV6="true"
 
 HTTPS_PORT="" # 3335
 QUIC_PORT="" # 3555
@@ -104,9 +106,11 @@ function CreateNewContainer() {
     RUNTIME_CONFIG=(
         "--listen=${LISTEN_IP:-0.0.0.0}"
         "--insecure"
+        "--max-go-routines=1000"
         "--ratelimit=1000"
         "--refuse-any"
         "--timeout=5s"
+        "--udp-buf-size=1232"
     )
 
     for BOOTSTRAP_DNS_TASK in "${!BOOTSTRAP_DNS[@]}"; do
@@ -133,6 +137,10 @@ function CreateNewContainer() {
 
     if [ "${ENABLE_EDNS}" == "true" ]; then
         RUNTIME_CONFIG+=("--edns" "--edns-addr=$(StaticIP=${EDNS_ADDR} && Type=${EDNS_ADDR_TYPE:-A} && GetWANIP)")
+    fi
+
+    if [ "${ENABLE_IPV6}" == "false" ]; then
+        RUNTIME_CONFIG+=("--ipv6-disabled")
     fi
 
     if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
