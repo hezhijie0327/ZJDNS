@@ -11,7 +11,7 @@ CONTAINER_NAME="" # gost
 
 GOST_HOST="" # demo.zhijie.online
 GOST_IP=() # ("1.0.0.1" "1.1.1.1")
-GOST_DYNAMIC_IP="" # cdn.jsdelivr.net.cdn.cloudflare.net,223.5.5.5, cdn.cloudflare.steamstatic.com,223.6.6.6
+GOST_DYNAMIC_IP="" # cdn.jsdelivr.net.cdn.cloudflare.net,127.0.0.1 | production.cloudflare.docker.com,127.0.0.1 | cdn.cloudflare.steamstatic.com,127.0.0.1
 GOST_PORT="" # 8443
 
 GRPC_USERNAME="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
