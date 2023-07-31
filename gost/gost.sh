@@ -67,7 +67,7 @@ function CreateNewContainer() {
 # Cleanup Expired Image
 function CleanupExpiredImage() {
     if [ "${IMAGES}" != "" ]; then
-        docker rmi ${IMAGES}
+        docker rmi ${IMAGES} > "/dev/null" 2>&1
     fi
 }
 
