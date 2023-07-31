@@ -104,8 +104,8 @@ function CleanupCurrentContainer() {
 # Create New Container
 function CreateNewContainer() {
     RUNTIME_CONFIG=(
-        "--listen=${LISTEN_IP:-0.0.0.0}"
         "--insecure"
+        "--listen=${LISTEN_IP:-0.0.0.0}"
         "--max-go-routines=1000"
         "--ratelimit=1000"
         "--refuse-any"
