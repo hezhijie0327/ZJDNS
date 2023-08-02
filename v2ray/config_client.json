@@ -268,15 +268,11 @@
                     }
                 }
             ],
-            "balancerTag": "balancer",
             "domainMatcher": "mph",
             "domainStrategy": "IPIfNonMatch",
             "rules": [
                 {
-                    "type": "field",
-                    "outboundTag": "direct",
                     "ip": [
-                        "ext:/etc/v2ray/data/geoip.dat:cn",
                         "0.0.0.0/8",
                         "10.0.0.0/8",
                         "100.64.0.0/10",
@@ -304,7 +300,16 @@
                         "2620:4f:8000::/48",
                         "fc00::/7",
                         "fe80::/10"
-                    ]
+                    ],
+                    "outboundTag": "direct",
+                    "type": "field"
+                },
+                {
+                    "ip": [
+                        "ext:/etc/v2ray/data/geoip.dat:!cn"
+                    ],
+                    "balancerTag": "balancer",
+                    "type": "field"
                 }
             ]
         }
