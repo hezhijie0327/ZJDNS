@@ -22,6 +22,10 @@
     ],
     "outbounds": [
         {
+            "protocol": "freedom",
+            "tag": "direct"
+        },
+        {
             "protocol": "shadowsocks",
             "settings": {
                 "servers": [
@@ -244,8 +248,7 @@
                 }
             },
             "tag": "vmess_wss"
-        },
-        { "protocol": "freedom", "tag": "direct" }
+        }
     ],
     "routing": {
         "strategy": "rules",
