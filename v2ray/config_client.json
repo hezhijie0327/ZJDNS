@@ -245,10 +245,7 @@
             },
             "tag": "vmess_wss"
         },
-        {
-            "protocol": "freedom",
-            "tag": "direct"
-        }
+        { "protocol": "freedom", "tag": "direct" }
     ],
     "routing": {
         "strategy": "rules",
@@ -279,7 +276,7 @@
                     "type": "field",
                     "outboundTag": "direct",
                     "ip": [
-                        "geoip:cn",
+                        "ext:/etc/v2ray/data/geoip.dat:cn",
                         "0.0.0.0/8",
                         "10.0.0.0/8",
                         "100.64.0.0/10",
