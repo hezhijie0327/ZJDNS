@@ -1,0 +1,315 @@
+{
+    "inbounds": [
+        {
+            "listen": "0.0.0.0",
+            "port": 7890,
+            "protocol": "http",
+            "settings": {
+                "allowTransparent": false,
+                "timeout": 0,
+                "userLevel": 0
+            }
+        },
+        {
+            "listen": "0.0.0.0",
+            "port": 7891,
+            "protocol": "socks",
+            "settings": {
+                "udp": true,
+                "userLevel": 0
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "protocol": "shadowsocks",
+            "settings": {
+                "servers": [
+                    {
+                        "address": "demo.zhijie.online",
+                        "level": 0,
+                        "method": "chacha20-ietf-poly1305",
+                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "port": 443
+                    }
+                ]
+            },
+            "streamSettings": {
+                "grpcSettings": {
+                    "serviceName": "gRPCSHADOWSOCKS"
+                },
+                "network": "grpc",
+                "security": "tls"
+            },
+            "tag": "shadowsocks_grpc"
+        },
+        {
+            "protocol": "trojan",
+            "settings": {
+                "servers": [
+                    {
+                        "address": "demo.zhijie.online",
+                        "level": 0,
+                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "port": 443
+                    }
+                ]
+            },
+            "streamSettings": {
+                "grpcSettings": {
+                    "serviceName": "gRPCTROJAN"
+                },
+                "network": "grpc",
+                "security": "tls"
+            },
+            "tag": "trojan_grpc"
+        },
+        {
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "demo.zhijie.online",
+                        "port": 443,
+                        "users": [
+                            {
+                                "encryption": "none",
+                                "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                                "level": 0
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "grpcSettings": {
+                    "serviceName": "gRPCVLESS"
+                },
+                "network": "grpc",
+                "security": "tls"
+            },
+            "tag": "vless_grpc"
+        },
+        {
+            "protocol": "vmess",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "demo.zhijie.online",
+                        "port": 443,
+                        "users": [
+                            {
+                                "alterId": 0,
+                                "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                                "level": 0,
+                                "security": "auto"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "grpcSettings": {
+                    "serviceName": "gRPCVMESS"
+                },
+                "network": "grpc",
+                "security": "tls"
+            },
+            "tag": "vmess_grpc"
+        },
+        {
+            "protocol": "shadowsocks",
+            "settings": {
+                "servers": [
+                    {
+                        "address": "demo.zhijie.online",
+                        "level": 0,
+                        "method": "chacha20-ietf-poly1305",
+                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "port": 443
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "tls",
+                "wsSettings": {
+                    "acceptProxyProtocol": false,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-shadowsocks",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
+                }
+            },
+            "tag": "shadowsocks_wss"
+        },
+        {
+            "protocol": "trojan",
+            "settings": {
+                "servers": [
+                    {
+                        "address": "demo.zhijie.online",
+                        "level": 0,
+                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                        "port": 443
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "tls",
+                "wsSettings": {
+                    "acceptProxyProtocol": false,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-trojan",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
+                }
+            },
+            "tag": "trojan_wss"
+        },
+        {
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "demo.zhijie.online",
+                        "port": 443,
+                        "users": [
+                            {
+                                "encryption": "none",
+                                "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                                "level": 0
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "tls",
+                "wsSettings": {
+                    "acceptProxyProtocol": false,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-vless",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
+                }
+            },
+            "tag": "vless_wss"
+        },
+        {
+            "protocol": "vmess",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "demo.zhijie.online",
+                        "port": 443,
+                        "users": [
+                            {
+                                "alterId": 0,
+                                "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
+                                "level": 0,
+                                "security": "auto"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "tls",
+                "wsSettings": {
+                    "acceptProxyProtocol": false,
+                    "earlyDataHeaderName": "",
+                    "headers": {
+                        "Host": "demo.zhijie.online"
+                    },
+                    "maxEarlyData": 4096,
+                    "path": "/wss-vmess",
+                    "pinnedPeerCertificateChainSha256": "",
+                    "useBrowserForwarding": false
+                }
+            },
+            "tag": "vmess_wss"
+        },
+        {
+            "protocol": "freedom",
+            "tag": "direct"
+        }
+    ],
+    "routing": {
+        "strategy": "rules",
+        "settings": {
+            "balancers": [
+                {
+                    "tag": "balancer",
+                    "selector": [
+                        "shadowsocks_grpc",
+                        "shadowsocks_wss",
+                        "trojan_grpc",
+                        "trojan_wss",
+                        "vless_grpc",
+                        "vless_wss",
+                        "vmess_grpc",
+                        "vmess_wss"
+                    ],
+                    "strategy": {
+                        "type": "leastPing"
+                    }
+                }
+            ],
+            "balancerTag": "balancer",
+            "domainMatcher": "mph",
+            "domainStrategy": "IPIfNonMatch",
+            "rules": [
+                {
+                    "type": "field",
+                    "outboundTag": "direct",
+                    "ip": [
+                        "geoip:cn",
+                        "0.0.0.0/8",
+                        "10.0.0.0/8",
+                        "100.64.0.0/10",
+                        "127.0.0.0/8",
+                        "169.254.0.0/16",
+                        "172.16.0.0/12",
+                        "192.0.0.0/24",
+                        "192.0.2.0/24",
+                        "192.31.196.0/24",
+                        "192.52.193.0/24",
+                        "192.88.99.0/24",
+                        "192.168.0.0/16",
+                        "192.175.48.0/24",
+                        "198.18.0.0/15",
+                        "198.51.100.0/24",
+                        "203.0.113.0/24",
+                        "240.0.0.0/4",
+                        "::/127",
+                        "64:ff9b::/96",
+                        "64:ff9b:1::/48",
+                        "100::/64",
+                        "2001::/23",
+                        "2001:db8::/32",
+                        "2002::/16",
+                        "2620:4f:8000::/48",
+                        "fc00::/7",
+                        "fe80::/10"
+                    ]
+                }
+            ]
+        }
+    }
+}
