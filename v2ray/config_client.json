@@ -65,32 +65,6 @@
             "tag": "trojan_grpc"
         },
         {
-            "protocol": "vless",
-            "settings": {
-                "vnext": [
-                    {
-                        "address": "demo.zhijie.online",
-                        "port": 443,
-                        "users": [
-                            {
-                                "encryption": "none",
-                                "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                                "level": 0
-                            }
-                        ]
-                    }
-                ]
-            },
-            "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPCVLESS"
-                },
-                "network": "grpc",
-                "security": "tls"
-            },
-            "tag": "vless_grpc"
-        },
-        {
             "protocol": "vmess",
             "settings": {
                 "vnext": [
@@ -177,40 +151,6 @@
             "tag": "trojan_wss"
         },
         {
-            "protocol": "vless",
-            "settings": {
-                "vnext": [
-                    {
-                        "address": "demo.zhijie.online",
-                        "port": 443,
-                        "users": [
-                            {
-                                "encryption": "none",
-                                "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                                "level": 0
-                            }
-                        ]
-                    }
-                ]
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "tls",
-                "wsSettings": {
-                    "acceptProxyProtocol": false,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-vless",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            },
-            "tag": "vless_wss"
-        },
-        {
             "protocol": "vmess",
             "settings": {
                 "vnext": [
@@ -256,8 +196,6 @@
                     "shadowsocks_wss",
                     "trojan_grpc",
                     "trojan_wss",
-                    "vless_grpc",
-                    "vless_wss",
                     "vmess_grpc",
                     "vmess_wss"
                 ],
