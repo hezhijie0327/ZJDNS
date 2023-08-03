@@ -262,7 +262,7 @@
                     "vmess_wss"
                 ],
                 "strategy": {
-                    "type": "leastPing"
+                    "type": "random"
                 }
             }
         ],
