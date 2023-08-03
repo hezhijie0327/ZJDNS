@@ -41,7 +41,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7895,
+            "port": 7894,
             "protocol": "vmess",
             "settings": {
                 "clients": [
@@ -64,7 +64,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7896,
+            "port": 7895,
             "protocol": "shadowsocks",
             "settings": {
                 "ivCheck": true,
@@ -91,7 +91,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7897,
+            "port": 7896,
             "protocol": "trojan",
             "settings": {
                 "clients": [
@@ -119,7 +119,7 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7899,
+            "port": 7897,
             "protocol": "vmess",
             "settings": {
                 "clients": [
