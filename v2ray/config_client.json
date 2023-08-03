@@ -21,7 +21,6 @@
         }
     ],
     "outbounds": [
-        { "protocol": "freedom", "tag": "direct" },
         {
             "protocol": "shadowsocks",
             "settings": {
@@ -245,7 +244,8 @@
                 }
             },
             "tag": "vmess_wss"
-        }
+        },
+        { "protocol": "freedom", "tag": "direct" }
     ],
     "routing": {
         "balancers": [
