@@ -3,7 +3,7 @@
 # Parameter
 OWNER="hezhijie0327"
 REPO="clash"
-TAG="latest" # latest, meta
+TAG="latest"
 DOCKER_PATH="/docker/clash"
 
 CURL_OPTION=""
@@ -19,8 +19,6 @@ CUSTOM_UUID="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
 ENABLE_SHADOWSOCKS_WSS="false"
 ENABLE_TROJAN_GRPC="false"
 ENABLE_TROJAN_WSS="false"
-ENABLE_VLESS_GRPC="false"
-ENABLE_VLESS_WSS="false"
 ENABLE_VMESS_GRPC="false"
 ENABLE_VMESS_WSS="true"
 
@@ -29,9 +27,7 @@ RUNNING_MODE="" # fallback, load-balance, url-test
 ## Function
 # Get Latest Image
 function GetLatestImage() {
-    if [ "${ENABLE_VLESS_GRPC}" == "true" ] || [ "${ENABLE_VLESS_WSS}" == "true" ]; then
-        TAG="meta"
-    fi && docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
+    docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
 # Cleanup Current Container
 function CleanupCurrentContainer() {
@@ -66,20 +62,12 @@ function DownloadConfiguration() {
             sed -i 's/#)/  /g' "${DOCKER_PATH}/conf/config.yaml"
             PROXY_LIST="TROJAN_WSS ${PROXY_LIST}"
         fi
-        if [ "${ENABLE_VLESS_GRPC}" == "true" ]; then
-            sed -i 's/#</  /g' "${DOCKER_PATH}/conf/config.yaml"
-            PROXY_LIST="VLESS_GRPC ${PROXY_LIST}"
-        fi
-        if [ "${ENABLE_VLESS_WSS}" == "true" ]; then
-            sed -i 's/#>/  /g' "${DOCKER_PATH}/conf/config.yaml"
-            PROXY_LIST="VLESS_WSS ${PROXY_LIST}"
-        fi
         if [ "${ENABLE_VMESS_GRPC}" == "true" ]; then
             sed -i 's/##/  /g' "${DOCKER_PATH}/conf/config.yaml"
             PROXY_LIST="VMESS_GRPC ${PROXY_LIST}"
         fi
         if [ "${ENABLE_VMESS_WSS}" == "false" ]; then
-            if [ "${ENABLE_SHADOWSOCKS_WSS}" != "false" ] || [ "${ENABLE_TROJAN_GRPC}" != "false" ] || [ "${ENABLE_TROJAN_WSS}" != "false" ] || [ "${ENABLE_VLESS_GRPC}" != "false" ] || [ "${ENABLE_VLESS_WSS}" != "false" ] || [ "${ENABLE_VMESS_GRPC}" != "false" ]; then
+            if [ "${ENABLE_SHADOWSOCKS_WSS}" != "false" ] || [ "${ENABLE_TROJAN_GRPC}" != "false" ] || [ "${ENABLE_TROJAN_WSS}" != "false" ] || [ "${ENABLE_VMESS_GRPC}" != "false" ]; then
                 sed -i 's/  - { name: VMESS_WSS/##- { name: VMESS_WSS/g' "${DOCKER_PATH}/conf/config.yaml"
             else
                 PROXY_LIST="VMESS_WSS ${PROXY_LIST}"
