@@ -41,27 +41,6 @@
         },
         {
             "listen": "127.0.0.1",
-            "port": 7894,
-            "protocol": "vless",
-            "settings": {
-                "clients": [
-                    {
-                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                        "level": 0
-                    }
-                ],
-                "decryption": "none"
-            },
-            "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPCVLESS"
-                },
-                "network": "grpc",
-                "security": "none"
-            }
-        },
-        {
-            "listen": "127.0.0.1",
             "port": 7895,
             "protocol": "vmess",
             "settings": {
@@ -133,35 +112,6 @@
                     },
                     "maxEarlyData": 4096,
                     "path": "/wss-trojan",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            }
-        },
-        {
-            "port": 7898,
-            "listen": "127.0.0.1",
-            "protocol": "vless",
-            "settings": {
-                "clients": [
-                    {
-                        "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                        "level": 0
-                    }
-                ],
-                "decryption": "none"
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "none",
-                "wsSettings": {
-                    "acceptProxyProtocol": false,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-vless",
                     "pinnedPeerCertificateChainSha256": "",
                     "useBrowserForwarding": false
                 }
