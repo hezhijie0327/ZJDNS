@@ -14,6 +14,9 @@ GOST_IP=() # ("1.0.0.1" "1.1.1.1")
 GOST_DYNAMIC_IP="" # cdn.jsdelivr.net.cdn.cloudflare.net,127.0.0.1 | production.cloudflare.docker.com,127.0.0.1 | cdn.cloudflare.steamstatic.com,127.0.0.1
 GOST_PORT="" # 8443
 
+GOST_KNOCK="" # demo.zhijie.online
+GOST_PROBERESISTANCE="" # code:403, web:demo.zhijie.online/page.html, host:demo.zhijie.online:443, file:/send/to/client/file.txt
+
 GRPC_USERNAME="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
 GRPC_PASSWORD="" # $(echo "${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52}" | base64)
 
@@ -36,12 +39,20 @@ function CleanupCurrentContainer() {
 }
 # Create New Container
 function CreateNewContainer() {
+    if [ "${GOST_PROBERESISTANCE}" != "" ]; then
+        GOST_ADDITIONAL_PARAMETERS="?probeResistance=${GOST_PROBERESISTANCE}"
+
+        if [ "${GOST_KNOCK}" != "" ]; then
+            GOST_ADDITIONAL_PARAMETERS="${GOST_ADDITIONAL_PARAMETERS}&knock=${GOST_KNOCK}"
+        fi
+    fi
+
     if [ "${RUNNING_MODE:-server}" == "server" ]; then
         docker run --name ${CONTAINER_NAME:-${REPO}} --net host --restart=always \
             -v /docker/ssl/${SSL_CERT:-fullchain.cer}:/cert.pem:ro \
             -v /docker/ssl/${SSL_KEY:-zhijie.online.key}:/key.pem:ro \
             -d ${OWNER}/${REPO}:${TAG} \
-            -L "relay+grpc://${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52}:${GRPC_PASSWORD:-$(echo ${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52} | base64)}@:${GOST_PORT:-8443}?probeResistance=code:403"
+            -L "relay+grpc://${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52}:${GRPC_PASSWORD:-$(echo ${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52} | base64)}@:${GOST_PORT:-8443}${GOST_ADDITIONAL_PARAMETERS}"
     else
         if [ "${GOST_DYNAMIC_IP}" != "" ]; then
             GOST_IP=(
