@@ -52,6 +52,8 @@ function CreateNewContainer() {
             -v /docker/ssl/${SSL_CERT:-fullchain.cer}:/cert.pem:ro \
             -v /docker/ssl/${SSL_KEY:-zhijie.online.key}:/key.pem:ro \
             -d ${OWNER}/${REPO}:${TAG} \
+            -L "http://:7890" \
+            -L "socks5://:7891" \
             -L "relay+grpc://${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52}:${GRPC_PASSWORD:-$(echo ${GRPC_USERNAME:-99235a6e-05d4-2afe-2990-5bc5cf1f5c52} | base64)}@:${GOST_PORT:-8443}${GOST_ADDITIONAL_PARAMETERS}"
     else
         if [ "${GOST_DYNAMIC_IP}" != "" ]; then
