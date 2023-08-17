@@ -39,7 +39,10 @@
                     "serviceName": "gRPCSHADOWSOCKS"
                 },
                 "network": "grpc",
-                "security": "tls"
+                "security": "tls",
+                "tlsSettings": {
+                    "serverName": "demo.zhijie.online"
+                }
             },
             "tag": "shadowsocks_grpc"
         },
@@ -60,7 +63,10 @@
                     "serviceName": "gRPCTROJAN"
                 },
                 "network": "grpc",
-                "security": "tls"
+                "security": "tls",
+                "tlsSettings": {
+                    "serverName": "demo.zhijie.online"
+                }
             },
             "tag": "trojan_grpc"
         },
@@ -87,7 +93,10 @@
                     "serviceName": "gRPCVMESS"
                 },
                 "network": "grpc",
-                "security": "tls"
+                "security": "tls",
+                "tlsSettings": {
+                    "serverName": "demo.zhijie.online"
+                }
             },
             "tag": "vmess_grpc"
         },
@@ -107,6 +116,9 @@
             "streamSettings": {
                 "network": "ws",
                 "security": "tls",
+                "tlsSettings": {
+                    "serverName": "demo.zhijie.online"
+                },
                 "wsSettings": {
                     "acceptProxyProtocol": false,
                     "earlyDataHeaderName": "",
@@ -136,6 +148,9 @@
             "streamSettings": {
                 "network": "ws",
                 "security": "tls",
+                "tlsSettings": {
+                    "serverName": "demo.zhijie.online"
+                },
                 "wsSettings": {
                     "acceptProxyProtocol": false,
                     "earlyDataHeaderName": "",
@@ -171,6 +186,9 @@
             "streamSettings": {
                 "network": "ws",
                 "security": "tls",
+                "tlsSettings": {
+                    "serverName": "demo.zhijie.online"
+                },
                 "wsSettings": {
                     "acceptProxyProtocol": false,
                     "earlyDataHeaderName": "",
