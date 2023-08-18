@@ -286,7 +286,7 @@
                     "vmess_wss"
                 ],
                 "strategy": {
-                    "type": "random"
+                    "type": "leastping"
                 }
             }
         ],
@@ -334,5 +334,9 @@
                 "type": "field"
             }
         ]
+    },
+    "observatory": {
+        "probeInterval": "15s",
+        "probeURL": "https://www.google.com/generate_204"
     }
 }
