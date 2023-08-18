@@ -334,9 +334,5 @@
                 "type": "field"
             }
         ]
-    },
-    "observatory": {
-        "probeInterval": "15s",
-        "probeURL": "https://cp.cloudflare.com"
     }
 }
