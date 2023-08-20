@@ -154,7 +154,7 @@ function DownloadConfiguration() {
         fi
 
         if [ -f "${DOCKER_PATH}/conf/smartdns.conf" ]; then
-            sed -i "/#/d" "${DOCKER_PATH}/conf/smartdns.conf"
+            sed -i "/#/d;/^$/d" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
         if [ ! -d "${DOCKER_PATH}/data" ]; then
