@@ -72,19 +72,15 @@ function DownloadConfiguration() {
             sed -i "/remote_ipv/d;/5303/d;/5304/d" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
-        if [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" == "false" ] || [ "${ENABLE_LOCAL_UPSTREAM}" == "false" ]; then
-            if [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" == "false" ]; then
-                sed -i "s/ -proxy local_proxy//g" "${DOCKER_PATH}/conf/smartdns.conf"
-            else
-                sed -i "s/socks5://127.0.0.1:7891 -name local_proxy/socks5://${ENABLE_LOCAL_UPSTREAM_PROXY} -name local_proxy/g" "${DOCKER_PATH}/conf/smartdns.conf"
-            fi
+        if [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" == "false" ]; then
+            sed -i "s/ -proxy local_proxy//g" "${DOCKER_PATH}/conf/smartdns.conf"
+        else
+            sed -i "s|socks5://127.0.0.1:7891 -name local_proxy|socks5://${ENABLE_LOCAL_UPSTREAM_PROXY} -name local_proxy|g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
-        if [ "${ENABLE_REMOTE_UPSTREAM_PROXY}" == "false" ] || [ "${ENABLE_REMOTE_UPSTREAM}" == "false" ]; then
-            if [ "${ENABLE_REMOTE_UPSTREAM_PROXY}" == "false" ]; then
-                sed -i "s/ -proxy remote_proxy//g" "${DOCKER_PATH}/conf/smartdns.conf"
-            else
-                sed -i "s/socks5://127.0.0.1:7891 -name remote_proxy/socks5://${ENABLE_REMOTE_UPSTREAM_PROXY} -name remote_proxy/g" "${DOCKER_PATH}/conf/smartdns.conf"
-            fi
+        if [ "${ENABLE_REMOTE_UPSTREAM_PROXY}" == "false" ]; then
+            sed -i "s/ -proxy remote_proxy//g" "${DOCKER_PATH}/conf/smartdns.conf"
+        else
+            sed -i "s|socks5://127.0.0.1:7891 -name remote_proxy|socks5://${ENABLE_REMOTE_UPSTREAM_PROXY} -name remote_proxy|g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
         if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
