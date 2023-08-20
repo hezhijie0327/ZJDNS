@@ -116,7 +116,6 @@ function DownloadConfiguration() {
         else
             sed -i "s/^/whitelist-ip /g" "${DOCKER_PATH}/data/GeoIP_CNIPDb.conf"
         fi
-
     fi
 }
 # Create New Container
