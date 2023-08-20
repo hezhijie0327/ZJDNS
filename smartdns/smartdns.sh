@@ -145,6 +145,8 @@ function CleanupExpiredImage() {
 GetLatestImage
 # Call CleanupCurrentContainer
 CleanupCurrentContainer
+# Call DownloadConfiguration
+DownloadConfiguration
 # Call CreateNewContainer
 CreateNewContainer
 # Call CleanupExpiredImage
