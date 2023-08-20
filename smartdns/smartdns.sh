@@ -175,7 +175,7 @@ function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/smartdns/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/smartdns/conf \
-        -v ${DOCKER_PATH}/conf:/etc/smartdns/data \
+        -v ${DOCKER_PATH}/data:/etc/smartdns/data \
         -v ${DOCKER_PATH}/work:/etc/smartdns/work \
         -d ${OWNER}/${REPO}:${TAG} \
         -c "/etc/smartdns/conf/smartdns.conf" \
