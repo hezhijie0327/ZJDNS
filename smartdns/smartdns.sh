@@ -75,7 +75,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/smartdns/smartdns.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/smartdns.conf"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/smartdns/smartdns.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" | sort | uniq > "${DOCKER_PATH}/conf/smartdns.conf"
 
         if [ "${SAVE_AUDIT_TO_FILE}" == "true" ]; then
             sed -i "s/audit-console yes/audit-console no/g" "${DOCKER_PATH}/conf/smartdns.conf"
