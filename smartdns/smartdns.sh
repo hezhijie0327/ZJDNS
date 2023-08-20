@@ -16,6 +16,8 @@ CACHE_PERSIST="" # false, true
 CACHE_SIZE="" # 4096
 
 MAX_REPLY_IP_NUM="1" # 1 - 16 (MAX)
+RESPONSE_MODE="" # first-ping, fastest-ip, fastest-response
+SPEED_CHECK_MODE="" # none, ping, tcp:port
 
 DUALSTACK_IP_ALLOW_FORCE_AAAA="" # false, true
 DUALSTACK_IP_SELECTION="" # false, true
@@ -79,6 +81,12 @@ function DownloadConfiguration() {
 
         if [ "${MAX_REPLY_IP_NUM}" != "1" ]; then
             sed -i "s/max-reply-ip-num 1/max-reply-ip-num ${MAX_REPLY_IP_NUM}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
+        if [ "${RESPONSE_MODE}" != "" ]; then
+            sed -i "s/response-mode first-ping/response-mode ${RESPONSE_MODE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
+        if [ "${SPEED_CHECK_MODE}" != "" ]; then
+            sed -i "s/speed-check-mode ping,tcp:80,tcp:443/speed-check-mode ${SPEED_CHECK_MODE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
         if [ "${DUALSTACK_IP_ALLOW_FORCE_AAAA}" != "false" ]; then
