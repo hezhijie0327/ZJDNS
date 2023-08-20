@@ -12,6 +12,9 @@ USE_CDN="true"
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, vxlink, zjdb
 
+SAVE_AUDIT_TO_FILE="" # false, true
+SAVE_LOG_TO_FILE="" # false, true
+
 SERVER_NAME="$(hostname)" # smartdns, $(hostname)
 
 CACHE_PERSIST="" # false, true
@@ -73,6 +76,13 @@ function DownloadConfiguration() {
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/smartdns/smartdns.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/smartdns.conf"
+
+        if [ "${SAVE_AUDIT_TO_FILE}" == "true" ]; then
+            sed -i "s/audit-console yes/audit-console no/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
+        if [ "${SAVE_LOG_TO_FILE}" == "true" ]; then
+            sed -i "s/log-console yes/log-console no/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
 
         if [ "${SERVER_NAME}" != "" ]; then
             sed -i "s/server-name smartdns/server-name ${SERVER_NAME}/g" "${DOCKER_PATH}/conf/smartdns.conf"
