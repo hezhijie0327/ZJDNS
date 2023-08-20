@@ -22,7 +22,7 @@ SERVER_NAME="$(hostname)" # smartdns, $(hostname)
 CACHE_PERSIST="" # false, true
 CACHE_SIZE="" # 4096
 
-MAX_REPLY_IP_NUM="1" # 1 - 16 (MAX)
+MAX_REPLY_IP_NUM="" # 1 - 16 (MAX)
 RESPONSE_MODE="" # first-ping, fastest-ip, fastest-response
 SPEED_CHECK_MODE="" # none, ping, tcp:port
 
@@ -101,7 +101,7 @@ function DownloadConfiguration() {
             sed -i "s/cache-size 4096/cache-size ${CACHE_SIZE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
-        if [ "${MAX_REPLY_IP_NUM}" != "1" ]; then
+        if [ "${MAX_REPLY_IP_NUM}" != "" ]; then
             sed -i "s/max-reply-ip-num 1/max-reply-ip-num ${MAX_REPLY_IP_NUM}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
         if [ "${RESPONSE_MODE}" != "" ]; then
