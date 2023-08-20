@@ -33,7 +33,9 @@ function CreateNewContainer() {
         -v ${DOCKER_PATH}/conf:/etc/smartdns/data \
         -v ${DOCKER_PATH}/work:/etc/smartdns/work \
         -d ${OWNER}/${REPO}:${TAG} \
-        -c="/etc/smartdns/conf/smartdns.conf"
+        -c "/etc/smartdns/conf/smartdns.conf" \
+        -p "/etc/smartdns/work/smartdns.pid" \
+        -f
 }
 # Cleanup Expired Image
 function CleanupExpiredImage() {
