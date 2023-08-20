@@ -105,7 +105,7 @@ function DownloadConfiguration() {
             sed -i "s/max-reply-ip-num 1/max-reply-ip-num ${MAX_REPLY_IP_NUM}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
         if [ "${RESPONSE_MODE}" != "" ]; then
-            sed -i "s/response-mode first-ping/response-mode ${RESPONSE_MODE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+            sed -i "s/response-mode fastest-response/response-mode ${RESPONSE_MODE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
         if [ "${SPEED_CHECK_MODE}" != "" ]; then
             sed -i "s/speed-check-mode ping,tcp:443,tcp:80/speed-check-mode ${SPEED_CHECK_MODE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
