@@ -12,6 +12,8 @@ USE_CDN="true"
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, vxlink, zjdb
 
+PREFER_REMOTE_UPSTREAM="false"
+
 ENABLE_LOCAL_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 ENABLE_REMOTE_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 
@@ -106,7 +108,15 @@ function DownloadConfiguration() {
 
         if [ ! -d "${DOCKER_PATH}/data" ]; then
             mkdir -p "${DOCKER_PATH}/data"
-        fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE:-geolite2}/country_ipv4_6.txt" | sed "s/^/whitelist-ip /g" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.conf"
+        fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE:-geolite2}/country_ipv4_6.txt" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.conf"
+
+        if [ "${PREFER_REMOTE_UPSTREAM}" == "true" ]; then
+            sed -i "s/-proxy remote_proxy/-blacklist-ip -proxy remote_proxy/g;s/-blacklist-ip -blacklist-ip/-blacklist-ip/g;s/-whitelist-ip //g" "${DOCKER_PATH}/conf/smartdns.conf"
+            sed -i "s/^/blacklist-ip /g" "${DOCKER_PATH}/data/GeoIP_CNIPDb.conf"
+        else
+            sed -i "s/^/whitelist-ip /g" "${DOCKER_PATH}/data/GeoIP_CNIPDb.conf"
+        fi
+
     fi
 }
 # Create New Container
