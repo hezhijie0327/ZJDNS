@@ -111,10 +111,10 @@ function DownloadConfiguration() {
             sed -i "s/speed-check-mode tcp:443,ping,tcp:80/speed-check-mode ${SPEED_CHECK_MODE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
-        if [ "${DUALSTACK_IP_ALLOW_FORCE_AAAA}" != "false" ]; then
+        if [ "${DUALSTACK_IP_ALLOW_FORCE_AAAA}" == "true" ]; then
             sed -i "s/dualstack-ip-allow-force-AAAA no/dualstack-ip-allow-force-AAAA yes/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
-        if [ "${DUALSTACK_IP_SELECTION}" != "false" ]; then
+        if [ "${DUALSTACK_IP_SELECTION}" == "true" ]; then
             sed -i "s/dualstack-ip-selection no/dualstack-ip-selection yes/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
@@ -126,7 +126,7 @@ function DownloadConfiguration() {
             sed -i "s/serve-expired yes/serve-expired no/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
-        if [ "${FORCE_AAAA_SOA}" != "false" ]; then
+        if [ "${FORCE_AAAA_SOA}" == "true" ]; then
             sed -i "s/force-AAAA-SOA no/force-AAAA-SOA yes/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
