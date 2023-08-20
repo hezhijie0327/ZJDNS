@@ -97,7 +97,7 @@ function DownloadConfiguration() {
         if [ "${CACHE_PERSIST}" == "false" ]; then
             sed -i "s/cache-persist yes/cache-persist no/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
-        if [ "${CACHE_SIZE}" != "4096" ]; then
+        if [ "${CACHE_SIZE}" != "" ]; then
             sed -i "s/cache-size 4096/cache-size ${CACHE_SIZE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
