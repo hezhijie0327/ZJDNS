@@ -20,8 +20,8 @@ ENABLE_REMOTE_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 ENABLE_LOCAL_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 ENABLE_REMOTE_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 
-TLS_PORT="" # 5535
-UNENCRYPTED_PORT="" # 5533
+TLS_PORT="" # 5355
+UNENCRYPTED_PORT="" # 5335
 
 ENABLE_TLS="false"
 ENABLE_UNENCRYPTED_DNS="true"
@@ -93,18 +93,18 @@ function DownloadConfiguration() {
 
         if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
             if [ "${ENABLE_TLS}" == "true" ]; then
-                sed -i "/bind [::]:5533/d;/bind-tcp [::]:5533/d" "${DOCKER_PATH}/conf/smartdns.conf"
+                sed -i "/bind [::]:5335/d;/bind-tcp [::]:5335/d" "${DOCKER_PATH}/conf/smartdns.conf"
             fi
         else
-            if [ "${UNENCRYPTED_PORT:-5533}" != "5533" ]; then
-                sed "s/bind [::]:5533/bind [::]:${UNENCRYPTED_PORT}/g;s/bind-tcp [::]:5533/bind-tcp [::]:${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+            if [ "${UNENCRYPTED_PORT:-5335}" != "5335" ]; then
+                sed "s/bind [::]:5335/bind [::]:${UNENCRYPTED_PORT}/g;s/bind-tcp [::]:5335/bind-tcp [::]:${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/smartdns.conf"
             fi
         fi
         if [ "${ENABLE_TLS}" == "false" ]; then
             sed -i "/bind-cert/d;/bind-tls/d" "${DOCKER_PATH}/conf/smartdns.conf"
         else
-            if [ "${TLS_PORT:-5535}" != "5535" ]; then
-                sed "s/bind-tls [::]:5535/bind-tls [::]:${TLS_PORT}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+            if [ "${TLS_PORT:-5355}" != "5355" ]; then
+                sed "s/bind-tls [::]:5355/bind-tls [::]:${TLS_PORT}/g" "${DOCKER_PATH}/conf/smartdns.conf"
             fi
         fi
 
