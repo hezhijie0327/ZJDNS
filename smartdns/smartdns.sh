@@ -12,6 +12,7 @@ USE_CDN="true"
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, vxlink, zjdb
 
+ENABLE_AUDIT_LOG="" # false, true
 LOG_LEVEL="" # off, fatal, error, warn, notice, info, debug
 
 SAVE_AUDIT_TO_FILE="" # false, true
@@ -79,6 +80,9 @@ function DownloadConfiguration() {
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/smartdns/smartdns.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" | sort | uniq > "${DOCKER_PATH}/conf/smartdns.conf"
 
+        if [ "${ENABLE_AUDIT_LOG}" == "false" ]; then
+            sed -i "s/audit-enable yes/audit-enable no/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
         if [ "${LOG_LEVEL}" != "" ]; then
             sed -i "s/log-level error/log-level ${LOG_LEVEL}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
