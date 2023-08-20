@@ -29,12 +29,12 @@ plugins:
 #+        socks5: '127.0.0.1:7891'
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.5.5.5:443'
-          enable_http3: false
+          enable_http3: true
           insecure_skip_verify: true
 #+        socks5: '127.0.0.1:7891'
         - addr: 'https://dns.alidns.com/dns-query'
           dial_addr: '223.6.6.6:443'
-          enable_http3: false
+          enable_http3: true
           insecure_skip_verify: true
 #+        socks5: '127.0.0.1:7891'
         - addr: 'https://dns.ipv6dns.com/dns-query'
