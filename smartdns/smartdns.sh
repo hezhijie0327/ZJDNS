@@ -108,7 +108,7 @@ function DownloadConfiguration() {
             sed -i "s/response-mode first-ping/response-mode ${RESPONSE_MODE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
         if [ "${SPEED_CHECK_MODE}" != "" ]; then
-            sed -i "s/speed-check-mode tcp:443,ping,tcp:80/speed-check-mode ${SPEED_CHECK_MODE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+            sed -i "s/speed-check-mode ping,tcp:443,tcp:80/speed-check-mode ${SPEED_CHECK_MODE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
         if [ "${DUALSTACK_IP_ALLOW_FORCE_AAAA}" == "true" ]; then
