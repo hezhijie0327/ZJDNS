@@ -21,7 +21,7 @@ SAVE_LOG_TO_FILE="" # false, true
 SERVER_NAME="$(hostname)" # smartdns, $(hostname)
 
 CACHE_PERSIST="" # false, true
-CACHE_SIZE="" # 4096
+CACHE_SIZE="" # 0 (Auto), 4096
 
 MAX_REPLY_IP_NUM="" # 1 - 16 (MAX)
 RESPONSE_MODE="" # first-ping, fastest-ip, fastest-response
@@ -102,7 +102,11 @@ function DownloadConfiguration() {
             sed -i "s/cache-persist yes/cache-persist no/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
         if [ "${CACHE_SIZE}" != "" ]; then
-            sed -i "s/cache-size 4096/cache-size ${CACHE_SIZE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+            if [ "${CACHE_SIZE}" == "0" ]; then
+                sed -i "/cache-size 4096/d" "${DOCKER_PATH}/conf/smartdns.conf"
+            else
+                sed -i "s/cache-size 4096/cache-size ${CACHE_SIZE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+            fi
         fi
 
         if [ "${MAX_REPLY_IP_NUM}" != "" ]; then
