@@ -12,7 +12,19 @@ USE_CDN="true"
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, vxlink, zjdb
 
+CACHE_PERSIST="" # false, true
+CACHE_SIZE="" # 4096
+
 MAX_REPLY_IP_NUM="1" # 1 - 16 (MAX)
+
+DUALSTACK_IP_ALLOW_FORCE_AAAA="" # false, true
+DUALSTACK_IP_SELECTION="" # false, true
+
+PREFETCH_DOMAIN="" # false, true
+
+SERVE_EXPIRED="" # false, true
+
+FORCE_AAAA_SOA="" # false, true
 
 PREFER_REMOTE_UPSTREAM="false"
 
@@ -58,8 +70,34 @@ function DownloadConfiguration() {
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/smartdns/smartdns.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/smartdns.conf"
 
+        if [ "${CACHE_PERSIST}" == "false" ]; then
+            sed -i "s/cache-persist yes/cache-persist no/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
+        if [ "${CACHE_SIZE}" != "4096" ]; then
+            sed -i "s/cache-size 4096/cache-size ${CACHE_SIZE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
+
         if [ "${MAX_REPLY_IP_NUM}" != "1" ]; then
             sed -i "s/max-reply-ip-num 1/max-reply-ip-num ${MAX_REPLY_IP_NUM}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
+
+        if [ "${DUALSTACK_IP_ALLOW_FORCE_AAAA}" != "false" ]; then
+            sed -i "s/dualstack-ip-allow-force-AAAA no/dualstack-ip-allow-force-AAAA yes/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
+        if [ "${DUALSTACK_IP_SELECTION}" != "false" ]; then
+            sed -i "s/dualstack-ip-selection no/dualstack-ip-selection yes/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
+
+        if [ "${PREFETCH_DOMAIN}" == "false" ]; then
+            sed -i "s/prefetch-domain yes/prefetch-domain no/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
+
+        if [ "${SERVE_EXPIRED}" == "false" ]; then
+            sed -i "s/serve-expired yes/serve-expired no/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
+
+        if [ "${FORCE_AAAA_SOA}" != "false" ]; then
+            sed -i "s/force-AAAA-SOA no/force-AAAA-SOA yes/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
         if [ "${PREFER_REMOTE_UPSTREAM}" == "true" ]; then
