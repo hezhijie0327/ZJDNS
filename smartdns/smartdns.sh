@@ -12,6 +12,8 @@ USE_CDN="true"
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, vxlink, zjdb
 
+MAX_REPLY_IP_NUM="1" # 1 - 16 (MAX)
+
 PREFER_REMOTE_UPSTREAM="false"
 
 ENABLE_LOCAL_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
@@ -55,6 +57,10 @@ function DownloadConfiguration() {
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/smartdns/smartdns.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/smartdns.conf"
+
+        if [ "${MAX_REPLY_IP_NUM}" != "1" ]; then
+            sed -i "s/max-reply-ip-num 1/max-reply-ip-num ${MAX_REPLY_IP_NUM}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
 
         if [ "${PREFER_REMOTE_UPSTREAM}" == "true" ]; then
             sed -i "s/-proxy remote_proxy/-blacklist-ip -proxy remote_proxy/g;s/-blacklist-ip -blacklist-ip/-blacklist-ip/g;s/-whitelist-ip //g" "${DOCKER_PATH}/conf/smartdns.conf" && SED_CNIPDB="blacklist"
