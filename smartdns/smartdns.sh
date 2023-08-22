@@ -146,21 +146,21 @@ function DownloadConfiguration() {
 
         if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ]; then
             if [ "${ENABLE_LOCAL_UPSTREAM}" == "ipv4" ]; then
-                sed -i "/local_ipv6/d;/5302/d" "${DOCKER_PATH}/conf/smartdns.conf"
+                sed -i "/local_ipv6/d" "${DOCKER_PATH}/conf/smartdns.conf"
             elif [ "${ENABLE_LOCAL_UPSTREAM}" == "ipv6" ]; then
-                sed -i "/local_ipv4/d;/5301/d" "${DOCKER_PATH}/conf/smartdns.conf"
+                sed -i "/local_ipv4/d" "${DOCKER_PATH}/conf/smartdns.conf"
             fi
         else
-            sed -i "/local_ipv/d;/5301/d;/5302/d" "${DOCKER_PATH}/conf/smartdns.conf"
+            sed -i "/local_ipv/d" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
         if [ "${ENABLE_REMOTE_UPSTREAM}" != "false" ]; then
             if [ "${ENABLE_REMOTE_UPSTREAM}" == "ipv4" ]; then
-                sed -i "/remote_ipv6/d;/5304/d" "${DOCKER_PATH}/conf/smartdns.conf"
+                sed -i "/remote_ipv6/d" "${DOCKER_PATH}/conf/smartdns.conf"
             elif [ "${ENABLE_REMOTE_UPSTREAM}" == "ipv6" ]; then
-                sed -i "/remote_ipv4/d;/5303/d" "${DOCKER_PATH}/conf/smartdns.conf"
+                sed -i "/remote_ipv4/d" "${DOCKER_PATH}/conf/smartdns.conf"
             fi
         else
-            sed -i "/remote_ipv/d;/5303/d;/5304/d" "${DOCKER_PATH}/conf/smartdns.conf"
+            sed -i "/remote_ipv/d" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
         if [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" == "false" ]; then
