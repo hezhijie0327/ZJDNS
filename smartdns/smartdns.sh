@@ -89,9 +89,13 @@ function DownloadConfiguration() {
 
         if [ "${SAVE_AUDIT_TO_FILE}" == "true" ]; then
             sed -i "s/audit-console yes/audit-console no/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        else
+            sed -i "s/audit-file/#audit-file/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
         if [ "${SAVE_LOG_TO_FILE}" == "true" ]; then
             sed -i "s/log-console yes/log-console no/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        else
+            sed -i "s/log-file/#log-file/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
         if [ "${SERVER_NAME}" != "" ]; then
