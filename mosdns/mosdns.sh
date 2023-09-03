@@ -113,7 +113,7 @@ function DownloadConfiguration() {
             fi
         else
             if [ "${UNENCRYPTED_PORT:-5533}" != "5533" ]; then
-                sed "s/listen: :5533/listen: :${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
+                sed -i "s/listen: :5533/listen: :${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
             fi
         fi
         if [ "${ENABLE_HTTPS}" == "true" ]; then
