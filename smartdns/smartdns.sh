@@ -191,7 +191,7 @@ function DownloadConfiguration() {
             sed -i "/bind-cert/d;/bind-tls/d" "${DOCKER_PATH}/conf/smartdns.conf"
         else
             if [ "${TLS_PORT:-5355}" != "5355" ]; then
-                sed "s/bind-tls [::]:5355/bind-tls [::]:${TLS_PORT}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+                sed -i "s/bind-tls [::]:5355/bind-tls [::]:${TLS_PORT}/g" "${DOCKER_PATH}/conf/smartdns.conf"
             fi
         fi
 
