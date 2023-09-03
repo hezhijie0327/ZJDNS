@@ -164,7 +164,7 @@ function DownloadConfiguration() {
                 sed -i "/remote_ipv4/d" "${DOCKER_PATH}/conf/smartdns.conf"
             fi
         else
-            sed -i "/remote_ipv/d" "${DOCKER_PATH}/conf/smartdns.conf"
+            sed -i "/remote_ipv/d;s/-ignore-ip //g;s/-whitelist-ip //g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
         if [ "${ENABLE_LOCAL_UPSTREAM_PROXY}" == "false" ]; then
