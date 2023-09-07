@@ -5,7 +5,7 @@ plugins:
   - tag: cache_response_to_memory
     type: cache
     args:
-#=    dump_file: /etc/mosdns/work/mosdns.cache
+#=    dump_file: '/etc/mosdns/work/mosdns.cache'
 #=    dump_interval: 300
       lazy_cache_ttl: 259200
       size: 4096
