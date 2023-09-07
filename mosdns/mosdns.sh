@@ -164,6 +164,7 @@ function CreateNewContainer() {
         -v /docker/ssl:/etc/mosdns/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/mosdns/conf \
         -v ${DOCKER_PATH}/data:/etc/mosdns/data \
+        -v ${DOCKER_PATH}/work:/etc/mosdns/work \
         -d ${OWNER}/${REPO}:${TAG} \
         start \
         -c "/etc/mosdns/conf/config.yaml" \
