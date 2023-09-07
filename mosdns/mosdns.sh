@@ -26,6 +26,11 @@ ENABLE_REMOTE_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 ENABLE_LOCAL_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 ENABLE_REMOTE_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 
+ENABLE_CACHE="false"
+CACHE_DUMP="false"
+CACHE_DUMP_INTERVAL="" # 300, 600, 900
+CACHE_SIZE="" # 4096
+
 HTTPS_PORT="" # 5553
 TLS_PORT="" # 5535
 UNENCRYPTED_PORT="" # 5533
@@ -103,6 +108,19 @@ function DownloadConfiguration() {
             else
                 sed -i "s/#-/  /g" "${DOCKER_PATH}/conf/config.yaml"
             fi
+        fi
+
+        if [ "${ENABLE_CACHE}" == "true" ]; then
+            sed -i "s/##/  /g" "${DOCKER_PATH}/conf/config.yaml"
+        fi
+        if [ "${CACHE_DUMP}" == "true" ]; then
+            sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/config.yaml"
+        fi
+        if [ "${CACHE_DUMP_INTERVAL}" != "" ]; then
+            sed -i "s/dump_interval: 300/dump_interval: ${CACHE_DUMP_INTERVAL}/g" "${DOCKER_PATH}/conf/config.yaml"
+        fi
+        if [ "${CACHE_SIZE}" != "" ]; then
+            sed -i "s/size: 4096/size: ${CACHE_SIZE}/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
 
         if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
