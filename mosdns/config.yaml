@@ -2,6 +2,13 @@ log:
   level: error
   production: true
 plugins:
+  - tag: cache_response_to_memory
+    type: cache
+    args:
+#=    dump_file: /etc/mosdns/work/mosdns.cache
+#=    dump_interval: 300
+      lazy_cache_ttl: 259200
+      size: 4096
   - tag: forward_query_to_local_ecs_doh_ipv4
     type: forward
     args:
@@ -831,6 +838,13 @@ plugins:
       - matches:
           - 'has_resp'
         exec: accept
+  - tag: sequence_check_response_has_cache
+    type: sequence
+    args:
+      - exec: $cache_response_to_memory
+      - matches:
+          - 'has_resp'
+        exec: accept
   - tag: sequence_check_response_has_dns64_answer
     type: sequence
     args:
@@ -868,6 +882,7 @@ plugins:
   - tag: sequence_forward_query_to_ecs
     type: sequence
     args:
+##    - exec: jump sequence_check_response_has_cache
 #(    - exec: $fallback_forward_query_to_local_ecs_ipv64
 #@    - exec: jump sequence_check_response_has_dns64_answer
 #@    - exec: jump sequence_check_response_has_specific_answer
@@ -880,6 +895,7 @@ plugins:
   - tag: sequence_forward_query_to_no_ecs
     type: sequence
     args:
+##    - exec: jump sequence_check_response_has_cache
 #(    - exec: $fallback_forward_query_to_local_no_ecs_ipv64
 #@    - exec: jump sequence_check_response_has_dns64_answer
 #@    - exec: jump sequence_check_response_has_specific_answer
