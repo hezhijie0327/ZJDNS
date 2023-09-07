@@ -896,6 +896,7 @@ plugins:
   - tag: sequence_forward_query_to_ecs
     type: sequence
     args:
+      - exec: ttl 0-86400
 ##    - exec: jump sequence_check_response_has_cache_ecs
 #(    - exec: $fallback_forward_query_to_local_ecs_ipv64
 #@    - exec: jump sequence_check_response_has_dns64_answer
@@ -909,6 +910,7 @@ plugins:
   - tag: sequence_forward_query_to_no_ecs
     type: sequence
     args:
+      - exec: ttl 0-86400
 ##    - exec: jump sequence_check_response_has_cache_no_ecs
 #(    - exec: $fallback_forward_query_to_local_no_ecs_ipv64
 #@    - exec: jump sequence_check_response_has_dns64_answer
