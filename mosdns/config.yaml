@@ -2,10 +2,17 @@ log:
   level: error
   production: true
 plugins:
-  - tag: cache_response_to_memory
+  - tag: cache_response_to_memory_ecs
     type: cache
     args:
-#=    dump_file: '/etc/mosdns/work/mosdns.cache'
+#=    dump_file: /etc/mosdns/work/ecs.cache
+#=    dump_interval: 300
+      lazy_cache_ttl: 259200
+      size: 4096
+  - tag: cache_response_to_memory_no_ecs
+    type: cache
+    args:
+#=    dump_file: /etc/mosdns/work/no_ecs.cache
 #=    dump_interval: 300
       lazy_cache_ttl: 259200
       size: 4096
@@ -838,10 +845,17 @@ plugins:
       - matches:
           - 'has_resp'
         exec: accept
-  - tag: sequence_check_response_has_cache
+  - tag: sequence_check_response_has_cache_ecs
     type: sequence
     args:
-      - exec: $cache_response_to_memory
+      - exec: $cache_response_to_memory_ecs
+      - matches:
+          - 'has_resp'
+        exec: accept
+  - tag: sequence_check_response_has_cache_no_ecs
+    type: sequence
+    args:
+      - exec: $cache_response_to_memory_no_ecs
       - matches:
           - 'has_resp'
         exec: accept
@@ -882,7 +896,7 @@ plugins:
   - tag: sequence_forward_query_to_ecs
     type: sequence
     args:
-##    - exec: jump sequence_check_response_has_cache
+##    - exec: jump sequence_check_response_has_cache_ecs
 #(    - exec: $fallback_forward_query_to_local_ecs_ipv64
 #@    - exec: jump sequence_check_response_has_dns64_answer
 #@    - exec: jump sequence_check_response_has_specific_answer
@@ -895,7 +909,7 @@ plugins:
   - tag: sequence_forward_query_to_no_ecs
     type: sequence
     args:
-##    - exec: jump sequence_check_response_has_cache
+##    - exec: jump sequence_check_response_has_cache_no_ecs
 #(    - exec: $fallback_forward_query_to_local_no_ecs_ipv64
 #@    - exec: jump sequence_check_response_has_dns64_answer
 #@    - exec: jump sequence_check_response_has_specific_answer
