@@ -22,84 +22,6 @@
     ],
     "outbounds": [
         {
-            "protocol": "shadowsocks",
-            "settings": {
-                "servers": [
-                    {
-                        "address": "demo.zhijie.online",
-                        "level": 0,
-                        "method": "chacha20-ietf-poly1305",
-                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                        "port": 443
-                    }
-                ]
-            },
-            "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPCSHADOWSOCKS"
-                },
-                "network": "grpc",
-                "security": "tls",
-                "tlsSettings": {
-                    "serverName": "demo.zhijie.online"
-                }
-            },
-            "tag": "shadowsocks_grpc"
-        },
-        {
-            "protocol": "trojan",
-            "settings": {
-                "servers": [
-                    {
-                        "address": "demo.zhijie.online",
-                        "level": 0,
-                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                        "port": 443
-                    }
-                ]
-            },
-            "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPCTROJAN"
-                },
-                "network": "grpc",
-                "security": "tls",
-                "tlsSettings": {
-                    "serverName": "demo.zhijie.online"
-                }
-            },
-            "tag": "trojan_grpc"
-        },
-        {
-            "protocol": "vless",
-            "settings": {
-                "vnext": [
-                    {
-                        "address": "demo.zhijie.online",
-                        "port": 443,
-                        "users": [
-                            {
-                                "encryption": "none",
-                                "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                                "level": 0
-                            }
-                        ]
-                    }
-                ]
-            },
-            "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPCVLESS"
-                },
-                "network": "grpc",
-                "security": "tls",
-                "tlsSettings": {
-                    "serverName": "demo.zhijie.online"
-                }
-            },
-            "tag": "vless_grpc"
-        },
-        {
             "protocol": "vmess",
             "settings": {
                 "vnext": [
@@ -129,167 +51,9 @@
             },
             "tag": "vmess_grpc"
         },
-        {
-            "protocol": "shadowsocks",
-            "settings": {
-                "servers": [
-                    {
-                        "address": "demo.zhijie.online",
-                        "level": 0,
-                        "method": "chacha20-ietf-poly1305",
-                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                        "port": 443
-                    }
-                ]
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "tls",
-                "tlsSettings": {
-                    "serverName": "demo.zhijie.online"
-                },
-                "wsSettings": {
-                    "acceptProxyProtocol": false,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-shadowsocks",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            },
-            "tag": "shadowsocks_wss"
-        },
-        {
-            "protocol": "trojan",
-            "settings": {
-                "servers": [
-                    {
-                        "address": "demo.zhijie.online",
-                        "level": 0,
-                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                        "port": 443
-                    }
-                ]
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "tls",
-                "tlsSettings": {
-                    "serverName": "demo.zhijie.online"
-                },
-                "wsSettings": {
-                    "acceptProxyProtocol": false,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-trojan",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            },
-            "tag": "trojan_wss"
-        },
-        {
-            "protocol": "vless",
-            "settings": {
-                "vnext": [
-                    {
-                        "address": "demo.zhijie.online",
-                        "port": 443,
-                        "users": [
-                            {
-                                "encryption": "none",
-                                "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                                "level": 0
-                            }
-                        ]
-                    }
-                ]
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "tls",
-                "tlsSettings": {
-                    "serverName": "demo.zhijie.online"
-                },
-                "wsSettings": {
-                    "acceptProxyProtocol": false,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-vless",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            },
-            "tag": "vless_wss"
-        },
-        {
-            "protocol": "vmess",
-            "settings": {
-                "vnext": [
-                    {
-                        "address": "demo.zhijie.online",
-                        "port": 443,
-                        "users": [
-                            {
-                                "alterId": 0,
-                                "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                                "level": 0,
-                                "security": "auto"
-                            }
-                        ]
-                    }
-                ]
-            },
-            "streamSettings": {
-                "network": "ws",
-                "security": "tls",
-                "tlsSettings": {
-                    "serverName": "demo.zhijie.online"
-                },
-                "wsSettings": {
-                    "acceptProxyProtocol": false,
-                    "earlyDataHeaderName": "",
-                    "headers": {
-                        "Host": "demo.zhijie.online"
-                    },
-                    "maxEarlyData": 4096,
-                    "path": "/wss-vmess",
-                    "pinnedPeerCertificateChainSha256": "",
-                    "useBrowserForwarding": false
-                }
-            },
-            "tag": "vmess_wss"
-        },
         { "protocol": "freedom", "tag": "direct" }
     ],
     "routing": {
-        "balancers": [
-            {
-                "tag": "balancer",
-                "selector": [
-                    "shadowsocks_grpc",
-                    "shadowsocks_wss",
-                    "trojan_grpc",
-                    "trojan_wss",
-                    "vless_grpc",
-                    "vless_wss",
-                    "vmess_grpc",
-                    "vmess_wss"
-                ],
-                "strategy": {
-                    "type": "leastping"
-                }
-            }
-        ],
         "domainMatcher": "mph",
         "domainStrategy": "IPIfNonMatch",
         "rules": [
@@ -321,16 +85,10 @@
                     "2002::/16",
                     "2620:4f:8000::/48",
                     "fc00::/7",
-                    "fe80::/10"
+                    "fe80::/10",
+                    "ext:/etc/v2ray/data/geoip.dat:cn"
                 ],
                 "outboundTag": "direct",
-                "type": "field"
-            },
-            {
-                "ip": [
-                    "ext:/etc/v2ray/data/geoip.dat:!cn"
-                ],
-                "balancerTag": "balancer",
                 "type": "field"
             }
         ]
