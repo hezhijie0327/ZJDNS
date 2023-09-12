@@ -22,6 +22,10 @@
     ],
     "outbounds": [
         {
+            "mux": {
+                "concurrency": 8,
+                "enabled": true
+            },
             "protocol": "vmess",
             "settings": {
                 "vnext": [
@@ -51,7 +55,7 @@
             },
             "tag": "vmess_grpc"
         },
-        { "protocol": "freedom", "tag": "direct" }
+        { "mux": { "concurrency": 8, "enabled": true }, "protocol": "freedom", "tag": "direct" }
     ],
     "routing": {
         "domainMatcher": "mph",
