@@ -24,7 +24,7 @@
         {
             "mux": {
                 "concurrency": 8,
-                "enabled": true
+                "enabled": false
             },
             "protocol": "vmess",
             "settings": {
@@ -55,7 +55,7 @@
             },
             "tag": "vmess_grpc"
         },
-        { "mux": { "concurrency": 8, "enabled": true }, "protocol": "freedom", "tag": "direct" }
+        { "mux": { "concurrency": 8, "enabled": false }, "protocol": "freedom", "tag": "direct" }
     ],
     "routing": {
         "domainMatcher": "mph",
