@@ -20,6 +20,7 @@ SAVE_LOG_TO_FILE="" # false, true
 
 SERVER_NAME="$(hostname)" # smartdns, $(hostname)
 
+CACHE_CHECKPOINT_TIME="" # 300, 600, 900
 CACHE_PERSIST="" # false, true
 CACHE_SIZE="" # -1 (Auto), 0 (None), 4096
 
@@ -102,6 +103,9 @@ function DownloadConfiguration() {
             sed -i "s/server-name smartdns/server-name ${SERVER_NAME}/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
+        if [ "${CACHE_CHECKPOINT_TIME}" != "" ]; then
+            sed -i "s/cache-checkpoint-time 300/cache-checkpoint-time ${CACHE_CHECKPOINT_TIME}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+        fi
         if [ "${CACHE_PERSIST}" == "false" ]; then
             sed -i "s/cache-persist yes/cache-persist no/g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
