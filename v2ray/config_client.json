@@ -26,7 +26,7 @@
                 "concurrency": 8,
                 "enabled": true
             },
-            "protocol": "vmess",
+            "protocol": "vless",
             "settings": {
                 "vnext": [
                     {
@@ -34,10 +34,9 @@
                         "port": 443,
                         "users": [
                             {
-                                "alterId": 0,
+                                "encryption": "none",
                                 "id": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52",
-                                "level": 0,
-                                "security": "auto"
+                                "level": 0
                             }
                         ]
                     }
@@ -45,7 +44,7 @@
             },
             "streamSettings": {
                 "grpcSettings": {
-                    "serviceName": "gRPCVMESS"
+                    "serviceName": "gRPCVLESS"
                 },
                 "network": "grpc",
                 "security": "tls",
@@ -53,7 +52,7 @@
                     "serverName": "demo.zhijie.online"
                 }
             },
-            "tag": "vmess_grpc"
+            "tag": "vless_grpc"
         },
         { "mux": { "concurrency": 8, "enabled": false }, "protocol": "freedom", "tag": "direct" }
     ],
