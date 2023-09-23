@@ -7,14 +7,14 @@ plugins:
     args:
 #=    dump_file: '/etc/mosdns/work/ecs.cache'
 #=    dump_interval: 300
-      lazy_cache_ttl: 259200
+#~    lazy_cache_ttl: 259200
       size: 4096
   - tag: cache_response_to_memory_no_ecs
     type: cache
     args:
 #=    dump_file: '/etc/mosdns/work/no_ecs.cache'
 #=    dump_interval: 300
-      lazy_cache_ttl: 259200
+#~    lazy_cache_ttl: 259200
       size: 4096
   - tag: forward_query_to_local_ecs_doh_ipv4
     type: forward
