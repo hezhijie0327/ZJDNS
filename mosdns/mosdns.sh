@@ -27,6 +27,7 @@ ENABLE_LOCAL_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 ENABLE_REMOTE_UPSTREAM_PROXY="false" # false, 127.0.0.1:7891
 
 ENABLE_CACHE="false"
+ENABLE_LAZY_CACHE="false"
 CACHE_DUMP="false"
 CACHE_DUMP_INTERVAL="" # 300, 600, 900
 CACHE_SIZE="" # 4096
@@ -112,6 +113,9 @@ function DownloadConfiguration() {
 
         if [ "${ENABLE_CACHE}" == "true" ]; then
             sed -i "s/##/  /g" "${DOCKER_PATH}/conf/config.yaml"
+        fi
+        if [ "${ENABLE_LAZY_CACHE}" == "false" ]; then
+            sed -i "s/lazy_cache_ttl: 259200/lazy_cache_ttl: 0/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${CACHE_DUMP}" == "true" ]; then
             sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/config.yaml"
