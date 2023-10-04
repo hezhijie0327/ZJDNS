@@ -202,11 +202,11 @@ function DownloadConfiguration() {
         if [ -f "${DOCKER_PATH}/conf/smartdns.conf" ]; then
             sed -i "/#/d;/^$/d" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
-
-        if [ ! -d "${DOCKER_PATH}/data" ]; then
-            mkdir -p "${DOCKER_PATH}/data"
-        fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE:-geolite2}/country_ipv4_6.txt" | sed "s/^/${SED_CNIPDB}-ip /g" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.conf"
     fi
+
+    if [ ! -d "${DOCKER_PATH}/data" ]; then
+        mkdir -p "${DOCKER_PATH}/data"
+    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE:-geolite2}/country_ipv4_6.txt" | sed "s/^/${SED_CNIPDB}-ip /g" > "${DOCKER_PATH}/data/GeoIP_CNIPDb.conf"
 }
 # Create New Container
 function CreateNewContainer() {
