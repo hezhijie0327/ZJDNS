@@ -188,14 +188,14 @@ function DownloadConfiguration() {
             fi
         else
             if [ "${UNENCRYPTED_PORT:-5335}" != "5335" ]; then
-                sed -i "s/bind [::]:5335/bind [::]:${UNENCRYPTED_PORT}/g;s/bind-tcp [::]:5335/bind-tcp [::]:${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+                sed -i "s/bind \[::\]:5335/bind \[::\]:${UNENCRYPTED_PORT}/g;s/bind-tcp \[::\]:5335/bind-tcp \[::\]:${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/smartdns.conf"
             fi
         fi
         if [ "${ENABLE_TLS}" == "false" ]; then
             sed -i "/bind-cert/d;/bind-tls/d" "${DOCKER_PATH}/conf/smartdns.conf"
         else
             if [ "${TLS_PORT:-5355}" != "5355" ]; then
-                sed -i "s/bind-tls [::]:5355/bind-tls [::]:${TLS_PORT}/g" "${DOCKER_PATH}/conf/smartdns.conf"
+                sed -i "s/bind-tls \[::\]:5355/bind-tls \[::\]:${TLS_PORT}/g" "${DOCKER_PATH}/conf/smartdns.conf"
             fi
         fi
 
