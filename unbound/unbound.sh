@@ -48,9 +48,9 @@ CUSTOM_UPSTREAM="" # 127.0.0.1@5533
 ENABLE_TCP_UPSTREAM="false"
 ENABLE_TLS_UPSTREAM="false"
 
-HTTPS_PORT="" # 5333
-TLS_PORT="" # 5355
-UNENCRYPTED_PORT="" # 5335
+HTTPS_PORT="" # 3353
+TLS_PORT="" # 3533
+UNENCRYPTED_PORT="" # 3553
 
 ENABLE_HTTPS="false"
 ENABLE_TLS="false"
@@ -191,16 +191,16 @@ function DownloadConfiguration() {
                 sed -i "s/    interface/#+  interface/g" "${DOCKER_PATH}/conf/unbound.conf"
             fi
         else
-            if [ "${UNENCRYPTED_PORT:-5335}" != "5335" ]; then
-                sed "s/port: 5335/port: :${UNENCRYPTED_PORT}/g;s/@5335/@${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
+            if [ "${UNENCRYPTED_PORT:-3553}" != "3553" ]; then
+                sed "s/port: 3553/port: :${UNENCRYPTED_PORT}/g;s/@3553/@${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
             fi
         fi
 
         if [ "${ENABLE_HTTPS}" == "true" ]; then
-            sed -i "s/#@/  /g;s/https-port: 5333/https-port: ${HTTPS_PORT:-5333}/g;s/@5333/@${HTTPS_PORT:-5333}/g" "${DOCKER_PATH}/conf/unbound.conf"
+            sed -i "s/#@/  /g;s/https-port: 3353/https-port: ${HTTPS_PORT:-3353}/g;s/@3353/@${HTTPS_PORT:-3353}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
         if [ "${ENABLE_TLS}" == "true" ]; then
-            sed -i "s/#%/  /g;s/tls-port: 5355/tls-port: ${TLS_PORT:-5355}/g;s/@5355/@${TLS_PORT:-5355}/g" "${DOCKER_PATH}/conf/unbound.conf"
+            sed -i "s/#%/  /g;s/tls-port: 3533/tls-port: ${TLS_PORT:-3533}/g;s/@3533/@${TLS_PORT:-3533}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ -f "${DOCKER_PATH}/conf/unbound.conf" ]; then
