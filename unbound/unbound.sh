@@ -62,7 +62,7 @@ SSL_KEY="zhijie.online.key"
 ## Function
 # Get Latest Image
 function GetLatestImage() {
-    if [ "${CREATE_REDIS_INSTANCE}" -eq "true" ]; then
+    if [ "${CREATE_REDIS_INSTANCE}" == "true" ]; then
         docker pull library/redis:latest
     fi && docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
@@ -214,7 +214,7 @@ function DownloadConfiguration() {
 }
 # Create New Container
 function CreateNewContainer() {
-    if [ "${CREATE_REDIS_INSTANCE}" -eq "true" ]; then
+    if [ "${CREATE_REDIS_INSTANCE}" == "true" ]; then
         docker run --name ${REPO}_redis --net host --restart=always \
             -v ${DOCKER_PATH}/data:/data \
             -d library/redis:latest \
