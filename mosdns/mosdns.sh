@@ -33,10 +33,12 @@ CACHE_DUMP_INTERVAL="" # 300, 600, 900
 CACHE_SIZE="" # 4096
 
 HTTPS_PORT="" # 5553
+QUIC_PORT="" # 5535
 TLS_PORT="" # 5535
 UNENCRYPTED_PORT="" # 5533
 
 ENABLE_HTTPS="false"
+ENABLE_QUIC="false"
 ENABLE_TLS="false"
 ENABLE_UNENCRYPTED_DNS="true"
 
@@ -140,6 +142,9 @@ function DownloadConfiguration() {
         fi
         if [ "${ENABLE_HTTPS}" == "true" ]; then
             echo -e "  - tag: create_https_server\n    type: tcp_server\n    args:\n      entries:\n        - path: '/dns-query'\n          exec: fallback_sequence_forward_query_to_prefer_ecs\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${HTTPS_PORT:-5553}" >> "${DOCKER_PATH}/conf/config.yaml"
+        fi
+        if [ "${ENABLE_QUIC}" == "true" ]; then
+            echo -e "  - tag: create_quic_server\n    type: quic_server\n    args:\n      entry: fallback_sequence_forward_query_to_prefer_ecs\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${QUIC_PORT:-5535}" >> "${DOCKER_PATH}/conf/config.yaml"
         fi
         if [ "${ENABLE_TLS}" == "true" ]; then
             echo -e "  - tag: create_tls_server\n    type: tcp_server\n    args:\n      entry: fallback_sequence_forward_query_to_prefer_ecs\n      cert: '/etc/mosdns/cert/${SSL_CERT}'\n      key: '/etc/mosdns/cert/${SSL_KEY}'\n      listen: :${TLS_PORT:-5535}" >> "${DOCKER_PATH}/conf/config.yaml"
