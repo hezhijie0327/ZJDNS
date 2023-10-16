@@ -19,6 +19,7 @@ SET_CONCURRENT="1" # 1, 2, 3 (MAX)
 
 PREFER_NO_ECS_UPSTREAM="false" # false, true, ecs, noecs
 PREFER_REMOTE_UPSTREAM="false"
+CUSTOM_UPSTREAM="" # 127.0.0.1:3553, tls://127.0.0.1:3533, https://127.0.0.1:3353
 
 ENABLE_LOCAL_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
 ENABLE_REMOTE_UPSTREAM="ipv64" # false, ipv4, ipv6, ipv64
@@ -86,6 +87,9 @@ function DownloadConfiguration() {
 
         if [ "${PREFER_REMOTE_UPSTREAM}" == "true" ]; then
             sed -i 's/#(    - exec: $fallback_forward_query_to_local_ecs_ipv64/##)   - exec: $fallback_forward_query_to_remote_ecs_ipv64/g;s/#)    - exec: $fallback_forward_query_to_remote_ecs_ipv64/##(   - exec: $fallback_forward_query_to_local_ecs_ipv64/g;s/#(    - exec: $fallback_forward_query_to_local_no_ecs_ipv64/##)   - exec: $fallback_forward_query_to_remote_no_ecs_ipv64/g;s/#)    - exec: $fallback_forward_query_to_remote_no_ecs_ipv64/##(   - exec: $fallback_forward_query_to_local_no_ecs_ipv64/g;s/!resp_ip $ip_set_cnipdb/resp_ip $ip_set_cnipdb/g;/jump sequence_check_response_has_reserved_answer/d;/jump sequence_check_response_has_invalid_answer/d' "${DOCKER_PATH}/conf/config.yaml"
+        fi
+        if [ "${CUSTOM_UPSTREAM}" != "" ]; then
+            sed -i "s|#~|  |g;s|127.0.0.1:3553|${CUSTOM_UPSTREAM}|g" "${DOCKER_PATH}/conf/config.yaml"
         fi
 
         if [ "${ENABLE_LOCAL_UPSTREAM}" != "false" ]; then
