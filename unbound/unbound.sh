@@ -238,7 +238,7 @@ function CreateNewContainer() {
 
         docker run -it --rm --entrypoint=/redis-cli --net host \
                ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG} \
-               info
+            info
     fi
 
     docker run -it --rm --entrypoint=/unbound-anchor \
