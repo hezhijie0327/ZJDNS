@@ -222,7 +222,7 @@ function CreateNewContainer() {
         docker run --name ${REPO}_redis --net host --restart=always \
             -v ${DOCKER_PATH}/data:/etc/redis/data \
             -d ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG} \
-            --activedefrag no \
+            --activedefrag yes \
             --aof-use-rdb-preamble yes \
             --appendfsync always \
             --appendonly yes \
