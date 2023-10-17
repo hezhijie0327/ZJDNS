@@ -32,6 +32,7 @@ CACHE_SIZE_MSG="" # 4m
 CACHE_SIZE_NEG="" # 1m
 CACHE_SIZE_RRSET="" # 4m
 
+CUSTOM_REDIS_LOGICAL_DB="" # 0
 CUSTOM_REDIS_SERVER_HOST="" # 127.0.0.1
 CUSTOM_REDIS_SERVER_PASSWORD=""
 CUSTOM_REDIS_SERVER_PATH=""
@@ -140,6 +141,9 @@ function DownloadConfiguration() {
             sed -i "s/ratelimit\: 1000/ratelimit\: 0/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
+        if [ "${CUSTOM_REDIS_LOGICAL_DB}" != "" ]; then
+            sed -i "s/redis-logical-db: 0/redis-logical-db: ${CUSTOM_REDIS_LOGICAL_DB}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
         if [ "${CUSTOM_REDIS_SERVER_HOST}" != "" ]; then
             sed -i "s/redis-server-host: 127.0.0.1/redis-server-host: ${CUSTOM_REDIS_SERVER_HOST}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
