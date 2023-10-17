@@ -235,6 +235,10 @@ function CreateNewContainer() {
             --maxmemory ${REDIS_MAXMEMORY:-4MB} \
             --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-volatile-ttl} \
             --maxmemory-samples 10
+
+        docker run -it --rm --entrypoint=/redis-cli --net host \
+               ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG} \
+               info
     fi
 
     docker run -it --rm --entrypoint=/unbound-anchor \
