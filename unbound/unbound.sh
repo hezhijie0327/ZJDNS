@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Parameter
-OWNER="hezhijie0327"
-REPO="unbound"
-TAG="latest"
+OWNER="hezhijie0327" && REDIS_OWNER=""
+REPO="unbound" && REDIS_REPO=""
+TAG="latest" && REDIS_TAG=""
 DOCKER_PATH="/docker/unbound"
 
 CURL_OPTION=""
@@ -64,7 +64,7 @@ SSL_KEY="zhijie.online.key"
 # Get Latest Image
 function GetLatestImage() {
     if [ "${CREATE_REDIS_INSTANCE}" == "true" ]; then
-        docker pull library/redis:latest
+        docker pull ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG}
     fi && docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
 # Cleanup Current Container
@@ -221,8 +221,8 @@ function CreateNewContainer() {
     if [ "${CREATE_REDIS_INSTANCE}" == "true" ]; then
         docker run --name ${REPO}_redis --net host --restart=always \
             -v ${DOCKER_PATH}/data:/data \
-            -d library/redis:latest \
-            --activedefrag yes \
+            -d ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG} \
+            --activedefrag no \
             --aof-use-rdb-preamble yes \
             --appendfsync always \
             --appendonly yes \
