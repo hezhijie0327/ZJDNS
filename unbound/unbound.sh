@@ -220,12 +220,13 @@ function DownloadConfiguration() {
 function CreateNewContainer() {
     if [ "${CREATE_REDIS_INSTANCE}" == "true" ]; then
         docker run --name ${REPO}_redis --net host --restart=always \
-            -v ${DOCKER_PATH}/data:/data \
+            -v ${DOCKER_PATH}/data:/etc/redis/data \
             -d ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG} \
             --activedefrag no \
             --aof-use-rdb-preamble yes \
             --appendfsync always \
             --appendonly yes \
+            --dir /etc/redis/data \
             --lazyfree-lazy-eviction yes \
             --lazyfree-lazy-expire yes \
             --lazyfree-lazy-server-del yes \
