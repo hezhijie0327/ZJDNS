@@ -230,11 +230,14 @@ function CreateNewContainer() {
             --lazyfree-lazy-eviction yes \
             --lazyfree-lazy-expire yes \
             --lazyfree-lazy-server-del yes \
+            --lazyfree-lazy-user-del yes \
+            --lazyfree-lazy-user-flush yes \
             --lfu-decay-time 1 \
             --lfu-log-factor 10 \
             --maxmemory ${REDIS_MAXMEMORY:-4MB} \
             --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-volatile-ttl} \
-            --maxmemory-samples 10
+            --maxmemory-samples 10 \
+            --replica-lazy-flush yes
 
         docker run -it --rm --entrypoint=/redis-cli --net host \
                ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG} \
