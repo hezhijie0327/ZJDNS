@@ -80,7 +80,7 @@ function CleanupCurrentContainer() {
     fi
 
     if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REDIS_REPO:-redis}_${REPO}$") ]; then
-        docker stop ${REDIS_REPO:-redis}_${REPO} && docker rm ${REPO}_redis
+        docker stop ${REDIS_REPO:-redis}_${REPO} && docker rm ${REDIS_REPO:-redis}_${REPO}
     fi
 }
 # Download Configuration
