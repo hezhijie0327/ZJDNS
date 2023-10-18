@@ -27,6 +27,12 @@ ENABLE_LOGFILE="false"
 
 ENABLE_RATELIMIT="false"
 
+ENABLE_PREFETCH="false"
+
+ENABLE_SERVE_EXPIRED="false"
+ENABLE_SERVE_EXPIRED_TTL_RESET="true"
+ENABLE_SERVE_ORIGINAL_TTL="false"
+
 CACHE_SIZE_KEY="" # 4m
 CACHE_SIZE_MSG="" # 4m
 CACHE_SIZE_NEG="" # 1m
@@ -124,13 +130,13 @@ function DownloadConfiguration() {
         fi
 
         if [ "${ENABLE_IPV4}" == "false" ]; then
-            sed -i "s/do\-ip4\: yes/do\-ip4\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+            sed -i "s/do-ip4\: yes/do-ip4\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
         if [ "${ENABLE_IPV6}" == "false" ]; then
-            sed -i "s/do\-ip6\: yes/do\-ip6\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+            sed -i "s/do-ip6\: yes/do-ip6\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
         if [ "${ENABLE_IP64}" == "true" ]; then
-            sed -i "s/do\-nat64\: no/do\-nat64\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
+            sed -i "s/do-nat64\: no/do-nat64\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_LOGFILE}" == "true" ]; then
@@ -139,6 +145,20 @@ function DownloadConfiguration() {
 
         if [ "${ENABLE_RATELIMIT}" == "false" ]; then
             sed -i "s/ratelimit\: 1000/ratelimit\: 0/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ "${ENABLE_PREFETCH}" == "false" ]; then
+            sed -i "s/prefetch\: yes/prefetch\: no/g;s/prefetch-key\: yes/prefetch-key\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ "${ENABLE_SERVE_EXPIRED}" == "false" ]; then
+            sed -i "s/serve-expired\: yes/serve-expired\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_SERVE_EXPIRED_TTL_RESET}" == "false" ]; then
+            sed -i "s/serve-expired-ttl-reset\: yes/serve-expired-ttl-reset\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_SERVE_ORIGINAL_TTL}" == "true" ]; then
+            sed -i "s/serve-original-ttl\: no/serve-original-ttl\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${CUSTOM_REDIS_LOGICAL_DB}" != "" ]; then
