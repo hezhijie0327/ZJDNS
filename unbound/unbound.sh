@@ -28,6 +28,7 @@ ENABLE_LOGFILE="false"
 ENABLE_RATELIMIT="false"
 
 ENABLE_PREFETCH="false"
+ENABLE_PREFETCH_KEY="true"
 
 ENABLE_SERVE_EXPIRED="false"
 ENABLE_SERVE_EXPIRED_TTL_RESET="true"
@@ -148,7 +149,10 @@ function DownloadConfiguration() {
         fi
 
         if [ "${ENABLE_PREFETCH}" == "false" ]; then
-            sed -i "s/prefetch\: yes/prefetch\: no/g;s/prefetch-key\: yes/prefetch-key\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+            sed -i "s/prefetch\: yes/prefetch\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_PREFETCH_KEY}" == "false" ]; then
+            sed -i "s/prefetch-key\: yes/prefetch-key\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_SERVE_EXPIRED}" == "false" ]; then
