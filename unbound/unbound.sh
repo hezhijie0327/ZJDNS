@@ -224,7 +224,7 @@ function CreateNewContainer() {
             -d ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG} \
             --activedefrag yes \
             --aof-use-rdb-preamble yes \
-            --appendfsync always \
+            --appendfsync everysec \
             --appendonly yes \
             --dir /etc/redis/data \
             --lazyfree-lazy-eviction yes \
