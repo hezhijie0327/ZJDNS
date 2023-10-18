@@ -73,8 +73,8 @@ function CleanupCurrentContainer() {
         docker stop ${REPO} && docker rm ${REPO}
     fi
 
-    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REPO}_redis$") ]; then
-        docker stop ${REPO}_redis && docker rm ${REPO}_redis
+    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REDIS_REPO:-redis}_${REPO}$") ]; then
+        docker stop ${REDIS_REPO:-redis}_${REPO} && docker rm ${REPO}_redis
     fi
 }
 # Download Configuration
@@ -219,7 +219,7 @@ function DownloadConfiguration() {
 # Create New Container
 function CreateNewContainer() {
     if [ "${CREATE_REDIS_INSTANCE}" == "true" ]; then
-        docker run --name ${REPO}_redis --net host --restart=always \
+        docker run --name ${REDIS_REPO:-redis}_${REPO} --net host --restart=always \
             -v ${DOCKER_PATH}/data:/etc/redis/data \
             -d ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG} \
             --activedefrag yes \
