@@ -10,7 +10,7 @@ CURL_OPTION=""
 DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
-CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipipdotnet, iptoasn, vxlink, zjdb
+CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipinfoio, ipipdotnet, iptoasn, vxlink, zjdb
 
 ENABLE_AUDIT_LOG="" # false, true
 LOG_LEVEL="" # off, fatal, error, warn, notice, info, debug
