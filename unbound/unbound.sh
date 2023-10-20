@@ -105,10 +105,14 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" | sed "s|num-threads\: 1|num-threads\: ${NUM_THREADS:-1}|g;s|slabs\: 1|slabs:\ $(${NUM_THREADS:-1} * ${NUM_THREADS:-1})|g" > "${DOCKER_PATH}/conf/unbound.conf"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/unbound.conf"
 
         if [ ! -d "${DOCKER_PATH}/work" ]; then
             mkdir -p "${DOCKER_PATH}/work"
+        fi
+
+        if [ "${NUM_THREADS}" != "" ]; then
+            sed -i "s|num-threads\: 1|num-threads\: ${NUM_THREADS:-1}|g;s|slabs\: 1|slabs:\ $((${NUM_THREADS:-1} * ${NUM_THREADS:-1}))|g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_DNSSEC}" == "false" ]; then
