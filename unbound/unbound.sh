@@ -259,7 +259,7 @@ function CreateNewContainer() {
             --lfu-decay-time 1 \
             --lfu-log-factor 10 \
             --maxmemory ${REDIS_MAXMEMORY:-4MB} \
-            --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-allkeys-lru} \
+            --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-volatile-ttl} \
             --maxmemory-samples 10 \
             --replica-lazy-flush yes
 
