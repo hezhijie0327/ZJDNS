@@ -112,7 +112,7 @@ function DownloadConfiguration() {
         fi
 
         if [ "${NUM_THREADS}" != "" ]; then
-            sed -i "s|num-threads\: 1|num-threads\: ${NUM_THREADS:-1}|g;s|slabs\: 1|slabs:\ $((${NUM_THREADS:-1} * ${NUM_THREADS:-1}))|g" "${DOCKER_PATH}/conf/unbound.conf"
+            sed -i "s/num-threads\: 1/num-threads\: ${NUM_THREADS:-1}/g;s/slabs\: 1/slabs:\ $((${NUM_THREADS:-1} * ${NUM_THREADS:-1}))/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_DNSSEC}" == "false" ]; then
