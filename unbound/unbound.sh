@@ -171,6 +171,19 @@ function DownloadConfiguration() {
             sed -i "s/serve-original-ttl\: no/serve-original-ttl\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
+        if [ "${CACHE_SIZE_KEY}" != "" ]; then
+            sed -i "s/key-cache-size: 4m/key-cache-size: ${CACHE_SIZE_KEY}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CACHE_SIZE_MSG}" != "" ]; then
+            sed -i "s/msg-cache-size: 4m/msg-cache-size: ${CACHE_SIZE_MSG}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CACHE_SIZE_NEG}" != "" ]; then
+            sed -i "s/neg-cache-size: 1m/neg-cache-size: ${CACHE_SIZE_NEG}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CACHE_SIZE_RRSET}" != "" ]; then
+            sed -i "s/rrset-cache-size: 4m/rrset-cache-size: ${CACHE_SIZE_RRSET}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
         if [ "${CUSTOM_REDIS_LOGICAL_DB}" != "" ]; then
             sed -i "s/redis-logical-db: 0/redis-logical-db: ${CUSTOM_REDIS_LOGICAL_DB}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
@@ -188,18 +201,6 @@ function DownloadConfiguration() {
         fi
         if [ "${ENABLE_REDIS_CACHE}" == "false" ]; then
             sed -i "/cachedb:/d;/#-/d;s/cachedb //g" "${DOCKER_PATH}/conf/unbound.conf"
-            if [ "${CACHE_SIZE_KEY}" != "" ]; then
-                sed -i "s/key-cache-size: 4m/key-cache-size: ${CACHE_SIZE_KEY}/g" "${DOCKER_PATH}/conf/unbound.conf"
-            fi
-            if [ "${CACHE_SIZE_MSG}" != "" ]; then
-                sed -i "s/msg-cache-size: 4m/msg-cache-size: ${CACHE_SIZE_MSG}/g" "${DOCKER_PATH}/conf/unbound.conf"
-            fi
-            if [ "${CACHE_SIZE_NEG}" != "" ]; then
-                sed -i "s/neg-cache-size: 1m/neg-cache-size: ${CACHE_SIZE_NEG}/g" "${DOCKER_PATH}/conf/unbound.conf"
-            fi
-            if [ "${CACHE_SIZE_RRSET}" != "" ]; then
-                sed -i "s/rrset-cache-size: 4m/rrset-cache-size: ${CACHE_SIZE_RRSET}/g" "${DOCKER_PATH}/conf/unbound.conf"
-            fi
         else
             sed -i "s/#-/  /g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
