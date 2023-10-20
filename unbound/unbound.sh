@@ -27,6 +27,8 @@ ENABLE_LOGFILE="false"
 
 ENABLE_RATELIMIT="false"
 
+ENABLE_USE_CAPS_FOR_ID="false"
+
 ENABLE_PREFETCH="false"
 ENABLE_PREFETCH_KEY="true"
 
@@ -146,6 +148,10 @@ function DownloadConfiguration() {
 
         if [ "${ENABLE_RATELIMIT}" == "false" ]; then
             sed -i "s/ratelimit\: 1000/ratelimit\: 0/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+
+        if [ "${ENABLE_USE_CAPS_FOR_ID}" == "false" ]; then
+            sed -i "s/use-caps-for-id\: yes/use-caps-for-id\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_PREFETCH}" == "false" ]; then
