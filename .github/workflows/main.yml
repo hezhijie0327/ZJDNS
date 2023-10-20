@@ -1,8 +1,10 @@
-# Current Version: 1.0.5
+# Current Version: 1.0.6
 
 name: Build & Release hezhijie0327/CMA_DNS
 
 on:
+    push:
+        branches: [main]
     schedule:
         - cron: "0 0 1 */1 *"
 
