@@ -1,4 +1,4 @@
-# Current Version: 1.0.7
+# Current Version: 1.0.8
 
 name: Build & Release hezhijie0327/CMA_DNS
 
@@ -20,7 +20,6 @@ jobs:
                   cd unbound
                   sudo wget "https://www.internic.net/domain/named.cache"
                   sudo mv named.cache root.hints
-                  sudo sed -i "s|199.9.14.201|170.247.170.2|g;s|2001:500:200::b|2801:1b8:10::b|g" root.hints
                   cd ..
             - name: Step 3 - Release CMA_DNS
               run: |
