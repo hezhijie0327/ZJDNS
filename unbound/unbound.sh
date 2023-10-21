@@ -10,7 +10,7 @@ CURL_OPTION=""
 DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
-NUM_THREADS=$(grep -c ^processor /proc/cpuinfo)
+NUM_THREADS="auto" # auto, 1, 2
 
 ENABLE_DNSSEC="false"
 ENABLE_DNSSEC_PERMISSIVE_MODE="false"
@@ -112,7 +112,9 @@ function DownloadConfiguration() {
         fi
 
         if [ "${NUM_THREADS}" != "" ]; then
-            sed -i "s/num-threads\: 1/num-threads\: ${NUM_THREADS:-1}/g;s/slabs\: 1/slabs:\ $((${NUM_THREADS:-1} * ${NUM_THREADS:-1}))/g" "${DOCKER_PATH}/conf/unbound.conf"
+            if [ "${NUM_THREADS}" == "auto" ]; then
+               NUM_THREADS=$(grep -c ^processor /proc/cpuinfo)
+            fi && sed -i "s/num-threads\: 1/num-threads\: ${NUM_THREADS:-1}/g;s/slabs\: 1/slabs:\ $((${NUM_THREADS:-1} * ${NUM_THREADS:-1}))/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_DNSSEC}" == "false" ]; then
