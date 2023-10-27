@@ -52,7 +52,7 @@ ENABLE_REDIS_CACHE="false"
 
 CREATE_REDIS_INSTANCE="false"
 REDIS_MAXMEMORY="" # 4MB
-REDIS_MAXMEMORY_POLICY="" # noeviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl, volatile-lfu, allkeys-lfu
+REDIS_MAXMEMORY_POLICY="allkeys-lru" # noeviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl, volatile-lfu, allkeys-lfu
 
 ENABLE_REMOTE_CONTROL="true"
 
