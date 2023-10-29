@@ -24,6 +24,9 @@ CACHE_CHECKPOINT_TIME="" # 300, 600, 900
 CACHE_PERSIST="" # false, true
 CACHE_SIZE="" # -1 (Auto), 0 (None), 4096
 
+EDNS_ADDR="" # auto, 127.0.0.1, ::1
+EDNS_ADDR_TYPE="" # A, AAAA
+
 MAX_REPLY_IP_NUM="" # 1 - 16 (MAX)
 RESPONSE_MODE="" # first-ping, fastest-ip, fastest-response
 SPEED_CHECK_MODE="" # none, ping, tcp:port
@@ -115,6 +118,12 @@ function DownloadConfiguration() {
             else
                 sed -i "s/cache-size 4096/cache-size ${CACHE_SIZE}/g" "${DOCKER_PATH}/conf/smartdns.conf"
             fi
+        fi
+
+        if [ "${EDNS_ADDR}" != "" ]; then
+            if [ "${EDNS_ADDR_TYPE:-A}" != "A" ]; then
+                EDNS_CLIENT_SUBNET="48"
+            fi && sed -i "s|edns-client-subnet 127.0.0.1/24|edns-client-subnet $(StaticIP=${EDNS_ADDR} && Type=${EDNS_ADDR_TYPE:-A} && GetWANIP)/${EDNS_CLIENT_SUBNET:-24}|g" "${DOCKER_PATH}/conf/smartdns.conf"
         fi
 
         if [ "${MAX_REPLY_IP_NUM}" != "" ]; then
