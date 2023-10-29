@@ -16,6 +16,14 @@ plugins:
 #=    dump_interval: 300
       lazy_cache_ttl: 259200
       size: 4096
+  - tag: ecs_forward_or_send
+    type: ecs_handler
+    args:
+      forward: true
+      mask4: 24
+      mask6: 48
+#_    preset: 127.0.0.1
+      send: true
   - tag: forward_query_to_custom_upstream
     type: forward
     args:
@@ -905,6 +913,7 @@ plugins:
   - tag: sequence_forward_query_to_ecs
     type: sequence
     args:
+      - exec: $ecs_forward_or_send
       - exec: ttl 0-86400
 #~    - exec: $forward_query_to_custom_upstream
 #~    - exec: jump sequence_check_response_has_invalid_answer
@@ -922,6 +931,7 @@ plugins:
   - tag: sequence_forward_query_to_no_ecs
     type: sequence
     args:
+      - exec: $ecs_forward_or_send
       - exec: ttl 0-86400
 #~    - exec: $forward_query_to_custom_upstream
 #~    - exec: jump sequence_check_response_has_invalid_answer
