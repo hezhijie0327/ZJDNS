@@ -190,7 +190,7 @@ function DownloadConfiguration() {
         fi
 
         if [ "${EDNS_ADDR}" != "" ]; then
-            sed -i "s/#_    preset: 127.0.0.1/      preset: $(StaticIP=${EDNS_ADDR} && Type=${EDNS_ADDR_TYPE:-A} && GetWANIP)/g" ""
+            sed -i "s/#_    preset: 127.0.0.1/      preset: $(StaticIP=${EDNS_ADDR} && Type=${EDNS_ADDR_TYPE:-A} && GetWANIP)/g" "${DOCKER_PATH}/conf/config.yaml"
         fi
 
         if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
