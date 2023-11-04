@@ -93,7 +93,7 @@ function DownloadConfiguration() {
     if [ "${USE_CDN}" == true ]; then
         CDN_PATH="source.zhijie.online"
         ROOT_HINTS_DOMAIN="source.zhijie.online"
-        ROOT_HINTS_PATH="CMA_DNS/main/unbound/root.hints"
+        ROOT_HINTS_PATH="ZJDNS/main/unbound/root.hints"
     else
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
         ROOT_HINTS_DOMAIN="www.internic.net"
@@ -105,7 +105,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/unbound.conf"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/unbound/unbound.conf" | sed "s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" > "${DOCKER_PATH}/conf/unbound.conf"
 
         if [ ! -d "${DOCKER_PATH}/work" ]; then
             mkdir -p "${DOCKER_PATH}/work"
