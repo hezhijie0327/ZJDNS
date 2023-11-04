@@ -126,7 +126,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CMA_DNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/mosdns/config.yaml" > "${DOCKER_PATH}/conf/config.yaml"
 
         if [ "${ENABLE_ALWAYS_STANDBY}" == "false" ]; then
             sed -i 's/always_standby: true/always_standby: false/g' "${DOCKER_PATH}/conf/config.yaml"
