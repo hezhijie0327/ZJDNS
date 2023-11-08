@@ -235,7 +235,7 @@ function DownloadConfiguration() {
             fi
         else
             if [ "${UNENCRYPTED_PORT:-3553}" != "3553" ]; then
-                sed "s/port: 3553/port: :${UNENCRYPTED_PORT}/g;s/@3553/@${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/config.yaml"
+                sed -i "s/port: 3553/port: ${UNENCRYPTED_PORT}/g;s/@3553/@${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/unbound.conf"
             fi
         fi
 
