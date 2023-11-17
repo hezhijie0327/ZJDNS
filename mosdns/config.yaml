@@ -915,10 +915,10 @@ plugins:
     args:
       - exec: $ecs_forward_or_send
       - exec: ttl 0-86400
+##    - exec: jump sequence_check_response_has_cache_ecs
 #~    - exec: $forward_query_to_custom_upstream
 #~    - exec: jump sequence_check_response_has_invalid_answer
 #~    - exec: jump sequence_check_response_has_any_answer
-##    - exec: jump sequence_check_response_has_cache_ecs
 #(    - exec: $fallback_forward_query_to_local_ecs_ipv64
 #@    - exec: jump sequence_check_response_has_dns64_answer
 #@    - exec: jump sequence_check_response_has_specific_answer
@@ -933,10 +933,10 @@ plugins:
     args:
       - exec: $ecs_forward_or_send
       - exec: ttl 0-86400
+##    - exec: jump sequence_check_response_has_cache_no_ecs
 #~    - exec: $forward_query_to_custom_upstream
 #~    - exec: jump sequence_check_response_has_invalid_answer
 #~    - exec: jump sequence_check_response_has_any_answer
-##    - exec: jump sequence_check_response_has_cache_no_ecs
 #(    - exec: $fallback_forward_query_to_local_no_ecs_ipv64
 #@    - exec: jump sequence_check_response_has_dns64_answer
 #@    - exec: jump sequence_check_response_has_specific_answer
