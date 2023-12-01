@@ -219,16 +219,6 @@ function DownloadConfiguration() {
             sed -i "s/#=/  /g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
-        if [ "${CUSTOM_UPSTREAM}" != "" ]; then
-            sed -i "s/127.0.0.1@5533/${CUSTOM_UPSTREAM}/g;s/127.0.0.1@5535/${CUSTOM_UPSTREAM}/g" "${DOCKER_PATH}/conf/unbound.conf"
-        fi
-        if [ "${ENABLE_TCP_UPSTREAM}" == "false" ]; then
-            sed -i "s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
-        fi
-        if [ "${ENABLE_TLS_UPSTREAM}" == "true" ]; then
-            sed -i "s/127.0.0.1@5533/127.0.0.1@5535/g;s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
-        fi
-
         if [ "${ENABLE_UNENCRYPTED_DNS}" == "false" ]; then
             if [ "${ENABLE_HTTPS}" == "true" ] || [ "${ENABLE_TLS}" == "true" ]; then
                 sed -i "s/    interface/#+  interface/g" "${DOCKER_PATH}/conf/unbound.conf"
@@ -237,6 +227,16 @@ function DownloadConfiguration() {
             if [ "${UNENCRYPTED_PORT:-3553}" != "3553" ]; then
                 sed -i "s/port: 3553/port: ${UNENCRYPTED_PORT}/g;s/@3553/@${UNENCRYPTED_PORT}/g" "${DOCKER_PATH}/conf/unbound.conf"
             fi
+        fi
+
+        if [ "${CUSTOM_UPSTREAM}" != "" ]; then
+            sed -i "s/127.0.0.1@5533/${CUSTOM_UPSTREAM}/g;s/127.0.0.1@5535/${CUSTOM_UPSTREAM}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_TCP_UPSTREAM}" == "false" ]; then
+            sed -i "s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_TLS_UPSTREAM}" == "true" ]; then
+            sed -i "s/127.0.0.1@5533/127.0.0.1@5535/g;s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_HTTPS}" == "true" ]; then
