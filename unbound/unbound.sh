@@ -308,7 +308,7 @@ function CreateNewContainer() {
                ${OWNER}/${REPO}:${TAG} \
             -c "/etc/unbound/conf/unbound.conf" \
             -s "127.0.0.1@8953" \
-            stats
+            stats_noreset
     fi
 }
 # Cleanup Expired Image
