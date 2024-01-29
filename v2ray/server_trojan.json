@@ -57,30 +57,8 @@
         }
     ],
     "outbounds": [
-        {
-            "mux": {
-                "concurrency": 8,
-                "enabled": false
-            },
-            "protocol": "socks",
-            "settings": {
-                "servers": [
-                    {
-                        "address": "127.0.0.1",
-                        "port": 40000
-                    }
-                ]
-            },
-            "tag": "warp"
-        },
-        {
-            "mux": {
-                "concurrency": 8,
-                "enabled": false
-            },
-            "protocol": "freedom",
-            "tag": "direct"
-        }
+        { "mux": { "concurrency": 8, "enabled": false }, "protocol": "socks", "settings": { "servers": [ { "address": "127.0.0.1", "port": 40000 } ] }, "tag": "warp" },
+        { "mux": { "concurrency": 8, "enabled": false }, "protocol": "freedom", "tag": "direct" }
     ],
     "routing": {
         "domainMatcher": "mph",
