@@ -49,14 +49,7 @@
             },
             "tag": "trojan_grpc"
         },
-        {
-            "mux": {
-                "concurrency": 8,
-                "enabled": false
-            },
-            "protocol": "freedom",
-            "tag": "direct"
-        }
+        { "mux": { "concurrency": 8, "enabled": false }, "protocol": "freedom", "tag": "direct" }
     ],
     "routing": {
         "domainMatcher": "mph",
