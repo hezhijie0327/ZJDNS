@@ -1,5 +1,6 @@
 {
     "inbounds": [
+        { "listen": "0.0.0.0", "port": 40000, "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1", "port": 40000, "network": "tcp" }, "tag": "warp" },
         {
             "listen": "0.0.0.0",
             "port": 7890,
@@ -21,6 +22,7 @@
         }
     ],
     "outbounds": [
+        { "mux": { "concurrency": 8, "enabled": false }, "protocol": "socks", "settings": { "servers": [ { "address": "127.0.0.1", "port": 40000 } ] }, "tag": "proxy" },
         {
             "mux": {
                 "concurrency": 8,
@@ -55,6 +57,7 @@
         "domainMatcher": "mph",
         "domainStrategy": "IPIfNonMatch",
         "rules": [
+            { "inboundTag": [ "warp" ], "outboundTag": "trojan_grpc", "type": "field" },
             {
                 "ip": [
                     "0.0.0.0/8",
