@@ -2,7 +2,7 @@
 
 # Parameter
 OWNER="hezhijie0327"
-REPO="v2ray"
+REPO="v2ray" # v2ray, xray
 TAG="latest"
 DOCKER_PATH="/docker/v2ray"
 
@@ -33,8 +33,18 @@ function GetLatestImage() {
 }
 # Cleanup Current Container
 function CleanupCurrentContainer() {
+    if [ "${REPO}" == "v2ray" ]; then
+        TEMP_REPO="xray"
+    else
+        TEMP_REPO="${REPO}"
+    fi
+
     if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REPO}$") ]; then
         docker stop ${REPO} && docker rm ${REPO}
+    fi
+
+    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${TEMP_REPO}$") ]; then
+        docker stop ${TEMP_REPO} && docker rm ${TEMP_REPO}
     fi
 }
 # Download Configuration
