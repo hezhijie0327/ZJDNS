@@ -36,7 +36,7 @@ function CleanupCurrentContainer() {
     if [ "${REPO}" == "v2ray" ]; then
         TEMP_REPO="xray"
     else
-        TEMP_REPO="${REPO}"
+        TEMP_REPO="v2ray"
     fi
 
     if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REPO}$") ]; then
