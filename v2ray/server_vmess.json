@@ -44,9 +44,7 @@
             "port": 7890,
             "protocol": "http",
             "settings": {
-                "allowTransparent": false,
-                "timeout": 0,
-                "userLevel": 0
+                "allowTransparent": true
             }
         },
         {
@@ -54,8 +52,7 @@
             "port": 7891,
             "protocol": "socks",
             "settings": {
-                "udp": true,
-                "userLevel": 0
+                "udp": true
             }
         }
     ],
