@@ -40,6 +40,7 @@
                 "network": "grpc",
                 "security": "tls",
                 "tlsSettings": {
+                    "allowInsecure": false,
                     "serverName": "demo.zhijie.online"
                 }
             },
