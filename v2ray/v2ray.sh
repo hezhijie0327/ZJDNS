@@ -75,7 +75,7 @@ function DownloadConfiguration() {
         fi
 
         if [ "${ENABLE_WARP:-false}" == "false" ]; then
-            sed -i '/"address": "127.0.0.1", "port": 40000/d;/"inboundTag": \[ "warp" \]/d' "${DOCKER_PATH}/conf/config.json"
+            sed -i '/"address": "127.0.0.1", "port": 40000/d' "${DOCKER_PATH}/conf/config.json"
         fi
     fi
 

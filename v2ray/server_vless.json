@@ -19,7 +19,6 @@
                 "network": "grpc",
                 "security": "tls",
                 "tlsSettings": {
-                    "allowInsecure": false,
                     "alpn": [
                         "h2",
                         "http/1.1"
