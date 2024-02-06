@@ -89,7 +89,7 @@
         ]
     },
     "observatory": {
-        "probeInterval": "15s",
-        "probeURL": "https://cp.cloudflare.com"
+        "probeInterval": "5s",
+        "probeURL": "https://cp.cloudflare.com/generate_204"
     }
 }

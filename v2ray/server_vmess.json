@@ -95,5 +95,9 @@
                 "type": "field"
             }
         ]
+    },
+    "observatory": {
+        "probeInterval": "5s",
+        "probeURL": "https://cp.cloudflare.com/generate_204"
     }
 }
