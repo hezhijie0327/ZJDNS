@@ -50,7 +50,7 @@
     ],
     "routing": {
         "domainMatcher": "mph",
-        "domainStrategy": "IPIfNonMatch",
+        "domainStrategy": "IPOnDemand",
         "rules": [
             {
                 "ip": [
