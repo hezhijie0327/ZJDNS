@@ -82,7 +82,7 @@
             "port": 7890,
             "protocol": "http",
             "settings": {
-                "allowTransparent": true
+                "allowTransparent": false
             }
         },
         {
