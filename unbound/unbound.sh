@@ -1,9 +1,14 @@
 #!/bin/bash
 
 # Parameter
-OWNER="hezhijie0327" && REDIS_OWNER=""
-REPO="unbound" && REDIS_REPO=""
-TAG="latest" && REDIS_TAG=""
+OWNER="hezhijie0327"
+REPO="unbound"
+TAG="latest"
+
+REDIS_OWNER="hezhijie0327"
+REDIS_REPO="redis" # redis, valkey
+REDIS_TAG="latest"
+
 DOCKER_PATH="/docker/unbound"
 
 CURL_OPTION=""
@@ -75,17 +80,27 @@ SSL_KEY="zhijie.online.key"
 # Get Latest Image
 function GetLatestImage() {
     if [ "${CREATE_REDIS_INSTANCE}" == "true" ]; then
-        docker pull ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG}
+        docker pull ${REDIS_OWNER}/${REDIS_REPO}:${REDIS_TAG}
     fi && docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
 # Cleanup Current Container
 function CleanupCurrentContainer() {
+    if [ "${REDIS_REPO}" == "redis" ]; then
+        TEMP_REDIS_REPO="valkey"
+    else
+        TEMP_REDIS_REPO="redis"
+    fi
+
     if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REPO}$") ]; then
         docker stop ${REPO} && docker rm ${REPO}
     fi
 
-    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REDIS_REPO:-redis}_${REPO}$") ]; then
-        docker stop ${REDIS_REPO:-redis}_${REPO} && docker rm ${REDIS_REPO:-redis}_${REPO}
+    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REDIS_REPO}_${REPO}$") ]; then
+        docker stop ${REDIS_REPO}_${REPO} && docker rm ${REDIS_REPO}_${REPO}
+    fi
+
+    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${TEMP_REDIS_REPO}_${REPO}$") ]; then
+        docker stop ${TEMP_REDIS_REPO}_${REPO} && docker rm ${TEMP_REDIS_REPO}_${REPO}
     fi
 }
 # Download Configuration
@@ -258,9 +273,9 @@ function DownloadConfiguration() {
 # Create New Container
 function CreateNewContainer() {
     if [ "${CREATE_REDIS_INSTANCE}" == "true" ]; then
-        docker run --name ${REDIS_REPO:-redis}_${REPO} --net host --restart=always \
+        docker run --name ${REDIS_REPO}_${REPO} --net host --restart=always \
             -v ${DOCKER_PATH}/data:/etc/redis/data \
-            -d ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG} \
+            -d ${REDIS_OWNER}/${REDIS_REPO}:${REDIS_TAG} \
             --activedefrag yes \
             --aof-use-rdb-preamble yes \
             --appendfsync everysec \
@@ -278,8 +293,8 @@ function CreateNewContainer() {
             --maxmemory-samples 10 \
             --replica-lazy-flush yes
 
-        docker run -it --rm --entrypoint=/redis-cli --net host \
-               ${REDIS_OWNER:-$OWNER}/${REDIS_REPO:-redis}:${REDIS_TAG:-$TAG} \
+        docker run -it --rm --entrypoint=/${REDIS_REPO}-cli --net host \
+               ${REDIS_OWNER}/${REDIS_REPO}:${REDIS_TAG} \
             info
     fi
 
