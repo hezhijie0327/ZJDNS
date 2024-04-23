@@ -246,11 +246,11 @@ function DownloadConfiguration() {
         fi
 
         if [ "${CUSTOM_UPSTREAM[*]}" != "" ]; then
-                SED_CUSTOM_UPSTREAM="" && for CUSTOM_UPSTREAM_TASK in "${!CUSTOM_UPSTREAM[@]}"; do
-                    SED_CUSTOM_UPSTREAM="${SED_CUSTOM_UPSTREAM}forward-addr: ${CUSTOM_UPSTREAM[$CUSTOM_UPSTREAM_TASK]}\n"
-                done && CUSTOM_UPSTREAM="${SED_CUSTOM_UPSTREAM%\\n}"
+            SED_CUSTOM_UPSTREAM="" && for CUSTOM_UPSTREAM_TASK in "${!CUSTOM_UPSTREAM[@]}"; do
+                SED_CUSTOM_UPSTREAM="${SED_CUSTOM_UPSTREAM}forward-addr: ${CUSTOM_UPSTREAM[$CUSTOM_UPSTREAM_TASK]}\n"
+            done && CUSTOM_UPSTREAM="${SED_CUSTOM_UPSTREAM%\\n}"
 
-                sed -i "s/127.0.0.1@5533/${CUSTOM_UPSTREAM}/g;s/127.0.0.1@5535/${CUSTOM_UPSTREAM}/g" "${DOCKER_PATH}/conf/unbound.conf"
+            sed -i "s/127.0.0.1@5533/${CUSTOM_UPSTREAM}/g;s/127.0.0.1@5535/${CUSTOM_UPSTREAM}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
         if [ "${ENABLE_TCP_UPSTREAM}" == "false" ]; then
             sed -i "s/tcp-upstream\: yes/tcp-upstream\: no/g;s/tls-upstream\: no/tls-upstream\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
