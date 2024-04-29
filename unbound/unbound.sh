@@ -38,9 +38,10 @@ ENABLE_PREFETCH="false"
 ENABLE_PREFETCH_KEY="true"
 
 ENABLE_SERVE_EXPIRED="false"
-ENABLE_SERVE_EXPIRED_CLIENT_TIMEOUT="" # 0, 1800
 ENABLE_SERVE_EXPIRED_TTL_RESET="true"
 ENABLE_SERVE_ORIGINAL_TTL="false"
+SERVE_EXPIRED_CLIENT_TIMEOUT="" # 0, 1800
+SERVE_EXPIRED_TTL="" # 0, 86400, 259200
 
 CACHE_SIZE_KEY="" # 4m
 CACHE_SIZE_MSG="" # 4m
@@ -181,14 +182,17 @@ function DownloadConfiguration() {
         if [ "${ENABLE_SERVE_EXPIRED}" == "false" ]; then
             sed -i "s/serve-expired\: yes/serve-expired\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-        if [ "${ENABLE_SERVE_EXPIRED_CLIENT_TIMEOUT}" != "0" ]; then
-            sed -i "s/serve-expired-client-timeout\: 0/serve-expired-client-timeout\: ${ENABLE_SERVE_EXPIRED_CLIENT_TIMEOUT}/g" "${DOCKER_PATH}/conf/unbound.conf"
-        fi
         if [ "${ENABLE_SERVE_EXPIRED_TTL_RESET}" == "false" ]; then
             sed -i "s/serve-expired-ttl-reset\: yes/serve-expired-ttl-reset\: no/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
         if [ "${ENABLE_SERVE_ORIGINAL_TTL}" == "true" ]; then
             sed -i "s/serve-original-ttl\: no/serve-original-ttl\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${SERVE_EXPIRED_CLIENT_TIMEOUT}" != "0" ]; then
+            sed -i "s/serve-expired-client-timeout\: 0/serve-expired-client-timeout\: ${SERVE_EXPIRED_CLIENT_TIMEOUT}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${SERVE_EXPIRED_TTL}" != "0" ]; then
+            sed -i "s/serve-expired-ttl\: 0/serve-expired-ttl\: ${SERVE_EXPIRED_TTL}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${CACHE_SIZE_KEY}" != "" ]; then
