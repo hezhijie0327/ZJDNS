@@ -188,10 +188,10 @@ function DownloadConfiguration() {
         if [ "${ENABLE_SERVE_ORIGINAL_TTL}" == "true" ]; then
             sed -i "s/serve-original-ttl\: no/serve-original-ttl\: yes/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-        if [ "${SERVE_EXPIRED_CLIENT_TIMEOUT}" != "0" ]; then
+        if [ "${SERVE_EXPIRED_CLIENT_TIMEOUT:-0}" != "0" ]; then
             sed -i "s/serve-expired-client-timeout\: 0/serve-expired-client-timeout\: ${SERVE_EXPIRED_CLIENT_TIMEOUT}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-        if [ "${SERVE_EXPIRED_TTL}" != "0" ]; then
+        if [ "${SERVE_EXPIRED_TTL:-0}" != "0" ]; then
             sed -i "s/serve-expired-ttl\: 0/serve-expired-ttl\: ${SERVE_EXPIRED_TTL}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
