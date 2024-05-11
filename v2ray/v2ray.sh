@@ -15,8 +15,10 @@ RUNTIME_PROTOCOL="" # trojan, vless, vmess
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipinfoio, ipipdotnet, iptoasn, vxlink, zjdb
 
-CUSTOM_SERVERNAME="" # demo.zhijie.online
-CUSTOM_UUID="" # 99235a6e-05d4-2afe-2990-5bc5cf1f5c52
+CUSTOM_SERVERNAME="demo.zhijie.online" # demo.zhijie.online
+CUSTOM_UUID="99235a6e-05d4-2afe-2990-5bc5cf1f5c52" # $(uuidgen | tr 'A-Z' 'a-z')
+
+CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1")
 
 ENABLE_MUX="" # false, true
 MUX_CONCURRENCY=""
@@ -49,10 +51,6 @@ function CleanupCurrentContainer() {
 }
 # Download Configuration
 function DownloadConfiguration() {
-    if [ "${RUNNING_MODE}" != "client" ]; then
-        RUNNING_MODE="server"
-    fi
-
     if [ "${USE_CDN}" == "true" ]; then
         CDN_PATH="source.zhijie.online"
     else
@@ -64,7 +62,35 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/v2ray/${RUNNING_MODE:-server}_${RUNTIME_PROTOCOL:-vmess}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/demo.zhijie.online/${CUSTOM_SERVERNAME:-demo.zhijie.online}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID:-$(uuidgen | tr 'A-Z' 'a-z')}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/v2ray/${RUNNING_MODE:-server}_${RUNTIME_PROTOCOL:-vmess}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
+
+        if [ "${CUSTOM_IP[*]}" != "" ] && [ "${RUNNING_MODE:-server}" == "client" ]; then
+            JSON_STRING="" && for IP in "${CUSTOM_IP[@]}"; do
+                case "${RUNTIME_PROTOCOL:-vmess}" in
+                    "trojan")
+                        JSON_STRING+='{ "address": "'${IP}'", "port": 443, "password": "'${CUSTOM_UUID}'" }, '
+                        ;;
+                    "vless")
+                        JSON_STRING+='{ "address": "'${IP}'", "port": 443, "users": [ { "encryption": "none", "id": "'${CUSTOM_UUID}'" } ] }, '
+                        ;;
+                    "vmess")
+                        JSON_STRING+='{ "address": "'${IP}'", "port": 443, "users": [ { "id": "'${CUSTOM_UUID}'", "security": "auto" } ] }, '
+                        ;;
+                esac
+            done && JSON_STRING="${JSON_STRING%, }"
+
+            case "${RUNTIME_PROTOCOL:-vmess}" in
+                "trojan")
+                    sed -i "s/{ \"address\": \"${CUSTOM_SERVERNAME}\", \"port\": 443, \"password\": \"${CUSTOM_UUID}\" }/${JSON_STRING}/g" "${DOCKER_PATH}/conf/config.json"
+                    ;;
+                "vless")
+                    sed -i "s/{ \"address\": \"${CUSTOM_SERVERNAME}\", \"port\": 443, \"users\": \\[ { \"encryption\": \"none\", \"id\": \"${CUSTOM_UUID}\" } \\] }/${JSON_STRING}/g" "${DOCKER_PATH}/conf/config.json"
+                    ;;
+                "vmess")
+                    sed -i "s/{ \"address\": \"${CUSTOM_SERVERNAME}\", \"port\": 443, \"users\": \\[ { \"id\": \"${CUSTOM_UUID}\", \"security\": \"auto\" } \\] }/${JSON_STRING}/g" "${DOCKER_PATH}/conf/config.json"
+                    ;;
+            esac
+        fi
 
         if [ "${ENABLE_MUX:-true}" != "true" ]; then
             sed -i 's/"enabled": true/"enabled": false/g' "${DOCKER_PATH}/conf/config.json"

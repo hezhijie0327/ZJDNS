@@ -69,11 +69,7 @@
             "protocol": "trojan",
             "settings": {
                 "servers": [
-                    {
-                        "address": "demo.zhijie.online",
-                        "port": 443,
-                        "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52"
-                    }
+                    { "address": "demo.zhijie.online", "port": 443, "password": "99235a6e-05d4-2afe-2990-5bc5cf1f5c52" }
                 ]
             },
             "streamSettings": {
