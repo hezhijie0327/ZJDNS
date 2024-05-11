@@ -3,6 +3,7 @@
         "access": "none",
         "loglevel": "info"
     },
+    "dns": { "servers": [ { "address": "127.0.0.1", "port": 53 } ] },
     "routing": {
         "domainMatcher": "mph",
         "domainStrategy": "IPOnDemand",
