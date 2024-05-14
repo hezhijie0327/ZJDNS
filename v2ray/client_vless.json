@@ -4,8 +4,10 @@
         "loglevel": "info"
     },
     "dns": {
+        "clientIp": "127.0.0.1",
         "disableCache": true,
         "disableFallback": true,
+        "queryStrategy": "UseIP",
         "servers": [
             { "address": "127.0.0.1", "port": 53 } 
         ]

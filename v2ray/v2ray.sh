@@ -20,6 +20,9 @@ CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipinfoio, ipipdotnet,
 CUSTOM_SERVERNAME="demo.zhijie.online" # demo.zhijie.online
 CUSTOM_UUID="99235a6e-05d4-2afe-2990-5bc5cf1f5c52" # $(uuidgen | tr 'A-Z' 'a-z')
 
+CUSTOM_CLIENT_IP="" # auto, 127.0.0.1, ::1
+CUSTOM_CLIENT_IP_TYPE="" # A, AAAA
+
 CUSTOM_DNS=() # ("1.0.0.1@53" "223.5.5.5@53#CN" "8.8.8.8@53%1.1.1.1")
 CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1")
 
@@ -32,6 +35,59 @@ SSL_CERT="fullchain.cer"
 SSL_KEY="zhijie.online.key"
 
 ## Function
+# Get WAN IP
+function GetWANIP() {
+    if [ "${Type}" == "A" ]; then
+        IPv4_v6="4"
+        IP_REGEX="^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$"
+    else
+        IPv4_v6="6"
+        IP_REGEX="^(([0-9a-f]{1,4}:){7,7}[0-9a-f]{1,4}|([0-9a-f]{1,4}:){1,7}:|([0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|([0-9a-f]{1,4}:){1,5}(:[0-9a-f]{1,4}){1,2}|([0-9a-f]{1,4}:){1,4}(:[0-9a-f]{1,4}){1,3}|([0-9a-f]{1,4}:){1,3}(:[0-9a-f]{1,4}){1,4}|([0-9a-f]{1,4}:){1,2}(:[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:((:[0-9a-f]{1,4}){1,6})|:((:[0-9a-f]{1,4}){1,7}|:)|fe80:(:[0-9a-f]{0,4}){0,4}%[0-9a-z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-f]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$"
+    fi
+    if [ "${StaticIP:-auto}" == "auto" ]; then
+        IP_RESULT=$(curl -${IPv4_v6:-4} -s --connect-timeout 15 "https://api.cloudflare.com/cdn-cgi/trace" | grep "ip=" | sed "s/ip=//g" | grep -E "${IP_REGEX}")
+        if [ "${IP_RESULT}" == "" ]; then
+            IP_RESULT=$(curl -${IPv4_v6:-4} -s --connect-timeout 15 "https://api64.ipify.org" | grep -E "${IP_REGEX}")
+            if [ "${IP_RESULT}" == "" ]; then
+                IP_RESULT=$(dig -${IPv4_v6:-4} +short TXT @ns1.google.com o-o.myaddr.l.google.com | tr -d '"' | grep -E "${IP_REGEX}")
+                if [ "${IP_RESULT}" == "" ]; then
+                    IP_RESULT=$(dig -${IPv4_v6:-4} +short ANY @resolver1.opendns.com myip.opendns.com | grep -E "${IP_REGEX}")
+                    if [ "${IP_RESULT}" == "" ]; then
+                        echo "invalid"
+                    else
+                        echo "${IP_RESULT}"
+                    fi
+                else
+                    echo "${IP_RESULT}"
+                fi
+            else
+                echo "${IP_RESULT}"
+            fi
+        else
+            echo "${IP_RESULT}"
+        fi
+    else
+        if [ "$(echo ${StaticIP} | grep ',')" != "" ]; then
+            if [ "${Type}" == "A" ]; then
+                IP_RESULT=$(echo "${StaticIP}" | cut -d ',' -f 1 | grep -E "${IP_REGEX}")
+            else
+                IP_RESULT=$(echo "${StaticIP}" | cut -d ',' -f 2 | grep -E "${IP_REGEX}")
+            fi
+            if [ "${IP_RESULT}" == "" ]; then
+                echo "invalid"
+            else
+                echo "${IP_RESULT}"
+            fi
+        else
+            IP_RESULT=$(echo "${StaticIP}" | grep -E "${IP_REGEX}")
+            if [ "${IP_RESULT}" == "" ]; then
+                echo "invalid"
+            else
+                echo "${IP_RESULT}"
+            fi
+        fi
+    fi
+}
 # Get Latest Image
 function GetLatestImage() {
     docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
@@ -66,6 +122,10 @@ function DownloadConfiguration() {
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/v2ray/${RUNNING_MODE:-server}_${RUNTIME_PROTOCOL:-vmess}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
+
+        if [ "${CUSTOM_CLIENT_IP:-auto}" != "" ]; then
+            sed -i "s|\"clientIp\": \"127.0.0.1\"|\"clientIp\": \"$(StaticIP=${CUSTOM_CLIENT_IP} && Type=${CUSTOM_CLIENT_IP_TYPE:-A} && GetWANIP)\"|g" "${DOCKER_PATH}/conf/config.json"
+        fi
 
         if [ "${CUSTOM_DNS[*]}" != "" ]; then
             JSON_STRING="" && for IP in "${CUSTOM_DNS[@]}"; do
