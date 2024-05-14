@@ -6,7 +6,7 @@
     "dns": {
         "clientIp": "127.0.0.1",
         "disableCache": true,
-        "disableFallback": true,
+        "disableFallback": false,
         "queryStrategy": "UseIP",
         "servers": [
             { "address": "127.0.0.1", "port": 53 } 
