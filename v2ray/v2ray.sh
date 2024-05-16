@@ -123,10 +123,6 @@ function DownloadConfiguration() {
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/v2ray/${RUNNING_MODE:-server}_${RUNTIME_PROTOCOL:-vmess}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
 
-        if [ "${CUSTOM_CLIENT_IP:-auto}" != "" ]; then
-            sed -i "s|\"clientIp\": \"127.0.0.1\"|\"clientIp\": \"$(StaticIP=${CUSTOM_CLIENT_IP} && Type=${CUSTOM_CLIENT_IP_TYPE:-A} && GetWANIP)\"|g" "${DOCKER_PATH}/conf/config.json"
-        fi
-
         if [ "${CUSTOM_DNS[*]}" != "" ]; then
             JSON_STRING="" && for IP in "${CUSTOM_DNS[@]}"; do
                 IPADDR="" && IPADDR=$(echo ${IP} | cut -d "@" -f 1)
@@ -135,7 +131,7 @@ function DownloadConfiguration() {
                 CLIENT="" && CLIENT=$(echo ${IP} | grep '%' | cut -d "%" -f 2)
 
                 ADDITIONAL="" && if [ "${CLIENT}" != "" ]; then
-                    ADDITIONAL=', "clientIp": "'${CLIENT}'"'
+                    ADDITIONAL=', "clientIp": "'$(StaticIP=${CLIENT} && Type=${CUSTOM_CLIENT_IP_TYPE:-A} && GetWANIP)'"'
                 fi
 
                 if [ "${EXPECT}" != "" ]; then
