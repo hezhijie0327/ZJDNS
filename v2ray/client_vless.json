@@ -4,7 +4,6 @@
         "loglevel": "info"
     },
     "dns": {
-        "clientIp": "127.0.0.1",
         "disableCache": true,
         "disableFallback": false,
         "queryStrategy": "UseIP",
