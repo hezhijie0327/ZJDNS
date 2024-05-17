@@ -20,10 +20,7 @@ CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipinfoio, ipipdotnet,
 CUSTOM_SERVERNAME="demo.zhijie.online" # demo.zhijie.online
 CUSTOM_UUID="99235a6e-05d4-2afe-2990-5bc5cf1f5c52" # $(uuidgen | tr 'A-Z' 'a-z')
 
-CUSTOM_CLIENT_IP="" # auto, 127.0.0.1, ::1
-CUSTOM_CLIENT_IP_TYPE="" # A, AAAA
-
-CUSTOM_DNS=() # ("1.0.0.1@53" "223.5.5.5@53#CN" "8.8.8.8@53%1.1.1.1")
+CUSTOM_DNS=() # ("1.0.0.1@53" "223.5.5.5@53#CN" "8.8.8.8@53%1.1.1.1" "8.8.4.4@53%auto&AAAA")
 CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1")
 
 ENABLE_MUX="" # false, true
@@ -126,12 +123,13 @@ function DownloadConfiguration() {
         if [ "${CUSTOM_DNS[*]}" != "" ]; then
             JSON_STRING="" && for IP in "${CUSTOM_DNS[@]}"; do
                 IPADDR="" && IPADDR=$(echo ${IP} | cut -d "@" -f 1)
-                PORT="" && PORT=$(echo ${IP} | grep '@' | cut -d "@" -f 2 | cut -d "#" -f 1 | cut -d "%" -f 1)
-                EXPECT="" && EXPECT=$(echo ${IP} | grep '#' | cut -d "#" -f 2 | cut -d "%" -f 1)
-                CLIENT="" && CLIENT=$(echo ${IP} | grep '%' | cut -d "%" -f 2)
+                PORT="" && PORT=$(echo ${IP} | grep '@' | cut -d "@" -f 2 | cut -d "#" -f 1 | cut -d "%" -f 1 | cut -d "&" -f 1)
+                EXPECT="" && EXPECT=$(echo ${IP} | grep '#' | cut -d "#" -f 2 | cut -d "%" -f 1 | cut -d "&" -f 1)
+                CLIENT="" && CLIENT=$(echo ${IP} | grep '%' | cut -d "%" -f 2 | cut -d "&" -f 1)
+                TYPE="" && TYPE=$(echo ${IP} | grep '&' | cut -d "&" -f 2)
 
                 ADDITIONAL="" && if [ "${CLIENT}" != "" ]; then
-                    ADDITIONAL=', "clientIp": "'$(StaticIP=${CLIENT} && Type=${CUSTOM_CLIENT_IP_TYPE:-A} && GetWANIP)'"'
+                    ADDITIONAL=', "clientIp": "'$(StaticIP=${CLIENT} && Type=${TYPE:-A} && GetWANIP)'"'
                 fi
 
                 if [ "${EXPECT}" != "" ]; then
