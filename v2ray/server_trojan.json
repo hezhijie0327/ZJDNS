@@ -8,7 +8,7 @@
         "disableFallback": false,
         "queryStrategy": "UseIP",
         "servers": [
-            { "address": "127.0.0.1", "port": 53 } 
+            { "address": "127.0.0.1", "port": 53 }
         ]
     },
     "routing": {
