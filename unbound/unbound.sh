@@ -55,6 +55,7 @@ CUSTOM_REDIS_SERVER_HOST="" # 127.0.0.1
 CUSTOM_REDIS_SERVER_PASSWORD=""
 CUSTOM_REDIS_SERVER_PATH=""
 CUSTOM_REDIS_SERVER_PORT="" # 6379
+ENABLE_REDIS_CACHE_CHECK_WHEN_SERVE_EXPIRED="false"
 ENABLE_REDIS_CACHE="false"
 
 CREATE_REDIS_INSTANCE="false"
@@ -230,6 +231,9 @@ function DownloadConfiguration() {
         fi
         if [ "${CUSTOM_REDIS_SERVER_PORT}" != "" ]; then
             sed -i "s/redis-server-port: 6379/redis-server-port: ${CUSTOM_REDIS_SERVER_PORT}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${ENABLE_REDIS_CACHE_CHECK_WHEN_SERVE_EXPIRED}" == "false" ]; then
+            sed -i "s/cachedb-check-when-serve-expired: yes/cachedb-check-when-serve-expired: no/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
         if [ "${ENABLE_REDIS_CACHE}" == "false" ]; then
             sed -i "/cachedb:/d;/#-/d;s/cachedb //g" "${DOCKER_PATH}/conf/unbound.conf"
