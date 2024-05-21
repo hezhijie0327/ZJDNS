@@ -132,7 +132,7 @@ function CreateNewContainer() {
     fi
 
     if [ "${ENABLE_CACHE}" == "true" ]; then
-        RUNTIME_CONFIG+=("--cache" "--cache-size=${CACHE_SIZE:-4194304}" "--cache-max-ttl=86400" "--cache-min-ttl=0" "--cache-optimistic")
+        RUNTIME_CONFIG+=("--cache" "--cache-size=${CACHE_SIZE:-4194304}" "--cache-max-ttl=0" "--cache-min-ttl=0" "--cache-optimistic")
     fi
 
     if [ "${ENABLE_EDNS}" == "true" ]; then
