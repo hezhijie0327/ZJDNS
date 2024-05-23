@@ -111,12 +111,8 @@ function CleanupCurrentContainer() {
 function DownloadConfiguration() {
     if [ "${USE_CDN}" == true ]; then
         CDN_PATH="source.zhijie.online"
-        ROOT_HINTS_DOMAIN="source.zhijie.online"
-        ROOT_HINTS_PATH="ZJDNS/main/unbound/root.hints"
     else
         CDN_PATH="raw.githubusercontent.com/hezhijie0327"
-        ROOT_HINTS_DOMAIN="www.internic.net"
-        ROOT_HINTS_PATH="domain/named.cache"
     fi
 
     if [ ! -d "${DOCKER_PATH}/conf" ]; then
@@ -282,10 +278,6 @@ function DownloadConfiguration() {
             sed -i "/#/d" "${DOCKER_PATH}/conf/unbound.conf"
         fi
     fi
-
-    if [ ! -d "${DOCKER_PATH}/data" ]; then
-        mkdir -p "${DOCKER_PATH}/data"
-    fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${ROOT_HINTS_DOMAIN}/${ROOT_HINTS_PATH}" > "${DOCKER_PATH}/data/root.hints"
 }
 # Create New Container
 function CreateNewContainer() {
@@ -310,11 +302,6 @@ function CreateNewContainer() {
             --maxmemory-samples 10 \
             --port ${REDIS_PORT:-6379} \
             --replica-lazy-flush yes
-
-        docker run -it --rm --entrypoint=/${REDIS_REPO}-cli --net host \
-               ${REDIS_OWNER}/${REDIS_REPO}:${REDIS_TAG} \
-            -p ${REDIS_PORT:-6379} \
-            info
     fi
 
     docker run -it --rm --entrypoint=/unbound-anchor \
@@ -324,7 +311,7 @@ function CreateNewContainer() {
         -a "/etc/unbound/data/root.key" \
         -c "/etc/unbound/data/icannbundle.pem" \
         -f "/etc/resolv.conf" \
-        -r "/etc/unbound/data/root.hints" \
+        -r "/etc/unbound/root.hints" \
         -R
 
     docker run --name ${REPO} --net host --restart=always \
@@ -335,15 +322,6 @@ function CreateNewContainer() {
         -d ${OWNER}/${REPO}:${TAG} \
         -c "/etc/unbound/conf/unbound.conf" \
         -d
-
-    if [ "${ENABLE_REMOTE_CONTROL}" == "true" ]; then
-        docker run -it --rm --entrypoint=/unbound-control --net host \
-            -v ${DOCKER_PATH}/conf:/etc/unbound/conf \
-               ${OWNER}/${REPO}:${TAG} \
-            -c "/etc/unbound/conf/unbound.conf" \
-            -s "127.0.0.1@8953" \
-            stats_noreset
-    fi
 }
 # Cleanup Expired Image
 function CleanupExpiredImage() {
