@@ -304,20 +304,9 @@ function CreateNewContainer() {
             --replica-lazy-flush yes
     fi
 
-    docker run -it --rm --entrypoint=/unbound-anchor \
-        -v /etc/resolv.conf:/etc/resolv.conf:ro \
-        -v ${DOCKER_PATH}/data:/etc/unbound/data \
-           ${OWNER}/${REPO}:${TAG} \
-        -a "/etc/unbound/data/root.key" \
-        -c "/etc/unbound/icannbundle.pem" \
-        -f "/etc/resolv.conf" \
-        -r "/etc/unbound/root.hints" \
-        -R
-
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/unbound/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/unbound/conf \
-        -v ${DOCKER_PATH}/data:/etc/unbound/data \
         -v ${DOCKER_PATH}/work:/etc/unbound/work \
         -d ${OWNER}/${REPO}:${TAG} \
         -c "/etc/unbound/conf/unbound.conf" \
