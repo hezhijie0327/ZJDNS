@@ -129,7 +129,8 @@ function DownloadConfiguration() {
         if [ "${NUM_THREADS}" != "" ]; then
             if [ "${NUM_THREADS}" == "auto" ]; then
                NUM_THREADS=$(grep -c ^processor /proc/cpuinfo)
-            fi && sed -i "s/num-threads\: 1/num-threads\: ${NUM_THREADS:-1}/g" "${DOCKER_PATH}/conf/unbound.conf"
+               SLABS=$(echo "${NUM_THREADS}" | awk '{printf "%.0f\n", 2^int(log($1-1)/log(2)+1)}')
+            fi && sed -i "s/num-threads\: 1/num-threads\: ${NUM_THREADS:-1}/g;s/slabs: 1/slabs: ${SLABS:-1}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_DNSSEC}" == "false" ]; then
