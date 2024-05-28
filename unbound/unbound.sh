@@ -88,6 +88,24 @@ function GetLatestImage() {
         docker pull ${REDIS_OWNER}/${REDIS_REPO}:${REDIS_TAG}
     fi && docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
+# Caculate Cache Size
+function CaculateCacheSize() {
+    value=$(echo "$1" | sed 's/[^0-9.]//g')
+    unit=$(echo "$1" | sed 's/[0-9.]*//g')
+
+    case $unit in
+        k|K) calculated_bytes=$(echo "$value * 1024" | bc) ;;
+        m|M) calculated_bytes=$(echo "$value * 1024 * 1024" | bc) ;;
+        g|G) calculated_bytes=$(echo "$value * 1024 * 1024 * 1024" | bc) ;;
+        *) calculated_bytes="$value" ;;
+    esac
+
+    if [ "$2" != "" ]; then
+        echo $(echo $calculated_bytes | awk -v num_threads="$2" '{printf "%.0f\n", $1/num_threads}')
+    else
+        echo $calculated_bytes
+    fi
+}
 # Cleanup Current Container
 function CleanupCurrentContainer() {
     if [ "${REDIS_REPO}" == "redis" ]; then
@@ -132,16 +150,9 @@ function DownloadConfiguration() {
                 NUM_THREADS=$(grep -c ^processor /proc/cpuinfo)
 
                 if [ "${ENABLE_FORK_OPERATION:-true}" == "false" ]; then
-                    SLABS=$(echo "${NUM_THREADS}" | awk '{printf "%.0f\n", 2^int(log($1-1)/log(2)+1)}')
+                    SLABS=$(echo $NUM_THREADS | awk '{printf "%.0f\n", 2^int(log($1-1)/log(2)+1)}')
                 else
-                    function CACHE_SIZE_FORK_OPERATION() {
-                        echo $(echo $(echo "$1" | sed 's/[^0-9.]//g') | awk -v num_threads="$2" '{printf "%.0f\n", $1/num_threads}')$(echo "$1" | sed 's/[0-9.]*//g')
-                    }
-
-                    CACHE_SIZE_KEY=$(CACHE_SIZE_FORK_OPERATION $CACHE_SIZE_KEY $NUM_THREADS)
-                    CACHE_SIZE_MSG=$(CACHE_SIZE_FORK_OPERATION $CACHE_SIZE_MSG $NUM_THREADS)
-                    CACHE_SIZE_NEG=$(CACHE_SIZE_FORK_OPERATION $CACHE_SIZE_NEG $NUM_THREADS)
-                    CACHE_SIZE_RRSET=$(CACHE_SIZE_FORK_OPERATION $CACHE_SIZE_RRSET $NUM_THREADS)
+                    FORK_NUM_THREADS=$NUM_THREADS
                 fi
             fi && sed -i "s/num-threads\: 1/num-threads\: ${NUM_THREADS:-1}/g;s/slabs: 1/slabs: ${SLABS:-1}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
@@ -214,17 +225,17 @@ function DownloadConfiguration() {
             sed -i "s/serve-expired-ttl\: 0/serve-expired-ttl\: ${SERVE_EXPIRED_TTL}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
-        if [ "${CACHE_SIZE_KEY}" != "" ]; then
-            sed -i "s/key-cache-size: 4m/key-cache-size: ${CACHE_SIZE_KEY}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ "${CACHE_SIZE_KEY:-4m}" != "" ]; then
+            sed -i "s/key-cache-size: 4m/key-cache-size: $(CaculateCacheSize $CACHE_SIZE_KEY ${FORK_NUM_THREADS:-1})/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-        if [ "${CACHE_SIZE_MSG}" != "" ]; then
-            sed -i "s/msg-cache-size: 4m/msg-cache-size: ${CACHE_SIZE_MSG}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ "${CACHE_SIZE_MSG:-4m}" != "" ]; then
+            sed -i "s/msg-cache-size: 4m/msg-cache-size: $(CaculateCacheSize $CACHE_SIZE_MSG ${FORK_NUM_THREADS:-1})/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-        if [ "${CACHE_SIZE_NEG}" != "" ]; then
-            sed -i "s/neg-cache-size: 1m/neg-cache-size: ${CACHE_SIZE_NEG}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ "${CACHE_SIZE_NEG:-1m}" != "" ]; then
+            sed -i "s/neg-cache-size: 1m/neg-cache-size: $(CaculateCacheSize $CACHE_SIZE_NEG ${FORK_NUM_THREADS:-1})/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-        if [ "${CACHE_SIZE_RRSET}" != "" ]; then
-            sed -i "s/rrset-cache-size: 4m/rrset-cache-size: ${CACHE_SIZE_RRSET}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ "${CACHE_SIZE_RRSET:-4m}" != "" ]; then
+            sed -i "s/rrset-cache-size: 4m/rrset-cache-size: $(CaculateCacheSize $CACHE_SIZE_RRSET ${FORK_NUM_THREADS:-1})/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${CUSTOM_REDIS_LOGICAL_DB}" != "" ]; then
