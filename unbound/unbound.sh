@@ -94,9 +94,10 @@ function CaculateCacheSize() {
     unit=$(echo "$1" | sed 's/[0-9.]*//g')
 
     case $unit in
-        k|K) calculated_bytes=$(echo "$value * 1024" | bc) ;;
-        m|M) calculated_bytes=$(echo "$value * 1024 * 1024" | bc) ;;
-        g|G) calculated_bytes=$(echo "$value * 1024 * 1024 * 1024" | bc) ;;
+        k|K) calculated_bytes=$(echo "$value * 1024^1" | bc) ;;
+        m|M) calculated_bytes=$(echo "$value * 1024^2" | bc) ;;
+        g|G) calculated_bytes=$(echo "$value * 1024^3" | bc) ;;
+        t|T) calculated_bytes=$(echo "$value * 1024^4" | bc) ;;
         *) calculated_bytes="$value" ;;
     esac
 
