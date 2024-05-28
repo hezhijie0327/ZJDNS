@@ -133,6 +133,15 @@ function DownloadConfiguration() {
 
                 if [ "${ENABLE_FORK_OPERATION:-true}" == "false" ]; then
                     SLABS=$(echo "${NUM_THREADS}" | awk '{printf "%.0f\n", 2^int(log($1-1)/log(2)+1)}')
+                else
+                    function CACHE_SIZE_FORK_OPERATION() {
+                        echo $(echo $(echo "$1" | sed 's/[^0-9.]//g') | awk -v num_threads="$2" '{printf "%.0f\n", $1/num_threads}')$(echo "$1" | sed 's/[0-9.]*//g')
+                    }
+
+                    CACHE_SIZE_KEY=$(CACHE_SIZE_FORK_OPERATION $CACHE_SIZE_KEY $NUM_THREADS)
+                    CACHE_SIZE_MSG=$(CACHE_SIZE_FORK_OPERATION $CACHE_SIZE_MSG $NUM_THREADS)
+                    CACHE_SIZE_NEG=$(CACHE_SIZE_FORK_OPERATION $CACHE_SIZE_NEG $NUM_THREADS)
+                    CACHE_SIZE_RRSET=$(CACHE_SIZE_FORK_OPERATION $CACHE_SIZE_RRSET $NUM_THREADS)
                 fi
             fi && sed -i "s/num-threads\: 1/num-threads\: ${NUM_THREADS:-1}/g;s/slabs: 1/slabs: ${SLABS:-1}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
