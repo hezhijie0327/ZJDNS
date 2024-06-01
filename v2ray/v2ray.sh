@@ -133,7 +133,11 @@ function DownloadConfiguration() {
                 fi
 
                 if [ "${EXPECT}" != "" ]; then
-                    JSON_STRING+='{ "address": "'${IPADDR}'", "port": '${PORT:-53}''${ADDITIONAL}', "expectIPs": [ "ext:/etc/v2ray/data/geoip.dat:cn" ] }, '
+                    if [ "${EXPECT}" == "CN" ]; then
+                        JSON_STRING+='{ "address": "'${IPADDR}'", "port": '${PORT:-53}''${ADDITIONAL}', "expectIPs": [ "ext:/etc/v2ray/data/geoip.dat:cn" ] }, '
+                    else
+                        JSON_STRING+='{ "address": "'${IPADDR}'", "port": '${PORT:-53}''${ADDITIONAL}', "expectIPs": [ "ext:/etc/v2ray/data/geoip.dat:!cn" ] }, '
+                    fi
                 else
                     JSON_STRING+='{ "address": "'${IPADDR}'", "port": '${PORT:-53}''${ADDITIONAL}' }, '
                 fi
