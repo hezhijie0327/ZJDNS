@@ -20,6 +20,7 @@ CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipinfoio, ipipdotnet,
 CUSTOM_SERVERNAME="demo.zhijie.online" # demo.zhijie.online
 CUSTOM_UUID="99235a6e-05d4-2afe-2990-5bc5cf1f5c52" # $(uuidgen | tr 'A-Z' 'a-z')
 
+ENABLE_DNS="" # false, true
 ENABLE_DNS_CACHE="" # false, true
 CUSTOM_DNS=() # ("1.0.0.1@53" "223.5.5.5@53#CN" "8.8.8.8@53%1.1.1.1" "8.8.4.4@53%auto&AAAA")
 CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1")
@@ -190,6 +191,10 @@ function DownloadConfiguration() {
         if [ "${ENABLE_WARP:-false}" == "false" ]; then
             sed -i '/"address": "127.0.0.1", "port": 40000/d' "${DOCKER_PATH}/conf/config.json"
         fi
+    fi
+
+    if [ "${ENABLE_DNS:-true}" != "true" ]; then
+        cat "${DOCKER_PATH}/conf/config.json" | jq 'del(.dns)' > "${DOCKER_PATH}/conf/config.json.tmp" && mv "${DOCKER_PATH}/conf/config.json.tmp" "${DOCKER_PATH}/conf/config.json"
     fi
 
     if [ ! -d "${DOCKER_PATH}/data" ]; then
