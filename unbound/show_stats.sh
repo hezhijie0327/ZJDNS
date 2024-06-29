@@ -11,7 +11,9 @@ REDIS_TAG="latest"
 
 DOCKER_PATH="/docker/unbound"
 
-ENABLE_REDIS_CACHE="false"
+ENABLE_REDIS_CACHE="" # false, true
+CUSTOM_REDIS_SERVER_HOST="" # 127.0.0.1
+CUSTOM_REDIS_SERVER_PORT="" # 6379
 
 docker run -it --rm --entrypoint=/unbound-control --net host \
     -v ${DOCKER_PATH}/conf:/etc/unbound/conf \
@@ -23,6 +25,7 @@ docker run -it --rm --entrypoint=/unbound-control --net host \
 if [ "${ENABLE_REDIS_CACHE:-false}" == "true" ]; then
     docker run -it --rm --entrypoint=/${REDIS_REPO}-cli --net host \
             ${REDIS_OWNER}/${REDIS_REPO}:${REDIS_TAG} \
-        -p ${REDIS_PORT:-6379} \
+        -h ${CUSTOM_REDIS_SERVER_HOST:-127.0.0.1} \
+        -p ${CUSTOM_REDIS_SERVER_PORT:-6379} \
         info
 fi
