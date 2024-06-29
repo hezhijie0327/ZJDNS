@@ -264,7 +264,7 @@ function DownloadConfiguration() {
             sed -i "s/redis-server-port: 6379/redis-server-port: ${CUSTOM_REDIS_SERVER_PORT}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
         if [ "${CUSTOM_SECRET_SEED}" != "" ]; then
-            sed -i "s/secret-seed: default/secret-seed: ${CUSTOM_SECRET_SEED}/g" "${DOCKER_PATH}/conf/unbound.conf"
+            sed -i "s/secret-seed: 'default'/secret-seed: '${CUSTOM_SECRET_SEED}'/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_REMOTE_CONTROL}" == "false" ]; then
@@ -331,6 +331,7 @@ function CreateNewContainer() {
             --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-volatile-ttl} \
             --maxmemory-samples 10 \
             --port ${REDIS_PORT:-6379} \
+            --protected-mode no \
             --replica-lazy-flush yes
     fi
 
