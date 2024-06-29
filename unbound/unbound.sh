@@ -61,6 +61,7 @@ CUSTOM_REDIS_SERVER_PORT="" # 6379
 CUSTOM_SECRET_SEED=$(hostname) # default, $(hostname)
 
 CREATE_REDIS_INSTANCE="false"
+REDIS_DATABASES="" # 16
 REDIS_MAXMEMORY="" # 4MB
 REDIS_MAXMEMORY_POLICY="allkeys-lru" # noeviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl, volatile-lfu, allkeys-lfu
 REDIS_PORT="" # 6379
@@ -319,6 +320,7 @@ function CreateNewContainer() {
             --aof-use-rdb-preamble yes \
             --appendfsync everysec \
             --appendonly yes \
+            --databases ${REDIS_DATABASES:-16} \
             --dir /etc/redis/data \
             --lazyfree-lazy-eviction yes \
             --lazyfree-lazy-expire yes \
