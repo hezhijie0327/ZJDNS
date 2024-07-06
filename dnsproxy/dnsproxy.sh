@@ -8,11 +8,11 @@ DOCKER_PATH="/docker/dnsproxy"
 
 LISTEN_IP="" # 0.0.0.0
 
-RUNNING_MODE="" # all-servers, fastest-addr
-
 BOOTSTRAP_DNS=() # ("tls://8.8.4.4:853" "tls://8.8.8.8:853" "tls://[2001:4860:4860::8844]:853" "tls://[2001:4860:4860::8888]:853")
 FALLBACK_DNS=() # ("tls://223.5.5.5:853" "tls://223.6.6.6:853" "tls://[2400:3200::1]:853" "tls://[2400:3200:baba::1]:853")
 UPSTREAM_DNS=() # ("127.0.0.1:5533")
+
+UPSTREAM_MODE="" # fastest_addr, load_balance, parallel
 
 ENABLE_CACHE="true"
 CACHE_SIZE="" # 4194304
@@ -125,11 +125,7 @@ function CreateNewContainer() {
         RUNTIME_CONFIG+=("--upstream=${UPSTREAM_DNS[$UPSTREAM_DNS_TASK]}")
     done
 
-    if [ "${RUNNING_MODE}" == "all-servers" ]; then
-        RUNTIME_CONFIG+=("--all-servers")
-    elif [ "${RUNNING_MODE}" == "fastest-addr" ]; then
-        RUNTIME_CONFIG+=("--fastest-addr")
-    fi
+    RUNTIME_CONFIG+=("--upstream-mode=${UPSTREAM_MODE:-load_balance}")
 
     if [ "${ENABLE_CACHE}" == "true" ]; then
         RUNTIME_CONFIG+=("--cache" "--cache-size=${CACHE_SIZE:-4194304}" "--cache-max-ttl=0" "--cache-min-ttl=0" "--cache-optimistic")
