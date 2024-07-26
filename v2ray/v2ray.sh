@@ -23,7 +23,7 @@ CUSTOM_UUID="99235a6e-05d4-2afe-2990-5bc5cf1f5c52" # $(uuidgen | tr 'A-Z' 'a-z')
 ENABLE_DNS="" # false, true
 ENABLE_DNS_CACHE="" # false, true
 CUSTOM_DNS=() # ("1.0.0.1@53" "223.5.5.5@53#CN" "8.8.8.8@53%1.1.1.1" "8.8.4.4@53%auto&AAAA")
-CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1")
+CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1" "127.0.0.1@7893")
 
 ENABLE_MUX="" # false, true
 MUX_CONCURRENCY=""
@@ -154,15 +154,22 @@ function DownloadConfiguration() {
 
         if [ "${CUSTOM_IP[*]}" != "" ] && [ "${RUNNING_MODE:-server}" == "client" ]; then
             JSON_STRING="" && for IP in "${CUSTOM_IP[@]}"; do
+                if [ $(echo "${IP}" | grep "@") != "" ]; then
+                    PORT="443"
+                else
+                    PORT=$(echo ${IP} | cut -d "@" -f 2)
+                    IP=$(echo ${IP} | cut -d "@" -f 1)
+                fi
+
                 case "${RUNTIME_PROTOCOL:-vmess}" in
                     "trojan")
-                        JSON_STRING+='{ "address": "'${IP}'", "port": 443, "password": "'${CUSTOM_UUID}'" }, '
+                        JSON_STRING+='{ "address": "'${IP}'", "port": '${PORT}', "password": "'${CUSTOM_UUID}'" }, '
                         ;;
                     "vless")
-                        JSON_STRING+='{ "address": "'${IP}'", "port": 443, "users": [ { "encryption": "none", "id": "'${CUSTOM_UUID}'" } ] }, '
+                        JSON_STRING+='{ "address": "'${IP}'", "port": '${PORT}', "users": [ { "encryption": "none", "id": "'${CUSTOM_UUID}'" } ] }, '
                         ;;
                     "vmess")
-                        JSON_STRING+='{ "address": "'${IP}'", "port": 443, "users": [ { "id": "'${CUSTOM_UUID}'", "security": "auto" } ] }, '
+                        JSON_STRING+='{ "address": "'${IP}'", "port": '${PORT}', "users": [ { "id": "'${CUSTOM_UUID}'", "security": "auto" } ] }, '
                         ;;
                 esac
             done && JSON_STRING="${JSON_STRING%, }"
