@@ -154,7 +154,7 @@ function DownloadConfiguration() {
 
         if [ "${CUSTOM_IP[*]}" != "" ] && [ "${RUNNING_MODE:-server}" == "client" ]; then
             JSON_STRING="" && for IP in "${CUSTOM_IP[@]}"; do
-                if [ $(echo "${IP}" | grep "@") != "" ]; then
+                if [ $(echo "${IP}" | grep "@") == "" ]; then
                     PORT="443"
                 else
                     PORT=$(echo ${IP} | cut -d "@" -f 2)
