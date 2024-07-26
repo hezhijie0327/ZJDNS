@@ -49,7 +49,7 @@ function DownloadConfiguration() {
         fi
 
         if [ "${CUSTOM_IP[*]}" != "" ]; then
-            if [ $(echo "${IP}" | grep "@") != "" ]; then
+            if [ -z "$(echo "${IP}" | grep "@")" ]; then
                 PORT="443"
             else
                 PORT=$(echo ${IP} | cut -d "@" -f 2)
