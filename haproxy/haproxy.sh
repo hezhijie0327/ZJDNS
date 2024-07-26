@@ -10,6 +10,8 @@ CURL_OPTION=""
 DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
+HAPROXY_STATS_AUTH_USER="" # admin:admin, admin:'*admin*'
+
 CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1" "127.0.0.1@443")
 
 SSL_CERT="zhijie.online.cert"
@@ -39,6 +41,12 @@ function DownloadConfiguration() {
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/haproxy/haproxy.cfg" > "${DOCKER_PATH}/conf/haproxy.cfg" && sed -i "s/zhijie\.online\.cert/${SSL_CERT/./\\.}/g" "${DOCKER_PATH}/conf/haproxy.cfg"
+
+        if [ "${HAPROXY_STATS_AUTH_USER}" != "" ]; then
+            sed -i "s|admin:admin|${HAPROXY_STATS_AUTH_USER}|g" "${DOCKER_PATH}/conf/haproxy.cfg"
+        else
+            sed -i "|stats auth|d" "${DOCKER_PATH}/conf/haproxy.cfg"
+        fi
 
         if [ "${CUSTOM_IP[*]}" != "" ]; then
             if [ $(echo "${IP}" | grep "@") != "" ]; then
