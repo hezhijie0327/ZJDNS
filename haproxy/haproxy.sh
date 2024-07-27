@@ -10,8 +10,6 @@ CURL_OPTION=""
 DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
-LOG_LEVEL="" # emerg, alert, crit, err, warning, notice, info, debug
-
 HAPROXY_STATS_AUTH_USER="" # admin:admin, admin:'*admin*'
 
 CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1" "127.0.0.1@443")
@@ -42,7 +40,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/haproxy/haproxy.cfg" > "${DOCKER_PATH}/conf/haproxy.cfg" && sed -i "s/local0 info/local0 ${LOG_LEVEL:-info}/g;s/zhijie\.online\.cert/${SSL_CERT/./\\.}/g" "${DOCKER_PATH}/conf/haproxy.cfg"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/haproxy/haproxy.cfg" > "${DOCKER_PATH}/conf/haproxy.cfg" && sed -i "s/zhijie\.online\.cert/${SSL_CERT/./\\.}/g" "${DOCKER_PATH}/conf/haproxy.cfg"
 
         if [ "${HAPROXY_STATS_AUTH_USER}" != "" ]; then
             sed -i "s|admin:admin|${HAPROXY_STATS_AUTH_USER}|g" "${DOCKER_PATH}/conf/haproxy.cfg"
