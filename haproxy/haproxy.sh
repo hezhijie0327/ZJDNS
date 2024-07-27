@@ -46,8 +46,6 @@ function DownloadConfiguration() {
 
         if [ "${HAPROXY_STATS_AUTH_USER}" != "" ]; then
             sed -i "s|admin:admin|${HAPROXY_STATS_AUTH_USER}|g" "${DOCKER_PATH}/conf/haproxy.cfg"
-        else
-            sed -i "|stats auth|d" "${DOCKER_PATH}/conf/haproxy.cfg"
         fi
 
         if [ "${CUSTOM_IP[*]}" != "" ]; then
