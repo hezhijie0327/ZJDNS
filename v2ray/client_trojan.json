@@ -91,6 +91,11 @@
                 "grpcSettings": {
                     "serviceName": "gRPC4TROJAN"
                 },
+                "httpupgradeSettings": {
+                  "acceptProxyProtocol": false,
+                  "host": "demo.zhijie.online",
+                  "path": "/HTTPUpgrade4TROJAN"
+                },
                 "splithttpSettings": {
                   "host": "demo.zhijie.online",
                   "path": "/SplitHTTP4TROJAN",
@@ -99,8 +104,8 @@
                 },
                 "wsSettings": {
                   "acceptProxyProtocol": false,
-                  "path": "/WebSocket4TROJAN",
-                  "host": "demo.zhijie.online"
+                  "host": "demo.zhijie.online",
+                  "path": "/WebSocket4TROJAN"
                 }
             },
             "tag": "trojan_grpc"
