@@ -91,6 +91,11 @@
                 "grpcSettings": {
                     "serviceName": "gRPC4VMESS"
                 },
+                "httpupgradeSettings": {
+                  "acceptProxyProtocol": false,
+                  "host": "demo.zhijie.online",
+                  "path": "/HTTPUpgrade4VMESS"
+                },
                 "splithttpSettings": {
                   "host": "demo.zhijie.online",
                   "path": "/SplitHTTP4VMESS",
@@ -99,8 +104,8 @@
                 },
                 "wsSettings": {
                   "acceptProxyProtocol": false,
-                  "path": "/WebSocket4VMESS",
-                  "host": "demo.zhijie.online"
+                  "host": "demo.zhijie.online",
+                  "path": "/WebSocket4VMESS"
                 }
             },
             "tag": "vmess_grpc"
