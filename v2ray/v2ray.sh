@@ -14,7 +14,7 @@ LOG_LEVEL="" # debug, info, warning, error, none"
 
 RUNNING_MODE="" # client, server
 RUNTIME_PROTOCOL="" # trojan, vless, vmess
-RUNTIME_TRANSPORT="" # grpc, splithttp, ws
+RUNTIME_TRANSPORT="" # grpc, httpupgrade, splithttp, ws
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipinfoio, ipipdotnet, iptoasn, vxlink, zjdb
 
@@ -90,7 +90,7 @@ function GetWANIP() {
 }
 # Get Latest Image
 function GetLatestImage() {
-    if [ "${RUNTIME_TRANSPORT}" == "splithttp" ]; then
+    if [ "${RUNTIME_TRANSPORT}" == "httpupgrade" ] || [ "${RUNTIME_TRANSPORT}" == "splithttp" ]; then
         REPO="xray"
     fi
 

@@ -84,6 +84,11 @@
                 "grpcSettings": {
                     "serviceName": "gRPC4VLESS"
                 },
+                "httpupgradeSettings": {
+                  "acceptProxyProtocol": false,
+                  "host": "demo.zhijie.online",
+                  "path": "/HTTPUpgrade4VLESS"
+                },
                 "splithttpSettings": {
                   "host": "demo.zhijie.online",
                   "path": "/SplitHTTP4VLESS",
@@ -92,8 +97,8 @@
                 },
                 "wsSettings": {
                   "acceptProxyProtocol": false,
-                  "path": "/WebSocket4VLESS",
-                  "host": "demo.zhijie.online"
+                  "host": "demo.zhijie.online",
+                  "path": "/WebSocket4VLESS"
                 }
             }
         },
