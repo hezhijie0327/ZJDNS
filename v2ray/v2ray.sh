@@ -14,6 +14,7 @@ LOG_LEVEL="" # debug, info, warning, error, none"
 
 RUNNING_MODE="" # client, server
 RUNTIME_PROTOCOL="" # trojan, vless, vmess
+RUNTIME_TRANSPORT="" # grpc, splithttp, ws
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipinfoio, ipipdotnet, iptoasn, vxlink, zjdb
 
@@ -89,6 +90,10 @@ function GetWANIP() {
 }
 # Get Latest Image
 function GetLatestImage() {
+    if [ "${RUNTIME_TRANSPORT}" == "splithttp" ]; then
+        REPO="xray"
+    fi
+
     docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
 # Cleanup Current Container
@@ -120,7 +125,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/v2ray/${RUNNING_MODE:-server}_${RUNTIME_PROTOCOL:-vmess}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/v2ray/${RUNNING_MODE:-server}_${RUNTIME_PROTOCOL:-vmess}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"grpc\"/\"${RUNTIME_TRANSPORT:-grpc}\"/g;s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
 
         if [ "${ENABLE_DNS_CACHE:-false}" != "false" ]; then
             sed -i 's/"disableCache": true/"disableCache": false/g' "${DOCKER_PATH}/conf/config.json"

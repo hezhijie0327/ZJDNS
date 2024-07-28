@@ -63,9 +63,6 @@
                 ]
             },
             "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPCTROJAN"
-                },
                 "network": "grpc",
                 "security": "tls",
                 "tlsSettings": {
@@ -82,6 +79,20 @@
                     ],
                     "disableSystemRoot": false,
                     "verifyClientCertificate": false
+                },
+                "grpcSettings": {
+                    "serviceName": "gRPC4TROJAN"
+                },
+                "splithttpSettings": {
+                  "host": "demo.zhijie.online",
+                  "path": "/SplitHTTP4TROJAN",
+                  "maxConcurrentUploads": 10,
+                  "maxUploadSize": 1000000
+                },
+                "wsSettings": {
+                  "acceptProxyProtocol": false,
+                  "path": "/WebSocket4TROJAN",
+                  "host": "demo.zhijie.online"
                 }
             }
         },

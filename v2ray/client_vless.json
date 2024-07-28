@@ -82,14 +82,25 @@
                 ]
             },
             "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPCVLESS"
-                },
                 "network": "grpc",
                 "security": "tls",
                 "tlsSettings": {
                     "allowInsecure": false,
                     "serverName": "demo.zhijie.online"
+                },
+                "grpcSettings": {
+                    "serviceName": "gRPC4VLESS"
+                },
+                "splithttpSettings": {
+                  "host": "demo.zhijie.online",
+                  "path": "/SplitHTTP4VLESS",
+                  "maxConcurrentUploads": 10,
+                  "maxUploadSize": 1000000
+                },
+                "wsSettings": {
+                  "acceptProxyProtocol": false,
+                  "path": "/WebSocket4VLESS",
+                  "host": "demo.zhijie.online"
                 }
             },
             "tag": "vless_grpc"

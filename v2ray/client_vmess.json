@@ -82,14 +82,25 @@
                 ]
             },
             "streamSettings": {
-                "grpcSettings": {
-                    "serviceName": "gRPCVMESS"
-                },
                 "network": "grpc",
                 "security": "tls",
                 "tlsSettings": {
                     "allowInsecure": false,
                     "serverName": "demo.zhijie.online"
+                },
+                "grpcSettings": {
+                    "serviceName": "gRPC4VMESS"
+                },
+                "splithttpSettings": {
+                  "host": "demo.zhijie.online",
+                  "path": "/SplitHTTP4VMESS",
+                  "maxConcurrentUploads": 10,
+                  "maxUploadSize": 1000000
+                },
+                "wsSettings": {
+                  "acceptProxyProtocol": false,
+                  "path": "/WebSocket4VMESS",
+                  "host": "demo.zhijie.online"
                 }
             },
             "tag": "vmess_grpc"
