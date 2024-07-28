@@ -209,6 +209,10 @@ function DownloadConfiguration() {
         cat "${DOCKER_PATH}/conf/config.json" | jq 'del(.dns)' > "${DOCKER_PATH}/conf/config.json.tmp" && mv "${DOCKER_PATH}/conf/config.json.tmp" "${DOCKER_PATH}/conf/config.json"
     fi
 
+    if [ "${REPO}" != "xray" ]; then
+        cat "${DOCKER_PATH}/conf/config.json" | jq 'del(..|.httpupgradeSettings?) | del(..|.splithttpSettings?)' > "${DOCKER_PATH}/conf/config.json.tmp" && mv "${DOCKER_PATH}/conf/config.json.tmp" "${DOCKER_PATH}/conf/config.json"
+    fi
+
     if [ ! -d "${DOCKER_PATH}/data" ]; then
         mkdir -p "${DOCKER_PATH}/data"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE:-geolite2}/country_ipv4_6.dat" > "${DOCKER_PATH}/data/geoip.dat"
