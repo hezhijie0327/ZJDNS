@@ -10,7 +10,7 @@ CURL_OPTION=""
 DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
-LOG_LEVEL="" # debug, info, warning, error, none"
+LOG_LEVEL="" # debug, info, warning, error, none
 
 RUNNING_MODE="" # client, server
 RUNTIME_PROTOCOL="" # trojan, vless, vmess
