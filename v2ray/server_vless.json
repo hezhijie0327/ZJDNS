@@ -92,8 +92,10 @@
                 "splithttpSettings": {
                   "host": "demo.zhijie.online",
                   "path": "/SplitHTTP4VLESS",
-                  "maxConcurrentUploads": 10,
-                  "maxUploadSize": 1000000
+                  "noSSEHeader": false,
+                  "scMaxEachPostBytes": "500000-1000000",
+                  "scMaxConcurrentPosts": "50-100",
+                  "scMinPostsIntervalMs": "10-50"
                 },
                 "wsSettings": {
                   "acceptProxyProtocol": false,
