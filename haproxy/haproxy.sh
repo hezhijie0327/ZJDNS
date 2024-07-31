@@ -56,7 +56,7 @@ function DownloadConfiguration() {
                     OPTION=" ${OPTION}"
                 fi
 
-                echo "    server ${IP} ${IP}:${PORT:-443} check inter 1000${OPTION}" >> "${DOCKER_PATH}/conf/haproxy.cfg"
+                echo "    server $(echo ${IP} | tr '.:' '_') ${IP}:${PORT:-443} check inter 1000${OPTION}" >> "${DOCKER_PATH}/conf/haproxy.cfg"
             done
         fi
     fi
