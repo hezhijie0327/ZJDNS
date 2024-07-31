@@ -12,7 +12,7 @@ USE_CDN="true"
 
 HAPROXY_STATS_AUTH_USER="" # admin:admin, admin:'*admin*'
 
-CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1" "127.0.0.1@443")
+IP_GROUP=() # ("127.0.0.1" "127.0.0.1@443" "127.0.0.1#backup" ""127.0.0.1@443#backup"")
 
 SSL_CERT="zhijie.online.cert"
 
@@ -46,16 +46,17 @@ function DownloadConfiguration() {
             sed -i "s|admin:admin|${HAPROXY_STATS_AUTH_USER}|g" "${DOCKER_PATH}/conf/haproxy.cfg"
         fi
 
-        if [ "${CUSTOM_IP[*]}" != "" ]; then
-            if [ -z "$(echo "${IP}" | grep "@")" ]; then
-                PORT="443"
-            else
-                PORT=$(echo ${IP} | cut -d "@" -f 2)
-                IP=$(echo ${IP} | cut -d "@" -f 1)
-            fi
+        if [ "${IP_GROUP[*]}" != "" ]; then
+            for IP in ${IP_GROUP[*]}; do
+                OPTION=$(echo ${IP} | grep '#' | cut -d '#' -f 2)
+                PORT=$(echo ${IP} | grep '@' | cut -d '@' -f 2 | cut -d '#' -f 1)
+                IP=$(echo ${IP} | cut -d '@' -f 1 | cut -d '#' -f 1)
 
-            for IP in ${CUSTOM_IP[*]}; do
-                echo "    server ${IP} ${IP}:${PORT} check" >> "${DOCKER_PATH}/conf/haproxy.cfg"
+                if [ ! -z "${OPTION}" ]; then
+                    OPTION=" ${OPTION}"
+                fi
+
+                echo "    server ${IP} ${IP}:${PORT:-443} check inter 1000${OPTION}" >> "${DOCKER_PATH}/conf/haproxy.cfg"
             done
         fi
     fi
