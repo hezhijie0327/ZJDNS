@@ -12,7 +12,7 @@ USE_CDN="true"
 
 HAPROXY_STATS_AUTH_USER="" # admin:admin, admin:'*admin*'
 
-IP_GROUP=() # ("127.0.0.1" "127.0.0.1@443" "127.0.0.1#backup" ""127.0.0.1@443#backup"")
+IP_GROUP=() # ("127.0.0.1" "127.0.0.1@443" "127.0.0.1#backup" "127.0.0.1@443#backup")
 
 SSL_CERT="zhijie.online.cert"
 
