@@ -94,6 +94,7 @@
                   "host": "demo.zhijie.online",
                   "path": "/SplitHTTP4VMESS",
                   "noSSEHeader": false,
+                  "responseOkPadding": "100-1000",
                   "scMaxEachPostBytes": "500000-1000000",
                   "scMaxConcurrentPosts": "50-100",
                   "scMinPostsIntervalMs": "10-50"
