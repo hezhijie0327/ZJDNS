@@ -64,6 +64,7 @@ CREATE_REDIS_INSTANCE="false"
 REDIS_DATABASES="" # 16
 REDIS_MAXMEMORY="" # 4MB
 REDIS_MAXMEMORY_POLICY="" # noeviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl, volatile-lfu, allkeys-lfu
+REDIS_PASSWORD="${CUSTOM_REDIS_SERVER_PASSWORD}"
 REDIS_PORT="" # 6379
 
 ENABLE_REMOTE_CONTROL="true"
@@ -334,7 +335,8 @@ function CreateNewContainer() {
             --maxmemory-samples 10 \
             --port ${REDIS_PORT:-6379} \
             --protected-mode no \
-            --replica-lazy-flush yes
+            --replica-lazy-flush yes \
+            --requirepass ${REDIS_PASSWORD}
     fi
 
     docker run --name ${REPO} --net host --restart=always \
