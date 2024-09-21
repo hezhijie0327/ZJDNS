@@ -92,10 +92,16 @@
                   "host": "demo.zhijie.online",
                   "path": "/SplitHTTP4TROJAN",
                   "noSSEHeader": false,
-                  "responseOkPadding": "100-1000",
                   "scMaxEachPostBytes": "500000-1000000",
                   "scMaxConcurrentPosts": "50-100",
-                  "scMinPostsIntervalMs": "10-50"
+                  "scMinPostsIntervalMs": "10-50",
+                  "xPaddingBytes": "100-1000",
+                  "xmux": {
+                    "cMaxLifetimeMs": 0,
+                    "cMaxReuseTimes": 0,
+                    "maxConcurrency": 0,
+                    "maxConnections": 0
+                  }
                 },
                 "wsSettings": {
                   "acceptProxyProtocol": false,
