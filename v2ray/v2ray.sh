@@ -220,8 +220,8 @@ function DownloadConfiguration() {
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
+        --privileged \
         -v /docker/ssl:/etc/v2ray/cert:ro \
-        -v /etc/resolv.conf:/etc/resolv.conf:ro \
         -v ${DOCKER_PATH}/conf:/etc/v2ray/conf \
         -v ${DOCKER_PATH}/data:/etc/v2ray/data \
         -d ${OWNER}/${REPO}:${TAG} \
