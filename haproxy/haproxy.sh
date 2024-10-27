@@ -64,7 +64,6 @@ function DownloadConfiguration() {
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
-        -v /docker/ssl:/etc/haproxy/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/haproxy/conf \
         -d ${OWNER}/${REPO}:${TAG} \
         -f /etc/haproxy/conf/haproxy.cfg
