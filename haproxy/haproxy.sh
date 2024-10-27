@@ -10,11 +10,7 @@ CURL_OPTION=""
 DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
-HAPROXY_STATS_AUTH_USER="" # admin:admin, admin:'*admin*'
-
 IP_GROUP=() # ("127.0.0.1" "127.0.0.1@443" "127.0.0.1#backup" "127.0.0.1@443#backup")
-
-SSL_CERT="zhijie.online.cert"
 
 ## Function
 # Get Latest Image
@@ -40,11 +36,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/haproxy/haproxy.cfg" > "${DOCKER_PATH}/conf/haproxy.cfg" && sed -i "s/zhijie\.online\.cert/${SSL_CERT/./\\.}/g" "${DOCKER_PATH}/conf/haproxy.cfg"
-
-        if [ "${HAPROXY_STATS_AUTH_USER}" != "" ]; then
-            sed -i "s|admin:admin|${HAPROXY_STATS_AUTH_USER}|g" "${DOCKER_PATH}/conf/haproxy.cfg"
-        fi
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/haproxy/haproxy.cfg" > "${DOCKER_PATH}/conf/haproxy.cfg"
 
         if [ "${IP_GROUP[*]}" != "" ]; then
             for IP in ${IP_GROUP[*]}; do
