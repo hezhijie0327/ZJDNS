@@ -24,7 +24,7 @@ CUSTOM_UUID="99235a6e-05d4-2afe-2990-5bc5cf1f5c52" # $(uuidgen | tr 'A-Z' 'a-z')
 ENABLE_DNS="" # false, true
 ENABLE_DNS_CACHE="" # false, true
 CUSTOM_DNS=() # ("1.0.0.1@53" "223.5.5.5@53#CN" "8.8.8.8@53%1.1.1.1" "8.8.4.4@53%auto&AAAA")
-CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1" "127.0.0.1@7893")
+CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1" "127.0.0.1@7891")
 
 ENABLE_MUX="" # false, true
 MUX_CONCURRENCY=""
