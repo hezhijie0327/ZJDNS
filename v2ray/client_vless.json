@@ -52,17 +52,9 @@
         ]
     },
     "inbounds": [
-       {
-            "listen": "0.0.0.0",
-            "port": 7890,
-            "protocol": "http",
-            "settings": {
-                "allowTransparent": true
-            }
-        },
         {
             "listen": "0.0.0.0",
-            "port": 7891,
+            "port": 7890,
             "protocol": "socks",
             "settings": {
                 "udp": true
