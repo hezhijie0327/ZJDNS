@@ -5,10 +5,6 @@ OWNER="hezhijie0327"
 REPO="unbound"
 TAG="latest"
 
-REDIS_OWNER="hezhijie0327"
-REDIS_REPO="redis" # redis, valkey
-REDIS_TAG="latest"
-
 DOCKER_PATH="/docker/unbound"
 
 CURL_OPTION=""
@@ -60,13 +56,6 @@ CUSTOM_REDIS_SERVER_PATH=""
 CUSTOM_REDIS_SERVER_PORT="" # 6379
 CUSTOM_SECRET_SEED=$(hostname) # default, $(hostname)
 
-CREATE_REDIS_INSTANCE="false"
-REDIS_DATABASES="" # 16
-REDIS_MAXMEMORY="" # 4MB
-REDIS_MAXMEMORY_POLICY="" # noeviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl, volatile-lfu, allkeys-lfu
-REDIS_PASSWORD="${CUSTOM_REDIS_SERVER_PASSWORD}"
-REDIS_PORT="" # 6379
-
 ENABLE_REMOTE_CONTROL="true"
 
 CUSTOM_UPSTREAM=() # ("127.0.0.1@5533")
@@ -87,9 +76,7 @@ SSL_KEY="zhijie.online.key"
 ## Function
 # Get Latest Image
 function GetLatestImage() {
-    if [ "${CREATE_REDIS_INSTANCE}" == "true" ]; then
-        docker pull ${REDIS_OWNER}/${REDIS_REPO}:${REDIS_TAG}
-    fi && docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
+    docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
 # Caculate Cache Size
 function CaculateCacheSize() {
@@ -112,22 +99,8 @@ function CaculateCacheSize() {
 }
 # Cleanup Current Container
 function CleanupCurrentContainer() {
-    if [ "${REDIS_REPO}" == "redis" ]; then
-        TEMP_REDIS_REPO="valkey"
-    else
-        TEMP_REDIS_REPO="redis"
-    fi
-
     if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REPO}$") ]; then
         docker stop ${REPO} && docker rm ${REPO}
-    fi
-
-    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REDIS_REPO}_${REPO}$") ]; then
-        docker stop ${REDIS_REPO}_${REPO} && docker rm ${REDIS_REPO}_${REPO}
-    fi
-
-    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${TEMP_REDIS_REPO}_${REPO}$") ]; then
-        docker stop ${TEMP_REDIS_REPO}_${REPO} && docker rm ${TEMP_REDIS_REPO}_${REPO}
     fi
 }
 # Download Configuration
@@ -313,32 +286,6 @@ function DownloadConfiguration() {
 }
 # Create New Container
 function CreateNewContainer() {
-    if [ "${CREATE_REDIS_INSTANCE}" == "true" ]; then
-        docker run --name ${REDIS_REPO}_${REPO} --net host --restart=always \
-            -v ${DOCKER_PATH}/data:/etc/redis/data \
-            -d ${REDIS_OWNER}/${REDIS_REPO}:${REDIS_TAG} \
-            --activedefrag yes \
-            --aof-use-rdb-preamble yes \
-            --appendfsync everysec \
-            --appendonly yes \
-            --databases ${REDIS_DATABASES:-16} \
-            --dir /etc/redis/data \
-            --lazyfree-lazy-eviction yes \
-            --lazyfree-lazy-expire yes \
-            --lazyfree-lazy-server-del yes \
-            --lazyfree-lazy-user-del yes \
-            --lazyfree-lazy-user-flush yes \
-            --lfu-decay-time 1 \
-            --lfu-log-factor 10 \
-            --maxmemory ${REDIS_MAXMEMORY:-4MB} \
-            --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-volatile-ttl} \
-            --maxmemory-samples 10 \
-            --port ${REDIS_PORT:-6379} \
-            --protected-mode no \
-            --replica-lazy-flush yes \
-            --requirepass ${REDIS_PASSWORD}
-    fi
-
     docker run --name ${REPO} --net host --restart=always \
         -v /docker/ssl:/etc/unbound/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/unbound/conf \
