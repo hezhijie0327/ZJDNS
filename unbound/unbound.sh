@@ -202,7 +202,7 @@ function DownloadConfiguration() {
         else
             if [ "${OVERWRITE_EDNS_ADDR}" == "true" ]; then
                 OVERWRITE_EDNS_ADDR=$(StaticIP=${EDNS_ADDR} && Type=${EDNS_ADDR_TYPE:-A} && GetWANIP)
-                if [ "${EDNS_ADDR_TYPE}" == "A" ]; then
+                if [ "${EDNS_ADDR_TYPE:-A}" == "A" ]; then
                     sed -i "s|client-subnet-address-override-ipv4: ''|s|client-subnet-address-override-ipv4: '${OVERWRITE_EDNS_ADDR}'|g" "${DOCKER_PATH}/conf/unbound.conf"
                 else
                     sed -i "s|client-subnet-address-override-ipv6: ''|s|client-subnet-address-override-ipv6: '${OVERWRITE_EDNS_ADDR}'|g" "${DOCKER_PATH}/conf/unbound.conf"
