@@ -20,6 +20,7 @@ ENABLE_DNSSEC_PERMISSIVE_MODE="false"
 ENABLE_ECS="true"
 EDNS_ADDR="" # auto, 127.0.0.1, ::1
 EDNS_ADDR_TYPE="" # A, AAAA
+OVERWRITE_EDNS_ADDR="" # false, true
 
 ENABLE_FORWARD="true"
 ENABLE_FORWARD_CACHE="true"
@@ -199,11 +200,13 @@ function DownloadConfiguration() {
         if [ "${ENABLE_ECS}" == "false" ]; then
             sed -i "s/subnetcache //g" "${DOCKER_PATH}/conf/unbound.conf"
         else
-            OVERWRITE_ADDR=$(StaticIP=${EDNS_ADDR} && Type=${EDNS_ADDR_TYPE:-A} && GetWANIP)
-            if [ "${EDNS_ADDR_TYPE}" == "A" ]; then
-                sed -i "s|client-subnet-address-override-ipv4: ''|s|client-subnet-address-override-ipv4: '${OVERWRITE_ADDR}'|g" "${DOCKER_PATH}/conf/unbound.conf"
-            else
-                sed -i "s|client-subnet-address-override-ipv6: ''|s|client-subnet-address-override-ipv6: '${OVERWRITE_ADDR}'|g" "${DOCKER_PATH}/conf/unbound.conf"
+            if [ "${OVERWRITE_EDNS_ADDR}" == "true" ]; then
+                OVERWRITE_EDNS_ADDR=$(StaticIP=${EDNS_ADDR} && Type=${EDNS_ADDR_TYPE:-A} && GetWANIP)
+                if [ "${EDNS_ADDR_TYPE}" == "A" ]; then
+                    sed -i "s|client-subnet-address-override-ipv4: ''|s|client-subnet-address-override-ipv4: '${OVERWRITE_EDNS_ADDR}'|g" "${DOCKER_PATH}/conf/unbound.conf"
+                else
+                    sed -i "s|client-subnet-address-override-ipv6: ''|s|client-subnet-address-override-ipv6: '${OVERWRITE_EDNS_ADDR}'|g" "${DOCKER_PATH}/conf/unbound.conf"
+                fi
             fi
         fi
 
