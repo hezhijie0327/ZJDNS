@@ -14,7 +14,7 @@ LOG_LEVEL="" # debug, info, warning, error, none
 
 RUNNING_MODE="" # client, server
 RUNTIME_PROTOCOL="" # trojan, vless, vmess
-RUNTIME_TRANSPORT="" # grpc, httpupgrade, splithttp, ws
+RUNTIME_TRANSPORT="" # grpc, httpupgrade, ws, xhttp
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipinfoio, ipipdotnet, iptoasn, vxlink, zjdb
 
@@ -90,7 +90,7 @@ function GetWANIP() {
 }
 # Get Latest Image
 function GetLatestImage() {
-    if [ "${RUNTIME_TRANSPORT}" == "httpupgrade" ] || [ "${RUNTIME_TRANSPORT}" == "splithttp" ]; then
+    if [ "${RUNTIME_TRANSPORT}" == "httpupgrade" ] || [ "${RUNTIME_TRANSPORT}" == "xhttp" ]; then
         REPO="xray"
     fi
 
@@ -210,7 +210,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${REPO}" != "xray" ]; then
-        cat "${DOCKER_PATH}/conf/config.json" | jq 'del(..|.httpupgradeSettings?) | del(..|.splithttpSettings?)' > "${DOCKER_PATH}/conf/config.json.tmp" && mv "${DOCKER_PATH}/conf/config.json.tmp" "${DOCKER_PATH}/conf/config.json"
+        cat "${DOCKER_PATH}/conf/config.json" | jq 'del(..|.httpupgradeSettings?) | del(..|.xhttpSettings?)' > "${DOCKER_PATH}/conf/config.json.tmp" && mv "${DOCKER_PATH}/conf/config.json.tmp" "${DOCKER_PATH}/conf/config.json"
     fi
 
     if [ ! -d "${DOCKER_PATH}/data" ]; then

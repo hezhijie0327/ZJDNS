@@ -88,9 +88,14 @@
                   "host": "demo.zhijie.online",
                   "path": "/HTTPUpgrade4TROJAN"
                 },
-                "splithttpSettings": {
+                "wsSettings": {
+                  "acceptProxyProtocol": false,
                   "host": "demo.zhijie.online",
-                  "path": "/SplitHTTP4TROJAN",
+                  "path": "/WebSocket4TROJAN"
+                },
+                "xhttpSettings": {
+                  "host": "demo.zhijie.online",
+                  "path": "/XHTTP4VLESS",
                   "noSSEHeader": false,
                   "scMaxEachPostBytes": "500000-1000000",
                   "scMaxConcurrentPosts": "50-100",
@@ -102,11 +107,6 @@
                     "maxConcurrency": 0,
                     "maxConnections": 0
                   }
-                },
-                "wsSettings": {
-                  "acceptProxyProtocol": false,
-                  "host": "demo.zhijie.online",
-                  "path": "/WebSocket4TROJAN"
                 }
             },
             "tag": "trojan_grpc"
