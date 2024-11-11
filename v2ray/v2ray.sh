@@ -22,7 +22,7 @@ CUSTOM_SERVERNAME="demo.zhijie.online" # demo.zhijie.online
 CUSTOM_UUID="99235a6e-05d4-2afe-2990-5bc5cf1f5c52" # $(uuidgen | tr 'A-Z' 'a-z')
 
 ENABLE_ENCRYPT_PATH="" #false, true
-CUSTOM_ENCRYPT_PATH="$(date +%Y-%m-%W)" # YEAR-MONTH-WEEK
+CUSTOM_ENCRYPT_SEED="$(date +%Y-%m-%W)" # YEAR-MONTH-WEEK
 
 ENABLE_DNS="" # false, true
 ENABLE_DNS_CACHE="" # false, true
@@ -131,7 +131,7 @@ function DownloadConfiguration() {
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/v2ray/${RUNNING_MODE:-server}_${RUNTIME_PROTOCOL:-vmess}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"grpc\"/\"${RUNTIME_TRANSPORT:-grpc}\"/g;s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
 
         if [ "${ENABLE_ENCRYPT_PATH:-false}" != "false" ]; then
-            sed -i "s|gRPC4VLESS|$(echo -n ${CUSTOM_ENCRYPT_PATH}gRPC4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|HTTPUpgrade4VLESS|$(echo -n ${CUSTOM_ENCRYPT_PATH}HTTPUpgrade4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|WebSocket4VLESS|$(echo -n ${CUSTOM_ENCRYPT_PATH}WebSocket4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|XHTTP4VLESS|$(echo -n ${CUSTOM_ENCRYPT_PATH}XHTTP4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g" "${DOCKER_PATH}/conf/config.json"
+            sed -i "s|gRPC4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}gRPC4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|HTTPUpgrade4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}HTTPUpgrade4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|WebSocket4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}WebSocket4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|XHTTP4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}XHTTP4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g" "${DOCKER_PATH}/conf/config.json"
         fi
 
         if [ "${ENABLE_DNS_CACHE:-false}" != "false" ]; then
