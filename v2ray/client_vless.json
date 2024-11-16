@@ -103,8 +103,8 @@
                   "xPaddingBytes": "100-1000",
                   "xmux": {
                     "cMaxLifetimeMs": 0,
-                    "cMaxReuseTimes": 0,
-                    "maxConcurrency": 0,
+                    "cMaxReuseTimes": 64-128,
+                    "maxConcurrency": 16-32,
                     "maxConnections": 0
                   }
                 }
