@@ -5,7 +5,6 @@
     },
     "dns": {
         "disableCache": true,
-        "disableFallback": false,
         "queryStrategy": "UseIP",
         "servers": [
             { "address": "127.0.0.1", "port": 53 }
@@ -68,10 +67,6 @@
                 "network": "grpc",
                 "security": "tls",
                 "tlsSettings": {
-                    "alpn": [
-                        "h2",
-                        "http/1.1"
-                    ],
                     "certificates": [
                         {
                             "certificateFile": "/etc/v2ray/cert/fullchain.cer",
@@ -79,19 +74,17 @@
                             "usage": "encipherment"
                         }
                     ],
-                    "disableSystemRoot": false,
-                    "verifyClientCertificate": false
+                    "fingerprint": "randomized",
+                    "serverName": "demo.zhijie.online"
                 },
                 "grpcSettings": {
                     "serviceName": "gRPC4VMESS"
                 },
                 "httpupgradeSettings": {
-                  "acceptProxyProtocol": false,
                   "host": "demo.zhijie.online",
                   "path": "/HTTPUpgrade4VMESS"
                 },
                 "wsSettings": {
-                  "acceptProxyProtocol": false,
                   "host": "demo.zhijie.online",
                   "path": "/WebSocket4VMESS"
                 },
