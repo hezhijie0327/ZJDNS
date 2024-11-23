@@ -13,7 +13,6 @@ USE_CDN="true"
 LOG_LEVEL="" # debug, info, warning, error, none
 
 RUNNING_MODE="" # client, server
-RUNTIME_PROTOCOL="" # trojan, vless, vmess
 RUNTIME_TRANSPORT="" # grpc, httpupgrade, ws, xhttp
 
 CNIPDB_SOURCE="" # bgp, dbip, geolite2, iana, ip2location, ipinfoio, ipipdotnet, iptoasn, vxlink, zjdb
@@ -118,7 +117,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/xray/${RUNNING_MODE:-server}_${RUNTIME_PROTOCOL:-vmess}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"grpc\"/\"${RUNTIME_TRANSPORT:-grpc}\"/g;s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/xray/${RUNNING_MODE:-server}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"grpc\"/\"${RUNTIME_TRANSPORT:-grpc}\"/g;s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
 
         if [ "${ENABLE_ENCRYPT_PATH:-false}" != "false" ]; then
             sed -i "s|gRPC4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}gRPC4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|HTTPUpgrade4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}HTTPUpgrade4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|WebSocket4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}WebSocket4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|XHTTP4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}XHTTP4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g" "${DOCKER_PATH}/conf/config.json"
@@ -163,30 +162,10 @@ function DownloadConfiguration() {
                     IP=$(echo ${IP} | cut -d "@" -f 1)
                 fi
 
-                case "${RUNTIME_PROTOCOL:-vmess}" in
-                    "trojan")
-                        JSON_STRING+='{ "address": "'${IP}'", "port": '${PORT}', "password": "'${CUSTOM_UUID}'" }, '
-                        ;;
-                    "vless")
-                        JSON_STRING+='{ "address": "'${IP}'", "port": '${PORT}', "users": [ { "encryption": "none", "id": "'${CUSTOM_UUID}'" } ] }, '
-                        ;;
-                    "vmess")
-                        JSON_STRING+='{ "address": "'${IP}'", "port": '${PORT}', "users": [ { "id": "'${CUSTOM_UUID}'", "security": "auto" } ] }, '
-                        ;;
-                esac
+                JSON_STRING+='{ "address": "'${IP}'", "port": '${PORT}', "users": [ { "encryption": "none", "id": "'${CUSTOM_UUID}'" } ] }, '
             done && JSON_STRING="${JSON_STRING%, }"
 
-            case "${RUNTIME_PROTOCOL:-vmess}" in
-                "trojan")
-                    sed -i "s/{ \"address\": \"${CUSTOM_SERVERNAME}\", \"port\": 443, \"password\": \"${CUSTOM_UUID}\" }/${JSON_STRING}/g" "${DOCKER_PATH}/conf/config.json"
-                    ;;
-                "vless")
-                    sed -i "s/{ \"address\": \"${CUSTOM_SERVERNAME}\", \"port\": 443, \"users\": \\[ { \"encryption\": \"none\", \"id\": \"${CUSTOM_UUID}\" } \\] }/${JSON_STRING}/g" "${DOCKER_PATH}/conf/config.json"
-                    ;;
-                "vmess")
-                    sed -i "s/{ \"address\": \"${CUSTOM_SERVERNAME}\", \"port\": 443, \"users\": \\[ { \"id\": \"${CUSTOM_UUID}\", \"security\": \"auto\" } \\] }/${JSON_STRING}/g" "${DOCKER_PATH}/conf/config.json"
-                    ;;
-            esac
+            sed -i "s/{ \"address\": \"${CUSTOM_SERVERNAME}\", \"port\": 443, \"users\": \\[ { \"encryption\": \"none\", \"id\": \"${CUSTOM_UUID}\" } \\] }/${JSON_STRING}/g" "${DOCKER_PATH}/conf/config.json"
         fi
 
         if [ "${ENABLE_MUX:-true}" != "true" ]; then
