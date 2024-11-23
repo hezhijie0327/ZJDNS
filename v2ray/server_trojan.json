@@ -95,8 +95,10 @@
                 },
                 "xhttpSettings": {
                   "host": "demo.zhijie.online",
-                  "path": "/XHTTP4VLESS",
+                  "mode": "auto",
+                  "noGRPCHeader": false,
                   "noSSEHeader": false,
+                  "path": "/XHTTP4VLESS",
                   "scMaxEachPostBytes": "500000-1000000",
                   "scMaxConcurrentPosts": "50-100",
                   "scMinPostsIntervalMs": "10-50",
