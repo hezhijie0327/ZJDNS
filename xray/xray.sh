@@ -2,9 +2,9 @@
 
 # Parameter
 OWNER="hezhijie0327"
-REPO="v2ray" # v2ray, xray
+REPO="xray"
 TAG="latest"
-DOCKER_PATH="/docker/v2ray"
+DOCKER_PATH="/docker/xray"
 
 CURL_OPTION=""
 DOWNLOAD_CONFIG="" # false, true
@@ -101,18 +101,8 @@ function GetLatestImage() {
 }
 # Cleanup Current Container
 function CleanupCurrentContainer() {
-    if [ "${REPO}" == "v2ray" ]; then
-        TEMP_REPO="xray"
-    else
-        TEMP_REPO="v2ray"
-    fi
-
     if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REPO}$") ]; then
         docker stop ${REPO} && docker rm ${REPO}
-    fi
-
-    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${TEMP_REPO}$") ]; then
-        docker stop ${TEMP_REPO} && docker rm ${TEMP_REPO}
     fi
 }
 # Download Configuration
@@ -128,7 +118,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/v2ray/${RUNNING_MODE:-server}_${RUNTIME_PROTOCOL:-vmess}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"grpc\"/\"${RUNTIME_TRANSPORT:-grpc}\"/g;s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/xray/${RUNNING_MODE:-server}_${RUNTIME_PROTOCOL:-vmess}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"grpc\"/\"${RUNTIME_TRANSPORT:-grpc}\"/g;s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
 
         if [ "${ENABLE_ENCRYPT_PATH:-false}" != "false" ]; then
             sed -i "s|gRPC4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}gRPC4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|HTTPUpgrade4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}HTTPUpgrade4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|WebSocket4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}WebSocket4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g;s|XHTTP4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}XHTTP4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g" "${DOCKER_PATH}/conf/config.json"
@@ -152,9 +142,9 @@ function DownloadConfiguration() {
 
                 if [ "${EXPECT}" != "" ]; then
                     if [ "${EXPECT}" == "CN" ]; then
-                        JSON_STRING+='{ "address": "'${IPADDR}'", "port": '${PORT:-53}''${ADDITIONAL}', "expectIPs": [ "ext:/etc/v2ray/data/geoip.dat:cn" ] }, '
+                        JSON_STRING+='{ "address": "'${IPADDR}'", "port": '${PORT:-53}''${ADDITIONAL}', "expectIPs": [ "ext:/etc/xray/data/geoip.dat:cn" ] }, '
                     else
-                        JSON_STRING+='{ "address": "'${IPADDR}'", "port": '${PORT:-53}''${ADDITIONAL}', "expectIPs": [ "ext:/etc/v2ray/data/geoip.dat:!cn" ] }, '
+                        JSON_STRING+='{ "address": "'${IPADDR}'", "port": '${PORT:-53}''${ADDITIONAL}', "expectIPs": [ "ext:/etc/xray/data/geoip.dat:!cn" ] }, '
                     fi
                 else
                     JSON_STRING+='{ "address": "'${IPADDR}'", "port": '${PORT:-53}''${ADDITIONAL}' }, '
@@ -216,10 +206,6 @@ function DownloadConfiguration() {
         cat "${DOCKER_PATH}/conf/config.json" | jq 'del(.dns)' > "${DOCKER_PATH}/conf/config.json.tmp" && mv "${DOCKER_PATH}/conf/config.json.tmp" "${DOCKER_PATH}/conf/config.json"
     fi
 
-    if [ "${REPO}" != "xray" ]; then
-        cat "${DOCKER_PATH}/conf/config.json" | jq 'del(..|.httpupgradeSettings?) | del(..|.xhttpSettings?) | del(..|.fingerprint?)' > "${DOCKER_PATH}/conf/config.json.tmp" && mv "${DOCKER_PATH}/conf/config.json.tmp" "${DOCKER_PATH}/conf/config.json"
-    fi
-
     if [ ! -d "${DOCKER_PATH}/data" ]; then
         mkdir -p "${DOCKER_PATH}/data"
     fi && curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/CNIPDb/main/cnipdb_${CNIPDB_SOURCE:-geolite2}/country_ipv4_6.dat" > "${DOCKER_PATH}/data/geoip.dat"
@@ -228,12 +214,12 @@ function DownloadConfiguration() {
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
         --privileged \
-        -v /docker/ssl:/etc/v2ray/cert:ro \
-        -v ${DOCKER_PATH}/conf:/etc/v2ray/conf \
-        -v ${DOCKER_PATH}/data:/etc/v2ray/data \
+        -v /docker/ssl:/etc/xray/cert:ro \
+        -v ${DOCKER_PATH}/conf:/etc/xray/conf \
+        -v ${DOCKER_PATH}/data:/etc/xray/data \
         -d ${OWNER}/${REPO}:${TAG} \
         run \
-        -c /etc/v2ray/conf/config.json
+        -c /etc/xray/conf/config.json
 }
 # Cleanup Expired Image
 function CleanupExpiredImage() {
