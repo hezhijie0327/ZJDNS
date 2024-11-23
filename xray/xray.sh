@@ -92,10 +92,6 @@ function GetWANIP() {
 }
 # Get Latest Image
 function GetLatestImage() {
-    if [ "${RUNTIME_TRANSPORT}" == "httpupgrade" ] || [ "${RUNTIME_TRANSPORT}" == "xhttp" ]; then
-        REPO="xray"
-    fi
-
     docker pull ${OWNER}/${REPO}:${TAG} && IMAGES=$(docker images -f "dangling=true" -q)
 }
 # Cleanup Current Container
