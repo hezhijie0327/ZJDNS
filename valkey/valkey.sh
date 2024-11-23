@@ -2,15 +2,15 @@
 
 # Parameter
 OWNER="hezhijie0327"
-REPO="redis" # redis, valkey
+REPO="valkey"
 TAG="latest"
 DOCKER_PATH="/docker/redis"
 
-REDIS_DATABASES="" # 16
-REDIS_MAXMEMORY="" # 4MB
-REDIS_MAXMEMORY_POLICY="" # noeviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl, volatile-lfu, allkeys-lfu
-REDIS_PASSWORD=''
-REDIS_PORT="" # 6379
+VALKEY_DATABASES="" # 16
+VALKEY_MAXMEMORY="" # 4MB
+VALKEY_MAXMEMORY_POLICY="" # noeviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl, volatile-lfu, allkeys-lfu
+VALKEY_PASSWORD=''
+VALKEY_PORT="" # 6379
 
 ## Function
 # Get Latest Image
@@ -19,18 +19,8 @@ function GetLatestImage() {
 }
 # Cleanup Current Container
 function CleanupCurrentContainer() {
-    if [ "${REPO}" == "redis" ]; then
-        TEMP_REPO="valkey"
-    else
-        TEMP_REPO="redis"
-    fi
-
     if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${REPO}$") ]; then
         docker stop ${REPO} && docker rm ${REPO}
-    fi
-
-    if [ $(docker ps -a --format "table {{.Names}}" | grep -E "^${TEMP_REPO}_${REPO}$") ]; then
-        docker stop ${TEMP_REPO}_${REPO} && docker rm ${TEMP_REPO}_${REPO}
     fi
 }
 # Create New Container
@@ -42,7 +32,7 @@ function CreateNewContainer() {
         --aof-use-rdb-preamble yes \
         --appendfsync everysec \
         --appendonly yes \
-        --databases ${REDIS_DATABASES:-16} \
+        --databases ${VALKEY_DATABASES:-16} \
         --dir /etc/redis/data \
         --lazyfree-lazy-eviction yes \
         --lazyfree-lazy-expire yes \
@@ -51,13 +41,13 @@ function CreateNewContainer() {
         --lazyfree-lazy-user-flush yes \
         --lfu-decay-time 1 \
         --lfu-log-factor 10 \
-        --maxmemory ${REDIS_MAXMEMORY:-4MB} \
-        --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-volatile-ttl} \
+        --maxmemory ${VALKEY_MAXMEMORY:-4MB} \
+        --maxmemory-policy ${VALKEY_MAXMEMORY_POLICY:-volatile-ttl} \
         --maxmemory-samples 10 \
-        --port ${REDIS_PORT:-6379} \
+        --port ${VALKEY_PORT:-6379} \
         --protected-mode no \
         --replica-lazy-flush yes \
-        --requirepass ${REDIS_PASSWORD}
+        --requirepass ${VALKEY_PASSWORD}
 }
 # Cleanup Expired Image
 function CleanupExpiredImage() {
