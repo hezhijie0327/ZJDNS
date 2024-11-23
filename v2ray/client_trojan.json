@@ -83,12 +83,10 @@
                     "serviceName": "gRPC4TROJAN"
                 },
                 "httpupgradeSettings": {
-                  "acceptProxyProtocol": false,
                   "host": "demo.zhijie.online",
                   "path": "/HTTPUpgrade4TROJAN"
                 },
                 "wsSettings": {
-                  "acceptProxyProtocol": false,
                   "host": "demo.zhijie.online",
                   "path": "/WebSocket4TROJAN"
                 },
