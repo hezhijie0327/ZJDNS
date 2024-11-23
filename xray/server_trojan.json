@@ -67,8 +67,8 @@
                 "tlsSettings": {
                     "certificates": [
                         {
-                            "certificateFile": "/etc/v2ray/cert/fullchain.cer",
-                            "keyFile": "/etc/v2ray/cert/zhijie.online.key",
+                            "certificateFile": "/etc/xray/cert/fullchain.cer",
+                            "keyFile": "/etc/xray/cert/zhijie.online.key",
                             "usage": "encipherment"
                         }
                     ],
