@@ -4,7 +4,7 @@
 OWNER="hezhijie0327"
 REPO="valkey"
 TAG="latest"
-DOCKER_PATH="/docker/redis"
+DOCKER_PATH="/docker/valkey"
 
 VALKEY_DATABASES="" # 16
 VALKEY_MAXMEMORY="" # 4MB
