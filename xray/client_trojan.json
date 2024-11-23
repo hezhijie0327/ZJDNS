@@ -43,7 +43,7 @@
                     "2620:4f:8000::/48",
                     "fc00::/7",
                     "fe80::/10",
-                    "ext:/etc/v2ray/data/geoip.dat:cn"
+                    "ext:/etc/xray/data/geoip.dat:cn"
                 ],
                 "outboundTag": "direct",
                 "type": "field"
