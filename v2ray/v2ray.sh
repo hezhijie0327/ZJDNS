@@ -217,7 +217,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${REPO}" != "xray" ]; then
-        cat "${DOCKER_PATH}/conf/config.json" | jq 'del(..|.httpupgradeSettings?) | del(..|.xhttpSettings?)' > "${DOCKER_PATH}/conf/config.json.tmp" && mv "${DOCKER_PATH}/conf/config.json.tmp" "${DOCKER_PATH}/conf/config.json"
+        cat "${DOCKER_PATH}/conf/config.json" | jq 'del(..|.httpupgradeSettings?) | del(..|.xhttpSettings?) | del(..|.fingerprint?)' > "${DOCKER_PATH}/conf/config.json.tmp" && mv "${DOCKER_PATH}/conf/config.json.tmp" "${DOCKER_PATH}/conf/config.json"
     fi
 
     if [ ! -d "${DOCKER_PATH}/data" ]; then
