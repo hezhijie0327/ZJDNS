@@ -26,14 +26,14 @@ function CleanupCurrentContainer() {
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
-        -v ${DOCKER_PATH}/data:/etc/redis/data \
+        -v ${DOCKER_PATH}/data:/etc/valkey/data \
         -d ${OWNER}/${REPO}:${TAG} \
         --activedefrag yes \
         --aof-use-rdb-preamble yes \
         --appendfsync everysec \
         --appendonly yes \
         --databases ${VALKEY_DATABASES:-16} \
-        --dir /etc/redis/data \
+        --dir /etc/valkey/data \
         --lazyfree-lazy-eviction yes \
         --lazyfree-lazy-expire yes \
         --lazyfree-lazy-server-del yes \
