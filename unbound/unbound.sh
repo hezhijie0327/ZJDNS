@@ -63,12 +63,10 @@ ENABLE_TCP_UPSTREAM="false"
 ENABLE_TLS_UPSTREAM="false"
 
 HTTPS_PORT="" # 3353
-QUIC_PORT="" # 3533
 TLS_PORT="" # 3533
 UNENCRYPTED_PORT="" # 3553
 
 ENABLE_HTTPS="false"
-ENABLE_QUIC="false"
 ENABLE_TLS="false"
 ENABLE_UNENCRYPTED_DNS="true"
 
@@ -276,9 +274,6 @@ function DownloadConfiguration() {
 
         if [ "${ENABLE_HTTPS}" == "true" ]; then
             sed -i "s/#@/  /g;s/https-port: 3353/https-port: ${HTTPS_PORT:-3353}/g;s/@3353/@${HTTPS_PORT:-3353}/g" "${DOCKER_PATH}/conf/unbound.conf"
-        fi
-        if [ "${ENABLE_QUIC}" == "true" ]; then
-            sed -i "s/#&/  /g;s/quic-port: 3533/quic-port: ${QUIC_PORT:-3533}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
         if [ "${ENABLE_TLS}" == "true" ]; then
             sed -i "s/#%/  /g;s/tls-port: 3533/tls-port: ${TLS_PORT:-3533}/g;s/@3533/@${TLS_PORT:-3533}/g" "${DOCKER_PATH}/conf/unbound.conf"
