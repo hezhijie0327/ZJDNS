@@ -116,6 +116,8 @@ function DownloadConfiguration() {
         fi
 
         if [ "${ENABLE_ENCRYPT_PATH:-false}" != "false" ]; then
+            CUSTOM_ENCRYPT_SEED=$(echo -n "ffffffff-ffff-ffff-ffff-ffffffffffff${CUSTOM_ENCRYPT_SEED}" | sha1sum | awk '{print substr($1, 1, 8) "-" substr($1, 9, 4) "-" "5" substr($1, 14, 3) "-" substr($1, 17, 4) "-" substr($1, 21, 12)}')
+
             sed -i "s|XHTTP4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}XHTTP4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g" "${DOCKER_PATH}/conf/config.json"
         fi
 
