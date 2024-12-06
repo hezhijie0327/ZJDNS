@@ -62,10 +62,6 @@
     ],
     "outbounds": [
         {
-            "mux": {
-                "concurrency": 8,
-                "enabled": true
-            },
             "protocol": "vless",
             "settings": {
                 "vnext": [
@@ -73,22 +69,11 @@
                 ]
             },
             "streamSettings": {
-                "network": "grpc",
+                "network": "xhttp",
                 "security": "tls",
                 "tlsSettings": {
                     "fingerprint": "randomized",
                     "serverName": "demo.zhijie.online"
-                },
-                "grpcSettings": {
-                    "serviceName": "gRPC4VLESS"
-                },
-                "httpupgradeSettings": {
-                  "host": "demo.zhijie.online",
-                  "path": "/HTTPUpgrade4VLESS"
-                },
-                "wsSettings": {
-                  "host": "demo.zhijie.online",
-                  "path": "/WebSocket4VLESS"
                 },
                 "xhttpSettings": {
                   "host": "demo.zhijie.online",
@@ -107,9 +92,8 @@
                     "maxConnections": 0
                   }
                 }
-            },
-            "tag": "vless_grpc"
+            }
         },
-        { "mux": { "concurrency": 8, "enabled": false }, "protocol": "freedom", "tag": "direct" }
+        { "protocol": "freedom", "tag": "direct" }
     ]
 }
