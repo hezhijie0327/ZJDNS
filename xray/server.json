@@ -63,7 +63,7 @@
                 "decryption": "none"
             },
             "streamSettings": {
-                "network": "grpc",
+                "network": "xhttp",
                 "security": "tls",
                 "tlsSettings": {
                     "certificates": [
@@ -75,17 +75,6 @@
                     ],
                     "fingerprint": "randomized",
                     "serverName": "demo.zhijie.online"
-                },
-                "grpcSettings": {
-                    "serviceName": "gRPC4VLESS"
-                },
-                "httpupgradeSettings": {
-                  "host": "demo.zhijie.online",
-                  "path": "/HTTPUpgrade4VLESS"
-                },
-                "wsSettings": {
-                  "host": "demo.zhijie.online",
-                  "path": "/WebSocket4VLESS"
                 },
                 "xhttpSettings": {
                   "host": "demo.zhijie.online",
@@ -116,7 +105,6 @@
         }
     ],
     "outbounds": [
-        { "mux": { "concurrency": 8, "enabled": false }, "protocol": "socks", "settings": { "servers": [ { "address": "127.0.0.1", "port": 40000 } ] }, "tag": "warp" },
-        { "mux": { "concurrency": 8, "enabled": false }, "protocol": "freedom", "tag": "direct" }
+        { "protocol": "freedom", "tag": "direct" }
     ]
 }
