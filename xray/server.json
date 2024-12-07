@@ -66,6 +66,7 @@
                 "network": "xhttp",
                 "security": "tls",
                 "tlsSettings": {
+                    "alpn": [ "h2" ],
                     "certificates": [
                         {
                             "certificateFile": "/etc/xray/cert/fullchain.cer",

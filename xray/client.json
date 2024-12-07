@@ -72,6 +72,7 @@
                 "network": "xhttp",
                 "security": "tls",
                 "tlsSettings": {
+                    "alpn": [ "h2" ],
                     "fingerprint": "randomized",
                     "serverName": "demo.zhijie.online"
                 },
