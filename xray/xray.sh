@@ -109,7 +109,7 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/xray/${RUNNING_MODE:-server}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/xray/${RUNNING_MODE:-server}.json" > "${DOCKER_PATH}/conf/config.json" && sed -i "s/\"info\"/\"${LOG_LEVEL:-info}\"/g;s/\[ \"h2\" \]/\[ \"${CUSTOM_ALPN_VERSION:-h2}\" \]/g;s/demo.zhijie.online/${CUSTOM_SERVERNAME}/g;s/99235a6e-05d4-2afe-2990-5bc5cf1f5c52/${CUSTOM_UUID}/g;s/fullchain\.cer/${SSL_CERT/./\\.}/g;s/zhijie\.online\.key/${SSL_KEY/./\\.}/g" "${DOCKER_PATH}/conf/config.json"
 
         if [ "${XHTTP_MODE:-auto}" != "auto" ]; then
             sed -i "s|packet-up|${XHTTP_MODE}|g" "${DOCKER_PATH}/conf/config.json"
