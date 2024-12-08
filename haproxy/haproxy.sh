@@ -54,7 +54,7 @@ function DownloadConfiguration() {
                 if [ "${RUNNING_MODE:-server}" == "server" ]; then
                     echo "    server $(echo ${IP} | tr '.:' '_' | tr -d '[]') ${IP}:${PORT:-443} check inter 1000${OPTION}" >> "${DOCKER_PATH}/conf/haproxy.cfg"
                 else
-                    echo "    server-template $(echo ${IP} | tr '.:' '_' | tr -d '[]') ${CUSTOM_DNS_RESULT_NUM:-1} ${IP}:${PORT:-443} check resolvers v2ray_dns inter 1000${OPTION}" >> "${DOCKER_PATH}/conf/haproxy.cfg"
+                    echo "    server-template $(echo ${IP} | tr '.:' '_' | tr -d '[]')_ ${CUSTOM_DNS_RESULT_NUM:-1} ${IP}:${PORT:-443} check resolvers v2ray_dns inter 1000${OPTION}" >> "${DOCKER_PATH}/conf/haproxy.cfg"
                 fi
             done
         fi
