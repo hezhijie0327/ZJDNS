@@ -11,7 +11,6 @@ DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
 ENABLE_DNS="" # false, true
-CUSTOM_DNS_SERVER="" # 127.0.0.1:53
 CUSTOM_DNS_RESULT_NUM="" # 1, 5, 10, 15
 
 IP_GROUP=() # ("127.0.0.1" "127.0.0.1@443" "127.0.0.1#backup" "127.0.0.1@443#backup")
@@ -41,10 +40,6 @@ function DownloadConfiguration() {
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/haproxy/haproxy.cfg" > "${DOCKER_PATH}/conf/haproxy.cfg"
-
-        if [ "${CUSTOM_DNS_SERVER:-}" != "" ]; then
-            sed -i "s|127.0.0.1:53|${CUSTOM_DNS_SERVER}|g" "${DOCKER_PATH}/conf/haproxy.cfg"
-        fi
 
         if [ "${IP_GROUP[*]}" != "" ]; then
             for IP in ${IP_GROUP[*]}; do
