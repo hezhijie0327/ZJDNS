@@ -10,6 +10,10 @@ CURL_OPTION=""
 DOWNLOAD_CONFIG="" # false, true
 USE_CDN="true"
 
+ENABLE_DNS="" # false, true
+CUSTOM_DNS_SERVER="" # 127.0.0.1:53
+CUSTOM_DNS_RESULT_NUM="" # 1, 5, 10, 15
+
 IP_GROUP=() # ("127.0.0.1" "127.0.0.1@443" "127.0.0.1#backup" "127.0.0.1@443#backup")
 
 ## Function
@@ -38,6 +42,10 @@ function DownloadConfiguration() {
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
         curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/haproxy/haproxy.cfg" > "${DOCKER_PATH}/conf/haproxy.cfg"
 
+        if [ "${CUSTOM_DNS_SERVER:-}" != "" ]; then
+            sed -i "s|127.0.0.1:53|${CUSTOM_DNS_SERVER}|g" "${DOCKER_PATH}/conf/haproxy.cfg"
+        fi
+
         if [ "${IP_GROUP[*]}" != "" ]; then
             for IP in ${IP_GROUP[*]}; do
                 OPTION=$(echo ${IP} | grep '#' | cut -d '#' -f 2)
@@ -48,7 +56,11 @@ function DownloadConfiguration() {
                     OPTION=" ${OPTION}"
                 fi
 
-                echo "    server $(echo ${IP} | tr '.:' '_' | tr -d '[]') ${IP}:${PORT:-443} check inter 1000${OPTION}" >> "${DOCKER_PATH}/conf/haproxy.cfg"
+                if [ "${ENABLE_DNS:-false}" == "false" ]; then
+                    echo "    server $(echo ${IP} | tr '.:' '_' | tr -d '[]') ${IP}:${PORT:-443} check inter 1000${OPTION}" >> "${DOCKER_PATH}/conf/haproxy.cfg"
+                else
+                    echo "    server-template $(echo ${IP} | tr '.:' '_' | tr -d '[]') ${CUSTOM_DNS_RESULT_NUM:-1} ${IP}:${PORT:-443} check resolvers v2ray_dns inter 1000${OPTION}" >> "${DOCKER_PATH}/conf/haproxy.cfg"
+                fi
             done
         fi
     fi
