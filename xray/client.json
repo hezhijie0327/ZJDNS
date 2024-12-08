@@ -74,6 +74,7 @@
                 "tlsSettings": {
                     "alpn": [ "h2" ],
                     "fingerprint": "randomized",
+                    "minVersion": "1.3",
                     "serverName": "demo.zhijie.online"
                 },
                 "xhttpSettings": {
