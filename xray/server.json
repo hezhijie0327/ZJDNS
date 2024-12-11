@@ -85,7 +85,7 @@
                   "noSSEHeader": false,
                   "path": "/XHTTP4VLESS",
                   "scMaxEachPostBytes": "500000-1000000",
-                  "scMaxConcurrentPosts": "50-100",
+                  "scMaxBufferedPosts": 30,
                   "scMinPostsIntervalMs": "10-50",
                   "xPaddingBytes": "100-1000",
                   "xmux": {
