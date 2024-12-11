@@ -83,8 +83,8 @@
                   "noGRPCHeader": false,
                   "noSSEHeader": false,
                   "path": "/XHTTP4VLESS",
+                  "scMaxBufferedPosts": 30,
                   "scMaxEachPostBytes": "500000-1000000",
-                  "scMaxConcurrentPosts": "50-100",
                   "scMinPostsIntervalMs": "10-50",
                   "xPaddingBytes": "100-1000",
                   "xmux": {
