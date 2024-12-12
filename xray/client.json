@@ -10,11 +10,6 @@
             { "address": "127.0.0.1", "port": 53 }
         ]
     },
-    "observatory": {
-        "enableConcurrency": true,
-        "probeInterval": "5s",
-        "probeURL": "https://cp.cloudflare.com/generate_204"
-    },
     "routing": {
         "domainMatcher": "mph",
         "domainStrategy": "IPOnDemand",
