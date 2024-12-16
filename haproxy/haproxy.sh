@@ -13,7 +13,11 @@ USE_CDN="true"
 RUNNING_MODE="" # server, server-template
 CUSTOM_DNS_RESULT_NUM="" # 1, 5, 10, 15
 
+HAPROXY_STATS_AUTH_USER="" # admin:admin, admin:'*admin*'
+
 IP_GROUP=() # ("127.0.0.1" "127.0.0.1@443" "127.0.0.1#backup" "127.0.0.1@443#backup")
+
+SSL_CERT="zhijie.online.cert"
 
 ## Function
 # Get Latest Image
@@ -39,7 +43,11 @@ function DownloadConfiguration() {
     fi
 
     if [ "${DOWNLOAD_CONFIG:-true}" == "true" ]; then
-        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/haproxy/haproxy.cfg" > "${DOCKER_PATH}/conf/haproxy.cfg"
+        curl ${CURL_OPTION:--4 -s --connect-timeout 15} "https://${CDN_PATH}/ZJDNS/main/haproxy/haproxy.cfg" > "${DOCKER_PATH}/conf/haproxy.cfg" && sed -i "s/zhijie\.online\.cert/${SSL_CERT/./\\.}/g" "${DOCKER_PATH}/conf/haproxy.cfg"
+
+        if [ "${HAPROXY_STATS_AUTH_USER}" != "" ]; then
+            sed -i "s|admin:admin|${HAPROXY_STATS_AUTH_USER}|g" "${DOCKER_PATH}/conf/haproxy.cfg"
+        fi
 
         if [ "${IP_GROUP[*]}" != "" ]; then
             for IP in ${IP_GROUP[*]}; do
@@ -63,6 +71,7 @@ function DownloadConfiguration() {
 # Create New Container
 function CreateNewContainer() {
     docker run --name ${REPO} --net host --restart=always \
+        -v /docker/ssl:/etc/haproxy/cert:ro \
         -v ${DOCKER_PATH}/conf:/etc/haproxy/conf \
         -d ${OWNER}/${REPO}:${TAG} \
         -f /etc/haproxy/conf/haproxy.cfg
