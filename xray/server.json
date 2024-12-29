@@ -90,7 +90,7 @@
                     "xPaddingBytes": "128-1024",
                     "xmux": {
                         "cMaxLifetimeMs": "15000-300000",
-                        "cMaxReuseTimes": "64-128",
+                        "cMaxReuseTimes": "256-512",
                         "hKeepAlivePeriod": 5,
                         "hMaxRequestTimes": "650-850",
                         "maxConcurrency": "16-32",
