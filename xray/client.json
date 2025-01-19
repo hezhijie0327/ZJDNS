@@ -86,6 +86,7 @@
                     "scMaxBufferedPosts": 32,
                     "scMaxEachPostBytes": "131072-524288",
                     "scMinPostsIntervalMs": "50-100",
+                    "scStreamUpServerSecs": "15-90",
                     "xPaddingBytes": "128-1024",
                     "xmux": {
                         "cMaxReuseTimes": "256-512",
