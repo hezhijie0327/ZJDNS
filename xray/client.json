@@ -73,7 +73,7 @@
                 "security": "tls",
                 "tlsSettings": {
                     "alpn": [ "h2" ],
-                    "fingerprint": "randomizednoalpn",
+                    "fingerprint": "randomized",
                     "minVersion": "1.3",
                     "serverName": "demo.zhijie.online"
                 },
