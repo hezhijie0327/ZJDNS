@@ -146,11 +146,16 @@ function DownloadConfiguration() {
         if [ "${ENABLE_ECS}" == "false" ]; then
             sed -i "s/subnetcache //g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
-        if [ "${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV4}" != "" ]; then
-            sed -i "s/client-subnet-address-override-ipv4: ''/client-subnet-address-override-ipv4: ${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV4}/g" "${DOCKER_PATH}/conf/unbound.conf"
-        fi
-        if [ "${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV6}" != "" ]; then
-            sed -i "s/client-subnet-address-override-ipv6: ''/client-subnet-address-override-ipv6: ${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV6}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        if [ "${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV4}" != "" ] || [ "${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV6}" != "" ]; then
+            sed -i "s/#~/  /g" "${DOCKER_PATH}/conf/unbound.conf"
+
+            sed -i "s/client-subnet-address-override-ipv4: ''/client-subnet-address-override-ipv4: '${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV4}'/g;s/client-subnet-address-override-ipv6: ''/client-subnet-address-override-ipv6: '${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV6}'/g" "${DOCKER_PATH}/conf/unbound.conf"
+            if [ "${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV4}" == "" ]; then
+                sed -i "/client-subnet-address-override-ipv4/d" "${DOCKER_PATH}/conf/unbound.conf"
+            fi
+            if [ "${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV6}" == "" ]; then
+                sed -i "/client-subnet-address-override-ipv6/d" "${DOCKER_PATH}/conf/unbound.conf"
+            fi
         fi
 
         if [ "${ENABLE_FORWARD}" == "true" ]; then
