@@ -18,6 +18,8 @@ ENABLE_DNSSEC="false"
 ENABLE_DNSSEC_PERMISSIVE_MODE="false"
 
 ENABLE_ECS="true"
+CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV4=""
+CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV6=""
 
 ENABLE_FORWARD="true"
 ENABLE_FORWARD_CACHE="true"
@@ -143,6 +145,12 @@ function DownloadConfiguration() {
 
         if [ "${ENABLE_ECS}" == "false" ]; then
             sed -i "s/subnetcache //g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV4}" != "" ]; then
+            sed -i "s/client-subnet-address-override-ipv4: ''/client-subnet-address-override-ipv4: ${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV4}/g" "${DOCKER_PATH}/conf/unbound.conf"
+        fi
+        if [ "${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV6}" != "" ]; then
+            sed -i "s/client-subnet-address-override-ipv6: ''/client-subnet-address-override-ipv6: ${CLIENT_SUBNET_ADDRESS_OVERRIDE_IPV6}/g" "${DOCKER_PATH}/conf/unbound.conf"
         fi
 
         if [ "${ENABLE_FORWARD}" == "true" ]; then
