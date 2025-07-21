@@ -26,6 +26,7 @@ CUSTOM_ENCRYPT_SEED="$(date +%Y-%m-%W)" # YEAR-MONTH-WEEK
 ENABLE_DNS="" # false, true
 ENABLE_DNS_CACHE="" # false, true
 CUSTOM_DNS=() # ("1.0.0.1@53" "223.5.5.5@53#CN" "8.8.8.8@53%1.1.1.1" "8.8.4.4@53%auto&AAAA")
+CUSTOM_HOSTS=() # ("vpn.zhjie.online,127.0.0.1")
 
 CUSTOM_IP=() # ("1.0.0.1" "1.1.1.1" "127.0.0.1@7891")
 
@@ -149,6 +150,17 @@ function DownloadConfiguration() {
             done && JSON_STRING="${JSON_STRING%, }"
 
             sed -i "s|{ \"address\": \"127.0.0.1\", \"port\": 53 }|${JSON_STRING}|g" "${DOCKER_PATH}/conf/config.json"
+        fi
+
+        if [ "${CUSTOM_HOSTS[*]}" != "" ]; then
+            HOSTS_STRING="" && for HOST in "${CUSTOM_HOSTS[@]}"; do
+                HOSTNAME="" && HOSTNAME=$(echo ${HOST} | cut -d "," -f 1)
+                IPADDR="" && IPADDR=$(echo ${HOST} | cut -d "," -f 2)
+
+                HOSTS_STRING+="\"${HOSTNAME}\": \"${IPADDR}\", "
+            done && HOSTS_STRING="${HOSTS_STRING%, }"
+
+            sed -i "s|\"vpn.zhijie.online\": \"127.0.0.1\"|${HOSTS_STRING}|g" "${DOCKER_PATH}/conf/config.json"
         fi
 
         if [ "${CUSTOM_IP[*]}" != "" ] && [ "${RUNNING_MODE:-server}" == "client" ]; then
