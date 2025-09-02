@@ -21,7 +21,7 @@ CUSTOM_SERVERNAME="demo.zhijie.online" # demo.zhijie.online
 CUSTOM_UUID="99235a6e-05d4-2afe-2990-5bc5cf1f5c52" # $(uuidgen | tr 'A-Z' 'a-z')
 
 ENABLE_ENCRYPT_PATH="" #false, true
-CUSTOM_ENCRYPT_SEED="$(date +%Y-%m-%W)" # YEAR-MONTH-WEEK
+CUSTOM_ENCRYPT_SEED="$(date +%Y-%m)" # YEAR-MONTH
 
 VLESS_ENCRYPTION_MODE="" # mlkem, mlkem768x25519plus, x25519
 VLESS_ENCRYPTION_TYPE="" # native, random, xorpub
