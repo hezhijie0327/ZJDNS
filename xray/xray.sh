@@ -23,6 +23,11 @@ CUSTOM_UUID="99235a6e-05d4-2afe-2990-5bc5cf1f5c52" # $(uuidgen | tr 'A-Z' 'a-z')
 ENABLE_ENCRYPT_PATH="" #false, true
 CUSTOM_ENCRYPT_SEED="$(date +%Y-%m-%W)" # YEAR-MONTH-WEEK
 
+VLESS_ENCRYPTION_MODE="" # mlkem, mlkem768x25519plus, x25519
+VLESS_ENCRYPTION_TYPE="" # native, random, xorpub
+VLESS_ENCRYPTION_CLIENT_PASSWORD=""
+VLESS_ENCRYPTION_SEED_PRIVATEKEY=""
+
 ENABLE_DNS="" # false, true
 ENABLE_DNS_CACHE="" # false, true
 CUSTOM_DNS=() # ("1.0.0.1@53" "223.5.5.5@53#CN" "8.8.8.8@53%1.1.1.1" "8.8.4.4@53%auto&AAAA")
@@ -120,6 +125,14 @@ function DownloadConfiguration() {
             CUSTOM_ENCRYPT_SEED=$(echo -n "ffffffff-ffff-ffff-ffff-ffffffffffff${CUSTOM_ENCRYPT_SEED}" | sha1sum | awk '{print substr($1, 1, 8) "-" substr($1, 9, 4) "-" "5" substr($1, 14, 3) "-" substr($1, 17, 4) "-" substr($1, 21, 12)}')
 
             sed -i "s|XHTTP4VLESS|$(echo -n ${CUSTOM_ENCRYPT_SEED}XHTTP4VLESS${CUSTOM_UUID} | base64 | sha256sum | awk '{print $1}')|g" "${DOCKER_PATH}/conf/config.json"
+        fi
+
+        if [ "${VLESS_ENCRYPTION_CLIENT_PASSWORD}" != "" ] && [ "${VLESS_ENCRYPTION_SEED_PRIVATEKEY}" != "" ] ; then
+            if [ "${RUNNING_MODE:-server}" == "client" ]; then
+                sed -i "s|\"encryption\": \"none\"|\"encryption\": \"${VLESS_ENCRYPTION_MODE:-mlkem768x25519plus}.${VLESS_ENCRYPTION_TYPE:-random}.0rtt.${VLESS_ENCRYPTION_CLIENT_PASSWORD}\"|g" "${DOCKER_PATH}/conf/config.json"
+            else
+                sed -i "s|\"decryption\": \"none\"|\"decryption\": \"${VLESS_ENCRYPTION_MODE:-mlkem768x25519plus}.${VLESS_ENCRYPTION_TYPE:-random}.300s.${VLESS_ENCRYPTION_SEED_PRIVATEKEY}\"|g" "${DOCKER_PATH}/conf/config.json"
+            fi
         fi
 
         if [ "${ENABLE_DNS_CACHE:-false}" != "false" ]; then
