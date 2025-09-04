@@ -72,16 +72,16 @@ docker run -d \
 
 ```bash
 # 默认配置启动
-./zjdns-server
+./zjdns
 
 # 指定端口和缓存大小
-./zjdns-server -port 5353 -cache-size 50000
+./zjdns -port 5353 -cache-size 50000
 
 # 启用详细日志
-./zjdns-server -log-level debug
+./zjdns -log-level debug
 
 # 完整配置示例
-./zjdns-server \
+./zjdns \
   -port 53 \
   -cache-size 10000 \
   -cache-file dns_cache.gob.gz \
@@ -148,24 +148,24 @@ sudo systemctl start zjdns
 
 ```bash
 # 大内存环境，增加缓存大小
-./zjdns-server -cache-size 100000 -save-interval 300
+./zjdns -cache-size 100000 -save-interval 300
 
 # 启用Serve-Expired，提高缓存利用率
-./zjdns-server -serve-expired -expired-ttl 60 -stale-max-age 604800
+./zjdns -serve-expired -expired-ttl 60 -stale-max-age 604800
 ```
 
 ### 并发优化
 
 ```bash
 # 高负载环境
-./zjdns-server -max-concurrency 50 -conn-pool-size 100
+./zjdns -max-concurrency 50 -conn-pool-size 100
 ```
 
 ### IPv6优化
 
 ```bash
 # 双栈环境
-./zjdns-server -enable-ipv6 -default-ecs "2001:db8::/32"
+./zjdns -enable-ipv6 -default-ecs "2001:db8::/32"
 ```
 
 ## 📊 监控和日志
@@ -208,17 +208,17 @@ sudo systemctl start zjdns
 sudo netstat -tulpn | grep :53
 
 # 使用其他端口
-./zjdns-server -port 5353
+./zjdns -port 5353
 ```
 
 #### 2. 权限不足
 
 ```bash
 # 非root用户使用高端口
-./zjdns-server -port 1053
+./zjdns -port 1053
 
 # 或授权能力
-sudo setcap CAP_NET_BIND_SERVICE=+eip ./zjdns-server
+sudo setcap CAP_NET_BIND_SERVICE=+eip ./zjdns
 ```
 
 #### 3. 缓存文件权限
@@ -235,7 +235,7 @@ chmod 644 dns_cache.gob.gz
 
 ```bash
 # 启用调试日志
-./zjdns-server -log-level debug
+./zjdns -log-level debug
 
 # 检查网络连接
 dig @8.8.8.8 example.com
@@ -250,7 +250,7 @@ dig @8.8.8.8 example.com
 top -p $(pgrep zjdns)
 
 # 调整缓存大小
-./zjdns-server -cache-size 50000  # 根据可用内存调整
+./zjdns -cache-size 50000  # 根据可用内存调整
 ```
 
 #### 网络优化
@@ -260,7 +260,7 @@ top -p $(pgrep zjdns)
 ulimit -n 65536
 
 # 调整连接池大小
-./zjdns-server -conn-pool-size 50
+./zjdns -conn-pool-size 50
 ```
 
 ## 🧪 测试
@@ -342,14 +342,14 @@ sudo iptables -A INPUT -p udp --dport 53 -j DROP
 FROM golang:1.21-alpine AS builder
 WORKDIR /app
 COPY . .
-RUN go mod tidy && go build -o zjdns-server main.go
+RUN go mod tidy && go build -o zjdns main.go
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
-COPY --from=builder /app/zjdns-server .
+COPY --from=builder /app/zjdns .
 EXPOSE 53/udp 53/tcp
-CMD ["./zjdns-server"]
+CMD ["./zjdns"]
 ```
 
 #### Docker Compose
@@ -357,7 +357,7 @@ CMD ["./zjdns-server"]
 ```yaml
 version: '3.8'
 services:
-  zjdns-server:
+  zjdns:
     build: .
     ports:
       - "53:53/udp"
