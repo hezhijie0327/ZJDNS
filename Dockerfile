@@ -10,12 +10,13 @@ ENV \
     CGO_ENABLED="0"
 
 RUN \
-    go build -o zjdns-server -trimpath -ldflags "-s -w -buildid="
+    go mod tidy \
+    && go build -o zjdns -trimpath -ldflags "-s -w -buildid="
 
 FROM scratch
 
-COPY --from=build_zjdns /zjdns/zjdns-server /zjdns-server
+COPY --from=build_zjdns /zjdns/zjdns /zjdns
 
 EXPOSE 53/tcp 53/udp
 
-ENTRYPOINT ["/zjdns-server"]
+ENTRYPOINT ["/zjdns"]
