@@ -605,7 +605,7 @@ func (rc *RedisDNSCache) startRefreshProcessor() {
 
 func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 	rc.stats.RecordRefresh()
-	logf(LogDebug, "🔄 接收到刷新请求: %s", req.CacheKey)
+	logf(LogDebug, "🔄 处理刷新请求: %s", req.CacheKey)
 	// 这里可以实现实际的后台刷新逻辑
 }
 
@@ -619,14 +619,14 @@ func (rc *RedisDNSCache) Get(key string) (*RedisCacheEntry, bool, bool) {
 			return nil, false, false
 		}
 		rc.stats.RecordError()
-		logf(LogWarn, "Redis获取失败: %v", err)
+		logf(LogDebug, "Redis获取失败: %v", err)
 		return nil, false, false
 	}
 
 	var entry RedisCacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
 		rc.stats.RecordError()
-		logf(LogWarn, "Redis数据解析失败: %v", err)
+		logf(LogDebug, "Redis数据解析失败: %v", err)
 		return nil, false, false
 	}
 
@@ -679,7 +679,7 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 	data, err := json.Marshal(entry)
 	if err != nil {
 		rc.stats.RecordError()
-		logf(LogWarn, "Redis数据序列化失败: %v", err)
+		logf(LogDebug, "Redis数据序列化失败: %v", err)
 		return
 	}
 
@@ -691,7 +691,7 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 
 	if err := rc.client.Set(rc.ctx, fullKey, data, expiration).Err(); err != nil {
 		rc.stats.RecordError()
-		logf(LogWarn, "Redis设置失败: %v", err)
+		logf(LogDebug, "Redis设置失败: %v", err)
 		return
 	}
 
@@ -1215,19 +1215,19 @@ func (r *RecursiveDNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 		return msg
 	}
 
-	logf(LogInfo, "🔍 递归解析: %s %s", dns.TypeToString[question.Qtype], question.Name)
+	logf(LogDebug, "🔍 递归解析: %s %s", dns.TypeToString[question.Qtype], question.Name)
 
 	ctx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
 	defer cancel()
 
 	answer, authority, additional, validated, err := r.resolveWithCNAME(ctx, question, ecsOpt)
 	if err != nil {
-		logf(LogWarn, "查询失败: %v", err)
+		logf(LogDebug, "递归查询失败: %v", err)
 
 		// Serve-Stale fallback
 		if r.config.Features.ServeStale {
 			if entry, found, _ := r.cache.Get(cacheKey); found {
-				logf(LogInfo, "⏰ 使用过期缓存回退: %s %s", question.Name, dns.TypeToString[question.Qtype])
+				logf(LogDebug, "⏰ 使用过期缓存回退: %s %s", question.Name, dns.TypeToString[question.Qtype])
 
 				responseTTL := uint32(r.config.TTL.StaleTTL)
 				msg.Answer = adjustTTL(filterDNSSECRecords(entry.GetAnswerRRs(), dnssecOK), responseTTL)
