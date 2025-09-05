@@ -164,7 +164,7 @@ func (s *ServerStats) String() string {
 		uptime.Truncate(time.Second), queries, qps, hitRate, errors, avgTime)
 }
 
-// 优化后的服务器配置结构
+// 重构后的服务器配置结构
 type ServerConfig struct {
 	Network struct {
 		Port       string `json:"port"`
@@ -172,15 +172,13 @@ type ServerConfig struct {
 		DefaultECS string `json:"default_ecs_subnet"`
 	} `json:"network"`
 
-	Cache struct {
-		DefaultTTL int `json:"default_ttl"`
-		MinTTL     int `json:"min_ttl"`
-		MaxTTL     int `json:"max_ttl"`
-	} `json:"cache"`
-
-	DNSSEC struct {
-		Enable bool `json:"enable"`
-	} `json:"dnssec"`
+	TTL struct {
+		DefaultTTL  int `json:"default_ttl"`
+		MinTTL      int `json:"min_ttl"`
+		MaxTTL      int `json:"max_ttl"`
+		StaleTTL    int `json:"stale_ttl"`
+		StaleMaxAge int `json:"stale_max_age"`
+	} `json:"ttl"`
 
 	Performance struct {
 		MaxConcurrency int `json:"max_concurrency"`
@@ -198,9 +196,8 @@ type ServerConfig struct {
 
 	Features struct {
 		ServeStale      bool `json:"serve_stale"`
-		StaleMaxAge     int  `json:"stale_max_age"`
-		StaleTTL        int  `json:"stale_ttl"`
 		PrefetchEnabled bool `json:"prefetch_enabled"`
+		DNSSEC          bool `json:"dnssec"`
 	} `json:"features"`
 
 	Redis struct {
@@ -221,11 +218,12 @@ func getDefaultConfig() *ServerConfig {
 	config.Network.EnableIPv6 = false
 	config.Network.DefaultECS = ""
 
-	config.Cache.DefaultTTL = 3600
-	config.Cache.MinTTL = 300
-	config.Cache.MaxTTL = 86400
-
-	config.DNSSEC.Enable = true
+	// TTL配置：0表示使用上游值
+	config.TTL.DefaultTTL = 3600  // 当上游没有TTL时的默认值
+	config.TTL.MinTTL = 0         // 0表示使用上游值
+	config.TTL.MaxTTL = 0         // 0表示使用上游值
+	config.TTL.StaleTTL = 30      // 过期缓存返回时的TTL
+	config.TTL.StaleMaxAge = 604800 // 过期缓存最大保留时间（7天）
 
 	config.Performance.MaxConcurrency = 100
 	config.Performance.ConnPoolSize = 50
@@ -238,9 +236,8 @@ func getDefaultConfig() *ServerConfig {
 	config.Logging.StatsInterval = 300
 
 	config.Features.ServeStale = true
-	config.Features.StaleMaxAge = 604800
-	config.Features.StaleTTL = 30
 	config.Features.PrefetchEnabled = true
+	config.Features.DNSSEC = true
 
 	config.Redis.Address = "localhost:6379"
 	config.Redis.Password = ""
@@ -303,7 +300,8 @@ func validateConfig(config *ServerConfig) error {
 		}
 	}
 
-	if config.Cache.MinTTL > config.Cache.MaxTTL {
+	// TTL配置验证
+	if config.TTL.MinTTL > 0 && config.TTL.MaxTTL > 0 && config.TTL.MinTTL > config.TTL.MaxTTL {
 		return errors.New("最小TTL不能大于最大TTL")
 	}
 
@@ -317,9 +315,11 @@ func validateConfig(config *ServerConfig) error {
 		value       int
 		min, max    int
 	}{
-		{"cache.default_ttl", config.Cache.DefaultTTL, 1, 604800},
-		{"cache.min_ttl", config.Cache.MinTTL, 1, 3600},
-		{"cache.max_ttl", config.Cache.MaxTTL, 1, 604800},
+		{"ttl.default_ttl", config.TTL.DefaultTTL, 1, 604800},
+		{"ttl.min_ttl", config.TTL.MinTTL, 0, 604800}, // 0表示使用上游值
+		{"ttl.max_ttl", config.TTL.MaxTTL, 0, 604800}, // 0表示使用上游值
+		{"ttl.stale_ttl", config.TTL.StaleTTL, 1, 3600},
+		{"ttl.stale_max_age", config.TTL.StaleMaxAge, 1, 2592000}, // 最长30天
 		{"perf.max_concurrency", config.Performance.MaxConcurrency, 1, 2000},
 		{"perf.conn_pool_size", config.Performance.ConnPoolSize, 1, 500},
 		{"perf.query_timeout", config.Performance.QueryTimeout, 1, 30},
@@ -336,6 +336,47 @@ func validateConfig(config *ServerConfig) error {
 	return nil
 }
 
+// TTL计算器
+type TTLCalculator struct {
+	config *ServerConfig
+}
+
+func NewTTLCalculator(config *ServerConfig) *TTLCalculator {
+	return &TTLCalculator{config: config}
+}
+
+func (tc *TTLCalculator) CalculateCacheTTL(rrs []dns.RR) int {
+	if len(rrs) == 0 {
+		return tc.config.TTL.DefaultTTL
+	}
+
+	// 找到最小的上游TTL
+	minUpstreamTTL := int(rrs[0].Header().Ttl)
+	for _, rr := range rrs {
+		if ttl := int(rr.Header().Ttl); ttl > 0 && (minUpstreamTTL == 0 || ttl < minUpstreamTTL) {
+			minUpstreamTTL = ttl
+		}
+	}
+
+	// 如果上游没有有效TTL，使用默认值
+	if minUpstreamTTL <= 0 {
+		minUpstreamTTL = tc.config.TTL.DefaultTTL
+	}
+
+	// 应用min和max限制（0表示不限制）
+	if tc.config.TTL.MinTTL > 0 && minUpstreamTTL < tc.config.TTL.MinTTL {
+		minUpstreamTTL = tc.config.TTL.MinTTL
+		logf(LogDebug, "🕐 TTL调整: 应用最小TTL限制 %ds", minUpstreamTTL)
+	}
+
+	if tc.config.TTL.MaxTTL > 0 && minUpstreamTTL > tc.config.TTL.MaxTTL {
+		minUpstreamTTL = tc.config.TTL.MaxTTL
+		logf(LogDebug, "🕐 TTL调整: 应用最大TTL限制 %ds", minUpstreamTTL)
+	}
+
+	return minUpstreamTTL
+}
+
 // 优化的DNS记录结构
 type CompactDNSRecord struct {
 	Text    string `json:"text"`
@@ -343,7 +384,7 @@ type CompactDNSRecord struct {
 	Type    uint16 `json:"type"`
 }
 
-// 优化的对象池（移除有问题的msgPool）
+// 优化的对象池
 var (
 	rrPool = sync.Pool{
 		New: func() interface{} {
@@ -479,6 +520,7 @@ type RefreshRequest struct {
 type RedisDNSCache struct {
 	client       *redis.Client
 	config       *ServerConfig
+	ttlCalc      *TTLCalculator
 	keyPrefix    string
 	refreshQueue chan RefreshRequest
 	stats        *CacheStats
@@ -520,6 +562,7 @@ func NewRedisDNSCache(config *ServerConfig) (*RedisDNSCache, error) {
 	cache := &RedisDNSCache{
 		client:       rdb,
 		config:       config,
+		ttlCalc:      NewTTLCalculator(config),
 		keyPrefix:    config.Redis.KeyPrefix,
 		refreshQueue: make(chan RefreshRequest, 1000),
 		stats:        &CacheStats{},
@@ -590,7 +633,7 @@ func (rc *RedisDNSCache) Get(key string) (*RedisCacheEntry, bool, bool) {
 	now := time.Now().Unix()
 
 	if rc.config.Features.ServeStale &&
-		now-entry.Timestamp > int64(entry.TTL+rc.config.Features.StaleMaxAge) {
+		now-entry.Timestamp > int64(entry.TTL+rc.config.TTL.StaleMaxAge) {
 		rc.stats.RecordMiss()
 		go rc.removeStaleEntry(fullKey)
 		return nil, false, false
@@ -612,28 +655,20 @@ func (rc *RedisDNSCache) Get(key string) (*RedisCacheEntry, bool, bool) {
 }
 
 func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR, validated bool) {
-	minTTL := rc.config.Cache.DefaultTTL
+	// 使用TTL计算器来确定缓存TTL
+	allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
+	allRRs = append(allRRs, answer...)
+	allRRs = append(allRRs, authority...)
+	allRRs = append(allRRs, additional...)
 
-	for _, rrs := range [][]dns.RR{answer, authority, additional} {
-		for _, rr := range rrs {
-			if ttl := int(rr.Header().Ttl); ttl > 0 && ttl < minTTL {
-				minTTL = ttl
-			}
-		}
-	}
-
-	if minTTL < rc.config.Cache.MinTTL {
-		minTTL = rc.config.Cache.MinTTL
-	} else if minTTL > rc.config.Cache.MaxTTL {
-		minTTL = rc.config.Cache.MaxTTL
-	}
+	cacheTTL := rc.ttlCalc.CalculateCacheTTL(allRRs)
 
 	now := time.Now().Unix()
 	entry := &RedisCacheEntry{
 		Answer:      compactRRs(answer),
 		Authority:   compactRRs(authority),
 		Additional:  compactRRs(additional),
-		TTL:         minTTL,
+		TTL:         cacheTTL,
 		Timestamp:   now,
 		Validated:   validated,
 		AccessTime:  now,
@@ -649,9 +684,9 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 	}
 
 	fullKey := rc.keyPrefix + key
-	expiration := time.Duration(minTTL) * time.Second
+	expiration := time.Duration(cacheTTL) * time.Second
 	if rc.config.Features.ServeStale {
-		expiration += time.Duration(rc.config.Features.StaleMaxAge) * time.Second
+		expiration += time.Duration(rc.config.TTL.StaleMaxAge) * time.Second
 	}
 
 	if err := rc.client.Set(rc.ctx, fullKey, data, expiration).Err(); err != nil {
@@ -664,8 +699,15 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 	if validated {
 		validatedStr = " 🔐"
 	}
-	logf(LogDebug, "💾 Redis缓存记录: %s (TTL: %ds, 答案: %d条)%s",
-		key, minTTL, len(answer), validatedStr)
+
+	// 显示TTL来源信息
+	ttlSource := "上游"
+	if rc.config.TTL.MinTTL > 0 || rc.config.TTL.MaxTTL > 0 {
+		ttlSource = "限制后"
+	}
+
+	logf(LogDebug, "💾 Redis缓存记录: %s (TTL: %ds %s, 答案: %d条)%s",
+		key, cacheTTL, ttlSource, len(answer), validatedStr)
 }
 
 func (rc *RedisDNSCache) updateAccessInfo(fullKey string, entry *RedisCacheEntry) {
@@ -1015,19 +1057,30 @@ func (r *RecursiveDNSServer) Start() error {
 	var wg sync.WaitGroup
 	errChan := make(chan error, 2)
 
-	logf(LogInfo, "🚀 启动高性能DNS服务器 v2.2")
+	logf(LogInfo, "🚀 启动高性能DNS服务器 v2.3")
 	logf(LogInfo, "🌐 监听端口: %s", r.config.Network.Port)
 	logf(LogInfo, "💾 Redis缓存: %s (DB: %d)", r.config.Redis.Address, r.config.Redis.Database)
 	logf(LogInfo, "⚡ 最大并发: %d", r.config.Performance.MaxConcurrency)
 	logf(LogInfo, "🏊 连接池大小: %d", r.config.Performance.ConnPoolSize)
 	logf(LogInfo, "👷 Worker数量: %d", r.config.Performance.WorkerCount)
 
+	// TTL配置信息
+	if r.config.TTL.MinTTL == 0 && r.config.TTL.MaxTTL == 0 {
+		logf(LogInfo, "🕐 TTL策略: 使用上游值 (默认: %ds)", r.config.TTL.DefaultTTL)
+	} else {
+		logf(LogInfo, "🕐 TTL策略: 限制范围 [%ds, %ds] (默认: %ds)",
+			r.config.TTL.MinTTL, r.config.TTL.MaxTTL, r.config.TTL.DefaultTTL)
+	}
+
 	if r.config.Network.EnableIPv6 {
 		logf(LogInfo, "🔗 IPv6支持: 启用")
 	}
 	if r.config.Features.ServeStale {
 		logf(LogInfo, "⏰ 过期缓存服务: 启用 (TTL: %ds, 最大保留: %ds)",
-			r.config.Features.StaleTTL, r.config.Features.StaleMaxAge)
+			r.config.TTL.StaleTTL, r.config.TTL.StaleMaxAge)
+	}
+	if r.config.Features.DNSSEC {
+		logf(LogInfo, "🔐 DNSSEC支持: 启用")
 	}
 	if r.defaultECS != nil {
 		logf(LogInfo, "🌍 默认ECS: %s/%d", r.defaultECS.Address, r.defaultECS.SourcePrefix)
@@ -1102,7 +1155,6 @@ func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg
 }
 
 func (r *RecursiveDNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP) *dns.Msg {
-	// 直接创建新的Msg对象，不使用对象池
 	msg := new(dns.Msg)
 	msg.SetReply(req)
 	msg.Authoritative = false
@@ -1142,7 +1194,7 @@ func (r *RecursiveDNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 			logf(LogDebug, "💾 缓存命中: %s %s", question.Name, dns.TypeToString[question.Qtype])
 		}
 
-		responseTTL := entry.GetRemainingTTL(r.config.Features.StaleTTL)
+		responseTTL := entry.GetRemainingTTL(r.config.TTL.StaleTTL)
 
 		msg.Answer = adjustTTL(filterDNSSECRecords(entry.GetAnswerRRs(), dnssecOK), responseTTL)
 		msg.Ns = adjustTTL(filterDNSSECRecords(entry.GetAuthorityRRs(), dnssecOK), responseTTL)
@@ -1177,7 +1229,7 @@ func (r *RecursiveDNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 			if entry, found, _ := r.cache.Get(cacheKey); found {
 				logf(LogInfo, "⏰ 使用过期缓存回退: %s %s", question.Name, dns.TypeToString[question.Qtype])
 
-				responseTTL := uint32(r.config.Features.StaleTTL)
+				responseTTL := uint32(r.config.TTL.StaleTTL)
 				msg.Answer = adjustTTL(filterDNSSECRecords(entry.GetAnswerRRs(), dnssecOK), responseTTL)
 				msg.Ns = adjustTTL(filterDNSSECRecords(entry.GetAuthorityRRs(), dnssecOK), responseTTL)
 				msg.Extra = adjustTTL(filterDNSSECRecords(entry.GetAdditionalRRs(), dnssecOK), responseTTL)
@@ -1404,7 +1456,6 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 			client := r.connPool.Get()
 			defer r.connPool.Put(client)
 
-			// 直接创建新的Msg对象
 			msg := new(dns.Msg)
 			msg.SetQuestion(question.Name, question.Qtype)
 			msg.RecursionDesired = false
@@ -1416,7 +1467,7 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 					Class:  1232,
 				},
 			}
-			if r.config.DNSSEC.Enable {
+			if r.config.Features.DNSSEC {
 				opt.SetDo(true)
 			}
 
@@ -1569,7 +1620,7 @@ func main() {
 	flag.BoolVar(&generateConfig, "generate-config", false, "生成示例配置文件")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "🚀 ZJDNS Server v2.2 - 高性能递归DNS服务器\n\n")
+		fmt.Fprintf(os.Stderr, "🚀 ZJDNS Server v2.3 - 高性能递归DNS服务器\n\n")
 		fmt.Fprintf(os.Stderr, "用法:\n")
 		fmt.Fprintf(os.Stderr, "  %s -config <配置文件>     # 使用配置文件启动\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -generate-config       # 生成示例配置文件\n", os.Args[0])
