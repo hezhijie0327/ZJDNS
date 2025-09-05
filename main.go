@@ -167,7 +167,7 @@ func (s *ServerStats) String() string {
 type ECSOption struct {
 	Family       uint16
 	SourcePrefix uint8
-	ScopePrefix  uint8  // 优化：重命名为更清晰的字段名
+	ScopePrefix  uint8
 	Address      net.IP
 }
 
@@ -244,7 +244,7 @@ type ServerConfig struct {
 	} `json:"features"`
 
 	Redis struct {
-		Address     string `json:"address"`
+		Address     string `json:"address"`     // 空字符串表示不使用缓存
 		Password    string `json:"password"`
 		Database    int    `json:"database"`
 		PoolSize    int    `json:"pool_size"`
@@ -276,11 +276,12 @@ func getDefaultConfig() *ServerConfig {
 	config.Logging.EnableStats = true
 	config.Logging.StatsInterval = 300
 
-	config.Features.ServeStale = true
-	config.Features.PrefetchEnabled = true
+	config.Features.ServeStale = false    // 无缓存模式下禁用
+	config.Features.PrefetchEnabled = false // 无缓存模式下禁用
 	config.Features.DNSSEC = true
 
-	config.Redis.Address = "127.0.0.1:6379"
+	// 默认不使用Redis缓存（地址为空）
+	config.Redis.Address = ""
 	config.Redis.Password = ""
 	config.Redis.Database = 0
 	config.Redis.PoolSize = 20
@@ -294,7 +295,7 @@ func loadConfig(filename string) (*ServerConfig, error) {
 	config := getDefaultConfig()
 
 	if filename == "" {
-		logf(LogInfo, "📄 使用默认配置")
+		logf(LogInfo, "📄 使用默认配置（无缓存模式）")
 		return config, nil
 	}
 
@@ -313,6 +314,10 @@ func loadConfig(filename string) (*ServerConfig, error) {
 
 func generateExampleConfig() string {
 	config := getDefaultConfig()
+	// 生成示例配置时提供Redis地址示例
+	config.Redis.Address = "127.0.0.1:6379"
+	config.Features.ServeStale = true
+	config.Features.PrefetchEnabled = true
 	data, _ := json.MarshalIndent(config, "", "  ")
 	return string(data)
 }
@@ -339,8 +344,21 @@ func validateConfig(config *ServerConfig) error {
 		return errors.New("最小TTL不能大于最大TTL")
 	}
 
-	if _, _, err := net.SplitHostPort(config.Redis.Address); err != nil {
-		return fmt.Errorf("Redis地址格式错误: %w", err)
+	// 只有当Redis地址不为空时才验证Redis配置
+	if config.Redis.Address != "" {
+		if _, _, err := net.SplitHostPort(config.Redis.Address); err != nil {
+			return fmt.Errorf("Redis地址格式错误: %w", err)
+		}
+	} else {
+		// 无缓存模式下，禁用依赖缓存的功能
+		if config.Features.ServeStale {
+			logf(LogWarn, "⚠️  无缓存模式下禁用过期缓存服务功能")
+			config.Features.ServeStale = false
+		}
+		if config.Features.PrefetchEnabled {
+			logf(LogWarn, "⚠️  无缓存模式下禁用预取功能")
+			config.Features.PrefetchEnabled = false
+		}
 	}
 
 	checks := []struct {
@@ -497,8 +515,8 @@ func expandRRs(crs []*CompactDNSRecord) []dns.RR {
 	return result
 }
 
-// 优化的Redis缓存条目
-type RedisCacheEntry struct {
+// 缓存条目结构
+type CacheEntry struct {
 	Answer      []*CompactDNSRecord `json:"answer"`
 	Authority   []*CompactDNSRecord `json:"authority"`
 	Additional  []*CompactDNSRecord `json:"additional"`
@@ -515,22 +533,22 @@ type RedisCacheEntry struct {
 	ECSAddress      string `json:"ecs_address,omitempty"`
 }
 
-func (c *RedisCacheEntry) IsExpired() bool {
+func (c *CacheEntry) IsExpired() bool {
 	return time.Now().Unix()-c.Timestamp > int64(c.TTL)
 }
 
-func (c *RedisCacheEntry) IsStale(maxAge int) bool {
+func (c *CacheEntry) IsStale(maxAge int) bool {
 	return time.Now().Unix()-c.Timestamp > int64(c.TTL+maxAge)
 }
 
-func (c *RedisCacheEntry) ShouldRefresh() bool {
+func (c *CacheEntry) ShouldRefresh() bool {
 	now := time.Now().Unix()
 	return c.IsExpired() &&
 		(now-c.Timestamp) > int64(c.TTL+300) &&
 		(now-c.RefreshTime) > 600
 }
 
-func (c *RedisCacheEntry) GetRemainingTTL(staleTTL int) uint32 {
+func (c *CacheEntry) GetRemainingTTL(staleTTL int) uint32 {
 	remaining := int64(c.TTL) - (time.Now().Unix() - c.Timestamp)
 	if remaining <= 0 {
 		return uint32(staleTTL)
@@ -538,12 +556,11 @@ func (c *RedisCacheEntry) GetRemainingTTL(staleTTL int) uint32 {
 	return uint32(remaining)
 }
 
-func (c *RedisCacheEntry) GetAnswerRRs() []dns.RR     { return expandRRs(c.Answer) }
-func (c *RedisCacheEntry) GetAuthorityRRs() []dns.RR  { return expandRRs(c.Authority) }
-func (c *RedisCacheEntry) GetAdditionalRRs() []dns.RR { return expandRRs(c.Additional) }
+func (c *CacheEntry) GetAnswerRRs() []dns.RR     { return expandRRs(c.Answer) }
+func (c *CacheEntry) GetAuthorityRRs() []dns.RR  { return expandRRs(c.Authority) }
+func (c *CacheEntry) GetAdditionalRRs() []dns.RR { return expandRRs(c.Additional) }
 
-// 优化：获取缓存的ECS信息
-func (c *RedisCacheEntry) GetECSOption() *ECSOption {
+func (c *CacheEntry) GetECSOption() *ECSOption {
 	if c.ECSAddress == "" {
 		return nil
 	}
@@ -565,7 +582,60 @@ type RefreshRequest struct {
 	CacheKey string
 }
 
-// 优化的Redis缓存
+// 缓存统计
+type CacheStats struct {
+	hits, misses, evictions, refreshes, errors int64
+}
+
+func (cs *CacheStats) RecordHit()      { atomic.AddInt64(&cs.hits, 1) }
+func (cs *CacheStats) RecordMiss()     { atomic.AddInt64(&cs.misses, 1) }
+func (cs *CacheStats) RecordEviction() { atomic.AddInt64(&cs.evictions, 1) }
+func (cs *CacheStats) RecordRefresh()  { atomic.AddInt64(&cs.refreshes, 1) }
+func (cs *CacheStats) RecordError()    { atomic.AddInt64(&cs.errors, 1) }
+
+// 缓存接口
+type DNSCache interface {
+	Get(key string) (*CacheEntry, bool, bool)
+	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption)
+	RequestRefresh(req RefreshRequest)
+	Shutdown()
+	GetStats() *CacheStats
+}
+
+// 空缓存实现（无缓存模式）
+type NullCache struct {
+	stats *CacheStats
+}
+
+func NewNullCache() *NullCache {
+	logf(LogInfo, "🚫 启用无缓存模式")
+	return &NullCache{
+		stats: &CacheStats{},
+	}
+}
+
+func (nc *NullCache) Get(key string) (*CacheEntry, bool, bool) {
+	nc.stats.RecordMiss()
+	return nil, false, false
+}
+
+func (nc *NullCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
+	// 无缓存模式，不存储任何内容
+}
+
+func (nc *NullCache) RequestRefresh(req RefreshRequest) {
+	// 无缓存模式，无需刷新
+}
+
+func (nc *NullCache) Shutdown() {
+	logf(LogInfo, "🚫 无缓存模式关闭")
+}
+
+func (nc *NullCache) GetStats() *CacheStats {
+	return nc.stats
+}
+
+// Redis缓存实现
 type RedisDNSCache struct {
 	client       *redis.Client
 	config       *ServerConfig
@@ -577,16 +647,6 @@ type RedisDNSCache struct {
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
 }
-
-type CacheStats struct {
-	hits, misses, evictions, refreshes, errors int64
-}
-
-func (cs *CacheStats) RecordHit()      { atomic.AddInt64(&cs.hits, 1) }
-func (cs *CacheStats) RecordMiss()     { atomic.AddInt64(&cs.misses, 1) }
-func (cs *CacheStats) RecordEviction() { atomic.AddInt64(&cs.evictions, 1) }
-func (cs *CacheStats) RecordRefresh()  { atomic.AddInt64(&cs.refreshes, 1) }
-func (cs *CacheStats) RecordError()    { atomic.AddInt64(&cs.errors, 1) }
 
 func NewRedisDNSCache(config *ServerConfig) (*RedisDNSCache, error) {
 	rdb := redis.NewClient(&redis.Options{
@@ -657,7 +717,7 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 	logf(LogDebug, "🔄 处理刷新请求: %s", req.CacheKey)
 }
 
-func (rc *RedisDNSCache) Get(key string) (*RedisCacheEntry, bool, bool) {
+func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	fullKey := rc.keyPrefix + key
 
 	data, err := rc.client.Get(rc.ctx, fullKey).Result()
@@ -671,7 +731,7 @@ func (rc *RedisDNSCache) Get(key string) (*RedisCacheEntry, bool, bool) {
 		return nil, false, false
 	}
 
-	var entry RedisCacheEntry
+	var entry CacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
 		rc.stats.RecordError()
 		logf(LogDebug, "Redis数据解析失败: %v", err)
@@ -702,7 +762,6 @@ func (rc *RedisDNSCache) Get(key string) (*RedisCacheEntry, bool, bool) {
 	return &entry, true, isExpired
 }
 
-// 优化：支持存储ECS信息
 func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
 	allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
 	allRRs = append(allRRs, answer...)
@@ -712,7 +771,7 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 	cacheTTL := rc.ttlCalc.CalculateCacheTTL(allRRs)
 
 	now := time.Now().Unix()
-	entry := &RedisCacheEntry{
+	entry := &CacheEntry{
 		Answer:      compactRRs(answer),
 		Authority:   compactRRs(authority),
 		Additional:  compactRRs(additional),
@@ -765,7 +824,7 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 		key, cacheTTL, len(answer), validatedStr, ecsStr)
 }
 
-func (rc *RedisDNSCache) updateAccessInfo(fullKey string, entry *RedisCacheEntry) {
+func (rc *RedisDNSCache) updateAccessInfo(fullKey string, entry *CacheEntry) {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return
@@ -937,7 +996,7 @@ type QueryResult struct {
 // 优化的主服务器
 type RecursiveDNSServer struct {
 	config           *ServerConfig
-	cache            *RedisDNSCache
+	cache            DNSCache // 使用接口
 	rootServersV4    []string
 	rootServersV6    []string
 	connPool         *ConnectionPool
@@ -971,9 +1030,16 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		return nil, fmt.Errorf("ECS配置错误: %w", err)
 	}
 
-	cache, err := NewRedisDNSCache(config)
-	if err != nil {
-		return nil, fmt.Errorf("Redis缓存初始化失败: %w", err)
+	// 根据配置选择缓存实现
+	var cache DNSCache
+	if config.Redis.Address == "" {
+		cache = NewNullCache()
+	} else {
+		redisCache, err := NewRedisDNSCache(config)
+		if err != nil {
+			return nil, fmt.Errorf("Redis缓存初始化失败: %w", err)
+		}
+		cache = redisCache
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1025,8 +1091,13 @@ func (r *RecursiveDNSServer) startStatsReporter(interval time.Duration) {
 
 				created, available := r.connPool.Stats()
 
-				logf(LogInfo, "💾 Redis缓存: 命中率=%.1f%%, 淘汰=%d, 刷新=%d, 错误=%d, 连接池=%d/%d",
-					hitRate, evictions, refreshes, errors, available, created)
+				// 根据缓存类型显示不同的统计信息
+				if r.config.Redis.Address == "" {
+					logf(LogInfo, "🚫 无缓存模式: 查询=%d, 连接池=%d/%d", misses, available, created)
+				} else {
+					logf(LogInfo, "💾 Redis缓存: 命中率=%.1f%%, 淘汰=%d, 刷新=%d, 错误=%d, 连接池=%d/%d",
+						hitRate, evictions, refreshes, errors, available, created)
+				}
 
 			case <-r.ctx.Done():
 				return
@@ -1069,7 +1140,14 @@ func (r *RecursiveDNSServer) Start() error {
 
 	logf(LogInfo, "🚀 启动 ZJDNS Server")
 	logf(LogInfo, "🌐 监听端口: %s", r.config.Network.Port)
-	logf(LogInfo, "💾 Redis缓存: %s (DB: %d)", r.config.Redis.Address, r.config.Redis.Database)
+
+	// 根据缓存类型显示不同的信息
+	if r.config.Redis.Address == "" {
+		logf(LogInfo, "🚫 缓存模式: 无缓存")
+	} else {
+		logf(LogInfo, "💾 Redis缓存: %s (DB: %d)", r.config.Redis.Address, r.config.Redis.Database)
+	}
+
 	logf(LogInfo, "⚡ 最大并发: %d", r.config.Performance.MaxConcurrency)
 	logf(LogInfo, "🏊 连接池大小: %d", r.config.Performance.ConnPoolSize)
 	logf(LogInfo, "👷 Worker数量: %d", r.config.Performance.WorkerCount)
@@ -1164,7 +1242,6 @@ func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg
 	w.WriteMsg(response)
 }
 
-// 优化：添加EDNS0响应处理
 func (r *RecursiveDNSServer) addEDNS0(msg *dns.Msg, validated bool, ecs *ECSOption) {
 	var opt *dns.OPT
 
@@ -1260,7 +1337,6 @@ func (r *RecursiveDNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 		msg.Ns = adjustTTL(filterDNSSECRecords(entry.GetAuthorityRRs(), dnssecOK), responseTTL)
 		msg.Extra = adjustTTL(filterDNSSECRecords(entry.GetAdditionalRRs(), dnssecOK), responseTTL)
 
-		// 优化：从缓存恢复ECS信息
 		cachedECS := entry.GetECSOption()
 
 		if dnssecOK || cachedECS != nil {
@@ -1316,7 +1392,7 @@ func (r *RecursiveDNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 		finalECS = &ECSOption{
 			Family:       ecsOpt.Family,
 			SourcePrefix: ecsOpt.SourcePrefix,
-			ScopePrefix:  ecsOpt.SourcePrefix, // 默认使用source作为scope
+			ScopePrefix:  ecsOpt.SourcePrefix,
 			Address:      ecsOpt.Address,
 		}
 	}
@@ -1543,7 +1619,7 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 				Hdr: dns.RR_Header{
 					Name:   ".",
 					Rrtype: dns.TypeOPT,
-					Class:  DefaultBufferSize, // 使用RFC标准值
+					Class:  DefaultBufferSize,
 				},
 			}
 			if r.config.Features.DNSSEC {
@@ -1703,14 +1779,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "用法:\n")
 		fmt.Fprintf(os.Stderr, "  %s -config <配置文件>     # 使用配置文件启动\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -generate-config       # 生成示例配置文件\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s                         # 使用默认配置启动\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s                         # 使用默认配置启动（无缓存模式）\n\n", os.Args[0])
 
 		fmt.Fprintf(os.Stderr, "选项:\n")
 		fmt.Fprintf(os.Stderr, "  -config string            配置文件路径 (JSON格式)\n")
 		fmt.Fprintf(os.Stderr, "  -generate-config          生成示例配置文件到标准输出\n")
 		fmt.Fprintf(os.Stderr, "  -h, -help                 显示此帮助信息\n\n")
 
+		fmt.Fprintf(os.Stderr, "缓存模式:\n")
+		fmt.Fprintf(os.Stderr, "  默认: 无缓存模式（适合本地测试）\n")
+		fmt.Fprintf(os.Stderr, "  Redis: 在配置文件中设置 redis.address 启用Redis缓存\n\n")
+
 		fmt.Fprintf(os.Stderr, "示例:\n")
+		fmt.Fprintf(os.Stderr, "  # 直接启动（无缓存模式）\n")
+		fmt.Fprintf(os.Stderr, "  %s\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # 生成配置文件\n")
 		fmt.Fprintf(os.Stderr, "  %s -generate-config > config.json\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # 使用配置文件启动\n")
