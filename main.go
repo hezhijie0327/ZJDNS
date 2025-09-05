@@ -257,7 +257,7 @@ func getDefaultConfig() *ServerConfig {
 	config := &ServerConfig{}
 
 	config.Network.Port = "53"
-	config.Network.EnableIPv6 = false
+	config.Network.EnableIPv6 = true
 	config.Network.DefaultECS = ""
 
 	config.TTL.DefaultTTL = 3600
@@ -272,7 +272,7 @@ func getDefaultConfig() *ServerConfig {
 	config.Performance.MaxRecursion = 10
 	config.Performance.WorkerCount = runtime.NumCPU()
 
-	config.Logging.Level = "warn"
+	config.Logging.Level = "info"
 	config.Logging.EnableStats = true
 	config.Logging.StatsInterval = 300
 
@@ -280,12 +280,12 @@ func getDefaultConfig() *ServerConfig {
 	config.Features.PrefetchEnabled = true
 	config.Features.DNSSEC = true
 
-	config.Redis.Address = "localhost:6379"
+	config.Redis.Address = "127.0.0.1:6379"
 	config.Redis.Password = ""
 	config.Redis.Database = 0
 	config.Redis.PoolSize = 20
 	config.Redis.IdleTimeout = 300
-	config.Redis.KeyPrefix = "dns:"
+	config.Redis.KeyPrefix = "zjdns:"
 
 	return config
 }
@@ -1067,7 +1067,7 @@ func (r *RecursiveDNSServer) Start() error {
 	var wg sync.WaitGroup
 	errChan := make(chan error, 2)
 
-	logf(LogInfo, "🚀 启动高性能DNS服务器 v2.4")
+	logf(LogInfo, "🚀 启动 ZJDNS Server")
 	logf(LogInfo, "🌐 监听端口: %s", r.config.Network.Port)
 	logf(LogInfo, "💾 Redis缓存: %s (DB: %d)", r.config.Redis.Address, r.config.Redis.Database)
 	logf(LogInfo, "⚡ 最大并发: %d", r.config.Performance.MaxConcurrency)
@@ -1699,7 +1699,7 @@ func main() {
 	flag.BoolVar(&generateConfig, "generate-config", false, "生成示例配置文件")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "🚀 ZJDNS Server v2.4 - 高性能递归DNS服务器\n\n")
+		fmt.Fprintf(os.Stderr, "🚀 ZJDNS Server\n\n")
 		fmt.Fprintf(os.Stderr, "用法:\n")
 		fmt.Fprintf(os.Stderr, "  %s -config <配置文件>     # 使用配置文件启动\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -generate-config       # 生成示例配置文件\n", os.Args[0])
