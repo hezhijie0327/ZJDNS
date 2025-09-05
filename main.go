@@ -232,7 +232,7 @@ func NewBackgroundTaskManager(workers int) *BackgroundTaskManager {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	btm := &BackgroundTaskManager{
 		taskQueue: make(chan func(), WorkerQueueSize),
 		ctx:       ctx,
@@ -300,206 +300,16 @@ func (btm *BackgroundTaskManager) Shutdown() {
 	}
 }
 
-// 统计信息 - 优化后的统计结构
-type ServerStats struct {
-	queries       int64
-	cacheHits     int64
-	cacheMisses   int64
-	errors        int64
-	avgQueryTime  int64
-	totalTime     int64
-	startTime     time.Time
-	panics        int64  // 新增：panic统计
-	// 扩展统计
-	filteredResults    int64
-	rewrittenQueries   int64
-	recursiveQueries   int64
-	dnssecValidated    int64
-	dnssecFailed       int64
-	dnssecRequested    int64
-	upstreamQueries    map[string]int64
-	// 性能统计
-	processingTime map[string]int64
-	mu             sync.RWMutex
-}
-
-type StatsType int
-
-const (
-	StatsQuery StatsType = iota
-	StatsFilter
-	StatsRewrite
-	StatsRecursive
-	StatsUpstream
-	StatsDNSSECValid
-	StatsDNSSECInvalid
-	StatsDNSSECRequested
-	StatsPanic // 新增
-)
-
-func NewServerStats() *ServerStats {
-	return &ServerStats{
-		startTime:       time.Now(),
-		upstreamQueries: make(map[string]int64, 16),
-		processingTime:  make(map[string]int64, 16),
-	}
-}
-
-func (s *ServerStats) Record(statsType StatsType, server string, duration ...time.Duration) {
-	switch statsType {
-	case StatsQuery:
-		atomic.AddInt64(&s.queries, 1)
-		if len(duration) > 0 {
-			atomic.AddInt64(&s.totalTime, duration[0].Milliseconds())
-			queries := atomic.LoadInt64(&s.queries)
-			total := atomic.LoadInt64(&s.totalTime)
-			if queries > 0 {
-				atomic.StoreInt64(&s.avgQueryTime, total/queries)
-			}
-		}
-	case StatsFilter:
-		atomic.AddInt64(&s.filteredResults, 1)
-	case StatsRewrite:
-		atomic.AddInt64(&s.rewrittenQueries, 1)
-	case StatsRecursive:
-		atomic.AddInt64(&s.recursiveQueries, 1)
-	case StatsDNSSECValid:
-		atomic.AddInt64(&s.dnssecValidated, 1)
-	case StatsDNSSECInvalid:
-		atomic.AddInt64(&s.dnssecFailed, 1)
-	case StatsDNSSECRequested:
-		atomic.AddInt64(&s.dnssecRequested, 1)
-	case StatsPanic:
-		atomic.AddInt64(&s.panics, 1)
-	case StatsUpstream:
-		s.mu.Lock()
-		s.upstreamQueries[server]++
-		if len(duration) > 0 {
-			s.processingTime[server] += duration[0].Milliseconds()
-		}
-		s.mu.Unlock()
-	}
-}
-
-func (s *ServerStats) recordQuery(duration time.Duration, fromCache bool, hasError bool) {
-	s.Record(StatsQuery, "", duration)
-	if hasError {
-		atomic.AddInt64(&s.errors, 1)
-	} else if fromCache {
-		atomic.AddInt64(&s.cacheHits, 1)
-	} else {
-		atomic.AddInt64(&s.cacheMisses, 1)
-	}
-}
-
-func (s *ServerStats) GetDetailedStats() map[string]interface{} {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	queries := atomic.LoadInt64(&s.queries)
-	hits := atomic.LoadInt64(&s.cacheHits)
-	errors := atomic.LoadInt64(&s.errors)
-	panics := atomic.LoadInt64(&s.panics)
-
-	var hitRate float64
-	if queries > 0 {
-		hitRate = float64(hits) / float64(queries) * 100
-	}
-
-	stats := map[string]interface{}{
-		"uptime":             time.Since(s.startTime),
-		"queries":            queries,
-		"cache_hit_rate":     hitRate,
-		"errors":             errors,
-		"panics":             panics,
-		"avg_query_time":     atomic.LoadInt64(&s.avgQueryTime),
-		"filtered":           atomic.LoadInt64(&s.filteredResults),
-		"rewritten":          atomic.LoadInt64(&s.rewrittenQueries),
-		"recursive":          atomic.LoadInt64(&s.recursiveQueries),
-		"dnssec_validated":   atomic.LoadInt64(&s.dnssecValidated),
-		"dnssec_failed":      atomic.LoadInt64(&s.dnssecFailed),
-		"dnssec_requested":   atomic.LoadInt64(&s.dnssecRequested),
-		"upstream_queries":   make(map[string]int64),
-		"processing_time":    make(map[string]int64),
-	}
-
-	// 复制映射避免并发访问
-	for k, v := range s.upstreamQueries {
-		stats["upstream_queries"].(map[string]int64)[k] = v
-	}
-	for k, v := range s.processingTime {
-		stats["processing_time"].(map[string]int64)[k] = v
-	}
-
-	return stats
-}
-
-func (s *ServerStats) String() string {
-	queries := atomic.LoadInt64(&s.queries)
-	hits := atomic.LoadInt64(&s.cacheHits)
-	errors := atomic.LoadInt64(&s.errors)
-	panics := atomic.LoadInt64(&s.panics)
-	avgTime := atomic.LoadInt64(&s.avgQueryTime)
-	filtered := atomic.LoadInt64(&s.filteredResults)
-	rewritten := atomic.LoadInt64(&s.rewrittenQueries)
-	recursive := atomic.LoadInt64(&s.recursiveQueries)
-	dnssecValid := atomic.LoadInt64(&s.dnssecValidated)
-	uptime := time.Since(s.startTime)
-
-	var hitRate, qps float64
-	if queries > 0 {
-		hitRate = float64(hits) / float64(queries) * 100
-		if uptime.Seconds() > 0 {
-			qps = float64(queries) / uptime.Seconds()
-		}
-	}
-
-	panicStr := ""
-	if panics > 0 {
-		panicStr = fmt.Sprintf(", 恐慌: %d", panics)
-	}
-
-	return fmt.Sprintf("📊 运行时间: %v, 查询: %d (%.1f qps), 缓存命中率: %.1f%%, 错误: %d%s, 平均耗时: %dms, 过滤: %d, 重写: %d, 递归: %d, DNSSEC: %d",
-		uptime.Truncate(time.Second), queries, qps, hitRate, errors, panicStr, avgTime, filtered, rewritten, recursive, dnssecValid)
-}
-
-// 格式化统计信息的辅助函数
-func (s *ServerStats) GetFormattedDNSSECStats() string {
-	validated := atomic.LoadInt64(&s.dnssecValidated)
-	failed := atomic.LoadInt64(&s.dnssecFailed)
-	requested := atomic.LoadInt64(&s.dnssecRequested)
-
-	if validated == 0 && failed == 0 && requested == 0 {
-		return ""
-	}
-
-	total := validated + failed
-	var successRate float64
-	if total > 0 {
-		successRate = float64(validated) / float64(total) * 100
-	}
-
-	return fmt.Sprintf("🔐 DNSSEC统计: 客户端请求=%d, 验证成功=%d, 验证失败=%d, 成功率=%.1f%%",
-		requested, validated, failed, successRate)
-}
-
 // IP过滤器接口 - 更好的抽象设计
 type IPFilterInterface interface {
 	LoadCIDRs(filename string) error
 	IsChinaIP(ip net.IP) bool
 	HasData() bool
-	GetStats() map[string]int
 }
 
 type IPFilter struct {
 	cnCIDRs   []*net.IPNet
 	cnCIDRsV6 []*net.IPNet
-	stats     struct {
-		totalV4   int
-		totalV6   int
-		queriesV4 int64
-		queriesV6 int64
-	}
 	mu sync.RWMutex
 }
 
@@ -533,13 +343,12 @@ func (f *IPFilter) LoadCIDRs(filename string) error {
 	// 清空现有数据
 	f.cnCIDRs = f.cnCIDRs[:0]
 	f.cnCIDRsV6 = f.cnCIDRsV6[:0]
-	f.stats.totalV4 = 0
-	f.stats.totalV6 = 0
 
 	scanner := bufio.NewScanner(file)
 	// 设置最大行长度防止内存攻击
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	lineCount := 0
+	var totalV4, totalV6 int
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -561,10 +370,10 @@ func (f *IPFilter) LoadCIDRs(filename string) error {
 
 		if ipNet.IP.To4() != nil {
 			f.cnCIDRs = append(f.cnCIDRs, ipNet)
-			f.stats.totalV4++
+			totalV4++
 		} else {
 			f.cnCIDRsV6 = append(f.cnCIDRsV6, ipNet)
-			f.stats.totalV6++
+			totalV6++
 		}
 		lineCount++
 
@@ -583,7 +392,7 @@ func (f *IPFilter) LoadCIDRs(filename string) error {
 	f.optimizeCIDRs()
 
 	logf(LogInfo, "🌍 IP过滤器加载完成: IPv4=%d条, IPv6=%d条, 总计=%d条",
-		f.stats.totalV4, f.stats.totalV6, lineCount)
+		totalV4, totalV6, lineCount)
 	return nil
 }
 
@@ -626,14 +435,12 @@ func (f *IPFilter) IsChinaIP(ip net.IP) bool {
 	defer f.mu.RUnlock()
 
 	if ip.To4() != nil {
-		atomic.AddInt64(&f.stats.queriesV4, 1)
 		for _, cidr := range f.cnCIDRs {
 			if cidr.Contains(ip) {
 				return true
 			}
 		}
 	} else {
-		atomic.AddInt64(&f.stats.queriesV6, 1)
 		for _, cidr := range f.cnCIDRsV6 {
 			if cidr.Contains(ip) {
 				return true
@@ -649,23 +456,10 @@ func (f *IPFilter) HasData() bool {
 	return len(f.cnCIDRs) > 0 || len(f.cnCIDRsV6) > 0
 }
 
-func (f *IPFilter) GetStats() map[string]int {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	return map[string]int{
-		"total_v4":   f.stats.totalV4,
-		"total_v6":   f.stats.totalV6,
-		"queries_v4": int(atomic.LoadInt64(&f.stats.queriesV4)),
-		"queries_v6": int(atomic.LoadInt64(&f.stats.queriesV6)),
-	}
-}
-
 // DNS重写器接口 - 更好的抽象设计
 type DNSRewriterInterface interface {
 	LoadRules(rules []RewriteRule) error
 	Rewrite(domain string) (string, bool)
-	GetStats() map[string]int64
 }
 
 type RewriteRuleType int
@@ -685,29 +479,16 @@ type RewriteRule struct {
 	Enabled     bool            `json:"enabled"`
 	Priority    int             `json:"priority"`
 	regex       *regexp.Regexp  `json:"-"`
-	hitCount    int64           `json:"-"`
 }
 
 type DNSRewriter struct {
 	rules []RewriteRule
-	stats struct {
-		totalRules   int
-		totalMatches int64
-		ruleMatches  map[string]int64
-	}
-	mu sync.RWMutex
+	mu    sync.RWMutex
 }
 
 func NewDNSRewriter() DNSRewriterInterface {
 	return &DNSRewriter{
 		rules: make([]RewriteRule, 0, 32),
-		stats: struct {
-			totalRules   int
-			totalMatches int64
-			ruleMatches  map[string]int64
-		}{
-			ruleMatches: make(map[string]int64, 32),
-		},
 	}
 }
 
@@ -764,7 +545,6 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 		}
 
 		validRules = append(validRules, rule)
-		r.stats.ruleMatches[rule.Pattern] = 0
 	}
 
 	// 按优先级排序，优先级数值小的先匹配
@@ -773,7 +553,6 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 	})
 
 	r.rules = validRules
-	r.stats.totalRules = len(validRules)
 
 	logf(LogInfo, "🔄 DNS重写器加载完成: %d条规则", len(validRules))
 	return nil
@@ -799,10 +578,6 @@ func (r *DNSRewriter) Rewrite(domain string) (string, bool) {
 		matched, result := r.matchRule(rule, domain)
 
 		if matched {
-			atomic.AddInt64(&rule.hitCount, 1)
-			atomic.AddInt64(&r.stats.totalMatches, 1)
-			r.stats.ruleMatches[rule.Pattern]++
-
 			result = dns.Fqdn(result)
 			logf(LogDebug, "🔄 域名重写: %s -> %s (规则: %s, 类型: %s)",
 				domain, result, rule.Pattern, rule.TypeString)
@@ -852,23 +627,6 @@ func (r *DNSRewriter) matchRule(rule *RewriteRule, domain string) (bool, string)
 	}
 
 	return false, ""
-}
-
-func (r *DNSRewriter) GetStats() map[string]int64 {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	stats := map[string]int64{
-		"total_rules":   int64(r.stats.totalRules),
-		"total_matches": atomic.LoadInt64(&r.stats.totalMatches),
-	}
-
-	// 复制规则匹配统计
-	for pattern, count := range r.stats.ruleMatches {
-		stats["rule:"+pattern] = count
-	}
-
-	return stats
 }
 
 // 上游服务器管理 - 优化设计
@@ -1059,9 +817,7 @@ type ServerConfig struct {
 	} `json:"performance"`
 
 	Logging struct {
-		Level         string `json:"level"`
-		EnableStats   bool   `json:"enable_stats"`
-		StatsInterval int    `json:"stats_interval"`
+		Level string `json:"level"`
 	} `json:"logging"`
 
 	Features struct {
@@ -1324,8 +1080,6 @@ func getDefaultConfig() *ServerConfig {
 	config.Performance.BackgroundWorkers = runtime.NumCPU()
 
 	config.Logging.Level = "info"
-	config.Logging.EnableStats = true
-	config.Logging.StatsInterval = 300
 
 	config.Features.ServeStale = false
 	config.Features.PrefetchEnabled = false
@@ -1536,9 +1290,9 @@ func compactRRs(rrs []dns.RR) []*CompactDNSRecord {
 
 	result := rrPool.Get().([]*CompactDNSRecord)
 	result = result[:0]
-	
+
 	seen := stringPool.Get().(map[string]bool)
-	
+
 	// 修复：使用defer确保资源释放
 	defer func() {
 		rrPool.Put(result)
@@ -1589,7 +1343,6 @@ type CacheEntry struct {
 	Validated   bool                `json:"validated"`
 	AccessTime  int64               `json:"access_time"`
 	RefreshTime int64               `json:"refresh_time"`
-	HitCount    int32               `json:"hit_count"`
 	// ECS信息
 	ECSFamily       uint16 `json:"ecs_family,omitempty"`
 	ECSSourcePrefix uint8  `json:"ecs_source_prefix,omitempty"`
@@ -1654,40 +1407,23 @@ type RefreshRequest struct {
 	CacheKey string
 }
 
-// 缓存统计
-type CacheStats struct {
-	hits, misses, evictions, refreshes, errors int64
-}
-
-func (cs *CacheStats) RecordHit()      { atomic.AddInt64(&cs.hits, 1) }
-func (cs *CacheStats) RecordMiss()     { atomic.AddInt64(&cs.misses, 1) }
-func (cs *CacheStats) RecordEviction() { atomic.AddInt64(&cs.evictions, 1) }
-func (cs *CacheStats) RecordRefresh()  { atomic.AddInt64(&cs.refreshes, 1) }
-func (cs *CacheStats) RecordError()    { atomic.AddInt64(&cs.errors, 1) }
-
 // 缓存接口
 type DNSCache interface {
 	Get(key string) (*CacheEntry, bool, bool)
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption)
 	RequestRefresh(req RefreshRequest)
 	Shutdown()
-	GetStats() *CacheStats
 }
 
 // 空缓存实现（无缓存模式）
-type NullCache struct {
-	stats *CacheStats
-}
+type NullCache struct{}
 
 func NewNullCache() *NullCache {
 	logf(LogInfo, "🚫 启用无缓存模式")
-	return &NullCache{
-		stats: &CacheStats{},
-	}
+	return &NullCache{}
 }
 
 func (nc *NullCache) Get(key string) (*CacheEntry, bool, bool) {
-	nc.stats.RecordMiss()
 	return nil, false, false
 }
 
@@ -1703,10 +1439,6 @@ func (nc *NullCache) Shutdown() {
 	logf(LogInfo, "🚫 无缓存模式关闭")
 }
 
-func (nc *NullCache) GetStats() *CacheStats {
-	return nc.stats
-}
-
 // 修复：优化的Redis缓存实现
 type RedisDNSCache struct {
 	client            *redis.Client
@@ -1714,7 +1446,6 @@ type RedisDNSCache struct {
 	ttlCalc           *TTLCalculator
 	keyPrefix         string
 	refreshQueue      chan RefreshRequest
-	stats             *CacheStats
 	ctx               context.Context
 	cancel            context.CancelFunc
 	wg                sync.WaitGroup
@@ -1754,7 +1485,6 @@ func NewRedisDNSCache(config *ServerConfig) (*RedisDNSCache, error) {
 		ttlCalc:      NewTTLCalculator(config),
 		keyPrefix:    config.Redis.KeyPrefix,
 		refreshQueue: make(chan RefreshRequest, 1000),
-		stats:        &CacheStats{},
 		ctx:          cacheCtx,
 		cancel:       cacheCancel,
 		encoderPool: sync.Pool{
@@ -1805,7 +1535,6 @@ func (rc *RedisDNSCache) startRefreshProcessor() {
 
 func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 	defer recoverPanic("Redis刷新请求处理")
-	rc.stats.RecordRefresh()
 	logf(LogDebug, "🔄 处理刷新请求: %s", req.CacheKey)
 }
 
@@ -1817,17 +1546,14 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	data, err := rc.client.Get(rc.ctx, fullKey).Result()
 	if err != nil {
 		if err == redis.Nil {
-			rc.stats.RecordMiss()
 			return nil, false, false
 		}
-		rc.stats.RecordError()
 		logf(LogDebug, "Redis获取失败: %v", err)
 		return nil, false, false
 	}
 
 	var entry CacheEntry
 	if err := json.Unmarshal(unsafe.Slice(unsafe.StringData(data), len(data)), &entry); err != nil {
-		rc.stats.RecordError()
 		logf(LogDebug, "Redis数据解析失败: %v", err)
 		return nil, false, false
 	}
@@ -1836,7 +1562,6 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	if rc.config.Features.ServeStale &&
 		now-entry.Timestamp > int64(entry.TTL+rc.config.TTL.StaleMaxAge) {
-		rc.stats.RecordMiss()
 		// 修复：使用后台任务管理器
 		rc.backgroundManager.SubmitTask(func() {
 			rc.removeStaleEntry(fullKey)
@@ -1847,15 +1572,13 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	// 修复：只在需要时更新访问信息，避免频繁goroutine
 	if entry.ShouldUpdateAccessInfo(rc.config.Redis.UpdateThrottleMs) {
 		entry.AccessTime = now
-		entry.HitCount++
 		entry.LastUpdateTime = time.Now().UnixMilli()
-		
+
 		rc.backgroundManager.SubmitTask(func() {
 			rc.updateAccessInfo(fullKey, &entry)
 		})
 	}
 
-	rc.stats.RecordHit()
 	isExpired := entry.IsExpired()
 
 	if !rc.config.Features.ServeStale && isExpired {
@@ -1888,7 +1611,6 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 		Validated:   validated,
 		AccessTime:  now,
 		RefreshTime: 0,
-		HitCount:    0,
 		LastUpdateTime: time.Now().UnixMilli(),
 	}
 
@@ -1903,7 +1625,6 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 	// 修复：优化序列化性能
 	data, err := json.Marshal(entry)
 	if err != nil {
-		rc.stats.RecordError()
 		logf(LogDebug, "Redis数据序列化失败: %v", err)
 		return
 	}
@@ -1915,7 +1636,6 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 	}
 
 	if err := rc.client.Set(rc.ctx, fullKey, data, expiration).Err(); err != nil {
-		rc.stats.RecordError()
 		logf(LogDebug, "Redis设置失败: %v", err)
 		return
 	}
@@ -1946,17 +1666,13 @@ func (rc *RedisDNSCache) updateAccessInfo(fullKey string, entry *CacheEntry) {
 func (rc *RedisDNSCache) removeStaleEntry(fullKey string) {
 	defer recoverPanic("Redis过期条目删除")
 	if err := rc.client.Del(rc.ctx, fullKey).Err(); err != nil {
-		rc.stats.RecordError()
 		logf(LogDebug, "Redis删除过期条目失败: %v", err)
-	} else {
-		rc.stats.RecordEviction()
 	}
 }
 
 func (rc *RedisDNSCache) RequestRefresh(req RefreshRequest) {
 	select {
 	case rc.refreshQueue <- req:
-		rc.stats.RecordRefresh()
 	default:
 		logf(LogDebug, "刷新队列已满，跳过刷新请求")
 	}
@@ -1964,10 +1680,10 @@ func (rc *RedisDNSCache) RequestRefresh(req RefreshRequest) {
 
 func (rc *RedisDNSCache) Shutdown() {
 	logf(LogInfo, "🛑 正在关闭Redis缓存系统...")
-	
+
 	// 先关闭后台任务管理器
 	rc.backgroundManager.Shutdown()
-	
+
 	rc.cancel()
 	close(rc.refreshQueue)
 
@@ -1988,10 +1704,6 @@ func (rc *RedisDNSCache) Shutdown() {
 	} else {
 		logf(LogInfo, "✅ Redis缓存系统已安全关闭")
 	}
-}
-
-func (rc *RedisDNSCache) GetStats() *CacheStats {
-	return rc.stats
 }
 
 // 工具函数
@@ -2131,15 +1843,12 @@ func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) boo
 type ConnectionPool interface {
 	Get() *dns.Client
 	Put(client *dns.Client)
-	Stats() (created, available, current int64) // 修复：统一为三个返回值
 }
 
 // 动态连接池 - 解决并发瓶颈
 type DynamicConnectionPool struct {
 	clients     chan *dns.Client
 	timeout     time.Duration
-	created     int64
-	available   int64
 	maxSize     int
 	minSize     int
 	currentSize int64
@@ -2159,8 +1868,6 @@ func NewDynamicConnectionPool(minSize, maxSize int, timeout time.Duration) *Dyna
 	for i := 0; i < minSize; i++ {
 		client := pool.createClient()
 		pool.clients <- client
-		atomic.AddInt64(&pool.created, 1)
-		atomic.AddInt64(&pool.available, 1)
 		atomic.AddInt64(&pool.currentSize, 1)
 	}
 
@@ -2179,7 +1886,6 @@ func (dcp *DynamicConnectionPool) createClient() *dns.Client {
 func (dcp *DynamicConnectionPool) Get() *dns.Client {
 	select {
 	case client := <-dcp.clients:
-		atomic.AddInt64(&dcp.available, -1)
 		return client
 	default:
 		// 如果池为空，检查是否可以创建新连接
@@ -2187,7 +1893,6 @@ func (dcp *DynamicConnectionPool) Get() *dns.Client {
 		if int(currentSize) < dcp.maxSize {
 			if atomic.CompareAndSwapInt64(&dcp.currentSize, currentSize, currentSize+1) {
 				client := dcp.createClient()
-				atomic.AddInt64(&dcp.created, 1)
 				logf(LogDebug, "🏊 动态创建连接: 当前=%d/%d", currentSize+1, dcp.maxSize)
 				return client
 			}
@@ -2200,7 +1905,6 @@ func (dcp *DynamicConnectionPool) Get() *dns.Client {
 func (dcp *DynamicConnectionPool) Put(client *dns.Client) {
 	select {
 	case dcp.clients <- client:
-		atomic.AddInt64(&dcp.available, 1)
 	default:
 		// 池已满，检查是否可以缩减
 		currentSize := atomic.LoadInt64(&dcp.currentSize)
@@ -2212,19 +1916,11 @@ func (dcp *DynamicConnectionPool) Put(client *dns.Client) {
 	}
 }
 
-func (dcp *DynamicConnectionPool) Stats() (created, available, current int64) {
-	return atomic.LoadInt64(&dcp.created),
-		   atomic.LoadInt64(&dcp.available),
-		   atomic.LoadInt64(&dcp.currentSize)
-}
-
-// 静态连接池实现 - 修复返回值数量
+// 静态连接池实现
 type StaticConnectionPool struct {
-	clients   []*dns.Client
-	pool      chan *dns.Client
-	timeout   time.Duration
-	created   int64
-	available int64
+	clients []*dns.Client
+	pool    chan *dns.Client
+	timeout time.Duration
 }
 
 func NewStaticConnectionPool(size int, timeout time.Duration) *StaticConnectionPool {
@@ -2242,8 +1938,6 @@ func NewStaticConnectionPool(size int, timeout time.Duration) *StaticConnectionP
 		}
 		pool.clients = append(pool.clients, client)
 		pool.pool <- client
-		atomic.AddInt64(&pool.created, 1)
-		atomic.AddInt64(&pool.available, 1)
 	}
 
 	logf(LogDebug, "🏊 静态连接池初始化完成: %d个连接", size)
@@ -2253,7 +1947,6 @@ func NewStaticConnectionPool(size int, timeout time.Duration) *StaticConnectionP
 func (scp *StaticConnectionPool) Get() *dns.Client {
 	select {
 	case client := <-scp.pool:
-		atomic.AddInt64(&scp.available, -1)
 		return client
 	default:
 		return &dns.Client{
@@ -2267,17 +1960,8 @@ func (scp *StaticConnectionPool) Get() *dns.Client {
 func (scp *StaticConnectionPool) Put(client *dns.Client) {
 	select {
 	case scp.pool <- client:
-		atomic.AddInt64(&scp.available, 1)
 	default:
 	}
-}
-
-// 修复：返回三个值以匹配接口
-func (scp *StaticConnectionPool) Stats() (created, available, current int64) {
-	created = atomic.LoadInt64(&scp.created)
-	available = atomic.LoadInt64(&scp.available)
-	current = created // 对于静态连接池，当前数量等于创建的数量
-	return created, available, current
 }
 
 // 查询结果
@@ -2310,7 +1994,6 @@ type RecursiveDNSServer struct {
 	connPool         ConnectionPool
 	dnssecVal        DNSSECValidatorInterface
 	defaultECS       *ECSOption
-	stats            *ServerStats
 	concurrencyLimit chan struct{}
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -2403,7 +2086,6 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		connPool:         connPool,
 		dnssecVal:        NewDNSSECValidator(),
 		defaultECS:       defaultECS,
-		stats:            NewServerStats(),
 		concurrencyLimit: make(chan struct{}, config.Performance.MaxConcurrency),
 		ctx:              ctx,
 		cancel:           cancel,
@@ -2415,129 +2097,8 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		backgroundManager: NewBackgroundTaskManager(config.Performance.BackgroundWorkers),
 	}
 
-	if config.Logging.EnableStats {
-		server.startStatsReporter(time.Duration(config.Logging.StatsInterval) * time.Second)
-	}
-
 	server.setupSignalHandling()
 	return server, nil
-}
-
-// 优化统计报告功能 - 模块化处理
-func (r *RecursiveDNSServer) startStatsReporter(interval time.Duration) {
-	r.wg.Add(1)
-	go func() {
-		// 修复：确保wg.Done()总是被调用
-		defer r.wg.Done()
-		defer recoverPanic("统计报告器")
-
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				r.reportStats()
-			case <-r.ctx.Done():
-				return
-			}
-		}
-	}()
-}
-
-func (r *RecursiveDNSServer) reportStats() {
-	defer recoverPanic("统计报告")
-
-	// 基础统计
-	logf(LogInfo, r.stats.String())
-
-	// 模块化报告各项统计
-	r.reportCacheStats()
-	r.reportUpstreamStats()
-	r.reportIPFilterStats()
-	r.reportRewriterStats()
-	r.reportDNSSECStats()
-}
-
-func (r *RecursiveDNSServer) reportCacheStats() {
-	cacheStats := r.cache.GetStats()
-	hits := atomic.LoadInt64(&cacheStats.hits)
-	misses := atomic.LoadInt64(&cacheStats.misses)
-	evictions := atomic.LoadInt64(&cacheStats.evictions)
-	refreshes := atomic.LoadInt64(&cacheStats.refreshes)
-	errors := atomic.LoadInt64(&cacheStats.errors)
-
-	var hitRate float64
-	if hits+misses > 0 {
-		hitRate = float64(hits) / float64(hits+misses) * 100
-	}
-
-	// 修复：使用三个返回值
-	created, available, current := r.connPool.Stats()
-
-	if r.config.Redis.Address == "" {
-		logf(LogInfo, "🚫 无缓存模式: 查询=%d, 连接池=%d/%d/%d", misses, available, current, created)
-	} else {
-		logf(LogInfo, "💾 Redis缓存: 命中率=%.1f%%, 淘汰=%d, 刷新=%d, 错误=%d, 连接池=%d/%d/%d",
-			hitRate, evictions, refreshes, errors, available, current, created)
-	}
-}
-
-func (r *RecursiveDNSServer) reportUpstreamStats() {
-	if len(r.upstreamManager.GetServers()) == 0 {
-		return
-	}
-
-	detailedStats := r.stats.GetDetailedStats()
-	if upstreamStats, ok := detailedStats["upstream_queries"].(map[string]int64); ok && len(upstreamStats) > 0 {
-		// 只显示有查询的上游服务器
-		activeUpstreams := make(map[string]int64)
-		for server, count := range upstreamStats {
-			if count > 0 {
-				activeUpstreams[server] = count
-			}
-		}
-		if len(activeUpstreams) > 0 {
-			logf(LogInfo, "🔗 上游查询统计: %v", activeUpstreams)
-		}
-	}
-}
-
-func (r *RecursiveDNSServer) reportIPFilterStats() {
-	if !r.ipFilter.HasData() {
-		return
-	}
-
-	filterStats := r.ipFilter.GetStats()
-	totalQueries := filterStats["queries_v4"] + filterStats["queries_v6"]
-	if totalQueries > 0 {
-		logf(LogInfo, "🌍 IP过滤器: 规则=%d/%d, 查询=%d (IPv4=%d, IPv6=%d)",
-			filterStats["total_v4"], filterStats["total_v6"], totalQueries,
-			filterStats["queries_v4"], filterStats["queries_v6"])
-	}
-}
-
-func (r *RecursiveDNSServer) reportRewriterStats() {
-	if !r.config.Rewrite.Enabled {
-		return
-	}
-
-	rewriteStats := r.dnsRewriter.GetStats()
-	if totalMatches, ok := rewriteStats["total_matches"]; ok && totalMatches > 0 {
-		logf(LogInfo, "🔄 DNS重写器: 规则=%d, 匹配=%d",
-			rewriteStats["total_rules"], totalMatches)
-	}
-}
-
-func (r *RecursiveDNSServer) reportDNSSECStats() {
-	if !r.config.Features.DNSSEC {
-		return
-	}
-
-	// 使用优化的格式化方法
-	if dnssecStats := r.stats.GetFormattedDNSSECStats(); dnssecStats != "" {
-		logf(LogInfo, dnssecStats)
-	}
 }
 
 // 修复：信号处理器Goroutine泄漏问题
@@ -2554,7 +2115,6 @@ func (r *RecursiveDNSServer) setupSignalHandling() {
 		select {
 		case sig := <-sigChan:
 			logf(LogInfo, "🛑 收到信号 %v，开始优雅关闭...", sig)
-			logf(LogInfo, "📊 最终统计: %s", r.stats.String())
 
 			r.cancel()
 			r.cache.Shutdown()
@@ -2577,7 +2137,7 @@ func (r *RecursiveDNSServer) setupSignalHandling() {
 			close(r.shutdown)
 			time.Sleep(time.Second)
 			os.Exit(0)
-			
+
 		case <-r.ctx.Done():
 			// 修复：程序正常退出时也要处理
 			logf(LogInfo, "🛑 程序正常关闭...")
@@ -2697,15 +2257,12 @@ func (r *RecursiveDNSServer) displayModeInfo() {
 func (r *RecursiveDNSServer) displayFeatureStatus() {
 	// IP过滤器状态
 	if r.ipFilter.HasData() {
-		stats := r.ipFilter.GetStats()
-		logf(LogInfo, "🌍 IP过滤器: 已加载 IPv4=%d条, IPv6=%d条",
-			stats["total_v4"], stats["total_v6"])
+		logf(LogInfo, "🌍 IP过滤器: 已加载")
 	}
 
 	// DNS重写器状态
 	if r.config.Rewrite.Enabled {
-		stats := r.dnsRewriter.GetStats()
-		logf(LogInfo, "🔄 DNS重写器: 已加载 %d 条规则", stats["total_rules"])
+		logf(LogInfo, "🔄 DNS重写器: 已启用")
 	}
 
 	// 性能和功能状态
@@ -2750,7 +2307,6 @@ func (r *RecursiveDNSServer) displayFeatureStatus() {
 func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			r.stats.Record(StatsPanic, "", time.Duration(0))
 			logf(LogError, "🚨 DNS请求处理Panic: %v", rec)
 			// 记录调用栈
 			buf := make([]byte, 4096)
@@ -2765,8 +2321,6 @@ func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg
 		}
 	}()
 
-	start := time.Now()
-
 	select {
 	case <-r.ctx.Done():
 		return
@@ -2774,12 +2328,6 @@ func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg
 	}
 
 	response := r.processDNSQuery(req, getClientIP(w))
-	duration := time.Since(start)
-
-	fromCache := response.Rcode == dns.RcodeSuccess && len(response.Answer) > 0
-	hasError := response.Rcode != dns.RcodeSuccess
-	r.stats.recordQuery(duration, fromCache, hasError)
-
 	w.WriteMsg(response)
 }
 
@@ -2864,7 +2412,6 @@ func (r *RecursiveDNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 	if r.config.Rewrite.Enabled {
 		if rewritten, changed := r.dnsRewriter.Rewrite(question.Name); changed {
 			question.Name = rewritten
-			r.stats.Record(StatsRewrite, "", time.Duration(0))
 			logf(LogDebug, "🔄 域名重写: %s -> %s", originalDomain, rewritten)
 
 			// 检查是否重写为IP地址（简单的A记录响应）
@@ -2881,7 +2428,6 @@ func (r *RecursiveDNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 	if opt := req.IsEdns0(); opt != nil {
 		clientRequestedDNSSEC = opt.Do()
 		if clientRequestedDNSSEC {
-			r.stats.Record(StatsDNSSECRequested, "", time.Duration(0))
 			logf(LogDebug, "🔐 客户端请求DNSSEC验证")
 		}
 		for _, option := range opt.Option {
@@ -3033,14 +2579,9 @@ func (r *RecursiveDNSServer) handleQuerySuccess(msg *dns.Msg, question dns.Quest
 	ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR,
 	validated bool, ecsResponse *ECSOption) *dns.Msg {
 
-	// 记录DNSSEC统计
-	if r.config.Features.DNSSEC {
-		if validated {
-			msg.AuthenticatedData = true
-			r.stats.Record(StatsDNSSECValid, "", time.Duration(0))
-		} else {
-			r.stats.Record(StatsDNSSECInvalid, "", time.Duration(0))
-		}
+	// DNSSEC验证结果处理：服务器启用DNSSEC时根据验证结果设置AD标志
+	if r.config.Features.DNSSEC && validated {
+		msg.AuthenticatedData = true
 	}
 
 	// 使用实际响应的ECS信息或请求的ECS信息
@@ -3145,8 +2686,6 @@ func (r *RecursiveDNSServer) queryRecursiveAsUpstream(ctx context.Context, serve
 	question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) UpstreamResult {
 
 	start := time.Now()
-	r.stats.Record(StatsUpstream, server.Name, time.Duration(0))
-	r.stats.Record(StatsRecursive, "", time.Duration(0))
 
 	answer, authority, additional, validated, ecsResponse, err := r.resolveWithCNAME(ctx, question, ecs)
 	duration := time.Since(start)
@@ -3214,15 +2753,12 @@ func (r *RecursiveDNSServer) queryRecursiveAsUpstream(ctx context.Context, serve
 
 		if !result.Trusted {
 			result.Filtered = true
-			r.stats.Record(StatsFilter, "", time.Duration(0))
 			logf(LogDebug, "🚫 过滤递归结果: %s (策略: %s)", server.Name, server.TrustPolicy)
 		}
 	} else {
 		logf(LogDebug, "🔗 递归解析 %s 完成: DNSSEC=%v (%v)", server.Name, result.Validated, duration)
 	}
 
-	// 记录处理时间统计
-	r.stats.Record(StatsUpstream, server.Name, duration)
 	return result
 }
 
@@ -3230,7 +2766,6 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 	question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) UpstreamResult {
 
 	start := time.Now()
-	r.stats.Record(StatsUpstream, server.Name, time.Duration(0))
 
 	client := r.connPool.Get()
 	defer r.connPool.Put(client)
@@ -3311,15 +2846,12 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 
 		if !result.Trusted {
 			result.Filtered = true
-			r.stats.Record(StatsFilter, "", time.Duration(0))
 			logf(LogDebug, "🚫 过滤上游结果: %s (策略: %s)", server.Name, server.TrustPolicy)
 		}
 	} else {
 		logf(LogDebug, "🔗 上游查询 %s 完成: DNSSEC=%v (%v)", server.Name, result.Validated, duration)
 	}
 
-	// 记录处理时间统计
-	r.stats.Record(StatsUpstream, server.Name, duration)
 	return result
 }
 
