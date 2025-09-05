@@ -1847,6 +1847,8 @@ type RecursiveDNSServer struct {
 	ipFilter        IPFilterInterface
 	dnsRewriter     DNSRewriterInterface
 	upstreamManager *UpstreamManager
+	// 新增：统一的goroutine管理
+	wg sync.WaitGroup
 }
 
 func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
@@ -1932,7 +1934,9 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 
 // 优化统计报告功能 - 模块化处理
 func (r *RecursiveDNSServer) startStatsReporter(interval time.Duration) {
+	r.wg.Add(1)
 	go func() {
+		defer r.wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -2043,16 +2047,32 @@ func (r *RecursiveDNSServer) setupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	r.wg.Add(1)
 	go func() {
+		defer r.wg.Done()
 		sig := <-sigChan
 		logf(LogInfo, "🛑 收到信号 %v，开始优雅关闭...", sig)
 		logf(LogInfo, "📊 最终统计: %s", r.stats.String())
 
 		r.cancel()
 		r.cache.Shutdown()
-		close(r.shutdown)
 
-		time.Sleep(2 * time.Second)
+		// 等待所有goroutine关闭
+		done := make(chan struct{})
+		go func() {
+			r.wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			logf(LogInfo, "✅ 所有goroutine已安全关闭")
+		case <-time.After(10 * time.Second):
+			logf(LogWarn, "⏰ goroutine关闭超时")
+		}
+
+		close(r.shutdown)
+		time.Sleep(time.Second)
 		os.Exit(0)
 	}()
 }
@@ -2503,7 +2523,7 @@ func (r *RecursiveDNSServer) restoreOriginalDomain(msg *dns.Msg, questionName, o
 	}
 }
 
-// 优化的上游查询 - 服务器启用DNSSEC时总是向上游请求
+// 修复的上游查询 - 解决goroutine泄露问题
 func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	servers := r.upstreamManager.GetServers()
 	if len(servers) == 0 {
@@ -2516,20 +2536,29 @@ func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *EC
 		maxConcurrent = len(servers)
 	}
 
+	// 使用带缓冲的channel防止阻塞
 	resultChan := make(chan UpstreamResult, maxConcurrent)
 	ctx, cancel := context.WithTimeout(r.ctx, time.Duration(r.config.Upstream.QueryTimeout)*time.Second)
 	defer cancel()
 
 	// 启动查询goroutines
 	for i := 0; i < maxConcurrent && i < len(servers); i++ {
+		r.wg.Add(1)
 		go func(srv *UpstreamServer) {
+			defer r.wg.Done()
 			var result UpstreamResult
 			if srv.IsRecursive() {
 				result = r.queryRecursiveAsUpstream(ctx, srv, question, ecs, serverDNSSECEnabled)
 			} else {
 				result = r.queryUpstreamServer(ctx, srv, question, ecs, serverDNSSECEnabled)
 			}
-			resultChan <- result
+
+			// 使用select避免阻塞
+			select {
+			case resultChan <- result:
+			case <-ctx.Done():
+				// 超时或取消，不发送结果
+			}
 		}(servers[i])
 	}
 
@@ -3007,6 +3036,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 	}
 }
 
+// 修复的并发nameserver查询 - 解决goroutine泄露问题
 func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption) (*dns.Msg, error) {
 	if len(nameservers) == 0 {
 		return nil, errors.New("没有可用的nameserver")
@@ -3024,13 +3054,16 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 		concurrency = 5
 	}
 
+	// 使用带缓冲的channel防止阻塞
 	resultChan := make(chan QueryResult, concurrency)
 	queryTimeout := time.Duration(r.config.Performance.QueryTimeout) * time.Second
 	queryCtx, queryCancel := context.WithTimeout(ctx, queryTimeout)
 	defer queryCancel()
 
 	for i := 0; i < concurrency && i < len(nameservers); i++ {
+		r.wg.Add(1)
 		go func(ns string) {
+			defer r.wg.Done()
 			start := time.Now()
 			client := r.connPool.Get()
 			defer r.connPool.Put(client)
@@ -3067,11 +3100,18 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 			response, _, err := client.ExchangeContext(queryCtx, msg, ns)
 			duration := time.Since(start)
 
-			resultChan <- QueryResult{
+			result := QueryResult{
 				Response: response,
 				Server:   ns,
 				Error:    err,
 				Duration: duration,
+			}
+
+			// 使用select避免阻塞
+			select {
+			case resultChan <- result:
+			case <-queryCtx.Done():
+				// 超时或取消，不发送结果
 			}
 		}(nameservers[i])
 	}
@@ -3099,27 +3139,41 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 	return nil, errors.New("所有nameserver查询失败")
 }
 
+// 修复的NS地址解析 - 完全解决goroutine泄露问题
 func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int) []string {
-	var nextNS []string
-	nsChan := make(chan []string, len(nsRecords))
-
 	resolveCount := len(nsRecords)
 	if resolveCount > 3 {
 		resolveCount = 3
 	}
 
-	for i := 0; i < resolveCount; i++ {
-		go func(ns *dns.NS) {
-			defer func() { nsChan <- nil }()
+	// 使用带缓冲的channel，确保所有goroutine都能发送结果
+	nsChan := make(chan []string, resolveCount)
 
+	// 创建子context，便于管理goroutine生命周期
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer resolveCancel()
+
+	// 启动NS解析goroutines
+	for i := 0; i < resolveCount; i++ {
+		r.wg.Add(1)
+		go func(ns *dns.NS) {
+			defer r.wg.Done()
+
+			// 检查是否为自引用
 			if strings.EqualFold(strings.TrimSuffix(ns.Ns, "."), strings.TrimSuffix(qname, ".")) {
+				// 发送空结果，避免阻塞
+				select {
+				case nsChan <- nil:
+				case <-resolveCtx.Done():
+				}
 				return
 			}
 
 			var addresses []string
 
+			// 解析A记录
 			nsQuestion := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-			if nsAnswer, _, _, _, _, err := r.recursiveQuery(ctx, nsQuestion, nil, depth+1); err == nil {
+			if nsAnswer, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestion, nil, depth+1); err == nil {
 				for _, rr := range nsAnswer {
 					if a, ok := rr.(*dns.A); ok {
 						addresses = append(addresses, net.JoinHostPort(a.A.String(), "53"))
@@ -3127,9 +3181,10 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 				}
 			}
 
+			// 如果没有A记录且启用IPv6，尝试解析AAAA记录
 			if r.config.Network.EnableIPv6 && len(addresses) == 0 {
 				nsQuestionV6 := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-				if nsAnswerV6, _, _, _, _, err := r.recursiveQuery(ctx, nsQuestionV6, nil, depth+1); err == nil {
+				if nsAnswerV6, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1); err == nil {
 					for _, rr := range nsAnswerV6 {
 						if aaaa, ok := rr.(*dns.AAAA); ok {
 							addresses = append(addresses, net.JoinHostPort(aaaa.AAAA.String(), "53"))
@@ -3138,28 +3193,36 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 				}
 			}
 
-			nsChan <- addresses
+			// 发送结果，使用select避免阻塞
+			select {
+			case nsChan <- addresses:
+			case <-resolveCtx.Done():
+				// 超时或取消，不发送结果
+			}
 		}(nsRecords[i])
 	}
 
+	// 收集结果
+	var allAddresses []string
 	for i := 0; i < resolveCount; i++ {
 		select {
 		case addresses := <-nsChan:
 			if len(addresses) > 0 {
-				nextNS = append(nextNS, addresses...)
-				if len(nextNS) >= 3 {
-					return nextNS
+				allAddresses = append(allAddresses, addresses...)
+				// 如果已经获得足够的地址，可以提前返回
+				if len(allAddresses) >= 3 {
+					// 取消剩余的goroutine
+					resolveCancel()
+					break
 				}
 			}
-		case <-ctx.Done():
-			return nextNS
-		case <-time.After(3 * time.Second):
-			logf(LogDebug, "⏰ NS解析超时")
-			return nextNS
+		case <-resolveCtx.Done():
+			logf(LogDebug, "⏰ NS解析超时或取消")
+			break
 		}
 	}
 
-	return nextNS
+	return allAddresses
 }
 
 func getClientIP(w dns.ResponseWriter) net.IP {
