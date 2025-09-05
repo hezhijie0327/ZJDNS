@@ -278,7 +278,7 @@ func generateExampleConfig() string {
 	config := getDefaultConfig()
 	config.Network.Port = "53"
 	config.Redis.Address = "127.0.0.1:6379"
-	config.Redis.Database = 1
+	config.Redis.Database = 0
 	config.Logging.Level = "info"
 
 	data, _ := json.MarshalIndent(config, "", "  ")
