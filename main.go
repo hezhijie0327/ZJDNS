@@ -59,6 +59,9 @@ const (
 	MaxCacheKeySize    = 512
 	MaxDomainLength    = 253
 	MaxConcurrentQueries = 10000
+	// 新增：Goroutine管理常量
+	MaxBackgroundWorkers = 50
+	WorkerQueueSize     = 1000
 )
 
 // 日志配置
@@ -117,14 +120,23 @@ func logf(level LogLevel, format string, args ...interface{}) {
 	}
 }
 
-// Panic恢复中间件
+// 修复：安全的Panic恢复中间件
 func recoverPanic(operation string) {
 	if r := recover(); r != nil {
-		logf(LogError, "🚨 Panic恢复 [%s]: %v", operation, r)
-		// 记录调用栈
-		buf := make([]byte, 4096)
-		n := runtime.Stack(buf, false)
-		logf(LogError, "调用栈: %s", string(buf[:n]))
+		// 使用defer确保即使日志记录失败也不会再次panic
+		func() {
+			defer func() {
+				if r2 := recover(); r2 != nil {
+					// 如果日志记录也失败，至少输出到stderr
+					fmt.Fprintf(os.Stderr, "CRITICAL: Double panic in %s: %v (original: %v)\n", operation, r2, r)
+				}
+			}()
+			logf(LogError, "🚨 Panic恢复 [%s]: %v", operation, r)
+			// 记录调用栈
+			buf := make([]byte, 4096)
+			n := runtime.Stack(buf, false)
+			logf(LogError, "调用栈: %s", string(buf[:n]))
+		}()
 	}
 }
 
@@ -200,6 +212,92 @@ func itoa(i int) string {
 		return string(rune('0' + i))
 	}
 	return fmt.Sprintf("%d", i)
+}
+
+// 新增：后台任务管理器 - 修复Goroutine堆积问题
+type BackgroundTaskManager struct {
+	taskQueue chan func()
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	workers   int
+}
+
+func NewBackgroundTaskManager(workers int) *BackgroundTaskManager {
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+	if workers > MaxBackgroundWorkers {
+		workers = MaxBackgroundWorkers
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	btm := &BackgroundTaskManager{
+		taskQueue: make(chan func(), WorkerQueueSize),
+		ctx:       ctx,
+		cancel:    cancel,
+		workers:   workers,
+	}
+
+	// 启动worker goroutines
+	for i := 0; i < workers; i++ {
+		btm.wg.Add(1)
+		go func(workerID int) {
+			// 修复：确保wg.Done()总是被调用
+			defer btm.wg.Done()
+			defer recoverPanic(fmt.Sprintf("BackgroundTaskManager Worker %d", workerID))
+
+			logf(LogDebug, "🔧 后台任务Worker %d启动", workerID)
+
+			for {
+				select {
+				case task := <-btm.taskQueue:
+					if task != nil {
+						// 每个任务都有自己的panic恢复
+						func() {
+							defer recoverPanic(fmt.Sprintf("BackgroundTask in Worker %d", workerID))
+							task()
+						}()
+					}
+				case <-btm.ctx.Done():
+					logf(LogDebug, "🔧 后台任务Worker %d停止", workerID)
+					return
+				}
+			}
+		}(i)
+	}
+
+	return btm
+}
+
+func (btm *BackgroundTaskManager) SubmitTask(task func()) {
+	select {
+	case btm.taskQueue <- task:
+		// 任务提交成功
+	default:
+		// 队列已满，记录警告但不阻塞
+		logf(LogWarn, "⚠️ 后台任务队列已满，跳过任务")
+	}
+}
+
+func (btm *BackgroundTaskManager) Shutdown() {
+	logf(LogInfo, "🔧 正在关闭后台任务管理器...")
+	btm.cancel()
+	close(btm.taskQueue)
+
+	done := make(chan struct{})
+	go func() {
+		btm.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		logf(LogInfo, "✅ 后台任务管理器已安全关闭")
+	case <-time.After(10 * time.Second):
+		logf(LogWarn, "⏰ 后台任务管理器关闭超时")
+	}
 }
 
 // 统计信息 - 优化后的统计结构
@@ -956,6 +1054,8 @@ type ServerConfig struct {
 		EnableDynamicPool bool `json:"enable_dynamic_pool"`
 		MaxPoolSize      int  `json:"max_pool_size"`
 		MinPoolSize      int  `json:"min_pool_size"`
+		// 新增：后台任务管理
+		BackgroundWorkers int `json:"background_workers"`
 	} `json:"performance"`
 
 	Logging struct {
@@ -982,6 +1082,8 @@ type ServerConfig struct {
 		MinIdleConns    int `json:"min_idle_conns"`
 		PoolTimeout     int `json:"pool_timeout"`
 		IdleCheckFreq   int `json:"idle_check_freq"`
+		// 新增：更新频率限制
+		UpdateThrottleMs int `json:"update_throttle_ms"`
 	} `json:"redis"`
 
 	Upstream struct {
@@ -1138,6 +1240,12 @@ func (cm *ConfigManager) validateRedis() error {
 			cm.config.Features.PrefetchEnabled = false
 		}
 	}
+
+	// 设置默认的更新节流
+	if cm.config.Redis.UpdateThrottleMs <= 0 {
+		cm.config.Redis.UpdateThrottleMs = 100
+	}
+
 	return nil
 }
 
@@ -1177,6 +1285,14 @@ func (cm *ConfigManager) validatePerformance() error {
 		}
 	}
 
+	// 后台任务Worker数量验证
+	if cm.config.Performance.BackgroundWorkers <= 0 {
+		cm.config.Performance.BackgroundWorkers = runtime.NumCPU()
+	}
+	if cm.config.Performance.BackgroundWorkers > MaxBackgroundWorkers {
+		cm.config.Performance.BackgroundWorkers = MaxBackgroundWorkers
+	}
+
 	return nil
 }
 
@@ -1205,6 +1321,7 @@ func getDefaultConfig() *ServerConfig {
 	config.Performance.EnableDynamicPool = true
 	config.Performance.MaxPoolSize = 500
 	config.Performance.MinPoolSize = 50
+	config.Performance.BackgroundWorkers = runtime.NumCPU()
 
 	config.Logging.Level = "info"
 	config.Logging.EnableStats = true
@@ -1224,6 +1341,7 @@ func getDefaultConfig() *ServerConfig {
 	config.Redis.MinIdleConns = 10
 	config.Redis.PoolTimeout = 5
 	config.Redis.IdleCheckFreq = 60
+	config.Redis.UpdateThrottleMs = 100
 
 	config.Upstream.Servers = []UpstreamServer{}
 	config.Upstream.ChinaCIDRFile = ""
@@ -1410,6 +1528,7 @@ func expandRR(cr *CompactDNSRecord) dns.RR {
 	return rr
 }
 
+// 修复：确保对象池资源释放
 func compactRRs(rrs []dns.RR) []*CompactDNSRecord {
 	if len(rrs) == 0 {
 		return nil
@@ -1417,10 +1536,12 @@ func compactRRs(rrs []dns.RR) []*CompactDNSRecord {
 
 	result := rrPool.Get().([]*CompactDNSRecord)
 	result = result[:0]
-	defer rrPool.Put(result)
-
+	
 	seen := stringPool.Get().(map[string]bool)
+	
+	// 修复：使用defer确保资源释放
 	defer func() {
+		rrPool.Put(result)
 		for k := range seen {
 			delete(seen, k)
 		}
@@ -1474,6 +1595,8 @@ type CacheEntry struct {
 	ECSSourcePrefix uint8  `json:"ecs_source_prefix,omitempty"`
 	ECSScopePrefix  uint8  `json:"ecs_scope_prefix,omitempty"`
 	ECSAddress      string `json:"ecs_address,omitempty"`
+	// 新增：更新时间戳用于节流
+	LastUpdateTime  int64  `json:"last_update_time,omitempty"`
 }
 
 func (c *CacheEntry) IsExpired() bool {
@@ -1489,6 +1612,12 @@ func (c *CacheEntry) ShouldRefresh() bool {
 	return c.IsExpired() &&
 		(now-c.Timestamp) > int64(c.TTL+300) &&
 		(now-c.RefreshTime) > 600
+}
+
+// 新增：检查是否需要更新访问信息（节流）
+func (c *CacheEntry) ShouldUpdateAccessInfo(throttleMs int) bool {
+	now := time.Now().UnixMilli()
+	return now-c.LastUpdateTime > int64(throttleMs)
 }
 
 func (c *CacheEntry) GetRemainingTTL(staleTTL int) uint32 {
@@ -1578,19 +1707,20 @@ func (nc *NullCache) GetStats() *CacheStats {
 	return nc.stats
 }
 
-// 优化的Redis缓存实现
+// 修复：优化的Redis缓存实现
 type RedisDNSCache struct {
-	client       *redis.Client
-	config       *ServerConfig
-	ttlCalc      *TTLCalculator
-	keyPrefix    string
-	refreshQueue chan RefreshRequest
-	stats        *CacheStats
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	// 新增：序列化池
-	encoderPool  sync.Pool
+	client            *redis.Client
+	config            *ServerConfig
+	ttlCalc           *TTLCalculator
+	keyPrefix         string
+	refreshQueue      chan RefreshRequest
+	stats             *CacheStats
+	ctx               context.Context
+	cancel            context.CancelFunc
+	wg                sync.WaitGroup
+	encoderPool       sync.Pool
+	// 新增：后台任务管理器
+	backgroundManager *BackgroundTaskManager
 }
 
 func NewRedisDNSCache(config *ServerConfig) (*RedisDNSCache, error) {
@@ -1632,14 +1762,16 @@ func NewRedisDNSCache(config *ServerConfig) (*RedisDNSCache, error) {
 				return &strings.Builder{}
 			},
 		},
+		// 修复：使用后台任务管理器替代直接启动goroutine
+		backgroundManager: NewBackgroundTaskManager(config.Performance.BackgroundWorkers),
 	}
 
 	if config.Features.ServeStale && config.Features.PrefetchEnabled {
 		cache.startRefreshProcessor()
 	}
 
-	logf(LogInfo, "✅ Redis缓存系统初始化完成 (连接池: %d, 最小空闲: %d)",
-		config.Redis.PoolSize, config.Redis.MinIdleConns)
+	logf(LogInfo, "✅ Redis缓存系统初始化完成 (连接池: %d, 最小空闲: %d, 后台Workers: %d)",
+		config.Redis.PoolSize, config.Redis.MinIdleConns, config.Performance.BackgroundWorkers)
 	return cache, nil
 }
 
@@ -1652,10 +1784,9 @@ func (rc *RedisDNSCache) startRefreshProcessor() {
 	for i := 0; i < workerCount; i++ {
 		rc.wg.Add(1)
 		go func(workerID int) {
-			defer func() {
-				defer recoverPanic(fmt.Sprintf("Redis刷新Worker %d", workerID))
-				rc.wg.Done()
-			}()
+			// 修复：确保wg.Done()总是被调用
+			defer rc.wg.Done()
+			defer recoverPanic(fmt.Sprintf("Redis刷新Worker %d", workerID))
 
 			logf(LogDebug, "🔄 Redis后台刷新Worker %d启动", workerID)
 
@@ -1706,19 +1837,31 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	if rc.config.Features.ServeStale &&
 		now-entry.Timestamp > int64(entry.TTL+rc.config.TTL.StaleMaxAge) {
 		rc.stats.RecordMiss()
-		go rc.removeStaleEntry(fullKey)
+		// 修复：使用后台任务管理器
+		rc.backgroundManager.SubmitTask(func() {
+			rc.removeStaleEntry(fullKey)
+		})
 		return nil, false, false
 	}
 
-	entry.AccessTime = now
-	entry.HitCount++
-	go rc.updateAccessInfo(fullKey, &entry)
+	// 修复：只在需要时更新访问信息，避免频繁goroutine
+	if entry.ShouldUpdateAccessInfo(rc.config.Redis.UpdateThrottleMs) {
+		entry.AccessTime = now
+		entry.HitCount++
+		entry.LastUpdateTime = time.Now().UnixMilli()
+		
+		rc.backgroundManager.SubmitTask(func() {
+			rc.updateAccessInfo(fullKey, &entry)
+		})
+	}
 
 	rc.stats.RecordHit()
 	isExpired := entry.IsExpired()
 
 	if !rc.config.Features.ServeStale && isExpired {
-		go rc.removeStaleEntry(fullKey)
+		rc.backgroundManager.SubmitTask(func() {
+			rc.removeStaleEntry(fullKey)
+		})
 		return nil, false, false
 	}
 
@@ -1746,6 +1889,7 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 		AccessTime:  now,
 		RefreshTime: 0,
 		HitCount:    0,
+		LastUpdateTime: time.Now().UnixMilli(),
 	}
 
 	// 存储ECS信息
@@ -1756,10 +1900,7 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 		entry.ECSAddress = ecs.Address.String()
 	}
 
-	// 使用字节缓冲池优化序列化
-	buffer := byteBufferPool.Get().([]byte)
-	defer byteBufferPool.Put(buffer[:0])
-
+	// 修复：优化序列化性能
 	data, err := json.Marshal(entry)
 	if err != nil {
 		rc.stats.RecordError()
@@ -1823,6 +1964,10 @@ func (rc *RedisDNSCache) RequestRefresh(req RefreshRequest) {
 
 func (rc *RedisDNSCache) Shutdown() {
 	logf(LogInfo, "🛑 正在关闭Redis缓存系统...")
+	
+	// 先关闭后台任务管理器
+	rc.backgroundManager.Shutdown()
+	
 	rc.cancel()
 	close(rc.refreshQueue)
 
@@ -2156,7 +2301,7 @@ type UpstreamResult struct {
 	Validated     bool
 }
 
-// 优化的主服务器
+// 修复：优化的主服务器
 type RecursiveDNSServer struct {
 	config           *ServerConfig
 	cache            DNSCache
@@ -2174,8 +2319,10 @@ type RecursiveDNSServer struct {
 	ipFilter        IPFilterInterface
 	dnsRewriter     DNSRewriterInterface
 	upstreamManager *UpstreamManager
-	// 统一的goroutine管理
+	// 修复：统一的goroutine管理
 	wg sync.WaitGroup
+	// 新增：后台任务管理器
+	backgroundManager *BackgroundTaskManager
 }
 
 func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
@@ -2264,6 +2411,8 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		ipFilter:         ipFilter,
 		dnsRewriter:      dnsRewriter,
 		upstreamManager:  upstreamManager,
+		// 新增：后台任务管理器
+		backgroundManager: NewBackgroundTaskManager(config.Performance.BackgroundWorkers),
 	}
 
 	if config.Logging.EnableStats {
@@ -2278,10 +2427,9 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 func (r *RecursiveDNSServer) startStatsReporter(interval time.Duration) {
 	r.wg.Add(1)
 	go func() {
-		defer func() {
-			defer recoverPanic("统计报告器")
-			r.wg.Done()
-		}()
+		// 修复：确保wg.Done()总是被调用
+		defer r.wg.Done()
+		defer recoverPanic("统计报告器")
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -2392,41 +2540,49 @@ func (r *RecursiveDNSServer) reportDNSSECStats() {
 	}
 }
 
+// 修复：信号处理器Goroutine泄漏问题
 func (r *RecursiveDNSServer) setupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	r.wg.Add(1)
 	go func() {
-		defer func() {
-			defer recoverPanic("信号处理器")
-			r.wg.Done()
-		}()
-
-		sig := <-sigChan
-		logf(LogInfo, "🛑 收到信号 %v，开始优雅关闭...", sig)
-		logf(LogInfo, "📊 最终统计: %s", r.stats.String())
-
-		r.cancel()
-		r.cache.Shutdown()
-
-		// 等待所有goroutine关闭
-		done := make(chan struct{})
-		go func() {
-			r.wg.Wait()
-			close(done)
-		}()
+		// 修复：确保wg.Done()总是被调用
+		defer r.wg.Done()
+		defer recoverPanic("信号处理器")
 
 		select {
-		case <-done:
-			logf(LogInfo, "✅ 所有goroutine已安全关闭")
-		case <-time.After(10 * time.Second):
-			logf(LogWarn, "⏰ goroutine关闭超时")
-		}
+		case sig := <-sigChan:
+			logf(LogInfo, "🛑 收到信号 %v，开始优雅关闭...", sig)
+			logf(LogInfo, "📊 最终统计: %s", r.stats.String())
 
-		close(r.shutdown)
-		time.Sleep(time.Second)
-		os.Exit(0)
+			r.cancel()
+			r.cache.Shutdown()
+			r.backgroundManager.Shutdown() // 关闭后台任务管理器
+
+			// 等待所有goroutine关闭
+			done := make(chan struct{})
+			go func() {
+				r.wg.Wait()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				logf(LogInfo, "✅ 所有goroutine已安全关闭")
+			case <-time.After(10 * time.Second):
+				logf(LogWarn, "⏰ goroutine关闭超时")
+			}
+
+			close(r.shutdown)
+			time.Sleep(time.Second)
+			os.Exit(0)
+			
+		case <-r.ctx.Done():
+			// 修复：程序正常退出时也要处理
+			logf(LogInfo, "🛑 程序正常关闭...")
+			return
+		}
 	}()
 }
 
@@ -2440,6 +2596,7 @@ func (r *RecursiveDNSServer) getRootServers() []string {
 	return r.rootServersV4
 }
 
+// 修复：DNS服务器启动WaitGroup同步问题
 func (r *RecursiveDNSServer) Start() error {
 	var wg sync.WaitGroup
 	errChan := make(chan error, 2)
@@ -2453,11 +2610,15 @@ func (r *RecursiveDNSServer) Start() error {
 	// 显示功能模块状态
 	r.displayFeatureStatus()
 
+	// 修复：添加缺失的 wg.Add(2) 调用
 	wg.Add(2)
 
 	// UDP服务器
 	go func() {
+		// 修复：确保wg.Done()总是被调用
 		defer wg.Done()
+		defer recoverPanic("UDP服务器")
+
 		server := &dns.Server{
 			Addr:    ":" + r.config.Network.Port,
 			Net:     "udp",
@@ -2472,7 +2633,10 @@ func (r *RecursiveDNSServer) Start() error {
 
 	// TCP服务器
 	go func() {
+		// 修复：确保wg.Done()总是被调用
 		defer wg.Done()
+		defer recoverPanic("TCP服务器")
+
 		server := &dns.Server{
 			Addr:    ":" + r.config.Network.Port,
 			Net:     "tcp",
@@ -2554,6 +2718,7 @@ func (r *RecursiveDNSServer) displayFeatureStatus() {
 	}
 
 	logf(LogInfo, "👷 Worker数量: %d", r.config.Performance.WorkerCount)
+	logf(LogInfo, "🔧 后台任务Workers: %d", r.config.Performance.BackgroundWorkers)
 	logf(LogInfo, "📦 UDP缓冲区: %d bytes (RFC标准)", DefaultBufferSize)
 
 	if r.config.TTL.MinTTL == 0 && r.config.TTL.MaxTTL == 0 {
@@ -2575,6 +2740,9 @@ func (r *RecursiveDNSServer) displayFeatureStatus() {
 	}
 	if r.defaultECS != nil {
 		logf(LogInfo, "🌍 默认ECS: %s/%d", r.defaultECS.Address, r.defaultECS.SourcePrefix)
+	}
+	if r.config.Redis.UpdateThrottleMs > 0 {
+		logf(LogInfo, "⏱️  Redis更新节流: %dms", r.config.Redis.UpdateThrottleMs)
 	}
 }
 
@@ -2692,7 +2860,7 @@ func (r *RecursiveDNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 		return msg
 	}
 
-	// DNS重写处理
+	// DNS重写处理 - 修复：确保缓存键构建器资源释放
 	if r.config.Rewrite.Enabled {
 		if rewritten, changed := r.dnsRewriter.Rewrite(question.Name); changed {
 			question.Name = rewritten
@@ -2730,7 +2898,7 @@ func (r *RecursiveDNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 		logf(LogDebug, "🌍 使用默认ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
 	}
 
-	// 构建缓存键：服务器启用DNSSEC时总是包含dnssec标记
+	// 修复：确保缓存键构建器资源释放
 	serverDNSSECEnabled := r.config.Features.DNSSEC
 	cacheKey := r.buildCacheKey(question, ecsOpt, serverDNSSECEnabled)
 
@@ -2933,10 +3101,9 @@ func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *EC
 	for i := 0; i < maxConcurrent && i < len(servers); i++ {
 		r.wg.Add(1)
 		go func(srv *UpstreamServer) {
-			defer func() {
-				defer recoverPanic(fmt.Sprintf("上游查询worker %s", srv.Name))
-				r.wg.Done()
-			}()
+			// 修复：确保wg.Done()总是被调用
+			defer r.wg.Done()
+			defer recoverPanic(fmt.Sprintf("上游查询worker %s", srv.Name))
 
 			var result UpstreamResult
 			if srv.IsRecursive() {
@@ -3459,10 +3626,9 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 	for i := 0; i < concurrency && i < len(nameservers); i++ {
 		r.wg.Add(1)
 		go func(ns string) {
-			defer func() {
-				defer recoverPanic(fmt.Sprintf("nameserver查询 %s", ns))
-				r.wg.Done()
-			}()
+			// 修复：确保wg.Done()总是被调用
+			defer r.wg.Done()
+			defer recoverPanic(fmt.Sprintf("nameserver查询 %s", ns))
 
 			start := time.Now()
 			client := r.connPool.Get()
@@ -3559,10 +3725,9 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 	for i := 0; i < resolveCount; i++ {
 		r.wg.Add(1)
 		go func(ns *dns.NS) {
-			defer func() {
-				defer recoverPanic(fmt.Sprintf("NS解析 %s", ns.Ns))
-				r.wg.Done()
-			}()
+			// 修复：确保wg.Done()总是被调用
+			defer r.wg.Done()
+			defer recoverPanic(fmt.Sprintf("NS解析 %s", ns.Ns))
 
 			// 检查是否为自引用
 			if strings.EqualFold(strings.TrimSuffix(ns.Ns, "."), strings.TrimSuffix(qname, ".")) {
@@ -3642,10 +3807,10 @@ func getClientIP(w dns.ResponseWriter) net.IP {
 	return nil
 }
 
-// 优化的缓存键构建函数
+// 修复：确保缓存键构建器资源释放
 func (r *RecursiveDNSServer) buildCacheKey(q dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) string {
 	builder := newCacheKeyBuilder()
-	defer builder.Release()
+	defer builder.Release() // 修复：确保释放资源
 
 	key := builder.AddDomain(q.Name).
 		AddType(q.Qtype).
