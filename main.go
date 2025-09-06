@@ -53,7 +53,7 @@ const (
 const (
 	DefaultQueryTimeout = 5 * time.Second
 	MaxRetries         = 3
-	DefaultBufferSize  = 4096
+	DefaultBufferSize  = 1232
 	MaxCNAMEChain     = 10
 	RecursiveAddress   = "recursive" // 特殊地址，表示使用递归解析
 	// 性能优化相关常量
@@ -828,15 +828,15 @@ type ServerConfig struct {
 	} `json:"ttl"`
 
 	Performance struct {
-		MaxConcurrency int `json:"max_concurrency"`
-		ConnPoolSize   int `json:"conn_pool_size"`
-		QueryTimeout   int `json:"query_timeout"`
-		MaxRecursion   int `json:"max_recursion"`
-		WorkerCount    int `json:"worker_count"`
-		EnableDynamicPool bool `json:"enable_dynamic_pool"`
-		MaxPoolSize      int  `json:"max_pool_size"`
-		MinPoolSize      int  `json:"min_pool_size"`
-		BackgroundWorkers int `json:"background_workers"`
+		MaxConcurrency       int  `json:"max_concurrency"`
+		ConnPoolSize         int  `json:"conn_pool_size"`
+		QueryTimeout         int  `json:"query_timeout"`
+		MaxRecursion         int  `json:"max_recursion"`
+		WorkerCount          int  `json:"worker_count"`
+		EnableDynamicPool    bool `json:"enable_dynamic_pool"`
+		MaxPoolSize          int  `json:"max_pool_size"`
+		MinPoolSize          int  `json:"min_pool_size"`
+		BackgroundWorkers    int  `json:"background_workers"`
 	} `json:"performance"`
 
 	Logging struct {
@@ -1777,9 +1777,10 @@ func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) boo
 	return v.IsValidated(response)
 }
 
-// 连接池接口
+// 连接池接口 - 添加TCP支持
 type ConnectionPool interface {
 	Get() *dns.Client
+	GetTCP() *dns.Client
 	Put(client *dns.Client)
 }
 
@@ -1837,6 +1838,15 @@ func (dcp *DynamicConnectionPool) Get() *dns.Client {
 	}
 }
 
+func (dcp *DynamicConnectionPool) GetTCP() *dns.Client {
+	// TCP连接不需要池化，直接创建
+	return &dns.Client{
+		Timeout: dcp.timeout,
+		Net:     "tcp",
+		// TCP没有UDPSize限制
+	}
+}
+
 func (dcp *DynamicConnectionPool) Put(client *dns.Client) {
 	select {
 	case dcp.clients <- client:
@@ -1887,6 +1897,13 @@ func (scp *StaticConnectionPool) Get() *dns.Client {
 			Net:     "udp",
 			UDPSize: DefaultBufferSize,
 		}
+	}
+}
+
+func (scp *StaticConnectionPool) GetTCP() *dns.Client {
+	return &dns.Client{
+		Timeout: scp.timeout,
+		Net:     "tcp",
 	}
 }
 
@@ -2536,6 +2553,79 @@ func (r *RecursiveDNSServer) restoreOriginalDomain(msg *dns.Msg, questionName, o
 	}
 }
 
+// UDP到TCP Fallback实现
+func (r *RecursiveDNSServer) queryWithFallback(ctx context.Context, msg *dns.Msg, server string) (*dns.Msg, error) {
+	defer recoverPanic(fmt.Sprintf("DNS查询fallback %s", server))
+
+	// 首先尝试UDP查询
+	udpClient := r.connPool.Get()
+	defer r.connPool.Put(udpClient)
+
+	logf(LogDebug, "🔍 尝试UDP查询: %s", server)
+	response, _, err := udpClient.ExchangeContext(ctx, msg, server)
+
+	if err != nil {
+		// 检查是否是UDP特定错误，需要TCP fallback
+		if strings.Contains(err.Error(), "buffer size too small") ||
+		   strings.Contains(err.Error(), "message too long") ||
+		   strings.Contains(err.Error(), "truncated") {
+			logf(LogDebug, "🔄 UDP错误，切换到TCP: %v", err)
+			// 继续执行TCP fallback
+		} else {
+			logf(LogDebug, "UDP查询失败: %v", err)
+			return nil, err
+		}
+	}
+
+	// 检查是否需要TCP fallback
+	needTCPFallback := false
+
+	if response != nil {
+		// 情况1: 响应被截断（TC bit设置）
+		if response.Truncated {
+			logf(LogDebug, "🔄 响应被截断，切换到TCP: %s", server)
+			needTCPFallback = true
+		}
+
+		// 情况2: 检查响应大小是否超过配置的阈值
+		if !needTCPFallback {
+			packedResponse, packErr := response.Pack()
+
+			if packErr == nil && len(packedResponse) > DefaultBufferSize {
+				logf(LogDebug, "🔄 响应过大(%d bytes > %d), 切换到TCP: %s",
+					len(packedResponse), DefaultBufferSize, server)
+				needTCPFallback = true
+			}
+		}
+	} else if err != nil {
+		// UDP查询失败，尝试TCP
+		needTCPFallback = true
+	}
+
+	// 执行TCP fallback
+	if needTCPFallback {
+		tcpClient := r.connPool.GetTCP()
+
+		logf(LogDebug, "🔌 执行TCP查询: %s", server)
+		tcpResponse, _, tcpErr := tcpClient.ExchangeContext(ctx, msg, server)
+
+		if tcpErr != nil {
+			logf(LogDebug, "TCP查询也失败: %v", tcpErr)
+			// TCP失败但UDP有响应，返回UDP响应
+			if response != nil && response.Rcode != dns.RcodeServerFailure {
+				logf(LogDebug, "🔄 TCP失败，回退到UDP响应")
+				return response, nil
+			}
+			return nil, tcpErr
+		}
+
+		logf(LogDebug, "✅ TCP查询成功: %s", server)
+		return tcpResponse, nil
+	}
+
+	return response, nil
+}
+
 func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	defer recoverPanic("上游服务器查询")
 
@@ -2671,9 +2761,6 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 
 	start := time.Now()
 
-	client := r.connPool.Get()
-	defer r.connPool.Put(client)
-
 	msg := new(dns.Msg)
 	msg.SetQuestion(question.Name, question.Qtype)
 	msg.RecursionDesired = true
@@ -2707,7 +2794,8 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 	queryCtx, queryCancel := context.WithTimeout(ctx, time.Duration(server.Timeout)*time.Second)
 	defer queryCancel()
 
-	response, _, err := client.ExchangeContext(queryCtx, msg, server.Address)
+	// 使用新的fallback查询方法
+	response, err := r.queryWithFallback(queryCtx, msg, server.Address)
 	duration := time.Since(start)
 
 	result := UpstreamResult{
@@ -3114,8 +3202,6 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 			defer recoverPanic(fmt.Sprintf("nameserver查询 %s", ns))
 
 			start := time.Now()
-			client := r.connPool.Get()
-			defer r.connPool.Put(client)
 
 			msg := new(dns.Msg)
 			msg.SetQuestion(question.Name, question.Qtype)
@@ -3145,7 +3231,8 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 
 			msg.Extra = append(msg.Extra, opt)
 
-			response, _, err := client.ExchangeContext(queryCtx, msg, ns)
+			// 使用新的fallback查询方法
+			response, err := r.queryWithFallback(queryCtx, msg, ns)
 			duration := time.Since(start)
 
 			result := QueryResult{
