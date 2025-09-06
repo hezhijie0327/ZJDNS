@@ -1350,7 +1350,7 @@ func (c *CacheEntry) ShouldUpdateAccessInfo(throttleMs int) bool {
 	return now-c.LastUpdateTime > int64(throttleMs)
 }
 
-// 修复1: 让 stale TTL 递减而不是固定30秒
+// 修复后的 GetRemainingTTL 方法 - 周期性重置stale TTL
 func (c *CacheEntry) GetRemainingTTL(staleTTL int) uint32 {
 	now := time.Now().Unix()
 	elapsed := now - c.Timestamp
@@ -1361,13 +1361,16 @@ func (c *CacheEntry) GetRemainingTTL(staleTTL int) uint32 {
 		return uint32(remaining)
 	}
 
-	// 缓存已过期，计算stale TTL（递减）
-	staleElapsed := elapsed - int64(c.TTL)  // 过期多长时间了
-	staleTTLRemaining := int64(staleTTL) - staleElapsed
+	// 缓存已过期，进入stale模式
+	staleElapsed := elapsed - int64(c.TTL)  // 过期了多长时间
 
+	// 计算在stale周期中的位置
+	staleCycle := staleElapsed % int64(staleTTL)
+	staleTTLRemaining := int64(staleTTL) - staleCycle
+
+	// 如果计算结果为0，重置为完整的stale TTL
 	if staleTTLRemaining <= 0 {
-		// stale TTL也耗尽了，返回最小值1
-		return 1
+		staleTTLRemaining = int64(staleTTL)
 	}
 
 	return uint32(staleTTLRemaining)
