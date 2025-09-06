@@ -2567,6 +2567,7 @@ func (r *RecursiveDNSServer) queryWithFallback(ctx context.Context, msg *dns.Msg
 	if err != nil {
 		// 检查是否是UDP特定错误，需要TCP fallback
 		if strings.Contains(err.Error(), "buffer size too small") ||
+		   strings.Contains(err.Error(), "overflowing header size") ||
 		   strings.Contains(err.Error(), "message too long") ||
 		   strings.Contains(err.Error(), "truncated") {
 			logf(LogDebug, "🔄 UDP错误，切换到TCP: %v", err)
