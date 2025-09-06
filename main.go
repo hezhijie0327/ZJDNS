@@ -21,9 +21,10 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/miekg/dns"
 )
+
 
 // 日志级别和颜色定义
 type LogLevel int
@@ -853,12 +854,10 @@ type ServerConfig struct {
 		Password    string `json:"password"`
 		Database    int    `json:"database"`
 		PoolSize    int    `json:"pool_size"`
-		IdleTimeout int    `json:"idle_timeout"`
 		KeyPrefix   string `json:"key_prefix"`
 		MaxRetries      int `json:"max_retries"`
 		MinIdleConns    int `json:"min_idle_conns"`
 		PoolTimeout     int `json:"pool_timeout"`
-		IdleCheckFreq   int `json:"idle_check_freq"`
 		UpdateThrottleMs int `json:"update_throttle_ms"`
 	} `json:"redis"`
 
@@ -1100,12 +1099,10 @@ func getDefaultConfig() *ServerConfig {
 	config.Redis.Password = ""
 	config.Redis.Database = 0
 	config.Redis.PoolSize = 50
-	config.Redis.IdleTimeout = 300
 	config.Redis.KeyPrefix = "zjdns:"
 	config.Redis.MaxRetries = 3
 	config.Redis.MinIdleConns = 10
 	config.Redis.PoolTimeout = 5
-	config.Redis.IdleCheckFreq = 60
 	config.Redis.UpdateThrottleMs = 100
 
 	config.Upstream.Servers = []UpstreamServer{}
@@ -1458,9 +1455,7 @@ func NewRedisDNSCache(config *ServerConfig) (*RedisDNSCache, error) {
 		PoolSize:        config.Redis.PoolSize,
 		MinIdleConns:    config.Redis.MinIdleConns,
 		MaxRetries:      config.Redis.MaxRetries,
-		IdleTimeout:     time.Duration(config.Redis.IdleTimeout) * time.Second,
 		PoolTimeout:     time.Duration(config.Redis.PoolTimeout) * time.Second,
-		IdleCheckFrequency: time.Duration(config.Redis.IdleCheckFreq) * time.Second,
 		ReadTimeout:     3 * time.Second,
 		WriteTimeout:    3 * time.Second,
 		DialTimeout:     5 * time.Second,
