@@ -1316,7 +1316,7 @@ func expandRRs(crs []*CompactDNSRecord) []dns.RR {
 	return result
 }
 
-// 缓存条目结构
+// 缓存条目结构 - 修复 stale TTL 问题
 type CacheEntry struct {
 	Answer      []*CompactDNSRecord `json:"answer"`
 	Authority   []*CompactDNSRecord `json:"authority"`
@@ -1353,12 +1353,34 @@ func (c *CacheEntry) ShouldUpdateAccessInfo(throttleMs int) bool {
 	return now-c.LastUpdateTime > int64(throttleMs)
 }
 
+// 修复1: 让 stale TTL 递减而不是固定30秒
 func (c *CacheEntry) GetRemainingTTL(staleTTL int) uint32 {
-	remaining := int64(c.TTL) - (time.Now().Unix() - c.Timestamp)
-	if remaining <= 0 {
-		return uint32(staleTTL)
+	now := time.Now().Unix()
+	elapsed := now - c.Timestamp
+	remaining := int64(c.TTL) - elapsed
+
+	if remaining > 0 {
+		// 缓存未过期，返回剩余TTL
+		return uint32(remaining)
 	}
-	return uint32(remaining)
+
+	// 缓存已过期，计算stale TTL（递减）
+	staleElapsed := elapsed - int64(c.TTL)  // 过期多长时间了
+	staleTTLRemaining := int64(staleTTL) - staleElapsed
+
+	if staleTTLRemaining <= 0 {
+		// stale TTL也耗尽了，返回最小值1
+		return 1
+	}
+
+	return uint32(staleTTLRemaining)
+}
+
+// 新增: 判断缓存是否应该被删除
+func (c *CacheEntry) ShouldBeDeleted(maxAge int) bool {
+	now := time.Now().Unix()
+	totalAge := now - c.Timestamp
+	return totalAge > int64(c.TTL + maxAge)
 }
 
 func (c *CacheEntry) GetAnswerRRs() []dns.RR     { return expandRRs(c.Answer) }
@@ -1415,7 +1437,7 @@ func (nc *NullCache) Shutdown() {
 	logf(LogInfo, "🚫 无缓存模式关闭")
 }
 
-// Redis缓存实现
+// Redis缓存实现 - 修复stale条目处理
 type RedisDNSCache struct {
 	client            *redis.Client
 	config            *ServerConfig
@@ -1504,6 +1526,7 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 	logf(LogDebug, "🔄 处理刷新请求: %s", req.CacheKey)
 }
 
+// 修复4: 改进Redis缓存的Get方法，正确处理stale条目
 func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	defer recoverPanic("Redis缓存获取")
 
@@ -1526,14 +1549,15 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	now := time.Now().Unix()
 
-	if rc.config.Features.ServeStale &&
-		now-entry.Timestamp > int64(entry.TTL+rc.config.TTL.StaleMaxAge) {
+	// 检查是否应该完全删除
+	if entry.ShouldBeDeleted(rc.config.TTL.StaleMaxAge) {
 		rc.backgroundManager.SubmitTask(func() {
 			rc.removeStaleEntry(fullKey)
 		})
 		return nil, false, false
 	}
 
+	// 更新访问信息（节流）
 	if entry.ShouldUpdateAccessInfo(rc.config.Redis.UpdateThrottleMs) {
 		entry.AccessTime = now
 		entry.LastUpdateTime = time.Now().UnixMilli()
@@ -1545,6 +1569,7 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	isExpired := entry.IsExpired()
 
+	// 如果不支持stale服务且已过期，删除缓存
 	if !rc.config.Features.ServeStale && isExpired {
 		rc.backgroundManager.SubmitTask(func() {
 			rc.removeStaleEntry(fullKey)
@@ -2362,16 +2387,20 @@ func (r *RecursiveDNSServer) createDirectIPResponse(msg *dns.Msg, originalDomain
 	return msg
 }
 
+// 修复6: 改进handleCacheHit方法，添加更多调试信息
 func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isExpired bool,
 	question dns.Question, originalDomain string, clientRequestedDNSSEC bool, cacheKey string, ecsOpt *ECSOption) *dns.Msg {
 
-	if isExpired {
-		logf(LogDebug, "💾 缓存命中(过期): %s %s", question.Name, dns.TypeToString[question.Qtype])
-	} else {
-		logf(LogDebug, "💾 缓存命中: %s %s", question.Name, dns.TypeToString[question.Qtype])
-	}
-
 	responseTTL := entry.GetRemainingTTL(r.config.TTL.StaleTTL)
+
+	if isExpired {
+		logf(LogDebug, "💾 缓存命中(过期): %s %s (TTL: %ds, 过期时间: %ds)",
+			question.Name, dns.TypeToString[question.Qtype], responseTTL,
+			time.Now().Unix()-entry.Timestamp-int64(entry.TTL))
+	} else {
+		logf(LogDebug, "💾 缓存命中: %s %s (TTL: %ds)",
+			question.Name, dns.TypeToString[question.Qtype], responseTTL)
+	}
 
 	msg.Answer = adjustTTL(filterDNSSECRecords(entry.GetAnswerRRs(), clientRequestedDNSSEC), responseTTL)
 	msg.Ns = adjustTTL(filterDNSSECRecords(entry.GetAuthorityRRs(), clientRequestedDNSSEC), responseTTL)
@@ -2383,7 +2412,9 @@ func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isE
 		r.addEDNS0(msg, entry.Validated, cachedECS, clientRequestedDNSSEC)
 	}
 
+	// 预取逻辑改进
 	if isExpired && r.config.Features.ServeStale && r.config.Features.PrefetchEnabled && entry.ShouldRefresh() {
+		logf(LogDebug, "🔄 提交后台刷新请求: %s", cacheKey)
 		r.cache.RequestRefresh(RefreshRequest{
 			Question: question,
 			ECS:      ecsOpt,
@@ -2867,6 +2898,7 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, nil
 }
 
+// 修复3: 优化递归查询方法，修复根域名查询问题
 func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	if depth > r.config.Performance.MaxRecursion {
 		return nil, nil, nil, false, nil, fmt.Errorf("递归深度超限: %d", depth)
@@ -2876,6 +2908,41 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 	question.Name = qname
 	nameservers := r.getRootServers()
 	currentDomain := "."
+
+	// 标准化查询域名
+	normalizedQname := strings.ToLower(strings.TrimSuffix(qname, "."))
+
+	// 特殊处理根域名查询
+	if normalizedQname == "" {
+		// 查询根域名 "."
+		logf(LogDebug, "🔍 查询根域名")
+		response, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs)
+		if err != nil {
+			return nil, nil, nil, false, nil, fmt.Errorf("查询根域名失败: %w", err)
+		}
+
+		validated := false
+		if r.config.Features.DNSSEC {
+			validated = r.dnssecVal.ValidateResponse(response, true)
+		}
+
+		var ecsResponse *ECSOption
+		if opt := response.IsEdns0(); opt != nil {
+			for _, option := range opt.Option {
+				if subnet, ok := option.(*dns.EDNS0_SUBNET); ok {
+					ecsResponse = &ECSOption{
+						Family:       subnet.Family,
+						SourcePrefix: subnet.SourceNetmask,
+						ScopePrefix:  subnet.SourceScope,
+						Address:      subnet.Address,
+					}
+					break
+				}
+			}
+		}
+
+		return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
+	}
 
 	for {
 		select {
@@ -2917,15 +2984,28 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
+		// 改进的NS记录匹配逻辑
 		bestMatch := ""
 		var bestNSRecords []*dns.NS
 
 		for _, rr := range response.Ns {
 			if ns, ok := rr.(*dns.NS); ok {
 				nsName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
-				qnameNoRoot := strings.ToLower(strings.TrimSuffix(qname, "."))
 
-				if qnameNoRoot == nsName || strings.HasSuffix(qnameNoRoot, "."+nsName) {
+				// 改进匹配逻辑
+				var isMatch bool
+				if normalizedQname == nsName {
+					// 精确匹配
+					isMatch = true
+				} else if nsName != "" && strings.HasSuffix(normalizedQname, "."+nsName) {
+					// 后缀匹配
+					isMatch = true
+				} else if nsName == "" && normalizedQname != "" {
+					// 特殊情况：nsName是根域名，qname不是根域名
+					isMatch = true
+				}
+
+				if isMatch {
 					if len(nsName) > len(bestMatch) {
 						bestMatch = nsName
 						bestNSRecords = []*dns.NS{ns}
@@ -2937,16 +3017,26 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		if len(bestNSRecords) == 0 {
-			return nil, nil, nil, false, nil, errors.New("未找到适当的NS记录")
+			logf(LogDebug, "⚠️ 未找到适当的NS记录，响应中有 %d 条NS记录", len(response.Ns))
+			for _, rr := range response.Ns {
+				if ns, ok := rr.(*dns.NS); ok {
+					logf(LogDebug, "   NS: %s -> %s", rr.Header().Name, ns.Ns)
+				}
+			}
+			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
-		if bestMatch == strings.TrimSuffix(currentDomain, ".") {
-			return nil, nil, nil, false, nil, fmt.Errorf("检测到递归循环: %s", bestMatch)
+		// 改进循环检测逻辑
+		currentDomainNormalized := strings.ToLower(strings.TrimSuffix(currentDomain, "."))
+		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
+			logf(LogDebug, "⚠️ 检测到潜在递归循环: %s -> %s", currentDomainNormalized, bestMatch)
+			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
 		currentDomain = bestMatch + "."
 		var nextNS []string
 
+		// 从Additional记录中查找NS地址
 		for _, ns := range bestNSRecords {
 			for _, rr := range response.Extra {
 				switch a := rr.(type) {
@@ -2962,12 +3052,14 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			}
 		}
 
+		// 如果Additional中没有地址，需要单独解析NS
 		if len(nextNS) == 0 {
 			nextNS = r.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth)
 		}
 
 		if len(nextNS) == 0 {
-			return nil, nil, nil, false, nil, errors.New("无法解析NS地址")
+			logf(LogDebug, "⚠️ 无法解析NS地址，返回现有结果")
+			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
 		logf(LogDebug, "🔄 切换到NS: %v", nextNS[:min(len(nextNS), 3)])
