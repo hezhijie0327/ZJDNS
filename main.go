@@ -53,7 +53,7 @@ const (
 const (
 	DefaultQueryTimeout = 5 * time.Second
 	MaxRetries         = 3
-	DefaultBufferSize  = 1232  // RFC 标准，不可配置
+	DefaultBufferSize  = 4096
 	MaxCNAMEChain     = 10
 	RecursiveAddress   = "recursive" // 特殊地址，表示使用递归解析
 	// 性能优化相关常量
@@ -2185,7 +2185,7 @@ func (r *RecursiveDNSServer) displayFeatureStatus() {
 
 	logf(LogInfo, "👷 Worker数量: %d", r.config.Performance.WorkerCount)
 	logf(LogInfo, "🔧 后台任务Workers: %d", r.config.Performance.BackgroundWorkers)
-	logf(LogInfo, "📦 UDP缓冲区: %d bytes (RFC标准)", DefaultBufferSize)
+	logf(LogInfo, "📦 UDP缓冲区: %d bytes", DefaultBufferSize)
 
 	if r.config.TTL.MinTTL == 0 && r.config.TTL.MaxTTL == 0 {
 		logf(LogInfo, "🕐 TTL策略: 使用上游值 (默认: %ds)", r.config.TTL.DefaultTTL)
@@ -2202,7 +2202,7 @@ func (r *RecursiveDNSServer) displayFeatureStatus() {
 			r.config.TTL.StaleTTL, r.config.TTL.StaleMaxAge)
 	}
 	if r.config.Features.DNSSEC {
-		logf(LogInfo, "🔐 DNSSEC支持: 启用 (服务器强制验证，客户端可选获取)")
+		logf(LogInfo, "🔐 DNSSEC支持: 启用")
 	}
 	if r.defaultECS != nil {
 		logf(LogInfo, "🌍 默认ECS: %s/%d", r.defaultECS.Address, r.defaultECS.SourcePrefix)
