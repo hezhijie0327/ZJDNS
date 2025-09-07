@@ -7,8 +7,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"regexp"
@@ -337,6 +339,85 @@ func (btm *BackgroundTaskManager) Shutdown() {
 	case <-time.After(10 * time.Second):
 		logf(LogWarn, "⏰ 后台任务管理器关闭超时")
 	}
+}
+
+// 简化的IP检测器 - 仅使用Cloudflare
+type IPDetector struct {
+	client *http.Client
+}
+
+func NewIPDetector() *IPDetector {
+	// 创建支持双栈的基础客户端
+	return &IPDetector{
+		client: &http.Client{
+			Timeout: 8 * time.Second,
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout: 5 * time.Second,
+				}).DialContext,
+				TLSHandshakeTimeout: 3 * time.Second,
+			},
+		},
+	}
+}
+
+// 从Cloudflare检测IP，支持强制版本
+func (d *IPDetector) getIPFromCloudflare(forceIPv6 bool) net.IP {
+	// 创建版本特定的客户端
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: 5 * time.Second}
+			if forceIPv6 {
+				return dialer.DialContext(ctx, "tcp6", addr)
+			}
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
+		TLSHandshakeTimeout: 3 * time.Second,
+	}
+
+	client := &http.Client{
+		Timeout:   8 * time.Second,
+		Transport: transport,
+	}
+
+	resp, err := client.Get("https://api.cloudflare.com/cdn-cgi/trace")
+	if err != nil {
+		logf(LogDebug, "Cloudflare检测失败: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logf(LogDebug, "读取Cloudflare响应失败: %v", err)
+		return nil
+	}
+
+	// 解析IP地址
+	re := regexp.MustCompile(`ip=([^\s\n]+)`)
+	matches := re.FindStringSubmatch(string(body))
+	if len(matches) < 2 {
+		logf(LogDebug, "无法从Cloudflare响应中解析IP")
+		return nil
+	}
+
+	ip := net.ParseIP(matches[1])
+	if ip == nil {
+		logf(LogDebug, "Cloudflare返回无效IP: %s", matches[1])
+		return nil
+	}
+
+	// 验证IP版本
+	if forceIPv6 && ip.To4() != nil {
+		logf(LogDebug, "期望IPv6但检测到IPv4: %s", ip)
+		return nil
+	}
+	if !forceIPv6 && ip.To4() == nil {
+		logf(LogDebug, "期望IPv4但检测到IPv6: %s", ip)
+		return nil
+	}
+
+	return ip
 }
 
 // Bogons IP过滤器接口
@@ -1022,11 +1103,76 @@ func ParseECS(opt *dns.EDNS0_SUBNET) *ECSOption {
 	}
 }
 
+// 修改的parseDefaultECS函数，支持auto预设
 func parseDefaultECS(subnet string) (*ECSOption, error) {
 	if subnet == "" {
 		return nil, nil
 	}
 
+	detector := NewIPDetector()
+
+	switch strings.ToLower(subnet) {
+	case "auto":
+		// 自动检测：优先IPv4，失败则尝试IPv6，都失败则禁用
+		logf(LogInfo, "🌍 自动检测ECS地址 (优先IPv4)...")
+
+		// 先尝试IPv4
+		if ip := detector.getIPFromCloudflare(false); ip != nil {
+			logf(LogInfo, "🌍 检测到IPv4地址: %s", ip)
+			return &ECSOption{
+				Family:       1,
+				SourcePrefix: 24,
+				ScopePrefix:  24,
+				Address:      ip,
+			}, nil
+		}
+
+		logf(LogDebug, "IPv4检测失败，尝试IPv6...")
+
+		// IPv4失败，尝试IPv6
+		if ip := detector.getIPFromCloudflare(true); ip != nil {
+			logf(LogInfo, "🌍 检测到IPv6地址: %s", ip)
+			return &ECSOption{
+				Family:       2,
+				SourcePrefix: 64,
+				ScopePrefix:  64,
+				Address:      ip,
+			}, nil
+		}
+
+		logf(LogWarn, "⚠️ 自动检测失败 (IPv4和IPv6都无法获取)，ECS功能将禁用")
+		return nil, nil
+
+	case "auto_v4":
+		logf(LogInfo, "🌍 尝试自动检测IPv4地址用于ECS...")
+		if ip := detector.getIPFromCloudflare(false); ip != nil {
+			logf(LogInfo, "🌍 检测到IPv4地址: %s", ip)
+			return &ECSOption{
+				Family:       1,
+				SourcePrefix: 24,
+				ScopePrefix:  24,
+				Address:      ip,
+			}, nil
+		}
+		logf(LogWarn, "⚠️ IPv4自动检测失败，ECS功能将禁用")
+		return nil, nil
+
+	case "auto_v6":
+		logf(LogInfo, "🌍 尝试自动检测IPv6地址用于ECS...")
+		if ip := detector.getIPFromCloudflare(true); ip != nil {
+			logf(LogInfo, "🌍 检测到IPv6地址: %s", ip)
+			return &ECSOption{
+				Family:       2,
+				SourcePrefix: 64,
+				ScopePrefix:  64,
+				Address:      ip,
+			}, nil
+		}
+		logf(LogWarn, "⚠️ IPv6自动检测失败，ECS功能将禁用")
+		return nil, nil
+	}
+
+	// 手动CIDR配置
 	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		return nil, fmt.Errorf("解析CIDR失败: %w", err)
@@ -1181,10 +1327,24 @@ func (cm *ConfigManager) validateLogLevel() error {
 	return fmt.Errorf("无效的日志级别: %s", cm.config.Logging.Level)
 }
 
+// 更新配置验证函数，支持新的预设值
 func (cm *ConfigManager) validateNetwork() error {
 	if cm.config.Network.DefaultECS != "" {
-		if _, _, err := net.ParseCIDR(cm.config.Network.DefaultECS); err != nil {
-			return fmt.Errorf("ECS子网格式错误: %w", err)
+		ecs := strings.ToLower(cm.config.Network.DefaultECS)
+		// 支持auto、auto_v4、auto_v6和标准CIDR格式
+		validPresets := []string{"auto", "auto_v4", "auto_v6"}
+		isPreset := false
+		for _, preset := range validPresets {
+			if ecs == preset {
+				isPreset = true
+				break
+			}
+		}
+
+		if !isPreset {
+			if _, _, err := net.ParseCIDR(cm.config.Network.DefaultECS); err != nil {
+				return fmt.Errorf("ECS子网格式错误，支持格式: CIDR(如192.168.1.0/24)、auto、auto_v4、auto_v6: %w", err)
+			}
 		}
 	}
 	return nil
@@ -1301,12 +1461,13 @@ func (cm *ConfigManager) GetConfig() *ServerConfig {
 	return cm.config
 }
 
+// 更新默认配置，使用auto作为默认值
 func getDefaultConfig() *ServerConfig {
 	config := &ServerConfig{}
 
 	config.Network.Port = "53"
 	config.Network.EnableIPv6 = true
-	config.Network.DefaultECS = ""
+	config.Network.DefaultECS = "auto" // 改为auto，更智能的默认选择
 
 	config.TTL.DefaultTTL = 3600
 	config.TTL.MinTTL = 0
@@ -1361,8 +1522,10 @@ func loadConfig(filename string) (*ServerConfig, error) {
 	return cm.GetConfig(), nil
 }
 
+// 更新示例配置
 func generateExampleConfig() string {
 	config := getDefaultConfig()
+	config.Network.DefaultECS = "auto" // 示例也使用auto
 	config.Redis.Address = "127.0.0.1:6379"
 	config.Features.ServeStale = true
 	config.Features.PrefetchEnabled = true
