@@ -1640,11 +1640,17 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 	return nil
 }
 
-// 刷新请求
+// 修复：完善刷新请求结构
 type RefreshRequest struct {
-	Question dns.Question
-	ECS      *ECSOption
-	CacheKey string
+	Question            dns.Question
+	ECS                 *ECSOption
+	CacheKey            string
+	ServerDNSSECEnabled bool
+}
+
+// DNS查询接口 - 新增：为缓存刷新提供查询能力
+type DNSQueryInterface interface {
+	QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error)
 }
 
 // 缓存接口
@@ -1687,9 +1693,10 @@ type RedisDNSCache struct {
 	cancel            context.CancelFunc
 	wg                sync.WaitGroup
 	backgroundManager *BackgroundTaskManager
+	queryInterface    DNSQueryInterface // 新增：DNS查询接口
 }
 
-func NewRedisDNSCache(config *ServerConfig) (*RedisDNSCache, error) {
+func NewRedisDNSCache(config *ServerConfig, queryInterface DNSQueryInterface) (*RedisDNSCache, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         config.Redis.Address,
 		Password:     config.Redis.Password,
@@ -1720,6 +1727,7 @@ func NewRedisDNSCache(config *ServerConfig) (*RedisDNSCache, error) {
 		ctx:               cacheCtx,
 		cancel:            cacheCancel,
 		backgroundManager: NewBackgroundTaskManager(config.Performance.BackgroundWorkers),
+		queryInterface:    queryInterface, // 设置查询接口
 	}
 
 	if config.Features.ServeStale && config.Features.PrefetchEnabled {
@@ -1758,9 +1766,138 @@ func (rc *RedisDNSCache) startRefreshProcessor() {
 	}
 }
 
+// 修复：完整实现handleRefreshRequest函数
 func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 	defer recoverPanic("Redis刷新请求处理")
-	logf(LogDebug, "🔄 处理刷新请求: %s", req.CacheKey)
+
+	logf(LogDebug, "🔄 开始处理刷新请求: %s", req.CacheKey)
+
+	// 检查是否有查询接口
+	if rc.queryInterface == nil {
+		logf(LogWarn, "⚠️ 刷新请求处理失败: 未设置查询接口")
+		return
+	}
+
+	// 创建刷新超时上下文
+	start := time.Now()
+
+	// 执行查询
+	answer, authority, additional, validated, ecsResponse, err := rc.queryInterface.QueryForRefresh(
+		req.Question, req.ECS, req.ServerDNSSECEnabled)
+	duration := time.Since(start)
+
+	if err != nil {
+		logf(LogDebug, "🔄 刷新查询失败: %s (%v) - %v", req.CacheKey, duration, err)
+
+		// 查询失败时，尝试延长现有缓存的刷新时间，避免频繁重试
+		rc.updateRefreshTime(req.CacheKey)
+		return
+	}
+
+	// 查询成功，更新缓存
+	logf(LogDebug, "🔄 刷新查询成功: %s (%v) - 答案: %d条", req.CacheKey, duration, len(answer))
+
+	// 计算新的TTL
+	allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
+	allRRs = append(allRRs, answer...)
+	allRRs = append(allRRs, authority...)
+	allRRs = append(allRRs, additional...)
+
+	cacheTTL := rc.ttlCalc.CalculateCacheTTL(allRRs)
+
+	now := time.Now().Unix()
+	entry := &CacheEntry{
+		Answer:         compactRRs(answer),
+		Authority:      compactRRs(authority),
+		Additional:     compactRRs(additional),
+		TTL:            cacheTTL,
+		Timestamp:      now,
+		Validated:      validated,
+		AccessTime:     now,
+		RefreshTime:    now, // 更新刷新时间
+		LastUpdateTime: time.Now().UnixMilli(),
+	}
+
+	// 设置ECS信息
+	if ecsResponse != nil {
+		entry.ECSFamily = ecsResponse.Family
+		entry.ECSSourcePrefix = ecsResponse.SourcePrefix
+		entry.ECSScopePrefix = ecsResponse.ScopePrefix
+		entry.ECSAddress = ecsResponse.Address.String()
+	}
+
+	// 序列化并存储到Redis
+	data, err := json.Marshal(entry)
+	if err != nil {
+		logf(LogWarn, "⚠️ 刷新缓存序列化失败: %v", err)
+		return
+	}
+
+	fullKey := rc.keyPrefix + req.CacheKey
+	expiration := time.Duration(cacheTTL) * time.Second
+	if rc.config.Features.ServeStale {
+		expiration += time.Duration(rc.config.TTL.StaleMaxAge) * time.Second
+	}
+
+	if err := rc.client.Set(rc.ctx, fullKey, data, expiration).Err(); err != nil {
+		logf(LogWarn, "⚠️ 刷新缓存存储失败: %v", err)
+		return
+	}
+
+	validatedStr := ""
+	if validated {
+		validatedStr = " 🔐"
+	}
+
+	ecsStr := ""
+	if ecsResponse != nil {
+		ecsStr = fmt.Sprintf(" ECS: %s/%d/%d", ecsResponse.Address, ecsResponse.SourcePrefix, ecsResponse.ScopePrefix)
+	}
+
+	logf(LogDebug, "✅ 缓存刷新完成: %s (TTL: %ds, 答案: %d条)%s%s",
+		req.CacheKey, cacheTTL, len(answer), validatedStr, ecsStr)
+}
+
+// 新增：更新缓存条目的刷新时间（查询失败时使用）
+func (rc *RedisDNSCache) updateRefreshTime(cacheKey string) {
+	defer recoverPanic("更新刷新时间")
+
+	fullKey := rc.keyPrefix + cacheKey
+
+	// 获取现有条目
+	data, err := rc.client.Get(rc.ctx, fullKey).Result()
+	if err != nil {
+		if err != redis.Nil {
+			logf(LogDebug, "获取缓存条目失败: %v", err)
+		}
+		return
+	}
+
+	var entry CacheEntry
+	if err := json.Unmarshal(unsafe.Slice(unsafe.StringData(data), len(data)), &entry); err != nil {
+		logf(LogDebug, "解析缓存条目失败: %v", err)
+		return
+	}
+
+	// 更新刷新时间，延迟下次刷新
+	now := time.Now().Unix()
+	entry.RefreshTime = now
+	entry.LastUpdateTime = time.Now().UnixMilli()
+
+	// 重新序列化并存储
+	updatedData, err := json.Marshal(entry)
+	if err != nil {
+		logf(LogDebug, "序列化更新后的缓存条目失败: %v", err)
+		return
+	}
+
+	// 保持原有TTL
+	if err := rc.client.Set(rc.ctx, fullKey, updatedData, redis.KeepTTL).Err(); err != nil {
+		logf(LogDebug, "更新缓存刷新时间失败: %v", err)
+		return
+	}
+
+	logf(LogDebug, "🔄 已延迟缓存刷新时间: %s", cacheKey)
 }
 
 // 修复4: 改进Redis缓存的Get方法，正确处理stale条目
@@ -2194,6 +2331,25 @@ type RecursiveDNSServer struct {
 	backgroundManager *BackgroundTaskManager
 }
 
+// 实现DNSQueryInterface接口 - 新增：为缓存刷新提供查询能力
+func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+	defer recoverPanic("缓存刷新查询")
+
+	// 创建刷新查询的上下文
+	refreshCtx, cancel := context.WithTimeout(r.ctx, 25*time.Second)
+	defer cancel()
+
+	// 检查是否有上游服务器
+	servers := r.upstreamManager.GetServers()
+	if len(servers) > 0 {
+		// 有上游服务器，使用上游查询
+		return r.queryUpstreamServers(question, ecs, serverDNSSECEnabled)
+	} else {
+		// 纯递归模式
+		return r.resolveWithCNAME(refreshCtx, question, ecs)
+	}
+}
+
 func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 	// 数据来源：https://www.internic.net/domain/named.cache
 	rootServersV4 := []string{
@@ -2233,17 +2389,6 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		return nil, fmt.Errorf("ECS配置错误: %w", err)
 	}
 
-	var cache DNSCache
-	if config.Redis.Address == "" {
-		cache = NewNullCache()
-	} else {
-		redisCache, err := NewRedisDNSCache(config)
-		if err != nil {
-			return nil, fmt.Errorf("Redis缓存初始化失败: %w", err)
-		}
-		cache = redisCache
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 
 	ipFilter := NewIPFilter()
@@ -2278,7 +2423,6 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 
 	server := &RecursiveDNSServer{
 		config:            config,
-		cache:             cache,
 		rootServersV4:     rootServersV4,
 		rootServersV6:     rootServersV6,
 		connPool:          connPool,
@@ -2294,6 +2438,19 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		backgroundManager: NewBackgroundTaskManager(config.Performance.BackgroundWorkers),
 	}
 
+	// 修复：创建缓存时传入服务器实例作为查询接口
+	var cache DNSCache
+	if config.Redis.Address == "" {
+		cache = NewNullCache()
+	} else {
+		redisCache, err := NewRedisDNSCache(config, server) // 传入服务器实例
+		if err != nil {
+			return nil, fmt.Errorf("Redis缓存初始化失败: %w", err)
+		}
+		cache = redisCache
+	}
+
+	server.cache = cache
 	server.setupSignalHandling()
 	return server, nil
 }
@@ -2695,13 +2852,14 @@ func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isE
 		r.addEDNS0(msg, entry.Validated, cachedECS, clientRequestedDNSSEC)
 	}
 
-	// 预取逻辑改进
+	// 预取逻辑改进 - 修复：添加ServerDNSSECEnabled参数
 	if isExpired && r.config.Features.ServeStale && r.config.Features.PrefetchEnabled && entry.ShouldRefresh() {
 		logf(LogDebug, "🔄 提交后台刷新请求: %s", cacheKey)
 		r.cache.RequestRefresh(RefreshRequest{
-			Question: question,
-			ECS:      ecsOpt,
-			CacheKey: cacheKey,
+			Question:            question,
+			ECS:                 ecsOpt,
+			CacheKey:            cacheKey,
+			ServerDNSSECEnabled: r.config.Features.DNSSEC,
 		})
 	}
 
