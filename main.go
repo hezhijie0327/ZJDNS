@@ -21,10 +21,40 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/miekg/dns"
+	"github.com/redis/go-redis/v9"
 )
 
+// Bogons IP CIDR 列表 - 私有和保留IP地址
+var bogonsCIDRs = []string{
+	"0.0.0.0/8",
+	"10.0.0.0/8",
+	"100.64.0.0/10",
+	"127.0.0.0/8",
+	"169.254.0.0/16",
+	"172.16.0.0/12",
+	"192.0.0.0/24",
+	"192.0.2.0/24",
+	"192.31.196.0/24",
+	"192.52.193.0/24",
+	"192.88.99.0/24",
+	"192.168.0.0/16",
+	"192.175.48.0/24",
+	"198.18.0.0/15",
+	"198.51.100.0/24",
+	"203.0.113.0/24",
+	"240.0.0.0/4",
+	"::/127",
+	"64:ff9b::/96",
+	"64:ff9b:1::/48",
+	"100::/64",
+	"2001::/23",
+	"2001:db8::/32",
+	"2002::/16",
+	"2620:4f:8000::/48",
+	"fc00::/7",
+	"fe80::/10",
+}
 
 // 日志级别和颜色定义
 type LogLevel int
@@ -52,17 +82,17 @@ const (
 // 常量定义
 const (
 	DefaultQueryTimeout = 5 * time.Second
-	MaxRetries         = 3
-	DefaultBufferSize  = 1232
-	MaxCNAMEChain     = 10
-	RecursiveAddress   = "recursive" // 特殊地址，表示使用递归解析
+	MaxRetries          = 3
+	DefaultBufferSize   = 1232
+	MaxCNAMEChain       = 10
+	RecursiveAddress    = "recursive" // 特殊地址，表示使用递归解析
 	// 性能优化相关常量
-	MaxCacheKeySize    = 512
-	MaxDomainLength    = 253
+	MaxCacheKeySize      = 512
+	MaxDomainLength      = 253
 	MaxConcurrentQueries = 10000
 	// Goroutine管理常量
 	MaxBackgroundWorkers = 50
-	WorkerQueueSize     = 1000
+	WorkerQueueSize      = 1000
 )
 
 // 日志配置
@@ -309,6 +339,137 @@ func (btm *BackgroundTaskManager) Shutdown() {
 	}
 }
 
+// Bogons IP过滤器接口
+type BogonsFilterInterface interface {
+	LoadBogonsCIDRs() error
+	IsBogonsIP(ip net.IP) bool
+	FilterBogonsIPs(rrs []dns.RR) []dns.RR
+	HasData() bool
+}
+
+// Bogons IP过滤器实现
+type BogonsFilter struct {
+	ipv4CIDRs []*net.IPNet
+	ipv6CIDRs []*net.IPNet
+	mu        sync.RWMutex
+}
+
+func NewBogonsFilter() BogonsFilterInterface {
+	return &BogonsFilter{
+		ipv4CIDRs: make([]*net.IPNet, 0, 32),
+		ipv6CIDRs: make([]*net.IPNet, 0, 16),
+	}
+}
+
+func (bf *BogonsFilter) LoadBogonsCIDRs() error {
+	bf.mu.Lock()
+	defer bf.mu.Unlock()
+
+	bf.ipv4CIDRs = make([]*net.IPNet, 0, 32)
+	bf.ipv6CIDRs = make([]*net.IPNet, 0, 16)
+
+	var totalV4, totalV6 int
+
+	for _, cidr := range bogonsCIDRs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			logf(LogWarn, "跳过无效的Bogons CIDR: %s", cidr)
+			continue
+		}
+
+		if ipNet.IP.To4() != nil {
+			bf.ipv4CIDRs = append(bf.ipv4CIDRs, ipNet)
+			totalV4++
+		} else {
+			bf.ipv6CIDRs = append(bf.ipv6CIDRs, ipNet)
+			totalV6++
+		}
+	}
+
+	bf.optimizeCIDRs()
+
+	logf(LogInfo, "🚫 Bogons IP过滤器加载完成: IPv4=%d条, IPv6=%d条, 总计=%d条",
+		totalV4, totalV6, totalV4+totalV6)
+	return nil
+}
+
+func (bf *BogonsFilter) optimizeCIDRs() {
+	// 按掩码长度降序排序，更具体的网络优先匹配
+	sort.Slice(bf.ipv4CIDRs, func(i, j int) bool {
+		sizeI, _ := bf.ipv4CIDRs[i].Mask.Size()
+		sizeJ, _ := bf.ipv4CIDRs[j].Mask.Size()
+		return sizeI > sizeJ
+	})
+
+	sort.Slice(bf.ipv6CIDRs, func(i, j int) bool {
+		sizeI, _ := bf.ipv6CIDRs[i].Mask.Size()
+		sizeJ, _ := bf.ipv6CIDRs[j].Mask.Size()
+		return sizeI > sizeJ
+	})
+}
+
+func (bf *BogonsFilter) IsBogonsIP(ip net.IP) bool {
+	bf.mu.RLock()
+	defer bf.mu.RUnlock()
+
+	if ip.To4() != nil {
+		for _, cidr := range bf.ipv4CIDRs {
+			if cidr.Contains(ip) {
+				return true
+			}
+		}
+	} else {
+		for _, cidr := range bf.ipv6CIDRs {
+			if cidr.Contains(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (bf *BogonsFilter) FilterBogonsIPs(rrs []dns.RR) []dns.RR {
+	if !bf.HasData() || len(rrs) == 0 {
+		return rrs
+	}
+
+	filtered := make([]dns.RR, 0, len(rrs))
+	filteredCount := 0
+
+	for _, rr := range rrs {
+		var ip net.IP
+		switch record := rr.(type) {
+		case *dns.A:
+			ip = record.A
+		case *dns.AAAA:
+			ip = record.AAAA
+		default:
+			// 非IP记录，直接保留
+			filtered = append(filtered, rr)
+			continue
+		}
+
+		if bf.IsBogonsIP(ip) {
+			logf(LogDebug, "🚫 过滤Bogons IP: %s", ip.String())
+			filteredCount++
+		} else {
+			filtered = append(filtered, rr)
+		}
+	}
+
+	if filteredCount > 0 {
+		logf(LogDebug, "🚫 已过滤 %d 个Bogons IP记录", filteredCount)
+	}
+
+	return filtered
+}
+
+func (bf *BogonsFilter) HasData() bool {
+	bf.mu.RLock()
+	defer bf.mu.RUnlock()
+	return len(bf.ipv4CIDRs) > 0 || len(bf.ipv6CIDRs) > 0
+}
+
 // 优化的IP过滤器 - 修复内存泄漏问题
 type IPFilterInterface interface {
 	LoadCIDRs(filename string) error
@@ -475,9 +636,9 @@ func (f *IPFilter) HasData() bool {
 // 安全的文件路径验证
 func isValidFilePath(path string) bool {
 	if strings.Contains(path, "..") ||
-	   strings.HasPrefix(path, "/etc/") ||
-	   strings.HasPrefix(path, "/proc/") ||
-	   strings.HasPrefix(path, "/sys/") {
+		strings.HasPrefix(path, "/etc/") ||
+		strings.HasPrefix(path, "/proc/") ||
+		strings.HasPrefix(path, "/sys/") {
 		return false
 	}
 
@@ -659,13 +820,14 @@ func (r *DNSRewriter) matchRule(rule *RewriteRule, domain string) (bool, string)
 
 // 上游服务器管理
 type UpstreamServer struct {
-	Address     string `json:"address"`
-	Name        string `json:"name"`
-	TrustPolicy string `json:"trust_policy"`
-	Weight      int    `json:"weight"`
-	Timeout     int    `json:"timeout"`
-	Enabled     bool   `json:"enabled"`
-	Priority    int    `json:"priority"`
+	Address        string `json:"address"`
+	Name           string `json:"name"`
+	TrustPolicy    string `json:"trust_policy"`
+	Weight         int    `json:"weight"`
+	Timeout        int    `json:"timeout"`
+	Enabled        bool   `json:"enabled"`
+	Priority       int    `json:"priority"`
+	IgnoreBogonsIP bool   `json:"ignore_bogons_ip"` // 新增：跳过Bogons IP
 }
 
 type UpstreamManager struct {
@@ -673,10 +835,13 @@ type UpstreamManager struct {
 	strategy      string
 	roundRobinIdx int64
 	mu            sync.RWMutex
+	bogonsFilter  BogonsFilterInterface // 新增：Bogons IP过滤器
 }
 
 func NewUpstreamManager(servers []UpstreamServer, strategy string) *UpstreamManager {
 	activeServers := make([]*UpstreamServer, 0, len(servers))
+	needsBogonsFilter := false
+
 	for i := range servers {
 		if servers[i].Enabled {
 			if servers[i].Weight <= 0 {
@@ -689,6 +854,11 @@ func NewUpstreamManager(servers []UpstreamServer, strategy string) *UpstreamMana
 				servers[i].Priority = 100
 			}
 			activeServers = append(activeServers, &servers[i])
+
+			// 检查是否需要Bogons过滤器
+			if servers[i].IgnoreBogonsIP {
+				needsBogonsFilter = true
+			}
 		}
 	}
 
@@ -696,10 +866,20 @@ func NewUpstreamManager(servers []UpstreamServer, strategy string) *UpstreamMana
 		return activeServers[i].Priority < activeServers[j].Priority
 	})
 
-	return &UpstreamManager{
+	um := &UpstreamManager{
 		servers:  activeServers,
 		strategy: strategy,
 	}
+
+	// 初始化Bogons过滤器
+	if needsBogonsFilter {
+		um.bogonsFilter = NewBogonsFilter()
+		if err := um.bogonsFilter.LoadBogonsCIDRs(); err != nil {
+			logf(LogWarn, "Bogons过滤器初始化失败: %v", err)
+		}
+	}
+
+	return um
 }
 
 func (um *UpstreamManager) GetServers() []*UpstreamServer {
@@ -748,6 +928,61 @@ func (um *UpstreamManager) selectWeighted() *UpstreamServer {
 	}
 
 	return um.servers[0]
+}
+
+// 新增：过滤Bogons IP的方法
+func (um *UpstreamManager) FilterBogonsFromResponse(server *UpstreamServer, response *dns.Msg) *dns.Msg {
+	if !server.IgnoreBogonsIP || um.bogonsFilter == nil || !um.bogonsFilter.HasData() {
+		return response
+	}
+
+	if response == nil {
+		return response
+	}
+
+	// 创建响应副本以避免修改原始响应
+	filteredResponse := response.Copy()
+
+	// 过滤Answer部分
+	if len(filteredResponse.Answer) > 0 {
+		originalCount := len(filteredResponse.Answer)
+		filteredResponse.Answer = um.bogonsFilter.FilterBogonsIPs(filteredResponse.Answer)
+		if len(filteredResponse.Answer) < originalCount {
+			logf(LogDebug, "🚫 服务器 %s 过滤了 %d 个Bogons IP（Answer部分）",
+				server.Name, originalCount-len(filteredResponse.Answer))
+		}
+	}
+
+	// 过滤Additional部分的IP记录
+	if len(filteredResponse.Extra) > 0 {
+		originalCount := 0
+		// 只统计IP记录数量
+		for _, rr := range filteredResponse.Extra {
+			if _, ok := rr.(*dns.A); ok {
+				originalCount++
+			} else if _, ok := rr.(*dns.AAAA); ok {
+				originalCount++
+			}
+		}
+
+		filteredResponse.Extra = um.bogonsFilter.FilterBogonsIPs(filteredResponse.Extra)
+
+		filteredIPCount := 0
+		for _, rr := range filteredResponse.Extra {
+			if _, ok := rr.(*dns.A); ok {
+				filteredIPCount++
+			} else if _, ok := rr.(*dns.AAAA); ok {
+				filteredIPCount++
+			}
+		}
+
+		if filteredIPCount < originalCount {
+			logf(LogDebug, "🚫 服务器 %s 过滤了 %d 个Bogons IP（Additional部分）",
+				server.Name, originalCount-filteredIPCount)
+		}
+	}
+
+	return filteredResponse
 }
 
 func (u *UpstreamServer) IsRecursive() bool {
@@ -828,15 +1063,15 @@ type ServerConfig struct {
 	} `json:"ttl"`
 
 	Performance struct {
-		MaxConcurrency       int  `json:"max_concurrency"`
-		ConnPoolSize         int  `json:"conn_pool_size"`
-		QueryTimeout         int  `json:"query_timeout"`
-		MaxRecursion         int  `json:"max_recursion"`
-		WorkerCount          int  `json:"worker_count"`
-		EnableDynamicPool    bool `json:"enable_dynamic_pool"`
-		MaxPoolSize          int  `json:"max_pool_size"`
-		MinPoolSize          int  `json:"min_pool_size"`
-		BackgroundWorkers    int  `json:"background_workers"`
+		MaxConcurrency    int  `json:"max_concurrency"`
+		ConnPoolSize      int  `json:"conn_pool_size"`
+		QueryTimeout      int  `json:"query_timeout"`
+		MaxRecursion      int  `json:"max_recursion"`
+		WorkerCount       int  `json:"worker_count"`
+		EnableDynamicPool bool `json:"enable_dynamic_pool"`
+		MaxPoolSize       int  `json:"max_pool_size"`
+		MinPoolSize       int  `json:"min_pool_size"`
+		BackgroundWorkers int  `json:"background_workers"`
 	} `json:"performance"`
 
 	Logging struct {
@@ -850,15 +1085,15 @@ type ServerConfig struct {
 	} `json:"features"`
 
 	Redis struct {
-		Address     string `json:"address"`
-		Password    string `json:"password"`
-		Database    int    `json:"database"`
-		PoolSize    int    `json:"pool_size"`
-		KeyPrefix   string `json:"key_prefix"`
-		MaxRetries      int `json:"max_retries"`
-		MinIdleConns    int `json:"min_idle_conns"`
-		PoolTimeout     int `json:"pool_timeout"`
-		UpdateThrottleMs int `json:"update_throttle_ms"`
+		Address          string `json:"address"`
+		Password         string `json:"password"`
+		Database         int    `json:"database"`
+		PoolSize         int    `json:"pool_size"`
+		KeyPrefix        string `json:"key_prefix"`
+		MaxRetries       int    `json:"max_retries"`
+		MinIdleConns     int    `json:"min_idle_conns"`
+		PoolTimeout      int    `json:"pool_timeout"`
+		UpdateThrottleMs int    `json:"update_throttle_ms"`
 	} `json:"redis"`
 
 	Upstream struct {
@@ -1134,31 +1369,34 @@ func generateExampleConfig() string {
 
 	config.Upstream.Servers = []UpstreamServer{
 		{
-			Address:     "8.8.8.8:53",
-			Name:        "Google DNS (海外可信)",
-			TrustPolicy: "all",
-			Weight:      10,
-			Timeout:     5,
-			Priority:    1,
-			Enabled:     true,
+			Address:        "8.8.8.8:53",
+			Name:           "Google DNS (海外可信)",
+			TrustPolicy:    "all",
+			Weight:         10,
+			Timeout:        5,
+			Priority:       1,
+			Enabled:        true,
+			IgnoreBogonsIP: false, // 新增字段
 		},
 		{
-			Address:     "114.114.114.114:53",
-			Name:        "114 DNS (仅信任中国IP)",
-			TrustPolicy: "cn_only",
-			Weight:      8,
-			Timeout:     3,
-			Priority:    2,
-			Enabled:     true,
+			Address:        "114.114.114.114:53",
+			Name:           "114 DNS (仅信任中国IP)",
+			TrustPolicy:    "cn_only",
+			Weight:         8,
+			Timeout:        3,
+			Priority:       2,
+			Enabled:        true,
+			IgnoreBogonsIP: true, // 启用Bogons IP过滤
 		},
 		{
-			Address:     "recursive",
-			Name:        "递归解析 (回退选项)",
-			TrustPolicy: "all",
-			Weight:      5,
-			Timeout:     10,
-			Priority:    3,
-			Enabled:     true,
+			Address:        "recursive",
+			Name:           "递归解析 (回退选项)",
+			TrustPolicy:    "all",
+			Weight:         5,
+			Timeout:        10,
+			Priority:       3,
+			Enabled:        true,
+			IgnoreBogonsIP: true, // 启用Bogons IP过滤
 		},
 	}
 	config.Upstream.ChinaCIDRFile = "china_cidr.txt"
@@ -1315,19 +1553,19 @@ func expandRRs(crs []*CompactDNSRecord) []dns.RR {
 
 // 缓存条目结构 - 修复 stale TTL 问题
 type CacheEntry struct {
-	Answer      []*CompactDNSRecord `json:"answer"`
-	Authority   []*CompactDNSRecord `json:"authority"`
-	Additional  []*CompactDNSRecord `json:"additional"`
-	TTL         int                 `json:"ttl"`
-	Timestamp   int64               `json:"timestamp"`
-	Validated   bool                `json:"validated"`
-	AccessTime  int64               `json:"access_time"`
-	RefreshTime int64               `json:"refresh_time"`
-	ECSFamily       uint16 `json:"ecs_family,omitempty"`
-	ECSSourcePrefix uint8  `json:"ecs_source_prefix,omitempty"`
-	ECSScopePrefix  uint8  `json:"ecs_scope_prefix,omitempty"`
-	ECSAddress      string `json:"ecs_address,omitempty"`
-	LastUpdateTime  int64  `json:"last_update_time,omitempty"`
+	Answer          []*CompactDNSRecord `json:"answer"`
+	Authority       []*CompactDNSRecord `json:"authority"`
+	Additional      []*CompactDNSRecord `json:"additional"`
+	TTL             int                 `json:"ttl"`
+	Timestamp       int64               `json:"timestamp"`
+	Validated       bool                `json:"validated"`
+	AccessTime      int64               `json:"access_time"`
+	RefreshTime     int64               `json:"refresh_time"`
+	ECSFamily       uint16              `json:"ecs_family,omitempty"`
+	ECSSourcePrefix uint8               `json:"ecs_source_prefix,omitempty"`
+	ECSScopePrefix  uint8               `json:"ecs_scope_prefix,omitempty"`
+	ECSAddress      string              `json:"ecs_address,omitempty"`
+	LastUpdateTime  int64               `json:"last_update_time,omitempty"`
 }
 
 func (c *CacheEntry) IsExpired() bool {
@@ -1362,7 +1600,7 @@ func (c *CacheEntry) GetRemainingTTL(staleTTL int) uint32 {
 	}
 
 	// 缓存已过期，进入stale模式
-	staleElapsed := elapsed - int64(c.TTL)  // 过期了多长时间
+	staleElapsed := elapsed - int64(c.TTL) // 过期了多长时间
 
 	// 计算在stale周期中的位置
 	staleCycle := staleElapsed % int64(staleTTL)
@@ -1380,7 +1618,7 @@ func (c *CacheEntry) GetRemainingTTL(staleTTL int) uint32 {
 func (c *CacheEntry) ShouldBeDeleted(maxAge int) bool {
 	now := time.Now().Unix()
 	totalAge := now - c.Timestamp
-	return totalAge > int64(c.TTL + maxAge)
+	return totalAge > int64(c.TTL+maxAge)
 }
 
 func (c *CacheEntry) GetAnswerRRs() []dns.RR     { return expandRRs(c.Answer) }
@@ -1429,7 +1667,8 @@ func (nc *NullCache) Get(key string) (*CacheEntry, bool, bool) {
 	return nil, false, false
 }
 
-func (nc *NullCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {}
+func (nc *NullCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
+}
 
 func (nc *NullCache) RequestRefresh(req RefreshRequest) {}
 
@@ -1452,16 +1691,16 @@ type RedisDNSCache struct {
 
 func NewRedisDNSCache(config *ServerConfig) (*RedisDNSCache, error) {
 	rdb := redis.NewClient(&redis.Options{
-		Addr:            config.Redis.Address,
-		Password:        config.Redis.Password,
-		DB:              config.Redis.Database,
-		PoolSize:        config.Redis.PoolSize,
-		MinIdleConns:    config.Redis.MinIdleConns,
-		MaxRetries:      config.Redis.MaxRetries,
-		PoolTimeout:     time.Duration(config.Redis.PoolTimeout) * time.Second,
-		ReadTimeout:     3 * time.Second,
-		WriteTimeout:    3 * time.Second,
-		DialTimeout:     5 * time.Second,
+		Addr:         config.Redis.Address,
+		Password:     config.Redis.Password,
+		DB:           config.Redis.Database,
+		PoolSize:     config.Redis.PoolSize,
+		MinIdleConns: config.Redis.MinIdleConns,
+		MaxRetries:   config.Redis.MaxRetries,
+		PoolTimeout:  time.Duration(config.Redis.PoolTimeout) * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+		DialTimeout:  5 * time.Second,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1473,13 +1712,13 @@ func NewRedisDNSCache(config *ServerConfig) (*RedisDNSCache, error) {
 
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
 	cache := &RedisDNSCache{
-		client:       rdb,
-		config:       config,
-		ttlCalc:      NewTTLCalculator(config),
-		keyPrefix:    config.Redis.KeyPrefix,
-		refreshQueue: make(chan RefreshRequest, 1000),
-		ctx:          cacheCtx,
-		cancel:       cacheCancel,
+		client:            rdb,
+		config:            config,
+		ttlCalc:           NewTTLCalculator(config),
+		keyPrefix:         config.Redis.KeyPrefix,
+		refreshQueue:      make(chan RefreshRequest, 1000),
+		ctx:               cacheCtx,
+		cancel:            cacheCancel,
 		backgroundManager: NewBackgroundTaskManager(config.Performance.BackgroundWorkers),
 	}
 
@@ -1590,14 +1829,14 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 
 	now := time.Now().Unix()
 	entry := &CacheEntry{
-		Answer:      compactRRs(answer),
-		Authority:   compactRRs(authority),
-		Additional:  compactRRs(additional),
-		TTL:         cacheTTL,
-		Timestamp:   now,
-		Validated:   validated,
-		AccessTime:  now,
-		RefreshTime: 0,
+		Answer:         compactRRs(answer),
+		Authority:      compactRRs(authority),
+		Additional:     compactRRs(additional),
+		TTL:            cacheTTL,
+		Timestamp:      now,
+		Validated:      validated,
+		AccessTime:     now,
+		RefreshTime:    0,
 		LastUpdateTime: time.Now().UnixMilli(),
 	}
 
@@ -1937,21 +2176,21 @@ type UpstreamResult struct {
 
 // 主服务器
 type RecursiveDNSServer struct {
-	config           *ServerConfig
-	cache            DNSCache
-	rootServersV4    []string
-	rootServersV6    []string
-	connPool         ConnectionPool
-	dnssecVal        DNSSECValidatorInterface
-	defaultECS       *ECSOption
-	concurrencyLimit chan struct{}
-	ctx              context.Context
-	cancel           context.CancelFunc
-	shutdown         chan struct{}
-	ipFilter        IPFilterInterface
-	dnsRewriter     DNSRewriterInterface
-	upstreamManager *UpstreamManager
-	wg sync.WaitGroup
+	config            *ServerConfig
+	cache             DNSCache
+	rootServersV4     []string
+	rootServersV6     []string
+	connPool          ConnectionPool
+	dnssecVal         DNSSECValidatorInterface
+	defaultECS        *ECSOption
+	concurrencyLimit  chan struct{}
+	ctx               context.Context
+	cancel            context.CancelFunc
+	shutdown          chan struct{}
+	ipFilter          IPFilterInterface
+	dnsRewriter       DNSRewriterInterface
+	upstreamManager   *UpstreamManager
+	wg                sync.WaitGroup
 	backgroundManager *BackgroundTaskManager
 }
 
@@ -1975,18 +2214,18 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 
 	rootServersV6 := []string{
 		"[2001:503:ba3e::2:30]:53", // a.root-servers.net
-		"[2801:1b8:10::b]:53",       // b.root-servers.net
-		"[2001:500:2::c]:53",        // c.root-servers.net
-		"[2001:500:2d::d]:53",       // d.root-servers.net
-		"[2001:500:a8::e]:53",       // e.root-servers.net
-		"[2001:500:2f::f]:53",       // f.root-servers.net
-		"[2001:500:12::d0d]:53",     // g.root-servers.net
-		"[2001:500:1::53]:53",       // h.root-servers.net
-		"[2001:7fe::53]:53",         // i.root-servers.net
-		"[2001:503:c27::2:30]:53",   // j.root-servers.net
-		"[2001:7fd::1]:53",          // k.root-servers.net
-		"[2001:500:9f::42]:53",      // l.root-servers.net
-		"[2001:dc3::35]:53",         // m.root-servers.net
+		"[2801:1b8:10::b]:53",      // b.root-servers.net
+		"[2001:500:2::c]:53",       // c.root-servers.net
+		"[2001:500:2d::d]:53",      // d.root-servers.net
+		"[2001:500:a8::e]:53",      // e.root-servers.net
+		"[2001:500:2f::f]:53",      // f.root-servers.net
+		"[2001:500:12::d0d]:53",    // g.root-servers.net
+		"[2001:500:1::53]:53",      // h.root-servers.net
+		"[2001:7fe::53]:53",        // i.root-servers.net
+		"[2001:503:c27::2:30]:53",  // j.root-servers.net
+		"[2001:7fd::1]:53",         // k.root-servers.net
+		"[2001:500:9f::42]:53",     // l.root-servers.net
+		"[2001:dc3::35]:53",        // m.root-servers.net
 	}
 
 	defaultECS, err := parseDefaultECS(config.Network.DefaultECS)
@@ -2038,20 +2277,20 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 	}
 
 	server := &RecursiveDNSServer{
-		config:           config,
-		cache:            cache,
-		rootServersV4:    rootServersV4,
-		rootServersV6:    rootServersV6,
-		connPool:         connPool,
-		dnssecVal:        NewDNSSECValidator(),
-		defaultECS:       defaultECS,
-		concurrencyLimit: make(chan struct{}, config.Performance.MaxConcurrency),
-		ctx:              ctx,
-		cancel:           cancel,
-		shutdown:         make(chan struct{}),
-		ipFilter:         ipFilter,
-		dnsRewriter:      dnsRewriter,
-		upstreamManager:  upstreamManager,
+		config:            config,
+		cache:             cache,
+		rootServersV4:     rootServersV4,
+		rootServersV6:     rootServersV6,
+		connPool:          connPool,
+		dnssecVal:         NewDNSSECValidator(),
+		defaultECS:        defaultECS,
+		concurrencyLimit:  make(chan struct{}, config.Performance.MaxConcurrency),
+		ctx:               ctx,
+		cancel:            cancel,
+		shutdown:          make(chan struct{}),
+		ipFilter:          ipFilter,
+		dnsRewriter:       dnsRewriter,
+		upstreamManager:   upstreamManager,
 		backgroundManager: NewBackgroundTaskManager(config.Performance.BackgroundWorkers),
 	}
 
@@ -2178,19 +2417,30 @@ func (r *RecursiveDNSServer) displayModeInfo() {
 	if len(servers) > 0 {
 		enabledCount := len(servers)
 		recursiveCount := 0
+		bogonsFilterCount := 0
 		for _, server := range servers {
 			if server.IsRecursive() {
 				recursiveCount++
-				logf(LogInfo, "🔗 上游配置: %s (递归解析) - %s (优先级: %d, 权重: %d)",
-					server.Name, server.TrustPolicy, server.Priority, server.Weight)
+				bogonsInfo := ""
+				if server.IgnoreBogonsIP {
+					bogonsInfo = " [过滤Bogons]"
+					bogonsFilterCount++
+				}
+				logf(LogInfo, "🔗 上游配置: %s (递归解析) - %s (优先级: %d, 权重: %d)%s",
+					server.Name, server.TrustPolicy, server.Priority, server.Weight, bogonsInfo)
 			} else {
-				logf(LogInfo, "🔗 上游服务器: %s (%s) - %s (优先级: %d, 权重: %d)",
-					server.Name, server.Address, server.TrustPolicy, server.Priority, server.Weight)
+				bogonsInfo := ""
+				if server.IgnoreBogonsIP {
+					bogonsInfo = " [过滤Bogons]"
+					bogonsFilterCount++
+				}
+				logf(LogInfo, "🔗 上游服务器: %s (%s) - %s (优先级: %d, 权重: %d)%s",
+					server.Name, server.Address, server.TrustPolicy, server.Priority, server.Weight, bogonsInfo)
 			}
 		}
-		logf(LogInfo, "🔗 混合模式: %d个上游 (%d递归), 策略=%s, 过滤=%v, 并发=%d",
+		logf(LogInfo, "🔗 混合模式: %d个上游 (%d递归), 策略=%s, 过滤=%v, 并发=%d, Bogons过滤=%d个",
 			enabledCount, recursiveCount, r.config.Upstream.Strategy,
-			r.config.Upstream.FilteringEnabled, r.config.Upstream.MaxConcurrent)
+			r.config.Upstream.FilteringEnabled, r.config.Upstream.MaxConcurrent, bogonsFilterCount)
 	} else {
 		if r.config.Redis.Address == "" {
 			logf(LogInfo, "🚫 纯递归模式 (无缓存)")
@@ -2567,9 +2817,9 @@ func (r *RecursiveDNSServer) queryWithFallback(ctx context.Context, msg *dns.Msg
 	if err != nil {
 		// 检查是否是UDP特定错误，需要TCP fallback
 		if strings.Contains(err.Error(), "buffer size too small") ||
-		   strings.Contains(err.Error(), "overflowing header size") ||
-		   strings.Contains(err.Error(), "message too long") ||
-		   strings.Contains(err.Error(), "truncated") {
+			strings.Contains(err.Error(), "overflowing header size") ||
+			strings.Contains(err.Error(), "message too long") ||
+			strings.Contains(err.Error(), "truncated") {
 			logf(LogDebug, "🔄 UDP错误，切换到TCP: %v", err)
 			// 继续执行TCP fallback
 		} else {
@@ -2713,6 +2963,11 @@ func (r *RecursiveDNSServer) queryRecursiveAsUpstream(ctx context.Context, serve
 		}
 	}
 
+	// 新增：应用Bogons IP过滤
+	if server.IgnoreBogonsIP {
+		response = r.upstreamManager.FilterBogonsFromResponse(server, response)
+	}
+
 	result.Response = response
 	result.Validated = validated
 
@@ -2738,20 +2993,20 @@ func (r *RecursiveDNSServer) queryRecursiveAsUpstream(ctx context.Context, serve
 		response.Extra = append(response.Extra, opt)
 	}
 
-	// 优化：使用合并的IP分析函数
-	result.HasChinaIP, result.HasNonChinaIP = r.ipFilter.AnalyzeIPs(answer)
+	// 优化：使用合并的IP分析函数 (基于过滤后的响应)
+	result.HasChinaIP, result.HasNonChinaIP = r.ipFilter.AnalyzeIPs(response.Answer)
 	result.Trusted = server.ShouldTrustResult(result.HasChinaIP, result.HasNonChinaIP)
 
 	if r.config.Upstream.FilteringEnabled && r.ipFilter.HasData() {
-		logf(LogDebug, "🔗 递归解析 %s 完成: 中国IP=%v, 非中国IP=%v, 可信=%v, DNSSEC=%v (%v)",
-			server.Name, result.HasChinaIP, result.HasNonChinaIP, result.Trusted, result.Validated, duration)
+		logf(LogDebug, "🔗 递归解析 %s 完成: 中国IP=%v, 非中国IP=%v, 可信=%v, DNSSEC=%v, Bogons过滤=%v (%v)",
+			server.Name, result.HasChinaIP, result.HasNonChinaIP, result.Trusted, result.Validated, server.IgnoreBogonsIP, duration)
 
 		if !result.Trusted {
 			result.Filtered = true
 			logf(LogDebug, "🚫 过滤递归结果: %s (策略: %s)", server.Name, server.TrustPolicy)
 		}
 	} else {
-		logf(LogDebug, "🔗 递归解析 %s 完成: DNSSEC=%v (%v)", server.Name, result.Validated, duration)
+		logf(LogDebug, "🔗 递归解析 %s 完成: DNSSEC=%v, Bogons过滤=%v (%v)", server.Name, result.Validated, server.IgnoreBogonsIP, duration)
 	}
 
 	return result
@@ -2825,20 +3080,26 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 		}
 	}
 
-	// 优化：使用合并的IP分析函数
+	// 新增：应用Bogons IP过滤
+	if server.IgnoreBogonsIP {
+		response = r.upstreamManager.FilterBogonsFromResponse(server, response)
+		result.Response = response
+	}
+
+	// 优化：使用合并的IP分析函数 (基于过滤后的响应)
 	result.HasChinaIP, result.HasNonChinaIP = r.ipFilter.AnalyzeIPs(response.Answer)
 	result.Trusted = server.ShouldTrustResult(result.HasChinaIP, result.HasNonChinaIP)
 
 	if r.config.Upstream.FilteringEnabled && r.ipFilter.HasData() {
-		logf(LogDebug, "🔗 上游查询 %s 完成: 中国IP=%v, 非中国IP=%v, 可信=%v, DNSSEC=%v (%v)",
-			server.Name, result.HasChinaIP, result.HasNonChinaIP, result.Trusted, result.Validated, duration)
+		logf(LogDebug, "🔗 上游查询 %s 完成: 中国IP=%v, 非中国IP=%v, 可信=%v, DNSSEC=%v, Bogons过滤=%v (%v)",
+			server.Name, result.HasChinaIP, result.HasNonChinaIP, result.Trusted, result.Validated, server.IgnoreBogonsIP, duration)
 
 		if !result.Trusted {
 			result.Filtered = true
 			logf(LogDebug, "🚫 过滤上游结果: %s (策略: %s)", server.Name, server.TrustPolicy)
 		}
 	} else {
-		logf(LogDebug, "🔗 上游查询 %s 完成: DNSSEC=%v (%v)", server.Name, result.Validated, duration)
+		logf(LogDebug, "🔗 上游查询 %s 完成: DNSSEC=%v, Bogons过滤=%v (%v)", server.Name, result.Validated, server.IgnoreBogonsIP, duration)
 	}
 
 	return result
@@ -2888,8 +3149,9 @@ func (r *RecursiveDNSServer) selectUpstreamResult(results []UpstreamResult, ques
 	if selectedResult.Server.IsRecursive() {
 		sourceType = "递归"
 	}
-	logf(LogDebug, "✅ 选择%s结果: %s (策略: %s, 可信: %v, DNSSEC: %v)",
-		sourceType, selectedResult.Server.Name, r.config.Upstream.Strategy, selectedResult.Trusted, selectedResult.Validated)
+	logf(LogDebug, "✅ 选择%s结果: %s (策略: %s, 可信: %v, DNSSEC: %v, Bogons过滤: %v)",
+		sourceType, selectedResult.Server.Name, r.config.Upstream.Strategy,
+		selectedResult.Trusted, selectedResult.Validated, selectedResult.Server.IgnoreBogonsIP)
 
 	var ecsResponse *ECSOption
 	if opt := selectedResult.Response.IsEdns0(); opt != nil {
@@ -3403,7 +3665,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -h, -help                 显示此帮助信息\n\n")
 
 		fmt.Fprintf(os.Stderr, "示例:\n")
-		fmt.Fprintf(os.Stderr, "  # 直接启动（纯递归模式，启用DNSSEC）\n")
+		fmt.Fprintf(os.Stderr, "  # 直接启动（纯递归模式）\n")
 		fmt.Fprintf(os.Stderr, "  %s\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # 生成配置文件\n")
 		fmt.Fprintf(os.Stderr, "  %s -generate-config > config.json\n\n", os.Args[0])
