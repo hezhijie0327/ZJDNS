@@ -50,11 +50,12 @@ const (
 	ColorCyan   = "\033[36m"
 )
 
-// 常量定义
+// 常量定义 - 修改：区分客户端响应和上游查询的buffer size
 const (
 	DefaultQueryTimeout = 5 * time.Second
 	MaxRetries          = 3
-	DefaultBufferSize   = 4096
+	ClientBufferSize    = 1232 // 响应给客户端的buffer size (推荐安全大小)
+	UpstreamBufferSize  = 4096 // 向上游查询的buffer size (减少TCP fallback)
 	MaxCNAMEChain       = 10
 	RecursiveAddress    = "recursive" // 特殊地址，表示使用递归解析
 	// 性能优化相关常量
@@ -2141,7 +2142,7 @@ type ConnectionPool interface {
 	Put(client *dns.Client)
 }
 
-// 动态连接池
+// 修改：动态连接池 - 区分客户端和上游buffer size
 type DynamicConnectionPool struct {
 	clients     chan *dns.Client
 	timeout     time.Duration
@@ -2170,11 +2171,12 @@ func NewDynamicConnectionPool(minSize, maxSize int, timeout time.Duration) *Dyna
 	return pool
 }
 
+// 修改：使用UpstreamBufferSize用于向上游查询
 func (dcp *DynamicConnectionPool) createClient() *dns.Client {
 	return &dns.Client{
 		Timeout: dcp.timeout,
 		Net:     "udp",
-		UDPSize: DefaultBufferSize,
+		UDPSize: UpstreamBufferSize, // 使用4096向上游查询
 	}
 }
 
@@ -2216,7 +2218,7 @@ func (dcp *DynamicConnectionPool) Put(client *dns.Client) {
 	}
 }
 
-// 静态连接池实现
+// 修改：静态连接池实现 - 区分客户端和上游buffer size
 type StaticConnectionPool struct {
 	clients []*dns.Client
 	pool    chan *dns.Client
@@ -2234,7 +2236,7 @@ func NewStaticConnectionPool(size int, timeout time.Duration) *StaticConnectionP
 		client := &dns.Client{
 			Timeout: timeout,
 			Net:     "udp",
-			UDPSize: DefaultBufferSize,
+			UDPSize: UpstreamBufferSize, // 使用4096向上游查询
 		}
 		pool.clients = append(pool.clients, client)
 		pool.pool <- client
@@ -2252,7 +2254,7 @@ func (scp *StaticConnectionPool) Get() *dns.Client {
 		return &dns.Client{
 			Timeout: scp.timeout,
 			Net:     "udp",
-			UDPSize: DefaultBufferSize,
+			UDPSize: UpstreamBufferSize, // 使用4096向上游查询
 		}
 	}
 }
@@ -2504,7 +2506,7 @@ func (r *RecursiveDNSServer) Start() error {
 
 	wg.Add(2)
 
-	// UDP服务器
+	// 修改：UDP服务器 - 使用ClientBufferSize响应客户端
 	go func() {
 		defer wg.Done()
 		defer recoverPanic("UDP服务器")
@@ -2513,7 +2515,7 @@ func (r *RecursiveDNSServer) Start() error {
 			Addr:    ":" + r.config.Network.Port,
 			Net:     "udp",
 			Handler: dns.HandlerFunc(r.handleDNSRequest),
-			UDPSize: DefaultBufferSize,
+			UDPSize: ClientBufferSize, // 使用1232响应客户端
 		}
 		logf(LogInfo, "📡 UDP服务器启动中...")
 		if err := server.ListenAndServe(); err != nil {
@@ -2607,7 +2609,8 @@ func (r *RecursiveDNSServer) displayFeatureStatus() {
 
 	logf(LogInfo, "👷 Worker数量: %d", r.config.Performance.WorkerCount)
 	logf(LogInfo, "🔧 后台任务Workers: %d", r.config.Performance.BackgroundWorkers)
-	logf(LogInfo, "📦 UDP缓冲区: %d bytes", DefaultBufferSize)
+	// 修改：显示两种不同的buffer size
+	logf(LogInfo, "📦 UDP缓冲区: 客户端=%d bytes, 上游=%d bytes", ClientBufferSize, UpstreamBufferSize)
 
 	if r.config.TTL.MinTTL == 0 && r.config.TTL.MaxTTL == 0 {
 		logf(LogInfo, "🕐 TTL策略: 使用上游值 (默认: %ds)", r.config.TTL.DefaultTTL)
@@ -2659,7 +2662,7 @@ func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg
 	w.WriteMsg(response)
 }
 
-// 优化：统一EDNS0处理逻辑
+// 修改：统一EDNS0处理逻辑 - 使用ClientBufferSize响应客户端
 func (r *RecursiveDNSServer) addEDNS0(msg *dns.Msg, validated bool, ecs *ECSOption, clientRequestedDNSSEC bool) {
 	var opt *dns.OPT
 
@@ -2669,7 +2672,7 @@ func (r *RecursiveDNSServer) addEDNS0(msg *dns.Msg, validated bool, ecs *ECSOpti
 		opt = new(dns.OPT)
 		opt.Hdr.Name = "."
 		opt.Hdr.Rrtype = dns.TypeOPT
-		opt.Hdr.Class = DefaultBufferSize
+		opt.Hdr.Class = ClientBufferSize // 使用1232响应客户端
 		msg.Extra = append(msg.Extra, opt)
 	}
 
@@ -2980,9 +2983,9 @@ func (r *RecursiveDNSServer) queryWithFallback(ctx context.Context, msg *dns.Msg
 		if !needTCPFallback {
 			packedResponse, packErr := response.Pack()
 
-			if packErr == nil && len(packedResponse) > DefaultBufferSize {
+			if packErr == nil && len(packedResponse) > UpstreamBufferSize {
 				logf(LogDebug, "🔄 响应过大(%d bytes > %d), 切换到TCP: %s",
-					len(packedResponse), DefaultBufferSize, server)
+					len(packedResponse), UpstreamBufferSize, server)
 				needTCPFallback = true
 			}
 		}
@@ -3109,7 +3112,7 @@ func (r *RecursiveDNSServer) queryRecursiveAsUpstream(ctx context.Context, serve
 			Hdr: dns.RR_Header{
 				Name:   ".",
 				Rrtype: dns.TypeOPT,
-				Class:  DefaultBufferSize,
+				Class:  UpstreamBufferSize, // 修改：使用UpstreamBufferSize
 			},
 		}
 		if serverDNSSECEnabled {
@@ -3158,7 +3161,7 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 		Hdr: dns.RR_Header{
 			Name:   ".",
 			Rrtype: dns.TypeOPT,
-			Class:  DefaultBufferSize,
+			Class:  UpstreamBufferSize, // 修改：使用UpstreamBufferSize向上游查询
 		},
 	}
 
@@ -3621,7 +3624,7 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 				Hdr: dns.RR_Header{
 					Name:   ".",
 					Rrtype: dns.TypeOPT,
-					Class:  DefaultBufferSize,
+					Class:  UpstreamBufferSize, // 修改：使用UpstreamBufferSize向上游查询
 				},
 			}
 			if r.config.Features.DNSSEC {
