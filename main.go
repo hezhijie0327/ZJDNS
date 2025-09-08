@@ -27,37 +27,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Bogons IP CIDR 列表 - 私有和保留IP地址
-var bogonsCIDRs = []string{
-	"0.0.0.0/8",
-	"10.0.0.0/8",
-	"100.64.0.0/10",
-	"127.0.0.0/8",
-	"169.254.0.0/16",
-	"172.16.0.0/12",
-	"192.0.0.0/24",
-	"192.0.2.0/24",
-	"192.31.196.0/24",
-	"192.52.193.0/24",
-	"192.88.99.0/24",
-	"192.168.0.0/16",
-	"192.175.48.0/24",
-	"198.18.0.0/15",
-	"198.51.100.0/24",
-	"203.0.113.0/24",
-	"240.0.0.0/4",
-	"::/127",
-	"64:ff9b::/96",
-	"64:ff9b:1::/48",
-	"100::/64",
-	"2001::/23",
-	"2001:db8::/32",
-	"2002::/16",
-	"2620:4f:8000::/48",
-	"fc00::/7",
-	"fe80::/10",
-}
-
 // 日志级别和颜色定义
 type LogLevel int
 
@@ -85,7 +54,7 @@ const (
 const (
 	DefaultQueryTimeout = 5 * time.Second
 	MaxRetries          = 3
-	DefaultBufferSize   = 1232
+	DefaultBufferSize   = 4096
 	MaxCNAMEChain       = 10
 	RecursiveAddress    = "recursive" // 特殊地址，表示使用递归解析
 	// 性能优化相关常量
@@ -418,137 +387,6 @@ func (d *IPDetector) getIPFromCloudflare(forceIPv6 bool) net.IP {
 	}
 
 	return ip
-}
-
-// Bogons IP过滤器接口
-type BogonsFilterInterface interface {
-	LoadBogonsCIDRs() error
-	IsBogonsIP(ip net.IP) bool
-	FilterBogonsIPs(rrs []dns.RR) []dns.RR
-	HasData() bool
-}
-
-// Bogons IP过滤器实现
-type BogonsFilter struct {
-	ipv4CIDRs []*net.IPNet
-	ipv6CIDRs []*net.IPNet
-	mu        sync.RWMutex
-}
-
-func NewBogonsFilter() BogonsFilterInterface {
-	return &BogonsFilter{
-		ipv4CIDRs: make([]*net.IPNet, 0, 32),
-		ipv6CIDRs: make([]*net.IPNet, 0, 16),
-	}
-}
-
-func (bf *BogonsFilter) LoadBogonsCIDRs() error {
-	bf.mu.Lock()
-	defer bf.mu.Unlock()
-
-	bf.ipv4CIDRs = make([]*net.IPNet, 0, 32)
-	bf.ipv6CIDRs = make([]*net.IPNet, 0, 16)
-
-	var totalV4, totalV6 int
-
-	for _, cidr := range bogonsCIDRs {
-		_, ipNet, err := net.ParseCIDR(cidr)
-		if err != nil {
-			logf(LogWarn, "跳过无效的Bogons CIDR: %s", cidr)
-			continue
-		}
-
-		if ipNet.IP.To4() != nil {
-			bf.ipv4CIDRs = append(bf.ipv4CIDRs, ipNet)
-			totalV4++
-		} else {
-			bf.ipv6CIDRs = append(bf.ipv6CIDRs, ipNet)
-			totalV6++
-		}
-	}
-
-	bf.optimizeCIDRs()
-
-	logf(LogInfo, "🚫 Bogons IP过滤器加载完成: IPv4=%d条, IPv6=%d条, 总计=%d条",
-		totalV4, totalV6, totalV4+totalV6)
-	return nil
-}
-
-func (bf *BogonsFilter) optimizeCIDRs() {
-	// 按掩码长度降序排序，更具体的网络优先匹配
-	sort.Slice(bf.ipv4CIDRs, func(i, j int) bool {
-		sizeI, _ := bf.ipv4CIDRs[i].Mask.Size()
-		sizeJ, _ := bf.ipv4CIDRs[j].Mask.Size()
-		return sizeI > sizeJ
-	})
-
-	sort.Slice(bf.ipv6CIDRs, func(i, j int) bool {
-		sizeI, _ := bf.ipv6CIDRs[i].Mask.Size()
-		sizeJ, _ := bf.ipv6CIDRs[j].Mask.Size()
-		return sizeI > sizeJ
-	})
-}
-
-func (bf *BogonsFilter) IsBogonsIP(ip net.IP) bool {
-	bf.mu.RLock()
-	defer bf.mu.RUnlock()
-
-	if ip.To4() != nil {
-		for _, cidr := range bf.ipv4CIDRs {
-			if cidr.Contains(ip) {
-				return true
-			}
-		}
-	} else {
-		for _, cidr := range bf.ipv6CIDRs {
-			if cidr.Contains(ip) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (bf *BogonsFilter) FilterBogonsIPs(rrs []dns.RR) []dns.RR {
-	if !bf.HasData() || len(rrs) == 0 {
-		return rrs
-	}
-
-	filtered := make([]dns.RR, 0, len(rrs))
-	filteredCount := 0
-
-	for _, rr := range rrs {
-		var ip net.IP
-		switch record := rr.(type) {
-		case *dns.A:
-			ip = record.A
-		case *dns.AAAA:
-			ip = record.AAAA
-		default:
-			// 非IP记录，直接保留
-			filtered = append(filtered, rr)
-			continue
-		}
-
-		if bf.IsBogonsIP(ip) {
-			logf(LogDebug, "🚫 过滤Bogons IP: %s", ip.String())
-			filteredCount++
-		} else {
-			filtered = append(filtered, rr)
-		}
-	}
-
-	if filteredCount > 0 {
-		logf(LogDebug, "🚫 已过滤 %d 个Bogons IP记录", filteredCount)
-	}
-
-	return filtered
-}
-
-func (bf *BogonsFilter) HasData() bool {
-	bf.mu.RLock()
-	defer bf.mu.RUnlock()
-	return len(bf.ipv4CIDRs) > 0 || len(bf.ipv6CIDRs) > 0
 }
 
 // 优化的IP过滤器 - 修复内存泄漏问题
@@ -899,16 +737,68 @@ func (r *DNSRewriter) matchRule(rule *RewriteRule, domain string) (bool, string)
 	return false, ""
 }
 
+// DNS劫持预防检查器 - 确认只检查不修改
+type DNSHijackPrevention interface {
+	CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string)
+	IsEnabled() bool
+}
+
+type SimpleHijackPrevention struct {
+	enabled bool
+}
+
+func NewSimpleHijackPrevention(enabled bool) *SimpleHijackPrevention {
+	return &SimpleHijackPrevention{
+		enabled: enabled,
+	}
+}
+
+func (shp *SimpleHijackPrevention) IsEnabled() bool {
+	return shp.enabled
+}
+
+// CheckResponse DNS劫持预防检查 - 只检查不修改，直接拒绝可疑响应
+func (shp *SimpleHijackPrevention) CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string) {
+	if !shp.enabled || response == nil {
+		return true, ""
+	}
+
+	// 标准化域名（转小写，移除末尾点）
+	currentDomain = strings.ToLower(strings.TrimSuffix(currentDomain, "."))
+	queryDomain = strings.ToLower(strings.TrimSuffix(queryDomain, "."))
+
+	// 核心检测逻辑：根服务器不应该直接回答非根域名的最终记录
+	if currentDomain == "" && queryDomain != "" {
+		// 检查Answer中是否包含查询域名的记录
+		for _, rr := range response.Answer {
+			answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
+			if answerName == queryDomain {
+				// 跳过委托记录（NS, DS）
+				if rr.Header().Rrtype == dns.TypeNS || rr.Header().Rrtype == dns.TypeDS {
+					continue
+				}
+
+				// 发现最终答案记录，这是可疑的
+				recordType := dns.TypeToString[rr.Header().Rrtype]
+				reason := fmt.Sprintf("根服务器越权返回了 '%s' 的%s记录", queryDomain, recordType)
+				logf(LogDebug, "🚨 检测到DNS劫持: %s", reason)
+				return false, reason
+			}
+		}
+	}
+
+	return true, ""
+}
+
 // 上游服务器管理
 type UpstreamServer struct {
-	Address        string `json:"address"`
-	Name           string `json:"name"`
-	TrustPolicy    string `json:"trust_policy"`
-	Weight         int    `json:"weight"`
-	Timeout        int    `json:"timeout"`
-	Enabled        bool   `json:"enabled"`
-	Priority       int    `json:"priority"`
-	IgnoreBogonsIP bool   `json:"ignore_bogons_ip"` // 新增：跳过Bogons IP
+	Address     string `json:"address"`
+	Name        string `json:"name"`
+	TrustPolicy string `json:"trust_policy"`
+	Weight      int    `json:"weight"`
+	Timeout     int    `json:"timeout"`
+	Enabled     bool   `json:"enabled"`
+	Priority    int    `json:"priority"`
 }
 
 type UpstreamManager struct {
@@ -916,12 +806,10 @@ type UpstreamManager struct {
 	strategy      string
 	roundRobinIdx int64
 	mu            sync.RWMutex
-	bogonsFilter  BogonsFilterInterface // 新增：Bogons IP过滤器
 }
 
 func NewUpstreamManager(servers []UpstreamServer, strategy string) *UpstreamManager {
 	activeServers := make([]*UpstreamServer, 0, len(servers))
-	needsBogonsFilter := false
 
 	for i := range servers {
 		if servers[i].Enabled {
@@ -935,11 +823,6 @@ func NewUpstreamManager(servers []UpstreamServer, strategy string) *UpstreamMana
 				servers[i].Priority = 100
 			}
 			activeServers = append(activeServers, &servers[i])
-
-			// 检查是否需要Bogons过滤器
-			if servers[i].IgnoreBogonsIP {
-				needsBogonsFilter = true
-			}
 		}
 	}
 
@@ -947,20 +830,10 @@ func NewUpstreamManager(servers []UpstreamServer, strategy string) *UpstreamMana
 		return activeServers[i].Priority < activeServers[j].Priority
 	})
 
-	um := &UpstreamManager{
+	return &UpstreamManager{
 		servers:  activeServers,
 		strategy: strategy,
 	}
-
-	// 初始化Bogons过滤器
-	if needsBogonsFilter {
-		um.bogonsFilter = NewBogonsFilter()
-		if err := um.bogonsFilter.LoadBogonsCIDRs(); err != nil {
-			logf(LogWarn, "Bogons过滤器初始化失败: %v", err)
-		}
-	}
-
-	return um
 }
 
 func (um *UpstreamManager) GetServers() []*UpstreamServer {
@@ -1009,61 +882,6 @@ func (um *UpstreamManager) selectWeighted() *UpstreamServer {
 	}
 
 	return um.servers[0]
-}
-
-// 新增：过滤Bogons IP的方法
-func (um *UpstreamManager) FilterBogonsFromResponse(server *UpstreamServer, response *dns.Msg) *dns.Msg {
-	if !server.IgnoreBogonsIP || um.bogonsFilter == nil || !um.bogonsFilter.HasData() {
-		return response
-	}
-
-	if response == nil {
-		return response
-	}
-
-	// 创建响应副本以避免修改原始响应
-	filteredResponse := response.Copy()
-
-	// 过滤Answer部分
-	if len(filteredResponse.Answer) > 0 {
-		originalCount := len(filteredResponse.Answer)
-		filteredResponse.Answer = um.bogonsFilter.FilterBogonsIPs(filteredResponse.Answer)
-		if len(filteredResponse.Answer) < originalCount {
-			logf(LogDebug, "🚫 服务器 %s 过滤了 %d 个Bogons IP（Answer部分）",
-				server.Name, originalCount-len(filteredResponse.Answer))
-		}
-	}
-
-	// 过滤Additional部分的IP记录
-	if len(filteredResponse.Extra) > 0 {
-		originalCount := 0
-		// 只统计IP记录数量
-		for _, rr := range filteredResponse.Extra {
-			if _, ok := rr.(*dns.A); ok {
-				originalCount++
-			} else if _, ok := rr.(*dns.AAAA); ok {
-				originalCount++
-			}
-		}
-
-		filteredResponse.Extra = um.bogonsFilter.FilterBogonsIPs(filteredResponse.Extra)
-
-		filteredIPCount := 0
-		for _, rr := range filteredResponse.Extra {
-			if _, ok := rr.(*dns.A); ok {
-				filteredIPCount++
-			} else if _, ok := rr.(*dns.AAAA); ok {
-				filteredIPCount++
-			}
-		}
-
-		if filteredIPCount < originalCount {
-			logf(LogDebug, "🚫 服务器 %s 过滤了 %d 个Bogons IP（Additional部分）",
-				server.Name, originalCount-filteredIPCount)
-		}
-	}
-
-	return filteredResponse
 }
 
 func (u *UpstreamServer) IsRecursive() bool {
@@ -1225,9 +1043,10 @@ type ServerConfig struct {
 	} `json:"logging"`
 
 	Features struct {
-		ServeStale      bool `json:"serve_stale"`
-		PrefetchEnabled bool `json:"prefetch_enabled"`
-		DNSSEC          bool `json:"dnssec"`
+		ServeStale       bool `json:"serve_stale"`
+		PrefetchEnabled  bool `json:"prefetch_enabled"`
+		DNSSEC           bool `json:"dnssec"`
+		PreventDNSHijack bool `json:"prevent_dns_hijack"` // DNS劫持预防
 	} `json:"features"`
 
 	Redis struct {
@@ -1490,6 +1309,7 @@ func getDefaultConfig() *ServerConfig {
 	config.Features.ServeStale = false
 	config.Features.PrefetchEnabled = false
 	config.Features.DNSSEC = true
+	config.Features.PreventDNSHijack = false // 默认关闭DNS劫持预防
 
 	config.Redis.Address = ""
 	config.Redis.Password = ""
@@ -1522,44 +1342,42 @@ func loadConfig(filename string) (*ServerConfig, error) {
 	return cm.GetConfig(), nil
 }
 
-// 更新示例配置
+// 更新示例配置 - 移除Bogons相关配置
 func generateExampleConfig() string {
 	config := getDefaultConfig()
-	config.Network.DefaultECS = "auto" // 示例也使用auto
+	config.Network.DefaultECS = "auto"
 	config.Redis.Address = "127.0.0.1:6379"
 	config.Features.ServeStale = true
 	config.Features.PrefetchEnabled = true
+	config.Features.PreventDNSHijack = true // 启用DNS劫持预防作为示例
 
 	config.Upstream.Servers = []UpstreamServer{
 		{
-			Address:        "8.8.8.8:53",
-			Name:           "Google DNS (海外可信)",
-			TrustPolicy:    "all",
-			Weight:         10,
-			Timeout:        5,
-			Priority:       1,
-			Enabled:        true,
-			IgnoreBogonsIP: false, // 新增字段
+			Address:     "8.8.8.8:53",
+			Name:        "Google DNS (海外可信)",
+			TrustPolicy: "all",
+			Weight:      10,
+			Timeout:     5,
+			Priority:    1,
+			Enabled:     true,
 		},
 		{
-			Address:        "114.114.114.114:53",
-			Name:           "114 DNS (仅信任中国IP)",
-			TrustPolicy:    "cn_only",
-			Weight:         8,
-			Timeout:        3,
-			Priority:       2,
-			Enabled:        true,
-			IgnoreBogonsIP: true, // 启用Bogons IP过滤
+			Address:     "114.114.114.114:53",
+			Name:        "114 DNS (仅信任中国IP)",
+			TrustPolicy: "cn_only",
+			Weight:      8,
+			Timeout:     3,
+			Priority:    2,
+			Enabled:     true,
 		},
 		{
-			Address:        "recursive",
-			Name:           "递归解析 (回退选项)",
-			TrustPolicy:    "all",
-			Weight:         5,
-			Timeout:        10,
-			Priority:       3,
-			Enabled:        true,
-			IgnoreBogonsIP: true, // 启用Bogons IP过滤
+			Address:     "recursive",
+			Name:        "递归解析 (回退选项)",
+			TrustPolicy: "all",
+			Weight:      5,
+			Timeout:     10,
+			Priority:    3,
+			Enabled:     true,
 		},
 	}
 	config.Upstream.ChinaCIDRFile = "china_cidr.txt"
@@ -2492,6 +2310,7 @@ type RecursiveDNSServer struct {
 	upstreamManager   *UpstreamManager
 	wg                sync.WaitGroup
 	backgroundManager *BackgroundTaskManager
+	hijackPrevention  DNSHijackPrevention // DNS劫持预防检查器
 }
 
 // 实现DNSQueryInterface接口 - 新增：为缓存刷新提供查询能力
@@ -2584,6 +2403,9 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		)
 	}
 
+	// 创建DNS劫持预防检查器
+	hijackPrevention := NewSimpleHijackPrevention(config.Features.PreventDNSHijack)
+
 	server := &RecursiveDNSServer{
 		config:            config,
 		rootServersV4:     rootServersV4,
@@ -2599,6 +2421,7 @@ func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		dnsRewriter:       dnsRewriter,
 		upstreamManager:   upstreamManager,
 		backgroundManager: NewBackgroundTaskManager(config.Performance.BackgroundWorkers),
+		hijackPrevention:  hijackPrevention,
 	}
 
 	// 修复：创建缓存时传入服务器实例作为查询接口
@@ -2737,30 +2560,19 @@ func (r *RecursiveDNSServer) displayModeInfo() {
 	if len(servers) > 0 {
 		enabledCount := len(servers)
 		recursiveCount := 0
-		bogonsFilterCount := 0
 		for _, server := range servers {
 			if server.IsRecursive() {
 				recursiveCount++
-				bogonsInfo := ""
-				if server.IgnoreBogonsIP {
-					bogonsInfo = " [过滤Bogons]"
-					bogonsFilterCount++
-				}
-				logf(LogInfo, "🔗 上游配置: %s (递归解析) - %s (优先级: %d, 权重: %d)%s",
-					server.Name, server.TrustPolicy, server.Priority, server.Weight, bogonsInfo)
+				logf(LogInfo, "🔗 上游配置: %s (递归解析) - %s (优先级: %d, 权重: %d)",
+					server.Name, server.TrustPolicy, server.Priority, server.Weight)
 			} else {
-				bogonsInfo := ""
-				if server.IgnoreBogonsIP {
-					bogonsInfo = " [过滤Bogons]"
-					bogonsFilterCount++
-				}
-				logf(LogInfo, "🔗 上游服务器: %s (%s) - %s (优先级: %d, 权重: %d)%s",
-					server.Name, server.Address, server.TrustPolicy, server.Priority, server.Weight, bogonsInfo)
+				logf(LogInfo, "🔗 上游服务器: %s (%s) - %s (优先级: %d, 权重: %d)",
+					server.Name, server.Address, server.TrustPolicy, server.Priority, server.Weight)
 			}
 		}
-		logf(LogInfo, "🔗 混合模式: %d个上游 (%d递归), 策略=%s, 过滤=%v, 并发=%d, Bogons过滤=%d个",
+		logf(LogInfo, "🔗 混合模式: %d个上游 (%d递归), 策略=%s, 过滤=%v, 并发=%d",
 			enabledCount, recursiveCount, r.config.Upstream.Strategy,
-			r.config.Upstream.FilteringEnabled, r.config.Upstream.MaxConcurrent, bogonsFilterCount)
+			r.config.Upstream.FilteringEnabled, r.config.Upstream.MaxConcurrent)
 	} else {
 		if r.config.Redis.Address == "" {
 			logf(LogInfo, "🚫 纯递归模式 (无缓存)")
@@ -2778,6 +2590,11 @@ func (r *RecursiveDNSServer) displayFeatureStatus() {
 
 	if r.config.Rewrite.Enabled {
 		logf(LogInfo, "🔄 DNS重写器: 已启用")
+	}
+
+	// 显示DNS劫持预防状态
+	if r.config.Features.PreventDNSHijack {
+		logf(LogInfo, "🛡️ DNS劫持预防: 启用")
 	}
 
 	logf(LogInfo, "⚡ 最大并发: %d", r.config.Performance.MaxConcurrency)
@@ -3284,11 +3101,6 @@ func (r *RecursiveDNSServer) queryRecursiveAsUpstream(ctx context.Context, serve
 		}
 	}
 
-	// 新增：应用Bogons IP过滤
-	if server.IgnoreBogonsIP {
-		response = r.upstreamManager.FilterBogonsFromResponse(server, response)
-	}
-
 	result.Response = response
 	result.Validated = validated
 
@@ -3314,20 +3126,20 @@ func (r *RecursiveDNSServer) queryRecursiveAsUpstream(ctx context.Context, serve
 		response.Extra = append(response.Extra, opt)
 	}
 
-	// 优化：使用合并的IP分析函数 (基于过滤后的响应)
+	// 分析IP
 	result.HasChinaIP, result.HasNonChinaIP = r.ipFilter.AnalyzeIPs(response.Answer)
 	result.Trusted = server.ShouldTrustResult(result.HasChinaIP, result.HasNonChinaIP)
 
 	if r.config.Upstream.FilteringEnabled && r.ipFilter.HasData() {
-		logf(LogDebug, "🔗 递归解析 %s 完成: 中国IP=%v, 非中国IP=%v, 可信=%v, DNSSEC=%v, Bogons过滤=%v (%v)",
-			server.Name, result.HasChinaIP, result.HasNonChinaIP, result.Trusted, result.Validated, server.IgnoreBogonsIP, duration)
+		logf(LogDebug, "🔗 递归解析 %s 完成: 中国IP=%v, 非中国IP=%v, 可信=%v, DNSSEC=%v (%v)",
+			server.Name, result.HasChinaIP, result.HasNonChinaIP, result.Trusted, result.Validated, duration)
 
 		if !result.Trusted {
 			result.Filtered = true
 			logf(LogDebug, "🚫 过滤递归结果: %s (策略: %s)", server.Name, server.TrustPolicy)
 		}
 	} else {
-		logf(LogDebug, "🔗 递归解析 %s 完成: DNSSEC=%v, Bogons过滤=%v (%v)", server.Name, result.Validated, server.IgnoreBogonsIP, duration)
+		logf(LogDebug, "🔗 递归解析 %s 完成: DNSSEC=%v (%v)", server.Name, result.Validated, duration)
 	}
 
 	return result
@@ -3371,7 +3183,7 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 	queryCtx, queryCancel := context.WithTimeout(ctx, time.Duration(server.Timeout)*time.Second)
 	defer queryCancel()
 
-	// 使用新的fallback查询方法
+	// 使用fallback查询方法
 	response, err := r.queryWithFallback(queryCtx, msg, server.Address)
 	duration := time.Since(start)
 
@@ -3401,26 +3213,20 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 		}
 	}
 
-	// 新增：应用Bogons IP过滤
-	if server.IgnoreBogonsIP {
-		response = r.upstreamManager.FilterBogonsFromResponse(server, response)
-		result.Response = response
-	}
-
-	// 优化：使用合并的IP分析函数 (基于过滤后的响应)
+	// 分析IP
 	result.HasChinaIP, result.HasNonChinaIP = r.ipFilter.AnalyzeIPs(response.Answer)
 	result.Trusted = server.ShouldTrustResult(result.HasChinaIP, result.HasNonChinaIP)
 
 	if r.config.Upstream.FilteringEnabled && r.ipFilter.HasData() {
-		logf(LogDebug, "🔗 上游查询 %s 完成: 中国IP=%v, 非中国IP=%v, 可信=%v, DNSSEC=%v, Bogons过滤=%v (%v)",
-			server.Name, result.HasChinaIP, result.HasNonChinaIP, result.Trusted, result.Validated, server.IgnoreBogonsIP, duration)
+		logf(LogDebug, "🔗 上游查询 %s 完成: 中国IP=%v, 非中国IP=%v, 可信=%v, DNSSEC=%v (%v)",
+			server.Name, result.HasChinaIP, result.HasNonChinaIP, result.Trusted, result.Validated, duration)
 
 		if !result.Trusted {
 			result.Filtered = true
 			logf(LogDebug, "🚫 过滤上游结果: %s (策略: %s)", server.Name, server.TrustPolicy)
 		}
 	} else {
-		logf(LogDebug, "🔗 上游查询 %s 完成: DNSSEC=%v, Bogons过滤=%v (%v)", server.Name, result.Validated, server.IgnoreBogonsIP, duration)
+		logf(LogDebug, "🔗 上游查询 %s 完成: DNSSEC=%v (%v)", server.Name, result.Validated, duration)
 	}
 
 	return result
@@ -3470,9 +3276,9 @@ func (r *RecursiveDNSServer) selectUpstreamResult(results []UpstreamResult, ques
 	if selectedResult.Server.IsRecursive() {
 		sourceType = "递归"
 	}
-	logf(LogDebug, "✅ 选择%s结果: %s (策略: %s, 可信: %v, DNSSEC: %v, Bogons过滤: %v)",
+	logf(LogDebug, "✅ 选择%s结果: %s (策略: %s, 可信: %v, DNSSEC: %v)",
 		sourceType, selectedResult.Server.Name, r.config.Upstream.Strategy,
-		selectedResult.Trusted, selectedResult.Validated, selectedResult.Server.IgnoreBogonsIP)
+		selectedResult.Trusted, selectedResult.Validated)
 
 	var ecsResponse *ECSOption
 	if opt := selectedResult.Response.IsEdns0(); opt != nil {
@@ -3586,7 +3392,7 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, nil
 }
 
-// 修复3: 优化递归查询方法，修复根域名查询问题
+// 递归查询方法 - 确认DNS劫持检查只检查不修改，直接拒绝
 func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	if depth > r.config.Performance.MaxRecursion {
 		return nil, nil, nil, false, nil, fmt.Errorf("递归深度超限: %d", depth)
@@ -3602,11 +3408,17 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 
 	// 特殊处理根域名查询
 	if normalizedQname == "" {
-		// 查询根域名 "."
 		logf(LogDebug, "🔍 查询根域名")
 		response, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs)
 		if err != nil {
 			return nil, nil, nil, false, nil, fmt.Errorf("查询根域名失败: %w", err)
+		}
+
+		// 应用DNS劫持预防检查 - 只检查不修改，直接拒绝可疑响应
+		if r.hijackPrevention.IsEnabled() {
+			if valid, reason := r.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
+				return r.handleSuspiciousResponse(response, reason)
+			}
 		}
 
 		validated := false
@@ -3639,11 +3451,18 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 		default:
 		}
 
-		logf(LogDebug, "🔍 查询域 %s，使用NS: %v", currentDomain, nameservers[:min(len(nameservers), 3)])
+		logf(LogDebug, "🔍 查询域 %s (查询目标: %s)，使用NS: %v", currentDomain, normalizedQname, nameservers[:min(len(nameservers), 3)])
 
 		response, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs)
 		if err != nil {
 			return nil, nil, nil, false, nil, fmt.Errorf("查询%s失败: %w", currentDomain, err)
+		}
+
+		// 应用DNS劫持预防检查 - 只检查不修改，直接拒绝可疑响应
+		if r.hijackPrevention.IsEnabled() {
+			if valid, reason := r.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
+				return r.handleSuspiciousResponse(response, reason)
+			}
 		}
 
 		validated := false
@@ -3753,6 +3572,13 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 		logf(LogDebug, "🔄 切换到NS: %v", nextNS[:min(len(nextNS), 3)])
 		nameservers = nextNS
 	}
+}
+
+// handleSuspiciousResponse方法 - 确认直接拒绝，不修改DNS响应
+func (r *RecursiveDNSServer) handleSuspiciousResponse(response *dns.Msg, reason string) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+	logf(LogDebug, "🚫 拒绝可疑的DNS响应: %s", reason)
+	// 直接返回错误，不修改或返回任何DNS响应内容
+	return nil, nil, nil, false, nil, fmt.Errorf("检测到DNS劫持: %s", reason)
 }
 
 func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption) (*dns.Msg, error) {
