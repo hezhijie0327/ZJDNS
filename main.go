@@ -877,7 +877,6 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 
 	switch strings.ToLower(subnet) {
 	case "auto":
-		logf(LogInfo, "🌍 自动检测ECS地址 (优先IPv4)...")
 		if ip := detector.detectPublicIP(false); ip != nil {
 			logf(LogInfo, "🌍 检测到IPv4地址: %s", ip)
 			return &ECSOption{
@@ -901,6 +900,7 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 
 	case "auto_v4":
 		if ip := detector.detectPublicIP(false); ip != nil {
+			logf(LogInfo, "🌍 检测到IPv4地址: %s", ip)
 			return &ECSOption{
 				Family:       1,
 				SourcePrefix: 24,
@@ -908,10 +908,12 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 				Address:      ip,
 			}, nil
 		}
+		logf(LogWarn, "⚠️ 自动检测失败，ECS功能将禁用")
 		return nil, nil
 
 	case "auto_v6":
 		if ip := detector.detectPublicIP(true); ip != nil {
+			logf(LogInfo, "🌍 检测到IPv6地址: %s", ip)
 			return &ECSOption{
 				Family:       2,
 				SourcePrefix: 64,
@@ -919,6 +921,7 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 				Address:      ip,
 			}, nil
 		}
+		logf(LogWarn, "⚠️ 自动检测失败，ECS功能将禁用")
 		return nil, nil
 	}
 
@@ -2157,7 +2160,7 @@ func (r *RecursiveDNSServer) displayInfo() {
 		logf(LogInfo, "🔗 混合模式: %d个上游, 策略=%s", len(servers), r.config.Upstream.Strategy)
 	} else {
 		if r.config.Redis.Address == "" {
-			logf(LogInfo, "🚫 纯递归模式 (无缓存)")
+			logf(LogInfo, "🚫 递归模式 (无缓存)")
 		} else {
 			logf(LogInfo, "💾 递归模式 + Redis缓存: %s", r.config.Redis.Address)
 		}
@@ -2170,7 +2173,7 @@ func (r *RecursiveDNSServer) displayInfo() {
 		logf(LogInfo, "🔄 DNS重写器: 已启用")
 	}
 	if r.config.Features.PreventDNSHijack {
-		logf(LogInfo, "🛡️ DNS劫持预防: 启用")
+		logf(LogInfo, "🛡️ DNS劫持预防: 已启用")
 	}
 	if r.defaultECS != nil {
 		logf(LogInfo, "🌍 默认ECS: %s/%d", r.defaultECS.Address, r.defaultECS.SourcePrefix)
@@ -2994,10 +2997,10 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 
 func (r *RecursiveDNSServer) handleSuspiciousResponse(response *dns.Msg, reason string, currentlyTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	if !currentlyTCP {
-		logf(LogWarn, "🛡️ 检测到DNS劫持，将切换到TCP模式重试: %s", reason)
+		logf(LogDebug, "🛡️ 检测到DNS劫持，将切换到TCP模式重试: %s", reason)
 		return nil, nil, nil, false, nil, fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
 	} else {
-		logf(LogError, "🚫 TCP模式下仍检测到DNS劫持，拒绝响应: %s", reason)
+		logf(LogDebug, "🚫 TCP模式下仍检测到DNS劫持，拒绝响应: %s", reason)
 		return nil, nil, nil, false, nil, fmt.Errorf("检测到DNS劫持(TCP模式): %s", reason)
 	}
 }
