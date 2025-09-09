@@ -2390,7 +2390,7 @@ type RecursiveDNSServer struct {
 	hijackPrevention  DNSHijackPrevention // DNS劫持预防检查器
 }
 
-// 实现DNSQueryInterface接口 - 新增：为缓存刷新提供查询能力
+// 修改6: 更新QueryForRefresh方法以支持TCP切换
 func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	defer recoverPanic("缓存刷新查询")
 
@@ -2404,7 +2404,7 @@ func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOpti
 		// 有上游服务器，使用上游查询
 		return r.queryUpstreamServers(question, ecs, serverDNSSECEnabled)
 	} else {
-		// 纯递归模式
+		// 纯递归模式 - 支持DNS劫持检测和TCP自动切换
 		return r.resolveWithCNAME(refreshCtx, question, ecs)
 	}
 }
@@ -3401,6 +3401,7 @@ func (r *RecursiveDNSServer) selectWeightedResult(results []UpstreamResult) Upst
 	return results[0]
 }
 
+// 修改4: 更新resolveWithCNAME方法 - 传递forceTCP参数
 func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	defer recoverPanic("CNAME解析")
 
@@ -3425,7 +3426,8 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 		}
 		visitedCNAMEs[currentName] = true
 
-		answer, authority, additional, validated, ecsResponse, err := r.recursiveQuery(ctx, currentQuestion, ecs, 0)
+		// 修改：初始使用UDP，如果检测到劫持会自动切换到TCP
+		answer, authority, additional, validated, ecsResponse, err := r.recursiveQuery(ctx, currentQuestion, ecs, 0, false)
 		if err != nil {
 			return nil, nil, nil, false, nil, err
 		}
@@ -3470,8 +3472,8 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, nil
 }
 
-// 递归查询方法 - 确认DNS劫持检查只检查不修改，直接拒绝
-func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+// 修改2: 更新recursiveQuery方法 - 添加forceTCP参数和TCP重试逻辑
+func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	if depth > r.config.Performance.MaxRecursion {
 		return nil, nil, nil, false, nil, fmt.Errorf("递归深度超限: %d", depth)
 	}
@@ -3487,15 +3489,15 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 	// 特殊处理根域名查询
 	if normalizedQname == "" {
 		logf(LogDebug, "🔍 查询根域名")
-		response, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs)
+		response, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
 		if err != nil {
 			return nil, nil, nil, false, nil, fmt.Errorf("查询根域名失败: %w", err)
 		}
 
-		// 应用DNS劫持预防检查 - 只检查不修改，直接拒绝可疑响应
+		// 应用DNS劫持预防检查 - 支持TCP重试
 		if r.hijackPrevention.IsEnabled() {
 			if valid, reason := r.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				return r.handleSuspiciousResponse(response, reason)
+				return r.handleSuspiciousResponse(response, reason, forceTCP)
 			}
 		}
 
@@ -3529,17 +3531,31 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 		default:
 		}
 
-		logf(LogDebug, "🔍 查询域 %s (查询目标: %s)，使用NS: %v", currentDomain, normalizedQname, nameservers[:min(len(nameservers), 3)])
+		tcpModeStr := ""
+		if forceTCP {
+			tcpModeStr = " (TCP模式)"
+		}
+		logf(LogDebug, "🔍 查询域 %s (查询目标: %s)%s，使用NS: %v", currentDomain, normalizedQname, tcpModeStr, nameservers[:min(len(nameservers), 3)])
 
-		response, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs)
+		response, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
 		if err != nil {
+			// 检查是否是DNS劫持检测错误，需要TCP重试
+			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
+				logf(LogInfo, "🔄 检测到DNS劫持，自动切换到TCP模式重试: %s", currentDomain)
+				return r.recursiveQuery(ctx, question, ecs, depth, true) // 递归调用，强制TCP
+			}
 			return nil, nil, nil, false, nil, fmt.Errorf("查询%s失败: %w", currentDomain, err)
 		}
 
-		// 应用DNS劫持预防检查 - 只检查不修改，直接拒绝可疑响应
+		// 应用DNS劫持预防检查 - 支持TCP重试
 		if r.hijackPrevention.IsEnabled() {
 			if valid, reason := r.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				return r.handleSuspiciousResponse(response, reason)
+				answer, authority, additional, validated, ecsResponse, err := r.handleSuspiciousResponse(response, reason, forceTCP)
+				if err != nil && !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
+					logf(LogInfo, "🔄 检测到DNS劫持，自动切换到TCP模式重试: %s", currentDomain)
+					return r.recursiveQuery(ctx, question, ecs, depth, true) // 递归调用，强制TCP
+				}
+				return answer, authority, additional, validated, ecsResponse, err
 			}
 		}
 
@@ -3565,7 +3581,11 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		if len(response.Answer) > 0 {
-			logf(LogDebug, "✅ 找到答案: %d条记录", len(response.Answer))
+			protocolStr := "UDP"
+			if forceTCP {
+				protocolStr = "TCP"
+			}
+			logf(LogDebug, "✅ 找到答案: %d条记录 (%s)", len(response.Answer), protocolStr)
 			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
@@ -3639,7 +3659,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 
 		// 如果Additional中没有地址，需要单独解析NS
 		if len(nextNS) == 0 {
-			nextNS = r.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth)
+			nextNS = r.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
 		}
 
 		if len(nextNS) == 0 {
@@ -3652,14 +3672,21 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 	}
 }
 
-// handleSuspiciousResponse方法 - 确认直接拒绝，不修改DNS响应
-func (r *RecursiveDNSServer) handleSuspiciousResponse(response *dns.Msg, reason string) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
-	logf(LogDebug, "🚫 拒绝可疑的DNS响应: %s", reason)
-	// 直接返回错误，不修改或返回任何DNS响应内容
-	return nil, nil, nil, false, nil, fmt.Errorf("检测到DNS劫持: %s", reason)
+// 修改1: 更新handleSuspiciousResponse方法 - 支持TCP重试标记
+func (r *RecursiveDNSServer) handleSuspiciousResponse(response *dns.Msg, reason string, currentlyTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+	if !currentlyTCP {
+		// 如果当前不是TCP模式，返回特殊错误以触发TCP重试
+		logf(LogWarn, "🛡️ 检测到DNS劫持，将切换到TCP模式重试: %s", reason)
+		return nil, nil, nil, false, nil, fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
+	} else {
+		// 如果TCP模式下仍然检测到劫持，直接拒绝
+		logf(LogError, "🚫 TCP模式下仍检测到DNS劫持，拒绝响应: %s", reason)
+		return nil, nil, nil, false, nil, fmt.Errorf("检测到DNS劫持(TCP模式): %s", reason)
+	}
 }
 
-func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption) (*dns.Msg, error) {
+// 修改3: 更新queryNameserversConcurrent方法 - 添加forceTCP参数
+func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption, forceTCP bool) (*dns.Msg, error) {
 	defer recoverPanic("nameserver并发查询")
 
 	if len(nameservers) == 0 {
@@ -3699,7 +3726,7 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 				Hdr: dns.RR_Header{
 					Name:   ".",
 					Rrtype: dns.TypeOPT,
-					Class:  UpstreamBufferSize, // 修改：使用UpstreamBufferSize向上游查询
+					Class:  UpstreamBufferSize, // 使用UpstreamBufferSize向上游查询
 				},
 			}
 			if r.config.Features.DNSSEC {
@@ -3719,8 +3746,19 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 
 			msg.Extra = append(msg.Extra, opt)
 
-			// 使用新的fallback查询方法
-			response, err := r.queryWithFallback(queryCtx, msg, ns)
+			var response *dns.Msg
+			var err error
+
+			if forceTCP {
+				// 强制使用TCP
+				tcpClient := r.connPool.GetTCP()
+				logf(LogDebug, "🔌 强制TCP查询: %s", ns)
+				response, _, err = tcpClient.ExchangeContext(queryCtx, msg, ns)
+			} else {
+				// 使用原有的fallback机制
+				response, err = r.queryWithFallback(queryCtx, msg, ns)
+			}
+
 			duration := time.Since(start)
 
 			result := QueryResult{
@@ -3741,12 +3779,20 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 		select {
 		case result := <-resultChan:
 			if result.Error != nil {
-				logf(LogDebug, "查询%s失败: %v (%v)", result.Server, result.Error, result.Duration)
+				protocolStr := "UDP"
+				if forceTCP {
+					protocolStr = "TCP"
+				}
+				logf(LogDebug, "查询%s失败(%s): %v (%v)", result.Server, protocolStr, result.Error, result.Duration)
 				continue
 			}
 
 			if result.Response.Rcode == dns.RcodeSuccess || result.Response.Rcode == dns.RcodeNameError {
-				logf(LogDebug, "✅ 查询%s成功 (%v)", result.Server, result.Duration)
+				protocolStr := "UDP"
+				if forceTCP {
+					protocolStr = "TCP"
+				}
+				logf(LogDebug, "✅ 查询%s成功(%s) (%v)", result.Server, protocolStr, result.Duration)
 				return result.Response, nil
 			}
 
@@ -3760,7 +3806,8 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 	return nil, errors.New("所有nameserver查询失败")
 }
 
-func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int) []string {
+// 修改5: 更新resolveNSAddressesConcurrent方法 - 传递forceTCP参数
+func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int, forceTCP bool) []string {
 	defer recoverPanic("NS地址并发解析")
 
 	resolveCount := len(nsRecords)
@@ -3790,7 +3837,7 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 			var addresses []string
 
 			nsQuestion := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-			if nsAnswer, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestion, nil, depth+1); err == nil {
+			if nsAnswer, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
 				for _, rr := range nsAnswer {
 					if a, ok := rr.(*dns.A); ok {
 						addresses = append(addresses, net.JoinHostPort(a.A.String(), "53"))
@@ -3800,7 +3847,7 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 
 			if r.config.Network.EnableIPv6 && len(addresses) == 0 {
 				nsQuestionV6 := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-				if nsAnswerV6, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1); err == nil {
+				if nsAnswerV6, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
 					for _, rr := range nsAnswerV6 {
 						if aaaa, ok := rr.(*dns.AAAA); ok {
 							addresses = append(addresses, net.JoinHostPort(aaaa.AAAA.String(), "53"))
