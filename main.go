@@ -878,7 +878,7 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 	switch strings.ToLower(subnet) {
 	case "auto":
 		if ip := detector.detectPublicIP(false); ip != nil {
-			logf(LogInfo, "🌍 检测到IPv4地址: %s", ip)
+			logf(LogDebug, "🌍 检测到IPv4地址: %s", ip)
 			return &ECSOption{
 				Family:       1,
 				SourcePrefix: 24,
@@ -887,7 +887,7 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 			}, nil
 		}
 		if ip := detector.detectPublicIP(true); ip != nil {
-			logf(LogInfo, "🌍 检测到IPv6地址: %s", ip)
+			logf(LogDebug, "🌍 检测到IPv6地址: %s", ip)
 			return &ECSOption{
 				Family:       2,
 				SourcePrefix: 64,
@@ -900,7 +900,7 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 
 	case "auto_v4":
 		if ip := detector.detectPublicIP(false); ip != nil {
-			logf(LogInfo, "🌍 检测到IPv4地址: %s", ip)
+			logf(LogDebug, "🌍 检测到IPv4地址: %s", ip)
 			return &ECSOption{
 				Family:       1,
 				SourcePrefix: 24,
@@ -913,7 +913,7 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 
 	case "auto_v6":
 		if ip := detector.detectPublicIP(true); ip != nil {
-			logf(LogInfo, "🌍 检测到IPv6地址: %s", ip)
+			logf(LogDebug, "🌍 检测到IPv6地址: %s", ip)
 			return &ECSOption{
 				Family:       2,
 				SourcePrefix: 64,
@@ -1017,7 +1017,7 @@ func loadConfig(filename string) (*ServerConfig, error) {
 	config := getDefaultConfig()
 
 	if filename == "" {
-		logf(LogInfo, "📄 使用默认配置（纯递归模式）")
+		logf(LogInfo, "📄 使用默认配置")
 		return config, nil
 	}
 
@@ -1474,7 +1474,7 @@ type DNSCache interface {
 type NullCache struct{}
 
 func NewNullCache() *NullCache {
-	logf(LogInfo, "🚫 启用无缓存模式")
+	logf(LogInfo, "🚫 无缓存模式")
 	return &NullCache{}
 }
 
@@ -2152,7 +2152,7 @@ func (r *RecursiveDNSServer) displayInfo() {
 	if len(servers) > 0 {
 		for _, server := range servers {
 			if server.IsRecursive() {
-				logf(LogInfo, "🔗 上游配置: %s (递归解析) - %s", server.Name, server.TrustPolicy)
+				logf(LogInfo, "🔗 上游服务器: %s (递归解析) - %s", server.Name, server.TrustPolicy)
 			} else {
 				logf(LogInfo, "🔗 上游服务器: %s (%s) - %s", server.Name, server.Address, server.TrustPolicy)
 			}
@@ -2883,7 +2883,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 		if err != nil {
 			// 检查是否需要TCP重试
 			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
-				logf(LogInfo, "🔄 检测到DNS劫持，自动切换到TCP模式重试: %s", currentDomain)
+				logf(LogDebug, "🔄 检测到DNS劫持，自动切换到TCP模式重试: %s", currentDomain)
 				return r.recursiveQuery(ctx, question, ecs, depth, true)
 			}
 			return nil, nil, nil, false, nil, fmt.Errorf("查询%s失败: %w", currentDomain, err)
@@ -2894,7 +2894,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			if valid, reason := r.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
 				answer, authority, additional, validated, ecsResponse, err := r.handleSuspiciousResponse(response, reason, forceTCP)
 				if err != nil && !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
-					logf(LogInfo, "🔄 检测到DNS劫持，自动切换到TCP模式重试: %s", currentDomain)
+					logf(LogDebug, "🔄 检测到DNS劫持，自动切换到TCP模式重试: %s", currentDomain)
 					return r.recursiveQuery(ctx, question, ecs, depth, true)
 				}
 				return answer, authority, additional, validated, ecsResponse, err
@@ -3262,7 +3262,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "用法:\n")
 		fmt.Fprintf(os.Stderr, "  %s -config <配置文件>     # 使用配置文件启动\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -generate-config       # 生成示例配置文件\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s                         # 使用默认配置启动（纯递归模式）\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s                         # 使用默认配置启动\n\n", os.Args[0])
 	}
 
 	flag.Parse()
