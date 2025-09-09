@@ -311,48 +311,123 @@ func (btm *BackgroundTaskManager) Shutdown() {
 	}
 }
 
-// 简化的IP检测器 - 仅使用Cloudflare
+// 合并的IP检测器 - 支持Google DNS和Cloudflare HTTP fallback
 type IPDetector struct {
-	client *http.Client
+	dnsClient  *dns.Client
+	httpClient *http.Client
 }
 
 func NewIPDetector() *IPDetector {
-	// 创建支持双栈的基础客户端
 	return &IPDetector{
-		client: &http.Client{
-			Timeout: 8 * time.Second,
+		dnsClient: &dns.Client{
+			Timeout: 3 * time.Second,
+			Net:     "udp",
+			UDPSize: UpstreamBufferSize,
+		},
+		httpClient: &http.Client{
+			Timeout: 5 * time.Second,
 			Transport: &http.Transport{
 				DialContext: (&net.Dialer{
-					Timeout: 5 * time.Second,
+					Timeout: 3 * time.Second,
 				}).DialContext,
-				TLSHandshakeTimeout: 3 * time.Second,
+				TLSHandshakeTimeout: 2 * time.Second,
 			},
 		},
 	}
 }
 
-// 从Cloudflare检测IP，支持强制版本
-func (d *IPDetector) getIPFromCloudflare(forceIPv6 bool) net.IP {
+// 通用的公网IP检测方法，优先Google DNS，fallback到Cloudflare
+func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
+	// 方法1: 优先尝试Google DNS查询 (更快，更可靠)
+	if ip := d.tryGoogleDNS(forceIPv6); ip != nil {
+		logf(LogDebug, "✅ Google DNS检测成功: %s", ip)
+		return ip
+	}
+
+	logf(LogDebug, "Google DNS检测失败，尝试Cloudflare HTTP...")
+
+	// 方法2: Fallback到Cloudflare HTTP API
+	if ip := d.tryCloudflareHTTP(forceIPv6); ip != nil {
+		logf(LogDebug, "✅ Cloudflare HTTP检测成功: %s", ip)
+		return ip
+	}
+
+	logf(LogDebug, "所有IP检测方法都失败")
+	return nil
+}
+
+// Google DNS检测方法
+func (d *IPDetector) tryGoogleDNS(forceIPv6 bool) net.IP {
+	// Google DNS 服务器地址 (ns1.google.com)
+	var server string
+	if forceIPv6 {
+		server = "[2001:4860:4802:32::a]:53" // IPv6
+	} else {
+		server = "216.239.32.10:53" // IPv4
+	}
+
+	// 创建查询消息
+	msg := new(dns.Msg)
+	msg.SetQuestion("o-o.myaddr.l.google.com.", dns.TypeTXT)
+	msg.RecursionDesired = true
+
+	// 执行查询
+	response, _, err := d.dnsClient.Exchange(msg, server)
+	if err != nil {
+		logf(LogDebug, "Google DNS查询失败: %v", err)
+		return nil
+	}
+
+	if response.Rcode != dns.RcodeSuccess {
+		logf(LogDebug, "Google DNS查询返回错误: %s", dns.RcodeToString[response.Rcode])
+		return nil
+	}
+
+	// 解析TXT记录
+	for _, rr := range response.Answer {
+		if txt, ok := rr.(*dns.TXT); ok {
+			for _, record := range txt.Txt {
+				// 移除可能的引号
+				record = strings.Trim(record, "\"")
+				if ip := net.ParseIP(record); ip != nil {
+					// 验证IP版本
+					if forceIPv6 && ip.To4() != nil {
+						continue // 期望IPv6但得到IPv4
+					}
+					if !forceIPv6 && ip.To4() == nil {
+						continue // 期望IPv4但得到IPv6
+					}
+					return ip
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// Cloudflare HTTP检测方法
+func (d *IPDetector) tryCloudflareHTTP(forceIPv6 bool) net.IP {
 	// 创建版本特定的客户端
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: 5 * time.Second}
+			dialer := &net.Dialer{Timeout: 3 * time.Second}
 			if forceIPv6 {
 				return dialer.DialContext(ctx, "tcp6", addr)
 			}
 			return dialer.DialContext(ctx, "tcp4", addr)
 		},
-		TLSHandshakeTimeout: 3 * time.Second,
+		TLSHandshakeTimeout: 2 * time.Second,
 	}
 
 	client := &http.Client{
-		Timeout:   8 * time.Second,
+		Timeout:   5 * time.Second,
 		Transport: transport,
 	}
 
 	resp, err := client.Get("https://api.cloudflare.com/cdn-cgi/trace")
 	if err != nil {
-		logf(LogDebug, "Cloudflare检测失败: %v", err)
+		logf(LogDebug, "Cloudflare HTTP请求失败: %v", err)
 		return nil
 	}
 	defer resp.Body.Close()
@@ -922,7 +997,7 @@ func ParseECS(opt *dns.EDNS0_SUBNET) *ECSOption {
 	}
 }
 
-// 修改的parseDefaultECS函数，支持auto预设
+// 修改的parseDefaultECS函数，使用合并的IP检测方法
 func parseDefaultECS(subnet string) (*ECSOption, error) {
 	if subnet == "" {
 		return nil, nil
@@ -936,7 +1011,7 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 		logf(LogInfo, "🌍 自动检测ECS地址 (优先IPv4)...")
 
 		// 先尝试IPv4
-		if ip := detector.getIPFromCloudflare(false); ip != nil {
+		if ip := detector.detectPublicIP(false); ip != nil {
 			logf(LogInfo, "🌍 检测到IPv4地址: %s", ip)
 			return &ECSOption{
 				Family:       1,
@@ -949,7 +1024,7 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 		logf(LogDebug, "IPv4检测失败，尝试IPv6...")
 
 		// IPv4失败，尝试IPv6
-		if ip := detector.getIPFromCloudflare(true); ip != nil {
+		if ip := detector.detectPublicIP(true); ip != nil {
 			logf(LogInfo, "🌍 检测到IPv6地址: %s", ip)
 			return &ECSOption{
 				Family:       2,
@@ -964,7 +1039,7 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 
 	case "auto_v4":
 		logf(LogInfo, "🌍 尝试自动检测IPv4地址用于ECS...")
-		if ip := detector.getIPFromCloudflare(false); ip != nil {
+		if ip := detector.detectPublicIP(false); ip != nil {
 			logf(LogInfo, "🌍 检测到IPv4地址: %s", ip)
 			return &ECSOption{
 				Family:       1,
@@ -978,7 +1053,7 @@ func parseDefaultECS(subnet string) (*ECSOption, error) {
 
 	case "auto_v6":
 		logf(LogInfo, "🌍 尝试自动检测IPv6地址用于ECS...")
-		if ip := detector.getIPFromCloudflare(true); ip != nil {
+		if ip := detector.detectPublicIP(true); ip != nil {
 			logf(LogInfo, "🌍 检测到IPv6地址: %s", ip)
 			return &ECSOption{
 				Family:       2,
