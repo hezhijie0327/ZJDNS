@@ -719,6 +719,9 @@ func (shp *DNSHijackPrevention) CheckResponse(currentDomain, queryDomain string,
 
 	// 检查根服务器是否越权返回最终记录
 	if currentDomain == "" && queryDomain != "" {
+		// 添加根服务器查询的例外处理
+		isRootServerQuery := strings.HasSuffix(queryDomain, ".root-servers.net") || queryDomain == "root-servers.net"
+
 		for _, rr := range response.Answer {
 			answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
 			if answerName == queryDomain {
@@ -726,6 +729,12 @@ func (shp *DNSHijackPrevention) CheckResponse(currentDomain, queryDomain string,
 				if rr.Header().Rrtype == dns.TypeNS || rr.Header().Rrtype == dns.TypeDS {
 					continue
 				}
+
+				// 允许根服务器返回自身的A/AAAA记录
+				if isRootServerQuery && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
+					continue
+				}
+
 				recordType := dns.TypeToString[rr.Header().Rrtype]
 				reason := fmt.Sprintf("根服务器越权返回了 '%s' 的%s记录", queryDomain, recordType)
 				logf(LogDebug, "🚨 检测到DNS劫持: %s", reason)
