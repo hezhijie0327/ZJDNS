@@ -51,20 +51,116 @@ const (
 	ColorCyan   = "\033[36m"
 )
 
-// 系统常量
+// ==================== 系统常量统一管理 ====================
+
+// 网络和协议常量
 const (
-	MaxRetries           = 3
-	ClientBufferSize     = 1232 // 响应给客户端的buffer size
-	UpstreamBufferSize   = 4096 // 向上游查询的buffer size
-	MaxCNAMEChain        = 16   // 统一的递归和CNAME链限制
-	RecursiveAddress     = "recursive"
-	MaxCacheKeySize      = 512
-	MaxDomainLength      = 253
-	MaxConcurrentQueries = 10000
-	MaxBackgroundWorkers = 50
-	WorkerQueueSize      = 1000
-	QueryTimeout         = 5 * time.Second // 固定查询超时
-	MaxConcurrent        = 5               // 固定最大并发数
+	DefaultDNSPort     = "53"
+	RecursiveAddress   = "recursive"
+	ClientBufferSize   = 1232 // 响应给客户端的buffer size
+	UpstreamBufferSize = 4096 // 向上游查询的buffer size
+	MaxDomainLength    = 253  // RFC规定的最大域名长度
+	MaxCacheKeySize    = 512  // 缓存键最大长度
+	DNSHeaderSize      = 12   // DNS头部大小
+)
+
+// 并发和性能常量
+const (
+	MaxConcurrentQueries    = 10000 // 最大并发查询数
+	MaxBackgroundWorkers    = 50    // 最大后台工作协程数
+	WorkerQueueSize         = 1000  // 工作队列大小
+	DefaultMaxConcurrency   = 1000  // 默认最大并发数
+	DefaultConnPoolSize     = 100   // 默认连接池大小
+	MaxQueryConcurrency     = 5     // 单次查询最大并发数
+	MaxNSResolveConcurrency = 3     // NS解析最大并发数
+)
+
+// 查询和解析常量
+const (
+	MaxCNAMEChain     = 16 // 统一的递归和CNAME链限制
+	MaxRecursiveDepth = 16 // 最大递归深度
+	MaxNSResolveCount = 3  // 最大NS解析数量
+)
+
+// 超时时间常量
+const (
+	DefaultQueryTimeout   = 5 * time.Second        // 默认查询超时
+	ShortTimeout          = 2 * time.Second        // 短超时时间
+	StandardTimeout       = 3 * time.Second        // 标准超时时间
+	MediumTimeout         = 5 * time.Second        // 中等超时时间
+	LongTimeout           = 10 * time.Second       // 长超时时间
+	ExtendedTimeout       = 25 * time.Second       // 扩展超时时间
+	RecursiveQueryTimeout = 30 * time.Second       // 递归查询超时
+	ServerStartupDelay    = 100 * time.Millisecond // 服务器启动延迟
+	ShutdownTimeout       = 10 * time.Second       // 关闭超时
+	TLSHandshakeTimeout   = 2 * time.Second        // TLS握手超时
+	RefreshInterval       = 5 * time.Minute        // 刷新间隔
+	BackgroundTaskTimeout = 10 * time.Second       // 后台任务超时
+)
+
+// 缓存和TTL常量
+const (
+	DefaultTTL           = 3600   // 默认TTL (1小时)
+	MinTTL               = 0      // 最小TTL
+	MaxTTL               = 0      // 最大TTL (0表示不限制)
+	StaleTTL             = 30     // 过期缓存TTL
+	StaleMaxAge          = 604800 // 过期缓存最大保存时间 (1周)
+	CacheRefreshInterval = 300    // 缓存刷新间隔 (5分钟)
+	CacheAccessThrottle  = 100    // 缓存访问节流时间(毫秒)
+)
+
+// 容量和大小限制常量
+const (
+	SmallSliceCapacity  = 8           // 小切片初始容量
+	MediumSliceCapacity = 16          // 中等切片初始容量
+	LargeSliceCapacity  = 32          // 大切片初始容量
+	ExtraLargeCapacity  = 100         // 超大容量
+	SmallMapCapacity    = 32          // 小映射初始容量
+	LargeMapCapacity    = 1024        // 大映射初始容量
+	MaxLineLength       = 128         // 最大行长度
+	MaxConfigFileSize   = 1024 * 1024 // 最大配置文件大小 (1MB)
+	MaxRegexLength      = 100         // 最大正则表达式长度
+	StackBufferSize     = 4096        // 栈缓冲区大小
+	ScannerBufferSize   = 64 * 1024   // 扫描器缓冲区大小
+	ScannerMaxTokenSize = 1024 * 1024 // 扫描器最大token大小
+)
+
+// Redis连接常量
+const (
+	RedisPoolSize      = 50              // Redis连接池大小
+	RedisMinIdleConns  = 10              // Redis最小空闲连接
+	RedisMaxRetries    = 3               // Redis最大重试次数
+	RedisPoolTimeout   = 5 * time.Second // Redis连接池超时
+	RedisReadTimeout   = 3 * time.Second // Redis读超时
+	RedisWriteTimeout  = 3 * time.Second // Redis写超时
+	RedisDialTimeout   = 5 * time.Second // Redis拨号超时
+	RefreshQueueSize   = 1000            // 刷新队列大小
+	RefreshWorkerCount = 10              // 最大刷新工作线程数
+)
+
+// IP检测和网络常量
+const (
+	IPDetectionTimeout = 3 * time.Second // IP检测超时
+	HTTPClientTimeout  = 5 * time.Second // HTTP客户端超时
+	IPCacheExpiration  = 5 * time.Minute // IP检测缓存过期时间
+	MaxTrustedCIDRsV4  = 1024            // 最大可信IPv4 CIDR数量
+	MaxTrustedCIDRsV6  = 256             // 最大可信IPv6 CIDR数量
+)
+
+// DNS记录和响应常量
+const (
+	DefaultIPv4Prefix = 24  // 默认IPv4前缀长度
+	DefaultIPv6Prefix = 64  // 默认IPv6前缀长度
+	MaxAnswerRecords  = 100 // 最大答案记录数
+	MaxNSRecords      = 10  // 最大NS记录数
+)
+
+// 错误重试和限制常量
+const (
+	MaxRetryAttempts    = 3   // 最大重试次数
+	MaxFilePathLength   = 256 // 最大文件路径长度
+	MaxRuleCount        = 100 // 最大重写规则数量
+	RefreshQueueTimeout = 600 // 刷新队列超时 (10分钟)
 )
 
 // 全局日志配置
@@ -107,7 +203,7 @@ func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
 		Domain:    domain,
 		QueryType: qtype,
 		ClientIP:  clientIP,
-		Steps:     make([]string, 0, 10),
+		Steps:     make([]string, 0, SmallSliceCapacity),
 	}
 }
 
@@ -121,7 +217,7 @@ func (rt *RequestTracker) AddStep(step string, args ...interface{}) {
 	rt.Steps = append(rt.Steps, stepMsg)
 
 	// 输出debug日志
-	logf(LogDebug, "🔍 [%s] %s", rt.ID[:8], stepMsg)
+	logf(LogDebug, "🔍 [%s] %s", rt.ID[:SmallSliceCapacity], stepMsg)
 }
 
 // Finish 完成请求追踪
@@ -142,7 +238,7 @@ func (rt *RequestTracker) logSummary() {
 	}
 
 	logf(LogInfo, "📊 [%s] 查询完成: %s %s | 缓存:%s | 耗时:%v | 上游:%s",
-		rt.ID[:8], rt.Domain, rt.QueryType, cacheStatus, rt.ResponseTime, rt.Upstream)
+		rt.ID[:SmallSliceCapacity], rt.Domain, rt.QueryType, cacheStatus, rt.ResponseTime, rt.Upstream)
 }
 
 // generateRequestID 生成请求ID
@@ -218,7 +314,7 @@ func (se *SafeExecutor) Execute(fn func() error) error {
 				}()
 
 				logf(LogError, "🚨 Panic恢复 [%s]: %v", se.operation, r)
-				buf := make([]byte, 4096)
+				buf := make([]byte, StackBufferSize)
 				n := runtime.Stack(buf, false)
 				logf(LogError, "调用栈: %s", string(buf[:n]))
 			}()
@@ -270,17 +366,17 @@ func NewObjectPoolManager() *ObjectPoolManager {
 		},
 		rrSlices: sync.Pool{
 			New: func() interface{} {
-				return make([]*CompactDNSRecord, 0, 16)
+				return make([]*CompactDNSRecord, 0, MediumSliceCapacity)
 			},
 		},
 		stringSlices: sync.Pool{
 			New: func() interface{} {
-				return make([]string, 0, 8)
+				return make([]string, 0, SmallSliceCapacity)
 			},
 		},
 		stringMaps: sync.Pool{
 			New: func() interface{} {
-				return make(map[string]bool, 32)
+				return make(map[string]bool, SmallMapCapacity)
 			},
 		},
 		dnsMessages: sync.Pool{
@@ -300,7 +396,7 @@ func (pm *ObjectPoolManager) GetStringBuilder() *strings.Builder {
 
 // PutStringBuilder 归还字符串构建器
 func (pm *ObjectPoolManager) PutStringBuilder(builder *strings.Builder) {
-	if builder.Cap() < 1024 { // 防止内存泄漏
+	if builder.Cap() < LargeSliceCapacity*SmallMapCapacity { // 防止内存泄漏
 		pm.stringBuilders.Put(builder)
 	}
 }
@@ -313,7 +409,7 @@ func (pm *ObjectPoolManager) GetRRSlice() []*CompactDNSRecord {
 
 // PutRRSlice 归还RR切片
 func (pm *ObjectPoolManager) PutRRSlice(slice []*CompactDNSRecord) {
-	if cap(slice) < 100 { // 防止内存泄漏
+	if cap(slice) < ExtraLargeCapacity { // 防止内存泄漏
 		pm.rrSlices.Put(slice)
 	}
 }
@@ -330,7 +426,7 @@ func (pm *ObjectPoolManager) GetStringMap() map[string]bool {
 
 // PutStringMap 归还字符串映射
 func (pm *ObjectPoolManager) PutStringMap(m map[string]bool) {
-	if len(m) < 50 { // 防止内存泄漏
+	if len(m) < MaxRuleCount/2 { // 防止内存泄漏
 		pm.stringMaps.Put(m)
 	}
 }
@@ -611,11 +707,11 @@ func (em *ECSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption,
 	// 检测IPv4或IPv6
 	if ip = em.detector.detectPublicIP(forceIPv6); ip != nil {
 		family := uint16(1)
-		prefix := uint8(24)
+		prefix := uint8(DefaultIPv4Prefix)
 
 		if forceIPv6 {
 			family = 2
-			prefix = 64
+			prefix = DefaultIPv6Prefix
 		}
 
 		ecs = &ECSOption{
@@ -633,18 +729,18 @@ func (em *ECSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption,
 		if ip = em.detector.detectPublicIP(true); ip != nil {
 			ecs = &ECSOption{
 				Family:       2,
-				SourcePrefix: 64,
-				ScopePrefix:  64,
+				SourcePrefix: DefaultIPv6Prefix,
+				ScopePrefix:  DefaultIPv6Prefix,
 				Address:      ip,
 			}
 			logf(LogDebug, "🌍 回退检测到IPv6地址: %s", ip)
 		}
 	}
 
-	// 缓存结果（5分钟）
+	// 缓存结果
 	if ecs != nil {
 		em.cache.Store(cacheKey, ecs)
-		time.AfterFunc(5*time.Minute, func() {
+		time.AfterFunc(IPCacheExpiration, func() {
 			em.cache.Delete(cacheKey)
 		})
 	} else {
@@ -889,17 +985,17 @@ type IPDetector struct {
 func NewIPDetector() *IPDetector {
 	return &IPDetector{
 		dnsClient: &dns.Client{
-			Timeout: 3 * time.Second,
+			Timeout: IPDetectionTimeout,
 			Net:     "udp",
 			UDPSize: UpstreamBufferSize,
 		},
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout: HTTPClientTimeout,
 			Transport: &http.Transport{
 				DialContext: (&net.Dialer{
-					Timeout: 3 * time.Second,
+					Timeout: IPDetectionTimeout,
 				}).DialContext,
-				TLSHandshakeTimeout: 2 * time.Second,
+				TLSHandshakeTimeout: TLSHandshakeTimeout,
 			},
 		},
 	}
@@ -925,9 +1021,9 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 func (d *IPDetector) tryGoogleDNS(forceIPv6 bool) net.IP {
 	var server string
 	if forceIPv6 {
-		server = "[2001:4860:4802:32::a]:53"
+		server = "[2001:4860:4802:32::a]:" + DefaultDNSPort
 	} else {
-		server = "216.239.32.10:53"
+		server = "216.239.32.10:" + DefaultDNSPort
 	}
 
 	msg := new(dns.Msg)
@@ -961,17 +1057,17 @@ func (d *IPDetector) tryGoogleDNS(forceIPv6 bool) net.IP {
 func (d *IPDetector) tryCloudflareHTTP(forceIPv6 bool) net.IP {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: 3 * time.Second}
+			dialer := &net.Dialer{Timeout: IPDetectionTimeout}
 			if forceIPv6 {
 				return dialer.DialContext(ctx, "tcp6", addr)
 			}
 			return dialer.DialContext(ctx, "tcp4", addr)
 		},
-		TLSHandshakeTimeout: 2 * time.Second,
+		TLSHandshakeTimeout: TLSHandshakeTimeout,
 	}
 
 	client := &http.Client{
-		Timeout:   5 * time.Second,
+		Timeout:   HTTPClientTimeout,
 		Transport: transport,
 	}
 
@@ -1083,7 +1179,7 @@ type BackgroundTaskManager struct {
 }
 
 func NewBackgroundTaskManager() *BackgroundTaskManager {
-	workers := runtime.NumCPU() // 固定使用CPU核数
+	workers := runtime.NumCPU() // 使用CPU核数
 	if workers > MaxBackgroundWorkers {
 		workers = MaxBackgroundWorkers
 	}
@@ -1143,7 +1239,7 @@ func (btm *BackgroundTaskManager) Shutdown() {
 	select {
 	case <-done:
 		logf(LogInfo, "✅ 后台任务管理器已安全关闭")
-	case <-time.After(10 * time.Second):
+	case <-time.After(BackgroundTaskTimeout):
 		logf(LogWarn, "⏰ 后台任务管理器关闭超时")
 	}
 }
@@ -1158,8 +1254,8 @@ type IPFilter struct {
 
 func NewIPFilter() *IPFilter {
 	return &IPFilter{
-		trustedCIDRs:   make([]*net.IPNet, 0, 1024),
-		trustedCIDRsV6: make([]*net.IPNet, 0, 256),
+		trustedCIDRs:   make([]*net.IPNet, 0, MaxTrustedCIDRsV4),
+		trustedCIDRsV6: make([]*net.IPNet, 0, MaxTrustedCIDRsV6),
 	}
 }
 
@@ -1182,16 +1278,16 @@ func (f *IPFilter) LoadCIDRs(filename string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.trustedCIDRs = make([]*net.IPNet, 0, 1024)
-	f.trustedCIDRsV6 = make([]*net.IPNet, 0, 256)
+	f.trustedCIDRs = make([]*net.IPNet, 0, MaxTrustedCIDRsV4)
+	f.trustedCIDRsV6 = make([]*net.IPNet, 0, MaxTrustedCIDRsV6)
 
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, ScannerBufferSize), ScannerMaxTokenSize)
 	var totalV4, totalV6 int
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || len(line) > 128 {
+		if line == "" || strings.HasPrefix(line, "#") || len(line) > MaxLineLength {
 			continue
 		}
 
@@ -1295,7 +1391,7 @@ const (
 	RewritePrefix
 )
 
-// RewriteRule 重写规则（简化版本）
+// RewriteRule 重写规则
 type RewriteRule struct {
 	Type        RewriteRuleType `json:"-"`
 	TypeString  string          `json:"type"`
@@ -1311,7 +1407,7 @@ type DNSRewriter struct {
 
 func NewDNSRewriter() *DNSRewriter {
 	return &DNSRewriter{
-		rules: make([]RewriteRule, 0, 32),
+		rules: make([]RewriteRule, 0, LargeSliceCapacity),
 	}
 }
 
@@ -1334,7 +1430,7 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 			rule.Type = RewritePrefix
 		case "regex":
 			rule.Type = RewriteRegex
-			if len(rule.Pattern) > 100 {
+			if len(rule.Pattern) > MaxRegexLength {
 				return fmt.Errorf("重写规则 %d 正则表达式过于复杂", i)
 			}
 			regex, err := regexp.Compile(rule.Pattern)
@@ -1349,7 +1445,6 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 		validRules = append(validRules, rule)
 	}
 
-	// 规则按定义顺序执行，无需排序
 	r.rules = validRules
 	logf(LogInfo, "🔄 DNS重写器加载完成: %d条规则", len(validRules))
 	return nil
@@ -1464,7 +1559,7 @@ func (shp *DNSHijackPrevention) CheckResponse(currentDomain, queryDomain string,
 
 // ==================== 上游服务器管理 ====================
 
-// UpstreamServer 上游服务器配置（简化版本）
+// UpstreamServer 上游服务器配置
 type UpstreamServer struct {
 	Address string `json:"address"`
 	Policy  string `json:"policy"`
@@ -1575,7 +1670,7 @@ func loadConfig(filename string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("读取配置文件失败: %w", err)
 	}
 
-	if len(data) > 1024*1024 {
+	if len(data) > MaxConfigFileSize {
 		return nil, fmt.Errorf("配置文件过大: %d bytes", len(data))
 	}
 
@@ -1657,19 +1752,19 @@ func validateConfig(config *ServerConfig) error {
 func getDefaultConfig() *ServerConfig {
 	config := &ServerConfig{}
 
-	config.Server.Port = "53"
+	config.Server.Port = DefaultDNSPort
 	config.Server.IPv6 = true
 	config.Server.DefaultECS = "auto"
 
-	config.TTL.DefaultTTL = 3600
-	config.TTL.MinTTL = 0
-	config.TTL.MaxTTL = 0
-	config.TTL.StaleTTL = 30
-	config.TTL.StaleMaxAge = 604800
+	config.TTL.DefaultTTL = DefaultTTL
+	config.TTL.MinTTL = MinTTL
+	config.TTL.MaxTTL = MaxTTL
+	config.TTL.StaleTTL = StaleTTL
+	config.TTL.StaleMaxAge = StaleMaxAge
 
-	config.Performance.MaxConcurrency = 1000
-	config.Performance.ConnPoolSize = 100
-	config.Performance.QueryTimeout = 5
+	config.Performance.MaxConcurrency = DefaultMaxConcurrency
+	config.Performance.ConnPoolSize = DefaultConnPoolSize
+	config.Performance.QueryTimeout = int(DefaultQueryTimeout / time.Second)
 
 	config.Logging.Level = "info"
 
@@ -1696,6 +1791,10 @@ func isValidFilePath(path string) bool {
 		strings.HasPrefix(path, "/etc/") ||
 		strings.HasPrefix(path, "/proc/") ||
 		strings.HasPrefix(path, "/sys/") {
+		return false
+	}
+
+	if len(path) > MaxFilePathLength {
 		return false
 	}
 
@@ -1882,13 +1981,13 @@ func (c *CacheEntry) IsStale(maxAge int) bool {
 func (c *CacheEntry) ShouldRefresh() bool {
 	now := time.Now().Unix()
 	return c.IsExpired() &&
-		(now-c.Timestamp) > int64(c.TTL+300) &&
-		(now-c.RefreshTime) > 600
+		(now-c.Timestamp) > int64(c.TTL+CacheRefreshInterval) &&
+		(now-c.RefreshTime) > RefreshQueueTimeout
 }
 
 func (c *CacheEntry) ShouldUpdateAccessInfo() bool {
 	now := time.Now().UnixMilli()
-	return now-c.LastUpdateTime > 100 // 固定100ms节流
+	return now-c.LastUpdateTime > CacheAccessThrottle
 }
 
 func (c *CacheEntry) GetRemainingTTL(staleTTL int) uint32 {
@@ -1989,16 +2088,16 @@ func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisD
 		Addr:         config.Redis.Address,
 		Password:     config.Redis.Password,
 		DB:           config.Redis.Database,
-		PoolSize:     50,              // 固定值
-		MinIdleConns: 10,              // 固定值
-		MaxRetries:   3,               // 固定值
-		PoolTimeout:  5 * time.Second, // 固定值
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-		DialTimeout:  5 * time.Second,
+		PoolSize:     RedisPoolSize,
+		MinIdleConns: RedisMinIdleConns,
+		MaxRetries:   RedisMaxRetries,
+		PoolTimeout:  RedisPoolTimeout,
+		ReadTimeout:  RedisReadTimeout,
+		WriteTimeout: RedisWriteTimeout,
+		DialTimeout:  RedisDialTimeout,
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), MediumTimeout)
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
@@ -2011,7 +2110,7 @@ func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisD
 		config:       config,
 		ttlCalc:      NewTTLCalculator(config),
 		keyPrefix:    config.Redis.KeyPrefix,
-		refreshQueue: make(chan RefreshRequest, 1000),
+		refreshQueue: make(chan RefreshRequest, RefreshQueueSize),
 		ctx:          cacheCtx,
 		cancel:       cacheCancel,
 		bgManager:    NewBackgroundTaskManager(),
@@ -2028,8 +2127,8 @@ func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisD
 
 func (rc *RedisDNSCache) startRefreshProcessor() {
 	workerCount := runtime.NumCPU()
-	if workerCount > 10 {
-		workerCount = 10
+	if workerCount > RefreshWorkerCount {
+		workerCount = RefreshWorkerCount
 	}
 
 	for i := 0; i < workerCount; i++ {
@@ -2259,7 +2358,7 @@ func (rc *RedisDNSCache) Shutdown() {
 
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(BackgroundTaskTimeout):
 		logf(LogWarn, "Redis缓存关闭超时")
 	}
 
@@ -2404,7 +2503,7 @@ type RecursiveDNSServer struct {
 func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	defer recoverPanic("缓存刷新查询")
 
-	refreshCtx, cancel := context.WithTimeout(r.ctx, 25*time.Second)
+	refreshCtx, cancel := context.WithTimeout(r.ctx, ExtendedTimeout)
 	defer cancel()
 
 	servers := r.upstreamManager.GetServers()
@@ -2418,15 +2517,15 @@ func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOpti
 func NewRecursiveDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 	// Root servers
 	rootServersV4 := []string{
-		"198.41.0.4:53", "170.247.170.2:53", "192.33.4.12:53", "199.7.91.13:53",
-		"192.203.230.10:53", "192.5.5.241:53", "192.112.36.4:53", "198.97.190.53:53",
-		"192.36.148.17:53", "192.58.128.30:53", "193.0.14.129:53", "199.7.83.42:53", "202.12.27.33:53",
+		"198.41.0.4:" + DefaultDNSPort, "170.247.170.2:" + DefaultDNSPort, "192.33.4.12:" + DefaultDNSPort, "199.7.91.13:" + DefaultDNSPort,
+		"192.203.230.10:" + DefaultDNSPort, "192.5.5.241:" + DefaultDNSPort, "192.112.36.4:" + DefaultDNSPort, "198.97.190.53:" + DefaultDNSPort,
+		"192.36.148.17:" + DefaultDNSPort, "192.58.128.30:" + DefaultDNSPort, "193.0.14.129:" + DefaultDNSPort, "199.7.83.42:" + DefaultDNSPort, "202.12.27.33:" + DefaultDNSPort,
 	}
 
 	rootServersV6 := []string{
-		"[2001:503:ba3e::2:30]:53", "[2801:1b8:10::b]:53", "[2001:500:2::c]:53", "[2001:500:2d::d]:53",
-		"[2001:500:a8::e]:53", "[2001:500:2f::f]:53", "[2001:500:12::d0d]:53", "[2001:500:1::53]:53",
-		"[2001:7fe::53]:53", "[2001:503:c27::2:30]:53", "[2001:7fd::1]:53", "[2001:500:9f::42]:53", "[2001:dc3::35]:53",
+		"[2001:503:ba3e::2:30]:" + DefaultDNSPort, "[2801:1b8:10::b]:" + DefaultDNSPort, "[2001:500:2::c]:" + DefaultDNSPort, "[2001:500:2d::d]:" + DefaultDNSPort,
+		"[2001:500:a8::e]:" + DefaultDNSPort, "[2001:500:2f::f]:" + DefaultDNSPort, "[2001:500:12::d0d]:" + DefaultDNSPort, "[2001:500:1::53]:" + DefaultDNSPort,
+		"[2001:7fe::53]:" + DefaultDNSPort, "[2001:503:c27::2:30]:" + DefaultDNSPort, "[2001:7fd::1]:" + DefaultDNSPort, "[2001:500:9f::42]:" + DefaultDNSPort, "[2001:dc3::35]:" + DefaultDNSPort,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2525,7 +2624,7 @@ func (r *RecursiveDNSServer) setupSignalHandling() {
 			r.cancel()
 			r.cache.Shutdown()
 			r.backgroundManager.Shutdown()
-			r.goroutineManager.Shutdown(10 * time.Second)
+			r.goroutineManager.Shutdown(ShutdownTimeout)
 
 			done := make(chan struct{})
 			go func() {
@@ -2536,7 +2635,7 @@ func (r *RecursiveDNSServer) setupSignalHandling() {
 			select {
 			case <-done:
 				logf(LogInfo, "✅ 所有goroutine已安全关闭")
-			case <-time.After(10 * time.Second):
+			case <-time.After(ShutdownTimeout):
 				logf(LogWarn, "⏰ goroutine关闭超时")
 			}
 
@@ -2604,7 +2703,7 @@ func (r *RecursiveDNSServer) Start() error {
 		}
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(ServerStartupDelay)
 	logf(LogInfo, "✅ DNS服务器启动完成！")
 
 	go func() {
@@ -2876,7 +2975,7 @@ func (r *RecursiveDNSServer) handleCacheMiss(msg *dns.Msg, question dns.Question
 		if tracker != nil {
 			tracker.AddStep("使用递归解析")
 		}
-		ctx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
+		ctx, cancel := context.WithTimeout(r.ctx, RecursiveQueryTimeout)
 		defer cancel()
 		answer, authority, additional, validated, ecsResponse, err = r.resolveWithCNAME(ctx, question, ecsOpt, tracker)
 	}
@@ -2981,7 +3080,7 @@ func (r *RecursiveDNSServer) restoreOriginalDomain(msg *dns.Msg, questionName, o
 
 // ==================== DNS查询实现 ====================
 
-// queryUpstreamServers 查询上游服务器（简化为prefer_trusted策略）
+// queryUpstreamServers 查询上游服务器
 func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *ECSOption,
 	serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 
@@ -2990,7 +3089,7 @@ func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *EC
 		return nil, nil, nil, false, nil, errors.New("没有可用的上游服务器")
 	}
 
-	maxConcurrent := MaxConcurrent
+	maxConcurrent := MaxQueryConcurrency
 	if maxConcurrent > len(servers) {
 		maxConcurrent = len(servers)
 	}
@@ -3000,7 +3099,7 @@ func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *EC
 	}
 
 	resultChan := make(chan UpstreamResult, maxConcurrent)
-	ctx, cancel := context.WithTimeout(r.ctx, QueryTimeout)
+	ctx, cancel := context.WithTimeout(r.ctx, DefaultQueryTimeout)
 	defer cancel()
 
 	// 启动并发查询
@@ -3083,11 +3182,11 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 			r.ecsManager.AddToMessage(response, ecsResponse, serverDNSSECEnabled)
 		}
 	} else {
-		// 上游服务器查询（固定5秒超时）
+		// 上游服务器查询
 		msg := r.messageBuilder.BuildQuery(question, ecs, serverDNSSECEnabled, true)
 		defer r.messageBuilder.ReleaseMessage(msg)
 
-		queryCtx, queryCancel := context.WithTimeout(ctx, 5*time.Second)
+		queryCtx, queryCancel := context.WithTimeout(ctx, MediumTimeout)
 		defer queryCancel()
 
 		queryResult := r.queryManager.ExecuteQuery(queryCtx, msg, server.Address, tracker)
@@ -3135,7 +3234,7 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 	return result
 }
 
-// selectUpstreamResult 选择最佳上游查询结果（固定prefer_trusted策略）
+// selectUpstreamResult 选择最佳上游查询结果
 func (r *RecursiveDNSServer) selectUpstreamResult(results []UpstreamResult, question dns.Question,
 	tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 
@@ -3162,7 +3261,7 @@ func (r *RecursiveDNSServer) selectUpstreamResult(results []UpstreamResult, ques
 
 	var selectedResult UpstreamResult
 
-	// 固定使用prefer_trusted策略
+	// 使用prefer_trusted策略
 	if len(trustedResults) > 0 {
 		selectedResult = trustedResults[0]
 	} else {
@@ -3282,7 +3381,7 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption,
 	depth int, forceTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 
-	if depth > MaxCNAMEChain {
+	if depth > MaxRecursiveDepth {
 		return nil, nil, nil, false, nil, fmt.Errorf("递归深度超限: %d", depth)
 	}
 
@@ -3429,11 +3528,11 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 				switch a := rr.(type) {
 				case *dns.A:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
-						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), "53"))
+						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), DefaultDNSPort))
 					}
 				case *dns.AAAA:
 					if r.config.Server.IPv6 && strings.EqualFold(a.Header().Name, ns.Ns) {
-						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), "53"))
+						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), DefaultDNSPort))
 					}
 				}
 			}
@@ -3495,8 +3594,8 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 	}
 
 	concurrency := len(nameservers)
-	if concurrency > 5 {
-		concurrency = 5
+	if concurrency > MaxQueryConcurrency {
+		concurrency = MaxQueryConcurrency
 	}
 
 	if tracker != nil {
@@ -3523,8 +3622,8 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 	qname string, depth int, forceTCP bool, tracker *RequestTracker) []string {
 
 	resolveCount := len(nsRecords)
-	if resolveCount > 3 {
-		resolveCount = 3
+	if resolveCount > MaxNSResolveConcurrency {
+		resolveCount = MaxNSResolveConcurrency
 	}
 
 	if tracker != nil {
@@ -3532,7 +3631,7 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 	}
 
 	nsChan := make(chan []string, resolveCount)
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, 5*time.Second)
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, MediumTimeout)
 	defer resolveCancel()
 
 	// 启动NS解析goroutine
@@ -3556,7 +3655,7 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 				if nsAnswer, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP, tracker); err == nil {
 					for _, rr := range nsAnswer {
 						if a, ok := rr.(*dns.A); ok {
-							addresses = append(addresses, net.JoinHostPort(a.A.String(), "53"))
+							addresses = append(addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
 						}
 					}
 				}
@@ -3567,7 +3666,7 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 					if nsAnswerV6, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP, tracker); err == nil {
 						for _, rr := range nsAnswerV6 {
 							if aaaa, ok := rr.(*dns.AAAA); ok {
-								addresses = append(addresses, net.JoinHostPort(aaaa.AAAA.String(), "53"))
+								addresses = append(addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
 							}
 						}
 					}
@@ -3588,7 +3687,7 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 		case addresses := <-nsChan:
 			if len(addresses) > 0 {
 				allAddresses = append(allAddresses, addresses...)
-				if len(allAddresses) >= 3 {
+				if len(allAddresses) >= MaxNSResolveCount {
 					resolveCancel()
 					break
 				}
