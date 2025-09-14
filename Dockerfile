@@ -23,6 +23,6 @@ FROM scratch
 
 COPY --from=rebase_zjdns / /
 
-EXPOSE 53/tcp 53/udp
+EXPOSE 53/tcp 53/udp 853/tcp 853/udp
 
 ENTRYPOINT ["/zjdns"]
