@@ -17,7 +17,6 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -36,179 +35,154 @@ import (
 
 // DNS服务相关常量
 const (
-	DNSServerPort            = "53"                // 标准DNS服务端口
-	DNSServerSecurePort      = "853"               // DNS安全传输端口 (DoT/DoQ)
-	RecursiveServerIndicator = "buildin_recursive" // 内置递归服务器标识符
-	ClientUDPBufferSize      = 1232                // UDP客户端缓冲区大小（字节）
-	UpstreamUDPBufferSize    = 4096                // UDP上游服务器缓冲区大小（字节）
-	RFCMaxDomainNameLength   = 253                 // RFC规定的最大域名长度
+	DNSServerPort            = "53"
+	DNSServerSecurePort      = "853"
+	RecursiveServerIndicator = "buildin_recursive"
+	ClientUDPBufferSize      = 1232
+	UpstreamUDPBufferSize    = 4096
+	RFCMaxDomainNameLength   = 253
 )
 
 // DNS Padding 相关常量 (RFC 7830)
 const (
-	DNSPaddingBlockSize = 128  // RFC 7830 推荐的块大小
-	DNSPaddingFillByte  = 0x00 // RFC 7830 规定填充字节为0x00
-	DNSPaddingMinSize   = 12   // 最小DNS消息大小
-	DNSPaddingMaxSize   = 468  // 最大填充后大小(保持UDP 512字节限制)
+	DNSPaddingBlockSize = 128
+	DNSPaddingFillByte  = 0x00
+	DNSPaddingMinSize   = 12
+	DNSPaddingMaxSize   = 468
 )
 
-// 安全连接相关常量（统一DoT/DoQ配置）
+// 安全连接相关常量
 const (
-	SecureConnIdleTimeout      = 5 * time.Minute  // 安全连接最大空闲超时时间
-	SecureConnKeepAlive        = 20 * time.Second // 安全连接保活周期
-	SecureConnHandshakeTimeout = 2 * time.Second  // 安全连接握手超时时间
-	SecureConnQueryTimeout     = 5 * time.Second  // 安全连接查询超时时间
-	SecureConnBufferSize       = 8192             // 安全连接缓冲区大小
-	MinDNSPacketSize           = 12               // DNS数据包最小长度
-	SecureConnMaxRetries       = 2                // 安全连接最大重试次数
+	SecureConnIdleTimeout      = 5 * time.Minute
+	SecureConnKeepAlive        = 20 * time.Second
+	SecureConnHandshakeTimeout = 2 * time.Second
+	SecureConnQueryTimeout     = 5 * time.Second
+	SecureConnBufferSize       = 8192
+	MinDNSPacketSize           = 12
+	SecureConnMaxRetries       = 2
 )
 
-// QUIC协议特定常量
+// QUIC协议相关常量
 const (
-	QUICAddrValidatorCacheSize = 1000             // QUIC地址验证器缓存大小
-	QUICAddrValidatorCacheTTL  = 30 * time.Minute // QUIC地址验证器缓存TTL
+	QUICAddrValidatorCacheSize = 1000
+	QUICAddrValidatorCacheTTL  = 30 * time.Minute
 )
 
-// QUIC协议版本和错误码
-var (
-	NextProtoQUIC = []string{"doq", "doq-i02", "doq-i00", "dq"} // QUIC ALPN 标识符列表
-)
+var NextProtoQUIC = []string{"doq", "doq-i02", "doq-i00", "dq"}
 
-// QUIC错误码常量
 const (
-	QUICCodeNoError       quic.ApplicationErrorCode = 0 // 无错误
-	QUICCodeInternalError quic.ApplicationErrorCode = 1 // 内部错误
-	QUICCodeProtocolError quic.ApplicationErrorCode = 2 // 协议错误
+	QUICCodeNoError       quic.ApplicationErrorCode = 0
+	QUICCodeInternalError quic.ApplicationErrorCode = 1
+	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 )
 
 // 缓存系统相关常量
 const (
-	DefaultCacheTTL           = 3600   // 默认缓存TTL时间（秒）
-	StaleTTL                  = 30     // 过期缓存的TTL时间（秒）
-	StaleMaxAge               = 259200 // 过期缓存最大保存时间（3天）
-	CacheRefreshThreshold     = 300    // 缓存刷新阈值（秒）
-	CacheRefreshQueueSize     = 1000   // 缓存刷新队列大小
-	CacheRefreshRetryInterval = 600    // 缓存刷新重试间隔（秒）
+	DefaultCacheTTL           = 3600
+	StaleTTL                  = 30
+	StaleMaxAge               = 259200
+	CacheRefreshThreshold     = 300
+	CacheRefreshQueueSize     = 500
+	CacheRefreshRetryInterval = 600
 )
 
 // 并发控制相关常量
 const (
-	MaxConcurrency                  = 1000 // 系统最大并发数
-	ConnPoolSize                    = 100  // 连接池大小
-	SingleQueryMaxConcurrency       = 5    // 单次查询最大并发数
-	NameServerResolveMaxConcurrency = 3    // NS解析最大并发数
-	TaskWorkerMaxCount              = 50   // 任务工作线程最大数量
-	TaskWorkerQueueSize             = 1000 // 任务队列大小
+	MaxConcurrency                  = 500
+	SingleQueryMaxConcurrency       = 3
+	NameServerResolveMaxConcurrency = 2
 )
 
 // DNS解析相关常量
 const (
-	MaxCNAMEChainLength       = 16 // 最大CNAME链长度
-	MaxRecursionDepth         = 16 // 最大递归深度
-	MaxNameServerResolveCount = 3  // 最大NS解析数量
+	MaxCNAMEChainLength       = 16
+	MaxRecursionDepth         = 16
+	MaxNameServerResolveCount = 3
 )
 
 // 超时时间相关常量
 const (
-	QueryTimeout             = 5 * time.Second        // 标准查询超时时间
-	StandardOperationTimeout = 5 * time.Second        // 标准操作超时时间
-	RecursiveQueryTimeout    = 30 * time.Second       // 递归查询超时时间
-	ExtendedQueryTimeout     = 25 * time.Second       // 扩展查询超时时间
-	ServerStartupDelay       = 100 * time.Millisecond // 服务器启动延迟
-	GracefulShutdownTimeout  = 10 * time.Second       // 优雅关闭超时时间
-	TaskExecutionTimeout     = 10 * time.Second       // 任务执行超时时间
-)
-
-// 内存管理相关常量
-const (
-	DefaultSliceCapacity = 8    // 默认切片初始容量
-	LargeSliceCapacity   = 32   // 大切片初始容量
-	DefaultMapCapacity   = 32   // Map初始容量
-	StackTraceBufferSize = 4096 // 堆栈跟踪缓冲区大小
+	QueryTimeout             = 5 * time.Second
+	StandardOperationTimeout = 5 * time.Second
+	RecursiveQueryTimeout    = 30 * time.Second
+	ExtendedQueryTimeout     = 25 * time.Second
+	GracefulShutdownTimeout  = 10 * time.Second
 )
 
 // 文件处理相关常量
 const (
-	MaxConfigFileSize       = 1024 * 1024 // 最大配置文件大小（1MB）
-	MaxInputLineLength      = 128         // 最大输入行长度
-	FileScannerBufferSize   = 64 * 1024   // 文件扫描器缓冲区大小
-	FileScannerMaxTokenSize = 1024 * 1024 // 文件扫描器最大令牌大小
-	MaxRegexPatternLength   = 100         // 最大正则表达式长度
-	MaxDNSRewriteRules      = 100         // 最大DNS重写规则数
+	MaxConfigFileSize       = 1024 * 1024
+	MaxInputLineLength      = 128
+	FileScannerBufferSize   = 64 * 1024
+	FileScannerMaxTokenSize = 1024 * 1024
+	MaxRegexPatternLength   = 100
+	MaxDNSRewriteRules      = 100
 )
 
 // Redis配置相关常量
 const (
-	RedisConnectionPoolSize    = 50              // Redis连接池大小
-	RedisMinIdleConnections    = 10              // Redis最小空闲连接数
-	RedisMaxRetryAttempts      = 3               // Redis最大重试次数
-	RedisConnectionPoolTimeout = 5 * time.Second // Redis连接池超时时间
-	RedisReadOperationTimeout  = 3 * time.Second // Redis读操作超时时间
-	RedisWriteOperationTimeout = 3 * time.Second // Redis写操作超时时间
-	RedisDialTimeout           = 5 * time.Second // Redis拨号超时时间
+	RedisConnectionPoolSize    = 20
+	RedisMinIdleConnections    = 5
+	RedisMaxRetryAttempts      = 3
+	RedisConnectionPoolTimeout = 5 * time.Second
+	RedisReadOperationTimeout  = 3 * time.Second
+	RedisWriteOperationTimeout = 3 * time.Second
+	RedisDialTimeout           = 5 * time.Second
 )
 
 // IP检测相关常量
 const (
-	PublicIPDetectionTimeout = 3 * time.Second // 公网IP检测超时时间
-	HTTPClientRequestTimeout = 5 * time.Second // HTTP客户端请求超时时间
-	IPDetectionCacheExpiry   = 5 * time.Minute // IP检测缓存过期时间
-	MaxTrustedIPv4CIDRs      = 1024            // 最大可信IPv4 CIDR数量
-	MaxTrustedIPv6CIDRs      = 256             // 最大可信IPv6 CIDR数量
-	DefaultECSIPv4PrefixLen  = 24              // 默认ECS IPv4前缀长度
-	DefaultECSIPv6PrefixLen  = 64              // 默认ECS IPv6前缀长度
-	DefaultECSClientScope    = 0               // 客户端查询中 SourceScope 必须为 0 (RFC 7871)
+	PublicIPDetectionTimeout = 3 * time.Second
+	HTTPClientRequestTimeout = 5 * time.Second
+	IPDetectionCacheExpiry   = 5 * time.Minute
+	MaxTrustedIPv4CIDRs      = 1024
+	MaxTrustedIPv6CIDRs      = 256
+	DefaultECSIPv4PrefixLen  = 24
+	DefaultECSIPv6PrefixLen  = 64
+	DefaultECSClientScope    = 0
 )
 
 // ==================== 日志系统 ====================
 
-// LogLevel 定义日志级别枚举
 type LogLevel int
 
-// 日志级别常量定义
 const (
-	LogNone  LogLevel = iota - 1 // 无日志输出
-	LogError                     // 错误日志级别
-	LogWarn                      // 警告日志级别
-	LogInfo                      // 信息日志级别
-	LogDebug                     // 调试日志级别
+	LogNone LogLevel = iota - 1
+	LogError
+	LogWarn
+	LogInfo
+	LogDebug
 )
 
-// ANSI颜色代码常量，用于控制台彩色输出
 const (
-	ColorReset  = "\033[0m"  // 重置颜色
-	ColorRed    = "\033[31m" // 红色
-	ColorYellow = "\033[33m" // 黄色
-	ColorGreen  = "\033[32m" // 绿色
-	ColorBlue   = "\033[34m" // 蓝色
-	ColorGray   = "\033[37m" // 灰色
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorYellow = "\033[33m"
+	ColorGreen  = "\033[32m"
+	ColorBlue   = "\033[34m"
+	ColorGray   = "\033[37m"
 )
 
-// LogConfig 全局日志配置结构
 type LogConfig struct {
-	level     LogLevel // 当前日志级别
-	useColor  bool     // 是否使用颜色输出
-	useEmojis bool     // 是否使用表情符号
+	level     LogLevel
+	useColor  bool
+	useEmojis bool
 }
 
 var (
-	// logConfig 全局日志配置实例
 	logConfig = &LogConfig{
 		level:     LogInfo,
 		useColor:  true,
 		useEmojis: true,
 	}
-	// customLogger 自定义日志记录器
 	customLogger = log.New(os.Stdout, "", 0)
 )
 
-// String 返回日志级别的字符串表示，支持颜色和表情符号
 func (l LogLevel) String() string {
-	// 日志级别配置映射表
 	configs := []struct {
-		name  string // 级别名称
-		emoji string // 表情符号
-		color string // 颜色代码
+		name  string
+		emoji string
+		color string
 	}{
 		{"NONE", "🔇", ColorGray},
 		{"ERROR", "🔥", ColorRed},
@@ -222,12 +196,10 @@ func (l LogLevel) String() string {
 		config := configs[index]
 		result := config.name
 
-		// 添加表情符号（如果启用）
 		if logConfig.useEmojis {
 			result = config.emoji + " " + result
 		}
 
-		// 添加颜色（如果启用）
 		if logConfig.useColor {
 			result = config.color + result + ColorReset
 		}
@@ -237,7 +209,6 @@ func (l LogLevel) String() string {
 	return "UNKNOWN"
 }
 
-// writeLog 格式化日志输出函数
 func writeLog(level LogLevel, format string, args ...interface{}) {
 	if level <= logConfig.level {
 		timestamp := time.Now().UTC().Format("2006-01-02 15:04:05 UTC")
@@ -250,330 +221,122 @@ func writeLog(level LogLevel, format string, args ...interface{}) {
 	}
 }
 
-// ==================== 错误处理和恢复系统 ====================
+// ==================== 简化的错误处理和恢复系统 ====================
 
-// ErrorHandler 统一错误处理器
-type ErrorHandler struct{}
-
-// NewErrorHandler 创建错误处理器
-func NewErrorHandler() *ErrorHandler {
-	return &ErrorHandler{}
-}
-
-// handlePanic 统一的panic恢复处理函数
-func (eh *ErrorHandler) handlePanic(operation string) {
+func handlePanic(operation string) {
 	if r := recover(); r != nil {
-		eh.handlePanicRecovery(operation, r)
+		writeLog(LogError, "🚨 Panic恢复 [%s]: %v", operation, r)
 	}
 }
 
-// handlePanicRecovery 处理panic恢复
-func (eh *ErrorHandler) handlePanicRecovery(operation string, r interface{}) {
-	// 使用闭包确保即使在错误处理中发生panic也能被捕获
-	func() {
-		defer func() {
-			if r2 := recover(); r2 != nil {
-				// 双重panic处理，直接输出到stderr
-				fmt.Fprintf(os.Stderr, "CRITICAL: Double panic in %s: %v (original: %v)\n", operation, r2, r)
-			}
-		}()
-
-		writeLog(LogError, "🚨 Panic恢复 [%s]: %v", operation, r)
-
-		// 获取调用栈信息
-		buf := make([]byte, StackTraceBufferSize)
-		n := runtime.Stack(buf, false)
-		writeLog(LogError, "调用栈: %s", string(buf[:n]))
-	}()
-}
-
-// executeWithRecover 安全执行函数，自动处理panic
-func (eh *ErrorHandler) executeWithRecover(operation string, fn func() error) error {
-	defer eh.handlePanic(operation)
+func executeWithRecover(operation string, fn func() error) error {
+	defer handlePanic(operation)
 	return fn()
 }
 
-// 全局错误处理器
-var globalErrorHandler = NewErrorHandler()
+// ==================== 简化的请求追踪系统 ====================
 
-// 便捷函数
-func handlePanic(operation string) {
-	globalErrorHandler.handlePanic(operation)
-}
-
-func executeWithRecover(operation string, fn func() error) error {
-	return globalErrorHandler.executeWithRecover(operation, fn)
-}
-
-// ==================== 请求追踪系统 ====================
-
-// RequestTracker 用于追踪单个DNS请求的完整处理过程
 type RequestTracker struct {
-	ID           string        // 请求唯一标识符
-	StartTime    time.Time     // 请求开始时间
-	Domain       string        // 查询的域名
-	QueryType    string        // 查询类型（A、AAAA、CNAME等）
-	ClientIP     string        // 客户端IP地址
-	Steps        []string      // 处理步骤记录
-	CacheHit     bool          // 是否命中缓存
-	Upstream     string        // 使用的上游服务器地址
-	ResponseTime time.Duration // 总响应时间
-	mutex        sync.Mutex    // 并发保护锁
+	ID           string
+	StartTime    time.Time
+	Domain       string
+	QueryType    string
+	ClientIP     string
+	CacheHit     bool
+	Upstream     string
+	ResponseTime time.Duration
+	mutex        sync.Mutex
 }
 
-// NewRequestTracker 创建新的请求追踪器
 func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
 	return &RequestTracker{
-		ID:        generateRequestID(),
+		ID:        fmt.Sprintf("%d", time.Now().UnixNano()%1000000),
 		StartTime: time.Now(),
 		Domain:    domain,
 		QueryType: qtype,
 		ClientIP:  clientIP,
-		Steps:     make([]string, 0, DefaultSliceCapacity),
 	}
 }
 
-// AddStep 添加处理步骤记录
 func (rt *RequestTracker) AddStep(step string, args ...interface{}) {
-	rt.mutex.Lock()
-	defer rt.mutex.Unlock()
-
-	// 计算相对时间戳
-	timestamp := time.Since(rt.StartTime).String()
-	stepMsg := fmt.Sprintf("[%s] %s", timestamp, fmt.Sprintf(step, args...))
-	rt.Steps = append(rt.Steps, stepMsg)
-
-	// 输出调试日志
-	writeLog(LogDebug, "🔍 [%s] %s", rt.ID[:8], stepMsg)
+	if logConfig.level >= LogDebug {
+		rt.mutex.Lock()
+		timestamp := time.Since(rt.StartTime).String()
+		stepMsg := fmt.Sprintf("[%s] %s", timestamp, fmt.Sprintf(step, args...))
+		writeLog(LogDebug, "🔍 [%s] %s", rt.ID, stepMsg)
+		rt.mutex.Unlock()
+	}
 }
 
-// Finish 完成请求追踪并记录摘要
 func (rt *RequestTracker) Finish() {
 	rt.ResponseTime = time.Since(rt.StartTime)
 	if logConfig.level >= LogInfo {
-		rt.logSummary()
+		cacheStatus := "MISS"
+		if rt.CacheHit {
+			cacheStatus = "HIT"
+		}
+		writeLog(LogInfo, "📊 [%s] 查询完成: %s %s | 缓存:%s | 耗时:%v | 上游:%s",
+			rt.ID, rt.Domain, rt.QueryType, cacheStatus, rt.ResponseTime, rt.Upstream)
 	}
 }
 
-// logSummary 记录请求处理摘要
-func (rt *RequestTracker) logSummary() {
-	cacheStatus := "MISS"
-	if rt.CacheHit {
-		cacheStatus = "HIT"
-	}
-	writeLog(LogInfo, "📊 [%s] 查询完成: %s %s | 缓存:%s | 耗时:%v | 上游:%s",
-		rt.ID[:8], rt.Domain, rt.QueryType, cacheStatus, rt.ResponseTime, rt.Upstream)
-}
+// ==================== 简化的资源管理器 ====================
 
-// generateRequestID 生成唯一的请求ID
-func generateRequestID() string {
-	return fmt.Sprintf("%d_%d", time.Now().UnixNano(), runtime.NumGoroutine())
-}
-
-// ==================== 资源管理器 ====================
-
-// ResourceManager 统一资源管理器，管理各种可复用资源
 type ResourceManager struct {
-	stringBuilders sync.Pool // 字符串构建器对象池
-	dnsMessages    sync.Pool // DNS消息对象池
-	stringMaps     sync.Pool // 字符串映射对象池
-	byteBuffers    sync.Pool // 字节缓冲池
-	slicePool      sync.Pool // 切片池
+	dnsMessages sync.Pool
 }
 
-// NewResourceManager 初始化资源管理器
 func NewResourceManager() *ResourceManager {
 	return &ResourceManager{
-		stringBuilders: sync.Pool{
-			New: func() interface{} {
-				return &strings.Builder{}
-			},
-		},
 		dnsMessages: sync.Pool{
 			New: func() interface{} {
 				return new(dns.Msg)
 			},
 		},
-		stringMaps: sync.Pool{
-			New: func() interface{} {
-				return make(map[string]bool, DefaultMapCapacity)
-			},
-		},
-		byteBuffers: sync.Pool{
-			New: func() interface{} {
-				buf := make([]byte, SecureConnBufferSize)
-				return &buf
-			},
-		},
-		slicePool: sync.Pool{
-			New: func() interface{} {
-				return make([]string, 0, DefaultSliceCapacity)
-			},
-		},
 	}
 }
 
-// GetStringBuilder 从对象池获取字符串构建器
-func (rm *ResourceManager) GetStringBuilder() *strings.Builder {
-	builder := rm.stringBuilders.Get().(*strings.Builder)
-	builder.Reset()
-	return builder
-}
-
-// PutStringBuilder 将字符串构建器归还到对象池
-func (rm *ResourceManager) PutStringBuilder(builder *strings.Builder) {
-	if builder != nil && builder.Cap() < LargeSliceCapacity*DefaultMapCapacity {
-		rm.stringBuilders.Put(builder)
-	}
-}
-
-// GetStringMap 从对象池获取字符串映射
-func (rm *ResourceManager) GetStringMap() map[string]bool {
-	m := rm.stringMaps.Get().(map[string]bool)
-	// 清空映射内容
-	for k := range m {
-		delete(m, k)
-	}
-	return m
-}
-
-// PutStringMap 将字符串映射归还到对象池
-func (rm *ResourceManager) PutStringMap(m map[string]bool) {
-	if m != nil && len(m) < MaxDNSRewriteRules/2 {
-		rm.stringMaps.Put(m)
-	}
-}
-
-// GetDNSMessage 从对象池获取DNS消息
 func (rm *ResourceManager) GetDNSMessage() *dns.Msg {
 	msg := rm.dnsMessages.Get().(*dns.Msg)
-	*msg = dns.Msg{} // 重置消息内容
+	*msg = dns.Msg{}
 	return msg
 }
 
-// PutDNSMessage 将DNS消息归还到对象池
 func (rm *ResourceManager) PutDNSMessage(msg *dns.Msg) {
 	if msg != nil {
 		rm.dnsMessages.Put(msg)
 	}
 }
 
-// GetByteBuffer 从对象池获取字节缓冲区
-func (rm *ResourceManager) GetByteBuffer() *[]byte {
-	return rm.byteBuffers.Get().(*[]byte)
-}
-
-// PutByteBuffer 将字节缓冲区归还到对象池
-func (rm *ResourceManager) PutByteBuffer(buf *[]byte) {
-	if buf != nil && len(*buf) <= SecureConnBufferSize*2 {
-		rm.byteBuffers.Put(buf)
-	}
-}
-
-// GetStringSlice 从对象池获取字符串切片
-func (rm *ResourceManager) GetStringSlice() []string {
-	slice := rm.slicePool.Get().([]string)
-	return slice[:0] // 重置长度但保留容量
-}
-
-// PutStringSlice 将字符串切片归还到对象池
-func (rm *ResourceManager) PutStringSlice(slice []string) {
-	if slice != nil && cap(slice) <= LargeSliceCapacity {
-		rm.slicePool.Put(slice)
-	}
-}
-
-// 全局资源管理器实例
 var globalResourceManager = NewResourceManager()
 
-// ==================== 统一任务管理器 ====================
+// ==================== 简化的任务管理器 ====================
 
-// TaskManager 统一的任务和协程管理器
 type TaskManager struct {
-	ctx           context.Context    // 全局上下文
-	cancel        context.CancelFunc // 取消函数
-	wg            sync.WaitGroup     // 等待组，用于等待所有协程完成
-	activeCount   int64              // 当前活跃协程数量（原子操作）
-	maxGoroutines int64              // 最大协程数量限制
-	semaphore     chan struct{}      // 信号量，控制并发数
-	taskQueue     chan func()        // 后台任务队列
-	closed        int32              // 关闭状态标志（原子操作）
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	semaphore   chan struct{}
+	activeCount int64
 }
 
-// NewTaskManager 创建任务管理器
 func NewTaskManager(maxGoroutines int) *TaskManager {
 	ctx, cancel := context.WithCancel(context.Background())
-
-	if maxGoroutines <= 0 {
-		maxGoroutines = MaxConcurrency
-	}
-
-	tm := &TaskManager{
-		ctx:           ctx,
-		cancel:        cancel,
-		maxGoroutines: int64(maxGoroutines),
-		semaphore:     make(chan struct{}, maxGoroutines),
-		taskQueue:     make(chan func(), TaskWorkerQueueSize),
-	}
-
-	tm.startBackgroundWorkers()
-	return tm
-}
-
-// startBackgroundWorkers 启动后台任务处理工作线程
-func (tm *TaskManager) startBackgroundWorkers() {
-	workers := runtime.NumCPU()
-	if workers > TaskWorkerMaxCount {
-		workers = TaskWorkerMaxCount
-	}
-
-	for i := 0; i < workers; i++ {
-		tm.wg.Add(1)
-		go func(workerID int) {
-			defer tm.wg.Done()
-			defer handlePanic(fmt.Sprintf("TaskManager Worker %d", workerID))
-
-			for {
-				select {
-				case task := <-tm.taskQueue:
-					if task != nil {
-						tm.executeTask(task, workerID)
-					}
-				case <-tm.ctx.Done():
-					return
-				}
-			}
-		}(i)
+	return &TaskManager{
+		ctx:       ctx,
+		cancel:    cancel,
+		semaphore: make(chan struct{}, maxGoroutines),
 	}
 }
 
-// executeTask 安全执行任务
-func (tm *TaskManager) executeTask(task func(), workerID int) {
-	defer handlePanic(fmt.Sprintf("BackgroundTask in Worker %d", workerID))
-	task()
-}
-
-// Execute 同步执行任务
 func (tm *TaskManager) Execute(name string, fn func(ctx context.Context) error) error {
-	if atomic.LoadInt32(&tm.closed) != 0 {
-		return errors.New("task manager is closed")
-	}
-
 	select {
 	case <-tm.ctx.Done():
 		return tm.ctx.Err()
-	default:
-	}
-
-	// 获取信号量，控制并发
-	select {
 	case tm.semaphore <- struct{}{}:
 		defer func() { <-tm.semaphore }()
-	case <-tm.ctx.Done():
-		return tm.ctx.Err()
 	}
 
-	// 原子操作更新活跃协程计数
 	atomic.AddInt64(&tm.activeCount, 1)
 	defer atomic.AddInt64(&tm.activeCount, -1)
 
@@ -585,12 +348,7 @@ func (tm *TaskManager) Execute(name string, fn func(ctx context.Context) error) 
 	})
 }
 
-// ExecuteAsync 异步执行任务
 func (tm *TaskManager) ExecuteAsync(name string, fn func(ctx context.Context) error) {
-	if atomic.LoadInt32(&tm.closed) != 0 {
-		return
-	}
-
 	go func() {
 		if err := tm.Execute(name, fn); err != nil && err != context.Canceled {
 			writeLog(LogError, "异步任务执行失败 [%s]: %v", name, err)
@@ -598,39 +356,8 @@ func (tm *TaskManager) ExecuteAsync(name string, fn func(ctx context.Context) er
 	}()
 }
 
-// SubmitBackgroundTask 提交后台任务到队列
-func (tm *TaskManager) SubmitBackgroundTask(task func()) {
-	if atomic.LoadInt32(&tm.closed) != 0 {
-		return
-	}
-
-	select {
-	case tm.taskQueue <- task:
-		// 任务成功提交到队列
-	default:
-		// 队列已满，记录警告但不阻塞
-		writeLog(LogWarn, "⚠️ 后台任务队列已满，跳过任务")
-	}
-}
-
-// GetActiveCount 获取当前活跃协程数量
-func (tm *TaskManager) GetActiveCount() int64 {
-	return atomic.LoadInt64(&tm.activeCount)
-}
-
-// Shutdown 关闭任务管理器
 func (tm *TaskManager) Shutdown(timeout time.Duration) error {
-	if !atomic.CompareAndSwapInt32(&tm.closed, 0, 1) {
-		return nil // 已经关闭
-	}
-
-	writeLog(LogInfo, "🛑 正在关闭任务管理器...")
-
-	// 取消所有任务并关闭队列
 	tm.cancel()
-	close(tm.taskQueue)
-
-	// 等待所有协程完成（带超时）
 	done := make(chan struct{})
 	go func() {
 		tm.wg.Wait()
@@ -639,50 +366,34 @@ func (tm *TaskManager) Shutdown(timeout time.Duration) error {
 
 	select {
 	case <-done:
-		writeLog(LogInfo, "✅ 任务管理器已安全关闭")
 		return nil
 	case <-time.After(timeout):
-		activeCount := tm.GetActiveCount()
-		writeLog(LogWarn, "⏰ 任务管理器关闭超时，仍有 %d 个活跃协程", activeCount)
-		return fmt.Errorf("shutdown timeout, %d goroutines still active", activeCount)
+		return fmt.Errorf("shutdown timeout")
 	}
 }
 
 // ==================== DNS Padding 管理器 ====================
 
-// PaddingManager DNS填充管理器，实现RFC 7830标准
 type PaddingManager struct {
-	enabled bool // 是否启用填充功能
+	enabled bool
 }
 
-// NewPaddingManager 创建DNS填充管理器
 func NewPaddingManager(enabled bool) *PaddingManager {
-	return &PaddingManager{
-		enabled: enabled,
-	}
+	return &PaddingManager{enabled: enabled}
 }
 
-// IsEnabled 检查是否启用填充
 func (pm *PaddingManager) IsEnabled() bool {
 	return pm.enabled
 }
 
-// CalculatePaddingSize 计算需要的填充大小（RFC 7830 Block Size Padding）
 func (pm *PaddingManager) CalculatePaddingSize(currentSize int) int {
-	if !pm.enabled || currentSize <= 0 {
+	if !pm.enabled || currentSize <= 0 || currentSize >= DNSPaddingMaxSize {
 		return 0
 	}
 
-	// 确保不超过最大大小限制
-	if currentSize >= DNSPaddingMaxSize {
-		return 0
-	}
-
-	// RFC 7830 Block Size Padding: 填充到最近的块大小倍数
 	nextBlockSize := ((currentSize + DNSPaddingBlockSize - 1) / DNSPaddingBlockSize) * DNSPaddingBlockSize
 	paddingSize := nextBlockSize - currentSize
 
-	// 确保填充后不超过最大限制
 	if currentSize+paddingSize > DNSPaddingMaxSize {
 		return DNSPaddingMaxSize - currentSize
 	}
@@ -690,38 +401,33 @@ func (pm *PaddingManager) CalculatePaddingSize(currentSize int) int {
 	return paddingSize
 }
 
-// CreatePaddingOption 创建EDNS0 Padding选项
 func (pm *PaddingManager) CreatePaddingOption(paddingSize int) *dns.EDNS0_PADDING {
 	if paddingSize <= 0 {
 		return nil
 	}
-
 	return &dns.EDNS0_PADDING{
-		Padding: make([]byte, paddingSize), // RFC 7830: 填充字节为0x00
+		Padding: make([]byte, paddingSize),
 	}
 }
 
 // ==================== ECS选项结构 ====================
 
-// ECSOption ECS (EDNS Client Subnet) 选项配置
 type ECSOption struct {
-	Family       uint16 // 地址族 (1=IPv4, 2=IPv6)
-	SourcePrefix uint8  // 源前缀长度
-	ScopePrefix  uint8  // 作用域前缀长度
-	Address      net.IP // IP地址
+	Family       uint16
+	SourcePrefix uint8
+	ScopePrefix  uint8
+	Address      net.IP
 }
 
 // ==================== EDNS管理器 ====================
 
-// EDNSManager EDNS选项管理器，统一管理ECS、Padding等EDNS选项
 type EDNSManager struct {
-	defaultECS     *ECSOption      // 默认ECS配置
-	detector       *IPDetector     // IP检测器
-	cache          sync.Map        // ECS检测结果缓存
-	paddingManager *PaddingManager // DNS填充管理器
+	defaultECS     *ECSOption
+	detector       *IPDetector
+	cache          sync.Map
+	paddingManager *PaddingManager
 }
 
-// NewEDNSManager 初始化EDNS管理器
 func NewEDNSManager(defaultSubnet string, paddingEnabled bool) (*EDNSManager, error) {
 	manager := &EDNSManager{
 		detector:       NewIPDetector(),
@@ -734,7 +440,6 @@ func NewEDNSManager(defaultSubnet string, paddingEnabled bool) (*EDNSManager, er
 			return nil, fmt.Errorf("ECS配置解析失败: %w", err)
 		}
 		manager.defaultECS = ecs
-
 		if ecs != nil {
 			writeLog(LogInfo, "🌍 默认ECS配置: %s/%d", ecs.Address, ecs.SourcePrefix)
 		}
@@ -747,17 +452,14 @@ func NewEDNSManager(defaultSubnet string, paddingEnabled bool) (*EDNSManager, er
 	return manager, nil
 }
 
-// GetDefaultECS 获取默认ECS配置
 func (em *EDNSManager) GetDefaultECS() *ECSOption {
 	return em.defaultECS
 }
 
-// IsPaddingEnabled 检查是否启用填充
 func (em *EDNSManager) IsPaddingEnabled() bool {
 	return em.paddingManager.IsEnabled()
 }
 
-// ParseFromDNS 从DNS消息中解析ECS选项
 func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 	if msg == nil {
 		return nil
@@ -768,7 +470,6 @@ func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 		return nil
 	}
 
-	// 遍历EDNS选项查找ECS
 	for _, option := range opt.Option {
 		if subnet, ok := option.(*dns.EDNS0_SUBNET); ok {
 			return &ECSOption{
@@ -783,7 +484,6 @@ func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 	return nil
 }
 
-// AddToMessage 向DNS消息添加所有EDNS选项（ECS + Padding仅对安全连接）
 func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled bool, isSecureConnection bool) {
 	if msg == nil {
 		return
@@ -808,7 +508,6 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		},
 	}
 
-	// 设置DNSSEC标志
 	if dnssecEnabled {
 		opt.SetDo(true)
 	}
@@ -828,9 +527,8 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		writeLog(LogDebug, "🌍 添加ECS选项: %s/%d (scope=0)", ecs.Address, ecs.SourcePrefix)
 	}
 
-	// 添加Padding选项（RFC 7830：仅对安全连接，应该是最后一个选项）
+	// 添加Padding选项（仅对安全连接）
 	if em.paddingManager.IsEnabled() && isSecureConnection {
-		// 计算当前消息大小（包括已有的EDNS选项）
 		tempMsg := msg.Copy()
 		opt.Option = options
 		tempMsg.Extra = append(tempMsg.Extra, opt)
@@ -845,12 +543,10 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		}
 	}
 
-	// 即使没有任何选项，如果需要DNSSEC或其他EDNS功能，也要添加OPT记录
 	opt.Option = options
 	msg.Extra = append(msg.Extra, opt)
 }
 
-// parseECSConfig 解析ECS配置字符串
 func (em *EDNSManager) parseECSConfig(subnet string) (*ECSOption, error) {
 	switch strings.ToLower(subnet) {
 	case "auto":
@@ -860,7 +556,6 @@ func (em *EDNSManager) parseECSConfig(subnet string) (*ECSOption, error) {
 	case "auto_v6":
 		return em.detectPublicIP(true, false)
 	default:
-		// 解析CIDR格式
 		_, ipNet, err := net.ParseCIDR(subnet)
 		if err != nil {
 			return nil, fmt.Errorf("解析CIDR失败: %w", err)
@@ -881,23 +576,17 @@ func (em *EDNSManager) parseECSConfig(subnet string) (*ECSOption, error) {
 	}
 }
 
-// detectPublicIP 检测公网IP地址
 func (em *EDNSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption, error) {
 	cacheKey := fmt.Sprintf("ip_detection_%v_%v", forceIPv6, allowFallback)
 
-	// 检查缓存
 	if cached, ok := em.cache.Load(cacheKey); ok {
 		if cachedECS, ok := cached.(*ECSOption); ok {
-			writeLog(LogDebug, "🌍 使用缓存的IP检测结果: %s", cachedECS.Address)
 			return cachedECS, nil
 		}
 	}
 
-	var ip net.IP
 	var ecs *ECSOption
-
-	// 检测IP地址
-	if ip = em.detector.DetectPublicIP(forceIPv6); ip != nil {
+	if ip := em.detector.DetectPublicIP(forceIPv6); ip != nil {
 		family := uint16(1)
 		prefix := uint8(DefaultECSIPv4PrefixLen)
 
@@ -912,108 +601,53 @@ func (em *EDNSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption
 			ScopePrefix:  DefaultECSClientScope,
 			Address:      ip,
 		}
-
-		writeLog(LogDebug, "🌍 检测到IP地址: %s", ip)
 	}
 
 	// 回退处理
 	if ecs == nil && allowFallback && !forceIPv6 {
-		if ip = em.detector.DetectPublicIP(true); ip != nil {
+		if ip := em.detector.DetectPublicIP(true); ip != nil {
 			ecs = &ECSOption{
 				Family:       2,
 				SourcePrefix: DefaultECSIPv6PrefixLen,
 				ScopePrefix:  DefaultECSClientScope,
 				Address:      ip,
 			}
-			writeLog(LogDebug, "🌍 回退检测到IPv6地址: %s", ip)
 		}
 	}
 
 	// 缓存结果
 	if ecs != nil {
 		em.cache.Store(cacheKey, ecs)
-		// 设置缓存过期时间
 		time.AfterFunc(IPDetectionCacheExpiry, func() {
 			em.cache.Delete(cacheKey)
 		})
-	} else {
-		writeLog(LogWarn, "⚠️ IP地址检测失败，ECS功能将禁用")
 	}
 
 	return ecs, nil
 }
 
-// ==================== IP检测器 ====================
+// ==================== 简化的IP检测器 ====================
 
-// IPDetector 公网IP地址检测器
 type IPDetector struct {
-	dnsClient  *dns.Client  // DNS客户端
-	httpClient *http.Client // HTTP客户端
+	dnsClient  *dns.Client
+	httpClient *http.Client
 }
 
-// IPDetectionMethod IP检测方法接口
-type IPDetectionMethod interface {
-	DetectIP(forceIPv6 bool) net.IP // 检测IP地址
-	Name() string                   // 获取检测方法名称
-}
-
-// GoogleDNSDetector 基于Google DNS的IP检测器
-type GoogleDNSDetector struct {
-	client *dns.Client
-}
-
-// CloudflareHTTPDetector 基于Cloudflare HTTP API的IP检测器
-type CloudflareHTTPDetector struct {
-	client *http.Client
-}
-
-// DetectIP 使用Google DNS检测IP地址
-func (g *GoogleDNSDetector) DetectIP(forceIPv6 bool) net.IP {
-	var server string
-	if forceIPv6 {
-		server = "[2001:4860:4802:32::a]:53"
-	} else {
-		server = "216.239.32.10:53"
+func NewIPDetector() *IPDetector {
+	return &IPDetector{
+		dnsClient: &dns.Client{
+			Timeout: PublicIPDetectionTimeout,
+			Net:     "udp",
+			UDPSize: UpstreamUDPBufferSize,
+		},
+		httpClient: &http.Client{
+			Timeout: HTTPClientRequestTimeout,
+		},
 	}
-
-	// 构建DNS查询
-	msg := new(dns.Msg)
-	msg.SetQuestion("o-o.myaddr.l.google.com.", dns.TypeTXT)
-	msg.RecursionDesired = true
-
-	// 执行查询
-	response, _, err := g.client.Exchange(msg, server)
-	if err != nil || response.Rcode != dns.RcodeSuccess {
-		return nil
-	}
-
-	// 解析结果
-	for _, rr := range response.Answer {
-		if txt, ok := rr.(*dns.TXT); ok {
-			for _, record := range txt.Txt {
-				record = strings.Trim(record, "\"")
-				if ip := net.ParseIP(record); ip != nil {
-					// 检查IP版本匹配
-					if forceIPv6 && ip.To4() != nil {
-						continue
-					}
-					if !forceIPv6 && ip.To4() == nil {
-						continue
-					}
-					return ip
-				}
-			}
-		}
-	}
-	return nil
 }
 
-// Name 返回检测方法名称
-func (g *GoogleDNSDetector) Name() string { return "Google DNS" }
-
-// DetectIP 使用Cloudflare HTTP API检测IP地址
-func (c *CloudflareHTTPDetector) DetectIP(forceIPv6 bool) net.IP {
-	// 创建自定义transport以控制IP版本
+func (d *IPDetector) DetectPublicIP(forceIPv6 bool) net.IP {
+	// 简化：只使用Cloudflare HTTP检测
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialer := &net.Dialer{Timeout: PublicIPDetectionTimeout}
@@ -1031,20 +665,17 @@ func (c *CloudflareHTTPDetector) DetectIP(forceIPv6 bool) net.IP {
 	}
 	defer transport.CloseIdleConnections()
 
-	// 发起HTTP请求
 	resp, err := client.Get("https://api.cloudflare.com/cdn-cgi/trace")
 	if err != nil {
 		return nil
 	}
 	defer resp.Body.Close()
 
-	// 读取响应
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil
 	}
 
-	// 解析IP地址
 	re := regexp.MustCompile(`ip=([^\s\n]+)`)
 	matches := re.FindStringSubmatch(string(body))
 	if len(matches) < 2 {
@@ -1067,66 +698,20 @@ func (c *CloudflareHTTPDetector) DetectIP(forceIPv6 bool) net.IP {
 	return ip
 }
 
-// Name 返回检测方法名称
-func (c *CloudflareHTTPDetector) Name() string { return "Cloudflare HTTP" }
-
-// NewIPDetector 创建IP检测器
-func NewIPDetector() *IPDetector {
-	return &IPDetector{
-		dnsClient: &dns.Client{
-			Timeout: PublicIPDetectionTimeout,
-			Net:     "udp",
-			UDPSize: UpstreamUDPBufferSize,
-		},
-		httpClient: &http.Client{
-			Timeout: HTTPClientRequestTimeout,
-			Transport: &http.Transport{
-				DialContext: (&net.Dialer{
-					Timeout: PublicIPDetectionTimeout,
-				}).DialContext,
-				TLSHandshakeTimeout: SecureConnHandshakeTimeout,
-			},
-		},
-	}
-}
-
-// DetectPublicIP 检测公网IP地址，依次尝试多种检测方法
-func (d *IPDetector) DetectPublicIP(forceIPv6 bool) net.IP {
-	// 初始化所有可用的检测方法
-	detectors := []IPDetectionMethod{
-		&GoogleDNSDetector{client: d.dnsClient},
-		&CloudflareHTTPDetector{client: d.httpClient},
-	}
-
-	// 依次尝试每种检测方法
-	for _, detector := range detectors {
-		if ip := detector.DetectIP(forceIPv6); ip != nil {
-			writeLog(LogDebug, "✅ %s检测成功: %s", detector.Name(), ip)
-			return ip
-		}
-	}
-
-	return nil
-}
-
 // ==================== DNS记录转换和处理工具 ====================
 
-// CompactDNSRecord 紧凑的DNS记录结构，用于缓存存储
 type CompactDNSRecord struct {
-	Text    string `json:"text"`     // DNS记录的文本表示
-	OrigTTL uint32 `json:"orig_ttl"` // 原始TTL值
-	Type    uint16 `json:"type"`     // 记录类型
+	Text    string `json:"text"`
+	OrigTTL uint32 `json:"orig_ttl"`
+	Type    uint16 `json:"type"`
 }
 
-// DNSRecordHandler DNS记录处理器，负责转换、TTL调整和DNSSEC过滤
 type DNSRecordHandler struct{}
 
-// NewDNSRecordHandler 创建DNS记录处理器
 func NewDNSRecordHandler() *DNSRecordHandler {
 	return &DNSRecordHandler{}
 }
 
-// CompactRecord 将DNS记录转换为紧凑格式
 func (drh *DNSRecordHandler) CompactRecord(rr dns.RR) *CompactDNSRecord {
 	if rr == nil {
 		return nil
@@ -1138,38 +723,31 @@ func (drh *DNSRecordHandler) CompactRecord(rr dns.RR) *CompactDNSRecord {
 	}
 }
 
-// ExpandRecord 将紧凑格式转换为DNS记录
 func (drh *DNSRecordHandler) ExpandRecord(cr *CompactDNSRecord) dns.RR {
 	if cr == nil || cr.Text == "" {
 		return nil
 	}
 	rr, err := dns.NewRR(cr.Text)
 	if err != nil {
-		writeLog(LogDebug, "解析DNS记录失败: %v", err)
 		return nil
 	}
 	return rr
 }
 
-// CompactRecords 批量转换DNS记录为紧凑格式，同时去重
 func (drh *DNSRecordHandler) CompactRecords(rrs []dns.RR) []*CompactDNSRecord {
 	if len(rrs) == 0 {
 		return nil
 	}
 
-	// 使用资源管理器获取临时map用于去重
-	seen := globalResourceManager.GetStringMap()
-	defer globalResourceManager.PutStringMap(seen)
-
+	seen := make(map[string]bool)
 	result := make([]*CompactDNSRecord, 0, len(rrs))
+
 	for _, rr := range rrs {
-		// 跳过无效记录和OPT记录
 		if rr == nil || rr.Header().Rrtype == dns.TypeOPT {
 			continue
 		}
 
 		rrText := rr.String()
-		// 去重处理
 		if !seen[rrText] {
 			seen[rrText] = true
 			if cr := drh.CompactRecord(rr); cr != nil {
@@ -1180,7 +758,6 @@ func (drh *DNSRecordHandler) CompactRecords(rrs []dns.RR) []*CompactDNSRecord {
 	return result
 }
 
-// ExpandRecords 批量将紧凑格式转换为DNS记录
 func (drh *DNSRecordHandler) ExpandRecords(crs []*CompactDNSRecord) []dns.RR {
 	if len(crs) == 0 {
 		return nil
@@ -1194,20 +771,18 @@ func (drh *DNSRecordHandler) ExpandRecords(crs []*CompactDNSRecord) []dns.RR {
 	return result
 }
 
-// AdjustTTL 调整DNS记录的TTL值
 func (drh *DNSRecordHandler) AdjustTTL(rrs []dns.RR, ttl uint32) []dns.RR {
 	if len(rrs) == 0 {
 		return nil
 	}
 	result := make([]dns.RR, len(rrs))
 	for i, rr := range rrs {
-		result[i] = dns.Copy(rr)     // 创建副本避免修改原记录
-		result[i].Header().Ttl = ttl // 设置新的TTL
+		result[i] = dns.Copy(rr)
+		result[i].Header().Ttl = ttl
 	}
 	return result
 }
 
-// FilterDNSSEC 过滤DNSSEC相关记录
 func (drh *DNSRecordHandler) FilterDNSSEC(rrs []dns.RR, includeDNSSEC bool) []dns.RR {
 	if includeDNSSEC || len(rrs) == 0 {
 		return rrs
@@ -1215,7 +790,6 @@ func (drh *DNSRecordHandler) FilterDNSSEC(rrs []dns.RR, includeDNSSEC bool) []dn
 
 	filtered := make([]dns.RR, 0, len(rrs))
 	for _, rr := range rrs {
-		// 检查是否为DNSSEC相关记录
 		switch rr.(type) {
 		case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
 			// 跳过DNSSEC记录
@@ -1226,69 +800,47 @@ func (drh *DNSRecordHandler) FilterDNSSEC(rrs []dns.RR, includeDNSSEC bool) []dn
 	return filtered
 }
 
-// ProcessRecords 综合处理DNS记录（TTL调整 + DNSSEC过滤）
 func (drh *DNSRecordHandler) ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
 	filtered := drh.FilterDNSSEC(rrs, includeDNSSEC)
 	return drh.AdjustTTL(filtered, ttl)
 }
 
-// 全局DNS记录处理器实例
 var globalRecordHandler = NewDNSRecordHandler()
 
 // ==================== 缓存工具 ====================
 
-// CacheUtils 缓存相关工具函数集合
 type CacheUtils struct{}
 
-// NewCacheUtils 创建缓存工具
 func NewCacheUtils() *CacheUtils {
 	return &CacheUtils{}
 }
 
-// BuildKey 构建缓存键
 func (cu *CacheUtils) BuildKey(question dns.Question, ecs *ECSOption, dnssecEnabled bool) string {
-	builder := globalResourceManager.GetStringBuilder()
-	defer globalResourceManager.PutStringBuilder(builder)
+	var parts []string
+	parts = append(parts, strings.ToLower(question.Name))
+	parts = append(parts, fmt.Sprintf("%d", question.Qtype))
+	parts = append(parts, fmt.Sprintf("%d", question.Qclass))
 
-	// 域名（转换为小写）
-	builder.WriteString(strings.ToLower(question.Name))
-	builder.WriteByte(':')
-
-	// 查询类型
-	builder.WriteString(fmt.Sprintf("%d", question.Qtype))
-	builder.WriteByte(':')
-
-	// 查询类
-	builder.WriteString(fmt.Sprintf("%d", question.Qclass))
-
-	// ECS选项
 	if ecs != nil {
-		builder.WriteByte(':')
-		builder.WriteString(ecs.Address.String())
-		builder.WriteByte('/')
-		builder.WriteString(fmt.Sprintf("%d", ecs.SourcePrefix))
+		parts = append(parts, fmt.Sprintf("%s/%d", ecs.Address.String(), ecs.SourcePrefix))
 	}
 
-	// DNSSEC选项
 	if dnssecEnabled {
-		builder.WriteString(":dnssec")
+		parts = append(parts, "dnssec")
 	}
 
-	result := builder.String()
-	// 限制缓存键长度，过长时使用哈希
+	result := strings.Join(parts, ":")
 	if len(result) > 512 {
 		result = fmt.Sprintf("hash:%x", result)[:512]
 	}
 	return result
 }
 
-// CalculateTTL 计算缓存TTL值
 func (cu *CacheUtils) CalculateTTL(rrs []dns.RR) int {
 	if len(rrs) == 0 {
 		return DefaultCacheTTL
 	}
 
-	// 找到最小的非零TTL
 	minTTL := int(rrs[0].Header().Ttl)
 	for _, rr := range rrs {
 		if ttl := int(rr.Header().Ttl); ttl > 0 && (minTTL == 0 || ttl < minTTL) {
@@ -1296,7 +848,6 @@ func (cu *CacheUtils) CalculateTTL(rrs []dns.RR) int {
 		}
 	}
 
-	// 如果所有TTL都是0，使用默认值
 	if minTTL <= 0 {
 		minTTL = DefaultCacheTTL
 	}
@@ -1304,20 +855,16 @@ func (cu *CacheUtils) CalculateTTL(rrs []dns.RR) int {
 	return minTTL
 }
 
-// 全局缓存工具实例
 var globalCacheUtils = NewCacheUtils()
 
 // ==================== 统一安全连接错误处理器 ====================
 
-// SecureConnErrorHandler 统一的安全连接错误处理器
 type SecureConnErrorHandler struct{}
 
-// NewSecureConnErrorHandler 创建安全连接错误处理器
 func NewSecureConnErrorHandler() *SecureConnErrorHandler {
 	return &SecureConnErrorHandler{}
 }
 
-// IsRetryableError 判断是否为可重试的安全连接错误
 func (h *SecureConnErrorHandler) IsRetryableError(protocol string, err error) bool {
 	if err == nil {
 		return false
@@ -1333,12 +880,10 @@ func (h *SecureConnErrorHandler) IsRetryableError(protocol string, err error) bo
 	}
 }
 
-// isQUICRetryableError 判断是否为可重试的QUIC错误
 func (h *SecureConnErrorHandler) isQUICRetryableError(err error) bool {
 	// 应用层错误
 	var qAppErr *quic.ApplicationError
 	if errors.As(err, &qAppErr) {
-		// 错误码0或HTTP/3的NoError通常表示服务器重启
 		return qAppErr.ErrorCode == 0 || qAppErr.ErrorCode == quic.ApplicationErrorCode(0x100)
 	}
 
@@ -1369,14 +914,12 @@ func (h *SecureConnErrorHandler) isQUICRetryableError(err error) bool {
 	return errors.Is(err, os.ErrDeadlineExceeded)
 }
 
-// isTLSRetryableError 判断是否为可重试的TLS错误（扩展版）
 func (h *SecureConnErrorHandler) isTLSRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
 
 	errStr := err.Error()
-	// 检查各种连接错误
 	connectionErrors := []string{
 		"broken pipe",
 		"connection reset",
@@ -1392,46 +935,34 @@ func (h *SecureConnErrorHandler) isTLSRetryableError(err error) bool {
 		}
 	}
 
-	// 超时错误
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		return true
 	}
 
-	// EOF错误
 	return errors.Is(err, io.EOF)
 }
 
-// 全局安全连接错误处理器实例
 var globalSecureConnErrorHandler = NewSecureConnErrorHandler()
 
-// ==================== 简化的安全连接客户端 ====================
+// ==================== 统一安全连接客户端 ====================
 
-// SecureClient 安全DNS客户端接口
 type SecureClient interface {
 	Exchange(msg *dns.Msg, addr string) (*dns.Msg, error)
 	Close() error
 }
 
-// UnifiedSecureClient 统一的安全连接客户端实现
 type UnifiedSecureClient struct {
-	protocol   string        // 协议类型: "tls" 或 "quic"
-	serverName string        // 服务器名称
-	skipVerify bool          // 是否跳过TLS验证
-	timeout    time.Duration // 超时时间
-
-	// TLS相关
-	tlsConn *tls.Conn
-
-	// QUIC相关
+	protocol        string
+	serverName      string
+	skipVerify      bool
+	timeout         time.Duration
+	tlsConn         *tls.Conn
 	quicConn        *quic.Conn
 	isQUICConnected bool
-
-	// 通用配置
-	mutex        sync.Mutex // 连接保护锁
-	lastActivity time.Time  // 最后活动时间
+	lastActivity    time.Time
+	mutex           sync.Mutex
 }
 
-// NewUnifiedSecureClient 创建统一的安全连接客户端
 func NewUnifiedSecureClient(protocol, addr, serverName string, skipVerify bool) (*UnifiedSecureClient, error) {
 	client := &UnifiedSecureClient{
 		protocol:     strings.ToLower(protocol),
@@ -1441,7 +972,6 @@ func NewUnifiedSecureClient(protocol, addr, serverName string, skipVerify bool) 
 		lastActivity: time.Now(),
 	}
 
-	// 建立连接
 	if err := client.connect(addr); err != nil {
 		return nil, err
 	}
@@ -1449,12 +979,10 @@ func NewUnifiedSecureClient(protocol, addr, serverName string, skipVerify bool) 
 	return client, nil
 }
 
-// connect 建立安全连接
 func (c *UnifiedSecureClient) connect(addr string) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	// 解析地址
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("解析地址失败: %w", err)
@@ -1470,14 +998,12 @@ func (c *UnifiedSecureClient) connect(addr string) error {
 	}
 }
 
-// connectTLS 建立TLS连接（添加keep-alive）
 func (c *UnifiedSecureClient) connectTLS(host, port string) error {
 	tlsConfig := &tls.Config{
 		ServerName:         c.serverName,
 		InsecureSkipVerify: c.skipVerify,
 	}
 
-	// 使用带keep-alive的dialer
 	dialer := &net.Dialer{
 		Timeout:   SecureConnHandshakeTimeout,
 		KeepAlive: SecureConnKeepAlive,
@@ -1499,7 +1025,6 @@ func (c *UnifiedSecureClient) connectTLS(host, port string) error {
 	return nil
 }
 
-// connectQUIC 建立QUIC连接
 func (c *UnifiedSecureClient) connectQUIC(addr string) error {
 	tlsConfig := &tls.Config{
 		ServerName:         c.serverName,
@@ -1527,7 +1052,6 @@ func (c *UnifiedSecureClient) connectQUIC(addr string) error {
 	return nil
 }
 
-// isConnectionAlive 检查连接是否仍然有效
 func (c *UnifiedSecureClient) isConnectionAlive() bool {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -1537,7 +1061,6 @@ func (c *UnifiedSecureClient) isConnectionAlive() bool {
 		if c.tlsConn == nil {
 			return false
 		}
-		// 检查连接是否超时
 		return time.Since(c.lastActivity) <= SecureConnIdleTimeout
 	case "quic":
 		return c.quicConn != nil && c.isQUICConnected &&
@@ -1546,7 +1069,6 @@ func (c *UnifiedSecureClient) isConnectionAlive() bool {
 	return false
 }
 
-// reconnectIfNeeded 在需要时重新连接
 func (c *UnifiedSecureClient) reconnectIfNeeded(addr string) error {
 	if c.isConnectionAlive() {
 		return nil
@@ -1561,7 +1083,6 @@ func (c *UnifiedSecureClient) reconnectIfNeeded(addr string) error {
 	return c.connect(addr)
 }
 
-// Exchange 执行安全DNS查询（添加自动重连）
 func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, error) {
 	// 检查并重连（如果需要）
 	if err := c.reconnectIfNeeded(addr); err != nil {
@@ -1586,7 +1107,6 @@ func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, err
 	}
 }
 
-// exchangeTLS 执行TLS查询
 func (c *UnifiedSecureClient) exchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -1595,28 +1115,23 @@ func (c *UnifiedSecureClient) exchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 		return nil, errors.New("TLS连接未建立")
 	}
 
-	// 设置读写超时
 	deadline := time.Now().Add(c.timeout)
 	c.tlsConn.SetDeadline(deadline)
 	defer c.tlsConn.SetDeadline(time.Time{})
 
-	// 打包查询消息
 	msgData, err := msg.Pack()
 	if err != nil {
 		return nil, fmt.Errorf("消息打包失败: %w", err)
 	}
 
-	// TLS格式：2字节长度前缀 + DNS消息
 	buf := make([]byte, 2+len(msgData))
 	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
 	copy(buf[2:], msgData)
 
-	// 发送查询
 	if _, err := c.tlsConn.Write(buf); err != nil {
 		return nil, fmt.Errorf("发送TLS查询失败: %w", err)
 	}
 
-	// 读取响应长度
 	lengthBuf := make([]byte, 2)
 	if _, err := io.ReadFull(c.tlsConn, lengthBuf); err != nil {
 		return nil, fmt.Errorf("读取响应长度失败: %w", err)
@@ -1627,13 +1142,11 @@ func (c *UnifiedSecureClient) exchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 		return nil, fmt.Errorf("响应长度异常: %d", respLength)
 	}
 
-	// 读取响应内容
 	respBuf := make([]byte, respLength)
 	if _, err := io.ReadFull(c.tlsConn, respBuf); err != nil {
 		return nil, fmt.Errorf("读取响应内容失败: %w", err)
 	}
 
-	// 解析响应
 	response := new(dns.Msg)
 	if err := response.Unpack(respBuf); err != nil {
 		return nil, fmt.Errorf("响应解析失败: %w", err)
@@ -1643,24 +1156,20 @@ func (c *UnifiedSecureClient) exchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 	return response, nil
 }
 
-// exchangeQUIC 执行QUIC查询
 func (c *UnifiedSecureClient) exchangeQUIC(msg *dns.Msg) (*dns.Msg, error) {
-	// 保存原始ID并设置为0（根据DoQ规范）
 	originalID := msg.Id
 	msg.Id = 0
 	defer func() {
 		msg.Id = originalID
 	}()
 
-	// 尝试查询，如果失败则重试一次
 	resp, err := c.exchangeQUICWithRetry(msg)
 	if resp != nil {
-		resp.Id = originalID // 恢复原始ID
+		resp.Id = originalID
 	}
 	return resp, err
 }
 
-// exchangeQUICWithRetry 带重试机制的QUIC查询
 func (c *UnifiedSecureClient) exchangeQUICWithRetry(msg *dns.Msg) (*dns.Msg, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -1685,15 +1194,12 @@ func (c *UnifiedSecureClient) exchangeQUICWithRetry(msg *dns.Msg) (*dns.Msg, err
 	return resp, err
 }
 
-// exchangeQUICDirect 直接执行QUIC查询
 func (c *UnifiedSecureClient) exchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error) {
-	// 打包查询消息
 	msgData, err := msg.Pack()
 	if err != nil {
 		return nil, fmt.Errorf("消息打包失败: %w", err)
 	}
 
-	// 创建流
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
@@ -1703,7 +1209,6 @@ func (c *UnifiedSecureClient) exchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error)
 	}
 	defer stream.Close()
 
-	// 设置流超时
 	if c.timeout > 0 {
 		if err := stream.SetDeadline(time.Now().Add(c.timeout)); err != nil {
 			return nil, fmt.Errorf("设置流超时失败: %w", err)
@@ -1715,7 +1220,6 @@ func (c *UnifiedSecureClient) exchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error)
 	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
 	copy(buf[2:], msgData)
 
-	// 发送查询
 	if _, err = stream.Write(buf); err != nil {
 		return nil, fmt.Errorf("发送QUIC查询失败: %w", err)
 	}
@@ -1733,13 +1237,8 @@ func (c *UnifiedSecureClient) exchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error)
 	return resp, err
 }
 
-// readQUICMsg 从QUIC流中读取DNS响应
 func (c *UnifiedSecureClient) readQUICMsg(stream *quic.Stream) (*dns.Msg, error) {
-	// 从资源管理器获取缓冲区
-	bufPtr := globalResourceManager.GetByteBuffer()
-	defer globalResourceManager.PutByteBuffer(bufPtr)
-
-	respBuf := *bufPtr
+	respBuf := make([]byte, SecureConnBufferSize)
 
 	// 读取响应数据
 	n, err := stream.Read(respBuf)
@@ -1770,7 +1269,6 @@ func (c *UnifiedSecureClient) readQUICMsg(stream *quic.Stream) (*dns.Msg, error)
 	return response, nil
 }
 
-// closeConnection 关闭连接（安全版本）
 func (c *UnifiedSecureClient) closeConnection() {
 	switch c.protocol {
 	case "tls":
@@ -1783,7 +1281,6 @@ func (c *UnifiedSecureClient) closeConnection() {
 	}
 }
 
-// closeQUICConn 关闭QUIC连接
 func (c *UnifiedSecureClient) closeQUICConn() {
 	if c.quicConn != nil {
 		c.quicConn.CloseWithError(QUICCodeNoError, "")
@@ -1792,7 +1289,6 @@ func (c *UnifiedSecureClient) closeQUICConn() {
 	}
 }
 
-// Close 关闭安全连接客户端
 func (c *UnifiedSecureClient) Close() error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -1803,26 +1299,21 @@ func (c *UnifiedSecureClient) Close() error {
 
 // ==================== 连接池管理器 ====================
 
-// ConnectionPoolManager 统一连接池管理器，支持UDP/TCP/TLS/QUIC
 type ConnectionPoolManager struct {
-	clients       chan *dns.Client        // UDP客户端池
-	secureClients map[string]SecureClient // 安全客户端缓存
-	timeout       time.Duration           // 超时时间
-	currentSize   int64                   // 当前池大小
-	mutex         sync.RWMutex            // 保护安全客户端缓存
+	clients       chan *dns.Client
+	secureClients map[string]SecureClient
+	timeout       time.Duration
+	mutex         sync.RWMutex
 }
 
-// NewConnectionPoolManager 初始化连接池管理器
 func NewConnectionPoolManager() *ConnectionPoolManager {
 	return &ConnectionPoolManager{
-		clients:       make(chan *dns.Client, ConnPoolSize),
+		clients:       make(chan *dns.Client, 50),
 		secureClients: make(map[string]SecureClient),
 		timeout:       QueryTimeout,
-		currentSize:   0,
 	}
 }
 
-// createClient 创建新的DNS客户端
 func (cpm *ConnectionPoolManager) createClient() *dns.Client {
 	return &dns.Client{
 		Timeout: cpm.timeout,
@@ -1831,7 +1322,6 @@ func (cpm *ConnectionPoolManager) createClient() *dns.Client {
 	}
 }
 
-// GetUDPClient 获取UDP客户端
 func (cpm *ConnectionPoolManager) GetUDPClient() *dns.Client {
 	select {
 	case client := <-cpm.clients:
@@ -1841,7 +1331,6 @@ func (cpm *ConnectionPoolManager) GetUDPClient() *dns.Client {
 	}
 }
 
-// GetTCPClient 获取TCP客户端
 func (cpm *ConnectionPoolManager) GetTCPClient() *dns.Client {
 	return &dns.Client{
 		Timeout: cpm.timeout,
@@ -1849,7 +1338,6 @@ func (cpm *ConnectionPoolManager) GetTCPClient() *dns.Client {
 	}
 }
 
-// GetSecureClient 获取安全DNS客户端（添加连接检查）
 func (cpm *ConnectionPoolManager) GetSecureClient(protocol, addr, serverName string, skipVerify bool) (SecureClient, error) {
 	cacheKey := fmt.Sprintf("%s:%s:%s:%v", protocol, addr, serverName, skipVerify)
 
@@ -1887,25 +1375,20 @@ func (cpm *ConnectionPoolManager) GetSecureClient(protocol, addr, serverName str
 	return client, nil
 }
 
-// PutUDPClient 归还UDP客户端到池中
 func (cpm *ConnectionPoolManager) PutUDPClient(client *dns.Client) {
 	if client == nil {
 		return
 	}
 	select {
 	case cpm.clients <- client:
-		// 客户端成功归还到池中
 	default:
-		// 池已满，丢弃客户端
 	}
 }
 
-// Close 关闭连接池管理器
 func (cpm *ConnectionPoolManager) Close() error {
 	cpm.mutex.Lock()
 	defer cpm.mutex.Unlock()
 
-	// 关闭所有安全客户端
 	for key, client := range cpm.secureClients {
 		if err := client.Close(); err != nil {
 			writeLog(LogWarn, "关闭安全客户端失败 [%s]: %v", key, err)
@@ -1913,10 +1396,8 @@ func (cpm *ConnectionPoolManager) Close() error {
 	}
 	cpm.secureClients = make(map[string]SecureClient)
 
-	// 清空UDP客户端池
 	close(cpm.clients)
 	for range cpm.clients {
-		// 清空剩余客户端
 	}
 
 	return nil
@@ -1924,33 +1405,25 @@ func (cpm *ConnectionPoolManager) Close() error {
 
 // ==================== 统一安全DNS服务器管理器 ====================
 
-// SecureDNSManager 统一管理 TLS 和 QUIC 服务器
 type SecureDNSManager struct {
-	server    *RecursiveDNSServer // DNS服务器实例
-	tlsConfig *tls.Config         // TLS配置
-	ctx       context.Context     // 上下文
-	cancel    context.CancelFunc  // 取消函数
-	wg        sync.WaitGroup      // 等待组
-
-	// TLS 相关
-	tlsListener net.Listener // TLS监听器
-
-	// QUIC 相关
-	quicConn      *net.UDPConn        // QUIC连接
-	quicListener  *quic.EarlyListener // QUIC监听器
-	quicTransport *quic.Transport     // QUIC传输
-	validator     gcache.Cache        // QUIC地址验证缓存
+	server        *RecursiveDNSServer
+	tlsConfig     *tls.Config
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	tlsListener   net.Listener
+	quicConn      *net.UDPConn
+	quicListener  *quic.EarlyListener
+	quicTransport *quic.Transport
+	validator     gcache.Cache
 }
 
-// NewSecureDNSManager 创建统一安全DNS管理器
 func NewSecureDNSManager(server *RecursiveDNSServer, config *ServerConfig) (*SecureDNSManager, error) {
-	// 加载证书
 	cert, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("加载证书失败: %w", err)
 	}
 
-	// 创建TLS配置
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
@@ -1967,28 +1440,47 @@ func NewSecureDNSManager(server *RecursiveDNSServer, config *ServerConfig) (*Sec
 	}, nil
 }
 
-// Start 启动 TLS 和 QUIC 服务器
 func (sm *SecureDNSManager) Start() error {
-	var startErrors []string
+	var wg sync.WaitGroup
+	errChan := make(chan error, 2)
+
+	wg.Add(2)
 
 	// 启动 TLS 服务器
-	if err := sm.startTLSServer(); err != nil {
-		startErrors = append(startErrors, fmt.Sprintf("TLS启动失败: %v", err))
-	}
+	go func() {
+		defer wg.Done()
+		defer handlePanic("TLS服务器")
+
+		if err := sm.startTLSServer(); err != nil {
+			errChan <- fmt.Errorf("TLS启动失败: %w", err)
+		}
+	}()
 
 	// 启动 QUIC 服务器
-	if err := sm.startQUICServer(); err != nil {
-		startErrors = append(startErrors, fmt.Sprintf("QUIC启动失败: %v", err))
-	}
+	go func() {
+		defer wg.Done()
+		defer handlePanic("QUIC服务器")
 
-	if len(startErrors) > 0 {
-		return fmt.Errorf("安全DNS服务启动失败: %v", startErrors)
+		if err := sm.startQUICServer(); err != nil {
+			errChan <- fmt.Errorf("QUIC启动失败: %w", err)
+		}
+	}()
+
+	// 等待启动完成或错误
+	go func() {
+		wg.Wait()
+		close(errChan)
+	}()
+
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// startTLSServer 启动 TLS 服务器
 func (sm *SecureDNSManager) startTLSServer() error {
 	listener, err := net.Listen("tcp", ":"+sm.server.config.Server.TLS.Port)
 	if err != nil {
@@ -2008,7 +1500,6 @@ func (sm *SecureDNSManager) startTLSServer() error {
 	return nil
 }
 
-// startQUICServer 启动 QUIC 服务器
 func (sm *SecureDNSManager) startQUICServer() error {
 	addr := ":" + sm.server.config.Server.TLS.Port
 
@@ -2073,7 +1564,6 @@ func (sm *SecureDNSManager) requiresValidation(addr net.Addr) bool {
 	return true
 }
 
-// handleTLSConnections 处理 TLS 连接
 func (sm *SecureDNSManager) handleTLSConnections() {
 	for {
 		select {
@@ -2101,7 +1591,6 @@ func (sm *SecureDNSManager) handleTLSConnections() {
 	}
 }
 
-// handleQUICConnections 处理 QUIC 连接
 func (sm *SecureDNSManager) handleQUICConnections() {
 	for {
 		select {
@@ -2128,7 +1617,6 @@ func (sm *SecureDNSManager) handleQUICConnections() {
 	}
 }
 
-// handleQUICConnection 处理 QUIC 连接
 func (sm *SecureDNSManager) handleQUICConnection(conn *quic.Conn) {
 	defer func() {
 		conn.CloseWithError(QUICCodeNoError, "")
@@ -2157,7 +1645,6 @@ func (sm *SecureDNSManager) handleQUICConnection(conn *quic.Conn) {
 	}
 }
 
-// handleQUICStream 处理 QUIC 流
 func (sm *SecureDNSManager) handleQUICStream(stream *quic.Stream, conn *quic.Conn) {
 	// 读取DNS消息
 	buf := make([]byte, SecureConnBufferSize)
@@ -2211,14 +1698,8 @@ func (sm *SecureDNSManager) handleQUICStream(stream *quic.Stream, conn *quic.Con
 	}
 }
 
-// handleSecureDNSConnection 统一处理安全DNS连接（TLS）
 func (sm *SecureDNSManager) handleSecureDNSConnection(conn net.Conn, protocol string) {
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
-		return
-	}
-
-	// 设置读取超时
+	tlsConn := conn.(*tls.Conn)
 	tlsConn.SetReadDeadline(time.Now().Add(SecureConnQueryTimeout))
 
 	for {
@@ -2228,7 +1709,6 @@ func (sm *SecureDNSManager) handleSecureDNSConnection(conn net.Conn, protocol st
 		default:
 		}
 
-		// 读取DNS消息长度前缀 (2字节)
 		lengthBuf := make([]byte, 2)
 		if _, err := io.ReadFull(tlsConn, lengthBuf); err != nil {
 			if err != io.EOF {
@@ -2243,32 +1723,27 @@ func (sm *SecureDNSManager) handleSecureDNSConnection(conn net.Conn, protocol st
 			return
 		}
 
-		// 读取DNS消息
 		msgBuf := make([]byte, msgLength)
 		if _, err := io.ReadFull(tlsConn, msgBuf); err != nil {
 			writeLog(LogDebug, "%s消息读取失败: %v", protocol, err)
 			return
 		}
 
-		// 解析DNS请求
 		req := new(dns.Msg)
 		if err := req.Unpack(msgBuf); err != nil {
 			writeLog(LogDebug, "%s消息解析失败: %v", protocol, err)
 			return
 		}
 
-		// 处理DNS查询
 		clientIP := sm.getSecureClientIP(tlsConn, protocol)
 		response := sm.server.ProcessDNSQuery(req, clientIP, true)
 
-		// 发送响应
 		respBuf, err := response.Pack()
 		if err != nil {
 			writeLog(LogError, "%s响应打包失败: %v", protocol, err)
 			return
 		}
 
-		// 写入响应长度和内容
 		lengthPrefix := make([]byte, 2)
 		binary.BigEndian.PutUint16(lengthPrefix, uint16(len(respBuf)))
 
@@ -2282,12 +1757,10 @@ func (sm *SecureDNSManager) handleSecureDNSConnection(conn net.Conn, protocol st
 			return
 		}
 
-		// 重置读取超时
 		tlsConn.SetReadDeadline(time.Now().Add(SecureConnQueryTimeout))
 	}
 }
 
-// getSecureClientIP 统一获取安全连接的客户端IP
 func (sm *SecureDNSManager) getSecureClientIP(conn interface{}, protocol string) net.IP {
 	switch c := conn.(type) {
 	case *tls.Conn:
@@ -2397,7 +1870,6 @@ func (sm *SecureDNSManager) readAll(r io.Reader, buf []byte) (int, error) {
 	return n, nil
 }
 
-// Shutdown 关闭安全DNS管理器
 func (sm *SecureDNSManager) Shutdown() error {
 	writeLog(LogInfo, "🛑 正在关闭安全DNS服务器...")
 
@@ -2433,26 +1905,23 @@ func (sm *SecureDNSManager) Shutdown() error {
 
 // ==================== 查询引擎 ====================
 
-// QueryResult DNS查询结果
 type QueryResult struct {
-	Response *dns.Msg      // DNS响应消息
-	Server   string        // 响应服务器地址
-	Error    error         // 错误信息
-	Duration time.Duration // 查询耗时
-	UsedTCP  bool          // 是否使用了TCP
-	Protocol string        // 使用的协议
+	Response *dns.Msg
+	Server   string
+	Error    error
+	Duration time.Duration
+	UsedTCP  bool
+	Protocol string
 }
 
-// QueryEngine 统一的DNS查询引擎
 type QueryEngine struct {
-	resourceManager *ResourceManager       // 资源管理器
-	ednsManager     *EDNSManager           // EDNS选项管理器
-	connPool        *ConnectionPoolManager // 连接池管理器
-	taskManager     *TaskManager           // 任务管理器
-	timeout         time.Duration          // 查询超时时间
+	resourceManager *ResourceManager
+	ednsManager     *EDNSManager
+	connPool        *ConnectionPoolManager
+	taskManager     *TaskManager
+	timeout         time.Duration
 }
 
-// NewQueryEngine 创建查询引擎
 func NewQueryEngine(resourceManager *ResourceManager, ednsManager *EDNSManager,
 	connPool *ConnectionPoolManager, taskManager *TaskManager, timeout time.Duration) *QueryEngine {
 	return &QueryEngine{
@@ -2464,19 +1933,14 @@ func NewQueryEngine(resourceManager *ResourceManager, ednsManager *EDNSManager,
 	}
 }
 
-// BuildQuery 构建DNS查询消息
 func (qe *QueryEngine) BuildQuery(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
 	msg := qe.resourceManager.GetDNSMessage()
-
 	msg.SetQuestion(question.Name, question.Qtype)
 	msg.RecursionDesired = recursionDesired
-
 	qe.ednsManager.AddToMessage(msg, ecs, dnssecEnabled, isSecureConnection)
-
 	return msg
 }
 
-// BuildResponse 构建DNS响应消息
 func (qe *QueryEngine) BuildResponse(request *dns.Msg) *dns.Msg {
 	msg := qe.resourceManager.GetDNSMessage()
 	msg.SetReply(request)
@@ -2485,20 +1949,17 @@ func (qe *QueryEngine) BuildResponse(request *dns.Msg) *dns.Msg {
 	return msg
 }
 
-// ReleaseMessage 释放DNS消息到资源池
 func (qe *QueryEngine) ReleaseMessage(msg *dns.Msg) {
 	if msg != nil {
 		qe.resourceManager.PutDNSMessage(msg)
 	}
 }
 
-// executeQuery 执行单个DNS查询（支持UDP/TCP/TLS/QUIC）
 func (qe *QueryEngine) executeQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, useTCP bool, tracker *RequestTracker) (*dns.Msg, error) {
 	protocol := strings.ToLower(server.Protocol)
 
 	switch protocol {
 	case "tls", "quic":
-		// 安全DNS查询
 		client, err := qe.connPool.GetSecureClient(protocol, server.Address, server.ServerName, server.SkipTLSVerify)
 		if err != nil {
 			return nil, fmt.Errorf("获取%s客户端失败: %w", strings.ToUpper(protocol), err)
@@ -2516,7 +1977,6 @@ func (qe *QueryEngine) executeQuery(ctx context.Context, msg *dns.Msg, server *U
 		return response, nil
 
 	default:
-		// 标准UDP/TCP查询
 		var client *dns.Client
 		if useTCP || protocol == "tcp" {
 			client = qe.connPool.GetTCPClient()
@@ -2539,7 +1999,6 @@ func (qe *QueryEngine) executeQuery(ctx context.Context, msg *dns.Msg, server *U
 	}
 }
 
-// ExecuteQuery 执行单个DNS查询，支持UDP/TCP自动回退
 func (qe *QueryEngine) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) *QueryResult {
 	start := time.Now()
 	result := &QueryResult{
@@ -2589,7 +2048,6 @@ func (qe *QueryEngine) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 		tcpResponse, tcpErr := qe.executeQuery(queryCtx, msg, &tcpServer, true, tracker)
 
 		if tcpErr != nil {
-			// 如果TCP也失败，但UDP有部分响应，则使用UDP响应
 			if result.Response != nil && result.Response.Rcode != dns.RcodeServerFailure {
 				if tracker != nil {
 					tracker.AddStep("TCP回退失败，使用UDP响应: %v", tcpErr)
@@ -2615,7 +2073,6 @@ func (qe *QueryEngine) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 	return result
 }
 
-// ExecuteConcurrentQuery 执行并发DNS查询，返回第一个成功的结果
 func (qe *QueryEngine) ExecuteConcurrentQuery(ctx context.Context, msg *dns.Msg, servers []*UpstreamServer,
 	maxConcurrency int, tracker *RequestTracker) (*QueryResult, error) {
 
@@ -2654,7 +2111,6 @@ func (qe *QueryEngine) ExecuteConcurrentQuery(ctx context.Context, msg *dns.Msg,
 		case result := <-resultChan:
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
-				// 接受成功或NXDOMAIN响应
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 					if tracker != nil {
 						tracker.AddStep("并发查询成功，选择服务器: %s (%s)", result.Server, result.Protocol)
@@ -2672,14 +2128,12 @@ func (qe *QueryEngine) ExecuteConcurrentQuery(ctx context.Context, msg *dns.Msg,
 
 // ==================== IP过滤器 ====================
 
-// IPFilter IP地址过滤器
 type IPFilter struct {
-	trustedCIDRs   []*net.IPNet // IPv4可信CIDR列表
-	trustedCIDRsV6 []*net.IPNet // IPv6可信CIDR列表
-	mutex          sync.RWMutex // 读写锁，保护CIDR列表
+	trustedCIDRs   []*net.IPNet
+	trustedCIDRsV6 []*net.IPNet
+	mutex          sync.RWMutex
 }
 
-// NewIPFilter 创建IP过滤器
 func NewIPFilter() *IPFilter {
 	return &IPFilter{
 		trustedCIDRs:   make([]*net.IPNet, 0, MaxTrustedIPv4CIDRs),
@@ -2687,7 +2141,6 @@ func NewIPFilter() *IPFilter {
 	}
 }
 
-// LoadCIDRs 从文件加载CIDR列表
 func (f *IPFilter) LoadCIDRs(filename string) error {
 	if filename == "" {
 		writeLog(LogInfo, "🌍 IP过滤器未配置文件路径")
@@ -2707,28 +2160,23 @@ func (f *IPFilter) LoadCIDRs(filename string) error {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
-	// 重置CIDR列表
 	f.trustedCIDRs = make([]*net.IPNet, 0, MaxTrustedIPv4CIDRs)
 	f.trustedCIDRsV6 = make([]*net.IPNet, 0, MaxTrustedIPv6CIDRs)
 
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, FileScannerBufferSize), FileScannerMaxTokenSize)
 	var totalV4, totalV6 int
 
-	// 逐行读取CIDR
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		// 跳过空行、注释行和过长的行
 		if line == "" || strings.HasPrefix(line, "#") || len(line) > MaxInputLineLength {
 			continue
 		}
 
 		_, ipNet, err := net.ParseCIDR(line)
 		if err != nil {
-			continue // 跳过无效的CIDR
+			continue
 		}
 
-		// 根据IP版本分类存储
 		if ipNet.IP.To4() != nil {
 			f.trustedCIDRs = append(f.trustedCIDRs, ipNet)
 			totalV4++
@@ -2743,16 +2191,13 @@ func (f *IPFilter) LoadCIDRs(filename string) error {
 	return scanner.Err()
 }
 
-// optimizeCIDRs 优化CIDR列表，按前缀长度排序以提高匹配效率
 func (f *IPFilter) optimizeCIDRs() {
-	// IPv4 CIDR按前缀长度降序排列（更具体的匹配优先）
 	sort.Slice(f.trustedCIDRs, func(i, j int) bool {
 		sizeI, _ := f.trustedCIDRs[i].Mask.Size()
 		sizeJ, _ := f.trustedCIDRs[j].Mask.Size()
 		return sizeI > sizeJ
 	})
 
-	// IPv6 CIDR按前缀长度降序排列
 	sort.Slice(f.trustedCIDRsV6, func(i, j int) bool {
 		sizeI, _ := f.trustedCIDRsV6[i].Mask.Size()
 		sizeJ, _ := f.trustedCIDRsV6[j].Mask.Size()
@@ -2760,20 +2205,17 @@ func (f *IPFilter) optimizeCIDRs() {
 	})
 }
 
-// IsTrustedIP 判断IP是否为可信IP
 func (f *IPFilter) IsTrustedIP(ip net.IP) bool {
 	f.mutex.RLock()
 	defer f.mutex.RUnlock()
 
 	if ip.To4() != nil {
-		// IPv4地址检查
 		for _, cidr := range f.trustedCIDRs {
 			if cidr.Contains(ip) {
 				return true
 			}
 		}
 	} else {
-		// IPv6地址检查
 		for _, cidr := range f.trustedCIDRsV6 {
 			if cidr.Contains(ip) {
 				return true
@@ -2783,7 +2225,6 @@ func (f *IPFilter) IsTrustedIP(ip net.IP) bool {
 	return false
 }
 
-// AnalyzeIPs 分析DNS记录中的IP地址，返回是否包含可信和不可信IP
 func (f *IPFilter) AnalyzeIPs(rrs []dns.RR) (hasTrustedIP, hasUntrustedIP bool) {
 	if !f.HasData() {
 		return false, true
@@ -2791,7 +2232,6 @@ func (f *IPFilter) AnalyzeIPs(rrs []dns.RR) (hasTrustedIP, hasUntrustedIP bool) 
 
 	for _, rr := range rrs {
 		var ip net.IP
-		// 提取A和AAAA记录中的IP地址
 		switch record := rr.(type) {
 		case *dns.A:
 			ip = record.A
@@ -2807,7 +2247,6 @@ func (f *IPFilter) AnalyzeIPs(rrs []dns.RR) (hasTrustedIP, hasUntrustedIP bool) 
 			hasUntrustedIP = true
 		}
 
-		// 如果已经找到两种类型的IP，可以提前返回
 		if hasTrustedIP && hasUntrustedIP {
 			return
 		}
@@ -2815,7 +2254,6 @@ func (f *IPFilter) AnalyzeIPs(rrs []dns.RR) (hasTrustedIP, hasUntrustedIP bool) 
 	return
 }
 
-// HasData 检查是否有可信CIDR数据
 func (f *IPFilter) HasData() bool {
 	f.mutex.RLock()
 	defer f.mutex.RUnlock()
@@ -2824,52 +2262,44 @@ func (f *IPFilter) HasData() bool {
 
 // ==================== DNS重写器 ====================
 
-// RewriteRuleType DNS重写规则类型枚举
 type RewriteRuleType int
 
-// 重写规则类型常量
 const (
-	RewriteExact  RewriteRuleType = iota // 精确匹配
-	RewriteSuffix                        // 后缀匹配
-	RewriteRegex                         // 正则表达式匹配
-	RewritePrefix                        // 前缀匹配
+	RewriteExact RewriteRuleType = iota
+	RewriteSuffix
+	RewriteRegex
+	RewritePrefix
 )
 
-// RewriteRule DNS重写规则定义
 type RewriteRule struct {
-	Type        RewriteRuleType `json:"-"`           // 规则类型（运行时）
-	TypeString  string          `json:"type"`        // 规则类型字符串（配置）
-	Pattern     string          `json:"pattern"`     // 匹配模式
-	Replacement string          `json:"replacement"` // 替换内容
-	regex       *regexp.Regexp  `json:"-"`           // 编译后的正则表达式（仅regex类型）
+	Type        RewriteRuleType `json:"-"`
+	TypeString  string          `json:"type"`
+	Pattern     string          `json:"pattern"`
+	Replacement string          `json:"replacement"`
+	regex       *regexp.Regexp  `json:"-"`
 }
 
-// DNSRewriter DNS域名重写器
 type DNSRewriter struct {
-	rules []RewriteRule // 重写规则列表
-	mutex sync.RWMutex  // 读写锁，保护规则列表
+	rules []RewriteRule
+	mutex sync.RWMutex
 }
 
-// NewDNSRewriter 创建DNS重写器
 func NewDNSRewriter() *DNSRewriter {
 	return &DNSRewriter{
-		rules: make([]RewriteRule, 0, LargeSliceCapacity),
+		rules: make([]RewriteRule, 0, 32),
 	}
 }
 
-// LoadRules 加载重写规则
 func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
 	validRules := make([]RewriteRule, 0, len(rules))
 	for i, rule := range rules {
-		// 检查规则长度限制
 		if len(rule.Pattern) > RFCMaxDomainNameLength || len(rule.Replacement) > RFCMaxDomainNameLength {
 			continue
 		}
 
-		// 解析规则类型
 		switch strings.ToLower(rule.TypeString) {
 		case "exact":
 			rule.Type = RewriteExact
@@ -2879,7 +2309,6 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 			rule.Type = RewritePrefix
 		case "regex":
 			rule.Type = RewriteRegex
-			// 正则表达式复杂度限制
 			if len(rule.Pattern) > MaxRegexPatternLength {
 				return fmt.Errorf("重写规则 %d 正则表达式过于复杂", i)
 			}
@@ -2900,7 +2329,6 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 	return nil
 }
 
-// Rewrite 重写域名
 func (r *DNSRewriter) Rewrite(domain string) (string, bool) {
 	if !r.HasRules() || len(domain) > RFCMaxDomainNameLength {
 		return domain, false
@@ -2909,14 +2337,12 @@ func (r *DNSRewriter) Rewrite(domain string) (string, bool) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	// 标准化域名（转小写，移除尾部点号）
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 
-	// 依次应用重写规则
 	for i := range r.rules {
 		rule := &r.rules[i]
 		if matched, result := r.matchRule(rule, domain); matched {
-			result = dns.Fqdn(result) // 确保结果是FQDN格式
+			result = dns.Fqdn(result)
 			writeLog(LogDebug, "🔄 域名重写: %s -> %s", domain, result)
 			return result, true
 		}
@@ -2924,20 +2350,16 @@ func (r *DNSRewriter) Rewrite(domain string) (string, bool) {
 	return domain, false
 }
 
-// matchRule 匹配单个重写规则
 func (r *DNSRewriter) matchRule(rule *RewriteRule, domain string) (bool, string) {
 	switch rule.Type {
 	case RewriteExact:
-		// 精确匹配
 		if domain == strings.ToLower(rule.Pattern) {
 			return true, rule.Replacement
 		}
 
 	case RewriteSuffix:
-		// 后缀匹配
 		pattern := strings.ToLower(rule.Pattern)
 		if domain == pattern || strings.HasSuffix(domain, "."+pattern) {
-			// 支持$1占位符（保留前缀）
 			if strings.Contains(rule.Replacement, "$1") {
 				if domain == pattern {
 					return true, strings.ReplaceAll(rule.Replacement, "$1", "")
@@ -2950,10 +2372,8 @@ func (r *DNSRewriter) matchRule(rule *RewriteRule, domain string) (bool, string)
 		}
 
 	case RewritePrefix:
-		// 前缀匹配
 		pattern := strings.ToLower(rule.Pattern)
 		if strings.HasPrefix(domain, pattern) {
-			// 支持$1占位符（保留后缀）
 			if strings.Contains(rule.Replacement, "$1") {
 				suffix := strings.TrimPrefix(domain, pattern)
 				return true, strings.ReplaceAll(rule.Replacement, "$1", suffix)
@@ -2962,7 +2382,6 @@ func (r *DNSRewriter) matchRule(rule *RewriteRule, domain string) (bool, string)
 		}
 
 	case RewriteRegex:
-		// 正则表达式匹配
 		if rule.regex.MatchString(domain) {
 			result := rule.regex.ReplaceAllString(domain, rule.Replacement)
 			return true, result
@@ -2971,7 +2390,6 @@ func (r *DNSRewriter) matchRule(rule *RewriteRule, domain string) (bool, string)
 	return false, ""
 }
 
-// HasRules 检查是否有重写规则
 func (r *DNSRewriter) HasRules() bool {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -2980,52 +2398,42 @@ func (r *DNSRewriter) HasRules() bool {
 
 // ==================== DNS劫持预防检查器 ====================
 
-// DNSHijackPrevention DNS劫持预防检查器
 type DNSHijackPrevention struct {
-	enabled bool // 是否启用检查
+	enabled bool
 }
 
-// NewDNSHijackPrevention 创建DNS劫持预防检查器
 func NewDNSHijackPrevention(enabled bool) *DNSHijackPrevention {
 	return &DNSHijackPrevention{enabled: enabled}
 }
 
-// IsEnabled 检查是否启用劫持预防
 func (shp *DNSHijackPrevention) IsEnabled() bool {
 	return shp.enabled
 }
 
-// CheckResponse 检查DNS响应是否存在劫持迹象
 func (shp *DNSHijackPrevention) CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string) {
 	if !shp.enabled || response == nil {
 		return true, ""
 	}
 
-	// 标准化域名
 	currentDomain = strings.ToLower(strings.TrimSuffix(currentDomain, "."))
 	queryDomain = strings.ToLower(strings.TrimSuffix(queryDomain, "."))
 
-	// 检查根服务器是否越权返回记录
 	if currentDomain == "" && queryDomain != "" {
 		isRootServerQuery := strings.HasSuffix(queryDomain, ".root-servers.net") || queryDomain == "root-servers.net"
 
 		for _, rr := range response.Answer {
 			answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
 			if answerName == queryDomain {
-				// NS和DS记录是合法的
 				if rr.Header().Rrtype == dns.TypeNS || rr.Header().Rrtype == dns.TypeDS {
 					continue
 				}
 
-				// 根服务器的A/AAAA记录是合法的
 				if isRootServerQuery && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
 					continue
 				}
 
-				// 其他记录类型可能表示劫持
 				recordType := dns.TypeToString[rr.Header().Rrtype]
 				reason := fmt.Sprintf("根服务器越权返回了 '%s' 的%s记录", queryDomain, recordType)
-				writeLog(LogDebug, "🚨 检测到DNS劫持: %s", reason)
 				return false, reason
 			}
 		}
@@ -3035,48 +2443,41 @@ func (shp *DNSHijackPrevention) CheckResponse(currentDomain, queryDomain string,
 
 // ==================== 扩展上游服务器管理 ====================
 
-// UpstreamServer 上游DNS服务器配置
 type UpstreamServer struct {
-	Address       string `json:"address"`         // 服务器地址
-	Policy        string `json:"policy"`          // 信任策略 (all/trusted_only/untrusted_only)
-	Protocol      string `json:"protocol"`        // 协议类型: "udp", "tcp", "tls", "quic"
-	ServerName    string `json:"server_name"`     // TLS/QUIC 的 SNI 名称
-	SkipTLSVerify bool   `json:"skip_tls_verify"` // 是否跳过TLS证书验证
+	Address       string `json:"address"`
+	Policy        string `json:"policy"`
+	Protocol      string `json:"protocol"`
+	ServerName    string `json:"server_name"`
+	SkipTLSVerify bool   `json:"skip_tls_verify"`
 }
 
-// IsRecursive 检查是否为内置递归服务器
 func (u *UpstreamServer) IsRecursive() bool {
 	return strings.ToLower(u.Address) == RecursiveServerIndicator
 }
 
-// ShouldTrustResult 根据策略判断是否信任查询结果
 func (u *UpstreamServer) ShouldTrustResult(hasTrustedIP, hasUntrustedIP bool) bool {
 	switch u.Policy {
 	case "all":
-		return true // 信任所有结果
+		return true
 	case "trusted_only":
-		return hasTrustedIP && !hasUntrustedIP // 仅信任只包含可信IP的结果
+		return hasTrustedIP && !hasUntrustedIP
 	case "untrusted_only":
-		return !hasTrustedIP // 仅信任不包含可信IP的结果
+		return !hasTrustedIP
 	default:
-		return true // 默认信任所有结果
+		return true
 	}
 }
 
-// UpstreamManager 上游服务器管理器
 type UpstreamManager struct {
-	servers []*UpstreamServer // 服务器列表
-	mutex   sync.RWMutex      // 读写锁，保护服务器列表
+	servers []*UpstreamServer
+	mutex   sync.RWMutex
 }
 
-// NewUpstreamManager 初始化上游服务器管理器
 func NewUpstreamManager(servers []UpstreamServer) *UpstreamManager {
 	activeServers := make([]*UpstreamServer, 0, len(servers))
 
-	// 转换为指针切片以便后续修改
 	for i := range servers {
 		server := &servers[i]
-		// 设置默认协议
 		if server.Protocol == "" {
 			server.Protocol = "udp"
 		}
@@ -3088,7 +2489,6 @@ func NewUpstreamManager(servers []UpstreamServer) *UpstreamManager {
 	}
 }
 
-// GetServers 获取服务器列表
 func (um *UpstreamManager) GetServers() []*UpstreamServer {
 	um.mutex.RLock()
 	defer um.mutex.RUnlock()
@@ -3097,51 +2497,46 @@ func (um *UpstreamManager) GetServers() []*UpstreamServer {
 
 // ==================== 服务器配置 ====================
 
-// ServerConfig 服务器配置结构
 type ServerConfig struct {
 	Server struct {
-		Port            string `json:"port"`               // 监听端口
-		IPv6            bool   `json:"ipv6"`               // 是否支持IPv6
-		LogLevel        string `json:"log_level"`          // 日志级别
-		DefaultECS      string `json:"default_ecs_subnet"` // 默认ECS子网
-		TrustedCIDRFile string `json:"trusted_cidr_file"`  // 可信CIDR文件路径
+		Port            string `json:"port"`
+		IPv6            bool   `json:"ipv6"`
+		LogLevel        string `json:"log_level"`
+		DefaultECS      string `json:"default_ecs_subnet"`
+		TrustedCIDRFile string `json:"trusted_cidr_file"`
 
-		// TLS 配置
 		TLS struct {
-			Port     string `json:"port"`      // TLS/QUIC 端口，默认 853
-			CertFile string `json:"cert_file"` // 证书文件路径
-			KeyFile  string `json:"key_file"`  // 私钥文件路径
+			Port     string `json:"port"`
+			CertFile string `json:"cert_file"`
+			KeyFile  string `json:"key_file"`
 		} `json:"tls"`
 
 		Features struct {
-			ServeStale       bool `json:"serve_stale"`       // 是否启用过期缓存服务
-			Prefetch         bool `json:"prefetch"`          // 是否启用预取
-			DNSSEC           bool `json:"dnssec"`            // 是否启用DNSSEC
-			HijackProtection bool `json:"hijack_protection"` // 是否启用劫持保护
-			Padding          bool `json:"padding"`           // 是否启用DNS Padding (RFC 7830)
+			ServeStale       bool `json:"serve_stale"`
+			Prefetch         bool `json:"prefetch"`
+			DNSSEC           bool `json:"dnssec"`
+			HijackProtection bool `json:"hijack_protection"`
+			Padding          bool `json:"padding"`
 		} `json:"features"`
 	} `json:"server"`
 
 	Redis struct {
-		Address   string `json:"address"`    // Redis服务器地址
-		Password  string `json:"password"`   // Redis密码
-		Database  int    `json:"database"`   // Redis数据库编号
-		KeyPrefix string `json:"key_prefix"` // 缓存键前缀
+		Address   string `json:"address"`
+		Password  string `json:"password"`
+		Database  int    `json:"database"`
+		KeyPrefix string `json:"key_prefix"`
 	} `json:"redis"`
 
-	Upstream []UpstreamServer `json:"upstream"` // 上游服务器列表
-	Rewrite  []RewriteRule    `json:"rewrite"`  // DNS重写规则
+	Upstream []UpstreamServer `json:"upstream"`
+	Rewrite  []RewriteRule    `json:"rewrite"`
 }
 
-// ConfigManager 配置管理器
 type ConfigManager struct{}
 
-// NewConfigManager 创建配置管理器
 func NewConfigManager() *ConfigManager {
 	return &ConfigManager{}
 }
 
-// LoadConfig 加载配置文件
 func (cm *ConfigManager) LoadConfig(filename string) (*ServerConfig, error) {
 	config := cm.getDefaultConfig()
 
@@ -3159,7 +2554,6 @@ func (cm *ConfigManager) LoadConfig(filename string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("读取配置文件失败: %w", err)
 	}
 
-	// 文件大小限制
 	if len(data) > MaxConfigFileSize {
 		return nil, fmt.Errorf("配置文件过大: %d bytes", len(data))
 	}
@@ -3172,7 +2566,6 @@ func (cm *ConfigManager) LoadConfig(filename string) (*ServerConfig, error) {
 	return config, cm.ValidateConfig(config)
 }
 
-// ValidateConfig 验证配置有效性
 func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
 	// 验证日志级别
 	if err := cm.validateLogLevel(config.Server.LogLevel); err != nil {
@@ -3202,7 +2595,6 @@ func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
 	return nil
 }
 
-// validateLogLevel 验证日志级别
 func (cm *ConfigManager) validateLogLevel(logLevel string) error {
 	validLevels := map[string]LogLevel{
 		"none": LogNone, "error": LogError, "warn": LogWarn,
@@ -3215,7 +2607,6 @@ func (cm *ConfigManager) validateLogLevel(logLevel string) error {
 	return fmt.Errorf("无效的日志级别: %s", logLevel)
 }
 
-// validateECSConfig 验证ECS配置
 func (cm *ConfigManager) validateECSConfig(ecsConfig string) error {
 	if ecsConfig == "" {
 		return nil
@@ -3229,33 +2620,30 @@ func (cm *ConfigManager) validateECSConfig(ecsConfig string) error {
 		}
 	}
 
-	// 验证CIDR格式
 	if _, _, err := net.ParseCIDR(ecsConfig); err != nil {
 		return fmt.Errorf("ECS子网格式错误: %w", err)
 	}
 	return nil
 }
 
-// validateUpstreamServers 验证上游服务器配置
 func (cm *ConfigManager) validateUpstreamServers(servers []UpstreamServer) error {
 	for i, server := range servers {
 		if !server.IsRecursive() {
-			// 验证服务器地址格式
 			if _, _, err := net.SplitHostPort(server.Address); err != nil {
 				return fmt.Errorf("上游服务器 %d 地址格式错误: %w", i, err)
 			}
 		}
-		// 验证信任策略
+
 		validPolicies := map[string]bool{"all": true, "trusted_only": true, "untrusted_only": true}
 		if !validPolicies[server.Policy] {
 			return fmt.Errorf("上游服务器 %d 信任策略无效: %s", i, server.Policy)
 		}
-		// 验证协议
+
 		validProtocols := map[string]bool{"udp": true, "tcp": true, "tls": true, "quic": true}
 		if server.Protocol != "" && !validProtocols[strings.ToLower(server.Protocol)] {
 			return fmt.Errorf("上游服务器 %d 协议无效: %s", i, server.Protocol)
 		}
-		// TLS/QUIC 需要 ServerName
+
 		if (strings.ToLower(server.Protocol) == "tls" || strings.ToLower(server.Protocol) == "quic") && server.ServerName == "" {
 			return fmt.Errorf("上游服务器 %d 使用 %s 协议需要配置 server_name", i, server.Protocol)
 		}
@@ -3263,14 +2651,12 @@ func (cm *ConfigManager) validateUpstreamServers(servers []UpstreamServer) error
 	return nil
 }
 
-// validateRedisConfig 验证Redis配置
 func (cm *ConfigManager) validateRedisConfig(config *ServerConfig) error {
 	if config.Redis.Address != "" {
 		if _, _, err := net.SplitHostPort(config.Redis.Address); err != nil {
 			return fmt.Errorf("Redis地址格式错误: %w", err)
 		}
 	} else {
-		// 无缓存模式下禁用某些功能
 		if config.Server.Features.ServeStale {
 			writeLog(LogWarn, "⚠️ 无缓存模式下禁用过期缓存服务功能")
 			config.Server.Features.ServeStale = false
@@ -3283,15 +2669,12 @@ func (cm *ConfigManager) validateRedisConfig(config *ServerConfig) error {
 	return nil
 }
 
-// validateTLSConfig 验证TLS配置
 func (cm *ConfigManager) validateTLSConfig(config *ServerConfig) error {
 	if config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "" {
-		// 必须同时配置证书和私钥
 		if config.Server.TLS.CertFile == "" || config.Server.TLS.KeyFile == "" {
 			return fmt.Errorf("证书和私钥文件必须同时配置")
 		}
 
-		// 检查文件是否存在
 		if !cm.isValidFilePath(config.Server.TLS.CertFile) {
 			return fmt.Errorf("证书文件不存在: %s", config.Server.TLS.CertFile)
 		}
@@ -3299,7 +2682,6 @@ func (cm *ConfigManager) validateTLSConfig(config *ServerConfig) error {
 			return fmt.Errorf("私钥文件不存在: %s", config.Server.TLS.KeyFile)
 		}
 
-		// 验证证书有效性
 		if _, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile); err != nil {
 			return fmt.Errorf("证书加载失败: %w", err)
 		}
@@ -3310,45 +2692,37 @@ func (cm *ConfigManager) validateTLSConfig(config *ServerConfig) error {
 	return nil
 }
 
-// getDefaultConfig 获取默认配置
 func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config := &ServerConfig{}
 
-	// 服务器基本配置
 	config.Server.Port = DNSServerPort
 	config.Server.IPv6 = true
 	config.Server.LogLevel = "info"
 	config.Server.DefaultECS = "auto"
 	config.Server.TrustedCIDRFile = ""
 
-	// TLS 默认配置
 	config.Server.TLS.Port = DNSServerSecurePort
 	config.Server.TLS.CertFile = ""
 	config.Server.TLS.KeyFile = ""
 
-	// 功能开关配置
 	config.Server.Features.ServeStale = false
 	config.Server.Features.Prefetch = false
 	config.Server.Features.DNSSEC = true
 	config.Server.Features.HijackProtection = false
 	config.Server.Features.Padding = false
 
-	// Redis配置
 	config.Redis.Address = ""
 	config.Redis.Password = ""
 	config.Redis.Database = 0
 	config.Redis.KeyPrefix = "zjdns:"
 
-	// 初始化为空列表
 	config.Upstream = []UpstreamServer{}
 	config.Rewrite = []RewriteRule{}
 
 	return config
 }
 
-// isValidFilePath 验证文件路径是否安全
 func (cm *ConfigManager) isValidFilePath(path string) bool {
-	// 安全检查：防止路径遍历攻击
 	if strings.Contains(path, "..") ||
 		strings.HasPrefix(path, "/etc/") ||
 		strings.HasPrefix(path, "/proc/") ||
@@ -3356,7 +2730,6 @@ func (cm *ConfigManager) isValidFilePath(path string) bool {
 		return false
 	}
 
-	// 检查文件是否存在且为常规文件
 	info, err := os.Stat(path)
 	if err != nil {
 		return false
@@ -3364,16 +2737,13 @@ func (cm *ConfigManager) isValidFilePath(path string) bool {
 	return info.Mode().IsRegular()
 }
 
-// GenerateExampleConfig 生成示例配置
 func (cm *ConfigManager) GenerateExampleConfig() string {
 	config := cm.getDefaultConfig()
 
-	// 设置示例值
 	config.Server.LogLevel = "info"
 	config.Server.DefaultECS = "auto"
 	config.Server.TrustedCIDRFile = "trusted_cidr.txt"
 
-	// TLS 示例配置
 	config.Server.TLS.CertFile = "/path/to/cert.pem"
 	config.Server.TLS.KeyFile = "/path/to/key.pem"
 
@@ -3383,7 +2753,6 @@ func (cm *ConfigManager) GenerateExampleConfig() string {
 	config.Server.Features.HijackProtection = true
 	config.Server.Features.Padding = false
 
-	// 示例上游服务器配置
 	config.Upstream = []UpstreamServer{
 		{
 			Address:  "223.5.5.5:53",
@@ -3392,7 +2761,7 @@ func (cm *ConfigManager) GenerateExampleConfig() string {
 		},
 		{
 			Address:  "223.6.6.6:53",
-			Policy:   "tcp",
+			Policy:   "all",
 			Protocol: "udp",
 		},
 		{
@@ -3410,12 +2779,11 @@ func (cm *ConfigManager) GenerateExampleConfig() string {
 			SkipTLSVerify: true,
 		},
 		{
-			Address: "buildin_recursive",
+			Address: RecursiveServerIndicator,
 			Policy:  "all",
 		},
 	}
 
-	// 示例重写规则
 	config.Rewrite = []RewriteRule{
 		{
 			TypeString:  "exact",
@@ -3433,10 +2801,8 @@ func (cm *ConfigManager) GenerateExampleConfig() string {
 	return string(data)
 }
 
-// 全局配置管理器
 var globalConfigManager = NewConfigManager()
 
-// 便捷函数
 func LoadConfig(filename string) (*ServerConfig, error) {
 	return globalConfigManager.LoadConfig(filename)
 }
@@ -3451,33 +2817,29 @@ func GenerateExampleConfig() string {
 
 // ==================== 缓存条目结构 ====================
 
-// CacheEntry 缓存条目结构
 type CacheEntry struct {
-	Answer          []*CompactDNSRecord `json:"answer"`                      // 答案记录
-	Authority       []*CompactDNSRecord `json:"authority"`                   // 授权记录
-	Additional      []*CompactDNSRecord `json:"additional"`                  // 附加记录
-	TTL             int                 `json:"ttl"`                         // 缓存TTL（秒）
-	Timestamp       int64               `json:"timestamp"`                   // 创建时间戳
-	Validated       bool                `json:"validated"`                   // DNSSEC验证状态
-	AccessTime      int64               `json:"access_time"`                 // 最后访问时间
-	RefreshTime     int64               `json:"refresh_time"`                // 最后刷新时间
-	ECSFamily       uint16              `json:"ecs_family,omitempty"`        // ECS地址族
-	ECSSourcePrefix uint8               `json:"ecs_source_prefix,omitempty"` // ECS源前缀
-	ECSScopePrefix  uint8               `json:"ecs_scope_prefix,omitempty"`  // ECS作用域前缀
-	ECSAddress      string              `json:"ecs_address,omitempty"`       // ECS地址
+	Answer          []*CompactDNSRecord `json:"answer"`
+	Authority       []*CompactDNSRecord `json:"authority"`
+	Additional      []*CompactDNSRecord `json:"additional"`
+	TTL             int                 `json:"ttl"`
+	Timestamp       int64               `json:"timestamp"`
+	Validated       bool                `json:"validated"`
+	AccessTime      int64               `json:"access_time"`
+	RefreshTime     int64               `json:"refresh_time,omitempty"`
+	ECSFamily       uint16              `json:"ecs_family,omitempty"`
+	ECSSourcePrefix uint8               `json:"ecs_source_prefix,omitempty"`
+	ECSScopePrefix  uint8               `json:"ecs_scope_prefix,omitempty"`
+	ECSAddress      string              `json:"ecs_address,omitempty"`
 }
 
-// IsExpired 检查缓存是否已过期
 func (c *CacheEntry) IsExpired() bool {
 	return time.Now().Unix()-c.Timestamp > int64(c.TTL)
 }
 
-// IsStale 检查缓存是否过期且超过最大保存时间
 func (c *CacheEntry) IsStale() bool {
 	return time.Now().Unix()-c.Timestamp > int64(c.TTL+StaleMaxAge)
 }
 
-// ShouldRefresh 检查是否需要刷新缓存
 func (c *CacheEntry) ShouldRefresh() bool {
 	now := time.Now().Unix()
 	return c.IsExpired() &&
@@ -3485,7 +2847,6 @@ func (c *CacheEntry) ShouldRefresh() bool {
 		(now-c.RefreshTime) > CacheRefreshRetryInterval
 }
 
-// GetRemainingTTL 获取剩余TTL时间
 func (c *CacheEntry) GetRemainingTTL() uint32 {
 	now := time.Now().Unix()
 	elapsed := now - c.Timestamp
@@ -3495,7 +2856,6 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 		return uint32(remaining)
 	}
 
-	// 对于过期缓存，使用循环的StaleTTL
 	staleElapsed := elapsed - int64(c.TTL)
 	staleCycle := staleElapsed % int64(StaleTTL)
 	staleTTLRemaining := int64(StaleTTL) - staleCycle
@@ -3507,29 +2867,24 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	return uint32(staleTTLRemaining)
 }
 
-// ShouldBeDeleted 检查缓存是否应该被删除
 func (c *CacheEntry) ShouldBeDeleted() bool {
 	now := time.Now().Unix()
 	totalAge := now - c.Timestamp
 	return totalAge > int64(c.TTL+StaleMaxAge)
 }
 
-// GetAnswerRRs 获取答案DNS记录
 func (c *CacheEntry) GetAnswerRRs() []dns.RR {
 	return globalRecordHandler.ExpandRecords(c.Answer)
 }
 
-// GetAuthorityRRs 获取授权DNS记录
 func (c *CacheEntry) GetAuthorityRRs() []dns.RR {
 	return globalRecordHandler.ExpandRecords(c.Authority)
 }
 
-// GetAdditionalRRs 获取附加DNS记录
 func (c *CacheEntry) GetAdditionalRRs() []dns.RR {
 	return globalRecordHandler.ExpandRecords(c.Additional)
 }
 
-// GetECSOption 获取ECS选项
 func (c *CacheEntry) GetECSOption() *ECSOption {
 	if c.ECSAddress == "" {
 		return nil
@@ -3547,72 +2902,51 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 
 // ==================== 刷新请求结构 ====================
 
-// RefreshRequest 缓存刷新请求
 type RefreshRequest struct {
-	Question            dns.Question // DNS问题
-	ECS                 *ECSOption   // ECS选项
-	CacheKey            string       // 缓存键
-	ServerDNSSECEnabled bool         // 服务器DNSSEC设置
+	Question            dns.Question
+	ECS                 *ECSOption
+	CacheKey            string
+	ServerDNSSECEnabled bool
 }
 
 // ==================== 缓存接口 ====================
 
-// DNSCache DNS缓存接口定义
 type DNSCache interface {
-	// Get 获取缓存条目
 	Get(key string) (*CacheEntry, bool, bool)
-
-	// Set 设置缓存条目
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption)
-
-	// RequestRefresh 请求刷新缓存
 	RequestRefresh(req RefreshRequest)
-
-	// Shutdown 关闭缓存系统
 	Shutdown()
 }
 
-// NullCache 空缓存实现，不执行任何缓存操作
 type NullCache struct{}
 
-// NewNullCache 创建空缓存
 func NewNullCache() *NullCache {
 	writeLog(LogInfo, "🚫 无缓存模式")
 	return &NullCache{}
 }
 
-// Get 空缓存的Get实现（总是返回未找到）
 func (nc *NullCache) Get(key string) (*CacheEntry, bool, bool) { return nil, false, false }
-
-// Set 空缓存的Set实现（什么都不做）
 func (nc *NullCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
 }
-
-// RequestRefresh 空缓存的RequestRefresh实现（什么都不做）
 func (nc *NullCache) RequestRefresh(req RefreshRequest) {}
+func (nc *NullCache) Shutdown()                         {}
 
-// Shutdown 空缓存的Shutdown实现（什么都不做）
-func (nc *NullCache) Shutdown() {}
+// ==================== 简化的Redis缓存实现 ====================
 
-// ==================== Redis缓存实现 ====================
-
-// RedisDNSCache Redis缓存实现
 type RedisDNSCache struct {
-	client       *redis.Client       // Redis客户端
-	config       *ServerConfig       // 服务器配置
-	keyPrefix    string              // 缓存键前缀
-	refreshQueue chan RefreshRequest // 刷新请求队列
-	ctx          context.Context     // 上下文
-	cancel       context.CancelFunc  // 取消函数
-	wg           sync.WaitGroup      // 等待组
-	taskManager  *TaskManager        // 任务管理器
-	server       *RecursiveDNSServer // DNS服务器引用
-	closed       int32               // 关闭状态标志
+	client       *redis.Client
+	config       *ServerConfig
+	keyPrefix    string
+	refreshQueue chan RefreshRequest
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	taskManager  *TaskManager
+	server       *RecursiveDNSServer
+	closed       int32
 }
 
-// NewRedisDNSCache 创建Redis缓存
 func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisDNSCache, error) {
-	// 创建Redis客户端
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         config.Redis.Address,
 		Password:     config.Redis.Password,
@@ -3626,7 +2960,6 @@ func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisD
 		DialTimeout:  RedisDialTimeout,
 	})
 
-	// 测试Redis连接
 	ctx, cancel := context.WithTimeout(context.Background(), StandardOperationTimeout)
 	defer cancel()
 
@@ -3634,7 +2967,6 @@ func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisD
 		return nil, fmt.Errorf("Redis连接失败: %w", err)
 	}
 
-	// 创建缓存上下文
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
 	cache := &RedisDNSCache{
 		client:       rdb,
@@ -3643,11 +2975,10 @@ func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisD
 		refreshQueue: make(chan RefreshRequest, CacheRefreshQueueSize),
 		ctx:          cacheCtx,
 		cancel:       cacheCancel,
-		taskManager:  NewTaskManager(TaskWorkerMaxCount),
+		taskManager:  NewTaskManager(10),
 		server:       server,
 	}
 
-	// 启动刷新处理器（仅当启用过期缓存和预取时）
 	if config.Server.Features.ServeStale && config.Server.Features.Prefetch {
 		cache.startRefreshProcessor()
 	}
@@ -3656,11 +2987,9 @@ func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisD
 	return cache, nil
 }
 
-// startRefreshProcessor 启动刷新处理器
 func (rc *RedisDNSCache) startRefreshProcessor() {
-	workerCount := runtime.NumCPU()
+	workerCount := 2
 
-	// 启动多个刷新工作线程
 	for i := 0; i < workerCount; i++ {
 		rc.wg.Add(1)
 		go func(workerID int) {
@@ -3679,7 +3008,6 @@ func (rc *RedisDNSCache) startRefreshProcessor() {
 	}
 }
 
-// handleRefreshRequest 处理缓存刷新请求
 func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 	defer handlePanic("Redis刷新请求处理")
 
@@ -3687,19 +3015,14 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 		return
 	}
 
-	writeLog(LogDebug, "🔄 开始处理刷新请求: %s", req.CacheKey)
-
-	// 执行查询获取新数据
 	answer, authority, additional, validated, ecsResponse, err := rc.server.QueryForRefresh(
 		req.Question, req.ECS, req.ServerDNSSECEnabled)
 
 	if err != nil {
-		writeLog(LogDebug, "🔄 刷新查询失败: %s - %v", req.CacheKey, err)
 		rc.updateRefreshTime(req.CacheKey)
 		return
 	}
 
-	// 计算新的TTL
 	allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
 	allRRs = append(allRRs, answer...)
 	allRRs = append(allRRs, authority...)
@@ -3708,7 +3031,6 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 	cacheTTL := globalCacheUtils.CalculateTTL(allRRs)
 	now := time.Now().Unix()
 
-	// 创建新的缓存条目
 	entry := &CacheEntry{
 		Answer:      globalRecordHandler.CompactRecords(answer),
 		Authority:   globalRecordHandler.CompactRecords(authority),
@@ -3720,7 +3042,6 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 		RefreshTime: now,
 	}
 
-	// 设置ECS信息
 	if ecsResponse != nil {
 		entry.ECSFamily = ecsResponse.Family
 		entry.ECSSourcePrefix = ecsResponse.SourcePrefix
@@ -3728,10 +3049,8 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 		entry.ECSAddress = ecsResponse.Address.String()
 	}
 
-	// 序列化并存储到Redis
 	data, err := json.Marshal(entry)
 	if err != nil {
-		writeLog(LogWarn, "⚠️ 刷新缓存序列化失败: %v", err)
 		return
 	}
 
@@ -3741,15 +3060,9 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 		expiration += time.Duration(StaleMaxAge) * time.Second
 	}
 
-	if err := rc.client.Set(rc.ctx, fullKey, data, expiration).Err(); err != nil {
-		writeLog(LogWarn, "⚠️ 刷新缓存存储失败: %v", err)
-		return
-	}
-
-	writeLog(LogDebug, "✅ 缓存刷新完成: %s (TTL: %ds, 答案: %d条)", req.CacheKey, cacheTTL, len(answer))
+	rc.client.Set(rc.ctx, fullKey, data, expiration)
 }
 
-// updateRefreshTime 更新缓存条目的刷新时间
 func (rc *RedisDNSCache) updateRefreshTime(cacheKey string) {
 	defer handlePanic("更新刷新时间")
 
@@ -3768,7 +3081,6 @@ func (rc *RedisDNSCache) updateRefreshTime(cacheKey string) {
 		return
 	}
 
-	// 更新时间戳
 	entry.RefreshTime = time.Now().Unix()
 
 	updatedData, err := json.Marshal(entry)
@@ -3776,11 +3088,9 @@ func (rc *RedisDNSCache) updateRefreshTime(cacheKey string) {
 		return
 	}
 
-	// 保持原有TTL
 	rc.client.Set(rc.ctx, fullKey, updatedData, redis.KeepTTL)
 }
 
-// Get 获取缓存条目
 func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	defer handlePanic("Redis缓存获取")
 
@@ -3791,42 +3101,38 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	fullKey := rc.keyPrefix + key
 	data, err := rc.client.Get(rc.ctx, fullKey).Result()
 	if err != nil {
-		if err == redis.Nil {
-			return nil, false, false
-		}
 		return nil, false, false
 	}
 
-	// 反序列化缓存条目
 	var entry CacheEntry
 	if err := json.Unmarshal(unsafe.Slice(unsafe.StringData(data), len(data)), &entry); err != nil {
 		return nil, false, false
 	}
 
-	// 检查是否应该删除过期缓存
 	if entry.ShouldBeDeleted() {
-		rc.taskManager.SubmitBackgroundTask(func() {
+		go func() {
 			rc.client.Del(rc.ctx, fullKey)
-		})
+		}()
 		return nil, false, false
 	}
 
-	// 异步更新访问信息（避免阻塞）
 	entry.AccessTime = time.Now().Unix()
-	rc.taskManager.SubmitBackgroundTask(func() { rc.updateAccessInfo(fullKey, &entry) })
+	go func() {
+		rc.updateAccessInfo(fullKey, &entry)
+	}()
 
 	isExpired := entry.IsExpired()
 
-	// 如果不支持过期缓存且已过期，删除并返回未找到
 	if !rc.config.Server.Features.ServeStale && isExpired {
-		rc.taskManager.SubmitBackgroundTask(func() { rc.client.Del(rc.ctx, fullKey) })
+		go func() {
+			rc.client.Del(rc.ctx, fullKey)
+		}()
 		return nil, false, false
 	}
 
 	return &entry, true, isExpired
 }
 
-// Set 设置缓存条目
 func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
 	defer handlePanic("Redis缓存设置")
 
@@ -3834,7 +3140,6 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 		return
 	}
 
-	// 计算TTL
 	allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
 	allRRs = append(allRRs, answer...)
 	allRRs = append(allRRs, authority...)
@@ -3843,7 +3148,6 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 	cacheTTL := globalCacheUtils.CalculateTTL(allRRs)
 	now := time.Now().Unix()
 
-	// 创建缓存条目
 	entry := &CacheEntry{
 		Answer:      globalRecordHandler.CompactRecords(answer),
 		Authority:   globalRecordHandler.CompactRecords(authority),
@@ -3855,7 +3159,6 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 		RefreshTime: 0,
 	}
 
-	// 设置ECS信息
 	if ecs != nil {
 		entry.ECSFamily = ecs.Family
 		entry.ECSSourcePrefix = ecs.SourcePrefix
@@ -3863,7 +3166,6 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 		entry.ECSAddress = ecs.Address.String()
 	}
 
-	// 序列化并存储
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return
@@ -3876,10 +3178,8 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 	}
 
 	rc.client.Set(rc.ctx, fullKey, data, expiration)
-	writeLog(LogDebug, "💾 Redis缓存记录: %s (TTL: %ds)", key, cacheTTL)
 }
 
-// updateAccessInfo 更新访问信息
 func (rc *RedisDNSCache) updateAccessInfo(fullKey string, entry *CacheEntry) {
 	defer handlePanic("Redis访问信息更新")
 
@@ -3894,7 +3194,6 @@ func (rc *RedisDNSCache) updateAccessInfo(fullKey string, entry *CacheEntry) {
 	rc.client.Set(rc.ctx, fullKey, data, redis.KeepTTL)
 }
 
-// RequestRefresh 请求刷新缓存
 func (rc *RedisDNSCache) RequestRefresh(req RefreshRequest) {
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -3902,29 +3201,19 @@ func (rc *RedisDNSCache) RequestRefresh(req RefreshRequest) {
 
 	select {
 	case rc.refreshQueue <- req:
-		// 请求成功提交到队列
 	default:
-		// 队列已满，记录调试信息但不阻塞
-		writeLog(LogDebug, "刷新队列已满，跳过刷新请求")
 	}
 }
 
-// Shutdown 关闭Redis缓存系统
 func (rc *RedisDNSCache) Shutdown() {
 	if !atomic.CompareAndSwapInt32(&rc.closed, 0, 1) {
-		return // 已经关闭
+		return
 	}
 
-	writeLog(LogInfo, "🛑 正在关闭Redis缓存系统...")
-
-	// 关闭任务管理器
-	rc.taskManager.Shutdown(TaskExecutionTimeout)
-
-	// 取消上下文并关闭队列
+	rc.taskManager.Shutdown(5 * time.Second)
 	rc.cancel()
 	close(rc.refreshQueue)
 
-	// 等待所有刷新worker完成
 	done := make(chan struct{})
 	go func() {
 		rc.wg.Wait()
@@ -3933,33 +3222,25 @@ func (rc *RedisDNSCache) Shutdown() {
 
 	select {
 	case <-done:
-		// 正常关闭
-	case <-time.After(TaskExecutionTimeout):
-		writeLog(LogWarn, "Redis缓存关闭超时")
+	case <-time.After(5 * time.Second):
 	}
 
-	// 关闭Redis客户端
 	rc.client.Close()
-	writeLog(LogInfo, "✅ Redis缓存系统已安全关闭")
 }
 
 // ==================== DNSSEC验证器 ====================
 
-// DNSSECValidator DNSSEC验证器
 type DNSSECValidator struct{}
 
-// NewDNSSECValidator 创建DNSSEC验证器
 func NewDNSSECValidator() *DNSSECValidator {
 	return &DNSSECValidator{}
 }
 
-// HasDNSSECRecords 检查响应是否包含DNSSEC记录
 func (v *DNSSECValidator) HasDNSSECRecords(response *dns.Msg) bool {
 	if response == nil {
 		return false
 	}
 
-	// 检查所有section中的DNSSEC记录
 	for _, sections := range [][]dns.RR{response.Answer, response.Ns, response.Extra} {
 		for _, rr := range sections {
 			switch rr.(type) {
@@ -3971,20 +3252,16 @@ func (v *DNSSECValidator) HasDNSSECRecords(response *dns.Msg) bool {
 	return false
 }
 
-// IsValidated 检查响应是否已通过DNSSEC验证
 func (v *DNSSECValidator) IsValidated(response *dns.Msg) bool {
 	if response == nil {
 		return false
 	}
-	// 优先检查AD标志
 	if response.AuthenticatedData {
 		return true
 	}
-	// 只有当AD标志未设置时才检查DNSSEC记录
 	return v.HasDNSSECRecords(response)
 }
 
-// ValidateResponse 验证DNS响应
 func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
 	if response == nil || !dnssecOK {
 		return false
@@ -3994,47 +3271,44 @@ func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) boo
 
 // ==================== 查询结果结构 ====================
 
-// UpstreamResult 上游查询结果
 type UpstreamResult struct {
-	Response       *dns.Msg        // DNS响应消息
-	Server         *UpstreamServer // 上游服务器配置
-	Error          error           // 查询错误
-	Duration       time.Duration   // 查询耗时
-	HasTrustedIP   bool            // 是否包含可信IP
-	HasUntrustedIP bool            // 是否包含不可信IP
-	Trusted        bool            // 是否被信任
-	Filtered       bool            // 是否被过滤
-	Validated      bool            // 是否通过DNSSEC验证
-	Protocol       string          // 使用的协议
+	Response       *dns.Msg
+	Server         *UpstreamServer
+	Error          error
+	Duration       time.Duration
+	HasTrustedIP   bool
+	HasUntrustedIP bool
+	Trusted        bool
+	Filtered       bool
+	Validated      bool
+	Protocol       string
 }
 
 // ==================== 主DNS服务器 ====================
 
-// RecursiveDNSServer 递归DNS服务器主结构
 type RecursiveDNSServer struct {
-	config           *ServerConfig          // 服务器配置
-	cache            DNSCache               // DNS缓存接口
-	rootServersV4    []string               // IPv4根服务器列表
-	rootServersV6    []string               // IPv6根服务器列表
-	connPool         *ConnectionPoolManager // 连接池管理器
-	dnssecVal        *DNSSECValidator       // DNSSEC验证器
-	concurrencyLimit chan struct{}          // 并发限制信号量
-	ctx              context.Context        // 全局上下文
-	cancel           context.CancelFunc     // 取消函数
-	shutdown         chan struct{}          // 关闭信号通道
-	ipFilter         *IPFilter              // IP过滤器
-	dnsRewriter      *DNSRewriter           // DNS重写器
-	upstreamManager  *UpstreamManager       // 上游服务器管理器
-	wg               sync.WaitGroup         // 等待组
-	taskManager      *TaskManager           // 任务管理器
-	hijackPrevention *DNSHijackPrevention   // DNS劫持预防
-	ednsManager      *EDNSManager           // EDNS选项管理器
-	queryEngine      *QueryEngine           // 查询引擎
-	secureDNSManager *SecureDNSManager      // 统一安全DNS管理器
-	closed           int32                  // 关闭状态标志
+	config           *ServerConfig
+	cache            DNSCache
+	rootServersV4    []string
+	rootServersV6    []string
+	connPool         *ConnectionPoolManager
+	dnssecVal        *DNSSECValidator
+	concurrencyLimit chan struct{}
+	ctx              context.Context
+	cancel           context.CancelFunc
+	shutdown         chan struct{}
+	ipFilter         *IPFilter
+	dnsRewriter      *DNSRewriter
+	upstreamManager  *UpstreamManager
+	wg               sync.WaitGroup
+	taskManager      *TaskManager
+	hijackPrevention *DNSHijackPrevention
+	ednsManager      *EDNSManager
+	queryEngine      *QueryEngine
+	secureDNSManager *SecureDNSManager
+	closed           int32
 }
 
-// QueryForRefresh 为缓存刷新执行查询，供Redis缓存调用
 func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	defer handlePanic("缓存刷新查询")
 
@@ -4047,17 +3321,13 @@ func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOpti
 
 	servers := r.upstreamManager.GetServers()
 	if len(servers) > 0 {
-		// 使用上游服务器
 		return r.queryUpstreamServers(question, ecs, serverDNSSECEnabled, nil)
 	} else {
-		// 使用递归解析
 		return r.resolveWithCNAME(refreshCtx, question, ecs, nil)
 	}
 }
 
-// NewDNSServer 创建递归DNS服务器
 func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
-	// 根服务器列表定义
 	rootServersV4 := []string{
 		"198.41.0.4:53", "170.247.170.2:53", "192.33.4.12:53", "199.7.91.13:53",
 		"192.203.230.10:53", "192.5.5.241:53", "192.112.36.4:53", "198.97.190.53:53",
@@ -4070,10 +3340,8 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		"[2001:7fe::53]:53", "[2001:503:c27::2:30]:53", "[2001:7fd::1]:53", "[2001:500:9f::42]:53", "[2001:dc3::35]:53",
 	}
 
-	// 创建全局上下文
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// 初始化各种组件
 	ednsManager, err := NewEDNSManager(config.Server.DefaultECS, config.Server.Features.Padding)
 	if err != nil {
 		cancel()
@@ -4102,7 +3370,6 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 	queryEngine := NewQueryEngine(globalResourceManager, ednsManager, connPool, taskManager, QueryTimeout)
 	hijackPrevention := NewDNSHijackPrevention(config.Server.Features.HijackProtection)
 
-	// 创建服务器实例
 	server := &RecursiveDNSServer{
 		config:           config,
 		rootServersV4:    rootServersV4,
@@ -4122,19 +3389,15 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		queryEngine:      queryEngine,
 	}
 
-	// 检查是否配置了TLS证书
 	if config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "" {
-		// 初始化统一安全DNS管理器
 		secureDNSManager, err := NewSecureDNSManager(server, config)
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("安全DNS管理器初始化失败: %w", err)
 		}
-
 		server.secureDNSManager = secureDNSManager
 	}
 
-	// 初始化缓存系统
 	var cache DNSCache
 	if config.Redis.Address == "" {
 		cache = NewNullCache()
@@ -4152,7 +3415,6 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 	return server, nil
 }
 
-// setupSignalHandling 设置系统信号处理
 func (r *RecursiveDNSServer) setupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -4166,35 +3428,27 @@ func (r *RecursiveDNSServer) setupSignalHandling() {
 		case sig := <-sigChan:
 			writeLog(LogInfo, "🛑 收到信号 %v，开始优雅关闭...", sig)
 			r.shutdownServer()
-
 		case <-r.ctx.Done():
 			return
 		}
 	}()
 }
 
-// shutdownServer 优雅关闭服务器
 func (r *RecursiveDNSServer) shutdownServer() {
 	if !atomic.CompareAndSwapInt32(&r.closed, 0, 1) {
-		return // 已经关闭
+		return
 	}
 
-	// 依次关闭各个组件
 	r.cancel()
 	r.cache.Shutdown()
 
-	// 关闭安全DNS服务器
 	if r.secureDNSManager != nil {
 		r.secureDNSManager.Shutdown()
 	}
 
-	// 关闭连接池
 	r.connPool.Close()
-
-	// 关闭任务管理器
 	r.taskManager.Shutdown(GracefulShutdownTimeout)
 
-	// 等待所有组件关闭
 	done := make(chan struct{})
 	go func() {
 		r.wg.Wait()
@@ -4213,10 +3467,8 @@ func (r *RecursiveDNSServer) shutdownServer() {
 	os.Exit(0)
 }
 
-// getRootServers 获取根服务器列表
 func (r *RecursiveDNSServer) getRootServers() []string {
 	if r.config.Server.IPv6 {
-		// 混合IPv4和IPv6根服务器
 		mixed := make([]string, 0, len(r.rootServersV4)+len(r.rootServersV6))
 		mixed = append(mixed, r.rootServersV4...)
 		mixed = append(mixed, r.rootServersV6...)
@@ -4225,18 +3477,16 @@ func (r *RecursiveDNSServer) getRootServers() []string {
 	return r.rootServersV4
 }
 
-// Start 启动DNS服务器
 func (r *RecursiveDNSServer) Start() error {
 	if atomic.LoadInt32(&r.closed) != 0 {
 		return errors.New("server is closed")
 	}
 
 	var wg sync.WaitGroup
-	serverCount := 2 // UDP + TCP
+	serverCount := 2
 
-	// 如果有安全DNS配置，增加服务器数量
 	if r.secureDNSManager != nil {
-		serverCount += 1 // 统一安全DNS管理器
+		serverCount += 1
 	}
 
 	errChan := make(chan error, serverCount)
@@ -4244,7 +3494,6 @@ func (r *RecursiveDNSServer) Start() error {
 	writeLog(LogInfo, "🚀 启动 ZJDNS Server")
 	writeLog(LogInfo, "🌐 监听端口: %s", r.config.Server.Port)
 
-	// 显示启动信息
 	r.displayInfo()
 
 	wg.Add(serverCount)
@@ -4294,10 +3543,6 @@ func (r *RecursiveDNSServer) Start() error {
 		}()
 	}
 
-	// 等待服务器启动完成
-	time.Sleep(ServerStartupDelay)
-	writeLog(LogInfo, "✅ DNS服务器启动完成！")
-
 	// 等待错误或正常结束
 	go func() {
 		wg.Wait()
@@ -4314,11 +3559,9 @@ func (r *RecursiveDNSServer) Start() error {
 	return nil
 }
 
-// displayInfo 显示服务器信息
 func (r *RecursiveDNSServer) displayInfo() {
 	servers := r.upstreamManager.GetServers()
 	if len(servers) > 0 {
-		// 显示上游服务器信息
 		for _, server := range servers {
 			if server.IsRecursive() {
 				writeLog(LogInfo, "🔗 上游服务器: 递归解析 - %s", server.Policy)
@@ -4336,7 +3579,6 @@ func (r *RecursiveDNSServer) displayInfo() {
 		}
 		writeLog(LogInfo, "🔗 上游模式: 共 %d 个服务器", len(servers))
 	} else {
-		// 递归模式
 		if r.config.Redis.Address == "" {
 			writeLog(LogInfo, "🚫 递归模式 (无缓存)")
 		} else {
@@ -4344,13 +3586,10 @@ func (r *RecursiveDNSServer) displayInfo() {
 		}
 	}
 
-	// 显示TLS相关信息
 	if r.secureDNSManager != nil {
 		writeLog(LogInfo, "🔐 监听加密端口: %s", r.config.Server.TLS.Port)
-		writeLog(LogInfo, "🔐 证书文件: %s %s", r.config.Server.TLS.CertFile, r.config.Server.TLS.KeyFile)
 	}
 
-	// 显示功能信息
 	if r.ipFilter.HasData() {
 		writeLog(LogInfo, "🌍 IP过滤器: 已启用 (配置文件: %s)", r.config.Server.TrustedCIDRFile)
 	}
@@ -4364,46 +3603,37 @@ func (r *RecursiveDNSServer) displayInfo() {
 		writeLog(LogInfo, "🌍 默认ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
 	if r.ednsManager.IsPaddingEnabled() {
-		writeLog(LogInfo, "🔒 DNS Padding: 已启用 (RFC 7830, 仅对安全连接生效)")
+		writeLog(LogInfo, "🔒 DNS Padding: 已启用")
 	}
 
-	// 显示性能参数
 	writeLog(LogInfo, "⚡ 最大并发: %d", MaxConcurrency)
-	writeLog(LogInfo, "📦 UDP缓冲区: 客户端=%d, 上游=%d", ClientUDPBufferSize, UpstreamUDPBufferSize)
 }
 
-// handleDNSRequest 处理DNS请求的入口函数
 func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	if atomic.LoadInt32(&r.closed) != 0 {
 		return
 	}
 
 	executeWithRecover("DNS请求处理", func() error {
-		// 检查服务器状态
 		select {
 		case <-r.ctx.Done():
 			return nil
 		default:
 		}
 
-		// 普通UDP/TCP连接不使用padding
 		response := r.ProcessDNSQuery(req, GetClientIP(w), false)
 		return w.WriteMsg(response)
 	})
 }
 
-// ProcessDNSQuery 处理DNS查询的核心逻辑
 func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	if atomic.LoadInt32(&r.closed) != 0 {
-		// 服务器已关闭，返回错误响应
 		msg := r.queryEngine.BuildResponse(req)
 		msg.Rcode = dns.RcodeServerFailure
 		return msg
 	}
 
 	var tracker *RequestTracker
-
-	// 创建请求追踪器（仅在调试模式下）
 	if logConfig.level >= LogDebug {
 		if len(req.Question) > 0 {
 			question := req.Question[0]
@@ -4416,11 +3646,9 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 		}
 	}
 
-	// 构建基础响应消息
 	msg := r.queryEngine.BuildResponse(req)
 	defer r.queryEngine.ReleaseMessage(msg)
 
-	// 验证请求格式
 	if len(req.Question) == 0 {
 		msg.Rcode = dns.RcodeFormatError
 		if tracker != nil {
@@ -4432,9 +3660,7 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 	question := req.Question[0]
 	originalDomain := question.Name
 
-	// 域名长度检查
 	if len(question.Name) > RFCMaxDomainNameLength {
-		writeLog(LogWarn, "拒绝过长域名查询: %d字符", len(question.Name))
 		msg.Rcode = dns.RcodeFormatError
 		if tracker != nil {
 			tracker.AddStep("域名过长被拒绝: %d字符", len(question.Name))
@@ -4457,7 +3683,6 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 				tracker.AddStep("域名重写: %s -> %s", originalDomain, rewritten)
 			}
 
-			// 检查是否重写为直接IP地址
 			if ip := net.ParseIP(strings.TrimSuffix(rewritten, ".")); ip != nil {
 				return r.createDirectIPResponse(msg, originalDomain, question.Qtype, ip, tracker)
 			}
@@ -4478,7 +3703,6 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 		}
 	}
 
-	// 使用默认ECS（如果客户端未提供）
 	if ecsOpt == nil {
 		ecsOpt = r.ednsManager.GetDefaultECS()
 		if tracker != nil && ecsOpt != nil {
@@ -4499,7 +3723,6 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 			clientRequestedDNSSEC, clientHasEDNS, ecsOpt, cacheKey, tracker, isSecureConnection)
 	}
 
-	// 缓存未命中，执行查询
 	if tracker != nil {
 		tracker.AddStep("缓存未命中，开始查询")
 	}
@@ -4507,7 +3730,6 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 		clientRequestedDNSSEC, clientHasEDNS, serverDNSSECEnabled, cacheKey, tracker, isSecureConnection)
 }
 
-// createDirectIPResponse 创建直接IP响应
 func (r *RecursiveDNSServer) createDirectIPResponse(msg *dns.Msg, originalDomain string,
 	qtype uint16, ip net.IP, tracker *RequestTracker) *dns.Msg {
 
@@ -4515,7 +3737,6 @@ func (r *RecursiveDNSServer) createDirectIPResponse(msg *dns.Msg, originalDomain
 		tracker.AddStep("创建直接IP响应: %s", ip.String())
 	}
 
-	// 根据查询类型和IP版本创建相应的记录
 	if qtype == dns.TypeA && ip.To4() != nil {
 		msg.Answer = []dns.RR{&dns.A{
 			Hdr: dns.RR_Header{
@@ -4540,7 +3761,6 @@ func (r *RecursiveDNSServer) createDirectIPResponse(msg *dns.Msg, originalDomain
 	return msg
 }
 
-// handleCacheHit 处理缓存命中情况
 func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isExpired bool,
 	question dns.Question, originalDomain string, clientRequestedDNSSEC bool, clientHasEDNS bool,
 	ecsOpt *ECSOption, cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
@@ -4556,12 +3776,10 @@ func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isE
 		}
 	}
 
-	// 处理DNS记录并设置TTL
 	msg.Answer = globalRecordHandler.ProcessRecords(entry.GetAnswerRRs(), responseTTL, clientRequestedDNSSEC)
 	msg.Ns = globalRecordHandler.ProcessRecords(entry.GetAuthorityRRs(), responseTTL, clientRequestedDNSSEC)
 	msg.Extra = globalRecordHandler.ProcessRecords(entry.GetAdditionalRRs(), responseTTL, clientRequestedDNSSEC)
 
-	// 设置DNSSEC标志
 	if r.config.Server.Features.DNSSEC && entry.Validated {
 		msg.AuthenticatedData = true
 		if tracker != nil {
@@ -4569,13 +3787,11 @@ func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isE
 		}
 	}
 
-	// 确定响应ECS（优先缓存的ECS，然后是请求的ECS）
 	responseECS := entry.GetECSOption()
 	if responseECS == nil {
 		responseECS = ecsOpt
 	}
 
-	// 添加EDNS选项（重要：传递 isSecureConnection）
 	shouldAddEDNS := clientHasEDNS || responseECS != nil || r.ednsManager.IsPaddingEnabled() ||
 		(clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
 
@@ -4584,12 +3800,8 @@ func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isE
 		if tracker != nil && responseECS != nil {
 			tracker.AddStep("添加响应ECS: %s/%d", responseECS.Address, responseECS.SourcePrefix)
 		}
-		if tracker != nil && isSecureConnection && r.ednsManager.IsPaddingEnabled() {
-			tracker.AddStep("安全连接响应，已启用DNS Padding")
-		}
 	}
 
-	// 启动后台刷新（如果需要）
 	if isExpired && r.config.Server.Features.ServeStale && r.config.Server.Features.Prefetch && entry.ShouldRefresh() {
 		if tracker != nil {
 			tracker.AddStep("启动后台预取刷新")
@@ -4606,7 +3818,6 @@ func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isE
 	return msg
 }
 
-// handleCacheMiss 处理缓存未命中情况
 func (r *RecursiveDNSServer) handleCacheMiss(msg *dns.Msg, question dns.Question, originalDomain string,
 	ecsOpt *ECSOption, clientRequestedDNSSEC bool, clientHasEDNS bool, serverDNSSECEnabled bool,
 	cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
@@ -4618,13 +3829,11 @@ func (r *RecursiveDNSServer) handleCacheMiss(msg *dns.Msg, question dns.Question
 
 	servers := r.upstreamManager.GetServers()
 	if len(servers) > 0 {
-		// 使用上游服务器
 		if tracker != nil {
 			tracker.AddStep("使用上游服务器查询 (%d个可用)", len(servers))
 		}
 		answer, authority, additional, validated, ecsResponse, err = r.queryUpstreamServers(question, ecsOpt, serverDNSSECEnabled, tracker)
 	} else {
-		// 使用递归解析
 		if tracker != nil {
 			tracker.AddStep("使用递归解析")
 		}
@@ -4642,7 +3851,6 @@ func (r *RecursiveDNSServer) handleCacheMiss(msg *dns.Msg, question dns.Question
 		clientHasEDNS, cacheKey, answer, authority, additional, validated, ecsResponse, tracker, isSecureConnection)
 }
 
-// handleQueryError 处理查询错误
 func (r *RecursiveDNSServer) handleQueryError(msg *dns.Msg, err error, cacheKey string,
 	originalDomain string, question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool,
 	ecsOpt *ECSOption, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
@@ -4651,7 +3859,6 @@ func (r *RecursiveDNSServer) handleQueryError(msg *dns.Msg, err error, cacheKey 
 		tracker.AddStep("查询失败: %v", err)
 	}
 
-	// 尝试使用过期缓存
 	if r.config.Server.Features.ServeStale {
 		if entry, found, _ := r.cache.Get(cacheKey); found {
 			if tracker != nil {
@@ -4663,18 +3870,15 @@ func (r *RecursiveDNSServer) handleQueryError(msg *dns.Msg, err error, cacheKey 
 			msg.Ns = globalRecordHandler.ProcessRecords(entry.GetAuthorityRRs(), responseTTL, clientRequestedDNSSEC)
 			msg.Extra = globalRecordHandler.ProcessRecords(entry.GetAdditionalRRs(), responseTTL, clientRequestedDNSSEC)
 
-			// 设置DNSSEC标志
 			if r.config.Server.Features.DNSSEC && entry.Validated {
 				msg.AuthenticatedData = true
 			}
 
-			// 确定响应ECS
 			responseECS := entry.GetECSOption()
 			if responseECS == nil {
 				responseECS = ecsOpt
 			}
 
-			// 添加EDNS选项（重要：传递 isSecureConnection）
 			shouldAddEDNS := clientHasEDNS || responseECS != nil || r.ednsManager.IsPaddingEnabled() ||
 				(clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
 
@@ -4687,12 +3891,10 @@ func (r *RecursiveDNSServer) handleQueryError(msg *dns.Msg, err error, cacheKey 
 		}
 	}
 
-	// 返回服务器错误
 	msg.Rcode = dns.RcodeServerFailure
 	return msg
 }
 
-// handleQuerySuccess 处理查询成功
 func (r *RecursiveDNSServer) handleQuerySuccess(msg *dns.Msg, question dns.Question, originalDomain string,
 	ecsOpt *ECSOption, clientRequestedDNSSEC bool, clientHasEDNS bool, cacheKey string,
 	answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
@@ -4704,7 +3906,6 @@ func (r *RecursiveDNSServer) handleQuerySuccess(msg *dns.Msg, question dns.Quest
 		}
 	}
 
-	// 设置DNSSEC标志
 	if r.config.Server.Features.DNSSEC && validated {
 		msg.AuthenticatedData = true
 		if tracker != nil {
@@ -4712,7 +3913,6 @@ func (r *RecursiveDNSServer) handleQuerySuccess(msg *dns.Msg, question dns.Quest
 		}
 	}
 
-	// 确定最终的ECS选项（优先响应的ECS，然后是请求的ECS）
 	responseECS := ecsResponse
 	if responseECS == nil && ecsOpt != nil {
 		responseECS = &ECSOption{
@@ -4723,15 +3923,12 @@ func (r *RecursiveDNSServer) handleQuerySuccess(msg *dns.Msg, question dns.Quest
 		}
 	}
 
-	// 缓存查询结果
 	r.cache.Set(cacheKey, answer, authority, additional, validated, responseECS)
 
-	// 设置响应记录
 	msg.Answer = globalRecordHandler.FilterDNSSEC(answer, clientRequestedDNSSEC)
 	msg.Ns = globalRecordHandler.FilterDNSSEC(authority, clientRequestedDNSSEC)
 	msg.Extra = globalRecordHandler.FilterDNSSEC(additional, clientRequestedDNSSEC)
 
-	// 添加EDNS选项（重要：传递 isSecureConnection）
 	shouldAddEDNS := clientHasEDNS || responseECS != nil || r.ednsManager.IsPaddingEnabled() ||
 		(clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
 
@@ -4740,16 +3937,12 @@ func (r *RecursiveDNSServer) handleQuerySuccess(msg *dns.Msg, question dns.Quest
 		if tracker != nil && responseECS != nil {
 			tracker.AddStep("添加响应ECS: %s/%d", responseECS.Address, responseECS.SourcePrefix)
 		}
-		if tracker != nil && isSecureConnection && r.ednsManager.IsPaddingEnabled() {
-			tracker.AddStep("安全连接响应，已启用DNS Padding")
-		}
 	}
 
 	r.restoreOriginalDomain(msg, question.Name, originalDomain)
 	return msg
 }
 
-// restoreOriginalDomain 恢复原始域名
 func (r *RecursiveDNSServer) restoreOriginalDomain(msg *dns.Msg, questionName, originalDomain string) {
 	for _, rr := range msg.Answer {
 		if strings.EqualFold(rr.Header().Name, questionName) {
@@ -4758,7 +3951,6 @@ func (r *RecursiveDNSServer) restoreOriginalDomain(msg *dns.Msg, questionName, o
 	}
 }
 
-// queryUpstreamServers 查询上游服务器
 func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *ECSOption,
 	serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 
@@ -4780,7 +3972,6 @@ func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *EC
 	ctx, cancel := context.WithTimeout(r.ctx, QueryTimeout)
 	defer cancel()
 
-	// 启动并发查询
 	for i := 0; i < maxConcurrent && i < len(servers); i++ {
 		server := servers[i]
 		r.taskManager.ExecuteAsync(fmt.Sprintf("UpstreamQuery-%s", server.Address),
@@ -4794,7 +3985,6 @@ func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *EC
 			})
 	}
 
-	// 收集查询结果
 	var results []UpstreamResult
 	for i := 0; i < maxConcurrent; i++ {
 		select {
@@ -4812,7 +4002,6 @@ func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *EC
 	return r.selectUpstreamResult(results, question, tracker)
 }
 
-// queryUpstreamServer 查询单个上游服务器
 func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *UpstreamServer,
 	question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool, tracker *RequestTracker) UpstreamResult {
 
@@ -4827,7 +4016,6 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 		tracker.AddStep("查询上游服务器: %s (%s)", server.Address, result.Protocol)
 	}
 
-	// 递归服务器处理
 	if server.IsRecursive() {
 		answer, authority, additional, validated, ecsResponse, err := r.resolveWithCNAME(ctx, question, ecs, tracker)
 		result.Duration = time.Since(start)
@@ -4841,7 +4029,6 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 			return result
 		}
 
-		// 构建响应消息
 		response := globalResourceManager.GetDNSMessage()
 		defer globalResourceManager.PutDNSMessage(response)
 
@@ -4858,10 +4045,9 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 		result.Validated = validated
 
 		if ecsResponse != nil {
-			r.ednsManager.AddToMessage(response, ecsResponse, serverDNSSECEnabled, false) // 递归查询不使用padding
+			r.ednsManager.AddToMessage(response, ecsResponse, serverDNSSECEnabled, false)
 		}
 	} else {
-		// 外部服务器查询
 		protocol := strings.ToLower(server.Protocol)
 		isSecureConnection := (protocol == "tls" || protocol == "quic")
 
@@ -4896,7 +4082,6 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 		}
 	}
 
-	// IP信任策略检查
 	result.HasTrustedIP, result.HasUntrustedIP = r.ipFilter.AnalyzeIPs(result.Response.Answer)
 	result.Trusted = server.ShouldTrustResult(result.HasTrustedIP, result.HasUntrustedIP)
 
@@ -4917,14 +4102,12 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 	return result
 }
 
-// selectUpstreamResult 选择上游查询结果
 func (r *RecursiveDNSServer) selectUpstreamResult(results []UpstreamResult, question dns.Question,
 	tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 
 	var validResults []UpstreamResult
 	var trustedResults []UpstreamResult
 
-	// 过滤有效结果
 	for _, result := range results {
 		if result.Error == nil && result.Response != nil && result.Response.Rcode == dns.RcodeSuccess {
 			validResults = append(validResults, result)
@@ -4942,7 +4125,6 @@ func (r *RecursiveDNSServer) selectUpstreamResult(results []UpstreamResult, ques
 		tracker.AddStep("有效结果: %d, 可信结果: %d", len(validResults), len(trustedResults))
 	}
 
-	// 选择最佳结果（优先选择可信结果）
 	var selectedResult UpstreamResult
 	if len(trustedResults) > 0 {
 		selectedResult = trustedResults[0]
@@ -4957,10 +4139,9 @@ func (r *RecursiveDNSServer) selectUpstreamResult(results []UpstreamResult, ques
 
 	if tracker != nil {
 		tracker.Upstream = selectedResult.Server.Address
-		tracker.AddStep("最终选择%s结果: %s (策略: prefer_trusted)", sourceType, selectedResult.Server.Address)
+		tracker.AddStep("最终选择%s结果: %s", sourceType, selectedResult.Server.Address)
 	}
 
-	// 解析ECS响应
 	var ecsResponse *ECSOption
 	if selectedResult.Response != nil {
 		ecsResponse = r.ednsManager.ParseFromDNS(selectedResult.Response)
@@ -4970,7 +4151,6 @@ func (r *RecursiveDNSServer) selectUpstreamResult(results []UpstreamResult, ques
 		selectedResult.Validated, ecsResponse, nil
 }
 
-// resolveWithCNAME 处理CNAME链的递归解析
 func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption,
 	tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 
@@ -4980,14 +4160,12 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 	allValidated := true
 
 	currentQuestion := question
-	visitedCNAMEs := globalResourceManager.GetStringMap()
-	defer globalResourceManager.PutStringMap(visitedCNAMEs)
+	visitedCNAMEs := make(map[string]bool)
 
 	if tracker != nil {
 		tracker.AddStep("开始CNAME链解析")
 	}
 
-	// CNAME链处理循环
 	for i := 0; i < MaxCNAMEChainLength; i++ {
 		select {
 		case <-ctx.Done():
@@ -4996,7 +4174,6 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 		}
 
 		currentName := strings.ToLower(currentQuestion.Name)
-		// 循环检测
 		if visitedCNAMEs[currentName] {
 			return nil, nil, nil, false, nil, fmt.Errorf("CNAME循环检测: %s", currentName)
 		}
@@ -5006,7 +4183,6 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 			tracker.AddStep("解析CNAME链第%d步: %s", i+1, currentQuestion.Name)
 		}
 
-		// 递归查询当前问题
 		answer, authority, additional, validated, ecsResponse, err := r.recursiveQuery(ctx, currentQuestion, ecs, 0, false, tracker)
 		if err != nil {
 			return nil, nil, nil, false, nil, err
@@ -5024,7 +4200,6 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 		finalAuthority = authority
 		finalAdditional = additional
 
-		// 检查CNAME记录
 		var nextCNAME *dns.CNAME
 		hasTargetType := false
 
@@ -5041,7 +4216,6 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 			}
 		}
 
-		// 检查是否需要继续CNAME解析
 		if hasTargetType || currentQuestion.Qtype == dns.TypeCNAME || nextCNAME == nil {
 			if tracker != nil {
 				tracker.AddStep("CNAME链解析完成")
@@ -5049,7 +4223,6 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 			break
 		}
 
-		// 继续解析CNAME目标
 		currentQuestion = dns.Question{
 			Name:   nextCNAME.Target,
 			Qtype:  question.Qtype,
@@ -5060,16 +4233,13 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, nil
 }
 
-// recursiveQuery 执行递归DNS查询
 func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption,
 	depth int, forceTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 
-	// 递归深度检查
 	if depth > MaxRecursionDepth {
 		return nil, nil, nil, false, nil, fmt.Errorf("递归深度超限: %d", depth)
 	}
 
-	// 标准化查询名称
 	qname := dns.Fqdn(question.Name)
 	question.Name = qname
 	nameservers := r.getRootServers()
@@ -5081,14 +4251,12 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 		tracker.AddStep("递归查询开始: %s, 深度=%d, TCP=%v", normalizedQname, depth, forceTCP)
 	}
 
-	// 根域名查询处理
 	if normalizedQname == "" {
 		response, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
 		if err != nil {
 			return nil, nil, nil, false, nil, fmt.Errorf("查询根域名失败: %w", err)
 		}
 
-		// DNS劫持检查
 		if r.hijackPrevention.IsEnabled() {
 			if valid, reason := r.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
 				return r.handleSuspiciousResponse(response, reason, forceTCP, tracker)
@@ -5106,7 +4274,6 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 		return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
 	}
 
-	// 迭代查询循环
 	for {
 		select {
 		case <-ctx.Done():
@@ -5118,10 +4285,8 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			tracker.AddStep("查询授权服务器: %s (%d个NS)", currentDomain, len(nameservers))
 		}
 
-		// 查询当前授权服务器
 		response, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
 		if err != nil {
-			// DNS劫持检测后的TCP回退
 			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
 				if tracker != nil {
 					tracker.AddStep("检测到DNS劫持，切换TCP模式重试")
@@ -5131,7 +4296,6 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			return nil, nil, nil, false, nil, fmt.Errorf("查询%s失败: %w", currentDomain, err)
 		}
 
-		// DNS劫持检查
 		if r.hijackPrevention.IsEnabled() {
 			if valid, reason := r.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
 				answer, authority, additional, validated, ecsResponse, err := r.handleSuspiciousResponse(response, reason, forceTCP, tracker)
@@ -5145,7 +4309,6 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			}
 		}
 
-		// DNSSEC验证
 		validated := false
 		if r.config.Server.Features.DNSSEC {
 			validated = r.dnssecVal.ValidateResponse(response, true)
@@ -5154,7 +4317,6 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 		var ecsResponse *ECSOption
 		ecsResponse = r.ednsManager.ParseFromDNS(response)
 
-		// 检查是否获得最终答案
 		if len(response.Answer) > 0 {
 			if tracker != nil {
 				tracker.AddStep("获得最终答案: %d条记录", len(response.Answer))
@@ -5162,7 +4324,6 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
-		// 查找下一级授权
 		bestMatch := ""
 		var bestNSRecords []*dns.NS
 
@@ -5197,7 +4358,6 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
-		// 循环检测
 		currentDomainNormalized := strings.ToLower(strings.TrimSuffix(currentDomain, "."))
 		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
 			if tracker != nil {
@@ -5209,7 +4369,6 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 		currentDomain = bestMatch + "."
 		var nextNS []string
 
-		// 从Additional section查找NS地址
 		for _, ns := range bestNSRecords {
 			for _, rr := range response.Extra {
 				switch a := rr.(type) {
@@ -5225,7 +4384,6 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			}
 		}
 
-		// 如果Additional中没有地址，需要解析NS记录
 		if len(nextNS) == 0 {
 			if tracker != nil {
 				tracker.AddStep("Additional中无NS地址，开始解析NS记录")
@@ -5247,18 +4405,15 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 	}
 }
 
-// handleSuspiciousResponse 处理可疑响应
 func (r *RecursiveDNSServer) handleSuspiciousResponse(response *dns.Msg, reason string, currentlyTCP bool,
 	tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 
 	if !currentlyTCP {
-		// 未使用TCP，建议切换到TCP模式
 		if tracker != nil {
 			tracker.AddStep("检测到DNS劫持，将切换到TCP模式: %s", reason)
 		}
 		return nil, nil, nil, false, nil, fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
 	} else {
-		// 已使用TCP仍检测到劫持，拒绝响应
 		if tracker != nil {
 			tracker.AddStep("TCP模式下仍检测到DNS劫持，拒绝响应: %s", reason)
 		}
@@ -5266,7 +4421,6 @@ func (r *RecursiveDNSServer) handleSuspiciousResponse(response *dns.Msg, reason 
 	}
 }
 
-// queryNameserversConcurrent 并发查询nameserver
 func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nameservers []string,
 	question dns.Question, ecs *ECSOption, forceTCP bool, tracker *RequestTracker) (*dns.Msg, error) {
 
@@ -5274,7 +4428,6 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 		return nil, errors.New("没有可用的nameserver")
 	}
 
-	// 并发控制
 	select {
 	case r.concurrencyLimit <- struct{}{}:
 		defer func() { <-r.concurrencyLimit }()
@@ -5291,11 +4444,9 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 		tracker.AddStep("并发查询nameserver: %d个, TCP=%v", concurrency, forceTCP)
 	}
 
-	// 构建查询消息
-	msg := r.queryEngine.BuildQuery(question, ecs, r.config.Server.Features.DNSSEC, false, false) // 递归查询不使用padding
+	msg := r.queryEngine.BuildQuery(question, ecs, r.config.Server.Features.DNSSEC, false, false)
 	defer r.queryEngine.ReleaseMessage(msg)
 
-	// 创建临时上游服务器列表用于并发查询
 	tempServers := make([]*UpstreamServer, concurrency)
 	for i := 0; i < concurrency && i < len(nameservers); i++ {
 		protocol := "udp"
@@ -5309,7 +4460,6 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 		}
 	}
 
-	// 执行并发查询
 	queryResult, err := r.queryEngine.ExecuteConcurrentQuery(ctx, msg, tempServers, concurrency, tracker)
 
 	if err != nil {
@@ -5319,7 +4469,6 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 	return queryResult.Response, nil
 }
 
-// resolveNSAddressesConcurrent 并发解析NS地址
 func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS,
 	qname string, depth int, forceTCP bool, tracker *RequestTracker) []string {
 
@@ -5336,12 +4485,10 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, StandardOperationTimeout)
 	defer resolveCancel()
 
-	// 启动并发NS地址解析
 	for i := 0; i < resolveCount; i++ {
 		ns := nsRecords[i]
 		r.taskManager.ExecuteAsync(fmt.Sprintf("NSResolve-%s", ns.Ns),
 			func(ctx context.Context) error {
-				// 避免循环查询
 				if strings.EqualFold(strings.TrimSuffix(ns.Ns, "."), strings.TrimSuffix(qname, ".")) {
 					select {
 					case nsChan <- nil:
@@ -5352,7 +4499,6 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 
 				var addresses []string
 
-				// 解析A记录
 				nsQuestion := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
 				if nsAnswer, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP, tracker); err == nil {
 					for _, rr := range nsAnswer {
@@ -5362,7 +4508,6 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 					}
 				}
 
-				// 如果支持IPv6且没有A记录，尝试AAAA记录
 				if r.config.Server.IPv6 && len(addresses) == 0 {
 					nsQuestionV6 := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
 					if nsAnswerV6, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP, tracker); err == nil {
@@ -5382,14 +4527,12 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 			})
 	}
 
-	// 收集NS地址
 	var allAddresses []string
 	for i := 0; i < resolveCount; i++ {
 		select {
 		case addresses := <-nsChan:
 			if len(addresses) > 0 {
 				allAddresses = append(allAddresses, addresses...)
-				// 限制总数避免过多地址
 				if len(allAddresses) >= MaxNameServerResolveCount {
 					resolveCancel()
 					break
@@ -5409,7 +4552,6 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 
 // ==================== 工具函数 ====================
 
-// GetClientIP 获取客户端IP地址
 func GetClientIP(w dns.ResponseWriter) net.IP {
 	if addr := w.RemoteAddr(); addr != nil {
 		switch a := addr.(type) {
@@ -5428,11 +4570,9 @@ func main() {
 	var configFile string
 	var generateConfig bool
 
-	// 命令行参数解析
 	flag.StringVar(&configFile, "config", "", "配置文件路径 (JSON格式)")
 	flag.BoolVar(&generateConfig, "generate-config", false, "生成示例配置文件")
 
-	// 自定义使用说明
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "🚀 ZJDNS Server\n\n")
 		fmt.Fprintf(os.Stderr, "用法:\n")
@@ -5443,25 +4583,21 @@ func main() {
 
 	flag.Parse()
 
-	// 生成示例配置
 	if generateConfig {
 		fmt.Println(GenerateExampleConfig())
 		return
 	}
 
-	// 加载配置
 	config, err := LoadConfig(configFile)
 	if err != nil {
 		customLogger.Fatalf("❌ 配置加载失败: %v", err)
 	}
 
-	// 创建服务器
 	server, err := NewDNSServer(config)
 	if err != nil {
 		customLogger.Fatalf("❌ 服务器创建失败: %v", err)
 	}
 
-	// 启动服务器
 	if err := server.Start(); err != nil {
 		customLogger.Fatalf("❌ 服务器启动失败: %v", err)
 	}
