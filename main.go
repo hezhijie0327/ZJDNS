@@ -58,7 +58,7 @@ const (
 	SecureConnKeepAlive        = 20 * time.Second // 安全连接保活周期
 	SecureConnHandshakeTimeout = 2 * time.Second  // 安全连接握手超时时间
 	SecureConnQueryTimeout     = 5 * time.Second  // 安全连接查询超时时间
-	SecureConnBufferSize       = 4096             // 安全连接缓冲区大小
+	SecureConnBufferSize       = 8192             // 安全连接缓冲区大小
 	MinDNSPacketSize           = 12               // DNS数据包最小长度
 	SecureConnMaxRetries       = 2                // 安全连接最大重试次数
 )
@@ -803,7 +803,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		Hdr: dns.RR_Header{
 			Name:   ".",
 			Rrtype: dns.TypeOPT,
-			Class:  UpstreamUDPBufferSize,
+			Class:  ClientUDPBufferSize,
 			Ttl:    0,
 		},
 	}
