@@ -157,6 +157,7 @@ const (
 	MaxTrustedIPv6CIDRs      = 256             // 最大可信IPv6 CIDR数量
 	DefaultECSIPv4PrefixLen  = 24              // 默认ECS IPv4前缀长度
 	DefaultECSIPv6PrefixLen  = 64              // 默认ECS IPv6前缀长度
+	DefaultECSClientScope    = 0               // 客户端查询中 SourceScope 必须为 0 (RFC 7871)
 )
 
 // ==================== 日志系统 ====================
@@ -820,11 +821,11 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 			Code:          dns.EDNS0SUBNET,
 			Family:        ecs.Family,
 			SourceNetmask: ecs.SourcePrefix,
-			SourceScope:   ecs.ScopePrefix,
+			SourceScope:   DefaultECSClientScope,
 			Address:       ecs.Address,
 		}
 		options = append(options, ecsOption)
-		writeLog(LogDebug, "🌍 添加ECS选项: %s/%d", ecs.Address, ecs.SourcePrefix)
+		writeLog(LogDebug, "🌍 添加ECS选项: %s/%d (scope=0)", ecs.Address, ecs.SourcePrefix)
 	}
 
 	// 添加Padding选项（RFC 7830：应该是最后一个选项）
@@ -874,7 +875,7 @@ func (em *EDNSManager) parseECSConfig(subnet string) (*ECSOption, error) {
 		return &ECSOption{
 			Family:       family,
 			SourcePrefix: uint8(prefix),
-			ScopePrefix:  uint8(prefix),
+			ScopePrefix:  DefaultECSClientScope,
 			Address:      ipNet.IP,
 		}, nil
 	}
@@ -908,7 +909,7 @@ func (em *EDNSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption
 		ecs = &ECSOption{
 			Family:       family,
 			SourcePrefix: prefix,
-			ScopePrefix:  prefix,
+			ScopePrefix:  DefaultECSClientScope,
 			Address:      ip,
 		}
 
@@ -921,7 +922,7 @@ func (em *EDNSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption
 			ecs = &ECSOption{
 				Family:       2,
 				SourcePrefix: DefaultECSIPv6PrefixLen,
-				ScopePrefix:  DefaultECSIPv6PrefixLen,
+				ScopePrefix:  DefaultECSClientScope,
 				Address:      ip,
 			}
 			writeLog(LogDebug, "🌍 回退检测到IPv6地址: %s", ip)
@@ -1953,11 +1954,6 @@ func NewSecureDNSManager(server *RecursiveDNSServer, config *ServerConfig) (*Sec
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
-		CipherSuites: []uint16{
-			tls.TLS_AES_128_GCM_SHA256,
-			tls.TLS_AES_256_GCM_SHA384,
-			tls.TLS_CHACHA20_POLY1305_SHA256,
-		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
