@@ -1,6 +1,6 @@
 # ZJDNS Server
 
-🚀 高性能递归DNS解析服务器，基于Go语言开发，支持Redis缓存、DNSSEC验证、ECS等高级功能。
+🚀 高性能递归DNS解析服务器，基于Go语言开发，支持Redis缓存、DNSSEC验证、ECS、DoT/DoQ等高级功能。
 
 > ⚠️ **警告**
 > 本项目为 Vibe Coding 产物，代码结构复杂且未经充分生产环境验证，请勿用于生产环境
@@ -25,6 +25,17 @@
 - **递归深度保护**：防止恶意递归查询攻击，可配置最大递归深度
 - **IP过滤**：基于CIDR的IP过滤功能，可区分可信IP和非可信IP，实现精细化流量控制
 - **内存安全**：采用对象池管理，修复潜在内存泄漏，提升长时间运行稳定性
+
+### 🔐 安全传输协议
+- **DNS over TLS (DoT)**：支持标准的DNS over TLS协议 (RFC 7818)，在端口`853`上提供加密的DNS查询，防止中间人窃听和篡改。
+- **DNS over QUIC (DoQ)**：支持前沿的DNS over QUIC协议，利用QUIC协议的0-RTT、多路复用和连接迁移等特性，提供更低延迟和更高可靠性的加密DNS服务。
+- **统一证书管理**：DoT和DoQ共享同一套TLS证书配置，简化部署。
+- **连接复用与保活**：为安全连接实现连接复用和TCP Keep-Alive，提升性能和稳定性。
+
+### 📦 DNS Padding
+- **RFC 7830 标准支持**：实现DNS Padding功能，通过在EDNS0中添加填充字节，使DNS响应数据包大小标准化，有效对抗基于流量大小的指纹识别和审查。
+- **智能块大小填充**：采用推荐的128字节块大小进行填充，平衡隐私保护和带宽效率。
+- **按需启用**：可通过配置文件灵活开启或关闭此功能。
 
 ### 💾 缓存系统
 - **双模式运行**：
@@ -65,27 +76,12 @@
                        │  │ Request     │               │
                        │  │ Tracker     │───────────────│───▶│    ECS Mgr      │
                        │  └─────────────┘               │    └─────────────────┘
+                       │  ┌─────────────┐               │    ┌─────────────────┐
+                       │  │  Secure     │───────────────│───▶│    DoT/DoQ     │
+                       │  │  Conn Mgr   │               │    │    Servers      │
+                       │  └─────────────┘               │    └─────────────────┘
                        └───────────────────────────────┘
 ```
-
-## 🛠️ 配置选项
-
-### 核心配置
-- **网络设置**：端口、IPv6支持、默认ECS子网（支持`auto`, `auto_v4`, `auto_v6`）
-- **TTL策略**：默认TTL、过期缓存服务参数（Stale TTL, Stale Max Age）
-- **日志级别**：支持`none`、`error`、`warn`、`info`、`debug`五级日志，带颜色和emoji输出
-
-### 高级功能
-- **IP过滤**：通过`trusted_cidr_file`配置可信IP段，启用后可对A/AAAA记录进行信任分析
-- **DNS重写**：支持多种重写规则，可实现域名重定向、广告过滤（如重写到127.0.0.1）等
-- **上游服务器**：可配置多个上游DNS服务器，设置信任策略（`all`, `trusted_only`, `untrusted_only`）
-- **DNS劫持预防**：在 `features` 配置块中设置 `hijack_protection: true` 即可启用。
-
-### 性能调优
-- **并发控制**：系统最大并发数固定为1000
-- **后台任务**：后台任务处理worker数量根据CPU核心数自动调整
-- **缓存刷新**：可配置缓存预取和刷新策略，以及Redis更新节流时间（毫秒级）
-- **查询超时**：全局查询超时固定为5秒
 
 ## 📋 使用示例
 
@@ -112,3 +108,5 @@
 感谢以下开源项目：
 - [miekg/dns](https://github.com/miekg/dns) - Go DNS库
 - [redis/go-redis](https://github.com/redis/go-redis) - Redis Go客户端
+- [quic-go/quic-go](https://github.com/quic-go/quic-go) - QUIC协议实现
+- [bluele/gcache](https://github.com/bluele/gcache) - Go通用缓存库
