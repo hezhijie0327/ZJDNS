@@ -741,7 +741,7 @@ func NewEDNSManager(defaultSubnet string, paddingEnabled bool) (*EDNSManager, er
 	}
 
 	if paddingEnabled {
-		writeLog(LogInfo, "🔒 DNS Padding: 已启用 (RFC 7830, 块大小: %d字节)", DNSPaddingBlockSize)
+		writeLog(LogInfo, "🔒 DNS Padding: 已启用 (RFC 7830, 块大小: %d字节, 仅对安全连接生效)", DNSPaddingBlockSize)
 	}
 
 	return manager, nil
@@ -783,8 +783,8 @@ func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 	return nil
 }
 
-// AddToMessage 向DNS消息添加所有EDNS选项（ECS + Padding）
-func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled bool) {
+// AddToMessage 向DNS消息添加所有EDNS选项（ECS + Padding仅对安全连接）
+func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled bool, isSecureConnection bool) {
 	if msg == nil {
 		return
 	}
@@ -828,8 +828,8 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		writeLog(LogDebug, "🌍 添加ECS选项: %s/%d (scope=0)", ecs.Address, ecs.SourcePrefix)
 	}
 
-	// 添加Padding选项（RFC 7830：应该是最后一个选项）
-	if em.paddingManager.IsEnabled() {
+	// 添加Padding选项（RFC 7830：仅对安全连接，应该是最后一个选项）
+	if em.paddingManager.IsEnabled() && isSecureConnection {
 		// 计算当前消息大小（包括已有的EDNS选项）
 		tempMsg := msg.Copy()
 		opt.Option = options
@@ -2203,7 +2203,7 @@ func (sm *SecureDNSManager) handleQUICStream(stream *quic.Stream, conn *quic.Con
 
 	// 处理DNS查询
 	clientIP := sm.getSecureClientIP(conn, "QUIC")
-	response := sm.server.ProcessDNSQuery(req, clientIP)
+	response := sm.server.ProcessDNSQuery(req, clientIP, true)
 
 	// 发送响应
 	if err := sm.respondQUIC(stream, response); err != nil {
@@ -2259,7 +2259,7 @@ func (sm *SecureDNSManager) handleSecureDNSConnection(conn net.Conn, protocol st
 
 		// 处理DNS查询
 		clientIP := sm.getSecureClientIP(tlsConn, protocol)
-		response := sm.server.ProcessDNSQuery(req, clientIP)
+		response := sm.server.ProcessDNSQuery(req, clientIP, true)
 
 		// 发送响应
 		respBuf, err := response.Pack()
@@ -2465,13 +2465,13 @@ func NewQueryEngine(resourceManager *ResourceManager, ednsManager *EDNSManager,
 }
 
 // BuildQuery 构建DNS查询消息
-func (qe *QueryEngine) BuildQuery(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool) *dns.Msg {
+func (qe *QueryEngine) BuildQuery(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
 	msg := qe.resourceManager.GetDNSMessage()
 
 	msg.SetQuestion(question.Name, question.Qtype)
 	msg.RecursionDesired = recursionDesired
 
-	qe.ednsManager.AddToMessage(msg, ecs, dnssecEnabled)
+	qe.ednsManager.AddToMessage(msg, ecs, dnssecEnabled, isSecureConnection)
 
 	return msg
 }
@@ -4364,7 +4364,7 @@ func (r *RecursiveDNSServer) displayInfo() {
 		writeLog(LogInfo, "🌍 默认ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
 	if r.ednsManager.IsPaddingEnabled() {
-		writeLog(LogInfo, "🔒 DNS Padding: 已启用 (RFC 7830)")
+		writeLog(LogInfo, "🔒 DNS Padding: 已启用 (RFC 7830, 仅对安全连接生效)")
 	}
 
 	// 显示性能参数
@@ -4386,13 +4386,14 @@ func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg
 		default:
 		}
 
-		response := r.ProcessDNSQuery(req, GetClientIP(w))
+		// 普通UDP/TCP连接不使用padding
+		response := r.ProcessDNSQuery(req, GetClientIP(w), false)
 		return w.WriteMsg(response)
 	})
 }
 
 // ProcessDNSQuery 处理DNS查询的核心逻辑
-func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP) *dns.Msg {
+func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	if atomic.LoadInt32(&r.closed) != 0 {
 		// 服务器已关闭，返回错误响应
 		msg := r.queryEngine.BuildResponse(req)
@@ -4443,6 +4444,9 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 
 	if tracker != nil {
 		tracker.AddStep("开始处理查询: %s %s", question.Name, dns.TypeToString[question.Qtype])
+		if isSecureConnection {
+			tracker.AddStep("安全连接查询，将启用DNS Padding")
+		}
 	}
 
 	// DNS重写处理
@@ -4492,7 +4496,7 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 	// 缓存查找
 	if entry, found, isExpired := r.cache.Get(cacheKey); found {
 		return r.handleCacheHit(msg, entry, isExpired, question, originalDomain,
-			clientRequestedDNSSEC, clientHasEDNS, ecsOpt, cacheKey, tracker)
+			clientRequestedDNSSEC, clientHasEDNS, ecsOpt, cacheKey, tracker, isSecureConnection)
 	}
 
 	// 缓存未命中，执行查询
@@ -4500,7 +4504,7 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP) *dns
 		tracker.AddStep("缓存未命中，开始查询")
 	}
 	return r.handleCacheMiss(msg, question, originalDomain, ecsOpt,
-		clientRequestedDNSSEC, clientHasEDNS, serverDNSSECEnabled, cacheKey, tracker)
+		clientRequestedDNSSEC, clientHasEDNS, serverDNSSECEnabled, cacheKey, tracker, isSecureConnection)
 }
 
 // createDirectIPResponse 创建直接IP响应
@@ -4539,7 +4543,7 @@ func (r *RecursiveDNSServer) createDirectIPResponse(msg *dns.Msg, originalDomain
 // handleCacheHit 处理缓存命中情况
 func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isExpired bool,
 	question dns.Question, originalDomain string, clientRequestedDNSSEC bool, clientHasEDNS bool,
-	ecsOpt *ECSOption, cacheKey string, tracker *RequestTracker) *dns.Msg {
+	ecsOpt *ECSOption, cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
 
 	responseTTL := entry.GetRemainingTTL()
 
@@ -4571,14 +4575,17 @@ func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isE
 		responseECS = ecsOpt
 	}
 
-	// 添加EDNS选项
+	// 添加EDNS选项（重要：传递 isSecureConnection）
 	shouldAddEDNS := clientHasEDNS || responseECS != nil || r.ednsManager.IsPaddingEnabled() ||
 		(clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
 
 	if shouldAddEDNS {
-		r.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
+		r.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && r.config.Server.Features.DNSSEC, isSecureConnection)
 		if tracker != nil && responseECS != nil {
 			tracker.AddStep("添加响应ECS: %s/%d", responseECS.Address, responseECS.SourcePrefix)
+		}
+		if tracker != nil && isSecureConnection && r.ednsManager.IsPaddingEnabled() {
+			tracker.AddStep("安全连接响应，已启用DNS Padding")
 		}
 	}
 
@@ -4602,7 +4609,7 @@ func (r *RecursiveDNSServer) handleCacheHit(msg *dns.Msg, entry *CacheEntry, isE
 // handleCacheMiss 处理缓存未命中情况
 func (r *RecursiveDNSServer) handleCacheMiss(msg *dns.Msg, question dns.Question, originalDomain string,
 	ecsOpt *ECSOption, clientRequestedDNSSEC bool, clientHasEDNS bool, serverDNSSECEnabled bool,
-	cacheKey string, tracker *RequestTracker) *dns.Msg {
+	cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
 
 	var answer, authority, additional []dns.RR
 	var validated bool
@@ -4628,17 +4635,17 @@ func (r *RecursiveDNSServer) handleCacheMiss(msg *dns.Msg, question dns.Question
 
 	if err != nil {
 		return r.handleQueryError(msg, err, cacheKey, originalDomain, question,
-			clientRequestedDNSSEC, clientHasEDNS, ecsOpt, tracker)
+			clientRequestedDNSSEC, clientHasEDNS, ecsOpt, tracker, isSecureConnection)
 	}
 
 	return r.handleQuerySuccess(msg, question, originalDomain, ecsOpt, clientRequestedDNSSEC,
-		clientHasEDNS, cacheKey, answer, authority, additional, validated, ecsResponse, tracker)
+		clientHasEDNS, cacheKey, answer, authority, additional, validated, ecsResponse, tracker, isSecureConnection)
 }
 
 // handleQueryError 处理查询错误
 func (r *RecursiveDNSServer) handleQueryError(msg *dns.Msg, err error, cacheKey string,
 	originalDomain string, question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool,
-	ecsOpt *ECSOption, tracker *RequestTracker) *dns.Msg {
+	ecsOpt *ECSOption, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
 
 	if tracker != nil {
 		tracker.AddStep("查询失败: %v", err)
@@ -4667,12 +4674,12 @@ func (r *RecursiveDNSServer) handleQueryError(msg *dns.Msg, err error, cacheKey 
 				responseECS = ecsOpt
 			}
 
-			// 添加EDNS选项
+			// 添加EDNS选项（重要：传递 isSecureConnection）
 			shouldAddEDNS := clientHasEDNS || responseECS != nil || r.ednsManager.IsPaddingEnabled() ||
 				(clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
 
 			if shouldAddEDNS {
-				r.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
+				r.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && r.config.Server.Features.DNSSEC, isSecureConnection)
 			}
 
 			r.restoreOriginalDomain(msg, question.Name, originalDomain)
@@ -4688,7 +4695,7 @@ func (r *RecursiveDNSServer) handleQueryError(msg *dns.Msg, err error, cacheKey 
 // handleQuerySuccess 处理查询成功
 func (r *RecursiveDNSServer) handleQuerySuccess(msg *dns.Msg, question dns.Question, originalDomain string,
 	ecsOpt *ECSOption, clientRequestedDNSSEC bool, clientHasEDNS bool, cacheKey string,
-	answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, tracker *RequestTracker) *dns.Msg {
+	answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
 
 	if tracker != nil {
 		tracker.AddStep("查询成功: 答案=%d, 授权=%d, 附加=%d", len(answer), len(authority), len(additional))
@@ -4724,14 +4731,17 @@ func (r *RecursiveDNSServer) handleQuerySuccess(msg *dns.Msg, question dns.Quest
 	msg.Ns = globalRecordHandler.FilterDNSSEC(authority, clientRequestedDNSSEC)
 	msg.Extra = globalRecordHandler.FilterDNSSEC(additional, clientRequestedDNSSEC)
 
-	// 添加EDNS选项
+	// 添加EDNS选项（重要：传递 isSecureConnection）
 	shouldAddEDNS := clientHasEDNS || responseECS != nil || r.ednsManager.IsPaddingEnabled() ||
 		(clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
 
 	if shouldAddEDNS {
-		r.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
+		r.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && r.config.Server.Features.DNSSEC, isSecureConnection)
 		if tracker != nil && responseECS != nil {
 			tracker.AddStep("添加响应ECS: %s/%d", responseECS.Address, responseECS.SourcePrefix)
+		}
+		if tracker != nil && isSecureConnection && r.ednsManager.IsPaddingEnabled() {
+			tracker.AddStep("安全连接响应，已启用DNS Padding")
 		}
 	}
 
@@ -4848,11 +4858,14 @@ func (r *RecursiveDNSServer) queryUpstreamServer(ctx context.Context, server *Up
 		result.Validated = validated
 
 		if ecsResponse != nil {
-			r.ednsManager.AddToMessage(response, ecsResponse, serverDNSSECEnabled)
+			r.ednsManager.AddToMessage(response, ecsResponse, serverDNSSECEnabled, false) // 递归查询不使用padding
 		}
 	} else {
 		// 外部服务器查询
-		msg := r.queryEngine.BuildQuery(question, ecs, serverDNSSECEnabled, true)
+		protocol := strings.ToLower(server.Protocol)
+		isSecureConnection := (protocol == "tls" || protocol == "quic")
+
+		msg := r.queryEngine.BuildQuery(question, ecs, serverDNSSECEnabled, true, isSecureConnection)
 		defer r.queryEngine.ReleaseMessage(msg)
 
 		queryCtx, queryCancel := context.WithTimeout(ctx, StandardOperationTimeout)
@@ -5279,7 +5292,7 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 	}
 
 	// 构建查询消息
-	msg := r.queryEngine.BuildQuery(question, ecs, r.config.Server.Features.DNSSEC, false)
+	msg := r.queryEngine.BuildQuery(question, ecs, r.config.Server.Features.DNSSEC, false, false) // 递归查询不使用padding
 	defer r.queryEngine.ReleaseMessage(msg)
 
 	// 创建临时上游服务器列表用于并发查询
