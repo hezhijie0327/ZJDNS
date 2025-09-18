@@ -43,7 +43,8 @@ func NewResourceManager() *ResourceManager {
 
 	rm.buffers = sync.Pool{
 		New: func() interface{} {
-			return make([]byte, 0, 1024)
+			buf := make([]byte, 0, 1024)
+			return &buf
 		},
 	}
 
@@ -125,7 +126,7 @@ func (rm *ResourceManager) GetBuffer() []byte {
 	if rm == nil {
 		return make([]byte, 0, 1024)
 	}
-	return rm.buffers.Get().([]byte)[:0]
+	return (*(rm.buffers.Get().(*[]byte)))[:0]
 }
 
 func (rm *ResourceManager) PutBuffer(buf []byte) {
@@ -133,7 +134,7 @@ func (rm *ResourceManager) PutBuffer(buf []byte) {
 		return
 	}
 	if cap(buf) <= 8192 { // 避免保留过大的buffer
-		rm.buffers.Put(buf)
+		rm.buffers.Put(&buf)
 	}
 }
 

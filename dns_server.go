@@ -256,7 +256,7 @@ func (r *RecursiveDNSServer) Start() error {
 			Handler: dns.HandlerFunc(r.handleDNSRequest),
 			UDPSize: ClientUDPBufferSizeBytes,
 		}
-		writeLog(LogInfo, "📡 UDP服务器启动: [::]:"+r.config.Server.Port)
+		writeLog(LogInfo, "📡 UDP服务器启动: [::]:%s", r.config.Server.Port)
 		if err := server.ListenAndServe(); err != nil {
 			errChan <- fmt.Errorf("📡 UDP启动失败: %w", err)
 		}
@@ -271,7 +271,7 @@ func (r *RecursiveDNSServer) Start() error {
 			Net:     "tcp",
 			Handler: dns.HandlerFunc(r.handleDNSRequest),
 		}
-		writeLog(LogInfo, "🔌 TCP服务器启动: [::]:"+r.config.Server.Port)
+		writeLog(LogInfo, "🔌 TCP服务器启动: [::]:%s", r.config.Server.Port)
 		if err := server.ListenAndServe(); err != nil {
 			errChan <- fmt.Errorf("🔌 TCP启动失败: %w", err)
 		}

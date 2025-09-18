@@ -120,7 +120,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 
 		if r.hijackPrevention.IsEnabled() {
 			if valid, reason := r.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				return r.handleSuspiciousResponse(response, reason, forceTCP, tracker)
+				return r.handleSuspiciousResponse(reason, forceTCP, tracker)
 			}
 		}
 
@@ -129,8 +129,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			validated = r.dnssecValidator.ValidateResponse(response, true)
 		}
 
-		var ecsResponse *ECSOption
-		ecsResponse = r.ednsManager.ParseFromDNS(response)
+		ecsResponse := r.ednsManager.ParseFromDNS(response)
 
 		return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
 	}
@@ -159,7 +158,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 
 		if r.hijackPrevention.IsEnabled() {
 			if valid, reason := r.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				answer, authority, additional, validated, ecsResponse, err := r.handleSuspiciousResponse(response, reason, forceTCP, tracker)
+				answer, authority, additional, validated, ecsResponse, err := r.handleSuspiciousResponse(reason, forceTCP, tracker)
 				if err != nil && !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
 					if tracker != nil {
 						tracker.AddStep("🛡️ 检测到DNS劫持，切换TCP模式重试")
@@ -175,8 +174,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			validated = r.dnssecValidator.ValidateResponse(response, true)
 		}
 
-		var ecsResponse *ECSOption
-		ecsResponse = r.ednsManager.ParseFromDNS(response)
+		ecsResponse := r.ednsManager.ParseFromDNS(response)
 
 		if len(response.Answer) > 0 {
 			if tracker != nil {
@@ -266,8 +264,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 	}
 }
 
-func (r *RecursiveDNSServer) handleSuspiciousResponse(response *dns.Msg, reason string, currentlyTCP bool,
-	tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (r *RecursiveDNSServer) handleSuspiciousResponse(reason string, currentlyTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 
 	if !currentlyTCP {
 		if tracker != nil {
@@ -385,6 +382,7 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 	}
 
 	var allAddresses []string
+	// 从通道中读取解析到的NS地址，直到达到最大数量或者超时
 	for i := 0; i < resolveCount; i++ {
 		select {
 		case addresses := <-nsChan:
@@ -392,11 +390,11 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 				allAddresses = append(allAddresses, addresses...)
 				if len(allAddresses) >= MaxNameServerResolveCount {
 					resolveCancel()
-					break
+					return allAddresses
 				}
 			}
 		case <-resolveCtx.Done():
-			break
+			return allAddresses
 		}
 	}
 
