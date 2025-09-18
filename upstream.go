@@ -223,6 +223,16 @@ func (uqc *UnifiedQueryClient) executeSecureQuery(ctx context.Context, msg *dns.
 }
 
 func (uqc *UnifiedQueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
+	// 创建消息的副本以保证安全性和避免并发问题
+	// Copy() 方法会正确初始化所有切片字段，防止 nil panic
+	var msgCopy *dns.Msg
+	if msg != nil {
+		msgCopy = msg.Copy()
+	} else {
+		msgCopy = new(dns.Msg)
+	}
+
+
 	var client *dns.Client
 	if server.Protocol == "tcp" {
 		client = uqc.connectionPool.GetTCPClient()
@@ -231,7 +241,7 @@ func (uqc *UnifiedQueryClient) executeTraditionalQuery(ctx context.Context, msg 
 		defer uqc.connectionPool.PutUDPClient(client)
 	}
 
-	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
+	response, _, err := client.ExchangeContext(ctx, msgCopy, server.Address)
 
 	if tracker != nil && err == nil && response != nil {
 		protocolName := "UDP"

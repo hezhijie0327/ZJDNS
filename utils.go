@@ -109,43 +109,6 @@ func (rt *RequestTracker) Finish() {
 
 // ==================== DNS消息安全处理 ====================
 
-// 安全的IsEdns0检查，修复panic问题
-func safeIsEdns0(msg *dns.Msg) *dns.OPT {
-	if msg == nil || msg.Extra == nil || len(msg.Extra) == 0 {
-		return nil
-	}
-
-	// 额外的防护检查
-	defer func() {
-		if r := recover(); r != nil {
-			writeLog(LogError, "💥 IsEdns0调用发生panic: %v", r)
-		}
-	}()
-
-	return msg.IsEdns0()
-}
-
-// 安全的DNS消息处理
-func safeDNSMsgProcess(msg *dns.Msg, operation string) {
-	if msg == nil {
-		return
-	}
-
-	// 确保所有切片字段都已初始化
-	if msg.Question == nil {
-		msg.Question = make([]dns.Question, 0)
-	}
-	if msg.Answer == nil {
-		msg.Answer = make([]dns.RR, 0)
-	}
-	if msg.Ns == nil {
-		msg.Ns = make([]dns.RR, 0)
-	}
-	if msg.Extra == nil {
-		msg.Extra = make([]dns.RR, 0)
-	}
-}
-
 // ==================== DNS记录转换工具 ====================
 
 type DNSRecordHandler struct{}

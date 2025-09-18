@@ -457,7 +457,8 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 	clientHasEDNS := false
 	var ecsOpt *ECSOption
 
-	if opt := safeIsEdns0(req); opt != nil { // 使用安全检查
+	// 使用 IsEdns0() 自动处理 nil Extra 的情况
+	if opt := req.IsEdns0(); opt != nil {
 		clientHasEDNS = true
 		clientRequestedDNSSEC = opt.Do()
 		ecsOpt = r.ednsManager.ParseFromDNS(req)

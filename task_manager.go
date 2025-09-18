@@ -59,7 +59,11 @@ func NewResourceManager() *ResourceManager {
 func (rm *ResourceManager) GetDNSMessage() *dns.Msg {
 	if rm == nil {
 		msg := &dns.Msg{}
-		safeDNSMsgProcess(msg, "get")
+		// 移除safeDNSMsgProcess补丁函数，直接初始化字段
+		msg.Question = make([]dns.Question, 0)
+		msg.Answer = make([]dns.RR, 0)
+		msg.Ns = make([]dns.RR, 0)
+		msg.Extra = make([]dns.RR, 0)
 		return msg
 	}
 
@@ -68,6 +72,11 @@ func (rm *ResourceManager) GetDNSMessage() *dns.Msg {
 	msg, ok := obj.(*dns.Msg)
 	if !ok {
 		msg = &dns.Msg{}
+		// 移除safeDNSMsgProcess补丁函数，直接初始化字段
+		msg.Question = make([]dns.Question, 0)
+		msg.Answer = make([]dns.RR, 0)
+		msg.Ns = make([]dns.RR, 0)
+		msg.Extra = make([]dns.RR, 0)
 	}
 
 	rm.resetDNSMessageSafe(msg)

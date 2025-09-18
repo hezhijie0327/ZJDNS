@@ -1305,7 +1305,7 @@ func (sm *SecureDNSManager) validQUICMsg(req *dns.Msg) bool {
 		return false
 	}
 
-	if opt := safeIsEdns0(req); opt != nil { // 使用安全检查
+	if opt := req.IsEdns0(); opt != nil {
 		for _, option := range opt.Option {
 			if option.Option() == dns.EDNS0TCPKEEPALIVE {
 				writeLog(LogDebug, "❌ DoQ客户端发送了不允许的TCP keepalive选项")
