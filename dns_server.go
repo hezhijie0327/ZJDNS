@@ -122,11 +122,6 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 	}
 
 	if config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "" {
-		httpsPort := config.Server.TLS.HTTPS.Port
-		if httpsPort == "" {
-			httpsPort = ""
-		}
-
 		secureDNSManager, err := NewSecureDNSManager(server, config)
 		if err != nil {
 			cancel()
@@ -366,7 +361,7 @@ func (r *RecursiveDNSServer) displayInfo() {
 }
 
 func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
-	executeWithRecovery("DNS请求处理", func() error {
+	err := executeWithRecovery("DNS请求处理", func() error {
 		select {
 		case <-r.ctx.Done():
 			return nil
@@ -379,6 +374,9 @@ func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg
 		}
 		return nil
 	}, nil)
+	if err != nil {
+		writeLog(LogError, "💥 DNS请求处理失败: %v", err)
+	}
 }
 
 func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool) *dns.Msg {

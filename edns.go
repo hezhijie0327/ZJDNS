@@ -294,7 +294,11 @@ func (d *IPDetector) DetectPublicIP(forceIPv6 bool) net.IP {
 	if err != nil {
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭响应体失败: %v", closeErr)
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

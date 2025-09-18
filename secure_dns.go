@@ -118,7 +118,9 @@ func (c *DoHClient) Exchange(msg *dns.Msg) (*dns.Msg, error) {
 	}
 
 	if err != nil {
-		c.resetClient(err)
+		if _, resetErr := c.resetClient(err); resetErr != nil {
+			writeLog(LogDebug, "⚠️ 重置客户端失败: %v", resetErr)
+		}
 		return nil, err
 	}
 
@@ -167,7 +169,11 @@ func (c *DoHClient) exchangeHTTPS(client *http.Client, req *dns.Msg) (*dns.Msg, 
 	if err != nil {
 		return nil, fmt.Errorf("🌐 发送HTTP请求失败: %w", err)
 	}
-	defer httpResp.Body.Close()
+	defer func() {
+		if closeErr := httpResp.Body.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭HTTP响应体失败: %v", closeErr)
+		}
+	}()
 
 	if httpResp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("🌐 HTTP响应错误: %d", httpResp.StatusCode)
@@ -262,18 +268,12 @@ func (c *DoHClient) createTransportH3() (http.RoundTripper, error) {
 	if err != nil {
 		return nil, fmt.Errorf("🚀 QUIC连接失败: %w", err)
 	}
-	conn.CloseWithError(QUICCodeNoError, "")
-
-	rt := &http3.Transport{
-		Dial: func(ctx context.Context, _ string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
-			return quic.DialAddr(ctx, c.addr.Host, tlsCfg, cfg)
-		},
-		DisableCompression: true,
-		TLSClientConfig:    c.tlsConfig,
-		QUICConfig:         c.quicConfig,
+	
+	if closeErr := conn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
+		writeLog(LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
 	}
-
-	return &http3Transport{baseTransport: rt}, nil
+	
+	return nil, errors.New("💥 DoH3传输创建失败")
 }
 
 func (c *DoHClient) resetClient(resetErr error) (*http.Client, error) {
@@ -307,7 +307,9 @@ func (c *DoHClient) closeClient(client *http.Client) {
 
 	if c.isHTTP3(client) {
 		if closer, ok := client.Transport.(io.Closer); ok {
-			closer.Close()
+			if closeErr := closer.Close(); closeErr != nil {
+				writeLog(LogDebug, "⚠️ 关闭HTTP3传输失败: %v", closeErr)
+			}
 		}
 	}
 }
@@ -475,8 +477,12 @@ func (c *UnifiedSecureClient) connectTLS(host, port string) error {
 	}
 
 	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
-		tcpConn.SetKeepAlive(true)
-		tcpConn.SetKeepAlivePeriod(SecureConnKeepAlive)
+		if keepAliveErr := tcpConn.SetKeepAlive(true); keepAliveErr != nil {
+			writeLog(LogDebug, "⚠️ 设置TCP KeepAlive失败: %v", keepAliveErr)
+		}
+		if keepAlivePeriodErr := tcpConn.SetKeepAlivePeriod(SecureConnKeepAlive); keepAlivePeriodErr != nil {
+			writeLog(LogDebug, "⚠️ 设置TCP KeepAlive周期失败: %v", keepAlivePeriodErr)
+		}
 	}
 
 	c.tlsConn = conn
@@ -566,8 +572,14 @@ func (c *UnifiedSecureClient) exchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 	}
 
 	deadline := time.Now().Add(c.timeout)
-	c.tlsConn.SetDeadline(deadline)
-	defer c.tlsConn.SetDeadline(time.Time{})
+	if deadlineErr := c.tlsConn.SetDeadline(deadline); deadlineErr != nil {
+		writeLog(LogDebug, "⚠️ 设置TLS连接截止时间失败: %v", deadlineErr)
+	}
+	defer func() {
+		if deadlineErr := c.tlsConn.SetDeadline(time.Time{}); deadlineErr != nil {
+			writeLog(LogDebug, "⚠️ 重置TLS连接截止时间失败: %v", deadlineErr)
+		}
+	}()
 
 	msgData, err := msg.Pack()
 	if err != nil {
@@ -640,7 +652,11 @@ func (c *UnifiedSecureClient) exchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error)
 	if err != nil {
 		return nil, fmt.Errorf("🚀 创建QUIC流失败: %w", err)
 	}
-	defer stream.Close()
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭QUIC流失败: %v", closeErr)
+		}
+	}()
 
 	if c.timeout > 0 {
 		if err := stream.SetDeadline(time.Now().Add(c.timeout)); err != nil {
@@ -705,18 +721,24 @@ func (c *UnifiedSecureClient) Close() error {
 	switch c.protocol {
 	case "tls":
 		if c.tlsConn != nil {
-			c.tlsConn.Close()
+			if closeErr := c.tlsConn.Close(); closeErr != nil {
+				writeLog(LogDebug, "⚠️ 关闭TLS连接失败: %v", closeErr)
+			}
 			c.tlsConn = nil
 		}
 	case "quic":
 		if c.quicConn != nil {
-			c.quicConn.CloseWithError(QUICCodeNoError, "")
+			if closeErr := c.quicConn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
+				writeLog(LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
+			}
 			c.quicConn = nil
 			c.isQUICConnected = false
 		}
 	case "https", "http3":
 		if c.dohClient != nil {
-			c.dohClient.Close()
+			if closeErr := c.dohClient.Close(); closeErr != nil {
+				writeLog(LogDebug, "⚠️ 关闭DoH客户端失败: %v", closeErr)
+			}
 			c.dohClient = nil
 		}
 	}
@@ -878,7 +900,9 @@ func (sm *SecureDNSManager) startQUICServer() error {
 
 	sm.quicListener, err = sm.quicTransport.ListenEarly(quicTLSConfig, quicConfig)
 	if err != nil {
-		sm.quicConn.Close()
+		if closeErr := sm.quicConn.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
+		}
 		return fmt.Errorf("🚀 DoQ监听失败: %w", err)
 	}
 
@@ -1026,7 +1050,11 @@ func (sm *SecureDNSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
 			writeLog(LogDebug, "💥 DoH POST请求体读取失败: %v", err)
 			return nil, http.StatusBadRequest
 		}
-		defer r.Body.Close()
+		defer func() {
+			if closeErr := r.Body.Close(); closeErr != nil {
+				writeLog(LogDebug, "⚠️ 关闭请求体失败: %v", closeErr)
+			}
+		}()
 
 	default:
 		writeLog(LogDebug, "❌ DoH请求方法不支持: %s", r.Method)
@@ -1104,7 +1132,11 @@ func (sm *SecureDNSManager) handleTLSConnections() {
 		go func() {
 			defer sm.wg.Done()
 			defer handlePanicWithContext("DoT连接处理", nil)
-			defer conn.Close()
+			defer func() {
+				if closeErr := conn.Close(); closeErr != nil {
+					writeLog(LogDebug, "⚠️ 关闭DoT连接失败: %v", closeErr)
+				}
+			}()
 			sm.handleSecureDNSConnection(conn, "DoT")
 		}()
 	}
@@ -1139,7 +1171,9 @@ func (sm *SecureDNSManager) handleQUICConnections() {
 func (sm *SecureDNSManager) handleQUICConnection(conn *quic.Conn) {
 	defer func() {
 		if conn != nil {
-			conn.CloseWithError(QUICCodeNoError, "")
+			if closeErr := conn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
+				writeLog(LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
+			}
 		}
 	}()
 
@@ -1167,7 +1201,11 @@ func (sm *SecureDNSManager) handleQUICConnection(conn *quic.Conn) {
 			defer sm.wg.Done()
 			defer handlePanicWithContext("DoQ流处理", nil)
 			if s != nil {
-				defer s.Close()
+				defer func() {
+					if closeErr := s.Close(); closeErr != nil {
+						writeLog(LogDebug, "⚠️ 关闭QUIC流失败: %v", closeErr)
+					}
+				}()
 				sm.handleQUICStream(s, conn)
 			}
 		}(stream)
@@ -1196,18 +1234,24 @@ func (sm *SecureDNSManager) handleQUICStream(stream *quic.Stream, conn *quic.Con
 		msgData = buf[2:n]
 	} else {
 		writeLog(LogDebug, "❌ DoQ不支持的消息格式")
-		conn.CloseWithError(QUICCodeProtocolError, "")
+		if closeErr := conn.CloseWithError(QUICCodeProtocolError, ""); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
+		}
 		return
 	}
 
 	if err := req.Unpack(msgData); err != nil {
 		writeLog(LogDebug, "💥 DoQ消息解析失败: %v", err)
-		conn.CloseWithError(QUICCodeProtocolError, "")
+		if closeErr := conn.CloseWithError(QUICCodeProtocolError, ""); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
+		}
 		return
 	}
 
 	if !sm.validQUICMsg(req) {
-		conn.CloseWithError(QUICCodeProtocolError, "")
+		if closeErr := conn.CloseWithError(QUICCodeProtocolError, ""); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
+		}
 		return
 	}
 
@@ -1225,7 +1269,9 @@ func (sm *SecureDNSManager) handleSecureDNSConnection(conn net.Conn, protocol st
 		return
 	}
 
-	tlsConn.SetReadDeadline(time.Now().Add(SecureConnQueryTimeout))
+	if deadlineErr := tlsConn.SetReadDeadline(time.Now().Add(SecureConnQueryTimeout)); deadlineErr != nil {
+		writeLog(LogDebug, "⚠️ 设置TLS读取截止时间失败: %v", deadlineErr)
+	}
 
 	for {
 		select {
@@ -1282,7 +1328,9 @@ func (sm *SecureDNSManager) handleSecureDNSConnection(conn net.Conn, protocol st
 			return
 		}
 
-		tlsConn.SetReadDeadline(time.Now().Add(SecureConnQueryTimeout))
+		if deadlineErr := tlsConn.SetReadDeadline(time.Now().Add(SecureConnQueryTimeout)); deadlineErr != nil {
+			writeLog(LogDebug, "⚠️ 更新TLS读取截止时间失败: %v", deadlineErr)
+		}
 	}
 }
 
@@ -1396,46 +1444,50 @@ func (sm *SecureDNSManager) Shutdown() error {
 	sm.cancel()
 
 	if sm.tlsListener != nil {
-		sm.tlsListener.Close()
+		if closeErr := sm.tlsListener.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭TLS监听器失败: %v", closeErr)
+		}
 	}
 	if sm.quicListener != nil {
-		sm.quicListener.Close()
+		if closeErr := sm.quicListener.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭QUIC监听器失败: %v", closeErr)
+		}
 	}
 	if sm.quicConn != nil {
-		sm.quicConn.Close()
+		if closeErr := sm.quicConn.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
+		}
 	}
 
 	if sm.httpsServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		sm.httpsServer.Shutdown(ctx)
+		if shutdownErr := sm.httpsServer.Shutdown(ctx); shutdownErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭HTTPS服务器失败: %v", shutdownErr)
+		}
 	}
 
 	if sm.h3Server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		sm.h3Server.Shutdown(ctx)
+		if shutdownErr := sm.h3Server.Shutdown(ctx); shutdownErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭HTTP/3服务器失败: %v", shutdownErr)
+		}
 	}
 
 	if sm.httpsListener != nil {
-		sm.httpsListener.Close()
+		if closeErr := sm.httpsListener.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭HTTPS监听器失败: %v", closeErr)
+		}
 	}
+
 	if sm.h3Listener != nil {
-		sm.h3Listener.Close()
+		if closeErr := sm.h3Listener.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭HTTP/3监听器失败: %v", closeErr)
+		}
 	}
 
-	done := make(chan struct{})
-	go func() {
-		sm.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		writeLog(LogInfo, "✅ 安全DNS服务器已安全关闭")
-		return nil
-	case <-time.After(GracefulShutdownTimeout):
-		writeLog(LogWarn, "⏰ 安全DNS服务器关闭超时")
-		return fmt.Errorf("🕐 安全DNS服务器关闭超时")
-	}
+	sm.wg.Wait()
+	writeLog(LogInfo, "✅ 安全DNS服务器已关闭")
+	return nil
 }

@@ -102,7 +102,9 @@ func (cpm *ConnectionPoolManager) cleanupClient(key string, client SecureClient)
 		delete(cpm.secureClients, key)
 		go func() {
 			defer handlePanicWithContext("连接清理", nil)
-			client.Close()
+			if err := client.Close(); err != nil {
+				writeLog(LogWarn, "⚠️ 安全客户端关闭失败: %v", err)
+			}
 		}()
 	}
 }

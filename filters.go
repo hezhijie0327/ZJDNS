@@ -42,7 +42,11 @@ func (f *IPFilter) LoadCIDRs(filename string) error {
 	if err != nil {
 		return fmt.Errorf("📖 打开CIDR文件失败: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			writeLog(LogWarn, "⚠️ 关闭CIDR文件失败: %v", closeErr)
+		}
+	}()
 
 	f.mu.Lock()
 	defer f.mu.Unlock()

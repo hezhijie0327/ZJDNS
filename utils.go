@@ -228,15 +228,15 @@ func (cu *CacheUtils) BuildKey(question dns.Question, ecs *ECSOption, dnssecEnab
 
 	sb.WriteString(strings.ToLower(question.Name))
 	sb.WriteByte(':')
-	sb.WriteString(fmt.Sprintf("%d", question.Qtype))
+	fmt.Fprintf(sb, "%d", question.Qtype)
 	sb.WriteByte(':')
-	sb.WriteString(fmt.Sprintf("%d", question.Qclass))
+	fmt.Fprintf(sb, "%d", question.Qclass)
 
 	if ecs != nil {
 		sb.WriteByte(':')
 		sb.WriteString(ecs.Address.String())
 		sb.WriteByte('/')
-		sb.WriteString(fmt.Sprintf("%d", ecs.SourcePrefix))
+		fmt.Fprintf(sb, "%d", ecs.SourcePrefix)
 	}
 
 	if dnssecEnabled {

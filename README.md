@@ -94,8 +94,6 @@ graph TD
     L --> V
 ```
 
-pus
-
 ## 📁 项目文件结构
 
 ```bash
@@ -141,6 +139,26 @@ zjdns/
 ## 📝 许可证
 
 本项目采用 MIT 许可证，详见 [LICENSE](LICENSE) 文件。
+
+## 🛠️ 开发工具
+
+### golangci-lint
+
+在提交代码前，请使用 [golangci-lint](https://golangci-lint.run/) 进行代码检查。
+
+安装 golangci-lint：
+
+```bash
+brew install golangci-lint
+```
+
+运行检查：
+
+```bash
+golangci-lint run
+```
+
+提交代码前请确保 golangci-lint 检查通过，以保证代码质量和一致性。
 
 ## 🙏 致谢
 
