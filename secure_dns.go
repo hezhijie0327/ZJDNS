@@ -802,7 +802,7 @@ func (sm *SecureDNSManager) Start(httpsPort string) error {
 	// 启动DoT服务器
 	go func() {
 		defer wg.Done()
-		defer handlePanicWithContext("关键-DoT服务器", nil)
+		defer func() { handlePanicWithContext("关键-DoT服务器") }()
 		if err := sm.startTLSServer(); err != nil {
 			errChan <- fmt.Errorf("🔐 DoT启动失败: %w", err)
 		}
@@ -811,7 +811,7 @@ func (sm *SecureDNSManager) Start(httpsPort string) error {
 	// 启动DoQ服务器
 	go func() {
 		defer wg.Done()
-		defer handlePanicWithContext("关键-DoQ服务器", nil)
+		defer func() { handlePanicWithContext("关键-DoQ服务器") }()
 		if err := sm.startQUICServer(); err != nil {
 			errChan <- fmt.Errorf("🚀 DoQ启动失败: %w", err)
 		}
@@ -821,7 +821,7 @@ func (sm *SecureDNSManager) Start(httpsPort string) error {
 		// 启动DoH服务器
 		go func() {
 			defer wg.Done()
-			defer handlePanicWithContext("关键-DoH服务器", nil)
+			defer func() { handlePanicWithContext("关键-DoH服务器") }()
 			if err := sm.startDoHServer(httpsPort); err != nil {
 				errChan <- fmt.Errorf("🌐 DoH启动失败: %w", err)
 			}
@@ -830,7 +830,7 @@ func (sm *SecureDNSManager) Start(httpsPort string) error {
 		// 启动DoH3服务器
 		go func() {
 			defer wg.Done()
-			defer handlePanicWithContext("关键-DoH3服务器", nil)
+			defer func() { handlePanicWithContext("关键-DoH3服务器") }()
 			if err := sm.startDoH3Server(httpsPort); err != nil {
 				errChan <- fmt.Errorf("⚡ DoH3启动失败: %w", err)
 			}
@@ -863,7 +863,7 @@ func (sm *SecureDNSManager) startTLSServer() error {
 	sm.wg.Add(1)
 	go func() {
 		defer sm.wg.Done()
-		defer handlePanicWithContext("DoT服务器", nil)
+		defer func() { handlePanicWithContext("DoT服务器") }()
 		sm.handleTLSConnections()
 	}()
 
@@ -912,7 +912,7 @@ func (sm *SecureDNSManager) startQUICServer() error {
 	sm.wg.Add(1)
 	go func() {
 		defer sm.wg.Done()
-		defer handlePanicWithContext("DoQ服务器", nil)
+		defer func() { handlePanicWithContext("DoQ服务器") }()
 		sm.handleQUICConnections()
 	}()
 
@@ -940,7 +940,7 @@ func (sm *SecureDNSManager) startDoHServer(port string) error {
 	sm.wg.Add(1)
 	go func() {
 		defer sm.wg.Done()
-		defer handlePanicWithContext("DoH服务器", nil)
+		defer func() { handlePanicWithContext("DoH服务器") }()
 		if err := sm.httpsServer.Serve(sm.httpsListener); err != nil && err != http.ErrServerClosed {
 			writeLog(LogError, "💥 DoH服务器错误: %v", err)
 		}
@@ -977,7 +977,7 @@ func (sm *SecureDNSManager) startDoH3Server(port string) error {
 	sm.wg.Add(1)
 	go func() {
 		defer sm.wg.Done()
-		defer handlePanicWithContext("DoH3服务器", nil)
+		defer func() { handlePanicWithContext("DoH3服务器") }()
 		if err := sm.h3Server.ServeListener(sm.h3Listener); err != nil && err != http.ErrServerClosed {
 			writeLog(LogError, "💥 DoH3服务器错误: %v", err)
 		}
@@ -1132,7 +1132,7 @@ func (sm *SecureDNSManager) handleTLSConnections() {
 		sm.wg.Add(1)
 		go func() {
 			defer sm.wg.Done()
-			defer handlePanicWithContext("DoT连接处理", nil)
+			defer func() { handlePanicWithContext("DoT连接处理") }()
 			defer func() {
 				if closeErr := conn.Close(); closeErr != nil {
 					writeLog(LogDebug, "⚠️ 关闭DoT连接失败: %v", closeErr)
@@ -1163,7 +1163,7 @@ func (sm *SecureDNSManager) handleQUICConnections() {
 		sm.wg.Add(1)
 		go func() {
 			defer sm.wg.Done()
-			defer handlePanicWithContext("DoQ连接处理", nil)
+			defer func() { handlePanicWithContext("DoQ连接处理") }()
 			sm.handleQUICConnection(conn)
 		}()
 	}
@@ -1200,7 +1200,7 @@ func (sm *SecureDNSManager) handleQUICConnection(conn *quic.Conn) {
 		sm.wg.Add(1)
 		go func(s *quic.Stream) {
 			defer sm.wg.Done()
-			defer handlePanicWithContext("DoQ流处理", nil)
+			defer func() { handlePanicWithContext("DoQ流处理") }()
 			if s != nil {
 				defer func() {
 					if closeErr := s.Close(); closeErr != nil {

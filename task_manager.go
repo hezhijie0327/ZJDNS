@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -183,16 +182,9 @@ func NewTaskManager(maxGoroutines int) *TaskManager {
 	}
 }
 
-func (tm *TaskManager) Execute(name string, fn func(ctx context.Context) error) error {
+func (tm *TaskManager) ExecuteTask(name string, fn func(ctx context.Context) error) error {
 	if tm == nil || atomic.LoadInt32(&tm.closed) != 0 {
-		return errors.New("🔒 任务管理器已关闭")
-	}
-
-	select {
-	case <-tm.ctx.Done():
-		return tm.ctx.Err()
-	case tm.semaphore <- struct{}{}:
-		defer func() { <-tm.semaphore }()
+		return nil
 	}
 
 	atomic.AddInt64(&tm.activeCount, 1)
@@ -203,9 +195,14 @@ func (tm *TaskManager) Execute(name string, fn func(ctx context.Context) error) 
 
 	atomic.AddInt64(&tm.stats.executed, 1)
 
-	return executeWithRecovery(fmt.Sprintf("Task-%s", name), func() error {
-		return fn(tm.ctx)
-	}, nil)
+	defer func() { handlePanicWithContext(fmt.Sprintf("Task-%s", name)) }()
+	return fn(tm.ctx)
+}
+
+// Execute is a convenience method that calls ExecuteTask with the given name and function.
+// It executes the task synchronously and returns any error encountered.
+func (tm *TaskManager) Execute(name string, fn func(ctx context.Context) error) error {
+	return tm.ExecuteTask(name, fn)
 }
 
 func (tm *TaskManager) ExecuteAsync(name string, fn func(ctx context.Context) error) {
@@ -214,9 +211,9 @@ func (tm *TaskManager) ExecuteAsync(name string, fn func(ctx context.Context) er
 	}
 
 	go func() {
-		defer handlePanicWithContext(fmt.Sprintf("AsyncTask-%s", name), nil)
+		defer func() { handlePanicWithContext(fmt.Sprintf("AsyncTask-%s", name)) }()
 
-		if err := tm.Execute(name, fn); err != nil {
+		if err := tm.ExecuteTask(name, fn); err != nil {
 			if err != context.Canceled {
 				atomic.AddInt64(&tm.stats.failed, 1)
 				writeLog(LogError, "💥 异步任务执行失败 [%s]: %v", name, err)

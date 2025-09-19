@@ -6,7 +6,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -14,51 +13,79 @@ import (
 
 // ==================== 安全的错误处理和恢复系统 ====================
 
-type PanicRecovery struct {
-	mu    sync.RWMutex
-	stats map[string]int64
+// SafeCopyDNSMessage 安全地复制DNS消息，防止在复制过程中出现panic
+// 使用ResourceManager对象池优化性能
+func SafeCopyDNSMessage(msg *dns.Msg) *dns.Msg {
+	if msg == nil {
+		newMsg := globalResourceManager.GetDNSMessage()
+		return newMsg
+	}
+
+	// 从对象池获取消息对象
+	msgCopy := globalResourceManager.GetDNSMessage()
+
+	// 复制消息头部和压缩标志
+	msgCopy.MsgHdr = msg.MsgHdr
+	msgCopy.Compress = msg.Compress
+
+	// 安全复制Question切片
+	if msg.Question != nil {
+		msgCopy.Question = append(msgCopy.Question[:0], msg.Question...)
+	} else {
+		msgCopy.Question = msgCopy.Question[:0]
+	}
+
+	// 安全复制Answer切片
+	if msg.Answer != nil {
+		msgCopy.Answer = msgCopy.Answer[:0]
+		for _, rr := range msg.Answer {
+			if rr != nil {
+				msgCopy.Answer = append(msgCopy.Answer, dns.Copy(rr))
+			}
+		}
+	} else {
+		msgCopy.Answer = msgCopy.Answer[:0]
+	}
+
+	// 安全复制Ns切片
+	if msg.Ns != nil {
+		msgCopy.Ns = msgCopy.Ns[:0]
+		for _, rr := range msg.Ns {
+			if rr != nil {
+				msgCopy.Ns = append(msgCopy.Ns, dns.Copy(rr))
+			}
+		}
+	} else {
+		msgCopy.Ns = msgCopy.Ns[:0]
+	}
+
+	// 安全复制Extra切片
+	if msg.Extra != nil {
+		msgCopy.Extra = msgCopy.Extra[:0]
+		for _, rr := range msg.Extra {
+			if rr != nil {
+				msgCopy.Extra = append(msgCopy.Extra, dns.Copy(rr))
+			}
+		}
+	} else {
+		msgCopy.Extra = msgCopy.Extra[:0]
+	}
+
+	return msgCopy
 }
 
-var globalPanicRecovery = &PanicRecovery{
-	stats: make(map[string]int64),
-}
-
-func handlePanicWithContext(operation string, cleanup func()) {
+func handlePanicWithContext(operation string) {
 	if r := recover(); r != nil {
-		globalPanicRecovery.mu.Lock()
-		globalPanicRecovery.stats[operation]++
-		count := globalPanicRecovery.stats[operation]
-		globalPanicRecovery.mu.Unlock()
-
 		buf := make([]byte, 2048)
 		n := runtime.Stack(buf, false)
 		stackTrace := string(buf[:n])
 
-		writeLog(LogError, "🚨 Panic恢复 [%s] (第%d次): %v\n堆栈:\n%s",
-			operation, count, r, stackTrace)
+		// 合并日志输出，包含操作信息、panic详情和堆栈跟踪
+		writeLog(LogError, "🚨 Panic触发 [%s]: %v\n堆栈:\n%s\n💥 程序因panic退出",
+			operation, r, stackTrace)
 
-		if cleanup != nil {
-			func() {
-				defer func() {
-					if r2 := recover(); r2 != nil {
-						writeLog(LogError, "💀 清理函数也发生panic: %v", r2)
-					}
-				}()
-				cleanup()
-			}()
-		}
-
-		// 如果是关键组件频繁panic，考虑退出
-		if strings.Contains(operation, "关键") && count > 3 {
-			writeLog(LogError, "💀 关键组件频繁panic，程序将退出")
-			os.Exit(1)
-		}
+		os.Exit(1)
 	}
-}
-
-func executeWithRecovery(operation string, fn func() error, cleanup func()) error {
-	defer handlePanicWithContext(operation, cleanup)
-	return fn()
 }
 
 // ==================== 请求追踪系统 ====================

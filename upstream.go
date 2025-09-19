@@ -160,7 +160,7 @@ func (uqc *UnifiedQueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, s
 
 	// 安全连接协议
 	if isSecureProtocol(protocol) {
-		result.Response, result.Error = uqc.executeSecureQuery(queryCtx, msg, server, tracker)
+		result.Response, result.Error = uqc.executeSecureQuery(msg, server, tracker)
 		result.Duration = time.Since(start)
 		result.Protocol = strings.ToUpper(protocol)
 		return result
@@ -203,7 +203,7 @@ func (uqc *UnifiedQueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, s
 	return result
 }
 
-func (uqc *UnifiedQueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
+func (uqc *UnifiedQueryClient) executeSecureQuery(msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
 	client, err := uqc.connectionPool.GetSecureClient(server.Protocol, server.Address, server.ServerName, server.SkipTLSVerify)
 	if err != nil {
 		return nil, fmt.Errorf("🔒 获取%s客户端失败: %w", strings.ToUpper(server.Protocol), err)
@@ -224,13 +224,9 @@ func (uqc *UnifiedQueryClient) executeSecureQuery(ctx context.Context, msg *dns.
 
 func (uqc *UnifiedQueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
 	// 创建消息的副本以保证安全性和避免并发问题
-	// Copy() 方法会正确初始化所有切片字段，防止 nil panic
-	var msgCopy *dns.Msg
-	if msg != nil {
-		msgCopy = msg.Copy()
-	} else {
-		msgCopy = new(dns.Msg)
-	}
+	// 使用SafeCopyDNSMessage函数防止nil切片导致的slice bounds out of range panic
+	// SafeCopyDNSMessage内部使用sync.Pool优化性能
+	msgCopy := SafeCopyDNSMessage(msg)
 
 	var client *dns.Client
 	if server.Protocol == "tcp" {
@@ -250,6 +246,11 @@ func (uqc *UnifiedQueryClient) executeTraditionalQuery(ctx context.Context, msg 
 			emoji = "🔌"
 		}
 		tracker.AddStep("%s %s查询成功，响应码: %s", emoji, protocolName, dns.RcodeToString[response.Rcode])
+	}
+
+	// 将复制的消息对象返回到对象池
+	if msgCopy != nil {
+		globalResourceManager.PutDNSMessage(msgCopy)
 	}
 
 	return response, err

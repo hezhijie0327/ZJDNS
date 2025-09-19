@@ -89,7 +89,7 @@ func (rc *RedisDNSCache) startRefreshProcessor() {
 		rc.wg.Add(1)
 		go func(workerID int) {
 			defer rc.wg.Done()
-			defer handlePanicWithContext(fmt.Sprintf("Redis刷新Worker %d", workerID), nil)
+			defer func() { handlePanicWithContext(fmt.Sprintf("Redis刷新Worker %d", workerID)) }()
 
 			for {
 				select {
@@ -104,7 +104,7 @@ func (rc *RedisDNSCache) startRefreshProcessor() {
 }
 
 func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
-	defer handlePanicWithContext("Redis刷新请求处理", nil)
+	defer func() { handlePanicWithContext("Redis刷新请求处理") }()
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -160,7 +160,7 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 }
 
 func (rc *RedisDNSCache) updateRefreshTime(cacheKey string) {
-	defer handlePanicWithContext("更新刷新时间", nil)
+	defer func() { handlePanicWithContext("更新刷新时间") }()
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -188,7 +188,7 @@ func (rc *RedisDNSCache) updateRefreshTime(cacheKey string) {
 }
 
 func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
-	defer handlePanicWithContext("Redis缓存获取", nil)
+	defer func() { handlePanicWithContext("Redis缓存获取") }()
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return nil, false, false
@@ -204,7 +204,7 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
 		writeLog(LogDebug, "💥 缓存条目解析失败: %v", err)
 		go func() {
-			defer handlePanicWithContext("清理损坏缓存", nil)
+			defer func() { handlePanicWithContext("清理损坏缓存") }()
 			rc.client.Del(context.Background(), fullKey)
 		}()
 		return nil, false, false
@@ -213,7 +213,7 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	// 检查是否需要删除过期缓存
 	if entry.IsStale() {
 		go func() {
-			defer handlePanicWithContext("清理过期缓存", nil)
+			defer func() { handlePanicWithContext("清理过期缓存") }()
 			rc.client.Del(context.Background(), fullKey)
 		}()
 		return nil, false, false
@@ -221,7 +221,7 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	entry.AccessTime = time.Now().Unix()
 	go func() {
-		defer handlePanicWithContext("更新访问时间", nil)
+		defer func() { handlePanicWithContext("更新访问时间") }()
 		rc.updateAccessInfo(fullKey, &entry)
 	}()
 
@@ -229,7 +229,7 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	if !rc.config.Server.Features.ServeStale && isExpired {
 		go func() {
-			defer handlePanicWithContext("清理过期缓存", nil)
+			defer func() { handlePanicWithContext("清理过期缓存") }()
 			rc.client.Del(context.Background(), fullKey)
 		}()
 		return nil, false, false
@@ -239,7 +239,7 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 }
 
 func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
-	defer handlePanicWithContext("Redis缓存设置", nil)
+	defer func() { handlePanicWithContext("Redis缓存设置") }()
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -287,7 +287,7 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 }
 
 func (rc *RedisDNSCache) updateAccessInfo(fullKey string, entry *CacheEntry) {
-	defer handlePanicWithContext("Redis访问信息更新", nil)
+	defer func() { handlePanicWithContext("Redis访问信息更新") }()
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return

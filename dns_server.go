@@ -42,7 +42,7 @@ type RecursiveDNSServer struct {
 }
 
 func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
-	defer handlePanicWithContext("缓存刷新查询", nil)
+	defer func() { handlePanicWithContext("缓存刷新查询") }()
 
 	if atomic.LoadInt32(&r.closed) != 0 {
 		return nil, nil, nil, false, nil, errors.New("🔒 服务器已关闭")
@@ -154,7 +154,7 @@ func (r *RecursiveDNSServer) setupSignalHandling() {
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		defer handlePanicWithContext("信号处理器", nil)
+		defer func() { handlePanicWithContext("信号处理器") }()
 
 		select {
 		case sig := <-sigChan:
@@ -244,7 +244,7 @@ func (r *RecursiveDNSServer) Start() error {
 	// 启动UDP服务器
 	go func() {
 		defer wg.Done()
-		defer handlePanicWithContext("关键-UDP服务器", nil)
+		defer func() { handlePanicWithContext("关键-UDP服务器") }()
 		server := &dns.Server{
 			Addr:    ":" + r.config.Server.Port,
 			Net:     "udp",
@@ -260,7 +260,7 @@ func (r *RecursiveDNSServer) Start() error {
 	// 启动TCP服务器
 	go func() {
 		defer wg.Done()
-		defer handlePanicWithContext("关键-TCP服务器", nil)
+		defer func() { handlePanicWithContext("关键-TCP服务器") }()
 		server := &dns.Server{
 			Addr:    ":" + r.config.Server.Port,
 			Net:     "tcp",
@@ -276,7 +276,7 @@ func (r *RecursiveDNSServer) Start() error {
 	if r.secureDNSManager != nil {
 		go func() {
 			defer wg.Done()
-			defer handlePanicWithContext("关键-安全DNS服务器", nil)
+			defer func() { handlePanicWithContext("关键-安全DNS服务器") }()
 			httpsPort := r.config.Server.TLS.HTTPS.Port
 			if err := r.secureDNSManager.Start(httpsPort); err != nil {
 				errChan <- fmt.Errorf("🔐 安全DNS启动失败: %w", err)
@@ -361,21 +361,17 @@ func (r *RecursiveDNSServer) displayInfo() {
 }
 
 func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
-	err := executeWithRecovery("DNS请求处理", func() error {
-		select {
-		case <-r.ctx.Done():
-			return nil
-		default:
-		}
+	defer func() { handlePanicWithContext("DNS请求处理") }()
 
-		response := r.ProcessDNSQuery(req, GetClientIP(w), false)
-		if response != nil {
-			return w.WriteMsg(response)
-		}
-		return nil
-	}, nil)
-	if err != nil {
-		writeLog(LogError, "💥 DNS请求处理失败: %v", err)
+	select {
+	case <-r.ctx.Done():
+		return
+	default:
+	}
+
+	response := r.ProcessDNSQuery(req, GetClientIP(w), false)
+	if response != nil {
+		_ = w.WriteMsg(response)
 	}
 }
 
@@ -475,7 +471,7 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 
 			// 创建DDR记录生成器
 			ddrGenerator := NewDDRRecordGenerator(r.config.Server.DDR.Domain, ipv4Addr, ipv6Addr)
-			
+
 			response := ddrGenerator.CreateDDRResponse(req, r.config)
 
 			if tracker != nil {
@@ -854,8 +850,11 @@ func (r *RecursiveDNSServer) executeConcurrentQueries(ctx context.Context, quest
 
 	for i := 0; i < concurrency && i < len(servers); i++ {
 		server := servers[i]
-		msg := r.buildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
-		defer globalResourceManager.PutDNSMessage(msg)
+		// 为每个并发查询创建独立的消息副本，避免数据竞争
+		// SafeCopyDNSMessage内部使用sync.Pool优化性能
+		originalMsg := r.buildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
+		msg := SafeCopyDNSMessage(originalMsg)
+		defer globalResourceManager.PutDNSMessage(originalMsg)
 
 		r.taskManager.ExecuteAsync(fmt.Sprintf("ConcurrentQuery-%s", server.Address),
 			func(ctx context.Context) error {
