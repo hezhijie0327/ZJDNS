@@ -108,10 +108,18 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 	}
 
 	// 确保消息结构安全，防止在ExchangeContext中调用IsEdns0时出现panic
-	if msg.Question == nil { msg.Question = []dns.Question{} }
-	if msg.Answer   == nil { msg.Answer   = []dns.RR{} }
-	if msg.Ns       == nil { msg.Ns       = []dns.RR{} }
-	if msg.Extra    == nil { msg.Extra    = []dns.RR{} }
+	if msg.Question == nil {
+		msg.Question = []dns.Question{}
+	}
+	if msg.Answer == nil {
+		msg.Answer = []dns.RR{}
+	}
+	if msg.Ns == nil {
+		msg.Ns = []dns.RR{}
+	}
+	if msg.Extra == nil {
+		msg.Extra = []dns.RR{}
+	}
 
 	// 清理现有OPT记录
 	cleanExtra := make([]dns.RR, 0, len(msg.Extra))

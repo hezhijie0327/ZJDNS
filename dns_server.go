@@ -439,16 +439,56 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 
 	// DNS重写处理
 	if r.dnsRewriter.HasRules() {
-		if rewritten, changed := r.dnsRewriter.Rewrite(question.Name); changed {
-			question.Name = rewritten
+		if rewritten, changed := r.dnsRewriter.Rewrite(question.Name, question.Qtype); changed {
 			if tracker != nil {
 				tracker.AddStep("🔄 域名重写: %s -> %s", question.Name, rewritten)
 			}
 
+			// 如果重写结果是IP地址，则直接返回IP响应
 			if ip := net.ParseIP(strings.TrimSuffix(rewritten, ".")); ip != nil {
 				return r.createDirectIPResponse(req, question.Qtype, ip, tracker)
 			}
+
+			// 否则更新问题域名继续处理
+			question.Name = rewritten
 		}
+	}
+
+	// 检查是否为DDR查询
+	if IsDDRQuery(req, r.config.Server.DDR.Domain, r.config.Server.Port) {
+		// 检查是否满足DDR功能启用条件
+		// 需要配置域名，且至少配置一个IP地址（IPv4或IPv6）
+		if r.config.Server.DDR.Domain != "" &&
+			(r.config.Server.DDR.IPv4 != "" || r.config.Server.DDR.IPv6 != "") {
+			if tracker != nil {
+				tracker.AddStep("🔍 检测到DDR查询")
+			}
+
+			// 创建DDR记录生成器
+			var ipv4Addr, ipv6Addr net.IP
+			if r.config.Server.DDR.IPv4 != "" {
+				ipv4Addr = net.ParseIP(r.config.Server.DDR.IPv4)
+			}
+			if r.config.Server.DDR.IPv6 != "" {
+				ipv6Addr = net.ParseIP(r.config.Server.DDR.IPv6)
+			}
+
+			// 创建DDR记录生成器
+			ddrGenerator := NewDDRRecordGenerator(r.config.Server.DDR.Domain, ipv4Addr, ipv6Addr)
+			
+			response := ddrGenerator.CreateDDRResponse(req, r.config)
+
+			if tracker != nil {
+				tracker.AddStep("✅ 生成DDR响应: %d条记录", len(response.Answer))
+			}
+
+			return response
+		}
+	}
+
+	// IP地址直接响应
+	if ip := net.ParseIP(strings.TrimSuffix(question.Name, ".")); ip != nil {
+		return r.createDirectIPResponse(req, question.Qtype, ip, tracker)
 	}
 
 	clientRequestedDNSSEC := false
@@ -518,7 +558,10 @@ func (r *RecursiveDNSServer) createDirectIPResponse(req *dns.Msg, qtype uint16, 
 	}
 
 	msg := r.buildResponse(req)
+
+	// 根据查询类型和IP地址类型返回相应记录
 	if qtype == dns.TypeA && ip.To4() != nil {
+		// IPv4地址查询
 		msg.Answer = []dns.RR{&dns.A{
 			Hdr: dns.RR_Header{
 				Name:   req.Question[0].Name,
@@ -529,6 +572,7 @@ func (r *RecursiveDNSServer) createDirectIPResponse(req *dns.Msg, qtype uint16, 
 			A: ip,
 		}}
 	} else if qtype == dns.TypeAAAA && ip.To4() == nil {
+		// IPv6地址查询
 		msg.Answer = []dns.RR{&dns.AAAA{
 			Hdr: dns.RR_Header{
 				Name:   req.Question[0].Name,
@@ -539,6 +583,8 @@ func (r *RecursiveDNSServer) createDirectIPResponse(req *dns.Msg, qtype uint16, 
 			AAAA: ip,
 		}}
 	}
+	// 对于IPv4地址查询但得到IPv6地址，或IPv6地址查询但得到IPv4地址的情况，返回空答案
+
 	return msg
 }
 

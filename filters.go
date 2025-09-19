@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -140,30 +139,9 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 	defer r.mu.Unlock()
 
 	validRules := make([]RewriteRule, 0, len(rules))
-	for i, rule := range rules {
-		if len(rule.Pattern) > MaxDomainNameLengthRFC || len(rule.Replacement) > MaxDomainNameLengthRFC {
+	for _, rule := range rules {
+		if len(rule.Match) > MaxDomainNameLengthRFC || len(rule.Replace) > MaxDomainNameLengthRFC {
 			continue
-		}
-
-		switch strings.ToLower(rule.TypeString) {
-		case "exact":
-			rule.Type = RewriteExact
-		case "suffix":
-			rule.Type = RewriteSuffix
-		case "prefix":
-			rule.Type = RewritePrefix
-		case "regex":
-			rule.Type = RewriteRegex
-			if len(rule.Pattern) > MaxRegexPatternLength {
-				return fmt.Errorf("🔄 重写规则 %d 正则表达式过于复杂", i)
-			}
-			regex, err := regexp.Compile(rule.Pattern)
-			if err != nil {
-				return fmt.Errorf("🔄 重写规则 %d 正则表达式编译失败: %w", i, err)
-			}
-			rule.regex = regex
-		default:
-			return fmt.Errorf("❌ 重写规则 %d 类型无效: %s", i, rule.TypeString)
 		}
 
 		validRules = append(validRules, rule)
@@ -174,7 +152,7 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 	return nil
 }
 
-func (r *DNSRewriter) Rewrite(domain string) (string, bool) {
+func (r *DNSRewriter) Rewrite(domain string, qtype uint16) (string, bool) {
 	if !r.HasRules() || len(domain) > MaxDomainNameLengthRFC {
 		return domain, false
 	}
@@ -186,56 +164,26 @@ func (r *DNSRewriter) Rewrite(domain string) (string, bool) {
 
 	for i := range r.rules {
 		rule := &r.rules[i]
-		if matched, result := r.matchRule(rule, domain); matched {
-			result = dns.Fqdn(result)
-			writeLog(LogDebug, "🔄 域名重写: %s -> %s", domain, result)
+		// 只保留精确匹配
+		if domain == strings.ToLower(rule.Match) {
+			// 自动识别查询类型
+			// 如果替换值是IPv4地址，则只对A记录查询生效
+			// 如果替换值是IPv6地址，则只对AAAA记录查询生效
+			if ip := net.ParseIP(rule.Replace); ip != nil {
+				if ip.To4() != nil && qtype != dns.TypeA {
+					continue
+				}
+				if ip.To4() == nil && qtype != dns.TypeAAAA {
+					continue
+				}
+			}
+
+			result := dns.Fqdn(rule.Replace)
+			writeLog(LogDebug, "🔄 域名重写: %s -> %s (QType: %s)", domain, result, dns.TypeToString[qtype])
 			return result, true
 		}
 	}
 	return domain, false
-}
-
-func (r *DNSRewriter) matchRule(rule *RewriteRule, domain string) (bool, string) {
-	if rule == nil {
-		return false, ""
-	}
-
-	switch rule.Type {
-	case RewriteExact:
-		if domain == strings.ToLower(rule.Pattern) {
-			return true, rule.Replacement
-		}
-
-	case RewriteSuffix:
-		pattern := strings.ToLower(rule.Pattern)
-		if domain == pattern || strings.HasSuffix(domain, "."+pattern) {
-			if strings.Contains(rule.Replacement, "$1") {
-				if domain == pattern {
-					return true, strings.ReplaceAll(rule.Replacement, "$1", "")
-				}
-				prefix := strings.TrimSuffix(domain, "."+pattern)
-				return true, strings.TrimSuffix(strings.ReplaceAll(rule.Replacement, "$1", prefix+"."), ".")
-			}
-			return true, rule.Replacement
-		}
-
-	case RewritePrefix:
-		pattern := strings.ToLower(rule.Pattern)
-		if strings.HasPrefix(domain, pattern) {
-			if strings.Contains(rule.Replacement, "$1") {
-				suffix := strings.TrimPrefix(domain, pattern)
-				return true, strings.ReplaceAll(rule.Replacement, "$1", suffix)
-			}
-			return true, rule.Replacement
-		}
-
-	case RewriteRegex:
-		if rule.regex != nil && rule.regex.MatchString(domain) {
-			result := rule.regex.ReplaceAllString(domain, rule.Replacement)
-			return true, result
-		}
-	}
-	return false, ""
 }
 
 func (r *DNSRewriter) HasRules() bool {

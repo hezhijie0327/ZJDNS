@@ -18,36 +18,35 @@ func NewConfigManager() *ConfigManager {
 	return &ConfigManager{}
 }
 
-func (cm *ConfigManager) LoadConfig(filename string) (*ServerConfig, error) {
-	config := cm.getDefaultConfig()
-
-	if filename == "" {
-		writeLog(LogInfo, "📄 使用默认配置")
-		return config, nil
-	}
-
-	if !isValidFilePath(filename) {
-		return nil, fmt.Errorf("❌ 无效的配置文件路径: %s", filename)
-	}
-
-	data, err := os.ReadFile(filename)
+// LoadConfig 从文件加载配置
+func (cm *ConfigManager) LoadConfig(configFile string) (*ServerConfig, error) {
+	// 读取配置文件
+	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return nil, fmt.Errorf("📖 读取配置文件失败: %w", err)
 	}
 
-	if len(data) > MaxConfigFileSizeBytes {
-		return nil, fmt.Errorf("📏 配置文件过大: %d bytes", len(data))
-	}
-
+	// 解析JSON配置
+	config := &ServerConfig{}
 	if err := json.Unmarshal(data, config); err != nil {
-		return nil, fmt.Errorf("📦 解析配置文件失败: %w", err)
+		return nil, fmt.Errorf("📖 解析配置文件失败: %w", err)
 	}
 
-	writeLog(LogInfo, "✅ 配置文件加载成功: %s", filename)
-	return config, cm.ValidateConfig(config)
+	// 验证配置
+	if err := cm.validateConfig(config); err != nil {
+		return nil, fmt.Errorf("✅ 配置验证失败: %w", err)
+	}
+
+	// 如果启用了DDR功能，则自动添加DDR相关的重写规则
+	if cm.shouldEnableDDR(config) {
+		cm.addDDRRecords(config)
+	}
+
+	writeLog(LogInfo, "✅ 配置加载成功: %s", configFile)
+	return config, nil
 }
 
-func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
+func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	// 日志级别验证
 	validLevels := map[string]LogLevel{
 		"none": LogNone, "error": LogError, "warn": LogWarn,
@@ -150,14 +149,16 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config := &ServerConfig{}
 
 	config.Server.Port = DefaultDNSPort
-	config.Server.IPv6 = true
 	config.Server.LogLevel = "info"
 	config.Server.DefaultECS = "auto"
 	config.Server.TrustedCIDRFile = ""
+	config.Server.DDR.Domain = "dns.example.com"
+	config.Server.DDR.IPv4 = "127.0.0.1"
+	config.Server.DDR.IPv6 = "::1"
 
 	config.Server.TLS.Port = DefaultSecureDNSPort
 	config.Server.TLS.HTTPS.Port = DefaultHTTPSPort
-	config.Server.TLS.HTTPS.Endpoint = strings.TrimPrefix(DefaultDNSQueryPath, "/")
+	config.Server.TLS.HTTPS.Endpoint = DefaultDNSQueryPath
 	config.Server.TLS.CertFile = ""
 	config.Server.TLS.KeyFile = ""
 
@@ -166,6 +167,7 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config.Server.Features.DNSSEC = true
 	config.Server.Features.HijackProtection = false
 	config.Server.Features.Padding = false
+	config.Server.Features.IPv6 = true
 
 	config.Redis.Address = ""
 	config.Redis.Password = ""
@@ -194,7 +196,7 @@ func GenerateExampleConfig() string {
 	config.Server.TLS.CertFile = "/path/to/cert.pem"
 	config.Server.TLS.KeyFile = "/path/to/key.pem"
 	config.Server.TLS.HTTPS.Port = DefaultHTTPSPort
-	config.Server.TLS.HTTPS.Endpoint = strings.TrimPrefix(DefaultDNSQueryPath, "/")
+	config.Server.TLS.HTTPS.Endpoint = DefaultDNSQueryPath
 
 	config.Redis.Address = "127.0.0.1:6379"
 	config.Server.Features.ServeStale = true
@@ -249,17 +251,46 @@ func GenerateExampleConfig() string {
 
 	config.Rewrite = []RewriteRule{
 		{
-			TypeString:  "exact",
-			Pattern:     "blocked.example.com",
-			Replacement: "127.0.0.1",
+			Match:   "blocked.example.com",
+			Replace: "127.0.0.1",
 		},
 		{
-			TypeString:  "suffix",
-			Pattern:     "ads.example.com",
-			Replacement: "127.0.0.1",
+			Match:   "ipv6.blocked.example.com",
+			Replace: "::1",
 		},
 	}
 
 	data, _ := json.MarshalIndent(config, "", "  ")
 	return string(data)
+}
+
+// shouldEnableDDR 检查是否应该启用DDR功能
+func (cm *ConfigManager) shouldEnableDDR(config *ServerConfig) bool {
+	return config.Server.DDR.Domain != "" &&
+		(config.Server.DDR.IPv4 != "" || config.Server.DDR.IPv6 != "")
+}
+
+// addDDRRecords 添加DDR相关的A和AAAA记录重写规则
+func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
+	domain := strings.TrimSuffix(config.Server.DDR.Domain, ".")
+
+	// 添加IPv4重写规则
+	if config.Server.DDR.IPv4 != "" {
+		ipv4Rule := RewriteRule{
+			Match:   domain,
+			Replace: config.Server.DDR.IPv4,
+		}
+		config.Rewrite = append(config.Rewrite, ipv4Rule)
+		writeLog(LogDebug, "📝 添加DDR IPv4重写规则: %s -> %s", domain, config.Server.DDR.IPv4)
+	}
+
+	// 添加IPv6重写规则
+	if config.Server.DDR.IPv6 != "" {
+		ipv6Rule := RewriteRule{
+			Match:   domain,
+			Replace: config.Server.DDR.IPv6,
+		}
+		config.Rewrite = append(config.Rewrite, ipv6Rule)
+		writeLog(LogDebug, "📝 添加DDR IPv6重写规则: %s -> %s", domain, config.Server.DDR.IPv6)
+	}
 }

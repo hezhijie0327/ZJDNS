@@ -42,6 +42,13 @@
 - **智能块大小填充**：采用推荐的 128 字节块大小进行填充，平衡隐私保护和带宽效率。
 - **按需启用**：可通过配置文件灵活开启或关闭此功能，**仅对安全连接（DoT/DoQ/DoH）生效**。
 
+### 📍 DDR (DNS Delivery Rules) 功能
+
+- **自动发现支持**：支持 RFC [9461](https://www.rfc-editor.org/rfc/rfc9461.html)/[9462](https://www.rfc-editor.org/rfc/rfc9461.html) DNS SVCB 记录，用于自动发现安全 DNS 服务器
+- **SVCB 记录生成**：自动生成 DoT、DoH、DoQ 的 SVCB 记录，支持 IPv4 和 IPv6 提示
+- **灵活配置**：通过配置文件指定 DDR 域名和对应的 IP 地址，支持 IPv4 和 IPv6 双栈配置
+- **智能响应**：当收到 `_dns.resolver.arpa` `_dns.dns.example.org` `_non_53_port._dns.dns.example.org` 的 SVCB 查询时，自动返回配置的加密 DNS 服务信息
+
 ### 💾 缓存系统
 
 - **双模式运行**：

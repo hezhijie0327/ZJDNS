@@ -321,7 +321,7 @@ func (rc *RedisDNSCache) Shutdown() {
 	if err := rc.taskManager.Shutdown(5 * time.Second); err != nil {
 		writeLog(LogError, "💥 任务管理器关闭失败: %v", err)
 	}
-	
+
 	rc.cancel()
 	close(rc.refreshQueue)
 
@@ -339,6 +339,6 @@ func (rc *RedisDNSCache) Shutdown() {
 	if err := rc.client.Close(); err != nil {
 		writeLog(LogError, "💥 Redis客户端关闭失败: %v", err)
 	}
-	
+
 	writeLog(LogInfo, "✅ Redis缓存已关闭")
 }

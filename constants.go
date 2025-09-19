@@ -68,7 +68,7 @@ const (
 
 const (
 	// 缓存配置
-	DefaultCacheTTLSeconds       = 10
+	DefaultCacheTTLSeconds       = 300
 	StaleTTLSeconds              = 30
 	StaleMaxAgeSeconds           = 259200
 	CacheRefreshThresholdSeconds = 300

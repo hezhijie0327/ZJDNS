@@ -232,7 +232,6 @@ func (uqc *UnifiedQueryClient) executeTraditionalQuery(ctx context.Context, msg 
 		msgCopy = new(dns.Msg)
 	}
 
-
 	var client *dns.Client
 	if server.Protocol == "tcp" {
 		client = uqc.connectionPool.GetTCPClient()

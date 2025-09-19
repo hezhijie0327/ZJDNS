@@ -236,7 +236,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), DefaultDNSPort))
 					}
 				case *dns.AAAA:
-					if r.config.Server.IPv6 && strings.EqualFold(a.Header().Name, ns.Ns) {
+					if r.config.Server.Features.IPv6 && strings.EqualFold(a.Header().Name, ns.Ns) {
 						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), DefaultDNSPort))
 					}
 				}
@@ -362,7 +362,7 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 					}
 				}
 
-				if r.config.Server.IPv6 && len(addresses) == 0 {
+				if r.config.Server.Features.IPv6 && len(addresses) == 0 {
 					nsQuestionV6 := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
 					if nsAnswerV6, _, _, _, _, err := r.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP, tracker); err == nil {
 						for _, rr := range nsAnswerV6 {
@@ -406,7 +406,7 @@ func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, n
 }
 
 func (r *RecursiveDNSServer) getRootServers() []string {
-	if r.config.Server.IPv6 {
+	if r.config.Server.Features.IPv6 {
 		mixed := make([]string, 0, len(r.rootServersV4)+len(r.rootServersV6))
 		mixed = append(mixed, r.rootServersV4...)
 		mixed = append(mixed, r.rootServersV6...)

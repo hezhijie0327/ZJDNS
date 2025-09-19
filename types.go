@@ -2,7 +2,6 @@ package main
 
 import (
 	"net"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -159,33 +158,25 @@ type RefreshRequest struct {
 	ServerDNSSECEnabled bool
 }
 
-// RewriteRuleType 重写规则类型
-type RewriteRuleType int
-
-const (
-	RewriteExact RewriteRuleType = iota
-	RewriteSuffix
-	RewriteRegex
-	RewritePrefix
-)
-
 // RewriteRule DNS重写规则
 type RewriteRule struct {
-	Type        RewriteRuleType `json:"-"`
-	TypeString  string          `json:"type"`
-	Pattern     string          `json:"pattern"`
-	Replacement string          `json:"replacement"`
-	regex       *regexp.Regexp  `json:"-"`
+	Match   string `json:"match"`   // 需要匹配的域名
+	Replace string `json:"replace"` // 替换的域名或IP地址
 }
 
 // ServerConfig 服务器配置
 type ServerConfig struct {
 	Server struct {
 		Port            string `json:"port"`
-		IPv6            bool   `json:"ipv6"`
 		LogLevel        string `json:"log_level"`
 		DefaultECS      string `json:"default_ecs_subnet"`
 		TrustedCIDRFile string `json:"trusted_cidr_file"`
+
+		DDR struct {
+			Domain string `json:"domain"`
+			IPv4   string `json:"ipv4"`
+			IPv6   string `json:"ipv6"`
+		} `json:"ddr"`
 
 		TLS struct {
 			Port     string `json:"port"`
@@ -204,6 +195,7 @@ type ServerConfig struct {
 			DNSSEC           bool `json:"dnssec"`
 			HijackProtection bool `json:"hijack_protection"`
 			Padding          bool `json:"padding"`
+			IPv6             bool `json:"ipv6"`
 		} `json:"features"`
 	} `json:"server"`
 
