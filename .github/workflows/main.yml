@@ -1,4 +1,4 @@
-name: Build & Release hezhijie0327/ZJDNSServer
+name: Build & Release hezhijie0327/ZJDNS
 
 on:
   schedule:
