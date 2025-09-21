@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bluele/gcache"
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -759,7 +758,6 @@ type SecureDNSManager struct {
 	quicConn      *net.UDPConn
 	quicListener  *quic.EarlyListener
 	quicTransport *quic.Transport
-	validator     gcache.Cache
 	httpsServer   *http.Server
 	h3Server      *http3.Server
 	httpsListener net.Listener
@@ -784,7 +782,6 @@ func NewSecureDNSManager(server *RecursiveDNSServer, config *ServerConfig) (*Sec
 		tlsConfig: tlsConfig,
 		ctx:       ctx,
 		cancel:    cancel,
-		validator: gcache.New(QUICAddrValidatorCacheSize).LRU().Build(),
 	}, nil
 }
 
@@ -884,8 +881,7 @@ func (sm *SecureDNSManager) startQUICServer() error {
 	}
 
 	sm.quicTransport = &quic.Transport{
-		Conn:                sm.quicConn,
-		VerifySourceAddress: sm.requiresValidation,
+		Conn: sm.quicConn,
 	}
 
 	quicTLSConfig := sm.tlsConfig.Clone()
@@ -1093,23 +1089,6 @@ func (sm *SecureDNSManager) respondDoH(w http.ResponseWriter, response *dns.Msg)
 
 	_, err = w.Write(bytes)
 	return err
-}
-
-func (sm *SecureDNSManager) requiresValidation(addr net.Addr) bool {
-	if sm == nil || sm.validator == nil {
-		return false
-	}
-
-	key := addr.(*net.UDPAddr).IP.String()
-	if sm.validator.Has(key) {
-		return false
-	}
-
-	if err := sm.validator.SetWithExpire(key, true, QUICAddrValidatorCacheTTL); err != nil {
-		writeLog(LogWarn, "⚠️ QUIC验证器缓存设置失败: %v", err)
-	}
-
-	return true
 }
 
 func (sm *SecureDNSManager) handleTLSConnections() {
