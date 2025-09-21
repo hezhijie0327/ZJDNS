@@ -1,0 +1,43 @@
+name: Update Dependencies
+
+on:
+  schedule:
+    - cron: "0 4,16 * * *" # UTC+8 00:00 / 12:00
+  workflow_dispatch:
+
+jobs:
+  update-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ">=1.25.0"
+
+      - name: Update dependencies to latest commits
+        run: |
+          go get -u github.com/miekg/dns@master
+          go get -u github.com/redis/go-redis/v9@master
+          go get -u github.com/quic-go/quic-go@master
+          go mod tidy
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Update dependencies to latest commits"
+          title: "Update dependencies to latest commits"
+          body: |
+            This PR updates the following dependencies to their latest commits:
+            - github.com/miekg/dns@master
+            - github.com/redis/go-redis/v9@master
+            - github.com/quic-go/quic-go@master
+
+            It also updates Go to the latest stable version.
+
+            Check the changes and merge if everything looks good.
+          branch: update-dependencies
+          delete-branch: true
