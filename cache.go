@@ -10,6 +10,8 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/hitless"
+	"github.com/redis/go-redis/v9/logging"
 )
 
 // ==================== 缓存接口和实现 ====================
@@ -42,17 +44,24 @@ type RedisDNSCache struct {
 }
 
 func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisDNSCache, error) {
+	// 使用go-redis内置的VoidLogger来禁用日志
+	logging.Disable()
+
 	rdb := redis.NewClient(&redis.Options{
-		Addr:         config.Redis.Address,
-		Password:     config.Redis.Password,
-		DB:           config.Redis.Database,
-		PoolSize:     RedisConnectionPoolSize,
-		MinIdleConns: RedisMinIdleConnections,
-		MaxRetries:   RedisMaxRetryAttempts,
-		PoolTimeout:  RedisConnectionPoolTimeout,
-		ReadTimeout:  RedisReadTimeout,
-		WriteTimeout: RedisWriteTimeout,
-		DialTimeout:  RedisDialTimeout,
+		Addr:            config.Redis.Address,
+		Password:        config.Redis.Password,
+		DB:              config.Redis.Database,
+		PoolSize:        RedisConnectionPoolSize,
+		MinIdleConns:    RedisMinIdleConnections,
+		MaxRetries:      RedisMaxRetryAttempts,
+		PoolTimeout:     RedisConnectionPoolTimeout,
+		ReadTimeout:     RedisReadTimeout,
+		WriteTimeout:    RedisWriteTimeout,
+		DialTimeout:     RedisDialTimeout,
+		DisableIdentity: true, // 禁用CLIENT SETINFO命令，包括maint_notifications
+		HitlessUpgradeConfig: &hitless.Config{
+			Mode: hitless.MaintNotificationsDisabled, // 明确禁用维护通知功能
+		},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), StandardOperationTimeout)
