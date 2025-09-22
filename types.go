@@ -150,6 +150,16 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 	return nil
 }
 
+// SpeedTestMethod 速度测试方法
+type SpeedTestMethod struct {
+	// 测试类型: icmp, tcp
+	Type string `json:"type"`
+	// 端口号（仅对TCP有效）
+	Port string `json:"port,omitempty"`
+	// 超时时间（毫秒）
+	Timeout int `json:"timeout"`
+}
+
 // RefreshRequest 刷新请求
 type RefreshRequest struct {
 	Question            dns.Question
@@ -206,8 +216,9 @@ type ServerConfig struct {
 		KeyPrefix string `json:"key_prefix"`
 	} `json:"redis"`
 
-	Upstream []UpstreamServer `json:"upstream"`
-	Rewrite  []RewriteRule    `json:"rewrite"`
+	Speedtest []SpeedTestMethod `json:"speedtest"`
+	Upstream  []UpstreamServer  `json:"upstream"`
+	Rewrite   []RewriteRule     `json:"rewrite"`
 }
 
 // DNSCache 缓存接口
