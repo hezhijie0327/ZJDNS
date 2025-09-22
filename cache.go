@@ -127,6 +127,25 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 		return
 	}
 
+	// 对A和AAAA记录进行测速和排序（如果启用了speedtest功能）
+	if len(rc.server.config.Speedtest) > 0 && (req.Question.Qtype == dns.TypeA || req.Question.Qtype == dns.TypeAAAA) {
+		// 构建临时消息用于测速
+		tempMsg := &dns.Msg{
+			Answer: answer,
+			Ns:     authority,
+			Extra:  additional,
+		}
+
+		// 执行测速和排序
+		speedTester := NewSpeedTester(*rc.server.config)
+		speedTester.PerformSpeedTestAndSort(tempMsg)
+
+		// 更新记录
+		answer = tempMsg.Answer
+		authority = tempMsg.Ns
+		additional = tempMsg.Extra
+	}
+
 	allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
 	allRRs = append(allRRs, answer...)
 	allRRs = append(allRRs, authority...)

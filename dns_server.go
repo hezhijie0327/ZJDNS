@@ -19,26 +19,50 @@ import (
 // ==================== 主DNS递归服务器 ====================
 
 type RecursiveDNSServer struct {
-	config           *ServerConfig
-	cache            DNSCache
-	rootServersV4    []string
-	rootServersV6    []string
-	connectionPool   *ConnectionPoolManager
-	dnssecValidator  *DNSSECValidator
+	// 配置信息
+	config *ServerConfig
+	// 根服务器地址列表
+	rootServersV4 []string
+	rootServersV6 []string
+	// 连接池管理器
+	connectionPool *ConnectionPoolManager
+	// DNSSEC验证器
+	dnssecValidator *DNSSECValidator
+	// 并发控制通道
 	concurrencyLimit chan struct{}
-	ctx              context.Context
-	cancel           context.CancelFunc
-	shutdown         chan struct{}
-	ipFilter         *IPFilter
-	dnsRewriter      *DNSRewriter
-	upstreamManager  *UpstreamManager
-	wg               sync.WaitGroup
-	taskManager      *TaskManager
+	// 上下文和取消函数
+	ctx    context.Context
+	cancel context.CancelFunc
+	// 关闭通知通道
+	shutdown chan struct{}
+	// IP过滤器
+	ipFilter *IPFilter
+	// DNS重写器
+	dnsRewriter *DNSRewriter
+	// 上游服务器管理器
+	upstreamManager *UpstreamManager
+	// 统一查询客户端
+	queryClient *UnifiedQueryClient
+	// 缓存实例
+	cache DNSCache
+	// 任务管理器
+	taskManager *TaskManager
+	// ECS管理器
+	ednsManager *EDNSManager
+	// 劫持预防器
 	hijackPrevention *DNSHijackPrevention
-	ednsManager      *EDNSManager
-	queryClient      *UnifiedQueryClient
+	// 防抖间隔
+	speedtestInterval time.Duration
+	// 防抖机制
+	speedtestDebounce map[string]time.Time
+	// 速度测试防抖互斥锁
+	speedtestMutex sync.Mutex
+	// 安全DNS管理器
 	secureDNSManager *SecureDNSManager
-	closed           int32
+	// 等待组
+	wg sync.WaitGroup
+	// 关闭状态标志
+	closed int32
 }
 
 func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
@@ -103,22 +127,25 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 	hijackPrevention := NewDNSHijackPrevention(config.Server.Features.HijackProtection)
 
 	server := &RecursiveDNSServer{
-		config:           config,
-		rootServersV4:    rootServersV4,
-		rootServersV6:    rootServersV6,
-		connectionPool:   connectionPool,
-		dnssecValidator:  NewDNSSECValidator(),
-		concurrencyLimit: make(chan struct{}, MaxGlobalConcurrency),
-		ctx:              ctx,
-		cancel:           cancel,
-		shutdown:         make(chan struct{}),
-		ipFilter:         ipFilter,
-		dnsRewriter:      dnsRewriter,
-		upstreamManager:  upstreamManager,
-		taskManager:      taskManager,
-		hijackPrevention: hijackPrevention,
-		ednsManager:      ednsManager,
-		queryClient:      queryClient,
+		config:            config,
+		rootServersV4:     rootServersV4,
+		rootServersV6:     rootServersV6,
+		connectionPool:    connectionPool,
+		dnssecValidator:   NewDNSSECValidator(),
+		concurrencyLimit:  make(chan struct{}, MaxGlobalConcurrency),
+		ctx:               ctx,
+		cancel:            cancel,
+		shutdown:          make(chan struct{}),
+		ipFilter:          ipFilter,
+		dnsRewriter:       dnsRewriter,
+		upstreamManager:   upstreamManager,
+		queryClient:       queryClient,
+		hijackPrevention:  hijackPrevention,
+		taskManager:       taskManager,
+		ednsManager:       ednsManager,
+		speedtestDebounce: make(map[string]time.Time),
+		speedtestMutex:    sync.Mutex{},
+		speedtestInterval: SpeedTestDebounceInterval, // 使用常量中的防抖间隔
 	}
 
 	if config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "" {
@@ -166,12 +193,28 @@ func (r *RecursiveDNSServer) setupSignalHandling() {
 	}()
 }
 
+// cleanupSpeedtestDebounce 清理用于防抖的速度测试域名记录
+func (r *RecursiveDNSServer) cleanupSpeedtestDebounce() {
+	r.speedtestMutex.Lock()
+	defer r.speedtestMutex.Unlock()
+
+	now := time.Now()
+	for domain, lastCheck := range r.speedtestDebounce {
+		if now.Sub(lastCheck) >= r.speedtestInterval {
+			delete(r.speedtestDebounce, domain)
+		}
+	}
+}
+
 func (r *RecursiveDNSServer) shutdownServer() {
 	if !atomic.CompareAndSwapInt32(&r.closed, 0, 1) {
 		return
 	}
 
 	writeLog(LogInfo, "🛑 开始关闭DNS服务器...")
+
+	// 清理速度测试防抖记录
+	r.cleanupSpeedtestDebounce()
 
 	if r.cancel != nil {
 		r.cancel()
@@ -355,6 +398,13 @@ func (r *RecursiveDNSServer) displayInfo() {
 	}
 	if r.ednsManager.IsPaddingEnabled() {
 		writeLog(LogInfo, "📦 DNS Padding: 已启用")
+	}
+
+	// 添加路由检测功能状态的显示
+	if len(r.config.Speedtest) > 0 {
+		writeLog(LogInfo, "📍 速度测试: 已启用")
+	} else {
+		writeLog(LogInfo, "📍 速度测试: 未启用")
 	}
 
 	writeLog(LogInfo, "⚡ 最大并发: %d", MaxGlobalConcurrency)
@@ -781,6 +831,52 @@ func (r *RecursiveDNSServer) processQuerySuccess(req *dns.Msg, question dns.Ques
 	msg.Ns = globalRecordHandler.ProcessRecords(authority, 0, clientRequestedDNSSEC)
 	msg.Extra = globalRecordHandler.ProcessRecords(additional, 0, clientRequestedDNSSEC)
 
+	// 速度测试：对A和AAAA记录进行测速和排序
+	if len(r.config.Speedtest) > 0 {
+		writeLog(LogDebug, "📍 速度测试功能已启用")
+		if tracker != nil {
+			tracker.AddStep("📍 启用速度测试")
+		}
+
+		// 检查是否需要执行速度测试（防抖机制）
+		shouldPerformSpeedTest := r.shouldPerformSpeedTest(question.Name)
+		if shouldPerformSpeedTest {
+			writeLog(LogDebug, "📍 速度测试: 触发域名 %s 的后台检测", question.Name)
+			// 在后台执行速度测试，不影响主响应
+			// 克隆消息用于后台处理
+			msgCopy := msg.Copy()
+			r.taskManager.ExecuteAsync(fmt.Sprintf("speed-test-%s", question.Name), func(ctx context.Context) error {
+				writeLog(LogDebug, "📍 速度测试: 开始后台检测域名 %s", question.Name)
+				// 创建临时的SpeedTester实例执行测速
+				speedTester := NewSpeedTester(*r.config)
+				// 执行速度测试和排序
+				speedTester.PerformSpeedTestAndSort(msgCopy)
+
+				// 更新缓存中的排序结果
+				r.cache.Set(cacheKey,
+					msgCopy.Answer,
+					msgCopy.Ns,
+					msgCopy.Extra,
+					validated, responseECS)
+				writeLog(LogDebug, "📍 速度测试: 域名 %s 后台检测完成", question.Name)
+
+				return nil
+			})
+
+			// 首次响应直接返回，不进行排序
+			if tracker != nil {
+				tracker.AddStep("⚡ 首次响应不排序，后台进行速度测试")
+			}
+		} else {
+			writeLog(LogDebug, "📍 速度测试: 域名 %s 被防抖机制跳过", question.Name)
+			if tracker != nil {
+				tracker.AddStep("⏰ 速度测试跳过（防抖机制）")
+			}
+		}
+	} else {
+		writeLog(LogDebug, "📍 速度测试功能未启用")
+	}
+
 	shouldAddEDNS := clientHasEDNS || responseECS != nil || r.ednsManager.IsPaddingEnabled() ||
 		(clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
 
@@ -805,6 +901,27 @@ func (r *RecursiveDNSServer) restoreOriginalDomain(msg *dns.Msg, currentName, or
 			rr.Header().Name = originalName
 		}
 	}
+}
+
+// shouldPerformSpeedTest 检查是否应该对域名进行速度测试（防抖机制）
+func (r *RecursiveDNSServer) shouldPerformSpeedTest(domain string) bool {
+	// 如果没有配置speedtest，则不进行速度测试
+	if len(r.config.Speedtest) == 0 {
+		return false
+	}
+
+	r.speedtestMutex.Lock()
+	defer r.speedtestMutex.Unlock()
+
+	now := time.Now()
+	lastCheck, exists := r.speedtestDebounce[domain]
+	// 如果域名未被检查过，或者距离上次检查已经超过间隔时间，则应该检查
+	if !exists || now.Sub(lastCheck) >= r.speedtestInterval {
+		r.speedtestDebounce[domain] = now
+		return true
+	}
+
+	return false
 }
 
 func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *ECSOption,

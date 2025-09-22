@@ -149,7 +149,7 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config := &ServerConfig{}
 
 	config.Server.Port = DefaultDNSPort
-	config.Server.LogLevel = "info"
+	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
 	config.Server.TrustedCIDRFile = ""
 	config.Server.DDR.Domain = "dns.example.com"
@@ -165,10 +165,11 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config.Server.Features.ServeStale = false
 	config.Server.Features.Prefetch = false
 	config.Server.Features.DNSSEC = true
-	config.Server.Features.HijackProtection = false
-	config.Server.Features.Padding = false
+	config.Server.Features.HijackProtection = true
+	config.Server.Features.Padding = true
 	config.Server.Features.IPv6 = true
 
+	// 速度测试配置
 	config.Redis.Address = ""
 	config.Redis.Password = ""
 	config.Redis.Database = 0
@@ -176,6 +177,9 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 
 	config.Upstream = []UpstreamServer{}
 	config.Rewrite = []RewriteRule{}
+
+	// 添加这一行
+	config.Speedtest = []SpeedTestMethod{}
 
 	return config
 }
@@ -189,20 +193,16 @@ func LoadConfig(filename string) (*ServerConfig, error) {
 func GenerateExampleConfig() string {
 	config := globalConfigManager.getDefaultConfig()
 
-	config.Server.LogLevel = "info"
+	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
 	config.Server.TrustedCIDRFile = "trusted_cidr.txt"
+
+	config.Redis.Address = "127.0.0.1:6379"
 
 	config.Server.TLS.CertFile = "/path/to/cert.pem"
 	config.Server.TLS.KeyFile = "/path/to/key.pem"
 	config.Server.TLS.HTTPS.Port = DefaultHTTPSPort
 	config.Server.TLS.HTTPS.Endpoint = DefaultDNSQueryPath
-
-	config.Redis.Address = "127.0.0.1:6379"
-	config.Server.Features.ServeStale = true
-	config.Server.Features.Prefetch = true
-	config.Server.Features.HijackProtection = true
-	config.Server.Features.Padding = false
 
 	config.Upstream = []UpstreamServer{
 		{
@@ -257,6 +257,29 @@ func GenerateExampleConfig() string {
 		{
 			Match:   "ipv6.blocked.example.com",
 			Replace: "::1",
+		},
+	}
+
+	// 速度测试配置示例
+	config.Speedtest = []SpeedTestMethod{
+		{
+			Type:    "icmp",
+			Timeout: 1000,
+		},
+		{
+			Type:    "tcp",
+			Port:    "443",
+			Timeout: 1000,
+		},
+		{
+			Type:    "tcp",
+			Port:    "80",
+			Timeout: 1000,
+		},
+		{
+			Type:    "udp",
+			Port:    "53",
+			Timeout: 1000,
 		},
 	}
 

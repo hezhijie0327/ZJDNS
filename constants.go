@@ -10,6 +10,9 @@ import (
 // ==================== 系统常量定义 ====================
 
 const (
+	// 日志
+	DefaultLogLevel = "info"
+
 	// DNS服务端口
 	DefaultDNSPort       = "53"
 	DefaultSecureDNSPort = "853"
@@ -42,7 +45,7 @@ const (
 
 const (
 	// 连接超时配置
-	SecureConnIdleTimeout      = 5 * time.Minute
+	SecureConnIdleTimeout      = 300 * time.Second
 	SecureConnKeepAlive        = 15 * time.Second
 	SecureConnHandshakeTimeout = 3 * time.Second
 	SecureConnQueryTimeout     = 5 * time.Second
@@ -56,14 +59,14 @@ const (
 	DoHMaxRequestSize    = 8192
 	DoHMaxConnsPerHost   = 3
 	DoHMaxIdleConns      = 3
-	DoHIdleConnTimeout   = 5 * time.Minute
+	DoHIdleConnTimeout   = 300 * time.Second
 	DoHReadIdleTimeout   = 30 * time.Second
 )
 
 const (
 	// QUIC配置
 	QUICAddrValidatorCacheSize = 1000
-	QUICAddrValidatorCacheTTL  = 5 * time.Minute
+	QUICAddrValidatorCacheTTL  = 300 * time.Second
 )
 
 const (
@@ -113,12 +116,20 @@ const (
 	// ECS配置
 	PublicIPDetectionTimeout = 3 * time.Second
 	HTTPClientRequestTimeout = 5 * time.Second
-	IPDetectionCacheExpiry   = 5 * time.Minute
+	IPDetectionCacheExpiry   = 300 * time.Second
 	MaxTrustedIPv4CIDRs      = 1024
 	MaxTrustedIPv6CIDRs      = 256
 	DefaultECSIPv4PrefixLen  = 24
 	DefaultECSIPv6PrefixLen  = 64
 	DefaultECSClientScope    = 0
+)
+
+const (
+	// Speedtest配置
+	DefaultSpeedTestTimeout     = 1 * time.Second
+	DefaultSpeedTestConcurrency = 4
+	DefaultSpeedTestCacheTTL    = 900 * time.Second
+	SpeedTestDebounceInterval   = 10 * time.Second
 )
 
 // 协议标识符
