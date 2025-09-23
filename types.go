@@ -170,8 +170,20 @@ type RefreshRequest struct {
 
 // RewriteRule DNS重写规则
 type RewriteRule struct {
-	Match   string `json:"match"`   // 需要匹配的域名
-	Replace string `json:"replace"` // 替换的域名或IP地址
+	Name string `json:"name"` // 需要匹配的域名
+
+	// 新增字段支持响应码重写（数字形式）
+	ResponseCode *int `json:"response_code,omitempty"` // 响应码: 0=NOERROR, 2=SERVFAIL, 3=NXDOMAIN, 5=REFUSED 等
+
+	// 新增字段支持所有类型DNS记录重写，使用更简单的格式
+	Records []DNSRecordConfig `json:"records,omitempty"` // DNS记录列表
+}
+
+// DNSRecordConfig DNS记录配置，更接近标准DNS区域文件格式
+type DNSRecordConfig struct {
+	Type    string `json:"type"`          // 记录类型字符串: A, AAAA, CNAME, TXT, MX, NS, PTR, SRV等
+	TTL     uint32 `json:"ttl,omitempty"` // TTL值，默认使用300
+	Content string `json:"content"`       // 记录内容（RDATA）
 }
 
 // ServerConfig 服务器配置

@@ -251,12 +251,24 @@ func GenerateExampleConfig() string {
 
 	config.Rewrite = []RewriteRule{
 		{
-			Match:   "blocked.example.com",
-			Replace: "127.0.0.1",
+			Name: "blocked.example.com",
+			Records: []DNSRecordConfig{
+				{
+					Type:    "A",
+					Content: "127.0.0.1",
+					TTL:     300,
+				},
+			},
 		},
 		{
-			Match:   "ipv6.blocked.example.com",
-			Replace: "::1",
+			Name: "ipv6.blocked.example.com",
+			Records: []DNSRecordConfig{
+				{
+					Type:    "AAAA",
+					Content: "::1",
+					TTL:     300,
+				},
+			},
 		},
 	}
 
@@ -300,8 +312,14 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	// 添加IPv4重写规则
 	if config.Server.DDR.IPv4 != "" {
 		ipv4Rule := RewriteRule{
-			Match:   domain,
-			Replace: config.Server.DDR.IPv4,
+			Name: domain,
+			Records: []DNSRecordConfig{
+				{
+					Type:    "A",
+					Content: config.Server.DDR.IPv4,
+					TTL:     300,
+				},
+			},
 		}
 		config.Rewrite = append(config.Rewrite, ipv4Rule)
 		writeLog(LogDebug, "📝 添加DDR IPv4重写规则: %s -> %s", domain, config.Server.DDR.IPv4)
@@ -310,8 +328,14 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	// 添加IPv6重写规则
 	if config.Server.DDR.IPv6 != "" {
 		ipv6Rule := RewriteRule{
-			Match:   domain,
-			Replace: config.Server.DDR.IPv6,
+			Name: domain,
+			Records: []DNSRecordConfig{
+				{
+					Type:    "AAAA",
+					Content: config.Server.DDR.IPv6,
+					TTL:     300,
+				},
+			},
 		}
 		config.Rewrite = append(config.Rewrite, ipv6Rule)
 		writeLog(LogDebug, "📝 添加DDR IPv6重写规则: %s -> %s", domain, config.Server.DDR.IPv6)

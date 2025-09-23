@@ -140,7 +140,7 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 
 	validRules := make([]RewriteRule, 0, len(rules))
 	for _, rule := range rules {
-		if len(rule.Match) > MaxDomainNameLengthRFC || len(rule.Replace) > MaxDomainNameLengthRFC {
+		if len(rule.Name) > MaxDomainNameLengthRFC {
 			continue
 		}
 
@@ -152,9 +152,25 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 	return nil
 }
 
-func (r *DNSRewriter) Rewrite(domain string, qtype uint16) (string, bool) {
+// DNSRewriteResult DNS重写结果
+type DNSRewriteResult struct {
+	Domain        string
+	ShouldRewrite bool
+	ResponseCode  int
+	Records       []dns.RR
+}
+
+// RewriteWithDetails 根据查询详细信息进行重写，支持响应码和自定义记录
+func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewriteResult {
+	result := DNSRewriteResult{
+		Domain:        domain,
+		ShouldRewrite: false,
+		ResponseCode:  dns.RcodeSuccess, // 默认NOERROR
+		Records:       nil,
+	}
+
 	if !r.HasRules() || len(domain) > MaxDomainNameLengthRFC {
-		return domain, false
+		return result
 	}
 
 	r.mu.RLock()
@@ -164,26 +180,75 @@ func (r *DNSRewriter) Rewrite(domain string, qtype uint16) (string, bool) {
 
 	for i := range r.rules {
 		rule := &r.rules[i]
-		// 只保留精确匹配
-		if domain == strings.ToLower(rule.Match) {
-			// 自动识别查询类型
-			// 如果替换值是IPv4地址，则只对A记录查询生效
-			// 如果替换值是IPv6地址，则只对AAAA记录查询生效
-			if ip := net.ParseIP(rule.Replace); ip != nil {
-				if ip.To4() != nil && qtype != dns.TypeA {
-					continue
-				}
-				if ip.To4() == nil && qtype != dns.TypeAAAA {
-					continue
-				}
+
+		// 精确匹配域名
+		if domain == strings.ToLower(rule.Name) {
+			// 处理响应码重写
+			if rule.ResponseCode != nil {
+				result.ResponseCode = *rule.ResponseCode
+				result.ShouldRewrite = true
+				// 如果设置了响应码，则不返回记录
+				return result
 			}
 
-			result := dns.Fqdn(rule.Replace)
-			writeLog(LogDebug, "🔄 域名重写: %s -> %s (QType: %s)", domain, result, dns.TypeToString[qtype])
-			return result, true
+			// 处理自定义记录
+			if len(rule.Records) > 0 {
+				result.Records = make([]dns.RR, 0)
+				for _, record := range rule.Records {
+					// 如果指定了记录类型，则只返回匹配类型的记录
+					if record.Type != "" && record.Type != dns.TypeToString[qtype] {
+						continue
+					}
+
+					rr := r.buildDNSRecord(domain, record)
+					if rr != nil {
+						result.Records = append(result.Records, rr)
+					}
+				}
+				result.ShouldRewrite = true
+				return result
+			}
 		}
 	}
-	return domain, false
+
+	return result
+}
+
+// buildDNSRecord 根据配置构建DNS记录
+func (r *DNSRewriter) buildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
+	ttl := record.TTL
+	if ttl == 0 {
+		ttl = DefaultCacheTTLSeconds // 默认TTL
+	}
+
+	// 确定记录名称（直接使用domain）
+	name := dns.Fqdn(domain)
+
+	// 尝试解析记录内容
+	rrStr := fmt.Sprintf("%s %d IN %s %s", name, ttl, record.Type, record.Content)
+
+	// 使用miekg/dns库的解析功能
+	rr, err := dns.NewRR(rrStr)
+	if err == nil {
+		return rr
+	}
+
+	// 如果解析失败，使用RFC3597通用格式
+	rrType, exists := dns.StringToType[record.Type]
+	if !exists {
+		rrType = 0
+	}
+
+	rfc3597 := &dns.RFC3597{
+		Hdr: dns.RR_Header{
+			Name:   name,
+			Rrtype: rrType,
+			Class:  dns.ClassINET,
+			Ttl:    ttl,
+		},
+	}
+	rfc3597.Rdata = record.Content
+	return rfc3597
 }
 
 func (r *DNSRewriter) HasRules() bool {
