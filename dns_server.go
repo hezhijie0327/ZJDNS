@@ -485,18 +485,51 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 
 	// DNS重写处理
 	if r.dnsRewriter.HasRules() {
-		if rewritten, changed := r.dnsRewriter.Rewrite(question.Name, question.Qtype); changed {
+		rewriteResult := r.dnsRewriter.RewriteWithDetails(question.Name, question.Qtype)
+		if rewriteResult.ShouldRewrite {
 			if tracker != nil {
-				tracker.AddStep("🔄 域名重写: %s -> %s", question.Name, rewritten)
+				tracker.AddStep("🔄 域名重写: %s (QType: %s)", question.Name, dns.TypeToString[question.Qtype])
 			}
 
-			// 如果重写结果是IP地址，则直接返回IP响应
-			if ip := net.ParseIP(strings.TrimSuffix(rewritten, ".")); ip != nil {
-				return r.createDirectIPResponse(req, question.Qtype, ip, tracker)
+			// 处理响应码重写
+			if rewriteResult.ResponseCode != dns.RcodeSuccess {
+				response := r.buildResponse(req)
+				response.Rcode = rewriteResult.ResponseCode
+
+				if tracker != nil {
+					tracker.AddStep("📛 响应码重写: %d", rewriteResult.ResponseCode)
+				}
+
+				return response
 			}
 
-			// 否则更新问题域名继续处理
-			question.Name = rewritten
+			// 处理自定义记录
+			if len(rewriteResult.Records) > 0 {
+				response := r.buildResponse(req)
+				response.Answer = rewriteResult.Records
+				response.Rcode = dns.RcodeSuccess
+
+				if tracker != nil {
+					tracker.AddStep("📝 返回自定义记录: %d条", len(rewriteResult.Records))
+				}
+
+				return response
+			}
+
+			// 处理域名重写
+			if rewriteResult.Domain != question.Name {
+				if tracker != nil {
+					tracker.AddStep("🔄 域名重写: %s -> %s", question.Name, rewriteResult.Domain)
+				}
+
+				// 如果重写结果是IP地址，则直接返回IP响应
+				if ip := net.ParseIP(strings.TrimSuffix(rewriteResult.Domain, ".")); ip != nil {
+					return r.createDirectIPResponse(req, question.Qtype, ip, tracker)
+				}
+
+				// 否则更新问题域名继续处理
+				question.Name = rewriteResult.Domain
+			}
 		}
 	}
 
