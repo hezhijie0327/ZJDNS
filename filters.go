@@ -158,6 +158,7 @@ type DNSRewriteResult struct {
 	ShouldRewrite bool
 	ResponseCode  int
 	Records       []dns.RR
+	Additional    []dns.RR // Additional Section记录
 }
 
 // RewriteWithDetails 根据查询详细信息进行重写，支持响应码和自定义记录
@@ -167,6 +168,7 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 		ShouldRewrite: false,
 		ResponseCode:  dns.RcodeSuccess, // 默认NOERROR
 		Records:       nil,
+		Additional:    nil,
 	}
 
 	if !r.HasRules() || len(domain) > MaxDomainNameLengthRFC {
@@ -192,8 +194,11 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 			}
 
 			// 处理自定义记录
-			if len(rule.Records) > 0 {
+			if len(rule.Records) > 0 || len(rule.Additional) > 0 {
 				result.Records = make([]dns.RR, 0)
+				result.Additional = make([]dns.RR, 0)
+
+				// 处理Answer Section记录
 				for _, record := range rule.Records {
 					// 检查记录类型是否与查询类型匹配
 					recordType := dns.StringToType[record.Type]
@@ -205,6 +210,7 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 							result.ShouldRewrite = true
 							// 清空已收集的记录，因为我们要返回响应码
 							result.Records = nil
+							result.Additional = nil
 							return result
 						}
 						// 如果类型不匹配，继续检查其他记录
@@ -221,6 +227,15 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 						result.Records = append(result.Records, rr)
 					}
 				}
+
+				// 处理Additional Section记录
+				for _, record := range rule.Additional {
+					rr := r.buildDNSRecord(domain, record)
+					if rr != nil {
+						result.Additional = append(result.Additional, rr)
+					}
+				}
+
 				result.ShouldRewrite = true
 				return result
 			}
@@ -237,8 +252,11 @@ func (r *DNSRewriter) buildDNSRecord(domain string, record DNSRecordConfig) dns.
 		ttl = DefaultCacheTTLSeconds // 默认TTL
 	}
 
-	// 确定记录名称（直接使用domain）
+	// 确定记录名称（优先使用record.Name，否则使用domain）
 	name := dns.Fqdn(domain)
+	if record.Name != "" {
+		name = dns.Fqdn(record.Name)
+	}
 
 	// 尝试解析记录内容
 	rrStr := fmt.Sprintf("%s %d IN %s %s", name, ttl, record.Type, record.Content)

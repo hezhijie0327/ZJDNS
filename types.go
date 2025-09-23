@@ -177,10 +177,14 @@ type RewriteRule struct {
 
 	// 新增字段支持所有类型DNS记录重写，使用更简单的格式
 	Records []DNSRecordConfig `json:"records,omitempty"` // DNS记录列表
+
+	// 新增字段支持在Additional Section中添加记录，用于DDR等功能
+	Additional []DNSRecordConfig `json:"additional,omitempty"` // Additional Section记录列表
 }
 
-// DNSRecordConfig DNS记录配置，更接近标准DNS区域文件格式
+// DNSRecordConfig DNS记录配置，用于重写规则
 type DNSRecordConfig struct {
+	Name         string `json:"name,omitempty"`          // 可选的记录名称，如果未指定则使用RewriteRule.Name
 	Type         string `json:"type"`                    // 记录类型字符串
 	TTL          uint32 `json:"ttl,omitempty"`           // TTL值，默认使用300
 	Content      string `json:"content"`                 // 记录内容（RDATA）

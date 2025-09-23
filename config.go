@@ -309,35 +309,99 @@ func (cm *ConfigManager) shouldEnableDDR(config *ServerConfig) bool {
 func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	domain := strings.TrimSuffix(config.Server.DDR.Domain, ".")
 
-	// 添加IPv4重写规则
-	if config.Server.DDR.IPv4 != "" {
-		ipv4Rule := RewriteRule{
-			Name: domain,
-			Records: []DNSRecordConfig{
-				{
-					Type:    "A",
-					Content: config.Server.DDR.IPv4,
-					TTL:     300,
-				},
-			},
-		}
-		config.Rewrite = append(config.Rewrite, ipv4Rule)
-		writeLog(LogDebug, "📝 添加DDR IPv4重写规则: %s -> %s", domain, config.Server.DDR.IPv4)
+	// 创建通用的SVCB记录配置
+	svcbRecords := []DNSRecordConfig{
+		{
+			Type:    "SVCB",
+			Content: "1 . alpn=doq,dot port=" + config.Server.TLS.Port,
+		},
+		{
+			Type:    "SVCB",
+			Content: "2 . alpn=h3,h2 port=" + config.Server.TLS.HTTPS.Port,
+		},
 	}
 
-	// 添加IPv6重写规则
-	if config.Server.DDR.IPv6 != "" {
-		ipv6Rule := RewriteRule{
-			Name: domain,
-			Records: []DNSRecordConfig{
-				{
-					Type:    "AAAA",
-					Content: config.Server.DDR.IPv6,
-					TTL:     300,
-				},
-			},
+	// 创建Additional Section记录
+	additionalRecords := make([]DNSRecordConfig, 0)
+
+	// 创建用于直接查询的A/AAAA记录
+	directQueryRecords := make([]DNSRecordConfig, 0)
+
+	// 添加IPv4和IPv6提示
+	if config.Server.DDR.IPv4 != "" {
+		svcbRecords[0].Content += " ipv4hint=" + config.Server.DDR.IPv4
+		svcbRecords[1].Content += " ipv4hint=" + config.Server.DDR.IPv4
+
+		// 创建并添加IPv4记录到Additional Section和直接查询记录
+		ipv4Record := DNSRecordConfig{
+			Type:    "A",
+			Content: config.Server.DDR.IPv4,
 		}
-		config.Rewrite = append(config.Rewrite, ipv6Rule)
-		writeLog(LogDebug, "📝 添加DDR IPv6重写规则: %s -> %s", domain, config.Server.DDR.IPv6)
+
+		// 添加IPv4记录到Additional Section，使用指定的域名
+		additionalRecords = append(additionalRecords, DNSRecordConfig{
+			Name:    domain,
+			Type:    ipv4Record.Type,
+			Content: ipv4Record.Content,
+		})
+
+		// 添加到直接查询记录
+		directQueryRecords = append(directQueryRecords, ipv4Record)
+	}
+
+	if config.Server.DDR.IPv6 != "" {
+		svcbRecords[0].Content += " ipv6hint=" + config.Server.DDR.IPv6
+		svcbRecords[1].Content += " ipv6hint=" + config.Server.DDR.IPv6
+
+		// 创建并添加IPv6记录到Additional Section和直接查询记录
+		ipv6Record := DNSRecordConfig{
+			Type:    "AAAA",
+			Content: config.Server.DDR.IPv6,
+		}
+
+		// 添加IPv6记录到Additional Section，使用指定的域名
+		additionalRecords = append(additionalRecords, DNSRecordConfig{
+			Name:    domain,
+			Type:    ipv6Record.Type,
+			Content: ipv6Record.Content,
+		})
+
+		// 添加到直接查询记录
+		directQueryRecords = append(directQueryRecords, ipv6Record)
+	}
+
+	// 添加DDR SVCB记录规则
+	if config.Server.DDR.IPv4 != "" || config.Server.DDR.IPv6 != "" {
+		// 统一的DDR SVCB记录规则名称列表
+		ddrRuleNames := []string{
+			"_dns.resolver.arpa",
+			"_dns." + domain,
+		}
+
+		// 如果服务器运行在非标准端口上，添加 _port._dns.domain 记录
+		if config.Server.Port != "" && config.Server.Port != DefaultDNSPort {
+			ddrRuleNames = append(ddrRuleNames, "_"+config.Server.Port+"._dns."+domain)
+		}
+
+		// 为每个规则名称添加相同的SVCB记录
+		for _, ruleName := range ddrRuleNames {
+			ddrRule := RewriteRule{
+				Name:       ruleName,
+				Records:    svcbRecords,
+				Additional: additionalRecords, // 添加Additional Section记录
+			}
+			config.Rewrite = append(config.Rewrite, ddrRule)
+			writeLog(LogDebug, "📝 添加DDR SVCB重写规则: %s", ruleName)
+		}
+
+		// 添加用于直接查询的A/AAAA记录规则
+		if len(directQueryRecords) > 0 {
+			directRule := RewriteRule{
+				Name:    domain,
+				Records: directQueryRecords,
+			}
+			config.Rewrite = append(config.Rewrite, directRule)
+			writeLog(LogDebug, "📝 添加DDR直接查询重写规则: %s (%d条记录)", domain, len(directQueryRecords))
+		}
 	}
 }
