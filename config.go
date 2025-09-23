@@ -309,15 +309,30 @@ func (cm *ConfigManager) shouldEnableDDR(config *ServerConfig) bool {
 func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	domain := strings.TrimSuffix(config.Server.DDR.Domain, ".")
 
-	// 添加IPv4重写规则
+	// 创建通用的SVCB记录配置
+	svcbRecords := []DNSRecordConfig{
+		{
+			Type:    "SVCB",
+			Content: "1 . alpn=doq,dot port=" + config.Server.TLS.Port,
+		},
+		{
+			Type:    "SVCB",
+			Content: "2 . alpn=h3,h2 port=" + config.Server.TLS.HTTPS.Port,
+		},
+	}
+
+	// 添加IPv4和IPv6提示
 	if config.Server.DDR.IPv4 != "" {
+		svcbRecords[0].Content += " ipv4hint=" + config.Server.DDR.IPv4
+		svcbRecords[1].Content += " ipv4hint=" + config.Server.DDR.IPv4
+
+		// 添加IPv4重写规则
 		ipv4Rule := RewriteRule{
 			Name: domain,
 			Records: []DNSRecordConfig{
 				{
 					Type:    "A",
 					Content: config.Server.DDR.IPv4,
-					TTL:     300,
 				},
 			},
 		}
@@ -325,19 +340,45 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 		writeLog(LogDebug, "📝 添加DDR IPv4重写规则: %s -> %s", domain, config.Server.DDR.IPv4)
 	}
 
-	// 添加IPv6重写规则
 	if config.Server.DDR.IPv6 != "" {
+		svcbRecords[0].Content += " ipv6hint=" + config.Server.DDR.IPv6
+		svcbRecords[1].Content += " ipv6hint=" + config.Server.DDR.IPv6
+
+		// 添加IPv6重写规则
 		ipv6Rule := RewriteRule{
 			Name: domain,
 			Records: []DNSRecordConfig{
 				{
 					Type:    "AAAA",
 					Content: config.Server.DDR.IPv6,
-					TTL:     300,
 				},
 			},
 		}
 		config.Rewrite = append(config.Rewrite, ipv6Rule)
 		writeLog(LogDebug, "📝 添加DDR IPv6重写规则: %s -> %s", domain, config.Server.DDR.IPv6)
+	}
+
+	// 添加DDR SVCB记录规则
+	if config.Server.DDR.IPv4 != "" || config.Server.DDR.IPv6 != "" {
+		// 统一的DDR SVCB记录规则名称列表
+		ddrRuleNames := []string{
+			"_dns.resolver.arpa",
+			"_dns." + domain,
+		}
+
+		// 如果服务器运行在非标准端口上，添加 _port._dns.domain 记录
+		if config.Server.Port != "" && config.Server.Port != DefaultDNSPort {
+			ddrRuleNames = append(ddrRuleNames, "_"+config.Server.Port+"._dns."+domain)
+		}
+
+		// 为每个规则名称添加相同的SVCB记录
+		for _, ruleName := range ddrRuleNames {
+			ddrRule := RewriteRule{
+				Name:    ruleName,
+				Records: svcbRecords,
+			}
+			config.Rewrite = append(config.Rewrite, ddrRule)
+			writeLog(LogDebug, "📝 添加DDR SVCB重写规则: %s", ruleName)
+		}
 	}
 }
