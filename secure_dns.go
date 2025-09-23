@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1469,4 +1470,213 @@ func (sm *SecureDNSManager) Shutdown() error {
 	sm.wg.Wait()
 	writeLog(LogInfo, "✅ 安全DNS服务器已关闭")
 	return nil
+}
+
+// ==================== DDR (Discovery of Designated Resolvers) ====================
+
+// DDRRecordGenerator DDR记录生成器
+type DDRRecordGenerator struct {
+	domain     string
+	ipv4Addr   net.IP
+	ipv6Addr   net.IP
+	dotPort    string
+	dohPort    string
+	doqPort    string
+	dohPath    string
+	serverName string
+}
+
+// NewDDRRecordGenerator 创建新的DDR记录生成器
+func NewDDRRecordGenerator(domain string, ipv4Addr, ipv6Addr net.IP) *DDRRecordGenerator {
+	return &DDRRecordGenerator{
+		domain:     domain,
+		ipv4Addr:   ipv4Addr,
+		ipv6Addr:   ipv6Addr,
+		dotPort:    DefaultSecureDNSPort,
+		dohPort:    DefaultHTTPSPort,
+		doqPort:    DefaultSecureDNSPort,
+		dohPath:    DefaultDNSQueryPath,
+		serverName: domain,
+	}
+}
+
+// createSVCBRecord 创建SVCB记录
+func (d *DDRRecordGenerator) createSVCBRecord(alpn, port string) (*dns.SVCB, error) {
+	// 根据配置的域名生成DDR查询名称
+	ddrName := "_dns." + strings.TrimSuffix(d.domain, ".") + "."
+
+	svcb := &dns.SVCB{
+		Hdr: dns.RR_Header{
+			Name:   ddrName,
+			Rrtype: dns.TypeSVCB,
+			Class:  dns.ClassINET,
+			Ttl:    DefaultCacheTTLSeconds,
+		},
+		Priority: 1,
+		Target:   ".",
+		Value:    []dns.SVCBKeyValue{},
+	}
+
+	// 添加ALPN参数
+	alpnList := strings.Split(alpn, ",")
+	svcb.Value = append(svcb.Value, &dns.SVCBAlpn{Alpn: alpnList})
+
+	// 添加端口参数 - 无论是否为默认端口都需要添加
+	if port != "" {
+		portNum, err := strconv.Atoi(port)
+		if err != nil {
+			return nil, err
+		}
+		svcb.Value = append(svcb.Value, &dns.SVCBPort{Port: uint16(portNum)})
+	}
+
+	// 添加IPv4提示
+	if d.ipv4Addr != nil {
+		svcb.Value = append(svcb.Value, &dns.SVCBIPv4Hint{Hint: []net.IP{d.ipv4Addr}})
+	}
+
+	// 添加IPv6提示
+	if d.ipv6Addr != nil {
+		svcb.Value = append(svcb.Value, &dns.SVCBIPv6Hint{Hint: []net.IP{d.ipv6Addr}})
+	}
+
+	// 添加服务器名称
+	if d.serverName != "" && d.serverName != "." {
+		// 对于DoH/DoT/DoQ记录，使用实际的服务器名称而不是"."
+		svcb.Target = dns.Fqdn(d.serverName)
+	} else if alpn == "h2" || alpn == "h3" || alpn == "h2,h3" || alpn == "h3,h2" {
+		// DoH记录应该使用实际的服务器名称而不是"."
+		svcb.Target = dns.Fqdn(d.domain)
+	} else {
+		// DoT和DoQ可以使用"."作为目标名称
+		svcb.Target = "."
+	}
+
+	return svcb, nil
+}
+
+// IsDDRQuery 检查是否为DDR查询
+func IsDDRQuery(query *dns.Msg, ddrDomain string, serverPort string) bool {
+	if query == nil {
+		return false
+	}
+
+	for _, question := range query.Question {
+		if question.Qtype == dns.TypeSVCB && question.Qclass == dns.ClassINET {
+			questionName := strings.TrimSuffix(question.Name, ".")
+
+			// 直接匹配标准DDR查询名称
+			if strings.EqualFold(questionName, "_dns.resolver.arpa") {
+				return true
+			}
+
+			// 如果配置了特定的DDR域名，则也支持该域名的查询以及带端口号前缀的DDR查询
+			if ddrDomain != "" {
+				customDDRQueryName := "_dns." + strings.TrimSuffix(ddrDomain, ".")
+				if strings.EqualFold(questionName, customDDRQueryName) {
+					return true
+				}
+
+				// 检查是否为带端口号前缀的DDR查询
+				if port, ok := parseDDRQueryPort(questionName, ddrDomain); ok {
+					// 如果端口号是服务器默认端口，则也认为是有效的DDR查询
+					if port == serverPort {
+						return true
+					}
+				}
+			}
+		}
+		// DDR不需要响应HTTPS类型查询
+	}
+
+	return false
+}
+
+// parseDDRQueryPort 解析DDR查询中的端口号
+// 返回端口号和是否成功解析
+func parseDDRQueryPort(questionName, ddrDomain string) (string, bool) {
+	// 检查是否为带端口号前缀的DDR查询
+	// 格式: _<port>._dns.<domain>
+	// 检查是否以 _<数字>._dns. 开头
+	if strings.HasPrefix(questionName, "_") && strings.Contains(questionName, "._dns.") {
+		// 提取端口部分和域名部分
+		parts := strings.SplitN(questionName, "._dns.", 2)
+		if len(parts) == 2 {
+			portPart := parts[0][1:] // 去掉开头的下划线
+			domainPart := parts[1]
+
+			// 验证端口部分是否为数字
+			if portNum, err := strconv.Atoi(portPart); err == nil {
+				// 如果端口号是DefaultDNSPort，则不视为有效的端口查询
+				defaultPort, _ := strconv.Atoi(DefaultDNSPort)
+				if portNum == defaultPort {
+					return "", false
+				}
+				// 检查域名部分是否匹配配置的DDR域名
+				if strings.EqualFold(domainPart, strings.TrimSuffix(ddrDomain, ".")) {
+					return portPart, true
+				}
+			}
+		}
+	}
+
+	return "", false
+}
+
+// CreateDDRResponse 创建DDR响应
+func (d *DDRRecordGenerator) CreateDDRResponse(query *dns.Msg, config *ServerConfig) *dns.Msg {
+	response := &dns.Msg{}
+	response.SetReply(query)
+	response.Answer = make([]dns.RR, 0)
+	response.Extra = make([]dns.RR, 0)
+
+	// 按优先级顺序创建记录: DoQ > DoT > DoH3 > DoH
+	// 创建DoT/DoQ记录 (优先级1，合并ALPN)
+	dotDoqRecord, err := d.createSVCBRecord("doq,dot", config.Server.TLS.Port)
+	if err == nil {
+		dotDoqRecord.Priority = 1
+		response.Answer = append(response.Answer, dotDoqRecord)
+	}
+
+	// 创建DoH/DoH3记录 (优先级2，合并ALPN)
+	dohRecord, err := d.createSVCBRecord("h3,h2", config.Server.TLS.HTTPS.Port)
+	if err == nil {
+		dohRecord.Priority = 2
+		// 添加DoH路径
+		dohPath := config.Server.TLS.HTTPS.Endpoint
+		if !strings.Contains(dohPath, "{?dns}") {
+			dohPath += "{?dns}"
+		}
+		dohRecord.Value = append(dohRecord.Value, &dns.SVCBDoHPath{Template: dohPath})
+		response.Answer = append(response.Answer, dohRecord)
+	}
+
+	// 添加A和AAAA记录到附加部分
+	if d.ipv4Addr != nil {
+		aRecord := &dns.A{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(d.domain),
+				Rrtype: dns.TypeA,
+				Class:  dns.ClassINET,
+				Ttl:    DefaultCacheTTLSeconds,
+			},
+			A: d.ipv4Addr,
+		}
+		response.Extra = append(response.Extra, aRecord)
+	}
+
+	if d.ipv6Addr != nil {
+		aaaaRecord := &dns.AAAA{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(d.domain),
+				Rrtype: dns.TypeAAAA,
+				Class:  dns.ClassINET,
+				Ttl:    DefaultCacheTTLSeconds,
+			},
+			AAAA: d.ipv6Addr,
+		}
+		response.Extra = append(response.Extra, aaaaRecord)
+	}
+
+	return response
 }

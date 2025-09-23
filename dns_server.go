@@ -533,6 +533,38 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 		}
 	}
 
+	// 检查是否为DDR查询
+	if IsDDRQuery(req, r.config.Server.DDR.Domain, r.config.Server.Port) {
+		// 检查是否满足DDR功能启用条件
+		// 需要配置域名，且至少配置一个IP地址（IPv4或IPv6）
+		if r.config.Server.DDR.Domain != "" &&
+			(r.config.Server.DDR.IPv4 != "" || r.config.Server.DDR.IPv6 != "") {
+			if tracker != nil {
+				tracker.AddStep("🔍 检测到DDR查询")
+			}
+
+			// 创建DDR记录生成器
+			var ipv4Addr, ipv6Addr net.IP
+			if r.config.Server.DDR.IPv4 != "" {
+				ipv4Addr = net.ParseIP(r.config.Server.DDR.IPv4)
+			}
+			if r.config.Server.DDR.IPv6 != "" {
+				ipv6Addr = net.ParseIP(r.config.Server.DDR.IPv6)
+			}
+
+			// 创建DDR记录生成器
+			ddrGenerator := NewDDRRecordGenerator(r.config.Server.DDR.Domain, ipv4Addr, ipv6Addr)
+
+			response := ddrGenerator.CreateDDRResponse(req, r.config)
+
+			if tracker != nil {
+				tracker.AddStep("✅ 生成DDR响应: %d条记录", len(response.Answer))
+			}
+
+			return response
+		}
+	}
+
 	// IP地址直接响应
 	if ip := net.ParseIP(strings.TrimSuffix(question.Name, ".")); ip != nil {
 		return r.createDirectIPResponse(req, question.Qtype, ip, tracker)
