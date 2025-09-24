@@ -45,15 +45,23 @@ func (em *EDNSManager) IsPaddingEnabled() bool {
 }
 
 func (em *EDNSManager) calculatePaddingSize(currentSize int) int {
-	if !em.paddingEnabled || currentSize <= 0 || currentSize >= DNSPaddingMaxSizeBytes {
+	// 检查是否启用padding，以及当前大小是否有效
+	if !em.paddingEnabled || currentSize <= 0 {
 		return 0
 	}
 
-	nextBlockSize := ((currentSize + DNSPaddingBlockSizeBytes - 1) / DNSPaddingBlockSizeBytes) * DNSPaddingBlockSizeBytes
-	paddingSize := nextBlockSize - currentSize
+	// 如果已经大于等于目标大小，则不添加padding
+	if currentSize >= DNSPaddingMaxSizeBytes {
+		return 0
+	}
 
-	if currentSize+paddingSize > DNSPaddingMaxSizeBytes {
-		return DNSPaddingMaxSizeBytes - currentSize
+	// 根据规范，应该将安全连接的DNS响应填充到固定468字节
+	// 计算需要添加的padding大小
+	paddingSize := DNSPaddingMaxSizeBytes - currentSize
+
+	// 确保padding大小不为负数
+	if paddingSize <= 0 {
+		return 0
 	}
 
 	return paddingSize
@@ -147,21 +155,60 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 
 	// 添加Padding选项（仅对安全连接）
 	if em.paddingEnabled && isSecureConnection {
-		// 临时计算当前大小
-		tempMsg := *msg
+		// 先添加所有其他选项（如ECS等）
 		opt.Option = options
+		tempMsg := *msg
 		tempMsg.Extra = append(tempMsg.Extra, opt)
-
+		
+		// 计算当前消息大小
 		currentSize := tempMsg.Len()
+		
+		// 计算需要的padding大小
 		paddingSize := em.calculatePaddingSize(currentSize)
-
+		
+		// 添加padding选项
 		if paddingSize > 0 {
+			// 创建初始padding选项
 			paddingOption := &dns.EDNS0_PADDING{
 				Padding: make([]byte, paddingSize),
 			}
-			options = append(options, paddingOption)
-			writeLog(LogDebug, "📦 DNS Padding: %d -> %d 字节 (+%d)",
-				currentSize, currentSize+paddingSize, paddingSize)
+			
+			// 创建包含padding选项的完整OPT记录来计算实际大小
+			tempOptWithPadding := &dns.OPT{
+				Hdr: dns.RR_Header{
+					Name:   ".",
+					Rrtype: dns.TypeOPT,
+					Class:  ClientUDPBufferSizeBytes,
+					Ttl:    0,
+				},
+				Option: append(options, paddingOption),
+			}
+			
+			// 计算包含padding的完整消息大小
+			tempMsgWithPadding := *msg
+			tempMsgWithPadding.Extra = append(tempMsgWithPadding.Extra, tempOptWithPadding)
+			finalSize := tempMsgWithPadding.Len()
+			
+			// 精确调整padding大小以确保最终消息大小正好是468字节
+			if finalSize != DNSPaddingMaxSizeBytes {
+				// 计算大小差异
+				diff := DNSPaddingMaxSizeBytes - finalSize
+				
+				// 调整padding大小
+				newPaddingSize := paddingSize + diff
+				
+				// 确保padding大小非负
+				if newPaddingSize >= 0 {
+					paddingOption.Padding = make([]byte, newPaddingSize)
+					options = append(options, paddingOption)
+					writeLog(LogDebug, "📦 DNS Padding: %d -> %d 字节 (+%d)",
+						currentSize, DNSPaddingMaxSizeBytes, newPaddingSize)
+				}
+			} else {
+				options = append(options, paddingOption)
+				writeLog(LogDebug, "📦 DNS Padding: %d -> %d 字节 (+%d)",
+					currentSize, finalSize, paddingSize)
+			}
 		}
 	}
 
