@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
+	"net"
+
 	"sync/atomic"
 	"time"
 
@@ -13,35 +14,6 @@ import (
 	"github.com/redis/go-redis/v9/hitless"
 	"github.com/redis/go-redis/v9/logging"
 )
-
-// ==================== 缓存接口和实现 ====================
-
-type NullCache struct{}
-
-func NewNullCache() *NullCache {
-	writeLog(LogInfo, "🚫 无缓存模式")
-	return &NullCache{}
-}
-
-func (nc *NullCache) Get(key string) (*CacheEntry, bool, bool) { return nil, false, false }
-func (nc *NullCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
-}
-func (nc *NullCache) RequestRefresh(req RefreshRequest) {}
-func (nc *NullCache) Shutdown()                         {}
-
-// Redis缓存实现
-type RedisDNSCache struct {
-	client       *redis.Client
-	config       *ServerConfig
-	keyPrefix    string
-	refreshQueue chan RefreshRequest
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	taskManager  *TaskManager
-	server       *RecursiveDNSServer
-	closed       int32
-}
 
 func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisDNSCache, error) {
 	// 使用go-redis内置的VoidLogger来禁用日志
@@ -369,4 +341,73 @@ func (rc *RedisDNSCache) Shutdown() {
 	}
 
 	writeLog(LogInfo, "✅ Redis缓存已关闭")
+}
+
+func (c *CacheEntry) IsExpired() bool {
+	if c == nil {
+		return true
+	}
+	return time.Now().Unix()-c.Timestamp > int64(c.TTL)
+}
+
+func (c *CacheEntry) IsStale() bool {
+	if c == nil {
+		return true
+	}
+	return time.Now().Unix()-c.Timestamp > int64(c.TTL+StaleMaxAgeSeconds)
+}
+
+func (c *CacheEntry) ShouldRefresh() bool {
+	if c == nil {
+		return false
+	}
+
+	now := time.Now().Unix()
+	refreshInterval := int64(c.OriginalTTL)
+	if refreshInterval <= 0 {
+		refreshInterval = int64(c.TTL)
+	}
+
+	return c.IsExpired() &&
+		(now-c.Timestamp) > refreshInterval &&
+		(now-c.RefreshTime) > refreshInterval
+}
+
+func (c *CacheEntry) GetRemainingTTL() uint32 {
+	if c == nil {
+		return 0
+	}
+
+	now := time.Now().Unix()
+	elapsed := now - c.Timestamp
+	remaining := int64(c.TTL) - elapsed
+
+	if remaining > 0 {
+		return uint32(remaining)
+	}
+
+	staleElapsed := elapsed - int64(c.TTL)
+	staleCycle := staleElapsed % int64(StaleTTLSeconds)
+	staleTTLRemaining := int64(StaleTTLSeconds) - staleCycle
+
+	if staleTTLRemaining <= 0 {
+		staleTTLRemaining = int64(StaleTTLSeconds)
+	}
+
+	return uint32(staleTTLRemaining)
+}
+
+func (c *CacheEntry) GetECSOption() *ECSOption {
+	if c == nil || c.ECSAddress == "" {
+		return nil
+	}
+	if ip := net.ParseIP(c.ECSAddress); ip != nil {
+		return &ECSOption{
+			Family:       c.ECSFamily,
+			SourcePrefix: c.ECSSourcePrefix,
+			ScopePrefix:  c.ECSScopePrefix,
+			Address:      ip,
+		}
+	}
+	return nil
 }

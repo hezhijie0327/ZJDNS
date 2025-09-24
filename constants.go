@@ -7,12 +7,29 @@ import (
 	"golang.org/x/net/http2"
 )
 
-// ==================== 系统常量定义 ====================
+// 日志
+const (
+	LogNone LogLevel = iota - 1
+	LogError
+	LogWarn
+	LogInfo
+	LogDebug
+)
 
 const (
-	// 日志
 	DefaultLogLevel = "info"
 
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorYellow = "\033[33m"
+	ColorGreen  = "\033[32m"
+	ColorBlue   = "\033[34m"
+	ColorGray   = "\033[37m"
+	ColorPurple = "\033[35m"
+	ColorCyan   = "\033[36m"
+)
+
+const (
 	// DNS服务端口
 	DefaultDNSPort       = "53"
 	DefaultSecureDNSPort = "853"

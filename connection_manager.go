@@ -3,22 +3,10 @@ package main
 import (
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/miekg/dns"
 )
-
-// ==================== 连接池管理器 ====================
-
-type ConnectionPoolManager struct {
-	clients       chan *dns.Client
-	secureClients map[string]SecureClient
-	timeout       time.Duration
-	mu            sync.RWMutex
-	closed        int32
-}
 
 func NewConnectionPoolManager() *ConnectionPoolManager {
 	return &ConnectionPoolManager{

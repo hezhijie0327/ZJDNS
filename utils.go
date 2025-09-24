@@ -1,17 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/miekg/dns"
 )
-
-// ==================== 安全的错误处理和恢复系统 ====================
 
 // SafeCopyDNSMessage 安全地复制DNS消息，防止在复制过程中出现panic
 // 使用ResourceManager对象池优化性能
@@ -88,8 +90,6 @@ func handlePanicWithContext(operation string) {
 	}
 }
 
-// ==================== 请求追踪系统 ====================
-
 func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
 	return &RequestTracker{
 		ID:        fmt.Sprintf("%x", time.Now().UnixNano()&0xFFFFFF),
@@ -133,12 +133,6 @@ func (rt *RequestTracker) Finish() {
 			rt.ResponseTime.Truncate(time.Microsecond), rt.Upstream)
 	}
 }
-
-// ==================== DNS消息安全处理 ====================
-
-// ==================== DNS记录转换工具 ====================
-
-type DNSRecordHandler struct{}
 
 func NewDNSRecordHandler() *DNSRecordHandler {
 	return &DNSRecordHandler{}
@@ -236,10 +230,6 @@ func (drh *DNSRecordHandler) ProcessRecords(rrs []dns.RR, ttl uint32, includeDNS
 
 var globalRecordHandler = NewDNSRecordHandler()
 
-// ==================== 缓存工具 ====================
-
-type CacheUtils struct{}
-
 func NewCacheUtils() *CacheUtils {
 	return &CacheUtils{}
 }
@@ -301,10 +291,6 @@ func (cu *CacheUtils) CalculateTTL(rrs []dns.RR) int {
 
 var globalCacheUtils = NewCacheUtils()
 
-// ==================== DNSSEC验证器 ====================
-
-type DNSSECValidator struct{}
-
 func NewDNSSECValidator() *DNSSECValidator {
 	return &DNSSECValidator{}
 }
@@ -341,8 +327,6 @@ func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) boo
 	}
 	return v.IsValidated(response)
 }
-
-// ==================== 通用工具函数 ====================
 
 func GetClientIP(w dns.ResponseWriter) net.IP {
 	if addr := w.RemoteAddr(); addr != nil {
@@ -397,4 +381,71 @@ func isValidFilePath(path string) bool {
 		return false
 	}
 	return info.Mode().IsRegular()
+}
+
+func NewIPDetector() *IPDetector {
+	return &IPDetector{
+		httpClient: &http.Client{
+			Timeout: HTTPClientRequestTimeout,
+		},
+	}
+}
+
+func (d *IPDetector) DetectPublicIP(forceIPv6 bool) net.IP {
+	if d == nil {
+		return nil
+	}
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: PublicIPDetectionTimeout}
+			if forceIPv6 {
+				return dialer.DialContext(ctx, "tcp6", addr)
+			}
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
+		TLSHandshakeTimeout: SecureConnHandshakeTimeout,
+	}
+
+	client := &http.Client{
+		Timeout:   HTTPClientRequestTimeout,
+		Transport: transport,
+	}
+	defer transport.CloseIdleConnections()
+
+	resp, err := client.Get("https://api.cloudflare.com/cdn-cgi/trace")
+	if err != nil {
+		return nil
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭响应体失败: %v", closeErr)
+		}
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	re := regexp.MustCompile(`ip=([^\s\n]+)`)
+	matches := re.FindStringSubmatch(string(body))
+	if len(matches) < 2 {
+		return nil
+	}
+
+	ip := net.ParseIP(matches[1])
+	if ip == nil {
+		return nil
+	}
+
+	// 检查IP版本匹配
+	if forceIPv6 && ip.To4() != nil {
+		return nil
+	}
+	if !forceIPv6 && ip.To4() == nil {
+		return nil
+	}
+
+	return ip
 }

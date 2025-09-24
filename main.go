@@ -6,8 +6,6 @@ import (
 	"os"
 )
 
-// ==================== 主函数 ====================
-
 func main() {
 	var configFile string
 	var generateConfig bool

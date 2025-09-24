@@ -10,10 +10,6 @@ import (
 	"strings"
 )
 
-// ==================== 配置管理器 ====================
-
-type ConfigManager struct{}
-
 func NewConfigManager() *ConfigManager {
 	return &ConfigManager{}
 }

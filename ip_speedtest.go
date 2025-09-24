@@ -15,34 +15,6 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
-// SpeedTester 速度测试器
-type SpeedTester struct {
-	// 测速超时时间
-	timeout time.Duration
-	// 并发测速数量
-	concurrency int
-	// 测速结果缓存
-	cache map[string]*SpeedTestResult
-	// 缓存锁
-	cacheMutex sync.RWMutex
-	// 缓存过期时间
-	cacheTTL time.Duration
-	// ICMP连接
-	icmpConn4 *icmp.PacketConn
-	// IPv6的ICMP连接
-	icmpConn6 *icmp.PacketConn
-	// 测试方法配置
-	methods []SpeedTestMethod
-}
-
-// SpeedTestResult 测速结果
-type SpeedTestResult struct {
-	IP        string
-	Latency   time.Duration
-	Reachable bool
-	Timestamp time.Time
-}
-
 // NewSpeedTester 创建新的速度测试器
 func NewSpeedTester(config ServerConfig) *SpeedTester {
 	// 当 config.Speedtest 非空时，启用速度测试功能

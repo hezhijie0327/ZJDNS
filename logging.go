@@ -5,39 +5,8 @@ import (
 	"log"
 	"os"
 	"strings"
-	"sync"
 	"time"
 )
-
-// ==================== 增强日志系统 ====================
-
-type LogLevel int
-
-const (
-	LogNone LogLevel = iota - 1
-	LogError
-	LogWarn
-	LogInfo
-	LogDebug
-)
-
-const (
-	ColorReset  = "\033[0m"
-	ColorRed    = "\033[31m"
-	ColorYellow = "\033[33m"
-	ColorGreen  = "\033[32m"
-	ColorBlue   = "\033[34m"
-	ColorGray   = "\033[37m"
-	ColorPurple = "\033[35m"
-	ColorCyan   = "\033[36m"
-)
-
-type LogConfig struct {
-	level     LogLevel
-	useColor  bool
-	useEmojis bool
-	mu        sync.RWMutex
-}
 
 var (
 	logConfig = &LogConfig{

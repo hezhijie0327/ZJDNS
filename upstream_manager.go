@@ -1,0 +1,23 @@
+package main
+
+func NewUpstreamManager(servers []UpstreamServer) *UpstreamManager {
+	activeServers := make([]*UpstreamServer, 0, len(servers))
+
+	for i := range servers {
+		server := &servers[i]
+		if server.Protocol == "" {
+			server.Protocol = "udp"
+		}
+		activeServers = append(activeServers, server)
+	}
+
+	return &UpstreamManager{
+		servers: activeServers,
+	}
+}
+
+func (um *UpstreamManager) GetServers() []*UpstreamServer {
+	um.mu.RLock()
+	defer um.mu.RUnlock()
+	return um.servers
+}
