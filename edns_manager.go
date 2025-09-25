@@ -159,20 +159,20 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		opt.Option = options
 		tempMsg := *msg
 		tempMsg.Extra = append(tempMsg.Extra, opt)
-		
+
 		// 计算当前消息大小
 		currentSize := tempMsg.Len()
-		
+
 		// 计算需要的padding大小
 		paddingSize := em.calculatePaddingSize(currentSize)
-		
+
 		// 添加padding选项
 		if paddingSize > 0 {
 			// 创建初始padding选项
 			paddingOption := &dns.EDNS0_PADDING{
 				Padding: make([]byte, paddingSize),
 			}
-			
+
 			// 创建包含padding选项的完整OPT记录来计算实际大小
 			tempOptWithPadding := &dns.OPT{
 				Hdr: dns.RR_Header{
@@ -183,20 +183,20 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 				},
 				Option: append(options, paddingOption),
 			}
-			
+
 			// 计算包含padding的完整消息大小
 			tempMsgWithPadding := *msg
 			tempMsgWithPadding.Extra = append(tempMsgWithPadding.Extra, tempOptWithPadding)
 			finalSize := tempMsgWithPadding.Len()
-			
+
 			// 精确调整padding大小以确保最终消息大小正好是468字节
 			if finalSize != DNSPaddingMaxSizeBytes {
 				// 计算大小差异
 				diff := DNSPaddingMaxSizeBytes - finalSize
-				
+
 				// 调整padding大小
 				newPaddingSize := paddingSize + diff
-				
+
 				// 确保padding大小非负
 				if newPaddingSize >= 0 {
 					paddingOption.Padding = make([]byte, newPaddingSize)

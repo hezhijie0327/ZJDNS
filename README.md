@@ -117,18 +117,23 @@ graph TD
 zjdns/
     ├── main.go                 # 程序入口点
     ├── config.go               # 配置文件解析和管理
-    ├── config.json             # 默认配置文件
     ├── dns_server.go           # DNS服务器主逻辑
-    ├── resolver.go             # DNS解析器实现
-    ├── upstream.go             # 上游服务器管理
-    ├── secure_dns.go           # 安全DNS相关功能（DoT/DoQ/DoH）
-    ├── edns.go                 # EDNS支持（包括ECS和Padding）
-    ├── cache.go                # 缓存管理（Redis集成）
-    ├── connection.go           # 连接池管理
-    ├── filters.go              # DNS重写和过滤规则
+    ├── dns_client.go           # DNS客户端实现
+    ├── dns_rewriter.go         # DNS重写规则处理
+    ├── dns_hijack.go           # DNS劫持检测与防护
+    ├── upstream_manager.go     # 上游服务器管理
+    ├── securedns_manager.go    # 安全DNS管理器（DoT/DoQ/DoH）
+    ├── securedns_client.go     # 安全DNS客户端实现
+    ├── securedns_error.go      # 安全DNS错误处理
+    ├── edns_manager.go         # EDNS支持管理（包括ECS和Padding）
+    ├── cache_null.go           # 空缓存实现（无缓存模式）
+    ├── cache_redis.go          # Redis缓存实现
+    ├── connection_manager.go   # 连接池管理
+    ├── ip_filter.go            # IP过滤器
+    ├── ip_speedtest.go         # 网络质量测试功能
+    ├── task_manager.go         # 任务管理器（缓存预取等后台任务）
+    ├── resource_manager.go     # 资源管理器
     ├── logging.go              # 日志系统
-    ├── task_manager.go         # 任务管理器（缓存预取等）
-    ├── speedtest.go            # 网络质量测试功能
     ├── utils.go                # 工具函数
     ├── constants.go            # 常量定义
     ├── types.go                # 类型定义
@@ -174,6 +179,12 @@ brew install golangci-lint
 
 ```bash
 golangci-lint run
+```
+
+运行代码格式化：
+
+```bash
+golangci-lint fmt
 ```
 
 提交代码前请确保 golangci-lint 检查通过，以保证代码质量和一致性。
