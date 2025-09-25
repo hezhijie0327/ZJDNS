@@ -10,9 +10,6 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// SecureConnErrorHandler 安全连接错误处理器
-type SecureConnErrorHandler struct{}
-
 // NewSecureConnErrorHandler 创建新的安全连接错误处理器
 func NewSecureConnErrorHandler() *SecureConnErrorHandler {
 	return &SecureConnErrorHandler{}

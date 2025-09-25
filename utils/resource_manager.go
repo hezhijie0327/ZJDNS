@@ -8,18 +8,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-// 优化的资源管理器
-type ResourceManager struct {
-	dnsMessages    sync.Pool
-	buffers        sync.Pool
-	stringBuilders sync.Pool
-	stats          struct {
-		gets int64
-		puts int64
-		news int64
-	}
-}
-
 // NewResourceManager 创建新的资源管理器
 func NewResourceManager() *ResourceManager {
 	rm := &ResourceManager{}

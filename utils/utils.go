@@ -10,71 +10,10 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/miekg/dns"
 )
-
-// Constants
-const (
-	DefaultCacheTTLSeconds     = 300
-	HTTPClientRequestTimeout   = 5 * time.Second
-	PublicIPDetectionTimeout   = 3 * time.Second
-	SecureConnHandshakeTimeout = 3 * time.Second
-)
-
-// RequestTracker 请求追踪器
-type RequestTracker struct {
-	ID           string
-	StartTime    time.Time
-	Domain       string
-	QueryType    string
-	ClientIP     string
-	Steps        []string
-	CacheHit     bool
-	Upstream     string
-	ResponseTime time.Duration
-	mu           sync.Mutex
-}
-
-// CompactDNSRecord 紧凑DNS记录
-type CompactDNSRecord struct {
-	Text    string `json:"text"`
-	OrigTTL uint32 `json:"orig_ttl"`
-	Type    uint16 `json:"type"`
-}
-
-// DNSRecordConfig DNS记录配置，用于重写规则
-type DNSRecordConfig struct {
-	Name         string `json:"name,omitempty"`          // 可选的记录名称，如果未指定则使用RewriteRule.Name
-	Type         string `json:"type"`                    // 记录类型字符串
-	TTL          uint32 `json:"ttl,omitempty"`           // TTL值，默认使用300
-	Content      string `json:"content"`                 // 记录内容（RDATA）
-	ResponseCode *int   `json:"response_code,omitempty"` // 响应码
-}
-
-// ECSOption ECS选项配置
-type ECSOption struct {
-	Family       uint16 `json:"family"`
-	SourcePrefix uint8  `json:"source_prefix"`
-	ScopePrefix  uint8  `json:"scope_prefix"`
-	Address      net.IP `json:"address"`
-}
-
-// DNS记录转换工具
-type DNSRecordHandler struct{}
-
-// IPDetector IP检测器
-type IPDetector struct {
-	httpClient *http.Client
-}
-
-// DNSSECValidator DNSSEC验证器
-type DNSSECValidator struct{}
-
-// 缓存工具
-type CacheUtils struct{}
 
 // SafeCopyDNSMessage 安全地复制DNS消息，防止在复制过程中出现panic
 // 使用ResourceManager对象池优化性能

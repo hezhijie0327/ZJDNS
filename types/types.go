@@ -2,7 +2,6 @@ package types
 
 import (
 	"net"
-	"time"
 
 	"github.com/miekg/dns"
 )
@@ -59,26 +58,6 @@ type RecursiveDNSServer interface {
 	QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error)
 	GetConfig() *ServerConfig
 }
-
-// 常量定义
-const (
-	// Redis配置
-	RedisConnectionPoolSize    = 20
-	RedisMinIdleConnections    = 5
-	RedisMaxRetryAttempts      = 3
-	RedisConnectionPoolTimeout = 5 * time.Second
-	RedisReadTimeout           = 3 * time.Second
-	RedisWriteTimeout          = 3 * time.Second
-	RedisDialTimeout           = 5 * time.Second
-
-	// 超时配置
-	StandardOperationTimeout = 5 * time.Second
-
-	// 缓存配置
-	CacheRefreshQueueSize   = 500
-	CacheStaleMaxAgeSeconds = 259200
-	StaleTTLSeconds         = 30
-)
 
 // ECSOption ECS选项配置
 type ECSOption struct {

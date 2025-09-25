@@ -3,47 +3,8 @@ package utils
 import (
 	"fmt"
 	"log"
-	"os"
 	"strings"
-	"sync"
 	"time"
-)
-
-// Color constants for logging
-const (
-	ColorReset  = "\033[0m"
-	ColorRed    = "\033[31m"
-	ColorGreen  = "\033[32m"
-	ColorYellow = "\033[33m"
-	ColorBlue   = "\033[34m"
-	ColorGray   = "\033[90m"
-)
-
-// 增强日志系统
-type LogLevel int
-
-const (
-	LogNone LogLevel = iota - 1
-	LogError
-	LogWarn
-	LogInfo
-	LogDebug
-)
-
-type LogConfig struct {
-	level     LogLevel
-	useColor  bool
-	useEmojis bool
-	mu        sync.RWMutex
-}
-
-var (
-	logConfig = &LogConfig{
-		level:     LogInfo,
-		useColor:  true,
-		useEmojis: true,
-	}
-	customLogger = log.New(os.Stdout, "", 0)
 )
 
 // GetLogger returns the custom logger instance

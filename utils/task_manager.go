@@ -3,25 +3,9 @@ package utils
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 )
-
-// 优化的任务管理器
-type TaskManager struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	semaphore   chan struct{}
-	activeCount int64
-	closed      int32
-	stats       struct {
-		executed int64
-		failed   int64
-		timeout  int64
-	}
-}
 
 // NewTaskManager 创建新的任务管理器
 func NewTaskManager(maxGoroutines int) *TaskManager {

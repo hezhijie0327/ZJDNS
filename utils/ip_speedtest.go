@@ -17,52 +17,6 @@ import (
 	"zjdns/types"
 )
 
-const (
-	// Speedtest配置
-	DefaultSpeedTestTimeout     = 1 * time.Second
-	DefaultSpeedTestConcurrency = 4
-	DefaultSpeedTestCacheTTL    = 900 * time.Second
-	SpeedTestDebounceInterval   = 10 * time.Second
-)
-
-// SpeedTestMethod 速度测试方法
-type SpeedTestMethod struct {
-	// 测试类型: icmp, tcp
-	Type string `json:"type"`
-	// 端口号（仅对TCP有效）
-	Port string `json:"port,omitempty"`
-	// 超时时间（毫秒）
-	Timeout int `json:"timeout"`
-}
-
-// SpeedTester 速度测试器
-type SpeedTester struct {
-	// 测速超时时间
-	timeout time.Duration
-	// 并发测速数量
-	concurrency int
-	// 测速结果缓存
-	cache map[string]*SpeedTestResult
-	// 缓存锁
-	cacheMutex sync.RWMutex
-	// 缓存过期时间
-	cacheTTL time.Duration
-	// ICMP连接
-	icmpConn4 *icmp.PacketConn
-	// IPv6的ICMP连接
-	icmpConn6 *icmp.PacketConn
-	// 测试方法配置
-	methods []types.SpeedTestMethod
-}
-
-// SpeedTestResult 测速结果
-type SpeedTestResult struct {
-	IP        string
-	Latency   time.Duration
-	Reachable bool
-	Timestamp time.Time
-}
-
 // NewSpeedTester 创建新的速度测试器
 func NewSpeedTester(methods []types.SpeedTestMethod) *SpeedTester {
 	st := &SpeedTester{

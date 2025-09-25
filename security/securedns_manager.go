@@ -26,20 +26,6 @@ import (
 	"zjdns/utils"
 )
 
-// Constants
-const (
-	DefaultDNSQueryPath   = "/dns-query"
-	DoHReadHeaderTimeout  = 5 * time.Second
-	DoHWriteTimeout       = 5 * time.Second
-	DoHMaxRequestSize     = 8192
-	MinDNSPacketSizeBytes = 12
-)
-
-// QUIC error codes
-const (
-	QUICCodeProtocolError quic.ApplicationErrorCode = 2
-)
-
 // handlePanicWithContext 处理带上下文的panic
 func handlePanicWithContext(operation string) {
 	if r := recover(); r != nil {
@@ -53,29 +39,6 @@ func handlePanicWithContext(operation string) {
 
 		os.Exit(1)
 	}
-}
-
-// Minimal interface definitions to break circular dependency
-type DNSProcessor interface {
-	ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool) *dns.Msg
-	GetConfig() *types.ServerConfig
-}
-
-// SecureDNSManager 安全DNS管理器
-type SecureDNSManager struct {
-	server        DNSProcessor
-	tlsConfig     *tls.Config
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	tlsListener   net.Listener
-	quicConn      *net.UDPConn
-	quicListener  *quic.EarlyListener
-	quicTransport *quic.Transport
-	httpsServer   *http.Server
-	h3Server      *http3.Server
-	httpsListener net.Listener
-	h3Listener    *quic.EarlyListener
 }
 
 // NewSecureDNSManager 创建新的安全DNS管理器

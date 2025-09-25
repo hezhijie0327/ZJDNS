@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,68 +24,6 @@ import (
 
 	"zjdns/utils"
 )
-
-// Constants
-const (
-	SecureConnIdleTimeout      = 300 * time.Second
-	SecureConnKeepAlive        = 15 * time.Second
-	SecureConnHandshakeTimeout = 3 * time.Second
-	SecureConnQueryTimeout     = 5 * time.Second
-	SecureConnBufferSizeBytes  = 8192
-	UpstreamUDPBufferSizeBytes = 4096
-	DefaultHTTPSPort           = "443"
-	DoHMaxConnsPerHost         = 3
-	DoHMaxIdleConns            = 3
-	DoHIdleConnTimeout         = 300 * time.Second
-)
-
-// QUIC error codes
-const (
-	QUICCodeNoError quic.ApplicationErrorCode = 0
-)
-
-// Protocol identifiers
-var (
-	NextProtoQUIC  = []string{"doq", "doq-i02", "doq-i00", "dq"}
-	NextProtoHTTP3 = []string{"h3"}
-	NextProtoHTTP2 = []string{http2.NextProtoTLS, "http/1.1"}
-)
-
-// HTTP/3 传输包装器
-type http3Transport struct {
-	baseTransport *http3.Transport
-	closed        bool
-	mu            sync.RWMutex
-}
-
-// 统一安全连接客户端
-type UnifiedSecureClient struct {
-	protocol        string
-	serverName      string
-	skipVerify      bool
-	timeout         time.Duration
-	tlsConn         *tls.Conn
-	quicConn        *quic.Conn
-	dohClient       *DoHClient
-	isQUICConnected bool
-	lastActivity    time.Time
-	mu              sync.Mutex
-}
-
-// DoH客户端实现
-type DoHClient struct {
-	addr         *url.URL
-	tlsConfig    *tls.Config
-	client       *http.Client
-	clientMu     sync.Mutex
-	quicConfig   *quic.Config
-	timeout      time.Duration
-	skipVerify   bool
-	serverName   string
-	addrRedacted string
-	httpVersions []string
-	closed       int32
-}
 
 // NewUnifiedSecureClient 创建新的统一安全客户端
 func NewUnifiedSecureClient(protocol, addr, serverName string, skipVerify bool) (*UnifiedSecureClient, error) {
