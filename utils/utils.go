@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"context"
@@ -10,21 +10,83 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
 )
 
+// Constants
+const (
+	DefaultCacheTTLSeconds     = 300
+	HTTPClientRequestTimeout   = 5 * time.Second
+	PublicIPDetectionTimeout   = 3 * time.Second
+	SecureConnHandshakeTimeout = 3 * time.Second
+)
+
+// RequestTracker 请求追踪器
+type RequestTracker struct {
+	ID           string
+	StartTime    time.Time
+	Domain       string
+	QueryType    string
+	ClientIP     string
+	Steps        []string
+	CacheHit     bool
+	Upstream     string
+	ResponseTime time.Duration
+	mu           sync.Mutex
+}
+
+// CompactDNSRecord 紧凑DNS记录
+type CompactDNSRecord struct {
+	Text    string `json:"text"`
+	OrigTTL uint32 `json:"orig_ttl"`
+	Type    uint16 `json:"type"`
+}
+
+// DNSRecordConfig DNS记录配置，用于重写规则
+type DNSRecordConfig struct {
+	Name         string `json:"name,omitempty"`          // 可选的记录名称，如果未指定则使用RewriteRule.Name
+	Type         string `json:"type"`                    // 记录类型字符串
+	TTL          uint32 `json:"ttl,omitempty"`           // TTL值，默认使用300
+	Content      string `json:"content"`                 // 记录内容（RDATA）
+	ResponseCode *int   `json:"response_code,omitempty"` // 响应码
+}
+
+// ECSOption ECS选项配置
+type ECSOption struct {
+	Family       uint16 `json:"family"`
+	SourcePrefix uint8  `json:"source_prefix"`
+	ScopePrefix  uint8  `json:"scope_prefix"`
+	Address      net.IP `json:"address"`
+}
+
+// DNS记录转换工具
+type DNSRecordHandler struct{}
+
+// IPDetector IP检测器
+type IPDetector struct {
+	httpClient *http.Client
+}
+
+// DNSSECValidator DNSSEC验证器
+type DNSSECValidator struct{}
+
+// 缓存工具
+type CacheUtils struct{}
+
 // SafeCopyDNSMessage 安全地复制DNS消息，防止在复制过程中出现panic
 // 使用ResourceManager对象池优化性能
+// SafeCopyDNSMessage 安全地复制DNS消息
 func SafeCopyDNSMessage(msg *dns.Msg) *dns.Msg {
 	if msg == nil {
-		newMsg := globalResourceManager.GetDNSMessage()
+		newMsg := GlobalResourceManager.GetDNSMessage()
 		return newMsg
 	}
 
 	// 从对象池获取消息对象
-	msgCopy := globalResourceManager.GetDNSMessage()
+	msgCopy := GlobalResourceManager.GetDNSMessage()
 
 	// 复制消息头部和压缩标志
 	msgCopy.MsgHdr = msg.MsgHdr
@@ -76,6 +138,7 @@ func SafeCopyDNSMessage(msg *dns.Msg) *dns.Msg {
 	return msgCopy
 }
 
+// handlePanicWithContext 处理带上下文的panic
 func handlePanicWithContext(operation string) {
 	if r := recover(); r != nil {
 		buf := make([]byte, 2048)
@@ -89,6 +152,9 @@ func handlePanicWithContext(operation string) {
 		os.Exit(1)
 	}
 }
+
+// HandlePanicWithContext 处理带上下文的panic（导出版本）
+var HandlePanicWithContext = handlePanicWithContext
 
 func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
 	return &RequestTracker{
@@ -230,6 +296,9 @@ func (drh *DNSRecordHandler) ProcessRecords(rrs []dns.RR, ttl uint32, includeDNS
 
 var globalRecordHandler = NewDNSRecordHandler()
 
+// GlobalRecordHandler 全局DNS记录处理器
+var GlobalRecordHandler = globalRecordHandler
+
 func NewCacheUtils() *CacheUtils {
 	return &CacheUtils{}
 }
@@ -240,8 +309,8 @@ func (cu *CacheUtils) BuildKey(question dns.Question, ecs *ECSOption, dnssecEnab
 	}
 
 	// 使用string builder优化字符串拼接
-	sb := globalResourceManager.GetStringBuilder()
-	defer globalResourceManager.PutStringBuilder(sb)
+	sb := GlobalResourceManager.GetStringBuilder()
+	defer GlobalResourceManager.PutStringBuilder(sb)
 
 	sb.WriteString(strings.ToLower(question.Name))
 	sb.WriteByte(':')
@@ -290,6 +359,9 @@ func (cu *CacheUtils) CalculateTTL(rrs []dns.RR) int {
 }
 
 var globalCacheUtils = NewCacheUtils()
+
+// GlobalCacheUtils 全局缓存工具
+var GlobalCacheUtils = globalCacheUtils
 
 func NewDNSSECValidator() *DNSSECValidator {
 	return &DNSSECValidator{}
@@ -340,6 +412,7 @@ func GetClientIP(w dns.ResponseWriter) net.IP {
 	return nil
 }
 
+// isSecureProtocol 检查协议是否为安全协议
 func isSecureProtocol(protocol string) bool {
 	switch protocol {
 	case "tls", "quic", "https", "http3":
@@ -349,6 +422,7 @@ func isSecureProtocol(protocol string) bool {
 	}
 }
 
+// getProtocolEmoji 获取协议对应的emoji
 func getProtocolEmoji(protocol string) string {
 	switch strings.ToLower(protocol) {
 	case "tls":
@@ -368,7 +442,14 @@ func getProtocolEmoji(protocol string) string {
 	}
 }
 
-func isValidFilePath(path string) bool {
+// IsSecureProtocol 检查协议是否为安全协议（导出版本）
+var IsSecureProtocol = isSecureProtocol
+
+// GetProtocolEmoji 获取协议对应的emoji（导出版本）
+var GetProtocolEmoji = getProtocolEmoji
+
+// IsValidFilePath 检查文件路径是否有效
+func IsValidFilePath(path string) bool {
 	if strings.Contains(path, "..") ||
 		strings.HasPrefix(path, "/etc/") ||
 		strings.HasPrefix(path, "/proc/") ||

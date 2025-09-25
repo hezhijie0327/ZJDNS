@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"crypto/tls"
@@ -8,6 +8,10 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	zjdns "zjdns/dns"
+	"zjdns/types"
+	"zjdns/utils"
 )
 
 func NewConfigManager() *ConfigManager {
@@ -38,18 +42,19 @@ func (cm *ConfigManager) LoadConfig(configFile string) (*ServerConfig, error) {
 		cm.addDDRRecords(config)
 	}
 
-	writeLog(LogInfo, "✅ 配置加载成功: %s", configFile)
+	utils.WriteLog(zjdns.LogInfo, "✅ 配置加载成功: %s", configFile)
 	return config, nil
 }
 
+// validateConfig 验证配置文件的有效性
 func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	// 日志级别验证
-	validLevels := map[string]LogLevel{
-		"none": LogNone, "error": LogError, "warn": LogWarn,
-		"info": LogInfo, "debug": LogDebug,
+	validLevels := map[string]utils.LogLevel{
+		"none": utils.LogNone, "error": utils.LogError, "warn": utils.LogWarn,
+		"info": utils.LogInfo, "debug": utils.LogDebug,
 	}
 	if level, ok := validLevels[strings.ToLower(config.Server.LogLevel)]; ok {
-		SetLogLevel(level)
+		utils.SetLogLevel(level)
 	} else {
 		return fmt.Errorf("❌ 无效的日志级别: %s", config.Server.LogLevel)
 	}
@@ -74,7 +79,7 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 
 	// 上游服务器验证
 	for i, server := range config.Upstream {
-		if !server.IsRecursive() {
+		if server.Address != zjdns.RecursiveServerIndicator {
 			if _, _, err := net.SplitHostPort(server.Address); err != nil {
 				if server.Protocol == "https" || server.Protocol == "http3" {
 					if _, err := url.Parse(server.Address); err != nil {
@@ -97,7 +102,7 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		}
 
 		protocol := strings.ToLower(server.Protocol)
-		if isSecureProtocol(protocol) && server.ServerName == "" {
+		if utils.IsSecureProtocol(protocol) && server.ServerName == "" {
 			return fmt.Errorf("🔒 上游服务器 %d 使用 %s 协议需要配置 server_name", i, server.Protocol)
 		}
 	}
@@ -109,11 +114,11 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		}
 	} else {
 		if config.Server.Features.ServeStale {
-			writeLog(LogWarn, "⚠️ 无缓存模式下禁用过期缓存服务功能")
+			utils.WriteLog(utils.LogWarn, "⚠️ 无缓存模式下禁用过期缓存服务功能")
 			config.Server.Features.ServeStale = false
 		}
 		if config.Server.Features.Prefetch {
-			writeLog(LogWarn, "⚠️ 无缓存模式下禁用预取功能")
+			utils.WriteLog(utils.LogWarn, "⚠️ 无缓存模式下禁用预取功能")
 			config.Server.Features.Prefetch = false
 		}
 	}
@@ -124,10 +129,10 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 			return fmt.Errorf("🔐 证书和私钥文件必须同时配置")
 		}
 
-		if !isValidFilePath(config.Server.TLS.CertFile) {
+		if !utils.IsValidFilePath(config.Server.TLS.CertFile) {
 			return fmt.Errorf("📄 证书文件不存在: %s", config.Server.TLS.CertFile)
 		}
-		if !isValidFilePath(config.Server.TLS.KeyFile) {
+		if !utils.IsValidFilePath(config.Server.TLS.KeyFile) {
 			return fmt.Errorf("🔑 私钥文件不存在: %s", config.Server.TLS.KeyFile)
 		}
 
@@ -135,26 +140,27 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 			return fmt.Errorf("🔐 证书加载失败: %w", err)
 		}
 
-		writeLog(LogInfo, "✅ TLS证书验证通过")
+		utils.WriteLog(utils.LogInfo, "✅ TLS证书验证通过")
 	}
 
 	return nil
 }
 
-func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
-	config := &ServerConfig{}
+// getDefaultConfig 获取默认配置
+func (cm *ConfigManager) getDefaultConfig() *types.ServerConfig {
+	config := &types.ServerConfig{}
 
-	config.Server.Port = DefaultDNSPort
-	config.Server.LogLevel = DefaultLogLevel
+	config.Server.Port = zjdns.DefaultDNSPort
+	config.Server.LogLevel = zjdns.DefaultLogLevel
 	config.Server.DefaultECS = "auto"
 	config.Server.TrustedCIDRFile = ""
 	config.Server.DDR.Domain = "dns.example.com"
 	config.Server.DDR.IPv4 = "127.0.0.1"
 	config.Server.DDR.IPv6 = "::1"
 
-	config.Server.TLS.Port = DefaultSecureDNSPort
-	config.Server.TLS.HTTPS.Port = DefaultHTTPSPort
-	config.Server.TLS.HTTPS.Endpoint = DefaultDNSQueryPath
+	config.Server.TLS.Port = zjdns.DefaultSecureDNSPort
+	config.Server.TLS.HTTPS.Port = zjdns.DefaultHTTPSPort
+	config.Server.TLS.HTTPS.Endpoint = zjdns.DefaultDNSQueryPath
 	config.Server.TLS.CertFile = ""
 	config.Server.TLS.KeyFile = ""
 
@@ -171,25 +177,25 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config.Redis.Database = 0
 	config.Redis.KeyPrefix = "zjdns:"
 
-	config.Upstream = []UpstreamServer{}
-	config.Rewrite = []RewriteRule{}
+	config.Upstream = []types.UpstreamServer{}
+	config.Rewrite = []types.RewriteRule{}
 
 	// 添加这一行
-	config.Speedtest = []SpeedTestMethod{}
+	config.Speedtest = []types.SpeedTestMethod{}
 
 	return config
 }
 
 var globalConfigManager = NewConfigManager()
 
-func LoadConfig(filename string) (*ServerConfig, error) {
+func LoadConfig(filename string) (*types.ServerConfig, error) {
 	return globalConfigManager.LoadConfig(filename)
 }
 
 func GenerateExampleConfig() string {
 	config := globalConfigManager.getDefaultConfig()
 
-	config.Server.LogLevel = DefaultLogLevel
+	config.Server.LogLevel = zjdns.DefaultLogLevel
 	config.Server.DefaultECS = "auto"
 	config.Server.TrustedCIDRFile = "trusted_cidr.txt"
 
@@ -197,10 +203,10 @@ func GenerateExampleConfig() string {
 
 	config.Server.TLS.CertFile = "/path/to/cert.pem"
 	config.Server.TLS.KeyFile = "/path/to/key.pem"
-	config.Server.TLS.HTTPS.Port = DefaultHTTPSPort
-	config.Server.TLS.HTTPS.Endpoint = DefaultDNSQueryPath
+	config.Server.TLS.HTTPS.Port = zjdns.DefaultHTTPSPort
+	config.Server.TLS.HTTPS.Endpoint = zjdns.DefaultDNSQueryPath
 
-	config.Upstream = []UpstreamServer{
+	config.Upstream = []types.UpstreamServer{
 		{
 			Address:  "223.5.5.5:53",
 			Policy:   "all",
@@ -240,15 +246,15 @@ func GenerateExampleConfig() string {
 			SkipTLSVerify: false,
 		},
 		{
-			Address: RecursiveServerIndicator,
+			Address: zjdns.RecursiveServerIndicator,
 			Policy:  "all",
 		},
 	}
 
-	config.Rewrite = []RewriteRule{
+	config.Rewrite = []types.RewriteRule{
 		{
 			Name: "blocked.example.com",
-			Records: []DNSRecordConfig{
+			Records: []types.DNSRecordConfig{
 				{
 					Type:    "A",
 					Content: "127.0.0.1",
@@ -258,7 +264,7 @@ func GenerateExampleConfig() string {
 		},
 		{
 			Name: "ipv6.blocked.example.com",
-			Records: []DNSRecordConfig{
+			Records: []types.DNSRecordConfig{
 				{
 					Type:    "AAAA",
 					Content: "::1",
@@ -269,7 +275,7 @@ func GenerateExampleConfig() string {
 	}
 
 	// 速度测试配置示例
-	config.Speedtest = []SpeedTestMethod{
+	config.Speedtest = []types.SpeedTestMethod{
 		{
 			Type:    "icmp",
 			Timeout: 1000,
@@ -296,74 +302,46 @@ func GenerateExampleConfig() string {
 }
 
 // shouldEnableDDR 检查是否应该启用DDR功能
-func (cm *ConfigManager) shouldEnableDDR(config *ServerConfig) bool {
+func (cm *ConfigManager) shouldEnableDDR(config *types.ServerConfig) bool {
 	return config.Server.DDR.Domain != "" &&
 		(config.Server.DDR.IPv4 != "" || config.Server.DDR.IPv6 != "")
 }
 
 // addDDRRecords 添加DDR相关的A和AAAA记录重写规则
-func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
+func (cm *ConfigManager) addDDRRecords(config *types.ServerConfig) {
 	domain := strings.TrimSuffix(config.Server.DDR.Domain, ".")
 
-	// 创建通用的SVCB记录配置
-	svcbRecords := []DNSRecordConfig{
-		{
-			Type:    "SVCB",
-			Content: "1 . alpn=doq,dot port=" + config.Server.TLS.Port,
-		},
-		{
-			Type:    "SVCB",
-			Content: "2 . alpn=h3,h2 port=" + config.Server.TLS.HTTPS.Port,
-		},
-	}
-
-	// 创建Additional Section记录
-	additionalRecords := make([]DNSRecordConfig, 0)
-
-	// 创建用于直接查询的A/AAAA记录
-	directQueryRecords := make([]DNSRecordConfig, 0)
+	// 创建通用的SVCB记录配置文本
+	svcbRecord1Text := "1 . alpn=doq,dot port=" + config.Server.TLS.Port
+	svcbRecord2Text := "2 . alpn=h3,h2 port=" + config.Server.TLS.HTTPS.Port
 
 	// 添加IPv4和IPv6提示
 	if config.Server.DDR.IPv4 != "" {
-		svcbRecords[0].Content += " ipv4hint=" + config.Server.DDR.IPv4
-		svcbRecords[1].Content += " ipv4hint=" + config.Server.DDR.IPv4
-
-		// 创建并添加IPv4记录到Additional Section和直接查询记录
-		ipv4Record := DNSRecordConfig{
-			Type:    "A",
-			Content: config.Server.DDR.IPv4,
-		}
-
-		// 添加IPv4记录到Additional Section，使用指定的域名
-		additionalRecords = append(additionalRecords, DNSRecordConfig{
-			Name:    domain,
-			Type:    ipv4Record.Type,
-			Content: ipv4Record.Content,
-		})
-
-		// 添加到直接查询记录
-		directQueryRecords = append(directQueryRecords, ipv4Record)
+		svcbRecord1Text += " ipv4hint=" + config.Server.DDR.IPv4
+		svcbRecord2Text += " ipv4hint=" + config.Server.DDR.IPv4
 	}
 
 	if config.Server.DDR.IPv6 != "" {
-		svcbRecords[0].Content += " ipv6hint=" + config.Server.DDR.IPv6
-		svcbRecords[1].Content += " ipv6hint=" + config.Server.DDR.IPv6
+		svcbRecord1Text += " ipv6hint=" + config.Server.DDR.IPv6
+		svcbRecord2Text += " ipv6hint=" + config.Server.DDR.IPv6
+	}
 
-		// 创建并添加IPv6记录到Additional Section和直接查询记录
-		ipv6Record := DNSRecordConfig{
+	// 添加IPv4记录
+	if config.Server.DDR.IPv4 != "" {
+		_ = types.DNSRecordConfig{
+			Type:    "A",
+			Content: config.Server.DDR.IPv4,
+			TTL:     300,
+		}
+	}
+
+	// 添加IPv6记录
+	if config.Server.DDR.IPv6 != "" {
+		_ = types.DNSRecordConfig{
 			Type:    "AAAA",
 			Content: config.Server.DDR.IPv6,
+			TTL:     300,
 		}
-
-		// 添加IPv6记录到Additional Section，使用指定的域名
-		additionalRecords = append(additionalRecords, DNSRecordConfig{
-			Name:    domain,
-			Type:    ipv6Record.Type,
-			Content: ipv6Record.Content,
-		})
-
-		// 添加到直接查询记录
-		directQueryRecords = append(directQueryRecords, ipv6Record)
 	}
 
 	// 添加DDR SVCB记录规则
@@ -375,29 +353,55 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 		}
 
 		// 如果服务器运行在非标准端口上，添加 _port._dns.domain 记录
-		if config.Server.Port != "" && config.Server.Port != DefaultDNSPort {
+		if config.Server.Port != "" && config.Server.Port != zjdns.DefaultDNSPort {
 			ddrRuleNames = append(ddrRuleNames, "_"+config.Server.Port+"._dns."+domain)
 		}
 
 		// 为每个规则名称添加相同的SVCB记录
 		for _, ruleName := range ddrRuleNames {
-			ddrRule := RewriteRule{
-				Name:       ruleName,
-				Records:    svcbRecords,
-				Additional: additionalRecords, // 添加Additional Section记录
+			ddrRule := types.RewriteRule{
+				Name: ruleName,
+				Records: []types.DNSRecordConfig{
+					{
+						Type:    "SVCB",
+						Content: svcbRecord1Text,
+						TTL:     300,
+					},
+					{
+						Type:    "SVCB",
+						Content: svcbRecord2Text,
+						TTL:     300,
+					},
+				},
 			}
 			config.Rewrite = append(config.Rewrite, ddrRule)
-			writeLog(LogDebug, "📝 添加DDR SVCB重写规则: %s", ruleName)
+			utils.WriteLog(utils.LogDebug, "📝 添加DDR SVCB重写规则: %s", ruleName)
 		}
 
 		// 添加用于直接查询的A/AAAA记录规则
-		if len(directQueryRecords) > 0 {
-			directRule := RewriteRule{
+		var directRecords []types.DNSRecordConfig
+		if config.Server.DDR.IPv4 != "" {
+			directRecords = append(directRecords, types.DNSRecordConfig{
+				Type:    "A",
+				Content: config.Server.DDR.IPv4,
+				TTL:     300,
+			})
+		}
+		if config.Server.DDR.IPv6 != "" {
+			directRecords = append(directRecords, types.DNSRecordConfig{
+				Type:    "AAAA",
+				Content: config.Server.DDR.IPv6,
+				TTL:     300,
+			})
+		}
+
+		if len(directRecords) > 0 {
+			directRule := types.RewriteRule{
 				Name:    domain,
-				Records: directQueryRecords,
+				Records: directRecords,
 			}
 			config.Rewrite = append(config.Rewrite, directRule)
-			writeLog(LogDebug, "📝 添加DDR直接查询重写规则: %s (%d条记录)", domain, len(directQueryRecords))
+			utils.WriteLog(utils.LogDebug, "📝 添加DDR直接查询重写规则: %s (%d条记录)", domain, len(directRecords))
 		}
 	}
 }

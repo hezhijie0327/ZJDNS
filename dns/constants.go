@@ -1,15 +1,17 @@
-package main
+package dns
 
 import (
 	"time"
 
 	"github.com/quic-go/quic-go"
 	"golang.org/x/net/http2"
+
+	"zjdns/utils"
 )
 
 // 日志
 const (
-	LogNone LogLevel = iota - 1
+	LogNone utils.LogLevel = iota - 1
 	LogError
 	LogWarn
 	LogInfo

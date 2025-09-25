@@ -1,12 +1,29 @@
-package main
+package utils
 
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
+// 优化的任务管理器
+type TaskManager struct {
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	semaphore   chan struct{}
+	activeCount int64
+	closed      int32
+	stats       struct {
+		executed int64
+		failed   int64
+		timeout  int64
+	}
+}
+
+// NewTaskManager 创建新的任务管理器
 func NewTaskManager(maxGoroutines int) *TaskManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TaskManager{
@@ -16,6 +33,7 @@ func NewTaskManager(maxGoroutines int) *TaskManager {
 	}
 }
 
+// ExecuteTask 执行任务
 func (tm *TaskManager) ExecuteTask(name string, fn func(ctx context.Context) error) error {
 	if tm == nil || atomic.LoadInt32(&tm.closed) != 0 {
 		return nil
@@ -35,10 +53,12 @@ func (tm *TaskManager) ExecuteTask(name string, fn func(ctx context.Context) err
 
 // Execute is a convenience method that calls ExecuteTask with the given name and function.
 // It executes the task synchronously and returns any error encountered.
+// Execute 执行任务
 func (tm *TaskManager) Execute(name string, fn func(ctx context.Context) error) error {
 	return tm.ExecuteTask(name, fn)
 }
 
+// ExecuteAsync 异步执行任务
 func (tm *TaskManager) ExecuteAsync(name string, fn func(ctx context.Context) error) {
 	if tm == nil || atomic.LoadInt32(&tm.closed) != 0 {
 		return

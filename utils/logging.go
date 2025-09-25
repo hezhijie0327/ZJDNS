@@ -1,12 +1,41 @@
-package main
+package utils
 
 import (
 	"fmt"
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
+
+// Color constants for logging
+const (
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorGreen  = "\033[32m"
+	ColorYellow = "\033[33m"
+	ColorBlue   = "\033[34m"
+	ColorGray   = "\033[90m"
+)
+
+// 增强日志系统
+type LogLevel int
+
+const (
+	LogNone LogLevel = iota - 1
+	LogError
+	LogWarn
+	LogInfo
+	LogDebug
+)
+
+type LogConfig struct {
+	level     LogLevel
+	useColor  bool
+	useEmojis bool
+	mu        sync.RWMutex
+}
 
 var (
 	logConfig = &LogConfig{
@@ -17,6 +46,12 @@ var (
 	customLogger = log.New(os.Stdout, "", 0)
 )
 
+// GetLogger returns the custom logger instance
+func GetLogger() *log.Logger {
+	return customLogger
+}
+
+// String 将日志级别转换为字符串
 func (l LogLevel) String() string {
 	configs := []struct {
 		name  string
@@ -53,8 +88,9 @@ func (l LogLevel) String() string {
 	return "UNKNOWN"
 }
 
-// 增强的日志函数，支持更多场景emoji
-func writeLog(level LogLevel, format string, args ...interface{}) {
+// WriteLog 写入日志
+// writeLog 写入日志
+func WriteLog(level LogLevel, format string, args ...interface{}) {
 	logConfig.mu.RLock()
 	currentLevel := logConfig.level
 	useColor := logConfig.useColor
@@ -75,7 +111,11 @@ func writeLog(level LogLevel, format string, args ...interface{}) {
 	}
 }
 
+// Create an alias for backward compatibility
+var writeLog = WriteLog
+
 // 根据消息内容添加相应的emoji
+// enhanceLogMessage 增强日志消息
 func enhanceLogMessage(message string) string {
 	lowerMsg := strings.ToLower(message)
 
@@ -119,12 +159,14 @@ func enhanceLogMessage(message string) string {
 }
 
 // SetLogLevel 设置日志级别
+// SetLogLevel 设置日志级别
 func SetLogLevel(level LogLevel) {
 	logConfig.mu.Lock()
 	defer logConfig.mu.Unlock()
 	logConfig.level = level
 }
 
+// GetLogLevel 获取当前日志级别
 // GetLogLevel 获取当前日志级别
 func GetLogLevel() LogLevel {
 	logConfig.mu.RLock()

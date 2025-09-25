@@ -1,24 +1,15 @@
-# 实现白名单机制，只允许特定类型的文件被 Git 跟踪
-# 首先忽略所有文件
-*
+# Configuration files
+*.json
 
-# 然后允许特定的文件类型
-!*.go
-!*.md
-!*.yml
-!.gitignore
+# Certificate and key files
+*.cer
+*.key
+*.pem
+*.crt
 
-# 允许目录结构（否则目录不会被创建）
-!*/
+# Binary files
+zjdns
+*.exe
 
-# 特殊情况处理
-# 允许 go.mod 和 go.sum 文件，虽然它们不是 .go 文件，但是 Go 项目必需的
-!go.mod
-!go.sum
-
-# 允许 Dockerfile
-!Dockerfile
-
-# 如果有 .github 目录，通常需要保留其配置文件
-!.github/
-!.github/**/*.yml
+# DS_Store
+.DS_Store

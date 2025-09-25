@@ -1,4 +1,4 @@
-package main
+package dns
 
 import (
 	"context"
@@ -14,13 +14,29 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	cache_pkg "zjdns/cache"
+	"zjdns/network"
+	"zjdns/security"
+	"zjdns/types"
+	"zjdns/utils"
 )
 
-func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
-	defer func() { handlePanicWithContext("缓存刷新查询") }()
+func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *types.ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *types.ECSOption, error) {
+	defer func() { utils.HandlePanicWithContext("缓存刷新查询") }()
 
 	if atomic.LoadInt32(&r.closed) != 0 {
 		return nil, nil, nil, false, nil, errors.New("🔒 服务器已关闭")
+	}
+
+	// 将types.ECSOption转换为utils.ECSOption
+	var utilsECS *utils.ECSOption
+	if ecs != nil {
+		utilsECS = &utils.ECSOption{
+			Family:       ecs.Family,
+			SourcePrefix: ecs.SourcePrefix,
+			ScopePrefix:  ecs.ScopePrefix,
+			Address:      ecs.Address,
+		}
 	}
 
 	refreshCtx, cancel := context.WithTimeout(r.ctx, ExtendedQueryTimeout)
@@ -28,13 +44,36 @@ func (r *RecursiveDNSServer) QueryForRefresh(question dns.Question, ecs *ECSOpti
 
 	servers := r.upstreamManager.GetServers()
 	if len(servers) > 0 {
-		return r.queryUpstreamServers(question, ecs, serverDNSSECEnabled, nil)
+		answer, authority, additional, validated, ecsResponse, err := r.queryUpstreamServers(question, utilsECS, serverDNSSECEnabled, nil)
+		// 将utils.ECSOption转换为types.ECSOption
+		var typesECS *types.ECSOption
+		if ecsResponse != nil {
+			typesECS = &types.ECSOption{
+				Family:       ecsResponse.Family,
+				SourcePrefix: ecsResponse.SourcePrefix,
+				ScopePrefix:  ecsResponse.ScopePrefix,
+				Address:      ecsResponse.Address,
+			}
+		}
+		return answer, authority, additional, validated, typesECS, err
 	} else {
-		return r.resolveWithCNAME(refreshCtx, question, ecs, nil)
+		answer, authority, additional, validated, ecsResponse, err := r.resolveWithCNAME(refreshCtx, question, utilsECS, nil)
+		// 将utils.ECSOption转换为types.ECSOption
+		var typesECS *types.ECSOption
+		if ecsResponse != nil {
+			typesECS = &types.ECSOption{
+				Family:       ecsResponse.Family,
+				SourcePrefix: ecsResponse.SourcePrefix,
+				ScopePrefix:  ecsResponse.ScopePrefix,
+				Address:      ecsResponse.Address,
+			}
+		}
+		return answer, authority, additional, validated, typesECS, err
 	}
 }
 
-func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
+// NewDNSServer 创建新的DNS服务器实例
+func NewDNSServer(config *types.ServerConfig) (*RecursiveDNSServer, error) {
 	rootServersV4 := []string{
 		"198.41.0.4:53", "170.247.170.2:53", "192.33.4.12:53", "199.7.91.13:53",
 		"192.203.230.10:53", "192.5.5.241:53", "192.112.36.4:53", "198.97.190.53:53",
@@ -49,13 +88,13 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	ednsManager, err := NewEDNSManager(config.Server.DefaultECS, config.Server.Features.Padding)
+	ednsManager, err := network.NewEDNSManager(config.Server.DefaultECS, config.Server.Features.Padding)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("🌍 EDNS管理器初始化失败: %w", err)
 	}
 
-	ipFilter := NewIPFilter()
+	ipFilter := network.NewIPFilter()
 	if config.Server.TrustedCIDRFile != "" {
 		if err := ipFilter.LoadCIDRs(config.Server.TrustedCIDRFile); err != nil {
 			cancel()
@@ -65,16 +104,59 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 
 	dnsRewriter := NewDNSRewriter()
 	if len(config.Rewrite) > 0 {
-		if err := dnsRewriter.LoadRules(config.Rewrite); err != nil {
+		// Convert types.RewriteRule to dns.RewriteRule
+		dnsRewriteRules := make([]RewriteRule, len(config.Rewrite))
+		for i, rule := range config.Rewrite {
+			dnsRewriteRules[i] = RewriteRule{
+				Name: rule.Name,
+			}
+			if rule.ResponseCode != nil {
+				dnsRewriteRules[i].ResponseCode = rule.ResponseCode
+			}
+			// Convert Records
+			dnsRewriteRules[i].Records = make([]utils.DNSRecordConfig, len(rule.Records))
+			for j, record := range rule.Records {
+				dnsRewriteRules[i].Records[j] = utils.DNSRecordConfig{
+					Name:         record.Name,
+					Type:         record.Type,
+					TTL:          record.TTL,
+					Content:      record.Content,
+					ResponseCode: record.ResponseCode,
+				}
+			}
+			// Convert Additional
+			dnsRewriteRules[i].Additional = make([]utils.DNSRecordConfig, len(rule.Additional))
+			for j, record := range rule.Additional {
+				dnsRewriteRules[i].Additional[j] = utils.DNSRecordConfig{
+					Name:         record.Name,
+					Type:         record.Type,
+					TTL:          record.TTL,
+					Content:      record.Content,
+					ResponseCode: record.ResponseCode,
+				}
+			}
+		}
+		if err := dnsRewriter.LoadRules(dnsRewriteRules); err != nil {
 			cancel()
 			return nil, fmt.Errorf("🔄 加载DNS重写规则失败: %w", err)
 		}
 	}
 
-	upstreamManager := NewUpstreamManager(config.Upstream)
-	connectionPool := NewConnectionPoolManager()
-	taskManager := NewTaskManager(MaxGlobalConcurrency)
-	queryClient := NewUnifiedQueryClient(connectionPool, StandardQueryTimeout)
+	// Convert types.UpstreamServer to dns.UpstreamServer
+	dnsUpstreamServers := make([]UpstreamServer, len(config.Upstream))
+	for i, server := range config.Upstream {
+		dnsUpstreamServers[i] = UpstreamServer{
+			Address:       server.Address,
+			Policy:        server.Policy,
+			Protocol:      server.Protocol,
+			ServerName:    server.ServerName,
+			SkipTLSVerify: server.SkipTLSVerify,
+		}
+	}
+	upstreamManager := NewUpstreamManager(dnsUpstreamServers)
+	connectionPool := network.NewConnectionPoolManager()
+	taskManager := utils.NewTaskManager(MaxGlobalConcurrency)
+	queryClient := NewUnifiedQueryClient(connectionPool, network.StandardQueryTimeout)
 	hijackPrevention := NewDNSHijackPrevention(config.Server.Features.HijackProtection)
 
 	server := &RecursiveDNSServer{
@@ -82,7 +164,7 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 		rootServersV4:     rootServersV4,
 		rootServersV6:     rootServersV6,
 		connectionPool:    connectionPool,
-		dnssecValidator:   NewDNSSECValidator(),
+		dnssecValidator:   utils.NewDNSSECValidator(),
 		concurrencyLimit:  make(chan struct{}, MaxGlobalConcurrency),
 		ctx:               ctx,
 		cancel:            cancel,
@@ -100,7 +182,7 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 	}
 
 	if config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "" {
-		secureDNSManager, err := NewSecureDNSManager(server, config)
+		secureDNSManager, err := security.NewSecureDNSManager(server, config)
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("🔐 安全DNS管理器初始化失败: %w", err)
@@ -110,9 +192,9 @@ func NewDNSServer(config *ServerConfig) (*RecursiveDNSServer, error) {
 
 	var cache DNSCache
 	if config.Redis.Address == "" {
-		cache = NewNullCache()
+		cache = cache_pkg.NewNullCache()
 	} else {
-		redisCache, err := NewRedisDNSCache(config, server)
+		redisCache, err := cache_pkg.NewRedisDNSCache(config, server)
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("💾 Redis缓存初始化失败: %w", err)
@@ -132,11 +214,11 @@ func (r *RecursiveDNSServer) setupSignalHandling() {
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		defer func() { handlePanicWithContext("信号处理器") }()
+		defer func() { utils.HandlePanicWithContext("信号处理器") }()
 
 		select {
 		case sig := <-sigChan:
-			writeLog(LogInfo, "🛑 收到信号 %v，开始优雅关闭...", sig)
+			utils.WriteLog(utils.LogInfo, "🛑 收到信号 %v，开始优雅关闭...", sig)
 			r.shutdownServer()
 		case <-r.ctx.Done():
 			return
@@ -162,7 +244,7 @@ func (r *RecursiveDNSServer) shutdownServer() {
 		return
 	}
 
-	writeLog(LogInfo, "🛑 开始关闭DNS服务器...")
+	utils.WriteLog(utils.LogInfo, "🛑 开始关闭DNS服务器...")
 
 	// 清理速度测试防抖记录
 	r.cleanupSpeedtestDebounce()
@@ -177,19 +259,19 @@ func (r *RecursiveDNSServer) shutdownServer() {
 
 	if r.secureDNSManager != nil {
 		if err := r.secureDNSManager.Shutdown(); err != nil {
-			writeLog(LogError, "💥 安全DNS管理器关闭失败: %v", err)
+			utils.WriteLog(utils.LogError, "💥 安全DNS管理器关闭失败: %v", err)
 		}
 	}
 
 	if r.connectionPool != nil {
 		if err := r.connectionPool.Close(); err != nil {
-			writeLog(LogError, "💥 连接池关闭失败: %v", err)
+			utils.WriteLog(utils.LogError, "💥 连接池关闭失败: %v", err)
 		}
 	}
 
 	if r.taskManager != nil {
 		if err := r.taskManager.Shutdown(GracefulShutdownTimeout); err != nil {
-			writeLog(LogError, "💥 任务管理器关闭失败: %v", err)
+			utils.WriteLog(utils.LogError, "💥 任务管理器关闭失败: %v", err)
 		}
 	}
 
@@ -201,9 +283,9 @@ func (r *RecursiveDNSServer) shutdownServer() {
 
 	select {
 	case <-done:
-		writeLog(LogInfo, "✅ 所有组件已安全关闭")
+		utils.WriteLog(utils.LogInfo, "✅ 所有组件已安全关闭")
 	case <-time.After(GracefulShutdownTimeout):
-		writeLog(LogWarn, "⏰ 组件关闭超时")
+		utils.WriteLog(utils.LogWarn, "⏰ 组件关闭超时")
 	}
 
 	if r.shutdown != nil {
@@ -214,6 +296,7 @@ func (r *RecursiveDNSServer) shutdownServer() {
 	os.Exit(0)
 }
 
+// Start 启动DNS服务器
 func (r *RecursiveDNSServer) Start() error {
 	if atomic.LoadInt32(&r.closed) != 0 {
 		return errors.New("🔒 服务器已关闭")
@@ -228,8 +311,8 @@ func (r *RecursiveDNSServer) Start() error {
 
 	errChan := make(chan error, serverCount)
 
-	writeLog(LogInfo, "🚀 启动 ZJDNS Server")
-	writeLog(LogInfo, "🌐 监听端口: %s", r.config.Server.Port)
+	utils.WriteLog(utils.LogInfo, "🚀 启动 ZJDNS Server")
+	utils.WriteLog(utils.LogInfo, "🌐 监听端口: %s", r.config.Server.Port)
 
 	r.displayInfo()
 
@@ -238,14 +321,14 @@ func (r *RecursiveDNSServer) Start() error {
 	// 启动UDP服务器
 	go func() {
 		defer wg.Done()
-		defer func() { handlePanicWithContext("关键-UDP服务器") }()
+		defer func() { utils.HandlePanicWithContext("关键-UDP服务器") }()
 		server := &dns.Server{
 			Addr:    ":" + r.config.Server.Port,
 			Net:     "udp",
 			Handler: dns.HandlerFunc(r.handleDNSRequest),
 			UDPSize: ClientUDPBufferSizeBytes,
 		}
-		writeLog(LogInfo, "📡 UDP服务器启动: [::]:%s", r.config.Server.Port)
+		utils.WriteLog(utils.LogInfo, "📡 UDP服务器启动: [::]:%s", r.config.Server.Port)
 		if err := server.ListenAndServe(); err != nil {
 			errChan <- fmt.Errorf("📡 UDP启动失败: %w", err)
 		}
@@ -254,13 +337,13 @@ func (r *RecursiveDNSServer) Start() error {
 	// 启动TCP服务器
 	go func() {
 		defer wg.Done()
-		defer func() { handlePanicWithContext("关键-TCP服务器") }()
+		defer func() { utils.HandlePanicWithContext("关键-TCP服务器") }()
 		server := &dns.Server{
 			Addr:    ":" + r.config.Server.Port,
 			Net:     "tcp",
 			Handler: dns.HandlerFunc(r.handleDNSRequest),
 		}
-		writeLog(LogInfo, "🔌 TCP服务器启动: [::]:%s", r.config.Server.Port)
+		utils.WriteLog(utils.LogInfo, "🔌 TCP服务器启动: [::]:%s", r.config.Server.Port)
 		if err := server.ListenAndServe(); err != nil {
 			errChan <- fmt.Errorf("🔌 TCP启动失败: %w", err)
 		}
@@ -270,7 +353,7 @@ func (r *RecursiveDNSServer) Start() error {
 	if r.secureDNSManager != nil {
 		go func() {
 			defer wg.Done()
-			defer func() { handlePanicWithContext("关键-安全DNS服务器") }()
+			defer func() { utils.HandlePanicWithContext("关键-安全DNS服务器") }()
 			httpsPort := r.config.Server.TLS.HTTPS.Port
 			if err := r.secureDNSManager.Start(httpsPort); err != nil {
 				errChan <- fmt.Errorf("🔐 安全DNS启动失败: %w", err)
@@ -298,32 +381,32 @@ func (r *RecursiveDNSServer) displayInfo() {
 	if len(servers) > 0 {
 		for _, server := range servers {
 			if server.IsRecursive() {
-				writeLog(LogInfo, "🔗 上游服务器: 🔄 递归解析 - %s", server.Policy)
+				utils.WriteLog(utils.LogInfo, "🔗 上游服务器: 🔄 递归解析 - %s", server.Policy)
 			} else {
 				protocol := strings.ToUpper(server.Protocol)
-				emoji := getProtocolEmoji(server.Protocol)
+				emoji := utils.GetProtocolEmoji(server.Protocol)
 				if protocol == "" {
 					protocol = "UDP"
 					emoji = "📡"
 				}
 				serverInfo := fmt.Sprintf("%s %s (%s) - %s", emoji, server.Address, protocol, server.Policy)
-				if server.SkipTLSVerify && isSecureProtocol(strings.ToLower(server.Protocol)) {
+				if server.SkipTLSVerify && utils.IsSecureProtocol(strings.ToLower(server.Protocol)) {
 					serverInfo += " [跳过TLS验证]"
 				}
-				writeLog(LogInfo, "🔗 上游服务器: %s", serverInfo)
+				utils.WriteLog(utils.LogInfo, "🔗 上游服务器: %s", serverInfo)
 			}
 		}
-		writeLog(LogInfo, "🔗 上游模式: 共 %d 个服务器", len(servers))
+		utils.WriteLog(utils.LogInfo, "🔗 上游模式: 共 %d 个服务器", len(servers))
 	} else {
 		if r.config.Redis.Address == "" {
-			writeLog(LogInfo, "🚫 递归模式 (无缓存)")
+			utils.WriteLog(utils.LogInfo, "🚫 递归模式 (无缓存)")
 		} else {
-			writeLog(LogInfo, "💾 递归模式 + Redis缓存: %s", r.config.Redis.Address)
+			utils.WriteLog(utils.LogInfo, "💾 递归模式 + Redis缓存: %s", r.config.Redis.Address)
 		}
 	}
 
 	if r.secureDNSManager != nil {
-		writeLog(LogInfo, "🔐 监听安全DNS协议端口: %s (DoT/DoQ)", r.config.Server.TLS.Port)
+		utils.WriteLog(utils.LogInfo, "🔐 监听安全DNS协议端口: %s (DoT/DoQ)", r.config.Server.TLS.Port)
 
 		httpsPort := r.config.Server.TLS.HTTPS.Port
 		if httpsPort != "" {
@@ -331,38 +414,39 @@ func (r *RecursiveDNSServer) displayInfo() {
 			if endpoint == "" {
 				endpoint = strings.TrimPrefix(DefaultDNSQueryPath, "/")
 			}
-			writeLog(LogInfo, "🌐 监听安全DNS协议端口: %s (DoH/DoH3, 端点: %s)", httpsPort, endpoint)
+			utils.WriteLog(utils.LogInfo, "🌐 监听安全DNS协议端口: %s (DoH/DoH3, 端点: %s)", httpsPort, endpoint)
 		}
 	}
 
 	if r.ipFilter.HasData() {
-		writeLog(LogInfo, "🌍 IP过滤器: 已启用 (配置文件: %s)", r.config.Server.TrustedCIDRFile)
+		utils.WriteLog(utils.LogInfo, "🌍 IP过滤器: 已启用 (配置文件: %s)", r.config.Server.TrustedCIDRFile)
 	}
 	if r.dnsRewriter.HasRules() {
-		writeLog(LogInfo, "🔄 DNS重写器: 已启用 (%d条规则)", len(r.config.Rewrite))
+		utils.WriteLog(utils.LogInfo, "🔄 DNS重写器: 已启用 (%d条规则)", len(r.config.Rewrite))
 	}
 	if r.config.Server.Features.HijackProtection {
-		writeLog(LogInfo, "🛡️ DNS劫持预防: 已启用")
+		utils.WriteLog(utils.LogInfo, "🛡️ DNS劫持预防: 已启用")
 	}
 	if defaultECS := r.ednsManager.GetDefaultECS(); defaultECS != nil {
-		writeLog(LogInfo, "🌍 默认ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
+		utils.WriteLog(utils.LogInfo, "🌍 默认ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
 	if r.ednsManager.IsPaddingEnabled() {
-		writeLog(LogInfo, "📦 DNS Padding: 已启用")
+		utils.WriteLog(utils.LogInfo, "📦 DNS Padding: 已启用")
 	}
 
 	// 添加路由检测功能状态的显示
 	if len(r.config.Speedtest) > 0 {
-		writeLog(LogInfo, "📍 速度测试: 已启用")
+		utils.WriteLog(utils.LogInfo, "📍 速度测试: 已启用")
 	} else {
-		writeLog(LogInfo, "📍 速度测试: 未启用")
+		utils.WriteLog(utils.LogInfo, "📍 速度测试: 未启用")
 	}
 
-	writeLog(LogInfo, "⚡ 最大并发: %d", MaxGlobalConcurrency)
+	utils.WriteLog(utils.LogInfo, "⚡ 最大并发: %d", MaxGlobalConcurrency)
 }
 
+// handleDNSRequest 处理DNS请求
 func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
-	defer func() { handlePanicWithContext("DNS请求处理") }()
+	defer func() { utils.HandlePanicWithContext("DNS请求处理") }()
 
 	select {
 	case <-r.ctx.Done():
@@ -370,12 +454,13 @@ func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg
 	default:
 	}
 
-	response := r.ProcessDNSQuery(req, GetClientIP(w), false)
+	response := r.ProcessDNSQuery(req, utils.GetClientIP(w), false)
 	if response != nil {
 		_ = w.WriteMsg(response)
 	}
 }
 
+// ProcessDNSQuery 处理DNS查询
 func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	if atomic.LoadInt32(&r.closed) != 0 {
 		msg := r.buildResponse(req)
@@ -411,13 +496,13 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 		return msg
 	}
 
-	var tracker *RequestTracker
-	if GetLogLevel() >= LogDebug {
+	var tracker *utils.RequestTracker
+	if utils.GetLogLevel() >= utils.LogDebug {
 		clientIPStr := "unknown"
 		if clientIP != nil {
 			clientIPStr = clientIP.String()
 		}
-		tracker = NewRequestTracker(
+		tracker = utils.NewRequestTracker(
 			question.Name,
 			dns.TypeToString[question.Qtype],
 			clientIPStr,
@@ -497,27 +582,43 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 
 	clientRequestedDNSSEC := false
 	clientHasEDNS := false
-	var ecsOpt *ECSOption
+	var ecsOpt *utils.ECSOption
 
 	// 使用 IsEdns0() 自动处理 nil Extra 的情况
 	if opt := req.IsEdns0(); opt != nil {
 		clientHasEDNS = true
 		clientRequestedDNSSEC = opt.Do()
-		ecsOpt = r.ednsManager.ParseFromDNS(req)
+		networkECS := r.ednsManager.ParseFromDNS(req)
+		if networkECS != nil {
+			ecsOpt = &utils.ECSOption{
+				Family:       networkECS.Family,
+				SourcePrefix: networkECS.SourcePrefix,
+				ScopePrefix:  networkECS.ScopePrefix,
+				Address:      networkECS.Address,
+			}
+		}
 		if tracker != nil && ecsOpt != nil {
 			tracker.AddStep("🌍 客户端ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
 		}
 	}
 
 	if ecsOpt == nil {
-		ecsOpt = r.ednsManager.GetDefaultECS()
+		networkECS := r.ednsManager.GetDefaultECS()
+		if networkECS != nil {
+			ecsOpt = &utils.ECSOption{
+				Family:       networkECS.Family,
+				SourcePrefix: networkECS.SourcePrefix,
+				ScopePrefix:  networkECS.ScopePrefix,
+				Address:      networkECS.Address,
+			}
+		}
 		if tracker != nil && ecsOpt != nil {
 			tracker.AddStep("🌍 使用默认ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
 		}
 	}
 
 	serverDNSSECEnabled := r.config.Server.Features.DNSSEC
-	cacheKey := globalCacheUtils.BuildKey(question, ecsOpt, serverDNSSECEnabled)
+	cacheKey := utils.GlobalCacheUtils.BuildKey(question, ecsOpt, serverDNSSECEnabled)
 
 	if tracker != nil {
 		tracker.AddStep("🔑 缓存键: %s", cacheKey)
@@ -534,7 +635,7 @@ func (r *RecursiveDNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSe
 }
 
 func (r *RecursiveDNSServer) buildResponse(req *dns.Msg) *dns.Msg {
-	msg := globalResourceManager.GetDNSMessage()
+	msg := utils.GlobalResourceManager.GetDNSMessage()
 	if msg == nil {
 		msg = &dns.Msg{}
 	}
@@ -556,7 +657,7 @@ func (r *RecursiveDNSServer) buildResponse(req *dns.Msg) *dns.Msg {
 	return msg
 }
 
-func (r *RecursiveDNSServer) createDirectIPResponse(req *dns.Msg, qtype uint16, ip net.IP, tracker *RequestTracker) *dns.Msg {
+func (r *RecursiveDNSServer) createDirectIPResponse(req *dns.Msg, qtype uint16, ip net.IP, tracker *utils.RequestTracker) *dns.Msg {
 	if tracker != nil {
 		tracker.AddStep("🎯 创建直接IP响应: %s", ip.String())
 	}
@@ -593,8 +694,8 @@ func (r *RecursiveDNSServer) createDirectIPResponse(req *dns.Msg, qtype uint16, 
 }
 
 func (r *RecursiveDNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool,
-	question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool, ecsOpt *ECSOption,
-	cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+	question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool, ecsOpt *utils.ECSOption,
+	cacheKey string, tracker *utils.RequestTracker, isSecureConnection bool) *dns.Msg {
 
 	responseTTL := entry.GetRemainingTTL()
 
@@ -615,9 +716,38 @@ func (r *RecursiveDNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, is
 		return msg
 	}
 
-	msg.Answer = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Answer), responseTTL, clientRequestedDNSSEC)
-	msg.Ns = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
-	msg.Extra = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
+	// 将cache.CompactDNSRecord转换为utils.CompactDNSRecord
+	answerRecords := make([]*utils.CompactDNSRecord, len(entry.Answer))
+	authorityRecords := make([]*utils.CompactDNSRecord, len(entry.Authority))
+	additionalRecords := make([]*utils.CompactDNSRecord, len(entry.Additional))
+
+	for i, record := range entry.Answer {
+		answerRecords[i] = &utils.CompactDNSRecord{
+			Text:    record.Text,
+			OrigTTL: record.OrigTTL,
+			Type:    record.Type,
+		}
+	}
+
+	for i, record := range entry.Authority {
+		authorityRecords[i] = &utils.CompactDNSRecord{
+			Text:    record.Text,
+			OrigTTL: record.OrigTTL,
+			Type:    record.Type,
+		}
+	}
+
+	for i, record := range entry.Additional {
+		additionalRecords[i] = &utils.CompactDNSRecord{
+			Text:    record.Text,
+			OrigTTL: record.OrigTTL,
+			Type:    record.Type,
+		}
+	}
+
+	msg.Answer = utils.GlobalRecordHandler.ProcessRecords(utils.GlobalRecordHandler.ExpandRecords(answerRecords), responseTTL, clientRequestedDNSSEC)
+	msg.Ns = utils.GlobalRecordHandler.ProcessRecords(utils.GlobalRecordHandler.ExpandRecords(authorityRecords), responseTTL, clientRequestedDNSSEC)
+	msg.Extra = utils.GlobalRecordHandler.ProcessRecords(utils.GlobalRecordHandler.ExpandRecords(additionalRecords), responseTTL, clientRequestedDNSSEC)
 
 	if r.config.Server.Features.DNSSEC && entry.Validated {
 		msg.AuthenticatedData = true
@@ -626,16 +756,42 @@ func (r *RecursiveDNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, is
 		}
 	}
 
-	responseECS := entry.GetECSOption()
-	if responseECS == nil {
-		responseECS = ecsOpt
+	var responseECS *network.ECSOption
+	cacheECS := entry.GetECSOption()
+	if cacheECS != nil {
+		// 将cache.ECSOption转换为network.ECSOption
+		responseECS = &network.ECSOption{
+			Family:       cacheECS.Family,
+			SourcePrefix: cacheECS.SourcePrefix,
+			ScopePrefix:  cacheECS.ScopePrefix,
+			Address:      cacheECS.Address,
+		}
+	} else if ecsOpt != nil {
+		// 将utils.ECSOption转换为network.ECSOption
+		responseECS = &network.ECSOption{
+			Family:       ecsOpt.Family,
+			SourcePrefix: ecsOpt.SourcePrefix,
+			ScopePrefix:  ecsOpt.ScopePrefix,
+			Address:      ecsOpt.Address,
+		}
 	}
 
 	shouldAddEDNS := clientHasEDNS || responseECS != nil || r.ednsManager.IsPaddingEnabled() ||
 		(clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
 
 	if shouldAddEDNS {
-		r.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && r.config.Server.Features.DNSSEC, isSecureConnection)
+		// 将utils.ECSOption转换为network.ECSOption
+		var networkECS *network.ECSOption
+		if responseECS != nil {
+			networkECS = &network.ECSOption{
+				Family:       responseECS.Family,
+				SourcePrefix: responseECS.SourcePrefix,
+				ScopePrefix:  responseECS.ScopePrefix,
+				Address:      responseECS.Address,
+			}
+		}
+
+		r.ednsManager.AddToMessage(msg, networkECS, clientRequestedDNSSEC && r.config.Server.Features.DNSSEC, isSecureConnection)
 		if tracker != nil && responseECS != nil {
 			tracker.AddStep("🌍 添加响应ECS: %s/%d", responseECS.Address, responseECS.SourcePrefix)
 		}
@@ -645,9 +801,20 @@ func (r *RecursiveDNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, is
 		if tracker != nil {
 			tracker.AddStep("🔄 启动后台预取刷新")
 		}
-		r.cache.RequestRefresh(RefreshRequest{
+		// 将utils.ECSOption转换为cache.ECSOption
+		var cacheECS *cache_pkg.ECSOption
+		if ecsOpt != nil {
+			cacheECS = &cache_pkg.ECSOption{
+				Family:       ecsOpt.Family,
+				SourcePrefix: ecsOpt.SourcePrefix,
+				ScopePrefix:  ecsOpt.ScopePrefix,
+				Address:      ecsOpt.Address,
+			}
+		}
+
+		r.cache.RequestRefresh(cache_pkg.RefreshRequest{
 			Question:            question,
-			ECS:                 ecsOpt,
+			ECS:                 cacheECS,
 			CacheKey:            cacheKey,
 			ServerDNSSECEnabled: r.config.Server.Features.DNSSEC,
 		})
@@ -657,13 +824,13 @@ func (r *RecursiveDNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, is
 	return msg
 }
 
-func (r *RecursiveDNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption,
+func (r *RecursiveDNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *utils.ECSOption,
 	clientRequestedDNSSEC bool, clientHasEDNS bool, serverDNSSECEnabled bool, cacheKey string,
-	tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+	tracker *utils.RequestTracker, isSecureConnection bool) *dns.Msg {
 
 	var answer, authority, additional []dns.RR
 	var validated bool
-	var ecsResponse *ECSOption
+	var ecsResponse *utils.ECSOption
 	var err error
 
 	servers := r.upstreamManager.GetServers()
@@ -692,8 +859,8 @@ func (r *RecursiveDNSServer) processCacheMiss(req *dns.Msg, question dns.Questio
 }
 
 func (r *RecursiveDNSServer) processQueryError(req *dns.Msg, err error, cacheKey string,
-	question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool, ecsOpt *ECSOption,
-	tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+	question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool, ecsOpt *utils.ECSOption,
+	tracker *utils.RequestTracker, isSecureConnection bool) *dns.Msg {
 
 	if tracker != nil {
 		tracker.AddStep("💥 查询失败: %v", err)
@@ -714,17 +881,61 @@ func (r *RecursiveDNSServer) processQueryError(req *dns.Msg, err error, cacheKey
 				return msg
 			}
 
-			msg.Answer = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Answer), responseTTL, clientRequestedDNSSEC)
-			msg.Ns = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
-			msg.Extra = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
+			// 将cache.CompactDNSRecord转换为utils.CompactDNSRecord
+			answerRecords := make([]*utils.CompactDNSRecord, len(entry.Answer))
+			authorityRecords := make([]*utils.CompactDNSRecord, len(entry.Authority))
+			additionalRecords := make([]*utils.CompactDNSRecord, len(entry.Additional))
+
+			for i, record := range entry.Answer {
+				answerRecords[i] = &utils.CompactDNSRecord{
+					Text:    record.Text,
+					OrigTTL: record.OrigTTL,
+					Type:    record.Type,
+				}
+			}
+
+			for i, record := range entry.Authority {
+				authorityRecords[i] = &utils.CompactDNSRecord{
+					Text:    record.Text,
+					OrigTTL: record.OrigTTL,
+					Type:    record.Type,
+				}
+			}
+
+			for i, record := range entry.Additional {
+				additionalRecords[i] = &utils.CompactDNSRecord{
+					Text:    record.Text,
+					OrigTTL: record.OrigTTL,
+					Type:    record.Type,
+				}
+			}
+
+			msg.Answer = utils.GlobalRecordHandler.ProcessRecords(utils.GlobalRecordHandler.ExpandRecords(answerRecords), responseTTL, clientRequestedDNSSEC)
+			msg.Ns = utils.GlobalRecordHandler.ProcessRecords(utils.GlobalRecordHandler.ExpandRecords(authorityRecords), responseTTL, clientRequestedDNSSEC)
+			msg.Extra = utils.GlobalRecordHandler.ProcessRecords(utils.GlobalRecordHandler.ExpandRecords(additionalRecords), responseTTL, clientRequestedDNSSEC)
 
 			if r.config.Server.Features.DNSSEC && entry.Validated {
 				msg.AuthenticatedData = true
 			}
 
-			responseECS := entry.GetECSOption()
-			if responseECS == nil {
-				responseECS = ecsOpt
+			var responseECS *network.ECSOption
+			cacheECS := entry.GetECSOption()
+			if cacheECS != nil {
+				// 将cache.ECSOption转换为network.ECSOption
+				responseECS = &network.ECSOption{
+					Family:       cacheECS.Family,
+					SourcePrefix: cacheECS.SourcePrefix,
+					ScopePrefix:  cacheECS.ScopePrefix,
+					Address:      cacheECS.Address,
+				}
+			} else if ecsOpt != nil {
+				// 将utils.ECSOption转换为network.ECSOption
+				responseECS = &network.ECSOption{
+					Family:       ecsOpt.Family,
+					SourcePrefix: ecsOpt.SourcePrefix,
+					ScopePrefix:  ecsOpt.ScopePrefix,
+					Address:      ecsOpt.Address,
+				}
 			}
 
 			shouldAddEDNS := clientHasEDNS || responseECS != nil || r.ednsManager.IsPaddingEnabled() ||
@@ -748,10 +959,10 @@ func (r *RecursiveDNSServer) processQueryError(req *dns.Msg, err error, cacheKey
 	return msg
 }
 
-func (r *RecursiveDNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption,
+func (r *RecursiveDNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *utils.ECSOption,
 	clientRequestedDNSSEC bool, clientHasEDNS bool, cacheKey string,
-	answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption,
-	tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+	answer, authority, additional []dns.RR, validated bool, ecsResponse *utils.ECSOption,
+	tracker *utils.RequestTracker, isSecureConnection bool) *dns.Msg {
 
 	if tracker != nil {
 		tracker.AddStep("✅ 查询成功: 答案=%d, 授权=%d, 附加=%d", len(answer), len(authority), len(additional))
@@ -775,7 +986,7 @@ func (r *RecursiveDNSServer) processQuerySuccess(req *dns.Msg, question dns.Ques
 
 	responseECS := ecsResponse
 	if responseECS == nil && ecsOpt != nil {
-		responseECS = &ECSOption{
+		responseECS = &utils.ECSOption{
 			Family:       ecsOpt.Family,
 			SourcePrefix: ecsOpt.SourcePrefix,
 			ScopePrefix:  ecsOpt.ScopePrefix,
@@ -783,15 +994,26 @@ func (r *RecursiveDNSServer) processQuerySuccess(req *dns.Msg, question dns.Ques
 		}
 	}
 
-	r.cache.Set(cacheKey, answer, authority, additional, validated, responseECS)
+	// 将utils.ECSOption转换为types.ECSOption
+	var typesECS *types.ECSOption
+	if responseECS != nil {
+		typesECS = &types.ECSOption{
+			Family:       responseECS.Family,
+			SourcePrefix: responseECS.SourcePrefix,
+			ScopePrefix:  responseECS.ScopePrefix,
+			Address:      responseECS.Address,
+		}
+	}
 
-	msg.Answer = globalRecordHandler.ProcessRecords(answer, 0, clientRequestedDNSSEC)
-	msg.Ns = globalRecordHandler.ProcessRecords(authority, 0, clientRequestedDNSSEC)
-	msg.Extra = globalRecordHandler.ProcessRecords(additional, 0, clientRequestedDNSSEC)
+	r.cache.Set(cacheKey, answer, authority, additional, validated, typesECS)
+
+	msg.Answer = utils.GlobalRecordHandler.ProcessRecords(answer, 0, clientRequestedDNSSEC)
+	msg.Ns = utils.GlobalRecordHandler.ProcessRecords(authority, 0, clientRequestedDNSSEC)
+	msg.Extra = utils.GlobalRecordHandler.ProcessRecords(additional, 0, clientRequestedDNSSEC)
 
 	// 速度测试：对A和AAAA记录进行测速和排序
 	if len(r.config.Speedtest) > 0 {
-		writeLog(LogDebug, "📍 速度测试功能已启用")
+		utils.WriteLog(utils.LogDebug, "📍 速度测试功能已启用")
 		if tracker != nil {
 			tracker.AddStep("📍 启用速度测试")
 		}
@@ -799,24 +1021,35 @@ func (r *RecursiveDNSServer) processQuerySuccess(req *dns.Msg, question dns.Ques
 		// 检查是否需要执行速度测试（防抖机制）
 		shouldPerformSpeedTest := r.shouldPerformSpeedTest(question.Name)
 		if shouldPerformSpeedTest {
-			writeLog(LogDebug, "📍 速度测试: 触发域名 %s 的后台检测", question.Name)
+			utils.WriteLog(utils.LogDebug, "📍 速度测试: 触发域名 %s 的后台检测", question.Name)
 			// 在后台执行速度测试，不影响主响应
 			// 克隆消息用于后台处理
 			msgCopy := msg.Copy()
 			r.taskManager.ExecuteAsync(fmt.Sprintf("speed-test-%s", question.Name), func(ctx context.Context) error {
-				writeLog(LogDebug, "📍 速度测试: 开始后台检测域名 %s", question.Name)
+				utils.WriteLog(utils.LogDebug, "📍 速度测试: 开始后台检测域名 %s", question.Name)
 				// 创建临时的SpeedTester实例执行测速
-				speedTester := NewSpeedTester(*r.config)
+				speedTester := utils.NewSpeedTester(r.config.Speedtest)
 				// 执行速度测试和排序
 				speedTester.PerformSpeedTestAndSort(msgCopy)
 
 				// 更新缓存中的排序结果
+				// 将utils.ECSOption转换为types.ECSOption
+				var typesECS *types.ECSOption
+				if responseECS != nil {
+					typesECS = &types.ECSOption{
+						Family:       responseECS.Family,
+						SourcePrefix: responseECS.SourcePrefix,
+						ScopePrefix:  responseECS.ScopePrefix,
+						Address:      responseECS.Address,
+					}
+				}
+
 				r.cache.Set(cacheKey,
 					msgCopy.Answer,
 					msgCopy.Ns,
 					msgCopy.Extra,
-					validated, responseECS)
-				writeLog(LogDebug, "📍 速度测试: 域名 %s 后台检测完成", question.Name)
+					validated, typesECS)
+				utils.WriteLog(utils.LogDebug, "📍 速度测试: 域名 %s 后台检测完成", question.Name)
 
 				return nil
 			})
@@ -826,20 +1059,31 @@ func (r *RecursiveDNSServer) processQuerySuccess(req *dns.Msg, question dns.Ques
 				tracker.AddStep("⚡ 首次响应不排序，后台进行速度测试")
 			}
 		} else {
-			writeLog(LogDebug, "📍 速度测试: 域名 %s 被防抖机制跳过", question.Name)
+			utils.WriteLog(utils.LogDebug, "📍 速度测试: 域名 %s 被防抖机制跳过", question.Name)
 			if tracker != nil {
 				tracker.AddStep("⏰ 速度测试跳过（防抖机制）")
 			}
 		}
 	} else {
-		writeLog(LogDebug, "📍 速度测试功能未启用")
+		utils.WriteLog(utils.LogDebug, "📍 速度测试功能未启用")
 	}
 
 	shouldAddEDNS := clientHasEDNS || responseECS != nil || r.ednsManager.IsPaddingEnabled() ||
 		(clientRequestedDNSSEC && r.config.Server.Features.DNSSEC)
 
 	if shouldAddEDNS {
-		r.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && r.config.Server.Features.DNSSEC, isSecureConnection)
+		// 将utils.ECSOption转换为network.ECSOption
+		var networkECS *network.ECSOption
+		if responseECS != nil {
+			networkECS = &network.ECSOption{
+				Family:       responseECS.Family,
+				SourcePrefix: responseECS.SourcePrefix,
+				ScopePrefix:  responseECS.ScopePrefix,
+				Address:      responseECS.Address,
+			}
+		}
+
+		r.ednsManager.AddToMessage(msg, networkECS, clientRequestedDNSSEC && r.config.Server.Features.DNSSEC, isSecureConnection)
 		if tracker != nil && responseECS != nil {
 			tracker.AddStep("🌍 添加响应ECS: %s/%d", responseECS.Address, responseECS.SourcePrefix)
 		}
@@ -882,8 +1126,8 @@ func (r *RecursiveDNSServer) shouldPerformSpeedTest(domain string) bool {
 	return false
 }
 
-func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *ECSOption,
-	serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *utils.ECSOption,
+	serverDNSSECEnabled bool, tracker *utils.RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *utils.ECSOption, error) {
 
 	servers := r.upstreamManager.GetServers()
 	if len(servers) == 0 {
@@ -896,17 +1140,26 @@ func (r *RecursiveDNSServer) queryUpstreamServers(question dns.Question, ecs *EC
 		return nil, nil, nil, false, nil, err
 	}
 
-	var ecsResponse *ECSOption
+	var ecsResponse *utils.ECSOption
 	if result.Response != nil {
-		ecsResponse = r.ednsManager.ParseFromDNS(result.Response)
+		networkECS := r.ednsManager.ParseFromDNS(result.Response)
+		// 将network.ECSOption转换为utils.ECSOption
+		if networkECS != nil {
+			ecsResponse = &utils.ECSOption{
+				Family:       networkECS.Family,
+				SourcePrefix: networkECS.SourcePrefix,
+				ScopePrefix:  networkECS.ScopePrefix,
+				Address:      networkECS.Address,
+			}
+		}
 	}
 
 	return result.Response.Answer, result.Response.Ns, result.Response.Extra,
 		result.Validated, ecsResponse, nil
 }
 
-func (r *RecursiveDNSServer) executeConcurrentQueries(ctx context.Context, question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool,
-	servers []*UpstreamServer, maxConcurrency int, tracker *RequestTracker) (*QueryResult, error) {
+func (r *RecursiveDNSServer) executeConcurrentQueries(ctx context.Context, question dns.Question, ecs *utils.ECSOption, serverDNSSECEnabled bool,
+	servers []*UpstreamServer, maxConcurrency int, tracker *utils.RequestTracker) (*QueryResult, error) {
 
 	if len(servers) == 0 {
 		return nil, errors.New("❌ 没有可用的服务器")
@@ -928,8 +1181,8 @@ func (r *RecursiveDNSServer) executeConcurrentQueries(ctx context.Context, quest
 		// 为每个并发查询创建独立的消息副本，避免数据竞争
 		// SafeCopyDNSMessage内部使用sync.Pool优化性能
 		originalMsg := r.buildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
-		msg := SafeCopyDNSMessage(originalMsg)
-		defer globalResourceManager.PutDNSMessage(originalMsg)
+		msg := utils.SafeCopyDNSMessage(originalMsg)
+		defer utils.GlobalResourceManager.PutDNSMessage(originalMsg)
 
 		r.taskManager.ExecuteAsync(fmt.Sprintf("ConcurrentQuery-%s", server.Address),
 			func(ctx context.Context) error {
@@ -962,8 +1215,8 @@ func (r *RecursiveDNSServer) executeConcurrentQueries(ctx context.Context, quest
 	return nil, errors.New("💥 所有并发查询均失败")
 }
 
-func (r *RecursiveDNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
-	msg := globalResourceManager.GetDNSMessage()
+func (r *RecursiveDNSServer) buildQueryMessage(question dns.Question, ecs *utils.ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
+	msg := utils.GlobalResourceManager.GetDNSMessage()
 
 	// 确保消息状态正确
 	if msg == nil {
@@ -972,7 +1225,7 @@ func (r *RecursiveDNSServer) buildQueryMessage(question dns.Question, ecs *ECSOp
 
 	// 安全设置问题
 	if err := r.safeSetQuestion(msg, question.Name, question.Qtype); err != nil {
-		writeLog(LogDebug, "💥 设置DNS问题失败: %v", err)
+		utils.WriteLog(utils.LogDebug, "💥 设置DNS问题失败: %v", err)
 		msg = &dns.Msg{}
 		msg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
 	}
@@ -980,7 +1233,18 @@ func (r *RecursiveDNSServer) buildQueryMessage(question dns.Question, ecs *ECSOp
 	msg.RecursionDesired = recursionDesired
 
 	if r.ednsManager != nil {
-		r.ednsManager.AddToMessage(msg, ecs, dnssecEnabled, isSecureConnection)
+		// 将utils.ECSOption转换为network.ECSOption
+		var networkECS *network.ECSOption
+		if ecs != nil {
+			networkECS = &network.ECSOption{
+				Family:       ecs.Family,
+				SourcePrefix: ecs.SourcePrefix,
+				ScopePrefix:  ecs.ScopePrefix,
+				Address:      ecs.Address,
+			}
+		}
+
+		r.ednsManager.AddToMessage(msg, networkECS, dnssecEnabled, isSecureConnection)
 	}
 
 	return msg
@@ -1005,7 +1269,7 @@ func (r *RecursiveDNSServer) safeSetQuestion(msg *dns.Msg, name string, qtype ui
 
 	defer func() {
 		if r := recover(); r != nil {
-			writeLog(LogError, "💥 设置DNS问题时发生panic: %v", r)
+			utils.WriteLog(utils.LogError, "💥 设置DNS问题时发生panic: %v", r)
 		}
 	}()
 
@@ -1013,12 +1277,12 @@ func (r *RecursiveDNSServer) safeSetQuestion(msg *dns.Msg, name string, qtype ui
 	return nil
 }
 
-func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption,
-	tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *utils.ECSOption,
+	tracker *utils.RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *utils.ECSOption, error) {
 
 	var allAnswers []dns.RR
 	var finalAuthority, finalAdditional []dns.RR
-	var finalECSResponse *ECSOption
+	var finalECSResponse *utils.ECSOption
 	allValidated := true
 
 	currentQuestion := question
@@ -1095,8 +1359,8 @@ func (r *RecursiveDNSServer) resolveWithCNAME(ctx context.Context, question dns.
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, nil
 }
 
-func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption,
-	depth int, forceTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Question, ecs *utils.ECSOption,
+	depth int, forceTCP bool, tracker *utils.RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *utils.ECSOption, error) {
 
 	if depth > MaxRecursionDepth {
 		return nil, nil, nil, false, nil, fmt.Errorf("📏 递归深度超限: %d", depth)
@@ -1130,7 +1394,17 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			validated = r.dnssecValidator.ValidateResponse(response, true)
 		}
 
-		ecsResponse := r.ednsManager.ParseFromDNS(response)
+		networkECS := r.ednsManager.ParseFromDNS(response)
+		// 将network.ECSOption转换为utils.ECSOption
+		var ecsResponse *utils.ECSOption
+		if networkECS != nil {
+			ecsResponse = &utils.ECSOption{
+				Family:       networkECS.Family,
+				SourcePrefix: networkECS.SourcePrefix,
+				ScopePrefix:  networkECS.ScopePrefix,
+				Address:      networkECS.Address,
+			}
+		}
 
 		return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
 	}
@@ -1175,7 +1449,17 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 			validated = r.dnssecValidator.ValidateResponse(response, true)
 		}
 
-		ecsResponse := r.ednsManager.ParseFromDNS(response)
+		networkECS := r.ednsManager.ParseFromDNS(response)
+		// 将network.ECSOption转换为utils.ECSOption
+		var ecsResponse *utils.ECSOption
+		if networkECS != nil {
+			ecsResponse = &utils.ECSOption{
+				Family:       networkECS.Family,
+				SourcePrefix: networkECS.SourcePrefix,
+				ScopePrefix:  networkECS.ScopePrefix,
+				Address:      networkECS.Address,
+			}
+		}
 
 		if len(response.Answer) > 0 {
 			if tracker != nil {
@@ -1265,7 +1549,7 @@ func (r *RecursiveDNSServer) recursiveQuery(ctx context.Context, question dns.Qu
 	}
 }
 
-func (r *RecursiveDNSServer) handleSuspiciousResponse(reason string, currentlyTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (r *RecursiveDNSServer) handleSuspiciousResponse(reason string, currentlyTCP bool, tracker *utils.RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *utils.ECSOption, error) {
 
 	if !currentlyTCP {
 		if tracker != nil {
@@ -1281,7 +1565,7 @@ func (r *RecursiveDNSServer) handleSuspiciousResponse(reason string, currentlyTC
 }
 
 func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nameservers []string,
-	question dns.Question, ecs *ECSOption, forceTCP bool, tracker *RequestTracker) (*dns.Msg, error) {
+	question dns.Question, ecs *utils.ECSOption, forceTCP bool, tracker *utils.RequestTracker) (*dns.Msg, error) {
 
 	if len(nameservers) == 0 {
 		return nil, errors.New("❌ 没有可用的nameserver")
@@ -1326,7 +1610,7 @@ func (r *RecursiveDNSServer) queryNameserversConcurrent(ctx context.Context, nam
 }
 
 func (r *RecursiveDNSServer) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS,
-	qname string, depth int, forceTCP bool, tracker *RequestTracker) []string {
+	qname string, depth int, forceTCP bool, tracker *utils.RequestTracker) []string {
 
 	resolveCount := len(nsRecords)
 	if resolveCount > NameServerResolveMaxConcurrency {
@@ -1418,4 +1702,9 @@ func (r *RecursiveDNSServer) getRootServers() []string {
 
 func (u *UpstreamServer) IsRecursive() bool {
 	return strings.ToLower(u.Address) == RecursiveServerIndicator
+}
+
+// GetConfig returns the server configuration
+func (r *RecursiveDNSServer) GetConfig() *types.ServerConfig {
+	return r.config
 }

@@ -1,18 +1,22 @@
-package main
+package dns
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/miekg/dns"
+
+	"zjdns/utils"
 )
 
+// NewDNSRewriter 创建新的DNS重写器
 func NewDNSRewriter() *DNSRewriter {
 	return &DNSRewriter{
 		rules: make([]RewriteRule, 0, 32),
 	}
 }
 
+// LoadRules 加载重写规则
 func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -27,11 +31,12 @@ func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
 	}
 
 	r.rules = validRules
-	writeLog(LogInfo, "🔄 DNS重写器加载完成: %d条规则", len(validRules))
+	utils.WriteLog(utils.LogInfo, "🔄 DNS重写器加载完成: %d条规则", len(validRules))
 	return nil
 }
 
 // RewriteWithDetails 根据查询详细信息进行重写，支持响应码和自定义记录
+// RewriteWithDetails 根据域名和查询类型进行重写
 func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewriteResult {
 	result := DNSRewriteResult{
 		Domain:        domain,
@@ -116,7 +121,7 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 }
 
 // buildDNSRecord 根据配置构建DNS记录
-func (r *DNSRewriter) buildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
+func (r *DNSRewriter) buildDNSRecord(domain string, record utils.DNSRecordConfig) dns.RR {
 	ttl := record.TTL
 	if ttl == 0 {
 		ttl = DefaultCacheTTLSeconds // 默认TTL
@@ -155,6 +160,7 @@ func (r *DNSRewriter) buildDNSRecord(domain string, record DNSRecordConfig) dns.
 	return rfc3597
 }
 
+// HasRules 检查是否有重写规则
 func (r *DNSRewriter) HasRules() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
