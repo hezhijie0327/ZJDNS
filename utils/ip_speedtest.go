@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"context"
@@ -13,19 +13,18 @@ import (
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+
+	"zjdns/types"
 )
 
 // NewSpeedTester 创建新的速度测试器
-func NewSpeedTester(config ServerConfig) *SpeedTester {
-	// 当 config.Speedtest 非空时，启用速度测试功能
-	// 测试方法的配置将直接从 config.Speedtest 中获取
-
+func NewSpeedTester(methods []types.SpeedTestMethod) *SpeedTester {
 	st := &SpeedTester{
 		timeout:     DefaultSpeedTestTimeout,
 		concurrency: DefaultSpeedTestConcurrency,
 		cache:       make(map[string]*SpeedTestResult),
 		cacheTTL:    DefaultSpeedTestCacheTTL,
-		methods:     config.Speedtest,
+		methods:     methods,
 	}
 
 	// 初始化ICMP连接
@@ -35,6 +34,7 @@ func NewSpeedTester(config ServerConfig) *SpeedTester {
 }
 
 // initICMP 初始化ICMP连接
+// initICMP 初始化ICMP连接
 func (st *SpeedTester) initICMP() {
 	// 创建IPv4 ICMP连接
 	conn4, err := icmp.ListenPacket("ip4:icmp", "")
@@ -43,10 +43,10 @@ func (st *SpeedTester) initICMP() {
 	} else {
 		// 如果是因为权限问题导致的错误，直接忽略而不是降级到UDP
 		if strings.Contains(err.Error(), "operation not permitted") {
-			writeLog(LogDebug, "📍 速度测试: 无权限创建IPv4 ICMP连接，跳过ICMP测试")
+			WriteLog(LogDebug, "📍 速度测试: 无权限创建IPv4 ICMP连接，跳过ICMP测试")
 		} else {
 			// 其他错误也直接忽略，不降级到UDP
-			writeLog(LogDebug, "📍 速度测试: 无法创建IPv4 ICMP连接: %v", err)
+			WriteLog(LogDebug, "📍 速度测试: 无法创建IPv4 ICMP连接: %v", err)
 		}
 	}
 
@@ -57,10 +57,10 @@ func (st *SpeedTester) initICMP() {
 	} else {
 		// 如果是因为权限问题导致的错误，直接忽略而不是降级到UDP
 		if strings.Contains(err.Error(), "operation not permitted") {
-			writeLog(LogDebug, "📍 速度测试: 无权限创建IPv6 ICMP连接，跳过ICMP测试")
+			WriteLog(LogDebug, "📍 速度测试: 无权限创建IPv6 ICMP连接，跳过ICMP测试")
 		} else {
 			// 其他错误也直接忽略，不降级到UDP
-			writeLog(LogDebug, "📍 速度测试: 无法创建IPv6 ICMP连接: %v", err)
+			WriteLog(LogDebug, "📍 速度测试: 无法创建IPv6 ICMP连接: %v", err)
 		}
 	}
 }
@@ -79,13 +79,14 @@ func (st *SpeedTester) Close() error {
 }
 
 // PerformSpeedTestAndSort 对DNS响应中的A/AAAA记录进行测速并排序
+// PerformSpeedTestAndSort 对DNS响应进行测速并排序
 func (st *SpeedTester) PerformSpeedTestAndSort(response *dns.Msg) *dns.Msg {
 	if response == nil {
-		writeLog(LogDebug, "📍 速度测试: 响应为空")
+		WriteLog(LogDebug, "📍 速度测试: 响应为空")
 		return response
 	}
 
-	writeLog(LogDebug, "📍 速度测试: 开始处理响应，答案记录数: %d", len(response.Answer))
+	WriteLog(LogDebug, "📍 速度测试: 开始处理响应，答案记录数: %d", len(response.Answer))
 
 	// 分离不同类型的记录
 	var aRecords []*dns.A
@@ -106,22 +107,22 @@ func (st *SpeedTester) PerformSpeedTestAndSort(response *dns.Msg) *dns.Msg {
 		}
 	}
 
-	writeLog(LogDebug, "📍 速度测试: A记录数=%d, AAAA记录数=%d, CNAME记录数=%d", len(aRecords), len(aaaaRecords), len(cnameRecords))
+	WriteLog(LogDebug, "📍 速度测试: A记录数=%d, AAAA记录数=%d, CNAME记录数=%d", len(aRecords), len(aaaaRecords), len(cnameRecords))
 
 	// 对A记录进行测速和排序
 	if len(aRecords) > 1 {
-		writeLog(LogDebug, "📍 速度测试: 对%d个A记录进行测速排序", len(aRecords))
+		WriteLog(LogDebug, "📍 速度测试: 对%d个A记录进行测速排序", len(aRecords))
 		aRecords = st.sortARecords(aRecords)
 	} else {
-		writeLog(LogDebug, "📍 速度测试: A记录数不足或等于1，跳过测速")
+		WriteLog(LogDebug, "📍 速度测试: A记录数不足或等于1，跳过测速")
 	}
 
 	// 对AAAA记录进行测速和排序
 	if len(aaaaRecords) > 1 {
-		writeLog(LogDebug, "📍 速度测试: 对%d个AAAA记录进行测速排序", len(aaaaRecords))
+		WriteLog(LogDebug, "📍 速度测试: 对%d个AAAA记录进行测速排序", len(aaaaRecords))
 		aaaaRecords = st.sortAAAARecords(aaaaRecords)
 	} else {
-		writeLog(LogDebug, "📍 速度测试: AAAA记录数不足或等于1，跳过测速")
+		WriteLog(LogDebug, "📍 速度测试: AAAA记录数不足或等于1，跳过测速")
 	}
 
 	// 重新构建响应，保持正确的DNS记录顺序
@@ -143,12 +144,13 @@ func (st *SpeedTester) PerformSpeedTestAndSort(response *dns.Msg) *dns.Msg {
 	// 最后添加其他记录
 	response.Answer = append(response.Answer, otherRecords...)
 
-	writeLog(LogDebug, "📍 速度测试: 处理完成，答案记录数: %d", len(response.Answer))
+	WriteLog(LogDebug, "📍 速度测试: 处理完成，答案记录数: %d", len(response.Answer))
 
 	return response
 }
 
 // sortARecords 对A记录按延迟排序
+// sortARecords 对A记录进行排序
 func (st *SpeedTester) sortARecords(records []*dns.A) []*dns.A {
 	if len(records) <= 1 {
 		return records
@@ -258,11 +260,11 @@ func (st *SpeedTester) speedTest(ips []string) map[string]*SpeedTestResult {
 
 	// 如果所有IP都有有效的缓存结果，直接返回
 	if len(remainingIPs) == 0 {
-		writeLog(LogDebug, "📍 速度测试: 所有IP都有有效缓存，直接返回缓存结果")
+		WriteLog(LogDebug, "📍 速度测试: 所有IP都有有效缓存，直接返回缓存结果")
 		return cachedResults
 	}
 
-	writeLog(LogDebug, "📍 速度测试: 需要测试%d个IP，%d个IP使用缓存", len(remainingIPs), len(cachedResults))
+	WriteLog(LogDebug, "📍 速度测试: 需要测试%d个IP，%d个IP使用缓存", len(remainingIPs), len(cachedResults))
 
 	// 对剩余IP执行测速
 	newResults := st.performSpeedTest(remainingIPs)
@@ -288,7 +290,7 @@ func (st *SpeedTester) speedTest(ips []string) map[string]*SpeedTestResult {
 
 // performSpeedTest 并发执行IP测速
 func (st *SpeedTester) performSpeedTest(ips []string) map[string]*SpeedTestResult {
-	writeLog(LogDebug, "📍 速度测试: 开始并发测速%d个IP", len(ips))
+	WriteLog(LogDebug, "📍 速度测试: 开始并发测速%d个IP", len(ips))
 
 	// 创建带缓冲的通道，限制并发数
 	semaphore := make(chan struct{}, st.concurrency)
@@ -322,14 +324,14 @@ func (st *SpeedTester) performSpeedTest(ips []string) map[string]*SpeedTestResul
 		results[result.IP] = result
 	}
 
-	writeLog(LogDebug, "📍 速度测试: 并发测速完成，共获得%d个结果", len(results))
+	WriteLog(LogDebug, "📍 速度测试: 并发测速完成，共获得%d个结果", len(results))
 
 	return results
 }
 
 // testSingleIP 对单个IP进行测速
 func (st *SpeedTester) testSingleIP(ip string) *SpeedTestResult {
-	writeLog(LogDebug, "📍 速度测试: 开始测试IP %s", ip)
+	WriteLog(LogDebug, "📍 速度测试: 开始测试IP %s", ip)
 
 	result := &SpeedTestResult{
 		IP:        ip,
@@ -349,7 +351,7 @@ func (st *SpeedTester) testSingleIP(ip string) *SpeedTestResult {
 			// 总超时时间已到
 			result.Reachable = false
 			result.Latency = st.timeout
-			writeLog(LogDebug, "📍 速度测试: IP %s 总超时，标记为不可达", ip)
+			WriteLog(LogDebug, "📍 速度测试: IP %s 总超时，标记为不可达", ip)
 			return result
 		default:
 		}
@@ -369,7 +371,7 @@ func (st *SpeedTester) testSingleIP(ip string) *SpeedTestResult {
 		if latency >= 0 {
 			result.Reachable = true
 			result.Latency = latency
-			writeLog(LogDebug, "📍 速度测试: IP %s %s 测试成功，延迟: %v", ip, method.Type, result.Latency)
+			WriteLog(LogDebug, "📍 速度测试: IP %s %s 测试成功，延迟: %v", ip, method.Type, result.Latency)
 			return result
 		}
 	}
@@ -377,18 +379,18 @@ func (st *SpeedTester) testSingleIP(ip string) *SpeedTestResult {
 	// 所有尝试都失败
 	result.Reachable = false
 	result.Latency = st.timeout
-	writeLog(LogDebug, "📍 速度测试: IP %s 所有连接尝试失败，标记为不可达", ip)
+	WriteLog(LogDebug, "📍 速度测试: IP %s 所有连接尝试失败，标记为不可达", ip)
 	return result
 }
 
 // pingWithICMP 使用ICMP ping测试IP延迟
 func (st *SpeedTester) pingWithICMP(ip string, timeout time.Duration) time.Duration {
-	writeLog(LogDebug, "📍 速度测试: 开始ICMP ping测试 %s", ip)
+	WriteLog(LogDebug, "📍 速度测试: 开始ICMP ping测试 %s", ip)
 
 	// 解析IP地址
 	dst, err := net.ResolveIPAddr("ip", ip)
 	if err != nil {
-		writeLog(LogDebug, "📍 速度测试: 无法解析IP地址 %s: %v", ip, err)
+		WriteLog(LogDebug, "📍 速度测试: 无法解析IP地址 %s: %v", ip, err)
 		return -1
 	}
 
@@ -402,7 +404,7 @@ func (st *SpeedTester) pingWithICMP(ip string, timeout time.Duration) time.Durat
 
 	// 检查是否有可用的ICMP连接
 	if conn == nil {
-		writeLog(LogDebug, "📍 速度测试: 没有可用的ICMP连接用于测试 %s", ip)
+		WriteLog(LogDebug, "📍 速度测试: 没有可用的ICMP连接用于测试 %s", ip)
 		return -1
 	}
 
@@ -431,7 +433,7 @@ func (st *SpeedTester) pingWithICMP(ip string, timeout time.Duration) time.Durat
 	// 序列化ICMP消息
 	wb, err := wm.Marshal(nil)
 	if err != nil {
-		writeLog(LogDebug, "📍 速度测试: 无法序列化ICMP消息 %s: %v", ip, err)
+		WriteLog(LogDebug, "📍 速度测试: 无法序列化ICMP消息 %s: %v", ip, err)
 		return -1
 	}
 
@@ -445,7 +447,7 @@ func (st *SpeedTester) pingWithICMP(ip string, timeout time.Duration) time.Durat
 	// 尝试直接写入
 	_, err = conn.WriteTo(wb, dst)
 	if err != nil {
-		writeLog(LogDebug, "📍 速度测试: ICMP消息发送失败 %s: %v", ip, err)
+		WriteLog(LogDebug, "📍 速度测试: ICMP消息发送失败 %s: %v", ip, err)
 		return -1
 	}
 
@@ -458,19 +460,19 @@ func (st *SpeedTester) pingWithICMP(ip string, timeout time.Duration) time.Durat
 	n, peer, err := conn.ReadFrom(rb)
 	if err != nil {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			writeLog(LogDebug, "📍 速度测试: ICMP ping超时 %s", ip)
+			WriteLog(LogDebug, "📍 速度测试: ICMP ping超时 %s", ip)
 		} else {
-			writeLog(LogDebug, "📍 速度测试: 读取ICMP回复失败 %s: %v", ip, err)
+			WriteLog(LogDebug, "📍 速度测试: 读取ICMP回复失败 %s: %v", ip, err)
 		}
 		return -1
 	}
 
-	writeLog(LogDebug, "📍 速度测试: 收到来自 %v 的回复，大小 %d 字节", peer, n)
+	WriteLog(LogDebug, "📍 速度测试: 收到来自 %v 的回复，大小 %d 字节", peer, n)
 
 	// 解析回复
 	rm, err := icmp.ParseMessage(protocol, rb[:n])
 	if err != nil {
-		writeLog(LogDebug, "📍 速度测试: 无法解析ICMP回复 %s: %v", ip, err)
+		WriteLog(LogDebug, "📍 速度测试: 无法解析ICMP回复 %s: %v", ip, err)
 		return -1
 	}
 
@@ -479,10 +481,10 @@ func (st *SpeedTester) pingWithICMP(ip string, timeout time.Duration) time.Durat
 	case ipv4.ICMPTypeEchoReply, ipv6.ICMPTypeEchoReply:
 		// 成功收到回复
 		latency := time.Since(start)
-		writeLog(LogDebug, "📍 速度测试: ICMP ping成功 %s，延迟: %v", ip, latency)
+		WriteLog(LogDebug, "📍 速度测试: ICMP ping成功 %s，延迟: %v", ip, latency)
 		return latency
 	default:
-		writeLog(LogDebug, "📍 速度测试: 收到意外的ICMP消息类型 %s: %v", ip, rm.Type)
+		WriteLog(LogDebug, "📍 速度测试: 收到意外的ICMP消息类型 %s: %v", ip, rm.Type)
 		return -1
 	}
 }
@@ -499,7 +501,7 @@ func (st *SpeedTester) pingWithTCP(ip, port string, timeout time.Duration) time.
 	// 尝试建立TCP连接
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(ip, port))
 	if err != nil {
-		writeLog(LogDebug, "📍 速度测试: TCP连接失败 %s:%s - %v", ip, port, err)
+		WriteLog(LogDebug, "📍 速度测试: TCP连接失败 %s:%s - %v", ip, port, err)
 		return -1
 	}
 
@@ -508,7 +510,7 @@ func (st *SpeedTester) pingWithTCP(ip, port string, timeout time.Duration) time.
 	// 忽略关闭连接的错误
 	_ = conn.Close()
 
-	writeLog(LogDebug, "📍 速度测试: TCP连接成功 %s:%s，延迟: %v", ip, port, latency)
+	WriteLog(LogDebug, "📍 速度测试: TCP连接成功 %s:%s，延迟: %v", ip, port, latency)
 
 	return latency
 }
@@ -525,14 +527,14 @@ func (st *SpeedTester) pingWithUDP(ip, port string, timeout time.Duration) time.
 	// 尝试建立UDP连接
 	conn, err := (&net.Dialer{}).DialContext(ctx, "udp", net.JoinHostPort(ip, port))
 	if err != nil {
-		writeLog(LogDebug, "📍 速度测试: UDP连接失败 %s:%s - %v", ip, port, err)
+		WriteLog(LogDebug, "📍 速度测试: UDP连接失败 %s:%s - %v", ip, port, err)
 		return -1
 	}
 
 	// 发送一个空的UDP包
 	_, writeErr := conn.Write([]byte{})
 	if writeErr != nil {
-		writeLog(LogDebug, "📍 速度测试: UDP发送数据失败 %s:%s - %v", ip, port, writeErr)
+		WriteLog(LogDebug, "📍 速度测试: UDP发送数据失败 %s:%s - %v", ip, port, writeErr)
 		// 忽略关闭连接的错误
 		_ = conn.Close()
 		return -1
@@ -543,7 +545,7 @@ func (st *SpeedTester) pingWithUDP(ip, port string, timeout time.Duration) time.
 	// 忽略关闭连接的错误
 	_ = conn.Close()
 
-	writeLog(LogDebug, "📍 速度测试: UDP连接成功 %s:%s，延迟: %v", ip, port, latency)
+	WriteLog(LogDebug, "📍 速度测试: UDP连接成功 %s:%s，延迟: %v", ip, port, latency)
 
 	return latency
 }

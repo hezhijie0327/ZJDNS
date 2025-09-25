@@ -4,7 +4,7 @@ FROM golang:${GOLANG_VERSION} AS build_zjdns
 
 WORKDIR /zjdns
 
-ADD ./* /zjdns
+ADD . /zjdns
 
 ENV \
     CGO_ENABLED="0"

@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// NewTaskManager 创建新的任务管理器
 func NewTaskManager(maxGoroutines int) *TaskManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TaskManager{
@@ -16,6 +17,7 @@ func NewTaskManager(maxGoroutines int) *TaskManager {
 	}
 }
 
+// ExecuteTask 执行任务
 func (tm *TaskManager) ExecuteTask(name string, fn func(ctx context.Context) error) error {
 	if tm == nil || atomic.LoadInt32(&tm.closed) != 0 {
 		return nil
@@ -29,28 +31,30 @@ func (tm *TaskManager) ExecuteTask(name string, fn func(ctx context.Context) err
 
 	atomic.AddInt64(&tm.stats.executed, 1)
 
-	defer func() { handlePanicWithContext(fmt.Sprintf("Task-%s", name)) }()
+	defer func() { HandlePanicWithContext(fmt.Sprintf("Task-%s", name)) }()
 	return fn(tm.ctx)
 }
 
 // Execute is a convenience method that calls ExecuteTask with the given name and function.
 // It executes the task synchronously and returns any error encountered.
+// Execute 执行任务
 func (tm *TaskManager) Execute(name string, fn func(ctx context.Context) error) error {
 	return tm.ExecuteTask(name, fn)
 }
 
+// ExecuteAsync 异步执行任务
 func (tm *TaskManager) ExecuteAsync(name string, fn func(ctx context.Context) error) {
 	if tm == nil || atomic.LoadInt32(&tm.closed) != 0 {
 		return
 	}
 
 	go func() {
-		defer func() { handlePanicWithContext(fmt.Sprintf("AsyncTask-%s", name)) }()
+		defer func() { HandlePanicWithContext(fmt.Sprintf("AsyncTask-%s", name)) }()
 
 		if err := tm.ExecuteTask(name, fn); err != nil {
 			if err != context.Canceled {
 				atomic.AddInt64(&tm.stats.failed, 1)
-				writeLog(LogError, "💥 异步任务执行失败 [%s]: %v", name, err)
+				WriteLog(LogError, "💥 异步任务执行失败 [%s]: %v", name, err)
 			}
 		}
 	}()
@@ -67,7 +71,7 @@ func (tm *TaskManager) Shutdown(timeout time.Duration) error {
 		return nil
 	}
 
-	writeLog(LogInfo, "🛑 正在关闭任务管理器...")
+	WriteLog(LogInfo, "🛑 正在关闭任务管理器...")
 	tm.cancel()
 
 	done := make(chan struct{})
@@ -78,10 +82,10 @@ func (tm *TaskManager) Shutdown(timeout time.Duration) error {
 
 	select {
 	case <-done:
-		writeLog(LogInfo, "✅ 任务管理器已安全关闭")
+		WriteLog(LogInfo, "✅ 任务管理器已安全关闭")
 		return nil
 	case <-time.After(timeout):
-		writeLog(LogWarn, "⏰ 任务管理器关闭超时")
+		WriteLog(LogWarn, "⏰ 任务管理器关闭超时")
 		return fmt.Errorf("🕐 shutdown timeout")
 	}
 }

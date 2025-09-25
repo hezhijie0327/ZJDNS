@@ -1,5 +1,10 @@
-package main
+package dns
 
+import (
+	"strings"
+)
+
+// NewUpstreamManager 创建新的上游服务器管理器
 func NewUpstreamManager(servers []UpstreamServer) *UpstreamManager {
 	activeServers := make([]*UpstreamServer, 0, len(servers))
 
@@ -16,8 +21,13 @@ func NewUpstreamManager(servers []UpstreamServer) *UpstreamManager {
 	}
 }
 
+// GetServers 获取上游服务器列表
 func (um *UpstreamManager) GetServers() []*UpstreamServer {
 	um.mu.RLock()
 	defer um.mu.RUnlock()
 	return um.servers
+}
+
+func (u *UpstreamServer) IsRecursive() bool {
+	return strings.ToLower(u.Address) == RecursiveServerIndicator
 }

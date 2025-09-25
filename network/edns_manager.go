@@ -1,4 +1,4 @@
-package main
+package network
 
 import (
 	"fmt"
@@ -7,11 +7,14 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+
+	"zjdns/utils"
 )
 
+// NewEDNSManager 创建新的EDNS管理器
 func NewEDNSManager(defaultSubnet string, paddingEnabled bool) (*EDNSManager, error) {
 	manager := &EDNSManager{
-		detector:       NewIPDetector(),
+		detector:       utils.NewIPDetector(),
 		paddingEnabled: paddingEnabled,
 	}
 
@@ -22,17 +25,18 @@ func NewEDNSManager(defaultSubnet string, paddingEnabled bool) (*EDNSManager, er
 		}
 		manager.defaultECS = ecs
 		if ecs != nil {
-			writeLog(LogInfo, "🌍 默认ECS配置: %s/%d", ecs.Address, ecs.SourcePrefix)
+			utils.WriteLog(utils.LogInfo, "🌍 默认ECS配置: %s/%d", ecs.Address, ecs.SourcePrefix)
 		}
 	}
 
 	if paddingEnabled {
-		writeLog(LogInfo, "📦 DNS Padding已启用 (块大小: %d字节)", DNSPaddingBlockSizeBytes)
+		utils.WriteLog(utils.LogInfo, "📦 DNS Padding已启用 (块大小: %d字节)", DNSPaddingBlockSizeBytes)
 	}
 
 	return manager, nil
 }
 
+// GetDefaultECS 获取默认ECS选项
 func (em *EDNSManager) GetDefaultECS() *ECSOption {
 	if em == nil {
 		return nil
@@ -40,10 +44,12 @@ func (em *EDNSManager) GetDefaultECS() *ECSOption {
 	return em.defaultECS
 }
 
+// IsPaddingEnabled 检查是否启用Padding
 func (em *EDNSManager) IsPaddingEnabled() bool {
 	return em != nil && em.paddingEnabled
 }
 
+// calculatePaddingSize 计算Padding大小
 func (em *EDNSManager) calculatePaddingSize(currentSize int) int {
 	// 检查是否启用padding，以及当前大小是否有效
 	if !em.paddingEnabled || currentSize <= 0 {
@@ -150,7 +156,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 			Address:       ecs.Address,
 		}
 		options = append(options, ecsOption)
-		writeLog(LogDebug, "🌍 添加ECS选项: %s/%d", ecs.Address, ecs.SourcePrefix)
+		utils.WriteLog(utils.LogDebug, "🌍 添加ECS选项: %s/%d", ecs.Address, ecs.SourcePrefix)
 	}
 
 	// 添加Padding选项（仅对安全连接）
@@ -201,12 +207,12 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 				if newPaddingSize >= 0 {
 					paddingOption.Padding = make([]byte, newPaddingSize)
 					options = append(options, paddingOption)
-					writeLog(LogDebug, "📦 DNS Padding: %d -> %d 字节 (+%d)",
+					utils.WriteLog(utils.LogDebug, "📦 DNS Padding: %d -> %d 字节 (+%d)",
 						currentSize, DNSPaddingMaxSizeBytes, newPaddingSize)
 				}
 			} else {
 				options = append(options, paddingOption)
-				writeLog(LogDebug, "📦 DNS Padding: %d -> %d 字节 (+%d)",
+				utils.WriteLog(utils.LogDebug, "📦 DNS Padding: %d -> %d 字节 (+%d)",
 					currentSize, finalSize, paddingSize)
 			}
 		}

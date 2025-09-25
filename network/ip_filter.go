@@ -1,4 +1,4 @@
-package main
+package network
 
 import (
 	"bufio"
@@ -7,8 +7,11 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"zjdns/utils"
 )
 
+// NewIPFilter 创建新的IP过滤器
 func NewIPFilter() *IPFilter {
 	return &IPFilter{
 		trustedCIDRs:   make([]*net.IPNet, 0, MaxTrustedIPv4CIDRs),
@@ -16,13 +19,14 @@ func NewIPFilter() *IPFilter {
 	}
 }
 
+// LoadCIDRs 从文件加载CIDR
 func (f *IPFilter) LoadCIDRs(filename string) error {
 	if filename == "" {
-		writeLog(LogInfo, "🌍 IP过滤器未配置文件路径")
+		utils.WriteLog(utils.LogInfo, "🌍 IP过滤器未配置文件路径")
 		return nil
 	}
 
-	if !isValidFilePath(filename) {
+	if !utils.IsValidFilePath(filename) {
 		return fmt.Errorf("❌ 无效的文件路径: %s", filename)
 	}
 
@@ -32,7 +36,7 @@ func (f *IPFilter) LoadCIDRs(filename string) error {
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			writeLog(LogWarn, "⚠️ 关闭CIDR文件失败: %v", closeErr)
+			utils.WriteLog(utils.LogWarn, "⚠️ 关闭CIDR文件失败: %v", closeErr)
 		}
 	}()
 
@@ -66,7 +70,7 @@ func (f *IPFilter) LoadCIDRs(filename string) error {
 	}
 
 	f.optimizeCIDRs()
-	writeLog(LogInfo, "🌍 IP过滤器加载完成: IPv4=%d条, IPv6=%d条", totalV4, totalV6)
+	utils.WriteLog(utils.LogInfo, "🌍 IP过滤器加载完成: IPv4=%d条, IPv6=%d条", totalV4, totalV6)
 	return scanner.Err()
 }
 
@@ -84,6 +88,7 @@ func (f *IPFilter) optimizeCIDRs() {
 	})
 }
 
+// IsTrustedIP 检查IP是否为可信IP
 func (f *IPFilter) IsTrustedIP(ip net.IP) bool {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -104,6 +109,7 @@ func (f *IPFilter) IsTrustedIP(ip net.IP) bool {
 	return false
 }
 
+// HasData 检查是否有数据
 func (f *IPFilter) HasData() bool {
 	f.mu.RLock()
 	defer f.mu.RUnlock()

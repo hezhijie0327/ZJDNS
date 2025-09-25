@@ -4,6 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"zjdns/config"
+	"zjdns/dns"
+	"zjdns/utils"
 )
 
 func main() {
@@ -24,23 +28,23 @@ func main() {
 	flag.Parse()
 
 	if generateConfig {
-		fmt.Println(GenerateExampleConfig())
+		fmt.Println(config.GenerateExampleConfig())
 		return
 	}
 
-	config, err := LoadConfig(configFile)
+	config, err := config.LoadConfig(configFile)
 	if err != nil {
-		customLogger.Fatalf("💥 配置加载失败: %v", err)
+		utils.GetLogger().Fatalf("💥 配置加载失败: %v", err)
 	}
 
-	server, err := NewDNSServer(config)
+	server, err := dns.NewDNSServer(config)
 	if err != nil {
-		customLogger.Fatalf("💥 服务器创建失败: %v", err)
+		utils.GetLogger().Fatalf("💥 服务器创建失败: %v", err)
 	}
 
-	writeLog(LogInfo, "🎉 ZJDNS Server 启动成功!")
+	utils.WriteLog(utils.LogInfo, "🎉 ZJDNS Server 启动成功!")
 
 	if err := server.Start(); err != nil {
-		customLogger.Fatalf("💥 服务器启动失败: %v", err)
+		utils.GetLogger().Fatalf("💥 服务器启动失败: %v", err)
 	}
 }

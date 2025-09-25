@@ -1,4 +1,4 @@
-package main
+package dns
 
 import (
 	"fmt"
@@ -7,14 +7,17 @@ import (
 	"github.com/miekg/dns"
 )
 
+// NewDNSHijackPrevention 创建新的DNS劫持预防器
 func NewDNSHijackPrevention(enabled bool) *DNSHijackPrevention {
 	return &DNSHijackPrevention{enabled: enabled}
 }
 
+// IsEnabled 检查劫持预防是否启用
 func (shp *DNSHijackPrevention) IsEnabled() bool {
 	return shp.enabled
 }
 
+// CheckResponse 检查响应是否为劫持响应
 func (shp *DNSHijackPrevention) CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string) {
 	if !shp.enabled || response == nil {
 		return true, ""

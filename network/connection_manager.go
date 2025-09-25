@@ -1,4 +1,4 @@
-package main
+package network
 
 import (
 	"errors"
@@ -6,8 +6,11 @@ import (
 	"sync/atomic"
 
 	"github.com/miekg/dns"
+
+	"zjdns/utils"
 )
 
+// NewConnectionPoolManager 创建新的连接池管理器
 func NewConnectionPoolManager() *ConnectionPoolManager {
 	return &ConnectionPoolManager{
 		clients:       make(chan *dns.Client, 50),
@@ -16,6 +19,7 @@ func NewConnectionPoolManager() *ConnectionPoolManager {
 	}
 }
 
+// createClient 创建新的DNS客户端
 func (cpm *ConnectionPoolManager) createClient() *dns.Client {
 	return &dns.Client{
 		Timeout:        cpm.timeout,
@@ -25,6 +29,7 @@ func (cpm *ConnectionPoolManager) createClient() *dns.Client {
 	}
 }
 
+// GetUDPClient 获取UDP客户端
 func (cpm *ConnectionPoolManager) GetUDPClient() *dns.Client {
 	if atomic.LoadInt32(&cpm.closed) != 0 {
 		return cpm.createClient()
@@ -38,6 +43,7 @@ func (cpm *ConnectionPoolManager) GetUDPClient() *dns.Client {
 	}
 }
 
+// GetTCPClient 获取TCP客户端
 func (cpm *ConnectionPoolManager) GetTCPClient() *dns.Client {
 	return &dns.Client{
 		Timeout:        cpm.timeout,
@@ -57,8 +63,8 @@ func (cpm *ConnectionPoolManager) GetSecureClient(protocol, addr, serverName str
 	if client, exists := cpm.secureClients[cacheKey]; exists {
 		cpm.mu.RUnlock()
 
-		if unifiedClient, ok := client.(*UnifiedSecureClient); ok && unifiedClient != nil {
-			if unifiedClient.isConnectionAlive() {
+		if unifiedClient, ok := client.(interface{ IsConnectionAlive() bool }); ok && unifiedClient != nil {
+			if unifiedClient.IsConnectionAlive() {
 				return client, nil
 			} else {
 				cpm.cleanupClient(cacheKey, client)
@@ -68,18 +74,9 @@ func (cpm *ConnectionPoolManager) GetSecureClient(protocol, addr, serverName str
 		cpm.mu.RUnlock()
 	}
 
-	client, err := NewUnifiedSecureClient(protocol, addr, serverName, skipVerify)
-	if err != nil {
-		return nil, err
-	}
-
-	cpm.mu.Lock()
-	if atomic.LoadInt32(&cpm.closed) == 0 {
-		cpm.secureClients[cacheKey] = client
-	}
-	cpm.mu.Unlock()
-
-	return client, nil
+	// 注意：这里我们不能直接调用dns.NewUnifiedSecureClient，因为会导致循环导入
+	// 需要在dns包中通过其他方式处理
+	return nil, errors.New("🔒 安全客户端创建未实现")
 }
 
 func (cpm *ConnectionPoolManager) cleanupClient(key string, client SecureClient) {
@@ -89,9 +86,9 @@ func (cpm *ConnectionPoolManager) cleanupClient(key string, client SecureClient)
 	if currentClient, exists := cpm.secureClients[key]; exists && currentClient == client {
 		delete(cpm.secureClients, key)
 		go func() {
-			defer func() { handlePanicWithContext("连接清理") }()
+			defer func() { utils.HandlePanicWithContext("连接清理") }()
 			if err := client.Close(); err != nil {
-				writeLog(LogWarn, "⚠️ 安全客户端关闭失败: %v", err)
+				utils.WriteLog(utils.LogWarn, "⚠️ 安全客户端关闭失败: %v", err)
 			}
 		}()
 	}
@@ -112,14 +109,14 @@ func (cpm *ConnectionPoolManager) Close() error {
 		return nil
 	}
 
-	writeLog(LogInfo, "🏊 正在关闭连接池...")
+	utils.WriteLog(utils.LogInfo, "🏊 正在关闭连接池...")
 
 	cpm.mu.Lock()
 	defer cpm.mu.Unlock()
 
 	for key, client := range cpm.secureClients {
 		if err := client.Close(); err != nil {
-			writeLog(LogWarn, "⚠️ 关闭安全客户端失败 [%s]: %v", key, err)
+			utils.WriteLog(utils.LogWarn, "⚠️ 关闭安全客户端失败 [%s]: %v", key, err)
 		}
 	}
 	cpm.secureClients = make(map[string]SecureClient)
@@ -128,6 +125,6 @@ func (cpm *ConnectionPoolManager) Close() error {
 	for range cpm.clients {
 	}
 
-	writeLog(LogInfo, "✅ 连接池已关闭")
+	utils.WriteLog(utils.LogInfo, "✅ 连接池已关闭")
 	return nil
 }

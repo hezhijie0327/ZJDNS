@@ -1,10 +1,9 @@
-package main
+package cache
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 
 	"sync/atomic"
 	"time"
@@ -13,9 +12,13 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/hitless"
 	"github.com/redis/go-redis/v9/logging"
+
+	"zjdns/types"
+	"zjdns/utils"
 )
 
-func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisDNSCache, error) {
+// NewRedisDNSCache 创建新的Redis DNS缓存实例
+func NewRedisDNSCache(config *types.ServerConfig, server types.RecursiveDNSServer) (*RedisDNSCache, error) {
 	// 使用go-redis内置的VoidLogger来禁用日志
 	logging.Disable()
 
@@ -23,20 +26,20 @@ func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisD
 		Addr:            config.Redis.Address,
 		Password:        config.Redis.Password,
 		DB:              config.Redis.Database,
-		PoolSize:        RedisConnectionPoolSize,
-		MinIdleConns:    RedisMinIdleConnections,
-		MaxRetries:      RedisMaxRetryAttempts,
-		PoolTimeout:     RedisConnectionPoolTimeout,
-		ReadTimeout:     RedisReadTimeout,
-		WriteTimeout:    RedisWriteTimeout,
-		DialTimeout:     RedisDialTimeout,
+		PoolSize:        types.RedisConnectionPoolSize,
+		MinIdleConns:    types.RedisMinIdleConnections,
+		MaxRetries:      types.RedisMaxRetryAttempts,
+		PoolTimeout:     types.RedisConnectionPoolTimeout,
+		ReadTimeout:     types.RedisReadTimeout,
+		WriteTimeout:    types.RedisWriteTimeout,
+		DialTimeout:     types.RedisDialTimeout,
 		DisableIdentity: true, // 禁用CLIENT SETINFO命令，包括maint_notifications
 		HitlessUpgradeConfig: &hitless.Config{
 			Mode: hitless.MaintNotificationsDisabled, // 明确禁用维护通知功能
 		},
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), StandardOperationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), types.StandardOperationTimeout)
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
@@ -48,10 +51,10 @@ func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisD
 		client:       rdb,
 		config:       config,
 		keyPrefix:    config.Redis.KeyPrefix,
-		refreshQueue: make(chan RefreshRequest, CacheRefreshQueueSize),
+		refreshQueue: make(chan RefreshRequest, types.CacheRefreshQueueSize),
 		ctx:          cacheCtx,
 		cancel:       cacheCancel,
-		taskManager:  NewTaskManager(10),
+		taskManager:  utils.NewTaskManager(10),
 		server:       server,
 	}
 
@@ -59,10 +62,11 @@ func NewRedisDNSCache(config *ServerConfig, server *RecursiveDNSServer) (*RedisD
 		cache.startRefreshProcessor()
 	}
 
-	writeLog(LogInfo, "✅ Redis缓存系统初始化完成")
+	utils.WriteLog(utils.LogInfo, "✅ Redis缓存系统初始化完成")
 	return cache, nil
 }
 
+// startRefreshProcessor 启动缓存刷新处理器
 func (rc *RedisDNSCache) startRefreshProcessor() {
 	workerCount := 2
 
@@ -70,7 +74,7 @@ func (rc *RedisDNSCache) startRefreshProcessor() {
 		rc.wg.Add(1)
 		go func(workerID int) {
 			defer rc.wg.Done()
-			defer func() { handlePanicWithContext(fmt.Sprintf("Redis刷新Worker %d", workerID)) }()
+			defer func() { utils.HandlePanicWithContext(fmt.Sprintf("Redis刷新Worker %d", workerID)) }()
 
 			for {
 				select {
@@ -84,15 +88,16 @@ func (rc *RedisDNSCache) startRefreshProcessor() {
 	}
 }
 
+// handleRefreshRequest 处理缓存刷新请求
 func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
-	defer func() { handlePanicWithContext("Redis刷新请求处理") }()
+	defer func() { utils.HandlePanicWithContext("Redis刷新请求处理") }()
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
 	}
 
 	answer, authority, additional, validated, ecsResponse, err := rc.server.QueryForRefresh(
-		req.Question, req.ECS, req.ServerDNSSECEnabled)
+		req.Question, (*types.ECSOption)(req.ECS), req.ServerDNSSECEnabled)
 
 	if err != nil {
 		rc.updateRefreshTime(req.CacheKey)
@@ -100,7 +105,7 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 	}
 
 	// 对A和AAAA记录进行测速和排序（如果启用了speedtest功能）
-	if len(rc.server.config.Speedtest) > 0 && (req.Question.Qtype == dns.TypeA || req.Question.Qtype == dns.TypeAAAA) {
+	if len(rc.server.GetConfig().Speedtest) > 0 && (req.Question.Qtype == dns.TypeA || req.Question.Qtype == dns.TypeAAAA) {
 		// 构建临时消息用于测速
 		tempMsg := &dns.Msg{
 			Answer: answer,
@@ -109,7 +114,7 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 		}
 
 		// 执行测速和排序
-		speedTester := NewSpeedTester(*rc.server.config)
+		speedTester := utils.NewSpeedTester(rc.server.GetConfig().Speedtest)
 		speedTester.PerformSpeedTestAndSort(tempMsg)
 
 		// 更新记录
@@ -123,13 +128,46 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 	allRRs = append(allRRs, authority...)
 	allRRs = append(allRRs, additional...)
 
-	cacheTTL := globalCacheUtils.CalculateTTL(allRRs)
+	cacheTTL := utils.GlobalCacheUtils.CalculateTTL(allRRs)
 	now := time.Now().Unix()
 
+	// 转换utils.CompactDNSRecord到cache.CompactDNSRecord
+	answerRecords := utils.GlobalRecordHandler.CompactRecords(answer)
+	authorityRecords := utils.GlobalRecordHandler.CompactRecords(authority)
+	additionalRecords := utils.GlobalRecordHandler.CompactRecords(additional)
+
+	answerCacheRecords := make([]*CompactDNSRecord, len(answerRecords))
+	authorityCacheRecords := make([]*CompactDNSRecord, len(authorityRecords))
+	additionalCacheRecords := make([]*CompactDNSRecord, len(additionalRecords))
+
+	for i, record := range answerRecords {
+		answerCacheRecords[i] = &CompactDNSRecord{
+			Text:    record.Text,
+			OrigTTL: record.OrigTTL,
+			Type:    record.Type,
+		}
+	}
+
+	for i, record := range authorityRecords {
+		authorityCacheRecords[i] = &CompactDNSRecord{
+			Text:    record.Text,
+			OrigTTL: record.OrigTTL,
+			Type:    record.Type,
+		}
+	}
+
+	for i, record := range additionalRecords {
+		additionalCacheRecords[i] = &CompactDNSRecord{
+			Text:    record.Text,
+			OrigTTL: record.OrigTTL,
+			Type:    record.Type,
+		}
+	}
+
 	entry := &CacheEntry{
-		Answer:      globalRecordHandler.CompactRecords(answer),
-		Authority:   globalRecordHandler.CompactRecords(authority),
-		Additional:  globalRecordHandler.CompactRecords(additional),
+		Answer:      answerCacheRecords,
+		Authority:   authorityCacheRecords,
+		Additional:  additionalCacheRecords,
 		TTL:         cacheTTL,
 		OriginalTTL: cacheTTL,
 		Timestamp:   now,
@@ -153,14 +191,15 @@ func (rc *RedisDNSCache) handleRefreshRequest(req RefreshRequest) {
 	fullKey := rc.keyPrefix + req.CacheKey
 	expiration := time.Duration(cacheTTL) * time.Second
 	if rc.config.Server.Features.ServeStale {
-		expiration += time.Duration(StaleMaxAgeSeconds) * time.Second
+		expiration += time.Duration(types.CacheStaleMaxAgeSeconds) * time.Second
 	}
 
 	rc.client.Set(rc.ctx, fullKey, data, expiration)
 }
 
+// updateRefreshTime 更新缓存刷新时间
 func (rc *RedisDNSCache) updateRefreshTime(cacheKey string) {
-	defer func() { handlePanicWithContext("更新刷新时间") }()
+	defer func() { utils.HandlePanicWithContext("更新刷新时间") }()
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -188,7 +227,7 @@ func (rc *RedisDNSCache) updateRefreshTime(cacheKey string) {
 }
 
 func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
-	defer func() { handlePanicWithContext("Redis缓存获取") }()
+	defer func() { utils.HandlePanicWithContext("Redis缓存获取") }()
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return nil, false, false
@@ -202,9 +241,9 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	var entry CacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		writeLog(LogDebug, "💥 缓存条目解析失败: %v", err)
+		utils.WriteLog(utils.LogDebug, "💥 缓存条目解析失败: %v", err)
 		go func() {
-			defer func() { handlePanicWithContext("清理损坏缓存") }()
+			defer func() { utils.HandlePanicWithContext("清理损坏缓存") }()
 			rc.client.Del(context.Background(), fullKey)
 		}()
 		return nil, false, false
@@ -213,7 +252,7 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	// 检查是否需要删除过期缓存
 	if entry.IsStale() {
 		go func() {
-			defer func() { handlePanicWithContext("清理过期缓存") }()
+			defer func() { utils.HandlePanicWithContext("清理过期缓存") }()
 			rc.client.Del(context.Background(), fullKey)
 		}()
 		return nil, false, false
@@ -221,7 +260,7 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	entry.AccessTime = time.Now().Unix()
 	go func() {
-		defer func() { handlePanicWithContext("更新访问时间") }()
+		defer func() { utils.HandlePanicWithContext("更新访问时间") }()
 		rc.updateAccessInfo(fullKey, &entry)
 	}()
 
@@ -229,7 +268,7 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	if !rc.config.Server.Features.ServeStale && isExpired {
 		go func() {
-			defer func() { handlePanicWithContext("清理过期缓存") }()
+			defer func() { utils.HandlePanicWithContext("清理过期缓存") }()
 			rc.client.Del(context.Background(), fullKey)
 		}()
 		return nil, false, false
@@ -238,8 +277,8 @@ func (rc *RedisDNSCache) Get(key string) (*CacheEntry, bool, bool) {
 	return &entry, true, isExpired
 }
 
-func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
-	defer func() { handlePanicWithContext("Redis缓存设置") }()
+func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *types.ECSOption) {
+	defer func() { utils.HandlePanicWithContext("Redis缓存设置") }()
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -250,13 +289,46 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 	allRRs = append(allRRs, authority...)
 	allRRs = append(allRRs, additional...)
 
-	cacheTTL := globalCacheUtils.CalculateTTL(allRRs)
+	cacheTTL := utils.GlobalCacheUtils.CalculateTTL(allRRs)
 	now := time.Now().Unix()
 
+	// 转换utils.CompactDNSRecord到cache.CompactDNSRecord
+	answerRecords2 := utils.GlobalRecordHandler.CompactRecords(answer)
+	authorityRecords2 := utils.GlobalRecordHandler.CompactRecords(authority)
+	additionalRecords2 := utils.GlobalRecordHandler.CompactRecords(additional)
+
+	answerCacheRecords2 := make([]*CompactDNSRecord, len(answerRecords2))
+	authorityCacheRecords2 := make([]*CompactDNSRecord, len(authorityRecords2))
+	additionalCacheRecords2 := make([]*CompactDNSRecord, len(additionalRecords2))
+
+	for i, record := range answerRecords2 {
+		answerCacheRecords2[i] = &CompactDNSRecord{
+			Text:    record.Text,
+			OrigTTL: record.OrigTTL,
+			Type:    record.Type,
+		}
+	}
+
+	for i, record := range authorityRecords2 {
+		authorityCacheRecords2[i] = &CompactDNSRecord{
+			Text:    record.Text,
+			OrigTTL: record.OrigTTL,
+			Type:    record.Type,
+		}
+	}
+
+	for i, record := range additionalRecords2 {
+		additionalCacheRecords2[i] = &CompactDNSRecord{
+			Text:    record.Text,
+			OrigTTL: record.OrigTTL,
+			Type:    record.Type,
+		}
+	}
+
 	entry := &CacheEntry{
-		Answer:      globalRecordHandler.CompactRecords(answer),
-		Authority:   globalRecordHandler.CompactRecords(authority),
-		Additional:  globalRecordHandler.CompactRecords(additional),
+		Answer:      answerCacheRecords2,
+		Authority:   authorityCacheRecords2,
+		Additional:  additionalCacheRecords2,
 		TTL:         cacheTTL,
 		OriginalTTL: cacheTTL,
 		Timestamp:   now,
@@ -280,14 +352,15 @@ func (rc *RedisDNSCache) Set(key string, answer, authority, additional []dns.RR,
 	fullKey := rc.keyPrefix + key
 	expiration := time.Duration(cacheTTL) * time.Second
 	if rc.config.Server.Features.ServeStale {
-		expiration += time.Duration(StaleMaxAgeSeconds) * time.Second
+		expiration += time.Duration(types.CacheStaleMaxAgeSeconds) * time.Second
 	}
 
 	rc.client.Set(rc.ctx, fullKey, data, expiration)
 }
 
+// updateAccessInfo 更新缓存访问信息
 func (rc *RedisDNSCache) updateAccessInfo(fullKey string, entry *CacheEntry) {
-	defer func() { handlePanicWithContext("Redis访问信息更新") }()
+	defer func() { utils.HandlePanicWithContext("Redis访问信息更新") }()
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -316,10 +389,10 @@ func (rc *RedisDNSCache) Shutdown() {
 		return
 	}
 
-	writeLog(LogInfo, "💾 正在关闭Redis缓存...")
+	utils.WriteLog(utils.LogInfo, "💾 正在关闭Redis缓存...")
 
 	if err := rc.taskManager.Shutdown(5 * time.Second); err != nil {
-		writeLog(LogError, "💥 任务管理器关闭失败: %v", err)
+		utils.WriteLog(utils.LogError, "💥 任务管理器关闭失败: %v", err)
 	}
 
 	rc.cancel()
@@ -337,77 +410,8 @@ func (rc *RedisDNSCache) Shutdown() {
 	}
 
 	if err := rc.client.Close(); err != nil {
-		writeLog(LogError, "💥 Redis客户端关闭失败: %v", err)
+		utils.WriteLog(utils.LogError, "💥 Redis客户端关闭失败: %v", err)
 	}
 
-	writeLog(LogInfo, "✅ Redis缓存已关闭")
-}
-
-func (c *CacheEntry) IsExpired() bool {
-	if c == nil {
-		return true
-	}
-	return time.Now().Unix()-c.Timestamp > int64(c.TTL)
-}
-
-func (c *CacheEntry) IsStale() bool {
-	if c == nil {
-		return true
-	}
-	return time.Now().Unix()-c.Timestamp > int64(c.TTL+StaleMaxAgeSeconds)
-}
-
-func (c *CacheEntry) ShouldRefresh() bool {
-	if c == nil {
-		return false
-	}
-
-	now := time.Now().Unix()
-	refreshInterval := int64(c.OriginalTTL)
-	if refreshInterval <= 0 {
-		refreshInterval = int64(c.TTL)
-	}
-
-	return c.IsExpired() &&
-		(now-c.Timestamp) > refreshInterval &&
-		(now-c.RefreshTime) > refreshInterval
-}
-
-func (c *CacheEntry) GetRemainingTTL() uint32 {
-	if c == nil {
-		return 0
-	}
-
-	now := time.Now().Unix()
-	elapsed := now - c.Timestamp
-	remaining := int64(c.TTL) - elapsed
-
-	if remaining > 0 {
-		return uint32(remaining)
-	}
-
-	staleElapsed := elapsed - int64(c.TTL)
-	staleCycle := staleElapsed % int64(StaleTTLSeconds)
-	staleTTLRemaining := int64(StaleTTLSeconds) - staleCycle
-
-	if staleTTLRemaining <= 0 {
-		staleTTLRemaining = int64(StaleTTLSeconds)
-	}
-
-	return uint32(staleTTLRemaining)
-}
-
-func (c *CacheEntry) GetECSOption() *ECSOption {
-	if c == nil || c.ECSAddress == "" {
-		return nil
-	}
-	if ip := net.ParseIP(c.ECSAddress); ip != nil {
-		return &ECSOption{
-			Family:       c.ECSFamily,
-			SourcePrefix: c.ECSSourcePrefix,
-			ScopePrefix:  c.ECSScopePrefix,
-			Address:      ip,
-		}
-	}
-	return nil
+	utils.WriteLog(utils.LogInfo, "✅ Redis缓存已关闭")
 }

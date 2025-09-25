@@ -1,4 +1,4 @@
-package main
+package security
 
 import (
 	"context"
@@ -21,8 +21,11 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/http2"
+
+	"zjdns/utils"
 )
 
+// NewUnifiedSecureClient 创建新的统一安全客户端
 func NewUnifiedSecureClient(protocol, addr, serverName string, skipVerify bool) (*UnifiedSecureClient, error) {
 	client := &UnifiedSecureClient{
 		protocol:     strings.ToLower(protocol),
@@ -82,10 +85,10 @@ func (c *UnifiedSecureClient) connectTLS(host, port string) error {
 
 	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
 		if keepAliveErr := tcpConn.SetKeepAlive(true); keepAliveErr != nil {
-			writeLog(LogDebug, "⚠️ 设置TCP KeepAlive失败: %v", keepAliveErr)
+			utils.WriteLog(utils.LogDebug, "⚠️ 设置TCP KeepAlive失败: %v", keepAliveErr)
 		}
 		if keepAlivePeriodErr := tcpConn.SetKeepAlivePeriod(SecureConnKeepAlive); keepAlivePeriodErr != nil {
-			writeLog(LogDebug, "⚠️ 设置TCP KeepAlive周期失败: %v", keepAlivePeriodErr)
+			utils.WriteLog(utils.LogDebug, "⚠️ 设置TCP KeepAlive周期失败: %v", keepAlivePeriodErr)
 		}
 	}
 
@@ -137,6 +140,7 @@ func (c *UnifiedSecureClient) isConnectionAlive() bool {
 	return false
 }
 
+// Exchange 执行DNS交换
 func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, error) {
 	switch c.protocol {
 	case "https", "http3":
@@ -149,7 +153,7 @@ func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, err
 		}
 		resp, err := c.exchangeTLS(msg)
 		if err != nil && globalSecureConnErrorHandler.IsRetryableError("tls", err) {
-			writeLog(LogDebug, "🔄 TLS连接错误，尝试重连: %v", err)
+			utils.WriteLog(utils.LogDebug, "🔄 TLS连接错误，尝试重连: %v", err)
 			if c.connect(addr) == nil {
 				return c.exchangeTLS(msg)
 			}
@@ -177,11 +181,11 @@ func (c *UnifiedSecureClient) exchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 
 	deadline := time.Now().Add(c.timeout)
 	if deadlineErr := c.tlsConn.SetDeadline(deadline); deadlineErr != nil {
-		writeLog(LogDebug, "⚠️ 设置TLS连接截止时间失败: %v", deadlineErr)
+		utils.WriteLog(utils.LogDebug, "⚠️ 设置TLS连接截止时间失败: %v", deadlineErr)
 	}
 	defer func() {
 		if deadlineErr := c.tlsConn.SetDeadline(time.Time{}); deadlineErr != nil {
-			writeLog(LogDebug, "⚠️ 重置TLS连接截止时间失败: %v", deadlineErr)
+			utils.WriteLog(utils.LogDebug, "⚠️ 重置TLS连接截止时间失败: %v", deadlineErr)
 		}
 	}()
 
@@ -258,7 +262,7 @@ func (c *UnifiedSecureClient) exchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error)
 	}
 	defer func() {
 		if closeErr := stream.Close(); closeErr != nil {
-			writeLog(LogDebug, "⚠️ 关闭QUIC流失败: %v", closeErr)
+			utils.WriteLog(utils.LogDebug, "⚠️ 关闭QUIC流失败: %v", closeErr)
 		}
 	}()
 
@@ -277,7 +281,7 @@ func (c *UnifiedSecureClient) exchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error)
 	}
 
 	if err := stream.Close(); err != nil {
-		writeLog(LogDebug, "⚠️ 关闭QUIC流写方向失败: %v", err)
+		utils.WriteLog(utils.LogDebug, "⚠️ 关闭QUIC流写方向失败: %v", err)
 	}
 
 	resp, err := c.readQUICMsg(stream)
@@ -303,7 +307,7 @@ func (c *UnifiedSecureClient) readQUICMsg(stream *quic.Stream) (*dns.Msg, error)
 
 	msgLen := binary.BigEndian.Uint16(respBuf[:2])
 	if int(msgLen) != n-2 {
-		writeLog(LogDebug, "⚠️ QUIC响应长度不匹配: 声明=%d, 实际=%d", msgLen, n-2)
+		utils.WriteLog(utils.LogDebug, "⚠️ QUIC响应长度不匹配: 声明=%d, 实际=%d", msgLen, n-2)
 	}
 
 	response := new(dns.Msg)
@@ -314,6 +318,7 @@ func (c *UnifiedSecureClient) readQUICMsg(stream *quic.Stream) (*dns.Msg, error)
 	return response, nil
 }
 
+// Close 关闭安全客户端
 func (c *UnifiedSecureClient) Close() error {
 	if c == nil {
 		return nil
@@ -326,14 +331,14 @@ func (c *UnifiedSecureClient) Close() error {
 	case "tls":
 		if c.tlsConn != nil {
 			if closeErr := c.tlsConn.Close(); closeErr != nil {
-				writeLog(LogDebug, "⚠️ 关闭TLS连接失败: %v", closeErr)
+				utils.WriteLog(utils.LogDebug, "⚠️ 关闭TLS连接失败: %v", closeErr)
 			}
 			c.tlsConn = nil
 		}
 	case "quic":
 		if c.quicConn != nil {
 			if closeErr := c.quicConn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
-				writeLog(LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
+				utils.WriteLog(utils.LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
 			}
 			c.quicConn = nil
 			c.isQUICConnected = false
@@ -341,7 +346,7 @@ func (c *UnifiedSecureClient) Close() error {
 	case "https", "http3":
 		if c.dohClient != nil {
 			if closeErr := c.dohClient.Close(); closeErr != nil {
-				writeLog(LogDebug, "⚠️ 关闭DoH客户端失败: %v", closeErr)
+				utils.WriteLog(utils.LogDebug, "⚠️ 关闭DoH客户端失败: %v", closeErr)
 			}
 			c.dohClient = nil
 		}
@@ -350,6 +355,7 @@ func (c *UnifiedSecureClient) Close() error {
 	return nil
 }
 
+// NewDoHClient 创建新的DoH客户端
 func NewDoHClient(addr, serverName string, skipVerify bool, timeout time.Duration) (*DoHClient, error) {
 	parsedURL, err := url.Parse(addr)
 	if err != nil {
@@ -428,7 +434,7 @@ func (c *DoHClient) Exchange(msg *dns.Msg) (*dns.Msg, error) {
 
 	if err != nil {
 		if _, resetErr := c.resetClient(err); resetErr != nil {
-			writeLog(LogDebug, "⚠️ 重置客户端失败: %v", resetErr)
+			utils.WriteLog(utils.LogDebug, "⚠️ 重置客户端失败: %v", resetErr)
 		}
 		return nil, err
 	}
@@ -480,7 +486,7 @@ func (c *DoHClient) exchangeHTTPS(client *http.Client, req *dns.Msg) (*dns.Msg, 
 	}
 	defer func() {
 		if closeErr := httpResp.Body.Close(); closeErr != nil {
-			writeLog(LogDebug, "⚠️ 关闭HTTP响应体失败: %v", closeErr)
+			utils.WriteLog(utils.LogDebug, "⚠️ 关闭HTTP响应体失败: %v", closeErr)
 		}
 	}()
 
@@ -537,10 +543,10 @@ func (c *DoHClient) createClient() (*http.Client, error) {
 func (c *DoHClient) createTransport() (http.RoundTripper, error) {
 	if c.supportsHTTP3() {
 		if transport, err := c.createTransportH3(); err == nil {
-			writeLog(LogDebug, "⚡ DoH客户端使用HTTP/3: %s", c.addrRedacted)
+			utils.WriteLog(utils.LogDebug, "⚡ DoH客户端使用HTTP/3: %s", c.addrRedacted)
 			return transport, nil
 		} else {
-			writeLog(LogDebug, "🔙 HTTP/3连接失败，回退到HTTP/2: %v", err)
+			utils.WriteLog(utils.LogDebug, "🔙 HTTP/3连接失败，回退到HTTP/2: %v", err)
 		}
 	}
 
@@ -579,7 +585,7 @@ func (c *DoHClient) createTransportH3() (http.RoundTripper, error) {
 	}
 
 	if closeErr := conn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
-		writeLog(LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
+		utils.WriteLog(utils.LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
 	}
 
 	return nil, errors.New("💥 DoH3传输创建失败")
@@ -617,7 +623,7 @@ func (c *DoHClient) closeClient(client *http.Client) {
 	if c.isHTTP3(client) {
 		if closer, ok := client.Transport.(io.Closer); ok {
 			if closeErr := closer.Close(); closeErr != nil {
-				writeLog(LogDebug, "⚠️ 关闭HTTP3传输失败: %v", closeErr)
+				utils.WriteLog(utils.LogDebug, "⚠️ 关闭HTTP3传输失败: %v", closeErr)
 			}
 		}
 	}
