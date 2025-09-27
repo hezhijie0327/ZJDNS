@@ -10,7 +10,6 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/redis/go-redis/v9"
-	"github.com/redis/go-redis/v9/hitless"
 	"github.com/redis/go-redis/v9/logging"
 
 	"zjdns/types"
@@ -23,20 +22,16 @@ func NewRedisDNSCache(config *types.ServerConfig, server types.RecursiveDNSServe
 	logging.Disable()
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:            config.Redis.Address,
-		Password:        config.Redis.Password,
-		DB:              config.Redis.Database,
-		PoolSize:        types.RedisConnectionPoolSize,
-		MinIdleConns:    types.RedisMinIdleConnections,
-		MaxRetries:      types.RedisMaxRetryAttempts,
-		PoolTimeout:     types.RedisConnectionPoolTimeout,
-		ReadTimeout:     types.RedisReadTimeout,
-		WriteTimeout:    types.RedisWriteTimeout,
-		DialTimeout:     types.RedisDialTimeout,
-		DisableIdentity: true, // 禁用CLIENT SETINFO命令，包括maint_notifications
-		HitlessUpgradeConfig: &hitless.Config{
-			Mode: hitless.MaintNotificationsDisabled, // 明确禁用维护通知功能
-		},
+		Addr:         config.Redis.Address,
+		Password:     config.Redis.Password,
+		DB:           config.Redis.Database,
+		PoolSize:     types.RedisConnectionPoolSize,
+		MinIdleConns: types.RedisMinIdleConnections,
+		MaxRetries:   types.RedisMaxRetryAttempts,
+		PoolTimeout:  types.RedisConnectionPoolTimeout,
+		ReadTimeout:  types.RedisReadTimeout,
+		WriteTimeout: types.RedisWriteTimeout,
+		DialTimeout:  types.RedisDialTimeout,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), types.StandardOperationTimeout)
