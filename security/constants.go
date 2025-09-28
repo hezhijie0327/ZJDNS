@@ -34,7 +34,7 @@ const (
 
 // Protocol identifiers
 var (
-	NextProtoQUIC  = []string{"doq", "doq-i02", "doq-i00", "dq"}
+	NextProtoQUIC  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
 	NextProtoHTTP3 = []string{"h3"}
 	NextProtoHTTP2 = []string{http2.NextProtoTLS, "http/1.1"}
 )

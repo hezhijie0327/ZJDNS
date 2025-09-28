@@ -74,9 +74,39 @@ func (cpm *ConnectionPoolManager) GetSecureClient(protocol, addr, serverName str
 		cpm.mu.RUnlock()
 	}
 
-	// 注意：这里我们不能直接调用dns.NewUnifiedSecureClient，因为会导致循环导入
-	// 需要在dns包中通过其他方式处理
-	return nil, errors.New("🔒 安全客户端创建未实现")
+	// 创建新的安全客户端
+	cpm.mu.Lock()
+	defer cpm.mu.Unlock()
+
+	// 双重检查，确保在获取写锁期间没有其他goroutine创建了客户端
+	if client, exists := cpm.secureClients[cacheKey]; exists {
+		if unifiedClient, ok := client.(interface{ IsConnectionAlive() bool }); ok && unifiedClient != nil {
+			if unifiedClient.IsConnectionAlive() {
+				return client, nil
+			}
+		}
+	}
+
+	// 使用工厂函数创建安全客户端
+	newClient, err := createSecureClient(protocol, addr, serverName, skipVerify)
+	if err != nil {
+		return nil, fmt.Errorf("🔒 创建安全客户端失败: %w", err)
+	}
+
+	// 缓存新创建的客户端
+	cpm.secureClients[cacheKey] = newClient
+	return newClient, nil
+}
+
+// createSecureClient 是一个工厂函数，用于创建安全客户端
+// 这样可以避免 network 包直接依赖 security 包，解决循环依赖问题
+var createSecureClient = func(protocol, addr, serverName string, skipVerify bool) (SecureClient, error) {
+	return nil, errors.New("🔒 安全客户端工厂函数未初始化")
+}
+
+// SetSecureClientFactory 设置安全客户端工厂函数
+func SetSecureClientFactory(factory func(protocol, addr, serverName string, skipVerify bool) (SecureClient, error)) {
+	createSecureClient = factory
 }
 
 func (cpm *ConnectionPoolManager) cleanupClient(key string, client SecureClient) {

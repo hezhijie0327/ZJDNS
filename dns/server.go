@@ -104,6 +104,12 @@ func NewDNSServer(config *types.ServerConfig) (*RecursiveDNSServer, error) {
 	}
 	upstreamManager := NewUpstreamManager(dnsUpstreamServers)
 	connectionPool := network.NewConnectionPoolManager()
+
+	// 设置安全客户端工厂函数，解决循环依赖问题
+	network.SetSecureClientFactory(func(protocol, addr, serverName string, skipVerify bool) (network.SecureClient, error) {
+		return security.NewUnifiedSecureClient(protocol, addr, serverName, skipVerify)
+	})
+
 	taskManager := utils.NewTaskManager(MaxGlobalConcurrency)
 	queryClient := NewUnifiedQueryClient(connectionPool, network.StandardQueryTimeout)
 	hijackPrevention := NewDNSHijackPrevention(config.Server.Features.HijackProtection)

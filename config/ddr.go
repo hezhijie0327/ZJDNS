@@ -19,8 +19,8 @@ func (cm *ConfigManager) addDDRRecords(config *types.ServerConfig) {
 	domain := strings.TrimSuffix(config.Server.DDR.Domain, ".")
 
 	// 创建通用的SVCB记录配置文本
-	svcbRecord1Text := "1 . alpn=doq,dot port=" + config.Server.TLS.Port
-	svcbRecord2Text := "2 . alpn=h3,h2 port=" + config.Server.TLS.HTTPS.Port
+	svcbRecord1Text := "1 . alpn=h3,h2 port=" + config.Server.TLS.HTTPS.Port
+	svcbRecord2Text := "2 . alpn=doq,dot port=" + config.Server.TLS.Port
 
 	// 添加IPv4和IPv6提示
 	if config.Server.DDR.IPv4 != "" {

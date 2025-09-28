@@ -124,7 +124,7 @@ func (c *UnifiedSecureClient) connectQUIC(addr string) error {
 	return nil
 }
 
-func (c *UnifiedSecureClient) isConnectionAlive() bool {
+func (c *UnifiedSecureClient) IsConnectionAlive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -146,7 +146,7 @@ func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, err
 	case "https", "http3":
 		return c.dohClient.Exchange(msg)
 	case "tls":
-		if !c.isConnectionAlive() {
+		if !c.IsConnectionAlive() {
 			if err := c.connect(addr); err != nil {
 				return nil, fmt.Errorf("🔄 重连失败: %w", err)
 			}
@@ -160,7 +160,7 @@ func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, err
 		}
 		return resp, err
 	case "quic":
-		if !c.isConnectionAlive() {
+		if !c.IsConnectionAlive() {
 			if err := c.connect(addr); err != nil {
 				return nil, fmt.Errorf("🔄 重连失败: %w", err)
 			}
@@ -588,7 +588,15 @@ func (c *DoHClient) createTransportH3() (http.RoundTripper, error) {
 		utils.WriteLog(utils.LogDebug, "⚠️ 关闭QUIC连接失败: %v", closeErr)
 	}
 
-	return nil, errors.New("💥 DoH3传输创建失败")
+	// 修复：正确创建并返回 HTTP/3 传输
+	transport := &http3Transport{
+		baseTransport: &http3.Transport{
+			TLSClientConfig: c.tlsConfig,
+			QUICConfig:      c.quicConfig,
+		},
+	}
+
+	return transport, nil
 }
 
 func (c *DoHClient) resetClient(resetErr error) (*http.Client, error) {
