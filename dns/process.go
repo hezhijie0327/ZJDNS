@@ -28,6 +28,7 @@ func (r *RecursiveDNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg
 
 	response := r.ProcessDNSQuery(req, utils.GetClientIP(w), false)
 	if response != nil {
+		response.Compress = true
 		_ = w.WriteMsg(response)
 	}
 }

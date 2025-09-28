@@ -28,6 +28,7 @@ func (r *RecursiveDNSServer) buildResponse(req *dns.Msg) *dns.Msg {
 
 	msg.Authoritative = false
 	msg.RecursionAvailable = true
+	msg.Compress = true
 	return msg
 }
 
