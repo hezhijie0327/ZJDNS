@@ -1,17 +1,15 @@
-package dns
+package main
 
 import (
 	"time"
 
 	"github.com/quic-go/quic-go"
 	"golang.org/x/net/http2"
-
-	"zjdns/utils"
 )
 
 // 日志
 const (
-	LogNone utils.LogLevel = iota - 1
+	LogNone LogLevel = iota - 1
 	LogError
 	LogWarn
 	LogInfo
@@ -153,7 +151,7 @@ const (
 
 // 协议标识符
 var (
-	NextProtoQUIC  = []string{"doq", "doq-i02", "doq-i00", "dq"}
+	NextProtoQUIC  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
 	NextProtoHTTP3 = []string{"h3"}
 	NextProtoHTTP2 = []string{http2.NextProtoTLS, "http/1.1"}
 )

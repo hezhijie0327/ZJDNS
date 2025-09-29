@@ -1,18 +1,22 @@
-package utils
+package main
 
 import (
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 )
 
-// GetLogger returns the custom logger instance
-func GetLogger() *log.Logger {
-	return customLogger
-}
+var (
+	logConfig = &LogConfig{
+		level:     LogInfo,
+		useColor:  true,
+		useEmojis: true,
+	}
+	customLogger = log.New(os.Stdout, "", 0)
+)
 
-// String 将日志级别转换为字符串
 func (l LogLevel) String() string {
 	configs := []struct {
 		name  string
@@ -49,9 +53,8 @@ func (l LogLevel) String() string {
 	return "UNKNOWN"
 }
 
-// WriteLog 写入日志
-// writeLog 写入日志
-func WriteLog(level LogLevel, format string, args ...interface{}) {
+// 增强的日志函数，支持更多场景emoji
+func writeLog(level LogLevel, format string, args ...interface{}) {
 	logConfig.mu.RLock()
 	currentLevel := logConfig.level
 	useColor := logConfig.useColor
@@ -62,7 +65,7 @@ func WriteLog(level LogLevel, format string, args ...interface{}) {
 		message := fmt.Sprintf(format, args...)
 
 		// 添加上下文emoji
-		message = AddEmojiToMessage(message)
+		message = enhanceLogMessage(message)
 
 		logLine := fmt.Sprintf("%s[%s] %s %s", ColorGray, timestamp, level.String(), message)
 		if useColor {
@@ -73,8 +76,7 @@ func WriteLog(level LogLevel, format string, args ...interface{}) {
 }
 
 // 根据消息内容添加相应的emoji
-// AddEmojiToMessage 增强日志消息
-func AddEmojiToMessage(message string) string {
+func enhanceLogMessage(message string) string {
 	lowerMsg := strings.ToLower(message)
 
 	// 协议相关emoji
@@ -117,7 +119,6 @@ func AddEmojiToMessage(message string) string {
 }
 
 // SetLogLevel 设置日志级别
-// SetLogLevel 设置日志级别
 func SetLogLevel(level LogLevel) {
 	logConfig.mu.Lock()
 	defer logConfig.mu.Unlock()
@@ -125,29 +126,8 @@ func SetLogLevel(level LogLevel) {
 }
 
 // GetLogLevel 获取当前日志级别
-// GetLogLevel 获取当前日志级别
 func GetLogLevel() LogLevel {
 	logConfig.mu.RLock()
 	defer logConfig.mu.RUnlock()
 	return logConfig.level
-}
-
-// GetProtocolEmoji 获取协议对应的emoji
-func GetProtocolEmoji(protocol string) string {
-	switch strings.ToLower(protocol) {
-	case "tls":
-		return "🔐"
-	case "quic":
-		return "🚀"
-	case "https":
-		return "🌐"
-	case "http3":
-		return "⚡"
-	case "tcp":
-		return "🔌"
-	case "udp":
-		return "📡"
-	default:
-		return "📡"
-	}
 }

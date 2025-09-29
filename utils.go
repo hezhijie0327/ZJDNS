@@ -1,9 +1,13 @@
-package utils
+package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -13,15 +17,14 @@ import (
 
 // SafeCopyDNSMessage 安全地复制DNS消息，防止在复制过程中出现panic
 // 使用ResourceManager对象池优化性能
-// SafeCopyDNSMessage 安全地复制DNS消息
 func SafeCopyDNSMessage(msg *dns.Msg) *dns.Msg {
 	if msg == nil {
-		newMsg := GlobalResourceManager.GetDNSMessage()
+		newMsg := globalResourceManager.GetDNSMessage()
 		return newMsg
 	}
 
 	// 从对象池获取消息对象
-	msgCopy := GlobalResourceManager.GetDNSMessage()
+	msgCopy := globalResourceManager.GetDNSMessage()
 
 	// 复制消息头部和压缩标志
 	msgCopy.MsgHdr = msg.MsgHdr
@@ -73,15 +76,14 @@ func SafeCopyDNSMessage(msg *dns.Msg) *dns.Msg {
 	return msgCopy
 }
 
-// HandlePanicWithContext 处理带上下文的panic
-func HandlePanicWithContext(operation string) {
+func handlePanicWithContext(operation string) {
 	if r := recover(); r != nil {
 		buf := make([]byte, 2048)
 		n := runtime.Stack(buf, false)
 		stackTrace := string(buf[:n])
 
 		// 合并日志输出，包含操作信息、panic详情和堆栈跟踪
-		WriteLog(LogError, "🚨 Panic触发 [%s]: %v\n堆栈:\n%s\n💥 程序因panic退出",
+		writeLog(LogError, "🚨 Panic触发 [%s]: %v\n堆栈:\n%s\n💥 程序因panic退出",
 			operation, r, stackTrace)
 
 		os.Exit(1)
@@ -111,7 +113,7 @@ func (rt *RequestTracker) AddStep(step string, args ...interface{}) {
 	stepMsg := fmt.Sprintf("[%v] %s", timestamp.Truncate(time.Microsecond), fmt.Sprintf(step, args...))
 	rt.Steps = append(rt.Steps, stepMsg)
 
-	WriteLog(LogDebug, "🔍 [%s] %s", rt.ID, stepMsg)
+	writeLog(LogDebug, "🔍 [%s] %s", rt.ID, stepMsg)
 }
 
 func (rt *RequestTracker) Finish() {
@@ -126,7 +128,7 @@ func (rt *RequestTracker) Finish() {
 			cacheEmoji = "🎯"
 		}
 
-		WriteLog(LogInfo, "📊 [%s] 查询完成: %s %s | 缓存:%s | 耗时:%v | 上游:%s",
+		writeLog(LogInfo, "📊 [%s] 查询完成: %s %s | 缓存:%s | 耗时:%v | 上游:%s",
 			rt.ID, rt.Domain, rt.QueryType, cacheEmoji,
 			rt.ResponseTime.Truncate(time.Microsecond), rt.Upstream)
 	}
@@ -228,9 +230,6 @@ func (drh *DNSRecordHandler) ProcessRecords(rrs []dns.RR, ttl uint32, includeDNS
 
 var globalRecordHandler = NewDNSRecordHandler()
 
-// GlobalRecordHandler 全局DNS记录处理器
-var GlobalRecordHandler = globalRecordHandler
-
 func NewCacheUtils() *CacheUtils {
 	return &CacheUtils{}
 }
@@ -241,8 +240,8 @@ func (cu *CacheUtils) BuildKey(question dns.Question, ecs *ECSOption, dnssecEnab
 	}
 
 	// 使用string builder优化字符串拼接
-	sb := GlobalResourceManager.GetStringBuilder()
-	defer GlobalResourceManager.PutStringBuilder(sb)
+	sb := globalResourceManager.GetStringBuilder()
+	defer globalResourceManager.PutStringBuilder(sb)
 
 	sb.WriteString(strings.ToLower(question.Name))
 	sb.WriteByte(':')
@@ -291,9 +290,6 @@ func (cu *CacheUtils) CalculateTTL(rrs []dns.RR) int {
 }
 
 var globalCacheUtils = NewCacheUtils()
-
-// GlobalCacheUtils 全局缓存工具
-var GlobalCacheUtils = globalCacheUtils
 
 func NewDNSSECValidator() *DNSSECValidator {
 	return &DNSSECValidator{}
@@ -344,8 +340,7 @@ func GetClientIP(w dns.ResponseWriter) net.IP {
 	return nil
 }
 
-// IsSecureProtocol 检查协议是否为安全协议
-func IsSecureProtocol(protocol string) bool {
+func isSecureProtocol(protocol string) bool {
 	switch protocol {
 	case "tls", "quic", "https", "http3":
 		return true
@@ -354,8 +349,26 @@ func IsSecureProtocol(protocol string) bool {
 	}
 }
 
-// IsValidFilePath 检查文件路径是否有效
-func IsValidFilePath(path string) bool {
+func getProtocolEmoji(protocol string) string {
+	switch strings.ToLower(protocol) {
+	case "tls":
+		return "🔐"
+	case "quic":
+		return "🚀"
+	case "https":
+		return "🌐"
+	case "http3":
+		return "⚡"
+	case "tcp":
+		return "🔌"
+	case "udp":
+		return "📡"
+	default:
+		return "📡"
+	}
+}
+
+func isValidFilePath(path string) bool {
 	if strings.Contains(path, "..") ||
 		strings.HasPrefix(path, "/etc/") ||
 		strings.HasPrefix(path, "/proc/") ||
@@ -368,4 +381,71 @@ func IsValidFilePath(path string) bool {
 		return false
 	}
 	return info.Mode().IsRegular()
+}
+
+func NewIPDetector() *IPDetector {
+	return &IPDetector{
+		httpClient: &http.Client{
+			Timeout: HTTPClientRequestTimeout,
+		},
+	}
+}
+
+func (d *IPDetector) DetectPublicIP(forceIPv6 bool) net.IP {
+	if d == nil {
+		return nil
+	}
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: PublicIPDetectionTimeout}
+			if forceIPv6 {
+				return dialer.DialContext(ctx, "tcp6", addr)
+			}
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
+		TLSHandshakeTimeout: SecureConnHandshakeTimeout,
+	}
+
+	client := &http.Client{
+		Timeout:   HTTPClientRequestTimeout,
+		Transport: transport,
+	}
+	defer transport.CloseIdleConnections()
+
+	resp, err := client.Get("https://api.cloudflare.com/cdn-cgi/trace")
+	if err != nil {
+		return nil
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			writeLog(LogDebug, "⚠️ 关闭响应体失败: %v", closeErr)
+		}
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	re := regexp.MustCompile(`ip=([^\s\n]+)`)
+	matches := re.FindStringSubmatch(string(body))
+	if len(matches) < 2 {
+		return nil
+	}
+
+	ip := net.ParseIP(matches[1])
+	if ip == nil {
+		return nil
+	}
+
+	// 检查IP版本匹配
+	if forceIPv6 && ip.To4() != nil {
+		return nil
+	}
+	if !forceIPv6 && ip.To4() == nil {
+		return nil
+	}
+
+	return ip
 }

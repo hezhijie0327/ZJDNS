@@ -1,4 +1,4 @@
-package utils
+package main
 
 import (
 	"strings"
@@ -8,7 +8,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-// NewResourceManager 创建新的资源管理器
 func NewResourceManager() *ResourceManager {
 	rm := &ResourceManager{}
 
@@ -41,7 +40,6 @@ func NewResourceManager() *ResourceManager {
 	return rm
 }
 
-// GetDNSMessage 获取DNS消息
 func (rm *ResourceManager) GetDNSMessage() *dns.Msg {
 	if rm == nil {
 		msg := &dns.Msg{}
@@ -69,7 +67,6 @@ func (rm *ResourceManager) GetDNSMessage() *dns.Msg {
 	return msg
 }
 
-// resetDNSMessageSafe 安全地重置DNS消息
 func (rm *ResourceManager) resetDNSMessageSafe(msg *dns.Msg) {
 	if msg == nil {
 		return
@@ -108,7 +105,6 @@ func (rm *ResourceManager) PutDNSMessage(msg *dns.Msg) {
 	rm.dnsMessages.Put(msg)
 }
 
-// GetBuffer 获取缓冲区
 func (rm *ResourceManager) GetBuffer() []byte {
 	if rm == nil {
 		return make([]byte, 0, 1024)
@@ -143,4 +139,4 @@ func (rm *ResourceManager) PutStringBuilder(sb *strings.Builder) {
 	}
 }
 
-var GlobalResourceManager = NewResourceManager()
+var globalResourceManager = NewResourceManager()

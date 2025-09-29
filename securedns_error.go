@@ -1,4 +1,4 @@
-package security
+package main
 
 import (
 	"errors"
@@ -10,12 +10,10 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// NewSecureConnErrorHandler 创建新的安全连接错误处理器
 func NewSecureConnErrorHandler() *SecureConnErrorHandler {
 	return &SecureConnErrorHandler{}
 }
 
-// IsRetryableError 检查错误是否可重试
 func (h *SecureConnErrorHandler) IsRetryableError(protocol string, err error) bool {
 	if h == nil || err == nil {
 		return false
@@ -39,7 +37,6 @@ func (h *SecureConnErrorHandler) IsRetryableError(protocol string, err error) bo
 	}
 }
 
-// handleQUICErrors 处理QUIC错误
 func (h *SecureConnErrorHandler) handleQUICErrors(err error) bool {
 	var qAppErr *quic.ApplicationError
 	if errors.As(err, &qAppErr) {
@@ -64,7 +61,6 @@ func (h *SecureConnErrorHandler) handleQUICErrors(err error) bool {
 	return errors.Is(err, quic.Err0RTTRejected)
 }
 
-// handleTLSErrors 处理TLS错误
 func (h *SecureConnErrorHandler) handleTLSErrors(err error) bool {
 	errStr := err.Error()
 	connectionErrors := []string{
@@ -91,6 +87,3 @@ func (h *SecureConnErrorHandler) handleHTTPErrors(err error) bool {
 }
 
 var globalSecureConnErrorHandler = NewSecureConnErrorHandler()
-
-// GlobalSecureConnErrorHandler 全局安全连接错误处理器
-var GlobalSecureConnErrorHandler = globalSecureConnErrorHandler

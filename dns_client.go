@@ -1,4 +1,4 @@
-package dns
+package main
 
 import (
 	"context"
@@ -7,23 +7,17 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-
-	"zjdns/network"
-	"zjdns/security"
-	"zjdns/utils"
 )
 
-// NewUnifiedQueryClient 创建新的统一查询客户端
-func NewUnifiedQueryClient(connectionPool *network.ConnectionPoolManager, timeout time.Duration) *UnifiedQueryClient {
+func NewUnifiedQueryClient(connectionPool *ConnectionPoolManager, timeout time.Duration) *UnifiedQueryClient {
 	return &UnifiedQueryClient{
 		connectionPool: connectionPool,
-		errorHandler:   security.GlobalSecureConnErrorHandler,
+		errorHandler:   globalSecureConnErrorHandler,
 		timeout:        timeout,
 	}
 }
 
-// ExecuteQuery 执行DNS查询
-func (uqc *UnifiedQueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *utils.RequestTracker) *QueryResult {
+func (uqc *UnifiedQueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) *QueryResult {
 	start := time.Now()
 	result := &QueryResult{
 		Server:   server.Address,
@@ -40,7 +34,7 @@ func (uqc *UnifiedQueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, s
 	protocol := strings.ToLower(server.Protocol)
 
 	// 安全连接协议
-	if utils.IsSecureProtocol(protocol) {
+	if isSecureProtocol(protocol) {
 		result.Response, result.Error = uqc.executeSecureQuery(msg, server, tracker)
 		result.Duration = time.Since(start)
 		result.Protocol = strings.ToUpper(protocol)
@@ -84,8 +78,7 @@ func (uqc *UnifiedQueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, s
 	return result
 }
 
-// executeSecureQuery 执行安全查询
-func (uqc *UnifiedQueryClient) executeSecureQuery(msg *dns.Msg, server *UpstreamServer, tracker *utils.RequestTracker) (*dns.Msg, error) {
+func (uqc *UnifiedQueryClient) executeSecureQuery(msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
 	client, err := uqc.connectionPool.GetSecureClient(server.Protocol, server.Address, server.ServerName, server.SkipTLSVerify)
 	if err != nil {
 		return nil, fmt.Errorf("🔒 获取%s客户端失败: %w", strings.ToUpper(server.Protocol), err)
@@ -97,19 +90,18 @@ func (uqc *UnifiedQueryClient) executeSecureQuery(msg *dns.Msg, server *Upstream
 	}
 
 	if tracker != nil && response != nil {
-		protocolEmoji := utils.GetProtocolEmoji(server.Protocol)
+		protocolEmoji := getProtocolEmoji(server.Protocol)
 		tracker.AddStep("%s %s查询成功，响应码: %s", protocolEmoji, strings.ToUpper(server.Protocol), dns.RcodeToString[response.Rcode])
 	}
 
 	return response, nil
 }
 
-// executeTraditionalQuery 执行传统查询
-func (uqc *UnifiedQueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *utils.RequestTracker) (*dns.Msg, error) {
+func (uqc *UnifiedQueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
 	// 创建消息的副本以保证安全性和避免并发问题
 	// 使用SafeCopyDNSMessage函数防止nil切片导致的slice bounds out of range panic
 	// SafeCopyDNSMessage内部使用sync.Pool优化性能
-	msgCopy := utils.SafeCopyDNSMessage(msg)
+	msgCopy := SafeCopyDNSMessage(msg)
 
 	var client *dns.Client
 	if server.Protocol == "tcp" {
@@ -133,7 +125,7 @@ func (uqc *UnifiedQueryClient) executeTraditionalQuery(ctx context.Context, msg 
 
 	// 将复制的消息对象返回到对象池
 	if msgCopy != nil {
-		utils.GlobalResourceManager.PutDNSMessage(msgCopy)
+		globalResourceManager.PutDNSMessage(msgCopy)
 	}
 
 	return response, err
