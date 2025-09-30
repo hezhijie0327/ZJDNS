@@ -600,7 +600,7 @@ type (
 	// ConfigManager handles configuration loading and validation
 	ConfigManager struct{}
 
-	// Logger provides structured logging functionality with color support
+	// Logger provides structured logging functionality
 	Logger struct {
 		level    LogLevel
 		writer   io.Writer
@@ -623,10 +623,10 @@ var (
 )
 
 // =============================================================================
-// Logging System with Color Support
+// Logging System
 // =============================================================================
 
-// NewLogger creates a new logger instance with color support
+// NewLogger creates a new logger instance
 func NewLogger() *Logger {
 	return &Logger{
 		level:  LogInfo,
@@ -1521,7 +1521,7 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 }
 
 // =============================================================================
-// Connection & Network Management (Optimized)
+// Connection & Network Management
 // =============================================================================
 
 // NewConnectionPool creates a new Connection pool with cleanup routine
