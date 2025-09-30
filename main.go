@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -61,12 +60,14 @@ const (
 	MaxInputLineLength = 128
 
 	// Timeout Configuration
-	QueryTimeout        = 5 * time.Second
-	ConnTimeout         = 5 * time.Second
-	TLSHandshakeTimeout = 3 * time.Second
-	RecursiveTimeout    = 15 * time.Second
-	ExtendedTimeout     = 30 * time.Second
-	ShutdownTimeout     = 5 * time.Second
+	QueryTimeout          = 5 * time.Second
+	ConnTimeout           = 5 * time.Second
+	TLSHandshakeTimeout   = 3 * time.Second
+	RecursiveTimeout      = 15 * time.Second
+	ExtendedTimeout       = 30 * time.Second
+	ShutdownTimeout       = 5 * time.Second
+	ConnectionTestTimeout = 100 * time.Millisecond
+	CleanupInterval       = 30 * time.Second
 
 	// Cache Configuration
 	DefaultCacheTTL = 300
@@ -121,8 +122,30 @@ const (
 	SecureIdleTimeout = 300 * time.Second
 	SecureKeepAlive   = 15 * time.Second
 
+	// Connection Pool Configuration
+	TLSSessionCacheSize  = 256
+	QUICSessionCacheSize = 128
+	MaxIncomingStreams   = 2048
+	InitialPacketSize    = 1200
+	H3MaxResponseHeader  = 8192
+	ConnectionPoolSize   = 50
+
+	// TCP Optimization
+	TCPReadBufferSize  = 128 * 1024
+	TCPWriteBufferSize = 128 * 1024
+	TCPNoDelay         = 1
+	TCPQuickAck        = 0x0c // Linux TCP_QUICKACK
+
 	// Default Values
 	DefaultLogLevel = "info"
+
+	// ANSI Color Codes
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorYellow = "\033[33m"
+	ColorGreen  = "\033[32m"
+	ColorCyan   = "\033[36m"
+	ColorBold   = "\033[1m"
 )
 
 // Protocol Identifiers
@@ -376,8 +399,15 @@ type (
 	ConnectionPool struct {
 		clients       chan *dns.Client
 		secureClients map[string]SecureClient
+		tlsConns      map[string]*tls.Conn
+		tlsMu         sync.RWMutex
+		quicConns     map[string]*quic.Conn
+		quicMu        sync.RWMutex
 		timeout       time.Duration
 		mu            sync.RWMutex
+		ctx           context.Context
+		cancel        context.CancelFunc
+		wg            sync.WaitGroup
 		closed        int32
 	}
 
@@ -399,6 +429,8 @@ type (
 		isQUICConnected bool
 		lastActivity    time.Time
 		mu              sync.Mutex
+		connPool        *ConnectionPool
+		addr            string
 	}
 
 	// DoHClient implements DNS-over-HTTPS client
@@ -567,6 +599,14 @@ type (
 
 	// ConfigManager handles configuration loading and validation
 	ConfigManager struct{}
+
+	// Logger provides structured logging functionality
+	Logger struct {
+		level    LogLevel
+		writer   io.Writer
+		mu       sync.Mutex
+		colorMap map[LogLevel]string
+	}
 )
 
 // =============================================================================
@@ -586,18 +626,17 @@ var (
 // Logging System
 // =============================================================================
 
-// Logger provides structured logging functionality
-type Logger struct {
-	level  LogLevel
-	writer io.Writer
-	mu     sync.Mutex
-}
-
 // NewLogger creates a new logger instance
 func NewLogger() *Logger {
 	return &Logger{
 		level:  LogInfo,
 		writer: os.Stdout,
+		colorMap: map[LogLevel]string{
+			LogError: ColorRed,
+			LogWarn:  ColorYellow,
+			LogInfo:  ColorGreen,
+			LogDebug: ColorCyan,
+		},
 	}
 }
 
@@ -615,7 +654,23 @@ func (l *Logger) GetLevel() LogLevel {
 	return l.level
 }
 
-// log writes a log message at the specified level
+// GetLevelString returns string representation of log level
+func (l *Logger) GetLevelString(level LogLevel) string {
+	switch level {
+	case LogError:
+		return "ERROR"
+	case LogWarn:
+		return "WARN"
+	case LogInfo:
+		return "INFO"
+	case LogDebug:
+		return "DEBUG"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// log writes a log message at the specified level with color
 func (l *Logger) Log(level LogLevel, format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -624,25 +679,18 @@ func (l *Logger) Log(level LogLevel, format string, args ...interface{}) {
 		return
 	}
 
-	var levelStr string
-	switch level {
-	case LogError:
-		levelStr = "ERROR"
-	case LogWarn:
-		levelStr = "WARN"
-	case LogInfo:
-		levelStr = "INFO"
-	case LogDebug:
-		levelStr = "DEBUG"
-	}
-
+	levelStr := l.GetLevelString(level)
+	color := l.colorMap[level]
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	message := fmt.Sprintf(format, args...)
-	logLine := fmt.Sprintf("%s [%s] %s", timestamp, levelStr, message)
 
-	if _, err := fmt.Fprintln(l.writer, logLine); err != nil {
-		// Since this is the logging system itself, we cannot use regular logging
-		// So write directly to stderr
+	// Format: [BOLD timestamp RESET] [COLOR level RESET] message
+	logLine := fmt.Sprintf("%s[%s]%s %s%-5s%s %s\n",
+		ColorBold, timestamp, ColorReset,
+		color, levelStr, ColorReset,
+		message)
+
+	if _, err := fmt.Fprint(l.writer, logLine); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to write log: %v\n", err)
 	}
 }
@@ -1162,8 +1210,8 @@ func (rc *RedisCache) HandleRefreshRequest(req RefreshRequest) {
 			Extra:  additional,
 		}
 
-		SpeedTester := NewSpeedTester(*rc.server.config)
-		SpeedTester.PerformSpeedTestAndSort(tempMsg)
+		speedTester := NewSpeedTester(*rc.server.config)
+		speedTester.PerformSpeedTestAndSort(tempMsg)
 
 		answer = tempMsg.Answer
 		authority = tempMsg.Ns
@@ -1476,13 +1524,78 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 // Connection & Network Management
 // =============================================================================
 
-// NewConnectionPool creates a new Connection pool
+// NewConnectionPool creates a new Connection pool with cleanup routine
 func NewConnectionPool() *ConnectionPool {
-	return &ConnectionPool{
-		clients:       make(chan *dns.Client, 50),
+	ctx, cancel := context.WithCancel(context.Background())
+	cp := &ConnectionPool{
+		clients:       make(chan *dns.Client, ConnectionPoolSize),
 		secureClients: make(map[string]SecureClient),
+		tlsConns:      make(map[string]*tls.Conn),
+		quicConns:     make(map[string]*quic.Conn),
 		timeout:       QueryTimeout,
+		ctx:           ctx,
+		cancel:        cancel,
 	}
+
+	// Start background cleanup routine
+	cp.wg.Add(1)
+	go func() {
+		defer cp.wg.Done()
+		cp.StartCleanupRoutine()
+	}()
+
+	return cp
+}
+
+// StartCleanupRoutine periodically cleans up idle connections
+func (cp *ConnectionPool) StartCleanupRoutine() {
+	ticker := time.NewTicker(CleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-cp.ctx.Done():
+			return
+		case <-ticker.C:
+			cp.CleanupIdleConnections()
+		}
+	}
+}
+
+// CleanupIdleConnections removes and closes idle connections
+func (cp *ConnectionPool) CleanupIdleConnections() {
+	if atomic.LoadInt32(&cp.closed) != 0 {
+		return
+	}
+
+	// Cleanup TLS connections
+	cp.tlsMu.Lock()
+	for key, conn := range cp.tlsConns {
+		// Test connection validity
+		if err := conn.SetReadDeadline(time.Now().Add(ConnectionTestTimeout)); err != nil {
+			delete(cp.tlsConns, key)
+			go func(c *tls.Conn) {
+				_ = c.Close()
+			}(conn)
+			Debug("Cleaned up idle TLS connection: %s", key)
+		} else {
+			_ = conn.SetReadDeadline(time.Time{})
+		}
+	}
+	cp.tlsMu.Unlock()
+
+	// Cleanup QUIC connections
+	cp.quicMu.Lock()
+	for key, conn := range cp.quicConns {
+		if conn.Context().Err() != nil {
+			delete(cp.quicConns, key)
+			go func(c *quic.Conn) {
+				_ = c.CloseWithError(QUICCodeNoError, "idle-cleanup")
+			}(conn)
+			Debug("Cleaned up idle QUIC connection: %s", key)
+		}
+	}
+	cp.quicMu.Unlock()
 }
 
 // CreateClient creates a new DNS client
@@ -1518,7 +1631,151 @@ func (cp *ConnectionPool) GetTCPClient() *dns.Client {
 	}
 }
 
-// GetSecureClient gets a secure DNS client
+// GetTLSConn gets or creates a TLS connection with connection pooling
+func (cp *ConnectionPool) GetTLSConn(host, port string, tlsConfig *tls.Config) (*tls.Conn, error) {
+	cacheKey := fmt.Sprintf("%s:%s", host, port)
+
+	// Try to reuse existing connection
+	cp.tlsMu.RLock()
+	if conn, exists := cp.tlsConns[cacheKey]; exists {
+		cp.tlsMu.RUnlock()
+
+		// Test connection validity
+		if err := conn.SetReadDeadline(time.Now().Add(ConnectionTestTimeout)); err == nil {
+			var buf [1]byte
+			if _, err := conn.Read(buf[:]); err == nil || err == io.EOF {
+				_ = conn.SetReadDeadline(time.Time{})
+				Debug("Reusing existing TLS connection: %s", cacheKey)
+				return conn, nil
+			}
+		}
+
+		// Connection is invalid, remove it
+		cp.RemoveTLSConn(cacheKey, conn)
+	} else {
+		cp.tlsMu.RUnlock()
+	}
+
+	// Create new connection with optimizations
+	dialer := &net.Dialer{
+		Timeout:   TLSHandshakeTimeout,
+		KeepAlive: SecureKeepAlive,
+	}
+
+	// Apply TCP optimizations
+	if runtime.GOOS == "linux" {
+		dialer.Control = func(network, address string, c syscall.RawConn) error {
+			return c.Control(func(fd uintptr) {
+				_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_NODELAY, TCPNoDelay)
+				_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, TCPQuickAck, 1)
+			})
+		}
+	}
+
+	conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), tlsConfig)
+	if err != nil {
+		return nil, fmt.Errorf("TLS dial failed: %w", err)
+	}
+
+	// Optimize TCP parameters
+	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(SecureKeepAlive)
+		_ = tcpConn.SetNoDelay(true)
+		_ = tcpConn.SetReadBuffer(TCPReadBufferSize)
+		_ = tcpConn.SetWriteBuffer(TCPWriteBufferSize)
+	}
+
+	// Check if session was resumed
+	connState := conn.ConnectionState()
+	if connState.DidResume {
+		Debug("TLS session resumed for %s:%s", host, port)
+	} else {
+		Debug("TLS full handshake for %s:%s", host, port)
+	}
+
+	// Cache connection
+	cp.tlsMu.Lock()
+	cp.tlsConns[cacheKey] = conn
+	cp.tlsMu.Unlock()
+
+	Debug("Created new TLS connection: %s", cacheKey)
+	return conn, nil
+}
+
+// RemoveTLSConn removes a TLS connection from pool
+func (cp *ConnectionPool) RemoveTLSConn(key string, conn *tls.Conn) {
+	cp.tlsMu.Lock()
+	defer cp.tlsMu.Unlock()
+
+	if currentConn, exists := cp.tlsConns[key]; exists && currentConn == conn {
+		delete(cp.tlsConns, key)
+		go func() {
+			_ = conn.Close()
+		}()
+	}
+}
+
+// GetQUICConn gets or creates a QUIC connection with 0-RTT support
+func (cp *ConnectionPool) GetQUICConn(addr string, tlsConfig *tls.Config, quicConfig *quic.Config) (*quic.Conn, error) {
+	cacheKey := addr
+
+	// Try to reuse existing connection
+	cp.quicMu.RLock()
+	if conn, exists := cp.quicConns[cacheKey]; exists {
+		cp.quicMu.RUnlock()
+
+		// Check connection validity
+		if conn.Context().Err() == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), ConnectionTestTimeout)
+			defer cancel()
+
+			stream, err := conn.OpenStreamSync(ctx)
+			if err == nil {
+				_ = stream.Close()
+				Debug("Reusing existing QUIC connection: %s", addr)
+				return conn, nil
+			}
+		}
+
+		// Connection is invalid, remove it
+		cp.RemoveQUICConn(cacheKey, conn)
+	} else {
+		cp.quicMu.RUnlock()
+	}
+
+	// Create new connection with 0-RTT support
+	ctx, cancel := context.WithTimeout(context.Background(), ConnTimeout)
+	defer cancel()
+
+	conn, err := quic.DialAddr(ctx, addr, tlsConfig, quicConfig)
+	if err != nil {
+		return nil, fmt.Errorf("QUIC dial failed: %w", err)
+	}
+
+	// Cache connection
+	cp.quicMu.Lock()
+	cp.quicConns[cacheKey] = conn
+	cp.quicMu.Unlock()
+
+	Debug("Created new QUIC connection: %s", addr)
+	return conn, nil
+}
+
+// RemoveQUICConn removes a QUIC connection from pool
+func (cp *ConnectionPool) RemoveQUICConn(key string, conn *quic.Conn) {
+	cp.quicMu.Lock()
+	defer cp.quicMu.Unlock()
+
+	if currentConn, exists := cp.quicConns[key]; exists && currentConn == conn {
+		delete(cp.quicConns, key)
+		go func() {
+			_ = conn.CloseWithError(QUICCodeNoError, "cleanup")
+		}()
+	}
+}
+
+// GetSecureClient gets a secure DNS client with connection pooling
 func (cp *ConnectionPool) GetSecureClient(protocol, addr, serverName string, skipVerify bool) (SecureClient, error) {
 	if atomic.LoadInt32(&cp.closed) != 0 {
 		return nil, errors.New("connection pool closed")
@@ -1531,7 +1788,8 @@ func (cp *ConnectionPool) GetSecureClient(protocol, addr, serverName string, ski
 		cp.mu.RUnlock()
 
 		if unifiedClient, ok := client.(*UnifiedSecureClient); ok && unifiedClient != nil {
-			if unifiedClient.IsConnectionAlive() {
+			if unifiedClient.IsConnectionHealthy() {
+				Debug("Reusing secure client: %s", protocol)
 				return client, nil
 			} else {
 				cp.CleanupClient(cacheKey, client)
@@ -1541,7 +1799,7 @@ func (cp *ConnectionPool) GetSecureClient(protocol, addr, serverName string, ski
 		cp.mu.RUnlock()
 	}
 
-	client, err := NewUnifiedSecureClient(protocol, addr, serverName, skipVerify)
+	client, err := NewUnifiedSecureClient(cp, protocol, addr, serverName, skipVerify)
 	if err != nil {
 		return nil, err
 	}
@@ -1590,28 +1848,47 @@ func (cp *ConnectionPool) Close() error {
 
 	Info("Shutting down connection pool...")
 
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
+	cp.cancel()
 
+	cp.mu.Lock()
 	for key, client := range cp.secureClients {
 		if err := client.Close(); err != nil {
 			Warn("Secure client shutdown failed [%s]: %v", key, err)
 		}
 	}
 	cp.secureClients = make(map[string]SecureClient)
+	cp.mu.Unlock()
+
+	cp.tlsMu.Lock()
+	for key, conn := range cp.tlsConns {
+		_ = conn.Close()
+		Debug("Closed TLS connection: %s", key)
+	}
+	cp.tlsConns = make(map[string]*tls.Conn)
+	cp.tlsMu.Unlock()
+
+	cp.quicMu.Lock()
+	for key, conn := range cp.quicConns {
+		_ = conn.CloseWithError(QUICCodeNoError, "shutdown")
+		Debug("Closed QUIC connection: %s", key)
+	}
+	cp.quicConns = make(map[string]*quic.Conn)
+	cp.quicMu.Unlock()
 
 	close(cp.clients)
 	for range cp.clients {
 	}
+
+	cp.wg.Wait()
 
 	Info("Connection pool has been shut down")
 	return nil
 }
 
 // NewQueryClient creates a new query client
-func NewQueryClient(ConnectionPool *ConnectionPool, timeout time.Duration) *QueryClient {
+func NewQueryClient(connectionPool *ConnectionPool, timeout time.Duration) *QueryClient {
 	return &QueryClient{
-		connPool:     ConnectionPool,
+		connPool:     connectionPool,
 		errorHandler: globalErrorHandler,
 		timeout:      timeout,
 	}
@@ -1744,14 +2021,16 @@ func (qc *QueryClient) NeedsTCPFallback(result *QueryResult, protocol string) bo
 	return false
 }
 
-// NewUnifiedSecureClient creates a new unified secure client
-func NewUnifiedSecureClient(protocol, addr, serverName string, skipVerify bool) (*UnifiedSecureClient, error) {
+// NewUnifiedSecureClient creates a new unified secure client with connection pool
+func NewUnifiedSecureClient(pool *ConnectionPool, protocol, addr, serverName string, skipVerify bool) (*UnifiedSecureClient, error) {
 	client := &UnifiedSecureClient{
 		protocol:     strings.ToLower(protocol),
 		serverName:   serverName,
 		skipVerify:   skipVerify,
 		timeout:      QueryTimeout,
 		lastActivity: time.Now(),
+		connPool:     pool,
+		addr:         addr,
 	}
 
 	switch client.protocol {
@@ -1761,16 +2040,36 @@ func NewUnifiedSecureClient(protocol, addr, serverName string, skipVerify bool) 
 		if err != nil {
 			return nil, fmt.Errorf("failed to create DoH client: %w", err)
 		}
+	case "tls", "quic":
+		// Delay connection establishment until first use
 	default:
-		if err := client.Connect(addr); err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}
 
 	return client, nil
 }
 
-// Connect establishes connection for secure protocols
+// IsConnectionHealthy checks if connection is healthy
+func (c *UnifiedSecureClient) IsConnectionHealthy() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if time.Since(c.lastActivity) > SecureIdleTimeout {
+		return false
+	}
+
+	switch c.protocol {
+	case "tls":
+		return c.tlsConn != nil
+	case "quic":
+		return c.quicConn != nil && c.isQUICConnected && c.quicConn.Context().Err() == nil
+	case "https", "http3":
+		return c.dohClient != nil
+	}
+	return false
+}
+
+// Connect establishes connection for secure protocols with optimization
 func (c *UnifiedSecureClient) Connect(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -1787,13 +2086,29 @@ func (c *UnifiedSecureClient) Connect(addr string) error {
 	}
 }
 
-// ConnectTLS establishes TLS Connection
+// ConnectTLS establishes optimized TLS Connection with session resumption
 func (c *UnifiedSecureClient) ConnectTLS(host, port string) error {
 	tlsConfig := &tls.Config{
-		ServerName:         c.serverName,
-		InsecureSkipVerify: c.skipVerify,
+		ServerName:             c.serverName,
+		InsecureSkipVerify:     c.skipVerify,
+		ClientSessionCache:     tls.NewLRUClientSessionCache(TLSSessionCacheSize),
+		MinVersion:             tls.VersionTLS12,
+		MaxVersion:             tls.VersionTLS13,
+		SessionTicketsDisabled: false,
 	}
 
+	// Use connection pool if available
+	if c.connPool != nil {
+		conn, err := c.connPool.GetTLSConn(host, port, tlsConfig)
+		if err != nil {
+			return err
+		}
+		c.tlsConn = conn
+		c.lastActivity = time.Now()
+		return nil
+	}
+
+	// Fallback to direct connection
 	dialer := &net.Dialer{
 		Timeout:   TLSHandshakeTimeout,
 		KeepAlive: SecureKeepAlive,
@@ -1805,12 +2120,11 @@ func (c *UnifiedSecureClient) ConnectTLS(host, port string) error {
 	}
 
 	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
-		if keepAliveErr := tcpConn.SetKeepAlive(true); keepAliveErr != nil {
-			Debug("Setting TCP KeepAlive failed: %v", keepAliveErr)
-		}
-		if keepAlivePeriodErr := tcpConn.SetKeepAlivePeriod(SecureKeepAlive); keepAlivePeriodErr != nil {
-			Debug("Setting TCP KeepAlive period failed: %v", keepAlivePeriodErr)
-		}
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(SecureKeepAlive)
+		_ = tcpConn.SetNoDelay(true)
+		_ = tcpConn.SetReadBuffer(TCPReadBufferSize)
+		_ = tcpConn.SetWriteBuffer(TCPWriteBufferSize)
 	}
 
 	c.tlsConn = conn
@@ -1818,24 +2132,42 @@ func (c *UnifiedSecureClient) ConnectTLS(host, port string) error {
 	return nil
 }
 
-// ConnectQUIC establishes QUIC Connection
+// ConnectQUIC establishes optimized QUIC Connection with 0-RTT support
 func (c *UnifiedSecureClient) ConnectQUIC(addr string) error {
 	tlsConfig := &tls.Config{
 		ServerName:         c.serverName,
 		InsecureSkipVerify: c.skipVerify,
 		NextProtos:         NextProtoQUIC,
+		ClientSessionCache: tls.NewLRUClientSessionCache(QUICSessionCacheSize),
 	}
 
+	quicConfig := &quic.Config{
+		MaxIdleTimeout:        SecureIdleTimeout,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
+		KeepAlivePeriod:       SecureKeepAlive,
+		Allow0RTT:             true,
+		EnableDatagrams:       false,
+		InitialPacketSize:     InitialPacketSize,
+	}
+
+	// Use connection pool if available
+	if c.connPool != nil {
+		conn, err := c.connPool.GetQUICConn(addr, tlsConfig, quicConfig)
+		if err != nil {
+			return err
+		}
+		c.quicConn = conn
+		c.isQUICConnected = true
+		c.lastActivity = time.Now()
+		return nil
+	}
+
+	// Fallback to direct connection
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
-	conn, err := quic.DialAddr(ctx, addr, tlsConfig, &quic.Config{
-		MaxIdleTimeout:        SecureIdleTimeout,
-		MaxIncomingStreams:    math.MaxUint16,
-		MaxIncomingUniStreams: math.MaxUint16,
-		KeepAlivePeriod:       SecureKeepAlive,
-		Allow0RTT:             true,
-	})
+	conn, err := quic.DialAddr(ctx, addr, tlsConfig, quicConfig)
 	if err != nil {
 		return fmt.Errorf("QUIC connection failed: %w", err)
 	}
@@ -1846,30 +2178,13 @@ func (c *UnifiedSecureClient) ConnectQUIC(addr string) error {
 	return nil
 }
 
-// IsConnectionAlive checks if Connection is alive
-func (c *UnifiedSecureClient) IsConnectionAlive() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	switch c.protocol {
-	case "tls":
-		return c.tlsConn != nil && time.Since(c.lastActivity) <= SecureIdleTimeout
-	case "quic":
-		return c.quicConn != nil && c.isQUICConnected &&
-			time.Since(c.lastActivity) <= SecureIdleTimeout
-	case "https", "http3":
-		return c.dohClient != nil
-	}
-	return false
-}
-
-// Exchange performs DNS exchange
+// Exchange performs DNS exchange with optimizations
 func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, error) {
 	switch c.protocol {
 	case "https", "http3":
 		return c.dohClient.Exchange(msg)
 	case "tls":
-		if !c.IsConnectionAlive() {
+		if !c.IsConnectionHealthy() {
 			if err := c.Connect(addr); err != nil {
 				return nil, fmt.Errorf("reconnection failed: %w", err)
 			}
@@ -1883,7 +2198,7 @@ func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, err
 		}
 		return resp, err
 	case "quic":
-		if !c.IsConnectionAlive() {
+		if !c.IsConnectionHealthy() {
 			if err := c.Connect(addr); err != nil {
 				return nil, fmt.Errorf("reconnection failed: %w", err)
 			}
@@ -1950,7 +2265,7 @@ func (c *UnifiedSecureClient) ExchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 	return response, nil
 }
 
-// ExchangeQUIC performs QUIC exchange
+// ExchangeQUIC performs QUIC exchange with 0-RTT retry handling
 func (c *UnifiedSecureClient) ExchangeQUIC(msg *dns.Msg) (*dns.Msg, error) {
 	originalID := msg.Id
 	msg.Id = 0
@@ -1959,6 +2274,24 @@ func (c *UnifiedSecureClient) ExchangeQUIC(msg *dns.Msg) (*dns.Msg, error) {
 	}()
 
 	resp, err := c.ExchangeQUICDirect(msg)
+
+	// Handle 0-RTT rejection
+	if errors.Is(err, quic.Err0RTTRejected) {
+		Debug("0-RTT rejected, retrying with 1-RTT")
+
+		// Reconnect without 0-RTT
+		c.mu.Lock()
+		if c.quicConn != nil {
+			_ = c.quicConn.CloseWithError(QUICCodeNoError, "0rtt-rejected")
+			c.quicConn = nil
+			c.isQUICConnected = false
+		}
+		c.mu.Unlock()
+
+		// Retry
+		resp, err = c.ExchangeQUICDirect(msg)
+	}
+
 	if resp != nil {
 		resp.Id = originalID
 	}
@@ -2057,15 +2390,21 @@ func (c *UnifiedSecureClient) Close() error {
 	switch c.protocol {
 	case "tls":
 		if c.tlsConn != nil {
-			if closeErr := c.tlsConn.Close(); closeErr != nil {
-				Debug("Closing TLS connection failed: %v", closeErr)
+			// Don't close if managed by pool
+			if c.connPool == nil {
+				if closeErr := c.tlsConn.Close(); closeErr != nil {
+					Debug("Closing TLS connection failed: %v", closeErr)
+				}
 			}
 			c.tlsConn = nil
 		}
 	case "quic":
 		if c.quicConn != nil {
-			if closeErr := c.quicConn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
-				Debug("Closing QUIC connection failed: %v", closeErr)
+			// Don't close if managed by pool
+			if c.connPool == nil {
+				if closeErr := c.quicConn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
+					Debug("Closing QUIC connection failed: %v", closeErr)
+				}
 			}
 			c.quicConn = nil
 			c.isQUICConnected = false
@@ -2082,7 +2421,7 @@ func (c *UnifiedSecureClient) Close() error {
 	return nil
 }
 
-// NewDoHClient creates a new DoH client
+// NewDoHClient creates a new DoH client with HTTP/3 optimization
 func NewDoHClient(addr, serverName string, skipVerify bool, timeout time.Duration) (*DoHClient, error) {
 	parsedURL, err := url.Parse(addr)
 	if err != nil {
@@ -2112,14 +2451,18 @@ func NewDoHClient(addr, serverName string, skipVerify bool, timeout time.Duratio
 		InsecureSkipVerify: skipVerify,
 		NextProtos:         httpVersions,
 		MinVersion:         tls.VersionTLS12,
-		ClientSessionCache: tls.NewLRUClientSessionCache(0),
+		ClientSessionCache: tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 	}
 
 	client := &DoHClient{
 		addr:      parsedURL,
 		tlsConfig: tlsConfig,
 		quicConfig: &quic.Config{
-			KeepAlivePeriod: SecureKeepAlive,
+			MaxIdleTimeout:     SecureIdleTimeout,
+			MaxIncomingStreams: MaxIncomingStreams,
+			KeepAlivePeriod:    SecureKeepAlive,
+			Allow0RTT:          true,
+			InitialPacketSize:  InitialPacketSize,
 		},
 		timeout:      timeout,
 		skipVerify:   skipVerify,
@@ -2132,7 +2475,7 @@ func NewDoHClient(addr, serverName string, skipVerify bool, timeout time.Duratio
 	return client, nil
 }
 
-// Exchange performs DoH exchange
+// Exchange performs DoH exchange with retry logic
 func (c *DoHClient) Exchange(msg *dns.Msg) (*dns.Msg, error) {
 	if c == nil || msg == nil {
 		return nil, errors.New("DoH client or message is empty")
@@ -2151,7 +2494,7 @@ func (c *DoHClient) Exchange(msg *dns.Msg) (*dns.Msg, error) {
 
 	resp, err := c.ExchangeHTTPS(httpClient, msg)
 
-	// Retry logic
+	// Retry logic for 0-RTT rejection
 	for i := 0; isCached && c.ShouldRetry(err) && i < 2; i++ {
 		httpClient, err = c.ResetClient(err)
 		if err != nil {
@@ -2258,7 +2601,7 @@ func (c *DoHClient) GetClient() (*http.Client, bool, error) {
 	return c.client, false, err
 }
 
-// CreateClient creates HTTP client
+// CreateClient creates HTTP client with HTTP/3 support
 func (c *DoHClient) CreateClient() (*http.Client, error) {
 	transport, err := c.CreateTransport()
 	if err != nil {
@@ -2271,8 +2614,9 @@ func (c *DoHClient) CreateClient() (*http.Client, error) {
 	}, nil
 }
 
-// CreateTransport creates HTTP transport
+// CreateTransport creates HTTP transport with HTTP/3 priority
 func (c *DoHClient) CreateTransport() (http.RoundTripper, error) {
+	// Try HTTP/3 first
 	if c.SupportsHTTP3() {
 		if transport, err := c.CreateTransportH3(); err == nil {
 			Debug("DoH client using HTTP/3: %s", c.addrRedacted)
@@ -2307,12 +2651,16 @@ func (c *DoHClient) CreateTransport() (http.RoundTripper, error) {
 	return transport, nil
 }
 
-// CreateTransportH3 creates HTTP/3 transport
+// CreateTransportH3 creates optimized HTTP/3 transport
 func (c *DoHClient) CreateTransportH3() (http.RoundTripper, error) {
+	// Test QUIC connectivity
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
-	conn, err := quic.DialAddr(ctx, c.addr.Host, c.tlsConfig, c.quicConfig)
+	tlsConfig := c.tlsConfig.Clone()
+	tlsConfig.NextProtos = NextProtoHTTP3
+
+	conn, err := quic.DialAddr(ctx, c.addr.Host, tlsConfig, c.quicConfig)
 	if err != nil {
 		return nil, fmt.Errorf("QUIC connection failed: %w", err)
 	}
@@ -2322,7 +2670,7 @@ func (c *DoHClient) CreateTransportH3() (http.RoundTripper, error) {
 	}
 
 	transport := &http3.Transport{
-		TLSClientConfig: c.tlsConfig,
+		TLSClientConfig: tlsConfig,
 		QUICConfig:      c.quicConfig,
 	}
 
@@ -2332,7 +2680,7 @@ func (c *DoHClient) CreateTransportH3() (http.RoundTripper, error) {
 	}, nil
 }
 
-// ResetClient resets HTTP client
+// ResetClient resets HTTP client with 0-RTT rejection handling
 func (c *DoHClient) ResetClient(resetErr error) (*http.Client, error) {
 	if c == nil {
 		return nil, errors.New("DoH client is empty")
@@ -2341,9 +2689,15 @@ func (c *DoHClient) ResetClient(resetErr error) (*http.Client, error) {
 	c.clientMu.Lock()
 	defer c.clientMu.Unlock()
 
+	// Handle 0-RTT rejection
 	if errors.Is(resetErr, quic.Err0RTTRejected) {
+		Debug("0-RTT rejected, disabling 0-RTT for next attempt")
 		c.quicConfig = &quic.Config{
-			KeepAlivePeriod: SecureKeepAlive,
+			MaxIdleTimeout:     SecureIdleTimeout,
+			MaxIncomingStreams: MaxIncomingStreams,
+			KeepAlivePeriod:    SecureKeepAlive,
+			Allow0RTT:          false, // Disable 0-RTT
+			InitialPacketSize:  InitialPacketSize,
 		}
 	}
 
@@ -2518,13 +2872,13 @@ func (h *SecureErrorHandler) HandleQUICErrors(err error) bool {
 // HandleTLSErrors handles TLS-specific errors
 func (h *SecureErrorHandler) HandleTLSErrors(err error) bool {
 	errStr := err.Error()
-	ConnectionErrors := []string{
-		"broken pipe", "Connection reset", "use of closed network Connection",
-		"Connection refused", "no route to host", "network is unreachable",
+	connectionErrors := []string{
+		"broken pipe", "connection reset", "use of closed network connection",
+		"connection refused", "no route to host", "network is unreachable",
 	}
 
-	for _, connErr := range ConnectionErrors {
-		if strings.Contains(errStr, connErr) {
+	for _, connErr := range connectionErrors {
+		if strings.Contains(strings.ToLower(errStr), strings.ToLower(connErr)) {
 			return true
 		}
 	}
@@ -2614,16 +2968,16 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	}
 
 	upstreamManager := NewUpstreamManager(config.Upstream)
-	ConnectionPool := NewConnectionPool()
+	connectionPool := NewConnectionPool()
 	taskManager := NewTaskManager(MaxConcurrency)
-	queryClient := NewQueryClient(ConnectionPool, QueryTimeout)
+	queryClient := NewQueryClient(connectionPool, QueryTimeout)
 	hijackPrevention := NewHijackPrevention(config.Server.Features.HijackProtection)
 
 	server := &DNSServer{
 		config:           config,
 		rootServersV4:    rootServersV4,
 		rootServersV6:    rootServersV6,
-		connPool:         ConnectionPool,
+		connPool:         connectionPool,
 		dnssecValidator:  NewDNSSECValidator(),
 		concurrencyLimit: make(chan struct{}, MaxConcurrency),
 		ctx:              ctx,
@@ -2902,6 +3256,7 @@ func (s *DNSServer) DisplayInfo() {
 	}
 
 	Info("Max concurrency: %d", MaxConcurrency)
+	Info("Connection pool optimizations: enabled (TLS session resumption, QUIC 0-RTT)")
 }
 
 // HandleDNSRequest handles DNS requests
@@ -3134,7 +3489,6 @@ func (s *DNSServer) CreateDirectIPResponse(req *dns.Msg, qtype uint16, ip net.IP
 			AAAA: ip,
 		}}
 	}
-	// For IPv4 address query but got IPv6 address, or IPv6 address query but got IPv4 address, return empty answer
 
 	return msg
 }
@@ -3348,18 +3702,18 @@ func (s *DNSServer) ProcessQuerySuccess(req *dns.Msg, question dns.Question, ecs
 		}
 
 		// Check if SpeedTest should be performed (debounce mechanism)
-		ShouldPerformSpeedTest := s.ShouldPerformSpeedTest(question.Name)
-		if ShouldPerformSpeedTest {
+		shouldPerformSpeedTest := s.ShouldPerformSpeedTest(question.Name)
+		if shouldPerformSpeedTest {
 			Debug("SpeedTest: triggering background detection for domain %s", question.Name)
 			// Perform SpeedTest in background without affecting main response
-			// Clone message for background processing
 			msgCopy := msg.Copy()
 			s.taskManager.ExecuteAsync(fmt.Sprintf("speed-test-%s", question.Name), func(ctx context.Context) error {
 				Debug("SpeedTest: starting background detection for domain %s", question.Name)
-				// Create temporary SpeedTester instance for SpeedTesting
-				SpeedTester := NewSpeedTester(*s.config)
-				// Perform SpeedTest and sorting
-				SpeedTester.PerformSpeedTestAndSort(msgCopy)
+				speedTester := NewSpeedTester(*s.config)
+				defer func() {
+					_ = speedTester.Close()
+				}()
+				speedTester.PerformSpeedTestAndSort(msgCopy)
 
 				// Update cache with sorted results
 				s.cache.Set(cacheKey,
@@ -3372,7 +3726,6 @@ func (s *DNSServer) ProcessQuerySuccess(req *dns.Msg, question dns.Question, ecs
 				return nil
 			})
 
-			// First response returns directly without sorting
 			if tracker != nil {
 				tracker.AddStep("First response not sorted, background SpeedTest in progress")
 			}
@@ -3415,7 +3768,6 @@ func (s *DNSServer) RestoreOriginalDomain(msg *dns.Msg, currentName, originalNam
 
 // ShouldPerformSpeedTest checks if SpeedTest should be performed for domain (debounce mechanism)
 func (s *DNSServer) ShouldPerformSpeedTest(domain string) bool {
-	// If no SpeedTest configured, don't perform SpeedTest
 	if len(s.config.SpeedTest) == 0 {
 		return false
 	}
@@ -3425,7 +3777,6 @@ func (s *DNSServer) ShouldPerformSpeedTest(domain string) bool {
 
 	now := time.Now()
 	lastCheck, exists := s.speedDebounce[domain]
-	// If domain hasn't been checked or interval has passed since last check, should check
 	if !exists || now.Sub(lastCheck) >= s.speedInterval {
 		s.speedDebounce[domain] = now
 		return true
@@ -3526,12 +3877,10 @@ func (s *DNSServer) ExecuteConcurrentQueries(ctx context.Context, question dns.Q
 func (s *DNSServer) BuildQueryMessage(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
 	msg := globalResourceManager.GetDNSMessage()
 
-	// Ensure message state is correct
 	if msg == nil {
 		msg = &dns.Msg{}
 	}
 
-	// Safe set question
 	if err := s.SafeSetQuestion(msg, question.Name, question.Qtype); err != nil {
 		Debug("Setting DNS question failed: %v", err)
 		msg = &dns.Msg{}
@@ -3949,7 +4298,6 @@ func (s *DNSServer) ResolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	}
 
 	var allAddresses []string
-	// Read resolved NS addresses from channel until max count or timeout
 	for i := 0; i < resolveCount; i++ {
 		select {
 		case addresses := <-nsChan:
@@ -4050,7 +4398,6 @@ func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 		return nil
 	}
 
-	// Ensure msg.Extra field is safe to prevent index out of range in IsEdns0()
 	if msg.Extra == nil {
 		return nil
 	}
@@ -4080,7 +4427,6 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		return
 	}
 
-	// Ensure message structure is safe
 	if msg.Question == nil {
 		msg.Question = []dns.Question{}
 	}
@@ -4094,7 +4440,6 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		msg.Extra = []dns.RR{}
 	}
 
-	// Clean existing OPT records
 	cleanExtra := make([]dns.RR, 0, len(msg.Extra))
 	for _, rr := range msg.Extra {
 		if rr != nil && rr.Header().Rrtype != dns.TypeOPT {
@@ -4103,7 +4448,6 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 	}
 	msg.Extra = cleanExtra
 
-	// Create new OPT record
 	opt := &dns.OPT{
 		Hdr: dns.RR_Header{
 			Name:   ".",
@@ -4117,10 +4461,8 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		opt.SetDo(true)
 	}
 
-	// Prepare EDNS options
 	var options []dns.EDNS0
 
-	// Add ECS option
 	if ecs != nil {
 		ecsOption := &dns.EDNS0_SUBNET{
 			Code:          dns.EDNS0SUBNET,
@@ -4133,7 +4475,6 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		Debug("Adding ECS option: %s/%d", ecs.Address, ecs.SourcePrefix)
 	}
 
-	// Calculate and add padding for secure connections
 	if em.paddingEnabled && isSecureConnection {
 		opt.Option = options
 		msg.Extra = append(msg.Extra, opt)
@@ -4141,7 +4482,6 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		if wireData, err := msg.Pack(); err == nil {
 			currentSize := len(wireData)
 			if currentSize < PaddingBlockSize {
-				// Calculate required padding: target - current - EDNS0 header overhead (4 bytes)
 				paddingDataSize := PaddingBlockSize - currentSize - 4
 				if paddingDataSize > 0 {
 					options = append(options, &dns.EDNS0_PADDING{
@@ -4154,11 +4494,9 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 			Debug("Failed to calculate padding: %v", err)
 		}
 
-		// Remove temporary OPT and rebuild with padding
 		msg.Extra = msg.Extra[:len(msg.Extra)-1]
 	}
 
-	// Set final options and add OPT record
 	opt.Option = options
 	msg.Extra = append(msg.Extra, opt)
 }
@@ -4221,7 +4559,6 @@ func (em *EDNSManager) DetectPublicIP(forceIPv6, allowFallback bool) (*ECSOption
 		}
 	}
 
-	// Fallback handling
 	if ecs == nil && allowFallback && !forceIPv6 {
 		if ip := em.detector.DetectPublicIP(true); ip != nil {
 			ecs = &ECSOption{
@@ -4233,7 +4570,6 @@ func (em *EDNSManager) DetectPublicIP(forceIPv6, allowFallback bool) (*ECSOption
 		}
 	}
 
-	// Cache result
 	if ecs != nil {
 		em.cache.Store(cacheKey, ecs)
 		time.AfterFunc(IPCacheExpiry, func() {
@@ -4302,7 +4638,6 @@ func (d *IPDetector) DetectPublicIP(forceIPv6 bool) net.IP {
 		return nil
 	}
 
-	// Check IP version match
 	if forceIPv6 && ip.To4() != nil {
 		return nil
 	}
@@ -4348,7 +4683,7 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 	result := DNSRewriteResult{
 		Domain:        domain,
 		ShouldRewrite: false,
-		ResponseCode:  dns.RcodeSuccess, // Default NOERROR
+		ResponseCode:  dns.RcodeSuccess,
 		Records:       nil,
 		Additional:    nil,
 	}
@@ -4365,41 +4700,31 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 	for i := range r.rules {
 		rule := &r.rules[i]
 
-		// Exact domain match
 		if domain == strings.ToLower(rule.Name) {
-			// Handle response code rewriting
 			if rule.ResponseCode != nil {
 				result.ResponseCode = *rule.ResponseCode
 				result.ShouldRewrite = true
-				// If response code is set, don't return records
 				return result
 			}
 
-			// Handle custom records
 			if len(rule.Records) > 0 || len(rule.Additional) > 0 {
 				result.Records = make([]dns.RR, 0)
 				result.Additional = make([]dns.RR, 0)
 
-				// Process Answer Section records
 				for _, record := range rule.Records {
-					// Check if record type matches query type
 					recordType := dns.StringToType[record.Type]
 
-					// Special handling for records with response_code, only apply when type matches
 					if record.ResponseCode != nil {
 						if record.Type == "" || recordType == qtype {
 							result.ResponseCode = *record.ResponseCode
 							result.ShouldRewrite = true
-							// Clear collected records because we're returning response code
 							result.Records = nil
 							result.Additional = nil
 							return result
 						}
-						// If type doesn't match, continue checking other records
 						continue
 					}
 
-					// If record type doesn't match query type, skip
 					if record.Type != "" && recordType != qtype {
 						continue
 					}
@@ -4410,7 +4735,6 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 					}
 				}
 
-				// Process Additional Section records
 				for _, record := range rule.Additional {
 					rr := r.BuildDNSRecord(domain, record)
 					if rr != nil {
@@ -4431,25 +4755,21 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 func (r *DNSRewriter) BuildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
 	ttl := record.TTL
 	if ttl == 0 {
-		ttl = DefaultCacheTTL // Default TTL
+		ttl = DefaultCacheTTL
 	}
 
-	// Determine record name (prefer record.Name, otherwise use domain)
 	name := dns.Fqdn(domain)
 	if record.Name != "" {
 		name = dns.Fqdn(record.Name)
 	}
 
-	// Try to parse record content
 	rrStr := fmt.Sprintf("%s %d IN %s %s", name, ttl, record.Type, record.Content)
 
-	// Use miekg/dns library parsing functionality
 	rr, err := dns.NewRR(rrStr)
 	if err == nil {
 		return rr
 	}
 
-	// If parsing fails, use RFC3597 generic format
 	rrType, exists := dns.StringToType[record.Type]
 	if !exists {
 		rrType = 0
@@ -4759,7 +5079,6 @@ func (rh *RecordHandler) ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC 
 			continue
 		}
 
-		// Filter DNSSEC records
 		if !includeDNSSEC {
 			switch rr.(type) {
 			case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
@@ -4767,7 +5086,6 @@ func (rh *RecordHandler) ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC 
 			}
 		}
 
-		// Adjust TTL
 		newRR := dns.Copy(rr)
 		if newRR != nil {
 			if ttl > 0 {
@@ -4794,7 +5112,6 @@ func (cu *CacheUtils) BuildKey(question dns.Question, ecs *ECSOption, dnssecEnab
 		return ""
 	}
 
-	// Use string builder for optimized string concatenation
 	sb := globalResourceManager.GetStringBuilder()
 	defer globalResourceManager.PutStringBuilder(sb)
 
@@ -4873,17 +5190,16 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 
 // Start starts TLS services
 func (tm *TLSManager) Start(httpsPort string) error {
-	serverCount := 2 // DoT + DoQ
+	serverCount := 2
 
 	if httpsPort != "" {
-		serverCount += 2 // DoH + DoH3
+		serverCount += 2
 	}
 
 	errChan := make(chan error, serverCount)
 	wg := sync.WaitGroup{}
 	wg.Add(serverCount)
 
-	// Start DoT server
 	go func() {
 		defer wg.Done()
 		defer func() { RecoverPanic("Critical-DoT server") }()
@@ -4892,7 +5208,6 @@ func (tm *TLSManager) Start(httpsPort string) error {
 		}
 	}()
 
-	// Start DoQ server
 	go func() {
 		defer wg.Done()
 		defer func() { RecoverPanic("Critical-DoQ server") }()
@@ -4902,7 +5217,6 @@ func (tm *TLSManager) Start(httpsPort string) error {
 	}()
 
 	if httpsPort != "" {
-		// Start DoH server
 		go func() {
 			defer wg.Done()
 			defer func() { RecoverPanic("Critical-DoH server") }()
@@ -4911,7 +5225,6 @@ func (tm *TLSManager) Start(httpsPort string) error {
 			}
 		}()
 
-		// Start DoH3 server
 		go func() {
 			defer wg.Done()
 			defer func() { RecoverPanic("Critical-DoH3 server") }()
@@ -4978,8 +5291,8 @@ func (tm *TLSManager) StartQUICServer() error {
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        SecureIdleTimeout,
-		MaxIncomingStreams:    math.MaxUint16,
-		MaxIncomingUniStreams: math.MaxUint16,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
 		KeepAlivePeriod:       SecureKeepAlive,
 		Allow0RTT:             true,
 	}
@@ -5044,8 +5357,8 @@ func (tm *TLSManager) StartDoH3Server(port string) error {
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        SecureIdleTimeout,
-		MaxIncomingStreams:    math.MaxUint16,
-		MaxIncomingUniStreams: math.MaxUint16,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             true,
 	}
 
@@ -5546,7 +5859,7 @@ func (tm *TLSManager) Shutdown() error {
 	}
 
 	if tm.httpsServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 		defer cancel()
 		if shutdownErr := tm.httpsServer.Shutdown(ctx); shutdownErr != nil {
 			Debug("Closing HTTPS server failed: %v", shutdownErr)
@@ -5554,7 +5867,7 @@ func (tm *TLSManager) Shutdown() error {
 	}
 
 	if tm.h3Server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 		defer cancel()
 		if shutdownErr := tm.h3Server.Shutdown(ctx); shutdownErr != nil {
 			Debug("Closing HTTP/3 server failed: %v", shutdownErr)
@@ -5592,7 +5905,6 @@ func NewSpeedTester(config ServerConfig) *SpeedTester {
 		methods:     config.SpeedTest,
 	}
 
-	// Initialize ICMP Connections
 	st.InitICMP()
 
 	return st
@@ -5600,30 +5912,24 @@ func NewSpeedTester(config ServerConfig) *SpeedTester {
 
 // InitICMP initializes ICMP Connections
 func (st *SpeedTester) InitICMP() {
-	// Create IPv4 ICMP Connection
 	conn4, err := icmp.ListenPacket("ip4:icmp", "")
 	if err == nil {
 		st.icmpConn4 = conn4
 	} else {
-		// If it's permission issue, ignore directly instead of degrading to UDP
 		if strings.Contains(err.Error(), "operation not permitted") {
 			Debug("SpeedTest: no permission to create IPv4 ICMP connection, skipping ICMP test")
 		} else {
-			// Also ignore other errors directly without degrading to UDP
 			Debug("SpeedTest: cannot create IPv4 ICMP connection: %v", err)
 		}
 	}
 
-	// Create IPv6 ICMP Connection (only on IPv6-supported systems)
 	conn6, err := icmp.ListenPacket("ip6:ipv6-icmp", "")
 	if err == nil {
 		st.icmpConn6 = conn6
 	} else {
-		// If it's permission issue, ignore directly instead of degrading to UDP
 		if strings.Contains(err.Error(), "operation not permitted") {
 			Debug("SpeedTest: no permission to create IPv6 ICMP connection, skipping ICMP test")
 		} else {
-			// Also ignore other errors directly without degrading to UDP
 			Debug("SpeedTest: cannot create IPv6 ICMP connection: %v", err)
 		}
 	}
@@ -5632,11 +5938,9 @@ func (st *SpeedTester) InitICMP() {
 // Close closes ICMP Connections
 func (st *SpeedTester) Close() error {
 	if st.icmpConn4 != nil {
-		// Ignore close errors
 		_ = st.icmpConn4.Close()
 	}
 	if st.icmpConn6 != nil {
-		// Ignore close errors
 		_ = st.icmpConn6.Close()
 	}
 	return nil
@@ -5651,7 +5955,6 @@ func (st *SpeedTester) PerformSpeedTestAndSort(response *dns.Msg) *dns.Msg {
 
 	Debug("SpeedTest: starting to process response, answer records count: %d", len(response.Answer))
 
-	// Separate different types of records
 	var aRecords []*dns.A
 	var aaaaRecords []*dns.AAAA
 	var cnameRecords []dns.RR
@@ -5672,7 +5975,6 @@ func (st *SpeedTester) PerformSpeedTestAndSort(response *dns.Msg) *dns.Msg {
 
 	Debug("SpeedTest: A records=%d, AAAA records=%d, CNAME records=%d", len(aRecords), len(aaaaRecords), len(cnameRecords))
 
-	// Perform SpeedTest and sort A records
 	if len(aRecords) > 1 {
 		Debug("SpeedTest: performing SpeedTest sorting for %d A records", len(aRecords))
 		aRecords = st.SortARecords(aRecords)
@@ -5680,7 +5982,6 @@ func (st *SpeedTester) PerformSpeedTestAndSort(response *dns.Msg) *dns.Msg {
 		Debug("SpeedTest: A records count insufficient or equal to 1, skipping SpeedTest")
 	}
 
-	// Perform SpeedTest and sort AAAA records
 	if len(aaaaRecords) > 1 {
 		Debug("SpeedTest: performing SpeedTest sorting for %d AAAA records", len(aaaaRecords))
 		aaaaRecords = st.SortAAAARecords(aaaaRecords)
@@ -5688,23 +5989,18 @@ func (st *SpeedTester) PerformSpeedTestAndSort(response *dns.Msg) *dns.Msg {
 		Debug("SpeedTest: AAAA records count insufficient or equal to 1, skipping SpeedTest")
 	}
 
-	// Rebuild response, maintaining correct DNS record order
 	response.Answer = []dns.RR{}
 
-	// First add CNAME records (if any)
 	response.Answer = append(response.Answer, cnameRecords...)
 
-	// Then add A records
 	for _, record := range aRecords {
 		response.Answer = append(response.Answer, record)
 	}
 
-	// Then add AAAA records
 	for _, record := range aaaaRecords {
 		response.Answer = append(response.Answer, record)
 	}
 
-	// Finally add other records
 	response.Answer = append(response.Answer, otherRecords...)
 
 	Debug("SpeedTest: processing completed, answer records count: %d", len(response.Answer))
@@ -5718,16 +6014,13 @@ func (st *SpeedTester) SortARecords(records []*dns.A) []*dns.A {
 		return records
 	}
 
-	// Extract IP addresses
 	ips := make([]string, len(records))
 	for i, record := range records {
 		ips[i] = record.A.String()
 	}
 
-	// Perform SpeedTest
 	results := st.SpeedTest(ips)
 
-	// Sort based on SpeedTest results
 	sort.Slice(records, func(i, j int) bool {
 		ipI := records[i].A.String()
 		ipJ := records[j].A.String()
@@ -5735,12 +6028,10 @@ func (st *SpeedTester) SortARecords(records []*dns.A) []*dns.A {
 		resultI, okI := results[ipI]
 		resultJ, okJ := results[ipJ]
 
-		// If unable to get SpeedTest results, maintain original order
 		if !okI || !okJ {
 			return i < j
 		}
 
-		// Unreachable addresses go to the end
 		if !resultI.Reachable && resultJ.Reachable {
 			return false
 		}
@@ -5748,7 +6039,6 @@ func (st *SpeedTester) SortARecords(records []*dns.A) []*dns.A {
 			return true
 		}
 
-		// Both unreachable or both reachable, sort by latency
 		return resultI.Latency < resultJ.Latency
 	})
 
@@ -5761,16 +6051,13 @@ func (st *SpeedTester) SortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
 		return records
 	}
 
-	// Extract IP addresses
 	ips := make([]string, len(records))
 	for i, record := range records {
 		ips[i] = record.AAAA.String()
 	}
 
-	// Perform SpeedTest
 	results := st.SpeedTest(ips)
 
-	// Sort based on SpeedTest results
 	sort.Slice(records, func(i, j int) bool {
 		ipI := records[i].AAAA.String()
 		ipJ := records[j].AAAA.String()
@@ -5778,12 +6065,10 @@ func (st *SpeedTester) SortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
 		resultI, okI := results[ipI]
 		resultJ, okJ := results[ipJ]
 
-		// If unable to get SpeedTest results, maintain original order
 		if !okI || !okJ {
 			return i < j
 		}
 
-		// Unreachable addresses go to the end
 		if !resultI.Reachable && resultJ.Reachable {
 			return false
 		}
@@ -5791,7 +6076,6 @@ func (st *SpeedTester) SortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
 			return true
 		}
 
-		// Both unreachable or both reachable, sort by latency
 		return resultI.Latency < resultJ.Latency
 	})
 
@@ -5800,7 +6084,6 @@ func (st *SpeedTester) SortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
 
 // SpeedTest performs SpeedTest on IP list
 func (st *SpeedTester) SpeedTest(ips []string) map[string]*SpeedResult {
-	// Check cache
 	cachedResults := make(map[string]*SpeedResult)
 	remainingIPs := []string{}
 
@@ -5808,7 +6091,6 @@ func (st *SpeedTester) SpeedTest(ips []string) map[string]*SpeedResult {
 	now := time.Now()
 	for _, ip := range ips {
 		if result, exists := st.cache[ip]; exists {
-			// Check if cache has expired
 			if now.Sub(result.Timestamp) < st.cacheTTL {
 				cachedResults[ip] = result
 			} else {
@@ -5820,7 +6102,6 @@ func (st *SpeedTester) SpeedTest(ips []string) map[string]*SpeedResult {
 	}
 	st.cacheMutex.RUnlock()
 
-	// If all IPs have valid cache results, return directly
 	if len(remainingIPs) == 0 {
 		Debug("SpeedTest: all IPs have valid cache, returning cached results directly")
 		return cachedResults
@@ -5828,10 +6109,8 @@ func (st *SpeedTester) SpeedTest(ips []string) map[string]*SpeedResult {
 
 	Debug("SpeedTest: need to test %d IPs, %d IPs using cache", len(remainingIPs), len(cachedResults))
 
-	// Perform SpeedTest on remaining IPs
 	newResults := st.PerformSpeedTest(remainingIPs)
 
-	// Merge results
 	results := make(map[string]*SpeedResult)
 	for ip, result := range cachedResults {
 		results[ip] = result
@@ -5840,7 +6119,6 @@ func (st *SpeedTester) SpeedTest(ips []string) map[string]*SpeedResult {
 		results[ip] = result
 	}
 
-	// Update cache
 	st.cacheMutex.Lock()
 	for ip, result := range newResults {
 		st.cache[ip] = result
@@ -5854,33 +6132,27 @@ func (st *SpeedTester) SpeedTest(ips []string) map[string]*SpeedResult {
 func (st *SpeedTester) PerformSpeedTest(ips []string) map[string]*SpeedResult {
 	Debug("SpeedTest: starting concurrent SpeedTest for %d IPs", len(ips))
 
-	// Create buffered channel to limit concurrency
 	semaphore := make(chan struct{}, st.concurrency)
 	resultChan := make(chan *SpeedResult, len(ips))
 
-	// Start SpeedTest tasks
 	var wg sync.WaitGroup
 	for _, ip := range ips {
 		wg.Add(1)
 		go func(ip string) {
 			defer wg.Done()
-			// Get semaphore
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
-			// Perform single IP SpeedTest
 			result := st.TestSingleIP(ip)
 			resultChan <- result
 		}(ip)
 	}
 
-	// Wait for all SpeedTest tasks to complete
 	go func() {
 		wg.Wait()
 		close(resultChan)
 	}()
 
-	// Collect SpeedTest results
 	results := make(map[string]*SpeedResult)
 	for result := range resultChan {
 		results[result.IP] = result
@@ -5900,17 +6172,13 @@ func (st *SpeedTester) TestSingleIP(ip string) *SpeedResult {
 		Timestamp: time.Now(),
 	}
 
-	// Perform SpeedTest based on configured methods
-	// Create context with timeout
 	totalTimeout := time.Duration(st.timeout)
 	totalTimeoutCtx, totalCancel := context.WithTimeout(context.Background(), totalTimeout)
 	defer totalCancel()
 
-	// Test according to configured test methods in order
 	for _, method := range st.methods {
 		select {
 		case <-totalTimeoutCtx.Done():
-			// Total timeout reached
 			result.Reachable = false
 			result.Latency = st.timeout
 			Debug("SpeedTest: IP %s total timeout, marked as unreachable", ip)
@@ -5938,7 +6206,6 @@ func (st *SpeedTester) TestSingleIP(ip string) *SpeedResult {
 		}
 	}
 
-	// All attempts failed
 	result.Reachable = false
 	result.Latency = st.timeout
 	Debug("SpeedTest: IP %s all connection attempts failed, marked as unreachable", ip)
@@ -5949,14 +6216,12 @@ func (st *SpeedTester) TestSingleIP(ip string) *SpeedResult {
 func (st *SpeedTester) PingWithICMP(ip string, timeout time.Duration) time.Duration {
 	Debug("SpeedTest: starting ICMP ping test %s", ip)
 
-	// Resolve IP address
 	dst, err := net.ResolveIPAddr("ip", ip)
 	if err != nil {
 		Debug("SpeedTest: cannot parse IP address %s: %v", ip, err)
 		return -1
 	}
 
-	// Select appropriate ICMP Connection
 	var conn *icmp.PacketConn
 	if dst.IP.To4() != nil {
 		conn = st.icmpConn4
@@ -5964,24 +6229,21 @@ func (st *SpeedTester) PingWithICMP(ip string, timeout time.Duration) time.Durat
 		conn = st.icmpConn6
 	}
 
-	// Check if ICMP Connection is available
 	if conn == nil {
 		Debug("SpeedTest: no available ICMP connection for testing %s", ip)
 		return -1
 	}
 
-	// Create ICMP message type
 	var icmpType icmp.Type
 	var protocol int
 	if dst.IP.To4() != nil {
 		icmpType = ipv4.ICMPTypeEcho
-		protocol = 1 // ICMP protocol number
+		protocol = 1
 	} else {
 		icmpType = ipv6.ICMPTypeEchoRequest
-		protocol = 58 // IPv6 ICMP protocol number
+		protocol = 58
 	}
 
-	// Create ICMP message
 	wm := icmp.Message{
 		Type: icmpType,
 		Code: 0,
@@ -5992,32 +6254,24 @@ func (st *SpeedTester) PingWithICMP(ip string, timeout time.Duration) time.Durat
 		},
 	}
 
-	// Serialize ICMP message
 	wb, err := wm.Marshal(nil)
 	if err != nil {
 		Debug("SpeedTest: cannot serialize ICMP message %s: %v", ip, err)
 		return -1
 	}
 
-	// Set write timeout
-	// Ignore possible timeout setting errors
 	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
 
-	// Send ICMP message
 	start := time.Now()
 
-	// Try to write directly
 	_, err = conn.WriteTo(wb, dst)
 	if err != nil {
 		Debug("SpeedTest: ICMP message sending failed %s: %v", ip, err)
 		return -1
 	}
 
-	// Set read timeout
-	// Ignore possible timeout setting errors
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 
-	// Read reply
 	rb := make([]byte, 1500)
 	n, peer, err := conn.ReadFrom(rb)
 	if err != nil {
@@ -6031,17 +6285,14 @@ func (st *SpeedTester) PingWithICMP(ip string, timeout time.Duration) time.Durat
 
 	Debug("SpeedTest: received reply from %v, size %d bytes", peer, n)
 
-	// Parse reply
 	rm, err := icmp.ParseMessage(protocol, rb[:n])
 	if err != nil {
 		Debug("SpeedTest: cannot parse ICMP reply %s: %v", ip, err)
 		return -1
 	}
 
-	// Check reply type
 	switch rm.Type {
 	case ipv4.ICMPTypeEchoReply, ipv6.ICMPTypeEchoReply:
-		// Successfully received reply
 		latency := time.Since(start)
 		Debug("SpeedTest: ICMP ping successful %s, latency: %v", ip, latency)
 		return latency
@@ -6053,23 +6304,18 @@ func (st *SpeedTester) PingWithICMP(ip string, timeout time.Duration) time.Durat
 
 // PingWithTCP uses TCP Connection to test IP and port latency
 func (st *SpeedTester) PingWithTCP(ip, port string, timeout time.Duration) time.Duration {
-	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Record start time
 	start := time.Now()
 
-	// Try to establish TCP Connection
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(ip, port))
 	if err != nil {
 		Debug("SpeedTest: TCP connection failed %s:%s - %v", ip, port, err)
 		return -1
 	}
 
-	// Record latency and close Connection
 	latency := time.Since(start)
-	// Ignore Connection close errors
 	_ = conn.Close()
 
 	Debug("SpeedTest: TCP connection successful %s:%s, latency: %v", ip, port, latency)
@@ -6079,58 +6325,30 @@ func (st *SpeedTester) PingWithTCP(ip, port string, timeout time.Duration) time.
 
 // PingWithUDP uses UDP Connection to test IP and port latency
 func (st *SpeedTester) PingWithUDP(ip, port string, timeout time.Duration) time.Duration {
-	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Record start time
 	start := time.Now()
 
-	// Try to establish UDP Connection
 	conn, err := (&net.Dialer{}).DialContext(ctx, "udp", net.JoinHostPort(ip, port))
 	if err != nil {
 		Debug("SpeedTest: UDP connection failed %s:%s - %v", ip, port, err)
 		return -1
 	}
 
-	// Send empty UDP packet
 	_, writeErr := conn.Write([]byte{})
 	if writeErr != nil {
 		Debug("SpeedTest: UDP data sending failed %s:%s - %v", ip, port, writeErr)
-		// Ignore Connection close errors
 		_ = conn.Close()
 		return -1
 	}
 
-	// Record latency and close Connection
 	latency := time.Since(start)
-	// Ignore Connection close errors
 	_ = conn.Close()
 
 	Debug("SpeedTest: UDP connection successful %s:%s, latency: %v", ip, port, latency)
 
 	return latency
-}
-
-// Cleanup cleans expired cache
-func (st *SpeedTester) Cleanup() {
-	st.cacheMutex.Lock()
-	defer st.cacheMutex.Unlock()
-
-	now := time.Now()
-	for ip, result := range st.cache {
-		if now.Sub(result.Timestamp) >= st.cacheTTL {
-			delete(st.cache, ip)
-		}
-	}
-}
-
-// ClearCache clears cache
-func (st *SpeedTester) ClearCache() {
-	st.cacheMutex.Lock()
-	defer st.cacheMutex.Unlock()
-
-	st.cache = make(map[string]*SpeedResult)
 }
 
 // =============================================================================
@@ -6145,7 +6363,6 @@ func NewResourceManager() *ResourceManager {
 		New: func() interface{} {
 			atomic.AddInt64(&rm.stats.news, 1)
 			msg := &dns.Msg{}
-			// Ensure all slice fields are initialized
 			msg.Question = make([]dns.Question, 0)
 			msg.Answer = make([]dns.RR, 0)
 			msg.Ns = make([]dns.RR, 0)
@@ -6174,7 +6391,6 @@ func NewResourceManager() *ResourceManager {
 func (rm *ResourceManager) GetDNSMessage() *dns.Msg {
 	if rm == nil {
 		msg := &dns.Msg{}
-		// Initialize fields directly without patch function
 		msg.Question = make([]dns.Question, 0)
 		msg.Answer = make([]dns.RR, 0)
 		msg.Ns = make([]dns.RR, 0)
@@ -6187,7 +6403,6 @@ func (rm *ResourceManager) GetDNSMessage() *dns.Msg {
 	msg, ok := obj.(*dns.Msg)
 	if !ok {
 		msg = &dns.Msg{}
-		// Initialize fields directly without patch function
 		msg.Question = make([]dns.Question, 0)
 		msg.Answer = make([]dns.RR, 0)
 		msg.Ns = make([]dns.RR, 0)
@@ -6204,15 +6419,13 @@ func (rm *ResourceManager) ResetDNSMessageSafe(msg *dns.Msg) {
 		return
 	}
 
-	// Safe reset, preserve slice capacity and ensure non-nil
 	*msg = dns.Msg{
 		Question: msg.Question[:0],
 		Answer:   msg.Answer[:0],
 		Ns:       msg.Ns[:0],
-		Extra:    msg.Extra[:0], // Ensure empty slice rather than nil
+		Extra:    msg.Extra[:0],
 	}
 
-	// If any field is nil, reinitialize
 	if msg.Question == nil {
 		msg.Question = make([]dns.Question, 0)
 	}
@@ -6243,7 +6456,7 @@ func (rm *ResourceManager) GetBuffer() []byte {
 	if rm == nil {
 		return make([]byte, 0, 1024)
 	}
-	return (*rm.buffers.Get().(*[]byte))[:0]
+	return (rm.buffers.Get().([]byte))[:0]
 }
 
 // PutBuffer returns buffer to pool
@@ -6251,7 +6464,7 @@ func (rm *ResourceManager) PutBuffer(buf []byte) {
 	if rm == nil || buf == nil {
 		return
 	}
-	if cap(buf) <= 8192 { // Avoid keeping oversized buffers
+	if cap(buf) <= 8192 {
 		rm.buffers.Put(&buf)
 	}
 }
@@ -6271,7 +6484,7 @@ func (rm *ResourceManager) PutStringBuilder(sb *strings.Builder) {
 	if rm == nil || sb == nil {
 		return
 	}
-	if sb.Cap() <= 4096 { // Avoid keeping oversized builders
+	if sb.Cap() <= 4096 {
 		rm.stringBuilders.Put(sb)
 	}
 }
@@ -6401,28 +6614,23 @@ func (rt *RequestTracker) Finish() {
 }
 
 // SafeCopyMessage safely copies DNS message to prevent panic during copying
-// Uses ResourceManager object pool for performance optimization
 func SafeCopyMessage(msg *dns.Msg) *dns.Msg {
 	if msg == nil {
 		newMsg := globalResourceManager.GetDNSMessage()
 		return newMsg
 	}
 
-	// Get message object from object pool
 	msgCopy := globalResourceManager.GetDNSMessage()
 
-	// Copy message header and compression flag
 	msgCopy.MsgHdr = msg.MsgHdr
 	msgCopy.Compress = msg.Compress
 
-	// Safely copy Question slice
 	if msg.Question != nil {
 		msgCopy.Question = append(msgCopy.Question[:0], msg.Question...)
 	} else {
 		msgCopy.Question = msgCopy.Question[:0]
 	}
 
-	// Safely copy Answer slice
 	if msg.Answer != nil {
 		msgCopy.Answer = msgCopy.Answer[:0]
 		for _, rr := range msg.Answer {
@@ -6434,7 +6642,6 @@ func SafeCopyMessage(msg *dns.Msg) *dns.Msg {
 		msgCopy.Answer = msgCopy.Answer[:0]
 	}
 
-	// Safely copy Ns slice
 	if msg.Ns != nil {
 		msgCopy.Ns = msgCopy.Ns[:0]
 		for _, rr := range msg.Ns {
@@ -6446,7 +6653,6 @@ func SafeCopyMessage(msg *dns.Msg) *dns.Msg {
 		msgCopy.Ns = msgCopy.Ns[:0]
 	}
 
-	// Safely copy Extra slice
 	if msg.Extra != nil {
 		msgCopy.Extra = msgCopy.Extra[:0]
 		for _, rr := range msg.Extra {
@@ -6468,7 +6674,6 @@ func RecoverPanic(operation string) {
 		n := runtime.Stack(buf, false)
 		stackTrace := string(buf[:n])
 
-		// Merge log output with operation info, panic details and stack trace
 		Error("Panic triggered [%s]: %v\nStack:\n%s\nProgram exiting due to panic",
 			operation, r, stackTrace)
 
