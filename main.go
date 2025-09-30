@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dgraph-io/ristretto/v2"
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -135,6 +136,10 @@ const (
 	TCPWriteBufferSize = 128 * 1024
 	TCPNoDelay         = 1
 	TCPQuickAck        = 0x0c // Linux TCP_QUICKACK
+
+	// QUIC Address Validation Configuration
+	QUICAddrValidatorCacheSize = 10000
+	QUICAddrValidatorTTL       = 300 * time.Second
 
 	// Default Values
 	DefaultLogLevel = "info"
@@ -460,19 +465,20 @@ type (
 type (
 	// TLSManager handles secure DNS protocols (DoT/DoH/DoQ)
 	TLSManager struct {
-		server        *DNSServer
-		tlsConfig     *tls.Config
-		ctx           context.Context
-		cancel        context.CancelFunc
-		wg            sync.WaitGroup
-		tlsListener   net.Listener
-		quicConn      *net.UDPConn
-		quicListener  *quic.EarlyListener
-		quicTransport *quic.Transport
-		httpsServer   *http.Server
-		h3Server      *http3.Server
-		httpsListener net.Listener
-		h3Listener    *quic.EarlyListener
+		server            *DNSServer
+		tlsConfig         *tls.Config
+		ctx               context.Context
+		cancel            context.CancelFunc
+		wg                sync.WaitGroup
+		tlsListener       net.Listener
+		quicConn          *net.UDPConn
+		quicListener      *quic.EarlyListener
+		quicTransport     *quic.Transport
+		quicAddrValidator *QuicAddrValidator
+		httpsServer       *http.Server
+		h3Server          *http3.Server
+		httpsListener     net.Listener
+		h3Listener        *quic.EarlyListener
 	}
 
 	// UpstreamManager manages upstream DNS servers
@@ -497,6 +503,12 @@ type (
 			failed   int64
 			timeout  int64
 		}
+	}
+
+	// QuicAddrValidator validates QUIC addresses
+	QuicAddrValidator struct {
+		cache *ristretto.Cache[string, string]
+		ttl   time.Duration
 	}
 )
 
@@ -5195,11 +5207,18 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	quicAddrValidator, err := NewQUICAddrValidator(QUICAddrValidatorCacheSize, QUICAddrValidatorTTL)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create QUIC address validator: %w", err)
+	}
+
 	return &TLSManager{
-		server:    server,
-		tlsConfig: tlsConfig,
-		ctx:       ctx,
-		cancel:    cancel,
+		server:            server,
+		tlsConfig:         tlsConfig,
+		ctx:               ctx,
+		cancel:            cancel,
+		quicAddrValidator: quicAddrValidator,
 	}, nil
 }
 
@@ -5298,7 +5317,8 @@ func (tm *TLSManager) StartQUICServer() error {
 	}
 
 	tm.quicTransport = &quic.Transport{
-		Conn: tm.quicConn,
+		Conn:                tm.quicConn,
+		VerifySourceAddress: tm.quicAddrValidator.RequiresValidation,
 	}
 
 	quicTLSConfig := tm.tlsConfig.Clone()
@@ -5872,6 +5892,10 @@ func (tm *TLSManager) Shutdown() error {
 			Debug("Closing QUIC connection failed: %v", closeErr)
 		}
 	}
+	if tm.quicAddrValidator != nil {
+		tm.quicAddrValidator.Close()
+		Debug("QUIC address validator closed")
+	}
 
 	if tm.httpsServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
@@ -5904,6 +5928,51 @@ func (tm *TLSManager) Shutdown() error {
 	tm.wg.Wait()
 	Info("Secure DNS server has been shut down")
 	return nil
+}
+
+// =============================================================================
+// QUIC Address Validator & Utilities
+// =============================================================================
+
+// NewQUICAddrValidator initializes a new instance of *QuicAddrValidator.
+func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (v *QuicAddrValidator, err error) {
+	cache, err := ristretto.NewCache(&ristretto.Config[string, string]{
+		NumCounters: int64(cacheSize * 10), // Recommended to set it as 10 times the MaxCost
+		MaxCost:     int64(cacheSize),
+		BufferItems: 64,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating ristretto cache: %w", err)
+	}
+
+	return &QuicAddrValidator{
+		cache: cache,
+		ttl:   ttl,
+	}, nil
+}
+
+// RequiresValidation determines if a QUIC Retry packet should be sent by the
+// client. This allows the server to verify the client's address but increases
+// the latency.
+func (v *QuicAddrValidator) RequiresValidation(addr net.Addr) (ok bool) {
+	// addr must be *net.UDPAddr here and if it's not we don't mind panic.
+	key := addr.(*net.UDPAddr).IP.String()
+
+	if _, found := v.cache.Get(key); found {
+		return false
+	}
+
+	// Setting cost to 1 means it occupies 1 cache slot
+	v.cache.SetWithTTL(key, "true", 1, v.ttl)
+
+	// Address not found in the cache so return true to make sure the server
+	// will require address validation.
+	return true
+}
+
+// Close Cache
+func (v *QuicAddrValidator) Close() {
+	v.cache.Close()
 }
 
 // =============================================================================

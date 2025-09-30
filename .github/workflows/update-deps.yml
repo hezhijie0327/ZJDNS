@@ -19,6 +19,7 @@ jobs:
 
       - name: Update dependencies to latest commits
         run: |
+          go get -u github.com/dgraph-io/ristretto/v2@main
           go get -u github.com/miekg/dns@master
           go get -u github.com/redis/go-redis/v9@master
           go get -u github.com/quic-go/quic-go@master
