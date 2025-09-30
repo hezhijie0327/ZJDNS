@@ -5934,6 +5934,7 @@ func (tm *TLSManager) Shutdown() error {
 	}
 	if tm.quicAddrValidator != nil {
 		tm.quicAddrValidator.Close()
+		Debug("QUIC address validator closed")
 	}
 
 	if tm.httpsServer != nil {
