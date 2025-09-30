@@ -137,8 +137,8 @@ const (
 	TCPNoDelay         = 1
 	TCPQuickAck        = 0x0c // Linux TCP_QUICKACK
 
-	// QUIC Address Validation Configuration
-	QUICAddrValidatorCacheSize = 10000
+	// QuicAddrValidator validates QUIC client addresses using a TTL-based cache
+	QUICAddrValidatorCacheSize = 16 * 1024
 	QUICAddrValidatorTTL       = 300 * time.Second
 
 	// Default Values
@@ -507,7 +507,7 @@ type (
 
 	// QuicAddrValidator validates QUIC addresses
 	QuicAddrValidator struct {
-		cache *ristretto.Cache[string, string]
+		cache *ristretto.Cache[string, struct{}]
 		ttl   time.Duration
 	}
 )
@@ -5934,10 +5934,15 @@ func (tm *TLSManager) Shutdown() error {
 // QUIC Address Validator & Utilities
 // =============================================================================
 
-// NewQUICAddrValidator initializes a new instance of *QuicAddrValidator.
-func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (v *QuicAddrValidator, err error) {
-	cache, err := ristretto.NewCache(&ristretto.Config[string, string]{
-		NumCounters: int64(cacheSize * 10), // Recommended to set it as 10 times the MaxCost
+// NewQUICAddrValidator initializes a new instance of *QuicAddrValidator with optimized memory usage.
+// It uses empty struct{} as the cache value type to minimize memory footprint.
+// Parameters:
+//   - cacheSize: maximum number of addresses to cache
+//   - ttl: time-to-live for cached addresses
+func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (*QuicAddrValidator, error) {
+	// Use empty struct as value type to save memory (0 bytes per entry)
+	cache, err := ristretto.NewCache(&ristretto.Config[string, struct{}]{
+		NumCounters: int64(cacheSize * 10), // Recommended to be 10x of MaxCost
 		MaxCost:     int64(cacheSize),
 		BufferItems: 64,
 	})
@@ -5945,34 +5950,54 @@ func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (v *QuicAddrValidato
 		return nil, fmt.Errorf("creating ristretto cache: %w", err)
 	}
 
+	Debug("QUIC address validator initialized: cacheSize=%d, ttl=%v", cacheSize, ttl)
+
 	return &QuicAddrValidator{
 		cache: cache,
 		ttl:   ttl,
 	}, nil
 }
 
-// RequiresValidation determines if a QUIC Retry packet should be sent by the
-// client. This allows the server to verify the client's address but increases
-// the latency.
-func (v *QuicAddrValidator) RequiresValidation(addr net.Addr) (ok bool) {
-	// addr must be *net.UDPAddr here and if it's not we don't mind panic.
-	key := addr.(*net.UDPAddr).IP.String()
+// RequiresValidation determines if a QUIC Retry packet should be sent by the server.
+// This allows the server to verify the client's address ownership but increases connection latency.
+// Returns true if validation is required (address not in cache), false if already validated.
+func (v *QuicAddrValidator) RequiresValidation(addr net.Addr) bool {
+	// Safety check: if validator is not properly initialized, require validation as safe default
+	if v == nil || v.cache == nil {
+		Debug("QUIC address validation: validator not initialized, requiring validation")
+		return true
+	}
 
+	// Safe type assertion to *net.UDPAddr
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok {
+		Debug("QUIC address validation: unexpected address type %T, requiring validation", addr)
+		return true
+	}
+
+	key := udpAddr.IP.String()
+
+	// Check if address is already validated in cache
 	if _, found := v.cache.Get(key); found {
+		Debug("QUIC address validation: %s found in cache, skipping validation", key)
 		return false
 	}
 
-	// Setting cost to 1 means it occupies 1 cache slot
-	v.cache.SetWithTTL(key, "true", 1, v.ttl)
+	// Mark address as validated using empty struct (zero memory overhead)
+	// Cost is set to 1, meaning it occupies 1 cache slot
+	v.cache.SetWithTTL(key, struct{}{}, 1, v.ttl)
+	Debug("QUIC address validation: %s not in cache, requiring validation and caching for %v", key, v.ttl)
 
-	// Address not found in the cache so return true to make sure the server
-	// will require address validation.
+	// Address not found in cache, validation is required
 	return true
 }
 
-// Close Cache
+// Close releases the cache resources
 func (v *QuicAddrValidator) Close() {
-	v.cache.Close()
+	if v != nil && v.cache != nil {
+		v.cache.Close()
+		Debug("QUIC address validator cache closed and resources released")
+	}
 }
 
 // =============================================================================
