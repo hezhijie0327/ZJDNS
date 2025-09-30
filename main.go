@@ -3352,6 +3352,8 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 					tracker.AddStep("Response code rewrite: %d", rewriteResult.ResponseCode)
 				}
 
+				// Defer ECS and padding addition until after variables are declared
+				response = s.AddEDNStoRewriteResponse(response, req, tracker, isSecureConnection)
 				return response
 			}
 
@@ -3370,6 +3372,8 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 						len(rewriteResult.Records), len(rewriteResult.Additional))
 				}
 
+				// Defer ECS and padding addition until after variables are declared
+				response = s.AddEDNStoRewriteResponse(response, req, tracker, isSecureConnection)
 				return response
 			}
 
@@ -3379,20 +3383,10 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 					tracker.AddStep("Domain rewrite: %s -> %s", question.Name, rewriteResult.Domain)
 				}
 
-				// If rewrite result is IP address, return IP response directly
-				if ip := net.ParseIP(strings.TrimSuffix(rewriteResult.Domain, ".")); ip != nil {
-					return s.CreateDirectIPResponse(req, question.Qtype, ip, tracker)
-				}
-
 				// Otherwise update question domain and continue processing
 				question.Name = rewriteResult.Domain
 			}
 		}
-	}
-
-	// Direct IP address response
-	if ip := net.ParseIP(strings.TrimSuffix(question.Name, ".")); ip != nil {
-		return s.CreateDirectIPResponse(req, question.Qtype, ip, tracker)
 	}
 
 	clientRequestedDNSSEC := false
@@ -3432,6 +3426,41 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	return s.ProcessCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, clientHasEDNS, serverDNSSECEnabled, cacheKey, tracker, isSecureConnection)
 }
 
+// AddEDNStoRewriteResponse adds EDNS options to rewrite responses
+func (s *DNSServer) AddEDNStoRewriteResponse(response *dns.Msg, req *dns.Msg, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+	if response == nil {
+		return response
+	}
+
+	// Parse EDNS information from the original request
+	clientRequestedDNSSEC := false
+	clientHasEDNS := false
+	var ecsOpt *ECSOption
+
+	if opt := req.IsEdns0(); opt != nil {
+		clientHasEDNS = true
+		clientRequestedDNSSEC = opt.Do()
+		ecsOpt = s.ednsManager.ParseFromDNS(req)
+	}
+
+	if ecsOpt == nil {
+		ecsOpt = s.ednsManager.GetDefaultECS()
+	}
+
+	// Add ECS and padding for rewrite responses
+	shouldAddEDNS := clientHasEDNS || ecsOpt != nil || s.ednsManager.IsPaddingEnabled() ||
+		(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
+
+	if shouldAddEDNS {
+		s.ednsManager.AddToMessage(response, ecsOpt, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
+		if tracker != nil && ecsOpt != nil {
+			tracker.AddStep("Adding response ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
+		}
+	}
+
+	return response
+}
+
 // BuildResponse builds a DNS response message
 func (s *DNSServer) BuildResponse(req *dns.Msg) *dns.Msg {
 	msg := globalResourceManager.GetDNSMessage()
@@ -3454,42 +3483,6 @@ func (s *DNSServer) BuildResponse(req *dns.Msg) *dns.Msg {
 	msg.Authoritative = false
 	msg.RecursionAvailable = true
 	msg.Compress = true
-	return msg
-}
-
-// CreateDirectIPResponse creates a direct IP response
-func (s *DNSServer) CreateDirectIPResponse(req *dns.Msg, qtype uint16, ip net.IP, tracker *RequestTracker) *dns.Msg {
-	if tracker != nil {
-		tracker.AddStep("Creating direct IP response: %s", ip.String())
-	}
-
-	msg := s.BuildResponse(req)
-
-	// Return appropriate record based on query type and IP address type
-	if qtype == dns.TypeA && ip.To4() != nil {
-		// IPv4 address query
-		msg.Answer = []dns.RR{&dns.A{
-			Hdr: dns.RR_Header{
-				Name:   req.Question[0].Name,
-				Rrtype: dns.TypeA,
-				Class:  dns.ClassINET,
-				Ttl:    uint32(DefaultCacheTTL),
-			},
-			A: ip,
-		}}
-	} else if qtype == dns.TypeAAAA && ip.To4() == nil {
-		// IPv6 address query
-		msg.Answer = []dns.RR{&dns.AAAA{
-			Hdr: dns.RR_Header{
-				Name:   req.Question[0].Name,
-				Rrtype: dns.TypeAAAA,
-				Class:  dns.ClassINET,
-				Ttl:    uint32(DefaultCacheTTL),
-			},
-			AAAA: ip,
-		}}
-	}
-
 	return msg
 }
 
