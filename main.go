@@ -3389,7 +3389,6 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		}
 	}
 
-	// Direct IP address response - check after variables are declared
 	clientRequestedDNSSEC := false
 	clientHasEDNS := false
 	var ecsOpt *ECSOption
