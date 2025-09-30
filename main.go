@@ -138,7 +138,7 @@ const (
 	TCPQuickAck        = 0x0c // Linux TCP_QUICKACK
 
 	// QUIC Address Validation Configuration
-	QUICAddrValidatorCacheSize = 10000
+	QUICAddrValidatorCacheSize = 16 * 1024
 	QUICAddrValidatorTTL       = 300 * time.Second
 
 	// Default Values
@@ -507,7 +507,7 @@ type (
 
 	// QuicAddrValidator validates QUIC addresses
 	QuicAddrValidator struct {
-		cache *ristretto.Cache[string, string]
+		cache *ristretto.Cache[string, struct{}]
 		ttl   time.Duration
 	}
 )
@@ -5934,10 +5934,10 @@ func (tm *TLSManager) Shutdown() error {
 // QUIC Address Validator & Utilities
 // =============================================================================
 
-// NewQUICAddrValidator initializes a new instance of *QuicAddrValidator.
-func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (v *QuicAddrValidator, err error) {
-	cache, err := ristretto.NewCache(&ristretto.Config[string, string]{
-		NumCounters: int64(cacheSize * 10), // Recommended to set it as 10 times the MaxCost
+// NewQUICAddrValidator initializes a new instance of *QuicAddrValidator with optimized memory usage
+func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (*QuicAddrValidator, error) {
+	cache, err := ristretto.NewCache(&ristretto.Config[string, struct{}]{
+		NumCounters: int64(cacheSize * 10),
 		MaxCost:     int64(cacheSize),
 		BufferItems: 64,
 	})
@@ -5951,22 +5951,27 @@ func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (v *QuicAddrValidato
 	}, nil
 }
 
-// RequiresValidation determines if a QUIC Retry packet should be sent by the
-// client. This allows the server to verify the client's address but increases
-// the latency.
-func (v *QuicAddrValidator) RequiresValidation(addr net.Addr) (ok bool) {
-	// addr must be *net.UDPAddr here and if it's not we don't mind panic.
-	key := addr.(*net.UDPAddr).IP.String()
+// RequiresValidation determines if a QUIC Retry packet should be sent.
+// Returns true if validation is required, false if address is already validated.
+func (v *QuicAddrValidator) RequiresValidation(addr net.Addr) bool {
+	if v == nil || v.cache == nil {
+		return true
+	}
+
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok {
+		Debug("QUIC address validation: unexpected address type %T, requiring validation", addr)
+		return true
+	}
+
+	key := udpAddr.IP.String()
 
 	if _, found := v.cache.Get(key); found {
 		return false
 	}
 
-	// Setting cost to 1 means it occupies 1 cache slot
-	v.cache.SetWithTTL(key, "true", 1, v.ttl)
+	v.cache.SetWithTTL(key, struct{}{}, 1, v.ttl)
 
-	// Address not found in the cache so return true to make sure the server
-	// will require address validation.
 	return true
 }
 
