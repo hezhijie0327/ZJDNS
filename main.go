@@ -3352,6 +3352,8 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 					tracker.AddStep("Response code rewrite: %d", rewriteResult.ResponseCode)
 				}
 
+				// Defer ECS and padding addition until after variables are declared
+				response = s.AddEDNStoRewriteResponse(response, req, tracker, isSecureConnection)
 				return response
 			}
 
@@ -3370,6 +3372,8 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 						len(rewriteResult.Records), len(rewriteResult.Additional))
 				}
 
+				// Defer ECS and padding addition until after variables are declared
+				response = s.AddEDNStoRewriteResponse(response, req, tracker, isSecureConnection)
 				return response
 			}
 
@@ -3390,11 +3394,7 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		}
 	}
 
-	// Direct IP address response
-	if ip := net.ParseIP(strings.TrimSuffix(question.Name, ".")); ip != nil {
-		return s.CreateDirectIPResponse(req, question.Qtype, ip, tracker)
-	}
-
+	// Direct IP address response - check after variables are declared
 	clientRequestedDNSSEC := false
 	clientHasEDNS := false
 	var ecsOpt *ECSOption
@@ -3415,6 +3415,24 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		}
 	}
 
+	// Check for direct IP address response after variables are declared
+	if ip := net.ParseIP(strings.TrimSuffix(question.Name, ".")); ip != nil {
+		response := s.CreateDirectIPResponse(req, question.Qtype, ip, tracker)
+
+		// Add ECS and padding for direct IP responses
+		shouldAddEDNS := clientHasEDNS || ecsOpt != nil || s.ednsManager.IsPaddingEnabled() ||
+			(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
+
+		if shouldAddEDNS {
+			s.ednsManager.AddToMessage(response, ecsOpt, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
+			if tracker != nil && ecsOpt != nil {
+				tracker.AddStep("Adding response ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
+			}
+		}
+
+		return response
+	}
+
 	serverDNSSECEnabled := s.config.Server.Features.DNSSEC
 	cacheKey := globalCacheUtils.BuildKey(question, ecsOpt, serverDNSSECEnabled)
 
@@ -3430,6 +3448,41 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		tracker.AddStep("Cache miss, starting query")
 	}
 	return s.ProcessCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, clientHasEDNS, serverDNSSECEnabled, cacheKey, tracker, isSecureConnection)
+}
+
+// AddEDNStoRewriteResponse adds EDNS options to rewrite responses
+func (s *DNSServer) AddEDNStoRewriteResponse(response *dns.Msg, req *dns.Msg, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+	if response == nil {
+		return response
+	}
+
+	// Parse EDNS information from the original request
+	clientRequestedDNSSEC := false
+	clientHasEDNS := false
+	var ecsOpt *ECSOption
+
+	if opt := req.IsEdns0(); opt != nil {
+		clientHasEDNS = true
+		clientRequestedDNSSEC = opt.Do()
+		ecsOpt = s.ednsManager.ParseFromDNS(req)
+	}
+
+	if ecsOpt == nil {
+		ecsOpt = s.ednsManager.GetDefaultECS()
+	}
+
+	// Add ECS and padding for rewrite responses
+	shouldAddEDNS := clientHasEDNS || ecsOpt != nil || s.ednsManager.IsPaddingEnabled() ||
+		(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
+
+	if shouldAddEDNS {
+		s.ednsManager.AddToMessage(response, ecsOpt, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
+		if tracker != nil && ecsOpt != nil {
+			tracker.AddStep("Adding response ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
+		}
+	}
+
+	return response
 }
 
 // BuildResponse builds a DNS response message
