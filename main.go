@@ -3471,8 +3471,6 @@ func (s *DNSServer) ExecuteConcurrentQueries(ctx context.Context, question dns.Q
 
 	for i := 0; i < concurrency && i < len(servers); i++ {
 		server := servers[i]
-		// Create independent message copy for each concurrent query to avoid data race
-		// SafeCopyMessage uses sync.Pool internally for performance optimization
 		originalMsg := s.BuildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
 		msg := SafeCopyMessage(originalMsg)
 		defer globalResourceManager.PutDNSMessage(originalMsg)
@@ -3494,6 +3492,14 @@ func (s *DNSServer) ExecuteConcurrentQueries(ctx context.Context, question dns.Q
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+					// Validate DNSSEC if enabled
+					if serverDNSSECEnabled && s.config.Server.Features.DNSSEC {
+						result.Validated = s.dnssecValidator.ValidateResponse(result.Response, true)
+						if tracker != nil && result.Validated {
+							tracker.AddStep("DNSSEC validation passed for upstream response")
+						}
+					}
+
 					if tracker != nil {
 						tracker.AddStep("Concurrent query successful, selected server: %s (%s)", result.Server, result.Protocol)
 					}
