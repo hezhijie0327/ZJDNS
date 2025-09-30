@@ -4030,30 +4030,6 @@ func (em *EDNSManager) IsPaddingEnabled() bool {
 	return em != nil && em.paddingEnabled
 }
 
-// CalculatePaddingSize calculates padding size
-func (em *EDNSManager) CalculatePaddingSize(currentSize int) int {
-	// Check if padding is enabled and current size is valid
-	if !em.paddingEnabled || currentSize <= 0 {
-		return 0
-	}
-
-	// If already >= target size, no padding needed
-	if currentSize >= PaddingBlockSize {
-		return 0
-	}
-
-	// According to spec, secure DNS responses should be padded to fixed 468 bytes
-	// Calculate needed padding size
-	paddingSize := PaddingBlockSize - currentSize
-
-	// Ensure padding size is not negative
-	if paddingSize <= 0 {
-		return 0
-	}
-
-	return paddingSize
-}
-
 // ParseFromDNS parses ECS from DNS message
 func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 	if em == nil || msg == nil {
@@ -4090,7 +4066,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		return
 	}
 
-	// Ensure message structure is safe to prevent panic in ExchangeContext when calling IsEdns0
+	// Ensure message structure is safe
 	if msg.Question == nil {
 		msg.Question = []dns.Question{}
 	}
@@ -4127,6 +4103,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		opt.SetDo(true)
 	}
 
+	// Prepare EDNS options
 	var options []dns.EDNS0
 
 	// Add ECS option
@@ -4142,65 +4119,32 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		Debug("Adding ECS option: %s/%d", ecs.Address, ecs.SourcePrefix)
 	}
 
-	// Add Padding option (only for secure Connections)
+	// Calculate and add padding for secure connections
 	if em.paddingEnabled && isSecureConnection {
-		// First add all other options (like ECS)
 		opt.Option = options
-		tempMsg := *msg
-		tempMsg.Extra = append(tempMsg.Extra, opt)
+		msg.Extra = append(msg.Extra, opt)
 
-		// Calculate current message size
-		currentSize := tempMsg.Len()
-
-		// Calculate needed padding size
-		paddingSize := em.CalculatePaddingSize(currentSize)
-
-		// Add padding option
-		if paddingSize > 0 {
-			// Create initial padding option
-			paddingOption := &dns.EDNS0_PADDING{
-				Padding: make([]byte, paddingSize),
-			}
-
-			// Create complete OPT record with padding option to calculate actual size
-			tempOptWithPadding := &dns.OPT{
-				Hdr: dns.RR_Header{
-					Name:   ".",
-					Rrtype: dns.TypeOPT,
-					Class:  UDPBufferSize,
-					Ttl:    0,
-				},
-				Option: append(options, paddingOption),
-			}
-
-			// Calculate complete message size with padding
-			tempMsgWithPadding := *msg
-			tempMsgWithPadding.Extra = append(tempMsgWithPadding.Extra, tempOptWithPadding)
-			finalSize := tempMsgWithPadding.Len()
-
-			// Precisely adjust padding size to ensure final message size is exactly 468 bytes
-			if finalSize != PaddingBlockSize {
-				// Calculate size difference
-				diff := PaddingBlockSize - finalSize
-
-				// Adjust padding size
-				newPaddingSize := paddingSize + diff
-
-				// Ensure padding size is non-negative
-				if newPaddingSize >= 0 {
-					paddingOption.Padding = make([]byte, newPaddingSize)
-					options = append(options, paddingOption)
-					Debug("DNS Padding: %d -> %d bytes (+%d)",
-						currentSize, PaddingBlockSize, newPaddingSize)
+		if wireData, err := msg.Pack(); err == nil {
+			currentSize := len(wireData)
+			if currentSize < PaddingBlockSize {
+				// Calculate required padding: target - current - EDNS0 header overhead (4 bytes)
+				paddingDataSize := PaddingBlockSize - currentSize - 4
+				if paddingDataSize > 0 {
+					options = append(options, &dns.EDNS0_PADDING{
+						Padding: make([]byte, paddingDataSize),
+					})
+					Debug("DNS Padding: %d -> %d bytes (+%d)", currentSize, PaddingBlockSize, paddingDataSize)
 				}
-			} else {
-				options = append(options, paddingOption)
-				Debug("DNS Padding: %d -> %d bytes (+%d)",
-					currentSize, finalSize, paddingSize)
 			}
+		} else {
+			Debug("Failed to calculate padding: %v", err)
 		}
+
+		// Remove temporary OPT and rebuild with padding
+		msg.Extra = msg.Extra[:len(msg.Extra)-1]
 	}
 
+	// Set final options and add OPT record
 	opt.Option = options
 	msg.Extra = append(msg.Extra, opt)
 }
