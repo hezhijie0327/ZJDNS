@@ -4042,16 +4042,23 @@ func (em *EDNSManager) CalculatePaddingSize(currentSize int) int {
 		return 0
 	}
 
-	// According to spec, secure DNS responses should be padded to fixed 468 bytes
-	// Calculate needed padding size
-	paddingSize := PaddingBlockSize - currentSize
+	// Calculate base padding size needed
+	basePaddingSize := PaddingBlockSize - currentSize
+
+	// Each EDNS0 option has 4 bytes overhead (2 bytes option code + 2 bytes length)
+	// We need to account for this when calculating the actual padding data size
+	const edns0OptionOverhead = 4
+
+	// The actual padding data size should be:
+	// total needed size - EDNS0 option overhead
+	paddingDataSize := basePaddingSize - edns0OptionOverhead
 
 	// Ensure padding size is not negative
-	if paddingSize <= 0 {
+	if paddingDataSize <= 0 {
 		return 0
 	}
 
-	return paddingSize
+	return paddingDataSize
 }
 
 // ParseFromDNS parses ECS from DNS message
@@ -4090,7 +4097,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		return
 	}
 
-	// Ensure message structure is safe to prevent panic in ExchangeContext when calling IsEdns0
+	// 确保消息结构安全
 	if msg.Question == nil {
 		msg.Question = []dns.Question{}
 	}
@@ -4104,7 +4111,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		msg.Extra = []dns.RR{}
 	}
 
-	// Clean existing OPT records
+	// 清理现有 OPT 记录
 	cleanExtra := make([]dns.RR, 0, len(msg.Extra))
 	for _, rr := range msg.Extra {
 		if rr != nil && rr.Header().Rrtype != dns.TypeOPT {
@@ -4113,7 +4120,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 	}
 	msg.Extra = cleanExtra
 
-	// Create new OPT record
+	// 创建新的 OPT 记录
 	opt := &dns.OPT{
 		Hdr: dns.RR_Header{
 			Name:   ".",
@@ -4129,7 +4136,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 
 	var options []dns.EDNS0
 
-	// Add ECS option
+	// 添加 ECS 选项
 	if ecs != nil {
 		ecsOption := &dns.EDNS0_SUBNET{
 			Code:          dns.EDNS0SUBNET,
@@ -4139,69 +4146,49 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 			Address:       ecs.Address,
 		}
 		options = append(options, ecsOption)
-		Debug("Adding ECS option: %s/%d", ecs.Address, ecs.SourcePrefix)
+		Debug("添加 ECS 选项: %s/%d", ecs.Address, ecs.SourcePrefix)
 	}
 
-	// Add Padding option (only for secure Connections)
+	// 只在安全连接时添加 Padding
 	if em.paddingEnabled && isSecureConnection {
-		// First add all other options (like ECS)
+		// 先设置已有的选项
 		opt.Option = options
-		tempMsg := *msg
-		tempMsg.Extra = append(tempMsg.Extra, opt)
 
-		// Calculate current message size
-		currentSize := tempMsg.Len()
+		// 将 opt 添加到消息中，然后打包获取实际大小
+		msg.Extra = append(msg.Extra, opt)
 
-		// Calculate needed padding size
-		paddingSize := em.CalculatePaddingSize(currentSize)
+		wireData, err := msg.Pack()
+		if err == nil {
+			currentSize := len(wireData)
 
-		// Add padding option
-		if paddingSize > 0 {
-			// Create initial padding option
-			paddingOption := &dns.EDNS0_PADDING{
-				Padding: make([]byte, paddingSize),
-			}
+			if currentSize < PaddingBlockSize {
+				// 移除刚才添加的 opt，因为我们要重新构建它
+				msg.Extra = msg.Extra[:len(msg.Extra)-1]
 
-			// Create complete OPT record with padding option to calculate actual size
-			tempOptWithPadding := &dns.OPT{
-				Hdr: dns.RR_Header{
-					Name:   ".",
-					Rrtype: dns.TypeOPT,
-					Class:  UDPBufferSize,
-					Ttl:    0,
-				},
-				Option: append(options, paddingOption),
-			}
+				// 计算 padding 大小
+				// 需要的 padding 数据 = 目标大小 - 当前大小 - EDNS0选项头部(4字节)
+				paddingDataSize := PaddingBlockSize - currentSize - 4
 
-			// Calculate complete message size with padding
-			tempMsgWithPadding := *msg
-			tempMsgWithPadding.Extra = append(tempMsgWithPadding.Extra, tempOptWithPadding)
-			finalSize := tempMsgWithPadding.Len()
-
-			// Precisely adjust padding size to ensure final message size is exactly 468 bytes
-			if finalSize != PaddingBlockSize {
-				// Calculate size difference
-				diff := PaddingBlockSize - finalSize
-
-				// Adjust padding size
-				newPaddingSize := paddingSize + diff
-
-				// Ensure padding size is non-negative
-				if newPaddingSize >= 0 {
-					paddingOption.Padding = make([]byte, newPaddingSize)
+				if paddingDataSize > 0 {
+					paddingOption := &dns.EDNS0_PADDING{
+						Padding: make([]byte, paddingDataSize),
+					}
 					options = append(options, paddingOption)
-					Debug("DNS Padding: %d -> %d bytes (+%d)",
-						currentSize, PaddingBlockSize, newPaddingSize)
+
+					Debug("DNS Padding: %d -> %d bytes (+%d)", currentSize, PaddingBlockSize, paddingDataSize)
 				}
-			} else {
-				options = append(options, paddingOption)
-				Debug("DNS Padding: %d -> %d bytes (+%d)",
-					currentSize, finalSize, paddingSize)
 			}
+		} else {
+			Debug("计算 padding 失败: %v", err)
 		}
+
+		// 重新设置选项
+		opt.Option = options
+	} else {
+		opt.Option = options
 	}
 
-	opt.Option = options
+	// 最终添加 OPT 记录
 	msg.Extra = append(msg.Extra, opt)
 }
 
