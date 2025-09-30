@@ -505,6 +505,7 @@ type (
 		}
 	}
 
+	// QuicAddrValidator validates QUIC addresses
 	QuicAddrValidator struct {
 		cache *ristretto.Cache[string, string]
 		ttl   time.Duration
