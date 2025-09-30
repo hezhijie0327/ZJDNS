@@ -654,8 +654,8 @@ func (l *Logger) GetLevel() LogLevel {
 	return l.level
 }
 
-// getLevelString returns string representation of log level
-func (l *Logger) getLevelString(level LogLevel) string {
+// GetLevelString returns string representation of log level
+func (l *Logger) GetLevelString(level LogLevel) string {
 	switch level {
 	case LogError:
 		return "ERROR"
@@ -679,7 +679,7 @@ func (l *Logger) Log(level LogLevel, format string, args ...interface{}) {
 		return
 	}
 
-	levelStr := l.getLevelString(level)
+	levelStr := l.GetLevelString(level)
 	color := l.colorMap[level]
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	message := fmt.Sprintf(format, args...)
@@ -1541,14 +1541,14 @@ func NewConnectionPool() *ConnectionPool {
 	cp.wg.Add(1)
 	go func() {
 		defer cp.wg.Done()
-		cp.startCleanupRoutine()
+		cp.StartCleanupRoutine()
 	}()
 
 	return cp
 }
 
-// startCleanupRoutine periodically cleans up idle connections
-func (cp *ConnectionPool) startCleanupRoutine() {
+// StartCleanupRoutine periodically cleans up idle connections
+func (cp *ConnectionPool) StartCleanupRoutine() {
 	ticker := time.NewTicker(CleanupInterval)
 	defer ticker.Stop()
 
@@ -1557,13 +1557,13 @@ func (cp *ConnectionPool) startCleanupRoutine() {
 		case <-cp.ctx.Done():
 			return
 		case <-ticker.C:
-			cp.cleanupIdleConnections()
+			cp.CleanupIdleConnections()
 		}
 	}
 }
 
-// cleanupIdleConnections removes and closes idle connections
-func (cp *ConnectionPool) cleanupIdleConnections() {
+// CleanupIdleConnections removes and closes idle connections
+func (cp *ConnectionPool) CleanupIdleConnections() {
 	if atomic.LoadInt32(&cp.closed) != 0 {
 		return
 	}
@@ -1631,8 +1631,8 @@ func (cp *ConnectionPool) GetTCPClient() *dns.Client {
 	}
 }
 
-// getTLSConn gets or creates a TLS connection with connection pooling
-func (cp *ConnectionPool) getTLSConn(host, port string, tlsConfig *tls.Config) (*tls.Conn, error) {
+// GetTLSConn gets or creates a TLS connection with connection pooling
+func (cp *ConnectionPool) GetTLSConn(host, port string, tlsConfig *tls.Config) (*tls.Conn, error) {
 	cacheKey := fmt.Sprintf("%s:%s", host, port)
 
 	// Try to reuse existing connection
@@ -1651,7 +1651,7 @@ func (cp *ConnectionPool) getTLSConn(host, port string, tlsConfig *tls.Config) (
 		}
 
 		// Connection is invalid, remove it
-		cp.removeTLSConn(cacheKey, conn)
+		cp.RemoveTLSConn(cacheKey, conn)
 	} else {
 		cp.tlsMu.RUnlock()
 	}
@@ -1703,8 +1703,8 @@ func (cp *ConnectionPool) getTLSConn(host, port string, tlsConfig *tls.Config) (
 	return conn, nil
 }
 
-// removeTLSConn removes a TLS connection from pool
-func (cp *ConnectionPool) removeTLSConn(key string, conn *tls.Conn) {
+// RemoveTLSConn removes a TLS connection from pool
+func (cp *ConnectionPool) RemoveTLSConn(key string, conn *tls.Conn) {
 	cp.tlsMu.Lock()
 	defer cp.tlsMu.Unlock()
 
@@ -1716,8 +1716,8 @@ func (cp *ConnectionPool) removeTLSConn(key string, conn *tls.Conn) {
 	}
 }
 
-// getQUICConn gets or creates a QUIC connection with 0-RTT support
-func (cp *ConnectionPool) getQUICConn(addr string, tlsConfig *tls.Config, quicConfig *quic.Config) (*quic.Conn, error) {
+// GetQUICConn gets or creates a QUIC connection with 0-RTT support
+func (cp *ConnectionPool) GetQUICConn(addr string, tlsConfig *tls.Config, quicConfig *quic.Config) (*quic.Conn, error) {
 	cacheKey := addr
 
 	// Try to reuse existing connection
@@ -1739,7 +1739,7 @@ func (cp *ConnectionPool) getQUICConn(addr string, tlsConfig *tls.Config, quicCo
 		}
 
 		// Connection is invalid, remove it
-		cp.removeQUICConn(cacheKey, conn)
+		cp.RemoveQUICConn(cacheKey, conn)
 	} else {
 		cp.quicMu.RUnlock()
 	}
@@ -1762,8 +1762,8 @@ func (cp *ConnectionPool) getQUICConn(addr string, tlsConfig *tls.Config, quicCo
 	return conn, nil
 }
 
-// removeQUICConn removes a QUIC connection from pool
-func (cp *ConnectionPool) removeQUICConn(key string, conn *quic.Conn) {
+// RemoveQUICConn removes a QUIC connection from pool
+func (cp *ConnectionPool) RemoveQUICConn(key string, conn *quic.Conn) {
 	cp.quicMu.Lock()
 	defer cp.quicMu.Unlock()
 
@@ -1799,7 +1799,7 @@ func (cp *ConnectionPool) GetSecureClient(protocol, addr, serverName string, ski
 		cp.mu.RUnlock()
 	}
 
-	client, err := NewUnifiedSecureClientWithPool(cp, protocol, addr, serverName, skipVerify)
+	client, err := NewUnifiedSecureClient(cp, protocol, addr, serverName, skipVerify)
 	if err != nil {
 		return nil, err
 	}
@@ -2021,8 +2021,8 @@ func (qc *QueryClient) NeedsTCPFallback(result *QueryResult, protocol string) bo
 	return false
 }
 
-// NewUnifiedSecureClientWithPool creates a new unified secure client with connection pool
-func NewUnifiedSecureClientWithPool(pool *ConnectionPool, protocol, addr, serverName string, skipVerify bool) (*UnifiedSecureClient, error) {
+// NewUnifiedSecureClient creates a new unified secure client with connection pool
+func NewUnifiedSecureClient(pool *ConnectionPool, protocol, addr, serverName string, skipVerify bool) (*UnifiedSecureClient, error) {
 	client := &UnifiedSecureClient{
 		protocol:     strings.ToLower(protocol),
 		serverName:   serverName,
@@ -2099,7 +2099,7 @@ func (c *UnifiedSecureClient) ConnectTLS(host, port string) error {
 
 	// Use connection pool if available
 	if c.connPool != nil {
-		conn, err := c.connPool.getTLSConn(host, port, tlsConfig)
+		conn, err := c.connPool.GetTLSConn(host, port, tlsConfig)
 		if err != nil {
 			return err
 		}
@@ -2153,7 +2153,7 @@ func (c *UnifiedSecureClient) ConnectQUIC(addr string) error {
 
 	// Use connection pool if available
 	if c.connPool != nil {
-		conn, err := c.connPool.getQUICConn(addr, tlsConfig, quicConfig)
+		conn, err := c.connPool.GetQUICConn(addr, tlsConfig, quicConfig)
 		if err != nil {
 			return err
 		}
