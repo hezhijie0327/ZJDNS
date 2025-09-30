@@ -2318,10 +2318,18 @@ func (c *DoHClient) CreateTransportH3() (http.RoundTripper, error) {
 	}
 
 	if closeErr := conn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
-		Debug("Closing QUIC connection failed: %v", closeErr)
+		Debug("Closing QUIC test connection failed: %v", closeErr)
 	}
 
-	return nil, errors.New("DoH3 transport creation failed")
+	transport := &http3.Transport{
+		TLSClientConfig: c.tlsConfig,
+		QUICConfig:      c.quicConfig,
+	}
+
+	return &HTTP3Transport{
+		baseTransport: transport,
+		closed:        false,
+	}, nil
 }
 
 // ResetClient resets HTTP client
