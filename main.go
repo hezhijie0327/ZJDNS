@@ -459,11 +459,6 @@ type (
 		closed        bool
 		mu            sync.RWMutex
 	}
-
-	QuicAddrValidator struct {
-		cache *ristretto.Cache[string, string]
-		ttl   time.Duration
-	}
 )
 
 // Security & Management Types
@@ -508,6 +503,11 @@ type (
 			failed   int64
 			timeout  int64
 		}
+	}
+
+	QuicAddrValidator struct {
+		cache *ristretto.Cache[string, string]
+		ttl   time.Duration
 	}
 )
 
@@ -5849,47 +5849,6 @@ func (tm *TLSManager) IsQUICErrorForDebugLog(err error) bool {
 	return errors.As(err, &qIdleErr)
 }
 
-// NewQUICAddrValidator initializes a new instance of *QuicAddrValidator.
-func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (v *QuicAddrValidator, err error) {
-	cache, err := ristretto.NewCache(&ristretto.Config[string, string]{
-		NumCounters: int64(cacheSize * 10), // Recommended to set it as 10 times the MaxCost
-		MaxCost:     int64(cacheSize),
-		BufferItems: 64,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating ristretto cache: %w", err)
-	}
-
-	return &QuicAddrValidator{
-		cache: cache,
-		ttl:   ttl,
-	}, nil
-}
-
-// RequiresValidation determines if a QUIC Retry packet should be sent by the
-// client. This allows the server to verify the client's address but increases
-// the latency.
-func (v *QuicAddrValidator) RequiresValidation(addr net.Addr) (ok bool) {
-	// addr must be *net.UDPAddr here and if it's not we don't mind panic.
-	key := addr.(*net.UDPAddr).IP.String()
-
-	if _, found := v.cache.Get(key); found {
-		return false
-	}
-
-	// Setting cost to 1 means it occupies 1 cache slot
-	v.cache.SetWithTTL(key, "true", 1, v.ttl)
-
-	// Address not found in the cache so return true to make sure the server
-	// will require address validation.
-	return true
-}
-
-// Close 关闭缓存
-func (v *QuicAddrValidator) Close() {
-	v.cache.Close()
-}
-
 // ReadAll reads all data from reader
 func (tm *TLSManager) ReadAll(r io.Reader, buf []byte) (int, error) {
 	var n int
@@ -5968,6 +5927,51 @@ func (tm *TLSManager) Shutdown() error {
 	tm.wg.Wait()
 	Info("Secure DNS server has been shut down")
 	return nil
+}
+
+// =============================================================================
+// QUIC Address Validator & Utilities
+// =============================================================================
+
+// NewQUICAddrValidator initializes a new instance of *QuicAddrValidator.
+func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (v *QuicAddrValidator, err error) {
+	cache, err := ristretto.NewCache(&ristretto.Config[string, string]{
+		NumCounters: int64(cacheSize * 10), // Recommended to set it as 10 times the MaxCost
+		MaxCost:     int64(cacheSize),
+		BufferItems: 64,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating ristretto cache: %w", err)
+	}
+
+	return &QuicAddrValidator{
+		cache: cache,
+		ttl:   ttl,
+	}, nil
+}
+
+// RequiresValidation determines if a QUIC Retry packet should be sent by the
+// client. This allows the server to verify the client's address but increases
+// the latency.
+func (v *QuicAddrValidator) RequiresValidation(addr net.Addr) (ok bool) {
+	// addr must be *net.UDPAddr here and if it's not we don't mind panic.
+	key := addr.(*net.UDPAddr).IP.String()
+
+	if _, found := v.cache.Get(key); found {
+		return false
+	}
+
+	// Setting cost to 1 means it occupies 1 cache slot
+	v.cache.SetWithTTL(key, "true", 1, v.ttl)
+
+	// Address not found in the cache so return true to make sure the server
+	// will require address validation.
+	return true
+}
+
+// Close Cache
+func (v *QuicAddrValidator) Close() {
+	v.cache.Close()
 }
 
 // =============================================================================
