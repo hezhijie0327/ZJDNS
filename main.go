@@ -923,6 +923,8 @@ func (cm *ConfigManager) AddDDRRecords(config *ServerConfig) {
 	var additionalRecords []DNSRecordConfig
 	var directQueryRecords []DNSRecordConfig
 
+	nxdomainCode := dns.RcodeNameError
+
 	if config.Server.DDR.IPv4 != "" {
 		svcbRecords[0].Content += " ipv4hint=" + config.Server.DDR.IPv4
 		svcbRecords[1].Content += " ipv4hint=" + config.Server.DDR.IPv4
@@ -939,6 +941,16 @@ func (cm *ConfigManager) AddDDRRecords(config *ServerConfig) {
 		})
 
 		directQueryRecords = append(directQueryRecords, ipv4Record)
+	} else {
+		nxdomainARecord := DNSRecordConfig{
+			Type:         "A",
+			ResponseCode: &nxdomainCode,
+		}
+		config.Rewrite = append(config.Rewrite, RewriteRule{
+			Name:    domain,
+			Records: []DNSRecordConfig{nxdomainARecord},
+		})
+		Debug("Adding DDR NXDOMAIN rule for A record: %s", domain)
 	}
 
 	if config.Server.DDR.IPv6 != "" {
@@ -957,6 +969,16 @@ func (cm *ConfigManager) AddDDRRecords(config *ServerConfig) {
 		})
 
 		directQueryRecords = append(directQueryRecords, ipv6Record)
+	} else {
+		nxdomainAAAARecord := DNSRecordConfig{
+			Type:         "AAAA",
+			ResponseCode: &nxdomainCode,
+		}
+		config.Rewrite = append(config.Rewrite, RewriteRule{
+			Name:    domain,
+			Records: []DNSRecordConfig{nxdomainAAAARecord},
+		})
+		Debug("Adding DDR NXDOMAIN rule for AAAA record: %s", domain)
 	}
 
 	if config.Server.DDR.IPv4 != "" || config.Server.DDR.IPv6 != "" {
