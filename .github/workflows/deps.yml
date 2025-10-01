@@ -29,11 +29,8 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Update dependencies to latest commits"
-          title: "pkg: update packages"
-          body: |
-            Check the changes and merge if everything looks good.
-
-            @sourcery-ai review @sourcery-ai title
+          commit-message: "pkg: Update Go and module dependencies"
+          title: "pkg: Update Go and module dependencies"
+          body: "@sourcery-ai review"
           branch: update-dependencies
           delete-branch: true
