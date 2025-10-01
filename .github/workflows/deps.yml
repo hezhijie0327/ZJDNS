@@ -1,4 +1,4 @@
-name: Update Dependencies
+name: Dependencies
 
 on:
   schedule:
@@ -29,16 +29,8 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Update dependencies to latest commits"
-          title: "Update dependencies to latest commits"
-          body: |
-            This PR updates the following dependencies to their latest commits:
-            - github.com/miekg/dns@master
-            - github.com/redis/go-redis/v9@master
-            - github.com/quic-go/quic-go@master
-
-            It also updates Go to the latest stable version.
-
-            Check the changes and merge if everything looks good.
+          commit-message: "pkg: Update Go and module dependencies"
+          title: "pkg: Update Go and module dependencies"
+          body: "@sourcery-ai review"
           branch: update-dependencies
           delete-branch: true
