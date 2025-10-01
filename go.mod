@@ -3,7 +3,7 @@ module zjdns
 go 1.25.1
 
 require (
-	github.com/dgraph-io/ristretto/v2 v2.3.1-0.20250905144517-ebc181521755
+	github.com/dgraph-io/ristretto/v2 v2.3.1-0.20251001025004-e122624f0cf7
 	github.com/miekg/dns v1.1.69-0.20250920065150-294d37389ccc
 	github.com/quic-go/quic-go v0.54.1-0.20250924105422-97f3aae7760a
 	github.com/redis/go-redis/v9 v9.16.0-beta.1.0.20250929063504-3ad9f9cb2334
