@@ -1,15 +1,28 @@
-# Configuration files
-*.json
+# Ignore everything by default
+*
 
-# Certificate and key files
-*.cer
-*.key
-*.pem
-*.crt
+# Allow all directories so Git can traverse them
+!*/
 
-# Binary files
-zjdns
-*.exe
+# Allow .github directory and all its contents
+!.github/
+!.github/**
 
-# DS_Store
-.DS_Store
+# Git configuration
+!.gitignore
+
+# Go source files
+!*.go
+
+# Go module files
+!go.mod
+!go.sum
+
+# Markdown documentation
+!*.md
+
+# YAML files
+!*.yml
+
+# Dockerfile
+!Dockerfile
