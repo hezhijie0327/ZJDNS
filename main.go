@@ -2127,7 +2127,6 @@ func (c *UnifiedSecureClient) ConnectTLS(host, port string) error {
 		InsecureSkipVerify:     c.skipVerify,
 		ClientSessionCache:     tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 		MinVersion:             tls.VersionTLS12,
-		MaxVersion:             tls.VersionTLS13,
 		SessionTicketsDisabled: false,
 	}
 
@@ -5212,7 +5211,7 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
