@@ -31,6 +31,5 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "pkg: Update Go and module dependencies"
           title: "pkg: Update Go and module dependencies"
-          body: "@sourcery-ai review"
           branch: update-dependencies
           delete-branch: true
