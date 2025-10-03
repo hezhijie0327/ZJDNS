@@ -175,16 +175,10 @@ graph TD
 brew install golangci-lint
 ```
 
-运行检查：
+运行检查 & 代码格式化：
 
 ```bash
-golangci-lint run
-```
-
-运行代码格式化：
-
-```bash
-golangci-lint fmt
+golangci-lint run & golangci-lint fmt
 ```
 
 提交代码前请确保 golangci-lint 检查通过，以保证代码质量和一致性。
@@ -198,4 +192,4 @@ golangci-lint fmt
 - [miekg/dns](https://github.com/miekg/dns) - Go DNS 库
 - [redis/go-redis](https://github.com/redis/go-redis) - Redis Go 客户端
 - [quic-go/quic-go](https://github.com/quic-go/quic-go) - QUIC 协议实现
-- [bluele/gcache](https://github.com/bluele/gcache) - Go 通用缓存库
+- [hypermodeinc/ristretto](https://github.com/hypermodeinc/ristretto) - 高性能 Go 缓存
