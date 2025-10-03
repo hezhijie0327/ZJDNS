@@ -3341,7 +3341,6 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	question := req.Question[0]
 
 	// Reject queries with domain names longer than the DNS maximum allowed length.
-	// This prevents malformed or invalid DNS queries from being processed.
 	if len(question.Name) > MaxDomainLength {
 		msg := &dns.Msg{}
 		msg.SetReply(req)
@@ -3350,7 +3349,6 @@ func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	}
 
 	// Reject "ANY" type queries explicitly.
-	// DNS Type=ANY is often abused (e.g., amplification attacks) and generally discouraged.
 	if question.Qtype == dns.TypeANY {
 		msg := &dns.Msg{}
 		msg.SetReply(req)
