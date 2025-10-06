@@ -3830,7 +3830,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		return nil, nil, nil, false, nil, errors.New("no available upstream servers")
 	}
 
-	// Check if any server is recursive
+	// Separate recursive and non-recursive servers
 	hasRecursive := false
 	var nonRecursiveServers []*UpstreamServer
 
@@ -3842,88 +3842,147 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		}
 	}
 
-	// If we have recursive server configured, use recursive resolution
+	// Build server list for concurrent queries
+	var queryServers []*UpstreamServer
+	var needRecursive bool
+
 	if hasRecursive {
+		needRecursive = true
 		if tracker != nil {
-			tracker.AddStep("Using built-in recursive resolution")
+			tracker.AddStep("Including built-in recursive resolution in concurrent queries")
 		}
-
-		ctx, cancel := context.WithTimeout(s.ctx, RecursiveTimeout)
-		defer cancel()
-
-		return s.ResolveWithCNAME(ctx, question, ecs, tracker)
 	}
 
-	// Try servers one by one, applying policy filtering
-	var lastErr error
-	remainingServers := make([]*UpstreamServer, len(nonRecursiveServers))
-	copy(remainingServers, nonRecursiveServers)
-
-	for len(remainingServers) > 0 {
-		// Try up to MaxSingleQuery servers concurrently
-		batchSize := MaxSingleQuery
-		if batchSize > len(remainingServers) {
-			batchSize = len(remainingServers)
-		}
-
-		batch := remainingServers[:batchSize]
-		remainingServers = remainingServers[batchSize:]
-
-		result, err := s.ExecuteConcurrentQueries(s.ctx, question, ecs, serverDNSSECEnabled,
-			batch, MaxSingleQuery, tracker)
-
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		if result.Response == nil {
-			continue
-		}
-
-		// Find the server configuration for this result
-		var serverPolicy string
-		for _, server := range batch {
-			if server.Address == result.Server {
-				serverPolicy = server.Policy
-				break
-			}
-		}
-
-		if tracker != nil && serverPolicy != "" && serverPolicy != "all" {
-			tracker.AddStep("Applying policy filter: %s", serverPolicy)
-		}
-
-		// Apply policy filtering
-		filteredAnswer := s.FilterRecordsByPolicy(result.Response.Answer, serverPolicy)
-		filteredExtra := s.FilterRecordsByPolicy(result.Response.Extra, serverPolicy)
-
-		// Check if we got any useful records after filtering
-		hasUsefulRecords := len(filteredAnswer) > 0
-
-		if !hasUsefulRecords {
-			if tracker != nil {
-				tracker.AddStep("After policy filter: no answer records, trying next server")
-			}
-			continue
-		}
-
-		if tracker != nil && serverPolicy != "all" {
-			tracker.AddStep("After policy filter: %d answer records, %d additional records",
-				len(filteredAnswer), len(filteredExtra))
-		}
-
-		// Parse ECS response
-		ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
-
-		return filteredAnswer, result.Response.Ns, filteredExtra, result.Validated, ecsResponse, nil
+	queryServers = append(queryServers, nonRecursiveServers...)
+	totalServers := len(queryServers)
+	if needRecursive {
+		totalServers++
 	}
 
-	// All servers failed or returned empty results after filtering
-	if lastErr != nil {
-		return nil, nil, nil, false, nil, lastErr
+	if tracker != nil {
+		tracker.AddStep("Starting concurrent query of %d servers (including recursive: %v)", totalServers, needRecursive)
 	}
-	return nil, nil, nil, false, nil, errors.New("all upstream servers returned empty results after policy filtering")
+
+	// Channel to receive filtered results
+	type FilteredResult struct {
+		Answer     []dns.RR
+		Authority  []dns.RR
+		Additional []dns.RR
+		Validated  bool
+		ECS        *ECSOption
+		Server     string
+	}
+
+	resultChan := make(chan *FilteredResult, totalServers)
+	ctx, cancel := context.WithTimeout(s.ctx, QueryTimeout)
+	defer cancel()
+
+	// Launch queries for non-recursive servers
+	for _, server := range queryServers {
+		srv := server // Capture for goroutine
+		originalMsg := s.BuildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
+		msg := SafeCopyMessage(originalMsg)
+		globalResourceManager.PutDNSMessage(originalMsg)
+
+		s.taskManager.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address),
+			func(ctx context.Context) error {
+				result := s.queryClient.ExecuteQuery(ctx, msg, srv, tracker)
+
+				if result.Error == nil && result.Response != nil {
+					rcode := result.Response.Rcode
+					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+						// Validate DNSSEC if enabled
+						if serverDNSSECEnabled && s.config.Server.Features.DNSSEC {
+							result.Validated = s.dnssecValidator.ValidateResponse(result.Response, true)
+						}
+
+						// Apply policy filtering
+						filteredAnswer := s.FilterRecordsByPolicy(result.Response.Answer, srv.Policy)
+						filteredExtra := s.FilterRecordsByPolicy(result.Response.Extra, srv.Policy)
+
+						// Only send result if we have useful records after filtering
+						if len(filteredAnswer) > 0 {
+							ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
+
+							if tracker != nil && srv.Policy != "all" {
+								tracker.AddStep("Server %s after policy filter: %d answer records", srv.Address, len(filteredAnswer))
+							}
+
+							select {
+							case resultChan <- &FilteredResult{
+								Answer:     filteredAnswer,
+								Authority:  result.Response.Ns,
+								Additional: filteredExtra,
+								Validated:  result.Validated,
+								ECS:        ecsResponse,
+								Server:     srv.Address,
+							}:
+							case <-ctx.Done():
+							}
+						} else {
+							if tracker != nil && srv.Policy != "all" {
+								tracker.AddStep("Server %s after policy filter: no answer records", srv.Address)
+							}
+						}
+					}
+				}
+				return nil
+			})
+	}
+
+	// Launch recursive query if needed
+	if needRecursive {
+		s.taskManager.ExecuteAsync("Query-Recursive",
+			func(ctx context.Context) error {
+				recursiveCtx, recursiveCancel := context.WithTimeout(ctx, RecursiveTimeout)
+				defer recursiveCancel()
+
+				answer, authority, additional, validated, ecsResponse, err := s.ResolveWithCNAME(recursiveCtx, question, ecs, tracker)
+
+				if err == nil && len(answer) > 0 {
+					// Get recursive policy
+					recursivePolicy := s.GetRecursivePolicy()
+
+					// Apply policy filtering to recursive result
+					filteredAnswer := s.FilterRecordsByPolicy(answer, recursivePolicy)
+					filteredAdditional := s.FilterRecordsByPolicy(additional, recursivePolicy)
+
+					if len(filteredAnswer) > 0 {
+						if tracker != nil && recursivePolicy != "all" {
+							tracker.AddStep("Recursive query after policy filter: %d answer records", len(filteredAnswer))
+						}
+
+						select {
+						case resultChan <- &FilteredResult{
+							Answer:     filteredAnswer,
+							Authority:  authority,
+							Additional: filteredAdditional,
+							Validated:  validated,
+							ECS:        ecsResponse,
+							Server:     "builtin_recursive",
+						}:
+						case <-ctx.Done():
+						}
+					} else {
+						if tracker != nil && recursivePolicy != "all" {
+							tracker.AddStep("Recursive query after policy filter: no answer records")
+						}
+					}
+				}
+				return nil
+			})
+	}
+
+	// Wait for first successful filtered result
+	select {
+	case result := <-resultChan:
+		if tracker != nil {
+			tracker.AddStep("Using result from: %s", result.Server)
+		}
+		return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
+	case <-ctx.Done():
+		return nil, nil, nil, false, nil, errors.New("all upstream queries failed or timed out")
+	}
 }
 
 // ExecuteConcurrentQueries executes concurrent queries
