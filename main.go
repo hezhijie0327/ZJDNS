@@ -3839,6 +3839,30 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 	var ecsResponse *ECSOption
 	if result.Response != nil {
 		ecsResponse = s.ednsManager.ParseFromDNS(result.Response)
+
+		// Apply policy filtering
+		if result.Server != "" && result.Response != nil {
+			// Find corresponding upstream server configuration
+			for _, server := range servers {
+				if server.Address == result.Server {
+					if tracker != nil {
+						tracker.AddStep("Applying policy filter: %s", server.Policy)
+					}
+
+					// Filter Answer records
+					result.Response.Answer = s.FilterRecordsByPolicy(result.Response.Answer, server.Policy)
+
+					// Filter address records in Additional section
+					result.Response.Extra = s.FilterRecordsByPolicy(result.Response.Extra, server.Policy)
+
+					if tracker != nil {
+						tracker.AddStep("After policy filter: %d answer records, %d additional records",
+							len(result.Response.Answer), len(result.Response.Extra))
+					}
+					break
+				}
+			}
+		}
 	}
 
 	return result.Response.Answer, result.Response.Ns, result.Response.Extra,
@@ -3873,6 +3897,8 @@ func (s *DNSServer) ExecuteConcurrentQueries(ctx context.Context, question dns.Q
 		s.taskManager.ExecuteAsync(fmt.Sprintf("ConcurrentQuery-%s", server.Address),
 			func(ctx context.Context) error {
 				result := s.queryClient.ExecuteQuery(ctx, msg, server, tracker)
+				// Ensure Server field is correctly set
+				result.Server = server.Address
 				select {
 				case resultChan <- result:
 				case <-ctx.Done():
@@ -4062,6 +4088,13 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 		tracker.AddStep("Starting recursive query: %s, depth=%d, TCP=%v", normalizedQname, depth, forceTCP)
 	}
 
+	// Determine policy to use (get recursive policy from configuration)
+	recursivePolicy := s.GetRecursivePolicy()
+
+	if tracker != nil && recursivePolicy != "all" {
+		tracker.AddStep("Recursive query using policy: %s", recursivePolicy)
+	}
+
 	if normalizedQname == "" {
 		response, err := s.QueryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
 		if err != nil {
@@ -4081,7 +4114,12 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 
 		ecsResponse := s.ednsManager.ParseFromDNS(response)
 
-		return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
+		// Apply policy filtering
+		answer := s.FilterRecordsByPolicy(response.Answer, recursivePolicy)
+		authority := response.Ns
+		additional := s.FilterRecordsByPolicy(response.Extra, recursivePolicy)
+
+		return answer, authority, additional, validated, ecsResponse, nil
 	}
 
 	for {
@@ -4130,7 +4168,17 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 			if tracker != nil {
 				tracker.AddStep("Obtained final answer: %d records", len(response.Answer))
 			}
-			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
+
+			// Apply policy filtering
+			answer := s.FilterRecordsByPolicy(response.Answer, recursivePolicy)
+			authority := response.Ns
+			additional := s.FilterRecordsByPolicy(response.Extra, recursivePolicy)
+
+			if tracker != nil && recursivePolicy != "all" {
+				tracker.AddStep("After policy filter: %d answer records", len(answer))
+			}
+
+			return answer, authority, additional, validated, ecsResponse, nil
 		}
 
 		bestMatch := ""
@@ -4178,8 +4226,11 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 		currentDomain = bestMatch + "."
 
 		var nextNS []string
+		// Apply policy filtering to address records in Additional section
+		filteredExtra := s.FilterRecordsByPolicy(response.Extra, recursivePolicy)
+
 		for _, ns := range bestNSRecords {
-			for _, rr := range response.Extra {
+			for _, rr := range filteredExtra {
 				switch a := rr.(type) {
 				case *dns.A:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
@@ -4212,6 +4263,62 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 			tracker.AddStep("Next round query, switching to domain: %s (%d NS)", bestMatch, len(nextNS))
 		}
 	}
+}
+
+// GetRecursivePolicy gets recursive policy
+func (s *DNSServer) GetRecursivePolicy() string {
+	servers := s.upstreamManager.GetServers()
+	for _, server := range servers {
+		if server.IsRecursive() {
+			return server.Policy
+		}
+	}
+	return "all"
+}
+
+// FilterRecordsByPolicy filter DNS records by policy
+func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, policy string) []dns.RR {
+	if policy == "all" || !s.ipFilter.HasData() {
+		return records
+	}
+
+	filtered := make([]dns.RR, 0, len(records))
+
+	for _, rr := range records {
+		var ip net.IP
+
+		switch record := rr.(type) {
+		case *dns.A:
+			ip = record.A
+		case *dns.AAAA:
+			ip = record.AAAA
+		default:
+			// Keep non-A/AAAA records directly
+			filtered = append(filtered, rr)
+			continue
+		}
+
+		isTrusted := s.ipFilter.IsTrustedIP(ip)
+
+		switch policy {
+		case "trusted_only":
+			if isTrusted {
+				filtered = append(filtered, rr)
+				Debug("Policy filter: keeping trusted IP %s", ip)
+			} else {
+				Debug("Policy filter: filtering out untrusted IP %s", ip)
+			}
+		case "untrusted_only":
+			if !isTrusted {
+				filtered = append(filtered, rr)
+				Debug("Policy filter: keeping untrusted IP %s", ip)
+			} else {
+				Debug("Policy filter: filtering out trusted IP %s", ip)
+			}
+		}
+	}
+
+	return filtered
 }
 
 // HandleSuspiciousResponse handles suspicious DNS responses
