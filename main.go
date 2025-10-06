@@ -552,6 +552,16 @@ type (
 		mu             sync.RWMutex
 	}
 
+	// Channel to receive filtered results
+	FilteredResult struct {
+		Answer     []dns.RR
+		Authority  []dns.RR
+		Additional []dns.RR
+		Validated  bool
+		ECS        *ECSOption
+		Server     string
+	}
+
 	// HijackPrevention detects DNS hijacking attempts
 	HijackPrevention struct {
 		enabled bool
@@ -3863,19 +3873,52 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		tracker.AddStep("Starting concurrent query of %d servers (including recursive: %v)", totalServers, needRecursive)
 	}
 
-	// Channel to receive filtered results
-	type FilteredResult struct {
-		Answer     []dns.RR
-		Authority  []dns.RR
-		Additional []dns.RR
-		Validated  bool
-		ECS        *ECSOption
-		Server     string
-	}
-
 	resultChan := make(chan *FilteredResult, totalServers)
 	ctx, cancel := context.WithTimeout(s.ctx, QueryTimeout)
 	defer cancel()
+
+	// Launch recursive query if needed
+	if needRecursive {
+		s.taskManager.ExecuteAsync("Query-Recursive",
+			func(ctx context.Context) error {
+				recursiveCtx, recursiveCancel := context.WithTimeout(ctx, RecursiveTimeout)
+				defer recursiveCancel()
+
+				answer, authority, additional, validated, ecsResponse, err := s.ResolveWithCNAME(recursiveCtx, question, ecs, tracker)
+
+				if err == nil && len(answer) > 0 {
+					// Get recursive policy
+					recursivePolicy := s.GetRecursivePolicy()
+
+					// Apply policy filtering to recursive result
+					filteredAnswer := s.FilterRecordsByPolicy(answer, recursivePolicy)
+					filteredAdditional := s.FilterRecordsByPolicy(additional, recursivePolicy)
+
+					if len(filteredAnswer) > 0 {
+						if tracker != nil && recursivePolicy != "all" {
+							tracker.AddStep("Recursive query after policy filter: %d answer records", len(filteredAnswer))
+						}
+
+						select {
+						case resultChan <- &FilteredResult{
+							Answer:     filteredAnswer,
+							Authority:  authority,
+							Additional: filteredAdditional,
+							Validated:  validated,
+							ECS:        ecsResponse,
+							Server:     "builtin_recursive",
+						}:
+						case <-ctx.Done():
+						}
+					} else {
+						if tracker != nil && recursivePolicy != "all" {
+							tracker.AddStep("Recursive query after policy filter: no answer records")
+						}
+					}
+				}
+				return nil
+			})
+	}
 
 	// Launch queries for non-recursive servers
 	for _, server := range queryServers {
@@ -3923,49 +3966,6 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 							if tracker != nil && srv.Policy != "all" {
 								tracker.AddStep("Server %s after policy filter: no answer records", srv.Address)
 							}
-						}
-					}
-				}
-				return nil
-			})
-	}
-
-	// Launch recursive query if needed
-	if needRecursive {
-		s.taskManager.ExecuteAsync("Query-Recursive",
-			func(ctx context.Context) error {
-				recursiveCtx, recursiveCancel := context.WithTimeout(ctx, RecursiveTimeout)
-				defer recursiveCancel()
-
-				answer, authority, additional, validated, ecsResponse, err := s.ResolveWithCNAME(recursiveCtx, question, ecs, tracker)
-
-				if err == nil && len(answer) > 0 {
-					// Get recursive policy
-					recursivePolicy := s.GetRecursivePolicy()
-
-					// Apply policy filtering to recursive result
-					filteredAnswer := s.FilterRecordsByPolicy(answer, recursivePolicy)
-					filteredAdditional := s.FilterRecordsByPolicy(additional, recursivePolicy)
-
-					if len(filteredAnswer) > 0 {
-						if tracker != nil && recursivePolicy != "all" {
-							tracker.AddStep("Recursive query after policy filter: %d answer records", len(filteredAnswer))
-						}
-
-						select {
-						case resultChan <- &FilteredResult{
-							Answer:     filteredAnswer,
-							Authority:  authority,
-							Additional: filteredAdditional,
-							Validated:  validated,
-							ECS:        ecsResponse,
-							Server:     "builtin_recursive",
-						}:
-						case <-ctx.Done():
-						}
-					} else {
-						if tracker != nil && recursivePolicy != "all" {
-							tracker.AddStep("Recursive query after policy filter: no answer records")
 						}
 					}
 				}
