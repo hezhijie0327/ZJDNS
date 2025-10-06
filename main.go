@@ -157,13 +157,6 @@ const (
 	ColorBold   = "\033[1m"
 )
 
-// Protocol Identifiers
-var (
-	NextProtoQUIC  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
-	NextProtoHTTP3 = []string{"h3"}
-	NextProtoHTTP2 = []string{http2.NextProtoTLS, "http/1.1"}
-)
-
 // QUIC Error Codes
 const (
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
@@ -171,18 +164,19 @@ const (
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 )
 
-// =============================================================================
-// Types - Logging
-// =============================================================================
-
-type LogLevel int
-
+// Log Levels
 const (
 	LogError LogLevel = iota
 	LogWarn
 	LogInfo
 	LogDebug
 )
+
+// =============================================================================
+// Types - Logging
+// =============================================================================
+
+type LogLevel int
 
 type Logger struct {
 	level    LogLevel
@@ -596,9 +590,17 @@ type ResourceManager struct {
 type ConfigManager struct{}
 
 // =============================================================================
-// Global Variables
+// Variables
 // =============================================================================
 
+// Protocol Identifiers
+var (
+	NextProtoQUIC  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
+	NextProtoHTTP3 = []string{"h3"}
+	NextProtoHTTP2 = []string{http2.NextProtoTLS, "http/1.1"}
+)
+
+// Global Variables
 var (
 	globalResourceManager = NewResourceManager()
 	globalRecordHandler   = NewRecordHandler()
