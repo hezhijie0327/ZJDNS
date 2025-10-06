@@ -3830,8 +3830,33 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		return nil, nil, nil, false, nil, errors.New("no available upstream servers")
 	}
 
+	// Check if any server is recursive
+	hasRecursive := false
+	var nonRecursiveServers []*UpstreamServer
+
+	for _, server := range servers {
+		if server.IsRecursive() {
+			hasRecursive = true
+		} else {
+			nonRecursiveServers = append(nonRecursiveServers, server)
+		}
+	}
+
+	// If we have recursive server configured, use recursive resolution
+	if hasRecursive {
+		if tracker != nil {
+			tracker.AddStep("Using built-in recursive resolution")
+		}
+
+		ctx, cancel := context.WithTimeout(s.ctx, RecursiveTimeout)
+		defer cancel()
+
+		return s.ResolveWithCNAME(ctx, question, ecs, tracker)
+	}
+
+	// Otherwise use upstream servers
 	result, err := s.ExecuteConcurrentQueries(s.ctx, question, ecs, serverDNSSECEnabled,
-		servers, MaxSingleQuery, tracker)
+		nonRecursiveServers, MaxSingleQuery, tracker)
 	if err != nil {
 		return nil, nil, nil, false, nil, err
 	}
@@ -3843,7 +3868,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		// Apply policy filtering
 		if result.Server != "" && result.Response != nil {
 			// Find corresponding upstream server configuration
-			for _, server := range servers {
+			for _, server := range nonRecursiveServers {
 				if server.Address == result.Server {
 					if tracker != nil {
 						tracker.AddStep("Applying policy filter: %s", server.Policy)
@@ -4095,6 +4120,7 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 		tracker.AddStep("Recursive query using policy: %s", recursivePolicy)
 	}
 
+	// Special case: querying root domain itself
 	if normalizedQname == "" {
 		response, err := s.QueryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
 		if err != nil {
@@ -4114,7 +4140,7 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 
 		ecsResponse := s.ednsManager.ParseFromDNS(response)
 
-		// Apply policy filtering
+		// Apply policy filtering for root domain query result
 		answer := s.FilterRecordsByPolicy(response.Answer, recursivePolicy)
 		authority := response.Ns
 		additional := s.FilterRecordsByPolicy(response.Extra, recursivePolicy)
@@ -4122,6 +4148,7 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 		return answer, authority, additional, validated, ecsResponse, nil
 	}
 
+	// Main recursion loop
 	for {
 		select {
 		case <-ctx.Done():
@@ -4164,12 +4191,13 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 
 		ecsResponse := s.ednsManager.ParseFromDNS(response)
 
+		// Found final answer - apply policy filtering here
 		if len(response.Answer) > 0 {
 			if tracker != nil {
 				tracker.AddStep("Obtained final answer: %d records", len(response.Answer))
 			}
 
-			// Apply policy filtering
+			// Apply policy filtering to final result
 			answer := s.FilterRecordsByPolicy(response.Answer, recursivePolicy)
 			authority := response.Ns
 			additional := s.FilterRecordsByPolicy(response.Extra, recursivePolicy)
@@ -4181,6 +4209,8 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 			return answer, authority, additional, validated, ecsResponse, nil
 		}
 
+		// No final answer yet, continue recursion
+		// Find best matching NS records
 		bestMatch := ""
 		var bestNSRecords []*dns.NS
 
@@ -4225,12 +4255,11 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 
 		currentDomain = bestMatch + "."
 
+		// Extract glue records from Additional section
+		// DO NOT filter here - we need all glue records to continue recursion
 		var nextNS []string
-		// Apply policy filtering to address records in Additional section
-		filteredExtra := s.FilterRecordsByPolicy(response.Extra, recursivePolicy)
-
 		for _, ns := range bestNSRecords {
-			for _, rr := range filteredExtra {
+			for _, rr := range response.Extra {
 				switch a := rr.(type) {
 				case *dns.A:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
@@ -4244,6 +4273,7 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 			}
 		}
 
+		// If no glue records, need to resolve NS addresses
 		if len(nextNS) == 0 {
 			if tracker != nil {
 				tracker.AddStep("No NS addresses in Additional, starting NS record resolution")
