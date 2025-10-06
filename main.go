@@ -3854,44 +3854,76 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		return s.ResolveWithCNAME(ctx, question, ecs, tracker)
 	}
 
-	// Otherwise use upstream servers
-	result, err := s.ExecuteConcurrentQueries(s.ctx, question, ecs, serverDNSSECEnabled,
-		nonRecursiveServers, MaxSingleQuery, tracker)
-	if err != nil {
-		return nil, nil, nil, false, nil, err
-	}
+	// Try servers one by one, applying policy filtering
+	var lastErr error
+	remainingServers := make([]*UpstreamServer, len(nonRecursiveServers))
+	copy(remainingServers, nonRecursiveServers)
 
-	var ecsResponse *ECSOption
-	if result.Response != nil {
-		ecsResponse = s.ednsManager.ParseFromDNS(result.Response)
+	for len(remainingServers) > 0 {
+		// Try up to MaxSingleQuery servers concurrently
+		batchSize := MaxSingleQuery
+		if batchSize > len(remainingServers) {
+			batchSize = len(remainingServers)
+		}
 
-		// Apply policy filtering
-		if result.Server != "" && result.Response != nil {
-			// Find corresponding upstream server configuration
-			for _, server := range nonRecursiveServers {
-				if server.Address == result.Server {
-					if tracker != nil {
-						tracker.AddStep("Applying policy filter: %s", server.Policy)
-					}
+		batch := remainingServers[:batchSize]
+		remainingServers = remainingServers[batchSize:]
 
-					// Filter Answer records
-					result.Response.Answer = s.FilterRecordsByPolicy(result.Response.Answer, server.Policy)
+		result, err := s.ExecuteConcurrentQueries(s.ctx, question, ecs, serverDNSSECEnabled,
+			batch, MaxSingleQuery, tracker)
 
-					// Filter address records in Additional section
-					result.Response.Extra = s.FilterRecordsByPolicy(result.Response.Extra, server.Policy)
+		if err != nil {
+			lastErr = err
+			continue
+		}
 
-					if tracker != nil {
-						tracker.AddStep("After policy filter: %d answer records, %d additional records",
-							len(result.Response.Answer), len(result.Response.Extra))
-					}
-					break
-				}
+		if result.Response == nil {
+			continue
+		}
+
+		// Find the server configuration for this result
+		var serverPolicy string
+		for _, server := range batch {
+			if server.Address == result.Server {
+				serverPolicy = server.Policy
+				break
 			}
 		}
+
+		if tracker != nil && serverPolicy != "" && serverPolicy != "all" {
+			tracker.AddStep("Applying policy filter: %s", serverPolicy)
+		}
+
+		// Apply policy filtering
+		filteredAnswer := s.FilterRecordsByPolicy(result.Response.Answer, serverPolicy)
+		filteredExtra := s.FilterRecordsByPolicy(result.Response.Extra, serverPolicy)
+
+		// Check if we got any useful records after filtering
+		hasUsefulRecords := len(filteredAnswer) > 0
+
+		if !hasUsefulRecords {
+			if tracker != nil {
+				tracker.AddStep("After policy filter: no answer records, trying next server")
+			}
+			continue
+		}
+
+		if tracker != nil && serverPolicy != "all" {
+			tracker.AddStep("After policy filter: %d answer records, %d additional records",
+				len(filteredAnswer), len(filteredExtra))
+		}
+
+		// Parse ECS response
+		ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
+
+		return filteredAnswer, result.Response.Ns, filteredExtra, result.Validated, ecsResponse, nil
 	}
 
-	return result.Response.Answer, result.Response.Ns, result.Response.Extra,
-		result.Validated, ecsResponse, nil
+	// All servers failed or returned empty results after filtering
+	if lastErr != nil {
+		return nil, nil, nil, false, nil, lastErr
+	}
+	return nil, nil, nil, false, nil, errors.New("all upstream servers returned empty results after policy filtering")
 }
 
 // ExecuteConcurrentQueries executes concurrent queries
