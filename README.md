@@ -85,54 +85,96 @@ ZJDNS 采用模块化、分层设计，核心组件职责清晰、松耦合，�
 
 ```mermaid
 graph TD
-    A[DNS Client] -->|UDP/TCP/DoT/DoQ/DoH| B[ZJDNS Server]
+    A[DNS Client] -->|UDP/TCP/DoT/DoQ/DoH| B[DNSServer]
 
-    subgraph Core ["核心处理层"]
-        B --> C[请求处理器<br><i>HandleDNSRequest</i>]
-        C --> D[DNS 重写器<br><i>DNSRewriter</i>]
-        C --> E[缓存管理器<br><i>CacheManager</i>]
-        C --> F[查询引擎<br><i>ProcessDNSQuery</i>]
+    subgraph ServerCore ["服务器核心"]
+        B --> C[HandleDNSRequest<br><i>请求处理入口</i>]
+        C --> D[ProcessDNSQuery<br><i>核心查询处理</i>]
     end
 
-    subgraph Cache ["缓存子系统"]
-        E -->|可选| G[RedisCache]
-        E -->|默认| H[NullCache]
+    subgraph Managers ["管理器层"]
+        D --> E[UpstreamManager<br><i>上游服务器管理</i>]
+        D --> F[ConnectionPool<br><i>连接池管理</i>]
+        D --> G[TaskManager<br><i>任务管理器</i>]
+        D --> H[TLSManager<br><i>TLS证书管理</i>]
     end
 
-    subgraph Query ["查询子系统"]
-        F --> I{是否配置上游?}
-        I -->|是| J[上游查询<br><i>QueryUpstreamServers</i>]
-        I -->|否| K[递归解析<br><i>RecursiveQuery</i>]
+    subgraph QueryFlow ["查询流程"]
+        D --> I{查询类型判断}
+        I -->|配置上游| J[QueryUpstreamServers<br><i>上游查询</i>]
+        I -->|递归模式| K[RecursiveQuery<br><i>递归解析</i>]
 
-        J --> L[连接池<br><i>ConnectionPool</i>]
-        K --> M[根服务器列表]
+        J --> L[QueryClient<br><i>统一查询客户端</i>]
         K --> L
+        L --> F
     end
 
-    subgraph Security ["安全与增强模块"]
-        F --> N[EDNS 管理器<br><i>EDNSManager</i>]
-        F --> O[DNSSEC 验证器<br><i>DNSSECValidator</i>]
-        F --> P[劫持防护<br><i>HijackPrevention</i>]
-        F --> Q[IP 过滤器<br><i>IPFilter</i>]
-        F --> R[网络质量测试<br><i>SpeedTester</i>]
+    subgraph Security ["安全模块"]
+        D --> M[DNSSECValidator<br><i>DNSSEC验证</i>]
+        D --> N[HijackPrevention<br><i>劫持防护</i>]
+        D --> O[IPFilter<br><i>IP过滤</i>]
+        D --> P[DNSRewriter<br><i>DNS重写</i>]
     end
 
-    subgraph SecureDNS ["安全传输协议"]
-        B --> S[安全 DNS 管理器<br><i>TLSManager</i>]
-        S --> T[DoT 服务<br><i>TLS</i>]
-        S --> U[DoQ 服务<br><i>QUIC</i>]
-        S --> V[DoH/DoH3 服务<br><i>HTTP/2 + HTTP/3</i>]
+    subgraph Enhancement ["增强功能"]
+        D --> Q[EDNSManager<br><i>EDNS0管理</i>]
+        Q --> R[ECS支持<br><i>客户端子网</i>]
+        Q --> S[Padding<br><i>流量填充</i>]
+
+        D --> T[SpeedTester<br><i>网络质量测试</i>]
+        T --> U[SpeedResult缓存<br><i>结果缓存</i>]
     end
 
-    subgraph Utils ["支撑组件"]
-        L --> W[安全客户端<br><i>UnifiedSecureClient</i>]
-        L --> X[传统客户端<br><i>dns.Client</i>]
-        C --> Y[请求追踪器<br><i>RequestTracker</i>]
-        C --> Z[资源管理器<br><i>ResourceManager</i>]
+    subgraph CacheSystem ["缓存系统"]
+        D --> V[CacheManager<br><i>缓存管理接口</i>]
+        V -->|生产环境| W[RedisCache<br><i>Redis缓存</i>]
+        V -->|测试环境| X[NullCache<br><i>空缓存</i>]
+
+        W --> Y[RefreshQueue<br><i>刷新队列</i>]
+        W --> Z[RefreshRequest<br><i>刷新请求</i>]
     end
 
-    classDef module fill:#e6f3ff,stroke:#333;
-    class Core,Cache,Query,Security,SecureDNS,Utils module;
+    subgraph SecureClients ["安全客户端"]
+        L --> AA[UnifiedSecureClient<br><i>统一安全客户端</i>]
+        L --> BB[DoHClient<br><i>DoH客户端</i>]
+
+        AA --> CC[DoT连接<br><i>TLS连接</i>]
+        AA --> DD[DoQ连接<br><i>QUIC连接</i>]
+        BB --> EE[HTTP3Transport<br><i>HTTP/3传输</i>]
+    end
+
+    subgraph Support ["支撑组件"]
+        D --> FF[RequestTracker<br><i>请求追踪</i>]
+        D --> GG[ResourceManager<br><i>资源管理</i>]
+        D --> HH[ConfigManager<br><i>配置管理</i>]
+
+        GG --> II[对象池<br><i>sync.Pool</i>]
+        FF --> JJ[唯一ID<br><i>请求标识</i>]
+    end
+
+    subgraph DDR ["DDR功能"]
+        H --> KK[DDRSettings<br><i>DDR配置</i>]
+        KK --> LL[SVCB记录<br><i>服务发现</i>]
+    end
+
+    subgraph Validation ["验证组件"]
+        L --> MM[QuicAddrValidator<br><i>QUIC地址验证</i>]
+        MM --> NN[Ristretto缓存<br><i>内存缓存</i>]
+    end
+
+    classDef core fill:#e6f3ff,stroke:#333;
+    classDef manager fill:#e6ffe6,stroke:#333;
+    classDef security fill:#ffe6e6,stroke:#333;
+    classDef cache fill:#fff0e6,stroke:#333;
+    classDef client fill:#f0e6ff,stroke:#333;
+    classDef support fill:#e6ffff,stroke:#333;
+
+    class ServerCore core;
+    class Managers manager;
+    class Security security;
+    class CacheSystem cache;
+    class SecureClients client;
+    class Support support;
 ```
 
 ---
