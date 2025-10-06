@@ -202,8 +202,7 @@ type DNSServer struct {
 	ipFilter         *IPFilter
 	hijackPrevention *HijackPrevention
 	dnssecValidator  *DNSSECValidator
-	rootServersV4    []string
-	rootServersV6    []string
+	rootServerManager *RootServerManager
 	concurrencyLimit chan struct{}
 	speedDebounce    map[string]time.Time
 	speedMutex       sync.Mutex
@@ -588,6 +587,16 @@ type ResourceManager struct {
 }
 
 type ConfigManager struct{}
+
+type RootServerManager struct {
+	serversV4     []string
+	serversV6     []string
+	speedTester   *SpeedTester
+	sortedV4      []string
+	sortedV6      []string
+	lastSortTime  time.Time
+	mu            sync.RWMutex
+}
 
 // =============================================================================
 // Variables
@@ -2805,19 +2814,10 @@ func (u *UpstreamServer) IsRecursive() bool {
 // =============================================================================
 
 func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
-	rootServersV4 := []string{
-		"198.41.0.4:53", "170.247.170.2:53", "192.33.4.12:53", "199.7.91.13:53",
-		"192.203.230.10:53", "192.5.5.241:53", "192.112.36.4:53", "198.97.190.53:53",
-		"192.36.148.17:53", "192.58.128.30:53", "193.0.14.129:53", "199.7.83.42:53", "202.12.27.33:53",
-	}
-
-	rootServersV6 := []string{
-		"[2001:503:ba3e::2:30]:53", "[2801:1b8:10::b]:53", "[2001:500:2::c]:53", "[2001:500:2d::d]:53",
-		"[2001:500:a8::e]:53", "[2001:500:2f::f]:53", "[2001:500:12::d0d]:53", "[2001:500:1::53]:53",
-		"[2001:7fe::53]:53", "[2001:503:c27::2:30]:53", "[2001:7fd::1]:53", "[2001:500:9f::42]:53", "[2001:dc3::35]:53",
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Initialize root server manager first
+	rootServerManager := NewRootServerManager(*config)
 
 	ednsManager, err := NewEDNSManager(config.Server.DefaultECS, config.Server.Features.Padding)
 	if err != nil {
@@ -2849,8 +2849,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 
 	server := &DNSServer{
 		config:           config,
-		rootServersV4:    rootServersV4,
-		rootServersV6:    rootServersV6,
+		rootServerManager: rootServerManager,
 		connPool:         connectionPool,
 		dnssecValidator:  NewDNSSECValidator(),
 		concurrencyLimit: make(chan struct{}, MaxConcurrency),
@@ -2897,6 +2896,14 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 func (s *DNSServer) SetupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start root server periodic sorting
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() { RecoverPanic("Root server periodic sorting") }()
+		s.rootServerManager.StartPeriodicSorting(s.ctx)
+	}()
 
 	s.wg.Add(1)
 	go func() {
@@ -4285,13 +4292,7 @@ func (s *DNSServer) ResolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 }
 
 func (s *DNSServer) GetRootServers() []string {
-	if s.config.Server.Features.IPv6 {
-		mixed := make([]string, 0, len(s.rootServersV4)+len(s.rootServersV6))
-		mixed = append(mixed, s.rootServersV4...)
-		mixed = append(mixed, s.rootServersV6...)
-		return mixed
-	}
-	return s.rootServersV4
+	return s.rootServerManager.GetOptimalRootServers(s.config.Server.Features.IPv6)
 }
 
 func (s *DNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
@@ -5861,6 +5862,171 @@ func (v *QuicAddrValidator) Close() {
 		v.cache.Close()
 		Debug("QUIC address validator cache closed and resources released")
 	}
+}
+
+// =============================================================================
+// Root Server Management
+// =============================================================================
+
+func NewRootServerManager(config ServerConfig) *RootServerManager {
+	rsm := &RootServerManager{
+		serversV4: []string{
+			"198.41.0.4:53", "170.247.170.2:53", "192.33.4.12:53", "199.7.91.13:53",
+			"192.203.230.10:53", "192.5.5.241:53", "192.112.36.4:53", "198.97.190.53:53",
+			"192.36.148.17:53", "192.58.128.30:53", "193.0.14.129:53", "199.7.83.42:53", "202.12.27.33:53",
+		},
+		serversV6: []string{
+			"[2001:503:ba3e::2:30]:53", "[2801:1b8:10::b]:53", "[2001:500:2::c]:53", "[2001:500:2d::d]:53",
+			"[2001:500:a8::e]:53", "[2001:500:2f::f]:53", "[2001:500:12::d0d]:53", "[2001:500:1::53]:53",
+			"[2001:7fe::53]:53", "[2001:503:c27::2:30]:53", "[2001:7fd::1]:53", "[2001:500:9f::42]:53", "[2001:dc3::35]:53",
+		},
+		speedTester: NewSpeedTester(config),
+	}
+
+	// Initialize with default order
+	rsm.sortedV4 = make([]string, len(rsm.serversV4))
+	rsm.sortedV6 = make([]string, len(rsm.serversV6))
+	copy(rsm.sortedV4, rsm.serversV4)
+	copy(rsm.sortedV6, rsm.serversV6)
+
+	// Start initial sorting in background
+	go rsm.sortServersBySpeed()
+
+	return rsm
+}
+
+func (rsm *RootServerManager) GetOptimalRootServers(ipv6Enabled bool) []string {
+	rsm.mu.RLock()
+	defer rsm.mu.RUnlock()
+
+	if ipv6Enabled {
+		// Return mixed optimal servers (IPv4 + IPv6)
+		mixed := make([]string, 0, 8)
+		v4Count := min(4, len(rsm.sortedV4))
+		v6Count := min(4, len(rsm.sortedV6))
+
+		mixed = append(mixed, rsm.sortedV4[:v4Count]...)
+		mixed = append(mixed, rsm.sortedV6[:v6Count]...)
+		return mixed
+	}
+
+	// Return top IPv4 servers
+	count := min(6, len(rsm.sortedV4))
+	result := make([]string, count)
+	copy(result, rsm.sortedV4[:count])
+	return result
+}
+
+func (rsm *RootServerManager) sortServersBySpeed() {
+	defer func() { RecoverPanic("Root server speed sorting") }()
+
+	// Sort IPv4 servers
+	if len(rsm.serversV4) > 0 {
+		ips := extractIPsFromServers(rsm.serversV4)
+		results := rsm.speedTester.SpeedTest(ips)
+
+		sorted := sortBySpeedResult(rsm.serversV4, results)
+
+		rsm.mu.Lock()
+		rsm.sortedV4 = sorted
+		rsm.mu.Unlock()
+
+		Info("Root servers IPv4 sorted by latency: %v", sorted[:min(3, len(sorted))])
+	}
+
+	// Sort IPv6 servers
+	if len(rsm.serversV6) > 0 {
+		ips := extractIPsFromServers(rsm.serversV6)
+		results := rsm.speedTester.SpeedTest(ips)
+
+		sorted := sortBySpeedResult(rsm.serversV6, results)
+
+		rsm.mu.Lock()
+		rsm.sortedV6 = sorted
+		rsm.mu.Unlock()
+
+		Info("Root servers IPv6 sorted by latency: %v", sorted[:min(3, len(sorted))])
+	}
+
+	rsm.mu.Lock()
+	rsm.lastSortTime = time.Now()
+	rsm.mu.Unlock()
+}
+
+func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute) // Sort every 5 minutes
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			rsm.sortServersBySpeed()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func extractIPsFromServers(servers []string) []string {
+	ips := make([]string, len(servers))
+	for i, server := range servers {
+		// Extract IP from server:port format
+		server = strings.Trim(server, "[]")
+		if idx := strings.LastIndex(server, ":"); idx != -1 {
+			ips[i] = server[:idx]
+		} else {
+			ips[i] = server
+		}
+	}
+	return ips
+}
+
+func sortBySpeedResult(servers []string, results map[string]*SpeedResult) []string {
+	type serverWithLatency struct {
+		server   string
+		latency  time.Duration
+		reachable bool
+	}
+
+	serverList := make([]serverWithLatency, len(servers))
+	for i, server := range servers {
+		ip := extractIPFromServer(server)
+		if result, exists := results[ip]; exists && result.Reachable {
+			serverList[i] = serverWithLatency{
+				server:    server,
+				latency:   result.Latency,
+				reachable: true,
+			}
+		} else {
+			serverList[i] = serverWithLatency{
+				server:    server,
+				latency:   9999 * time.Millisecond, // Put unreachable servers at the end
+				reachable: false,
+			}
+		}
+	}
+
+	// Sort by latency (reachable first, then by latency)
+	sort.Slice(serverList, func(i, j int) bool {
+		if serverList[i].reachable != serverList[j].reachable {
+			return serverList[i].reachable
+		}
+		return serverList[i].latency < serverList[j].latency
+	})
+
+	sorted := make([]string, len(servers))
+	for i, item := range serverList {
+		sorted[i] = item.server
+	}
+	return sorted
+}
+
+func extractIPFromServer(server string) string {
+	server = strings.Trim(server, "[]")
+	if idx := strings.LastIndex(server, ":"); idx != -1 {
+		return server[:idx]
+	}
+	return server
 }
 
 // =============================================================================
