@@ -84,91 +84,99 @@ ZJDNS 采用模块化、分层设计，核心组件职责清晰、松耦合，�
 
 ```mermaid
 graph TD
-    A[DNS Client] -->|UDP/TCP/DoT/DoQ/DoH| B[DNSServer]
+    A[DNS Client] -->|UDP/TCP/DoT/DoQ/DoH| B[DNSServer<br><i>服务器核心</i>]
 
-    subgraph ServerCore ["服务器核心"]
-        B --> C[HandleDNSRequest<br><i>请求处理入口</i>]
-        C --> D[ProcessDNSQuery<br><i>核心查询处理</i>]
+    subgraph CoreManagers ["核心管理器层"]
+        B --> C[QueryManager<br><i>查询管理器</i>]
+        B --> D[ConnectionManager<br><i>连接管理器</i>]
+        B --> E[SecurityManager<br><i>安全管理器</i>]
+        B --> F[TaskManager<br><i>任务管理器</i>]
+        B --> G[RootServerManager<br><i>根服务器管理器</i>]
     end
 
-    subgraph Managers ["管理器层"]
-        D --> E[UpstreamManager<br><i>上游服务器管理</i>]
-        D --> F[ConnectionPool<br><i>连接池管理</i>]
-        D --> G[TaskManager<br><i>任务管理器</i>]
-        D --> H[TLSManager<br><i>TLS证书管理</i>]
-        D --> OO[RootServerManager<br><i>根服务器管理</i>]
+    subgraph QueryProcessing ["查询处理流程"]
+        C --> H[UpstreamHandler<br><i>上游处理器</i>]
+        C --> I[RecursiveResolver<br><i>递归解析器</i>]
+        C --> J[CNAMEHandler<br><i>CNAME处理器</i>]
+        C --> K[ResponseValidator<br><i>响应验证器</i>]
+
+        I --> G
+        H --> D
+        I --> D
     end
 
-    subgraph QueryFlow ["查询流程"]
-        D --> I{查询类型判断}
-        I -->|配置上游| J[QueryUpstreamServers<br><i>上游查询</i>]
-        I -->|递归模式| K[RecursiveQuery<br><i>递归解析</i>]
+    subgraph ConnectionSystem ["连接系统"]
+        D --> L[PoolManager<br><i>连接池管理</i>]
+        D --> M[SecureClientManager<br><i>安全客户端管理</i>]
+        D --> N[QueryClient<br><i>查询客户端</i>]
 
-        J --> L[QueryClient<br><i>统一查询客户端</i>]
-        K --> L
-        K --> OO
-        L --> F
+        L --> O[UDP Clients<br><i>UDP客户端池</i>]
+        L --> P[TLS Connections<br><i>TLS连接池</i>]
+        L --> Q[QUIC Connections<br><i>QUIC连接池</i>]
+
+        M --> R[UnifiedSecureClient<br><i>统一安全客户端</i>]
+        M --> S[DoHClient<br><i>DoH客户端</i>]
+
+        R --> T[DoT连接<br><i>TLS连接</i>]
+        R --> U[DoQ连接<br><i>QUIC连接</i>]
+        S --> V[HTTP3Transport<br><i>HTTP/3传输</i>]
     end
 
-    subgraph Security ["安全模块"]
-        D --> M[DNSSECValidator<br><i>DNSSEC验证</i>]
-        D --> N[HijackPrevention<br><i>劫持防护</i>]
-        D --> P[DNSRewriter<br><i>DNS重写</i>]
+    subgraph SecurityComponents ["安全组件"]
+        E --> W[TLSManager<br><i>TLS管理器</i>]
+        E --> X[DNSSECValidator<br><i>DNSSEC验证器</i>]
+        E --> Y[HijackPrevention<br><i>劫持防护</i>]
+
+        W --> Z[QUICAddrValidator<br><i>QUIC地址验证</i>]
+        Z --> AA[Ristretto缓存<br><i>内存缓存</i>]
     end
 
     subgraph Enhancement ["增强功能"]
-        D --> Q[EDNSManager<br><i>EDNS0管理</i>]
-        Q --> R[ECS支持<br><i>客户端子网</i>]
-        Q --> S[Padding<br><i>流量填充</i>]
+        B --> BB[EDNSManager<br><i>EDNS管理器</i>]
+        B --> CC[RewriteManager<br><i>重写管理器</i>]
+        B --> DD[SpeedTestManager<br><i>网络质量管理器</i>]
 
-        D --> T[SpeedTester<br><i>网络质量测试</i>]
-        T --> U[SpeedResult缓存<br><i>结果缓存</i>]
+        BB --> EE[IPDetector<br><i>IP检测器</i>]
+        BB --> FF[ECS支持<br><i>客户端子网</i>]
+        BB --> GG[Padding<br><i>流量填充</i>]
+
+        DD --> HH[SpeedResult缓存<br><i>结果缓存</i>]
     end
 
     subgraph CacheSystem ["缓存系统"]
-        D --> V[CacheManager<br><i>缓存管理接口</i>]
-        V -->|生产环境| W[RedisCache<br><i>Redis缓存</i>]
-        V -->|测试环境| X[NullCache<br><i>空缓存</i>]
+        B --> II[CacheManager<br><i>缓存管理接口</i>]
+        II -->|生产环境| JJ[RedisCache<br><i>Redis缓存</i>]
+        II -->|测试环境| KK[NullCache<br><i>空缓存</i>]
 
-        W --> Y[RefreshQueue<br><i>刷新队列</i>]
-        W --> Z[RefreshRequest<br><i>刷新请求</i>]
-    end
-
-    subgraph SecureClients ["安全客户端"]
-        L --> AA[UnifiedSecureClient<br><i>统一安全客户端</i>]
-        L --> BB[DoHClient<br><i>DoH客户端</i>]
-
-        AA --> CC[DoT连接<br><i>TLS连接</i>]
-        AA --> DD[DoQ连接<br><i>QUIC连接</i>]
-        BB --> EE[HTTP3Transport<br><i>HTTP/3传输</i>]
+        JJ --> LL[RefreshQueue<br><i>刷新队列</i>]
+        JJ --> MM[RefreshRequest<br><i>刷新请求</i>]
     end
 
     subgraph Support ["支撑组件"]
-        D --> FF[RequestTracker<br><i>请求追踪</i>]
-        D --> GG[ResourceManager<br><i>资源管理</i>]
-        D --> HH[ConfigManager<br><i>配置管理</i>]
+        B --> NN[ResourceManager<br><i>资源管理器</i>]
+        B --> OO[RequestTracker<br><i>请求追踪器</i>]
 
-        GG --> II[对象池<br><i>sync.Pool</i>]
-        FF --> JJ[唯一ID<br><i>请求标识</i>]
+        NN --> PP[对象池<br><i>sync.Pool</i>]
+        OO --> QQ[唯一ID<br><i>请求标识</i>]
+    end
+
+    subgraph GlobalServices ["全局服务"]
+        RR[GlobalLog<br><i>全局日志</i>]
+        SS[GlobalConfig<br><i>全局配置</i>]
+        TT[GlobalResource<br><i>全局资源</i>]
+
+        RR -.-> B
+        SS -.-> B
+        TT -.-> NN
     end
 
     subgraph RootServerSystem ["根服务器系统"]
-        OO --> PP[IPv4根服务器池<br><i>13个根服务器</i>]
-        OO --> QQ[IPv6根服务器池<br><i>13个根服务器</i>]
-        OO --> RR[速度排序<br><i>基于UDP:53测试</i>]
+        G --> UU[IPv4根服务器池<br><i>13个根服务器</i>]
+        G --> VV[IPv6根服务器池<br><i>13个根服务器</i>]
+        G --> WW[速度排序<br><i>基于网络测试</i>]
 
-        RR --> SS[最优服务器选择<br><i>IPv4/IPv6混合</i>]
-        OO --> TT[周期性重排序<br><i>5分钟间隔</i>]
-    end
-
-    subgraph DDR ["DDR功能"]
-        H --> KK[DDRSettings<br><i>DDR配置</i>]
-        KK --> LL[SVCB记录<br><i>服务发现</i>]
-    end
-
-    subgraph Validation ["验证组件"]
-        L --> MM[QuicAddrValidator<br><i>QUIC地址验证</i>]
-        MM --> NN[Ristretto缓存<br><i>内存缓存</i>]
+        WW --> XX[最优服务器选择<br><i>IPv4/IPv6混合</i>]
+        G --> YY[周期性重排序<br><i>15分钟间隔</i>]
     end
 
     classDef core fill:#e6f3ff,stroke:#333;
@@ -178,14 +186,15 @@ graph TD
     classDef client fill:#f0e6ff,stroke:#333;
     classDef support fill:#e6ffff,stroke:#333;
     classDef rootserver fill:#f0fff0,stroke:#333;
+    classDef global fill:#ffe6ff,stroke:#333;
 
-    class ServerCore core;
-    class Managers manager;
-    class Security security;
+    class B core;
+    class CoreManagers,QueryProcessing,ConnectionSystem manager;
+    class SecurityComponents security;
     class CacheSystem cache;
-    class SecureClients client;
-    class Support support;
+    class Enhancement,Support support;
     class RootServerSystem rootserver;
+    class GlobalServices global;
 ```
 
 ---

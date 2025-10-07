@@ -40,70 +40,65 @@ import (
 )
 
 // =============================================================================
-// Constants
+// Constants - Network & Protocol
 // =============================================================================
 
 const (
-	// Network Configuration
-	DefaultDNSPort     = "53"
-	DefaultTLSPort     = "853"
-	DefaultHTTPSPort   = "443"
-	DefaultQueryPath   = "/dns-query"
+	// Ports
+	DefaultDNSPort   = "53"
+	DefaultTLSPort   = "853"
+	DefaultHTTPSPort = "443"
+
+	// Protocol
 	RecursiveIndicator = "builtin_recursive"
+	DefaultQueryPath   = "/dns-query"
 
-	// Buffer & Size Limits
-	UDPBufferSize      = 1232
-	TCPBufferSize      = 4096
-	SecureBufferSize   = 8192
-	MinDNSPacketSize   = 12
+	// Buffer Sizes
+	UDPBufferSize    = 1232
+	TCPBufferSize    = 4096
+	SecureBufferSize = 8192
+	MinDNSPacketSize = 12
+
+	// Limits
 	MaxDomainLength    = 253
-	MaxInputLineLength = 128
+	MaxCNAMEChain      = 16
+	MaxRecursionDepth  = 16
+	MaxConcurrency     = 1000
+	MaxSingleQuery     = 3
+	MaxNSResolve       = 3
+	ConnectionPoolSize = 50
 
-	// DNS Query Timeouts
+	// Timeouts - Query
 	QueryTimeout     = 5 * time.Second
 	RecursiveTimeout = 15 * time.Second
 	ExtendedTimeout  = 30 * time.Second
 
-	// Connection Timeouts
+	// Timeouts - Connection
 	ConnTimeout           = 5 * time.Second
 	TLSHandshakeTimeout   = 3 * time.Second
 	ConnectionTestTimeout = 100 * time.Millisecond
 	PublicIPTimeout       = 3 * time.Second
 	HTTPClientTimeout     = 5 * time.Second
 
-	// Server Timeouts
-	ShutdownTimeout       = 5 * time.Second
-	CleanupInterval       = 30 * time.Second
-	DoHReadHeaderTimeout  = 5 * time.Second
-	DoHWriteTimeout       = 5 * time.Second
-	DefaultSpeedTimeout   = 250 * time.Millisecond
-	SpeedDebounceInterval = 10 * time.Second
-
-	// Root Server Management
-	RootServerSortInterval = 900 * time.Second
+	// Timeouts - Server
+	ShutdownTimeout      = 5 * time.Second
+	CleanupInterval      = 30 * time.Second
+	DoHReadHeaderTimeout = 5 * time.Second
+	DoHWriteTimeout      = 5 * time.Second
 
 	// Connection Lifecycle
 	SecureIdleTimeout  = 300 * time.Second
 	SecureKeepAlive    = 15 * time.Second
 	DoHIdleConnTimeout = 300 * time.Second
 
-	// Cache Configuration
-	DefaultCacheTTL      = 300
-	StaleTTL             = 30
-	StaleMaxAge          = 259200
-	CacheQueueSize       = 500
-	IPCacheExpiry        = 300 * time.Second
-	DefaultSpeedCacheTTL = 900 * time.Second
+	// Cache
+	DefaultCacheTTL = 300
+	StaleTTL        = 30
+	StaleMaxAge     = 259200
+	CacheQueueSize  = 500
+	IPCacheExpiry   = 300 * time.Second
 
-	// Performance Limits
-	MaxConcurrency     = 1000
-	MaxSingleQuery     = 3
-	MaxNSResolve       = 3
-	MaxCNAMEChain      = 16
-	MaxRecursionDepth  = 16
-	ConnectionPoolSize = 50
-
-	// Redis Configuration
+	// Redis
 	RedisPoolSize     = 20
 	RedisMinIdle      = 5
 	RedisMaxRetries   = 3
@@ -112,20 +107,20 @@ const (
 	RedisWriteTimeout = 3 * time.Second
 	RedisDialTimeout  = 5 * time.Second
 
-	// ECS Configuration
+	// ECS
 	DefaultECSv4Len = 24
 	DefaultECSv6Len = 64
 	DefaultECSScope = 0
 
-	// DNS Padding
+	// Padding
 	PaddingBlockSize = 468
 
-	// DoH Configuration
+	// DoH
 	DoHMaxRequestSize  = 8192
 	DoHMaxConnsPerHost = 3
 	DoHMaxIdleConns    = 3
 
-	// Connection Pool Configuration
+	// TLS/QUIC
 	TLSSessionCacheSize  = 256
 	QUICSessionCacheSize = 128
 	MaxIncomingStreams   = 2048
@@ -138,18 +133,24 @@ const (
 	TCPNoDelay         = 1
 	TCPQuickAck        = 0x0c
 
-	// QUIC Address Validator
+	// QUIC Validator
 	QUICAddrValidatorCacheSize = 16 * 1024
 	QUICAddrValidatorTTL       = 300 * time.Second
 
-	// SpeedTest Configuration
+	// SpeedTest
+	DefaultSpeedTimeout     = 250 * time.Millisecond
 	DefaultSpeedConcurrency = 4
 	UnreachableLatency      = 10 * time.Second
+	DefaultSpeedCacheTTL    = 900 * time.Second
+	SpeedDebounceInterval   = 10 * time.Second
 
-	// Default Values
+	// Root Server
+	RootServerSortInterval = 900 * time.Second
+
+	// Defaults
 	DefaultLogLevel = "info"
 
-	// ANSI Color Codes
+	// ANSI Colors
 	ColorReset  = "\033[0m"
 	ColorRed    = "\033[31m"
 	ColorYellow = "\033[33m"
@@ -165,13 +166,20 @@ const (
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 )
 
-// Log Levels
-const (
-	LogError LogLevel = iota
-	LogWarn
-	LogInfo
-	LogDebug
-)
+// =============================================================================
+// Types - Core Interfaces
+// =============================================================================
+
+// Manager defines lifecycle interface for all managers
+type Manager interface {
+	Initialize() error
+	Shutdown(timeout time.Duration) error
+}
+
+// Closeable defines resource cleanup interface
+type Closeable interface {
+	Close() error
+}
 
 // =============================================================================
 // Types - Logging
@@ -179,72 +187,18 @@ const (
 
 type LogLevel int
 
-type Logger struct {
+const (
+	Error LogLevel = iota
+	Warn
+	Info
+	Debug
+)
+
+type LogManager struct {
 	level    LogLevel
 	writer   io.Writer
 	mu       sync.Mutex
 	colorMap map[LogLevel]string
-}
-
-// =============================================================================
-// Types - Core Server
-// =============================================================================
-
-type DNSServer struct {
-	config            *ServerConfig
-	cache             CacheManager
-	connPool          *ConnectionPool
-	tlsManager        *TLSManager
-	upstreamManager   *UpstreamManager
-	queryClient       *QueryClient
-	taskManager       *TaskManager
-	ednsManager       *EDNSManager
-	dnsRewriter       *DNSRewriter
-	hijackPrevention  *HijackPrevention
-	dnssecValidator   *DNSSECValidator
-	rootServerManager *RootServerManager
-	concurrencyLimit  chan struct{}
-	speedDebounce     map[string]time.Time
-	speedMutex        sync.Mutex
-	speedInterval     time.Duration
-	ctx               context.Context
-	cancel            context.CancelFunc
-	shutdown          chan struct{}
-	wg                sync.WaitGroup
-	closed            int32
-}
-
-type QueryClient struct {
-	connPool     *ConnectionPool
-	errorHandler *SecureErrorHandler
-	timeout      time.Duration
-}
-
-type QueryResult struct {
-	Response   *dns.Msg
-	Answer     []dns.RR
-	Authority  []dns.RR
-	Additional []dns.RR
-	Server     string
-	Error      error
-	Duration   time.Duration
-	UsedTCP    bool
-	Protocol   string
-	Validated  bool
-	ECS        *ECSOption
-}
-
-type RequestTracker struct {
-	ID           string
-	StartTime    time.Time
-	Domain       string
-	QueryType    string
-	ClientIP     string
-	Steps        []string
-	CacheHit     bool
-	Upstream     string
-	ResponseTime time.Duration
-	mu           sync.Mutex
 }
 
 // =============================================================================
@@ -330,6 +284,9 @@ type SpeedTestMethod struct {
 	Timeout int    `json:"timeout"`
 }
 
+type ConfigManager struct {
+}
+
 // =============================================================================
 // Types - Cache
 // =============================================================================
@@ -338,7 +295,7 @@ type CacheManager interface {
 	Get(key string) (*CacheEntry, bool, bool)
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption)
 	RequestRefresh(req RefreshRequest)
-	Close() error
+	Closeable
 }
 
 type CacheEntry struct {
@@ -379,34 +336,44 @@ type RedisCache struct {
 	refreshQueue chan RefreshRequest
 	ctx          context.Context
 	cancel       context.CancelFunc
-	taskManager  *TaskManager
+	taskMgr      *TaskManager
 	server       *DNSServer
 	wg           sync.WaitGroup
 	closed       int32
 }
 
 // =============================================================================
-// Types - Network
+// Types - Connection
 // =============================================================================
 
-type ConnectionPool struct {
-	clients       chan *dns.Client
-	secureClients map[string]SecureClient
-	tlsConns      map[string]*tls.Conn
-	tlsMu         sync.RWMutex
-	quicConns     map[string]*quic.Conn
-	quicMu        sync.RWMutex
-	timeout       time.Duration
-	mu            sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	closed        int32
+type ConnectionManager struct {
+	pools       *PoolManager
+	clients     *SecureClientManager
+	queryClient *QueryClient
+	timeout     time.Duration
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	closed      int32
+}
+
+type PoolManager struct {
+	udpClients chan *dns.Client
+	tlsConns   map[string]*tls.Conn
+	tlsMu      sync.RWMutex
+	quicConns  map[string]*quic.Conn
+	quicMu     sync.RWMutex
+}
+
+type SecureClientManager struct {
+	clients map[string]SecureClient
+	mu      sync.RWMutex
 }
 
 type SecureClient interface {
 	Exchange(msg *dns.Msg, addr string) (*dns.Msg, error)
-	Close() error
+	IsHealthy() bool
+	Closeable
 }
 
 type UnifiedSecureClient struct {
@@ -420,7 +387,7 @@ type UnifiedSecureClient struct {
 	isQUICConnected bool
 	lastActivity    time.Time
 	mu              sync.Mutex
-	connPool        *ConnectionPool
+	connMgr         *ConnectionManager
 	addr            string
 }
 
@@ -444,9 +411,66 @@ type HTTP3Transport struct {
 	mu            sync.RWMutex
 }
 
+type QueryClient struct {
+	connMgr *ConnectionManager
+	timeout time.Duration
+}
+
+type QueryResult struct {
+	Response   *dns.Msg
+	Answer     []dns.RR
+	Authority  []dns.RR
+	Additional []dns.RR
+	Server     string
+	Error      error
+	Duration   time.Duration
+	UsedTCP    bool
+	Protocol   string
+	Validated  bool
+	ECS        *ECSOption
+}
+
 // =============================================================================
-// Types - Security & Management
+// Types - Query Processing
 // =============================================================================
+
+type QueryManager struct {
+	upstream  *UpstreamHandler
+	recursive *RecursiveResolver
+	cname     *CNAMEHandler
+	validator *ResponseValidator
+	server    *DNSServer
+}
+
+type UpstreamHandler struct {
+	servers []*UpstreamServer
+	mu      sync.RWMutex
+}
+
+type RecursiveResolver struct {
+	server          *DNSServer
+	rootServerMgr   *RootServerManager
+	concurrencyLock chan struct{}
+}
+
+type CNAMEHandler struct {
+	server *DNSServer
+}
+
+type ResponseValidator struct {
+	hijackPrevention *HijackPrevention
+	dnssecValidator  *DNSSECValidator
+}
+
+// =============================================================================
+// Types - Security
+// =============================================================================
+
+type SecurityManager struct {
+	tls    *TLSManager
+	dnssec *DNSSECValidator
+	hijack *HijackPrevention
+}
 
 type TLSManager struct {
 	server            *DNSServer
@@ -458,41 +482,26 @@ type TLSManager struct {
 	quicConn          *net.UDPConn
 	quicListener      *quic.EarlyListener
 	quicTransport     *quic.Transport
-	quicAddrValidator *QuicAddrValidator
+	quicAddrValidator *QUICAddrValidator
 	httpsServer       *http.Server
 	h3Server          *http3.Server
 	httpsListener     net.Listener
 	h3Listener        *quic.EarlyListener
 }
 
-type UpstreamManager struct {
-	servers []*UpstreamServer
-	mu      sync.RWMutex
+type DNSSECValidator struct{}
+
+type HijackPrevention struct {
+	enabled bool
 }
 
-type SecureErrorHandler struct{}
-
-type TaskManager struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	semaphore   chan struct{}
-	activeCount int64
-	closed      int32
-	stats       struct {
-		executed int64
-		failed   int64
-		timeout  int64
-	}
-}
-
-type QuicAddrValidator struct {
+type QUICAddrValidator struct {
 	cache *ristretto.Cache[string, struct{}]
 	ttl   time.Duration
 }
 
 // =============================================================================
-// Types - DNS Processing
+// Types - EDNS
 // =============================================================================
 
 type EDNSManager struct {
@@ -509,7 +518,15 @@ type ECSOption struct {
 	Address      net.IP `json:"address"`
 }
 
-type DNSRewriter struct {
+type IPDetector struct {
+	httpClient *http.Client
+}
+
+// =============================================================================
+// Types - Rewrite
+// =============================================================================
+
+type RewriteManager struct {
 	rules []RewriteRule
 	mu    sync.RWMutex
 }
@@ -522,25 +539,11 @@ type DNSRewriteResult struct {
 	Additional    []dns.RR
 }
 
-type HijackPrevention struct {
-	enabled bool
-}
-
-type DNSSECValidator struct{}
-
-type RecordHandler struct{}
-
-type CacheUtils struct{}
-
-type IPDetector struct {
-	httpClient *http.Client
-}
-
 // =============================================================================
-// Types - SpeedTesting
+// Types - SpeedTest
 // =============================================================================
 
-type SpeedTester struct {
+type SpeedTestManager struct {
 	timeout     time.Duration
 	concurrency int
 	cache       map[string]*SpeedResult
@@ -559,6 +562,26 @@ type SpeedResult struct {
 }
 
 // =============================================================================
+// Types - Root Server
+// =============================================================================
+
+type RootServerManager struct {
+	serversV4    []string
+	serversV6    []string
+	speedTester  *SpeedTestManager
+	sortedV4     []RootServerWithLatency
+	sortedV6     []RootServerWithLatency
+	lastSortTime time.Time
+	mu           sync.RWMutex
+}
+
+type RootServerWithLatency struct {
+	Server    string        `json:"server"`
+	Latency   time.Duration `json:"latency"`
+	Reachable bool          `json:"reachable"`
+}
+
+// =============================================================================
 // Types - Resource Management
 // =============================================================================
 
@@ -573,107 +596,120 @@ type ResourceManager struct {
 	}
 }
 
-// =============================================================================
-// Types - Config Management
-// =============================================================================
-
-type ConfigManager struct{}
-
-// =============================================================================
-// Types - Root Server Management
-// =============================================================================
-
-type RootServerManager struct {
-	serversV4    []string
-	serversV6    []string
-	speedTester  *SpeedTester
-	sortedV4     []RootServerWithLatency
-	sortedV6     []RootServerWithLatency
-	lastSortTime time.Time
-	mu           sync.RWMutex
+type TaskManager struct {
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	semaphore   chan struct{}
+	activeCount int64
+	closed      int32
+	stats       struct {
+		executed int64
+		failed   int64
+		timeout  int64
+	}
 }
 
-type RootServerWithLatency struct {
-	Server    string        `json:"server"`
-	Latency   time.Duration `json:"latency"`
-	Reachable bool          `json:"reachable"`
+type RequestTracker struct {
+	ID           string
+	StartTime    time.Time
+	Domain       string
+	QueryType    string
+	ClientIP     string
+	Steps        []string
+	CacheHit     bool
+	Upstream     string
+	ResponseTime time.Duration
+	mu           sync.Mutex
 }
 
 // =============================================================================
-// Variables
+// Types - DNS Server
 // =============================================================================
 
-// Protocol Identifiers
+type DNSServer struct {
+	config        *ServerConfig
+	cacheMgr      CacheManager
+	connMgr       *ConnectionManager
+	queryMgr      *QueryManager
+	securityMgr   *SecurityManager
+	ednsMgr       *EDNSManager
+	rewriteMgr    *RewriteManager
+	speedTestMgr  *SpeedTestManager
+	rootServerMgr *RootServerManager
+	taskMgr       *TaskManager
+	resourceMgr   *ResourceManager
+	speedDebounce map[string]time.Time
+	speedMutex    sync.Mutex
+	speedInterval time.Duration
+	ctx           context.Context
+	cancel        context.CancelFunc
+	shutdown      chan struct{}
+	wg            sync.WaitGroup
+	closed        int32
+}
+
+// =============================================================================
+// Global Variables
+// =============================================================================
+
 var (
 	NextProtoQUIC  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
 	NextProtoHTTP3 = []string{"h3"}
 	NextProtoHTTP2 = []string{http2.NextProtoTLS, "http/1.1"}
 )
 
-// Global Variables
 var (
-	globalResourceManager = NewResourceManager()
-	globalRecordHandler   = NewRecordHandler()
-	globalCacheUtils      = NewCacheUtils()
-	globalErrorHandler    = NewSecureErrorHandler()
-	globalConfigManager   = NewConfigManager()
-	globalLogger          = NewLogger()
+	GlobalLog      *LogManager
+	GlobalConfig   *ConfigManager
+	GlobalResource *ResourceManager
 )
+
+func init() {
+	GlobalLog = NewLogManager()
+	GlobalConfig = NewConfigManager()
+	GlobalResource = NewResourceManager()
+}
 
 // =============================================================================
 // Logging System
 // =============================================================================
 
-func NewLogger() *Logger {
-	return &Logger{
-		level:  LogInfo,
+func NewLogManager() *LogManager {
+	return &LogManager{
+		level:  Info,
 		writer: os.Stdout,
 		colorMap: map[LogLevel]string{
-			LogError: ColorRed,
-			LogWarn:  ColorYellow,
-			LogInfo:  ColorGreen,
-			LogDebug: ColorCyan,
+			Error: ColorRed,
+			Warn:  ColorYellow,
+			Info:  ColorGreen,
+			Debug: ColorCyan,
 		},
 	}
 }
 
-func (l *Logger) SetLevel(level LogLevel) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.level = level
+func (lm *LogManager) SetLevel(level LogLevel) {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	lm.level = level
 }
 
-func (l *Logger) GetLevel() LogLevel {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.level
+func (lm *LogManager) GetLevel() LogLevel {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	return lm.level
 }
 
-func (l *Logger) GetLevelString(level LogLevel) string {
-	switch level {
-	case LogError:
-		return "ERROR"
-	case LogWarn:
-		return "WARN"
-	case LogInfo:
-		return "INFO"
-	case LogDebug:
-		return "DEBUG"
-	default:
-		return "UNKNOWN"
-	}
-}
+func (lm *LogManager) Log(level LogLevel, format string, args ...interface{}) {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
 
-func (l *Logger) Log(level LogLevel, format string, args ...interface{}) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if level > l.level {
+	if level > lm.level {
 		return
 	}
 
-	levelStr := l.GetLevelString(level)
-	color := l.colorMap[level]
+	levelStr := lm.GetLevelString(level)
+	color := lm.colorMap[level]
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	message := fmt.Sprintf(format, args...)
 
@@ -682,20 +718,34 @@ func (l *Logger) Log(level LogLevel, format string, args ...interface{}) {
 		color, levelStr, ColorReset,
 		message)
 
-	if _, err := fmt.Fprint(l.writer, logLine); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Failed to write log: %v\n", err)
+	_, _ = fmt.Fprint(lm.writer, logLine)
+}
+
+func (lm *LogManager) GetLevelString(level LogLevel) string {
+	switch level {
+	case Error:
+		return "ERROR"
+	case Warn:
+		return "WARN"
+	case Info:
+		return "INFO"
+	case Debug:
+		return "DEBUG"
+	default:
+		return "UNKNOWN"
 	}
 }
 
-func (l *Logger) Error(format string, args ...interface{}) { l.Log(LogError, format, args...) }
-func (l *Logger) Warn(format string, args ...interface{})  { l.Log(LogWarn, format, args...) }
-func (l *Logger) Info(format string, args ...interface{})  { l.Log(LogInfo, format, args...) }
-func (l *Logger) Debug(format string, args ...interface{}) { l.Log(LogDebug, format, args...) }
+func (lm *LogManager) Error(format string, args ...interface{}) { lm.Log(Error, format, args...) }
+func (lm *LogManager) Warn(format string, args ...interface{})  { lm.Log(Warn, format, args...) }
+func (lm *LogManager) Info(format string, args ...interface{})  { lm.Log(Info, format, args...) }
+func (lm *LogManager) Debug(format string, args ...interface{}) { lm.Log(Debug, format, args...) }
 
-func Error(format string, args ...interface{}) { globalLogger.Error(format, args...) }
-func Warn(format string, args ...interface{})  { globalLogger.Warn(format, args...) }
-func Info(format string, args ...interface{})  { globalLogger.Info(format, args...) }
-func Debug(format string, args ...interface{}) { globalLogger.Debug(format, args...) }
+// Helper functions for global logging
+func LogError(format string, args ...interface{}) { GlobalLog.Error(format, args...) }
+func LogWarn(format string, args ...interface{})  { GlobalLog.Warn(format, args...) }
+func LogInfo(format string, args ...interface{})  { GlobalLog.Info(format, args...) }
+func LogDebug(format string, args ...interface{}) { GlobalLog.Debug(format, args...) }
 
 // =============================================================================
 // Configuration Management
@@ -712,38 +762,40 @@ func (cm *ConfigManager) LoadConfig(configFile string) (*ServerConfig, error) {
 
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read configuration file: %w", err)
+		return nil, WrapError("read config file", err)
 	}
 
 	config := &ServerConfig{}
 	if err := json.Unmarshal(data, config); err != nil {
-		return nil, fmt.Errorf("failed to parse configuration file: %w", err)
+		return nil, WrapError("parse config file", err)
 	}
 
 	if err := cm.ValidateConfig(config); err != nil {
-		return nil, fmt.Errorf("configuration validation failed: %w", err)
+		return nil, WrapError("validate config", err)
 	}
 
 	if cm.ShouldEnableDDR(config) {
 		cm.AddDDRRecords(config)
 	}
 
-	Info("Configuration loaded successfully: %s", configFile)
+	LogInfo("Configuration loaded successfully: %s", configFile)
 	return config, nil
 }
 
 func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
+	// Validate log level
 	validLevels := map[string]LogLevel{
-		"error": LogError, "warn": LogWarn,
-		"info": LogInfo, "debug": LogDebug,
+		"error": Error, "warn": Warn,
+		"info": Info, "debug": Debug,
 	}
 
 	if level, ok := validLevels[strings.ToLower(config.Server.LogLevel)]; ok {
-		globalLogger.SetLevel(level)
+		GlobalLog.SetLevel(level)
 	} else {
 		return fmt.Errorf("invalid log level: %s", config.Server.LogLevel)
 	}
 
+	// Validate ECS
 	if config.Server.DefaultECS != "" {
 		ecs := strings.ToLower(config.Server.DefaultECS)
 		validPresets := []string{"auto", "auto_v4", "auto_v6"}
@@ -758,68 +810,74 @@ func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
 
 		if !isValidPreset {
 			if _, _, err := net.ParseCIDR(config.Server.DefaultECS); err != nil {
-				return fmt.Errorf("invalid ECS subnet format: %w", err)
+				return WrapError("invalid ECS subnet", err)
 			}
 		}
 	}
 
+	// Validate upstream servers
 	for i, server := range config.Upstream {
 		if !server.IsRecursive() {
 			if _, _, err := net.SplitHostPort(server.Address); err != nil {
 				if server.Protocol == "https" || server.Protocol == "http3" {
 					if _, err := url.Parse(server.Address); err != nil {
-						return fmt.Errorf("upstream server %d address format error: %w", i, err)
+						return fmt.Errorf("upstream server %d address invalid: %w", i, err)
 					}
 				} else {
-					return fmt.Errorf("upstream server %d address format error: %w", i, err)
+					return fmt.Errorf("upstream server %d address invalid: %w", i, err)
 				}
 			}
 		}
 
-		validProtocols := map[string]bool{"udp": true, "tcp": true, "tls": true, "quic": true, "https": true, "http3": true}
+		validProtocols := map[string]bool{
+			"udp": true, "tcp": true, "tls": true,
+			"quic": true, "https": true, "http3": true,
+		}
 		if server.Protocol != "" && !validProtocols[strings.ToLower(server.Protocol)] {
 			return fmt.Errorf("upstream server %d protocol invalid: %s", i, server.Protocol)
 		}
 
 		protocol := strings.ToLower(server.Protocol)
 		if IsSecureProtocol(protocol) && server.ServerName == "" {
-			return fmt.Errorf("upstream server %d using %s protocol requires server_name configuration", i, server.Protocol)
+			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
 		}
 	}
 
+	// Validate Redis
 	if config.Redis.Address != "" {
 		if _, _, err := net.SplitHostPort(config.Redis.Address); err != nil {
-			return fmt.Errorf("redis address format error: %w", err)
+			return WrapError("redis address invalid", err)
 		}
 	} else {
 		if config.Server.Features.ServeStale {
-			Warn("No cache mode: expired cache service disabled")
+			LogWarn("No cache mode: serve stale disabled")
 			config.Server.Features.ServeStale = false
 		}
 		if config.Server.Features.Prefetch {
-			Warn("No cache mode: prefetch function disabled")
+			LogWarn("No cache mode: prefetch disabled")
 			config.Server.Features.Prefetch = false
 		}
 	}
 
+	// Validate TLS
 	if config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "" {
 		if config.Server.TLS.CertFile == "" || config.Server.TLS.KeyFile == "" {
-			return fmt.Errorf("certificate and private key files must be configured together")
+			return errors.New("cert and key files must be configured together")
 		}
 
 		if !IsValidFilePath(config.Server.TLS.CertFile) {
-			return fmt.Errorf("certificate file does not exist: %s", config.Server.TLS.CertFile)
+			return fmt.Errorf("cert file not found: %s", config.Server.TLS.CertFile)
 		}
 
 		if !IsValidFilePath(config.Server.TLS.KeyFile) {
-			return fmt.Errorf("private key file does not exist: %s", config.Server.TLS.KeyFile)
+			return fmt.Errorf("key file not found: %s", config.Server.TLS.KeyFile)
 		}
 
 		if _, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile); err != nil {
-			return fmt.Errorf("certificate loading failed: %w", err)
+			return WrapError("load certificate", err)
 		}
 
-		Info("TLS certificate verification passed")
+		LogInfo("TLS certificate verified")
 	}
 
 	return nil
@@ -909,7 +967,7 @@ func (cm *ConfigManager) AddDDRRecords(config *ServerConfig) {
 			Name:    domain,
 			Records: []DNSRecordConfig{nxdomainARecord},
 		})
-		Debug("Adding DDR NXDOMAIN rule for A record: %s", domain)
+		LogDebug("Adding DDR NXDOMAIN rule for A record: %s", domain)
 	}
 
 	if config.Server.DDR.IPv6 != "" {
@@ -937,7 +995,7 @@ func (cm *ConfigManager) AddDDRRecords(config *ServerConfig) {
 			Name:    domain,
 			Records: []DNSRecordConfig{nxdomainAAAARecord},
 		})
-		Debug("Adding DDR NXDOMAIN rule for AAAA record: %s", domain)
+		LogDebug("Adding DDR NXDOMAIN rule for AAAA record: %s", domain)
 	}
 
 	if config.Server.DDR.IPv4 != "" || config.Server.DDR.IPv6 != "" {
@@ -957,7 +1015,7 @@ func (cm *ConfigManager) AddDDRRecords(config *ServerConfig) {
 				Additional: additionalRecords,
 			}
 			config.Rewrite = append(config.Rewrite, ddrRule)
-			Debug("Adding DDR SVCB rewrite rule: %s", ruleName)
+			LogDebug("Adding DDR SVCB rewrite rule: %s", ruleName)
 		}
 
 		if len(directQueryRecords) > 0 {
@@ -966,13 +1024,13 @@ func (cm *ConfigManager) AddDDRRecords(config *ServerConfig) {
 				Records: directQueryRecords,
 			}
 			config.Rewrite = append(config.Rewrite, directRule)
-			Debug("Adding DDR direct query rewrite rule: %s (%d records)", domain, len(directQueryRecords))
+			LogDebug("Adding DDR direct query rewrite rule: %s (%d records)", domain, len(directQueryRecords))
 		}
 	}
 }
 
 func GenerateExampleConfig() string {
-	config := globalConfigManager.GetDefaultConfig()
+	config := GlobalConfig.GetDefaultConfig()
 
 	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
@@ -1071,16 +1129,12 @@ func GenerateExampleConfig() string {
 	return string(data)
 }
 
-func LoadConfig(filename string) (*ServerConfig, error) {
-	return globalConfigManager.LoadConfig(filename)
-}
-
 // =============================================================================
 // Cache System
 // =============================================================================
 
 func NewNullCache() *NullCache {
-	Info("No cache mode")
+	LogInfo("No cache mode")
 	return &NullCache{}
 }
 
@@ -1110,7 +1164,7 @@ func NewRedisCache(config *ServerConfig, server *DNSServer) (*RedisCache, error)
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis connection failed: %w", err)
+		return nil, WrapError("redis connection", err)
 	}
 
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
@@ -1121,7 +1175,7 @@ func NewRedisCache(config *ServerConfig, server *DNSServer) (*RedisCache, error)
 		refreshQueue: make(chan RefreshRequest, CacheQueueSize),
 		ctx:          cacheCtx,
 		cancel:       cacheCancel,
-		taskManager:  NewTaskManager(10),
+		taskMgr:      NewTaskManager(10),
 		server:       server,
 	}
 
@@ -1129,7 +1183,7 @@ func NewRedisCache(config *ServerConfig, server *DNSServer) (*RedisCache, error)
 		cache.StartRefreshProcessor()
 	}
 
-	Info("Redis cache system initialization completed")
+	LogInfo("Redis cache initialized")
 	return cache, nil
 }
 
@@ -1140,7 +1194,7 @@ func (rc *RedisCache) StartRefreshProcessor() {
 		rc.wg.Add(1)
 		go func(workerID int) {
 			defer rc.wg.Done()
-			defer func() { RecoverPanic(fmt.Sprintf("Redis refresh worker %d", workerID)) }()
+			defer HandlePanic(fmt.Sprintf("Redis refresh worker %d", workerID))
 
 			for {
 				select {
@@ -1155,7 +1209,7 @@ func (rc *RedisCache) StartRefreshProcessor() {
 }
 
 func (rc *RedisCache) HandleRefreshRequest(req RefreshRequest) {
-	defer func() { RecoverPanic("Redis refresh request processing") }()
+	defer HandlePanic("Redis refresh request")
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -1176,9 +1230,9 @@ func (rc *RedisCache) HandleRefreshRequest(req RefreshRequest) {
 			Extra:  additional,
 		}
 
-		speedTester := NewSpeedTester(*rc.server.config)
+		speedTester := NewSpeedTestManager(*rc.server.config)
 		speedTester.PerformSpeedTestAndSort(tempMsg)
-		_ = speedTester.Close()
+		CloseWithLog(speedTester, "SpeedTester")
 
 		answer = tempMsg.Answer
 		authority = tempMsg.Ns
@@ -1190,13 +1244,13 @@ func (rc *RedisCache) HandleRefreshRequest(req RefreshRequest) {
 	allRRs = append(allRRs, authority...)
 	allRRs = append(allRRs, additional...)
 
-	cacheTTL := globalCacheUtils.CalculateTTL(allRRs)
+	cacheTTL := CalculateTTL(allRRs)
 	now := time.Now().Unix()
 
 	entry := &CacheEntry{
-		Answer:      globalRecordHandler.CompactRecords(answer),
-		Authority:   globalRecordHandler.CompactRecords(authority),
-		Additional:  globalRecordHandler.CompactRecords(additional),
+		Answer:      CompactRecords(answer),
+		Authority:   CompactRecords(authority),
+		Additional:  CompactRecords(additional),
 		TTL:         cacheTTL,
 		OriginalTTL: cacheTTL,
 		Timestamp:   now,
@@ -1227,7 +1281,7 @@ func (rc *RedisCache) HandleRefreshRequest(req RefreshRequest) {
 }
 
 func (rc *RedisCache) UpdateRefreshTime(cacheKey string) {
-	defer func() { RecoverPanic("Update refresh time") }()
+	defer HandlePanic("Update refresh time")
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -1255,7 +1309,7 @@ func (rc *RedisCache) UpdateRefreshTime(cacheKey string) {
 }
 
 func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
-	defer func() { RecoverPanic("Redis cache retrieval") }()
+	defer HandlePanic("Redis cache get")
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return nil, false, false
@@ -1269,9 +1323,9 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	var entry CacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		Debug("Cache entry parsing failed: %v", err)
+		LogDebug("Cache entry parse failed: %v", err)
 		go func() {
-			defer func() { RecoverPanic("Clean corrupted cache") }()
+			defer HandlePanic("Clean corrupted cache")
 			rc.client.Del(context.Background(), fullKey)
 		}()
 		return nil, false, false
@@ -1279,7 +1333,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	if entry.IsStale() {
 		go func() {
-			defer func() { RecoverPanic("Clean expired cache") }()
+			defer HandlePanic("Clean stale cache")
 			rc.client.Del(context.Background(), fullKey)
 		}()
 		return nil, false, false
@@ -1287,7 +1341,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	entry.AccessTime = time.Now().Unix()
 	go func() {
-		defer func() { RecoverPanic("Update access time") }()
+		defer HandlePanic("Update access time")
 		rc.UpdateAccessInfo(fullKey, &entry)
 	}()
 
@@ -1295,7 +1349,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	if !rc.config.Server.Features.ServeStale && isExpired {
 		go func() {
-			defer func() { RecoverPanic("Clean expired cache") }()
+			defer HandlePanic("Clean expired cache")
 			rc.client.Del(context.Background(), fullKey)
 		}()
 		return nil, false, false
@@ -1305,7 +1359,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 }
 
 func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
-	defer func() { RecoverPanic("Redis cache setting") }()
+	defer HandlePanic("Redis cache set")
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -1316,13 +1370,13 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 	allRRs = append(allRRs, authority...)
 	allRRs = append(allRRs, additional...)
 
-	cacheTTL := globalCacheUtils.CalculateTTL(allRRs)
+	cacheTTL := CalculateTTL(allRRs)
 	now := time.Now().Unix()
 
 	entry := &CacheEntry{
-		Answer:      globalRecordHandler.CompactRecords(answer),
-		Authority:   globalRecordHandler.CompactRecords(authority),
-		Additional:  globalRecordHandler.CompactRecords(additional),
+		Answer:      CompactRecords(answer),
+		Authority:   CompactRecords(authority),
+		Additional:  CompactRecords(additional),
 		TTL:         cacheTTL,
 		OriginalTTL: cacheTTL,
 		Timestamp:   now,
@@ -1353,7 +1407,7 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 }
 
 func (rc *RedisCache) UpdateAccessInfo(fullKey string, entry *CacheEntry) {
-	defer func() { RecoverPanic("Redis access info update") }()
+	defer HandlePanic("Redis access info update")
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -1382,10 +1436,10 @@ func (rc *RedisCache) Close() error {
 		return nil
 	}
 
-	Info("Shutting down Redis cache...")
+	LogInfo("Shutting down Redis cache...")
 
-	if err := rc.taskManager.Shutdown(ShutdownTimeout); err != nil {
-		Error("Task manager shutdown failed: %v", err)
+	if err := rc.taskMgr.Shutdown(ShutdownTimeout); err != nil {
+		LogError("Task manager shutdown failed: %v", err)
 	}
 
 	rc.cancel()
@@ -1403,10 +1457,10 @@ func (rc *RedisCache) Close() error {
 	}
 
 	if err := rc.client.Close(); err != nil {
-		Error("Redis client shutdown failed: %v", err)
+		LogError("Redis client shutdown failed: %v", err)
 	}
 
-	Info("Redis cache has been shut down")
+	LogInfo("Redis cache shut down")
 	return nil
 }
 
@@ -1480,125 +1534,141 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 }
 
 // =============================================================================
-// Connection & Network Management
+// Connection Management
 // =============================================================================
 
-func NewConnectionPool() *ConnectionPool {
+func NewConnectionManager() *ConnectionManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	cp := &ConnectionPool{
-		clients:       make(chan *dns.Client, ConnectionPoolSize),
-		secureClients: make(map[string]SecureClient),
-		tlsConns:      make(map[string]*tls.Conn),
-		quicConns:     make(map[string]*quic.Conn),
-		timeout:       QueryTimeout,
-		ctx:           ctx,
-		cancel:        cancel,
+	cm := &ConnectionManager{
+		pools: &PoolManager{
+			udpClients: make(chan *dns.Client, ConnectionPoolSize),
+			tlsConns:   make(map[string]*tls.Conn),
+			quicConns:  make(map[string]*quic.Conn),
+		},
+		clients: &SecureClientManager{
+			clients: make(map[string]SecureClient),
+		},
+		timeout: QueryTimeout,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 
-	cp.wg.Add(1)
+	cm.queryClient = NewQueryClient(cm)
+
+	cm.wg.Add(1)
 	go func() {
-		defer cp.wg.Done()
-		cp.StartCleanupRoutine()
+		defer cm.wg.Done()
+		cm.StartCleanupRoutine()
 	}()
 
-	return cp
+	return cm
 }
 
-func (cp *ConnectionPool) StartCleanupRoutine() {
+func (cm *ConnectionManager) StartCleanupRoutine() {
 	ticker := time.NewTicker(CleanupInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-cp.ctx.Done():
+		case <-cm.ctx.Done():
 			return
 		case <-ticker.C:
-			cp.CleanupIdleConnections()
+			cm.CleanupIdleConnections()
 		}
 	}
 }
 
-func (cp *ConnectionPool) CleanupIdleConnections() {
-	if atomic.LoadInt32(&cp.closed) != 0 {
+func (cm *ConnectionManager) CleanupIdleConnections() {
+	if atomic.LoadInt32(&cm.closed) != 0 {
 		return
 	}
 
-	cp.tlsMu.Lock()
-	for key, conn := range cp.tlsConns {
+	// Cleanup TLS connections
+	cm.pools.tlsMu.Lock()
+	for key, conn := range cm.pools.tlsConns {
 		if err := conn.SetReadDeadline(time.Now().Add(ConnectionTestTimeout)); err != nil {
-			delete(cp.tlsConns, key)
-			go func(c *tls.Conn) {
-				_ = c.Close()
-			}(conn)
-			Debug("Cleaned up idle TLS connection: %s", key)
+			delete(cm.pools.tlsConns, key)
+			go CloseWithLog(conn, "TLS connection")
+			LogDebug("Cleaned up idle TLS connection: %s", key)
 		} else {
 			_ = conn.SetReadDeadline(time.Time{})
 		}
 	}
-	cp.tlsMu.Unlock()
+	cm.pools.tlsMu.Unlock()
 
-	cp.quicMu.Lock()
-	for key, conn := range cp.quicConns {
+	// Cleanup QUIC connections
+	cm.pools.quicMu.Lock()
+	for key, conn := range cm.pools.quicConns {
 		if conn.Context().Err() != nil {
-			delete(cp.quicConns, key)
+			delete(cm.pools.quicConns, key)
 			go func(c *quic.Conn) {
 				_ = c.CloseWithError(QUICCodeNoError, "idle-cleanup")
 			}(conn)
-			Debug("Cleaned up idle QUIC connection: %s", key)
+			LogDebug("Cleaned up idle QUIC connection: %s", key)
 		}
 	}
-	cp.quicMu.Unlock()
+	cm.pools.quicMu.Unlock()
 }
 
-func (cp *ConnectionPool) CreateClient() *dns.Client {
+func (cm *ConnectionManager) GetUDPClient() *dns.Client {
+	if atomic.LoadInt32(&cm.closed) != 0 {
+		return cm.CreateUDPClient()
+	}
+
+	select {
+	case client := <-cm.pools.udpClients:
+		return client
+	default:
+		return cm.CreateUDPClient()
+	}
+}
+
+func (cm *ConnectionManager) CreateUDPClient() *dns.Client {
 	return &dns.Client{
-		Timeout:        cp.timeout,
+		Timeout:        cm.timeout,
 		Net:            "udp",
 		UDPSize:        UDPBufferSize,
 		SingleInflight: false,
 	}
 }
 
-func (cp *ConnectionPool) GetUDPClient() *dns.Client {
-	if atomic.LoadInt32(&cp.closed) != 0 {
-		return cp.CreateClient()
+func (cm *ConnectionManager) PutUDPClient(client *dns.Client) {
+	if client == nil || atomic.LoadInt32(&cm.closed) != 0 {
+		return
 	}
-
 	select {
-	case client := <-cp.clients:
-		return client
+	case cm.pools.udpClients <- client:
 	default:
-		return cp.CreateClient()
 	}
 }
 
-func (cp *ConnectionPool) GetTCPClient() *dns.Client {
+func (cm *ConnectionManager) GetTCPClient() *dns.Client {
 	return &dns.Client{
-		Timeout:        cp.timeout,
+		Timeout:        cm.timeout,
 		Net:            "tcp",
 		SingleInflight: false,
 	}
 }
 
-func (cp *ConnectionPool) GetTLSConn(host, port string, tlsConfig *tls.Config) (*tls.Conn, error) {
+func (cm *ConnectionManager) GetTLSConn(host, port string, tlsConfig *tls.Config) (*tls.Conn, error) {
 	cacheKey := fmt.Sprintf("%s:%s", host, port)
 
-	cp.tlsMu.RLock()
-	if conn, exists := cp.tlsConns[cacheKey]; exists {
-		cp.tlsMu.RUnlock()
+	cm.pools.tlsMu.RLock()
+	if conn, exists := cm.pools.tlsConns[cacheKey]; exists {
+		cm.pools.tlsMu.RUnlock()
 
 		if err := conn.SetReadDeadline(time.Now().Add(ConnectionTestTimeout)); err == nil {
 			var buf [1]byte
 			if _, err := conn.Read(buf[:]); err == nil || err == io.EOF {
 				_ = conn.SetReadDeadline(time.Time{})
-				Debug("Reusing existing TLS connection: %s", cacheKey)
+				LogDebug("Reusing TLS connection: %s", cacheKey)
 				return conn, nil
 			}
 		}
 
-		cp.RemoveTLSConn(cacheKey, conn)
+		cm.RemoveTLSConn(cacheKey, conn)
 	} else {
-		cp.tlsMu.RUnlock()
+		cm.pools.tlsMu.RUnlock()
 	}
 
 	dialer := &net.Dialer{
@@ -1617,7 +1687,7 @@ func (cp *ConnectionPool) GetTLSConn(host, port string, tlsConfig *tls.Config) (
 
 	conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), tlsConfig)
 	if err != nil {
-		return nil, fmt.Errorf("TLS dial failed: %w", err)
+		return nil, WrapError("TLS dial", err)
 	}
 
 	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
@@ -1630,37 +1700,35 @@ func (cp *ConnectionPool) GetTLSConn(host, port string, tlsConfig *tls.Config) (
 
 	connState := conn.ConnectionState()
 	if connState.DidResume {
-		Debug("TLS session resumed for %s:%s", host, port)
+		LogDebug("TLS session resumed: %s:%s", host, port)
 	} else {
-		Debug("TLS full handshake for %s:%s", host, port)
+		LogDebug("TLS full handshake: %s:%s", host, port)
 	}
 
-	cp.tlsMu.Lock()
-	cp.tlsConns[cacheKey] = conn
-	cp.tlsMu.Unlock()
+	cm.pools.tlsMu.Lock()
+	cm.pools.tlsConns[cacheKey] = conn
+	cm.pools.tlsMu.Unlock()
 
-	Debug("Created new TLS connection: %s", cacheKey)
+	LogDebug("Created new TLS connection: %s", cacheKey)
 	return conn, nil
 }
 
-func (cp *ConnectionPool) RemoveTLSConn(key string, conn *tls.Conn) {
-	cp.tlsMu.Lock()
-	defer cp.tlsMu.Unlock()
+func (cm *ConnectionManager) RemoveTLSConn(key string, conn *tls.Conn) {
+	cm.pools.tlsMu.Lock()
+	defer cm.pools.tlsMu.Unlock()
 
-	if currentConn, exists := cp.tlsConns[key]; exists && currentConn == conn {
-		delete(cp.tlsConns, key)
-		go func() {
-			_ = conn.Close()
-		}()
+	if currentConn, exists := cm.pools.tlsConns[key]; exists && currentConn == conn {
+		delete(cm.pools.tlsConns, key)
+		go CloseWithLog(conn, "TLS connection")
 	}
 }
 
-func (cp *ConnectionPool) GetQUICConn(addr string, tlsConfig *tls.Config, quicConfig *quic.Config) (*quic.Conn, error) {
+func (cm *ConnectionManager) GetQUICConn(addr string, tlsConfig *tls.Config, quicConfig *quic.Config) (*quic.Conn, error) {
 	cacheKey := addr
 
-	cp.quicMu.RLock()
-	if conn, exists := cp.quicConns[cacheKey]; exists {
-		cp.quicMu.RUnlock()
+	cm.pools.quicMu.RLock()
+	if conn, exists := cm.pools.quicConns[cacheKey]; exists {
+		cm.pools.quicMu.RUnlock()
 
 		if conn.Context().Err() == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), ConnectionTestTimeout)
@@ -1669,14 +1737,14 @@ func (cp *ConnectionPool) GetQUICConn(addr string, tlsConfig *tls.Config, quicCo
 			stream, err := conn.OpenStreamSync(ctx)
 			if err == nil {
 				_ = stream.Close()
-				Debug("Reusing existing QUIC connection: %s", addr)
+				LogDebug("Reusing QUIC connection: %s", addr)
 				return conn, nil
 			}
 		}
 
-		cp.RemoveQUICConn(cacheKey, conn)
+		cm.RemoveQUICConn(cacheKey, conn)
 	} else {
-		cp.quicMu.RUnlock()
+		cm.pools.quicMu.RUnlock()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), ConnTimeout)
@@ -1684,140 +1752,120 @@ func (cp *ConnectionPool) GetQUICConn(addr string, tlsConfig *tls.Config, quicCo
 
 	conn, err := quic.DialAddr(ctx, addr, tlsConfig, quicConfig)
 	if err != nil {
-		return nil, fmt.Errorf("QUIC dial failed: %w", err)
+		return nil, WrapError("QUIC dial", err)
 	}
 
-	cp.quicMu.Lock()
-	cp.quicConns[cacheKey] = conn
-	cp.quicMu.Unlock()
+	cm.pools.quicMu.Lock()
+	cm.pools.quicConns[cacheKey] = conn
+	cm.pools.quicMu.Unlock()
 
-	Debug("Created new QUIC connection: %s", addr)
+	LogDebug("Created new QUIC connection: %s", addr)
 	return conn, nil
 }
 
-func (cp *ConnectionPool) RemoveQUICConn(key string, conn *quic.Conn) {
-	cp.quicMu.Lock()
-	defer cp.quicMu.Unlock()
+func (cm *ConnectionManager) RemoveQUICConn(key string, conn *quic.Conn) {
+	cm.pools.quicMu.Lock()
+	defer cm.pools.quicMu.Unlock()
 
-	if currentConn, exists := cp.quicConns[key]; exists && currentConn == conn {
-		delete(cp.quicConns, key)
+	if currentConn, exists := cm.pools.quicConns[key]; exists && currentConn == conn {
+		delete(cm.pools.quicConns, key)
 		go func() {
 			_ = conn.CloseWithError(QUICCodeNoError, "cleanup")
 		}()
 	}
 }
 
-func (cp *ConnectionPool) GetSecureClient(protocol, addr, serverName string, skipVerify bool) (SecureClient, error) {
-	if atomic.LoadInt32(&cp.closed) != 0 {
-		return nil, errors.New("connection pool closed")
+func (cm *ConnectionManager) GetSecureClient(protocol, addr, serverName string, skipVerify bool) (SecureClient, error) {
+	if atomic.LoadInt32(&cm.closed) != 0 {
+		return nil, errors.New("connection manager closed")
 	}
 
 	cacheKey := fmt.Sprintf("%s:%s:%s:%v", protocol, addr, serverName, skipVerify)
 
-	cp.mu.RLock()
-	if client, exists := cp.secureClients[cacheKey]; exists {
-		cp.mu.RUnlock()
+	cm.clients.mu.RLock()
+	if client, exists := cm.clients.clients[cacheKey]; exists {
+		cm.clients.mu.RUnlock()
 
-		if unifiedClient, ok := client.(*UnifiedSecureClient); ok && unifiedClient != nil {
-			if unifiedClient.IsConnectionHealthy() {
-				Debug("Reusing secure client: %s", protocol)
-				return client, nil
-			} else {
-				cp.CleanupClient(cacheKey, client)
-			}
+		if client.IsHealthy() {
+			LogDebug("Reusing secure client: %s", protocol)
+			return client, nil
+		} else {
+			cm.CleanupClient(cacheKey, client)
 		}
 	} else {
-		cp.mu.RUnlock()
+		cm.clients.mu.RUnlock()
 	}
 
-	client, err := NewUnifiedSecureClient(cp, protocol, addr, serverName, skipVerify)
+	client, err := NewUnifiedSecureClient(cm, protocol, addr, serverName, skipVerify)
 	if err != nil {
 		return nil, err
 	}
 
-	cp.mu.Lock()
-	if atomic.LoadInt32(&cp.closed) == 0 {
-		cp.secureClients[cacheKey] = client
+	cm.clients.mu.Lock()
+	if atomic.LoadInt32(&cm.closed) == 0 {
+		cm.clients.clients[cacheKey] = client
 	}
-	cp.mu.Unlock()
+	cm.clients.mu.Unlock()
 
 	return client, nil
 }
 
-func (cp *ConnectionPool) CleanupClient(key string, client SecureClient) {
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
+func (cm *ConnectionManager) CleanupClient(key string, client SecureClient) {
+	cm.clients.mu.Lock()
+	defer cm.clients.mu.Unlock()
 
-	if currentClient, exists := cp.secureClients[key]; exists && currentClient == client {
-		delete(cp.secureClients, key)
-		go func() {
-			defer func() { RecoverPanic("Connection cleanup") }()
-			if err := client.Close(); err != nil {
-				Warn("Secure client shutdown failed: %v", err)
-			}
-		}()
+	if currentClient, exists := cm.clients.clients[key]; exists && currentClient == client {
+		delete(cm.clients.clients, key)
+		go CloseWithLog(client, "Secure client")
 	}
 }
 
-func (cp *ConnectionPool) PutUDPClient(client *dns.Client) {
-	if client == nil || atomic.LoadInt32(&cp.closed) != 0 {
-		return
-	}
-	select {
-	case cp.clients <- client:
-	default:
-	}
-}
-
-func (cp *ConnectionPool) Close() error {
-	if !atomic.CompareAndSwapInt32(&cp.closed, 0, 1) {
+func (cm *ConnectionManager) Close() error {
+	if !atomic.CompareAndSwapInt32(&cm.closed, 0, 1) {
 		return nil
 	}
 
-	Info("Shutting down connection pool...")
+	LogInfo("Shutting down connection manager...")
 
-	cp.cancel()
+	cm.cancel()
 
-	cp.mu.Lock()
-	for key, client := range cp.secureClients {
-		if err := client.Close(); err != nil {
-			Warn("Secure client shutdown failed [%s]: %v", key, err)
-		}
+	cm.clients.mu.Lock()
+	for key, client := range cm.clients.clients {
+		CloseWithLog(client, fmt.Sprintf("Secure client [%s]", key))
 	}
-	cp.secureClients = make(map[string]SecureClient)
-	cp.mu.Unlock()
+	cm.clients.clients = make(map[string]SecureClient)
+	cm.clients.mu.Unlock()
 
-	cp.tlsMu.Lock()
-	for key, conn := range cp.tlsConns {
+	cm.pools.tlsMu.Lock()
+	for key, conn := range cm.pools.tlsConns {
 		_ = conn.Close()
-		Debug("Closed TLS connection: %s", key)
+		LogDebug("Closed TLS connection: %s", key)
 	}
-	cp.tlsConns = make(map[string]*tls.Conn)
-	cp.tlsMu.Unlock()
+	cm.pools.tlsConns = make(map[string]*tls.Conn)
+	cm.pools.tlsMu.Unlock()
 
-	cp.quicMu.Lock()
-	for key, conn := range cp.quicConns {
+	cm.pools.quicMu.Lock()
+	for key, conn := range cm.pools.quicConns {
 		_ = conn.CloseWithError(QUICCodeNoError, "shutdown")
-		Debug("Closed QUIC connection: %s", key)
+		LogDebug("Closed QUIC connection: %s", key)
 	}
-	cp.quicConns = make(map[string]*quic.Conn)
-	cp.quicMu.Unlock()
+	cm.pools.quicConns = make(map[string]*quic.Conn)
+	cm.pools.quicMu.Unlock()
 
-	close(cp.clients)
-	for range cp.clients {
+	close(cm.pools.udpClients)
+	for range cm.pools.udpClients {
 	}
 
-	cp.wg.Wait()
+	cm.wg.Wait()
 
-	Info("Connection pool has been shut down")
+	LogInfo("Connection manager shut down")
 	return nil
 }
 
-func NewQueryClient(connectionPool *ConnectionPool, timeout time.Duration) *QueryClient {
+func NewQueryClient(connMgr *ConnectionManager) *QueryClient {
 	return &QueryClient{
-		connPool:     connectionPool,
-		errorHandler: globalErrorHandler,
-		timeout:      timeout,
+		connMgr: connMgr,
+		timeout: QueryTimeout,
 	}
 }
 
@@ -1829,7 +1877,7 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 	}
 
 	if tracker != nil {
-		tracker.AddStep("Starting query server: %s (%s)", server.Address, server.Protocol)
+		tracker.AddStep("Starting query: %s (%s)", server.Address, server.Protocol)
 	}
 
 	queryCtx, cancel := context.WithTimeout(ctx, qc.timeout)
@@ -1880,9 +1928,9 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 }
 
 func (qc *QueryClient) ExecuteSecureQuery(msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
-	client, err := qc.connPool.GetSecureClient(server.Protocol, server.Address, server.ServerName, server.SkipTLSVerify)
+	client, err := qc.connMgr.GetSecureClient(server.Protocol, server.Address, server.ServerName, server.SkipTLSVerify)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get %s client: %w", strings.ToUpper(server.Protocol), err)
+		return nil, WrapError(fmt.Sprintf("get %s client", strings.ToUpper(server.Protocol)), err)
 	}
 
 	response, err := client.Exchange(msg, server.Address)
@@ -1891,7 +1939,7 @@ func (qc *QueryClient) ExecuteSecureQuery(msg *dns.Msg, server *UpstreamServer, 
 	}
 
 	if tracker != nil && response != nil {
-		tracker.AddStep("%s query successful, response code: %s", strings.ToUpper(server.Protocol), dns.RcodeToString[response.Rcode])
+		tracker.AddStep("%s query successful, rcode: %s", strings.ToUpper(server.Protocol), dns.RcodeToString[response.Rcode])
 	}
 
 	return response, nil
@@ -1902,10 +1950,10 @@ func (qc *QueryClient) ExecuteTraditionalQuery(ctx context.Context, msg *dns.Msg
 
 	var client *dns.Client
 	if server.Protocol == "tcp" {
-		client = qc.connPool.GetTCPClient()
+		client = qc.connMgr.GetTCPClient()
 	} else {
-		client = qc.connPool.GetUDPClient()
-		defer qc.connPool.PutUDPClient(client)
+		client = qc.connMgr.GetUDPClient()
+		defer qc.connMgr.PutUDPClient(client)
 	}
 
 	response, _, err := client.ExchangeContext(ctx, msgCopy, server.Address)
@@ -1915,11 +1963,11 @@ func (qc *QueryClient) ExecuteTraditionalQuery(ctx context.Context, msg *dns.Msg
 		if server.Protocol == "tcp" {
 			protocolName = "TCP"
 		}
-		tracker.AddStep("%s query successful, response code: %s", protocolName, dns.RcodeToString[response.Rcode])
+		tracker.AddStep("%s query successful, rcode: %s", protocolName, dns.RcodeToString[response.Rcode])
 	}
 
 	if msgCopy != nil {
-		globalResourceManager.PutDNSMessage(msgCopy)
+		GlobalResource.PutDNSMessage(msgCopy)
 	}
 
 	return response, err
@@ -1941,14 +1989,18 @@ func (qc *QueryClient) NeedsTCPFallback(result *QueryResult, protocol string) bo
 	return false
 }
 
-func NewUnifiedSecureClient(pool *ConnectionPool, protocol, addr, serverName string, skipVerify bool) (*UnifiedSecureClient, error) {
+// =============================================================================
+// Unified Secure Client
+// =============================================================================
+
+func NewUnifiedSecureClient(connMgr *ConnectionManager, protocol, addr, serverName string, skipVerify bool) (*UnifiedSecureClient, error) {
 	client := &UnifiedSecureClient{
 		protocol:     strings.ToLower(protocol),
 		serverName:   serverName,
 		skipVerify:   skipVerify,
 		timeout:      QueryTimeout,
 		lastActivity: time.Now(),
-		connPool:     pool,
+		connMgr:      connMgr,
 		addr:         addr,
 	}
 
@@ -1957,9 +2009,10 @@ func NewUnifiedSecureClient(pool *ConnectionPool, protocol, addr, serverName str
 		var err error
 		client.dohClient, err = NewDoHClient(addr, serverName, skipVerify, QueryTimeout)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create DoH client: %w", err)
+			return nil, WrapError("create DoH client", err)
 		}
 	case "tls", "quic":
+		// Connection will be established on first use
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}
@@ -1967,7 +2020,7 @@ func NewUnifiedSecureClient(pool *ConnectionPool, protocol, addr, serverName str
 	return client, nil
 }
 
-func (c *UnifiedSecureClient) IsConnectionHealthy() bool {
+func (c *UnifiedSecureClient) IsHealthy() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1989,7 +2042,7 @@ func (c *UnifiedSecureClient) IsConnectionHealthy() bool {
 func (c *UnifiedSecureClient) Connect(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("address parsing failed: %w", err)
+		return WrapError("parse address", err)
 	}
 
 	switch c.protocol {
@@ -2011,8 +2064,8 @@ func (c *UnifiedSecureClient) ConnectTLS(host, port string) error {
 		SessionTicketsDisabled: false,
 	}
 
-	if c.connPool != nil {
-		conn, err := c.connPool.GetTLSConn(host, port, tlsConfig)
+	if c.connMgr != nil {
+		conn, err := c.connMgr.GetTLSConn(host, port, tlsConfig)
 		if err != nil {
 			return err
 		}
@@ -2028,7 +2081,7 @@ func (c *UnifiedSecureClient) ConnectTLS(host, port string) error {
 
 	conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), tlsConfig)
 	if err != nil {
-		return fmt.Errorf("TLS connection failed: %w", err)
+		return WrapError("TLS connection", err)
 	}
 
 	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
@@ -2062,8 +2115,8 @@ func (c *UnifiedSecureClient) ConnectQUIC(addr string) error {
 		InitialPacketSize:     InitialPacketSize,
 	}
 
-	if c.connPool != nil {
-		conn, err := c.connPool.GetQUICConn(addr, tlsConfig, quicConfig)
+	if c.connMgr != nil {
+		conn, err := c.connMgr.GetQUICConn(addr, tlsConfig, quicConfig)
 		if err != nil {
 			return err
 		}
@@ -2078,7 +2131,7 @@ func (c *UnifiedSecureClient) ConnectQUIC(addr string) error {
 
 	conn, err := quic.DialAddr(ctx, addr, tlsConfig, quicConfig)
 	if err != nil {
-		return fmt.Errorf("QUIC connection failed: %w", err)
+		return WrapError("QUIC connection", err)
 	}
 
 	c.quicConn = conn
@@ -2092,23 +2145,23 @@ func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, err
 	case "https", "http3":
 		return c.dohClient.Exchange(msg)
 	case "tls":
-		if !c.IsConnectionHealthy() {
+		if !c.IsHealthy() {
 			if err := c.Connect(addr); err != nil {
-				return nil, fmt.Errorf("reconnection failed: %w", err)
+				return nil, WrapError("reconnect", err)
 			}
 		}
 		resp, err := c.ExchangeTLS(msg)
-		if err != nil && globalErrorHandler.IsRetryableError("tls", err) {
-			Debug("TLS connection error, attempting reconnect: %v", err)
+		if err != nil && IsRetryableError("tls", err) {
+			LogDebug("TLS connection error, reconnecting: %v", err)
 			if c.Connect(addr) == nil {
 				return c.ExchangeTLS(msg)
 			}
 		}
 		return resp, err
 	case "quic":
-		if !c.IsConnectionHealthy() {
+		if !c.IsHealthy() {
 			if err := c.Connect(addr); err != nil {
-				return nil, fmt.Errorf("reconnection failed: %w", err)
+				return nil, WrapError("reconnect", err)
 			}
 		}
 		return c.ExchangeQUIC(msg)
@@ -2126,18 +2179,14 @@ func (c *UnifiedSecureClient) ExchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 	}
 
 	deadline := time.Now().Add(c.timeout)
-	if deadlineErr := c.tlsConn.SetDeadline(deadline); deadlineErr != nil {
-		Debug("Setting TLS connection deadline failed: %v", deadlineErr)
+	if err := c.tlsConn.SetDeadline(deadline); err != nil {
+		LogDebug("Set TLS deadline failed: %v", err)
 	}
-	defer func() {
-		if deadlineErr := c.tlsConn.SetDeadline(time.Time{}); deadlineErr != nil {
-			Debug("Resetting TLS connection deadline failed: %v", deadlineErr)
-		}
-	}()
+	defer func() { _ = c.tlsConn.SetDeadline(time.Time{}) }()
 
 	msgData, err := msg.Pack()
 	if err != nil {
-		return nil, fmt.Errorf("message packing failed: %w", err)
+		return nil, WrapError("pack message", err)
 	}
 
 	buf := make([]byte, 2+len(msgData))
@@ -2145,27 +2194,27 @@ func (c *UnifiedSecureClient) ExchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 	copy(buf[2:], msgData)
 
 	if _, err := c.tlsConn.Write(buf); err != nil {
-		return nil, fmt.Errorf("failed to send TLS query: %w", err)
+		return nil, WrapError("send TLS query", err)
 	}
 
 	lengthBuf := make([]byte, 2)
 	if _, err := io.ReadFull(c.tlsConn, lengthBuf); err != nil {
-		return nil, fmt.Errorf("failed to read response length: %w", err)
+		return nil, WrapError("read response length", err)
 	}
 
 	respLength := binary.BigEndian.Uint16(lengthBuf)
 	if respLength == 0 || respLength > TCPBufferSize {
-		return nil, fmt.Errorf("abnormal response length: %d", respLength)
+		return nil, fmt.Errorf("invalid response length: %d", respLength)
 	}
 
 	respBuf := make([]byte, respLength)
 	if _, err := io.ReadFull(c.tlsConn, respBuf); err != nil {
-		return nil, fmt.Errorf("failed to read response content: %w", err)
+		return nil, WrapError("read response", err)
 	}
 
 	response := new(dns.Msg)
 	if err := response.Unpack(respBuf); err != nil {
-		return nil, fmt.Errorf("response parsing failed: %w", err)
+		return nil, WrapError("parse response", err)
 	}
 
 	c.lastActivity = time.Now()
@@ -2182,7 +2231,7 @@ func (c *UnifiedSecureClient) ExchangeQUIC(msg *dns.Msg) (*dns.Msg, error) {
 	resp, err := c.ExchangeQUICDirect(msg)
 
 	if errors.Is(err, quic.Err0RTTRejected) {
-		Debug("0-RTT rejected, retrying with 1-RTT")
+		LogDebug("0-RTT rejected, retrying with 1-RTT")
 
 		c.mu.Lock()
 		if c.quicConn != nil {
@@ -2211,7 +2260,7 @@ func (c *UnifiedSecureClient) ExchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error)
 
 	msgData, err := msg.Pack()
 	if err != nil {
-		return nil, fmt.Errorf("message packing failed: %w", err)
+		return nil, WrapError("pack message", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
@@ -2219,17 +2268,13 @@ func (c *UnifiedSecureClient) ExchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error)
 
 	stream, err := c.quicConn.OpenStreamSync(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create QUIC stream: %w", err)
+		return nil, WrapError("create QUIC stream", err)
 	}
-	defer func() {
-		if closeErr := stream.Close(); closeErr != nil {
-			Debug("Closing QUIC stream failed: %v", closeErr)
-		}
-	}()
+	defer func() { _ = stream.Close() }()
 
 	if c.timeout > 0 {
 		if err := stream.SetDeadline(time.Now().Add(c.timeout)); err != nil {
-			return nil, fmt.Errorf("failed to set stream timeout: %w", err)
+			return nil, WrapError("set stream timeout", err)
 		}
 	}
 
@@ -2238,11 +2283,11 @@ func (c *UnifiedSecureClient) ExchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error)
 	copy(buf[2:], msgData)
 
 	if _, err = stream.Write(buf); err != nil {
-		return nil, fmt.Errorf("failed to send QUIC query: %w", err)
+		return nil, WrapError("send QUIC query", err)
 	}
 
 	if err := stream.Close(); err != nil {
-		Debug("Closing QUIC stream write direction failed: %v", err)
+		LogDebug("Close QUIC stream write failed: %v", err)
 	}
 
 	resp, err := c.ReadQUICMsg(stream)
@@ -2257,7 +2302,7 @@ func (c *UnifiedSecureClient) ReadQUICMsg(stream *quic.Stream) (*dns.Msg, error)
 
 	n, err := stream.Read(respBuf)
 	if err != nil && n == 0 {
-		return nil, fmt.Errorf("failed to read QUIC response: %w", err)
+		return nil, WrapError("read QUIC response", err)
 	}
 
 	stream.CancelRead(0)
@@ -2268,12 +2313,12 @@ func (c *UnifiedSecureClient) ReadQUICMsg(stream *quic.Stream) (*dns.Msg, error)
 
 	msgLen := binary.BigEndian.Uint16(respBuf[:2])
 	if int(msgLen) != n-2 {
-		Debug("QUIC response length mismatch: declared=%d, actual=%d", msgLen, n-2)
+		LogDebug("QUIC response length mismatch: declared=%d, actual=%d", msgLen, n-2)
 	}
 
 	response := new(dns.Msg)
 	if err := response.Unpack(respBuf[2:n]); err != nil {
-		return nil, fmt.Errorf("QUIC response parsing failed: %w", err)
+		return nil, WrapError("parse QUIC response", err)
 	}
 
 	return response, nil
@@ -2290,28 +2335,22 @@ func (c *UnifiedSecureClient) Close() error {
 	switch c.protocol {
 	case "tls":
 		if c.tlsConn != nil {
-			if c.connPool == nil {
-				if closeErr := c.tlsConn.Close(); closeErr != nil {
-					Debug("Closing TLS connection failed: %v", closeErr)
-				}
+			if c.connMgr == nil {
+				CloseWithLog(c.tlsConn, "TLS connection")
 			}
 			c.tlsConn = nil
 		}
 	case "quic":
 		if c.quicConn != nil {
-			if c.connPool == nil {
-				if closeErr := c.quicConn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
-					Debug("Closing QUIC connection failed: %v", closeErr)
-				}
+			if c.connMgr == nil {
+				_ = c.quicConn.CloseWithError(QUICCodeNoError, "")
 			}
 			c.quicConn = nil
 			c.isQUICConnected = false
 		}
 	case "https", "http3":
 		if c.dohClient != nil {
-			if closeErr := c.dohClient.Close(); closeErr != nil {
-				Debug("Closing DoH client failed: %v", closeErr)
-			}
+			CloseWithLog(c.dohClient, "DoH client")
 			c.dohClient = nil
 		}
 	}
@@ -2319,10 +2358,14 @@ func (c *UnifiedSecureClient) Close() error {
 	return nil
 }
 
+// =============================================================================
+// DoH Client
+// =============================================================================
+
 func NewDoHClient(addr, serverName string, skipVerify bool, timeout time.Duration) (*DoHClient, error) {
 	parsedURL, err := url.Parse(addr)
 	if err != nil {
-		return nil, fmt.Errorf("DoH address parsing failed: %w", err)
+		return nil, WrapError("parse DoH address", err)
 	}
 
 	if parsedURL.Port() == "" {
@@ -2374,7 +2417,7 @@ func NewDoHClient(addr, serverName string, skipVerify bool, timeout time.Duratio
 
 func (c *DoHClient) Exchange(msg *dns.Msg) (*dns.Msg, error) {
 	if c == nil || msg == nil {
-		return nil, errors.New("DoH client or message is empty")
+		return nil, errors.New("DoH client or message is nil")
 	}
 
 	originalID := msg.Id
@@ -2385,7 +2428,7 @@ func (c *DoHClient) Exchange(msg *dns.Msg) (*dns.Msg, error) {
 
 	httpClient, isCached, err := c.GetClient()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get HTTP client: %w", err)
+		return nil, WrapError("get HTTP client", err)
 	}
 
 	resp, err := c.ExchangeHTTPS(httpClient, msg)
@@ -2393,15 +2436,13 @@ func (c *DoHClient) Exchange(msg *dns.Msg) (*dns.Msg, error) {
 	for i := 0; isCached && c.ShouldRetry(err) && i < 2; i++ {
 		httpClient, err = c.ResetClient(err)
 		if err != nil {
-			return nil, fmt.Errorf("failed to reset HTTP client: %w", err)
+			return nil, WrapError("reset HTTP client", err)
 		}
 		resp, err = c.ExchangeHTTPS(httpClient, msg)
 	}
 
 	if err != nil {
-		if _, resetErr := c.ResetClient(err); resetErr != nil {
-			Debug("Resetting client failed: %v", resetErr)
-		}
+		_, _ = c.ResetClient(err)
 		return nil, err
 	}
 
@@ -2414,12 +2455,12 @@ func (c *DoHClient) Exchange(msg *dns.Msg) (*dns.Msg, error) {
 
 func (c *DoHClient) ExchangeHTTPS(client *http.Client, req *dns.Msg) (*dns.Msg, error) {
 	if client == nil || req == nil {
-		return nil, errors.New("HTTP client or request is empty")
+		return nil, errors.New("HTTP client or request is nil")
 	}
 
 	buf, err := req.Pack()
 	if err != nil {
-		return nil, fmt.Errorf("failed to pack DNS message: %w", err)
+		return nil, WrapError("pack DNS message", err)
 	}
 
 	method := http.MethodGet
@@ -2440,7 +2481,7 @@ func (c *DoHClient) ExchangeHTTPS(client *http.Client, req *dns.Msg) (*dns.Msg, 
 
 	httpReq, err := http.NewRequest(method, u.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		return nil, WrapError("create HTTP request", err)
 	}
 
 	httpReq.Header.Set("Accept", "application/dns-message")
@@ -2448,26 +2489,22 @@ func (c *DoHClient) ExchangeHTTPS(client *http.Client, req *dns.Msg) (*dns.Msg, 
 
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send HTTP request: %w", err)
+		return nil, WrapError("send HTTP request", err)
 	}
-	defer func() {
-		if closeErr := httpResp.Body.Close(); closeErr != nil {
-			Debug("Closing HTTP response body failed: %v", closeErr)
-		}
-	}()
+	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP response error: %d", httpResp.StatusCode)
+		return nil, fmt.Errorf("HTTP error: %d", httpResp.StatusCode)
 	}
 
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, WrapError("read response", err)
 	}
 
 	resp := &dns.Msg{}
 	if err := resp.Unpack(body); err != nil {
-		return nil, fmt.Errorf("failed to parse DNS response: %w", err)
+		return nil, WrapError("parse DNS response", err)
 	}
 
 	return resp, nil
@@ -2475,7 +2512,7 @@ func (c *DoHClient) ExchangeHTTPS(client *http.Client, req *dns.Msg) (*dns.Msg, 
 
 func (c *DoHClient) GetClient() (*http.Client, bool, error) {
 	if c == nil {
-		return nil, false, errors.New("DoH client is empty")
+		return nil, false, errors.New("DoH client is nil")
 	}
 
 	if atomic.LoadInt32(&c.closed) != 0 {
@@ -2497,7 +2534,7 @@ func (c *DoHClient) GetClient() (*http.Client, bool, error) {
 func (c *DoHClient) CreateClient() (*http.Client, error) {
 	transport, err := c.CreateTransport()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP transport: %w", err)
+		return nil, WrapError("create HTTP transport", err)
 	}
 
 	return &http.Client{
@@ -2509,10 +2546,10 @@ func (c *DoHClient) CreateClient() (*http.Client, error) {
 func (c *DoHClient) CreateTransport() (http.RoundTripper, error) {
 	if c.SupportsHTTP3() {
 		if transport, err := c.CreateTransportH3(); err == nil {
-			Debug("DoH client using HTTP/3: %s", c.addrRedacted)
+			LogDebug("DoH using HTTP/3: %s", c.addrRedacted)
 			return transport, nil
 		} else {
-			Debug("HTTP/3 connection failed, falling back to HTTP/2: %v", err)
+			LogDebug("HTTP/3 failed, fallback to HTTP/2: %v", err)
 		}
 	}
 
@@ -2550,12 +2587,10 @@ func (c *DoHClient) CreateTransportH3() (http.RoundTripper, error) {
 
 	conn, err := quic.DialAddr(ctx, c.addr.Host, tlsConfig, c.quicConfig)
 	if err != nil {
-		return nil, fmt.Errorf("QUIC connection failed: %w", err)
+		return nil, WrapError("QUIC connection", err)
 	}
 
-	if closeErr := conn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
-		Debug("Closing QUIC test connection failed: %v", closeErr)
-	}
+	_ = conn.CloseWithError(QUICCodeNoError, "")
 
 	transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
@@ -2570,14 +2605,14 @@ func (c *DoHClient) CreateTransportH3() (http.RoundTripper, error) {
 
 func (c *DoHClient) ResetClient(resetErr error) (*http.Client, error) {
 	if c == nil {
-		return nil, errors.New("DoH client is empty")
+		return nil, errors.New("DoH client is nil")
 	}
 
 	c.clientMu.Lock()
 	defer c.clientMu.Unlock()
 
 	if errors.Is(resetErr, quic.Err0RTTRejected) {
-		Debug("0-RTT rejected, disabling 0-RTT for next attempt")
+		LogDebug("0-RTT rejected, disabling 0-RTT")
 		c.quicConfig = &quic.Config{
 			MaxIdleTimeout:     SecureIdleTimeout,
 			MaxIncomingStreams: MaxIncomingStreams,
@@ -2604,9 +2639,7 @@ func (c *DoHClient) CloseClient(client *http.Client) {
 
 	if c.IsHTTP3(client) {
 		if closer, ok := client.Transport.(io.Closer); ok {
-			if closeErr := closer.Close(); closeErr != nil {
-				Debug("Closing HTTP3 transport failed: %v", closeErr)
-			}
+			CloseWithLog(closer, "HTTP3 transport")
 		}
 	}
 }
@@ -2615,7 +2648,7 @@ func (c *DoHClient) ShouldRetry(err error) bool {
 	if c == nil {
 		return false
 	}
-	return globalErrorHandler.IsRetryableError("https", err)
+	return IsRetryableError("https", err)
 }
 
 func (c *DoHClient) SupportsHTTP3() bool {
@@ -2661,7 +2694,7 @@ func (c *DoHClient) Close() error {
 
 func (h *HTTP3Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if h == nil || h.baseTransport == nil {
-		return nil, errors.New("HTTP/3 transport is empty")
+		return nil, errors.New("HTTP/3 transport is nil")
 	}
 
 	h.mu.RLock()
@@ -2694,83 +2727,32 @@ func (h *HTTP3Transport) Close() error {
 	return nil
 }
 
-func NewSecureErrorHandler() *SecureErrorHandler {
-	return &SecureErrorHandler{}
-}
+// =============================================================================
+// Query Management
+// =============================================================================
 
-func (h *SecureErrorHandler) IsRetryableError(protocol string, err error) bool {
-	if h == nil || err == nil {
-		return false
-	}
-
-	if errors.Is(err, os.ErrDeadlineExceeded) {
-		return true
-	}
-
-	protocol = strings.ToLower(protocol)
-
-	switch protocol {
-	case "quic", "http3":
-		return h.HandleQUICErrors(err)
-	case "tls":
-		return h.HandleTLSErrors(err)
-	case "https":
-		return h.HandleHTTPErrors(err)
-	default:
-		return false
+func NewQueryManager(server *DNSServer) *QueryManager {
+	return &QueryManager{
+		upstream: &UpstreamHandler{
+			servers: make([]*UpstreamServer, 0),
+		},
+		recursive: &RecursiveResolver{
+			server:          server,
+			rootServerMgr:   server.rootServerMgr,
+			concurrencyLock: make(chan struct{}, MaxConcurrency),
+		},
+		cname: &CNAMEHandler{
+			server: server,
+		},
+		validator: &ResponseValidator{
+			hijackPrevention: server.securityMgr.hijack,
+			dnssecValidator:  server.securityMgr.dnssec,
+		},
+		server: server,
 	}
 }
 
-func (h *SecureErrorHandler) HandleQUICErrors(err error) bool {
-	var qAppErr *quic.ApplicationError
-	if errors.As(err, &qAppErr) {
-		return qAppErr.ErrorCode == 0 || qAppErr.ErrorCode == quic.ApplicationErrorCode(0x100)
-	}
-
-	var qIdleErr *quic.IdleTimeoutError
-	if errors.As(err, &qIdleErr) {
-		return true
-	}
-
-	var resetErr *quic.StatelessResetError
-	if errors.As(err, &resetErr) {
-		return true
-	}
-
-	var qTransportError *quic.TransportError
-	if errors.As(err, &qTransportError) && qTransportError.ErrorCode == quic.NoError {
-		return true
-	}
-
-	return errors.Is(err, quic.Err0RTTRejected)
-}
-
-func (h *SecureErrorHandler) HandleTLSErrors(err error) bool {
-	errStr := err.Error()
-	connectionErrors := []string{
-		"broken pipe", "connection reset", "use of closed network connection",
-		"connection refused", "no route to host", "network is unreachable",
-	}
-
-	for _, connErr := range connectionErrors {
-		if strings.Contains(strings.ToLower(errStr), strings.ToLower(connErr)) {
-			return true
-		}
-	}
-
-	return errors.Is(err, io.EOF)
-}
-
-func (h *SecureErrorHandler) HandleHTTPErrors(err error) bool {
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return true
-	}
-
-	return h.HandleQUICErrors(err)
-}
-
-func NewUpstreamManager(servers []UpstreamServer) *UpstreamManager {
+func (qm *QueryManager) Initialize(servers []UpstreamServer) error {
 	activeServers := make([]*UpstreamServer, 0, len(servers))
 
 	for i := range servers {
@@ -2781,841 +2763,34 @@ func NewUpstreamManager(servers []UpstreamServer) *UpstreamManager {
 		activeServers = append(activeServers, server)
 	}
 
-	return &UpstreamManager{
-		servers: activeServers,
-	}
-}
+	qm.upstream.mu.Lock()
+	qm.upstream.servers = activeServers
+	qm.upstream.mu.Unlock()
 
-func (um *UpstreamManager) GetServers() []*UpstreamServer {
-	um.mu.RLock()
-	defer um.mu.RUnlock()
-	return um.servers
-}
-
-func (u *UpstreamServer) IsRecursive() bool {
-	return strings.ToLower(u.Address) == RecursiveIndicator
-}
-
-// =============================================================================
-// DNS Processing Core
-// =============================================================================
-
-func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Initialize root server manager first
-	rootServerManager := NewRootServerManager(*config)
-
-	ednsManager, err := NewEDNSManager(config.Server.DefaultECS, config.Server.Features.Padding)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("EDNS manager initialization failed: %w", err)
-	}
-
-	dnsRewriter := NewDNSRewriter()
-	if len(config.Rewrite) > 0 {
-		if err := dnsRewriter.LoadRules(config.Rewrite); err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to load DNS rewrite rules: %w", err)
-		}
-	}
-
-	upstreamManager := NewUpstreamManager(config.Upstream)
-	connectionPool := NewConnectionPool()
-	taskManager := NewTaskManager(MaxConcurrency)
-	queryClient := NewQueryClient(connectionPool, QueryTimeout)
-	hijackPrevention := NewHijackPrevention(config.Server.Features.HijackProtection)
-
-	server := &DNSServer{
-		config:            config,
-		rootServerManager: rootServerManager,
-		connPool:          connectionPool,
-		dnssecValidator:   NewDNSSECValidator(),
-		concurrencyLimit:  make(chan struct{}, MaxConcurrency),
-		ctx:               ctx,
-		cancel:            cancel,
-		shutdown:          make(chan struct{}),
-		dnsRewriter:       dnsRewriter,
-		upstreamManager:   upstreamManager,
-		queryClient:       queryClient,
-		hijackPrevention:  hijackPrevention,
-		taskManager:       taskManager,
-		ednsManager:       ednsManager,
-		speedDebounce:     make(map[string]time.Time),
-		speedInterval:     SpeedDebounceInterval,
-	}
-
-	if config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "" {
-		tlsManager, err := NewTLSManager(server, config)
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("secure DNS manager initialization failed: %w", err)
-		}
-		server.tlsManager = tlsManager
-	}
-
-	var cache CacheManager
-	if config.Redis.Address == "" {
-		cache = NewNullCache()
-	} else {
-		redisCache, err := NewRedisCache(config, server)
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("redis cache initialization failed: %w", err)
-		}
-		cache = redisCache
-	}
-
-	server.cache = cache
-	server.SetupSignalHandling()
-	return server, nil
-}
-
-func (s *DNSServer) SetupSignalHandling() {
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Start root server periodic sorting
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		defer func() { RecoverPanic("Root server periodic sorting") }()
-		s.rootServerManager.StartPeriodicSorting(s.ctx)
-	}()
-
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		defer func() { RecoverPanic("Signal handler") }()
-
-		select {
-		case sig := <-sigChan:
-			Info("Received signal %v, starting graceful shutdown...", sig)
-			s.ShutdownServer()
-		case <-s.ctx.Done():
-			return
-		}
-	}()
-}
-
-func (s *DNSServer) CleanupSpeedDebounce() {
-	s.speedMutex.Lock()
-	defer s.speedMutex.Unlock()
-
-	now := time.Now()
-	for domain, lastCheck := range s.speedDebounce {
-		if now.Sub(lastCheck) >= s.speedInterval {
-			delete(s.speedDebounce, domain)
-		}
-	}
-}
-
-func (s *DNSServer) ShutdownServer() {
-	if !atomic.CompareAndSwapInt32(&s.closed, 0, 1) {
-		return
-	}
-
-	Info("Starting DNS server shutdown...")
-
-	s.CleanupSpeedDebounce()
-
-	if s.cancel != nil {
-		s.cancel()
-	}
-
-	if s.cache != nil {
-		if err := s.cache.Close(); err != nil {
-			Error("Cache shutdown failed: %v", err)
-		}
-	}
-
-	if s.tlsManager != nil {
-		if err := s.tlsManager.Shutdown(); err != nil {
-			Error("Secure DNS manager shutdown failed: %v", err)
-		}
-	}
-
-	if s.connPool != nil {
-		if err := s.connPool.Close(); err != nil {
-			Error("Connection pool shutdown failed: %v", err)
-		}
-	}
-
-	if s.taskManager != nil {
-		if err := s.taskManager.Shutdown(ShutdownTimeout); err != nil {
-			Error("Task manager shutdown failed: %v", err)
-		}
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		s.wg.Wait()
-	}()
-
-	select {
-	case <-done:
-		Info("All components have been safely shut down")
-	case <-time.After(ShutdownTimeout):
-		Warn("Component shutdown timeout")
-	}
-
-	if s.shutdown != nil {
-		close(s.shutdown)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-	os.Exit(0)
-}
-
-func (s *DNSServer) Start() error {
-	if atomic.LoadInt32(&s.closed) != 0 {
-		return errors.New("server is closed")
-	}
-
-	var wg sync.WaitGroup
-	serverCount := 2
-
-	if s.tlsManager != nil {
-		serverCount += 1
-	}
-
-	errChan := make(chan error, serverCount)
-
-	Info("Starting ZJDNS Server")
-	Info("Listening port: %s", s.config.Server.Port)
-
-	s.DisplayInfo()
-
-	wg.Add(serverCount)
-
-	go func() {
-		defer wg.Done()
-		defer func() { RecoverPanic("Critical-UDP server") }()
-		server := &dns.Server{
-			Addr:    ":" + s.config.Server.Port,
-			Net:     "udp",
-			Handler: dns.HandlerFunc(s.HandleDNSRequest),
-			UDPSize: UDPBufferSize,
-		}
-		Info("UDP server started: [::]:%s", s.config.Server.Port)
-		if err := server.ListenAndServe(); err != nil {
-			errChan <- fmt.Errorf("UDP startup failed: %w", err)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		defer func() { RecoverPanic("Critical-TCP server") }()
-		server := &dns.Server{
-			Addr:    ":" + s.config.Server.Port,
-			Net:     "tcp",
-			Handler: dns.HandlerFunc(s.HandleDNSRequest),
-		}
-		Info("TCP server started: [::]:%s", s.config.Server.Port)
-		if err := server.ListenAndServe(); err != nil {
-			errChan <- fmt.Errorf("TCP startup failed: %w", err)
-		}
-	}()
-
-	if s.tlsManager != nil {
-		go func() {
-			defer wg.Done()
-			defer func() { RecoverPanic("Critical-Secure DNS server") }()
-			httpsPort := s.config.Server.TLS.HTTPS.Port
-			if err := s.tlsManager.Start(httpsPort); err != nil {
-				errChan <- fmt.Errorf("secure DNS startup failed: %w", err)
-			}
-		}()
-	}
-
-	go func() {
-		wg.Wait()
-		close(errChan)
-	}()
-
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
-	}
-
-	<-s.shutdown
 	return nil
 }
 
-func (s *DNSServer) DisplayInfo() {
-	servers := s.upstreamManager.GetServers()
-	if len(servers) > 0 {
-		for _, server := range servers {
-			if server.IsRecursive() {
-				Info("Upstream server: recursive resolution")
-			} else {
-				protocol := strings.ToUpper(server.Protocol)
-				if protocol == "" {
-					protocol = "UDP"
-				}
-				serverInfo := fmt.Sprintf("%s (%s)", server.Address, protocol)
-				if server.SkipTLSVerify && IsSecureProtocol(strings.ToLower(server.Protocol)) {
-					serverInfo += " [Skip TLS verification]"
-				}
-				Info("Upstream server: %s", serverInfo)
-			}
-		}
-		Info("Upstream mode: total %d servers", len(servers))
-	} else {
-		if s.config.Redis.Address == "" {
-			Info("Recursive mode (no cache)")
-		} else {
-			Info("Recursive mode + Redis cache: %s", s.config.Redis.Address)
-		}
-	}
-
-	if s.tlsManager != nil {
-		Info("Listening secure DNS protocol port: %s (DoT/DoQ)", s.config.Server.TLS.Port)
-
-		httpsPort := s.config.Server.TLS.HTTPS.Port
-		if httpsPort != "" {
-			endpoint := s.config.Server.TLS.HTTPS.Endpoint
-			if endpoint == "" {
-				endpoint = strings.TrimPrefix(DefaultQueryPath, "/")
-			}
-			Info("Listening secure DNS protocol port: %s (DoH/DoH3, endpoint: %s)", httpsPort, endpoint)
-		}
-	}
-
-	if s.dnsRewriter.HasRules() {
-		Info("DNS rewriter: enabled (%d rules)", len(s.config.Rewrite))
-	}
-	if s.config.Server.Features.HijackProtection {
-		Info("DNS hijacking prevention: enabled")
-	}
-	if defaultECS := s.ednsManager.GetDefaultECS(); defaultECS != nil {
-		Info("Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
-	}
-	if s.ednsManager.IsPaddingEnabled() {
-		Info("DNS Padding: enabled")
-	}
-
-	if len(s.config.SpeedTest) > 0 {
-		Info("SpeedTest: enabled")
-	} else {
-		Info("SpeedTest: not enabled")
-	}
-
-	Info("Max concurrency: %d", MaxConcurrency)
-	Info("Connection pool optimizations: enabled (TLS session resumption, QUIC 0-RTT)")
-}
-
-func (s *DNSServer) HandleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
-	defer func() { RecoverPanic("DNS request processing") }()
-
-	select {
-	case <-s.ctx.Done():
-		return
-	default:
-	}
-
-	response := s.ProcessDNSQuery(req, GetClientIP(w), false)
-	if response != nil {
-		response.Compress = true
-		_ = w.WriteMsg(response)
-	}
-}
-
-func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool) *dns.Msg {
-	if atomic.LoadInt32(&s.closed) != 0 {
-		msg := s.BuildResponse(req)
-		if msg != nil {
-			msg.Rcode = dns.RcodeServerFailure
-		}
-		return msg
-	}
-
-	if req == nil {
-		msg := &dns.Msg{}
-		msg.SetReply(&dns.Msg{})
-		msg.Rcode = dns.RcodeFormatError
-		return msg
-	}
-
-	if len(req.Question) == 0 {
-		msg := &dns.Msg{}
-		if len(req.Question) > 0 {
-			msg.SetReply(req)
-		} else {
-			msg.Response = true
-		}
-		msg.Rcode = dns.RcodeFormatError
-		return msg
-	}
-
-	question := req.Question[0]
-
-	if len(question.Name) > MaxDomainLength {
-		msg := &dns.Msg{}
-		msg.SetReply(req)
-		msg.Rcode = dns.RcodeFormatError
-		return msg
-	}
-
-	if question.Qtype == dns.TypeANY {
-		msg := &dns.Msg{}
-		msg.SetReply(req)
-		msg.Rcode = dns.RcodeRefused
-		return msg
-	}
-
-	var tracker *RequestTracker
-	if globalLogger.GetLevel() >= LogDebug {
-		clientIPStr := "unknown"
-		if clientIP != nil {
-			clientIPStr = clientIP.String()
-		}
-		tracker = NewRequestTracker(
-			question.Name,
-			dns.TypeToString[question.Qtype],
-			clientIPStr,
-		)
-		if tracker != nil {
-			defer tracker.Finish()
-		}
-	}
-
-	if tracker != nil {
-		tracker.AddStep("Starting query processing: %s %s", question.Name, dns.TypeToString[question.Qtype])
-		if isSecureConnection {
-			tracker.AddStep("Secure connection query, DNS Padding will be enabled")
-		}
-	}
-
-	if s.dnsRewriter.HasRules() {
-		rewriteResult := s.dnsRewriter.RewriteWithDetails(question.Name, question.Qtype)
-		if rewriteResult.ShouldRewrite {
-			if tracker != nil {
-				tracker.AddStep("Domain rewrite: %s (QType: %s)", question.Name, dns.TypeToString[question.Qtype])
-			}
-
-			if rewriteResult.ResponseCode != dns.RcodeSuccess {
-				response := s.BuildResponse(req)
-				response.Rcode = rewriteResult.ResponseCode
-
-				if tracker != nil {
-					tracker.AddStep("Response code rewrite: %d", rewriteResult.ResponseCode)
-				}
-
-				response = s.AddEDNStoRewriteResponse(response, req, tracker, isSecureConnection)
-				return response
-			}
-
-			if len(rewriteResult.Records) > 0 {
-				response := s.BuildResponse(req)
-				response.Answer = rewriteResult.Records
-				response.Rcode = dns.RcodeSuccess
-
-				if len(rewriteResult.Additional) > 0 {
-					response.Extra = rewriteResult.Additional
-				}
-
-				if tracker != nil {
-					tracker.AddStep("Returning custom records: %d (Answer), %d (Additional)",
-						len(rewriteResult.Records), len(rewriteResult.Additional))
-				}
-
-				response = s.AddEDNStoRewriteResponse(response, req, tracker, isSecureConnection)
-				return response
-			}
-
-			if rewriteResult.Domain != question.Name {
-				if tracker != nil {
-					tracker.AddStep("Domain rewrite: %s -> %s", question.Name, rewriteResult.Domain)
-				}
-				question.Name = rewriteResult.Domain
-			}
-		}
-	}
-
-	clientRequestedDNSSEC := false
-	clientHasEDNS := false
-	var ecsOpt *ECSOption
-
-	if opt := req.IsEdns0(); opt != nil {
-		clientHasEDNS = true
-		clientRequestedDNSSEC = opt.Do()
-		ecsOpt = s.ednsManager.ParseFromDNS(req)
-		if tracker != nil && ecsOpt != nil {
-			tracker.AddStep("Client ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
-		}
-	}
-
-	if ecsOpt == nil {
-		ecsOpt = s.ednsManager.GetDefaultECS()
-		if tracker != nil && ecsOpt != nil {
-			tracker.AddStep("Using default ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
-		}
-	}
-
-	serverDNSSECEnabled := s.config.Server.Features.DNSSEC
-	cacheKey := globalCacheUtils.BuildKey(question, ecsOpt, serverDNSSECEnabled)
-
-	if tracker != nil {
-		tracker.AddStep("Cache key: %s", cacheKey)
-	}
-
-	if entry, found, isExpired := s.cache.Get(cacheKey); found {
-		return s.ProcessCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, clientHasEDNS, ecsOpt, cacheKey, tracker, isSecureConnection)
-	}
-
-	if tracker != nil {
-		tracker.AddStep("Cache miss, starting query")
-	}
-	return s.ProcessCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, clientHasEDNS, serverDNSSECEnabled, cacheKey, tracker, isSecureConnection)
-}
-
-func (s *DNSServer) AddEDNStoRewriteResponse(response *dns.Msg, req *dns.Msg, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
-	if response == nil {
-		return response
-	}
-
-	clientRequestedDNSSEC := false
-	clientHasEDNS := false
-	var ecsOpt *ECSOption
-
-	if opt := req.IsEdns0(); opt != nil {
-		clientHasEDNS = true
-		clientRequestedDNSSEC = opt.Do()
-		ecsOpt = s.ednsManager.ParseFromDNS(req)
-	}
-
-	if ecsOpt == nil {
-		ecsOpt = s.ednsManager.GetDefaultECS()
-	}
-
-	shouldAddEDNS := clientHasEDNS || ecsOpt != nil || s.ednsManager.IsPaddingEnabled() ||
-		(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
-
-	if shouldAddEDNS {
-		s.ednsManager.AddToMessage(response, ecsOpt, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
-		if tracker != nil && ecsOpt != nil {
-			tracker.AddStep("Adding response ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
-		}
-	}
-
-	return response
-}
-
-func (s *DNSServer) BuildResponse(req *dns.Msg) *dns.Msg {
-	msg := globalResourceManager.GetDNSMessage()
-	if msg == nil {
-		msg = &dns.Msg{}
-	}
-
-	if req != nil {
-		if len(req.Question) > 0 {
-			if msg.Question == nil {
-				msg.Question = make([]dns.Question, 0, len(req.Question))
-			}
-			msg.SetReply(req)
-		} else {
-			msg.Response = true
-			msg.Rcode = dns.RcodeFormatError
-		}
-	}
-
-	msg.Authoritative = false
-	msg.RecursionAvailable = true
-	msg.Compress = true
-	return msg
-}
-
-func (s *DNSServer) ProcessCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool,
-	question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool, ecsOpt *ECSOption,
-	cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
-
-	responseTTL := entry.GetRemainingTTL()
-
-	if tracker != nil {
-		tracker.CacheHit = true
-		if isExpired {
-			tracker.AddStep("Cache hit (expired): TTL=%ds", responseTTL)
-		} else {
-			tracker.AddStep("Cache hit: TTL=%ds", responseTTL)
-		}
-	}
-
-	msg := s.BuildResponse(req)
-	if msg == nil {
-		msg = &dns.Msg{}
-		msg.SetReply(req)
-		msg.Rcode = dns.RcodeServerFailure
-		return msg
-	}
-
-	msg.Answer = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Answer), responseTTL, clientRequestedDNSSEC)
-	msg.Ns = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
-	msg.Extra = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
-
-	if s.config.Server.Features.DNSSEC && entry.Validated {
-		msg.AuthenticatedData = true
-		if tracker != nil {
-			tracker.AddStep("Setting AD flag: cached records verified")
-		}
-	}
-
-	responseECS := entry.GetECSOption()
-	if responseECS == nil {
-		responseECS = ecsOpt
-	}
-
-	shouldAddEDNS := clientHasEDNS || responseECS != nil || s.ednsManager.IsPaddingEnabled() ||
-		(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
-
-	if shouldAddEDNS {
-		s.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
-		if tracker != nil && responseECS != nil {
-			tracker.AddStep("Adding response ECS: %s/%d", responseECS.Address, responseECS.SourcePrefix)
-		}
-	}
-
-	if isExpired && s.config.Server.Features.ServeStale && s.config.Server.Features.Prefetch && entry.ShouldRefresh() {
-		if tracker != nil {
-			tracker.AddStep("Starting background prefetch refresh")
-		}
-		s.cache.RequestRefresh(RefreshRequest{
-			Question:            question,
-			ECS:                 ecsOpt,
-			CacheKey:            cacheKey,
-			ServerDNSSECEnabled: s.config.Server.Features.DNSSEC,
-		})
-	}
-
-	s.RestoreOriginalDomain(msg, req.Question[0].Name, question.Name)
-	return msg
-}
-
-func (s *DNSServer) ProcessCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption,
-	clientRequestedDNSSEC bool, clientHasEDNS bool, serverDNSSECEnabled bool, cacheKey string,
-	tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
-
-	var answer, authority, additional []dns.RR
-	var validated bool
-	var ecsResponse *ECSOption
-	var err error
-
-	servers := s.upstreamManager.GetServers()
+func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+	servers := qm.upstream.GetServers()
 	if len(servers) > 0 {
 		if tracker != nil {
-			tracker.AddStep("Using upstream server query (%d available)", len(servers))
+			tracker.AddStep("Using upstream query (%d servers)", len(servers))
 		}
-		answer, authority, additional, validated, ecsResponse, err = s.QueryUpstreamServers(
-			question, ecsOpt, serverDNSSECEnabled, tracker)
+		return qm.QueryUpstream(question, ecs, serverDNSSECEnabled, tracker)
 	} else {
 		if tracker != nil {
 			tracker.AddStep("Using recursive resolution")
 		}
-		ctx, cancel := context.WithTimeout(s.ctx, RecursiveTimeout)
+		ctx, cancel := context.WithTimeout(qm.server.ctx, RecursiveTimeout)
 		defer cancel()
-		answer, authority, additional, validated, ecsResponse, err = s.ResolveWithCNAME(ctx, question, ecsOpt, tracker)
-	}
-
-	if err != nil {
-		return s.ProcessQueryError(req, err, cacheKey, question, clientRequestedDNSSEC,
-			clientHasEDNS, ecsOpt, tracker, isSecureConnection)
-	}
-
-	return s.ProcessQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, clientHasEDNS, cacheKey,
-		answer, authority, additional, validated, ecsResponse, tracker, isSecureConnection)
-}
-
-func (s *DNSServer) ProcessQueryError(req *dns.Msg, err error, cacheKey string,
-	question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool, ecsOpt *ECSOption,
-	tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
-
-	if tracker != nil {
-		tracker.AddStep("Query failed: %v", err)
-	}
-
-	if s.config.Server.Features.ServeStale {
-		if entry, found, _ := s.cache.Get(cacheKey); found {
-			if tracker != nil {
-				tracker.AddStep("Using expired cache fallback")
-			}
-
-			responseTTL := uint32(StaleTTL)
-			msg := s.BuildResponse(req)
-			if msg == nil {
-				msg = &dns.Msg{}
-				msg.SetReply(req)
-				msg.Rcode = dns.RcodeServerFailure
-				return msg
-			}
-
-			msg.Answer = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Answer), responseTTL, clientRequestedDNSSEC)
-			msg.Ns = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
-			msg.Extra = globalRecordHandler.ProcessRecords(globalRecordHandler.ExpandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
-
-			if s.config.Server.Features.DNSSEC && entry.Validated {
-				msg.AuthenticatedData = true
-			}
-
-			responseECS := entry.GetECSOption()
-			if responseECS == nil {
-				responseECS = ecsOpt
-			}
-
-			shouldAddEDNS := clientHasEDNS || responseECS != nil || s.ednsManager.IsPaddingEnabled() ||
-				(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
-
-			if shouldAddEDNS {
-				s.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
-			}
-
-			s.RestoreOriginalDomain(msg, req.Question[0].Name, question.Name)
-			return msg
-		}
-	}
-
-	msg := s.BuildResponse(req)
-	if msg == nil {
-		msg = &dns.Msg{}
-		msg.SetReply(req)
-	}
-	msg.Rcode = dns.RcodeServerFailure
-	return msg
-}
-
-func (s *DNSServer) ProcessQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption,
-	clientRequestedDNSSEC bool, clientHasEDNS bool, cacheKey string,
-	answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption,
-	tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
-
-	if tracker != nil {
-		tracker.AddStep("Query successful: answers=%d, authority=%d, additional=%d", len(answer), len(authority), len(additional))
-		if validated {
-			tracker.AddStep("DNSSEC validation passed")
-		}
-	}
-
-	msg := s.BuildResponse(req)
-	if msg == nil {
-		msg = &dns.Msg{}
-		msg.SetReply(req)
-	}
-
-	if s.config.Server.Features.DNSSEC && validated {
-		msg.AuthenticatedData = true
-		if tracker != nil {
-			tracker.AddStep("Setting AD flag: query results verified")
-		}
-	}
-
-	responseECS := ecsResponse
-	if responseECS == nil && ecsOpt != nil {
-		responseECS = &ECSOption{
-			Family:       ecsOpt.Family,
-			SourcePrefix: ecsOpt.SourcePrefix,
-			ScopePrefix:  ecsOpt.ScopePrefix,
-			Address:      ecsOpt.Address,
-		}
-	}
-
-	s.cache.Set(cacheKey, answer, authority, additional, validated, responseECS)
-
-	msg.Answer = globalRecordHandler.ProcessRecords(answer, 0, clientRequestedDNSSEC)
-	msg.Ns = globalRecordHandler.ProcessRecords(authority, 0, clientRequestedDNSSEC)
-	msg.Extra = globalRecordHandler.ProcessRecords(additional, 0, clientRequestedDNSSEC)
-
-	if len(s.config.SpeedTest) > 0 {
-		Debug("SpeedTest feature enabled")
-		if tracker != nil {
-			tracker.AddStep("SpeedTest enabled")
-		}
-
-		shouldPerformSpeedTest := s.ShouldPerformSpeedTest(question.Name)
-		if shouldPerformSpeedTest {
-			Debug("SpeedTest: triggering background detection for domain %s", question.Name)
-			msgCopy := msg.Copy()
-			s.taskManager.ExecuteAsync(fmt.Sprintf("speed-test-%s", question.Name), func(ctx context.Context) error {
-				Debug("SpeedTest: starting background detection for domain %s", question.Name)
-				speedTester := NewSpeedTester(*s.config)
-				defer func() {
-					_ = speedTester.Close()
-				}()
-				speedTester.PerformSpeedTestAndSort(msgCopy)
-
-				s.cache.Set(cacheKey,
-					msgCopy.Answer,
-					msgCopy.Ns,
-					msgCopy.Extra,
-					validated, responseECS)
-				Debug("SpeedTest: background detection completed for domain %s", question.Name)
-
-				return nil
-			})
-
-			if tracker != nil {
-				tracker.AddStep("First response not sorted, background SpeedTest in progress")
-			}
-		} else {
-			Debug("SpeedTest: domain %s skipped by debounce mechanism", question.Name)
-			if tracker != nil {
-				tracker.AddStep("SpeedTest skipped (debounce mechanism)")
-			}
-		}
-	} else {
-		Debug("SpeedTest feature not enabled")
-	}
-
-	shouldAddEDNS := clientHasEDNS || responseECS != nil || s.ednsManager.IsPaddingEnabled() ||
-		(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
-
-	if shouldAddEDNS {
-		s.ednsManager.AddToMessage(msg, responseECS, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
-		if tracker != nil && responseECS != nil {
-			tracker.AddStep("Adding response ECS: %s/%d", responseECS.Address, responseECS.SourcePrefix)
-		}
-	}
-
-	s.RestoreOriginalDomain(msg, req.Question[0].Name, question.Name)
-	return msg
-}
-
-func (s *DNSServer) RestoreOriginalDomain(msg *dns.Msg, currentName, originalName string) {
-	if msg == nil {
-		return
-	}
-
-	for _, rr := range msg.Answer {
-		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
-			rr.Header().Name = originalName
-		}
+		return qm.cname.ResolveWithCNAME(ctx, question, ecs, tracker)
 	}
 }
 
-func (s *DNSServer) ShouldPerformSpeedTest(domain string) bool {
-	if len(s.config.SpeedTest) == 0 {
-		return false
-	}
-
-	s.speedMutex.Lock()
-	defer s.speedMutex.Unlock()
-
-	now := time.Now()
-	lastCheck, exists := s.speedDebounce[domain]
-	if !exists || now.Sub(lastCheck) >= s.speedInterval {
-		s.speedDebounce[domain] = now
-		return true
-	}
-
-	return false
-}
-
-func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
-	serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
-
-	servers := s.upstreamManager.GetServers()
+func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+	servers := qm.upstream.GetServers()
 	if len(servers) == 0 {
-		return nil, nil, nil, false, nil, errors.New("no available upstream servers")
+		return nil, nil, nil, false, nil, errors.New("no upstream servers")
 	}
 
 	if tracker != nil {
@@ -3623,18 +2798,18 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 	}
 
 	resultChan := make(chan *QueryResult, len(servers))
-	ctx, cancel := context.WithTimeout(s.ctx, QueryTimeout)
+	ctx, cancel := context.WithTimeout(qm.server.ctx, QueryTimeout)
 	defer cancel()
 
 	for _, server := range servers {
 		srv := server
 
 		if srv.IsRecursive() {
-			s.taskManager.ExecuteAsync("Query-Recursive", func(taskCtx context.Context) error {
+			qm.server.taskMgr.ExecuteAsync("Query-Recursive", func(taskCtx context.Context) error {
 				recursiveCtx, recursiveCancel := context.WithTimeout(taskCtx, RecursiveTimeout)
 				defer recursiveCancel()
 
-				answer, authority, additional, validated, ecsResponse, err := s.ResolveWithCNAME(
+				answer, authority, additional, validated, ecsResponse, err := qm.cname.ResolveWithCNAME(
 					recursiveCtx, question, ecs, tracker)
 
 				if err == nil && len(answer) > 0 {
@@ -3654,22 +2829,21 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 			})
 
 		} else {
-			originalMsg := s.BuildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
+			originalMsg := qm.server.BuildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
 			msg := SafeCopyMessage(originalMsg)
-			globalResourceManager.PutDNSMessage(originalMsg)
+			GlobalResource.PutDNSMessage(originalMsg)
 
-			s.taskManager.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(taskCtx context.Context) error {
-				result := s.queryClient.ExecuteQuery(taskCtx, msg, srv, tracker)
+			qm.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(taskCtx context.Context) error {
+				result := qm.server.connMgr.queryClient.ExecuteQuery(taskCtx, msg, srv, tracker)
 
 				if result.Error == nil && result.Response != nil {
 					rcode := result.Response.Rcode
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-						// DNSSEC validation
-						if serverDNSSECEnabled && s.config.Server.Features.DNSSEC {
-							result.Validated = s.dnssecValidator.ValidateResponse(result.Response, true)
+						if serverDNSSECEnabled && qm.server.config.Server.Features.DNSSEC {
+							result.Validated = qm.validator.dnssecValidator.ValidateResponse(result.Response, true)
 						}
 
-						ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
+						ecsResponse := qm.server.ednsMgr.ParseFromDNS(result.Response)
 
 						select {
 						case resultChan <- &QueryResult{
@@ -3689,7 +2863,6 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		}
 	}
 
-	// Wait for first successful result
 	var lastError error
 	receivedCount := 0
 	serversCount := len(servers)
@@ -3702,25 +2875,23 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 			if result.Error != nil {
 				lastError = result.Error
 				if tracker != nil {
-					tracker.AddStep("Server %s returned error: %v", result.Server, result.Error)
+					tracker.AddStep("Server %s error: %v", result.Server, result.Error)
 				}
 				continue
 			}
 
-			// Check for valid Answer
 			if len(result.Answer) > 0 {
 				if tracker != nil {
-					tracker.AddStep("Using successful result from: %s", result.Server)
+					tracker.AddStep("Using result from: %s", result.Server)
 				}
 				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
 			}
 
-			// No valid records, continue waiting for other results
 			continue
 
 		case <-ctx.Done():
 			if tracker != nil {
-				tracker.AddStep("Query context cancelled after receiving %d/%d responses", receivedCount, serversCount)
+				tracker.AddStep("Query cancelled after %d/%d responses", receivedCount, serversCount)
 			}
 			if lastError != nil {
 				return nil, nil, nil, false, nil, lastError
@@ -3729,7 +2900,6 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		}
 	}
 
-	// All servers returned results but no valid records
 	if tracker != nil {
 		tracker.AddStep("All %d upstream servers returned no valid records", serversCount)
 	}
@@ -3739,58 +2909,21 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 	return nil, nil, nil, false, nil, errors.New("all upstream queries returned no valid records")
 }
 
-func (s *DNSServer) BuildQueryMessage(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
-	msg := globalResourceManager.GetDNSMessage()
-
-	if msg == nil {
-		msg = &dns.Msg{}
-	}
-
-	if err := s.SafeSetQuestion(msg, question.Name, question.Qtype); err != nil {
-		Debug("Setting DNS question failed: %v", err)
-		msg = &dns.Msg{}
-		msg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
-	}
-
-	msg.RecursionDesired = recursionDesired
-
-	if s.ednsManager != nil {
-		s.ednsManager.AddToMessage(msg, ecs, dnssecEnabled, isSecureConnection)
-	}
-
-	return msg
+func (uh *UpstreamHandler) GetServers() []*UpstreamServer {
+	uh.mu.RLock()
+	defer uh.mu.RUnlock()
+	return uh.servers
 }
 
-func (s *DNSServer) SafeSetQuestion(msg *dns.Msg, name string, qtype uint16) error {
-	if msg == nil {
-		return errors.New("message is empty")
-	}
-
-	if name == "" {
-		return errors.New("domain is empty")
-	}
-
-	if len(name) > MaxDomainLength {
-		return errors.New("domain is too long")
-	}
-
-	if msg.Question == nil {
-		msg.Question = make([]dns.Question, 0, 1)
-	}
-
-	defer func() {
-		if r := recover(); r != nil {
-			Error("Panic occurred while setting DNS question: %v", r)
-		}
-	}()
-
-	msg.SetQuestion(dns.Fqdn(name), qtype)
-	return nil
+func (u *UpstreamServer) IsRecursive() bool {
+	return strings.ToLower(u.Address) == RecursiveIndicator
 }
 
-func (s *DNSServer) ResolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption,
-	tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+// =============================================================================
+// CNAME Handler
+// =============================================================================
 
+func (ch *CNAMEHandler) ResolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	var allAnswers []dns.RR
 	var finalAuthority, finalAdditional []dns.RR
 	var finalECSResponse *ECSOption
@@ -3817,10 +2950,10 @@ func (s *DNSServer) ResolveWithCNAME(ctx context.Context, question dns.Question,
 		visitedCNAMEs[currentName] = true
 
 		if tracker != nil {
-			tracker.AddStep("Resolving CNAME chain step %d: %s", i+1, currentQuestion.Name)
+			tracker.AddStep("Resolving CNAME step %d: %s", i+1, currentQuestion.Name)
 		}
 
-		answer, authority, additional, validated, ecsResponse, err := s.RecursiveQuery(ctx, currentQuestion, ecs, 0, false, tracker)
+		answer, authority, additional, validated, ecsResponse, err := ch.server.queryMgr.recursive.RecursiveQuery(ctx, currentQuestion, ecs, 0, false, tracker)
 		if err != nil {
 			return nil, nil, nil, false, nil, err
 		}
@@ -3870,16 +3003,18 @@ func (s *DNSServer) ResolveWithCNAME(ctx context.Context, question dns.Question,
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, nil
 }
 
-func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption,
-	depth int, forceTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+// =============================================================================
+// Recursive Resolver
+// =============================================================================
 
+func (rr *RecursiveResolver) RecursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	if depth > MaxRecursionDepth {
 		return nil, nil, nil, false, nil, fmt.Errorf("recursion depth exceeded: %d", depth)
 	}
 
 	qname := dns.Fqdn(question.Name)
 	question.Name = qname
-	nameservers := s.GetRootServers()
+	nameservers := rr.GetRootServers()
 	currentDomain := "."
 
 	normalizedQname := strings.ToLower(strings.TrimSuffix(qname, "."))
@@ -3889,29 +3024,25 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 	}
 
 	if normalizedQname == "" {
-		response, err := s.QueryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
+		response, err := rr.QueryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
 		if err != nil {
-			return nil, nil, nil, false, nil, fmt.Errorf("root domain query failed: %w", err)
+			return nil, nil, nil, false, nil, WrapError("root domain query", err)
 		}
 
-		if s.hijackPrevention.IsEnabled() {
-			if valid, reason := s.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				return s.HandleSuspiciousResponse(reason, forceTCP, tracker)
+		if rr.server.securityMgr.hijack.IsEnabled() {
+			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
+				return rr.HandleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth, tracker)
 			}
 		}
 
 		validated := false
-		if s.config.Server.Features.DNSSEC {
-			validated = s.dnssecValidator.ValidateResponse(response, true)
+		if rr.server.config.Server.Features.DNSSEC {
+			validated = rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		}
 
-		ecsResponse := s.ednsManager.ParseFromDNS(response)
+		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
 
-		answer := response.Answer
-		authority := response.Ns
-		additional := response.Extra
-
-		return answer, authority, additional, validated, ecsResponse, nil
+		return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
 	}
 
 	for {
@@ -3922,58 +3053,53 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 		}
 
 		if tracker != nil {
-			tracker.AddStep("Querying authoritative server: %s (%d NS)", currentDomain, len(nameservers))
+			tracker.AddStep("Querying authoritative: %s (%d NS)", currentDomain, len(nameservers))
 		}
 
-		response, err := s.QueryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
+		response, err := rr.QueryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
 		if err != nil {
 			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
 				if tracker != nil {
-					tracker.AddStep("DNS hijacking detected, switching to TCP mode retry")
+					tracker.AddStep("DNS hijacking detected, switching to TCP")
 				}
-				return s.RecursiveQuery(ctx, question, ecs, depth, true, tracker)
+				return rr.RecursiveQuery(ctx, question, ecs, depth, true, tracker)
 			}
-			return nil, nil, nil, false, nil, fmt.Errorf("query %s failed: %w", currentDomain, err)
+			return nil, nil, nil, false, nil, WrapError(fmt.Sprintf("query %s", currentDomain), err)
 		}
 
-		if s.hijackPrevention.IsEnabled() {
-			if valid, reason := s.hijackPrevention.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				answer, authority, additional, validated, ecsResponse, err := s.HandleSuspiciousResponse(reason, forceTCP, tracker)
+		if rr.server.securityMgr.hijack.IsEnabled() {
+			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
+				answer, authority, additional, validated, ecsResponse, err := rr.HandleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth, tracker)
 				if err != nil && !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
 					if tracker != nil {
-						tracker.AddStep("DNS hijacking detected, switching to TCP mode retry")
+						tracker.AddStep("DNS hijacking detected, switching to TCP")
 					}
-					return s.RecursiveQuery(ctx, question, ecs, depth, true, tracker)
+					return rr.RecursiveQuery(ctx, question, ecs, depth, true, tracker)
 				}
 				return answer, authority, additional, validated, ecsResponse, err
 			}
 		}
 
 		validated := false
-		if s.config.Server.Features.DNSSEC {
-			validated = s.dnssecValidator.ValidateResponse(response, true)
+		if rr.server.config.Server.Features.DNSSEC {
+			validated = rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		}
 
-		ecsResponse := s.ednsManager.ParseFromDNS(response)
+		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
 
 		if len(response.Answer) > 0 {
 			if tracker != nil {
-				tracker.AddStep("Obtained final answer: %d records", len(response.Answer))
+				tracker.AddStep("Got final answer: %d records", len(response.Answer))
 			}
-
-			answer := response.Answer
-			authority := response.Ns
-			additional := response.Extra
-
-			return answer, authority, additional, validated, ecsResponse, nil
+			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
 		bestMatch := ""
 		var bestNSRecords []*dns.NS
 
-		for _, rr := range response.Ns {
-			if ns, ok := rr.(*dns.NS); ok {
-				nsName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
+		for _, rrec := range response.Ns {
+			if ns, ok := rrec.(*dns.NS); ok {
+				nsName := strings.ToLower(strings.TrimSuffix(rrec.Header().Name, "."))
 
 				var isMatch bool
 				if normalizedQname == nsName {
@@ -3997,7 +3123,7 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 
 		if len(bestNSRecords) == 0 {
 			if tracker != nil {
-				tracker.AddStep("No matching NS records found, returning authority info")
+				tracker.AddStep("No matching NS records, returning authority")
 			}
 			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
@@ -4005,7 +3131,7 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 		currentDomainNormalized := strings.ToLower(strings.TrimSuffix(currentDomain, "."))
 		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
 			if tracker != nil {
-				tracker.AddStep("Query loop detected, stopping recursion")
+				tracker.AddStep("Query loop detected, stopping")
 			}
 			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
@@ -4014,14 +3140,14 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 
 		var nextNS []string
 		for _, ns := range bestNSRecords {
-			for _, rr := range response.Extra {
-				switch a := rr.(type) {
+			for _, rrec := range response.Extra {
+				switch a := rrec.(type) {
 				case *dns.A:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
 						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), DefaultDNSPort))
 					}
 				case *dns.AAAA:
-					if s.config.Server.Features.IPv6 && strings.EqualFold(a.Header().Name, ns.Ns) {
+					if rr.server.config.Server.Features.IPv6 && strings.EqualFold(a.Header().Name, ns.Ns) {
 						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), DefaultDNSPort))
 					}
 				}
@@ -4030,49 +3156,47 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 
 		if len(nextNS) == 0 {
 			if tracker != nil {
-				tracker.AddStep("No NS addresses in Additional, starting NS record resolution")
+				tracker.AddStep("No NS addresses in Additional, resolving NS")
 			}
-			nextNS = s.ResolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP, tracker)
+			nextNS = rr.ResolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP, tracker)
 		}
 
 		if len(nextNS) == 0 {
 			if tracker != nil {
-				tracker.AddStep("Cannot obtain NS addresses, returning authority info")
+				tracker.AddStep("Cannot get NS addresses, returning authority")
 			}
 			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
 		nameservers = nextNS
 		if tracker != nil {
-			tracker.AddStep("Next round query, switching to domain: %s (%d NS)", bestMatch, len(nextNS))
+			tracker.AddStep("Next round, switching to: %s (%d NS)", bestMatch, len(nextNS))
 		}
 	}
 }
 
-func (s *DNSServer) HandleSuspiciousResponse(reason string, currentlyTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (rr *RecursiveResolver) HandleSuspiciousResponse(reason string, currentlyTCP bool, ctx context.Context, question dns.Question, ecs *ECSOption, depth int, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	if !currentlyTCP {
 		if tracker != nil {
-			tracker.AddStep("DNS hijacking detected, will switch to TCP mode: %s", reason)
+			tracker.AddStep("DNS hijacking detected, switching to TCP: %s", reason)
 		}
 		return nil, nil, nil, false, nil, fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
 	} else {
 		if tracker != nil {
-			tracker.AddStep("DNS hijacking still detected in TCP mode, rejecting response: %s", reason)
+			tracker.AddStep("DNS hijacking still detected in TCP, rejecting: %s", reason)
 		}
-		return nil, nil, nil, false, nil, fmt.Errorf("DNS hijacking detected (TCP mode): %s", reason)
+		return nil, nil, nil, false, nil, fmt.Errorf("DNS hijacking detected (TCP): %s", reason)
 	}
 }
 
-func (s *DNSServer) QueryNameserversConcurrent(ctx context.Context, nameservers []string,
-	question dns.Question, ecs *ECSOption, forceTCP bool, tracker *RequestTracker) (*dns.Msg, error) {
-
+func (rr *RecursiveResolver) QueryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption, forceTCP bool, tracker *RequestTracker) (*dns.Msg, error) {
 	if len(nameservers) == 0 {
-		return nil, errors.New("no available nameservers")
+		return nil, errors.New("no nameservers")
 	}
 
 	select {
-	case s.concurrencyLimit <- struct{}{}:
-		defer func() { <-s.concurrencyLimit }()
+	case rr.concurrencyLock <- struct{}{}:
+		defer func() { <-rr.concurrencyLock }()
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -4102,21 +3226,21 @@ func (s *DNSServer) QueryNameserversConcurrent(ctx context.Context, nameservers 
 
 	for _, server := range tempServers {
 		srv := server
-		originalMsg := s.BuildQueryMessage(question, ecs, s.config.Server.Features.DNSSEC, true, false)
+		originalMsg := rr.server.BuildQueryMessage(question, ecs, rr.server.config.Server.Features.DNSSEC, true, false)
 		msg := SafeCopyMessage(originalMsg)
-		globalResourceManager.PutDNSMessage(originalMsg)
+		GlobalResource.PutDNSMessage(originalMsg)
 
-		s.taskManager.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address),
+		rr.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address),
 			func(ctx context.Context) error {
-				result := s.queryClient.ExecuteQuery(ctx, msg, srv, tracker)
+				result := rr.server.connMgr.queryClient.ExecuteQuery(ctx, msg, srv, tracker)
 
 				if result.Error == nil && result.Response != nil {
 					rcode := result.Response.Rcode
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-						if s.config.Server.Features.DNSSEC {
-							result.Validated = s.dnssecValidator.ValidateResponse(result.Response, true)
+						if rr.server.config.Server.Features.DNSSEC {
+							result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
 							if tracker != nil && result.Validated {
-								tracker.AddStep("DNSSEC validation passed")
+								tracker.AddStep("DNSSEC validated")
 							}
 						}
 
@@ -4133,7 +3257,7 @@ func (s *DNSServer) QueryNameserversConcurrent(ctx context.Context, nameservers 
 	select {
 	case result := <-resultChan:
 		if tracker != nil {
-			tracker.AddStep("Query successful, selected server: %s", result.Server)
+			tracker.AddStep("Query successful, selected: %s", result.Server)
 		}
 		return result.Response, nil
 	case <-ctx.Done():
@@ -4141,9 +3265,7 @@ func (s *DNSServer) QueryNameserversConcurrent(ctx context.Context, nameservers 
 	}
 }
 
-func (s *DNSServer) ResolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS,
-	qname string, depth int, forceTCP bool, tracker *RequestTracker) []string {
-
+func (rr *RecursiveResolver) ResolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int, forceTCP bool, tracker *RequestTracker) []string {
 	resolveCount := len(nsRecords)
 	if resolveCount > MaxNSResolve {
 		resolveCount = MaxNSResolve
@@ -4159,7 +3281,7 @@ func (s *DNSServer) ResolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 
 	for i := 0; i < resolveCount; i++ {
 		ns := nsRecords[i]
-		s.taskManager.ExecuteAsync(fmt.Sprintf("NSResolve-%s", ns.Ns),
+		rr.server.taskMgr.ExecuteAsync(fmt.Sprintf("NSResolve-%s", ns.Ns),
 			func(ctx context.Context) error {
 				if strings.EqualFold(strings.TrimSuffix(ns.Ns, "."), strings.TrimSuffix(qname, ".")) {
 					select {
@@ -4171,19 +3293,19 @@ func (s *DNSServer) ResolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 
 				var addresses []string
 				nsQuestion := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-				if nsAnswer, _, _, _, _, err := s.RecursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP, tracker); err == nil {
-					for _, rr := range nsAnswer {
-						if a, ok := rr.(*dns.A); ok {
+				if nsAnswer, _, _, _, _, err := rr.RecursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP, tracker); err == nil {
+					for _, rrec := range nsAnswer {
+						if a, ok := rrec.(*dns.A); ok {
 							addresses = append(addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
 						}
 					}
 				}
 
-				if s.config.Server.Features.IPv6 && len(addresses) == 0 {
+				if rr.server.config.Server.Features.IPv6 && len(addresses) == 0 {
 					nsQuestionV6 := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-					if nsAnswerV6, _, _, _, _, err := s.RecursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP, tracker); err == nil {
-						for _, rr := range nsAnswerV6 {
-							if aaaa, ok := rr.(*dns.AAAA); ok {
+					if nsAnswerV6, _, _, _, _, err := rr.RecursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP, tracker); err == nil {
+						for _, rrec := range nsAnswerV6 {
+							if aaaa, ok := rrec.(*dns.AAAA); ok {
 								addresses = append(addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
 							}
 						}
@@ -4215,37 +3337,860 @@ func (s *DNSServer) ResolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	}
 
 	if tracker != nil {
-		tracker.AddStep("NS resolution completed: obtained %d addresses", len(allAddresses))
+		tracker.AddStep("NS resolution completed: %d addresses", len(allAddresses))
 	}
 
 	return allAddresses
 }
 
-func (s *DNSServer) GetRootServers() []string {
-	serversWithLatency := s.rootServerManager.GetOptimalRootServers(s.config.Server.Features.IPv6)
+func (rr *RecursiveResolver) GetRootServers() []string {
+	serversWithLatency := rr.rootServerMgr.GetOptimalRootServers(rr.server.config.Server.Features.IPv6)
 	servers := make([]string, len(serversWithLatency))
 	for i, server := range serversWithLatency {
 		servers[i] = server.Server
 	}
-
 	return servers
 }
 
-func (s *DNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
-	defer func() { RecoverPanic("Cache refresh query") }()
+// =============================================================================
+// Security Management
+// =============================================================================
 
-	if atomic.LoadInt32(&s.closed) != 0 {
-		return nil, nil, nil, false, nil, errors.New("server is closed")
+func NewSecurityManager(config *ServerConfig, server *DNSServer) (*SecurityManager, error) {
+	sm := &SecurityManager{
+		dnssec: NewDNSSECValidator(),
+		hijack: NewHijackPrevention(config.Server.Features.HijackProtection),
 	}
 
-	refreshCtx, cancel := context.WithTimeout(s.ctx, ExtendedTimeout)
-	defer cancel()
+	if config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "" {
+		tlsMgr, err := NewTLSManager(server, config)
+		if err != nil {
+			return nil, WrapError("create TLS manager", err)
+		}
+		sm.tls = tlsMgr
+	}
 
-	servers := s.upstreamManager.GetServers()
-	if len(servers) > 0 {
-		return s.QueryUpstreamServers(question, ecs, serverDNSSECEnabled, nil)
+	return sm, nil
+}
+
+func (sm *SecurityManager) Shutdown(timeout time.Duration) error {
+	if sm.tls != nil {
+		return sm.tls.Shutdown()
+	}
+	return nil
+}
+
+func NewDNSSECValidator() *DNSSECValidator {
+	return &DNSSECValidator{}
+}
+
+func (v *DNSSECValidator) HasDNSSECRecords(response *dns.Msg) bool {
+	if response == nil {
+		return false
+	}
+
+	for _, sections := range [][]dns.RR{response.Answer, response.Ns, response.Extra} {
+		for _, rr := range sections {
+			switch rr.(type) {
+			case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (v *DNSSECValidator) IsValidated(response *dns.Msg) bool {
+	if response == nil {
+		return false
+	}
+	if response.AuthenticatedData {
+		return true
+	}
+	return v.HasDNSSECRecords(response)
+}
+
+func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
+	if !dnssecOK || response == nil {
+		return false
+	}
+	return v.IsValidated(response)
+}
+
+func NewHijackPrevention(enabled bool) *HijackPrevention {
+	return &HijackPrevention{enabled: enabled}
+}
+
+func (hp *HijackPrevention) IsEnabled() bool {
+	return hp.enabled
+}
+
+func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string) {
+	if !hp.enabled || response == nil {
+		return true, ""
+	}
+
+	currentDomain = strings.ToLower(strings.TrimSuffix(currentDomain, "."))
+	queryDomain = strings.ToLower(strings.TrimSuffix(queryDomain, "."))
+
+	if currentDomain == "" && queryDomain != "" {
+		isRootServerQuery := strings.HasSuffix(queryDomain, ".root-servers.net") || queryDomain == "root-servers.net"
+
+		for _, rr := range response.Answer {
+			answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
+			if answerName == queryDomain {
+				if rr.Header().Rrtype == dns.TypeNS || rr.Header().Rrtype == dns.TypeDS {
+					continue
+				}
+
+				if isRootServerQuery && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
+					continue
+				}
+
+				recordType := dns.TypeToString[rr.Header().Rrtype]
+				reason := fmt.Sprintf("Root server overstepped authority: %s record for '%s'", recordType, queryDomain)
+				return false, reason
+			}
+		}
+	}
+	return true, ""
+}
+
+// =============================================================================
+// TLS Management
+// =============================================================================
+
+func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error) {
+	cert, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
+	if err != nil {
+		return nil, WrapError("load certificate", err)
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	quicAddrValidator, err := NewQUICAddrValidator(QUICAddrValidatorCacheSize, QUICAddrValidatorTTL)
+	if err != nil {
+		cancel()
+		return nil, WrapError("create QUIC validator", err)
+	}
+
+	return &TLSManager{
+		server:            server,
+		tlsConfig:         tlsConfig,
+		ctx:               ctx,
+		cancel:            cancel,
+		quicAddrValidator: quicAddrValidator,
+	}, nil
+}
+
+func (tm *TLSManager) Start(httpsPort string) error {
+	serverCount := 2
+
+	if httpsPort != "" {
+		serverCount += 2
+	}
+
+	errChan := make(chan error, serverCount)
+	wg := sync.WaitGroup{}
+	wg.Add(serverCount)
+
+	go func() {
+		defer wg.Done()
+		defer HandlePanic("Critical-DoT server")
+		if err := tm.StartTLSServer(); err != nil {
+			errChan <- WrapError("DoT startup", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		defer HandlePanic("Critical-DoQ server")
+		if err := tm.StartQUICServer(); err != nil {
+			errChan <- WrapError("DoQ startup", err)
+		}
+	}()
+
+	if httpsPort != "" {
+		go func() {
+			defer wg.Done()
+			defer HandlePanic("Critical-DoH server")
+			if err := tm.StartDoHServer(httpsPort); err != nil {
+				errChan <- WrapError("DoH startup", err)
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			defer HandlePanic("Critical-DoH3 server")
+			if err := tm.StartDoH3Server(httpsPort); err != nil {
+				errChan <- WrapError("DoH3 startup", err)
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(errChan)
+	}()
+
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (tm *TLSManager) StartTLSServer() error {
+	listener, err := net.Listen("tcp", ":"+tm.server.config.Server.TLS.Port)
+	if err != nil {
+		return WrapError("DoT listen", err)
+	}
+
+	tm.tlsListener = tls.NewListener(listener, tm.tlsConfig)
+	LogInfo("DoT server started: %s", tm.tlsListener.Addr())
+
+	tm.wg.Add(1)
+	go func() {
+		defer tm.wg.Done()
+		defer HandlePanic("DoT server")
+		tm.HandleTLSConnections()
+	}()
+
+	return nil
+}
+
+func (tm *TLSManager) StartQUICServer() error {
+	addr := ":" + tm.server.config.Server.TLS.Port
+
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return WrapError("resolve UDP address", err)
+	}
+
+	tm.quicConn, err = net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return WrapError("UDP listen", err)
+	}
+
+	tm.quicTransport = &quic.Transport{
+		Conn:                tm.quicConn,
+		VerifySourceAddress: tm.quicAddrValidator.RequiresValidation,
+	}
+
+	quicTLSConfig := tm.tlsConfig.Clone()
+	quicTLSConfig.NextProtos = NextProtoQUIC
+
+	quicConfig := &quic.Config{
+		MaxIdleTimeout:        SecureIdleTimeout,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
+		KeepAlivePeriod:       SecureKeepAlive,
+		Allow0RTT:             true,
+	}
+
+	tm.quicListener, err = tm.quicTransport.ListenEarly(quicTLSConfig, quicConfig)
+	if err != nil {
+		_ = tm.quicConn.Close()
+		return WrapError("DoQ listen", err)
+	}
+
+	LogInfo("DoQ server started: %s", tm.quicListener.Addr())
+
+	tm.wg.Add(1)
+	go func() {
+		defer tm.wg.Done()
+		defer HandlePanic("DoQ server")
+		tm.HandleQUICConnections()
+	}()
+
+	return nil
+}
+
+func (tm *TLSManager) StartDoHServer(port string) error {
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		return WrapError("DoH listen", err)
+	}
+
+	tlsConfig := tm.tlsConfig.Clone()
+	tlsConfig.NextProtos = []string{http2.NextProtoTLS, "http/1.1"}
+
+	tm.httpsListener = tls.NewListener(listener, tlsConfig)
+	LogInfo("DoH server started: %s", tm.httpsListener.Addr())
+
+	tm.httpsServer = &http.Server{
+		Handler:           tm,
+		ReadHeaderTimeout: DoHReadHeaderTimeout,
+		WriteTimeout:      DoHWriteTimeout,
+	}
+
+	tm.wg.Add(1)
+	go func() {
+		defer tm.wg.Done()
+		defer HandlePanic("DoH server")
+		if err := tm.httpsServer.Serve(tm.httpsListener); err != nil && err != http.ErrServerClosed {
+			LogError("DoH server error: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+func (tm *TLSManager) StartDoH3Server(port string) error {
+	addr := ":" + port
+
+	tlsConfig := tm.tlsConfig.Clone()
+	tlsConfig.NextProtos = NextProtoHTTP3
+
+	quicConfig := &quic.Config{
+		MaxIdleTimeout:        SecureIdleTimeout,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
+		Allow0RTT:             true,
+	}
+
+	quicListener, err := quic.ListenAddrEarly(addr, tlsConfig, quicConfig)
+	if err != nil {
+		return WrapError("DoH3 listen", err)
+	}
+
+	tm.h3Listener = quicListener
+	LogInfo("DoH3 server started: %s", tm.h3Listener.Addr())
+
+	tm.h3Server = &http3.Server{
+		Handler: tm,
+	}
+
+	tm.wg.Add(1)
+	go func() {
+		defer tm.wg.Done()
+		defer HandlePanic("DoH3 server")
+		if err := tm.h3Server.ServeListener(tm.h3Listener); err != nil && err != http.ErrServerClosed {
+			LogError("DoH3 server error: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if tm == nil || tm.server == nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	expectedPath := tm.server.config.Server.TLS.HTTPS.Endpoint
+	if expectedPath == "" {
+		expectedPath = DefaultQueryPath
+	}
+	if !strings.HasPrefix(expectedPath, "/") {
+		expectedPath = "/" + expectedPath
+	}
+
+	if r.URL.Path != expectedPath {
+		http.NotFound(w, r)
+		return
+	}
+
+	if GlobalLog.GetLevel() >= Debug {
+		LogDebug("Received DoH request: %s %s", r.Method, r.URL.Path)
+	}
+
+	req, statusCode := tm.ParseDoHRequest(r)
+	if req == nil {
+		http.Error(w, http.StatusText(statusCode), statusCode)
+		return
+	}
+
+	response := tm.server.ProcessDNSQuery(req, nil, true)
+	if err := tm.RespondDoH(w, response); err != nil {
+		LogError("DoH response failed: %v", err)
+	}
+}
+
+func (tm *TLSManager) ParseDoHRequest(r *http.Request) (*dns.Msg, int) {
+	var buf []byte
+	var err error
+
+	switch r.Method {
+	case http.MethodGet:
+		dnsParam := r.URL.Query().Get("dns")
+		if dnsParam == "" {
+			LogDebug("DoH GET missing dns parameter")
+			return nil, http.StatusBadRequest
+		}
+		buf, err = base64.RawURLEncoding.DecodeString(dnsParam)
+		if err != nil {
+			LogDebug("DoH GET dns parameter decode failed: %v", err)
+			return nil, http.StatusBadRequest
+		}
+
+	case http.MethodPost:
+		contentType := r.Header.Get("Content-Type")
+		if contentType != "application/dns-message" {
+			LogDebug("DoH POST unsupported Content-Type: %s", contentType)
+			return nil, http.StatusUnsupportedMediaType
+		}
+
+		r.Body = http.MaxBytesReader(nil, r.Body, DoHMaxRequestSize)
+		buf, err = io.ReadAll(r.Body)
+		if err != nil {
+			LogDebug("DoH POST body read failed: %v", err)
+			return nil, http.StatusBadRequest
+		}
+		defer func() { _ = r.Body.Close() }()
+
+	default:
+		LogDebug("DoH unsupported method: %s", r.Method)
+		return nil, http.StatusMethodNotAllowed
+	}
+
+	if len(buf) == 0 {
+		LogDebug("DoH request data empty")
+		return nil, http.StatusBadRequest
+	}
+
+	req := new(dns.Msg)
+	if err := req.Unpack(buf); err != nil {
+		LogDebug("DoH DNS message parse failed: %v", err)
+		return nil, http.StatusBadRequest
+	}
+
+	return req, http.StatusOK
+}
+
+func (tm *TLSManager) RespondDoH(w http.ResponseWriter, response *dns.Msg) error {
+	if response == nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return nil
+	}
+
+	bytes, err := response.Pack()
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return WrapError("pack response", err)
+	}
+
+	w.Header().Set("Content-Type", "application/dns-message")
+	w.Header().Set("Cache-Control", "max-age=0")
+
+	_, err = w.Write(bytes)
+	return err
+}
+
+func (tm *TLSManager) HandleTLSConnections() {
+	for {
+		select {
+		case <-tm.ctx.Done():
+			return
+		default:
+		}
+
+		conn, err := tm.tlsListener.Accept()
+		if err != nil {
+			if tm.ctx.Err() != nil {
+				return
+			}
+			LogError("DoT accept failed: %v", err)
+			continue
+		}
+
+		tm.wg.Add(1)
+		go func() {
+			defer tm.wg.Done()
+			defer HandlePanic("DoT connection")
+			defer func() { _ = conn.Close() }()
+			tm.HandleSecureDNSConnection(conn, "DoT")
+		}()
+	}
+}
+
+func (tm *TLSManager) HandleQUICConnections() {
+	for {
+		select {
+		case <-tm.ctx.Done():
+			return
+		default:
+		}
+
+		conn, err := tm.quicListener.Accept(tm.ctx)
+		if err != nil {
+			if tm.ctx.Err() != nil {
+				return
+			}
+			tm.LogQUICError("accept quic conn", err)
+			continue
+		}
+
+		tm.wg.Add(1)
+		go func() {
+			defer tm.wg.Done()
+			defer HandlePanic("DoQ connection")
+			tm.HandleQUICConnection(conn)
+		}()
+	}
+}
+
+func (tm *TLSManager) HandleQUICConnection(conn *quic.Conn) {
+	defer func() {
+		if conn != nil {
+			_ = conn.CloseWithError(QUICCodeNoError, "")
+		}
+	}()
+
+	for {
+		select {
+		case <-tm.ctx.Done():
+			return
+		default:
+		}
+
+		stream, err := conn.AcceptStream(tm.ctx)
+		if err != nil {
+			if conn != nil {
+				tm.LogQUICError("accept quic stream", err)
+			}
+			return
+		}
+
+		if stream == nil {
+			continue
+		}
+
+		tm.wg.Add(1)
+		go func(s *quic.Stream) {
+			defer tm.wg.Done()
+			defer HandlePanic("DoQ stream")
+			if s != nil {
+				defer func() { _ = s.Close() }()
+				tm.HandleQUICStream(s, conn)
+			}
+		}(stream)
+	}
+}
+
+func (tm *TLSManager) HandleQUICStream(stream *quic.Stream, conn *quic.Conn) {
+	buf := make([]byte, SecureBufferSize)
+	n, err := tm.ReadAll(stream, buf)
+
+	if err != nil && err != io.EOF {
+		LogDebug("DoQ stream read failed: %v", err)
+		return
+	}
+
+	if n < MinDNSPacketSize {
+		LogDebug("DoQ message too short: %d bytes", n)
+		return
+	}
+
+	req := new(dns.Msg)
+	var msgData []byte
+
+	packetLen := binary.BigEndian.Uint16(buf[:2])
+	if packetLen == uint16(n-2) {
+		msgData = buf[2:n]
 	} else {
-		return s.ResolveWithCNAME(refreshCtx, question, ecs, nil)
+		LogDebug("DoQ unsupported message format")
+		_ = conn.CloseWithError(QUICCodeProtocolError, "")
+		return
+	}
+
+	if err := req.Unpack(msgData); err != nil {
+		LogDebug("DoQ message parse failed: %v", err)
+		_ = conn.CloseWithError(QUICCodeProtocolError, "")
+		return
+	}
+
+	if !tm.ValidQUICMsg(req) {
+		_ = conn.CloseWithError(QUICCodeProtocolError, "")
+		return
+	}
+
+	clientIP := tm.GetSecureClientIP(conn)
+	response := tm.server.ProcessDNSQuery(req, clientIP, true)
+
+	if err := tm.RespondQUIC(stream, response); err != nil {
+		LogDebug("DoQ response failed: %v", err)
+	}
+}
+
+func (tm *TLSManager) HandleSecureDNSConnection(conn net.Conn, protocol string) {
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return
+	}
+
+	if err := tlsConn.SetReadDeadline(time.Now().Add(QueryTimeout)); err != nil {
+		LogDebug("Set TLS read deadline failed: %v", err)
+	}
+
+	for {
+		select {
+		case <-tm.ctx.Done():
+			return
+		default:
+		}
+
+		lengthBuf := make([]byte, 2)
+		if _, err := io.ReadFull(tlsConn, lengthBuf); err != nil {
+			if err != io.EOF {
+				LogDebug("%s length read failed: %v", protocol, err)
+			}
+			return
+		}
+
+		msgLength := binary.BigEndian.Uint16(lengthBuf)
+		if msgLength == 0 || msgLength > TCPBufferSize {
+			LogWarn("%s invalid message length: %d", protocol, msgLength)
+			return
+		}
+
+		msgBuf := make([]byte, msgLength)
+		if _, err := io.ReadFull(tlsConn, msgBuf); err != nil {
+			LogDebug("%s message read failed: %v", protocol, err)
+			return
+		}
+
+		req := new(dns.Msg)
+		if err := req.Unpack(msgBuf); err != nil {
+			LogDebug("%s message parse failed: %v", protocol, err)
+			return
+		}
+
+		clientIP := tm.GetSecureClientIP(tlsConn)
+		response := tm.server.ProcessDNSQuery(req, clientIP, true)
+
+		respBuf, err := response.Pack()
+		if err != nil {
+			LogError("%s response pack failed: %v", protocol, err)
+			return
+		}
+
+		lengthPrefix := make([]byte, 2)
+		binary.BigEndian.PutUint16(lengthPrefix, uint16(len(respBuf)))
+
+		if _, err := tlsConn.Write(lengthPrefix); err != nil {
+			LogDebug("%s response length write failed: %v", protocol, err)
+			return
+		}
+
+		if _, err := tlsConn.Write(respBuf); err != nil {
+			LogDebug("%s response write failed: %v", protocol, err)
+			return
+		}
+
+		if err := tlsConn.SetReadDeadline(time.Now().Add(QueryTimeout)); err != nil {
+			LogDebug("Update TLS read deadline failed: %v", err)
+		}
+	}
+}
+
+func (tm *TLSManager) GetSecureClientIP(conn interface{}) net.IP {
+	switch c := conn.(type) {
+	case *tls.Conn:
+		if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+			return addr.IP
+		}
+	case *quic.Conn:
+		if addr, ok := c.RemoteAddr().(*net.UDPAddr); ok {
+			return addr.IP
+		}
+	}
+	return nil
+}
+
+func (tm *TLSManager) ValidQUICMsg(req *dns.Msg) bool {
+	if req == nil {
+		return false
+	}
+
+	if opt := req.IsEdns0(); opt != nil {
+		for _, option := range opt.Option {
+			if option.Option() == dns.EDNS0TCPKEEPALIVE {
+				LogDebug("DoQ client sent disallowed TCP keepalive")
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (tm *TLSManager) RespondQUIC(stream *quic.Stream, response *dns.Msg) error {
+	if response == nil {
+		return errors.New("response is nil")
+	}
+
+	respBuf, err := response.Pack()
+	if err != nil {
+		return WrapError("pack response", err)
+	}
+
+	buf := make([]byte, 2+len(respBuf))
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(respBuf)))
+	copy(buf[2:], respBuf)
+
+	n, err := stream.Write(buf)
+	if err != nil {
+		return WrapError("stream write", err)
+	}
+
+	if n != len(buf) {
+		return fmt.Errorf("write length mismatch: %d != %d", n, len(buf))
+	}
+
+	return nil
+}
+
+func (tm *TLSManager) LogQUICError(prefix string, err error) {
+	if tm.IsQUICErrorForDebugLog(err) {
+		LogDebug("DoQ connection closed: %s - %v", prefix, err)
+	} else {
+		LogError("DoQ error: %s - %v", prefix, err)
+	}
+}
+
+func (tm *TLSManager) IsQUICErrorForDebugLog(err error) bool {
+	if errors.Is(err, quic.ErrServerClosed) {
+		return true
+	}
+
+	var qAppErr *quic.ApplicationError
+	if errors.As(err, &qAppErr) &&
+		(qAppErr.ErrorCode == quic.ApplicationErrorCode(quic.NoError) ||
+			qAppErr.ErrorCode == quic.ApplicationErrorCode(quic.ApplicationErrorErrorCode)) {
+		return true
+	}
+
+	if errors.Is(err, quic.Err0RTTRejected) {
+		return true
+	}
+
+	var qIdleErr *quic.IdleTimeoutError
+	return errors.As(err, &qIdleErr)
+}
+
+func (tm *TLSManager) ReadAll(r io.Reader, buf []byte) (int, error) {
+	var n int
+	for n < len(buf) {
+		read, err := r.Read(buf[n:])
+		n += read
+
+		if err != nil {
+			if err == io.EOF {
+				return n, nil
+			}
+			return n, err
+		}
+
+		if n == len(buf) {
+			return n, io.ErrShortBuffer
+		}
+	}
+	return n, nil
+}
+
+func (tm *TLSManager) Shutdown() error {
+	LogInfo("Shutting down secure DNS server...")
+
+	tm.cancel()
+
+	if tm.tlsListener != nil {
+		CloseWithLog(tm.tlsListener, "TLS listener")
+	}
+	if tm.quicListener != nil {
+		CloseWithLog(tm.quicListener, "QUIC listener")
+	}
+	if tm.quicConn != nil {
+		CloseWithLog(tm.quicConn, "QUIC connection")
+	}
+	if tm.quicAddrValidator != nil {
+		tm.quicAddrValidator.Close()
+		LogDebug("QUIC address validator closed")
+	}
+
+	if tm.httpsServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+		defer cancel()
+		if err := tm.httpsServer.Shutdown(ctx); err != nil {
+			LogDebug("HTTPS server shutdown failed: %v", err)
+		}
+	}
+
+	if tm.h3Server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+		defer cancel()
+		if err := tm.h3Server.Shutdown(ctx); err != nil {
+			LogDebug("HTTP/3 server shutdown failed: %v", err)
+		}
+	}
+
+	if tm.httpsListener != nil {
+		CloseWithLog(tm.httpsListener, "HTTPS listener")
+	}
+
+	if tm.h3Listener != nil {
+		CloseWithLog(tm.h3Listener, "HTTP/3 listener")
+	}
+
+	tm.wg.Wait()
+	LogInfo("Secure DNS server shut down")
+	return nil
+}
+
+func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (*QUICAddrValidator, error) {
+	cache, err := ristretto.NewCache(&ristretto.Config[string, struct{}]{
+		NumCounters: int64(cacheSize * 10),
+		MaxCost:     int64(cacheSize),
+		BufferItems: 64,
+	})
+	if err != nil {
+		return nil, WrapError("create ristretto cache", err)
+	}
+
+	LogDebug("QUIC address validator initialized: cacheSize=%d, ttl=%v", cacheSize, ttl)
+
+	return &QUICAddrValidator{
+		cache: cache,
+		ttl:   ttl,
+	}, nil
+}
+
+func (v *QUICAddrValidator) RequiresValidation(addr net.Addr) bool {
+	if v == nil || v.cache == nil {
+		LogDebug("QUIC address validation: validator not initialized")
+		return true
+	}
+
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok {
+		LogDebug("QUIC address validation: unexpected type %T", addr)
+		return true
+	}
+
+	key := udpAddr.IP.String()
+
+	if _, found := v.cache.Get(key); found {
+		LogDebug("QUIC address validation: %s cached, skip", key)
+		return false
+	}
+
+	v.cache.SetWithTTL(key, struct{}{}, 1, v.ttl)
+	LogDebug("QUIC address validation: %s not cached, require validation", key)
+
+	return true
+}
+
+func (v *QUICAddrValidator) Close() {
+	if v != nil && v.cache != nil {
+		v.cache.Close()
+		LogDebug("QUIC address validator closed")
 	}
 }
 
@@ -4262,16 +4207,16 @@ func NewEDNSManager(defaultSubnet string, paddingEnabled bool) (*EDNSManager, er
 	if defaultSubnet != "" {
 		ecs, err := manager.ParseECSConfig(defaultSubnet)
 		if err != nil {
-			return nil, fmt.Errorf("ECS configuration parsing failed: %w", err)
+			return nil, WrapError("parse ECS config", err)
 		}
 		manager.defaultECS = ecs
 		if ecs != nil {
-			Info("Default ECS config: %s/%d", ecs.Address, ecs.SourcePrefix)
+			LogInfo("Default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
 		}
 	}
 
 	if paddingEnabled {
-		Info("DNS Padding enabled (block size: %d bytes)", PaddingBlockSize)
+		LogInfo("DNS Padding enabled (block size: %d bytes)", PaddingBlockSize)
 	}
 
 	return manager, nil
@@ -4366,7 +4311,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 			Address:       ecs.Address,
 		}
 		options = append(options, ecsOption)
-		Debug("Adding ECS option: %s/%d", ecs.Address, ecs.SourcePrefix)
+		LogDebug("Adding ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
 	}
 
 	if em.paddingEnabled && isSecureConnection {
@@ -4381,11 +4326,11 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 					options = append(options, &dns.EDNS0_PADDING{
 						Padding: make([]byte, paddingDataSize),
 					})
-					Debug("DNS Padding: %d -> %d bytes (+%d)", currentSize, PaddingBlockSize, paddingDataSize)
+					LogDebug("DNS Padding: %d -> %d bytes (+%d)", currentSize, PaddingBlockSize, paddingDataSize)
 				}
 			}
 		} else {
-			Debug("Failed to calculate padding: %v", err)
+			LogDebug("Calculate padding failed: %v", err)
 		}
 
 		msg.Extra = msg.Extra[:len(msg.Extra)-1]
@@ -4406,7 +4351,7 @@ func (em *EDNSManager) ParseECSConfig(subnet string) (*ECSOption, error) {
 	default:
 		_, ipNet, err := net.ParseCIDR(subnet)
 		if err != nil {
-			return nil, fmt.Errorf("CIDR parsing failed: %w", err)
+			return nil, WrapError("parse CIDR", err)
 		}
 
 		prefix, _ := ipNet.Mask.Size()
@@ -4506,11 +4451,7 @@ func (d *IPDetector) DetectPublicIP(forceIPv6 bool) net.IP {
 	if err != nil {
 		return nil
 	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			Debug("Closing response body failed: %v", closeErr)
-		}
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -4539,34 +4480,33 @@ func (d *IPDetector) DetectPublicIP(forceIPv6 bool) net.IP {
 }
 
 // =============================================================================
-// DNS Rewriting
+// Rewrite Management
 // =============================================================================
 
-func NewDNSRewriter() *DNSRewriter {
-	return &DNSRewriter{
+func NewRewriteManager() *RewriteManager {
+	return &RewriteManager{
 		rules: make([]RewriteRule, 0, 32),
 	}
 }
 
-func (r *DNSRewriter) LoadRules(rules []RewriteRule) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
 
 	validRules := make([]RewriteRule, 0, len(rules))
 	for _, rule := range rules {
 		if len(rule.Name) > MaxDomainLength {
 			continue
 		}
-
 		validRules = append(validRules, rule)
 	}
 
-	r.rules = validRules
-	Info("DNS rewriter loaded: %d rules", len(validRules))
+	rm.rules = validRules
+	LogInfo("DNS rewriter loaded: %d rules", len(validRules))
 	return nil
 }
 
-func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewriteResult {
+func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRewriteResult {
 	result := DNSRewriteResult{
 		Domain:        domain,
 		ShouldRewrite: false,
@@ -4575,17 +4515,17 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 		Additional:    nil,
 	}
 
-	if !r.HasRules() || len(domain) > MaxDomainLength {
+	if !rm.HasRules() || len(domain) > MaxDomainLength {
 		return result
 	}
 
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
 
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 
-	for i := range r.rules {
-		rule := &r.rules[i]
+	for i := range rm.rules {
+		rule := &rm.rules[i]
 
 		if domain == strings.ToLower(rule.Name) {
 			if rule.ResponseCode != nil {
@@ -4616,14 +4556,14 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 						continue
 					}
 
-					rr := r.BuildDNSRecord(domain, record)
+					rr := rm.BuildDNSRecord(domain, record)
 					if rr != nil {
 						result.Records = append(result.Records, rr)
 					}
 				}
 
 				for _, record := range rule.Additional {
-					rr := r.BuildDNSRecord(domain, record)
+					rr := rm.BuildDNSRecord(domain, record)
 					if rr != nil {
 						result.Additional = append(result.Additional, rr)
 					}
@@ -4638,7 +4578,7 @@ func (r *DNSRewriter) RewriteWithDetails(domain string, qtype uint16) DNSRewrite
 	return result
 }
 
-func (r *DNSRewriter) BuildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
+func (rm *RewriteManager) BuildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
 	ttl := record.TTL
 	if ttl == 0 {
 		ttl = DefaultCacheTTL
@@ -4673,1026 +4613,458 @@ func (r *DNSRewriter) BuildDNSRecord(domain string, record DNSRecordConfig) dns.
 	return rfc3597
 }
 
-func (r *DNSRewriter) HasRules() bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.rules) > 0
+func (rm *RewriteManager) HasRules() bool {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	return len(rm.rules) > 0
 }
 
 // =============================================================================
-// Hijack Prevention
+// SpeedTest Management
 // =============================================================================
 
-func NewHijackPrevention(enabled bool) *HijackPrevention {
-	return &HijackPrevention{enabled: enabled}
-}
-
-func (hp *HijackPrevention) IsEnabled() bool {
-	return hp.enabled
-}
-
-func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string) {
-	if !hp.enabled || response == nil {
-		return true, ""
+func NewSpeedTestManager(config ServerConfig) *SpeedTestManager {
+	st := &SpeedTestManager{
+		timeout:     DefaultSpeedTimeout,
+		concurrency: DefaultSpeedConcurrency,
+		cache:       make(map[string]*SpeedResult),
+		cacheTTL:    DefaultSpeedCacheTTL,
+		methods:     config.SpeedTest,
 	}
 
-	currentDomain = strings.ToLower(strings.TrimSuffix(currentDomain, "."))
-	queryDomain = strings.ToLower(strings.TrimSuffix(queryDomain, "."))
+	st.InitICMP()
 
-	if currentDomain == "" && queryDomain != "" {
-		isRootServerQuery := strings.HasSuffix(queryDomain, ".root-servers.net") || queryDomain == "root-servers.net"
+	return st
+}
 
-		for _, rr := range response.Answer {
-			answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
-			if answerName == queryDomain {
-				if rr.Header().Rrtype == dns.TypeNS || rr.Header().Rrtype == dns.TypeDS {
-					continue
-				}
-
-				if isRootServerQuery && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
-					continue
-				}
-
-				recordType := dns.TypeToString[rr.Header().Rrtype]
-				reason := fmt.Sprintf("Root server overstepped authority and returned %s record for '%s'", recordType, queryDomain)
-				return false, reason
-			}
+func (st *SpeedTestManager) InitICMP() {
+	conn4, err := icmp.ListenPacket("ip4:icmp", "")
+	if err == nil {
+		st.icmpConn4 = conn4
+	} else {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			LogDebug("SpeedTest: no permission for IPv4 ICMP")
+		} else {
+			LogDebug("SpeedTest: cannot create IPv4 ICMP: %v", err)
 		}
 	}
-	return true, ""
+
+	conn6, err := icmp.ListenPacket("ip6:ipv6-icmp", "")
+	if err == nil {
+		st.icmpConn6 = conn6
+	} else {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			LogDebug("SpeedTest: no permission for IPv6 ICMP")
+		} else {
+			LogDebug("SpeedTest: cannot create IPv6 ICMP: %v", err)
+		}
+	}
 }
 
-// =============================================================================
-// DNSSEC Validation
-// =============================================================================
-
-func NewDNSSECValidator() *DNSSECValidator {
-	return &DNSSECValidator{}
+func (st *SpeedTestManager) Close() error {
+	if st.icmpConn4 != nil {
+		_ = st.icmpConn4.Close()
+	}
+	if st.icmpConn6 != nil {
+		_ = st.icmpConn6.Close()
+	}
+	return nil
 }
 
-func (v *DNSSECValidator) HasDNSSECRecords(response *dns.Msg) bool {
+func (st *SpeedTestManager) PerformSpeedTestAndSort(response *dns.Msg) *dns.Msg {
 	if response == nil {
-		return false
+		LogDebug("SpeedTest: response is nil")
+		return response
 	}
 
-	for _, sections := range [][]dns.RR{response.Answer, response.Ns, response.Extra} {
-		for _, rr := range sections {
-			switch rr.(type) {
-			case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
-				return true
+	LogDebug("SpeedTest: processing response, answer count: %d", len(response.Answer))
+
+	var aRecords []*dns.A
+	var aaaaRecords []*dns.AAAA
+	var cnameRecords []dns.RR
+	var otherRecords []dns.RR
+
+	for _, answer := range response.Answer {
+		switch record := answer.(type) {
+		case *dns.A:
+			aRecords = append(aRecords, record)
+		case *dns.AAAA:
+			aaaaRecords = append(aaaaRecords, record)
+		case *dns.CNAME:
+			cnameRecords = append(cnameRecords, record)
+		default:
+			otherRecords = append(otherRecords, record)
+		}
+	}
+
+	LogDebug("SpeedTest: A=%d, AAAA=%d, CNAME=%d", len(aRecords), len(aaaaRecords), len(cnameRecords))
+
+	if len(aRecords) > 1 {
+		LogDebug("SpeedTest: sorting %d A records", len(aRecords))
+		aRecords = st.SortARecords(aRecords)
+	} else {
+		LogDebug("SpeedTest: A records insufficient, skip")
+	}
+
+	if len(aaaaRecords) > 1 {
+		LogDebug("SpeedTest: sorting %d AAAA records", len(aaaaRecords))
+		aaaaRecords = st.SortAAAARecords(aaaaRecords)
+	} else {
+		LogDebug("SpeedTest: AAAA records insufficient, skip")
+	}
+
+	response.Answer = []dns.RR{}
+
+	response.Answer = append(response.Answer, cnameRecords...)
+
+	for _, record := range aRecords {
+		response.Answer = append(response.Answer, record)
+	}
+
+	for _, record := range aaaaRecords {
+		response.Answer = append(response.Answer, record)
+	}
+
+	response.Answer = append(response.Answer, otherRecords...)
+
+	LogDebug("SpeedTest: processing completed, answer count: %d", len(response.Answer))
+
+	return response
+}
+
+func (st *SpeedTestManager) SortARecords(records []*dns.A) []*dns.A {
+	if len(records) <= 1 {
+		return records
+	}
+
+	ips := make([]string, len(records))
+	for i, record := range records {
+		ips[i] = record.A.String()
+	}
+
+	results := st.SpeedTest(ips)
+
+	sort.Slice(records, func(i, j int) bool {
+		ipI := records[i].A.String()
+		ipJ := records[j].A.String()
+
+		resultI, okI := results[ipI]
+		resultJ, okJ := results[ipJ]
+
+		if !okI || !okJ {
+			return i < j
+		}
+
+		if !resultI.Reachable && resultJ.Reachable {
+			return false
+		}
+		if resultI.Reachable && !resultJ.Reachable {
+			return true
+		}
+
+		return resultI.Latency < resultJ.Latency
+	})
+
+	return records
+}
+
+func (st *SpeedTestManager) SortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
+	if len(records) <= 1 {
+		return records
+	}
+
+	ips := make([]string, len(records))
+	for i, record := range records {
+		ips[i] = record.AAAA.String()
+	}
+
+	results := st.SpeedTest(ips)
+
+	sort.Slice(records, func(i, j int) bool {
+		ipI := records[i].AAAA.String()
+		ipJ := records[j].AAAA.String()
+
+		resultI, okI := results[ipI]
+		resultJ, okJ := results[ipJ]
+
+		if !okI || !okJ {
+			return i < j
+		}
+
+		if !resultI.Reachable && resultJ.Reachable {
+			return false
+		}
+		if resultI.Reachable && !resultJ.Reachable {
+			return true
+		}
+
+		return resultI.Latency < resultJ.Latency
+	})
+
+	return records
+}
+
+func (st *SpeedTestManager) SpeedTest(ips []string) map[string]*SpeedResult {
+	cachedResults := make(map[string]*SpeedResult)
+	remainingIPs := []string{}
+
+	st.cacheMutex.RLock()
+	now := time.Now()
+	for _, ip := range ips {
+		if result, exists := st.cache[ip]; exists {
+			if now.Sub(result.Timestamp) < st.cacheTTL {
+				cachedResults[ip] = result
+			} else {
+				remainingIPs = append(remainingIPs, ip)
 			}
+		} else {
+			remainingIPs = append(remainingIPs, ip)
 		}
 	}
-	return false
+	st.cacheMutex.RUnlock()
+
+	if len(remainingIPs) == 0 {
+		LogDebug("SpeedTest: all IPs cached")
+		return cachedResults
+	}
+
+	LogDebug("SpeedTest: testing %d IPs, %d cached", len(remainingIPs), len(cachedResults))
+
+	newResults := st.PerformSpeedTest(remainingIPs)
+
+	results := make(map[string]*SpeedResult)
+	for ip, result := range cachedResults {
+		results[ip] = result
+	}
+	for ip, result := range newResults {
+		results[ip] = result
+	}
+
+	st.cacheMutex.Lock()
+	for ip, result := range newResults {
+		st.cache[ip] = result
+	}
+	st.cacheMutex.Unlock()
+
+	return results
 }
 
-func (v *DNSSECValidator) IsValidated(response *dns.Msg) bool {
-	if response == nil {
-		return false
-	}
-	if response.AuthenticatedData {
-		return true
-	}
-	return v.HasDNSSECRecords(response)
-}
+func (st *SpeedTestManager) PerformSpeedTest(ips []string) map[string]*SpeedResult {
+	LogDebug("SpeedTest: starting concurrent test for %d IPs", len(ips))
 
-func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
-	if !dnssecOK || response == nil {
-		return false
-	}
-	return v.IsValidated(response)
-}
+	semaphore := make(chan struct{}, st.concurrency)
+	resultChan := make(chan *SpeedResult, len(ips))
 
-// =============================================================================
-// Record Handling
-// =============================================================================
-
-func NewRecordHandler() *RecordHandler {
-	return &RecordHandler{}
-}
-
-func (rh *RecordHandler) CompactRecord(rr dns.RR) *CompactRecord {
-	if rh == nil || rr == nil {
-		return nil
-	}
-	return &CompactRecord{
-		Text:    rr.String(),
-		OrigTTL: rr.Header().Ttl,
-		Type:    rr.Header().Rrtype,
-	}
-}
-
-func (rh *RecordHandler) ExpandRecord(cr *CompactRecord) dns.RR {
-	if rh == nil || cr == nil || cr.Text == "" {
-		return nil
-	}
-	rr, err := dns.NewRR(cr.Text)
-	if err != nil {
-		return nil
-	}
-	return rr
-}
-
-func (rh *RecordHandler) CompactRecords(rrs []dns.RR) []*CompactRecord {
-	if rh == nil || len(rrs) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]bool, len(rrs))
-	result := make([]*CompactRecord, 0, len(rrs))
-
-	for _, rr := range rrs {
-		if rr == nil || rr.Header().Rrtype == dns.TypeOPT {
-			continue
-		}
-
-		rrText := rr.String()
-		if !seen[rrText] {
-			seen[rrText] = true
-			if cr := rh.CompactRecord(rr); cr != nil {
-				result = append(result, cr)
-			}
-		}
-	}
-	return result
-}
-
-func (rh *RecordHandler) ExpandRecords(crs []*CompactRecord) []dns.RR {
-	if rh == nil || len(crs) == 0 {
-		return nil
-	}
-	result := make([]dns.RR, 0, len(crs))
-	for _, cr := range crs {
-		if rr := rh.ExpandRecord(cr); rr != nil {
-			result = append(result, rr)
-		}
-	}
-	return result
-}
-
-func (rh *RecordHandler) ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
-	if rh == nil || len(rrs) == 0 {
-		return nil
-	}
-
-	result := make([]dns.RR, 0, len(rrs))
-	for _, rr := range rrs {
-		if rr == nil {
-			continue
-		}
-
-		if !includeDNSSEC {
-			switch rr.(type) {
-			case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
-				continue
-			}
-		}
-
-		newRR := dns.Copy(rr)
-		if newRR != nil {
-			if ttl > 0 {
-				newRR.Header().Ttl = ttl
-			}
-			result = append(result, newRR)
-		}
-	}
-	return result
-}
-
-// =============================================================================
-// Cache Utilities
-// =============================================================================
-
-func NewCacheUtils() *CacheUtils {
-	return &CacheUtils{}
-}
-
-func (cu *CacheUtils) BuildKey(question dns.Question, ecs *ECSOption, dnssecEnabled bool) string {
-	if cu == nil {
-		return ""
-	}
-
-	sb := globalResourceManager.GetStringBuilder()
-	defer globalResourceManager.PutStringBuilder(sb)
-
-	sb.WriteString(strings.ToLower(question.Name))
-	sb.WriteByte(':')
-	fmt.Fprintf(sb, "%d", question.Qtype)
-	sb.WriteByte(':')
-	fmt.Fprintf(sb, "%d", question.Qclass)
-
-	if ecs != nil {
-		sb.WriteByte(':')
-		sb.WriteString(ecs.Address.String())
-		sb.WriteByte('/')
-		fmt.Fprintf(sb, "%d", ecs.SourcePrefix)
-	}
-
-	if dnssecEnabled {
-		sb.WriteString(":dnssec")
-	}
-
-	result := sb.String()
-	if len(result) > 512 {
-		result = fmt.Sprintf("hash:%x", result)[:512]
-	}
-	return result
-}
-
-func (cu *CacheUtils) CalculateTTL(rrs []dns.RR) int {
-	if cu == nil || len(rrs) == 0 {
-		return DefaultCacheTTL
-	}
-
-	minTTL := int(rrs[0].Header().Ttl)
-	for _, rr := range rrs {
-		if rr == nil {
-			continue
-		}
-		if ttl := int(rr.Header().Ttl); ttl > 0 && (minTTL == 0 || ttl < minTTL) {
-			minTTL = ttl
-		}
-	}
-
-	if minTTL <= 0 {
-		minTTL = DefaultCacheTTL
-	}
-
-	return minTTL
-}
-
-// =============================================================================
-// Security & TLS Management
-// =============================================================================
-
-func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error) {
-	cert, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("certificate loading failed: %w", err)
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	quicAddrValidator, err := NewQUICAddrValidator(QUICAddrValidatorCacheSize, QUICAddrValidatorTTL)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create QUIC address validator: %w", err)
-	}
-
-	return &TLSManager{
-		server:            server,
-		tlsConfig:         tlsConfig,
-		ctx:               ctx,
-		cancel:            cancel,
-		quicAddrValidator: quicAddrValidator,
-	}, nil
-}
-
-func (tm *TLSManager) Start(httpsPort string) error {
-	serverCount := 2
-
-	if httpsPort != "" {
-		serverCount += 2
-	}
-
-	errChan := make(chan error, serverCount)
-	wg := sync.WaitGroup{}
-	wg.Add(serverCount)
-
-	go func() {
-		defer wg.Done()
-		defer func() { RecoverPanic("Critical-DoT server") }()
-		if err := tm.StartTLSServer(); err != nil {
-			errChan <- fmt.Errorf("DoT startup failed: %w", err)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		defer func() { RecoverPanic("Critical-DoQ server") }()
-		if err := tm.StartQUICServer(); err != nil {
-			errChan <- fmt.Errorf("DoQ startup failed: %w", err)
-		}
-	}()
-
-	if httpsPort != "" {
-		go func() {
+	var wg sync.WaitGroup
+	for _, ip := range ips {
+		wg.Add(1)
+		go func(ip string) {
 			defer wg.Done()
-			defer func() { RecoverPanic("Critical-DoH server") }()
-			if err := tm.StartDoHServer(httpsPort); err != nil {
-				errChan <- fmt.Errorf("DoH startup failed: %w", err)
-			}
-		}()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
 
-		go func() {
-			defer wg.Done()
-			defer func() { RecoverPanic("Critical-DoH3 server") }()
-			if err := tm.StartDoH3Server(httpsPort); err != nil {
-				errChan <- fmt.Errorf("DoH3 startup failed: %w", err)
-			}
-		}()
+			result := st.TestSingleIP(ip)
+			resultChan <- result
+		}(ip)
 	}
 
 	go func() {
 		wg.Wait()
-		close(errChan)
+		close(resultChan)
 	}()
 
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
+	results := make(map[string]*SpeedResult)
+	for result := range resultChan {
+		results[result.IP] = result
 	}
 
-	return nil
+	LogDebug("SpeedTest: concurrent test completed, got %d results", len(results))
+
+	return results
 }
 
-func (tm *TLSManager) StartTLSServer() error {
-	listener, err := net.Listen("tcp", ":"+tm.server.config.Server.TLS.Port)
-	if err != nil {
-		return fmt.Errorf("DoT listening failed: %w", err)
+func (st *SpeedTestManager) TestSingleIP(ip string) *SpeedResult {
+	LogDebug("SpeedTest: testing IP %s", ip)
+
+	result := &SpeedResult{
+		IP:        ip,
+		Timestamp: time.Now(),
 	}
 
-	tm.tlsListener = tls.NewListener(listener, tm.tlsConfig)
-	Info("DoT server started: %s", tm.tlsListener.Addr())
+	totalTimeout := time.Duration(st.timeout)
+	totalTimeoutCtx, totalCancel := context.WithTimeout(context.Background(), totalTimeout)
+	defer totalCancel()
 
-	tm.wg.Add(1)
-	go func() {
-		defer tm.wg.Done()
-		defer func() { RecoverPanic("DoT server") }()
-		tm.HandleTLSConnections()
-	}()
+	for _, method := range st.methods {
+		select {
+		case <-totalTimeoutCtx.Done():
+			result.Reachable = false
+			result.Latency = st.timeout
+			LogDebug("SpeedTest: IP %s total timeout", ip)
+			return result
+		default:
+		}
 
-	return nil
+		var latency time.Duration
+		switch method.Type {
+		case "icmp":
+			latency = st.PingWithICMP(ip, time.Duration(method.Timeout)*time.Millisecond)
+		case "tcp":
+			latency = st.PingWithTCP(ip, method.Port, time.Duration(method.Timeout)*time.Millisecond)
+		case "udp":
+			latency = st.PingWithUDP(ip, method.Port, time.Duration(method.Timeout)*time.Millisecond)
+		default:
+			continue
+		}
+
+		if latency >= 0 {
+			result.Reachable = true
+			result.Latency = latency
+			LogDebug("SpeedTest: IP %s %s successful, latency: %v", ip, method.Type, result.Latency)
+			return result
+		}
+	}
+
+	result.Reachable = false
+	result.Latency = st.timeout
+	LogDebug("SpeedTest: IP %s all attempts failed", ip)
+	return result
 }
 
-func (tm *TLSManager) StartQUICServer() error {
-	addr := ":" + tm.server.config.Server.TLS.Port
+func (st *SpeedTestManager) PingWithICMP(ip string, timeout time.Duration) time.Duration {
+	LogDebug("SpeedTest: ICMP ping %s", ip)
 
-	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	dst, err := net.ResolveIPAddr("ip", ip)
 	if err != nil {
-		return fmt.Errorf("UDP address parsing failed: %w", err)
+		LogDebug("SpeedTest: cannot parse IP %s: %v", ip, err)
+		return -1
 	}
 
-	tm.quicConn, err = net.ListenUDP("udp", udpAddr)
+	var conn *icmp.PacketConn
+	if dst.IP.To4() != nil {
+		conn = st.icmpConn4
+	} else {
+		conn = st.icmpConn6
+	}
+
+	if conn == nil {
+		LogDebug("SpeedTest: no ICMP connection for %s", ip)
+		return -1
+	}
+
+	var icmpType icmp.Type
+	var protocol int
+	if dst.IP.To4() != nil {
+		icmpType = ipv4.ICMPTypeEcho
+		protocol = 1
+	} else {
+		icmpType = ipv6.ICMPTypeEchoRequest
+		protocol = 58
+	}
+
+	wm := icmp.Message{
+		Type: icmpType,
+		Code: 0,
+		Body: &icmp.Echo{
+			ID:   os.Getpid() & 0xffff,
+			Seq:  1,
+			Data: []byte("ZJDNS SpeedTest"),
+		},
+	}
+
+	wb, err := wm.Marshal(nil)
 	if err != nil {
-		return fmt.Errorf("UDP listening failed: %w", err)
+		LogDebug("SpeedTest: cannot marshal ICMP %s: %v", ip, err)
+		return -1
 	}
 
-	tm.quicTransport = &quic.Transport{
-		Conn:                tm.quicConn,
-		VerifySourceAddress: tm.quicAddrValidator.RequiresValidation,
-	}
+	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
 
-	quicTLSConfig := tm.tlsConfig.Clone()
-	quicTLSConfig.NextProtos = NextProtoQUIC
+	start := time.Now()
 
-	quicConfig := &quic.Config{
-		MaxIdleTimeout:        SecureIdleTimeout,
-		MaxIncomingStreams:    MaxIncomingStreams,
-		MaxIncomingUniStreams: MaxIncomingStreams,
-		KeepAlivePeriod:       SecureKeepAlive,
-		Allow0RTT:             true,
-	}
-
-	tm.quicListener, err = tm.quicTransport.ListenEarly(quicTLSConfig, quicConfig)
+	_, err = conn.WriteTo(wb, dst)
 	if err != nil {
-		if closeErr := tm.quicConn.Close(); closeErr != nil {
-			Debug("Closing QUIC connection failed: %v", closeErr)
-		}
-		return fmt.Errorf("DoQ listening failed: %w", err)
+		LogDebug("SpeedTest: ICMP send failed %s: %v", ip, err)
+		return -1
 	}
 
-	Info("DoQ server started: %s", tm.quicListener.Addr())
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 
-	tm.wg.Add(1)
-	go func() {
-		defer tm.wg.Done()
-		defer func() { RecoverPanic("DoQ server") }()
-		tm.HandleQUICConnections()
-	}()
-
-	return nil
-}
-
-func (tm *TLSManager) StartDoHServer(port string) error {
-	listener, err := net.Listen("tcp", ":"+port)
+	rb := make([]byte, 1500)
+	n, peer, err := conn.ReadFrom(rb)
 	if err != nil {
-		return fmt.Errorf("DoH listening failed: %w", err)
-	}
-
-	tlsConfig := tm.tlsConfig.Clone()
-	tlsConfig.NextProtos = []string{http2.NextProtoTLS, "http/1.1"}
-
-	tm.httpsListener = tls.NewListener(listener, tlsConfig)
-	Info("DoH server started: %s", tm.httpsListener.Addr())
-
-	tm.httpsServer = &http.Server{
-		Handler:           tm,
-		ReadHeaderTimeout: DoHReadHeaderTimeout,
-		WriteTimeout:      DoHWriteTimeout,
-	}
-
-	tm.wg.Add(1)
-	go func() {
-		defer tm.wg.Done()
-		defer func() { RecoverPanic("DoH server") }()
-		if err := tm.httpsServer.Serve(tm.httpsListener); err != nil && err != http.ErrServerClosed {
-			Error("DoH server error: %v", err)
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			LogDebug("SpeedTest: ICMP timeout %s", ip)
+		} else {
+			LogDebug("SpeedTest: ICMP read failed %s: %v", ip, err)
 		}
-	}()
-
-	return nil
-}
-
-func (tm *TLSManager) StartDoH3Server(port string) error {
-	addr := ":" + port
-
-	tlsConfig := tm.tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoHTTP3
-
-	quicConfig := &quic.Config{
-		MaxIdleTimeout:        SecureIdleTimeout,
-		MaxIncomingStreams:    MaxIncomingStreams,
-		MaxIncomingUniStreams: MaxIncomingStreams,
-		Allow0RTT:             true,
+		return -1
 	}
 
-	quicListener, err := quic.ListenAddrEarly(addr, tlsConfig, quicConfig)
+	LogDebug("SpeedTest: received reply from %v, size %d bytes", peer, n)
+
+	rm, err := icmp.ParseMessage(protocol, rb[:n])
 	if err != nil {
-		return fmt.Errorf("DoH3 listening failed: %w", err)
+		LogDebug("SpeedTest: cannot parse ICMP reply %s: %v", ip, err)
+		return -1
 	}
 
-	tm.h3Listener = quicListener
-	Info("DoH3 server started: %s", tm.h3Listener.Addr())
-
-	tm.h3Server = &http3.Server{
-		Handler: tm,
-	}
-
-	tm.wg.Add(1)
-	go func() {
-		defer tm.wg.Done()
-		defer func() { RecoverPanic("DoH3 server") }()
-		if err := tm.h3Server.ServeListener(tm.h3Listener); err != nil && err != http.ErrServerClosed {
-			Error("DoH3 server error: %v", err)
-		}
-	}()
-
-	return nil
-}
-
-func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if tm == nil || tm.server == nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	expectedPath := tm.server.config.Server.TLS.HTTPS.Endpoint
-	if expectedPath == "" {
-		expectedPath = DefaultQueryPath
-	}
-	if !strings.HasPrefix(expectedPath, "/") {
-		expectedPath = "/" + expectedPath
-	}
-
-	if r.URL.Path != expectedPath {
-		http.NotFound(w, r)
-		return
-	}
-
-	if globalLogger.GetLevel() >= LogDebug {
-		Debug("Received DoH request: %s %s", r.Method, r.URL.Path)
-	}
-
-	req, statusCode := tm.ParseDoHRequest(r)
-	if req == nil {
-		http.Error(w, http.StatusText(statusCode), statusCode)
-		return
-	}
-
-	response := tm.server.ProcessDNSQuery(req, nil, true)
-	if err := tm.RespondDoH(w, response); err != nil {
-		Error("DoH response sending failed: %v", err)
-	}
-}
-
-func (tm *TLSManager) ParseDoHRequest(r *http.Request) (*dns.Msg, int) {
-	var buf []byte
-	var err error
-
-	switch r.Method {
-	case http.MethodGet:
-		dnsParam := r.URL.Query().Get("dns")
-		if dnsParam == "" {
-			Debug("DoH GET request missing dns parameter")
-			return nil, http.StatusBadRequest
-		}
-		buf, err = base64.RawURLEncoding.DecodeString(dnsParam)
-		if err != nil {
-			Debug("DoH GET request dns parameter decoding failed: %v", err)
-			return nil, http.StatusBadRequest
-		}
-
-	case http.MethodPost:
-		contentType := r.Header.Get("Content-Type")
-		if contentType != "application/dns-message" {
-			Debug("DoH POST request Content-Type not supported: %s", contentType)
-			return nil, http.StatusUnsupportedMediaType
-		}
-
-		r.Body = http.MaxBytesReader(nil, r.Body, DoHMaxRequestSize)
-		buf, err = io.ReadAll(r.Body)
-		if err != nil {
-			Debug("DoH POST request body reading failed: %v", err)
-			return nil, http.StatusBadRequest
-		}
-		defer func() {
-			if closeErr := r.Body.Close(); closeErr != nil {
-				Debug("Closing request body failed: %v", closeErr)
-			}
-		}()
-
+	switch rm.Type {
+	case ipv4.ICMPTypeEchoReply, ipv6.ICMPTypeEchoReply:
+		latency := time.Since(start)
+		LogDebug("SpeedTest: ICMP ping successful %s, latency: %v", ip, latency)
+		return latency
 	default:
-		Debug("DoH request method not supported: %s", r.Method)
-		return nil, http.StatusMethodNotAllowed
+		LogDebug("SpeedTest: unexpected ICMP type %s: %v", ip, rm.Type)
+		return -1
 	}
-
-	if len(buf) == 0 {
-		Debug("DoH request data is empty")
-		return nil, http.StatusBadRequest
-	}
-
-	req := new(dns.Msg)
-	if err := req.Unpack(buf); err != nil {
-		Debug("DoH DNS message parsing failed: %v", err)
-		return nil, http.StatusBadRequest
-	}
-
-	return req, http.StatusOK
 }
 
-func (tm *TLSManager) RespondDoH(w http.ResponseWriter, response *dns.Msg) error {
-	if response == nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return nil
-	}
+func (st *SpeedTestManager) PingWithTCP(ip, port string, timeout time.Duration) time.Duration {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-	bytes, err := response.Pack()
+	start := time.Now()
+
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(ip, port))
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return fmt.Errorf("response packing failed: %w", err)
+		LogDebug("SpeedTest: TCP failed %s:%s - %v", ip, port, err)
+		return -1
 	}
 
-	w.Header().Set("Content-Type", "application/dns-message")
-	w.Header().Set("Cache-Control", "max-age=0")
+	latency := time.Since(start)
+	_ = conn.Close()
 
-	_, err = w.Write(bytes)
-	return err
+	LogDebug("SpeedTest: TCP successful %s:%s, latency: %v", ip, port, latency)
+
+	return latency
 }
 
-func (tm *TLSManager) HandleTLSConnections() {
-	for {
-		select {
-		case <-tm.ctx.Done():
-			return
-		default:
-		}
+func (st *SpeedTestManager) PingWithUDP(ip, port string, timeout time.Duration) time.Duration {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-		conn, err := tm.tlsListener.Accept()
-		if err != nil {
-			if tm.ctx.Err() != nil {
-				return
-			}
-			Error("DoT connection accept failed: %v", err)
-			continue
-		}
+	start := time.Now()
 
-		tm.wg.Add(1)
-		go func() {
-			defer tm.wg.Done()
-			defer func() { RecoverPanic("DoT connection handling") }()
-			defer func() {
-				if closeErr := conn.Close(); closeErr != nil {
-					Debug("Closing DoT connection failed: %v", closeErr)
-				}
-			}()
-			tm.HandleSecureDNSConnection(conn, "DoT")
-		}()
-	}
-}
-
-func (tm *TLSManager) HandleQUICConnections() {
-	for {
-		select {
-		case <-tm.ctx.Done():
-			return
-		default:
-		}
-
-		conn, err := tm.quicListener.Accept(tm.ctx)
-		if err != nil {
-			if tm.ctx.Err() != nil {
-				return
-			}
-			tm.LogQUICError("accepting quic conn", err)
-			continue
-		}
-
-		tm.wg.Add(1)
-		go func() {
-			defer tm.wg.Done()
-			defer func() { RecoverPanic("DoQ connection handling") }()
-			tm.HandleQUICConnection(conn)
-		}()
-	}
-}
-
-func (tm *TLSManager) HandleQUICConnection(conn *quic.Conn) {
-	defer func() {
-		if conn != nil {
-			if closeErr := conn.CloseWithError(QUICCodeNoError, ""); closeErr != nil {
-				Debug("Closing QUIC connection failed: %v", closeErr)
-			}
-		}
-	}()
-
-	for {
-		select {
-		case <-tm.ctx.Done():
-			return
-		default:
-		}
-
-		stream, err := conn.AcceptStream(tm.ctx)
-		if err != nil {
-			if conn != nil {
-				tm.LogQUICError("accepting quic stream", err)
-			}
-			return
-		}
-
-		if stream == nil {
-			continue
-		}
-
-		tm.wg.Add(1)
-		go func(s *quic.Stream) {
-			defer tm.wg.Done()
-			defer func() { RecoverPanic("DoQ stream handling") }()
-			if s != nil {
-				defer func() {
-					if closeErr := s.Close(); closeErr != nil {
-						Debug("Closing QUIC stream failed: %v", closeErr)
-					}
-				}()
-				tm.HandleQUICStream(s, conn)
-			}
-		}(stream)
-	}
-}
-
-func (tm *TLSManager) HandleQUICStream(stream *quic.Stream, conn *quic.Conn) {
-	buf := make([]byte, SecureBufferSize)
-	n, err := tm.ReadAll(stream, buf)
-
-	if err != nil && err != io.EOF {
-		Debug("DoQ stream reading failed: %v", err)
-		return
-	}
-
-	if n < MinDNSPacketSize {
-		Debug("DoQ message too short: %d bytes", n)
-		return
-	}
-
-	req := new(dns.Msg)
-	var msgData []byte
-
-	packetLen := binary.BigEndian.Uint16(buf[:2])
-	if packetLen == uint16(n-2) {
-		msgData = buf[2:n]
-	} else {
-		Debug("DoQ unsupported message format")
-		if closeErr := conn.CloseWithError(QUICCodeProtocolError, ""); closeErr != nil {
-			Debug("Closing QUIC connection failed: %v", closeErr)
-		}
-		return
-	}
-
-	if err := req.Unpack(msgData); err != nil {
-		Debug("DoQ message parsing failed: %v", err)
-		if closeErr := conn.CloseWithError(QUICCodeProtocolError, ""); closeErr != nil {
-			Debug("Closing QUIC connection failed: %v", closeErr)
-		}
-		return
-	}
-
-	if !tm.ValidQUICMsg(req) {
-		if closeErr := conn.CloseWithError(QUICCodeProtocolError, ""); closeErr != nil {
-			Debug("Closing QUIC connection failed: %v", closeErr)
-		}
-		return
-	}
-
-	clientIP := tm.GetSecureClientIP(conn)
-	response := tm.server.ProcessDNSQuery(req, clientIP, true)
-
-	if err := tm.RespondQUIC(stream, response); err != nil {
-		Debug("DoQ response sending failed: %v", err)
-	}
-}
-
-func (tm *TLSManager) HandleSecureDNSConnection(conn net.Conn, protocol string) {
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
-		return
-	}
-
-	if deadlineErr := tlsConn.SetReadDeadline(time.Now().Add(QueryTimeout)); deadlineErr != nil {
-		Debug("Setting TLS read deadline failed: %v", deadlineErr)
-	}
-
-	for {
-		select {
-		case <-tm.ctx.Done():
-			return
-		default:
-		}
-
-		lengthBuf := make([]byte, 2)
-		if _, err := io.ReadFull(tlsConn, lengthBuf); err != nil {
-			if err != io.EOF {
-				Debug("%s length reading failed: %v", protocol, err)
-			}
-			return
-		}
-
-		msgLength := binary.BigEndian.Uint16(lengthBuf)
-		if msgLength == 0 || msgLength > TCPBufferSize {
-			Warn("%s message length abnormal: %d", protocol, msgLength)
-			return
-		}
-
-		msgBuf := make([]byte, msgLength)
-		if _, err := io.ReadFull(tlsConn, msgBuf); err != nil {
-			Debug("%s message reading failed: %v", protocol, err)
-			return
-		}
-
-		req := new(dns.Msg)
-		if err := req.Unpack(msgBuf); err != nil {
-			Debug("%s message parsing failed: %v", protocol, err)
-			return
-		}
-
-		clientIP := tm.GetSecureClientIP(tlsConn)
-		response := tm.server.ProcessDNSQuery(req, clientIP, true)
-
-		respBuf, err := response.Pack()
-		if err != nil {
-			Error("%s response packing failed: %v", protocol, err)
-			return
-		}
-
-		lengthPrefix := make([]byte, 2)
-		binary.BigEndian.PutUint16(lengthPrefix, uint16(len(respBuf)))
-
-		if _, err := tlsConn.Write(lengthPrefix); err != nil {
-			Debug("%s response length writing failed: %v", protocol, err)
-			return
-		}
-
-		if _, err := tlsConn.Write(respBuf); err != nil {
-			Debug("%s response writing failed: %v", protocol, err)
-			return
-		}
-
-		if deadlineErr := tlsConn.SetReadDeadline(time.Now().Add(QueryTimeout)); deadlineErr != nil {
-			Debug("Updating TLS read deadline failed: %v", deadlineErr)
-		}
-	}
-}
-
-func (tm *TLSManager) GetSecureClientIP(conn interface{}) net.IP {
-	switch c := conn.(type) {
-	case *tls.Conn:
-		if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
-			return addr.IP
-		}
-	case *quic.Conn:
-		if addr, ok := c.RemoteAddr().(*net.UDPAddr); ok {
-			return addr.IP
-		}
-	}
-	return nil
-}
-
-func (tm *TLSManager) ValidQUICMsg(req *dns.Msg) bool {
-	if req == nil {
-		return false
-	}
-
-	if opt := req.IsEdns0(); opt != nil {
-		for _, option := range opt.Option {
-			if option.Option() == dns.EDNS0TCPKEEPALIVE {
-				Debug("DoQ client sent disallowed TCP keepalive option")
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func (tm *TLSManager) RespondQUIC(stream *quic.Stream, response *dns.Msg) error {
-	if response == nil {
-		return errors.New("response message is empty")
-	}
-
-	respBuf, err := response.Pack()
+	conn, err := (&net.Dialer{}).DialContext(ctx, "udp", net.JoinHostPort(ip, port))
 	if err != nil {
-		return fmt.Errorf("response packing failed: %w", err)
+		LogDebug("SpeedTest: UDP failed %s:%s - %v", ip, port, err)
+		return -1
 	}
 
-	buf := make([]byte, 2+len(respBuf))
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(respBuf)))
-	copy(buf[2:], respBuf)
-
-	n, err := stream.Write(buf)
-	if err != nil {
-		return fmt.Errorf("stream writing failed: %w", err)
+	_, writeErr := conn.Write([]byte{})
+	if writeErr != nil {
+		LogDebug("SpeedTest: UDP send failed %s:%s - %v", ip, port, writeErr)
+		_ = conn.Close()
+		return -1
 	}
 
-	if n != len(buf) {
-		return fmt.Errorf("write length mismatch: %d != %d", n, len(buf))
-	}
+	latency := time.Since(start)
+	_ = conn.Close()
 
-	return nil
-}
+	LogDebug("SpeedTest: UDP successful %s:%s, latency: %v", ip, port, latency)
 
-func (tm *TLSManager) LogQUICError(prefix string, err error) {
-	if tm.IsQUICErrorForDebugLog(err) {
-		Debug("DoQ connection closed: %s - %v", prefix, err)
-	} else {
-		Error("DoQ error: %s - %v", prefix, err)
-	}
-}
-
-func (tm *TLSManager) IsQUICErrorForDebugLog(err error) bool {
-	if errors.Is(err, quic.ErrServerClosed) {
-		return true
-	}
-
-	var qAppErr *quic.ApplicationError
-	if errors.As(err, &qAppErr) &&
-		(qAppErr.ErrorCode == quic.ApplicationErrorCode(quic.NoError) ||
-			qAppErr.ErrorCode == quic.ApplicationErrorCode(quic.ApplicationErrorErrorCode)) {
-		return true
-	}
-
-	if errors.Is(err, quic.Err0RTTRejected) {
-		return true
-	}
-
-	var qIdleErr *quic.IdleTimeoutError
-	return errors.As(err, &qIdleErr)
-}
-
-func (tm *TLSManager) ReadAll(r io.Reader, buf []byte) (int, error) {
-	var n int
-	for n < len(buf) {
-		read, err := r.Read(buf[n:])
-		n += read
-
-		if err != nil {
-			if err == io.EOF {
-				return n, nil
-			}
-			return n, err
-		}
-
-		if n == len(buf) {
-			return n, io.ErrShortBuffer
-		}
-	}
-	return n, nil
-}
-
-func (tm *TLSManager) Shutdown() error {
-	Info("Shutting down secure DNS server...")
-
-	tm.cancel()
-
-	if tm.tlsListener != nil {
-		if closeErr := tm.tlsListener.Close(); closeErr != nil {
-			Debug("Closing TLS listener failed: %v", closeErr)
-		}
-	}
-	if tm.quicListener != nil {
-		if closeErr := tm.quicListener.Close(); closeErr != nil {
-			Debug("Closing QUIC listener failed: %v", closeErr)
-		}
-	}
-	if tm.quicConn != nil {
-		if closeErr := tm.quicConn.Close(); closeErr != nil {
-			Debug("Closing QUIC connection failed: %v", closeErr)
-		}
-	}
-	if tm.quicAddrValidator != nil {
-		tm.quicAddrValidator.Close()
-		Debug("QUIC address validator closed")
-	}
-
-	if tm.httpsServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
-		defer cancel()
-		if shutdownErr := tm.httpsServer.Shutdown(ctx); shutdownErr != nil {
-			Debug("Closing HTTPS server failed: %v", shutdownErr)
-		}
-	}
-
-	if tm.h3Server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
-		defer cancel()
-		if shutdownErr := tm.h3Server.Shutdown(ctx); shutdownErr != nil {
-			Debug("Closing HTTP/3 server failed: %v", shutdownErr)
-		}
-	}
-
-	if tm.httpsListener != nil {
-		if closeErr := tm.httpsListener.Close(); closeErr != nil {
-			Debug("Closing HTTPS listener failed: %v", closeErr)
-		}
-	}
-
-	if tm.h3Listener != nil {
-		if closeErr := tm.h3Listener.Close(); closeErr != nil {
-			Debug("Closing HTTP/3 listener failed: %v", closeErr)
-		}
-	}
-
-	tm.wg.Wait()
-	Info("Secure DNS server has been shut down")
-	return nil
-}
-
-// =============================================================================
-// QUIC Address Validator & Utilities
-// =============================================================================
-
-func NewQUICAddrValidator(cacheSize int, ttl time.Duration) (*QuicAddrValidator, error) {
-	cache, err := ristretto.NewCache(&ristretto.Config[string, struct{}]{
-		NumCounters: int64(cacheSize * 10),
-		MaxCost:     int64(cacheSize),
-		BufferItems: 64,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating ristretto cache: %w", err)
-	}
-
-	Debug("QUIC address validator initialized: cacheSize=%d, ttl=%v", cacheSize, ttl)
-
-	return &QuicAddrValidator{
-		cache: cache,
-		ttl:   ttl,
-	}, nil
-}
-
-func (v *QuicAddrValidator) RequiresValidation(addr net.Addr) bool {
-	if v == nil || v.cache == nil {
-		Debug("QUIC address validation: validator not initialized, requiring validation")
-		return true
-	}
-
-	udpAddr, ok := addr.(*net.UDPAddr)
-	if !ok {
-		Debug("QUIC address validation: unexpected address type %T, requiring validation", addr)
-		return true
-	}
-
-	key := udpAddr.IP.String()
-
-	if _, found := v.cache.Get(key); found {
-		Debug("QUIC address validation: %s found in cache, skipping validation", key)
-		return false
-	}
-
-	v.cache.SetWithTTL(key, struct{}{}, 1, v.ttl)
-	Debug("QUIC address validation: %s not in cache, requiring validation and caching for %v", key, v.ttl)
-
-	return true
-}
-
-func (v *QuicAddrValidator) Close() {
-	if v != nil && v.cache != nil {
-		v.cache.Close()
-		Debug("QUIC address validator cache closed and resources released")
-	}
+	return latency
 }
 
 // =============================================================================
@@ -5700,7 +5072,6 @@ func (v *QuicAddrValidator) Close() {
 // =============================================================================
 
 func NewRootServerManager(config ServerConfig) *RootServerManager {
-	// Create DNS-specific speed test configuration for root servers
 	dnsSpeedTestConfig := config
 	dnsSpeedTestConfig.SpeedTest = []SpeedTestMethod{
 		{
@@ -5730,10 +5101,9 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 			"[2001:500:a8::e]:53", "[2001:500:2f::f]:53", "[2001:500:12::d0d]:53", "[2001:500:1::53]:53",
 			"[2001:7fe::53]:53", "[2001:503:c27::2:30]:53", "[2001:7fd::1]:53", "[2001:500:9f::42]:53", "[2001:dc3::35]:53",
 		},
-		speedTester: NewSpeedTester(dnsSpeedTestConfig),
+		speedTester: NewSpeedTestManager(dnsSpeedTestConfig),
 	}
 
-	// Initialize with default order (unreachable placeholder)
 	rsm.sortedV4 = make([]RootServerWithLatency, len(rsm.serversV4))
 	rsm.sortedV6 = make([]RootServerWithLatency, len(rsm.serversV6))
 
@@ -5753,7 +5123,6 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 		}
 	}
 
-	// Start initial sorting in background
 	go rsm.SortServersBySpeed()
 
 	return rsm
@@ -5785,9 +5154,8 @@ func (rsm *RootServerManager) GetOptimalRootServers(ipv6Enabled bool) []RootServ
 }
 
 func (rsm *RootServerManager) SortServersBySpeed() {
-	defer func() { RecoverPanic("Root server speed sorting") }()
+	defer HandlePanic("Root server speed sorting")
 
-	// Sort IPv4 servers using existing SpeedTest
 	if len(rsm.serversV4) > 0 {
 		ips := ExtractIPsFromServers(rsm.serversV4)
 		results := rsm.speedTester.SpeedTest(ips)
@@ -5799,7 +5167,6 @@ func (rsm *RootServerManager) SortServersBySpeed() {
 		rsm.mu.Unlock()
 	}
 
-	// Sort IPv6 servers using existing SpeedTest
 	if len(rsm.serversV6) > 0 {
 		ips := ExtractIPsFromServers(rsm.serversV6)
 		results := rsm.speedTester.SpeedTest(ips)
@@ -5855,17 +5222,17 @@ func ExtractIPsFromServers(servers []string) []string {
 }
 
 func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
-	Debug("RootServer: Starting periodic sorting (%v interval)", RootServerSortInterval)
+	LogDebug("RootServer: starting periodic sorting (%v interval)", RootServerSortInterval)
 	ticker := time.NewTicker(RootServerSortInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			Debug("RootServer: Triggering periodic speed test")
+			LogDebug("RootServer: triggering periodic speed test")
 			rsm.SortServersBySpeed()
 		case <-ctx.Done():
-			Debug("RootServer: Stopping periodic sorting - context cancelled")
+			LogDebug("RootServer: stopping periodic sorting")
 			return
 		}
 	}
@@ -5874,458 +5241,9 @@ func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
 func ExtractIPFromServer(server string) string {
 	host, _, err := net.SplitHostPort(server)
 	if err != nil {
-		// If server does not contain a port, return as is (could be just an IP)
 		return server
 	}
 	return host
-}
-
-// =============================================================================
-// SpeedTesting & Utilities
-// =============================================================================
-
-func NewSpeedTester(config ServerConfig) *SpeedTester {
-	st := &SpeedTester{
-		timeout:     DefaultSpeedTimeout,
-		concurrency: DefaultSpeedConcurrency,
-		cache:       make(map[string]*SpeedResult),
-		cacheTTL:    DefaultSpeedCacheTTL,
-		methods:     config.SpeedTest,
-	}
-
-	st.InitICMP()
-
-	return st
-}
-
-func (st *SpeedTester) InitICMP() {
-	conn4, err := icmp.ListenPacket("ip4:icmp", "")
-	if err == nil {
-		st.icmpConn4 = conn4
-	} else {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			Debug("SpeedTest: no permission to create IPv4 ICMP connection, skipping ICMP test")
-		} else {
-			Debug("SpeedTest: cannot create IPv4 ICMP connection: %v", err)
-		}
-	}
-
-	conn6, err := icmp.ListenPacket("ip6:ipv6-icmp", "")
-	if err == nil {
-		st.icmpConn6 = conn6
-	} else {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			Debug("SpeedTest: no permission to create IPv6 ICMP connection, skipping ICMP test")
-		} else {
-			Debug("SpeedTest: cannot create IPv6 ICMP connection: %v", err)
-		}
-	}
-}
-
-func (st *SpeedTester) Close() error {
-	if st.icmpConn4 != nil {
-		_ = st.icmpConn4.Close()
-	}
-	if st.icmpConn6 != nil {
-		_ = st.icmpConn6.Close()
-	}
-	return nil
-}
-
-func (st *SpeedTester) PerformSpeedTestAndSort(response *dns.Msg) *dns.Msg {
-	if response == nil {
-		Debug("SpeedTest: response is empty")
-		return response
-	}
-
-	Debug("SpeedTest: starting to process response, answer records count: %d", len(response.Answer))
-
-	var aRecords []*dns.A
-	var aaaaRecords []*dns.AAAA
-	var cnameRecords []dns.RR
-	var otherRecords []dns.RR
-
-	for _, answer := range response.Answer {
-		switch record := answer.(type) {
-		case *dns.A:
-			aRecords = append(aRecords, record)
-		case *dns.AAAA:
-			aaaaRecords = append(aaaaRecords, record)
-		case *dns.CNAME:
-			cnameRecords = append(cnameRecords, record)
-		default:
-			otherRecords = append(otherRecords, record)
-		}
-	}
-
-	Debug("SpeedTest: A records=%d, AAAA records=%d, CNAME records=%d", len(aRecords), len(aaaaRecords), len(cnameRecords))
-
-	if len(aRecords) > 1 {
-		Debug("SpeedTest: performing SpeedTest sorting for %d A records", len(aRecords))
-		aRecords = st.SortARecords(aRecords)
-	} else {
-		Debug("SpeedTest: A records count insufficient or equal to 1, skipping SpeedTest")
-	}
-
-	if len(aaaaRecords) > 1 {
-		Debug("SpeedTest: performing SpeedTest sorting for %d AAAA records", len(aaaaRecords))
-		aaaaRecords = st.SortAAAARecords(aaaaRecords)
-	} else {
-		Debug("SpeedTest: AAAA records count insufficient or equal to 1, skipping SpeedTest")
-	}
-
-	response.Answer = []dns.RR{}
-
-	response.Answer = append(response.Answer, cnameRecords...)
-
-	for _, record := range aRecords {
-		response.Answer = append(response.Answer, record)
-	}
-
-	for _, record := range aaaaRecords {
-		response.Answer = append(response.Answer, record)
-	}
-
-	response.Answer = append(response.Answer, otherRecords...)
-
-	Debug("SpeedTest: processing completed, answer records count: %d", len(response.Answer))
-
-	return response
-}
-
-func (st *SpeedTester) SortARecords(records []*dns.A) []*dns.A {
-	if len(records) <= 1 {
-		return records
-	}
-
-	ips := make([]string, len(records))
-	for i, record := range records {
-		ips[i] = record.A.String()
-	}
-
-	results := st.SpeedTest(ips)
-
-	sort.Slice(records, func(i, j int) bool {
-		ipI := records[i].A.String()
-		ipJ := records[j].A.String()
-
-		resultI, okI := results[ipI]
-		resultJ, okJ := results[ipJ]
-
-		if !okI || !okJ {
-			return i < j
-		}
-
-		if !resultI.Reachable && resultJ.Reachable {
-			return false
-		}
-		if resultI.Reachable && !resultJ.Reachable {
-			return true
-		}
-
-		return resultI.Latency < resultJ.Latency
-	})
-
-	return records
-}
-
-func (st *SpeedTester) SortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
-	if len(records) <= 1 {
-		return records
-	}
-
-	ips := make([]string, len(records))
-	for i, record := range records {
-		ips[i] = record.AAAA.String()
-	}
-
-	results := st.SpeedTest(ips)
-
-	sort.Slice(records, func(i, j int) bool {
-		ipI := records[i].AAAA.String()
-		ipJ := records[j].AAAA.String()
-
-		resultI, okI := results[ipI]
-		resultJ, okJ := results[ipJ]
-
-		if !okI || !okJ {
-			return i < j
-		}
-
-		if !resultI.Reachable && resultJ.Reachable {
-			return false
-		}
-		if resultI.Reachable && !resultJ.Reachable {
-			return true
-		}
-
-		return resultI.Latency < resultJ.Latency
-	})
-
-	return records
-}
-
-func (st *SpeedTester) SpeedTest(ips []string) map[string]*SpeedResult {
-	cachedResults := make(map[string]*SpeedResult)
-	remainingIPs := []string{}
-
-	st.cacheMutex.RLock()
-	now := time.Now()
-	for _, ip := range ips {
-		if result, exists := st.cache[ip]; exists {
-			if now.Sub(result.Timestamp) < st.cacheTTL {
-				cachedResults[ip] = result
-			} else {
-				remainingIPs = append(remainingIPs, ip)
-			}
-		} else {
-			remainingIPs = append(remainingIPs, ip)
-		}
-	}
-	st.cacheMutex.RUnlock()
-
-	if len(remainingIPs) == 0 {
-		Debug("SpeedTest: all IPs have valid cache, returning cached results directly")
-		return cachedResults
-	}
-
-	Debug("SpeedTest: need to test %d IPs, %d IPs using cache", len(remainingIPs), len(cachedResults))
-
-	newResults := st.PerformSpeedTest(remainingIPs)
-
-	results := make(map[string]*SpeedResult)
-	for ip, result := range cachedResults {
-		results[ip] = result
-	}
-	for ip, result := range newResults {
-		results[ip] = result
-	}
-
-	st.cacheMutex.Lock()
-	for ip, result := range newResults {
-		st.cache[ip] = result
-	}
-	st.cacheMutex.Unlock()
-
-	return results
-}
-
-func (st *SpeedTester) PerformSpeedTest(ips []string) map[string]*SpeedResult {
-	Debug("SpeedTest: starting concurrent SpeedTest for %d IPs", len(ips))
-
-	semaphore := make(chan struct{}, st.concurrency)
-	resultChan := make(chan *SpeedResult, len(ips))
-
-	var wg sync.WaitGroup
-	for _, ip := range ips {
-		wg.Add(1)
-		go func(ip string) {
-			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			result := st.TestSingleIP(ip)
-			resultChan <- result
-		}(ip)
-	}
-
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	results := make(map[string]*SpeedResult)
-	for result := range resultChan {
-		results[result.IP] = result
-	}
-
-	Debug("SpeedTest: concurrent SpeedTest completed, obtained %d results", len(results))
-
-	return results
-}
-
-func (st *SpeedTester) TestSingleIP(ip string) *SpeedResult {
-	Debug("SpeedTest: starting to test IP %s", ip)
-
-	result := &SpeedResult{
-		IP:        ip,
-		Timestamp: time.Now(),
-	}
-
-	totalTimeout := time.Duration(st.timeout)
-	totalTimeoutCtx, totalCancel := context.WithTimeout(context.Background(), totalTimeout)
-	defer totalCancel()
-
-	for _, method := range st.methods {
-		select {
-		case <-totalTimeoutCtx.Done():
-			result.Reachable = false
-			result.Latency = st.timeout
-			Debug("SpeedTest: IP %s total timeout, marked as unreachable", ip)
-			return result
-		default:
-		}
-
-		var latency time.Duration
-		switch method.Type {
-		case "icmp":
-			latency = st.PingWithICMP(ip, time.Duration(method.Timeout)*time.Millisecond)
-		case "tcp":
-			latency = st.PingWithTCP(ip, method.Port, time.Duration(method.Timeout)*time.Millisecond)
-		case "udp":
-			latency = st.PingWithUDP(ip, method.Port, time.Duration(method.Timeout)*time.Millisecond)
-		default:
-			continue
-		}
-
-		if latency >= 0 {
-			result.Reachable = true
-			result.Latency = latency
-			Debug("SpeedTest: IP %s %s test successful, latency: %v", ip, method.Type, result.Latency)
-			return result
-		}
-	}
-
-	result.Reachable = false
-	result.Latency = st.timeout
-	Debug("SpeedTest: IP %s all connection attempts failed, marked as unreachable", ip)
-	return result
-}
-
-func (st *SpeedTester) PingWithICMP(ip string, timeout time.Duration) time.Duration {
-	Debug("SpeedTest: starting ICMP ping test %s", ip)
-
-	dst, err := net.ResolveIPAddr("ip", ip)
-	if err != nil {
-		Debug("SpeedTest: cannot parse IP address %s: %v", ip, err)
-		return -1
-	}
-
-	var conn *icmp.PacketConn
-	if dst.IP.To4() != nil {
-		conn = st.icmpConn4
-	} else {
-		conn = st.icmpConn6
-	}
-
-	if conn == nil {
-		Debug("SpeedTest: no available ICMP connection for testing %s", ip)
-		return -1
-	}
-
-	var icmpType icmp.Type
-	var protocol int
-	if dst.IP.To4() != nil {
-		icmpType = ipv4.ICMPTypeEcho
-		protocol = 1
-	} else {
-		icmpType = ipv6.ICMPTypeEchoRequest
-		protocol = 58
-	}
-
-	wm := icmp.Message{
-		Type: icmpType,
-		Code: 0,
-		Body: &icmp.Echo{
-			ID:   os.Getpid() & 0xffff,
-			Seq:  1,
-			Data: []byte("ZJDNS SpeedTest"),
-		},
-	}
-
-	wb, err := wm.Marshal(nil)
-	if err != nil {
-		Debug("SpeedTest: cannot serialize ICMP message %s: %v", ip, err)
-		return -1
-	}
-
-	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
-
-	start := time.Now()
-
-	_, err = conn.WriteTo(wb, dst)
-	if err != nil {
-		Debug("SpeedTest: ICMP message sending failed %s: %v", ip, err)
-		return -1
-	}
-
-	_ = conn.SetReadDeadline(time.Now().Add(timeout))
-
-	rb := make([]byte, 1500)
-	n, peer, err := conn.ReadFrom(rb)
-	if err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			Debug("SpeedTest: ICMP ping timeout %s", ip)
-		} else {
-			Debug("SpeedTest: reading ICMP reply failed %s: %v", ip, err)
-		}
-		return -1
-	}
-
-	Debug("SpeedTest: received reply from %v, size %d bytes", peer, n)
-
-	rm, err := icmp.ParseMessage(protocol, rb[:n])
-	if err != nil {
-		Debug("SpeedTest: cannot parse ICMP reply %s: %v", ip, err)
-		return -1
-	}
-
-	switch rm.Type {
-	case ipv4.ICMPTypeEchoReply, ipv6.ICMPTypeEchoReply:
-		latency := time.Since(start)
-		Debug("SpeedTest: ICMP ping successful %s, latency: %v", ip, latency)
-		return latency
-	default:
-		Debug("SpeedTest: received unexpected ICMP message type %s: %v", ip, rm.Type)
-		return -1
-	}
-}
-
-func (st *SpeedTester) PingWithTCP(ip, port string, timeout time.Duration) time.Duration {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	start := time.Now()
-
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(ip, port))
-	if err != nil {
-		Debug("SpeedTest: TCP connection failed %s:%s - %v", ip, port, err)
-		return -1
-	}
-
-	latency := time.Since(start)
-	_ = conn.Close()
-
-	Debug("SpeedTest: TCP connection successful %s:%s, latency: %v", ip, port, latency)
-
-	return latency
-}
-
-func (st *SpeedTester) PingWithUDP(ip, port string, timeout time.Duration) time.Duration {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	start := time.Now()
-
-	conn, err := (&net.Dialer{}).DialContext(ctx, "udp", net.JoinHostPort(ip, port))
-	if err != nil {
-		Debug("SpeedTest: UDP connection failed %s:%s - %v", ip, port, err)
-		return -1
-	}
-
-	_, writeErr := conn.Write([]byte{})
-	if writeErr != nil {
-		Debug("SpeedTest: UDP data sending failed %s:%s - %v", ip, port, writeErr)
-		_ = conn.Close()
-		return -1
-	}
-
-	latency := time.Since(start)
-	_ = conn.Close()
-
-	Debug("SpeedTest: UDP connection successful %s:%s, latency: %v", ip, port, latency)
-
-	return latency
 }
 
 // =============================================================================
@@ -6480,7 +5398,7 @@ func (tm *TaskManager) ExecuteTask(name string, fn func(ctx context.Context) err
 
 	atomic.AddInt64(&tm.stats.executed, 1)
 
-	defer func() { RecoverPanic(fmt.Sprintf("Task-%s", name)) }()
+	defer HandlePanic(fmt.Sprintf("Task-%s", name))
 	return fn(tm.ctx)
 }
 
@@ -6494,12 +5412,12 @@ func (tm *TaskManager) ExecuteAsync(name string, fn func(ctx context.Context) er
 	}
 
 	go func() {
-		defer func() { RecoverPanic(fmt.Sprintf("AsyncTask-%s", name)) }()
+		defer HandlePanic(fmt.Sprintf("AsyncTask-%s", name))
 
 		if err := tm.ExecuteTask(name, fn); err != nil {
 			if err != context.Canceled {
 				atomic.AddInt64(&tm.stats.failed, 1)
-				Error("Async task execution failed [%s]: %v", name, err)
+				LogError("Async task failed [%s]: %v", name, err)
 			}
 		}
 	}()
@@ -6516,7 +5434,7 @@ func (tm *TaskManager) Shutdown(timeout time.Duration) error {
 		return nil
 	}
 
-	Info("Shutting down task manager...")
+	LogInfo("Shutting down task manager...")
 	tm.cancel()
 
 	done := make(chan struct{})
@@ -6527,10 +5445,10 @@ func (tm *TaskManager) Shutdown(timeout time.Duration) error {
 
 	select {
 	case <-done:
-		Info("Task manager has been safely shut down")
+		LogInfo("Task manager shut down")
 		return nil
 	case <-time.After(timeout):
-		Warn("Task manager shutdown timeout")
+		LogWarn("Task manager shutdown timeout")
 		return fmt.Errorf("shutdown timeout")
 	}
 }
@@ -6547,7 +5465,7 @@ func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
 }
 
 func (rt *RequestTracker) AddStep(step string, args ...interface{}) {
-	if rt == nil || globalLogger.GetLevel() < LogDebug {
+	if rt == nil || GlobalLog.GetLevel() < Debug {
 		return
 	}
 
@@ -6558,7 +5476,7 @@ func (rt *RequestTracker) AddStep(step string, args ...interface{}) {
 	stepMsg := fmt.Sprintf("[%v] %s", timestamp.Truncate(time.Microsecond), fmt.Sprintf(step, args...))
 	rt.Steps = append(rt.Steps, stepMsg)
 
-	Debug("[%s] %s", rt.ID, stepMsg)
+	LogDebug("[%s] %s", rt.ID, stepMsg)
 }
 
 func (rt *RequestTracker) Finish() {
@@ -6567,19 +5485,1021 @@ func (rt *RequestTracker) Finish() {
 	}
 
 	rt.ResponseTime = time.Since(rt.StartTime)
-	if globalLogger.GetLevel() >= LogInfo {
-		Info("[%s] Query completed: %s %s | Time:%v | Upstream:%s",
+	if GlobalLog.GetLevel() >= Info {
+		LogInfo("[%s] Query completed: %s %s | Time:%v | Upstream:%s",
 			rt.ID, rt.Domain, rt.QueryType, rt.ResponseTime.Truncate(time.Microsecond), rt.Upstream)
 	}
 }
 
+// =============================================================================
+// DNS Record Utilities
+// =============================================================================
+
+func CreateCompactRecord(rr dns.RR) *CompactRecord {
+	if rr == nil {
+		return nil
+	}
+	return &CompactRecord{
+		Text:    rr.String(),
+		OrigTTL: rr.Header().Ttl,
+		Type:    rr.Header().Rrtype,
+	}
+}
+
+func ExpandRecord(cr *CompactRecord) dns.RR {
+	if cr == nil || cr.Text == "" {
+		return nil
+	}
+	rr, err := dns.NewRR(cr.Text)
+	if err != nil {
+		return nil
+	}
+	return rr
+}
+
+func CompactRecords(rrs []dns.RR) []*CompactRecord {
+	if len(rrs) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool, len(rrs))
+	result := make([]*CompactRecord, 0, len(rrs))
+
+	for _, rr := range rrs {
+		if rr == nil || rr.Header().Rrtype == dns.TypeOPT {
+			continue
+		}
+
+		rrText := rr.String()
+		if !seen[rrText] {
+			seen[rrText] = true
+			if cr := CreateCompactRecord(rr); cr != nil {
+				result = append(result, cr)
+			}
+		}
+	}
+	return result
+}
+
+func ExpandRecords(crs []*CompactRecord) []dns.RR {
+	if len(crs) == 0 {
+		return nil
+	}
+	result := make([]dns.RR, 0, len(crs))
+	for _, cr := range crs {
+		if rr := ExpandRecord(cr); rr != nil {
+			result = append(result, rr)
+		}
+	}
+	return result
+}
+
+func ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
+	if len(rrs) == 0 {
+		return nil
+	}
+
+	result := make([]dns.RR, 0, len(rrs))
+	for _, rr := range rrs {
+		if rr == nil {
+			continue
+		}
+
+		if !includeDNSSEC {
+			switch rr.(type) {
+			case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
+				continue
+			}
+		}
+
+		newRR := dns.Copy(rr)
+		if newRR != nil {
+			if ttl > 0 {
+				newRR.Header().Ttl = ttl
+			}
+			result = append(result, newRR)
+		}
+	}
+	return result
+}
+
+func BuildCacheKey(question dns.Question, ecs *ECSOption, dnssecEnabled bool) string {
+	sb := GlobalResource.GetStringBuilder()
+	defer GlobalResource.PutStringBuilder(sb)
+
+	sb.WriteString(strings.ToLower(question.Name))
+	sb.WriteByte(':')
+	fmt.Fprintf(sb, "%d", question.Qtype)
+	sb.WriteByte(':')
+	fmt.Fprintf(sb, "%d", question.Qclass)
+
+	if ecs != nil {
+		sb.WriteByte(':')
+		sb.WriteString(ecs.Address.String())
+		sb.WriteByte('/')
+		fmt.Fprintf(sb, "%d", ecs.SourcePrefix)
+	}
+
+	if dnssecEnabled {
+		sb.WriteString(":dnssec")
+	}
+
+	result := sb.String()
+	if len(result) > 512 {
+		result = fmt.Sprintf("hash:%x", result)[:512]
+	}
+	return result
+}
+
+func CalculateTTL(rrs []dns.RR) int {
+	if len(rrs) == 0 {
+		return DefaultCacheTTL
+	}
+
+	minTTL := int(rrs[0].Header().Ttl)
+	for _, rr := range rrs {
+		if rr == nil {
+			continue
+		}
+		if ttl := int(rr.Header().Ttl); ttl > 0 && (minTTL == 0 || ttl < minTTL) {
+			minTTL = ttl
+		}
+	}
+
+	if minTTL <= 0 {
+		minTTL = DefaultCacheTTL
+	}
+
+	return minTTL
+}
+
+// =============================================================================
+// DNS Server Core
+// =============================================================================
+
+func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	rootServerManager := NewRootServerManager(*config)
+
+	ednsManager, err := NewEDNSManager(config.Server.DefaultECS, config.Server.Features.Padding)
+	if err != nil {
+		cancel()
+		return nil, WrapError("EDNS manager init", err)
+	}
+
+	rewriteManager := NewRewriteManager()
+	if len(config.Rewrite) > 0 {
+		if err := rewriteManager.LoadRules(config.Rewrite); err != nil {
+			cancel()
+			return nil, WrapError("load rewrite rules", err)
+		}
+	}
+
+	connectionManager := NewConnectionManager()
+	taskManager := NewTaskManager(MaxConcurrency)
+
+	server := &DNSServer{
+		config:        config,
+		rootServerMgr: rootServerManager,
+		connMgr:       connectionManager,
+		taskMgr:       taskManager,
+		ednsMgr:       ednsManager,
+		rewriteMgr:    rewriteManager,
+		resourceMgr:   GlobalResource,
+		speedDebounce: make(map[string]time.Time),
+		speedInterval: SpeedDebounceInterval,
+		ctx:           ctx,
+		cancel:        cancel,
+		shutdown:      make(chan struct{}),
+	}
+
+	securityManager, err := NewSecurityManager(config, server)
+	if err != nil {
+		cancel()
+		return nil, WrapError("security manager init", err)
+	}
+	server.securityMgr = securityManager
+
+	queryManager := NewQueryManager(server)
+	if err := queryManager.Initialize(config.Upstream); err != nil {
+		cancel()
+		return nil, WrapError("query manager init", err)
+	}
+	server.queryMgr = queryManager
+
+	if len(config.SpeedTest) > 0 {
+		server.speedTestMgr = NewSpeedTestManager(*config)
+	}
+
+	var cache CacheManager
+	if config.Redis.Address == "" {
+		cache = NewNullCache()
+	} else {
+		redisCache, err := NewRedisCache(config, server)
+		if err != nil {
+			cancel()
+			return nil, WrapError("redis cache init", err)
+		}
+		cache = redisCache
+	}
+
+	server.cacheMgr = cache
+	server.SetupSignalHandling()
+	return server, nil
+}
+
+func (s *DNSServer) SetupSignalHandling() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer HandlePanic("Root server periodic sorting")
+		s.rootServerMgr.StartPeriodicSorting(s.ctx)
+	}()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer HandlePanic("Signal handler")
+
+		select {
+		case sig := <-sigChan:
+			LogInfo("Received signal %v, starting graceful shutdown...", sig)
+			s.ShutdownServer()
+		case <-s.ctx.Done():
+			return
+		}
+	}()
+}
+
+func (s *DNSServer) CleanupSpeedDebounce() {
+	s.speedMutex.Lock()
+	defer s.speedMutex.Unlock()
+
+	now := time.Now()
+	for domain, lastCheck := range s.speedDebounce {
+		if now.Sub(lastCheck) >= s.speedInterval {
+			delete(s.speedDebounce, domain)
+		}
+	}
+}
+
+func (s *DNSServer) ShutdownServer() {
+	if !atomic.CompareAndSwapInt32(&s.closed, 0, 1) {
+		return
+	}
+
+	LogInfo("Starting DNS server shutdown...")
+
+	s.CleanupSpeedDebounce()
+
+	if s.cancel != nil {
+		s.cancel()
+	}
+
+	if s.cacheMgr != nil {
+		CloseWithLog(s.cacheMgr, "Cache manager")
+	}
+
+	if s.securityMgr != nil {
+		if err := s.securityMgr.Shutdown(ShutdownTimeout); err != nil {
+			LogError("Security manager shutdown failed: %v", err)
+		}
+	}
+
+	if s.connMgr != nil {
+		CloseWithLog(s.connMgr, "Connection manager")
+	}
+
+	if s.taskMgr != nil {
+		if err := s.taskMgr.Shutdown(ShutdownTimeout); err != nil {
+			LogError("Task manager shutdown failed: %v", err)
+		}
+	}
+
+	if s.speedTestMgr != nil {
+		CloseWithLog(s.speedTestMgr, "SpeedTest manager")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.wg.Wait()
+	}()
+
+	select {
+	case <-done:
+		LogInfo("All components shut down")
+	case <-time.After(ShutdownTimeout):
+		LogWarn("Component shutdown timeout")
+	}
+
+	if s.shutdown != nil {
+		close(s.shutdown)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	os.Exit(0)
+}
+
+func (s *DNSServer) Start() error {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return errors.New("server is closed")
+	}
+
+	var wg sync.WaitGroup
+	serverCount := 2
+
+	if s.securityMgr.tls != nil {
+		serverCount += 1
+	}
+
+	errChan := make(chan error, serverCount)
+
+	LogInfo("Starting ZJDNS Server")
+	LogInfo("Listening port: %s", s.config.Server.Port)
+
+	s.DisplayInfo()
+
+	wg.Add(serverCount)
+
+	go func() {
+		defer wg.Done()
+		defer HandlePanic("Critical-UDP server")
+		server := &dns.Server{
+			Addr:    ":" + s.config.Server.Port,
+			Net:     "udp",
+			Handler: dns.HandlerFunc(s.HandleDNSRequest),
+			UDPSize: UDPBufferSize,
+		}
+		LogInfo("UDP server started: [::]:%s", s.config.Server.Port)
+		if err := server.ListenAndServe(); err != nil {
+			errChan <- WrapError("UDP startup", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		defer HandlePanic("Critical-TCP server")
+		server := &dns.Server{
+			Addr:    ":" + s.config.Server.Port,
+			Net:     "tcp",
+			Handler: dns.HandlerFunc(s.HandleDNSRequest),
+		}
+		LogInfo("TCP server started: [::]:%s", s.config.Server.Port)
+		if err := server.ListenAndServe(); err != nil {
+			errChan <- WrapError("TCP startup", err)
+		}
+	}()
+
+	if s.securityMgr.tls != nil {
+		go func() {
+			defer wg.Done()
+			defer HandlePanic("Critical-Secure DNS server")
+			httpsPort := s.config.Server.TLS.HTTPS.Port
+			if err := s.securityMgr.tls.Start(httpsPort); err != nil {
+				errChan <- WrapError("secure DNS startup", err)
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(errChan)
+	}()
+
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
+	}
+
+	<-s.shutdown
+	return nil
+}
+
+func (s *DNSServer) DisplayInfo() {
+	servers := s.queryMgr.upstream.GetServers()
+	if len(servers) > 0 {
+		for _, server := range servers {
+			if server.IsRecursive() {
+				LogInfo("Upstream server: recursive resolution")
+			} else {
+				protocol := strings.ToUpper(server.Protocol)
+				if protocol == "" {
+					protocol = "UDP"
+				}
+				serverInfo := fmt.Sprintf("%s (%s)", server.Address, protocol)
+				if server.SkipTLSVerify && IsSecureProtocol(strings.ToLower(server.Protocol)) {
+					serverInfo += " [Skip TLS verification]"
+				}
+				LogInfo("Upstream server: %s", serverInfo)
+			}
+		}
+		LogInfo("Upstream mode: total %d servers", len(servers))
+	} else {
+		if s.config.Redis.Address == "" {
+			LogInfo("Recursive mode (no cache)")
+		} else {
+			LogInfo("Recursive mode + Redis cache: %s", s.config.Redis.Address)
+		}
+	}
+
+	if s.securityMgr.tls != nil {
+		LogInfo("Listening secure DNS port: %s (DoT/DoQ)", s.config.Server.TLS.Port)
+
+		httpsPort := s.config.Server.TLS.HTTPS.Port
+		if httpsPort != "" {
+			endpoint := s.config.Server.TLS.HTTPS.Endpoint
+			if endpoint == "" {
+				endpoint = strings.TrimPrefix(DefaultQueryPath, "/")
+			}
+			LogInfo("Listening secure DNS port: %s (DoH/DoH3, endpoint: %s)", httpsPort, endpoint)
+		}
+	}
+
+	if s.rewriteMgr.HasRules() {
+		LogInfo("DNS rewriter: enabled (%d rules)", len(s.config.Rewrite))
+	}
+	if s.config.Server.Features.HijackProtection {
+		LogInfo("DNS hijacking prevention: enabled")
+	}
+	if defaultECS := s.ednsMgr.GetDefaultECS(); defaultECS != nil {
+		LogInfo("Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
+	}
+	if s.ednsMgr.IsPaddingEnabled() {
+		LogInfo("DNS Padding: enabled")
+	}
+
+	if len(s.config.SpeedTest) > 0 {
+		LogInfo("SpeedTest: enabled")
+	} else {
+		LogInfo("SpeedTest: not enabled")
+	}
+
+	LogInfo("Max concurrency: %d", MaxConcurrency)
+	LogInfo("Connection pool optimizations: enabled (TLS session resumption, QUIC 0-RTT)")
+}
+
+func (s *DNSServer) HandleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
+	defer HandlePanic("DNS request processing")
+
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
+	}
+
+	response := s.ProcessDNSQuery(req, GetClientIP(w), false)
+	if response != nil {
+		response.Compress = true
+		_ = w.WriteMsg(response)
+	}
+}
+
+func (s *DNSServer) ProcessDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		msg := s.BuildResponse(req)
+		if msg != nil {
+			msg.Rcode = dns.RcodeServerFailure
+		}
+		return msg
+	}
+
+	if req == nil {
+		msg := &dns.Msg{}
+		msg.SetReply(&dns.Msg{})
+		msg.Rcode = dns.RcodeFormatError
+		return msg
+	}
+
+	if len(req.Question) == 0 {
+		msg := &dns.Msg{}
+		if len(req.Question) > 0 {
+			msg.SetReply(req)
+		} else {
+			msg.Response = true
+		}
+		msg.Rcode = dns.RcodeFormatError
+		return msg
+	}
+
+	question := req.Question[0]
+
+	if len(question.Name) > MaxDomainLength {
+		msg := &dns.Msg{}
+		msg.SetReply(req)
+		msg.Rcode = dns.RcodeFormatError
+		return msg
+	}
+
+	if question.Qtype == dns.TypeANY {
+		msg := &dns.Msg{}
+		msg.SetReply(req)
+		msg.Rcode = dns.RcodeRefused
+		return msg
+	}
+
+	var tracker *RequestTracker
+	if GlobalLog.GetLevel() >= Debug {
+		clientIPStr := "unknown"
+		if clientIP != nil {
+			clientIPStr = clientIP.String()
+		}
+		tracker = NewRequestTracker(
+			question.Name,
+			dns.TypeToString[question.Qtype],
+			clientIPStr,
+		)
+		if tracker != nil {
+			defer tracker.Finish()
+		}
+	}
+
+	if tracker != nil {
+		tracker.AddStep("Starting query: %s %s", question.Name, dns.TypeToString[question.Qtype])
+		if isSecureConnection {
+			tracker.AddStep("Secure connection, DNS Padding enabled")
+		}
+	}
+
+	if s.rewriteMgr.HasRules() {
+		rewriteResult := s.rewriteMgr.RewriteWithDetails(question.Name, question.Qtype)
+		if rewriteResult.ShouldRewrite {
+			if tracker != nil {
+				tracker.AddStep("Domain rewrite: %s (QType: %s)", question.Name, dns.TypeToString[question.Qtype])
+			}
+
+			if rewriteResult.ResponseCode != dns.RcodeSuccess {
+				response := s.BuildResponse(req)
+				response.Rcode = rewriteResult.ResponseCode
+
+				if tracker != nil {
+					tracker.AddStep("Response code rewrite: %d", rewriteResult.ResponseCode)
+				}
+
+				response = s.AddEDNStoRewriteResponse(response, req, tracker, isSecureConnection)
+				return response
+			}
+
+			if len(rewriteResult.Records) > 0 {
+				response := s.BuildResponse(req)
+				response.Answer = rewriteResult.Records
+				response.Rcode = dns.RcodeSuccess
+
+				if len(rewriteResult.Additional) > 0 {
+					response.Extra = rewriteResult.Additional
+				}
+
+				if tracker != nil {
+					tracker.AddStep("Returning custom records: %d (Answer), %d (Additional)",
+						len(rewriteResult.Records), len(rewriteResult.Additional))
+				}
+
+				response = s.AddEDNStoRewriteResponse(response, req, tracker, isSecureConnection)
+				return response
+			}
+
+			if rewriteResult.Domain != question.Name {
+				if tracker != nil {
+					tracker.AddStep("Domain rewrite: %s -> %s", question.Name, rewriteResult.Domain)
+				}
+				question.Name = rewriteResult.Domain
+			}
+		}
+	}
+
+	clientRequestedDNSSEC := false
+	clientHasEDNS := false
+	var ecsOpt *ECSOption
+
+	if opt := req.IsEdns0(); opt != nil {
+		clientHasEDNS = true
+		clientRequestedDNSSEC = opt.Do()
+		ecsOpt = s.ednsMgr.ParseFromDNS(req)
+		if tracker != nil && ecsOpt != nil {
+			tracker.AddStep("Client ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
+		}
+	}
+
+	if ecsOpt == nil {
+		ecsOpt = s.ednsMgr.GetDefaultECS()
+		if tracker != nil && ecsOpt != nil {
+			tracker.AddStep("Using default ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
+		}
+	}
+
+	serverDNSSECEnabled := s.config.Server.Features.DNSSEC
+	cacheKey := BuildCacheKey(question, ecsOpt, serverDNSSECEnabled)
+
+	if tracker != nil {
+		tracker.AddStep("Cache key: %s", cacheKey)
+	}
+
+	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
+		return s.ProcessCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, clientHasEDNS, ecsOpt, cacheKey, tracker, isSecureConnection)
+	}
+
+	if tracker != nil {
+		tracker.AddStep("Cache miss, starting query")
+	}
+	return s.ProcessCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, clientHasEDNS, serverDNSSECEnabled, cacheKey, tracker, isSecureConnection)
+}
+
+func (s *DNSServer) AddEDNStoRewriteResponse(response *dns.Msg, req *dns.Msg, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+	if response == nil {
+		return response
+	}
+
+	clientRequestedDNSSEC := false
+	clientHasEDNS := false
+	var ecsOpt *ECSOption
+
+	if opt := req.IsEdns0(); opt != nil {
+		clientHasEDNS = true
+		clientRequestedDNSSEC = opt.Do()
+		ecsOpt = s.ednsMgr.ParseFromDNS(req)
+	}
+
+	if ecsOpt == nil {
+		ecsOpt = s.ednsMgr.GetDefaultECS()
+	}
+
+	shouldAddEDNS := clientHasEDNS || ecsOpt != nil || s.ednsMgr.IsPaddingEnabled() ||
+		(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
+
+	if shouldAddEDNS {
+		s.ednsMgr.AddToMessage(response, ecsOpt, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
+		if tracker != nil && ecsOpt != nil {
+			tracker.AddStep("Adding response ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
+		}
+	}
+
+	return response
+}
+
+func (s *DNSServer) BuildResponse(req *dns.Msg) *dns.Msg {
+	msg := GlobalResource.GetDNSMessage()
+	if msg == nil {
+		msg = &dns.Msg{}
+	}
+
+	if req != nil {
+		if len(req.Question) > 0 {
+			if msg.Question == nil {
+				msg.Question = make([]dns.Question, 0, len(req.Question))
+			}
+			msg.SetReply(req)
+		} else {
+			msg.Response = true
+			msg.Rcode = dns.RcodeFormatError
+		}
+	}
+
+	msg.Authoritative = false
+	msg.RecursionAvailable = true
+	msg.Compress = true
+	return msg
+}
+
+func (s *DNSServer) ProcessCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool,
+	question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool, ecsOpt *ECSOption,
+	cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+
+	responseTTL := entry.GetRemainingTTL()
+
+	if tracker != nil {
+		tracker.CacheHit = true
+		if isExpired {
+			tracker.AddStep("Cache hit (expired): TTL=%ds", responseTTL)
+		} else {
+			tracker.AddStep("Cache hit: TTL=%ds", responseTTL)
+		}
+	}
+
+	msg := s.BuildResponse(req)
+	if msg == nil {
+		msg = &dns.Msg{}
+		msg.SetReply(req)
+		msg.Rcode = dns.RcodeServerFailure
+		return msg
+	}
+
+	msg.Answer = ProcessRecords(ExpandRecords(entry.Answer), responseTTL, clientRequestedDNSSEC)
+	msg.Ns = ProcessRecords(ExpandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
+	msg.Extra = ProcessRecords(ExpandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
+
+	if s.config.Server.Features.DNSSEC && entry.Validated {
+		msg.AuthenticatedData = true
+		if tracker != nil {
+			tracker.AddStep("Setting AD flag: cached records verified")
+		}
+	}
+
+	responseECS := entry.GetECSOption()
+	if responseECS == nil {
+		responseECS = ecsOpt
+	}
+
+	shouldAddEDNS := clientHasEDNS || responseECS != nil || s.ednsMgr.IsPaddingEnabled() ||
+		(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
+
+	if shouldAddEDNS {
+		s.ednsMgr.AddToMessage(msg, responseECS, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
+		if tracker != nil && responseECS != nil {
+			tracker.AddStep("Adding response ECS: %s/%d", responseECS.Address, responseECS.SourcePrefix)
+		}
+	}
+
+	if isExpired && s.config.Server.Features.ServeStale && s.config.Server.Features.Prefetch && entry.ShouldRefresh() {
+		if tracker != nil {
+			tracker.AddStep("Starting background prefetch")
+		}
+		s.cacheMgr.RequestRefresh(RefreshRequest{
+			Question:            question,
+			ECS:                 ecsOpt,
+			CacheKey:            cacheKey,
+			ServerDNSSECEnabled: s.config.Server.Features.DNSSEC,
+		})
+	}
+
+	s.RestoreOriginalDomain(msg, req.Question[0].Name, question.Name)
+	return msg
+}
+
+func (s *DNSServer) ProcessCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption,
+	clientRequestedDNSSEC bool, clientHasEDNS bool, serverDNSSECEnabled bool, cacheKey string,
+	tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+
+	var answer, authority, additional []dns.RR
+	var validated bool
+	var ecsResponse *ECSOption
+	var err error
+
+	answer, authority, additional, validated, ecsResponse, err = s.queryMgr.Query(question, ecsOpt, serverDNSSECEnabled, tracker)
+
+	if err != nil {
+		return s.ProcessQueryError(req, err, cacheKey, question, clientRequestedDNSSEC,
+			clientHasEDNS, ecsOpt, tracker, isSecureConnection)
+	}
+
+	return s.ProcessQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, clientHasEDNS, cacheKey,
+		answer, authority, additional, validated, ecsResponse, tracker, isSecureConnection)
+}
+
+func (s *DNSServer) ProcessQueryError(req *dns.Msg, err error, cacheKey string,
+	question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool, ecsOpt *ECSOption,
+	tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+
+	if tracker != nil {
+		tracker.AddStep("Query failed: %v", err)
+	}
+
+	if s.config.Server.Features.ServeStale {
+		if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
+			if tracker != nil {
+				tracker.AddStep("Using expired cache fallback")
+			}
+
+			responseTTL := uint32(StaleTTL)
+			msg := s.BuildResponse(req)
+			if msg == nil {
+				msg = &dns.Msg{}
+				msg.SetReply(req)
+				msg.Rcode = dns.RcodeServerFailure
+				return msg
+			}
+
+			msg.Answer = ProcessRecords(ExpandRecords(entry.Answer), responseTTL, clientRequestedDNSSEC)
+			msg.Ns = ProcessRecords(ExpandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
+			msg.Extra = ProcessRecords(ExpandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
+
+			if s.config.Server.Features.DNSSEC && entry.Validated {
+				msg.AuthenticatedData = true
+			}
+
+			responseECS := entry.GetECSOption()
+			if responseECS == nil {
+				responseECS = ecsOpt
+			}
+
+			shouldAddEDNS := clientHasEDNS || responseECS != nil || s.ednsMgr.IsPaddingEnabled() ||
+				(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
+
+			if shouldAddEDNS {
+				s.ednsMgr.AddToMessage(msg, responseECS, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
+			}
+
+			s.RestoreOriginalDomain(msg, req.Question[0].Name, question.Name)
+			return msg
+		}
+	}
+
+	msg := s.BuildResponse(req)
+	if msg == nil {
+		msg = &dns.Msg{}
+		msg.SetReply(req)
+	}
+	msg.Rcode = dns.RcodeServerFailure
+	return msg
+}
+
+func (s *DNSServer) ProcessQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption,
+	clientRequestedDNSSEC bool, clientHasEDNS bool, cacheKey string,
+	answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption,
+	tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+
+	if tracker != nil {
+		tracker.AddStep("Query successful: answers=%d, authority=%d, additional=%d", len(answer), len(authority), len(additional))
+		if validated {
+			tracker.AddStep("DNSSEC validated")
+		}
+	}
+
+	msg := s.BuildResponse(req)
+	if msg == nil {
+		msg = &dns.Msg{}
+		msg.SetReply(req)
+	}
+
+	if s.config.Server.Features.DNSSEC && validated {
+		msg.AuthenticatedData = true
+		if tracker != nil {
+			tracker.AddStep("Setting AD flag: query results verified")
+		}
+	}
+
+	responseECS := ecsResponse
+	if responseECS == nil && ecsOpt != nil {
+		responseECS = &ECSOption{
+			Family:       ecsOpt.Family,
+			SourcePrefix: ecsOpt.SourcePrefix,
+			ScopePrefix:  ecsOpt.ScopePrefix,
+			Address:      ecsOpt.Address,
+		}
+	}
+
+	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
+
+	msg.Answer = ProcessRecords(answer, 0, clientRequestedDNSSEC)
+	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
+	msg.Extra = ProcessRecords(additional, 0, clientRequestedDNSSEC)
+
+	if len(s.config.SpeedTest) > 0 {
+		LogDebug("SpeedTest enabled")
+		if tracker != nil {
+			tracker.AddStep("SpeedTest enabled")
+		}
+
+		shouldPerformSpeedTest := s.ShouldPerformSpeedTest(question.Name)
+		if shouldPerformSpeedTest {
+			LogDebug("SpeedTest: triggering background test for %s", question.Name)
+			msgCopy := msg.Copy()
+			s.taskMgr.ExecuteAsync(fmt.Sprintf("speed-test-%s", question.Name), func(ctx context.Context) error {
+				LogDebug("SpeedTest: starting background test for %s", question.Name)
+				speedTester := NewSpeedTestManager(*s.config)
+				defer CloseWithLog(speedTester, "SpeedTester")
+				speedTester.PerformSpeedTestAndSort(msgCopy)
+
+				s.cacheMgr.Set(cacheKey,
+					msgCopy.Answer,
+					msgCopy.Ns,
+					msgCopy.Extra,
+					validated, responseECS)
+				LogDebug("SpeedTest: background test completed for %s", question.Name)
+
+				return nil
+			})
+
+			if tracker != nil {
+				tracker.AddStep("First response not sorted, background SpeedTest in progress")
+			}
+		} else {
+			LogDebug("SpeedTest: domain %s skipped by debounce", question.Name)
+			if tracker != nil {
+				tracker.AddStep("SpeedTest skipped (debounce)")
+			}
+		}
+	} else {
+		LogDebug("SpeedTest not enabled")
+	}
+
+	shouldAddEDNS := clientHasEDNS || responseECS != nil || s.ednsMgr.IsPaddingEnabled() ||
+		(clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
+
+	if shouldAddEDNS {
+		s.ednsMgr.AddToMessage(msg, responseECS, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
+		if tracker != nil && responseECS != nil {
+			tracker.AddStep("Adding response ECS: %s/%d", responseECS.Address, responseECS.SourcePrefix)
+		}
+	}
+
+	s.RestoreOriginalDomain(msg, req.Question[0].Name, question.Name)
+	return msg
+}
+
+func (s *DNSServer) RestoreOriginalDomain(msg *dns.Msg, currentName, originalName string) {
+	if msg == nil {
+		return
+	}
+
+	for _, rr := range msg.Answer {
+		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
+			rr.Header().Name = originalName
+		}
+	}
+}
+
+func (s *DNSServer) ShouldPerformSpeedTest(domain string) bool {
+	if len(s.config.SpeedTest) == 0 {
+		return false
+	}
+
+	s.speedMutex.Lock()
+	defer s.speedMutex.Unlock()
+
+	now := time.Now()
+	lastCheck, exists := s.speedDebounce[domain]
+	if !exists || now.Sub(lastCheck) >= s.speedInterval {
+		s.speedDebounce[domain] = now
+		return true
+	}
+
+	return false
+}
+
+func (s *DNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+	defer HandlePanic("Cache refresh query")
+
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return nil, nil, nil, false, nil, errors.New("server is closed")
+	}
+
+	_, cancel := context.WithTimeout(s.ctx, ExtendedTimeout)
+	defer cancel()
+
+	return s.queryMgr.Query(question, ecs, serverDNSSECEnabled, nil)
+}
+
+func (s *DNSServer) BuildQueryMessage(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
+	msg := GlobalResource.GetDNSMessage()
+
+	if msg == nil {
+		msg = &dns.Msg{}
+	}
+
+	if err := s.SafeSetQuestion(msg, question.Name, question.Qtype); err != nil {
+		LogDebug("Set DNS question failed: %v", err)
+		msg = &dns.Msg{}
+		msg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
+	}
+
+	msg.RecursionDesired = recursionDesired
+
+	if s.ednsMgr != nil {
+		s.ednsMgr.AddToMessage(msg, ecs, dnssecEnabled, isSecureConnection)
+	}
+
+	return msg
+}
+
+func (s *DNSServer) SafeSetQuestion(msg *dns.Msg, name string, qtype uint16) error {
+	if msg == nil {
+		return errors.New("message is nil")
+	}
+
+	if name == "" {
+		return errors.New("domain is empty")
+	}
+
+	if len(name) > MaxDomainLength {
+		return errors.New("domain too long")
+	}
+
+	if msg.Question == nil {
+		msg.Question = make([]dns.Question, 0, 1)
+	}
+
+	defer HandlePanic("Set DNS question")
+
+	msg.SetQuestion(dns.Fqdn(name), qtype)
+	return nil
+}
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
+
 func SafeCopyMessage(msg *dns.Msg) *dns.Msg {
 	if msg == nil {
-		newMsg := globalResourceManager.GetDNSMessage()
+		newMsg := GlobalResource.GetDNSMessage()
 		return newMsg
 	}
 
-	msgCopy := globalResourceManager.GetDNSMessage()
+	msgCopy := GlobalResource.GetDNSMessage()
 
 	msgCopy.MsgHdr = msg.MsgHdr
 	msgCopy.Compress = msg.Compress
@@ -6626,13 +6546,13 @@ func SafeCopyMessage(msg *dns.Msg) *dns.Msg {
 	return msgCopy
 }
 
-func RecoverPanic(operation string) {
+func HandlePanic(operation string) {
 	if r := recover(); r != nil {
 		buf := make([]byte, 2048)
 		n := runtime.Stack(buf, false)
 		stackTrace := string(buf[:n])
 
-		Error("Panic triggered [%s]: %v\nStack:\n%s\nProgram exiting due to panic",
+		LogError("Panic [%s]: %v\nStack:\n%s\nExiting due to panic",
 			operation, r, stackTrace)
 
 		os.Exit(1)
@@ -6675,6 +6595,105 @@ func IsValidFilePath(path string) bool {
 	return info.Mode().IsRegular()
 }
 
+func WrapError(op string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", op, err)
+}
+
+func CloseWithLog(c Closeable, name string) {
+	if c == nil {
+		return
+	}
+	if err := c.Close(); err != nil {
+		LogWarn("Close %s failed: %v", name, err)
+	}
+}
+
+func IsRetryableError(protocol string, err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+
+	protocol = strings.ToLower(protocol)
+
+	switch protocol {
+	case "quic", "http3":
+		var qAppErr *quic.ApplicationError
+		if errors.As(err, &qAppErr) {
+			return qAppErr.ErrorCode == 0 || qAppErr.ErrorCode == quic.ApplicationErrorCode(0x100)
+		}
+
+		var qIdleErr *quic.IdleTimeoutError
+		if errors.As(err, &qIdleErr) {
+			return true
+		}
+
+		var resetErr *quic.StatelessResetError
+		if errors.As(err, &resetErr) {
+			return true
+		}
+
+		var qTransportError *quic.TransportError
+		if errors.As(err, &qTransportError) && qTransportError.ErrorCode == quic.NoError {
+			return true
+		}
+
+		return errors.Is(err, quic.Err0RTTRejected)
+
+	case "tls":
+		errStr := err.Error()
+		connectionErrors := []string{
+			"broken pipe", "connection reset", "use of closed network connection",
+			"connection refused", "no route to host", "network is unreachable",
+		}
+
+		for _, connErr := range connectionErrors {
+			if strings.Contains(strings.ToLower(errStr), strings.ToLower(connErr)) {
+				return true
+			}
+		}
+
+		return errors.Is(err, io.EOF)
+
+	case "https":
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return true
+		}
+
+		var qAppErr *quic.ApplicationError
+		if errors.As(err, &qAppErr) {
+			return qAppErr.ErrorCode == 0 || qAppErr.ErrorCode == quic.ApplicationErrorCode(0x100)
+		}
+
+		var qIdleErr *quic.IdleTimeoutError
+		if errors.As(err, &qIdleErr) {
+			return true
+		}
+
+		var resetErr *quic.StatelessResetError
+		if errors.As(err, &resetErr) {
+			return true
+		}
+
+		var qTransportError *quic.TransportError
+		if errors.As(err, &qTransportError) && qTransportError.ErrorCode == quic.NoError {
+			return true
+		}
+
+		return errors.Is(err, quic.Err0RTTRejected)
+
+	default:
+		return false
+	}
+}
+
 // =============================================================================
 // Main Function
 // =============================================================================
@@ -6689,9 +6708,9 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "ZJDNS Server\n\n")
 		fmt.Fprintf(os.Stderr, "Usage:\n")
-		fmt.Fprintf(os.Stderr, "  %s -config <configuration file>     # Start with configuration file\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s -generate-config       # Generate example configuration file\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s                         # Start with default configuration\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -config <config file>     # Start with config file\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -generate-config          # Generate example config\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s                            # Start with default config\n\n", os.Args[0])
 	}
 
 	flag.Parse()
@@ -6701,9 +6720,9 @@ func main() {
 		return
 	}
 
-	config, err := LoadConfig(configFile)
+	config, err := GlobalConfig.LoadConfig(configFile)
 	if err != nil {
-		log.Fatalf("Configuration loading failed: %v", err)
+		log.Fatalf("Config load failed: %v", err)
 	}
 
 	server, err := NewDNSServer(config)
@@ -6711,7 +6730,7 @@ func main() {
 		log.Fatalf("Server creation failed: %v", err)
 	}
 
-	Info("ZJDNS Server started successfully!")
+	LogInfo("ZJDNS Server started successfully!")
 
 	if err := server.Start(); err != nil {
 		log.Fatalf("Server startup failed: %v", err)
