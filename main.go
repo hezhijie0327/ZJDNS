@@ -81,7 +81,7 @@ const (
 	SpeedDebounceInterval = 10 * time.Second
 
 	// Root Server Management
-	RootServerSortInterval = 300 * time.Second
+	RootServerSortInterval = 900 * time.Second
 
 	// Connection Lifecycle
 	SecureIdleTimeout  = 300 * time.Second
