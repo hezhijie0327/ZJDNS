@@ -147,6 +147,7 @@ const (
 
 	// SpeedTest Configuration
 	DefaultSpeedConcurrency = 4
+	UnreachableLatency      = 9999 * time.Millisecond
 
 	// Default Values
 	DefaultLogLevel = "info"
@@ -4150,12 +4151,10 @@ func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) [
 		case *dns.AAAA:
 			ip = record.AAAA
 		default:
-			// 非 IP 记录直接保留
 			filtered = append(filtered, rr)
 			continue
 		}
 
-		// IP 记录根据策略过滤
 		isTrusted := s.ipFilter.IsTrustedIP(ip)
 		shouldKeep := (ctx.Policy == "trusted_only" && isTrusted) ||
 			(ctx.Policy == "untrusted_only" && !isTrusted)
@@ -4344,7 +4343,6 @@ func (s *DNSServer) ResolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	return allAddresses
 }
 
-// GetRootServers 返回所有根服务器地址列表（兼容旧接口）
 func (s *DNSServer) GetRootServers() []string {
 	serversWithLatency := s.rootServerManager.GetOptimalRootServers(s.config.Server.Features.IPv6)
 	servers := make([]string, len(serversWithLatency))
@@ -5969,7 +5967,7 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 	for i, server := range rsm.serversV4 {
 		rsm.sortedV4[i] = RootServerWithLatency{
 			Server:    server,
-			Latency:   9999 * time.Millisecond,
+			Latency:   UnreachableLatency,
 			Reachable: false,
 		}
 	}
@@ -5977,7 +5975,7 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 	for i, server := range rsm.serversV6 {
 		rsm.sortedV6[i] = RootServerWithLatency{
 			Server:    server,
-			Latency:   9999 * time.Millisecond,
+			Latency:   UnreachableLatency,
 			Reachable: false,
 		}
 	}
@@ -6059,7 +6057,7 @@ func SortBySpeedResultWithLatency(servers []string, results map[string]*SpeedRes
 		} else {
 			serverList[i] = RootServerWithLatency{
 				Server:    server,
-				Latency:   9999 * time.Millisecond,
+				Latency:   UnreachableLatency,
 				Reachable: false,
 			}
 		}
