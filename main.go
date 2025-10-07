@@ -1045,7 +1045,7 @@ func GenerateExampleConfig() string {
 				{
 					Type:    "A",
 					Content: "127.0.0.1",
-					TTL:     300,
+					TTL:     DefaultCacheTTL,
 				},
 			},
 		},
@@ -1055,7 +1055,7 @@ func GenerateExampleConfig() string {
 				{
 					Type:    "AAAA",
 					Content: "::1",
-					TTL:     300,
+					TTL:     DefaultCacheTTL,
 				},
 			},
 		},
@@ -1064,22 +1064,22 @@ func GenerateExampleConfig() string {
 	config.SpeedTest = []SpeedTestMethod{
 		{
 			Type:    "icmp",
-			Timeout: 1000,
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 		},
 		{
 			Type:    "tcp",
 			Port:    "443",
-			Timeout: 1000,
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 		},
 		{
 			Type:    "tcp",
 			Port:    "80",
-			Timeout: 1000,
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 		},
 		{
 			Type:    "udp",
 			Port:    "53",
-			Timeout: 1000,
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 		},
 	}
 
@@ -5880,7 +5880,7 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 		{
 			Type:    "udp",
 			Port:    DefaultDNSPort,
-			Timeout: int(DefaultSpeedTimeout),
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 		},
 	}
 
