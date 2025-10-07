@@ -599,8 +599,8 @@ type RootServerManager struct {
 	serversV4    []string
 	serversV6    []string
 	speedTester  *SpeedTester
-	sortedV4     []RootServerWithLatency // 存储包含延迟信息的 IPv4 服务器
-	sortedV6     []RootServerWithLatency // 存储包含延迟信息的 IPv6 服务器
+	sortedV4     []RootServerWithLatency
+	sortedV6     []RootServerWithLatency
 	lastSortTime time.Time
 	mu           sync.RWMutex
 }
