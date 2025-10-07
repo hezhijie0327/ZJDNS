@@ -147,7 +147,7 @@ const (
 
 	// SpeedTest Configuration
 	DefaultSpeedConcurrency = 4
-	UnreachableLatency      = 9999 * time.Millisecond
+	UnreachableLatency      = 10 * time.Second
 
 	// Default Values
 	DefaultLogLevel = "info"
