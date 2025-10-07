@@ -1583,20 +1583,29 @@ func (cm *ConnectionManager) CleanupIdleConnections() {
 		return
 	}
 
-	// Cleanup TLS connections
 	cm.pools.tlsMu.Lock()
 	for key, conn := range cm.pools.tlsConns {
 		if err := conn.SetReadDeadline(time.Now().Add(ConnectionTestTimeout)); err != nil {
 			delete(cm.pools.tlsConns, key)
 			go CloseWithLog(conn, "TLS connection")
 			LogDebug("Cleaned up idle TLS connection: %s", key)
-		} else {
-			_ = conn.SetReadDeadline(time.Time{})
+			continue
+		}
+
+		var buf [1]byte
+		_, err := conn.Read(buf[:])
+		_ = conn.SetReadDeadline(time.Time{})
+
+		if err != nil {
+			if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+				delete(cm.pools.tlsConns, key)
+				go CloseWithLog(conn, "TLS connection")
+				LogDebug("Cleaned up broken TLS connection: %s (error: %v)", key, err)
+			}
 		}
 	}
 	cm.pools.tlsMu.Unlock()
 
-	// Cleanup QUIC connections
 	cm.pools.quicMu.Lock()
 	for key, conn := range cm.pools.quicConns {
 		if conn.Context().Err() != nil {
@@ -2030,9 +2039,36 @@ func (c *UnifiedSecureClient) IsHealthy() bool {
 
 	switch c.protocol {
 	case "tls":
-		return c.tlsConn != nil
+		if c.tlsConn == nil {
+			return false
+		}
+		if err := c.tlsConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+			return false
+		}
+		defer func() {
+			_ = c.tlsConn.SetReadDeadline(time.Time{})
+		}()
+
+		var buf [1]byte
+		if err := c.tlsConn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+			return false
+		}
+		_, err := c.tlsConn.Read(buf[:])
+		if err := c.tlsConn.SetReadDeadline(time.Time{}); err != nil {
+			return false
+		}
+
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return true
+		}
+		return false
+
 	case "quic":
-		return c.quicConn != nil && c.isQUICConnected && c.quicConn.Context().Err() == nil
+		if c.quicConn == nil || !c.isQUICConnected {
+			return false
+		}
+		return c.quicConn.Context().Err() == nil
+
 	case "https", "http3":
 		return c.dohClient != nil
 	}
@@ -2141,33 +2177,55 @@ func (c *UnifiedSecureClient) ConnectQUIC(addr string) error {
 }
 
 func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, error) {
-	switch c.protocol {
-	case "https", "http3":
-		return c.dohClient.Exchange(msg)
-	case "tls":
-		if !c.IsHealthy() {
+	maxRetries := 2
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			LogDebug("Retrying %s connection (attempt %d/%d)", c.protocol, attempt+1, maxRetries+1)
 			if err := c.Connect(addr); err != nil {
-				return nil, WrapError("reconnect", err)
+				lastErr = err
+				continue
 			}
 		}
-		resp, err := c.ExchangeTLS(msg)
-		if err != nil && IsRetryableError("tls", err) {
-			LogDebug("TLS connection error, reconnecting: %v", err)
-			if c.Connect(addr) == nil {
-				return c.ExchangeTLS(msg)
+
+		switch c.protocol {
+		case "https", "http3":
+			return c.dohClient.Exchange(msg)
+		case "tls":
+			if !c.IsHealthy() {
+				if err := c.Connect(addr); err != nil {
+					lastErr = WrapError("reconnect", err)
+					continue
+				}
 			}
-		}
-		return resp, err
-	case "quic":
-		if !c.IsHealthy() {
-			if err := c.Connect(addr); err != nil {
-				return nil, WrapError("reconnect", err)
+			resp, err := c.ExchangeTLS(msg)
+			if err != nil && IsRetryableError("tls", err) && attempt < maxRetries {
+				lastErr = err
+				LogDebug("TLS connection error, will retry: %v", err)
+				continue
 			}
+			return resp, err
+		case "quic":
+			if !c.IsHealthy() {
+				if err := c.Connect(addr); err != nil {
+					lastErr = WrapError("reconnect", err)
+					continue
+				}
+			}
+			resp, err := c.ExchangeQUIC(msg)
+			if err != nil && IsRetryableError("quic", err) && attempt < maxRetries {
+				lastErr = err
+				LogDebug("QUIC connection error, will retry: %v", err)
+				continue
+			}
+			return resp, err
+		default:
+			return nil, fmt.Errorf("unsupported protocol: %s", c.protocol)
 		}
-		return c.ExchangeQUIC(msg)
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", c.protocol)
 	}
+
+	return nil, WrapError(fmt.Sprintf("all %d attempts failed", maxRetries+1), lastErr)
 }
 
 func (c *UnifiedSecureClient) ExchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
@@ -2181,8 +2239,11 @@ func (c *UnifiedSecureClient) ExchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 	deadline := time.Now().Add(c.timeout)
 	if err := c.tlsConn.SetDeadline(deadline); err != nil {
 		LogDebug("Set TLS deadline failed: %v", err)
+		return nil, WrapError("set deadline", err)
 	}
-	defer func() { _ = c.tlsConn.SetDeadline(time.Time{}) }()
+	defer func() {
+		_ = c.tlsConn.SetDeadline(time.Time{})
+	}()
 
 	msgData, err := msg.Pack()
 	if err != nil {
@@ -2194,21 +2255,25 @@ func (c *UnifiedSecureClient) ExchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
 	copy(buf[2:], msgData)
 
 	if _, err := c.tlsConn.Write(buf); err != nil {
+		c.lastActivity = time.Time{}
 		return nil, WrapError("send TLS query", err)
 	}
 
 	lengthBuf := make([]byte, 2)
 	if _, err := io.ReadFull(c.tlsConn, lengthBuf); err != nil {
+		c.lastActivity = time.Time{}
 		return nil, WrapError("read response length", err)
 	}
 
 	respLength := binary.BigEndian.Uint16(lengthBuf)
 	if respLength == 0 || respLength > TCPBufferSize {
+		c.lastActivity = time.Time{}
 		return nil, fmt.Errorf("invalid response length: %d", respLength)
 	}
 
 	respBuf := make([]byte, respLength)
 	if _, err := io.ReadFull(c.tlsConn, respBuf); err != nil {
+		c.lastActivity = time.Time{}
 		return nil, WrapError("read response", err)
 	}
 
@@ -3852,11 +3917,15 @@ func (tm *TLSManager) HandleQUICConnection(conn *quic.Conn) {
 		default:
 		}
 
-		stream, err := conn.AcceptStream(tm.ctx)
+		ctx, cancel := context.WithTimeout(tm.ctx, SecureIdleTimeout)
+		stream, err := conn.AcceptStream(ctx)
+		cancel()
+
 		if err != nil {
-			if conn != nil {
-				tm.LogQUICError("accept quic stream", err)
+			if conn.Context().Err() != nil {
+				return
 			}
+			tm.LogQUICError("accept quic stream", err)
 			return
 		}
 
@@ -3877,39 +3946,42 @@ func (tm *TLSManager) HandleQUICConnection(conn *quic.Conn) {
 }
 
 func (tm *TLSManager) HandleQUICStream(stream *quic.Stream, conn *quic.Conn) {
-	buf := make([]byte, SecureBufferSize)
-	n, err := tm.ReadAll(stream, buf)
-
-	if err != nil && err != io.EOF {
-		LogDebug("DoQ stream read failed: %v", err)
+	deadline := time.Now().Add(QueryTimeout)
+	if err := stream.SetDeadline(deadline); err != nil {
+		LogDebug("DoQ set stream deadline failed: %v", err)
 		return
 	}
 
-	if n < MinDNSPacketSize {
-		LogDebug("DoQ message too short: %d bytes", n)
+	lengthBuf := make([]byte, 2)
+	if _, err := io.ReadFull(stream, lengthBuf); err != nil {
+		if err != io.EOF {
+			LogDebug("DoQ read length failed: %v", err)
+		}
+		return
+	}
+
+	msgLength := binary.BigEndian.Uint16(lengthBuf)
+	if msgLength == 0 || msgLength > SecureBufferSize-2 {
+		LogDebug("DoQ invalid message length: %d", msgLength)
+		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid-length")
+		return
+	}
+
+	msgBuf := make([]byte, msgLength)
+	if _, err := io.ReadFull(stream, msgBuf); err != nil {
+		LogDebug("DoQ read message failed: %v", err)
 		return
 	}
 
 	req := new(dns.Msg)
-	var msgData []byte
-
-	packetLen := binary.BigEndian.Uint16(buf[:2])
-	if packetLen == uint16(n-2) {
-		msgData = buf[2:n]
-	} else {
-		LogDebug("DoQ unsupported message format")
-		_ = conn.CloseWithError(QUICCodeProtocolError, "")
-		return
-	}
-
-	if err := req.Unpack(msgData); err != nil {
+	if err := req.Unpack(msgBuf); err != nil {
 		LogDebug("DoQ message parse failed: %v", err)
-		_ = conn.CloseWithError(QUICCodeProtocolError, "")
+		_ = conn.CloseWithError(QUICCodeProtocolError, "parse-error")
 		return
 	}
 
 	if !tm.ValidQUICMsg(req) {
-		_ = conn.CloseWithError(QUICCodeProtocolError, "")
+		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid-message")
 		return
 	}
 
@@ -3927,8 +3999,9 @@ func (tm *TLSManager) HandleSecureDNSConnection(conn net.Conn, protocol string) 
 		return
 	}
 
-	if err := tlsConn.SetReadDeadline(time.Now().Add(QueryTimeout)); err != nil {
+	if err := tlsConn.SetReadDeadline(time.Now().Add(SecureIdleTimeout)); err != nil {
 		LogDebug("Set TLS read deadline failed: %v", err)
+		return
 	}
 
 	for {
@@ -3940,7 +4013,7 @@ func (tm *TLSManager) HandleSecureDNSConnection(conn net.Conn, protocol string) 
 
 		lengthBuf := make([]byte, 2)
 		if _, err := io.ReadFull(tlsConn, lengthBuf); err != nil {
-			if err != io.EOF {
+			if err != io.EOF && !IsTimeoutError(err) {
 				LogDebug("%s length read failed: %v", protocol, err)
 			}
 			return
@@ -3976,6 +4049,11 @@ func (tm *TLSManager) HandleSecureDNSConnection(conn net.Conn, protocol string) 
 		lengthPrefix := make([]byte, 2)
 		binary.BigEndian.PutUint16(lengthPrefix, uint16(len(respBuf)))
 
+		if err := tlsConn.SetWriteDeadline(time.Now().Add(QueryTimeout)); err != nil {
+			LogDebug("%s set write deadline failed: %v", protocol, err)
+			return
+		}
+
 		if _, err := tlsConn.Write(lengthPrefix); err != nil {
 			LogDebug("%s response length write failed: %v", protocol, err)
 			return
@@ -3986,10 +4064,23 @@ func (tm *TLSManager) HandleSecureDNSConnection(conn net.Conn, protocol string) 
 			return
 		}
 
-		if err := tlsConn.SetReadDeadline(time.Now().Add(QueryTimeout)); err != nil {
-			LogDebug("Update TLS read deadline failed: %v", err)
+		if err := tlsConn.SetWriteDeadline(time.Time{}); err != nil {
+			LogDebug("%s clear write deadline failed: %v", protocol, err)
+		}
+
+		if err := tlsConn.SetReadDeadline(time.Now().Add(SecureIdleTimeout)); err != nil {
+			LogDebug("%s update read deadline failed: %v", protocol, err)
+			return
 		}
 	}
+}
+
+func IsTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	netErr, ok := err.(net.Error)
+	return ok && netErr.Timeout()
 }
 
 func (tm *TLSManager) GetSecureClientIP(conn interface{}) net.IP {
