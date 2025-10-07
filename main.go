@@ -5495,7 +5495,7 @@ func (rt *RequestTracker) Finish() {
 // DNS Record Utilities
 // =============================================================================
 
-func createCompactRecord(rr dns.RR) *CompactRecord {
+func CreateCompactRecord(rr dns.RR) *CompactRecord {
 	if rr == nil {
 		return nil
 	}
@@ -5533,7 +5533,7 @@ func CompactRecords(rrs []dns.RR) []*CompactRecord {
 		rrText := rr.String()
 		if !seen[rrText] {
 			seen[rrText] = true
-			if cr := createCompactRecord(rr); cr != nil {
+			if cr := CreateCompactRecord(rr); cr != nil {
 				result = append(result, cr)
 			}
 		}
