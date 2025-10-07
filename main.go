@@ -589,6 +589,10 @@ type ResourceManager struct {
 	}
 }
 
+// =============================================================================
+// Types - Config Management
+// =============================================================================
+
 type ConfigManager struct{}
 
 // =============================================================================
@@ -4347,6 +4351,7 @@ func (s *DNSServer) GetRootServers() []string {
 	for i, server := range serversWithLatency {
 		servers[i] = server.Server
 	}
+
 	return servers
 }
 
