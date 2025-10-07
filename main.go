@@ -60,13 +60,12 @@ const (
 	MinDNSPacketSize = 12
 
 	// Limits
-	MaxDomainLength    = 253
-	MaxCNAMEChain      = 16
-	MaxRecursionDepth  = 16
-	MaxConcurrency     = 1000
-	MaxSingleQuery     = 3
-	MaxNSResolve       = 3
-	ConnectionPoolSize = 50
+	MaxDomainLength   = 253
+	MaxCNAMEChain     = 16
+	MaxRecursionDepth = 16
+	MaxConcurrency    = 1000
+	MaxSingleQuery    = 3
+	MaxNSResolve      = 3
 
 	// Timeouts - Query
 	QueryTimeout     = 5 * time.Second
@@ -82,13 +81,11 @@ const (
 
 	// Timeouts - Server
 	ShutdownTimeout      = 5 * time.Second
-	CleanupInterval      = 30 * time.Second
 	DoHReadHeaderTimeout = 5 * time.Second
 	DoHWriteTimeout      = 5 * time.Second
 
 	// Connection Lifecycle
 	SecureIdleTimeout  = 300 * time.Second
-	SecureKeepAlive    = 15 * time.Second
 	DoHIdleConnTimeout = 300 * time.Second
 
 	// Cache
@@ -284,8 +281,7 @@ type SpeedTestMethod struct {
 	Timeout int    `json:"timeout"`
 }
 
-type ConfigManager struct {
-}
+type ConfigManager struct{}
 
 // =============================================================================
 // Types - Cache
@@ -347,68 +343,12 @@ type RedisCache struct {
 // =============================================================================
 
 type ConnectionManager struct {
-	pools       *PoolManager
-	clients     *SecureClientManager
-	queryClient *QueryClient
 	timeout     time.Duration
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 	closed      int32
-}
-
-type PoolManager struct {
-	udpClients chan *dns.Client
-	tlsConns   map[string]*tls.Conn
-	tlsMu      sync.RWMutex
-	quicConns  map[string]*quic.Conn
-	quicMu     sync.RWMutex
-}
-
-type SecureClientManager struct {
-	clients map[string]SecureClient
-	mu      sync.RWMutex
-}
-
-type SecureClient interface {
-	Exchange(msg *dns.Msg, addr string) (*dns.Msg, error)
-	IsHealthy() bool
-	Closeable
-}
-
-type UnifiedSecureClient struct {
-	protocol        string
-	serverName      string
-	skipVerify      bool
-	timeout         time.Duration
-	tlsConn         *tls.Conn
-	quicConn        *quic.Conn
-	dohClient       *DoHClient
-	isQUICConnected bool
-	lastActivity    time.Time
-	mu              sync.Mutex
-	connMgr         *ConnectionManager
-	addr            string
-}
-
-type DoHClient struct {
-	addr         *url.URL
-	tlsConfig    *tls.Config
-	client       *http.Client
-	clientMu     sync.Mutex
-	quicConfig   *quic.Config
-	timeout      time.Duration
-	skipVerify   bool
-	serverName   string
-	addrRedacted string
-	httpVersions []string
-	closed       int32
-}
-
-type HTTP3Transport struct {
-	baseTransport *http3.Transport
-	closed        bool
-	mu            sync.RWMutex
+	queryClient *QueryClient
 }
 
 type QueryClient struct {
@@ -1539,284 +1479,10 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 
 func NewConnectionManager() *ConnectionManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	cm := &ConnectionManager{
-		pools: &PoolManager{
-			udpClients: make(chan *dns.Client, ConnectionPoolSize),
-			tlsConns:   make(map[string]*tls.Conn),
-			quicConns:  make(map[string]*quic.Conn),
-		},
-		clients: &SecureClientManager{
-			clients: make(map[string]SecureClient),
-		},
+	return &ConnectionManager{
 		timeout: QueryTimeout,
 		ctx:     ctx,
 		cancel:  cancel,
-	}
-
-	cm.queryClient = NewQueryClient(cm)
-
-	cm.wg.Add(1)
-	go func() {
-		defer cm.wg.Done()
-		cm.StartCleanupRoutine()
-	}()
-
-	return cm
-}
-
-func (cm *ConnectionManager) StartCleanupRoutine() {
-	ticker := time.NewTicker(CleanupInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-cm.ctx.Done():
-			return
-		case <-ticker.C:
-			cm.CleanupIdleConnections()
-		}
-	}
-}
-
-func (cm *ConnectionManager) CleanupIdleConnections() {
-	if atomic.LoadInt32(&cm.closed) != 0 {
-		return
-	}
-
-	// Cleanup TLS connections
-	cm.pools.tlsMu.Lock()
-	for key, conn := range cm.pools.tlsConns {
-		if err := conn.SetReadDeadline(time.Now().Add(ConnectionTestTimeout)); err != nil {
-			delete(cm.pools.tlsConns, key)
-			go CloseWithLog(conn, "TLS connection")
-			LogDebug("Cleaned up idle TLS connection: %s", key)
-		} else {
-			_ = conn.SetReadDeadline(time.Time{})
-		}
-	}
-	cm.pools.tlsMu.Unlock()
-
-	// Cleanup QUIC connections
-	cm.pools.quicMu.Lock()
-	for key, conn := range cm.pools.quicConns {
-		if conn.Context().Err() != nil {
-			delete(cm.pools.quicConns, key)
-			go func(c *quic.Conn) {
-				_ = c.CloseWithError(QUICCodeNoError, "idle-cleanup")
-			}(conn)
-			LogDebug("Cleaned up idle QUIC connection: %s", key)
-		}
-	}
-	cm.pools.quicMu.Unlock()
-}
-
-func (cm *ConnectionManager) GetUDPClient() *dns.Client {
-	if atomic.LoadInt32(&cm.closed) != 0 {
-		return cm.CreateUDPClient()
-	}
-
-	select {
-	case client := <-cm.pools.udpClients:
-		return client
-	default:
-		return cm.CreateUDPClient()
-	}
-}
-
-func (cm *ConnectionManager) CreateUDPClient() *dns.Client {
-	return &dns.Client{
-		Timeout:        cm.timeout,
-		Net:            "udp",
-		UDPSize:        UDPBufferSize,
-		SingleInflight: false,
-	}
-}
-
-func (cm *ConnectionManager) PutUDPClient(client *dns.Client) {
-	if client == nil || atomic.LoadInt32(&cm.closed) != 0 {
-		return
-	}
-	select {
-	case cm.pools.udpClients <- client:
-	default:
-	}
-}
-
-func (cm *ConnectionManager) GetTCPClient() *dns.Client {
-	return &dns.Client{
-		Timeout:        cm.timeout,
-		Net:            "tcp",
-		SingleInflight: false,
-	}
-}
-
-func (cm *ConnectionManager) GetTLSConn(host, port string, tlsConfig *tls.Config) (*tls.Conn, error) {
-	cacheKey := fmt.Sprintf("%s:%s", host, port)
-
-	cm.pools.tlsMu.RLock()
-	if conn, exists := cm.pools.tlsConns[cacheKey]; exists {
-		cm.pools.tlsMu.RUnlock()
-
-		if err := conn.SetReadDeadline(time.Now().Add(ConnectionTestTimeout)); err == nil {
-			var buf [1]byte
-			if _, err := conn.Read(buf[:]); err == nil || err == io.EOF {
-				_ = conn.SetReadDeadline(time.Time{})
-				LogDebug("Reusing TLS connection: %s", cacheKey)
-				return conn, nil
-			}
-		}
-
-		cm.RemoveTLSConn(cacheKey, conn)
-	} else {
-		cm.pools.tlsMu.RUnlock()
-	}
-
-	dialer := &net.Dialer{
-		Timeout:   TLSHandshakeTimeout,
-		KeepAlive: SecureKeepAlive,
-	}
-
-	if runtime.GOOS == "linux" {
-		dialer.Control = func(network, address string, c syscall.RawConn) error {
-			return c.Control(func(fd uintptr) {
-				_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_NODELAY, TCPNoDelay)
-				_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, TCPQuickAck, 1)
-			})
-		}
-	}
-
-	conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), tlsConfig)
-	if err != nil {
-		return nil, WrapError("TLS dial", err)
-	}
-
-	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
-		_ = tcpConn.SetKeepAlive(true)
-		_ = tcpConn.SetKeepAlivePeriod(SecureKeepAlive)
-		_ = tcpConn.SetNoDelay(true)
-		_ = tcpConn.SetReadBuffer(TCPReadBufferSize)
-		_ = tcpConn.SetWriteBuffer(TCPWriteBufferSize)
-	}
-
-	connState := conn.ConnectionState()
-	if connState.DidResume {
-		LogDebug("TLS session resumed: %s:%s", host, port)
-	} else {
-		LogDebug("TLS full handshake: %s:%s", host, port)
-	}
-
-	cm.pools.tlsMu.Lock()
-	cm.pools.tlsConns[cacheKey] = conn
-	cm.pools.tlsMu.Unlock()
-
-	LogDebug("Created new TLS connection: %s", cacheKey)
-	return conn, nil
-}
-
-func (cm *ConnectionManager) RemoveTLSConn(key string, conn *tls.Conn) {
-	cm.pools.tlsMu.Lock()
-	defer cm.pools.tlsMu.Unlock()
-
-	if currentConn, exists := cm.pools.tlsConns[key]; exists && currentConn == conn {
-		delete(cm.pools.tlsConns, key)
-		go CloseWithLog(conn, "TLS connection")
-	}
-}
-
-func (cm *ConnectionManager) GetQUICConn(addr string, tlsConfig *tls.Config, quicConfig *quic.Config) (*quic.Conn, error) {
-	cacheKey := addr
-
-	cm.pools.quicMu.RLock()
-	if conn, exists := cm.pools.quicConns[cacheKey]; exists {
-		cm.pools.quicMu.RUnlock()
-
-		if conn.Context().Err() == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), ConnectionTestTimeout)
-			defer cancel()
-
-			stream, err := conn.OpenStreamSync(ctx)
-			if err == nil {
-				_ = stream.Close()
-				LogDebug("Reusing QUIC connection: %s", addr)
-				return conn, nil
-			}
-		}
-
-		cm.RemoveQUICConn(cacheKey, conn)
-	} else {
-		cm.pools.quicMu.RUnlock()
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), ConnTimeout)
-	defer cancel()
-
-	conn, err := quic.DialAddr(ctx, addr, tlsConfig, quicConfig)
-	if err != nil {
-		return nil, WrapError("QUIC dial", err)
-	}
-
-	cm.pools.quicMu.Lock()
-	cm.pools.quicConns[cacheKey] = conn
-	cm.pools.quicMu.Unlock()
-
-	LogDebug("Created new QUIC connection: %s", addr)
-	return conn, nil
-}
-
-func (cm *ConnectionManager) RemoveQUICConn(key string, conn *quic.Conn) {
-	cm.pools.quicMu.Lock()
-	defer cm.pools.quicMu.Unlock()
-
-	if currentConn, exists := cm.pools.quicConns[key]; exists && currentConn == conn {
-		delete(cm.pools.quicConns, key)
-		go func() {
-			_ = conn.CloseWithError(QUICCodeNoError, "cleanup")
-		}()
-	}
-}
-
-func (cm *ConnectionManager) GetSecureClient(protocol, addr, serverName string, skipVerify bool) (SecureClient, error) {
-	if atomic.LoadInt32(&cm.closed) != 0 {
-		return nil, errors.New("connection manager closed")
-	}
-
-	cacheKey := fmt.Sprintf("%s:%s:%s:%v", protocol, addr, serverName, skipVerify)
-
-	cm.clients.mu.RLock()
-	if client, exists := cm.clients.clients[cacheKey]; exists {
-		cm.clients.mu.RUnlock()
-
-		if client.IsHealthy() {
-			LogDebug("Reusing secure client: %s", protocol)
-			return client, nil
-		} else {
-			cm.CleanupClient(cacheKey, client)
-		}
-	} else {
-		cm.clients.mu.RUnlock()
-	}
-
-	client, err := NewUnifiedSecureClient(cm, protocol, addr, serverName, skipVerify)
-	if err != nil {
-		return nil, err
-	}
-
-	cm.clients.mu.Lock()
-	if atomic.LoadInt32(&cm.closed) == 0 {
-		cm.clients.clients[cacheKey] = client
-	}
-	cm.clients.mu.Unlock()
-
-	return client, nil
-}
-
-func (cm *ConnectionManager) CleanupClient(key string, client SecureClient) {
-	cm.clients.mu.Lock()
-	defer cm.clients.mu.Unlock()
-
-	if currentClient, exists := cm.clients.clients[key]; exists && currentClient == client {
-		delete(cm.clients.clients, key)
-		go CloseWithLog(client, "Secure client")
 	}
 }
 
@@ -1826,41 +1492,15 @@ func (cm *ConnectionManager) Close() error {
 	}
 
 	LogInfo("Shutting down connection manager...")
-
 	cm.cancel()
-
-	cm.clients.mu.Lock()
-	for key, client := range cm.clients.clients {
-		CloseWithLog(client, fmt.Sprintf("Secure client [%s]", key))
-	}
-	cm.clients.clients = make(map[string]SecureClient)
-	cm.clients.mu.Unlock()
-
-	cm.pools.tlsMu.Lock()
-	for key, conn := range cm.pools.tlsConns {
-		_ = conn.Close()
-		LogDebug("Closed TLS connection: %s", key)
-	}
-	cm.pools.tlsConns = make(map[string]*tls.Conn)
-	cm.pools.tlsMu.Unlock()
-
-	cm.pools.quicMu.Lock()
-	for key, conn := range cm.pools.quicConns {
-		_ = conn.CloseWithError(QUICCodeNoError, "shutdown")
-		LogDebug("Closed QUIC connection: %s", key)
-	}
-	cm.pools.quicConns = make(map[string]*quic.Conn)
-	cm.pools.quicMu.Unlock()
-
-	close(cm.pools.udpClients)
-	for range cm.pools.udpClients {
-	}
-
 	cm.wg.Wait()
-
 	LogInfo("Connection manager shut down")
 	return nil
 }
+
+// =============================================================================
+// Query Client
+// =============================================================================
 
 func NewQueryClient(connMgr *ConnectionManager) *QueryClient {
 	return &QueryClient{
@@ -1886,7 +1526,7 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 	protocol := strings.ToLower(server.Protocol)
 
 	if IsSecureProtocol(protocol) {
-		result.Response, result.Error = qc.ExecuteSecureQuery(msg, server, tracker)
+		result.Response, result.Error = qc.ExecuteSecureQuery(queryCtx, msg, server, tracker)
 		result.Duration = time.Since(start)
 		result.Protocol = strings.ToUpper(protocol)
 		return result
@@ -1927,19 +1567,275 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 	return result
 }
 
-func (qc *QueryClient) ExecuteSecureQuery(msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
-	client, err := qc.connMgr.GetSecureClient(server.Protocol, server.Address, server.ServerName, server.SkipTLSVerify)
+func (qc *QueryClient) ExecuteSecureQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
+	protocol := strings.ToLower(server.Protocol)
+
+	switch protocol {
+	case "tls":
+		return qc.ExecuteTLSQuery(ctx, msg, server, tracker)
+	case "quic":
+		return qc.ExecuteQUICQuery(ctx, msg, server, tracker)
+	case "https", "http3":
+		return qc.ExecuteDoHQuery(ctx, msg, server, tracker)
+	default:
+		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
+	}
+}
+
+func (qc *QueryClient) ExecuteTLSQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
+	host, port, err := net.SplitHostPort(server.Address)
 	if err != nil {
-		return nil, WrapError(fmt.Sprintf("get %s client", strings.ToUpper(server.Protocol)), err)
+		return nil, WrapError("parse TLS address", err)
 	}
 
-	response, err := client.Exchange(msg, server.Address)
-	if err != nil {
-		return nil, err
+	tlsConfig := &tls.Config{
+		ServerName:         server.ServerName,
+		InsecureSkipVerify: server.SkipTLSVerify,
+		MinVersion:         tls.VersionTLS12,
 	}
 
-	if tracker != nil && response != nil {
-		tracker.AddStep("%s query successful, rcode: %s", strings.ToUpper(server.Protocol), dns.RcodeToString[response.Rcode])
+	dialer := &net.Dialer{
+		Timeout: TLSHandshakeTimeout,
+	}
+
+	conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), tlsConfig)
+	if err != nil {
+		return nil, WrapError("TLS dial", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if err := conn.SetDeadline(time.Now().Add(qc.timeout)); err != nil {
+		return nil, WrapError("set TLS deadline", err)
+	}
+
+	msgData, err := msg.Pack()
+	if err != nil {
+		return nil, WrapError("pack message", err)
+	}
+
+	buf := make([]byte, 2+len(msgData))
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
+	copy(buf[2:], msgData)
+
+	if _, err := conn.Write(buf); err != nil {
+		return nil, WrapError("send TLS query", err)
+	}
+
+	lengthBuf := make([]byte, 2)
+	if _, err := io.ReadFull(conn, lengthBuf); err != nil {
+		return nil, WrapError("read response length", err)
+	}
+
+	respLength := binary.BigEndian.Uint16(lengthBuf)
+	if respLength == 0 || respLength > TCPBufferSize {
+		return nil, fmt.Errorf("invalid response length: %d", respLength)
+	}
+
+	respBuf := make([]byte, respLength)
+	if _, err := io.ReadFull(conn, respBuf); err != nil {
+		return nil, WrapError("read response", err)
+	}
+
+	response := new(dns.Msg)
+	if err := response.Unpack(respBuf); err != nil {
+		return nil, WrapError("parse response", err)
+	}
+
+	if tracker != nil {
+		tracker.AddStep("TLS query successful, rcode: %s", dns.RcodeToString[response.Rcode])
+	}
+
+	return response, nil
+}
+
+func (qc *QueryClient) ExecuteQUICQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
+	tlsConfig := &tls.Config{
+		ServerName:         server.ServerName,
+		InsecureSkipVerify: server.SkipTLSVerify,
+		NextProtos:         NextProtoQUIC,
+	}
+
+	quicConfig := &quic.Config{
+		MaxIdleTimeout:     SecureIdleTimeout,
+		MaxIncomingStreams: MaxIncomingStreams,
+	}
+
+	conn, err := quic.DialAddr(ctx, server.Address, tlsConfig, quicConfig)
+	if err != nil {
+		return nil, WrapError("QUIC dial", err)
+	}
+	defer func() { _ = conn.CloseWithError(QUICCodeNoError, "") }()
+
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, WrapError("create QUIC stream", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	if err := stream.SetDeadline(time.Now().Add(qc.timeout)); err != nil {
+		return nil, WrapError("set stream timeout", err)
+	}
+
+	// 保存原始 ID
+	originalID := msg.Id
+	msg.Id = 0
+
+	msgData, err := msg.Pack()
+	if err != nil {
+		msg.Id = originalID
+		return nil, WrapError("pack message", err)
+	}
+
+	buf := make([]byte, 2+len(msgData))
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
+	copy(buf[2:], msgData)
+
+	if _, err := stream.Write(buf); err != nil {
+		msg.Id = originalID
+		return nil, WrapError("send QUIC query", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		LogDebug("Close QUIC stream write failed: %v", err)
+	}
+
+	respBuf := make([]byte, SecureBufferSize)
+	n, err := stream.Read(respBuf)
+	if err != nil && n == 0 {
+		msg.Id = originalID
+		return nil, WrapError("read QUIC response", err)
+	}
+
+	stream.CancelRead(0)
+
+	if n < 2 {
+		msg.Id = originalID
+		return nil, fmt.Errorf("QUIC response too short: %d bytes", n)
+	}
+
+	response := new(dns.Msg)
+	if err := response.Unpack(respBuf[2:n]); err != nil {
+		msg.Id = originalID
+		return nil, WrapError("parse QUIC response", err)
+	}
+
+	// 恢复原始 ID
+	msg.Id = originalID
+	response.Id = originalID
+
+	if tracker != nil {
+		tracker.AddStep("QUIC query successful, rcode: %s", dns.RcodeToString[response.Rcode])
+	}
+
+	return response, nil
+}
+
+func (qc *QueryClient) ExecuteDoHQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
+	parsedURL, err := url.Parse(server.Address)
+	if err != nil {
+		return nil, WrapError("parse DoH address", err)
+	}
+
+	if parsedURL.Port() == "" {
+		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultHTTPSPort)
+	}
+
+	tlsConfig := &tls.Config{
+		ServerName:         server.ServerName,
+		InsecureSkipVerify: server.SkipTLSVerify,
+		MinVersion:         tls.VersionTLS12,
+	}
+
+	var transport http.RoundTripper
+	protocol := strings.ToLower(server.Protocol)
+
+	if protocol == "http3" {
+		tlsConfig.NextProtos = NextProtoHTTP3
+		quicConfig := &quic.Config{
+			MaxIdleTimeout:     SecureIdleTimeout,
+			MaxIncomingStreams: MaxIncomingStreams,
+		}
+		transport = &http3.Transport{
+			TLSClientConfig: tlsConfig,
+			QUICConfig:      quicConfig,
+		}
+		defer func() { _ = transport.(*http3.Transport).Close() }()
+	} else {
+		tlsConfig.NextProtos = NextProtoHTTP2
+		transport = &http.Transport{
+			TLSClientConfig:    tlsConfig,
+			DisableCompression: true,
+			IdleConnTimeout:    DoHIdleConnTimeout,
+			ForceAttemptHTTP2:  true,
+		}
+		_, _ = http2.ConfigureTransports(transport.(*http.Transport))
+		defer transport.(*http.Transport).CloseIdleConnections()
+	}
+
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   qc.timeout,
+	}
+
+	// 保存原始 ID
+	originalID := msg.Id
+	msg.Id = 0
+
+	buf, err := msg.Pack()
+	if err != nil {
+		msg.Id = originalID
+		return nil, WrapError("pack DNS message", err)
+	}
+
+	q := url.Values{
+		"dns": []string{base64.RawURLEncoding.EncodeToString(buf)},
+	}
+
+	u := url.URL{
+		Scheme:   parsedURL.Scheme,
+		Host:     parsedURL.Host,
+		Path:     parsedURL.Path,
+		RawQuery: q.Encode(),
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		msg.Id = originalID
+		return nil, WrapError("create HTTP request", err)
+	}
+
+	httpReq.Header.Set("Accept", "application/dns-message")
+
+	httpResp, err := httpClient.Do(httpReq)
+	if err != nil {
+		msg.Id = originalID
+		return nil, WrapError("send HTTP request", err)
+	}
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode != http.StatusOK {
+		msg.Id = originalID
+		return nil, fmt.Errorf("HTTP error: %d", httpResp.StatusCode)
+	}
+
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		msg.Id = originalID
+		return nil, WrapError("read response", err)
+	}
+
+	response := &dns.Msg{}
+	if err := response.Unpack(body); err != nil {
+		msg.Id = originalID
+		return nil, WrapError("parse DNS response", err)
+	}
+
+	// 恢复原始 ID
+	msg.Id = originalID
+	response.Id = originalID
+
+	if tracker != nil {
+		tracker.AddStep("DoH query successful, rcode: %s", dns.RcodeToString[response.Rcode])
 	}
 
 	return response, nil
@@ -1947,27 +1843,22 @@ func (qc *QueryClient) ExecuteSecureQuery(msg *dns.Msg, server *UpstreamServer, 
 
 func (qc *QueryClient) ExecuteTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
 	msgCopy := SafeCopyMessage(msg)
+	defer GlobalResource.PutDNSMessage(msgCopy)
 
-	var client *dns.Client
-	if server.Protocol == "tcp" {
-		client = qc.connMgr.GetTCPClient()
-	} else {
-		client = qc.connMgr.GetUDPClient()
-		defer qc.connMgr.PutUDPClient(client)
+	client := &dns.Client{
+		Timeout: qc.timeout,
+		Net:     server.Protocol,
+	}
+
+	if server.Protocol == "udp" {
+		client.UDPSize = UDPBufferSize
 	}
 
 	response, _, err := client.ExchangeContext(ctx, msgCopy, server.Address)
 
 	if tracker != nil && err == nil && response != nil {
-		protocolName := "UDP"
-		if server.Protocol == "tcp" {
-			protocolName = "TCP"
-		}
+		protocolName := strings.ToUpper(server.Protocol)
 		tracker.AddStep("%s query successful, rcode: %s", protocolName, dns.RcodeToString[response.Rcode])
-	}
-
-	if msgCopy != nil {
-		GlobalResource.PutDNSMessage(msgCopy)
 	}
 
 	return response, err
@@ -1987,744 +1878,6 @@ func (qc *QueryClient) NeedsTCPFallback(result *QueryResult, protocol string) bo
 	}
 
 	return false
-}
-
-// =============================================================================
-// Unified Secure Client
-// =============================================================================
-
-func NewUnifiedSecureClient(connMgr *ConnectionManager, protocol, addr, serverName string, skipVerify bool) (*UnifiedSecureClient, error) {
-	client := &UnifiedSecureClient{
-		protocol:     strings.ToLower(protocol),
-		serverName:   serverName,
-		skipVerify:   skipVerify,
-		timeout:      QueryTimeout,
-		lastActivity: time.Now(),
-		connMgr:      connMgr,
-		addr:         addr,
-	}
-
-	switch client.protocol {
-	case "https", "http3":
-		var err error
-		client.dohClient, err = NewDoHClient(addr, serverName, skipVerify, QueryTimeout)
-		if err != nil {
-			return nil, WrapError("create DoH client", err)
-		}
-	case "tls", "quic":
-		// Connection will be established on first use
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
-	}
-
-	return client, nil
-}
-
-func (c *UnifiedSecureClient) IsHealthy() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if time.Since(c.lastActivity) > SecureIdleTimeout {
-		return false
-	}
-
-	switch c.protocol {
-	case "tls":
-		return c.tlsConn != nil
-	case "quic":
-		return c.quicConn != nil && c.isQUICConnected && c.quicConn.Context().Err() == nil
-	case "https", "http3":
-		return c.dohClient != nil
-	}
-	return false
-}
-
-func (c *UnifiedSecureClient) Connect(addr string) error {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return WrapError("parse address", err)
-	}
-
-	switch c.protocol {
-	case "tls":
-		return c.ConnectTLS(host, port)
-	case "quic":
-		return c.ConnectQUIC(net.JoinHostPort(host, port))
-	default:
-		return fmt.Errorf("unsupported protocol: %s", c.protocol)
-	}
-}
-
-func (c *UnifiedSecureClient) ConnectTLS(host, port string) error {
-	tlsConfig := &tls.Config{
-		ServerName:             c.serverName,
-		InsecureSkipVerify:     c.skipVerify,
-		ClientSessionCache:     tls.NewLRUClientSessionCache(TLSSessionCacheSize),
-		MinVersion:             tls.VersionTLS12,
-		SessionTicketsDisabled: false,
-	}
-
-	if c.connMgr != nil {
-		conn, err := c.connMgr.GetTLSConn(host, port, tlsConfig)
-		if err != nil {
-			return err
-		}
-		c.tlsConn = conn
-		c.lastActivity = time.Now()
-		return nil
-	}
-
-	dialer := &net.Dialer{
-		Timeout:   TLSHandshakeTimeout,
-		KeepAlive: SecureKeepAlive,
-	}
-
-	conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), tlsConfig)
-	if err != nil {
-		return WrapError("TLS connection", err)
-	}
-
-	if tcpConn, ok := conn.NetConn().(*net.TCPConn); ok {
-		_ = tcpConn.SetKeepAlive(true)
-		_ = tcpConn.SetKeepAlivePeriod(SecureKeepAlive)
-		_ = tcpConn.SetNoDelay(true)
-		_ = tcpConn.SetReadBuffer(TCPReadBufferSize)
-		_ = tcpConn.SetWriteBuffer(TCPWriteBufferSize)
-	}
-
-	c.tlsConn = conn
-	c.lastActivity = time.Now()
-	return nil
-}
-
-func (c *UnifiedSecureClient) ConnectQUIC(addr string) error {
-	tlsConfig := &tls.Config{
-		ServerName:         c.serverName,
-		InsecureSkipVerify: c.skipVerify,
-		NextProtos:         NextProtoQUIC,
-		ClientSessionCache: tls.NewLRUClientSessionCache(QUICSessionCacheSize),
-	}
-
-	quicConfig := &quic.Config{
-		MaxIdleTimeout:        SecureIdleTimeout,
-		MaxIncomingStreams:    MaxIncomingStreams,
-		MaxIncomingUniStreams: MaxIncomingStreams,
-		KeepAlivePeriod:       SecureKeepAlive,
-		Allow0RTT:             true,
-		EnableDatagrams:       false,
-		InitialPacketSize:     InitialPacketSize,
-	}
-
-	if c.connMgr != nil {
-		conn, err := c.connMgr.GetQUICConn(addr, tlsConfig, quicConfig)
-		if err != nil {
-			return err
-		}
-		c.quicConn = conn
-		c.isQUICConnected = true
-		c.lastActivity = time.Now()
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-
-	conn, err := quic.DialAddr(ctx, addr, tlsConfig, quicConfig)
-	if err != nil {
-		return WrapError("QUIC connection", err)
-	}
-
-	c.quicConn = conn
-	c.isQUICConnected = true
-	c.lastActivity = time.Now()
-	return nil
-}
-
-func (c *UnifiedSecureClient) Exchange(msg *dns.Msg, addr string) (*dns.Msg, error) {
-	switch c.protocol {
-	case "https", "http3":
-		return c.dohClient.Exchange(msg)
-	case "tls":
-		if !c.IsHealthy() {
-			if err := c.Connect(addr); err != nil {
-				return nil, WrapError("reconnect", err)
-			}
-		}
-		resp, err := c.ExchangeTLS(msg)
-		if err != nil && IsRetryableError("tls", err) {
-			LogDebug("TLS connection error, reconnecting: %v", err)
-			if c.Connect(addr) == nil {
-				return c.ExchangeTLS(msg)
-			}
-		}
-		return resp, err
-	case "quic":
-		if !c.IsHealthy() {
-			if err := c.Connect(addr); err != nil {
-				return nil, WrapError("reconnect", err)
-			}
-		}
-		return c.ExchangeQUIC(msg)
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", c.protocol)
-	}
-}
-
-func (c *UnifiedSecureClient) ExchangeTLS(msg *dns.Msg) (*dns.Msg, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.tlsConn == nil {
-		return nil, errors.New("TLS connection not established")
-	}
-
-	deadline := time.Now().Add(c.timeout)
-	if err := c.tlsConn.SetDeadline(deadline); err != nil {
-		LogDebug("Set TLS deadline failed: %v", err)
-	}
-	defer func() { _ = c.tlsConn.SetDeadline(time.Time{}) }()
-
-	msgData, err := msg.Pack()
-	if err != nil {
-		return nil, WrapError("pack message", err)
-	}
-
-	buf := make([]byte, 2+len(msgData))
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
-	copy(buf[2:], msgData)
-
-	if _, err := c.tlsConn.Write(buf); err != nil {
-		return nil, WrapError("send TLS query", err)
-	}
-
-	lengthBuf := make([]byte, 2)
-	if _, err := io.ReadFull(c.tlsConn, lengthBuf); err != nil {
-		return nil, WrapError("read response length", err)
-	}
-
-	respLength := binary.BigEndian.Uint16(lengthBuf)
-	if respLength == 0 || respLength > TCPBufferSize {
-		return nil, fmt.Errorf("invalid response length: %d", respLength)
-	}
-
-	respBuf := make([]byte, respLength)
-	if _, err := io.ReadFull(c.tlsConn, respBuf); err != nil {
-		return nil, WrapError("read response", err)
-	}
-
-	response := new(dns.Msg)
-	if err := response.Unpack(respBuf); err != nil {
-		return nil, WrapError("parse response", err)
-	}
-
-	c.lastActivity = time.Now()
-	return response, nil
-}
-
-func (c *UnifiedSecureClient) ExchangeQUIC(msg *dns.Msg) (*dns.Msg, error) {
-	originalID := msg.Id
-	msg.Id = 0
-	defer func() {
-		msg.Id = originalID
-	}()
-
-	resp, err := c.ExchangeQUICDirect(msg)
-
-	if errors.Is(err, quic.Err0RTTRejected) {
-		LogDebug("0-RTT rejected, retrying with 1-RTT")
-
-		c.mu.Lock()
-		if c.quicConn != nil {
-			_ = c.quicConn.CloseWithError(QUICCodeNoError, "0rtt-rejected")
-			c.quicConn = nil
-			c.isQUICConnected = false
-		}
-		c.mu.Unlock()
-
-		resp, err = c.ExchangeQUICDirect(msg)
-	}
-
-	if resp != nil {
-		resp.Id = originalID
-	}
-	return resp, err
-}
-
-func (c *UnifiedSecureClient) ExchangeQUICDirect(msg *dns.Msg) (*dns.Msg, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.quicConn == nil || !c.isQUICConnected {
-		return nil, errors.New("QUIC connection not established")
-	}
-
-	msgData, err := msg.Pack()
-	if err != nil {
-		return nil, WrapError("pack message", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-
-	stream, err := c.quicConn.OpenStreamSync(ctx)
-	if err != nil {
-		return nil, WrapError("create QUIC stream", err)
-	}
-	defer func() { _ = stream.Close() }()
-
-	if c.timeout > 0 {
-		if err := stream.SetDeadline(time.Now().Add(c.timeout)); err != nil {
-			return nil, WrapError("set stream timeout", err)
-		}
-	}
-
-	buf := make([]byte, 2+len(msgData))
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
-	copy(buf[2:], msgData)
-
-	if _, err = stream.Write(buf); err != nil {
-		return nil, WrapError("send QUIC query", err)
-	}
-
-	if err := stream.Close(); err != nil {
-		LogDebug("Close QUIC stream write failed: %v", err)
-	}
-
-	resp, err := c.ReadQUICMsg(stream)
-	if err == nil {
-		c.lastActivity = time.Now()
-	}
-	return resp, err
-}
-
-func (c *UnifiedSecureClient) ReadQUICMsg(stream *quic.Stream) (*dns.Msg, error) {
-	respBuf := make([]byte, SecureBufferSize)
-
-	n, err := stream.Read(respBuf)
-	if err != nil && n == 0 {
-		return nil, WrapError("read QUIC response", err)
-	}
-
-	stream.CancelRead(0)
-
-	if n < 2 {
-		return nil, fmt.Errorf("QUIC response too short: %d bytes", n)
-	}
-
-	msgLen := binary.BigEndian.Uint16(respBuf[:2])
-	if int(msgLen) != n-2 {
-		LogDebug("QUIC response length mismatch: declared=%d, actual=%d", msgLen, n-2)
-	}
-
-	response := new(dns.Msg)
-	if err := response.Unpack(respBuf[2:n]); err != nil {
-		return nil, WrapError("parse QUIC response", err)
-	}
-
-	return response, nil
-}
-
-func (c *UnifiedSecureClient) Close() error {
-	if c == nil {
-		return nil
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	switch c.protocol {
-	case "tls":
-		if c.tlsConn != nil {
-			if c.connMgr == nil {
-				CloseWithLog(c.tlsConn, "TLS connection")
-			}
-			c.tlsConn = nil
-		}
-	case "quic":
-		if c.quicConn != nil {
-			if c.connMgr == nil {
-				_ = c.quicConn.CloseWithError(QUICCodeNoError, "")
-			}
-			c.quicConn = nil
-			c.isQUICConnected = false
-		}
-	case "https", "http3":
-		if c.dohClient != nil {
-			CloseWithLog(c.dohClient, "DoH client")
-			c.dohClient = nil
-		}
-	}
-
-	return nil
-}
-
-// =============================================================================
-// DoH Client
-// =============================================================================
-
-func NewDoHClient(addr, serverName string, skipVerify bool, timeout time.Duration) (*DoHClient, error) {
-	parsedURL, err := url.Parse(addr)
-	if err != nil {
-		return nil, WrapError("parse DoH address", err)
-	}
-
-	if parsedURL.Port() == "" {
-		if parsedURL.Scheme == "https" || parsedURL.Scheme == "h3" {
-			parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultHTTPSPort)
-		}
-	}
-
-	var httpVersions []string
-	if parsedURL.Scheme == "h3" {
-		parsedURL.Scheme = "https"
-		httpVersions = NextProtoHTTP3
-	} else {
-		httpVersions = append(NextProtoHTTP2, NextProtoHTTP3...)
-	}
-
-	if serverName == "" {
-		serverName = parsedURL.Hostname()
-	}
-
-	tlsConfig := &tls.Config{
-		ServerName:         serverName,
-		InsecureSkipVerify: skipVerify,
-		NextProtos:         httpVersions,
-		MinVersion:         tls.VersionTLS12,
-		ClientSessionCache: tls.NewLRUClientSessionCache(TLSSessionCacheSize),
-	}
-
-	client := &DoHClient{
-		addr:      parsedURL,
-		tlsConfig: tlsConfig,
-		quicConfig: &quic.Config{
-			MaxIdleTimeout:     SecureIdleTimeout,
-			MaxIncomingStreams: MaxIncomingStreams,
-			KeepAlivePeriod:    SecureKeepAlive,
-			Allow0RTT:          true,
-			InitialPacketSize:  InitialPacketSize,
-		},
-		timeout:      timeout,
-		skipVerify:   skipVerify,
-		serverName:   serverName,
-		addrRedacted: parsedURL.Redacted(),
-		httpVersions: httpVersions,
-	}
-
-	runtime.SetFinalizer(client, (*DoHClient).Close)
-	return client, nil
-}
-
-func (c *DoHClient) Exchange(msg *dns.Msg) (*dns.Msg, error) {
-	if c == nil || msg == nil {
-		return nil, errors.New("DoH client or message is nil")
-	}
-
-	originalID := msg.Id
-	msg.Id = 0
-	defer func() {
-		msg.Id = originalID
-	}()
-
-	httpClient, isCached, err := c.GetClient()
-	if err != nil {
-		return nil, WrapError("get HTTP client", err)
-	}
-
-	resp, err := c.ExchangeHTTPS(httpClient, msg)
-
-	for i := 0; isCached && c.ShouldRetry(err) && i < 2; i++ {
-		httpClient, err = c.ResetClient(err)
-		if err != nil {
-			return nil, WrapError("reset HTTP client", err)
-		}
-		resp, err = c.ExchangeHTTPS(httpClient, msg)
-	}
-
-	if err != nil {
-		_, _ = c.ResetClient(err)
-		return nil, err
-	}
-
-	if resp != nil {
-		resp.Id = originalID
-	}
-
-	return resp, nil
-}
-
-func (c *DoHClient) ExchangeHTTPS(client *http.Client, req *dns.Msg) (*dns.Msg, error) {
-	if client == nil || req == nil {
-		return nil, errors.New("HTTP client or request is nil")
-	}
-
-	buf, err := req.Pack()
-	if err != nil {
-		return nil, WrapError("pack DNS message", err)
-	}
-
-	method := http.MethodGet
-	if c.IsHTTP3(client) {
-		method = http3.MethodGet0RTT
-	}
-
-	q := url.Values{
-		"dns": []string{base64.RawURLEncoding.EncodeToString(buf)},
-	}
-
-	u := url.URL{
-		Scheme:   c.addr.Scheme,
-		Host:     c.addr.Host,
-		Path:     c.addr.Path,
-		RawQuery: q.Encode(),
-	}
-
-	httpReq, err := http.NewRequest(method, u.String(), nil)
-	if err != nil {
-		return nil, WrapError("create HTTP request", err)
-	}
-
-	httpReq.Header.Set("Accept", "application/dns-message")
-	httpReq.Header.Set("User-Agent", "")
-
-	httpResp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, WrapError("send HTTP request", err)
-	}
-	defer func() { _ = httpResp.Body.Close() }()
-
-	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP error: %d", httpResp.StatusCode)
-	}
-
-	body, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, WrapError("read response", err)
-	}
-
-	resp := &dns.Msg{}
-	if err := resp.Unpack(body); err != nil {
-		return nil, WrapError("parse DNS response", err)
-	}
-
-	return resp, nil
-}
-
-func (c *DoHClient) GetClient() (*http.Client, bool, error) {
-	if c == nil {
-		return nil, false, errors.New("DoH client is nil")
-	}
-
-	if atomic.LoadInt32(&c.closed) != 0 {
-		return nil, false, errors.New("DoH client is closed")
-	}
-
-	c.clientMu.Lock()
-	defer c.clientMu.Unlock()
-
-	if c.client != nil {
-		return c.client, true, nil
-	}
-
-	var err error
-	c.client, err = c.CreateClient()
-	return c.client, false, err
-}
-
-func (c *DoHClient) CreateClient() (*http.Client, error) {
-	transport, err := c.CreateTransport()
-	if err != nil {
-		return nil, WrapError("create HTTP transport", err)
-	}
-
-	return &http.Client{
-		Transport: transport,
-		Timeout:   c.timeout,
-	}, nil
-}
-
-func (c *DoHClient) CreateTransport() (http.RoundTripper, error) {
-	if c.SupportsHTTP3() {
-		if transport, err := c.CreateTransportH3(); err == nil {
-			LogDebug("DoH using HTTP/3: %s", c.addrRedacted)
-			return transport, nil
-		} else {
-			LogDebug("HTTP/3 failed, fallback to HTTP/2: %v", err)
-		}
-	}
-
-	if !c.SupportsHTTP() {
-		return nil, errors.New("HTTP/1.1 or HTTP/2 not supported")
-	}
-
-	transport := &http.Transport{
-		TLSClientConfig:    c.tlsConfig.Clone(),
-		DisableCompression: true,
-		IdleConnTimeout:    DoHIdleConnTimeout,
-		MaxConnsPerHost:    DoHMaxConnsPerHost,
-		MaxIdleConns:       DoHMaxIdleConns,
-		ForceAttemptHTTP2:  true,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: c.timeout}
-			return dialer.DialContext(ctx, network, addr)
-		},
-	}
-
-	_, err := http2.ConfigureTransports(transport)
-	if err != nil {
-		return nil, err
-	}
-
-	return transport, nil
-}
-
-func (c *DoHClient) CreateTransportH3() (http.RoundTripper, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-
-	tlsConfig := c.tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoHTTP3
-
-	conn, err := quic.DialAddr(ctx, c.addr.Host, tlsConfig, c.quicConfig)
-	if err != nil {
-		return nil, WrapError("QUIC connection", err)
-	}
-
-	_ = conn.CloseWithError(QUICCodeNoError, "")
-
-	transport := &http3.Transport{
-		TLSClientConfig: tlsConfig,
-		QUICConfig:      c.quicConfig,
-	}
-
-	return &HTTP3Transport{
-		baseTransport: transport,
-		closed:        false,
-	}, nil
-}
-
-func (c *DoHClient) ResetClient(resetErr error) (*http.Client, error) {
-	if c == nil {
-		return nil, errors.New("DoH client is nil")
-	}
-
-	c.clientMu.Lock()
-	defer c.clientMu.Unlock()
-
-	if errors.Is(resetErr, quic.Err0RTTRejected) {
-		LogDebug("0-RTT rejected, disabling 0-RTT")
-		c.quicConfig = &quic.Config{
-			MaxIdleTimeout:     SecureIdleTimeout,
-			MaxIncomingStreams: MaxIncomingStreams,
-			KeepAlivePeriod:    SecureKeepAlive,
-			Allow0RTT:          false,
-			InitialPacketSize:  InitialPacketSize,
-		}
-	}
-
-	oldClient := c.client
-	if oldClient != nil {
-		c.CloseClient(oldClient)
-	}
-
-	var err error
-	c.client, err = c.CreateClient()
-	return c.client, err
-}
-
-func (c *DoHClient) CloseClient(client *http.Client) {
-	if c == nil || client == nil {
-		return
-	}
-
-	if c.IsHTTP3(client) {
-		if closer, ok := client.Transport.(io.Closer); ok {
-			CloseWithLog(closer, "HTTP3 transport")
-		}
-	}
-}
-
-func (c *DoHClient) ShouldRetry(err error) bool {
-	if c == nil {
-		return false
-	}
-	return IsRetryableError("https", err)
-}
-
-func (c *DoHClient) SupportsHTTP3() bool {
-	for _, proto := range c.httpVersions {
-		if proto == "h3" {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *DoHClient) SupportsHTTP() bool {
-	for _, proto := range c.httpVersions {
-		if proto == http2.NextProtoTLS || proto == "http/1.1" {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *DoHClient) IsHTTP3(client *http.Client) bool {
-	_, ok := client.Transport.(*HTTP3Transport)
-	return ok
-}
-
-func (c *DoHClient) Close() error {
-	if c == nil || !atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
-		return nil
-	}
-
-	runtime.SetFinalizer(c, nil)
-
-	c.clientMu.Lock()
-	defer c.clientMu.Unlock()
-
-	if c.client != nil {
-		c.CloseClient(c.client)
-		c.client = nil
-	}
-
-	return nil
-}
-
-func (h *HTTP3Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if h == nil || h.baseTransport == nil {
-		return nil, errors.New("HTTP/3 transport is nil")
-	}
-
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	if h.closed {
-		return nil, net.ErrClosed
-	}
-
-	resp, err := h.baseTransport.RoundTripOpt(req, http3.RoundTripOpt{OnlyCachedConn: true})
-	if errors.Is(err, http3.ErrNoCachedConn) {
-		resp, err = h.baseTransport.RoundTrip(req)
-	}
-
-	return resp, err
-}
-
-func (h *HTTP3Transport) Close() error {
-	if h == nil {
-		return nil
-	}
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	h.closed = true
-	if h.baseTransport != nil {
-		return h.baseTransport.Close()
-	}
-	return nil
 }
 
 // =============================================================================
@@ -3457,7 +2610,7 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 }
 
 // =============================================================================
-// TLS Management
+// TLS Management (服务端保持不变，客户端无需连接复用)
 // =============================================================================
 
 func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error) {
@@ -3468,7 +2621,7 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
+		MinVersion:   tls.VersionTLS12,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3591,7 +2744,6 @@ func (tm *TLSManager) StartQUICServer() error {
 		MaxIdleTimeout:        SecureIdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
-		KeepAlivePeriod:       SecureKeepAlive,
 		Allow0RTT:             true,
 	}
 
@@ -5657,6 +4809,8 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	}
 
 	connectionManager := NewConnectionManager()
+	connectionManager.queryClient = NewQueryClient(connectionManager)
+
 	taskManager := NewTaskManager(MaxConcurrency)
 
 	server := &DNSServer{
@@ -5941,7 +5095,6 @@ func (s *DNSServer) DisplayInfo() {
 	}
 
 	LogInfo("Max concurrency: %d", MaxConcurrency)
-	LogInfo("Connection pool optimizations: enabled (TLS session resumption, QUIC 0-RTT)")
 }
 
 func (s *DNSServer) HandleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
@@ -6608,89 +5761,6 @@ func CloseWithLog(c Closeable, name string) {
 	}
 	if err := c.Close(); err != nil {
 		LogWarn("Close %s failed: %v", name, err)
-	}
-}
-
-func IsRetryableError(protocol string, err error) bool {
-	if err == nil {
-		return false
-	}
-
-	if errors.Is(err, os.ErrDeadlineExceeded) {
-		return true
-	}
-
-	protocol = strings.ToLower(protocol)
-
-	switch protocol {
-	case "quic", "http3":
-		var qAppErr *quic.ApplicationError
-		if errors.As(err, &qAppErr) {
-			return qAppErr.ErrorCode == 0 || qAppErr.ErrorCode == quic.ApplicationErrorCode(0x100)
-		}
-
-		var qIdleErr *quic.IdleTimeoutError
-		if errors.As(err, &qIdleErr) {
-			return true
-		}
-
-		var resetErr *quic.StatelessResetError
-		if errors.As(err, &resetErr) {
-			return true
-		}
-
-		var qTransportError *quic.TransportError
-		if errors.As(err, &qTransportError) && qTransportError.ErrorCode == quic.NoError {
-			return true
-		}
-
-		return errors.Is(err, quic.Err0RTTRejected)
-
-	case "tls":
-		errStr := err.Error()
-		connectionErrors := []string{
-			"broken pipe", "connection reset", "use of closed network connection",
-			"connection refused", "no route to host", "network is unreachable",
-		}
-
-		for _, connErr := range connectionErrors {
-			if strings.Contains(strings.ToLower(errStr), strings.ToLower(connErr)) {
-				return true
-			}
-		}
-
-		return errors.Is(err, io.EOF)
-
-	case "https":
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			return true
-		}
-
-		var qAppErr *quic.ApplicationError
-		if errors.As(err, &qAppErr) {
-			return qAppErr.ErrorCode == 0 || qAppErr.ErrorCode == quic.ApplicationErrorCode(0x100)
-		}
-
-		var qIdleErr *quic.IdleTimeoutError
-		if errors.As(err, &qIdleErr) {
-			return true
-		}
-
-		var resetErr *quic.StatelessResetError
-		if errors.As(err, &resetErr) {
-			return true
-		}
-
-		var qTransportError *quic.TransportError
-		if errors.As(err, &qTransportError) && qTransportError.ErrorCode == quic.NoError {
-			return true
-		}
-
-		return errors.Is(err, quic.Err0RTTRejected)
-
-	default:
-		return false
 	}
 }
 
