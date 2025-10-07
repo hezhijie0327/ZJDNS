@@ -12,6 +12,7 @@
 ### 🔧 核心功能
 
 - **递归 DNS 解析**：完整实现 DNS 递归查询算法，从根服务器开始逐级解析
+- **智能根服务器管理**：自动管理 13 个 IPv4 和 13 个 IPv6 根服务器，基于实时网络延迟测试进行动态排序，优先选择最优服务器进行查询
 - **智能协议协商**：同时支持 UDP 和 TCP 协议，**当 UDP 响应被截断或超过缓冲区大小时，自动回退到 TCP 协议**，确保大响应数据的完整传输
 - **CNAME 链解析**：智能处理 CNAME 记录链，防止循环引用，支持多级 CNAME 解析
 - **并发查询**：高性能并发处理，支持连接池管理
@@ -97,6 +98,7 @@ graph TD
         D --> F[ConnectionPool<br><i>连接池管理</i>]
         D --> G[TaskManager<br><i>任务管理器</i>]
         D --> H[TLSManager<br><i>TLS证书管理</i>]
+        D --> OO[RootServerManager<br><i>根服务器管理</i>]
     end
 
     subgraph QueryFlow ["查询流程"]
@@ -106,6 +108,7 @@ graph TD
 
         J --> L[QueryClient<br><i>统一查询客户端</i>]
         K --> L
+        K --> OO
         L --> F
     end
 
@@ -152,6 +155,15 @@ graph TD
         FF --> JJ[唯一ID<br><i>请求标识</i>]
     end
 
+    subgraph RootServerSystem ["根服务器系统"]
+        OO --> PP[IPv4根服务器池<br><i>13个根服务器</i>]
+        OO --> QQ[IPv6根服务器池<br><i>13个根服务器</i>]
+        OO --> RR[速度排序<br><i>基于UDP:53测试</i>]
+
+        RR --> SS[最优服务器选择<br><i>IPv4/IPv6混合</i>]
+        OO --> TT[周期性重排序<br><i>5分钟间隔</i>]
+    end
+
     subgraph DDR ["DDR功能"]
         H --> KK[DDRSettings<br><i>DDR配置</i>]
         KK --> LL[SVCB记录<br><i>服务发现</i>]
@@ -168,6 +180,7 @@ graph TD
     classDef cache fill:#fff0e6,stroke:#333;
     classDef client fill:#f0e6ff,stroke:#333;
     classDef support fill:#e6ffff,stroke:#333;
+    classDef rootserver fill:#f0fff0,stroke:#333;
 
     class ServerCore core;
     class Managers manager;
@@ -175,6 +188,7 @@ graph TD
     class CacheSystem cache;
     class SecureClients client;
     class Support support;
+    class RootServerSystem rootserver;
 ```
 
 ---
