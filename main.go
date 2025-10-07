@@ -6079,11 +6079,6 @@ func sortBySpeedResult(servers []string, results map[string]*SpeedResult) []stri
 	return sorted
 }
 
-import (
-	"net"
-	"strings"
-)
-
 func extractIPFromServer(server string) string {
 	host, _, err := net.SplitHostPort(server)
 	if err != nil {
