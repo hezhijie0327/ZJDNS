@@ -3721,10 +3721,12 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 				if result.Error == nil && result.Response != nil {
 					rcode := result.Response.Rcode
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+						// DNSSEC 验证
 						if serverDNSSECEnabled && s.config.Server.Features.DNSSEC {
 							result.Validated = s.dnssecValidator.ValidateResponse(result.Response, true)
 						}
 
+						// 应用 policy 过滤
 						filteredAnswer, _, allIPFiltered := s.FilterRecordsByPolicy(result.Response.Answer, FilterContext{
 							Policy:       srv.Policy,
 							IsGlueRecord: false,
@@ -3735,6 +3737,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 						})
 
 						if allIPFiltered {
+							// 所有 A/AAAA 记录被过滤
 							if tracker != nil {
 								tracker.AddStep("Server %s: all A/AAAA records filtered by policy '%s'", srv.Address, srv.Policy)
 							}
@@ -3746,6 +3749,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 							case <-ctx.Done():
 							}
 						} else if len(filteredAnswer) > 0 {
+							// 有有效记录
 							ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
 
 							if tracker != nil && srv.Policy != "all" {
@@ -3775,6 +3779,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		}
 	}
 
+	// 等待第一个成功的结果，忽略 policy 过滤失败
 	var lastError error
 	receivedCount := 0
 	serversCount := len(servers)
@@ -3785,6 +3790,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 			receivedCount++
 
 			if result.Error != nil {
+				// 记录错误但继续等待其他结果
 				lastError = result.Error
 				if tracker != nil {
 					tracker.AddStep("Server %s returned error: %v", result.Server, result.Error)
@@ -3792,6 +3798,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 				continue
 			}
 
+			// 收到成功结果，立即返回
 			if tracker != nil {
 				tracker.AddStep("Using successful result from: %s", result.Server)
 			}
@@ -3808,6 +3815,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		}
 	}
 
+	// 所有服务器都返回了结果但都失败
 	if tracker != nil {
 		tracker.AddStep("All %d upstream servers returned errors", serversCount)
 	}
@@ -4127,6 +4135,11 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 	}
 }
 
+// FilterRecordsByPolicy 根据策略过滤记录
+// 返回值：
+//   - filtered: 过滤后的记录
+//   - hadIPRecords: 原始记录中是否包含 A/AAAA 记录
+//   - allIPFiltered: 是否所有 A/AAAA 记录都被过滤掉
 func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) ([]dns.RR, bool, bool) {
 	if ctx.IsGlueRecord {
 		return records, false, false
@@ -4185,6 +4198,7 @@ func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) (
 		}
 	}
 
+	// 判断是否所有 A/AAAA 记录都被过滤掉
 	allIPFiltered := hadIPRecords && ipRecordCount > 0 && filteredIPCount == ipRecordCount
 
 	return filtered, hadIPRecords, allIPFiltered
