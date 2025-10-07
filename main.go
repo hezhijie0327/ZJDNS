@@ -6079,12 +6079,18 @@ func sortBySpeedResult(servers []string, results map[string]*SpeedResult) []stri
 	return sorted
 }
 
+import (
+	"net"
+	"strings"
+)
+
 func extractIPFromServer(server string) string {
-	server = strings.Trim(server, "[]")
-	if idx := strings.LastIndex(server, ":"); idx != -1 {
-		return server[:idx]
+	host, _, err := net.SplitHostPort(server)
+	if err != nil {
+		// If server does not contain a port, return as is (could be just an IP)
+		return server
 	}
-	return server
+	return host
 }
 
 // =============================================================================
