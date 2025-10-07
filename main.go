@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -77,8 +76,11 @@ const (
 	CleanupInterval       = 30 * time.Second
 	DoHReadHeaderTimeout  = 5 * time.Second
 	DoHWriteTimeout       = 5 * time.Second
-	DefaultSpeedTimeout   = 1 * time.Second
+	DefaultSpeedTimeout   = 250 * time.Millisecond
 	SpeedDebounceInterval = 10 * time.Second
+
+	// Root Server Management
+	RootServerSortInterval = 900 * time.Second
 
 	// Connection Lifecycle
 	SecureIdleTimeout  = 300 * time.Second
@@ -111,8 +113,6 @@ const (
 	RedisDialTimeout  = 5 * time.Second
 
 	// ECS Configuration
-	MaxTrustedIPv4  = 1024
-	MaxTrustedIPv6  = 256
 	DefaultECSv4Len = 24
 	DefaultECSv6Len = 64
 	DefaultECSScope = 0
@@ -144,6 +144,7 @@ const (
 
 	// SpeedTest Configuration
 	DefaultSpeedConcurrency = 4
+	UnreachableLatency      = 10 * time.Second
 
 	// Default Values
 	DefaultLogLevel = "info"
@@ -190,29 +191,27 @@ type Logger struct {
 // =============================================================================
 
 type DNSServer struct {
-	config           *ServerConfig
-	cache            CacheManager
-	connPool         *ConnectionPool
-	tlsManager       *TLSManager
-	upstreamManager  *UpstreamManager
-	queryClient      *QueryClient
-	taskManager      *TaskManager
-	ednsManager      *EDNSManager
-	dnsRewriter      *DNSRewriter
-	ipFilter         *IPFilter
-	hijackPrevention *HijackPrevention
-	dnssecValidator  *DNSSECValidator
-	rootServersV4    []string
-	rootServersV6    []string
-	concurrencyLimit chan struct{}
-	speedDebounce    map[string]time.Time
-	speedMutex       sync.Mutex
-	speedInterval    time.Duration
-	ctx              context.Context
-	cancel           context.CancelFunc
-	shutdown         chan struct{}
-	wg               sync.WaitGroup
-	closed           int32
+	config            *ServerConfig
+	cache             CacheManager
+	connPool          *ConnectionPool
+	tlsManager        *TLSManager
+	upstreamManager   *UpstreamManager
+	queryClient       *QueryClient
+	taskManager       *TaskManager
+	ednsManager       *EDNSManager
+	dnsRewriter       *DNSRewriter
+	hijackPrevention  *HijackPrevention
+	dnssecValidator   *DNSSECValidator
+	rootServerManager *RootServerManager
+	concurrencyLimit  chan struct{}
+	speedDebounce     map[string]time.Time
+	speedMutex        sync.Mutex
+	speedInterval     time.Duration
+	ctx               context.Context
+	cancel            context.CancelFunc
+	shutdown          chan struct{}
+	wg                sync.WaitGroup
+	closed            int32
 }
 
 type QueryClient struct {
@@ -261,13 +260,12 @@ type ServerConfig struct {
 }
 
 type ServerSettings struct {
-	Port            string       `json:"port"`
-	LogLevel        string       `json:"log_level"`
-	DefaultECS      string       `json:"default_ecs_subnet"`
-	TrustedCIDRFile string       `json:"trusted_cidr_file"`
-	DDR             DDRSettings  `json:"ddr"`
-	TLS             TLSSettings  `json:"tls"`
-	Features        FeatureFlags `json:"features"`
+	Port       string       `json:"port"`
+	LogLevel   string       `json:"log_level"`
+	DefaultECS string       `json:"default_ecs_subnet"`
+	DDR        DDRSettings  `json:"ddr"`
+	TLS        TLSSettings  `json:"tls"`
+	Features   FeatureFlags `json:"features"`
 }
 
 type DDRSettings struct {
@@ -306,7 +304,6 @@ type RedisSettings struct {
 
 type UpstreamServer struct {
 	Address       string `json:"address"`
-	Policy        string `json:"policy"`
 	Protocol      string `json:"protocol"`
 	ServerName    string `json:"server_name"`
 	SkipTLSVerify bool   `json:"skip_tls_verify"`
@@ -525,17 +522,6 @@ type DNSRewriteResult struct {
 	Additional    []dns.RR
 }
 
-type IPFilter struct {
-	trustedCIDRs   []*net.IPNet
-	trustedCIDRsV6 []*net.IPNet
-	mu             sync.RWMutex
-}
-
-type FilterContext struct {
-	Policy       string
-	IsGlueRecord bool
-}
-
 type HijackPrevention struct {
 	enabled bool
 }
@@ -587,7 +573,31 @@ type ResourceManager struct {
 	}
 }
 
+// =============================================================================
+// Types - Config Management
+// =============================================================================
+
 type ConfigManager struct{}
+
+// =============================================================================
+// Types - Root Server Management
+// =============================================================================
+
+type RootServerManager struct {
+	serversV4    []string
+	serversV6    []string
+	speedTester  *SpeedTester
+	sortedV4     []RootServerWithLatency
+	sortedV6     []RootServerWithLatency
+	lastSortTime time.Time
+	mu           sync.RWMutex
+}
+
+type RootServerWithLatency struct {
+	Server    string        `json:"server"`
+	Latency   time.Duration `json:"latency"`
+	Reachable bool          `json:"reachable"`
+}
 
 // =============================================================================
 // Variables
@@ -766,11 +776,6 @@ func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
 			}
 		}
 
-		validPolicies := map[string]bool{"all": true, "trusted_only": true, "untrusted_only": true}
-		if !validPolicies[server.Policy] {
-			return fmt.Errorf("upstream server %d trust policy invalid: %s", i, server.Policy)
-		}
-
 		validProtocols := map[string]bool{"udp": true, "tcp": true, "tls": true, "quic": true, "https": true, "http3": true}
 		if server.Protocol != "" && !validProtocols[strings.ToLower(server.Protocol)] {
 			return fmt.Errorf("upstream server %d protocol invalid: %s", i, server.Protocol)
@@ -826,7 +831,6 @@ func (cm *ConfigManager) GetDefaultConfig() *ServerConfig {
 	config.Server.Port = DefaultDNSPort
 	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
-	config.Server.TrustedCIDRFile = ""
 	config.Server.DDR.Domain = "dns.example.com"
 	config.Server.DDR.IPv4 = "127.0.0.1"
 	config.Server.DDR.IPv6 = "::1"
@@ -972,7 +976,6 @@ func GenerateExampleConfig() string {
 
 	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
-	config.Server.TrustedCIDRFile = "trusted_cidr.txt"
 
 	config.Redis.Address = "127.0.0.1:6379"
 
@@ -984,45 +987,38 @@ func GenerateExampleConfig() string {
 	config.Upstream = []UpstreamServer{
 		{
 			Address:  "223.5.5.5:53",
-			Policy:   "all",
 			Protocol: "tcp",
 		},
 		{
 			Address:  "223.6.6.6:53",
-			Policy:   "all",
 			Protocol: "udp",
 		},
 		{
 			Address:       "223.5.5.5:853",
-			Policy:        "trusted_only",
 			Protocol:      "tls",
 			ServerName:    "dns.alidns.com",
 			SkipTLSVerify: false,
 		},
 		{
 			Address:       "223.6.6.6:853",
-			Policy:        "all",
 			Protocol:      "quic",
 			ServerName:    "dns.alidns.com",
 			SkipTLSVerify: true,
 		},
 		{
 			Address:       "https://dns.alidns.com/dns-query",
-			Policy:        "all",
 			Protocol:      "https",
 			ServerName:    "dns.alidns.com",
 			SkipTLSVerify: false,
 		},
 		{
 			Address:       "https://dns.alidns.com/dns-query",
-			Policy:        "trusted_only",
 			Protocol:      "http3",
 			ServerName:    "dns.alidns.com",
 			SkipTLSVerify: false,
 		},
 		{
 			Address: RecursiveIndicator,
-			Policy:  "all",
 		},
 	}
 
@@ -1033,7 +1029,7 @@ func GenerateExampleConfig() string {
 				{
 					Type:    "A",
 					Content: "127.0.0.1",
-					TTL:     300,
+					TTL:     DefaultCacheTTL,
 				},
 			},
 		},
@@ -1043,7 +1039,7 @@ func GenerateExampleConfig() string {
 				{
 					Type:    "AAAA",
 					Content: "::1",
-					TTL:     300,
+					TTL:     DefaultCacheTTL,
 				},
 			},
 		},
@@ -1052,22 +1048,22 @@ func GenerateExampleConfig() string {
 	config.SpeedTest = []SpeedTestMethod{
 		{
 			Type:    "icmp",
-			Timeout: 1000,
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 		},
 		{
 			Type:    "tcp",
 			Port:    "443",
-			Timeout: 1000,
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 		},
 		{
 			Type:    "tcp",
 			Port:    "80",
-			Timeout: 1000,
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 		},
 		{
 			Type:    "udp",
 			Port:    "53",
-			Timeout: 1000,
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 		},
 	}
 
@@ -2805,32 +2801,15 @@ func (u *UpstreamServer) IsRecursive() bool {
 // =============================================================================
 
 func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
-	rootServersV4 := []string{
-		"198.41.0.4:53", "170.247.170.2:53", "192.33.4.12:53", "199.7.91.13:53",
-		"192.203.230.10:53", "192.5.5.241:53", "192.112.36.4:53", "198.97.190.53:53",
-		"192.36.148.17:53", "192.58.128.30:53", "193.0.14.129:53", "199.7.83.42:53", "202.12.27.33:53",
-	}
-
-	rootServersV6 := []string{
-		"[2001:503:ba3e::2:30]:53", "[2801:1b8:10::b]:53", "[2001:500:2::c]:53", "[2001:500:2d::d]:53",
-		"[2001:500:a8::e]:53", "[2001:500:2f::f]:53", "[2001:500:12::d0d]:53", "[2001:500:1::53]:53",
-		"[2001:7fe::53]:53", "[2001:503:c27::2:30]:53", "[2001:7fd::1]:53", "[2001:500:9f::42]:53", "[2001:dc3::35]:53",
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Initialize root server manager first
+	rootServerManager := NewRootServerManager(*config)
 
 	ednsManager, err := NewEDNSManager(config.Server.DefaultECS, config.Server.Features.Padding)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("EDNS manager initialization failed: %w", err)
-	}
-
-	ipFilter := NewIPFilter()
-	if config.Server.TrustedCIDRFile != "" {
-		if err := ipFilter.LoadCIDRs(config.Server.TrustedCIDRFile); err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to load trusted CIDR file: %w", err)
-		}
 	}
 
 	dnsRewriter := NewDNSRewriter()
@@ -2848,24 +2827,22 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	hijackPrevention := NewHijackPrevention(config.Server.Features.HijackProtection)
 
 	server := &DNSServer{
-		config:           config,
-		rootServersV4:    rootServersV4,
-		rootServersV6:    rootServersV6,
-		connPool:         connectionPool,
-		dnssecValidator:  NewDNSSECValidator(),
-		concurrencyLimit: make(chan struct{}, MaxConcurrency),
-		ctx:              ctx,
-		cancel:           cancel,
-		shutdown:         make(chan struct{}),
-		ipFilter:         ipFilter,
-		dnsRewriter:      dnsRewriter,
-		upstreamManager:  upstreamManager,
-		queryClient:      queryClient,
-		hijackPrevention: hijackPrevention,
-		taskManager:      taskManager,
-		ednsManager:      ednsManager,
-		speedDebounce:    make(map[string]time.Time),
-		speedInterval:    SpeedDebounceInterval,
+		config:            config,
+		rootServerManager: rootServerManager,
+		connPool:          connectionPool,
+		dnssecValidator:   NewDNSSECValidator(),
+		concurrencyLimit:  make(chan struct{}, MaxConcurrency),
+		ctx:               ctx,
+		cancel:            cancel,
+		shutdown:          make(chan struct{}),
+		dnsRewriter:       dnsRewriter,
+		upstreamManager:   upstreamManager,
+		queryClient:       queryClient,
+		hijackPrevention:  hijackPrevention,
+		taskManager:       taskManager,
+		ednsManager:       ednsManager,
+		speedDebounce:     make(map[string]time.Time),
+		speedInterval:     SpeedDebounceInterval,
 	}
 
 	if config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "" {
@@ -2897,6 +2874,14 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 func (s *DNSServer) SetupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start root server periodic sorting
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() { RecoverPanic("Root server periodic sorting") }()
+		s.rootServerManager.StartPeriodicSorting(s.ctx)
+	}()
 
 	s.wg.Add(1)
 	go func() {
@@ -3064,13 +3049,13 @@ func (s *DNSServer) DisplayInfo() {
 	if len(servers) > 0 {
 		for _, server := range servers {
 			if server.IsRecursive() {
-				Info("Upstream server: recursive resolution - %s", server.Policy)
+				Info("Upstream server: recursive resolution")
 			} else {
 				protocol := strings.ToUpper(server.Protocol)
 				if protocol == "" {
 					protocol = "UDP"
 				}
-				serverInfo := fmt.Sprintf("%s (%s) - %s", server.Address, protocol, server.Policy)
+				serverInfo := fmt.Sprintf("%s (%s)", server.Address, protocol)
 				if server.SkipTLSVerify && IsSecureProtocol(strings.ToLower(server.Protocol)) {
 					serverInfo += " [Skip TLS verification]"
 				}
@@ -3099,9 +3084,6 @@ func (s *DNSServer) DisplayInfo() {
 		}
 	}
 
-	if s.ipFilter.HasData() {
-		Info("IP filter: enabled (config file: %s)", s.config.Server.TrustedCIDRFile)
-	}
 	if s.dnsRewriter.HasRules() {
 		Info("DNS rewriter: enabled (%d rules)", len(s.config.Rewrite))
 	}
@@ -3656,34 +3638,16 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 					recursiveCtx, question, ecs, tracker)
 
 				if err == nil && len(answer) > 0 {
-					filteredAnswer := s.FilterRecordsByPolicy(answer, FilterContext{
-						Policy:       srv.Policy,
-						IsGlueRecord: false,
-					})
-					filteredAdditional := s.FilterRecordsByPolicy(additional, FilterContext{
-						Policy:       srv.Policy,
-						IsGlueRecord: false,
-					})
-
-					if len(filteredAnswer) > 0 {
-						if tracker != nil && srv.Policy != "all" {
-							tracker.AddStep("Recursive query after policy filter: %d answer records", len(filteredAnswer))
-						}
-						select {
-						case resultChan <- &QueryResult{
-							Answer:     filteredAnswer,
-							Authority:  authority,
-							Additional: filteredAdditional,
-							Validated:  validated,
-							ECS:        ecsResponse,
-							Server:     srv.Address,
-						}:
-						case <-ctx.Done():
-						}
-					} else {
-						if tracker != nil {
-							tracker.AddStep("Recursive query: all records filtered by policy '%s'", srv.Policy)
-						}
+					select {
+					case resultChan <- &QueryResult{
+						Answer:     answer,
+						Authority:  authority,
+						Additional: additional,
+						Validated:  validated,
+						ECS:        ecsResponse,
+						Server:     srv.Address,
+					}:
+					case <-ctx.Done():
 					}
 				}
 				return nil
@@ -3700,41 +3664,23 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 				if result.Error == nil && result.Response != nil {
 					rcode := result.Response.Rcode
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+						// DNSSEC validation
 						if serverDNSSECEnabled && s.config.Server.Features.DNSSEC {
 							result.Validated = s.dnssecValidator.ValidateResponse(result.Response, true)
 						}
 
-						filteredAnswer := s.FilterRecordsByPolicy(result.Response.Answer, FilterContext{
-							Policy:       srv.Policy,
-							IsGlueRecord: false,
-						})
-						filteredExtra := s.FilterRecordsByPolicy(result.Response.Extra, FilterContext{
-							Policy:       srv.Policy,
-							IsGlueRecord: false,
-						})
+						ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
 
-						if len(filteredAnswer) > 0 {
-							ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
-
-							if tracker != nil && srv.Policy != "all" {
-								tracker.AddStep("Server %s after policy filter: %d answer records", srv.Address, len(filteredAnswer))
-							}
-
-							select {
-							case resultChan <- &QueryResult{
-								Answer:     filteredAnswer,
-								Authority:  result.Response.Ns,
-								Additional: filteredExtra,
-								Validated:  result.Validated,
-								ECS:        ecsResponse,
-								Server:     srv.Address,
-							}:
-							case <-ctx.Done():
-							}
-						} else {
-							if tracker != nil {
-								tracker.AddStep("Server %s: all records filtered by policy '%s'", srv.Address, srv.Policy)
-							}
+						select {
+						case resultChan <- &QueryResult{
+							Answer:     result.Response.Answer,
+							Authority:  result.Response.Ns,
+							Additional: result.Response.Extra,
+							Validated:  result.Validated,
+							ECS:        ecsResponse,
+							Server:     srv.Address,
+						}:
+						case <-ctx.Done():
 						}
 					}
 				}
@@ -3743,6 +3689,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		}
 	}
 
+	// Wait for first successful result
 	var lastError error
 	receivedCount := 0
 	serversCount := len(servers)
@@ -3760,6 +3707,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 				continue
 			}
 
+			// Check for valid Answer
 			if len(result.Answer) > 0 {
 				if tracker != nil {
 					tracker.AddStep("Using successful result from: %s", result.Server)
@@ -3767,6 +3715,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
 			}
 
+			// No valid records, continue waiting for other results
 			continue
 
 		case <-ctx.Done():
@@ -3780,6 +3729,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 		}
 	}
 
+	// All servers returned results but no valid records
 	if tracker != nil {
 		tracker.AddStep("All %d upstream servers returned no valid records", serversCount)
 	}
@@ -4099,41 +4049,6 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 	}
 }
 
-func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) []dns.RR {
-	if ctx.IsGlueRecord || ctx.Policy == "all" || !s.ipFilter.HasData() {
-		return records
-	}
-
-	filtered := make([]dns.RR, 0, len(records))
-
-	for _, rr := range records {
-		var ip net.IP
-
-		switch record := rr.(type) {
-		case *dns.A:
-			ip = record.A
-		case *dns.AAAA:
-			ip = record.AAAA
-		default:
-			filtered = append(filtered, rr)
-			continue
-		}
-
-		isTrusted := s.ipFilter.IsTrustedIP(ip)
-		shouldKeep := (ctx.Policy == "trusted_only" && isTrusted) ||
-			(ctx.Policy == "untrusted_only" && !isTrusted)
-
-		if shouldKeep {
-			filtered = append(filtered, rr)
-			Debug("Policy filter: keeping %s IP %s", ctx.Policy, ip)
-		} else {
-			Debug("Policy filter: filtering out %s IP %s", ctx.Policy, ip)
-		}
-	}
-
-	return filtered
-}
-
 func (s *DNSServer) HandleSuspiciousResponse(reason string, currentlyTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	if !currentlyTCP {
 		if tracker != nil {
@@ -4180,7 +4095,6 @@ func (s *DNSServer) QueryNameserversConcurrent(ctx context.Context, nameservers 
 		tempServers[i] = &UpstreamServer{
 			Address:  nameservers[i],
 			Protocol: protocol,
-			Policy:   "all",
 		}
 	}
 
@@ -4308,13 +4222,13 @@ func (s *DNSServer) ResolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 }
 
 func (s *DNSServer) GetRootServers() []string {
-	if s.config.Server.Features.IPv6 {
-		mixed := make([]string, 0, len(s.rootServersV4)+len(s.rootServersV6))
-		mixed = append(mixed, s.rootServersV4...)
-		mixed = append(mixed, s.rootServersV6...)
-		return mixed
+	serversWithLatency := s.rootServerManager.GetOptimalRootServers(s.config.Server.Features.IPv6)
+	servers := make([]string, len(serversWithLatency))
+	for i, server := range serversWithLatency {
+		servers[i] = server.Server
 	}
-	return s.rootServersV4
+
+	return servers
 }
 
 func (s *DNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
@@ -4763,111 +4677,6 @@ func (r *DNSRewriter) HasRules() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.rules) > 0
-}
-
-// =============================================================================
-// IP Filtering
-// =============================================================================
-
-func NewIPFilter() *IPFilter {
-	return &IPFilter{
-		trustedCIDRs:   make([]*net.IPNet, 0, MaxTrustedIPv4),
-		trustedCIDRsV6: make([]*net.IPNet, 0, MaxTrustedIPv6),
-	}
-}
-
-func (f *IPFilter) LoadCIDRs(filename string) error {
-	if filename == "" {
-		Info("IP filter config file path not set")
-		return nil
-	}
-
-	if !IsValidFilePath(filename) {
-		return fmt.Errorf("invalid file path: %s", filename)
-	}
-
-	file, err := os.Open(filename)
-	if err != nil {
-		return fmt.Errorf("failed to open CIDR file: %w", err)
-	}
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			Warn("Failed to close CIDR file: %v", closeErr)
-		}
-	}()
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.trustedCIDRs = make([]*net.IPNet, 0, MaxTrustedIPv4)
-	f.trustedCIDRsV6 = make([]*net.IPNet, 0, MaxTrustedIPv6)
-
-	scanner := bufio.NewScanner(file)
-	var totalV4, totalV6 int
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || len(line) > MaxInputLineLength {
-			continue
-		}
-
-		_, ipNet, err := net.ParseCIDR(line)
-		if err != nil {
-			continue
-		}
-
-		if ipNet.IP.To4() != nil {
-			f.trustedCIDRs = append(f.trustedCIDRs, ipNet)
-			totalV4++
-		} else {
-			f.trustedCIDRsV6 = append(f.trustedCIDRsV6, ipNet)
-			totalV6++
-		}
-	}
-
-	f.OptimizeCIDRs()
-	Info("IP filter loaded: IPv4=%d rules, IPv6=%d rules", totalV4, totalV6)
-	return scanner.Err()
-}
-
-func (f *IPFilter) OptimizeCIDRs() {
-	sort.Slice(f.trustedCIDRs, func(i, j int) bool {
-		sizeI, _ := f.trustedCIDRs[i].Mask.Size()
-		sizeJ, _ := f.trustedCIDRs[j].Mask.Size()
-		return sizeI > sizeJ
-	})
-
-	sort.Slice(f.trustedCIDRsV6, func(i, j int) bool {
-		sizeI, _ := f.trustedCIDRsV6[i].Mask.Size()
-		sizeJ, _ := f.trustedCIDRsV6[j].Mask.Size()
-		return sizeI > sizeJ
-	})
-}
-
-func (f *IPFilter) IsTrustedIP(ip net.IP) bool {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	if ip.To4() != nil {
-		for _, cidr := range f.trustedCIDRs {
-			if cidr.Contains(ip) {
-				return true
-			}
-		}
-	} else {
-		for _, cidr := range f.trustedCIDRsV6 {
-			if cidr.Contains(ip) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (f *IPFilter) HasData() bool {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	return len(f.trustedCIDRs) > 0 || len(f.trustedCIDRsV6) > 0
 }
 
 // =============================================================================
@@ -5884,6 +5693,191 @@ func (v *QuicAddrValidator) Close() {
 		v.cache.Close()
 		Debug("QUIC address validator cache closed and resources released")
 	}
+}
+
+// =============================================================================
+// Root Server Management
+// =============================================================================
+
+func NewRootServerManager(config ServerConfig) *RootServerManager {
+	// Create DNS-specific speed test configuration for root servers
+	dnsSpeedTestConfig := config
+	dnsSpeedTestConfig.SpeedTest = []SpeedTestMethod{
+		{
+			Type:    "icmp",
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
+		},
+		{
+			Type:    "udp",
+			Port:    DefaultDNSPort,
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
+		},
+		{
+			Type:    "tcp",
+			Port:    DefaultDNSPort,
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
+		},
+	}
+
+	rsm := &RootServerManager{
+		serversV4: []string{
+			"198.41.0.4:53", "170.247.170.2:53", "192.33.4.12:53", "199.7.91.13:53",
+			"192.203.230.10:53", "192.5.5.241:53", "192.112.36.4:53", "198.97.190.53:53",
+			"192.36.148.17:53", "192.58.128.30:53", "193.0.14.129:53", "199.7.83.42:53", "202.12.27.33:53",
+		},
+		serversV6: []string{
+			"[2001:503:ba3e::2:30]:53", "[2801:1b8:10::b]:53", "[2001:500:2::c]:53", "[2001:500:2d::d]:53",
+			"[2001:500:a8::e]:53", "[2001:500:2f::f]:53", "[2001:500:12::d0d]:53", "[2001:500:1::53]:53",
+			"[2001:7fe::53]:53", "[2001:503:c27::2:30]:53", "[2001:7fd::1]:53", "[2001:500:9f::42]:53", "[2001:dc3::35]:53",
+		},
+		speedTester: NewSpeedTester(dnsSpeedTestConfig),
+	}
+
+	// Initialize with default order (unreachable placeholder)
+	rsm.sortedV4 = make([]RootServerWithLatency, len(rsm.serversV4))
+	rsm.sortedV6 = make([]RootServerWithLatency, len(rsm.serversV6))
+
+	for i, server := range rsm.serversV4 {
+		rsm.sortedV4[i] = RootServerWithLatency{
+			Server:    server,
+			Latency:   UnreachableLatency,
+			Reachable: false,
+		}
+	}
+
+	for i, server := range rsm.serversV6 {
+		rsm.sortedV6[i] = RootServerWithLatency{
+			Server:    server,
+			Latency:   UnreachableLatency,
+			Reachable: false,
+		}
+	}
+
+	// Start initial sorting in background
+	go rsm.SortServersBySpeed()
+
+	return rsm
+}
+
+func (rsm *RootServerManager) GetOptimalRootServers(ipv6Enabled bool) []RootServerWithLatency {
+	rsm.mu.RLock()
+	defer rsm.mu.RUnlock()
+
+	if ipv6Enabled {
+		mixed := make([]RootServerWithLatency, 0, len(rsm.sortedV4)+len(rsm.sortedV6))
+		mixed = append(mixed, rsm.sortedV4...)
+		mixed = append(mixed, rsm.sortedV6...)
+
+		sort.Slice(mixed, func(i, j int) bool {
+			if mixed[i].Reachable != mixed[j].Reachable {
+				return mixed[i].Reachable
+			}
+			return mixed[i].Latency < mixed[j].Latency
+		})
+
+		return mixed
+	}
+
+	result := make([]RootServerWithLatency, len(rsm.sortedV4))
+	copy(result, rsm.sortedV4)
+
+	return result
+}
+
+func (rsm *RootServerManager) SortServersBySpeed() {
+	defer func() { RecoverPanic("Root server speed sorting") }()
+
+	// Sort IPv4 servers using existing SpeedTest
+	if len(rsm.serversV4) > 0 {
+		ips := ExtractIPsFromServers(rsm.serversV4)
+		results := rsm.speedTester.SpeedTest(ips)
+
+		sortedWithLatency := SortBySpeedResultWithLatency(rsm.serversV4, results)
+
+		rsm.mu.Lock()
+		rsm.sortedV4 = sortedWithLatency
+		rsm.mu.Unlock()
+	}
+
+	// Sort IPv6 servers using existing SpeedTest
+	if len(rsm.serversV6) > 0 {
+		ips := ExtractIPsFromServers(rsm.serversV6)
+		results := rsm.speedTester.SpeedTest(ips)
+
+		sortedWithLatency := SortBySpeedResultWithLatency(rsm.serversV6, results)
+
+		rsm.mu.Lock()
+		rsm.sortedV6 = sortedWithLatency
+		rsm.mu.Unlock()
+	}
+
+	rsm.mu.Lock()
+	rsm.lastSortTime = time.Now()
+	rsm.mu.Unlock()
+}
+
+func SortBySpeedResultWithLatency(servers []string, results map[string]*SpeedResult) []RootServerWithLatency {
+	serverList := make([]RootServerWithLatency, len(servers))
+
+	for i, server := range servers {
+		ip := ExtractIPFromServer(server)
+		if result, exists := results[ip]; exists && result.Reachable {
+			serverList[i] = RootServerWithLatency{
+				Server:    server,
+				Latency:   result.Latency,
+				Reachable: true,
+			}
+		} else {
+			serverList[i] = RootServerWithLatency{
+				Server:    server,
+				Latency:   UnreachableLatency,
+				Reachable: false,
+			}
+		}
+	}
+
+	sort.Slice(serverList, func(i, j int) bool {
+		if serverList[i].Reachable != serverList[j].Reachable {
+			return serverList[i].Reachable
+		}
+		return serverList[i].Latency < serverList[j].Latency
+	})
+
+	return serverList
+}
+
+func ExtractIPsFromServers(servers []string) []string {
+	ips := make([]string, len(servers))
+	for i, server := range servers {
+		ips[i] = ExtractIPFromServer(server)
+	}
+	return ips
+}
+
+func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
+	Debug("RootServer: Starting periodic sorting (%v interval)", RootServerSortInterval)
+	ticker := time.NewTicker(RootServerSortInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			Debug("RootServer: Triggering periodic speed test")
+			rsm.SortServersBySpeed()
+		case <-ctx.Done():
+			Debug("RootServer: Stopping periodic sorting - context cancelled")
+			return
+		}
+	}
+}
+
+func ExtractIPFromServer(server string) string {
+	host, _, err := net.SplitHostPort(server)
+	if err != nil {
+		// If server does not contain a port, return as is (could be just an IP)
+		return server
+	}
+	return host
 }
 
 // =============================================================================
