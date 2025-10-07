@@ -591,14 +591,24 @@ type ResourceManager struct {
 
 type ConfigManager struct{}
 
+// =============================================================================
+// Types - Root Server Management
+// =============================================================================
+
 type RootServerManager struct {
 	serversV4    []string
 	serversV6    []string
 	speedTester  *SpeedTester
-	sortedV4     []string
-	sortedV6     []string
+	sortedV4     []RootServerWithLatency // 存储包含延迟信息的 IPv4 服务器
+	sortedV6     []RootServerWithLatency // 存储包含延迟信息的 IPv6 服务器
 	lastSortTime time.Time
 	mu           sync.RWMutex
+}
+
+type RootServerWithLatency struct {
+	Server    string        `json:"server"`
+	Latency   time.Duration `json:"latency"`
+	Reachable bool          `json:"reachable"`
 }
 
 // =============================================================================
@@ -4330,8 +4340,14 @@ func (s *DNSServer) ResolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	return allAddresses
 }
 
+// GetRootServers 返回所有根服务器地址列表（兼容旧接口）
 func (s *DNSServer) GetRootServers() []string {
-	return s.rootServerManager.GetOptimalRootServers(s.config.Server.Features.IPv6)
+	serversWithLatency := s.rootServerManager.GetOptimalRootServers(s.config.Server.Features.IPv6)
+	servers := make([]string, len(serversWithLatency))
+	for i, server := range serversWithLatency {
+		servers[i] = server.Server
+	}
+	return servers
 }
 
 func (s *DNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
@@ -5914,6 +5930,10 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 	dnsSpeedTestConfig := config
 	dnsSpeedTestConfig.SpeedTest = []SpeedTestMethod{
 		{
+			Type:    "icmp",
+			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
+		},
+		{
 			Type:    "udp",
 			Port:    DefaultDNSPort,
 			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
@@ -5937,50 +5957,105 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 	Debug("RootServer: Manager created with servers - IPv4: %v, IPv6: %v",
 		rsm.serversV4[:3], rsm.serversV6[:3])
 
-	// Initialize with default order
-	rsm.sortedV4 = make([]string, len(rsm.serversV4))
-	rsm.sortedV6 = make([]string, len(rsm.serversV6))
-	copy(rsm.sortedV4, rsm.serversV4)
-	copy(rsm.sortedV6, rsm.serversV6)
+	// Initialize with default order (unreachable placeholder)
+	rsm.sortedV4 = make([]RootServerWithLatency, len(rsm.serversV4))
+	rsm.sortedV6 = make([]RootServerWithLatency, len(rsm.serversV6))
+
+	for i, server := range rsm.serversV4 {
+		rsm.sortedV4[i] = RootServerWithLatency{
+			Server:    server,
+			Latency:   9999 * time.Millisecond,
+			Reachable: false,
+		}
+	}
+
+	for i, server := range rsm.serversV6 {
+		rsm.sortedV6[i] = RootServerWithLatency{
+			Server:    server,
+			Latency:   9999 * time.Millisecond,
+			Reachable: false,
+		}
+	}
 
 	Debug("RootServer: Using default server order until speed test completes")
 
 	// Start initial sorting in background
-	go rsm.sortServersBySpeed()
+	go rsm.SortServersBySpeed()
 
 	return rsm
 }
 
-func (rsm *RootServerManager) GetOptimalRootServers(ipv6Enabled bool) []string {
+// GetOptimalRootServers 返回所有根服务器及其延迟信息，按延迟排序
+func (rsm *RootServerManager) GetOptimalRootServers(ipv6Enabled bool) []RootServerWithLatency {
 	rsm.mu.RLock()
 	defer rsm.mu.RUnlock()
 
-	Debug("RootServer: Requesting optimal servers - IPv6 enabled: %v", ipv6Enabled)
+	Debug("RootServer: Requesting all optimal servers - IPv6 enabled: %v", ipv6Enabled)
 
 	if ipv6Enabled {
-		// Return mixed optimal servers (IPv4 + IPv6)
-		mixed := make([]string, 0, 8)
-		v4Count := min(4, len(rsm.sortedV4))
-		v6Count := min(4, len(rsm.sortedV6))
+		// 混合所有 IPv4 和 IPv6 服务器
+		mixed := make([]RootServerWithLatency, 0, len(rsm.sortedV4)+len(rsm.sortedV6))
+		mixed = append(mixed, rsm.sortedV4...)
+		mixed = append(mixed, rsm.sortedV6...)
 
-		mixed = append(mixed, rsm.sortedV4[:v4Count]...)
-		mixed = append(mixed, rsm.sortedV6[:v6Count]...)
+		// 统一排序：可达的服务器优先，然后按延迟排序
+		sort.Slice(mixed, func(i, j int) bool {
+			if mixed[i].Reachable != mixed[j].Reachable {
+				return mixed[i].Reachable
+			}
+			return mixed[i].Latency < mixed[j].Latency
+		})
 
-		Debug("RootServer: Selected %d mixed servers (IPv4: %d, IPv6: %d): %v",
-			len(mixed), v4Count, v6Count, mixed)
+		reachableCount := 0
+		for _, server := range mixed {
+			if server.Reachable {
+				reachableCount++
+			}
+		}
+
+		Debug("RootServer: Returning %d mixed servers (%d IPv4 + %d IPv6), %d reachable",
+			len(mixed), len(rsm.sortedV4), len(rsm.sortedV6), reachableCount)
+
+		// 输出前 5 个服务器及延迟
+		topCount := min(5, len(mixed))
+		for i := 0; i < topCount; i++ {
+			if mixed[i].Reachable {
+				Debug("RootServer:   #%d: %s (latency: %v)", i+1, mixed[i].Server, mixed[i].Latency)
+			} else {
+				Debug("RootServer:   #%d: %s (unreachable)", i+1, mixed[i].Server)
+			}
+		}
+
 		return mixed
 	}
 
-	// Return top IPv4 servers
-	count := min(6, len(rsm.sortedV4))
-	result := make([]string, count)
-	copy(result, rsm.sortedV4[:count])
+	// 返回所有 IPv4 服务器
+	result := make([]RootServerWithLatency, len(rsm.sortedV4))
+	copy(result, rsm.sortedV4)
 
-	Debug("RootServer: Selected %d IPv4 servers: %v", count, result)
+	reachableCount := 0
+	for _, server := range result {
+		if server.Reachable {
+			reachableCount++
+		}
+	}
+
+	Debug("RootServer: Returning %d IPv4 servers, %d reachable", len(result), reachableCount)
+
+	// 输出前 5 个服务器及延迟
+	topCount := min(5, len(result))
+	for i := 0; i < topCount; i++ {
+		if result[i].Reachable {
+			Debug("RootServer:   #%d: %s (latency: %v)", i+1, result[i].Server, result[i].Latency)
+		} else {
+			Debug("RootServer:   #%d: %s (unreachable)", i+1, result[i].Server)
+		}
+	}
+
 	return result
 }
 
-func (rsm *RootServerManager) sortServersBySpeed() {
+func (rsm *RootServerManager) SortServersBySpeed() {
 	defer func() { RecoverPanic("Root server speed sorting") }()
 
 	Debug("RootServer: Starting speed-based server sorting")
@@ -5988,49 +6063,71 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 	// Sort IPv4 servers using existing SpeedTest
 	if len(rsm.serversV4) > 0 {
 		Debug("RootServer: Testing %d IPv4 servers via UDP:%s", len(rsm.serversV4), DefaultDNSPort)
-		ips := extractIPsFromServers(rsm.serversV4)
+		ips := ExtractIPsFromServers(rsm.serversV4)
 		results := rsm.speedTester.SpeedTest(ips)
 
-		sorted := sortBySpeedResult(rsm.serversV4, results)
+		sortedWithLatency := SortBySpeedResultWithLatency(rsm.serversV4, results)
 
 		rsm.mu.Lock()
-		rsm.sortedV4 = sorted
+		rsm.sortedV4 = sortedWithLatency
 		rsm.mu.Unlock()
 
 		reachableCount := 0
-		for _, result := range results {
-			if result != nil && result.Reachable {
+		for _, server := range sortedWithLatency {
+			if server.Reachable {
 				reachableCount++
 			}
 		}
-		Debug("RootServer: IPv4 test complete - %d/%d reachable",
-			reachableCount, len(rsm.serversV4))
-		Info("RootServer: IPv4 servers sorted by latency - top 3: %v",
-			sorted[:min(3, len(sorted))])
+		Debug("RootServer: IPv4 test complete - %d/%d reachable", reachableCount, len(rsm.serversV4))
+
+		// 输出前 3 个服务器及其延迟
+		topServers := make([]string, 0, 3)
+		for i := 0; i < min(3, len(sortedWithLatency)); i++ {
+			if sortedWithLatency[i].Reachable {
+				topServers = append(topServers, fmt.Sprintf("%s(%v)",
+					sortedWithLatency[i].Server, sortedWithLatency[i].Latency))
+			}
+		}
+		if len(topServers) > 0 {
+			Info("RootServer: IPv4 servers sorted by latency - top 3: %v", topServers)
+		} else {
+			Warn("RootServer: No reachable IPv4 root servers found")
+		}
 	}
 
 	// Sort IPv6 servers using existing SpeedTest
 	if len(rsm.serversV6) > 0 {
 		Debug("RootServer: Testing %d IPv6 servers via UDP:%s", len(rsm.serversV6), DefaultDNSPort)
-		ips := extractIPsFromServers(rsm.serversV6)
+		ips := ExtractIPsFromServers(rsm.serversV6)
 		results := rsm.speedTester.SpeedTest(ips)
 
-		sorted := sortBySpeedResult(rsm.serversV6, results)
+		sortedWithLatency := SortBySpeedResultWithLatency(rsm.serversV6, results)
 
 		rsm.mu.Lock()
-		rsm.sortedV6 = sorted
+		rsm.sortedV6 = sortedWithLatency
 		rsm.mu.Unlock()
 
 		reachableCount := 0
-		for _, result := range results {
-			if result != nil && result.Reachable {
+		for _, server := range sortedWithLatency {
+			if server.Reachable {
 				reachableCount++
 			}
 		}
-		Debug("RootServer: IPv6 test complete - %d/%d reachable",
-			reachableCount, len(rsm.serversV6))
-		Info("RootServer: IPv6 servers sorted by latency - top 3: %v",
-			sorted[:min(3, len(sorted))])
+		Debug("RootServer: IPv6 test complete - %d/%d reachable", reachableCount, len(rsm.serversV6))
+
+		// 输出前 3 个服务器及其延迟
+		topServers := make([]string, 0, 3)
+		for i := 0; i < min(3, len(sortedWithLatency)); i++ {
+			if sortedWithLatency[i].Reachable {
+				topServers = append(topServers, fmt.Sprintf("%s(%v)",
+					sortedWithLatency[i].Server, sortedWithLatency[i].Latency))
+			}
+		}
+		if len(topServers) > 0 {
+			Info("RootServer: IPv6 servers sorted by latency - top 3: %v", topServers)
+		} else {
+			Warn("RootServer: No reachable IPv6 root servers found")
+		}
 	}
 
 	rsm.mu.Lock()
@@ -6039,10 +6136,59 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 	Debug("RootServer: Speed sorting completed")
 }
 
-func extractIPsFromServers(servers []string) []string {
+// SortBySpeedResultWithLatency 根据速度测试结果排序服务器，返回包含延迟信息的列表
+func SortBySpeedResultWithLatency(servers []string, results map[string]*SpeedResult) []RootServerWithLatency {
+	Debug("RootServer: Processing speed test results for %d servers", len(servers))
+
+	serverList := make([]RootServerWithLatency, len(servers))
+	reachableCount := 0
+
+	for i, server := range servers {
+		ip := ExtractIPFromServer(server)
+		if result, exists := results[ip]; exists && result.Reachable {
+			serverList[i] = RootServerWithLatency{
+				Server:    server,
+				Latency:   result.Latency,
+				Reachable: true,
+			}
+			reachableCount++
+			Debug("RootServer: %s reachable, latency: %v", server, result.Latency)
+		} else {
+			serverList[i] = RootServerWithLatency{
+				Server:    server,
+				Latency:   9999 * time.Millisecond, // 不可达服务器放到最后
+				Reachable: false,
+			}
+			Debug("RootServer: %s unreachable", server)
+		}
+	}
+
+	Debug("RootServer: Speed test summary - %d/%d reachable", reachableCount, len(servers))
+
+	// 排序：可达的优先，然后按延迟排序
+	sort.Slice(serverList, func(i, j int) bool {
+		if serverList[i].Reachable != serverList[j].Reachable {
+			return serverList[i].Reachable
+		}
+		return serverList[i].Latency < serverList[j].Latency
+	})
+
+	if reachableCount > 0 {
+		topCount := min(3, reachableCount)
+		topServers := make([]string, topCount)
+		for i := 0; i < topCount; i++ {
+			topServers[i] = fmt.Sprintf("%s(%v)", serverList[i].Server, serverList[i].Latency)
+		}
+		Debug("RootServer: Server ranking updated - top 3: %v", topServers)
+	}
+
+	return serverList
+}
+
+func ExtractIPsFromServers(servers []string) []string {
 	ips := make([]string, len(servers))
 	for i, server := range servers {
-		ips[i] = extractIPFromServer(server)
+		ips[i] = ExtractIPFromServer(server)
 	}
 	return ips
 }
@@ -6056,7 +6202,7 @@ func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			Debug("RootServer: Triggering periodic speed test")
-			rsm.sortServersBySpeed()
+			rsm.SortServersBySpeed()
 		case <-ctx.Done():
 			Debug("RootServer: Stopping periodic sorting - context cancelled")
 			return
@@ -6064,58 +6210,7 @@ func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
 	}
 }
 
-func sortBySpeedResult(servers []string, results map[string]*SpeedResult) []string {
-	Debug("RootServer: Processing speed test results for %d servers", len(servers))
-
-	type serverWithLatency struct {
-		server    string
-		latency   time.Duration
-		reachable bool
-	}
-
-	serverList := make([]serverWithLatency, len(servers))
-	reachableCount := 0
-
-	for i, server := range servers {
-		ip := extractIPFromServer(server)
-		if result, exists := results[ip]; exists && result.Reachable {
-			serverList[i] = serverWithLatency{
-				server:    server,
-				latency:   result.Latency,
-				reachable: true,
-			}
-			reachableCount++
-			Debug("RootServer: %s reachable, latency: %v", server, result.Latency)
-		} else {
-			serverList[i] = serverWithLatency{
-				server:    server,
-				latency:   9999 * time.Millisecond, // Put unreachable servers at the end
-				reachable: false,
-			}
-			Debug("RootServer: %s unreachable", server)
-		}
-	}
-
-	Debug("RootServer: Speed test summary - %d/%d reachable", reachableCount, len(servers))
-
-	// Sort by latency (reachable first, then by latency)
-	sort.Slice(serverList, func(i, j int) bool {
-		if serverList[i].reachable != serverList[j].reachable {
-			return serverList[i].reachable
-		}
-		return serverList[i].latency < serverList[j].latency
-	})
-
-	sorted := make([]string, len(servers))
-	for i, item := range serverList {
-		sorted[i] = item.server
-	}
-
-	Debug("RootServer: Server ranking updated - top 3: %v", sorted[:min(3, reachableCount)])
-	return sorted
-}
-
-func extractIPFromServer(server string) string {
+func ExtractIPFromServer(server string) string {
 	host, _, err := net.SplitHostPort(server)
 	if err != nil {
 		// If server does not contain a port, return as is (could be just an IP)
