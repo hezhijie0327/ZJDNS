@@ -190,28 +190,28 @@ type Logger struct {
 // =============================================================================
 
 type DNSServer struct {
-	config           *ServerConfig
-	cache            CacheManager
-	connPool         *ConnectionPool
-	tlsManager       *TLSManager
-	upstreamManager  *UpstreamManager
-	queryClient      *QueryClient
-	taskManager      *TaskManager
-	ednsManager      *EDNSManager
-	dnsRewriter      *DNSRewriter
-	ipFilter         *IPFilter
-	hijackPrevention *HijackPrevention
-	dnssecValidator  *DNSSECValidator
+	config            *ServerConfig
+	cache             CacheManager
+	connPool          *ConnectionPool
+	tlsManager        *TLSManager
+	upstreamManager   *UpstreamManager
+	queryClient       *QueryClient
+	taskManager       *TaskManager
+	ednsManager       *EDNSManager
+	dnsRewriter       *DNSRewriter
+	ipFilter          *IPFilter
+	hijackPrevention  *HijackPrevention
+	dnssecValidator   *DNSSECValidator
 	rootServerManager *RootServerManager
-	concurrencyLimit chan struct{}
-	speedDebounce    map[string]time.Time
-	speedMutex       sync.Mutex
-	speedInterval    time.Duration
-	ctx              context.Context
-	cancel           context.CancelFunc
-	shutdown         chan struct{}
-	wg               sync.WaitGroup
-	closed           int32
+	concurrencyLimit  chan struct{}
+	speedDebounce     map[string]time.Time
+	speedMutex        sync.Mutex
+	speedInterval     time.Duration
+	ctx               context.Context
+	cancel            context.CancelFunc
+	shutdown          chan struct{}
+	wg                sync.WaitGroup
+	closed            int32
 }
 
 type QueryClient struct {
@@ -589,13 +589,13 @@ type ResourceManager struct {
 type ConfigManager struct{}
 
 type RootServerManager struct {
-	serversV4     []string
-	serversV6     []string
-	speedTester   *SpeedTester
-	sortedV4      []string
-	sortedV6      []string
-	lastSortTime  time.Time
-	mu            sync.RWMutex
+	serversV4    []string
+	serversV6    []string
+	speedTester  *SpeedTester
+	sortedV4     []string
+	sortedV6     []string
+	lastSortTime time.Time
+	mu           sync.RWMutex
 }
 
 // =============================================================================
@@ -2848,23 +2848,23 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	hijackPrevention := NewHijackPrevention(config.Server.Features.HijackProtection)
 
 	server := &DNSServer{
-		config:           config,
+		config:            config,
 		rootServerManager: rootServerManager,
-		connPool:         connectionPool,
-		dnssecValidator:  NewDNSSECValidator(),
-		concurrencyLimit: make(chan struct{}, MaxConcurrency),
-		ctx:              ctx,
-		cancel:           cancel,
-		shutdown:         make(chan struct{}),
-		ipFilter:         ipFilter,
-		dnsRewriter:      dnsRewriter,
-		upstreamManager:  upstreamManager,
-		queryClient:      queryClient,
-		hijackPrevention: hijackPrevention,
-		taskManager:      taskManager,
-		ednsManager:      ednsManager,
-		speedDebounce:    make(map[string]time.Time),
-		speedInterval:    SpeedDebounceInterval,
+		connPool:          connectionPool,
+		dnssecValidator:   NewDNSSECValidator(),
+		concurrencyLimit:  make(chan struct{}, MaxConcurrency),
+		ctx:               ctx,
+		cancel:            cancel,
+		shutdown:          make(chan struct{}),
+		ipFilter:          ipFilter,
+		dnsRewriter:       dnsRewriter,
+		upstreamManager:   upstreamManager,
+		queryClient:       queryClient,
+		hijackPrevention:  hijackPrevention,
+		taskManager:       taskManager,
+		ednsManager:       ednsManager,
+		speedDebounce:     make(map[string]time.Time),
+		speedInterval:     SpeedDebounceInterval,
 	}
 
 	if config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "" {
@@ -5869,6 +5869,16 @@ func (v *QuicAddrValidator) Close() {
 // =============================================================================
 
 func NewRootServerManager(config ServerConfig) *RootServerManager {
+	// Create DNS-specific speed test configuration for root servers
+	dnsSpeedTestConfig := config
+	dnsSpeedTestConfig.SpeedTest = []SpeedTestMethod{
+		{
+			Type:    "udp",
+			Port:    "53",
+			Timeout: 250, // Short timeout for root server testing
+		},
+	}
+
 	rsm := &RootServerManager{
 		serversV4: []string{
 			"198.41.0.4:53", "170.247.170.2:53", "192.33.4.12:53", "199.7.91.13:53",
@@ -5880,7 +5890,7 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 			"[2001:500:a8::e]:53", "[2001:500:2f::f]:53", "[2001:500:12::d0d]:53", "[2001:500:1::53]:53",
 			"[2001:7fe::53]:53", "[2001:503:c27::2:30]:53", "[2001:7fd::1]:53", "[2001:500:9f::42]:53", "[2001:dc3::35]:53",
 		},
-		speedTester: NewSpeedTester(config),
+		speedTester: NewSpeedTester(dnsSpeedTestConfig),
 	}
 
 	// Initialize with default order
@@ -5920,7 +5930,7 @@ func (rsm *RootServerManager) GetOptimalRootServers(ipv6Enabled bool) []string {
 func (rsm *RootServerManager) sortServersBySpeed() {
 	defer func() { RecoverPanic("Root server speed sorting") }()
 
-	// Sort IPv4 servers
+	// Sort IPv4 servers using existing SpeedTest
 	if len(rsm.serversV4) > 0 {
 		ips := extractIPsFromServers(rsm.serversV4)
 		results := rsm.speedTester.SpeedTest(ips)
@@ -5931,10 +5941,10 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 		rsm.sortedV4 = sorted
 		rsm.mu.Unlock()
 
-		Info("Root servers IPv4 sorted by latency: %v", sorted[:min(3, len(sorted))])
+		Info("Root servers IPv4 sorted by UDP 53 port latency: %v", sorted[:min(3, len(sorted))])
 	}
 
-	// Sort IPv6 servers
+	// Sort IPv6 servers using existing SpeedTest
 	if len(rsm.serversV6) > 0 {
 		ips := extractIPsFromServers(rsm.serversV6)
 		results := rsm.speedTester.SpeedTest(ips)
@@ -5945,12 +5955,20 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 		rsm.sortedV6 = sorted
 		rsm.mu.Unlock()
 
-		Info("Root servers IPv6 sorted by latency: %v", sorted[:min(3, len(sorted))])
+		Info("Root servers IPv6 sorted by UDP 53 port latency: %v", sorted[:min(3, len(sorted))])
 	}
 
 	rsm.mu.Lock()
 	rsm.lastSortTime = time.Now()
 	rsm.mu.Unlock()
+}
+
+func extractIPsFromServers(servers []string) []string {
+	ips := make([]string, len(servers))
+	for i, server := range servers {
+		ips[i] = extractIPFromServer(server)
+	}
+	return ips
 }
 
 func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
@@ -5967,24 +5985,10 @@ func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
 	}
 }
 
-func extractIPsFromServers(servers []string) []string {
-	ips := make([]string, len(servers))
-	for i, server := range servers {
-		// Extract IP from server:port format
-		server = strings.Trim(server, "[]")
-		if idx := strings.LastIndex(server, ":"); idx != -1 {
-			ips[i] = server[:idx]
-		} else {
-			ips[i] = server
-		}
-	}
-	return ips
-}
-
 func sortBySpeedResult(servers []string, results map[string]*SpeedResult) []string {
 	type serverWithLatency struct {
-		server   string
-		latency  time.Duration
+		server    string
+		latency   time.Duration
 		reachable bool
 	}
 
