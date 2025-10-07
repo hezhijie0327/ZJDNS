@@ -3654,141 +3654,167 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 	ctx, cancel := context.WithTimeout(s.ctx, QueryTimeout)
 	defer cancel()
 
-	completedCount := 0
-	totalServers := len(servers)
-
 	for _, server := range servers {
 		srv := server
+
 		if srv.IsRecursive() {
-			s.taskManager.ExecuteAsync("Query-Recursive",
-				func(ctx context.Context) error {
-					recursiveCtx, recursiveCancel := context.WithTimeout(ctx, RecursiveTimeout)
-					defer recursiveCancel()
+			s.taskManager.ExecuteAsync("Query-Recursive", func(taskCtx context.Context) error {
+				recursiveCtx, recursiveCancel := context.WithTimeout(taskCtx, RecursiveTimeout)
+				defer recursiveCancel()
 
-					answer, authority, additional, validated, ecsResponse, err := s.ResolveWithCNAME(recursiveCtx, question, ecs, tracker)
+				answer, authority, additional, validated, ecsResponse, err := s.ResolveWithCNAME(
+					recursiveCtx, question, ecs, tracker)
 
-					if err == nil && len(answer) > 0 {
-						filteredAnswer := s.FilterRecordsByPolicy(answer, FilterContext{
-							Policy:       srv.Policy,
-							IsGlueRecord: false,
-						})
-						filteredAdditional := s.FilterRecordsByPolicy(additional, FilterContext{
-							Policy:       srv.Policy,
-							IsGlueRecord: false,
-						})
+				if err == nil && len(answer) > 0 {
+					filteredAnswer, _, allIPFiltered := s.FilterRecordsByPolicy(answer, FilterContext{
+						Policy:       srv.Policy,
+						IsGlueRecord: false,
+					})
+					filteredAdditional, _, _ := s.FilterRecordsByPolicy(additional, FilterContext{
+						Policy:       srv.Policy,
+						IsGlueRecord: false,
+					})
 
-						if len(filteredAnswer) > 0 {
-							if tracker != nil && srv.Policy != "all" {
-								tracker.AddStep("Recursive query after policy filter: %d answer records", len(filteredAnswer))
-							}
-
-							select {
-							case resultChan <- &QueryResult{
-								Answer:     filteredAnswer,
-								Authority:  authority,
-								Additional: filteredAdditional,
-								Validated:  validated,
-								ECS:        ecsResponse,
-								Server:     srv.Address,
-							}:
-							case <-ctx.Done():
-							}
-							return nil
-						} else {
-							if tracker != nil && srv.Policy != "all" {
-								tracker.AddStep("Recursive query after policy filter: no answer records")
-							}
+					if allIPFiltered {
+						if tracker != nil {
+							tracker.AddStep("Recursive query: all A/AAAA records filtered by policy '%s'", srv.Policy)
+						}
+						select {
+						case resultChan <- &QueryResult{
+							Error:  fmt.Errorf("all A/AAAA records filtered by policy '%s'", srv.Policy),
+							Server: srv.Address,
+						}:
+						case <-ctx.Done():
+						}
+					} else if len(filteredAnswer) > 0 {
+						if tracker != nil && srv.Policy != "all" {
+							tracker.AddStep("Recursive query after policy filter: %d answer records", len(filteredAnswer))
+						}
+						select {
+						case resultChan <- &QueryResult{
+							Answer:     filteredAnswer,
+							Authority:  authority,
+							Additional: filteredAdditional,
+							Validated:  validated,
+							ECS:        ecsResponse,
+							Server:     srv.Address,
+						}:
+						case <-ctx.Done():
+						}
+					} else {
+						if tracker != nil && srv.Policy != "all" {
+							tracker.AddStep("Recursive query after policy filter: no answer records")
 						}
 					}
+				}
+				return nil
+			})
 
-					select {
-					case resultChan <- nil:
-					case <-ctx.Done():
-					}
-					return nil
-				})
 		} else {
 			originalMsg := s.BuildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
 			msg := SafeCopyMessage(originalMsg)
 			globalResourceManager.PutDNSMessage(originalMsg)
 
-			s.taskManager.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address),
-				func(ctx context.Context) error {
-					result := s.queryClient.ExecuteQuery(ctx, msg, srv, tracker)
+			s.taskManager.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(taskCtx context.Context) error {
+				result := s.queryClient.ExecuteQuery(taskCtx, msg, srv, tracker)
 
-					if result.Error == nil && result.Response != nil {
-						rcode := result.Response.Rcode
-						if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-							if serverDNSSECEnabled && s.config.Server.Features.DNSSEC {
-								result.Validated = s.dnssecValidator.ValidateResponse(result.Response, true)
+				if result.Error == nil && result.Response != nil {
+					rcode := result.Response.Rcode
+					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+						if serverDNSSECEnabled && s.config.Server.Features.DNSSEC {
+							result.Validated = s.dnssecValidator.ValidateResponse(result.Response, true)
+						}
+
+						filteredAnswer, _, allIPFiltered := s.FilterRecordsByPolicy(result.Response.Answer, FilterContext{
+							Policy:       srv.Policy,
+							IsGlueRecord: false,
+						})
+						filteredExtra, _, _ := s.FilterRecordsByPolicy(result.Response.Extra, FilterContext{
+							Policy:       srv.Policy,
+							IsGlueRecord: false,
+						})
+
+						if allIPFiltered {
+							if tracker != nil {
+								tracker.AddStep("Server %s: all A/AAAA records filtered by policy '%s'", srv.Address, srv.Policy)
+							}
+							select {
+							case resultChan <- &QueryResult{
+								Error:  fmt.Errorf("all A/AAAA records filtered by policy '%s'", srv.Policy),
+								Server: srv.Address,
+							}:
+							case <-ctx.Done():
+							}
+						} else if len(filteredAnswer) > 0 {
+							ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
+
+							if tracker != nil && srv.Policy != "all" {
+								tracker.AddStep("Server %s after policy filter: %d answer records", srv.Address, len(filteredAnswer))
 							}
 
-							filteredAnswer := s.FilterRecordsByPolicy(result.Response.Answer, FilterContext{
-								Policy:       srv.Policy,
-								IsGlueRecord: false,
-							})
-							filteredExtra := s.FilterRecordsByPolicy(result.Response.Extra, FilterContext{
-								Policy:       srv.Policy,
-								IsGlueRecord: false,
-							})
-
-							if len(filteredAnswer) > 0 {
-								ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
-
-								if tracker != nil && srv.Policy != "all" {
-									tracker.AddStep("Server %s after policy filter: %d answer records", srv.Address, len(filteredAnswer))
-								}
-
-								select {
-								case resultChan <- &QueryResult{
-									Answer:     filteredAnswer,
-									Authority:  result.Response.Ns,
-									Additional: filteredExtra,
-									Validated:  result.Validated,
-									ECS:        ecsResponse,
-									Server:     srv.Address,
-								}:
-								case <-ctx.Done():
-								}
-								return nil
-							} else {
-								if tracker != nil && srv.Policy != "all" {
-									tracker.AddStep("Server %s after policy filter: no answer records", srv.Address)
-								}
+							select {
+							case resultChan <- &QueryResult{
+								Answer:     filteredAnswer,
+								Authority:  result.Response.Ns,
+								Additional: filteredExtra,
+								Validated:  result.Validated,
+								ECS:        ecsResponse,
+								Server:     srv.Address,
+							}:
+							case <-ctx.Done():
+							}
+						} else {
+							if tracker != nil && srv.Policy != "all" {
+								tracker.AddStep("Server %s after policy filter: no answer records", srv.Address)
 							}
 						}
 					}
-
-					select {
-					case resultChan <- nil:
-					case <-ctx.Done():
-					}
-					return nil
-				})
+				}
+				return nil
+			})
 		}
 	}
 
-	for completedCount < totalServers {
+	var lastError error
+	receivedCount := 0
+	serversCount := len(servers)
+
+	for receivedCount < serversCount {
 		select {
 		case result := <-resultChan:
-			completedCount++
+			receivedCount++
 
-			if result != nil && len(result.Answer) > 0 {
+			if result.Error != nil {
+				lastError = result.Error
 				if tracker != nil {
-					tracker.AddStep("Using result from: %s", result.Server)
+					tracker.AddStep("Server %s returned error: %v", result.Server, result.Error)
 				}
-				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
+				continue
 			}
 
 			if tracker != nil {
-				tracker.AddStep("Received invalid result, waiting for other servers (%d/%d completed)", completedCount, totalServers)
+				tracker.AddStep("Using successful result from: %s", result.Server)
 			}
+			return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
+
 		case <-ctx.Done():
+			if tracker != nil {
+				tracker.AddStep("Query context cancelled after receiving %d/%d responses", receivedCount, serversCount)
+			}
+			if lastError != nil {
+				return nil, nil, nil, false, nil, lastError
+			}
 			return nil, nil, nil, false, nil, errors.New("all upstream queries failed or timed out")
 		}
 	}
 
-	return nil, nil, nil, false, nil, errors.New("all upstream servers returned no valid answers")
+	if tracker != nil {
+		tracker.AddStep("All %d upstream servers returned errors", serversCount)
+	}
+	if lastError != nil {
+		return nil, nil, nil, false, nil, lastError
+	}
+	return nil, nil, nil, false, nil, errors.New("all upstream queries failed")
 }
 
 func (s *DNSServer) BuildQueryMessage(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
@@ -4101,24 +4127,31 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 	}
 }
 
-func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) []dns.RR {
+func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) ([]dns.RR, bool, bool) {
 	if ctx.IsGlueRecord {
-		return records
+		return records, false, false
 	}
 
 	if ctx.Policy == "all" || !s.ipFilter.HasData() {
-		return records
+		return records, false, false
 	}
 
 	filtered := make([]dns.RR, 0, len(records))
+	hadIPRecords := false
+	ipRecordCount := 0
+	filteredIPCount := 0
 
 	for _, rr := range records {
 		var ip net.IP
 
 		switch record := rr.(type) {
 		case *dns.A:
+			hadIPRecords = true
+			ipRecordCount++
 			ip = record.A
 		case *dns.AAAA:
+			hadIPRecords = true
+			ipRecordCount++
 			ip = record.AAAA
 		default:
 			filtered = append(filtered, rr)
@@ -4126,6 +4159,7 @@ func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) [
 		}
 
 		isTrusted := s.ipFilter.IsTrustedIP(ip)
+		wasFiltered := false
 
 		switch ctx.Policy {
 		case "trusted_only":
@@ -4133,6 +4167,7 @@ func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) [
 				filtered = append(filtered, rr)
 				Debug("Policy filter: keeping trusted IP %s", ip)
 			} else {
+				wasFiltered = true
 				Debug("Policy filter: filtering out untrusted IP %s", ip)
 			}
 		case "untrusted_only":
@@ -4140,12 +4175,19 @@ func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) [
 				filtered = append(filtered, rr)
 				Debug("Policy filter: keeping untrusted IP %s", ip)
 			} else {
+				wasFiltered = true
 				Debug("Policy filter: filtering out trusted IP %s", ip)
 			}
 		}
+
+		if wasFiltered {
+			filteredIPCount++
+		}
 	}
 
-	return filtered
+	allIPFiltered := hadIPRecords && ipRecordCount > 0 && filteredIPCount == ipRecordCount
+
+	return filtered, hadIPRecords, allIPFiltered
 }
 
 func (s *DNSServer) HandleSuspiciousResponse(reason string, currentlyTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
