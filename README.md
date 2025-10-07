@@ -86,114 +86,116 @@ ZJDNS 采用模块化、分层设计，核心组件职责清晰、松耦合，�
 graph TD
     A[DNS Client] -->|UDP/TCP/DoT/DoQ/DoH| B[DNSServer<br><i>服务器核心</i>]
 
-    subgraph CoreManagers ["核心管理器层"]
-        B --> C[QueryManager<br><i>查询管理器</i>]
-        B --> D[ConnectionManager<br><i>连接管理器</i>]
-        B --> E[SecurityManager<br><i>安全管理器</i>]
-        B --> F[TaskManager<br><i>任务管理器</i>]
-        B --> G[RootServerManager<br><i>根服务器管理器</i>]
+    subgraph CoreComponents ["核心组件层"]
+        B --> C[ConfigManager<br><i>配置管理器</i>]
+        B --> D[ConnectionPool<br><i>连接池</i>]
+        B --> E[CacheManager<br><i>缓存管理器</i>]
+        B --> F[QueryClient<br><i>查询客户端</i>]
+        B --> G[UpstreamManager<br><i>上游管理器</i>]
     end
 
-    subgraph QueryProcessing ["查询处理流程"]
-        C --> H[UpstreamHandler<br><i>上游处理器</i>]
-        C --> I[RecursiveResolver<br><i>递归解析器</i>]
-        C --> J[CNAMEHandler<br><i>CNAME处理器</i>]
-        C --> K[ResponseValidator<br><i>响应验证器</i>]
+    subgraph ProtocolHandlers ["协议处理器"]
+        B --> H[UDPServer<br><i>UDP服务器</i>]
+        B --> I[TCPServer<br><i>TCP服务器</i>]
+        B --> J[DoTHandler<br><i>DoT处理器</i>]
+        B --> K[DoQHandler<br><i>DoQ处理器</i>]
+        B --> L[DoHHandler<br><i>DoH处理器</i>]
 
-        I --> G
-        H --> D
-        I --> D
+        H --> F
+        I --> F
+        J --> F
+        K --> F
+        L --> F
     end
 
-    subgraph ConnectionSystem ["连接系统"]
-        D --> L[PoolManager<br><i>连接池管理</i>]
-        D --> M[SecureClientManager<br><i>安全客户端管理</i>]
-        D --> N[QueryClient<br><i>查询客户端</i>]
-
-        L --> O[UDP Clients<br><i>UDP客户端池</i>]
-        L --> P[TLS Connections<br><i>TLS连接池</i>]
-        L --> Q[QUIC Connections<br><i>QUIC连接池</i>]
-
-        M --> R[UnifiedSecureClient<br><i>统一安全客户端</i>]
-        M --> S[DoHClient<br><i>DoH客户端</i>]
-
-        R --> T[DoT连接<br><i>TLS连接</i>]
-        R --> U[DoQ连接<br><i>QUIC连接</i>]
-        S --> V[HTTP3Transport<br><i>HTTP/3传输</i>]
-    end
-
-    subgraph SecurityComponents ["安全组件"]
-        E --> W[TLSManager<br><i>TLS管理器</i>]
-        E --> X[DNSSECValidator<br><i>DNSSEC验证器</i>]
-        E --> Y[HijackPrevention<br><i>劫持防护</i>]
-
-        W --> Z[QUICAddrValidator<br><i>QUIC地址验证</i>]
-        Z --> AA[Ristretto缓存<br><i>内存缓存</i>]
-    end
-
-    subgraph Enhancement ["增强功能"]
-        B --> BB[EDNSManager<br><i>EDNS管理器</i>]
-        B --> CC[RewriteManager<br><i>重写管理器</i>]
-        B --> DD[SpeedTestManager<br><i>网络质量管理器</i>]
-
-        BB --> EE[IPDetector<br><i>IP检测器</i>]
-        BB --> FF[ECS支持<br><i>客户端子网</i>]
-        BB --> GG[Padding<br><i>流量填充</i>]
-
-        DD --> HH[SpeedResult缓存<br><i>结果缓存</i>]
+    subgraph SecurityEnhancement ["安全与增强模块"]
+        B --> M[EDNSManager<br><i>EDNS管理器</i>]
+        B --> N[DNSSECValidator<br><i>DNSSEC验证器</i>]
+        B --> O[HijackPrevention<br><i>劫持防护</i>]
+        B --> P[IPFilter<br><i>IP过滤器</i>]
+        B --> Q[DNSRewriter<br><i>DNS重写器</i>]
+        B --> R[SpeedTester<br><i>网络质量测试</i>]
     end
 
     subgraph CacheSystem ["缓存系统"]
-        B --> II[CacheManager<br><i>缓存管理接口</i>]
-        II -->|生产环境| JJ[RedisCache<br><i>Redis缓存</i>]
-        II -->|测试环境| KK[NullCache<br><i>空缓存</i>]
+        E -->|生产环境| S[RedisCache<br><i>Redis缓存</i>]
+        E -->|测试环境| T[NullCache<br><i>空缓存</i>]
 
-        JJ --> LL[RefreshQueue<br><i>刷新队列</i>]
-        JJ --> MM[RefreshRequest<br><i>刷新请求</i>]
+        S --> U[刷新队列<br><i>RefreshQueue</i>]
+        S --> V[预取机制<br><i>预取即将过期</i>]
+        S --> W[过期缓存服务<br><i>Serve Stale</i>]
     end
 
-    subgraph Support ["支撑组件"]
-        B --> NN[ResourceManager<br><i>资源管理器</i>]
-        B --> OO[RequestTracker<br><i>请求追踪器</i>]
+    subgraph SecurityFeatures ["安全特性"]
+        M --> X[ECS支持<br><i>客户端子网</i>]
+        M --> Y[Padding<br><i>流量填充</i>]
 
-        NN --> PP[对象池<br><i>sync.Pool</i>]
-        OO --> QQ[唯一ID<br><i>请求标识</i>]
+        N --> Z[DNSSEC验证<br><i>AD标志传递</i>]
+        O --> AA[TCP回退<br><i>绕过UDP污染</i>]
+
+        Q --> BB[域名重写<br><i>过滤/重定向</i>]
+    end
+
+    subgraph SupportInfrastructure ["支撑基础设施"]
+        B --> CC[RequestTracker<br><i>请求追踪器</i>]
+        B --> DD[ResourceManager<br><i>资源管理器</i>]
+        B --> EE[TaskManager<br><i>任务管理器</i>]
+        B --> FF[TLSManager<br><i>TLS证书管理</i>]
+
+        CC --> GG[唯一ID<br><i>请求标识</i>]
+        DD --> HH[对象池<br><i>sync.Pool</i>]
+        EE --> II[Goroutine池<br><i>并发管理</i>]
+        FF --> JJ[证书加载<br><i>安全协议共享</i>]
+    end
+
+    subgraph DDRSystem ["DDR系统"]
+        B --> KK[DDRHandler<br><i>DDR处理器</i>]
+        KK --> LL[SVCB记录生成<br><i>自动发现</i>]
+        KK --> MM[DoT/DoQ/DoH<br><i>服务信息</i>]
+    end
+
+    subgraph RootServerManagement ["根服务器管理"]
+        F --> NN[RootServerManager<br><i>根服务器管理器</i>]
+        NN --> OO[IPv4根服务器<br><i>13个根服务器</i>]
+        NN --> PP[IPv6根服务器<br><i>13个根服务器</i>]
+        NN --> QQ[延迟感知排序<br><i>网络质量测试</i>]
+
+        QQ --> RR[最优服务器选择<br><i>动态优先级</i>]
+        NN --> SS[周期性重排序<br><i>15分钟间隔</i>]
+    end
+
+    subgraph UpstreamSystem ["上游系统"]
+        G --> TT[上游服务器配置<br><i>多个上游</i>]
+        G --> UU[IP策略过滤<br><i>安全访问</i>]
+        G --> VV[混合模式<br><i>递归+转发</i>]
     end
 
     subgraph GlobalServices ["全局服务"]
-        RR[GlobalLog<br><i>全局日志</i>]
-        SS[GlobalConfig<br><i>全局配置</i>]
-        TT[GlobalResource<br><i>全局资源</i>]
+        WW[GlobalLog<br><i>全局日志</i>]
+        XX[GlobalConfig<br><i>全局配置</i>]
 
-        RR -.-> B
-        SS -.-> B
-        TT -.-> NN
-    end
-
-    subgraph RootServerSystem ["根服务器系统"]
-        G --> UU[IPv4根服务器池<br><i>13个根服务器</i>]
-        G --> VV[IPv6根服务器池<br><i>13个根服务器</i>]
-        G --> WW[速度排序<br><i>基于网络测试</i>]
-
-        WW --> XX[最优服务器选择<br><i>IPv4/IPv6混合</i>]
-        G --> YY[周期性重排序<br><i>15分钟间隔</i>]
+        WW -.-> B
+        XX -.-> C
     end
 
     classDef core fill:#e6f3ff,stroke:#333;
-    classDef manager fill:#e6ffe6,stroke:#333;
+    classDef protocol fill:#e6ffe6,stroke:#333;
     classDef security fill:#ffe6e6,stroke:#333;
     classDef cache fill:#fff0e6,stroke:#333;
-    classDef client fill:#f0e6ff,stroke:#333;
     classDef support fill:#e6ffff,stroke:#333;
+    classDef ddr fill:#f0e6ff,stroke:#333;
     classDef rootserver fill:#f0fff0,stroke:#333;
+    classDef upstream fill:#ffe6f0,stroke:#333;
     classDef global fill:#ffe6ff,stroke:#333;
 
     class B core;
-    class CoreManagers,QueryProcessing,ConnectionSystem manager;
-    class SecurityComponents security;
+    class CoreComponents,ProtocolHandlers protocol;
+    class SecurityEnhancement,SecurityFeatures security;
     class CacheSystem cache;
-    class Enhancement,Support support;
-    class RootServerSystem rootserver;
+    class SupportInfrastructure support;
+    class DDRSystem ddr;
+    class RootServerManagement rootserver;
+    class UpstreamSystem upstream;
     class GlobalServices global;
 ```
 
