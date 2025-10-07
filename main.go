@@ -243,7 +243,6 @@ type FeatureFlags struct {
 	DNSSEC           bool `json:"dnssec"`
 	HijackProtection bool `json:"hijack_protection"`
 	Padding          bool `json:"padding"`
-	IPv6             bool `json:"ipv6"`
 }
 
 type RedisSettings struct {
@@ -506,13 +505,12 @@ type SpeedResult struct {
 // =============================================================================
 
 type RootServerManager struct {
-	serversV4    []string
-	serversV6    []string
+	servers      []string
 	speedTester  *SpeedTestManager
-	sortedV4     []RootServerWithLatency
-	sortedV6     []RootServerWithLatency
+	sorted       []RootServerWithLatency
 	lastSortTime time.Time
 	mu           sync.RWMutex
+	needsSpeed   bool
 }
 
 type RootServerWithLatency struct {
@@ -844,7 +842,6 @@ func (cm *ConfigManager) GetDefaultConfig() *ServerConfig {
 	config.Server.Features.DNSSEC = true
 	config.Server.Features.HijackProtection = true
 	config.Server.Features.Padding = true
-	config.Server.Features.IPv6 = true
 
 	config.Redis.Address = ""
 	config.Redis.Password = ""
@@ -2300,7 +2297,8 @@ func (rr *RecursiveResolver) RecursiveQuery(ctx context.Context, question dns.Qu
 						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), DefaultDNSPort))
 					}
 				case *dns.AAAA:
-					if rr.server.config.Server.Features.IPv6 && strings.EqualFold(a.Header().Name, ns.Ns) {
+					// 移除 IPv6 判断，总是尝试解析 IPv6
+					if strings.EqualFold(a.Header().Name, ns.Ns) {
 						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), DefaultDNSPort))
 					}
 				}
@@ -2445,6 +2443,8 @@ func (rr *RecursiveResolver) ResolveNSAddressesConcurrent(ctx context.Context, n
 				}
 
 				var addresses []string
+
+				// 优先解析 A 记录
 				nsQuestion := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
 				if nsAnswer, _, _, _, _, err := rr.RecursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP, tracker); err == nil {
 					for _, rrec := range nsAnswer {
@@ -2454,7 +2454,9 @@ func (rr *RecursiveResolver) ResolveNSAddressesConcurrent(ctx context.Context, n
 					}
 				}
 
-				if rr.server.config.Server.Features.IPv6 && len(addresses) == 0 {
+				// 移除 IPv6 判断，总是尝试解析 AAAA
+				// 如果 IPv4 解析失败或没有结果，尝试 IPv6
+				if len(addresses) == 0 {
 					nsQuestionV6 := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
 					if nsAnswerV6, _, _, _, _, err := rr.RecursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP, tracker); err == nil {
 						for _, rrec := range nsAnswerV6 {
@@ -2497,7 +2499,7 @@ func (rr *RecursiveResolver) ResolveNSAddressesConcurrent(ctx context.Context, n
 }
 
 func (rr *RecursiveResolver) GetRootServers() []string {
-	serversWithLatency := rr.rootServerMgr.GetOptimalRootServers(rr.server.config.Server.Features.IPv6)
+	serversWithLatency := rr.rootServerMgr.GetOptimalRootServers()
 	servers := make([]string, len(serversWithLatency))
 	for i, server := range serversWithLatency {
 		servers[i] = server.Server
@@ -4224,115 +4226,109 @@ func (st *SpeedTestManager) PingWithUDP(ip, port string, timeout time.Duration) 
 // =============================================================================
 
 func NewRootServerManager(config ServerConfig) *RootServerManager {
-	dnsSpeedTestConfig := config
-	dnsSpeedTestConfig.SpeedTest = []SpeedTestMethod{
-		{
-			Type:    "icmp",
-			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
-		},
-		{
-			Type:    "udp",
-			Port:    DefaultDNSPort,
-			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
-		},
-		{
-			Type:    "tcp",
-			Port:    DefaultDNSPort,
-			Timeout: int(DefaultSpeedTimeout.Milliseconds()),
-		},
+	// 判断是否需要递归解析
+	needsRecursive := len(config.Upstream) == 0
+	if !needsRecursive {
+		for _, upstream := range config.Upstream {
+			if upstream.IsRecursive() {
+				needsRecursive = true
+				break
+			}
+		}
 	}
 
 	rsm := &RootServerManager{
-		serversV4: []string{
+		servers: []string{
+			// IPv4 根服务器
 			"198.41.0.4:53", "170.247.170.2:53", "192.33.4.12:53", "199.7.91.13:53",
 			"192.203.230.10:53", "192.5.5.241:53", "192.112.36.4:53", "198.97.190.53:53",
 			"192.36.148.17:53", "192.58.128.30:53", "193.0.14.129:53", "199.7.83.42:53", "202.12.27.33:53",
-		},
-		serversV6: []string{
+			// IPv6 根服务器
 			"[2001:503:ba3e::2:30]:53", "[2801:1b8:10::b]:53", "[2001:500:2::c]:53", "[2001:500:2d::d]:53",
 			"[2001:500:a8::e]:53", "[2001:500:2f::f]:53", "[2001:500:12::d0d]:53", "[2001:500:1::53]:53",
 			"[2001:7fe::53]:53", "[2001:503:c27::2:30]:53", "[2001:7fd::1]:53", "[2001:500:9f::42]:53", "[2001:dc3::35]:53",
 		},
-		speedTester: NewSpeedTestManager(dnsSpeedTestConfig),
+		needsSpeed: needsRecursive,
 	}
 
-	rsm.sortedV4 = make([]RootServerWithLatency, len(rsm.serversV4))
-	rsm.sortedV6 = make([]RootServerWithLatency, len(rsm.serversV6))
-
-	for i, server := range rsm.serversV4 {
-		rsm.sortedV4[i] = RootServerWithLatency{
+	// 初始化排序列表
+	rsm.sorted = make([]RootServerWithLatency, len(rsm.servers))
+	for i, server := range rsm.servers {
+		rsm.sorted[i] = RootServerWithLatency{
 			Server:    server,
 			Latency:   UnreachableLatency,
 			Reachable: false,
 		}
 	}
 
-	for i, server := range rsm.serversV6 {
-		rsm.sortedV6[i] = RootServerWithLatency{
-			Server:    server,
-			Latency:   UnreachableLatency,
-			Reachable: false,
+	// 仅在需要递归解析时初始化测速
+	if needsRecursive {
+		dnsSpeedTestConfig := config
+		dnsSpeedTestConfig.SpeedTest = []SpeedTestMethod{
+			{
+				Type:    "icmp",
+				Timeout: int(DefaultSpeedTimeout.Milliseconds()),
+			},
+			{
+				Type:    "udp",
+				Port:    DefaultDNSPort,
+				Timeout: int(DefaultSpeedTimeout.Milliseconds()),
+			},
+			{
+				Type:    "tcp",
+				Port:    DefaultDNSPort,
+				Timeout: int(DefaultSpeedTimeout.Milliseconds()),
+			},
 		}
-	}
+		rsm.speedTester = NewSpeedTestManager(dnsSpeedTestConfig)
 
-	go rsm.SortServersBySpeed()
+		// 立即执行一次测速
+		go rsm.SortServersBySpeed()
+
+		LogInfo("Root server speed testing enabled")
+	} else {
+		LogInfo("Root server speed testing disabled (using upstream servers)")
+	}
 
 	return rsm
 }
 
-func (rsm *RootServerManager) GetOptimalRootServers(ipv6Enabled bool) []RootServerWithLatency {
+func (rsm *RootServerManager) GetOptimalRootServers() []RootServerWithLatency {
 	rsm.mu.RLock()
 	defer rsm.mu.RUnlock()
 
-	if ipv6Enabled {
-		mixed := make([]RootServerWithLatency, 0, len(rsm.sortedV4)+len(rsm.sortedV6))
-		mixed = append(mixed, rsm.sortedV4...)
-		mixed = append(mixed, rsm.sortedV6...)
-
-		sort.Slice(mixed, func(i, j int) bool {
-			if mixed[i].Reachable != mixed[j].Reachable {
-				return mixed[i].Reachable
-			}
-			return mixed[i].Latency < mixed[j].Latency
-		})
-
-		return mixed
-	}
-
-	result := make([]RootServerWithLatency, len(rsm.sortedV4))
-	copy(result, rsm.sortedV4)
-
+	result := make([]RootServerWithLatency, len(rsm.sorted))
+	copy(result, rsm.sorted)
 	return result
 }
 
 func (rsm *RootServerManager) SortServersBySpeed() {
 	defer HandlePanic("Root server speed sorting")
 
-	if len(rsm.serversV4) > 0 {
-		ips := ExtractIPsFromServers(rsm.serversV4)
-		results := rsm.speedTester.SpeedTest(ips)
-
-		sortedWithLatency := SortBySpeedResultWithLatency(rsm.serversV4, results)
-
-		rsm.mu.Lock()
-		rsm.sortedV4 = sortedWithLatency
-		rsm.mu.Unlock()
+	if !rsm.needsSpeed || rsm.speedTester == nil {
+		LogDebug("Root server speed testing skipped")
+		return
 	}
 
-	if len(rsm.serversV6) > 0 {
-		ips := ExtractIPsFromServers(rsm.serversV6)
-		results := rsm.speedTester.SpeedTest(ips)
-
-		sortedWithLatency := SortBySpeedResultWithLatency(rsm.serversV6, results)
-
-		rsm.mu.Lock()
-		rsm.sortedV6 = sortedWithLatency
-		rsm.mu.Unlock()
+	if len(rsm.servers) == 0 {
+		return
 	}
+
+	// 提取所有 IP
+	ips := ExtractIPsFromServers(rsm.servers)
+
+	// 执行测速
+	results := rsm.speedTester.SpeedTest(ips)
+
+	// 排序
+	sortedWithLatency := SortBySpeedResultWithLatency(rsm.servers, results)
 
 	rsm.mu.Lock()
+	rsm.sorted = sortedWithLatency
 	rsm.lastSortTime = time.Now()
 	rsm.mu.Unlock()
+
+	LogDebug("Root server speed test completed: %d servers tested", len(rsm.servers))
 }
 
 func SortBySpeedResultWithLatency(servers []string, results map[string]*SpeedResult) []RootServerWithLatency {
@@ -4374,6 +4370,11 @@ func ExtractIPsFromServers(servers []string) []string {
 }
 
 func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
+	if !rsm.needsSpeed {
+		LogDebug("RootServer: periodic sorting disabled")
+		return
+	}
+
 	LogDebug("RootServer: starting periodic sorting (%v interval)", RootServerSortInterval)
 	ticker := time.NewTicker(RootServerSortInterval)
 	defer ticker.Stop()
@@ -5092,6 +5093,11 @@ func (s *DNSServer) DisplayInfo() {
 		LogInfo("SpeedTest: enabled")
 	} else {
 		LogInfo("SpeedTest: not enabled")
+	}
+
+	// 新增：显示 Root Server 测速状态
+	if s.rootServerMgr.needsSpeed {
+		LogInfo("Root server speed testing: enabled")
 	}
 
 	LogInfo("Max concurrency: %d", MaxConcurrency)
