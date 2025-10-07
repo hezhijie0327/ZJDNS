@@ -3654,6 +3654,9 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 	ctx, cancel := context.WithTimeout(s.ctx, QueryTimeout)
 	defer cancel()
 
+	completedCount := 0
+	totalServers := len(servers)
+
 	for _, server := range servers {
 		srv := server
 		if srv.IsRecursive() {
@@ -3690,11 +3693,17 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 							}:
 							case <-ctx.Done():
 							}
+							return nil
 						} else {
 							if tracker != nil && srv.Policy != "all" {
 								tracker.AddStep("Recursive query after policy filter: no answer records")
 							}
 						}
+					}
+
+					select {
+					case resultChan <- nil:
+					case <-ctx.Done():
 					}
 					return nil
 				})
@@ -3741,6 +3750,7 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 								}:
 								case <-ctx.Done():
 								}
+								return nil
 							} else {
 								if tracker != nil && srv.Policy != "all" {
 									tracker.AddStep("Server %s after policy filter: no answer records", srv.Address)
@@ -3748,20 +3758,37 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 							}
 						}
 					}
+
+					select {
+					case resultChan <- nil:
+					case <-ctx.Done():
+					}
 					return nil
 				})
 		}
 	}
 
-	select {
-	case result := <-resultChan:
-		if tracker != nil {
-			tracker.AddStep("Using result from: %s", result.Server)
+	for completedCount < totalServers {
+		select {
+		case result := <-resultChan:
+			completedCount++
+
+			if result != nil && len(result.Answer) > 0 {
+				if tracker != nil {
+					tracker.AddStep("Using result from: %s", result.Server)
+				}
+				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
+			}
+
+			if tracker != nil {
+				tracker.AddStep("Received invalid result, waiting for other servers (%d/%d completed)", completedCount, totalServers)
+			}
+		case <-ctx.Done():
+			return nil, nil, nil, false, nil, errors.New("all upstream queries failed or timed out")
 		}
-		return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
-	case <-ctx.Done():
-		return nil, nil, nil, false, nil, errors.New("all upstream queries failed or timed out")
 	}
+
+	return nil, nil, nil, false, nil, errors.New("all upstream servers returned no valid answers")
 }
 
 func (s *DNSServer) BuildQueryMessage(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
