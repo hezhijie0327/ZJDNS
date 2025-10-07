@@ -3656,112 +3656,158 @@ func (s *DNSServer) QueryUpstreamServers(question dns.Question, ecs *ECSOption,
 
 	for _, server := range servers {
 		srv := server
+
 		if srv.IsRecursive() {
-			s.taskManager.ExecuteAsync("Query-Recursive",
-				func(ctx context.Context) error {
-					recursiveCtx, recursiveCancel := context.WithTimeout(ctx, RecursiveTimeout)
-					defer recursiveCancel()
+			s.taskManager.ExecuteAsync("Query-Recursive", func(taskCtx context.Context) error {
+				recursiveCtx, recursiveCancel := context.WithTimeout(taskCtx, RecursiveTimeout)
+				defer recursiveCancel()
 
-					answer, authority, additional, validated, ecsResponse, err := s.ResolveWithCNAME(recursiveCtx, question, ecs, tracker)
+				answer, authority, additional, validated, ecsResponse, err := s.ResolveWithCNAME(
+					recursiveCtx, question, ecs, tracker)
 
-					if err == nil && len(answer) > 0 {
-						filteredAnswer := s.FilterRecordsByPolicy(answer, FilterContext{
+				if err == nil && len(answer) > 0 {
+					// 应用 policy 过滤
+					filteredAnswer := s.FilterRecordsByPolicy(answer, FilterContext{
+						Policy:       srv.Policy,
+						IsGlueRecord: false,
+					})
+					filteredAdditional := s.FilterRecordsByPolicy(additional, FilterContext{
+						Policy:       srv.Policy,
+						IsGlueRecord: false,
+					})
+
+					// 检查是否有有效记录
+					if len(filteredAnswer) > 0 {
+						if tracker != nil && srv.Policy != "all" {
+							tracker.AddStep("Recursive query after policy filter: %d answer records", len(filteredAnswer))
+						}
+						select {
+						case resultChan <- &QueryResult{
+							Answer:     filteredAnswer,
+							Authority:  authority,
+							Additional: filteredAdditional,
+							Validated:  validated,
+							ECS:        ecsResponse,
+							Server:     srv.Address,
+						}:
+						case <-ctx.Done():
+						}
+					} else {
+						// 所有记录被过滤
+						if tracker != nil {
+							tracker.AddStep("Recursive query: all records filtered by policy '%s'", srv.Policy)
+						}
+					}
+				}
+				return nil
+			})
+
+		} else {
+			originalMsg := s.BuildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
+			msg := SafeCopyMessage(originalMsg)
+			globalResourceManager.PutDNSMessage(originalMsg)
+
+			s.taskManager.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(taskCtx context.Context) error {
+				result := s.queryClient.ExecuteQuery(taskCtx, msg, srv, tracker)
+
+				if result.Error == nil && result.Response != nil {
+					rcode := result.Response.Rcode
+					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+						// DNSSEC 验证
+						if serverDNSSECEnabled && s.config.Server.Features.DNSSEC {
+							result.Validated = s.dnssecValidator.ValidateResponse(result.Response, true)
+						}
+
+						// 应用 policy 过滤
+						filteredAnswer := s.FilterRecordsByPolicy(result.Response.Answer, FilterContext{
 							Policy:       srv.Policy,
 							IsGlueRecord: false,
 						})
-						filteredAdditional := s.FilterRecordsByPolicy(additional, FilterContext{
+						filteredExtra := s.FilterRecordsByPolicy(result.Response.Extra, FilterContext{
 							Policy:       srv.Policy,
 							IsGlueRecord: false,
 						})
 
+						// 检查是否有有效记录
 						if len(filteredAnswer) > 0 {
+							ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
+
 							if tracker != nil && srv.Policy != "all" {
-								tracker.AddStep("Recursive query after policy filter: %d answer records", len(filteredAnswer))
+								tracker.AddStep("Server %s after policy filter: %d answer records", srv.Address, len(filteredAnswer))
 							}
 
 							select {
 							case resultChan <- &QueryResult{
 								Answer:     filteredAnswer,
-								Authority:  authority,
-								Additional: filteredAdditional,
-								Validated:  validated,
+								Authority:  result.Response.Ns,
+								Additional: filteredExtra,
+								Validated:  result.Validated,
 								ECS:        ecsResponse,
 								Server:     srv.Address,
 							}:
 							case <-ctx.Done():
 							}
 						} else {
-							if tracker != nil && srv.Policy != "all" {
-								tracker.AddStep("Recursive query after policy filter: no answer records")
+							// 所有记录被过滤
+							if tracker != nil {
+								tracker.AddStep("Server %s: all records filtered by policy '%s'", srv.Address, srv.Policy)
 							}
 						}
 					}
-					return nil
-				})
-		} else {
-			originalMsg := s.BuildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
-			msg := SafeCopyMessage(originalMsg)
-			globalResourceManager.PutDNSMessage(originalMsg)
-
-			s.taskManager.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address),
-				func(ctx context.Context) error {
-					result := s.queryClient.ExecuteQuery(ctx, msg, srv, tracker)
-
-					if result.Error == nil && result.Response != nil {
-						rcode := result.Response.Rcode
-						if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-							if serverDNSSECEnabled && s.config.Server.Features.DNSSEC {
-								result.Validated = s.dnssecValidator.ValidateResponse(result.Response, true)
-							}
-
-							filteredAnswer := s.FilterRecordsByPolicy(result.Response.Answer, FilterContext{
-								Policy:       srv.Policy,
-								IsGlueRecord: false,
-							})
-							filteredExtra := s.FilterRecordsByPolicy(result.Response.Extra, FilterContext{
-								Policy:       srv.Policy,
-								IsGlueRecord: false,
-							})
-
-							if len(filteredAnswer) > 0 {
-								ecsResponse := s.ednsManager.ParseFromDNS(result.Response)
-
-								if tracker != nil && srv.Policy != "all" {
-									tracker.AddStep("Server %s after policy filter: %d answer records", srv.Address, len(filteredAnswer))
-								}
-
-								select {
-								case resultChan <- &QueryResult{
-									Answer:     filteredAnswer,
-									Authority:  result.Response.Ns,
-									Additional: filteredExtra,
-									Validated:  result.Validated,
-									ECS:        ecsResponse,
-									Server:     srv.Address,
-								}:
-								case <-ctx.Done():
-								}
-							} else {
-								if tracker != nil && srv.Policy != "all" {
-									tracker.AddStep("Server %s after policy filter: no answer records", srv.Address)
-								}
-							}
-						}
-					}
-					return nil
-				})
+				}
+				return nil
+			})
 		}
 	}
 
-	select {
-	case result := <-resultChan:
-		if tracker != nil {
-			tracker.AddStep("Using result from: %s", result.Server)
+	// 等待第一个成功的结果
+	var lastError error
+	receivedCount := 0
+	serversCount := len(servers)
+
+	for receivedCount < serversCount {
+		select {
+		case result := <-resultChan:
+			receivedCount++
+
+			if result.Error != nil {
+				lastError = result.Error
+				if tracker != nil {
+					tracker.AddStep("Server %s returned error: %v", result.Server, result.Error)
+				}
+				continue
+			}
+
+			// 检查是否有有效的 Answer
+			if len(result.Answer) > 0 {
+				if tracker != nil {
+					tracker.AddStep("Using successful result from: %s", result.Server)
+				}
+				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
+			}
+
+			// 没有有效记录，继续等待其他结果
+			continue
+
+		case <-ctx.Done():
+			if tracker != nil {
+				tracker.AddStep("Query context cancelled after receiving %d/%d responses", receivedCount, serversCount)
+			}
+			if lastError != nil {
+				return nil, nil, nil, false, nil, lastError
+			}
+			return nil, nil, nil, false, nil, errors.New("all upstream queries failed or timed out")
 		}
-		return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
-	case <-ctx.Done():
-		return nil, nil, nil, false, nil, errors.New("all upstream queries failed or timed out")
 	}
+
+	// 所有服务器都返回了结果但都没有有效记录
+	if tracker != nil {
+		tracker.AddStep("All %d upstream servers returned no valid records", serversCount)
+	}
+	if lastError != nil {
+		return nil, nil, nil, false, nil, lastError
+	}
+	return nil, nil, nil, false, nil, errors.New("all upstream queries returned no valid records")
 }
 
 func (s *DNSServer) BuildQueryMessage(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
@@ -4075,11 +4121,7 @@ func (s *DNSServer) RecursiveQuery(ctx context.Context, question dns.Question, e
 }
 
 func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) []dns.RR {
-	if ctx.IsGlueRecord {
-		return records
-	}
-
-	if ctx.Policy == "all" || !s.ipFilter.HasData() {
+	if ctx.IsGlueRecord || ctx.Policy == "all" || !s.ipFilter.HasData() {
 		return records
 	}
 
@@ -4094,27 +4136,21 @@ func (s *DNSServer) FilterRecordsByPolicy(records []dns.RR, ctx FilterContext) [
 		case *dns.AAAA:
 			ip = record.AAAA
 		default:
+			// 非 IP 记录直接保留
 			filtered = append(filtered, rr)
 			continue
 		}
 
+		// IP 记录根据策略过滤
 		isTrusted := s.ipFilter.IsTrustedIP(ip)
+		shouldKeep := (ctx.Policy == "trusted_only" && isTrusted) ||
+			(ctx.Policy == "untrusted_only" && !isTrusted)
 
-		switch ctx.Policy {
-		case "trusted_only":
-			if isTrusted {
-				filtered = append(filtered, rr)
-				Debug("Policy filter: keeping trusted IP %s", ip)
-			} else {
-				Debug("Policy filter: filtering out untrusted IP %s", ip)
-			}
-		case "untrusted_only":
-			if !isTrusted {
-				filtered = append(filtered, rr)
-				Debug("Policy filter: keeping untrusted IP %s", ip)
-			} else {
-				Debug("Policy filter: filtering out trusted IP %s", ip)
-			}
+		if shouldKeep {
+			filtered = append(filtered, rr)
+			Debug("Policy filter: keeping %s IP %s", ctx.Policy, ip)
+		} else {
+			Debug("Policy filter: filtering out %s IP %s", ctx.Policy, ip)
 		}
 	}
 
