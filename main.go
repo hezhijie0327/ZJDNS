@@ -243,11 +243,11 @@ type RedisSettings struct {
 }
 
 type UpstreamServer struct {
-	Address       string `json:"address"`
-	Protocol      string `json:"protocol"`
-	ServerName    string `json:"server_name"`
-	SkipTLSVerify bool   `json:"skip_tls_verify"`
-	Match         string `json:"match,omitempty"`
+	Address       string   `json:"address"`
+	Protocol      string   `json:"protocol"`
+	ServerName    string   `json:"server_name"`
+	SkipTLSVerify bool     `json:"skip_tls_verify"`
+	Match         []string `json:"match,omitempty"`
 }
 
 type RewriteRule struct {
@@ -833,11 +833,11 @@ func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
 		}
 
 		// 验证 match 字段
-		if server.Match != "" {
-			matchTag := strings.TrimPrefix(server.Match, "!")
-			if !cidrTags[matchTag] {
+		for _, matchTag := range server.Match {
+			cleanTag := strings.TrimPrefix(matchTag, "!")
+			if !cidrTags[cleanTag] {
 				return fmt.Errorf("upstream server %d: match tag '%s' not found in CIDR config",
-					i, matchTag)
+					i, cleanTag)
 			}
 		}
 	}
@@ -1088,14 +1088,14 @@ func GenerateExampleConfig() string {
 			Protocol:      "https",
 			ServerName:    "dns.alidns.com",
 			SkipTLSVerify: false,
-			Match:         "whitelist",
+			Match:         []string{"mixed"},
 		},
 		{
 			Address:       "https://223.6.6.6:443/dns-query",
 			Protocol:      "http3",
 			ServerName:    "dns.alidns.com",
 			SkipTLSVerify: false,
-			Match:         "!blacklist",
+			Match:         []string{"!mixed"},
 		},
 		{
 			Address: RecursiveIndicator,
@@ -2051,15 +2051,15 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 
 				if err == nil && len(answer) > 0 {
 					// 应用 CIDR 过滤
-					if srv.Match != "" {
+					if len(srv.Match) > 0 {
 						filteredAnswer, shouldRefuse := qm.FilterRecordsByCIDR(answer, srv.Match, tracker)
 						if shouldRefuse {
 							if tracker != nil {
-								tracker.AddStep("Recursive result refused by CIDR filter: %s", srv.Match)
+								tracker.AddStep("Recursive result refused by CIDR filter: %v", srv.Match)
 							}
 							select {
 							case resultChan <- &QueryResult{
-								Error:  fmt.Errorf("CIDR filter refused (match: %s)", srv.Match),
+								Error:  fmt.Errorf("CIDR filter refused (match: %v)", srv.Match),
 								Server: srv.Address,
 							}:
 							case <-ctx.Done():
@@ -2116,15 +2116,15 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 						// 应用 CIDR 过滤
-						if srv.Match != "" {
+						if len(srv.Match) > 0 {
 							filteredAnswer, shouldRefuse := qm.FilterRecordsByCIDR(result.Response.Answer, srv.Match, tracker)
 							if shouldRefuse {
 								if tracker != nil {
-									tracker.AddStep("Upstream %s refused by CIDR filter: %s", srv.Address, srv.Match)
+									tracker.AddStep("Upstream %s refused by CIDR filter: %v", srv.Address, srv.Match)
 								}
 								select {
 								case resultChan <- &QueryResult{
-									Error:  fmt.Errorf("CIDR filter refused (match: %s)", srv.Match),
+									Error:  fmt.Errorf("CIDR filter refused (match: %v)", srv.Match),
 									Server: srv.Address,
 								}:
 								case <-ctx.Done():
@@ -2232,9 +2232,9 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 	return nil, nil, nil, false, nil, errors.New("all upstream queries returned no valid records")
 }
 
-// 新增：过滤 A/AAAA 记录方法
-func (qm *QueryManager) FilterRecordsByCIDR(records []dns.RR, matchTag string, tracker *RequestTracker) ([]dns.RR, bool) {
-	if qm.server.cidrMgr == nil || matchTag == "" {
+// 新增：过滤 A/AAAA 记录方法，支持多个匹配条件
+func (qm *QueryManager) FilterRecordsByCIDR(records []dns.RR, matchTags []string, tracker *RequestTracker) ([]dns.RR, bool) {
+	if qm.server.cidrMgr == nil || len(matchTags) == 0 {
 		return records, false
 	}
 
@@ -2256,23 +2256,31 @@ func (qm *QueryManager) FilterRecordsByCIDR(records []dns.RR, matchTag string, t
 			continue
 		}
 
-		// 检查 IP 是否匹配
-		matched, exists := qm.server.cidrMgr.MatchIP(ip, matchTag)
-		if !exists {
-			LogError("CIDR tag validation failed during query: %s", matchTag)
-			return nil, true // 标签不存在，拒绝所有
+		// 检查 IP 是否匹配任何一个条件
+		accepted := false
+		for _, matchTag := range matchTags {
+			matched, exists := qm.server.cidrMgr.MatchIP(ip, matchTag)
+			if !exists {
+				LogError("CIDR tag validation failed during query: %s", matchTag)
+				return nil, true // 标签不存在，拒绝所有
+			}
+
+			if matched {
+				accepted = true
+				if tracker != nil {
+					LogDebug("IP %s matched '%s': accepted", ip, matchTag)
+				}
+				break
+			}
 		}
 
-		if matched {
+		if accepted {
 			filtered = append(filtered, rr)
 			acceptedCount++
-			if tracker != nil {
-				LogDebug("IP %s matched '%s': accepted", ip, matchTag)
-			}
 		} else {
 			refusedCount++
 			if tracker != nil {
-				LogDebug("IP %s not matched '%s': refused", ip, matchTag)
+				LogDebug("IP %s not matched any of %v: refused", ip, matchTags)
 			}
 		}
 	}
@@ -2280,14 +2288,14 @@ func (qm *QueryManager) FilterRecordsByCIDR(records []dns.RR, matchTag string, t
 	// 只要有任何 A/AAAA 记录被拒绝，就返回 REFUSED
 	if refusedCount > 0 {
 		if tracker != nil {
-			tracker.AddStep("CIDR filter: %d accepted, %d refused (match: %s) -> REFUSED",
-				acceptedCount, refusedCount, matchTag)
+			tracker.AddStep("CIDR filter: %d accepted, %d refused (match: %v) -> REFUSED",
+				acceptedCount, refusedCount, matchTags)
 		}
 		return nil, true
 	}
 
 	if tracker != nil && acceptedCount > 0 {
-		tracker.AddStep("CIDR filter: %d accepted (match: %s)", acceptedCount, matchTag)
+		tracker.AddStep("CIDR filter: %d accepted (match: %v)", acceptedCount, matchTags)
 	}
 
 	return filtered, false
@@ -5593,8 +5601,8 @@ func (s *DNSServer) DisplayInfo() {
 		for _, server := range servers {
 			if server.IsRecursive() {
 				info := "Upstream server: recursive resolution"
-				if server.Match != "" {
-					info += fmt.Sprintf(" [CIDR match: %s]", server.Match)
+				if len(server.Match) > 0 {
+					info += fmt.Sprintf(" [CIDR match: %v]", server.Match)
 				}
 				LogInfo("%s", info)
 			} else {
@@ -5606,8 +5614,8 @@ func (s *DNSServer) DisplayInfo() {
 				if server.SkipTLSVerify && IsSecureProtocol(strings.ToLower(server.Protocol)) {
 					serverInfo += " [Skip TLS verification]"
 				}
-				if server.Match != "" {
-					serverInfo += fmt.Sprintf(" [CIDR match: %s]", server.Match)
+				if len(server.Match) > 0 {
+					serverInfo += fmt.Sprintf(" [CIDR match: %v]", server.Match)
 				}
 				LogInfo("Upstream server: %s", serverInfo)
 			}
