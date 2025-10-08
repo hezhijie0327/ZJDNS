@@ -40,6 +40,22 @@ import (
 )
 
 // =============================================================================
+// Version Information
+// =============================================================================
+
+// These variables are set at build time using ldflags
+var (
+	Version    = "1.0.0" // Default version for development
+	CommitHash = "dev"   // Git commit hash
+	BuildTime  = ""      // Build timestamp
+)
+
+// GetVersion returns the full version string in format: {Version}-ZHIJIE-{CommitHash}
+func GetVersion() string {
+	return fmt.Sprintf("%s-ZHIJIE-%s", Version, CommitHash)
+}
+
+// =============================================================================
 // Constants - Network & Protocol
 // =============================================================================
 
@@ -5777,19 +5793,32 @@ func CloseWithLog(c Closeable, name string) {
 func main() {
 	var configFile string
 	var generateConfig bool
+	var showVersion bool
 
 	flag.StringVar(&configFile, "config", "", "Configuration file path (JSON format)")
 	flag.BoolVar(&generateConfig, "generate-config", false, "Generate example configuration file")
+	flag.BoolVar(&showVersion, "version", false, "Show version information and exit")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "ZJDNS Server\n\n")
+		fmt.Fprintf(os.Stderr, "ZJDNS Server - High Performance Recursive DNS Server\n\n")
+		fmt.Fprintf(os.Stderr, "Version: %s\n\n", GetVersion())
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  %s -config <config file>     # Start with config file\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -generate-config          # Generate example config\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -version                  # Show version information\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s                            # Start with default config\n\n", os.Args[0])
 	}
 
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("ZJDNS Server\n")
+		fmt.Printf("Version: %s\n", GetVersion())
+		if BuildTime != "" {
+			fmt.Printf("Built: %s\n", BuildTime)
+		}
+		return
+	}
 
 	if generateConfig {
 		fmt.Println(GenerateExampleConfig())
