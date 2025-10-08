@@ -22,6 +22,11 @@
 
 ### 🛡️ 安全与防御特性
 
+- **CIDR 过滤**：基于 CIDR 规则的智能 IP 地址过滤功能，支持精确的结果控制。
+  - **文件配置**：通过外部文件定义 CIDR 规则，支持动态加载和管理。
+  - **标签匹配**：使用标签系统关联上游服务器与过滤规则，实现灵活的策略配置。
+  - **记录过滤**：智能过滤 A 和 AAAA 记录，仅允许符合 CIDR 规则的 IP 结果通过。
+  - **拒绝策略**：当任何记录被过滤时，返回 REFUSED 响应，确保严格的访问控制。
 - **DNS 劫持预防**：主动检测并智能应对来自根服务器的越权响应。
   - **第一步**：当检测到根服务器直接返回非根域名的最终记录时，判定为 DNS 劫持。
   - **第二步**：**自动切换到 TCP 协议进行重试**，以绕过常见的 UDP 污染。
@@ -112,7 +117,7 @@ graph TD
         B --> M[EDNSManager<br><i>EDNS管理器</i>]
         B --> N[DNSSECValidator<br><i>DNSSEC验证器</i>]
         B --> O[HijackPrevention<br><i>劫持防护</i>]
-        B --> P[IPFilter<br><i>IP过滤器</i>]
+        B --> P[CIDRManager<br><i>CIDR过滤器</i>]
         B --> Q[DNSRewriter<br><i>DNS重写器</i>]
         B --> R[SpeedTester<br><i>网络质量测试</i>]
     end
@@ -133,49 +138,53 @@ graph TD
         N --> Z[DNSSEC验证<br><i>AD标志传递</i>]
         O --> AA[TCP回退<br><i>绕过UDP污染</i>]
 
+        P --> CC[CIDR规则<br><i>IP地址过滤</i>]
+        P --> DD[标签匹配<br><i>策略关联</i>]
+        P --> EE[记录过滤<br><i>A/AAAA记录</i>]
+
         Q --> BB[域名重写<br><i>过滤/重定向</i>]
     end
 
     subgraph SupportInfrastructure ["支撑基础设施"]
-        B --> CC[RequestTracker<br><i>请求追踪器</i>]
-        B --> DD[ResourceManager<br><i>资源管理器</i>]
-        B --> EE[TaskManager<br><i>任务管理器</i>]
-        B --> FF[TLSManager<br><i>TLS证书管理</i>]
+        B --> FF[RequestTracker<br><i>请求追踪器</i>]
+        B --> GG[ResourceManager<br><i>资源管理器</i>]
+        B --> HH[TaskManager<br><i>任务管理器</i>]
+        B --> II[TLSManager<br><i>TLS证书管理</i>]
 
-        CC --> GG[唯一ID<br><i>请求标识</i>]
-        DD --> HH[对象池<br><i>sync.Pool</i>]
-        EE --> II[Goroutine池<br><i>并发管理</i>]
-        FF --> JJ[证书加载<br><i>安全协议共享</i>]
+        FF --> JJ[唯一ID<br><i>请求标识</i>]
+        GG --> KK[对象池<br><i>sync.Pool</i>]
+        HH --> LL[Goroutine池<br><i>并发管理</i>]
+        II --> MM[证书加载<br><i>安全协议共享</i>]
     end
 
     subgraph DDRSystem ["DDR系统"]
-        B --> KK[DDRHandler<br><i>DDR处理器</i>]
-        KK --> LL[SVCB记录生成<br><i>自动发现</i>]
-        KK --> MM[DoT/DoQ/DoH<br><i>服务信息</i>]
+        B --> NN[DDRHandler<br><i>DDR处理器</i>]
+        NN --> OO[SVCB记录生成<br><i>自动发现</i>]
+        NN --> PP[DoT/DoQ/DoH<br><i>服务信息</i>]
     end
 
     subgraph RootServerManagement ["根服务器管理"]
-        F --> NN[RootServerManager<br><i>根服务器管理器</i>]
-        NN --> OO[IPv4根服务器<br><i>13个根服务器</i>]
-        NN --> PP[IPv6根服务器<br><i>13个根服务器</i>]
-        NN --> QQ[延迟感知排序<br><i>网络质量测试</i>]
+        F --> QQ[RootServerManager<br><i>根服务器管理器</i>]
+        QQ --> RR[IPv4根服务器<br><i>13个根服务器</i>]
+        QQ --> SS[IPv6根服务器<br><i>13个根服务器</i>]
+        QQ --> TT[延迟感知排序<br><i>网络质量测试</i>]
 
-        QQ --> RR[最优服务器选择<br><i>动态优先级</i>]
-        NN --> SS[周期性重排序<br><i>15分钟间隔</i>]
+        TT --> UU[最优服务器选择<br><i>动态优先级</i>]
+        QQ --> VV[周期性重排序<br><i>15分钟间隔</i>]
     end
 
     subgraph UpstreamSystem ["上游系统"]
-        G --> TT[上游服务器配置<br><i>多个上游</i>]
-        G --> UU[IP策略过滤<br><i>安全访问</i>]
-        G --> VV[混合模式<br><i>递归+转发</i>]
+        G --> WW[上游服务器配置<br><i>多个上游</i>]
+        G --> XX[CIDR策略过滤<br><i>安全访问</i>]
+        G --> YY[混合模式<br><i>递归+转发</i>]
     end
 
     subgraph GlobalServices ["全局服务"]
-        WW[GlobalLog<br><i>全局日志</i>]
-        XX[GlobalConfig<br><i>全局配置</i>]
+        ZZ[GlobalLog<br><i>全局日志</i>]
+        AAA[GlobalConfig<br><i>全局配置</i>]
 
-        WW -.-> B
-        XX -.-> C
+        ZZ -.-> B
+        AAA -.-> C
     end
 
     classDef core fill:#e6f3ff,stroke:#333;
