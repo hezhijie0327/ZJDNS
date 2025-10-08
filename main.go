@@ -4117,9 +4117,9 @@ func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
 		// 改进日志信息
 		sourceInfo := ""
 		if config.File != "" && len(config.Rules) > 0 {
-			sourceInfo = fmt.Sprintf("file=%s + %d inline rules", config.File, len(config.Rules))
+			sourceInfo = fmt.Sprintf("%s + %d inline rules", config.File, len(config.Rules))
 		} else if config.File != "" {
-			sourceInfo = fmt.Sprintf("file=%s", config.File)
+			sourceInfo = config.File
 		} else {
 			sourceInfo = fmt.Sprintf("%d inline rules", len(config.Rules))
 		}
