@@ -12,7 +12,9 @@ ENV \
 RUN \
     wget "https://curl.se/ca/cacert.pem" \
     && go mod tidy \
-    && go build -o zjdns -trimpath -ldflags "-s -w -buildid="
+    && BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC') \
+    && COMMIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") \
+    && go build -o zjdns -trimpath -ldflags "-s -w -buildid= -X main.BuildTime=${BUILD_TIME} -X main.CommitHash=${COMMIT_SHA}"
 
 FROM scratch AS rebase_zjdns
 

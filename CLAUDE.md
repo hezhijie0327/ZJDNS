@@ -19,8 +19,11 @@ ZJDNS is a high-performance recursive DNS server written in Go that supports:
 
 ### Building
 ```bash
-# Build the binary
-go build -o zjdns -trimpath -ldflags "-s -w -buildid="
+# Build the binary with version info
+VERSION=$(git describe --tags --always 2>/dev/null || echo "1.0.0")
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
+BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
+go build -o zjdns -trimpath -ldflags "-s -w -buildid= -X main.Version=${VERSION} -X main.CommitHash=${COMMIT} -X main.BuildTime=${BUILD_TIME}"
 
 # Build for production (uses Docker multi-stage build)
 docker build -t zjdns .
