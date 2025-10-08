@@ -5815,9 +5815,6 @@ func main() {
 	if showVersion {
 		fmt.Printf("ZJDNS Server\n")
 		fmt.Printf("Version: %s\n", GetVersion())
-		if BuildTime != "" {
-			fmt.Printf("Built: %s\n", BuildTime)
-		}
 		return
 	}
 
