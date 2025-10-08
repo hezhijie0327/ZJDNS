@@ -2649,7 +2649,7 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 	currentDomain = strings.ToLower(strings.TrimSuffix(currentDomain, "."))
 	queryDomain = strings.ToLower(strings.TrimSuffix(queryDomain, "."))
 
-	// 检查权威服务器是否越权返回答案
+	// 检查 Answer 记录中是否有越权的答案
 	for _, rr := range response.Answer {
 		answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
 
@@ -2663,18 +2663,16 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 			continue
 		}
 
-		// 根服务器特殊情况：允许返回 root-servers.net 的 A/AAAA 记录
+		// 根服务器特殊情况
 		if currentDomain == "" {
+			// 允许返回 root-servers.net 的 A/AAAA 记录
 			isRootServerQuery := strings.HasSuffix(queryDomain, ".root-servers.net") ||
 				queryDomain == "root-servers.net"
 			if isRootServerQuery && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
 				continue
 			}
-		}
 
-		// 检查权威服务器的管辖权限
-		if currentDomain == "" {
-			// 根服务器不应该直接返回任何域名的最终答案（除了 root-servers.net）
+			// 根服务器不应该直接返回其他域名的最终答案
 			if queryDomain != "" {
 				recordType := dns.TypeToString[rr.Header().Rrtype]
 				reason := fmt.Sprintf("Root server overstepped authority: %s record for '%s'",
@@ -2683,30 +2681,39 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 			}
 		} else {
 			// 中间层权威服务器的检查
-			// 答案域名必须在当前权威服务器的管辖范围内
-			if !strings.HasSuffix(queryDomain, "."+currentDomain) && queryDomain != currentDomain {
+
+			// 首先检查答案是否在管辖范围内
+			if queryDomain != currentDomain && !strings.HasSuffix(queryDomain, "."+currentDomain) {
 				recordType := dns.TypeToString[rr.Header().Rrtype]
-				reason := fmt.Sprintf("Authoritative server '%s' overstepped authority: %s record for '%s'",
+				reason := fmt.Sprintf("Authoritative server '%s' overstepped authority: %s record for '%s' (out of zone)",
 					currentDomain, recordType, queryDomain)
 				return false, reason
 			}
 
-			// 检查是否是直接子域
-			// 例如：com 可以管理 youtube.com，但不能管理 www.youtube.com
-			var subdomain string
-			if queryDomain == currentDomain {
-				subdomain = ""
-			} else {
-				subdomain = strings.TrimSuffix(queryDomain, "."+currentDomain)
-			}
+			// 判断当前域是否是 TLD（顶级域）
+			// TLD 特征：域名中不包含点
+			isTLD := !strings.Contains(currentDomain, ".")
 
-			if strings.Contains(subdomain, ".") {
-				// subdomain 包含点，说明不是直接子域，而是更深层的域名
-				recordType := dns.TypeToString[rr.Header().Rrtype]
-				reason := fmt.Sprintf("Authoritative server '%s' overstepped authority: %s record for '%s' (not a direct subdomain)",
-					currentDomain, recordType, queryDomain)
-				return false, reason
+			if isTLD {
+				// TLD 服务器只能返回直接子域的答案
+				var subdomain string
+				if queryDomain == currentDomain {
+					// 查询域名就是当前域，允许
+					continue
+				} else {
+					// 提取子域部分
+					subdomain = strings.TrimSuffix(queryDomain, "."+currentDomain)
+				}
+
+				// 如果子域包含点，说明不是直接子域
+				if strings.Contains(subdomain, ".") {
+					recordType := dns.TypeToString[rr.Header().Rrtype]
+					reason := fmt.Sprintf("TLD server '%s' overstepped authority: %s record for '%s' (not a direct subdomain)",
+						currentDomain, recordType, queryDomain)
+					return false, reason
+				}
 			}
+			// 非 TLD 的普通权威服务器可以返回其管辖下任意子域的答案
 		}
 	}
 
