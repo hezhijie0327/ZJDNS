@@ -2646,78 +2646,116 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 		return true, ""
 	}
 
+	// 规范化域名
 	currentDomain = strings.ToLower(strings.TrimSuffix(currentDomain, "."))
 	queryDomain = strings.ToLower(strings.TrimSuffix(queryDomain, "."))
 
-	// 检查 Answer 记录中是否有越权的答案
+	// 只检查 Answer 部分的记录
 	for _, rr := range response.Answer {
 		answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
+		rrType := rr.Header().Rrtype
 
-		// 只检查与查询域名完全匹配的答案
+		// 只检查与查询域名完全匹配的答案记录
 		if answerName != queryDomain {
 			continue
 		}
 
-		// NS 和 DS 记录是正常的委派记录，不检查
-		if rr.Header().Rrtype == dns.TypeNS || rr.Header().Rrtype == dns.TypeDS {
+		// NS 和 DS 记录是委派记录，属于正常流程，允许
+		if rrType == dns.TypeNS || rrType == dns.TypeDS {
 			continue
 		}
 
-		// 根服务器特殊情况
+		// Root 服务器特殊检查
 		if currentDomain == "" {
-			// 允许返回 root-servers.net 的 A/AAAA 记录
-			isRootServerQuery := strings.HasSuffix(queryDomain, ".root-servers.net") ||
-				queryDomain == "root-servers.net"
-			if isRootServerQuery && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
-				continue
+			if !hp.checkRootServerAnswer(queryDomain, rrType) {
+				return false, fmt.Sprintf("Root server returned unauthorized %s record for '%s'",
+					dns.TypeToString[rrType], queryDomain)
 			}
+			continue
+		}
 
-			// 根服务器不应该直接返回其他域名的最终答案
-			if queryDomain != "" {
-				recordType := dns.TypeToString[rr.Header().Rrtype]
-				reason := fmt.Sprintf("Root server overstepped authority: %s record for '%s'",
-					recordType, queryDomain)
-				return false, reason
+		// 检查记录是否在当前权威范围内
+		if !hp.isInAuthority(queryDomain, currentDomain) {
+			return false, fmt.Sprintf("Server '%s' returned out-of-authority %s record for '%s'",
+				currentDomain, dns.TypeToString[rrType], queryDomain)
+		}
+
+		// TLD 服务器额外检查
+		if hp.isTLD(currentDomain) {
+			if !hp.isDirectChildOrSelf(queryDomain, currentDomain) {
+				return false, fmt.Sprintf("TLD '%s' returned unauthorized %s record for '%s' (not a direct child)",
+					currentDomain, dns.TypeToString[rrType], queryDomain)
 			}
-		} else {
-			// 中间层权威服务器的检查
-
-			// 首先检查答案是否在管辖范围内
-			if queryDomain != currentDomain && !strings.HasSuffix(queryDomain, "."+currentDomain) {
-				recordType := dns.TypeToString[rr.Header().Rrtype]
-				reason := fmt.Sprintf("Authoritative server '%s' overstepped authority: %s record for '%s' (out of zone)",
-					currentDomain, recordType, queryDomain)
-				return false, reason
-			}
-
-			// 判断当前域是否是 TLD（顶级域）
-			// TLD 特征：域名中不包含点
-			isTLD := !strings.Contains(currentDomain, ".")
-
-			if isTLD {
-				// TLD 服务器只能返回直接子域的答案
-				var subdomain string
-				if queryDomain == currentDomain {
-					// 查询域名就是当前域，允许
-					continue
-				} else {
-					// 提取子域部分
-					subdomain = strings.TrimSuffix(queryDomain, "."+currentDomain)
-				}
-
-				// 如果子域包含点，说明不是直接子域
-				if strings.Contains(subdomain, ".") {
-					recordType := dns.TypeToString[rr.Header().Rrtype]
-					reason := fmt.Sprintf("TLD server '%s' overstepped authority: %s record for '%s' (not a direct subdomain)",
-						currentDomain, recordType, queryDomain)
-					return false, reason
-				}
-			}
-			// 非 TLD 的普通权威服务器可以返回其管辖下任意子域的答案
 		}
 	}
 
 	return true, ""
+}
+
+// checkRootServerAnswer 检查 Root 服务器返回的答案是否合法
+func (hp *HijackPrevention) checkRootServerAnswer(queryDomain string, rrType uint16) bool {
+	// 允许 root-servers.net 的 A/AAAA 记录（这是合法的 glue 记录）
+	if strings.HasSuffix(queryDomain, ".root-servers.net") || queryDomain == "root-servers.net" {
+		if rrType == dns.TypeA || rrType == dns.TypeAAAA {
+			return true
+		}
+	}
+
+	// Root 服务器不应该直接返回具体域名的最终记录
+	// 这是 GFW 劫持的典型特征
+	if queryDomain != "" {
+		return false
+	}
+
+	return true
+}
+
+// isTLD 判断域名是否为顶级域（TLD）
+func (hp *HijackPrevention) isTLD(domain string) bool {
+	// TLD 的特征：不包含点的非空域名
+	return domain != "" && !strings.Contains(domain, ".")
+}
+
+// isDirectChildOrSelf 检查 child 是否是 parent 的直接子域或其本身
+func (hp *HijackPrevention) isDirectChildOrSelf(child, parent string) bool {
+	// 完全匹配（例如查询 com. 本身）
+	if child == parent {
+		return true
+	}
+
+	// Root 的直接子域是所有 TLD
+	if parent == "" {
+		return !strings.Contains(child, ".")
+	}
+
+	// 必须是 parent 的子域
+	if !strings.HasSuffix(child, "."+parent) {
+		return false
+	}
+
+	// 提取子域前缀部分
+	prefix := strings.TrimSuffix(child, "."+parent)
+
+	// 直接子域的特征：前缀部分不包含点
+	// 例如：google.com 是 com 的直接子域
+	//      www.google.com 不是 com 的直接子域
+	return !strings.Contains(prefix, ".")
+}
+
+// isInAuthority 检查查询域名是否在权威域名的管辖范围内
+func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) bool {
+	// 完全匹配
+	if queryDomain == authorityDomain {
+		return true
+	}
+
+	// Root 管辖所有域名
+	if authorityDomain == "" {
+		return true
+	}
+
+	// 检查是否为子域
+	return strings.HasSuffix(queryDomain, "."+authorityDomain)
 }
 
 // =============================================================================
