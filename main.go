@@ -46,13 +46,13 @@ import (
 // These variables are set at build time using ldflags
 var (
 	Version    = "1.0.0" // Default version for development
-	CommitHash = "dev"   // Git commit hash
-	BuildTime  = ""      // Build timestamp
+	CommitHash = "dirty" // Git commit hash
+	BuildTime  = "dev"   // Build timestamp
 )
 
-// GetVersion returns the full version string in format: {Version}-ZHIJIE-{CommitHash}
+// GetVersion returns the full version string in format: {Version}-ZHIJIE-{CommitHash}@{BuildTime}
 func GetVersion() string {
-	return fmt.Sprintf("%s-ZHIJIE-%s", Version, CommitHash)
+	return fmt.Sprintf("%s-ZHIJIE-%s@%s", Version, CommitHash, BuildTime)
 }
 
 // =============================================================================
