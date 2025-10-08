@@ -798,11 +798,6 @@ func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
 			return fmt.Errorf("CIDR config %d (tag '%s'): either 'file' or 'rules' must be specified", i, cidrConfig.Tag)
 		}
 
-		// 如果同时提供了 file 和 rules,发出警告
-		if cidrConfig.File != "" && len(cidrConfig.Rules) > 0 {
-			LogWarn("CIDR config %d (tag '%s'): both 'file' and 'rules' specified, will use both", i, cidrConfig.Tag)
-		}
-
 		// 验证文件路径(如果提供)
 		if cidrConfig.File != "" && !IsValidFilePath(cidrConfig.File) {
 			return fmt.Errorf("CIDR config %d (tag '%s'): file not found or unsafe: %s",
