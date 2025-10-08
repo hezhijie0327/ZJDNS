@@ -278,8 +278,9 @@ type ConfigManager struct{}
 // =============================================================================
 
 type CIDRConfig struct {
-	File string `json:"file"` // CIDR 文件路径
-	Tag  string `json:"tag"`  // 标签名称
+	File  string   `json:"file,omitempty"`  // CIDR 文件路径(可选)
+	Rules []string `json:"rules,omitempty"` // 直接定义的 CIDR 规则(可选)
+	Tag   string   `json:"tag"`             // 标签名称
 }
 
 type CIDRManager struct {
@@ -780,7 +781,7 @@ func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
 		}
 	}
 
-	// 验证 CIDR 配置（在验证 TLS 之前添加）
+	// 验证 CIDR 配置(在验证 TLS 之前添加)
 	cidrTags := make(map[string]bool)
 	for i, cidrConfig := range config.CIDR {
 		if cidrConfig.Tag == "" {
@@ -792,11 +793,13 @@ func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
 		}
 		cidrTags[cidrConfig.Tag] = true
 
-		if cidrConfig.File == "" {
-			return fmt.Errorf("CIDR config %d (tag '%s'): file cannot be empty", i, cidrConfig.Tag)
+		// 修改:必须提供 file 或 rules 之一
+		if cidrConfig.File == "" && len(cidrConfig.Rules) == 0 {
+			return fmt.Errorf("CIDR config %d (tag '%s'): either 'file' or 'rules' must be specified", i, cidrConfig.Tag)
 		}
 
-		if !IsValidFilePath(cidrConfig.File) {
+		// 验证文件路径(如果提供)
+		if cidrConfig.File != "" && !IsValidFilePath(cidrConfig.File) {
 			return fmt.Errorf("CIDR config %d (tag '%s'): file not found or unsafe: %s",
 				i, cidrConfig.Tag, cidrConfig.File)
 		}
@@ -1037,15 +1040,25 @@ func GenerateExampleConfig() string {
 	config.Server.TLS.HTTPS.Port = DefaultHTTPSPort
 	config.Server.TLS.HTTPS.Endpoint = DefaultQueryPath
 
-	// 新增：CIDR 示例配置
 	config.CIDR = []CIDRConfig{
 		{
 			File: "whitelist.txt",
-			Tag:  "whitelist",
+			Tag:  "file",
+		},
+		{
+			Rules: []string{
+				"192.168.0.0/16",
+				"10.0.0.0/8",
+				"2001:db8::/32",
+			},
+			Tag: "rules",
 		},
 		{
 			File: "blacklist.txt",
-			Tag:  "blacklist",
+			Rules: []string{
+				"127.0.0.1/32",
+			},
+			Tag: "mixed",
 		},
 	}
 
@@ -4094,74 +4107,115 @@ func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
 			return nil, fmt.Errorf("duplicate CIDR tag: %s", config.Tag)
 		}
 
-		rule, err := cm.LoadCIDRFile(config.File, config.Tag)
+		rule, err := cm.LoadCIDRConfig(config)
 		if err != nil {
-			return nil, WrapError(fmt.Sprintf("load CIDR file for tag '%s'", config.Tag), err)
+			return nil, WrapError(fmt.Sprintf("load CIDR config for tag '%s'", config.Tag), err)
 		}
 
 		cm.rules[config.Tag] = rule
-		LogInfo("CIDR loaded: tag=%s, file=%s, ipv4=%d, ipv6=%d",
-			config.Tag, config.File, len(rule.ipv4Nets), len(rule.ipv6Nets))
+
+		// 改进日志信息
+		sourceInfo := ""
+		if config.File != "" && len(config.Rules) > 0 {
+			sourceInfo = fmt.Sprintf("%s + %d inline rules", config.File, len(config.Rules))
+		} else if config.File != "" {
+			sourceInfo = config.File
+		} else {
+			sourceInfo = fmt.Sprintf("%d inline rules", len(config.Rules))
+		}
+
+		LogInfo("CIDR loaded: tag=%s, source=%s, ipv4=%d, ipv6=%d",
+			config.Tag, sourceInfo, len(rule.ipv4Nets), len(rule.ipv6Nets))
 	}
 
 	return cm, nil
 }
 
-func (cm *CIDRManager) LoadCIDRFile(file, tag string) (*CIDRRule, error) {
-	if !IsValidFilePath(file) {
-		return nil, fmt.Errorf("invalid or unsafe file path: %s", file)
-	}
-
+func (cm *CIDRManager) LoadCIDRConfig(config CIDRConfig) (*CIDRRule, error) {
 	rule := &CIDRRule{
-		tag:      tag,
+		tag:      config.Tag,
 		ipv4Nets: make([]*net.IPNet, 0),
 		ipv6Nets: make([]*net.IPNet, 0),
 	}
 
-	f, err := os.Open(file)
-	if err != nil {
-		return nil, WrapError("open CIDR file", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	lineNum := 0
 	validCount := 0
 
-	for scanner.Scan() {
-		lineNum++
-		line := strings.TrimSpace(scanner.Text())
+	// 处理直接定义的规则
+	if len(config.Rules) > 0 {
+		for i, cidr := range config.Rules {
+			cidr = strings.TrimSpace(cidr)
 
-		// 跳过注释和空行
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+			// 跳过注释和空行
+			if cidr == "" || strings.HasPrefix(cidr, "#") {
+				continue
+			}
 
-		// 解析 CIDR
-		_, ipNet, err := net.ParseCIDR(line)
-		if err != nil {
-			LogWarn("Invalid CIDR at %s:%d: %s - %v", file, lineNum, line, err)
-			continue
-		}
+			_, ipNet, err := net.ParseCIDR(cidr)
+			if err != nil {
+				LogWarn("Invalid CIDR in rules[%d] for tag '%s': %s - %v", i, config.Tag, cidr, err)
+				continue
+			}
 
-		// 分类存储 IPv4/IPv6
-		if ipNet.IP.To4() != nil {
-			rule.ipv4Nets = append(rule.ipv4Nets, ipNet)
-		} else {
-			rule.ipv6Nets = append(rule.ipv6Nets, ipNet)
+			if ipNet.IP.To4() != nil {
+				rule.ipv4Nets = append(rule.ipv4Nets, ipNet)
+			} else {
+				rule.ipv6Nets = append(rule.ipv6Nets, ipNet)
+			}
+			validCount++
 		}
-		validCount++
+		LogDebug("CIDR rules parsed: tag=%s, valid=%d, total=%d", config.Tag, validCount, len(config.Rules))
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, WrapError("scan CIDR file", err)
+	// 处理文件(如果提供)
+	if config.File != "" {
+		if !IsValidFilePath(config.File) {
+			return nil, fmt.Errorf("invalid or unsafe file path: %s", config.File)
+		}
+
+		f, err := os.Open(config.File)
+		if err != nil {
+			return nil, WrapError("open CIDR file", err)
+		}
+		defer func() { _ = f.Close() }()
+
+		scanner := bufio.NewScanner(f)
+		lineNum := 0
+		fileValidCount := 0
+
+		for scanner.Scan() {
+			lineNum++
+			line := strings.TrimSpace(scanner.Text())
+
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+
+			_, ipNet, err := net.ParseCIDR(line)
+			if err != nil {
+				LogWarn("Invalid CIDR at %s:%d: %s - %v", config.File, lineNum, line, err)
+				continue
+			}
+
+			if ipNet.IP.To4() != nil {
+				rule.ipv4Nets = append(rule.ipv4Nets, ipNet)
+			} else {
+				rule.ipv6Nets = append(rule.ipv6Nets, ipNet)
+			}
+			fileValidCount++
+		}
+
+		if err := scanner.Err(); err != nil {
+			return nil, WrapError("scan CIDR file", err)
+		}
+
+		LogDebug("CIDR file parsed: %s, valid=%d, total_lines=%d", config.File, fileValidCount, lineNum)
+		validCount += fileValidCount
 	}
 
 	if validCount == 0 {
-		return nil, fmt.Errorf("no valid CIDR entries in file: %s", file)
+		return nil, fmt.Errorf("no valid CIDR entries for tag '%s'", config.Tag)
 	}
 
-	LogDebug("CIDR file parsed: %s, valid=%d, total_lines=%d", file, validCount, lineNum)
 	return rule, nil
 }
 
