@@ -1818,6 +1818,7 @@ func (qc *QueryClient) ExecuteDoHQuery(ctx context.Context, msg *dns.Msg, server
 	}
 
 	httpReq.Header.Set("Accept", "application/dns-message")
+	httpReq.Header.Set("User-Agent", "")
 
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
