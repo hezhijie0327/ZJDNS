@@ -1004,13 +1004,13 @@ func GenerateExampleConfig() string {
 			SkipTLSVerify: true,
 		},
 		{
-			Address:       "https://dns.alidns.com/dns-query",
+			Address:       "https://223.5.5.5:443/dns-query",
 			Protocol:      "https",
 			ServerName:    "dns.alidns.com",
 			SkipTLSVerify: false,
 		},
 		{
-			Address:       "https://dns.alidns.com/dns-query",
+			Address:       "https://223.6.6.6:443/dns-query",
 			Protocol:      "http3",
 			ServerName:    "dns.alidns.com",
 			SkipTLSVerify: false,
