@@ -1978,6 +1978,14 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 					}:
 					case <-ctx.Done():
 					}
+				} else if err != nil {
+					select {
+					case resultChan <- &QueryResult{
+						Error:  err,
+						Server: srv.Address,
+					}:
+					case <-ctx.Done():
+					}
 				}
 				return nil
 			})
@@ -1990,8 +1998,21 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 			qm.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(taskCtx context.Context) error {
 				result := qm.server.connMgr.queryClient.ExecuteQuery(taskCtx, msg, srv, tracker)
 
-				if result.Error == nil && result.Response != nil {
+				if result.Error != nil {
+					select {
+					case resultChan <- &QueryResult{
+						Error:  result.Error,
+						Server: srv.Address,
+					}:
+					case <-ctx.Done():
+					}
+					return nil
+				}
+
+				if result.Response != nil {
 					rcode := result.Response.Rcode
+
+					// 只接受 NOERROR 和 NXDOMAIN 作为有效响应
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 						if serverDNSSECEnabled && qm.server.config.Server.Features.DNSSEC {
 							result.Validated = qm.validator.dnssecValidator.ValidateResponse(result.Response, true)
@@ -2010,6 +2031,15 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 						}:
 						case <-ctx.Done():
 						}
+					} else {
+						// 对于 SERVFAIL 等错误响应，记录为错误
+						select {
+						case resultChan <- &QueryResult{
+							Error:  fmt.Errorf("upstream returned error: %s", dns.RcodeToString[rcode]),
+							Server: srv.Address,
+						}:
+						case <-ctx.Done():
+						}
 					}
 				}
 				return nil
@@ -2018,6 +2048,7 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 	}
 
 	var lastError error
+	var successfulResults []*QueryResult
 	receivedCount := 0
 	serversCount := len(servers)
 
@@ -2034,18 +2065,35 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 				continue
 			}
 
+			// 收集所有成功的响应
 			if len(result.Answer) > 0 {
+				if tracker != nil {
+					tracker.AddStep("Received valid response from: %s (%d answers)", result.Server, len(result.Answer))
+				}
+				// 立即返回第一个有答案的成功响应
 				if tracker != nil {
 					tracker.AddStep("Using result from: %s", result.Server)
 				}
 				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
+			} else {
+				// 收集没有答案的成功响应（如NXDOMAIN）
+				successfulResults = append(successfulResults, result)
+				if tracker != nil {
+					tracker.AddStep("Received successful response without answers from: %s", result.Server)
+				}
 			}
-
-			continue
 
 		case <-ctx.Done():
 			if tracker != nil {
 				tracker.AddStep("Query cancelled after %d/%d responses", receivedCount, serversCount)
+			}
+			// 如果有任何成功响应，使用它
+			if len(successfulResults) > 0 {
+				result := successfulResults[0]
+				if tracker != nil {
+					tracker.AddStep("Using result from: %s (after timeout)", result.Server)
+				}
+				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
 			}
 			if lastError != nil {
 				return nil, nil, nil, false, nil, lastError
@@ -2054,8 +2102,17 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 		}
 	}
 
+	// 所有服务器都响应了，但没有答案
+	if len(successfulResults) > 0 {
+		result := successfulResults[0]
+		if tracker != nil {
+			tracker.AddStep("Using result from: %s (no answers)", result.Server)
+		}
+		return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
+	}
+
 	if tracker != nil {
-		tracker.AddStep("All %d upstream servers returned no valid records", serversCount)
+		tracker.AddStep("All %d upstream servers returned errors or no valid records", serversCount)
 	}
 	if lastError != nil {
 		return nil, nil, nil, false, nil, lastError
