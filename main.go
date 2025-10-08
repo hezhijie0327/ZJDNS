@@ -1978,6 +1978,14 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 					}:
 					case <-ctx.Done():
 					}
+				} else if err != nil {
+					select {
+					case resultChan <- &QueryResult{
+						Error:  err,
+						Server: srv.Address,
+					}:
+					case <-ctx.Done():
+					}
 				}
 				return nil
 			})
@@ -1990,8 +1998,21 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 			qm.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(taskCtx context.Context) error {
 				result := qm.server.connMgr.queryClient.ExecuteQuery(taskCtx, msg, srv, tracker)
 
-				if result.Error == nil && result.Response != nil {
+				if result.Error != nil {
+					select {
+					case resultChan <- &QueryResult{
+						Error:  result.Error,
+						Server: srv.Address,
+					}:
+					case <-ctx.Done():
+					}
+					return nil
+				}
+
+				if result.Response != nil {
 					rcode := result.Response.Rcode
+
+					// 只接受 NOERROR 和 NXDOMAIN 作为有效响应
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 						if serverDNSSECEnabled && qm.server.config.Server.Features.DNSSEC {
 							result.Validated = qm.validator.dnssecValidator.ValidateResponse(result.Response, true)
@@ -2010,6 +2031,15 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 						}:
 						case <-ctx.Done():
 						}
+					} else {
+						// 对于 SERVFAIL 等错误响应，记录为错误
+						select {
+						case resultChan <- &QueryResult{
+							Error:  fmt.Errorf("upstream returned error: %s", dns.RcodeToString[rcode]),
+							Server: srv.Address,
+						}:
+						case <-ctx.Done():
+						}
 					}
 				}
 				return nil
@@ -2018,6 +2048,7 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 	}
 
 	var lastError error
+	var successfulResults []*QueryResult
 	receivedCount := 0
 	serversCount := len(servers)
 
@@ -2034,18 +2065,35 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 				continue
 			}
 
+			// 收集所有成功的响应
 			if len(result.Answer) > 0 {
+				if tracker != nil {
+					tracker.AddStep("Received valid response from: %s (%d answers)", result.Server, len(result.Answer))
+				}
+				// 立即返回第一个有答案的成功响应
 				if tracker != nil {
 					tracker.AddStep("Using result from: %s", result.Server)
 				}
 				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
+			} else {
+				// 收集没有答案的成功响应（如NXDOMAIN）
+				successfulResults = append(successfulResults, result)
+				if tracker != nil {
+					tracker.AddStep("Received successful response without answers from: %s", result.Server)
+				}
 			}
-
-			continue
 
 		case <-ctx.Done():
 			if tracker != nil {
 				tracker.AddStep("Query cancelled after %d/%d responses", receivedCount, serversCount)
+			}
+			// 如果有任何成功响应，使用它
+			if len(successfulResults) > 0 {
+				result := successfulResults[0]
+				if tracker != nil {
+					tracker.AddStep("Using result from: %s (after timeout)", result.Server)
+				}
+				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
 			}
 			if lastError != nil {
 				return nil, nil, nil, false, nil, lastError
@@ -2054,8 +2102,17 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 		}
 	}
 
+	// 所有服务器都响应了，但没有答案
+	if len(successfulResults) > 0 {
+		result := successfulResults[0]
+		if tracker != nil {
+			tracker.AddStep("Using result from: %s (no answers)", result.Server)
+		}
+		return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
+	}
+
 	if tracker != nil {
-		tracker.AddStep("All %d upstream servers returned no valid records", serversCount)
+		tracker.AddStep("All %d upstream servers returned errors or no valid records", serversCount)
 	}
 	if lastError != nil {
 		return nil, nil, nil, false, nil, lastError
@@ -2584,35 +2641,117 @@ func (hp *HijackPrevention) IsEnabled() bool {
 	return hp.enabled
 }
 
+// CheckResponse 检查响应是否存在劫持行为
 func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string) {
 	if !hp.enabled || response == nil {
 		return true, ""
 	}
 
+	// 规范化域名
 	currentDomain = strings.ToLower(strings.TrimSuffix(currentDomain, "."))
 	queryDomain = strings.ToLower(strings.TrimSuffix(queryDomain, "."))
 
-	if currentDomain == "" && queryDomain != "" {
-		isRootServerQuery := strings.HasSuffix(queryDomain, ".root-servers.net") || queryDomain == "root-servers.net"
+	// 只检查 Answer 部分的记录
+	for _, rr := range response.Answer {
+		answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
+		rrType := rr.Header().Rrtype
 
-		for _, rr := range response.Answer {
-			answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
-			if answerName == queryDomain {
-				if rr.Header().Rrtype == dns.TypeNS || rr.Header().Rrtype == dns.TypeDS {
-					continue
-				}
+		// 只检查与查询域名完全匹配的答案记录
+		if answerName != queryDomain {
+			continue
+		}
 
-				if isRootServerQuery && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
-					continue
-				}
+		// NS 和 DS 记录是委派记录，属于正常流程，允许
+		if rrType == dns.TypeNS || rrType == dns.TypeDS {
+			continue
+		}
 
-				recordType := dns.TypeToString[rr.Header().Rrtype]
-				reason := fmt.Sprintf("Root server overstepped authority: %s record for '%s'", recordType, queryDomain)
-				return false, reason
-			}
+		// 统一的劫持检测
+		if valid, reason := hp.validateAnswer(currentDomain, queryDomain, rrType); !valid {
+			return false, reason
 		}
 	}
+
 	return true, ""
+}
+
+// validateAnswer 统一的答案验证逻辑
+func (hp *HijackPrevention) validateAnswer(authorityDomain, queryDomain string, rrType uint16) (bool, string) {
+	// 1. 基础权威范围检查
+	if !hp.isInAuthority(queryDomain, authorityDomain) {
+		return false, fmt.Sprintf("Server '%s' returned out-of-authority %s record for '%s'",
+			authorityDomain, dns.TypeToString[rrType], queryDomain)
+	}
+
+	// 2. Root 服务器特殊规则
+	if authorityDomain == "" {
+		return hp.validateRootServer(queryDomain, rrType)
+	}
+
+	// 3. TLD 服务器特殊规则
+	if hp.isTLD(authorityDomain) {
+		return hp.validateTLDServer(authorityDomain, queryDomain, rrType)
+	}
+
+	return true, ""
+}
+
+// validateRootServer Root 服务器专用验证
+func (hp *HijackPrevention) validateRootServer(queryDomain string, rrType uint16) (bool, string) {
+	// 允许 root-servers.net 的 A/AAAA 记录（glue 记录）
+	if hp.isRootServerGlue(queryDomain, rrType) {
+		return true, ""
+	}
+
+	// Root 服务器不应该直接返回具体域名的最终记录
+	if queryDomain != "" {
+		return false, fmt.Sprintf("Root server returned unauthorized %s record for '%s'",
+			dns.TypeToString[rrType], queryDomain)
+	}
+
+	return true, ""
+}
+
+// validateTLDServer TLD 服务器专用验证
+func (hp *HijackPrevention) validateTLDServer(tldDomain, queryDomain string, rrType uint16) (bool, string) {
+	// TLD 服务器不应该在 Answer 段返回子域的记录
+	// 例如：com. 不应该返回 facebook.com 的 A 记录
+	if queryDomain != tldDomain {
+		return false, fmt.Sprintf("TLD '%s' returned %s record in Answer for subdomain '%s' (should only delegate via Authority section)",
+			tldDomain, dns.TypeToString[rrType], queryDomain)
+	}
+
+	return true, ""
+}
+
+// isRootServerGlue 判断是否为 Root 服务器的 glue 记录
+func (hp *HijackPrevention) isRootServerGlue(domain string, rrType uint16) bool {
+	if rrType != dns.TypeA && rrType != dns.TypeAAAA {
+		return false
+	}
+	return strings.HasSuffix(domain, ".root-servers.net") || domain == "root-servers.net"
+}
+
+// isTLD 判断域名是否为顶级域（TLD）
+func (hp *HijackPrevention) isTLD(domain string) bool {
+	// TLD 的特征：不包含点的非空域名
+	return domain != "" && !strings.Contains(domain, ".")
+}
+
+// isInAuthority 检查查询域名是否在权威域名的管辖范围内
+func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) bool {
+	// 完全匹配
+	if queryDomain == authorityDomain {
+		return true
+	}
+
+	// Root 管辖所有域名
+	if authorityDomain == "" {
+		return true
+	}
+
+	// 检查是否为子域
+	return strings.HasSuffix(queryDomain, "."+authorityDomain)
 }
 
 // =============================================================================
