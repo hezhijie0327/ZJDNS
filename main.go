@@ -2649,26 +2649,67 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 	currentDomain = strings.ToLower(strings.TrimSuffix(currentDomain, "."))
 	queryDomain = strings.ToLower(strings.TrimSuffix(queryDomain, "."))
 
-	if currentDomain == "" && queryDomain != "" {
-		isRootServerQuery := strings.HasSuffix(queryDomain, ".root-servers.net") || queryDomain == "root-servers.net"
+	// 检查权威服务器是否越权返回答案
+	for _, rr := range response.Answer {
+		answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
 
-		for _, rr := range response.Answer {
-			answerName := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))
-			if answerName == queryDomain {
-				if rr.Header().Rrtype == dns.TypeNS || rr.Header().Rrtype == dns.TypeDS {
-					continue
-				}
+		// 只检查与查询域名完全匹配的答案
+		if answerName != queryDomain {
+			continue
+		}
 
-				if isRootServerQuery && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
-					continue
-				}
+		// NS 和 DS 记录是正常的委派记录，不检查
+		if rr.Header().Rrtype == dns.TypeNS || rr.Header().Rrtype == dns.TypeDS {
+			continue
+		}
 
+		// 根服务器特殊情况：允许返回 root-servers.net 的 A/AAAA 记录
+		if currentDomain == "" {
+			isRootServerQuery := strings.HasSuffix(queryDomain, ".root-servers.net") ||
+				queryDomain == "root-servers.net"
+			if isRootServerQuery && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
+				continue
+			}
+		}
+
+		// 检查权威服务器的管辖权限
+		if currentDomain == "" {
+			// 根服务器不应该直接返回任何域名的最终答案（除了 root-servers.net）
+			if queryDomain != "" {
 				recordType := dns.TypeToString[rr.Header().Rrtype]
-				reason := fmt.Sprintf("Root server overstepped authority: %s record for '%s'", recordType, queryDomain)
+				reason := fmt.Sprintf("Root server overstepped authority: %s record for '%s'",
+					recordType, queryDomain)
+				return false, reason
+			}
+		} else {
+			// 中间层权威服务器的检查
+			// 答案域名必须在当前权威服务器的管辖范围内
+			if !strings.HasSuffix(queryDomain, "."+currentDomain) && queryDomain != currentDomain {
+				recordType := dns.TypeToString[rr.Header().Rrtype]
+				reason := fmt.Sprintf("Authoritative server '%s' overstepped authority: %s record for '%s'",
+					currentDomain, recordType, queryDomain)
+				return false, reason
+			}
+
+			// 检查是否是直接子域
+			// 例如：com 可以管理 youtube.com，但不能管理 www.youtube.com
+			var subdomain string
+			if queryDomain == currentDomain {
+				subdomain = ""
+			} else {
+				subdomain = strings.TrimSuffix(queryDomain, "."+currentDomain)
+			}
+
+			if strings.Contains(subdomain, ".") {
+				// subdomain 包含点，说明不是直接子域，而是更深层的域名
+				recordType := dns.TypeToString[rr.Header().Rrtype]
+				reason := fmt.Sprintf("Authoritative server '%s' overstepped authority: %s record for '%s' (not a direct subdomain)",
+					currentDomain, recordType, queryDomain)
 				return false, reason
 			}
 		}
 	}
+
 	return true, ""
 }
 
