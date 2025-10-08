@@ -2667,7 +2667,7 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 		}
 
 		// 统一的劫持检测
-		if valid, reason := hp.validateAnswer(currentDomain, queryDomain, rrType); !valid {
+		if valid, reason := hp.ValidateAnswer(currentDomain, queryDomain, rrType); !valid {
 			return false, reason
 		}
 	}
@@ -2675,31 +2675,31 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 	return true, ""
 }
 
-// validateAnswer 统一的答案验证逻辑
-func (hp *HijackPrevention) validateAnswer(authorityDomain, queryDomain string, rrType uint16) (bool, string) {
+// ValidateAnswer 统一的答案验证逻辑
+func (hp *HijackPrevention) ValidateAnswer(authorityDomain, queryDomain string, rrType uint16) (bool, string) {
 	// 1. 基础权威范围检查
-	if !hp.isInAuthority(queryDomain, authorityDomain) {
+	if !hp.IsInAuthority(queryDomain, authorityDomain) {
 		return false, fmt.Sprintf("Server '%s' returned out-of-authority %s record for '%s'",
 			authorityDomain, dns.TypeToString[rrType], queryDomain)
 	}
 
 	// 2. Root 服务器特殊规则
 	if authorityDomain == "" {
-		return hp.validateRootServer(queryDomain, rrType)
+		return hp.ValidateRootServer(queryDomain, rrType)
 	}
 
 	// 3. TLD 服务器特殊规则
-	if hp.isTLD(authorityDomain) {
-		return hp.validateTLDServer(authorityDomain, queryDomain, rrType)
+	if hp.IsTLD(authorityDomain) {
+		return hp.ValidateTLDServer(authorityDomain, queryDomain, rrType)
 	}
 
 	return true, ""
 }
 
-// validateRootServer Root 服务器专用验证
-func (hp *HijackPrevention) validateRootServer(queryDomain string, rrType uint16) (bool, string) {
+// ValidateRootServer Root 服务器专用验证
+func (hp *HijackPrevention) ValidateRootServer(queryDomain string, rrType uint16) (bool, string) {
 	// 允许 root-servers.net 的 A/AAAA 记录（glue 记录）
-	if hp.isRootServerGlue(queryDomain, rrType) {
+	if hp.IsRootServerGlue(queryDomain, rrType) {
 		return true, ""
 	}
 
@@ -2712,8 +2712,8 @@ func (hp *HijackPrevention) validateRootServer(queryDomain string, rrType uint16
 	return true, ""
 }
 
-// validateTLDServer TLD 服务器专用验证
-func (hp *HijackPrevention) validateTLDServer(tldDomain, queryDomain string, rrType uint16) (bool, string) {
+// ValidateTLDServer TLD 服务器专用验证
+func (hp *HijackPrevention) ValidateTLDServer(tldDomain, queryDomain string, rrType uint16) (bool, string) {
 	// TLD 服务器不应该在 Answer 段返回子域的记录
 	// 例如：com. 不应该返回 facebook.com 的 A 记录
 	if queryDomain != tldDomain {
@@ -2724,22 +2724,22 @@ func (hp *HijackPrevention) validateTLDServer(tldDomain, queryDomain string, rrT
 	return true, ""
 }
 
-// isRootServerGlue 判断是否为 Root 服务器的 glue 记录
-func (hp *HijackPrevention) isRootServerGlue(domain string, rrType uint16) bool {
+// IsRootServerGlue 判断是否为 Root 服务器的 glue 记录
+func (hp *HijackPrevention) IsRootServerGlue(domain string, rrType uint16) bool {
 	if rrType != dns.TypeA && rrType != dns.TypeAAAA {
 		return false
 	}
 	return strings.HasSuffix(domain, ".root-servers.net") || domain == "root-servers.net"
 }
 
-// isTLD 判断域名是否为顶级域（TLD）
-func (hp *HijackPrevention) isTLD(domain string) bool {
+// IsTLD 判断域名是否为顶级域（TLD）
+func (hp *HijackPrevention) IsTLD(domain string) bool {
 	// TLD 的特征：不包含点的非空域名
 	return domain != "" && !strings.Contains(domain, ".")
 }
 
-// isInAuthority 检查查询域名是否在权威域名的管辖范围内
-func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) bool {
+// IsInAuthority 检查查询域名是否在权威域名的管辖范围内
+func (hp *HijackPrevention) IsInAuthority(queryDomain, authorityDomain string) bool {
 	// 完全匹配
 	if queryDomain == authorityDomain {
 		return true
