@@ -40,22 +40,6 @@ import (
 )
 
 // =============================================================================
-// Version Information
-// =============================================================================
-
-// These variables are set at build time using ldflags
-var (
-	Version    = "1.0.0" // Default version for development
-	CommitHash = "dev"   // Git commit hash
-	BuildTime  = ""      // Build timestamp
-)
-
-// GetVersion returns the full version string in format: {Version}-ZHIJIE-{CommitHash}
-func GetVersion() string {
-	return fmt.Sprintf("%s-ZHIJIE-%s", Version, CommitHash)
-}
-
-// =============================================================================
 // Constants - Network & Protocol
 // =============================================================================
 
@@ -608,6 +592,12 @@ type DNSServer struct {
 // =============================================================================
 
 var (
+	Version    = "1.0.0"
+	CommitHash = "dirty"
+	BuildTime  = "dev"
+)
+
+var (
 	NextProtoQUIC  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
 	NextProtoHTTP3 = []string{"h3"}
 	NextProtoHTTP2 = []string{http2.NextProtoTLS, "http/1.1"}
@@ -623,6 +613,15 @@ func init() {
 	GlobalLog = NewLogManager()
 	GlobalConfig = NewConfigManager()
 	GlobalResource = NewResourceManager()
+}
+
+// =============================================================================
+// Version Information
+// =============================================================================
+
+// GetVersion returns the full version string in format: {Version}-ZHIJIE-{CommitHash}@{BuildTime}
+func GetVersion() string {
+	return fmt.Sprintf("v%s-ZHIJIE-%s@%s", Version, CommitHash, BuildTime)
 }
 
 // =============================================================================
@@ -4991,7 +4990,7 @@ func (s *DNSServer) Start() error {
 
 	errChan := make(chan error, serverCount)
 
-	LogInfo("Starting ZJDNS Server v%s", GetVersion())
+	LogInfo("Starting ZJDNS Server %s", GetVersion())
 	LogInfo("Listening port: %s", s.config.Server.Port)
 
 	s.DisplayInfo()
@@ -5815,9 +5814,6 @@ func main() {
 	if showVersion {
 		fmt.Printf("ZJDNS Server\n")
 		fmt.Printf("Version: %s\n", GetVersion())
-		if BuildTime != "" {
-			fmt.Printf("Built: %s\n", BuildTime)
-		}
 		return
 	}
 
