@@ -64,23 +64,21 @@ const (
 	MaxCNAMEChain     = 16
 	MaxRecursionDepth = 16
 	MaxConcurrency    = 1000
-	MaxSingleQuery    = 3
-	MaxNSResolve      = 3
+	MaxSingleQuery    = 5
+	MaxNSResolve      = 5
 
 	// Timeouts - Query
 	QueryTimeout     = 5 * time.Second
-	RecursiveTimeout = 15 * time.Second
-	ExtendedTimeout  = 30 * time.Second
+	RecursiveTimeout = 10 * time.Second
 
 	// Timeouts - Connection
-	ConnTimeout           = 5 * time.Second
-	TLSHandshakeTimeout   = 3 * time.Second
-	ConnectionTestTimeout = 100 * time.Millisecond
-	PublicIPTimeout       = 3 * time.Second
-	HTTPClientTimeout     = 5 * time.Second
+	ConnTimeout         = 5 * time.Second
+	TLSHandshakeTimeout = 3 * time.Second
+	PublicIPTimeout     = 3 * time.Second
+	HTTPClientTimeout   = 5 * time.Second
 
 	// Timeouts - Server
-	ShutdownTimeout      = 5 * time.Second
+	ShutdownTimeout      = 3 * time.Second
 	DoHReadHeaderTimeout = 5 * time.Second
 	DoHWriteTimeout      = 5 * time.Second
 
@@ -89,9 +87,9 @@ const (
 	DoHIdleConnTimeout = 300 * time.Second
 
 	// Cache
-	DefaultCacheTTL = 300
+	DefaultCacheTTL = 10
 	StaleTTL        = 30
-	StaleMaxAge     = 259200
+	StaleMaxAge     = 86400 * 30
 	CacheQueueSize  = 500
 	IPCacheExpiry   = 300 * time.Second
 
@@ -114,21 +112,11 @@ const (
 
 	// DoH
 	DoHMaxRequestSize  = 8192
-	DoHMaxConnsPerHost = 3
-	DoHMaxIdleConns    = 3
+	DoHMaxConnsPerHost = 5
+	DoHMaxIdleConns    = 5
 
 	// TLS/QUIC
-	TLSSessionCacheSize  = 256
-	QUICSessionCacheSize = 128
-	MaxIncomingStreams   = 2048
-	InitialPacketSize    = 1200
-	H3MaxResponseHeader  = 8192
-
-	// TCP Optimization
-	TCPReadBufferSize  = 128 * 1024
-	TCPWriteBufferSize = 128 * 1024
-	TCPNoDelay         = 1
-	TCPQuickAck        = 0x0c
+	MaxIncomingStreams = 2048
 
 	// QUIC Validator
 	QUICAddrValidatorCacheSize = 16 * 1024
@@ -136,7 +124,7 @@ const (
 
 	// SpeedTest
 	DefaultSpeedTimeout     = 250 * time.Millisecond
-	DefaultSpeedConcurrency = 4
+	DefaultSpeedConcurrency = 5
 	UnreachableLatency      = 10 * time.Second
 	DefaultSpeedCacheTTL    = 900 * time.Second
 	SpeedDebounceInterval   = 10 * time.Second
@@ -4254,15 +4242,34 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 	}
 
 	rsm := &RootServerManager{
+		// Get servers from https://www.iana.org/domains/root/servers
 		servers: []string{
-			// IPv4 根服务器
-			"198.41.0.4:53", "170.247.170.2:53", "192.33.4.12:53", "199.7.91.13:53",
-			"192.203.230.10:53", "192.5.5.241:53", "192.112.36.4:53", "198.97.190.53:53",
-			"192.36.148.17:53", "192.58.128.30:53", "193.0.14.129:53", "199.7.83.42:53", "202.12.27.33:53",
-			// IPv6 根服务器
-			"[2001:503:ba3e::2:30]:53", "[2801:1b8:10::b]:53", "[2001:500:2::c]:53", "[2001:500:2d::d]:53",
-			"[2001:500:a8::e]:53", "[2001:500:2f::f]:53", "[2001:500:12::d0d]:53", "[2001:500:1::53]:53",
-			"[2001:7fe::53]:53", "[2001:503:c27::2:30]:53", "[2001:7fd::1]:53", "[2001:500:9f::42]:53", "[2001:dc3::35]:53",
+			// a.root-servers.net: Verisign, Inc.
+			"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
+			// b.root-servers.net: University of Southern California, Information Sciences Institute
+			"170.247.170.2:53", "[2801:1b8:10::b]:53",
+			// c.root-servers.net: Cogent Communications
+			"192.33.4.12:53", "[2001:500:2::c]:53",
+			// d.root-servers.net: University of Maryland
+			"199.7.91.13:53", "[2001:500:2d::d]:53",
+			// e.root-servers.net: NASA (Ames Research Center)
+			"192.203.230.10:53", "[2001:500:a8::e]:53",
+			// f.root-servers.net: Internet Systems Consortium, Inc.
+			"192.5.5.241:53", "[2001:500:2f::f]:53",
+			// g.root-servers.net: US Department of Defense (NIC)
+			"192.112.36.4:53", "[2001:500:12::d0d]:53",
+			// h.root-servers.net: US Army (Research Lab)
+			"198.97.190.53:53", "[2001:500:1::53]:53",
+			// i.root-servers.net: Netnod
+			"192.36.148.17:53", "[2001:7fe::53]:53",
+			// j.root-servers.net: Verisign, Inc.
+			"192.58.128.30:53", "[2001:503:c27::2:30]:53",
+			// k.root-servers.net: RIPE NCC
+			"193.0.14.129:53", "[2001:7fd::1]:53",
+			// l.root-servers.net: ICANN
+			"199.7.83.42:53", "[2001:500:9f::42]:53",
+			// m.root-servers.net: WIDE Project
+			"202.12.27.33:53", "[2001:dc3::35]:53",
 		},
 		needsSpeed: needsRecursive,
 	}
@@ -4286,12 +4293,12 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 				Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 			},
 			{
-				Type:    "udp",
+				Type:    "tcp",
 				Port:    DefaultDNSPort,
 				Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 			},
 			{
-				Type:    "tcp",
+				Type:    "udp",
 				Port:    DefaultDNSPort,
 				Timeout: int(DefaultSpeedTimeout.Milliseconds()),
 			},
@@ -4344,7 +4351,15 @@ func (rsm *RootServerManager) SortServersBySpeed() {
 	rsm.lastSortTime = time.Now()
 	rsm.mu.Unlock()
 
-	LogDebug("Root server speed test completed: %d servers tested", len(rsm.servers))
+	// Debug output for sorted root servers
+	LogDebug("Root server ranking (sorted by latency):")
+	for i, server := range sortedWithLatency {
+		status := "reachable"
+		if !server.Reachable {
+			status = "unreachable"
+		}
+		LogDebug("  [%d] %s - %v (%s)", i+1, server.Server, server.Latency, status)
+	}
 }
 
 func SortBySpeedResultWithLatency(servers []string, results map[string]*SpeedResult) []RootServerWithLatency {
@@ -5613,7 +5628,7 @@ func (s *DNSServer) QueryForRefresh(question dns.Question, ecs *ECSOption, serve
 		return nil, nil, nil, false, nil, errors.New("server is closed")
 	}
 
-	_, cancel := context.WithTimeout(s.ctx, ExtendedTimeout)
+	_, cancel := context.WithTimeout(s.ctx, QueryTimeout)
 	defer cancel()
 
 	return s.queryMgr.Query(question, ecs, serverDNSSECEnabled, nil)
