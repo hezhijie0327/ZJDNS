@@ -4990,7 +4990,7 @@ func (s *DNSServer) Start() error {
 
 	errChan := make(chan error, serverCount)
 
-	LogInfo("Starting ZJDNS Server")
+	LogInfo("Starting ZJDNS Server v%s", GetVersion())
 	LogInfo("Listening port: %s", s.config.Server.Port)
 
 	s.DisplayInfo()
