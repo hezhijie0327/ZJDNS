@@ -2680,8 +2680,18 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 				currentDomain, dns.TypeToString[rrType], queryDomain)
 		}
 
-		// TLD 服务器额外检查
+		// TLD 服务器额外检查（修复后的逻辑）
 		if hp.isTLD(currentDomain) {
+			// 关键修复：TLD 服务器不应该在 Answer 段返回子域的记录
+			// TLD 只应该委派（NS 在 Authority 段），而不是直接返回最终答案
+			if queryDomain != currentDomain {
+				// 查询的是 TLD 的子域（如 facebook.com），而不是 TLD 自身（如 com.）
+				// TLD 服务器的 Answer 段应该为空，NS 记录应该在 Authority 段
+				return false, fmt.Sprintf("TLD '%s' returned %s record in Answer for subdomain '%s' (should only delegate via Authority section)",
+					currentDomain, dns.TypeToString[rrType], queryDomain)
+			}
+
+			// 如果查询的是 TLD 自身，检查是否为直接子域
 			if !hp.isDirectChildOrSelf(queryDomain, currentDomain) {
 				return false, fmt.Sprintf("TLD '%s' returned unauthorized %s record for '%s' (not a direct child)",
 					currentDomain, dns.TypeToString[rrType], queryDomain)
