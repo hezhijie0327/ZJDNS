@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -196,6 +197,7 @@ type ServerConfig struct {
 	SpeedTest []SpeedTestMethod `json:"speedtest"`
 	Upstream  []UpstreamServer  `json:"upstream"`
 	Rewrite   []RewriteRule     `json:"rewrite"`
+	CIDR      []CIDRConfig      `json:"cidr"`
 }
 
 type ServerSettings struct {
@@ -245,6 +247,7 @@ type UpstreamServer struct {
 	Protocol      string `json:"protocol"`
 	ServerName    string `json:"server_name"`
 	SkipTLSVerify bool   `json:"skip_tls_verify"`
+	Match         string `json:"match,omitempty"`
 }
 
 type RewriteRule struct {
@@ -269,6 +272,26 @@ type SpeedTestMethod struct {
 }
 
 type ConfigManager struct{}
+
+// =============================================================================
+// Types - CIDR Management
+// =============================================================================
+
+type CIDRConfig struct {
+	File string `json:"file"` // CIDR 文件路径
+	Tag  string `json:"tag"`  // 标签名称
+}
+
+type CIDRManager struct {
+	rules map[string]*CIDRRule // key: tag 名称
+	mu    sync.RWMutex
+}
+
+type CIDRRule struct {
+	tag      string
+	ipv4Nets []*net.IPNet // IPv4 网络列表
+	ipv6Nets []*net.IPNet // IPv6 网络列表
+}
 
 // =============================================================================
 // Types - Cache
@@ -565,6 +588,7 @@ type DNSServer struct {
 	rootServerMgr *RootServerManager
 	taskMgr       *TaskManager
 	resourceMgr   *ResourceManager
+	cidrMgr       *CIDRManager
 	speedDebounce map[string]time.Time
 	speedMutex    sync.Mutex
 	speedInterval time.Duration
@@ -756,6 +780,28 @@ func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
 		}
 	}
 
+	// 验证 CIDR 配置（在验证 TLS 之前添加）
+	cidrTags := make(map[string]bool)
+	for i, cidrConfig := range config.CIDR {
+		if cidrConfig.Tag == "" {
+			return fmt.Errorf("CIDR config %d: tag cannot be empty", i)
+		}
+
+		if cidrTags[cidrConfig.Tag] {
+			return fmt.Errorf("CIDR config %d: duplicate tag '%s'", i, cidrConfig.Tag)
+		}
+		cidrTags[cidrConfig.Tag] = true
+
+		if cidrConfig.File == "" {
+			return fmt.Errorf("CIDR config %d (tag '%s'): file cannot be empty", i, cidrConfig.Tag)
+		}
+
+		if !IsValidFilePath(cidrConfig.File) {
+			return fmt.Errorf("CIDR config %d (tag '%s'): file not found or unsafe: %s",
+				i, cidrConfig.Tag, cidrConfig.File)
+		}
+	}
+
 	// Validate upstream servers
 	for i, server := range config.Upstream {
 		if !server.IsRecursive() {
@@ -781,6 +827,15 @@ func (cm *ConfigManager) ValidateConfig(config *ServerConfig) error {
 		protocol := strings.ToLower(server.Protocol)
 		if IsSecureProtocol(protocol) && server.ServerName == "" {
 			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
+		}
+
+		// 验证 match 字段
+		if server.Match != "" {
+			matchTag := strings.TrimPrefix(server.Match, "!")
+			if !cidrTags[matchTag] {
+				return fmt.Errorf("upstream server %d: match tag '%s' not found in CIDR config",
+					i, matchTag)
+			}
 		}
 	}
 
@@ -982,6 +1037,18 @@ func GenerateExampleConfig() string {
 	config.Server.TLS.HTTPS.Port = DefaultHTTPSPort
 	config.Server.TLS.HTTPS.Endpoint = DefaultQueryPath
 
+	// 新增：CIDR 示例配置
+	config.CIDR = []CIDRConfig{
+		{
+			File: "whitelist.txt",
+			Tag:  "whitelist",
+		},
+		{
+			File: "blacklist.txt",
+			Tag:  "blacklist",
+		},
+	}
+
 	config.Upstream = []UpstreamServer{
 		{
 			Address:  "223.5.5.5:53",
@@ -1008,12 +1075,14 @@ func GenerateExampleConfig() string {
 			Protocol:      "https",
 			ServerName:    "dns.alidns.com",
 			SkipTLSVerify: false,
+			Match:         "whitelist",
 		},
 		{
 			Address:       "https://223.6.6.6:443/dns-query",
 			Protocol:      "http3",
 			ServerName:    "dns.alidns.com",
 			SkipTLSVerify: false,
+			Match:         "!blacklist",
 		},
 		{
 			Address: RecursiveIndicator,
@@ -1941,6 +2010,7 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption, serverDNSSE
 	}
 }
 
+// 在 QueryManager.QueryUpstream 方法中集成过滤逻辑
 func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	servers := qm.upstream.GetServers()
 	if len(servers) == 0 {
@@ -1967,6 +2037,25 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 					recursiveCtx, question, ecs, tracker)
 
 				if err == nil && len(answer) > 0 {
+					// 应用 CIDR 过滤
+					if srv.Match != "" {
+						filteredAnswer, shouldRefuse := qm.FilterRecordsByCIDR(answer, srv.Match, tracker)
+						if shouldRefuse {
+							if tracker != nil {
+								tracker.AddStep("Recursive result refused by CIDR filter: %s", srv.Match)
+							}
+							select {
+							case resultChan <- &QueryResult{
+								Error:  fmt.Errorf("CIDR filter refused (match: %s)", srv.Match),
+								Server: srv.Address,
+							}:
+							case <-ctx.Done():
+							}
+							return nil
+						}
+						answer = filteredAnswer
+					}
+
 					select {
 					case resultChan <- &QueryResult{
 						Answer:     answer,
@@ -2012,8 +2101,26 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 				if result.Response != nil {
 					rcode := result.Response.Rcode
 
-					// 只接受 NOERROR 和 NXDOMAIN 作为有效响应
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+						// 应用 CIDR 过滤
+						if srv.Match != "" {
+							filteredAnswer, shouldRefuse := qm.FilterRecordsByCIDR(result.Response.Answer, srv.Match, tracker)
+							if shouldRefuse {
+								if tracker != nil {
+									tracker.AddStep("Upstream %s refused by CIDR filter: %s", srv.Address, srv.Match)
+								}
+								select {
+								case resultChan <- &QueryResult{
+									Error:  fmt.Errorf("CIDR filter refused (match: %s)", srv.Match),
+									Server: srv.Address,
+								}:
+								case <-ctx.Done():
+								}
+								return nil
+							}
+							result.Response.Answer = filteredAnswer
+						}
+
 						if serverDNSSECEnabled && qm.server.config.Server.Features.DNSSEC {
 							result.Validated = qm.validator.dnssecValidator.ValidateResponse(result.Response, true)
 						}
@@ -2032,7 +2139,6 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 						case <-ctx.Done():
 						}
 					} else {
-						// 对于 SERVFAIL 等错误响应，记录为错误
 						select {
 						case resultChan <- &QueryResult{
 							Error:  fmt.Errorf("upstream returned error: %s", dns.RcodeToString[rcode]),
@@ -2065,18 +2171,13 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 				continue
 			}
 
-			// 收集所有成功的响应
 			if len(result.Answer) > 0 {
 				if tracker != nil {
 					tracker.AddStep("Received valid response from: %s (%d answers)", result.Server, len(result.Answer))
-				}
-				// 立即返回第一个有答案的成功响应
-				if tracker != nil {
 					tracker.AddStep("Using result from: %s", result.Server)
 				}
 				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
 			} else {
-				// 收集没有答案的成功响应（如NXDOMAIN）
 				successfulResults = append(successfulResults, result)
 				if tracker != nil {
 					tracker.AddStep("Received successful response without answers from: %s", result.Server)
@@ -2087,7 +2188,6 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 			if tracker != nil {
 				tracker.AddStep("Query cancelled after %d/%d responses", receivedCount, serversCount)
 			}
-			// 如果有任何成功响应，使用它
 			if len(successfulResults) > 0 {
 				result := successfulResults[0]
 				if tracker != nil {
@@ -2102,7 +2202,6 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 		}
 	}
 
-	// 所有服务器都响应了，但没有答案
 	if len(successfulResults) > 0 {
 		result := successfulResults[0]
 		if tracker != nil {
@@ -2118,6 +2217,67 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 		return nil, nil, nil, false, nil, lastError
 	}
 	return nil, nil, nil, false, nil, errors.New("all upstream queries returned no valid records")
+}
+
+// 新增：过滤 A/AAAA 记录方法
+func (qm *QueryManager) FilterRecordsByCIDR(records []dns.RR, matchTag string, tracker *RequestTracker) ([]dns.RR, bool) {
+	if qm.server.cidrMgr == nil || matchTag == "" {
+		return records, false
+	}
+
+	filtered := make([]dns.RR, 0, len(records))
+	refusedCount := 0
+	acceptedCount := 0
+
+	for _, rr := range records {
+		var ip net.IP
+
+		switch record := rr.(type) {
+		case *dns.A:
+			ip = record.A
+		case *dns.AAAA:
+			ip = record.AAAA
+		default:
+			// 非 A/AAAA 记录直接保留
+			filtered = append(filtered, rr)
+			continue
+		}
+
+		// 检查 IP 是否匹配
+		matched, exists := qm.server.cidrMgr.MatchIP(ip, matchTag)
+		if !exists {
+			LogError("CIDR tag validation failed during query: %s", matchTag)
+			return nil, true // 标签不存在，拒绝所有
+		}
+
+		if matched {
+			filtered = append(filtered, rr)
+			acceptedCount++
+			if tracker != nil {
+				LogDebug("IP %s matched '%s': accepted", ip, matchTag)
+			}
+		} else {
+			refusedCount++
+			if tracker != nil {
+				LogDebug("IP %s not matched '%s': refused", ip, matchTag)
+			}
+		}
+	}
+
+	// 只要有任何 A/AAAA 记录被拒绝，就返回 REFUSED
+	if refusedCount > 0 {
+		if tracker != nil {
+			tracker.AddStep("CIDR filter: %d accepted, %d refused (match: %s) -> REFUSED",
+				acceptedCount, refusedCount, matchTag)
+		}
+		return nil, true
+	}
+
+	if tracker != nil && acceptedCount > 0 {
+		tracker.AddStep("CIDR filter: %d accepted (match: %s)", acceptedCount, matchTag)
+	}
+
+	return filtered, false
 }
 
 func (uh *UpstreamHandler) GetServers() []*UpstreamServer {
@@ -3917,6 +4077,162 @@ func (rm *RewriteManager) HasRules() bool {
 }
 
 // =============================================================================
+// CIDR Management
+// =============================================================================
+
+func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
+	cm := &CIDRManager{
+		rules: make(map[string]*CIDRRule),
+	}
+
+	for _, config := range configs {
+		if config.Tag == "" {
+			return nil, errors.New("CIDR tag cannot be empty")
+		}
+
+		if _, exists := cm.rules[config.Tag]; exists {
+			return nil, fmt.Errorf("duplicate CIDR tag: %s", config.Tag)
+		}
+
+		rule, err := cm.LoadCIDRFile(config.File, config.Tag)
+		if err != nil {
+			return nil, WrapError(fmt.Sprintf("load CIDR file for tag '%s'", config.Tag), err)
+		}
+
+		cm.rules[config.Tag] = rule
+		LogInfo("CIDR loaded: tag=%s, file=%s, ipv4=%d, ipv6=%d",
+			config.Tag, config.File, len(rule.ipv4Nets), len(rule.ipv6Nets))
+	}
+
+	return cm, nil
+}
+
+func (cm *CIDRManager) LoadCIDRFile(file, tag string) (*CIDRRule, error) {
+	if !IsValidFilePath(file) {
+		return nil, fmt.Errorf("invalid or unsafe file path: %s", file)
+	}
+
+	rule := &CIDRRule{
+		tag:      tag,
+		ipv4Nets: make([]*net.IPNet, 0),
+		ipv6Nets: make([]*net.IPNet, 0),
+	}
+
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, WrapError("open CIDR file", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	lineNum := 0
+	validCount := 0
+
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+
+		// 跳过注释和空行
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// 解析 CIDR
+		_, ipNet, err := net.ParseCIDR(line)
+		if err != nil {
+			LogWarn("Invalid CIDR at %s:%d: %s - %v", file, lineNum, line, err)
+			continue
+		}
+
+		// 分类存储 IPv4/IPv6
+		if ipNet.IP.To4() != nil {
+			rule.ipv4Nets = append(rule.ipv4Nets, ipNet)
+		} else {
+			rule.ipv6Nets = append(rule.ipv6Nets, ipNet)
+		}
+		validCount++
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, WrapError("scan CIDR file", err)
+	}
+
+	if validCount == 0 {
+		return nil, fmt.Errorf("no valid CIDR entries in file: %s", file)
+	}
+
+	LogDebug("CIDR file parsed: %s, valid=%d, total_lines=%d", file, validCount, lineNum)
+	return rule, nil
+}
+
+func (cm *CIDRManager) MatchIP(ip net.IP, matchTag string) (matched bool, exists bool) {
+	if cm == nil {
+		return true, true // 没有 CIDR Manager，所有 IP 都通过
+	}
+
+	if matchTag == "" {
+		return true, true // 没有配置 match，所有 IP 都通过
+	}
+
+	// 解析取反逻辑
+	negate := strings.HasPrefix(matchTag, "!")
+	tag := strings.TrimPrefix(matchTag, "!")
+
+	// 获取规则
+	cm.mu.RLock()
+	rule, exists := cm.rules[tag]
+	cm.mu.RUnlock()
+
+	if !exists {
+		LogError("CIDR tag not found: %s (this should have been caught during validation)", tag)
+		return false, false
+	}
+
+	// 检查 IP 是否在 CIDR 列表中
+	inList := rule.Contains(ip)
+
+	// 应用取反逻辑
+	if negate {
+		return !inList, true
+	}
+	return inList, true
+}
+
+func (cm *CIDRManager) TagExists(tag string) bool {
+	if cm == nil {
+		return false
+	}
+
+	tag = strings.TrimPrefix(tag, "!")
+
+	cm.mu.RLock()
+	_, exists := cm.rules[tag]
+	cm.mu.RUnlock()
+
+	return exists
+}
+
+func (r *CIDRRule) Contains(ip net.IP) bool {
+	if r == nil || ip == nil {
+		return false
+	}
+
+	var nets []*net.IPNet
+	if ip.To4() != nil {
+		nets = r.ipv4Nets
+	} else {
+		nets = r.ipv6Nets
+	}
+
+	for _, ipNet := range nets {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// =============================================================================
 // SpeedTest Management
 // =============================================================================
 
@@ -4979,6 +5295,16 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		}
 	}
 
+	// 新增：初始化 CIDR Manager
+	var cidrManager *CIDRManager
+	if len(config.CIDR) > 0 {
+		cidrManager, err = NewCIDRManager(config.CIDR)
+		if err != nil {
+			cancel()
+			return nil, WrapError("CIDR manager init", err)
+		}
+	}
+
 	connectionManager := NewConnectionManager()
 	connectionManager.queryClient = NewQueryClient(connectionManager)
 
@@ -4991,6 +5317,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		taskMgr:       taskManager,
 		ednsMgr:       ednsManager,
 		rewriteMgr:    rewriteManager,
+		cidrMgr:       cidrManager,
 		resourceMgr:   GlobalResource,
 		speedDebounce: make(map[string]time.Time),
 		speedInterval: SpeedDebounceInterval,
@@ -5211,7 +5538,11 @@ func (s *DNSServer) DisplayInfo() {
 	if len(servers) > 0 {
 		for _, server := range servers {
 			if server.IsRecursive() {
-				LogInfo("Upstream server: recursive resolution")
+				info := "Upstream server: recursive resolution"
+				if server.Match != "" {
+					info += fmt.Sprintf(" [CIDR match: %s]", server.Match)
+				}
+				LogInfo("%s", info)
 			} else {
 				protocol := strings.ToUpper(server.Protocol)
 				if protocol == "" {
@@ -5220,6 +5551,9 @@ func (s *DNSServer) DisplayInfo() {
 				serverInfo := fmt.Sprintf("%s (%s)", server.Address, protocol)
 				if server.SkipTLSVerify && IsSecureProtocol(strings.ToLower(server.Protocol)) {
 					serverInfo += " [Skip TLS verification]"
+				}
+				if server.Match != "" {
+					serverInfo += fmt.Sprintf(" [CIDR match: %s]", server.Match)
 				}
 				LogInfo("Upstream server: %s", serverInfo)
 			}
@@ -5233,6 +5567,13 @@ func (s *DNSServer) DisplayInfo() {
 		}
 	}
 
+	// 新增：显示 CIDR 信息
+	if s.cidrMgr != nil && len(s.config.CIDR) > 0 {
+		LogInfo("CIDR Manager: enabled (%d rules)", len(s.config.CIDR))
+		for _, cidrConfig := range s.config.CIDR {
+			LogInfo("  - Tag: %s, File: %s", cidrConfig.Tag, cidrConfig.File)
+		}
+	}
 	if s.securityMgr.tls != nil {
 		LogInfo("Listening secure DNS port: %s (DoT/DoQ)", s.config.Server.TLS.Port)
 
