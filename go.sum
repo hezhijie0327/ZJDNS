@@ -22,8 +22,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/quic-go/qpack v0.5.1 h1:giqksBPnT/HDtZ6VhtFKgoLOWmlyo9Ei6u9PqzIMbhI=
 github.com/quic-go/qpack v0.5.1/go.mod h1:+PC4XFrEskIVkcLzpEkbLqq1uCoxPhQuvK5rH1ZgaEg=
-github.com/quic-go/quic-go v0.55.1-0.20251009040723-c26e86c54780 h1:pq78Wd11Yc3NacK+hpVtalAJFb8SQtVvoW1VcHdzf/M=
-github.com/quic-go/quic-go v0.55.1-0.20251009040723-c26e86c54780/go.mod h1:Dg4C30DBPt0xeYXkc+4JL4n+wrRaeyacHzwF/bmqVqA=
+github.com/quic-go/quic-go v0.55.1-0.20251009082106-03a99447fd9d h1:pkxaqYYcVB+7sHQa6pUk/IIISy2Fil5He/0RrHvR8ws=
+github.com/quic-go/quic-go v0.55.1-0.20251009082106-03a99447fd9d/go.mod h1:Dg4C30DBPt0xeYXkc+4JL4n+wrRaeyacHzwF/bmqVqA=
 github.com/redis/go-redis/v9 v9.16.0-beta.1.0.20250929063504-3ad9f9cb2334 h1:i9uiSg3RPubiYGknv6zvNEFyFfILMzc4MUx94Gw8dNs=
 github.com/redis/go-redis/v9 v9.16.0-beta.1.0.20250929063504-3ad9f9cb2334/go.mod h1:u410H11HMLoB+TP67dz8rL9s6QW2j76l0//kSOd3370=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=

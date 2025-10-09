@@ -5,7 +5,7 @@ go 1.25.1
 require (
 	github.com/dgraph-io/ristretto/v2 v2.3.1-0.20251005211149-0286606d05a9
 	github.com/miekg/dns v1.1.69-0.20251008180327-f640e4b3696a
-	github.com/quic-go/quic-go v0.55.1-0.20251009040723-c26e86c54780
+	github.com/quic-go/quic-go v0.55.1-0.20251009082106-03a99447fd9d
 	github.com/redis/go-redis/v9 v9.16.0-beta.1.0.20250929063504-3ad9f9cb2334
 	golang.org/x/net v0.46.0
 )
