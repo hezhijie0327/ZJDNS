@@ -1453,6 +1453,7 @@ func (rc *RedisCache) RequestRefresh(req RefreshRequest) {
 	}
 }
 
+// 修复1: RedisCache.Close() - 确保刷新队列完全关闭
 func (rc *RedisCache) Close() error {
 	if !atomic.CompareAndSwapInt32(&rc.closed, 0, 1) {
 		return nil
@@ -1465,7 +1466,19 @@ func (rc *RedisCache) Close() error {
 	}
 
 	rc.cancel()
+
+	// 关闭刷新队列并清空其中的请求
 	close(rc.refreshQueue)
+
+	// 清空队列中剩余的请求，防止 goroutine 阻塞
+	for {
+		select {
+		case <-rc.refreshQueue:
+		default:
+			goto drained
+		}
+	}
+drained:
 
 	done := make(chan struct{})
 	go func() {
@@ -2024,7 +2037,9 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption, serverDNSSE
 }
 
 // 在 QueryManager.QueryUpstream 方法中集成过滤逻辑
-func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption,
+	serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+
 	servers := qm.upstream.GetServers()
 	if len(servers) == 0 {
 		return nil, nil, nil, false, nil, errors.New("no upstream servers")
@@ -2038,11 +2053,17 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 	ctx, cancel := context.WithTimeout(qm.server.ctx, QueryTimeout)
 	defer cancel()
 
+	var wg sync.WaitGroup
+	serverCount := len(servers)
+
 	for _, server := range servers {
 		srv := server
 
 		if srv.IsRecursive() {
+			wg.Add(1)
 			qm.server.taskMgr.ExecuteAsync("Query-Recursive", func(taskCtx context.Context) error {
+				defer wg.Done()
+
 				recursiveCtx, recursiveCancel := context.WithTimeout(taskCtx, RecursiveTimeout)
 				defer recursiveCancel()
 
@@ -2050,7 +2071,6 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 					recursiveCtx, question, ecs, tracker)
 
 				if err == nil && len(answer) > 0 {
-					// 应用 CIDR 过滤
 					if len(srv.Match) > 0 {
 						filteredAnswer, shouldRefuse := qm.FilterRecordsByCIDR(answer, srv.Match, tracker)
 						if shouldRefuse {
@@ -2093,11 +2113,15 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 			})
 
 		} else {
+			wg.Add(1)
 			originalMsg := qm.server.BuildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
 			msg := SafeCopyMessage(originalMsg)
 			GlobalResource.PutDNSMessage(originalMsg)
 
 			qm.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(taskCtx context.Context) error {
+				defer wg.Done()
+				defer GlobalResource.PutDNSMessage(msg)
+
 				result := qm.server.connMgr.queryClient.ExecuteQuery(taskCtx, msg, srv, tracker)
 
 				if result.Error != nil {
@@ -2115,7 +2139,6 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 					rcode := result.Response.Rcode
 
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-						// 应用 CIDR 过滤
 						if len(srv.Match) > 0 {
 							filteredAnswer, shouldRefuse := qm.FilterRecordsByCIDR(result.Response.Answer, srv.Match, tracker)
 							if shouldRefuse {
@@ -2169,9 +2192,8 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 	var lastError error
 	var successfulResults []*QueryResult
 	receivedCount := 0
-	serversCount := len(servers)
 
-	for receivedCount < serversCount {
+	for receivedCount < serverCount {
 		select {
 		case result := <-resultChan:
 			receivedCount++
@@ -2189,6 +2211,19 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 					tracker.AddStep("Received valid response from: %s (%d answers)", result.Server, len(result.Answer))
 					tracker.AddStep("Using result from: %s", result.Server)
 				}
+
+				// 清空剩余结果
+				go func() {
+					for receivedCount < serverCount {
+						select {
+						case <-resultChan:
+							receivedCount++
+						default:
+							return
+						}
+					}
+				}()
+
 				return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
 			} else {
 				successfulResults = append(successfulResults, result)
@@ -2199,7 +2234,7 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 
 		case <-ctx.Done():
 			if tracker != nil {
-				tracker.AddStep("Query cancelled after %d/%d responses", receivedCount, serversCount)
+				tracker.AddStep("Query cancelled after %d/%d responses", receivedCount, serverCount)
 			}
 			if len(successfulResults) > 0 {
 				result := successfulResults[0]
@@ -2224,7 +2259,7 @@ func (qm *QueryManager) QueryUpstream(question dns.Question, ecs *ECSOption, ser
 	}
 
 	if tracker != nil {
-		tracker.AddStep("All %d upstream servers returned errors or no valid records", serversCount)
+		tracker.AddStep("All %d upstream servers returned errors or no valid records", serverCount)
 	}
 	if lastError != nil {
 		return nil, nil, nil, false, nil, lastError
@@ -3307,21 +3342,28 @@ func (tm *TLSManager) HandleQUICConnections() {
 			continue
 		}
 
+		if conn == nil {
+			continue
+		}
+
 		tm.wg.Add(1)
-		go func() {
+		go func(quicConn *quic.Conn) {
 			defer tm.wg.Done()
 			defer HandlePanic("DoQ connection")
-			tm.HandleQUICConnection(conn)
-		}()
+			defer func() {
+				if quicConn != nil {
+					_ = quicConn.CloseWithError(QUICCodeNoError, "")
+				}
+			}()
+			tm.HandleQUICConnection(quicConn)
+		}(conn)
 	}
 }
 
 func (tm *TLSManager) HandleQUICConnection(conn *quic.Conn) {
-	defer func() {
-		if conn != nil {
-			_ = conn.CloseWithError(QUICCodeNoError, "")
-		}
-	}()
+	if conn == nil {
+		return
+	}
 
 	for {
 		select {
@@ -3353,7 +3395,6 @@ func (tm *TLSManager) HandleQUICConnection(conn *quic.Conn) {
 		}(stream)
 	}
 }
-
 func (tm *TLSManager) HandleQUICStream(stream *quic.Stream, conn *quic.Conn) {
 	buf := make([]byte, SecureBufferSize)
 	n, err := tm.ReadAll(stream, buf)
@@ -4533,13 +4574,17 @@ func (st *SpeedTestManager) PerformSpeedTest(ips []string) map[string]*SpeedResu
 	var wg sync.WaitGroup
 	for _, ip := range ips {
 		wg.Add(1)
-		go func(ip string) {
+		go func(testIP string) {
 			defer wg.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
-			result := st.TestSingleIP(ip)
-			resultChan <- result
+			result := st.TestSingleIP(testIP)
+			select {
+			case resultChan <- result:
+			default:
+				LogDebug("SpeedTest: result channel full, discarding result for %s", testIP)
+			}
 		}(ip)
 	}
 
@@ -4550,7 +4595,9 @@ func (st *SpeedTestManager) PerformSpeedTest(ips []string) map[string]*SpeedResu
 
 	results := make(map[string]*SpeedResult)
 	for result := range resultChan {
-		results[result.IP] = result
+		if result != nil {
+			results[result.IP] = result
+		}
 	}
 
 	LogDebug("SpeedTest: concurrent test completed, got %d results", len(results))
@@ -5147,11 +5194,14 @@ func (tm *TaskManager) Shutdown(timeout time.Duration) error {
 	select {
 	case <-done:
 		LogInfo("Task manager shut down")
-		return nil
 	case <-time.After(timeout):
 		LogWarn("Task manager shutdown timeout")
 		return fmt.Errorf("shutdown timeout")
 	}
+
+	// 清空信号量
+	close(tm.semaphore)
+	return nil
 }
 
 func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
@@ -6090,21 +6140,30 @@ func (s *DNSServer) ProcessQuerySuccess(req *dns.Msg, question dns.Question, ecs
 		if shouldPerformSpeedTest {
 			LogDebug("SpeedTest: triggering background test for %s", question.Name)
 			msgCopy := msg.Copy()
-			s.taskMgr.ExecuteAsync(fmt.Sprintf("speed-test-%s", question.Name), func(ctx context.Context) error {
-				LogDebug("SpeedTest: starting background test for %s", question.Name)
-				speedTester := NewSpeedTestManager(*s.config)
-				defer CloseWithLog(speedTester, "SpeedTester")
-				speedTester.PerformSpeedTestAndSort(msgCopy)
+			if msgCopy != nil {
+				s.taskMgr.ExecuteAsync(fmt.Sprintf("speed-test-%s", question.Name), func(ctx context.Context) error {
+					defer func() {
+						if msgCopy != nil {
+							GlobalResource.PutDNSMessage(msgCopy)
+						}
+					}()
 
-				s.cacheMgr.Set(cacheKey,
-					msgCopy.Answer,
-					msgCopy.Ns,
-					msgCopy.Extra,
-					validated, responseECS)
-				LogDebug("SpeedTest: background test completed for %s", question.Name)
+					LogDebug("SpeedTest: starting background test for %s", question.Name)
+					speedTester := NewSpeedTestManager(*s.config)
+					defer CloseWithLog(speedTester, "SpeedTester")
 
-				return nil
-			})
+					speedTester.PerformSpeedTestAndSort(msgCopy)
+
+					s.cacheMgr.Set(cacheKey,
+						msgCopy.Answer,
+						msgCopy.Ns,
+						msgCopy.Extra,
+						validated, responseECS)
+					LogDebug("SpeedTest: background test completed for %s", question.Name)
+
+					return nil
+				})
+			}
 
 			if tracker != nil {
 				tracker.AddStep("First response not sorted, background SpeedTest in progress")
