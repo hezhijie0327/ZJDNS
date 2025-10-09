@@ -2,7 +2,7 @@ name: Dependencies
 
 on:
   schedule:
-    - cron: "0 4,16 * * *" # UTC+8 00:00 / 12:00
+    - cron: "0 4 * * 6" # UTC+8 00:00
   workflow_dispatch:
 
 jobs:
@@ -28,8 +28,8 @@ jobs:
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "pkg: Update Go and module dependencies"
-          title: "pkg: Update Go and module dependencies"
-          branch: update-dependencies
+          token: ${{ secrets.PAT_TOKEN }}
+          commit-message: "pkg: Update dependencies"
+          title: "pkg: Update dependencies"
+          branch: deps
           delete-branch: true
