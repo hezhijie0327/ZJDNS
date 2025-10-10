@@ -845,7 +845,7 @@ func (rc *RedisCache) handleRefreshRequest(req RefreshRequest) {
 		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
 		speedTester := NewSpeedTestManager(*rc.server.config)
 		speedTester.performSpeedTestAndSort(tempMsg)
-		speedTester.Close()
+		_ = speedTester.Close()
 		answer, authority, additional = tempMsg.Answer, tempMsg.Ns, tempMsg.Extra
 	}
 
@@ -1153,7 +1153,7 @@ func (cm *CIDRManager) loadCIDRConfig(config CIDRConfig) (*CIDRRule, error) {
 		if err != nil {
 			return nil, fmt.Errorf("open CIDR file: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		scanner := bufio.NewScanner(f)
 		lineNum := 0
@@ -1483,7 +1483,7 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 	if err != nil {
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1704,10 +1704,10 @@ func (st *SpeedTestManager) initICMP() {
 // Close closes speed test resources
 func (st *SpeedTestManager) Close() error {
 	if st.icmpConn4 != nil {
-		st.icmpConn4.Close()
+		_ = st.icmpConn4.Close()
 	}
 	if st.icmpConn6 != nil {
-		st.icmpConn6.Close()
+		_ = st.icmpConn6.Close()
 	}
 	return nil
 }
@@ -1945,14 +1945,14 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 		return -1
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(timeout))
+	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
 	start := time.Now()
 
 	if _, err := conn.WriteTo(wb, dst); err != nil {
 		return -1
 	}
 
-	conn.SetReadDeadline(time.Now().Add(timeout))
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	rb := make([]byte, 1500)
 	n, _, err := conn.ReadFrom(rb)
 	if err != nil {
@@ -1983,7 +1983,7 @@ func (st *SpeedTestManager) pingWithTCP(ip, port string, timeout time.Duration) 
 		return -1
 	}
 	latency := time.Since(start)
-	conn.Close()
+	_ = conn.Close()
 	return latency
 }
 
@@ -1999,12 +1999,12 @@ func (st *SpeedTestManager) pingWithUDP(ip, port string, timeout time.Duration) 
 	}
 
 	if _, err := conn.Write([]byte{}); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return -1
 	}
 
 	latency := time.Since(start)
-	conn.Close()
+	_ = conn.Close()
 	return latency
 }
 
@@ -2459,7 +2459,7 @@ func (tm *TLSManager) startQUICServer() error {
 
 	tm.quicListener, err = tm.quicTransport.ListenEarly(quicTLSConfig, quicConfig)
 	if err != nil {
-		tm.quicConn.Close()
+		_ = tm.quicConn.Close()
 		return fmt.Errorf("DoQ listen: %w", err)
 	}
 
@@ -2596,7 +2596,7 @@ func (tm *TLSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
 		}
 		r.Body = http.MaxBytesReader(nil, r.Body, DoHMaxRequestSize)
 		buf, err = io.ReadAll(r.Body)
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 		if err != nil {
 			return nil, http.StatusBadRequest
 		}
@@ -2658,7 +2658,7 @@ func (tm *TLSManager) handleTLSConnections() {
 		go func() {
 			defer tm.wg.Done()
 			defer handlePanic("DoT connection")
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			tm.handleSecureDNSConnection(conn, "DoT")
 		}()
 	}
@@ -2689,7 +2689,7 @@ func (tm *TLSManager) handleQUICConnections() {
 		go func(quicConn *quic.Conn) {
 			defer tm.wg.Done()
 			defer handlePanic("DoQ connection")
-			defer quicConn.CloseWithError(QUICCodeNoError, "")
+			defer func() { _ = quicConn.CloseWithError(QUICCodeNoError, "") }()
 			tm.handleQUICConnection(quicConn)
 		}(conn)
 	}
@@ -2722,7 +2722,7 @@ func (tm *TLSManager) handleQUICConnection(conn *quic.Conn) {
 			defer tm.wg.Done()
 			defer handlePanic("DoQ stream")
 			if s != nil {
-				defer s.Close()
+				defer func() { _ = s.Close() }()
 				tm.handleQUICStream(s, conn)
 			}
 		}(stream)
@@ -2739,7 +2739,7 @@ func (tm *TLSManager) handleQUICStream(stream *quic.Stream, conn *quic.Conn) {
 
 	msgLen := binary.BigEndian.Uint16(buf[:2])
 	if msgLen == 0 || msgLen > SecureBufferSize-2 {
-		conn.CloseWithError(QUICCodeProtocolError, "")
+		_ = conn.CloseWithError(QUICCodeProtocolError, "")
 		return
 	}
 
@@ -2750,7 +2750,7 @@ func (tm *TLSManager) handleQUICStream(stream *quic.Stream, conn *quic.Conn) {
 
 	req := new(dns.Msg)
 	if err := req.Unpack(buf[2 : 2+msgLen]); err != nil {
-		conn.CloseWithError(QUICCodeProtocolError, "")
+		_ = conn.CloseWithError(QUICCodeProtocolError, "")
 		return
 	}
 
@@ -2769,7 +2769,7 @@ func (tm *TLSManager) handleSecureDNSConnection(conn net.Conn, protocol string) 
 		return
 	}
 
-	tlsConn.SetReadDeadline(time.Now().Add(QueryTimeout))
+	_ = tlsConn.SetReadDeadline(time.Now().Add(QueryTimeout))
 
 	for {
 		select {
@@ -2816,7 +2816,7 @@ func (tm *TLSManager) handleSecureDNSConnection(conn net.Conn, protocol string) 
 			return
 		}
 
-		tlsConn.SetReadDeadline(time.Now().Add(QueryTimeout))
+		_ = tlsConn.SetReadDeadline(time.Now().Add(QueryTimeout))
 	}
 }
 
@@ -2868,13 +2868,13 @@ func (tm *TLSManager) shutdown() error {
 	if tm.httpsServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 		defer cancel()
-		tm.httpsServer.Shutdown(ctx)
+		_ = tm.httpsServer.Shutdown(ctx)
 	}
 
 	if tm.h3Server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 		defer cancel()
-		tm.h3Server.Shutdown(ctx)
+		_ = tm.h3Server.Shutdown(ctx)
 	}
 
 	if tm.httpsListener != nil {
@@ -3059,9 +3059,9 @@ func (qc *QueryClient) executeTLSQuery(ctx context.Context, msg *dns.Msg, server
 	if err != nil {
 		return nil, fmt.Errorf("TLS dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
-	conn.SetDeadline(time.Now().Add(qc.timeout))
+	_ = conn.SetDeadline(time.Now().Add(qc.timeout))
 
 	msgData, err := msg.Pack()
 	if err != nil {
@@ -3111,15 +3111,15 @@ func (qc *QueryClient) executeQUICQuery(ctx context.Context, msg *dns.Msg, serve
 	if err != nil {
 		return nil, fmt.Errorf("QUIC dial: %w", err)
 	}
-	defer conn.CloseWithError(QUICCodeNoError, "")
+	defer func() { _ = conn.CloseWithError(QUICCodeNoError, "") }()
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create QUIC stream: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
-	stream.SetDeadline(time.Now().Add(qc.timeout))
+	_ = stream.SetDeadline(time.Now().Add(qc.timeout))
 
 	originalID := msg.Id
 	msg.Id = 0
@@ -3139,7 +3139,7 @@ func (qc *QueryClient) executeQUICQuery(ctx context.Context, msg *dns.Msg, serve
 		return nil, fmt.Errorf("send QUIC query: %w", err)
 	}
 
-	stream.Close()
+	_ = stream.Close()
 
 	respBuf := make([]byte, SecureBufferSize)
 	n, err := stream.Read(respBuf)
@@ -3193,7 +3193,7 @@ func (qc *QueryClient) executeDoHQuery(ctx context.Context, msg *dns.Msg, server
 			MaxIncomingStreams: MaxIncomingStreams,
 		}
 		transport = &http3.Transport{TLSClientConfig: tlsConfig, QUICConfig: quicConfig}
-		defer transport.(*http3.Transport).Close()
+		defer func() { _ = transport.(*http3.Transport).Close() }()
 	} else {
 		tlsConfig.NextProtos = NextProtoHTTP2
 		transport = &http.Transport{
@@ -3202,7 +3202,7 @@ func (qc *QueryClient) executeDoHQuery(ctx context.Context, msg *dns.Msg, server
 			IdleConnTimeout:    DoHIdleConnTimeout,
 			ForceAttemptHTTP2:  true,
 		}
-		http2.ConfigureTransports(transport.(*http.Transport))
+		_, _ = http2.ConfigureTransports(transport.(*http.Transport))
 		defer transport.(*http.Transport).CloseIdleConnections()
 	}
 
@@ -3233,7 +3233,7 @@ func (qc *QueryClient) executeDoHQuery(ctx context.Context, msg *dns.Msg, server
 		msg.Id = originalID
 		return nil, fmt.Errorf("send HTTP request: %w", err)
 	}
-	defer httpResp.Body.Close()
+	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode != http.StatusOK {
 		msg.Id = originalID
@@ -4440,7 +4440,7 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	response := s.processDNSQuery(req, getClientIP(w), false)
 	if response != nil {
 		response.Compress = true
-		w.WriteMsg(response)
+		_ = w.WriteMsg(response)
 	}
 }
 
@@ -4558,10 +4558,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 		msg.AuthenticatedData = true
 	}
 
-	responseECS := entry.GetECSOption()
-	if responseECS == nil {
-		responseECS = ecsOpt
-	}
+	_ = entry.GetECSOption()
 
 	s.addEDNS(msg, req, isSecureConnection)
 
@@ -4662,7 +4659,7 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 					defer releaseMessage(msgCopy)
 
 					speedTester := NewSpeedTestManager(*s.config)
-					defer speedTester.Close()
+					defer func() { _ = speedTester.Close() }()
 
 					speedTester.performSpeedTestAndSort(msgCopy)
 
