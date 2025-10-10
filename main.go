@@ -2763,7 +2763,7 @@ func (tm *TLSManager) handleQUICStream(stream *quic.Stream, conn *quic.Conn) {
 }
 
 // handleSecureDNSConnection handles secure DNS connection (DoT)
-func (tm *TLSManager) handleSecureDNSConnection(conn net.Conn, protocol string) {
+func (tm *TLSManager) handleSecureDNSConnection(conn net.Conn, _ string) {
 	tlsConn, ok := conn.(*tls.Conn)
 	if !ok {
 		return
@@ -3028,7 +3028,7 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 }
 
 // executeSecureQuery executes secure query (TLS/QUIC/DoH)
-func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, protocol string, tracker *RequestTracker) (*dns.Msg, error) {
+func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, protocol string, _ *RequestTracker) (*dns.Msg, error) {
 	tlsConfig := &tls.Config{
 		ServerName:         server.ServerName,
 		InsecureSkipVerify: server.SkipTLSVerify,
@@ -3048,7 +3048,7 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 }
 
 // executeTLSQuery executes TLS query
-func (qc *QueryClient) executeTLSQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+func (qc *QueryClient) executeTLSQuery(_ context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	host, port, err := net.SplitHostPort(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse TLS address: %w", err)
@@ -3259,7 +3259,7 @@ func (qc *QueryClient) executeDoHQuery(ctx context.Context, msg *dns.Msg, server
 }
 
 // executeTraditionalQuery executes traditional UDP/TCP query
-func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tracker *RequestTracker) (*dns.Msg, error) {
+func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, _ *RequestTracker) (*dns.Msg, error) {
 	client := &dns.Client{Timeout: qc.timeout, Net: server.Protocol}
 	if server.Protocol == "udp" {
 		client.UDPSize = UDPBufferSize
@@ -3515,7 +3515,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 }
 
 // filterRecordsByCIDR filters DNS records by CIDR rules
-func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string, tracker *RequestTracker) ([]dns.RR, bool) {
+func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string, _ *RequestTracker) ([]dns.RR, bool) {
 	if qm.server.cidrMgr == nil || len(matchTags) == 0 {
 		return records, false
 	}
@@ -3784,7 +3784,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 }
 
 // handleSuspiciousResponse handles suspicious DNS response
-func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, ctx context.Context, question dns.Question, ecs *ECSOption, depth int, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *ECSOption, _ int, _ *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	if !currentlyTCP {
 		return nil, nil, nil, false, nil, fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
 	}
@@ -4539,7 +4539,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 }
 
 // processCacheHit processes cache hit
-func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool, ecsOpt *ECSOption, cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, _ bool, ecsOpt *ECSOption, cacheKey string, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
 	responseTTL := entry.GetRemainingTTL()
 
 	msg := s.buildResponse(req)
@@ -4587,7 +4587,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 }
 
 // processQueryError processes query error
-func (s *DNSServer) processQueryError(req *dns.Msg, err error, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool, ecsOpt *ECSOption, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processQueryError(req *dns.Msg, _ error, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ bool, _ *ECSOption, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
 	if s.config.Server.Features.ServeStale {
 		if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
 			responseTTL := uint32(StaleTTL)
@@ -4623,7 +4623,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, err error, cacheKey string, 
 }
 
 // processQuerySuccess processes successful query
-func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, clientHasEDNS bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, _ bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
 		msg = &dns.Msg{}
