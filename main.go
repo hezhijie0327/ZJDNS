@@ -1592,6 +1592,8 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 		return result
 	}
 
+	LogDebug("REWRITE: Checking domain %s for rewrite rules", domain)
+
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
@@ -1603,9 +1605,11 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 			continue
 		}
 
+		LogDebug("REWRITE: Found matching rule for domain %s", domain)
 		if rule.ResponseCode != nil {
 			result.ResponseCode = *rule.ResponseCode
 			result.ShouldRewrite = true
+			LogDebug("REWRITE: Applied response code rewrite for %s: %d", domain, *rule.ResponseCode)
 			return result
 		}
 
@@ -1640,6 +1644,7 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 			}
 
 			result.ShouldRewrite = true
+			LogDebug("REWRITE: Applied record rewrite for %s with %d records and %d additional", domain, len(result.Records), len(result.Additional))
 			return result
 		}
 	}
@@ -1746,6 +1751,7 @@ func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg) *dns.Msg 
 		return response
 	}
 
+	LogDebug("SPEEDTEST: Starting speed test and sort for %d records", len(response.Answer))
 	var aRecords []*dns.A
 	var aaaaRecords []*dns.AAAA
 	var cnameRecords []dns.RR
@@ -1838,6 +1844,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	cachedResults := make(map[string]*SpeedResult)
 	remainingIPs := []string{}
 
+	LogDebug("SPEEDTEST: Testing %d IPs for speed", len(ips))
 	st.cacheMutex.RLock()
 	now := time.Now()
 	for _, ip := range ips {
@@ -1849,6 +1856,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	}
 	st.cacheMutex.RUnlock()
 
+	LogDebug("SPEEDTEST: Found %d cached results, testing %d remaining IPs", len(cachedResults), len(remainingIPs))
 	if len(remainingIPs) == 0 {
 		return cachedResults
 	}
@@ -1874,6 +1882,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 
 // performSpeedTest performs concurrent speed test
 func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResult {
+	LogDebug("SPEEDTEST: Starting concurrent speed test for %d IPs with concurrency %d", len(ips), st.concurrency)
 	semaphore := make(chan struct{}, st.concurrency)
 	resultChan := make(chan *SpeedResult, len(ips))
 
@@ -1910,6 +1919,7 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 
 // testSingleIP tests a single IP
 func (st *SpeedTestManager) testSingleIP(ip string) *SpeedResult {
+	LogDebug("SPEEDTEST: Testing IP %s", ip)
 	result := &SpeedResult{IP: ip, Timestamp: time.Now()}
 
 	for _, method := range st.methods {
@@ -1928,12 +1938,14 @@ func (st *SpeedTestManager) testSingleIP(ip string) *SpeedResult {
 		if latency >= 0 {
 			result.Reachable = true
 			result.Latency = latency
+			LogDebug("SPEEDTEST: IP %s reachable with latency %v", ip, latency)
 			return result
 		}
 	}
 
 	result.Reachable = false
 	result.Latency = st.timeout
+	LogDebug("SPEEDTEST: IP %s unreachable", ip)
 	return result
 }
 
@@ -2243,6 +2255,7 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 		return true, ""
 	}
 
+	LogDebug("HIJACK: Checking response for domain %s (query: %s)", currentDomain, queryDomain)
 	currentDomain = normalizeDomain(currentDomain)
 	queryDomain = normalizeDomain(queryDomain)
 
@@ -2259,6 +2272,7 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 		}
 
 		if valid, reason := hp.validateAnswer(currentDomain, queryDomain, rrType); !valid {
+			LogDebug("HIJACK: Detected potential hijacking for %s: %s", queryDomain, reason)
 			return false, reason
 		}
 	}
@@ -2786,7 +2800,7 @@ func (tm *TLSManager) handleQUICStream(stream *quic.Stream, conn *quic.Conn) {
 	response := tm.server.processDNSQuery(req, clientIP, true)
 
 	if err := tm.respondQUIC(stream, response); err != nil {
-		LogDebug("DoQ response failed: %v", err)
+		LogDebug("PROTOCOL: DoQ response failed: %v", err)
 	}
 }
 
@@ -4171,7 +4185,7 @@ func (rt *RequestTracker) Finish() {
 		if upstream == "" {
 			upstream = RecursiveIndicator
 		}
-		LogInfo("[%s] Query completed: %s %s | Time:%v | Upstream:%s",
+		LogDebug("FINISH [%s]: Query completed: %s %s | Time:%v | Upstream:%s",
 			rt.ID, rt.Domain, rt.QueryType, rt.ResponseTime.Truncate(time.Microsecond), upstream)
 	}
 }
