@@ -4167,8 +4167,12 @@ func (rt *RequestTracker) Finish() {
 	}
 	rt.ResponseTime = time.Since(rt.StartTime)
 	if globalLog.GetLevel() >= Info {
+		upstream := rt.Upstream
+		if upstream == "" {
+			upstream = RecursiveIndicator
+		}
 		LogInfo("[%s] Query completed: %s %s | Time:%v | Upstream:%s",
-			rt.ID, rt.Domain, rt.QueryType, rt.ResponseTime.Truncate(time.Microsecond), rt.Upstream)
+			rt.ID, rt.Domain, rt.QueryType, rt.ResponseTime.Truncate(time.Microsecond), upstream)
 	}
 }
 
