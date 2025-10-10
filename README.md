@@ -90,117 +90,130 @@ ZJDNS 采用模块化、分层设计，核心组件职责清晰、松耦合，�
 ```mermaid
 graph TB
     subgraph "客户端层"
-        A[DNS Client]
+        A[DNS Client<br><i>客户端设备</i>]
     end
 
     subgraph "核心服务层"
         B[DNSServer<br><i>服务器核心</i>]
         C[ConfigManager<br><i>配置管理</i>]
-        D[ConnectionPool<br><i>连接池</i>]
-        E[CacheManager<br><i>缓存管理</i>]
-        F[QueryClient<br><i>查询客户端</i>]
-        G[UpstreamManager<br><i>上游管理</i>]
+        D[ConnectionManager<br><i>连接管理</i>]
+        E[CacheManager<br><i>缓存管理器</i>]
+        F[QueryManager<br><i>查询管理器</i>]
+        G[UpstreamHandler<br><i>上游处理器</i>]
     end
 
     subgraph "协议处理层"
-        H[UDPServer]
-        I[TCPServer]
-        J[DoTHandler]
-        K[DoQHandler]
-        L[DoHHandler]
+        H[UDPServer<br><i>UDP:53</i>]
+        I[TCPServer<br><i>TCP:53</i>]
+        J[DoTHandler<br><i>DoT:853</i>]
+        K[DoQHandler<br><i>DoQ:784/8853</i>]
+        L[DoHHandler<br><i>DoH:443</i>]
     end
 
-    subgraph "安全增强层"
-        M[EDNSManager]
-        N[DNSSECValidator]
-        O[HijackPrevention]
-        P[CIDRManager]
-        Q[DNSRewriter]
-        R[SpeedTester]
+    subgraph "DNS处理引擎"
+        M[RecursiveResolver<br><i>递归解析器</i>]
+        N[CNAMEHandler<br><i>CNAME处理器</i>]
+        O[ResponseValidator<br><i>响应验证器</i>]
+        P[QueryClient<br><i>查询客户端</i>]
+    end
+
+    subgraph "安全与增强层"
+        Q[SecurityManager<br><i>安全管理器</i>]
+        R[EDNSManager<br><i>EDNS管理器</i>]
+        S[DNSSECValidator<br><i>DNSSEC验证</i>]
+        T[HijackPrevention<br><i>劫持防护</i>]
+        U[CIDRManager<br><i>CIDR过滤</i>]
+        V[RewriteManager<br><i>DNS重写</i>]
+        W[SpeedTestManager<br><i>网络测试</i>]
     end
 
     subgraph "缓存系统"
-        S[RedisCache]
-        T[NullCache]
-        U[RefreshQueue]
-        V[预取机制]
-        W[Serve Stale]
+        X[RedisCache<br><i>Redis缓存</i>]
+        Y[NullCache<br><i>无缓存模式</i>]
+        Z[预取机制<br><i>Cache Prefetch</i>]
+        AA[ServeStale<br><i>过期缓存服务</i>]
     end
 
-    subgraph "支撑设施"
-        X[RequestTracker]
-        Y[ResourceManager]
-        Z[TaskManager]
-        AA[TLSManager]
-        BB[DDRHandler]
-        CC[RootServerManager]
+    subgraph "基础设施层"
+        BB[RequestTracker<br><i>请求追踪</i>]
+        CC[TaskManager<br><i>任务管理</i>]
+        DD[TLSManager<br><i>TLS管理</i>]
+        EE[RootServerManager<br><i>根服务器管理</i>]
+        FF[IPDetector<br><i>IP检测器</i>]
+        GG[LogManager<br><i>日志管理</i>]
     end
 
     subgraph "外部服务"
-        DD[Root Servers]
-        EE[Upstream DNS]
-        FF[Redis]
-        GG[TLS Certificates]
+        HH[Root Servers<br><i>根服务器</i>]
+        II[Upstream DNS<br><i>上游DNS</i>]
+        JJ[Redis Cluster<br><i>Redis集群</i>]
+        KK[TLS Certificates<br><i>TLS证书</i>]
     end
 
-    %% 连接关系
-    A -->|DNS查询| B
-    B --> C
-    B --> D
-    B --> E
-    B --> F
-    B --> G
+    %% 主要连接关系
+    A -->|DNS查询| H
+    A -->|DNS查询| I
+    A -->|安全查询| J
+    A -->|安全查询| K
+    A -->|安全查询| L
 
-    B --> H
-    B --> I
-    B --> J
-    B --> K
-    B --> L
+    H --> B
+    I --> B
+    J --> B
+    K --> B
+    L --> B
 
     B --> M
     B --> N
     B --> O
     B --> P
-    B --> Q
-    B --> R
 
-    E -->|生产| S
-    E -->|测试| T
-    S --> U
-    S --> V
-    S --> W
+    M --> Q
+    M --> R
+    M --> S
+    M --> T
+    M --> U
+    M --> V
+    M --> W
 
+    P --> EE
     B --> X
     B --> Y
-    B --> Z
-    B --> AA
-    B --> BB
+    X --> Z
+    X --> AA
 
-    F --> CC
+    B --> BB
+    B --> CC
+    B --> DD
+    B --> FF
+    B --> GG
 
     %% 外部连接
-    CC --> DD
-    G --> EE
-    S --> FF
-    J --> GG
-    K --> GG
-    L --> GG
+    EE --> HH
+    G --> II
+    X --> JJ
+    J --> KK
+    K --> KK
+    L --> KK
 
     %% 样式定义
-    classDef core fill:#4a90e2,stroke:#2c5aa0,color:#fff,font-weight:bold
-    classDef protocol fill:#50c878,stroke:#3a9b5c,color:#fff
+    classDef client fill:#3498db,stroke:#2980b9,color:#fff
+    classDef core fill:#2ecc71,stroke:#27ae60,color:#fff,font-weight:bold
+    classDef protocol fill:#e67e22,stroke:#d35400,color:#fff
+    classDef engine fill:#9b59b6,stroke:#8e44ad,color:#fff
     classDef security fill:#e74c3c,stroke:#c0392b,color:#fff
     classDef cache fill:#f39c12,stroke:#d68910,color:#fff
-    classDef support fill:#9b59b6,stroke:#8e44ad,color:#fff
+    classDef infra fill:#34495e,stroke:#2c3e50,color:#fff
     classDef external fill:#95a5a6,stroke:#7f8c8d,color:#fff
 
-    class B core
-    class C,D,E,F,G core
+    class A client
+    class B,C,D,E,F,G core
     class H,I,J,K,L protocol
-    class M,N,O,P,Q,R security
-    class S,T,U,V,W cache
-    class X,Y,Z,AA,BB,CC support
-    class DD,EE,FF,GG external
+    class M,N,O,P engine
+    class Q,R,S,T,U,V,W security
+    class X,Y,Z,AA cache
+    class BB,CC,DD,EE,FF,GG infra
+    class HH,II,JJ,KK external
 ```
 
 ---
