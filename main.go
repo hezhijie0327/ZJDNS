@@ -832,10 +832,12 @@ func (rc *RedisCache) handleRefreshRequest(req RefreshRequest) {
 		return
 	}
 
+	LogDebug("REFRESH: Refreshing cache for %s", req.CacheKey)
 	answer, authority, additional, validated, ecsResponse, err := rc.server.queryForRefresh(
 		req.Question, req.ECS, req.ServerDNSSECEnabled)
 
 	if err != nil {
+		LogDebug("REFRESH: Refresh failed for %s: %v", req.CacheKey, err)
 		rc.updateRefreshTime(req.CacheKey)
 		return
 	}
@@ -884,6 +886,7 @@ func (rc *RedisCache) handleRefreshRequest(req RefreshRequest) {
 		expiration += time.Duration(StaleMaxAge) * time.Second
 	}
 	rc.client.Set(rc.ctx, fullKey, data, expiration)
+	LogDebug("REFRESH: Successfully refreshed cache for %s", req.CacheKey)
 }
 
 // updateRefreshTime updates the refresh timestamp of a cache entry
@@ -1298,12 +1301,14 @@ func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 
 	for _, option := range opt.Option {
 		if subnet, ok := option.(*dns.EDNS0_SUBNET); ok {
-			return &ECSOption{
+			ecs := &ECSOption{
 				Family:       subnet.Family,
 				SourcePrefix: subnet.SourceNetmask,
 				ScopePrefix:  subnet.SourceScope,
 				Address:      subnet.Address,
 			}
+			LogDebug("EDNS: Parsed ECS option: %s/%d", ecs.Address.String(), ecs.SourcePrefix)
+			return ecs
 		}
 	}
 	return nil
@@ -1314,6 +1319,8 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 	if em == nil || msg == nil {
 		return
 	}
+
+	LogDebug("EDNS: Adding EDNS to message (DNSSEC: %v, ECS: %v)", dnssecEnabled, ecs != nil)
 
 	// Initialize message sections
 	if msg.Question == nil {
@@ -4090,6 +4097,7 @@ func (tm *TaskManager) ExecuteAsync(name string, fn func(ctx context.Context) er
 		return
 	}
 
+	LogDebug("TASK: Starting async task %s", name)
 	go func() {
 		defer handlePanic(fmt.Sprintf("AsyncTask-%s", name))
 
@@ -4103,6 +4111,9 @@ func (tm *TaskManager) ExecuteAsync(name string, fn func(ctx context.Context) er
 
 		if err := fn(tm.ctx); err != nil && err != context.Canceled {
 			atomic.AddInt64(&tm.stats.failed, 1)
+			LogDebug("TASK: Async task %s failed: %v", name, err)
+		} else {
+			LogDebug("TASK: Async task %s completed successfully", name)
 		}
 	}()
 }
