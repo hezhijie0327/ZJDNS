@@ -918,17 +918,21 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	defer handlePanic("Redis cache get")
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
+		LogDebug("CACHE: Redis cache is closed")
 		return nil, false, false
 	}
 
 	fullKey := rc.keyPrefix + key
+	LogDebug("CACHE: Getting key: %s", fullKey)
 	data, err := rc.client.Get(rc.ctx, fullKey).Result()
 	if err != nil {
+		LogDebug("CACHE: Cache miss for key: %s (error: %v)", fullKey, err)
 		return nil, false, false
 	}
 
 	var entry CacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
+		LogDebug("CACHE: Corrupted cache entry for key: %s, deleting", fullKey)
 		go func() {
 			defer handlePanic("Clean corrupted cache")
 			rc.client.Del(context.Background(), fullKey)
@@ -936,7 +940,11 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 		return nil, false, false
 	}
 
+	LogDebug("CACHE: Cache hit for key: %s (expired: %v, TTL: %d, age: %ds)",
+		fullKey, entry.IsExpired(), entry.TTL, time.Now().Unix()-entry.Timestamp)
+
 	if entry.IsStale() {
+		LogDebug("CACHE: Stale cache entry for key: %s, deleting", fullKey)
 		go func() {
 			defer handlePanic("Clean stale cache")
 			rc.client.Del(context.Background(), fullKey)
@@ -967,6 +975,7 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 	defer handlePanic("Redis cache set")
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
+		LogDebug("CACHE: Redis cache is closed, not setting key: %s", key)
 		return
 	}
 
@@ -974,6 +983,9 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 	allRRs = append(append(append(allRRs, answer...), authority...), additional...)
 	cacheTTL := calculateTTL(allRRs)
 	now := time.Now().Unix()
+
+	LogDebug("CACHE: Setting key: %s (TTL: %d, answer: %d, authority: %d, additional: %d, validated: %v)",
+		key, cacheTTL, len(answer), len(authority), len(additional), validated)
 
 	entry := &CacheEntry{
 		Answer:      compactRecords(answer),
@@ -1354,20 +1366,36 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 
 	// Add padding for secure connections
 	if em.paddingEnabled && isSecureConnection {
+		LogDebug("PADDING: Adding padding for secure connection")
 		opt.Option = options
 		msg.Extra = append(msg.Extra, opt)
 		if wireData, err := msg.Pack(); err == nil {
 			currentSize := len(wireData)
+			LogDebug("PADDING: Current message size: %d bytes", currentSize)
 			if currentSize < PaddingBlockSize {
 				paddingDataSize := PaddingBlockSize - currentSize - 4
+				LogDebug("PADDING: Adding %d bytes of padding (target: %d bytes)",
+					paddingDataSize, PaddingBlockSize)
 				if paddingDataSize > 0 {
 					options = append(options, &dns.EDNS0_PADDING{
 						Padding: make([]byte, paddingDataSize),
 					})
+					LogDebug("PADDING: Padding added successfully")
+				} else {
+					LogDebug("PADDING: No padding needed (size already optimal)")
 				}
+			} else {
+				LogDebug("PADDING: Message size %d exceeds padding target %d, no padding",
+					currentSize, PaddingBlockSize)
 			}
+		} else {
+			LogDebug("PADDING: Failed to pack message for padding calculation: %v", err)
 		}
 		msg.Extra = msg.Extra[:len(msg.Extra)-1]
+	} else if em.paddingEnabled {
+		LogDebug("PADDING: Padding enabled but connection is not secure, skipping padding")
+	} else {
+		LogDebug("PADDING: Padding disabled")
 	}
 
 	opt.Option = options
@@ -3003,27 +3031,50 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 	defer cancel()
 
 	protocol := strings.ToLower(server.Protocol)
+	LogDebug("PROTOCOL: Selected protocol %s for query to %s (question: %s)",
+		strings.ToUpper(protocol), server.Address, msg.Question[0].Name)
 
 	if isSecureProtocol(protocol) {
+		LogDebug("PROTOCOL: Using secure protocol %s", strings.ToUpper(protocol))
 		result.Response, result.Error = qc.executeSecureQuery(queryCtx, msg, server, protocol, tracker)
 	} else {
+		LogDebug("PROTOCOL: Using traditional protocol %s", strings.ToUpper(protocol))
 		result.Response, result.Error = qc.executeTraditionalQuery(queryCtx, msg, server, tracker)
 		if qc.needsTCPFallback(result, protocol) {
+			LogDebug("PROTOCOL: UDP query failed/truncated, falling back to TCP for %s", server.Address)
 			tcpServer := *server
 			tcpServer.Protocol = "tcp"
 			tcpResponse, tcpErr := qc.executeTraditionalQuery(queryCtx, msg, &tcpServer, tracker)
 			if tcpErr == nil {
+				LogDebug("PROTOCOL: TCP fallback successful for %s", server.Address)
 				result.Response = tcpResponse
 				result.Error = nil
 				result.Protocol = "TCP"
-			} else if result.Response == nil || result.Response.Rcode == dns.RcodeServerFailure {
-				result.Error = tcpErr
+			} else {
+				LogDebug("PROTOCOL: TCP fallback failed for %s: %v", server.Address, tcpErr)
+				if result.Response == nil || result.Response.Rcode == dns.RcodeServerFailure {
+					result.Error = tcpErr
+				}
 			}
+		} else {
+			LogDebug("PROTOCOL: No TCP fallback needed for %s", server.Address)
 		}
 	}
 
 	result.Duration = time.Since(start)
 	result.Protocol = strings.ToUpper(protocol)
+
+	if result.Error != nil {
+		LogDebug("PROTOCOL: Query to %s failed in %v: %v", server.Address, result.Duration, result.Error)
+	} else {
+		rcode := "UNKNOWN"
+		if result.Response != nil {
+			rcode = dns.RcodeToString[result.Response.Rcode]
+		}
+		LogDebug("PROTOCOL: Query to %s completed in %v with rcode %s",
+			server.Address, result.Duration, rcode)
+	}
+
 	return result
 }
 
@@ -3656,6 +3707,7 @@ type RecursiveResolver struct {
 // recursiveQuery performs recursive DNS query
 func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	if depth > MaxRecursionDepth {
+		LogDebug("RECURSION: Maximum depth exceeded for %s (depth: %d)", question.Name, depth)
 		return nil, nil, nil, false, nil, fmt.Errorf("recursion depth exceeded: %d", depth)
 	}
 
@@ -3664,6 +3716,10 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 	nameservers := rr.getRootServers()
 	currentDomain := "."
 	normalizedQname := normalizeDomain(qname)
+
+	LogDebug("RECURSION: Starting resolution for %s (type: %d, depth: %d, forceTCP: %v)",
+		qname, question.Qtype, depth, forceTCP)
+	LogDebug("RECURSION: Using %d root servers: %v", len(nameservers), nameservers)
 
 	if normalizedQname == "" {
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
@@ -3689,13 +3745,17 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 	for {
 		select {
 		case <-ctx.Done():
+			LogDebug("RECURSION: Context cancelled for %s", question.Name)
 			return nil, nil, nil, false, nil, ctx.Err()
 		default:
 		}
 
+		LogDebug("RECURSION: Querying %d nameservers for domain %s", len(nameservers), currentDomain)
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
 		if err != nil {
+			LogDebug("RECURSION: Query failed for %s: %v (forceTCP: %v)", currentDomain, err, forceTCP)
 			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
+				LogDebug("RECURSION: DNS hijack detected, retrying with TCP for %s", question.Name)
 				return rr.recursiveQuery(ctx, question, ecs, depth, true, tracker)
 			}
 			return nil, nil, nil, false, nil, fmt.Errorf("query %s: %w", currentDomain, err)
@@ -3713,17 +3773,27 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 		validated := false
 		if rr.server.config.Server.Features.DNSSEC {
+			LogDebug("RECURSION: Validating DNSSEC for %s", currentDomain)
 			validated = rr.server.securityMgr.dnssec.ValidateResponse(response, true)
+			LogDebug("RECURSION: DNSSEC validation result for %s: %v", currentDomain, validated)
 		}
 
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
+		if ecsResponse != nil {
+			LogDebug("RECURSION: ECS response received for %s: %s/%d",
+				currentDomain, ecsResponse.Address, ecsResponse.SourcePrefix)
+		}
 
 		if len(response.Answer) > 0 {
+			LogDebug("RECURSION: Found answer for %s - %d records, returning result",
+				question.Name, len(response.Answer))
 			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
 		bestMatch := ""
 		var bestNSRecords []*dns.NS
+
+		LogDebug("RECURSION: Processing %d NS records from response for %s", len(response.Ns), currentDomain)
 
 		for _, rrec := range response.Ns {
 			if ns, ok := rrec.(*dns.NS); ok {
@@ -3744,41 +3814,52 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 			}
 		}
 
+		LogDebug("RECURSION: Best NS match for %s: %s (%d records)", question.Name, bestMatch, len(bestNSRecords))
 		if len(bestNSRecords) == 0 {
+			LogDebug("RECURSION: No matching NS records found, returning delegation")
 			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
 		currentDomainNormalized := normalizeDomain(currentDomain)
 		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
+			LogDebug("RECURSION: NS delegation loop detected for %s, returning delegation", currentDomain)
 			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
 		currentDomain = bestMatch + "."
+		LogDebug("RECURSION: Continuing to next level: %s", currentDomain)
 
 		var nextNS []string
+		LogDebug("RECURSION: Resolving glue records for %d NS servers", len(bestNSRecords))
 		for _, ns := range bestNSRecords {
 			for _, rrec := range response.Extra {
 				switch a := rrec.(type) {
 				case *dns.A:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
 						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), DefaultDNSPort))
+						LogDebug("RECURSION: Found glue A record: %s -> %s", ns.Ns, a.A.String())
 					}
 				case *dns.AAAA:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
 						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), DefaultDNSPort))
+						LogDebug("RECURSION: Found glue AAAA record: %s -> %s", ns.Ns, a.AAAA.String())
 					}
 				}
 			}
 		}
 
 		if len(nextNS) == 0 {
+			LogDebug("RECURSION: No glue records found, resolving NS addresses recursively")
 			nextNS = rr.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP, tracker)
 		}
 
+		LogDebug("RECURSION: Resolved %d nameserver addresses for next level", len(nextNS))
 		if len(nextNS) == 0 {
+			LogDebug("RECURSION: Failed to resolve any nameserver addresses, returning delegation")
 			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
+		LogDebug("RECURSION: Using nameservers for next query: %v", nextNS)
 		nameservers = nextNS
 	}
 }
@@ -3794,19 +3875,25 @@ func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTC
 // queryNameserversConcurrent queries nameservers concurrently
 func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption, forceTCP bool, tracker *RequestTracker) (*dns.Msg, error) {
 	if len(nameservers) == 0 {
+		LogDebug("UPSTREAM: No nameservers provided for query %s", question.Name)
 		return nil, errors.New("no nameservers")
 	}
+
+	LogDebug("UPSTREAM: Starting concurrent query for %s (type: %d) to %d servers, forceTCP: %v",
+		question.Name, question.Qtype, len(nameservers), forceTCP)
 
 	select {
 	case rr.concurrencyLock <- struct{}{}:
 		defer func() { <-rr.concurrencyLock }()
 	case <-ctx.Done():
+		LogDebug("UPSTREAM: Context cancelled while waiting for concurrency lock")
 		return nil, ctx.Err()
 	}
 
 	concurrency := len(nameservers)
 	if concurrency > MaxSingleQuery {
 		concurrency = MaxSingleQuery
+		LogDebug("UPSTREAM: Limiting concurrency to %d (was %d)", MaxSingleQuery, len(nameservers))
 	}
 
 	tempServers := make([]*UpstreamServer, concurrency)
@@ -3816,37 +3903,53 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			protocol = "tcp"
 		}
 		tempServers[i] = &UpstreamServer{Address: nameservers[i], Protocol: protocol}
+		LogDebug("UPSTREAM: Server %d: %s (%s)", i+1, nameservers[i], protocol)
 	}
 
 	resultChan := make(chan *QueryResult, concurrency)
+	LogDebug("UPSTREAM: Launching %d concurrent queries", concurrency)
 
 	for _, server := range tempServers {
 		srv := server
 		msg := rr.server.buildQueryMessage(question, ecs, rr.server.config.Server.Features.DNSSEC, true, false)
 		rr.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(ctx context.Context) error {
 			defer releaseMessage(msg)
+			LogDebug("UPSTREAM: Executing query to %s", srv.Address)
 			result := rr.server.connMgr.queryClient.ExecuteQuery(ctx, msg, srv, tracker)
 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
+				LogDebug("UPSTREAM: Response from %s: rcode=%d, answer=%d, ns=%d, additional=%d",
+					srv.Address, rcode, len(result.Response.Answer), len(result.Response.Ns), len(result.Response.Extra))
+
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 					if rr.server.config.Server.Features.DNSSEC {
 						result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
+						LogDebug("UPSTREAM: DNSSEC validation for %s: %v", srv.Address, result.Validated)
 					}
+					LogDebug("UPSTREAM: Successful response from %s, returning result", srv.Address)
 					select {
 					case resultChan <- result:
 					case <-ctx.Done():
+						LogDebug("UPSTREAM: Context cancelled while sending result from %s", srv.Address)
 					}
+				} else {
+					LogDebug("UPSTREAM: Response from %s has non-success rcode %d, ignoring", srv.Address, rcode)
 				}
+			} else {
+				LogDebug("UPSTREAM: Query to %s failed: %v", srv.Address, result.Error)
 			}
 			return nil
 		})
 	}
 
+	LogDebug("UPSTREAM: Waiting for first successful response")
 	select {
 	case result := <-resultChan:
+		LogDebug("UPSTREAM: Received successful response (rcode: %d)", result.Response.Rcode)
 		return result.Response, nil
 	case <-ctx.Done():
+		LogDebug("UPSTREAM: Context cancelled while waiting for response")
 		return nil, ctx.Err()
 	}
 }
