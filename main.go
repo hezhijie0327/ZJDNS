@@ -2408,7 +2408,7 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 
 	// Create server certificate template
 	serverTemplate := x509.Certificate{
-		SerialNumber: serverSerialNumber, // Use random serial number instead of hardcoded 1
+		SerialNumber: serverSerialNumber,
 		Subject: pkix.Name{
 			CommonName: domain,
 		},
