@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -2366,38 +2367,103 @@ func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) b
 
 // generateSelfSignedCert creates a self-signed certificate using ECDSA with P-384 curve for testing
 func generateSelfSignedCert(domain string) (tls.Certificate, error) {
-	privKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	// Generate separate key pairs for CA and server for better security isolation
+	caPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("generate EC key: %w", err)
+		return tls.Certificate{}, fmt.Errorf("generate CA EC key: %w", err)
 	}
 
+	serverPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate server EC key: %w", err)
+	}
+
+	// Generate random serial numbers for both CA and server certificates
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	caSerialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("generate serial number: %w", err)
+		return tls.Certificate{}, fmt.Errorf("generate CA serial number: %w", err)
 	}
 
-	template := x509.Certificate{
-		SerialNumber: serialNumber,
+	serverSerialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate server serial number: %w", err)
+	}
+
+	// Create CA certificate
+	caTemplate := x509.Certificate{
+		SerialNumber: caSerialNumber,
+		Subject: pkix.Name{
+			CommonName:   "ZJDNS ECC Domain Secure Site CA",
+			Organization: []string{"ZJDNS"},
+			Country:      []string{"CN"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(CertValidityDuration),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign | x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            1,
+	}
+
+	// Create server certificate template
+	serverTemplate := x509.Certificate{
+		SerialNumber: serverSerialNumber,
 		Subject: pkix.Name{
 			CommonName: domain,
 		},
 		DNSNames:    []string{domain},
 		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(CertValidityDuration), // 1 year
+		NotAfter:    time.Now().Add(CertValidityDuration),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	// Create CA certificate first (self-signed)
+	caCertDER, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &caPrivKey.PublicKey, caPrivKey)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("create certificate: %w", err)
+		return tls.Certificate{}, fmt.Errorf("create CA certificate: %w", err)
+	}
+
+	// Parse CA certificate
+	caCert, err := x509.ParseCertificate(caCertDER)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("parse CA certificate: %w", err)
+	}
+
+	// Create server certificate signed by CA with server's private key
+	certDER, err := x509.CreateCertificate(rand.Reader, &serverTemplate, caCert, &serverPrivKey.PublicKey, caPrivKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create server certificate: %w", err)
 	}
 
 	cert := tls.Certificate{
 		Certificate: [][]byte{certDER},
-		PrivateKey:  privKey,
+		PrivateKey:  serverPrivKey, // Use server's private key for TLS
 	}
+
+	// Output complete certificate bundle in PEM format for debugging
+	caPrivKeyBytes, err := x509.MarshalPKCS8PrivateKey(caPrivKey)
+	if err != nil {
+		LogWarn("TLS: Failed to marshal CA private key: %v", err)
+		return cert, nil
+	}
+
+	serverPrivKeyBytes, err := x509.MarshalPKCS8PrivateKey(serverPrivKey)
+	if err != nil {
+		LogWarn("TLS: Failed to marshal server private key: %v", err)
+		return cert, nil
+	}
+
+	caDetail := fmt.Sprintf("TLS: CA Bundle:\n%s\n%s",
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCertDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caPrivKeyBytes}))
+	LogWarn("%s", caDetail)
+
+	certDetail := fmt.Sprintf("TLS: Certificate Bundle:\n%s\n%s",
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: serverPrivKeyBytes}))
+	LogWarn("%s", certDetail)
 
 	return cert, nil
 }
