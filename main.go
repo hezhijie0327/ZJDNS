@@ -2395,6 +2395,49 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 	return cert, nil
 }
 
+// displayCertificateInfo displays certificate information
+func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
+	if len(cert.Certificate) == 0 {
+		LogError("TLS: No certificate found")
+		return
+	}
+
+	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		LogError("TLS: Failed to parse certificate: %v", err)
+		return
+	}
+
+	// Build complete issuer information
+	issuerInfo := x509Cert.Issuer.CommonName
+	if issuerInfo == "" && len(x509Cert.Issuer.Organization) > 0 {
+		issuerInfo = x509Cert.Issuer.Organization[0]
+	}
+	if issuerInfo == "" {
+		issuerInfo = x509Cert.Issuer.String()
+	}
+
+	// Add organization details if available
+	if len(x509Cert.Issuer.Organization) > 0 && x509Cert.Issuer.CommonName != "" {
+		issuerInfo = fmt.Sprintf("%s (%s)", x509Cert.Issuer.CommonName, x509Cert.Issuer.Organization[0])
+	}
+
+	LogInfo("TLS: Certificate: Subject: %s | Issuer: %s | Valid: %s -> %s | Algorithm: %s",
+		x509Cert.Subject.CommonName,
+		issuerInfo,
+		x509Cert.NotBefore.Format("2006-01-02"),
+		x509Cert.NotAfter.Format("2006-01-02"),
+		x509Cert.SignatureAlgorithm.String())
+
+	// Expiry warning
+	daysUntilExpiry := int(time.Until(x509Cert.NotAfter).Hours() / 24)
+	if daysUntilExpiry < 0 {
+		LogError("TLS: Certificate has EXPIRED for %d days!", -daysUntilExpiry)
+	} else if daysUntilExpiry <= 30 {
+		LogWarn("TLS: Certificate expires in %d days!", daysUntilExpiry)
+	}
+}
+
 // TLSManager manages TLS/QUIC/DoH servers
 type TLSManager struct {
 	server            *DNSServer
@@ -2445,13 +2488,18 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 		return nil, fmt.Errorf("create QUIC validator: %w", err)
 	}
 
-	return &TLSManager{
+	tm := &TLSManager{
 		server:            server,
 		tlsConfig:         tlsConfig,
 		ctx:               ctx,
 		cancel:            cancel,
 		quicAddrValidator: quicAddrValidator,
-	}, nil
+	}
+
+	// Display certificate information
+	tm.displayCertificateInfo(cert)
+
+	return tm, nil
 }
 
 // Start starts all secure DNS servers
