@@ -41,7 +41,17 @@
 - **DNS over QUIC (DoQ)**：支持前沿的 DNS over QUIC 协议，利用 QUIC 协议的 0-RTT、多路复用和连接迁移等特性，提供更低延迟和更高可靠性的加密 DNS 服务。
 - **DNS over HTTPS (DoH/DoH3)**：同时支持 HTTP/2 和 HTTP/3 的 DoH 服务，在端口 `443` 上提供基于 HTTPS 的 DNS 查询。
 - **统一证书管理**：DoT、DoQ 和 DoH 共享同一套 TLS 证书配置，简化部署。
-- **连接复用与保活**：为安全连接实现连接复用和 TCP Keep-Alive，提升性能和稳定性。
+- **自签名 CA 支持**：内置自签名 CA 功能，可为域名动态签发 TLS 证书，简化开发环境配置。
+- **调试证书自动生成**：在开发或调试模式下，自动生成自签名 TLS 证书，无需外部证书文件。
+- **增强 TLS 日志**：提供详细的 TLS 握手和证书验证日志，便于问题诊断和安全监控。
+
+### 🔧 TLS 证书管理
+
+- **自签名根 CA**：内置自签名根证书颁发机构，支持为任意域名签发 TLS 证书。
+- **动态证书签发**：可根据配置的域名动态生成有效的 TLS 证书，无需外部证书文件。
+- **开发调试支持**：在开发环境中自动生成临时证书，简化配置流程。
+- **EC 密钥支持**：支持 ECDSA 私钥的生成、序列化和加载，提供更现代的加密算法。
+- **证书验证日志**：详细的 TLS 证书验证过程日志，包括证书链验证、有效期检查等。
 
 ### 📦 DNS Padding
 
@@ -137,7 +147,7 @@ graph TB
     subgraph "基础设施层"
         BB[RequestTracker<br><i>请求追踪</i>]
         CC[TaskManager<br><i>任务管理</i>]
-        DD[TLSManager<br><i>TLS管理</i>]
+        DD[TLSManager<br><i>TLS证书管理</i>]
         EE[RootServerManager<br><i>根服务器管理</i>]
         FF[IPDetector<br><i>IP检测器</i>]
         GG[LogManager<br><i>日志管理</i>]
@@ -147,7 +157,8 @@ graph TB
         HH[Root Servers<br><i>根服务器</i>]
         II[Upstream DNS<br><i>上游DNS</i>]
         JJ[Redis Cluster<br><i>Redis集群</i>]
-        KK[TLS Certificates<br><i>TLS证书</i>]
+        KK[Self-signed CA<br><i>自签名CA</i>]
+        LL[TLS Certificates<br><i>TLS证书</i>]
     end
 
     %% 主要连接关系
@@ -192,9 +203,11 @@ graph TB
     EE --> HH
     G --> II
     X --> JJ
-    J --> KK
-    K --> KK
-    L --> KK
+    DD --> KK
+    DD --> LL
+    J --> LL
+    K --> LL
+    L --> LL
 
     %% 样式定义
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
@@ -213,7 +226,7 @@ graph TB
     class Q,R,S,T,U,V,W security
     class X,Y,Z,AA cache
     class BB,CC,DD,EE,FF,GG infra
-    class HH,II,JJ,KK external
+    class HH,II,JJ,KK,LL external
 ```
 
 ---
