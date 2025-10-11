@@ -49,7 +49,7 @@
 
 - **Self-signed Root CA**: Built-in self-signed root certificate authority, supports signing TLS certificates for any domain.
 - **Dynamic Certificate Issuance**: Can dynamically generate valid TLS certificates based on configured domains, no external certificate files required.
-- **Development Debug Support**: Automatically generates temporary certificates in development environments, simplifying configuration process.
+- **Development Debug Support**: Automatically generates temporary certificates in development environments, simplifying the configuration process.
 - **EC Key Support**: Supports generation, serialization, and loading of ECDSA private keys, providing more modern encryption algorithms.
 - **Certificate Validation Logs**: Detailed TLS certificate validation process logs, including certificate chain validation, validity period checks, etc.
 
