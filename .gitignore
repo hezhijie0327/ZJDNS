@@ -26,3 +26,4 @@
 
 # Dockerfile
 !Dockerfile
+!LICENSE
