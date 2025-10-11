@@ -371,7 +371,7 @@ func (cm *ConfigManager) LoadConfig(configFile string) (*ServerConfig, error) {
 		cm.addDDRRecords(config)
 	}
 
-	LogInfo("Configuration loaded successfully: %s", configFile)
+	LogInfo("CONFIG: Configuration loaded successfully: %s", configFile)
 	return config, nil
 }
 
@@ -466,11 +466,11 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		}
 	} else {
 		if config.Server.Features.ServeStale {
-			LogWarn("No cache mode: serve stale disabled")
+			LogWarn("CACHE: No cache mode: serve stale disabled")
 			config.Server.Features.ServeStale = false
 		}
 		if config.Server.Features.Prefetch {
-			LogWarn("No cache mode: prefetch disabled")
+			LogWarn("CACHE: No cache mode: prefetch disabled")
 			config.Server.Features.Prefetch = false
 		}
 	}
@@ -489,7 +489,7 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		if _, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile); err != nil {
 			return fmt.Errorf("load certificate: %w", err)
 		}
-		LogInfo("TLS certificate verified")
+		LogInfo("TLS: Certificate verified [Cert: %s, Key: %s]", config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
 	}
 
 	return nil
@@ -737,7 +737,7 @@ type NullCache struct{}
 
 // NewNullCache creates a new null cache
 func NewNullCache() *NullCache {
-	LogInfo("No cache mode")
+	LogInfo("CACHE: No cache mode")
 	return &NullCache{}
 }
 
@@ -801,7 +801,7 @@ func NewRedisCache(config *ServerConfig, server *DNSServer) (*RedisCache, error)
 		cache.startRefreshProcessor()
 	}
 
-	LogInfo("Redis cache initialized")
+	LogInfo("CACHE: Redis cache initialized")
 	return cache, nil
 }
 
@@ -1053,10 +1053,10 @@ func (rc *RedisCache) Close() error {
 		return nil
 	}
 
-	LogInfo("Shutting down Redis cache...")
+	LogInfo("CACHE: Shutting down Redis cache...")
 
 	if err := rc.taskMgr.Shutdown(ShutdownTimeout); err != nil {
-		LogError("Task manager shutdown failed: %v", err)
+		LogError("TASK: Task manager shutdown failed: %v", err)
 	}
 
 	rc.cancel()
@@ -1084,10 +1084,10 @@ drained:
 	}
 
 	if err := rc.client.Close(); err != nil {
-		LogError("Redis client shutdown failed: %v", err)
+		LogError("CACHE: Redis client shutdown failed: %v", err)
 	}
 
-	LogInfo("Redis cache shut down")
+	LogInfo("CACHE: Redis cache shut down")
 	return nil
 }
 
@@ -1133,7 +1133,7 @@ func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
 		} else {
 			sourceInfo = fmt.Sprintf("%d inline rules", len(config.Rules))
 		}
-		LogInfo("CIDR loaded: tag=%s, source=%s, total=%d", config.Tag, sourceInfo, len(rule.nets))
+		LogInfo("CIDR: loaded: tag=%s, source=%s, total=%d", config.Tag, sourceInfo, len(rule.nets))
 	}
 
 	return cm, nil
@@ -1152,7 +1152,7 @@ func (cm *CIDRManager) loadCIDRConfig(config CIDRConfig) (*CIDRRule, error) {
 		}
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
-			LogWarn("Invalid CIDR in rules[%d] for tag '%s': %s - %v", i, config.Tag, cidr, err)
+			LogWarn("CIDR: Invalid CIDR in rules[%d] for tag '%s': %s - %v", i, config.Tag, cidr, err)
 			continue
 		}
 		rule.nets = append(rule.nets, ipNet)
@@ -1180,7 +1180,7 @@ func (cm *CIDRManager) loadCIDRConfig(config CIDRConfig) (*CIDRRule, error) {
 			}
 			_, ipNet, err := net.ParseCIDR(line)
 			if err != nil {
-				LogWarn("Invalid CIDR at %s:%d: %s - %v", config.File, lineNum, line, err)
+				LogWarn("CIDR: Invalid CIDR at %s:%d: %s - %v", config.File, lineNum, line, err)
 				continue
 			}
 			rule.nets = append(rule.nets, ipNet)
@@ -1269,12 +1269,12 @@ func NewEDNSManager(defaultSubnet string, paddingEnabled bool) (*EDNSManager, er
 		}
 		manager.defaultECS = ecs
 		if ecs != nil {
-			LogInfo("Default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
+			LogInfo("EDNS: Default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
 		}
 	}
 
 	if paddingEnabled {
-		LogInfo("DNS Padding enabled (block size: %d bytes)", PaddingBlockSize)
+		LogInfo("PADDING: DNS Padding enabled (block size: %d bytes)", PaddingBlockSize)
 	}
 
 	return manager, nil
@@ -1583,7 +1583,7 @@ func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 	}
 
 	rm.rules = validRules
-	LogInfo("DNS rewriter loaded: %d rules", len(validRules))
+	LogInfo("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
 	return nil
 }
 
@@ -2125,9 +2125,9 @@ func NewRootServerManager(config ServerConfig) *RootServerManager {
 		}
 		rsm.speedTester = NewSpeedTestManager(dnsSpeedTestConfig)
 		go rsm.sortServersBySpeed()
-		LogInfo("Root server speed testing enabled")
+		LogInfo("SPEEDTEST: Root server speed testing enabled")
 	} else {
-		LogInfo("Root server speed testing disabled (using upstream servers)")
+		LogInfo("SPEEDTEST: Root server speed testing disabled (using upstream servers)")
 	}
 
 	return rsm
@@ -2465,7 +2465,7 @@ func (tm *TLSManager) startTLSServer() error {
 	}
 
 	tm.tlsListener = tls.NewListener(listener, tm.tlsConfig)
-	LogInfo("DoT server started: %s", tm.tlsListener.Addr())
+	LogInfo("DOT: DoT server started: %s", tm.tlsListener.Addr())
 
 	tm.wg.Add(1)
 	go func() {
@@ -2512,7 +2512,7 @@ func (tm *TLSManager) startQUICServer() error {
 		return fmt.Errorf("DoQ listen: %w", err)
 	}
 
-	LogInfo("DoQ server started: %s", tm.quicListener.Addr())
+	LogInfo("DOQ: DoQ server started: %s", tm.quicListener.Addr())
 
 	tm.wg.Add(1)
 	go func() {
@@ -2535,7 +2535,7 @@ func (tm *TLSManager) startDoHServer(port string) error {
 	tlsConfig.NextProtos = NextProtoHTTP2
 
 	tm.httpsListener = tls.NewListener(listener, tlsConfig)
-	LogInfo("DoH server started: %s", tm.httpsListener.Addr())
+	LogInfo("DOH: DoH server started: %s", tm.httpsListener.Addr())
 
 	tm.httpsServer = &http.Server{
 		Handler:           tm,
@@ -2548,7 +2548,7 @@ func (tm *TLSManager) startDoHServer(port string) error {
 		defer tm.wg.Done()
 		defer handlePanic("DoH server")
 		if err := tm.httpsServer.Serve(tm.httpsListener); err != nil && err != http.ErrServerClosed {
-			LogError("DoH server error: %v", err)
+			LogError("DOH: DoH server error: %v", err)
 		}
 	}()
 
@@ -2575,7 +2575,7 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 	}
 
 	tm.h3Listener = quicListener
-	LogInfo("DoH3 server started: %s", tm.h3Listener.Addr())
+	LogInfo("DOH3: DoH3 server started: %s", tm.h3Listener.Addr())
 
 	tm.h3Server = &http3.Server{Handler: tm}
 
@@ -2584,7 +2584,7 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 		defer tm.wg.Done()
 		defer handlePanic("DoH3 server")
 		if err := tm.h3Server.ServeListener(tm.h3Listener); err != nil && err != http.ErrServerClosed {
-			LogError("DoH3 server error: %v", err)
+			LogError("DOH3: DoH3 server error: %v", err)
 		}
 	}()
 
@@ -2619,7 +2619,7 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	response := tm.server.processDNSQuery(req, nil, true)
 	if err := tm.respondDoH(w, response); err != nil {
-		LogError("DoH response failed: %v", err)
+		LogError("DOH: DoH response failed: %v", err)
 	}
 }
 
@@ -2699,7 +2699,7 @@ func (tm *TLSManager) handleTLSConnections() {
 			if tm.ctx.Err() != nil {
 				return
 			}
-			LogError("DoT accept failed: %v", err)
+			LogError("DOT: DoT accept failed: %v", err)
 			continue
 		}
 
@@ -2897,7 +2897,7 @@ func (tm *TLSManager) respondQUIC(stream *quic.Stream, response *dns.Msg) error 
 
 // shutdown shuts down TLS manager
 func (tm *TLSManager) shutdown() error {
-	LogInfo("Shutting down secure DNS server...")
+	LogInfo("TLS: Shutting down secure DNS server...")
 
 	tm.cancel()
 
@@ -2934,7 +2934,7 @@ func (tm *TLSManager) shutdown() error {
 	}
 
 	tm.wg.Wait()
-	LogInfo("Secure DNS server shut down")
+	LogInfo("TLS: Secure DNS server shut down")
 	return nil
 }
 
@@ -3016,10 +3016,10 @@ func (cm *ConnectionManager) Close() error {
 	if !atomic.CompareAndSwapInt32(&cm.closed, 0, 1) {
 		return nil
 	}
-	LogInfo("Shutting down connection manager...")
+	LogInfo("CONN: Shutting down connection manager...")
 	cm.cancel()
 	cm.wg.Wait()
-	LogInfo("Connection manager shut down")
+	LogInfo("CONN: Connection manager shut down")
 	return nil
 }
 
@@ -4124,7 +4124,7 @@ func (tm *TaskManager) Shutdown(timeout time.Duration) error {
 		return nil
 	}
 
-	LogInfo("Shutting down task manager...")
+	LogInfo("TASK: Shutting down task manager...")
 	tm.cancel()
 
 	done := make(chan struct{})
@@ -4135,9 +4135,9 @@ func (tm *TaskManager) Shutdown(timeout time.Duration) error {
 
 	select {
 	case <-done:
-		LogInfo("Task manager shut down")
+		LogInfo("TASK: Task manager shut down")
 	case <-time.After(timeout):
-		LogWarn("Task manager shutdown timeout")
+		LogWarn("TASK: Task manager shutdown timeout")
 		return fmt.Errorf("shutdown timeout")
 	}
 
@@ -4328,7 +4328,7 @@ func (s *DNSServer) setupSignalHandling() {
 		defer handlePanic("Signal handler")
 		select {
 		case sig := <-sigChan:
-			LogInfo("Received signal %v, starting graceful shutdown...", sig)
+			LogInfo("SIGNAL: Received signal %v, starting graceful shutdown...", sig)
 			s.shutdownServer()
 		case <-s.ctx.Done():
 			return
@@ -4342,7 +4342,7 @@ func (s *DNSServer) shutdownServer() {
 		return
 	}
 
-	LogInfo("Starting DNS server shutdown...")
+	LogInfo("SERVER: Starting DNS server shutdown...")
 
 	s.cleanupSpeedDebounce()
 
@@ -4356,7 +4356,7 @@ func (s *DNSServer) shutdownServer() {
 
 	if s.securityMgr != nil {
 		if err := s.securityMgr.Shutdown(ShutdownTimeout); err != nil {
-			LogError("Security manager shutdown failed: %v", err)
+			LogError("SECURITY: Security manager shutdown failed: %v", err)
 		}
 	}
 
@@ -4366,7 +4366,7 @@ func (s *DNSServer) shutdownServer() {
 
 	if s.taskMgr != nil {
 		if err := s.taskMgr.Shutdown(ShutdownTimeout); err != nil {
-			LogError("Task manager shutdown failed: %v", err)
+			LogError("TASK: Task manager shutdown failed: %v", err)
 		}
 	}
 
@@ -4382,9 +4382,9 @@ func (s *DNSServer) shutdownServer() {
 
 	select {
 	case <-done:
-		LogInfo("All components shut down")
+		LogInfo("SERVER: All components shut down")
 	case <-time.After(ShutdownTimeout):
-		LogWarn("Component shutdown timeout")
+		LogWarn("SERVER: Component shutdown timeout")
 	}
 
 	if s.shutdown != nil {
@@ -4422,8 +4422,8 @@ func (s *DNSServer) Start() error {
 
 	errChan := make(chan error, serverCount)
 
-	LogInfo("Starting ZJDNS Server %s", getVersion())
-	LogInfo("Listening port: %s", s.config.Server.Port)
+	LogInfo("SERVER: Starting ZJDNS Server %s", getVersion())
+	LogInfo("SERVER: Listening port: %s", s.config.Server.Port)
 
 	s.displayInfo()
 
@@ -4438,7 +4438,7 @@ func (s *DNSServer) Start() error {
 			Handler: dns.HandlerFunc(s.handleDNSRequest),
 			UDPSize: UDPBufferSize,
 		}
-		LogInfo("UDP server started: [::]:%s", s.config.Server.Port)
+		LogInfo("DNS: UDP server started: [::]:%s", s.config.Server.Port)
 		if err := server.ListenAndServe(); err != nil {
 			errChan <- fmt.Errorf("UDP startup: %w", err)
 		}
@@ -4452,7 +4452,7 @@ func (s *DNSServer) Start() error {
 			Net:     "tcp",
 			Handler: dns.HandlerFunc(s.handleDNSRequest),
 		}
-		LogInfo("TCP server started: [::]:%s", s.config.Server.Port)
+		LogInfo("DNS: TCP server started: [::]:%s", s.config.Server.Port)
 		if err := server.ListenAndServe(); err != nil {
 			errChan <- fmt.Errorf("TCP startup: %w", err)
 		}
@@ -4494,7 +4494,7 @@ func (s *DNSServer) displayInfo() {
 				if len(server.Match) > 0 {
 					info += fmt.Sprintf(" [CIDR match: %v]", server.Match)
 				}
-				LogInfo("%s", info)
+				LogInfo("UPSTREAM: %s", info)
 			} else {
 				protocol := strings.ToUpper(server.Protocol)
 				if protocol == "" {
@@ -4507,56 +4507,56 @@ func (s *DNSServer) displayInfo() {
 				if len(server.Match) > 0 {
 					serverInfo += fmt.Sprintf(" [CIDR match: %v]", server.Match)
 				}
-				LogInfo("Upstream server: %s", serverInfo)
+				LogInfo("UPSTREAM: Upstream server: %s", serverInfo)
 			}
 		}
-		LogInfo("Upstream mode: total %d servers", len(servers))
+		LogInfo("UPSTREAM: Upstream mode: total %d servers", len(servers))
 	} else {
 		if s.config.Redis.Address == "" {
-			LogInfo("Recursive mode (no cache)")
+			LogInfo("RECURSION: Recursive mode (no cache)")
 		} else {
-			LogInfo("Recursive mode + Redis cache: %s", s.config.Redis.Address)
+			LogInfo("RECURSION: Recursive mode + Redis cache: %s", s.config.Redis.Address)
 		}
 	}
 
 	if s.cidrMgr != nil && len(s.config.CIDR) > 0 {
-		LogInfo("CIDR Manager: enabled (%d rules)", len(s.config.CIDR))
+		LogInfo("CIDR: CIDR Manager: enabled (%d rules)", len(s.config.CIDR))
 	}
 
 	if s.securityMgr.tls != nil {
-		LogInfo("Listening secure DNS port: %s (DoT/DoQ)", s.config.Server.TLS.Port)
+		LogInfo("TLS: Listening secure DNS port: %s (DoT/DoQ)", s.config.Server.TLS.Port)
 		httpsPort := s.config.Server.TLS.HTTPS.Port
 		if httpsPort != "" {
 			endpoint := s.config.Server.TLS.HTTPS.Endpoint
 			if endpoint == "" {
 				endpoint = strings.TrimPrefix(DefaultQueryPath, "/")
 			}
-			LogInfo("Listening secure DNS port: %s (DoH/DoH3, endpoint: %s)", httpsPort, endpoint)
+			LogInfo("TLS: Listening secure DNS port: %s (DoH/DoH3, endpoint: %s)", httpsPort, endpoint)
 		}
 	}
 
 	if s.rewriteMgr.hasRules() {
-		LogInfo("DNS rewriter: enabled (%d rules)", len(s.config.Rewrite))
+		LogInfo("REWRITE: DNS rewriter: enabled (%d rules)", len(s.config.Rewrite))
 	}
 	if s.config.Server.Features.HijackProtection {
-		LogInfo("DNS hijacking prevention: enabled")
+		LogInfo("HIJACK: DNS hijacking prevention: enabled")
 	}
 	if defaultECS := s.ednsMgr.GetDefaultECS(); defaultECS != nil {
-		LogInfo("Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
+		LogInfo("EDNS: Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
 	if s.ednsMgr.paddingEnabled {
-		LogInfo("DNS Padding: enabled")
+		LogInfo("PADDING: DNS Padding: enabled")
 	}
 
 	if len(s.config.SpeedTest) > 0 {
-		LogInfo("SpeedTest: enabled")
+		LogInfo("SPEEDTEST: SpeedTest: enabled")
 	}
 
 	if s.rootServerMgr.needsSpeed {
-		LogInfo("Root server speed testing: enabled")
+		LogInfo("SPEEDTEST: Root server speed testing: enabled")
 	}
 
-	LogInfo("Max concurrency: %d", MaxConcurrency)
+	LogInfo("SERVER: Max concurrency: %d", MaxConcurrency)
 }
 
 // handleDNSRequest handles DNS request
@@ -4957,7 +4957,7 @@ func handlePanic(operation string) {
 		buf := make([]byte, 2048)
 		n := runtime.Stack(buf, false)
 		stackTrace := string(buf[:n])
-		LogError("Panic [%s]: %v\nStack:\n%s\nExiting due to panic", operation, r, stackTrace)
+		LogError("PANIC: Panic [%s]: %v\nStack:\n%s\nExiting due to panic", operation, r, stackTrace)
 		os.Exit(1)
 	}
 }
@@ -4996,7 +4996,7 @@ func closeWithLog(c Closeable, name string) {
 		return
 	}
 	if err := c.Close(); err != nil {
-		LogWarn("Close %s failed: %v", name, err)
+		LogWarn("SERVER: Close %s failed: %v", name, err)
 	}
 }
 
@@ -5295,7 +5295,7 @@ func main() {
 		log.Fatalf("Server creation failed: %v", err)
 	}
 
-	LogInfo("ZJDNS Server started successfully!")
+	LogInfo("SERVER: ZJDNS Server started successfully!")
 
 	if err := server.Start(); err != nil {
 		log.Fatalf("Server startup failed: %v", err)
