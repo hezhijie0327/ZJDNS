@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -2427,6 +2428,20 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 		Certificate: [][]byte{certDER},
 		PrivateKey:  privKey,
 	}
+
+	// Output complete certificate in PEM format for debugging
+	privKeyBytes, err := x509.MarshalPKCS8PrivateKey(privKey)
+	if err != nil {
+		LogWarn("TLS: Failed to marshal private key: %v", err)
+		return cert, nil
+	}
+
+	certDebug := fmt.Sprintf("TLS: Certificate Bundle:\n%s\n%s\n%s",
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCertDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privKeyBytes}))
+
+	LogDebug("%s", certDebug)
 
 	return cert, nil
 }
