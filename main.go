@@ -5,7 +5,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -14,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -129,6 +135,9 @@ const (
 
 	// Root Server
 	RootServerSortInterval = 900 * time.Second
+
+	// TLS Certificate
+	CertValidityDuration = 90 * 24 * time.Hour
 
 	// Defaults
 	DefaultLogLevel = "info"
@@ -275,10 +284,11 @@ type DDRSettings struct {
 }
 
 type TLSSettings struct {
-	Port     string        `json:"port"`
-	CertFile string        `json:"cert_file"`
-	KeyFile  string        `json:"key_file"`
-	HTTPS    HTTPSSettings `json:"https"`
+	Port       string        `json:"port"`
+	CertFile   string        `json:"cert_file"`
+	KeyFile    string        `json:"key_file"`
+	SelfSigned bool          `json:"self_signed"`
+	HTTPS      HTTPSSettings `json:"https"`
 }
 
 type HTTPSSettings struct {
@@ -476,7 +486,11 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	}
 
 	// Validate TLS
-	if config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "" {
+	if config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {
+		LogWarn("TLS: Self-signed certificate enabled, ignoring cert and key files")
+	}
+
+	if !config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {
 		if config.Server.TLS.CertFile == "" || config.Server.TLS.KeyFile == "" {
 			return errors.New("cert and key files must be configured together")
 		}
@@ -489,7 +503,6 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		if _, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile); err != nil {
 			return fmt.Errorf("load certificate: %w", err)
 		}
-		LogInfo("TLS: Certificate verified [Cert: %s, Key: %s]", config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
 	}
 
 	return nil
@@ -2197,7 +2210,7 @@ func NewSecurityManager(config *ServerConfig, server *DNSServer) (*SecurityManag
 		hijack: &HijackPrevention{enabled: config.Server.Features.HijackProtection},
 	}
 
-	if config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "" {
+	if config.Server.TLS.SelfSigned || (config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "") {
 		tlsMgr, err := NewTLSManager(server, config)
 		if err != nil {
 			return nil, fmt.Errorf("create TLS manager: %w", err)
@@ -2351,6 +2364,73 @@ func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) b
 // TLS Management
 // =============================================================================
 
+// generateSelfSignedCert creates a self-signed certificate using ECDSA with P-384 curve for testing
+func generateSelfSignedCert(domain string) (tls.Certificate, error) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate EC key: %w", err)
+	}
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate serial number: %w", err)
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName: domain,
+		},
+		DNSNames:    []string{domain},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().Add(CertValidityDuration), // 1 year
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create certificate: %w", err)
+	}
+
+	cert := tls.Certificate{
+		Certificate: [][]byte{certDER},
+		PrivateKey:  privKey,
+	}
+
+	return cert, nil
+}
+
+// displayCertificateInfo displays certificate information
+func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
+	if len(cert.Certificate) == 0 {
+		LogError("TLS: No certificate found")
+		return
+	}
+
+	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		LogError("TLS: Failed to parse certificate: %v", err)
+		return
+	}
+
+	LogInfo("TLS: Certificate: Subject: %s | Issuer: %s | Valid: %s -> %s | Algorithm: %s",
+		x509Cert.Subject.CommonName,
+		x509Cert.Issuer.String(),
+		x509Cert.NotBefore.Format("2006-01-02"),
+		x509Cert.NotAfter.Format("2006-01-02"),
+		x509Cert.SignatureAlgorithm.String())
+
+	// Expiry warning
+	daysUntilExpiry := int(time.Until(x509Cert.NotAfter).Hours() / 24)
+	if daysUntilExpiry < 0 {
+		LogError("TLS: Certificate has EXPIRED for %d days!", -daysUntilExpiry)
+	} else if daysUntilExpiry <= 30 {
+		LogWarn("TLS: Certificate expires in %d days!", daysUntilExpiry)
+	}
+}
+
 // TLSManager manages TLS/QUIC/DoH servers
 type TLSManager struct {
 	server            *DNSServer
@@ -2371,9 +2451,21 @@ type TLSManager struct {
 
 // NewTLSManager creates a new TLS manager
 func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error) {
-	cert, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load certificate: %w", err)
+	var cert tls.Certificate
+	var err error
+
+	if config.Server.TLS.SelfSigned {
+		cert, err = generateSelfSignedCert(config.Server.DDR.Domain)
+		if err != nil {
+			return nil, fmt.Errorf("generate self-signed certificate: %w", err)
+		}
+		LogInfo("TLS: Using self-signed certificate for domain: %s", config.Server.DDR.Domain)
+	} else {
+		cert, err = tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load certificate: %w", err)
+		}
+		LogInfo("TLS: Using certificate from files: %s, %s", config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
 	}
 
 	tlsConfig := &tls.Config{
@@ -2389,13 +2481,18 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 		return nil, fmt.Errorf("create QUIC validator: %w", err)
 	}
 
-	return &TLSManager{
+	tm := &TLSManager{
 		server:            server,
 		tlsConfig:         tlsConfig,
 		ctx:               ctx,
 		cancel:            cancel,
 		quicAddrValidator: quicAddrValidator,
-	}, nil
+	}
+
+	// Display certificate information
+	tm.displayCertificateInfo(cert)
+
+	return tm, nil
 }
 
 // Start starts all secure DNS servers
