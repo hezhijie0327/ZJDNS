@@ -136,6 +136,9 @@ const (
 	// Root Server
 	RootServerSortInterval = 900 * time.Second
 
+	// TLS Certificate
+	CertValidityDuration = 90 * 24 * time.Hour
+
 	// Defaults
 	DefaultLogLevel = "info"
 
@@ -483,6 +486,10 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	}
 
 	// Validate TLS
+	if config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {
+		LogWarn("TLS: Self-signed certificate enabled, ignoring cert and key files")
+	}
+
 	if !config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {
 		if config.Server.TLS.CertFile == "" || config.Server.TLS.KeyFile == "" {
 			return errors.New("cert and key files must be configured together")
@@ -2357,7 +2364,7 @@ func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) b
 // TLS Management
 // =============================================================================
 
-// generateSelfSignedCert creates a self-signed certificate using EC-384 for testing
+// generateSelfSignedCert creates a self-signed certificate using ECDSA with P-384 curve for testing
 func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
@@ -2377,7 +2384,7 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 		},
 		DNSNames:    []string{domain},
 		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(365 * 24 * time.Hour), // 1 year
+		NotAfter:    time.Now().Add(CertValidityDuration), // 1 year
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -2408,23 +2415,9 @@ func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 		return
 	}
 
-	// Build complete issuer information
-	issuerInfo := x509Cert.Issuer.CommonName
-	if issuerInfo == "" && len(x509Cert.Issuer.Organization) > 0 {
-		issuerInfo = x509Cert.Issuer.Organization[0]
-	}
-	if issuerInfo == "" {
-		issuerInfo = x509Cert.Issuer.String()
-	}
-
-	// Add organization details if available
-	if len(x509Cert.Issuer.Organization) > 0 && x509Cert.Issuer.CommonName != "" {
-		issuerInfo = fmt.Sprintf("%s (%s)", x509Cert.Issuer.CommonName, x509Cert.Issuer.Organization[0])
-	}
-
 	LogInfo("TLS: Certificate: Subject: %s | Issuer: %s | Valid: %s -> %s | Algorithm: %s",
 		x509Cert.Subject.CommonName,
-		issuerInfo,
+		x509Cert.Issuer.String(),
 		x509Cert.NotBefore.Format("2006-01-02"),
 		x509Cert.NotAfter.Format("2006-01-02"),
 		x509Cert.SignatureAlgorithm.String())
