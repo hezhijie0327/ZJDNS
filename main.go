@@ -496,7 +496,6 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		if _, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile); err != nil {
 			return fmt.Errorf("load certificate: %w", err)
 		}
-		LogInfo("TLS: Certificate verified [Cert: %s, Key: %s]", config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
 	}
 
 	return nil
@@ -2430,6 +2429,7 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 		if err != nil {
 			return nil, fmt.Errorf("load certificate: %w", err)
 		}
+		LogInfo("TLS: Using certificate from files: %s, %s", config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
 	}
 
 	tlsConfig := &tls.Config{
