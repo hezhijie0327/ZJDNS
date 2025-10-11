@@ -2377,19 +2377,48 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 		return tls.Certificate{}, fmt.Errorf("generate serial number: %w", err)
 	}
 
-	template := x509.Certificate{
+	// Create CA certificate
+	caTemplate := x509.Certificate{
 		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   "ZJDNS ECC Domain Secure Site CA",
+			Organization: []string{"ZJDNS"},
+			Country:      []string{"CN"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(CertValidityDuration),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	// Create server certificate template
+	serverTemplate := x509.Certificate{
+		SerialNumber: big.NewInt(1), // Different serial number for server cert
 		Subject: pkix.Name{
 			CommonName: domain,
 		},
 		DNSNames:    []string{domain},
 		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(CertValidityDuration), // 1 year
+		NotAfter:    time.Now().Add(CertValidityDuration),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	// Create CA certificate first
+	caCertDER, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &privKey.PublicKey, privKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create CA certificate: %w", err)
+	}
+
+	// Parse CA certificate
+	caCert, err := x509.ParseCertificate(caCertDER)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("parse CA certificate: %w", err)
+	}
+
+	// Create server certificate signed by CA
+	certDER, err := x509.CreateCertificate(rand.Reader, &serverTemplate, caCert, &privKey.PublicKey, privKey)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("create certificate: %w", err)
 	}
