@@ -2443,27 +2443,33 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 	}
 
 	// Output complete certificate bundle in PEM format for debugging
-	caPrivKeyBytes, err := x509.MarshalPKCS8PrivateKey(caPrivKey)
+	caPrivKeyBytes, err := x509.MarshalECPrivateKey(caPrivKey)
 	if err != nil {
 		LogWarn("TLS: Failed to marshal CA private key: %v", err)
 		return cert, nil
 	}
 
-	serverPrivKeyBytes, err := x509.MarshalPKCS8PrivateKey(serverPrivKey)
+	serverPrivKeyBytes, err := x509.MarshalECPrivateKey(serverPrivKey)
 	if err != nil {
 		LogWarn("TLS: Failed to marshal server private key: %v", err)
 		return cert, nil
 	}
 
-	caDetail := fmt.Sprintf("TLS: CA Bundle:\n%s\n%s",
-		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCertDER}),
-		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caPrivKeyBytes}))
-	LogWarn("%s", caDetail)
-
-	certDetail := fmt.Sprintf("TLS: Certificate Bundle:\n%s\n%s",
+	// Output fullchain.pem format (server cert + CA cert)
+	fullchain := fmt.Sprintf("TLS: Certificate Full Chain:\n%s\n%s",
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
-		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: serverPrivKeyBytes}))
-	LogWarn("%s", certDetail)
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCertDER}))
+	LogWarn("%s", fullchain)
+
+	// Output privkey.pem format (server private key only)
+	privkey := fmt.Sprintf("TLS: Certificate Private Key:\n%s",
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: serverPrivKeyBytes}))
+	LogWarn("%s", privkey)
+
+	// Output CA private key for backup (optional)
+	caPrivkey := fmt.Sprintf("TLS: CA Private key:\n%s",
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: caPrivKeyBytes}))
+	LogDebug("%s", caPrivkey)
 
 	return cert, nil
 }
