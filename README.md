@@ -1,118 +1,118 @@
 # ZJDNS Server
 
-🚀 高性能递归 DNS 解析服务器，基于 Go 语言开发，支持 Redis 缓存、DNSSEC 验证、ECS、DoT/DoQ/DoH 等高级功能。
+🚀 High-performance recursive DNS resolution server written in Go, supporting Redis caching, DNSSEC validation, ECS, DoT/DoQ/DoH and other advanced features.
 
-> ⚠️ **警告**
-> 本项目为 Vibe Coding 产物，代码结构复杂且未经充分生产环境验证，请勿用于生产环境。
+> ⚠️ **Warning**
+> This project is a Vibe Coding product with complex code structure and hasn't been thoroughly verified in production environments. Please do not use it in production.
 
 ---
 
-## ✨ 功能特点
+## ✨ Features
 
-### 🔧 核心功能
+### 🔧 Core Features
 
-- **递归 DNS 解析**：完整实现 DNS 递归查询算法，从根服务器开始逐级解析
-- **智能根服务器管理**：自动管理 13 个 IPv4 和 13 个 IPv6 根服务器，基于实时网络延迟测试进行动态排序，优先选择最优服务器进行查询
-- **智能协议协商**：同时支持 UDP 和 TCP 协议，**当 UDP 响应被截断或超过缓冲区大小时，自动回退到 TCP 协议**，确保大响应数据的完整传输
-- **CNAME 链解析**：智能处理 CNAME 记录链，防止循环引用，支持多级 CNAME 解析
-- **并发查询**：高性能并发处理，支持连接池管理
-- **DNS 重写功能**：支持精确匹配的域名重写规则，可实现域名过滤和重定向；支持自定义响应码（如 NXDOMAIN、SERVFAIL 等）和 DNS 记录（如 A、AAAA、CNAME 等）的返回
-- **混合模式**：可同时配置上游 DNS 服务器和递归解析器，实现灵活的查询策略
-- **网络质量感知排序**：对解析结果进行网络延迟测试并按质量排序，优先返回网络质量最佳的结果
+- **Recursive DNS Resolution**: Complete implementation of DNS recursive query algorithm, resolving step by step from root servers
+- **Smart Root Server Management**: Automatically manages 13 IPv4 and 13 IPv6 root servers, dynamically sorts based on real-time network latency testing, prioritizing optimal servers for queries
+- **Intelligent Protocol Negotiation**: Supports both UDP and TCP protocols, **automatically falls back to TCP protocol when UDP responses are truncated or exceed buffer size**, ensuring complete transmission of large response data
+- **CNAME Chain Resolution**: Intelligently handles CNAME record chains, prevents circular references, supports multi-level CNAME resolution
+- **Concurrent Queries**: High-performance concurrent processing with connection pool management
+- **DNS Rewrite Functionality**: Supports exact match domain rewrite rules, enabling domain filtering and redirection; supports custom response codes (such as NXDOMAIN, SERVFAIL, etc.) and DNS records (such as A, AAAA, CNAME, etc.) return
+- **Hybrid Mode**: Can configure both upstream DNS servers and recursive resolvers simultaneously, enabling flexible query strategies
+- **Network Quality-Aware Sorting**: Performs network latency testing on resolution results and sorts by quality, prioritizing results with the best network quality
 
-### 🛡️ 安全与防御特性
+### 🛡️ Security and Defense Features
 
-- **CIDR 过滤**：基于 CIDR 规则的智能 IP 地址过滤功能，支持精确的结果控制。
-  - **文件配置**：通过外部文件定义 CIDR 规则，支持动态加载和管理。
-  - **标签匹配**：使用标签系统关联上游服务器与过滤规则，实现灵活的策略配置。
-  - **记录过滤**：智能过滤 A 和 AAAA 记录，仅允许符合 CIDR 规则的 IP 结果通过。
-  - **拒绝策略**：当任何记录被过滤时，返回 REFUSED 响应，确保严格的访问控制。
-- **DNS 劫持预防**：主动检测并智能应对来自根服务器的越权响应。
-  - **第一步**：当检测到根服务器直接返回非根域名的最终记录时，判定为 DNS 劫持。
-  - **第二步**：**自动切换到 TCP 协议进行重试**，以绕过常见的 UDP 污染。
-  - **第三步**：如果 TCP 查询结果**依然**被劫持，则彻底拒绝该响应，从源头上防止污染。
-- **DNSSEC 验证**：完整的 DNSSEC 支持和验证，可设置服务器强制验证，支持 AD 标志传递
-- **ECS 支持**：EDNS Client Subnet，提供地理位置感知的解析，支持 `auto`、`auto_v4`、`auto_v6` 自动检测或手动 CIDR 配置
-- **递归深度保护**：防止恶意递归查询攻击，可配置最大递归深度
+- **CIDR Filtering**: Intelligent IP address filtering based on CIDR rules, supporting precise result control.
+  - **File Configuration**: Define CIDR rules through external files, supporting dynamic loading and management.
+  - **Label Matching**: Use label system to associate upstream servers with filtering rules, enabling flexible policy configuration.
+  - **Record Filtering**: Intelligently filter A and AAAA records, only allowing IP results that comply with CIDR rules to pass through.
+  - **Rejection Policy**: When any record is filtered, returns REFUSED response, ensuring strict access control.
+- **DNS Hijacking Prevention**: Proactively detects and intelligently responds to overreaching responses from root servers.
+  - **Step 1**: When detecting that root servers directly return final records for non-root domains, it's determined as DNS hijacking.
+  - **Step 2**: **Automatically switches to TCP protocol for retry** to bypass common UDP pollution.
+  - **Step 3**: If TCP query results are **still** hijacked, completely reject the response, preventing pollution from the source.
+- **DNSSEC Validation**: Complete DNSSEC support and validation, can set server mandatory validation, supports AD flag propagation
+- **ECS Support**: EDNS Client Subnet, providing geolocation-aware resolution, supports `auto`, `auto_v4`, `auto_v6` auto-detection or manual CIDR configuration
+- **Recursion Depth Protection**: Prevents malicious recursive query attacks, configurable maximum recursion depth
 
-### 🔐 安全传输协议
+### 🔐 Secure Transport Protocols
 
-- **DNS over TLS (DoT)**：支持标准的 DNS over TLS 协议 (RFC 7818)，在端口 `853` 上提供加密的 DNS 查询，防止中间人窃听和篡改。
-- **DNS over QUIC (DoQ)**：支持前沿的 DNS over QUIC 协议，利用 QUIC 协议的 0-RTT、多路复用和连接迁移等特性，提供更低延迟和更高可靠性的加密 DNS 服务。
-- **DNS over HTTPS (DoH/DoH3)**：同时支持 HTTP/2 和 HTTP/3 的 DoH 服务，在端口 `443` 上提供基于 HTTPS 的 DNS 查询。
-- **统一证书管理**：DoT、DoQ 和 DoH 共享同一套 TLS 证书配置，简化部署。
-- **自签名 CA 支持**：内置自签名 CA 功能，可为域名动态签发 TLS 证书，简化开发环境配置。
-- **调试证书自动生成**：在开发或调试模式下，自动生成自签名 TLS 证书，无需外部证书文件。
-- **增强 TLS 日志**：提供详细的 TLS 握手和证书验证日志，便于问题诊断和安全监控。
+- **DNS over TLS (DoT)**: Supports standard DNS over TLS protocol (RFC 7818), providing encrypted DNS queries on port `853`, preventing eavesdropping and tampering.
+- **DNS over QUIC (DoQ)**: Supports cutting-edge DNS over QUIC protocol, leveraging QUIC protocol's 0-RTT, multiplexing, and connection migration features to provide lower latency and higher reliability encrypted DNS services.
+- **DNS over HTTPS (DoH/DoH3)**: Simultaneously supports HTTP/2 and HTTP/3 DoH services, providing HTTPS-based DNS queries on port `443`.
+- **Unified Certificate Management**: DoT, DoQ, and DoH share the same TLS certificate configuration, simplifying deployment.
+- **Self-signed CA Support**: Built-in self-signed CA functionality, can dynamically sign TLS certificates for domains, simplifying development environment configuration.
+- **Debug Certificate Auto-generation**: Automatically generates self-signed TLS certificates in development or debug mode, no external certificate files required.
+- **Enhanced TLS Logging**: Provides detailed TLS handshake and certificate validation logs, facilitating problem diagnosis and security monitoring.
 
-### 🔧 TLS 证书管理
+### 🔧 TLS Certificate Management
 
-- **自签名根 CA**：内置自签名根证书颁发机构，支持为任意域名签发 TLS 证书。
-- **动态证书签发**：可根据配置的域名动态生成有效的 TLS 证书，无需外部证书文件。
-- **开发调试支持**：在开发环境中自动生成临时证书，简化配置流程。
-- **EC 密钥支持**：支持 ECDSA 私钥的生成、序列化和加载，提供更现代的加密算法。
-- **证书验证日志**：详细的 TLS 证书验证过程日志，包括证书链验证、有效期检查等。
+- **Self-signed Root CA**: Built-in self-signed root certificate authority, supports signing TLS certificates for any domain.
+- **Dynamic Certificate Issuance**: Can dynamically generate valid TLS certificates based on configured domains, no external certificate files required.
+- **Development Debug Support**: Automatically generates temporary certificates in development environments, simplifying the configuration process.
+- **EC Key Support**: Supports generation, serialization, and loading of ECDSA private keys, providing more modern encryption algorithms.
+- **Certificate Validation Logs**: Detailed TLS certificate validation process logs, including certificate chain validation, validity period checks, etc.
 
 ### 📦 DNS Padding
 
-- **RFC 7830 标准支持**：实现 DNS Padding 功能，通过在 EDNS0 中添加填充字节，使 DNS 响应数据包大小标准化，有效对抗基于流量大小的指纹识别和审查。
-- **智能块大小填充**：填充至推荐的 468 字节，平衡隐私保护和带宽效率。
-- **按需启用**：可通过配置文件灵活开启或关闭此功能，**仅对安全连接（DoT/DoQ/DoH）生效**。
+- **RFC 7830 Standard Support**: Implements DNS Padding functionality, standardizing DNS response packet sizes by adding padding bytes in EDNS0, effectively combating fingerprinting and censorship based on traffic size.
+- **Smart Block Size Padding**: Pads to recommended 468 bytes, balancing privacy protection and bandwidth efficiency.
+- **On-demand Enablement**: Can be flexibly enabled or disabled through configuration file, **only effective for secure connections (DoT/DoQ/DoH)**.
 
-### 📍 DDR (Discovery of Designated Resolvers) 功能
+### 📍 DDR (Discovery of Designated Resolvers) Functionality
 
-- **自动发现支持**：支持 RFC [9461](https://www.rfc-editor.org/rfc/rfc9461.html)/[9462](https://www.rfc-editor.org/rfc/rfc9462.html) DNS SVCB 记录，用于自动发现安全 DNS 服务器
-- **SVCB 记录生成**：自动生成 DoT、DoH、DoQ 的 SVCB 记录，支持 IPv4 和 IPv6 提示
-- **灵活配置**：通过配置文件指定 DDR 域名和对应的 IP 地址，支持 IPv4 和 IPv6 双栈配置
-- **智能响应**：当收到 `_dns.resolver.arpa`、`_dns.dns.example.org`、`_non_53_port._dns.dns.example.org` 的 SVCB 查询时，自动返回配置的加密 DNS 服务信息
+- **Auto-discovery Support**: Supports RFC [9461](https://www.rfc-editor.org/rfc/rfc9461.html)/[9462](https://www.rfc-editor.org/rfc/rfc9462.html) DNS SVCB records for automatic discovery of secure DNS servers
+- **SVCB Record Generation**: Automatically generates SVCB records for DoT, DoH, DoQ, supporting IPv4 and IPv6 hints
+- **Flexible Configuration**: Specify DDR domain names and corresponding IP addresses through configuration file, supporting IPv4 and IPv6 dual-stack configuration
+- **Intelligent Response**: When receiving SVCB queries for `_dns.resolver.arpa`, `_dns.dns.example.org`, `_non_53_port._dns.dns.example.org`, automatically returns configured encrypted DNS service information
 
-### 🚀 网络质量测试 (SpeedTest)
+### 🚀 Network Quality Testing (SpeedTest)
 
-- **多协议支持**：支持 ICMP、TCP 和 UDP 等多种协议进行网络质量测试
-- **灵活配置**：可配置不同的测试端口和超时时间，适应不同网络环境
-- **智能排序**：根据测试结果对 DNS 解析结果进行延迟排序，优先返回网络质量最佳的结果
-- **缓存机制**：内置测试结果缓存，避免重复测试，提高响应速度
-- **并发处理**：支持并发测试多个 IP 地址，提高测试效率
+- **Multi-protocol Support**: Supports various protocols including ICMP, TCP, and UDP for network quality testing
+- **Flexible Configuration**: Configurable different test ports and timeout values, adapting to different network environments
+- **Intelligent Sorting**: Sorts DNS resolution results by latency based on test results, prioritizing results with the best network quality
+- **Caching Mechanism**: Built-in test result caching, avoiding duplicate tests and improving response speed
+- **Concurrent Processing**: Supports concurrent testing of multiple IP addresses, improving test efficiency
 
-### 💾 缓存系统
+### 💾 Cache System
 
-- **双模式运行**：
-  - **无缓存模式**：适合测试环境，零配置启动，纯递归解析
-  - **Redis 缓存模式**：生产环境推荐，支持分布式部署，数据持久化
-- **智能 TTL 管理**：灵活的 TTL 策略，支持最小/最大 TTL 限制
-- **过期缓存服务 (Serve Stale)**：在上游服务器不可用时，提供过期缓存服务，极大提高系统可用性
-- **预取机制**：后台自动刷新即将过期的缓存，减少用户等待时间
-- **ECS 感知缓存**：基于客户端地理位置（EDNS Client Subnet）的缓存分区，提供精准的本地化解析
-- **访问节流**：对缓存的访问时间更新操作进行节流，减轻 Redis 压力
+- **Dual Mode Operation**:
+  - **No Cache Mode**: Suitable for testing environments, zero-configuration startup, pure recursive resolution
+  - **Redis Cache Mode**: Recommended for production environments, supports distributed deployment, data persistence
+- **Intelligent TTL Management**: Flexible TTL strategies, supports minimum/maximum TTL limits
+- **Stale Cache Serving**: Provides stale cache service when upstream servers are unavailable, greatly improving system availability
+- **Prefetch Mechanism**: Background automatic refresh of soon-to-expire cache, reducing user waiting time
+- **ECS-aware Caching**: Cache partitioning based on client geographic location (EDNS Client Subnet), providing precise localized resolution
+- **Access Throttling**: Throttles cache access time update operations, reducing Redis pressure
 
-### 🕵️ 请求追踪系统
+### 🕵️ Request Tracking System
 
-- **全链路追踪**：为每个 DNS 请求生成唯一 ID，详细记录处理过程中的每一步操作和耗时。
-- **智能日志**：在 `DEBUG` 级别下，输出带时间戳的请求处理步骤，极大简化调试和性能分析。
-- **摘要报告**：在 `INFO` 级别下，输出请求处理摘要，包括缓存命中状态、总耗时、使用的上游服务器等关键信息。
+- **Full-chain Tracing**: Generates unique ID for each DNS request, detailed recording of each step and time consumption during processing.
+- **Intelligent Logging**: At `DEBUG` level, outputs timestamped request processing steps, greatly simplifying debugging and performance analysis.
+- **Summary Report**: At `INFO` level, outputs request processing summary, including cache hit status, total time, upstream servers used, and other key information.
 
 ---
 
-## 🏗️ 系统架构
+## 🏗️ System Architecture
 
-ZJDNS 采用模块化、分层设计，核心组件职责清晰、松耦合，支持高并发与多种安全协议。整体架构如下：
+ZJDNS adopts modular, layered design with clear responsibilities and loose coupling of core components, supporting high concurrency and multiple security protocols. Overall architecture is as follows:
 
 ```mermaid
 graph TB
-    subgraph "客户端层"
-        A[DNS Client<br><i>客户端设备</i>]
+    subgraph "Client Layer"
+        A[DNS Client<br><i>Client Device</i>]
     end
 
-    subgraph "核心服务层"
-        B[DNSServer<br><i>服务器核心</i>]
-        C[ConfigManager<br><i>配置管理</i>]
-        D[ConnectionManager<br><i>连接管理</i>]
-        E[CacheManager<br><i>缓存管理器</i>]
-        F[QueryManager<br><i>查询管理器</i>]
-        G[UpstreamHandler<br><i>上游处理器</i>]
+    subgraph "Core Service Layer"
+        B[DNSServer<br><i>Server Core</i>]
+        C[ConfigManager<br><i>Config Management</i>]
+        D[ConnectionManager<br><i>Connection Management</i>]
+        E[CacheManager<br><i>Cache Manager</i>]
+        F[QueryManager<br><i>Query Manager</i>]
+        G[UpstreamHandler<br><i>Upstream Handler</i>]
     end
 
-    subgraph "协议处理层"
+    subgraph "Protocol Processing Layer"
         H[UDPServer<br><i>UDP:53</i>]
         I[TCPServer<br><i>TCP:53</i>]
         J[DoTHandler<br><i>DoT:853</i>]
@@ -120,53 +120,53 @@ graph TB
         L[DoHHandler<br><i>DoH:443</i>]
     end
 
-    subgraph "DNS处理引擎"
-        M[RecursiveResolver<br><i>递归解析器</i>]
-        N[CNAMEHandler<br><i>CNAME处理器</i>]
-        O[ResponseValidator<br><i>响应验证器</i>]
-        P[QueryClient<br><i>查询客户端</i>]
+    subgraph "DNS Processing Engine"
+        M[RecursiveResolver<br><i>Recursive Resolver</i>]
+        N[CNAMEHandler<br><i>CNAME Handler</i>]
+        O[ResponseValidator<br><i>Response Validator</i>]
+        P[QueryClient<br><i>Query Client</i>]
     end
 
-    subgraph "安全与增强层"
-        Q[SecurityManager<br><i>安全管理器</i>]
-        R[EDNSManager<br><i>EDNS管理器</i>]
-        S[DNSSECValidator<br><i>DNSSEC验证</i>]
-        T[HijackPrevention<br><i>劫持防护</i>]
-        U[CIDRManager<br><i>CIDR过滤</i>]
-        V[RewriteManager<br><i>DNS重写</i>]
-        W[SpeedTestManager<br><i>网络测试</i>]
+    subgraph "Security & Enhancement Layer"
+        Q[SecurityManager<br><i>Security Manager</i>]
+        R[EDNSManager<br><i>EDNS Manager</i>]
+        S[DNSSECValidator<br><i>DNSSEC Validator</i>]
+        T[HijackPrevention<br><i>Hijack Prevention</i>]
+        U[CIDRManager<br><i>CIDR Filtering</i>]
+        V[RewriteManager<br><i>DNS Rewrite</i>]
+        W[SpeedTestManager<br><i>Network Testing</i>]
     end
 
-    subgraph "缓存系统"
-        X[RedisCache<br><i>Redis缓存</i>]
-        Y[NullCache<br><i>无缓存模式</i>]
-        Z[预取机制<br><i>Cache Prefetch</i>]
-        AA[ServeStale<br><i>过期缓存服务</i>]
+    subgraph "Cache System"
+        X[RedisCache<br><i>Redis Cache</i>]
+        Y[NullCache<br><i>No Cache Mode</i>]
+        Z[Prefetch Mechanism<br><i>Cache Prefetch</i>]
+        AA[ServeStale<br><i>Stale Cache Service</i>]
     end
 
-    subgraph "基础设施层"
-        BB[RequestTracker<br><i>请求追踪</i>]
-        CC[TaskManager<br><i>任务管理</i>]
-        DD[TLSManager<br><i>TLS证书管理</i>]
-        EE[RootServerManager<br><i>根服务器管理</i>]
-        FF[IPDetector<br><i>IP检测器</i>]
-        GG[LogManager<br><i>日志管理</i>]
+    subgraph "Infrastructure Layer"
+        BB[RequestTracker<br><i>Request Tracking</i>]
+        CC[TaskManager<br><i>Task Management</i>]
+        DD[TLSManager<br><i>TLS Certificate Management</i>]
+        EE[RootServerManager<br><i>Root Server Management</i>]
+        FF[IPDetector<br><i>IP Detector</i>]
+        GG[LogManager<br><i>Log Management</i>]
     end
 
-    subgraph "外部服务"
-        HH[Root Servers<br><i>根服务器</i>]
-        II[Upstream DNS<br><i>上游DNS</i>]
-        JJ[Redis Cluster<br><i>Redis集群</i>]
-        KK[Self-signed CA<br><i>自签名CA</i>]
-        LL[TLS Certificates<br><i>TLS证书</i>]
+    subgraph "External Services"
+        HH[Root Servers<br><i>Root Servers</i>]
+        II[Upstream DNS<br><i>Upstream DNS</i>]
+        JJ[Redis Cluster<br><i>Redis Cluster</i>]
+        KK[Self-signed CA<br><i>Self-signed CA</i>]
+        LL[TLS Certificates<br><i>TLS Certificates</i>]
     end
 
-    %% 主要连接关系
-    A -->|DNS查询| H
-    A -->|DNS查询| I
-    A -->|安全查询| J
-    A -->|安全查询| K
-    A -->|安全查询| L
+    %% Main connections
+    A -->|DNS Query| H
+    A -->|DNS Query| I
+    A -->|Secure Query| J
+    A -->|Secure Query| K
+    A -->|Secure Query| L
 
     H --> B
     I --> B
@@ -199,7 +199,7 @@ graph TB
     B --> FF
     B --> GG
 
-    %% 外部连接
+    %% External connections
     EE --> HH
     G --> II
     X --> JJ
@@ -209,7 +209,7 @@ graph TB
     K --> LL
     L --> LL
 
-    %% 样式定义
+    %% Style definitions
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
     classDef core fill:#2ecc71,stroke:#27ae60,color:#fff,font-weight:bold
     classDef protocol fill:#e67e22,stroke:#d35400,color:#fff
@@ -231,59 +231,59 @@ graph TB
 
 ---
 
-## 📋 使用示例
+## 📋 Usage Examples
 
-### 生成示例配置文件
+### Generate Example Configuration File
 
 ```bash
 ./zjdns -generate-config > config.json
 ```
 
-### 启动服务器
+### Start Server
 
 ```bash
-# 使用默认配置（纯递归模式，无缓存）
+# Use default configuration (pure recursive mode, no cache)
 ./zjdns
 
-# 使用配置文件启动（推荐）
+# Start with configuration file (recommended)
 ./zjdns -config config.json
 ```
 
 ---
 
-## 📝 许可证
+## 📝 License
 
-本项目采用 MIT 许可证，详见 [LICENSE](LICENSE) 文件。
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🛠️ 开发工具
+## 🛠️ Development Tools
 
 ### golangci-lint
 
-在提交代码前，请使用 [golangci-lint](https://golangci-lint.run/) 进行代码检查。
+Before committing code, please use [golangci-lint](https://golangci-lint.run/) for code checking.
 
-安装 golangci-lint：
+Install golangci-lint:
 
 ```bash
 brew install golangci-lint
 ```
 
-运行检查 & 代码格式化：
+Run checks & code formatting:
 
 ```bash
 golangci-lint run & golangci-lint fmt
 ```
 
-提交代码前请确保 golangci-lint 检查通过，以保证代码质量和一致性。
+Please ensure golangci-lint checks pass before committing code to maintain code quality and consistency.
 
 ---
 
-## 🙏 致谢
+## 🙏 Acknowledgments
 
-感谢以下开源项目：
+Thanks to the following open source projects:
 
-- [miekg/dns](https://github.com/miekg/dns) - Go DNS 库
-- [redis/go-redis](https://github.com/redis/go-redis) - Redis Go 客户端
-- [quic-go/quic-go](https://github.com/quic-go/quic-go) - QUIC 协议实现
-- [hypermodeinc/ristretto](https://github.com/hypermodeinc/ristretto) - 高性能 Go 缓存
+- [miekg/dns](https://github.com/miekg/dns) - Go DNS library
+- [redis/go-redis](https://github.com/redis/go-redis) - Redis Go client
+- [quic-go/quic-go](https://github.com/quic-go/quic-go) - QUIC protocol implementation
+- [hypermodeinc/ristretto](https://github.com/hypermodeinc/ristretto) - High-performance Go cache
