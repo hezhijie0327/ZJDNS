@@ -2441,7 +2441,7 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privKeyBytes}))
 
-	LogDebug("%s", certDebug)
+	LogInfo("%s", certDebug)
 
 	return cert, nil
 }
