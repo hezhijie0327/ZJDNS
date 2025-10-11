@@ -489,7 +489,7 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		if _, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile); err != nil {
 			return fmt.Errorf("load certificate: %w", err)
 		}
-		LogInfo("TLS: Certificate verified")
+		LogInfo("TLS: Certificate verified [Cert: %s, Key: %s]", config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
 	}
 
 	return nil
