@@ -35,6 +35,8 @@ import (
 	"syscall"
 	"time"
 
+	_ "net/http/pprof"
+
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -60,10 +62,12 @@ const (
 	DefaultDNSPort   = "53"
 	DefaultTLSPort   = "853"
 	DefaultHTTPSPort = "443"
+	DefaultPprofPort = "6060"
 
 	// Protocol
 	RecursiveIndicator = "builtin_recursive"
 	DefaultQueryPath   = "/dns-query"
+	PprofPath          = "/debug/pprof/"
 
 	// Buffer sizes
 	UDPBufferSize    = 1232
@@ -80,16 +84,18 @@ const (
 	MaxNSResolve      = 5
 
 	// Timeouts
-	QueryTimeout         = 5 * time.Second
-	RecursiveTimeout     = 10 * time.Second
-	ConnTimeout          = 5 * time.Second
-	TLSHandshakeTimeout  = 3 * time.Second
-	PublicIPTimeout      = 3 * time.Second
-	HTTPClientTimeout    = 5 * time.Second
-	ShutdownTimeout      = 3 * time.Second
-	DoHReadHeaderTimeout = 5 * time.Second
-	DoHWriteTimeout      = 5 * time.Second
-	SecureIdleTimeout    = 300 * time.Second
+	QueryTimeout           = 5 * time.Second
+	RecursiveTimeout       = 10 * time.Second
+	ConnTimeout            = 5 * time.Second
+	TLSHandshakeTimeout    = 3 * time.Second
+	PublicIPTimeout        = 3 * time.Second
+	HTTPClientTimeout      = 5 * time.Second
+	ShutdownTimeout        = 3 * time.Second
+	DoHReadHeaderTimeout   = 5 * time.Second
+	DoHWriteTimeout        = 5 * time.Second
+	SecureIdleTimeout      = 300 * time.Second
+	PprofReadHeaderTimeout = 10 * time.Second
+	PprofShutdownTimeout   = 5 * time.Second
 
 	// Cache
 	DefaultCacheTTL = 10
@@ -266,6 +272,7 @@ type ServerConfig struct {
 
 type ServerSettings struct {
 	Port       string       `json:"port"`
+	Pprof      string       `json:"pprof"`
 	LogLevel   string       `json:"log_level"`
 	DefaultECS string       `json:"default_ecs_subnet"`
 	DDR        DDRSettings  `json:"ddr"`
@@ -592,6 +599,8 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 func GenerateExampleConfig() string {
 	cm := &ConfigManager{}
 	config := cm.getDefaultConfig()
+
+	config.Server.Pprof = DefaultPprofPort
 
 	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
@@ -4240,6 +4249,7 @@ type DNSServer struct {
 	rootServerMgr *RootServerManager
 	taskMgr       *TaskManager
 	cidrMgr       *CIDRManager
+	pprofServer   *http.Server
 	speedInterval time.Duration
 	redisClient   *redis.Client
 	ctx           context.Context
@@ -4344,6 +4354,15 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		}
 	}
 
+	// Initialize pprof server if configured
+	if config.Server.Pprof != "" {
+		server.pprofServer = &http.Server{
+			Addr:              ":" + config.Server.Pprof,
+			ReadHeaderTimeout: PprofReadHeaderTimeout,
+		}
+		LogInfo("PPROF: pprof server configured on port %s", config.Server.Pprof)
+	}
+
 	server.setupSignalHandling()
 
 	return server, nil
@@ -4409,6 +4428,16 @@ func (s *DNSServer) shutdownServer() {
 		closeWithLog(s.speedTestMgr, "SpeedTest manager")
 	}
 
+	if s.pprofServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), PprofShutdownTimeout)
+		if err := s.pprofServer.Shutdown(ctx); err != nil {
+			LogError("PPROF: pprof server shutdown failed: %v", err)
+		} else {
+			LogInfo("PPROF: pprof server shut down successfully")
+		}
+		cancel()
+	}
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -4440,6 +4469,9 @@ func (s *DNSServer) Start() error {
 	if s.securityMgr.tls != nil {
 		serverCount++
 	}
+	if s.pprofServer != nil {
+		serverCount++
+	}
 
 	errChan := make(chan error, serverCount)
 
@@ -4464,6 +4496,18 @@ func (s *DNSServer) Start() error {
 			errChan <- fmt.Errorf("UDP startup: %w", err)
 		}
 	}()
+
+	// Start pprof server if configured
+	if s.pprofServer != nil {
+		go func() {
+			defer wg.Done()
+			defer handlePanic("Critical-pprof server")
+			LogInfo("PPROF: pprof server started: [::]:%s", s.config.Server.Pprof)
+			if err := s.pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				errChan <- fmt.Errorf("pprof startup: %w", err)
+			}
+		}()
+	}
 
 	go func() {
 		defer wg.Done()
@@ -4541,6 +4585,11 @@ func (s *DNSServer) displayInfo() {
 
 	if s.cidrMgr != nil && len(s.config.CIDR) > 0 {
 		LogInfo("CIDR: CIDR Manager: enabled (%d rules)", len(s.config.CIDR))
+	}
+
+	if s.pprofServer != nil {
+		LogInfo("PPROF: pprof server enabled on port: %s", s.config.Server.Pprof)
+		LogInfo("PPROF: Access pprof via: http://localhost:%s%s", s.config.Server.Pprof, PprofPath)
 	}
 
 	if s.securityMgr.tls != nil {
