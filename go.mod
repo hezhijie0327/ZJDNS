@@ -3,7 +3,6 @@ module zjdns
 go 1.25.1
 
 require (
-	github.com/dgraph-io/ristretto/v2 v2.3.1-0.20251005211149-0286606d05a9
 	github.com/miekg/dns v1.1.69-0.20251010090242-a0f8faa24999
 	github.com/quic-go/quic-go v0.55.1-0.20251011093825-6c4abb9c14d4
 	github.com/redis/go-redis/v9 v9.16.0-beta.1.0.20250929063504-3ad9f9cb2334
@@ -13,7 +12,6 @@ require (
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
-	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/crypto v0.43.0 // indirect
