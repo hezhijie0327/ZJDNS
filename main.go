@@ -95,6 +95,8 @@ const (
 	DoHWriteTimeout        = 5 * time.Second
 	SecureIdleTimeout      = 300 * time.Second
 	PprofReadHeaderTimeout = 10 * time.Second
+	PprofReadTimeout       = 30 * time.Second
+	PprofIdleTimeout       = 120 * time.Second
 	PprofShutdownTimeout   = 5 * time.Second
 
 	// Cache
@@ -4359,6 +4361,8 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		server.pprofServer = &http.Server{
 			Addr:              ":" + config.Server.Pprof,
 			ReadHeaderTimeout: PprofReadHeaderTimeout,
+			ReadTimeout:       PprofReadTimeout,
+			IdleTimeout:       PprofIdleTimeout,
 		}
 		LogInfo("PPROF: pprof server configured on port %s", config.Server.Pprof)
 	}
