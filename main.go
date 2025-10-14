@@ -4364,7 +4364,11 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 			ReadTimeout:       PprofReadTimeout,
 			IdleTimeout:       PprofIdleTimeout,
 		}
-		LogInfo("PPROF: pprof server configured on port %s", config.Server.Pprof)
+
+		// Configure TLS for pprof if TLS manager is available
+		if server.securityMgr != nil && server.securityMgr.tls != nil {
+			server.pprofServer.TLSConfig = server.securityMgr.tls.tlsConfig
+		}
 	}
 
 	server.setupSignalHandling()
@@ -4507,7 +4511,16 @@ func (s *DNSServer) Start() error {
 			defer wg.Done()
 			defer handlePanic("Critical-pprof server")
 			LogInfo("PPROF: pprof server started: [::]:%s", s.config.Server.Pprof)
-			if err := s.pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			var err error
+			if s.pprofServer.TLSConfig != nil {
+				// Start HTTPS server using existing TLS config
+				err = s.pprofServer.ListenAndServeTLS("", "") // Cert and key are in TLSConfig
+			} else {
+				// Start HTTP server
+				err = s.pprofServer.ListenAndServe()
+			}
+
+			if err != nil && err != http.ErrServerClosed {
 				errChan <- fmt.Errorf("pprof startup: %w", err)
 			}
 		}()
@@ -4592,8 +4605,7 @@ func (s *DNSServer) displayInfo() {
 	}
 
 	if s.pprofServer != nil {
-		LogInfo("PPROF: pprof server enabled on port: %s", s.config.Server.Pprof)
-		LogInfo("PPROF: Access pprof via: http://localhost:%s%s", s.config.Server.Pprof, PprofPath)
+		LogInfo("PPROF: pprof server enabled on: %s, via: %s, tls: %t", s.config.Server.Pprof, PprofPath, s.pprofServer.TLSConfig != nil)
 	}
 
 	if s.securityMgr.tls != nil {
