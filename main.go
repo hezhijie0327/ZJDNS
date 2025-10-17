@@ -695,7 +695,9 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	staleElapsed := elapsed - int64(c.TTL) // How long we've been in stale state
 	staleRemaining := int64(StaleTTL) - staleElapsed
 	if staleRemaining < 0 {
-		staleRemaining = 0
+		// After stale TTL expires, keep a minimal TTL (1 second) instead of 0
+		// This ensures cached data can still be served in extreme cases
+		staleRemaining = 1
 	}
 	return uint32(staleRemaining)
 }
@@ -898,20 +900,14 @@ func (rc *RedisCache) updateCacheEntry(cacheKey string, updateType string) {
 
 	switch updateType {
 	case "stale":
-		// Update TTL to StaleTTL and reset timestamp for proper countdown
-		entry.TTL = StaleTTL
-		entry.OriginalTTL = StaleTTL
-		entry.Timestamp = now
-
+		// Don't immediately change TTL to stale - let original TTL expire naturally
+		// Only update refresh time to prevent immediate retry
 		updatedData, err := json.Marshal(entry)
 		if err != nil {
 			return
 		}
-
-		// Set new expiration time based on stale TTL
-		expiration := time.Duration(StaleTTL+StaleMaxAge) * time.Second
-		rc.client.Set(rc.ctx, cacheKey, updatedData, expiration)
-		LogDebug("REFRESH: Updated cache %s to stale TTL (%d)", cacheKey, StaleTTL)
+		rc.client.Set(rc.ctx, cacheKey, updatedData, redis.KeepTTL)
+		LogDebug("REFRESH: Refresh failed for %s, letting original TTL expire naturally", cacheKey)
 
 	case "cooldown":
 		updatedData, err := json.Marshal(entry)
