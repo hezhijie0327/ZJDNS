@@ -101,6 +101,7 @@ const (
 
 	// Cache
 	DefaultCacheTTL = 10
+	StaleTTL        = 30
 	StaleMaxAge     = 86400 * 7
 	CacheQueueSize  = 500
 
@@ -473,7 +474,6 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		if _, _, err := net.SplitHostPort(config.Redis.Address); err != nil {
 			return fmt.Errorf("redis address invalid: %w", err)
 		}
-		LogInfo("CACHE: Background refresh: enabled (automatic stale serving)")
 	}
 
 	// Validate TLS
@@ -664,29 +664,22 @@ type RefreshRequest struct {
 	ServerDNSSECEnabled bool
 }
 
-// IsExpired checks if cache entry has expired based on original TTL
 func (c *CacheEntry) IsExpired() bool {
 	return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL)
 }
 
-// ShouldRefresh checks if cache should be refreshed (simplified logic)
 func (c *CacheEntry) ShouldRefresh() bool {
 	if c == nil {
 		return false
 	}
 	now := time.Now().Unix()
-
-	// Calculate refresh interval (half of original TTL, minimum 1 minute)
 	refreshInterval := int64(c.OriginalTTL / 2)
 	if refreshInterval < 60 {
 		refreshInterval = 60
 	}
-
-	// Refresh if enough time has passed since last refresh
 	return (now - c.RefreshTime) > refreshInterval
 }
 
-// GetRemainingTTL calculates remaining TTL based on timestamp (simplified)
 func (c *CacheEntry) GetRemainingTTL() uint32 {
 	if c == nil {
 		return 0
@@ -694,13 +687,16 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	now := time.Now().Unix()
 	elapsed := now - c.Timestamp
 	remaining := int64(c.TTL) - elapsed
-
 	if remaining > 0 {
 		return uint32(remaining)
 	}
-
-	// Return a small TTL for expired entries (will be refreshed in background)
-	return 1
+	staleElapsed := elapsed - int64(c.TTL)
+	staleCycle := staleElapsed % int64(StaleTTL)
+	staleTTLRemaining := int64(StaleTTL) - staleCycle
+	if staleTTLRemaining <= 0 {
+		staleTTLRemaining = int64(StaleTTL)
+	}
+	return uint32(staleTTLRemaining)
 }
 
 func (c *CacheEntry) GetECSOption() *ECSOption {
@@ -784,10 +780,9 @@ func NewRedisCache(config *ServerConfig, server *DNSServer) (*RedisCache, error)
 		server:       server,
 	}
 
-	// Always start refresh processor (no config check needed)
 	cache.startRefreshProcessor()
 
-	LogInfo("CACHE: Redis cache initialized with background refresh")
+	LogInfo("CACHE: Redis cache initialized")
 	return cache, nil
 }
 
@@ -875,7 +870,6 @@ func (rc *RedisCache) handleRefreshRequest(req RefreshRequest) {
 		return
 	}
 
-	// Unified TTL: original + 7 days (let Redis handle expiration)
 	expiration := time.Duration(cacheTTL+StaleMaxAge) * time.Second
 	rc.client.Set(rc.ctx, req.CacheKey, data, expiration)
 	LogDebug("REFRESH: Successfully refreshed cache for %s (TTL: %d)", req.CacheKey, cacheTTL)
@@ -898,7 +892,6 @@ func (rc *RedisCache) updateRefreshTime(cacheKey string) {
 		return
 	}
 
-	// Update refresh time to enter cooldown period
 	entry.RefreshTime = time.Now().Unix()
 	updatedData, err := json.Marshal(entry)
 	if err != nil {
@@ -936,7 +929,6 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool) {
 	LogDebug("CACHE: Cache hit for key: %s (age: %ds, TTL: %d)",
 		key, time.Now().Unix()-entry.Timestamp, entry.TTL)
 
-	// Update access time in background
 	entry.AccessTime = time.Now().Unix()
 	go func() {
 		defer handlePanic("Update access time")
@@ -986,7 +978,7 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		return
 	}
 
-	// Unified TTL: original + 30 days grace period (Redis auto-expiration)
+	// Unified TTL: original + StaleMaxAge grace period (Redis auto-expiration)
 	expiration := time.Duration(cacheTTL+StaleMaxAge) * time.Second
 	rc.client.Set(rc.ctx, key, data, expiration)
 }
@@ -4758,7 +4750,6 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, question dn
 
 	s.addEDNS(msg, req, isSecureConnection)
 
-	// Trigger background refresh if needed (unified logic)
 	if entry.ShouldRefresh() {
 		s.cacheMgr.RequestRefresh(RefreshRequest{
 			Question:            question,
@@ -4783,9 +4774,8 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 }
 
 func (s *DNSServer) processQueryError(req *dns.Msg, _ error, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ bool, _ *ECSOption, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
-	// Try to serve stale cache (always enabled now)
 	if entry, found := s.cacheMgr.Get(cacheKey); found {
-		responseTTL := uint32(1) // Return TTL of 1 for stale entries
+		responseTTL := uint32(StaleMaxAge)
 		msg := s.buildResponse(req)
 		if msg == nil {
 			msg = &dns.Msg{}
