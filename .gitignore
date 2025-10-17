@@ -21,8 +21,8 @@
 # Markdown documentation
 !*.md
 
-# YAML files
-!*.yml
+# JSON files
+!*.example.json
 
 # Dockerfile
 !Dockerfile
