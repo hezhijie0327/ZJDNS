@@ -690,13 +690,14 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	if remaining > 0 {
 		return uint32(remaining)
 	}
-	staleElapsed := elapsed - int64(c.TTL)
-	staleCycle := staleElapsed % int64(StaleTTL)
-	staleTTLRemaining := int64(StaleTTL) - staleCycle
-	if staleTTLRemaining <= 0 {
-		staleTTLRemaining = int64(StaleTTL)
+	// For stale cache, calculate remaining stale TTL
+	// The stale period starts when original TTL expires, and lasts for StaleTTL seconds
+	staleElapsed := elapsed - int64(c.TTL) // How long we've been in stale state
+	staleRemaining := int64(StaleTTL) - staleElapsed
+	if staleRemaining < 0 {
+		staleRemaining = 0
 	}
-	return uint32(staleTTLRemaining)
+	return uint32(staleRemaining)
 }
 
 func (c *CacheEntry) GetECSOption() *ECSOption {
