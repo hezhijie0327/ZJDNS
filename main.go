@@ -818,15 +818,15 @@ func (rc *RedisCache) handleRefreshRequest(req RefreshRequest) {
 
 	// === Failure scenario 1: Query error ===
 	if err != nil {
-		LogDebug("REFRESH: Refresh failed for %s: %v, entering cooldown", req.CacheKey, err)
-		rc.updateRefreshTime(req.CacheKey)
+		LogDebug("REFRESH: Refresh failed for %s: %v, updating to stale TTL", req.CacheKey, err)
+		rc.updateCacheEntry(req.CacheKey, "stale")
 		return
 	}
 
 	// === Failure scenario 2: Empty response ===
 	if len(answer) == 0 && len(authority) == 0 && len(additional) == 0 {
-		LogDebug("REFRESH: Refresh returned no records for %s, entering cooldown", req.CacheKey)
-		rc.updateRefreshTime(req.CacheKey)
+		LogDebug("REFRESH: Refresh returned no records for %s, updating to stale TTL", req.CacheKey)
+		rc.updateCacheEntry(req.CacheKey, "stale")
 		return
 	}
 
@@ -876,8 +876,8 @@ func (rc *RedisCache) handleRefreshRequest(req RefreshRequest) {
 	LogDebug("REFRESH: Successfully refreshed cache for %s (TTL: %d)", req.CacheKey, cacheTTL)
 }
 
-func (rc *RedisCache) updateRefreshTime(cacheKey string) {
-	defer handlePanic("Update refresh time")
+func (rc *RedisCache) updateCacheEntry(cacheKey string, updateType string) {
+	defer handlePanic("Update cache entry")
 
 	if atomic.LoadInt32(&rc.closed) != 0 {
 		return
@@ -893,13 +893,34 @@ func (rc *RedisCache) updateRefreshTime(cacheKey string) {
 		return
 	}
 
-	entry.RefreshTime = time.Now().Unix()
-	updatedData, err := json.Marshal(entry)
-	if err != nil {
-		return
+	now := time.Now().Unix()
+	entry.RefreshTime = now
+
+	switch updateType {
+	case "stale":
+		// Update TTL to StaleTTL and reset timestamp for proper countdown
+		entry.TTL = StaleTTL
+		entry.OriginalTTL = StaleTTL
+		entry.Timestamp = now
+
+		updatedData, err := json.Marshal(entry)
+		if err != nil {
+			return
+		}
+
+		// Set new expiration time based on stale TTL
+		expiration := time.Duration(StaleTTL+StaleMaxAge) * time.Second
+		rc.client.Set(rc.ctx, cacheKey, updatedData, expiration)
+		LogDebug("REFRESH: Updated cache %s to stale TTL (%d)", cacheKey, StaleTTL)
+
+	case "cooldown":
+		updatedData, err := json.Marshal(entry)
+		if err != nil {
+			return
+		}
+		rc.client.Set(rc.ctx, cacheKey, updatedData, redis.KeepTTL)
+		LogDebug("REFRESH: Updated refresh time for %s (cooldown activated)", cacheKey)
 	}
-	rc.client.Set(rc.ctx, cacheKey, updatedData, redis.KeepTTL)
-	LogDebug("REFRESH: Updated refresh time for %s (cooldown activated)", cacheKey)
 }
 
 func (rc *RedisCache) Get(key string) (*CacheEntry, bool) {
@@ -4775,7 +4796,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 
 func (s *DNSServer) processQueryError(req *dns.Msg, _ error, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ bool, _ *ECSOption, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
 	if entry, found := s.cacheMgr.Get(cacheKey); found {
-		responseTTL := uint32(StaleMaxAge)
+		responseTTL := entry.GetRemainingTTL()
 		msg := s.buildResponse(req)
 		if msg == nil {
 			msg = &dns.Msg{}
