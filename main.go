@@ -978,7 +978,6 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		return
 	}
 
-	// Unified TTL: original + StaleMaxAge grace period (Redis auto-expiration)
 	expiration := time.Duration(cacheTTL+StaleMaxAge) * time.Second
 	rc.client.Set(rc.ctx, key, data, expiration)
 }
