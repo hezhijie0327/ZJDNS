@@ -351,4 +351,3 @@ golangci-lint run & golangci-lint fmt
 - [miekg/dns](https://github.com/miekg/dns) - Go DNS 库
 - [redis/go-redis](https://github.com/redis/go-redis) - Redis Go 客户端
 - [quic-go/quic-go](https://github.com/quic-go/quic-go) - QUIC 协议实现
-- [hypermodeinc/ristretto](https://github.com/hypermodeinc/ristretto) - 高性能 Go 缓存

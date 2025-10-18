@@ -1,0 +1,148 @@
+{
+  "server": {
+    "port": "53",
+    "pprof": "6060",
+    "log_level": "info",
+    "default_ecs_subnet": "auto",
+    "ddr": {
+      "domain": "dns.example.com",
+      "ipv4": "127.0.0.1",
+      "ipv6": "::1"
+    },
+    "tls": {
+      "port": "853",
+      "cert_file": "/path/to/cert.pem",
+      "key_file": "/path/to/key.pem",
+      "self_signed": false,
+      "https": {
+        "port": "443",
+        "endpoint": "/dns-query"
+      }
+    },
+    "features": {
+      "dnssec": true,
+      "hijack_protection": true,
+      "padding": true
+    }
+  },
+  "redis": {
+    "address": "127.0.0.1:6379",
+    "password": "",
+    "database": 0,
+    "key_prefix": "zjdns:"
+  },
+  "speedtest": [
+    {
+      "type": "icmp",
+      "timeout": 250
+    },
+    {
+      "type": "tcp",
+      "port": "443",
+      "timeout": 250
+    },
+    {
+      "type": "tcp",
+      "port": "80",
+      "timeout": 250
+    },
+    {
+      "type": "udp",
+      "port": "53",
+      "timeout": 250
+    }
+  ],
+  "upstream": [
+    {
+      "address": "223.5.5.5:53",
+      "protocol": "tcp",
+      "server_name": "",
+      "skip_tls_verify": false
+    },
+    {
+      "address": "223.6.6.6:53",
+      "protocol": "udp",
+      "server_name": "",
+      "skip_tls_verify": false
+    },
+    {
+      "address": "223.5.5.5:853",
+      "protocol": "tls",
+      "server_name": "dns.alidns.com",
+      "skip_tls_verify": false
+    },
+    {
+      "address": "223.6.6.6:853",
+      "protocol": "quic",
+      "server_name": "dns.alidns.com",
+      "skip_tls_verify": true
+    },
+    {
+      "address": "https://223.5.5.5:443/dns-query",
+      "protocol": "https",
+      "server_name": "dns.alidns.com",
+      "skip_tls_verify": false,
+      "match": [
+        "mixed"
+      ]
+    },
+    {
+      "address": "https://223.6.6.6:443/dns-query",
+      "protocol": "http3",
+      "server_name": "dns.alidns.com",
+      "skip_tls_verify": false,
+      "match": [
+        "!mixed"
+      ]
+    },
+    {
+      "address": "builtin_recursive",
+      "protocol": "",
+      "server_name": "",
+      "skip_tls_verify": false
+    }
+  ],
+  "rewrite": [
+    {
+      "name": "blocked.example.com",
+      "records": [
+        {
+          "type": "A",
+          "ttl": 10,
+          "content": "127.0.0.1"
+        }
+      ]
+    },
+    {
+      "name": "ipv6.blocked.example.com",
+      "records": [
+        {
+          "type": "AAAA",
+          "ttl": 10,
+          "content": "::1"
+        }
+      ]
+    }
+  ],
+  "cidr": [
+    {
+      "file": "whitelist.txt",
+      "tag": "file"
+    },
+    {
+      "rules": [
+        "192.168.0.0/16",
+        "10.0.0.0/8",
+        "2001:db8::/32"
+      ],
+      "tag": "rules"
+    },
+    {
+      "file": "blacklist.txt",
+      "rules": [
+        "127.0.0.1/32"
+      ],
+      "tag": "mixed"
+    }
+  ]
+}

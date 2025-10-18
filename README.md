@@ -351,4 +351,3 @@ Thanks to the following open source projects:
 - [miekg/dns](https://github.com/miekg/dns) - Go DNS library
 - [redis/go-redis](https://github.com/redis/go-redis) - Redis Go client
 - [quic-go/quic-go](https://github.com/quic-go/quic-go) - QUIC protocol implementation
-- [hypermodeinc/ristretto](https://github.com/hypermodeinc/ristretto) - High-performance Go cache
