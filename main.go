@@ -99,11 +99,10 @@ const (
 	PprofIdleTimeout       = 120 * time.Second
 	PprofShutdownTimeout   = 5 * time.Second
 
-	// RFC 8767 - Serve Stale
-	ClientResponseTimeout = 1800 * time.Millisecond // 1.8 seconds per RFC 8767
-	DefaultCacheTTL       = 10
-	StaleTTL              = 30
-	StaleMaxAge           = 86400 * 30 // 30 days max stale period
+	// Cache TTL settings
+	DefaultCacheTTL = 10
+	StaleTTL        = 30
+	StaleMaxAge     = 86400 * 30 // 30 days max stale period
 
 	// Redis
 	RedisPoolSize     = 20
@@ -682,7 +681,7 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	if remaining > 0 {
 		return uint32(remaining)
 	}
-	// RFC 8767: Return short TTL for stale data
+	// Return short TTL for stale data
 	staleElapsed := elapsed - int64(c.TTL)
 	staleCycle := staleElapsed % int64(StaleTTL)
 	staleTTLRemaining := int64(StaleTTL) - staleCycle
@@ -853,7 +852,7 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		return
 	}
 
-	// RFC 8767: Cache TTL = original TTL + stale max-age
+	// Cache TTL = original TTL + stale max-age
 	expiration := time.Duration(cacheTTL)*time.Second + time.Duration(StaleMaxAge)*time.Second
 	rc.client.Set(rc.ctx, key, data, expiration)
 }
@@ -4558,7 +4557,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 }
 
 func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, _ bool, ecsOpt *ECSOption, cacheKey string, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
-	// RFC 8767: Calculate response TTL
+	// Calculate response TTL
 	responseTTL := entry.GetRemainingTTL()
 
 	msg := s.buildResponse(req)
@@ -4579,10 +4578,10 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 
 	s.addEDNS(msg, req, isSecureConnection)
 
-	// RFC 8767: Trigger background refresh for expired stale cache
+	// Trigger background refresh for expired stale cache
 	if isExpired && entry.ShouldRefresh() {
 		s.taskMgr.ExecuteAsync(
-			fmt.Sprintf("rfc8767-refresh-%s", cacheKey),
+			fmt.Sprintf("refresh-%s", cacheKey),
 			func(ctx context.Context) error {
 				return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
 			},
@@ -4599,109 +4598,24 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 }
 
 func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, clientHasEDNS bool, serverDNSSECEnabled bool, cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
-	// RFC 8767: Client Response Timer (1.8 seconds)
-	queryCtx, cancel := context.WithTimeout(s.ctx, ClientResponseTimeout)
-	defer cancel()
+	// Execute query directly
+	answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(
+		question, ecsOpt, serverDNSSECEnabled, tracker)
 
-	type queryResult struct {
-		answer     []dns.RR
-		authority  []dns.RR
-		additional []dns.RR
-		validated  bool
-		ecsResp    *ECSOption
-		err        error
+	if err != nil {
+		return s.processQueryError(req, err, cacheKey, question,
+			clientRequestedDNSSEC, clientHasEDNS, ecsOpt, tracker, isSecureConnection)
 	}
 
-	resultChan := make(chan queryResult, 1)
-
-	// Start async query
-	go func() {
-		answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(
-			question, ecsOpt, serverDNSSECEnabled, tracker)
-
-		resultChan <- queryResult{
-			answer:     answer,
-			authority:  authority,
-			additional: additional,
-			validated:  validated,
-			ecsResp:    ecsResponse,
-			err:        err,
-		}
-	}()
-
-	// Wait for result or timeout
-	select {
-	case result := <-resultChan:
-		// Query completed before timeout
-		if result.err != nil {
-			return s.processQueryError(req, result.err, cacheKey, question,
-				clientRequestedDNSSEC, clientHasEDNS, ecsOpt, tracker, isSecureConnection)
-		}
-
-		return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC,
-			clientHasEDNS, cacheKey, result.answer, result.authority, result.additional,
-			result.validated, result.ecsResp, tracker, isSecureConnection)
-
-	case <-queryCtx.Done():
-		// RFC 8767: Timeout - try to return stale cache
-		LogDebug("CACHE: Client response timeout (%v), checking stale cache", ClientResponseTimeout)
-
-		if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
-			LogDebug("CACHE: Returning stale cache after timeout for %s", question.Name)
-
-			msg := s.buildResponse(req)
-			if msg == nil {
-				msg = &dns.Msg{}
-				msg.SetReply(req)
-				msg.Rcode = dns.RcodeServerFailure
-				return msg
-			}
-
-			responseTTL := uint32(StaleTTL)
-			msg.Answer = processRecords(expandRecords(entry.Answer), responseTTL, clientRequestedDNSSEC)
-			msg.Ns = processRecords(expandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
-			msg.Extra = processRecords(expandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
-
-			if s.config.Server.Features.DNSSEC && entry.Validated {
-				msg.AuthenticatedData = true
-			}
-
-			s.addEDNS(msg, req, isSecureConnection)
-			s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
-
-			// Continue background query
-			s.taskMgr.ExecuteAsync(
-				fmt.Sprintf("rfc8767-background-%s", cacheKey),
-				func(ctx context.Context) error {
-					result := <-resultChan
-					if result.err == nil {
-						s.cacheMgr.Set(cacheKey, result.answer, result.authority,
-							result.additional, result.validated, result.ecsResp)
-						LogDebug("CACHE: Background query completed for %s", question.Name)
-					}
-					return nil
-				},
-			)
-
-			return msg
-		}
-
-		// No stale cache available
-		LogDebug("CACHE: No stale cache available for %s", question.Name)
-		msg := s.buildResponse(req)
-		if msg == nil {
-			msg = &dns.Msg{}
-			msg.SetReply(req)
-		}
-		msg.Rcode = dns.RcodeServerFailure
-		return msg
-	}
+	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC,
+		clientHasEDNS, cacheKey, answer, authority, additional,
+		validated, ecsResponse, tracker, isSecureConnection)
 }
 
 func (s *DNSServer) refreshCacheEntry(ctx context.Context, question dns.Question,
 	ecs *ECSOption, cacheKey string, oldEntry *CacheEntry) error {
 
-	defer handlePanic("RFC 8767 cache refresh")
+	defer handlePanic("cache refresh")
 
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return errors.New("server closed")
@@ -4729,8 +4643,7 @@ func (s *DNSServer) refreshCacheEntry(ctx context.Context, question dns.Question
 		question, ecs, s.config.Server.Features.DNSSEC, nil)
 
 	if err != nil {
-		LogDebug("CACHE: Refresh failed for %s: %v, keeping stale data", cacheKey, err)
-		// RFC 8767: Keep stale data on refresh failure
+		LogDebug("CACHE: Refresh failed for %s: %v", cacheKey, err)
 		s.updateCacheRefreshTime(cacheKey, oldEntry)
 		return err
 	}
@@ -4754,7 +4667,7 @@ func (s *DNSServer) refreshCacheEntry(ctx context.Context, question dns.Question
 	return nil
 }
 
-func (s *DNSServer) updateCacheRefreshTime(cacheKey string, entry *CacheEntry) {
+func (s *DNSServer) updateCacheRefreshTime(cacheKey string, _ *CacheEntry) {
 	defer handlePanic("Update refresh time")
 
 	redisCache, ok := s.cacheMgr.(*RedisCache)
@@ -4783,11 +4696,11 @@ func (s *DNSServer) updateCacheRefreshTime(cacheKey string, entry *CacheEntry) {
 	LogDebug("CACHE: Updated refresh time for %s (keeping stale data)", cacheKey)
 }
 
-func (s *DNSServer) processQueryError(req *dns.Msg, queryErr error, cacheKey string,
-	question dns.Question, clientRequestedDNSSEC bool, clientHasEDNS bool,
-	ecsOpt *ECSOption, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processQueryError(req *dns.Msg, _ error, cacheKey string,
+	question dns.Question, clientRequestedDNSSEC bool, _ bool,
+	_ *ECSOption, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
 
-	// RFC 8767: Try to return stale cache on query error
+	// Try to return stale cache on query error
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
 		LogDebug("CACHE: Query failed, returning stale cache for %s", question.Name)
 
@@ -5032,7 +4945,7 @@ func getClientIP(w dns.ResponseWriter) net.IP {
 	return nil
 }
 
-func getSecureClientIP(conn interface{}) net.IP {
+func getSecureClientIP(conn any) net.IP {
 	switch c := conn.(type) {
 	case *tls.Conn:
 		if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
@@ -5232,7 +5145,7 @@ func toRRSlice[T dns.RR](records []T) []dns.RR {
 }
 
 var messagePool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return &dns.Msg{}
 	},
 }
