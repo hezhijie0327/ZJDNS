@@ -716,7 +716,7 @@ type CacheManager interface {
 type NullCache struct{}
 
 func NewNullCache() *NullCache {
-	LogInfo("CACHE: No cache mode (RFC 8767 disabled)")
+	LogInfo("CACHE: No cache mode (stale cache disabled)")
 	return &NullCache{}
 }
 
@@ -768,7 +768,7 @@ func NewRedisCache(config *ServerConfig, server *DNSServer) (*RedisCache, error)
 		server:  server,
 	}
 
-	LogInfo("CACHE: Redis cache initialized (RFC 8767 enabled)")
+	LogInfo("CACHE: Redis cache initialized (stale cache enabled)")
 	return cache, nil
 }
 
@@ -4592,7 +4592,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
 
 	if isExpired {
-		LogDebug("CACHE: RFC 8767 - Returned stale cache for %s (TTL: %d)", question.Name, responseTTL)
+		LogDebug("CACHE: Returned stale cache for %s (TTL: %d)", question.Name, responseTTL)
 	}
 
 	return msg
@@ -4644,10 +4644,10 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 
 	case <-queryCtx.Done():
 		// RFC 8767: Timeout - try to return stale cache
-		LogDebug("CACHE: RFC 8767 - Client response timeout (%v), checking stale cache", ClientResponseTimeout)
+		LogDebug("CACHE: Client response timeout (%v), checking stale cache", ClientResponseTimeout)
 
 		if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
-			LogDebug("CACHE: RFC 8767 - Returning stale cache after timeout for %s", question.Name)
+			LogDebug("CACHE: Returning stale cache after timeout for %s", question.Name)
 
 			msg := s.buildResponse(req)
 			if msg == nil {
@@ -4677,7 +4677,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 					if result.err == nil {
 						s.cacheMgr.Set(cacheKey, result.answer, result.authority,
 							result.additional, result.validated, result.ecsResp)
-						LogDebug("CACHE: RFC 8767 - Background query completed for %s", question.Name)
+						LogDebug("CACHE: Background query completed for %s", question.Name)
 					}
 					return nil
 				},
@@ -4687,7 +4687,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 		}
 
 		// No stale cache available
-		LogDebug("CACHE: RFC 8767 - No stale cache available for %s", question.Name)
+		LogDebug("CACHE: No stale cache available for %s", question.Name)
 		msg := s.buildResponse(req)
 		if msg == nil {
 			msg = &dns.Msg{}
@@ -4715,11 +4715,11 @@ func (s *DNSServer) refreshCacheEntry(ctx context.Context, question dns.Question
 	}
 
 	if (now - oldEntry.RefreshTime) < refreshInterval {
-		LogDebug("CACHE: RFC 8767 - Skip refresh for %s (recently refreshed)", cacheKey)
+		LogDebug("CACHE: Skip refresh for %s (recently refreshed)", cacheKey)
 		return nil
 	}
 
-	LogDebug("CACHE: RFC 8767 - Starting background refresh for %s", cacheKey)
+	LogDebug("CACHE: Starting background refresh for %s", cacheKey)
 
 	// Execute query with timeout
 	_, cancel := context.WithTimeout(ctx, QueryTimeout)
@@ -4729,13 +4729,13 @@ func (s *DNSServer) refreshCacheEntry(ctx context.Context, question dns.Question
 		question, ecs, s.config.Server.Features.DNSSEC, nil)
 
 	if err != nil {
-		LogDebug("CACHE: RFC 8767 - Refresh failed for %s: %v, keeping stale data", cacheKey, err)
+		LogDebug("CACHE: Refresh failed for %s: %v, keeping stale data", cacheKey, err)
 		// RFC 8767: Keep stale data on refresh failure
 		s.updateCacheRefreshTime(cacheKey, oldEntry)
 		return err
 	}
 
-	LogDebug("CACHE: RFC 8767 - Refresh succeeded for %s", cacheKey)
+	LogDebug("CACHE: Refresh succeeded for %s", cacheKey)
 
 	// Speed test if configured
 	if len(s.config.SpeedTest) > 0 &&
@@ -4780,7 +4780,7 @@ func (s *DNSServer) updateCacheRefreshTime(cacheKey string, entry *CacheEntry) {
 	}
 
 	redisCache.client.Set(redisCache.ctx, cacheKey, updatedData, redis.KeepTTL)
-	LogDebug("CACHE: RFC 8767 - Updated refresh time for %s (keeping stale data)", cacheKey)
+	LogDebug("CACHE: Updated refresh time for %s (keeping stale data)", cacheKey)
 }
 
 func (s *DNSServer) processQueryError(req *dns.Msg, queryErr error, cacheKey string,
@@ -4789,7 +4789,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, queryErr error, cacheKey str
 
 	// RFC 8767: Try to return stale cache on query error
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
-		LogDebug("CACHE: RFC 8767 - Query failed, returning stale cache for %s", question.Name)
+		LogDebug("CACHE: Query failed, returning stale cache for %s", question.Name)
 
 		msg := s.buildResponse(req)
 		if msg == nil {
@@ -4814,7 +4814,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, queryErr error, cacheKey str
 	}
 
 	// No stale cache available
-	LogDebug("CACHE: RFC 8767 - No stale cache available after query error for %s", question.Name)
+	LogDebug("CACHE: No stale cache available after query error for %s", question.Name)
 	msg := s.buildResponse(req)
 	if msg == nil {
 		msg = &dns.Msg{}
