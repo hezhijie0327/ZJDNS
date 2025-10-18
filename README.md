@@ -231,6 +231,71 @@ graph TB
 
 ---
 
+## 🔍 DNS Query Process
+
+### Complete Query Flow
+
+The following diagram and steps illustrate how a DNS query flows through ZJDNS from client request to final response:
+
+```mermaid
+sequenceDiagram
+    participant C as DNS Client
+    participant S as DNSServer
+    participant CM as CacheManager
+    participant QR as QueryManager
+    participant RR as RecursiveResolver
+    participant QC as QueryClient
+    participant RS as RootServers
+    participant US as UpstreamDNS
+    participant R as Redis Cache
+
+    Note over C,R: Client queries for example.com
+
+    C->>S: DNS Query (UDP/TCP/DoT/DoQ/DoH)
+    S->>S: Parse & Validate Request
+    S->>CM: Check Cache
+
+    alt Cache Hit (Fresh)
+        CM-->>S: Return Cached Response
+        S->>S: Apply Security Rules
+        S-->>C: DNS Response
+    else Cache Hit (Stale) or Cache Miss
+        S->>QR: Start Query Process
+        QR->>RR: Recursive Resolution
+
+        RR->>QC: Query Root Servers
+        QC->>RS: UDP/TCP Query
+        RS-->>QC: Referral to TLD
+        QC-->>RR: TLD Information
+
+        RR->>QC: Query TLD Servers
+        QC-->>RR: Referral to Authoritative
+        RR->>QC: Query Authoritative
+        QC-->>RR: Final Response
+
+        alt Query Success
+            RR-->>QR: Valid Response
+            QR->>CM: Store in Cache
+            QR-->>S: Query Result
+            S->>S: Apply Security Rules
+            S-->>C: DNS Response
+        else Query Timeout/Error
+            RR-->>QR: Error
+            QR->>CM: Try Stale Cache
+            alt Stale Available
+                CM-->>QR: Stale Response
+                QR-->>S: Stale Result
+                S-->>C: Stale Response
+            else No Stale
+                QR-->>S: Error Response
+                S-->>C: DNS Error
+            end
+        end
+    end
+```
+
+---
+
 ## 📋 Usage Examples
 
 ### Generate Example Configuration File

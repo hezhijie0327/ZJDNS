@@ -99,11 +99,10 @@ const (
 	PprofIdleTimeout       = 120 * time.Second
 	PprofShutdownTimeout   = 5 * time.Second
 
-	// Cache
+	// Cache TTL settings
 	DefaultCacheTTL = 10
 	StaleTTL        = 30
-	StaleMaxAge     = 86400 * 30
-	CacheQueueSize  = 500
+	StaleMaxAge     = 86400 * 7
 
 	// Redis
 	RedisPoolSize     = 20
@@ -302,8 +301,6 @@ type HTTPSSettings struct {
 }
 
 type FeatureFlags struct {
-	ServeStale       bool `json:"serve_stale"`
-	Prefetch         bool `json:"prefetch"`
 	DNSSEC           bool `json:"dnssec"`
 	HijackProtection bool `json:"hijack_protection"`
 	Padding          bool `json:"padding"`
@@ -476,15 +473,6 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		if _, _, err := net.SplitHostPort(config.Redis.Address); err != nil {
 			return fmt.Errorf("redis address invalid: %w", err)
 		}
-	} else {
-		if config.Server.Features.ServeStale {
-			LogWarn("CACHE: No cache mode: serve stale disabled")
-			config.Server.Features.ServeStale = false
-		}
-		if config.Server.Features.Prefetch {
-			LogWarn("CACHE: No cache mode: prefetch disabled")
-			config.Server.Features.Prefetch = false
-		}
 	}
 
 	// Validate TLS
@@ -603,7 +591,6 @@ func GenerateExampleConfig() string {
 	config := cm.getDefaultConfig()
 
 	config.Server.Pprof = DefaultPprofPort
-
 	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
 	config.Redis.Address = "127.0.0.1:6379"
@@ -668,19 +655,8 @@ type CompactRecord struct {
 	Type    uint16 `json:"type"`
 }
 
-type RefreshRequest struct {
-	Question            dns.Question
-	ECS                 *ECSOption
-	CacheKey            string
-	ServerDNSSECEnabled bool
-}
-
 func (c *CacheEntry) IsExpired() bool {
 	return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL)
-}
-
-func (c *CacheEntry) IsStale() bool {
-	return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL+StaleMaxAge)
 }
 
 func (c *CacheEntry) ShouldRefresh() bool {
@@ -705,6 +681,7 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	if remaining > 0 {
 		return uint32(remaining)
 	}
+	// Return short TTL for stale data
 	staleElapsed := elapsed - int64(c.TTL)
 	staleCycle := staleElapsed % int64(StaleTTL)
 	staleTTLRemaining := int64(StaleTTL) - staleCycle
@@ -732,33 +709,29 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 type CacheManager interface {
 	Get(key string) (*CacheEntry, bool, bool)
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption)
-	RequestRefresh(req RefreshRequest)
 	Closeable
 }
 
 type NullCache struct{}
 
 func NewNullCache() *NullCache {
-	LogInfo("CACHE: No cache mode")
+	LogInfo("CACHE: No cache mode (stale cache disabled)")
 	return &NullCache{}
 }
 
 func (nc *NullCache) Get(key string) (*CacheEntry, bool, bool) { return nil, false, false }
 func (nc *NullCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
 }
-func (nc *NullCache) RequestRefresh(req RefreshRequest) {}
-func (nc *NullCache) Close() error                      { return nil }
+func (nc *NullCache) Close() error { return nil }
 
 type RedisCache struct {
-	client       *redis.Client
-	config       *ServerConfig
-	refreshQueue chan RefreshRequest
-	ctx          context.Context
-	cancel       context.CancelFunc
-	taskMgr      *TaskManager
-	server       *DNSServer
-	wg           sync.WaitGroup
-	closed       int32
+	client  *redis.Client
+	config  *ServerConfig
+	ctx     context.Context
+	cancel  context.CancelFunc
+	taskMgr *TaskManager
+	server  *DNSServer
+	closed  int32
 }
 
 func NewRedisCache(config *ServerConfig, server *DNSServer) (*RedisCache, error) {
@@ -786,128 +759,16 @@ func NewRedisCache(config *ServerConfig, server *DNSServer) (*RedisCache, error)
 
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
 	cache := &RedisCache{
-		client:       rdb,
-		config:       config,
-		refreshQueue: make(chan RefreshRequest, CacheQueueSize),
-		ctx:          cacheCtx,
-		cancel:       cacheCancel,
-		taskMgr:      NewTaskManager(10),
-		server:       server,
+		client:  rdb,
+		config:  config,
+		ctx:     cacheCtx,
+		cancel:  cacheCancel,
+		taskMgr: NewTaskManager(10),
+		server:  server,
 	}
 
-	if config.Server.Features.ServeStale && config.Server.Features.Prefetch {
-		cache.startRefreshProcessor()
-	}
-
-	LogInfo("CACHE: Redis cache initialized")
+	LogInfo("CACHE: Redis cache initialized (stale cache enabled)")
 	return cache, nil
-}
-
-func (rc *RedisCache) startRefreshProcessor() {
-	for i := 0; i < 2; i++ {
-		rc.wg.Add(1)
-		go func(workerID int) {
-			defer rc.wg.Done()
-			defer handlePanic(fmt.Sprintf("Redis refresh worker %d", workerID))
-			for {
-				select {
-				case req := <-rc.refreshQueue:
-					rc.handleRefreshRequest(req)
-				case <-rc.ctx.Done():
-					return
-				}
-			}
-		}(i)
-	}
-}
-
-func (rc *RedisCache) handleRefreshRequest(req RefreshRequest) {
-	defer handlePanic("Redis refresh request")
-
-	if atomic.LoadInt32(&rc.closed) != 0 {
-		return
-	}
-
-	LogDebug("REFRESH: Refreshing cache for %s", req.CacheKey)
-	answer, authority, additional, validated, ecsResponse, err := rc.server.queryForRefresh(
-		req.Question, req.ECS, req.ServerDNSSECEnabled)
-
-	if err != nil {
-		LogDebug("REFRESH: Refresh failed for %s: %v", req.CacheKey, err)
-		rc.updateRefreshTime(req.CacheKey)
-		return
-	}
-
-	if len(rc.server.config.SpeedTest) > 0 &&
-		(req.Question.Qtype == dns.TypeA || req.Question.Qtype == dns.TypeAAAA) {
-		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
-		domainSpeedPrefix := rc.server.config.Redis.KeyPrefix + RedisPrefixSpeedTestDomain
-		speedTester := NewSpeedTestManager(*rc.server.config, rc.client, domainSpeedPrefix)
-		speedTester.performSpeedTestAndSort(tempMsg)
-		_ = speedTester.Close()
-		answer, authority, additional = tempMsg.Answer, tempMsg.Ns, tempMsg.Extra
-	}
-
-	allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
-	allRRs = append(append(append(allRRs, answer...), authority...), additional...)
-	cacheTTL := calculateTTL(allRRs)
-	now := time.Now().Unix()
-
-	entry := &CacheEntry{
-		Answer:      compactRecords(answer),
-		Authority:   compactRecords(authority),
-		Additional:  compactRecords(additional),
-		TTL:         cacheTTL,
-		OriginalTTL: cacheTTL,
-		Timestamp:   now,
-		Validated:   validated,
-		AccessTime:  now,
-		RefreshTime: now,
-	}
-
-	if ecsResponse != nil {
-		entry.ECSFamily = ecsResponse.Family
-		entry.ECSSourcePrefix = ecsResponse.SourcePrefix
-		entry.ECSScopePrefix = ecsResponse.ScopePrefix
-		entry.ECSAddress = ecsResponse.Address.String()
-	}
-
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return
-	}
-
-	expiration := time.Duration(cacheTTL) * time.Second
-	if rc.config.Server.Features.ServeStale {
-		expiration += time.Duration(StaleMaxAge) * time.Second
-	}
-	rc.client.Set(rc.ctx, req.CacheKey, data, expiration)
-	LogDebug("REFRESH: Successfully refreshed cache for %s", req.CacheKey)
-}
-
-func (rc *RedisCache) updateRefreshTime(cacheKey string) {
-	defer handlePanic("Update refresh time")
-
-	if atomic.LoadInt32(&rc.closed) != 0 {
-		return
-	}
-
-	data, err := rc.client.Get(rc.ctx, cacheKey).Result()
-	if err != nil {
-		return
-	}
-
-	var entry CacheEntry
-	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		return
-	}
-
-	entry.RefreshTime = time.Now().Unix()
-	updatedData, err := json.Marshal(entry)
-	if err != nil {
-		return
-	}
-	rc.client.Set(rc.ctx, cacheKey, updatedData, redis.KeepTTL)
 }
 
 func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
@@ -921,13 +782,13 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	LogDebug("CACHE: Getting key: %s", key)
 	data, err := rc.client.Get(rc.ctx, key).Result()
 	if err != nil {
-		LogDebug("CACHE: Cache miss for key: %s (error: %v)", key, err)
+		LogDebug("CACHE: Cache miss for key: %s", key)
 		return nil, false, false
 	}
 
 	var entry CacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		LogDebug("CACHE: Corrupted cache entry for key: %s, deleting", key)
+		LogDebug("CACHE: Corrupted cache entry for key: %s, removing", key)
 		go func() {
 			defer handlePanic("Clean corrupted cache")
 			rc.client.Del(context.Background(), key)
@@ -935,32 +796,19 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 		return nil, false, false
 	}
 
+	isExpired := entry.IsExpired()
 	LogDebug("CACHE: Cache hit for key: %s (expired: %v, TTL: %d, age: %ds)",
-		key, entry.IsExpired(), entry.TTL, time.Now().Unix()-entry.Timestamp)
+		key, isExpired, entry.TTL, time.Now().Unix()-entry.Timestamp)
 
-	if entry.IsStale() {
-		LogDebug("CACHE: Stale cache entry for key: %s, deleting", key)
-		go func() {
-			defer handlePanic("Clean stale cache")
-			rc.client.Del(context.Background(), key)
-		}()
-		return nil, false, false
-	}
-
+	// Update access time
 	entry.AccessTime = time.Now().Unix()
 	go func() {
 		defer handlePanic("Update access time")
-		rc.updateAccessInfo(key, &entry)
+		if atomic.LoadInt32(&rc.closed) == 0 {
+			data, _ := json.Marshal(entry)
+			rc.client.Set(context.Background(), key, data, redis.KeepTTL)
+		}
 	}()
-
-	isExpired := entry.IsExpired()
-	if !rc.config.Server.Features.ServeStale && isExpired {
-		go func() {
-			defer handlePanic("Clean expired cache")
-			rc.client.Del(context.Background(), key)
-		}()
-		return nil, false, false
-	}
 
 	return &entry, true, isExpired
 }
@@ -1004,35 +852,9 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		return
 	}
 
-	expiration := time.Duration(cacheTTL) * time.Second
-	if rc.config.Server.Features.ServeStale {
-		expiration += time.Duration(StaleMaxAge) * time.Second
-	}
+	// Cache TTL = original TTL + stale max-age
+	expiration := time.Duration(cacheTTL)*time.Second + time.Duration(StaleMaxAge)*time.Second
 	rc.client.Set(rc.ctx, key, data, expiration)
-}
-
-func (rc *RedisCache) updateAccessInfo(key string, entry *CacheEntry) {
-	defer handlePanic("Redis access info update")
-
-	if atomic.LoadInt32(&rc.closed) != 0 {
-		return
-	}
-
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return
-	}
-	rc.client.Set(rc.ctx, key, data, redis.KeepTTL)
-}
-
-func (rc *RedisCache) RequestRefresh(req RefreshRequest) {
-	if atomic.LoadInt32(&rc.closed) != 0 {
-		return
-	}
-	select {
-	case rc.refreshQueue <- req:
-	default:
-	}
 }
 
 func (rc *RedisCache) Close() error {
@@ -1047,28 +869,6 @@ func (rc *RedisCache) Close() error {
 	}
 
 	rc.cancel()
-	close(rc.refreshQueue)
-
-	// Drain queue
-	for {
-		select {
-		case <-rc.refreshQueue:
-		default:
-			goto drained
-		}
-	}
-
-drained:
-	done := make(chan struct{})
-	go func() {
-		rc.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(ShutdownTimeout):
-	}
 
 	if err := rc.client.Close(); err != nil {
 		LogError("CACHE: Redis client shutdown failed: %v", err)
@@ -4295,7 +4095,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	var cache CacheManager
 	if config.Redis.Address == "" {
 		cache = NewNullCache()
-		LogInfo("CACHE: No cache mode")
 	} else {
 		redisCache, err := NewRedisCache(config, nil)
 		if err != nil {
@@ -4758,6 +4557,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 }
 
 func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, _ bool, ecsOpt *ECSOption, cacheKey string, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
+	// Calculate response TTL
 	responseTTL := entry.GetRemainingTTL()
 
 	msg := s.buildResponse(req)
@@ -4776,59 +4576,158 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 		msg.AuthenticatedData = true
 	}
 
-	_ = entry.GetECSOption()
-
 	s.addEDNS(msg, req, isSecureConnection)
 
-	if isExpired && s.config.Server.Features.ServeStale && s.config.Server.Features.Prefetch && entry.ShouldRefresh() {
-		s.cacheMgr.RequestRefresh(RefreshRequest{
-			Question:            question,
-			ECS:                 ecsOpt,
-			CacheKey:            cacheKey,
-			ServerDNSSECEnabled: s.config.Server.Features.DNSSEC,
-		})
+	// Trigger background refresh for expired stale cache
+	if isExpired && entry.ShouldRefresh() {
+		s.taskMgr.ExecuteAsync(
+			fmt.Sprintf("refresh-%s", cacheKey),
+			func(ctx context.Context) error {
+				return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
+			},
+		)
 	}
 
 	s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
+
+	if isExpired {
+		LogDebug("CACHE: Returned stale cache for %s (TTL: %d)", question.Name, responseTTL)
+	}
+
 	return msg
 }
 
 func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, clientHasEDNS bool, serverDNSSECEnabled bool, cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
-	answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(question, ecsOpt, serverDNSSECEnabled, tracker)
+	// Execute query directly
+	answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(
+		question, ecsOpt, serverDNSSECEnabled, tracker)
 
 	if err != nil {
-		return s.processQueryError(req, err, cacheKey, question, clientRequestedDNSSEC, clientHasEDNS, ecsOpt, tracker, isSecureConnection)
+		return s.processQueryError(req, err, cacheKey, question,
+			clientRequestedDNSSEC, clientHasEDNS, ecsOpt, tracker, isSecureConnection)
 	}
 
-	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, clientHasEDNS, cacheKey, answer, authority, additional, validated, ecsResponse, tracker, isSecureConnection)
+	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC,
+		clientHasEDNS, cacheKey, answer, authority, additional,
+		validated, ecsResponse, tracker, isSecureConnection)
 }
 
-func (s *DNSServer) processQueryError(req *dns.Msg, _ error, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ bool, _ *ECSOption, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
-	if s.config.Server.Features.ServeStale {
-		if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
-			responseTTL := uint32(StaleTTL)
-			msg := s.buildResponse(req)
-			if msg == nil {
-				msg = &dns.Msg{}
-				msg.SetReply(req)
-				msg.Rcode = dns.RcodeServerFailure
-				return msg
-			}
+func (s *DNSServer) refreshCacheEntry(ctx context.Context, question dns.Question,
+	ecs *ECSOption, cacheKey string, oldEntry *CacheEntry) error {
 
-			msg.Answer = processRecords(expandRecords(entry.Answer), responseTTL, clientRequestedDNSSEC)
-			msg.Ns = processRecords(expandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
-			msg.Extra = processRecords(expandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
+	defer handlePanic("cache refresh")
 
-			if s.config.Server.Features.DNSSEC && entry.Validated {
-				msg.AuthenticatedData = true
-			}
-
-			s.addEDNS(msg, req, isSecureConnection)
-			s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
-			return msg
-		}
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return errors.New("server closed")
 	}
 
+	// Prevent duplicate refresh
+	now := time.Now().Unix()
+	refreshInterval := int64(oldEntry.OriginalTTL)
+	if refreshInterval <= 0 {
+		refreshInterval = int64(oldEntry.TTL)
+	}
+
+	if (now - oldEntry.RefreshTime) < refreshInterval {
+		LogDebug("CACHE: Skip refresh for %s (recently refreshed)", cacheKey)
+		return nil
+	}
+
+	LogDebug("CACHE: Starting background refresh for %s", cacheKey)
+
+	// Execute query with timeout
+	_, cancel := context.WithTimeout(ctx, QueryTimeout)
+	defer cancel()
+
+	answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(
+		question, ecs, s.config.Server.Features.DNSSEC, nil)
+
+	if err != nil {
+		LogDebug("CACHE: Refresh failed for %s: %v", cacheKey, err)
+		s.updateCacheRefreshTime(cacheKey, oldEntry)
+		return err
+	}
+
+	LogDebug("CACHE: Refresh succeeded for %s", cacheKey)
+
+	// Speed test if configured
+	if len(s.config.SpeedTest) > 0 &&
+		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
+		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
+		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedTestDomain
+		speedTester := NewSpeedTestManager(*s.config, s.redisClient, domainSpeedPrefix)
+		speedTester.performSpeedTestAndSort(tempMsg)
+		_ = speedTester.Close()
+		answer, authority, additional = tempMsg.Answer, tempMsg.Ns, tempMsg.Extra
+	}
+
+	// Update cache
+	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
+
+	return nil
+}
+
+func (s *DNSServer) updateCacheRefreshTime(cacheKey string, _ *CacheEntry) {
+	defer handlePanic("Update refresh time")
+
+	redisCache, ok := s.cacheMgr.(*RedisCache)
+	if !ok || atomic.LoadInt32(&redisCache.closed) != 0 {
+		return
+	}
+
+	data, err := redisCache.client.Get(redisCache.ctx, cacheKey).Result()
+	if err != nil {
+		return
+	}
+
+	var currentEntry CacheEntry
+	if err := json.Unmarshal([]byte(data), &currentEntry); err != nil {
+		return
+	}
+
+	currentEntry.RefreshTime = time.Now().Unix()
+
+	updatedData, err := json.Marshal(currentEntry)
+	if err != nil {
+		return
+	}
+
+	redisCache.client.Set(redisCache.ctx, cacheKey, updatedData, redis.KeepTTL)
+	LogDebug("CACHE: Updated refresh time for %s (keeping stale data)", cacheKey)
+}
+
+func (s *DNSServer) processQueryError(req *dns.Msg, _ error, cacheKey string,
+	question dns.Question, clientRequestedDNSSEC bool, _ bool,
+	_ *ECSOption, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
+
+	// Try to return stale cache on query error
+	if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
+		LogDebug("CACHE: Query failed, returning stale cache for %s", question.Name)
+
+		msg := s.buildResponse(req)
+		if msg == nil {
+			msg = &dns.Msg{}
+			msg.SetReply(req)
+			msg.Rcode = dns.RcodeServerFailure
+			return msg
+		}
+
+		responseTTL := uint32(StaleTTL)
+		msg.Answer = processRecords(expandRecords(entry.Answer), responseTTL, clientRequestedDNSSEC)
+		msg.Ns = processRecords(expandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
+		msg.Extra = processRecords(expandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
+
+		if s.config.Server.Features.DNSSEC && entry.Validated {
+			msg.AuthenticatedData = true
+		}
+
+		s.addEDNS(msg, req, isSecureConnection)
+		s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
+		return msg
+	}
+
+	// No stale cache available
+	LogDebug("CACHE: No stale cache available after query error for %s", question.Name)
 	msg := s.buildResponse(req)
 	if msg == nil {
 		msg = &dns.Msg{}
@@ -4975,19 +4874,6 @@ func (s *DNSServer) shouldPerformSpeedTest(domain string) bool {
 	return false
 }
 
-func (s *DNSServer) queryForRefresh(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
-	defer handlePanic("Cache refresh query")
-
-	if atomic.LoadInt32(&s.closed) != 0 {
-		return nil, nil, nil, false, nil, errors.New("server is closed")
-	}
-
-	_, cancel := context.WithTimeout(s.ctx, QueryTimeout)
-	defer cancel()
-
-	return s.queryMgr.Query(question, ecs, serverDNSSECEnabled, nil)
-}
-
 func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
 	msg := acquireMessage()
 	if msg == nil {
@@ -5059,7 +4945,7 @@ func getClientIP(w dns.ResponseWriter) net.IP {
 	return nil
 }
 
-func getSecureClientIP(conn interface{}) net.IP {
+func getSecureClientIP(conn any) net.IP {
 	switch c := conn.(type) {
 	case *tls.Conn:
 		if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
@@ -5259,7 +5145,7 @@ func toRRSlice[T dns.RR](records []T) []dns.RR {
 }
 
 var messagePool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return &dns.Msg{}
 	},
 }

@@ -231,6 +231,71 @@ graph TB
 
 ---
 
+## 🔍 DNS 查询过程
+
+### 完整查询流程
+
+以下图表和步骤详细说明了 DNS 查询如何在 ZJDNS 中从客户端请求到最终响应的完整流程：
+
+```mermaid
+sequenceDiagram
+    participant C as DNS客户端
+    participant S as DNSServer
+    participant CM as CacheManager
+    participant QR as QueryManager
+    participant RR as RecursiveResolver
+    participant QC as QueryClient
+    participant RS as 根服务器
+    participant US as 上游DNS
+    participant R as Redis缓存
+
+    Note over C,R: 客户端查询 example.com
+
+    C->>S: DNS查询 (UDP/TCP/DoT/DoQ/DoH)
+    S->>S: 解析和验证请求
+    S->>CM: 检查缓存
+
+    alt 缓存命中 (新鲜)
+        CM-->>S: 返回缓存响应
+        S->>S: 应用安全规则
+        S-->>C: DNS响应
+    else 缓存命中 (过期) 或 缓存未命中
+        S->>QR: 开始查询处理
+        QR->>RR: 递归解析
+
+        RR->>QC: 查询根服务器
+        QC->>RS: UDP/TCP查询
+        RS-->>QC: 返回TLD引用
+        QC-->>RR: TLD信息
+
+        RR->>QC: 查询TLD服务器
+        QC-->>RR: 返回权威服务器引用
+        RR->>QC: 查询权威服务器
+        QC-->>RR: 最终响应
+
+        alt 查询成功
+            RR-->>QR: 有效响应
+            QR->>CM: 存储到缓存
+            QR-->>S: 查询结果
+            S->>S: 应用安全规则
+            S-->>C: DNS响应
+        else 查询超时/错误
+            RR-->>QR: 错误
+            QR->>CM: 尝试过期缓存
+            alt 有过期缓存
+                CM-->>QR: 过期响应
+                QR-->>S: 过期结果
+                S-->>C: 过期响应
+            else 无过期缓存
+                QR-->>S: 错误响应
+                S-->>C: DNS错误
+            end
+        end
+    end
+```
+
+---
+
 ## 📋 使用示例
 
 ### 生成示例配置文件
