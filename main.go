@@ -102,7 +102,7 @@ const (
 	// Cache TTL settings
 	DefaultCacheTTL = 10
 	StaleTTL        = 30
-	StaleMaxAge     = 86400 * 30 // 30 days max stale period
+	StaleMaxAge     = 86400 * 7
 
 	// Redis
 	RedisPoolSize     = 20
