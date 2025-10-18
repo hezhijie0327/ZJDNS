@@ -1024,15 +1024,13 @@ type ECSOption struct {
 }
 
 type EDNSManager struct {
-	defaultECS     *ECSOption
-	detector       *IPDetector
-	paddingEnabled bool
+	defaultECS *ECSOption
+	detector   *IPDetector
 }
 
-func NewEDNSManager(defaultSubnet string, paddingEnabled bool) (*EDNSManager, error) {
+func NewEDNSManager(defaultSubnet string) (*EDNSManager, error) {
 	manager := &EDNSManager{
-		detector:       newIPDetector(),
-		paddingEnabled: paddingEnabled,
+		detector: newIPDetector(),
 	}
 
 	if defaultSubnet != "" {
@@ -1044,10 +1042,6 @@ func NewEDNSManager(defaultSubnet string, paddingEnabled bool) (*EDNSManager, er
 		if ecs != nil {
 			LogInfo("EDNS: Default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
 		}
-	}
-
-	if paddingEnabled {
-		LogInfo("PADDING: DNS Padding enabled (block size: %d bytes)", PaddingBlockSize)
 	}
 
 	return manager, nil
@@ -1085,12 +1079,13 @@ func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 	return nil
 }
 
-func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled bool, isSecureConnection bool) {
+func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDNSSEC bool, isSecureConnection bool) {
 	if em == nil || msg == nil {
 		return
 	}
 
-	LogDebug("EDNS: Adding EDNS to message (DNSSEC: %v, ECS: %v)", dnssecEnabled, ecs != nil)
+	// DNSSEC is always enabled, but we check if client requested it
+	LogDebug("EDNS: Adding EDNS to message (DNSSEC: %v, ECS: %v)", clientRequestedDNSSEC, ecs != nil)
 
 	// Initialize message sections
 	if msg.Question == nil {
@@ -1124,9 +1119,8 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		},
 	}
 
-	if dnssecEnabled {
-		opt.SetDo(true)
-	}
+	// DNSSEC is always enabled
+	opt.SetDo()
 
 	var options []dns.EDNS0
 
@@ -1141,8 +1135,8 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 		})
 	}
 
-	// Add padding for secure connections
-	if em.paddingEnabled && isSecureConnection {
+	// Add padding for secure connections (always enabled)
+	if isSecureConnection {
 		LogDebug("PADDING: Adding padding for secure connection")
 		opt.Option = options
 		msg.Extra = append(msg.Extra, opt)
@@ -1169,10 +1163,8 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, dnssecEnabled 
 			LogDebug("PADDING: Failed to pack message for padding calculation: %v", err)
 		}
 		msg.Extra = msg.Extra[:len(msg.Extra)-1]
-	} else if em.paddingEnabled {
-		LogDebug("PADDING: Padding enabled but connection is not secure, skipping padding")
 	} else {
-		LogDebug("PADDING: Padding disabled")
+		LogDebug("PADDING: Connection is not secure, skipping padding")
 	}
 
 	opt.Option = options
@@ -3253,17 +3245,17 @@ func (qm *QueryManager) Initialize(servers []UpstreamServer) error {
 	return nil
 }
 
-func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	servers := qm.upstream.getServers()
 	if len(servers) > 0 {
-		return qm.queryUpstream(question, ecs, serverDNSSECEnabled, tracker)
+		return qm.queryUpstream(question, ecs, tracker)
 	}
 	ctx, cancel := context.WithTimeout(qm.server.ctx, RecursiveTimeout)
 	defer cancel()
 	return qm.cname.resolveWithCNAME(ctx, question, ecs, tracker)
 }
 
-func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, serverDNSSECEnabled bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	servers := qm.upstream.getServers()
 	if len(servers) == 0 {
 		return nil, nil, nil, false, nil, errors.New("no upstream servers")
@@ -3322,7 +3314,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 			})
 		} else {
 			wg.Add(1)
-			msg := qm.server.buildQueryMessage(question, ecs, serverDNSSECEnabled, true, false)
+			msg := qm.server.buildQueryMessage(question, ecs, true, false)
 			qm.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(taskCtx context.Context) error {
 				defer wg.Done()
 				defer releaseMessage(msg)
@@ -3353,9 +3345,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 							result.Response.Answer = filteredAnswer
 						}
 
-						if serverDNSSECEnabled {
-							result.Validated = qm.validator.dnssecValidator.ValidateResponse(result.Response, true)
-						}
+						result.Validated = qm.validator.dnssecValidator.ValidateResponse(result.Response, true)
 
 						ecsResponse := qm.server.ednsMgr.ParseFromDNS(result.Response)
 
@@ -3773,7 +3763,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 
 	for _, server := range tempServers {
 		srv := server
-		msg := rr.server.buildQueryMessage(question, ecs, true, true, false)
+		msg := rr.server.buildQueryMessage(question, ecs, true, false)
 		rr.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(ctx context.Context) error {
 			defer releaseMessage(msg)
 			LogDebug("UPSTREAM: Executing query to %s", srv.Address)
@@ -4060,7 +4050,7 @@ type DNSServer struct {
 func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	ednsManager, err := NewEDNSManager(config.Server.DefaultECS, true)
+	ednsManager, err := NewEDNSManager(config.Server.DefaultECS)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("EDNS manager init: %w", err)
@@ -4424,9 +4414,6 @@ func (s *DNSServer) displayInfo() {
 	if defaultECS := s.ednsMgr.GetDefaultECS(); defaultECS != nil {
 		LogInfo("EDNS: Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
-	if s.ednsMgr.paddingEnabled {
-		LogInfo("PADDING: DNS Padding: enabled")
-	}
 
 	if len(s.config.SpeedTest) > 0 {
 		if s.redisClient != nil {
@@ -4439,8 +4426,6 @@ func (s *DNSServer) displayInfo() {
 	if s.rootServerMgr.needsSpeed {
 		LogInfo("SPEEDTEST: Root server speed testing: enabled")
 	}
-
-	LogInfo("SERVER: Max concurrency: %d", MaxConcurrency)
 }
 
 func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
@@ -4542,14 +4527,13 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		ecsOpt = s.ednsMgr.GetDefaultECS()
 	}
 
-	serverDNSSECEnabled := true
-	cacheKey := buildCacheKey(question, ecsOpt, serverDNSSECEnabled, s.config.Redis.KeyPrefix)
+	cacheKey := buildCacheKey(question, ecsOpt, s.config.Redis.KeyPrefix)
 
 	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
 		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, clientHasEDNS, ecsOpt, cacheKey, tracker, isSecureConnection)
 	}
 
-	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, clientHasEDNS, serverDNSSECEnabled, cacheKey, tracker, isSecureConnection)
+	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, clientHasEDNS, cacheKey, tracker, isSecureConnection)
 }
 
 func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, _ bool, ecsOpt *ECSOption, cacheKey string, _ *RequestTracker, isSecureConnection bool) *dns.Msg {
@@ -4593,10 +4577,10 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	return msg
 }
 
-func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, clientHasEDNS bool, serverDNSSECEnabled bool, cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, clientHasEDNS bool, cacheKey string, tracker *RequestTracker, isSecureConnection bool) *dns.Msg {
 	// Execute query directly
 	answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(
-		question, ecsOpt, serverDNSSECEnabled, tracker)
+		question, ecsOpt, tracker)
 
 	if err != nil {
 		return s.processQueryError(req, err, cacheKey, question,
@@ -4636,7 +4620,7 @@ func (s *DNSServer) refreshCacheEntry(ctx context.Context, question dns.Question
 	defer cancel()
 
 	answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(
-		question, ecs, true, nil)
+		question, ecs, nil)
 
 	if err != nil {
 		LogDebug("CACHE: Refresh failed for %s: %v", cacheKey, err)
@@ -4803,7 +4787,7 @@ func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool)
 		ecsOpt = s.ednsMgr.GetDefaultECS()
 	}
 
-	shouldAddEDNS := ecsOpt != nil || s.ednsMgr.paddingEnabled || clientRequestedDNSSEC
+	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || true // padding always enabled
 
 	if shouldAddEDNS {
 		s.ednsMgr.AddToMessage(msg, ecsOpt, clientRequestedDNSSEC, isSecureConnection)
@@ -4870,7 +4854,7 @@ func (s *DNSServer) shouldPerformSpeedTest(domain string) bool {
 	return false
 }
 
-func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, dnssecEnabled bool, recursionDesired bool, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {
 	msg := acquireMessage()
 	if msg == nil {
 		msg = &dns.Msg{}
@@ -4880,7 +4864,7 @@ func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, dns
 	msg.RecursionDesired = recursionDesired
 
 	if s.ednsMgr != nil {
-		s.ednsMgr.AddToMessage(msg, ecs, dnssecEnabled, isSecureConnection)
+		s.ednsMgr.AddToMessage(msg, ecs, true, isSecureConnection) // DNSSEC always enabled
 	}
 
 	return msg
@@ -5049,7 +5033,7 @@ func processRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
 	return result
 }
 
-func buildCacheKey(question dns.Question, ecs *ECSOption, dnssecEnabled bool, globalPrefix string) string {
+func buildCacheKey(question dns.Question, ecs *ECSOption, globalPrefix string) string {
 	key := globalPrefix + RedisPrefixDNS +
 		fmt.Sprintf("%s:%d:%d", normalizeDomain(question.Name), question.Qtype, question.Qclass)
 
@@ -5057,9 +5041,8 @@ func buildCacheKey(question dns.Question, ecs *ECSOption, dnssecEnabled bool, gl
 		key += fmt.Sprintf(":%s/%d", ecs.Address.String(), ecs.SourcePrefix)
 	}
 
-	if dnssecEnabled {
-		key += ":dnssec"
-	}
+	// DNSSEC is always enabled
+	key += ":dnssec"
 
 	if len(key) > 512 {
 		key = fmt.Sprintf("hash:%x", key)[:512]
