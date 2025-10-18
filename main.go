@@ -301,9 +301,7 @@ type HTTPSSettings struct {
 }
 
 type FeatureFlags struct {
-	DNSSEC           bool `json:"dnssec"`
 	HijackProtection bool `json:"hijack_protection"`
-	Padding          bool `json:"padding"`
 }
 
 type RedisSettings struct {
@@ -509,9 +507,7 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config.Server.TLS.Port = DefaultTLSPort
 	config.Server.TLS.HTTPS.Port = DefaultHTTPSPort
 	config.Server.TLS.HTTPS.Endpoint = DefaultQueryPath
-	config.Server.Features.DNSSEC = true
 	config.Server.Features.HijackProtection = true
-	config.Server.Features.Padding = true
 	config.Redis.KeyPrefix = "zjdns:"
 	return config
 }
@@ -3357,7 +3353,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 							result.Response.Answer = filteredAnswer
 						}
 
-						if serverDNSSECEnabled && qm.server.config.Server.Features.DNSSEC {
+						if serverDNSSECEnabled {
 							result.Validated = qm.validator.dnssecValidator.ValidateResponse(result.Response, true)
 						}
 
@@ -3602,7 +3598,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		validated := false
-		if rr.server.config.Server.Features.DNSSEC {
+		if true {
 			validated = rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		}
 
@@ -3640,7 +3636,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		validated := false
-		if rr.server.config.Server.Features.DNSSEC {
+		if true {
 			LogDebug("RECURSION: Validating DNSSEC for %s", currentDomain)
 			validated = rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 			LogDebug("RECURSION: DNSSEC validation result for %s: %v", currentDomain, validated)
@@ -3777,7 +3773,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 
 	for _, server := range tempServers {
 		srv := server
-		msg := rr.server.buildQueryMessage(question, ecs, rr.server.config.Server.Features.DNSSEC, true, false)
+		msg := rr.server.buildQueryMessage(question, ecs, true, true, false)
 		rr.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(ctx context.Context) error {
 			defer releaseMessage(msg)
 			LogDebug("UPSTREAM: Executing query to %s", srv.Address)
@@ -3789,7 +3785,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 					srv.Address, rcode, len(result.Response.Answer), len(result.Response.Ns), len(result.Response.Extra))
 
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-					if rr.server.config.Server.Features.DNSSEC {
+					if true {
 						result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
 						LogDebug("UPSTREAM: DNSSEC validation for %s: %v", srv.Address, result.Validated)
 					}
@@ -4064,7 +4060,7 @@ type DNSServer struct {
 func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	ednsManager, err := NewEDNSManager(config.Server.DefaultECS, config.Server.Features.Padding)
+	ednsManager, err := NewEDNSManager(config.Server.DefaultECS, true)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("EDNS manager init: %w", err)
@@ -4546,7 +4542,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		ecsOpt = s.ednsMgr.GetDefaultECS()
 	}
 
-	serverDNSSECEnabled := s.config.Server.Features.DNSSEC
+	serverDNSSECEnabled := true
 	cacheKey := buildCacheKey(question, ecsOpt, serverDNSSECEnabled, s.config.Redis.KeyPrefix)
 
 	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
@@ -4572,7 +4568,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	msg.Ns = processRecords(expandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
 	msg.Extra = processRecords(expandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
 
-	if s.config.Server.Features.DNSSEC && entry.Validated {
+	if entry.Validated {
 		msg.AuthenticatedData = true
 	}
 
@@ -4640,7 +4636,7 @@ func (s *DNSServer) refreshCacheEntry(ctx context.Context, question dns.Question
 	defer cancel()
 
 	answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(
-		question, ecs, s.config.Server.Features.DNSSEC, nil)
+		question, ecs, true, nil)
 
 	if err != nil {
 		LogDebug("CACHE: Refresh failed for %s: %v", cacheKey, err)
@@ -4717,7 +4713,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, _ error, cacheKey string,
 		msg.Ns = processRecords(expandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
 		msg.Extra = processRecords(expandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
 
-		if s.config.Server.Features.DNSSEC && entry.Validated {
+		if entry.Validated {
 			msg.AuthenticatedData = true
 		}
 
@@ -4744,7 +4740,7 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 		msg.SetReply(req)
 	}
 
-	if s.config.Server.Features.DNSSEC && validated {
+	if validated {
 		msg.AuthenticatedData = true
 	}
 
@@ -4807,10 +4803,10 @@ func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool)
 		ecsOpt = s.ednsMgr.GetDefaultECS()
 	}
 
-	shouldAddEDNS := ecsOpt != nil || s.ednsMgr.paddingEnabled || (clientRequestedDNSSEC && s.config.Server.Features.DNSSEC)
+	shouldAddEDNS := ecsOpt != nil || s.ednsMgr.paddingEnabled || clientRequestedDNSSEC
 
 	if shouldAddEDNS {
-		s.ednsMgr.AddToMessage(msg, ecsOpt, clientRequestedDNSSEC && s.config.Server.Features.DNSSEC, isSecureConnection)
+		s.ednsMgr.AddToMessage(msg, ecsOpt, clientRequestedDNSSEC, isSecureConnection)
 	}
 }
 
