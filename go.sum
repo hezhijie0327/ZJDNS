@@ -16,10 +16,10 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/quic-go/qpack v0.5.1 h1:giqksBPnT/HDtZ6VhtFKgoLOWmlyo9Ei6u9PqzIMbhI=
 github.com/quic-go/qpack v0.5.1/go.mod h1:+PC4XFrEskIVkcLzpEkbLqq1uCoxPhQuvK5rH1ZgaEg=
-github.com/quic-go/quic-go v0.55.1-0.20251012121154-378d8672413b h1:FhT/wYFpYToEHkMfy1u0gU74kE5sO0IfrTw1UCvnoME=
-github.com/quic-go/quic-go v0.55.1-0.20251012121154-378d8672413b/go.mod h1:Dg4C30DBPt0xeYXkc+4JL4n+wrRaeyacHzwF/bmqVqA=
-github.com/redis/go-redis/v9 v9.16.0-beta.1.0.20250929063504-3ad9f9cb2334 h1:i9uiSg3RPubiYGknv6zvNEFyFfILMzc4MUx94Gw8dNs=
-github.com/redis/go-redis/v9 v9.16.0-beta.1.0.20250929063504-3ad9f9cb2334/go.mod h1:u410H11HMLoB+TP67dz8rL9s6QW2j76l0//kSOd3370=
+github.com/quic-go/quic-go v0.55.1-0.20251017053007-f07d6939d007 h1:mg9q/8q2zV8gH3ZSzQOUQz04ALmqsM0dagrC+fBRrCs=
+github.com/quic-go/quic-go v0.55.1-0.20251017053007-f07d6939d007/go.mod h1:Dg4C30DBPt0xeYXkc+4JL4n+wrRaeyacHzwF/bmqVqA=
+github.com/redis/go-redis/v9 v9.16.0-beta.1.0.20251017142310-1e6ee0674016 h1:82KfYxUnW6O4skBY5jrCUCYNqpVW5dFvSPjygH/hz38=
+github.com/redis/go-redis/v9 v9.16.0-beta.1.0.20251017142310-1e6ee0674016/go.mod h1:u410H11HMLoB+TP67dz8rL9s6QW2j76l0//kSOd3370=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 go.uber.org/mock v0.6.0 h1:hyF9dfmbgIX5EfOdasqLsWD6xqpNZlXblLB/Dbnwv3Y=
