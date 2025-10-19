@@ -53,28 +53,23 @@ import (
 // =============================================================================
 
 const (
-	// Version info
 	Version    = "1.2.0"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
-	// Network ports
 	DefaultDNSPort   = "53"
 	DefaultTLSPort   = "853"
 	DefaultHTTPSPort = "443"
 	DefaultPprofPort = "6060"
 
-	// Protocol
 	RecursiveIndicator = "builtin_recursive"
 	DefaultQueryPath   = "/dns-query"
 	PprofPath          = "/debug/pprof/"
 
-	// Buffer sizes
 	UDPBufferSize    = 1232
 	TCPBufferSize    = 4096
 	SecureBufferSize = 8192
 
-	// Limits
 	MaxDomainLength   = 253
 	MaxCNAMEChain     = 16
 	MaxRecursionDepth = 16
@@ -82,7 +77,6 @@ const (
 	MaxSingleQuery    = 5
 	MaxNSResolve      = 5
 
-	// Timeouts
 	QueryTimeout           = 5 * time.Second
 	RecursiveTimeout       = 10 * time.Second
 	ConnTimeout            = 5 * time.Second
@@ -98,13 +92,13 @@ const (
 	PprofIdleTimeout       = 120 * time.Second
 	PprofShutdownTimeout   = 5 * time.Second
 	ConnectionCloseTimeout = 1 * time.Second
+	ConnectionDialTimeout  = 3 * time.Second
+	ConnectionHealthCheck  = 5 * time.Second
 
-	// Cache TTL settings
 	DefaultCacheTTL = 10
 	StaleTTL        = 30
 	StaleMaxAge     = 86400 * 7
 
-	// Redis
 	RedisPoolSize     = 20
 	RedisMinIdle      = 5
 	RedisMaxRetries   = 3
@@ -113,30 +107,32 @@ const (
 	RedisWriteTimeout = 3 * time.Second
 	RedisDialTimeout  = 5 * time.Second
 
-	// Redis key prefixes
 	RedisPrefixDNS               = "dns:"
 	RedisPrefixSpeedTestDomain   = "speedtest:domain:"
 	RedisPrefixSpeedTestRoot     = "speedtest:rootserver:"
 	RedisPrefixSpeedTestDebounce = "speedtest:debounce:"
 	RedisPrefixQUICValidator     = "quic:validator:"
 	RedisPrefixRefreshLock       = "refresh:lock:"
+	RedisPrefixQUICSession       = "quic:session:"
 
-	// ECS
 	DefaultECSv4Len = 24
 	DefaultECSv6Len = 64
 	DefaultECSScope = 0
 
-	// Padding
 	PaddingBlockSize = 468
 
-	// DoH
 	DoHMaxRequestSize = 8192
 
-	// QUIC
-	MaxIncomingStreams   = 2048
-	QUICAddrValidatorTTL = 300 * time.Second
+	MaxIncomingStreams      = 2048
+	QUICAddrValidatorTTL    = 300 * time.Second
+	QUICSessionCacheTTL     = 7200 * time.Second
+	MaxIdleConnections      = 50
+	ConnectionKeepalive     = 60 * time.Second
+	ConnectionPoolCleanup   = 30 * time.Second
+	ConnectionMaxLifetime   = 600 * time.Second
+	ConnectionMaxIdleTime   = 180 * time.Second
+	ConnectionValidateEvery = 10 * time.Second
 
-	// SpeedTest
 	DefaultSpeedTimeout     = 250 * time.Millisecond
 	DefaultSpeedConcurrency = 5
 	UnreachableLatency      = 10 * time.Second
@@ -144,13 +140,10 @@ const (
 	SpeedDebounceInterval   = 10 * time.Second
 	RootServerSortInterval  = 900 * time.Second
 
-	// TLS
 	CertValidityDuration = 90 * 24 * time.Hour
 
-	// Defaults
 	DefaultLogLevel = "info"
 
-	// ANSI colors
 	ColorReset  = "\033[0m"
 	ColorRed    = "\033[31m"
 	ColorYellow = "\033[33m"
@@ -158,12 +151,10 @@ const (
 	ColorCyan   = "\033[36m"
 	ColorBold   = "\033[1m"
 
-	// QUIC error codes
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
 	QUICCodeInternalError quic.ApplicationErrorCode = 1
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 
-	// Refresh tracker cleanup
 	RefreshTrackerCleanupInterval = 5 * time.Minute
 	RefreshTrackerMaxAge          = 15 * time.Minute
 )
@@ -177,15 +168,13 @@ var (
 )
 
 // =============================================================================
-// Core Types & Interfaces
+// Type Definitions
 // =============================================================================
 
-// Closeable defines resource cleanup interface
 type Closeable interface {
 	Close() error
 }
 
-// LogLevel represents logging severity
 type LogLevel int
 
 const (
@@ -195,11 +184,6 @@ const (
 	Debug
 )
 
-// =============================================================================
-// Configuration Types
-// =============================================================================
-
-// ServerConfig is the root configuration structure
 type ServerConfig struct {
 	Server    ServerSettings    `json:"server"`
 	Redis     RedisSettings     `json:"redis"`
@@ -209,7 +193,6 @@ type ServerConfig struct {
 	CIDR      []CIDRConfig      `json:"cidr"`
 }
 
-// ServerSettings contains server-level configuration
 type ServerSettings struct {
 	Port       string       `json:"port"`
 	Pprof      string       `json:"pprof"`
@@ -220,14 +203,12 @@ type ServerSettings struct {
 	Features   FeatureFlags `json:"features"`
 }
 
-// DDRSettings contains Discovery of Designated Resolvers configuration
 type DDRSettings struct {
 	Domain string `json:"domain"`
 	IPv4   string `json:"ipv4"`
 	IPv6   string `json:"ipv6"`
 }
 
-// TLSSettings contains TLS/secure DNS configuration
 type TLSSettings struct {
 	Port       string        `json:"port"`
 	CertFile   string        `json:"cert_file"`
@@ -236,18 +217,15 @@ type TLSSettings struct {
 	HTTPS      HTTPSSettings `json:"https"`
 }
 
-// HTTPSSettings contains DoH/DoH3 configuration
 type HTTPSSettings struct {
 	Port     string `json:"port"`
 	Endpoint string `json:"endpoint"`
 }
 
-// FeatureFlags contains optional feature toggles
 type FeatureFlags struct {
 	HijackProtection bool `json:"hijack_protection"`
 }
 
-// RedisSettings contains Redis connection configuration
 type RedisSettings struct {
 	Address   string `json:"address"`
 	Password  string `json:"password"`
@@ -255,7 +233,6 @@ type RedisSettings struct {
 	KeyPrefix string `json:"key_prefix"`
 }
 
-// UpstreamServer defines an upstream DNS server
 type UpstreamServer struct {
 	Address       string   `json:"address"`
 	Protocol      string   `json:"protocol"`
@@ -264,12 +241,11 @@ type UpstreamServer struct {
 	Match         []string `json:"match,omitempty"`
 }
 
-// IsRecursive checks if this server uses recursive resolution
-func (u *UpstreamServer) IsRecursive() bool {
-	return strings.ToLower(u.Address) == RecursiveIndicator
+// IsRecursive returns true as all upstream servers are expected to be recursive
+func (s *UpstreamServer) IsRecursive() bool {
+	return true
 }
 
-// RewriteRule defines a DNS rewrite rule
 type RewriteRule struct {
 	Name         string            `json:"name"`
 	ResponseCode *int              `json:"response_code,omitempty"`
@@ -277,7 +253,6 @@ type RewriteRule struct {
 	Additional   []DNSRecordConfig `json:"additional,omitempty"`
 }
 
-// DNSRecordConfig defines a DNS record in configuration
 type DNSRecordConfig struct {
 	Name         string `json:"name,omitempty"`
 	Type         string `json:"type"`
@@ -286,25 +261,18 @@ type DNSRecordConfig struct {
 	ResponseCode *int   `json:"response_code,omitempty"`
 }
 
-// SpeedTestMethod defines a speed testing method
 type SpeedTestMethod struct {
 	Type    string `json:"type"`
 	Port    string `json:"port,omitempty"`
 	Timeout int    `json:"timeout"`
 }
 
-// CIDRConfig defines CIDR filtering configuration
 type CIDRConfig struct {
 	File  string   `json:"file,omitempty"`
 	Rules []string `json:"rules,omitempty"`
 	Tag   string   `json:"tag"`
 }
 
-// =============================================================================
-// Cache Types
-// =============================================================================
-
-// CacheEntry represents a cached DNS response
 type CacheEntry struct {
 	Answer          []*CompactRecord `json:"answer"`
 	Authority       []*CompactRecord `json:"authority"`
@@ -321,79 +289,18 @@ type CacheEntry struct {
 	Validated       bool             `json:"validated"`
 }
 
-// CompactRecord is a space-efficient DNS record representation
 type CompactRecord struct {
 	Text    string `json:"text"`
 	OrigTTL uint32 `json:"orig_ttl"`
 	Type    uint16 `json:"type"`
 }
 
-// IsExpired checks if cache entry has expired
-func (c *CacheEntry) IsExpired() bool {
-	return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL)
-}
-
-// ShouldRefresh checks if cache entry should be refreshed
-func (c *CacheEntry) ShouldRefresh() bool {
-	if c == nil {
-		return false
-	}
-	now := time.Now().Unix()
-	refreshInterval := int64(c.OriginalTTL)
-	if refreshInterval <= 0 {
-		refreshInterval = int64(c.TTL)
-	}
-	return c.IsExpired() && (now-c.Timestamp) > refreshInterval && (now-c.RefreshTime) > refreshInterval
-}
-
-// GetRemainingTTL calculates remaining TTL for cache entry
-func (c *CacheEntry) GetRemainingTTL() uint32 {
-	if c == nil {
-		return 0
-	}
-	now := time.Now().Unix()
-	elapsed := now - c.Timestamp
-	remaining := int64(c.TTL) - elapsed
-	if remaining > 0 {
-		return uint32(remaining)
-	}
-	staleElapsed := elapsed - int64(c.TTL)
-	staleCycle := staleElapsed % int64(StaleTTL)
-	staleTTLRemaining := int64(StaleTTL) - staleCycle
-	if staleTTLRemaining <= 0 {
-		staleTTLRemaining = int64(StaleTTL)
-	}
-	return uint32(staleTTLRemaining)
-}
-
-// GetECSOption extracts ECS option from cache entry
-func (c *CacheEntry) GetECSOption() *ECSOption {
-	if c == nil || c.ECSAddress == "" {
-		return nil
-	}
-	if ip := net.ParseIP(c.ECSAddress); ip != nil {
-		return &ECSOption{
-			Family:       c.ECSFamily,
-			SourcePrefix: c.ECSSourcePrefix,
-			ScopePrefix:  c.ECSScopePrefix,
-			Address:      ip,
-		}
-	}
-	return nil
-}
-
-// CacheManager interface defines cache operations
 type CacheManager interface {
 	Get(key string) (*CacheEntry, bool, bool)
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption)
 	Closeable
 }
 
-// =============================================================================
-// Network Types
-// =============================================================================
-
-// ECSOption represents EDNS Client Subnet option
 type ECSOption struct {
 	Address      net.IP
 	Family       uint16
@@ -401,7 +308,6 @@ type ECSOption struct {
 	ScopePrefix  uint8
 }
 
-// QueryResult represents the result of a DNS query
 type QueryResult struct {
 	Response   *dns.Msg
 	Answer     []dns.RR
@@ -415,7 +321,6 @@ type QueryResult struct {
 	ECS        *ECSOption
 }
 
-// SpeedResult represents speed test result for an IP
 type SpeedResult struct {
 	IP        string        `json:"ip"`
 	Latency   time.Duration `json:"latency"`
@@ -423,18 +328,12 @@ type SpeedResult struct {
 	Timestamp time.Time     `json:"timestamp"`
 }
 
-// RootServerWithLatency represents a root server with latency info
 type RootServerWithLatency struct {
 	Server    string        `json:"server"`
 	Latency   time.Duration `json:"latency"`
 	Reachable bool          `json:"reachable"`
 }
 
-// =============================================================================
-// Security Types
-// =============================================================================
-
-// DNSRewriteResult represents the result of DNS rewrite evaluation
 type DNSRewriteResult struct {
 	Domain        string
 	ShouldRewrite bool
@@ -443,23 +342,16 @@ type DNSRewriteResult struct {
 	Additional    []dns.RR
 }
 
-// =============================================================================
-// Manager Types
-// =============================================================================
-
-// CIDRRule represents a CIDR filtering rule
 type CIDRRule struct {
 	tag  string
 	nets []*net.IPNet
 }
 
-// RefreshEntry tracks cache refresh operations
 type RefreshEntry struct {
 	lastRefresh time.Time
 	mu          sync.Mutex
 }
 
-// RequestTracker tracks DNS request processing
 type RequestTracker struct {
 	ID           string
 	StartTime    time.Time
@@ -472,11 +364,34 @@ type RequestTracker struct {
 	mu           sync.Mutex
 }
 
+type ConnectionPoolEntry struct {
+	conn       any
+	lastUsed   time.Time
+	createdAt  time.Time
+	useCount   int64
+	serverAddr string
+	protocol   string
+	healthy    atomic.Bool
+	closed     atomic.Bool
+	mu         sync.Mutex
+}
+
+type QUICSessionCache struct {
+	sessions map[string]*sessionCacheEntry
+	redis    *redis.Client
+	prefix   string
+	mu       sync.RWMutex
+}
+
+type sessionCacheEntry struct {
+	data      []byte
+	expiresAt time.Time
+}
+
 // =============================================================================
 // Logging System
 // =============================================================================
 
-// LogManager handles structured logging with color support
 type LogManager struct {
 	level    LogLevel
 	writer   io.Writer
@@ -543,6 +458,943 @@ func LogInfo(format string, args ...interface{})  { globalLog.Info(format, args.
 func LogDebug(format string, args ...interface{}) { globalLog.Debug(format, args...) }
 
 // =============================================================================
+// Connection Pool
+// =============================================================================
+
+type ConnectionPool struct {
+	http2Conns    sync.Map
+	http3Conns    sync.Map
+	quicConns     sync.Map
+	tlsConns      sync.Map
+	sessionCache  *QUICSessionCache
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	closed        atomic.Bool
+	redisClient   *redis.Client
+	maxIdle       int
+	maxLifetime   time.Duration
+	maxIdleTime   time.Duration
+	cleanupTicker *time.Ticker
+	validateEvery time.Duration
+	connCount     atomic.Int64
+}
+
+func NewConnectionPool(redisClient *redis.Client, keyPrefix string) *ConnectionPool {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	pool := &ConnectionPool{
+		sessionCache:  NewQUICSessionCache(redisClient, keyPrefix+RedisPrefixQUICSession),
+		ctx:           ctx,
+		cancel:        cancel,
+		redisClient:   redisClient,
+		maxIdle:       MaxIdleConnections,
+		maxLifetime:   ConnectionMaxLifetime,
+		maxIdleTime:   ConnectionMaxIdleTime,
+		validateEvery: ConnectionValidateEvery,
+		cleanupTicker: time.NewTicker(ConnectionPoolCleanup),
+	}
+
+	pool.wg.Add(1)
+	go pool.cleanupLoop()
+
+	LogInfo("POOL: Connection pool initialized")
+	return pool
+}
+
+func (p *ConnectionPool) cleanupLoop() {
+	defer p.wg.Done()
+	defer handlePanic("Connection pool cleanup loop")
+
+	validateTicker := time.NewTicker(p.validateEvery)
+	defer validateTicker.Stop()
+
+	for {
+		select {
+		case <-p.cleanupTicker.C:
+			p.cleanupExpiredConnections()
+		case <-validateTicker.C:
+			p.validateConnections()
+		case <-p.ctx.Done():
+			return
+		}
+	}
+}
+
+func (p *ConnectionPool) cleanupExpiredConnections() {
+	now := time.Now()
+	removed := 0
+
+	cleanMap := func(m *sync.Map, connType string) {
+		m.Range(func(key, value interface{}) bool {
+			entry := value.(*ConnectionPoolEntry)
+			entry.mu.Lock()
+
+			shouldRemove := false
+			reason := ""
+
+			if entry.closed.Load() {
+				shouldRemove = true
+				reason = "already closed"
+			} else if now.Sub(entry.createdAt) > p.maxLifetime {
+				shouldRemove = true
+				reason = "max lifetime exceeded"
+			} else if now.Sub(entry.lastUsed) > p.maxIdleTime {
+				shouldRemove = true
+				reason = "idle timeout"
+			} else if !entry.healthy.Load() {
+				shouldRemove = true
+				reason = "unhealthy"
+			}
+
+			if shouldRemove {
+				m.Delete(key)
+				p.closeConnectionEntry(entry)
+				removed++
+				LogDebug("POOL: Removed %s connection to %s (reason: %s, use count: %d, age: %v)",
+					connType, entry.serverAddr, reason, entry.useCount, now.Sub(entry.createdAt))
+			}
+
+			entry.mu.Unlock()
+			return true
+		})
+	}
+
+	cleanMap(&p.http2Conns, "HTTP/2")
+	cleanMap(&p.http3Conns, "HTTP/3")
+	cleanMap(&p.quicConns, "QUIC")
+	cleanMap(&p.tlsConns, "TLS")
+
+	if removed > 0 {
+		LogDebug("POOL: Cleanup removed %d expired connections (total: %d)", removed, p.connCount.Load())
+	}
+}
+
+func (p *ConnectionPool) validateConnections() {
+	validated := 0
+	failed := 0
+
+	validateMap := func(m *sync.Map, connType string) {
+		m.Range(func(key, value interface{}) bool {
+			entry := value.(*ConnectionPoolEntry)
+			entry.mu.Lock()
+
+			if entry.closed.Load() {
+				entry.mu.Unlock()
+				return true
+			}
+
+			valid := p.validateConnection(entry)
+			entry.healthy.Store(valid)
+
+			if !valid {
+				failed++
+				m.Delete(key)
+				p.closeConnectionEntry(entry)
+				LogDebug("POOL: Removed invalid %s connection to %s", connType, entry.serverAddr)
+			} else {
+				validated++
+			}
+
+			entry.mu.Unlock()
+			return true
+		})
+	}
+
+	validateMap(&p.quicConns, "QUIC")
+	validateMap(&p.tlsConns, "TLS")
+
+	if validated > 0 || failed > 0 {
+		LogDebug("POOL: Validation completed (valid: %d, failed: %d)", validated, failed)
+	}
+}
+
+func (p *ConnectionPool) validateConnection(entry *ConnectionPoolEntry) bool {
+	switch conn := entry.conn.(type) {
+	case *quic.Conn:
+		select {
+		case <-conn.Context().Done():
+			return false
+		default:
+			return true
+		}
+	case *tls.Conn:
+		_ = conn.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
+		buf := make([]byte, 1)
+		_, err := conn.Read(buf)
+		_ = conn.SetReadDeadline(time.Time{})
+		return err == nil || isTemporaryError(err)
+	case *http.Transport, *http3.Transport:
+		return true
+	}
+	return false
+}
+
+func (p *ConnectionPool) closeConnectionEntry(entry *ConnectionPoolEntry) {
+	if !entry.closed.CompareAndSwap(false, true) {
+		return
+	}
+
+	p.connCount.Add(-1)
+
+	switch conn := entry.conn.(type) {
+	case *http.Transport:
+		conn.CloseIdleConnections()
+	case *http3.Transport:
+		_ = conn.Close()
+	case *quic.Conn:
+		_, cancel := context.WithTimeout(context.Background(), ConnectionCloseTimeout)
+		_ = conn.CloseWithError(QUICCodeNoError, "pool cleanup")
+		<-conn.Context().Done()
+		cancel()
+	case *tls.Conn:
+		_ = conn.Close()
+	}
+}
+
+func (p *ConnectionPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
+	if p.closed.Load() {
+		return nil, errors.New("pool is closed")
+	}
+
+	key := "h2:" + serverAddr
+
+	if value, ok := p.http2Conns.Load(key); ok {
+		entry := value.(*ConnectionPoolEntry)
+		entry.mu.Lock()
+		if !entry.closed.Load() && entry.healthy.Load() {
+			entry.lastUsed = time.Now()
+			entry.useCount++
+			entry.mu.Unlock()
+			transport := entry.conn.(*http.Transport)
+			return &http.Client{Transport: transport, Timeout: QueryTimeout}, nil
+		}
+		p.http2Conns.Delete(key)
+		p.closeConnectionEntry(entry)
+		entry.mu.Unlock()
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig:       tlsConfig,
+		DisableCompression:    true,
+		DisableKeepAlives:     false,
+		MaxIdleConns:          p.maxIdle,
+		IdleConnTimeout:       p.maxIdleTime,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConnsPerHost:   10,
+		ResponseHeaderTimeout: QueryTimeout,
+	}
+
+	if err := http2.ConfigureTransport(transport); err != nil {
+		return nil, fmt.Errorf("configure HTTP/2: %w", err)
+	}
+
+	entry := &ConnectionPoolEntry{
+		conn:       transport,
+		lastUsed:   time.Now(),
+		createdAt:  time.Now(),
+		useCount:   1,
+		serverAddr: serverAddr,
+		protocol:   "http2",
+	}
+	entry.healthy.Store(true)
+
+	p.http2Conns.Store(key, entry)
+	p.connCount.Add(1)
+	LogDebug("POOL: Created HTTP/2 connection to %s", serverAddr)
+
+	return &http.Client{Transport: transport, Timeout: QueryTimeout}, nil
+}
+
+func (p *ConnectionPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
+	if p.closed.Load() {
+		return nil, errors.New("pool is closed")
+	}
+
+	key := "h3:" + serverAddr
+
+	if value, ok := p.http3Conns.Load(key); ok {
+		entry := value.(*ConnectionPoolEntry)
+		entry.mu.Lock()
+		if !entry.closed.Load() && entry.healthy.Load() {
+			entry.lastUsed = time.Now()
+			entry.useCount++
+			entry.mu.Unlock()
+			transport := entry.conn.(*http3.Transport)
+			return &http.Client{Transport: transport, Timeout: QueryTimeout}, nil
+		}
+		p.http3Conns.Delete(key)
+		p.closeConnectionEntry(entry)
+		entry.mu.Unlock()
+	}
+
+	tlsConfig = tlsConfig.Clone()
+	tlsConfig.NextProtos = NextProtoHTTP3
+
+	if sessionData := p.sessionCache.Get(serverAddr); sessionData != nil {
+		if cache := deserializeQUICSession(sessionData); cache != nil {
+			tlsConfig.ClientSessionCache = cache
+			LogDebug("POOL: Using cached session for HTTP/3 0-RTT to %s", serverAddr)
+		}
+	}
+
+	transport := &http3.Transport{
+		TLSClientConfig: tlsConfig,
+		QUICConfig: &quic.Config{
+			MaxIdleTimeout:             p.maxIdleTime,
+			MaxIncomingStreams:         MaxIncomingStreams,
+			KeepAlivePeriod:            ConnectionKeepalive,
+			EnableDatagrams:            true,
+			Allow0RTT:                  true,
+			MaxStreamReceiveWindow:     6 * 1024 * 1024,
+			MaxConnectionReceiveWindow: 15 * 1024 * 1024,
+		},
+	}
+
+	entry := &ConnectionPoolEntry{
+		conn:       transport,
+		lastUsed:   time.Now(),
+		createdAt:  time.Now(),
+		useCount:   1,
+		serverAddr: serverAddr,
+		protocol:   "http3",
+	}
+	entry.healthy.Store(true)
+
+	p.http3Conns.Store(key, entry)
+	p.connCount.Add(1)
+	LogDebug("POOL: Created HTTP/3 connection to %s (0-RTT enabled)", serverAddr)
+
+	return &http.Client{Transport: transport, Timeout: QueryTimeout}, nil
+}
+
+func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*quic.Conn, error) {
+	if p.closed.Load() {
+		return nil, errors.New("pool is closed")
+	}
+
+	key := "quic:" + serverAddr
+
+	if value, ok := p.quicConns.Load(key); ok {
+		entry := value.(*ConnectionPoolEntry)
+		entry.mu.Lock()
+		conn := entry.conn.(*quic.Conn)
+
+		if !entry.closed.Load() && entry.healthy.Load() {
+			select {
+			case <-conn.Context().Done():
+				p.quicConns.Delete(key)
+				p.closeConnectionEntry(entry)
+				entry.mu.Unlock()
+			default:
+				entry.lastUsed = time.Now()
+				entry.useCount++
+				entry.mu.Unlock()
+				LogDebug("POOL: Reusing QUIC connection to %s (use: %d)", serverAddr, entry.useCount)
+				return conn, nil
+			}
+		} else {
+			p.quicConns.Delete(key)
+			p.closeConnectionEntry(entry)
+			entry.mu.Unlock()
+		}
+	}
+
+	tlsConfig = tlsConfig.Clone()
+	tlsConfig.NextProtos = NextProtoQUIC
+
+	earlyData := false
+	if sessionData := p.sessionCache.Get(serverAddr); sessionData != nil {
+		if cache := deserializeQUICSession(sessionData); cache != nil {
+			tlsConfig.ClientSessionCache = cache
+			earlyData = true
+			LogDebug("POOL: Attempting 0-RTT QUIC to %s", serverAddr)
+		}
+	}
+
+	quicConfig := &quic.Config{
+		MaxIdleTimeout:             p.maxIdleTime,
+		MaxIncomingStreams:         MaxIncomingStreams,
+		KeepAlivePeriod:            ConnectionKeepalive,
+		EnableDatagrams:            true,
+		Allow0RTT:                  true,
+		MaxStreamReceiveWindow:     6 * 1024 * 1024,
+		MaxConnectionReceiveWindow: 15 * 1024 * 1024,
+	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, ConnectionDialTimeout)
+	defer cancel()
+
+	var conn *quic.Conn
+	var err error
+
+	if earlyData {
+		conn, err = quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, quicConfig)
+		if err == nil {
+			LogInfo("POOL: Established 0-RTT QUIC to %s", serverAddr)
+		} else {
+			LogDebug("POOL: 0-RTT failed, fallback to 1-RTT: %v", err)
+		}
+	}
+
+	if conn == nil {
+		conn, err = quic.DialAddr(dialCtx, serverAddr, tlsConfig, quicConfig)
+		if err != nil {
+			return nil, fmt.Errorf("QUIC dial: %w", err)
+		}
+		LogDebug("POOL: Established 1-RTT QUIC to %s", serverAddr)
+	}
+
+	go p.cacheQUICSession(serverAddr, conn)
+
+	entry := &ConnectionPoolEntry{
+		conn:       conn,
+		lastUsed:   time.Now(),
+		createdAt:  time.Now(),
+		useCount:   1,
+		serverAddr: serverAddr,
+		protocol:   "quic",
+	}
+	entry.healthy.Store(true)
+
+	p.quicConns.Store(key, entry)
+	p.connCount.Add(1)
+
+	go p.monitorQUICConnection(key, entry, conn)
+
+	return conn, nil
+}
+
+func (p *ConnectionPool) monitorQUICConnection(key string, entry *ConnectionPoolEntry, conn *quic.Conn) {
+	defer handlePanic("Monitor QUIC connection")
+
+	<-conn.Context().Done()
+
+	entry.mu.Lock()
+	entry.healthy.Store(false)
+	entry.mu.Unlock()
+
+	p.quicConns.Delete(key)
+	p.closeConnectionEntry(entry)
+	LogDebug("POOL: QUIC connection to %s closed", entry.serverAddr)
+}
+
+func (p *ConnectionPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*tls.Conn, error) {
+	if p.closed.Load() {
+		return nil, errors.New("pool is closed")
+	}
+
+	key := "tls:" + serverAddr
+
+	if value, ok := p.tlsConns.Load(key); ok {
+		entry := value.(*ConnectionPoolEntry)
+		entry.mu.Lock()
+		conn := entry.conn.(*tls.Conn)
+
+		if !entry.closed.Load() && entry.healthy.Load() {
+			if p.validateConnection(entry) {
+				entry.lastUsed = time.Now()
+				entry.useCount++
+				entry.mu.Unlock()
+				LogDebug("POOL: Reusing TLS connection to %s", serverAddr)
+				return conn, nil
+			}
+		}
+
+		p.tlsConns.Delete(key)
+		p.closeConnectionEntry(entry)
+		entry.mu.Unlock()
+	}
+
+	host, port, err := net.SplitHostPort(serverAddr)
+	if err != nil {
+		return nil, fmt.Errorf("parse address: %w", err)
+	}
+
+	dialer := &net.Dialer{Timeout: ConnectionDialTimeout, KeepAlive: ConnectionKeepalive}
+	netConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	if err != nil {
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+
+	tlsConn := tls.Client(netConn, tlsConfig)
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		_ = netConn.Close()
+		return nil, fmt.Errorf("TLS handshake: %w", err)
+	}
+
+	entry := &ConnectionPoolEntry{
+		conn:       tlsConn,
+		lastUsed:   time.Now(),
+		createdAt:  time.Now(),
+		useCount:   1,
+		serverAddr: serverAddr,
+		protocol:   "tls",
+	}
+	entry.healthy.Store(true)
+
+	p.tlsConns.Store(key, entry)
+	p.connCount.Add(1)
+	LogDebug("POOL: Created TLS connection to %s", serverAddr)
+
+	return tlsConn, nil
+}
+
+func (p *ConnectionPool) cacheQUICSession(serverAddr string, conn *quic.Conn) {
+	defer handlePanic("Cache QUIC session")
+
+	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case <-conn.Context().Done():
+		return
+	default:
+	}
+
+	if sessionData := serializeQUICSession(conn); sessionData != nil {
+		p.sessionCache.Put(serverAddr, sessionData)
+		LogDebug("POOL: Cached QUIC session for %s", serverAddr)
+	}
+}
+
+func (p *ConnectionPool) Close() error {
+	if !p.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+
+	LogInfo("POOL: Shutting down connection pool...")
+
+	p.cancel()
+	p.cleanupTicker.Stop()
+
+	closeMap := func(m *sync.Map) {
+		m.Range(func(key, value interface{}) bool {
+			entry := value.(*ConnectionPoolEntry)
+			p.closeConnectionEntry(entry)
+			m.Delete(key)
+			return true
+		})
+	}
+
+	closeMap(&p.http2Conns)
+	closeMap(&p.http3Conns)
+	closeMap(&p.quicConns)
+	closeMap(&p.tlsConns)
+
+	p.wg.Wait()
+	LogInfo("POOL: Connection pool shut down (total connections closed: %d)", p.connCount.Load())
+	return nil
+}
+
+// =============================================================================
+// QUIC Session Cache
+// =============================================================================
+
+func NewQUICSessionCache(redisClient *redis.Client, keyPrefix string) *QUICSessionCache {
+	cache := &QUICSessionCache{
+		sessions: make(map[string]*sessionCacheEntry),
+		redis:    redisClient,
+		prefix:   keyPrefix,
+	}
+
+	go cache.cleanupExpiredSessions()
+
+	return cache
+}
+
+func (qsc *QUICSessionCache) cleanupExpiredSessions() {
+	defer handlePanic("QUIC session cache cleanup")
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		qsc.mu.Lock()
+		now := time.Now()
+		for addr, entry := range qsc.sessions {
+			if now.After(entry.expiresAt) {
+				delete(qsc.sessions, addr)
+			}
+		}
+		qsc.mu.Unlock()
+	}
+}
+
+func (qsc *QUICSessionCache) Get(serverAddr string) []byte {
+	qsc.mu.RLock()
+	if entry, ok := qsc.sessions[serverAddr]; ok {
+		if time.Now().Before(entry.expiresAt) {
+			data := entry.data
+			qsc.mu.RUnlock()
+			return data
+		}
+		delete(qsc.sessions, serverAddr)
+	}
+	qsc.mu.RUnlock()
+
+	if qsc.redis != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), RedisReadTimeout)
+		defer cancel()
+
+		key := qsc.prefix + serverAddr
+		if data, err := qsc.redis.Get(ctx, key).Bytes(); err == nil {
+			qsc.mu.Lock()
+			qsc.sessions[serverAddr] = &sessionCacheEntry{
+				data:      data,
+				expiresAt: time.Now().Add(QUICSessionCacheTTL),
+			}
+			qsc.mu.Unlock()
+			return data
+		}
+	}
+
+	return nil
+}
+
+func (qsc *QUICSessionCache) Put(serverAddr string, sessionData []byte) {
+	expiresAt := time.Now().Add(QUICSessionCacheTTL)
+
+	qsc.mu.Lock()
+	qsc.sessions[serverAddr] = &sessionCacheEntry{
+		data:      sessionData,
+		expiresAt: expiresAt,
+	}
+	qsc.mu.Unlock()
+
+	if qsc.redis != nil {
+		go func() {
+			defer handlePanic("Put QUIC session to Redis")
+			ctx, cancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
+			defer cancel()
+
+			key := qsc.prefix + serverAddr
+			_ = qsc.redis.Set(ctx, key, sessionData, QUICSessionCacheTTL).Err()
+		}()
+	}
+}
+
+func serializeQUICSession(conn *quic.Conn) []byte {
+	return []byte(fmt.Sprintf("session:%p:%v", conn, time.Now().Unix()))
+}
+
+func deserializeQUICSession(data []byte) tls.ClientSessionCache {
+	if data == nil {
+		return nil
+	}
+	return tls.NewLRUClientSessionCache(32)
+}
+
+// =============================================================================
+// Query Client
+// =============================================================================
+
+type QueryClient struct {
+	server   *DNSServer
+	timeout  time.Duration
+	connPool *ConnectionPool
+}
+
+func (eqc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer) *QueryResult {
+	start := time.Now()
+	result := &QueryResult{Server: server.Address, Protocol: server.Protocol}
+
+	queryCtx, cancel := context.WithTimeout(ctx, eqc.timeout)
+	defer cancel()
+
+	protocol := strings.ToLower(server.Protocol)
+
+	if isSecureProtocol(protocol) {
+		result.Response, result.Error = eqc.executeSecureQuery(queryCtx, msg, server, protocol)
+	} else {
+		result.Response, result.Error = eqc.executeTraditionalQuery(queryCtx, msg, server)
+		if eqc.needsTCPFallback(result, protocol) {
+			tcpServer := *server
+			tcpServer.Protocol = "tcp"
+			if tcpResp, tcpErr := eqc.executeTraditionalQuery(queryCtx, msg, &tcpServer); tcpErr == nil {
+				result.Response = tcpResp
+				result.Error = nil
+				result.Protocol = "TCP"
+			}
+		}
+	}
+
+	result.Duration = time.Since(start)
+	result.Protocol = strings.ToUpper(protocol)
+
+	return result
+}
+
+func (eqc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, protocol string) (*dns.Msg, error) {
+	tlsConfig := &tls.Config{
+		ServerName:         server.ServerName,
+		InsecureSkipVerify: server.SkipTLSVerify,
+		MinVersion:         tls.VersionTLS12,
+	}
+
+	switch protocol {
+	case "tls":
+		return eqc.executeTLS(ctx, msg, server, tlsConfig)
+	case "quic":
+		return eqc.executeQUIC(ctx, msg, server, tlsConfig)
+	case "https":
+		return eqc.executeDoH(ctx, msg, server, tlsConfig)
+	case "http3":
+		return eqc.executeDoH3(ctx, msg, server, tlsConfig)
+	default:
+		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
+	}
+}
+
+func (eqc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+	conn, err := eqc.connPool.GetOrCreateTLS(ctx, server.Address, tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = conn.SetDeadline(time.Now().Add(eqc.timeout))
+	defer func() { _ = conn.SetDeadline(time.Time{}) }()
+
+	msgData, err := msg.Pack()
+	if err != nil {
+		return nil, fmt.Errorf("pack message: %w", err)
+	}
+
+	buf := make([]byte, 2+len(msgData))
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
+	copy(buf[2:], msgData)
+
+	if _, err := conn.Write(buf); err != nil {
+		return nil, fmt.Errorf("write: %w", err)
+	}
+
+	lengthBuf := make([]byte, 2)
+	if _, err := io.ReadFull(conn, lengthBuf); err != nil {
+		return nil, fmt.Errorf("read length: %w", err)
+	}
+
+	respLength := binary.BigEndian.Uint16(lengthBuf)
+	if respLength == 0 || respLength > TCPBufferSize {
+		return nil, fmt.Errorf("invalid length: %d", respLength)
+	}
+
+	respBuf := make([]byte, respLength)
+	if _, err := io.ReadFull(conn, respBuf); err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	response := new(dns.Msg)
+	if err := response.Unpack(respBuf); err != nil {
+		return nil, fmt.Errorf("unpack: %w", err)
+	}
+
+	return response, nil
+}
+
+func (eqc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+	conn, err := eqc.connPool.GetOrCreateQUIC(ctx, server.Address, tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open stream: %w", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	_ = stream.SetDeadline(time.Now().Add(eqc.timeout))
+
+	originalID := msg.Id
+	msg.Id = 0
+
+	msgData, err := msg.Pack()
+	if err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("pack: %w", err)
+	}
+
+	buf := make([]byte, 2+len(msgData))
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
+	copy(buf[2:], msgData)
+
+	if _, err := stream.Write(buf); err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("write: %w", err)
+	}
+
+	_ = stream.Close()
+
+	respBuf := make([]byte, SecureBufferSize)
+	n, err := stream.Read(respBuf)
+	if err != nil && n == 0 {
+		msg.Id = originalID
+		return nil, fmt.Errorf("read: %w", err)
+	}
+
+	stream.CancelRead(0)
+
+	if n < 2 {
+		msg.Id = originalID
+		return nil, fmt.Errorf("response too short: %d", n)
+	}
+
+	response := new(dns.Msg)
+	if err := response.Unpack(respBuf[2:n]); err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("unpack: %w", err)
+	}
+
+	msg.Id = originalID
+	response.Id = originalID
+
+	return response, nil
+}
+
+func (eqc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+	parsedURL, err := url.Parse(server.Address)
+	if err != nil {
+		return nil, fmt.Errorf("parse URL: %w", err)
+	}
+
+	if parsedURL.Port() == "" {
+		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultHTTPSPort)
+	}
+
+	httpClient, err := eqc.connPool.GetOrCreateHTTP2(parsedURL.Host, tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	originalID := msg.Id
+	msg.Id = 0
+
+	buf, err := msg.Pack()
+	if err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("pack: %w", err)
+	}
+
+	q := url.Values{"dns": []string{base64.RawURLEncoding.EncodeToString(buf)}}
+	u := url.URL{Scheme: parsedURL.Scheme, Host: parsedURL.Host, Path: parsedURL.Path, RawQuery: q.Encode()}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	httpReq.Header.Set("Accept", "application/dns-message")
+
+	httpResp, err := httpClient.Do(httpReq)
+	if err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode != http.StatusOK {
+		msg.Id = originalID
+		return nil, fmt.Errorf("HTTP status: %d", httpResp.StatusCode)
+	}
+
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+
+	response := &dns.Msg{}
+	if err := response.Unpack(body); err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("unpack: %w", err)
+	}
+
+	msg.Id = originalID
+	response.Id = originalID
+
+	return response, nil
+}
+
+func (eqc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+	parsedURL, err := url.Parse(server.Address)
+	if err != nil {
+		return nil, fmt.Errorf("parse URL: %w", err)
+	}
+
+	if parsedURL.Port() == "" {
+		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultHTTPSPort)
+	}
+
+	httpClient, err := eqc.connPool.GetOrCreateHTTP3(parsedURL.Host, tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	originalID := msg.Id
+	msg.Id = 0
+
+	buf, err := msg.Pack()
+	if err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("pack: %w", err)
+	}
+
+	q := url.Values{"dns": []string{base64.RawURLEncoding.EncodeToString(buf)}}
+	u := url.URL{Scheme: parsedURL.Scheme, Host: parsedURL.Host, Path: parsedURL.Path, RawQuery: q.Encode()}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	httpReq.Header.Set("Accept", "application/dns-message")
+
+	httpResp, err := httpClient.Do(httpReq)
+	if err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	defer func() { _ = httpResp.Body.Close() }()
+
+	if httpResp.StatusCode != http.StatusOK {
+		msg.Id = originalID
+		return nil, fmt.Errorf("HTTP status: %d", httpResp.StatusCode)
+	}
+
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+
+	response := &dns.Msg{}
+	if err := response.Unpack(body); err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("unpack: %w", err)
+	}
+
+	msg.Id = originalID
+	response.Id = originalID
+
+	return response, nil
+}
+
+func (eqc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer) (*dns.Msg, error) {
+	client := &dns.Client{Timeout: eqc.timeout, Net: server.Protocol}
+	if server.Protocol == "udp" {
+		client.UDPSize = UDPBufferSize
+	}
+
+	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
+	return response, err
+}
+
+func (eqc *QueryClient) needsTCPFallback(result *QueryResult, protocol string) bool {
+	return protocol != "tcp" && (result.Error != nil || (result.Response != nil && result.Response.Truncated))
+}
+
+// =============================================================================
 // Configuration Manager
 // =============================================================================
 
@@ -571,7 +1423,7 @@ func (cm *ConfigManager) LoadConfig(configFile string) (*ServerConfig, error) {
 		cm.addDDRRecords(config)
 	}
 
-	LogInfo("CONFIG: Configuration loaded successfully: %s", configFile)
+	LogInfo("CONFIG: Configuration loaded successfully")
 	return config, nil
 }
 
@@ -613,10 +1465,10 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		cidrTags[cidrConfig.Tag] = true
 
 		if cidrConfig.File == "" && len(cidrConfig.Rules) == 0 {
-			return fmt.Errorf("CIDR config %d (tag '%s'): either 'file' or 'rules' must be specified", i, cidrConfig.Tag)
+			return fmt.Errorf("CIDR config %d: either 'file' or 'rules' must be specified", i)
 		}
 		if cidrConfig.File != "" && !isValidFilePath(cidrConfig.File) {
-			return fmt.Errorf("CIDR config %d (tag '%s'): file not found: %s", i, cidrConfig.Tag, cidrConfig.File)
+			return fmt.Errorf("CIDR config %d: file not found: %s", i, cidrConfig.File)
 		}
 	}
 
@@ -649,7 +1501,7 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		for _, matchTag := range server.Match {
 			cleanTag := strings.TrimPrefix(matchTag, "!")
 			if !cidrTags[cleanTag] {
-				return fmt.Errorf("upstream server %d: match tag '%s' not found in CIDR config", i, cleanTag)
+				return fmt.Errorf("upstream server %d: match tag '%s' not found", i, cleanTag)
 			}
 		}
 	}
@@ -661,7 +1513,7 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	}
 
 	if config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {
-		LogWarn("TLS: Self-signed certificate enabled, ignoring cert and key files")
+		LogWarn("TLS: Self-signed enabled, ignoring cert/key files")
 	}
 
 	if !config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {
@@ -815,11 +1667,10 @@ func GenerateExampleConfig() string {
 // Cache Implementation
 // =============================================================================
 
-// NullCache is a no-op cache implementation
 type NullCache struct{}
 
 func NewNullCache() *NullCache {
-	LogInfo("CACHE: No cache mode (stale cache disabled)")
+	LogInfo("CACHE: No cache mode")
 	return &NullCache{}
 }
 
@@ -828,7 +1679,6 @@ func (nc *NullCache) Set(key string, answer, authority, additional []dns.RR, val
 }
 func (nc *NullCache) Close() error { return nil }
 
-// RedisCache implements cache using Redis
 type RedisCache struct {
 	client         *redis.Client
 	config         *ServerConfig
@@ -839,7 +1689,6 @@ type RedisCache struct {
 	closed         int32
 }
 
-// RefreshTracker prevents duplicate cache refresh operations
 type RefreshTracker struct {
 	entries map[string]*RefreshEntry
 	mu      sync.RWMutex
@@ -936,7 +1785,7 @@ func NewRedisCache(config *ServerConfig, server *DNSServer) (*RedisCache, error)
 		refreshTracker: NewRefreshTracker(),
 	}
 
-	LogInfo("CACHE: Redis cache initialized (stale cache enabled)")
+	LogInfo("CACHE: Redis cache initialized")
 	return cache, nil
 }
 
@@ -947,19 +1796,16 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 		return nil, false, false
 	}
 
-	LogDebug("CACHE: Getting key: %s", key)
 	ctx, cancel := context.WithTimeout(rc.ctx, RedisReadTimeout)
 	defer cancel()
 
 	data, err := rc.client.Get(ctx, key).Result()
 	if err != nil {
-		LogDebug("CACHE: Cache miss for key: %s", key)
 		return nil, false, false
 	}
 
 	var entry CacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		LogDebug("CACHE: Corrupted cache entry for key: %s, removing", key)
 		go func() {
 			defer handlePanic("Clean corrupted cache")
 			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
@@ -970,8 +1816,6 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	}
 
 	isExpired := entry.IsExpired()
-	LogDebug("CACHE: Cache hit for key: %s (expired: %v, TTL: %d, age: %ds)",
-		key, isExpired, entry.TTL, time.Now().Unix()-entry.Timestamp)
 
 	entry.AccessTime = time.Now().Unix()
 	go func() {
@@ -998,9 +1842,6 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 	allRRs = append(append(append(allRRs, answer...), authority...), additional...)
 	cacheTTL := calculateTTL(allRRs)
 	now := time.Now().Unix()
-
-	LogDebug("CACHE: Setting key: %s (TTL: %d, answer: %d, authority: %d, additional: %d, validated: %v)",
-		key, cacheTTL, len(answer), len(authority), len(additional), validated)
 
 	entry := &CacheEntry{
 		Answer:      compactRecords(answer),
@@ -1047,6 +1888,56 @@ func (rc *RedisCache) Close() error {
 	}
 
 	LogInfo("CACHE: Redis cache shut down")
+	return nil
+}
+
+func (c *CacheEntry) IsExpired() bool {
+	return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL)
+}
+
+func (c *CacheEntry) ShouldRefresh() bool {
+	if c == nil {
+		return false
+	}
+	now := time.Now().Unix()
+	refreshInterval := int64(c.OriginalTTL)
+	if refreshInterval <= 0 {
+		refreshInterval = int64(c.TTL)
+	}
+	return c.IsExpired() && (now-c.Timestamp) > refreshInterval && (now-c.RefreshTime) > refreshInterval
+}
+
+func (c *CacheEntry) GetRemainingTTL() uint32 {
+	if c == nil {
+		return 0
+	}
+	now := time.Now().Unix()
+	elapsed := now - c.Timestamp
+	remaining := int64(c.TTL) - elapsed
+	if remaining > 0 {
+		return uint32(remaining)
+	}
+	staleElapsed := elapsed - int64(c.TTL)
+	staleCycle := staleElapsed % int64(StaleTTL)
+	staleTTLRemaining := int64(StaleTTL) - staleCycle
+	if staleTTLRemaining <= 0 {
+		staleTTLRemaining = int64(StaleTTL)
+	}
+	return uint32(staleTTLRemaining)
+}
+
+func (c *CacheEntry) GetECSOption() *ECSOption {
+	if c == nil || c.ECSAddress == "" {
+		return nil
+	}
+	if ip := net.ParseIP(c.ECSAddress); ip != nil {
+		return &ECSOption{
+			Family:       c.ECSFamily,
+			SourcePrefix: c.ECSSourcePrefix,
+			ScopePrefix:  c.ECSScopePrefix,
+			Address:      ip,
+		}
+	}
 	return nil
 }
 
@@ -1190,9 +2081,15 @@ type EDNSManager struct {
 	detector   *IPDetector
 }
 
+type IPDetector struct {
+	httpClient *http.Client
+}
+
 func NewEDNSManager(defaultSubnet string) (*EDNSManager, error) {
 	manager := &EDNSManager{
-		detector: newIPDetector(),
+		detector: &IPDetector{
+			httpClient: &http.Client{Timeout: HTTPClientTimeout},
+		},
 	}
 
 	if defaultSubnet != "" {
@@ -1228,14 +2125,12 @@ func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 
 	for _, option := range opt.Option {
 		if subnet, ok := option.(*dns.EDNS0_SUBNET); ok {
-			ecs := &ECSOption{
+			return &ECSOption{
 				Family:       subnet.Family,
 				SourcePrefix: subnet.SourceNetmask,
 				ScopePrefix:  subnet.SourceScope,
 				Address:      subnet.Address,
 			}
-			LogDebug("EDNS: Parsed ECS option: %s/%d", ecs.Address.String(), ecs.SourcePrefix)
-			return ecs
 		}
 	}
 	return nil
@@ -1245,8 +2140,6 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 	if em == nil || msg == nil {
 		return
 	}
-
-	LogDebug("EDNS: Adding EDNS to message (DNSSEC: %v, ECS: %v)", clientRequestedDNSSEC, ecs != nil)
 
 	if msg.Question == nil {
 		msg.Question = []dns.Question{}
@@ -1292,21 +2185,16 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 	}
 
 	if isSecureConnection {
-		LogDebug("PADDING: Adding padding for secure connection")
 		opt.Option = options
 		msg.Extra = append(msg.Extra, opt)
 		if wireData, err := msg.Pack(); err == nil {
 			currentSize := len(wireData)
-			LogDebug("PADDING: Current message size: %d bytes", currentSize)
 			if currentSize < PaddingBlockSize {
 				paddingDataSize := PaddingBlockSize - currentSize - 4
-				LogDebug("PADDING: Adding %d bytes of padding (target: %d bytes)",
-					paddingDataSize, PaddingBlockSize)
 				if paddingDataSize > 0 {
 					options = append(options, &dns.EDNS0_PADDING{
 						Padding: make([]byte, paddingDataSize),
 					})
-					LogDebug("PADDING: Padding added successfully")
 				}
 			}
 		}
@@ -1373,16 +2261,6 @@ func (em *EDNSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption
 	}
 
 	return ecs, nil
-}
-
-type IPDetector struct {
-	httpClient *http.Client
-}
-
-func newIPDetector() *IPDetector {
-	return &IPDetector{
-		httpClient: &http.Client{Timeout: HTTPClientTimeout},
-	}
 }
 
 func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
@@ -1476,8 +2354,6 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 		return result
 	}
 
-	LogDebug("REWRITE: Checking domain %s for rewrite rules", domain)
-
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
@@ -1489,11 +2365,9 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 			continue
 		}
 
-		LogDebug("REWRITE: Found matching rule for domain %s", domain)
 		if rule.ResponseCode != nil {
 			result.ResponseCode = *rule.ResponseCode
 			result.ShouldRewrite = true
-			LogDebug("REWRITE: Applied response code rewrite for %s: %d", domain, *rule.ResponseCode)
 			return result
 		}
 
@@ -1528,7 +2402,6 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 			}
 
 			result.ShouldRewrite = true
-			LogDebug("REWRITE: Applied record rewrite for %s with %d records and %d additional", domain, len(result.Records), len(result.Additional))
 			return result
 		}
 	}
@@ -1625,7 +2498,6 @@ func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg) *dns.Msg 
 		return response
 	}
 
-	LogDebug("SPEEDTEST: Starting speed test and sort for %d records", len(response.Answer))
 	var aRecords []*dns.A
 	var aaaaRecords []*dns.AAAA
 	var cnameRecords []dns.RR
@@ -1715,10 +2587,8 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	results := make(map[string]*SpeedResult)
 	remainingIPs := []string{}
 
-	LogDebug("SPEEDTEST: Testing %d IPs for speed", len(ips))
-
 	if st.redis != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
 		for _, ip := range ips {
@@ -1729,7 +2599,6 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 				if json.Unmarshal([]byte(data), &result) == nil {
 					if time.Since(result.Timestamp) < st.cacheTTL {
 						results[ip] = &result
-						LogDebug("SPEEDTEST: Cache hit for IP %s (latency: %v)", ip, result.Latency)
 						continue
 					}
 				}
@@ -1740,9 +2609,6 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 		remainingIPs = ips
 	}
 
-	LogDebug("SPEEDTEST: Found %d cached results, testing %d remaining IPs",
-		len(results), len(remainingIPs))
-
 	if len(remainingIPs) == 0 {
 		return results
 	}
@@ -1750,7 +2616,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	newResults := st.performSpeedTest(remainingIPs)
 
 	if st.redis != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
 		for ip, result := range newResults {
@@ -1758,7 +2624,6 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 			data, err := json.Marshal(result)
 			if err == nil {
 				st.redis.Set(ctx, key, data, st.cacheTTL)
-				LogDebug("SPEEDTEST: Cached result for IP %s (latency: %v)", ip, result.Latency)
 			}
 		}
 	}
@@ -1771,7 +2636,6 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 }
 
 func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResult {
-	LogDebug("SPEEDTEST: Starting concurrent speed test for %d IPs with concurrency %d", len(ips), st.concurrency)
 	semaphore := make(chan struct{}, st.concurrency)
 	resultChan := make(chan *SpeedResult, len(ips))
 
@@ -1807,7 +2671,6 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 }
 
 func (st *SpeedTestManager) testSingleIP(ip string) *SpeedResult {
-	LogDebug("SPEEDTEST: Testing IP %s", ip)
 	result := &SpeedResult{IP: ip, Timestamp: time.Now()}
 
 	for _, method := range st.methods {
@@ -1826,14 +2689,12 @@ func (st *SpeedTestManager) testSingleIP(ip string) *SpeedResult {
 		if latency >= 0 {
 			result.Reachable = true
 			result.Latency = latency
-			LogDebug("SPEEDTEST: IP %s reachable with latency %v", ip, latency)
 			return result
 		}
 	}
 
 	result.Reachable = false
 	result.Latency = st.timeout
-	LogDebug("SPEEDTEST: IP %s unreachable", ip)
 	return result
 }
 
@@ -2000,7 +2861,7 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 		go rsm.sortServersBySpeed()
 		LogInfo("SPEEDTEST: Root server speed testing enabled")
 	} else {
-		LogInfo("SPEEDTEST: Root server speed testing disabled (using upstream servers)")
+		LogInfo("SPEEDTEST: Root server speed testing disabled")
 	}
 
 	return rsm
@@ -2059,30 +2920,6 @@ type SecurityManager struct {
 	hijack *HijackPrevention
 }
 
-func NewSecurityManager(config *ServerConfig, server *DNSServer) (*SecurityManager, error) {
-	sm := &SecurityManager{
-		dnssec: &DNSSECValidator{},
-		hijack: &HijackPrevention{enabled: config.Server.Features.HijackProtection},
-	}
-
-	if config.Server.TLS.SelfSigned || (config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "") {
-		tlsMgr, err := NewTLSManager(server, config)
-		if err != nil {
-			return nil, fmt.Errorf("create TLS manager: %w", err)
-		}
-		sm.tls = tlsMgr
-	}
-
-	return sm, nil
-}
-
-func (sm *SecurityManager) Shutdown(timeout time.Duration) error {
-	if sm.tls != nil {
-		return sm.tls.shutdown()
-	}
-	return nil
-}
-
 type DNSSECValidator struct{}
 
 func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
@@ -2123,7 +2960,6 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 		return true, ""
 	}
 
-	LogDebug("HIJACK: Checking response for domain %s (query: %s)", currentDomain, queryDomain)
 	currentDomain = normalizeDomain(currentDomain)
 	queryDomain = normalizeDomain(queryDomain)
 
@@ -2140,7 +2976,6 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 		}
 
 		if valid, reason := hp.validateAnswer(currentDomain, queryDomain, rrType); !valid {
-			LogDebug("HIJACK: Detected potential hijacking for %s: %s", queryDomain, reason)
 			return false, reason
 		}
 	}
@@ -2202,9 +3037,92 @@ func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) b
 	return strings.HasSuffix(queryDomain, "."+authorityDomain)
 }
 
+func NewSecurityManager(config *ServerConfig, server *DNSServer) (*SecurityManager, error) {
+	sm := &SecurityManager{
+		dnssec: &DNSSECValidator{},
+		hijack: &HijackPrevention{enabled: config.Server.Features.HijackProtection},
+	}
+
+	if config.Server.TLS.SelfSigned || (config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "") {
+		tlsMgr, err := NewTLSManager(server, config)
+		if err != nil {
+			return nil, fmt.Errorf("create TLS manager: %w", err)
+		}
+		sm.tls = tlsMgr
+	}
+
+	return sm, nil
+}
+
+func (sm *SecurityManager) Shutdown(timeout time.Duration) error {
+	if sm.tls != nil {
+		return sm.tls.shutdown()
+	}
+	return nil
+}
+
 // =============================================================================
-// TLS Management
+// TLS Management (继续实现剩余部分...)
 // =============================================================================
+
+type TLSManager struct {
+	server            *DNSServer
+	tlsConfig         *tls.Config
+	ctx               context.Context
+	cancel            context.CancelFunc
+	wg                sync.WaitGroup
+	tlsListener       net.Listener
+	quicConn          *net.UDPConn
+	quicListener      *quic.EarlyListener
+	quicTransport     *quic.Transport
+	quicAddrValidator *QUICAddrValidator
+	httpsServer       *http.Server
+	h3Server          *http3.Server
+	httpsListener     net.Listener
+	h3Listener        *quic.EarlyListener
+}
+
+type QUICAddrValidator struct {
+	redis  *redis.Client
+	ttl    time.Duration
+	prefix string
+}
+
+func newQUICAddrValidator(redisClient *redis.Client, keyPrefix string, ttl time.Duration) *QUICAddrValidator {
+	return &QUICAddrValidator{
+		redis:  redisClient,
+		ttl:    ttl,
+		prefix: keyPrefix,
+	}
+}
+
+func (v *QUICAddrValidator) requiresValidation(addr net.Addr) bool {
+	if v == nil || v.redis == nil {
+		return true
+	}
+
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok {
+		return true
+	}
+
+	key := v.prefix + udpAddr.IP.String()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	exists, err := v.redis.Exists(ctx, key).Result()
+	if err != nil || exists == 1 {
+		return err != nil
+	}
+
+	err = v.redis.Set(ctx, key, "1", v.ttl).Err()
+	if err != nil {
+		LogDebug("QUIC: Failed to set validation cache for %s: %v", key, err)
+	}
+
+	return true
+}
 
 func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 	caPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
@@ -2330,24 +3248,6 @@ func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 	}
 }
 
-type TLSManager struct {
-	server            *DNSServer
-	tlsConfig         *tls.Config
-	ctx               context.Context
-	cancel            context.CancelFunc
-	wg                sync.WaitGroup
-	tlsListener       net.Listener
-	quicConn          *net.UDPConn
-	quicListener      *quic.EarlyListener
-	quicTransport     *quic.Transport
-	quicAddrValidator *QUICAddrValidator
-	httpsServer       *http.Server
-	h3Server          *http3.Server
-	httpsListener     net.Listener
-	h3Listener        *quic.EarlyListener
-	transportPool     *TransportPool
-}
-
 func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error) {
 	var cert tls.Certificate
 	var err error
@@ -2379,7 +3279,7 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 		quicAddrValidator = newQUICAddrValidator(server.redisClient, quicPrefix, QUICAddrValidatorTTL)
 		LogInfo("QUIC: Using Redis cache for address validation")
 	} else {
-		LogInfo("QUIC: No cache for address validation (Redis not configured)")
+		LogInfo("QUIC: No cache for address validation")
 	}
 
 	tm := &TLSManager{
@@ -2388,7 +3288,6 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 		ctx:               ctx,
 		cancel:            cancel,
 		quicAddrValidator: quicAddrValidator,
-		transportPool:     NewTransportPool(),
 	}
 
 	tm.displayCertificateInfo(cert)
@@ -2955,143 +3854,9 @@ func (tm *TLSManager) shutdown() error {
 		closeWithLog(tm.h3Listener, "HTTP/3 listener")
 	}
 
-	if tm.transportPool != nil {
-		tm.transportPool.Close()
-	}
-
 	tm.wg.Wait()
 	LogInfo("TLS: Secure DNS server shut down")
 	return nil
-}
-
-type QUICAddrValidator struct {
-	redis  *redis.Client
-	ttl    time.Duration
-	prefix string
-}
-
-func newQUICAddrValidator(redisClient *redis.Client, keyPrefix string, ttl time.Duration) *QUICAddrValidator {
-	return &QUICAddrValidator{
-		redis:  redisClient,
-		ttl:    ttl,
-		prefix: keyPrefix,
-	}
-}
-
-func (v *QUICAddrValidator) requiresValidation(addr net.Addr) bool {
-	if v == nil || v.redis == nil {
-		return true
-	}
-
-	udpAddr, ok := addr.(*net.UDPAddr)
-	if !ok {
-		return true
-	}
-
-	key := v.prefix + udpAddr.IP.String()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	exists, err := v.redis.Exists(ctx, key).Result()
-	if err != nil || exists == 1 {
-		return err != nil
-	}
-
-	err = v.redis.Set(ctx, key, "1", v.ttl).Err()
-	if err != nil {
-		LogDebug("QUIC: Failed to set validation cache for %s: %v", key, err)
-	}
-
-	return true
-}
-
-// =============================================================================
-// Transport Pool (新增)
-// =============================================================================
-
-type TransportPool struct {
-	http2Pool sync.Pool
-	http3Pool sync.Pool
-	mu        sync.Mutex
-	closed    bool
-}
-
-func NewTransportPool() *TransportPool {
-	tp := &TransportPool{}
-
-	tp.http2Pool.New = func() interface{} {
-		t := &http.Transport{
-			DisableCompression: true,
-			DisableKeepAlives:  false,
-			MaxIdleConns:       100,
-			IdleConnTimeout:    90 * time.Second,
-			ForceAttemptHTTP2:  true,
-		}
-		_, _ = http2.ConfigureTransports(t)
-		return t
-	}
-
-	tp.http3Pool.New = func() interface{} {
-		return &http3.Transport{
-			QUICConfig: &quic.Config{
-				MaxIdleTimeout:     SecureIdleTimeout,
-				MaxIncomingStreams: MaxIncomingStreams,
-			},
-		}
-	}
-
-	return tp
-}
-
-func (tp *TransportPool) GetHTTP2() *http.Transport {
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-	if tp.closed {
-		return nil
-	}
-	return tp.http2Pool.Get().(*http.Transport)
-}
-
-func (tp *TransportPool) PutHTTP2(t *http.Transport) {
-	if t == nil {
-		return
-	}
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-	if !tp.closed {
-		tp.http2Pool.Put(t)
-	} else {
-		t.CloseIdleConnections()
-	}
-}
-
-func (tp *TransportPool) GetHTTP3() *http3.Transport {
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-	if tp.closed {
-		return nil
-	}
-	return tp.http3Pool.Get().(*http3.Transport)
-}
-
-func (tp *TransportPool) PutHTTP3(t *http3.Transport) {
-	if t == nil {
-		return
-	}
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-	if !tp.closed {
-		tp.http3Pool.Put(t)
-	} else {
-		_ = t.Close()
-	}
-}
-
-func (tp *TransportPool) Close() {
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-	tp.closed = true
 }
 
 // =============================================================================
@@ -3127,352 +3892,6 @@ func (cm *ConnectionManager) Close() error {
 	return nil
 }
 
-type QueryClient struct {
-	server        *DNSServer
-	timeout       time.Duration
-	transportPool *TransportPool
-}
-
-func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer) *QueryResult {
-	start := time.Now()
-	result := &QueryResult{Server: server.Address, Protocol: server.Protocol}
-
-	queryCtx, cancel := context.WithTimeout(ctx, qc.timeout)
-	defer cancel()
-
-	protocol := strings.ToLower(server.Protocol)
-	LogDebug("PROTOCOL: Selected protocol %s for query to %s (question: %s)",
-		strings.ToUpper(protocol), server.Address, msg.Question[0].Name)
-
-	if isSecureProtocol(protocol) {
-		LogDebug("PROTOCOL: Using secure protocol %s", strings.ToUpper(protocol))
-		result.Response, result.Error = qc.executeSecureQuery(queryCtx, msg, server, protocol)
-	} else {
-		LogDebug("PROTOCOL: Using traditional protocol %s", strings.ToUpper(protocol))
-		result.Response, result.Error = qc.executeTraditionalQuery(queryCtx, msg, server)
-		if qc.needsTCPFallback(result, protocol) {
-			LogDebug("PROTOCOL: UDP query failed/truncated, falling back to TCP for %s", server.Address)
-			tcpServer := *server
-			tcpServer.Protocol = "tcp"
-			tcpResponse, tcpErr := qc.executeTraditionalQuery(queryCtx, msg, &tcpServer)
-			if tcpErr == nil {
-				LogDebug("PROTOCOL: TCP fallback successful for %s", server.Address)
-				result.Response = tcpResponse
-				result.Error = nil
-				result.Protocol = "TCP"
-			} else {
-				LogDebug("PROTOCOL: TCP fallback failed for %s: %v", server.Address, tcpErr)
-				if result.Response == nil || result.Response.Rcode == dns.RcodeServerFailure {
-					result.Error = tcpErr
-				}
-			}
-		}
-	}
-
-	result.Duration = time.Since(start)
-	result.Protocol = strings.ToUpper(protocol)
-
-	if result.Error != nil {
-		LogDebug("PROTOCOL: Query to %s failed in %v: %v", server.Address, result.Duration, result.Error)
-	} else {
-		rcode := "UNKNOWN"
-		if result.Response != nil {
-			rcode = dns.RcodeToString[result.Response.Rcode]
-		}
-		LogDebug("PROTOCOL: Query to %s completed in %v with rcode %s",
-			server.Address, result.Duration, rcode)
-	}
-
-	return result
-}
-
-func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, protocol string) (*dns.Msg, error) {
-	tlsConfig := &tls.Config{
-		ServerName:         server.ServerName,
-		InsecureSkipVerify: server.SkipTLSVerify,
-		MinVersion:         tls.VersionTLS12,
-	}
-
-	switch protocol {
-	case "tls":
-		return qc.executeTLSQuery(ctx, msg, server, tlsConfig)
-	case "quic":
-		return qc.executeQUICQuery(ctx, msg, server, tlsConfig)
-	case "https", "http3":
-		return qc.executeDoHQuery(ctx, msg, server, protocol)
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
-	}
-}
-
-func (qc *QueryClient) executeTLSQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	host, port, err := net.SplitHostPort(server.Address)
-	if err != nil {
-		return nil, fmt.Errorf("parse TLS address: %w", err)
-	}
-
-	dialer := &net.Dialer{Timeout: TLSHandshakeTimeout}
-	netConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
-	if err != nil {
-		return nil, fmt.Errorf("dial: %w", err)
-	}
-
-	connWg := sync.WaitGroup{}
-	connWg.Add(1)
-	go func() {
-		defer connWg.Done()
-		<-ctx.Done()
-		_ = netConn.Close()
-	}()
-	defer connWg.Wait()
-
-	tlsConn := tls.Client(netConn, tlsConfig)
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		_ = netConn.Close()
-		return nil, fmt.Errorf("TLS handshake: %w", err)
-	}
-	defer func() { _ = tlsConn.Close() }()
-
-	_ = tlsConn.SetDeadline(time.Now().Add(qc.timeout))
-
-	msgData, err := msg.Pack()
-	if err != nil {
-		return nil, fmt.Errorf("pack message: %w", err)
-	}
-
-	buf := make([]byte, 2+len(msgData))
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
-	copy(buf[2:], msgData)
-
-	if _, err := tlsConn.Write(buf); err != nil {
-		return nil, fmt.Errorf("send TLS query: %w", err)
-	}
-
-	lengthBuf := make([]byte, 2)
-	if _, err := io.ReadFull(tlsConn, lengthBuf); err != nil {
-		return nil, fmt.Errorf("read response length: %w", err)
-	}
-
-	respLength := binary.BigEndian.Uint16(lengthBuf)
-	if respLength == 0 || respLength > TCPBufferSize {
-		return nil, fmt.Errorf("invalid response length: %d", respLength)
-	}
-
-	respBuf := make([]byte, respLength)
-	if _, err := io.ReadFull(tlsConn, respBuf); err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	response := new(dns.Msg)
-	if err := response.Unpack(respBuf); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-
-	return response, nil
-}
-
-func (qc *QueryClient) executeQUICQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	tlsConfig.NextProtos = NextProtoQUIC
-	quicConfig := &quic.Config{
-		MaxIdleTimeout:     SecureIdleTimeout,
-		MaxIncomingStreams: MaxIncomingStreams,
-	}
-
-	conn, err := quic.DialAddr(ctx, server.Address, tlsConfig, quicConfig)
-	if err != nil {
-		return nil, fmt.Errorf("QUIC dial: %w", err)
-	}
-
-	closeWg := sync.WaitGroup{}
-	closeWg.Add(1)
-	defer func() {
-		go func() {
-			defer closeWg.Done()
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), ConnectionCloseTimeout)
-			defer closeCancel()
-
-			_ = conn.CloseWithError(QUICCodeNoError, "")
-
-			done := make(chan struct{})
-			go func() {
-				<-conn.Context().Done()
-				close(done)
-			}()
-
-			select {
-			case <-done:
-			case <-closeCtx.Done():
-			}
-		}()
-		closeWg.Wait()
-	}()
-
-	stream, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("create QUIC stream: %w", err)
-	}
-	defer func() { _ = stream.Close() }()
-
-	_ = stream.SetDeadline(time.Now().Add(qc.timeout))
-
-	originalID := msg.Id
-	msg.Id = 0
-
-	msgData, err := msg.Pack()
-	if err != nil {
-		msg.Id = originalID
-		return nil, fmt.Errorf("pack message: %w", err)
-	}
-
-	buf := make([]byte, 2+len(msgData))
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
-	copy(buf[2:], msgData)
-
-	if _, err := stream.Write(buf); err != nil {
-		msg.Id = originalID
-		return nil, fmt.Errorf("send QUIC query: %w", err)
-	}
-
-	_ = stream.Close()
-
-	respBuf := make([]byte, SecureBufferSize)
-	n, err := stream.Read(respBuf)
-	if err != nil && n == 0 {
-		msg.Id = originalID
-		return nil, fmt.Errorf("read QUIC response: %w", err)
-	}
-
-	stream.CancelRead(0)
-
-	if n < 2 {
-		msg.Id = originalID
-		return nil, fmt.Errorf("QUIC response too short: %d bytes", n)
-	}
-
-	response := new(dns.Msg)
-	if err := response.Unpack(respBuf[2:n]); err != nil {
-		msg.Id = originalID
-		return nil, fmt.Errorf("parse QUIC response: %w", err)
-	}
-
-	msg.Id = originalID
-	response.Id = originalID
-
-	return response, nil
-}
-
-func (qc *QueryClient) executeDoHQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, protocol string) (*dns.Msg, error) {
-	parsedURL, err := url.Parse(server.Address)
-	if err != nil {
-		return nil, fmt.Errorf("parse DoH address: %w", err)
-	}
-
-	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultHTTPSPort)
-	}
-
-	tlsConfig := &tls.Config{
-		ServerName:         server.ServerName,
-		InsecureSkipVerify: server.SkipTLSVerify,
-		MinVersion:         tls.VersionTLS12,
-	}
-
-	var transport http.RoundTripper
-	var returnTransport func()
-
-	if protocol == "http3" {
-		tlsConfig.NextProtos = NextProtoHTTP3
-		h3Transport := qc.transportPool.GetHTTP3()
-		if h3Transport == nil {
-			return nil, errors.New("transport pool closed")
-		}
-		transport = h3Transport
-		returnTransport = func() { qc.transportPool.PutHTTP3(h3Transport) }
-	} else {
-		tlsConfig.NextProtos = NextProtoHTTP2
-		h2Transport := qc.transportPool.GetHTTP2()
-		if h2Transport == nil {
-			return nil, errors.New("transport pool closed")
-		}
-		h2Transport.TLSClientConfig = tlsConfig
-		transport = h2Transport
-		returnTransport = func() { qc.transportPool.PutHTTP2(h2Transport) }
-	}
-	defer returnTransport()
-
-	httpClient := &http.Client{Transport: transport, Timeout: qc.timeout}
-
-	originalID := msg.Id
-	msg.Id = 0
-
-	buf, err := msg.Pack()
-	if err != nil {
-		msg.Id = originalID
-		return nil, fmt.Errorf("pack DNS message: %w", err)
-	}
-
-	q := url.Values{"dns": []string{base64.RawURLEncoding.EncodeToString(buf)}}
-	u := url.URL{Scheme: parsedURL.Scheme, Host: parsedURL.Host, Path: parsedURL.Path, RawQuery: q.Encode()}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		msg.Id = originalID
-		return nil, fmt.Errorf("create HTTP request: %w", err)
-	}
-
-	httpReq.Header.Set("Accept", "application/dns-message")
-	httpReq.Close = true
-
-	httpResp, err := httpClient.Do(httpReq)
-	if err != nil {
-		msg.Id = originalID
-		return nil, fmt.Errorf("send HTTP request: %w", err)
-	}
-	defer func() { _ = httpResp.Body.Close() }()
-
-	if httpResp.StatusCode != http.StatusOK {
-		msg.Id = originalID
-		return nil, fmt.Errorf("HTTP error: %d", httpResp.StatusCode)
-	}
-
-	body, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		msg.Id = originalID
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	response := &dns.Msg{}
-	if err := response.Unpack(body); err != nil {
-		msg.Id = originalID
-		return nil, fmt.Errorf("parse DNS response: %w", err)
-	}
-
-	msg.Id = originalID
-	response.Id = originalID
-
-	return response, nil
-}
-
-func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer) (*dns.Msg, error) {
-	client := &dns.Client{Timeout: qc.timeout, Net: server.Protocol}
-	if server.Protocol == "udp" {
-		client.UDPSize = UDPBufferSize
-	}
-
-	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
-	return response, err
-}
-
-func (qc *QueryClient) needsTCPFallback(result *QueryResult, protocol string) bool {
-	if protocol == "tcp" {
-		return false
-	}
-	if result.Error != nil || (result.Response != nil && result.Response.Truncated) {
-		return true
-	}
-	return false
-}
-
 // =============================================================================
 // Query Manager
 // =============================================================================
@@ -3483,6 +3902,26 @@ type QueryManager struct {
 	cname     *CNAMEHandler
 	validator *ResponseValidator
 	server    *DNSServer
+}
+
+type UpstreamHandler struct {
+	servers []*UpstreamServer
+	mu      sync.RWMutex
+}
+
+type CNAMEHandler struct {
+	server *DNSServer
+}
+
+type RecursiveResolver struct {
+	server          *DNSServer
+	rootServerMgr   *RootServerManager
+	concurrencyLock chan struct{}
+}
+
+type ResponseValidator struct {
+	hijackPrevention *HijackPrevention
+	dnssecValidator  *DNSSECValidator
 }
 
 func NewQueryManager(server *DNSServer) *QueryManager {
@@ -3697,19 +4136,10 @@ func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string
 	return filtered, false
 }
 
-type UpstreamHandler struct {
-	servers []*UpstreamServer
-	mu      sync.RWMutex
-}
-
 func (uh *UpstreamHandler) getServers() []*UpstreamServer {
 	uh.mu.RLock()
 	defer uh.mu.RUnlock()
 	return uh.servers
-}
-
-type CNAMEHandler struct {
-	server *DNSServer
 }
 
 func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
@@ -3778,15 +4208,8 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, nil
 }
 
-type RecursiveResolver struct {
-	server          *DNSServer
-	rootServerMgr   *RootServerManager
-	concurrencyLock chan struct{}
-}
-
 func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
 	if depth > MaxRecursionDepth {
-		LogDebug("RECURSION: Maximum depth exceeded for %s (depth: %d)", question.Name, depth)
 		return nil, nil, nil, false, nil, fmt.Errorf("recursion depth exceeded: %d", depth)
 	}
 
@@ -3795,10 +4218,6 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 	nameservers := rr.getRootServers()
 	currentDomain := "."
 	normalizedQname := normalizeDomain(qname)
-
-	LogDebug("RECURSION: Starting resolution for %s (type: %d, depth: %d, forceTCP: %v)",
-		qname, question.Qtype, depth, forceTCP)
-	LogDebug("RECURSION: Using %d root servers: %v", len(nameservers), nameservers)
 
 	if normalizedQname == "" {
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
@@ -3820,17 +4239,13 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 	for {
 		select {
 		case <-ctx.Done():
-			LogDebug("RECURSION: Context cancelled for %s", question.Name)
 			return nil, nil, nil, false, nil, ctx.Err()
 		default:
 		}
 
-		LogDebug("RECURSION: Querying %d nameservers for domain %s", len(nameservers), currentDomain)
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
 		if err != nil {
-			LogDebug("RECURSION: Query failed for %s: %v (forceTCP: %v)", currentDomain, err, forceTCP)
 			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
-				LogDebug("RECURSION: DNS hijack detected, retrying with TCP for %s", question.Name)
 				return rr.recursiveQuery(ctx, question, ecs, depth, true)
 			}
 			return nil, nil, nil, false, nil, fmt.Errorf("query %s: %w", currentDomain, err)
@@ -3847,24 +4262,14 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		validated := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
-		LogDebug("RECURSION: DNSSEC validation result for %s: %v", currentDomain, validated)
-
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
-		if ecsResponse != nil {
-			LogDebug("RECURSION: ECS response received for %s: %s/%d",
-				currentDomain, ecsResponse.Address, ecsResponse.SourcePrefix)
-		}
 
 		if len(response.Answer) > 0 {
-			LogDebug("RECURSION: Found answer for %s - %d records, returning result",
-				question.Name, len(response.Answer))
 			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
 		bestMatch := ""
 		var bestNSRecords []*dns.NS
-
-		LogDebug("RECURSION: Processing %d NS records from response for %s", len(response.Ns), currentDomain)
 
 		for _, rrec := range response.Ns {
 			if ns, ok := rrec.(*dns.NS); ok {
@@ -3885,52 +4290,41 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 			}
 		}
 
-		LogDebug("RECURSION: Best NS match for %s: %s (%d records)", question.Name, bestMatch, len(bestNSRecords))
 		if len(bestNSRecords) == 0 {
-			LogDebug("RECURSION: No matching NS records found, returning delegation")
 			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
 		currentDomainNormalized := normalizeDomain(currentDomain)
 		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
-			LogDebug("RECURSION: NS delegation loop detected for %s, returning delegation", currentDomain)
 			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
 		currentDomain = bestMatch + "."
-		LogDebug("RECURSION: Continuing to next level: %s", currentDomain)
 
 		var nextNS []string
-		LogDebug("RECURSION: Resolving glue records for %d NS servers", len(bestNSRecords))
 		for _, ns := range bestNSRecords {
 			for _, rrec := range response.Extra {
 				switch a := rrec.(type) {
 				case *dns.A:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
 						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), DefaultDNSPort))
-						LogDebug("RECURSION: Found glue A record: %s -> %s", ns.Ns, a.A.String())
 					}
 				case *dns.AAAA:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
 						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), DefaultDNSPort))
-						LogDebug("RECURSION: Found glue AAAA record: %s -> %s", ns.Ns, a.AAAA.String())
 					}
 				}
 			}
 		}
 
 		if len(nextNS) == 0 {
-			LogDebug("RECURSION: No glue records found, resolving NS addresses recursively")
 			nextNS = rr.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
 		}
 
-		LogDebug("RECURSION: Resolved %d nameserver addresses for next level", len(nextNS))
 		if len(nextNS) == 0 {
-			LogDebug("RECURSION: Failed to resolve any nameserver addresses, returning delegation")
 			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
 		}
 
-		LogDebug("RECURSION: Using nameservers for next query: %v", nextNS)
 		nameservers = nextNS
 	}
 }
@@ -3944,25 +4338,19 @@ func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTC
 
 func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption, forceTCP bool) (*dns.Msg, error) {
 	if len(nameservers) == 0 {
-		LogDebug("UPSTREAM: No nameservers provided for query %s", question.Name)
 		return nil, errors.New("no nameservers")
 	}
-
-	LogDebug("UPSTREAM: Starting concurrent query for %s (type: %d) to %d servers, forceTCP: %v",
-		question.Name, question.Qtype, len(nameservers), forceTCP)
 
 	select {
 	case rr.concurrencyLock <- struct{}{}:
 		defer func() { <-rr.concurrencyLock }()
 	case <-ctx.Done():
-		LogDebug("UPSTREAM: Context cancelled while waiting for concurrency lock")
 		return nil, ctx.Err()
 	}
 
 	concurrency := len(nameservers)
 	if concurrency > MaxSingleQuery {
 		concurrency = MaxSingleQuery
-		LogDebug("UPSTREAM: Limiting concurrency to %d (was %d)", MaxSingleQuery, len(nameservers))
 	}
 
 	tempServers := make([]*UpstreamServer, concurrency)
@@ -3972,13 +4360,10 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			protocol = "tcp"
 		}
 		tempServers[i] = &UpstreamServer{Address: nameservers[i], Protocol: protocol}
-		LogDebug("UPSTREAM: Server %d: %s (%s)", i+1, nameservers[i], protocol)
 	}
 
 	resultChan := make(chan *QueryResult, 1)
 	queryWg := sync.WaitGroup{}
-
-	LogDebug("UPSTREAM: Launching %d concurrent queries", concurrency)
 
 	for _, server := range tempServers {
 		srv := server
@@ -3996,28 +4381,18 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			default:
 			}
 
-			LogDebug("UPSTREAM: Executing query to %s", s.Address)
 			result := rr.server.connMgr.queryClient.ExecuteQuery(ctx, m, s)
 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
-				LogDebug("UPSTREAM: Response from %s: rcode=%d, answer=%d, ns=%d, additional=%d",
-					s.Address, rcode, len(result.Response.Answer), len(result.Response.Ns), len(result.Response.Extra))
 
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 					result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
-					LogDebug("UPSTREAM: DNSSEC validation for %s: %v", s.Address, result.Validated)
-					LogDebug("UPSTREAM: Successful response from %s, returning result", s.Address)
 					select {
 					case resultChan <- result:
 					case <-ctx.Done():
-						LogDebug("UPSTREAM: Context cancelled while sending result from %s", s.Address)
 					}
-				} else {
-					LogDebug("UPSTREAM: Response from %s has non-success rcode %d, ignoring", s.Address, rcode)
 				}
-			} else {
-				LogDebug("UPSTREAM: Query to %s failed: %v", s.Address, result.Error)
 			}
 		}(srv, msg)
 	}
@@ -4027,16 +4402,13 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		close(resultChan)
 	}()
 
-	LogDebug("UPSTREAM: Waiting for first successful response")
 	select {
 	case result, ok := <-resultChan:
 		if ok && result != nil {
-			LogDebug("UPSTREAM: Received successful response (rcode: %d)", result.Response.Rcode)
 			return result.Response, nil
 		}
 		return nil, errors.New("no successful response")
 	case <-ctx.Done():
-		LogDebug("UPSTREAM: Context cancelled while waiting for response")
 		return nil, ctx.Err()
 	}
 }
@@ -4124,11 +4496,6 @@ func (rr *RecursiveResolver) getRootServers() []string {
 		servers[i] = server.Server
 	}
 	return servers
-}
-
-type ResponseValidator struct {
-	hijackPrevention *HijackPrevention
-	dnssecValidator  *DNSSECValidator
 }
 
 // =============================================================================
@@ -4332,10 +4699,12 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	}
 	server.queryMgr = queryManager
 
+	connPool := NewConnectionPool(redisClient, config.Redis.KeyPrefix)
+
 	connectionManager.queryClient = &QueryClient{
-		server:        server,
-		timeout:       QueryTimeout,
-		transportPool: server.securityMgr.tls.transportPool,
+		server:   server,
+		timeout:  QueryTimeout,
+		connPool: connPool,
 	}
 
 	if len(config.SpeedTest) > 0 {
@@ -4344,7 +4713,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		if redisClient != nil {
 			LogInfo("SPEEDTEST: Using Redis cache for domain speed test results")
 		} else {
-			LogInfo("SPEEDTEST: No cache for domain speed test (Redis not configured)")
+			LogInfo("SPEEDTEST: No cache for domain speed test")
 		}
 	}
 
@@ -4415,6 +4784,9 @@ func (s *DNSServer) shutdownServer() {
 	}
 
 	if s.connMgr != nil {
+		if s.connMgr.queryClient != nil {
+			closeWithLog(s.connMgr.queryClient.connPool, "Connection pool")
+		}
 		closeWithLog(s.connMgr, "Connection manager")
 	}
 
@@ -4776,10 +5148,6 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 
 	s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
 
-	if isExpired {
-		LogDebug("CACHE: Returned stale cache for %s (TTL: %d)", question.Name, responseTTL)
-	}
-
 	return msg
 }
 
@@ -4800,17 +5168,12 @@ func (s *DNSServer) refreshCacheEntry(ctx context.Context, question dns.Question
 		return errors.New("server closed")
 	}
 
-	LogDebug("CACHE: Starting background refresh for %s", cacheKey)
-
 	answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(question, ecs)
 
 	if err != nil {
-		LogDebug("CACHE: Refresh failed for %s: %v", cacheKey, err)
 		s.updateCacheRefreshTime(cacheKey, oldEntry)
 		return err
 	}
-
-	LogDebug("CACHE: Refresh succeeded for %s", cacheKey)
 
 	if len(s.config.SpeedTest) > 0 &&
 		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
@@ -4859,13 +5222,10 @@ func (s *DNSServer) updateCacheRefreshTime(cacheKey string, _ *CacheEntry) {
 	defer writeCancel()
 
 	redisCache.client.Set(writeCtx, cacheKey, updatedData, redis.KeepTTL)
-	LogDebug("CACHE: Updated refresh time for %s (keeping stale data)", cacheKey)
 }
 
 func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *ECSOption, isSecureConnection bool) *dns.Msg {
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
-		LogDebug("CACHE: Query failed, returning stale cache for %s", question.Name)
-
 		msg := s.buildResponse(req)
 		if msg == nil {
 			msg = &dns.Msg{}
@@ -4888,7 +5248,6 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 		return msg
 	}
 
-	LogDebug("CACHE: No stale cache available after query error for %s", question.Name)
 	msg := s.buildResponse(req)
 	if msg == nil {
 		msg = &dns.Msg{}
@@ -5011,7 +5370,6 @@ func (s *DNSServer) shouldPerformSpeedTest(domain string) bool {
 	}
 
 	if s.redisClient == nil {
-		LogDebug("SPEEDTEST: No Redis, performing speed test for %s", domain)
 		return true
 	}
 
@@ -5022,17 +5380,10 @@ func (s *DNSServer) shouldPerformSpeedTest(domain string) bool {
 
 	success, err := s.redisClient.SetNX(ctx, debounceKey, "1", s.speedInterval).Result()
 	if err != nil {
-		LogDebug("SPEEDTEST: Redis debounce check failed for %s: %v, performing test", domain, err)
 		return true
 	}
 
-	if success {
-		LogDebug("SPEEDTEST: Debounce passed for %s, performing speed test", domain)
-		return true
-	}
-
-	LogDebug("SPEEDTEST: Domain %s in debounce period, skipping speed test", domain)
-	return false
+	return success
 }
 
 func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {
@@ -5056,7 +5407,7 @@ func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, rec
 // =============================================================================
 
 func getVersion() string {
-	return fmt.Sprintf("v%s-ZHIJIE-%s@%s", Version, CommitHash, BuildTime)
+	return fmt.Sprintf("v%s-%s@%s", Version, CommitHash, BuildTime)
 }
 
 func normalizeDomain(domain string) string {
@@ -5084,9 +5435,19 @@ func isValidFilePath(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+func isTemporaryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return true
+	}
+	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
+}
+
 func handlePanic(operation string) {
 	if r := recover(); r != nil {
-		buf := make([]byte, 2048)
+		buf := make([]byte, 4096)
 		n := runtime.Stack(buf, false)
 		stackTrace := string(buf[:n])
 		LogError("PANIC: Panic [%s]: %v\nStack:\n%s\nExiting due to panic", operation, r, stackTrace)
@@ -5386,7 +5747,7 @@ func main() {
 	flag.BoolVar(&showVersion, "version", false, "Show version information and exit")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "ZJDNS Server - High Performance Recursive DNS Server\n\n")
+		fmt.Fprintf(os.Stderr, "ZJDNS Server - High Performance DNS Server\n\n")
 		fmt.Fprintf(os.Stderr, "Version: %s\n\n", getVersion())
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  %s -config <config file>     # Start with config file\n", os.Args[0])
