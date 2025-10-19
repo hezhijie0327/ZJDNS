@@ -5123,7 +5123,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		ecsOpt = s.ednsMgr.GetDefaultECS()
 	}
 
-	cacheKey := buildCacheKey(question, ecsOpt, s.config.Redis.KeyPrefix)
+	cacheKey := buildCacheKey(question, ecsOpt, clientRequestedDNSSEC, s.config.Redis.KeyPrefix)
 
 	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
 		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cacheKey, isSecureConnection)
@@ -5598,7 +5598,7 @@ func processRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
 	return result
 }
 
-func buildCacheKey(question dns.Question, ecs *ECSOption, globalPrefix string) string {
+func buildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC bool, globalPrefix string) string {
 	key := globalPrefix + RedisPrefixDNS +
 		fmt.Sprintf("%s:%d:%d", normalizeDomain(question.Name), question.Qtype, question.Qclass)
 
@@ -5606,7 +5606,9 @@ func buildCacheKey(question dns.Question, ecs *ECSOption, globalPrefix string) s
 		key += fmt.Sprintf(":%s/%d", ecs.Address.String(), ecs.SourcePrefix)
 	}
 
-	key += ":dnssec"
+	if clientRequestedDNSSEC {
+		key += ":dnssec"
+	}
 
 	if len(key) > 512 {
 		key = fmt.Sprintf("hash:%x", key)[:512]
