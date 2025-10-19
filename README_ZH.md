@@ -91,11 +91,20 @@
 - **智能日志**：在 `DEBUG` 级别下，输出带时间戳的请求处理步骤，极大简化调试和性能分析。
 - **摘要报告**：在 `INFO` 级别下，输出请求处理摘要，包括缓存命中状态、总耗时、使用的上游服务器等关键信息。
 
+### 🧠 内存管理与优化
+
+- **工作池任务管理**：优化的 TaskManager 采用固定工作池和任务队列，防止 goroutine 爆炸，减少内存开销。
+- **智能消息池化**：增强的 DNS 消息池，支持大小限制（1000条消息）、slice 容量控制（50），以及适当的清理机制，防止内存膨胀。
+- **受控查询并发**：限制并发查询数量（MaxSingleQuery: 5），采用首胜策略，减少资源使用并提高响应时间。
+- **实时内存监控**：每 30 秒持续跟踪内存使用情况，当内存超过 500MB 时自动触发垃圾回收。
+- **资源生命周期管理**：在关闭过程中正确清理所有资源，防止内存泄漏。
+- **Goroutine 优化**：在关键路径上直接使用 goroutine 而非 TaskManager，减少上下文切换开销。
+
 ---
 
 ## 🏗️ 系统架构
 
-ZJDNS 采用模块化、分层设计，核心组件职责清晰、松耦合，支持高并发与多种安全协议。整体架构如下：
+ZJDNS 采用模块化、分层设计，核心组件职责清晰、松耦合，支持高并发与多种安全协议。架构强调内存效率和资源优化，具备智能任务管理和实时监控功能。整体架构如下：
 
 ```mermaid
 graph TB
@@ -151,14 +160,15 @@ graph TB
         EE[RootServerManager<br><i>根服务器管理</i>]
         FF[IPDetector<br><i>IP检测器</i>]
         GG[LogManager<br><i>日志管理</i>]
+        HH[MemoryMonitor<br><i>内存监控</i>]
     end
 
     subgraph "外部服务"
-        HH[Root Servers<br><i>根服务器</i>]
-        II[Upstream DNS<br><i>上游DNS</i>]
-        JJ[Redis Cluster<br><i>Redis集群</i>]
-        KK[Self-signed CA<br><i>自签名CA</i>]
-        LL[TLS Certificates<br><i>TLS证书</i>]
+        II[Root Servers<br><i>根服务器</i>]
+        JJ[Upstream DNS<br><i>上游DNS</i>]
+        KK[Redis Cluster<br><i>Redis集群</i>]
+        LL[Self-signed CA<br><i>自签名CA</i>]
+        MM[TLS Certificates<br><i>TLS证书</i>]
     end
 
     %% 主要连接关系
@@ -198,16 +208,17 @@ graph TB
     B --> DD
     B --> FF
     B --> GG
+    B --> HH
 
     %% 外部连接
-    EE --> HH
-    G --> II
-    X --> JJ
-    DD --> KK
+    EE --> II
+    G --> JJ
+    X --> KK
     DD --> LL
-    J --> LL
-    K --> LL
-    L --> LL
+    DD --> MM
+    J --> MM
+    K --> MM
+    L --> MM
 
     %% 样式定义
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
@@ -225,8 +236,8 @@ graph TB
     class M,N,O,P engine
     class Q,R,S,T,U,V,W security
     class X,Y,Z,AA cache
-    class BB,CC,DD,EE,FF,GG infra
-    class HH,II,JJ,KK,LL external
+    class BB,CC,DD,EE,FF,GG,HH infra
+    class II,JJ,KK,LL,MM external
 ```
 
 ---

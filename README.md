@@ -91,11 +91,20 @@
 - **Intelligent Logging**: At `DEBUG` level, outputs timestamped request processing steps, greatly simplifying debugging and performance analysis.
 - **Summary Report**: At `INFO` level, outputs request processing summary, including cache hit status, total time, upstream servers used, and other key information.
 
+### 🧠 Memory Management & Optimization
+
+- **Worker Pool Task Management**: Optimized TaskManager with fixed worker pool and task queue, preventing goroutine explosion and reducing memory overhead.
+- **Smart Message Pooling**: Enhanced DNS message pool with size limits (1000 messages), slice capacity controls (50), and proper cleanup to prevent memory bloat.
+- **Controlled Query Concurrency**: Limited concurrent queries (MaxSingleQuery: 5) with first-winner strategy, reducing resource usage and improving response times.
+- **Real-time Memory Monitoring**: Continuous memory usage tracking every 30 seconds with automatic GC triggering when memory exceeds 500MB.
+- **Resource Lifecycle Management**: Proper cleanup of all resources during shutdown to prevent memory leaks.
+- **Goroutine Optimization**: Direct goroutine usage for critical paths instead of TaskManager, reducing context switching overhead.
+
 ---
 
 ## 🏗️ System Architecture
 
-ZJDNS adopts modular, layered design with clear responsibilities and loose coupling of core components, supporting high concurrency and multiple security protocols. Overall architecture is as follows:
+ZJDNS adopts modular, layered design with clear responsibilities and loose coupling of core components, supporting high concurrency and multiple security protocols. The architecture emphasizes memory efficiency and resource optimization with intelligent task management and real-time monitoring. Overall architecture is as follows:
 
 ```mermaid
 graph TB
@@ -151,14 +160,15 @@ graph TB
         EE[RootServerManager<br><i>Root Server Management</i>]
         FF[IPDetector<br><i>IP Detector</i>]
         GG[LogManager<br><i>Log Management</i>]
+        HH[MemoryMonitor<br><i>Memory Monitor</i>]
     end
 
     subgraph "External Services"
-        HH[Root Servers<br><i>Root Servers</i>]
-        II[Upstream DNS<br><i>Upstream DNS</i>]
-        JJ[Redis Cluster<br><i>Redis Cluster</i>]
-        KK[Self-signed CA<br><i>Self-signed CA</i>]
-        LL[TLS Certificates<br><i>TLS Certificates</i>]
+        II[Root Servers<br><i>Root Servers</i>]
+        JJ[Upstream DNS<br><i>Upstream DNS</i>]
+        KK[Redis Cluster<br><i>Redis Cluster</i>]
+        LL[Self-signed CA<br><i>Self-signed CA</i>]
+        MM[TLS Certificates<br><i>TLS Certificates</i>]
     end
 
     %% Main connections
@@ -198,16 +208,17 @@ graph TB
     B --> DD
     B --> FF
     B --> GG
+    B --> HH
 
     %% External connections
-    EE --> HH
-    G --> II
-    X --> JJ
-    DD --> KK
+    EE --> II
+    G --> JJ
+    X --> KK
     DD --> LL
-    J --> LL
-    K --> LL
-    L --> LL
+    DD --> MM
+    J --> MM
+    K --> MM
+    L --> MM
 
     %% Style definitions
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
@@ -225,8 +236,8 @@ graph TB
     class M,N,O,P engine
     class Q,R,S,T,U,V,W security
     class X,Y,Z,AA cache
-    class BB,CC,DD,EE,FF,GG infra
-    class HH,II,JJ,KK,LL external
+    class BB,CC,DD,EE,FF,GG,HH infra
+    class II,JJ,KK,LL,MM external
 ```
 
 ---
