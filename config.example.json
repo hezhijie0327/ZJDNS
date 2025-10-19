@@ -20,9 +20,7 @@
       }
     },
     "features": {
-      "dnssec": true,
-      "hijack_protection": true,
-      "padding": true
+      "hijack_protection": true
     }
   },
   "redis": {

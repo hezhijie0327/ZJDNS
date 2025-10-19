@@ -84,6 +84,10 @@ const (
 	MaxNSResolve      = 5
 	MaxMessageCap     = 100
 
+	// Message Pool Constants
+	MaxMessagePoolSize = 1000
+	MaxMessagePoolCap  = 50
+
 	// Timeouts
 	QueryTimeout           = 5 * time.Second
 	RecursiveTimeout       = 10 * time.Second
@@ -172,7 +176,7 @@ var (
 	NextProtoHTTP2 = []string{http2.NextProtoTLS, "http/1.1"}
 
 	// Maximum worker count
-	MaxWorkerCount = runtime.NumCPU()
+	MaxWorkerCount = runtime.NumCPU() * 2
 )
 
 // =============================================================================
@@ -3366,39 +3370,47 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, tra
 		return nil, nil, nil, false, nil, errors.New("no upstream servers")
 	}
 
-	resultChan := make(chan *QueryResult, len(servers))
+	// 限制并发查询数量
+	maxConcurrent := len(servers)
+	if maxConcurrent > MaxSingleQuery {
+		maxConcurrent = MaxSingleQuery
+	}
+
+	resultChan := make(chan *QueryResult, maxConcurrent) // 接收所有结果
 	ctx, cancel := context.WithTimeout(qm.server.ctx, QueryTimeout)
 	defer cancel()
 
-	// ✅ 修复：创建一个可取消的子 context 用于所有查询
 	queryCtx, cancelQueries := context.WithCancel(ctx)
-	defer cancelQueries() // 确保所有查询都会被取消
+	defer cancelQueries()
 
 	var wg sync.WaitGroup
 
-	for _, server := range servers {
-		srv := server
+	for i := 0; i < maxConcurrent && i < len(servers); i++ {
+		srv := servers[i]
 
-		if srv.IsRecursive() {
-			wg.Add(1)
-			qm.server.taskMgr.ExecuteAsync("Query-Recursive", func(taskCtx context.Context) error {
-				defer wg.Done()
+		wg.Add(1)
 
-				// ✅ 使用可取消的 context
+		// 关键修复：递归查询需要直接执行，不能放到队列
+		go func(server *UpstreamServer) {
+			defer wg.Done()
+			defer handlePanic("Query upstream")
+
+			if server.IsRecursive() {
+				// 递归查询 - 同步执行
 				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, RecursiveTimeout)
 				defer recursiveCancel()
 
 				answer, authority, additional, validated, ecsResponse, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs, tracker)
 
 				if err == nil && len(answer) > 0 {
-					if len(srv.Match) > 0 {
-						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, srv.Match, tracker)
+					if len(server.Match) > 0 {
+						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, server.Match, tracker)
 						if shouldRefuse {
 							select {
-							case resultChan <- &QueryResult{Error: fmt.Errorf("CIDR filter refused"), Server: srv.Address}:
+							case resultChan <- &QueryResult{Error: fmt.Errorf("CIDR filter refused"), Server: server.Address}:
 							case <-queryCtx.Done():
 							}
-							return nil
+							return
 						}
 						answer = filteredAnswer
 					}
@@ -3410,54 +3422,48 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, tra
 						Additional: additional,
 						Validated:  validated,
 						ECS:        ecsResponse,
-						Server:     srv.Address,
+						Server:     server.Address,
 					}:
 					case <-queryCtx.Done():
 					}
 				} else if err != nil {
 					select {
-					case resultChan <- &QueryResult{Error: err, Server: srv.Address}:
+					case resultChan <- &QueryResult{Error: err, Server: server.Address}:
 					case <-queryCtx.Done():
 					}
 				}
-				return nil
-			})
-		} else {
-			wg.Add(1)
-			msg := qm.server.buildQueryMessage(question, ecs, true, false)
-			qm.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(taskCtx context.Context) error {
-				defer wg.Done()
+			} else {
+				// 上游查询 - 可以异步
+				msg := qm.server.buildQueryMessage(question, ecs, true, false)
 				defer releaseMessage(msg)
 
-				// ✅ 使用可取消的 context
-				result := qm.server.connMgr.queryClient.ExecuteQuery(queryCtx, msg, srv, tracker)
+				result := qm.server.connMgr.queryClient.ExecuteQuery(queryCtx, msg, server, tracker)
 
 				if result.Error != nil {
 					select {
-					case resultChan <- &QueryResult{Error: result.Error, Server: srv.Address}:
+					case resultChan <- &QueryResult{Error: result.Error, Server: server.Address}:
 					case <-queryCtx.Done():
 					}
-					return nil
+					return
 				}
 
 				if result.Response != nil {
 					rcode := result.Response.Rcode
 
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-						if len(srv.Match) > 0 {
-							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(result.Response.Answer, srv.Match, tracker)
+						if len(server.Match) > 0 {
+							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(result.Response.Answer, server.Match, tracker)
 							if shouldRefuse {
 								select {
-								case resultChan <- &QueryResult{Error: fmt.Errorf("CIDR filter refused"), Server: srv.Address}:
+								case resultChan <- &QueryResult{Error: fmt.Errorf("CIDR filter refused"), Server: server.Address}:
 								case <-queryCtx.Done():
 								}
-								return nil
+								return
 							}
 							result.Response.Answer = filteredAnswer
 						}
 
 						result.Validated = qm.validator.dnssecValidator.ValidateResponse(result.Response, true)
-
 						ecsResponse := qm.server.ednsMgr.ParseFromDNS(result.Response)
 
 						select {
@@ -3467,32 +3473,31 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, tra
 							Additional: result.Response.Extra,
 							Validated:  result.Validated,
 							ECS:        ecsResponse,
-							Server:     srv.Address,
+							Server:     server.Address,
 						}:
 						case <-queryCtx.Done():
 						}
 					} else {
 						select {
-						case resultChan <- &QueryResult{Error: fmt.Errorf("upstream error: %s", dns.RcodeToString[rcode]), Server: srv.Address}:
+						case resultChan <- &QueryResult{Error: fmt.Errorf("upstream error: %s", dns.RcodeToString[rcode]), Server: server.Address}:
 						case <-queryCtx.Done():
 						}
 					}
 				}
-				return nil
-			})
-		}
+			}
+		}(srv)
 	}
 
-	// ✅ 在单独的 goroutine 中等待所有任务完成并关闭 channel
+	// 关闭 channel
 	go func() {
 		wg.Wait()
 		close(resultChan)
 	}()
 
+	// 收集结果
 	var lastError error
 	var successfulResults []*QueryResult
 
-	// ✅ 修复：接收第一个成功结果后立即取消其他查询
 	for result := range resultChan {
 		if result.Error != nil {
 			lastError = result.Error
@@ -3500,12 +3505,9 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, tra
 		}
 
 		if len(result.Answer) > 0 {
-			// ✅ 找到成功结果，取消所有其他查询
+			// 找到成功结果，立即返回
 			cancelQueries()
-			// 等待 wg 完成以确保所有 goroutine 退出
-			go func() {
-				wg.Wait()
-			}()
+			go func() { wg.Wait() }() // 异步等待其他 goroutine 退出
 			return result.Answer, result.Authority, result.Additional, result.Validated, result.ECS, nil
 		}
 
@@ -3847,58 +3849,69 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		LogDebug("UPSTREAM: Server %d: %s (%s)", i+1, nameservers[i], protocol)
 	}
 
-	// ✅ 修复：使用 buffered channel 防止 goroutine 泄漏
 	resultChan := make(chan *QueryResult, concurrency)
-
-	// ✅ 创建可取消的 context
 	queryCtx, cancelQueries := context.WithCancel(ctx)
 	defer cancelQueries()
 
+	var wg sync.WaitGroup
 	LogDebug("UPSTREAM: Launching %d concurrent queries", concurrency)
 
 	for _, server := range tempServers {
 		srv := server
 		msg := rr.server.buildQueryMessage(question, ecs, true, false)
-		rr.server.taskMgr.ExecuteAsync(fmt.Sprintf("Query-%s", srv.Address), func(taskCtx context.Context) error {
-			defer releaseMessage(msg)
-			LogDebug("UPSTREAM: Executing query to %s", srv.Address)
 
-			// ✅ 使用可取消的 context
-			result := rr.server.connMgr.queryClient.ExecuteQuery(queryCtx, msg, srv, tracker)
+		wg.Add(1)
+		// 直接启动 goroutine，不通过 TaskManager
+		go func(s *UpstreamServer, m *dns.Msg) {
+			defer wg.Done()
+			defer releaseMessage(m)
+			defer handlePanic("Query nameserver")
+
+			LogDebug("UPSTREAM: Executing query to %s", s.Address)
+			result := rr.server.connMgr.queryClient.ExecuteQuery(queryCtx, m, s, tracker)
 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
 				LogDebug("UPSTREAM: Response from %s: rcode=%d, answer=%d, ns=%d, additional=%d",
-					srv.Address, rcode, len(result.Response.Answer), len(result.Response.Ns), len(result.Response.Extra))
+					s.Address, rcode, len(result.Response.Answer), len(result.Response.Ns), len(result.Response.Extra))
 
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 					result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
-					LogDebug("UPSTREAM: DNSSEC validation for %s: %v", srv.Address, result.Validated)
-					LogDebug("UPSTREAM: Successful response from %s, returning result", srv.Address)
+					LogDebug("UPSTREAM: DNSSEC validation for %s: %v", s.Address, result.Validated)
+					LogDebug("UPSTREAM: Successful response from %s, returning result", s.Address)
 					select {
 					case resultChan <- result:
 					case <-queryCtx.Done():
-						LogDebug("UPSTREAM: Context cancelled while sending result from %s", srv.Address)
+						LogDebug("UPSTREAM: Context cancelled while sending result from %s", s.Address)
 					}
 				} else {
-					LogDebug("UPSTREAM: Response from %s has non-success rcode %d, ignoring", srv.Address, rcode)
+					LogDebug("UPSTREAM: Response from %s has non-success rcode %d, ignoring", s.Address, rcode)
 				}
 			} else {
-				LogDebug("UPSTREAM: Query to %s failed: %v", srv.Address, result.Error)
+				LogDebug("UPSTREAM: Query to %s failed: %v", s.Address, result.Error)
 			}
-			return nil
-		})
+		}(srv, msg)
 	}
+
+	// 等待第一个成功结果
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
 
 	LogDebug("UPSTREAM: Waiting for first successful response")
 	select {
-	case result := <-resultChan:
-		// ✅ 收到第一个成功响应，立即取消其他查询
-		cancelQueries()
-		LogDebug("UPSTREAM: Received successful response (rcode: %d)", result.Response.Rcode)
-		return result.Response, nil
+	case result, ok := <-resultChan:
+		if ok && result != nil {
+			cancelQueries()
+			LogDebug("UPSTREAM: Received successful response (rcode: %d)", result.Response.Rcode)
+			return result.Response, nil
+		}
+		return nil, errors.New("no successful response")
 	case <-ctx.Done():
 		LogDebug("UPSTREAM: Context cancelled while waiting for response")
+		cancelQueries()
+		wg.Wait()
 		return nil, ctx.Err()
 	}
 }
@@ -3909,25 +3922,33 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		resolveCount = MaxNSResolve
 	}
 
-	// ✅ 修复：使用 buffered channel
 	nsChan := make(chan []string, resolveCount)
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, ConnTimeout)
 	defer resolveCancel()
 
+	var wg sync.WaitGroup
+
 	for i := 0; i < resolveCount; i++ {
 		ns := nsRecords[i]
-		rr.server.taskMgr.ExecuteAsync(fmt.Sprintf("NSResolve-%s", ns.Ns), func(taskCtx context.Context) error {
-			if strings.EqualFold(strings.TrimSuffix(ns.Ns, "."), strings.TrimSuffix(qname, ".")) {
+		wg.Add(1)
+
+		// 直接启动 goroutine
+		go func(nsRecord *dns.NS) {
+			defer wg.Done()
+			defer handlePanic("NS resolve")
+
+			if strings.EqualFold(strings.TrimSuffix(nsRecord.Ns, "."), strings.TrimSuffix(qname, ".")) {
 				select {
 				case nsChan <- nil:
 				case <-resolveCtx.Done():
 				}
-				return nil
+				return
 			}
 
 			var addresses []string
 
-			nsQuestion := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
+			// A 记录查询
+			nsQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
 			if nsAnswer, _, _, _, _, err := rr.recursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP, tracker); err == nil {
 				for _, rrec := range nsAnswer {
 					if a, ok := rrec.(*dns.A); ok {
@@ -3936,8 +3957,9 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				}
 			}
 
+			// AAAA 记录查询
 			if len(addresses) == 0 {
-				nsQuestionV6 := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
+				nsQuestionV6 := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
 				if nsAnswerV6, _, _, _, _, err := rr.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP, tracker); err == nil {
 					for _, rrec := range nsAnswerV6 {
 						if aaaa, ok := rrec.(*dns.AAAA); ok {
@@ -3947,40 +3969,27 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				}
 			}
 
-			// ✅ 修复：检查 context 是否已取消
 			select {
 			case nsChan <- addresses:
 			case <-resolveCtx.Done():
-				// Context 已取消，不发送
 			}
-			return nil
-		})
+		}(ns)
 	}
 
+	// 收集结果
+	go func() {
+		wg.Wait()
+		close(nsChan)
+	}()
+
 	var allAddresses []string
-	for i := 0; i < resolveCount; i++ {
-		select {
-		case addresses := <-nsChan:
-			if len(addresses) > 0 {
-				allAddresses = append(allAddresses, addresses...)
-				if len(allAddresses) >= MaxNSResolve {
-					resolveCancel() // ✅ 取消剩余任务
-					// ✅ 清空 channel 以防止 goroutine 阻塞
-					go func() {
-						for i < resolveCount {
-							select {
-							case <-nsChan:
-								i++
-							case <-time.After(time.Second):
-								return
-							}
-						}
-					}()
-					return allAddresses
-				}
+	for addresses := range nsChan {
+		if len(addresses) > 0 {
+			allAddresses = append(allAddresses, addresses...)
+			if len(allAddresses) >= MaxNSResolve {
+				resolveCancel()
+				break
 			}
-		case <-resolveCtx.Done():
-			return allAddresses
 		}
 	}
 
@@ -4009,56 +4018,94 @@ type TaskManager struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
-	semaphore   chan struct{}
+	taskQueue   chan taskItem // 任务队列
+	workerCount int
 	activeCount int64
 	closed      int32
 	stats       struct {
 		executed int64
 		failed   int64
 		timeout  int64
+		queued   int64
 	}
+}
+
+type taskItem struct {
+	name string
+	fn   func(ctx context.Context) error
 }
 
 func NewTaskManager(maxGoroutines int) *TaskManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &TaskManager{
-		ctx:       ctx,
-		cancel:    cancel,
-		semaphore: make(chan struct{}, maxGoroutines),
+	tm := &TaskManager{
+		ctx:         ctx,
+		cancel:      cancel,
+		taskQueue:   make(chan taskItem, maxGoroutines*2),
+		workerCount: maxGoroutines,
+	}
+
+	// 启动固定数量的 worker
+	for i := 0; i < maxGoroutines; i++ {
+		tm.wg.Add(1)
+		go tm.worker(i)
+	}
+
+	LogInfo("TASK: Started %d worker goroutines", maxGoroutines)
+	return tm
+}
+
+func (tm *TaskManager) worker(id int) {
+	defer tm.wg.Done()
+	defer handlePanic(fmt.Sprintf("Worker-%d", id))
+
+	for {
+		select {
+		case <-tm.ctx.Done():
+			return
+		case task, ok := <-tm.taskQueue:
+			if !ok {
+				return
+			}
+
+			atomic.AddInt64(&tm.activeCount, 1)
+			atomic.AddInt64(&tm.stats.executed, 1)
+
+			if err := task.fn(tm.ctx); err != nil && err != context.Canceled {
+				atomic.AddInt64(&tm.stats.failed, 1)
+				LogDebug("TASK: Task %s failed: %v", task.name, err)
+			}
+
+			atomic.AddInt64(&tm.activeCount, -1)
+		}
 	}
 }
 
 func (tm *TaskManager) ExecuteAsync(name string, fn func(ctx context.Context) error) {
-	// ✅ 修复：提前检查，避免创建 goroutine
 	if tm == nil || atomic.LoadInt32(&tm.closed) != 0 {
 		return
 	}
 
-	// ✅ 在创建 goroutine 前增加计数
-	tm.wg.Add(1)
+	atomic.AddInt64(&tm.stats.queued, 1)
 
-	LogDebug("TASK: Starting async task %s", name)
-	go func() {
-		defer tm.wg.Done()
-		defer handlePanic(fmt.Sprintf("AsyncTask-%s", name))
+	select {
+	case tm.taskQueue <- taskItem{name: name, fn: fn}:
+		// 任务已加入队列
+	case <-tm.ctx.Done():
+		atomic.AddInt64(&tm.stats.queued, -1)
+	default:
+		// 队列已满，记录并丢弃
+		atomic.AddInt64(&tm.stats.queued, -1)
+		LogWarn("TASK: Task queue full, dropping task: %s", name)
+	}
+}
 
-		// ✅ 再次检查关闭状态
-		if atomic.LoadInt32(&tm.closed) != 0 {
-			return
-		}
+// 新增：同步执行方法，用于关键路径（如递归查询）
+func (tm *TaskManager) ExecuteSync(ctx context.Context, name string, fn func(ctx context.Context) error) error {
+	if tm == nil || atomic.LoadInt32(&tm.closed) != 0 {
+		return errors.New("task manager closed")
+	}
 
-		atomic.AddInt64(&tm.activeCount, 1)
-		defer atomic.AddInt64(&tm.activeCount, -1)
-
-		atomic.AddInt64(&tm.stats.executed, 1)
-
-		if err := fn(tm.ctx); err != nil && err != context.Canceled {
-			atomic.AddInt64(&tm.stats.failed, 1)
-			LogDebug("TASK: Async task %s failed: %v", name, err)
-		} else {
-			LogDebug("TASK: Async task %s completed successfully", name)
-		}
-	}()
+	return fn(ctx)
 }
 
 func (tm *TaskManager) Shutdown(timeout time.Duration) error {
@@ -4067,6 +4114,7 @@ func (tm *TaskManager) Shutdown(timeout time.Duration) error {
 	}
 
 	LogInfo("TASK: Shutting down task manager...")
+	close(tm.taskQueue)
 	tm.cancel()
 
 	done := make(chan struct{})
@@ -4077,13 +4125,13 @@ func (tm *TaskManager) Shutdown(timeout time.Duration) error {
 
 	select {
 	case <-done:
-		LogInfo("TASK: Task manager shut down")
+		LogInfo("TASK: Task manager shut down (executed: %d, failed: %d)",
+			tm.stats.executed, tm.stats.failed)
 	case <-time.After(timeout):
 		LogWarn("TASK: Task manager shutdown timeout")
 		return fmt.Errorf("shutdown timeout")
 	}
 
-	close(tm.semaphore)
 	return nil
 }
 
@@ -4140,6 +4188,60 @@ func (rt *RequestTracker) Finish() {
 }
 
 // =============================================================================
+// Memory Monitor
+// =============================================================================
+
+type MemoryMonitor struct {
+	server *DNSServer
+	ticker *time.Ticker
+	done   chan struct{}
+}
+
+func NewMemoryMonitor(server *DNSServer) *MemoryMonitor {
+	return &MemoryMonitor{
+		server: server,
+		ticker: time.NewTicker(30 * time.Second),
+		done:   make(chan struct{}),
+	}
+}
+
+func (mm *MemoryMonitor) Start() {
+	go func() {
+		defer handlePanic("Memory monitor")
+
+		for {
+			select {
+			case <-mm.ticker.C:
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+
+				LogInfo("MEMORY: Alloc=%dMB TotalAlloc=%dMB Sys=%dMB NumGC=%d Goroutines=%d MessagePool=%d",
+					m.Alloc/1024/1024,
+					m.TotalAlloc/1024/1024,
+					m.Sys/1024/1024,
+					m.NumGC,
+					runtime.NumGoroutine(),
+					messagePoolSize.Load())
+
+				// 高内存时触发 GC
+				if m.Alloc > 500*1024*1024 {
+					LogWarn("MEMORY: High memory usage detected, triggering GC")
+					runtime.GC()
+				}
+
+			case <-mm.done:
+				return
+			}
+		}
+	}()
+}
+
+func (mm *MemoryMonitor) Stop() {
+	mm.ticker.Stop()
+	close(mm.done)
+}
+
+// =============================================================================
 // DNS Server
 // =============================================================================
 
@@ -4156,6 +4258,7 @@ type DNSServer struct {
 	taskMgr       *TaskManager
 	cidrMgr       *CIDRManager
 	pprofServer   *http.Server
+	memMonitor    *MemoryMonitor
 	speedInterval time.Duration
 	redisClient   *redis.Client
 	ctx           context.Context
@@ -4274,6 +4377,9 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		}
 	}
 
+	// Initialize memory monitor
+	server.memMonitor = NewMemoryMonitor(server)
+
 	server.setupSignalHandling()
 
 	return server, nil
@@ -4335,6 +4441,11 @@ func (s *DNSServer) shutdownServer() {
 		}
 	}
 
+	if s.memMonitor != nil {
+		s.memMonitor.Stop()
+		LogInfo("MEMORY: Memory monitor stopped")
+	}
+
 	if s.speedTestMgr != nil {
 		closeWithLog(s.speedTestMgr, "SpeedTest manager")
 	}
@@ -4388,6 +4499,12 @@ func (s *DNSServer) Start() error {
 
 	LogInfo("SERVER: Starting ZJDNS Server %s", getVersion())
 	LogInfo("SERVER: Listening port: %s", s.config.Server.Port)
+
+	// Start memory monitor
+	if s.memMonitor != nil {
+		s.memMonitor.Start()
+		LogInfo("MEMORY: Memory monitor started")
+	}
 
 	s.displayInfo()
 
@@ -5239,49 +5356,54 @@ func toRRSlice[T dns.RR](records []T) []dns.RR {
 	return result
 }
 
-var messagePool = sync.Pool{
-	New: func() any {
-		return &dns.Msg{}
-	},
-}
+var (
+	messagePool = sync.Pool{
+		New: func() any {
+			return &dns.Msg{
+				Question: make([]dns.Question, 0, 4),
+				Answer:   make([]dns.RR, 0, 8),
+				Ns:       make([]dns.RR, 0, 4),
+				Extra:    make([]dns.RR, 0, 4),
+			}
+		},
+	}
+	messagePoolSize atomic.Int64
+)
 
 func acquireMessage() *dns.Msg {
 	msg := messagePool.Get().(*dns.Msg)
+	msg.MsgHdr = dns.MsgHdr{}
 	msg.Question = msg.Question[:0]
 	msg.Answer = msg.Answer[:0]
 	msg.Ns = msg.Ns[:0]
 	msg.Extra = msg.Extra[:0]
+	msg.Compress = false
+	messagePoolSize.Add(1)
 	return msg
 }
 
 func releaseMessage(msg *dns.Msg) {
-	if msg != nil {
-		// ✅ 修复：限制 slice 容量，防止大对象占用内存
-		if cap(msg.Question) > MaxMessageCap {
-			msg.Question = make([]dns.Question, 0, 10)
-		} else {
-			msg.Question = msg.Question[:0]
-		}
+	if msg == nil {
+		return
+	}
 
-		if cap(msg.Answer) > MaxMessageCap {
-			msg.Answer = make([]dns.RR, 0, 10)
-		} else {
-			msg.Answer = msg.Answer[:0]
-		}
+	if cap(msg.Question) > MaxMessagePoolCap {
+		msg.Question = make([]dns.Question, 0, 4)
+	}
+	if cap(msg.Answer) > MaxMessagePoolCap {
+		msg.Answer = make([]dns.RR, 0, 8)
+	}
+	if cap(msg.Ns) > MaxMessagePoolCap {
+		msg.Ns = make([]dns.RR, 0, 4)
+	}
+	if cap(msg.Extra) > MaxMessagePoolCap {
+		msg.Extra = make([]dns.RR, 0, 4)
+	}
 
-		if cap(msg.Ns) > MaxMessageCap {
-			msg.Ns = make([]dns.RR, 0, 10)
-		} else {
-			msg.Ns = msg.Ns[:0]
-		}
-
-		if cap(msg.Extra) > MaxMessageCap {
-			msg.Extra = make([]dns.RR, 0, 10)
-		} else {
-			msg.Extra = msg.Extra[:0]
-		}
-
+	if messagePoolSize.Load() < MaxMessagePoolSize {
 		messagePool.Put(msg)
+	} else {
+		messagePoolSize.Add(-1)
 	}
 }
 
