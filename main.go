@@ -243,7 +243,10 @@ type UpstreamServer struct {
 
 // IsRecursive returns true as all upstream servers are expected to be recursive
 func (s *UpstreamServer) IsRecursive() bool {
-	return true
+	if s == nil {
+		return false
+	}
+	return s.Address == RecursiveIndicator
 }
 
 type RewriteRule struct {
@@ -3958,20 +3961,22 @@ func (qm *QueryManager) Initialize(servers []UpstreamServer) error {
 	return nil
 }
 
-func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	servers := qm.upstream.getServers()
 	if len(servers) > 0 {
 		return qm.queryUpstream(question, ecs)
 	}
 	ctx, cancel := context.WithTimeout(qm.server.ctx, RecursiveTimeout)
 	defer cancel()
-	return qm.cname.resolveWithCNAME(ctx, question, ecs)
+
+	answer, authority, additional, validated, ecsResponse, server, err := qm.cname.resolveWithCNAME(ctx, question, ecs)
+	return answer, authority, additional, validated, ecsResponse, server, err
 }
 
-func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	servers := qm.upstream.getServers()
 	if len(servers) == 0 {
-		return nil, nil, nil, false, nil, errors.New("no upstream servers")
+		return nil, nil, nil, false, nil, "", errors.New("no upstream servers")
 	}
 
 	maxConcurrent := len(servers)
@@ -3988,6 +3993,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 		additional []dns.RR
 		validated  bool
 		ecs        *ECSOption
+		server     string
 	}
 
 	resultChan := make(chan result, 1)
@@ -4011,7 +4017,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 				recursiveCtx, recursiveCancel := context.WithTimeout(ctx, RecursiveTimeout)
 				defer recursiveCancel()
 
-				answer, authority, additional, validated, ecsResponse, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs)
+				answer, authority, additional, validated, ecsResponse, usedServer, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs)
 
 				if err == nil && len(answer) > 0 {
 					if len(server.Match) > 0 {
@@ -4029,6 +4035,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						additional: additional,
 						validated:  validated,
 						ecs:        ecsResponse,
+						server:     usedServer,
 					}:
 					case <-ctx.Done():
 					}
@@ -4058,6 +4065,12 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						queryResult.Validated = qm.validator.dnssecValidator.ValidateResponse(queryResult.Response, true)
 						ecsResponse := qm.server.ednsMgr.ParseFromDNS(queryResult.Response)
 
+						// 构建服务器描述
+						serverDesc := server.Address
+						if server.Protocol != "" && server.Protocol != "udp" {
+							serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
+						}
+
 						select {
 						case resultChan <- result{
 							answer:     queryResult.Response.Answer,
@@ -4065,6 +4078,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							additional: queryResult.Response.Extra,
 							validated:  queryResult.Validated,
 							ecs:        ecsResponse,
+							server:     serverDesc,
 						}:
 						case <-ctx.Done():
 						}
@@ -4082,11 +4096,11 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	select {
 	case res, ok := <-resultChan:
 		if ok {
-			return res.answer, res.authority, res.additional, res.validated, res.ecs, nil
+			return res.answer, res.authority, res.additional, res.validated, res.ecs, res.server, nil
 		}
-		return nil, nil, nil, false, nil, errors.New("all upstream queries failed")
+		return nil, nil, nil, false, nil, "", errors.New("all upstream queries failed")
 	case <-ctx.Done():
-		return nil, nil, nil, false, nil, ctx.Err()
+		return nil, nil, nil, false, nil, "", ctx.Err()
 	}
 }
 
@@ -4142,10 +4156,11 @@ func (uh *UpstreamHandler) getServers() []*UpstreamServer {
 	return uh.servers
 }
 
-func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	var allAnswers []dns.RR
 	var finalAuthority, finalAdditional []dns.RR
 	var finalECSResponse *ECSOption
+	var usedServer string
 	allValidated := true
 
 	currentQuestion := question
@@ -4154,19 +4169,23 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 	for i := 0; i < MaxCNAMEChain; i++ {
 		select {
 		case <-ctx.Done():
-			return nil, nil, nil, false, nil, ctx.Err()
+			return nil, nil, nil, false, nil, "", ctx.Err()
 		default:
 		}
 
 		currentName := normalizeDomain(currentQuestion.Name)
 		if visitedCNAMEs[currentName] {
-			return nil, nil, nil, false, nil, fmt.Errorf("CNAME loop detected: %s", currentName)
+			return nil, nil, nil, false, nil, "", fmt.Errorf("CNAME loop detected: %s", currentName)
 		}
 		visitedCNAMEs[currentName] = true
 
-		answer, authority, additional, validated, ecsResponse, err := ch.server.queryMgr.recursive.recursiveQuery(ctx, currentQuestion, ecs, 0, false)
+		answer, authority, additional, validated, ecsResponse, server, err := ch.server.queryMgr.recursive.recursiveQuery(ctx, currentQuestion, ecs, 0, false)
 		if err != nil {
-			return nil, nil, nil, false, nil, err
+			return nil, nil, nil, false, nil, "", err
+		}
+
+		if usedServer == "" {
+			usedServer = server
 		}
 
 		if !validated {
@@ -4205,12 +4224,12 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 		}
 	}
 
-	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, nil
+	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, usedServer, nil
 }
 
-func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	if depth > MaxRecursionDepth {
-		return nil, nil, nil, false, nil, fmt.Errorf("recursion depth exceeded: %d", depth)
+		return nil, nil, nil, false, nil, "", fmt.Errorf("recursion depth exceeded: %d", depth)
 	}
 
 	qname := dns.Fqdn(question.Name)
@@ -4222,7 +4241,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 	if normalizedQname == "" {
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
 		if err != nil {
-			return nil, nil, nil, false, nil, fmt.Errorf("root domain query: %w", err)
+			return nil, nil, nil, false, nil, "", fmt.Errorf("root domain query: %w", err)
 		}
 
 		if rr.server.securityMgr.hijack.IsEnabled() {
@@ -4233,13 +4252,13 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 		validated := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
-		return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
+		return response.Answer, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, nil, nil, false, nil, ctx.Err()
+			return nil, nil, nil, false, nil, "", ctx.Err()
 		default:
 		}
 
@@ -4248,16 +4267,16 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
 				return rr.recursiveQuery(ctx, question, ecs, depth, true)
 			}
-			return nil, nil, nil, false, nil, fmt.Errorf("query %s: %w", currentDomain, err)
+			return nil, nil, nil, false, nil, "", fmt.Errorf("query %s: %w", currentDomain, err)
 		}
 
 		if rr.server.securityMgr.hijack.IsEnabled() {
 			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				answer, authority, additional, validated, ecsResponse, err := rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth)
+				answer, authority, additional, validated, ecsResponse, server, err := rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth)
 				if err != nil && !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
 					return rr.recursiveQuery(ctx, question, ecs, depth, true)
 				}
-				return answer, authority, additional, validated, ecsResponse, err
+				return answer, authority, additional, validated, ecsResponse, server, err
 			}
 		}
 
@@ -4265,7 +4284,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
 
 		if len(response.Answer) > 0 {
-			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, nil
+			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
 		bestMatch := ""
@@ -4291,12 +4310,12 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		if len(bestNSRecords) == 0 {
-			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
+			return nil, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
 		currentDomainNormalized := normalizeDomain(currentDomain)
 		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
-			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
+			return nil, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
 		currentDomain = bestMatch + "."
@@ -4322,18 +4341,18 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		if len(nextNS) == 0 {
-			return nil, response.Ns, response.Extra, validated, ecsResponse, nil
+			return nil, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
 		nameservers = nextNS
 	}
 }
 
-func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, error) {
+func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	if !currentlyTCP {
-		return nil, nil, nil, false, nil, fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
+		return nil, nil, nil, false, nil, "", fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
 	}
-	return nil, nil, nil, false, nil, fmt.Errorf("DNS hijacking detected (TCP): %s", reason)
+	return nil, nil, nil, false, nil, "", fmt.Errorf("DNS hijacking detected (TCP): %s", reason)
 }
 
 func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption, forceTCP bool) (*dns.Msg, error) {
@@ -4444,7 +4463,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 			var addresses []string
 
 			nsQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-			if nsAnswer, _, _, _, _, err := rr.recursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
+			if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
 				for _, rrec := range nsAnswer {
 					if a, ok := rrec.(*dns.A); ok {
 						addresses = append(addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
@@ -4454,7 +4473,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 
 			if len(addresses) == 0 {
 				nsQuestionV6 := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-				if nsAnswerV6, _, _, _, _, err := rr.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
+				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswerV6 {
 						if aaaa, ok := rrec.(*dns.AAAA); ok {
 							addresses = append(addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
@@ -5110,7 +5129,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cacheKey, isSecureConnection)
 	}
 
-	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection)
+	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection, tracker)
 }
 
 func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cacheKey string, isSecureConnection bool) *dns.Msg {
@@ -5151,8 +5170,12 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	return msg
 }
 
-func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool) *dns.Msg {
-	answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(question, ecsOpt)
+func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool, tracker *RequestTracker) *dns.Msg {
+	answer, authority, additional, validated, ecsResponse, usedServer, err := s.queryMgr.Query(question, ecsOpt)
+
+	if tracker != nil {
+		tracker.Upstream = usedServer
+	}
 
 	if err != nil {
 		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, isSecureConnection)
@@ -5161,14 +5184,14 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection)
 }
 
-func (s *DNSServer) refreshCacheEntry(ctx context.Context, question dns.Question, ecs *ECSOption, cacheKey string, oldEntry *CacheEntry) error {
+func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *ECSOption, cacheKey string, oldEntry *CacheEntry) error {
 	defer handlePanic("cache refresh")
 
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return errors.New("server closed")
 	}
 
-	answer, authority, additional, validated, ecsResponse, err := s.queryMgr.Query(question, ecs)
+	answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecs)
 
 	if err != nil {
 		s.updateCacheRefreshTime(cacheKey, oldEntry)
