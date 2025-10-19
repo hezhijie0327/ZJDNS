@@ -834,7 +834,7 @@ func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string,
 	if earlyData {
 		conn, err = quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, quicConfig)
 		if err == nil {
-			LogInfo("POOL: Established 0-RTT QUIC to %s", serverAddr)
+			LogDebug("POOL: Established 0-RTT QUIC to %s", serverAddr)
 		} else {
 			LogDebug("POOL: 0-RTT failed, fallback to 1-RTT: %v", err)
 		}
@@ -4589,7 +4589,7 @@ func (mm *MemoryMonitor) Start() {
 				var m runtime.MemStats
 				runtime.ReadMemStats(&m)
 
-				LogInfo("MEMORY: Alloc=%dMB TotalAlloc=%dMB Sys=%dMB NumGC=%d Goroutines=%d MessagePool=%d",
+				LogDebug("MEMORY: Alloc=%dMB TotalAlloc=%dMB Sys=%dMB NumGC=%d Goroutines=%d MessagePool=%d",
 					m.Alloc/1024/1024,
 					m.TotalAlloc/1024/1024,
 					m.Sys/1024/1024,
