@@ -49,16 +49,6 @@ import (
 )
 
 // =============================================================================
-// Constants - Version and Build Information
-// =============================================================================
-
-const (
-	Version    = "1.3.0"
-	CommitHash = "dirty"
-	BuildTime  = "dev"
-)
-
-// =============================================================================
 // Constants - Server Ports and Network
 // =============================================================================
 
@@ -221,6 +211,16 @@ const (
 	Warn
 	Info
 	Debug
+)
+
+// =============================================================================
+// Variables - Version and Build Information
+// =============================================================================
+
+var (
+	Version    = "1.3.0"
+	CommitHash = "dirty"
+	BuildTime  = "dev"
 )
 
 // =============================================================================
@@ -3922,7 +3922,7 @@ func (mm *MemoryMonitor) Start() {
 					m.NumGC,
 					runtime.NumGoroutine())
 
-				if m.Alloc > 500*1024*1024 {
+				if m.Alloc > 128*1024*1024 {
 					LogWarn("MEMORY: High memory usage detected, triggering GC")
 					debug.FreeOSMemory()
 					runtime.GC()
@@ -5294,7 +5294,7 @@ func (rr *RecursiveResolver) getRootServers() []string {
 // =============================================================================
 
 func getVersion() string {
-	return fmt.Sprintf("v%s-%s@%s", Version, CommitHash, BuildTime)
+	return fmt.Sprintf("v%s-%s@%s (%s)", Version, CommitHash, BuildTime, runtime.Version())
 }
 
 func NormalizeDomain(domain string) string {
