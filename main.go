@@ -496,8 +496,6 @@ type RootServerManager struct {
 	lastSortTime time.Time
 	mu           sync.RWMutex
 	needsSpeed   bool
-	ctx          context.Context
-	cancel       context.CancelFunc
 }
 
 // =============================================================================
@@ -790,15 +788,12 @@ func (p *ConnectionPool) cleanupExpiredConnections() {
 	removed := 0
 
 	cleanMap := func(m *sync.Map, connType string) {
-		var keysToDelete []string
-
-		m.Range(func(key, value interface{}) bool {
+		deleteKeysFromMap(m, func(key, value interface{}) bool {
 			entry := value.(*ConnectionPoolEntry)
 			entry.mu.Lock()
 			defer entry.mu.Unlock()
 
 			shouldRemove := false
-
 			if entry.closed.Load() {
 				shouldRemove = true
 			} else if now.Sub(entry.createdAt) > ConnectionMaxLifetime {
@@ -810,17 +805,12 @@ func (p *ConnectionPool) cleanupExpiredConnections() {
 			}
 
 			if shouldRemove {
-				keysToDelete = append(keysToDelete, key.(string))
 				p.closeConnectionEntry(entry)
 				removed++
+				return true
 			}
-
-			return true
+			return false
 		})
-
-		for _, key := range keysToDelete {
-			m.Delete(key)
-		}
 	}
 
 	cleanMap(&p.http2Conns, "HTTP/2")
@@ -838,15 +828,13 @@ func (p *ConnectionPool) validateConnections() {
 	failed := 0
 
 	validateMap := func(m *sync.Map, connType string) {
-		var keysToDelete []string
-
-		m.Range(func(key, value interface{}) bool {
+		deleteKeysFromMap(m, func(key, value interface{}) bool {
 			entry := value.(*ConnectionPoolEntry)
 			entry.mu.Lock()
+			defer entry.mu.Unlock()
 
 			if entry.closed.Load() {
-				entry.mu.Unlock()
-				return true
+				return false
 			}
 
 			valid := p.validateConnection(entry)
@@ -854,19 +842,12 @@ func (p *ConnectionPool) validateConnections() {
 
 			if !valid {
 				failed++
-				keysToDelete = append(keysToDelete, key.(string))
 				p.closeConnectionEntry(entry)
-			} else {
-				validated++
+				return true
 			}
-
-			entry.mu.Unlock()
-			return true
+			validated++
+			return false
 		})
-
-		for _, key := range keysToDelete {
-			m.Delete(key)
-		}
 	}
 
 	validateMap(&p.quicConns, "QUIC")
@@ -1107,7 +1088,6 @@ func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string,
 func (p *ConnectionPool) monitorQUICConnection(key string, entry *ConnectionPoolEntry, conn *quic.Conn) {
 	defer HandlePanic("Monitor QUIC connection")
 
-	// BUGFIX: 使用 select 而不是直接等待，避免阻塞
 	select {
 	case <-conn.Context().Done():
 		entry.mu.Lock()
@@ -1192,16 +1172,11 @@ func (p *ConnectionPool) Close() error {
 	p.cleanupTicker.Stop()
 
 	closeMap := func(m *sync.Map) {
-		var keysToDelete []string
-		m.Range(func(key, value interface{}) bool {
+		deleteKeysFromMap(m, func(key, value interface{}) bool {
 			entry := value.(*ConnectionPoolEntry)
 			p.closeConnectionEntry(entry)
-			keysToDelete = append(keysToDelete, key.(string))
 			return true
 		})
-		for _, key := range keysToDelete {
-			m.Delete(key)
-		}
 	}
 
 	closeMap(&p.http2Conns)
@@ -1209,7 +1184,6 @@ func (p *ConnectionPool) Close() error {
 	closeMap(&p.quicConns)
 	closeMap(&p.tlsConns)
 
-	// BUGFIX: 添加超时等待，避免无限等待
 	done := make(chan struct{})
 	go func() {
 		p.wg.Wait()
@@ -1224,6 +1198,19 @@ func (p *ConnectionPool) Close() error {
 	}
 
 	return nil
+}
+
+func deleteKeysFromMap(m *sync.Map, predicate func(key, value interface{}) bool) {
+	var keysToDelete []string
+	m.Range(func(key, value interface{}) bool {
+		if predicate(key, value) {
+			keysToDelete = append(keysToDelete, key.(string))
+		}
+		return true
+	})
+	for _, key := range keysToDelete {
+		m.Delete(key)
+	}
 }
 
 // =============================================================================
@@ -2921,8 +2908,6 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 		}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
 	rsm := &RootServerManager{
 		servers: []string{
 			"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
@@ -2940,8 +2925,6 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 			"202.12.27.33:53", "[2001:dc3::35]:53",
 		},
 		needsSpeed: needsRecursive,
-		ctx:        ctx,
-		cancel:     cancel,
 	}
 
 	rsm.sorted = make([]RootServerWithLatency, len(rsm.servers))
@@ -3012,7 +2995,6 @@ func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
 		case <-ticker.C:
 			rsm.sortServersBySpeed()
 		case <-ctx.Done():
-			rsm.cancel()
 			return
 		}
 	}
@@ -3888,7 +3870,6 @@ func (tm *TLSManager) shutdown() error {
 		CloseWithLog(tm.h3Listener, "HTTP/3 listener")
 	}
 
-	// BUGFIX: 添加超时等待，避免无限等待
 	done := make(chan struct{})
 	go func() {
 		tm.wg.Wait()
