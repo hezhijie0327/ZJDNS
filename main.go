@@ -228,10 +228,10 @@ const (
 // =============================================================================
 
 var (
-	NextProtoDOT   = []string{"dot"}
-	NextProtoQUIC  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
-	NextProtoHTTP3 = []string{"h3"}
-	NextProtoHTTP2 = []string{http2.NextProtoTLS, "http/1.1"}
+	NextProtoDOT  = []string{"dot"}
+	NextProtoDoQ  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
+	NextProtoDoH3 = []string{"h3"}
+	NextProtoDoH  = []string{"h2", "http/1.1"}
 
 	MaxWorkerCount = runtime.NumCPU() * 2
 )
@@ -980,7 +980,7 @@ func (p *ConnectionPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Conf
 	}
 
 	tlsConfig = tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoHTTP3
+	tlsConfig.NextProtos = NextProtoDoH3
 
 	transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
@@ -1043,7 +1043,7 @@ func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string,
 	}
 
 	tlsConfig = tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoQUIC
+	tlsConfig.NextProtos = NextProtoDoQ
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:             ConnectionMaxIdleTime,
@@ -3333,7 +3333,7 @@ func (tm *TLSManager) startDOTServer() error {
 	dotTLSConfig.NextProtos = NextProtoDOT
 
 	tm.dotListener = tls.NewListener(listener, dotTLSConfig)
-	LogInfo("DOT: DoT server started on port %s with ALPN support: %v", tm.server.config.Server.TLS.Port, NextProtoDOT)
+	LogInfo("DOT: DoT server started on port %s", tm.server.config.Server.TLS.Port)
 
 	tm.wg.Add(1)
 	go func() {
@@ -3481,7 +3481,7 @@ func (tm *TLSManager) startDOQServer() error {
 	}
 
 	quicTLSConfig := tm.tlsConfig.Clone()
-	quicTLSConfig.NextProtos = NextProtoQUIC
+	quicTLSConfig.NextProtos = NextProtoDoQ
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        SecureIdleTimeout,
@@ -3662,7 +3662,7 @@ func (tm *TLSManager) startDOHServer(port string) error {
 	}
 
 	tlsConfig := tm.tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoHTTP2
+	tlsConfig.NextProtos = NextProtoDoH
 
 	tm.httpsListener = tls.NewListener(listener, tlsConfig)
 	LogInfo("DOH: DoH server started on port %s", port)
@@ -3689,7 +3689,7 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 	addr := ":" + port
 
 	tlsConfig := tm.tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoHTTP3
+	tlsConfig.NextProtos = NextProtoDoH3
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        SecureIdleTimeout,
