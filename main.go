@@ -112,6 +112,7 @@ const (
 	ConnectionValidateEvery = 10 * time.Second
 	ConnectionKeepalive     = 60 * time.Second
 	ConnectionPoolCleanup   = 30 * time.Second
+	GoroutineCleanupTimeout = 2 * time.Second
 )
 
 // =============================================================================
@@ -379,6 +380,7 @@ type RefreshTracker struct {
 	mu      sync.RWMutex
 	ticker  *time.Ticker
 	done    chan struct{}
+	closed  int32
 }
 
 type NullCache struct{}
@@ -494,6 +496,8 @@ type RootServerManager struct {
 	lastSortTime time.Time
 	mu           sync.RWMutex
 	needsSpeed   bool
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 // =============================================================================
@@ -786,9 +790,12 @@ func (p *ConnectionPool) cleanupExpiredConnections() {
 	removed := 0
 
 	cleanMap := func(m *sync.Map, connType string) {
+		var keysToDelete []string
+
 		m.Range(func(key, value interface{}) bool {
 			entry := value.(*ConnectionPoolEntry)
 			entry.mu.Lock()
+			defer entry.mu.Unlock()
 
 			shouldRemove := false
 
@@ -803,14 +810,17 @@ func (p *ConnectionPool) cleanupExpiredConnections() {
 			}
 
 			if shouldRemove {
-				m.Delete(key)
+				keysToDelete = append(keysToDelete, key.(string))
 				p.closeConnectionEntry(entry)
 				removed++
 			}
 
-			entry.mu.Unlock()
 			return true
 		})
+
+		for _, key := range keysToDelete {
+			m.Delete(key)
+		}
 	}
 
 	cleanMap(&p.http2Conns, "HTTP/2")
@@ -828,6 +838,8 @@ func (p *ConnectionPool) validateConnections() {
 	failed := 0
 
 	validateMap := func(m *sync.Map, connType string) {
+		var keysToDelete []string
+
 		m.Range(func(key, value interface{}) bool {
 			entry := value.(*ConnectionPoolEntry)
 			entry.mu.Lock()
@@ -842,7 +854,7 @@ func (p *ConnectionPool) validateConnections() {
 
 			if !valid {
 				failed++
-				m.Delete(key)
+				keysToDelete = append(keysToDelete, key.(string))
 				p.closeConnectionEntry(entry)
 			} else {
 				validated++
@@ -851,6 +863,10 @@ func (p *ConnectionPool) validateConnections() {
 			entry.mu.Unlock()
 			return true
 		})
+
+		for _, key := range keysToDelete {
+			m.Delete(key)
+		}
 	}
 
 	validateMap(&p.quicConns, "QUIC")
@@ -895,10 +911,16 @@ func (p *ConnectionPool) closeConnectionEntry(entry *ConnectionPoolEntry) {
 	case *http3.Transport:
 		_ = conn.Close()
 	case *quic.Conn:
-		_, cancel := context.WithTimeout(context.Background(), ConnectionCloseTimeout)
+		// BUGFIX: 修复 QUIC 连接关闭的 goroutine 泄漏
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), ConnectionCloseTimeout)
 		_ = conn.CloseWithError(QUICCodeNoError, "pool cleanup")
-		<-conn.Context().Done()
-		cancel()
+		// 等待连接关闭完成
+		select {
+		case <-conn.Context().Done():
+			closeCancel()
+		case <-closeCtx.Done():
+			closeCancel()
+		}
 	case *tls.Conn:
 		_ = conn.Close()
 	}
@@ -1076,6 +1098,7 @@ func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string,
 	p.quicConns.Store(key, entry)
 	p.connCount.Add(1)
 
+	// BUGFIX: 修复 QUIC 连接监控 goroutine
 	go p.monitorQUICConnection(key, entry, conn)
 
 	return conn, nil
@@ -1084,14 +1107,19 @@ func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string,
 func (p *ConnectionPool) monitorQUICConnection(key string, entry *ConnectionPoolEntry, conn *quic.Conn) {
 	defer HandlePanic("Monitor QUIC connection")
 
-	<-conn.Context().Done()
+	// BUGFIX: 使用 select 而不是直接等待，避免阻塞
+	select {
+	case <-conn.Context().Done():
+		entry.mu.Lock()
+		entry.healthy.Store(false)
+		entry.mu.Unlock()
 
-	entry.mu.Lock()
-	entry.healthy.Store(false)
-	entry.mu.Unlock()
-
-	p.quicConns.Delete(key)
-	p.closeConnectionEntry(entry)
+		p.quicConns.Delete(key)
+		p.closeConnectionEntry(entry)
+	case <-p.ctx.Done():
+		// 连接池已关闭，不处理
+		return
+	}
 }
 
 func (p *ConnectionPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*tls.Conn, error) {
@@ -1164,12 +1192,16 @@ func (p *ConnectionPool) Close() error {
 	p.cleanupTicker.Stop()
 
 	closeMap := func(m *sync.Map) {
+		var keysToDelete []string
 		m.Range(func(key, value interface{}) bool {
 			entry := value.(*ConnectionPoolEntry)
 			p.closeConnectionEntry(entry)
-			m.Delete(key)
+			keysToDelete = append(keysToDelete, key.(string))
 			return true
 		})
+		for _, key := range keysToDelete {
+			m.Delete(key)
+		}
 	}
 
 	closeMap(&p.http2Conns)
@@ -1177,8 +1209,20 @@ func (p *ConnectionPool) Close() error {
 	closeMap(&p.quicConns)
 	closeMap(&p.tlsConns)
 
-	p.wg.Wait()
-	LogInfo("POOL: Connection pool shut down")
+	// BUGFIX: 添加超时等待，避免无限等待
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		LogInfo("POOL: Connection pool shut down")
+	case <-time.After(GoroutineCleanupTimeout):
+		LogWarn("POOL: Connection pool shutdown timeout")
+	}
+
 	return nil
 }
 
@@ -1299,7 +1343,10 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 	if err != nil {
 		return nil, fmt.Errorf("open stream: %w", err)
 	}
-	defer func() { _ = stream.Close() }()
+	// BUGFIX: 确保 stream 正确关闭
+	defer func() {
+		_ = stream.Close()
+	}()
 
 	_ = stream.SetDeadline(time.Now().Add(qc.timeout))
 
@@ -1826,6 +1873,9 @@ func (rt *RefreshTracker) TryStartRefresh(key string, ttl time.Duration) bool {
 }
 
 func (rt *RefreshTracker) Close() {
+	if !atomic.CompareAndSwapInt32(&rt.closed, 0, 1) {
+		return
+	}
 	rt.ticker.Stop()
 	close(rt.done)
 }
@@ -1887,27 +1937,20 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	var entry CacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		go func() {
-			defer HandlePanic("Clean corrupted cache")
-			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
-			defer cleanCancel()
-			rc.client.Del(cleanCtx, key)
-		}()
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
+		_ = rc.client.Del(cleanCtx, key).Err()
+		cleanCancel()
 		return nil, false, false
 	}
 
 	isExpired := entry.IsExpired()
 
 	entry.AccessTime = time.Now().Unix()
-	go func() {
-		defer HandlePanic("Update access time")
-		if atomic.LoadInt32(&rc.closed) == 0 {
-			updateCtx, updateCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
-			defer updateCancel()
-			data, _ := json.Marshal(entry)
-			rc.client.Set(updateCtx, key, data, redis.KeepTTL)
-		}
-	}()
+
+	updateCtx, updateCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
+	updatedData, _ := json.Marshal(entry)
+	_ = rc.client.Set(updateCtx, key, string(updatedData), redis.KeepTTL).Err()
+	updateCancel()
 
 	return &entry, true, isExpired
 }
@@ -1951,7 +1994,7 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 	defer cancel()
 
 	expiration := time.Duration(cacheTTL)*time.Second + time.Duration(StaleMaxAge)*time.Second
-	rc.client.Set(ctx, key, data, expiration)
+	_ = rc.client.Set(ctx, key, data, expiration).Err()
 }
 
 func (rc *RedisCache) Close() error {
@@ -2690,7 +2733,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 			key := st.keyPrefix + ip
 			data, err := json.Marshal(result)
 			if err == nil {
-				st.redis.Set(ctx, key, data, st.cacheTTL)
+				_ = st.redis.Set(ctx, key, data, st.cacheTTL).Err()
 			}
 		}
 	}
@@ -2878,6 +2921,8 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	rsm := &RootServerManager{
 		servers: []string{
 			"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
@@ -2895,6 +2940,8 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 			"202.12.27.33:53", "[2001:dc3::35]:53",
 		},
 		needsSpeed: needsRecursive,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	rsm.sorted = make([]RootServerWithLatency, len(rsm.servers))
@@ -2965,6 +3012,7 @@ func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
 		case <-ticker.C:
 			rsm.sortServersBySpeed()
 		case <-ctx.Done():
+			rsm.cancel()
 			return
 		}
 	}
@@ -3542,22 +3590,17 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		return
 	}
 
+	// BUGFIX: 确保连接正确关闭，避免 goroutine 泄漏
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), ConnectionCloseTimeout)
-		defer cancel()
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), ConnectionCloseTimeout)
+		defer closeCancel()
 
 		_ = conn.CloseWithError(QUICCodeNoError, "")
 
-		done := make(chan struct{})
-		go func() {
-			<-conn.Context().Done()
-			close(done)
-		}()
-
+		// 等待连接关闭完成
 		select {
-		case <-done:
-		case <-ctx.Done():
-			LogDebug("QUIC: Connection close timeout")
+		case <-conn.Context().Done():
+		case <-closeCtx.Done():
 		}
 	}()
 
@@ -3828,14 +3871,14 @@ func (tm *TLSManager) shutdown() error {
 
 	if tm.httpsServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
-		defer cancel()
 		_ = tm.httpsServer.Shutdown(ctx)
+		cancel()
 	}
 
 	if tm.h3Server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
-		defer cancel()
 		_ = tm.h3Server.Shutdown(ctx)
+		cancel()
 	}
 
 	if tm.httpsListener != nil {
@@ -3845,8 +3888,20 @@ func (tm *TLSManager) shutdown() error {
 		CloseWithLog(tm.h3Listener, "HTTP/3 listener")
 	}
 
-	tm.wg.Wait()
-	LogInfo("TLS: Secure DNS server shut down")
+	// BUGFIX: 添加超时等待，避免无限等待
+	done := make(chan struct{})
+	go func() {
+		tm.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		LogInfo("TLS: Secure DNS server shut down")
+	case <-time.After(GoroutineCleanupTimeout):
+		LogWarn("TLS: Secure DNS server shutdown timeout")
+	}
+
 	return nil
 }
 
@@ -4449,6 +4504,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 		refreshInterval := time.Duration(entry.OriginalTTL) * time.Second
 		if redisCache, ok := s.cacheMgr.(*RedisCache); ok {
 			if redisCache.refreshTracker.TryStartRefresh(cacheKey, refreshInterval) {
+				// BUGFIX: 使用带超时的 context 启动后台刷新
 				go func() {
 					defer HandlePanic("cache refresh")
 					ctx, cancel := context.WithTimeout(context.Background(), QueryTimeout)
@@ -4538,7 +4594,7 @@ func (s *DNSServer) updateCacheRefreshTime(cacheKey string, _ *CacheEntry) {
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
 	defer writeCancel()
 
-	redisCache.client.Set(writeCtx, cacheKey, updatedData, redis.KeepTTL)
+	_ = redisCache.client.Set(writeCtx, cacheKey, updatedData, redis.KeepTTL).Err()
 }
 
 func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *ECSOption, isSecureConnection bool) *dns.Msg {
