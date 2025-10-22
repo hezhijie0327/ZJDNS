@@ -3796,7 +3796,7 @@ func (mm *MemoryMonitor) Start() {
 					m.NumGC,
 					runtime.NumGoroutine())
 
-				if m.Alloc > 100*1024*1024 {
+				if m.Alloc > 64*1024*1024 {
 					LogWarn("MEMORY: High memory usage detected, triggering GC")
 					debug.FreeOSMemory()
 					runtime.GC()
