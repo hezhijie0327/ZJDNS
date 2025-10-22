@@ -49,6 +49,36 @@ import (
 )
 
 // =============================================================================
+// Global Variables
+// =============================================================================
+
+var (
+	Version    = "1.4.0"
+	CommitHash = "dirty"
+	BuildTime  = "dev"
+
+	globalLog = NewLogManager()
+
+	// Protocol configurations
+	NextProtoDOT  = []string{"dot"}
+	NextProtoDoQ  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
+	NextProtoDoH3 = []string{"h3"}
+	NextProtoDoH  = []string{"h2", "http/1.1"}
+
+	// Minimal message pool to reduce GC pressure
+	messagePool = sync.Pool{
+		New: func() any {
+			return &dns.Msg{
+				Question: make([]dns.Question, 0, 1),
+				Answer:   make([]dns.RR, 0, 4),
+				Ns:       make([]dns.RR, 0, 2),
+				Extra:    make([]dns.RR, 0, 2),
+			}
+		},
+	}
+)
+
+// =============================================================================
 // Constants Section
 // =============================================================================
 
@@ -529,36 +559,6 @@ type ResponseValidator struct {
 	hijackPrevention *HijackPrevention
 	dnssecValidator  *DNSSECValidator
 }
-
-// =============================================================================
-// Global Variables
-// =============================================================================
-
-var (
-	Version    = "1.4.0"
-	CommitHash = "dirty"
-	BuildTime  = "dev"
-
-	globalLog = NewLogManager()
-
-	// Protocol configurations
-	NextProtoDOT  = []string{"dot"}
-	NextProtoDoQ  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
-	NextProtoDoH3 = []string{"h3"}
-	NextProtoDoH  = []string{"h2", "http/1.1"}
-
-	// Minimal message pool to reduce GC pressure
-	messagePool = sync.Pool{
-		New: func() any {
-			return &dns.Msg{
-				Question: make([]dns.Question, 0, 1),
-				Answer:   make([]dns.RR, 0, 4),
-				Ns:       make([]dns.RR, 0, 2),
-				Extra:    make([]dns.RR, 0, 2),
-			}
-		},
-	}
-)
 
 // =============================================================================
 // LogManager Implementation
