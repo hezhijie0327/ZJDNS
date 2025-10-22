@@ -1147,13 +1147,13 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 	}
 
 	switch protocol {
-	case "tls":
+	case "dot", "tls":
 		return qc.executeTLS(ctx, msg, server, tlsConfig)
-	case "quic":
+	case "doq", "quic":
 		return qc.executeQUIC(ctx, msg, server, tlsConfig)
-	case "https":
+	case "doh", "https":
 		return qc.executeDoH(ctx, msg, server, tlsConfig)
-	case "http3":
+	case "doh3", "http3":
 		return qc.executeDoH3(ctx, msg, server, tlsConfig)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
@@ -3089,7 +3089,7 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
