@@ -95,10 +95,11 @@ const (
 	PprofPath          = "/debug/pprof/"
 
 	// Buffer Sizes
-	UDPBufferSize     = 1232
-	TCPBufferSize     = 4096
-	SecureBufferSize  = 8192
-	DoHMaxRequestSize = 8192
+	UDPBufferSize       = 1232
+	TCPBufferSize       = 4096
+	SecureBufferSize    = 8192
+	DoHMaxRequestSize   = 8192
+	TLSSessionCacheSize = 256
 
 	// Domain Limits
 	MaxDomainLength = 253
@@ -457,6 +458,7 @@ type ConnPool struct {
 	http3Conns    sync.Map
 	quicConns     sync.Map
 	tlsConns      sync.Map
+	sessionCache  tls.ClientSessionCache
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
@@ -663,6 +665,7 @@ func NewConnPool() *ConnPool {
 		ctx:           ctx,
 		cancel:        cancel,
 		cleanupTicker: time.NewTicker(ConnPoolCleanup),
+		sessionCache:  tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 	}
 
 	pool.wg.Add(1)
@@ -833,6 +836,9 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 		entry.mu.Unlock()
 	}
 
+	tlsConfig = tlsConfig.Clone()
+	tlsConfig.ClientSessionCache = p.sessionCache
+
 	transport := &http.Transport{
 		TLSClientConfig:       tlsConfig,
 		DisableCompression:    true,
@@ -893,6 +899,7 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 
 	tlsConfig = tlsConfig.Clone()
 	tlsConfig.NextProtos = NextProtoDoH3
+	tlsConfig.ClientSessionCache = p.sessionCache
 
 	transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
@@ -959,6 +966,7 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 
 	tlsConfig = tlsConfig.Clone()
 	tlsConfig.NextProtos = NextProtoDoQ
+	tlsConfig.ClientSessionCache = p.sessionCache
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:             ConnMaxIdleTime,
@@ -1032,6 +1040,9 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 		p.closeEntry(entry)
 		entry.mu.Unlock()
 	}
+
+	tlsConfig = tlsConfig.Clone()
+	tlsConfig.ClientSessionCache = p.sessionCache
 
 	host, port, err := net.SplitHostPort(serverAddr)
 	if err != nil {
@@ -1144,6 +1155,11 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 		ServerName:         server.ServerName,
 		InsecureSkipVerify: server.SkipTLSVerify,
 		MinVersion:         tls.VersionTLS12,
+		ClientSessionCache: qc.connPool.sessionCache,
+	}
+
+	if server.SkipTLSVerify {
+		LogDebug("QUERY: TLS verification disabled for %s - security risk!", server.ServerName)
 	}
 
 	switch protocol {
@@ -3088,8 +3104,9 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 	}
 
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
+		Certificates:           []tls.Certificate{cert},
+		MinVersion:             tls.VersionTLS13,
+		SessionTicketsDisabled: false,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
