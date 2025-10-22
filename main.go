@@ -1,5 +1,5 @@
-// Package main implements a high-performance DNS server supporting
-// recursive resolution, caching, and secure DNS protocols (DoT/DoH/DoQ).
+// Package main implements ZJDNS - High Performance DNS Server
+// Supporting DoT/DoH/DoQ/DoH3 with connection pooling and recursive resolution
 package main
 
 import (
@@ -49,198 +49,154 @@ import (
 )
 
 // =============================================================================
-// Constants - Server Ports and Network
+// Global Variables
+// =============================================================================
+
+var (
+	Version    = "1.4.0"
+	CommitHash = "dirty"
+	BuildTime  = "dev"
+
+	globalLog = NewLogManager()
+
+	// Protocol configurations
+	NextProtoDOT  = []string{"dot"}
+	NextProtoDoQ  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
+	NextProtoDoH3 = []string{"h3"}
+	NextProtoDoH  = []string{"h2", "http/1.1"}
+
+	// Minimal message pool to reduce GC pressure
+	messagePool = sync.Pool{
+		New: func() any {
+			return &dns.Msg{
+				Question: make([]dns.Question, 0, 1),
+				Answer:   make([]dns.RR, 0, 4),
+				Ns:       make([]dns.RR, 0, 2),
+				Extra:    make([]dns.RR, 0, 2),
+			}
+		},
+	}
+)
+
+// =============================================================================
+// Constants Section
 // =============================================================================
 
 const (
+	// Server Ports
 	DefaultDNSPort   = "53"
 	DefaultDOTPort   = "853"
 	DefaultDOHPort   = "443"
 	DefaultPprofPort = "6060"
 
+	// Protocol Indicators
 	RecursiveIndicator = "builtin_recursive"
 	DefaultQueryPath   = "/dns-query"
 	PprofPath          = "/debug/pprof/"
 
-	UDPBufferSize    = 1232
-	TCPBufferSize    = 4096
-	SecureBufferSize = 8192
+	// Buffer Sizes
+	UDPBufferSize     = 1232
+	TCPBufferSize     = 4096
+	SecureBufferSize  = 8192
+	DoHMaxRequestSize = 8192
 
-	DOTTCPBufferSize  = 2048
-	DOHMaxRequestSize = 8192
-)
+	// Domain Limits
+	MaxDomainLength = 253
+	MaxCNAMEChain   = 16
+	MaxRecursionDep = 16
+	MaxConcurrency  = 200
+	MaxSingleQuery  = 2
+	MaxNSResolve    = 2
 
-// =============================================================================
-// Constants - DNS Query Limits
-// =============================================================================
+	// Timeouts
+	QueryTimeout           = 2500 * time.Millisecond
+	RecursiveTimeout       = 5 * time.Second
+	ConnTimeout            = 1500 * time.Millisecond
+	TLSHandshakeTimeout    = 1500 * time.Millisecond
+	PublicIPTimeout        = 1500 * time.Millisecond
+	HTTPClientTimeout      = 2500 * time.Millisecond
+	ShutdownTimeout        = 1500 * time.Millisecond
+	DoHReadHeaderTimeout   = 2500 * time.Millisecond
+	DoHWriteTimeout        = 2500 * time.Millisecond
+	DoTReadTimeout         = 3 * time.Second
+	DoTWriteTimeout        = 3 * time.Second
+	DoTIdleTimeout         = 45 * time.Second
+	SecureIdleTimeout      = 45 * time.Second
+	PprofReadHeaderTimeout = 3 * time.Second
+	PprofReadTimeout       = 3 * time.Second
+	PprofIdleTimeout       = 45 * time.Second
+	ConnCloseTimeout       = 200 * time.Millisecond
+	ConnDialTimeout        = 2 * time.Second
+	ConnMaxLifetime        = 180 * time.Second
+	ConnMaxIdleTime        = 30 * time.Second
+	ConnValidateEvery      = 8 * time.Second
+	ConnKeepAlive          = 30 * time.Second
+	ConnPoolCleanup        = 8 * time.Second
 
-const (
-	MaxDomainLength   = 253
-	MaxCNAMEChain     = 16
-	MaxRecursionDepth = 16
-	MaxConcurrency    = 1000
-	MaxSingleQuery    = 5
-	MaxNSResolve      = 5
-)
+	// Cache Configuration
+	DefaultCacheTTL    = 10
+	StaleTTL           = 30
+	StaleMaxAge        = 86400 * 7
+	DefaultSpeedTTL    = 180 * time.Second
+	SpeedDebounceDelay = 3 * time.Second
+	RootServerRefresh  = 600 * time.Second
 
-// =============================================================================
-// Constants - Timeouts
-// =============================================================================
+	// Redis Configuration
+	RedisPoolSize     = 3
+	RedisMinIdle      = 1
+	RedisMaxRetries   = 2
+	RedisPoolTimeout  = 2 * time.Second
+	RedisReadTimeout  = 1500 * time.Millisecond
+	RedisWriteTimeout = 1500 * time.Millisecond
+	RedisDialTimeout  = 2 * time.Second
 
-const (
-	QueryTimeout            = 5 * time.Second
-	RecursiveTimeout        = 10 * time.Second
-	ConnTimeout             = 5 * time.Second
-	TLSHandshakeTimeout     = 3 * time.Second
-	PublicIPTimeout         = 3 * time.Second
-	HTTPClientTimeout       = 5 * time.Second
-	ShutdownTimeout         = 3 * time.Second
-	DOHReadHeaderTimeout    = 5 * time.Second
-	DOHWriteTimeout         = 5 * time.Second
-	DOTReadTimeout          = 10 * time.Second
-	DOTWriteTimeout         = 10 * time.Second
-	DOTIdleTimeout          = 30 * time.Second
-	SecureIdleTimeout       = 300 * time.Second
-	PprofReadHeaderTimeout  = 10 * time.Second
-	PprofReadTimeout        = 30 * time.Second
-	PprofIdleTimeout        = 120 * time.Second
-	ConnectionCloseTimeout  = 1 * time.Second
-	ConnectionDialTimeout   = 3 * time.Second
-	ConnectionHealthCheck   = 5 * time.Second
-	ConnectionMaxLifetime   = 600 * time.Second
-	ConnectionMaxIdleTime   = 180 * time.Second
-	ConnectionValidateEvery = 10 * time.Second
-	ConnectionKeepalive     = 60 * time.Second
-	ConnectionPoolCleanup   = 30 * time.Second
-)
+	// Redis Key Prefixes
+	RedisPrefixDNS           = "dns:"
+	RedisPrefixSpeedtest     = "speed:"
+	RedisPrefixQUICValidator = "quic:v:"
+	RedisPrefixQUICSession   = "quic:s:"
 
-// =============================================================================
-// Constants - Cache Configuration
-// =============================================================================
+	// EDNS Configuration
+	DefaultECSv4Len = 24
+	DefaultECSv6Len = 64
+	DefaultECSScope = 0
+	PaddingSize     = 468
 
-const (
-	DefaultCacheTTL = 10
-	StaleTTL        = 30
-	StaleMaxAge     = 86400 * 7
-
-	DefaultSpeedCacheTTL   = 900 * time.Second
-	SpeedDebounceInterval  = 10 * time.Second
-	RootServerSortInterval = 900 * time.Second
-
-	RefreshTrackerCleanupInterval = 5 * time.Minute
-	RefreshTrackerMaxAge          = 15 * time.Minute
-
-	CertValidityDuration = 90 * 24 * time.Hour
-)
-
-// =============================================================================
-// Constants - Redis Configuration
-// =============================================================================
-
-const (
-	RedisPoolSize     = 20
-	RedisMinIdle      = 5
-	RedisMaxRetries   = 3
-	RedisPoolTimeout  = 5 * time.Second
-	RedisReadTimeout  = 3 * time.Second
-	RedisWriteTimeout = 3 * time.Second
-	RedisDialTimeout  = 5 * time.Second
-
-	RedisPrefixDNS               = "dns:"
-	RedisPrefixSpeedTestDomain   = "speedtest:domain:"
-	RedisPrefixSpeedTestRoot     = "speedtest:rootserver:"
-	RedisPrefixSpeedTestDebounce = "speedtest:debounce:"
-	RedisPrefixQUICValidator     = "quic:validator:"
-	RedisPrefixRefreshLock       = "refresh:lock:"
-	RedisPrefixQUICSession       = "quic:session:"
-)
-
-// =============================================================================
-// Constants - EDNS Configuration
-// =============================================================================
-
-const (
-	DefaultECSv4Len  = 24
-	DefaultECSv6Len  = 64
-	DefaultECSScope  = 0
-	PaddingBlockSize = 468
-)
-
-// =============================================================================
-// Constants - QUIC Configuration
-// =============================================================================
-
-const (
-	MaxIncomingStreams   = 2048
-	QUICAddrValidatorTTL = 300 * time.Second
-	QUICSessionCacheTTL  = 7200 * time.Second
-	MaxIdleConnections   = 50
+	// QUIC Configuration
+	MaxIncomingStreams   = 512
+	QUICAddrValidatorTTL = 30 * time.Second
+	QUICSessionCacheTTL  = 180 * time.Second
+	MaxIdleConnections   = 3
 
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
 	QUICCodeInternalError quic.ApplicationErrorCode = 1
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
-)
 
-// =============================================================================
-// Constants - Speed Test Configuration
-// =============================================================================
-
-const (
-	DefaultSpeedTimeout     = 250 * time.Millisecond
-	DefaultSpeedConcurrency = 5
+	// Speed Test Configuration
+	DefaultSpeedTimeout     = 200 * time.Millisecond
+	DefaultSpeedConcurrency = 2
 	UnreachableLatency      = 10 * time.Second
-)
 
-// =============================================================================
-// Constants - Logging Configuration
-// =============================================================================
-
-const (
+	// Logging
 	DefaultLogLevel = "info"
+	ColorReset      = "\033[0m"
+	ColorRed        = "\033[31m"
+	ColorYellow     = "\033[33m"
+	ColorGreen      = "\033[32m"
+	ColorCyan       = "\033[36m"
+	ColorBold       = "\033[1m"
 
-	ColorReset  = "\033[0m"
-	ColorRed    = "\033[31m"
-	ColorYellow = "\033[33m"
-	ColorGreen  = "\033[32m"
-	ColorCyan   = "\033[36m"
-	ColorBold   = "\033[1m"
-)
-
-const (
 	Error LogLevel = iota
 	Warn
 	Info
 	Debug
 )
 
-// =============================================================================
-// Variables - Version and Build Information
-// =============================================================================
-
-var (
-	Version    = "1.3.0"
-	CommitHash = "dirty"
-	BuildTime  = "dev"
-)
-
-// =============================================================================
-// Variables - Protocol Settings
-// =============================================================================
-
-var (
-	NextProtoDOT  = []string{"dot"}
-	NextProtoDoQ  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
-	NextProtoDoH3 = []string{"h3"}
-	NextProtoDoH  = []string{"h2", "http/1.1"}
-
-	MaxWorkerCount = runtime.NumCPU() * 2
-)
-
-// =============================================================================
-// Type Definitions - Logging System
-// =============================================================================
-
 type LogLevel int
+
+// =============================================================================
+// Type Definitions - Core Types
+// =============================================================================
 
 type LogManager struct {
 	level    LogLevel
@@ -249,14 +205,10 @@ type LogManager struct {
 	colorMap map[LogLevel]string
 }
 
-// =============================================================================
-// Type Definitions - Configuration
-// =============================================================================
-
 type ServerConfig struct {
 	Server    ServerSettings    `json:"server"`
 	Redis     RedisSettings     `json:"redis"`
-	SpeedTest []SpeedTestMethod `json:"speedtest"`
+	Speedtest []SpeedTestMethod `json:"speedtest"`
 	Upstream  []UpstreamServer  `json:"upstream"`
 	Rewrite   []RewriteRule     `json:"rewrite"`
 	CIDR      []CIDRConfig      `json:"cidr"`
@@ -337,10 +289,7 @@ type CIDRConfig struct {
 	Tag   string   `json:"tag"`
 }
 
-// =============================================================================
-// Type Definitions - Cache and Storage
-// =============================================================================
-
+// Cache and Storage Types
 type CacheEntry struct {
 	Answer          []*CompactRecord `json:"answer"`
 	Authority       []*CompactRecord `json:"authority"`
@@ -366,36 +315,20 @@ type CompactRecord struct {
 type CacheManager interface {
 	Get(key string) (*CacheEntry, bool, bool)
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption)
-	Closeable
-}
-
-type RefreshEntry struct {
-	lastRefresh time.Time
-	mu          sync.Mutex
-}
-
-type RefreshTracker struct {
-	entries map[string]*RefreshEntry
-	mu      sync.RWMutex
-	ticker  *time.Ticker
-	done    chan struct{}
+	Close() error
 }
 
 type NullCache struct{}
 
 type RedisCache struct {
-	client         *redis.Client
-	config         *ServerConfig
-	ctx            context.Context
-	cancel         context.CancelFunc
-	refreshTracker *RefreshTracker
-	closed         int32
+	client *redis.Client
+	config *ServerConfig
+	ctx    context.Context
+	cancel context.CancelFunc
+	closed int32
 }
 
-// =============================================================================
-// Type Definitions - EDNS and DNS Options
-// =============================================================================
-
+// EDNS and DNS Options
 type ECSOption struct {
 	Address      net.IP
 	Family       uint16
@@ -412,10 +345,7 @@ type IPDetector struct {
 	httpClient *http.Client
 }
 
-// =============================================================================
-// Type Definitions - Query and Response
-// =============================================================================
-
+// Query and Response Types
 type QueryResult struct {
 	Response   *dns.Msg
 	Answer     []dns.RR
@@ -452,16 +382,12 @@ type RequestTracker struct {
 	Domain       string
 	QueryType    string
 	ClientIP     string
-	Steps        []string
 	Upstream     string
 	ResponseTime time.Duration
 	mu           sync.Mutex
 }
 
-// =============================================================================
-// Type Definitions - Speed Test and Root Servers
-// =============================================================================
-
+// Speed Test Types
 type SpeedResult struct {
 	IP        string        `json:"ip"`
 	Latency   time.Duration `json:"latency"`
@@ -470,9 +396,9 @@ type SpeedResult struct {
 }
 
 type RootServerWithLatency struct {
-	Server    string        `json:"server"`
-	Latency   time.Duration `json:"latency"`
-	Reachable bool          `json:"reachable"`
+	Server    string
+	Latency   time.Duration
+	Reachable bool
 }
 
 type SpeedTestManager struct {
@@ -496,10 +422,7 @@ type RootServerManager struct {
 	needsSpeed   bool
 }
 
-// =============================================================================
-// Type Definitions - CIDR Management
-// =============================================================================
-
+// CIDR Management Types
 type CIDRRule struct {
 	tag  string
 	nets []*net.IPNet
@@ -510,24 +433,14 @@ type CIDRManager struct {
 	mu    sync.RWMutex
 }
 
-// =============================================================================
-// Type Definitions - Rewrite Management
-// =============================================================================
-
+// Rewrite Management Type
 type RewriteManager struct {
 	rules []RewriteRule
 	mu    sync.RWMutex
 }
 
-// =============================================================================
-// Type Definitions - Connection Pool
-// =============================================================================
-
-type Closeable interface {
-	Close() error
-}
-
-type ConnectionPoolEntry struct {
+// Connection Pool Types
+type ConnPoolEntry struct {
 	conn       any
 	lastUsed   time.Time
 	createdAt  time.Time
@@ -539,7 +452,7 @@ type ConnectionPoolEntry struct {
 	mu         sync.Mutex
 }
 
-type ConnectionPool struct {
+type ConnPool struct {
 	http2Conns    sync.Map
 	http3Conns    sync.Map
 	quicConns     sync.Map
@@ -554,13 +467,10 @@ type ConnectionPool struct {
 
 type QueryClient struct {
 	timeout  time.Duration
-	connPool *ConnectionPool
+	connPool *ConnPool
 }
 
-// =============================================================================
-// Type Definitions - Security
-// =============================================================================
-
+// Security Types
 type DNSSECValidator struct{}
 
 type HijackPrevention struct {
@@ -573,10 +483,7 @@ type SecurityManager struct {
 	hijack *HijackPrevention
 }
 
-// =============================================================================
-// Type Definitions - TLS Management
-// =============================================================================
-
+// TLS Management Type
 type TLSManager struct {
 	server        *DNSServer
 	tlsConfig     *tls.Config
@@ -593,24 +500,18 @@ type TLSManager struct {
 	h3Listener    *quic.EarlyListener
 }
 
-// =============================================================================
-// Type Definitions - Memory Monitoring
-// =============================================================================
-
+// Memory Monitor Type
 type MemoryMonitor struct {
 	ticker *time.Ticker
 	done   chan struct{}
 }
 
-// =============================================================================
-// Type Definitions - DNS Server and Query Management
-// =============================================================================
-
+// DNS Server Type
 type DNSServer struct {
 	config        *ServerConfig
 	cacheMgr      CacheManager
 	queryClient   *QueryClient
-	connPool      *ConnectionPool
+	connPool      *ConnPool
 	securityMgr   *SecurityManager
 	ednsMgr       *EDNSManager
 	rewriteMgr    *RewriteManager
@@ -630,10 +531,7 @@ type DNSServer struct {
 
 type ConfigManager struct{}
 
-// =============================================================================
-// Type Definitions - Query Manager
-// =============================================================================
-
+// Query Manager Types
 type QueryManager struct {
 	upstream  *UpstreamHandler
 	recursive *RecursiveResolver
@@ -663,27 +561,7 @@ type ResponseValidator struct {
 }
 
 // =============================================================================
-// Global Variables
-// =============================================================================
-
-var globalLog = NewLogManager()
-
-// Message pool for performance optimization
-var (
-	messagePool = sync.Pool{
-		New: func() any {
-			return &dns.Msg{
-				Question: make([]dns.Question, 0, 4),
-				Answer:   make([]dns.RR, 0, 8),
-				Ns:       make([]dns.RR, 0, 4),
-				Extra:    make([]dns.RR, 0, 4),
-			}
-		},
-	}
-)
-
-// =============================================================================
-// LogManager Methods
+// LogManager Implementation
 // =============================================================================
 
 func NewLogManager() *LogManager {
@@ -702,6 +580,12 @@ func NewLogManager() *LogManager {
 func (lm *LogManager) SetLevel(level LogLevel) {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
+	// Clamp level to valid range
+	if level < Error {
+		level = Error
+	} else if level > Debug {
+		level = Debug
+	}
 	lm.level = level
 }
 
@@ -715,12 +599,38 @@ func (lm *LogManager) Log(level LogLevel, format string, args ...interface{}) {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
+	// Clamp level to valid range to prevent array out of bounds
+	if level < Error {
+		level = Error
+	} else if level > Debug {
+		level = Debug
+	}
+
 	if level > lm.level {
 		return
 	}
 
-	levelStr := [...]string{"ERROR", "WARN", "INFO", "DEBUG"}[level]
-	color := lm.colorMap[level]
+	// Use switch instead of array index to avoid panic
+	var levelStr string
+	switch level {
+	case Error:
+		levelStr = "ERROR"
+	case Warn:
+		levelStr = "WARN"
+	case Info:
+		levelStr = "INFO"
+	case Debug:
+		levelStr = "DEBUG"
+	default:
+		levelStr = "UNKNOWN"
+	}
+
+	// Safely get color from map with fallback
+	color, ok := lm.colorMap[level]
+	if !ok {
+		color = ColorReset
+	}
+
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	message := fmt.Sprintf(format, args...)
 
@@ -743,16 +653,16 @@ func LogInfo(format string, args ...interface{})  { globalLog.Info(format, args.
 func LogDebug(format string, args ...interface{}) { globalLog.Debug(format, args...) }
 
 // =============================================================================
-// ConnectionPool Methods
+// ConnectionPool Implementation
 // =============================================================================
 
-func NewConnectionPool() *ConnectionPool {
+func NewConnPool() *ConnPool {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	pool := &ConnectionPool{
+	pool := &ConnPool{
 		ctx:           ctx,
 		cancel:        cancel,
-		cleanupTicker: time.NewTicker(ConnectionPoolCleanup),
+		cleanupTicker: time.NewTicker(ConnPoolCleanup),
 	}
 
 	pool.wg.Add(1)
@@ -762,49 +672,42 @@ func NewConnectionPool() *ConnectionPool {
 	return pool
 }
 
-func (p *ConnectionPool) cleanupLoop() {
+func (p *ConnPool) cleanupLoop() {
 	defer p.wg.Done()
-	defer HandlePanic("Connection pool cleanup loop")
+	defer HandlePanic("Connection pool cleanup")
 
-	validateTicker := time.NewTicker(ConnectionValidateEvery)
+	validateTicker := time.NewTicker(ConnValidateEvery)
 	defer validateTicker.Stop()
 
 	for {
 		select {
 		case <-p.cleanupTicker.C:
-			p.cleanupExpiredConnections()
+			p.cleanupExpiredConns()
 		case <-validateTicker.C:
-			p.validateConnections()
+			p.validateConns()
 		case <-p.ctx.Done():
 			return
 		}
 	}
 }
 
-func (p *ConnectionPool) cleanupExpiredConnections() {
+func (p *ConnPool) cleanupExpiredConns() {
 	now := time.Now()
 	removed := 0
 
-	cleanMap := func(m *sync.Map, connType string) {
+	cleanupMap := func(m *sync.Map, connType string) {
 		m.Range(func(key, value interface{}) bool {
-			entry := value.(*ConnectionPoolEntry)
+			entry := value.(*ConnPoolEntry)
 			entry.mu.Lock()
 
-			shouldRemove := false
-
-			if entry.closed.Load() {
-				shouldRemove = true
-			} else if now.Sub(entry.createdAt) > ConnectionMaxLifetime {
-				shouldRemove = true
-			} else if now.Sub(entry.lastUsed) > ConnectionMaxIdleTime {
-				shouldRemove = true
-			} else if !entry.healthy.Load() {
-				shouldRemove = true
-			}
+			shouldRemove := entry.closed.Load() ||
+				now.Sub(entry.createdAt) > ConnMaxLifetime ||
+				now.Sub(entry.lastUsed) > ConnMaxIdleTime ||
+				!entry.healthy.Load()
 
 			if shouldRemove {
 				m.Delete(key)
-				p.closeConnectionEntry(entry)
+				p.closeEntry(entry)
 				removed++
 			}
 
@@ -813,23 +716,23 @@ func (p *ConnectionPool) cleanupExpiredConnections() {
 		})
 	}
 
-	cleanMap(&p.http2Conns, "HTTP/2")
-	cleanMap(&p.http3Conns, "HTTP/3")
-	cleanMap(&p.quicConns, "QUIC")
-	cleanMap(&p.tlsConns, "TLS")
+	cleanupMap(&p.http2Conns, "HTTP/2")
+	cleanupMap(&p.http3Conns, "HTTP/3")
+	cleanupMap(&p.quicConns, "QUIC")
+	cleanupMap(&p.tlsConns, "TLS")
 
 	if removed > 0 {
-		LogDebug("POOL: Cleanup removed %d expired connections", removed)
+		LogDebug("POOL: Cleaned up %d expired connections", removed)
 	}
 }
 
-func (p *ConnectionPool) validateConnections() {
+func (p *ConnPool) validateConns() {
 	validated := 0
 	failed := 0
 
-	validateMap := func(m *sync.Map, connType string) {
+	validateMap := func(m *sync.Map) {
 		m.Range(func(key, value interface{}) bool {
-			entry := value.(*ConnectionPoolEntry)
+			entry := value.(*ConnPoolEntry)
 			entry.mu.Lock()
 
 			if entry.closed.Load() {
@@ -837,13 +740,13 @@ func (p *ConnectionPool) validateConnections() {
 				return true
 			}
 
-			valid := p.validateConnection(entry)
+			valid := p.validateConn(entry)
 			entry.healthy.Store(valid)
 
 			if !valid {
 				failed++
 				m.Delete(key)
-				p.closeConnectionEntry(entry)
+				p.closeEntry(entry)
 			} else {
 				validated++
 			}
@@ -853,15 +756,15 @@ func (p *ConnectionPool) validateConnections() {
 		})
 	}
 
-	validateMap(&p.quicConns, "QUIC")
-	validateMap(&p.tlsConns, "TLS")
+	validateMap(&p.quicConns)
+	validateMap(&p.tlsConns)
 
 	if validated > 0 || failed > 0 {
-		LogDebug("POOL: Validation completed (valid: %d, failed: %d)", validated, failed)
+		LogDebug("POOL: Validation - valid: %d, failed: %d", validated, failed)
 	}
 }
 
-func (p *ConnectionPool) validateConnection(entry *ConnectionPoolEntry) bool {
+func (p *ConnPool) validateConn(entry *ConnPoolEntry) bool {
 	switch conn := entry.conn.(type) {
 	case *quic.Conn:
 		select {
@@ -871,18 +774,17 @@ func (p *ConnectionPool) validateConnection(entry *ConnectionPoolEntry) bool {
 			return true
 		}
 	case *tls.Conn:
-		_ = conn.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
+		_ = conn.SetReadDeadline(time.Now().Add(time.Millisecond))
 		buf := make([]byte, 1)
 		_, err := conn.Read(buf)
 		_ = conn.SetReadDeadline(time.Time{})
 		return err == nil || IsTemporaryError(err)
-	case *http.Transport, *http3.Transport:
+	default:
 		return true
 	}
-	return false
 }
 
-func (p *ConnectionPool) closeConnectionEntry(entry *ConnectionPoolEntry) {
+func (p *ConnPool) closeEntry(entry *ConnPoolEntry) {
 	if !entry.closed.CompareAndSwap(false, true) {
 		return
 	}
@@ -895,34 +797,39 @@ func (p *ConnectionPool) closeConnectionEntry(entry *ConnectionPoolEntry) {
 	case *http3.Transport:
 		_ = conn.Close()
 	case *quic.Conn:
-		_, cancel := context.WithTimeout(context.Background(), ConnectionCloseTimeout)
-		_ = conn.CloseWithError(QUICCodeNoError, "pool cleanup")
-		<-conn.Context().Done()
+		ctx, cancel := context.WithTimeout(context.Background(), ConnCloseTimeout)
+		_ = conn.CloseWithError(QUICCodeNoError, "cleanup")
+		select {
+		case <-conn.Context().Done():
+		case <-ctx.Done():
+		}
 		cancel()
 	case *tls.Conn:
 		_ = conn.Close()
 	}
 }
 
-func (p *ConnectionPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
+func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
 	if p.closed.Load() {
-		return nil, errors.New("pool is closed")
+		return nil, errors.New("pool closed")
 	}
 
 	key := "h2:" + serverAddr
 
 	if value, ok := p.http2Conns.Load(key); ok {
-		entry := value.(*ConnectionPoolEntry)
+		entry := value.(*ConnPoolEntry)
 		entry.mu.Lock()
 		if !entry.closed.Load() && entry.healthy.Load() {
 			entry.lastUsed = time.Now()
 			entry.useCount++
 			entry.mu.Unlock()
-			transport := entry.conn.(*http.Transport)
-			return &http.Client{Transport: transport, Timeout: QueryTimeout}, nil
+			return &http.Client{
+				Transport: entry.conn.(*http.Transport),
+				Timeout:   QueryTimeout,
+			}, nil
 		}
 		p.http2Conns.Delete(key)
-		p.closeConnectionEntry(entry)
+		p.closeEntry(entry)
 		entry.mu.Unlock()
 	}
 
@@ -930,10 +837,10 @@ func (p *ConnectionPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Conf
 		TLSClientConfig:       tlsConfig,
 		DisableCompression:    true,
 		DisableKeepAlives:     false,
-		MaxIdleConns:          MaxIdleConnections,
-		IdleConnTimeout:       ConnectionMaxIdleTime,
+		MaxIdleConns:          8,
+		IdleConnTimeout:       ConnMaxIdleTime,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConnsPerHost:   10,
+		MaxIdleConnsPerHost:   4,
 		ResponseHeaderTimeout: QueryTimeout,
 	}
 
@@ -941,7 +848,7 @@ func (p *ConnectionPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Conf
 		return nil, fmt.Errorf("configure HTTP/2: %w", err)
 	}
 
-	entry := &ConnectionPoolEntry{
+	entry := &ConnPoolEntry{
 		conn:       transport,
 		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
@@ -954,28 +861,33 @@ func (p *ConnectionPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Conf
 	p.http2Conns.Store(key, entry)
 	p.connCount.Add(1)
 
-	return &http.Client{Transport: transport, Timeout: QueryTimeout}, nil
+	return &http.Client{
+		Transport: transport,
+		Timeout:   QueryTimeout,
+	}, nil
 }
 
-func (p *ConnectionPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
+func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
 	if p.closed.Load() {
-		return nil, errors.New("pool is closed")
+		return nil, errors.New("pool closed")
 	}
 
 	key := "h3:" + serverAddr
 
 	if value, ok := p.http3Conns.Load(key); ok {
-		entry := value.(*ConnectionPoolEntry)
+		entry := value.(*ConnPoolEntry)
 		entry.mu.Lock()
 		if !entry.closed.Load() && entry.healthy.Load() {
 			entry.lastUsed = time.Now()
 			entry.useCount++
 			entry.mu.Unlock()
-			transport := entry.conn.(*http3.Transport)
-			return &http.Client{Transport: transport, Timeout: QueryTimeout}, nil
+			return &http.Client{
+				Transport: entry.conn.(*http3.Transport),
+				Timeout:   QueryTimeout,
+			}, nil
 		}
 		p.http3Conns.Delete(key)
-		p.closeConnectionEntry(entry)
+		p.closeEntry(entry)
 		entry.mu.Unlock()
 	}
 
@@ -985,17 +897,17 @@ func (p *ConnectionPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Conf
 	transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
 		QUICConfig: &quic.Config{
-			MaxIdleTimeout:             ConnectionMaxIdleTime,
-			MaxIncomingStreams:         MaxIncomingStreams,
-			KeepAlivePeriod:            ConnectionKeepalive,
+			MaxIdleTimeout:             ConnMaxIdleTime,
+			MaxIncomingStreams:         MaxIncomingStreams / 2,
+			KeepAlivePeriod:            ConnKeepAlive,
 			EnableDatagrams:            true,
 			Allow0RTT:                  true,
-			MaxStreamReceiveWindow:     6 * 1024 * 1024,
-			MaxConnectionReceiveWindow: 15 * 1024 * 1024,
+			MaxStreamReceiveWindow:     4 * 1024 * 1024,
+			MaxConnectionReceiveWindow: 8 * 1024 * 1024,
 		},
 	}
 
-	entry := &ConnectionPoolEntry{
+	entry := &ConnPoolEntry{
 		conn:       transport,
 		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
@@ -1008,18 +920,21 @@ func (p *ConnectionPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Conf
 	p.http3Conns.Store(key, entry)
 	p.connCount.Add(1)
 
-	return &http.Client{Transport: transport, Timeout: QueryTimeout}, nil
+	return &http.Client{
+		Transport: transport,
+		Timeout:   QueryTimeout,
+	}, nil
 }
 
-func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*quic.Conn, error) {
+func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*quic.Conn, error) {
 	if p.closed.Load() {
-		return nil, errors.New("pool is closed")
+		return nil, errors.New("pool closed")
 	}
 
 	key := "quic:" + serverAddr
 
 	if value, ok := p.quicConns.Load(key); ok {
-		entry := value.(*ConnectionPoolEntry)
+		entry := value.(*ConnPoolEntry)
 		entry.mu.Lock()
 		conn := entry.conn.(*quic.Conn)
 
@@ -1027,7 +942,7 @@ func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string,
 			select {
 			case <-conn.Context().Done():
 				p.quicConns.Delete(key)
-				p.closeConnectionEntry(entry)
+				p.closeEntry(entry)
 				entry.mu.Unlock()
 			default:
 				entry.lastUsed = time.Now()
@@ -1037,7 +952,7 @@ func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string,
 			}
 		} else {
 			p.quicConns.Delete(key)
-			p.closeConnectionEntry(entry)
+			p.closeEntry(entry)
 			entry.mu.Unlock()
 		}
 	}
@@ -1046,16 +961,16 @@ func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string,
 	tlsConfig.NextProtos = NextProtoDoQ
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:             ConnectionMaxIdleTime,
-		MaxIncomingStreams:         MaxIncomingStreams,
-		KeepAlivePeriod:            ConnectionKeepalive,
+		MaxIdleTimeout:             ConnMaxIdleTime,
+		MaxIncomingStreams:         MaxIncomingStreams / 2,
+		KeepAlivePeriod:            ConnKeepAlive,
 		EnableDatagrams:            true,
 		Allow0RTT:                  true,
-		MaxStreamReceiveWindow:     6 * 1024 * 1024,
-		MaxConnectionReceiveWindow: 15 * 1024 * 1024,
+		MaxStreamReceiveWindow:     4 * 1024 * 1024,
+		MaxConnectionReceiveWindow: 8 * 1024 * 1024,
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, ConnectionDialTimeout)
+	dialCtx, cancel := context.WithTimeout(ctx, ConnDialTimeout)
 	defer cancel()
 
 	conn, err := quic.DialAddr(dialCtx, serverAddr, tlsConfig, quicConfig)
@@ -1063,7 +978,7 @@ func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string,
 		return nil, fmt.Errorf("QUIC dial: %w", err)
 	}
 
-	entry := &ConnectionPoolEntry{
+	entry := &ConnPoolEntry{
 		conn:       conn,
 		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
@@ -1076,12 +991,12 @@ func (p *ConnectionPool) GetOrCreateQUIC(ctx context.Context, serverAddr string,
 	p.quicConns.Store(key, entry)
 	p.connCount.Add(1)
 
-	go p.monitorQUICConnection(key, entry, conn)
+	go p.monitorQUICConn(key, entry, conn)
 
 	return conn, nil
 }
 
-func (p *ConnectionPool) monitorQUICConnection(key string, entry *ConnectionPoolEntry, conn *quic.Conn) {
+func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.Conn) {
 	defer HandlePanic("Monitor QUIC connection")
 
 	<-conn.Context().Done()
@@ -1091,32 +1006,30 @@ func (p *ConnectionPool) monitorQUICConnection(key string, entry *ConnectionPool
 	entry.mu.Unlock()
 
 	p.quicConns.Delete(key)
-	p.closeConnectionEntry(entry)
+	p.closeEntry(entry)
 }
 
-func (p *ConnectionPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*tls.Conn, error) {
+func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*tls.Conn, error) {
 	if p.closed.Load() {
-		return nil, errors.New("pool is closed")
+		return nil, errors.New("pool closed")
 	}
 
 	key := "tls:" + serverAddr
 
 	if value, ok := p.tlsConns.Load(key); ok {
-		entry := value.(*ConnectionPoolEntry)
+		entry := value.(*ConnPoolEntry)
 		entry.mu.Lock()
 		conn := entry.conn.(*tls.Conn)
 
-		if !entry.closed.Load() && entry.healthy.Load() {
-			if p.validateConnection(entry) {
-				entry.lastUsed = time.Now()
-				entry.useCount++
-				entry.mu.Unlock()
-				return conn, nil
-			}
+		if !entry.closed.Load() && entry.healthy.Load() && p.validateConn(entry) {
+			entry.lastUsed = time.Now()
+			entry.useCount++
+			entry.mu.Unlock()
+			return conn, nil
 		}
 
 		p.tlsConns.Delete(key)
-		p.closeConnectionEntry(entry)
+		p.closeEntry(entry)
 		entry.mu.Unlock()
 	}
 
@@ -1125,7 +1038,10 @@ func (p *ConnectionPool) GetOrCreateTLS(ctx context.Context, serverAddr string, 
 		return nil, fmt.Errorf("parse address: %w", err)
 	}
 
-	dialer := &net.Dialer{Timeout: ConnectionDialTimeout, KeepAlive: ConnectionKeepalive}
+	dialer := &net.Dialer{
+		Timeout:   ConnDialTimeout,
+		KeepAlive: ConnKeepAlive,
+	}
 	netConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
@@ -1137,7 +1053,7 @@ func (p *ConnectionPool) GetOrCreateTLS(ctx context.Context, serverAddr string, 
 		return nil, fmt.Errorf("TLS handshake: %w", err)
 	}
 
-	entry := &ConnectionPoolEntry{
+	entry := &ConnPoolEntry{
 		conn:       tlsConn,
 		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
@@ -1153,20 +1069,20 @@ func (p *ConnectionPool) GetOrCreateTLS(ctx context.Context, serverAddr string, 
 	return tlsConn, nil
 }
 
-func (p *ConnectionPool) Close() error {
+func (p *ConnPool) Close() error {
 	if !p.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 
-	LogInfo("POOL: Shutting down connection pool...")
+	LogInfo("POOL: Shutting down connection pool")
 
 	p.cancel()
 	p.cleanupTicker.Stop()
 
 	closeMap := func(m *sync.Map) {
 		m.Range(func(key, value interface{}) bool {
-			entry := value.(*ConnectionPoolEntry)
-			p.closeConnectionEntry(entry)
+			entry := value.(*ConnPoolEntry)
+			p.closeEntry(entry)
 			m.Delete(key)
 			return true
 		})
@@ -1183,10 +1099,10 @@ func (p *ConnectionPool) Close() error {
 }
 
 // =============================================================================
-// QueryClient Methods
+// QueryClient Implementation
 // =============================================================================
 
-func NewQueryClient(connPool *ConnectionPool) *QueryClient {
+func NewQueryClient(connPool *ConnPool) *QueryClient {
 	return &QueryClient{
 		timeout:  QueryTimeout,
 		connPool: connPool,
@@ -1370,7 +1286,12 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 	}
 
 	q := url.Values{"dns": []string{base64.RawURLEncoding.EncodeToString(buf)}}
-	u := url.URL{Scheme: parsedURL.Scheme, Host: parsedURL.Host, Path: parsedURL.Path, RawQuery: q.Encode()}
+	u := url.URL{
+		Scheme:   parsedURL.Scheme,
+		Host:     parsedURL.Host,
+		Path:     parsedURL.Path,
+		RawQuery: q.Encode(),
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
@@ -1435,7 +1356,12 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 	}
 
 	q := url.Values{"dns": []string{base64.RawURLEncoding.EncodeToString(buf)}}
-	u := url.URL{Scheme: parsedURL.Scheme, Host: parsedURL.Host, Path: parsedURL.Path, RawQuery: q.Encode()}
+	u := url.URL{
+		Scheme:   parsedURL.Scheme,
+		Host:     parsedURL.Host,
+		Path:     parsedURL.Path,
+		RawQuery: q.Encode(),
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
@@ -1490,7 +1416,7 @@ func (qc *QueryClient) needsTCPFallback(result *QueryResult, protocol string) bo
 }
 
 // =============================================================================
-// ConfigManager Methods
+// ConfigManager Implementation
 // =============================================================================
 
 func (cm *ConfigManager) LoadConfig(configFile string) (*ServerConfig, error) {
@@ -1522,12 +1448,23 @@ func (cm *ConfigManager) LoadConfig(configFile string) (*ServerConfig, error) {
 
 func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	validLevels := map[string]LogLevel{
-		"error": Error, "warn": Warn, "info": Info, "debug": Debug,
+		"error": Error,
+		"warn":  Warn,
+		"info":  Info,
+		"debug": Debug,
 	}
-	if level, ok := validLevels[strings.ToLower(config.Server.LogLevel)]; ok {
+
+	logLevelStr := strings.ToLower(config.Server.LogLevel)
+	if logLevelStr == "" {
+		logLevelStr = DefaultLogLevel
+	}
+
+	if level, ok := validLevels[logLevelStr]; ok {
 		globalLog.SetLevel(level)
 	} else {
-		return fmt.Errorf("invalid log level: %s", config.Server.LogLevel)
+		// Use default level instead of error, to avoid panic before validation
+		globalLog.SetLevel(Info)
+		LogWarn("CONFIG: Invalid log level '%s', using default: info", config.Server.LogLevel)
 	}
 
 	if config.Server.DefaultECS != "" {
@@ -1606,21 +1543,21 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	}
 
 	if config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {
-		LogWarn("TLS: Self-signed enabled, ignoring cert/key files")
+		LogWarn("CONFIG: TLS: Self-signed enabled, ignoring cert/key files")
 	}
 
 	if !config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {
 		if config.Server.TLS.CertFile == "" || config.Server.TLS.KeyFile == "" {
-			return errors.New("cert and key files must be configured together")
+			return errors.New("config: cert and key files must be configured together")
 		}
 		if !IsValidFilePath(config.Server.TLS.CertFile) {
-			return fmt.Errorf("cert file not found: %s", config.Server.TLS.CertFile)
+			return fmt.Errorf("config: cert file not found: %s", config.Server.TLS.CertFile)
 		}
 		if !IsValidFilePath(config.Server.TLS.KeyFile) {
-			return fmt.Errorf("key file not found: %s", config.Server.TLS.KeyFile)
+			return fmt.Errorf("config: key file not found: %s", config.Server.TLS.KeyFile)
 		}
 		if _, err := tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile); err != nil {
-			return fmt.Errorf("load certificate: %w", err)
+			return fmt.Errorf("config: load certificate: %w", err)
 		}
 	}
 
@@ -1745,7 +1682,7 @@ func GenerateExampleConfig() string {
 		{Name: "ipv6.blocked.example.com", Records: []DNSRecordConfig{{Type: "AAAA", Content: "::1", TTL: DefaultCacheTTL}}},
 	}
 
-	config.SpeedTest = []SpeedTestMethod{
+	config.Speedtest = []SpeedTestMethod{
 		{Type: "icmp", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
 		{Type: "tcp", Port: "443", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
 		{Type: "tcp", Port: "80", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
@@ -1757,11 +1694,11 @@ func GenerateExampleConfig() string {
 }
 
 // =============================================================================
-// NullCache Methods
+// NullCache Implementation
 // =============================================================================
 
 func NewNullCache() *NullCache {
-	LogInfo("CACHE: No cache mode")
+	LogInfo("CACHE: Null cache mode enabled")
 	return &NullCache{}
 }
 
@@ -1771,67 +1708,7 @@ func (nc *NullCache) Set(key string, answer, authority, additional []dns.RR, val
 func (nc *NullCache) Close() error { return nil }
 
 // =============================================================================
-// RefreshTracker Methods
-// =============================================================================
-
-func NewRefreshTracker() *RefreshTracker {
-	rt := &RefreshTracker{
-		entries: make(map[string]*RefreshEntry),
-		ticker:  time.NewTicker(RefreshTrackerCleanupInterval),
-		done:    make(chan struct{}),
-	}
-	go rt.cleanup()
-	return rt
-}
-
-func (rt *RefreshTracker) cleanup() {
-	defer HandlePanic("RefreshTracker cleanup")
-	for {
-		select {
-		case <-rt.ticker.C:
-			rt.mu.Lock()
-			now := time.Now()
-			for key, entry := range rt.entries {
-				entry.mu.Lock()
-				if now.Sub(entry.lastRefresh) > RefreshTrackerMaxAge {
-					delete(rt.entries, key)
-				}
-				entry.mu.Unlock()
-			}
-			rt.mu.Unlock()
-		case <-rt.done:
-			return
-		}
-	}
-}
-
-func (rt *RefreshTracker) TryStartRefresh(key string, ttl time.Duration) bool {
-	rt.mu.Lock()
-	entry, exists := rt.entries[key]
-	if !exists {
-		entry = &RefreshEntry{}
-		rt.entries[key] = entry
-	}
-	rt.mu.Unlock()
-
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-
-	if time.Since(entry.lastRefresh) < ttl {
-		return false
-	}
-
-	entry.lastRefresh = time.Now()
-	return true
-}
-
-func (rt *RefreshTracker) Close() {
-	rt.ticker.Stop()
-	close(rt.done)
-}
-
-// =============================================================================
-// RedisCache Methods
+// RedisCache Implementation
 // =============================================================================
 
 func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
@@ -1859,11 +1736,10 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
 	cache := &RedisCache{
-		client:         rdb,
-		config:         config,
-		ctx:            cacheCtx,
-		cancel:         cacheCancel,
-		refreshTracker: NewRefreshTracker(),
+		client: rdb,
+		config: config,
+		ctx:    cacheCtx,
+		cancel: cacheCancel,
 	}
 
 	LogInfo("CACHE: Redis cache initialized")
@@ -1959,9 +1835,8 @@ func (rc *RedisCache) Close() error {
 		return nil
 	}
 
-	LogInfo("CACHE: Shutting down Redis cache...")
+	LogInfo("CACHE: Shutting down Redis cache")
 
-	rc.refreshTracker.Close()
 	rc.cancel()
 
 	if err := rc.client.Close(); err != nil {
@@ -1973,7 +1848,7 @@ func (rc *RedisCache) Close() error {
 }
 
 // =============================================================================
-// CacheEntry Methods
+// CacheEntry Implementation
 // =============================================================================
 
 func (c *CacheEntry) IsExpired() bool {
@@ -1989,7 +1864,7 @@ func (c *CacheEntry) ShouldRefresh() bool {
 	if refreshInterval <= 0 {
 		refreshInterval = int64(c.TTL)
 	}
-	return c.IsExpired() && (now-c.Timestamp) > refreshInterval && (now-c.RefreshTime) > refreshInterval
+	return c.IsExpired() && (now-c.Timestamp) > refreshInterval
 }
 
 func (c *CacheEntry) GetRemainingTTL() uint32 {
@@ -2027,7 +1902,7 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 }
 
 // =============================================================================
-// CIDRManager Methods
+// CIDRManager Implementation
 // =============================================================================
 
 func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
@@ -2055,7 +1930,7 @@ func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
 		} else {
 			sourceInfo = fmt.Sprintf("%d inline rules", len(config.Rules))
 		}
-		LogInfo("CIDR: loaded: tag=%s, source=%s, total=%d", config.Tag, sourceInfo, len(rule.nets))
+		LogInfo("CIDR: Loaded tag=%s, source=%s, total=%d", config.Tag, sourceInfo, len(rule.nets))
 	}
 
 	return cm, nil
@@ -2141,7 +2016,7 @@ func (cm *CIDRManager) MatchIP(ip net.IP, matchTag string) (matched bool, exists
 }
 
 // =============================================================================
-// CIDRRule Methods
+// CIDRRule Implementation
 // =============================================================================
 
 func (r *CIDRRule) contains(ip net.IP) bool {
@@ -2157,7 +2032,7 @@ func (r *CIDRRule) contains(ip net.IP) bool {
 }
 
 // =============================================================================
-// EDNSManager Methods
+// EDNSManager Implementation
 // =============================================================================
 
 func NewEDNSManager(defaultSubnet string) (*EDNSManager, error) {
@@ -2264,8 +2139,8 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 		msg.Extra = append(msg.Extra, opt)
 		if wireData, err := msg.Pack(); err == nil {
 			currentSize := len(wireData)
-			if currentSize < PaddingBlockSize {
-				paddingDataSize := PaddingBlockSize - currentSize - 4
+			if currentSize < PaddingSize {
+				paddingDataSize := PaddingSize - currentSize - 4
 				if paddingDataSize > 0 {
 					options = append(options, &dns.EDNS0_PADDING{
 						Padding: make([]byte, paddingDataSize),
@@ -2339,7 +2214,7 @@ func (em *EDNSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption
 }
 
 // =============================================================================
-// IPDetector Methods
+// IPDetector Implementation
 // =============================================================================
 
 func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
@@ -2394,11 +2269,11 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 }
 
 // =============================================================================
-// RewriteManager Methods
+// RewriteManager Implementation
 // =============================================================================
 
 func NewRewriteManager() *RewriteManager {
-	return &RewriteManager{rules: make([]RewriteRule, 0, 32)}
+	return &RewriteManager{rules: make([]RewriteRule, 0, 16)}
 }
 
 func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
@@ -2517,21 +2392,21 @@ func (rm *RewriteManager) hasRules() bool {
 }
 
 // =============================================================================
-// SpeedTestManager Methods
+// SpeedTestManager Implementation
 // =============================================================================
 
 func NewSpeedTestManager(config ServerConfig, redisClient *redis.Client, keyPrefix string) *SpeedTestManager {
 	if keyPrefix == "" {
-		keyPrefix = config.Redis.KeyPrefix + RedisPrefixSpeedTestDomain
+		keyPrefix = config.Redis.KeyPrefix + RedisPrefixSpeedtest
 	}
 
 	st := &SpeedTestManager{
 		timeout:     DefaultSpeedTimeout,
 		concurrency: DefaultSpeedConcurrency,
 		redis:       redisClient,
-		cacheTTL:    DefaultSpeedCacheTTL,
+		cacheTTL:    DefaultSpeedTTL,
 		keyPrefix:   keyPrefix,
-		methods:     config.SpeedTest,
+		methods:     config.Speedtest,
 	}
 	st.initICMP()
 	return st
@@ -2655,7 +2530,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	remainingIPs := []string{}
 
 	if st.redis != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
 		for _, ip := range ips {
@@ -2683,7 +2558,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	newResults := st.performSpeedTest(remainingIPs)
 
 	if st.redis != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
 		for ip, result := range newResults {
@@ -2864,7 +2739,7 @@ func (st *SpeedTestManager) pingWithUDP(ip, port string, timeout time.Duration) 
 }
 
 // =============================================================================
-// RootServerManager Methods
+// RootServerManager Implementation
 // =============================================================================
 
 func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootServerManager {
@@ -2908,20 +2783,17 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 
 	if needsRecursive {
 		dnsSpeedTestConfig := config
-		dnsSpeedTestConfig.SpeedTest = []SpeedTestMethod{
+		dnsSpeedTestConfig.Speedtest = []SpeedTestMethod{
 			{Type: "icmp", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
 			{Type: "tcp", Port: DefaultDNSPort, Timeout: int(DefaultSpeedTimeout.Milliseconds())},
-			{Type: "udp", Port: DefaultDNSPort, Timeout: int(DefaultSpeedTimeout.Milliseconds())},
 		}
 
-		rootServerPrefix := config.Redis.KeyPrefix + RedisPrefixSpeedTestRoot
+		rootServerPrefix := config.Redis.KeyPrefix + RedisPrefixSpeedtest
 		rsm.speedTester = NewSpeedTestManager(dnsSpeedTestConfig, redisClient, rootServerPrefix)
-		rsm.speedTester.cacheTTL = DefaultSpeedCacheTTL
+		rsm.speedTester.cacheTTL = DefaultSpeedTTL
 
 		go rsm.sortServersBySpeed()
 		LogInfo("SPEEDTEST: Root server speed testing enabled")
-	} else {
-		LogInfo("SPEEDTEST: Root server speed testing disabled")
 	}
 
 	return rsm
@@ -2957,7 +2829,7 @@ func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
 		return
 	}
 
-	ticker := time.NewTicker(RootServerSortInterval)
+	ticker := time.NewTicker(RootServerRefresh)
 	defer ticker.Stop()
 
 	for {
@@ -2971,7 +2843,7 @@ func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
 }
 
 // =============================================================================
-// DNSSECValidator Methods
+// Security: DNSSECValidator Implementation
 // =============================================================================
 
 func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
@@ -3000,7 +2872,7 @@ func (v *DNSSECValidator) hasDNSSECRecords(response *dns.Msg) bool {
 }
 
 // =============================================================================
-// HijackPrevention Methods
+// Security: HijackPrevention Implementation
 // =============================================================================
 
 func (hp *HijackPrevention) IsEnabled() bool {
@@ -3090,7 +2962,7 @@ func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) b
 }
 
 // =============================================================================
-// SecurityManager Methods
+// SecurityManager Implementation
 // =============================================================================
 
 func NewSecurityManager(config *ServerConfig, server *DNSServer) (*SecurityManager, error) {
@@ -3118,7 +2990,7 @@ func (sm *SecurityManager) Shutdown(timeout time.Duration) error {
 }
 
 // =============================================================================
-// TLS Manager Methods - Certificate Generation
+// TLS Manager: Certificate Generation
 // =============================================================================
 
 func generateSelfSignedCert(domain string) (tls.Certificate, error) {
@@ -3151,7 +3023,7 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 			Country:      []string{"CN"},
 		},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(CertValidityDuration),
+		NotAfter:              time.Now().Add(90 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign | x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -3165,7 +3037,7 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 		},
 		DNSNames:    []string{domain},
 		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(CertValidityDuration),
+		NotAfter:    time.Now().Add(90 * 24 * time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -3194,7 +3066,7 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 }
 
 // =============================================================================
-// TLSManager Methods - Initialization and Lifecycle
+// TLSManager Implementation
 // =============================================================================
 
 func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error) {
@@ -3273,7 +3145,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 
 	go func() {
 		defer wg.Done()
-		defer HandlePanic("Critical-DoT server")
+		defer HandlePanic("DoT server")
 		if err := tm.startDOTServer(); err != nil {
 			errChan <- fmt.Errorf("DoT startup: %w", err)
 		}
@@ -3281,7 +3153,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 
 	go func() {
 		defer wg.Done()
-		defer HandlePanic("Critical-DoQ server")
+		defer HandlePanic("DoQ server")
 		if err := tm.startDOQServer(); err != nil {
 			errChan <- fmt.Errorf("DoQ startup: %w", err)
 		}
@@ -3290,7 +3162,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 	if httpsPort != "" {
 		go func() {
 			defer wg.Done()
-			defer HandlePanic("Critical-DoH server")
+			defer HandlePanic("DoH server")
 			if err := tm.startDOHServer(httpsPort); err != nil {
 				errChan <- fmt.Errorf("DoH startup: %w", err)
 			}
@@ -3298,7 +3170,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 
 		go func() {
 			defer wg.Done()
-			defer HandlePanic("Critical-DoH3 server")
+			defer HandlePanic("DoH3 server")
 			if err := tm.startDoH3Server(httpsPort); err != nil {
 				errChan <- fmt.Errorf("DoH3 startup: %w", err)
 			}
@@ -3320,7 +3192,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 }
 
 // =============================================================================
-// TLSManager Methods - DoT (DNS over TLS)
+// TLSManager: DoT (DNS over TLS) Implementation
 // =============================================================================
 
 func (tm *TLSManager) startDOTServer() error {
@@ -3378,10 +3250,10 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		return
 	}
 
-	_ = tlsConn.SetReadDeadline(time.Now().Add(DOTReadTimeout))
-	_ = tlsConn.SetWriteDeadline(time.Now().Add(DOTWriteTimeout))
+	_ = tlsConn.SetReadDeadline(time.Now().Add(DoTReadTimeout))
+	_ = tlsConn.SetWriteDeadline(time.Now().Add(DoTWriteTimeout))
 
-	reader := bufio.NewReaderSize(tlsConn, DOTTCPBufferSize)
+	reader := bufio.NewReaderSize(tlsConn, 2048)
 
 	for {
 		select {
@@ -3390,8 +3262,8 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		default:
 		}
 
-		_ = tlsConn.SetReadDeadline(time.Now().Add(DOTReadTimeout))
-		_ = tlsConn.SetWriteDeadline(time.Now().Add(DOTWriteTimeout))
+		_ = tlsConn.SetReadDeadline(time.Now().Add(DoTReadTimeout))
+		_ = tlsConn.SetWriteDeadline(time.Now().Add(DoTWriteTimeout))
 
 		lengthBuf := make([]byte, 2)
 		n, err := io.ReadFull(reader, lengthBuf)
@@ -3407,9 +3279,8 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
-		LogDebug("DOT: Received message length: %d (bytes: %x)", msgLength, lengthBuf)
 		if msgLength == 0 || msgLength > TCPBufferSize {
-			LogWarn("DOT: Invalid message length: %d (max allowed: %d, raw bytes: %x)", msgLength, TCPBufferSize, lengthBuf)
+			LogWarn("DOT: Invalid message length: %d", msgLength)
 			return
 		}
 
@@ -3460,7 +3331,7 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 }
 
 // =============================================================================
-// TLSManager Methods - DoQ (DNS over QUIC)
+// TLSManager: DoQ (DNS over QUIC) Implementation
 // =============================================================================
 
 func (tm *TLSManager) startDOQServer() error {
@@ -3485,9 +3356,11 @@ func (tm *TLSManager) startDOQServer() error {
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        SecureIdleTimeout,
-		MaxIncomingStreams:    MaxIncomingStreams,
-		MaxIncomingUniStreams: MaxIncomingStreams,
+		MaxIncomingStreams:    MaxIncomingStreams / 2,
+		MaxIncomingUniStreams: MaxIncomingStreams / 4,
 		Allow0RTT:             true,
+		EnableDatagrams:       true,
+		KeepAlivePeriod:       ConnKeepAlive,
 	}
 
 	tm.doqListener, err = tm.doqTransport.ListenEarly(quicTLSConfig, quicConfig)
@@ -3543,7 +3416,7 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 	}
 
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), ConnectionCloseTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), ConnCloseTimeout)
 		defer cancel()
 
 		_ = conn.CloseWithError(QUICCodeNoError, "")
@@ -3652,7 +3525,7 @@ func (tm *TLSManager) respondQUIC(stream *quic.Stream, response *dns.Msg) error 
 }
 
 // =============================================================================
-// TLSManager Methods - DoH (DNS over HTTPS)
+// TLSManager: DoH (DNS over HTTPS) Implementation
 // =============================================================================
 
 func (tm *TLSManager) startDOHServer(port string) error {
@@ -3669,8 +3542,9 @@ func (tm *TLSManager) startDOHServer(port string) error {
 
 	tm.httpsServer = &http.Server{
 		Handler:           tm,
-		ReadHeaderTimeout: DOHReadHeaderTimeout,
-		WriteTimeout:      DOHWriteTimeout,
+		ReadHeaderTimeout: DoHReadHeaderTimeout,
+		WriteTimeout:      DoHWriteTimeout,
+		IdleTimeout:       DoTIdleTimeout,
 	}
 
 	tm.wg.Add(1)
@@ -3693,9 +3567,11 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        SecureIdleTimeout,
-		MaxIncomingStreams:    MaxIncomingStreams,
-		MaxIncomingUniStreams: MaxIncomingStreams,
+		MaxIncomingStreams:    MaxIncomingStreams / 2,
+		MaxIncomingUniStreams: MaxIncomingStreams / 4,
 		Allow0RTT:             true,
+		EnableDatagrams:       true,
+		KeepAlivePeriod:       ConnKeepAlive,
 	}
 
 	quicListener, err := quic.ListenAddrEarly(addr, tlsConfig, quicConfig)
@@ -3770,7 +3646,7 @@ func (tm *TLSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
 		if r.Header.Get("Content-Type") != "application/dns-message" {
 			return nil, http.StatusUnsupportedMediaType
 		}
-		r.Body = http.MaxBytesReader(nil, r.Body, DOHMaxRequestSize)
+		r.Body = http.MaxBytesReader(nil, r.Body, DoHMaxRequestSize)
 		buf, err = io.ReadAll(r.Body)
 		defer func() { _ = r.Body.Close() }()
 		if err != nil {
@@ -3812,7 +3688,7 @@ func (tm *TLSManager) respondDoH(w http.ResponseWriter, response *dns.Msg) error
 }
 
 func (tm *TLSManager) shutdown() error {
-	LogInfo("TLS: Shutting down secure DNS server...")
+	LogInfo("TLS: Shutting down secure DNS server")
 
 	tm.cancel()
 
@@ -3851,7 +3727,7 @@ func (tm *TLSManager) shutdown() error {
 }
 
 // =============================================================================
-// RequestTracker Methods
+// RequestTracker Implementation
 // =============================================================================
 
 func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
@@ -3861,7 +3737,6 @@ func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
 		Domain:    domain,
 		QueryType: qtype,
 		ClientIP:  clientIP,
-		Steps:     make([]string, 0, 8),
 	}
 }
 
@@ -3875,7 +3750,6 @@ func (rt *RequestTracker) AddStep(step string, args ...interface{}) {
 
 	timestamp := time.Since(rt.StartTime)
 	stepMsg := fmt.Sprintf("[%v] %s", timestamp.Truncate(time.Microsecond), fmt.Sprintf(step, args...))
-	rt.Steps = append(rt.Steps, stepMsg)
 	LogDebug("[%s] %s", rt.ID, stepMsg)
 }
 
@@ -3895,7 +3769,7 @@ func (rt *RequestTracker) Finish() {
 }
 
 // =============================================================================
-// MemoryMonitor Methods
+// MemoryMonitor Implementation
 // =============================================================================
 
 func NewMemoryMonitor() *MemoryMonitor {
@@ -3922,7 +3796,7 @@ func (mm *MemoryMonitor) Start() {
 					m.NumGC,
 					runtime.NumGoroutine())
 
-				if m.Alloc > 128*1024*1024 {
+				if m.Alloc > 64*1024*1024 {
 					LogWarn("MEMORY: High memory usage detected, triggering GC")
 					debug.FreeOSMemory()
 					runtime.GC()
@@ -3941,7 +3815,7 @@ func (mm *MemoryMonitor) Stop() {
 }
 
 // =============================================================================
-// DNSServer Methods - Initialization
+// DNSServer Implementation
 // =============================================================================
 
 func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
@@ -3970,7 +3844,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		}
 	}
 
-	connPool := NewConnectionPool()
+	connPool := NewConnPool()
 
 	var redisClient *redis.Client
 	var cache CacheManager
@@ -4020,8 +3894,8 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	}
 	server.queryMgr = queryManager
 
-	if len(config.SpeedTest) > 0 {
-		domainSpeedPrefix := config.Redis.KeyPrefix + RedisPrefixSpeedTestDomain
+	if len(config.Speedtest) > 0 {
+		domainSpeedPrefix := config.Redis.KeyPrefix + RedisPrefixSpeedtest
 		server.speedTestMgr = NewSpeedTestManager(*config, redisClient, domainSpeedPrefix)
 	}
 
@@ -4044,7 +3918,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 }
 
 // =============================================================================
-// DNSServer Methods - Lifecycle Management
+// DNSServer: Lifecycle Management Implementation
 // =============================================================================
 
 func (s *DNSServer) setupSignalHandling() {
@@ -4064,7 +3938,7 @@ func (s *DNSServer) setupSignalHandling() {
 		defer HandlePanic("Signal handler")
 		select {
 		case sig := <-sigChan:
-			LogInfo("SIGNAL: Received signal %v, starting graceful shutdown...", sig)
+			LogInfo("SIGNAL: Received signal %v, starting graceful shutdown", sig)
 			s.shutdownServer()
 		case <-s.ctx.Done():
 			return
@@ -4077,7 +3951,7 @@ func (s *DNSServer) shutdownServer() {
 		return
 	}
 
-	LogInfo("SERVER: Starting DNS server shutdown...")
+	LogInfo("SERVER: Starting DNS server shutdown")
 
 	if s.cancel != nil {
 		s.cancel()
@@ -4107,7 +3981,7 @@ func (s *DNSServer) shutdownServer() {
 	}
 
 	if s.pprofServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), PprofReadHeaderTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 		if err := s.pprofServer.Shutdown(ctx); err != nil {
 			LogError("PPROF: pprof server shutdown failed: %v", err)
 		} else {
@@ -4167,7 +4041,7 @@ func (s *DNSServer) Start() error {
 
 	go func() {
 		defer wg.Done()
-		defer HandlePanic("Critical-UDP server")
+		defer HandlePanic("UDP server")
 		server := &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
 			Net:     "udp",
@@ -4183,7 +4057,7 @@ func (s *DNSServer) Start() error {
 	if s.pprofServer != nil {
 		go func() {
 			defer wg.Done()
-			defer HandlePanic("Critical-pprof server")
+			defer HandlePanic("pprof server")
 			LogInfo("PPROF: pprof server started on port %s", s.config.Server.Pprof)
 			var err error
 			if s.pprofServer.TLSConfig != nil {
@@ -4200,7 +4074,7 @@ func (s *DNSServer) Start() error {
 
 	go func() {
 		defer wg.Done()
-		defer HandlePanic("Critical-TCP server")
+		defer HandlePanic("TCP server")
 		server := &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
 			Net:     "tcp",
@@ -4215,7 +4089,7 @@ func (s *DNSServer) Start() error {
 	if s.securityMgr.tls != nil {
 		go func() {
 			defer wg.Done()
-			defer HandlePanic("Critical-Secure DNS server")
+			defer HandlePanic("Secure DNS server")
 			httpsPort := s.config.Server.TLS.HTTPS.Port
 			if err := s.securityMgr.tls.Start(httpsPort); err != nil {
 				errChan <- fmt.Errorf("secure DNS startup: %w", err)
@@ -4302,11 +4176,11 @@ func (s *DNSServer) displayInfo() {
 		LogInfo("EDNS: Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
 
-	if len(s.config.SpeedTest) > 0 {
+	if len(s.config.Speedtest) > 0 {
 		if s.redisClient != nil {
-			LogInfo("SPEEDTEST: SpeedTest: enabled (with Redis debouncing)")
+			LogInfo("SPEEDTEST: SpeedTest: enabled (with Redis caching)")
 		} else {
-			LogInfo("SPEEDTEST: SpeedTest: enabled (no debouncing)")
+			LogInfo("SPEEDTEST: SpeedTest: enabled (no caching)")
 		}
 	}
 
@@ -4316,7 +4190,7 @@ func (s *DNSServer) displayInfo() {
 }
 
 // =============================================================================
-// DNSServer Methods - Query Processing
+// DNSServer: Query Processing Implementation
 // =============================================================================
 
 func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
@@ -4446,17 +4320,12 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	s.addEDNS(msg, req, isSecureConnection)
 
 	if isExpired && entry.ShouldRefresh() {
-		refreshInterval := time.Duration(entry.OriginalTTL) * time.Second
-		if redisCache, ok := s.cacheMgr.(*RedisCache); ok {
-			if redisCache.refreshTracker.TryStartRefresh(cacheKey, refreshInterval) {
-				go func() {
-					defer HandlePanic("cache refresh")
-					ctx, cancel := context.WithTimeout(context.Background(), QueryTimeout)
-					defer cancel()
-					_ = s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
-				}()
-			}
-		}
+		go func() {
+			defer HandlePanic("cache refresh")
+			ctx, cancel := context.WithTimeout(context.Background(), QueryTimeout)
+			defer cancel()
+			_ = s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
+		}()
 	}
 
 	s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
@@ -4488,14 +4357,13 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 	answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecs)
 
 	if err != nil {
-		s.updateCacheRefreshTime(cacheKey, oldEntry)
 		return err
 	}
 
-	if len(s.config.SpeedTest) > 0 &&
+	if len(s.config.Speedtest) > 0 &&
 		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
 		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
-		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedTestDomain
+		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedtest
 		speedTester := NewSpeedTestManager(*s.config, s.redisClient, domainSpeedPrefix)
 		speedTester.performSpeedTestAndSort(tempMsg)
 		_ = speedTester.Close()
@@ -4505,40 +4373,6 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
 
 	return nil
-}
-
-func (s *DNSServer) updateCacheRefreshTime(cacheKey string, _ *CacheEntry) {
-	defer HandlePanic("Update refresh time")
-
-	redisCache, ok := s.cacheMgr.(*RedisCache)
-	if !ok || atomic.LoadInt32(&redisCache.closed) != 0 {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), RedisReadTimeout)
-	defer cancel()
-
-	data, err := redisCache.client.Get(ctx, cacheKey).Result()
-	if err != nil {
-		return
-	}
-
-	var currentEntry CacheEntry
-	if err := json.Unmarshal([]byte(data), &currentEntry); err != nil {
-		return
-	}
-
-	currentEntry.RefreshTime = time.Now().Unix()
-
-	updatedData, err := json.Marshal(currentEntry)
-	if err != nil {
-		return
-	}
-
-	writeCtx, writeCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
-	defer writeCancel()
-
-	redisCache.client.Set(writeCtx, cacheKey, updatedData, redis.KeepTTL)
 }
 
 func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *ECSOption, isSecureConnection bool) *dns.Msg {
@@ -4677,7 +4511,7 @@ func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, rec
 }
 
 // =============================================================================
-// QueryManager Methods - Initialization and Query Processing
+// QueryManager Implementation
 // =============================================================================
 
 func NewQueryManager(server *DNSServer) *QueryManager {
@@ -4727,7 +4561,7 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, 
 }
 
 // =============================================================================
-// UpstreamServer Methods
+// UpstreamServer Implementation
 // =============================================================================
 
 func (s *UpstreamServer) IsRecursive() bool {
@@ -4738,7 +4572,7 @@ func (s *UpstreamServer) IsRecursive() bool {
 }
 
 // =============================================================================
-// UpstreamHandler Methods
+// UpstreamHandler Implementation
 // =============================================================================
 
 func (uh *UpstreamHandler) getServers() []*UpstreamServer {
@@ -4915,7 +4749,7 @@ func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string
 }
 
 // =============================================================================
-// CNAMEHandler Methods
+// CNAMEHandler Implementation
 // =============================================================================
 
 func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
@@ -4990,11 +4824,11 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 }
 
 // =============================================================================
-// RecursiveResolver Methods
+// RecursiveResolver Implementation
 // =============================================================================
 
 func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
-	if depth > MaxRecursionDepth {
+	if depth > MaxRecursionDep {
 		return nil, nil, nil, false, nil, "", fmt.Errorf("recursion depth exceeded: %d", depth)
 	}
 
@@ -5284,10 +5118,10 @@ func (rr *RecursiveResolver) getRootServers() []string {
 }
 
 // =============================================================================
-// ResponseValidator Methods
+// ResponseValidator Implementation
 // =============================================================================
 
-// (ResponseValidator methods are inherited from DNSSECValidator and HijackPrevention)
+// (ResponseValidator methods inherited from DNSSECValidator and HijackPrevention)
 
 // =============================================================================
 // Utility Functions
@@ -5368,12 +5202,14 @@ func GetSecureClientIP(conn any) net.IP {
 	return nil
 }
 
-func CloseWithLog(c Closeable, name string) {
+func CloseWithLog(c any, name string) {
 	if c == nil {
 		return
 	}
-	if err := c.Close(); err != nil {
-		LogWarn("SERVER: Close %s failed: %v", name, err)
+	if closer, ok := c.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			LogWarn("SERVER: Close %s failed: %v", name, err)
+		}
 	}
 }
 
@@ -5573,7 +5409,7 @@ func ReleaseMessage(msg *dns.Msg) {
 }
 
 // =============================================================================
-// Main Function
+// Main Entry Point
 // =============================================================================
 
 func main() {
