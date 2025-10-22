@@ -74,51 +74,51 @@ const (
 	MaxDomainLength = 253
 	MaxCNAMEChain   = 16
 	MaxRecursionDep = 16
-	MaxConcurrency  = 500
-	MaxSingleQuery  = 3
-	MaxNSResolve    = 3
+	MaxConcurrency  = 200
+	MaxSingleQuery  = 2
+	MaxNSResolve    = 2
 
 	// Timeouts
-	QueryTimeout           = 5 * time.Second
-	RecursiveTimeout       = 10 * time.Second
-	ConnTimeout            = 3 * time.Second
-	TLSHandshakeTimeout    = 2 * time.Second
-	PublicIPTimeout        = 3 * time.Second
-	HTTPClientTimeout      = 5 * time.Second
-	ShutdownTimeout        = 3 * time.Second
-	DoHReadHeaderTimeout   = 5 * time.Second
-	DoHWriteTimeout        = 5 * time.Second
-	DoTReadTimeout         = 8 * time.Second
-	DoTWriteTimeout        = 8 * time.Second
-	DoTIdleTimeout         = 90 * time.Second
-	SecureIdleTimeout      = 120 * time.Second
-	PprofReadHeaderTimeout = 10 * time.Second
-	PprofReadTimeout       = 30 * time.Second
-	PprofIdleTimeout       = 60 * time.Second
-	ConnCloseTimeout       = 500 * time.Millisecond
+	QueryTimeout           = 2500 * time.Millisecond
+	RecursiveTimeout       = 5 * time.Second
+	ConnTimeout            = 1500 * time.Millisecond
+	TLSHandshakeTimeout    = 1500 * time.Millisecond
+	PublicIPTimeout        = 1500 * time.Millisecond
+	HTTPClientTimeout      = 2500 * time.Millisecond
+	ShutdownTimeout        = 1500 * time.Millisecond
+	DoHReadHeaderTimeout   = 2500 * time.Millisecond
+	DoHWriteTimeout        = 2500 * time.Millisecond
+	DoTReadTimeout         = 3 * time.Second
+	DoTWriteTimeout        = 3 * time.Second
+	DoTIdleTimeout         = 45 * time.Second
+	SecureIdleTimeout      = 45 * time.Second
+	PprofReadHeaderTimeout = 3 * time.Second
+	PprofReadTimeout       = 3 * time.Second
+	PprofIdleTimeout       = 45 * time.Second
+	ConnCloseTimeout       = 200 * time.Millisecond
 	ConnDialTimeout        = 2 * time.Second
-	ConnMaxLifetime        = 300 * time.Second
-	ConnMaxIdleTime        = 60 * time.Second
-	ConnValidateEvery      = 15 * time.Second
+	ConnMaxLifetime        = 180 * time.Second
+	ConnMaxIdleTime        = 30 * time.Second
+	ConnValidateEvery      = 8 * time.Second
 	ConnKeepAlive          = 30 * time.Second
-	ConnPoolCleanup        = 20 * time.Second
+	ConnPoolCleanup        = 8 * time.Second
 
 	// Cache Configuration
 	DefaultCacheTTL    = 10
 	StaleTTL           = 30
 	StaleMaxAge        = 86400 * 7
-	DefaultSpeedTTL    = 300 * time.Second
-	SpeedDebounceDelay = 5 * time.Second
+	DefaultSpeedTTL    = 180 * time.Second
+	SpeedDebounceDelay = 3 * time.Second
 	RootServerRefresh  = 600 * time.Second
 
 	// Redis Configuration
-	RedisPoolSize     = 5
-	RedisMinIdle      = 2
+	RedisPoolSize     = 3
+	RedisMinIdle      = 1
 	RedisMaxRetries   = 2
-	RedisPoolTimeout  = 3 * time.Second
-	RedisReadTimeout  = 2 * time.Second
-	RedisWriteTimeout = 2 * time.Second
-	RedisDialTimeout  = 3 * time.Second
+	RedisPoolTimeout  = 2 * time.Second
+	RedisReadTimeout  = 1500 * time.Millisecond
+	RedisWriteTimeout = 1500 * time.Millisecond
+	RedisDialTimeout  = 2 * time.Second
 
 	// Redis Key Prefixes
 	RedisPrefixDNS           = "dns:"
@@ -133,10 +133,10 @@ const (
 	PaddingSize     = 468
 
 	// QUIC Configuration
-	MaxIncomingStreams   = 1024
-	QUICAddrValidatorTTL = 180 * time.Second
-	QUICSessionCacheTTL  = 3600 * time.Second
-	MaxIdleConnections   = 20
+	MaxIncomingStreams   = 512
+	QUICAddrValidatorTTL = 30 * time.Second
+	QUICSessionCacheTTL  = 180 * time.Second
+	MaxIdleConnections   = 3
 
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
 	QUICCodeInternalError quic.ApplicationErrorCode = 1
@@ -144,7 +144,7 @@ const (
 
 	// Speed Test Configuration
 	DefaultSpeedTimeout     = 200 * time.Millisecond
-	DefaultSpeedConcurrency = 3
+	DefaultSpeedConcurrency = 2
 	UnreachableLatency      = 10 * time.Second
 
 	// Logging
