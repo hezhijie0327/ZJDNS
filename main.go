@@ -2607,7 +2607,8 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 			if result := st.testSingleIP(testIP); result != nil {
 				select {
 				case resultChan <- result:
-				default:
+				case <-time.After(DefaultSpeedTimeout):
+					LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
 				}
 			}
 		}(ip)
@@ -5409,10 +5410,10 @@ func ToRRSlice[T dns.RR](records []T) []dns.RR {
 func AcquireMessage() *dns.Msg {
 	msg := messagePool.Get().(*dns.Msg)
 	msg.MsgHdr = dns.MsgHdr{}
-	msg.Question = msg.Question[:0]
-	msg.Answer = msg.Answer[:0]
-	msg.Ns = msg.Ns[:0]
-	msg.Extra = msg.Extra[:0]
+	msg.Question = msg.Question[:0:0]
+	msg.Answer = msg.Answer[:0:0]
+	msg.Ns = msg.Ns[:0:0]
+	msg.Extra = msg.Extra[:0:0]
 	msg.Compress = false
 	return msg
 }
