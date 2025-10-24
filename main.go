@@ -5404,12 +5404,7 @@ func ToRRSlice[T dns.RR](records []T) []dns.RR {
 
 func AcquireMessage() *dns.Msg {
 	msg := messagePool.Get().(*dns.Msg)
-	msg.MsgHdr = dns.MsgHdr{}
-	msg.Question = msg.Question[:0:0]
-	msg.Answer = msg.Answer[:0:0]
-	msg.Ns = msg.Ns[:0:0]
-	msg.Extra = msg.Extra[:0:0]
-	msg.Compress = false
+	*msg = dns.Msg{}
 	return msg
 }
 
