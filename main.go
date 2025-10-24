@@ -2599,10 +2599,15 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 			defer wg.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
+
+			// Create a reusable timer for this goroutine
+			timer := time.NewTimer(st.timeout)
+			defer timer.Stop()
+
 			if result := st.testSingleIP(testIP); result != nil {
 				select {
 				case resultChan <- result:
-				case <-time.After(st.timeout):
+				case <-timer.C:
 					LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
 				}
 			}
