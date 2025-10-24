@@ -68,12 +68,7 @@ var (
 	// Minimal message pool to reduce GC pressure
 	messagePool = sync.Pool{
 		New: func() any {
-			return &dns.Msg{
-				Question: make([]dns.Question, 0, 1),
-				Answer:   make([]dns.RR, 0, 4),
-				Ns:       make([]dns.RR, 0, 2),
-				Extra:    make([]dns.RR, 0, 2),
-			}
+			return &dns.Msg{}
 		},
 	}
 )
