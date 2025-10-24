@@ -135,7 +135,7 @@ const (
 	StaleMaxAge        = 86400 * 7
 	DefaultSpeedTTL    = 180 * time.Second
 	SpeedDebounceDelay = 3 * time.Second
-	RootServerRefresh  = 600 * time.Second
+	RootServerRefresh  = 900 * time.Second
 
 	// Redis Configuration
 	RedisPoolSize     = 3
