@@ -53,7 +53,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.0"
+	Version    = "1.4.1"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -68,12 +68,7 @@ var (
 	// Minimal message pool to reduce GC pressure
 	messagePool = sync.Pool{
 		New: func() any {
-			return &dns.Msg{
-				Question: make([]dns.Question, 0, 1),
-				Answer:   make([]dns.RR, 0, 4),
-				Ns:       make([]dns.RR, 0, 2),
-				Extra:    make([]dns.RR, 0, 2),
-			}
+			return &dns.Msg{}
 		},
 	}
 )
@@ -110,15 +105,15 @@ const (
 	MaxNSResolve    = 2
 
 	// Timeouts
-	QueryTimeout           = 2500 * time.Millisecond
+	QueryTimeout           = 3 * time.Second
 	RecursiveTimeout       = 5 * time.Second
-	ConnTimeout            = 1500 * time.Millisecond
-	TLSHandshakeTimeout    = 1500 * time.Millisecond
-	PublicIPTimeout        = 1500 * time.Millisecond
-	HTTPClientTimeout      = 2500 * time.Millisecond
-	ShutdownTimeout        = 1500 * time.Millisecond
-	DoHReadHeaderTimeout   = 2500 * time.Millisecond
-	DoHWriteTimeout        = 2500 * time.Millisecond
+	ConnTimeout            = 2 * time.Second
+	TLSHandshakeTimeout    = 2 * time.Second
+	PublicIPTimeout        = 2 * time.Second
+	HTTPClientTimeout      = 3 * time.Second
+	ShutdownTimeout        = 2 * time.Second
+	DoHReadHeaderTimeout   = 3 * time.Second
+	DoHWriteTimeout        = 3 * time.Second
 	DoTReadTimeout         = 3 * time.Second
 	DoTWriteTimeout        = 3 * time.Second
 	DoTIdleTimeout         = 45 * time.Second
@@ -128,7 +123,7 @@ const (
 	PprofIdleTimeout       = 45 * time.Second
 	ConnCloseTimeout       = 200 * time.Millisecond
 	ConnDialTimeout        = 2 * time.Second
-	ConnMaxLifetime        = 180 * time.Second
+	ConnMaxLifetime        = 90 * time.Second
 	ConnMaxIdleTime        = 30 * time.Second
 	ConnValidateEvery      = 8 * time.Second
 	ConnKeepAlive          = 30 * time.Second
@@ -140,15 +135,15 @@ const (
 	StaleMaxAge        = 86400 * 7
 	DefaultSpeedTTL    = 180 * time.Second
 	SpeedDebounceDelay = 3 * time.Second
-	RootServerRefresh  = 600 * time.Second
+	RootServerRefresh  = 900 * time.Second
 
 	// Redis Configuration
 	RedisPoolSize     = 3
 	RedisMinIdle      = 1
 	RedisMaxRetries   = 2
 	RedisPoolTimeout  = 2 * time.Second
-	RedisReadTimeout  = 1500 * time.Millisecond
-	RedisWriteTimeout = 1500 * time.Millisecond
+	RedisReadTimeout  = 2 * time.Second
+	RedisWriteTimeout = 2 * time.Second
 	RedisDialTimeout  = 2 * time.Second
 
 	// Redis Key Prefixes
@@ -165,8 +160,8 @@ const (
 
 	// QUIC Configuration
 	MaxIncomingStreams   = 512
-	QUICAddrValidatorTTL = 30 * time.Second
-	QUICSessionCacheTTL  = 180 * time.Second
+	QUICAddrValidatorTTL = 15 * time.Second
+	QUICSessionCacheTTL  = 90 * time.Second
 	MaxIdleConnections   = 3
 
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
@@ -176,7 +171,7 @@ const (
 	// Speed Test Configuration
 	DefaultSpeedTimeout     = 200 * time.Millisecond
 	DefaultSpeedConcurrency = 2
-	UnreachableLatency      = 10 * time.Second
+	UnreachableLatency      = 5 * time.Second
 
 	// Logging
 	DefaultLogLevel = "info"
@@ -2604,10 +2599,16 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 			defer wg.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
+
+			// Create a reusable timer for this goroutine
+			timer := time.NewTimer(st.timeout)
+			defer timer.Stop()
+
 			if result := st.testSingleIP(testIP); result != nil {
 				select {
 				case resultChan <- result:
-				default:
+				case <-timer.C:
+					LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
 				}
 			}
 		}(ip)
@@ -5408,12 +5409,7 @@ func ToRRSlice[T dns.RR](records []T) []dns.RR {
 
 func AcquireMessage() *dns.Msg {
 	msg := messagePool.Get().(*dns.Msg)
-	msg.MsgHdr = dns.MsgHdr{}
-	msg.Question = msg.Question[:0]
-	msg.Answer = msg.Answer[:0]
-	msg.Ns = msg.Ns[:0]
-	msg.Extra = msg.Extra[:0]
-	msg.Compress = false
+	*msg = dns.Msg{}
 	return msg
 }
 
