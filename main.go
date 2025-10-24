@@ -53,7 +53,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.0"
+	Version    = "1.4.1"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -110,15 +110,15 @@ const (
 	MaxNSResolve    = 2
 
 	// Timeouts
-	QueryTimeout           = 2500 * time.Millisecond
+	QueryTimeout           = 3 * time.Second
 	RecursiveTimeout       = 5 * time.Second
-	ConnTimeout            = 1500 * time.Millisecond
-	TLSHandshakeTimeout    = 1500 * time.Millisecond
-	PublicIPTimeout        = 1500 * time.Millisecond
-	HTTPClientTimeout      = 2500 * time.Millisecond
-	ShutdownTimeout        = 1500 * time.Millisecond
-	DoHReadHeaderTimeout   = 2500 * time.Millisecond
-	DoHWriteTimeout        = 2500 * time.Millisecond
+	ConnTimeout            = 2 * time.Second
+	TLSHandshakeTimeout    = 2 * time.Second
+	PublicIPTimeout        = 2 * time.Second
+	HTTPClientTimeout      = 3 * time.Second
+	ShutdownTimeout        = 2 * time.Second
+	DoHReadHeaderTimeout   = 3 * time.Second
+	DoHWriteTimeout        = 3 * time.Second
 	DoTReadTimeout         = 3 * time.Second
 	DoTWriteTimeout        = 3 * time.Second
 	DoTIdleTimeout         = 45 * time.Second
@@ -128,7 +128,7 @@ const (
 	PprofIdleTimeout       = 45 * time.Second
 	ConnCloseTimeout       = 200 * time.Millisecond
 	ConnDialTimeout        = 2 * time.Second
-	ConnMaxLifetime        = 180 * time.Second
+	ConnMaxLifetime        = 90 * time.Second
 	ConnMaxIdleTime        = 30 * time.Second
 	ConnValidateEvery      = 8 * time.Second
 	ConnKeepAlive          = 30 * time.Second
@@ -147,8 +147,8 @@ const (
 	RedisMinIdle      = 1
 	RedisMaxRetries   = 2
 	RedisPoolTimeout  = 2 * time.Second
-	RedisReadTimeout  = 1500 * time.Millisecond
-	RedisWriteTimeout = 1500 * time.Millisecond
+	RedisReadTimeout  = 2 * time.Second
+	RedisWriteTimeout = 2 * time.Second
 	RedisDialTimeout  = 2 * time.Second
 
 	// Redis Key Prefixes
@@ -165,8 +165,8 @@ const (
 
 	// QUIC Configuration
 	MaxIncomingStreams   = 512
-	QUICAddrValidatorTTL = 30 * time.Second
-	QUICSessionCacheTTL  = 180 * time.Second
+	QUICAddrValidatorTTL = 15 * time.Second
+	QUICSessionCacheTTL  = 90 * time.Second
 	MaxIdleConnections   = 3
 
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
@@ -176,7 +176,7 @@ const (
 	// Speed Test Configuration
 	DefaultSpeedTimeout     = 200 * time.Millisecond
 	DefaultSpeedConcurrency = 2
-	UnreachableLatency      = 10 * time.Second
+	UnreachableLatency      = 5 * time.Second
 
 	// Logging
 	DefaultLogLevel = "info"
@@ -2607,7 +2607,7 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 			if result := st.testSingleIP(testIP); result != nil {
 				select {
 				case resultChan <- result:
-				case <-time.After(DefaultSpeedTimeout):
+				case <-time.After(st.timeout):
 					LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
 				}
 			}
