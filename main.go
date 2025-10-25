@@ -2506,7 +2506,7 @@ func (st *SpeedTestManager) getICMPConn(isIPv6 bool) *icmp.PacketConn {
 func (st *SpeedTestManager) icmpHealthCheckLoop() {
 	defer HandlePanic("ICMP health check")
 
-	ticker := time.NewTicker(30 * time.Second) // Health check every 30 seconds
+	ticker := time.NewTicker(UnreachableLatency)
 	defer ticker.Stop()
 
 	for {
