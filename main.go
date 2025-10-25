@@ -305,30 +305,6 @@ type CacheEntry struct {
 	Validated       bool             `json:"validated"`
 }
 
-// SerializeBinary efficiently serializes CacheEntry to binary format
-func (ce *CacheEntry) SerializeBinary() ([]byte, error) {
-	var buf bytes.Buffer
-	encoder := gob.NewEncoder(&buf)
-
-	if err := encoder.Encode(ce); err != nil {
-		return nil, fmt.Errorf("binary encode: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-// DeserializeBinary efficiently deserializes CacheEntry from binary format
-func (ce *CacheEntry) DeserializeBinary(data []byte) error {
-	buf := bytes.NewReader(data)
-	decoder := gob.NewDecoder(buf)
-
-	if err := decoder.Decode(ce); err != nil {
-		return fmt.Errorf("binary decode: %w", err)
-	}
-
-	return nil
-}
-
 type CompactRecord struct {
 	Text    string `json:"text"`
 	OrigTTL uint32 `json:"orig_ttl"`
@@ -416,30 +392,6 @@ type SpeedResult struct {
 	Latency   time.Duration `json:"latency"`
 	Reachable bool          `json:"reachable"`
 	Timestamp time.Time     `json:"timestamp"`
-}
-
-// SerializeBinary efficiently serializes SpeedResult to binary format
-func (sr *SpeedResult) SerializeBinary() ([]byte, error) {
-	var buf bytes.Buffer
-	encoder := gob.NewEncoder(&buf)
-
-	if err := encoder.Encode(sr); err != nil {
-		return nil, fmt.Errorf("binary encode: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-// DeserializeBinary efficiently deserializes SpeedResult from binary format
-func (sr *SpeedResult) DeserializeBinary(data []byte) error {
-	buf := bytes.NewReader(data)
-	decoder := gob.NewDecoder(buf)
-
-	if err := decoder.Decode(sr); err != nil {
-		return fmt.Errorf("binary decode: %w", err)
-	}
-
-	return nil
 }
 
 type RootServerWithLatency struct {
@@ -1956,6 +1908,30 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 	return nil
 }
 
+// SerializeBinary efficiently serializes CacheEntry to binary format
+func (ce *CacheEntry) SerializeBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := gob.NewEncoder(&buf)
+
+	if err := encoder.Encode(ce); err != nil {
+		return nil, fmt.Errorf("binary encode: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DeserializeBinary efficiently deserializes CacheEntry from binary format
+func (ce *CacheEntry) DeserializeBinary(data []byte) error {
+	buf := bytes.NewReader(data)
+	decoder := gob.NewDecoder(buf)
+
+	if err := decoder.Decode(ce); err != nil {
+		return fmt.Errorf("binary decode: %w", err)
+	}
+
+	return nil
+}
+
 // =============================================================================
 // CIDRManager Implementation
 // =============================================================================
@@ -2904,6 +2880,30 @@ func (st *SpeedTestManager) pingWithUDP(ip, port string, timeout time.Duration) 
 	latency := time.Since(start)
 	_ = conn.Close()
 	return latency
+}
+
+// SerializeBinary efficiently serializes SpeedResult to binary format
+func (sr *SpeedResult) SerializeBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := gob.NewEncoder(&buf)
+
+	if err := encoder.Encode(sr); err != nil {
+		return nil, fmt.Errorf("binary encode: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DeserializeBinary efficiently deserializes SpeedResult from binary format
+func (sr *SpeedResult) DeserializeBinary(data []byte) error {
+	buf := bytes.NewReader(data)
+	decoder := gob.NewDecoder(buf)
+
+	if err := decoder.Decode(sr); err != nil {
+		return fmt.Errorf("binary decode: %w", err)
+	}
+
+	return nil
 }
 
 // =============================================================================
