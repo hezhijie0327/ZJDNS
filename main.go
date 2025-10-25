@@ -436,8 +436,7 @@ type CIDRRule struct {
 }
 
 type CIDRManager struct {
-	rules map[string]*CIDRRule
-	mu    sync.RWMutex
+	rules atomic.Value // map[string]*CIDRRule
 }
 
 // Rewrite Management Type
@@ -541,8 +540,7 @@ type QueryManager struct {
 }
 
 type UpstreamHandler struct {
-	servers []*UpstreamServer
-	mu      sync.RWMutex
+	servers atomic.Value // []*UpstreamServer
 }
 
 type RecursiveResolver struct {
@@ -1936,13 +1934,14 @@ func deserializeFromBinary(data []byte, v any) error {
 // =============================================================================
 
 func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
-	cm := &CIDRManager{rules: make(map[string]*CIDRRule)}
+	cm := &CIDRManager{}
+	rules := make(map[string]*CIDRRule)
 
 	for _, config := range configs {
 		if config.Tag == "" {
 			return nil, errors.New("CIDR tag cannot be empty")
 		}
-		if _, exists := cm.rules[config.Tag]; exists {
+		if _, exists := rules[config.Tag]; exists {
 			return nil, fmt.Errorf("duplicate CIDR tag: %s", config.Tag)
 		}
 
@@ -1950,7 +1949,7 @@ func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load CIDR config for tag '%s': %w", config.Tag, err)
 		}
-		cm.rules[config.Tag] = rule
+		rules[config.Tag] = rule
 
 		sourceInfo := ""
 		if config.File != "" && len(config.Rules) > 0 {
@@ -1963,6 +1962,7 @@ func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
 		LogInfo("CIDR: Loaded tag=%s, source=%s, total=%d", config.Tag, sourceInfo, len(rule.nets))
 	}
 
+	cm.rules.Store(rules)
 	return cm, nil
 }
 
@@ -2030,9 +2030,8 @@ func (cm *CIDRManager) MatchIP(ip net.IP, matchTag string) (matched bool, exists
 	negate := strings.HasPrefix(matchTag, "!")
 	tag := strings.TrimPrefix(matchTag, "!")
 
-	cm.mu.RLock()
-	rule, exists := cm.rules[tag]
-	cm.mu.RUnlock()
+	rules := cm.rules.Load().(map[string]*CIDRRule)
+	rule, exists := rules[tag]
 
 	if !exists {
 		return false, false
@@ -4621,7 +4620,7 @@ func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, rec
 
 func NewQueryManager(server *DNSServer) *QueryManager {
 	return &QueryManager{
-		upstream: &UpstreamHandler{servers: make([]*UpstreamServer, 0)},
+		upstream: &UpstreamHandler{},
 		recursive: &RecursiveResolver{
 			server:        server,
 			rootServerMgr: server.rootServerMgr,
@@ -4645,9 +4644,7 @@ func (qm *QueryManager) Initialize(servers []UpstreamServer) error {
 		activeServers = append(activeServers, server)
 	}
 
-	qm.upstream.mu.Lock()
-	qm.upstream.servers = activeServers
-	qm.upstream.mu.Unlock()
+	qm.upstream.servers.Store(activeServers)
 
 	return nil
 }
@@ -4680,9 +4677,11 @@ func (s *UpstreamServer) IsRecursive() bool {
 // =============================================================================
 
 func (uh *UpstreamHandler) getServers() []*UpstreamServer {
-	uh.mu.RLock()
-	defer uh.mu.RUnlock()
-	return uh.servers
+	servers := uh.servers.Load()
+	if servers == nil {
+		return []*UpstreamServer{}
+	}
+	return servers.([]*UpstreamServer)
 }
 
 func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
