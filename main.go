@@ -2024,6 +2024,7 @@ func (cm *ConfigManager) shouldEnableDDR(config *ServerConfig) bool {
 
 func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	domain := strings.TrimSuffix(config.Server.DDR.Domain, ".")
+	nxdomainCode := dns.RcodeNameError
 
 	svcbRecords := []DNSRecordConfig{
 		{Type: "SVCB", Content: "1 . alpn=h3,h2 port=" + config.Server.TLS.HTTPS.Port},
@@ -2031,60 +2032,58 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	}
 
 	var additionalRecords []DNSRecordConfig
-	var directQueryRecords []DNSRecordConfig
-	nxdomainCode := dns.RcodeNameError
+	var directRecords []DNSRecordConfig
 
 	if config.Server.DDR.IPv4 != "" {
 		svcbRecords[0].Content += " ipv4hint=" + config.Server.DDR.IPv4
 		svcbRecords[1].Content += " ipv4hint=" + config.Server.DDR.IPv4
-		ipv4Record := DNSRecordConfig{Type: "A", Content: config.Server.DDR.IPv4}
 		additionalRecords = append(additionalRecords, DNSRecordConfig{
-			Name: domain, Type: ipv4Record.Type, Content: ipv4Record.Content,
+			Name: domain, Type: "A", Content: config.Server.DDR.IPv4,
 		})
-		directQueryRecords = append(directQueryRecords, ipv4Record)
+		directRecords = append(directRecords, DNSRecordConfig{
+			Type: "A", Content: config.Server.DDR.IPv4,
+		})
 	} else {
-		config.Rewrite = append(config.Rewrite, RewriteRule{
-			Name:    domain,
-			Records: []DNSRecordConfig{{Type: "A", ResponseCode: &nxdomainCode}},
+		directRecords = append(directRecords, DNSRecordConfig{
+			Type: "A", ResponseCode: &nxdomainCode,
 		})
 	}
 
 	if config.Server.DDR.IPv6 != "" {
 		svcbRecords[0].Content += " ipv6hint=" + config.Server.DDR.IPv6
 		svcbRecords[1].Content += " ipv6hint=" + config.Server.DDR.IPv6
-		ipv6Record := DNSRecordConfig{Type: "AAAA", Content: config.Server.DDR.IPv6}
 		additionalRecords = append(additionalRecords, DNSRecordConfig{
-			Name: domain, Type: ipv6Record.Type, Content: ipv6Record.Content,
+			Name: domain, Type: "AAAA", Content: config.Server.DDR.IPv6,
 		})
-		directQueryRecords = append(directQueryRecords, ipv6Record)
+		directRecords = append(directRecords, DNSRecordConfig{
+			Type: "AAAA", Content: config.Server.DDR.IPv6,
+		})
 	} else {
-		config.Rewrite = append(config.Rewrite, RewriteRule{
-			Name:    domain,
-			Records: []DNSRecordConfig{{Type: "AAAA", ResponseCode: &nxdomainCode}},
+		directRecords = append(directRecords, DNSRecordConfig{
+			Type: "AAAA", ResponseCode: &nxdomainCode,
 		})
 	}
 
-	if config.Server.DDR.IPv4 != "" || config.Server.DDR.IPv6 != "" {
-		ddrRuleNames := []string{"_dns.resolver.arpa", "_dns." + domain}
-		if config.Server.Port != "" && config.Server.Port != DefaultDNSPort {
-			ddrRuleNames = append(ddrRuleNames, "_"+config.Server.Port+"._dns."+domain)
-		}
+	config.Rewrite = append(config.Rewrite, RewriteRule{
+		Name:    domain,
+		Records: directRecords,
+	})
 
-		for _, ruleName := range ddrRuleNames {
-			config.Rewrite = append(config.Rewrite, RewriteRule{
-				Name:       ruleName,
-				Records:    svcbRecords,
-				Additional: additionalRecords,
-			})
-		}
-
-		if len(directQueryRecords) > 0 {
-			config.Rewrite = append(config.Rewrite, RewriteRule{
-				Name:    domain,
-				Records: directQueryRecords,
-			})
-		}
+	ddrNames := []string{"_dns.resolver.arpa", "_dns." + domain}
+	if config.Server.Port != "" && config.Server.Port != DefaultDNSPort {
+		ddrNames = append(ddrNames, "_"+config.Server.Port+"._dns."+domain)
 	}
+
+	for _, name := range ddrNames {
+		config.Rewrite = append(config.Rewrite, RewriteRule{
+			Name:       name,
+			Records:    svcbRecords,
+			Additional: additionalRecords,
+		})
+	}
+
+	LogInfo("CONFIG: DDR enabled for domain %s (IPv4: %s, IPv6: %s)",
+		domain, config.Server.DDR.IPv4, config.Server.DDR.IPv6)
 }
 
 func GenerateExampleConfig() string {
