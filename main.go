@@ -83,12 +83,13 @@ const (
 	DefaultDOTPort     = "853"
 	DefaultDOHPort     = "443"
 	DefaultPprofPort   = "6060"
-	DefaultMetricsPort = "8080"
+	DefaultMetricsPort = "6061"
 
 	// Protocol Indicators
 	RecursiveIndicator = "builtin_recursive"
 	DefaultQueryPath   = "/dns-query"
 	PprofPath          = "/debug/pprof/"
+	MetricsPath        = "/metrics"
 
 	// Buffer Sizes
 	UDPBufferSize       = 1232
@@ -644,15 +645,9 @@ type CacheMetrics struct {
 }
 
 type FeaturesMetrics struct {
-	Cache   CacheMetrics    `json:"cache"`
-	Hijack  SecurityMetrics `json:"hijack"`
-	Rewrite SecurityMetrics `json:"rewrite"`
-}
-
-// SecurityMetrics represents security-related metrics with count and rate
-type SecurityMetrics struct {
-	Total uint64  `json:"total"`
-	Rate  float64 `json:"rate"`
+	Cache   CacheMetrics `json:"cache"`
+	Hijack  uint64       `json:"hijack"`
+	Rewrite uint64       `json:"rewrite"`
 }
 
 type ConfigManager struct{}
@@ -932,17 +927,6 @@ func (mc *MetricsCollector) GetMetrics() MetricsResponse {
 		cacheHitRate = float64(mc.CacheHits) / float64(totalCacheRequests) * 100
 	}
 
-	// Calculate security rates (per total queries)
-	var hijackPreventionRate float64
-	if totalQueries > 0 {
-		hijackPreventionRate = float64(mc.HijackPrevented) / float64(totalQueries) * 100
-	}
-
-	var rewriteRate float64
-	if totalQueries > 0 {
-		rewriteRate = float64(mc.RewriteMatches) / float64(totalQueries) * 100
-	}
-
 	// Get memory stats
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -1017,14 +1001,8 @@ func (mc *MetricsCollector) GetMetrics() MetricsResponse {
 				Misses:  mc.CacheMisses,
 				HitRate: cacheHitRate,
 			},
-			Hijack: SecurityMetrics{
-				Total: mc.HijackPrevented,
-				Rate:  hijackPreventionRate,
-			},
-			Rewrite: SecurityMetrics{
-				Total: mc.RewriteMatches,
-				Rate:  rewriteRate,
-			},
+			Hijack:  mc.HijackPrevented,
+			Rewrite: mc.RewriteMatches,
 		},
 		Timestamp: time.Now(),
 	}
@@ -1060,11 +1038,11 @@ func (ma *MetricsAPI) Start(port string) error {
 
 	if ma.tlsConfig != nil {
 		ma.server.TLSConfig = ma.tlsConfig
-		LogInfo("METRICS: HTTPS metrics server started on port %s", port)
+		LogInfo("METRICS: HTTPS metrics server started on port %s, via: %s", port, MetricsPath)
 		return ma.server.ListenAndServeTLS("", "")
 	}
 
-	LogInfo("METRICS: HTTP metrics server started on port %s", port)
+	LogInfo("METRICS: HTTP metrics server started on port %s, via: %s", port, MetricsPath)
 	return ma.server.ListenAndServe()
 }
 
@@ -4636,7 +4614,7 @@ func (s *DNSServer) Start() error {
 		go func() {
 			defer wg.Done()
 			defer HandlePanic("metrics API server")
-			LogInfo("METRICS: metrics API server started on port %s", s.config.Server.Metrics)
+			LogInfo("METRICS: metrics API server started on port %s, via: %s, tls: %t", s.config.Server.Metrics, MetricsPath, s.metricsAPI.tlsConfig != nil)
 			if err := s.metricsAPI.Start(s.config.Server.Metrics); err != nil {
 				errChan <- fmt.Errorf("metrics API startup: %w", err)
 			}
