@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -584,7 +586,7 @@ func (lm *LogManager) GetLevel() LogLevel {
 	return lm.level
 }
 
-func (lm *LogManager) Log(level LogLevel, format string, args ...interface{}) {
+func (lm *LogManager) Log(level LogLevel, format string, args ...any) {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
@@ -631,37 +633,15 @@ func (lm *LogManager) Log(level LogLevel, format string, args ...interface{}) {
 	_, _ = fmt.Fprint(lm.writer, logLine)
 }
 
-func (lm *LogManager) Error(format string, args ...interface{}) { lm.Log(Error, format, args...) }
-func (lm *LogManager) Warn(format string, args ...interface{})  { lm.Log(Warn, format, args...) }
-func (lm *LogManager) Info(format string, args ...interface{})  { lm.Log(Info, format, args...) }
-func (lm *LogManager) Debug(format string, args ...interface{}) { lm.Log(Debug, format, args...) }
+func (lm *LogManager) Error(format string, args ...any) { lm.Log(Error, format, args...) }
+func (lm *LogManager) Warn(format string, args ...any)  { lm.Log(Warn, format, args...) }
+func (lm *LogManager) Info(format string, args ...any)  { lm.Log(Info, format, args...) }
+func (lm *LogManager) Debug(format string, args ...any) { lm.Log(Debug, format, args...) }
 
-func LogError(format string, args ...interface{}) { globalLog.Error(format, args...) }
-func LogWarn(format string, args ...interface{})  { globalLog.Warn(format, args...) }
-func LogInfo(format string, args ...interface{})  { globalLog.Info(format, args...) }
-func LogDebug(format string, args ...interface{}) { globalLog.Debug(format, args...) }
-
-// calculateHitRate calculates hit rate from hits and misses
-func calculateHitRate(hits, misses uint64) float64 {
-	total := hits + misses
-	if total > 0 {
-		return float64(hits) / float64(total) * 100
-	}
-	return 0
-}
-
-// calculateQPS calculates queries per second
-func calculateQPS(totalQueries uint64, uptime time.Duration) float64 {
-	if totalQueries > 0 {
-		return float64(totalQueries) / uptime.Seconds()
-	}
-	return 0
-}
-
-// bToMb converts bytes to megabytes
-func bToMb(b uint64) uint64 {
-	return b / 1024 / 1024
-}
+func LogError(format string, args ...any) { globalLog.Error(format, args...) }
+func LogWarn(format string, args ...any)  { globalLog.Warn(format, args...) }
+func LogInfo(format string, args ...any)  { globalLog.Info(format, args...) }
+func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
 
 // =============================================================================
 // ConnectionPool Implementation
@@ -707,8 +687,8 @@ func (p *ConnPool) cleanupExpiredConns() {
 	now := time.Now()
 	removed := 0
 
-	cleanupMap := func(m *sync.Map, connType string) {
-		m.Range(func(key, value interface{}) bool {
+	cleanupMap := func(m *sync.Map) {
+		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
 			entry.mu.Lock()
 
@@ -728,10 +708,10 @@ func (p *ConnPool) cleanupExpiredConns() {
 		})
 	}
 
-	cleanupMap(&p.http2Conns, "HTTP/2")
-	cleanupMap(&p.http3Conns, "HTTP/3")
-	cleanupMap(&p.quicConns, "QUIC")
-	cleanupMap(&p.tlsConns, "TLS")
+	cleanupMap(&p.http2Conns)
+	cleanupMap(&p.http3Conns)
+	cleanupMap(&p.quicConns)
+	cleanupMap(&p.tlsConns)
 
 	if removed > 0 {
 		LogDebug("POOL: Cleaned up %d expired connections", removed)
@@ -743,7 +723,7 @@ func (p *ConnPool) validateConns() {
 	failed := 0
 
 	validateMap := func(m *sync.Map) {
-		m.Range(func(key, value interface{}) bool {
+		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
 			entry.mu.Lock()
 
@@ -1100,7 +1080,7 @@ func (p *ConnPool) Close() error {
 	p.cleanupTicker.Stop()
 
 	closeMap := func(m *sync.Map) {
-		m.Range(func(key, value interface{}) bool {
+		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
 			p.closeEntry(entry)
 			m.Delete(key)
@@ -1495,13 +1475,7 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	if config.Server.DefaultECS != "" {
 		ecs := strings.ToLower(config.Server.DefaultECS)
 		validPresets := []string{"auto", "auto_v4", "auto_v6"}
-		isValidPreset := false
-		for _, preset := range validPresets {
-			if ecs == preset {
-				isValidPreset = true
-				break
-			}
-		}
+		isValidPreset := slices.Contains(validPresets, ecs)
 		if !isValidPreset {
 			if _, _, err := net.ParseCIDR(config.Server.DefaultECS); err != nil {
 				return fmt.Errorf("invalid ECS subnet: %w", err)
@@ -2594,9 +2568,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 		}
 	}
 
-	for ip, result := range newResults {
-		results[ip] = result
-	}
+	maps.Copy(results, newResults)
 
 	return results
 }
@@ -3772,7 +3744,7 @@ func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
 	}
 }
 
-func (rt *RequestTracker) AddStep(step string, args ...interface{}) {
+func (rt *RequestTracker) AddStep(step string, args ...any) {
 	if rt == nil || globalLog.GetLevel() < Debug {
 		return
 	}
@@ -4323,7 +4295,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection)
 }
 
-func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *ECSOption, cacheKey string, oldEntry *CacheEntry) error {
+func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *ECSOption, cacheKey string, _ *CacheEntry) error {
 	defer HandlePanic("cache refresh")
 
 	if atomic.LoadInt32(&s.closed) != 0 {
@@ -4563,10 +4535,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 		return nil, nil, nil, false, nil, "", errors.New("no upstream servers")
 	}
 
-	maxConcurrent := len(servers)
-	if maxConcurrent > MaxSingleQuery {
-		maxConcurrent = MaxSingleQuery
-	}
+	maxConcurrent := min(len(servers), MaxSingleQuery)
 
 	ctx, cancel := context.WithTimeout(qm.server.ctx, QueryTimeout)
 	defer cancel()
@@ -4738,7 +4707,7 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 	currentQuestion := question
 	visitedCNAMEs := make(map[string]bool)
 
-	for i := 0; i < MaxCNAMEChain; i++ {
+	for range MaxCNAMEChain {
 		select {
 		case <-ctx.Done():
 			return nil, nil, nil, false, nil, "", ctx.Err()
@@ -4943,10 +4912,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		return nil, ctx.Err()
 	}
 
-	concurrency := len(nameservers)
-	if concurrency > MaxSingleQuery {
-		concurrency = MaxSingleQuery
-	}
+	concurrency := min(len(nameservers), MaxSingleQuery)
 
 	tempServers := make([]*UpstreamServer, concurrency)
 	for i := 0; i < concurrency && i < len(nameservers); i++ {
@@ -5009,10 +4975,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 }
 
 func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int, forceTCP bool) []string {
-	resolveCount := len(nsRecords)
-	if resolveCount > MaxNSResolve {
-		resolveCount = MaxNSResolve
-	}
+	resolveCount := min(len(nsRecords), MaxNSResolve)
 
 	nsChan := make(chan []string, resolveCount)
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, ConnTimeout)
