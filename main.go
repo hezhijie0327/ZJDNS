@@ -1034,13 +1034,6 @@ func (ma *MetricsAPI) Start(port string) error {
 
 	if ma.tlsConfig != nil {
 		ma.server.TLSConfig = ma.tlsConfig
-		LogInfo("METRICS: HTTPS metrics server started on port %s, via: %s", port, MetricsPath)
-		return ma.server.ListenAndServeTLS("", "")
-	}
-
-	LogInfo("METRICS: HTTP metrics server started on port %s, via: %s", port, MetricsPath)
-
-	if ma.tlsConfig != nil {
 		return ma.server.ListenAndServeTLS("", "")
 	}
 	return ma.server.ListenAndServe()
@@ -4617,7 +4610,7 @@ func (s *DNSServer) Start() error {
 		go func() {
 			defer wg.Done()
 			defer HandlePanic("metrics API server")
-			LogInfo("METRICS: metrics API server started on port %s, via: %s, tls: %t", s.config.Server.Metrics, MetricsPath, s.metricsAPI.tlsConfig != nil)
+			LogInfo("METRICS: metrics server enabled on: %s, via: %s, tls: %t", s.config.Server.Metrics, MetricsPath, s.metricsAPI.tlsConfig != nil)
 			if err := s.metricsAPI.Start(s.config.Server.Metrics); err != nil {
 				errChan <- fmt.Errorf("metrics API startup: %w", err)
 			}
