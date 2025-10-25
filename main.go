@@ -59,7 +59,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.3"
+	Version    = "1.4.4"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -1955,6 +1955,7 @@ func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
 	cm := &CIDRManager{}
 	rules := make(map[string]*CIDRRule)
 	matchCache := make(map[string]*CIDRMatchInfo)
+	cm.rules.Store(rules) // Initialize with empty map
 	cm.matchCache.Store(matchCache)
 
 	for _, config := range configs {
@@ -4766,8 +4767,11 @@ func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, rec
 // =============================================================================
 
 func NewQueryManager(server *DNSServer) *QueryManager {
+	upstream := &UpstreamHandler{}
+	upstream.servers.Store([]*UpstreamServer{}) // Initialize with empty slice
+
 	return &QueryManager{
-		upstream: &UpstreamHandler{},
+		upstream: upstream,
 		recursive: &RecursiveResolver{
 			server:        server,
 			rootServerMgr: server.rootServerMgr,
