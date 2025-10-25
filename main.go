@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"maps"
@@ -32,6 +33,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -5240,7 +5242,20 @@ func getVersion() string {
 }
 
 func NormalizeDomain(domain string) string {
-	return strings.ToLower(strings.TrimSuffix(domain, "."))
+	if domain == "" {
+		return ""
+	}
+
+	if len(domain) > 0 && domain[len(domain)-1] != '.' {
+		lower := strings.ToLower(domain)
+		if lower == domain {
+			return domain
+		}
+		return lower
+	}
+
+	domain = strings.TrimSuffix(domain, ".")
+	return strings.ToLower(domain)
 }
 
 func IsSecureProtocol(protocol string) bool {
@@ -5407,21 +5422,37 @@ func ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
 }
 
 func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC bool, globalPrefix string) string {
-	key := globalPrefix + RedisPrefixDNS +
-		fmt.Sprintf("%s:%d:%d", NormalizeDomain(question.Name), question.Qtype, question.Qclass)
+	var buf strings.Builder
+	buf.Grow(128)
+
+	buf.WriteString(globalPrefix)
+	buf.WriteString(RedisPrefixDNS)
+
+	buf.WriteString(NormalizeDomain(question.Name))
+	buf.WriteByte(':')
+
+	buf.WriteString(strconv.FormatUint(uint64(question.Qtype), 10))
+	buf.WriteByte(':')
+	buf.WriteString(strconv.FormatUint(uint64(question.Qclass), 10))
 
 	if ecs != nil {
-		key += fmt.Sprintf(":%s/%d", ecs.Address.String(), ecs.SourcePrefix)
+		buf.WriteString(":ecs:")
+		buf.WriteString(ecs.Address.String())
+		buf.WriteByte('/')
+		buf.WriteString(strconv.FormatUint(uint64(ecs.SourcePrefix), 10))
 	}
 
 	if clientRequestedDNSSEC {
-		key += ":dnssec"
+		buf.WriteString(":dnssec")
 	}
 
-	if len(key) > 512 {
-		key = fmt.Sprintf("hash:%x", key)[:512]
+	result := buf.String()
+	if len(result) > 512 {
+		hash := fnv.New64a()
+		hash.Write([]byte(result))
+		return fmt.Sprintf("h:%x", hash.Sum64())
 	}
-	return key
+	return result
 }
 
 func calculateTTL(rrs []dns.RR) int {
