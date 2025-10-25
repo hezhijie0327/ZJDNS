@@ -1743,7 +1743,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	var entry CacheEntry
 	// Use binary serialization only for maximum performance
-	if err := entry.DeserializeBinary([]byte(data)); err != nil {
+	if err := deserializeFromBinary([]byte(data), entry); err != nil {
 		// Invalid cache entry - remove it
 		rc.wg.Add(1)
 		go func() {
@@ -1767,7 +1767,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
 			defer updateCancel()
 			// Use binary serialization only for maximum performance
-			data, err := entry.SerializeBinary()
+			data, err := serializeToBinary(entry)
 			if err != nil {
 				LogWarn("CACHE: Binary serialization failed, skipping update: %v", err)
 				return
@@ -1810,7 +1810,7 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 	}
 
 	// Use binary serialization only for maximum performance
-	data, err := entry.SerializeBinary()
+	data, err := serializeToBinary(entry)
 	if err != nil {
 		LogWarn("CACHE: Binary serialization failed, skipping cache write: %v", err)
 		return
@@ -1908,24 +1908,28 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 	return nil
 }
 
-// SerializeBinary efficiently serializes CacheEntry to binary format
-func (ce *CacheEntry) SerializeBinary() ([]byte, error) {
+// =============================================================================
+// Serialization Helper Functions
+// =============================================================================
+
+// serializeToBinary efficiently serializes any value to binary format using gob
+func serializeToBinary(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	encoder := gob.NewEncoder(&buf)
 
-	if err := encoder.Encode(ce); err != nil {
+	if err := encoder.Encode(v); err != nil {
 		return nil, fmt.Errorf("binary encode: %w", err)
 	}
 
 	return buf.Bytes(), nil
 }
 
-// DeserializeBinary efficiently deserializes CacheEntry from binary format
-func (ce *CacheEntry) DeserializeBinary(data []byte) error {
+// deserializeFromBinary efficiently deserializes binary data to any value using gob
+func deserializeFromBinary(data []byte, v any) error {
 	buf := bytes.NewReader(data)
 	decoder := gob.NewDecoder(buf)
 
-	if err := decoder.Decode(ce); err != nil {
+	if err := decoder.Decode(v); err != nil {
 		return fmt.Errorf("binary decode: %w", err)
 	}
 
@@ -2660,7 +2664,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 			if err == nil {
 				var result SpeedResult
 				// Use binary serialization only for maximum performance
-				if result.DeserializeBinary([]byte(data)) == nil {
+				if deserializeFromBinary([]byte(data), result) == nil {
 					if time.Since(result.Timestamp) < st.cacheTTL {
 						results[ip] = &result
 						continue
@@ -2689,7 +2693,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 		for ip, result := range newResults {
 			key := st.keyPrefix + ip
 			// Use binary serialization only for maximum performance
-			data, err := result.SerializeBinary()
+			data, err := serializeToBinary(result)
 			if err != nil {
 				LogWarn("SPEEDTEST: Binary serialization failed for %s: %v", ip, err)
 				continue
@@ -2880,30 +2884,6 @@ func (st *SpeedTestManager) pingWithUDP(ip, port string, timeout time.Duration) 
 	latency := time.Since(start)
 	_ = conn.Close()
 	return latency
-}
-
-// SerializeBinary efficiently serializes SpeedResult to binary format
-func (sr *SpeedResult) SerializeBinary() ([]byte, error) {
-	var buf bytes.Buffer
-	encoder := gob.NewEncoder(&buf)
-
-	if err := encoder.Encode(sr); err != nil {
-		return nil, fmt.Errorf("binary encode: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-// DeserializeBinary efficiently deserializes SpeedResult from binary format
-func (sr *SpeedResult) DeserializeBinary(data []byte) error {
-	buf := bytes.NewReader(data)
-	decoder := gob.NewDecoder(buf)
-
-	if err := decoder.Decode(sr); err != nil {
-		return fmt.Errorf("binary decode: %w", err)
-	}
-
-	return nil
 }
 
 // =============================================================================
