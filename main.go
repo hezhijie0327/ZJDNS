@@ -397,6 +397,13 @@ type RootServerWithLatency struct {
 	Reachable bool
 }
 
+// RootServerSortResult contains both the sorted servers and the sort timestamp
+// This ensures atomic consistency when reading both values together
+type RootServerSortResult struct {
+	SortedServers []RootServerWithLatency
+	SortTime      time.Time
+}
+
 type SpeedTestManager struct {
 	timeout     time.Duration
 	concurrency int
@@ -410,11 +417,10 @@ type SpeedTestManager struct {
 }
 
 type RootServerManager struct {
-	servers      []string
-	speedTester  *SpeedTestManager
-	sorted       atomic.Value // []RootServerWithLatency
-	lastSortTime atomic.Value // time.Time
-	needsSpeed   bool
+	servers     []string
+	speedTester *SpeedTestManager
+	sortResult  atomic.Value // *RootServerSortResult
+	needsSpeed  bool
 }
 
 // CIDR Management Types
@@ -2756,8 +2762,12 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 			Reachable: false,
 		}
 	}
-	rsm.sorted.Store(sorted)
-	rsm.lastSortTime.Store(time.Time{}) // Initialize with zero time
+	// Initialize with default values - ensures atomic consistency from startup
+	initialResult := &RootServerSortResult{
+		SortedServers: sorted,
+		SortTime:      time.Time{}, // Zero time indicates no sorting has occurred yet
+	}
+	rsm.sortResult.Store(initialResult)
 
 	if needsRecursive {
 		dnsSpeedTestConfig := config
@@ -2778,12 +2788,26 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 }
 
 func (rsm *RootServerManager) GetOptimalRootServers() []RootServerWithLatency {
-	if sorted, ok := rsm.sorted.Load().([]RootServerWithLatency); ok {
-		result := make([]RootServerWithLatency, len(sorted))
-		copy(result, sorted)
-		return result
+	// Load the sort result with type checking and fallback
+	if result, ok := rsm.sortResult.Load().(*RootServerSortResult); ok && result != nil {
+		// Create a copy to avoid race conditions
+		serversCopy := make([]RootServerWithLatency, len(result.SortedServers))
+		copy(serversCopy, result.SortedServers)
+		return serversCopy
 	}
+
+	// Fallback: return empty slice if no data is available
+	// This prevents runtime crashes and ensures graceful degradation
 	return []RootServerWithLatency{}
+}
+
+// GetLastSortTime returns the timestamp of the last sort operation
+// Returns zero time.Time if no sort has been performed yet
+func (rsm *RootServerManager) GetLastSortTime() time.Time {
+	if result, ok := rsm.sortResult.Load().(*RootServerSortResult); ok && result != nil {
+		return result.SortTime
+	}
+	return time.Time{} // Return zero time as fallback
 }
 
 func (rsm *RootServerManager) sortServersBySpeed() {
@@ -2797,8 +2821,13 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 	results := rsm.speedTester.speedTest(ips)
 	sortedWithLatency := SortBySpeedResultWithLatency(rsm.servers, results)
 
-	rsm.sorted.Store(sortedWithLatency)
-	rsm.lastSortTime.Store(time.Now())
+	// Store both the sorted servers and timestamp atomically as one unit
+	// This ensures consistency when reading both values together
+	sortResult := &RootServerSortResult{
+		SortedServers: sortedWithLatency,
+		SortTime:      time.Now(),
+	}
+	rsm.sortResult.Store(sortResult)
 }
 
 func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
