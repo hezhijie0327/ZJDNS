@@ -789,20 +789,7 @@ func (mc *MetricsCollector) RecordQuery(protocol string) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 
-	switch protocol {
-	case "udp":
-		mc.UDP.Queries++
-	case "tcp":
-		mc.TCP.Queries++
-	case "dot":
-		mc.DoT.Queries++
-	case "doq":
-		mc.DoQ.Queries++
-	case "doh":
-		mc.DoH.Queries++
-	case "doh3":
-		mc.DoH3.Queries++
-	}
+	mc.getProtocolStats(protocol).Queries++
 }
 
 // RecordResponse records a DNS response for a specific protocol
@@ -810,29 +797,11 @@ func (mc *MetricsCollector) RecordResponse(protocol string, success bool, respon
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 
-	// Update protocol-specific response metrics
-	var protocolMetrics *ProtocolStats
-	switch protocol {
-	case "udp":
-		protocolMetrics = &mc.UDP
-	case "tcp":
-		protocolMetrics = &mc.TCP
-	case "dot":
-		protocolMetrics = &mc.DoT
-	case "doq":
-		protocolMetrics = &mc.DoQ
-	case "doh":
-		protocolMetrics = &mc.DoH
-	case "doh3":
-		protocolMetrics = &mc.DoH3
-	}
-
-	if protocolMetrics != nil {
-		if success {
-			protocolMetrics.Success++
-		} else {
-			protocolMetrics.Failed++
-		}
+	protocolMetrics := mc.getProtocolStats(protocol)
+	if success {
+		protocolMetrics.Success++
+	} else {
+		protocolMetrics.Failed++
 	}
 
 	// Update response time metrics
@@ -858,6 +827,17 @@ func (mc *MetricsCollector) RecordCacheMiss() {
 	mc.CacheMisses++
 }
 
+// RecordCacheOperation records cache operation (hit or miss)
+func (mc *MetricsCollector) RecordCacheOperation(isHit bool) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	if isHit {
+		mc.CacheHits++
+	} else {
+		mc.CacheMisses++
+	}
+}
+
 // RecordTraffic records bytes sent/received
 func (mc *MetricsCollector) RecordTraffic(bytesReceived, bytesSent uint64) {
 	mc.mu.Lock()
@@ -866,16 +846,53 @@ func (mc *MetricsCollector) RecordTraffic(bytesReceived, bytesSent uint64) {
 	mc.BytesSent += bytesSent
 }
 
-// RecordConnection records a new connection
-// RecordTimeout records a timeout error (included in failed responses)
-func (mc *MetricsCollector) RecordTimeout() {
-	// Timeout is already counted as a failed response in RecordResponse
+// RecordMultipleMetrics records multiple metrics in a single lock operation
+func (mc *MetricsCollector) RecordMultipleMetrics(
+	protocol string,
+	success bool,
+	responseTime time.Duration,
+	bytesReceived, bytesSent uint64,
+	cacheHit bool,
+) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+
+	// Protocol stats
+	stats := mc.getProtocolStats(protocol)
+	stats.Queries++
+	if success {
+		stats.Success++
+	} else {
+		stats.Failed++
+	}
+
+	// Traffic
+	mc.BytesReceived += bytesReceived
+	mc.BytesSent += bytesSent
+
+	// Cache
+	if cacheHit {
+		mc.CacheHits++
+	} else {
+		mc.CacheMisses++
+	}
+
+	// Response time
+	if responseTime > mc.MaxResponseTime {
+		mc.MaxResponseTime = responseTime
+	}
+	mc.AverageResponseTime = (mc.AverageResponseTime + responseTime) / 2
 }
 
+// RecordTimeout records a timeout error (included in failed responses)
+// Note: Timeout is already counted as a failed response in RecordResponse
+// This function is kept for backward compatibility but does nothing
+func (mc *MetricsCollector) RecordTimeout() {}
+
 // RecordHijackDetection records a DNS hijacking detection
-func (mc *MetricsCollector) RecordHijackDetection() {
-	// Detection is already handled in security prevention metrics
-}
+// Note: Detection is already handled in security prevention metrics
+// This function is kept for backward compatibility but does nothing
+func (mc *MetricsCollector) RecordHijackDetection() {}
 
 // RecordHijackPrevented records a successful hijack prevention
 func (mc *MetricsCollector) RecordHijackPrevented() {
@@ -905,29 +922,62 @@ func (mc *MetricsCollector) getProtocolSuccessRate(p ProtocolStats) float64 {
 	return 0
 }
 
+// getProtocolStats returns a pointer to the protocol stats for the given protocol
+func (mc *MetricsCollector) getProtocolStats(protocol string) *ProtocolStats {
+	switch protocol {
+	case "udp":
+		return &mc.UDP
+	case "tcp":
+		return &mc.TCP
+	case "dot":
+		return &mc.DoT
+	case "doq":
+		return &mc.DoQ
+	case "doh":
+		return &mc.DoH
+	case "doh3":
+		return &mc.DoH3
+	default:
+		// Return a safe fallback - this should never happen with valid protocols
+		return &mc.UDP
+	}
+}
+
+// buildProtocolMetrics creates ProtocolQueryMetrics from ProtocolStats
+func (mc *MetricsCollector) buildProtocolMetrics(stats ProtocolStats) ProtocolQueryMetrics {
+	return ProtocolQueryMetrics{
+		Queries:     stats.Queries,
+		Success:     stats.Success,
+		Failed:      stats.Failed,
+		SuccessRate: mc.getProtocolSuccessRate(stats),
+	}
+}
+
+// calculateHitRate calculates hit rate from hits and misses
+func calculateHitRate(hits, misses uint64) float64 {
+	total := hits + misses
+	if total > 0 {
+		return float64(hits) / float64(total) * 100
+	}
+	return 0
+}
+
+// calculateQPS calculates queries per second
+func calculateQPS(totalQueries uint64, uptime time.Duration) float64 {
+	if totalQueries > 0 {
+		return float64(totalQueries) / uptime.Seconds()
+	}
+	return 0
+}
+
 // GetMetrics returns current metrics
 func (mc *MetricsCollector) GetMetrics() MetricsResponse {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
 
-	// Calculate uptime
+	// Calculate metrics once
 	uptime := time.Since(mc.startTime)
-
-	// Calculate QPS
 	totalQueries := mc.getTotalQueries()
-	var qps float64
-	if totalQueries > 0 {
-		qps = float64(totalQueries) / uptime.Seconds()
-	}
-
-	// Calculate cache hit rate
-	var cacheHitRate float64
-	totalCacheRequests := mc.CacheHits + mc.CacheMisses
-	if totalCacheRequests > 0 {
-		cacheHitRate = float64(mc.CacheHits) / float64(totalCacheRequests) * 100
-	}
-
-	// Get memory stats
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
@@ -953,53 +1003,23 @@ func (mc *MetricsCollector) GetMetrics() MetricsResponse {
 			},
 		},
 		QueryStats: QueryMetricsStats{
-			UDP: ProtocolQueryMetrics{
-				Queries:     mc.UDP.Queries,
-				Success:     mc.UDP.Success,
-				Failed:      mc.UDP.Failed,
-				SuccessRate: mc.getProtocolSuccessRate(mc.UDP),
-			},
-			TCP: ProtocolQueryMetrics{
-				Queries:     mc.TCP.Queries,
-				Success:     mc.TCP.Success,
-				Failed:      mc.TCP.Failed,
-				SuccessRate: mc.getProtocolSuccessRate(mc.TCP),
-			},
-			DoT: ProtocolQueryMetrics{
-				Queries:     mc.DoT.Queries,
-				Success:     mc.DoT.Success,
-				Failed:      mc.DoT.Failed,
-				SuccessRate: mc.getProtocolSuccessRate(mc.DoT),
-			},
-			DoQ: ProtocolQueryMetrics{
-				Queries:     mc.DoQ.Queries,
-				Success:     mc.DoQ.Success,
-				Failed:      mc.DoQ.Failed,
-				SuccessRate: mc.getProtocolSuccessRate(mc.DoQ),
-			},
-			DoH: ProtocolQueryMetrics{
-				Queries:     mc.DoH.Queries,
-				Success:     mc.DoH.Success,
-				Failed:      mc.DoH.Failed,
-				SuccessRate: mc.getProtocolSuccessRate(mc.DoH),
-			},
-			DoH3: ProtocolQueryMetrics{
-				Queries:     mc.DoH3.Queries,
-				Success:     mc.DoH3.Success,
-				Failed:      mc.DoH3.Failed,
-				SuccessRate: mc.getProtocolSuccessRate(mc.DoH3),
-			},
+			UDP:  mc.buildProtocolMetrics(mc.UDP),
+			TCP:  mc.buildProtocolMetrics(mc.TCP),
+			DoT:  mc.buildProtocolMetrics(mc.DoT),
+			DoQ:  mc.buildProtocolMetrics(mc.DoQ),
+			DoH:  mc.buildProtocolMetrics(mc.DoH),
+			DoH3: mc.buildProtocolMetrics(mc.DoH3),
 		},
 		Performance: PerformanceStats{
 			AvgResponseTime:  mc.AverageResponseTime.String(),
 			MaxResponseTime:  mc.MaxResponseTime.String(),
-			QueriesPerSecond: qps,
+			QueriesPerSecond: calculateQPS(totalQueries, uptime),
 		},
 		Features: FeaturesMetrics{
 			Cache: CacheMetrics{
 				Hits:    mc.CacheHits,
 				Misses:  mc.CacheMisses,
-				HitRate: cacheHitRate,
+				HitRate: calculateHitRate(mc.CacheHits, mc.CacheMisses),
 			},
 			Hijack:  mc.HijackPrevented,
 			Rewrite: mc.RewriteMatches,
@@ -1026,7 +1046,7 @@ func (ma *MetricsAPI) Start(port string) error {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", ma.handleMetricsJSON)
+	mux.HandleFunc(MetricsPath, ma.handleMetricsJSON)
 
 	ma.server = &http.Server{
 		Addr:         ":" + port,
@@ -1034,15 +1054,19 @@ func (ma *MetricsAPI) Start(port string) error {
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
+		TLSConfig:    ma.tlsConfig,
 	}
+
+	protocol := "HTTP"
+	if ma.tlsConfig != nil {
+		protocol = "HTTPS"
+	}
+
+	LogInfo("METRICS: %s metrics server started on port %s, via: %s", protocol, port, MetricsPath)
 
 	if ma.tlsConfig != nil {
-		ma.server.TLSConfig = ma.tlsConfig
-		LogInfo("METRICS: HTTPS metrics server started on port %s, via: %s", port, MetricsPath)
 		return ma.server.ListenAndServeTLS("", "")
 	}
-
-	LogInfo("METRICS: HTTP metrics server started on port %s, via: %s", port, MetricsPath)
 	return ma.server.ListenAndServe()
 }
 
@@ -1056,6 +1080,16 @@ func (ma *MetricsAPI) Stop() error {
 	return nil
 }
 
+// writeJSONResponse writes a JSON response with CORS headers
+func (ma *MetricsAPI) writeJSONResponse(w http.ResponseWriter, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
+}
+
 // handleMetricsJSON handles JSON metrics endpoint
 func (ma *MetricsAPI) handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -1064,14 +1098,7 @@ func (ma *MetricsAPI) handleMetricsJSON(w http.ResponseWriter, r *http.Request) 
 	}
 
 	metrics := ma.collector.GetMetrics()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	if err := json.NewEncoder(w).Encode(metrics); err != nil {
-		http.Error(w, "Failed to encode metrics", http.StatusInternalServerError)
-		return
-	}
+	ma.writeJSONResponse(w, metrics)
 }
 
 // bToMb converts bytes to megabytes
