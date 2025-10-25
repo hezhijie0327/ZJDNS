@@ -379,9 +379,8 @@ type RequestTracker struct {
 	Domain       string
 	QueryType    string
 	ClientIP     string
-	Upstream     string
+	Upstream     atomic.Value // string
 	ResponseTime time.Duration
-	mu           sync.Mutex
 }
 
 // Speed Test Types
@@ -398,6 +397,13 @@ type RootServerWithLatency struct {
 	Reachable bool
 }
 
+// RootServerSortResult contains both the sorted servers and the sort timestamp
+// This ensures atomic consistency when reading both values together
+type RootServerSortResult struct {
+	SortedServers []RootServerWithLatency
+	SortTime      time.Time
+}
+
 type SpeedTestManager struct {
 	timeout     time.Duration
 	concurrency int
@@ -411,12 +417,10 @@ type SpeedTestManager struct {
 }
 
 type RootServerManager struct {
-	servers      []string
-	speedTester  *SpeedTestManager
-	sorted       []RootServerWithLatency
-	lastSortTime time.Time
-	mu           sync.RWMutex
-	needsSpeed   bool
+	servers     []string
+	speedTester *SpeedTestManager
+	sortResult  atomic.Value // *RootServerSortResult
+	needsSpeed  bool
 }
 
 // CIDR Management Types
@@ -2750,14 +2754,20 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 		needsSpeed: needsRecursive,
 	}
 
-	rsm.sorted = make([]RootServerWithLatency, len(rsm.servers))
+	sorted := make([]RootServerWithLatency, len(rsm.servers))
 	for i, server := range rsm.servers {
-		rsm.sorted[i] = RootServerWithLatency{
+		sorted[i] = RootServerWithLatency{
 			Server:    server,
 			Latency:   UnreachableLatency,
 			Reachable: false,
 		}
 	}
+	// Initialize with default values - ensures atomic consistency from startup
+	initialResult := &RootServerSortResult{
+		SortedServers: sorted,
+		SortTime:      time.Time{}, // Zero time indicates no sorting has occurred yet
+	}
+	rsm.sortResult.Store(initialResult)
 
 	if needsRecursive {
 		dnsSpeedTestConfig := config
@@ -2778,11 +2788,26 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 }
 
 func (rsm *RootServerManager) GetOptimalRootServers() []RootServerWithLatency {
-	rsm.mu.RLock()
-	defer rsm.mu.RUnlock()
-	result := make([]RootServerWithLatency, len(rsm.sorted))
-	copy(result, rsm.sorted)
-	return result
+	// Load the sort result with type checking and fallback
+	if result, ok := rsm.sortResult.Load().(*RootServerSortResult); ok && result != nil {
+		// Create a copy to avoid race conditions
+		serversCopy := make([]RootServerWithLatency, len(result.SortedServers))
+		copy(serversCopy, result.SortedServers)
+		return serversCopy
+	}
+
+	// Fallback: return empty slice if no data is available
+	// This prevents runtime crashes and ensures graceful degradation
+	return []RootServerWithLatency{}
+}
+
+// GetLastSortTime returns the timestamp of the last sort operation
+// Returns zero time.Time if no sort has been performed yet
+func (rsm *RootServerManager) GetLastSortTime() time.Time {
+	if result, ok := rsm.sortResult.Load().(*RootServerSortResult); ok && result != nil {
+		return result.SortTime
+	}
+	return time.Time{} // Return zero time as fallback
 }
 
 func (rsm *RootServerManager) sortServersBySpeed() {
@@ -2796,10 +2821,13 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 	results := rsm.speedTester.speedTest(ips)
 	sortedWithLatency := SortBySpeedResultWithLatency(rsm.servers, results)
 
-	rsm.mu.Lock()
-	rsm.sorted = sortedWithLatency
-	rsm.lastSortTime = time.Now()
-	rsm.mu.Unlock()
+	// Store both the sorted servers and timestamp atomically as one unit
+	// This ensures consistency when reading both values together
+	sortResult := &RootServerSortResult{
+		SortedServers: sortedWithLatency,
+		SortTime:      time.Now(),
+	}
+	rsm.sortResult.Store(sortResult)
 }
 
 func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
@@ -3711,22 +3739,21 @@ func (tm *TLSManager) shutdown() error {
 // =============================================================================
 
 func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
-	return &RequestTracker{
+	rt := &RequestTracker{
 		ID:        fmt.Sprintf("%x", time.Now().UnixNano()&0xFFFFFF),
 		StartTime: time.Now(),
 		Domain:    domain,
 		QueryType: qtype,
 		ClientIP:  clientIP,
 	}
+	rt.Upstream.Store("") // Initialize with empty string
+	return rt
 }
 
 func (rt *RequestTracker) AddStep(step string, args ...any) {
 	if rt == nil || globalLog.GetLevel() < Debug {
 		return
 	}
-
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
 
 	timestamp := time.Since(rt.StartTime)
 	stepMsg := fmt.Sprintf("[%v] %s", timestamp.Truncate(time.Microsecond), fmt.Sprintf(step, args...))
@@ -3739,7 +3766,7 @@ func (rt *RequestTracker) Finish() {
 	}
 	rt.ResponseTime = time.Since(rt.StartTime)
 	if globalLog.GetLevel() >= Info {
-		upstream := rt.Upstream
+		upstream, _ := rt.Upstream.Load().(string)
 		if upstream == "" {
 			upstream = RecursiveIndicator
 		}
@@ -4261,7 +4288,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 	answer, authority, additional, validated, ecsResponse, usedServer, err := s.queryMgr.Query(question, ecsOpt)
 
 	if tracker != nil {
-		tracker.Upstream = usedServer
+		tracker.Upstream.Store(usedServer)
 	}
 
 	if err != nil {
