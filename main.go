@@ -656,7 +656,6 @@ func NewConnPool() *ConnPool {
 		sessionCache:  tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 	}
 
-	pool.wg.Add(1)
 	go pool.cleanupLoop()
 
 	LogInfo("POOL: Connection pool initialized")
@@ -664,7 +663,6 @@ func NewConnPool() *ConnPool {
 }
 
 func (p *ConnPool) cleanupLoop() {
-	defer p.wg.Done()
 	defer HandlePanic("Connection pool cleanup")
 
 	validateTicker := time.NewTicker(ConnValidateEvery)
@@ -973,14 +971,12 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 	p.quicConns.Store(key, entry)
 	p.connCount.Add(1)
 
-	p.wg.Add(1)
 	go p.monitorQUICConn(key, entry, conn)
 
 	return conn, nil
 }
 
 func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.Conn) {
-	defer p.wg.Done()
 	defer HandlePanic("Monitor QUIC connection")
 
 	<-conn.Context().Done()
@@ -3406,9 +3402,7 @@ func (tm *TLSManager) handleDOTConnections() {
 			continue
 		}
 
-		tm.wg.Add(1)
 		go func(c net.Conn) {
-			defer tm.wg.Done()
 			defer HandlePanic("DoT connection handler")
 			defer func() { _ = c.Close() }()
 			tm.handleDOTConnection(c)
@@ -3571,9 +3565,7 @@ func (tm *TLSManager) handleDOQConnections() {
 			continue
 		}
 
-		tm.wg.Add(1)
 		go func(quicConn *quic.Conn) {
-			defer tm.wg.Done()
 			defer HandlePanic("DoQ connection handler")
 			tm.handleDOQConnection(quicConn)
 		}(conn)
@@ -3604,36 +3596,46 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		}
 	}()
 
-	streamWg := sync.WaitGroup{}
-	defer streamWg.Wait()
+	g, streamCtx := errgroup.WithContext(tm.ctx)
 
-	for {
-		select {
-		case <-tm.ctx.Done():
-			return
-		case <-conn.Context().Done():
-			return
-		default:
-		}
+	g.SetLimit(MaxIncomingStreams / 2)
 
-		stream, err := conn.AcceptStream(tm.ctx)
-		if err != nil {
-			return
-		}
+	acceptDone := make(chan struct{})
+	g.Go(func() error {
+		defer close(acceptDone)
+		for {
+			select {
+			case <-tm.ctx.Done():
+				return tm.ctx.Err()
+			case <-conn.Context().Done():
+				return conn.Context().Err()
+			default:
+			}
 
-		if stream == nil {
-			continue
-		}
+			stream, err := conn.AcceptStream(streamCtx)
+			if err != nil {
+				if streamCtx.Err() != nil {
+					return streamCtx.Err()
+				}
+				return err
+			}
 
-		streamWg.Add(1)
-		go func(s *quic.Stream) {
-			defer streamWg.Done()
-			defer HandlePanic("DoQ stream handler")
-			if s != nil {
+			if stream == nil {
+				continue
+			}
+
+			s := stream
+			g.Go(func() error {
+				defer HandlePanic("DoQ stream handler")
 				defer func() { _ = s.Close() }()
 				tm.handleDOQStream(s, conn)
-			}
-		}(stream)
+				return nil
+			})
+		}
+	})
+
+	if err := g.Wait(); err != nil && err != context.Canceled {
+		LogDebug("QUIC: Connection handler error: %v", err)
 	}
 }
 
