@@ -431,12 +431,30 @@ type RootServerManager struct {
 
 // CIDR Management Types
 type CIDRRule struct {
-	tag  string
-	nets []*net.IPNet
+	tag       string
+	nets      []*net.IPNet
+	ipv4Nets  []ipv4Net    // Optimized IPv4 networks for faster matching
+	ipv6Nets  []*net.IPNet // IPv6 networks (keep as IPNet for now)
+	totalNets int          // Cache total number of networks
 }
 
 type CIDRManager struct {
-	rules atomic.Value // map[string]*CIDRRule
+	rules      atomic.Value // map[string]*CIDRRule
+	matchCache atomic.Value // map[string]*CIDRMatchInfo - cache for parsed match tags
+}
+
+// CIDRMatchInfo caches parsed match tag information
+type CIDRMatchInfo struct {
+	Tag      string
+	Negate   bool
+	Original string
+}
+
+// Optimized IPv4 network representation
+type ipv4Net struct {
+	ip     uint32 // Network address in uint32
+	mask   uint32 // Network mask in uint32
+	prefix uint8  // Prefix length
 }
 
 // Rewrite Management Type
@@ -1936,6 +1954,8 @@ func deserializeFromBinary(data []byte, v any) error {
 func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
 	cm := &CIDRManager{}
 	rules := make(map[string]*CIDRRule)
+	matchCache := make(map[string]*CIDRMatchInfo)
+	cm.matchCache.Store(matchCache)
 
 	for _, config := range configs {
 		if config.Tag == "" {
@@ -2019,6 +2039,8 @@ func (cm *CIDRManager) loadCIDRConfig(config CIDRConfig) (*CIDRRule, error) {
 		return nil, fmt.Errorf("no valid CIDR entries for tag '%s'", config.Tag)
 	}
 
+	// Preprocess networks for optimization
+	rule.preprocessNetworks()
 	return rule, nil
 }
 
@@ -2027,32 +2049,157 @@ func (cm *CIDRManager) MatchIP(ip net.IP, matchTag string) (matched bool, exists
 		return true, true
 	}
 
-	negate := strings.HasPrefix(matchTag, "!")
-	tag := strings.TrimPrefix(matchTag, "!")
+	// Get or create cached match info
+	matchInfo := cm.getMatchInfo(matchTag)
+	if matchInfo == nil {
+		return false, false
+	}
 
 	rules := cm.rules.Load().(map[string]*CIDRRule)
-	rule, exists := rules[tag]
+	rule, exists := rules[matchInfo.Tag]
 
 	if !exists {
 		return false, false
 	}
 
 	inList := rule.contains(ip)
-	if negate {
+	if matchInfo.Negate {
 		return !inList, true
 	}
 	return inList, true
+}
+
+// getMatchInfo retrieves or creates cached match tag information
+func (cm *CIDRManager) getMatchInfo(matchTag string) *CIDRMatchInfo {
+	matchCache := cm.matchCache.Load().(map[string]*CIDRMatchInfo)
+
+	// Check cache first
+	if info, exists := matchCache[matchTag]; exists {
+		return info
+	}
+
+	// Parse and cache the match tag
+	negate := strings.HasPrefix(matchTag, "!")
+	tag := strings.TrimPrefix(matchTag, "!")
+
+	info := &CIDRMatchInfo{
+		Tag:      tag,
+		Negate:   negate,
+		Original: matchTag,
+	}
+
+	// Update cache (note: this is safe during initialization only)
+	// For runtime updates, we'd need a more sophisticated approach
+	newCache := make(map[string]*CIDRMatchInfo, len(matchCache)+1)
+	maps.Copy(newCache, matchCache)
+	newCache[matchTag] = info
+	cm.matchCache.Store(newCache)
+
+	return info
 }
 
 // =============================================================================
 // CIDRRule Implementation
 // =============================================================================
 
+// preprocessNetworks optimizes networks for faster matching
+func (r *CIDRRule) preprocessNetworks() {
+	if r == nil {
+		return
+	}
+
+	r.totalNets = len(r.nets)
+	r.ipv4Nets = make([]ipv4Net, 0, r.totalNets)
+	r.ipv6Nets = make([]*net.IPNet, 0, r.totalNets)
+
+	for _, ipNet := range r.nets {
+		if ipNet == nil {
+			continue
+		}
+
+		// Check if it's IPv4
+		if ipNet.IP.To4() != nil {
+			// Convert to optimized IPv4 representation
+			if ipv4Net := toIPv4Net(ipNet); ipv4Net != nil {
+				r.ipv4Nets = append(r.ipv4Nets, *ipv4Net)
+			}
+		} else {
+			// Keep IPv6 as is for now
+			r.ipv6Nets = append(r.ipv6Nets, ipNet)
+		}
+	}
+
+	// Sort IPv4 networks by prefix length (longest prefix first) for optimization
+	sort.Slice(r.ipv4Nets, func(i, j int) bool {
+		return r.ipv4Nets[i].prefix > r.ipv4Nets[j].prefix
+	})
+}
+
+// toIPv4Net converts a net.IPNet to optimized ipv4Net representation
+func toIPv4Net(ipNet *net.IPNet) *ipv4Net {
+	if ipNet == nil || ipNet.IP.To4() == nil {
+		return nil
+	}
+
+	ipv4 := ipNet.IP.To4()
+	if ipv4 == nil {
+		return nil
+	}
+
+	// Convert IP to uint32 (network byte order)
+	ipUint := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
+
+	// Convert mask to uint32
+	maskSize, _ := ipNet.Mask.Size()
+	var maskUint uint32
+	if maskSize <= 32 {
+		maskUint = ^uint32(0) << (32 - maskSize)
+	}
+
+	return &ipv4Net{
+		ip:     ipUint & maskUint, // Ensure network address
+		mask:   maskUint,
+		prefix: uint8(maskSize),
+	}
+}
+
+// contains optimized IP matching function
 func (r *CIDRRule) contains(ip net.IP) bool {
 	if r == nil || ip == nil {
 		return false
 	}
-	for _, ipNet := range r.nets {
+
+	// Fast path: IPv4 using optimized representation
+	if ipv4 := ip.To4(); ipv4 != nil {
+		return r.containsIPv4(ipv4)
+	}
+
+	// IPv6 path: use original method
+	return r.containsIPv6(ip)
+}
+
+// containsIPv4 optimized IPv4 matching using uint32 operations
+func (r *CIDRRule) containsIPv4(ipv4 net.IP) bool {
+	if len(r.ipv4Nets) == 0 {
+		return false
+	}
+
+	// Convert IP to uint32
+	ipUint := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
+
+	// Check against optimized IPv4 networks
+	for _, net := range r.ipv4Nets {
+		if (ipUint & net.mask) == net.ip {
+			return true
+		}
+	}
+
+	return false
+}
+
+// containsIPv6 handles IPv6 matching (kept as original method for now)
+func (r *CIDRRule) containsIPv6(ip net.IP) bool {
+	for _, ipNet := range r.ipv6Nets {
 		if ipNet.Contains(ip) {
 			return true
 		}
