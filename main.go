@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -13,10 +14,12 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"maps"
@@ -30,6 +33,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,13 +144,14 @@ const (
 	RootServerRefresh  = 900 * time.Second
 
 	// Redis Configuration
-	RedisPoolSize     = 3
-	RedisMinIdle      = 1
-	RedisMaxRetries   = 2
-	RedisPoolTimeout  = 2 * time.Second
-	RedisReadTimeout  = 2 * time.Second
-	RedisWriteTimeout = 2 * time.Second
-	RedisDialTimeout  = 2 * time.Second
+	RedisPoolSize        = 3
+	RedisMinIdle         = 1
+	RedisMaxRetries      = 2
+	RedisPoolTimeout     = 2 * time.Second
+	RedisReadTimeout     = 2 * time.Second
+	RedisWriteTimeout    = 2 * time.Second
+	RedisDialTimeout     = 2 * time.Second
+	RedisPoolIdleTimeout = 5 * time.Second
 
 	// Redis Key Prefixes
 	RedisPrefixDNS           = "dns:"
@@ -323,6 +328,7 @@ type RedisCache struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	closed int32
+	wg     sync.WaitGroup
 }
 
 // EDNS and DNS Options
@@ -436,8 +442,8 @@ type CIDRManager struct {
 
 // Rewrite Management Type
 type RewriteManager struct {
-	rules []RewriteRule
-	mu    sync.RWMutex
+	rules    atomic.Value // []RewriteRule
+	rulesLen atomic.Int64
 }
 
 // Connection Pool Types
@@ -540,9 +546,8 @@ type UpstreamHandler struct {
 }
 
 type RecursiveResolver struct {
-	server          *DNSServer
-	rootServerMgr   *RootServerManager
-	concurrencyLock chan struct{}
+	server        *DNSServer
+	rootServerMgr *RootServerManager
 }
 
 type CNAMEHandler struct {
@@ -654,7 +659,6 @@ func NewConnPool() *ConnPool {
 		sessionCache:  tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 	}
 
-	pool.wg.Add(1)
 	go pool.cleanupLoop()
 
 	LogInfo("POOL: Connection pool initialized")
@@ -662,7 +666,6 @@ func NewConnPool() *ConnPool {
 }
 
 func (p *ConnPool) cleanupLoop() {
-	defer p.wg.Done()
 	defer HandlePanic("Connection pool cleanup")
 
 	validateTicker := time.NewTicker(ConnValidateEvery)
@@ -1738,10 +1741,12 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	}
 
 	var entry CacheEntry
-	if err := json.Unmarshal([]byte(data), &entry); err != nil {
+	// Use binary serialization only for maximum performance
+	if err := deserializeFromBinary([]byte(data), entry); err != nil {
+		// Invalid cache entry - remove it
 		go func() {
 			defer HandlePanic("Clean corrupted cache")
-			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
+			cleanCtx, cleanCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
 			defer cleanCancel()
 			rc.client.Del(cleanCtx, key)
 		}()
@@ -1754,9 +1759,14 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	go func() {
 		defer HandlePanic("Update access time")
 		if atomic.LoadInt32(&rc.closed) == 0 {
-			updateCtx, updateCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
+			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
 			defer updateCancel()
-			data, _ := json.Marshal(entry)
+			// Use binary serialization only for maximum performance
+			data, err := serializeToBinary(entry)
+			if err != nil {
+				LogWarn("CACHE: Binary serialization failed, skipping update: %v", err)
+				return
+			}
 			rc.client.Set(updateCtx, key, data, redis.KeepTTL)
 		}
 	}()
@@ -1794,8 +1804,10 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		entry.ECSAddress = ecs.Address.String()
 	}
 
-	data, err := json.Marshal(entry)
+	// Use binary serialization only for maximum performance
+	data, err := serializeToBinary(entry)
 	if err != nil {
+		LogWarn("CACHE: Binary serialization failed, skipping cache write: %v", err)
 		return
 	}
 
@@ -1814,6 +1826,20 @@ func (rc *RedisCache) Close() error {
 	LogInfo("CACHE: Shutting down Redis cache")
 
 	rc.cancel()
+
+	// Wait for all goroutines to finish with a timeout
+	done := make(chan struct{})
+	go func() {
+		rc.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		LogDebug("CACHE: All Redis goroutines finished gracefully")
+	case <-time.After(RedisPoolIdleTimeout):
+		LogWarn("CACHE: Redis goroutine shutdown timeout")
+	}
 
 	if err := rc.client.Close(); err != nil {
 		LogError("CACHE: Redis client shutdown failed: %v", err)
@@ -1874,6 +1900,34 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 			Address:      ip,
 		}
 	}
+	return nil
+}
+
+// =============================================================================
+// Serialization Helper Functions
+// =============================================================================
+
+// serializeToBinary efficiently serializes any value to binary format using gob
+func serializeToBinary(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := gob.NewEncoder(&buf)
+
+	if err := encoder.Encode(v); err != nil {
+		return nil, fmt.Errorf("binary encode: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// deserializeFromBinary efficiently deserializes binary data to any value using gob
+func deserializeFromBinary(data []byte, v any) error {
+	buf := bytes.NewReader(data)
+	decoder := gob.NewDecoder(buf)
+
+	if err := decoder.Decode(v); err != nil {
+		return fmt.Errorf("binary decode: %w", err)
+	}
+
 	return nil
 }
 
@@ -2249,13 +2303,13 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 // =============================================================================
 
 func NewRewriteManager() *RewriteManager {
-	return &RewriteManager{rules: make([]RewriteRule, 0, 16)}
+	rm := &RewriteManager{}
+	rm.rules.Store(make([]RewriteRule, 0, 16))
+	rm.rulesLen.Store(0)
+	return rm
 }
 
 func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-
 	validRules := make([]RewriteRule, 0, len(rules))
 	for _, rule := range rules {
 		if len(rule.Name) <= MaxDomainLength {
@@ -2263,9 +2317,14 @@ func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 		}
 	}
 
-	rm.rules = validRules
+	rm.rules.Store(validRules)
+	rm.rulesLen.Store(int64(len(validRules)))
 	LogInfo("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
 	return nil
+}
+
+func (rm *RewriteManager) hasRules() bool {
+	return rm.rulesLen.Load() > 0
 }
 
 func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRewriteResult {
@@ -2279,13 +2338,12 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 		return result
 	}
 
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-
+	// Copy-on-read pattern: get rules snapshot without holding lock
+	rules := rm.rules.Load().([]RewriteRule)
 	domain = NormalizeDomain(domain)
 
-	for i := range rm.rules {
-		rule := &rm.rules[i]
+	for i := range rules {
+		rule := &rules[i]
 		if domain != NormalizeDomain(rule.Name) {
 			continue
 		}
@@ -2345,11 +2403,14 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 		name = dns.Fqdn(record.Name)
 	}
 
+	// Try to create any type of DNS record using dns.NewRR()
+	// This supports ALL DNS record types (MX, NS, SRV, CAA, DNSKEY, etc.)
 	rrStr := fmt.Sprintf("%s %d IN %s %s", name, ttl, record.Type, record.Content)
 	if rr, err := dns.NewRR(rrStr); err == nil {
 		return rr
 	}
 
+	// If direct parsing fails, fall back to RFC3597 format
 	rrType, exists := dns.StringToType[record.Type]
 	if !exists {
 		rrType = 0
@@ -2359,12 +2420,6 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 		Hdr:   dns.RR_Header{Name: name, Rrtype: rrType, Class: dns.ClassINET, Ttl: ttl},
 		Rdata: record.Content,
 	}
-}
-
-func (rm *RewriteManager) hasRules() bool {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	return len(rm.rules) > 0
 }
 
 // =============================================================================
@@ -2385,15 +2440,104 @@ func NewSpeedTestManager(config ServerConfig, redisClient *redis.Client, keyPref
 		methods:     config.Speedtest,
 	}
 	st.initICMP()
+
+	// Start periodic ICMP health check (if ICMP methods are enabled)
+	if len(config.Speedtest) > 0 {
+		go st.icmpHealthCheckLoop()
+	}
+
 	return st
 }
 
 func (st *SpeedTestManager) initICMP() {
+	st.reinitICMP()
+}
+
+func (st *SpeedTestManager) reinitICMP() {
+	// Close existing connections
+	if st.icmpConn4 != nil {
+		_ = st.icmpConn4.Close()
+		st.icmpConn4 = nil
+	}
+	if st.icmpConn6 != nil {
+		_ = st.icmpConn6.Close()
+		st.icmpConn6 = nil
+	}
+
+	// Initialize new connections with proper error handling
 	if conn4, err := icmp.ListenPacket("ip4:icmp", ""); err == nil {
 		st.icmpConn4 = conn4
+		LogDebug("SPEEDTEST: ICMPv4 connection initialized")
+	} else {
+		LogWarn("SPEEDTEST: Failed to initialize ICMPv4 connection: %v", err)
 	}
+
 	if conn6, err := icmp.ListenPacket("ip6:ipv6-icmp", ""); err == nil {
 		st.icmpConn6 = conn6
+		LogDebug("SPEEDTEST: ICMPv6 connection initialized")
+	} else {
+		LogWarn("SPEEDTEST: Failed to initialize ICMPv6 connection: %v", err)
+	}
+}
+
+func (st *SpeedTestManager) getICMPConn(isIPv6 bool) *icmp.PacketConn {
+	var conn *icmp.PacketConn
+	if isIPv6 {
+		conn = st.icmpConn6
+	} else {
+		conn = st.icmpConn4
+	}
+
+	// Check if connection is still valid by attempting to set a deadline
+	if conn != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
+			LogWarn("SPEEDTEST: ICMP connection appears dead, reinitializing: %v", err)
+			go st.reinitICMP() // Reinitialize in background
+			return nil
+		}
+		// Reset the deadline to remove the temporary one
+		_ = conn.SetReadDeadline(time.Time{})
+	}
+
+	return conn
+}
+
+func (st *SpeedTestManager) icmpHealthCheckLoop() {
+	defer HandlePanic("ICMP health check")
+
+	ticker := time.NewTicker(UnreachableLatency)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if atomic.LoadInt32(&st.closed) != 0 {
+				return
+			}
+
+			// Check both ICMP connections
+			if st.icmpConn4 != nil {
+				if err := st.icmpConn4.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
+					LogWarn("SPEEDTEST: ICMPv4 health check failed, reinitializing: %v", err)
+					go st.reinitICMP()
+					continue
+				}
+				_ = st.icmpConn4.SetReadDeadline(time.Time{})
+			}
+
+			if st.icmpConn6 != nil {
+				if err := st.icmpConn6.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
+					LogWarn("SPEEDTEST: ICMPv6 health check failed, reinitializing: %v", err)
+					go st.reinitICMP()
+					continue
+				}
+				_ = st.icmpConn6.SetReadDeadline(time.Time{})
+			}
+
+		case <-time.After(time.Minute): // Safety timeout
+			// If we haven't checked in a minute, exit to avoid goroutine leak
+			return
+		}
 	}
 }
 
@@ -2514,11 +2658,15 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 			data, err := st.redis.Get(ctx, key).Result()
 			if err == nil {
 				var result SpeedResult
-				if json.Unmarshal([]byte(data), &result) == nil {
+				// Use binary serialization only for maximum performance
+				if deserializeFromBinary([]byte(data), result) == nil {
 					if time.Since(result.Timestamp) < st.cacheTTL {
 						results[ip] = &result
 						continue
 					}
+				} else {
+					// Invalid cache entry - skip it
+					continue
 				}
 			}
 			remainingIPs = append(remainingIPs, ip)
@@ -2539,10 +2687,13 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 
 		for ip, result := range newResults {
 			key := st.keyPrefix + ip
-			data, err := json.Marshal(result)
-			if err == nil {
-				st.redis.Set(ctx, key, data, st.cacheTTL)
+			// Use binary serialization only for maximum performance
+			data, err := serializeToBinary(result)
+			if err != nil {
+				LogWarn("SPEEDTEST: Binary serialization failed for %s: %v", ip, err)
+				continue
 			}
+			st.redis.Set(ctx, key, data, st.cacheTTL)
 		}
 	}
 
@@ -2628,17 +2779,17 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 		return -1
 	}
 
-	var conn *icmp.PacketConn
 	var icmpType icmp.Type
+	isIPv6 := dst.IP.To4() == nil
 
-	if dst.IP.To4() != nil {
-		conn = st.icmpConn4
-		icmpType = ipv4.ICMPTypeEcho
-	} else {
-		conn = st.icmpConn6
+	if isIPv6 {
 		icmpType = ipv6.ICMPTypeEchoRequest
+	} else {
+		icmpType = ipv4.ICMPTypeEcho
 	}
 
+	// Get connection with health checking
+	conn := st.getICMPConn(isIPv6)
 	if conn == nil {
 		return -1
 	}
@@ -2658,6 +2809,11 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	start := time.Now()
 
 	if _, err := conn.WriteTo(wb, dst); err != nil {
+		// If write fails, the connection might be dead
+		if !IsTemporaryError(err) {
+			LogWarn("SPEEDTEST: ICMP write failed permanently, triggering reinit: %v", err)
+			go st.reinitICMP()
+		}
 		return -1
 	}
 
@@ -2665,6 +2821,11 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	rb := make([]byte, 1500)
 	n, _, err := conn.ReadFrom(rb)
 	if err != nil {
+		// If read fails due to timeout or connection error, trigger reinit for permanent errors
+		if !IsTemporaryError(err) {
+			LogWarn("SPEEDTEST: ICMP read failed permanently, triggering reinit: %v", err)
+			go st.reinitICMP()
+		}
 		return -1
 	}
 
@@ -3141,51 +3302,56 @@ func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 }
 
 func (tm *TLSManager) Start(httpsPort string) error {
-	serverCount := 2
-	if httpsPort != "" {
-		serverCount += 2
-	}
+	errChan := make(chan error, 1)
 
-	errChan := make(chan error, serverCount)
-	wg := sync.WaitGroup{}
-	wg.Add(serverCount)
-
-	go func() {
-		defer wg.Done()
-		defer HandlePanic("DoT server")
-		if err := tm.startDOTServer(); err != nil {
-			errChan <- fmt.Errorf("DoT startup: %w", err)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		defer HandlePanic("DoQ server")
-		if err := tm.startDOQServer(); err != nil {
-			errChan <- fmt.Errorf("DoQ startup: %w", err)
-		}
-	}()
+	g, ctx := errgroup.WithContext(context.Background())
 
 	if httpsPort != "" {
-		go func() {
-			defer wg.Done()
+		g.Go(func() error {
 			defer HandlePanic("DoH server")
 			if err := tm.startDOHServer(httpsPort); err != nil {
-				errChan <- fmt.Errorf("DoH startup: %w", err)
+				return fmt.Errorf("DoH startup: %w", err)
 			}
-		}()
+			<-ctx.Done()
+			return nil
+		})
 
-		go func() {
-			defer wg.Done()
+		g.Go(func() error {
 			defer HandlePanic("DoH3 server")
 			if err := tm.startDoH3Server(httpsPort); err != nil {
-				errChan <- fmt.Errorf("DoH3 startup: %w", err)
+				return fmt.Errorf("DoH3 startup: %w", err)
 			}
-		}()
+			<-ctx.Done()
+			return nil
+		})
 	}
 
+	g.Go(func() error {
+		defer HandlePanic("DoT server")
+		if err := tm.startDOTServer(); err != nil {
+			return fmt.Errorf("DoT startup: %w", err)
+		}
+		<-ctx.Done()
+		return nil
+	})
+
+	g.Go(func() error {
+		defer HandlePanic("DoQ server")
+		if err := tm.startDOQServer(); err != nil {
+			return fmt.Errorf("DoQ startup: %w", err)
+		}
+		<-ctx.Done()
+		return nil
+	})
+
 	go func() {
-		wg.Wait()
+		defer HandlePanic("TLS manager coordinator")
+		if err := g.Wait(); err != nil {
+			select {
+			case errChan <- err:
+			default:
+			}
+		}
 		close(errChan)
 	}()
 
@@ -3214,9 +3380,7 @@ func (tm *TLSManager) startDOTServer() error {
 	tm.dotListener = tls.NewListener(listener, dotTLSConfig)
 	LogInfo("DOT: DoT server started on port %s", tm.server.config.Server.TLS.Port)
 
-	tm.wg.Add(1)
 	go func() {
-		defer tm.wg.Done()
 		defer HandlePanic("DoT server")
 		tm.handleDOTConnections()
 	}()
@@ -3241,9 +3405,7 @@ func (tm *TLSManager) handleDOTConnections() {
 			continue
 		}
 
-		tm.wg.Add(1)
 		go func(c net.Conn) {
-			defer tm.wg.Done()
 			defer HandlePanic("DoT connection handler")
 			defer func() { _ = c.Close() }()
 			tm.handleDOTConnection(c)
@@ -3378,9 +3540,7 @@ func (tm *TLSManager) startDOQServer() error {
 
 	LogInfo("DOQ: DoQ server started on port %s", tm.server.config.Server.TLS.Port)
 
-	tm.wg.Add(1)
 	go func() {
-		defer tm.wg.Done()
 		defer HandlePanic("DoQ server")
 		tm.handleDOQConnections()
 	}()
@@ -3408,9 +3568,7 @@ func (tm *TLSManager) handleDOQConnections() {
 			continue
 		}
 
-		tm.wg.Add(1)
 		go func(quicConn *quic.Conn) {
-			defer tm.wg.Done()
 			defer HandlePanic("DoQ connection handler")
 			tm.handleDOQConnection(quicConn)
 		}(conn)
@@ -3462,15 +3620,13 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 			continue
 		}
 
-		streamWg.Add(1)
-		go func(s *quic.Stream) {
-			defer streamWg.Done()
+		streamWg.Go(func() {
 			defer HandlePanic("DoQ stream handler")
-			if s != nil {
-				defer func() { _ = s.Close() }()
-				tm.handleDOQStream(s, conn)
+			if stream != nil {
+				defer func() { _ = stream.Close() }()
+				tm.handleDOQStream(stream, conn)
 			}
-		}(stream)
+		})
 	}
 }
 
@@ -3554,9 +3710,7 @@ func (tm *TLSManager) startDOHServer(port string) error {
 		IdleTimeout:       DoTIdleTimeout,
 	}
 
-	tm.wg.Add(1)
 	go func() {
-		defer tm.wg.Done()
 		defer HandlePanic("DoH server")
 		if err := tm.httpsServer.Serve(tm.httpsListener); err != nil && err != http.ErrServerClosed {
 			LogError("DOH: DoH server error: %v", err)
@@ -3591,9 +3745,7 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 
 	tm.h3Server = &http3.Server{Handler: tm}
 
-	tm.wg.Add(1)
 	go func() {
-		defer tm.wg.Done()
 		defer HandlePanic("DoH3 server")
 		if err := tm.h3Server.ServeListener(tm.h3Listener); err != nil && err != http.ErrServerClosed {
 			LogError("DOH3: DoH3 server error: %v", err)
@@ -3885,16 +4037,12 @@ func (s *DNSServer) setupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	s.wg.Add(1)
 	go func() {
-		defer s.wg.Done()
 		defer HandlePanic("Root server periodic sorting")
 		s.rootServerMgr.StartPeriodicSorting(s.ctx)
 	}()
 
-	s.wg.Add(1)
 	go func() {
-		defer s.wg.Done()
 		defer HandlePanic("Signal handler")
 		select {
 		case sig := <-sigChan:
@@ -3971,26 +4119,18 @@ func (s *DNSServer) Start() error {
 		return errors.New("server is closed")
 	}
 
-	var wg sync.WaitGroup
-	serverCount := 2
-	if s.securityMgr.tls != nil {
-		serverCount++
-	}
-	if s.pprofServer != nil {
-		serverCount++
-	}
-
-	errChan := make(chan error, serverCount)
+	errChan := make(chan error, 1)
+	serverCtx, serverCancel := context.WithCancel(context.Background())
+	defer serverCancel()
 
 	LogInfo("SERVER: Starting ZJDNS Server %s", getVersion())
 	LogInfo("SERVER: Listening on port: %s", s.config.Server.Port)
 
 	s.displayInfo()
 
-	wg.Add(serverCount)
+	g, ctx := errgroup.WithContext(serverCtx)
 
-	go func() {
-		defer wg.Done()
+	g.Go(func() error {
 		defer HandlePanic("UDP server")
 		server := &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
@@ -3999,14 +4139,16 @@ func (s *DNSServer) Start() error {
 			UDPSize: UDPBufferSize,
 		}
 		LogInfo("DNS: UDP server started on port %s", s.config.Server.Port)
-		if err := server.ListenAndServe(); err != nil {
-			errChan <- fmt.Errorf("UDP startup: %w", err)
+		err := server.ListenAndServe()
+		if err != nil {
+			return fmt.Errorf("UDP startup: %w", err)
 		}
-	}()
+		<-ctx.Done()
+		return nil
+	})
 
 	if s.pprofServer != nil {
-		go func() {
-			defer wg.Done()
+		g.Go(func() error {
 			defer HandlePanic("pprof server")
 			LogInfo("PPROF: pprof server started on port %s", s.config.Server.Pprof)
 			var err error
@@ -4017,13 +4159,14 @@ func (s *DNSServer) Start() error {
 			}
 
 			if err != nil && err != http.ErrServerClosed {
-				errChan <- fmt.Errorf("pprof startup: %w", err)
+				return fmt.Errorf("pprof startup: %w", err)
 			}
-		}()
+			<-ctx.Done()
+			return nil
+		})
 	}
 
-	go func() {
-		defer wg.Done()
+	g.Go(func() error {
 		defer HandlePanic("TCP server")
 		server := &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
@@ -4031,24 +4174,35 @@ func (s *DNSServer) Start() error {
 			Handler: dns.HandlerFunc(s.handleDNSRequest),
 		}
 		LogInfo("DNS: TCP server started on port %s", s.config.Server.Port)
-		if err := server.ListenAndServe(); err != nil {
-			errChan <- fmt.Errorf("TCP startup: %w", err)
+		err := server.ListenAndServe()
+		if err != nil {
+			return fmt.Errorf("TCP startup: %w", err)
 		}
-	}()
+		<-ctx.Done()
+		return nil
+	})
 
 	if s.securityMgr.tls != nil {
-		go func() {
-			defer wg.Done()
+		g.Go(func() error {
 			defer HandlePanic("Secure DNS server")
 			httpsPort := s.config.Server.TLS.HTTPS.Port
-			if err := s.securityMgr.tls.Start(httpsPort); err != nil {
-				errChan <- fmt.Errorf("secure DNS startup: %w", err)
+			err := s.securityMgr.tls.Start(httpsPort)
+			if err != nil {
+				return fmt.Errorf("secure DNS startup: %w", err)
 			}
-		}()
+			<-ctx.Done()
+			return nil
+		})
 	}
 
 	go func() {
-		wg.Wait()
+		defer HandlePanic("Server coordinator")
+		if err := g.Wait(); err != nil {
+			select {
+			case errChan <- err:
+			default:
+			}
+		}
 		close(errChan)
 	}()
 
@@ -4469,9 +4623,8 @@ func NewQueryManager(server *DNSServer) *QueryManager {
 	return &QueryManager{
 		upstream: &UpstreamHandler{servers: make([]*UpstreamServer, 0)},
 		recursive: &RecursiveResolver{
-			server:          server,
-			rootServerMgr:   server.rootServerMgr,
-			concurrencyLock: make(chan struct{}, MaxConcurrency),
+			server:        server,
+			rootServerMgr: server.rootServerMgr,
 		},
 		cname: &CNAMEHandler{server: server},
 		validator: &ResponseValidator{
@@ -4544,33 +4697,32 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	defer cancel()
 
 	resultChan := make(chan UpstreamQueryResult, 1)
-	queryWg := sync.WaitGroup{}
+
+	g, ctx := errgroup.WithContext(ctx)
 
 	for i := 0; i < maxConcurrent && i < len(servers); i++ {
 		srv := servers[i]
 
-		queryWg.Add(1)
-		go func(server *UpstreamServer) {
-			defer queryWg.Done()
+		g.Go(func() error {
 			defer HandlePanic("Query upstream")
 
 			select {
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			default:
 			}
 
-			if server.IsRecursive() {
+			if srv.IsRecursive() {
 				recursiveCtx, recursiveCancel := context.WithTimeout(ctx, RecursiveTimeout)
 				defer recursiveCancel()
 
 				answer, authority, additional, validated, ecsResponse, usedServer, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs)
 
 				if err == nil && len(answer) > 0 {
-					if len(server.Match) > 0 {
-						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, server.Match)
+					if len(srv.Match) > 0 {
+						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, srv.Match)
 						if shouldRefuse {
-							return
+							return nil
 						}
 						answer = filteredAnswer
 					}
@@ -4584,27 +4736,29 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						ecs:        ecsResponse,
 						server:     usedServer,
 					}:
+						return nil
 					case <-ctx.Done():
+						return ctx.Err()
 					}
 				}
 			} else {
 				msg := qm.server.buildQueryMessage(question, ecs, true, false)
 				defer ReleaseMessage(msg)
 
-				queryResult := qm.server.queryClient.ExecuteQuery(ctx, msg, server)
+				queryResult := qm.server.queryClient.ExecuteQuery(ctx, msg, srv)
 
 				if queryResult.Error != nil {
-					return
+					return nil
 				}
 
 				if queryResult.Response != nil {
 					rcode := queryResult.Response.Rcode
 
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-						if len(server.Match) > 0 {
-							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
+						if len(srv.Match) > 0 {
+							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, srv.Match)
 							if shouldRefuse {
-								return
+								return nil
 							}
 							queryResult.Response.Answer = filteredAnswer
 						}
@@ -4612,9 +4766,9 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						queryResult.Validated = qm.validator.dnssecValidator.ValidateResponse(queryResult.Response, true)
 						ecsResponse := qm.server.ednsMgr.ParseFromDNS(queryResult.Response)
 
-						serverDesc := server.Address
-						if server.Protocol != "" && server.Protocol != "udp" {
-							serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
+						serverDesc := srv.Address
+						if srv.Protocol != "" && srv.Protocol != "udp" {
+							serverDesc = fmt.Sprintf("%s (%s)", srv.Address, strings.ToUpper(srv.Protocol))
 						}
 
 						select {
@@ -4626,16 +4780,19 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							ecs:        ecsResponse,
 							server:     serverDesc,
 						}:
+							return nil
 						case <-ctx.Done():
+							return ctx.Err()
 						}
 					}
 				}
 			}
-		}(srv)
+			return nil
+		})
 	}
 
 	go func() {
-		queryWg.Wait()
+		_ = g.Wait()
 		close(resultChan)
 	}()
 
@@ -4908,14 +5065,11 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		return nil, errors.New("no nameservers")
 	}
 
-	select {
-	case rr.concurrencyLock <- struct{}{}:
-		defer func() { <-rr.concurrencyLock }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
 	concurrency := min(len(nameservers), MaxSingleQuery)
+
+	// Create a sub-context that can be cancelled when we get first success
+	queryCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	tempServers := make([]*UpstreamServer, concurrency)
 	for i := 0; i < concurrency && i < len(nameservers); i++ {
@@ -4926,26 +5080,25 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		tempServers[i] = &UpstreamServer{Address: nameservers[i], Protocol: protocol}
 	}
 
-	resultChan := make(chan *QueryResult, 1)
-	queryWg := sync.WaitGroup{}
+	resultChan := make(chan *QueryResult, concurrency)
+
+	g, ctx := errgroup.WithContext(queryCtx)
 
 	for _, server := range tempServers {
 		srv := server
 		msg := rr.server.buildQueryMessage(question, ecs, true, false)
 
-		queryWg.Add(1)
-		go func(s *UpstreamServer, m *dns.Msg) {
-			defer queryWg.Done()
-			defer ReleaseMessage(m)
+		g.Go(func() error {
+			defer ReleaseMessage(msg)
 			defer HandlePanic("Query nameserver")
 
 			select {
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			default:
 			}
 
-			result := rr.server.queryClient.ExecuteQuery(ctx, m, s)
+			result := rr.server.queryClient.ExecuteQuery(ctx, msg, srv)
 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
@@ -4954,15 +5107,20 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 					result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
 					select {
 					case resultChan <- result:
+						// Cancel all other queries when we get first success
+						cancel()
+						return nil
 					case <-ctx.Done():
+						return ctx.Err()
 					}
 				}
 			}
-		}(srv, msg)
+			return nil
+		})
 	}
 
 	go func() {
-		queryWg.Wait()
+		_ = g.Wait()
 		close(resultChan)
 	}()
 
@@ -4986,7 +5144,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 
 	g, ctx := errgroup.WithContext(resolveCtx)
 
-	for i := 0; i < resolveCount; i++ {
+	for i := range resolveCount {
 		ns := nsRecords[i]
 		g.Go(func() error {
 			defer HandlePanic("NS resolve")
@@ -5240,21 +5398,37 @@ func ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
 }
 
 func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC bool, globalPrefix string) string {
-	key := globalPrefix + RedisPrefixDNS +
-		fmt.Sprintf("%s:%d:%d", NormalizeDomain(question.Name), question.Qtype, question.Qclass)
+	var buf strings.Builder
+	buf.Grow(128)
+
+	buf.WriteString(globalPrefix)
+	buf.WriteString(RedisPrefixDNS)
+
+	buf.WriteString(NormalizeDomain(question.Name))
+	buf.WriteByte(':')
+
+	buf.WriteString(strconv.FormatUint(uint64(question.Qtype), 10))
+	buf.WriteByte(':')
+	buf.WriteString(strconv.FormatUint(uint64(question.Qclass), 10))
 
 	if ecs != nil {
-		key += fmt.Sprintf(":%s/%d", ecs.Address.String(), ecs.SourcePrefix)
+		buf.WriteString(":ecs:")
+		buf.WriteString(ecs.Address.String())
+		buf.WriteByte('/')
+		buf.WriteString(strconv.FormatUint(uint64(ecs.SourcePrefix), 10))
 	}
 
 	if clientRequestedDNSSEC {
-		key += ":dnssec"
+		buf.WriteString(":dnssec")
 	}
 
-	if len(key) > 512 {
-		key = fmt.Sprintf("hash:%x", key)[:512]
+	result := buf.String()
+	if len(result) > 512 {
+		hash := fnv.New64a()
+		hash.Write([]byte(result))
+		return fmt.Sprintf("h:%x", hash.Sum64())
 	}
-	return key
+	return result
 }
 
 func calculateTTL(rrs []dns.RR) int {
