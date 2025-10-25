@@ -537,7 +537,6 @@ type DNSServer struct {
 
 // ProtocolStats stores per-protocol query and response statistics for MetricsCollector
 type ProtocolStats struct {
-	Queries uint64
 	Success uint64
 	Failed  uint64
 }
@@ -614,7 +613,6 @@ type QueryMetricsStats struct {
 }
 
 type ProtocolQueryMetrics struct {
-	Queries     uint64  `json:"queries"`
 	Success     uint64  `json:"success"`
 	Failed      uint64  `json:"failed"`
 	SuccessRate float64 `json:"success_rate"`
@@ -784,14 +782,6 @@ func NewMetricsCollector() *MetricsCollector {
 	}
 }
 
-// RecordQuery records a DNS query
-func (mc *MetricsCollector) RecordQuery(protocol string) {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-
-	mc.getProtocolStats(protocol).Queries++
-}
-
 // RecordResponse records a DNS response for a specific protocol
 func (mc *MetricsCollector) RecordResponse(protocol string, success bool, responseTime time.Duration, rcode int) {
 	mc.mu.Lock()
@@ -845,7 +835,6 @@ func (mc *MetricsCollector) RecordMultipleMetrics(
 
 	// Protocol stats
 	stats := mc.getProtocolStats(protocol)
-	stats.Queries++
 	if success {
 		stats.Success++
 	} else {
@@ -884,9 +873,9 @@ func (mc *MetricsCollector) RecordRewriteMatch() {
 	mc.RewriteMatches++
 }
 
-// getTotalQueries returns total queries across all protocols
+// getTotalQueries returns total queries across all protocols (calculated from success + failed)
 func (mc *MetricsCollector) getTotalQueries() uint64 {
-	return mc.UDP.Queries + mc.TCP.Queries + mc.DoT.Queries + mc.DoQ.Queries + mc.DoH.Queries + mc.DoH3.Queries
+	return mc.UDP.Success + mc.UDP.Failed + mc.TCP.Success + mc.TCP.Failed + mc.DoT.Success + mc.DoT.Failed + mc.DoQ.Success + mc.DoQ.Failed + mc.DoH.Success + mc.DoH.Failed + mc.DoH3.Success + mc.DoH3.Failed
 }
 
 // getProtocolSuccessRate calculates success rate for a protocol
@@ -922,7 +911,6 @@ func (mc *MetricsCollector) getProtocolStats(protocol string) *ProtocolStats {
 // buildProtocolMetrics creates ProtocolQueryMetrics from ProtocolStats
 func (mc *MetricsCollector) buildProtocolMetrics(stats ProtocolStats) ProtocolQueryMetrics {
 	return ProtocolQueryMetrics{
-		Queries:     stats.Queries,
 		Success:     stats.Success,
 		Failed:      stats.Failed,
 		SuccessRate: mc.getProtocolSuccessRate(stats),
@@ -3748,11 +3736,6 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		// Record query start time for metrics
 		startTime := time.Now()
 
-		// Record DoT query
-		if tm.server.metricsCollector != nil {
-			tm.server.metricsCollector.RecordQuery("dot")
-		}
-
 		var clientIP net.IP
 		if addr := tlsConn.RemoteAddr(); addr != nil {
 			clientIP = addr.(*net.TCPAddr).IP
@@ -3957,11 +3940,6 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	// Record query start time for metrics
 	startTime := time.Now()
 
-	// Record DoQ query
-	if tm.server.metricsCollector != nil {
-		tm.server.metricsCollector.RecordQuery("doq")
-	}
-
 	clientIP := GetSecureClientIP(conn)
 	response := tm.server.processDNSQuery(req, clientIP, true)
 
@@ -4105,11 +4083,6 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	protocol := "doh"
 	if r.ProtoMajor == 3 {
 		protocol = "doh3"
-	}
-
-	// Record DoH query
-	if tm.server.metricsCollector != nil {
-		tm.server.metricsCollector.RecordQuery(protocol)
 	}
 
 	req, statusCode := tm.parseDoHRequest(r)
@@ -4751,11 +4724,6 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	protocol := "udp"
 	if w.LocalAddr().Network() == "tcp" {
 		protocol = "tcp"
-	}
-
-	// Record the query
-	if s.metricsCollector != nil {
-		s.metricsCollector.RecordQuery(protocol)
 	}
 
 	response := s.processDNSQuery(req, GetClientIP(w), false)
