@@ -1935,7 +1935,8 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
 			defer updateCancel()
 			// Use binary serialization only for maximum performance
-			if data, err := entry.SerializeBinary(); err != nil {
+			data, err := entry.SerializeBinary()
+			if err != nil {
 				LogWarn("CACHE: Binary serialization failed, skipping update: %v", err)
 				return
 			}
@@ -2708,7 +2709,8 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 		for ip, result := range newResults {
 			key := st.keyPrefix + ip
 			// Use binary serialization only for maximum performance
-			if data, err := result.SerializeBinary(); err != nil {
+			data, err := result.SerializeBinary()
+			if err != nil {
 				LogWarn("SPEEDTEST: Binary serialization failed for %s: %v", ip, err)
 				continue
 			}
