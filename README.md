@@ -161,14 +161,16 @@ graph TB
         FF[IPDetector<br><i>IP Detector</i>]
         GG[LogManager<br><i>Log Management</i>]
         HH[MemoryMonitor<br><i>Memory Monitor</i>]
+        II[MetricsCollector<br><i>Metrics Collection</i>]
+        JJ[MetricsAPI<br><i>Metrics HTTP API</i>]
     end
 
     subgraph "External Services"
-        II[Root Servers<br><i>Root Servers</i>]
-        JJ[Upstream DNS<br><i>Upstream DNS</i>]
-        KK[Redis Cluster<br><i>Redis Cluster</i>]
-        LL[Self-signed CA<br><i>Self-signed CA</i>]
-        MM[TLS Certificates<br><i>TLS Certificates</i>]
+        KK[Root Servers<br><i>Root Servers</i>]
+        LL[Upstream DNS<br><i>Upstream DNS</i>]
+        MM[Redis Cluster<br><i>Redis Cluster</i>]
+        NN[Self-signed CA<br><i>Self-signed CA</i>]
+        OO[TLS Certificates<br><i>TLS Certificates</i>]
     end
 
     %% Main connections
@@ -209,16 +211,18 @@ graph TB
     B --> FF
     B --> GG
     B --> HH
+    B --> II
+    II --> JJ
 
     %% External connections
-    EE --> II
-    G --> JJ
-    X --> KK
-    DD --> LL
-    DD --> MM
-    J --> MM
-    K --> MM
-    L --> MM
+    EE --> KK
+    G --> LL
+    X --> MM
+    DD --> NN
+    DD --> OO
+    J --> OO
+    K --> OO
+    L --> OO
 
     %% Style definitions
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
@@ -236,8 +240,8 @@ graph TB
     class M,N,O,P engine
     class Q,R,S,T,U,V,W security
     class X,Y,Z,AA cache
-    class BB,CC,DD,EE,FF,GG,HH infra
-    class II,JJ,KK,LL,MM external
+    class BB,CC,DD,EE,FF,GG,HH,II,JJ infra
+    class KK,LL,MM,NN,OO external
 ```
 
 ---

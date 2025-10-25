@@ -53,7 +53,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.1"
+	Version    = "1.4.2"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -79,15 +79,17 @@ var (
 
 const (
 	// Server Ports
-	DefaultDNSPort   = "53"
-	DefaultDOTPort   = "853"
-	DefaultDOHPort   = "443"
-	DefaultPprofPort = "6060"
+	DefaultDNSPort     = "53"
+	DefaultDOTPort     = "853"
+	DefaultDOHPort     = "443"
+	DefaultPprofPort   = "6060"
+	DefaultMetricsPort = "6061"
 
 	// Protocol Indicators
 	RecursiveIndicator = "builtin_recursive"
 	DefaultQueryPath   = "/dns-query"
 	PprofPath          = "/debug/pprof/"
+	MetricsPath        = "/metrics"
 
 	// Buffer Sizes
 	UDPBufferSize       = 1232
@@ -213,6 +215,7 @@ type ServerConfig struct {
 type ServerSettings struct {
 	Port       string       `json:"port"`
 	Pprof      string       `json:"pprof"`
+	Metrics    string       `json:"metrics"`
 	LogLevel   string       `json:"log_level"`
 	DefaultECS string       `json:"default_ecs_subnet"`
 	DDR        DDRSettings  `json:"ddr"`
@@ -505,25 +508,146 @@ type MemoryMonitor struct {
 
 // DNS Server Type
 type DNSServer struct {
-	config        *ServerConfig
-	cacheMgr      CacheManager
-	queryClient   *QueryClient
-	connPool      *ConnPool
-	securityMgr   *SecurityManager
-	ednsMgr       *EDNSManager
-	rewriteMgr    *RewriteManager
-	speedTestMgr  *SpeedTestManager
-	rootServerMgr *RootServerManager
-	cidrMgr       *CIDRManager
-	pprofServer   *http.Server
-	memMonitor    *MemoryMonitor
-	redisClient   *redis.Client
-	ctx           context.Context
-	cancel        context.CancelFunc
-	shutdown      chan struct{}
-	wg            sync.WaitGroup
-	closed        int32
-	queryMgr      *QueryManager
+	config           *ServerConfig
+	cacheMgr         CacheManager
+	queryClient      *QueryClient
+	connPool         *ConnPool
+	securityMgr      *SecurityManager
+	ednsMgr          *EDNSManager
+	rewriteMgr       *RewriteManager
+	speedTestMgr     *SpeedTestManager
+	rootServerMgr    *RootServerManager
+	cidrMgr          *CIDRManager
+	pprofServer      *http.Server
+	memMonitor       *MemoryMonitor
+	redisClient      *redis.Client
+	metricsCollector *MetricsCollector
+	metricsAPI       *MetricsAPI
+	ctx              context.Context
+	cancel           context.CancelFunc
+	shutdown         chan struct{}
+	wg               sync.WaitGroup
+	closed           int32
+	queryMgr         *QueryManager
+}
+
+// =============================================================================
+// Metrics API Types
+// =============================================================================
+
+// ProtocolStats stores per-protocol query and response statistics for MetricsCollector
+type ProtocolStats struct {
+	Queries uint64
+	Success uint64
+	Failed  uint64
+}
+
+// MetricsCollector collects and stores DNS server metrics
+type MetricsCollector struct {
+	mu        sync.RWMutex
+	startTime time.Time
+
+	// Protocol-specific metrics
+	UDP  ProtocolStats
+	TCP  ProtocolStats
+	DoT  ProtocolStats
+	DoQ  ProtocolStats
+	DoH  ProtocolStats
+	DoH3 ProtocolStats
+
+	// Cache metrics
+	CacheHits   uint64
+	CacheMisses uint64
+
+	// Performance metrics
+	AverageResponseTime time.Duration
+	MaxResponseTime     time.Duration
+
+	// Security metrics
+	HijackPrevented uint64
+	RewriteMatches  uint64
+
+	// Traffic metrics
+	BytesReceived uint64
+	BytesSent     uint64
+}
+
+// MetricsAPI provides HTTP endpoints for metrics
+type MetricsAPI struct {
+	collector *MetricsCollector
+	server    *http.Server
+	tlsConfig *tls.Config
+	enabled   bool
+}
+
+// MetricsResponse represents the JSON response for metrics
+type MetricsResponse struct {
+	Server      ServerMetricsInfo `json:"server"`
+	QueryStats  QueryMetricsStats `json:"query_stats"`
+	Performance PerformanceStats  `json:"performance"`
+	Features    FeaturesMetrics   `json:"features"`
+	Timestamp   time.Time         `json:"timestamp"`
+}
+
+type ServerMetricsInfo struct {
+	Info    ServerInfo     `json:"info"`
+	Memory  MemoryMetrics  `json:"memory"`
+	Network NetworkMetrics `json:"network"`
+}
+
+type ServerInfo struct {
+	Version       string `json:"version"`
+	CommitHash    string `json:"commit_hash"`
+	BuildTime     string `json:"build_time"`
+	Uptime        string `json:"uptime"`
+	GoVersion     string `json:"go_version"`
+	NumGoroutines int    `json:"num_goroutines"`
+}
+
+type QueryMetricsStats struct {
+	UDP  ProtocolQueryMetrics `json:"udp"`
+	TCP  ProtocolQueryMetrics `json:"tcp"`
+	DoT  ProtocolQueryMetrics `json:"dot"`
+	DoQ  ProtocolQueryMetrics `json:"doq"`
+	DoH  ProtocolQueryMetrics `json:"doh"`
+	DoH3 ProtocolQueryMetrics `json:"doh3"`
+}
+
+type ProtocolQueryMetrics struct {
+	Queries     uint64  `json:"queries"`
+	Success     uint64  `json:"success"`
+	Failed      uint64  `json:"failed"`
+	SuccessRate float64 `json:"success_rate"`
+}
+
+type PerformanceStats struct {
+	AvgResponseTime  string  `json:"avg_response_time"`
+	MaxResponseTime  string  `json:"max_response_time"`
+	QueriesPerSecond float64 `json:"queries_per_second"`
+}
+
+type MemoryMetrics struct {
+	Alloc    uint64 `json:"alloc_mb"`
+	Sys      uint64 `json:"sys_mb"`
+	HeapSize uint64 `json:"heap_size_mb"`
+	NumGC    uint32 `json:"num_gc"`
+}
+
+type NetworkMetrics struct {
+	BytesReceived uint64 `json:"bytes_received"`
+	BytesSent     uint64 `json:"bytes_sent"`
+}
+
+type CacheMetrics struct {
+	Hits    uint64  `json:"hits"`
+	Misses  uint64  `json:"misses"`
+	HitRate float64 `json:"hit_rate"`
+}
+
+type FeaturesMetrics struct {
+	Cache   CacheMetrics `json:"cache"`
+	Hijack  uint64       `json:"hijack"`
+	Rewrite uint64       `json:"rewrite"`
 }
 
 type ConfigManager struct{}
@@ -648,6 +772,308 @@ func LogError(format string, args ...interface{}) { globalLog.Error(format, args
 func LogWarn(format string, args ...interface{})  { globalLog.Warn(format, args...) }
 func LogInfo(format string, args ...interface{})  { globalLog.Info(format, args...) }
 func LogDebug(format string, args ...interface{}) { globalLog.Debug(format, args...) }
+
+// =============================================================================
+// Metrics API Implementation
+// =============================================================================
+
+// NewMetricsCollector creates a new metrics collector
+func NewMetricsCollector() *MetricsCollector {
+	return &MetricsCollector{
+		startTime: time.Now(),
+	}
+}
+
+// RecordQuery records a DNS query
+func (mc *MetricsCollector) RecordQuery(protocol string) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+
+	mc.getProtocolStats(protocol).Queries++
+}
+
+// RecordResponse records a DNS response for a specific protocol
+func (mc *MetricsCollector) RecordResponse(protocol string, success bool, responseTime time.Duration, rcode int) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+
+	protocolMetrics := mc.getProtocolStats(protocol)
+	if success {
+		protocolMetrics.Success++
+	} else {
+		protocolMetrics.Failed++
+	}
+
+	// Update response time metrics
+	if responseTime > mc.MaxResponseTime {
+		mc.MaxResponseTime = responseTime
+	}
+
+	// Calculate rolling average
+	mc.AverageResponseTime = (mc.AverageResponseTime + responseTime) / 2
+}
+
+// RecordCacheOperation records cache operation (hit or miss)
+func (mc *MetricsCollector) RecordCacheOperation(isHit bool) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	if isHit {
+		mc.CacheHits++
+	} else {
+		mc.CacheMisses++
+	}
+}
+
+// RecordTraffic records bytes sent/received
+func (mc *MetricsCollector) RecordTraffic(bytesReceived, bytesSent uint64) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	mc.BytesReceived += bytesReceived
+	mc.BytesSent += bytesSent
+}
+
+// RecordMultipleMetrics records multiple metrics in a single lock operation
+func (mc *MetricsCollector) RecordMultipleMetrics(
+	protocol string,
+	success bool,
+	responseTime time.Duration,
+	bytesReceived, bytesSent uint64,
+	cacheHit bool,
+) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+
+	// Protocol stats
+	stats := mc.getProtocolStats(protocol)
+	stats.Queries++
+	if success {
+		stats.Success++
+	} else {
+		stats.Failed++
+	}
+
+	// Traffic
+	mc.BytesReceived += bytesReceived
+	mc.BytesSent += bytesSent
+
+	// Cache
+	if cacheHit {
+		mc.CacheHits++
+	} else {
+		mc.CacheMisses++
+	}
+
+	// Response time
+	if responseTime > mc.MaxResponseTime {
+		mc.MaxResponseTime = responseTime
+	}
+	mc.AverageResponseTime = (mc.AverageResponseTime + responseTime) / 2
+}
+
+// RecordHijackPrevented records a successful hijack prevention
+func (mc *MetricsCollector) RecordHijackPrevented() {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	mc.HijackPrevented++
+}
+
+// RecordRewriteMatch records a successful rewrite match
+func (mc *MetricsCollector) RecordRewriteMatch() {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	mc.RewriteMatches++
+}
+
+// getTotalQueries returns total queries across all protocols
+func (mc *MetricsCollector) getTotalQueries() uint64 {
+	return mc.UDP.Queries + mc.TCP.Queries + mc.DoT.Queries + mc.DoQ.Queries + mc.DoH.Queries + mc.DoH3.Queries
+}
+
+// getProtocolSuccessRate calculates success rate for a protocol
+func (mc *MetricsCollector) getProtocolSuccessRate(p ProtocolStats) float64 {
+	total := p.Success + p.Failed
+	if total > 0 {
+		return float64(p.Success) / float64(total) * 100
+	}
+	return 0
+}
+
+// getProtocolStats returns a pointer to the protocol stats for the given protocol
+func (mc *MetricsCollector) getProtocolStats(protocol string) *ProtocolStats {
+	switch protocol {
+	case "udp":
+		return &mc.UDP
+	case "tcp":
+		return &mc.TCP
+	case "dot":
+		return &mc.DoT
+	case "doq":
+		return &mc.DoQ
+	case "doh":
+		return &mc.DoH
+	case "doh3":
+		return &mc.DoH3
+	default:
+		// Return a safe fallback - this should never happen with valid protocols
+		return &mc.UDP
+	}
+}
+
+// buildProtocolMetrics creates ProtocolQueryMetrics from ProtocolStats
+func (mc *MetricsCollector) buildProtocolMetrics(stats ProtocolStats) ProtocolQueryMetrics {
+	return ProtocolQueryMetrics{
+		Queries:     stats.Queries,
+		Success:     stats.Success,
+		Failed:      stats.Failed,
+		SuccessRate: mc.getProtocolSuccessRate(stats),
+	}
+}
+
+// calculateHitRate calculates hit rate from hits and misses
+func calculateHitRate(hits, misses uint64) float64 {
+	total := hits + misses
+	if total > 0 {
+		return float64(hits) / float64(total) * 100
+	}
+	return 0
+}
+
+// calculateQPS calculates queries per second
+func calculateQPS(totalQueries uint64, uptime time.Duration) float64 {
+	if totalQueries > 0 {
+		return float64(totalQueries) / uptime.Seconds()
+	}
+	return 0
+}
+
+// GetMetrics returns current metrics
+func (mc *MetricsCollector) GetMetrics() MetricsResponse {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+
+	// Calculate metrics once
+	uptime := time.Since(mc.startTime)
+	totalQueries := mc.getTotalQueries()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	response := MetricsResponse{
+		Server: ServerMetricsInfo{
+			Info: ServerInfo{
+				Version:       Version,
+				CommitHash:    CommitHash,
+				BuildTime:     BuildTime,
+				Uptime:        uptime.String(),
+				GoVersion:     runtime.Version(),
+				NumGoroutines: runtime.NumGoroutine(),
+			},
+			Memory: MemoryMetrics{
+				Alloc:    bToMb(m.Alloc),
+				Sys:      bToMb(m.Sys),
+				HeapSize: bToMb(m.HeapAlloc),
+				NumGC:    m.NumGC,
+			},
+			Network: NetworkMetrics{
+				BytesReceived: mc.BytesReceived,
+				BytesSent:     mc.BytesSent,
+			},
+		},
+		QueryStats: QueryMetricsStats{
+			UDP:  mc.buildProtocolMetrics(mc.UDP),
+			TCP:  mc.buildProtocolMetrics(mc.TCP),
+			DoT:  mc.buildProtocolMetrics(mc.DoT),
+			DoQ:  mc.buildProtocolMetrics(mc.DoQ),
+			DoH:  mc.buildProtocolMetrics(mc.DoH),
+			DoH3: mc.buildProtocolMetrics(mc.DoH3),
+		},
+		Performance: PerformanceStats{
+			AvgResponseTime:  mc.AverageResponseTime.String(),
+			MaxResponseTime:  mc.MaxResponseTime.String(),
+			QueriesPerSecond: calculateQPS(totalQueries, uptime),
+		},
+		Features: FeaturesMetrics{
+			Cache: CacheMetrics{
+				Hits:    mc.CacheHits,
+				Misses:  mc.CacheMisses,
+				HitRate: calculateHitRate(mc.CacheHits, mc.CacheMisses),
+			},
+			Hijack:  mc.HijackPrevented,
+			Rewrite: mc.RewriteMatches,
+		},
+		Timestamp: time.Now(),
+	}
+
+	return response
+}
+
+// NewMetricsAPI creates a new metrics API server
+func NewMetricsAPI(collector *MetricsCollector, tlsConfig *tls.Config) *MetricsAPI {
+	return &MetricsAPI{
+		collector: collector,
+		tlsConfig: tlsConfig,
+		enabled:   true,
+	}
+}
+
+// Start starts the metrics API server
+func (ma *MetricsAPI) Start(port string) error {
+	if !ma.enabled {
+		return errors.New("metrics API is disabled")
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(MetricsPath, ma.handleMetricsJSON)
+
+	ma.server = &http.Server{
+		Addr:         ":" + port,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	if ma.tlsConfig != nil {
+		ma.server.TLSConfig = ma.tlsConfig
+		return ma.server.ListenAndServeTLS("", "")
+	}
+	return ma.server.ListenAndServe()
+}
+
+// Stop stops the metrics API server
+func (ma *MetricsAPI) Stop() error {
+	if ma.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return ma.server.Shutdown(ctx)
+	}
+	return nil
+}
+
+// writeJSONResponse writes a JSON response with CORS headers
+func (ma *MetricsAPI) writeJSONResponse(w http.ResponseWriter, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
+}
+
+// handleMetricsJSON handles JSON metrics endpoint
+func (ma *MetricsAPI) handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	metrics := ma.collector.GetMetrics()
+	ma.writeJSONResponse(w, metrics)
+}
+
+// bToMb converts bytes to megabytes
+func bToMb(b uint64) uint64 {
+	return b / 1024 / 1024
+}
 
 // =============================================================================
 // ConnectionPool Implementation
@@ -1666,6 +2092,7 @@ func GenerateExampleConfig() string {
 	config := cm.getDefaultConfig()
 
 	config.Server.Pprof = DefaultPprofPort
+	config.Server.Metrics = DefaultMetricsPort
 	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
 	config.Redis.Address = "127.0.0.1:6379"
@@ -3319,6 +3746,14 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			continue
 		}
 
+		// Record query start time for metrics
+		startTime := time.Now()
+
+		// Record DoT query
+		if tm.server.metricsCollector != nil {
+			tm.server.metricsCollector.RecordQuery("dot")
+		}
+
 		var clientIP net.IP
 		if addr := tlsConn.RemoteAddr(); addr != nil {
 			clientIP = addr.(*net.TCPAddr).IP
@@ -3326,6 +3761,17 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		response := tm.server.processDNSQuery(req, clientIP, true)
 
 		if response != nil {
+			// Record response metrics
+			if tm.server.metricsCollector != nil {
+				responseTime := time.Since(startTime)
+				success := response.Rcode == dns.RcodeSuccess || response.Rcode == dns.RcodeNameError
+				tm.server.metricsCollector.RecordResponse("dot", success, responseTime, response.Rcode)
+
+				// Record traffic metrics
+				reqBytes := uint64(len(msgBuf))
+				respBytes := uint64(response.Len())
+				tm.server.metricsCollector.RecordTraffic(reqBytes, respBytes)
+			}
 			respBuf, err := response.Pack()
 			if err != nil {
 				LogDebug("DOT: Response pack error: %v", err)
@@ -3509,8 +3955,28 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
+	// Record query start time for metrics
+	startTime := time.Now()
+
+	// Record DoQ query
+	if tm.server.metricsCollector != nil {
+		tm.server.metricsCollector.RecordQuery("doq")
+	}
+
 	clientIP := GetSecureClientIP(conn)
 	response := tm.server.processDNSQuery(req, clientIP, true)
+
+	// Record response metrics
+	if tm.server.metricsCollector != nil && response != nil {
+		responseTime := time.Since(startTime)
+		success := response.Rcode == dns.RcodeSuccess || response.Rcode == dns.RcodeNameError
+		tm.server.metricsCollector.RecordResponse("doq", success, responseTime, response.Rcode)
+
+		// Record traffic metrics
+		reqBytes := uint64(len(buf[2 : 2+msgLen]))
+		respBytes := uint64(response.Len())
+		tm.server.metricsCollector.RecordTraffic(reqBytes, respBytes)
+	}
 
 	if err := tm.respondQUIC(stream, response); err != nil {
 		LogDebug("PROTOCOL: DoQ response failed: %v", err)
@@ -3633,6 +4099,20 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Record query start time for metrics
+	startTime := time.Now()
+
+	// Determine protocol: DoH or DoH3
+	protocol := "doh"
+	if r.ProtoMajor == 3 {
+		protocol = "doh3"
+	}
+
+	// Record DoH query
+	if tm.server.metricsCollector != nil {
+		tm.server.metricsCollector.RecordQuery(protocol)
+	}
+
 	req, statusCode := tm.parseDoHRequest(r)
 	if req == nil {
 		http.Error(w, http.StatusText(statusCode), statusCode)
@@ -3640,6 +4120,19 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := tm.server.processDNSQuery(req, nil, true)
+
+	// Record response metrics
+	if tm.server.metricsCollector != nil && response != nil {
+		responseTime := time.Since(startTime)
+		success := response.Rcode == dns.RcodeSuccess || response.Rcode == dns.RcodeNameError
+		tm.server.metricsCollector.RecordResponse(protocol, success, responseTime, response.Rcode)
+
+		// Record traffic metrics
+		reqBytes := uint64(req.Len())
+		respBytes := uint64(response.Len())
+		tm.server.metricsCollector.RecordTraffic(reqBytes, respBytes)
+	}
+
 	if err := tm.respondDoH(w, response); err != nil {
 		LogError("DOH: DoH response failed: %v", err)
 	}
@@ -3930,6 +4423,18 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		}
 	}
 
+	// Initialize metrics collector and API
+	server.metricsCollector = NewMetricsCollector()
+
+	if config.Server.Metrics != "" {
+		var tlsConfig *tls.Config
+		if server.securityMgr != nil && server.securityMgr.tls != nil {
+			tlsConfig = server.securityMgr.tls.tlsConfig
+		}
+
+		server.metricsAPI = NewMetricsAPI(server.metricsCollector, tlsConfig)
+	}
+
 	server.setupSignalHandling()
 
 	return server, nil
@@ -3998,6 +4503,14 @@ func (s *DNSServer) shutdownServer() {
 		CloseWithLog(s.speedTestMgr, "SpeedTest manager")
 	}
 
+	if s.metricsAPI != nil {
+		if err := s.metricsAPI.Stop(); err != nil {
+			LogError("METRICS: metrics API shutdown failed: %v", err)
+		} else {
+			LogInfo("METRICS: metrics API shut down successfully")
+		}
+	}
+
 	if s.pprofServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 		if err := s.pprofServer.Shutdown(ctx); err != nil {
@@ -4040,6 +4553,9 @@ func (s *DNSServer) Start() error {
 		serverCount++
 	}
 	if s.pprofServer != nil {
+		serverCount++
+	}
+	if s.metricsAPI != nil {
 		serverCount++
 	}
 
@@ -4086,6 +4602,17 @@ func (s *DNSServer) Start() error {
 
 			if err != nil && err != http.ErrServerClosed {
 				errChan <- fmt.Errorf("pprof startup: %w", err)
+			}
+		}()
+	}
+
+	if s.metricsAPI != nil {
+		go func() {
+			defer wg.Done()
+			defer HandlePanic("metrics API server")
+			LogInfo("METRICS: metrics server enabled on: %s, via: %s, tls: %t", s.config.Server.Metrics, MetricsPath, s.metricsAPI.tlsConfig != nil)
+			if err := s.metricsAPI.Start(s.config.Server.Metrics); err != nil {
+				errChan <- fmt.Errorf("metrics API startup: %w", err)
 			}
 		}()
 	}
@@ -4220,9 +4747,34 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	default:
 	}
 
+	// Record query start time for metrics
+	startTime := time.Now()
+	protocol := "udp"
+	if w.LocalAddr().Network() == "tcp" {
+		protocol = "tcp"
+	}
+
+	// Record the query
+	if s.metricsCollector != nil {
+		s.metricsCollector.RecordQuery(protocol)
+	}
+
 	response := s.processDNSQuery(req, GetClientIP(w), false)
 	if response != nil {
 		response.Compress = true
+
+		// Record response metrics
+		if s.metricsCollector != nil {
+			responseTime := time.Since(startTime)
+			success := response.Rcode == dns.RcodeSuccess || response.Rcode == dns.RcodeNameError
+			s.metricsCollector.RecordResponse(protocol, success, responseTime, response.Rcode)
+
+			// Record traffic metrics
+			reqBytes := uint64(req.Len())
+			respBytes := uint64(response.Len())
+			s.metricsCollector.RecordTraffic(reqBytes, respBytes)
+		}
+
 		_ = w.WriteMsg(response)
 	}
 }
@@ -4270,6 +4822,12 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 
 	if s.rewriteMgr.hasRules() {
 		rewriteResult := s.rewriteMgr.RewriteWithDetails(question.Name, question.Qtype)
+
+		// Record rewrite match
+		if s.metricsCollector != nil && rewriteResult.ShouldRewrite {
+			s.metricsCollector.RecordRewriteMatch()
+		}
+
 		if rewriteResult.ShouldRewrite {
 			if rewriteResult.ResponseCode != dns.RcodeSuccess {
 				response := s.buildResponse(req)
@@ -4310,9 +4868,17 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	cacheKey := BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC, s.config.Redis.KeyPrefix)
 
 	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
+		// Record cache hit
+		if s.metricsCollector != nil {
+			s.metricsCollector.RecordCacheOperation(true)
+		}
 		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cacheKey, isSecureConnection)
 	}
 
+	// Record cache miss
+	if s.metricsCollector != nil {
+		s.metricsCollector.RecordCacheOperation(false)
+	}
 	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection, tracker)
 }
 
@@ -4967,6 +5533,11 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 }
 
 func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
+	// Record hijack prevention
+	if rr.server.metricsCollector != nil {
+		rr.server.metricsCollector.RecordHijackPrevented()
+	}
+
 	if !currentlyTCP {
 		return nil, nil, nil, false, nil, "", fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
 	}

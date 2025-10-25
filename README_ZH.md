@@ -161,14 +161,16 @@ graph TB
         FF[IPDetector<br><i>IP检测器</i>]
         GG[LogManager<br><i>日志管理</i>]
         HH[MemoryMonitor<br><i>内存监控</i>]
+        II[MetricsCollector<br><i>指标收集器</i>]
+        JJ[MetricsAPI<br><i>指标HTTP API</i>]
     end
 
     subgraph "外部服务"
-        II[Root Servers<br><i>根服务器</i>]
-        JJ[Upstream DNS<br><i>上游DNS</i>]
-        KK[Redis Cluster<br><i>Redis集群</i>]
-        LL[Self-signed CA<br><i>自签名CA</i>]
-        MM[TLS Certificates<br><i>TLS证书</i>]
+        KK[Root Servers<br><i>根服务器</i>]
+        LL[Upstream DNS<br><i>上游DNS</i>]
+        MM[Redis Cluster<br><i>Redis集群</i>]
+        NN[Self-signed CA<br><i>自签名CA</i>]
+        OO[TLS Certificates<br><i>TLS证书</i>]
     end
 
     %% 主要连接关系
@@ -209,16 +211,18 @@ graph TB
     B --> FF
     B --> GG
     B --> HH
+    B --> II
+    II --> JJ
 
     %% 外部连接
-    EE --> II
-    G --> JJ
-    X --> KK
-    DD --> LL
-    DD --> MM
-    J --> MM
-    K --> MM
-    L --> MM
+    EE --> KK
+    G --> LL
+    X --> MM
+    DD --> NN
+    DD --> OO
+    J --> OO
+    K --> OO
+    L --> OO
 
     %% 样式定义
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
@@ -236,8 +240,8 @@ graph TB
     class M,N,O,P engine
     class Q,R,S,T,U,V,W security
     class X,Y,Z,AA cache
-    class BB,CC,DD,EE,FF,GG,HH infra
-    class II,JJ,KK,LL,MM external
+    class BB,CC,DD,EE,FF,GG,HH,II,JJ infra
+    class KK,LL,MM,NN,OO external
 ```
 
 ---

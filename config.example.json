@@ -2,6 +2,7 @@
   "server": {
     "port": "53",
     "pprof": "6060",
+    "metrics": "6061",
     "log_level": "info",
     "default_ecs_subnet": "auto",
     "ddr": {
@@ -32,22 +33,22 @@
   "speedtest": [
     {
       "type": "icmp",
-      "timeout": 250
+      "timeout": 200
     },
     {
       "type": "tcp",
       "port": "443",
-      "timeout": 250
+      "timeout": 200
     },
     {
       "type": "tcp",
       "port": "80",
-      "timeout": 250
+      "timeout": 200
     },
     {
       "type": "udp",
       "port": "53",
-      "timeout": 250
+      "timeout": 200
     }
   ],
   "upstream": [
@@ -80,18 +81,14 @@
       "protocol": "https",
       "server_name": "dns.alidns.com",
       "skip_tls_verify": false,
-      "match": [
-        "mixed"
-      ]
+      "match": ["mixed"]
     },
     {
       "address": "https://223.6.6.6:443/dns-query",
       "protocol": "http3",
       "server_name": "dns.alidns.com",
       "skip_tls_verify": false,
-      "match": [
-        "!mixed"
-      ]
+      "match": ["!mixed"]
     },
     {
       "address": "builtin_recursive",
@@ -128,18 +125,12 @@
       "tag": "file"
     },
     {
-      "rules": [
-        "192.168.0.0/16",
-        "10.0.0.0/8",
-        "2001:db8::/32"
-      ],
+      "rules": ["192.168.0.0/16", "10.0.0.0/8", "2001:db8::/32"],
       "tag": "rules"
     },
     {
       "file": "blacklist.txt",
-      "rules": [
-        "127.0.0.1/32"
-      ],
+      "rules": ["127.0.0.1/32"],
       "tag": "mixed"
     }
   ]
