@@ -582,66 +582,31 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 }
 
 func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
-	if record.Type == "CNAME" && record.Content != "" {
-		return &dns.CNAME{
-			Hdr: dns.RR_Header{
-				Name:   domain,
-				Rrtype: dns.TypeCNAME,
-				Class:  dns.ClassINET,
-				Ttl:    record.TTL,
-			},
-			Target: dns.Fqdn(record.Content),
-		}
+	ttl := record.TTL
+	if ttl == 0 {
+		ttl = DefaultCacheTTL
 	}
 
-	if record.Content == "" {
-		return nil
+	name := dns.Fqdn(domain)
+	if record.Name != "" {
+		name = dns.Fqdn(record.Name)
 	}
 
-	switch strings.ToUpper(record.Type) {
-	case "A":
-		if ip := net.ParseIP(record.Content); ip != nil && ip.To4() != nil {
-			return &dns.A{
-				Hdr: dns.RR_Header{
-					Name:   domain,
-					Rrtype: dns.TypeA,
-					Class:  dns.ClassINET,
-					Ttl:    record.TTL,
-				},
-				A: ip.To4(),
-			}
-		}
-	case "AAAA":
-		if ip := net.ParseIP(record.Content); ip != nil && ip.To4() == nil {
-			return &dns.AAAA{
-				Hdr: dns.RR_Header{
-					Name:   domain,
-					Rrtype: dns.TypeAAAA,
-					Class:  dns.ClassINET,
-					Ttl:    record.TTL,
-				},
-				AAAA: ip,
-			}
-		}
-	case "TXT":
-		return &dns.TXT{
-			Hdr: dns.RR_Header{
-				Name:   domain,
-				Rrtype: dns.TypeTXT,
-				Class:  dns.ClassINET,
-				Ttl:    record.TTL,
-			},
-			Txt: []string{record.Content},
-		}
+	// Try to create any type of DNS record using dns.NewRR()
+	// This supports ALL DNS record types (MX, NS, SRV, CAA, DNSKEY, etc.)
+	rrStr := fmt.Sprintf("%s %d IN %s %s", name, ttl, record.Type, record.Content)
+	if rr, err := dns.NewRR(rrStr); err == nil {
+		return rr
+	}
+
+	// If direct parsing fails, fall back to RFC3597 format
+	rrType, exists := dns.StringToType[record.Type]
+	if !exists {
+		rrType = 0
 	}
 
 	return &dns.RFC3597{
-		Hdr: dns.RR_Header{
-			Name:   domain,
-			Rrtype: dns.StringToType[record.Type],
-			Class:  dns.ClassINET,
-			Ttl:    record.TTL,
-		},
+		Hdr:   dns.RR_Header{Name: name, Rrtype: rrType, Class: dns.ClassINET, Ttl: ttl},
 		Rdata: record.Content,
 	}
 }
@@ -1945,20 +1910,18 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	}
 
 	var entry CacheEntry
-	// Try binary deserialization first (more efficient)
+	// Use binary serialization only for maximum performance
 	if err := entry.DeserializeBinary([]byte(data)); err != nil {
-		// Fallback to JSON for backward compatibility
-		if err := json.Unmarshal([]byte(data), &entry); err != nil {
-			rc.wg.Add(1)
-			go func() {
-				defer rc.wg.Done()
-				defer HandlePanic("Clean corrupted cache")
-				cleanCtx, cleanCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
-				defer cleanCancel()
-				rc.client.Del(cleanCtx, key)
-			}()
-			return nil, false, false
-		}
+		// Invalid cache entry - remove it
+		rc.wg.Add(1)
+		go func() {
+			defer rc.wg.Done()
+			defer HandlePanic("Clean corrupted cache")
+			cleanCtx, cleanCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+			defer cleanCancel()
+			rc.client.Del(cleanCtx, key)
+		}()
+		return nil, false, false
 	}
 
 	isExpired := entry.IsExpired()
@@ -1971,15 +1934,12 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 		if atomic.LoadInt32(&rc.closed) == 0 {
 			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
 			defer updateCancel()
-			// Use binary serialization for better performance
-			if data, err := entry.SerializeBinary(); err == nil {
-				rc.client.Set(updateCtx, key, data, redis.KeepTTL)
-			} else {
-				// Fallback to JSON on error
-				if jsonData, jsonErr := json.Marshal(entry); jsonErr == nil {
-					rc.client.Set(updateCtx, key, jsonData, redis.KeepTTL)
-				}
+			// Use binary serialization only for maximum performance
+			if data, err := entry.SerializeBinary(); err != nil {
+				LogWarn("CACHE: Binary serialization failed, skipping update: %v", err)
+				return
 			}
+			rc.client.Set(updateCtx, key, data, redis.KeepTTL)
 		}
 	}()
 
@@ -2016,14 +1976,11 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		entry.ECSAddress = ecs.Address.String()
 	}
 
-	// Use binary serialization for better performance
+	// Use binary serialization only for maximum performance
 	data, err := entry.SerializeBinary()
 	if err != nil {
-		// Fallback to JSON on error
-		data, err = json.Marshal(entry)
-		if err != nil {
-			return
-		}
+		LogWarn("CACHE: Binary serialization failed, skipping cache write: %v", err)
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
@@ -2721,18 +2678,15 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 			data, err := st.redis.Get(ctx, key).Result()
 			if err == nil {
 				var result SpeedResult
-				// Try binary deserialization first (more efficient)
+				// Use binary serialization only for maximum performance
 				if result.DeserializeBinary([]byte(data)) == nil {
 					if time.Since(result.Timestamp) < st.cacheTTL {
 						results[ip] = &result
 						continue
 					}
-				} else if json.Unmarshal([]byte(data), &result) == nil {
-					// Fallback to JSON for backward compatibility
-					if time.Since(result.Timestamp) < st.cacheTTL {
-						results[ip] = &result
-						continue
-					}
+				} else {
+					// Invalid cache entry - skip it
+					continue
 				}
 			}
 			remainingIPs = append(remainingIPs, ip)
@@ -2753,15 +2707,12 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 
 		for ip, result := range newResults {
 			key := st.keyPrefix + ip
-			// Use binary serialization for better performance
-			if data, err := result.SerializeBinary(); err == nil {
-				st.redis.Set(ctx, key, data, st.cacheTTL)
-			} else {
-				// Fallback to JSON on error
-				if jsonData, jsonErr := json.Marshal(result); jsonErr == nil {
-					st.redis.Set(ctx, key, jsonData, st.cacheTTL)
-				}
+			// Use binary serialization only for maximum performance
+			if data, err := result.SerializeBinary(); err != nil {
+				LogWarn("SPEEDTEST: Binary serialization failed for %s: %v", ip, err)
+				continue
 			}
+			st.redis.Set(ctx, key, data, st.cacheTTL)
 		}
 	}
 
