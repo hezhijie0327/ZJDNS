@@ -144,13 +144,14 @@ const (
 	RootServerRefresh  = 900 * time.Second
 
 	// Redis Configuration
-	RedisPoolSize     = 3
-	RedisMinIdle      = 1
-	RedisMaxRetries   = 2
-	RedisPoolTimeout  = 2 * time.Second
-	RedisReadTimeout  = 2 * time.Second
-	RedisWriteTimeout = 2 * time.Second
-	RedisDialTimeout  = 2 * time.Second
+	RedisPoolSize        = 3
+	RedisMinIdle         = 1
+	RedisMaxRetries      = 2
+	RedisPoolTimeout     = 2 * time.Second
+	RedisReadTimeout     = 2 * time.Second
+	RedisWriteTimeout    = 2 * time.Second
+	RedisDialTimeout     = 2 * time.Second
+	RedisPoolIdleTimeout = 5 * time.Second
 
 	// Redis Key Prefixes
 	RedisPrefixDNS           = "dns:"
@@ -1740,35 +1741,36 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	}
 
 	var entry CacheEntry
-	// Use binary serialization only for maximum performance
-	if err := deserializeFromBinary([]byte(data), entry); err != nil {
-		// Invalid cache entry - remove it
-		go func() {
-			defer HandlePanic("Clean corrupted cache")
-			cleanCtx, cleanCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
-			defer cleanCancel()
-			rc.client.Del(cleanCtx, key)
-		}()
+	if err := deserializeFromBinary([]byte(data), &entry); err != nil {
+		rc.client.Del(rc.ctx, key)
 		return nil, false, false
 	}
 
 	isExpired := entry.IsExpired()
 
 	entry.AccessTime = time.Now().Unix()
-	go func() {
-		defer HandlePanic("Update access time")
+
+	select {
+	case <-rc.ctx.Done():
+		return nil, false, false
+	default:
 		if atomic.LoadInt32(&rc.closed) == 0 {
-			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
-			defer updateCancel()
-			// Use binary serialization only for maximum performance
-			data, err := serializeToBinary(entry)
-			if err != nil {
-				LogWarn("CACHE: Binary serialization failed, skipping update: %v", err)
-				return
-			}
-			rc.client.Set(updateCtx, key, data, redis.KeepTTL)
+			rc.wg.Add(1)
+			go func() {
+				defer rc.wg.Done()
+				defer HandlePanic("Update access time")
+
+				updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+				defer updateCancel()
+
+				data, err := serializeToBinary(entry)
+				if err != nil {
+					return
+				}
+				rc.client.Set(updateCtx, key, data, redis.KeepTTL)
+			}()
 		}
-	}()
+	}
 
 	return &entry, true, isExpired
 }
@@ -1836,7 +1838,7 @@ func (rc *RedisCache) Close() error {
 	select {
 	case <-done:
 		LogDebug("CACHE: All Redis goroutines finished gracefully")
-	case <-time.After(5 * time.Second):
+	case <-time.After(RedisPoolIdleTimeout):
 		LogWarn("CACHE: Redis goroutine shutdown timeout")
 	}
 
@@ -3423,6 +3425,9 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 
 	reader := bufio.NewReaderSize(tlsConn, 2048)
 
+	lengthBuf := make([]byte, 2)
+	msgBuf := make([]byte, TCPBufferSize)
+
 	for {
 		select {
 		case <-tm.ctx.Done():
@@ -3433,7 +3438,6 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		_ = tlsConn.SetReadDeadline(time.Now().Add(DoTReadTimeout))
 		_ = tlsConn.SetWriteDeadline(time.Now().Add(DoTWriteTimeout))
 
-		lengthBuf := make([]byte, 2)
 		n, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
 			if err != io.EOF && !IsTemporaryError(err) {
@@ -3452,8 +3456,7 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		msgBuf := make([]byte, msgLength)
-		n, err = io.ReadFull(reader, msgBuf)
+		n, err = io.ReadFull(reader, msgBuf[:msgLength])
 		if err != nil {
 			LogDebug("DOT: Read message error: %v", err)
 			return
@@ -3463,9 +3466,10 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		req := new(dns.Msg)
-		if err := req.Unpack(msgBuf); err != nil {
+		req := AcquireMessage()
+		if err := req.Unpack(msgBuf[:msgLength]); err != nil {
 			LogDebug("DOT: DNS message unpack error: %v", err)
+			ReleaseMessage(req)
 			continue
 		}
 
@@ -3474,26 +3478,31 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			clientIP = addr.(*net.TCPAddr).IP
 		}
 		response := tm.server.processDNSQuery(req, clientIP, true)
+		ReleaseMessage(req)
 
 		if response != nil {
 			respBuf, err := response.Pack()
 			if err != nil {
 				LogDebug("DOT: Response pack error: %v", err)
+				ReleaseMessage(response)
 				return
 			}
 
-			lengthBuf := make([]byte, 2)
 			binary.BigEndian.PutUint16(lengthBuf, uint16(len(respBuf)))
 
 			if _, err := tlsConn.Write(lengthBuf); err != nil {
 				LogDebug("DOT: Write length error: %v", err)
+				ReleaseMessage(response)
 				return
 			}
 
 			if _, err := tlsConn.Write(respBuf); err != nil {
 				LogDebug("DOT: Write response error: %v", err)
+				ReleaseMessage(response)
 				return
 			}
+
+			ReleaseMessage(response)
 		}
 	}
 }
