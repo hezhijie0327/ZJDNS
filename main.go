@@ -813,20 +813,6 @@ func (mc *MetricsCollector) RecordResponse(protocol string, success bool, respon
 	mc.AverageResponseTime = (mc.AverageResponseTime + responseTime) / 2
 }
 
-// RecordCacheHit records a cache hit
-func (mc *MetricsCollector) RecordCacheHit() {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-	mc.CacheHits++
-}
-
-// RecordCacheMiss records a cache miss
-func (mc *MetricsCollector) RecordCacheMiss() {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-	mc.CacheMisses++
-}
-
 // RecordCacheOperation records cache operation (hit or miss)
 func (mc *MetricsCollector) RecordCacheOperation(isHit bool) {
 	mc.mu.Lock()
@@ -883,16 +869,6 @@ func (mc *MetricsCollector) RecordMultipleMetrics(
 	}
 	mc.AverageResponseTime = (mc.AverageResponseTime + responseTime) / 2
 }
-
-// RecordTimeout records a timeout error (included in failed responses)
-// Note: Timeout is already counted as a failed response in RecordResponse
-// This function is kept for backward compatibility but does nothing
-func (mc *MetricsCollector) RecordTimeout() {}
-
-// RecordHijackDetection records a DNS hijacking detection
-// Note: Detection is already handled in security prevention metrics
-// This function is kept for backward compatibility but does nothing
-func (mc *MetricsCollector) RecordHijackDetection() {}
 
 // RecordHijackPrevented records a successful hijack prevention
 func (mc *MetricsCollector) RecordHijackPrevented() {
@@ -1054,15 +1030,15 @@ func (ma *MetricsAPI) Start(port string) error {
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
-		TLSConfig:    ma.tlsConfig,
 	}
 
-	protocol := "HTTP"
 	if ma.tlsConfig != nil {
-		protocol = "HTTPS"
+		ma.server.TLSConfig = ma.tlsConfig
+		LogInfo("METRICS: HTTPS metrics server started on port %s, via: %s", port, MetricsPath)
+		return ma.server.ListenAndServeTLS("", "")
 	}
 
-	LogInfo("METRICS: %s metrics server started on port %s, via: %s", protocol, port, MetricsPath)
+	LogInfo("METRICS: HTTP metrics server started on port %s, via: %s", port, MetricsPath)
 
 	if ma.tlsConfig != nil {
 		return ma.server.ListenAndServeTLS("", "")
@@ -4901,14 +4877,14 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
 		// Record cache hit
 		if s.metricsCollector != nil {
-			s.metricsCollector.RecordCacheHit()
+			s.metricsCollector.RecordCacheOperation(true)
 		}
 		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cacheKey, isSecureConnection)
 	}
 
 	// Record cache miss
 	if s.metricsCollector != nil {
-		s.metricsCollector.RecordCacheMiss()
+		s.metricsCollector.RecordCacheOperation(false)
 	}
 	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection, tracker)
 }
