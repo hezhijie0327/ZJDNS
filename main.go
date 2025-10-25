@@ -1741,36 +1741,35 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	}
 
 	var entry CacheEntry
-	if err := deserializeFromBinary([]byte(data), &entry); err != nil {
-		rc.client.Del(rc.ctx, key)
+	// Use binary serialization only for maximum performance
+	if err := deserializeFromBinary([]byte(data), entry); err != nil {
+		// Invalid cache entry - remove it
+		go func() {
+			defer HandlePanic("Clean corrupted cache")
+			cleanCtx, cleanCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+			defer cleanCancel()
+			rc.client.Del(cleanCtx, key)
+		}()
 		return nil, false, false
 	}
 
 	isExpired := entry.IsExpired()
 
 	entry.AccessTime = time.Now().Unix()
-
-	select {
-	case <-rc.ctx.Done():
-		return nil, false, false
-	default:
+	go func() {
+		defer HandlePanic("Update access time")
 		if atomic.LoadInt32(&rc.closed) == 0 {
-			rc.wg.Add(1)
-			go func() {
-				defer rc.wg.Done()
-				defer HandlePanic("Update access time")
-
-				updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
-				defer updateCancel()
-
-				data, err := serializeToBinary(entry)
-				if err != nil {
-					return
-				}
-				rc.client.Set(updateCtx, key, data, redis.KeepTTL)
-			}()
+			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+			defer updateCancel()
+			// Use binary serialization only for maximum performance
+			data, err := serializeToBinary(entry)
+			if err != nil {
+				LogWarn("CACHE: Binary serialization failed, skipping update: %v", err)
+				return
+			}
+			rc.client.Set(updateCtx, key, data, redis.KeepTTL)
 		}
-	}
+	}()
 
 	return &entry, true, isExpired
 }
@@ -3425,9 +3424,6 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 
 	reader := bufio.NewReaderSize(tlsConn, 2048)
 
-	lengthBuf := make([]byte, 2)
-	msgBuf := make([]byte, TCPBufferSize)
-
 	for {
 		select {
 		case <-tm.ctx.Done():
@@ -3438,6 +3434,7 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		_ = tlsConn.SetReadDeadline(time.Now().Add(DoTReadTimeout))
 		_ = tlsConn.SetWriteDeadline(time.Now().Add(DoTWriteTimeout))
 
+		lengthBuf := make([]byte, 2)
 		n, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
 			if err != io.EOF && !IsTemporaryError(err) {
@@ -3456,7 +3453,8 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		n, err = io.ReadFull(reader, msgBuf[:msgLength])
+		msgBuf := make([]byte, msgLength)
+		n, err = io.ReadFull(reader, msgBuf)
 		if err != nil {
 			LogDebug("DOT: Read message error: %v", err)
 			return
@@ -3466,10 +3464,9 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		req := AcquireMessage()
-		if err := req.Unpack(msgBuf[:msgLength]); err != nil {
+		req := new(dns.Msg)
+		if err := req.Unpack(msgBuf); err != nil {
 			LogDebug("DOT: DNS message unpack error: %v", err)
-			ReleaseMessage(req)
 			continue
 		}
 
@@ -3478,31 +3475,26 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			clientIP = addr.(*net.TCPAddr).IP
 		}
 		response := tm.server.processDNSQuery(req, clientIP, true)
-		ReleaseMessage(req)
 
 		if response != nil {
 			respBuf, err := response.Pack()
 			if err != nil {
 				LogDebug("DOT: Response pack error: %v", err)
-				ReleaseMessage(response)
 				return
 			}
 
+			lengthBuf := make([]byte, 2)
 			binary.BigEndian.PutUint16(lengthBuf, uint16(len(respBuf)))
 
 			if _, err := tlsConn.Write(lengthBuf); err != nil {
 				LogDebug("DOT: Write length error: %v", err)
-				ReleaseMessage(response)
 				return
 			}
 
 			if _, err := tlsConn.Write(respBuf); err != nil {
 				LogDebug("DOT: Write response error: %v", err)
-				ReleaseMessage(response)
 				return
 			}
-
-			ReleaseMessage(response)
 		}
 	}
 }
@@ -3607,46 +3599,36 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		}
 	}()
 
-	g, streamCtx := errgroup.WithContext(tm.ctx)
+	streamWg := sync.WaitGroup{}
+	defer streamWg.Wait()
 
-	g.SetLimit(MaxIncomingStreams / 2)
+	for {
+		select {
+		case <-tm.ctx.Done():
+			return
+		case <-conn.Context().Done():
+			return
+		default:
+		}
 
-	acceptDone := make(chan struct{})
-	g.Go(func() error {
-		defer close(acceptDone)
-		for {
-			select {
-			case <-tm.ctx.Done():
-				return tm.ctx.Err()
-			case <-conn.Context().Done():
-				return conn.Context().Err()
-			default:
-			}
+		stream, err := conn.AcceptStream(tm.ctx)
+		if err != nil {
+			return
+		}
 
-			stream, err := conn.AcceptStream(streamCtx)
-			if err != nil {
-				if streamCtx.Err() != nil {
-					return streamCtx.Err()
-				}
-				return err
-			}
+		if stream == nil {
+			continue
+		}
 
-			if stream == nil {
-				continue
-			}
-
-			s := stream
-			g.Go(func() error {
-				defer HandlePanic("DoQ stream handler")
+		streamWg.Add(1)
+		go func(s *quic.Stream) {
+			defer streamWg.Done()
+			defer HandlePanic("DoQ stream handler")
+			if s != nil {
 				defer func() { _ = s.Close() }()
 				tm.handleDOQStream(s, conn)
-				return nil
-			})
-		}
-	})
-
-	if err := g.Wait(); err != nil && err != context.Canceled {
-		LogDebug("QUIC: Connection handler error: %v", err)
+			}
+		}(stream)
 	}
 }
 
@@ -5251,20 +5233,7 @@ func getVersion() string {
 }
 
 func NormalizeDomain(domain string) string {
-	if domain == "" {
-		return ""
-	}
-
-	if len(domain) > 0 && domain[len(domain)-1] != '.' {
-		lower := strings.ToLower(domain)
-		if lower == domain {
-			return domain
-		}
-		return lower
-	}
-
-	domain = strings.TrimSuffix(domain, ".")
-	return strings.ToLower(domain)
+	return strings.ToLower(strings.TrimSuffix(domain, "."))
 }
 
 func IsSecureProtocol(protocol string) bool {
