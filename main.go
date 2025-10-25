@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -27,7 +28,7 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime"
-	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +47,7 @@ import (
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+	"golang.org/x/sync/errgroup"
 )
 
 // =============================================================================
@@ -53,7 +55,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.2"
+	Version    = "1.4.3"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -79,17 +81,15 @@ var (
 
 const (
 	// Server Ports
-	DefaultDNSPort     = "53"
-	DefaultDOTPort     = "853"
-	DefaultDOHPort     = "443"
-	DefaultPprofPort   = "6060"
-	DefaultMetricsPort = "6061"
+	DefaultDNSPort   = "53"
+	DefaultDOTPort   = "853"
+	DefaultDOHPort   = "443"
+	DefaultPprofPort = "6060"
 
 	// Protocol Indicators
 	RecursiveIndicator = "builtin_recursive"
 	DefaultQueryPath   = "/dns-query"
 	PprofPath          = "/debug/pprof/"
-	MetricsPath        = "/metrics"
 
 	// Buffer Sizes
 	UDPBufferSize       = 1232
@@ -197,9 +197,8 @@ type LogLevel int
 // =============================================================================
 
 type LogManager struct {
-	level    LogLevel
+	level    atomic.Int32 // LogLevel
 	writer   io.Writer
-	mu       sync.Mutex
 	colorMap map[LogLevel]string
 }
 
@@ -215,7 +214,6 @@ type ServerConfig struct {
 type ServerSettings struct {
 	Port       string       `json:"port"`
 	Pprof      string       `json:"pprof"`
-	Metrics    string       `json:"metrics"`
 	LogLevel   string       `json:"log_level"`
 	DefaultECS string       `json:"default_ecs_subnet"`
 	DDR        DDRSettings  `json:"ddr"`
@@ -441,14 +439,13 @@ type RewriteManager struct {
 // Connection Pool Types
 type ConnPoolEntry struct {
 	conn       any
-	lastUsed   time.Time
+	lastUsed   atomic.Value // time.Time
 	createdAt  time.Time
-	useCount   int64
+	useCount   atomic.Int64
 	serverAddr string
 	protocol   string
 	healthy    atomic.Bool
 	closed     atomic.Bool
-	mu         sync.Mutex
 }
 
 type ConnPool struct {
@@ -500,152 +497,26 @@ type TLSManager struct {
 	h3Listener    *quic.EarlyListener
 }
 
-// Memory Monitor Type
-type MemoryMonitor struct {
-	ticker *time.Ticker
-	done   chan struct{}
-}
-
 // DNS Server Type
 type DNSServer struct {
-	config           *ServerConfig
-	cacheMgr         CacheManager
-	queryClient      *QueryClient
-	connPool         *ConnPool
-	securityMgr      *SecurityManager
-	ednsMgr          *EDNSManager
-	rewriteMgr       *RewriteManager
-	speedTestMgr     *SpeedTestManager
-	rootServerMgr    *RootServerManager
-	cidrMgr          *CIDRManager
-	pprofServer      *http.Server
-	memMonitor       *MemoryMonitor
-	redisClient      *redis.Client
-	metricsCollector *MetricsCollector
-	metricsAPI       *MetricsAPI
-	ctx              context.Context
-	cancel           context.CancelFunc
-	shutdown         chan struct{}
-	wg               sync.WaitGroup
-	closed           int32
-	queryMgr         *QueryManager
-}
-
-// =============================================================================
-// Metrics API Types
-// =============================================================================
-
-// ProtocolStats stores per-protocol query and response statistics for MetricsCollector
-type ProtocolStats struct {
-	Success uint64
-	Failed  uint64
-}
-
-// MetricsCollector collects and stores DNS server metrics
-type MetricsCollector struct {
-	mu        sync.RWMutex
-	startTime time.Time
-
-	// Protocol-specific metrics
-	UDP  ProtocolStats
-	TCP  ProtocolStats
-	DoT  ProtocolStats
-	DoQ  ProtocolStats
-	DoH  ProtocolStats
-	DoH3 ProtocolStats
-
-	// Cache metrics
-	CacheHits   uint64
-	CacheMisses uint64
-
-	// Performance metrics
-	AverageResponseTime time.Duration
-	MaxResponseTime     time.Duration
-
-	// Security metrics
-	HijackPrevented uint64
-	RewriteMatches  uint64
-
-	// Traffic metrics
-	BytesReceived uint64
-	BytesSent     uint64
-}
-
-// MetricsAPI provides HTTP endpoints for metrics
-type MetricsAPI struct {
-	collector *MetricsCollector
-	server    *http.Server
-	tlsConfig *tls.Config
-	enabled   bool
-}
-
-// MetricsResponse represents the JSON response for metrics
-type MetricsResponse struct {
-	Server      ServerMetricsInfo `json:"server"`
-	QueryStats  QueryMetricsStats `json:"query_stats"`
-	Performance PerformanceStats  `json:"performance"`
-	Features    FeaturesMetrics   `json:"features"`
-	Timestamp   time.Time         `json:"timestamp"`
-}
-
-type ServerMetricsInfo struct {
-	Info    ServerInfo     `json:"info"`
-	Memory  MemoryMetrics  `json:"memory"`
-	Network NetworkMetrics `json:"network"`
-}
-
-type ServerInfo struct {
-	Version       string `json:"version"`
-	CommitHash    string `json:"commit_hash"`
-	BuildTime     string `json:"build_time"`
-	Uptime        string `json:"uptime"`
-	GoVersion     string `json:"go_version"`
-	NumGoroutines int    `json:"num_goroutines"`
-}
-
-type QueryMetricsStats struct {
-	UDP  ProtocolQueryMetrics `json:"udp"`
-	TCP  ProtocolQueryMetrics `json:"tcp"`
-	DoT  ProtocolQueryMetrics `json:"dot"`
-	DoQ  ProtocolQueryMetrics `json:"doq"`
-	DoH  ProtocolQueryMetrics `json:"doh"`
-	DoH3 ProtocolQueryMetrics `json:"doh3"`
-}
-
-type ProtocolQueryMetrics struct {
-	Success     uint64  `json:"success"`
-	Failed      uint64  `json:"failed"`
-	SuccessRate float64 `json:"success_rate"`
-}
-
-type PerformanceStats struct {
-	AvgResponseTime  string  `json:"avg_response_time"`
-	MaxResponseTime  string  `json:"max_response_time"`
-	QueriesPerSecond float64 `json:"queries_per_second"`
-}
-
-type MemoryMetrics struct {
-	Alloc    uint64 `json:"alloc_mb"`
-	Sys      uint64 `json:"sys_mb"`
-	HeapSize uint64 `json:"heap_size_mb"`
-	NumGC    uint32 `json:"num_gc"`
-}
-
-type NetworkMetrics struct {
-	BytesReceived uint64 `json:"bytes_received"`
-	BytesSent     uint64 `json:"bytes_sent"`
-}
-
-type CacheMetrics struct {
-	Hits    uint64  `json:"hits"`
-	Misses  uint64  `json:"misses"`
-	HitRate float64 `json:"hit_rate"`
-}
-
-type FeaturesMetrics struct {
-	Cache   CacheMetrics `json:"cache"`
-	Hijack  uint64       `json:"hijack"`
-	Rewrite uint64       `json:"rewrite"`
+	config        *ServerConfig
+	cacheMgr      CacheManager
+	queryClient   *QueryClient
+	connPool      *ConnPool
+	securityMgr   *SecurityManager
+	ednsMgr       *EDNSManager
+	rewriteMgr    *RewriteManager
+	speedTestMgr  *SpeedTestManager
+	rootServerMgr *RootServerManager
+	cidrMgr       *CIDRManager
+	pprofServer   *http.Server
+	redisClient   *redis.Client
+	ctx           context.Context
+	cancel        context.CancelFunc
+	shutdown      chan struct{}
+	wg            sync.WaitGroup
+	closed        int32
+	queryMgr      *QueryManager
 }
 
 type ConfigManager struct{}
@@ -684,8 +555,7 @@ type ResponseValidator struct {
 // =============================================================================
 
 func NewLogManager() *LogManager {
-	return &LogManager{
-		level:  Info,
+	lm := &LogManager{
 		writer: os.Stdout,
 		colorMap: map[LogLevel]string{
 			Error: ColorRed,
@@ -694,30 +564,25 @@ func NewLogManager() *LogManager {
 			Debug: ColorCyan,
 		},
 	}
+	lm.level.Store(int32(Info))
+	return lm
 }
 
 func (lm *LogManager) SetLevel(level LogLevel) {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
 	// Clamp level to valid range
 	if level < Error {
 		level = Error
 	} else if level > Debug {
 		level = Debug
 	}
-	lm.level = level
+	lm.level.Store(int32(level))
 }
 
 func (lm *LogManager) GetLevel() LogLevel {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
-	return lm.level
+	return LogLevel(lm.level.Load())
 }
 
-func (lm *LogManager) Log(level LogLevel, format string, args ...interface{}) {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
-
+func (lm *LogManager) Log(level LogLevel, format string, args ...any) {
 	// Clamp level to valid range to prevent array out of bounds
 	if level < Error {
 		level = Error
@@ -725,7 +590,7 @@ func (lm *LogManager) Log(level LogLevel, format string, args ...interface{}) {
 		level = Debug
 	}
 
-	if level > lm.level {
+	if level > LogLevel(lm.level.Load()) {
 		return
 	}
 
@@ -761,307 +626,15 @@ func (lm *LogManager) Log(level LogLevel, format string, args ...interface{}) {
 	_, _ = fmt.Fprint(lm.writer, logLine)
 }
 
-func (lm *LogManager) Error(format string, args ...interface{}) { lm.Log(Error, format, args...) }
-func (lm *LogManager) Warn(format string, args ...interface{})  { lm.Log(Warn, format, args...) }
-func (lm *LogManager) Info(format string, args ...interface{})  { lm.Log(Info, format, args...) }
-func (lm *LogManager) Debug(format string, args ...interface{}) { lm.Log(Debug, format, args...) }
+func (lm *LogManager) Error(format string, args ...any) { lm.Log(Error, format, args...) }
+func (lm *LogManager) Warn(format string, args ...any)  { lm.Log(Warn, format, args...) }
+func (lm *LogManager) Info(format string, args ...any)  { lm.Log(Info, format, args...) }
+func (lm *LogManager) Debug(format string, args ...any) { lm.Log(Debug, format, args...) }
 
-func LogError(format string, args ...interface{}) { globalLog.Error(format, args...) }
-func LogWarn(format string, args ...interface{})  { globalLog.Warn(format, args...) }
-func LogInfo(format string, args ...interface{})  { globalLog.Info(format, args...) }
-func LogDebug(format string, args ...interface{}) { globalLog.Debug(format, args...) }
-
-// =============================================================================
-// Metrics API Implementation
-// =============================================================================
-
-// NewMetricsCollector creates a new metrics collector
-func NewMetricsCollector() *MetricsCollector {
-	return &MetricsCollector{
-		startTime: time.Now(),
-	}
-}
-
-// RecordResponse records a DNS response for a specific protocol
-func (mc *MetricsCollector) RecordResponse(protocol string, success bool, responseTime time.Duration, rcode int) {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-
-	protocolMetrics := mc.getProtocolStats(protocol)
-	if success {
-		protocolMetrics.Success++
-	} else {
-		protocolMetrics.Failed++
-	}
-
-	// Update response time metrics
-	if responseTime > mc.MaxResponseTime {
-		mc.MaxResponseTime = responseTime
-	}
-
-	// Calculate rolling average
-	mc.AverageResponseTime = (mc.AverageResponseTime + responseTime) / 2
-}
-
-// RecordCacheOperation records cache operation (hit or miss)
-func (mc *MetricsCollector) RecordCacheOperation(isHit bool) {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-	if isHit {
-		mc.CacheHits++
-	} else {
-		mc.CacheMisses++
-	}
-}
-
-// RecordTraffic records bytes sent/received
-func (mc *MetricsCollector) RecordTraffic(bytesReceived, bytesSent uint64) {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-	mc.BytesReceived += bytesReceived
-	mc.BytesSent += bytesSent
-}
-
-// RecordMultipleMetrics records multiple metrics in a single lock operation
-func (mc *MetricsCollector) RecordMultipleMetrics(
-	protocol string,
-	success bool,
-	responseTime time.Duration,
-	bytesReceived, bytesSent uint64,
-	cacheHit bool,
-) {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-
-	// Protocol stats
-	stats := mc.getProtocolStats(protocol)
-	if success {
-		stats.Success++
-	} else {
-		stats.Failed++
-	}
-
-	// Traffic
-	mc.BytesReceived += bytesReceived
-	mc.BytesSent += bytesSent
-
-	// Cache
-	if cacheHit {
-		mc.CacheHits++
-	} else {
-		mc.CacheMisses++
-	}
-
-	// Response time
-	if responseTime > mc.MaxResponseTime {
-		mc.MaxResponseTime = responseTime
-	}
-	mc.AverageResponseTime = (mc.AverageResponseTime + responseTime) / 2
-}
-
-// RecordHijackPrevented records a successful hijack prevention
-func (mc *MetricsCollector) RecordHijackPrevented() {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-	mc.HijackPrevented++
-}
-
-// RecordRewriteMatch records a successful rewrite match
-func (mc *MetricsCollector) RecordRewriteMatch() {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-	mc.RewriteMatches++
-}
-
-// getTotalQueries returns total queries across all protocols (calculated from success + failed)
-func (mc *MetricsCollector) getTotalQueries() uint64 {
-	return mc.UDP.Success + mc.UDP.Failed + mc.TCP.Success + mc.TCP.Failed + mc.DoT.Success + mc.DoT.Failed + mc.DoQ.Success + mc.DoQ.Failed + mc.DoH.Success + mc.DoH.Failed + mc.DoH3.Success + mc.DoH3.Failed
-}
-
-// getProtocolSuccessRate calculates success rate for a protocol
-func (mc *MetricsCollector) getProtocolSuccessRate(p ProtocolStats) float64 {
-	total := p.Success + p.Failed
-	if total > 0 {
-		return float64(p.Success) / float64(total) * 100
-	}
-	return 0
-}
-
-// getProtocolStats returns a pointer to the protocol stats for the given protocol
-func (mc *MetricsCollector) getProtocolStats(protocol string) *ProtocolStats {
-	switch protocol {
-	case "udp":
-		return &mc.UDP
-	case "tcp":
-		return &mc.TCP
-	case "dot":
-		return &mc.DoT
-	case "doq":
-		return &mc.DoQ
-	case "doh":
-		return &mc.DoH
-	case "doh3":
-		return &mc.DoH3
-	default:
-		// Return a safe fallback - this should never happen with valid protocols
-		return &mc.UDP
-	}
-}
-
-// buildProtocolMetrics creates ProtocolQueryMetrics from ProtocolStats
-func (mc *MetricsCollector) buildProtocolMetrics(stats ProtocolStats) ProtocolQueryMetrics {
-	return ProtocolQueryMetrics{
-		Success:     stats.Success,
-		Failed:      stats.Failed,
-		SuccessRate: mc.getProtocolSuccessRate(stats),
-	}
-}
-
-// calculateHitRate calculates hit rate from hits and misses
-func calculateHitRate(hits, misses uint64) float64 {
-	total := hits + misses
-	if total > 0 {
-		return float64(hits) / float64(total) * 100
-	}
-	return 0
-}
-
-// calculateQPS calculates queries per second
-func calculateQPS(totalQueries uint64, uptime time.Duration) float64 {
-	if totalQueries > 0 {
-		return float64(totalQueries) / uptime.Seconds()
-	}
-	return 0
-}
-
-// GetMetrics returns current metrics
-func (mc *MetricsCollector) GetMetrics() MetricsResponse {
-	mc.mu.RLock()
-	defer mc.mu.RUnlock()
-
-	// Calculate metrics once
-	uptime := time.Since(mc.startTime)
-	totalQueries := mc.getTotalQueries()
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
-	response := MetricsResponse{
-		Server: ServerMetricsInfo{
-			Info: ServerInfo{
-				Version:       Version,
-				CommitHash:    CommitHash,
-				BuildTime:     BuildTime,
-				Uptime:        uptime.String(),
-				GoVersion:     runtime.Version(),
-				NumGoroutines: runtime.NumGoroutine(),
-			},
-			Memory: MemoryMetrics{
-				Alloc:    bToMb(m.Alloc),
-				Sys:      bToMb(m.Sys),
-				HeapSize: bToMb(m.HeapAlloc),
-				NumGC:    m.NumGC,
-			},
-			Network: NetworkMetrics{
-				BytesReceived: mc.BytesReceived,
-				BytesSent:     mc.BytesSent,
-			},
-		},
-		QueryStats: QueryMetricsStats{
-			UDP:  mc.buildProtocolMetrics(mc.UDP),
-			TCP:  mc.buildProtocolMetrics(mc.TCP),
-			DoT:  mc.buildProtocolMetrics(mc.DoT),
-			DoQ:  mc.buildProtocolMetrics(mc.DoQ),
-			DoH:  mc.buildProtocolMetrics(mc.DoH),
-			DoH3: mc.buildProtocolMetrics(mc.DoH3),
-		},
-		Performance: PerformanceStats{
-			AvgResponseTime:  mc.AverageResponseTime.String(),
-			MaxResponseTime:  mc.MaxResponseTime.String(),
-			QueriesPerSecond: calculateQPS(totalQueries, uptime),
-		},
-		Features: FeaturesMetrics{
-			Cache: CacheMetrics{
-				Hits:    mc.CacheHits,
-				Misses:  mc.CacheMisses,
-				HitRate: calculateHitRate(mc.CacheHits, mc.CacheMisses),
-			},
-			Hijack:  mc.HijackPrevented,
-			Rewrite: mc.RewriteMatches,
-		},
-		Timestamp: time.Now(),
-	}
-
-	return response
-}
-
-// NewMetricsAPI creates a new metrics API server
-func NewMetricsAPI(collector *MetricsCollector, tlsConfig *tls.Config) *MetricsAPI {
-	return &MetricsAPI{
-		collector: collector,
-		tlsConfig: tlsConfig,
-		enabled:   true,
-	}
-}
-
-// Start starts the metrics API server
-func (ma *MetricsAPI) Start(port string) error {
-	if !ma.enabled {
-		return errors.New("metrics API is disabled")
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc(MetricsPath, ma.handleMetricsJSON)
-
-	ma.server = &http.Server{
-		Addr:         ":" + port,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-
-	if ma.tlsConfig != nil {
-		ma.server.TLSConfig = ma.tlsConfig
-		return ma.server.ListenAndServeTLS("", "")
-	}
-	return ma.server.ListenAndServe()
-}
-
-// Stop stops the metrics API server
-func (ma *MetricsAPI) Stop() error {
-	if ma.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return ma.server.Shutdown(ctx)
-	}
-	return nil
-}
-
-// writeJSONResponse writes a JSON response with CORS headers
-func (ma *MetricsAPI) writeJSONResponse(w http.ResponseWriter, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-	}
-}
-
-// handleMetricsJSON handles JSON metrics endpoint
-func (ma *MetricsAPI) handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	metrics := ma.collector.GetMetrics()
-	ma.writeJSONResponse(w, metrics)
-}
-
-// bToMb converts bytes to megabytes
-func bToMb(b uint64) uint64 {
-	return b / 1024 / 1024
-}
+func LogError(format string, args ...any) { globalLog.Error(format, args...) }
+func LogWarn(format string, args ...any)  { globalLog.Warn(format, args...) }
+func LogInfo(format string, args ...any)  { globalLog.Info(format, args...) }
+func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
 
 // =============================================================================
 // ConnectionPool Implementation
@@ -1107,14 +680,14 @@ func (p *ConnPool) cleanupExpiredConns() {
 	now := time.Now()
 	removed := 0
 
-	cleanupMap := func(m *sync.Map, connType string) {
-		m.Range(func(key, value interface{}) bool {
+	cleanupMap := func(m *sync.Map) {
+		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
-			entry.mu.Lock()
 
+			lastUsed := entry.lastUsed.Load().(time.Time)
 			shouldRemove := entry.closed.Load() ||
 				now.Sub(entry.createdAt) > ConnMaxLifetime ||
-				now.Sub(entry.lastUsed) > ConnMaxIdleTime ||
+				now.Sub(lastUsed) > ConnMaxIdleTime ||
 				!entry.healthy.Load()
 
 			if shouldRemove {
@@ -1123,15 +696,14 @@ func (p *ConnPool) cleanupExpiredConns() {
 				removed++
 			}
 
-			entry.mu.Unlock()
 			return true
 		})
 	}
 
-	cleanupMap(&p.http2Conns, "HTTP/2")
-	cleanupMap(&p.http3Conns, "HTTP/3")
-	cleanupMap(&p.quicConns, "QUIC")
-	cleanupMap(&p.tlsConns, "TLS")
+	cleanupMap(&p.http2Conns)
+	cleanupMap(&p.http3Conns)
+	cleanupMap(&p.quicConns)
+	cleanupMap(&p.tlsConns)
 
 	if removed > 0 {
 		LogDebug("POOL: Cleaned up %d expired connections", removed)
@@ -1143,12 +715,10 @@ func (p *ConnPool) validateConns() {
 	failed := 0
 
 	validateMap := func(m *sync.Map) {
-		m.Range(func(key, value interface{}) bool {
+		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
-			entry.mu.Lock()
 
 			if entry.closed.Load() {
-				entry.mu.Unlock()
 				return true
 			}
 
@@ -1163,7 +733,6 @@ func (p *ConnPool) validateConns() {
 				validated++
 			}
 
-			entry.mu.Unlock()
 			return true
 		})
 	}
@@ -1230,11 +799,9 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 
 	if value, ok := p.http2Conns.Load(key); ok {
 		entry := value.(*ConnPoolEntry)
-		entry.mu.Lock()
 		if !entry.closed.Load() && entry.healthy.Load() {
-			entry.lastUsed = time.Now()
-			entry.useCount++
-			entry.mu.Unlock()
+			entry.lastUsed.Store(time.Now())
+			entry.useCount.Add(1)
 			return &http.Client{
 				Transport: entry.conn.(*http.Transport),
 				Timeout:   QueryTimeout,
@@ -1242,7 +809,6 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 		}
 		p.http2Conns.Delete(key)
 		p.closeEntry(entry)
-		entry.mu.Unlock()
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -1265,12 +831,12 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 
 	entry := &ConnPoolEntry{
 		conn:       transport,
-		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
-		useCount:   1,
 		serverAddr: serverAddr,
 		protocol:   "http2",
 	}
+	entry.lastUsed.Store(time.Now())
+	entry.useCount.Store(1)
 	entry.healthy.Store(true)
 
 	p.http2Conns.Store(key, entry)
@@ -1291,11 +857,9 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 
 	if value, ok := p.http3Conns.Load(key); ok {
 		entry := value.(*ConnPoolEntry)
-		entry.mu.Lock()
 		if !entry.closed.Load() && entry.healthy.Load() {
-			entry.lastUsed = time.Now()
-			entry.useCount++
-			entry.mu.Unlock()
+			entry.lastUsed.Store(time.Now())
+			entry.useCount.Add(1)
 			return &http.Client{
 				Transport: entry.conn.(*http3.Transport),
 				Timeout:   QueryTimeout,
@@ -1303,7 +867,6 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 		}
 		p.http3Conns.Delete(key)
 		p.closeEntry(entry)
-		entry.mu.Unlock()
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -1325,12 +888,12 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 
 	entry := &ConnPoolEntry{
 		conn:       transport,
-		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
-		useCount:   1,
 		serverAddr: serverAddr,
 		protocol:   "http3",
 	}
+	entry.lastUsed.Store(time.Now())
+	entry.useCount.Store(1)
 	entry.healthy.Store(true)
 
 	p.http3Conns.Store(key, entry)
@@ -1351,7 +914,6 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 
 	if value, ok := p.quicConns.Load(key); ok {
 		entry := value.(*ConnPoolEntry)
-		entry.mu.Lock()
 		conn := entry.conn.(*quic.Conn)
 
 		if !entry.closed.Load() && entry.healthy.Load() {
@@ -1359,17 +921,14 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 			case <-conn.Context().Done():
 				p.quicConns.Delete(key)
 				p.closeEntry(entry)
-				entry.mu.Unlock()
 			default:
-				entry.lastUsed = time.Now()
-				entry.useCount++
-				entry.mu.Unlock()
+				entry.lastUsed.Store(time.Now())
+				entry.useCount.Add(1)
 				return conn, nil
 			}
 		} else {
 			p.quicConns.Delete(key)
 			p.closeEntry(entry)
-			entry.mu.Unlock()
 		}
 	}
 
@@ -1397,12 +956,12 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 
 	entry := &ConnPoolEntry{
 		conn:       conn,
-		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
-		useCount:   1,
 		serverAddr: serverAddr,
 		protocol:   "quic",
 	}
+	entry.lastUsed.Store(time.Now())
+	entry.useCount.Store(1)
 	entry.healthy.Store(true)
 
 	p.quicConns.Store(key, entry)
@@ -1418,9 +977,7 @@ func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.
 
 	<-conn.Context().Done()
 
-	entry.mu.Lock()
 	entry.healthy.Store(false)
-	entry.mu.Unlock()
 
 	p.quicConns.Delete(key)
 	p.closeEntry(entry)
@@ -1435,19 +992,16 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 
 	if value, ok := p.tlsConns.Load(key); ok {
 		entry := value.(*ConnPoolEntry)
-		entry.mu.Lock()
 		conn := entry.conn.(*tls.Conn)
 
 		if !entry.closed.Load() && entry.healthy.Load() && p.validateConn(entry) {
-			entry.lastUsed = time.Now()
-			entry.useCount++
-			entry.mu.Unlock()
+			entry.lastUsed.Store(time.Now())
+			entry.useCount.Add(1)
 			return conn, nil
 		}
 
 		p.tlsConns.Delete(key)
 		p.closeEntry(entry)
-		entry.mu.Unlock()
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -1475,12 +1029,12 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 
 	entry := &ConnPoolEntry{
 		conn:       tlsConn,
-		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
-		useCount:   1,
 		serverAddr: serverAddr,
 		protocol:   "tls",
 	}
+	entry.lastUsed.Store(time.Now())
+	entry.useCount.Store(1)
 	entry.healthy.Store(true)
 
 	p.tlsConns.Store(key, entry)
@@ -1500,7 +1054,7 @@ func (p *ConnPool) Close() error {
 	p.cleanupTicker.Stop()
 
 	closeMap := func(m *sync.Map) {
-		m.Range(func(key, value interface{}) bool {
+		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
 			p.closeEntry(entry)
 			m.Delete(key)
@@ -1895,13 +1449,7 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	if config.Server.DefaultECS != "" {
 		ecs := strings.ToLower(config.Server.DefaultECS)
 		validPresets := []string{"auto", "auto_v4", "auto_v6"}
-		isValidPreset := false
-		for _, preset := range validPresets {
-			if ecs == preset {
-				isValidPreset = true
-				break
-			}
-		}
+		isValidPreset := slices.Contains(validPresets, ecs)
 		if !isValidPreset {
 			if _, _, err := net.ParseCIDR(config.Server.DefaultECS); err != nil {
 				return fmt.Errorf("invalid ECS subnet: %w", err)
@@ -2079,7 +1627,6 @@ func GenerateExampleConfig() string {
 	config := cm.getDefaultConfig()
 
 	config.Server.Pprof = DefaultPprofPort
-	config.Server.Metrics = DefaultMetricsPort
 	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
 	config.Redis.Address = "127.0.0.1:6379"
@@ -2995,9 +2542,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 		}
 	}
 
-	for ip, result := range newResults {
-		results[ip] = result
-	}
+	maps.Copy(results, newResults)
 
 	return results
 }
@@ -3006,11 +2551,10 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 	semaphore := make(chan struct{}, st.concurrency)
 	resultChan := make(chan *SpeedResult, len(ips))
 
-	var wg sync.WaitGroup
+	g, ctx := errgroup.WithContext(context.Background())
 	for _, ip := range ips {
-		wg.Add(1)
-		go func(testIP string) {
-			defer wg.Done()
+		testIP := ip
+		g.Go(func() error {
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
@@ -3023,13 +2567,16 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 				case resultChan <- result:
 				case <-timer.C:
 					LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 			}
-		}(ip)
+			return nil
+		})
 	}
 
 	go func() {
-		wg.Wait()
+		_ = g.Wait()
 		close(resultChan)
 	}()
 
@@ -3733,9 +3280,6 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			continue
 		}
 
-		// Record query start time for metrics
-		startTime := time.Now()
-
 		var clientIP net.IP
 		if addr := tlsConn.RemoteAddr(); addr != nil {
 			clientIP = addr.(*net.TCPAddr).IP
@@ -3743,17 +3287,6 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		response := tm.server.processDNSQuery(req, clientIP, true)
 
 		if response != nil {
-			// Record response metrics
-			if tm.server.metricsCollector != nil {
-				responseTime := time.Since(startTime)
-				success := response.Rcode == dns.RcodeSuccess || response.Rcode == dns.RcodeNameError
-				tm.server.metricsCollector.RecordResponse("dot", success, responseTime, response.Rcode)
-
-				// Record traffic metrics
-				reqBytes := uint64(len(msgBuf))
-				respBytes := uint64(response.Len())
-				tm.server.metricsCollector.RecordTraffic(reqBytes, respBytes)
-			}
 			respBuf, err := response.Pack()
 			if err != nil {
 				LogDebug("DOT: Response pack error: %v", err)
@@ -3937,23 +3470,8 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	// Record query start time for metrics
-	startTime := time.Now()
-
 	clientIP := GetSecureClientIP(conn)
 	response := tm.server.processDNSQuery(req, clientIP, true)
-
-	// Record response metrics
-	if tm.server.metricsCollector != nil && response != nil {
-		responseTime := time.Since(startTime)
-		success := response.Rcode == dns.RcodeSuccess || response.Rcode == dns.RcodeNameError
-		tm.server.metricsCollector.RecordResponse("doq", success, responseTime, response.Rcode)
-
-		// Record traffic metrics
-		reqBytes := uint64(len(buf[2 : 2+msgLen]))
-		respBytes := uint64(response.Len())
-		tm.server.metricsCollector.RecordTraffic(reqBytes, respBytes)
-	}
 
 	if err := tm.respondQUIC(stream, response); err != nil {
 		LogDebug("PROTOCOL: DoQ response failed: %v", err)
@@ -4076,15 +3594,6 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record query start time for metrics
-	startTime := time.Now()
-
-	// Determine protocol: DoH or DoH3
-	protocol := "doh"
-	if r.ProtoMajor == 3 {
-		protocol = "doh3"
-	}
-
 	req, statusCode := tm.parseDoHRequest(r)
 	if req == nil {
 		http.Error(w, http.StatusText(statusCode), statusCode)
@@ -4092,18 +3601,6 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := tm.server.processDNSQuery(req, nil, true)
-
-	// Record response metrics
-	if tm.server.metricsCollector != nil && response != nil {
-		responseTime := time.Since(startTime)
-		success := response.Rcode == dns.RcodeSuccess || response.Rcode == dns.RcodeNameError
-		tm.server.metricsCollector.RecordResponse(protocol, success, responseTime, response.Rcode)
-
-		// Record traffic metrics
-		reqBytes := uint64(req.Len())
-		respBytes := uint64(response.Len())
-		tm.server.metricsCollector.RecordTraffic(reqBytes, respBytes)
-	}
 
 	if err := tm.respondDoH(w, response); err != nil {
 		LogError("DOH: DoH response failed: %v", err)
@@ -4223,7 +3720,7 @@ func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
 	}
 }
 
-func (rt *RequestTracker) AddStep(step string, args ...interface{}) {
+func (rt *RequestTracker) AddStep(step string, args ...any) {
 	if rt == nil || globalLog.GetLevel() < Debug {
 		return
 	}
@@ -4249,52 +3746,6 @@ func (rt *RequestTracker) Finish() {
 		LogDebug("FINISH [%s]: Query completed: %s %s | Time:%v | Upstream:%s",
 			rt.ID, rt.Domain, rt.QueryType, rt.ResponseTime.Truncate(time.Microsecond), upstream)
 	}
-}
-
-// =============================================================================
-// MemoryMonitor Implementation
-// =============================================================================
-
-func NewMemoryMonitor() *MemoryMonitor {
-	return &MemoryMonitor{
-		ticker: time.NewTicker(30 * time.Second),
-		done:   make(chan struct{}),
-	}
-}
-
-func (mm *MemoryMonitor) Start() {
-	go func() {
-		defer HandlePanic("Memory monitor")
-
-		for {
-			select {
-			case <-mm.ticker.C:
-				var m runtime.MemStats
-				runtime.ReadMemStats(&m)
-
-				LogDebug("MEMORY: Alloc=%dMB TotalAlloc=%dMB Sys=%dMB NumGC=%d Goroutines=%d",
-					m.Alloc/1024/1024,
-					m.TotalAlloc/1024/1024,
-					m.Sys/1024/1024,
-					m.NumGC,
-					runtime.NumGoroutine())
-
-				if m.Alloc > 64*1024*1024 {
-					LogWarn("MEMORY: High memory usage detected, triggering GC")
-					debug.FreeOSMemory()
-					runtime.GC()
-				}
-
-			case <-mm.done:
-				return
-			}
-		}
-	}()
-}
-
-func (mm *MemoryMonitor) Stop() {
-	mm.ticker.Stop()
-	close(mm.done)
 }
 
 // =============================================================================
@@ -4357,7 +3808,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		ctx:           ctx,
 		cancel:        cancel,
 		shutdown:      make(chan struct{}),
-		memMonitor:    NewMemoryMonitor(),
 	}
 
 	securityManager, err := NewSecurityManager(config, server)
@@ -4393,18 +3843,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		if server.securityMgr != nil && server.securityMgr.tls != nil {
 			server.pprofServer.TLSConfig = server.securityMgr.tls.tlsConfig
 		}
-	}
-
-	// Initialize metrics collector and API
-	server.metricsCollector = NewMetricsCollector()
-
-	if config.Server.Metrics != "" {
-		var tlsConfig *tls.Config
-		if server.securityMgr != nil && server.securityMgr.tls != nil {
-			tlsConfig = server.securityMgr.tls.tlsConfig
-		}
-
-		server.metricsAPI = NewMetricsAPI(server.metricsCollector, tlsConfig)
 	}
 
 	server.setupSignalHandling()
@@ -4466,21 +3904,8 @@ func (s *DNSServer) shutdownServer() {
 		CloseWithLog(s.connPool, "Connection pool")
 	}
 
-	if s.memMonitor != nil {
-		s.memMonitor.Stop()
-		LogInfo("MEMORY: Memory monitor stopped")
-	}
-
 	if s.speedTestMgr != nil {
 		CloseWithLog(s.speedTestMgr, "SpeedTest manager")
-	}
-
-	if s.metricsAPI != nil {
-		if err := s.metricsAPI.Stop(); err != nil {
-			LogError("METRICS: metrics API shutdown failed: %v", err)
-		} else {
-			LogInfo("METRICS: metrics API shut down successfully")
-		}
 	}
 
 	if s.pprofServer != nil {
@@ -4527,19 +3952,11 @@ func (s *DNSServer) Start() error {
 	if s.pprofServer != nil {
 		serverCount++
 	}
-	if s.metricsAPI != nil {
-		serverCount++
-	}
 
 	errChan := make(chan error, serverCount)
 
 	LogInfo("SERVER: Starting ZJDNS Server %s", getVersion())
 	LogInfo("SERVER: Listening on port: %s", s.config.Server.Port)
-
-	if s.memMonitor != nil {
-		s.memMonitor.Start()
-		LogInfo("MEMORY: Memory monitor started")
-	}
 
 	s.displayInfo()
 
@@ -4574,17 +3991,6 @@ func (s *DNSServer) Start() error {
 
 			if err != nil && err != http.ErrServerClosed {
 				errChan <- fmt.Errorf("pprof startup: %w", err)
-			}
-		}()
-	}
-
-	if s.metricsAPI != nil {
-		go func() {
-			defer wg.Done()
-			defer HandlePanic("metrics API server")
-			LogInfo("METRICS: metrics server enabled on: %s, via: %s, tls: %t", s.config.Server.Metrics, MetricsPath, s.metricsAPI.tlsConfig != nil)
-			if err := s.metricsAPI.Start(s.config.Server.Metrics); err != nil {
-				errChan <- fmt.Errorf("metrics API startup: %w", err)
 			}
 		}()
 	}
@@ -4719,29 +4125,9 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	default:
 	}
 
-	// Record query start time for metrics
-	startTime := time.Now()
-	protocol := "udp"
-	if w.LocalAddr().Network() == "tcp" {
-		protocol = "tcp"
-	}
-
 	response := s.processDNSQuery(req, GetClientIP(w), false)
 	if response != nil {
 		response.Compress = true
-
-		// Record response metrics
-		if s.metricsCollector != nil {
-			responseTime := time.Since(startTime)
-			success := response.Rcode == dns.RcodeSuccess || response.Rcode == dns.RcodeNameError
-			s.metricsCollector.RecordResponse(protocol, success, responseTime, response.Rcode)
-
-			// Record traffic metrics
-			reqBytes := uint64(req.Len())
-			respBytes := uint64(response.Len())
-			s.metricsCollector.RecordTraffic(reqBytes, respBytes)
-		}
-
 		_ = w.WriteMsg(response)
 	}
 }
@@ -4790,11 +4176,6 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	if s.rewriteMgr.hasRules() {
 		rewriteResult := s.rewriteMgr.RewriteWithDetails(question.Name, question.Qtype)
 
-		// Record rewrite match
-		if s.metricsCollector != nil && rewriteResult.ShouldRewrite {
-			s.metricsCollector.RecordRewriteMatch()
-		}
-
 		if rewriteResult.ShouldRewrite {
 			if rewriteResult.ResponseCode != dns.RcodeSuccess {
 				response := s.buildResponse(req)
@@ -4835,17 +4216,9 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	cacheKey := BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC, s.config.Redis.KeyPrefix)
 
 	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
-		// Record cache hit
-		if s.metricsCollector != nil {
-			s.metricsCollector.RecordCacheOperation(true)
-		}
 		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cacheKey, isSecureConnection)
 	}
 
-	// Record cache miss
-	if s.metricsCollector != nil {
-		s.metricsCollector.RecordCacheOperation(false)
-	}
 	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection, tracker)
 }
 
@@ -4898,7 +4271,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection)
 }
 
-func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *ECSOption, cacheKey string, oldEntry *CacheEntry) error {
+func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *ECSOption, cacheKey string, _ *CacheEntry) error {
 	defer HandlePanic("cache refresh")
 
 	if atomic.LoadInt32(&s.closed) != 0 {
@@ -5138,10 +4511,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 		return nil, nil, nil, false, nil, "", errors.New("no upstream servers")
 	}
 
-	maxConcurrent := len(servers)
-	if maxConcurrent > MaxSingleQuery {
-		maxConcurrent = MaxSingleQuery
-	}
+	maxConcurrent := min(len(servers), MaxSingleQuery)
 
 	ctx, cancel := context.WithTimeout(qm.server.ctx, QueryTimeout)
 	defer cancel()
@@ -5313,7 +4683,7 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 	currentQuestion := question
 	visitedCNAMEs := make(map[string]bool)
 
-	for i := 0; i < MaxCNAMEChain; i++ {
+	for range MaxCNAMEChain {
 		select {
 		case <-ctx.Done():
 			return nil, nil, nil, false, nil, "", ctx.Err()
@@ -5500,11 +4870,6 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 }
 
 func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
-	// Record hijack prevention
-	if rr.server.metricsCollector != nil {
-		rr.server.metricsCollector.RecordHijackPrevented()
-	}
-
 	if !currentlyTCP {
 		return nil, nil, nil, false, nil, "", fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
 	}
@@ -5523,10 +4888,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		return nil, ctx.Err()
 	}
 
-	concurrency := len(nameservers)
-	if concurrency > MaxSingleQuery {
-		concurrency = MaxSingleQuery
-	}
+	concurrency := min(len(nameservers), MaxSingleQuery)
 
 	tempServers := make([]*UpstreamServer, concurrency)
 	for i := 0; i < concurrency && i < len(nameservers); i++ {
@@ -5589,37 +4951,31 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 }
 
 func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int, forceTCP bool) []string {
-	resolveCount := len(nsRecords)
-	if resolveCount > MaxNSResolve {
-		resolveCount = MaxNSResolve
-	}
+	resolveCount := min(len(nsRecords), MaxNSResolve)
 
 	nsChan := make(chan []string, resolveCount)
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, ConnTimeout)
 	defer resolveCancel()
 
-	var wg sync.WaitGroup
+	g, ctx := errgroup.WithContext(resolveCtx)
 
 	for i := 0; i < resolveCount; i++ {
 		ns := nsRecords[i]
-		wg.Add(1)
-
-		go func(nsRecord *dns.NS) {
-			defer wg.Done()
+		g.Go(func() error {
 			defer HandlePanic("NS resolve")
 
-			if strings.EqualFold(strings.TrimSuffix(nsRecord.Ns, "."), strings.TrimSuffix(qname, ".")) {
+			if strings.EqualFold(strings.TrimSuffix(ns.Ns, "."), strings.TrimSuffix(qname, ".")) {
 				select {
 				case nsChan <- nil:
-				case <-resolveCtx.Done():
+				case <-ctx.Done():
 				}
-				return
+				return nil
 			}
 
 			var addresses []string
 
-			nsQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-			if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
+			nsQuestion := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
+			if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(ctx, nsQuestion, nil, depth+1, forceTCP); err == nil {
 				for _, rrec := range nsAnswer {
 					if a, ok := rrec.(*dns.A); ok {
 						addresses = append(addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
@@ -5628,8 +4984,8 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 			}
 
 			if len(addresses) == 0 {
-				nsQuestionV6 := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
+				nsQuestionV6 := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
+				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(ctx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswerV6 {
 						if aaaa, ok := rrec.(*dns.AAAA); ok {
 							addresses = append(addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
@@ -5640,13 +4996,14 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 
 			select {
 			case nsChan <- addresses:
-			case <-resolveCtx.Done():
+			case <-ctx.Done():
 			}
-		}(ns)
+			return nil
+		})
 	}
 
 	go func() {
-		wg.Wait()
+		_ = g.Wait()
 		close(nsChan)
 	}()
 
@@ -5661,6 +5018,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		}
 	}
 
+	_ = g.Wait() // Ensure all goroutines complete and check for errors
 	return allAddresses
 }
 
