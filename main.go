@@ -3307,51 +3307,56 @@ func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 }
 
 func (tm *TLSManager) Start(httpsPort string) error {
-	serverCount := 2
-	if httpsPort != "" {
-		serverCount += 2
-	}
+	errChan := make(chan error, 1)
 
-	errChan := make(chan error, serverCount)
-	wg := sync.WaitGroup{}
-	wg.Add(serverCount)
-
-	go func() {
-		defer wg.Done()
-		defer HandlePanic("DoT server")
-		if err := tm.startDOTServer(); err != nil {
-			errChan <- fmt.Errorf("DoT startup: %w", err)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		defer HandlePanic("DoQ server")
-		if err := tm.startDOQServer(); err != nil {
-			errChan <- fmt.Errorf("DoQ startup: %w", err)
-		}
-	}()
+	g, ctx := errgroup.WithContext(context.Background())
 
 	if httpsPort != "" {
-		go func() {
-			defer wg.Done()
+		g.Go(func() error {
 			defer HandlePanic("DoH server")
 			if err := tm.startDOHServer(httpsPort); err != nil {
-				errChan <- fmt.Errorf("DoH startup: %w", err)
+				return fmt.Errorf("DoH startup: %w", err)
 			}
-		}()
+			<-ctx.Done()
+			return nil
+		})
 
-		go func() {
-			defer wg.Done()
+		g.Go(func() error {
 			defer HandlePanic("DoH3 server")
 			if err := tm.startDoH3Server(httpsPort); err != nil {
-				errChan <- fmt.Errorf("DoH3 startup: %w", err)
+				return fmt.Errorf("DoH3 startup: %w", err)
 			}
-		}()
+			<-ctx.Done()
+			return nil
+		})
 	}
 
+	g.Go(func() error {
+		defer HandlePanic("DoT server")
+		if err := tm.startDOTServer(); err != nil {
+			return fmt.Errorf("DoT startup: %w", err)
+		}
+		<-ctx.Done()
+		return nil
+	})
+
+	g.Go(func() error {
+		defer HandlePanic("DoQ server")
+		if err := tm.startDOQServer(); err != nil {
+			return fmt.Errorf("DoQ startup: %w", err)
+		}
+		<-ctx.Done()
+		return nil
+	})
+
 	go func() {
-		wg.Wait()
+		defer HandlePanic("TLS manager coordinator")
+		if err := g.Wait(); err != nil {
+			select {
+			case errChan <- err:
+			default:
+			}
+		}
 		close(errChan)
 	}()
 
@@ -4137,26 +4142,18 @@ func (s *DNSServer) Start() error {
 		return errors.New("server is closed")
 	}
 
-	var wg sync.WaitGroup
-	serverCount := 2
-	if s.securityMgr.tls != nil {
-		serverCount++
-	}
-	if s.pprofServer != nil {
-		serverCount++
-	}
-
-	errChan := make(chan error, serverCount)
+	errChan := make(chan error, 1)
+	serverCtx, serverCancel := context.WithCancel(context.Background())
+	defer serverCancel()
 
 	LogInfo("SERVER: Starting ZJDNS Server %s", getVersion())
 	LogInfo("SERVER: Listening on port: %s", s.config.Server.Port)
 
 	s.displayInfo()
 
-	wg.Add(serverCount)
+	g, ctx := errgroup.WithContext(serverCtx)
 
-	go func() {
-		defer wg.Done()
+	g.Go(func() error {
 		defer HandlePanic("UDP server")
 		server := &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
@@ -4165,14 +4162,16 @@ func (s *DNSServer) Start() error {
 			UDPSize: UDPBufferSize,
 		}
 		LogInfo("DNS: UDP server started on port %s", s.config.Server.Port)
-		if err := server.ListenAndServe(); err != nil {
-			errChan <- fmt.Errorf("UDP startup: %w", err)
+		err := server.ListenAndServe()
+		if err != nil {
+			return fmt.Errorf("UDP startup: %w", err)
 		}
-	}()
+		<-ctx.Done()
+		return nil
+	})
 
 	if s.pprofServer != nil {
-		go func() {
-			defer wg.Done()
+		g.Go(func() error {
 			defer HandlePanic("pprof server")
 			LogInfo("PPROF: pprof server started on port %s", s.config.Server.Pprof)
 			var err error
@@ -4183,13 +4182,14 @@ func (s *DNSServer) Start() error {
 			}
 
 			if err != nil && err != http.ErrServerClosed {
-				errChan <- fmt.Errorf("pprof startup: %w", err)
+				return fmt.Errorf("pprof startup: %w", err)
 			}
-		}()
+			<-ctx.Done()
+			return nil
+		})
 	}
 
-	go func() {
-		defer wg.Done()
+	g.Go(func() error {
 		defer HandlePanic("TCP server")
 		server := &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
@@ -4197,24 +4197,35 @@ func (s *DNSServer) Start() error {
 			Handler: dns.HandlerFunc(s.handleDNSRequest),
 		}
 		LogInfo("DNS: TCP server started on port %s", s.config.Server.Port)
-		if err := server.ListenAndServe(); err != nil {
-			errChan <- fmt.Errorf("TCP startup: %w", err)
+		err := server.ListenAndServe()
+		if err != nil {
+			return fmt.Errorf("TCP startup: %w", err)
 		}
-	}()
+		<-ctx.Done()
+		return nil
+	})
 
 	if s.securityMgr.tls != nil {
-		go func() {
-			defer wg.Done()
+		g.Go(func() error {
 			defer HandlePanic("Secure DNS server")
 			httpsPort := s.config.Server.TLS.HTTPS.Port
-			if err := s.securityMgr.tls.Start(httpsPort); err != nil {
-				errChan <- fmt.Errorf("secure DNS startup: %w", err)
+			err := s.securityMgr.tls.Start(httpsPort)
+			if err != nil {
+				return fmt.Errorf("secure DNS startup: %w", err)
 			}
-		}()
+			<-ctx.Done()
+			return nil
+		})
 	}
 
 	go func() {
-		wg.Wait()
+		defer HandlePanic("Server coordinator")
+		if err := g.Wait(); err != nil {
+			select {
+			case errChan <- err:
+			default:
+			}
+		}
 		close(errChan)
 	}()
 
@@ -4709,33 +4720,32 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	defer cancel()
 
 	resultChan := make(chan UpstreamQueryResult, 1)
-	queryWg := sync.WaitGroup{}
+
+	g, ctx := errgroup.WithContext(ctx)
 
 	for i := 0; i < maxConcurrent && i < len(servers); i++ {
 		srv := servers[i]
 
-		queryWg.Add(1)
-		go func(server *UpstreamServer) {
-			defer queryWg.Done()
+		g.Go(func() error {
 			defer HandlePanic("Query upstream")
 
 			select {
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			default:
 			}
 
-			if server.IsRecursive() {
+			if srv.IsRecursive() {
 				recursiveCtx, recursiveCancel := context.WithTimeout(ctx, RecursiveTimeout)
 				defer recursiveCancel()
 
 				answer, authority, additional, validated, ecsResponse, usedServer, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs)
 
 				if err == nil && len(answer) > 0 {
-					if len(server.Match) > 0 {
-						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, server.Match)
+					if len(srv.Match) > 0 {
+						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, srv.Match)
 						if shouldRefuse {
-							return
+							return nil
 						}
 						answer = filteredAnswer
 					}
@@ -4749,27 +4759,29 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						ecs:        ecsResponse,
 						server:     usedServer,
 					}:
+						return nil
 					case <-ctx.Done():
+						return ctx.Err()
 					}
 				}
 			} else {
 				msg := qm.server.buildQueryMessage(question, ecs, true, false)
 				defer ReleaseMessage(msg)
 
-				queryResult := qm.server.queryClient.ExecuteQuery(ctx, msg, server)
+				queryResult := qm.server.queryClient.ExecuteQuery(ctx, msg, srv)
 
 				if queryResult.Error != nil {
-					return
+					return nil
 				}
 
 				if queryResult.Response != nil {
 					rcode := queryResult.Response.Rcode
 
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-						if len(server.Match) > 0 {
-							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
+						if len(srv.Match) > 0 {
+							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, srv.Match)
 							if shouldRefuse {
-								return
+								return nil
 							}
 							queryResult.Response.Answer = filteredAnswer
 						}
@@ -4777,9 +4789,9 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						queryResult.Validated = qm.validator.dnssecValidator.ValidateResponse(queryResult.Response, true)
 						ecsResponse := qm.server.ednsMgr.ParseFromDNS(queryResult.Response)
 
-						serverDesc := server.Address
-						if server.Protocol != "" && server.Protocol != "udp" {
-							serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
+						serverDesc := srv.Address
+						if srv.Protocol != "" && srv.Protocol != "udp" {
+							serverDesc = fmt.Sprintf("%s (%s)", srv.Address, strings.ToUpper(srv.Protocol))
 						}
 
 						select {
@@ -4791,16 +4803,19 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							ecs:        ecsResponse,
 							server:     serverDesc,
 						}:
+							return nil
 						case <-ctx.Done():
+							return ctx.Err()
 						}
 					}
 				}
 			}
-		}(srv)
+			return nil
+		})
 	}
 
 	go func() {
-		queryWg.Wait()
+		_ = g.Wait()
 		close(resultChan)
 	}()
 
@@ -5089,25 +5104,24 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 	}
 
 	resultChan := make(chan *QueryResult, concurrency)
-	queryWg := sync.WaitGroup{}
+
+	g, ctx := errgroup.WithContext(queryCtx)
 
 	for _, server := range tempServers {
 		srv := server
 		msg := rr.server.buildQueryMessage(question, ecs, true, false)
 
-		queryWg.Add(1)
-		go func(s *UpstreamServer, m *dns.Msg) {
-			defer queryWg.Done()
-			defer ReleaseMessage(m)
+		g.Go(func() error {
+			defer ReleaseMessage(msg)
 			defer HandlePanic("Query nameserver")
 
 			select {
-			case <-queryCtx.Done():
-				return
+			case <-ctx.Done():
+				return ctx.Err()
 			default:
 			}
 
-			result := rr.server.queryClient.ExecuteQuery(queryCtx, m, s)
+			result := rr.server.queryClient.ExecuteQuery(ctx, msg, srv)
 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
@@ -5118,15 +5132,18 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 					case resultChan <- result:
 						// Cancel all other queries when we get first success
 						cancel()
-					case <-queryCtx.Done():
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
 					}
 				}
 			}
-		}(srv, msg)
+			return nil
+		})
 	}
 
 	go func() {
-		queryWg.Wait()
+		_ = g.Wait()
 		close(resultChan)
 	}()
 
@@ -5136,8 +5153,8 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			return result.Response, nil
 		}
 		return nil, errors.New("no successful response")
-	case <-queryCtx.Done():
-		return nil, queryCtx.Err()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
