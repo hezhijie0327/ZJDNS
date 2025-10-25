@@ -491,126 +491,6 @@ type RewriteManager struct {
 	rulesLen atomic.Int64
 }
 
-func NewRewriteManager() *RewriteManager {
-	rm := &RewriteManager{}
-	rm.rules.Store(make([]RewriteRule, 0, 16))
-	rm.rulesLen.Store(0)
-	return rm
-}
-
-func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
-	validRules := make([]RewriteRule, 0, len(rules))
-	for _, rule := range rules {
-		if len(rule.Name) <= MaxDomainLength {
-			validRules = append(validRules, rule)
-		}
-	}
-
-	rm.rules.Store(validRules)
-	rm.rulesLen.Store(int64(len(validRules)))
-	LogInfo("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
-	return nil
-}
-
-func (rm *RewriteManager) hasRules() bool {
-	return rm.rulesLen.Load() > 0
-}
-
-func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRewriteResult {
-	result := DNSRewriteResult{
-		Domain:        domain,
-		ResponseCode:  dns.RcodeSuccess,
-		ShouldRewrite: false,
-	}
-
-	if !rm.hasRules() || len(domain) > MaxDomainLength {
-		return result
-	}
-
-	// Copy-on-read pattern: get rules snapshot without holding lock
-	rules := rm.rules.Load().([]RewriteRule)
-	domain = NormalizeDomain(domain)
-
-	for i := range rules {
-		rule := &rules[i]
-		if domain != NormalizeDomain(rule.Name) {
-			continue
-		}
-
-		if rule.ResponseCode != nil {
-			result.ResponseCode = *rule.ResponseCode
-			result.ShouldRewrite = true
-			return result
-		}
-
-		if len(rule.Records) > 0 || len(rule.Additional) > 0 {
-			result.Records = make([]dns.RR, 0)
-			result.Additional = make([]dns.RR, 0)
-
-			for _, record := range rule.Records {
-				recordType := dns.StringToType[record.Type]
-				if record.ResponseCode != nil {
-					if record.Type == "" || recordType == qtype {
-						result.ResponseCode = *record.ResponseCode
-						result.ShouldRewrite = true
-						result.Records = nil
-						result.Additional = nil
-						return result
-					}
-					continue
-				}
-				if record.Type != "" && recordType != qtype {
-					continue
-				}
-				if rr := rm.buildDNSRecord(domain, record); rr != nil {
-					result.Records = append(result.Records, rr)
-				}
-			}
-
-			for _, record := range rule.Additional {
-				if rr := rm.buildDNSRecord(domain, record); rr != nil {
-					result.Additional = append(result.Additional, rr)
-				}
-			}
-
-			result.ShouldRewrite = true
-			return result
-		}
-	}
-
-	return result
-}
-
-func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
-	ttl := record.TTL
-	if ttl == 0 {
-		ttl = DefaultCacheTTL
-	}
-
-	name := dns.Fqdn(domain)
-	if record.Name != "" {
-		name = dns.Fqdn(record.Name)
-	}
-
-	// Try to create any type of DNS record using dns.NewRR()
-	// This supports ALL DNS record types (MX, NS, SRV, CAA, DNSKEY, etc.)
-	rrStr := fmt.Sprintf("%s %d IN %s %s", name, ttl, record.Type, record.Content)
-	if rr, err := dns.NewRR(rrStr); err == nil {
-		return rr
-	}
-
-	// If direct parsing fails, fall back to RFC3597 format
-	rrType, exists := dns.StringToType[record.Type]
-	if !exists {
-		rrType = 0
-	}
-
-	return &dns.RFC3597{
-		Hdr:   dns.RR_Header{Name: name, Rrtype: rrType, Class: dns.ClassINET, Ttl: ttl},
-		Rdata: record.Content,
-	}
-}
-
 // Connection Pool Types
 type ConnPoolEntry struct {
 	conn       any
@@ -2441,6 +2321,130 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 	}
 
 	return ip
+}
+
+// =============================================================================
+// RewriteManager Implementation
+// =============================================================================
+
+func NewRewriteManager() *RewriteManager {
+	rm := &RewriteManager{}
+	rm.rules.Store(make([]RewriteRule, 0, 16))
+	rm.rulesLen.Store(0)
+	return rm
+}
+
+func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
+	validRules := make([]RewriteRule, 0, len(rules))
+	for _, rule := range rules {
+		if len(rule.Name) <= MaxDomainLength {
+			validRules = append(validRules, rule)
+		}
+	}
+
+	rm.rules.Store(validRules)
+	rm.rulesLen.Store(int64(len(validRules)))
+	LogInfo("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
+	return nil
+}
+
+func (rm *RewriteManager) hasRules() bool {
+	return rm.rulesLen.Load() > 0
+}
+
+func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRewriteResult {
+	result := DNSRewriteResult{
+		Domain:        domain,
+		ResponseCode:  dns.RcodeSuccess,
+		ShouldRewrite: false,
+	}
+
+	if !rm.hasRules() || len(domain) > MaxDomainLength {
+		return result
+	}
+
+	// Copy-on-read pattern: get rules snapshot without holding lock
+	rules := rm.rules.Load().([]RewriteRule)
+	domain = NormalizeDomain(domain)
+
+	for i := range rules {
+		rule := &rules[i]
+		if domain != NormalizeDomain(rule.Name) {
+			continue
+		}
+
+		if rule.ResponseCode != nil {
+			result.ResponseCode = *rule.ResponseCode
+			result.ShouldRewrite = true
+			return result
+		}
+
+		if len(rule.Records) > 0 || len(rule.Additional) > 0 {
+			result.Records = make([]dns.RR, 0)
+			result.Additional = make([]dns.RR, 0)
+
+			for _, record := range rule.Records {
+				recordType := dns.StringToType[record.Type]
+				if record.ResponseCode != nil {
+					if record.Type == "" || recordType == qtype {
+						result.ResponseCode = *record.ResponseCode
+						result.ShouldRewrite = true
+						result.Records = nil
+						result.Additional = nil
+						return result
+					}
+					continue
+				}
+				if record.Type != "" && recordType != qtype {
+					continue
+				}
+				if rr := rm.buildDNSRecord(domain, record); rr != nil {
+					result.Records = append(result.Records, rr)
+				}
+			}
+
+			for _, record := range rule.Additional {
+				if rr := rm.buildDNSRecord(domain, record); rr != nil {
+					result.Additional = append(result.Additional, rr)
+				}
+			}
+
+			result.ShouldRewrite = true
+			return result
+		}
+	}
+
+	return result
+}
+
+func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
+	ttl := record.TTL
+	if ttl == 0 {
+		ttl = DefaultCacheTTL
+	}
+
+	name := dns.Fqdn(domain)
+	if record.Name != "" {
+		name = dns.Fqdn(record.Name)
+	}
+
+	// Try to create any type of DNS record using dns.NewRR()
+	// This supports ALL DNS record types (MX, NS, SRV, CAA, DNSKEY, etc.)
+	rrStr := fmt.Sprintf("%s %d IN %s %s", name, ttl, record.Type, record.Content)
+	if rr, err := dns.NewRR(rrStr); err == nil {
+		return rr
+	}
+
+	// If direct parsing fails, fall back to RFC3597 format
+	rrType, exists := dns.StringToType[record.Type]
+	if !exists {
+		rrType = 0
+	}
+
+	return &dns.RFC3597{
+		Hdr:   dns.RR_Header{Name: name, Rrtype: rrType, Class: dns.ClassINET, Ttl: ttl},
+		Rdata: record.Content,
+	}
 }
 
 // =============================================================================
