@@ -47,6 +47,7 @@ import (
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+	"golang.org/x/sync/errgroup"
 )
 
 // =============================================================================
@@ -54,7 +55,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.2"
+	Version    = "1.4.3"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -2577,11 +2578,10 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 	semaphore := make(chan struct{}, st.concurrency)
 	resultChan := make(chan *SpeedResult, len(ips))
 
-	var wg sync.WaitGroup
+	g, ctx := errgroup.WithContext(context.Background())
 	for _, ip := range ips {
-		wg.Add(1)
-		go func(testIP string) {
-			defer wg.Done()
+		testIP := ip
+		g.Go(func() error {
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
@@ -2594,13 +2594,16 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 				case resultChan <- result:
 				case <-timer.C:
 					LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 			}
-		}(ip)
+			return nil
+		})
 	}
 
 	go func() {
-		wg.Wait()
+		_ = g.Wait()
 		close(resultChan)
 	}()
 
@@ -4981,28 +4984,25 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, ConnTimeout)
 	defer resolveCancel()
 
-	var wg sync.WaitGroup
+	g, ctx := errgroup.WithContext(resolveCtx)
 
 	for i := 0; i < resolveCount; i++ {
 		ns := nsRecords[i]
-		wg.Add(1)
-
-		go func(nsRecord *dns.NS) {
-			defer wg.Done()
+		g.Go(func() error {
 			defer HandlePanic("NS resolve")
 
-			if strings.EqualFold(strings.TrimSuffix(nsRecord.Ns, "."), strings.TrimSuffix(qname, ".")) {
+			if strings.EqualFold(strings.TrimSuffix(ns.Ns, "."), strings.TrimSuffix(qname, ".")) {
 				select {
 				case nsChan <- nil:
-				case <-resolveCtx.Done():
+				case <-ctx.Done():
 				}
-				return
+				return nil
 			}
 
 			var addresses []string
 
-			nsQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-			if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(resolveCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
+			nsQuestion := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
+			if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(ctx, nsQuestion, nil, depth+1, forceTCP); err == nil {
 				for _, rrec := range nsAnswer {
 					if a, ok := rrec.(*dns.A); ok {
 						addresses = append(addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
@@ -5011,8 +5011,8 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 			}
 
 			if len(addresses) == 0 {
-				nsQuestionV6 := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(resolveCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
+				nsQuestionV6 := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
+				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(ctx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswerV6 {
 						if aaaa, ok := rrec.(*dns.AAAA); ok {
 							addresses = append(addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
@@ -5023,13 +5023,14 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 
 			select {
 			case nsChan <- addresses:
-			case <-resolveCtx.Done():
+			case <-ctx.Done():
 			}
-		}(ns)
+			return nil
+		})
 	}
 
 	go func() {
-		wg.Wait()
+		_ = g.Wait()
 		close(nsChan)
 	}()
 
@@ -5044,6 +5045,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		}
 	}
 
+	_ = g.Wait() // Ensure all goroutines complete and check for errors
 	return allAddresses
 }
 
