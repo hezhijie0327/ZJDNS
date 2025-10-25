@@ -27,7 +27,6 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -497,12 +496,6 @@ type TLSManager struct {
 	h3Listener    *quic.EarlyListener
 }
 
-// Memory Monitor Type
-type MemoryMonitor struct {
-	ticker *time.Ticker
-	done   chan struct{}
-}
-
 // DNS Server Type
 type DNSServer struct {
 	config        *ServerConfig
@@ -516,7 +509,6 @@ type DNSServer struct {
 	rootServerMgr *RootServerManager
 	cidrMgr       *CIDRManager
 	pprofServer   *http.Server
-	memMonitor    *MemoryMonitor
 	redisClient   *redis.Client
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -3809,52 +3801,6 @@ func (rt *RequestTracker) Finish() {
 }
 
 // =============================================================================
-// MemoryMonitor Implementation
-// =============================================================================
-
-func NewMemoryMonitor() *MemoryMonitor {
-	return &MemoryMonitor{
-		ticker: time.NewTicker(30 * time.Second),
-		done:   make(chan struct{}),
-	}
-}
-
-func (mm *MemoryMonitor) Start() {
-	go func() {
-		defer HandlePanic("Memory monitor")
-
-		for {
-			select {
-			case <-mm.ticker.C:
-				var m runtime.MemStats
-				runtime.ReadMemStats(&m)
-
-				LogDebug("MEMORY: Alloc=%dMB TotalAlloc=%dMB Sys=%dMB NumGC=%d Goroutines=%d",
-					m.Alloc/1024/1024,
-					m.TotalAlloc/1024/1024,
-					m.Sys/1024/1024,
-					m.NumGC,
-					runtime.NumGoroutine())
-
-				if m.Alloc > 64*1024*1024 {
-					LogWarn("MEMORY: High memory usage detected, triggering GC")
-					debug.FreeOSMemory()
-					runtime.GC()
-				}
-
-			case <-mm.done:
-				return
-			}
-		}
-	}()
-}
-
-func (mm *MemoryMonitor) Stop() {
-	mm.ticker.Stop()
-	close(mm.done)
-}
-
-// =============================================================================
 // DNSServer Implementation
 // =============================================================================
 
@@ -3914,7 +3860,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		ctx:           ctx,
 		cancel:        cancel,
 		shutdown:      make(chan struct{}),
-		memMonitor:    NewMemoryMonitor(),
 	}
 
 	securityManager, err := NewSecurityManager(config, server)
@@ -4011,11 +3956,6 @@ func (s *DNSServer) shutdownServer() {
 		CloseWithLog(s.connPool, "Connection pool")
 	}
 
-	if s.memMonitor != nil {
-		s.memMonitor.Stop()
-		LogInfo("MEMORY: Memory monitor stopped")
-	}
-
 	if s.speedTestMgr != nil {
 		CloseWithLog(s.speedTestMgr, "SpeedTest manager")
 	}
@@ -4069,11 +4009,6 @@ func (s *DNSServer) Start() error {
 
 	LogInfo("SERVER: Starting ZJDNS Server %s", getVersion())
 	LogInfo("SERVER: Listening on port: %s", s.config.Server.Port)
-
-	if s.memMonitor != nil {
-		s.memMonitor.Start()
-		LogInfo("MEMORY: Memory monitor started")
-	}
 
 	s.displayInfo()
 
