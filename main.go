@@ -1745,9 +1745,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	// Use binary serialization only for maximum performance
 	if err := deserializeFromBinary([]byte(data), entry); err != nil {
 		// Invalid cache entry - remove it
-		rc.wg.Add(1)
 		go func() {
-			defer rc.wg.Done()
 			defer HandlePanic("Clean corrupted cache")
 			cleanCtx, cleanCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
 			defer cleanCancel()
@@ -1759,9 +1757,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	isExpired := entry.IsExpired()
 
 	entry.AccessTime = time.Now().Unix()
-	rc.wg.Add(1)
 	go func() {
-		defer rc.wg.Done()
 		defer HandlePanic("Update access time")
 		if atomic.LoadInt32(&rc.closed) == 0 {
 			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
@@ -3385,9 +3381,7 @@ func (tm *TLSManager) startDOTServer() error {
 	tm.dotListener = tls.NewListener(listener, dotTLSConfig)
 	LogInfo("DOT: DoT server started on port %s", tm.server.config.Server.TLS.Port)
 
-	tm.wg.Add(1)
 	go func() {
-		defer tm.wg.Done()
 		defer HandlePanic("DoT server")
 		tm.handleDOTConnections()
 	}()
@@ -3549,9 +3543,7 @@ func (tm *TLSManager) startDOQServer() error {
 
 	LogInfo("DOQ: DoQ server started on port %s", tm.server.config.Server.TLS.Port)
 
-	tm.wg.Add(1)
 	go func() {
-		defer tm.wg.Done()
 		defer HandlePanic("DoQ server")
 		tm.handleDOQConnections()
 	}()
@@ -3725,9 +3717,7 @@ func (tm *TLSManager) startDOHServer(port string) error {
 		IdleTimeout:       DoTIdleTimeout,
 	}
 
-	tm.wg.Add(1)
 	go func() {
-		defer tm.wg.Done()
 		defer HandlePanic("DoH server")
 		if err := tm.httpsServer.Serve(tm.httpsListener); err != nil && err != http.ErrServerClosed {
 			LogError("DOH: DoH server error: %v", err)
@@ -3762,9 +3752,7 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 
 	tm.h3Server = &http3.Server{Handler: tm}
 
-	tm.wg.Add(1)
 	go func() {
-		defer tm.wg.Done()
 		defer HandlePanic("DoH3 server")
 		if err := tm.h3Server.ServeListener(tm.h3Listener); err != nil && err != http.ErrServerClosed {
 			LogError("DOH3: DoH3 server error: %v", err)
@@ -4056,16 +4044,12 @@ func (s *DNSServer) setupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	s.wg.Add(1)
 	go func() {
-		defer s.wg.Done()
 		defer HandlePanic("Root server periodic sorting")
 		s.rootServerMgr.StartPeriodicSorting(s.ctx)
 	}()
 
-	s.wg.Add(1)
 	go func() {
-		defer s.wg.Done()
 		defer HandlePanic("Signal handler")
 		select {
 		case sig := <-sigChan:
@@ -5167,7 +5151,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 
 	g, ctx := errgroup.WithContext(resolveCtx)
 
-	for i := 0; i < resolveCount; i++ {
+	for i := range resolveCount {
 		ns := nsRecords[i]
 		g.Go(func() error {
 			defer HandlePanic("NS resolve")
