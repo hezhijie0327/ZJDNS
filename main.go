@@ -53,7 +53,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.2"
+	Version    = "1.4.3"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -2042,11 +2042,6 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 			Name: domain, Type: ipv4Record.Type, Content: ipv4Record.Content,
 		})
 		directQueryRecords = append(directQueryRecords, ipv4Record)
-	} else {
-		config.Rewrite = append(config.Rewrite, RewriteRule{
-			Name:    domain,
-			Records: []DNSRecordConfig{{Type: "A", ResponseCode: &nxdomainCode}},
-		})
 	}
 
 	if config.Server.DDR.IPv6 != "" {
@@ -2057,11 +2052,6 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 			Name: domain, Type: ipv6Record.Type, Content: ipv6Record.Content,
 		})
 		directQueryRecords = append(directQueryRecords, ipv6Record)
-	} else {
-		config.Rewrite = append(config.Rewrite, RewriteRule{
-			Name:    domain,
-			Records: []DNSRecordConfig{{Type: "AAAA", ResponseCode: &nxdomainCode}},
-		})
 	}
 
 	if config.Server.DDR.IPv4 != "" || config.Server.DDR.IPv6 != "" {
@@ -2084,6 +2074,16 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 				Records: directQueryRecords,
 			})
 		}
+	} else {
+		// If no DDR IPs are configured, create NXDOMAIN rules for the DDR domain
+		config.Rewrite = append(config.Rewrite, RewriteRule{
+			Name:    domain,
+			Records: []DNSRecordConfig{{Type: "A", ResponseCode: &nxdomainCode}},
+		})
+		config.Rewrite = append(config.Rewrite, RewriteRule{
+			Name:    domain,
+			Records: []DNSRecordConfig{{Type: "AAAA", ResponseCode: &nxdomainCode}},
+		})
 	}
 }
 
