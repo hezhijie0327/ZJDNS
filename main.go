@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -13,6 +14,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -303,6 +305,30 @@ type CacheEntry struct {
 	Validated       bool             `json:"validated"`
 }
 
+// SerializeBinary efficiently serializes CacheEntry to binary format
+func (ce *CacheEntry) SerializeBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := gob.NewEncoder(&buf)
+
+	if err := encoder.Encode(ce); err != nil {
+		return nil, fmt.Errorf("binary encode: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DeserializeBinary efficiently deserializes CacheEntry from binary format
+func (ce *CacheEntry) DeserializeBinary(data []byte) error {
+	buf := bytes.NewReader(data)
+	decoder := gob.NewDecoder(buf)
+
+	if err := decoder.Decode(ce); err != nil {
+		return fmt.Errorf("binary decode: %w", err)
+	}
+
+	return nil
+}
+
 type CompactRecord struct {
 	Text    string `json:"text"`
 	OrigTTL uint32 `json:"orig_ttl"`
@@ -323,6 +349,7 @@ type RedisCache struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	closed int32
+	wg     sync.WaitGroup
 }
 
 // EDNS and DNS Options
@@ -391,6 +418,30 @@ type SpeedResult struct {
 	Timestamp time.Time     `json:"timestamp"`
 }
 
+// SerializeBinary efficiently serializes SpeedResult to binary format
+func (sr *SpeedResult) SerializeBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := gob.NewEncoder(&buf)
+
+	if err := encoder.Encode(sr); err != nil {
+		return nil, fmt.Errorf("binary encode: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DeserializeBinary efficiently deserializes SpeedResult from binary format
+func (sr *SpeedResult) DeserializeBinary(data []byte) error {
+	buf := bytes.NewReader(data)
+	decoder := gob.NewDecoder(buf)
+
+	if err := decoder.Decode(sr); err != nil {
+		return fmt.Errorf("binary decode: %w", err)
+	}
+
+	return nil
+}
+
 type RootServerWithLatency struct {
 	Server    string
 	Latency   time.Duration
@@ -436,8 +487,163 @@ type CIDRManager struct {
 
 // Rewrite Management Type
 type RewriteManager struct {
-	rules []RewriteRule
-	mu    sync.RWMutex
+	rules    atomic.Value // []RewriteRule
+	rulesLen atomic.Int64
+}
+
+func NewRewriteManager() *RewriteManager {
+	rm := &RewriteManager{}
+	rm.rules.Store(make([]RewriteRule, 0, 16))
+	rm.rulesLen.Store(0)
+	return rm
+}
+
+func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
+	validRules := make([]RewriteRule, 0, len(rules))
+	for _, rule := range rules {
+		if len(rule.Name) <= MaxDomainLength {
+			validRules = append(validRules, rule)
+		}
+	}
+
+	rm.rules.Store(validRules)
+	rm.rulesLen.Store(int64(len(validRules)))
+	LogInfo("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
+	return nil
+}
+
+func (rm *RewriteManager) hasRules() bool {
+	return rm.rulesLen.Load() > 0
+}
+
+func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRewriteResult {
+	result := DNSRewriteResult{
+		Domain:        domain,
+		ResponseCode:  dns.RcodeSuccess,
+		ShouldRewrite: false,
+	}
+
+	if !rm.hasRules() || len(domain) > MaxDomainLength {
+		return result
+	}
+
+	// Copy-on-read pattern: get rules snapshot without holding lock
+	rules := rm.rules.Load().([]RewriteRule)
+	domain = NormalizeDomain(domain)
+
+	for i := range rules {
+		rule := &rules[i]
+		if domain != NormalizeDomain(rule.Name) {
+			continue
+		}
+
+		if rule.ResponseCode != nil {
+			result.ResponseCode = *rule.ResponseCode
+			result.ShouldRewrite = true
+			return result
+		}
+
+		if len(rule.Records) > 0 || len(rule.Additional) > 0 {
+			result.Records = make([]dns.RR, 0)
+			result.Additional = make([]dns.RR, 0)
+
+			for _, record := range rule.Records {
+				recordType := dns.StringToType[record.Type]
+				if record.ResponseCode != nil {
+					if record.Type == "" || recordType == qtype {
+						result.ResponseCode = *record.ResponseCode
+						result.ShouldRewrite = true
+						result.Records = nil
+						result.Additional = nil
+						return result
+					}
+					continue
+				}
+				if record.Type != "" && recordType != qtype {
+					continue
+				}
+				if rr := rm.buildDNSRecord(domain, record); rr != nil {
+					result.Records = append(result.Records, rr)
+				}
+			}
+
+			for _, record := range rule.Additional {
+				if rr := rm.buildDNSRecord(domain, record); rr != nil {
+					result.Additional = append(result.Additional, rr)
+				}
+			}
+
+			result.ShouldRewrite = true
+			return result
+		}
+	}
+
+	return result
+}
+
+func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
+	if record.Type == "CNAME" && record.Content != "" {
+		return &dns.CNAME{
+			Hdr: dns.RR_Header{
+				Name:   domain,
+				Rrtype: dns.TypeCNAME,
+				Class:  dns.ClassINET,
+				Ttl:    record.TTL,
+			},
+			Target: dns.Fqdn(record.Content),
+		}
+	}
+
+	if record.Content == "" {
+		return nil
+	}
+
+	switch strings.ToUpper(record.Type) {
+	case "A":
+		if ip := net.ParseIP(record.Content); ip != nil && ip.To4() != nil {
+			return &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   domain,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    record.TTL,
+				},
+				A: ip.To4(),
+			}
+		}
+	case "AAAA":
+		if ip := net.ParseIP(record.Content); ip != nil && ip.To4() == nil {
+			return &dns.AAAA{
+				Hdr: dns.RR_Header{
+					Name:   domain,
+					Rrtype: dns.TypeAAAA,
+					Class:  dns.ClassINET,
+					Ttl:    record.TTL,
+				},
+				AAAA: ip,
+			}
+		}
+	case "TXT":
+		return &dns.TXT{
+			Hdr: dns.RR_Header{
+				Name:   domain,
+				Rrtype: dns.TypeTXT,
+				Class:  dns.ClassINET,
+				Ttl:    record.TTL,
+			},
+			Txt: []string{record.Content},
+		}
+	}
+
+	return &dns.RFC3597{
+		Hdr: dns.RR_Header{
+			Name:   domain,
+			Rrtype: dns.StringToType[record.Type],
+			Class:  dns.ClassINET,
+			Ttl:    record.TTL,
+		},
+		Rdata: record.Content,
+	}
 }
 
 // Connection Pool Types
@@ -540,9 +746,8 @@ type UpstreamHandler struct {
 }
 
 type RecursiveResolver struct {
-	server          *DNSServer
-	rootServerMgr   *RootServerManager
-	concurrencyLock chan struct{}
+	server        *DNSServer
+	rootServerMgr *RootServerManager
 }
 
 type CNAMEHandler struct {
@@ -971,12 +1176,14 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 	p.quicConns.Store(key, entry)
 	p.connCount.Add(1)
 
+	p.wg.Add(1)
 	go p.monitorQUICConn(key, entry, conn)
 
 	return conn, nil
 }
 
 func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.Conn) {
+	defer p.wg.Done()
 	defer HandlePanic("Monitor QUIC connection")
 
 	<-conn.Context().Done()
@@ -1738,26 +1945,41 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	}
 
 	var entry CacheEntry
-	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		go func() {
-			defer HandlePanic("Clean corrupted cache")
-			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
-			defer cleanCancel()
-			rc.client.Del(cleanCtx, key)
-		}()
-		return nil, false, false
+	// Try binary deserialization first (more efficient)
+	if err := entry.DeserializeBinary([]byte(data)); err != nil {
+		// Fallback to JSON for backward compatibility
+		if err := json.Unmarshal([]byte(data), &entry); err != nil {
+			rc.wg.Add(1)
+			go func() {
+				defer rc.wg.Done()
+				defer HandlePanic("Clean corrupted cache")
+				cleanCtx, cleanCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+				defer cleanCancel()
+				rc.client.Del(cleanCtx, key)
+			}()
+			return nil, false, false
+		}
 	}
 
 	isExpired := entry.IsExpired()
 
 	entry.AccessTime = time.Now().Unix()
+	rc.wg.Add(1)
 	go func() {
+		defer rc.wg.Done()
 		defer HandlePanic("Update access time")
 		if atomic.LoadInt32(&rc.closed) == 0 {
-			updateCtx, updateCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
+			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
 			defer updateCancel()
-			data, _ := json.Marshal(entry)
-			rc.client.Set(updateCtx, key, data, redis.KeepTTL)
+			// Use binary serialization for better performance
+			if data, err := entry.SerializeBinary(); err == nil {
+				rc.client.Set(updateCtx, key, data, redis.KeepTTL)
+			} else {
+				// Fallback to JSON on error
+				if jsonData, jsonErr := json.Marshal(entry); jsonErr == nil {
+					rc.client.Set(updateCtx, key, jsonData, redis.KeepTTL)
+				}
+			}
 		}
 	}()
 
@@ -1794,9 +2016,14 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		entry.ECSAddress = ecs.Address.String()
 	}
 
-	data, err := json.Marshal(entry)
+	// Use binary serialization for better performance
+	data, err := entry.SerializeBinary()
 	if err != nil {
-		return
+		// Fallback to JSON on error
+		data, err = json.Marshal(entry)
+		if err != nil {
+			return
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
@@ -1814,6 +2041,20 @@ func (rc *RedisCache) Close() error {
 	LogInfo("CACHE: Shutting down Redis cache")
 
 	rc.cancel()
+
+	// Wait for all goroutines to finish with a timeout
+	done := make(chan struct{})
+	go func() {
+		rc.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		LogDebug("CACHE: All Redis goroutines finished gracefully")
+	case <-time.After(5 * time.Second):
+		LogWarn("CACHE: Redis goroutine shutdown timeout")
+	}
 
 	if err := rc.client.Close(); err != nil {
 		LogError("CACHE: Redis client shutdown failed: %v", err)
@@ -2245,129 +2486,6 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 }
 
 // =============================================================================
-// RewriteManager Implementation
-// =============================================================================
-
-func NewRewriteManager() *RewriteManager {
-	return &RewriteManager{rules: make([]RewriteRule, 0, 16)}
-}
-
-func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-
-	validRules := make([]RewriteRule, 0, len(rules))
-	for _, rule := range rules {
-		if len(rule.Name) <= MaxDomainLength {
-			validRules = append(validRules, rule)
-		}
-	}
-
-	rm.rules = validRules
-	LogInfo("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
-	return nil
-}
-
-func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRewriteResult {
-	result := DNSRewriteResult{
-		Domain:        domain,
-		ResponseCode:  dns.RcodeSuccess,
-		ShouldRewrite: false,
-	}
-
-	if !rm.hasRules() || len(domain) > MaxDomainLength {
-		return result
-	}
-
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-
-	domain = NormalizeDomain(domain)
-
-	for i := range rm.rules {
-		rule := &rm.rules[i]
-		if domain != NormalizeDomain(rule.Name) {
-			continue
-		}
-
-		if rule.ResponseCode != nil {
-			result.ResponseCode = *rule.ResponseCode
-			result.ShouldRewrite = true
-			return result
-		}
-
-		if len(rule.Records) > 0 || len(rule.Additional) > 0 {
-			result.Records = make([]dns.RR, 0)
-			result.Additional = make([]dns.RR, 0)
-
-			for _, record := range rule.Records {
-				recordType := dns.StringToType[record.Type]
-				if record.ResponseCode != nil {
-					if record.Type == "" || recordType == qtype {
-						result.ResponseCode = *record.ResponseCode
-						result.ShouldRewrite = true
-						result.Records = nil
-						result.Additional = nil
-						return result
-					}
-					continue
-				}
-				if record.Type != "" && recordType != qtype {
-					continue
-				}
-				if rr := rm.buildDNSRecord(domain, record); rr != nil {
-					result.Records = append(result.Records, rr)
-				}
-			}
-
-			for _, record := range rule.Additional {
-				if rr := rm.buildDNSRecord(domain, record); rr != nil {
-					result.Additional = append(result.Additional, rr)
-				}
-			}
-
-			result.ShouldRewrite = true
-			return result
-		}
-	}
-
-	return result
-}
-
-func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
-	ttl := record.TTL
-	if ttl == 0 {
-		ttl = DefaultCacheTTL
-	}
-
-	name := dns.Fqdn(domain)
-	if record.Name != "" {
-		name = dns.Fqdn(record.Name)
-	}
-
-	rrStr := fmt.Sprintf("%s %d IN %s %s", name, ttl, record.Type, record.Content)
-	if rr, err := dns.NewRR(rrStr); err == nil {
-		return rr
-	}
-
-	rrType, exists := dns.StringToType[record.Type]
-	if !exists {
-		rrType = 0
-	}
-
-	return &dns.RFC3597{
-		Hdr:   dns.RR_Header{Name: name, Rrtype: rrType, Class: dns.ClassINET, Ttl: ttl},
-		Rdata: record.Content,
-	}
-}
-
-func (rm *RewriteManager) hasRules() bool {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	return len(rm.rules) > 0
-}
-
-// =============================================================================
 // SpeedTestManager Implementation
 // =============================================================================
 
@@ -2385,15 +2503,104 @@ func NewSpeedTestManager(config ServerConfig, redisClient *redis.Client, keyPref
 		methods:     config.Speedtest,
 	}
 	st.initICMP()
+
+	// Start periodic ICMP health check (if ICMP methods are enabled)
+	if len(config.Speedtest) > 0 {
+		go st.icmpHealthCheckLoop()
+	}
+
 	return st
 }
 
 func (st *SpeedTestManager) initICMP() {
+	st.reinitICMP()
+}
+
+func (st *SpeedTestManager) reinitICMP() {
+	// Close existing connections
+	if st.icmpConn4 != nil {
+		_ = st.icmpConn4.Close()
+		st.icmpConn4 = nil
+	}
+	if st.icmpConn6 != nil {
+		_ = st.icmpConn6.Close()
+		st.icmpConn6 = nil
+	}
+
+	// Initialize new connections with proper error handling
 	if conn4, err := icmp.ListenPacket("ip4:icmp", ""); err == nil {
 		st.icmpConn4 = conn4
+		LogDebug("SPEEDTEST: ICMPv4 connection initialized")
+	} else {
+		LogWarn("SPEEDTEST: Failed to initialize ICMPv4 connection: %v", err)
 	}
+
 	if conn6, err := icmp.ListenPacket("ip6:ipv6-icmp", ""); err == nil {
 		st.icmpConn6 = conn6
+		LogDebug("SPEEDTEST: ICMPv6 connection initialized")
+	} else {
+		LogWarn("SPEEDTEST: Failed to initialize ICMPv6 connection: %v", err)
+	}
+}
+
+func (st *SpeedTestManager) getICMPConn(isIPv6 bool) *icmp.PacketConn {
+	var conn *icmp.PacketConn
+	if isIPv6 {
+		conn = st.icmpConn6
+	} else {
+		conn = st.icmpConn4
+	}
+
+	// Check if connection is still valid by attempting to set a deadline
+	if conn != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
+			LogWarn("SPEEDTEST: ICMP connection appears dead, reinitializing: %v", err)
+			go st.reinitICMP() // Reinitialize in background
+			return nil
+		}
+		// Reset the deadline to remove the temporary one
+		_ = conn.SetReadDeadline(time.Time{})
+	}
+
+	return conn
+}
+
+func (st *SpeedTestManager) icmpHealthCheckLoop() {
+	defer HandlePanic("ICMP health check")
+
+	ticker := time.NewTicker(30 * time.Second) // Health check every 30 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if atomic.LoadInt32(&st.closed) != 0 {
+				return
+			}
+
+			// Check both ICMP connections
+			if st.icmpConn4 != nil {
+				if err := st.icmpConn4.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
+					LogWarn("SPEEDTEST: ICMPv4 health check failed, reinitializing: %v", err)
+					go st.reinitICMP()
+					continue
+				}
+				_ = st.icmpConn4.SetReadDeadline(time.Time{})
+			}
+
+			if st.icmpConn6 != nil {
+				if err := st.icmpConn6.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
+					LogWarn("SPEEDTEST: ICMPv6 health check failed, reinitializing: %v", err)
+					go st.reinitICMP()
+					continue
+				}
+				_ = st.icmpConn6.SetReadDeadline(time.Time{})
+			}
+
+		case <-time.After(time.Minute): // Safety timeout
+			// If we haven't checked in a minute, exit to avoid goroutine leak
+			return
+		}
 	}
 }
 
@@ -2514,7 +2721,14 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 			data, err := st.redis.Get(ctx, key).Result()
 			if err == nil {
 				var result SpeedResult
-				if json.Unmarshal([]byte(data), &result) == nil {
+				// Try binary deserialization first (more efficient)
+				if result.DeserializeBinary([]byte(data)) == nil {
+					if time.Since(result.Timestamp) < st.cacheTTL {
+						results[ip] = &result
+						continue
+					}
+				} else if json.Unmarshal([]byte(data), &result) == nil {
+					// Fallback to JSON for backward compatibility
 					if time.Since(result.Timestamp) < st.cacheTTL {
 						results[ip] = &result
 						continue
@@ -2539,9 +2753,14 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 
 		for ip, result := range newResults {
 			key := st.keyPrefix + ip
-			data, err := json.Marshal(result)
-			if err == nil {
+			// Use binary serialization for better performance
+			if data, err := result.SerializeBinary(); err == nil {
 				st.redis.Set(ctx, key, data, st.cacheTTL)
+			} else {
+				// Fallback to JSON on error
+				if jsonData, jsonErr := json.Marshal(result); jsonErr == nil {
+					st.redis.Set(ctx, key, jsonData, st.cacheTTL)
+				}
 			}
 		}
 	}
@@ -2628,17 +2847,17 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 		return -1
 	}
 
-	var conn *icmp.PacketConn
 	var icmpType icmp.Type
+	isIPv6 := dst.IP.To4() == nil
 
-	if dst.IP.To4() != nil {
-		conn = st.icmpConn4
-		icmpType = ipv4.ICMPTypeEcho
-	} else {
-		conn = st.icmpConn6
+	if isIPv6 {
 		icmpType = ipv6.ICMPTypeEchoRequest
+	} else {
+		icmpType = ipv4.ICMPTypeEcho
 	}
 
+	// Get connection with health checking
+	conn := st.getICMPConn(isIPv6)
 	if conn == nil {
 		return -1
 	}
@@ -2658,6 +2877,11 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	start := time.Now()
 
 	if _, err := conn.WriteTo(wb, dst); err != nil {
+		// If write fails, the connection might be dead
+		if !IsTemporaryError(err) {
+			LogWarn("SPEEDTEST: ICMP write failed permanently, triggering reinit: %v", err)
+			go st.reinitICMP()
+		}
 		return -1
 	}
 
@@ -2665,6 +2889,11 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	rb := make([]byte, 1500)
 	n, _, err := conn.ReadFrom(rb)
 	if err != nil {
+		// If read fails due to timeout or connection error, trigger reinit for permanent errors
+		if !IsTemporaryError(err) && err != nil {
+			LogWarn("SPEEDTEST: ICMP read failed permanently, triggering reinit: %v", err)
+			go st.reinitICMP()
+		}
 		return -1
 	}
 
@@ -4469,9 +4698,8 @@ func NewQueryManager(server *DNSServer) *QueryManager {
 	return &QueryManager{
 		upstream: &UpstreamHandler{servers: make([]*UpstreamServer, 0)},
 		recursive: &RecursiveResolver{
-			server:          server,
-			rootServerMgr:   server.rootServerMgr,
-			concurrencyLock: make(chan struct{}, MaxConcurrency),
+			server:        server,
+			rootServerMgr: server.rootServerMgr,
 		},
 		cname: &CNAMEHandler{server: server},
 		validator: &ResponseValidator{
@@ -4908,14 +5136,11 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		return nil, errors.New("no nameservers")
 	}
 
-	select {
-	case rr.concurrencyLock <- struct{}{}:
-		defer func() { <-rr.concurrencyLock }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
 	concurrency := min(len(nameservers), MaxSingleQuery)
+
+	// Create a sub-context that can be cancelled when we get first success
+	queryCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	tempServers := make([]*UpstreamServer, concurrency)
 	for i := 0; i < concurrency && i < len(nameservers); i++ {
@@ -4926,7 +5151,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		tempServers[i] = &UpstreamServer{Address: nameservers[i], Protocol: protocol}
 	}
 
-	resultChan := make(chan *QueryResult, 1)
+	resultChan := make(chan *QueryResult, concurrency)
 	queryWg := sync.WaitGroup{}
 
 	for _, server := range tempServers {
@@ -4940,12 +5165,12 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			defer HandlePanic("Query nameserver")
 
 			select {
-			case <-ctx.Done():
+			case <-queryCtx.Done():
 				return
 			default:
 			}
 
-			result := rr.server.queryClient.ExecuteQuery(ctx, m, s)
+			result := rr.server.queryClient.ExecuteQuery(queryCtx, m, s)
 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
@@ -4954,7 +5179,9 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 					result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
 					select {
 					case resultChan <- result:
-					case <-ctx.Done():
+						// Cancel all other queries when we get first success
+						cancel()
+					case <-queryCtx.Done():
 					}
 				}
 			}
@@ -4972,8 +5199,8 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			return result.Response, nil
 		}
 		return nil, errors.New("no successful response")
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-queryCtx.Done():
+		return nil, queryCtx.Err()
 	}
 }
 
