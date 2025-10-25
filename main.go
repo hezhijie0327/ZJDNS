@@ -197,9 +197,8 @@ type LogLevel int
 // =============================================================================
 
 type LogManager struct {
-	level    LogLevel
+	level    atomic.Int32 // LogLevel
 	writer   io.Writer
-	mu       sync.Mutex
 	colorMap map[LogLevel]string
 }
 
@@ -440,14 +439,13 @@ type RewriteManager struct {
 // Connection Pool Types
 type ConnPoolEntry struct {
 	conn       any
-	lastUsed   time.Time
+	lastUsed   atomic.Value // time.Time
 	createdAt  time.Time
-	useCount   int64
+	useCount   atomic.Int64
 	serverAddr string
 	protocol   string
 	healthy    atomic.Bool
 	closed     atomic.Bool
-	mu         sync.Mutex
 }
 
 type ConnPool struct {
@@ -557,8 +555,7 @@ type ResponseValidator struct {
 // =============================================================================
 
 func NewLogManager() *LogManager {
-	return &LogManager{
-		level:  Info,
+	lm := &LogManager{
 		writer: os.Stdout,
 		colorMap: map[LogLevel]string{
 			Error: ColorRed,
@@ -567,30 +564,25 @@ func NewLogManager() *LogManager {
 			Debug: ColorCyan,
 		},
 	}
+	lm.level.Store(int32(Info))
+	return lm
 }
 
 func (lm *LogManager) SetLevel(level LogLevel) {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
 	// Clamp level to valid range
 	if level < Error {
 		level = Error
 	} else if level > Debug {
 		level = Debug
 	}
-	lm.level = level
+	lm.level.Store(int32(level))
 }
 
 func (lm *LogManager) GetLevel() LogLevel {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
-	return lm.level
+	return LogLevel(lm.level.Load())
 }
 
 func (lm *LogManager) Log(level LogLevel, format string, args ...any) {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
-
 	// Clamp level to valid range to prevent array out of bounds
 	if level < Error {
 		level = Error
@@ -598,7 +590,7 @@ func (lm *LogManager) Log(level LogLevel, format string, args ...any) {
 		level = Debug
 	}
 
-	if level > lm.level {
+	if level > LogLevel(lm.level.Load()) {
 		return
 	}
 
@@ -691,11 +683,11 @@ func (p *ConnPool) cleanupExpiredConns() {
 	cleanupMap := func(m *sync.Map) {
 		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
-			entry.mu.Lock()
 
+			lastUsed := entry.lastUsed.Load().(time.Time)
 			shouldRemove := entry.closed.Load() ||
 				now.Sub(entry.createdAt) > ConnMaxLifetime ||
-				now.Sub(entry.lastUsed) > ConnMaxIdleTime ||
+				now.Sub(lastUsed) > ConnMaxIdleTime ||
 				!entry.healthy.Load()
 
 			if shouldRemove {
@@ -704,7 +696,6 @@ func (p *ConnPool) cleanupExpiredConns() {
 				removed++
 			}
 
-			entry.mu.Unlock()
 			return true
 		})
 	}
@@ -726,10 +717,8 @@ func (p *ConnPool) validateConns() {
 	validateMap := func(m *sync.Map) {
 		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
-			entry.mu.Lock()
 
 			if entry.closed.Load() {
-				entry.mu.Unlock()
 				return true
 			}
 
@@ -744,7 +733,6 @@ func (p *ConnPool) validateConns() {
 				validated++
 			}
 
-			entry.mu.Unlock()
 			return true
 		})
 	}
@@ -811,11 +799,9 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 
 	if value, ok := p.http2Conns.Load(key); ok {
 		entry := value.(*ConnPoolEntry)
-		entry.mu.Lock()
 		if !entry.closed.Load() && entry.healthy.Load() {
-			entry.lastUsed = time.Now()
-			entry.useCount++
-			entry.mu.Unlock()
+			entry.lastUsed.Store(time.Now())
+			entry.useCount.Add(1)
 			return &http.Client{
 				Transport: entry.conn.(*http.Transport),
 				Timeout:   QueryTimeout,
@@ -823,7 +809,6 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 		}
 		p.http2Conns.Delete(key)
 		p.closeEntry(entry)
-		entry.mu.Unlock()
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -846,12 +831,12 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 
 	entry := &ConnPoolEntry{
 		conn:       transport,
-		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
-		useCount:   1,
 		serverAddr: serverAddr,
 		protocol:   "http2",
 	}
+	entry.lastUsed.Store(time.Now())
+	entry.useCount.Store(1)
 	entry.healthy.Store(true)
 
 	p.http2Conns.Store(key, entry)
@@ -872,11 +857,9 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 
 	if value, ok := p.http3Conns.Load(key); ok {
 		entry := value.(*ConnPoolEntry)
-		entry.mu.Lock()
 		if !entry.closed.Load() && entry.healthy.Load() {
-			entry.lastUsed = time.Now()
-			entry.useCount++
-			entry.mu.Unlock()
+			entry.lastUsed.Store(time.Now())
+			entry.useCount.Add(1)
 			return &http.Client{
 				Transport: entry.conn.(*http3.Transport),
 				Timeout:   QueryTimeout,
@@ -884,7 +867,6 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 		}
 		p.http3Conns.Delete(key)
 		p.closeEntry(entry)
-		entry.mu.Unlock()
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -906,12 +888,12 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 
 	entry := &ConnPoolEntry{
 		conn:       transport,
-		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
-		useCount:   1,
 		serverAddr: serverAddr,
 		protocol:   "http3",
 	}
+	entry.lastUsed.Store(time.Now())
+	entry.useCount.Store(1)
 	entry.healthy.Store(true)
 
 	p.http3Conns.Store(key, entry)
@@ -932,7 +914,6 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 
 	if value, ok := p.quicConns.Load(key); ok {
 		entry := value.(*ConnPoolEntry)
-		entry.mu.Lock()
 		conn := entry.conn.(*quic.Conn)
 
 		if !entry.closed.Load() && entry.healthy.Load() {
@@ -940,17 +921,14 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 			case <-conn.Context().Done():
 				p.quicConns.Delete(key)
 				p.closeEntry(entry)
-				entry.mu.Unlock()
 			default:
-				entry.lastUsed = time.Now()
-				entry.useCount++
-				entry.mu.Unlock()
+				entry.lastUsed.Store(time.Now())
+				entry.useCount.Add(1)
 				return conn, nil
 			}
 		} else {
 			p.quicConns.Delete(key)
 			p.closeEntry(entry)
-			entry.mu.Unlock()
 		}
 	}
 
@@ -978,12 +956,12 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 
 	entry := &ConnPoolEntry{
 		conn:       conn,
-		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
-		useCount:   1,
 		serverAddr: serverAddr,
 		protocol:   "quic",
 	}
+	entry.lastUsed.Store(time.Now())
+	entry.useCount.Store(1)
 	entry.healthy.Store(true)
 
 	p.quicConns.Store(key, entry)
@@ -999,9 +977,7 @@ func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.
 
 	<-conn.Context().Done()
 
-	entry.mu.Lock()
 	entry.healthy.Store(false)
-	entry.mu.Unlock()
 
 	p.quicConns.Delete(key)
 	p.closeEntry(entry)
@@ -1016,19 +992,16 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 
 	if value, ok := p.tlsConns.Load(key); ok {
 		entry := value.(*ConnPoolEntry)
-		entry.mu.Lock()
 		conn := entry.conn.(*tls.Conn)
 
 		if !entry.closed.Load() && entry.healthy.Load() && p.validateConn(entry) {
-			entry.lastUsed = time.Now()
-			entry.useCount++
-			entry.mu.Unlock()
+			entry.lastUsed.Store(time.Now())
+			entry.useCount.Add(1)
 			return conn, nil
 		}
 
 		p.tlsConns.Delete(key)
 		p.closeEntry(entry)
-		entry.mu.Unlock()
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -1056,12 +1029,12 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 
 	entry := &ConnPoolEntry{
 		conn:       tlsConn,
-		lastUsed:   time.Now(),
 		createdAt:  time.Now(),
-		useCount:   1,
 		serverAddr: serverAddr,
 		protocol:   "tls",
 	}
+	entry.lastUsed.Store(time.Now())
+	entry.useCount.Store(1)
 	entry.healthy.Store(true)
 
 	p.tlsConns.Store(key, entry)
