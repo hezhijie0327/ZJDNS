@@ -2827,7 +2827,7 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	n, _, err := conn.ReadFrom(rb)
 	if err != nil {
 		// If read fails due to timeout or connection error, trigger reinit for permanent errors
-		if !IsTemporaryError(err) && err != nil {
+		if !IsTemporaryError(err) {
 			LogWarn("SPEEDTEST: ICMP read failed permanently, triggering reinit: %v", err)
 			go st.reinitICMP()
 		}
