@@ -4867,32 +4867,28 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 		return nil, nil, nil, false, nil, "", errors.New("no upstream servers")
 	}
 
-	semaphore := make(chan struct{}, MaxSingleQuery)
-	resultChan := make(chan UpstreamQueryResult, 1)
-
 	ctx, cancel := context.WithTimeout(qm.server.ctx, QueryTimeout)
 	defer cancel()
 
-	g, queryCtx := errgroup.WithContext(ctx)
+	resultChan := make(chan UpstreamQueryResult, 1)
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(MaxSingleQuery)
 
 	for _, srv := range servers {
 		server := srv
 
 		g.Go(func() error {
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
 			select {
-			case <-queryCtx.Done():
+			case <-resultChan:
+				return nil
+			case <-ctx.Done():
 				return nil
 			default:
 			}
 
 			if server.IsRecursive() {
-				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, RecursiveTimeout)
-				defer recursiveCancel()
-
-				answer, authority, additional, validated, ecsResponse, usedServer, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs)
+				answer, authority, additional, validated, ecsResponse, usedServer, err := qm.cname.resolveWithCNAME(ctx, question, ecs)
 
 				if err == nil && len(answer) > 0 {
 					if len(server.Match) > 0 {
@@ -4912,15 +4908,14 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						ecs:        ecsResponse,
 						server:     usedServer,
 					}:
-						cancel()
 						return nil
-					case <-queryCtx.Done():
+					case <-ctx.Done():
 						return nil
 					}
 				}
 			} else {
 				msg := qm.server.buildQueryMessage(question, ecs, true, false)
-				queryResult := qm.server.queryClient.ExecuteQuery(queryCtx, msg, server)
+				queryResult := qm.server.queryClient.ExecuteQuery(ctx, msg, server)
 
 				if queryResult.Error == nil && queryResult.Response != nil {
 					rcode := queryResult.Response.Rcode
@@ -4951,9 +4946,8 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							ecs:        ecsResponse,
 							server:     serverDesc,
 						}:
-							cancel()
 							return nil
-						case <-queryCtx.Done():
+						case <-ctx.Done():
 							return nil
 						}
 					}
@@ -5237,11 +5231,12 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		return nil, errors.New("no nameservers")
 	}
 
-	concurrency := min(len(nameservers), MaxSingleQuery)
-
-	// Create a sub-context that can be cancelled when we get first success
-	queryCtx, cancel := context.WithCancel(ctx)
+	timeoutCtx, cancel := context.WithTimeout(ctx, QueryTimeout)
 	defer cancel()
+
+	resultChan := make(chan *QueryResult, 1)
+
+	concurrency := min(len(nameservers), MaxSingleQuery)
 
 	tempServers := make([]*UpstreamServer, concurrency)
 	for i := 0; i < concurrency && i < len(nameservers); i++ {
@@ -5252,9 +5247,8 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		tempServers[i] = &UpstreamServer{Address: nameservers[i], Protocol: protocol}
 	}
 
-	resultChan := make(chan *QueryResult, concurrency)
-
-	g, ctx := errgroup.WithContext(queryCtx)
+	g, ctx := errgroup.WithContext(timeoutCtx)
+	g.SetLimit(MaxSingleQuery)
 
 	for _, server := range tempServers {
 		srv := server
@@ -5265,7 +5259,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil
 			default:
 			}
 
@@ -5276,13 +5270,12 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 					result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
+
 					select {
 					case resultChan <- result:
-						// Cancel all other queries when we get first success
-						cancel()
 						return nil
 					case <-ctx.Done():
-						return ctx.Err()
+						return nil
 					}
 				}
 			}
@@ -5301,8 +5294,8 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			return result.Response, nil
 		}
 		return nil, errors.New("no successful response")
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-timeoutCtx.Done():
+		return nil, timeoutCtx.Err()
 	}
 }
 
@@ -5311,23 +5304,20 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		return nil
 	}
 
-	semaphore := make(chan struct{}, MaxNSResolve)
+	timeoutCtx, cancel := context.WithTimeout(ctx, ConnTimeout)
+	defer cancel()
+
+	g, ctx := errgroup.WithContext(timeoutCtx)
+	g.SetLimit(MaxNSResolve)
+
 	nsChan := make(chan []string, len(nsRecords))
-
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, ConnTimeout)
-	defer resolveCancel()
-
-	g, queryCtx := errgroup.WithContext(resolveCtx)
 
 	for _, ns := range nsRecords {
 		nsRecord := ns
 
 		g.Go(func() error {
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
 			select {
-			case <-queryCtx.Done():
+			case <-ctx.Done():
 				return nil
 			default:
 			}
@@ -5336,12 +5326,11 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				return nil
 			}
 
-			ipv4Chan := make(chan []string, 1)
-			ipv6Chan := make(chan []string, 1)
+			var addresses []string
 
-			queryGroup, _ := errgroup.WithContext(queryCtx)
+			innerG, innerCtx := errgroup.WithContext(ctx)
 
-			queryGroup.Go(func() error {
+			innerG.Go(func() error {
 				defer HandlePanic("Resolve NS IPv4")
 
 				nsQuestion := dns.Question{
@@ -5350,23 +5339,17 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					Qclass: dns.ClassINET,
 				}
 
-				var ipv4Addresses []string
-				if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
+				if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(innerCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswer {
 						if a, ok := rrec.(*dns.A); ok {
-							ipv4Addresses = append(ipv4Addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
+							addresses = append(addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
 						}
 					}
-				}
-
-				select {
-				case ipv4Chan <- ipv4Addresses:
-				case <-queryCtx.Done():
 				}
 				return nil
 			})
 
-			queryGroup.Go(func() error {
+			innerG.Go(func() error {
 				defer HandlePanic("Resolve NS IPv6")
 
 				nsQuestionV6 := dns.Question{
@@ -5375,45 +5358,22 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					Qclass: dns.ClassINET,
 				}
 
-				var ipv6Addresses []string
-				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
+				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(innerCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswerV6 {
 						if aaaa, ok := rrec.(*dns.AAAA); ok {
-							ipv6Addresses = append(ipv6Addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
+							addresses = append(addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
 						}
 					}
-				}
-
-				select {
-				case ipv6Chan <- ipv6Addresses:
-				case <-queryCtx.Done():
 				}
 				return nil
 			})
 
-			_ = queryGroup.Wait()
+			_ = innerG.Wait()
 
-			var allAddresses atomic.Value
-			addresses := []string{}
-
-			select {
-			case ipv4Addresses := <-ipv4Chan:
-				addresses = append(addresses, ipv4Addresses...)
-			default:
-			}
-
-			select {
-			case ipv6Addresses := <-ipv6Chan:
-				addresses = append(addresses, ipv6Addresses...)
-			default:
-			}
-
-			allAddresses.Store(addresses)
-
-			if finalAddresses, ok := allAddresses.Load().([]string); ok && len(finalAddresses) > 0 {
+			if len(addresses) > 0 {
 				select {
-				case nsChan <- finalAddresses:
-				case <-queryCtx.Done():
+				case nsChan <- addresses:
+				case <-ctx.Done():
 				}
 			}
 
@@ -5426,24 +5386,16 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		close(nsChan)
 	}()
 
-	var allAddresses atomic.Value
-	addresses := []string{}
-
+	var allAddresses []string
 	for nsAddresses := range nsChan {
-		addresses = append(addresses, nsAddresses...)
-		allAddresses.Store(addresses)
-
-		if len(addresses) >= MaxNSResolve {
-			resolveCancel()
+		allAddresses = append(allAddresses, nsAddresses...)
+		if len(allAddresses) >= MaxNSResolve {
+			cancel()
 			break
 		}
 	}
 
-	if finalAddresses, ok := allAddresses.Load().([]string); ok {
-		return finalAddresses
-	}
-
-	return addresses
+	return allAddresses
 }
 
 func (rr *RecursiveResolver) getRootServers() []string {
