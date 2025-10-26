@@ -2522,8 +2522,18 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 
 	// Try to create any type of DNS record using dns.NewRR()
 	// This supports ALL DNS record types (MX, NS, SRV, CAA, DNSKEY, etc.)
-	rrStr := fmt.Sprintf("%s %d IN %s %s", name, ttl, record.Type, record.Content)
-	if rr, err := dns.NewRR(rrStr); err == nil {
+	// Use strings.Builder for better performance than fmt.Sprintf
+	var sb strings.Builder
+	sb.Grow(len(name) + len(record.Type) + len(record.Content) + 20) // Pre-allocate with extra space
+	sb.WriteString(name)
+	sb.WriteByte(' ')
+	sb.WriteString(strconv.FormatUint(uint64(ttl), 10))
+	sb.WriteString(" IN ")
+	sb.WriteString(record.Type)
+	sb.WriteByte(' ')
+	sb.WriteString(record.Content)
+
+	if rr, err := dns.NewRR(sb.String()); err == nil {
 		return rr
 	}
 
