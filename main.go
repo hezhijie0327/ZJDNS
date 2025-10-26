@@ -5307,19 +5307,24 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		return nil
 	}
 
-	nsChan := make(chan []string, len(nsRecords))
-
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, ConnTimeout)
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
 	g.SetLimit(MaxNSResolve)
 
+	// Use atomic.Pointer for true lock-free operations (Go 1.19+)
+	var allAddresses atomic.Pointer[[]string]
+	empty := []string{}
+	allAddresses.Store(&empty)
+
+	// Use atomic.Int32 for counting completed operations
+	var completedCount atomic.Int32
+
 	for _, ns := range nsRecords {
 		nsRecord := ns
 
 		g.Go(func() error {
-
 			select {
 			case <-queryCtx.Done():
 				return nil
@@ -5330,10 +5335,12 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				return nil
 			}
 
-			ipv4Chan := make(chan []string, 1)
-			ipv6Chan := make(chan []string, 1)
+			// Use atomic operations for thread-safe address collection
+			var nsAddresses atomic.Value
+			nsAddresses.Store([]string{})
 
 			queryGroup, _ := errgroup.WithContext(queryCtx)
+			queryGroup.SetLimit(2) // IPv4 + IPv6
 
 			queryGroup.Go(func() error {
 				defer HandlePanic("Resolve NS IPv4")
@@ -5353,9 +5360,12 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					}
 				}
 
-				select {
-				case ipv4Chan <- ipv4Addresses:
-				case <-queryCtx.Done():
+				// Atomically append addresses
+				if existing := nsAddresses.Load().([]string); len(existing) > 0 {
+					combined := append(existing, ipv4Addresses...)
+					nsAddresses.Store(combined)
+				} else {
+					nsAddresses.Store(ipv4Addresses)
 				}
 				return nil
 			})
@@ -5378,66 +5388,44 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					}
 				}
 
-				select {
-				case ipv6Chan <- ipv6Addresses:
-				case <-queryCtx.Done():
+				// Atomically append addresses
+				if existing := nsAddresses.Load().([]string); len(existing) > 0 {
+					combined := append(existing, ipv6Addresses...)
+					nsAddresses.Store(combined)
+				} else {
+					nsAddresses.Store(ipv6Addresses)
 				}
 				return nil
 			})
 
 			_ = queryGroup.Wait()
 
-			var allAddresses atomic.Value
-			addresses := []string{}
+			// Add this NS's addresses to the global collection using atomic.Pointer
+			if nsAddrs := nsAddresses.Load().([]string); len(nsAddrs) > 0 {
+				// True lock-free atomic pointer operations
+				current := allAddresses.Load()
+				newAddresses := append(*current, nsAddrs...)
 
-			select {
-			case ipv4Addresses := <-ipv4Chan:
-				addresses = append(addresses, ipv4Addresses...)
-			default:
-			}
+				allAddresses.Store(&newAddresses)
 
-			select {
-			case ipv6Addresses := <-ipv6Chan:
-				addresses = append(addresses, ipv6Addresses...)
-			default:
-			}
-
-			allAddresses.Store(addresses)
-
-			if finalAddresses, ok := allAddresses.Load().([]string); ok && len(finalAddresses) > 0 {
-				select {
-				case nsChan <- finalAddresses:
-				case <-queryCtx.Done():
+				// Check if we have enough addresses and can stop early
+				if len(newAddresses) >= MaxNSResolve {
+					resolveCancel()
 				}
 			}
 
+			completedCount.Add(1)
 			return nil
 		})
 	}
 
-	go func() {
-		_ = g.Wait()
-		close(nsChan)
-	}()
+	_ = g.Wait()
 
-	var allAddresses atomic.Value
-	addresses := []string{}
-
-	for nsAddresses := range nsChan {
-		addresses = append(addresses, nsAddresses...)
-		allAddresses.Store(addresses)
-
-		if len(addresses) >= MaxNSResolve {
-			resolveCancel()
-			break
-		}
+	if finalAddresses := allAddresses.Load(); finalAddresses != nil {
+		return *finalAddresses
 	}
 
-	if finalAddresses, ok := allAddresses.Load().([]string); ok {
-		return finalAddresses
-	}
-
-	return addresses
+	return nil
 }
 
 func (rr *RecursiveResolver) getRootServers() []string {
