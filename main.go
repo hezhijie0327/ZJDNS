@@ -68,13 +68,6 @@ var (
 	NextProtoDoQ  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
 	NextProtoDoH3 = []string{"h3"}
 	NextProtoDoH  = []string{"h2", "http/1.1"}
-
-	// Minimal message pool to reduce GC pressure
-	messagePool = sync.Pool{
-		New: func() any {
-			return &dns.Msg{}
-		},
-	}
 )
 
 // =============================================================================
@@ -1211,8 +1204,7 @@ func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *Ups
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	response := AcquireMessage()
-	defer ReleaseMessage(response)
+	response := &dns.Msg{}
 	if err := response.Unpack(respBuf); err != nil {
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
@@ -1264,8 +1256,7 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 		return nil, fmt.Errorf("response too short: %d", n)
 	}
 
-	response := AcquireMessage()
-	defer ReleaseMessage(response)
+	response := &dns.Msg{}
 	if err := response.Unpack(respBuf[2:n]); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("unpack: %w", err)
@@ -1335,8 +1326,7 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	response := AcquireMessage()
-	defer ReleaseMessage(response)
+	response := &dns.Msg{}
 	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("unpack: %w", err)
@@ -1406,8 +1396,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	response := AcquireMessage()
-	defer ReleaseMessage(response)
+	response := &dns.Msg{}
 	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("unpack: %w", err)
@@ -3617,8 +3606,7 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		req := AcquireMessage()
-		defer ReleaseMessage(req)
+		req := &dns.Msg{}
 		if err := req.Unpack(msgBuf); err != nil {
 			LogDebug("DOT: DNS message unpack error: %v", err)
 			continue
@@ -3817,8 +3805,7 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	req := AcquireMessage()
-	defer ReleaseMessage(req)
+	req := &dns.Msg{}
 	if err := req.Unpack(buf[2 : 2+msgLen]); err != nil {
 		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid DNS message")
 		return
@@ -3995,8 +3982,7 @@ func (tm *TLSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
 		return nil, http.StatusBadRequest
 	}
 
-	req := AcquireMessage()
-	defer ReleaseMessage(req)
+	req := &dns.Msg{}
 	if err := req.Unpack(buf); err != nil {
 		return nil, http.StatusBadRequest
 	}
@@ -4510,7 +4496,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	}
 
 	if req == nil || len(req.Question) == 0 {
-		msg := AcquireMessage()
+		msg := &dns.Msg{}
 		if req != nil && len(req.Question) > 0 {
 			msg.SetReply(req)
 		} else {
@@ -4523,7 +4509,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	question := req.Question[0]
 
 	if len(question.Name) > MaxDomainLength || question.Qtype == dns.TypeANY {
-		msg := AcquireMessage()
+		msg := &dns.Msg{}
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeRefused
 		return msg
@@ -4595,7 +4581,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 
 	msg := s.buildResponse(req)
 	if msg == nil {
-		msg = AcquireMessage()
+		msg = &dns.Msg{}
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeServerFailure
 		return msg
@@ -4671,7 +4657,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
 		msg := s.buildResponse(req)
 		if msg == nil {
-			msg = AcquireMessage()
+			msg = &dns.Msg{}
 			msg.SetReply(req)
 			msg.Rcode = dns.RcodeServerFailure
 			return msg
@@ -4693,7 +4679,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 
 	msg := s.buildResponse(req)
 	if msg == nil {
-		msg = AcquireMessage()
+		msg = &dns.Msg{}
 		msg.SetReply(req)
 	}
 	msg.Rcode = dns.RcodeServerFailure
@@ -4703,7 +4689,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
-		msg = AcquireMessage()
+		msg = &dns.Msg{}
 		msg.SetReply(req)
 	}
 
@@ -4757,10 +4743,7 @@ func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool)
 }
 
 func (s *DNSServer) buildResponse(req *dns.Msg) *dns.Msg {
-	msg := AcquireMessage()
-	if msg == nil {
-		msg = AcquireMessage()
-	}
+	msg := &dns.Msg{}
 
 	if req != nil && len(req.Question) > 0 {
 		msg.SetReply(req)
@@ -4787,10 +4770,7 @@ func (s *DNSServer) restoreOriginalDomain(msg *dns.Msg, currentName, originalNam
 }
 
 func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {
-	msg := AcquireMessage()
-	if msg == nil {
-		msg = AcquireMessage()
-	}
+	msg := &dns.Msg{}
 
 	msg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
 	msg.RecursionDesired = recursionDesired
@@ -4933,7 +4913,6 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 				}
 			} else {
 				msg := qm.server.buildQueryMessage(question, ecs, true, false)
-				defer ReleaseMessage(msg)
 
 				queryResult := qm.server.queryClient.ExecuteQuery(ctx, msg, srv)
 
@@ -5279,7 +5258,6 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		msg := rr.server.buildQueryMessage(question, ecs, true, false)
 
 		g.Go(func() error {
-			defer ReleaseMessage(msg)
 			defer HandlePanic("Query nameserver")
 
 			select {
@@ -5692,20 +5670,6 @@ func ToRRSlice[T dns.RR](records []T) []dns.RR {
 		result[i] = r
 	}
 	return result
-}
-
-func AcquireMessage() *dns.Msg {
-	msg := messagePool.Get().(*dns.Msg)
-	*msg = dns.Msg{}
-	return msg
-}
-
-func ReleaseMessage(msg *dns.Msg) {
-	if msg == nil {
-		return
-	}
-
-	messagePool.Put(msg)
 }
 
 // =============================================================================
