@@ -5273,39 +5273,35 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		return nil, errors.New("no nameservers")
 	}
 
-	concurrency := min(len(nameservers), MaxSingleQuery)
-
 	// Create a sub-context that can be cancelled when we get first success
 	queryCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	tempServers := make([]*UpstreamServer, concurrency)
-	for i := 0; i < concurrency && i < len(nameservers); i++ {
+	resultChan := make(chan *QueryResult, 1)
+
+	g, queryCtx := errgroup.WithContext(queryCtx)
+	// Set concurrency limit but still iterate through all nameservers
+	g.SetLimit(MaxSingleQuery)
+
+	for _, ns := range nameservers {
+		nsAddr := ns
 		protocol := "udp"
 		if forceTCP {
 			protocol = "tcp"
 		}
-		tempServers[i] = &UpstreamServer{Address: nameservers[i], Protocol: protocol}
-	}
-
-	resultChan := make(chan *QueryResult, concurrency)
-
-	g, ctx := errgroup.WithContext(queryCtx)
-
-	for _, server := range tempServers {
-		srv := server
+		server := &UpstreamServer{Address: nsAddr, Protocol: protocol}
 		msg := rr.server.buildQueryMessage(question, ecs, true, false)
 
 		g.Go(func() error {
 			defer HandlePanic("Query nameserver")
 
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-queryCtx.Done():
+				return queryCtx.Err()
 			default:
 			}
 
-			result := rr.server.queryClient.ExecuteQuery(ctx, msg, srv)
+			result := rr.server.queryClient.ExecuteQuery(queryCtx, msg, server)
 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
@@ -5317,8 +5313,8 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 						// Cancel all other queries when we get first success
 						cancel()
 						return nil
-					case <-ctx.Done():
-						return ctx.Err()
+					case <-queryCtx.Done():
+						return queryCtx.Err()
 					}
 				}
 			}
@@ -5446,11 +5442,6 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				newAddresses := append(*current, nsAddrs...)
 
 				allAddresses.Store(&newAddresses)
-
-				// Check if we have enough addresses and can stop early
-				if len(newAddresses) >= MaxNSResolve {
-					resolveCancel()
-				}
 			}
 
 			completedCount.Add(1)
