@@ -673,6 +673,7 @@ func NewConnPool() *ConnPool {
 		cleanupTicker:   time.NewTicker(ConnPoolCleanup),
 		sessionCache:    tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 	}
+	pool.closed.Store(false)
 
 	pool.backgroundGroup.Go(func() error {
 		pool.cleanupLoop()
@@ -863,6 +864,8 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 	entry.lastUsed.Store(time.Now())
 	entry.useCount.Store(1)
 	entry.healthy.Store(true)
+	entry.closed.Store(false)
+	entry.closed.Store(false)
 
 	p.http2Conns.Store(key, entry)
 	p.connCount.Add(1)
@@ -920,6 +923,7 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 	entry.lastUsed.Store(time.Now())
 	entry.useCount.Store(1)
 	entry.healthy.Store(true)
+	entry.closed.Store(false)
 
 	p.http3Conns.Store(key, entry)
 	p.connCount.Add(1)
@@ -988,6 +992,7 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 	entry.lastUsed.Store(time.Now())
 	entry.useCount.Store(1)
 	entry.healthy.Store(true)
+	entry.closed.Store(false)
 
 	p.quicConns.Store(key, entry)
 	p.connCount.Add(1)
@@ -1003,6 +1008,7 @@ func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.
 	<-conn.Context().Done()
 
 	entry.healthy.Store(false)
+	entry.closed.Store(false)
 
 	p.quicConns.Delete(key)
 	p.closeEntry(entry)
@@ -1061,6 +1067,7 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 	entry.lastUsed.Store(time.Now())
 	entry.useCount.Store(1)
 	entry.healthy.Store(true)
+	entry.closed.Store(false)
 
 	p.tlsConns.Store(key, entry)
 	p.connCount.Add(1)
