@@ -94,7 +94,7 @@
 ### 🧠 内存管理与优化
 
 - **工作池任务管理**：优化的 TaskManager 采用固定工作池和任务队列，防止 goroutine 爆炸，减少内存开销。
-- **智能消息池化**：增强的 DNS 消息池，支持大小限制（1000条消息）、slice 容量控制（50），以及适当的清理机制，防止内存膨胀。
+- **智能消息池化**：增强的 DNS 消息池，支持大小限制（1000 条消息）、slice 容量控制（50），以及适当的清理机制，防止内存膨胀。
 - **受控查询并发**：限制并发查询数量（MaxSingleQuery: 5），采用首胜策略，减少资源使用并提高响应时间。
 - **实时内存监控**：每 30 秒持续跟踪内存使用情况，当内存超过 500MB 时自动触发垃圾回收。
 - **资源生命周期管理**：在关闭过程中正确清理所有资源，防止内存泄漏。
@@ -115,8 +115,7 @@ graph TB
     subgraph "核心服务层"
         B[DNSServer<br><i>服务器核心</i>]
         C[ConfigManager<br><i>配置管理</i>]
-        D[ConnectionManager<br><i>连接管理</i>]
-        E[CacheManager<br><i>缓存管理器</i>]
+        E[CacheManager<br><i>缓存接口</i>]
         F[QueryManager<br><i>查询管理器</i>]
         G[UpstreamHandler<br><i>上游处理器</i>]
     end
@@ -155,22 +154,19 @@ graph TB
 
     subgraph "基础设施层"
         BB[RequestTracker<br><i>请求追踪</i>]
-        CC[TaskManager<br><i>任务管理</i>]
         DD[TLSManager<br><i>TLS证书管理</i>]
         EE[RootServerManager<br><i>根服务器管理</i>]
         FF[IPDetector<br><i>IP检测器</i>]
         GG[LogManager<br><i>日志管理</i>]
-        HH[MemoryMonitor<br><i>内存监控</i>]
-        II[MetricsCollector<br><i>指标收集器</i>]
-        JJ[MetricsAPI<br><i>指标HTTP API</i>]
+        LL[ConnPool<br><i>连接池</i>]
     end
 
     subgraph "外部服务"
         KK[Root Servers<br><i>根服务器</i>]
-        LL[Upstream DNS<br><i>上游DNS</i>]
-        MM[Redis Cluster<br><i>Redis集群</i>]
-        NN[Self-signed CA<br><i>自签名CA</i>]
-        OO[TLS Certificates<br><i>TLS证书</i>]
+        MM[Upstream DNS<br><i>上游DNS</i>]
+        NN[Redis Cluster<br><i>Redis集群</i>]
+        OO[Self-signed CA<br><i>自签名CA</i>]
+        PP[TLS Certificates<br><i>TLS证书</i>]
     end
 
     %% 主要连接关系
@@ -200,29 +196,26 @@ graph TB
     M --> W
 
     P --> EE
+    P --> LL
     B --> X
     B --> Y
     X --> Z
     X --> AA
 
     B --> BB
-    B --> CC
     B --> DD
     B --> FF
     B --> GG
-    B --> HH
-    B --> II
-    II --> JJ
 
     %% 外部连接
     EE --> KK
-    G --> LL
-    X --> MM
-    DD --> NN
+    G --> MM
+    X --> NN
     DD --> OO
-    J --> OO
-    K --> OO
-    L --> OO
+    DD --> PP
+    J --> PP
+    K --> PP
+    L --> PP
 
     %% 样式定义
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
@@ -235,13 +228,13 @@ graph TB
     classDef external fill:#95a5a6,stroke:#7f8c8d,color:#fff
 
     class A client
-    class B,C,D,E,F,G core
+    class B,C,E,F,G core
     class H,I,J,K,L protocol
     class M,N,O,P engine
     class Q,R,S,T,U,V,W security
     class X,Y,Z,AA cache
-    class BB,CC,DD,EE,FF,GG,HH,II,JJ infra
-    class KK,LL,MM,NN,OO external
+    class BB,DD,EE,FF,GG,LL infra
+    class KK,MM,NN,OO,PP external
 ```
 
 ---

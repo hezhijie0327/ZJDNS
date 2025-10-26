@@ -115,8 +115,7 @@ graph TB
     subgraph "Core Service Layer"
         B[DNSServer<br><i>Server Core</i>]
         C[ConfigManager<br><i>Config Management</i>]
-        D[ConnectionManager<br><i>Connection Management</i>]
-        E[CacheManager<br><i>Cache Manager</i>]
+        E[CacheManager<br><i>Cache Interface</i>]
         F[QueryManager<br><i>Query Manager</i>]
         G[UpstreamHandler<br><i>Upstream Handler</i>]
     end
@@ -155,22 +154,19 @@ graph TB
 
     subgraph "Infrastructure Layer"
         BB[RequestTracker<br><i>Request Tracking</i>]
-        CC[TaskManager<br><i>Task Management</i>]
         DD[TLSManager<br><i>TLS Certificate Management</i>]
         EE[RootServerManager<br><i>Root Server Management</i>]
         FF[IPDetector<br><i>IP Detector</i>]
         GG[LogManager<br><i>Log Management</i>]
-        HH[MemoryMonitor<br><i>Memory Monitor</i>]
-        II[MetricsCollector<br><i>Metrics Collection</i>]
-        JJ[MetricsAPI<br><i>Metrics HTTP API</i>]
+        LL[ConnPool<br><i>Connection Pool</i>]
     end
 
     subgraph "External Services"
         KK[Root Servers<br><i>Root Servers</i>]
-        LL[Upstream DNS<br><i>Upstream DNS</i>]
-        MM[Redis Cluster<br><i>Redis Cluster</i>]
-        NN[Self-signed CA<br><i>Self-signed CA</i>]
-        OO[TLS Certificates<br><i>TLS Certificates</i>]
+        MM[Upstream DNS<br><i>Upstream DNS</i>]
+        NN[Redis Cluster<br><i>Redis Cluster</i>]
+        OO[Self-signed CA<br><i>Self-signed CA</i>]
+        PP[TLS Certificates<br><i>TLS Certificates</i>]
     end
 
     %% Main connections
@@ -200,29 +196,26 @@ graph TB
     M --> W
 
     P --> EE
+    P --> LL
     B --> X
     B --> Y
     X --> Z
     X --> AA
 
     B --> BB
-    B --> CC
     B --> DD
     B --> FF
     B --> GG
-    B --> HH
-    B --> II
-    II --> JJ
 
     %% External connections
     EE --> KK
-    G --> LL
-    X --> MM
-    DD --> NN
+    G --> MM
+    X --> NN
     DD --> OO
-    J --> OO
-    K --> OO
-    L --> OO
+    DD --> PP
+    J --> PP
+    K --> PP
+    L --> PP
 
     %% Style definitions
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
@@ -235,13 +228,13 @@ graph TB
     classDef external fill:#95a5a6,stroke:#7f8c8d,color:#fff
 
     class A client
-    class B,C,D,E,F,G core
+    class B,C,E,F,G core
     class H,I,J,K,L protocol
     class M,N,O,P engine
     class Q,R,S,T,U,V,W security
     class X,Y,Z,AA cache
-    class BB,CC,DD,EE,FF,GG,HH,II,JJ infra
-    class KK,LL,MM,NN,OO external
+    class BB,DD,EE,FF,GG,LL infra
+    class KK,MM,NN,OO,PP external
 ```
 
 ---
