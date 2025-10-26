@@ -706,6 +706,10 @@ func (p *ConnPool) cleanupExpiredConns() {
 	removed := 0
 
 	cleanupMap := func(m *sync.Map) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var entriesToClean []*ConnPoolEntry
 		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
 
@@ -716,13 +720,26 @@ func (p *ConnPool) cleanupExpiredConns() {
 				!entry.healthy.Load()
 
 			if shouldRemove {
+				entriesToClean = append(entriesToClean, entry)
 				m.Delete(key)
-				p.closeEntry(entry)
-				removed++
 			}
 
 			return true
 		})
+
+		g, _ := errgroup.WithContext(ctx)
+		g.SetLimit(4)
+
+		for _, entry := range entriesToClean {
+			e := entry
+			g.Go(func() error {
+				p.closeEntry(e)
+				removed++
+				return nil
+			})
+		}
+
+		_ = g.Wait()
 	}
 
 	cleanupMap(&p.http2Conns)
@@ -740,26 +757,50 @@ func (p *ConnPool) validateConns() {
 	failed := 0
 
 	validateMap := func(m *sync.Map) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var entriesToValidate []*ConnPoolEntry
 		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
-
-			if entry.closed.Load() {
-				return true
+			if !entry.closed.Load() {
+				entriesToValidate = append(entriesToValidate, entry)
 			}
-
-			valid := p.validateConn(entry)
-			entry.healthy.Store(valid)
-
-			if !valid {
-				failed++
-				m.Delete(key)
-				p.closeEntry(entry)
-			} else {
-				validated++
-			}
-
 			return true
 		})
+
+		g, _ := errgroup.WithContext(ctx)
+		g.SetLimit(4)
+
+		for _, entry := range entriesToValidate {
+			e := entry
+			key := ""
+			m.Range(func(k, v any) bool {
+				if v.(*ConnPoolEntry) == e {
+					key = k.(string)
+					return false
+				}
+				return true
+			})
+
+			finalKey := key
+
+			g.Go(func() error {
+				valid := p.validateConn(e)
+				e.healthy.Store(valid)
+
+				if !valid {
+					failed++
+					m.Delete(finalKey)
+					p.closeEntry(e)
+				} else {
+					validated++
+				}
+				return nil
+			})
+		}
+
+		_ = g.Wait()
 	}
 
 	validateMap(&p.quicConns)
@@ -1742,6 +1783,7 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
 	bgGroup, bgCtx := errgroup.WithContext(cacheCtx)
+	bgGroup.SetLimit(8)
 	cache := &RedisCache{
 		client:  rdb,
 		config:  config,
@@ -1778,7 +1820,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 			defer cleanCancel()
 			if err := rc.client.Del(cleanCtx, key).Err(); err != nil {
 				LogError("CACHE: Failed to clean corrupted cache key %s: %v", key, err)
-				return nil // Don't fail the group for background cleanup errors
+				return nil
 			}
 			return nil
 		})
@@ -2845,27 +2887,25 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 }
 
 func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResult {
-	semaphore := make(chan struct{}, st.concurrency)
+	if len(ips) == 0 {
+		return nil
+	}
+
 	resultChan := make(chan *SpeedResult, len(ips))
 
-	g, ctx := errgroup.WithContext(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), st.timeout*2)
+	defer cancel()
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(st.concurrency)
+
 	for _, ip := range ips {
 		testIP := ip
 		g.Go(func() error {
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			// Create a reusable timer for this goroutine
-			timer := time.NewTimer(st.timeout)
-			defer timer.Stop()
-
 			if result := st.testSingleIP(testIP); result != nil {
 				select {
 				case resultChan <- result:
-				case <-timer.C:
-					LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
 				case <-ctx.Done():
-					return ctx.Err()
 				}
 			}
 			return nil
@@ -3536,6 +3576,12 @@ func (tm *TLSManager) startDOTServer() error {
 }
 
 func (tm *TLSManager) handleDOTConnections() {
+	timeoutCtx, cancel := context.WithCancel(tm.ctx)
+	defer cancel()
+
+	g, _ := errgroup.WithContext(timeoutCtx)
+	g.SetLimit(MaxIncomingStreams)
+
 	for {
 		select {
 		case <-tm.ctx.Done():
@@ -3552,7 +3598,7 @@ func (tm *TLSManager) handleDOTConnections() {
 			continue
 		}
 
-		tm.serverGroup.Go(func() error {
+		g.Go(func() error {
 			defer HandlePanic("DoT connection handler")
 			defer func() { _ = conn.Close() }()
 			tm.handleDOTConnection(conn)
@@ -3698,16 +3744,24 @@ func (tm *TLSManager) startDOQServer() error {
 }
 
 func (tm *TLSManager) handleDOQConnections() {
+	timeoutCtx, cancel := context.WithCancel(tm.ctx)
+	defer cancel()
+
+	g, ctx := errgroup.WithContext(timeoutCtx)
+	g.SetLimit(MaxIncomingStreams)
+
 	for {
 		select {
 		case <-tm.ctx.Done():
+			_ = g.Wait()
 			return
 		default:
 		}
 
-		conn, err := tm.doqListener.Accept(tm.ctx)
+		conn, err := tm.doqListener.Accept(ctx)
 		if err != nil {
 			if tm.ctx.Err() != nil {
+				_ = g.Wait()
 				return
 			}
 			continue
@@ -3717,7 +3771,7 @@ func (tm *TLSManager) handleDOQConnections() {
 			continue
 		}
 
-		tm.serverGroup.Go(func() error {
+		g.Go(func() error {
 			defer HandlePanic("DoQ connection handler")
 			tm.handleDOQConnection(conn)
 			return nil
@@ -3749,32 +3803,23 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		}
 	}()
 
-	// Create errgroup for stream handling
 	streamGroup, _ := errgroup.WithContext(tm.ctx)
+	streamGroup.SetLimit(MaxIncomingStreams / 2)
 
 	for {
 		select {
 		case <-tm.ctx.Done():
-			// Wait for all ongoing streams to finish before returning
-			if err := streamGroup.Wait(); err != nil {
-				LogError("DoQ: Stream group finished with error: %v", err)
-			}
+			_ = streamGroup.Wait()
 			return
 		case <-conn.Context().Done():
-			// Wait for all ongoing streams to finish before returning
-			if err := streamGroup.Wait(); err != nil {
-				LogError("DoQ: Stream group finished with error: %v", err)
-			}
+			_ = streamGroup.Wait()
 			return
 		default:
 		}
 
 		stream, err := conn.AcceptStream(tm.ctx)
 		if err != nil {
-			// Wait for all ongoing streams to finish before returning
-			if err := streamGroup.Wait(); err != nil {
-				LogError("DoQ: Stream group finished with error: %v", err)
-			}
+			_ = streamGroup.Wait()
 			return
 		}
 
