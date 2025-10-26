@@ -325,7 +325,7 @@ type RedisCache struct {
 	client  *redis.Client
 	config  *ServerConfig
 	ctx     context.Context
-	cancel  context.CancelFunc
+	cancel  context.CancelCauseFunc
 	closed  int32
 	bgGroup *errgroup.Group
 	bgCtx   context.Context
@@ -460,19 +460,19 @@ type ipv4Net struct {
 // Rewrite Management Type
 type RewriteManager struct {
 	rules    atomic.Pointer[[]RewriteRule]
-	rulesLen atomic.Int64
+	rulesLen atomic.Uint64
 }
 
 // Connection Pool Types
 type ConnPoolEntry struct {
 	conn       any
-	serverAddr string       // Grouped strings together for better cache locality
-	protocol   string       // Grouped strings together for better cache locality
-	createdAt  time.Time    // Grouped time fields together
-	lastUsed   atomic.Value // time.Time - most frequently accessed
-	healthy    atomic.Bool  // Group atomic types together
-	closed     atomic.Bool  // Group atomic types together
-	useCount   atomic.Int64 // Group atomic types together
+	serverAddr string        // Grouped strings together for better cache locality
+	protocol   string        // Grouped strings together for better cache locality
+	createdAt  time.Time     // Grouped time fields together
+	lastUsed   atomic.Value  // time.Time - most frequently accessed
+	healthy    atomic.Bool   // Group atomic types together
+	closed     atomic.Bool   // Group atomic types together
+	useCount   atomic.Uint64 // Group atomic types together
 }
 
 type ConnPool struct {
@@ -482,7 +482,7 @@ type ConnPool struct {
 	tlsConns        sync.Map
 	sessionCache    tls.ClientSessionCache
 	ctx             context.Context
-	cancel          context.CancelFunc
+	cancel          context.CancelCauseFunc
 	backgroundGroup *errgroup.Group
 	backgroundCtx   context.Context
 	closed          atomic.Bool
@@ -513,7 +513,7 @@ type TLSManager struct {
 	server        *DNSServer
 	tlsConfig     *tls.Config
 	ctx           context.Context
-	cancel        context.CancelFunc
+	cancel        context.CancelCauseFunc
 	serverGroup   *errgroup.Group
 	serverCtx     context.Context
 	dotListener   net.Listener
@@ -671,7 +671,7 @@ func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
 // =============================================================================
 
 func NewConnPool() *ConnPool {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 
 	pool := &ConnPool{
@@ -1091,7 +1091,7 @@ func (p *ConnPool) Close() error {
 
 	LogInfo("POOL: Shutting down connection pool")
 
-	p.cancel()
+	p.cancel(errors.New("connection pool shutdown"))
 	p.cleanupTicker.Stop()
 
 	closeMap := func(m *sync.Map) {
@@ -1750,7 +1750,7 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 		return nil, fmt.Errorf("redis connection: %w", err)
 	}
 
-	cacheCtx, cacheCancel := context.WithCancel(context.Background())
+	cacheCtx, cacheCancel := context.WithCancelCause(context.Background())
 	bgGroup, bgCtx := errgroup.WithContext(cacheCtx)
 
 	cache := &RedisCache{
@@ -1865,7 +1865,7 @@ func (rc *RedisCache) Close() error {
 
 	LogInfo("CACHE: Shutting down Redis cache")
 
-	rc.cancel()
+	rc.cancel(errors.New("redis cache shutdown"))
 
 	// Wait for all background goroutines to finish with timeout
 	done := make(chan error, 1)
@@ -2473,7 +2473,7 @@ func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 	}
 
 	rm.rules.Store(&validRules)
-	rm.rulesLen.Store(int64(len(validRules)))
+	rm.rulesLen.Store(uint64(len(validRules)))
 	LogInfo("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
 	return nil
 }
@@ -2728,10 +2728,12 @@ func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg) *dns.Msg 
 		return response
 	}
 
-	var aRecords []*dns.A
-	var aaaaRecords []*dns.AAAA
-	var cnameRecords []dns.RR
-	var otherRecords []dns.RR
+	// Pre-allocate slice capacity to avoid repeated reallocations
+	// Estimate typical distribution: 40% A, 20% AAAA, 10% CNAME, 30% other
+	aRecords := make([]*dns.A, 0, len(response.Answer)/3)
+	aaaaRecords := make([]*dns.AAAA, 0, len(response.Answer)/5)
+	cnameRecords := make([]dns.RR, 0, len(response.Answer)/10)
+	otherRecords := make([]dns.RR, 0, len(response.Answer)/3)
 
 	for _, answer := range response.Answer {
 		switch record := answer.(type) {
@@ -3457,7 +3459,7 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 		SessionTicketsDisabled: false,
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	serverGroup, serverCtx := errgroup.WithContext(ctx)
 
 	tm := &TLSManager{
@@ -4071,7 +4073,7 @@ func (tm *TLSManager) respondDoH(w http.ResponseWriter, response *dns.Msg) error
 func (tm *TLSManager) shutdown() error {
 	LogInfo("TLS: Shutting down secure DNS server")
 
-	tm.cancel()
+	tm.cancel(errors.New("tls manager shutdown"))
 
 	if tm.dotListener != nil {
 		CloseWithLog(tm.dotListener, "DoT listener")
@@ -4376,8 +4378,8 @@ func (s *DNSServer) Start() error {
 	}
 
 	errChan := make(chan error, 1)
-	serverCtx, serverCancel := context.WithCancel(context.Background())
-	defer serverCancel()
+	serverCtx, serverCancel := context.WithCancelCause(context.Background())
+	defer serverCancel(errors.New("server startup completed"))
 
 	LogInfo("SERVER: Starting ZJDNS Server %s", getVersion())
 	LogInfo("SERVER: Listening on port: %s", s.config.Server.Port)
@@ -5314,8 +5316,8 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 	}
 
 	// Create a sub-context that can be cancelled when we get first success
-	queryCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	queryCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(errors.New("query resolution completed"))
 
 	resultChan := make(chan *QueryResult, 1)
 
@@ -5351,7 +5353,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 					select {
 					case resultChan <- result:
 						// Cancel all other queries when we get first success
-						cancel()
+						cancel(errors.New("successful query completed"))
 						return nil
 					case <-queryCtx.Done():
 						return queryCtx.Err()
@@ -5561,10 +5563,11 @@ func IsSecureProtocol(protocol string) bool {
 }
 
 func IsValidFilePath(path string) bool {
-	if strings.Contains(path, "..") ||
-		strings.HasPrefix(path, "/etc/") ||
-		strings.HasPrefix(path, "/proc/") ||
-		strings.HasPrefix(path, "/sys/") {
+	// Use slices.ContainsFunc for cleaner prefix checking
+	dangerousPrefixes := []string{"/etc/", "/proc/", "/sys/"}
+	if strings.Contains(path, "..") || slices.ContainsFunc(dangerousPrefixes, func(prefix string) bool {
+		return strings.HasPrefix(path, prefix)
+	}) {
 		return false
 	}
 
