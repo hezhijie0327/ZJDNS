@@ -57,7 +57,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.6"
+	Version    = "1.4.7"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -2845,15 +2845,13 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 }
 
 func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResult {
-	semaphore := make(chan struct{}, st.concurrency)
 	resultChan := make(chan *SpeedResult, len(ips))
 
 	g, ctx := errgroup.WithContext(context.Background())
+	g.SetLimit(st.concurrency)
 	for _, ip := range ips {
 		testIP := ip
 		g.Go(func() error {
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
 
 			// Create a reusable timer for this goroutine
 			timer := time.NewTimer(st.timeout)
@@ -4867,36 +4865,34 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 		return nil, nil, nil, false, nil, "", errors.New("no upstream servers")
 	}
 
-	maxConcurrent := min(len(servers), MaxSingleQuery)
+	resultChan := make(chan UpstreamQueryResult, 1)
 
 	ctx, cancel := context.WithTimeout(qm.server.ctx, QueryTimeout)
 	defer cancel()
 
-	resultChan := make(chan UpstreamQueryResult, 1)
+	g, queryCtx := errgroup.WithContext(ctx)
+	g.SetLimit(MaxSingleQuery)
 
-	g, ctx := errgroup.WithContext(ctx)
-
-	for i := 0; i < maxConcurrent && i < len(servers); i++ {
-		srv := servers[i]
+	for _, srv := range servers {
+		server := srv
 
 		g.Go(func() error {
-			defer HandlePanic("Query upstream")
 
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-queryCtx.Done():
+				return nil
 			default:
 			}
 
-			if srv.IsRecursive() {
-				recursiveCtx, recursiveCancel := context.WithTimeout(ctx, RecursiveTimeout)
+			if server.IsRecursive() {
+				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, RecursiveTimeout)
 				defer recursiveCancel()
 
 				answer, authority, additional, validated, ecsResponse, usedServer, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs)
 
 				if err == nil && len(answer) > 0 {
-					if len(srv.Match) > 0 {
-						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, srv.Match)
+					if len(server.Match) > 0 {
+						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, server.Match)
 						if shouldRefuse {
 							return nil
 						}
@@ -4912,26 +4908,22 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						ecs:        ecsResponse,
 						server:     usedServer,
 					}:
+						cancel()
 						return nil
-					case <-ctx.Done():
-						return ctx.Err()
+					case <-queryCtx.Done():
+						return nil
 					}
 				}
 			} else {
 				msg := qm.server.buildQueryMessage(question, ecs, true, false)
+				queryResult := qm.server.queryClient.ExecuteQuery(queryCtx, msg, server)
 
-				queryResult := qm.server.queryClient.ExecuteQuery(ctx, msg, srv)
-
-				if queryResult.Error != nil {
-					return nil
-				}
-
-				if queryResult.Response != nil {
+				if queryResult.Error == nil && queryResult.Response != nil {
 					rcode := queryResult.Response.Rcode
 
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-						if len(srv.Match) > 0 {
-							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, srv.Match)
+						if len(server.Match) > 0 {
+							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
 							if shouldRefuse {
 								return nil
 							}
@@ -4941,9 +4933,9 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						queryResult.Validated = qm.validator.dnssecValidator.ValidateResponse(queryResult.Response, true)
 						ecsResponse := qm.server.ednsMgr.ParseFromDNS(queryResult.Response)
 
-						serverDesc := srv.Address
-						if srv.Protocol != "" && srv.Protocol != "udp" {
-							serverDesc = fmt.Sprintf("%s (%s)", srv.Address, strings.ToUpper(srv.Protocol))
+						serverDesc := server.Address
+						if server.Protocol != "" && server.Protocol != "udp" {
+							serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
 						}
 
 						select {
@@ -4955,9 +4947,10 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							ecs:        ecsResponse,
 							server:     serverDesc,
 						}:
+							cancel()
 							return nil
-						case <-ctx.Done():
-							return ctx.Err()
+						case <-queryCtx.Done():
+							return nil
 						}
 					}
 				}
@@ -5310,75 +5303,129 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 }
 
 func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int, forceTCP bool) []string {
-	resolveCount := min(len(nsRecords), MaxNSResolve)
+	if len(nsRecords) == 0 {
+		return nil
+	}
 
-	nsChan := make(chan []string, resolveCount)
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, ConnTimeout)
 	defer resolveCancel()
 
-	g, ctx := errgroup.WithContext(resolveCtx)
+	g, queryCtx := errgroup.WithContext(resolveCtx)
+	g.SetLimit(MaxNSResolve)
 
-	for i := range resolveCount {
-		ns := nsRecords[i]
+	// Use atomic.Pointer for true lock-free operations (Go 1.19+)
+	var allAddresses atomic.Pointer[[]string]
+	empty := []string{}
+	allAddresses.Store(&empty)
+
+	// Use atomic.Int32 for counting completed operations
+	var completedCount atomic.Int32
+
+	for _, ns := range nsRecords {
+		nsRecord := ns
+
 		g.Go(func() error {
-			defer HandlePanic("NS resolve")
+			select {
+			case <-queryCtx.Done():
+				return nil
+			default:
+			}
 
-			if strings.EqualFold(strings.TrimSuffix(ns.Ns, "."), strings.TrimSuffix(qname, ".")) {
-				select {
-				case nsChan <- nil:
-				case <-ctx.Done():
-				}
+			if strings.EqualFold(strings.TrimSuffix(nsRecord.Ns, "."), strings.TrimSuffix(qname, ".")) {
 				return nil
 			}
 
-			var addresses []string
+			// Use atomic operations for thread-safe address collection
+			var nsAddresses atomic.Value
+			nsAddresses.Store([]string{})
 
-			nsQuestion := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-			if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(ctx, nsQuestion, nil, depth+1, forceTCP); err == nil {
-				for _, rrec := range nsAnswer {
-					if a, ok := rrec.(*dns.A); ok {
-						addresses = append(addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
-					}
+			queryGroup, _ := errgroup.WithContext(queryCtx)
+			queryGroup.SetLimit(2) // IPv4 + IPv6
+
+			queryGroup.Go(func() error {
+				defer HandlePanic("Resolve NS IPv4")
+
+				nsQuestion := dns.Question{
+					Name:   dns.Fqdn(nsRecord.Ns),
+					Qtype:  dns.TypeA,
+					Qclass: dns.ClassINET,
 				}
-			}
 
-			if len(addresses) == 0 {
-				nsQuestionV6 := dns.Question{Name: dns.Fqdn(ns.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(ctx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
-					for _, rrec := range nsAnswerV6 {
-						if aaaa, ok := rrec.(*dns.AAAA); ok {
-							addresses = append(addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
+				var ipv4Addresses []string
+				if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
+					for _, rrec := range nsAnswer {
+						if a, ok := rrec.(*dns.A); ok {
+							ipv4Addresses = append(ipv4Addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
 						}
 					}
 				}
+
+				// Atomically append addresses
+				if existing := nsAddresses.Load().([]string); len(existing) > 0 {
+					combined := append(existing, ipv4Addresses...)
+					nsAddresses.Store(combined)
+				} else {
+					nsAddresses.Store(ipv4Addresses)
+				}
+				return nil
+			})
+
+			queryGroup.Go(func() error {
+				defer HandlePanic("Resolve NS IPv6")
+
+				nsQuestionV6 := dns.Question{
+					Name:   dns.Fqdn(nsRecord.Ns),
+					Qtype:  dns.TypeAAAA,
+					Qclass: dns.ClassINET,
+				}
+
+				var ipv6Addresses []string
+				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
+					for _, rrec := range nsAnswerV6 {
+						if aaaa, ok := rrec.(*dns.AAAA); ok {
+							ipv6Addresses = append(ipv6Addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
+						}
+					}
+				}
+
+				// Atomically append addresses
+				if existing := nsAddresses.Load().([]string); len(existing) > 0 {
+					combined := append(existing, ipv6Addresses...)
+					nsAddresses.Store(combined)
+				} else {
+					nsAddresses.Store(ipv6Addresses)
+				}
+				return nil
+			})
+
+			_ = queryGroup.Wait()
+
+			// Add this NS's addresses to the global collection using atomic.Pointer
+			if nsAddrs := nsAddresses.Load().([]string); len(nsAddrs) > 0 {
+				// True lock-free atomic pointer operations
+				current := allAddresses.Load()
+				newAddresses := append(*current, nsAddrs...)
+
+				allAddresses.Store(&newAddresses)
+
+				// Check if we have enough addresses and can stop early
+				if len(newAddresses) >= MaxNSResolve {
+					resolveCancel()
+				}
 			}
 
-			select {
-			case nsChan <- addresses:
-			case <-ctx.Done():
-			}
+			completedCount.Add(1)
 			return nil
 		})
 	}
 
-	go func() {
-		_ = g.Wait()
-		close(nsChan)
-	}()
+	_ = g.Wait()
 
-	var allAddresses []string
-	for addresses := range nsChan {
-		if len(addresses) > 0 {
-			allAddresses = append(allAddresses, addresses...)
-			if len(allAddresses) >= MaxNSResolve {
-				resolveCancel()
-				break
-			}
-		}
+	if finalAddresses := allAddresses.Load(); finalAddresses != nil {
+		return *finalAddresses
 	}
 
-	_ = g.Wait() // Ensure all goroutines complete and check for errors
-	return allAddresses
+	return nil
 }
 
 func (rr *RecursiveResolver) getRootServers() []string {
