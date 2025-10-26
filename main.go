@@ -264,7 +264,7 @@ type UpstreamServer struct {
 
 type RewriteRule struct {
 	Name           string            `json:"name"`
-	NormalizedName string            // Pre-normalized name for faster comparison
+	NormalizedName string            `json:"normalized_name,omitempty"`
 	ResponseCode   *int              `json:"response_code,omitempty"`
 	Records        []DNSRecordConfig `json:"records,omitempty"`
 	Additional     []DNSRecordConfig `json:"additional,omitempty"`

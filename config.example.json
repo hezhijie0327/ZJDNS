@@ -2,7 +2,6 @@
   "server": {
     "port": "53",
     "pprof": "6060",
-    "metrics": "6061",
     "log_level": "info",
     "default_ecs_subnet": "auto",
     "ddr": {
