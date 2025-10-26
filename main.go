@@ -1823,8 +1823,8 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		return
 	}
 
-	allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
-	allRRs = append(append(append(allRRs, answer...), authority...), additional...)
+	// Use slices.Concat for cleaner slice concatenation
+	allRRs := slices.Concat(answer, authority, additional)
 	cacheTTL := calculateTTL(allRRs)
 	now := time.Now().Unix()
 
@@ -3141,9 +3141,8 @@ func (rsm *RootServerManager) GetOptimalRootServers() []RootServerWithLatency {
 	// Load the sort result with type checking and fallback
 	if resultPtr := rsm.sortResult.Load(); resultPtr != nil && *resultPtr != nil {
 		result := *resultPtr
-		// Create a copy to avoid race conditions
-		serversCopy := make([]RootServerWithLatency, len(result.SortedServers))
-		copy(serversCopy, result.SortedServers)
+		// Create a copy to avoid race conditions using slices.Clone
+		serversCopy := slices.Clone(result.SortedServers)
 		return serversCopy
 	}
 
