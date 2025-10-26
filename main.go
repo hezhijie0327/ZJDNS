@@ -57,7 +57,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.5"
+	Version    = "1.4.6"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -97,9 +97,8 @@ const (
 	MaxDomainLength = 253
 	MaxCNAMEChain   = 16
 	MaxRecursionDep = 16
-	MaxConcurrency  = 200
-	MaxSingleQuery  = 2
-	MaxNSResolve    = 2
+	MaxSingleQuery  = 3
+	MaxNSResolve    = 3
 
 	// Timeouts
 	QueryTimeout           = 3 * time.Second
@@ -168,7 +167,7 @@ const (
 
 	// Speed Test Configuration
 	DefaultSpeedTimeout     = 200 * time.Millisecond
-	DefaultSpeedConcurrency = 2
+	DefaultSpeedConcurrency = 3
 	UnreachableLatency      = 5 * time.Second
 
 	// Logging
