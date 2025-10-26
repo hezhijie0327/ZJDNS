@@ -4,7 +4,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -14,7 +13,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -1757,12 +1755,10 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	}
 
 	var entry CacheEntry
-	// Use binary serialization only for maximum performance
-	if err := deserializeFromBinary([]byte(data), entry); err != nil {
-		// Invalid cache entry - remove it
+	if err := json.Unmarshal([]byte(data), &entry); err != nil {
 		go func() {
 			defer HandlePanic("Clean corrupted cache")
-			cleanCtx, cleanCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
 			defer cleanCancel()
 			rc.client.Del(cleanCtx, key)
 		}()
@@ -1775,14 +1771,9 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	go func() {
 		defer HandlePanic("Update access time")
 		if atomic.LoadInt32(&rc.closed) == 0 {
-			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+			updateCtx, updateCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
 			defer updateCancel()
-			// Use binary serialization only for maximum performance
-			data, err := serializeToBinary(entry)
-			if err != nil {
-				LogWarn("CACHE: Binary serialization failed, skipping update: %v", err)
-				return
-			}
+			data, _ := json.Marshal(entry)
 			rc.client.Set(updateCtx, key, data, redis.KeepTTL)
 		}
 	}()
@@ -1820,10 +1811,8 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		entry.ECSAddress = ecs.Address.String()
 	}
 
-	// Use binary serialization only for maximum performance
-	data, err := serializeToBinary(entry)
+	data, err := json.Marshal(entry)
 	if err != nil {
-		LogWarn("CACHE: Binary serialization failed, skipping cache write: %v", err)
 		return
 	}
 
@@ -1920,32 +1909,6 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 }
 
 // =============================================================================
-// Serialization Helper Functions
-// =============================================================================
-
-// serializeToBinary efficiently serializes any value to binary format using gob
-func serializeToBinary(v any) ([]byte, error) {
-	var buf bytes.Buffer
-	encoder := gob.NewEncoder(&buf)
-
-	if err := encoder.Encode(v); err != nil {
-		return nil, fmt.Errorf("binary encode: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-// deserializeFromBinary efficiently deserializes binary data to any value using gob
-func deserializeFromBinary(data []byte, v any) error {
-	buf := bytes.NewReader(data)
-	decoder := gob.NewDecoder(buf)
-
-	if err := decoder.Decode(v); err != nil {
-		return fmt.Errorf("binary decode: %w", err)
-	}
-
-	return nil
-}
 
 // =============================================================================
 // CIDRManager Implementation
@@ -2805,15 +2768,11 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 			data, err := st.redis.Get(ctx, key).Result()
 			if err == nil {
 				var result SpeedResult
-				// Use binary serialization only for maximum performance
-				if deserializeFromBinary([]byte(data), result) == nil {
+				if json.Unmarshal([]byte(data), &result) == nil {
 					if time.Since(result.Timestamp) < st.cacheTTL {
 						results[ip] = &result
 						continue
 					}
-				} else {
-					// Invalid cache entry - skip it
-					continue
 				}
 			}
 			remainingIPs = append(remainingIPs, ip)
@@ -2834,13 +2793,10 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 
 		for ip, result := range newResults {
 			key := st.keyPrefix + ip
-			// Use binary serialization only for maximum performance
-			data, err := serializeToBinary(result)
-			if err != nil {
-				LogWarn("SPEEDTEST: Binary serialization failed for %s: %v", ip, err)
-				continue
+			data, err := json.Marshal(result)
+			if err == nil {
+				st.redis.Set(ctx, key, data, st.cacheTTL)
 			}
-			st.redis.Set(ctx, key, data, st.cacheTTL)
 		}
 	}
 
