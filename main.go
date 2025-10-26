@@ -100,6 +100,14 @@ const (
 	MaxSingleQuery  = 3
 	MaxNSResolve    = 3
 
+	// Concurrency Limits
+	MaxCacheRefreshConcurrency = 5   // Cache refresh operations
+	MaxRedisBackgroundOps      = 10  // Redis background operations
+	MaxConcurrentStreams       = 256 // DoQ concurrent streams
+	MaxPoolCleanupOps          = 1   // Connection pool cleanup operations
+	MaxServerBackgroundOps     = 5   // Server background tasks (signal handling, root server sorting, etc.)
+	MaxDNSQueryOps             = 2   // DNS query operations (IPv4 + IPv6)
+
 	// Timeouts
 	QueryTimeout           = 3 * time.Second
 	RecursiveTimeout       = 5 * time.Second
@@ -520,25 +528,27 @@ type TLSManager struct {
 
 // DNS Server Type
 type DNSServer struct {
-	config          *ServerConfig
-	cacheMgr        CacheManager
-	queryClient     *QueryClient
-	connPool        *ConnPool
-	securityMgr     *SecurityManager
-	ednsMgr         *EDNSManager
-	rewriteMgr      *RewriteManager
-	speedTestMgr    *SpeedTestManager
-	rootServerMgr   *RootServerManager
-	cidrMgr         *CIDRManager
-	pprofServer     *http.Server
-	redisClient     *redis.Client
-	ctx             context.Context
-	cancel          context.CancelFunc
-	shutdown        chan struct{}
-	backgroundGroup *errgroup.Group
-	backgroundCtx   context.Context
-	closed          int32
-	queryMgr        *QueryManager
+	config            *ServerConfig
+	cacheMgr          CacheManager
+	queryClient       *QueryClient
+	connPool          *ConnPool
+	securityMgr       *SecurityManager
+	ednsMgr           *EDNSManager
+	rewriteMgr        *RewriteManager
+	speedTestMgr      *SpeedTestManager
+	rootServerMgr     *RootServerManager
+	cidrMgr           *CIDRManager
+	pprofServer       *http.Server
+	redisClient       *redis.Client
+	ctx               context.Context
+	cancel            context.CancelFunc
+	shutdown          chan struct{}
+	backgroundGroup   *errgroup.Group
+	backgroundCtx     context.Context
+	cacheRefreshGroup *errgroup.Group
+	cacheRefreshCtx   context.Context
+	closed            int32
+	queryMgr          *QueryManager
 }
 
 type ConfigManager struct{}
@@ -673,6 +683,9 @@ func NewConnPool() *ConnPool {
 		sessionCache:    tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 	}
 	pool.closed.Store(false)
+
+	// Limit background cleanup operations to prevent resource leaks
+	pool.backgroundGroup.SetLimit(MaxPoolCleanupOps)
 
 	pool.backgroundGroup.Go(func() error {
 		pool.cleanupLoop()
@@ -1742,6 +1755,10 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
 	bgGroup, bgCtx := errgroup.WithContext(cacheCtx)
+
+	// Limit Redis background operations to prevent resource exhaustion
+	bgGroup.SetLimit(MaxRedisBackgroundOps)
+
 	cache := &RedisCache{
 		client:  rdb,
 		config:  config,
@@ -3750,6 +3767,9 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 	// Create errgroup for stream handling
 	streamGroup, _ := errgroup.WithContext(tm.ctx)
 
+	// Limit concurrent DoQ streams to prevent resource exhaustion
+	streamGroup.SetLimit(MaxConcurrentStreams)
+
 	for {
 		select {
 		case <-tm.ctx.Done():
@@ -4102,6 +4122,7 @@ func (rt *RequestTracker) Finish() {
 func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
+	cacheRefreshGroup, cacheRefreshCtx := errgroup.WithContext(ctx)
 
 	ednsManager, err := NewEDNSManager(config.Server.DefaultECS)
 	if err != nil {
@@ -4145,19 +4166,21 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	rootServerManager := NewRootServerManager(*config, redisClient)
 
 	server := &DNSServer{
-		config:          config,
-		rootServerMgr:   rootServerManager,
-		ednsMgr:         ednsManager,
-		rewriteMgr:      rewriteManager,
-		cidrMgr:         cidrManager,
-		connPool:        connPool,
-		redisClient:     redisClient,
-		cacheMgr:        cache,
-		ctx:             ctx,
-		cancel:          cancel,
-		shutdown:        make(chan struct{}),
-		backgroundGroup: backgroundGroup,
-		backgroundCtx:   backgroundCtx,
+		config:            config,
+		rootServerMgr:     rootServerManager,
+		ednsMgr:           ednsManager,
+		rewriteMgr:        rewriteManager,
+		cidrMgr:           cidrManager,
+		connPool:          connPool,
+		redisClient:       redisClient,
+		cacheMgr:          cache,
+		ctx:               ctx,
+		cancel:            cancel,
+		shutdown:          make(chan struct{}),
+		backgroundGroup:   backgroundGroup,
+		backgroundCtx:     backgroundCtx,
+		cacheRefreshGroup: cacheRefreshGroup,
+		cacheRefreshCtx:   cacheRefreshCtx,
 	}
 
 	securityManager, err := NewSecurityManager(config, server)
@@ -4194,6 +4217,12 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 			server.pprofServer.TLSConfig = server.securityMgr.tls.tlsConfig
 		}
 	}
+
+	// Limit server background operations to prevent resource exhaustion
+	server.backgroundGroup.SetLimit(MaxServerBackgroundOps) // Allow for signal handling, root server sorting, and a few other tasks
+
+	// Limit cache refresh operations to prevent resource exhaustion
+	server.cacheRefreshGroup.SetLimit(MaxCacheRefreshConcurrency)
 
 	server.setupSignalHandling()
 
@@ -4281,6 +4310,23 @@ func (s *DNSServer) shutdownServer() {
 		LogInfo("SERVER: All background tasks shut down")
 	case <-time.After(ShutdownTimeout):
 		LogWarn("SERVER: Background tasks shutdown timeout")
+	}
+
+	// Wait for cache refresh goroutines with timeout
+	refreshDone := make(chan error, 1)
+	go func() {
+		defer HandlePanic("Cache refresh group wait")
+		refreshDone <- s.cacheRefreshGroup.Wait()
+	}()
+
+	select {
+	case err := <-refreshDone:
+		if err != nil {
+			LogError("SERVER: Cache refresh goroutines finished with error: %v", err)
+		}
+		LogInfo("SERVER: All cache refresh tasks shut down")
+	case <-time.After(ShutdownTimeout):
+		LogWarn("SERVER: Cache refresh tasks shutdown timeout")
 	}
 
 	if s.shutdown != nil {
@@ -4602,12 +4648,12 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	s.addEDNS(msg, req, isSecureConnection)
 
 	if isExpired && entry.ShouldRefresh() {
-		go func() {
+		s.cacheRefreshGroup.Go(func() error {
 			defer HandlePanic("cache refresh")
-			ctx, cancel := context.WithTimeout(context.Background(), QueryTimeout)
+			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, QueryTimeout)
 			defer cancel()
-			_ = s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
-		}()
+			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
+		})
 	}
 
 	s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
@@ -5340,7 +5386,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 			nsAddresses.Store([]string{})
 
 			queryGroup, _ := errgroup.WithContext(queryCtx)
-			queryGroup.SetLimit(2) // IPv4 + IPv6
+			queryGroup.SetLimit(MaxDNSQueryOps) // IPv4 + IPv6
 
 			queryGroup.Go(func() error {
 				defer HandlePanic("Resolve NS IPv4")
