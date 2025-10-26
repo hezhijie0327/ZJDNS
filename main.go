@@ -1758,7 +1758,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
 		go func() {
 			defer HandlePanic("Clean corrupted cache")
-			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
+			cleanCtx, cleanCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
 			defer cleanCancel()
 			rc.client.Del(cleanCtx, key)
 		}()
@@ -1771,7 +1771,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	go func() {
 		defer HandlePanic("Update access time")
 		if atomic.LoadInt32(&rc.closed) == 0 {
-			updateCtx, updateCancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
+			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
 			defer updateCancel()
 			data, _ := json.Marshal(entry)
 			rc.client.Set(updateCtx, key, data, redis.KeepTTL)
