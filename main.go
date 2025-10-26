@@ -62,6 +62,7 @@ var (
 	BuildTime  = "dev"
 
 	globalLog = NewLogManager()
+	timeCache = NewTimeCache()
 
 	// Protocol configurations
 	NextProtoDOT  = []string{"dot"}
@@ -425,7 +426,7 @@ type SpeedTestManager struct {
 type RootServerManager struct {
 	servers     []string
 	speedTester *SpeedTestManager
-	sortResult  atomic.Value // *RootServerSortResult
+	sortResult  atomic.Pointer[*RootServerSortResult]
 	needsSpeed  atomic.Bool
 }
 
@@ -459,7 +460,7 @@ type ipv4Net struct {
 
 // Rewrite Management Type
 type RewriteManager struct {
-	rules    atomic.Value // []RewriteRule
+	rules    atomic.Pointer[[]RewriteRule]
 	rulesLen atomic.Int64
 }
 
@@ -563,7 +564,7 @@ type QueryManager struct {
 }
 
 type UpstreamHandler struct {
-	servers atomic.Value // []*UpstreamServer
+	servers atomic.Pointer[[]*UpstreamServer]
 }
 
 type RecursiveResolver struct {
@@ -645,7 +646,7 @@ func (lm *LogManager) Log(level LogLevel, format string, args ...any) {
 		color = ColorReset
 	}
 
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	timestamp := timeCache.Now().Format("2006-01-02 15:04:05")
 	message := fmt.Sprintf(format, args...)
 
 	logLine := fmt.Sprintf("%s[%s]%s %s%-5s%s %s\n",
@@ -715,7 +716,7 @@ func (p *ConnPool) cleanupLoop() {
 }
 
 func (p *ConnPool) cleanupExpiredConns() {
-	now := time.Now()
+	now := timeCache.Now()
 	removed := 0
 
 	cleanupMap := func(m *sync.Map) {
@@ -2458,7 +2459,8 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 
 func NewRewriteManager() *RewriteManager {
 	rm := &RewriteManager{}
-	rm.rules.Store(make([]RewriteRule, 0, 16))
+	initialRules := make([]RewriteRule, 0, 16)
+	rm.rules.Store(&initialRules)
 	rm.rulesLen.Store(0)
 	return rm
 }
@@ -2473,7 +2475,7 @@ func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 		}
 	}
 
-	rm.rules.Store(validRules)
+	rm.rules.Store(&validRules)
 	rm.rulesLen.Store(int64(len(validRules)))
 	LogInfo("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
 	return nil
@@ -2495,7 +2497,11 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 	}
 
 	// Copy-on-read pattern: get rules snapshot without holding lock
-	rules := rm.rules.Load().([]RewriteRule)
+	rulesPtr := rm.rules.Load()
+	if rulesPtr == nil {
+		return result
+	}
+	rules := *rulesPtr
 	domain = NormalizeDomain(domain)
 
 	for i := range rules {
@@ -3085,7 +3091,7 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 		SortedServers: sorted,
 		SortTime:      time.Time{}, // Zero time indicates no sorting has occurred yet
 	}
-	rsm.sortResult.Store(initialResult)
+	rsm.sortResult.Store(&initialResult)
 
 	if needsRecursive {
 		dnsSpeedTestConfig := config
@@ -3107,7 +3113,8 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 
 func (rsm *RootServerManager) GetOptimalRootServers() []RootServerWithLatency {
 	// Load the sort result with type checking and fallback
-	if result, ok := rsm.sortResult.Load().(*RootServerSortResult); ok && result != nil {
+	if resultPtr := rsm.sortResult.Load(); resultPtr != nil && *resultPtr != nil {
+		result := *resultPtr
 		// Create a copy to avoid race conditions
 		serversCopy := make([]RootServerWithLatency, len(result.SortedServers))
 		copy(serversCopy, result.SortedServers)
@@ -3122,8 +3129,8 @@ func (rsm *RootServerManager) GetOptimalRootServers() []RootServerWithLatency {
 // GetLastSortTime returns the timestamp of the last sort operation
 // Returns zero time.Time if no sort has been performed yet
 func (rsm *RootServerManager) GetLastSortTime() time.Time {
-	if result, ok := rsm.sortResult.Load().(*RootServerSortResult); ok && result != nil {
-		return result.SortTime
+	if resultPtr := rsm.sortResult.Load(); resultPtr != nil && *resultPtr != nil {
+		return (*resultPtr).SortTime
 	}
 	return time.Time{} // Return zero time as fallback
 }
@@ -3145,7 +3152,7 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 		SortedServers: sortedWithLatency,
 		SortTime:      time.Now(),
 	}
-	rsm.sortResult.Store(sortResult)
+	rsm.sortResult.Store(&sortResult)
 }
 
 func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
@@ -4329,6 +4336,9 @@ func (s *DNSServer) shutdownServer() {
 		LogWarn("SERVER: Cache refresh tasks shutdown timeout")
 	}
 
+	// Stop time cache
+	timeCache.Stop()
+
 	if s.shutdown != nil {
 		close(s.shutdown)
 	}
@@ -4838,7 +4848,8 @@ func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, rec
 
 func NewQueryManager(server *DNSServer) *QueryManager {
 	upstream := &UpstreamHandler{}
-	upstream.servers.Store([]*UpstreamServer{}) // Initialize with empty slice
+	emptyServers := make([]*UpstreamServer, 0)
+	upstream.servers.Store(&emptyServers) // Initialize with empty slice
 
 	return &QueryManager{
 		upstream: upstream,
@@ -4865,7 +4876,7 @@ func (qm *QueryManager) Initialize(servers []UpstreamServer) error {
 		activeServers = append(activeServers, server)
 	}
 
-	qm.upstream.servers.Store(activeServers)
+	qm.upstream.servers.Store(&activeServers)
 
 	return nil
 }
@@ -4898,11 +4909,11 @@ func (s *UpstreamServer) IsRecursive() bool {
 // =============================================================================
 
 func (uh *UpstreamHandler) getServers() []*UpstreamServer {
-	servers := uh.servers.Load()
-	if servers == nil {
+	serversPtr := uh.servers.Load()
+	if serversPtr == nil {
 		return []*UpstreamServer{}
 	}
-	return servers.([]*UpstreamServer)
+	return *serversPtr
 }
 
 func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
@@ -5492,6 +5503,40 @@ func (rr *RecursiveResolver) getRootServers() []string {
 // =============================================================================
 // Utility Functions
 // =============================================================================
+
+// TimeCache provides cached time for performance optimization
+type TimeCache struct {
+	currentTime atomic.Value // time.Time
+	ticker      *time.Ticker
+}
+
+// NewTimeCache creates a new time cache that updates every second
+func NewTimeCache() *TimeCache {
+	tc := &TimeCache{
+		ticker: time.NewTicker(time.Second),
+	}
+	tc.currentTime.Store(time.Now())
+
+	go func() {
+		for range tc.ticker.C {
+			tc.currentTime.Store(time.Now())
+		}
+	}()
+
+	return tc
+}
+
+// Now returns the cached current time
+func (tc *TimeCache) Now() time.Time {
+	return tc.currentTime.Load().(time.Time)
+}
+
+// Stop stops the time cache ticker
+func (tc *TimeCache) Stop() {
+	if tc.ticker != nil {
+		tc.ticker.Stop()
+	}
+}
 
 func getVersion() string {
 	return fmt.Sprintf("v%s-%s@%s (%s)", Version, CommitHash, BuildTime, runtime.Version())
