@@ -703,13 +703,15 @@ func (p *ConnPool) cleanupLoop() {
 
 func (p *ConnPool) cleanupExpiredConns() {
 	now := time.Now()
-	removed := 0
+	removed := atomic.Int64{}
 
 	cleanupMap := func(m *sync.Map) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		var entriesToClean []*ConnPoolEntry
+		var keysToDelete []interface{}
+
 		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
 
@@ -721,11 +723,15 @@ func (p *ConnPool) cleanupExpiredConns() {
 
 			if shouldRemove {
 				entriesToClean = append(entriesToClean, entry)
-				m.Delete(key)
+				keysToDelete = append(keysToDelete, key)
 			}
 
 			return true
 		})
+
+		for _, key := range keysToDelete {
+			m.Delete(key)
+		}
 
 		g, _ := errgroup.WithContext(ctx)
 		g.SetLimit(4)
@@ -734,7 +740,7 @@ func (p *ConnPool) cleanupExpiredConns() {
 			e := entry
 			g.Go(func() error {
 				p.closeEntry(e)
-				removed++
+				removed.Add(1)
 				return nil
 			})
 		}
@@ -747,24 +753,32 @@ func (p *ConnPool) cleanupExpiredConns() {
 	cleanupMap(&p.quicConns)
 	cleanupMap(&p.tlsConns)
 
-	if removed > 0 {
-		LogDebug("POOL: Cleaned up %d expired connections", removed)
+	if removedCount := removed.Load(); removedCount > 0 {
+		LogDebug("POOL: Cleaned up %d expired connections", removedCount)
 	}
 }
 
 func (p *ConnPool) validateConns() {
-	validated := 0
-	failed := 0
+	validated := atomic.Int64{}
+	failed := atomic.Int64{}
 
 	validateMap := func(m *sync.Map) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		var entriesToValidate []*ConnPoolEntry
+		type entryWithKey struct {
+			entry *ConnPoolEntry
+			key   interface{}
+		}
+		var entriesToValidate []entryWithKey
+
 		m.Range(func(key, value any) bool {
 			entry := value.(*ConnPoolEntry)
 			if !entry.closed.Load() {
-				entriesToValidate = append(entriesToValidate, entry)
+				entriesToValidate = append(entriesToValidate, entryWithKey{
+					entry: entry,
+					key:   key,
+				})
 			}
 			return true
 		})
@@ -772,29 +786,20 @@ func (p *ConnPool) validateConns() {
 		g, _ := errgroup.WithContext(ctx)
 		g.SetLimit(4)
 
-		for _, entry := range entriesToValidate {
-			e := entry
-			key := ""
-			m.Range(func(k, v any) bool {
-				if v.(*ConnPoolEntry) == e {
-					key = k.(string)
-					return false
-				}
-				return true
-			})
-
-			finalKey := key
+		for _, item := range entriesToValidate {
+			e := item.entry
+			k := item.key
 
 			g.Go(func() error {
 				valid := p.validateConn(e)
 				e.healthy.Store(valid)
 
 				if !valid {
-					failed++
-					m.Delete(finalKey)
+					failed.Add(1)
+					m.Delete(k)
 					p.closeEntry(e)
 				} else {
-					validated++
+					validated.Add(1)
 				}
 				return nil
 			})
@@ -806,11 +811,10 @@ func (p *ConnPool) validateConns() {
 	validateMap(&p.quicConns)
 	validateMap(&p.tlsConns)
 
-	if validated > 0 || failed > 0 {
-		LogDebug("POOL: Validation - valid: %d, failed: %d", validated, failed)
+	if v := validated.Load(); v > 0 || failed.Load() > 0 {
+		LogDebug("POOL: Validation - valid: %d, failed: %d", v, failed.Load())
 	}
 }
-
 func (p *ConnPool) validateConn(entry *ConnPoolEntry) bool {
 	switch conn := entry.conn.(type) {
 	case *quic.Conn:
@@ -1784,6 +1788,7 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
 	bgGroup, bgCtx := errgroup.WithContext(cacheCtx)
 	bgGroup.SetLimit(8)
+
 	cache := &RedisCache{
 		client:  rdb,
 		config:  config,
@@ -1814,6 +1819,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	var entry CacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
+		// 后台清理损坏的缓存条目
 		rc.bgGroup.Go(func() error {
 			defer HandlePanic("Clean corrupted cache")
 			cleanCtx, cleanCancel := context.WithTimeout(rc.bgCtx, RedisWriteTimeout)
@@ -1830,6 +1836,8 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	isExpired := entry.IsExpired()
 
 	entry.AccessTime = time.Now().Unix()
+
+	// 后台更新访问时间
 	rc.bgGroup.Go(func() error {
 		defer HandlePanic("Update access time")
 		if atomic.LoadInt32(&rc.closed) == 0 {
@@ -1841,7 +1849,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 				}
 			}
 		}
-		return nil // Don't fail the group for background update errors
+		return nil
 	})
 
 	return &entry, true, isExpired
@@ -2892,6 +2900,7 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 	}
 
 	resultChan := make(chan *SpeedResult, len(ips))
+	processedCount := atomic.Int64{}
 
 	ctx, cancel := context.WithTimeout(context.Background(), st.timeout*2)
 	defer cancel()
@@ -2905,6 +2914,7 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 			if result := st.testSingleIP(testIP); result != nil {
 				select {
 				case resultChan <- result:
+					processedCount.Add(1)
 				case <-ctx.Done():
 				}
 			}
@@ -2922,6 +2932,10 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 		if result != nil {
 			results[result.IP] = result
 		}
+	}
+
+	if processed := processedCount.Load(); processed > 0 {
+		LogDebug("SPEEDTEST: Processed %d IPs", processed)
 	}
 
 	return results
@@ -3803,6 +3817,9 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		}
 	}()
 
+	streamCount := atomic.Int64{}
+	activeStreams := atomic.Int64{}
+
 	streamGroup, _ := errgroup.WithContext(tm.ctx)
 	streamGroup.SetLimit(MaxIncomingStreams / 2)
 
@@ -3827,8 +3844,13 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 			continue
 		}
 
+		streamCount.Add(1)
+		activeStreams.Add(1)
+
 		streamGroup.Go(func() error {
 			defer HandlePanic("DoQ stream handler")
+			defer activeStreams.Add(-1)
+
 			if stream != nil {
 				defer func() { _ = stream.Close() }()
 				tm.handleDOQStream(stream, conn)
