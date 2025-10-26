@@ -2728,12 +2728,10 @@ func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg) *dns.Msg 
 		return response
 	}
 
-	// Pre-allocate slice capacity to avoid repeated reallocations
-	// Estimate typical distribution: 40% A, 20% AAAA, 10% CNAME, 30% other
-	aRecords := make([]*dns.A, 0, len(response.Answer)/3)
-	aaaaRecords := make([]*dns.AAAA, 0, len(response.Answer)/5)
-	cnameRecords := make([]dns.RR, 0, len(response.Answer)/10)
-	otherRecords := make([]dns.RR, 0, len(response.Answer)/3)
+	var aRecords []*dns.A
+	var aaaaRecords []*dns.AAAA
+	var cnameRecords []dns.RR
+	var otherRecords []dns.RR
 
 	for _, answer := range response.Answer {
 		switch record := answer.(type) {
