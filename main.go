@@ -190,25 +190,6 @@ const (
 type LogLevel int
 
 // =============================================================================
-// Utility Functions - Modern Go Concurrency Helpers
-// =============================================================================
-
-// withErrGroup provides a unified pattern for error group usage
-// with optional concurrency limiting for consistent behavior across the codebase
-func withErrGroup(ctx context.Context, limit int, fn func(context.Context, *errgroup.Group) error) error {
-	g, ctx := errgroup.WithContext(ctx)
-	if limit > 0 {
-		g.SetLimit(limit)
-	}
-	return fn(ctx, g)
-}
-
-// withGracefulShutdown provides a context with graceful shutdown capability using WithCancelCause
-func withGracefulShutdown(parent context.Context) (context.Context, context.CancelCauseFunc) {
-	return context.WithCancelCause(parent)
-}
-
-// =============================================================================
 // Type Definitions - Core Types
 // =============================================================================
 
@@ -4176,7 +4157,7 @@ func (rt *RequestTracker) Finish() {
 // =============================================================================
 
 func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
-	ctx, cancel := withGracefulShutdown(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 	cacheRefreshGroup, cacheRefreshCtx := errgroup.WithContext(ctx)
 
