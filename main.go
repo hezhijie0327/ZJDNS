@@ -57,7 +57,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.8"
+	Version    = "1.4.9"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -98,8 +98,11 @@ const (
 	MaxDomainLength = 253
 	MaxCNAMEChain   = 16
 	MaxRecursionDep = 16
-	MaxSingleQuery  = 3
-	MaxNSResolve    = 3
+
+	// Concurrency Limits
+	DNSQueryConcurrency  = 3
+	NSResolveConcurrency = 3
+	SpeedTestConcurrency = 3
 
 	// Timeouts
 	QueryTimeout           = 3 * time.Second
@@ -167,9 +170,8 @@ const (
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 
 	// Speed Test Configuration
-	DefaultSpeedTimeout     = 200 * time.Millisecond
-	DefaultSpeedConcurrency = 3
-	UnreachableLatency      = 5 * time.Second
+	DefaultSpeedTimeout = 200 * time.Millisecond
+	UnreachableLatency  = 5 * time.Second
 
 	// Logging
 	DefaultLogLevel = "info"
@@ -410,15 +412,14 @@ type RootServerSortResult struct {
 }
 
 type SpeedTestManager struct {
-	timeout     time.Duration
-	concurrency int
-	redis       *redis.Client
-	cacheTTL    time.Duration
-	keyPrefix   string
-	icmpConn4   *icmp.PacketConn
-	icmpConn6   *icmp.PacketConn
-	methods     []SpeedTestMethod
-	closed      int32
+	timeout   time.Duration
+	redis     *redis.Client
+	cacheTTL  time.Duration
+	keyPrefix string
+	icmpConn4 *icmp.PacketConn
+	icmpConn6 *icmp.PacketConn
+	methods   []SpeedTestMethod
+	closed    int32
 }
 
 type RootServerManager struct {
@@ -2596,12 +2597,11 @@ func NewSpeedTestManager(config ServerConfig, redisClient *redis.Client, keyPref
 	}
 
 	st := &SpeedTestManager{
-		timeout:     DefaultSpeedTimeout,
-		concurrency: DefaultSpeedConcurrency,
-		redis:       redisClient,
-		cacheTTL:    DefaultSpeedTTL,
-		keyPrefix:   keyPrefix,
-		methods:     config.Speedtest,
+		timeout:   DefaultSpeedTimeout,
+		redis:     redisClient,
+		cacheTTL:  DefaultSpeedTTL,
+		keyPrefix: keyPrefix,
+		methods:   config.Speedtest,
 	}
 	st.initICMP()
 
@@ -2863,7 +2863,7 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 	resultChan := make(chan *SpeedResult, len(ips))
 
 	g, ctx := errgroup.WithContext(context.Background())
-	g.SetLimit(st.concurrency)
+	g.SetLimit(SpeedTestConcurrency)
 	for _, ip := range ips {
 		testIP := ip
 		g.Go(func() error {
@@ -4911,7 +4911,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	defer cancel()
 
 	g, queryCtx := errgroup.WithContext(ctx)
-	g.SetLimit(MaxSingleQuery)
+	g.SetLimit(DNSQueryConcurrency)
 
 	for _, srv := range servers {
 		server := srv
@@ -5281,7 +5281,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 
 	g, queryCtx := errgroup.WithContext(queryCtx)
 	// Set concurrency limit but still iterate through all nameservers
-	g.SetLimit(MaxSingleQuery)
+	g.SetLimit(DNSQueryConcurrency)
 
 	for _, ns := range nameservers {
 		nsAddr := ns
@@ -5347,7 +5347,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
-	g.SetLimit(MaxNSResolve)
+	g.SetLimit(NSResolveConcurrency)
 
 	// Use atomic.Pointer for true lock-free operations (Go 1.19+)
 	var allAddresses atomic.Pointer[[]string]
