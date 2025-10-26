@@ -101,14 +101,6 @@ const (
 	MaxSingleQuery  = 3
 	MaxNSResolve    = 3
 
-	// Concurrency Limits
-	MaxCacheRefreshConcurrency = 5   // Cache refresh operations
-	MaxRedisBackgroundOps      = 10  // Redis background operations
-	MaxConcurrentStreams       = 256 // DoQ concurrent streams
-	MaxPoolCleanupOps          = 1   // Connection pool cleanup operations
-	MaxServerBackgroundOps     = 5   // Server background tasks (signal handling, root server sorting, etc.)
-	MaxDNSQueryOps             = 2   // DNS query operations (IPv4 + IPv6)
-
 	// Timeouts
 	QueryTimeout           = 3 * time.Second
 	RecursiveTimeout       = 5 * time.Second
@@ -690,9 +682,6 @@ func NewConnPool() *ConnPool {
 		sessionCache:    tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 	}
 	pool.closed.Store(false)
-
-	// Limit background cleanup operations to prevent resource leaks
-	pool.backgroundGroup.SetLimit(MaxPoolCleanupOps)
 
 	pool.backgroundGroup.Go(func() error {
 		pool.cleanupLoop()
@@ -1762,9 +1751,6 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
 	bgGroup, bgCtx := errgroup.WithContext(cacheCtx)
-
-	// Limit Redis background operations to prevent resource exhaustion
-	bgGroup.SetLimit(MaxRedisBackgroundOps)
 
 	cache := &RedisCache{
 		client:  rdb,
@@ -3780,9 +3766,6 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 	// Create errgroup for stream handling
 	streamGroup, _ := errgroup.WithContext(tm.ctx)
 
-	// Limit concurrent DoQ streams to prevent resource exhaustion
-	streamGroup.SetLimit(MaxConcurrentStreams)
-
 	for {
 		select {
 		case <-tm.ctx.Done():
@@ -4230,12 +4213,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 			server.pprofServer.TLSConfig = server.securityMgr.tls.tlsConfig
 		}
 	}
-
-	// Limit server background operations to prevent resource exhaustion
-	server.backgroundGroup.SetLimit(MaxServerBackgroundOps) // Allow for signal handling, root server sorting, and a few other tasks
-
-	// Limit cache refresh operations to prevent resource exhaustion
-	server.cacheRefreshGroup.SetLimit(MaxCacheRefreshConcurrency)
 
 	server.setupSignalHandling()
 
@@ -5403,7 +5380,6 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 			nsAddresses.Store([]string{})
 
 			queryGroup, _ := errgroup.WithContext(queryCtx)
-			queryGroup.SetLimit(MaxDNSQueryOps) // IPv4 + IPv6
 
 			queryGroup.Go(func() error {
 				defer HandlePanic("Resolve NS IPv4")
