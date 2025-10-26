@@ -206,6 +206,12 @@ type LogManager struct {
 	colorMap map[LogLevel]string
 }
 
+// TimeCache provides cached time for performance optimization
+type TimeCache struct {
+	currentTime atomic.Value // time.Time
+	ticker      *time.Ticker
+}
+
 type ServerConfig struct {
 	Server    ServerSettings    `json:"server"`
 	Redis     RedisSettings     `json:"redis"`
@@ -5495,20 +5501,8 @@ func (rr *RecursiveResolver) getRootServers() []string {
 }
 
 // =============================================================================
-// ResponseValidator Implementation
+// Time Cache Implementation
 // =============================================================================
-
-// (ResponseValidator methods inherited from DNSSECValidator and HijackPrevention)
-
-// =============================================================================
-// Utility Functions
-// =============================================================================
-
-// TimeCache provides cached time for performance optimization
-type TimeCache struct {
-	currentTime atomic.Value // time.Time
-	ticker      *time.Ticker
-}
 
 // NewTimeCache creates a new time cache that updates every second
 func NewTimeCache() *TimeCache {
@@ -5537,6 +5531,10 @@ func (tc *TimeCache) Stop() {
 		tc.ticker.Stop()
 	}
 }
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
 
 func getVersion() string {
 	return fmt.Sprintf("v%s-%s@%s (%s)", Version, CommitHash, BuildTime, runtime.Version())
