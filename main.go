@@ -425,7 +425,7 @@ type RootServerManager struct {
 	servers     []string
 	speedTester *SpeedTestManager
 	sortResult  atomic.Value // *RootServerSortResult
-	needsSpeed  bool
+	needsSpeed  atomic.Bool
 }
 
 // CIDR Management Types
@@ -465,13 +465,13 @@ type RewriteManager struct {
 // Connection Pool Types
 type ConnPoolEntry struct {
 	conn       any
-	lastUsed   atomic.Value // time.Time
-	createdAt  time.Time
-	useCount   atomic.Int64
-	serverAddr string
-	protocol   string
-	healthy    atomic.Bool
-	closed     atomic.Bool
+	serverAddr string       // Grouped strings together for better cache locality
+	protocol   string       // Grouped strings together for better cache locality
+	createdAt  time.Time    // Grouped time fields together
+	lastUsed   atomic.Value // time.Time - most frequently accessed
+	healthy    atomic.Bool  // Group atomic types together
+	closed     atomic.Bool  // Group atomic types together
+	useCount   atomic.Int64 // Group atomic types together
 }
 
 type ConnPool struct {
@@ -497,7 +497,7 @@ type QueryClient struct {
 type DNSSECValidator struct{}
 
 type HijackPrevention struct {
-	enabled bool
+	enabled atomic.Bool
 }
 
 type SecurityManager struct {
@@ -3022,8 +3022,8 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 			"199.7.83.42:53", "[2001:500:9f::42]:53",
 			"202.12.27.33:53", "[2001:dc3::35]:53",
 		},
-		needsSpeed: needsRecursive,
 	}
+	rsm.needsSpeed.Store(needsRecursive)
 
 	sorted := make([]RootServerWithLatency, len(rsm.servers))
 	for i, server := range rsm.servers {
@@ -3084,7 +3084,7 @@ func (rsm *RootServerManager) GetLastSortTime() time.Time {
 func (rsm *RootServerManager) sortServersBySpeed() {
 	defer HandlePanic("Root server speed sorting")
 
-	if !rsm.needsSpeed || rsm.speedTester == nil {
+	if !rsm.needsSpeed.Load() || rsm.speedTester == nil {
 		return
 	}
 
@@ -3102,7 +3102,7 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 }
 
 func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
-	if !rsm.needsSpeed {
+	if !rsm.needsSpeed.Load() {
 		return
 	}
 
@@ -3153,11 +3153,11 @@ func (v *DNSSECValidator) hasDNSSECRecords(response *dns.Msg) bool {
 // =============================================================================
 
 func (hp *HijackPrevention) IsEnabled() bool {
-	return hp.enabled
+	return hp.enabled.Load()
 }
 
 func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string) {
-	if !hp.enabled || response == nil {
+	if !hp.enabled.Load() || response == nil {
 		return true, ""
 	}
 
@@ -3245,8 +3245,9 @@ func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) b
 func NewSecurityManager(config *ServerConfig, server *DNSServer) (*SecurityManager, error) {
 	sm := &SecurityManager{
 		dnssec: &DNSSECValidator{},
-		hijack: &HijackPrevention{enabled: config.Server.Features.HijackProtection},
+		hijack: &HijackPrevention{},
 	}
+	sm.hijack.enabled.Store(config.Server.Features.HijackProtection)
 
 	if config.Server.TLS.SelfSigned || (config.Server.TLS.CertFile != "" && config.Server.TLS.KeyFile != "") {
 		tlsMgr, err := NewTLSManager(server, config)
@@ -4401,7 +4402,7 @@ func (s *DNSServer) displayInfo() {
 		}
 	}
 
-	if s.rootServerMgr.needsSpeed {
+	if s.rootServerMgr.needsSpeed.Load() {
 		LogInfo("SPEEDTEST: Root server speed testing: enabled")
 	}
 }
