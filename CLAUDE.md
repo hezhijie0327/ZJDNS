@@ -62,6 +62,10 @@ go test -cover
 
 # Build and run a quick functional test
 go build -o zjdns && ./zjdns -generate-config
+
+# Test DNS resolution functionality
+dig @127.0.0.1 -p 53 example.com
+dig @127.0.0.1 -p 853 example.com +tls
 ```
 
 ## Architecture
@@ -72,11 +76,11 @@ This is a monolithic Go application contained in `main.go` (~180KB) with a modul
 
 - **DNSServer**: Main server struct that orchestrates all DNS protocols
 - **ConfigManager**: Handles JSON configuration loading and validation
-- **ConnectionManager**: Manages persistent connections to upstream servers
 - **CacheManager**: Interface for caching (NullCache for testing, RedisCache for production)
 - **QueryManager**: High-level query orchestration and management
 - **QueryClient**: Unified client for DNS queries with protocol fallback
 - **UpstreamHandler**: Manages upstream DNS server configurations and selection
+- **ConnPool**: Connection pooling for managing persistent connections to upstream servers
 
 ### Protocol Handlers
 
@@ -105,7 +109,6 @@ This is a monolithic Go application contained in `main.go` (~180KB) with a modul
 ### Supporting Infrastructure
 
 - **RequestTracker**: Per-request tracing and performance monitoring
-- **TaskManager**: Goroutine pool management for concurrent operations
 - **TLSManager**: Certificate management for secure protocols
 - **RootServerManager**: Dynamic root server management with latency testing
 - **IPDetector**: Client IP detection for ECS support
@@ -130,7 +133,6 @@ Key external dependencies:
 - `github.com/miekg/dns`: Core DNS protocol implementation
 - `github.com/redis/go-redis/v9`: Redis client for caching
 - `github.com/quic-go/quic-go`: QUIC protocol for DoQ
-- `github.com/dgraph-io/ristretto/v2`: In-memory caching
 - `golang.org/x/net`: Extended networking capabilities
 
 ## Development Notes
@@ -145,16 +147,25 @@ Key external dependencies:
 - Uses Go 1.25.1 with cutting-edge dependencies for latest DNS protocol support
 - Configuration is generated dynamically via `-generate-config` flag
 
+## Key Architecture Patterns
+
+- **Atomic Operations**: Uses `atomic.Value` and `atomic.Int32/Bool` for thread-safe state management
+- **Interface-based Design**: CacheManager interface allows multiple cache implementations
+- **Connection Pooling**: ConnPool manages persistent connections with different protocols (HTTP/2, QUIC)
+- **Structured Logging**: LogManager provides leveled logging with color support
+- **Configuration Management**: JSON-based configuration with automatic example generation
+
 ## Deployment & Build Process
 
 ### Container Builds
 
-The project uses automated multi-stage Docker builds:
+The project uses automated multi-stage Docker builds defined in `Dockerfile`:
 
-- **Build stage**: Compiles with Go 1.25.1, includes CA certificates
+- **Build stage**: Compiles with Go 1.25.1, includes CA certificates, sets build metadata
 - **Rebase stage**: Copies only necessary components to intermediate scratch
 - **Final stage**: Minimal scratch image with just the binary and certificates
 - **Automated publishing**: GitHub Actions build and publish to Docker Hub and GHCR
+- **Multi-platform**: Supports linux/amd64 and linux/arm64 architectures
 
 ### Build Information
 
