@@ -30,7 +30,6 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -189,6 +188,25 @@ const (
 )
 
 type LogLevel int
+
+// =============================================================================
+// Utility Functions - Modern Go Concurrency Helpers
+// =============================================================================
+
+// withErrGroup provides a unified pattern for error group usage
+// with optional concurrency limiting for consistent behavior across the codebase
+func withErrGroup(ctx context.Context, limit int, fn func(context.Context, *errgroup.Group) error) error {
+	g, ctx := errgroup.WithContext(ctx)
+	if limit > 0 {
+		g.SetLimit(limit)
+	}
+	return fn(ctx, g)
+}
+
+// withGracefulShutdown provides a context with graceful shutdown capability using WithCancelCause
+func withGracefulShutdown(parent context.Context) (context.Context, context.CancelCauseFunc) {
+	return context.WithCancelCause(parent)
+}
 
 // =============================================================================
 // Type Definitions - Core Types
@@ -423,9 +441,10 @@ type SpeedTestManager struct {
 }
 
 type RootServerManager struct {
-	servers     []string
+	servers     atomic.Pointer[[]string] // Replace regular slice with atomic pointer
 	speedTester *SpeedTestManager
 	sortResult  atomic.Pointer[*RootServerSortResult]
+	lastUpdate  atomic.Value // time.Time
 	needsSpeed  atomic.Bool
 }
 
@@ -541,7 +560,7 @@ type DNSServer struct {
 	pprofServer       *http.Server
 	redisClient       *redis.Client
 	ctx               context.Context
-	cancel            context.CancelFunc
+	cancel            context.CancelCauseFunc
 	shutdown          chan struct{}
 	backgroundGroup   *errgroup.Group
 	backgroundCtx     context.Context
@@ -2132,8 +2151,12 @@ func (r *CIDRRule) preprocessNetworks() {
 	}
 
 	// Sort IPv4 networks by prefix length (longest prefix first) for optimization
-	sort.Slice(r.ipv4Nets, func(i, j int) bool {
-		return r.ipv4Nets[i].prefix > r.ipv4Nets[j].prefix
+	slices.SortFunc(r.ipv4Nets, func(a, b ipv4Net) int {
+		// Sort by prefix length descending (longest first)
+		if a.prefix != b.prefix {
+			return int(b.prefix) - int(a.prefix) // b.prefix - a.prefix for descending
+		}
+		return 0
 	})
 }
 
@@ -2765,17 +2788,27 @@ func (st *SpeedTestManager) sortARecords(records []*dns.A) []*dns.A {
 
 	results := st.speedTest(ips)
 
-	sort.Slice(records, func(i, j int) bool {
-		ipI, ipJ := records[i].A.String(), records[j].A.String()
-		resultI, okI := results[ipI]
-		resultJ, okJ := results[ipJ]
-		if !okI || !okJ {
-			return i < j
+	slices.SortFunc(records, func(a, b *dns.A) int {
+		ipA, ipB := a.A.String(), b.A.String()
+		resultA, okA := results[ipA]
+		resultB, okB := results[ipB]
+		if !okA || !okB {
+			// Fallback to original order if either result is missing
+			return 0
 		}
-		if resultI.Reachable != resultJ.Reachable {
-			return resultI.Reachable
+		if resultA.Reachable != resultB.Reachable {
+			if resultA.Reachable {
+				return -1 // A comes first
+			}
+			return 1 // B comes first
 		}
-		return resultI.Latency < resultJ.Latency
+		if resultA.Latency != resultB.Latency {
+			if resultA.Latency < resultB.Latency {
+				return -1 // A comes first
+			}
+			return 1 // B comes first
+		}
+		return 0
 	})
 
 	return records
@@ -2793,17 +2826,27 @@ func (st *SpeedTestManager) sortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
 
 	results := st.speedTest(ips)
 
-	sort.Slice(records, func(i, j int) bool {
-		ipI, ipJ := records[i].AAAA.String(), records[j].AAAA.String()
-		resultI, okI := results[ipI]
-		resultJ, okJ := results[ipJ]
-		if !okI || !okJ {
-			return i < j
+	slices.SortFunc(records, func(a, b *dns.AAAA) int {
+		ipA, ipB := a.AAAA.String(), b.AAAA.String()
+		resultA, okA := results[ipA]
+		resultB, okB := results[ipB]
+		if !okA || !okB {
+			// Fallback to original order if either result is missing
+			return 0
 		}
-		if resultI.Reachable != resultJ.Reachable {
-			return resultI.Reachable
+		if resultA.Reachable != resultB.Reachable {
+			if resultA.Reachable {
+				return -1 // A comes first
+			}
+			return 1 // B comes first
 		}
-		return resultI.Latency < resultJ.Latency
+		if resultA.Latency != resultB.Latency {
+			if resultA.Latency < resultB.Latency {
+				return -1 // A comes first
+			}
+			return 1 // B comes first
+		}
+		return 0
 	})
 
 	return records
@@ -3051,27 +3094,37 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 		}
 	}
 
-	rsm := &RootServerManager{
-		servers: []string{
-			"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
-			"170.247.170.2:53", "[2801:1b8:10::b]:53",
-			"192.33.4.12:53", "[2001:500:2::c]:53",
-			"199.7.91.13:53", "[2001:500:2d::d]:53",
-			"192.203.230.10:53", "[2001:500:a8::e]:53",
-			"192.5.5.241:53", "[2001:500:2f::f]:53",
-			"192.112.36.4:53", "[2001:500:12::d0d]:53",
-			"198.97.190.53:53", "[2001:500:1::53]:53",
-			"192.36.148.17:53", "[2001:7fe::53]:53",
-			"192.58.128.30:53", "[2001:503:c27::2:30]:53",
-			"193.0.14.129:53", "[2001:7fd::1]:53",
-			"199.7.83.42:53", "[2001:500:9f::42]:53",
-			"202.12.27.33:53", "[2001:dc3::35]:53",
-		},
+	servers := []string{
+		"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
+		"170.247.170.2:53", "[2801:1b8:10::b]:53",
+		"192.33.4.12:53", "[2001:500:2::c]:53",
+		"199.7.91.13:53", "[2001:500:2d::d]:53",
+		"192.203.230.10:53", "[2001:500:a8::e]:53",
+		"192.5.5.241:53", "[2001:500:2f::f]:53",
+		"192.112.36.4:53", "[2001:500:12::d0d]:53",
+		"198.97.190.53:53", "[2001:500:1::53]:53",
+		"192.36.148.17:53", "[2001:7fe::53]:53",
+		"192.58.128.30:53", "[2001:503:c27::2:30]:53",
+		"193.0.14.129:53", "[2001:7fd::1]:53",
+		"199.7.83.42:53", "[2001:500:9f::42]:53",
+		"202.12.27.33:53", "[2001:dc3::35]:53",
 	}
+
+	rsm := &RootServerManager{
+		servers:     atomic.Pointer[[]string]{},
+		speedTester: nil, // Will be set conditionally later
+	}
+	rsm.servers.Store(&servers)
 	rsm.needsSpeed.Store(needsRecursive)
 
-	sorted := make([]RootServerWithLatency, len(rsm.servers))
-	for i, server := range rsm.servers {
+	serversPtr := rsm.servers.Load()
+	if serversPtr == nil {
+		serversPtr = &[]string{}
+	}
+	serversList := *serversPtr
+
+	sorted := make([]RootServerWithLatency, len(serversList))
+	for i, server := range serversList {
 		sorted[i] = RootServerWithLatency{
 			Server:    server,
 			Latency:   UnreachableLatency,
@@ -3134,9 +3187,15 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 		return
 	}
 
-	ips := ExtractIPsFromServers(rsm.servers)
+	serversPtr := rsm.servers.Load()
+	if serversPtr == nil {
+		return
+	}
+	servers := *serversPtr
+
+	ips := ExtractIPsFromServers(servers)
 	results := rsm.speedTester.speedTest(ips)
-	sortedWithLatency := SortBySpeedResultWithLatency(rsm.servers, results)
+	sortedWithLatency := SortBySpeedResultWithLatency(servers, results)
 
 	// Store both the sorted servers and timestamp atomically as one unit
 	// This ensures consistency when reading both values together
@@ -3145,6 +3204,7 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 		SortTime:      time.Now(),
 	}
 	rsm.sortResult.Store(&sortResult)
+	rsm.lastUpdate.Store(time.Now())
 }
 
 func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
@@ -4116,20 +4176,20 @@ func (rt *RequestTracker) Finish() {
 // =============================================================================
 
 func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := withGracefulShutdown(context.Background())
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 	cacheRefreshGroup, cacheRefreshCtx := errgroup.WithContext(ctx)
 
 	ednsManager, err := NewEDNSManager(config.Server.DefaultECS)
 	if err != nil {
-		cancel()
+		cancel(fmt.Errorf("EDNS manager init: %w", err))
 		return nil, fmt.Errorf("EDNS manager init: %w", err)
 	}
 
 	rewriteManager := NewRewriteManager()
 	if len(config.Rewrite) > 0 {
 		if err := rewriteManager.LoadRules(config.Rewrite); err != nil {
-			cancel()
+			cancel(fmt.Errorf("load rewrite rules: %w", err))
 			return nil, fmt.Errorf("load rewrite rules: %w", err)
 		}
 	}
@@ -4138,7 +4198,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	if len(config.CIDR) > 0 {
 		cidrManager, err = NewCIDRManager(config.CIDR)
 		if err != nil {
-			cancel()
+			cancel(fmt.Errorf("CIDR manager init: %w", err))
 			return nil, fmt.Errorf("CIDR manager init: %w", err)
 		}
 	}
@@ -4152,7 +4212,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	} else {
 		redisCache, err := NewRedisCache(config)
 		if err != nil {
-			cancel()
+			cancel(fmt.Errorf("redis cache init: %w", err))
 			return nil, fmt.Errorf("redis cache init: %w", err)
 		}
 		cache = redisCache
@@ -4181,7 +4241,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 
 	securityManager, err := NewSecurityManager(config, server)
 	if err != nil {
-		cancel()
+		cancel(fmt.Errorf("security manager init: %w", err))
 		return nil, fmt.Errorf("security manager init: %w", err)
 	}
 	server.securityMgr = securityManager
@@ -4191,7 +4251,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 
 	queryManager := NewQueryManager(server)
 	if err := queryManager.Initialize(config.Upstream); err != nil {
-		cancel()
+		cancel(fmt.Errorf("query manager init: %w", err))
 		return nil, fmt.Errorf("query manager init: %w", err)
 	}
 	server.queryMgr = queryManager
@@ -4254,7 +4314,7 @@ func (s *DNSServer) shutdownServer() {
 	LogInfo("SERVER: Starting DNS server shutdown")
 
 	if s.cancel != nil {
-		s.cancel()
+		s.cancel(errors.New("server shutdown"))
 	}
 
 	if s.cacheMgr != nil {
@@ -5763,11 +5823,20 @@ func SortBySpeedResultWithLatency(servers []string, results map[string]*SpeedRes
 		}
 	}
 
-	sort.Slice(serverList, func(i, j int) bool {
-		if serverList[i].Reachable != serverList[j].Reachable {
-			return serverList[i].Reachable
+	slices.SortFunc(serverList, func(a, b RootServerWithLatency) int {
+		if a.Reachable != b.Reachable {
+			if a.Reachable {
+				return -1 // A comes first
+			}
+			return 1 // B comes first
 		}
-		return serverList[i].Latency < serverList[j].Latency
+		if a.Latency != b.Latency {
+			if a.Latency < b.Latency {
+				return -1 // A comes first
+			}
+			return 1 // B comes first
+		}
+		return 0
 	})
 
 	return serverList
