@@ -263,10 +263,11 @@ type UpstreamServer struct {
 }
 
 type RewriteRule struct {
-	Name         string            `json:"name"`
-	ResponseCode *int              `json:"response_code,omitempty"`
-	Records      []DNSRecordConfig `json:"records,omitempty"`
-	Additional   []DNSRecordConfig `json:"additional,omitempty"`
+	Name           string            `json:"name"`
+	NormalizedName string            // Pre-normalized name for faster comparison
+	ResponseCode   *int              `json:"response_code,omitempty"`
+	Records        []DNSRecordConfig `json:"records,omitempty"`
+	Additional     []DNSRecordConfig `json:"additional,omitempty"`
 }
 
 type DNSRecordConfig struct {
@@ -1197,7 +1198,8 @@ func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *Ups
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	response := new(dns.Msg)
+	response := AcquireMessage()
+	defer ReleaseMessage(response)
 	if err := response.Unpack(respBuf); err != nil {
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
@@ -1249,7 +1251,8 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 		return nil, fmt.Errorf("response too short: %d", n)
 	}
 
-	response := new(dns.Msg)
+	response := AcquireMessage()
+	defer ReleaseMessage(response)
 	if err := response.Unpack(respBuf[2:n]); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("unpack: %w", err)
@@ -1319,7 +1322,8 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	response := &dns.Msg{}
+	response := AcquireMessage()
+	defer ReleaseMessage(response)
 	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("unpack: %w", err)
@@ -1389,7 +1393,8 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	response := &dns.Msg{}
+	response := AcquireMessage()
+	defer ReleaseMessage(response)
 	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("unpack: %w", err)
@@ -2423,6 +2428,8 @@ func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 	validRules := make([]RewriteRule, 0, len(rules))
 	for _, rule := range rules {
 		if len(rule.Name) <= MaxDomainLength {
+			// Pre-normalize the rule name for faster comparison
+			rule.NormalizedName = NormalizeDomain(rule.Name)
 			validRules = append(validRules, rule)
 		}
 	}
@@ -2454,7 +2461,7 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 
 	for i := range rules {
 		rule := &rules[i]
-		if domain != NormalizeDomain(rule.Name) {
+		if domain != rule.NormalizedName {
 			continue
 		}
 
@@ -2465,8 +2472,8 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 		}
 
 		if len(rule.Records) > 0 || len(rule.Additional) > 0 {
-			result.Records = make([]dns.RR, 0)
-			result.Additional = make([]dns.RR, 0)
+			result.Records = make([]dns.RR, 0, len(rule.Records))
+			result.Additional = make([]dns.RR, 0, len(rule.Additional))
 
 			for _, record := range rule.Records {
 				recordType := dns.StringToType[record.Type]
@@ -3567,7 +3574,8 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		req := new(dns.Msg)
+		req := AcquireMessage()
+		defer ReleaseMessage(req)
 		if err := req.Unpack(msgBuf); err != nil {
 			LogDebug("DOT: DNS message unpack error: %v", err)
 			continue
@@ -3751,7 +3759,8 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	req := new(dns.Msg)
+	req := AcquireMessage()
+	defer ReleaseMessage(req)
 	if err := req.Unpack(buf[2 : 2+msgLen]); err != nil {
 		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid DNS message")
 		return
@@ -3924,7 +3933,8 @@ func (tm *TLSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
 		return nil, http.StatusBadRequest
 	}
 
-	req := new(dns.Msg)
+	req := AcquireMessage()
+	defer ReleaseMessage(req)
 	if err := req.Unpack(buf); err != nil {
 		return nil, http.StatusBadRequest
 	}
@@ -4426,7 +4436,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	}
 
 	if req == nil || len(req.Question) == 0 {
-		msg := &dns.Msg{}
+		msg := AcquireMessage()
 		if req != nil && len(req.Question) > 0 {
 			msg.SetReply(req)
 		} else {
@@ -4439,7 +4449,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	question := req.Question[0]
 
 	if len(question.Name) > MaxDomainLength || question.Qtype == dns.TypeANY {
-		msg := &dns.Msg{}
+		msg := AcquireMessage()
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeRefused
 		return msg
@@ -4511,7 +4521,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 
 	msg := s.buildResponse(req)
 	if msg == nil {
-		msg = &dns.Msg{}
+		msg = AcquireMessage()
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeServerFailure
 		return msg
@@ -4587,7 +4597,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
 		msg := s.buildResponse(req)
 		if msg == nil {
-			msg = &dns.Msg{}
+			msg = AcquireMessage()
 			msg.SetReply(req)
 			msg.Rcode = dns.RcodeServerFailure
 			return msg
@@ -4609,7 +4619,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 
 	msg := s.buildResponse(req)
 	if msg == nil {
-		msg = &dns.Msg{}
+		msg = AcquireMessage()
 		msg.SetReply(req)
 	}
 	msg.Rcode = dns.RcodeServerFailure
@@ -4619,7 +4629,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
-		msg = &dns.Msg{}
+		msg = AcquireMessage()
 		msg.SetReply(req)
 	}
 
@@ -4675,7 +4685,7 @@ func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool)
 func (s *DNSServer) buildResponse(req *dns.Msg) *dns.Msg {
 	msg := AcquireMessage()
 	if msg == nil {
-		msg = &dns.Msg{}
+		msg = AcquireMessage()
 	}
 
 	if req != nil && len(req.Question) > 0 {
@@ -4705,7 +4715,7 @@ func (s *DNSServer) restoreOriginalDomain(msg *dns.Msg, currentName, originalNam
 func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {
 	msg := AcquireMessage()
 	if msg == nil {
-		msg = &dns.Msg{}
+		msg = AcquireMessage()
 	}
 
 	msg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
