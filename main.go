@@ -322,12 +322,13 @@ type CacheManager interface {
 type NullCache struct{}
 
 type RedisCache struct {
-	client *redis.Client
-	config *ServerConfig
-	ctx    context.Context
-	cancel context.CancelFunc
-	closed int32
-	wg     sync.WaitGroup
+	client  *redis.Client
+	config  *ServerConfig
+	ctx     context.Context
+	cancel  context.CancelFunc
+	closed  int32
+	bgGroup *errgroup.Group
+	bgCtx   context.Context
 }
 
 // EDNS and DNS Options
@@ -475,17 +476,18 @@ type ConnPoolEntry struct {
 }
 
 type ConnPool struct {
-	http2Conns    sync.Map
-	http3Conns    sync.Map
-	quicConns     sync.Map
-	tlsConns      sync.Map
-	sessionCache  tls.ClientSessionCache
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	closed        atomic.Bool
-	cleanupTicker *time.Ticker
-	connCount     atomic.Int64
+	http2Conns      sync.Map
+	http3Conns      sync.Map
+	quicConns       sync.Map
+	tlsConns        sync.Map
+	sessionCache    tls.ClientSessionCache
+	ctx             context.Context
+	cancel          context.CancelFunc
+	backgroundGroup *errgroup.Group
+	backgroundCtx   context.Context
+	closed          atomic.Bool
+	cleanupTicker   *time.Ticker
+	connCount       atomic.Int64
 }
 
 type QueryClient struct {
@@ -512,7 +514,8 @@ type TLSManager struct {
 	tlsConfig     *tls.Config
 	ctx           context.Context
 	cancel        context.CancelFunc
-	wg            sync.WaitGroup
+	serverGroup   *errgroup.Group
+	serverCtx     context.Context
 	dotListener   net.Listener
 	doqConn       *net.UDPConn
 	doqListener   *quic.EarlyListener
@@ -525,24 +528,25 @@ type TLSManager struct {
 
 // DNS Server Type
 type DNSServer struct {
-	config        *ServerConfig
-	cacheMgr      CacheManager
-	queryClient   *QueryClient
-	connPool      *ConnPool
-	securityMgr   *SecurityManager
-	ednsMgr       *EDNSManager
-	rewriteMgr    *RewriteManager
-	speedTestMgr  *SpeedTestManager
-	rootServerMgr *RootServerManager
-	cidrMgr       *CIDRManager
-	pprofServer   *http.Server
-	redisClient   *redis.Client
-	ctx           context.Context
-	cancel        context.CancelFunc
-	shutdown      chan struct{}
-	wg            sync.WaitGroup
-	closed        int32
-	queryMgr      *QueryManager
+	config          *ServerConfig
+	cacheMgr        CacheManager
+	queryClient     *QueryClient
+	connPool        *ConnPool
+	securityMgr     *SecurityManager
+	ednsMgr         *EDNSManager
+	rewriteMgr      *RewriteManager
+	speedTestMgr    *SpeedTestManager
+	rootServerMgr   *RootServerManager
+	cidrMgr         *CIDRManager
+	pprofServer     *http.Server
+	redisClient     *redis.Client
+	ctx             context.Context
+	cancel          context.CancelFunc
+	shutdown        chan struct{}
+	backgroundGroup *errgroup.Group
+	backgroundCtx   context.Context
+	closed          int32
+	queryMgr        *QueryManager
 }
 
 type ConfigManager struct{}
@@ -666,15 +670,21 @@ func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
 
 func NewConnPool() *ConnPool {
 	ctx, cancel := context.WithCancel(context.Background())
+	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 
 	pool := &ConnPool{
-		ctx:           ctx,
-		cancel:        cancel,
-		cleanupTicker: time.NewTicker(ConnPoolCleanup),
-		sessionCache:  tls.NewLRUClientSessionCache(TLSSessionCacheSize),
+		ctx:             ctx,
+		cancel:          cancel,
+		backgroundGroup: backgroundGroup,
+		backgroundCtx:   backgroundCtx,
+		cleanupTicker:   time.NewTicker(ConnPoolCleanup),
+		sessionCache:    tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 	}
 
-	go pool.cleanupLoop()
+	pool.backgroundGroup.Go(func() error {
+		pool.cleanupLoop()
+		return nil
+	})
 
 	LogInfo("POOL: Connection pool initialized")
 	return pool
@@ -1089,7 +1099,10 @@ func (p *ConnPool) Close() error {
 	closeMap(&p.quicConns)
 	closeMap(&p.tlsConns)
 
-	p.wg.Wait()
+	// Wait for background goroutines to finish
+	if err := p.backgroundGroup.Wait(); err != nil {
+		LogError("POOL: Background goroutines finished with error: %v", err)
+	}
 	LogInfo("POOL: Connection pool shut down")
 	return nil
 }
@@ -1733,11 +1746,14 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 	}
 
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
+	bgGroup, bgCtx := errgroup.WithContext(cacheCtx)
 	cache := &RedisCache{
-		client: rdb,
-		config: config,
-		ctx:    cacheCtx,
-		cancel: cacheCancel,
+		client:  rdb,
+		config:  config,
+		ctx:     cacheCtx,
+		cancel:  cacheCancel,
+		bgGroup: bgGroup,
+		bgCtx:   bgCtx,
 	}
 
 	LogInfo("CACHE: Redis cache initialized")
@@ -1761,27 +1777,35 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	var entry CacheEntry
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		go func() {
+		rc.bgGroup.Go(func() error {
 			defer HandlePanic("Clean corrupted cache")
-			cleanCtx, cleanCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+			cleanCtx, cleanCancel := context.WithTimeout(rc.bgCtx, RedisWriteTimeout)
 			defer cleanCancel()
-			rc.client.Del(cleanCtx, key)
-		}()
+			if err := rc.client.Del(cleanCtx, key).Err(); err != nil {
+				LogError("CACHE: Failed to clean corrupted cache key %s: %v", key, err)
+				return nil // Don't fail the group for background cleanup errors
+			}
+			return nil
+		})
 		return nil, false, false
 	}
 
 	isExpired := entry.IsExpired()
 
 	entry.AccessTime = time.Now().Unix()
-	go func() {
+	rc.bgGroup.Go(func() error {
 		defer HandlePanic("Update access time")
 		if atomic.LoadInt32(&rc.closed) == 0 {
-			updateCtx, updateCancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+			updateCtx, updateCancel := context.WithTimeout(rc.bgCtx, RedisWriteTimeout)
 			defer updateCancel()
-			data, _ := json.Marshal(entry)
-			rc.client.Set(updateCtx, key, data, redis.KeepTTL)
+			if data, err := json.Marshal(entry); err == nil {
+				if err := rc.client.Set(updateCtx, key, data, redis.KeepTTL).Err(); err != nil {
+					LogError("CACHE: Failed to update access time for key %s: %v", key, err)
+				}
+			}
 		}
-	}()
+		return nil // Don't fail the group for background update errors
+	})
 
 	return &entry, true, isExpired
 }
@@ -1837,18 +1861,21 @@ func (rc *RedisCache) Close() error {
 
 	rc.cancel()
 
-	// Wait for all goroutines to finish with a timeout
-	done := make(chan struct{})
+	// Wait for all background goroutines to finish with timeout
+	done := make(chan error, 1)
 	go func() {
-		rc.wg.Wait()
-		close(done)
+		defer HandlePanic("Redis background group wait")
+		done <- rc.bgGroup.Wait()
 	}()
 
 	select {
-	case <-done:
-		LogDebug("CACHE: All Redis goroutines finished gracefully")
+	case err := <-done:
+		if err != nil {
+			LogError("CACHE: Background goroutine error: %v", err)
+		}
+		LogDebug("CACHE: All Redis background goroutines finished gracefully")
 	case <-time.After(RedisPoolIdleTimeout):
-		LogWarn("CACHE: Redis goroutine shutdown timeout")
+		LogWarn("CACHE: Redis background goroutine shutdown timeout")
 	}
 
 	if err := rc.client.Close(); err != nil {
@@ -3382,12 +3409,15 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	serverGroup, serverCtx := errgroup.WithContext(ctx)
 
 	tm := &TLSManager{
-		server:    server,
-		tlsConfig: tlsConfig,
-		ctx:       ctx,
-		cancel:    cancel,
+		server:      server,
+		tlsConfig:   tlsConfig,
+		ctx:         ctx,
+		cancel:      cancel,
+		serverGroup: serverGroup,
+		serverCtx:   serverCtx,
 	}
 
 	tm.displayCertificateInfo(cert)
@@ -3501,10 +3531,11 @@ func (tm *TLSManager) startDOTServer() error {
 	tm.dotListener = tls.NewListener(listener, dotTLSConfig)
 	LogInfo("DOT: DoT server started on port %s", tm.server.config.Server.TLS.Port)
 
-	go func() {
+	tm.serverGroup.Go(func() error {
 		defer HandlePanic("DoT server")
 		tm.handleDOTConnections()
-	}()
+		return nil
+	})
 
 	return nil
 }
@@ -3526,11 +3557,12 @@ func (tm *TLSManager) handleDOTConnections() {
 			continue
 		}
 
-		go func(c net.Conn) {
+		tm.serverGroup.Go(func() error {
 			defer HandlePanic("DoT connection handler")
-			defer func() { _ = c.Close() }()
-			tm.handleDOTConnection(c)
-		}(conn)
+			defer func() { _ = conn.Close() }()
+			tm.handleDOTConnection(conn)
+			return nil
+		})
 	}
 }
 
@@ -3662,10 +3694,11 @@ func (tm *TLSManager) startDOQServer() error {
 
 	LogInfo("DOQ: DoQ server started on port %s", tm.server.config.Server.TLS.Port)
 
-	go func() {
+	tm.serverGroup.Go(func() error {
 		defer HandlePanic("DoQ server")
 		tm.handleDOQConnections()
-	}()
+		return nil
+	})
 
 	return nil
 }
@@ -3690,10 +3723,11 @@ func (tm *TLSManager) handleDOQConnections() {
 			continue
 		}
 
-		go func(quicConn *quic.Conn) {
+		tm.serverGroup.Go(func() error {
 			defer HandlePanic("DoQ connection handler")
-			tm.handleDOQConnection(quicConn)
-		}(conn)
+			tm.handleDOQConnection(conn)
+			return nil
+		})
 	}
 }
 
@@ -3721,20 +3755,32 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		}
 	}()
 
-	streamWg := sync.WaitGroup{}
-	defer streamWg.Wait()
+	// Create errgroup for stream handling
+	streamGroup, _ := errgroup.WithContext(tm.ctx)
 
 	for {
 		select {
 		case <-tm.ctx.Done():
+			// Wait for all ongoing streams to finish before returning
+			if err := streamGroup.Wait(); err != nil {
+				LogError("DoQ: Stream group finished with error: %v", err)
+			}
 			return
 		case <-conn.Context().Done():
+			// Wait for all ongoing streams to finish before returning
+			if err := streamGroup.Wait(); err != nil {
+				LogError("DoQ: Stream group finished with error: %v", err)
+			}
 			return
 		default:
 		}
 
 		stream, err := conn.AcceptStream(tm.ctx)
 		if err != nil {
+			// Wait for all ongoing streams to finish before returning
+			if err := streamGroup.Wait(); err != nil {
+				LogError("DoQ: Stream group finished with error: %v", err)
+			}
 			return
 		}
 
@@ -3742,12 +3788,13 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 			continue
 		}
 
-		streamWg.Go(func() {
+		streamGroup.Go(func() error {
 			defer HandlePanic("DoQ stream handler")
 			if stream != nil {
 				defer func() { _ = stream.Close() }()
 				tm.handleDOQStream(stream, conn)
 			}
+			return nil
 		})
 	}
 }
@@ -3833,12 +3880,14 @@ func (tm *TLSManager) startDOHServer(port string) error {
 		IdleTimeout:       DoTIdleTimeout,
 	}
 
-	go func() {
+	tm.serverGroup.Go(func() error {
 		defer HandlePanic("DoH server")
 		if err := tm.httpsServer.Serve(tm.httpsListener); err != nil && err != http.ErrServerClosed {
 			LogError("DOH: DoH server error: %v", err)
+			return err
 		}
-	}()
+		return nil
+	})
 
 	return nil
 }
@@ -3868,12 +3917,14 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 
 	tm.h3Server = &http3.Server{Handler: tm}
 
-	go func() {
+	tm.serverGroup.Go(func() error {
 		defer HandlePanic("DoH3 server")
 		if err := tm.h3Server.ServeListener(tm.h3Listener); err != nil && err != http.ErrServerClosed {
 			LogError("DOH3: DoH3 server error: %v", err)
+			return err
 		}
-	}()
+		return nil
+	})
 
 	return nil
 }
@@ -4005,7 +4056,10 @@ func (tm *TLSManager) shutdown() error {
 		CloseWithLog(tm.h3Listener, "HTTP/3 listener")
 	}
 
-	tm.wg.Wait()
+	// Wait for all server goroutines to finish
+	if err := tm.serverGroup.Wait(); err != nil {
+		LogError("TLS: Server goroutines finished with error: %v", err)
+	}
 	LogInfo("TLS: Secure DNS server shut down")
 	return nil
 }
@@ -4057,6 +4111,7 @@ func (rt *RequestTracker) Finish() {
 
 func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	ctx, cancel := context.WithCancel(context.Background())
+	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 
 	ednsManager, err := NewEDNSManager(config.Server.DefaultECS)
 	if err != nil {
@@ -4100,17 +4155,19 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	rootServerManager := NewRootServerManager(*config, redisClient)
 
 	server := &DNSServer{
-		config:        config,
-		rootServerMgr: rootServerManager,
-		ednsMgr:       ednsManager,
-		rewriteMgr:    rewriteManager,
-		cidrMgr:       cidrManager,
-		connPool:      connPool,
-		redisClient:   redisClient,
-		cacheMgr:      cache,
-		ctx:           ctx,
-		cancel:        cancel,
-		shutdown:      make(chan struct{}),
+		config:          config,
+		rootServerMgr:   rootServerManager,
+		ednsMgr:         ednsManager,
+		rewriteMgr:      rewriteManager,
+		cidrMgr:         cidrManager,
+		connPool:        connPool,
+		redisClient:     redisClient,
+		cacheMgr:        cache,
+		ctx:             ctx,
+		cancel:          cancel,
+		shutdown:        make(chan struct{}),
+		backgroundGroup: backgroundGroup,
+		backgroundCtx:   backgroundCtx,
 	}
 
 	securityManager, err := NewSecurityManager(config, server)
@@ -4161,21 +4218,23 @@ func (s *DNSServer) setupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
+	s.backgroundGroup.Go(func() error {
 		defer HandlePanic("Root server periodic sorting")
-		s.rootServerMgr.StartPeriodicSorting(s.ctx)
-	}()
+		s.rootServerMgr.StartPeriodicSorting(s.backgroundCtx)
+		return nil
+	})
 
-	go func() {
+	s.backgroundGroup.Go(func() error {
 		defer HandlePanic("Signal handler")
 		select {
 		case sig := <-sigChan:
 			LogInfo("SIGNAL: Received signal %v, starting graceful shutdown", sig)
 			s.shutdownServer()
-		case <-s.ctx.Done():
-			return
+		case <-s.backgroundCtx.Done():
+			return nil
 		}
-	}()
+		return nil
+	})
 }
 
 func (s *DNSServer) shutdownServer() {
@@ -4217,17 +4276,21 @@ func (s *DNSServer) shutdownServer() {
 		cancel()
 	}
 
-	done := make(chan struct{})
+	// Wait for background goroutines with timeout
+	bgDone := make(chan error, 1)
 	go func() {
-		defer close(done)
-		s.wg.Wait()
+		defer HandlePanic("Background group wait")
+		bgDone <- s.backgroundGroup.Wait()
 	}()
 
 	select {
-	case <-done:
-		LogInfo("SERVER: All components shut down")
+	case err := <-bgDone:
+		if err != nil {
+			LogError("SERVER: Background goroutines finished with error: %v", err)
+		}
+		LogInfo("SERVER: All background tasks shut down")
 	case <-time.After(ShutdownTimeout):
-		LogWarn("SERVER: Component shutdown timeout")
+		LogWarn("SERVER: Background tasks shutdown timeout")
 	}
 
 	if s.shutdown != nil {
