@@ -2845,15 +2845,13 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 }
 
 func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResult {
-	semaphore := make(chan struct{}, st.concurrency)
 	resultChan := make(chan *SpeedResult, len(ips))
 
 	g, ctx := errgroup.WithContext(context.Background())
+	g.SetLimit(st.concurrency)
 	for _, ip := range ips {
 		testIP := ip
 		g.Go(func() error {
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
 
 			// Create a reusable timer for this goroutine
 			timer := time.NewTimer(st.timeout)
@@ -4867,20 +4865,18 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 		return nil, nil, nil, false, nil, "", errors.New("no upstream servers")
 	}
 
-	semaphore := make(chan struct{}, MaxSingleQuery)
 	resultChan := make(chan UpstreamQueryResult, 1)
 
 	ctx, cancel := context.WithTimeout(qm.server.ctx, QueryTimeout)
 	defer cancel()
 
 	g, queryCtx := errgroup.WithContext(ctx)
+	g.SetLimit(MaxSingleQuery)
 
 	for _, srv := range servers {
 		server := srv
 
 		g.Go(func() error {
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
 
 			select {
 			case <-queryCtx.Done():
@@ -5311,20 +5307,18 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		return nil
 	}
 
-	semaphore := make(chan struct{}, MaxNSResolve)
 	nsChan := make(chan []string, len(nsRecords))
 
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, ConnTimeout)
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
+	g.SetLimit(MaxNSResolve)
 
 	for _, ns := range nsRecords {
 		nsRecord := ns
 
 		g.Go(func() error {
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
 
 			select {
 			case <-queryCtx.Done():
