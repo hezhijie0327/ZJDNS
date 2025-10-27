@@ -387,8 +387,7 @@ type RequestTracker struct {
 	ClientIP     string
 	Upstream     atomic.Value // string
 	ResponseTime time.Duration
-	Steps        []string
-	stepMutex    sync.Mutex
+	steps        atomic.Value // []string
 }
 
 // Speed Test Types
@@ -413,12 +412,14 @@ type RootServerSortResult struct {
 }
 
 type SpeedTestManager struct {
-	timeout   time.Duration
-	redis     *redis.Client
-	cacheTTL  time.Duration
-	keyPrefix string
-	methods   []SpeedTestMethod
-	closed    int32
+	timeout     time.Duration
+	redis       *redis.Client
+	cacheTTL    time.Duration
+	keyPrefix   string
+	methods     []SpeedTestMethod
+	closed      int32
+	cacheHits   atomic.Int64
+	cacheMisses atomic.Int64
 }
 
 type RootServerManager struct {
@@ -488,6 +489,8 @@ type ConnPool struct {
 	closed          atomic.Bool
 	cleanupTicker   *time.Ticker
 	connCount       atomic.Int64
+	activeConns     atomic.Int64
+	maxConns        atomic.Int64
 }
 
 type QueryClient struct {
@@ -549,6 +552,11 @@ type DNSServer struct {
 	cacheRefreshCtx   context.Context
 	closed            int32
 	queryMgr          *QueryManager
+	// Atomic statistics
+	queriesServed atomic.Uint64
+	cacheHits     atomic.Uint64
+	cacheMisses   atomic.Uint64
+	errorsCount   atomic.Uint64
 }
 
 type ConfigManager struct{}
@@ -806,6 +814,7 @@ func (p *ConnPool) closeEntry(entry *ConnPoolEntry) {
 	}
 
 	p.connCount.Add(-1)
+	p.activeConns.Add(-1) // Decrement active connections
 
 	switch conn := entry.conn.(type) {
 	case *http.Transport:
@@ -825,6 +834,10 @@ func (p *ConnPool) closeEntry(entry *ConnPoolEntry) {
 	}
 }
 
+func (p *ConnPool) GetStats() (total, active, max int64) {
+	return p.connCount.Load(), p.activeConns.Load(), p.maxConns.Load()
+}
+
 func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
 	if p.closed.Load() {
 		return nil, errors.New("pool closed")
@@ -837,6 +850,7 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 		if !entry.closed.Load() && entry.healthy.Load() {
 			entry.lastUsed.Store(time.Now())
 			entry.useCount.Add(1)
+			p.activeConns.Add(1) // Increment active connections
 			return &http.Client{
 				Transport: entry.conn.(*http.Transport),
 				Timeout:   QueryTimeout,
@@ -844,6 +858,7 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 		}
 		p.http2Conns.Delete(key)
 		p.closeEntry(entry)
+		p.activeConns.Add(-1) // Decrement active connections for closed entry
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -878,6 +893,15 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 
 	p.http2Conns.Store(key, entry)
 	p.connCount.Add(1)
+	p.activeConns.Add(1)
+
+	// Update max connections if needed
+	current := p.connCount.Load()
+	for current > p.maxConns.Load() {
+		if p.maxConns.CompareAndSwap(current-1, current) {
+			break
+		}
+	}
 
 	return &http.Client{
 		Transport: transport,
@@ -2617,6 +2641,10 @@ func (st *SpeedTestManager) Close() error {
 	return nil
 }
 
+func (st *SpeedTestManager) GetCacheStats() (hits, misses int64) {
+	return st.cacheHits.Load(), st.cacheMisses.Load()
+}
+
 func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg, tracker *RequestTracker) *dns.Msg {
 	if response == nil {
 		return response
@@ -2702,7 +2730,10 @@ func (st *SpeedTestManager) sortAAAARecords(records []*dns.AAAA, tracker *Reques
 func (st *SpeedTestManager) speedTest(ips []string, tracker *RequestTracker) map[string]*SpeedResult {
 	results := make(map[string]*SpeedResult)
 	remainingIPs := []string{}
-	cachedCount := 0
+
+	// Reset atomic counters for this test session
+	st.cacheHits.Store(0)
+	st.cacheMisses.Store(0)
 
 	if st.redis != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -2716,7 +2747,7 @@ func (st *SpeedTestManager) speedTest(ips []string, tracker *RequestTracker) map
 				if json.Unmarshal([]byte(data), &result) == nil {
 					if time.Since(result.Timestamp) < st.cacheTTL {
 						results[ip] = &result
-						cachedCount++
+						st.cacheHits.Add(1)
 						if tracker != nil {
 							tracker.AddStep("SPEEDTEST: Cache hit for %s (latency: %v)", ip, result.Latency)
 						} else {
@@ -2732,6 +2763,10 @@ func (st *SpeedTestManager) speedTest(ips []string, tracker *RequestTracker) map
 		remainingIPs = ips
 	}
 
+	// Count misses
+	st.cacheMisses.Add(int64(len(remainingIPs)))
+
+	cachedCount := int(st.cacheHits.Load())
 	if cachedCount > 0 || len(remainingIPs) > 0 {
 		if tracker != nil {
 			tracker.AddStep("SPEEDTEST: Cache status - %d hits, %d misses (need testing)", cachedCount, len(remainingIPs))
@@ -4107,15 +4142,16 @@ func (tm *TLSManager) shutdown() error {
 // =============================================================================
 
 func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
+	steps := make([]string, 0, 32)
 	rt := &RequestTracker{
 		ID:        fmt.Sprintf("%x", time.Now().UnixNano()&0xFFFFFF),
 		StartTime: time.Now(),
 		Domain:    domain,
 		QueryType: qtype,
 		ClientIP:  clientIP,
-		Steps:     make([]string, 0, 32),
 	}
-	rt.Upstream.Store("") // Initialize with empty string
+	rt.steps.Store(&steps) // Initialize steps slice pointer
+	rt.Upstream.Store("")  // Initialize with empty string
 	return rt
 }
 
@@ -4131,11 +4167,32 @@ func (rt *RequestTracker) AddStep(step string, args ...any) {
 	timestamp := time.Since(rt.StartTime)
 	stepMsg := fmt.Sprintf("[%v] %s", timestamp.Truncate(time.Microsecond), fmt.Sprintf(step, args...))
 
-	rt.stepMutex.Lock()
-	rt.Steps = append(rt.Steps, stepMsg)
-	rt.stepMutex.Unlock()
+	// Atomic append using Compare-and-Swap loop with pointer to slice
+	for {
+		oldStepsPtr := rt.steps.Load().(*[]string)
+		oldSteps := *oldStepsPtr
+		newSteps := make([]string, len(oldSteps)+1)
+		copy(newSteps, oldSteps)
+		newSteps[len(oldSteps)] = stepMsg
+
+		if rt.steps.CompareAndSwap(oldStepsPtr, &newSteps) {
+			break
+		}
+		// If CAS failed, retry with the updated oldSteps
+	}
 
 	LogDebug("[%s] %s", rt.ID, stepMsg)
+}
+
+func (rt *RequestTracker) GetSteps() []string {
+	if rt == nil {
+		return nil
+	}
+	stepsPtr := rt.steps.Load().(*[]string)
+	steps := *stepsPtr
+	result := make([]string, len(steps))
+	copy(result, steps)
+	return result
 }
 
 func (rt *RequestTracker) Finish() {
@@ -4151,8 +4208,10 @@ func (rt *RequestTracker) Finish() {
 		}
 
 		// 构建完整的查询链路摘要
-		LogInfo("QUERY [%s] COMPLETE: %s %s | Client:%s | Time:%v | Upstream:%s | Steps:%d",
-			rt.ID, rt.Domain, rt.QueryType, rt.ClientIP, rt.ResponseTime.Truncate(time.Microsecond), upstream, len(rt.Steps))
+		stepsPtr := rt.steps.Load().(*[]string)
+		steps := *stepsPtr
+		LogDebug("QUERY [%s] COMPLETE: %s %s | Client:%s | Time:%v | Upstream:%s | Steps:%d",
+			rt.ID, rt.Domain, rt.QueryType, rt.ClientIP, rt.ResponseTime.Truncate(time.Microsecond), upstream, len(steps))
 	}
 }
 
@@ -4375,6 +4434,10 @@ func (s *DNSServer) shutdownServer() {
 	os.Exit(0)
 }
 
+func (s *DNSServer) GetQueryStats() (served, hits, misses, errors uint64) {
+	return s.queriesServed.Load(), s.cacheHits.Load(), s.cacheMisses.Load(), s.errorsCount.Load()
+}
+
 func (s *DNSServer) Start() error {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return errors.New("server is closed")
@@ -4575,7 +4638,11 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 }
 
 func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+	// Increment query counter
+	s.queriesServed.Add(1)
+
 	if atomic.LoadInt32(&s.closed) != 0 {
+		s.errorsCount.Add(1)
 		msg := s.buildResponse(req)
 		if msg != nil {
 			msg.Rcode = dns.RcodeServerFailure
@@ -4584,6 +4651,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	}
 
 	if req == nil || len(req.Question) == 0 {
+		s.errorsCount.Add(1)
 		msg := &dns.Msg{}
 		if req != nil && len(req.Question) > 0 {
 			msg.SetReply(req)
@@ -4708,6 +4776,8 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 }
 
 func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cacheKey string, isSecureConnection bool, tracker *RequestTracker) *dns.Msg {
+	// Increment cache hit counter
+	s.cacheHits.Add(1)
 	responseTTL := entry.GetRemainingTTL()
 
 	msg := s.buildResponse(req)
@@ -4746,6 +4816,9 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 }
 
 func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool, tracker *RequestTracker) *dns.Msg {
+	// Increment cache miss counter
+	s.cacheMisses.Add(1)
+
 	answer, authority, additional, validated, ecsResponse, usedServer, err := s.queryMgr.Query(question, ecsOpt, tracker)
 
 	if tracker != nil {
@@ -4802,6 +4875,9 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 }
 
 func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *ECSOption, isSecureConnection bool, tracker *RequestTracker) *dns.Msg {
+	// Increment error counter
+	s.errorsCount.Add(1)
+
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
 		if tracker != nil {
 			tracker.AddStep("QUERY: Using stale cache due to query failure")
