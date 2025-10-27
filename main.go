@@ -2640,11 +2640,27 @@ func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg) *dns.Msg 
 		}
 	}
 
+	// Log speed test start
+	totalIPs := len(aRecords) + len(aaaaRecords)
+	if totalIPs > 1 {
+		LogDebug("SPEEDTEST: Starting speed test for %d A records and %d AAAA records", len(aRecords), len(aaaaRecords))
+	}
+
 	if len(aRecords) > 1 {
 		aRecords = st.sortARecords(aRecords)
+		// Log sorted A records
+		LogDebug("SPEEDTEST: A records sorted by speed:")
+		for i, record := range aRecords {
+			LogDebug("SPEEDTEST:   [%d] %s", i+1, record.A.String())
+		}
 	}
 	if len(aaaaRecords) > 1 {
 		aaaaRecords = st.sortAAAARecords(aaaaRecords)
+		// Log sorted AAAA records
+		LogDebug("SPEEDTEST: AAAA records sorted by speed:")
+		for i, record := range aaaaRecords {
+			LogDebug("SPEEDTEST:   [%d] %s", i+1, record.AAAA.String())
+		}
 	}
 
 	response.Answer = append(append(append(cnameRecords, ToRRSlice(aRecords)...), ToRRSlice(aaaaRecords)...), otherRecords...)
@@ -2692,6 +2708,7 @@ func (st *SpeedTestManager) sortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
 func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	results := make(map[string]*SpeedResult)
 	remainingIPs := []string{}
+	cachedCount := 0
 
 	if st.redis != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -2705,6 +2722,8 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 				if json.Unmarshal([]byte(data), &result) == nil {
 					if time.Since(result.Timestamp) < st.cacheTTL {
 						results[ip] = &result
+						cachedCount++
+						LogDebug("SPEEDTEST: Cache hit for %s (latency: %v)", ip, result.Latency)
 						continue
 					}
 				}
@@ -2713,6 +2732,10 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 		}
 	} else {
 		remainingIPs = ips
+	}
+
+	if cachedCount > 0 || len(remainingIPs) > 0 {
+		LogDebug("SPEEDTEST: Cache status - %d hits, %d misses (need testing)", cachedCount, len(remainingIPs))
 	}
 
 	if len(remainingIPs) == 0 {
@@ -2799,12 +2822,16 @@ func (st *SpeedTestManager) testSingleIP(ip string) *SpeedResult {
 		if latency >= 0 {
 			result.Reachable = true
 			result.Latency = latency
+			LogDebug("SPEEDTEST: %s reachable via %s (latency: %v)", ip, method.Type, latency)
 			return result
+		} else {
+			LogDebug("SPEEDTEST: %s unreachable via %s", ip, method.Type)
 		}
 	}
 
 	result.Reachable = false
 	result.Latency = UnreachableLatency
+	LogDebug("SPEEDTEST: %s unreachable via all methods", ip)
 	return result
 }
 
