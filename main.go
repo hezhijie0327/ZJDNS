@@ -2693,6 +2693,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	results := make(map[string]*SpeedResult)
 	remainingIPs := []string{}
 
+	// Fast path: only use cached results, don't block for missing cache
 	if st.redis != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
@@ -2709,32 +2710,30 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 					}
 				}
 			}
+			// For IPs without valid cache, use default latency and mark for background testing
+			results[ip] = &SpeedResult{
+				Latency:   UnreachableLatency,
+				Reachable: true,
+				Timestamp: time.Now(),
+			}
 			remainingIPs = append(remainingIPs, ip)
 		}
 	} else {
-		remainingIPs = ips
-	}
-
-	if len(remainingIPs) == 0 {
-		return results
-	}
-
-	newResults := st.performSpeedTest(remainingIPs)
-
-	if st.redis != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		defer cancel()
-
-		for ip, result := range newResults {
-			key := st.keyPrefix + ip
-			data, err := json.Marshal(result)
-			if err == nil {
-				st.redis.Set(ctx, key, data, st.cacheTTL)
+		// No Redis cache - use default latency for all IPs and trigger background testing
+		for _, ip := range ips {
+			results[ip] = &SpeedResult{
+				Latency:   UnreachableLatency,
+				Reachable: true,
+				Timestamp: time.Now(),
 			}
+			remainingIPs = append(remainingIPs, ip)
 		}
 	}
 
-	maps.Copy(results, newResults)
+	// Background path: async speed testing for IPs without fresh cache
+	if len(remainingIPs) > 0 {
+		go st.performSpeedTestInBackground(remainingIPs)
+	}
 
 	return results
 }
@@ -2778,6 +2777,32 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 	}
 
 	return results
+}
+
+// performSpeedTestInBackground performs speed testing asynchronously without blocking the main query
+func (st *SpeedTestManager) performSpeedTestInBackground(ips []string) {
+	defer HandlePanic("Background speed testing")
+
+	if len(ips) == 0 {
+		return
+	}
+
+	// Perform actual speed testing
+	newResults := st.performSpeedTest(ips)
+
+	// Update cache with new results
+	if st.redis != nil && len(newResults) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		for ip, result := range newResults {
+			key := st.keyPrefix + ip
+			data, err := json.Marshal(result)
+			if err == nil {
+				st.redis.Set(ctx, key, data, st.cacheTTL)
+			}
+		}
+	}
 }
 
 func (st *SpeedTestManager) testSingleIP(ip string) *SpeedResult {
@@ -2834,7 +2859,7 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	if err != nil {
 		return -1
 	}
-	defer conn.Close() // Ensure connection is closed after use
+	defer func() { _ = conn.Close() }() // Ensure connection is closed after use
 
 	wm := icmp.Message{
 		Type: icmpType,
