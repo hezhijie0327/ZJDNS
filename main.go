@@ -415,8 +415,6 @@ type SpeedTestManager struct {
 	redis     *redis.Client
 	cacheTTL  time.Duration
 	keyPrefix string
-	icmpConn4 *icmp.PacketConn
-	icmpConn6 *icmp.PacketConn
 	methods   []SpeedTestMethod
 	closed    int32
 }
@@ -2607,27 +2605,7 @@ func NewSpeedTestManager(config ServerConfig, redisClient *redis.Client, keyPref
 		keyPrefix: keyPrefix,
 		methods:   config.Speedtest,
 	}
-	st.initICMP()
-
 	return st
-}
-
-func (st *SpeedTestManager) initICMP() {
-	// Initialize ICMPv4 connection
-	if conn4, err := icmp.ListenPacket("ip4:icmp", ""); err == nil {
-		st.icmpConn4 = conn4
-		LogDebug("SPEEDTEST: ICMPv4 connection initialized")
-	} else {
-		LogWarn("SPEEDTEST: Failed to initialize ICMPv4 connection: %v", err)
-	}
-
-	// Initialize ICMPv6 connection
-	if conn6, err := icmp.ListenPacket("ip6:ipv6-icmp", ""); err == nil {
-		st.icmpConn6 = conn6
-		LogDebug("SPEEDTEST: ICMPv6 connection initialized")
-	} else {
-		LogWarn("SPEEDTEST: Failed to initialize ICMPv6 connection: %v", err)
-	}
 }
 
 func (st *SpeedTestManager) Close() error {
@@ -2635,12 +2613,7 @@ func (st *SpeedTestManager) Close() error {
 		return nil
 	}
 
-	if st.icmpConn4 != nil {
-		_ = st.icmpConn4.Close()
-	}
-	if st.icmpConn6 != nil {
-		_ = st.icmpConn6.Close()
-	}
+	// No longer need to close ICMP connections as they are created on-demand
 	return nil
 }
 
@@ -2888,17 +2861,18 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 		icmpType = ipv4.ICMPTypeEcho
 	}
 
-	// Get appropriate ICMP connection
+	// Create ICMP connection on-demand
 	var conn *icmp.PacketConn
 	if isIPv6 {
-		conn = st.icmpConn6
+		conn, err = icmp.ListenPacket("ip6:ipv6-icmp", "")
 	} else {
-		conn = st.icmpConn4
+		conn, err = icmp.ListenPacket("ip4:icmp", "")
 	}
 
-	if conn == nil {
+	if err != nil {
 		return -1
 	}
+	defer conn.Close() // Ensure connection is closed after use
 
 	wm := icmp.Message{
 		Type: icmpType,
