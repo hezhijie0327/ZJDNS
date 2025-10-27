@@ -2885,14 +2885,18 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 		return -1
 	}
 
-	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return -1
+	}
 	start := time.Now()
 
 	if _, err := conn.WriteTo(wb, dst); err != nil {
 		return -1
 	}
 
-	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return -1
+	}
 	rb := make([]byte, 1500)
 	n, _, err := conn.ReadFrom(rb)
 	if err != nil {
