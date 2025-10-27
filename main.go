@@ -106,6 +106,7 @@ const (
 	// Timeouts
 	QueryTimeout           = 3 * time.Second
 	RecursiveTimeout       = 5 * time.Second
+	SpeedTestTimeout       = 3 * time.Second
 	ConnTimeout            = 2 * time.Second
 	TLSHandshakeTimeout    = 2 * time.Second
 	PublicIPTimeout        = 2 * time.Second
@@ -417,6 +418,10 @@ type SpeedTestManager struct {
 	keyPrefix string
 	methods   []SpeedTestMethod
 	closed    int32
+	// Background worker pool for controlled concurrency
+	bgWorkerPool *errgroup.Group
+	bgWorkerCtx  context.Context
+	bgCancel     context.CancelCauseFunc
 }
 
 type RootServerManager struct {
@@ -2598,12 +2603,20 @@ func NewSpeedTestManager(config ServerConfig, redisClient *redis.Client, keyPref
 		keyPrefix = config.Redis.KeyPrefix + RedisPrefixSpeedtest
 	}
 
+	// Create background worker pool with controlled concurrency
+	ctx, cancel := context.WithCancelCause(context.Background())
+	bgPool, bgCtx := errgroup.WithContext(ctx)
+	bgPool.SetLimit(SpeedTestConcurrency)
+
 	st := &SpeedTestManager{
-		timeout:   DefaultSpeedTimeout,
-		redis:     redisClient,
-		cacheTTL:  DefaultSpeedTTL,
-		keyPrefix: keyPrefix,
-		methods:   config.Speedtest,
+		timeout:      DefaultSpeedTimeout,
+		redis:        redisClient,
+		cacheTTL:     DefaultSpeedTTL,
+		keyPrefix:    keyPrefix,
+		methods:      config.Speedtest,
+		bgWorkerPool: bgPool,
+		bgWorkerCtx:  bgCtx,
+		bgCancel:     cancel,
 	}
 	return st
 }
@@ -2613,7 +2626,28 @@ func (st *SpeedTestManager) Close() error {
 		return nil
 	}
 
-	// No longer need to close ICMP connections as they are created on-demand
+	// Cancel background worker pool
+	if st.bgCancel != nil {
+		st.bgCancel(errors.New("speed test manager closed"))
+	}
+
+	// Wait for background workers to finish with timeout
+	if st.bgWorkerPool != nil {
+		done := make(chan struct{})
+		go func() {
+			defer HandlePanic("SpeedTest background worker wait")
+			st.bgWorkerPool.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			LogDebug("SPEEDTEST: All background workers stopped gracefully")
+		case <-time.After(SpeedTestTimeout):
+			LogWarn("SPEEDTEST: Background workers did not stop within timeout")
+		}
+	}
+
 	return nil
 }
 
@@ -2693,48 +2727,35 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	results := make(map[string]*SpeedResult)
 	remainingIPs := []string{}
 
-	if st.redis != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		defer cancel()
+	// Fast path: only use cached results, don't block for missing cache
+	ctx, cancel := context.WithTimeout(context.Background(), RedisReadTimeout/2)
+	defer cancel()
 
-		for _, ip := range ips {
-			key := st.keyPrefix + ip
-			data, err := st.redis.Get(ctx, key).Result()
-			if err == nil {
-				var result SpeedResult
-				if json.Unmarshal([]byte(data), &result) == nil {
-					if time.Since(result.Timestamp) < st.cacheTTL {
-						results[ip] = &result
-						continue
-					}
+	for _, ip := range ips {
+		key := st.keyPrefix + ip
+		data, err := st.redis.Get(ctx, key).Result()
+		if err == nil {
+			var result SpeedResult
+			if json.Unmarshal([]byte(data), &result) == nil {
+				if time.Since(result.Timestamp) < st.cacheTTL {
+					results[ip] = &result
+					continue
 				}
 			}
-			remainingIPs = append(remainingIPs, ip)
 		}
-	} else {
-		remainingIPs = ips
-	}
-
-	if len(remainingIPs) == 0 {
-		return results
-	}
-
-	newResults := st.performSpeedTest(remainingIPs)
-
-	if st.redis != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		defer cancel()
-
-		for ip, result := range newResults {
-			key := st.keyPrefix + ip
-			data, err := json.Marshal(result)
-			if err == nil {
-				st.redis.Set(ctx, key, data, st.cacheTTL)
-			}
+		// For IPs without valid cache, use default latency and mark for background testing
+		results[ip] = &SpeedResult{
+			Latency:   UnreachableLatency,
+			Reachable: true,
+			Timestamp: time.Now(),
 		}
+		remainingIPs = append(remainingIPs, ip)
 	}
 
-	maps.Copy(results, newResults)
+	// Background path: async speed testing for IPs without fresh cache using controlled worker pool
+	if len(remainingIPs) > 0 {
+		st.submitBackgroundSpeedTest(remainingIPs)
+	}
 
 	return results
 }
@@ -2778,6 +2799,49 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 	}
 
 	return results
+}
+
+// submitBackgroundSpeedTest submits speed testing work to the controlled background pool
+func (st *SpeedTestManager) submitBackgroundSpeedTest(ips []string) {
+	if atomic.LoadInt32(&st.closed) != 0 || st.bgWorkerPool == nil {
+		return
+	}
+
+	// Make a copy of the IPs to avoid race conditions
+	ipsCopy := make([]string, len(ips))
+	copy(ipsCopy, ips)
+
+	st.bgWorkerPool.Go(func() error {
+		defer HandlePanic("Background speed test worker")
+		st.executeSpeedTestInBackground(ipsCopy)
+		return nil
+	})
+}
+
+// executeSpeedTestInBackground performs the actual speed testing work
+func (st *SpeedTestManager) executeSpeedTestInBackground(ips []string) {
+	defer HandlePanic("Background speed testing")
+
+	if len(ips) == 0 {
+		return
+	}
+
+	// Perform actual speed testing
+	newResults := st.performSpeedTest(ips)
+
+	// Update cache with new results
+	if len(newResults) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
+		defer cancel()
+
+		for ip, result := range newResults {
+			key := st.keyPrefix + ip
+			data, err := json.Marshal(result)
+			if err == nil {
+				st.redis.Set(ctx, key, data, st.cacheTTL)
+			}
+		}
+	}
 }
 
 func (st *SpeedTestManager) testSingleIP(ip string) *SpeedResult {
@@ -2834,7 +2898,7 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	if err != nil {
 		return -1
 	}
-	defer conn.Close() // Ensure connection is closed after use
+	defer func() { _ = conn.Close() }() // Ensure connection is closed after use
 
 	wm := icmp.Message{
 		Type: icmpType,
@@ -3007,7 +3071,7 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 	}
 	rsm.sortResult.Store(&initialResult)
 
-	if needsRecursive {
+	if needsRecursive && redisClient != nil {
 		dnsSpeedTestConfig := config
 		dnsSpeedTestConfig.Speedtest = []SpeedTestMethod{
 			{Type: "icmp", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
@@ -4151,7 +4215,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	}
 	server.queryMgr = queryManager
 
-	if len(config.Speedtest) > 0 {
+	if len(config.Speedtest) > 0 && redisClient != nil {
 		domainSpeedPrefix := config.Redis.KeyPrefix + RedisPrefixSpeedtest
 		server.speedTestMgr = NewSpeedTestManager(*config, redisClient, domainSpeedPrefix)
 	}
@@ -4636,7 +4700,7 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 		return err
 	}
 
-	if len(s.config.Speedtest) > 0 &&
+	if len(s.config.Speedtest) > 0 && s.redisClient != nil &&
 		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
 		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
 		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedtest
