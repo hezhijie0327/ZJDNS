@@ -387,6 +387,8 @@ type RequestTracker struct {
 	ClientIP     string
 	Upstream     atomic.Value // string
 	ResponseTime time.Duration
+	Steps        []string
+	stepMutex    sync.Mutex
 }
 
 // Speed Test Types
@@ -1945,8 +1947,6 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 }
 
 // =============================================================================
-
-// =============================================================================
 // CIDRManager Implementation
 // =============================================================================
 
@@ -2617,7 +2617,7 @@ func (st *SpeedTestManager) Close() error {
 	return nil
 }
 
-func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg) *dns.Msg {
+func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg, tracker *RequestTracker) *dns.Msg {
 	if response == nil {
 		return response
 	}
@@ -2643,31 +2643,25 @@ func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg) *dns.Msg 
 	// Log speed test start
 	totalIPs := len(aRecords) + len(aaaaRecords)
 	if totalIPs > 1 {
-		LogDebug("SPEEDTEST: Starting speed test for %d A records and %d AAAA records", len(aRecords), len(aaaaRecords))
+		if tracker != nil {
+			tracker.AddStep("SPEEDTEST: Starting speed test for %d A records and %d AAAA records", len(aRecords), len(aaaaRecords))
+		} else {
+			LogDebug("SPEEDTEST: Starting speed test for %d A records and %d AAAA records", len(aRecords), len(aaaaRecords))
+		}
 	}
 
 	if len(aRecords) > 1 {
-		aRecords = st.sortARecords(aRecords)
-		// Log sorted A records
-		LogDebug("SPEEDTEST: A records sorted by speed:")
-		for i, record := range aRecords {
-			LogDebug("SPEEDTEST:   [%d] %s", i+1, record.A.String())
-		}
+		aRecords = st.sortARecords(aRecords, tracker)
 	}
 	if len(aaaaRecords) > 1 {
-		aaaaRecords = st.sortAAAARecords(aaaaRecords)
-		// Log sorted AAAA records
-		LogDebug("SPEEDTEST: AAAA records sorted by speed:")
-		for i, record := range aaaaRecords {
-			LogDebug("SPEEDTEST:   [%d] %s", i+1, record.AAAA.String())
-		}
+		aaaaRecords = st.sortAAAARecords(aaaaRecords, tracker)
 	}
 
 	response.Answer = append(append(append(cnameRecords, ToRRSlice(aRecords)...), ToRRSlice(aaaaRecords)...), otherRecords...)
 	return response
 }
 
-func (st *SpeedTestManager) sortARecords(records []*dns.A) []*dns.A {
+func (st *SpeedTestManager) sortARecords(records []*dns.A, tracker *RequestTracker) []*dns.A {
 	if len(records) <= 1 {
 		return records
 	}
@@ -2677,16 +2671,16 @@ func (st *SpeedTestManager) sortARecords(records []*dns.A) []*dns.A {
 		ips[i] = record.A.String()
 	}
 
-	results := st.speedTest(ips)
+	results := st.speedTest(ips, tracker)
 
 	sortBySpeedResult(records, func(record *dns.A) string {
 		return record.A.String()
-	}, results)
+	}, results, tracker, "A")
 
 	return records
 }
 
-func (st *SpeedTestManager) sortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
+func (st *SpeedTestManager) sortAAAARecords(records []*dns.AAAA, tracker *RequestTracker) []*dns.AAAA {
 	if len(records) <= 1 {
 		return records
 	}
@@ -2696,16 +2690,16 @@ func (st *SpeedTestManager) sortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
 		ips[i] = record.AAAA.String()
 	}
 
-	results := st.speedTest(ips)
+	results := st.speedTest(ips, tracker)
 
 	sortBySpeedResult(records, func(record *dns.AAAA) string {
 		return record.AAAA.String()
-	}, results)
+	}, results, tracker, "AAAA")
 
 	return records
 }
 
-func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
+func (st *SpeedTestManager) speedTest(ips []string, tracker *RequestTracker) map[string]*SpeedResult {
 	results := make(map[string]*SpeedResult)
 	remainingIPs := []string{}
 	cachedCount := 0
@@ -2723,7 +2717,11 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 					if time.Since(result.Timestamp) < st.cacheTTL {
 						results[ip] = &result
 						cachedCount++
-						LogDebug("SPEEDTEST: Cache hit for %s (latency: %v)", ip, result.Latency)
+						if tracker != nil {
+							tracker.AddStep("SPEEDTEST: Cache hit for %s (latency: %v)", ip, result.Latency)
+						} else {
+							LogDebug("SPEEDTEST: Cache hit for %s (latency: %v)", ip, result.Latency)
+						}
 						continue
 					}
 				}
@@ -2735,14 +2733,18 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	}
 
 	if cachedCount > 0 || len(remainingIPs) > 0 {
-		LogDebug("SPEEDTEST: Cache status - %d hits, %d misses (need testing)", cachedCount, len(remainingIPs))
+		if tracker != nil {
+			tracker.AddStep("SPEEDTEST: Cache status - %d hits, %d misses (need testing)", cachedCount, len(remainingIPs))
+		} else {
+			LogDebug("SPEEDTEST: Cache status - %d hits, %d misses (need testing)", cachedCount, len(remainingIPs))
+		}
 	}
 
 	if len(remainingIPs) == 0 {
 		return results
 	}
 
-	newResults := st.performSpeedTest(remainingIPs)
+	newResults := st.performSpeedTest(remainingIPs, tracker)
 
 	if st.redis != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -2762,7 +2764,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	return results
 }
 
-func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResult {
+func (st *SpeedTestManager) performSpeedTest(ips []string, tracker *RequestTracker) map[string]*SpeedResult {
 	resultChan := make(chan *SpeedResult, len(ips))
 
 	g, ctx := errgroup.WithContext(context.Background())
@@ -2779,7 +2781,11 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 				select {
 				case resultChan <- result:
 				case <-timer.C:
-					LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
+					if tracker != nil {
+						tracker.AddStep("SPEEDTEST: Drop result for %s due to timeout", testIP)
+					} else {
+						LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
+					}
 				case <-ctx.Done():
 					return ctx.Err()
 				}
@@ -2946,7 +2952,7 @@ func (st *SpeedTestManager) pingWithUDP(ip, port string, timeout time.Duration) 
 
 // sortBySpeedResult is a generic method that sorts records by speed test results
 // It works for any type that can be mapped to an IP string
-func sortBySpeedResult[T any](records []T, getIP func(T) string, results map[string]*SpeedResult) {
+func sortBySpeedResult[T any](records []T, getIP func(T) string, results map[string]*SpeedResult, tracker *RequestTracker, recordType string) {
 	slices.SortFunc(records, func(a, b T) int {
 		ipA, ipB := getIP(a), getIP(b)
 		resultA, okA := results[ipA]
@@ -2959,14 +2965,26 @@ func sortBySpeedResult[T any](records []T, getIP func(T) string, results map[str
 
 		if resultA.Reachable != resultB.Reachable {
 			if resultA.Reachable {
+				if tracker != nil {
+					tracker.AddStep("SPEEDTEST: %s record %s reachable, placed before %s", recordType, ipA, ipB)
+				}
 				return -1 // A comes first
+			}
+			if tracker != nil {
+				tracker.AddStep("SPEEDTEST: %s record %s unreachable, placed after %s", recordType, ipA, ipB)
 			}
 			return 1 // B comes first
 		}
 
 		if resultA.Latency != resultB.Latency {
 			if resultA.Latency < resultB.Latency {
+				if tracker != nil {
+					tracker.AddStep("SPEEDTEST: %s record %s (latency: %v) faster than %s (latency: %v)", recordType, ipA, resultA.Latency, ipB, resultB.Latency)
+				}
 				return -1 // A comes first
+			}
+			if tracker != nil {
+				tracker.AddStep("SPEEDTEST: %s record %s (latency: %v) slower than %s (latency: %v)", recordType, ipA, resultA.Latency, ipB, resultB.Latency)
 			}
 			return 1 // B comes first
 		}
@@ -3045,7 +3063,7 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 		rsm.speedTester = NewSpeedTestManager(dnsSpeedTestConfig, redisClient, rootServerPrefix)
 		rsm.speedTester.cacheTTL = DefaultSpeedTTL
 
-		go rsm.sortServersBySpeed()
+		go rsm.sortServersBySpeed(nil)
 		LogInfo("SPEEDTEST: Root server speed testing enabled")
 	}
 
@@ -3075,7 +3093,7 @@ func (rsm *RootServerManager) GetLastSortTime() time.Time {
 	return time.Time{} // Return zero time as fallback
 }
 
-func (rsm *RootServerManager) sortServersBySpeed() {
+func (rsm *RootServerManager) sortServersBySpeed(tracker *RequestTracker) {
 	defer HandlePanic("Root server speed sorting")
 
 	if !rsm.needsSpeed.Load() || rsm.speedTester == nil {
@@ -3088,8 +3106,14 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 	}
 	servers := *serversPtr
 
+	if tracker != nil {
+		tracker.AddStep("ROOTSERVER: Starting root server speed sorting for %d servers", len(servers))
+	} else {
+		LogDebug("ROOTSERVER: Starting root server speed sorting for %d servers", len(servers))
+	}
+
 	ips := ExtractIPsFromServers(servers)
-	results := rsm.speedTester.speedTest(ips)
+	results := rsm.speedTester.speedTest(ips, tracker)
 
 	// Sort servers using the same logic as A/AAAA records
 	sortedServers := make([]string, len(servers))
@@ -3098,7 +3122,7 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 	sortBySpeedResult(sortedServers, func(server string) string {
 		host, _, _ := net.SplitHostPort(server)
 		return host
-	}, results)
+	}, results, tracker, "ROOTSERVER")
 
 	// Convert to RootServerWithLatency for storage and API compatibility
 	sortedWithLatency := make([]RootServerWithLatency, len(sortedServers))
@@ -3110,11 +3134,17 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 				Latency:   result.Latency,
 				Reachable: true,
 			}
+			if tracker != nil {
+				tracker.AddStep("ROOTSERVER: Server %s reachable (latency: %v)", server, result.Latency)
+			}
 		} else {
 			sortedWithLatency[i] = RootServerWithLatency{
 				Server:    server,
 				Latency:   UnreachableLatency,
 				Reachable: false,
+			}
+			if tracker != nil {
+				tracker.AddStep("ROOTSERVER: Server %s unreachable", server)
 			}
 		}
 	}
@@ -3127,6 +3157,12 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 	}
 	rsm.sortResult.Store(&sortResult)
 	rsm.lastUpdate.Store(time.Now())
+
+	if tracker != nil {
+		tracker.AddStep("ROOTSERVER: Root server sorting completed")
+	} else {
+		LogDebug("ROOTSERVER: Root server sorting completed")
+	}
 }
 
 func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
@@ -3140,7 +3176,7 @@ func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			rsm.sortServersBySpeed()
+			rsm.sortServersBySpeed(nil)
 		case <-ctx.Done():
 			return
 		}
@@ -3184,7 +3220,7 @@ func (hp *HijackPrevention) IsEnabled() bool {
 	return hp.enabled.Load()
 }
 
-func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string) {
+func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, response *dns.Msg, tracker *RequestTracker) (bool, string) {
 	if !hp.enabled.Load() || response == nil {
 		return true, ""
 	}
@@ -3204,7 +3240,7 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 			continue
 		}
 
-		if valid, reason := hp.validateAnswer(currentDomain, queryDomain, rrType); !valid {
+		if valid, reason := hp.validateAnswer(currentDomain, queryDomain, rrType, tracker); !valid {
 			return false, reason
 		}
 	}
@@ -3212,38 +3248,52 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 	return true, ""
 }
 
-func (hp *HijackPrevention) validateAnswer(authorityDomain, queryDomain string, rrType uint16) (bool, string) {
+func (hp *HijackPrevention) validateAnswer(authorityDomain, queryDomain string, rrType uint16, tracker *RequestTracker) (bool, string) {
 	if !hp.isInAuthority(queryDomain, authorityDomain) {
-		return false, fmt.Sprintf("Server '%s' returned out-of-authority %s record for '%s'",
+		reason := fmt.Sprintf("Server '%s' returned out-of-authority %s record for '%s'",
 			authorityDomain, dns.TypeToString[rrType], queryDomain)
+		if tracker != nil {
+			tracker.AddStep("HIJACK: %s", reason)
+		} else {
+			LogDebug("HIJACK: %s", reason)
+		}
+		return false, reason
 	}
 
 	if authorityDomain == "" {
-		return hp.validateRootServer(queryDomain, rrType)
+		return hp.validateRootServer(queryDomain, rrType, tracker)
 	}
 
 	if hp.isTLD(authorityDomain) {
-		return hp.validateTLDServer(authorityDomain, queryDomain, rrType)
+		return hp.validateTLDServer(authorityDomain, queryDomain, rrType, tracker)
 	}
 
 	return true, ""
 }
 
-func (hp *HijackPrevention) validateRootServer(queryDomain string, rrType uint16) (bool, string) {
+func (hp *HijackPrevention) validateRootServer(queryDomain string, rrType uint16, tracker *RequestTracker) (bool, string) {
 	if hp.isRootServerGlue(queryDomain, rrType) {
 		return true, ""
 	}
 	if queryDomain != "" {
-		return false, fmt.Sprintf("Root server returned unauthorized %s record for '%s'",
+		reason := fmt.Sprintf("Root server returned unauthorized %s record for '%s'",
 			dns.TypeToString[rrType], queryDomain)
+		if tracker != nil {
+			tracker.AddStep("HIJACK: %s", reason)
+		}
+		return false, reason
 	}
 	return true, ""
 }
 
-func (hp *HijackPrevention) validateTLDServer(tldDomain, queryDomain string, rrType uint16) (bool, string) {
+func (hp *HijackPrevention) validateTLDServer(tldDomain, queryDomain string, rrType uint16, tracker *RequestTracker) (bool, string) {
 	if queryDomain != tldDomain {
-		return false, fmt.Sprintf("TLD '%s' returned %s record in Answer for subdomain '%s'",
+		reason := fmt.Sprintf("TLD '%s' returned %s record in Answer for subdomain '%s'",
 			tldDomain, dns.TypeToString[rrType], queryDomain)
+		if tracker != nil {
+			tracker.AddStep("HIJACK: %s", reason)
+		}
+		return false, reason
 	}
 	return true, ""
 }
@@ -4063,18 +4113,28 @@ func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
 		Domain:    domain,
 		QueryType: qtype,
 		ClientIP:  clientIP,
+		Steps:     make([]string, 0, 32),
 	}
 	rt.Upstream.Store("") // Initialize with empty string
 	return rt
 }
 
 func (rt *RequestTracker) AddStep(step string, args ...any) {
-	if rt == nil || globalLog.GetLevel() < Debug {
+	if rt == nil {
+		return
+	}
+
+	if globalLog.GetLevel() < Debug {
 		return
 	}
 
 	timestamp := time.Since(rt.StartTime)
 	stepMsg := fmt.Sprintf("[%v] %s", timestamp.Truncate(time.Microsecond), fmt.Sprintf(step, args...))
+
+	rt.stepMutex.Lock()
+	rt.Steps = append(rt.Steps, stepMsg)
+	rt.stepMutex.Unlock()
+
 	LogDebug("[%s] %s", rt.ID, stepMsg)
 }
 
@@ -4083,13 +4143,16 @@ func (rt *RequestTracker) Finish() {
 		return
 	}
 	rt.ResponseTime = time.Since(rt.StartTime)
+
 	if globalLog.GetLevel() >= Info {
 		upstream, _ := rt.Upstream.Load().(string)
 		if upstream == "" {
 			upstream = RecursiveIndicator
 		}
-		LogDebug("FINISH [%s]: Query completed: %s %s | Time:%v | Upstream:%s",
-			rt.ID, rt.Domain, rt.QueryType, rt.ResponseTime.Truncate(time.Microsecond), upstream)
+
+		// 构建完整的查询链路摘要
+		LogInfo("QUERY [%s] COMPLETE: %s %s | Client:%s | Time:%v | Upstream:%s | Steps:%d",
+			rt.ID, rt.Domain, rt.QueryType, rt.ClientIP, rt.ResponseTime.Truncate(time.Microsecond), upstream, len(rt.Steps))
 	}
 }
 
@@ -4549,17 +4612,28 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		tracker = NewRequestTracker(question.Name, dns.TypeToString[question.Qtype], clientIPStr)
 		if tracker != nil {
 			defer tracker.Finish()
+			tracker.AddStep("QUERY: Start query processing")
 		}
 	}
 
+	// === STEP 1: Rewrite Check ===
 	if s.rewriteMgr.hasRules() {
 		rewriteResult := s.rewriteMgr.RewriteWithDetails(question.Name, question.Qtype)
 
 		if rewriteResult.ShouldRewrite {
+			if tracker != nil {
+				tracker.AddStep("REWRITE: Domain matched rewrite rule")
+			} else {
+				LogDebug("REWRITE: Domain %s matched rewrite rule", question.Name)
+			}
+
 			if rewriteResult.ResponseCode != dns.RcodeSuccess {
 				response := s.buildResponse(req)
 				response.Rcode = rewriteResult.ResponseCode
 				s.addEDNS(response, req, isSecureConnection)
+				if tracker != nil {
+					tracker.AddStep("REWRITE: Returned response code %d", rewriteResult.ResponseCode)
+				}
 				return response
 			}
 
@@ -4571,6 +4645,9 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 					response.Extra = rewriteResult.Additional
 				}
 				s.addEDNS(response, req, isSecureConnection)
+				if tracker != nil {
+					tracker.AddStep("REWRITE: Returned %d records from rewrite rule", len(rewriteResult.Records))
+				}
 				return response
 			}
 
@@ -4580,28 +4657,57 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		}
 	}
 
+	// === STEP 2: EDNS/DNSSEC Processing ===
 	clientRequestedDNSSEC := false
 	var ecsOpt *ECSOption
 
 	if opt := req.IsEdns0(); opt != nil {
 		clientRequestedDNSSEC = opt.Do()
 		ecsOpt = s.ednsMgr.ParseFromDNS(req)
+		if tracker != nil {
+			if clientRequestedDNSSEC {
+				tracker.AddStep("EDNS: DNSSEC requested")
+			}
+			if ecsOpt != nil {
+				tracker.AddStep("EDNS: ECS subnet provided: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
+			}
+		}
 	}
 
 	if ecsOpt == nil {
 		ecsOpt = s.ednsMgr.GetDefaultECS()
+		if ecsOpt != nil && tracker != nil {
+			tracker.AddStep("EDNS: Using default ECS: %s/%d", ecsOpt.Address, ecsOpt.SourcePrefix)
+		}
 	}
 
+	// === STEP 3: Cache Check ===
 	cacheKey := BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC, s.config.Redis.KeyPrefix)
 
 	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
-		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cacheKey, isSecureConnection)
+		if tracker != nil {
+			if isExpired {
+				tracker.AddStep("CACHE: Hit (but expired, will refresh asynchronously)")
+			} else {
+				tracker.AddStep("CACHE: Hit (valid)")
+			}
+		} else {
+			LogDebug("CACHE: Hit for %s %s", question.Name, dns.TypeToString[question.Qtype])
+		}
+		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cacheKey, isSecureConnection, tracker)
 	}
 
+	if tracker != nil {
+		tracker.AddStep("CACHE: Miss")
+	} else {
+		LogDebug("CACHE: Miss for %s %s", question.Name, dns.TypeToString[question.Qtype])
+	}
+
+	// === STEP 4: Upstream/Recursive Query ===
 	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection, tracker)
 }
 
-func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cacheKey string, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cacheKey string, isSecureConnection bool, tracker *RequestTracker) *dns.Msg {
 	responseTTL := entry.GetRemainingTTL()
 
 	msg := s.buildResponse(req)
@@ -4623,11 +4729,14 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	s.addEDNS(msg, req, isSecureConnection)
 
 	if isExpired && entry.ShouldRefresh() {
+		if tracker != nil {
+			tracker.AddStep("CACHE: Scheduling async refresh for expired entry")
+		}
 		s.cacheRefreshGroup.Go(func() error {
 			defer HandlePanic("cache refresh")
 			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, QueryTimeout)
 			defer cancel()
-			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
+			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry, tracker)
 		})
 	}
 
@@ -4637,29 +4746,39 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 }
 
 func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool, tracker *RequestTracker) *dns.Msg {
-	answer, authority, additional, validated, ecsResponse, usedServer, err := s.queryMgr.Query(question, ecsOpt)
+	answer, authority, additional, validated, ecsResponse, usedServer, err := s.queryMgr.Query(question, ecsOpt, tracker)
 
 	if tracker != nil {
 		tracker.Upstream.Store(usedServer)
 	}
 
 	if err != nil {
-		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, isSecureConnection)
+		if tracker != nil {
+			tracker.AddStep("QUERY: Failed - %v", err)
+		}
+		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, isSecureConnection, tracker)
 	}
 
-	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection)
+	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection, tracker)
 }
 
-func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *ECSOption, cacheKey string, _ *CacheEntry) error {
+func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *ECSOption, cacheKey string, _ *CacheEntry, tracker *RequestTracker) error {
 	defer HandlePanic("cache refresh")
 
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return errors.New("server closed")
 	}
 
-	answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecs)
+	if tracker != nil {
+		tracker.AddStep("CACHE_REFRESH: Starting refresh")
+	}
+
+	answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecs, tracker)
 
 	if err != nil {
+		if tracker != nil {
+			tracker.AddStep("CACHE_REFRESH: Failed - %v", err)
+		}
 		return err
 	}
 
@@ -4668,18 +4787,25 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
 		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedtest
 		speedTester := NewSpeedTestManager(*s.config, s.redisClient, domainSpeedPrefix)
-		speedTester.performSpeedTestAndSort(tempMsg)
+		speedTester.performSpeedTestAndSort(tempMsg, tracker)
 		_ = speedTester.Close()
 		answer, authority, additional = tempMsg.Answer, tempMsg.Ns, tempMsg.Extra
 	}
 
 	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
 
+	if tracker != nil {
+		tracker.AddStep("CACHE_REFRESH: Completed and cached")
+	}
+
 	return nil
 }
 
-func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *ECSOption, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *ECSOption, isSecureConnection bool, tracker *RequestTracker) *dns.Msg {
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
+		if tracker != nil {
+			tracker.AddStep("QUERY: Using stale cache due to query failure")
+		}
 		msg := s.buildResponse(req)
 		if msg == nil {
 			msg = &dns.Msg{}
@@ -4702,6 +4828,9 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 		return msg
 	}
 
+	if tracker != nil {
+		tracker.AddStep("QUERY: No cache available, returning server failure")
+	}
 	msg := s.buildResponse(req)
 	if msg == nil {
 		msg = &dns.Msg{}
@@ -4711,7 +4840,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 	return msg
 }
 
-func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, isSecureConnection bool, tracker *RequestTracker) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
 		msg = &dns.Msg{}
@@ -4733,6 +4862,25 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	}
 
 	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
+
+	if tracker != nil {
+		tracker.AddStep("CACHE: Result cached")
+	}
+
+	// === STEP 5: Speed Test (if applicable) ===
+	if len(s.config.Speedtest) > 0 &&
+		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) &&
+		(len(answer) > 1) {
+		if tracker != nil {
+			tracker.AddStep("SPEEDTEST: Sorting %d records by latency", len(answer))
+		}
+		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
+		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedtest
+		speedTester := NewSpeedTestManager(*s.config, s.redisClient, domainSpeedPrefix)
+		speedTester.performSpeedTestAndSort(tempMsg, tracker)
+		_ = speedTester.Close()
+		answer, authority, additional = tempMsg.Answer, tempMsg.Ns, tempMsg.Extra
+	}
 
 	msg.Answer = ProcessRecords(answer, 0, clientRequestedDNSSEC)
 	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
@@ -4846,15 +4994,22 @@ func (qm *QueryManager) Initialize(servers []UpstreamServer) error {
 	return nil
 }
 
-func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
+func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	servers := qm.upstream.getServers()
 	if len(servers) > 0 {
-		return qm.queryUpstream(question, ecs)
+		if tracker != nil {
+			tracker.AddStep("QUERY: Using upstream mode with %d servers", len(servers))
+		}
+		return qm.queryUpstream(question, ecs, tracker)
+	}
+
+	if tracker != nil {
+		tracker.AddStep("QUERY: Using recursive resolution mode")
 	}
 	ctx, cancel := context.WithTimeout(qm.server.ctx, RecursiveTimeout)
 	defer cancel()
 
-	answer, authority, additional, validated, ecsResponse, server, err := qm.cname.resolveWithCNAME(ctx, question, ecs)
+	answer, authority, additional, validated, ecsResponse, server, err := qm.cname.resolveWithCNAME(ctx, question, ecs, tracker)
 	return answer, authority, additional, validated, ecsResponse, server, err
 }
 
@@ -4881,7 +5036,7 @@ func (uh *UpstreamHandler) getServers() []*UpstreamServer {
 	return *serversPtr
 }
 
-func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
+func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	servers := qm.upstream.getServers()
 	if len(servers) == 0 {
 		return nil, nil, nil, false, nil, "", errors.New("no upstream servers")
@@ -4895,6 +5050,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	g, queryCtx := errgroup.WithContext(ctx)
 	g.SetLimit(DNSQueryConcurrency)
 
+	successfulServers := 0
 	for _, srv := range servers {
 		server := srv
 
@@ -4906,19 +5062,30 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 			default:
 			}
 
+			if tracker != nil {
+				tracker.AddStep("UPSTREAM: Querying %s (%s)", server.Address, server.Protocol)
+			}
+
 			if server.IsRecursive() {
 				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, RecursiveTimeout)
 				defer recursiveCancel()
 
-				answer, authority, additional, validated, ecsResponse, usedServer, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs)
+				answer, authority, additional, validated, ecsResponse, usedServer, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs, tracker)
 
 				if err == nil && len(answer) > 0 {
 					if len(server.Match) > 0 {
-						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, server.Match)
+						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, server.Match, tracker)
 						if shouldRefuse {
+							if tracker != nil {
+								tracker.AddStep("UPSTREAM: Recursive query filtered out by CIDR")
+							}
 							return nil
 						}
 						answer = filteredAnswer
+					}
+
+					if tracker != nil {
+						tracker.AddStep("UPSTREAM: Recursive query succeeded with %d answers", len(answer))
 					}
 
 					select {
@@ -4944,9 +5111,16 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 					rcode := queryResult.Response.Rcode
 
 					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+						if tracker != nil {
+							tracker.AddStep("UPSTREAM: Got response from %s in %v (%s)", server.Address, queryResult.Duration, queryResult.Protocol)
+						}
+
 						if len(server.Match) > 0 {
-							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
+							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match, tracker)
 							if shouldRefuse {
+								if tracker != nil {
+									tracker.AddStep("UPSTREAM: Response filtered out by CIDR")
+								}
 								return nil
 							}
 							queryResult.Response.Answer = filteredAnswer
@@ -4960,6 +5134,10 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
 						}
 
+						if tracker != nil {
+							tracker.AddStep("UPSTREAM: Got %d answers from %s", len(queryResult.Response.Answer), serverDesc)
+						}
+
 						select {
 						case resultChan <- UpstreamQueryResult{
 							answer:     queryResult.Response.Answer,
@@ -4969,12 +5147,17 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							ecs:        ecsResponse,
 							server:     serverDesc,
 						}:
+							successfulServers++
 							cancel()
 							return nil
 						case <-queryCtx.Done():
 							return nil
 						}
+					} else if tracker != nil {
+						tracker.AddStep("UPSTREAM: Got rcode %d from %s", rcode, server.Address)
 					}
+				} else if tracker != nil && queryResult.Error != nil {
+					tracker.AddStep("UPSTREAM: Query failed for %s - %v", server.Address, queryResult.Error)
 				}
 			}
 			return nil
@@ -4991,13 +5174,19 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 		if ok {
 			return res.answer, res.authority, res.additional, res.validated, res.ecs, res.server, nil
 		}
+		if tracker != nil {
+			tracker.AddStep("UPSTREAM: All upstream queries failed")
+		}
 		return nil, nil, nil, false, nil, "", errors.New("all upstream queries failed")
 	case <-ctx.Done():
+		if tracker != nil {
+			tracker.AddStep("UPSTREAM: Query timeout")
+		}
 		return nil, nil, nil, false, nil, "", ctx.Err()
 	}
 }
 
-func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]dns.RR, bool) {
+func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string, tracker *RequestTracker) ([]dns.RR, bool) {
 	if qm.server.cidrMgr == nil || len(matchTags) == 0 {
 		return records, false
 	}
@@ -5025,6 +5214,9 @@ func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string
 			}
 			if matched {
 				accepted = true
+				if tracker != nil {
+					tracker.AddStep("CIDR: IP %s matched CIDR rule %s", ip.String(), matchTag)
+				}
 				break
 			}
 		}
@@ -5033,6 +5225,9 @@ func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string
 			filtered = append(filtered, rr)
 		} else {
 			refusedCount++
+			if tracker != nil {
+				tracker.AddStep("CIDR: IP %s filtered out by CIDR rules", ip.String())
+			}
 		}
 	}
 
@@ -5047,7 +5242,7 @@ func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string
 // CNAMEHandler Implementation
 // =============================================================================
 
-func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
+func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	var allAnswers []dns.RR
 	var finalAuthority, finalAdditional []dns.RR
 	var finalECSResponse *ECSOption
@@ -5056,22 +5251,37 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 
 	currentQuestion := question
 	visitedCNAMEs := make(map[string]bool)
+	cnameCount := 0
 
 	for range MaxCNAMEChain {
 		select {
 		case <-ctx.Done():
+			if tracker != nil {
+				tracker.AddStep("CNAME: Resolution interrupted")
+			}
 			return nil, nil, nil, false, nil, "", ctx.Err()
 		default:
 		}
 
 		currentName := NormalizeDomain(currentQuestion.Name)
 		if visitedCNAMEs[currentName] {
+			if tracker != nil {
+				tracker.AddStep("CNAME: Loop detected at %s", currentName)
+			}
 			return nil, nil, nil, false, nil, "", fmt.Errorf("CNAME loop detected: %s", currentName)
 		}
 		visitedCNAMEs[currentName] = true
 
-		answer, authority, additional, validated, ecsResponse, server, err := ch.server.queryMgr.recursive.recursiveQuery(ctx, currentQuestion, ecs, 0, false)
+		if tracker != nil && cnameCount > 0 {
+			tracker.AddStep("CNAME: Following CNAME to %s", currentQuestion.Name)
+		}
+		cnameCount++
+
+		answer, authority, additional, validated, ecsResponse, server, err := ch.server.queryMgr.recursive.recursiveQuery(ctx, currentQuestion, ecs, 0, false, tracker)
 		if err != nil {
+			if tracker != nil {
+				tracker.AddStep("CNAME: Recursive query failed - %v", err)
+			}
 			return nil, nil, nil, false, nil, "", err
 		}
 
@@ -5105,6 +5315,9 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 		}
 
 		if hasTargetType || currentQuestion.Qtype == dns.TypeCNAME || nextCNAME == nil {
+			if tracker != nil && cnameCount > 1 {
+				tracker.AddStep("CNAME: Resolution completed after %d hops", cnameCount-1)
+			}
 			break
 		}
 
@@ -5122,8 +5335,11 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 // RecursiveResolver Implementation
 // =============================================================================
 
-func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
+func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	if depth > MaxRecursionDep {
+		if tracker != nil {
+			tracker.AddStep("RECURSIVE: Max recursion depth %d exceeded", depth)
+		}
 		return nil, nil, nil, false, nil, "", fmt.Errorf("recursion depth exceeded: %d", depth)
 	}
 
@@ -5133,43 +5349,74 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 	currentDomain := "."
 	normalizedQname := NormalizeDomain(qname)
 
+	if tracker != nil && depth == 0 {
+		tracker.AddStep("RECURSIVE: Starting recursive resolution for %s (type %s)", qname, dns.TypeToString[question.Qtype])
+	}
+
 	if normalizedQname == "" {
-		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
+		if tracker != nil {
+			tracker.AddStep("RECURSIVE: Querying root domain")
+		}
+		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
 		if err != nil {
+			if tracker != nil {
+				tracker.AddStep("RECURSIVE: Root query failed - %v", err)
+			}
 			return nil, nil, nil, false, nil, "", fmt.Errorf("root domain query: %w", err)
 		}
 
 		if rr.server.securityMgr.hijack.IsEnabled() {
-			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				return rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth)
+			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response, tracker); !valid {
+				return rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth, tracker)
 			}
 		}
 
 		validated := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
+		if tracker != nil {
+			tracker.AddStep("RECURSIVE: Got root response with %d answers", len(response.Answer))
+		}
 		return response.Answer, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
 	}
 
+	iterationCount := 0
 	for {
 		select {
 		case <-ctx.Done():
+			if tracker != nil {
+				tracker.AddStep("RECURSIVE: Resolution interrupted at depth %d", depth)
+			}
 			return nil, nil, nil, false, nil, "", ctx.Err()
 		default:
 		}
 
-		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
+		iterationCount++
+		if tracker != nil && depth < 2 {
+			tracker.AddStep("RECURSIVE: Iteration %d - Querying %s for %s", iterationCount, currentDomain, normalizedQname)
+		}
+
+		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, tracker)
 		if err != nil {
 			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
-				return rr.recursiveQuery(ctx, question, ecs, depth, true)
+				if tracker != nil {
+					tracker.AddStep("RECURSIVE: Hijack detected, retrying with TCP")
+				}
+				return rr.recursiveQuery(ctx, question, ecs, depth, true, tracker)
+			}
+			if tracker != nil {
+				tracker.AddStep("RECURSIVE: Query failed at %s - %v", currentDomain, err)
 			}
 			return nil, nil, nil, false, nil, "", fmt.Errorf("query %s: %w", currentDomain, err)
 		}
 
 		if rr.server.securityMgr.hijack.IsEnabled() {
-			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				answer, authority, additional, validated, ecsResponse, server, err := rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth)
+			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response, tracker); !valid {
+				answer, authority, additional, validated, ecsResponse, server, err := rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth, tracker)
 				if err != nil && !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
-					return rr.recursiveQuery(ctx, question, ecs, depth, true)
+					if tracker != nil {
+						tracker.AddStep("RECURSIVE: Hijack detected, retrying with TCP")
+					}
+					return rr.recursiveQuery(ctx, question, ecs, depth, true, tracker)
 				}
 				return answer, authority, additional, validated, ecsResponse, server, err
 			}
@@ -5179,6 +5426,9 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
 
 		if len(response.Answer) > 0 {
+			if tracker != nil && depth < 2 {
+				tracker.AddStep("RECURSIVE: Got answer with %d records from %s", len(response.Answer), currentDomain)
+			}
 			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
@@ -5205,11 +5455,17 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		if len(bestNSRecords) == 0 {
+			if tracker != nil && depth < 2 {
+				tracker.AddStep("RECURSIVE: No NS records found at %s", currentDomain)
+			}
 			return nil, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
 		currentDomainNormalized := NormalizeDomain(currentDomain)
 		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
+			if tracker != nil && depth < 2 {
+				tracker.AddStep("RECURSIVE: NS records not advancing, stopping at %s", currentDomain)
+			}
 			return nil, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
@@ -5232,10 +5488,16 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		if len(nextNS) == 0 {
-			nextNS = rr.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
+			if tracker != nil && depth < 2 {
+				tracker.AddStep("RECURSIVE: Resolving NS addresses for %d nameservers at depth %d", len(bestNSRecords), depth+1)
+			}
+			nextNS = rr.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP, tracker)
 		}
 
 		if len(nextNS) == 0 {
+			if tracker != nil && depth < 2 {
+				tracker.AddStep("RECURSIVE: Could not resolve next nameservers")
+			}
 			return nil, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
@@ -5243,14 +5505,20 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 	}
 }
 
-func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
+func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *ECSOption, _ int, tracker *RequestTracker) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	if !currentlyTCP {
+		if tracker != nil {
+			tracker.AddStep("HIJACK: DNS hijacking detected - %s", reason)
+		}
 		return nil, nil, nil, false, nil, "", fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
+	}
+	if tracker != nil {
+		tracker.AddStep("HIJACK: DNS hijacking suspected even with TCP - %s", reason)
 	}
 	return nil, nil, nil, false, nil, "", fmt.Errorf("DNS hijacking detected (TCP): %s", reason)
 }
 
-func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption, forceTCP bool) (*dns.Msg, error) {
+func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption, forceTCP bool, tracker *RequestTracker) (*dns.Msg, error) {
 	if len(nameservers) == 0 {
 		return nil, errors.New("no nameservers")
 	}
@@ -5290,6 +5558,9 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 					result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
+					if tracker != nil {
+						tracker.AddStep("RECURSIVE: Got response from %s in %v", nsAddr, result.Duration)
+					}
 					select {
 					case resultChan <- result:
 						// Cancel all other queries when we get first success
@@ -5314,13 +5585,19 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		if ok && result != nil {
 			return result.Response, nil
 		}
+		if tracker != nil {
+			tracker.AddStep("RECURSIVE: All nameservers failed")
+		}
 		return nil, errors.New("no successful response")
 	case <-ctx.Done():
+		if tracker != nil {
+			tracker.AddStep("RECURSIVE: Query timeout")
+		}
 		return nil, ctx.Err()
 	}
 }
 
-func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int, forceTCP bool) []string {
+func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int, forceTCP bool, tracker *RequestTracker) []string {
 	if len(nsRecords) == 0 {
 		return nil
 	}
@@ -5369,7 +5646,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				}
 
 				var ipv4Addresses []string
-				if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
+				if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestion, nil, depth+1, forceTCP, tracker); err == nil {
 					for _, rrec := range nsAnswer {
 						if a, ok := rrec.(*dns.A); ok {
 							ipv4Addresses = append(ipv4Addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
@@ -5397,7 +5674,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				}
 
 				var ipv6Addresses []string
-				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
+				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestionV6, nil, depth+1, forceTCP, tracker); err == nil {
 					for _, rrec := range nsAnswerV6 {
 						if aaaa, ok := rrec.(*dns.AAAA); ok {
 							ipv6Addresses = append(ipv6Addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
