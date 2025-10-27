@@ -2636,7 +2636,7 @@ func (st *SpeedTestManager) Close() error {
 		done := make(chan struct{})
 		go func() {
 			defer HandlePanic("SpeedTest background worker wait")
-			st.bgWorkerPool.Wait()
+			_ = st.bgWorkerPool.Wait()
 			close(done)
 		}()
 
@@ -4659,6 +4659,16 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 
 	s.addEDNS(msg, req, isSecureConnection)
 
+	// Trigger background speedtest for cache hits
+	if len(s.config.Speedtest) > 0 && s.redisClient != nil &&
+		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
+		s.cacheRefreshGroup.Go(func() error {
+			defer HandlePanic("cache hit speedtest")
+			s.performBackgroundSpeedTest(question, ecsOpt)
+			return nil
+		})
+	}
+
 	if isExpired && entry.ShouldRefresh() {
 		s.cacheRefreshGroup.Go(func() error {
 			defer HandlePanic("cache refresh")
@@ -4685,6 +4695,48 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 	}
 
 	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection)
+}
+
+// performBackgroundSpeedTest performs background speed testing for cached domains
+func (s *DNSServer) performBackgroundSpeedTest(question dns.Question, ecsOpt *ECSOption) {
+	defer HandlePanic("background speedtest")
+
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return
+	}
+
+	answer, authority, additional, _, _, _, err := s.queryMgr.Query(question, ecsOpt)
+	if err != nil {
+		return
+	}
+
+	// Perform speedtest if we have A/AAAA records
+	if len(s.config.Speedtest) > 0 && s.redisClient != nil &&
+		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
+		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
+		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedtest
+		speedTester := NewSpeedTestManager(*s.config, s.redisClient, domainSpeedPrefix)
+		speedTester.performSpeedTestAndSort(tempMsg)
+		_ = speedTester.Close()
+	}
+}
+
+// performBackgroundSpeedTestForRecords performs background speed testing for existing records
+func (s *DNSServer) performBackgroundSpeedTestForRecords(answer, authority, additional []dns.RR) {
+	defer HandlePanic("background speedtest for records")
+
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return
+	}
+
+	// Perform speedtest if we have A/AAAA records
+	if len(s.config.Speedtest) > 0 && s.redisClient != nil {
+		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
+		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedtest
+		speedTester := NewSpeedTestManager(*s.config, s.redisClient, domainSpeedPrefix)
+		speedTester.performSpeedTestAndSort(tempMsg)
+		_ = speedTester.Close()
+	}
 }
 
 func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *ECSOption, cacheKey string, _ *CacheEntry) error {
@@ -4770,6 +4822,16 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	}
 
 	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
+
+	// Trigger background speedtest for cache miss results
+	if len(s.config.Speedtest) > 0 && s.redisClient != nil &&
+		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
+		s.cacheRefreshGroup.Go(func() error {
+			defer HandlePanic("cache miss speedtest")
+			s.performBackgroundSpeedTestForRecords(answer, authority, additional)
+			return nil
+		})
+	}
 
 	msg.Answer = ProcessRecords(answer, 0, clientRequestedDNSSEC)
 	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
