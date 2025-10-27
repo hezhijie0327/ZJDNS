@@ -2609,30 +2609,11 @@ func NewSpeedTestManager(config ServerConfig, redisClient *redis.Client, keyPref
 	}
 	st.initICMP()
 
-	// Start periodic ICMP health check (if ICMP methods are enabled)
-	if len(config.Speedtest) > 0 {
-		go st.icmpHealthCheckLoop()
-	}
-
 	return st
 }
 
 func (st *SpeedTestManager) initICMP() {
-	st.reinitICMP()
-}
-
-func (st *SpeedTestManager) reinitICMP() {
-	// Close existing connections
-	if st.icmpConn4 != nil {
-		_ = st.icmpConn4.Close()
-		st.icmpConn4 = nil
-	}
-	if st.icmpConn6 != nil {
-		_ = st.icmpConn6.Close()
-		st.icmpConn6 = nil
-	}
-
-	// Initialize new connections with proper error handling
+	// Initialize ICMPv4 connection
 	if conn4, err := icmp.ListenPacket("ip4:icmp", ""); err == nil {
 		st.icmpConn4 = conn4
 		LogDebug("SPEEDTEST: ICMPv4 connection initialized")
@@ -2640,72 +2621,12 @@ func (st *SpeedTestManager) reinitICMP() {
 		LogWarn("SPEEDTEST: Failed to initialize ICMPv4 connection: %v", err)
 	}
 
+	// Initialize ICMPv6 connection
 	if conn6, err := icmp.ListenPacket("ip6:ipv6-icmp", ""); err == nil {
 		st.icmpConn6 = conn6
 		LogDebug("SPEEDTEST: ICMPv6 connection initialized")
 	} else {
 		LogWarn("SPEEDTEST: Failed to initialize ICMPv6 connection: %v", err)
-	}
-}
-
-func (st *SpeedTestManager) getICMPConn(isIPv6 bool) *icmp.PacketConn {
-	var conn *icmp.PacketConn
-	if isIPv6 {
-		conn = st.icmpConn6
-	} else {
-		conn = st.icmpConn4
-	}
-
-	// Check if connection is still valid by attempting to set a deadline
-	if conn != nil {
-		if err := conn.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
-			LogWarn("SPEEDTEST: ICMP connection appears dead, reinitializing: %v", err)
-			go st.reinitICMP() // Reinitialize in background
-			return nil
-		}
-		// Reset the deadline to remove the temporary one
-		_ = conn.SetReadDeadline(time.Time{})
-	}
-
-	return conn
-}
-
-func (st *SpeedTestManager) icmpHealthCheckLoop() {
-	defer HandlePanic("ICMP health check")
-
-	ticker := time.NewTicker(UnreachableLatency)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			if atomic.LoadInt32(&st.closed) != 0 {
-				return
-			}
-
-			// Check both ICMP connections
-			if st.icmpConn4 != nil {
-				if err := st.icmpConn4.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
-					LogWarn("SPEEDTEST: ICMPv4 health check failed, reinitializing: %v", err)
-					go st.reinitICMP()
-					continue
-				}
-				_ = st.icmpConn4.SetReadDeadline(time.Time{})
-			}
-
-			if st.icmpConn6 != nil {
-				if err := st.icmpConn6.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
-					LogWarn("SPEEDTEST: ICMPv6 health check failed, reinitializing: %v", err)
-					go st.reinitICMP()
-					continue
-				}
-				_ = st.icmpConn6.SetReadDeadline(time.Time{})
-			}
-
-		case <-time.After(time.Minute): // Safety timeout
-			// If we haven't checked in a minute, exit to avoid goroutine leak
-			return
-		}
 	}
 }
 
@@ -2967,8 +2888,14 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 		icmpType = ipv4.ICMPTypeEcho
 	}
 
-	// Get connection with health checking
-	conn := st.getICMPConn(isIPv6)
+	// Get appropriate ICMP connection
+	var conn *icmp.PacketConn
+	if isIPv6 {
+		conn = st.icmpConn6
+	} else {
+		conn = st.icmpConn4
+	}
+
 	if conn == nil {
 		return -1
 	}
@@ -2988,11 +2915,6 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	start := time.Now()
 
 	if _, err := conn.WriteTo(wb, dst); err != nil {
-		// If write fails, the connection might be dead
-		if !IsTemporaryError(err) {
-			LogWarn("SPEEDTEST: ICMP write failed permanently, triggering reinit: %v", err)
-			go st.reinitICMP()
-		}
 		return -1
 	}
 
@@ -3000,11 +2922,6 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	rb := make([]byte, 1500)
 	n, _, err := conn.ReadFrom(rb)
 	if err != nil {
-		// If read fails due to timeout or connection error, trigger reinit for permanent errors
-		if !IsTemporaryError(err) {
-			LogWarn("SPEEDTEST: ICMP read failed permanently, triggering reinit: %v", err)
-			go st.reinitICMP()
-		}
 		return -1
 	}
 
