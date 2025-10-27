@@ -137,14 +137,15 @@ const (
 	RootServerRefresh  = 900 * time.Second
 
 	// Redis Configuration
-	RedisPoolSize        = 3
-	RedisMinIdle         = 1
-	RedisMaxRetries      = 2
-	RedisPoolTimeout     = 2 * time.Second
-	RedisReadTimeout     = 2 * time.Second
-	RedisWriteTimeout    = 2 * time.Second
-	RedisDialTimeout     = 2 * time.Second
-	RedisPoolIdleTimeout = 5 * time.Second
+	RedisPoolSize         = 3
+	RedisMinIdle          = 1
+	RedisMaxRetries       = 2
+	RedisPoolTimeout      = 2 * time.Second
+	RedisReadTimeout      = 2 * time.Second
+	RedisWriteTimeout     = 2 * time.Second
+	RedisDialTimeout      = 2 * time.Second
+	RedisPoolIdleTimeout  = 5 * time.Second
+	RedisReadShortTimeout = 500 * time.Millisecond
 
 	// Redis Key Prefixes
 	RedisPrefixDNS           = "dns:"
@@ -2695,7 +2696,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 
 	// Fast path: only use cached results, don't block for missing cache
 	if st.redis != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), RedisReadShortTimeout)
 		defer cancel()
 
 		for _, ip := range ips {
