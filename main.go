@@ -2902,7 +2902,7 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	if err != nil {
 		return -1
 	}
-	defer conn.Close() // Ensure connection is closed after use
+	defer func() { _ = conn.Close() }() // Ensure connection is closed after use
 
 	wm := icmp.Message{
 		Type: icmpType,
