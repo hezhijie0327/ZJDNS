@@ -2695,40 +2695,28 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 	remainingIPs := []string{}
 
 	// Fast path: only use cached results, don't block for missing cache
-	if st.redis != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), RedisReadShortTimeout)
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), RedisReadShortTimeout)
+	defer cancel()
 
-		for _, ip := range ips {
-			key := st.keyPrefix + ip
-			data, err := st.redis.Get(ctx, key).Result()
-			if err == nil {
-				var result SpeedResult
-				if json.Unmarshal([]byte(data), &result) == nil {
-					if time.Since(result.Timestamp) < st.cacheTTL {
-						results[ip] = &result
-						continue
-					}
+	for _, ip := range ips {
+		key := st.keyPrefix + ip
+		data, err := st.redis.Get(ctx, key).Result()
+		if err == nil {
+			var result SpeedResult
+			if json.Unmarshal([]byte(data), &result) == nil {
+				if time.Since(result.Timestamp) < st.cacheTTL {
+					results[ip] = &result
+					continue
 				}
 			}
-			// For IPs without valid cache, use default latency and mark for background testing
-			results[ip] = &SpeedResult{
-				Latency:   UnreachableLatency,
-				Reachable: true,
-				Timestamp: time.Now(),
-			}
-			remainingIPs = append(remainingIPs, ip)
 		}
-	} else {
-		// No Redis cache - use default latency for all IPs and trigger background testing
-		for _, ip := range ips {
-			results[ip] = &SpeedResult{
-				Latency:   UnreachableLatency,
-				Reachable: true,
-				Timestamp: time.Now(),
-			}
-			remainingIPs = append(remainingIPs, ip)
+		// For IPs without valid cache, use default latency and mark for background testing
+		results[ip] = &SpeedResult{
+			Latency:   UnreachableLatency,
+			Reachable: true,
+			Timestamp: time.Now(),
 		}
+		remainingIPs = append(remainingIPs, ip)
 	}
 
 	// Background path: async speed testing for IPs without fresh cache
@@ -2792,8 +2780,8 @@ func (st *SpeedTestManager) performSpeedTestInBackground(ips []string) {
 	newResults := st.performSpeedTest(ips)
 
 	// Update cache with new results
-	if st.redis != nil && len(newResults) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	if len(newResults) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
 		defer cancel()
 
 		for ip, result := range newResults {
@@ -3033,7 +3021,7 @@ func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootS
 	}
 	rsm.sortResult.Store(&initialResult)
 
-	if needsRecursive {
+	if needsRecursive && redisClient != nil {
 		dnsSpeedTestConfig := config
 		dnsSpeedTestConfig.Speedtest = []SpeedTestMethod{
 			{Type: "icmp", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
@@ -4177,7 +4165,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	}
 	server.queryMgr = queryManager
 
-	if len(config.Speedtest) > 0 {
+	if len(config.Speedtest) > 0 && redisClient != nil {
 		domainSpeedPrefix := config.Redis.KeyPrefix + RedisPrefixSpeedtest
 		server.speedTestMgr = NewSpeedTestManager(*config, redisClient, domainSpeedPrefix)
 	}
@@ -4662,7 +4650,7 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 		return err
 	}
 
-	if len(s.config.Speedtest) > 0 &&
+	if len(s.config.Speedtest) > 0 && s.redisClient != nil &&
 		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
 		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
 		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedtest
