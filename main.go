@@ -106,6 +106,7 @@ const (
 	// Timeouts
 	QueryTimeout           = 3 * time.Second
 	RecursiveTimeout       = 5 * time.Second
+	SpeedTestTimeout       = 3 * time.Second
 	ConnTimeout            = 2 * time.Second
 	TLSHandshakeTimeout    = 2 * time.Second
 	PublicIPTimeout        = 2 * time.Second
@@ -418,6 +419,10 @@ type SpeedTestManager struct {
 	keyPrefix string
 	methods   []SpeedTestMethod
 	closed    int32
+	// Background worker pool for controlled concurrency
+	bgWorkerPool *errgroup.Group
+	bgWorkerCtx  context.Context
+	bgCancel     context.CancelCauseFunc
 }
 
 type RootServerManager struct {
@@ -2599,12 +2604,20 @@ func NewSpeedTestManager(config ServerConfig, redisClient *redis.Client, keyPref
 		keyPrefix = config.Redis.KeyPrefix + RedisPrefixSpeedtest
 	}
 
+	// Create background worker pool with controlled concurrency
+	ctx, cancel := context.WithCancelCause(context.Background())
+	bgPool, bgCtx := errgroup.WithContext(ctx)
+	bgPool.SetLimit(SpeedTestConcurrency)
+
 	st := &SpeedTestManager{
-		timeout:   DefaultSpeedTimeout,
-		redis:     redisClient,
-		cacheTTL:  DefaultSpeedTTL,
-		keyPrefix: keyPrefix,
-		methods:   config.Speedtest,
+		timeout:      DefaultSpeedTimeout,
+		redis:        redisClient,
+		cacheTTL:     DefaultSpeedTTL,
+		keyPrefix:    keyPrefix,
+		methods:      config.Speedtest,
+		bgWorkerPool: bgPool,
+		bgWorkerCtx:  bgCtx,
+		bgCancel:     cancel,
 	}
 	return st
 }
@@ -2614,7 +2627,28 @@ func (st *SpeedTestManager) Close() error {
 		return nil
 	}
 
-	// No longer need to close ICMP connections as they are created on-demand
+	// Cancel background worker pool
+	if st.bgCancel != nil {
+		st.bgCancel(errors.New("speed test manager closed"))
+	}
+
+	// Wait for background workers to finish with timeout
+	if st.bgWorkerPool != nil {
+		done := make(chan struct{})
+		go func() {
+			defer HandlePanic("SpeedTest background worker wait")
+			st.bgWorkerPool.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			LogDebug("SPEEDTEST: All background workers stopped gracefully")
+		case <-time.After(SpeedTestTimeout):
+			LogWarn("SPEEDTEST: Background workers did not stop within timeout")
+		}
+	}
+
 	return nil
 }
 
@@ -2719,9 +2753,9 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 		remainingIPs = append(remainingIPs, ip)
 	}
 
-	// Background path: async speed testing for IPs without fresh cache
+	// Background path: async speed testing for IPs without fresh cache using controlled worker pool
 	if len(remainingIPs) > 0 {
-		go st.performSpeedTestInBackground(remainingIPs)
+		st.submitBackgroundSpeedTest(remainingIPs)
 	}
 
 	return results
@@ -2768,8 +2802,25 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 	return results
 }
 
-// performSpeedTestInBackground performs speed testing asynchronously without blocking the main query
-func (st *SpeedTestManager) performSpeedTestInBackground(ips []string) {
+// submitBackgroundSpeedTest submits speed testing work to the controlled background pool
+func (st *SpeedTestManager) submitBackgroundSpeedTest(ips []string) {
+	if atomic.LoadInt32(&st.closed) != 0 || st.bgWorkerPool == nil {
+		return
+	}
+
+	// Make a copy of the IPs to avoid race conditions
+	ipsCopy := make([]string, len(ips))
+	copy(ipsCopy, ips)
+
+	st.bgWorkerPool.Go(func() error {
+		defer HandlePanic("Background speed test worker")
+		st.executeSpeedTestInBackground(ipsCopy)
+		return nil
+	})
+}
+
+// executeSpeedTestInBackground performs the actual speed testing work
+func (st *SpeedTestManager) executeSpeedTestInBackground(ips []string) {
 	defer HandlePanic("Background speed testing")
 
 	if len(ips) == 0 {
