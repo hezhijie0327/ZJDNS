@@ -3086,7 +3086,7 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 		} else {
 			sortedWithLatency[i] = RootServerWithLatency{
 				Server:    server,
-				Latency:   rsm.speedTester.timeout,
+				Latency:   UnreachableLatency,
 				Reachable: false,
 			}
 		}
