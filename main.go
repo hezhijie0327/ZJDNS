@@ -2663,28 +2663,9 @@ func (st *SpeedTestManager) sortARecords(records []*dns.A) []*dns.A {
 
 	results := st.speedTest(ips)
 
-	slices.SortFunc(records, func(a, b *dns.A) int {
-		ipA, ipB := a.A.String(), b.A.String()
-		resultA, okA := results[ipA]
-		resultB, okB := results[ipB]
-		if !okA || !okB {
-			// Fallback to original order if either result is missing
-			return 0
-		}
-		if resultA.Reachable != resultB.Reachable {
-			if resultA.Reachable {
-				return -1 // A comes first
-			}
-			return 1 // B comes first
-		}
-		if resultA.Latency != resultB.Latency {
-			if resultA.Latency < resultB.Latency {
-				return -1 // A comes first
-			}
-			return 1 // B comes first
-		}
-		return 0
-	})
+	sortBySpeedResult(records, func(record *dns.A) string {
+		return record.A.String()
+	}, results)
 
 	return records
 }
@@ -2701,28 +2682,9 @@ func (st *SpeedTestManager) sortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
 
 	results := st.speedTest(ips)
 
-	slices.SortFunc(records, func(a, b *dns.AAAA) int {
-		ipA, ipB := a.AAAA.String(), b.AAAA.String()
-		resultA, okA := results[ipA]
-		resultB, okB := results[ipB]
-		if !okA || !okB {
-			// Fallback to original order if either result is missing
-			return 0
-		}
-		if resultA.Reachable != resultB.Reachable {
-			if resultA.Reachable {
-				return -1 // A comes first
-			}
-			return 1 // B comes first
-		}
-		if resultA.Latency != resultB.Latency {
-			if resultA.Latency < resultB.Latency {
-				return -1 // A comes first
-			}
-			return 1 // B comes first
-		}
-		return 0
-	})
+	sortBySpeedResult(records, func(record *dns.AAAA) string {
+		return record.AAAA.String()
+	}, results)
 
 	return records
 }
@@ -2842,7 +2804,7 @@ func (st *SpeedTestManager) testSingleIP(ip string) *SpeedResult {
 	}
 
 	result.Reachable = false
-	result.Latency = st.timeout
+	result.Latency = UnreachableLatency
 	return result
 }
 
@@ -2953,6 +2915,37 @@ func (st *SpeedTestManager) pingWithUDP(ip, port string, timeout time.Duration) 
 	latency := time.Since(start)
 	_ = conn.Close()
 	return latency
+}
+
+// sortBySpeedResult is a generic method that sorts records by speed test results
+// It works for any type that can be mapped to an IP string
+func sortBySpeedResult[T any](records []T, getIP func(T) string, results map[string]*SpeedResult) {
+	slices.SortFunc(records, func(a, b T) int {
+		ipA, ipB := getIP(a), getIP(b)
+		resultA, okA := results[ipA]
+		resultB, okB := results[ipB]
+
+		if !okA || !okB {
+			// Fallback to original order if either result is missing
+			return 0
+		}
+
+		if resultA.Reachable != resultB.Reachable {
+			if resultA.Reachable {
+				return -1 // A comes first
+			}
+			return 1 // B comes first
+		}
+
+		if resultA.Latency != resultB.Latency {
+			if resultA.Latency < resultB.Latency {
+				return -1 // A comes first
+			}
+			return 1 // B comes first
+		}
+
+		return 0
+	})
 }
 
 // =============================================================================
@@ -3070,7 +3063,34 @@ func (rsm *RootServerManager) sortServersBySpeed() {
 
 	ips := ExtractIPsFromServers(servers)
 	results := rsm.speedTester.speedTest(ips)
-	sortedWithLatency := SortBySpeedResultWithLatency(servers, results)
+
+	// Sort servers using the same logic as A/AAAA records
+	sortedServers := make([]string, len(servers))
+	copy(sortedServers, servers)
+
+	sortBySpeedResult(sortedServers, func(server string) string {
+		host, _, _ := net.SplitHostPort(server)
+		return host
+	}, results)
+
+	// Convert to RootServerWithLatency for storage and API compatibility
+	sortedWithLatency := make([]RootServerWithLatency, len(sortedServers))
+	for i, server := range sortedServers {
+		host, _, _ := net.SplitHostPort(server)
+		if result, exists := results[host]; exists && result.Reachable {
+			sortedWithLatency[i] = RootServerWithLatency{
+				Server:    server,
+				Latency:   result.Latency,
+				Reachable: true,
+			}
+		} else {
+			sortedWithLatency[i] = RootServerWithLatency{
+				Server:    server,
+				Latency:   rsm.speedTester.timeout,
+				Reachable: false,
+			}
+		}
+	}
 
 	// Store both the sorted servers and timestamp atomically as one unit
 	// This ensures consistency when reading both values together
@@ -5677,45 +5697,6 @@ func ExtractIPsFromServers(servers []string) []string {
 		}
 	}
 	return ips
-}
-
-func SortBySpeedResultWithLatency(servers []string, results map[string]*SpeedResult) []RootServerWithLatency {
-	serverList := make([]RootServerWithLatency, len(servers))
-
-	for i, server := range servers {
-		host, _, _ := net.SplitHostPort(server)
-		if result, exists := results[host]; exists && result.Reachable {
-			serverList[i] = RootServerWithLatency{
-				Server:    server,
-				Latency:   result.Latency,
-				Reachable: true,
-			}
-		} else {
-			serverList[i] = RootServerWithLatency{
-				Server:    server,
-				Latency:   UnreachableLatency,
-				Reachable: false,
-			}
-		}
-	}
-
-	slices.SortFunc(serverList, func(a, b RootServerWithLatency) int {
-		if a.Reachable != b.Reachable {
-			if a.Reachable {
-				return -1 // A comes first
-			}
-			return 1 // B comes first
-		}
-		if a.Latency != b.Latency {
-			if a.Latency < b.Latency {
-				return -1 // A comes first
-			}
-			return 1 // B comes first
-		}
-		return 0
-	})
-
-	return serverList
 }
 
 func ToRRSlice[T dns.RR](records []T) []dns.RR {
