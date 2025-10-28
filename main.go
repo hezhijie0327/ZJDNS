@@ -65,6 +65,23 @@ var (
 	NextProtoDoQ  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
 	NextProtoDoH3 = []string{"h3"}
 	NextProtoDoH  = []string{"h2", "http/1.1"}
+
+	// Root servers - static configuration
+	DefaultRootServers = []string{
+		"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
+		"170.247.170.2:53", "[2801:1b8:10::b]:53",
+		"192.33.4.12:53", "[2001:500:2::c]:53",
+		"199.7.91.13:53", "[2001:500:2d::d]:53",
+		"192.203.230.10:53", "[2001:500:a8::e]:53",
+		"192.5.5.241:53", "[2001:500:2f::f]:53",
+		"192.112.36.4:53", "[2001:500:12::d0d]:53",
+		"198.97.190.53:53", "[2001:500:1::53]:53",
+		"192.36.148.17:53", "[2001:7fe::53]:53",
+		"192.58.128.30:53", "[2001:503:c27::2:30]:53",
+		"193.0.14.129:53", "[2001:7fd::1]:53",
+		"199.7.83.42:53", "[2001:500:9f::42]:53",
+		"202.12.27.33:53", "[2001:dc3::35]:53",
+	}
 )
 
 // =============================================================================
@@ -129,12 +146,9 @@ const (
 	MemoryCheckInterval = 180 * time.Second
 
 	// Cache Configuration
-	DefaultCacheTTL    = 10
-	StaleTTL           = 30
-	StaleMaxAge        = 86400 * 7
-	DefaultSpeedTTL    = 180 * time.Second
-	SpeedDebounceDelay = 3 * time.Second
-	RootServerRefresh  = 900 * time.Second
+	DefaultCacheTTL = 10
+	StaleTTL        = 30
+	StaleMaxAge     = 86400 * 7
 
 	// Redis Configuration
 	RedisPoolSize        = 3
@@ -148,7 +162,6 @@ const (
 
 	// Redis Key Prefixes
 	RedisPrefixDNS           = "dns:"
-	RedisPrefixSpeedtest     = "speed:"
 	RedisPrefixQUICValidator = "quic:v:"
 	RedisPrefixQUICSession   = "quic:s:"
 
@@ -167,10 +180,6 @@ const (
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
 	QUICCodeInternalError quic.ApplicationErrorCode = 1
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
-
-	// Speed Test Configuration
-	DefaultSpeedTimeout = 200 * time.Millisecond
-	UnreachableLatency  = 5 * time.Second
 
 	// Logging
 	DefaultLogLevel = "info"
@@ -382,32 +391,6 @@ type RequestTracker struct {
 	ResponseTime time.Duration
 }
 
-// Speed Test Types
-type SpeedResult struct {
-	IP        string        `json:"ip"`
-	Latency   time.Duration `json:"latency"`
-	Reachable bool          `json:"reachable"`
-	Timestamp time.Time     `json:"timestamp"`
-}
-
-type RootServerWithLatency struct {
-	Server    string
-	Latency   time.Duration
-	Reachable bool
-}
-
-// RootServerSortResult contains both the sorted servers and the sort timestamp
-// This ensures atomic consistency when reading both values together
-type RootServerSortResult struct {
-	SortedServers []RootServerWithLatency
-	SortTime      time.Time
-}
-
-type RootServerManager struct {
-	servers    atomic.Pointer[[]string] // Replace regular slice with atomic pointer
-	sortResult atomic.Pointer[*RootServerSortResult]
-}
-
 // CIDR Management Types
 type CIDRRule struct {
 	tag       string
@@ -515,7 +498,6 @@ type DNSServer struct {
 	securityMgr       *SecurityManager
 	ednsMgr           *EDNSManager
 	rewriteMgr        *RewriteManager
-	rootServerMgr     *RootServerManager
 	cidrMgr           *CIDRManager
 	pprofServer       *http.Server
 	redisClient       *redis.Client
@@ -547,8 +529,7 @@ type UpstreamHandler struct {
 }
 
 type RecursiveResolver struct {
-	server        *DNSServer
-	rootServerMgr *RootServerManager
+	server *DNSServer
 }
 
 type CNAMEHandler struct {
@@ -2644,80 +2625,6 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 }
 
 // =============================================================================
-
-// RootServerManager Implementation
-// =============================================================================
-
-func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootServerManager {
-	servers := []string{
-		"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
-		"170.247.170.2:53", "[2801:1b8:10::b]:53",
-		"192.33.4.12:53", "[2001:500:2::c]:53",
-		"199.7.91.13:53", "[2001:500:2d::d]:53",
-		"192.203.230.10:53", "[2001:500:a8::e]:53",
-		"192.5.5.241:53", "[2001:500:2f::f]:53",
-		"192.112.36.4:53", "[2001:500:12::d0d]:53",
-		"198.97.190.53:53", "[2001:500:1::53]:53",
-		"192.36.148.17:53", "[2001:7fe::53]:53",
-		"192.58.128.30:53", "[2001:503:c27::2:30]:53",
-		"193.0.14.129:53", "[2001:7fd::1]:53",
-		"199.7.83.42:53", "[2001:500:9f::42]:53",
-		"202.12.27.33:53", "[2001:dc3::35]:53",
-	}
-
-	rsm := &RootServerManager{
-		servers: atomic.Pointer[[]string]{},
-	}
-	rsm.servers.Store(&servers)
-
-	serversPtr := rsm.servers.Load()
-	if serversPtr == nil {
-		serversPtr = &[]string{}
-	}
-	serversList := *serversPtr
-
-	sorted := make([]RootServerWithLatency, len(serversList))
-	for i, server := range serversList {
-		sorted[i] = RootServerWithLatency{
-			Server:    server,
-			Latency:   UnreachableLatency,
-			Reachable: false,
-		}
-	}
-	// Initialize with default values - ensures atomic consistency from startup
-	initialResult := &RootServerSortResult{
-		SortedServers: sorted,
-		SortTime:      time.Time{}, // Zero time indicates no sorting has occurred yet
-	}
-	rsm.sortResult.Store(&initialResult)
-
-	return rsm
-}
-
-func (rsm *RootServerManager) GetOptimalRootServers() []RootServerWithLatency {
-	// Load the sort result with type checking and fallback
-	if resultPtr := rsm.sortResult.Load(); resultPtr != nil && *resultPtr != nil {
-		result := *resultPtr
-		// Create a copy to avoid race conditions using slices.Clone
-		serversCopy := slices.Clone(result.SortedServers)
-		return serversCopy
-	}
-
-	// Fallback: return empty slice if no data is available
-	// This prevents runtime crashes and ensures graceful degradation
-	return []RootServerWithLatency{}
-}
-
-// GetLastSortTime returns the timestamp of the last sort operation
-// Returns zero time.Time if no sort has been performed yet
-func (rsm *RootServerManager) GetLastSortTime() time.Time {
-	if resultPtr := rsm.sortResult.Load(); resultPtr != nil && *resultPtr != nil {
-		return (*resultPtr).SortTime
-	}
-	return time.Time{} // Return zero time as fallback
-}
-
-// =============================================================================
 // Security: DNSSECValidator Implementation
 // =============================================================================
 
@@ -3711,14 +3618,11 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		redisClient = redisCache.client
 	}
 
-	rootServerManager := NewRootServerManager(*config, redisClient)
-
 	// Initialize memory monitor
 	memoryMonitor := time.NewTicker(MemoryCheckInterval)
 
 	server := &DNSServer{
 		config:            config,
-		rootServerMgr:     rootServerManager,
 		ednsMgr:           ednsManager,
 		rewriteMgr:        rewriteManager,
 		cidrMgr:           cidrManager,
@@ -4382,8 +4286,7 @@ func NewQueryManager(server *DNSServer) *QueryManager {
 	return &QueryManager{
 		upstream: upstream,
 		recursive: &RecursiveResolver{
-			server:        server,
-			rootServerMgr: server.rootServerMgr,
+			server: server,
 		},
 		cname: &CNAMEHandler{server: server},
 		validator: &ResponseValidator{
@@ -4692,7 +4595,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 	qname := dns.Fqdn(question.Name)
 	question.Name = qname
-	nameservers := rr.getRootServers()
+	nameservers := DefaultRootServers
 	currentDomain := "."
 	normalizedQname := NormalizeDomain(qname)
 
@@ -5001,15 +4904,6 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	}
 
 	return nil
-}
-
-func (rr *RecursiveResolver) getRootServers() []string {
-	serversWithLatency := rr.rootServerMgr.GetOptimalRootServers()
-	servers := make([]string, len(serversWithLatency))
-	for i, server := range serversWithLatency {
-		servers[i] = server.Server
-	}
-	return servers
 }
 
 // =============================================================================
