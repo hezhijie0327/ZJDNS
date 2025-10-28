@@ -2636,7 +2636,7 @@ func (st *SpeedTestManager) Close() error {
 		done := make(chan struct{})
 		go func() {
 			defer HandlePanic("SpeedTest background worker wait")
-			st.bgWorkerPool.Wait()
+			_ = st.bgWorkerPool.Wait()
 			close(done)
 		}()
 
@@ -2685,6 +2685,7 @@ func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg) *dns.Msg 
 	return response
 }
 
+// sortARecords sorts A records by speed test results
 func (st *SpeedTestManager) sortARecords(records []*dns.A) []*dns.A {
 	if len(records) <= 1 {
 		return records
@@ -2704,6 +2705,7 @@ func (st *SpeedTestManager) sortARecords(records []*dns.A) []*dns.A {
 	return records
 }
 
+// sortAAAARecords sorts AAAA records by speed test results
 func (st *SpeedTestManager) sortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
 	if len(records) <= 1 {
 		return records
@@ -2773,14 +2775,41 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 			timer := time.NewTimer(st.timeout)
 			defer timer.Stop()
 
-			if result := st.testSingleIP(testIP); result != nil {
-				select {
-				case resultChan <- result:
-				case <-timer.C:
-					LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
-				case <-ctx.Done():
-					return ctx.Err()
+			// Inline testSingleIP logic
+			result := &SpeedResult{IP: testIP, Timestamp: time.Now()}
+
+			for _, method := range st.methods {
+				var latency time.Duration
+				timeout := time.Duration(method.Timeout) * time.Millisecond
+
+				switch method.Type {
+				case "icmp":
+					latency = st.pingWithProtocol("icmp", testIP, "", timeout, false)
+				case "tcp":
+					latency = st.pingWithProtocol("tcp", testIP, method.Port, timeout, false)
+				case "udp":
+					latency = st.pingWithProtocol("udp", testIP, method.Port, timeout, true)
+				default:
+					continue
 				}
+
+				if latency >= 0 {
+					result.Reachable = true
+					result.Latency = latency
+					break
+				}
+			}
+
+			if !result.Reachable {
+				result.Latency = UnreachableLatency
+			}
+
+			select {
+			case resultChan <- result:
+			case <-timer.C:
+				LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 			return nil
 		})
@@ -2801,7 +2830,7 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 	return results
 }
 
-// submitBackgroundSpeedTest submits speed testing work to the controlled background pool
+// submitBackgroundSpeedTest submits speed testing work to the controlled background pool and performs the testing
 func (st *SpeedTestManager) submitBackgroundSpeedTest(ips []string) {
 	if atomic.LoadInt32(&st.closed) != 0 || st.bgWorkerPool == nil {
 		return
@@ -2813,66 +2842,48 @@ func (st *SpeedTestManager) submitBackgroundSpeedTest(ips []string) {
 
 	st.bgWorkerPool.Go(func() error {
 		defer HandlePanic("Background speed test worker")
-		st.executeSpeedTestInBackground(ipsCopy)
+
+		if len(ipsCopy) == 0 {
+			return nil
+		}
+
+		// Perform actual speed testing
+		newResults := st.performSpeedTest(ipsCopy)
+
+		// Update cache with new results
+		if len(newResults) > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
+			defer cancel()
+
+			for ip, result := range newResults {
+				key := st.keyPrefix + ip
+				data, err := json.Marshal(result)
+				if err == nil {
+					st.redis.Set(ctx, key, data, st.cacheTTL)
+				}
+			}
+		}
+
 		return nil
 	})
 }
 
-// executeSpeedTestInBackground performs the actual speed testing work
-func (st *SpeedTestManager) executeSpeedTestInBackground(ips []string) {
-	defer HandlePanic("Background speed testing")
-
-	if len(ips) == 0 {
-		return
-	}
-
-	// Perform actual speed testing
-	newResults := st.performSpeedTest(ips)
-
-	// Update cache with new results
-	if len(newResults) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
-		defer cancel()
-
-		for ip, result := range newResults {
-			key := st.keyPrefix + ip
-			data, err := json.Marshal(result)
-			if err == nil {
-				st.redis.Set(ctx, key, data, st.cacheTTL)
-			}
-		}
+// pingWithProtocol handles ping operations for different protocols (tcp, udp, icmp)
+// For TCP/UDP: port is required, for ICMP: port is ignored
+// requireWrite indicates whether to send data after connecting (needed for UDP)
+func (st *SpeedTestManager) pingWithProtocol(protocol, ip string, port string, timeout time.Duration, requireWrite bool) time.Duration {
+	switch protocol {
+	case "icmp":
+		return st.performICMPPing(ip, timeout)
+	case "tcp", "udp":
+		return st.performNetworkPing(protocol, ip, port, timeout, requireWrite)
+	default:
+		return -1
 	}
 }
 
-func (st *SpeedTestManager) testSingleIP(ip string) *SpeedResult {
-	result := &SpeedResult{IP: ip, Timestamp: time.Now()}
-
-	for _, method := range st.methods {
-		var latency time.Duration
-		switch method.Type {
-		case "icmp":
-			latency = st.pingWithICMP(ip, time.Duration(method.Timeout)*time.Millisecond)
-		case "tcp":
-			latency = st.pingWithTCP(ip, method.Port, time.Duration(method.Timeout)*time.Millisecond)
-		case "udp":
-			latency = st.pingWithUDP(ip, method.Port, time.Duration(method.Timeout)*time.Millisecond)
-		default:
-			continue
-		}
-
-		if latency >= 0 {
-			result.Reachable = true
-			result.Latency = latency
-			return result
-		}
-	}
-
-	result.Reachable = false
-	result.Latency = UnreachableLatency
-	return result
-}
-
-func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.Duration {
+// performICMPPing handles ICMP ping operations
+func (st *SpeedTestManager) performICMPPing(ip string, timeout time.Duration) time.Duration {
 	dst, err := net.ResolveIPAddr("ip", ip)
 	if err != nil {
 		return -1
@@ -2947,33 +2958,23 @@ func (st *SpeedTestManager) pingWithICMP(ip string, timeout time.Duration) time.
 	}
 }
 
-func (st *SpeedTestManager) pingWithTCP(ip, port string, timeout time.Duration) time.Duration {
+// performNetworkPing handles TCP/UDP ping operations
+func (st *SpeedTestManager) performNetworkPing(protocol, ip, port string, timeout time.Duration, requireWrite bool) time.Duration {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	start := time.Now()
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(ip, port))
-	if err != nil {
-		return -1
-	}
-	latency := time.Since(start)
-	_ = conn.Close()
-	return latency
-}
-
-func (st *SpeedTestManager) pingWithUDP(ip, port string, timeout time.Duration) time.Duration {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	start := time.Now()
-	conn, err := (&net.Dialer{}).DialContext(ctx, "udp", net.JoinHostPort(ip, port))
+	conn, err := (&net.Dialer{}).DialContext(ctx, protocol, net.JoinHostPort(ip, port))
 	if err != nil {
 		return -1
 	}
 
-	if _, err := conn.Write([]byte{}); err != nil {
-		_ = conn.Close()
-		return -1
+	// For UDP, we need to write something to establish the connection
+	if requireWrite {
+		if _, err := conn.Write([]byte{}); err != nil {
+			_ = conn.Close()
+			return -1
+		}
 	}
 
 	latency := time.Since(start)
@@ -4659,6 +4660,16 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 
 	s.addEDNS(msg, req, isSecureConnection)
 
+	// Trigger background speedtest for cache hits
+	if len(s.config.Speedtest) > 0 && s.redisClient != nil &&
+		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
+		s.cacheRefreshGroup.Go(func() error {
+			defer HandlePanic("cache hit speedtest")
+			s.performBackgroundSpeedTest(nil, nil, nil, question, ecsOpt)
+			return nil
+		})
+	}
+
 	if isExpired && entry.ShouldRefresh() {
 		s.cacheRefreshGroup.Go(func() error {
 			defer HandlePanic("cache refresh")
@@ -4685,6 +4696,38 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 	}
 
 	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection)
+}
+
+// performBackgroundSpeedTest performs background speed testing for DNS records
+func (s *DNSServer) performBackgroundSpeedTest(answer, authority, additional []dns.RR, question dns.Question, ecsOpt *ECSOption) {
+	defer HandlePanic("background speedtest")
+
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return
+	}
+
+	// If records are not provided, query for them
+	if len(answer) == 0 && len(authority) == 0 && len(additional) == 0 {
+		var err error
+		answer, authority, additional, _, _, _, err = s.queryMgr.Query(question, ecsOpt)
+		if err != nil {
+			return
+		}
+	}
+
+	// Perform speedtest if we have A/AAAA records and configuration allows it
+	shouldTest := len(s.config.Speedtest) > 0 && s.redisClient != nil
+	if question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA {
+		shouldTest = shouldTest && (len(answer) > 0 || len(authority) > 0 || len(additional) > 0)
+	}
+
+	if shouldTest {
+		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
+		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedtest
+		speedTester := NewSpeedTestManager(*s.config, s.redisClient, domainSpeedPrefix)
+		speedTester.performSpeedTestAndSort(tempMsg)
+		_ = speedTester.Close()
+	}
 }
 
 func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *ECSOption, cacheKey string, _ *CacheEntry) error {
@@ -4770,6 +4813,16 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	}
 
 	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
+
+	// Trigger background speedtest for cache miss results
+	if len(s.config.Speedtest) > 0 && s.redisClient != nil &&
+		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
+		s.cacheRefreshGroup.Go(func() error {
+			defer HandlePanic("cache miss speedtest")
+			s.performBackgroundSpeedTest(answer, authority, additional, question, ecsOpt)
+			return nil
+		})
+	}
 
 	msg.Answer = ProcessRecords(answer, 0, clientRequestedDNSSEC)
 	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
