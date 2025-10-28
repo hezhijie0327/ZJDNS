@@ -129,6 +129,9 @@ const (
 	ConnKeepAlive          = 30 * time.Second
 	ConnPoolCleanup        = 8 * time.Second
 
+	// Memory Monitoring Configuration
+	MemoryCheckInterval = 180 * time.Second
+
 	// Cache Configuration
 	DefaultCacheTTL    = 10
 	StaleTTL           = 30
@@ -552,6 +555,7 @@ type DNSServer struct {
 	cacheRefreshCtx   context.Context
 	closed            int32
 	queryMgr          *QueryManager
+	memoryMonitor     *time.Ticker
 }
 
 type ConfigManager struct{}
@@ -1017,13 +1021,18 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.Conn) {
 	defer HandlePanic("Monitor QUIC connection")
 
-	<-conn.Context().Done()
-
-	entry.healthy.Store(false)
-	entry.closed.Store(false)
-
-	p.quicConns.Delete(key)
-	p.closeEntry(entry)
+	select {
+	case <-conn.Context().Done():
+		// Connection normal close or error
+		entry.healthy.Store(false)
+		entry.closed.Store(true)
+		p.quicConns.Delete(key)
+		p.closeEntry(entry)
+	case <-p.ctx.Done():
+		// Connection pool shutdown, force exit without cleanup
+		// Connection will be cleaned up by pool shutdown process
+		return
+	}
 }
 
 func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*tls.Conn, error) {
@@ -2770,10 +2779,22 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 	for _, ip := range ips {
 		testIP := ip
 		g.Go(func() error {
+			defer func() {
+				if r := recover(); r != nil {
+					LogError("SPEEDTEST: Panic in speed test goroutine: %v", r)
+				}
+			}()
 
 			// Create a reusable timer for this goroutine
 			timer := time.NewTimer(st.timeout)
-			defer timer.Stop()
+			defer func() {
+				timer.Stop()
+				// Drain channel to prevent potential leaks if timer.C has unread values
+				select {
+				case <-timer.C:
+				default:
+				}
+			}()
 
 			// Inline testSingleIP logic
 			result := &SpeedResult{IP: testIP, Timestamp: time.Now()}
@@ -4181,6 +4202,9 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 
 	rootServerManager := NewRootServerManager(*config, redisClient)
 
+	// Initialize memory monitor
+	memoryMonitor := time.NewTicker(MemoryCheckInterval)
+
 	server := &DNSServer{
 		config:            config,
 		rootServerMgr:     rootServerManager,
@@ -4197,6 +4221,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		backgroundCtx:     backgroundCtx,
 		cacheRefreshGroup: cacheRefreshGroup,
 		cacheRefreshCtx:   cacheRefreshCtx,
+		memoryMonitor:     memoryMonitor,
 	}
 
 	securityManager, err := NewSecurityManager(config, server)
@@ -4254,6 +4279,12 @@ func (s *DNSServer) setupSignalHandling() {
 	})
 
 	s.backgroundGroup.Go(func() error {
+		defer HandlePanic("Memory monitor")
+		s.startMemoryMonitoring()
+		return nil
+	})
+
+	s.backgroundGroup.Go(func() error {
 		defer HandlePanic("Signal handler")
 		select {
 		case sig := <-sigChan:
@@ -4272,6 +4303,12 @@ func (s *DNSServer) shutdownServer() {
 	}
 
 	LogInfo("SERVER: Starting DNS server shutdown")
+
+	// Stop memory monitor
+	if s.memoryMonitor != nil {
+		s.memoryMonitor.Stop()
+		LogInfo("MEMORY: Memory monitor stopped")
+	}
 
 	if s.cancel != nil {
 		s.cancel(errors.New("server shutdown"))
@@ -4348,6 +4385,20 @@ func (s *DNSServer) shutdownServer() {
 
 	time.Sleep(100 * time.Millisecond)
 	os.Exit(0)
+}
+
+func (s *DNSServer) startMemoryMonitoring() {
+	defer HandlePanic("Memory monitoring")
+
+	for {
+		select {
+		case <-s.memoryMonitor.C:
+			runtime.GC()
+
+		case <-s.backgroundCtx.Done():
+			return
+		}
+	}
 }
 
 func (s *DNSServer) Start() error {
