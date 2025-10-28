@@ -66,7 +66,7 @@ var (
 	NextProtoDoH3 = []string{"h3"}
 	NextProtoDoH  = []string{"h2", "http/1.1"}
 
-	// Root servers - static configuration
+	// Root servers
 	DefaultRootServers = []string{
 		"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
 		"170.247.170.2:53", "[2801:1b8:10::b]:53",
@@ -140,10 +140,6 @@ const (
 	ConnValidateEvery      = 3 * time.Second
 	ConnKeepAlive          = 30 * time.Second
 	ConnPoolCleanup        = 3 * time.Second
-	MaxConnectionsPerPool  = 128
-
-	// Memory Monitoring Configuration
-	MemoryCheckInterval = 180 * time.Second
 
 	// Cache Configuration
 	DefaultCacheTTL = 10
@@ -440,7 +436,6 @@ type ConnPool struct {
 	closed          atomic.Bool
 	cleanupTicker   *time.Ticker
 	connCount       atomic.Int64
-	maxConnections  atomic.Int64
 }
 
 type QueryClient struct {
@@ -500,7 +495,6 @@ type DNSServer struct {
 	cacheRefreshCtx   context.Context
 	closed            int32
 	queryMgr          *QueryManager
-	memoryMonitor     *time.Ticker
 }
 
 type ConfigManager struct{}
@@ -633,7 +627,6 @@ func NewConnPool() *ConnPool {
 		cleanupTicker:   time.NewTicker(ConnPoolCleanup),
 		sessionCache:    tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 	}
-	pool.maxConnections.Store(MaxConnectionsPerPool)
 	pool.closed.Store(false)
 
 	pool.backgroundGroup.Go(func() error {
@@ -777,20 +770,6 @@ func (p *ConnPool) closeEntry(entry *ConnPoolEntry) {
 	}
 }
 
-// checkConnectionLimitAndCleanup checks connection limits and performs cleanup if needed
-// Returns an error if the limit is still reached after cleanup
-func (p *ConnPool) checkConnectionLimitAndCleanup(protocol string) error {
-	if p.connCount.Load() >= p.maxConnections.Load() {
-		LogDebug("%s: Connection limit reached (%d/%d), forcing cleanup", protocol, p.connCount.Load(), p.maxConnections.Load())
-		p.cleanupExpiredConns()
-		// If still at limit after cleanup, return error
-		if p.connCount.Load() >= p.maxConnections.Load() {
-			return fmt.Errorf("%s connection pool limit reached (%d)", protocol, p.maxConnections.Load())
-		}
-	}
-	return nil
-}
-
 func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
 	if p.closed.Load() {
 		return nil, errors.New("pool closed")
@@ -810,11 +789,6 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 		}
 		p.http2Conns.Delete(key)
 		p.closeEntry(entry)
-	}
-
-	// Check connection limit before creating new connection
-	if err := p.checkConnectionLimitAndCleanup("HTTP2"); err != nil {
-		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -874,11 +848,6 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 		}
 		p.http3Conns.Delete(key)
 		p.closeEntry(entry)
-	}
-
-	// Check connection limit before creating new connection
-	if err := p.checkConnectionLimitAndCleanup("HTTP3"); err != nil {
-		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -943,11 +912,6 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 			p.quicConns.Delete(key)
 			p.closeEntry(entry)
 		}
-	}
-
-	// Check connection limit before creating new connection
-	if err := p.checkConnectionLimitAndCleanup("QUIC"); err != nil {
-		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -1067,11 +1031,6 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 
 		p.tlsConns.Delete(key)
 		p.closeEntry(entry)
-	}
-
-	// Check connection limit before creating new connection
-	if err := p.checkConnectionLimitAndCleanup("TLS"); err != nil {
-		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -3567,9 +3526,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		redisClient = redisCache.client
 	}
 
-	// Initialize memory monitor
-	memoryMonitor := time.NewTicker(MemoryCheckInterval)
-
 	server := &DNSServer{
 		config:            config,
 		ednsMgr:           ednsManager,
@@ -3585,7 +3541,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		backgroundCtx:     backgroundCtx,
 		cacheRefreshGroup: cacheRefreshGroup,
 		cacheRefreshCtx:   cacheRefreshCtx,
-		memoryMonitor:     memoryMonitor,
 	}
 
 	securityManager, err := NewSecurityManager(config, server)
@@ -3632,12 +3587,6 @@ func (s *DNSServer) setupSignalHandling() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	s.backgroundGroup.Go(func() error {
-		defer HandlePanic("Memory monitor")
-		s.startMemoryMonitoring()
-		return nil
-	})
-
-	s.backgroundGroup.Go(func() error {
 		defer HandlePanic("Signal handler")
 		select {
 		case sig := <-sigChan:
@@ -3656,12 +3605,6 @@ func (s *DNSServer) shutdownServer() {
 	}
 
 	LogInfo("SERVER: Starting DNS server shutdown")
-
-	// Stop memory monitor
-	if s.memoryMonitor != nil {
-		s.memoryMonitor.Stop()
-		LogInfo("MEMORY: Memory monitor stopped")
-	}
 
 	if s.cancel != nil {
 		s.cancel(errors.New("server shutdown"))
@@ -3734,20 +3677,6 @@ func (s *DNSServer) shutdownServer() {
 
 	time.Sleep(100 * time.Millisecond)
 	os.Exit(0)
-}
-
-func (s *DNSServer) startMemoryMonitoring() {
-	defer HandlePanic("Memory monitoring")
-
-	for {
-		select {
-		case <-s.memoryMonitor.C:
-			runtime.GC()
-
-		case <-s.backgroundCtx.Done():
-			return
-		}
-	}
 }
 
 func (s *DNSServer) Start() error {
