@@ -5,8 +5,9 @@ go 1.25.1
 require (
 	github.com/miekg/dns v1.1.69-0.20251010090242-a0f8faa24999
 	github.com/quic-go/quic-go v0.55.1-0.20251024200300-cf010814fa85
-	github.com/redis/go-redis/v9 v9.16.1-0.20251025002929-a3a369b2f5bb
+	github.com/redis/go-redis/v9 v9.16.1-0.20251028094406-f7a8a1c1d7c4
 	golang.org/x/net v0.46.0
+	golang.org/x/sync v0.17.0
 )
 
 require (
@@ -17,7 +18,6 @@ require (
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/crypto v0.43.0 // indirect
 	golang.org/x/mod v0.29.0 // indirect
-	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
 	golang.org/x/tools v0.38.0 // indirect
