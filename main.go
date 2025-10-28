@@ -381,16 +381,6 @@ type DNSRewriteResult struct {
 	Additional    []dns.RR
 }
 
-type RequestTracker struct {
-	ID           string
-	StartTime    time.Time
-	Domain       string
-	QueryType    string
-	ClientIP     string
-	Upstream     atomic.Value // string
-	ResponseTime time.Duration
-}
-
 // CIDR Management Types
 type CIDRRule struct {
 	tag       string
@@ -3530,47 +3520,6 @@ func (tm *TLSManager) shutdown() error {
 }
 
 // =============================================================================
-// RequestTracker Implementation
-// =============================================================================
-
-func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
-	rt := &RequestTracker{
-		ID:        fmt.Sprintf("%x", time.Now().UnixNano()&0xFFFFFF),
-		StartTime: time.Now(),
-		Domain:    domain,
-		QueryType: qtype,
-		ClientIP:  clientIP,
-	}
-	rt.Upstream.Store("") // Initialize with empty string
-	return rt
-}
-
-func (rt *RequestTracker) AddStep(step string, args ...any) {
-	if rt == nil || globalLog.GetLevel() < Debug {
-		return
-	}
-
-	timestamp := time.Since(rt.StartTime)
-	stepMsg := fmt.Sprintf("[%v] %s", timestamp.Truncate(time.Microsecond), fmt.Sprintf(step, args...))
-	LogDebug("[%s] %s", rt.ID, stepMsg)
-}
-
-func (rt *RequestTracker) Finish() {
-	if rt == nil {
-		return
-	}
-	rt.ResponseTime = time.Since(rt.StartTime)
-	if globalLog.GetLevel() >= Info {
-		upstream, _ := rt.Upstream.Load().(string)
-		if upstream == "" {
-			upstream = RecursiveIndicator
-		}
-		LogDebug("FINISH [%s]: Query completed: %s %s | Time:%v | Upstream:%s",
-			rt.ID, rt.Domain, rt.QueryType, rt.ResponseTime.Truncate(time.Microsecond), upstream)
-	}
-}
-
-// =============================================================================
 // DNSServer Implementation
 // =============================================================================
 
@@ -3988,7 +3937,7 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	}
 }
 
-func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processDNSQuery(req *dns.Msg, _ net.IP, isSecureConnection bool) *dns.Msg {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		msg := s.buildResponse(req)
 		if msg != nil {
@@ -4017,17 +3966,13 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		return msg
 	}
 
-	var tracker *RequestTracker
-	if globalLog.GetLevel() >= Debug {
-		clientIPStr := "unknown"
-		if clientIP != nil {
-			clientIPStr = clientIP.String()
+	startTime := time.Now()
+	defer func() {
+		if globalLog.GetLevel() >= Debug {
+			responseTime := time.Since(startTime)
+			LogDebug("Query completed: %s %s | Time:%v", question.Name, dns.TypeToString[question.Qtype], responseTime.Truncate(time.Microsecond))
 		}
-		tracker = NewRequestTracker(question.Name, dns.TypeToString[question.Qtype], clientIPStr)
-		if tracker != nil {
-			defer tracker.Finish()
-		}
-	}
+	}()
 
 	if s.rewriteMgr.hasRules() {
 		rewriteResult := s.rewriteMgr.RewriteWithDetails(question.Name, question.Qtype)
@@ -4075,7 +4020,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cacheKey, isSecureConnection)
 	}
 
-	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection, tracker)
+	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection)
 }
 
 func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cacheKey string, isSecureConnection bool) *dns.Msg {
@@ -4113,12 +4058,8 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	return msg
 }
 
-func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool, tracker *RequestTracker) *dns.Msg {
-	answer, authority, additional, validated, ecsResponse, usedServer, err := s.queryMgr.Query(question, ecsOpt)
-
-	if tracker != nil {
-		tracker.Upstream.Store(usedServer)
-	}
+func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool) *dns.Msg {
+	answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecsOpt)
 
 	if err != nil {
 		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, isSecureConnection)
