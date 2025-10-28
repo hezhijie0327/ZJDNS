@@ -131,7 +131,7 @@ const (
 	MaxConnectionsPerPool  = 128
 
 	// Memory Monitoring Configuration
-	MemoryCheckInterval = 15 * time.Second
+	MemoryCheckInterval = 180 * time.Second
 
 	// Cache Configuration
 	DefaultCacheTTL    = 10
