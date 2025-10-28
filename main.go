@@ -894,7 +894,6 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 	entry.useCount.Store(1)
 	entry.healthy.Store(true)
 	entry.closed.Store(false)
-	entry.closed.Store(false)
 
 	p.http2Conns.Store(key, entry)
 	p.connCount.Add(1)
@@ -1074,10 +1073,31 @@ func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.
 		p.quicConns.Delete(key)
 		p.closeEntry(entry)
 		// Force close the connection if it's still active
+		// Use a separate goroutine with timeout to prevent blocking
 		go func() {
 			defer HandlePanic("Force close QUIC connection")
 			if conn != nil {
-				_ = conn.CloseWithError(QUICCodeNoError, "monitor timeout")
+				// Add context timeout to prevent hanging
+				closeCtx, closeCancel := context.WithTimeout(context.Background(), ConnTimeout)
+				defer closeCancel()
+
+				done := make(chan struct{})
+				go func() {
+					defer HandlePanic("QUIC close operation")
+					_ = conn.CloseWithError(QUICCodeNoError, "monitor timeout")
+					close(done)
+				}()
+
+				select {
+				case <-done:
+					// Connection closed successfully
+				case <-closeCtx.Done():
+					// Timeout, force abandon the operation
+					LogDebug("QUIC: Force close operation timed out for %s", key)
+				case <-p.ctx.Done():
+					// Pool shutdown, abandon operation
+					return
+				}
 			}
 		}()
 	case <-p.ctx.Done():
@@ -2818,6 +2838,7 @@ func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
 		}
 		// For IPs without valid cache, use default latency and mark for background testing
 		results[ip] = &SpeedResult{
+			IP:        ip,
 			Latency:   UnreachableLatency,
 			Reachable: true,
 			Timestamp: time.Now(),
@@ -2859,7 +2880,10 @@ func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResu
 			}()
 
 			// Inline testSingleIP logic
-			result := &SpeedResult{IP: testIP, Timestamp: time.Now()}
+			result := &SpeedResult{
+				IP:        testIP,
+				Timestamp: time.Now(),
+			}
 
 			for _, method := range st.methods {
 				var latency time.Duration
