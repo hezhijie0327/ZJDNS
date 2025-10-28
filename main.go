@@ -103,6 +103,9 @@ const (
 	NSResolveConcurrency = 3
 	SpeedTestConcurrency = 3
 
+	// Connection Pool Limits
+	MaxConnectionsPerPool = 100
+
 	// Timeouts
 	QueryTimeout           = 3 * time.Second
 	RecursiveTimeout       = 5 * time.Second
@@ -125,12 +128,12 @@ const (
 	ConnDialTimeout        = 2 * time.Second
 	ConnMaxLifetime        = 90 * time.Second
 	ConnMaxIdleTime        = 30 * time.Second
-	ConnValidateEvery      = 8 * time.Second
+	ConnValidateEvery      = 3 * time.Second
 	ConnKeepAlive          = 30 * time.Second
-	ConnPoolCleanup        = 8 * time.Second
+	ConnPoolCleanup        = 3 * time.Second
 
 	// Memory Monitoring Configuration
-	MemoryCheckInterval = 180 * time.Second
+	MemoryCheckInterval = 45 * time.Second
 
 	// Cache Configuration
 	DefaultCacheTTL    = 10
@@ -494,6 +497,7 @@ type ConnPool struct {
 	closed          atomic.Bool
 	cleanupTicker   *time.Ticker
 	connCount       atomic.Int64
+	maxConnections  int64
 }
 
 type QueryClient struct {
@@ -688,6 +692,7 @@ func NewConnPool() *ConnPool {
 		backgroundCtx:   backgroundCtx,
 		cleanupTicker:   time.NewTicker(ConnPoolCleanup),
 		sessionCache:    tls.NewLRUClientSessionCache(TLSSessionCacheSize),
+		maxConnections:  MaxConnectionsPerPool,
 	}
 	pool.closed.Store(false)
 
@@ -853,6 +858,16 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 		p.closeEntry(entry)
 	}
 
+	// Check connection limit before creating new connection
+	if p.connCount.Load() >= p.maxConnections {
+		LogDebug("HTTP2: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections)
+		p.cleanupExpiredConns()
+		// If still at limit after cleanup, return error
+		if p.connCount.Load() >= p.maxConnections {
+			return nil, fmt.Errorf("HTTP2 connection pool limit reached (%d)", p.maxConnections)
+		}
+	}
+
 	tlsConfig = tlsConfig.Clone()
 	tlsConfig.ClientSessionCache = p.sessionCache
 
@@ -911,6 +926,16 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 		}
 		p.http3Conns.Delete(key)
 		p.closeEntry(entry)
+	}
+
+	// Check connection limit before creating new connection
+	if p.connCount.Load() >= p.maxConnections {
+		LogDebug("HTTP3: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections)
+		p.cleanupExpiredConns()
+		// If still at limit after cleanup, return error
+		if p.connCount.Load() >= p.maxConnections {
+			return nil, fmt.Errorf("HTTP3 connection pool limit reached (%d)", p.maxConnections)
+		}
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -977,6 +1002,16 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 		}
 	}
 
+	// Check connection limit before creating new connection
+	if p.connCount.Load() >= p.maxConnections {
+		LogDebug("QUIC: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections)
+		p.cleanupExpiredConns()
+		// If still at limit after cleanup, return error
+		if p.connCount.Load() >= p.maxConnections {
+			return nil, fmt.Errorf("QUIC connection pool limit reached (%d)", p.maxConnections)
+		}
+	}
+
 	tlsConfig = tlsConfig.Clone()
 	tlsConfig.NextProtos = NextProtoDoQ
 	tlsConfig.ClientSessionCache = p.sessionCache
@@ -1021,6 +1056,10 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.Conn) {
 	defer HandlePanic("Monitor QUIC connection")
 
+	// Add timeout protection to prevent goroutine leaks
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+
 	select {
 	case <-conn.Context().Done():
 		// Connection normal close or error
@@ -1028,6 +1067,21 @@ func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.
 		entry.closed.Store(true)
 		p.quicConns.Delete(key)
 		p.closeEntry(entry)
+		LogDebug("QUIC connection monitor: connection closed normally - %s", key)
+	case <-timeout.C:
+		// Timeout protection - force cleanup after 30 seconds
+		LogDebug("QUIC connection monitor timeout, force cleanup: %s", key)
+		entry.healthy.Store(false)
+		entry.closed.Store(true)
+		p.quicConns.Delete(key)
+		p.closeEntry(entry)
+		// Force close the connection if it's still active
+		go func() {
+			defer HandlePanic("Force close QUIC connection")
+			if conn != nil {
+				_ = conn.CloseWithError(QUICCodeNoError, "monitor timeout")
+			}
+		}()
 	case <-p.ctx.Done():
 		// Connection pool shutdown, force exit without cleanup
 		// Connection will be cleaned up by pool shutdown process
@@ -1054,6 +1108,16 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 
 		p.tlsConns.Delete(key)
 		p.closeEntry(entry)
+	}
+
+	// Check connection limit before creating new connection
+	if p.connCount.Load() >= p.maxConnections {
+		LogDebug("TLS: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections)
+		p.cleanupExpiredConns()
+		// If still at limit after cleanup, return error
+		if p.connCount.Load() >= p.maxConnections {
+			return nil, fmt.Errorf("TLS connection pool limit reached (%d)", p.maxConnections)
+		}
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -4390,10 +4454,30 @@ func (s *DNSServer) shutdownServer() {
 func (s *DNSServer) startMemoryMonitoring() {
 	defer HandlePanic("Memory monitoring")
 
+	// Create additional ticker for more frequent GC checking
+	gcTicker := time.NewTicker(30 * time.Second)
+	defer gcTicker.Stop()
+
 	for {
 		select {
 		case <-s.memoryMonitor.C:
+			// Main memory check interval (now 60 seconds)
 			runtime.GC()
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			LogDebug("MEMORY: GC triggered - Alloc: %d KB, Heap: %d KB, Goroutines: %d",
+				m.Alloc/1024, m.HeapAlloc/1024, runtime.NumGoroutine())
+
+		case <-gcTicker.C:
+			// More frequent GC check (30 seconds)
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+
+			// Force GC if memory usage is high (> 100MB)
+			if m.HeapAlloc > 100*1024*1024 {
+				LogDebug("MEMORY: High memory usage detected (%d KB), forcing GC", m.HeapAlloc/1024)
+				runtime.GC()
+			}
 
 		case <-s.backgroundCtx.Done():
 			return
