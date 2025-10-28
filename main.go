@@ -56,7 +56,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.4.9"
+	Version    = "1.5.0"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -91,7 +91,7 @@ const (
 	TCPBufferSize       = 4096
 	SecureBufferSize    = 8192
 	DoHMaxRequestSize   = 8192
-	TLSSessionCacheSize = 256
+	TLSSessionCacheSize = 128
 
 	// Domain Limits
 	MaxDomainLength = 253
@@ -102,9 +102,6 @@ const (
 	DNSQueryConcurrency  = 3
 	NSResolveConcurrency = 3
 	SpeedTestConcurrency = 3
-
-	// Connection Pool Limits
-	MaxConnectionsPerPool = 100
 
 	// Timeouts
 	QueryTimeout           = 3 * time.Second
@@ -131,9 +128,10 @@ const (
 	ConnValidateEvery      = 3 * time.Second
 	ConnKeepAlive          = 30 * time.Second
 	ConnPoolCleanup        = 3 * time.Second
+	MaxConnectionsPerPool  = 128
 
 	// Memory Monitoring Configuration
-	MemoryCheckInterval = 45 * time.Second
+	MemoryCheckInterval = 15 * time.Second
 
 	// Cache Configuration
 	DefaultCacheTTL    = 10
@@ -497,7 +495,7 @@ type ConnPool struct {
 	closed          atomic.Bool
 	cleanupTicker   *time.Ticker
 	connCount       atomic.Int64
-	maxConnections  int64
+	maxConnections  atomic.Int64
 }
 
 type QueryClient struct {
@@ -692,8 +690,8 @@ func NewConnPool() *ConnPool {
 		backgroundCtx:   backgroundCtx,
 		cleanupTicker:   time.NewTicker(ConnPoolCleanup),
 		sessionCache:    tls.NewLRUClientSessionCache(TLSSessionCacheSize),
-		maxConnections:  MaxConnectionsPerPool,
 	}
+	pool.maxConnections.Store(MaxConnectionsPerPool)
 	pool.closed.Store(false)
 
 	pool.backgroundGroup.Go(func() error {
@@ -859,12 +857,12 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 	}
 
 	// Check connection limit before creating new connection
-	if p.connCount.Load() >= p.maxConnections {
-		LogDebug("HTTP2: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections)
+	if p.connCount.Load() >= p.maxConnections.Load() {
+		LogDebug("HTTP2: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections.Load())
 		p.cleanupExpiredConns()
 		// If still at limit after cleanup, return error
-		if p.connCount.Load() >= p.maxConnections {
-			return nil, fmt.Errorf("HTTP2 connection pool limit reached (%d)", p.maxConnections)
+		if p.connCount.Load() >= p.maxConnections.Load() {
+			return nil, fmt.Errorf("HTTP2 connection pool limit reached (%d)", p.maxConnections.Load())
 		}
 	}
 
@@ -929,12 +927,12 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 	}
 
 	// Check connection limit before creating new connection
-	if p.connCount.Load() >= p.maxConnections {
-		LogDebug("HTTP3: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections)
+	if p.connCount.Load() >= p.maxConnections.Load() {
+		LogDebug("HTTP3: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections.Load())
 		p.cleanupExpiredConns()
 		// If still at limit after cleanup, return error
-		if p.connCount.Load() >= p.maxConnections {
-			return nil, fmt.Errorf("HTTP3 connection pool limit reached (%d)", p.maxConnections)
+		if p.connCount.Load() >= p.maxConnections.Load() {
+			return nil, fmt.Errorf("HTTP3 connection pool limit reached (%d)", p.maxConnections.Load())
 		}
 	}
 
@@ -1003,12 +1001,12 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 	}
 
 	// Check connection limit before creating new connection
-	if p.connCount.Load() >= p.maxConnections {
-		LogDebug("QUIC: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections)
+	if p.connCount.Load() >= p.maxConnections.Load() {
+		LogDebug("QUIC: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections.Load())
 		p.cleanupExpiredConns()
 		// If still at limit after cleanup, return error
-		if p.connCount.Load() >= p.maxConnections {
-			return nil, fmt.Errorf("QUIC connection pool limit reached (%d)", p.maxConnections)
+		if p.connCount.Load() >= p.maxConnections.Load() {
+			return nil, fmt.Errorf("QUIC connection pool limit reached (%d)", p.maxConnections.Load())
 		}
 	}
 
@@ -1057,7 +1055,7 @@ func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.
 	defer HandlePanic("Monitor QUIC connection")
 
 	// Add timeout protection to prevent goroutine leaks
-	timeout := time.NewTimer(30 * time.Second)
+	timeout := time.NewTimer(ConnTimeout)
 	defer timeout.Stop()
 
 	select {
@@ -1069,7 +1067,7 @@ func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.
 		p.closeEntry(entry)
 		LogDebug("QUIC connection monitor: connection closed normally - %s", key)
 	case <-timeout.C:
-		// Timeout protection - force cleanup after 30 seconds
+		// Timeout protection
 		LogDebug("QUIC connection monitor timeout, force cleanup: %s", key)
 		entry.healthy.Store(false)
 		entry.closed.Store(true)
@@ -1111,12 +1109,12 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 	}
 
 	// Check connection limit before creating new connection
-	if p.connCount.Load() >= p.maxConnections {
-		LogDebug("TLS: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections)
+	if p.connCount.Load() >= p.maxConnections.Load() {
+		LogDebug("TLS: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections.Load())
 		p.cleanupExpiredConns()
 		// If still at limit after cleanup, return error
-		if p.connCount.Load() >= p.maxConnections {
-			return nil, fmt.Errorf("TLS connection pool limit reached (%d)", p.maxConnections)
+		if p.connCount.Load() >= p.maxConnections.Load() {
+			return nil, fmt.Errorf("TLS connection pool limit reached (%d)", p.maxConnections.Load())
 		}
 	}
 
@@ -4454,30 +4452,10 @@ func (s *DNSServer) shutdownServer() {
 func (s *DNSServer) startMemoryMonitoring() {
 	defer HandlePanic("Memory monitoring")
 
-	// Create additional ticker for more frequent GC checking
-	gcTicker := time.NewTicker(30 * time.Second)
-	defer gcTicker.Stop()
-
 	for {
 		select {
 		case <-s.memoryMonitor.C:
-			// Main memory check interval (now 60 seconds)
 			runtime.GC()
-			var m runtime.MemStats
-			runtime.ReadMemStats(&m)
-			LogDebug("MEMORY: GC triggered - Alloc: %d KB, Heap: %d KB, Goroutines: %d",
-				m.Alloc/1024, m.HeapAlloc/1024, runtime.NumGoroutine())
-
-		case <-gcTicker.C:
-			// More frequent GC check (30 seconds)
-			var m runtime.MemStats
-			runtime.ReadMemStats(&m)
-
-			// Force GC if memory usage is high (> 100MB)
-			if m.HeapAlloc > 100*1024*1024 {
-				LogDebug("MEMORY: High memory usage detected (%d KB), forcing GC", m.HeapAlloc/1024)
-				runtime.GC()
-			}
 
 		case <-s.backgroundCtx.Done():
 			return
