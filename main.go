@@ -112,7 +112,7 @@ const (
 	TCPBufferSize     = 4096
 	SecureBufferSize  = 8192
 	DoHMaxRequestSize = 8192
-	TLSConnBufferSize = 2048
+	TLSConnBufferSize = 128
 
 	// Cache & Pool Sizes
 	TLSSessionCacheSize  = 128
@@ -638,10 +638,6 @@ func LogError(format string, args ...any) { globalLog.Error(format, args...) }
 func LogWarn(format string, args ...any)  { globalLog.Warn(format, args...) }
 func LogInfo(format string, args ...any)  { globalLog.Info(format, args...) }
 func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
-
-// =============================================================================
-// ConnectionPool Implementation
-// =============================================================================
 
 // =============================================================================
 // QueryClient Implementation
