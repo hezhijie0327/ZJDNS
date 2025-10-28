@@ -835,6 +835,20 @@ func (p *ConnPool) closeEntry(entry *ConnPoolEntry) {
 	}
 }
 
+// checkConnectionLimitAndCleanup checks connection limits and performs cleanup if needed
+// Returns an error if the limit is still reached after cleanup
+func (p *ConnPool) checkConnectionLimitAndCleanup(protocol string) error {
+	if p.connCount.Load() >= p.maxConnections.Load() {
+		LogDebug("%s: Connection limit reached (%d/%d), forcing cleanup", protocol, p.connCount.Load(), p.maxConnections.Load())
+		p.cleanupExpiredConns()
+		// If still at limit after cleanup, return error
+		if p.connCount.Load() >= p.maxConnections.Load() {
+			return fmt.Errorf("%s connection pool limit reached (%d)", protocol, p.maxConnections.Load())
+		}
+	}
+	return nil
+}
+
 func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
 	if p.closed.Load() {
 		return nil, errors.New("pool closed")
@@ -857,13 +871,8 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 	}
 
 	// Check connection limit before creating new connection
-	if p.connCount.Load() >= p.maxConnections.Load() {
-		LogDebug("HTTP2: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections.Load())
-		p.cleanupExpiredConns()
-		// If still at limit after cleanup, return error
-		if p.connCount.Load() >= p.maxConnections.Load() {
-			return nil, fmt.Errorf("HTTP2 connection pool limit reached (%d)", p.maxConnections.Load())
-		}
+	if err := p.checkConnectionLimitAndCleanup("HTTP2"); err != nil {
+		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -926,13 +935,8 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 	}
 
 	// Check connection limit before creating new connection
-	if p.connCount.Load() >= p.maxConnections.Load() {
-		LogDebug("HTTP3: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections.Load())
-		p.cleanupExpiredConns()
-		// If still at limit after cleanup, return error
-		if p.connCount.Load() >= p.maxConnections.Load() {
-			return nil, fmt.Errorf("HTTP3 connection pool limit reached (%d)", p.maxConnections.Load())
-		}
+	if err := p.checkConnectionLimitAndCleanup("HTTP3"); err != nil {
+		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -1000,13 +1004,8 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 	}
 
 	// Check connection limit before creating new connection
-	if p.connCount.Load() >= p.maxConnections.Load() {
-		LogDebug("QUIC: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections.Load())
-		p.cleanupExpiredConns()
-		// If still at limit after cleanup, return error
-		if p.connCount.Load() >= p.maxConnections.Load() {
-			return nil, fmt.Errorf("QUIC connection pool limit reached (%d)", p.maxConnections.Load())
-		}
+	if err := p.checkConnectionLimitAndCleanup("QUIC"); err != nil {
+		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -1129,13 +1128,8 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 	}
 
 	// Check connection limit before creating new connection
-	if p.connCount.Load() >= p.maxConnections.Load() {
-		LogDebug("TLS: Connection limit reached (%d/%d), forcing cleanup", p.connCount.Load(), p.maxConnections.Load())
-		p.cleanupExpiredConns()
-		// If still at limit after cleanup, return error
-		if p.connCount.Load() >= p.maxConnections.Load() {
-			return nil, fmt.Errorf("TLS connection pool limit reached (%d)", p.maxConnections.Load())
-		}
+	if err := p.checkConnectionLimitAndCleanup("TLS"); err != nil {
+		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
