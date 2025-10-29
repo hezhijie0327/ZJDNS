@@ -61,6 +61,10 @@ var (
 	globalLog = NewLogManager()
 	timeCache = NewTimeCache()
 
+	// Global random number generator for shuffling operations
+	// Seeded once at startup to avoid repeated initialization overhead
+	globalRNG = mrand.New(mrand.NewSource(time.Now().UnixNano()))
+
 	// Protocol configurations
 	NextProtoDOT  = []string{"dot"}
 	NextProtoDoQ  = []string{"doq"}
@@ -508,15 +512,12 @@ func shuffleRootServers(servers []string) []string {
 	shuffled := make([]string, len(servers))
 	copy(shuffled, servers)
 
-	// Use optimized Fisher-Yates shuffle algorithm with seeded random source
-	// Create a local random source with time-based seed for non-deterministic shuffling
-	rng := mrand.New(mrand.NewSource(time.Now().UnixNano()))
+	// Use optimized Fisher-Yates shuffle algorithm with global RNG
+	// Uses pre-initialized global RNG for better performance and true randomness
 	for i := len(shuffled) - 1; i > 0; i-- {
-		j := rng.Intn(i + 1)
+		j := globalRNG.Intn(i + 1)
 		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
-
-	LogDebug("Shuffled root servers: %v", shuffled)
 
 	return shuffled
 }
