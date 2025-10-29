@@ -150,39 +150,10 @@ const (
 	// Timing Configuration
 	// =============================================================================
 
-	// Connection Timeouts
-	ConnTimeout         = 2 * time.Second
-	ConnDialTimeout     = 2 * time.Second
-	TLSHandshakeTimeout = 2 * time.Second
-
-	// Protocol Timeouts
-	QueryTimeout      = 3 * time.Second
-	RecursiveTimeout  = 5 * time.Second
-	PublicIPTimeout   = 2 * time.Second
-	HTTPClientTimeout = 3 * time.Second
-	ShutdownTimeout   = 2 * time.Second
-
-	// DoH Timeouts
-	DoHReadHeaderTimeout = 3 * time.Second
-	DoHWriteTimeout      = 3 * time.Second
-
-	// DoT Timeouts
-	DoTReadTimeout  = 3 * time.Second
-	DoTWriteTimeout = 3 * time.Second
-	DoTIdleTimeout  = 45 * time.Second
-
-	// Secure Protocol Timeouts
-	SecureIdleTimeout = 45 * time.Second
-
-	// Pprof Timeouts
-	PprofReadHeaderTimeout = 3 * time.Second
-	PprofReadTimeout       = 3 * time.Second
-	PprofIdleTimeout       = 45 * time.Second
-
-	// QUIC Timeouts
-	QUICMaxIdleTimeout   = 30 * time.Second
-	QUICCloseTimeout     = 200 * time.Millisecond
-	QUICAddrValidatorTTL = 15 * time.Second
+	// Common Timeouts
+	DefaultTimeout   = 2 * time.Second // Connection, Dial, Handshake, PublicIP, Shutdown
+	OperationTimeout = 3 * time.Second // Query, HTTP, DNS I/O, Pprof I/O
+	IdleTimeout      = 5 * time.Second // Recursive, Secure Idle, Pprof Idle
 
 	// =============================================================================
 	// Cache Configuration
@@ -197,19 +168,8 @@ const (
 	// Redis Configuration
 	// =============================================================================
 
-	// Redis Settings
-	RedisMaxRetries = 2
-
-	// Redis Timeouts
-	RedisReadTimeout     = 2 * time.Second
-	RedisWriteTimeout    = 2 * time.Second
-	RedisDialTimeout     = 2 * time.Second
-	RedisPoolIdleTimeout = 3 * time.Second
-
 	// Redis Key Prefixes
-	RedisPrefixDNS           = "dns:"
-	RedisPrefixQUICValidator = "quic:v:"
-	RedisPrefixQUICSession   = "quic:s:"
+	RedisPrefixDNS = "dns:"
 
 	// =============================================================================
 	// QUIC Configuration
@@ -638,7 +598,7 @@ func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
 
 func NewQueryClient() *QueryClient {
 	return &QueryClient{
-		timeout: QueryTimeout,
+		timeout: OperationTimeout,
 	}
 }
 
@@ -699,7 +659,7 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 
 func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	dialer := &net.Dialer{
-		Timeout: ConnDialTimeout,
+		Timeout: DefaultTimeout,
 	}
 
 	netConn, err := dialer.DialContext(ctx, "tcp", server.Address)
@@ -757,7 +717,7 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 	tlsConfig.NextProtos = NextProtoDoQ
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:             QUICMaxIdleTimeout,
+		MaxIdleTimeout:             IdleTimeout,
 		MaxIncomingStreams:         MaxIncomingStreams / 2,
 		EnableDatagrams:            true,
 		Allow0RTT:                  true,
@@ -765,7 +725,7 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 		MaxConnectionReceiveWindow: MaxConnectionReceiveWindow,
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, ConnDialTimeout)
+	dialCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
 	defer cancel()
 
 	conn, err := quic.DialAddr(dialCtx, server.Address, tlsConfig, quicConfig)
@@ -925,7 +885,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 	transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
 		QUICConfig: &quic.Config{
-			MaxIdleTimeout:             QUICMaxIdleTimeout,
+			MaxIdleTimeout:             IdleTimeout,
 			MaxIncomingStreams:         MaxIncomingStreams / 2,
 			EnableDatagrams:            true,
 			Allow0RTT:                  true,
@@ -1294,16 +1254,12 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 	logging.Disable()
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:         config.Redis.Address,
-		Password:     config.Redis.Password,
-		DB:           config.Redis.Database,
-		MaxRetries:   RedisMaxRetries,
-		ReadTimeout:  RedisReadTimeout,
-		WriteTimeout: RedisWriteTimeout,
-		DialTimeout:  RedisDialTimeout,
+		Addr:     config.Redis.Address,
+		Password: config.Redis.Password,
+		DB:       config.Redis.Database,
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), ConnTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
@@ -1333,7 +1289,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 		return nil, false, false
 	}
 
-	ctx, cancel := context.WithTimeout(rc.ctx, RedisReadTimeout)
+	ctx, cancel := context.WithTimeout(rc.ctx, OperationTimeout)
 	defer cancel()
 
 	data, err := rc.client.Get(ctx, key).Result()
@@ -1345,7 +1301,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
 		rc.bgGroup.Go(func() error {
 			defer HandlePanic("Clean corrupted cache")
-			cleanCtx, cleanCancel := context.WithTimeout(rc.bgCtx, RedisWriteTimeout)
+			cleanCtx, cleanCancel := context.WithTimeout(rc.bgCtx, OperationTimeout)
 			defer cleanCancel()
 			if err := rc.client.Del(cleanCtx, key).Err(); err != nil {
 				LogError("CACHE: Failed to clean corrupted cache key %s: %v", key, err)
@@ -1362,7 +1318,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	rc.bgGroup.Go(func() error {
 		defer HandlePanic("Update access time")
 		if atomic.LoadInt32(&rc.closed) == 0 {
-			updateCtx, updateCancel := context.WithTimeout(rc.bgCtx, RedisWriteTimeout)
+			updateCtx, updateCancel := context.WithTimeout(rc.bgCtx, OperationTimeout)
 			defer updateCancel()
 			if data, err := json.Marshal(entry); err == nil {
 				if err := rc.client.Set(updateCtx, key, data, redis.KeepTTL).Err(); err != nil {
@@ -1411,7 +1367,7 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+	ctx, cancel := context.WithTimeout(rc.ctx, OperationTimeout)
 	defer cancel()
 
 	expiration := time.Duration(cacheTTL)*time.Second + time.Duration(StaleMaxAge)*time.Second
@@ -1440,7 +1396,7 @@ func (rc *RedisCache) Close() error {
 			LogError("CACHE: Background goroutine error: %v", err)
 		}
 		LogDebug("CACHE: All Redis background goroutines finished gracefully")
-	case <-time.After(RedisPoolIdleTimeout):
+	case <-time.After(IdleTimeout):
 		LogWarn("CACHE: Redis background goroutine shutdown timeout")
 	}
 
@@ -1780,7 +1736,7 @@ func (r *CIDRRule) containsIPv6(ip net.IP) bool {
 func NewEDNSManager(defaultSubnet string) (*EDNSManager, error) {
 	manager := &EDNSManager{
 		detector: &IPDetector{
-			httpClient: &http.Client{Timeout: HTTPClientTimeout},
+			httpClient: &http.Client{Timeout: OperationTimeout},
 		},
 	}
 
@@ -1966,16 +1922,15 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: PublicIPTimeout}
+			dialer := &net.Dialer{Timeout: DefaultTimeout}
 			if forceIPv6 {
 				return dialer.DialContext(ctx, "tcp6", addr)
 			}
 			return dialer.DialContext(ctx, "tcp4", addr)
 		},
-		TLSHandshakeTimeout: TLSHandshakeTimeout,
 	}
 
-	client := &http.Client{Timeout: HTTPClientTimeout, Transport: transport}
+	client := &http.Client{Timeout: OperationTimeout, Transport: transport}
 	defer transport.CloseIdleConnections()
 
 	resp, err := client.Get("https://api.cloudflare.com/cdn-cgi/trace")
@@ -2567,8 +2522,8 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		return
 	}
 
-	_ = tlsConn.SetReadDeadline(time.Now().Add(DoTReadTimeout))
-	_ = tlsConn.SetWriteDeadline(time.Now().Add(DoTWriteTimeout))
+	_ = tlsConn.SetReadDeadline(time.Now().Add(OperationTimeout))
+	_ = tlsConn.SetWriteDeadline(time.Now().Add(OperationTimeout))
 
 	reader := bufio.NewReaderSize(tlsConn, TLSConnBufferSize)
 
@@ -2579,8 +2534,8 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		default:
 		}
 
-		_ = tlsConn.SetReadDeadline(time.Now().Add(DoTReadTimeout))
-		_ = tlsConn.SetWriteDeadline(time.Now().Add(DoTWriteTimeout))
+		_ = tlsConn.SetReadDeadline(time.Now().Add(OperationTimeout))
+		_ = tlsConn.SetWriteDeadline(time.Now().Add(OperationTimeout))
 
 		lengthBuf := make([]byte, 2)
 		n, err := io.ReadFull(reader, lengthBuf)
@@ -2672,7 +2627,7 @@ func (tm *TLSManager) startDOQServer() error {
 	quicTLSConfig.NextProtos = NextProtoDoQ
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        SecureIdleTimeout,
+		MaxIdleTimeout:        IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams / 2,
 		MaxIncomingUniStreams: MaxIncomingStreams / 4,
 		Allow0RTT:             true,
@@ -2730,7 +2685,7 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 	}
 
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), QUICCloseTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 		defer cancel()
 
 		_ = conn.CloseWithError(QUICCodeNoError, "")
@@ -2867,9 +2822,9 @@ func (tm *TLSManager) startDOHServer(port string) error {
 
 	tm.httpsServer = &http.Server{
 		Handler:           tm,
-		ReadHeaderTimeout: DoHReadHeaderTimeout,
-		WriteTimeout:      DoHWriteTimeout,
-		IdleTimeout:       DoTIdleTimeout,
+		ReadHeaderTimeout: OperationTimeout,
+		WriteTimeout:      OperationTimeout,
+		IdleTimeout:       IdleTimeout,
 	}
 
 	tm.serverGroup.Go(func() error {
@@ -2891,7 +2846,7 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 	tlsConfig.NextProtos = NextProtoDoH3
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        SecureIdleTimeout,
+		MaxIdleTimeout:        IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams / 2,
 		MaxIncomingUniStreams: MaxIncomingStreams / 4,
 		Allow0RTT:             true,
@@ -3028,13 +2983,13 @@ func (tm *TLSManager) shutdown() error {
 	}
 
 	if tm.httpsServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 		defer cancel()
 		_ = tm.httpsServer.Shutdown(ctx)
 	}
 
 	if tm.h3Server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 		defer cancel()
 		_ = tm.h3Server.Shutdown(ctx)
 	}
@@ -3136,9 +3091,9 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	if config.Server.Pprof != "" {
 		server.pprofServer = &http.Server{
 			Addr:              ":" + config.Server.Pprof,
-			ReadHeaderTimeout: PprofReadHeaderTimeout,
-			ReadTimeout:       PprofReadTimeout,
-			IdleTimeout:       PprofIdleTimeout,
+			ReadHeaderTimeout: OperationTimeout,
+			ReadTimeout:       OperationTimeout,
+			IdleTimeout:       IdleTimeout,
 		}
 
 		if server.securityMgr != nil && server.securityMgr.tls != nil {
@@ -3188,13 +3143,13 @@ func (s *DNSServer) shutdownServer() {
 	}
 
 	if s.securityMgr != nil {
-		if err := s.securityMgr.Shutdown(ShutdownTimeout); err != nil {
+		if err := s.securityMgr.Shutdown(DefaultTimeout); err != nil {
 			LogError("SECURITY: Security manager shutdown failed: %v", err)
 		}
 	}
 
 	if s.pprofServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 		if err := s.pprofServer.Shutdown(ctx); err != nil {
 			LogError("PPROF: pprof server shutdown failed: %v", err)
 		} else {
@@ -3216,7 +3171,7 @@ func (s *DNSServer) shutdownServer() {
 			LogError("SERVER: Background goroutines finished with error: %v", err)
 		}
 		LogInfo("SERVER: All background tasks shut down")
-	case <-time.After(ShutdownTimeout):
+	case <-time.After(DefaultTimeout):
 		LogWarn("SERVER: Background tasks shutdown timeout")
 	}
 
@@ -3233,7 +3188,7 @@ func (s *DNSServer) shutdownServer() {
 			LogError("SERVER: Cache refresh goroutines finished with error: %v", err)
 		}
 		LogInfo("SERVER: All cache refresh tasks shut down")
-	case <-time.After(ShutdownTimeout):
+	case <-time.After(DefaultTimeout):
 		LogWarn("SERVER: Cache refresh tasks shutdown timeout")
 	}
 
@@ -3544,7 +3499,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	if isExpired && entry.ShouldRefresh() {
 		s.cacheRefreshGroup.Go(func() error {
 			defer HandlePanic("cache refresh")
-			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, QueryTimeout)
+			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, OperationTimeout)
 			defer cancel()
 			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
 		})
@@ -3755,7 +3710,7 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, 
 	if len(servers) > 0 {
 		return qm.queryUpstream(question, ecs)
 	}
-	ctx, cancel := context.WithTimeout(qm.server.ctx, RecursiveTimeout)
+	ctx, cancel := context.WithTimeout(qm.server.ctx, IdleTimeout)
 	defer cancel()
 
 	answer, authority, additional, validated, ecsResponse, server, err := qm.cname.resolveWithCNAME(ctx, question, ecs)
@@ -3793,7 +3748,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 
 	resultChan := make(chan UpstreamQueryResult, 1)
 
-	ctx, cancel := context.WithTimeout(qm.server.ctx, QueryTimeout)
+	ctx, cancel := context.WithTimeout(qm.server.ctx, OperationTimeout)
 	defer cancel()
 
 	g, queryCtx := errgroup.WithContext(ctx)
@@ -3811,7 +3766,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 			}
 
 			if server.IsRecursive() {
-				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, RecursiveTimeout)
+				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, IdleTimeout)
 				defer recursiveCancel()
 
 				answer, authority, additional, validated, ecsResponse, usedServer, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs)
@@ -4229,7 +4184,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		return nil
 	}
 
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, ConnTimeout)
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, DefaultTimeout)
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
