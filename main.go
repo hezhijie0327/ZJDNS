@@ -45,9 +45,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/logging"
 	"golang.org/x/net/http2"
-	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -68,6 +65,23 @@ var (
 	NextProtoDoQ  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
 	NextProtoDoH3 = []string{"h3"}
 	NextProtoDoH  = []string{"h2", "http/1.1"}
+
+	// Root servers
+	DefaultRootServers = []string{
+		"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
+		"170.247.170.2:53", "[2801:1b8:10::b]:53",
+		"192.33.4.12:53", "[2001:500:2::c]:53",
+		"199.7.91.13:53", "[2001:500:2d::d]:53",
+		"192.203.230.10:53", "[2001:500:a8::e]:53",
+		"192.5.5.241:53", "[2001:500:2f::f]:53",
+		"192.112.36.4:53", "[2001:500:12::d0d]:53",
+		"198.97.190.53:53", "[2001:500:1::53]:53",
+		"192.36.148.17:53", "[2001:7fe::53]:53",
+		"192.58.128.30:53", "[2001:503:c27::2:30]:53",
+		"193.0.14.129:53", "[2001:7fd::1]:53",
+		"199.7.83.42:53", "[2001:500:9f::42]:53",
+		"202.12.27.33:53", "[2001:dc3::35]:53",
+	}
 )
 
 // =============================================================================
@@ -101,12 +115,10 @@ const (
 	// Concurrency Limits
 	DNSQueryConcurrency  = 3
 	NSResolveConcurrency = 3
-	SpeedTestConcurrency = 3
 
 	// Timeouts
 	QueryTimeout           = 3 * time.Second
 	RecursiveTimeout       = 5 * time.Second
-	SpeedTestTimeout       = 3 * time.Second
 	ConnTimeout            = 2 * time.Second
 	TLSHandshakeTimeout    = 2 * time.Second
 	PublicIPTimeout        = 2 * time.Second
@@ -128,18 +140,11 @@ const (
 	ConnValidateEvery      = 3 * time.Second
 	ConnKeepAlive          = 30 * time.Second
 	ConnPoolCleanup        = 3 * time.Second
-	MaxConnectionsPerPool  = 128
-
-	// Memory Monitoring Configuration
-	MemoryCheckInterval = 180 * time.Second
 
 	// Cache Configuration
-	DefaultCacheTTL    = 10
-	StaleTTL           = 30
-	StaleMaxAge        = 86400 * 7
-	DefaultSpeedTTL    = 180 * time.Second
-	SpeedDebounceDelay = 3 * time.Second
-	RootServerRefresh  = 900 * time.Second
+	DefaultCacheTTL = 10
+	StaleTTL        = 30
+	StaleMaxAge     = 86400 * 7
 
 	// Redis Configuration
 	RedisPoolSize        = 3
@@ -153,7 +158,6 @@ const (
 
 	// Redis Key Prefixes
 	RedisPrefixDNS           = "dns:"
-	RedisPrefixSpeedtest     = "speed:"
 	RedisPrefixQUICValidator = "quic:v:"
 	RedisPrefixQUICSession   = "quic:s:"
 
@@ -172,10 +176,6 @@ const (
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
 	QUICCodeInternalError quic.ApplicationErrorCode = 1
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
-
-	// Speed Test Configuration
-	DefaultSpeedTimeout = 200 * time.Millisecond
-	UnreachableLatency  = 5 * time.Second
 
 	// Logging
 	DefaultLogLevel = "info"
@@ -211,12 +211,11 @@ type TimeCache struct {
 }
 
 type ServerConfig struct {
-	Server    ServerSettings    `json:"server"`
-	Redis     RedisSettings     `json:"redis"`
-	Speedtest []SpeedTestMethod `json:"speedtest"`
-	Upstream  []UpstreamServer  `json:"upstream"`
-	Rewrite   []RewriteRule     `json:"rewrite"`
-	CIDR      []CIDRConfig      `json:"cidr"`
+	Server   ServerSettings   `json:"server"`
+	Redis    RedisSettings    `json:"redis"`
+	Upstream []UpstreamServer `json:"upstream"`
+	Rewrite  []RewriteRule    `json:"rewrite"`
+	CIDR     []CIDRConfig     `json:"cidr"`
 }
 
 type ServerSettings struct {
@@ -281,12 +280,6 @@ type DNSRecordConfig struct {
 	TTL          uint32 `json:"ttl,omitempty"`
 	Content      string `json:"content"`
 	ResponseCode *int   `json:"response_code,omitempty"`
-}
-
-type SpeedTestMethod struct {
-	Type    string `json:"type"`
-	Port    string `json:"port,omitempty"`
-	Timeout int    `json:"timeout"`
 }
 
 type CIDRConfig struct {
@@ -384,58 +377,6 @@ type DNSRewriteResult struct {
 	Additional    []dns.RR
 }
 
-type RequestTracker struct {
-	ID           string
-	StartTime    time.Time
-	Domain       string
-	QueryType    string
-	ClientIP     string
-	Upstream     atomic.Value // string
-	ResponseTime time.Duration
-}
-
-// Speed Test Types
-type SpeedResult struct {
-	IP        string        `json:"ip"`
-	Latency   time.Duration `json:"latency"`
-	Reachable bool          `json:"reachable"`
-	Timestamp time.Time     `json:"timestamp"`
-}
-
-type RootServerWithLatency struct {
-	Server    string
-	Latency   time.Duration
-	Reachable bool
-}
-
-// RootServerSortResult contains both the sorted servers and the sort timestamp
-// This ensures atomic consistency when reading both values together
-type RootServerSortResult struct {
-	SortedServers []RootServerWithLatency
-	SortTime      time.Time
-}
-
-type SpeedTestManager struct {
-	timeout   time.Duration
-	redis     *redis.Client
-	cacheTTL  time.Duration
-	keyPrefix string
-	methods   []SpeedTestMethod
-	closed    int32
-	// Background worker pool for controlled concurrency
-	bgWorkerPool *errgroup.Group
-	bgWorkerCtx  context.Context
-	bgCancel     context.CancelCauseFunc
-}
-
-type RootServerManager struct {
-	servers     atomic.Pointer[[]string] // Replace regular slice with atomic pointer
-	speedTester *SpeedTestManager
-	sortResult  atomic.Pointer[*RootServerSortResult]
-	lastUpdate  atomic.Value // time.Time
-	needsSpeed  atomic.Bool
-}
-
 // CIDR Management Types
 type CIDRRule struct {
 	tag       string
@@ -495,7 +436,6 @@ type ConnPool struct {
 	closed          atomic.Bool
 	cleanupTicker   *time.Ticker
 	connCount       atomic.Int64
-	maxConnections  atomic.Int64
 }
 
 type QueryClient struct {
@@ -543,8 +483,6 @@ type DNSServer struct {
 	securityMgr       *SecurityManager
 	ednsMgr           *EDNSManager
 	rewriteMgr        *RewriteManager
-	speedTestMgr      *SpeedTestManager
-	rootServerMgr     *RootServerManager
 	cidrMgr           *CIDRManager
 	pprofServer       *http.Server
 	redisClient       *redis.Client
@@ -557,7 +495,6 @@ type DNSServer struct {
 	cacheRefreshCtx   context.Context
 	closed            int32
 	queryMgr          *QueryManager
-	memoryMonitor     *time.Ticker
 }
 
 type ConfigManager struct{}
@@ -576,8 +513,7 @@ type UpstreamHandler struct {
 }
 
 type RecursiveResolver struct {
-	server        *DNSServer
-	rootServerMgr *RootServerManager
+	server *DNSServer
 }
 
 type CNAMEHandler struct {
@@ -691,7 +627,6 @@ func NewConnPool() *ConnPool {
 		cleanupTicker:   time.NewTicker(ConnPoolCleanup),
 		sessionCache:    tls.NewLRUClientSessionCache(TLSSessionCacheSize),
 	}
-	pool.maxConnections.Store(MaxConnectionsPerPool)
 	pool.closed.Store(false)
 
 	pool.backgroundGroup.Go(func() error {
@@ -835,20 +770,6 @@ func (p *ConnPool) closeEntry(entry *ConnPoolEntry) {
 	}
 }
 
-// checkConnectionLimitAndCleanup checks connection limits and performs cleanup if needed
-// Returns an error if the limit is still reached after cleanup
-func (p *ConnPool) checkConnectionLimitAndCleanup(protocol string) error {
-	if p.connCount.Load() >= p.maxConnections.Load() {
-		LogDebug("%s: Connection limit reached (%d/%d), forcing cleanup", protocol, p.connCount.Load(), p.maxConnections.Load())
-		p.cleanupExpiredConns()
-		// If still at limit after cleanup, return error
-		if p.connCount.Load() >= p.maxConnections.Load() {
-			return fmt.Errorf("%s connection pool limit reached (%d)", protocol, p.maxConnections.Load())
-		}
-	}
-	return nil
-}
-
 func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
 	if p.closed.Load() {
 		return nil, errors.New("pool closed")
@@ -868,11 +789,6 @@ func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*
 		}
 		p.http2Conns.Delete(key)
 		p.closeEntry(entry)
-	}
-
-	// Check connection limit before creating new connection
-	if err := p.checkConnectionLimitAndCleanup("HTTP2"); err != nil {
-		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -932,11 +848,6 @@ func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*
 		}
 		p.http3Conns.Delete(key)
 		p.closeEntry(entry)
-	}
-
-	// Check connection limit before creating new connection
-	if err := p.checkConnectionLimitAndCleanup("HTTP3"); err != nil {
-		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -1001,11 +912,6 @@ func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsCo
 			p.quicConns.Delete(key)
 			p.closeEntry(entry)
 		}
-	}
-
-	// Check connection limit before creating new connection
-	if err := p.checkConnectionLimitAndCleanup("QUIC"); err != nil {
-		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -1125,11 +1031,6 @@ func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsCon
 
 		p.tlsConns.Delete(key)
 		p.closeEntry(entry)
-	}
-
-	// Check connection limit before creating new connection
-	if err := p.checkConnectionLimitAndCleanup("TLS"); err != nil {
-		return nil, err
 	}
 
 	tlsConfig = tlsConfig.Clone()
@@ -1784,13 +1685,6 @@ func GenerateExampleConfig() string {
 	config.Rewrite = []RewriteRule{
 		{Name: "blocked.example.com", Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultCacheTTL}}},
 		{Name: "ipv6.blocked.example.com", Records: []DNSRecordConfig{{Type: "AAAA", Content: "::1", TTL: DefaultCacheTTL}}},
-	}
-
-	config.Speedtest = []SpeedTestMethod{
-		{Type: "icmp", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
-		{Type: "tcp", Port: "443", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
-		{Type: "tcp", Port: "80", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
-		{Type: "udp", Port: "53", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
 	}
 
 	data, _ := json.MarshalIndent(config, "", "  ")
@@ -2676,613 +2570,6 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 	return &dns.RFC3597{
 		Hdr:   dns.RR_Header{Name: name, Rrtype: rrType, Class: dns.ClassINET, Ttl: ttl},
 		Rdata: record.Content,
-	}
-}
-
-// =============================================================================
-// SpeedTestManager Implementation
-// =============================================================================
-
-func NewSpeedTestManager(config ServerConfig, redisClient *redis.Client, keyPrefix string) *SpeedTestManager {
-	if keyPrefix == "" {
-		keyPrefix = config.Redis.KeyPrefix + RedisPrefixSpeedtest
-	}
-
-	// Create background worker pool with controlled concurrency
-	ctx, cancel := context.WithCancelCause(context.Background())
-	bgPool, bgCtx := errgroup.WithContext(ctx)
-	bgPool.SetLimit(SpeedTestConcurrency)
-
-	st := &SpeedTestManager{
-		timeout:      DefaultSpeedTimeout,
-		redis:        redisClient,
-		cacheTTL:     DefaultSpeedTTL,
-		keyPrefix:    keyPrefix,
-		methods:      config.Speedtest,
-		bgWorkerPool: bgPool,
-		bgWorkerCtx:  bgCtx,
-		bgCancel:     cancel,
-	}
-	return st
-}
-
-func (st *SpeedTestManager) Close() error {
-	if !atomic.CompareAndSwapInt32(&st.closed, 0, 1) {
-		return nil
-	}
-
-	// Cancel background worker pool
-	if st.bgCancel != nil {
-		st.bgCancel(errors.New("speed test manager closed"))
-	}
-
-	// Wait for background workers to finish with timeout
-	if st.bgWorkerPool != nil {
-		done := make(chan struct{})
-		go func() {
-			defer HandlePanic("SpeedTest background worker wait")
-			_ = st.bgWorkerPool.Wait()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			LogDebug("SPEEDTEST: All background workers stopped gracefully")
-		case <-time.After(SpeedTestTimeout):
-			LogWarn("SPEEDTEST: Background workers did not stop within timeout")
-		}
-	}
-
-	return nil
-}
-
-func (st *SpeedTestManager) performSpeedTestAndSort(response *dns.Msg) *dns.Msg {
-	if response == nil {
-		return response
-	}
-
-	var aRecords []*dns.A
-	var aaaaRecords []*dns.AAAA
-	var cnameRecords []dns.RR
-	var otherRecords []dns.RR
-
-	for _, answer := range response.Answer {
-		switch record := answer.(type) {
-		case *dns.A:
-			aRecords = append(aRecords, record)
-		case *dns.AAAA:
-			aaaaRecords = append(aaaaRecords, record)
-		case *dns.CNAME:
-			cnameRecords = append(cnameRecords, record)
-		default:
-			otherRecords = append(otherRecords, answer)
-		}
-	}
-
-	if len(aRecords) > 1 {
-		aRecords = st.sortARecords(aRecords)
-	}
-	if len(aaaaRecords) > 1 {
-		aaaaRecords = st.sortAAAARecords(aaaaRecords)
-	}
-
-	response.Answer = append(append(append(cnameRecords, ToRRSlice(aRecords)...), ToRRSlice(aaaaRecords)...), otherRecords...)
-	return response
-}
-
-// sortARecords sorts A records by speed test results
-func (st *SpeedTestManager) sortARecords(records []*dns.A) []*dns.A {
-	if len(records) <= 1 {
-		return records
-	}
-
-	ips := make([]string, len(records))
-	for i, record := range records {
-		ips[i] = record.A.String()
-	}
-
-	results := st.speedTest(ips)
-
-	sortBySpeedResult(records, func(record *dns.A) string {
-		return record.A.String()
-	}, results)
-
-	return records
-}
-
-// sortAAAARecords sorts AAAA records by speed test results
-func (st *SpeedTestManager) sortAAAARecords(records []*dns.AAAA) []*dns.AAAA {
-	if len(records) <= 1 {
-		return records
-	}
-
-	ips := make([]string, len(records))
-	for i, record := range records {
-		ips[i] = record.AAAA.String()
-	}
-
-	results := st.speedTest(ips)
-
-	sortBySpeedResult(records, func(record *dns.AAAA) string {
-		return record.AAAA.String()
-	}, results)
-
-	return records
-}
-
-func (st *SpeedTestManager) speedTest(ips []string) map[string]*SpeedResult {
-	results := make(map[string]*SpeedResult)
-	remainingIPs := []string{}
-
-	// Fast path: only use cached results, don't block for missing cache
-	ctx, cancel := context.WithTimeout(context.Background(), RedisReadTimeout/2)
-	defer cancel()
-
-	for _, ip := range ips {
-		key := st.keyPrefix + ip
-		data, err := st.redis.Get(ctx, key).Result()
-		if err == nil {
-			var result SpeedResult
-			if json.Unmarshal([]byte(data), &result) == nil {
-				if time.Since(result.Timestamp) < st.cacheTTL {
-					results[ip] = &result
-					continue
-				}
-			}
-		}
-		// For IPs without valid cache, use default latency and mark for background testing
-		results[ip] = &SpeedResult{
-			IP:        ip,
-			Latency:   UnreachableLatency,
-			Reachable: true,
-			Timestamp: time.Now(),
-		}
-		remainingIPs = append(remainingIPs, ip)
-	}
-
-	// Background path: async speed testing for IPs without fresh cache using controlled worker pool
-	if len(remainingIPs) > 0 {
-		st.submitBackgroundSpeedTest(remainingIPs)
-	}
-
-	return results
-}
-
-func (st *SpeedTestManager) performSpeedTest(ips []string) map[string]*SpeedResult {
-	resultChan := make(chan *SpeedResult, len(ips))
-
-	g, ctx := errgroup.WithContext(context.Background())
-	g.SetLimit(SpeedTestConcurrency)
-	for _, ip := range ips {
-		testIP := ip
-		g.Go(func() error {
-			defer func() {
-				if r := recover(); r != nil {
-					LogError("SPEEDTEST: Panic in speed test goroutine: %v", r)
-				}
-			}()
-
-			// Create a reusable timer for this goroutine
-			timer := time.NewTimer(st.timeout)
-			defer func() {
-				timer.Stop()
-				// Drain channel to prevent potential leaks if timer.C has unread values
-				select {
-				case <-timer.C:
-				default:
-				}
-			}()
-
-			// Inline testSingleIP logic
-			result := &SpeedResult{
-				IP:        testIP,
-				Timestamp: time.Now(),
-			}
-
-			for _, method := range st.methods {
-				var latency time.Duration
-				timeout := time.Duration(method.Timeout) * time.Millisecond
-
-				switch method.Type {
-				case "icmp":
-					latency = st.pingWithProtocol("icmp", testIP, "", timeout, false)
-				case "tcp":
-					latency = st.pingWithProtocol("tcp", testIP, method.Port, timeout, false)
-				case "udp":
-					latency = st.pingWithProtocol("udp", testIP, method.Port, timeout, true)
-				default:
-					continue
-				}
-
-				if latency >= 0 {
-					result.Reachable = true
-					result.Latency = latency
-					break
-				}
-			}
-
-			if !result.Reachable {
-				result.Latency = UnreachableLatency
-			}
-
-			select {
-			case resultChan <- result:
-			case <-timer.C:
-				LogDebug("SPEEDTEST: Drop result for %s due to timeout", testIP)
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			return nil
-		})
-	}
-
-	go func() {
-		_ = g.Wait()
-		close(resultChan)
-	}()
-
-	results := make(map[string]*SpeedResult)
-	for result := range resultChan {
-		if result != nil {
-			results[result.IP] = result
-		}
-	}
-
-	return results
-}
-
-// submitBackgroundSpeedTest submits speed testing work to the controlled background pool and performs the testing
-func (st *SpeedTestManager) submitBackgroundSpeedTest(ips []string) {
-	if atomic.LoadInt32(&st.closed) != 0 || st.bgWorkerPool == nil {
-		return
-	}
-
-	// Make a copy of the IPs to avoid race conditions
-	ipsCopy := make([]string, len(ips))
-	copy(ipsCopy, ips)
-
-	st.bgWorkerPool.Go(func() error {
-		defer HandlePanic("Background speed test worker")
-
-		if len(ipsCopy) == 0 {
-			return nil
-		}
-
-		// Perform actual speed testing
-		newResults := st.performSpeedTest(ipsCopy)
-
-		// Update cache with new results
-		if len(newResults) > 0 {
-			ctx, cancel := context.WithTimeout(context.Background(), RedisWriteTimeout)
-			defer cancel()
-
-			for ip, result := range newResults {
-				key := st.keyPrefix + ip
-				data, err := json.Marshal(result)
-				if err == nil {
-					st.redis.Set(ctx, key, data, st.cacheTTL)
-				}
-			}
-		}
-
-		return nil
-	})
-}
-
-// pingWithProtocol handles ping operations for different protocols (tcp, udp, icmp)
-// For TCP/UDP: port is required, for ICMP: port is ignored
-// requireWrite indicates whether to send data after connecting (needed for UDP)
-func (st *SpeedTestManager) pingWithProtocol(protocol, ip string, port string, timeout time.Duration, requireWrite bool) time.Duration {
-	switch protocol {
-	case "icmp":
-		return st.performICMPPing(ip, timeout)
-	case "tcp", "udp":
-		return st.performNetworkPing(protocol, ip, port, timeout, requireWrite)
-	default:
-		return -1
-	}
-}
-
-// performICMPPing handles ICMP ping operations
-func (st *SpeedTestManager) performICMPPing(ip string, timeout time.Duration) time.Duration {
-	dst, err := net.ResolveIPAddr("ip", ip)
-	if err != nil {
-		return -1
-	}
-
-	var icmpType icmp.Type
-	isIPv6 := dst.IP.To4() == nil
-
-	if isIPv6 {
-		icmpType = ipv6.ICMPTypeEchoRequest
-	} else {
-		icmpType = ipv4.ICMPTypeEcho
-	}
-
-	// Create ICMP connection on-demand
-	var conn *icmp.PacketConn
-	if isIPv6 {
-		conn, err = icmp.ListenPacket("ip6:ipv6-icmp", "")
-	} else {
-		conn, err = icmp.ListenPacket("ip4:icmp", "")
-	}
-
-	if err != nil {
-		return -1
-	}
-	defer func() { _ = conn.Close() }() // Ensure connection is closed after use
-
-	wm := icmp.Message{
-		Type: icmpType,
-		Code: 0,
-		Body: &icmp.Echo{ID: os.Getpid() & 0xffff, Seq: 1, Data: []byte("ZJDNS")},
-	}
-
-	wb, err := wm.Marshal(nil)
-	if err != nil {
-		return -1
-	}
-
-	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
-		return -1
-	}
-	start := time.Now()
-
-	if _, err := conn.WriteTo(wb, dst); err != nil {
-		return -1
-	}
-
-	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		return -1
-	}
-	rb := make([]byte, 1500)
-	n, _, err := conn.ReadFrom(rb)
-	if err != nil {
-		return -1
-	}
-
-	protocol := 1
-	if dst.IP.To4() == nil {
-		protocol = 58
-	}
-
-	rm, err := icmp.ParseMessage(protocol, rb[:n])
-	if err != nil {
-		return -1
-	}
-
-	switch rm.Type {
-	case ipv4.ICMPTypeEchoReply, ipv6.ICMPTypeEchoReply:
-		return time.Since(start)
-	default:
-		return -1
-	}
-}
-
-// performNetworkPing handles TCP/UDP ping operations
-func (st *SpeedTestManager) performNetworkPing(protocol, ip, port string, timeout time.Duration, requireWrite bool) time.Duration {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	start := time.Now()
-	conn, err := (&net.Dialer{}).DialContext(ctx, protocol, net.JoinHostPort(ip, port))
-	if err != nil {
-		return -1
-	}
-
-	// For UDP, we need to write something to establish the connection
-	if requireWrite {
-		if _, err := conn.Write([]byte{}); err != nil {
-			_ = conn.Close()
-			return -1
-		}
-	}
-
-	latency := time.Since(start)
-	_ = conn.Close()
-	return latency
-}
-
-// sortBySpeedResult is a generic method that sorts records by speed test results
-// It works for any type that can be mapped to an IP string
-func sortBySpeedResult[T any](records []T, getIP func(T) string, results map[string]*SpeedResult) {
-	slices.SortFunc(records, func(a, b T) int {
-		ipA, ipB := getIP(a), getIP(b)
-		resultA, okA := results[ipA]
-		resultB, okB := results[ipB]
-
-		if !okA || !okB {
-			// Fallback to original order if either result is missing
-			return 0
-		}
-
-		if resultA.Reachable != resultB.Reachable {
-			if resultA.Reachable {
-				return -1 // A comes first
-			}
-			return 1 // B comes first
-		}
-
-		if resultA.Latency != resultB.Latency {
-			if resultA.Latency < resultB.Latency {
-				return -1 // A comes first
-			}
-			return 1 // B comes first
-		}
-
-		return 0
-	})
-}
-
-// =============================================================================
-// RootServerManager Implementation
-// =============================================================================
-
-func NewRootServerManager(config ServerConfig, redisClient *redis.Client) *RootServerManager {
-	needsRecursive := len(config.Upstream) == 0
-	if !needsRecursive {
-		for _, upstream := range config.Upstream {
-			if upstream.IsRecursive() {
-				needsRecursive = true
-				break
-			}
-		}
-	}
-
-	servers := []string{
-		"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
-		"170.247.170.2:53", "[2801:1b8:10::b]:53",
-		"192.33.4.12:53", "[2001:500:2::c]:53",
-		"199.7.91.13:53", "[2001:500:2d::d]:53",
-		"192.203.230.10:53", "[2001:500:a8::e]:53",
-		"192.5.5.241:53", "[2001:500:2f::f]:53",
-		"192.112.36.4:53", "[2001:500:12::d0d]:53",
-		"198.97.190.53:53", "[2001:500:1::53]:53",
-		"192.36.148.17:53", "[2001:7fe::53]:53",
-		"192.58.128.30:53", "[2001:503:c27::2:30]:53",
-		"193.0.14.129:53", "[2001:7fd::1]:53",
-		"199.7.83.42:53", "[2001:500:9f::42]:53",
-		"202.12.27.33:53", "[2001:dc3::35]:53",
-	}
-
-	rsm := &RootServerManager{
-		servers:     atomic.Pointer[[]string]{},
-		speedTester: nil, // Will be set conditionally later
-	}
-	rsm.servers.Store(&servers)
-	rsm.needsSpeed.Store(needsRecursive)
-
-	serversPtr := rsm.servers.Load()
-	if serversPtr == nil {
-		serversPtr = &[]string{}
-	}
-	serversList := *serversPtr
-
-	sorted := make([]RootServerWithLatency, len(serversList))
-	for i, server := range serversList {
-		sorted[i] = RootServerWithLatency{
-			Server:    server,
-			Latency:   UnreachableLatency,
-			Reachable: false,
-		}
-	}
-	// Initialize with default values - ensures atomic consistency from startup
-	initialResult := &RootServerSortResult{
-		SortedServers: sorted,
-		SortTime:      time.Time{}, // Zero time indicates no sorting has occurred yet
-	}
-	rsm.sortResult.Store(&initialResult)
-
-	if needsRecursive && redisClient != nil {
-		dnsSpeedTestConfig := config
-		dnsSpeedTestConfig.Speedtest = []SpeedTestMethod{
-			{Type: "icmp", Timeout: int(DefaultSpeedTimeout.Milliseconds())},
-			{Type: "tcp", Port: DefaultDNSPort, Timeout: int(DefaultSpeedTimeout.Milliseconds())},
-		}
-
-		rootServerPrefix := config.Redis.KeyPrefix + RedisPrefixSpeedtest
-		rsm.speedTester = NewSpeedTestManager(dnsSpeedTestConfig, redisClient, rootServerPrefix)
-		rsm.speedTester.cacheTTL = DefaultSpeedTTL
-
-		go rsm.sortServersBySpeed()
-		LogInfo("SPEEDTEST: Root server speed testing enabled")
-	}
-
-	return rsm
-}
-
-func (rsm *RootServerManager) GetOptimalRootServers() []RootServerWithLatency {
-	// Load the sort result with type checking and fallback
-	if resultPtr := rsm.sortResult.Load(); resultPtr != nil && *resultPtr != nil {
-		result := *resultPtr
-		// Create a copy to avoid race conditions using slices.Clone
-		serversCopy := slices.Clone(result.SortedServers)
-		return serversCopy
-	}
-
-	// Fallback: return empty slice if no data is available
-	// This prevents runtime crashes and ensures graceful degradation
-	return []RootServerWithLatency{}
-}
-
-// GetLastSortTime returns the timestamp of the last sort operation
-// Returns zero time.Time if no sort has been performed yet
-func (rsm *RootServerManager) GetLastSortTime() time.Time {
-	if resultPtr := rsm.sortResult.Load(); resultPtr != nil && *resultPtr != nil {
-		return (*resultPtr).SortTime
-	}
-	return time.Time{} // Return zero time as fallback
-}
-
-func (rsm *RootServerManager) sortServersBySpeed() {
-	defer HandlePanic("Root server speed sorting")
-
-	if !rsm.needsSpeed.Load() || rsm.speedTester == nil {
-		return
-	}
-
-	serversPtr := rsm.servers.Load()
-	if serversPtr == nil {
-		return
-	}
-	servers := *serversPtr
-
-	ips := ExtractIPsFromServers(servers)
-	results := rsm.speedTester.speedTest(ips)
-
-	// Sort servers using the same logic as A/AAAA records
-	sortedServers := make([]string, len(servers))
-	copy(sortedServers, servers)
-
-	sortBySpeedResult(sortedServers, func(server string) string {
-		host, _, _ := net.SplitHostPort(server)
-		return host
-	}, results)
-
-	// Convert to RootServerWithLatency for storage and API compatibility
-	sortedWithLatency := make([]RootServerWithLatency, len(sortedServers))
-	for i, server := range sortedServers {
-		host, _, _ := net.SplitHostPort(server)
-		if result, exists := results[host]; exists && result.Reachable {
-			sortedWithLatency[i] = RootServerWithLatency{
-				Server:    server,
-				Latency:   result.Latency,
-				Reachable: true,
-			}
-		} else {
-			sortedWithLatency[i] = RootServerWithLatency{
-				Server:    server,
-				Latency:   UnreachableLatency,
-				Reachable: false,
-			}
-		}
-	}
-
-	// Store both the sorted servers and timestamp atomically as one unit
-	// This ensures consistency when reading both values together
-	sortResult := &RootServerSortResult{
-		SortedServers: sortedWithLatency,
-		SortTime:      time.Now(),
-	}
-	rsm.sortResult.Store(&sortResult)
-	rsm.lastUpdate.Store(time.Now())
-}
-
-func (rsm *RootServerManager) StartPeriodicSorting(ctx context.Context) {
-	if !rsm.needsSpeed.Load() {
-		return
-	}
-
-	ticker := time.NewTicker(RootServerRefresh)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			rsm.sortServersBySpeed()
-		case <-ctx.Done():
-			return
-		}
 	}
 }
 
@@ -4192,47 +3479,6 @@ func (tm *TLSManager) shutdown() error {
 }
 
 // =============================================================================
-// RequestTracker Implementation
-// =============================================================================
-
-func NewRequestTracker(domain, qtype, clientIP string) *RequestTracker {
-	rt := &RequestTracker{
-		ID:        fmt.Sprintf("%x", time.Now().UnixNano()&0xFFFFFF),
-		StartTime: time.Now(),
-		Domain:    domain,
-		QueryType: qtype,
-		ClientIP:  clientIP,
-	}
-	rt.Upstream.Store("") // Initialize with empty string
-	return rt
-}
-
-func (rt *RequestTracker) AddStep(step string, args ...any) {
-	if rt == nil || globalLog.GetLevel() < Debug {
-		return
-	}
-
-	timestamp := time.Since(rt.StartTime)
-	stepMsg := fmt.Sprintf("[%v] %s", timestamp.Truncate(time.Microsecond), fmt.Sprintf(step, args...))
-	LogDebug("[%s] %s", rt.ID, stepMsg)
-}
-
-func (rt *RequestTracker) Finish() {
-	if rt == nil {
-		return
-	}
-	rt.ResponseTime = time.Since(rt.StartTime)
-	if globalLog.GetLevel() >= Info {
-		upstream, _ := rt.Upstream.Load().(string)
-		if upstream == "" {
-			upstream = RecursiveIndicator
-		}
-		LogDebug("FINISH [%s]: Query completed: %s %s | Time:%v | Upstream:%s",
-			rt.ID, rt.Domain, rt.QueryType, rt.ResponseTime.Truncate(time.Microsecond), upstream)
-	}
-}
-
-// =============================================================================
 // DNSServer Implementation
 // =============================================================================
 
@@ -4280,14 +3526,8 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		redisClient = redisCache.client
 	}
 
-	rootServerManager := NewRootServerManager(*config, redisClient)
-
-	// Initialize memory monitor
-	memoryMonitor := time.NewTicker(MemoryCheckInterval)
-
 	server := &DNSServer{
 		config:            config,
-		rootServerMgr:     rootServerManager,
 		ednsMgr:           ednsManager,
 		rewriteMgr:        rewriteManager,
 		cidrMgr:           cidrManager,
@@ -4301,7 +3541,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		backgroundCtx:     backgroundCtx,
 		cacheRefreshGroup: cacheRefreshGroup,
 		cacheRefreshCtx:   cacheRefreshCtx,
-		memoryMonitor:     memoryMonitor,
 	}
 
 	securityManager, err := NewSecurityManager(config, server)
@@ -4320,11 +3559,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		return nil, fmt.Errorf("query manager init: %w", err)
 	}
 	server.queryMgr = queryManager
-
-	if len(config.Speedtest) > 0 && redisClient != nil {
-		domainSpeedPrefix := config.Redis.KeyPrefix + RedisPrefixSpeedtest
-		server.speedTestMgr = NewSpeedTestManager(*config, redisClient, domainSpeedPrefix)
-	}
 
 	if config.Server.Pprof != "" {
 		server.pprofServer = &http.Server{
@@ -4353,18 +3587,6 @@ func (s *DNSServer) setupSignalHandling() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	s.backgroundGroup.Go(func() error {
-		defer HandlePanic("Root server periodic sorting")
-		s.rootServerMgr.StartPeriodicSorting(s.backgroundCtx)
-		return nil
-	})
-
-	s.backgroundGroup.Go(func() error {
-		defer HandlePanic("Memory monitor")
-		s.startMemoryMonitoring()
-		return nil
-	})
-
-	s.backgroundGroup.Go(func() error {
 		defer HandlePanic("Signal handler")
 		select {
 		case sig := <-sigChan:
@@ -4384,12 +3606,6 @@ func (s *DNSServer) shutdownServer() {
 
 	LogInfo("SERVER: Starting DNS server shutdown")
 
-	// Stop memory monitor
-	if s.memoryMonitor != nil {
-		s.memoryMonitor.Stop()
-		LogInfo("MEMORY: Memory monitor stopped")
-	}
-
 	if s.cancel != nil {
 		s.cancel(errors.New("server shutdown"))
 	}
@@ -4406,10 +3622,6 @@ func (s *DNSServer) shutdownServer() {
 
 	if s.connPool != nil {
 		CloseWithLog(s.connPool, "Connection pool")
-	}
-
-	if s.speedTestMgr != nil {
-		CloseWithLog(s.speedTestMgr, "SpeedTest manager")
 	}
 
 	if s.pprofServer != nil {
@@ -4465,20 +3677,6 @@ func (s *DNSServer) shutdownServer() {
 
 	time.Sleep(100 * time.Millisecond)
 	os.Exit(0)
-}
-
-func (s *DNSServer) startMemoryMonitoring() {
-	defer HandlePanic("Memory monitoring")
-
-	for {
-		select {
-		case <-s.memoryMonitor.C:
-			runtime.GC()
-
-		case <-s.backgroundCtx.Done():
-			return
-		}
-	}
 }
 
 func (s *DNSServer) Start() error {
@@ -4646,18 +3844,6 @@ func (s *DNSServer) displayInfo() {
 	if defaultECS := s.ednsMgr.GetDefaultECS(); defaultECS != nil {
 		LogInfo("EDNS: Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
-
-	if len(s.config.Speedtest) > 0 {
-		if s.redisClient != nil {
-			LogInfo("SPEEDTEST: SpeedTest: enabled (with Redis caching)")
-		} else {
-			LogInfo("SPEEDTEST: SpeedTest: enabled (no caching)")
-		}
-	}
-
-	if s.rootServerMgr.needsSpeed.Load() {
-		LogInfo("SPEEDTEST: Root server speed testing: enabled")
-	}
 }
 
 // =============================================================================
@@ -4680,7 +3866,7 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	}
 }
 
-func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processDNSQuery(req *dns.Msg, _ net.IP, isSecureConnection bool) *dns.Msg {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		msg := s.buildResponse(req)
 		if msg != nil {
@@ -4709,17 +3895,13 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		return msg
 	}
 
-	var tracker *RequestTracker
-	if globalLog.GetLevel() >= Debug {
-		clientIPStr := "unknown"
-		if clientIP != nil {
-			clientIPStr = clientIP.String()
+	startTime := time.Now()
+	defer func() {
+		if globalLog.GetLevel() >= Debug {
+			responseTime := time.Since(startTime)
+			LogDebug("Query completed: %s %s | Time:%v", question.Name, dns.TypeToString[question.Qtype], responseTime.Truncate(time.Microsecond))
 		}
-		tracker = NewRequestTracker(question.Name, dns.TypeToString[question.Qtype], clientIPStr)
-		if tracker != nil {
-			defer tracker.Finish()
-		}
-	}
+	}()
 
 	if s.rewriteMgr.hasRules() {
 		rewriteResult := s.rewriteMgr.RewriteWithDetails(question.Name, question.Qtype)
@@ -4767,7 +3949,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cacheKey, isSecureConnection)
 	}
 
-	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection, tracker)
+	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection)
 }
 
 func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cacheKey string, isSecureConnection bool) *dns.Msg {
@@ -4791,16 +3973,6 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 
 	s.addEDNS(msg, req, isSecureConnection)
 
-	// Trigger background speedtest for cache hits
-	if len(s.config.Speedtest) > 0 && s.redisClient != nil &&
-		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
-		s.cacheRefreshGroup.Go(func() error {
-			defer HandlePanic("cache hit speedtest")
-			s.performBackgroundSpeedTest(nil, nil, nil, question, ecsOpt)
-			return nil
-		})
-	}
-
 	if isExpired && entry.ShouldRefresh() {
 		s.cacheRefreshGroup.Go(func() error {
 			defer HandlePanic("cache refresh")
@@ -4815,50 +3987,14 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	return msg
 }
 
-func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool, tracker *RequestTracker) *dns.Msg {
-	answer, authority, additional, validated, ecsResponse, usedServer, err := s.queryMgr.Query(question, ecsOpt)
-
-	if tracker != nil {
-		tracker.Upstream.Store(usedServer)
-	}
+func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool) *dns.Msg {
+	answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecsOpt)
 
 	if err != nil {
 		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, isSecureConnection)
 	}
 
 	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection)
-}
-
-// performBackgroundSpeedTest performs background speed testing for DNS records
-func (s *DNSServer) performBackgroundSpeedTest(answer, authority, additional []dns.RR, question dns.Question, ecsOpt *ECSOption) {
-	defer HandlePanic("background speedtest")
-
-	if atomic.LoadInt32(&s.closed) != 0 {
-		return
-	}
-
-	// If records are not provided, query for them
-	if len(answer) == 0 && len(authority) == 0 && len(additional) == 0 {
-		var err error
-		answer, authority, additional, _, _, _, err = s.queryMgr.Query(question, ecsOpt)
-		if err != nil {
-			return
-		}
-	}
-
-	// Perform speedtest if we have A/AAAA records and configuration allows it
-	shouldTest := len(s.config.Speedtest) > 0 && s.redisClient != nil
-	if question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA {
-		shouldTest = shouldTest && (len(answer) > 0 || len(authority) > 0 || len(additional) > 0)
-	}
-
-	if shouldTest {
-		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
-		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedtest
-		speedTester := NewSpeedTestManager(*s.config, s.redisClient, domainSpeedPrefix)
-		speedTester.performSpeedTestAndSort(tempMsg)
-		_ = speedTester.Close()
-	}
 }
 
 func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *ECSOption, cacheKey string, _ *CacheEntry) error {
@@ -4872,16 +4008,6 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 
 	if err != nil {
 		return err
-	}
-
-	if len(s.config.Speedtest) > 0 && s.redisClient != nil &&
-		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
-		tempMsg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
-		domainSpeedPrefix := s.config.Redis.KeyPrefix + RedisPrefixSpeedtest
-		speedTester := NewSpeedTestManager(*s.config, s.redisClient, domainSpeedPrefix)
-		speedTester.performSpeedTestAndSort(tempMsg)
-		_ = speedTester.Close()
-		answer, authority, additional = tempMsg.Answer, tempMsg.Ns, tempMsg.Extra
 	}
 
 	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
@@ -4944,16 +4070,6 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	}
 
 	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
-
-	// Trigger background speedtest for cache miss results
-	if len(s.config.Speedtest) > 0 && s.redisClient != nil &&
-		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
-		s.cacheRefreshGroup.Go(func() error {
-			defer HandlePanic("cache miss speedtest")
-			s.performBackgroundSpeedTest(answer, authority, additional, question, ecsOpt)
-			return nil
-		})
-	}
 
 	msg.Answer = ProcessRecords(answer, 0, clientRequestedDNSSEC)
 	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
@@ -5040,8 +4156,7 @@ func NewQueryManager(server *DNSServer) *QueryManager {
 	return &QueryManager{
 		upstream: upstream,
 		recursive: &RecursiveResolver{
-			server:        server,
-			rootServerMgr: server.rootServerMgr,
+			server: server,
 		},
 		cname: &CNAMEHandler{server: server},
 		validator: &ResponseValidator{
@@ -5350,7 +4465,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 	qname := dns.Fqdn(question.Name)
 	question.Name = qname
-	nameservers := rr.getRootServers()
+	nameservers := DefaultRootServers
 	currentDomain := "."
 	normalizedQname := NormalizeDomain(qname)
 
@@ -5659,15 +4774,6 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	}
 
 	return nil
-}
-
-func (rr *RecursiveResolver) getRootServers() []string {
-	serversWithLatency := rr.rootServerMgr.GetOptimalRootServers()
-	servers := make([]string, len(serversWithLatency))
-	for i, server := range serversWithLatency {
-		servers[i] = server.Server
-	}
-	return servers
 }
 
 // =============================================================================
