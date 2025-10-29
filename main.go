@@ -494,6 +494,22 @@ type ResponseValidator struct {
 }
 
 // =============================================================================
+// Utility Functions
+// =============================================================================
+
+// calculateConcurrencyLimit calculates 25% of server count with minimum of 1
+func calculateConcurrencyLimit(serverCount int) int {
+	if serverCount <= 1 {
+		return 1
+	}
+	limit := serverCount / 4
+	if limit < 1 {
+		return 1
+	}
+	return limit
+}
+
+// =============================================================================
 // LogManager Implementation
 // =============================================================================
 
@@ -3735,6 +3751,8 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 
 	g, queryCtx := errgroup.WithContext(ctx)
 
+	g.SetLimit(calculateConcurrencyLimit(len(servers)))
+
 	for _, srv := range servers {
 		server := srv
 
@@ -4103,6 +4121,8 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 
 	g, queryCtx := errgroup.WithContext(queryCtx)
 
+	g.SetLimit(calculateConcurrencyLimit(len(nameservers)))
+
 	for _, ns := range nameservers {
 		nsAddr := ns
 		protocol := "udp"
@@ -4167,6 +4187,8 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
+
+	g.SetLimit(calculateConcurrencyLimit(len(nsRecords)))
 
 	// Use atomic.Pointer for true lock-free operations (Go 1.19+)
 	var allAddresses atomic.Pointer[[]string]
