@@ -23,6 +23,7 @@ import (
 	"maps"
 	"math"
 	"math/big"
+	mrand "math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -507,30 +508,29 @@ func shuffleRootServers(servers []string) []string {
 	shuffled := make([]string, len(servers))
 	copy(shuffled, servers)
 
-	// Use optimized Fisher-Yates shuffle algorithm with crypto/rand
+	// Use optimized Fisher-Yates shuffle algorithm
 	for i := len(shuffled) - 1; i > 0; i-- {
-		// Generate random integer in range [0, i] using crypto/rand
-		max := i + 1
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
-		if err != nil {
-			// Fallback: use simple deterministic shuffle if crypto/rand fails
-			j := i % 2
-			shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-			continue
-		}
-		j := int(n.Int64())
+		j := mrand.Intn(i + 1)
 		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
+
+	LogDebug("Shuffled root servers: %v", shuffled)
 
 	return shuffled
 }
 
 // calculateConcurrencyLimit calculates optimized concurrency for first-winner strategy:
+// - <= 0 servers: return 0 (invalid input, safe default)
 // - <= 4 servers: query all concurrently (100%) - fast result for small groups
 // - 5-12 servers: query ~66% concurrently - balanced speed and load
 // - 13-20 servers: query half concurrently (50%) - medium scale optimization
 // - >20 servers: query at least 8, max 33% - ensures minimum performance
 func calculateConcurrencyLimit(serverCount int) int {
+	// Handle edge cases: zero or negative server counts
+	if serverCount <= 0 {
+		return 0 // Safe default for invalid input
+	}
+
 	switch {
 	case serverCount <= 4:
 		return serverCount // Small groups: all concurrent for fastest result
