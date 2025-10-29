@@ -497,16 +497,26 @@ type ResponseValidator struct {
 // Utility Functions
 // =============================================================================
 
-// calculateConcurrencyLimit calculates 25% of server count with minimum of 1
+// calculateConcurrencyLimit calculates optimized concurrency for first-winner strategy:
+// - <= 4 servers: query all concurrently (100%) - fast result for small groups
+// - 5-12 servers: query ~66% concurrently - balanced speed and load
+// - 13-20 servers: query half concurrently (50%) - medium scale optimization
+// - >20 servers: query at least 8, max 33% - ensures minimum performance
 func calculateConcurrencyLimit(serverCount int) int {
-	if serverCount <= 1 {
-		return 1
+	switch {
+	case serverCount <= 4:
+		return serverCount // Small groups: all concurrent for fastest result
+	case serverCount <= 12:
+		return (serverCount*2 + 2) / 3 // ~66% rounded up
+	case serverCount <= 20:
+		return (serverCount + 1) / 2 // 50% rounded up
+	default:
+		limit := serverCount / 3 // ~33% for large groups
+		if limit < 8 {
+			return 8 // Ensure minimum 8 concurrent for performance
+		}
+		return limit
 	}
-	limit := serverCount / 4
-	if limit < 1 {
-		return 1
-	}
-	return limit
 }
 
 // =============================================================================
