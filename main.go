@@ -419,7 +419,6 @@ type QueryClient struct {
 	udpClient  *dns.Client
 	tcpClient  *dns.Client
 	tlsClient  *dns.Client
-	quicClient *dns.Client
 	dohClient  *http.Client
 	doh3Client *http.Client
 }
@@ -745,11 +744,6 @@ func NewQueryClient() *QueryClient {
 		Net:     "tcp-tls",
 	}
 
-	quicClient := &dns.Client{
-		Timeout: OperationTimeout,
-		Net:     "quic",
-	}
-
 	// HTTP clients for DoH and DoH3 with connection pooling
 	dohTransport := &http.Transport{
 		MaxIdleConns:        10,
@@ -767,11 +761,10 @@ func NewQueryClient() *QueryClient {
 	}
 
 	return &QueryClient{
-		timeout:    OperationTimeout,
-		udpClient:  udpClient,
-		tcpClient:  tcpClient,
-		tlsClient:  tlsClient,
-		quicClient: quicClient,
+		timeout:   OperationTimeout,
+		udpClient: udpClient,
+		tcpClient: tcpClient,
+		tlsClient: tlsClient,
 		dohClient: &http.Client{
 			Timeout:   OperationTimeout,
 			Transport: dohTransport,
@@ -846,19 +839,81 @@ func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *Ups
 }
 
 func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	// Use the reusable QUIC client with proper TLS config
 	tlsConfig = tlsConfig.Clone()
 	tlsConfig.NextProtos = NextProtoDoQ
 
-	// Create a temporary QUIC client with the specific TLS config
-	quicClient := &dns.Client{
-		Timeout:   qc.timeout,
-		Net:       "quic",
-		TLSConfig: tlsConfig,
+	quicConfig := &quic.Config{
+		MaxIdleTimeout:        IdleTimeout,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
+		EnableDatagrams:       true,
+		Allow0RTT:             true,
+		// Connection management optimizations
+		MaxStreamReceiveWindow:     1024 * 1024,      // 1MB per stream
+		MaxConnectionReceiveWindow: 4 * 1024 * 1024,  // 4MB per connection
+		KeepAlivePeriod:            15 * time.Second, // Keep-alive to detect dead connections
+		DisablePathMTUDiscovery:    false,            // Enable PMTU for better performance
 	}
 
-	response, _, err := quicClient.ExchangeContext(ctx, msg, server.Address)
-	return response, err
+	dialCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
+	defer cancel()
+
+	conn, err := quic.DialAddr(dialCtx, server.Address, tlsConfig, quicConfig)
+	if err != nil {
+		return nil, fmt.Errorf("QUIC dial: %w", err)
+	}
+	defer func() {
+		_ = conn.CloseWithError(QUICCodeNoError, "query completed")
+	}()
+
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open stream: %w", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	_ = stream.SetDeadline(time.Now().Add(qc.timeout))
+
+	originalID := msg.Id
+	msg.Id = 0
+
+	msgData, err := msg.Pack()
+	if err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("pack: %w", err)
+	}
+
+	buf := make([]byte, 2+len(msgData))
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
+	copy(buf[2:], msgData)
+
+	if _, err := stream.Write(buf); err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("write: %w", err)
+	}
+
+	respBuf := make([]byte, SecureBufferSize)
+	n, err := stream.Read(respBuf)
+	if err != nil && n == 0 {
+		msg.Id = originalID
+		return nil, fmt.Errorf("read: %w", err)
+	}
+
+	if n < 2 {
+		msg.Id = originalID
+		return nil, fmt.Errorf("response too short: %d", n)
+	}
+
+	response := &dns.Msg{}
+	if err := response.Unpack(respBuf[2:n]); err != nil {
+		msg.Id = originalID
+		return nil, fmt.Errorf("unpack: %w", err)
+	}
+
+	msg.Id = originalID
+	response.Id = originalID
+
+	return response, nil
 }
 
 func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
