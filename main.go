@@ -792,11 +792,9 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 
 	tlsConfig = tlsConfig.Clone()
 	transport := &http.Transport{
-		TLSClientConfig:       tlsConfig,
-		DisableCompression:    true,
-		DisableKeepAlives:     true,
-		ForceAttemptHTTP2:     true,
-		ResponseHeaderTimeout: qc.timeout,
+		TLSClientConfig:    tlsConfig,
+		DisableCompression: true,
+		ForceAttemptHTTP2:  true,
 	}
 
 	if err := http2.ConfigureTransport(transport); err != nil {
