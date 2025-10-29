@@ -53,7 +53,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.5.2"
+	Version    = "1.5.3"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -3788,7 +3788,6 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	defer cancel()
 
 	g, queryCtx := errgroup.WithContext(ctx)
-
 	g.SetLimit(calculateConcurrencyLimit(len(servers)))
 
 	for _, srv := range servers {
@@ -4158,7 +4157,6 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 	resultChan := make(chan *QueryResult, 1)
 
 	g, queryCtx := errgroup.WithContext(queryCtx)
-
 	g.SetLimit(calculateConcurrencyLimit(len(nameservers)))
 
 	for _, ns := range nameservers {
@@ -4225,7 +4223,6 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
-
 	g.SetLimit(calculateConcurrencyLimit(len(nsRecords)))
 
 	// Use atomic.Pointer for true lock-free operations (Go 1.19+)
