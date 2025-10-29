@@ -29,27 +29,6 @@
     "database": 0,
     "key_prefix": "zjdns:"
   },
-  "speedtest": [
-    {
-      "type": "icmp",
-      "timeout": 200
-    },
-    {
-      "type": "tcp",
-      "port": "443",
-      "timeout": 200
-    },
-    {
-      "type": "tcp",
-      "port": "80",
-      "timeout": 200
-    },
-    {
-      "type": "udp",
-      "port": "53",
-      "timeout": 200
-    }
-  ],
   "upstream": [
     {
       "address": "223.5.5.5:53",
