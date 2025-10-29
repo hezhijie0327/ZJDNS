@@ -497,6 +497,34 @@ type ResponseValidator struct {
 // Utility Functions
 // =============================================================================
 
+// shuffleRootServers randomly shuffles the root server list to avoid always using the same order
+func shuffleRootServers(servers []string) []string {
+	if len(servers) <= 1 {
+		return servers
+	}
+
+	// Create a copy to avoid modifying the original slice
+	shuffled := make([]string, len(servers))
+	copy(shuffled, servers)
+
+	// Use optimized Fisher-Yates shuffle algorithm with crypto/rand
+	for i := len(shuffled) - 1; i > 0; i-- {
+		// Generate random integer in range [0, i] using crypto/rand
+		max := i + 1
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+		if err != nil {
+			// Fallback: use simple deterministic shuffle if crypto/rand fails
+			j := i % 2
+			shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+			continue
+		}
+		j := int(n.Int64())
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	}
+
+	return shuffled
+}
+
 // calculateConcurrencyLimit calculates optimized concurrency for first-winner strategy:
 // - <= 4 servers: query all concurrently (100%) - fast result for small groups
 // - 5-12 servers: query ~66% concurrently - balanced speed and load
@@ -3997,7 +4025,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 	qname := dns.Fqdn(question.Name)
 	question.Name = qname
-	nameservers := DefaultRootServers
+	nameservers := shuffleRootServers(DefaultRootServers)
 	currentDomain := "."
 	normalizedQname := NormalizeDomain(qname)
 
