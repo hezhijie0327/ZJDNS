@@ -23,6 +23,7 @@ import (
 	"maps"
 	"math"
 	"math/big"
+	mrand "math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -53,12 +54,16 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.5.2"
+	Version    = "1.5.3"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
 	globalLog = NewLogManager()
 	timeCache = NewTimeCache()
+
+	// Global random number generator for shuffling operations
+	// Seeded once at startup to avoid repeated initialization overhead
+	globalRNG = mrand.New(mrand.NewSource(time.Now().UnixNano()))
 
 	// Protocol configurations
 	NextProtoDOT  = []string{"dot"}
@@ -132,14 +137,6 @@ const (
 	DefaultECSv6Len = 64
 	DefaultECSScope = 0
 	PaddingSize     = 468
-
-	// =============================================================================
-	// Performance & Concurrency
-	// =============================================================================
-
-	// Concurrency Limits
-	DNSQueryConcurrency  = 3
-	NSResolveConcurrency = 3
 
 	// =============================================================================
 	// Timing Configuration
@@ -499,6 +496,59 @@ type CNAMEHandler struct {
 type ResponseValidator struct {
 	hijackPrevention *HijackPrevention
 	dnssecValidator  *DNSSECValidator
+}
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
+
+// shuffleRootServers randomly shuffles the root server list to avoid always using the same order
+func shuffleRootServers(servers []string) []string {
+	if len(servers) <= 1 {
+		return servers
+	}
+
+	// Create a copy to avoid modifying the original slice
+	shuffled := make([]string, len(servers))
+	copy(shuffled, servers)
+
+	// Use optimized Fisher-Yates shuffle algorithm with global RNG
+	// Uses pre-initialized global RNG for better performance and true randomness
+	for i := len(shuffled) - 1; i > 0; i-- {
+		j := globalRNG.Intn(i + 1)
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	}
+
+	return shuffled
+}
+
+// calculateConcurrencyLimit calculates optimized concurrency for first-winner strategy:
+// - <= 0 servers: return 1 (minimum to prevent errgroup deadlocks)
+// - <= 4 servers: query all concurrently (100%) - fast result for small groups
+// - 5-12 servers: query ~66% concurrently - balanced speed and load
+// - 13-20 servers: query half concurrently (50%) - medium scale optimization
+// - >20 servers: query at least 8, max 33% - ensures minimum performance
+func calculateConcurrencyLimit(serverCount int) int {
+	// Handle edge cases: zero or negative server counts
+	// Return minimum 1 to prevent errgroup.SetLimit(0) from blocking all queries
+	if serverCount <= 0 {
+		return 1 // Minimum limit to avoid deadlocks
+	}
+
+	switch {
+	case serverCount <= 4:
+		return serverCount // Small groups: all concurrent for fastest result
+	case serverCount <= 12:
+		return (serverCount*2 + 2) / 3 // ~66% rounded up
+	case serverCount <= 20:
+		return (serverCount + 1) / 2 // 50% rounded up
+	default:
+		limit := serverCount / 3 // ~33% for large groups
+		if limit < 8 {
+			return 8 // Ensure minimum 8 concurrent for performance
+		}
+		return limit
+	}
 }
 
 // =============================================================================
@@ -3742,7 +3792,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	defer cancel()
 
 	g, queryCtx := errgroup.WithContext(ctx)
-	g.SetLimit(DNSQueryConcurrency)
+	g.SetLimit(calculateConcurrencyLimit(len(servers)))
 
 	for _, srv := range servers {
 		server := srv
@@ -3978,7 +4028,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 	qname := dns.Fqdn(question.Name)
 	question.Name = qname
-	nameservers := DefaultRootServers
+	nameservers := shuffleRootServers(DefaultRootServers)
 	currentDomain := "."
 	normalizedQname := NormalizeDomain(qname)
 
@@ -4111,8 +4161,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 	resultChan := make(chan *QueryResult, 1)
 
 	g, queryCtx := errgroup.WithContext(queryCtx)
-	// Set concurrency limit but still iterate through all nameservers
-	g.SetLimit(DNSQueryConcurrency)
+	g.SetLimit(calculateConcurrencyLimit(len(nameservers)))
 
 	for _, ns := range nameservers {
 		nsAddr := ns
@@ -4178,7 +4227,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
-	g.SetLimit(NSResolveConcurrency)
+	g.SetLimit(calculateConcurrencyLimit(len(nsRecords)))
 
 	// Use atomic.Pointer for true lock-free operations (Go 1.19+)
 	var allAddresses atomic.Pointer[[]string]
