@@ -508,9 +508,11 @@ func shuffleRootServers(servers []string) []string {
 	shuffled := make([]string, len(servers))
 	copy(shuffled, servers)
 
-	// Use optimized Fisher-Yates shuffle algorithm
+	// Use optimized Fisher-Yates shuffle algorithm with seeded random source
+	// Create a local random source with time-based seed for non-deterministic shuffling
+	rng := mrand.New(mrand.NewSource(time.Now().UnixNano()))
 	for i := len(shuffled) - 1; i > 0; i-- {
-		j := mrand.Intn(i + 1)
+		j := rng.Intn(i + 1)
 		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
 
@@ -520,15 +522,16 @@ func shuffleRootServers(servers []string) []string {
 }
 
 // calculateConcurrencyLimit calculates optimized concurrency for first-winner strategy:
-// - <= 0 servers: return 0 (invalid input, safe default)
+// - <= 0 servers: return 1 (minimum to prevent errgroup deadlocks)
 // - <= 4 servers: query all concurrently (100%) - fast result for small groups
 // - 5-12 servers: query ~66% concurrently - balanced speed and load
 // - 13-20 servers: query half concurrently (50%) - medium scale optimization
 // - >20 servers: query at least 8, max 33% - ensures minimum performance
 func calculateConcurrencyLimit(serverCount int) int {
 	// Handle edge cases: zero or negative server counts
+	// Return minimum 1 to prevent errgroup.SetLimit(0) from blocking all queries
 	if serverCount <= 0 {
-		return 0 // Safe default for invalid input
+		return 1 // Minimum limit to avoid deadlocks
 	}
 
 	switch {
