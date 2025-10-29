@@ -43,6 +43,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/logging"
+	"golang.org/x/net/http2"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -51,7 +52,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.5.1"
+	Version    = "1.5.2"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -60,9 +61,9 @@ var (
 
 	// Protocol configurations
 	NextProtoDOT  = []string{"dot"}
-	NextProtoDoQ  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
+	NextProtoDoQ  = []string{"doq"}
 	NextProtoDoH3 = []string{"h3"}
-	NextProtoDoH  = []string{"h2", "http/1.1"}
+	NextProtoDoH  = []string{"h2"}
 
 	// Root servers
 	DefaultRootServers = []string{
@@ -840,8 +841,12 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 		TLSClientConfig:       tlsConfig,
 		DisableCompression:    true,
 		DisableKeepAlives:     true,
-		ForceAttemptHTTP2:     false,
+		ForceAttemptHTTP2:     true,
 		ResponseHeaderTimeout: qc.timeout,
+	}
+
+	if err := http2.ConfigureTransport(transport); err != nil {
+		return nil, fmt.Errorf("configure HTTP/2: %w", err)
 	}
 
 	httpClient := &http.Client{
