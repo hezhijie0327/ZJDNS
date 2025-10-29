@@ -4758,7 +4758,7 @@ func main() {
 	debug.SetGCPercent(50) // Trigger GC more frequently to prevent memory buildup
 
 	// Set memory limits to prevent excessive memory usage (Go 1.19+)
-	debug.SetMemoryLimit(500 * 1024 * 1024) // 500MB soft limit
+	debug.SetMemoryLimit(32 * 1024 * 1024) // 500MB soft limit
 
 	var configFile string
 	var generateConfig bool
