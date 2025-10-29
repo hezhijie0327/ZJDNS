@@ -138,8 +138,8 @@ const (
 	// =============================================================================
 
 	// Concurrency Limits
-	DNSQueryConcurrency  = 2
-	NSResolveConcurrency = 2
+	DNSQueryConcurrency  = 3
+	NSResolveConcurrency = 3
 
 	// =============================================================================
 	// Timing Configuration
