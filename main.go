@@ -1,5 +1,5 @@
 // Package main implements ZJDNS - High Performance DNS Server
-// Supporting DoT/DoH/DoQ/DoH3 with connection pooling and recursive resolution
+// Supporting DoT/DoH/DoQ/DoH3 and recursive resolution
 package main
 
 import (
@@ -43,7 +43,6 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/logging"
-	"golang.org/x/net/http2"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -115,7 +114,6 @@ const (
 	TLSConnBufferSize = 128
 
 	// Cache & Pool Sizes
-	TLSSessionCacheSize  = 128
 	MaxIncomingStreams   = 512
 	MaxResultLength      = 512
 	ResultBufferCapacity = 128
@@ -154,7 +152,6 @@ const (
 	// Connection Timeouts
 	ConnTimeout         = 2 * time.Second
 	ConnDialTimeout     = 2 * time.Second
-	ConnKeepAlive       = 30 * time.Second
 	TLSHandshakeTimeout = 2 * time.Second
 
 	// Protocol Timeouts
@@ -185,7 +182,6 @@ const (
 	QUICMaxIdleTimeout   = 30 * time.Second
 	QUICCloseTimeout     = 200 * time.Millisecond
 	QUICAddrValidatorTTL = 15 * time.Second
-	QUICSessionCacheTTL  = 90 * time.Second
 
 	// =============================================================================
 	// Cache Configuration
@@ -200,17 +196,14 @@ const (
 	// Redis Configuration
 	// =============================================================================
 
-	// Connection Pool
-	RedisPoolSize   = 3
-	RedisMinIdle    = 1
+	// Redis Settings
 	RedisMaxRetries = 2
 
 	// Redis Timeouts
-	RedisPoolTimeout     = 2 * time.Second
 	RedisReadTimeout     = 2 * time.Second
 	RedisWriteTimeout    = 2 * time.Second
 	RedisDialTimeout     = 2 * time.Second
-	RedisPoolIdleTimeout = 5 * time.Second
+	RedisPoolIdleTimeout = 3 * time.Second
 
 	// Redis Key Prefixes
 	RedisPrefixDNS           = "dns:"
@@ -468,8 +461,7 @@ type RewriteManager struct {
 }
 
 type QueryClient struct {
-	timeout      time.Duration
-	sessionCache tls.ClientSessionCache
+	timeout time.Duration
 }
 
 // Security Types
@@ -645,8 +637,7 @@ func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
 
 func NewQueryClient() *QueryClient {
 	return &QueryClient{
-		timeout:      QueryTimeout,
-		sessionCache: tls.NewLRUClientSessionCache(TLSSessionCacheSize),
+		timeout: QueryTimeout,
 	}
 }
 
@@ -685,7 +676,6 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 		ServerName:         server.ServerName,
 		InsecureSkipVerify: server.SkipTLSVerify,
 		MinVersion:         tls.VersionTLS12,
-		ClientSessionCache: qc.sessionCache,
 	}
 
 	if server.SkipTLSVerify {
@@ -708,8 +698,7 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 
 func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	dialer := &net.Dialer{
-		Timeout:   ConnDialTimeout,
-		KeepAlive: ConnKeepAlive,
+		Timeout: ConnDialTimeout,
 	}
 
 	netConn, err := dialer.DialContext(ctx, "tcp", server.Address)
@@ -769,7 +758,6 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:             QUICMaxIdleTimeout,
 		MaxIncomingStreams:         MaxIncomingStreams / 2,
-		KeepAlivePeriod:            ConnKeepAlive,
 		EnableDatagrams:            true,
 		Allow0RTT:                  true,
 		MaxStreamReceiveWindow:     MaxStreamReceiveWindow,
@@ -852,12 +840,8 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 		TLSClientConfig:       tlsConfig,
 		DisableCompression:    true,
 		DisableKeepAlives:     true,
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2:     false,
 		ResponseHeaderTimeout: qc.timeout,
-	}
-
-	if err := http2.ConfigureTransport(transport); err != nil {
-		return nil, fmt.Errorf("configure HTTP/2: %w", err)
 	}
 
 	httpClient := &http.Client{
@@ -938,7 +922,6 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 		QUICConfig: &quic.Config{
 			MaxIdleTimeout:             QUICMaxIdleTimeout,
 			MaxIncomingStreams:         MaxIncomingStreams / 2,
-			KeepAlivePeriod:            ConnKeepAlive,
 			EnableDatagrams:            true,
 			Allow0RTT:                  true,
 			MaxStreamReceiveWindow:     MaxStreamReceiveWindow,
@@ -1309,10 +1292,7 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 		Addr:         config.Redis.Address,
 		Password:     config.Redis.Password,
 		DB:           config.Redis.Database,
-		PoolSize:     RedisPoolSize,
-		MinIdleConns: RedisMinIdle,
 		MaxRetries:   RedisMaxRetries,
-		PoolTimeout:  RedisPoolTimeout,
 		ReadTimeout:  RedisReadTimeout,
 		WriteTimeout: RedisWriteTimeout,
 		DialTimeout:  RedisDialTimeout,
@@ -2692,7 +2672,6 @@ func (tm *TLSManager) startDOQServer() error {
 		MaxIncomingUniStreams: MaxIncomingStreams / 4,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
-		KeepAlivePeriod:       ConnKeepAlive,
 	}
 
 	tm.doqListener, err = tm.doqTransport.ListenEarly(quicTLSConfig, quicConfig)
@@ -2912,7 +2891,6 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 		MaxIncomingUniStreams: MaxIncomingStreams / 4,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
-		KeepAlivePeriod:       ConnKeepAlive,
 	}
 
 	quicListener, err := quic.ListenAddrEarly(addr, tlsConfig, quicConfig)
