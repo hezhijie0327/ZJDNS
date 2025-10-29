@@ -21,6 +21,7 @@ import (
 	"io"
 	"log"
 	"maps"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -108,20 +109,13 @@ const (
 	// =============================================================================
 
 	// Buffer Sizes
-	UDPBufferSize     = 1232
-	TCPBufferSize     = 4096
-	SecureBufferSize  = 8192
-	DoHMaxRequestSize = 8192
-	TLSConnBufferSize = 128
-
-	// Cache & Pool Sizes
-	MaxIncomingStreams   = 512
-	MaxResultLength      = 512
+	UDPBufferSize        = 1232
+	TCPBufferSize        = 4096
+	SecureBufferSize     = 8192
+	DoHMaxRequestSize    = 8192
+	TLSConnBufferSize    = 128
 	ResultBufferCapacity = 128
-
-	// Flow Control Window Sizes
-	MaxStreamReceiveWindow     = 4 * 1024 * 1024
-	MaxConnectionReceiveWindow = 8 * 1024 * 1024
+	MaxIncomingStreams   = math.MaxUint16
 
 	// =============================================================================
 	// Protocol Limits & Constraints
@@ -131,6 +125,7 @@ const (
 	MaxDomainLength = 253
 	MaxCNAMEChain   = 16
 	MaxRecursionDep = 16
+	MaxResultLength = 512
 
 	// EDNS Configuration
 	DefaultECSv4Len = 24
@@ -143,8 +138,8 @@ const (
 	// =============================================================================
 
 	// Concurrency Limits
-	DNSQueryConcurrency  = 3
-	NSResolveConcurrency = 3
+	DNSQueryConcurrency  = 2
+	NSResolveConcurrency = 2
 
 	// =============================================================================
 	// Timing Configuration
@@ -717,12 +712,11 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 	tlsConfig.NextProtos = NextProtoDoQ
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:             IdleTimeout,
-		MaxIncomingStreams:         MaxIncomingStreams / 2,
-		EnableDatagrams:            true,
-		Allow0RTT:                  true,
-		MaxStreamReceiveWindow:     MaxStreamReceiveWindow,
-		MaxConnectionReceiveWindow: MaxConnectionReceiveWindow,
+		MaxIdleTimeout:        IdleTimeout,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
+		EnableDatagrams:       true,
+		Allow0RTT:             true,
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
@@ -885,12 +879,11 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 	transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
 		QUICConfig: &quic.Config{
-			MaxIdleTimeout:             IdleTimeout,
-			MaxIncomingStreams:         MaxIncomingStreams / 2,
-			EnableDatagrams:            true,
-			Allow0RTT:                  true,
-			MaxStreamReceiveWindow:     MaxStreamReceiveWindow,
-			MaxConnectionReceiveWindow: MaxConnectionReceiveWindow,
+			MaxIdleTimeout:        IdleTimeout,
+			MaxIncomingStreams:    MaxIncomingStreams,
+			MaxIncomingUniStreams: MaxIncomingStreams,
+			EnableDatagrams:       true,
+			Allow0RTT:             true,
 		},
 	}
 
@@ -2628,8 +2621,8 @@ func (tm *TLSManager) startDOQServer() error {
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        IdleTimeout,
-		MaxIncomingStreams:    MaxIncomingStreams / 2,
-		MaxIncomingUniStreams: MaxIncomingStreams / 4,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
 	}
@@ -2847,8 +2840,8 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        IdleTimeout,
-		MaxIncomingStreams:    MaxIncomingStreams / 2,
-		MaxIncomingUniStreams: MaxIncomingStreams / 4,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
 	}
