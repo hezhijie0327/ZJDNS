@@ -2344,9 +2344,8 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 	}
 
 	tlsConfig := &tls.Config{
-		Certificates:           []tls.Certificate{cert},
-		MinVersion:             tls.VersionTLS13,
-		SessionTicketsDisabled: false,
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
