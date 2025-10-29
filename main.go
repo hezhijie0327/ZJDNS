@@ -1,5 +1,5 @@
 // Package main implements ZJDNS - High Performance DNS Server
-// Supporting DoT/DoH/DoQ/DoH3 with connection pooling and recursive resolution
+// Supporting DoT/DoH/DoQ/DoH3 and recursive resolution
 package main
 
 import (
@@ -21,6 +21,7 @@ import (
 	"io"
 	"log"
 	"maps"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -32,7 +33,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -53,7 +53,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.5.0"
+	Version    = "1.5.2"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -62,9 +62,9 @@ var (
 
 	// Protocol configurations
 	NextProtoDOT  = []string{"dot"}
-	NextProtoDoQ  = []string{"doq", "doq-i00", "doq-i02", "doq-i03", "dq"}
+	NextProtoDoQ  = []string{"doq"}
 	NextProtoDoH3 = []string{"h3"}
-	NextProtoDoH  = []string{"h2", "http/1.1"}
+	NextProtoDoH  = []string{"h2"}
 
 	// Root servers
 	DefaultRootServers = []string{
@@ -89,77 +89,43 @@ var (
 // =============================================================================
 
 const (
+	// =============================================================================
+	// Network Configuration
+	// =============================================================================
+
 	// Server Ports
 	DefaultDNSPort   = "53"
 	DefaultDOTPort   = "853"
 	DefaultDOHPort   = "443"
 	DefaultPprofPort = "6060"
 
-	// Protocol Indicators
+	// Protocol Paths & Indicators
 	RecursiveIndicator = "builtin_recursive"
 	DefaultQueryPath   = "/dns-query"
 	PprofPath          = "/debug/pprof/"
 
-	// Buffer Sizes
-	UDPBufferSize       = 1232
-	TCPBufferSize       = 4096
-	SecureBufferSize    = 8192
-	DoHMaxRequestSize   = 8192
-	TLSSessionCacheSize = 128
+	// =============================================================================
+	// Buffer & Memory Configuration
+	// =============================================================================
 
-	// Domain Limits
+	// Buffer Sizes
+	UDPBufferSize        = 1232
+	TCPBufferSize        = 4096
+	SecureBufferSize     = 8192
+	DoHMaxRequestSize    = 8192
+	TLSConnBufferSize    = 128
+	ResultBufferCapacity = 128
+	MaxIncomingStreams   = math.MaxUint16
+
+	// =============================================================================
+	// Protocol Limits & Constraints
+	// =============================================================================
+
+	// DNS Limits
 	MaxDomainLength = 253
 	MaxCNAMEChain   = 16
 	MaxRecursionDep = 16
-
-	// Concurrency Limits
-	DNSQueryConcurrency  = 3
-	NSResolveConcurrency = 3
-
-	// Timeouts
-	QueryTimeout           = 3 * time.Second
-	RecursiveTimeout       = 5 * time.Second
-	ConnTimeout            = 2 * time.Second
-	TLSHandshakeTimeout    = 2 * time.Second
-	PublicIPTimeout        = 2 * time.Second
-	HTTPClientTimeout      = 3 * time.Second
-	ShutdownTimeout        = 2 * time.Second
-	DoHReadHeaderTimeout   = 3 * time.Second
-	DoHWriteTimeout        = 3 * time.Second
-	DoTReadTimeout         = 3 * time.Second
-	DoTWriteTimeout        = 3 * time.Second
-	DoTIdleTimeout         = 45 * time.Second
-	SecureIdleTimeout      = 45 * time.Second
-	PprofReadHeaderTimeout = 3 * time.Second
-	PprofReadTimeout       = 3 * time.Second
-	PprofIdleTimeout       = 45 * time.Second
-	ConnCloseTimeout       = 200 * time.Millisecond
-	ConnDialTimeout        = 2 * time.Second
-	ConnMaxLifetime        = 90 * time.Second
-	ConnMaxIdleTime        = 30 * time.Second
-	ConnValidateEvery      = 3 * time.Second
-	ConnKeepAlive          = 30 * time.Second
-	ConnPoolCleanup        = 3 * time.Second
-
-	// Cache Configuration
-	DefaultCacheTTL = 10
-	StaleTTL        = 30
-	StaleMaxAge     = 86400 * 7
-
-	// Redis Configuration
-	RedisPoolSize        = 3
-	RedisMinIdle         = 1
-	RedisMaxRetries      = 2
-	RedisPoolTimeout     = 2 * time.Second
-	RedisReadTimeout     = 2 * time.Second
-	RedisWriteTimeout    = 2 * time.Second
-	RedisDialTimeout     = 2 * time.Second
-	RedisPoolIdleTimeout = 5 * time.Second
-
-	// Redis Key Prefixes
-	RedisPrefixDNS           = "dns:"
-	RedisPrefixQUICValidator = "quic:v:"
-	RedisPrefixQUICSession   = "quic:s:"
+	MaxResultLength = 512
 
 	// EDNS Configuration
 	DefaultECSv4Len = 24
@@ -167,25 +133,64 @@ const (
 	DefaultECSScope = 0
 	PaddingSize     = 468
 
-	// QUIC Configuration
-	MaxIncomingStreams   = 512
-	QUICAddrValidatorTTL = 15 * time.Second
-	QUICSessionCacheTTL  = 90 * time.Second
-	MaxIdleConnections   = 3
+	// =============================================================================
+	// Performance & Concurrency
+	// =============================================================================
 
+	// Concurrency Limits
+	DNSQueryConcurrency  = 3
+	NSResolveConcurrency = 3
+
+	// =============================================================================
+	// Timing Configuration
+	// =============================================================================
+
+	// Common Timeouts
+	DefaultTimeout   = 2 * time.Second // Connection, Dial, Handshake, PublicIP, Shutdown
+	OperationTimeout = 3 * time.Second // Query, HTTP, DNS I/O, Pprof I/O
+	IdleTimeout      = 5 * time.Second // Recursive, Secure Idle, Pprof Idle
+
+	// =============================================================================
+	// Cache Configuration
+	// =============================================================================
+
+	// TTL Configuration
+	DefaultCacheTTL = 10
+	StaleTTL        = 30
+	StaleMaxAge     = 86400 * 7
+
+	// =============================================================================
+	// Redis Configuration
+	// =============================================================================
+
+	// Redis Key Prefixes
+	RedisPrefixDNS = "dns:"
+
+	// =============================================================================
+	// QUIC Configuration
+	// =============================================================================
+
+	// QUIC Error Codes
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
 	QUICCodeInternalError quic.ApplicationErrorCode = 1
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 
-	// Logging
-	DefaultLogLevel = "info"
-	ColorReset      = "\033[0m"
-	ColorRed        = "\033[31m"
-	ColorYellow     = "\033[33m"
-	ColorGreen      = "\033[32m"
-	ColorCyan       = "\033[36m"
-	ColorBold       = "\033[1m"
+	// =============================================================================
+	// Logging Configuration
+	// =============================================================================
 
+	// Log Settings
+	DefaultLogLevel = "info"
+
+	// ANSI Color Codes
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorYellow = "\033[33m"
+	ColorGreen  = "\033[32m"
+	ColorCyan   = "\033[36m"
+	ColorBold   = "\033[1m"
+
+	// Log Levels
 	Error LogLevel = iota
 	Warn
 	Info
@@ -411,36 +416,8 @@ type RewriteManager struct {
 	rulesLen atomic.Uint64
 }
 
-// Connection Pool Types
-type ConnPoolEntry struct {
-	conn       any
-	serverAddr string        // Grouped strings together for better cache locality
-	protocol   string        // Grouped strings together for better cache locality
-	createdAt  time.Time     // Grouped time fields together
-	lastUsed   atomic.Value  // time.Time - most frequently accessed
-	healthy    atomic.Bool   // Group atomic types together
-	closed     atomic.Bool   // Group atomic types together
-	useCount   atomic.Uint64 // Group atomic types together
-}
-
-type ConnPool struct {
-	http2Conns      sync.Map
-	http3Conns      sync.Map
-	quicConns       sync.Map
-	tlsConns        sync.Map
-	sessionCache    tls.ClientSessionCache
-	ctx             context.Context
-	cancel          context.CancelCauseFunc
-	backgroundGroup *errgroup.Group
-	backgroundCtx   context.Context
-	closed          atomic.Bool
-	cleanupTicker   *time.Ticker
-	connCount       atomic.Int64
-}
-
 type QueryClient struct {
-	timeout  time.Duration
-	connPool *ConnPool
+	timeout time.Duration
 }
 
 // Security Types
@@ -479,7 +456,6 @@ type DNSServer struct {
 	config            *ServerConfig
 	cacheMgr          CacheManager
 	queryClient       *QueryClient
-	connPool          *ConnPool
 	securityMgr       *SecurityManager
 	ednsMgr           *EDNSManager
 	rewriteMgr        *RewriteManager
@@ -612,507 +588,12 @@ func LogInfo(format string, args ...any)  { globalLog.Info(format, args...) }
 func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
 
 // =============================================================================
-// ConnectionPool Implementation
-// =============================================================================
-
-func NewConnPool() *ConnPool {
-	ctx, cancel := context.WithCancelCause(context.Background())
-	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
-
-	pool := &ConnPool{
-		ctx:             ctx,
-		cancel:          cancel,
-		backgroundGroup: backgroundGroup,
-		backgroundCtx:   backgroundCtx,
-		cleanupTicker:   time.NewTicker(ConnPoolCleanup),
-		sessionCache:    tls.NewLRUClientSessionCache(TLSSessionCacheSize),
-	}
-	pool.closed.Store(false)
-
-	pool.backgroundGroup.Go(func() error {
-		pool.cleanupLoop()
-		return nil
-	})
-
-	LogInfo("POOL: Connection pool initialized")
-	return pool
-}
-
-func (p *ConnPool) cleanupLoop() {
-	defer HandlePanic("Connection pool cleanup")
-
-	validateTicker := time.NewTicker(ConnValidateEvery)
-	defer validateTicker.Stop()
-
-	for {
-		select {
-		case <-p.cleanupTicker.C:
-			p.cleanupExpiredConns()
-		case <-validateTicker.C:
-			p.validateConns()
-		case <-p.ctx.Done():
-			return
-		}
-	}
-}
-
-func (p *ConnPool) cleanupExpiredConns() {
-	now := timeCache.Now()
-	removed := 0
-
-	cleanupMap := func(m *sync.Map) {
-		m.Range(func(key, value any) bool {
-			entry := value.(*ConnPoolEntry)
-
-			lastUsed := entry.lastUsed.Load().(time.Time)
-			shouldRemove := entry.closed.Load() ||
-				now.Sub(entry.createdAt) > ConnMaxLifetime ||
-				now.Sub(lastUsed) > ConnMaxIdleTime ||
-				!entry.healthy.Load()
-
-			if shouldRemove {
-				m.Delete(key)
-				p.closeEntry(entry)
-				removed++
-			}
-
-			return true
-		})
-	}
-
-	cleanupMap(&p.http2Conns)
-	cleanupMap(&p.http3Conns)
-	cleanupMap(&p.quicConns)
-	cleanupMap(&p.tlsConns)
-
-	if removed > 0 {
-		LogDebug("POOL: Cleaned up %d expired connections", removed)
-	}
-}
-
-func (p *ConnPool) validateConns() {
-	validated := 0
-	failed := 0
-
-	validateMap := func(m *sync.Map) {
-		m.Range(func(key, value any) bool {
-			entry := value.(*ConnPoolEntry)
-
-			if entry.closed.Load() {
-				return true
-			}
-
-			valid := p.validateConn(entry)
-			entry.healthy.Store(valid)
-
-			if !valid {
-				failed++
-				m.Delete(key)
-				p.closeEntry(entry)
-			} else {
-				validated++
-			}
-
-			return true
-		})
-	}
-
-	validateMap(&p.quicConns)
-	validateMap(&p.tlsConns)
-
-	if validated > 0 || failed > 0 {
-		LogDebug("POOL: Validation - valid: %d, failed: %d", validated, failed)
-	}
-}
-
-func (p *ConnPool) validateConn(entry *ConnPoolEntry) bool {
-	switch conn := entry.conn.(type) {
-	case *quic.Conn:
-		select {
-		case <-conn.Context().Done():
-			return false
-		default:
-			return true
-		}
-	case *tls.Conn:
-		_ = conn.SetReadDeadline(time.Now().Add(time.Millisecond))
-		buf := make([]byte, 1)
-		_, err := conn.Read(buf)
-		_ = conn.SetReadDeadline(time.Time{})
-		return err == nil || IsTemporaryError(err)
-	default:
-		return true
-	}
-}
-
-func (p *ConnPool) closeEntry(entry *ConnPoolEntry) {
-	if !entry.closed.CompareAndSwap(false, true) {
-		return
-	}
-
-	p.connCount.Add(-1)
-
-	switch conn := entry.conn.(type) {
-	case *http.Transport:
-		conn.CloseIdleConnections()
-	case *http3.Transport:
-		_ = conn.Close()
-	case *quic.Conn:
-		ctx, cancel := context.WithTimeout(context.Background(), ConnCloseTimeout)
-		_ = conn.CloseWithError(QUICCodeNoError, "cleanup")
-		select {
-		case <-conn.Context().Done():
-		case <-ctx.Done():
-		}
-		cancel()
-	case *tls.Conn:
-		_ = conn.Close()
-	}
-}
-
-func (p *ConnPool) GetOrCreateHTTP2(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
-	if p.closed.Load() {
-		return nil, errors.New("pool closed")
-	}
-
-	key := "h2:" + serverAddr
-
-	if value, ok := p.http2Conns.Load(key); ok {
-		entry := value.(*ConnPoolEntry)
-		if !entry.closed.Load() && entry.healthy.Load() {
-			entry.lastUsed.Store(time.Now())
-			entry.useCount.Add(1)
-			return &http.Client{
-				Transport: entry.conn.(*http.Transport),
-				Timeout:   QueryTimeout,
-			}, nil
-		}
-		p.http2Conns.Delete(key)
-		p.closeEntry(entry)
-	}
-
-	tlsConfig = tlsConfig.Clone()
-	tlsConfig.ClientSessionCache = p.sessionCache
-
-	transport := &http.Transport{
-		TLSClientConfig:       tlsConfig,
-		DisableCompression:    true,
-		DisableKeepAlives:     false,
-		MaxIdleConns:          8,
-		IdleConnTimeout:       ConnMaxIdleTime,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConnsPerHost:   4,
-		ResponseHeaderTimeout: QueryTimeout,
-	}
-
-	if err := http2.ConfigureTransport(transport); err != nil {
-		return nil, fmt.Errorf("configure HTTP/2: %w", err)
-	}
-
-	entry := &ConnPoolEntry{
-		conn:       transport,
-		createdAt:  time.Now(),
-		serverAddr: serverAddr,
-		protocol:   "http2",
-	}
-	entry.lastUsed.Store(time.Now())
-	entry.useCount.Store(1)
-	entry.healthy.Store(true)
-	entry.closed.Store(false)
-
-	p.http2Conns.Store(key, entry)
-	p.connCount.Add(1)
-
-	return &http.Client{
-		Transport: transport,
-		Timeout:   QueryTimeout,
-	}, nil
-}
-
-func (p *ConnPool) GetOrCreateHTTP3(serverAddr string, tlsConfig *tls.Config) (*http.Client, error) {
-	if p.closed.Load() {
-		return nil, errors.New("pool closed")
-	}
-
-	key := "h3:" + serverAddr
-
-	if value, ok := p.http3Conns.Load(key); ok {
-		entry := value.(*ConnPoolEntry)
-		if !entry.closed.Load() && entry.healthy.Load() {
-			entry.lastUsed.Store(time.Now())
-			entry.useCount.Add(1)
-			return &http.Client{
-				Transport: entry.conn.(*http3.Transport),
-				Timeout:   QueryTimeout,
-			}, nil
-		}
-		p.http3Conns.Delete(key)
-		p.closeEntry(entry)
-	}
-
-	tlsConfig = tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoDoH3
-	tlsConfig.ClientSessionCache = p.sessionCache
-
-	transport := &http3.Transport{
-		TLSClientConfig: tlsConfig,
-		QUICConfig: &quic.Config{
-			MaxIdleTimeout:             ConnMaxIdleTime,
-			MaxIncomingStreams:         MaxIncomingStreams / 2,
-			KeepAlivePeriod:            ConnKeepAlive,
-			EnableDatagrams:            true,
-			Allow0RTT:                  true,
-			MaxStreamReceiveWindow:     4 * 1024 * 1024,
-			MaxConnectionReceiveWindow: 8 * 1024 * 1024,
-		},
-	}
-
-	entry := &ConnPoolEntry{
-		conn:       transport,
-		createdAt:  time.Now(),
-		serverAddr: serverAddr,
-		protocol:   "http3",
-	}
-	entry.lastUsed.Store(time.Now())
-	entry.useCount.Store(1)
-	entry.healthy.Store(true)
-	entry.closed.Store(false)
-
-	p.http3Conns.Store(key, entry)
-	p.connCount.Add(1)
-
-	return &http.Client{
-		Transport: transport,
-		Timeout:   QueryTimeout,
-	}, nil
-}
-
-func (p *ConnPool) GetOrCreateQUIC(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*quic.Conn, error) {
-	if p.closed.Load() {
-		return nil, errors.New("pool closed")
-	}
-
-	key := "quic:" + serverAddr
-
-	if value, ok := p.quicConns.Load(key); ok {
-		entry := value.(*ConnPoolEntry)
-		conn := entry.conn.(*quic.Conn)
-
-		if !entry.closed.Load() && entry.healthy.Load() {
-			select {
-			case <-conn.Context().Done():
-				p.quicConns.Delete(key)
-				p.closeEntry(entry)
-			default:
-				entry.lastUsed.Store(time.Now())
-				entry.useCount.Add(1)
-				return conn, nil
-			}
-		} else {
-			p.quicConns.Delete(key)
-			p.closeEntry(entry)
-		}
-	}
-
-	tlsConfig = tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoDoQ
-	tlsConfig.ClientSessionCache = p.sessionCache
-
-	quicConfig := &quic.Config{
-		MaxIdleTimeout:             ConnMaxIdleTime,
-		MaxIncomingStreams:         MaxIncomingStreams / 2,
-		KeepAlivePeriod:            ConnKeepAlive,
-		EnableDatagrams:            true,
-		Allow0RTT:                  true,
-		MaxStreamReceiveWindow:     4 * 1024 * 1024,
-		MaxConnectionReceiveWindow: 8 * 1024 * 1024,
-	}
-
-	dialCtx, cancel := context.WithTimeout(ctx, ConnDialTimeout)
-	defer cancel()
-
-	conn, err := quic.DialAddr(dialCtx, serverAddr, tlsConfig, quicConfig)
-	if err != nil {
-		return nil, fmt.Errorf("QUIC dial: %w", err)
-	}
-
-	entry := &ConnPoolEntry{
-		conn:       conn,
-		createdAt:  time.Now(),
-		serverAddr: serverAddr,
-		protocol:   "quic",
-	}
-	entry.lastUsed.Store(time.Now())
-	entry.useCount.Store(1)
-	entry.healthy.Store(true)
-	entry.closed.Store(false)
-
-	p.quicConns.Store(key, entry)
-	p.connCount.Add(1)
-
-	go p.monitorQUICConn(key, entry, conn)
-
-	return conn, nil
-}
-
-func (p *ConnPool) monitorQUICConn(key string, entry *ConnPoolEntry, conn *quic.Conn) {
-	defer HandlePanic("Monitor QUIC connection")
-
-	// Add timeout protection to prevent goroutine leaks
-	timeout := time.NewTimer(ConnTimeout)
-	defer timeout.Stop()
-
-	select {
-	case <-conn.Context().Done():
-		// Connection normal close or error
-		entry.healthy.Store(false)
-		entry.closed.Store(true)
-		p.quicConns.Delete(key)
-		p.closeEntry(entry)
-		LogDebug("QUIC connection monitor: connection closed normally - %s", key)
-	case <-timeout.C:
-		// Timeout protection
-		LogDebug("QUIC connection monitor timeout, force cleanup: %s", key)
-		entry.healthy.Store(false)
-		entry.closed.Store(true)
-		p.quicConns.Delete(key)
-		p.closeEntry(entry)
-		// Force close the connection if it's still active
-		// Use a separate goroutine with timeout to prevent blocking
-		go func() {
-			defer HandlePanic("Force close QUIC connection")
-			if conn != nil {
-				// Add context timeout to prevent hanging
-				closeCtx, closeCancel := context.WithTimeout(context.Background(), ConnTimeout)
-				defer closeCancel()
-
-				done := make(chan struct{})
-				go func() {
-					defer HandlePanic("QUIC close operation")
-					_ = conn.CloseWithError(QUICCodeNoError, "monitor timeout")
-					close(done)
-				}()
-
-				select {
-				case <-done:
-					// Connection closed successfully
-				case <-closeCtx.Done():
-					// Timeout, force abandon the operation
-					LogDebug("QUIC: Force close operation timed out for %s", key)
-				case <-p.ctx.Done():
-					// Pool shutdown, abandon operation
-					return
-				}
-			}
-		}()
-	case <-p.ctx.Done():
-		// Connection pool shutdown, force exit without cleanup
-		// Connection will be cleaned up by pool shutdown process
-		return
-	}
-}
-
-func (p *ConnPool) GetOrCreateTLS(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*tls.Conn, error) {
-	if p.closed.Load() {
-		return nil, errors.New("pool closed")
-	}
-
-	key := "tls:" + serverAddr
-
-	if value, ok := p.tlsConns.Load(key); ok {
-		entry := value.(*ConnPoolEntry)
-		conn := entry.conn.(*tls.Conn)
-
-		if !entry.closed.Load() && entry.healthy.Load() && p.validateConn(entry) {
-			entry.lastUsed.Store(time.Now())
-			entry.useCount.Add(1)
-			return conn, nil
-		}
-
-		p.tlsConns.Delete(key)
-		p.closeEntry(entry)
-	}
-
-	tlsConfig = tlsConfig.Clone()
-	tlsConfig.ClientSessionCache = p.sessionCache
-
-	host, port, err := net.SplitHostPort(serverAddr)
-	if err != nil {
-		return nil, fmt.Errorf("parse address: %w", err)
-	}
-
-	dialer := &net.Dialer{
-		Timeout:   ConnDialTimeout,
-		KeepAlive: ConnKeepAlive,
-	}
-	netConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
-	if err != nil {
-		return nil, fmt.Errorf("dial: %w", err)
-	}
-
-	tlsConn := tls.Client(netConn, tlsConfig)
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		_ = netConn.Close()
-		return nil, fmt.Errorf("TLS handshake: %w", err)
-	}
-
-	entry := &ConnPoolEntry{
-		conn:       tlsConn,
-		createdAt:  time.Now(),
-		serverAddr: serverAddr,
-		protocol:   "tls",
-	}
-	entry.lastUsed.Store(time.Now())
-	entry.useCount.Store(1)
-	entry.healthy.Store(true)
-	entry.closed.Store(false)
-
-	p.tlsConns.Store(key, entry)
-	p.connCount.Add(1)
-
-	return tlsConn, nil
-}
-
-func (p *ConnPool) Close() error {
-	if !p.closed.CompareAndSwap(false, true) {
-		return nil
-	}
-
-	LogInfo("POOL: Shutting down connection pool")
-
-	p.cancel(errors.New("connection pool shutdown"))
-	p.cleanupTicker.Stop()
-
-	closeMap := func(m *sync.Map) {
-		m.Range(func(key, value any) bool {
-			entry := value.(*ConnPoolEntry)
-			p.closeEntry(entry)
-			m.Delete(key)
-			return true
-		})
-	}
-
-	closeMap(&p.http2Conns)
-	closeMap(&p.http3Conns)
-	closeMap(&p.quicConns)
-	closeMap(&p.tlsConns)
-
-	// Wait for background goroutines to finish
-	if err := p.backgroundGroup.Wait(); err != nil {
-		LogError("POOL: Background goroutines finished with error: %v", err)
-	}
-	LogInfo("POOL: Connection pool shut down")
-	return nil
-}
-
-// =============================================================================
 // QueryClient Implementation
 // =============================================================================
 
-func NewQueryClient(connPool *ConnPool) *QueryClient {
+func NewQueryClient() *QueryClient {
 	return &QueryClient{
-		timeout:  QueryTimeout,
-		connPool: connPool,
+		timeout: OperationTimeout,
 	}
 }
 
@@ -1151,7 +632,6 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 		ServerName:         server.ServerName,
 		InsecureSkipVerify: server.SkipTLSVerify,
 		MinVersion:         tls.VersionTLS12,
-		ClientSessionCache: qc.connPool.sessionCache,
 	}
 
 	if server.SkipTLSVerify {
@@ -1173,13 +653,23 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 }
 
 func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	conn, err := qc.connPool.GetOrCreateTLS(ctx, server.Address, tlsConfig)
-	if err != nil {
-		return nil, err
+	dialer := &net.Dialer{
+		Timeout: DefaultTimeout,
 	}
 
-	_ = conn.SetDeadline(time.Now().Add(qc.timeout))
-	defer func() { _ = conn.SetDeadline(time.Time{}) }()
+	netConn, err := dialer.DialContext(ctx, "tcp", server.Address)
+	if err != nil {
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+	defer func() { _ = netConn.Close() }()
+
+	tlsConn := tls.Client(netConn, tlsConfig)
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		return nil, fmt.Errorf("TLS handshake: %w", err)
+	}
+	defer func() { _ = tlsConn.Close() }()
+
+	_ = tlsConn.SetDeadline(time.Now().Add(qc.timeout))
 
 	msgData, err := msg.Pack()
 	if err != nil {
@@ -1190,12 +680,12 @@ func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *Ups
 	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
 	copy(buf[2:], msgData)
 
-	if _, err := conn.Write(buf); err != nil {
+	if _, err := tlsConn.Write(buf); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
 	lengthBuf := make([]byte, 2)
-	if _, err := io.ReadFull(conn, lengthBuf); err != nil {
+	if _, err := io.ReadFull(tlsConn, lengthBuf); err != nil {
 		return nil, fmt.Errorf("read length: %w", err)
 	}
 
@@ -1205,7 +695,7 @@ func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *Ups
 	}
 
 	respBuf := make([]byte, respLength)
-	if _, err := io.ReadFull(conn, respBuf); err != nil {
+	if _, err := io.ReadFull(tlsConn, respBuf); err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
@@ -1218,10 +708,27 @@ func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *Ups
 }
 
 func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	conn, err := qc.connPool.GetOrCreateQUIC(ctx, server.Address, tlsConfig)
-	if err != nil {
-		return nil, err
+	tlsConfig = tlsConfig.Clone()
+	tlsConfig.NextProtos = NextProtoDoQ
+
+	quicConfig := &quic.Config{
+		MaxIdleTimeout:        IdleTimeout,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
+		EnableDatagrams:       true,
+		Allow0RTT:             true,
 	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
+	defer cancel()
+
+	conn, err := quic.DialAddr(dialCtx, server.Address, tlsConfig, quicConfig)
+	if err != nil {
+		return nil, fmt.Errorf("QUIC dial: %w", err)
+	}
+	defer func() {
+		_ = conn.CloseWithError(QUICCodeNoError, "query completed")
+	}()
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
@@ -1283,9 +790,20 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultDOHPort)
 	}
 
-	httpClient, err := qc.connPool.GetOrCreateHTTP2(parsedURL.Host, tlsConfig)
-	if err != nil {
-		return nil, err
+	tlsConfig = tlsConfig.Clone()
+	transport := &http.Transport{
+		TLSClientConfig:    tlsConfig,
+		DisableCompression: true,
+		ForceAttemptHTTP2:  true,
+	}
+
+	if err := http2.ConfigureTransport(transport); err != nil {
+		return nil, fmt.Errorf("configure HTTP/2: %w", err)
+	}
+
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   qc.timeout,
 	}
 
 	originalID := msg.Id
@@ -1353,9 +871,23 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultDOHPort)
 	}
 
-	httpClient, err := qc.connPool.GetOrCreateHTTP3(parsedURL.Host, tlsConfig)
-	if err != nil {
-		return nil, err
+	tlsConfig = tlsConfig.Clone()
+	tlsConfig.NextProtos = NextProtoDoH3
+
+	transport := &http3.Transport{
+		TLSClientConfig: tlsConfig,
+		QUICConfig: &quic.Config{
+			MaxIdleTimeout:        IdleTimeout,
+			MaxIncomingStreams:    MaxIncomingStreams,
+			MaxIncomingUniStreams: MaxIncomingStreams,
+			EnableDatagrams:       true,
+			Allow0RTT:             true,
+		},
+	}
+
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   qc.timeout,
 	}
 
 	originalID := msg.Id
@@ -1713,19 +1245,12 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 	logging.Disable()
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:         config.Redis.Address,
-		Password:     config.Redis.Password,
-		DB:           config.Redis.Database,
-		PoolSize:     RedisPoolSize,
-		MinIdleConns: RedisMinIdle,
-		MaxRetries:   RedisMaxRetries,
-		PoolTimeout:  RedisPoolTimeout,
-		ReadTimeout:  RedisReadTimeout,
-		WriteTimeout: RedisWriteTimeout,
-		DialTimeout:  RedisDialTimeout,
+		Addr:     config.Redis.Address,
+		Password: config.Redis.Password,
+		DB:       config.Redis.Database,
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), ConnTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
@@ -1755,7 +1280,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 		return nil, false, false
 	}
 
-	ctx, cancel := context.WithTimeout(rc.ctx, RedisReadTimeout)
+	ctx, cancel := context.WithTimeout(rc.ctx, OperationTimeout)
 	defer cancel()
 
 	data, err := rc.client.Get(ctx, key).Result()
@@ -1767,7 +1292,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	if err := json.Unmarshal([]byte(data), &entry); err != nil {
 		rc.bgGroup.Go(func() error {
 			defer HandlePanic("Clean corrupted cache")
-			cleanCtx, cleanCancel := context.WithTimeout(rc.bgCtx, RedisWriteTimeout)
+			cleanCtx, cleanCancel := context.WithTimeout(rc.bgCtx, OperationTimeout)
 			defer cleanCancel()
 			if err := rc.client.Del(cleanCtx, key).Err(); err != nil {
 				LogError("CACHE: Failed to clean corrupted cache key %s: %v", key, err)
@@ -1784,7 +1309,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 	rc.bgGroup.Go(func() error {
 		defer HandlePanic("Update access time")
 		if atomic.LoadInt32(&rc.closed) == 0 {
-			updateCtx, updateCancel := context.WithTimeout(rc.bgCtx, RedisWriteTimeout)
+			updateCtx, updateCancel := context.WithTimeout(rc.bgCtx, OperationTimeout)
 			defer updateCancel()
 			if data, err := json.Marshal(entry); err == nil {
 				if err := rc.client.Set(updateCtx, key, data, redis.KeepTTL).Err(); err != nil {
@@ -1833,7 +1358,7 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(rc.ctx, RedisWriteTimeout)
+	ctx, cancel := context.WithTimeout(rc.ctx, OperationTimeout)
 	defer cancel()
 
 	expiration := time.Duration(cacheTTL)*time.Second + time.Duration(StaleMaxAge)*time.Second
@@ -1862,7 +1387,7 @@ func (rc *RedisCache) Close() error {
 			LogError("CACHE: Background goroutine error: %v", err)
 		}
 		LogDebug("CACHE: All Redis background goroutines finished gracefully")
-	case <-time.After(RedisPoolIdleTimeout):
+	case <-time.After(IdleTimeout):
 		LogWarn("CACHE: Redis background goroutine shutdown timeout")
 	}
 
@@ -2202,7 +1727,7 @@ func (r *CIDRRule) containsIPv6(ip net.IP) bool {
 func NewEDNSManager(defaultSubnet string) (*EDNSManager, error) {
 	manager := &EDNSManager{
 		detector: &IPDetector{
-			httpClient: &http.Client{Timeout: HTTPClientTimeout},
+			httpClient: &http.Client{Timeout: OperationTimeout},
 		},
 	}
 
@@ -2388,16 +1913,15 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: PublicIPTimeout}
+			dialer := &net.Dialer{Timeout: DefaultTimeout}
 			if forceIPv6 {
 				return dialer.DialContext(ctx, "tcp6", addr)
 			}
 			return dialer.DialContext(ctx, "tcp4", addr)
 		},
-		TLSHandshakeTimeout: TLSHandshakeTimeout,
 	}
 
-	client := &http.Client{Timeout: HTTPClientTimeout, Transport: transport}
+	client := &http.Client{Timeout: OperationTimeout, Transport: transport}
 	defer transport.CloseIdleConnections()
 
 	resp, err := client.Get("https://api.cloudflare.com/cdn-cgi/trace")
@@ -2820,9 +2344,8 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 	}
 
 	tlsConfig := &tls.Config{
-		Certificates:           []tls.Certificate{cert},
-		MinVersion:             tls.VersionTLS13,
-		SessionTicketsDisabled: false,
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -2989,10 +2512,10 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		return
 	}
 
-	_ = tlsConn.SetReadDeadline(time.Now().Add(DoTReadTimeout))
-	_ = tlsConn.SetWriteDeadline(time.Now().Add(DoTWriteTimeout))
+	_ = tlsConn.SetReadDeadline(time.Now().Add(OperationTimeout))
+	_ = tlsConn.SetWriteDeadline(time.Now().Add(OperationTimeout))
 
-	reader := bufio.NewReaderSize(tlsConn, 2048)
+	reader := bufio.NewReaderSize(tlsConn, TLSConnBufferSize)
 
 	for {
 		select {
@@ -3001,8 +2524,8 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		default:
 		}
 
-		_ = tlsConn.SetReadDeadline(time.Now().Add(DoTReadTimeout))
-		_ = tlsConn.SetWriteDeadline(time.Now().Add(DoTWriteTimeout))
+		_ = tlsConn.SetReadDeadline(time.Now().Add(OperationTimeout))
+		_ = tlsConn.SetWriteDeadline(time.Now().Add(OperationTimeout))
 
 		lengthBuf := make([]byte, 2)
 		n, err := io.ReadFull(reader, lengthBuf)
@@ -3094,12 +2617,11 @@ func (tm *TLSManager) startDOQServer() error {
 	quicTLSConfig.NextProtos = NextProtoDoQ
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        SecureIdleTimeout,
-		MaxIncomingStreams:    MaxIncomingStreams / 2,
-		MaxIncomingUniStreams: MaxIncomingStreams / 4,
+		MaxIdleTimeout:        IdleTimeout,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
-		KeepAlivePeriod:       ConnKeepAlive,
 	}
 
 	tm.doqListener, err = tm.doqTransport.ListenEarly(quicTLSConfig, quicConfig)
@@ -3153,7 +2675,7 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 	}
 
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), ConnCloseTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 		defer cancel()
 
 		_ = conn.CloseWithError(QUICCodeNoError, "")
@@ -3290,9 +2812,9 @@ func (tm *TLSManager) startDOHServer(port string) error {
 
 	tm.httpsServer = &http.Server{
 		Handler:           tm,
-		ReadHeaderTimeout: DoHReadHeaderTimeout,
-		WriteTimeout:      DoHWriteTimeout,
-		IdleTimeout:       DoTIdleTimeout,
+		ReadHeaderTimeout: OperationTimeout,
+		WriteTimeout:      OperationTimeout,
+		IdleTimeout:       IdleTimeout,
 	}
 
 	tm.serverGroup.Go(func() error {
@@ -3314,12 +2836,11 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 	tlsConfig.NextProtos = NextProtoDoH3
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        SecureIdleTimeout,
-		MaxIncomingStreams:    MaxIncomingStreams / 2,
-		MaxIncomingUniStreams: MaxIncomingStreams / 4,
+		MaxIdleTimeout:        IdleTimeout,
+		MaxIncomingStreams:    MaxIncomingStreams,
+		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
-		KeepAlivePeriod:       ConnKeepAlive,
 	}
 
 	quicListener, err := quic.ListenAddrEarly(addr, tlsConfig, quicConfig)
@@ -3452,13 +2973,13 @@ func (tm *TLSManager) shutdown() error {
 	}
 
 	if tm.httpsServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 		defer cancel()
 		_ = tm.httpsServer.Shutdown(ctx)
 	}
 
 	if tm.h3Server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 		defer cancel()
 		_ = tm.h3Server.Shutdown(ctx)
 	}
@@ -3510,8 +3031,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		}
 	}
 
-	connPool := NewConnPool()
-
 	var redisClient *redis.Client
 	var cache CacheManager
 	if config.Redis.Address == "" {
@@ -3531,7 +3050,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		ednsMgr:           ednsManager,
 		rewriteMgr:        rewriteManager,
 		cidrMgr:           cidrManager,
-		connPool:          connPool,
 		redisClient:       redisClient,
 		cacheMgr:          cache,
 		ctx:               ctx,
@@ -3550,7 +3068,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	}
 	server.securityMgr = securityManager
 
-	queryClient := NewQueryClient(connPool)
+	queryClient := NewQueryClient()
 	server.queryClient = queryClient
 
 	queryManager := NewQueryManager(server)
@@ -3563,9 +3081,9 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	if config.Server.Pprof != "" {
 		server.pprofServer = &http.Server{
 			Addr:              ":" + config.Server.Pprof,
-			ReadHeaderTimeout: PprofReadHeaderTimeout,
-			ReadTimeout:       PprofReadTimeout,
-			IdleTimeout:       PprofIdleTimeout,
+			ReadHeaderTimeout: OperationTimeout,
+			ReadTimeout:       OperationTimeout,
+			IdleTimeout:       IdleTimeout,
 		}
 
 		if server.securityMgr != nil && server.securityMgr.tls != nil {
@@ -3615,17 +3133,13 @@ func (s *DNSServer) shutdownServer() {
 	}
 
 	if s.securityMgr != nil {
-		if err := s.securityMgr.Shutdown(ShutdownTimeout); err != nil {
+		if err := s.securityMgr.Shutdown(DefaultTimeout); err != nil {
 			LogError("SECURITY: Security manager shutdown failed: %v", err)
 		}
 	}
 
-	if s.connPool != nil {
-		CloseWithLog(s.connPool, "Connection pool")
-	}
-
 	if s.pprofServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 		if err := s.pprofServer.Shutdown(ctx); err != nil {
 			LogError("PPROF: pprof server shutdown failed: %v", err)
 		} else {
@@ -3647,7 +3161,7 @@ func (s *DNSServer) shutdownServer() {
 			LogError("SERVER: Background goroutines finished with error: %v", err)
 		}
 		LogInfo("SERVER: All background tasks shut down")
-	case <-time.After(ShutdownTimeout):
+	case <-time.After(DefaultTimeout):
 		LogWarn("SERVER: Background tasks shutdown timeout")
 	}
 
@@ -3664,7 +3178,7 @@ func (s *DNSServer) shutdownServer() {
 			LogError("SERVER: Cache refresh goroutines finished with error: %v", err)
 		}
 		LogInfo("SERVER: All cache refresh tasks shut down")
-	case <-time.After(ShutdownTimeout):
+	case <-time.After(DefaultTimeout):
 		LogWarn("SERVER: Cache refresh tasks shutdown timeout")
 	}
 
@@ -3675,7 +3189,6 @@ func (s *DNSServer) shutdownServer() {
 		close(s.shutdown)
 	}
 
-	time.Sleep(100 * time.Millisecond)
 	os.Exit(0)
 }
 
@@ -3976,7 +3489,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	if isExpired && entry.ShouldRefresh() {
 		s.cacheRefreshGroup.Go(func() error {
 			defer HandlePanic("cache refresh")
-			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, QueryTimeout)
+			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, OperationTimeout)
 			defer cancel()
 			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
 		})
@@ -4187,7 +3700,7 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, 
 	if len(servers) > 0 {
 		return qm.queryUpstream(question, ecs)
 	}
-	ctx, cancel := context.WithTimeout(qm.server.ctx, RecursiveTimeout)
+	ctx, cancel := context.WithTimeout(qm.server.ctx, IdleTimeout)
 	defer cancel()
 
 	answer, authority, additional, validated, ecsResponse, server, err := qm.cname.resolveWithCNAME(ctx, question, ecs)
@@ -4225,7 +3738,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 
 	resultChan := make(chan UpstreamQueryResult, 1)
 
-	ctx, cancel := context.WithTimeout(qm.server.ctx, QueryTimeout)
+	ctx, cancel := context.WithTimeout(qm.server.ctx, OperationTimeout)
 	defer cancel()
 
 	g, queryCtx := errgroup.WithContext(ctx)
@@ -4243,7 +3756,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 			}
 
 			if server.IsRecursive() {
-				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, RecursiveTimeout)
+				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, IdleTimeout)
 				defer recursiveCancel()
 
 				answer, authority, additional, validated, ecsResponse, usedServer, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs)
@@ -4661,7 +4174,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		return nil
 	}
 
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, ConnTimeout)
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, DefaultTimeout)
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
@@ -4854,7 +4367,7 @@ func IsTemporaryError(err error) bool {
 
 func HandlePanic(operation string) {
 	if r := recover(); r != nil {
-		buf := make([]byte, 4096)
+		buf := make([]byte, TCPBufferSize)
 		n := runtime.Stack(buf, false)
 		stackTrace := string(buf[:n])
 		LogError("PANIC: Panic [%s]: %v\nStack:\n%s\nExiting due to panic", operation, r, stackTrace)
@@ -4986,7 +4499,7 @@ func ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
 
 func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC bool, globalPrefix string) string {
 	var buf strings.Builder
-	buf.Grow(128)
+	buf.Grow(ResultBufferCapacity)
 
 	buf.WriteString(globalPrefix)
 	buf.WriteString(RedisPrefixDNS)
@@ -5010,7 +4523,7 @@ func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC 
 	}
 
 	result := buf.String()
-	if len(result) > 512 {
+	if len(result) > MaxResultLength {
 		hash := fnv.New64a()
 		hash.Write([]byte(result))
 		return fmt.Sprintf("h:%x", hash.Sum64())
