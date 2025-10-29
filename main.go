@@ -134,14 +134,6 @@ const (
 	PaddingSize     = 468
 
 	// =============================================================================
-	// Performance & Concurrency
-	// =============================================================================
-
-	// Concurrency Limits
-	DNSQueryConcurrency  = 3
-	NSResolveConcurrency = 3
-
-	// =============================================================================
 	// Timing Configuration
 	// =============================================================================
 
@@ -3742,7 +3734,6 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	defer cancel()
 
 	g, queryCtx := errgroup.WithContext(ctx)
-	g.SetLimit(DNSQueryConcurrency)
 
 	for _, srv := range servers {
 		server := srv
@@ -4111,8 +4102,6 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 	resultChan := make(chan *QueryResult, 1)
 
 	g, queryCtx := errgroup.WithContext(queryCtx)
-	// Set concurrency limit but still iterate through all nameservers
-	g.SetLimit(DNSQueryConcurrency)
 
 	for _, ns := range nameservers {
 		nsAddr := ns
@@ -4178,7 +4167,6 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
-	g.SetLimit(NSResolveConcurrency)
 
 	// Use atomic.Pointer for true lock-free operations (Go 1.19+)
 	var allAddresses atomic.Pointer[[]string]
