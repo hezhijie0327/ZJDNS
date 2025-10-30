@@ -1114,13 +1114,13 @@ func (qc *QueryClient) needsTCPFallback(result *QueryResult, protocol string) bo
 // Utility Functions - Shuffle and Concurrency
 // =============================================================================
 
-func shuffleRootServers(servers []string) []string {
-	if len(servers) <= 1 {
-		return servers
+func shuffleSlice[T any](slice []T) []T {
+	if len(slice) <= 1 {
+		return slice
 	}
 
-	shuffled := make([]string, len(servers))
-	copy(shuffled, servers)
+	shuffled := make([]T, len(slice))
+	copy(shuffled, slice)
 
 	for i := len(shuffled) - 1; i > 0; i-- {
 		j := globalRNG.Intn(i + 1)
@@ -3915,6 +3915,8 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 		return nil, nil, nil, false, nil, "", errors.New("no upstream servers")
 	}
 
+	servers = shuffleSlice(servers)
+
 	resultChan := make(chan UpstreamQueryResult, 1)
 	queryCtx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(errors.New("query completed"))
@@ -4170,7 +4172,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 	qname := dns.Fqdn(question.Name)
 	question.Name = qname
-	nameservers := shuffleRootServers(DefaultRootServers)
+	nameservers := shuffleSlice(DefaultRootServers)
 	currentDomain := "."
 	normalizedQname := NormalizeDomain(qname)
 
@@ -4299,6 +4301,8 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 			return nil, nsSlice, extraSlice, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
+		nextNS = shuffleSlice(nextNS)
+
 		messagePool.Put(response)
 		nameservers = nextNS
 	}
@@ -4315,6 +4319,8 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 	if len(nameservers) == 0 {
 		return nil, errors.New("no nameservers")
 	}
+
+	nameservers = shuffleSlice(nameservers)
 
 	queryCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errors.New("query resolution completed"))
@@ -4404,6 +4410,8 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	if len(nsRecords) == 0 {
 		return nil
 	}
+
+	nsRecords = shuffleSlice(nsRecords)
 
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, DefaultTimeout)
 	defer resolveCancel()
