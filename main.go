@@ -80,10 +80,8 @@ const (
 	MaxIncomingStreams   = math.MaxUint16
 
 	// Object pool sizes
-	MessagePoolSize    = 512
-	BufferPoolSize     = 256
-	ContextPoolSize    = 128
-	ConnectionPoolSize = 64
+	MessagePoolSize = 512
+	BufferPoolSize  = 256
 )
 
 // =============================================================================
@@ -194,9 +192,8 @@ var (
 	globalRNG = mrand.New(mrand.NewSource(time.Now().UnixNano()))
 
 	// Object pools for memory reuse
-	messagePool    *MessagePool
-	bufferPool     *BufferPool
-	connectionPool *ConnectionPool
+	messagePool *MessagePool
+	bufferPool  *BufferPool
 )
 
 // =============================================================================
@@ -568,19 +565,6 @@ type ContextPool struct {
 	pool sync.Pool
 }
 
-type ConnectionPool struct {
-	mu          sync.RWMutex
-	connections map[string][]*PooledConnection
-	maxSize     int
-	timeout     time.Duration
-}
-
-type PooledConnection struct {
-	conn      net.Conn
-	lastUsed  time.Time
-	createdAt time.Time
-}
-
 // =============================================================================
 // Initialization Functions
 // =============================================================================
@@ -588,7 +572,6 @@ type PooledConnection struct {
 func init() {
 	messagePool = NewMessagePool()
 	bufferPool = NewBufferPool(SecureBufferSize, BufferPoolSize)
-	connectionPool = NewConnectionPool(ConnectionPoolSize, DefaultTimeout)
 }
 
 // =============================================================================
@@ -778,97 +761,6 @@ func (cp *ContextPool) Get(parent context.Context, timeout time.Duration) (conte
 }
 
 // =============================================================================
-// ConnectionPool Implementation
-// =============================================================================
-
-func NewConnectionPool(maxSize int, timeout time.Duration) *ConnectionPool {
-	cp := &ConnectionPool{
-		connections: make(map[string][]*PooledConnection),
-		maxSize:     maxSize,
-		timeout:     timeout,
-	}
-	go cp.cleanupExpiredConnections()
-	return cp
-}
-
-func (cp *ConnectionPool) Get(key string) net.Conn {
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-
-	conns, exists := cp.connections[key]
-	if !exists || len(conns) == 0 {
-		return nil
-	}
-
-	pooledConn := conns[len(conns)-1]
-	cp.connections[key] = conns[:len(conns)-1]
-
-	if time.Since(pooledConn.lastUsed) > cp.timeout {
-		_ = pooledConn.conn.Close()
-		return nil
-	}
-
-	return pooledConn.conn
-}
-
-func (cp *ConnectionPool) Put(key string, conn net.Conn) {
-	if conn == nil {
-		return
-	}
-
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-
-	conns := cp.connections[key]
-	if len(conns) >= cp.maxSize {
-		_ = conn.Close()
-		return
-	}
-
-	cp.connections[key] = append(conns, &PooledConnection{
-		conn:      conn,
-		lastUsed:  time.Now(),
-		createdAt: time.Now(),
-	})
-}
-
-func (cp *ConnectionPool) cleanupExpiredConnections() {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		cp.mu.Lock()
-		for key, conns := range cp.connections {
-			validConns := make([]*PooledConnection, 0, len(conns))
-			for _, pooledConn := range conns {
-				if time.Since(pooledConn.lastUsed) <= cp.timeout {
-					validConns = append(validConns, pooledConn)
-				} else {
-					_ = pooledConn.conn.Close()
-				}
-			}
-			if len(validConns) > 0 {
-				cp.connections[key] = validConns
-			} else {
-				delete(cp.connections, key)
-			}
-		}
-		cp.mu.Unlock()
-	}
-}
-
-func (cp *ConnectionPool) Close() error {
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-
-	for _, conns := range cp.connections {
-		for _, pooledConn := range conns {
-			_ = pooledConn.conn.Close()
-		}
-	}
-	cp.connections = make(map[string][]*PooledConnection)
-	return nil
-}
 
 // =============================================================================
 // QueryClient Implementation
@@ -993,7 +885,7 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		EnableDatagrams:       true,
-		Allow0RTT:             true,
+		Allow0RTT:             false,
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
@@ -1158,7 +1050,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 			MaxIncomingStreams:    MaxIncomingStreams,
 			MaxIncomingUniStreams: MaxIncomingStreams,
 			EnableDatagrams:       true,
-			Allow0RTT:             true,
+			Allow0RTT:             false,
 		},
 	}
 
@@ -2917,7 +2809,7 @@ func (tm *TLSManager) startDOQServer() error {
 		MaxIdleTimeout:        IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
-		Allow0RTT:             true,
+		Allow0RTT:             false,
 		EnableDatagrams:       true,
 	}
 
@@ -3145,7 +3037,7 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 		MaxIdleTimeout:        IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
-		Allow0RTT:             true,
+		Allow0RTT:             false,
 		EnableDatagrams:       true,
 	}
 
@@ -3490,10 +3382,6 @@ func (s *DNSServer) shutdownServer() {
 	}
 
 	timeCache.Stop()
-
-	if connectionPool != nil {
-		_ = connectionPool.Close()
-	}
 
 	if s.shutdown != nil {
 		close(s.shutdown)
