@@ -4448,6 +4448,9 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 	g, queryCtx := errgroup.WithContext(queryCtx)
 	g.SetLimit(calculateConcurrencyLimit(len(nameservers)))
 
+	// Track active connections for immediate termination
+	var activeConnections atomic.Int32
+
 	for _, ns := range nameservers {
 		nsAddr := ns
 		protocol := "udp"
@@ -4459,6 +4462,8 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 
 		g.Go(func() error {
 			defer HandlePanic("Query nameserver")
+			activeConnections.Add(1)
+			defer activeConnections.Add(-1)
 
 			select {
 			case <-queryCtx.Done():
@@ -4467,7 +4472,11 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			default:
 			}
 
-			result := rr.server.queryClient.ExecuteQuery(queryCtx, msg, server)
+			// Create a sub-context with shorter timeout for individual queries
+			subCtx, subCancel := context.WithTimeout(queryCtx, DefaultTimeout/2)
+			defer subCancel()
+
+			result := rr.server.queryClient.ExecuteQuery(subCtx, msg, server)
 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
@@ -4476,7 +4485,8 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 					result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
 					select {
 					case resultChan <- result.Response:
-						cancel(errors.New("successful query completed"))
+						// First win - immediately cancel all other connections
+						cancel(errors.New("first win successful query completed"))
 						messagePool.Put(msg)
 						return nil
 					case <-queryCtx.Done():
@@ -4492,6 +4502,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		})
 	}
 
+	// Monitor for first success and terminate remaining connections
 	go func() {
 		_ = g.Wait()
 		close(resultChan)
@@ -4500,6 +4511,11 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 	select {
 	case result, ok := <-resultChan:
 		if ok && result != nil {
+			// Log connection termination stats
+			remaining := activeConnections.Load()
+			if remaining > 0 {
+				LogInfo("RECURSION: First win achieved, terminating %d remaining connections", remaining)
+			}
 			return result, nil
 		}
 		return nil, errors.New("no successful response")
@@ -4523,12 +4539,21 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	empty := []string{}
 	allAddresses.Store(&empty)
 
-	var completedCount atomic.Int32
+	// For first-win optimization: cancel when we get sufficient addresses
+	addressCtx, addressCancel := context.WithCancelCause(queryCtx)
+	defer addressCancel(errors.New("NS address resolution completed"))
+
+	var foundAddresses atomic.Int32
+	var activeResolutions atomic.Int32
 
 	for _, ns := range nsRecords {
 		nsRecord := ns
 
 		g.Go(func() error {
+			defer HandlePanic("Resolve NS addresses")
+			activeResolutions.Add(1)
+			defer activeResolutions.Add(-1)
+
 			select {
 			case <-queryCtx.Done():
 				return nil
@@ -4542,8 +4567,11 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 			var nsAddresses atomic.Value
 			nsAddresses.Store([]string{})
 
-			queryGroup, _ := errgroup.WithContext(queryCtx)
+			// Use first-win for IPv4/IPv6 resolution
+			queryGroup, subCtx := errgroup.WithContext(addressCtx)
+			queryGroup.SetLimit(2)
 
+			// IPv4 resolution
 			queryGroup.Go(func() error {
 				defer HandlePanic("Resolve NS IPv4")
 
@@ -4553,8 +4581,12 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					Qclass: dns.ClassINET,
 				}
 
+				// Create sub-context with shorter timeout
+				ipv4Ctx, ipv4Cancel := context.WithTimeout(subCtx, DefaultTimeout/3)
+				defer ipv4Cancel()
+
 				var ipv4Addresses []string
-				if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
+				if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(ipv4Ctx, nsQuestion, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswer {
 						if a, ok := rrec.(*dns.A); ok {
 							ipv4Addresses = append(ipv4Addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
@@ -4562,15 +4594,20 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					}
 				}
 
-				if existing := nsAddresses.Load().([]string); len(existing) > 0 {
-					combined := append(existing, ipv4Addresses...)
-					nsAddresses.Store(combined)
-				} else {
-					nsAddresses.Store(ipv4Addresses)
+				if len(ipv4Addresses) > 0 {
+					if existing := nsAddresses.Load().([]string); len(existing) > 0 {
+						combined := append(existing, ipv4Addresses...)
+						nsAddresses.Store(combined)
+					} else {
+						nsAddresses.Store(ipv4Addresses)
+					}
+					// First win - cancel IPv6 resolution
+					addressCancel(errors.New("IPv4 addresses resolved - first win"))
 				}
 				return nil
 			})
 
+			// IPv6 resolution
 			queryGroup.Go(func() error {
 				defer HandlePanic("Resolve NS IPv6")
 
@@ -4580,8 +4617,12 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					Qclass: dns.ClassINET,
 				}
 
+				// Create sub-context with shorter timeout
+				ipv6Ctx, ipv6Cancel := context.WithTimeout(subCtx, DefaultTimeout/3)
+				defer ipv6Cancel()
+
 				var ipv6Addresses []string
-				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
+				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(ipv6Ctx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswerV6 {
 						if aaaa, ok := rrec.(*dns.AAAA); ok {
 							ipv6Addresses = append(ipv6Addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
@@ -4589,11 +4630,15 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					}
 				}
 
-				if existing := nsAddresses.Load().([]string); len(existing) > 0 {
-					combined := append(existing, ipv6Addresses...)
-					nsAddresses.Store(combined)
-				} else {
-					nsAddresses.Store(ipv6Addresses)
+				if len(ipv6Addresses) > 0 {
+					if existing := nsAddresses.Load().([]string); len(existing) > 0 {
+						combined := append(existing, ipv6Addresses...)
+						nsAddresses.Store(combined)
+					} else {
+						nsAddresses.Store(ipv6Addresses)
+					}
+					// First win - cancel IPv4 resolution
+					addressCancel(errors.New("IPv6 addresses resolved - first win"))
 				}
 				return nil
 			})
@@ -4603,11 +4648,15 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 			if nsAddrs := nsAddresses.Load().([]string); len(nsAddrs) > 0 {
 				current := allAddresses.Load()
 				newAddresses := append(*current, nsAddrs...)
-
 				allAddresses.Store(&newAddresses)
+
+				// First win optimization: if we have enough addresses, cancel remaining NS resolutions
+				if foundAddresses.Add(1) >= 2 { // Cancel after resolving 2 NS servers
+					resolveCancel()
+					LogInfo("RECURSION: First win NS resolution - canceling %d remaining NS lookups", activeResolutions.Load())
+				}
 			}
 
-			completedCount.Add(1)
 			return nil
 		})
 	}
