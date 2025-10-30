@@ -4567,9 +4567,9 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 			var nsAddresses atomic.Value
 			nsAddresses.Store([]string{})
 
-			// Use first-win for IPv4/IPv6 resolution
+			// Use first-win for IPv4/IPv6 resolution (A and AAAA records)
 			queryGroup, subCtx := errgroup.WithContext(addressCtx)
-			queryGroup.SetLimit(2)
+			queryGroup.SetLimit(calculateConcurrencyLimit(2)) // IPv4 + IPv6 queries
 
 			// IPv4 resolution
 			queryGroup.Go(func() error {
@@ -4651,7 +4651,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				allAddresses.Store(&newAddresses)
 
 				// First win optimization: if we have enough addresses, cancel remaining NS resolutions
-				if foundAddresses.Add(1) >= 2 { // Cancel after resolving 2 NS servers
+				if foundAddresses.Add(1) >= int32(calculateConcurrencyLimit(len(nsRecords))) {
 					resolveCancel()
 					LogInfo("RECURSION: First win NS resolution - canceling %d remaining NS lookups", activeResolutions.Load())
 				}
