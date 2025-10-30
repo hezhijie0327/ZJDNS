@@ -4024,7 +4024,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						}:
 							remaining := activeConnections.Load() - 1
 							if remaining > 0 {
-								LogInfo("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
+								LogDebug("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
 							}
 							cancel(errors.New("successful result obtained from upstream"))
 							messagePool.Put(queryResult.Response)
@@ -4410,7 +4410,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			// Log connection termination stats
 			remaining := activeConnections.Load()
 			if remaining > 0 {
-				LogInfo("RECURSION: First win achieved, terminating %d remaining connections", remaining)
+				LogDebug("RECURSION: First win achieved, terminating %d remaining connections", remaining)
 			}
 			return result, nil
 		}
@@ -4549,7 +4549,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				// First win optimization: if we have enough addresses, cancel remaining NS resolutions
 				if foundAddresses.Add(1) >= int32(calculateConcurrencyLimit(len(nsRecords))) {
 					resolveCancel()
-					LogInfo("RECURSION: First win NS resolution - canceling %d remaining NS lookups", activeResolutions.Load())
+					LogDebug("RECURSION: First win NS resolution - canceling %d remaining NS lookups", activeResolutions.Load())
 				}
 			}
 
