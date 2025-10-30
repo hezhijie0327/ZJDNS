@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -50,70 +51,25 @@ import (
 )
 
 // =============================================================================
-// Global Variables
-// =============================================================================
-
-var (
-	Version    = "1.5.4"
-	CommitHash = "dirty"
-	BuildTime  = "dev"
-
-	globalLog = NewLogManager()
-	timeCache = NewTimeCache()
-
-	// Global random number generator for shuffling operations
-	// Seeded once at startup to avoid repeated initialization overhead
-	globalRNG = mrand.New(mrand.NewSource(time.Now().UnixNano()))
-
-	// Protocol configurations
-	NextProtoDOT  = []string{"dot"}
-	NextProtoDoQ  = []string{"doq"}
-	NextProtoDoH3 = []string{"h3"}
-	NextProtoDoH  = []string{"h2"}
-
-	// Root servers
-	DefaultRootServers = []string{
-		"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
-		"170.247.170.2:53", "[2801:1b8:10::b]:53",
-		"192.33.4.12:53", "[2001:500:2::c]:53",
-		"199.7.91.13:53", "[2001:500:2d::d]:53",
-		"192.203.230.10:53", "[2001:500:a8::e]:53",
-		"192.5.5.241:53", "[2001:500:2f::f]:53",
-		"192.112.36.4:53", "[2001:500:12::d0d]:53",
-		"198.97.190.53:53", "[2001:500:1::53]:53",
-		"192.36.148.17:53", "[2001:7fe::53]:53",
-		"192.58.128.30:53", "[2001:503:c27::2:30]:53",
-		"193.0.14.129:53", "[2001:7fd::1]:53",
-		"199.7.83.42:53", "[2001:500:9f::42]:53",
-		"202.12.27.33:53", "[2001:dc3::35]:53",
-	}
-)
-
-// =============================================================================
-// Constants Section
+// Global Constants - Network Configuration
 // =============================================================================
 
 const (
-	// =============================================================================
-	// Network Configuration
-	// =============================================================================
-
-	// Server Ports
 	DefaultDNSPort   = "53"
 	DefaultDOTPort   = "853"
 	DefaultDOHPort   = "443"
 	DefaultPprofPort = "6060"
 
-	// Protocol Paths & Indicators
 	RecursiveIndicator = "builtin_recursive"
 	DefaultQueryPath   = "/dns-query"
 	PprofPath          = "/debug/pprof/"
+)
 
-	// =============================================================================
-	// Buffer & Memory Configuration
-	// =============================================================================
+// =============================================================================
+// Global Constants - Buffer & Memory Configuration
+// =============================================================================
 
-	// Buffer Sizes
+const (
 	UDPBufferSize        = 1232
 	TCPBufferSize        = 4096
 	SecureBufferSize     = 8192
@@ -122,95 +78,154 @@ const (
 	ResultBufferCapacity = 128
 	MaxIncomingStreams   = math.MaxUint16
 
-	// =============================================================================
-	// Protocol Limits & Constraints
-	// =============================================================================
+	// Object pool sizes
+	MessagePoolSize = 512
+	BufferPoolSize  = 256
+)
 
-	// DNS Limits
+// =============================================================================
+// Global Constants - Protocol Limits & Constraints
+// =============================================================================
+
+const (
 	MaxDomainLength = 253
 	MaxCNAMEChain   = 16
 	MaxRecursionDep = 16
 	MaxResultLength = 512
 
-	// EDNS Configuration
 	DefaultECSv4Len = 24
 	DefaultECSv6Len = 64
 	DefaultECSScope = 0
 	PaddingSize     = 468
+)
 
-	// =============================================================================
-	// Timing Configuration
-	// =============================================================================
+// =============================================================================
+// Global Constants - Timing Configuration
+// =============================================================================
 
-	// Common Timeouts
-	DefaultTimeout   = 2 * time.Second // Connection, Dial, Handshake, PublicIP, Shutdown
-	OperationTimeout = 3 * time.Second // Query, HTTP, DNS I/O, Pprof I/O
-	IdleTimeout      = 5 * time.Second // Recursive, Secure Idle, Pprof Idle
+const (
+	DefaultTimeout   = 2 * time.Second
+	OperationTimeout = 3 * time.Second
+	IdleTimeout      = 5 * time.Second
+)
 
-	// =============================================================================
-	// Cache Configuration
-	// =============================================================================
+// =============================================================================
+// Global Constants - Cache Configuration
+// =============================================================================
 
-	// TTL Configuration
+const (
 	DefaultCacheTTL = 10
 	StaleTTL        = 30
 	StaleMaxAge     = 86400 * 7
 
-	// =============================================================================
-	// Redis Configuration
-	// =============================================================================
-
-	// Redis Key Prefixes
 	RedisPrefixDNS = "dns:"
+)
 
-	// =============================================================================
-	// QUIC Configuration
-	// =============================================================================
+// =============================================================================
+// Global Constants - QUIC Configuration
+// =============================================================================
 
-	// QUIC Error Codes
+const (
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
 	QUICCodeInternalError quic.ApplicationErrorCode = 1
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
+)
 
-	// =============================================================================
-	// Logging Configuration
-	// =============================================================================
+// =============================================================================
+// Global Constants - Logging Configuration
+// =============================================================================
 
-	// Log Settings
+const (
 	DefaultLogLevel = "info"
 
-	// ANSI Color Codes
 	ColorReset  = "\033[0m"
 	ColorRed    = "\033[31m"
 	ColorYellow = "\033[33m"
 	ColorGreen  = "\033[32m"
 	ColorCyan   = "\033[36m"
 	ColorBold   = "\033[1m"
+)
 
-	// Log Levels
+// =============================================================================
+// Variables - Protocol Next Protos
+// =============================================================================
+
+var (
+	NextProtoDOT  = []string{"dot"}
+	NextProtoDoQ  = []string{"doq"}
+	NextProtoDoH3 = []string{"h3"}
+	NextProtoDoH  = []string{"h2"}
+)
+
+// =============================================================================
+// Variables - Root Servers
+// =============================================================================
+
+var DefaultRootServers = []string{
+	"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
+	"170.247.170.2:53", "[2801:1b8:10::b]:53",
+	"192.33.4.12:53", "[2001:500:2::c]:53",
+	"199.7.91.13:53", "[2001:500:2d::d]:53",
+	"192.203.230.10:53", "[2001:500:a8::e]:53",
+	"192.5.5.241:53", "[2001:500:2f::f]:53",
+	"192.112.36.4:53", "[2001:500:12::d0d]:53",
+	"198.97.190.53:53", "[2001:500:1::53]:53",
+	"192.36.148.17:53", "[2001:7fe::53]:53",
+	"192.58.128.30:53", "[2001:503:c27::2:30]:53",
+	"193.0.14.129:53", "[2001:7fd::1]:53",
+	"199.7.83.42:53", "[2001:500:9f::42]:53",
+	"202.12.27.33:53", "[2001:dc3::35]:53",
+}
+
+// =============================================================================
+// Variables - Global Variables
+// =============================================================================
+
+var (
+	Version    = "1.5.5"
+	CommitHash = "dirty"
+	BuildTime  = "dev"
+
+	globalLog = NewLogManager()
+	timeCache = NewTimeCache()
+	globalRNG = mrand.New(mrand.NewSource(time.Now().UnixNano()))
+
+	// Object pools for memory reuse
+	messagePool *MessagePool
+	bufferPool  *BufferPool
+)
+
+// =============================================================================
+// Type Definitions - LogManager & Log Level
+// =============================================================================
+
+type LogManager struct {
+	level    atomic.Int32
+	writer   io.Writer
+	colorMap map[LogLevel]string
+}
+
+type LogLevel int
+
+const (
 	Error LogLevel = iota
 	Warn
 	Info
 	Debug
 )
 
-type LogLevel int
-
 // =============================================================================
-// Type Definitions - Core Types
+// Type Definitions - TimeCache
 // =============================================================================
 
-type LogManager struct {
-	level    atomic.Int32 // LogLevel
-	writer   io.Writer
-	colorMap map[LogLevel]string
-}
-
-// TimeCache provides cached time for performance optimization
 type TimeCache struct {
-	currentTime atomic.Value // time.Time
+	currentTime atomic.Value
 	ticker      *time.Ticker
 }
+
+// =============================================================================
+// Type Definitions - Configuration Types
+// =============================================================================
 
 type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
@@ -290,7 +305,10 @@ type CIDRConfig struct {
 	Tag   string   `json:"tag"`
 }
 
-// Cache and Storage Types
+// =============================================================================
+// Type Definitions - Cache Types
+// =============================================================================
+
 type CacheEntry struct {
 	Answer          []*CompactRecord `json:"answer"`
 	Authority       []*CompactRecord `json:"authority"`
@@ -331,7 +349,10 @@ type RedisCache struct {
 	bgCtx   context.Context
 }
 
-// EDNS and DNS Options
+// =============================================================================
+// Type Definitions - EDNS Types
+// =============================================================================
+
 type ECSOption struct {
 	Address      net.IP
 	Family       uint16
@@ -348,7 +369,10 @@ type IPDetector struct {
 	httpClient *http.Client
 }
 
-// Query and Response Types
+// =============================================================================
+// Type Definitions - Query Result Types
+// =============================================================================
+
 type QueryResult struct {
 	Response   *dns.Msg
 	Answer     []dns.RR
@@ -379,39 +403,47 @@ type DNSRewriteResult struct {
 	Additional    []dns.RR
 }
 
-// CIDR Management Types
+// =============================================================================
+// Type Definitions - CIDR Management Types
+// =============================================================================
+
 type CIDRRule struct {
 	tag       string
 	nets      []*net.IPNet
-	ipv4Nets  []ipv4Net    // Optimized IPv4 networks for faster matching
-	ipv6Nets  []*net.IPNet // IPv6 networks (keep as IPNet for now)
-	totalNets int          // Cache total number of networks
+	ipv4Nets  []ipv4Net
+	ipv6Nets  []*net.IPNet
+	totalNets int
 }
 
 type CIDRManager struct {
-	rules      atomic.Value // map[string]*CIDRRule
-	matchCache atomic.Value // map[string]*CIDRMatchInfo - cache for parsed match tags
+	rules      atomic.Value
+	matchCache atomic.Value
 }
 
-// CIDRMatchInfo caches parsed match tag information
 type CIDRMatchInfo struct {
 	Tag      string
 	Negate   bool
 	Original string
 }
 
-// Optimized IPv4 network representation
 type ipv4Net struct {
-	ip     uint32 // Network address in uint32
-	mask   uint32 // Network mask in uint32
-	prefix uint8  // Prefix length
+	ip     uint32
+	mask   uint32
+	prefix uint8
 }
 
-// Rewrite Management Type
+// =============================================================================
+// Type Definitions - Rewrite Management
+// =============================================================================
+
 type RewriteManager struct {
 	rules    atomic.Pointer[[]RewriteRule]
 	rulesLen atomic.Uint64
 }
+
+// =============================================================================
+// Type Definitions - Query Client
+// =============================================================================
 
 type QueryClient struct {
 	timeout    time.Duration
@@ -422,7 +454,10 @@ type QueryClient struct {
 	doh3Client *http.Client
 }
 
-// Security Types
+// =============================================================================
+// Type Definitions - Security Types
+// =============================================================================
+
 type DNSSECValidator struct{}
 
 type HijackPrevention struct {
@@ -435,7 +470,10 @@ type SecurityManager struct {
 	hijack *HijackPrevention
 }
 
-// TLS Management Type
+// =============================================================================
+// Type Definitions - TLS Manager
+// =============================================================================
+
 type TLSManager struct {
 	server        *DNSServer
 	tlsConfig     *tls.Config
@@ -453,7 +491,10 @@ type TLSManager struct {
 	h3Listener    *quic.EarlyListener
 }
 
-// DNS Server Type
+// =============================================================================
+// Type Definitions - DNS Server
+// =============================================================================
+
 type DNSServer struct {
 	config            *ServerConfig
 	cacheMgr          CacheManager
@@ -477,7 +518,10 @@ type DNSServer struct {
 
 type ConfigManager struct{}
 
-// Query Manager Types
+// =============================================================================
+// Type Definitions - Query Manager
+// =============================================================================
+
 type QueryManager struct {
 	upstream  *UpstreamHandler
 	recursive *RecursiveResolver
@@ -504,56 +548,25 @@ type ResponseValidator struct {
 }
 
 // =============================================================================
-// Utility Functions
+// Type Definitions - Object Pool System
 // =============================================================================
 
-// shuffleRootServers randomly shuffles the root server list to avoid always using the same order
-func shuffleRootServers(servers []string) []string {
-	if len(servers) <= 1 {
-		return servers
-	}
-
-	// Create a copy to avoid modifying the original slice
-	shuffled := make([]string, len(servers))
-	copy(shuffled, servers)
-
-	// Use optimized Fisher-Yates shuffle algorithm with global RNG
-	// Uses pre-initialized global RNG for better performance and true randomness
-	for i := len(shuffled) - 1; i > 0; i-- {
-		j := globalRNG.Intn(i + 1)
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-	}
-
-	return shuffled
+type MessagePool struct {
+	pool sync.Pool
 }
 
-// calculateConcurrencyLimit calculates optimized concurrency for first-winner strategy:
-// - <= 0 servers: return 1 (minimum to prevent errgroup deadlocks)
-// - <= 4 servers: query all concurrently (100%) - fast result for small groups
-// - 5-12 servers: query ~66% concurrently - balanced speed and load
-// - 13-20 servers: query half concurrently (50%) - medium scale optimization
-// - >20 servers: query at least 8, max 33% - ensures minimum performance
-func calculateConcurrencyLimit(serverCount int) int {
-	// Handle edge cases: zero or negative server counts
-	// Return minimum 1 to prevent errgroup.SetLimit(0) from blocking all queries
-	if serverCount <= 0 {
-		return 1 // Minimum limit to avoid deadlocks
-	}
+type BufferPool struct {
+	pool sync.Pool
+	size int
+}
 
-	switch {
-	case serverCount <= 4:
-		return serverCount // Small groups: all concurrent for fastest result
-	case serverCount <= 12:
-		return (serverCount*2 + 2) / 3 // ~66% rounded up
-	case serverCount <= 20:
-		return (serverCount + 1) / 2 // 50% rounded up
-	default:
-		limit := serverCount / 3 // ~33% for large groups
-		if limit < 8 {
-			return 8 // Ensure minimum 8 concurrent for performance
-		}
-		return limit
-	}
+// =============================================================================
+// Initialization Functions
+// =============================================================================
+
+func init() {
+	messagePool = NewMessagePool()
+	bufferPool = NewBufferPool(SecureBufferSize, BufferPoolSize)
 }
 
 // =============================================================================
@@ -575,7 +588,6 @@ func NewLogManager() *LogManager {
 }
 
 func (lm *LogManager) SetLevel(level LogLevel) {
-	// Clamp level to valid range
 	if level < Error {
 		level = Error
 	} else if level > Debug {
@@ -589,7 +601,6 @@ func (lm *LogManager) GetLevel() LogLevel {
 }
 
 func (lm *LogManager) Log(level LogLevel, format string, args ...any) {
-	// Clamp level to valid range to prevent array out of bounds
 	if level < Error {
 		level = Error
 	} else if level > Debug {
@@ -600,7 +611,6 @@ func (lm *LogManager) Log(level LogLevel, format string, args ...any) {
 		return
 	}
 
-	// Use switch instead of array index to avoid panic
 	var levelStr string
 	switch level {
 	case Error:
@@ -615,7 +625,6 @@ func (lm *LogManager) Log(level LogLevel, format string, args ...any) {
 		levelStr = "UNKNOWN"
 	}
 
-	// Safely get color from map with fallback
 	color, ok := lm.colorMap[level]
 	if !ok {
 		color = ColorReset
@@ -641,6 +650,97 @@ func LogError(format string, args ...any) { globalLog.Error(format, args...) }
 func LogWarn(format string, args ...any)  { globalLog.Warn(format, args...) }
 func LogInfo(format string, args ...any)  { globalLog.Info(format, args...) }
 func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
+
+// =============================================================================
+// TimeCache Implementation
+// =============================================================================
+
+func NewTimeCache() *TimeCache {
+	tc := &TimeCache{
+		ticker: time.NewTicker(time.Second),
+	}
+	tc.currentTime.Store(time.Now())
+
+	go func() {
+		for range tc.ticker.C {
+			tc.currentTime.Store(time.Now())
+		}
+	}()
+
+	return tc
+}
+
+func (tc *TimeCache) Now() time.Time {
+	return tc.currentTime.Load().(time.Time)
+}
+
+func (tc *TimeCache) Stop() {
+	if tc.ticker != nil {
+		tc.ticker.Stop()
+	}
+}
+
+// =============================================================================
+// MessagePool Implementation
+// =============================================================================
+
+func NewMessagePool() *MessagePool {
+	return &MessagePool{
+		pool: sync.Pool{
+			New: func() any {
+				return &dns.Msg{}
+			},
+		},
+	}
+}
+
+func (mp *MessagePool) Get() *dns.Msg {
+	msg := mp.pool.Get().(*dns.Msg)
+	*msg = dns.Msg{}
+	return msg
+}
+
+func (mp *MessagePool) Put(msg *dns.Msg) {
+	if msg != nil {
+		*msg = dns.Msg{}
+		mp.pool.Put(msg)
+	}
+}
+
+// =============================================================================
+// BufferPool Implementation
+// =============================================================================
+
+func NewBufferPool(size int, poolSize int) *BufferPool {
+	bp := &BufferPool{
+		size: size,
+		pool: sync.Pool{},
+	}
+	for range poolSize {
+		buf := make([]byte, size)
+		bp.pool.Put(&buf)
+	}
+	return bp
+}
+
+func (bp *BufferPool) Get() []byte {
+	bufPtr := bp.pool.Get()
+	if bufPtr == nil {
+		return make([]byte, bp.size)
+	}
+	buf := bufPtr.(*[]byte)
+	return *buf
+}
+
+func (bp *BufferPool) Put(buf []byte) {
+	if buf != nil && cap(buf) >= bp.size {
+		bufCopy := make([]byte, bp.size)
+		copy(bufCopy, buf[:bp.size])
+		bp.pool.Put(&bufCopy)
+	}
+}
+
+// =============================================================================
 
 // =============================================================================
 // QueryClient Implementation
@@ -751,7 +851,6 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 }
 
 func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	// Use the reusable TLS client
 	qc.tlsClient.TLSConfig = tlsConfig
 	response, _, err := qc.tlsClient.ExchangeContext(ctx, msg, server.Address)
 	return response, err
@@ -766,7 +865,7 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		EnableDatagrams:       true,
-		Allow0RTT:             true,
+		Allow0RTT:             false,
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
@@ -797,16 +896,24 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 		return nil, fmt.Errorf("pack: %w", err)
 	}
 
-	buf := make([]byte, 2+len(msgData))
+	buf := bufferPool.Get()
+	defer bufferPool.Put(buf)
+
+	if len(buf) < 2+len(msgData) {
+		buf = make([]byte, 2+len(msgData))
+	}
+
 	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
 	copy(buf[2:], msgData)
 
-	if _, err := stream.Write(buf); err != nil {
+	if _, err := stream.Write(buf[:2+len(msgData)]); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	respBuf := make([]byte, SecureBufferSize)
+	respBuf := bufferPool.Get()
+	defer bufferPool.Put(respBuf)
+
 	n, err := stream.Read(respBuf)
 	if err != nil && n == 0 {
 		msg.Id = originalID
@@ -818,9 +925,10 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 		return nil, fmt.Errorf("response too short: %d", n)
 	}
 
-	response := &dns.Msg{}
+	response := messagePool.Get()
 	if err := response.Unpack(respBuf[2:n]); err != nil {
 		msg.Id = originalID
+		messagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 
@@ -889,9 +997,10 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	response := &dns.Msg{}
+	response := messagePool.Get()
 	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
+		messagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 
@@ -921,11 +1030,10 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 			MaxIncomingStreams:    MaxIncomingStreams,
 			MaxIncomingUniStreams: MaxIncomingStreams,
 			EnableDatagrams:       true,
-			Allow0RTT:             true,
+			Allow0RTT:             false,
 		},
 	}
 
-	// Update the DoH3 client transport
 	qc.doh3Client.Transport = transport
 
 	originalID := msg.Id
@@ -971,9 +1079,10 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	response := &dns.Msg{}
+	response := messagePool.Get()
 	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
+		messagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 
@@ -999,6 +1108,47 @@ func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg
 
 func (qc *QueryClient) needsTCPFallback(result *QueryResult, protocol string) bool {
 	return protocol != "tcp" && (result.Error != nil || (result.Response != nil && result.Response.Truncated))
+}
+
+// =============================================================================
+// Utility Functions - Shuffle and Concurrency
+// =============================================================================
+
+func shuffleSlice[T any](slice []T) []T {
+	if len(slice) <= 1 {
+		return slice
+	}
+
+	shuffled := make([]T, len(slice))
+	copy(shuffled, slice)
+
+	for i := len(shuffled) - 1; i > 0; i-- {
+		j := globalRNG.Intn(i + 1)
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	}
+
+	return shuffled
+}
+
+func calculateConcurrencyLimit(serverCount int) int {
+	if serverCount <= 0 {
+		return 1
+	}
+
+	switch {
+	case serverCount <= 4:
+		return serverCount
+	case serverCount <= 12:
+		return (serverCount*2 + 2) / 3
+	case serverCount <= 20:
+		return (serverCount + 1) / 2
+	default:
+		limit := serverCount / 3
+		if limit < 8 {
+			return 8
+		}
+		return limit
+	}
 }
 
 // =============================================================================
@@ -1048,7 +1198,6 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	if level, ok := validLevels[logLevelStr]; ok {
 		globalLog.SetLevel(level)
 	} else {
-		// Use default level instead of error, to avoid panic before validation
 		globalLog.SetLevel(Info)
 		LogWarn("CONFIG: Invalid log level '%s', using default: info", config.Server.LogLevel)
 	}
@@ -1338,7 +1487,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 			defer cleanCancel()
 			if err := rc.client.Del(cleanCtx, key).Err(); err != nil {
 				LogError("CACHE: Failed to clean corrupted cache key %s: %v", key, err)
-				return nil // Don't fail the group for background cleanup errors
+				return nil
 			}
 			return nil
 		})
@@ -1359,7 +1508,7 @@ func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
 				}
 			}
 		}
-		return nil // Don't fail the group for background update errors
+		return nil
 	})
 
 	return &entry, true, isExpired
@@ -1372,7 +1521,6 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 		return
 	}
 
-	// Use slices.Concat for cleaner slice concatenation
 	allRRs := slices.Concat(answer, authority, additional)
 	cacheTTL := calculateTTL(allRRs)
 	now := time.Now().Unix()
@@ -1416,7 +1564,6 @@ func (rc *RedisCache) Close() error {
 
 	rc.cancel(errors.New("redis cache shutdown"))
 
-	// Wait for all background goroutines to finish with timeout
 	done := make(chan error, 1)
 	go func() {
 		defer HandlePanic("Redis background group wait")
@@ -1496,8 +1643,6 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 }
 
 // =============================================================================
-
-// =============================================================================
 // CIDRManager Implementation
 // =============================================================================
 
@@ -1505,7 +1650,7 @@ func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
 	cm := &CIDRManager{}
 	rules := make(map[string]*CIDRRule)
 	matchCache := make(map[string]*CIDRMatchInfo)
-	cm.rules.Store(rules) // Initialize with empty map
+	cm.rules.Store(rules)
 	cm.matchCache.Store(matchCache)
 
 	for _, config := range configs {
@@ -1590,7 +1735,6 @@ func (cm *CIDRManager) loadCIDRConfig(config CIDRConfig) (*CIDRRule, error) {
 		return nil, fmt.Errorf("no valid CIDR entries for tag '%s'", config.Tag)
 	}
 
-	// Preprocess networks for optimization
 	rule.preprocessNetworks()
 	return rule, nil
 }
@@ -1600,7 +1744,6 @@ func (cm *CIDRManager) MatchIP(ip net.IP, matchTag string) (matched bool, exists
 		return true, true
 	}
 
-	// Get or create cached match info
 	matchInfo := cm.getMatchInfo(matchTag)
 	if matchInfo == nil {
 		return false, false
@@ -1620,16 +1763,13 @@ func (cm *CIDRManager) MatchIP(ip net.IP, matchTag string) (matched bool, exists
 	return inList, true
 }
 
-// getMatchInfo retrieves or creates cached match tag information
 func (cm *CIDRManager) getMatchInfo(matchTag string) *CIDRMatchInfo {
 	matchCache := cm.matchCache.Load().(map[string]*CIDRMatchInfo)
 
-	// Check cache first
 	if info, exists := matchCache[matchTag]; exists {
 		return info
 	}
 
-	// Parse and cache the match tag
 	negate := strings.HasPrefix(matchTag, "!")
 	tag := strings.TrimPrefix(matchTag, "!")
 
@@ -1639,8 +1779,6 @@ func (cm *CIDRManager) getMatchInfo(matchTag string) *CIDRMatchInfo {
 		Original: matchTag,
 	}
 
-	// Update cache (note: this is safe during initialization only)
-	// For runtime updates, we'd need a more sophisticated approach
 	newCache := make(map[string]*CIDRMatchInfo, len(matchCache)+1)
 	maps.Copy(newCache, matchCache)
 	newCache[matchTag] = info
@@ -1653,7 +1791,6 @@ func (cm *CIDRManager) getMatchInfo(matchTag string) *CIDRMatchInfo {
 // CIDRRule Implementation
 // =============================================================================
 
-// preprocessNetworks optimizes networks for faster matching
 func (r *CIDRRule) preprocessNetworks() {
 	if r == nil {
 		return
@@ -1668,29 +1805,23 @@ func (r *CIDRRule) preprocessNetworks() {
 			continue
 		}
 
-		// Check if it's IPv4
 		if ipNet.IP.To4() != nil {
-			// Convert to optimized IPv4 representation
 			if ipv4Net := toIPv4Net(ipNet); ipv4Net != nil {
 				r.ipv4Nets = append(r.ipv4Nets, *ipv4Net)
 			}
 		} else {
-			// Keep IPv6 as is for now
 			r.ipv6Nets = append(r.ipv6Nets, ipNet)
 		}
 	}
 
-	// Sort IPv4 networks by prefix length (longest prefix first) for optimization
 	slices.SortFunc(r.ipv4Nets, func(a, b ipv4Net) int {
-		// Sort by prefix length descending (longest first)
 		if a.prefix != b.prefix {
-			return int(b.prefix) - int(a.prefix) // b.prefix - a.prefix for descending
+			return int(b.prefix) - int(a.prefix)
 		}
 		return 0
 	})
 }
 
-// toIPv4Net converts a net.IPNet to optimized ipv4Net representation
 func toIPv4Net(ipNet *net.IPNet) *ipv4Net {
 	if ipNet == nil || ipNet.IP.To4() == nil {
 		return nil
@@ -1701,10 +1832,8 @@ func toIPv4Net(ipNet *net.IPNet) *ipv4Net {
 		return nil
 	}
 
-	// Convert IP to uint32 (network byte order)
 	ipUint := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
 
-	// Convert mask to uint32
 	maskSize, _ := ipNet.Mask.Size()
 	var maskUint uint32
 	if maskSize <= 32 {
@@ -1712,37 +1841,31 @@ func toIPv4Net(ipNet *net.IPNet) *ipv4Net {
 	}
 
 	return &ipv4Net{
-		ip:     ipUint & maskUint, // Ensure network address
+		ip:     ipUint & maskUint,
 		mask:   maskUint,
 		prefix: uint8(maskSize),
 	}
 }
 
-// contains optimized IP matching function
 func (r *CIDRRule) contains(ip net.IP) bool {
 	if r == nil || ip == nil {
 		return false
 	}
 
-	// Fast path: IPv4 using optimized representation
 	if ipv4 := ip.To4(); ipv4 != nil {
 		return r.containsIPv4(ipv4)
 	}
 
-	// IPv6 path: use original method
 	return r.containsIPv6(ip)
 }
 
-// containsIPv4 optimized IPv4 matching using uint32 operations
 func (r *CIDRRule) containsIPv4(ipv4 net.IP) bool {
 	if len(r.ipv4Nets) == 0 {
 		return false
 	}
 
-	// Convert IP to uint32
 	ipUint := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
 
-	// Check against optimized IPv4 networks
 	for _, net := range r.ipv4Nets {
 		if (ipUint & net.mask) == net.ip {
 			return true
@@ -1752,7 +1875,6 @@ func (r *CIDRRule) containsIPv4(ipv4 net.IP) bool {
 	return false
 }
 
-// containsIPv6 handles IPv6 matching (kept as original method for now)
 func (r *CIDRRule) containsIPv6(ip net.IP) bool {
 	for _, ipNet := range r.ipv6Nets {
 		if ipNet.Contains(ip) {
@@ -2014,7 +2136,6 @@ func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 	validRules := make([]RewriteRule, 0, len(rules))
 	for _, rule := range rules {
 		if len(rule.Name) <= MaxDomainLength {
-			// Pre-normalize the rule name for faster comparison
 			rule.NormalizedName = NormalizeDomain(rule.Name)
 			validRules = append(validRules, rule)
 		}
@@ -2041,7 +2162,6 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 		return result
 	}
 
-	// Copy-on-read pattern: get rules snapshot without holding lock
 	rulesPtr := rm.rules.Load()
 	if rulesPtr == nil {
 		return result
@@ -2110,11 +2230,8 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 		name = dns.Fqdn(record.Name)
 	}
 
-	// Try to create any type of DNS record using dns.NewRR()
-	// This supports ALL DNS record types (MX, NS, SRV, CAA, DNSKEY, etc.)
-	// Use strings.Builder for better performance than fmt.Sprintf
 	var sb strings.Builder
-	sb.Grow(len(name) + len(record.Type) + len(record.Content) + 20) // Pre-allocate with extra space
+	sb.Grow(len(name) + len(record.Type) + len(record.Content) + 20)
 	sb.WriteString(name)
 	sb.WriteByte(' ')
 	sb.WriteString(strconv.FormatUint(uint64(ttl), 10))
@@ -2127,7 +2244,6 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 		return rr
 	}
 
-	// If direct parsing fails, fall back to RFC3597 format
 	rrType, exists := dns.StringToType[record.Type]
 	if !exists {
 		rrType = 0
@@ -2434,6 +2550,10 @@ func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 	}
 }
 
+// =============================================================================
+// TLSManager: Server Management
+// =============================================================================
+
 func (tm *TLSManager) Start(httpsPort string) error {
 	errChan := make(chan error, 1)
 
@@ -2498,7 +2618,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 }
 
 // =============================================================================
-// TLSManager: DoT (DNS over TLS) Implementation
+// TLSManager: DoT Implementation
 // =============================================================================
 
 func (tm *TLSManager) startDOTServer() error {
@@ -2599,9 +2719,10 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		req := &dns.Msg{}
+		req := messagePool.Get()
 		if err := req.Unpack(msgBuf); err != nil {
 			LogDebug("DOT: DNS message unpack error: %v", err)
+			messagePool.Put(req)
 			continue
 		}
 
@@ -2610,11 +2731,13 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			clientIP = addr.(*net.TCPAddr).IP
 		}
 		response := tm.server.processDNSQuery(req, clientIP, true)
+		messagePool.Put(req)
 
 		if response != nil {
 			respBuf, err := response.Pack()
 			if err != nil {
 				LogDebug("DOT: Response pack error: %v", err)
+				messagePool.Put(response)
 				return
 			}
 
@@ -2623,19 +2746,23 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 
 			if _, err := tlsConn.Write(lengthBuf); err != nil {
 				LogDebug("DOT: Write length error: %v", err)
+				messagePool.Put(response)
 				return
 			}
 
 			if _, err := tlsConn.Write(respBuf); err != nil {
 				LogDebug("DOT: Write response error: %v", err)
+				messagePool.Put(response)
 				return
 			}
+
+			messagePool.Put(response)
 		}
 	}
 }
 
 // =============================================================================
-// TLSManager: DoQ (DNS over QUIC) Implementation
+// TLSManager: DoQ Implementation
 // =============================================================================
 
 func (tm *TLSManager) startDOQServer() error {
@@ -2662,7 +2789,7 @@ func (tm *TLSManager) startDOQServer() error {
 		MaxIdleTimeout:        IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
-		Allow0RTT:             true,
+		Allow0RTT:             false,
 		EnableDatagrams:       true,
 	}
 
@@ -2735,19 +2862,16 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		}
 	}()
 
-	// Create errgroup for stream handling
 	streamGroup, _ := errgroup.WithContext(tm.ctx)
 
 	for {
 		select {
 		case <-tm.ctx.Done():
-			// Wait for all ongoing streams to finish before returning
 			if err := streamGroup.Wait(); err != nil {
 				LogError("DoQ: Stream group finished with error: %v", err)
 			}
 			return
 		case <-conn.Context().Done():
-			// Wait for all ongoing streams to finish before returning
 			if err := streamGroup.Wait(); err != nil {
 				LogError("DoQ: Stream group finished with error: %v", err)
 			}
@@ -2757,7 +2881,6 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 
 		stream, err := conn.AcceptStream(tm.ctx)
 		if err != nil {
-			// Wait for all ongoing streams to finish before returning
 			if err := streamGroup.Wait(); err != nil {
 				LogError("DoQ: Stream group finished with error: %v", err)
 			}
@@ -2780,7 +2903,9 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 }
 
 func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
-	buf := make([]byte, SecureBufferSize)
+	buf := bufferPool.Get()
+	defer bufferPool.Put(buf)
+
 	n, err := io.ReadFull(stream, buf[:2])
 	if err != nil || n < 2 {
 		return
@@ -2797,17 +2922,22 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	req := &dns.Msg{}
+	req := messagePool.Get()
 	if err := req.Unpack(buf[2 : 2+msgLen]); err != nil {
 		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid DNS message")
+		messagePool.Put(req)
 		return
 	}
 
 	clientIP := GetSecureClientIP(conn)
 	response := tm.server.processDNSQuery(req, clientIP, true)
+	messagePool.Put(req)
 
 	if err := tm.respondQUIC(stream, response); err != nil {
 		LogDebug("PROTOCOL: DoQ response failed: %v", err)
+	}
+	if response != nil {
+		messagePool.Put(response)
 	}
 }
 
@@ -2821,15 +2951,21 @@ func (tm *TLSManager) respondQUIC(stream *quic.Stream, response *dns.Msg) error 
 		return fmt.Errorf("pack response: %w", err)
 	}
 
-	buf := make([]byte, 2+len(respBuf))
+	buf := bufferPool.Get()
+	defer bufferPool.Put(buf)
+
+	if len(buf) < 2+len(respBuf) {
+		buf = make([]byte, 2+len(respBuf))
+	}
+
 	binary.BigEndian.PutUint16(buf[:2], uint16(len(respBuf)))
 	copy(buf[2:], respBuf)
 
-	n, err := stream.Write(buf)
+	n, err := stream.Write(buf[:2+len(respBuf)])
 	if err != nil {
 		return fmt.Errorf("stream write: %w", err)
 	}
-	if n != len(buf) {
+	if n != len(buf[:2+len(respBuf)]) {
 		return fmt.Errorf("write length mismatch: %d != %d", n, len(buf))
 	}
 
@@ -2837,7 +2973,7 @@ func (tm *TLSManager) respondQUIC(stream *quic.Stream, response *dns.Msg) error 
 }
 
 // =============================================================================
-// TLSManager: DoH (DNS over HTTPS) Implementation
+// TLSManager: DoH Implementation
 // =============================================================================
 
 func (tm *TLSManager) startDOHServer(port string) error {
@@ -2881,7 +3017,7 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 		MaxIdleTimeout:        IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
-		Allow0RTT:             true,
+		Allow0RTT:             false,
 		EnableDatagrams:       true,
 	}
 
@@ -2937,6 +3073,9 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := tm.respondDoH(w, response); err != nil {
 		LogError("DOH: DoH response failed: %v", err)
 	}
+	if response != nil {
+		messagePool.Put(response)
+	}
 }
 
 func (tm *TLSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
@@ -2973,8 +3112,9 @@ func (tm *TLSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
 		return nil, http.StatusBadRequest
 	}
 
-	req := &dns.Msg{}
+	req := messagePool.Get()
 	if err := req.Unpack(buf); err != nil {
+		messagePool.Put(req)
 		return nil, http.StatusBadRequest
 	}
 
@@ -3033,7 +3173,6 @@ func (tm *TLSManager) shutdown() error {
 		CloseWithLog(tm.h3Listener, "HTTP/3 listener")
 	}
 
-	// Wait for all server goroutines to finish
 	if err := tm.serverGroup.Wait(); err != nil {
 		LogError("TLS: Server goroutines finished with error: %v", err)
 	}
@@ -3139,7 +3278,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 }
 
 // =============================================================================
-// DNSServer: Lifecycle Management Implementation
+// DNSServer: Lifecycle Management
 // =============================================================================
 
 func (s *DNSServer) setupSignalHandling() {
@@ -3190,7 +3329,6 @@ func (s *DNSServer) shutdownServer() {
 		cancel()
 	}
 
-	// Wait for background goroutines with timeout
 	bgDone := make(chan error, 1)
 	go func() {
 		defer HandlePanic("Background group wait")
@@ -3207,7 +3345,6 @@ func (s *DNSServer) shutdownServer() {
 		LogWarn("SERVER: Background tasks shutdown timeout")
 	}
 
-	// Wait for cache refresh goroutines with timeout
 	refreshDone := make(chan error, 1)
 	go func() {
 		defer HandlePanic("Cache refresh group wait")
@@ -3224,7 +3361,6 @@ func (s *DNSServer) shutdownServer() {
 		LogWarn("SERVER: Cache refresh tasks shutdown timeout")
 	}
 
-	// Stop time cache
 	timeCache.Stop()
 
 	if s.shutdown != nil {
@@ -3402,7 +3538,7 @@ func (s *DNSServer) displayInfo() {
 }
 
 // =============================================================================
-// DNSServer: Query Processing Implementation
+// DNSServer: Query Processing
 // =============================================================================
 
 func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
@@ -3418,6 +3554,7 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	if response != nil {
 		response.Compress = true
 		_ = w.WriteMsg(response)
+		messagePool.Put(response)
 	}
 }
 
@@ -3512,7 +3649,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 
 	msg := s.buildResponse(req)
 	if msg == nil {
-		msg = &dns.Msg{}
+		msg := messagePool.Get()
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeServerFailure
 		return msg
@@ -3574,7 +3711,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
 		msg := s.buildResponse(req)
 		if msg == nil {
-			msg = &dns.Msg{}
+			msg := messagePool.Get()
 			msg.SetReply(req)
 			msg.Rcode = dns.RcodeServerFailure
 			return msg
@@ -3596,7 +3733,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 
 	msg := s.buildResponse(req)
 	if msg == nil {
-		msg = &dns.Msg{}
+		msg = messagePool.Get()
 		msg.SetReply(req)
 	}
 	msg.Rcode = dns.RcodeServerFailure
@@ -3606,7 +3743,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
-		msg = &dns.Msg{}
+		msg := messagePool.Get()
 		msg.SetReply(req)
 	}
 
@@ -3660,7 +3797,7 @@ func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool)
 }
 
 func (s *DNSServer) buildResponse(req *dns.Msg) *dns.Msg {
-	msg := &dns.Msg{}
+	msg := messagePool.Get()
 
 	if req != nil && len(req.Question) > 0 {
 		msg.SetReply(req)
@@ -3687,7 +3824,7 @@ func (s *DNSServer) restoreOriginalDomain(msg *dns.Msg, currentName, originalNam
 }
 
 func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {
-	msg := &dns.Msg{}
+	msg := messagePool.Get()
 
 	msg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
 	msg.RecursionDesired = recursionDesired
@@ -3706,7 +3843,7 @@ func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, rec
 func NewQueryManager(server *DNSServer) *QueryManager {
 	upstream := &UpstreamHandler{}
 	emptyServers := make([]*UpstreamServer, 0)
-	upstream.servers.Store(&emptyServers) // Initialize with empty slice
+	upstream.servers.Store(&emptyServers)
 
 	return &QueryManager{
 		upstream: upstream,
@@ -3778,24 +3915,29 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 		return nil, nil, nil, false, nil, "", errors.New("no upstream servers")
 	}
 
+	servers = shuffleSlice(servers)
+
 	resultChan := make(chan UpstreamQueryResult, 1)
+	queryCtx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(errors.New("query completed"))
 
-	ctx, cancel := context.WithTimeout(qm.server.ctx, OperationTimeout)
-	defer cancel()
-
-	g, queryCtx := errgroup.WithContext(ctx)
+	g, queryCtx := errgroup.WithContext(queryCtx)
 	g.SetLimit(calculateConcurrencyLimit(len(servers)))
+
+	var activeConnections atomic.Int32
 
 	for _, srv := range servers {
 		server := srv
 
 		g.Go(func() error {
-
 			select {
 			case <-queryCtx.Done():
 				return nil
 			default:
 			}
+
+			activeConnections.Add(1)
+			defer activeConnections.Add(-1)
 
 			if server.IsRecursive() {
 				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, IdleTimeout)
@@ -3821,7 +3963,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						ecs:        ecsResponse,
 						server:     usedServer,
 					}:
-						cancel()
+						cancel(errors.New("successful result obtained from recursive resolution"))
 						return nil
 					case <-queryCtx.Done():
 						return nil
@@ -3830,6 +3972,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 			} else {
 				msg := qm.server.buildQueryMessage(question, ecs, true, false)
 				queryResult := qm.server.queryClient.ExecuteQuery(queryCtx, msg, server)
+				messagePool.Put(msg)
 
 				if queryResult.Error == nil && queryResult.Response != nil {
 					rcode := queryResult.Response.Rcode
@@ -3838,6 +3981,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						if len(server.Match) > 0 {
 							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
 							if shouldRefuse {
+								messagePool.Put(queryResult.Response)
 								return nil
 							}
 							queryResult.Response.Answer = filteredAnswer
@@ -3860,11 +4004,19 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							ecs:        ecsResponse,
 							server:     serverDesc,
 						}:
-							cancel()
+							remaining := activeConnections.Load() - 1
+							if remaining > 0 {
+								LogDebug("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
+							}
+							cancel(errors.New("successful result obtained from upstream"))
+							messagePool.Put(queryResult.Response)
 							return nil
 						case <-queryCtx.Done():
+							messagePool.Put(queryResult.Response)
 							return nil
 						}
+					} else {
+						messagePool.Put(queryResult.Response)
 					}
 				}
 			}
@@ -3883,8 +4035,8 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 			return res.answer, res.authority, res.additional, res.validated, res.ecs, res.server, nil
 		}
 		return nil, nil, nil, false, nil, "", errors.New("all upstream queries failed")
-	case <-ctx.Done():
-		return nil, nil, nil, false, nil, "", ctx.Err()
+	case <-queryCtx.Done():
+		return nil, nil, nil, false, nil, "", queryCtx.Err()
 	}
 }
 
@@ -4020,7 +4172,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 	qname := dns.Fqdn(question.Name)
 	question.Name = qname
-	nameservers := shuffleRootServers(DefaultRootServers)
+	nameservers := shuffleSlice(DefaultRootServers)
 	currentDomain := "."
 	normalizedQname := NormalizeDomain(qname)
 
@@ -4032,13 +4184,23 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 		if rr.server.securityMgr.hijack.IsEnabled() {
 			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
+				messagePool.Put(response)
 				return rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth)
 			}
 		}
 
 		validated := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
-		return response.Answer, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
+
+		answer := response.Answer
+		authority := response.Ns
+		additional := response.Extra
+		valid := validated
+		ecsResp := ecsResponse
+		server := RecursiveIndicator
+		err = nil
+		messagePool.Put(response)
+		return answer, authority, additional, valid, ecsResp, server, err
 	}
 
 	for {
@@ -4058,6 +4220,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 		if rr.server.securityMgr.hijack.IsEnabled() {
 			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
+				messagePool.Put(response)
 				answer, authority, additional, validated, ecsResponse, server, err := rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth)
 				if err != nil && !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
 					return rr.recursiveQuery(ctx, question, ecs, depth, true)
@@ -4070,7 +4233,9 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
 
 		if len(response.Answer) > 0 {
-			return response.Answer, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
+			answer, authority, additional := response.Answer, response.Ns, response.Extra
+			messagePool.Put(response)
+			return answer, authority, additional, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
 		bestMatch := ""
@@ -4096,12 +4261,16 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		if len(bestNSRecords) == 0 {
-			return nil, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
+			nsSlice, extraSlice := response.Ns, response.Extra
+			messagePool.Put(response)
+			return nil, nsSlice, extraSlice, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
 		currentDomainNormalized := NormalizeDomain(currentDomain)
 		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
-			return nil, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
+			nsSlice, extraSlice := response.Ns, response.Extra
+			messagePool.Put(response)
+			return nil, nsSlice, extraSlice, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
 		currentDomain = bestMatch + "."
@@ -4127,9 +4296,14 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		}
 
 		if len(nextNS) == 0 {
-			return nil, response.Ns, response.Extra, validated, ecsResponse, RecursiveIndicator, nil
+			nsSlice, extraSlice := response.Ns, response.Extra
+			messagePool.Put(response)
+			return nil, nsSlice, extraSlice, validated, ecsResponse, RecursiveIndicator, nil
 		}
 
+		nextNS = shuffleSlice(nextNS)
+
+		messagePool.Put(response)
 		nameservers = nextNS
 	}
 }
@@ -4146,14 +4320,18 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		return nil, errors.New("no nameservers")
 	}
 
-	// Create a sub-context that can be cancelled when we get first success
+	nameservers = shuffleSlice(nameservers)
+
 	queryCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errors.New("query resolution completed"))
 
-	resultChan := make(chan *QueryResult, 1)
+	resultChan := make(chan *dns.Msg, 1)
 
 	g, queryCtx := errgroup.WithContext(queryCtx)
 	g.SetLimit(calculateConcurrencyLimit(len(nameservers)))
+
+	// Track active connections for immediate termination
+	var activeConnections atomic.Int32
 
 	for _, ns := range nameservers {
 		nsAddr := ns
@@ -4166,14 +4344,21 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 
 		g.Go(func() error {
 			defer HandlePanic("Query nameserver")
+			activeConnections.Add(1)
+			defer activeConnections.Add(-1)
 
 			select {
 			case <-queryCtx.Done():
+				messagePool.Put(msg)
 				return queryCtx.Err()
 			default:
 			}
 
-			result := rr.server.queryClient.ExecuteQuery(queryCtx, msg, server)
+			// Create a sub-context with shorter timeout for individual queries
+			subCtx, subCancel := context.WithTimeout(queryCtx, DefaultTimeout/2)
+			defer subCancel()
+
+			result := rr.server.queryClient.ExecuteQuery(subCtx, msg, server)
 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
@@ -4181,19 +4366,25 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 					result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
 					select {
-					case resultChan <- result:
-						// Cancel all other queries when we get first success
-						cancel(errors.New("successful query completed"))
+					case resultChan <- result.Response:
+						// First win - immediately cancel all other connections
+						cancel(errors.New("first win successful query completed"))
+						messagePool.Put(msg)
 						return nil
 					case <-queryCtx.Done():
+						messagePool.Put(msg)
+						messagePool.Put(result.Response)
 						return queryCtx.Err()
 					}
 				}
+				messagePool.Put(result.Response)
 			}
+			messagePool.Put(msg)
 			return nil
 		})
 	}
 
+	// Monitor for first success and terminate remaining connections
 	go func() {
 		_ = g.Wait()
 		close(resultChan)
@@ -4202,7 +4393,12 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 	select {
 	case result, ok := <-resultChan:
 		if ok && result != nil {
-			return result.Response, nil
+			// Log connection termination stats
+			remaining := activeConnections.Load()
+			if remaining > 0 {
+				LogDebug("RECURSION: First win achieved, terminating %d remaining connections", remaining)
+			}
+			return result, nil
 		}
 		return nil, errors.New("no successful response")
 	case <-ctx.Done():
@@ -4215,24 +4411,33 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		return nil
 	}
 
+	nsRecords = shuffleSlice(nsRecords)
+
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, DefaultTimeout)
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
 	g.SetLimit(calculateConcurrencyLimit(len(nsRecords)))
 
-	// Use atomic.Pointer for true lock-free operations (Go 1.19+)
 	var allAddresses atomic.Pointer[[]string]
 	empty := []string{}
 	allAddresses.Store(&empty)
 
-	// Use atomic.Int32 for counting completed operations
-	var completedCount atomic.Int32
+	// For first-win optimization: cancel when we get sufficient addresses
+	addressCtx, addressCancel := context.WithCancelCause(queryCtx)
+	defer addressCancel(errors.New("NS address resolution completed"))
+
+	var foundAddresses atomic.Int32
+	var activeResolutions atomic.Int32
 
 	for _, ns := range nsRecords {
 		nsRecord := ns
 
 		g.Go(func() error {
+			defer HandlePanic("Resolve NS addresses")
+			activeResolutions.Add(1)
+			defer activeResolutions.Add(-1)
+
 			select {
 			case <-queryCtx.Done():
 				return nil
@@ -4243,12 +4448,14 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				return nil
 			}
 
-			// Use atomic operations for thread-safe address collection
 			var nsAddresses atomic.Value
 			nsAddresses.Store([]string{})
 
-			queryGroup, _ := errgroup.WithContext(queryCtx)
+			// Use first-win for IPv4/IPv6 resolution (A and AAAA records)
+			queryGroup, subCtx := errgroup.WithContext(addressCtx)
+			queryGroup.SetLimit(calculateConcurrencyLimit(2)) // IPv4 + IPv6 queries
 
+			// IPv4 resolution
 			queryGroup.Go(func() error {
 				defer HandlePanic("Resolve NS IPv4")
 
@@ -4258,8 +4465,12 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					Qclass: dns.ClassINET,
 				}
 
+				// Create sub-context with shorter timeout
+				ipv4Ctx, ipv4Cancel := context.WithTimeout(subCtx, DefaultTimeout/3)
+				defer ipv4Cancel()
+
 				var ipv4Addresses []string
-				if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestion, nil, depth+1, forceTCP); err == nil {
+				if nsAnswer, _, _, _, _, _, err := rr.recursiveQuery(ipv4Ctx, nsQuestion, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswer {
 						if a, ok := rrec.(*dns.A); ok {
 							ipv4Addresses = append(ipv4Addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
@@ -4267,16 +4478,20 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					}
 				}
 
-				// Atomically append addresses
-				if existing := nsAddresses.Load().([]string); len(existing) > 0 {
-					combined := append(existing, ipv4Addresses...)
-					nsAddresses.Store(combined)
-				} else {
-					nsAddresses.Store(ipv4Addresses)
+				if len(ipv4Addresses) > 0 {
+					if existing := nsAddresses.Load().([]string); len(existing) > 0 {
+						combined := append(existing, ipv4Addresses...)
+						nsAddresses.Store(combined)
+					} else {
+						nsAddresses.Store(ipv4Addresses)
+					}
+					// First win - cancel IPv6 resolution
+					addressCancel(errors.New("IPv4 addresses resolved - first win"))
 				}
 				return nil
 			})
 
+			// IPv6 resolution
 			queryGroup.Go(func() error {
 				defer HandlePanic("Resolve NS IPv6")
 
@@ -4286,8 +4501,12 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					Qclass: dns.ClassINET,
 				}
 
+				// Create sub-context with shorter timeout
+				ipv6Ctx, ipv6Cancel := context.WithTimeout(subCtx, DefaultTimeout/3)
+				defer ipv6Cancel()
+
 				var ipv6Addresses []string
-				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(queryCtx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
+				if nsAnswerV6, _, _, _, _, _, err := rr.recursiveQuery(ipv6Ctx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswerV6 {
 						if aaaa, ok := rrec.(*dns.AAAA); ok {
 							ipv6Addresses = append(ipv6Addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
@@ -4295,28 +4514,33 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 					}
 				}
 
-				// Atomically append addresses
-				if existing := nsAddresses.Load().([]string); len(existing) > 0 {
-					combined := append(existing, ipv6Addresses...)
-					nsAddresses.Store(combined)
-				} else {
-					nsAddresses.Store(ipv6Addresses)
+				if len(ipv6Addresses) > 0 {
+					if existing := nsAddresses.Load().([]string); len(existing) > 0 {
+						combined := append(existing, ipv6Addresses...)
+						nsAddresses.Store(combined)
+					} else {
+						nsAddresses.Store(ipv6Addresses)
+					}
+					// First win - cancel IPv4 resolution
+					addressCancel(errors.New("IPv6 addresses resolved - first win"))
 				}
 				return nil
 			})
 
 			_ = queryGroup.Wait()
 
-			// Add this NS's addresses to the global collection using atomic.Pointer
 			if nsAddrs := nsAddresses.Load().([]string); len(nsAddrs) > 0 {
-				// True lock-free atomic pointer operations
 				current := allAddresses.Load()
 				newAddresses := append(*current, nsAddrs...)
-
 				allAddresses.Store(&newAddresses)
+
+				// First win optimization: if we have enough addresses, cancel remaining NS resolutions
+				if foundAddresses.Add(1) >= int32(calculateConcurrencyLimit(len(nsRecords))) {
+					resolveCancel()
+					LogDebug("RECURSION: First win NS resolution - canceling %d remaining NS lookups", activeResolutions.Load())
+				}
 			}
 
-			completedCount.Add(1)
 			return nil
 		})
 	}
@@ -4331,39 +4555,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 }
 
 // =============================================================================
-// Time Cache Implementation
-// =============================================================================
-
-// NewTimeCache creates a new time cache that updates every second
-func NewTimeCache() *TimeCache {
-	tc := &TimeCache{
-		ticker: time.NewTicker(time.Second),
-	}
-	tc.currentTime.Store(time.Now())
-
-	go func() {
-		for range tc.ticker.C {
-			tc.currentTime.Store(time.Now())
-		}
-	}()
-
-	return tc
-}
-
-// Now returns the cached current time
-func (tc *TimeCache) Now() time.Time {
-	return tc.currentTime.Load().(time.Time)
-}
-
-// Stop stops the time cache ticker
-func (tc *TimeCache) Stop() {
-	if tc.ticker != nil {
-		tc.ticker.Stop()
-	}
-}
-
-// =============================================================================
-// Utility Functions
+// Utility Functions - Strings and Helpers
 // =============================================================================
 
 func getVersion() string {
@@ -4384,7 +4576,6 @@ func IsSecureProtocol(protocol string) bool {
 }
 
 func IsValidFilePath(path string) bool {
-	// Use slices.ContainsFunc for cleaner prefix checking
 	dangerousPrefixes := []string{"/etc/", "/proc/", "/sys/"}
 	if strings.Contains(path, "..") || slices.ContainsFunc(dangerousPrefixes, func(prefix string) bool {
 		return strings.HasPrefix(path, prefix)
