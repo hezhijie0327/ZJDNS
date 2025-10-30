@@ -31,7 +31,6 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -454,84 +453,6 @@ type TLSManager struct {
 	h3Listener    *quic.EarlyListener
 }
 
-// Connection Manager for tracking and cleaning up connections
-type ConnectionManager struct {
-	ctx             context.Context
-	cancel          context.CancelCauseFunc
-	cleanupInterval time.Duration
-	maxLifetime     time.Duration
-	IdleTimeout     time.Duration
-}
-
-func NewConnectionManager(ctx context.Context) *ConnectionManager {
-	cleanupCtx, cancel := context.WithCancelCause(ctx)
-
-	return &ConnectionManager{
-		ctx:             cleanupCtx,
-		cancel:          cancel,
-		cleanupInterval: IdleTimeout,
-		maxLifetime:     IdleTimeout,
-		IdleTimeout:     IdleTimeout,
-	}
-}
-
-func (cm *ConnectionManager) Start() {
-	go func() {
-		defer HandlePanic("Connection manager")
-
-		ticker := time.NewTicker(cm.cleanupInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				cm.cleanupConnections()
-			case <-cm.ctx.Done():
-				return
-			}
-		}
-	}()
-
-	LogInfo("CONN: Connection manager started with cleanup interval %v", cm.cleanupInterval)
-}
-
-func (cm *ConnectionManager) cleanupConnections() {
-	// Force garbage collection to clean up unreferenced objects
-	runtime.GC()
-
-	// Log memory statistics for monitoring
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
-	// Calculate memory usage percentages
-	heapMB := float64(m.HeapInuse) / 1024 / 1024
-	sysMB := float64(m.Sys) / 1024 / 1024
-	gcPercent := float64(m.NumGC) // Number of GC cycles
-
-	LogInfo("CONN: Memory stats - Heap: %.2f MB, System: %.2f MB, Goroutines: %d, GC cycles: %.0f",
-		heapMB, sysMB, runtime.NumGoroutine(), gcPercent)
-
-	// Warning thresholds
-	if heapMB > 100 {
-		LogWarn("CONN: High heap memory usage: %.2f MB", heapMB)
-	}
-	if runtime.NumGoroutine() > 1000 {
-		LogWarn("CONN: High goroutine count: %d", runtime.NumGoroutine())
-	}
-
-	// Trigger additional GC if memory usage is high
-	if heapMB > 150 {
-		LogInfo("CONN: Triggering additional garbage collection due to high memory usage")
-		runtime.GC()
-		debug.FreeOSMemory() // Try to return memory to OS
-	}
-}
-
-func (cm *ConnectionManager) Stop() {
-	cm.cancel(errors.New("connection manager shutdown"))
-	LogInfo("CONN: Connection manager stopped")
-}
-
 // DNS Server Type
 type DNSServer struct {
 	config            *ServerConfig
@@ -543,7 +464,6 @@ type DNSServer struct {
 	cidrMgr           *CIDRManager
 	pprofServer       *http.Server
 	redisClient       *redis.Client
-	connMgr           *ConnectionManager
 	ctx               context.Context
 	cancel            context.CancelCauseFunc
 	shutdown          chan struct{}
@@ -727,7 +647,6 @@ func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
 // =============================================================================
 
 func NewQueryClient() *QueryClient {
-	// Create reusable DNS clients for different protocols
 	udpClient := &dns.Client{
 		Timeout: OperationTimeout,
 		Net:     "udp",
@@ -744,20 +663,20 @@ func NewQueryClient() *QueryClient {
 		Net:     "tcp-tls",
 	}
 
-	// HTTP clients for DoH and DoH3 with connection pooling
 	dohTransport := &http.Transport{
-		MaxIdleConns:        10,
-		MaxIdleConnsPerHost: 5,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:        1,
+		MaxIdleConnsPerHost: 1,
+		IdleConnTimeout:     IdleTimeout,
 		DisableCompression:  false,
+		ForceAttemptHTTP2:   true,
 	}
 
 	doh3Transport := &http.Transport{
-		MaxIdleConns:        10,
-		MaxIdleConnsPerHost: 5,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:        1,
+		MaxIdleConnsPerHost: 1,
+		IdleConnTimeout:     IdleTimeout,
 		DisableCompression:  false,
-		ForceAttemptHTTP2:   false, // For HTTP/3
+		ForceAttemptHTTP2:   false,
 	}
 
 	return &QueryClient{
@@ -848,11 +767,6 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		EnableDatagrams:       true,
 		Allow0RTT:             true,
-		// Connection management optimizations
-		MaxStreamReceiveWindow:     1024 * 1024,      // 1MB per stream
-		MaxConnectionReceiveWindow: 4 * 1024 * 1024,  // 4MB per connection
-		KeepAlivePeriod:            15 * time.Second, // Keep-alive to detect dead connections
-		DisablePathMTUDiscovery:    false,            // Enable PMTU for better performance
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
@@ -926,7 +840,6 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultDOHPort)
 	}
 
-	// Use the reusable DoH client with updated TLS config
 	dohTransport := qc.dohClient.Transport.(*http.Transport)
 	dohTransport.TLSClientConfig = tlsConfig.Clone()
 	if err := http2.ConfigureTransport(dohTransport); err != nil {
@@ -998,23 +911,17 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultDOHPort)
 	}
 
-	// Use the reusable DoH3 client with updated TLS config
 	tlsConfig = tlsConfig.Clone()
 	tlsConfig.NextProtos = NextProtoDoH3
 
 	transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
 		QUICConfig: &quic.Config{
-			MaxIdleTimeout:        30 * time.Second, // Custom timeout
+			MaxIdleTimeout:        IdleTimeout,
 			MaxIncomingStreams:    MaxIncomingStreams,
 			MaxIncomingUniStreams: MaxIncomingStreams,
 			EnableDatagrams:       true,
 			Allow0RTT:             true,
-			// Connection management optimizations
-			MaxStreamReceiveWindow:     1024 * 1024,      // 1MB per stream
-			MaxConnectionReceiveWindow: 4 * 1024 * 1024,  // 4MB per connection
-			KeepAlivePeriod:            15 * time.Second, // Keep-alive to detect dead connections
-			DisablePathMTUDiscovery:    false,            // Enable PMTU for better performance
 		},
 	}
 
@@ -1079,18 +986,11 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer) (*dns.Msg, error) {
 	var client *dns.Client
 
-	// Use the appropriate reusable client based on protocol
 	switch server.Protocol {
-	case "udp":
-		client = qc.udpClient
 	case "tcp":
 		client = qc.tcpClient
 	default:
-		// Fallback for unexpected protocols
-		client = &dns.Client{Timeout: qc.timeout, Net: server.Protocol}
-		if server.Protocol == "udp" {
-			client.UDPSize = UDPBufferSize
-		}
+		client = qc.udpClient
 	}
 
 	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
@@ -1390,15 +1290,6 @@ func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 		Addr:     config.Redis.Address,
 		Password: config.Redis.Password,
 		DB:       config.Redis.Database,
-
-		// Connection pool settings to prevent memory leaks
-		PoolSize:     20,              // Maximum number of connections
-		MinIdleConns: 5,               // Minimum number of idle connections
-		MaxRetries:   3,               // Maximum retry attempts
-		DialTimeout:  5 * time.Second, // Timeout for establishing new connection
-		ReadTimeout:  3 * time.Second, // Timeout for reading commands
-		WriteTimeout: 3 * time.Second, // Timeout for writing commands
-		PoolTimeout:  4 * time.Second, // Timeout for getting connection from pool
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
@@ -2768,16 +2659,11 @@ func (tm *TLSManager) startDOQServer() error {
 	quicTLSConfig.NextProtos = NextProtoDoQ
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        30 * time.Second, // Custom timeout instead of IdleTimeout
+		MaxIdleTimeout:        IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
-		// Connection management optimizations
-		MaxStreamReceiveWindow:     1024 * 1024,      // 1MB per stream
-		MaxConnectionReceiveWindow: 4 * 1024 * 1024,  // 4MB per connection
-		KeepAlivePeriod:            15 * time.Second, // Keep-alive to detect dead connections
-		DisablePathMTUDiscovery:    false,            // Enable PMTU for better performance
 	}
 
 	tm.doqListener, err = tm.doqTransport.ListenEarly(quicTLSConfig, quicConfig)
@@ -2992,16 +2878,11 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 	tlsConfig.NextProtos = NextProtoDoH3
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        30 * time.Second, // Custom timeout instead of IdleTimeout
+		MaxIdleTimeout:        IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
-		// Connection management optimizations
-		MaxStreamReceiveWindow:     1024 * 1024,      // 1MB per stream
-		MaxConnectionReceiveWindow: 4 * 1024 * 1024,  // 4MB per connection
-		KeepAlivePeriod:            15 * time.Second, // Keep-alive to detect dead connections
-		DisablePathMTUDiscovery:    false,            // Enable PMTU for better performance
 	}
 
 	quicListener, err := quic.ListenAddrEarly(addr, tlsConfig, quicConfig)
@@ -3232,10 +3113,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	queryClient := NewQueryClient()
 	server.queryClient = queryClient
 
-	// Initialize connection manager for memory management
-	connectionManager := NewConnectionManager(ctx)
-	server.connMgr = connectionManager
-
 	queryManager := NewQueryManager(server)
 	if err := queryManager.Initialize(config.Upstream); err != nil {
 		cancel(fmt.Errorf("query manager init: %w", err))
@@ -3347,11 +3224,6 @@ func (s *DNSServer) shutdownServer() {
 		LogWarn("SERVER: Cache refresh tasks shutdown timeout")
 	}
 
-	// Stop connection manager
-	if s.connMgr != nil {
-		s.connMgr.Stop()
-	}
-
 	// Stop time cache
 	timeCache.Stop()
 
@@ -3375,9 +3247,6 @@ func (s *DNSServer) Start() error {
 	LogInfo("SERVER: Listening on port: %s", s.config.Server.Port)
 
 	s.displayInfo()
-
-	// Start connection manager for memory cleanup
-	s.connMgr.Start()
 
 	g, ctx := errgroup.WithContext(serverCtx)
 
@@ -4751,15 +4620,6 @@ func ToRRSlice[T dns.RR](records []T) []dns.RR {
 // =============================================================================
 
 func main() {
-	// Performance optimizations
-	runtime.GOMAXPROCS(runtime.NumCPU())
-
-	// Enable more aggressive garbage collection for memory management
-	debug.SetGCPercent(50) // Trigger GC more frequently to prevent memory buildup
-
-	// Set memory limits to prevent excessive memory usage (Go 1.19+)
-	debug.SetMemoryLimit(32 * 1024 * 1024) // 500MB soft limit
-
 	var configFile string
 	var generateConfig bool
 	var showVersion bool
