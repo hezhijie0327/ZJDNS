@@ -54,7 +54,7 @@ import (
 // =============================================================================
 
 var (
-	Version    = "1.5.3"
+	Version    = "1.5.4"
 	CommitHash = "dirty"
 	BuildTime  = "dev"
 
@@ -414,7 +414,12 @@ type RewriteManager struct {
 }
 
 type QueryClient struct {
-	timeout time.Duration
+	timeout    time.Duration
+	udpClient  *dns.Client
+	tcpClient  *dns.Client
+	tlsClient  *dns.Client
+	dohClient  *http.Client
+	doh3Client *http.Client
 }
 
 // Security Types
@@ -642,8 +647,51 @@ func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
 // =============================================================================
 
 func NewQueryClient() *QueryClient {
+	udpClient := &dns.Client{
+		Timeout: OperationTimeout,
+		Net:     "udp",
+		UDPSize: UDPBufferSize,
+	}
+
+	tcpClient := &dns.Client{
+		Timeout: OperationTimeout,
+		Net:     "tcp",
+	}
+
+	tlsClient := &dns.Client{
+		Timeout: OperationTimeout,
+		Net:     "tcp-tls",
+	}
+
+	dohTransport := &http.Transport{
+		MaxIdleConns:        1,
+		MaxIdleConnsPerHost: 1,
+		IdleConnTimeout:     IdleTimeout,
+		DisableCompression:  false,
+		ForceAttemptHTTP2:   true,
+	}
+
+	doh3Transport := &http.Transport{
+		MaxIdleConns:        1,
+		MaxIdleConnsPerHost: 1,
+		IdleConnTimeout:     IdleTimeout,
+		DisableCompression:  false,
+		ForceAttemptHTTP2:   false,
+	}
+
 	return &QueryClient{
-		timeout: OperationTimeout,
+		timeout:   OperationTimeout,
+		udpClient: udpClient,
+		tcpClient: tcpClient,
+		tlsClient: tlsClient,
+		dohClient: &http.Client{
+			Timeout:   OperationTimeout,
+			Transport: dohTransport,
+		},
+		doh3Client: &http.Client{
+			Timeout:   OperationTimeout,
+			Transport: doh3Transport,
+		},
 	}
 }
 
@@ -703,58 +751,10 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 }
 
 func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	dialer := &net.Dialer{
-		Timeout: DefaultTimeout,
-	}
-
-	netConn, err := dialer.DialContext(ctx, "tcp", server.Address)
-	if err != nil {
-		return nil, fmt.Errorf("dial: %w", err)
-	}
-	defer func() { _ = netConn.Close() }()
-
-	tlsConn := tls.Client(netConn, tlsConfig)
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		return nil, fmt.Errorf("TLS handshake: %w", err)
-	}
-	defer func() { _ = tlsConn.Close() }()
-
-	_ = tlsConn.SetDeadline(time.Now().Add(qc.timeout))
-
-	msgData, err := msg.Pack()
-	if err != nil {
-		return nil, fmt.Errorf("pack message: %w", err)
-	}
-
-	buf := make([]byte, 2+len(msgData))
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
-	copy(buf[2:], msgData)
-
-	if _, err := tlsConn.Write(buf); err != nil {
-		return nil, fmt.Errorf("write: %w", err)
-	}
-
-	lengthBuf := make([]byte, 2)
-	if _, err := io.ReadFull(tlsConn, lengthBuf); err != nil {
-		return nil, fmt.Errorf("read length: %w", err)
-	}
-
-	respLength := binary.BigEndian.Uint16(lengthBuf)
-	if respLength == 0 || respLength > TCPBufferSize {
-		return nil, fmt.Errorf("invalid length: %d", respLength)
-	}
-
-	respBuf := make([]byte, respLength)
-	if _, err := io.ReadFull(tlsConn, respBuf); err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	response := &dns.Msg{}
-	if err := response.Unpack(respBuf); err != nil {
-		return nil, fmt.Errorf("unpack: %w", err)
-	}
-
-	return response, nil
+	// Use the reusable TLS client
+	qc.tlsClient.TLSConfig = tlsConfig
+	response, _, err := qc.tlsClient.ExchangeContext(ctx, msg, server.Address)
+	return response, err
 }
 
 func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
@@ -840,20 +840,10 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultDOHPort)
 	}
 
-	tlsConfig = tlsConfig.Clone()
-	transport := &http.Transport{
-		TLSClientConfig:    tlsConfig,
-		DisableCompression: true,
-		ForceAttemptHTTP2:  true,
-	}
-
-	if err := http2.ConfigureTransport(transport); err != nil {
+	dohTransport := qc.dohClient.Transport.(*http.Transport)
+	dohTransport.TLSClientConfig = tlsConfig.Clone()
+	if err := http2.ConfigureTransport(dohTransport); err != nil {
 		return nil, fmt.Errorf("configure HTTP/2: %w", err)
-	}
-
-	httpClient := &http.Client{
-		Transport: transport,
-		Timeout:   qc.timeout,
 	}
 
 	originalID := msg.Id
@@ -881,7 +871,7 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 
 	httpReq.Header.Set("Accept", "application/dns-message")
 
-	httpResp, err := httpClient.Do(httpReq)
+	httpResp, err := qc.dohClient.Do(httpReq)
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("do request: %w", err)
@@ -935,10 +925,8 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 		},
 	}
 
-	httpClient := &http.Client{
-		Transport: transport,
-		Timeout:   qc.timeout,
-	}
+	// Update the DoH3 client transport
+	qc.doh3Client.Transport = transport
 
 	originalID := msg.Id
 	msg.Id = 0
@@ -965,7 +953,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 
 	httpReq.Header.Set("Accept", "application/dns-message")
 
-	httpResp, err := httpClient.Do(httpReq)
+	httpResp, err := qc.doh3Client.Do(httpReq)
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("do request: %w", err)
@@ -996,9 +984,13 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 }
 
 func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer) (*dns.Msg, error) {
-	client := &dns.Client{Timeout: qc.timeout, Net: server.Protocol}
-	if server.Protocol == "udp" {
-		client.UDPSize = UDPBufferSize
+	var client *dns.Client
+
+	switch server.Protocol {
+	case "tcp":
+		client = qc.tcpClient
+	default:
+		client = qc.udpClient
 	}
 
 	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
