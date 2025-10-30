@@ -560,10 +560,6 @@ type BufferPool struct {
 	size int
 }
 
-type ContextPool struct {
-	pool sync.Pool
-}
-
 // =============================================================================
 // Initialization Functions
 // =============================================================================
