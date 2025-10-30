@@ -953,7 +953,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 
 	httpReq.Header.Set("Accept", "application/dns-message")
 
-	httpResp, err := qc.dohClient.Do(httpReq)
+	httpResp, err := qc.doh3Client.Do(httpReq)
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("do request: %w", err)
