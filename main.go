@@ -4048,12 +4048,13 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	}
 
 	resultChan := make(chan UpstreamQueryResult, 1)
-
 	queryCtx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(errors.New("query completed"))
 
 	g, queryCtx := errgroup.WithContext(queryCtx)
 	g.SetLimit(calculateConcurrencyLimit(len(servers)))
+
+	var activeConnections atomic.Int32
 
 	for _, srv := range servers {
 		server := srv
@@ -4064,6 +4065,9 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 				return nil
 			default:
 			}
+
+			activeConnections.Add(1)
+			defer activeConnections.Add(-1)
 
 			if server.IsRecursive() {
 				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, IdleTimeout)
@@ -4089,7 +4093,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						ecs:        ecsResponse,
 						server:     usedServer,
 					}:
-						cancel(errors.New("successful result obtained"))
+						cancel(errors.New("successful result obtained from recursive resolution"))
 						return nil
 					case <-queryCtx.Done():
 						return nil
@@ -4130,7 +4134,11 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							ecs:        ecsResponse,
 							server:     serverDesc,
 						}:
-							cancel(errors.New("successful result obtained"))
+							remaining := activeConnections.Load() - 1
+							if remaining > 0 {
+								LogInfo("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
+							}
+							cancel(errors.New("successful result obtained from upstream"))
 							messagePool.Put(queryResult.Response)
 							return nil
 						case <-queryCtx.Done():
