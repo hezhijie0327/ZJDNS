@@ -1,6 +1,5 @@
 // Package main implements ZJDNS - High Performance DNS Server
 // Supporting DoT/DoH/DoQ/DoH3 and recursive resolution
-// Optimized for low memory usage and connection pooling
 package main
 
 import (
@@ -743,21 +742,6 @@ func (bp *BufferPool) Put(buf []byte) {
 		copy(bufCopy, buf[:bp.size])
 		bp.pool.Put(&bufCopy)
 	}
-}
-
-// =============================================================================
-// ContextPool Implementation
-// =============================================================================
-
-func NewContextPool() *ContextPool {
-	return &ContextPool{
-		pool: sync.Pool{},
-	}
-}
-
-func (cp *ContextPool) Get(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	return ctx, cancel
 }
 
 // =============================================================================
