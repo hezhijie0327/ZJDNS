@@ -978,6 +978,7 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 	}
 
 	httpReq.Header.Set("Accept", "application/dns-message")
+	httpReq.Header.Set("User-Agent", "")
 
 	httpResp, err := qc.dohClient.Do(httpReq)
 	if err != nil {
@@ -1060,6 +1061,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 	}
 
 	httpReq.Header.Set("Accept", "application/dns-message")
+	httpReq.Header.Set("User-Agent", "")
 
 	httpResp, err := qc.doh3Client.Do(httpReq)
 	if err != nil {
