@@ -278,8 +278,8 @@ type RedisSettings struct {
 type UpstreamServer struct {
 	Address       string   `json:"address"`
 	Protocol      string   `json:"protocol"`
-	ServerName    string   `json:"server_name"`
-	SkipTLSVerify bool     `json:"skip_tls_verify"`
+	ServerName    string   `json:"server_name,omitempty"`
+	SkipTLSVerify bool     `json:"skip_tls_verify,omitempty"`
 	Match         []string `json:"match,omitempty"`
 }
 
