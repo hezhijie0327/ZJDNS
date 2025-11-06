@@ -116,7 +116,7 @@ const (
 const (
 	DefaultCacheTTL = 10
 	StaleTTL        = 30
-	StaleMaxAge     = 86400 * 7
+	StaleMaxAge     = 30 * 86400
 
 	RedisPrefixDNS = "dns:"
 )
