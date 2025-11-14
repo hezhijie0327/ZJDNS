@@ -3,11 +3,11 @@ module zjdns
 go 1.25.1
 
 require (
-	github.com/miekg/dns v1.1.69-0.20251010090242-a0f8faa24999
-	github.com/quic-go/quic-go v0.55.1-0.20251104171306-eb7fcf5637f7
-	github.com/redis/go-redis/v9 v9.16.1-0.20251107113100-5069fd6fa9ab
-	golang.org/x/net v0.46.0
-	golang.org/x/sync v0.17.0
+	github.com/miekg/dns v1.1.69-0.20251113160555-b39ef963336b
+	github.com/quic-go/quic-go v0.56.1-0.20251114084433-e46470d68fb4
+	github.com/redis/go-redis/v9 v9.16.1-0.20251112115523-9c425cb9bade
+	golang.org/x/net v0.47.0
+	golang.org/x/sync v0.18.0
 )
 
 require (
@@ -16,9 +16,9 @@ require (
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	go.uber.org/mock v0.6.0 // indirect
-	golang.org/x/crypto v0.43.0 // indirect
-	golang.org/x/mod v0.29.0 // indirect
-	golang.org/x/sys v0.37.0 // indirect
-	golang.org/x/text v0.30.0 // indirect
-	golang.org/x/tools v0.38.0 // indirect
+	golang.org/x/crypto v0.44.0 // indirect
+	golang.org/x/mod v0.30.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/tools v0.39.0 // indirect
 )
