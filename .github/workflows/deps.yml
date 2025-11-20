@@ -19,11 +19,10 @@ jobs:
 
       - name: Update dependencies to latest commits
         run: |
-          go get -u github.com/dgraph-io/ristretto/v2@main
-          go get -u github.com/miekg/dns@master
-          go get -u github.com/redis/go-redis/v9@master
-          go get -u github.com/quic-go/quic-go@master
           go mod tidy
+          go get -u
+          go mod download
+          go mod vendor
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
