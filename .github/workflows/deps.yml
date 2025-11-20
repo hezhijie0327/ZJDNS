@@ -19,8 +19,8 @@ jobs:
 
       - name: Update dependencies to latest commits
         run: |
-          go mod tidy
           go get -u
+          go mod tidy
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
