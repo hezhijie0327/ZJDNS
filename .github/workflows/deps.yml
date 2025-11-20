@@ -21,8 +21,6 @@ jobs:
         run: |
           go mod tidy
           go get -u
-          go mod download
-          go mod vendor
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
