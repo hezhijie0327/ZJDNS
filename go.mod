@@ -16,7 +16,7 @@ require (
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	go.uber.org/mock v0.6.0 // indirect
-	golang.org/x/crypto v0.44.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/mod v0.30.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
