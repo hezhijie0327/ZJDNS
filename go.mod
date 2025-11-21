@@ -4,8 +4,8 @@ go 1.25.1
 
 require (
 	github.com/miekg/dns v1.1.69-0.20251113160555-b39ef963336b
-	github.com/quic-go/quic-go v0.56.1-0.20251120030220-d4d168f0f093
-	github.com/redis/go-redis/v9 v9.17.0
+	github.com/quic-go/quic-go v0.57.0
+	github.com/redis/go-redis/v9 v9.17.1-0.20251121095256-1bb9e0d130f3
 	golang.org/x/net v0.47.0
 	golang.org/x/sync v0.18.0
 )
