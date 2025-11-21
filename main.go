@@ -830,6 +830,7 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 		ServerName:         server.ServerName,
 		InsecureSkipVerify: server.SkipTLSVerify,
 		MinVersion:         tls.VersionTLS12,
+		CurvePreferences:   []tls.CurveID{},
 	}
 
 	if server.SkipTLSVerify {
@@ -2504,8 +2505,9 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 	}
 
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
+		Certificates:       []tls.Certificate{cert},
+		MinVersion:         tls.VersionTLS13,
+		CurvePreferences:   []tls.CurveID{},
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
