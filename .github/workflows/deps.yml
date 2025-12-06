@@ -1,8 +1,6 @@
 name: Dependencies
 
 on:
-  schedule:
-    - cron: "0 16 * * 5" # UTC+8 00:00
   workflow_dispatch:
 
 jobs:
