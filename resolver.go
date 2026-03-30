@@ -100,6 +100,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	servers = shuffleSlice(servers)
 
 	resultChan := make(chan UpstreamQueryResult, 1)
+	nxdomainChan := make(chan UpstreamQueryResult, 1) // Fallback for NXDOMAIN
 	queryCtx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(errors.New("query completed"))
 
@@ -159,7 +160,12 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 				if queryResult.Error == nil && queryResult.Response != nil {
 					rcode := queryResult.Response.Rcode
 
-					if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+					serverDesc := server.Address
+					if server.Protocol != "" && server.Protocol != "udp" {
+						serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
+					}
+
+					if rcode == dns.RcodeSuccess {
 						if len(server.Match) > 0 {
 							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
 							if shouldRefuse {
@@ -172,10 +178,6 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						queryResult.Validated = qm.validator.dnssecValidator.ValidateResponse(queryResult.Response, true)
 						ecsResponse := qm.server.ednsMgr.ParseFromDNS(queryResult.Response)
 
-						serverDesc := server.Address
-						if server.Protocol != "" && server.Protocol != "udp" {
-							serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
-						}
 
 						select {
 						case resultChan <- UpstreamQueryResult{
@@ -197,6 +199,20 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							messagePool.Put(queryResult.Response)
 							return nil
 						}
+					} else if rcode == dns.RcodeNameError {
+						// NXDOMAIN - store as fallback, continue querying other servers
+						select {
+						case nxdomainChan <- UpstreamQueryResult{
+							answer:     queryResult.Response.Answer,
+							authority:  queryResult.Response.Ns,
+							additional: queryResult.Response.Extra,
+							validated:  false,
+							ecs:        qm.server.ednsMgr.ParseFromDNS(queryResult.Response),
+							server:     serverDesc,
+						}:
+						default:
+						}
+						messagePool.Put(queryResult.Response)
 					} else {
 						messagePool.Put(queryResult.Response)
 					}
@@ -209,12 +225,22 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	go func() {
 		_ = g.Wait()
 		close(resultChan)
+		close(nxdomainChan)
 	}()
 
 	select {
 	case res, ok := <-resultChan:
-		if ok {
+		if ok && res.server != "" {
 			return res.answer, res.authority, res.additional, res.validated, res.ecs, res.server, nil
+		}
+		// No NOERROR response, check for NXDOMAIN fallback
+		select {
+		case nxRes, nxOk := <-nxdomainChan:
+			if nxOk && nxRes.server != "" {
+				LogDebug("UPSTREAM: Returning NXDOMAIN fallback after no successful response")
+				return nxRes.answer, nxRes.authority, nxRes.additional, nxRes.validated, nxRes.ecs, nxRes.server, nil
+			}
+		default:
 		}
 		return nil, nil, nil, false, nil, "", errors.New("all upstream queries failed")
 	case <-queryCtx.Done():
