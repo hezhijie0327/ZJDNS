@@ -90,6 +90,27 @@
 
 ---
 
+## 📁 项目结构
+
+| 文件           | 说明                                                                 |
+| -------------- | -------------------------------------------------------------------- |
+| `constants.go` | 全局常量（端口、缓冲区、协议限制、缓存、QUIC、日志、根服务器、ALPN） |
+| `types.go`     | 所有类型定义（struct、interface）                                    |
+| `utils.go`     | 工具函数（字符串处理、DNS记录操作、缓存键生成、示例配置生成）        |
+| `logger.go`    | 日志管理（LogManager、TimeCache、RNG）                               |
+| `pool.go`      | 对象池（MessagePool、BufferPool）+ 全局变量初始化                    |
+| `config.go`    | 配置管理（ConfigManager、配置验证、DDR记录生成）                     |
+| `cache.go`     | 缓存实现（NullCache、RedisCache、CacheEntry 方法）                   |
+| `cidr.go`      | CIDR 过滤管理                                                        |
+| `edns.go`      | EDNS/ECS 管理                                                        |
+| `rewrite.go`   | DNS 重写规则                                                         |
+| `security.go`  | 安全管理（DNSSECValidator、HijackPrevention、SecurityManager）       |
+| `tls.go`       | TLS/DoT/DoQ/DoH/DoH3 管理                                            |
+| `query.go`     | DNS 查询客户端（QueryClient）                                        |
+| `resolver.go`  | 递归解析和上游查询（QueryManager、RecursiveResolver、CNAMEHandler）  |
+| `server.go`    | DNS 服务器核心（DNSServer）                                          |
+| `main.go`      | 入口文件                                                             |
+
 ## 🏗️ 系统架构
 
 ```mermaid
@@ -527,6 +548,34 @@ go build -o zjdns
 - **Access Throttling**: Throttles cache access time update operations, reducing Redis pressure
 
 ---
+
+## 📁 Project Structure
+
+The project has been refactored from a single file to a modular structure, organized by functionality:
+
+| File           | Description                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `constants.go` | Global constants (ports, buffers, protocol limits, cache, QUIC, logging, root servers, ALPN)                |
+| `types.go`     | All type definitions (struct, interface)                                                                    |
+| `utils.go`     | Utility functions (string handling, DNS record operations, cache key generation, example config generation) |
+| `logger.go`    | Log management (LogManager, TimeCache, RNG)                                                                 |
+| `pool.go`      | Object pools (MessagePool, BufferPool) + global variable initialization                                     |
+| `config.go`    | Configuration management (ConfigManager, validation, DDR records)                                           |
+| `cache.go`     | Cache implementations (NullCache, RedisCache, CacheEntry methods)                                           |
+| `types.go`     | All type definitions (struct, interface)                                                                    |
+| `utils.go`     | Utility functions (string handling, DNS record operations, cache key generation, etc.)                      |
+| `logger.go`    | Log management (LogManager, TimeCache, RNG global variables)                                                |
+| `pool.go`      | Object pools (MessagePool, BufferPool)                                                                      |
+| `config.go`    | Configuration management and cache implementation (ConfigManager, NullCache, RedisCache)                    |
+| `cidr.go`      | CIDR filtering management                                                                                   |
+| `edns.go`      | EDNS/ECS management                                                                                         |
+| `rewrite.go`   | DNS rewrite rules                                                                                           |
+| `security.go`  | Security management (DNSSECValidator, HijackPrevention, SecurityManager)                                    |
+| `tls.go`       | TLS/DoT/DoQ/DoH/DoH3 management                                                                             |
+| `query.go`     | DNS query client (QueryClient)                                                                              |
+| `resolver.go`  | Recursive resolution and upstream queries (QueryManager, RecursiveResolver, CNAMEHandler)                   |
+| `server.go`    | DNS server core (DNSServer)                                                                                 |
+| `main.go`      | Entry point file                                                                                            |
 
 ## 🏗️ System Architecture
 

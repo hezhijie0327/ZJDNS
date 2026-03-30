@@ -3,6 +3,7 @@
 ## Build Commands
 
 ### Basic Build
+
 ```bash
 go build -o zjdns
 GOOS=linux GOARCH=amd64 go build -o zjdns-linux-amd64
@@ -10,11 +11,13 @@ GOOS=linux GOARCH=arm64 go build -o zjdns-linux-arm64
 ```
 
 ### Code Quality
+
 ```bash
 golangci-lint run && golangci-lint fmt
 ```
 
 ### Testing
+
 ```bash
 go test ./...
 go test -v ./...
@@ -23,6 +26,7 @@ go test -bench=. ./...
 ```
 
 ### Development
+
 ```bash
 ./zjdns -generate-config > config.json
 ./zjdns -config config.json
@@ -31,15 +35,32 @@ go test -bench=. ./...
 ## Code Style
 
 ### File Structure
-- Single file (`main.go`) with clear comment sections
-- Constants grouped by purpose (Network, Buffer, Protocol, Timing)
-- Types organized by functionality (Config, Cache, Security)
-- Implementation sections follow type definitions
+
+Modular structure organized by functionality:
+
+- `constants.go` - Global constants (Network, Buffer, Protocol, Timing, Cache, QUIC, Logging, Root Servers, ALPN)
+- `types.go` - All type definitions (Config, Cache, Security types)
+- `utils.go` - Utility functions (string handling, DNS records, cache keys, config generation)
+- `logger.go` - Log management (LogManager, TimeCache, RNG)
+- `pool.go` - Object pools (MessagePool, BufferPool) + global variable initialization
+- `config.go` - Config loading, validation, DDR records
+- `cache.go` - Cache implementations (NullCache, RedisCache, CacheEntry methods)
+- `cidr.go` - CIDR filtering logic
+- `edns.go` - EDNS/ECS management
+- `rewrite.go` - DNS rewrite rules
+- `security.go` - Security (DNSSECValidator, HijackPrevention, SecurityManager)
+- `tls.go` - TLS/DoT/DoQ/DoH/DoH3 management
+- `query.go` - DNS query client (QueryClient)
+- `resolver.go` - Query management and recursive resolution
+- `server.go` - DNS server lifecycle (DNSServer)
+- `main.go` - Entry point only
 
 ### Imports
+
 Standard library → Third-party → Internal, all alphabetically sorted.
 
 ### Naming
+
 - Constants: `PascalCase` (`DefaultDNSPort`, `UDPBufferSize`)
 - Types: `PascalCase` (`ServerConfig`, `CacheManager`)
 - Functions: `PascalCase` public, `camelCase` private
@@ -47,45 +68,62 @@ Standard library → Third-party → Internal, all alphabetically sorted.
 - Patterns: `*Manager`, `*Handler`, `*Client` suffixes
 
 ### Error Handling
+
 - Use `fmt.Errorf("operation: %w", err)` for error chaining
 - `defer HandlePanic("operation")` for goroutine safety
 - Context-aware error handling preferred
 - Structured logging: `LogError("MODULE: message %v", err)`
 
 ### Concurrency
+
 - Atomic operations for simple state: `atomic.StoreInt32(&closed, 1)`
 - `errgroup.Group` for concurrent operations
 - Always propagate context for cancellation
 - Mutex for complex shared state
 
 ### Memory
+
 - Object pools: `MessagePool` for `dns.Msg`, `BufferPool` for bytes
 - Pre-allocated buffers: `UDPBufferSize = 1232`, `SecureBufferSize = 8192`
 - Use `sync.Pool` for frequently allocated objects
 
 ### Configuration
+
 - JSON with struct tags
 - Comprehensive validation with clear errors
 - Sensible defaults for all options
 
 ### Logging
+
 - Consistent prefixes: `CONFIG:`, `CACHE:`, `QUERY:`, `TLS:`
 - Levels: error, warn, info, debug
 - Avoid logging in hot paths
 
-## Architecture
-
-### Core Flow
-DNSServer → QueryManager → QueryClient → CacheManager → SecurityManager
-
-### Protocols
-- Traditional: UDP/TCP on port 53
-- Secure: DoT/DoQ (853), DoH/DoH3 (443)
-- Fallback: UDP to TCP for truncated responses
-
 ### Key Constants
+
 - Timeouts: `DefaultTimeout = 2s`, `OperationTimeout = 3s`
 - Limits: `MaxRecursionDep = 16`, `MaxCNAMEChain = 16`
+
+## Module Organization
+
+| File           | Purpose           | Key Types/Functions                                   |
+| -------------- | ----------------- | ----------------------------------------------------- |
+| `constants.go` | Global constants  | Port numbers, buffer sizes, timeouts, protocol limits |
+| `types.go`     | Type definitions  | All structs and interfaces (Config, Cache, Security)  |
+| `utils.go`     | Utility functions | String ops, DNS record helpers, cache key generation  |
+| `logger.go`    | Logging           | LogManager, TimeCache, RNG, global log functions      |
+| `pool.go`      | Memory pools      | MessagePool, BufferPool with sync.Pool                |
+| `config.go`    | Configuration     | ConfigManager, validation, DDR records                |
+| `cache.go`     | Cache             | NullCache, RedisCache, CacheEntry methods             |
+| `cidr.go`      | CIDR filtering    | CIDRManager, IP filtering logic                       |
+| `edns.go`      | EDNS/ECS          | EDNSManager, ECS option handling                      |
+| `rewrite.go`   | DNS rewriting     | RewriteManager, domain rewrite rules                  |
+| `security.go`  | Security          | DNSSECValidator, HijackPrevention, SecurityManager    |
+| `tls.go`       | TLS protocols     | TLSManager, DoT/DoQ/DoH/DoH3 handlers, self-signed CA |
+| `query.go`     | Query client      | QueryClient, protocol-specific querying               |
+| `resolver.go`  | Resolution        | QueryManager, RecursiveResolver, CNAMEHandler         |
+| `server.go`    | Server core       | DNSServer, UDP/TCP/DoT/DoQ/DoH handlers               |
+| `main.go`      | Entry point       | Main function only                                    |
 
 ## Development Workflow
 
