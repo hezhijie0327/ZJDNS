@@ -126,6 +126,7 @@ type RewriteRule struct {
 type DNSRecordConfig struct {
 	Name         string `json:"name,omitempty"`
 	Type         string `json:"type"`
+	Class        string `json:"class,omitempty"`
 	TTL          uint32 `json:"ttl,omitempty"`
 	Content      string `json:"content"`
 	ResponseCode *int   `json:"response_code,omitempty"`

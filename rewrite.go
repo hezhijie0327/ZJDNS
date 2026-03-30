@@ -43,11 +43,15 @@ func (rm *RewriteManager) hasRules() bool {
 }
 
 // RewriteWithDetails checks if a domain should be rewritten and returns the result
-func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRewriteResult {
+func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16, qclass uint16) DNSRewriteResult {
 	result := DNSRewriteResult{
 		Domain:        domain,
 		ResponseCode:  dns.RcodeSuccess,
 		ShouldRewrite: false,
+	}
+
+	if qclass == 0 {
+		qclass = dns.ClassINET
 	}
 
 	if !rm.hasRules() || len(domain) > MaxDomainLength {
@@ -82,15 +86,26 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16) DNSRew
 			// Build answer records
 			for _, record := range rule.Records {
 				recordType := dns.StringToType[record.Type]
+				var recordClass uint16 = dns.ClassINET
+				if record.Class != "" {
+					if parsedClass, ok := dns.StringToClass[strings.ToUpper(strings.TrimSpace(record.Class))]; ok {
+						recordClass = parsedClass
+					} else {
+						continue
+					}
+				}
 				// Check for record-level response code
 				if record.ResponseCode != nil {
-					if record.Type == "" || recordType == qtype {
+					if (record.Type == "" || recordType == qtype) && recordClass == qclass {
 						result.ResponseCode = *record.ResponseCode
 						result.ShouldRewrite = true
 						result.Records = nil
 						result.Additional = nil
 						return result
 					}
+					continue
+				}
+				if recordClass != qclass {
 					continue
 				}
 				// Skip records that don't match query type
@@ -124,6 +139,11 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 		ttl = DefaultCacheTTL
 	}
 
+	class := strings.ToUpper(strings.TrimSpace(record.Class))
+	if class == "" {
+		class = "IN"
+	}
+
 	name := dns.Fqdn(domain)
 	if record.Name != "" {
 		name = dns.Fqdn(record.Name)
@@ -131,11 +151,13 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 
 	// Build RR string in standard format
 	var sb strings.Builder
-	sb.Grow(len(name) + len(record.Type) + len(record.Content) + 20)
+	sb.Grow(len(name) + len(class) + len(record.Type) + len(record.Content) + 20)
 	sb.WriteString(name)
 	sb.WriteByte(' ')
 	sb.WriteString(strconv.FormatUint(uint64(ttl), 10))
-	sb.WriteString(" IN ")
+	sb.WriteByte(' ')
+	sb.WriteString(class)
+	sb.WriteByte(' ')
 	sb.WriteString(record.Type)
 	sb.WriteByte(' ')
 	sb.WriteString(record.Content)
@@ -151,8 +173,13 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 		rrType = 0
 	}
 
+	classValue := uint16(dns.ClassINET)
+	if parsedClass, ok := dns.StringToClass[class]; ok {
+		classValue = parsedClass
+	}
+
 	return &dns.RFC3597{
-		Hdr:   dns.RR_Header{Name: name, Rrtype: rrType, Class: dns.ClassINET, Ttl: ttl},
+		Hdr:   dns.RR_Header{Name: name, Rrtype: rrType, Class: classValue, Ttl: ttl},
 		Rdata: record.Content,
 	}
 }

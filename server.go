@@ -451,7 +451,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, _ net.IP, isSecureConnection b
 	}()
 
 	if s.rewriteMgr.hasRules() {
-		rewriteResult := s.rewriteMgr.RewriteWithDetails(question.Name, question.Qtype)
+		rewriteResult := s.rewriteMgr.RewriteWithDetails(question.Name, question.Qtype, question.Qclass)
 
 		if rewriteResult.ShouldRewrite {
 			if rewriteResult.ResponseCode != dns.RcodeSuccess {

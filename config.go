@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -42,6 +43,8 @@ func (cm *ConfigManager) LoadConfig(configFile string) (*ServerConfig, error) {
 	if cm.shouldEnableDDR(config) {
 		cm.addDDRRecords(config)
 	}
+
+	cm.addChaosRecord(config)
 
 	LogInfo("CONFIG: Configuration loaded successfully")
 	return config, nil
@@ -245,4 +248,33 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 
 	LogInfo("CONFIG: DDR enabled for domain %s (IPv4: %s, IPv6: %s)",
 		domain, config.Server.DDR.IPv4, config.Server.DDR.IPv6)
+}
+
+// addChaosRecord adds built-in CHAOS TXT records for resolver identity/version queries.
+func (cm *ConfigManager) addChaosRecord(config *ServerConfig) {
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "ZJDNS"
+	}
+
+	chaosRecords := map[string]string{
+		"id.server":      hostname,
+		"hostname.bind":  hostname,
+		"version.server": getVersion(),
+		"version.bind":   getVersion(),
+	}
+
+	for name, value := range chaosRecords {
+		config.Rewrite = append(config.Rewrite, RewriteRule{
+			Name: name,
+			Records: []DNSRecordConfig{{
+				Type:    "TXT",
+				Class:   "CH",
+				TTL:     DefaultCacheTTL,
+				Content: strconv.Quote(value),
+			}},
+		})
+	}
+
+	LogInfo("CONFIG: CHAOS TXT rewrite records enabled")
 }

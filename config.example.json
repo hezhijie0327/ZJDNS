@@ -81,6 +81,7 @@
       "records": [
         {
           "type": "A",
+          "class": "IN",
           "ttl": 10,
           "content": "127.0.0.1"
         }
