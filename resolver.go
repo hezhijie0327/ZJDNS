@@ -165,7 +165,8 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
 					}
 
-					if rcode == dns.RcodeSuccess {
+					switch rcode {
+					case dns.RcodeSuccess:
 						if len(server.Match) > 0 {
 							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
 							if shouldRefuse {
@@ -177,7 +178,6 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 
 						queryResult.Validated = qm.validator.dnssecValidator.ValidateResponse(queryResult.Response, true)
 						ecsResponse := qm.server.ednsMgr.ParseFromDNS(queryResult.Response)
-
 
 						select {
 						case resultChan <- UpstreamQueryResult{
@@ -199,7 +199,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							messagePool.Put(queryResult.Response)
 							return nil
 						}
-					} else if rcode == dns.RcodeNameError {
+					case dns.RcodeNameError:
 						// NXDOMAIN - store as fallback, continue querying other servers
 						select {
 						case nxdomainChan <- UpstreamQueryResult{
@@ -213,7 +213,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 						default:
 						}
 						messagePool.Put(queryResult.Response)
-					} else {
+					default:
 						messagePool.Put(queryResult.Response)
 					}
 				}
