@@ -254,14 +254,16 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 func (cm *ConfigManager) addChaosRecord(config *ServerConfig) {
 	hostname, err := os.Hostname()
 	if err != nil || strings.TrimSpace(hostname) == "" {
-		hostname = "ZJDNS"
+		hostname = ProjectName
 	}
+
+	version := ProjectName + " " + getVersion()
 
 	chaosRecords := map[string]string{
 		"id.server":      hostname,
 		"hostname.bind":  hostname,
-		"version.server": getVersion(),
-		"version.bind":   getVersion(),
+		"version.server": version,
+		"version.bind":   version,
 	}
 
 	for name, value := range chaosRecords {

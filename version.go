@@ -7,8 +7,10 @@ package main
 // =============================================================================
 
 var (
+	// ProjectName is the name of the project
+	ProjectName = "ZJDNS"
 	// Version is the current version of ZJDNS
-	Version = "1.5.8"
+	Version = "1.5.9"
 	// CommitHash is the git commit hash (set during build)
 	CommitHash = "dirty"
 	// BuildTime is the build timestamp (set during build)
