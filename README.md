@@ -97,7 +97,7 @@
 | `constants.go` | 全局常量（端口、缓冲区、协议限制、缓存、QUIC、日志、根服务器、ALPN） |
 | `types.go`     | 所有类型定义（struct、interface）                                    |
 | `utils.go`     | 工具函数（字符串处理、DNS记录操作、缓存键生成、示例配置生成）        |
-| `logger.go`    | 日志管理（LogManager、TimeCache、RNG）                               |
+| `logger.go`    | 日志管理（LogManager、TimeCache、RNG 全局变量）                      |
 | `pool.go`      | 对象池（MessagePool、BufferPool）+ 全局变量初始化                    |
 | `config.go`    | 配置管理（ConfigManager、配置验证、DDR记录生成）                     |
 | `cache.go`     | 缓存实现（NullCache、RedisCache、CacheEntry 方法）                   |
@@ -435,6 +435,10 @@ golangci-lint run && golangci-lint fmt
 
 请确保 golangci-lint 检查通过后再提交代码，以保持代码质量和一致性。
 
+### 开发指南
+
+查看 [AGENTS.md](AGENTS.md) 了解项目代码风格、构建命令和开发规范。
+
 ### 构建和测试
 
 ```bash
@@ -558,7 +562,7 @@ The project has been refactored from a single file to a modular structure, organ
 | `constants.go` | Global constants (ports, buffers, protocol limits, cache, QUIC, logging, root servers, ALPN)                |
 | `types.go`     | All type definitions (struct, interface)                                                                    |
 | `utils.go`     | Utility functions (string handling, DNS record operations, cache key generation, example config generation) |
-| `logger.go`    | Log management (LogManager, TimeCache, RNG)                                                                 |
+| `logger.go`    | Log management (LogManager, TimeCache, RNG global variables)                                                |
 | `pool.go`      | Object pools (MessagePool, BufferPool) + global variable initialization                                     |
 | `config.go`    | Configuration management (ConfigManager, validation, DDR records)                                           |
 | `cache.go`     | Cache implementations (NullCache, RedisCache, CacheEntry methods)                                           |
@@ -900,6 +904,10 @@ golangci-lint run && golangci-lint fmt
 ```
 
 Please ensure golangci-lint checks pass before committing code to maintain code quality and consistency.
+
+### Development Guide
+
+See [AGENTS.md](AGENTS.md) for code style, build commands, and development guidelines.
 
 ### Build and Test
 

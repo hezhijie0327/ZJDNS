@@ -57,7 +57,18 @@ Modular structure organized by functionality:
 
 ### Imports
 
-Standard library → Third-party → Internal, all alphabetically sorted.
+Standard library → Third-party → Internal, all alphabetically sorted:
+
+```go
+import (
+    "context"
+    "fmt"
+    "sync"
+
+    "github.com/miekg/dns"
+    "github.com/redis/go-redis/v9"
+)
+```
 
 ### Naming
 
