@@ -110,12 +110,7 @@ const (
 // =============================================================================
 
 var (
-	// Version information
-	Version    = "1.5.5"
-	CommitHash = "dirty"
-	BuildTime  = "dev"
-
-	// DefaultRootServers is the list of root DNS servers
+	// https://www.internic.net/domain/named.root
 	DefaultRootServers = []string{
 		"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
 		"170.247.170.2:53", "[2801:1b8:10::b]:53",
