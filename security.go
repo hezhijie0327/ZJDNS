@@ -48,7 +48,7 @@ func (v *DNSSECValidator) InitializeTrustAnchors() {
 		// Verify key tag matches
 		computedKeyTag := dnskey.KeyTag()
 		if computedKeyTag != anchor.KeyTag {
-			LogWarn("DNSSEC: Trust anchor %d has mismatched key tag (computed: %d)", anchor.KeyTag, computedKeyTag)
+			LogDebug("DNSSEC: Trust anchor %d has mismatched key tag (computed: %d)", anchor.KeyTag, computedKeyTag)
 			continue
 		}
 
@@ -155,7 +155,7 @@ func (v *DNSSECValidator) validateRRSIGSignatures(response *dns.Msg) (bool, uint
 	for key, rrsigList := range rrsigs {
 		rrset, exists := rrsets[key]
 		if !exists {
-			LogWarn("DNSSEC: RRSIG without corresponding RRset: %s", key)
+			LogDebug("DNSSEC: RRSIG without corresponding RRset: %s", key)
 			continue
 		}
 
@@ -312,12 +312,12 @@ func (v *DNSSECValidator) validateRootDNSKEYs(dnskeys []*dns.DNSKEY, rrsigs []*d
 
 		// Verify the DNSKEY matches the trust anchor
 		if dnskey.Algorithm != trustAnchor.Algorithm {
-			LogWarn("DNSSEC: Root KSK %d algorithm mismatch", keyTag)
+			LogDebug("DNSSEC: Root KSK %d algorithm mismatch", keyTag)
 			continue
 		}
 
 		if dnskey.PublicKey != trustAnchor.PublicKey {
-			LogWarn("DNSSEC: Root KSK %d public key mismatch", keyTag)
+			LogDebug("DNSSEC: Root KSK %d public key mismatch", keyTag)
 			continue
 		}
 
@@ -400,12 +400,12 @@ func (v *DNSSECValidator) verifyDSRecords(dnskeys []*dns.DNSKEY, dsRecords []*dn
 			// Compute digest and compare
 			digest, err := v.computeDSDigest(ds, dnskey)
 			if err != nil {
-				LogWarn("DNSSEC: Failed to compute DS digest: %v", err)
+				LogDebug("DNSSEC: Failed to compute DS digest: %v", err)
 				continue
 			}
 
 			if !strings.EqualFold(digest, ds.Digest) {
-				LogWarn("DNSSEC: DS digest mismatch for zone '%s'", zone)
+				LogDebug("DNSSEC: DS digest mismatch for zone '%s'", zone)
 				continue
 			}
 
@@ -510,12 +510,12 @@ func (v *DNSSECValidator) validateNSECRecords(response *dns.Msg) (bool, uint16) 
 					if _, isNSEC := rr2.(*dns.NSEC); isNSEC {
 						if err := v.verifyRRSIGSignature(rrsig, []dns.RR{rr2}, nil); err != nil {
 							// Try to find the signing key
-							LogWarn("DNSSEC: NSEC RRSIG verification pending (need DNSKEY)")
+							LogDebug("DNSSEC: NSEC RRSIG verification pending (need DNSKEY)")
 						}
 					}
 					if _, isNSEC3 := rr2.(*dns.NSEC3); isNSEC3 {
 						if err := v.verifyRRSIGSignature(rrsig, []dns.RR{rr2}, nil); err != nil {
-							LogWarn("DNSSEC: NSEC3 RRSIG verification pending (need DNSKEY)")
+							LogDebug("DNSSEC: NSEC3 RRSIG verification pending (need DNSKEY)")
 						}
 					}
 				}
@@ -534,7 +534,7 @@ func (v *DNSSECValidator) ValidateChain(response *dns.Msg, zone string) (bool, u
 	}
 
 	if len(v.trustAnchors) == 0 {
-		LogWarn("DNSSEC: No trust anchors available, cannot validate chain")
+		LogDebug("DNSSEC: No trust anchors available, cannot validate chain")
 		return false, EDECodeDNSKEYMissing
 	}
 

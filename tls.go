@@ -360,7 +360,7 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
 		if msgLength == 0 || msgLength > TCPBufferSize {
-			LogWarn("DOT: Invalid message length: %d", msgLength)
+			LogDebug("DOT: Invalid message length: %d", msgLength)
 			return
 		}
 
