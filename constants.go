@@ -71,55 +71,55 @@ const (
 */
 const (
 	// The error in question falls into a category that does not match known extended error codes. Implementations SHOULD include an EXTRA-TEXT value to augment this error code with additional information.
-	EDECodeOtherError                 uint16 = 0
+	EDECodeOtherError uint16 = 0
 	// The resolver attempted to perform DNSSEC validation, but a DNSKEY RRset contained only unsupported DNSSEC algorithms.
 	EDECodeUnsupportedDNSKEYAlgorithm uint16 = 1
 	// The resolver attempted to perform DNSSEC validation, but a DS RRset contained only unsupported Digest Types.
-	EDECodeUnsupportedDSDigestType    uint16 = 2
+	EDECodeUnsupportedDSDigestType uint16 = 2
 	// The resolver was unable to resolve the answer within its time limits and decided to answer with previously cached data instead of answering with an error. This is typically caused by problems communicating with an authoritative server, possibly as result of a denial of service (DoS) attack against another network.
-	EDECodeStaleAnswer                uint16 = 3
+	EDECodeStaleAnswer uint16 = 3
 	// For policy reasons (legal obligation or malware filtering, for instance), an answer was forged. Note that this should be used when an answer is still provided, not when failure codes are returned instead. See Blocked (15), Censored (16), and Filtered (17) for use when returning other response codes.
-	EDECodeForgedAnswer               uint16 = 4
+	EDECodeForgedAnswer uint16 = 4
 	// The resolver attempted to perform DNSSEC validation, but validation ended in the Indeterminate state [RFC4035].
-	EDECodeDNSSECIndeterminate        uint16 = 5
+	EDECodeDNSSECIndeterminate uint16 = 5
 	// The resolver attempted to perform DNSSEC validation, but validation ended in the Bogus state.
-	EDECodeDNSSECBogus                uint16 = 6
+	EDECodeDNSSECBogus uint16 = 6
 	// The resolver attempted to perform DNSSEC validation, but no signatures are presently valid and some (often all) are expired.
-	EDECodeSignatureExpired           uint16 = 7
+	EDECodeSignatureExpired uint16 = 7
 	// The resolver attempted to perform DNSSEC validation, but no signatures are presently valid and at least some are not yet valid.
-	EDECodeSignatureNotYetValid       uint16 = 8
+	EDECodeSignatureNotYetValid uint16 = 8
 	// A DS record existed at a parent, but no supported matching DNSKEY record could be found for the child.
-	EDECodeDNSKEYMissing              uint16 = 9
+	EDECodeDNSKEYMissing uint16 = 9
 	// The resolver attempted to perform DNSSEC validation, but no RRSIGs could be found for at least one RRset where RRSIGs were expected.
-	EDECodeRRSIGsMissing              uint16 = 10
+	EDECodeRRSIGsMissing uint16 = 10
 	// The resolver attempted to perform DNSSEC validation, but no Zone Key Bit was set in a DNSKEY.
-	EDECodeNoZoneKeyBitSet            uint16 = 11
+	EDECodeNoZoneKeyBitSet uint16 = 11
 	// The resolver attempted to perform DNSSEC validation, but the requested data was missing and a covering NSEC or NSEC3 was not provided.
-	EDECodeNSECMissing                uint16 = 12
+	EDECodeNSECMissing uint16 = 12
 	// The resolver is returning the SERVFAIL RCODE from its cache.
-	EDECodeCachedError                uint16 = 13
+	EDECodeCachedError uint16 = 13
 	// The server is unable to answer the query, as it was not fully functional when the query was received.
-	EDECodeNotReady                   uint16 = 14
+	EDECodeNotReady uint16 = 14
 	// The server is unable to respond to the request because the domain is on a blocklist due to an internal security policy imposed by the operator of the server resolving or forwarding the query.
-	EDECodeBlocked                    uint16 = 15
+	EDECodeBlocked uint16 = 15
 	// The server is unable to respond to the request because the domain is on a blocklist due to an external requirement imposed by an entity other than the operator of the server resolving or forwarding the query. Note that how the imposed policy is applied is irrelevant (in-band DNS filtering, court order, etc.).
-	EDECodeCensored                   uint16 = 16
+	EDECodeCensored uint16 = 16
 	// The server is unable to respond to the request because the domain is on a blocklist as requested by the client. Functionally, this amounts to "you requested that we filter domains like this one."
-	EDECodeFiltered                   uint16 = 17
+	EDECodeFiltered uint16 = 17
 	// An authoritative server or recursive resolver that receives a query from an "unauthorized" client can annotate its REFUSED message with this code. Examples of "unauthorized" clients are recursive queries from IP addresses outside the network, blocklisted IP addresses, local policy, etc.
-	EDECodeProhibited                 uint16 = 18
+	EDECodeProhibited uint16 = 18
 	// The resolver was unable to resolve an answer within its configured time limits and decided to answer with a previously cached NXDOMAIN answer instead of answering with an error. This may be caused, for example, by problems communicating with an authoritative server, possibly as result of a denial of service (DoS) attack against another network. (See also Code 3.)
-	EDECodeStaleNXDomainAnswer        uint16 = 19
+	EDECodeStaleNXDomainAnswer uint16 = 19
 	// An authoritative server that receives a query with the Recursion Desired (RD) bit clear, or when it is not configured for recursion for a domain for which it is not authoritative, SHOULD include this EDE code in the REFUSED response. A resolver that receives a query with the RD bit clear SHOULD include this EDE code in the REFUSED response.
-	EDECodeNotAuthoritative           uint16 = 20
+	EDECodeNotAuthoritative uint16 = 20
 	// The requested operation or query is not supported.
-	EDECodeNotSupported               uint16 = 21
+	EDECodeNotSupported uint16 = 21
 	// The resolver could not reach any of the authoritative name servers (or they potentially refused to reply).
-	EDECodeNoReachableAuthority       uint16 = 22
+	EDECodeNoReachableAuthority uint16 = 22
 	// An unrecoverable error occurred while communicating with another server.
-	EDECodeNetworkError               uint16 = 23
-	 // The authoritative server cannot answer with data for a zone it is otherwise configured to support. Examples of this include its most recent zone being too old or having expired.
-	EDECodeInvalidData                uint16 = 24
+	EDECodeNetworkError uint16 = 23
+	// The authoritative server cannot answer with data for a zone it is otherwise configured to support. Examples of this include its most recent zone being too old or having expired.
+	EDECodeInvalidData uint16 = 24
 )
 
 // =============================================================================

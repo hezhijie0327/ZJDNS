@@ -191,8 +191,17 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	domain := strings.TrimSuffix(config.Server.DDR.Domain, ".")
 	nxdomainCode := dns.RcodeNameError
 
-	svcbRecords := []DNSRecordConfig{
-		{Type: "SVCB", Content: "1 . alpn=h3,h2 port=" + config.Server.TLS.HTTPS.Port},
+	endpoint := config.Server.TLS.HTTPS.Endpoint
+	if endpoint == "" {
+		endpoint = DefaultQueryPath
+	}
+	if !strings.HasPrefix(endpoint, "/") {
+		endpoint = "/" + endpoint
+	}
+	dohPath := "dohpath=\"" + endpoint + "{?dns}\""
+
+	serviceRecords := []DNSRecordConfig{
+		{Type: "SVCB", Content: "1 . alpn=h3,h2 port=" + config.Server.TLS.HTTPS.Port + " " + dohPath},
 		{Type: "SVCB", Content: "2 . alpn=doq,dot port=" + config.Server.TLS.Port},
 	}
 
@@ -200,8 +209,9 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	var directRecords []DNSRecordConfig
 
 	if config.Server.DDR.IPv4 != "" {
-		svcbRecords[0].Content += " ipv4hint=" + config.Server.DDR.IPv4
-		svcbRecords[1].Content += " ipv4hint=" + config.Server.DDR.IPv4
+		for i := range serviceRecords {
+			serviceRecords[i].Content += " ipv4hint=" + config.Server.DDR.IPv4
+		}
 		additionalRecords = append(additionalRecords, DNSRecordConfig{
 			Name: domain, Type: "A", Content: config.Server.DDR.IPv4,
 		})
@@ -215,8 +225,9 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	}
 
 	if config.Server.DDR.IPv6 != "" {
-		svcbRecords[0].Content += " ipv6hint=" + config.Server.DDR.IPv6
-		svcbRecords[1].Content += " ipv6hint=" + config.Server.DDR.IPv6
+		for i := range serviceRecords {
+			serviceRecords[i].Content += " ipv6hint=" + config.Server.DDR.IPv6
+		}
 		additionalRecords = append(additionalRecords, DNSRecordConfig{
 			Name: domain, Type: "AAAA", Content: config.Server.DDR.IPv6,
 		})
@@ -242,7 +253,7 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	for _, name := range ddrNames {
 		config.Rewrite = append(config.Rewrite, RewriteRule{
 			Name:       name,
-			Records:    svcbRecords,
+			Records:    serviceRecords,
 			Additional: additionalRecords,
 		})
 	}
