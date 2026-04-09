@@ -44,7 +44,7 @@ Modular structure organized by functionality:
 - `logger.go` - Log management (LogManager, TimeCache, RNG)
 - `pool.go` - Object pools (MessagePool, BufferPool) + global variable initialization
 - `config.go` - Config loading, validation, DDR records
-- `cache.go` - Cache implementations (NullCache, RedisCache, CacheEntry methods)
+- `cache.go` - Cache implementations (MemoryCache, HybridCache, RedisCache, CacheEntry methods)
 - `cidr.go` - CIDR filtering logic
 - `edns.go` - EDNS/ECS management
 - `rewrite.go` - DNS rewrite rules
@@ -125,11 +125,12 @@ import (
 | `logger.go`    | Logging           | LogManager, TimeCache, RNG, global log functions      |
 | `pool.go`      | Memory pools      | MessagePool, BufferPool with sync.Pool                |
 | `config.go`    | Configuration     | ConfigManager, validation, DDR records                |
-| `cache.go`     | Cache             | NullCache, RedisCache, CacheEntry methods             |
+| `cache.go`     | Cache             | MemoryCache, HybridCache, RedisCache, CacheEntry methods             |
+|                |                   | Unified memory-first cache with optional Redis persistence              |
 | `cidr.go`      | CIDR filtering    | CIDRManager, IP filtering logic, REFUSED with EDE                         |
 | `edns.go`      | EDNS/ECS/Cookie/EDE | EDNSManager, ECS option handling, CookieGenerator, EDE helpers (RFC 7873, 8914) |
 | `rewrite.go`   | DNS rewriting     | RewriteManager, domain rewrite rules, EDE for blocked responses           |
-| `security.go`  | Security          | DNSSECValidator (chain of trust validation, RRSIG verification, ZoneCache), HijackPrevention, SecurityManager |
+| `security.go`  | Security          | DNSSECValidator (chain of trust validation, RRSIG verification), HijackPrevention, SecurityManager |
 | `tls.go`       | TLS protocols     | TLSManager, DoT/DoQ/DoH/DoH3 handlers, self-signed CA                     |
 | `query.go`     | Query client      | QueryClient, protocol-specific querying with EDE propagation               |
 | `resolver.go`  | Resolution        | QueryManager, RecursiveResolver, CNAMEHandler, EDE code propagation        |

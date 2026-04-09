@@ -2,6 +2,7 @@
 package main
 
 import (
+	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,24 +19,133 @@ import (
 )
 
 // =============================================================================
-// NullCache Implementation
+// MemoryCache Implementation
 // =============================================================================
 
-// NewNullCache creates a new no-op cache
-func NewNullCache() *NullCache {
-	LogInfo("CACHE: Null cache mode enabled")
-	return &NullCache{}
+// NewMemoryCache creates a new high-performance in-memory cache.
+func NewMemoryCache(size int) *MemoryCache {
+	if size <= 0 {
+		size = DefaultMemoryCacheSize
+	}
+	LogInfo("CACHE: Memory cache enabled (limit=%d)", size)
+	return &MemoryCache{
+		entries: make(map[string]*memoryCacheItem),
+		order:   list.New(),
+		limit:   size,
+	}
 }
 
-// Get returns empty cache result
-func (nc *NullCache) Get(key string) (*CacheEntry, bool, bool) { return nil, false, false }
-
-// Set is a no-op
-func (nc *NullCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
+func (mc *MemoryCache) touchEntryLocked(item *memoryCacheItem) {
+	if item == nil || item.element == nil {
+		return
+	}
+	mc.order.MoveToFront(item.element)
 }
 
-// Close is a no-op
-func (nc *NullCache) Close() error { return nil }
+func (mc *MemoryCache) evictOldestLocked() {
+	oldest := mc.order.Back()
+	if oldest == nil {
+		return
+	}
+	key, ok := oldest.Value.(string)
+	if !ok {
+		return
+	}
+	mc.order.Remove(oldest)
+	delete(mc.entries, key)
+}
+
+// Get retrieves a value from the memory cache.
+func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
+	if atomic.LoadInt32(&mc.closed) != 0 {
+		return nil, false, false
+	}
+
+	mc.mu.RLock()
+	item, found := mc.entries[key]
+	mc.mu.RUnlock()
+	if !found || item == nil || item.entry == nil {
+		return nil, false, false
+	}
+
+	mc.mu.Lock()
+	item.entry.AccessTime = time.Now().Unix()
+	mc.touchEntryLocked(item)
+	cloned := cloneCacheEntry(item.entry)
+	mc.mu.Unlock()
+
+	return cloned, true, cloned.IsExpired()
+}
+
+// Set stores a value in the memory cache.
+func (mc *MemoryCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
+	if atomic.LoadInt32(&mc.closed) != 0 {
+		return
+	}
+
+	allRRs := slices.Concat(answer, authority, additional)
+	cacheTTL := calculateTTL(allRRs)
+	now := time.Now().Unix()
+
+	entry := &CacheEntry{
+		Answer:      compactRecords(answer),
+		Authority:   compactRecords(authority),
+		Additional:  compactRecords(additional),
+		TTL:         cacheTTL,
+		OriginalTTL: cacheTTL,
+		Timestamp:   now,
+		Validated:   validated,
+		AccessTime:  now,
+	}
+
+	if ecs != nil {
+		entry.ECSFamily = ecs.Family
+		entry.ECSSourcePrefix = ecs.SourcePrefix
+		entry.ECSScopePrefix = ecs.ScopePrefix
+		entry.ECSAddress = ecs.Address.String()
+	}
+
+	mc.SetEntry(key, entry)
+}
+
+// SetEntry stores an existing CacheEntry in the memory cache.
+func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
+	if atomic.LoadInt32(&mc.closed) != 0 || entry == nil {
+		return
+	}
+
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	if atomic.LoadInt32(&mc.closed) != 0 {
+		return
+	}
+
+	if existing, ok := mc.entries[key]; ok {
+		existing.entry = cloneCacheEntry(entry)
+		mc.touchEntryLocked(existing)
+		return
+	}
+
+	element := mc.order.PushFront(key)
+	mc.entries[key] = &memoryCacheItem{entry: cloneCacheEntry(entry), element: element}
+	if mc.limit > 0 && mc.order.Len() > mc.limit {
+		mc.evictOldestLocked()
+	}
+}
+
+// Close shuts down the memory cache.
+func (mc *MemoryCache) Close() error {
+	if !atomic.CompareAndSwapInt32(&mc.closed, 0, 1) {
+		return nil
+	}
+
+	mc.mu.Lock()
+	mc.entries = nil
+	mc.order = nil
+	mc.mu.Unlock()
+	LogInfo("CACHE: Memory cache shut down")
+	return nil
+}
 
 // =============================================================================
 // RedisCache Implementation
@@ -261,54 +371,101 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 }
 
 // =============================================================================
-// ZoneCache - Caches validated DNSKEYs for zones
+// HybridCache Implementation
 // =============================================================================
 
-// NewZoneCache creates a new zone cache for validated DNSKEYs
-func NewZoneCache() *ZoneCache {
-	return &ZoneCache{
-		dnskeys:   make(map[string][]*dns.DNSKEY),
-		dsRecords: make(map[string][]*dns.DS),
-		expiry:    make(map[string]time.Time),
+// NewHybridCache creates an in-memory first-level cache with Redis persistence.
+func NewHybridCache(memory *MemoryCache, redisCache *RedisCache) *HybridCache {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	bgGroup, bgCtx := errgroup.WithContext(ctx)
+	return &HybridCache{
+		memory:  memory,
+		redis:   redisCache,
+		ctx:     ctx,
+		cancel:  cancel,
+		bgGroup: bgGroup,
+		bgCtx:   bgCtx,
 	}
 }
 
-// GetDNSKEYs returns validated DNSKEYs for a zone if available and not expired
-func (zc *ZoneCache) GetDNSKEYs(zone string) ([]*dns.DNSKEY, bool) {
-	zc.mu.RLock()
-	defer zc.mu.RUnlock()
-
-	if expiry, exists := zc.expiry[zone]; exists && time.Now().After(expiry) {
-		return nil, false // Expired
+func (hc *HybridCache) Get(key string) (*CacheEntry, bool, bool) {
+	if atomic.LoadInt32(&hc.closed) != 0 {
+		return nil, false, false
 	}
 
-	dnskeys, exists := zc.dnskeys[zone]
-	return dnskeys, exists
+	if entry, found, isExpired := hc.memory.Get(key); found {
+		return entry, found, isExpired
+	}
+
+	if hc.redis == nil {
+		return nil, false, false
+	}
+
+	entry, found, isExpired := hc.redis.Get(key)
+	if !found {
+		return nil, false, false
+	}
+
+	hc.memory.SetEntry(key, entry)
+	return entry, true, isExpired
 }
 
-// SetDNSKEYs stores validated DNSKEYs for a zone with TTL-based expiry
-func (zc *ZoneCache) SetDNSKEYs(zone string, dnskeys []*dns.DNSKEY, ttl uint32) {
-	zc.mu.Lock()
-	defer zc.mu.Unlock()
+func (hc *HybridCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
+	if atomic.LoadInt32(&hc.closed) != 0 {
+		return
+	}
 
-	zc.dnskeys[zone] = dnskeys
-	zc.expiry[zone] = time.Now().Add(time.Duration(ttl) * time.Second)
+	hc.memory.Set(key, answer, authority, additional, validated, ecs)
+	if hc.redis == nil {
+		return
+	}
+
+	hc.bgGroup.Go(func() error {
+		defer HandlePanic("Hybrid cache write-through")
+		if atomic.LoadInt32(&hc.closed) != 0 {
+			return nil
+		}
+		hc.redis.Set(key, answer, authority, additional, validated, ecs)
+		return nil
+	})
 }
 
-// GetDSRecords returns DS records for a zone if available
-func (zc *ZoneCache) GetDSRecords(zone string) ([]*dns.DS, bool) {
-	zc.mu.RLock()
-	defer zc.mu.RUnlock()
+func (hc *HybridCache) Close() error {
+	if !atomic.CompareAndSwapInt32(&hc.closed, 0, 1) {
+		return nil
+	}
 
-	dsRecords, exists := zc.dsRecords[zone]
-	return dsRecords, exists
-}
+	LogInfo("CACHE: Shutting down hybrid cache")
+	hc.cancel(errors.New("hybrid cache shutdown"))
 
-// SetDSRecords stores DS records for a zone
-func (zc *ZoneCache) SetDSRecords(zone string, dsRecords []*dns.DS, ttl uint32) {
-	zc.mu.Lock()
-	defer zc.mu.Unlock()
+	if hc.memory != nil {
+		if err := hc.memory.Close(); err != nil {
+			LogError("CACHE: Memory cache shutdown failed: %v", err)
+		}
+	}
 
-	zc.dsRecords[zone] = dsRecords
-	zc.expiry[zone] = time.Now().Add(time.Duration(ttl) * time.Second)
+	done := make(chan error, 1)
+	go func() {
+		defer HandlePanic("Hybrid cache background wait")
+		done <- hc.bgGroup.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			LogError("CACHE: Hybrid background goroutine error: %v", err)
+		}
+		LogDebug("CACHE: Hybrid background goroutines finished gracefully")
+	case <-time.After(IdleTimeout):
+		LogWarn("CACHE: Hybrid background goroutine shutdown timeout")
+	}
+
+	if hc.redis != nil {
+		if err := hc.redis.Close(); err != nil {
+			LogError("CACHE: Redis cache shutdown failed: %v", err)
+		}
+	}
+
+	LogInfo("CACHE: Hybrid cache shut down")
+	return nil
 }

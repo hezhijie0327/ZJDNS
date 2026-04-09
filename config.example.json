@@ -4,6 +4,7 @@
     "pprof": "6060",
     "log_level": "info",
     "default_ecs_subnet": "auto",
+    "memory_cache_size": 10000,
     "ddr": {
       "domain": "dns.example.com",
       "ipv4": "127.0.0.1",

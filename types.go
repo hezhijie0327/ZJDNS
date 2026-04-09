@@ -2,6 +2,7 @@
 package main
 
 import (
+	"container/list"
 	"context"
 	"crypto/tls"
 	"io"
@@ -60,13 +61,14 @@ type ServerConfig struct {
 
 // ServerSettings contains server-specific settings
 type ServerSettings struct {
-	Port       string       `json:"port"`
-	Pprof      string       `json:"pprof"`
-	LogLevel   string       `json:"log_level"`
-	DefaultECS string       `json:"default_ecs_subnet"`
-	DDR        DDRSettings  `json:"ddr"`
-	TLS        TLSSettings  `json:"tls"`
-	Features   FeatureFlags `json:"features"`
+	Port            string       `json:"port"`
+	Pprof           string       `json:"pprof"`
+	LogLevel        string       `json:"log_level"`
+	DefaultECS      string       `json:"default_ecs_subnet"`
+	MemoryCacheSize int          `json:"memory_cache_size,omitempty"`
+	DDR             DDRSettings  `json:"ddr"`
+	TLS             TLSSettings  `json:"tls"`
+	Features        FeatureFlags `json:"features"`
 }
 
 // DDRSettings contains DDR (Discovery of Designated Resolvers) configuration
@@ -175,8 +177,30 @@ type CacheManager interface {
 	Close() error
 }
 
-// NullCache is a no-op cache implementation
-type NullCache struct{}
+// MemoryCache is a high-performance in-memory cache implementation.
+type MemoryCache struct {
+	mu      sync.RWMutex
+	entries map[string]*memoryCacheItem
+	order   *list.List
+	limit   int
+	closed  int32
+}
+
+type memoryCacheItem struct {
+	entry   *CacheEntry
+	element *list.Element
+}
+
+// HybridCache combines a local memory cache with an optional Redis persistent cache.
+type HybridCache struct {
+	memory  *MemoryCache
+	redis   *RedisCache
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	bgGroup *errgroup.Group
+	bgCtx   context.Context
+	closed  int32
+}
 
 // RedisCache implements cache using Redis
 type RedisCache struct {
@@ -326,7 +350,6 @@ type QueryClient struct {
 type DNSSECValidator struct {
 	server       *DNSServer
 	trustAnchors map[uint16]*dns.DNSKEY // Root trust anchors (keyTag -> DNSKEY)
-	zoneCache    *ZoneCache             // Cache for validated DNSKEYs
 	mu           sync.RWMutex
 	initialized  bool
 }
@@ -380,6 +403,7 @@ type DNSServer struct {
 	cidrMgr           *CIDRManager
 	pprofServer       *http.Server
 	redisClient       *redis.Client
+	redisCache        *RedisCache
 	ctx               context.Context
 	cancel            context.CancelCauseFunc
 	shutdown          chan struct{}
@@ -457,16 +481,4 @@ type RootTrustAnchor struct {
 	DigestType uint8  // Digest type (1=SHA1, 2=SHA256)
 	PublicKey  string // Base64 encoded public key
 	Flags      uint16 // Key flags (256=ZSK, 257=KSK)
-}
-
-// =============================================================================
-// ZoneCache - Caches validated DNSKEYs for zones
-// =============================================================================
-
-// ZoneCache caches validated DNSKEYs for zones to avoid repeated queries
-type ZoneCache struct {
-	mu        sync.RWMutex
-	dnskeys   map[string][]*dns.DNSKEY // zone -> validated DNSKEYs
-	dsRecords map[string][]*dns.DS     // zone -> DS records from parent
-	expiry    map[string]time.Time     // cache expiry time
 }

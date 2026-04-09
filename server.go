@@ -56,17 +56,21 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	}
 
 	var redisClient *redis.Client
+	var redisCacheObj *RedisCache
 	var cache CacheManager
 	if config.Redis.Address == "" {
-		cache = NewNullCache()
+		memoryCache := NewMemoryCache(config.Server.MemoryCacheSize)
+		cache = memoryCache
 	} else {
 		redisCache, err := NewRedisCache(config)
 		if err != nil {
 			cancel(fmt.Errorf("redis cache init: %w", err))
 			return nil, fmt.Errorf("redis cache init: %w", err)
 		}
-		cache = redisCache
+		memoryCache := NewMemoryCache(config.Server.MemoryCacheSize)
+		cache = NewHybridCache(memoryCache, redisCache)
 		redisClient = redisCache.client
+		redisCacheObj = redisCache
 	}
 
 	server := &DNSServer{
@@ -75,6 +79,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		rewriteMgr:        rewriteManager,
 		cidrMgr:           cidrManager,
 		redisClient:       redisClient,
+		redisCache:        redisCacheObj,
 		cacheMgr:          cache,
 		ctx:               ctx,
 		cancel:            cancel,

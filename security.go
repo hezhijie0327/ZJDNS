@@ -28,7 +28,6 @@ func (v *DNSSECValidator) InitializeTrustAnchors() {
 	}
 
 	v.trustAnchors = make(map[uint16]*dns.DNSKEY)
-	v.zoneCache = NewZoneCache()
 
 	for _, anchor := range DefaultRootTrustAnchors {
 		// Create DNSKEY record from trust anchor
@@ -129,6 +128,69 @@ func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) (bo
 	return true, 0
 }
 
+func (v *DNSSECValidator) cachePrefix() string {
+	if v == nil || v.server == nil || v.server.config == nil {
+		return ""
+	}
+	return v.server.config.Redis.KeyPrefix
+}
+
+func (v *DNSSECValidator) buildCacheKey(question dns.Question) string {
+	return BuildCacheKey(question, nil, false, v.cachePrefix())
+}
+
+func (v *DNSSECValidator) getCachedRRs(question dns.Question) ([]dns.RR, bool) {
+	if v == nil || v.server == nil || v.server.cacheMgr == nil {
+		return nil, false
+	}
+
+	entry, found, isExpired := v.server.cacheMgr.Get(v.buildCacheKey(question))
+	if !found || isExpired {
+		return nil, false
+	}
+
+	return ExpandRecords(entry.Answer), true
+}
+
+func (v *DNSSECValidator) cacheRRs(question dns.Question, records []dns.RR, validated bool) {
+	if v == nil || v.server == nil || v.server.cacheMgr == nil {
+		return
+	}
+	v.server.cacheMgr.Set(v.buildCacheKey(question), records, nil, nil, validated, nil)
+}
+
+func (v *DNSSECValidator) getCachedDNSKEYs(zone string) ([]*dns.DNSKEY, bool) {
+	question := dns.Question{Name: zone, Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
+	rrs, ok := v.getCachedRRs(question)
+	if !ok {
+		return nil, false
+	}
+
+	var keys []*dns.DNSKEY
+	for _, rr := range rrs {
+		if dnskey, ok := rr.(*dns.DNSKEY); ok {
+			keys = append(keys, dnskey)
+		}
+	}
+	return keys, len(keys) > 0
+}
+
+func (v *DNSSECValidator) getCachedDSRecords(zone string) ([]*dns.DS, bool) {
+	question := dns.Question{Name: zone, Qtype: dns.TypeDS, Qclass: dns.ClassINET}
+	rrs, ok := v.getCachedRRs(question)
+	if !ok {
+		return nil, false
+	}
+
+	var records []*dns.DS
+	for _, rr := range rrs {
+		if ds, ok := rr.(*dns.DS); ok {
+			records = append(records, ds)
+		}
+	}
+	return records, len(records) > 0
+}
+
 // validateRRSIGSignatures validates RRSIG records with cryptographic verification
 func (v *DNSSECValidator) validateRRSIGSignatures(response *dns.Msg) (bool, uint16) {
 	now := time.Now().UTC()
@@ -223,9 +285,9 @@ func (v *DNSSECValidator) findDNSKEYForSignature(rrsig *dns.RRSIG, response *dns
 		}
 	}
 
-	// Check zone cache for validated DNSKEYs
+	// Check cache for validated DNSKEYs
 	zone := NormalizeDomain(rrsig.SignerName)
-	if cachedKeys, found := v.zoneCache.GetDNSKEYs(zone); found {
+	if cachedKeys, found := v.getCachedDNSKEYs(zone); found {
 		for _, dnskey := range cachedKeys {
 			if dnskey.KeyTag() == rrsig.KeyTag && dnskey.Algorithm == rrsig.Algorithm {
 				return dnskey, nil
@@ -324,7 +386,8 @@ func (v *DNSSECValidator) validateRootDNSKEYs(dnskeys []*dns.DNSKEY, rrsigs []*d
 		LogInfo("DNSSEC: Root KSK %d validated against trust anchor", keyTag)
 
 		// Cache the validated DNSKEY
-		v.zoneCache.SetDNSKEYs(".", dnskeys, dnskey.Hdr.Ttl)
+		question := dns.Question{Name: ".", Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
+		v.cacheRRs(question, dnsKEYsToRRs(dnskeys), true)
 		return true, 0
 	}
 
@@ -365,7 +428,7 @@ func (v *DNSSECValidator) validateNonRootDNSKEYs(dnskeys []*dns.DNSKEY, rrsigs [
 	}
 
 	// Validate DS records if available
-	dsRecords, hasDS := v.zoneCache.GetDSRecords(zone)
+	dsRecords, hasDS := v.getCachedDSRecords(zone)
 	if hasDS && len(dsRecords) > 0 {
 		if valid, edeCode := v.verifyDSRecords(dnskeys, dsRecords, zone); !valid {
 			return false, edeCode
@@ -374,8 +437,8 @@ func (v *DNSSECValidator) validateNonRootDNSKEYs(dnskeys []*dns.DNSKEY, rrsigs [
 
 	// Cache validated DNSKEYs
 	if len(dnskeys) > 0 {
-		v.zoneCache.SetDNSKEYs(zone, dnskeys, dnskeys[0].Hdr.Ttl)
-		LogDebug("DNSSEC: Cached %d validated DNSKEYs for zone '%s'", len(dnskeys), zone)
+		question := dns.Question{Name: zone, Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
+		v.cacheRRs(question, dnsKEYsToRRs(dnskeys), true)
 	}
 
 	return true, 0
@@ -560,12 +623,10 @@ func (v *DNSSECValidator) ValidateChain(response *dns.Msg, zone string) (bool, u
 
 	// If we have DS records, cache them for child zone validation
 	if len(dsRecords) > 0 {
-		// Extract zone name from DS records
-		if len(dsRecords) > 0 {
-			zone := NormalizeDomain(dsRecords[0].Hdr.Name)
-			v.zoneCache.SetDSRecords(zone, dsRecords, dsRecords[0].Hdr.Ttl)
-			LogDebug("DNSSEC: Cached %d DS records for zone '%s'", len(dsRecords), zone)
-		}
+		zone := NormalizeDomain(dsRecords[0].Hdr.Name)
+		question := dns.Question{Name: zone, Qtype: dns.TypeDS, Qclass: dns.ClassINET}
+		v.cacheRRs(question, dsRecordsToRRs(dsRecords), false)
+		LogDebug("DNSSEC: Cached %d DS records for zone '%s'", len(dsRecords), zone)
 	}
 
 	return true, 0
@@ -589,7 +650,7 @@ func (v *DNSSECValidator) QueryDNSKEY(ctx context.Context, zone string) ([]*dns.
 		// For non-root zones, we need to query the authoritative servers
 		// This requires a full recursive resolution which is complex
 		// For now, return cached keys if available
-		if keys, found := v.zoneCache.GetDNSKEYs(zone); found {
+		if keys, found := v.getCachedDNSKEYs(zone); found {
 			return keys, nil
 		}
 		return nil, fmt.Errorf("cannot query DNSKEY for non-root zone without full recursion")
@@ -632,6 +693,11 @@ func (v *DNSSECValidator) QueryDS(ctx context.Context, zone string) ([]*dns.DS, 
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(zone), dns.TypeDS)
 	msg.SetEdns0(UDPBufferSize, true)
+
+	// Try cached DS records first
+	if records, found := v.getCachedDSRecords(zone); found {
+		return records, nil
+	}
 
 	// Query root servers or parent zone
 	servers := DefaultRootServers
@@ -799,7 +865,7 @@ func (hp *HijackPrevention) SetHijackPreventionEnabled(enabled bool) {
 // It initializes DNSSEC validation, hijack prevention, and optional TLS management.
 func NewSecurityManager(config *ServerConfig, server *DNSServer) (*SecurityManager, error) {
 	sm := &SecurityManager{
-		dnssec: &DNSSECValidator{server: server, zoneCache: NewZoneCache()},
+		dnssec: &DNSSECValidator{server: server},
 		hijack: &HijackPrevention{},
 	}
 

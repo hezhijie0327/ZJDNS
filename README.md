@@ -48,7 +48,7 @@
   - **DNSKEY 链式验证**：从根区域到权威服务器的完整信任链验证
   - **DS 记录验证**：RFC 4509 标准 DS 记录验证，支持 SHA-1/SHA-256 摘要
   - **NSEC/NSEC3 验证**：否定回答的真实性验证（NXDOMAIN/NODATA）
-  - **ZoneCache 缓存**：已验证的 DNSKEY 缓存，避免重复查询
+  - **DNSSEC 缓存**：DNSKEY/DS 数据与普通 DNS 响应使用统一缓存，避免重复查询
   - **AD 标志传播**：支持 Authenticated Data 标志传递
 - **ECS 支持**：EDNS 客户端子网，提供地理位置感知解析，支持 `auto`、`auto_v4`、`auto_v6` 自动检测或手动 CIDR 配置
 - **DNS Cookie**：支持 RFC 7873 和 RFC 9018 标准，提供 HMAC-SHA256 服务端 Cookie 生成和验证，防范 DNS 放大攻击
@@ -88,14 +88,16 @@
 
 ### 💾 缓存系统
 
+- **统一缓存架构**：`CacheManager` 负责全部 DNS 响应和 DNSSEC 元数据缓存，不再单独维护 ZoneCache
 - **双模式运行**：
   - **无缓存模式**：适用于测试环境，零配置启动，纯递归解析
-  - **Redis 缓存模式**：推荐生产环境使用，支持分布式部署，数据持久化
-- **智能 TTL 管理**：灵活的 TTL 策略，支持最小/最大 TTL 限制
-- **过期缓存服务**：当上游服务器不可用时提供过期缓存服务，大大提高系统可用性
-- **预取机制**：后台自动刷新即将过期的缓存，减少用户等待时间
+  - **Redis 缓存模式**：推荐生产环境使用，支持分布式部署、数据持久化
+- **内存优先读取**：统一内存缓存作为一级层，未命中时回退 Redis；写操作先写内存，再异步写 Redis
+- **DNSSEC 缓存**：DNSKEY / DS 记录与普通查询使用相同缓存键格式，避免代码重复
+- **过期缓存服务**：当上游服务器不可用时返回过期缓存结果，提高可用性
+- **预取机制**：后台刷新即将过期的缓存记录，减少用户等待时间
 - **ECS 感知缓存**：基于客户端地理位置（EDNS Client Subnet）的缓存分区，提供精确的本地化解析
-- **访问限流**：限制缓存访问时间更新操作，减少 Redis 压力
+- **访问限流**：减少缓存访问时间更新操作，降低 Redis 压力
 
 ---
 
@@ -109,7 +111,7 @@
 | `logger.go`    | 日志管理（LogManager、TimeCache、RNG 全局变量）                      |
 | `pool.go`      | 对象池（MessagePool、BufferPool）+ 全局变量初始化                    |
 | `config.go`    | 配置管理（ConfigManager、配置验证、DDR记录生成）                     |
-| `cache.go`     | 缓存实现（NullCache、RedisCache、CacheEntry 方法）                   |
+| `cache.go`     | 缓存实现（MemoryCache、HybridCache、RedisCache、CacheEntry 方法）    |
 | `cidr.go`      | CIDR 过滤管理                                                        |
 | `edns.go`      | EDNS/ECS/Cookie/EDE 管理                                             |
 | `rewrite.go`   | DNS 重写规则                                                         |
@@ -164,7 +166,7 @@ graph TB
     subgraph "缓存系统"
         W[CacheManager Interface<br>缓存管理接口]
         X[RedisCache<br>Redis缓存实现]
-        Y[NullCache<br>无缓存实现]
+        Y[MemoryCache<br>内存缓存实现]
     end
 
     subgraph "背景任务管理"
@@ -263,7 +265,7 @@ sequenceDiagram
     participant P as Protocol Handler<br>协议处理器
     participant S as DNSServer<br>服务器核心
     participant QM as QueryManager<br>查询管理器
-    participant CM as CacheManager<br>缓存管理器
+    participant CM as CacheManager<br>统一缓存管理器（内存优先 + Redis 持久化）
     participant RM as RewriteManager<br>重写管理器
     participant EM as EDNSManager<br>EDNS管理器
     participant CIDR as CIDRManager<br>CIDR过滤
@@ -560,10 +562,12 @@ go build -o zjdns
 
 ### 💾 Cache System
 
+- **Unified Cache Architecture**: `CacheManager` manages both DNS responses and DNSSEC metadata, removing the separate zone cache concept
 - **Dual Mode Operation**:
   - **No Cache Mode**: Suitable for testing environments, zero-configuration startup, pure recursive resolution
-  - **Redis Cache Mode**: Recommended for production environments, supports distributed deployment, data persistence
-- **Intelligent TTL Management**: Flexible TTL strategies, supports minimum/maximum TTL limits
+  - **Redis Cache Mode**: Recommended for production environments, supports distributed deployment and data persistence
+- **Memory-first reads**: The cache reads from local memory first, then falls back to Redis if enabled
+- **Write-through strategy**: Writes immediately update memory and asynchronously persist to Redis
 - **Stale Cache Serving**: Provides stale cache service when upstream servers are unavailable, greatly improving system availability
 - **Prefetch Mechanism**: Background automatic refresh of soon-to-expire cache, reducing user waiting time
 - **ECS-aware Caching**: Cache partitioning based on client geographic location (EDNS Client Subnet), providing precise localized resolution
@@ -583,12 +587,12 @@ The project has been refactored from a single file to a modular structure, organ
 | `logger.go`    | Log management (LogManager, TimeCache, RNG global variables)                                                |
 | `pool.go`      | Object pools (MessagePool, BufferPool) + global variable initialization                                     |
 | `config.go`    | Configuration management (ConfigManager, validation, DDR records)                                           |
-| `cache.go`     | Cache implementations (NullCache, RedisCache, CacheEntry methods)                                           |
+| `cache.go`     | Cache implementations (MemoryCache, HybridCache, RedisCache, CacheEntry methods)                            |
 | `types.go`     | All type definitions (struct, interface)                                                                    |
 | `utils.go`     | Utility functions (string handling, DNS record operations, cache key generation, etc.)                      |
 | `logger.go`    | Log management (LogManager, TimeCache, RNG global variables)                                                |
 | `pool.go`      | Object pools (MessagePool, BufferPool)                                                                      |
-| `config.go`    | Configuration management and cache implementation (ConfigManager, NullCache, RedisCache)                    |
+| `config.go`    | Configuration management and cache implementation (ConfigManager, RedisCache)                               |
 | `cidr.go`      | CIDR filtering management                                                                                   |
 | `edns.go`      | EDNS/ECS/Cookie/EDE management                                                                              |
 | `rewrite.go`   | DNS rewrite rules                                                                                           |
@@ -643,7 +647,7 @@ graph TB
     subgraph "Cache System"
         W[CacheManager Interface<br>Cache Manager Interface]
         X[RedisCache<br>Redis Cache Implementation]
-        Y[NullCache<br>No Cache Implementation]
+        Y[MemoryCache<br>Memory Cache Implementation]
     end
 
     subgraph "Background Task Management"

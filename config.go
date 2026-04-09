@@ -140,6 +140,10 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		}
 	}
 
+	if config.Server.MemoryCacheSize < 0 {
+		return fmt.Errorf("server memory cache size must be non-negative")
+	}
+
 	if config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {
 		LogWarn("CONFIG: TLS: Self-signed enabled, ignoring cert/key files")
 	}
@@ -168,6 +172,7 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config.Server.Port = DefaultDNSPort
 	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
+	config.Server.MemoryCacheSize = DefaultMemoryCacheSize
 	config.Server.DDR.Domain = "dns.example.com"
 	config.Server.DDR.IPv4 = "127.0.0.1"
 	config.Server.DDR.IPv6 = "::1"
