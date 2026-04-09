@@ -259,3 +259,56 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 	}
 	return nil
 }
+
+// =============================================================================
+// ZoneCache - Caches validated DNSKEYs for zones
+// =============================================================================
+
+// NewZoneCache creates a new zone cache for validated DNSKEYs
+func NewZoneCache() *ZoneCache {
+	return &ZoneCache{
+		dnskeys:   make(map[string][]*dns.DNSKEY),
+		dsRecords: make(map[string][]*dns.DS),
+		expiry:    make(map[string]time.Time),
+	}
+}
+
+// GetDNSKEYs returns validated DNSKEYs for a zone if available and not expired
+func (zc *ZoneCache) GetDNSKEYs(zone string) ([]*dns.DNSKEY, bool) {
+	zc.mu.RLock()
+	defer zc.mu.RUnlock()
+
+	if expiry, exists := zc.expiry[zone]; exists && time.Now().After(expiry) {
+		return nil, false // Expired
+	}
+
+	dnskeys, exists := zc.dnskeys[zone]
+	return dnskeys, exists
+}
+
+// SetDNSKEYs stores validated DNSKEYs for a zone with TTL-based expiry
+func (zc *ZoneCache) SetDNSKEYs(zone string, dnskeys []*dns.DNSKEY, ttl uint32) {
+	zc.mu.Lock()
+	defer zc.mu.Unlock()
+
+	zc.dnskeys[zone] = dnskeys
+	zc.expiry[zone] = time.Now().Add(time.Duration(ttl) * time.Second)
+}
+
+// GetDSRecords returns DS records for a zone if available
+func (zc *ZoneCache) GetDSRecords(zone string) ([]*dns.DS, bool) {
+	zc.mu.RLock()
+	defer zc.mu.RUnlock()
+
+	dsRecords, exists := zc.dsRecords[zone]
+	return dsRecords, exists
+}
+
+// SetDSRecords stores DS records for a zone
+func (zc *ZoneCache) SetDSRecords(zone string, dsRecords []*dns.DS, ttl uint32) {
+	zc.mu.Lock()
+	defer zc.mu.Unlock()
+
+	zc.dsRecords[zone] = dsRecords
+	zc.expiry[zone] = time.Now().Add(time.Duration(ttl) * time.Second)
+}

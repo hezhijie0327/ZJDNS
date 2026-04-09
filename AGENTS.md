@@ -113,28 +113,28 @@ import (
 ### Key Constants
 
 - Timeouts: `DefaultTimeout = 2s`, `OperationTimeout = 3s`
-- Limits: `MaxRecursionDep = 16`, `MaxCNAMEChain = 16`
+- Limits: `MaxRecursionDep = 16`, `MaxCNAMEChain = 16`, `DefaultCookieClientLen = 8`
 
 ## Module Organization
 
 | File           | Purpose           | Key Types/Functions                                   |
 | -------------- | ----------------- | ----------------------------------------------------- |
-| `constants.go` | Global constants  | Port numbers, buffer sizes, timeouts, protocol limits |
-| `types.go`     | Type definitions  | All structs and interfaces (Config, Cache, Security)  |
-| `utils.go`     | Utility functions | String ops, DNS record helpers, cache key generation  |
+| `constants.go` | Global constants  | Port numbers, buffer sizes, timeouts, protocol limits, EDE codes, DNS Cookie constants, Root Trust Anchors (IANA KSK 20326/38696) |
+| `types.go`     | Type definitions  | All structs and interfaces (Config, Cache, Security, CookieOption, EDEOption, RootTrustAnchor, ZoneCache)  |
+| `utils.go`     | Utility functions | String ops, DNS record helpers, cache key generation, client IP extraction  |
 | `logger.go`    | Logging           | LogManager, TimeCache, RNG, global log functions      |
 | `pool.go`      | Memory pools      | MessagePool, BufferPool with sync.Pool                |
 | `config.go`    | Configuration     | ConfigManager, validation, DDR records                |
 | `cache.go`     | Cache             | NullCache, RedisCache, CacheEntry methods             |
-| `cidr.go`      | CIDR filtering    | CIDRManager, IP filtering logic                       |
-| `edns.go`      | EDNS/ECS          | EDNSManager, ECS option handling                      |
-| `rewrite.go`   | DNS rewriting     | RewriteManager, domain rewrite rules                  |
-| `security.go`  | Security          | DNSSECValidator, HijackPrevention, SecurityManager    |
-| `tls.go`       | TLS protocols     | TLSManager, DoT/DoQ/DoH/DoH3 handlers, self-signed CA |
-| `query.go`     | Query client      | QueryClient, protocol-specific querying               |
-| `resolver.go`  | Resolution        | QueryManager, RecursiveResolver, CNAMEHandler         |
-| `server.go`    | Server core       | DNSServer, UDP/TCP/DoT/DoQ/DoH handlers               |
-| `main.go`      | Entry point       | Main function only                                    |
+| `cidr.go`      | CIDR filtering    | CIDRManager, IP filtering logic, REFUSED with EDE                         |
+| `edns.go`      | EDNS/ECS/Cookie/EDE | EDNSManager, ECS option handling, CookieGenerator, EDE helpers (RFC 7873, 8914) |
+| `rewrite.go`   | DNS rewriting     | RewriteManager, domain rewrite rules, EDE for blocked responses           |
+| `security.go`  | Security          | DNSSECValidator (chain of trust validation, RRSIG verification, ZoneCache), HijackPrevention, SecurityManager |
+| `tls.go`       | TLS protocols     | TLSManager, DoT/DoQ/DoH/DoH3 handlers, self-signed CA                     |
+| `query.go`     | Query client      | QueryClient, protocol-specific querying with EDE propagation               |
+| `resolver.go`  | Resolution        | QueryManager, RecursiveResolver, CNAMEHandler, EDE code propagation        |
+| `server.go`    | Server core       | DNSServer, UDP/TCP/DoT/DoQ/DoH handlers, Cookie & EDE response generation  |
+| `main.go`      | Entry point       | Main function only                                                        |
 
 ## Development Workflow
 

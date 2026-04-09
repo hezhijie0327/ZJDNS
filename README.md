@@ -42,8 +42,17 @@
   - **步骤 2**：**自动切换到 TCP 协议重试**以绕过常见的 UDP 污染
   - **步骤 3**：如果 TCP 查询结果**仍然**被劫持，完全拒绝该响应，从源头防止污染
 
-- **DNSSEC 验证**：完整的 DNSSEC 支持和验证，可设置服务器强制验证，支持 AD 标志传播
+- **DNSSEC 验证**：完整的 DNSSEC 信任链验证，包括：
+  - **信任锚自动加载**：启动时自动从内置 IANA root-anchors.xml 加载根信任锚（KSK 20326 和 KSK 38696）
+  - **RRSIG 签名验证**：完整的 RRSIG 加密签名验证，支持 RSA/ECDSA 算法
+  - **DNSKEY 链式验证**：从根区域到权威服务器的完整信任链验证
+  - **DS 记录验证**：RFC 4509 标准 DS 记录验证，支持 SHA-1/SHA-256 摘要
+  - **NSEC/NSEC3 验证**：否定回答的真实性验证（NXDOMAIN/NODATA）
+  - **ZoneCache 缓存**：已验证的 DNSKEY 缓存，避免重复查询
+  - **AD 标志传播**：支持 Authenticated Data 标志传递
 - **ECS 支持**：EDNS 客户端子网，提供地理位置感知解析，支持 `auto`、`auto_v4`、`auto_v6` 自动检测或手动 CIDR 配置
+- **DNS Cookie**：支持 RFC 7873 和 RFC 9018 标准，提供 HMAC-SHA256 服务端 Cookie 生成和验证，防范 DNS 放大攻击
+- **扩展 DNS 错误 (EDE)**：支持 RFC 8914，在响应中附带详细的错误信息（如 Stale Answer、Blocked、DNSSEC Bogus 等），提升调试能力
 - **递归深度保护**：防止恶意递归查询攻击，可配置最大递归深度
 
 ### 🔐 安全传输协议
@@ -102,7 +111,7 @@
 | `config.go`    | 配置管理（ConfigManager、配置验证、DDR记录生成）                     |
 | `cache.go`     | 缓存实现（NullCache、RedisCache、CacheEntry 方法）                   |
 | `cidr.go`      | CIDR 过滤管理                                                        |
-| `edns.go`      | EDNS/ECS 管理                                                        |
+| `edns.go`      | EDNS/ECS/Cookie/EDE 管理                                             |
 | `rewrite.go`   | DNS 重写规则                                                         |
 | `security.go`  | 安全管理（DNSSECValidator、HijackPrevention、SecurityManager）       |
 | `tls.go`       | TLS/DoT/DoQ/DoH/DoH3 管理                                            |
@@ -505,8 +514,17 @@ go build -o zjdns
   - **Step 2**: **Automatically switches to TCP protocol for retry** to bypass common UDP pollution
   - **Step 3**: If TCP query results are **still** hijacked, completely reject the response, preventing pollution from the source
 
-- **DNSSEC Validation**: Complete DNSSEC support and validation, can set server mandatory validation, supports AD flag propagation
+- **DNSSEC Validation**: Complete DNSSEC chain of trust validation, including:
+  - **Trust Anchor Auto-loading**: Automatically loads root trust anchors (KSK 20326 and KSK 38696) from built-in IANA root-anchors.xml at startup
+  - **RRSIG Signature Verification**: Complete RRSIG cryptographic signature verification, supporting RSA/ECDSA algorithms
+  - **DNSKEY Chain Validation**: Full chain validation from root zone to authoritative servers
+  - **DS Record Validation**: RFC 4509 compliant DS record validation, supporting SHA-1/SHA-256 digests
+  - **NSEC/NSEC3 Validation**: Authenticated denial of existence (NXDOMAIN/NODATA)
+  - **ZoneCache**: Caches validated DNSKEY to avoid repeated queries
+  - **AD Flag Propagation**: Supports Authenticated Data flag propagation
 - **ECS Support**: EDNS Client Subnet, providing geolocation-aware resolution, supports `auto`, `auto_v4`, `auto_v6` auto-detection or manual CIDR configuration
+- **DNS Cookie**: Supports RFC 7873 and RFC 9018 standards, provides HMAC-SHA256 server cookie generation and validation, mitigates DNS amplification attacks
+- **Extended DNS Error (EDE)**: Supports RFC 8914, includes detailed error information in responses (such as Stale Answer, Blocked, DNSSEC Bogus, etc.), enhances debugging capability
 - **Recursion Depth Protection**: Prevents malicious recursive query attacks, configurable maximum recursion depth
 
 ### 🔐 Secure Transport Protocols
@@ -572,7 +590,7 @@ The project has been refactored from a single file to a modular structure, organ
 | `pool.go`      | Object pools (MessagePool, BufferPool)                                                                      |
 | `config.go`    | Configuration management and cache implementation (ConfigManager, NullCache, RedisCache)                    |
 | `cidr.go`      | CIDR filtering management                                                                                   |
-| `edns.go`      | EDNS/ECS management                                                                                         |
+| `edns.go`      | EDNS/ECS/Cookie/EDE management                                                                              |
 | `rewrite.go`   | DNS rewrite rules                                                                                           |
 | `security.go`  | Security management (DNSSECValidator, HijackPrevention, SecurityManager)                                    |
 | `tls.go`       | TLS/DoT/DoQ/DoH/DoH3 management                                                                             |
