@@ -188,7 +188,13 @@ type RedisCache struct {
 	bgCtx   context.Context
 }
 
-// =============================================================================
+// CookieOption represents DNS Cookie option (RFC 7873)
+type CookieOption struct {
+	ClientCookie []byte // 8 bytes fixed
+	ServerCookie []byte // 8-32 bytes (optional in requests)
+}
+
+// EDNSManager manages EDNS options
 // EDNS Types
 // =============================================================================
 
@@ -202,8 +208,9 @@ type ECSOption struct {
 
 // EDNSManager manages EDNS options
 type EDNSManager struct {
-	defaultECS *ECSOption
-	detector   *IPDetector
+	defaultECS      *ECSOption
+	detector        *IPDetector
+	cookieGenerator *CookieGenerator // Server cookie generator
 }
 
 // IPDetector detects public IP addresses

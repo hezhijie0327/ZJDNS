@@ -480,10 +480,12 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, _ net.IP, isSecureConnection b
 
 	clientRequestedDNSSEC := false
 	var ecsOpt *ECSOption
+	var cookieOpt *CookieOption
 
 	if opt := req.IsEdns0(); opt != nil {
 		clientRequestedDNSSEC = opt.Do()
 		ecsOpt = s.ednsMgr.ParseFromDNS(req)
+		cookieOpt = s.ednsMgr.ParseCookie(req)
 	}
 
 	if ecsOpt == nil {
@@ -493,15 +495,15 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, _ net.IP, isSecureConnection b
 	cacheKey := BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC, s.config.Redis.KeyPrefix)
 
 	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
-		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cacheKey, isSecureConnection)
+		return s.processCacheHit(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, isSecureConnection)
 	}
 
-	return s.processCacheMiss(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection)
+	return s.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, isSecureConnection)
 }
 
 // processCacheHit handles DNS queries that have a cache hit, returning cached
 // responses and optionally refreshing stale entries in the background.
-func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cacheKey string, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cookieOpt *CookieOption, cacheKey string, isSecureConnection bool) *dns.Msg {
 	responseTTL := entry.GetRemainingTTL()
 
 	msg := s.buildResponse(req)
@@ -520,8 +522,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 		msg.AuthenticatedData = true
 	}
 
-	s.addEDNS(msg, req, isSecureConnection)
-
+	s.addEDNSWithCookie(msg, req, isSecureConnection, cookieOpt)
 	if isExpired && entry.ShouldRefresh() {
 		s.cacheRefreshGroup.Go(func() error {
 			defer HandlePanic("cache refresh")
@@ -538,19 +539,19 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 
 // processCacheMiss handles DNS queries that do not have a cache hit,
 // performing upstream or recursive resolution.
-func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, cookieOpt *CookieOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool) *dns.Msg {
 	answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecsOpt)
 
 	if err != nil {
-		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, isSecureConnection)
+		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, isSecureConnection)
 	}
 
-	return s.processQuerySuccess(req, question, ecsOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection)
+	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection)
 }
 
 // processQueryError handles query failures, attempting to serve stale cache
 // data if available, or returning a server failure response.
-func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *ECSOption, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *ECSOption, cookieOpt *CookieOption, isSecureConnection bool) *dns.Msg {
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found {
 		msg := s.buildResponse(req)
 		if msg == nil {
@@ -569,7 +570,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 			msg.AuthenticatedData = true
 		}
 
-		s.addEDNS(msg, req, isSecureConnection)
+		s.addEDNSWithCookie(msg, req, isSecureConnection, cookieOpt)
 		s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
 		return msg
 	}
@@ -583,9 +584,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 	return msg
 }
 
-// processQuerySuccess handles successful query responses, caching the results
-// and building the response message.
-func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, cookieOpt *CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
 		msg := messagePool.Get()
@@ -612,7 +611,7 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
 	msg.Extra = ProcessRecords(additional, 0, clientRequestedDNSSEC)
 
-	s.addEDNS(msg, req, isSecureConnection)
+	s.addEDNSWithCookie(msg, req, isSecureConnection, cookieOpt)
 	s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
 	return msg
 }
@@ -658,14 +657,75 @@ func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool)
 	if ecsOpt == nil {
 		ecsOpt = s.ednsMgr.GetDefaultECS()
 	}
-
 	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || true
 
 	if shouldAddEDNS {
-		s.ednsMgr.AddToMessage(msg, ecsOpt, clientRequestedDNSSEC, isSecureConnection)
+		s.ednsMgr.AddToMessage(msg, ecsOpt, clientRequestedDNSSEC, isSecureConnection, "")
+	}
+}
+func (s *DNSServer) addEDNSWithCookie(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, cookieOpt *CookieOption) {
+	if msg == nil || req == nil {
+		return
+	}
+
+	clientRequestedDNSSEC := false
+	var ecsOpt *ECSOption
+
+	if opt := req.IsEdns0(); opt != nil {
+		clientRequestedDNSSEC = opt.Do()
+		ecsOpt = s.ednsMgr.ParseFromDNS(req)
+	}
+
+	if ecsOpt == nil {
+		ecsOpt = s.ednsMgr.GetDefaultECS()
+	}
+
+	// Generate cookie response
+	// If client sent a cookie, echo it back with server cookie
+	// If no client cookie, generate both client and server cookies
+	cookieStr := s.generateCookieResponse(cookieOpt)
+
+	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || true
+
+	if shouldAddEDNS {
+		s.ednsMgr.AddToMessage(msg, ecsOpt, clientRequestedDNSSEC, isSecureConnection, cookieStr)
 	}
 }
 
+// generateCookieResponse generates cookie string for response
+// Returns client_cookie || server_cookie format
+func (s *DNSServer) generateCookieResponse(cookieOpt *CookieOption) string {
+	if s.ednsMgr == nil || s.ednsMgr.cookieGenerator == nil {
+		return ""
+	}
+
+	// Use placeholder IP for cookie generation
+	clientIP := net.ParseIP("0.0.0.0")
+
+	if cookieOpt != nil && len(cookieOpt.ClientCookie) == DefaultCookieClientLen {
+		// Client sent a cookie - validate server cookie if present, then generate new one
+		var serverCookie []byte
+		
+		if len(cookieOpt.ServerCookie) >= 16 {
+			if s.ednsMgr.cookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
+				serverCookie = s.ednsMgr.cookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+			}
+		}
+		
+		if serverCookie == nil {
+			serverCookie = s.ednsMgr.cookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+		}
+		
+		return BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
+	}
+
+	// No client cookie - generate a default one (some DNS servers do this)
+	// Generate a client cookie based on a hash
+	clientCookie := s.ednsMgr.cookieGenerator.GenerateClientCookie(clientIP)
+	serverCookie := s.ednsMgr.cookieGenerator.GenerateServerCookie(clientIP, clientCookie)
+	
+	return BuildCookieResponse(clientCookie, serverCookie)
+}
 // buildResponse creates a new DNS response message from a request.
 // It sets the appropriate flags and initializes the message pool.
 func (s *DNSServer) buildResponse(req *dns.Msg) *dns.Msg {
@@ -706,7 +766,7 @@ func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, rec
 	msg.RecursionDesired = recursionDesired
 
 	if s.ednsMgr != nil {
-		s.ednsMgr.AddToMessage(msg, ecs, true, isSecureConnection)
+		s.ednsMgr.AddToMessage(msg, ecs, true, isSecureConnection, "")
 	}
 
 	return msg

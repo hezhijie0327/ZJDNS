@@ -2,10 +2,15 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -20,6 +25,7 @@ func NewEDNSManager(defaultSubnet string) (*EDNSManager, error) {
 		detector: &IPDetector{
 			httpClient: &http.Client{Timeout: OperationTimeout},
 		},
+		cookieGenerator: NewCookieGenerator(),
 	}
 
 	if defaultSubnet != "" {
@@ -68,8 +74,41 @@ func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 	return nil
 }
 
-// AddToMessage adds EDNS options including ECS and padding to a DNS message
-func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDNSSEC bool, isSecureConnection bool) {
+// ParseCookie extracts DNS Cookie option from a DNS message
+func (em *EDNSManager) ParseCookie(msg *dns.Msg) *CookieOption {
+	if em == nil || msg == nil || msg.Extra == nil {
+		return nil
+	}
+
+	opt := msg.IsEdns0()
+	if opt == nil {
+		return nil
+	}
+
+	for _, option := range opt.Option {
+		if cookie, ok := option.(*dns.EDNS0_COOKIE); ok {
+			cookieHex := cookie.Cookie
+			cookieBytes, _ := hex.DecodeString(cookieHex)
+			
+			// Client cookie is always 8 bytes (16 hex chars)
+			if len(cookieBytes) >= DefaultCookieClientLen {
+				clientCookie := cookieBytes[:DefaultCookieClientLen]
+				var serverCookie []byte
+				if len(cookieBytes) > DefaultCookieClientLen {
+					serverCookie = cookieBytes[DefaultCookieClientLen:]
+				}
+				return &CookieOption{
+					ClientCookie: clientCookie,
+					ServerCookie: serverCookie,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// AddToMessage adds EDNS options including ECS, cookies, and padding to a DNS message
+func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDNSSEC bool, isSecureConnection bool, cookieStr string) {
 	if em == nil || msg == nil {
 		return
 	}
@@ -118,6 +157,14 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 			SourceNetmask: ecs.SourcePrefix,
 			SourceScope:   DefaultECSScope,
 			Address:       ecs.Address,
+		})
+}
+
+	// Add DNS Cookie option if provided
+	if cookieStr != "" {
+		options = append(options, &dns.EDNS0_COOKIE{
+			Code:   dns.EDNS0COOKIE,
+			Cookie: cookieStr,
 		})
 	}
 
@@ -202,4 +249,112 @@ func (em *EDNSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption
 	}
 
 	return ecs, nil
+}
+
+// =============================================================================
+// CookieGenerator Implementation (RFC 7873 + RFC 9018)
+// =============================================================================
+
+// CookieGenerator handles DNS cookie generation and validation
+type CookieGenerator struct {
+	secret []byte // Server secret for HMAC
+}
+
+// NewCookieGenerator creates a new cookie generator with a random secret
+func NewCookieGenerator() *CookieGenerator {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		// Fallback: use timestamp-based secret if crypto/rand fails
+		secret = []byte(fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix()))
+	}
+	return &CookieGenerator{secret: secret}
+}
+
+// GenerateServerCookie generates a server cookie per RFC 9018
+// Algorithm: HMAC-SHA256(secret, clientIP || clientCookie || timestamp || nonce)
+// Server cookie format: nonce (8 bytes) || HMAC truncated to 8 bytes = 16 bytes total
+func (cg *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []byte) []byte {
+	if cg == nil || len(clientCookie) != DefaultCookieClientLen {
+		return nil
+	}
+
+	// Generate random nonce (8 bytes)
+	nonce := make([]byte, 8)
+	if _, err := rand.Read(nonce); err != nil {
+		// Fallback to timestamp-based nonce
+		timestamp := uint64(time.Now().UnixNano())
+		for i := 0; i < 8; i++ {
+			nonce[i] = byte(timestamp >> (i * 8))
+		}
+	}
+
+	// Build HMAC input: clientIP || clientCookie || nonce
+	data := make([]byte, 0, len(clientIP)+len(clientCookie)+len(nonce))
+	data = append(data, clientIP...)
+	data = append(data, clientCookie...)
+	data = append(data, nonce...)
+
+	// Compute HMAC-SHA256
+	h := hmac.New(sha256.New, cg.secret)
+	h.Write(data)
+	mac := h.Sum(nil)
+
+	// Server cookie = nonce (8 bytes) || truncated MAC (8 bytes) = 16 bytes
+	serverCookie := make([]byte, 0, DefaultCookieServerLen)
+	serverCookie = append(serverCookie, nonce...)
+	serverCookie = append(serverCookie, mac[:8]...)
+
+	return serverCookie
+}
+
+// ValidateServerCookie verifies a server cookie
+func (cg *CookieGenerator) ValidateServerCookie(clientIP net.IP, clientCookie, serverCookie []byte) bool {
+	if cg == nil || len(clientCookie) != DefaultCookieClientLen || len(serverCookie) < 16 {
+		return false
+	}
+
+	// Extract nonce (first 8 bytes)
+	nonce := serverCookie[:8]
+	receivedMAC := serverCookie[8:16]
+
+	// Rebuild HMAC input
+	data := make([]byte, 0, len(clientIP)+len(clientCookie)+len(nonce))
+	data = append(data, clientIP...)
+	data = append(data, clientCookie...)
+	data = append(data, nonce...)
+
+	// Compute expected HMAC
+	h := hmac.New(sha256.New, cg.secret)
+	h.Write(data)
+	expectedMAC := h.Sum(nil)[:8]
+
+	return hmac.Equal(receivedMAC, expectedMAC)
+}
+
+// GenerateClientCookie generates an 8-byte client cookie
+// Per RFC 7873 Section 5.1: Client should use a stable source of entropy
+func (cg *CookieGenerator) GenerateClientCookie(clientIP net.IP) []byte {
+	clientCookie := make([]byte, DefaultCookieClientLen)
+	
+	// Use HMAC of clientIP with server secret
+	h := hmac.New(sha256.New, cg.secret)
+	h.Write(clientIP)
+	h.Write([]byte("client"))
+	copy(clientCookie, h.Sum(nil))
+	
+	return clientCookie
+}
+
+// BuildCookieResponse builds the full cookie string for response
+// Format: hex(client_cookie || server_cookie)
+func BuildCookieResponse(clientCookie, serverCookie []byte) string {
+	if len(clientCookie) != DefaultCookieClientLen {
+		return ""
+	}
+	
+	cookie := make([]byte, 0, len(clientCookie)+len(serverCookie))
+	cookie = append(cookie, clientCookie...)
+	cookie = append(cookie, serverCookie...)
+	
+	return hex.EncodeToString(cookie)
 }

@@ -56,6 +56,11 @@ const (
 	DefaultECSv6Len = 64
 	DefaultECSScope = 0
 	PaddingSize     = 468
+
+	// DNS Cookie constants (RFC 7873)
+	DefaultCookieClientLen = 8   // 8 bytes client cookie
+	DefaultCookieServerLen = 16  // 16 bytes server cookie (recommended)
+	MaxCookieServerLen     = 32  // 32 bytes max server cookie
 )
 
 // =============================================================================

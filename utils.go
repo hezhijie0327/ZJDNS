@@ -106,6 +106,22 @@ func GetClientIP(w dns.ResponseWriter) net.IP {
 	return nil
 }
 
+// GetClientIPFromMsg extracts client IP from a DNS message (for cookie validation)
+func GetClientIPFromMsg(msg *dns.Msg) net.IP {
+	if msg == nil {
+		return nil
+	}
+	// Try to extract from EDNS0 ECS if available
+	if opt := msg.IsEdns0(); opt != nil {
+		for _, option := range opt.Option {
+			if subnet, ok := option.(*dns.EDNS0_SUBNET); ok {
+				return subnet.Address
+			}
+		}
+	}
+	return nil
+}
+
 // GetSecureClientIP extracts client IP from secure connection
 func GetSecureClientIP(conn any) net.IP {
 	switch c := conn.(type) {
