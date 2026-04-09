@@ -396,11 +396,11 @@ func BuildCookieResponse(clientCookie, serverCookie []byte) string {
 // ExtendedErrorCodeToString returns human-readable description for EDE code
 func ExtendedErrorCodeToString(code uint16) string {
 	switch code {
-	case EDECodeOther:
-		return "Other"
-	case EDECodeUnsupportedDNSKEY:
+	case EDECodeOtherError:
+		return "Other Error"
+	case EDECodeUnsupportedDNSKEYAlgorithm:
 		return "Unsupported DNSKEY Algorithm"
-	case EDECodeUnsupportedDS:
+	case EDECodeUnsupportedDSDigestType:
 		return "Unsupported DS Digest Type"
 	case EDECodeStaleAnswer:
 		return "Stale Answer"
@@ -434,11 +434,9 @@ func ExtendedErrorCodeToString(code uint16) string {
 		return "Filtered"
 	case EDECodeProhibited:
 		return "Prohibited"
-	case EDECodeStaleNSAnswer:
-		return "Stale NS Answer"
-	case EDECodeUnknownRCODE:
-		return "Unknown RCODE"
-	case EDECodeNotAuth:
+	case EDECodeStaleNXDomainAnswer:
+		return "Stale NXDOMAIN Answer"
+	case EDECodeNotAuthoritative:
 		return "Not Authoritative"
 	case EDECodeNotSupported:
 		return "Not Supported"
