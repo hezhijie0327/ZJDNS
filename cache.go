@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/logging"
 	"golang.org/x/sync/errgroup"

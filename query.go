@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/http2"
@@ -28,23 +28,22 @@ import (
 // The client is configured with appropriate timeouts and buffer sizes for DNS queries.
 func NewQueryClient() *QueryClient {
 	// Configure UDP client
-	udpClient := &dns.Client{
-		Timeout: OperationTimeout,
-		Net:     "udp",
-		UDPSize: UDPBufferSize,
-	}
+	udpClient := &dns.Client{Transport: dns.NewTransport()}
+	udpClient.Transport.Dialer = &net.Dialer{Timeout: OperationTimeout}
+	udpClient.Transport.ReadTimeout = OperationTimeout
+	udpClient.Transport.WriteTimeout = OperationTimeout
 
 	// Configure TCP client
-	tcpClient := &dns.Client{
-		Timeout: OperationTimeout,
-		Net:     "tcp",
-	}
+	tcpClient := &dns.Client{Transport: dns.NewTransport()}
+	tcpClient.Transport.Dialer = &net.Dialer{Timeout: OperationTimeout}
+	tcpClient.Transport.ReadTimeout = OperationTimeout
+	tcpClient.Transport.WriteTimeout = OperationTimeout
 
 	// Configure TLS client for DoT
-	tlsClient := &dns.Client{
-		Timeout: OperationTimeout,
-		Net:     "tcp-tls",
-	}
+	tlsClient := &dns.Client{Transport: dns.NewTransport()}
+	tlsClient.Transport.Dialer = &net.Dialer{Timeout: OperationTimeout}
+	tlsClient.Transport.ReadTimeout = OperationTimeout
+	tlsClient.Transport.WriteTimeout = OperationTimeout
 
 	// Configure HTTP/2 transport for DoH
 	dohTransport := &http.Transport{
@@ -148,7 +147,7 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 // executeTLS executes a DNS query over DNS over TLS (DoT).
 func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	qc.tlsClient.TLSConfig = tlsConfig
-	response, _, err := qc.tlsClient.ExchangeContext(ctx, msg, server.Address)
+	response, _, err := qc.tlsClient.Exchange(ctx, msg, "tcp", server.Address)
 	return response, err
 }
 
@@ -189,15 +188,15 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 	_ = stream.SetDeadline(time.Now().Add(qc.timeout))
 
 	// Set message ID to 0 for QUIC (per RFC)
-	originalID := msg.Id
-	msg.Id = 0
+	originalID := msg.ID
+	msg.ID = 0
 
 	// Pack message
-	msgData, err := msg.Pack()
-	if err != nil {
-		msg.Id = originalID
+	if err := msg.Pack(); err != nil {
+		msg.ID = originalID
 		return nil, fmt.Errorf("pack: %w", err)
 	}
+	msgData := msg.Data
 
 	// Write message with length prefix
 	buf := bufferPool.Get()
@@ -211,7 +210,7 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 	copy(buf[2:], msgData)
 
 	if _, err := stream.Write(buf[:2+len(msgData)]); err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
@@ -221,25 +220,26 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 
 	n, err := stream.Read(respBuf)
 	if err != nil && n == 0 {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("read: %w", err)
 	}
 
 	if n < 2 {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("response too short: %d", n)
 	}
 
 	// Parse response
 	response := messagePool.Get()
-	if err := response.Unpack(respBuf[2:n]); err != nil {
-		msg.Id = originalID
+	response.Data = respBuf[2:n]
+	if err := response.Unpack(); err != nil {
+		msg.ID = originalID
 		messagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 
-	msg.Id = originalID
-	response.Id = originalID
+	msg.ID = originalID
+	response.ID = originalID
 
 	return response, nil
 }
@@ -265,15 +265,14 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 	}
 
 	// Set message ID to 0 for DoH (privacy consideration)
-	originalID := msg.Id
-	msg.Id = 0
+	originalID := msg.ID
+	msg.ID = 0
 
-	// Pack message
-	buf, err := msg.Pack()
-	if err != nil {
-		msg.Id = originalID
+	if err := msg.Pack(); err != nil {
+		msg.ID = originalID
 		return nil, fmt.Errorf("pack: %w", err)
 	}
+	buf := msg.Data
 
 	// Build request URL
 	q := url.Values{"dns": []string{base64.RawURLEncoding.EncodeToString(buf)}}
@@ -287,7 +286,7 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 	// Create HTTP request
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
@@ -297,33 +296,34 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 	// Execute request
 	httpResp, err := qc.dohClient.Do(httpReq)
 	if err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("do request: %w", err)
 	}
 	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode != http.StatusOK {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("HTTP status: %d", httpResp.StatusCode)
 	}
 
 	// Read response body
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
 	// Parse DNS response
 	response := messagePool.Get()
-	if err := response.Unpack(body); err != nil {
-		msg.Id = originalID
+	response.Data = body
+	if err := response.Unpack(); err != nil {
+		msg.ID = originalID
 		messagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 
-	msg.Id = originalID
-	response.Id = originalID
+	msg.ID = originalID
+	response.ID = originalID
 
 	return response, nil
 }
@@ -360,15 +360,14 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 	qc.doh3Client.Transport = transport
 
 	// Set message ID to 0 for DoH (privacy consideration)
-	originalID := msg.Id
-	msg.Id = 0
+	originalID := msg.ID
+	msg.ID = 0
 
-	// Pack message
-	buf, err := msg.Pack()
-	if err != nil {
-		msg.Id = originalID
+	if err := msg.Pack(); err != nil {
+		msg.ID = originalID
 		return nil, fmt.Errorf("pack: %w", err)
 	}
+	buf := msg.Data
 
 	// Build request URL
 	q := url.Values{"dns": []string{base64.RawURLEncoding.EncodeToString(buf)}}
@@ -382,7 +381,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 	// Create HTTP request
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
@@ -392,33 +391,34 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 	// Execute request
 	httpResp, err := qc.doh3Client.Do(httpReq)
 	if err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("do request: %w", err)
 	}
 	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode != http.StatusOK {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("HTTP status: %d", httpResp.StatusCode)
 	}
 
 	// Read response body
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
 	// Parse DNS response
 	response := messagePool.Get()
-	if err := response.Unpack(body); err != nil {
-		msg.Id = originalID
+	response.Data = body
+	if err := response.Unpack(); err != nil {
+		msg.ID = originalID
 		messagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 
-	msg.Id = originalID
-	response.Id = originalID
+	msg.ID = originalID
+	response.ID = originalID
 
 	return response, nil
 }
@@ -434,7 +434,7 @@ func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg
 		client = qc.udpClient
 	}
 
-	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
+	response, _, err := client.Exchange(ctx, msg, server.Protocol, server.Address)
 	return response, err
 }
 
@@ -447,9 +447,27 @@ func (qc *QueryClient) needsTCPFallback(result *QueryResult, protocol string) bo
 // SetTimeout sets the query timeout duration.
 func (qc *QueryClient) SetTimeout(timeout time.Duration) {
 	qc.timeout = timeout
-	qc.udpClient.Timeout = timeout
-	qc.tcpClient.Timeout = timeout
-	qc.tlsClient.Timeout = timeout
+	if qc.udpClient != nil && qc.udpClient.Transport != nil {
+		qc.udpClient.Transport.ReadTimeout = timeout
+		qc.udpClient.Transport.WriteTimeout = timeout
+		if qc.udpClient.Transport.Dialer != nil {
+			qc.udpClient.Transport.Dialer.Timeout = timeout
+		}
+	}
+	if qc.tcpClient != nil && qc.tcpClient.Transport != nil {
+		qc.tcpClient.Transport.ReadTimeout = timeout
+		qc.tcpClient.Transport.WriteTimeout = timeout
+		if qc.tcpClient.Transport.Dialer != nil {
+			qc.tcpClient.Transport.Dialer.Timeout = timeout
+		}
+	}
+	if qc.tlsClient != nil && qc.tlsClient.Transport != nil {
+		qc.tlsClient.Transport.ReadTimeout = timeout
+		qc.tlsClient.Transport.WriteTimeout = timeout
+		if qc.tlsClient.Transport.Dialer != nil {
+			qc.tlsClient.Transport.Dialer.Timeout = timeout
+		}
+	}
 }
 
 // GetTimeout returns the current query timeout duration.

@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
@@ -378,9 +378,8 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 
 		// Parse DNS message
 		req := messagePool.Get()
-		if err := req.Unpack(msgBuf); err != nil {
-			LogDebug("DOT: DNS message unpack error: %v", err)
-			messagePool.Put(req)
+	req.Data = msgBuf
+	if err := req.Unpack(); err != nil {
 			continue
 		}
 
@@ -395,12 +394,12 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		messagePool.Put(req)
 
 		if response != nil {
-			respBuf, err := response.Pack()
-			if err != nil {
+			if err := response.Pack(); err != nil {
 				LogDebug("DOT: Response pack error: %v", err)
 				messagePool.Put(response)
 				return
 			}
+			respBuf := response.Data
 
 			// Write response with length prefix
 			lengthBuf := make([]byte, 2)
@@ -593,7 +592,8 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 
 	// Parse DNS message
 	req := messagePool.Get()
-	if err := req.Unpack(buf[2 : 2+msgLen]); err != nil {
+	req.Data = buf[2 : 2+msgLen]
+	if err := req.Unpack(); err != nil {
 		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid DNS message")
 		messagePool.Put(req)
 		return
@@ -619,10 +619,10 @@ func (tm *TLSManager) respondQUIC(stream *quic.Stream, response *dns.Msg) error 
 		return errors.New("response is nil")
 	}
 
-	respBuf, err := response.Pack()
-	if err != nil {
+	if err := response.Pack(); err != nil {
 		return fmt.Errorf("pack response: %w", err)
 	}
+	respBuf := response.Data
 
 	buf := bufferPool.Get()
 	defer bufferPool.Put(buf)
@@ -794,7 +794,8 @@ func (tm *TLSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
 	}
 
 	req := messagePool.Get()
-	if err := req.Unpack(buf); err != nil {
+	req.Data = buf
+	if err := req.Unpack(); err != nil {
 		messagePool.Put(req)
 		return nil, http.StatusBadRequest
 	}
@@ -809,15 +810,15 @@ func (tm *TLSManager) respondDoH(w http.ResponseWriter, response *dns.Msg) error
 		return nil
 	}
 
-	bytes, err := response.Pack()
-	if err != nil {
+	if err := response.Pack(); err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return fmt.Errorf("pack response: %w", err)
 	}
+	bytes := response.Data
 
 	w.Header().Set("Content-Type", "application/dns-message")
 	w.Header().Set("Cache-Control", "max-age=0")
-	_, err = w.Write(bytes)
+	_, err := w.Write(bytes)
 	return err
 }
 

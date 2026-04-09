@@ -16,7 +16,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // =============================================================================
@@ -112,11 +113,9 @@ func GetClientIPFromMsg(msg *dns.Msg) net.IP {
 		return nil
 	}
 	// Try to extract from EDNS0 ECS if available
-	if opt := msg.IsEdns0(); opt != nil {
-		for _, option := range opt.Option {
-			if subnet, ok := option.(*dns.EDNS0_SUBNET); ok {
-				return subnet.Address
-			}
+	for _, option := range msg.Pseudo {
+		if subnet, ok := option.(*dns.SUBNET); ok {
+			return subnet.Address.AsSlice()
 		}
 	}
 	return nil
@@ -164,8 +163,8 @@ func CreateCompactRecord(rr dns.RR) *CompactRecord {
 	}
 	return &CompactRecord{
 		Text:    rr.String(),
-		OrigTTL: rr.Header().Ttl,
-		Type:    rr.Header().Rrtype,
+		OrigTTL: rr.Header().TTL,
+		Type:    dns.RRToType(rr),
 	}
 }
 
@@ -174,7 +173,7 @@ func ExpandRecord(cr *CompactRecord) dns.RR {
 	if cr == nil || cr.Text == "" {
 		return nil
 	}
-	rr, _ := dns.NewRR(cr.Text)
+	rr, _ := dns.New(cr.Text)
 	return rr
 }
 
@@ -188,7 +187,7 @@ func compactRecords(rrs []dns.RR) []*CompactRecord {
 	result := make([]*CompactRecord, 0, len(rrs))
 
 	for _, rr := range rrs {
-		if rr == nil || rr.Header().Rrtype == dns.TypeOPT {
+		if rr == nil || dns.RRToType(rr) == dns.TypeOPT {
 			continue
 		}
 
@@ -236,10 +235,10 @@ func ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
 			}
 		}
 
-		newRR := dns.Copy(rr)
+		newRR := rr.Clone()
 		if newRR != nil {
 			if ttl > 0 {
-				newRR.Header().Ttl = ttl
+				newRR.Header().TTL = ttl
 			}
 			result = append(result, newRR)
 		}
@@ -247,24 +246,97 @@ func ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
 	return result
 }
 
+// CloneRecords deep-copies a slice of DNS resource records.
+func CloneRecords(rrs []dns.RR) []dns.RR {
+	if len(rrs) == 0 {
+		return nil
+	}
+
+	clones := make([]dns.RR, 0, len(rrs))
+	for _, rr := range rrs {
+		if rr == nil {
+			continue
+		}
+		clone := rr.Clone()
+		if clone != nil {
+			clones = append(clones, clone)
+		}
+	}
+	return clones
+}
+
 // =============================================================================
 // Cache Key and TTL Helpers
 // =============================================================================
 
+// QuestionName returns the question name from a DNS question RR.
+func QuestionName(question dns.RR) string {
+	if question == nil {
+		return ""
+	}
+	return question.Header().Name
+}
+
+// QuestionType returns the question type from a DNS question RR.
+func QuestionType(question dns.RR) uint16 {
+	if question == nil {
+		return 0
+	}
+	return dns.RRToType(question)
+}
+
+// QuestionClass returns the question class from a DNS question RR.
+func QuestionClass(question dns.RR) uint16 {
+	if question == nil {
+		return dns.ClassINET
+	}
+	class := question.Header().Class
+	if class == 0 {
+		return dns.ClassINET
+	}
+	return class
+}
+
+// NewQuestion creates a question RR for the given name, type, and class.
+func NewQuestion(name string, qtype uint16, qclass uint16) dns.RR {
+	newFn, ok := dns.TypeToRR[qtype]
+	if !ok {
+		return nil
+	}
+
+	if qclass == 0 {
+		qclass = dns.ClassINET
+	}
+
+	rr := newFn()
+	rr.Header().Name = dnsutil.Fqdn(name)
+	rr.Header().Class = qclass
+	return rr
+}
+
+// SplitDomainName returns the domain labels for a FQDN name.
+func SplitDomainName(name string) []string {
+	name = strings.TrimSuffix(name, ".")
+	if name == "" {
+		return nil
+	}
+	return strings.Split(name, ".")
+}
+
 // BuildCacheKey generates a cache key from question and options
-func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC bool, globalPrefix string) string {
+func BuildCacheKey(question dns.RR, ecs *ECSOption, clientRequestedDNSSEC bool, globalPrefix string) string {
 	var buf strings.Builder
 	buf.Grow(ResultBufferCapacity)
 
 	buf.WriteString(globalPrefix)
 	buf.WriteString(RedisPrefixDNS)
 
-	buf.WriteString(NormalizeDomain(question.Name))
+	buf.WriteString(NormalizeDomain(QuestionName(question)))
 	buf.WriteByte(':')
 
-	buf.WriteString(strconv.FormatUint(uint64(question.Qtype), 10))
+	buf.WriteString(strconv.FormatUint(uint64(QuestionType(question)), 10))
 	buf.WriteByte(':')
-	buf.WriteString(strconv.FormatUint(uint64(question.Qclass), 10))
+	buf.WriteString(strconv.FormatUint(uint64(QuestionClass(question)), 10))
 
 	if ecs != nil {
 		buf.WriteString(":ecs:")
@@ -292,12 +364,12 @@ func calculateTTL(rrs []dns.RR) int {
 		return DefaultCacheTTL
 	}
 
-	minTTL := int(rrs[0].Header().Ttl)
+	minTTL := int(rrs[0].Header().TTL)
 	for _, rr := range rrs {
 		if rr == nil {
 			continue
 		}
-		if ttl := int(rr.Header().Ttl); ttl > 0 && (minTTL == 0 || ttl < minTTL) {
+		if ttl := int(rr.Header().TTL); ttl > 0 && (minTTL == 0 || ttl < minTTL) {
 			minTTL = ttl
 		}
 	}

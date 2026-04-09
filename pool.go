@@ -4,7 +4,7 @@ package main
 import (
 	"sync"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 // =============================================================================

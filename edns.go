@@ -9,10 +9,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 // =============================================================================
@@ -52,22 +53,18 @@ func (em *EDNSManager) GetDefaultECS() *ECSOption {
 
 // ParseFromDNS extracts ECS option from a DNS message
 func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
-	if em == nil || msg == nil || msg.Extra == nil {
+	if em == nil || msg == nil || len(msg.Pseudo) == 0 {
 		return nil
 	}
 
-	opt := msg.IsEdns0()
-	if opt == nil {
-		return nil
-	}
-
-	for _, option := range opt.Option {
-		if subnet, ok := option.(*dns.EDNS0_SUBNET); ok {
+	for _, option := range msg.Pseudo {
+		switch subnet := option.(type) {
+		case *dns.SUBNET:
 			return &ECSOption{
 				Family:       subnet.Family,
-				SourcePrefix: subnet.SourceNetmask,
-				ScopePrefix:  subnet.SourceScope,
-				Address:      subnet.Address,
+				SourcePrefix: subnet.Netmask,
+				ScopePrefix:  subnet.Scope,
+				Address:      net.IP(subnet.Address.AsSlice()),
 			}
 		}
 	}
@@ -76,17 +73,12 @@ func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 
 // ParseCookie extracts DNS Cookie option from a DNS message
 func (em *EDNSManager) ParseCookie(msg *dns.Msg) *CookieOption {
-	if em == nil || msg == nil || msg.Extra == nil {
+	if em == nil || msg == nil || len(msg.Pseudo) == 0 {
 		return nil
 	}
 
-	opt := msg.IsEdns0()
-	if opt == nil {
-		return nil
-	}
-
-	for _, option := range opt.Option {
-		if cookie, ok := option.(*dns.EDNS0_COOKIE); ok {
+	for _, option := range msg.Pseudo {
+		if cookie, ok := option.(*dns.COOKIE); ok {
 			cookieHex := cookie.Cookie
 			cookieBytes, _ := hex.DecodeString(cookieHex)
 
@@ -109,17 +101,12 @@ func (em *EDNSManager) ParseCookie(msg *dns.Msg) *CookieOption {
 
 // ParseEDE extracts EDE (Extended DNS Error) option from a DNS message
 func (em *EDNSManager) ParseEDE(msg *dns.Msg) *EDEOption {
-	if em == nil || msg == nil || msg.Extra == nil {
+	if em == nil || msg == nil || len(msg.Pseudo) == 0 {
 		return nil
 	}
 
-	opt := msg.IsEdns0()
-	if opt == nil {
-		return nil
-	}
-
-	for _, option := range opt.Option {
-		if ede, ok := option.(*dns.EDNS0_EDE); ok {
+	for _, option := range msg.Pseudo {
+		if ede, ok := option.(*dns.EDE); ok {
 			return &EDEOption{
 				InfoCode:  ede.InfoCode,
 				ExtraText: ede.ExtraText,
@@ -135,9 +122,8 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 		return
 	}
 
-	// Ensure message sections are initialized
 	if msg.Question == nil {
-		msg.Question = []dns.Question{}
+		msg.Question = []dns.RR{}
 	}
 	if msg.Answer == nil {
 		msg.Answer = []dns.RR{}
@@ -149,75 +135,42 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 		msg.Extra = []dns.RR{}
 	}
 
-	// Remove existing OPT records
-	cleanExtra := make([]dns.RR, 0, len(msg.Extra))
-	for _, rr := range msg.Extra {
-		if rr != nil && rr.Header().Rrtype != dns.TypeOPT {
-			cleanExtra = append(cleanExtra, rr)
+	msg.Pseudo = msg.Pseudo[:0]
+	msg.UDPSize = UDPBufferSize
+	msg.Security = clientRequestedDNSSEC
+
+	if ecs != nil {
+		if addr, ok := netip.AddrFromSlice(ecs.Address); ok {
+			msg.Pseudo = append(msg.Pseudo, &dns.SUBNET{
+				Family:  ecs.Family,
+				Netmask: ecs.SourcePrefix,
+				Scope:   DefaultECSScope,
+				Address: addr,
+			})
 		}
 	}
-	msg.Extra = cleanExtra
 
-	// Create new OPT record
-	opt := &dns.OPT{
-		Hdr: dns.RR_Header{
-			Name:   ".",
-			Rrtype: dns.TypeOPT,
-			Class:  UDPBufferSize,
-		},
-	}
-
-	opt.SetDo()
-
-	var options []dns.EDNS0
-
-	// Add ECS option if provided
-	if ecs != nil {
-		options = append(options, &dns.EDNS0_SUBNET{
-			Code:          dns.EDNS0SUBNET,
-			Family:        ecs.Family,
-			SourceNetmask: ecs.SourcePrefix,
-			SourceScope:   DefaultECSScope,
-			Address:       ecs.Address,
-		})
-	}
-
-	// Add DNS Cookie option if provided
 	if cookieStr != "" {
-		options = append(options, &dns.EDNS0_COOKIE{
-			Code:   dns.EDNS0COOKIE,
-			Cookie: cookieStr,
-		})
+		msg.Pseudo = append(msg.Pseudo, &dns.COOKIE{Cookie: cookieStr})
 	}
 
-	// Add EDE option if provided
 	if ede != nil {
-		options = append(options, &dns.EDNS0_EDE{
-			InfoCode:  ede.InfoCode,
-			ExtraText: ede.ExtraText,
-		})
+		msg.Pseudo = append(msg.Pseudo, &dns.EDE{InfoCode: ede.InfoCode, ExtraText: ede.ExtraText})
 	}
 
-	// Add padding for secure connections (RFC 7830)
 	if isSecureConnection {
-		opt.Option = options
-		msg.Extra = append(msg.Extra, opt)
-		if wireData, err := msg.Pack(); err == nil {
-			currentSize := len(wireData)
+		paddingDataSize := PaddingSize
+		if err := msg.Pack(); err == nil {
+			currentSize := len(msg.Data)
 			if currentSize < PaddingSize {
-				paddingDataSize := PaddingSize - currentSize - 4
-				if paddingDataSize > 0 {
-					options = append(options, &dns.EDNS0_PADDING{
-						Padding: make([]byte, paddingDataSize),
-					})
-				}
+				paddingDataSize = PaddingSize - currentSize - 4
 			}
 		}
-		msg.Extra = msg.Extra[:len(msg.Extra)-1]
+		if paddingDataSize > 0 {
+			paddingBytes := make([]byte, paddingDataSize)
+			msg.Pseudo = append(msg.Pseudo, &dns.PADDING{Padding: hex.EncodeToString(paddingBytes)})
+		}
 	}
-
-	opt.Option = options
-	msg.Extra = append(msg.Extra, opt)
 }
 
 // parseECSConfig parses ECS configuration string (auto, auto_v4, auto_v6, or CIDR)

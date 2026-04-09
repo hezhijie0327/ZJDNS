@@ -5,7 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 )
 
 // =============================================================================
@@ -144,9 +146,9 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 		class = "IN"
 	}
 
-	name := dns.Fqdn(domain)
+	name := dnsutil.Fqdn(domain)
 	if record.Name != "" {
-		name = dns.Fqdn(record.Name)
+		name = dnsutil.Fqdn(record.Name)
 	}
 
 	// Build RR string in standard format
@@ -163,7 +165,7 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 	sb.WriteString(record.Content)
 
 	// Try to parse as standard record
-	if rr, err := dns.NewRR(sb.String()); err == nil {
+	if rr, err := dns.New(sb.String()); err == nil {
 		return rr
 	}
 
@@ -179,7 +181,7 @@ func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) 
 	}
 
 	return &dns.RFC3597{
-		Hdr:   dns.RR_Header{Name: name, Rrtype: rrType, Class: classValue, Ttl: ttl},
-		Rdata: record.Content,
+		Hdr: dns.Header{Name: name, Class: classValue, TTL: ttl},
+		RFC3597: rdata.RFC3597{RRType: rrType, Data: record.Content},
 	}
 }

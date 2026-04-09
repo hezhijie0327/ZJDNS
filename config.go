@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 // =============================================================================

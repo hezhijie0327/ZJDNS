@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 )
 
 // =============================================================================
@@ -33,16 +35,17 @@ func (v *DNSSECValidator) InitializeTrustAnchors() {
 	for _, anchor := range DefaultRootTrustAnchors {
 		// Create DNSKEY record from trust anchor
 		dnskey := &dns.DNSKEY{
-			Hdr: dns.RR_Header{
-				Name:   anchor.Zone,
-				Rrtype: dns.TypeDNSKEY,
-				Class:  dns.ClassINET,
-				Ttl:    3600,
+			Hdr: dns.Header{
+				Name:  anchor.Zone,
+				Class: dns.ClassINET,
+				TTL:   3600,
 			},
-			Flags:     anchor.Flags,
-			Protocol:  3,
-			Algorithm: anchor.Algorithm,
-			PublicKey: anchor.PublicKey,
+			DNSKEY: rdata.DNSKEY{
+				Flags:     anchor.Flags,
+				Protocol:  3,
+				Algorithm: anchor.Algorithm,
+				PublicKey: anchor.PublicKey,
+			},
 		}
 
 		// Verify key tag matches
@@ -100,7 +103,7 @@ func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) (bo
 		// Check if it's a referral (NS records without RRSIGs are OK in referrals)
 		isReferral := false
 		for _, rr := range response.Answer {
-			if rr.Header().Rrtype == dns.TypeNS {
+			if dns.RRToType(rr) == dns.TypeNS {
 				isReferral = true
 				break
 			}
@@ -146,7 +149,7 @@ func (v *DNSSECValidator) validateRRSIGSignatures(response *dns.Msg) (bool, uint
 	for _, section := range [][]dns.RR{response.Answer, response.Ns, response.Extra} {
 		for _, rr := range section {
 			header := rr.Header()
-			key := fmt.Sprintf("%s:%d", header.Name, header.Rrtype)
+			key := fmt.Sprintf("%s:%d", header.Name, dns.RRToType(rr))
 
 			if rrsig, ok := rr.(*dns.RRSIG); ok {
 				rrsigs[key] = append(rrsigs[key], rrsig)
@@ -257,7 +260,7 @@ func (v *DNSSECValidator) verifyRRSIGSignature(rrs *dns.RRSIG, rrset []dns.RR, d
 	}
 
 	// Use miekg/dns's built-in Verify method
-	err := rrs.Verify(dnskey, rrset)
+	err := rrs.Verify(dnskey, rrset, &dns.SignOption{})
 	if err != nil {
 		return fmt.Errorf("signature verification failed: %w", err)
 	}
@@ -329,7 +332,7 @@ func (v *DNSSECValidator) validateRootDNSKEYs(dnskeys []*dns.DNSKEY, rrsigs []*d
 		LogInfo("DNSSEC: Root KSK %d validated against trust anchor", keyTag)
 
 		// Cache the validated DNSKEY
-		v.zoneCache.SetDNSKEYs(".", dnskeys, dnskey.Hdr.Ttl)
+		v.zoneCache.SetDNSKEYs(".", dnskeys, dnskey.Hdr.TTL)
 		return true, 0
 	}
 
@@ -379,7 +382,7 @@ func (v *DNSSECValidator) validateNonRootDNSKEYs(dnskeys []*dns.DNSKEY, rrsigs [
 
 	// Cache validated DNSKEYs
 	if len(dnskeys) > 0 {
-		v.zoneCache.SetDNSKEYs(zone, dnskeys, dnskeys[0].Hdr.Ttl)
+		v.zoneCache.SetDNSKEYs(zone, dnskeys, dnskeys[0].Hdr.TTL)
 		LogDebug("DNSSEC: Cached %d validated DNSKEYs for zone '%s'", len(dnskeys), zone)
 	}
 
@@ -431,7 +434,7 @@ func (v *DNSSECValidator) computeDSDigest(ds *dns.DS, dnskey *dns.DNSKEY) (strin
 
 	// Convert owner name to wire format
 	wireName := make([]byte, 0, len(ownerName)+2)
-	for _, label := range dns.SplitDomainName(ownerName) {
+	for _, label := range SplitDomainName(ownerName) {
 		wireName = append(wireName, byte(len(label)))
 		wireName = append(wireName, []byte(label)...)
 	}
@@ -568,7 +571,7 @@ func (v *DNSSECValidator) ValidateChain(response *dns.Msg, zone string) (bool, u
 		// Extract zone name from DS records
 		if len(dsRecords) > 0 {
 			zone := NormalizeDomain(dsRecords[0].Hdr.Name)
-			v.zoneCache.SetDSRecords(zone, dsRecords, dsRecords[0].Hdr.Ttl)
+			v.zoneCache.SetDSRecords(zone, dsRecords, dsRecords[0].Hdr.TTL)
 			LogDebug("DNSSEC: Cached %d DS records for zone '%s'", len(dsRecords), zone)
 		}
 	}
@@ -583,8 +586,10 @@ func (v *DNSSECValidator) QueryDNSKEY(ctx context.Context, zone string) ([]*dns.
 	}
 
 	msg := new(dns.Msg)
-	msg.SetQuestion(dns.Fqdn(zone), dns.TypeDNSKEY)
-	msg.SetEdns0(UDPBufferSize, true)
+	dnsutil.SetQuestion(msg, dnsutil.Fqdn(zone), dns.TypeDNSKEY)
+	msg.Question[0].Header().Class = dns.ClassINET
+	msg.UDPSize = UDPBufferSize
+	msg.Security = true
 
 	// Query root servers for root zone, otherwise use recursive resolution
 	var servers []string
@@ -635,8 +640,10 @@ func (v *DNSSECValidator) QueryDS(ctx context.Context, zone string) ([]*dns.DS, 
 	}
 
 	msg := new(dns.Msg)
-	msg.SetQuestion(dns.Fqdn(zone), dns.TypeDS)
-	msg.SetEdns0(UDPBufferSize, true)
+	dnsutil.SetQuestion(msg, dnsutil.Fqdn(zone), dns.TypeDS)
+	msg.Question[0].Header().Class = dns.ClassINET
+	msg.UDPSize = UDPBufferSize
+	msg.Security = true
 
 	// Query root servers or parent zone
 	servers := DefaultRootServers
@@ -692,7 +699,7 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 	// Check each answer record for authorization violations
 	for _, rr := range response.Answer {
 		answerName := NormalizeDomain(rr.Header().Name)
-		rrType := rr.Header().Rrtype
+		rrType := dns.RRToType(rr)
 
 		// Skip if the answer name doesn't match the query
 		if answerName != queryDomain {
