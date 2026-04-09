@@ -194,9 +194,13 @@ type CookieOption struct {
 	ServerCookie []byte // 8-32 bytes (optional in requests)
 }
 
-// EDNSManager manages EDNS options
+// EDEOption represents Extended DNS Error option (RFC 8914)
+type EDEOption struct {
+	InfoCode  uint16 // Extended error code
+	ExtraText string // Optional diagnostic text
+}
+
 // EDNS Types
-// =============================================================================
 
 // ECSOption represents EDNS Client Subnet options
 type ECSOption struct {

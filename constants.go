@@ -58,9 +58,39 @@ const (
 	PaddingSize     = 468
 
 	// DNS Cookie constants (RFC 7873)
-	DefaultCookieClientLen = 8   // 8 bytes client cookie
-	DefaultCookieServerLen = 16  // 16 bytes server cookie (recommended)
-	MaxCookieServerLen     = 32  // 32 bytes max server cookie
+	DefaultCookieClientLen = 8  // 8 bytes client cookie
+	DefaultCookieServerLen = 16 // 16 bytes server cookie (recommended)
+	MaxCookieServerLen     = 32 // 32 bytes max server cookie
+)
+
+// Extended DNS Error codes (RFC 8914)
+const (
+	EDECodeOther                uint16 = 0  // Other
+	EDECodeUnsupportedDNSKEY    uint16 = 1  // Unsupported DNSKEY Algorithm
+	EDECodeUnsupportedDS        uint16 = 2  // Unsupported DS Digest Type
+	EDECodeStaleAnswer          uint16 = 3  // Stale Answer
+	EDECodeForgedAnswer         uint16 = 4  // Forged Answer
+	EDECodeDNSSECIndeterminate  uint16 = 5  // DNSSEC Indeterminate
+	EDECodeDNSSECBogus          uint16 = 6  // DNSSEC Bogus
+	EDECodeSignatureExpired     uint16 = 7  // Signature Expired
+	EDECodeSignatureNotYetValid uint16 = 8  // Signature Not Yet Valid
+	EDECodeDNSKEYMissing        uint16 = 9  // DNSKEY Missing
+	EDECodeRRSIGsMissing        uint16 = 10 // RRSIGs Missing
+	EDECodeNoZoneKeyBitSet      uint16 = 11 // No Zone Key Bit Set
+	EDECodeNSECMissing          uint16 = 12 // NSEC Missing
+	EDECodeCachedError          uint16 = 13 // Cached Error
+	EDECodeNotReady             uint16 = 14 // Not Ready
+	EDECodeBlocked              uint16 = 15 // Blocked
+	EDECodeCensored             uint16 = 16 // Censored
+	EDECodeFiltered             uint16 = 17 // Filtered
+	EDECodeProhibited           uint16 = 18 // Prohibited
+	EDECodeStaleNSAnswer        uint16 = 19 // Stale NS Answer
+	EDECodeUnknownRCODE         uint16 = 20 // Unknown RCODE
+	EDECodeNotAuth              uint16 = 21 // Not Authoritative
+	EDECodeNotSupported         uint16 = 22 // Not Supported
+	EDECodeNoReachableAuthority uint16 = 23 // No Reachable Authority
+	EDECodeNetworkError         uint16 = 24 // Network Error
+	EDECodeInvalidData          uint16 = 25 // Invalid Data
 )
 
 // =============================================================================

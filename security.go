@@ -15,20 +15,26 @@ import (
 
 // ValidateResponse validates DNSSEC records in a DNS response.
 // It checks if the response has DNSSEC records and if the AD flag is set.
-func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
+// Returns validation result and optional EDE code for failures.
+func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) (bool, uint16) {
 	if !dnssecOK || response == nil {
-		return false
+		return false, 0
 	}
 
 	// If the response has the Authenticated Data flag set, it's validated
 	if response.AuthenticatedData {
-		return true
+		return true, 0
 	}
 
 	// Check for DNSSEC record types in the response
-	return v.hasDNSSECRecords(response)
-}
+	hasRecords := v.hasDNSSECRecords(response)
+	if hasRecords && !response.AuthenticatedData {
+		// Has DNSSEC records but AD flag not set - indicates bogus/broken validation
+		return false, EDECodeDNSSECBogus
+	}
 
+	return hasRecords, 0
+}
 // hasDNSSECRecords checks if the response contains any DNSSEC-related record types.
 // DNSSEC record types include: RRSIG, NSEC, NSEC3, DNSKEY, DS
 func (v *DNSSECValidator) hasDNSSECRecords(response *dns.Msg) bool {

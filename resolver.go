@@ -132,7 +132,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 					if len(server.Match) > 0 {
 						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, server.Match)
 						if shouldRefuse {
-							return nil
+							return errors.New("cidr_filter_refused")
 						}
 						answer = filteredAnswer
 					}
@@ -171,12 +171,12 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
 							if shouldRefuse {
 								messagePool.Put(queryResult.Response)
-								return nil
+								return errors.New("cidr_filter_refused")
 							}
 							queryResult.Response.Answer = filteredAnswer
 						}
 
-						queryResult.Validated = qm.validator.dnssecValidator.ValidateResponse(queryResult.Response, true)
+						queryResult.Validated, _ = qm.validator.dnssecValidator.ValidateResponse(queryResult.Response, true)
 						ecsResponse := qm.server.ednsMgr.ParseFromDNS(queryResult.Response)
 
 						select {
@@ -405,7 +405,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 			}
 		}
 
-		validated := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
+		validated, _ := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
 
 		answer := response.Answer
@@ -445,7 +445,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 			}
 		}
 
-		validated := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
+		validated, _ := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
 
 		if len(response.Answer) > 0 {
@@ -584,7 +584,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 				rcode := result.Response.Rcode
 
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-					result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
+					result.Validated, _ = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
 					select {
 					case resultChan <- result.Response:
 						// First win - immediately cancel all other connections

@@ -439,6 +439,14 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, _ net.IP, isSecureConnection b
 		msg := &dns.Msg{}
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeRefused
+		// Add EDE for invalid queries
+		var ede *EDEOption
+		if len(question.Name) > MaxDomainLength {
+			ede = NewEDEOption(EDECodeInvalidData, fmt.Sprintf("Domain name too long: %d characters (max %d)", len(question.Name), MaxDomainLength))
+		} else {
+			ede = NewEDEOption(EDECodeNotSupported, "ANY queries are not supported")
+		}
+		s.addEDNS(msg, req, isSecureConnection, nil, ede)
 		return msg
 	}
 
@@ -457,7 +465,16 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, _ net.IP, isSecureConnection b
 			if rewriteResult.ResponseCode != dns.RcodeSuccess {
 				response := s.buildResponse(req)
 				response.Rcode = rewriteResult.ResponseCode
-				s.addEDNS(response, req, isSecureConnection)
+				// Add EDE for rewrite-based blocks
+				edeCode := EDECodeProhibited
+				switch rewriteResult.ResponseCode {
+				case dns.RcodeRefused:
+					edeCode = EDECodeBlocked
+				case dns.RcodeNameError:
+					edeCode = EDECodeFiltered
+				}
+				ede := NewEDEOption(edeCode, "Query blocked by rewrite rule")
+				s.addEDNS(response, req, isSecureConnection, nil, ede)
 				return response
 			}
 
@@ -468,16 +485,16 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, _ net.IP, isSecureConnection b
 				if len(rewriteResult.Additional) > 0 {
 					response.Extra = rewriteResult.Additional
 				}
-				s.addEDNS(response, req, isSecureConnection)
+				// Add EDE for rewrite-based response
+				ede := NewEDEOption(EDECodeFiltered, "Response modified by rewrite rule")
+				s.addEDNS(response, req, isSecureConnection, nil, ede)
 				return response
 			}
-
 			if rewriteResult.Domain != question.Name {
 				question.Name = rewriteResult.Domain
 			}
 		}
 	}
-
 	clientRequestedDNSSEC := false
 	var ecsOpt *ECSOption
 	var cookieOpt *CookieOption
@@ -522,7 +539,14 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 		msg.AuthenticatedData = true
 	}
 
-	s.addEDNSWithCookie(msg, req, isSecureConnection, cookieOpt)
+	// Add EDE for stale cache response
+	if isExpired {
+		ede := NewEDEOption(EDECodeStaleAnswer, "Serving expired cache entry")
+		s.addEDNS(msg, req, isSecureConnection, cookieOpt, ede)
+	} else {
+		s.addEDNS(msg, req, isSecureConnection, cookieOpt, nil)
+	}
+
 	if isExpired && entry.ShouldRefresh() {
 		s.cacheRefreshGroup.Go(func() error {
 			defer HandlePanic("cache refresh")
@@ -543,6 +567,10 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 	answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecsOpt)
 
 	if err != nil {
+		// Check if it's a CIDR filter refusal
+		if err.Error() == "cidr_filter_refused" {
+			return s.processCIDRRefused(req, question, cookieOpt, isSecureConnection)
+		}
 		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, isSecureConnection)
 	}
 
@@ -570,7 +598,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 			msg.AuthenticatedData = true
 		}
 
-		s.addEDNSWithCookie(msg, req, isSecureConnection, cookieOpt)
+		s.addEDNS(msg, req, isSecureConnection, cookieOpt, nil)
 		s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
 		return msg
 	}
@@ -581,6 +609,22 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 		msg.SetReply(req)
 	}
 	msg.Rcode = dns.RcodeServerFailure
+	// Add EDE for query error
+	ede := NewEDEOption(EDECodeNetworkError, "All upstream queries failed")
+	s.addEDNS(msg, req, isSecureConnection, cookieOpt, ede)
+	return msg
+}
+
+// processCIDRRefused handles CIDR filtering rejections by returning REFUSED with EDE
+func (s *DNSServer) processCIDRRefused(req *dns.Msg, question dns.Question, cookieOpt *CookieOption, isSecureConnection bool) *dns.Msg {
+	msg := s.buildResponse(req)
+	if msg == nil {
+		msg = messagePool.Get()
+		msg.SetReply(req)
+	}
+	msg.Rcode = dns.RcodeRefused
+	ede := NewEDEOption(EDECodeProhibited, "Query blocked by CIDR filtering rule")
+	s.addEDNS(msg, req, isSecureConnection, cookieOpt, ede)
 	return msg
 }
 
@@ -611,7 +655,7 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
 	msg.Extra = ProcessRecords(additional, 0, clientRequestedDNSSEC)
 
-	s.addEDNSWithCookie(msg, req, isSecureConnection, cookieOpt)
+	s.addEDNS(msg, req, isSecureConnection, cookieOpt, nil)
 	s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
 	return msg
 }
@@ -640,30 +684,8 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 // =============================================================================
 
 // addEDNS adds EDNS options to a DNS response message, including ECS,
-// DNSSEC flags, and padding for secure connections.
-func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool) {
-	if msg == nil || req == nil {
-		return
-	}
-
-	clientRequestedDNSSEC := false
-	var ecsOpt *ECSOption
-
-	if opt := req.IsEdns0(); opt != nil {
-		clientRequestedDNSSEC = opt.Do()
-		ecsOpt = s.ednsMgr.ParseFromDNS(req)
-	}
-
-	if ecsOpt == nil {
-		ecsOpt = s.ednsMgr.GetDefaultECS()
-	}
-	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || true
-
-	if shouldAddEDNS {
-		s.ednsMgr.AddToMessage(msg, ecsOpt, clientRequestedDNSSEC, isSecureConnection, "")
-	}
-}
-func (s *DNSServer) addEDNSWithCookie(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, cookieOpt *CookieOption) {
+// DNSSEC flags, cookie, EDE, and padding for secure connections.
+func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, cookieOpt *CookieOption, ede *EDEOption) {
 	if msg == nil || req == nil {
 		return
 	}
@@ -681,14 +703,12 @@ func (s *DNSServer) addEDNSWithCookie(msg *dns.Msg, req *dns.Msg, isSecureConnec
 	}
 
 	// Generate cookie response
-	// If client sent a cookie, echo it back with server cookie
-	// If no client cookie, generate both client and server cookies
 	cookieStr := s.generateCookieResponse(cookieOpt)
 
-	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || true
+	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || ede != nil || true
 
 	if shouldAddEDNS {
-		s.ednsMgr.AddToMessage(msg, ecsOpt, clientRequestedDNSSEC, isSecureConnection, cookieStr)
+		s.ednsMgr.AddToMessage(msg, ecsOpt, clientRequestedDNSSEC, isSecureConnection, cookieStr, ede)
 	}
 }
 
@@ -705,17 +725,17 @@ func (s *DNSServer) generateCookieResponse(cookieOpt *CookieOption) string {
 	if cookieOpt != nil && len(cookieOpt.ClientCookie) == DefaultCookieClientLen {
 		// Client sent a cookie - validate server cookie if present, then generate new one
 		var serverCookie []byte
-		
+
 		if len(cookieOpt.ServerCookie) >= 16 {
 			if s.ednsMgr.cookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
 				serverCookie = s.ednsMgr.cookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 			}
 		}
-		
+
 		if serverCookie == nil {
 			serverCookie = s.ednsMgr.cookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 		}
-		
+
 		return BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 	}
 
@@ -723,9 +743,10 @@ func (s *DNSServer) generateCookieResponse(cookieOpt *CookieOption) string {
 	// Generate a client cookie based on a hash
 	clientCookie := s.ednsMgr.cookieGenerator.GenerateClientCookie(clientIP)
 	serverCookie := s.ednsMgr.cookieGenerator.GenerateServerCookie(clientIP, clientCookie)
-	
+
 	return BuildCookieResponse(clientCookie, serverCookie)
 }
+
 // buildResponse creates a new DNS response message from a request.
 // It sets the appropriate flags and initializes the message pool.
 func (s *DNSServer) buildResponse(req *dns.Msg) *dns.Msg {
@@ -766,7 +787,7 @@ func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *ECSOption, rec
 	msg.RecursionDesired = recursionDesired
 
 	if s.ednsMgr != nil {
-		s.ednsMgr.AddToMessage(msg, ecs, true, isSecureConnection, "")
+		s.ednsMgr.AddToMessage(msg, ecs, true, isSecureConnection, "", nil)
 	}
 
 	return msg

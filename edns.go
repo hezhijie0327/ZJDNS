@@ -89,7 +89,7 @@ func (em *EDNSManager) ParseCookie(msg *dns.Msg) *CookieOption {
 		if cookie, ok := option.(*dns.EDNS0_COOKIE); ok {
 			cookieHex := cookie.Cookie
 			cookieBytes, _ := hex.DecodeString(cookieHex)
-			
+
 			// Client cookie is always 8 bytes (16 hex chars)
 			if len(cookieBytes) >= DefaultCookieClientLen {
 				clientCookie := cookieBytes[:DefaultCookieClientLen]
@@ -107,8 +107,30 @@ func (em *EDNSManager) ParseCookie(msg *dns.Msg) *CookieOption {
 	return nil
 }
 
-// AddToMessage adds EDNS options including ECS, cookies, and padding to a DNS message
-func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDNSSEC bool, isSecureConnection bool, cookieStr string) {
+// ParseEDE extracts EDE (Extended DNS Error) option from a DNS message
+func (em *EDNSManager) ParseEDE(msg *dns.Msg) *EDEOption {
+	if em == nil || msg == nil || msg.Extra == nil {
+		return nil
+	}
+
+	opt := msg.IsEdns0()
+	if opt == nil {
+		return nil
+	}
+
+	for _, option := range opt.Option {
+		if ede, ok := option.(*dns.EDNS0_EDE); ok {
+			return &EDEOption{
+				InfoCode:  ede.InfoCode,
+				ExtraText: ede.ExtraText,
+			}
+		}
+	}
+	return nil
+}
+
+// AddToMessage adds EDNS options including ECS, cookies, EDE, and padding to a DNS message
+func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDNSSEC bool, isSecureConnection bool, cookieStr string, ede *EDEOption) {
 	if em == nil || msg == nil {
 		return
 	}
@@ -158,13 +180,21 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 			SourceScope:   DefaultECSScope,
 			Address:       ecs.Address,
 		})
-}
+	}
 
 	// Add DNS Cookie option if provided
 	if cookieStr != "" {
 		options = append(options, &dns.EDNS0_COOKIE{
 			Code:   dns.EDNS0COOKIE,
 			Cookie: cookieStr,
+		})
+	}
+
+	// Add EDE option if provided
+	if ede != nil {
+		options = append(options, &dns.EDNS0_EDE{
+			InfoCode:  ede.InfoCode,
+			ExtraText: ede.ExtraText,
 		})
 	}
 
@@ -335,13 +365,13 @@ func (cg *CookieGenerator) ValidateServerCookie(clientIP net.IP, clientCookie, s
 // Per RFC 7873 Section 5.1: Client should use a stable source of entropy
 func (cg *CookieGenerator) GenerateClientCookie(clientIP net.IP) []byte {
 	clientCookie := make([]byte, DefaultCookieClientLen)
-	
+
 	// Use HMAC of clientIP with server secret
 	h := hmac.New(sha256.New, cg.secret)
 	h.Write(clientIP)
 	h.Write([]byte("client"))
 	copy(clientCookie, h.Sum(nil))
-	
+
 	return clientCookie
 }
 
@@ -351,10 +381,93 @@ func BuildCookieResponse(clientCookie, serverCookie []byte) string {
 	if len(clientCookie) != DefaultCookieClientLen {
 		return ""
 	}
-	
+
 	cookie := make([]byte, 0, len(clientCookie)+len(serverCookie))
 	cookie = append(cookie, clientCookie...)
 	cookie = append(cookie, serverCookie...)
-	
+
 	return hex.EncodeToString(cookie)
+}
+
+// =============================================================================
+// Extended DNS Error (EDE) Helpers (RFC 8914)
+// =============================================================================
+
+// ExtendedErrorCodeToString returns human-readable description for EDE code
+func ExtendedErrorCodeToString(code uint16) string {
+	switch code {
+	case EDECodeOther:
+		return "Other"
+	case EDECodeUnsupportedDNSKEY:
+		return "Unsupported DNSKEY Algorithm"
+	case EDECodeUnsupportedDS:
+		return "Unsupported DS Digest Type"
+	case EDECodeStaleAnswer:
+		return "Stale Answer"
+	case EDECodeForgedAnswer:
+		return "Forged Answer"
+	case EDECodeDNSSECIndeterminate:
+		return "DNSSEC Indeterminate"
+	case EDECodeDNSSECBogus:
+		return "DNSSEC Bogus"
+	case EDECodeSignatureExpired:
+		return "Signature Expired"
+	case EDECodeSignatureNotYetValid:
+		return "Signature Not Yet Valid"
+	case EDECodeDNSKEYMissing:
+		return "DNSKEY Missing"
+	case EDECodeRRSIGsMissing:
+		return "RRSIGs Missing"
+	case EDECodeNoZoneKeyBitSet:
+		return "No Zone Key Bit Set"
+	case EDECodeNSECMissing:
+		return "NSEC Missing"
+	case EDECodeCachedError:
+		return "Cached Error"
+	case EDECodeNotReady:
+		return "Not Ready"
+	case EDECodeBlocked:
+		return "Blocked"
+	case EDECodeCensored:
+		return "Censored"
+	case EDECodeFiltered:
+		return "Filtered"
+	case EDECodeProhibited:
+		return "Prohibited"
+	case EDECodeStaleNSAnswer:
+		return "Stale NS Answer"
+	case EDECodeUnknownRCODE:
+		return "Unknown RCODE"
+	case EDECodeNotAuth:
+		return "Not Authoritative"
+	case EDECodeNotSupported:
+		return "Not Supported"
+	case EDECodeNoReachableAuthority:
+		return "No Reachable Authority"
+	case EDECodeNetworkError:
+		return "Network Error"
+	case EDECodeInvalidData:
+		return "Invalid Data"
+	default:
+		return fmt.Sprintf("Unknown Error (%d)", code)
+	}
+}
+
+// NewEDEOption creates a new EDE option
+func NewEDEOption(infoCode uint16, extraText string) *EDEOption {
+	return &EDEOption{
+		InfoCode:  infoCode,
+		ExtraText: extraText,
+	}
+}
+
+// NewEDEWithError creates EDE option from an error
+func NewEDEWithError(infoCode uint16, err error) *EDEOption {
+	if err == nil {
+		return nil
+	}
+	return &EDEOption{
+		InfoCode:  infoCode,
+		ExtraText: err.Error(),
+	}
 }
