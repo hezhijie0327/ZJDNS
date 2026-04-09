@@ -68,11 +68,6 @@ func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) (bo
 		return false, 0
 	}
 
-	// If the response has the Authenticated Data flag set from a trusted resolver, trust it
-	if response.AuthenticatedData {
-		return true, 0
-	}
-
 	// Check for DNSSEC record types
 	var hasRRSIG, hasNSEC, hasNSEC3, hasDNSKEY bool
 	for _, sections := range [][]dns.RR{response.Answer, response.Ns, response.Extra} {

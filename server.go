@@ -488,12 +488,16 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, _ net.IP, isSecureConnection b
 			}
 		}
 	}
-	clientRequestedDNSSEC := false
+	// Respect config when deciding whether to preserve DNSSEC records for
+	// responses, and still preserve client EDNS data like ECS and cookies.
+	clientRequestedDNSSEC := s.config.Server.Features.ForceDNSSEC
 	var ecsOpt *ECSOption
 	var cookieOpt *CookieOption
 
 	if opt := req.IsEdns0(); opt != nil {
-		clientRequestedDNSSEC = opt.Do()
+		if !clientRequestedDNSSEC {
+			clientRequestedDNSSEC = opt.Do()
+		}
 		ecsOpt = s.ednsMgr.ParseFromDNS(req)
 		cookieOpt = s.ednsMgr.ParseCookie(req)
 	}

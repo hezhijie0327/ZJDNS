@@ -93,6 +93,7 @@ type HTTPSSettings struct {
 
 // FeatureFlags contains feature toggle settings
 type FeatureFlags struct {
+	ForceDNSSEC     bool `json:"force_dnssec,omitempty"`
 	HijackProtection bool `json:"hijack_protection"`
 }
 
