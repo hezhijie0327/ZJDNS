@@ -464,7 +464,7 @@ go build -o zjdns
 
 ## 📝 许可证
 
-本项目采用 MIT 许可证。详情请参见 [LICENSE](LICENSE) 文件。
+本项目采用 [Apache License 2.0 with Commons Clause v1.0](LICENSE) 许可证。
 
 ---
 
@@ -945,7 +945,7 @@ go build -o zjdns
 
 ## 📝 License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the [Apache License 2.0 with Commons Clause v1.0](LICENSE).
 
 ---
 
