@@ -333,6 +333,19 @@ func (c *CacheEntry) ShouldRefresh() bool {
 	return c.IsExpired() && (now-c.Timestamp) > refreshInterval
 }
 
+// CanServeExpired checks whether an expired cache entry is within the allowed
+// serve-expired age window.
+func (c *CacheEntry) CanServeExpired(maxAgeSeconds int) bool {
+	if c == nil || !c.IsExpired() {
+		return false
+	}
+	if maxAgeSeconds <= 0 {
+		return true
+	}
+	expiredAge := time.Now().Unix() - c.Timestamp - int64(c.TTL)
+	return expiredAge <= int64(maxAgeSeconds)
+}
+
 // GetRemainingTTL returns the remaining TTL for the cache entry
 func (c *CacheEntry) GetRemainingTTL() uint32 {
 	if c == nil {

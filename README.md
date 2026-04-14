@@ -94,7 +94,7 @@
   - **Redis 缓存模式**：推荐生产环境使用，支持分布式部署、数据持久化
 - **内存优先读取**：统一内存缓存作为一级层，未命中时回退 Redis；写操作先写内存，再异步写 Redis
 - **DNSSEC 缓存**：DNSKEY / DS 记录与普通查询使用相同缓存键格式，避免代码重复
-- **过期缓存服务**：当上游服务器不可用时返回过期缓存结果，提高可用性
+- **过期缓存服务**：当上游服务器不可用时返回过期缓存结果，提高可用性。该行为遵循 RFC [8767](https://www.rfc-editor.org/rfc/rfc8767.html) 的过期答案回退标准。
 - **预取机制**：后台刷新即将过期的缓存记录，减少用户等待时间
 - **ECS 感知缓存**：基于客户端地理位置（EDNS Client Subnet）的缓存分区，提供精确的本地化解析
 - **访问限流**：减少缓存访问时间更新操作，降低 Redis 压力
@@ -568,7 +568,7 @@ go build -o zjdns
   - **Redis Cache Mode**: Recommended for production environments, supports distributed deployment and data persistence
 - **Memory-first reads**: The cache reads from local memory first, then falls back to Redis if enabled
 - **Write-through strategy**: Writes immediately update memory and asynchronously persist to Redis
-- **Stale Cache Serving**: Provides stale cache service when upstream servers are unavailable, greatly improving system availability
+- **Stale Cache Serving**: Provides stale cache service when upstream servers are unavailable, greatly improving system availability. This behavior follows RFC [8767](https://www.rfc-editor.org/rfc/rfc8767.html) for expired answer fallback.
 - **Prefetch Mechanism**: Background automatic refresh of soon-to-expire cache, reducing user waiting time
 - **ECS-aware Caching**: Cache partitioning based on client geographic location (EDNS Client Subnet), providing precise localized resolution
 - **Access Throttling**: Throttles cache access time update operations, reducing Redis pressure
