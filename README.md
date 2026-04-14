@@ -47,18 +47,18 @@
   - **信任锚自动加载**：启动时自动从内置 IANA root-anchors.xml 加载根信任锚（KSK 20326 和 KSK 38696）
   - **RRSIG 签名验证**：完整的 RRSIG 加密签名验证，支持 RSA/ECDSA 算法
   - **DNSKEY 链式验证**：从根区域到权威服务器的完整信任链验证
-  - **DS 记录验证**：RFC 4509 标准 DS 记录验证，支持 SHA-1/SHA-256 摘要
+  - **DS 记录验证**：RFC [4509](https://www.rfc-editor.org/rfc/rfc4509.html) 标准 DS 记录验证，支持 SHA-1/SHA-256 摘要
   - **NSEC/NSEC3 验证**：否定回答的真实性验证（NXDOMAIN/NODATA）
   - **DNSSEC 缓存**：DNSKEY/DS 数据与普通 DNS 响应使用统一缓存，避免重复查询
   - **AD 标志传播**：支持 Authenticated Data 标志传递
 - **ECS 支持**：EDNS 客户端子网，提供地理位置感知解析，支持 `auto`、`auto_v4`、`auto_v6` 自动检测或手动 CIDR 配置
-- **DNS Cookie**：支持 RFC 7873 和 RFC 9018 标准，提供 HMAC-SHA256 服务端 Cookie 生成和验证，防范 DNS 放大攻击
-- **扩展 DNS 错误 (EDE)**：支持 RFC 8914，在响应中附带详细的错误信息（如 Stale Answer、Blocked、DNSSEC Bogus 等），提升调试能力
+- **DNS Cookie**：支持 RFC [7873](https://www.rfc-editor.org/rfc/rfc7873.html) 和 RFC [9018](https://www.rfc-editor.org/rfc/rfc9018.html) 标准，提供 HMAC-SHA256 服务端 Cookie 生成和验证，防范 DNS 放大攻击
+- **扩展 DNS 错误 (EDE)**：支持 RFC [8914](https://www.rfc-editor.org/rfc/rfc8914.html)，在响应中附带详细的错误信息（如 Stale Answer、Blocked、DNSSEC Bogus 等），提升调试能力
 - **递归深度保护**：防止恶意递归查询攻击，可配置最大递归深度
 
 ### 🔐 安全传输协议
 
-- **DNS over TLS (DoT)**：支持标准 DNS over TLS 协议 (RFC 7818)，在端口 `853` 上提供加密 DNS 查询，防止窃听和篡改
+- **DNS over TLS (DoT)**：支持标准 DNS over TLS 协议 (RFC [7818](https://www.rfc-editor.org/rfc/rfc7818.html))，在端口 `853` 上提供加密 DNS 查询，防止窃听和篡改
 - **DNS over QUIC (DoQ)**：支持前沿的 DNS over QUIC 协议，利用 QUIC 协议的 0-RTT、多路复用和连接迁移特性，提供更低延迟和更高可靠性的加密 DNS 服务
 - **DNS over HTTPS (DoH/DoH3)**：同时支持 HTTP/2 和 HTTP/3 DoH 服务，在端口 `443` 上提供基于 HTTPS 的 DNS 查询
 - **统一证书管理**：DoT、DoQ 和 DoH 共享相同的 TLS 证书配置，简化部署
@@ -76,7 +76,7 @@
 
 ### 📦 DNS 填充
 
-- **RFC 7830 标准支持**：实现 DNS 填充功能，通过在 EDNS0 中添加填充字节来标准化 DNS 响应包大小，有效对抗基于流量大小的指纹识别和审查
+- **RFC [7830](https://www.rfc-editor.org/rfc/rfc7830.html) 标准支持**：实现 DNS 填充功能，通过在 EDNS0 中添加填充字节来标准化 DNS 响应包大小，有效对抗基于流量大小的指纹识别和审查
 - **智能块大小填充**：填充到推荐的 468 字节，平衡隐私保护和带宽效率
 - **按需启用**：可通过配置文件灵活启用或禁用，**仅对安全连接（DoT/DoQ/DoH）生效**
 
@@ -522,18 +522,18 @@ go build -o zjdns
   - **Trust Anchor Auto-loading**: Automatically loads root trust anchors (KSK 20326 and KSK 38696) from built-in IANA root-anchors.xml at startup
   - **RRSIG Signature Verification**: Complete RRSIG cryptographic signature verification, supporting RSA/ECDSA algorithms
   - **DNSKEY Chain Validation**: Full chain validation from root zone to authoritative servers
-  - **DS Record Validation**: RFC 4509 compliant DS record validation, supporting SHA-1/SHA-256 digests
+  - **DS Record Validation**: RFC [4509](https://www.rfc-editor.org/rfc/rfc4509.html) compliant DS record validation, supporting SHA-1/SHA-256 digests
   - **NSEC/NSEC3 Validation**: Authenticated denial of existence (NXDOMAIN/NODATA)
   - **ZoneCache**: Caches validated DNSKEY to avoid repeated queries
   - **AD Flag Propagation**: Supports Authenticated Data flag propagation
 - **ECS Support**: EDNS Client Subnet, providing geolocation-aware resolution, supports `auto`, `auto_v4`, `auto_v6` auto-detection or manual CIDR configuration
-- **DNS Cookie**: Supports RFC 7873 and RFC 9018 standards, provides HMAC-SHA256 server cookie generation and validation, mitigates DNS amplification attacks
-- **Extended DNS Error (EDE)**: Supports RFC 8914, includes detailed error information in responses (such as Stale Answer, Blocked, DNSSEC Bogus, etc.), enhances debugging capability
+- **DNS Cookie**: Supports RFC [7873](https://www.rfc-editor.org/rfc/rfc7873.html) and RFC [9018](https://www.rfc-editor.org/rfc/rfc9018.html) standards, provides HMAC-SHA256 server cookie generation and validation, mitigates DNS amplification attacks
+- **Extended DNS Error (EDE)**: Supports RFC [8914](https://www.rfc-editor.org/rfc/rfc8914.html), includes detailed error information in responses (such as Stale Answer, Blocked, DNSSEC Bogus, etc.), enhances debugging capability
 - **Recursion Depth Protection**: Prevents malicious recursive query attacks, configurable maximum recursion depth
 
 ### 🔐 Secure Transport Protocols
 
-- **DNS over TLS (DoT)**: Supports standard DNS over TLS protocol (RFC 7818), providing encrypted DNS queries on port `853`, preventing eavesdropping and tampering
+- **DNS over TLS (DoT)**: Supports standard DNS over TLS protocol (RFC [7818](https://www.rfc-editor.org/rfc/rfc7818.html)), providing encrypted DNS queries on port `853`, preventing eavesdropping and tampering
 - **DNS over QUIC (DoQ)**: Supports cutting-edge DNS over QUIC protocol, leveraging QUIC protocol's 0-RTT, multiplexing, and connection migration features to provide lower latency and higher reliability encrypted DNS services
 - **DNS over HTTPS (DoH/DoH3)**: Simultaneously supports HTTP/2 and HTTP/3 DoH services, providing HTTPS-based DNS queries on port `443`
 - **Unified Certificate Management**: DoT, DoQ, and DoH share the same TLS certificate configuration, simplifying deployment
@@ -551,7 +551,7 @@ go build -o zjdns
 
 ### 📦 DNS Padding
 
-- **RFC 7830 Standard Support**: Implements DNS Padding functionality, standardizing DNS response packet sizes by adding padding bytes in EDNS0, effectively combating fingerprinting and censorship based on traffic size
+- **RFC [7830](https://www.rfc-editor.org/rfc/rfc7830.html) Standard Support**: Implements DNS Padding functionality, standardizing DNS response packet sizes by adding padding bytes in EDNS0, effectively combating fingerprinting and censorship based on traffic size
 - **Smart Block Size Padding**: Pads to recommended 468 bytes, balancing privacy protection and bandwidth efficiency
 - **On-demand Enablement**: Can be flexibly enabled or disabled through configuration file, **only effective for secure connections (DoT/DoQ/DoH)**
 
