@@ -693,6 +693,7 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	}
 
 	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
+	s.startLatencyProbe(question, cacheKey, answer, authority, additional, validated, responseECS)
 
 	msg.Answer = ProcessRecords(answer, 0, clientRequestedDNSSEC)
 	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
@@ -722,6 +723,7 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 	}
 
 	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
+	s.startLatencyProbe(question, cacheKey, answer, authority, additional, validated, ecsResponse)
 
 	return nil
 }

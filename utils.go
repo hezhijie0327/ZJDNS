@@ -432,6 +432,13 @@ func GenerateExampleConfig() string {
 	config.Server.TLS.CertFile = "/path/to/cert.pem"
 	config.Server.TLS.KeyFile = "/path/to/key.pem"
 
+	config.Server.LatencyProbe = []LatencyProbeStep{
+		{Protocol: "ping", Timeout: 100},
+		{Protocol: "tcp", Port: 443, Timeout: 100},
+		{Protocol: "tcp", Port: 80, Timeout: 100},
+		{Protocol: "udp", Port: 53, Timeout: 100},
+	}
+
 	config.CIDR = []CIDRConfig{
 		{File: "whitelist.txt", Tag: "file"},
 		{Rules: []string{"192.168.0.0/16", "10.0.0.0/8", "2001:db8::/32"}, Tag: "rules"},

@@ -23,7 +23,28 @@
     "features": {
       "force_dnssec": true,
       "hijack_protection": true
-    }
+    },
+    "latency_probe": [
+      {
+        "protocol": "ping",
+        "timeout": 100
+      },
+      {
+        "protocol": "tcp",
+        "port": 443,
+        "timeout": 100
+      },
+      {
+        "protocol": "tcp",
+        "port": 80,
+        "timeout": 100
+      },
+      {
+        "protocol": "udp",
+        "port": 53,
+        "timeout": 100
+      }
+    ]
   },
   "redis": {
     "address": "127.0.0.1:6379",

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -142,6 +143,38 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 
 	if config.Server.MemoryCacheSize < 0 {
 		return fmt.Errorf("server memory cache size must be non-negative")
+	}
+
+	if len(config.Server.LatencyProbe) > 0 {
+		for i, step := range config.Server.LatencyProbe {
+			protocol := strings.ToLower(strings.TrimSpace(step.Protocol))
+			if protocol == "" {
+				return fmt.Errorf("latency_probe step %d: protocol cannot be empty", i)
+			}
+			switch protocol {
+			case "ping", "icmp":
+				config.Server.LatencyProbe[i].Protocol = "ping"
+			case "tcp":
+				if step.Port <= 0 {
+					config.Server.LatencyProbe[i].Port = 80
+				}
+				if step.Port > 65535 {
+					return fmt.Errorf("latency_probe step %d: tcp port must be between 1 and 65535", i)
+				}
+			case "udp":
+				if step.Port <= 0 {
+					config.Server.LatencyProbe[i].Port = 53
+				}
+				if step.Port > 65535 {
+					return fmt.Errorf("latency_probe step %d: udp port must be between 1 and 65535", i)
+				}
+			default:
+				return fmt.Errorf("latency_probe step %d: unsupported protocol %s", i, step.Protocol)
+			}
+			if step.Timeout <= 0 {
+				config.Server.LatencyProbe[i].Timeout = int(DefaultLatencyProbeTimeout / time.Millisecond)
+			}
+		}
 	}
 
 	if config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {

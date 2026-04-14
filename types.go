@@ -61,14 +61,22 @@ type ServerConfig struct {
 
 // ServerSettings contains server-specific settings
 type ServerSettings struct {
-	Port            string       `json:"port"`
-	Pprof           string       `json:"pprof"`
-	LogLevel        string       `json:"log_level"`
-	DefaultECS      string       `json:"default_ecs_subnet"`
-	MemoryCacheSize int          `json:"memory_cache_size,omitempty"`
-	DDR             DDRSettings  `json:"ddr"`
-	TLS             TLSSettings  `json:"tls"`
-	Features        FeatureFlags `json:"features"`
+	Port            string             `json:"port"`
+	Pprof           string             `json:"pprof"`
+	LogLevel        string             `json:"log_level"`
+	DefaultECS      string             `json:"default_ecs_subnet"`
+	MemoryCacheSize int                `json:"memory_cache_size,omitempty"`
+	DDR             DDRSettings        `json:"ddr"`
+	TLS             TLSSettings        `json:"tls"`
+	Features        FeatureFlags       `json:"features"`
+	LatencyProbe    []LatencyProbeStep `json:"latency_probe,omitempty"`
+}
+
+// LatencyProbeStep represents one step in the latency probe sequence.
+type LatencyProbeStep struct {
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port,omitempty"`
+	Timeout  int    `json:"timeout,omitempty"`
 }
 
 // DDRSettings contains DDR (Discovery of Designated Resolvers) configuration

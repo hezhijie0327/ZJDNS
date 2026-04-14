@@ -127,9 +127,10 @@ const (
 // =============================================================================
 
 const (
-	DefaultTimeout   = 2 * time.Second
-	OperationTimeout = 3 * time.Second
-	IdleTimeout      = 5 * time.Second
+	DefaultTimeout             = 2 * time.Second
+	DefaultLatencyProbeTimeout = 100 * time.Millisecond
+	OperationTimeout           = 3 * time.Second
+	IdleTimeout                = 5 * time.Second
 )
 
 // =============================================================================
@@ -137,10 +138,10 @@ const (
 // =============================================================================
 
 const (
-	DefaultCacheTTL                  = 10
-	DefaultMemoryCacheSize           = 10000
-	StaleTTL                         = 30
-	StaleMaxAge                      = 30 * 86400
+	DefaultCacheTTL           = 10
+	DefaultMemoryCacheSize    = 10000
+	StaleTTL                  = 30
+	StaleMaxAge               = 30 * 86400
 	ServeExpiredClientTimeout = 500 // RFC 8767 recommends 1.8 seconds
 
 	RedisPrefixDNS = "dns:"
