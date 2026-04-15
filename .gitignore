@@ -1,29 +1,24 @@
 # Ignore everything by default
 *
 
-# Allow all directories so Git can traverse them
+# Allow directories so Git can traverse the tree
 !*/
 
-# Allow .github directory and all its contents
+# Ignore Rust build output
+target/
+
+# Keep Git metadata and config
+!.gitignore
 !.github/
 !.github/**
 
-# Git configuration
-!.gitignore
+# Rust sources and Cargo manifests
+!*.rs
+!Cargo.toml
+!Cargo.lock
 
-# Go source files
-!*.go
-
-# Go module files
-!go.mod
-!go.sum
-
-# Markdown documentation
+# Documentation and examples
 !*.md
-
-# JSON files
-!*.example.json
-
-# Dockerfile
 !Dockerfile
 !LICENSE
+!*.example.json
