@@ -26,7 +26,7 @@
 - **递归 DNS 解析**：完整的 DNS 递归查询算法实现，从根服务器开始逐步解析
 - **智能协议协商**：支持 UDP 和 TCP 协议，当 UDP 响应被截断或超过缓冲区大小时**自动回退到 TCP 协议**，确保大数据响应的完整传输
 - **CNAME 链解析**：智能处理 CNAME 记录链，防止循环引用，支持多级 CNAME 解析
-- **A/AAAA 延迟探测**：后台对 A/AAAA 记录进行速度检测，支持可配置的 `udp`、`ping`、`tcp` 探测步骤，检测结果会用于按最快顺序重排序记录，提升后续查询性能
+- **A/AAAA 延迟探测**：后台对 A/AAAA 记录进行速度检测，支持可配置的 `ping`、`tcp`、`udp`、`http(s|3)` 探测步骤，检测结果会用于按最快顺序重排序记录，提升后续查询性能
 - **DNS 重写功能**：支持精确匹配域名重写规则，实现域名过滤和重定向；支持自定义响应码（如 NXDOMAIN、SERVFAIL 等）和 DNS 记录（如 A、AAAA、CNAME 等）返回
 - **混合模式**：可同时配置上游 DNS 服务器和递归解析器，实现灵活的查询策略
 
@@ -501,7 +501,7 @@ go build -o zjdns
 - **Recursive DNS Resolution**: Complete implementation of DNS recursive query algorithm, resolving step by step from root servers
 - **Intelligent Protocol Negotiation**: Supports both UDP and TCP protocols, **automatically falls back to TCP protocol when UDP responses are truncated or exceed buffer size**, ensuring complete transmission of large response data
 - **CNAME Chain Resolution**: Intelligently handles CNAME record chains, prevents circular references, supports multi-level CNAME resolution
-- **A/AAAA Latency Probing**: Background speed testing for A/AAAA answers using configurable probe steps (`udp`, `ping`, `tcp`), then reorders records by observed latency to improve subsequent lookup performance while returning the first result immediately
+- **A/AAAA Latency Probing**: Background speed testing for A/AAAA answers using configurable probe steps (`ping`、`tcp`、`udp`、`http(s|3)`), then reorders records by observed latency to improve subsequent lookup performance while returning the first result immediately
 - **DNS Rewrite Functionality**: Supports exact match domain rewrite rules, enabling domain filtering and redirection; supports custom response codes (such as NXDOMAIN, SERVFAIL, etc.) and DNS records (such as A, AAAA, CNAME, etc.) return
 - **Hybrid Mode**: Can configure both upstream DNS servers and recursive resolvers simultaneously, enabling flexible query strategies
 

@@ -168,6 +168,27 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 				if step.Port > 65535 {
 					return fmt.Errorf("latency_probe step %d: udp port must be between 1 and 65535", i)
 				}
+			case "http":
+				if step.Port <= 0 {
+					config.Server.LatencyProbe[i].Port = 80
+				}
+				if step.Port > 65535 {
+					return fmt.Errorf("latency_probe step %d: http port must be between 1 and 65535", i)
+				}
+			case "https":
+				if step.Port <= 0 {
+					config.Server.LatencyProbe[i].Port = 443
+				}
+				if step.Port > 65535 {
+					return fmt.Errorf("latency_probe step %d: https port must be between 1 and 65535", i)
+				}
+			case "http3":
+				if step.Port <= 0 {
+					config.Server.LatencyProbe[i].Port = 443
+				}
+				if step.Port > 65535 {
+					return fmt.Errorf("latency_probe step %d: http3 port must be between 1 and 65535", i)
+				}
 			default:
 				return fmt.Errorf("latency_probe step %d: unsupported protocol %s", i, step.Protocol)
 			}

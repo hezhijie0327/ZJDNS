@@ -2,15 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"math"
 	"net"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -175,9 +178,72 @@ func probeAddress(ctx context.Context, ip net.IP, step LatencyProbeStep) error {
 			port = 53
 		}
 		return probeUDP(ctx, ip, port)
+	case "http":
+		port := step.Port
+		if port <= 0 {
+			port = 80
+		}
+		return probeHTTP(ctx, ip, port, false, false)
+	case "https":
+		port := step.Port
+		if port <= 0 {
+			port = 443
+		}
+		return probeHTTP(ctx, ip, port, true, false)
+	case "http3":
+		port := step.Port
+		if port <= 0 {
+			port = 443
+		}
+		return probeHTTP(ctx, ip, port, true, true)
 	default:
 		return fmt.Errorf("unsupported probe protocol: %s", step.Protocol)
 	}
+}
+
+func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool) error {
+	scheme := "http"
+	if useTLS {
+		scheme = "https"
+	}
+
+	url := fmt.Sprintf("%s://%s/", scheme, net.JoinHostPort(ip.String(), fmt.Sprint(port)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "")
+	req.Host = ip.String()
+
+	var client *http.Client
+	if useHTTP3 {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         NextProtoDoH3,
+		}
+		transport := &http3.Transport{
+			TLSClientConfig: tlsConfig,
+		}
+		client = &http.Client{Transport: transport}
+	} else {
+		tlsConfig := &tls.Config{InsecureSkipVerify: true}
+		transport := &http.Transport{
+			Proxy:             nil,
+			DisableKeepAlives: true,
+			ForceAttemptHTTP2: false,
+			TLSClientConfig:   tlsConfig,
+			DialContext:       (&net.Dialer{}).DialContext,
+			IdleConnTimeout:   DefaultLatencyProbeTimeout,
+		}
+		client = &http.Client{Transport: transport}
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return nil
 }
 
 func probeUDP(ctx context.Context, ip net.IP, port int) error {
@@ -187,7 +253,7 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
@@ -238,7 +304,7 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)

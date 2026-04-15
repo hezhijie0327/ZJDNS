@@ -43,6 +43,21 @@
         "protocol": "udp",
         "port": 53,
         "timeout": 100
+      },
+      {
+        "protocol": "http",
+        "port": 80,
+        "timeout": 100
+      },
+      {
+        "protocol": "https",
+        "port": 443,
+        "timeout": 100
+      },
+      {
+        "protocol": "http3",
+        "port": 443,
+        "timeout": 100
       }
     ]
   },

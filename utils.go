@@ -437,6 +437,9 @@ func GenerateExampleConfig() string {
 		{Protocol: "tcp", Port: 443, Timeout: 100},
 		{Protocol: "tcp", Port: 80, Timeout: 100},
 		{Protocol: "udp", Port: 53, Timeout: 100},
+		{Protocol: "http", Port: 80, Timeout: 100},
+		{Protocol: "https", Port: 443, Timeout: 100},
+		{Protocol: "http3", Port: 443, Timeout: 100},
 	}
 
 	config.CIDR = []CIDRConfig{
