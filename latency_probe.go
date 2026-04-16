@@ -114,6 +114,10 @@ func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []
 	}
 	close(results)
 
+	for _, c := range candidates {
+		LogDebug("LATENCY: probe result %s latency=%s", c.rr.String(), c.latency)
+	}
+
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return candidates[i].latency < candidates[j].latency
 	})
@@ -316,7 +320,7 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 		Body: &icmp.Echo{
 			ID:   os.Getpid() & 0xffff,
 			Seq:  1,
-			Data: []byte("zjdns-latency-probe"),
+			Data: make([]byte, 56), // Linux ping default payload size
 		},
 	}
 	messageData, err := message.Marshal(nil)
