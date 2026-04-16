@@ -138,7 +138,7 @@ const (
 // =============================================================================
 
 const (
-	DefaultCacheTTL           = 10
+	DefaultTTL                = 10
 	DefaultMemoryCacheSize    = 10000
 	StaleTTL                  = 30
 	StaleMaxAge               = 30 * 86400

@@ -136,7 +136,7 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16, qclass
 func (rm *RewriteManager) buildDNSRecord(domain string, record DNSRecordConfig) dns.RR {
 	ttl := record.TTL
 	if ttl == 0 {
-		ttl = DefaultCacheTTL
+		ttl = DefaultTTL
 	}
 
 	class := strings.ToUpper(strings.TrimSpace(record.Class))

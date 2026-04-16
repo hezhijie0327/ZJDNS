@@ -59,6 +59,61 @@ func NormalizeDomain(domain string) string {
 	return strings.ToLower(strings.TrimSuffix(domain, "."))
 }
 
+// ParseReverseDNSName parses a PTR query name into an IP address.
+// It supports IPv4 reverse names under in-addr.arpa and IPv6 reverse names
+// under ip6.arpa.
+func ParseReverseDNSName(name string) net.IP {
+	fqdn := strings.TrimSuffix(dns.Fqdn(name), ".")
+	lower := strings.ToLower(fqdn)
+
+	if strings.HasSuffix(lower, ".in-addr.arpa") {
+		octets := strings.Split(strings.TrimSuffix(strings.TrimSuffix(lower, ".in-addr.arpa"), "."), ".")
+		if len(octets) != 4 {
+			return nil
+		}
+		for i, j := 0, len(octets)-1; i < j; i, j = i+1, j-1 {
+			octets[i], octets[j] = octets[j], octets[i]
+		}
+		return net.ParseIP(strings.Join(octets, "."))
+	}
+
+	if strings.HasSuffix(lower, ".ip6.arpa") {
+		nibbles := strings.Split(strings.TrimSuffix(strings.TrimSuffix(lower, ".ip6.arpa"), "."), ".")
+		if len(nibbles) != 32 {
+			return nil
+		}
+		for i, j := 0, len(nibbles)-1; i < j; i, j = i+1, j-1 {
+			nibbles[i], nibbles[j] = nibbles[j], nibbles[i]
+		}
+		var builder strings.Builder
+		for i, nibble := range nibbles {
+			builder.WriteString(nibble)
+			if i%4 == 3 && i != len(nibbles)-1 {
+				builder.WriteByte(':')
+			}
+		}
+		return net.ParseIP(builder.String())
+	}
+
+	return nil
+}
+
+// BuildPTRRecord creates a PTR record for the given query name and target.
+func BuildPTRRecord(name, target string, ttl uint32, qclass uint16) dns.RR {
+	if ttl == 0 {
+		ttl = DefaultTTL
+	}
+	return &dns.PTR{
+		Hdr: dns.RR_Header{
+			Name:   dns.Fqdn(name),
+			Rrtype: dns.TypePTR,
+			Class:  qclass,
+			Ttl:    ttl,
+		},
+		Ptr: dns.Fqdn(target),
+	}
+}
+
 // =============================================================================
 // Error Helpers
 // =============================================================================
@@ -289,7 +344,7 @@ func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC 
 // calculateTTL calculates the minimum TTL from DNS records
 func calculateTTL(rrs []dns.RR) int {
 	if len(rrs) == 0 {
-		return DefaultCacheTTL
+		return DefaultTTL
 	}
 
 	minTTL := int(rrs[0].Header().Ttl)
@@ -303,7 +358,7 @@ func calculateTTL(rrs []dns.RR) int {
 	}
 
 	if minTTL <= 0 {
-		minTTL = DefaultCacheTTL
+		minTTL = DefaultTTL
 	}
 
 	return minTTL
@@ -459,8 +514,8 @@ func GenerateExampleConfig() string {
 	}
 
 	config.Rewrite = []RewriteRule{
-		{Name: "blocked.example.com", Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultCacheTTL}}},
-		{Name: "ipv6.blocked.example.com", Records: []DNSRecordConfig{{Type: "AAAA", Content: "::1", TTL: DefaultCacheTTL}}},
+		{Name: "blocked.example.com", Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultTTL}}},
+		{Name: "ipv6.blocked.example.com", Records: []DNSRecordConfig{{Type: "AAAA", Content: "::1", TTL: DefaultTTL}}},
 	}
 
 	data, _ := json.MarshalIndent(config, "", "  ")

@@ -178,6 +178,11 @@ type CompactRecord struct {
 	Type    uint16 `json:"type"`
 }
 
+type reverseLookupResult struct {
+	Name string
+	TTL  uint32
+}
+
 // CacheManager defines the cache interface
 type CacheManager interface {
 	Get(key string) (*CacheEntry, bool, bool)

@@ -343,7 +343,7 @@ func (cm *ConfigManager) addChaosRecord(config *ServerConfig) {
 			Records: []DNSRecordConfig{{
 				Type:    "TXT",
 				Class:   "CH",
-				TTL:     DefaultCacheTTL,
+				TTL:     DefaultTTL,
 				Content: strconv.Quote(value),
 			}},
 		})

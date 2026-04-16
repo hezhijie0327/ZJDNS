@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -75,6 +76,59 @@ func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
 	mc.mu.Unlock()
 
 	return cloned, true, cloned.IsExpired()
+}
+
+// ReverseLookup searches the memory cache for A or AAAA answers that match the
+// provided IP address and returns candidate reverse PTR targets.
+func (mc *MemoryCache) ReverseLookup(ip net.IP) []reverseLookupResult {
+	if ip == nil {
+		return nil
+	}
+
+	ip4 := ip.To4()
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+
+	candidates := make(map[string]uint32)
+	for _, item := range mc.entries {
+		if item == nil || item.entry == nil {
+			continue
+		}
+
+		for _, cr := range item.entry.Answer {
+			if cr == nil {
+				continue
+			}
+			rr := ExpandRecord(cr)
+			if rr == nil {
+				continue
+			}
+
+			switch rr := rr.(type) {
+			case *dns.A:
+				if ip4 != nil && rr.A.Equal(ip4) {
+					candidates[dns.Fqdn(rr.Hdr.Name)] = rr.Hdr.Ttl
+				}
+			case *dns.AAAA:
+				if ip4 == nil && rr.AAAA.Equal(ip) {
+					candidates[dns.Fqdn(rr.Hdr.Name)] = rr.Hdr.Ttl
+				}
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	results := make([]reverseLookupResult, 0, len(candidates))
+	for name, ttl := range candidates {
+		results = append(results, reverseLookupResult{Name: name, TTL: ttl})
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Name < results[j].Name
+	})
+	return results
 }
 
 // Set stores a value in the memory cache.
@@ -421,6 +475,13 @@ func (hc *HybridCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	hc.memory.SetEntry(key, entry)
 	return entry, true, isExpired
+}
+
+func (hc *HybridCache) ReverseLookup(ip net.IP) []reverseLookupResult {
+	if hc == nil || hc.memory == nil {
+		return nil
+	}
+	return hc.memory.ReverseLookup(ip)
 }
 
 func (hc *HybridCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
