@@ -58,9 +58,9 @@
 
 ### 🔐 安全传输协议
 
-- **DNS over TLS (DoT)**：支持标准 DNS over TLS 协议 (RFC [7818](https://www.rfc-editor.org/rfc/rfc7818.html))，在端口 `853` 上提供加密 DNS 查询，防止窃听和篡改
-- **DNS over QUIC (DoQ)**：支持前沿的 DNS over QUIC 协议，利用 QUIC 协议的 0-RTT、多路复用和连接迁移特性，提供更低延迟和更高可靠性的加密 DNS 服务
-- **DNS over HTTPS (DoH/DoH3)**：同时支持 HTTP/2 和 HTTP/3 DoH 服务，在端口 `443` 上提供基于 HTTPS 的 DNS 查询
+- **DNS over TLS (DoT)**：支持标准 DNS over TLS 协议 (RFC [7858](https://www.rfc-editor.org/rfc/rfc7858.html))，在端口 `853` 上提供加密 DNS 查询，防止窃听和篡改
+- **DNS over QUIC (DoQ)**：支持前沿的 DNS over QUIC 协议 (RFC [9250](https://www.rfc-editor.org/rfc/rfc9250.html))，利用 QUIC 协议的 0-RTT、多路复用和连接迁移特性，提供更低延迟和更高可靠性的加密 DNS 服务
+- **DNS over HTTPS (DoH/DoH3)**：同时支持 HTTP/2 和 HTTP/3 DoH 服务 (RFC [8484](https://www.rfc-editor.org/rfc/rfc8484.html))，在端口 `443` 上提供基于 HTTPS 的 DNS 查询
 - **统一证书管理**：DoT、DoQ 和 DoH 共享相同的 TLS 证书配置，简化部署
 - **自签名 CA 支持**：内置自签名 CA 功能，可为域名动态签名 TLS 证书，简化开发环境配置
 - **调试证书自动生成**：在开发或调试模式下自动生成自签名 TLS 证书，无需外部证书文件
@@ -534,9 +534,9 @@ go build -o zjdns
 
 ### 🔐 Secure Transport Protocols
 
-- **DNS over TLS (DoT)**: Supports standard DNS over TLS protocol (RFC [7818](https://www.rfc-editor.org/rfc/rfc7818.html)), providing encrypted DNS queries on port `853`, preventing eavesdropping and tampering
-- **DNS over QUIC (DoQ)**: Supports cutting-edge DNS over QUIC protocol, leveraging QUIC protocol's 0-RTT, multiplexing, and connection migration features to provide lower latency and higher reliability encrypted DNS services
-- **DNS over HTTPS (DoH/DoH3)**: Simultaneously supports HTTP/2 and HTTP/3 DoH services, providing HTTPS-based DNS queries on port `443`
+- **DNS over TLS (DoT)**: Supports standard DNS over TLS protocol (RFC [7858](https://www.rfc-editor.org/rfc/rfc7858.html)), providing encrypted DNS queries on port `853`, preventing eavesdropping and tampering
+- **DNS over QUIC (DoQ)**: Supports cutting-edge DNS over QUIC protocol (RFC [9250](https://www.rfc-editor.org/rfc/rfc9250.html)), leveraging QUIC protocol's 0-RTT, multiplexing, and connection migration features to provide lower latency and higher reliability encrypted DNS services
+- **DNS over HTTPS (DoH/DoH3)**: Simultaneously supports HTTP/2 and HTTP/3 DoH services (RFC [8484](https://www.rfc-editor.org/rfc/rfc8484.html)), providing HTTPS-based DNS queries on port `443`
 - **Unified Certificate Management**: DoT, DoQ, and DoH share the same TLS certificate configuration, simplifying deployment
 - **Self-signed CA Support**: Built-in self-signed CA functionality, can dynamically sign TLS certificates for domains, simplifying development environment configuration
 - **Debug Certificate Auto-generation**: Automatically generates self-signed TLS certificates in development or debug mode, no external certificate files required
