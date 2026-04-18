@@ -8,7 +8,7 @@
 
 ## 🇨🇳 中文文档
 
-🚀 高性能递归 DNS 解析服务器，基于 Go 语言开发，支持 Redis 缓存、DNSSEC 验证、ECS、DoT/DoQ/DoH 等高级功能。
+🚀 高性能递归 DNS 解析服务器，基于 Go 语言开发，支持内存/Redis 缓存、DNSSEC 验证、ECS、DoT/DoQ/DoH 等高级功能。
 
 ---
 
@@ -43,18 +43,14 @@
   - **步骤 2**：**自动切换到 TCP 协议重试**以绕过常见的 UDP 污染
   - **步骤 3**：如果 TCP 查询结果**仍然**被劫持，完全拒绝该响应，从源头防止污染
 
-- **DNSSEC 验证**：完整的 DNSSEC 信任链验证，包括：
-  - **信任锚自动加载**：启动时自动从内置 IANA root-anchors.xml 加载根信任锚（KSK 20326 和 KSK 38696）
-  - **RRSIG 签名验证**：完整的 RRSIG 加密签名验证，支持 RSA/ECDSA 算法
-  - **DNSKEY 链式验证**：从根区域到权威服务器的完整信任链验证
-  - **DS 记录验证**：RFC [4509](https://www.rfc-editor.org/rfc/rfc4509.html) 标准 DS 记录验证，支持 SHA-1/SHA-256 摘要
-  - **NSEC/NSEC3 验证**：否定回答的真实性验证（NXDOMAIN/NODATA）
-  - **DNSSEC 缓存**：DNSKEY/DS 数据与普通 DNS 响应使用统一缓存，避免重复查询
-  - **AD 标志传播**：支持 Authenticated Data 标志传递
-- **ECS 支持**：EDNS 客户端子网，提供地理位置感知解析，支持 `auto`、`auto_v4`、`auto_v6` 自动检测或手动 CIDR 配置
+- **DNSSEC 验证**：轻量级 DNSSEC 验证机制
+  - **AD 标志检查**：验证响应中的 Authenticated Data 标志
+  - **DNSSEC 记录检查**：检测 RRSIG、NSEC、NSEC3、DNSKEY、DS 等 DNSSEC 相关记录类型
+  - **AD 标志传播**：当验证通过时，向客户端传播 Authenticated Data 标志
+
+- **ECS 支持**：EDNS 客户端子网（RFC [7871](https://www.rfc-editor.org/rfc/rfc7871.html)），提供地理位置感知解析，支持 `auto`、`auto_v4`、`auto_v6` 自动检测或手动 CIDR 配置
 - **DNS Cookie**：支持 RFC [7873](https://www.rfc-editor.org/rfc/rfc7873.html) 和 RFC [9018](https://www.rfc-editor.org/rfc/rfc9018.html) 标准，提供 HMAC-SHA256 服务端 Cookie 生成和验证，防范 DNS 放大攻击
 - **扩展 DNS 错误 (EDE)**：支持 RFC [8914](https://www.rfc-editor.org/rfc/rfc8914.html)，在响应中附带详细的错误信息（如 Stale Answer、Blocked、DNSSEC Bogus 等），提升调试能力
-- **递归深度保护**：防止恶意递归查询攻击，可配置最大递归深度
 
 ### 🔐 安全传输协议
 
@@ -89,40 +85,49 @@
 
 ### 💾 缓存系统
 
-- **统一缓存架构**：`CacheManager` 负责全部 DNS 响应和 DNSSEC 元数据缓存，不再单独维护 ZoneCache
-- **双模式运行**：
-  - **无缓存模式**：适用于测试环境，零配置启动，纯递归解析
-  - **Redis 缓存模式**：推荐生产环境使用，支持分布式部署、数据持久化
-- **内存优先读取**：统一内存缓存作为一级层，未命中时回退 Redis；写操作先写内存，再异步写 Redis
-- **DNSSEC 缓存**：DNSKEY / DS 记录与普通查询使用相同缓存键格式，避免代码重复
+- **双模式架构**：
+  - **内存缓存模式**（默认）：当 Redis 未配置时，使用纯内存缓存（MemoryCache）
+  - **混合缓存模式**：当配置 Redis 时，使用 MemoryCache + Redis 的混合架构（HybridCache）
+
+- **混合缓存策略**：
+  - **内存优先读取**：查询时先检查内存缓存，未命中时回退到 Redis
+  - **写透（Write-through）**：写入时同时更新内存和 Redis（Redis 异步写入）
+  - **自动回填**：从 Redis 命中的缓存会自动回填到内存缓存
+
 - **PTR 反查优化**：当接收到 PTR 查询时，会先查看本地缓存中是否存在对应 A/AAAA 记录并直接生成 PTR 反向映射响应，无需额外上游查询
+
 - **过期缓存服务**：当上游服务器不可用时返回过期缓存结果，提高可用性。该行为遵循 RFC [8767](https://www.rfc-editor.org/rfc/rfc8767.html) 的过期答案回退标准。
+
 - **预取机制**：后台刷新即将过期的缓存记录，减少用户等待时间
+
 - **ECS 感知缓存**：基于客户端地理位置（EDNS Client Subnet）的缓存分区，提供精确的本地化解析
+
 - **访问限流**：减少缓存访问时间更新操作，降低 Redis 压力
 
 ---
 
 ## 📁 项目结构
 
-| 文件           | 说明                                                                 |
-| -------------- | -------------------------------------------------------------------- |
-| `constants.go` | 全局常量（端口、缓冲区、协议限制、缓存、QUIC、日志、根服务器、ALPN） |
-| `types.go`     | 所有类型定义（struct、interface）                                    |
-| `utils.go`     | 工具函数（字符串处理、DNS记录操作、缓存键生成、示例配置生成）        |
-| `logger.go`    | 日志管理（LogManager、TimeCache、RNG 全局变量）                      |
-| `pool.go`      | 对象池（MessagePool、BufferPool）+ 全局变量初始化                    |
-| `config.go`    | 配置管理（ConfigManager、配置验证、DDR记录生成）                     |
-| `cache.go`     | 缓存实现（MemoryCache、HybridCache、RedisCache、CacheEntry 方法）    |
-| `cidr.go`      | CIDR 过滤管理                                                        |
-| `edns.go`      | EDNS/ECS/Cookie/EDE 管理                                             |
-| `rewrite.go`   | DNS 重写规则                                                         |
-| `security.go`  | 安全管理（DNSSECValidator、HijackPrevention、SecurityManager）       |
-| `tls.go`       | TLS/DoT/DoQ/DoH/DoH3 管理                                            |
-| `query.go`     | DNS 查询客户端（QueryClient）                                        |
-| `resolver.go`  | 递归解析和上游查询（QueryManager、RecursiveResolver、CNAMEHandler）  |
-| `server.go`    | DNS 服务器核心（DNSServer）                                          |
-| `main.go`      | 入口文件                                                             |
+| 文件               | 说明                                                                       |
+| ------------------ | -------------------------------------------------------------------------- |
+| `main.go`          | 入口文件（CLI 参数、配置加载、服务器启动）                                 |
+| `version.go`       | 版本信息（v1.5.9）                                                         |
+| `constants.go`     | 全局常量（端口、缓冲区、超时、EDE 代码、根服务器、ALPN）                   |
+| `types.go`         | 类型定义（所有结构体、接口）                                               |
+| `utils.go`         | 工具函数（字符串处理、DNS 记录、缓存键、客户端 IP 提取）                   |
+| `logger.go`        | 日志管理（LogManager、TimeCache、RNG）                                     |
+| `pool.go`          | 对象池（MessagePool、BufferPool）                                          |
+| `config.go`        | 配置管理（ConfigManager、JSON 验证、DDR 记录生成）                         |
+| `cache.go`         | 缓存系统（MemoryCache、RedisCache、HybridCache）                           |
+| `cidr.go`          | CIDR 过滤（CIDRManager、IP 过滤、REFUSED + EDE 响应）                      |
+| `edns.go`          | EDNS 扩展（ECS、DNS Cookie RFC 7873/9018、EDE RFC 8914）                   |
+| `rewrite.go`       | DNS 重写（RewriteManager、域名过滤、自定义响应码）                         |
+| `security.go`      | 安全管理（DNSSECValidator、HijackPrevention、SecurityManager）             |
+| `tls.go`           | TLS 协议（TLSManager、DoT/DoQ/DoH/DoH3、自签名 CA）                        |
+| `query.go`         | 查询客户端（QueryClient、协议特定查询）                                    |
+| `resolver.go`      | 解析器（QueryManager、RecursiveResolver、CNAMEHandler、ResponseValidator） |
+| `server.go`        | 服务器核心（DNSServer、UDP/TCP/DoT/DoQ/DoH 处理器、信号处理）              |
+| `latency_probe.go` | 延迟探测（A/AAAA 记录速度测试、按延迟重排序）                              |
 
 ## 🏗️ 系统架构
 
@@ -156,41 +161,42 @@ graph TB
 
     subgraph "安全与管理层"
         O[SecurityManager<br>安全管理器]
-        P[EDNSManager<br>EDNS管理器]
-        Q[TLSManager<br>TLS证书管理]
-        R[DNSSECValidator<br>DNSSEC验证器]
+        P[EDNSManager<br>EDNS 管理器]
+        Q[TLSManager<br>TLS 证书管理]
+        R[DNSSECValidator<br>DNSSEC 验证器]
         S[HijackPrevention<br>劫持防护]
-        T[CIDRManager<br>CIDR过滤]
-        U[RewriteManager<br>DNS重写]
-        V[IPDetector<br>IP检测器]
+        T[CIDRManager<br>CIDR 过滤]
+        U[RewriteManager<br>DNS 重写]
+        V[IPDetector<br>IP 检测器]
     end
 
     subgraph "缓存系统"
         W[CacheManager Interface<br>缓存管理接口]
-        X[RedisCache<br>Redis缓存实现]
-        Y[MemoryCache<br>内存缓存实现]
+        X[MemoryCache<br>内存缓存实现]
+        Y[RedisCache<br>Redis 缓存实现<br>可选]
+        Z[HybridCache<br>混合缓存<br>MemoryCache + RedisCache]
     end
 
     subgraph "背景任务管理"
-        Z[Background Group<br>背景任务组]
-        AA[Cache Refresh Group<br>缓存刷新组]
-        BB[Shutdown Coordinator<br>关闭协调器]
-        CC[Signal Handler<br>信号处理器]
+        AA[Background Group<br>背景任务组]
+        BB[Cache Refresh Group<br>缓存刷新组]
+        CC[Shutdown Coordinator<br>关闭协调器]
+        DD[Signal Handler<br>信号处理器]
     end
 
     subgraph "外部依赖"
-        DD[Upstream DNS Servers<br>上游DNS服务器]
-        EE[Redis Server<br>Redis服务器]
-        FF[Root DNS Servers<br>根DNS服务器]
-        GG[TLS Certificates<br>TLS证书]
+        EE[Upstream DNS Servers<br>上游 DNS 服务器]
+        FF[Redis Server<br>Redis 服务器<br>可选]
+        GG[Root DNS Servers<br>根 DNS 服务器]
+        HH[TLS Certificates<br>TLS 证书]
     end
 
     %% Main connections
-    A -->|DNS 查询| D
-    A -->|DNS 查询| E
-    A -->|安全查询| F
-    A -->|安全查询| G
-    A -->|安全查询| H
+    A -->|DNS 查询 | D
+    A -->|DNS 查询 | E
+    A -->|安全查询 | F
+    A -->|安全查询 | G
+    A -->|安全查询 | H
 
     D --> B
     E --> B
@@ -221,21 +227,22 @@ graph TB
     P --> V
 
     W --> X
-    W --> Y
+    W --> Z
+    Z --> Y
 
-    B --> Z
     B --> AA
     B --> BB
     B --> CC
+    B --> DD
 
     %% External connections
-    K --> DD
-    L --> FF
-    X --> EE
-    Q --> GG
-    F --> GG
-    G --> GG
-    H --> GG
+    K --> EE
+    L --> GG
+    Y --> FF
+    Q --> HH
+    F --> HH
+    G --> HH
+    H --> HH
 
     %% Style definitions
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
@@ -252,9 +259,9 @@ graph TB
     class D,E,F,G,H protocol
     class I,J,K,L,M,N query
     class O,P,Q,R,S,T,U,V security
-    class W,X,Y cache
-    class Z,AA,BB,CC background
-    class DD,EE,FF,GG external
+    class W,X,Y,Z cache
+    class AA,BB,CC,DD background
+    class EE,FF,GG,HH external
 ```
 
 ---
@@ -267,19 +274,18 @@ sequenceDiagram
     participant P as Protocol Handler<br>协议处理器
     participant S as DNSServer<br>服务器核心
     participant QM as QueryManager<br>查询管理器
-    participant CM as CacheManager<br>统一缓存管理器（内存优先 + Redis 持久化）
+    participant CM as CacheManager<br>缓存管理器
     participant RM as RewriteManager<br>重写管理器
-    participant EM as EDNSManager<br>EDNS管理器
-    participant CIDR as CIDRManager<br>CIDR过滤
+    participant EM as EDNSManager<br>EDNS 管理器
+    participant CIDR as CIDRManager<br>CIDR 过滤
     participant QC as QueryClient<br>查询客户端
     participant UH as UpstreamHandler<br>上游处理器
     participant RR as RecursiveResolver<br>递归解析器
     participant SM as SecurityManager<br>安全管理器
-    participant US as 上游DNS
+    participant US as 上游 DNS
     participant RS as 根服务器
-    participant Redis as Redis缓存
 
-    Note over C,Redis: 客户端查询 example.com
+    Note over C,RS: 客户端查询 example.com
 
     C->>P: DNS 查询 (UDP/TCP/DoT/DoQ/DoH)
     P->>S: 统一请求处理
@@ -290,20 +296,20 @@ sequenceDiagram
 
     alt 域名匹配重写规则
         RM-->>S: 返回自定义响应
-        S-->>C: 自定义DNS响应
+        S-->>C: 自定义 DNS 响应
     else 无重写规则
-        S->>EM: 4. 处理ECS选项
+        S->>EM: 4. 处理 ECS 选项
         S->>CM: 5. 检查缓存
 
         alt 缓存命中 (新鲜)
             CM-->>S: 返回缓存响应
             S->>SM: 应用安全规则
-            S->>CIDR: 过滤响应IP
+            S->>CIDR: 过滤响应 IP
             S-->>C: DNS 响应
         else 缓存未命中或过期
             S->>QM: 6. 开始查询流程
 
-            alt 配置了上游DNS服务器
+            alt 配置了上游 DNS 服务器
                 QM->>UH: 上游查询模式
                 UH->>QC: 并发查询多个上游
 
@@ -316,36 +322,36 @@ sequenceDiagram
                 UH-->>QM: 上游查询结果
             else 递归解析模式
                 QM->>RR: 递归解析
-                RR->>SM: DNS劫持检测
+                RR->>SM: DNS 劫持检测
 
                 RR->>QC: 查询根服务器
-                QC->>RS: UDP查询根服务器
+                QC->>RS: UDP 查询根服务器
                 RS-->>QC: 根服务器响应
                 QC-->>RR: 响应结果
 
-                alt 检测到DNS劫持
-                    SM->>QC: 自动切换TCP重试
-                    QC->>RS: TCP查询根服务器
-                    RS-->>QC: TCP响应
-                    QC-->>SM: TCP响应结果
+                alt 检测到 DNS 劫持
+                    SM->>QC: 自动切换 TCP 重试
+                    QC->>RS: TCP 查询根服务器
+                    RS-->>QC: TCP 响应
+                    QC-->>SM: TCP 响应结果
 
-                    alt TCP查询仍被劫持
+                    alt TCP 查询仍被劫持
                         SM-->>RR: 完全拒绝响应
                         RR-->>QM: 劫持检测失败
                         QM-->>S: 返回错误响应
                         S-->>C: DNS 错误响应
-                    else TCP查询正常
+                    else TCP 查询正常
                         SM-->>RR: 继续递归解析
-                        RR->>QC: 查询TLD服务器
-                        QC-->>RR: TLD响应
+                        RR->>QC: 查询 TLD 服务器
+                        QC-->>RR: TLD 响应
                         RR->>QC: 查询权威服务器
                         QC-->>RR: 最终响应
                         RR-->>QM: 递归解析结果
                     end
                 else 正常响应流程
                     SM-->>RR: 正常响应
-                    RR->>QC: 查询TLD服务器
-                    QC-->>RR: TLD响应
+                    RR->>QC: 查询 TLD 服务器
+                    QC-->>RR: TLD 响应
                     RR->>QC: 查询权威服务器
                     QC-->>RR: 最终响应
                     RR-->>QM: 递归解析结果
@@ -355,14 +361,14 @@ sequenceDiagram
             alt 查询成功
                 QM-->>S: 有效响应
                 S->>SM: 安全规则验证
-                S->>CIDR: 过滤响应IP
+                S->>CIDR: 过滤响应 IP
 
-                alt 有IP通过过滤
+                alt 有 IP 通过过滤
                     CIDR-->>S: 过滤后的响应
                     S->>CM: 存储到缓存
                     S-->>C: DNS 响应
-                else 所有IP被过滤
-                    CIDR-->>S: 返回REFUSED
+                else 所有 IP 被过滤
+                    CIDR-->>S: 返回 REFUSED
                     S-->>C: DNS 拒绝响应
                 end
             else 查询失败
@@ -403,23 +409,23 @@ sequenceDiagram
 ### 测试 DNS 解析
 
 ```bash
-# 传统DNS测试
+# 传统 DNS 测试
 kdig @127.0.0.1 -p 53 example.com
 
-# DoT测试
+# DoT 测试
 kdig @127.0.0.1 -p 853 example.com +tls
 
-# DoQ测试
+# DoQ 测试
 kdig @127.0.0.1 -p 853 example.com +quic
 
-# DoH测试
+# DoH 测试
 kdig @127.0.0.1 -p 443 example.com +https
 ```
 
 ### 性能监控
 
 ```bash
-# 启用pprof性能分析
+# 启用 pprof 性能分析
 curl http://127.0.0.1:6060/debug/pprof/
 
 # 查看内存使用情况
@@ -484,7 +490,7 @@ go build -o zjdns
 
 ## 🇺🇸 English Documentation
 
-🚀 High-performance recursive DNS resolution server written in Go, supporting Redis caching, DNSSEC validation, ECS, DoT/DoQ/DoH and other advanced features.
+🚀 High-performance recursive DNS resolution server written in Go, supporting Memory/Redis caching, DNSSEC validation, ECS, DoT/DoQ/DoH and other advanced features.
 
 ---
 
@@ -502,7 +508,7 @@ go build -o zjdns
 - **Recursive DNS Resolution**: Complete implementation of DNS recursive query algorithm, resolving step by step from root servers
 - **Intelligent Protocol Negotiation**: Supports both UDP and TCP protocols, **automatically falls back to TCP protocol when UDP responses are truncated or exceed buffer size**, ensuring complete transmission of large response data
 - **CNAME Chain Resolution**: Intelligently handles CNAME record chains, prevents circular references, supports multi-level CNAME resolution
-- **A/AAAA Latency Probing**: Background speed testing for A/AAAA answers using configurable probe steps (`ping`、`tcp`、`udp`、`http(s|3)`), then reorders records by observed latency to improve subsequent lookup performance while returning the first result immediately
+- **A/AAAA Latency Probing**: Background speed testing for A/AAAA answers using configurable probe steps (`ping`, `tcp`, `udp`, `http(s|3)`), then reorders records by observed latency to improve subsequent lookup performance while returning the first result immediately
 - **DNS Rewrite Functionality**: Supports exact match domain rewrite rules, enabling domain filtering and redirection; supports custom response codes (such as NXDOMAIN, SERVFAIL, etc.) and DNS records (such as A, AAAA, CNAME, etc.) return
 - **Hybrid Mode**: Can configure both upstream DNS servers and recursive resolvers simultaneously, enabling flexible query strategies
 
@@ -519,15 +525,12 @@ go build -o zjdns
   - **Step 2**: **Automatically switches to TCP protocol for retry** to bypass common UDP pollution
   - **Step 3**: If TCP query results are **still** hijacked, completely reject the response, preventing pollution from the source
 
-- **DNSSEC Validation**: Complete DNSSEC chain of trust validation, including:
-  - **Trust Anchor Auto-loading**: Automatically loads root trust anchors (KSK 20326 and KSK 38696) from built-in IANA root-anchors.xml at startup
-  - **RRSIG Signature Verification**: Complete RRSIG cryptographic signature verification, supporting RSA/ECDSA algorithms
-  - **DNSKEY Chain Validation**: Full chain validation from root zone to authoritative servers
-  - **DS Record Validation**: RFC [4509](https://www.rfc-editor.org/rfc/rfc4509.html) compliant DS record validation, supporting SHA-1/SHA-256 digests
-  - **NSEC/NSEC3 Validation**: Authenticated denial of existence (NXDOMAIN/NODATA)
-  - **ZoneCache**: Caches validated DNSKEY to avoid repeated queries
-  - **AD Flag Propagation**: Supports Authenticated Data flag propagation
-- **ECS Support**: EDNS Client Subnet, providing geolocation-aware resolution, supports `auto`, `auto_v4`, `auto_v6` auto-detection or manual CIDR configuration
+- **DNSSEC Validation**: Lightweight DNSSEC validation mechanism
+  - **AD Flag Check**: Validates Authenticated Data flag in responses
+  - **DNSSEC Record Check**: Detects DNSSEC-related record types (RRSIG, NSEC, NSEC3, DNSKEY, DS)
+  - **AD Flag Propagation**: Propagates Authenticated Data flag to clients when validation passes
+
+- **ECS Support**: EDNS Client Subnet (RFC [7871](https://www.rfc-editor.org/rfc/rfc7871.html)), providing geolocation-aware resolution, supports `auto`, `auto_v4`, `auto_v6` auto-detection or manual CIDR configuration
 - **DNS Cookie**: Supports RFC [7873](https://www.rfc-editor.org/rfc/rfc7873.html) and RFC [9018](https://www.rfc-editor.org/rfc/rfc9018.html) standards, provides HMAC-SHA256 server cookie generation and validation, mitigates DNS amplification attacks
 - **Extended DNS Error (EDE)**: Supports RFC [8914](https://www.rfc-editor.org/rfc/rfc8914.html), includes detailed error information in responses (such as Stale Answer, Blocked, DNSSEC Bogus, etc.), enhances debugging capability
 - **Recursion Depth Protection**: Prevents malicious recursive query attacks, configurable maximum recursion depth
@@ -565,47 +568,49 @@ go build -o zjdns
 
 ### 💾 Cache System
 
-- **Unified Cache Architecture**: `CacheManager` manages both DNS responses and DNSSEC metadata, removing the separate zone cache concept
-- **Dual Mode Operation**:
-  - **No Cache Mode**: Suitable for testing environments, zero-configuration startup, pure recursive resolution
-  - **Redis Cache Mode**: Recommended for production environments, supports distributed deployment and data persistence
-- **Memory-first reads**: The cache reads from local memory first, then falls back to Redis if enabled
-- **Write-through strategy**: Writes immediately update memory and asynchronously persist to Redis
-- **PTR reverse lookup acceleration**: For PTR queries, the server checks local cache for matching A/AAAA records and generates PTR responses directly without extra upstream fetches
+- **Dual-Mode Architecture**:
+  - **Memory Cache Mode** (default): Uses pure MemoryCache when Redis is not configured
+  - **Hybrid Cache Mode**: Uses MemoryCache + Redis hybrid architecture (HybridCache) when Redis is configured
+
+- **Hybrid Cache Strategy**:
+  - **Memory-First Reads**: Query memory cache first, fall back to Redis on miss
+  - **Write-Through**: Update both memory and Redis simultaneously (Redis written asynchronously)
+  - **Auto-Fill**: Cache entries loaded from Redis are automatically filled into memory cache
+
+- **PTR Reverse Lookup Acceleration**: For PTR queries, checks local cache for matching A/AAAA records and generates PTR responses directly without extra upstream fetches
+
 - **Stale Cache Serving**: Provides stale cache service when upstream servers are unavailable, greatly improving system availability. This behavior follows RFC [8767](https://www.rfc-editor.org/rfc/rfc8767.html) for expired answer fallback.
+
 - **Prefetch Mechanism**: Background automatic refresh of soon-to-expire cache, reducing user waiting time
+
 - **ECS-aware Caching**: Cache partitioning based on client geographic location (EDNS Client Subnet), providing precise localized resolution
+
 - **Access Throttling**: Throttles cache access time update operations, reducing Redis pressure
 
 ---
 
 ## 📁 Project Structure
 
-The project has been refactored from a single file to a modular structure, organized by functionality:
-
-| File           | Description                                                                                                 |
-| -------------- | ----------------------------------------------------------------------------------------------------------- |
-| `constants.go` | Global constants (ports, buffers, protocol limits, cache, QUIC, logging, root servers, ALPN)                |
-| `types.go`     | All type definitions (struct, interface)                                                                    |
-| `utils.go`     | Utility functions (string handling, DNS record operations, cache key generation, example config generation) |
-| `logger.go`    | Log management (LogManager, TimeCache, RNG global variables)                                                |
-| `pool.go`      | Object pools (MessagePool, BufferPool) + global variable initialization                                     |
-| `config.go`    | Configuration management (ConfigManager, validation, DDR records)                                           |
-| `cache.go`     | Cache implementations (MemoryCache, HybridCache, RedisCache, CacheEntry methods)                            |
-| `types.go`     | All type definitions (struct, interface)                                                                    |
-| `utils.go`     | Utility functions (string handling, DNS record operations, cache key generation, etc.)                      |
-| `logger.go`    | Log management (LogManager, TimeCache, RNG global variables)                                                |
-| `pool.go`      | Object pools (MessagePool, BufferPool)                                                                      |
-| `config.go`    | Configuration management and cache implementation (ConfigManager, RedisCache)                               |
-| `cidr.go`      | CIDR filtering management                                                                                   |
-| `edns.go`      | EDNS/ECS/Cookie/EDE management                                                                              |
-| `rewrite.go`   | DNS rewrite rules                                                                                           |
-| `security.go`  | Security management (DNSSECValidator, HijackPrevention, SecurityManager)                                    |
-| `tls.go`       | TLS/DoT/DoQ/DoH/DoH3 management                                                                             |
-| `query.go`     | DNS query client (QueryClient)                                                                              |
-| `resolver.go`  | Recursive resolution and upstream queries (QueryManager, RecursiveResolver, CNAMEHandler)                   |
-| `server.go`    | DNS server core (DNSServer)                                                                                 |
-| `main.go`      | Entry point file                                                                                            |
+| File               | Description                                                                      |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `main.go`          | Entry point (CLI flags, config loading, server startup)                          |
+| `version.go`       | Version information (v1.5.9)                                                     |
+| `constants.go`     | Global constants (ports, buffers, timeouts, EDE codes, root servers, ALPN)       |
+| `types.go`         | All type definitions (structs, interfaces)                                       |
+| `utils.go`         | Utility functions (string ops, DNS records, cache keys, client IP extraction)    |
+| `logger.go`        | Log management (LogManager, TimeCache, RNG)                                      |
+| `pool.go`          | Object pools (MessagePool, BufferPool)                                           |
+| `config.go`        | Configuration management (ConfigManager, JSON validation, DDR record generation) |
+| `cache.go`         | Cache system (MemoryCache, RedisCache, HybridCache)                              |
+| `cidr.go`          | CIDR filtering (CIDRManager, IP filtering with REFUSED + EDE response)           |
+| `edns.go`          | EDNS extensions (ECS, DNS Cookie RFC 7873/9018, EDE RFC 8914)                    |
+| `rewrite.go`       | DNS rewriting (RewriteManager, domain filtering, custom response codes)          |
+| `security.go`      | Security management (DNSSECValidator, HijackPrevention, SecurityManager)         |
+| `tls.go`           | TLS protocols (TLSManager, DoT/DoQ/DoH/DoH3 handlers, self-signed CA)            |
+| `query.go`         | Query client (QueryClient, protocol-specific querying)                           |
+| `resolver.go`      | Resolution (QueryManager, RecursiveResolver, CNAMEHandler, ResponseValidator)    |
+| `server.go`        | Server core (DNSServer, UDP/TCP/DoT/DoQ/DoH handlers, signal handling)           |
+| `latency_probe.go` | Latency probing (A/AAAA record speed testing, reordering by latency)             |
 
 ## 🏗️ System Architecture
 
@@ -650,22 +655,23 @@ graph TB
 
     subgraph "Cache System"
         W[CacheManager Interface<br>Cache Manager Interface]
-        X[RedisCache<br>Redis Cache Implementation]
-        Y[MemoryCache<br>Memory Cache Implementation]
+        X[MemoryCache<br>Memory Cache Implementation]
+        Y[RedisCache<br>Redis Cache Implementation<br>Optional]
+        Z[HybridCache<br>Hybrid Cache<br>MemoryCache + RedisCache]
     end
 
     subgraph "Background Task Management"
-        Z[Background Group<br>Background Task Group]
-        AA[Cache Refresh Group<br>Cache Refresh Group]
-        BB[Shutdown Coordinator<br>Shutdown Coordinator]
-        CC[Signal Handler<br>Signal Handler]
+        AA[Background Group<br>Background Task Group]
+        BB[Cache Refresh Group<br>Cache Refresh Group]
+        CC[Shutdown Coordinator<br>Shutdown Coordinator]
+        DD[Signal Handler<br>Signal Handler]
     end
 
     subgraph "External Dependencies"
-        DD[Upstream DNS Servers<br>Upstream DNS Servers]
-        EE[Redis Server<br>Redis Server]
-        FF[Root DNS Servers<br>Root DNS Servers]
-        GG[TLS Certificates<br>TLS Certificates]
+        EE[Upstream DNS Servers<br>Upstream DNS Servers]
+        FF[Redis Server<br>Redis Server<br>Optional]
+        GG[Root DNS Servers<br>Root DNS Servers]
+        HH[TLS Certificates<br>TLS Certificates]
     end
 
     %% Main connections
@@ -704,21 +710,22 @@ graph TB
     P --> V
 
     W --> X
-    W --> Y
+    W --> Z
+    Z --> Y
 
-    B --> Z
     B --> AA
     B --> BB
     B --> CC
+    B --> DD
 
     %% External connections
-    K --> DD
-    L --> FF
-    X --> EE
-    Q --> GG
-    F --> GG
-    G --> GG
-    H --> GG
+    K --> EE
+    L --> GG
+    Y --> FF
+    Q --> HH
+    F --> HH
+    G --> HH
+    H --> HH
 
     %% Style definitions
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
@@ -735,9 +742,9 @@ graph TB
     class D,E,F,G,H protocol
     class I,J,K,L,M,N query
     class O,P,Q,R,S,T,U,V security
-    class W,X,Y cache
-    class Z,AA,BB,CC background
-    class DD,EE,FF,GG external
+    class W,X,Y,Z cache
+    class AA,BB,CC,DD background
+    class EE,FF,GG,HH external
 ```
 
 ---
@@ -760,9 +767,8 @@ sequenceDiagram
     participant SM as SecurityManager<br>Security Manager
     participant US as Upstream DNS
     participant RS as Root Servers
-    participant Redis as Redis Cache
 
-    Note over C,Redis: Client queries for example.com
+    Note over C,RS: Client queries for example.com
 
     C->>P: DNS Query (UDP/TCP/DoT/DoQ/DoH)
     P->>S: Unified Request Processing
