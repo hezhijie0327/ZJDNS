@@ -287,7 +287,8 @@ func (em *EDNSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption
 
 // CookieGenerator handles DNS cookie generation and validation
 type CookieGenerator struct {
-	secret []byte // Server secret for HMAC
+	secret         []byte // Current HMAC secret
+	previousSecret []byte // Previous secret for seamless rotation
 }
 
 // NewCookieGenerator creates a new cookie generator with a random secret
@@ -300,65 +301,76 @@ func NewCookieGenerator() *CookieGenerator {
 	return &CookieGenerator{secret: secret}
 }
 
-// GenerateServerCookie generates a server cookie per RFC 9018
-// Algorithm: HMAC-SHA256(secret, clientIP || clientCookie || timestamp || nonce)
-// Server cookie format: nonce (8 bytes) || HMAC truncated to 8 bytes = 16 bytes total
+// RotateSecret replaces the current secret and retains the previous secret
+// so already-issued cookies remain valid across one rotation window.
+func (cg *CookieGenerator) RotateSecret() {
+	if cg == nil {
+		return
+	}
+
+	newSecret := make([]byte, 32)
+	if _, err := rand.Read(newSecret); err != nil {
+		newSecret = []byte(fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix()))
+	}
+	cg.previousSecret = cg.secret
+	cg.secret = newSecret
+}
+
+// GenerateServerCookie generates a server cookie.
+// The server cookie is an HMAC of clientIP and clientCookie, truncated to 16 bytes.
 func (cg *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []byte) []byte {
 	if cg == nil || len(clientCookie) != DefaultCookieClientLen {
 		return nil
 	}
 
-	// Generate random nonce (8 bytes)
-	nonce := make([]byte, 8)
-	if _, err := rand.Read(nonce); err != nil {
-		// Fallback to timestamp-based nonce
-		timestamp := uint64(time.Now().UnixNano())
-		for i := 0; i < 8; i++ {
-			nonce[i] = byte(timestamp >> (i * 8))
-		}
+	if clientIP == nil {
+		clientIP = net.ParseIP("0.0.0.0")
 	}
+	clientIP = clientIP.To16()
 
-	// Build HMAC input: clientIP || clientCookie || nonce
-	data := make([]byte, 0, len(clientIP)+len(clientCookie)+len(nonce))
+	data := make([]byte, 0, len(clientIP)+len(clientCookie))
 	data = append(data, clientIP...)
 	data = append(data, clientCookie...)
-	data = append(data, nonce...)
 
-	// Compute HMAC-SHA256
 	h := hmac.New(sha256.New, cg.secret)
 	h.Write(data)
 	mac := h.Sum(nil)
 
-	// Server cookie = nonce (8 bytes) || truncated MAC (8 bytes) = 16 bytes
-	serverCookie := make([]byte, 0, DefaultCookieServerLen)
-	serverCookie = append(serverCookie, nonce...)
-	serverCookie = append(serverCookie, mac[:8]...)
+	serverCookie := make([]byte, DefaultCookieServerLen)
+	copy(serverCookie, mac[:DefaultCookieServerLen])
 
 	return serverCookie
 }
 
-// ValidateServerCookie verifies a server cookie
+// ValidateServerCookie verifies a server cookie using the current secret
+// or the previous secret when the server secret has rotated.
 func (cg *CookieGenerator) ValidateServerCookie(clientIP net.IP, clientCookie, serverCookie []byte) bool {
-	if cg == nil || len(clientCookie) != DefaultCookieClientLen || len(serverCookie) < 16 {
+	if cg == nil || len(clientCookie) != DefaultCookieClientLen || len(serverCookie) != DefaultCookieServerLen {
 		return false
 	}
 
-	// Extract nonce (first 8 bytes)
-	nonce := serverCookie[:8]
-	receivedMAC := serverCookie[8:16]
+	if clientIP == nil {
+		clientIP = net.ParseIP("0.0.0.0")
+	}
+	clientIP = clientIP.To16()
 
-	// Rebuild HMAC input
-	data := make([]byte, 0, len(clientIP)+len(clientCookie)+len(nonce))
+	data := make([]byte, 0, len(clientIP)+len(clientCookie))
 	data = append(data, clientIP...)
 	data = append(data, clientCookie...)
-	data = append(data, nonce...)
 
-	// Compute expected HMAC
 	h := hmac.New(sha256.New, cg.secret)
 	h.Write(data)
-	expectedMAC := h.Sum(nil)[:8]
+	if hmac.Equal(serverCookie, h.Sum(nil)[:DefaultCookieServerLen]) {
+		return true
+	}
 
-	return hmac.Equal(receivedMAC, expectedMAC)
+	if len(cg.previousSecret) > 0 {
+		hPrev := hmac.New(sha256.New, cg.previousSecret)
+		hPrev.Write(data)
+		return hmac.Equal(serverCookie, hPrev.Sum(nil)[:DefaultCookieServerLen])
+	}
+
+	return false
 }
 
 // GenerateClientCookie generates an 8-byte client cookie
