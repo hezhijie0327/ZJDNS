@@ -233,7 +233,6 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config.Server.TLS.Port = DefaultDOTPort
 	config.Server.TLS.HTTPS.Port = DefaultDOHPort
 	config.Server.TLS.HTTPS.Endpoint = DefaultQueryPath
-	config.Server.Features.ForceDNSSEC = true
 	config.Server.Features.HijackProtection = true
 	config.Redis.KeyPrefix = "zjdns:"
 	return config

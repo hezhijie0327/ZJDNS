@@ -59,7 +59,7 @@ func (qm *QueryManager) Initialize(servers []UpstreamServer) error {
 // Query routes DNS queries between upstream servers and recursive resolution.
 // If upstream servers are configured, it queries them; otherwise, it performs
 // recursive resolution starting from the root servers.
-func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, uint16, *ECSOption, string, error) {
+func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	servers := qm.upstream.getServers()
 	if len(servers) > 0 {
 		return qm.queryUpstream(question, ecs)
@@ -68,7 +68,7 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, 
 	defer cancel()
 
 	answer, authority, additional, validated, ecsResponse, server, err := qm.cname.resolveWithCNAME(ctx, question, ecs)
-	return answer, authority, additional, validated, 0, ecsResponse, server, err
+	return answer, authority, additional, validated, ecsResponse, server, err
 }
 
 // =============================================================================
@@ -91,10 +91,10 @@ func (uh *UpstreamHandler) getServers() []*UpstreamServer {
 // queryUpstream performs concurrent queries to upstream DNS servers.
 // It implements the "first win" strategy where the first successful response
 // is returned immediately, canceling any pending queries.
-func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, uint16, *ECSOption, string, error) {
+func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, error) {
 	servers := qm.upstream.getServers()
 	if len(servers) == 0 {
-		return nil, nil, nil, false, 0, nil, "", errors.New("no upstream servers")
+		return nil, nil, nil, false, nil, "", errors.New("no upstream servers")
 	}
 
 	servers = shuffleSlice(servers)
@@ -176,8 +176,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							queryResult.Response.Answer = filteredAnswer
 						}
 
-						var edeCode uint16
-						queryResult.Validated, edeCode = qm.validator.dnssecValidator.ValidateResponse(queryResult.Response, true)
+						queryResult.Validated = qm.validator.dnssecValidator.ValidateResponse(queryResult.Response, true)
 						ecsResponse := qm.server.ednsMgr.ParseFromDNS(queryResult.Response)
 
 						select {
@@ -186,7 +185,6 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							authority:  queryResult.Response.Ns,
 							additional: queryResult.Response.Extra,
 							validated:  queryResult.Validated,
-							edeCode:    edeCode,
 							ecs:        ecsResponse,
 							server:     serverDesc,
 						}:
@@ -209,7 +207,6 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 							authority:  queryResult.Response.Ns,
 							additional: queryResult.Response.Extra,
 							validated:  false,
-							edeCode:    0,
 							ecs:        qm.server.ednsMgr.ParseFromDNS(queryResult.Response),
 							server:     serverDesc,
 						}:
@@ -234,20 +231,20 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]
 	select {
 	case res, ok := <-resultChan:
 		if ok && res.server != "" {
-			return res.answer, res.authority, res.additional, res.validated, res.edeCode, res.ecs, res.server, nil
+			return res.answer, res.authority, res.additional, res.validated, res.ecs, res.server, nil
 		}
 		// No NOERROR response, check for NXDOMAIN fallback
 		select {
 		case nxRes, nxOk := <-nxdomainChan:
 			if nxOk && nxRes.server != "" {
 				LogDebug("UPSTREAM: Returning NXDOMAIN fallback after no successful response")
-				return nxRes.answer, nxRes.authority, nxRes.additional, nxRes.validated, nxRes.edeCode, nxRes.ecs, nxRes.server, nil
+				return nxRes.answer, nxRes.authority, nxRes.additional, nxRes.validated, nxRes.ecs, nxRes.server, nil
 			}
 		default:
 		}
-		return nil, nil, nil, false, 0, nil, "", errors.New("all upstream queries failed")
+		return nil, nil, nil, false, nil, "", errors.New("all upstream queries failed")
 	case <-queryCtx.Done():
-		return nil, nil, nil, false, 0, nil, "", queryCtx.Err()
+		return nil, nil, nil, false, nil, "", queryCtx.Err()
 	}
 }
 
@@ -408,8 +405,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 			}
 		}
 
-		var edeCode uint16
-		validated, edeCode := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
+		validated := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
 
 		answer := response.Answer
@@ -418,11 +414,6 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		valid := validated
 		ecsResp := ecsResponse
 		server := RecursiveIndicator
-		// Pass edeCode back through error for now (simplified)
-		if edeCode != 0 {
-			messagePool.Put(response)
-			return nil, nil, nil, false, ecsResp, server, fmt.Errorf("dnssec_validation_failed:%d", edeCode)
-		}
 		err = nil
 		messagePool.Put(response)
 		return answer, authority, additional, valid, ecsResp, server, err
@@ -454,14 +445,8 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 			}
 		}
 
-		var edeCode uint16
-		validated, edeCode := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
+		validated := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
-
-		if edeCode != 0 {
-			messagePool.Put(response)
-			return nil, nil, nil, false, ecsResponse, "", fmt.Errorf("dnssec_validation_failed:%d", edeCode)
-		}
 
 		if len(response.Answer) > 0 {
 			answer, authority, additional := response.Answer, response.Ns, response.Extra
@@ -599,7 +584,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 				rcode := result.Response.Rcode
 
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-					result.Validated, _ = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
+					result.Validated = rr.server.securityMgr.dnssec.ValidateResponse(result.Response, true)
 					select {
 					case resultChan <- result.Response:
 						// First win - immediately cancel all other connections

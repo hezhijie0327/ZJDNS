@@ -580,23 +580,3 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 
 	return ip
 }
-
-// =============================================================================
-// DNSKEY and DS Record Conversion
-// =============================================================================
-
-func dnsKEYsToRRs(keys []*dns.DNSKEY) []dns.RR {
-	rrs := make([]dns.RR, 0, len(keys))
-	for _, key := range keys {
-		rrs = append(rrs, key)
-	}
-	return rrs
-}
-
-func dsRecordsToRRs(records []*dns.DS) []dns.RR {
-	rrs := make([]dns.RR, 0, len(records))
-	for _, record := range records {
-		rrs = append(rrs, record)
-	}
-	return rrs
-}

@@ -21,7 +21,6 @@
       }
     },
     "features": {
-      "force_dnssec": true,
       "hijack_protection": true
     },
     "latency_probe": [

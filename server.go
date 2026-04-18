@@ -494,16 +494,12 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, _ net.IP, isSecureConnection b
 			}
 		}
 	}
-	// Respect config when deciding whether to preserve DNSSEC records for
-	// responses, and still preserve client EDNS data like ECS and cookies.
-	clientRequestedDNSSEC := s.config.Server.Features.ForceDNSSEC
+	clientRequestedDNSSEC := false
 	var ecsOpt *ECSOption
 	var cookieOpt *CookieOption
 
 	if opt := req.IsEdns0(); opt != nil {
-		if !clientRequestedDNSSEC {
-			clientRequestedDNSSEC = opt.Do()
-		}
+		clientRequestedDNSSEC = opt.Do()
 		ecsOpt = s.ednsMgr.ParseFromDNS(req)
 		cookieOpt = s.ednsMgr.ParseCookie(req)
 	}
@@ -624,7 +620,6 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 		authority  []dns.RR
 		additional []dns.RR
 		validated  bool
-		edeCode    uint16
 		ecs        *ECSOption
 		err        error
 	}
@@ -632,7 +627,7 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 	resultChan := make(chan queryResult, 1)
 	go func() {
 		defer HandlePanic("expired cache fallback query")
-		answer, authority, additional, validated, edeCode, ecsResponse, _, err := s.queryMgr.Query(question, ecsOpt)
+		answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecsOpt)
 		if err == nil {
 			s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
 		}
@@ -641,7 +636,6 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 			authority:  authority,
 			additional: additional,
 			validated:  validated,
-			edeCode:    edeCode,
 			ecs:        ecsResponse,
 			err:        err,
 		}
@@ -651,7 +645,7 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 	select {
 	case res := <-resultChan:
 		if res.err == nil {
-			return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.edeCode, res.ecs, isSecureConnection)
+			return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs, isSecureConnection)
 		}
 		return s.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, isSecureConnection)
 	case <-time.After(timeout):
@@ -662,7 +656,7 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 // processCacheMiss handles DNS queries that do not have a cache hit,
 // performing upstream or recursive resolution.
 func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, cookieOpt *CookieOption, clientRequestedDNSSEC bool, cacheKey string, isSecureConnection bool) *dns.Msg {
-	answer, authority, additional, validated, edeCode, ecsResponse, _, err := s.queryMgr.Query(question, ecsOpt)
+	answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecsOpt)
 
 	if err != nil {
 		// Check if it's a CIDR filter refusal
@@ -672,7 +666,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, isSecureConnection)
 	}
 
-	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, edeCode, ecsResponse, isSecureConnection)
+	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, isSecureConnection)
 }
 
 // processQueryError handles query failures, attempting to serve stale cache
@@ -707,10 +701,10 @@ func (s *DNSServer) processCIDRRefused(req *dns.Msg, question dns.Question, cook
 	return msg
 }
 
-func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, cookieOpt *CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, edeCode uint16, ecsResponse *ECSOption, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, cookieOpt *CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
-		msg := messagePool.Get()
+		msg = messagePool.Get()
 		msg.SetReply(req)
 	}
 
@@ -735,12 +729,7 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
 	msg.Extra = ProcessRecords(additional, 0, clientRequestedDNSSEC)
 
-	// Add EDE for DNSSEC validation failures
-	var ede *EDEOption
-	if edeCode != 0 {
-		ede = NewEDEOption(edeCode, "DNSSEC validation failed")
-	}
-	s.addEDNS(msg, req, isSecureConnection, cookieOpt, ede)
+	s.addEDNS(msg, req, isSecureConnection, cookieOpt, nil)
 	s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
 	return msg
 }
@@ -753,7 +742,7 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 		return errors.New("server closed")
 	}
 
-	answer, authority, additional, validated, _, ecsResponse, _, err := s.queryMgr.Query(question, ecs)
+	answer, authority, additional, validated, ecsResponse, _, err := s.queryMgr.Query(question, ecs)
 	if err != nil {
 		return err
 	}

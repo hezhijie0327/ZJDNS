@@ -103,7 +103,6 @@ type HTTPSSettings struct {
 
 // FeatureFlags contains feature toggle settings
 type FeatureFlags struct {
-	ForceDNSSEC      bool `json:"force_dnssec,omitempty"`
 	HijackProtection bool `json:"hijack_protection"`
 }
 
@@ -284,7 +283,6 @@ type UpstreamQueryResult struct {
 	authority  []dns.RR
 	additional []dns.RR
 	validated  bool
-	edeCode    uint16
 	ecs        *ECSOption
 	server     string
 }
@@ -360,12 +358,7 @@ type QueryClient struct {
 // =============================================================================
 
 // DNSSECValidator validates DNSSEC responses
-type DNSSECValidator struct {
-	server       *DNSServer
-	trustAnchors map[uint16]*dns.DNSKEY // Root trust anchors (keyTag -> DNSKEY)
-	mu           sync.RWMutex
-	initialized  bool
-}
+type DNSSECValidator struct{}
 
 // HijackPrevention prevents DNS hijacking
 type HijackPrevention struct {
@@ -478,20 +471,4 @@ type MessagePool struct {
 type BufferPool struct {
 	pool sync.Pool
 	size int
-}
-
-// =============================================================================
-// DNSSEC Types
-// =============================================================================
-
-// RootTrustAnchor represents a DNSSEC trust anchor for the root zone
-// This is the IANA root key signing key (KSK) used to bootstrap DNSSEC validation
-type RootTrustAnchor struct {
-	Zone       string
-	KeyTag     uint16
-	Algorithm  uint8
-	Digest     string // Hex encoded digest of DNSKEY
-	DigestType uint8  // Digest type (1=SHA1, 2=SHA256)
-	PublicKey  string // Base64 encoded public key
-	Flags      uint16 // Key flags (256=ZSK, 257=KSK)
 }
