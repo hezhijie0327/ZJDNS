@@ -391,7 +391,7 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		}
 
 		// Process query
-		response := tm.server.processDNSQuery(req, clientIP, true)
+		response := tm.server.processDNSQuery(req, clientIP, true, "DoT")
 		messagePool.Put(req)
 
 		if response != nil {
@@ -601,9 +601,7 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 
 	// Get client IP and process query
 	clientIP := GetSecureClientIP(conn)
-	response := tm.server.processDNSQuery(req, clientIP, true)
-	messagePool.Put(req)
-
+	response := tm.server.processDNSQuery(req, clientIP, true, "DoQ")
 	// Send response
 	if err := tm.respondQUIC(stream, response); err != nil {
 		LogDebug("PROTOCOL: DoQ response failed: %v", err)
@@ -747,7 +745,11 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Process the query
-	response := tm.server.processDNSQuery(req, nil, true)
+	protocol := "DoH"
+	if strings.HasPrefix(r.Proto, "HTTP/3") {
+		protocol = "DoH3"
+	}
+	response := tm.server.processDNSQuery(req, nil, true, protocol)
 
 	if err := tm.respondDoH(w, response); err != nil {
 		LogError("DOH: DoH response failed: %v", err)

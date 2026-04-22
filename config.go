@@ -144,6 +144,17 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	if config.Server.MemoryCacheSize < 0 {
 		return fmt.Errorf("server memory cache size must be non-negative")
 	}
+	if config.Server.StatsInterval < 0 {
+		return fmt.Errorf("server stats interval must be zero or positive")
+	}
+	if config.Server.Stats != nil {
+		if config.Server.Stats.Interval < 0 {
+			return fmt.Errorf("server.stats.interval must be zero or positive")
+		}
+		if config.Server.Stats.ResetInterval < 0 {
+			return fmt.Errorf("server.stats.reset_interval must be zero or positive")
+		}
+	}
 
 	if len(config.Server.LatencyProbe) > 0 {
 		for i, step := range config.Server.LatencyProbe {
@@ -236,6 +247,26 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config.Server.Features.HijackProtection = true
 	config.Redis.KeyPrefix = "zjdns:"
 	return config
+}
+
+// GetStatsInterval returns the configured stats logging interval in seconds.
+// It prefers the new stats config section but falls back to the legacy stats_interval.
+func (s *ServerSettings) GetStatsInterval() int {
+	if s == nil {
+		return 0
+	}
+	if s.Stats != nil && s.Stats.Interval > 0 {
+		return s.Stats.Interval
+	}
+	return s.StatsInterval
+}
+
+// GetStatsResetInterval returns the configured stats reset interval in seconds.
+func (s *ServerSettings) GetStatsResetInterval() int {
+	if s == nil || s.Stats == nil {
+		return 0
+	}
+	return s.Stats.ResetInterval
 }
 
 // shouldEnableDDR checks if DDR should be enabled

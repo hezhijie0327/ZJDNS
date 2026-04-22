@@ -480,10 +480,13 @@ func GenerateExampleConfig() string {
 	cm := &ConfigManager{}
 	config := cm.getDefaultConfig()
 
+	config.Redis.Address = "127.0.0.1:6379"
+
 	config.Server.Pprof = DefaultPprofPort
 	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
-	config.Redis.Address = "127.0.0.1:6379"
+	config.Server.StatsInterval = 0
+	config.Server.Stats = &StatsSettings{}
 	config.Server.TLS.CertFile = "/path/to/cert.pem"
 	config.Server.TLS.KeyFile = "/path/to/key.pem"
 

@@ -144,7 +144,8 @@ const (
 	StaleMaxAge               = 30 * 86400
 	ServeExpiredClientTimeout = 500 // RFC 8767 recommends 1.8 seconds
 
-	RedisPrefixDNS = "dns:"
+	RedisPrefixDNS   = "dns:"
+	RedisPrefixStats = "stats:"
 )
 
 // =============================================================================

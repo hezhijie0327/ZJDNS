@@ -66,6 +66,8 @@ type ServerSettings struct {
 	LogLevel        string             `json:"log_level"`
 	DefaultECS      string             `json:"default_ecs_subnet"`
 	MemoryCacheSize int                `json:"memory_cache_size,omitempty"`
+	StatsInterval   int                `json:"stats_interval,omitempty"`
+	Stats           *StatsSettings     `json:"stats,omitempty"`
 	DDR             DDRSettings        `json:"ddr"`
 	TLS             TLSSettings        `json:"tls"`
 	Features        FeatureFlags       `json:"features"`
@@ -104,6 +106,11 @@ type HTTPSSettings struct {
 // FeatureFlags contains feature toggle settings
 type FeatureFlags struct {
 	HijackProtection bool `json:"hijack_protection"`
+}
+
+type StatsSettings struct {
+	Interval      int `json:"interval,omitempty"`
+	ResetInterval int `json:"reset_interval,omitempty"`
 }
 
 // RedisSettings contains Redis connection settings
@@ -407,6 +414,7 @@ type DNSServer struct {
 	ednsMgr           *EDNSManager
 	rewriteMgr        *RewriteManager
 	cidrMgr           *CIDRManager
+	statsMgr          *StatsManager
 	pprofServer       *http.Server
 	redisClient       *redis.Client
 	redisCache        *RedisCache
@@ -471,4 +479,76 @@ type MessagePool struct {
 type BufferPool struct {
 	pool sync.Pool
 	size int
+}
+
+// =============================================================================
+// Stats Management
+// =============================================================================
+
+type StatsSnapshot struct {
+	TotalRequests       uint64 `json:"total_requests"`
+	CacheHits           uint64 `json:"cache_hits"`
+	CacheMisses         uint64 `json:"cache_misses"`
+	ErrorResponses      uint64 `json:"error_responses"`
+	StaleResponses      uint64 `json:"stale_responses"`
+	TotalResponseTimeMs uint64 `json:"total_response_time_ms"`
+	LastResponseTimeMs  uint64 `json:"last_response_time_ms"`
+	UDPRequests         uint64 `json:"udp_requests"`
+	TCPRequests         uint64 `json:"tcp_requests"`
+	DoTRequests         uint64 `json:"dot_requests"`
+	DoQRequests         uint64 `json:"doq_requests"`
+	DoHRequests         uint64 `json:"doh_requests"`
+	DoH3Requests        uint64 `json:"doh3_requests"`
+	RewriteRequests     uint64 `json:"rewrite_requests"`
+	HijackDetections    uint64 `json:"hijack_detections"`
+	UpdatedAt           int64  `json:"updated_at"`
+}
+
+type StatsLogTotals struct {
+	TotalRequests         uint64  `json:"total_requests"`
+	CacheHits             uint64  `json:"cache_hits"`
+	CacheMisses           uint64  `json:"cache_misses"`
+	ErrorResponses        uint64  `json:"error_responses"`
+	StaleResponses        uint64  `json:"stale_responses,omitempty"`
+	LastResponseTimeMs    uint64  `json:"last_response_time_ms"`
+	AverageResponseTimeMs float64 `json:"average_response_time_ms,omitempty"`
+}
+
+type StatsLogProtocolCounts struct {
+	UDPRequests  uint64 `json:"udp_requests,omitempty"`
+	TCPRequests  uint64 `json:"tcp_requests,omitempty"`
+	DoTRequests  uint64 `json:"dot_requests,omitempty"`
+	DoQRequests  uint64 `json:"doq_requests,omitempty"`
+	DoHRequests  uint64 `json:"doh_requests,omitempty"`
+	DoH3Requests uint64 `json:"doh3_requests,omitempty"`
+}
+
+type StatsLogEvents struct {
+	RewriteRequests  uint64 `json:"rewrite_requests,omitempty"`
+	HijackDetections uint64 `json:"hijack_detections,omitempty"`
+}
+
+type StatsLogRates struct {
+	FailureRate float64 `json:"failure_rate,omitempty"`
+	StaleRate   float64 `json:"stale_rate,omitempty"`
+	CacheRate   float64 `json:"cache_rate,omitempty"`
+	RewriteRate float64 `json:"rewrite_rate,omitempty"`
+	HijackRate  float64 `json:"hijack_rate,omitempty"`
+}
+
+type StatsLog struct {
+	Totals    StatsLogTotals         `json:"totals"`
+	Protocols StatsLogProtocolCounts `json:"protocols,omitempty"`
+	Events    StatsLogEvents         `json:"events,omitempty"`
+	Rates     StatsLogRates          `json:"rates,omitempty"`
+}
+
+type StatsManager struct {
+	enabled       bool
+	redisKey      string
+	client        *redis.Client
+	mu            sync.RWMutex
+	snapshot      StatsSnapshot
+	resetInterval time.Duration
+	nextResetAt   int64
 }

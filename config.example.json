@@ -5,6 +5,10 @@
     "log_level": "info",
     "default_ecs_subnet": "auto",
     "memory_cache_size": 10000,
+    "stats": {
+      "interval": 0,
+      "reset_interval": 0
+    },
     "ddr": {
       "domain": "dns.example.com",
       "ipv4": "127.0.0.1",
