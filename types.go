@@ -132,11 +132,13 @@ type UpstreamServer struct {
 
 // RewriteRule represents a DNS rewrite rule
 type RewriteRule struct {
-	Name           string            `json:"name"`
-	NormalizedName string            `json:"normalized_name,omitempty"`
-	ResponseCode   *int              `json:"response_code,omitempty"`
-	Records        []DNSRecordConfig `json:"records,omitempty"`
-	Additional     []DNSRecordConfig `json:"additional,omitempty"`
+	Name               string            `json:"name"`
+	NormalizedName     string            `json:"normalized_name,omitempty"`
+	ResponseCode       *int              `json:"response_code,omitempty"`
+	Records            []DNSRecordConfig `json:"records,omitempty"`
+	Additional         []DNSRecordConfig `json:"additional,omitempty"`
+	ExcludeClients     []string          `json:"exclude_clients,omitempty"`
+	ExcludeClientCIDRs []*net.IPNet      `json:"-"`
 }
 
 // DNSRecordConfig represents a DNS record configuration

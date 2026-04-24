@@ -2,6 +2,9 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"net"
 	"strconv"
 	"strings"
 
@@ -25,10 +28,24 @@ func NewRewriteManager() *RewriteManager {
 func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 	validRules := make([]RewriteRule, 0, len(rules))
 	for _, rule := range rules {
-		if len(rule.Name) <= MaxDomainLength {
-			rule.NormalizedName = NormalizeDomain(rule.Name)
-			validRules = append(validRules, rule)
+		if len(rule.Name) > MaxDomainLength {
+			continue
 		}
+
+		if len(rule.ExcludeClients) > 0 {
+			nets := make([]*net.IPNet, 0, len(rule.ExcludeClients))
+			for _, entry := range rule.ExcludeClients {
+				ipNet, err := parseRewriteCIDREntry(entry)
+				if err != nil {
+					return fmt.Errorf("rewrite rule '%s' invalid exclude_clients entry '%s': %w", rule.Name, entry, err)
+				}
+				nets = append(nets, ipNet)
+			}
+			rule.ExcludeClientCIDRs = nets
+		}
+
+		rule.NormalizedName = NormalizeDomain(rule.Name)
+		validRules = append(validRules, rule)
 	}
 
 	rm.rules.Store(&validRules)
@@ -37,13 +54,33 @@ func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 	return nil
 }
 
+func parseRewriteCIDREntry(entry string) (*net.IPNet, error) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return nil, errors.New("empty CIDR or IP address")
+	}
+
+	if ip := net.ParseIP(entry); ip != nil {
+		if ip.To4() != nil {
+			return &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}, nil
+		}
+		return &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}, nil
+	}
+
+	_, ipNet, err := net.ParseCIDR(entry)
+	if err != nil {
+		return nil, err
+	}
+	return ipNet, nil
+}
+
 // hasRules checks if any rewrite rules are loaded
 func (rm *RewriteManager) hasRules() bool {
 	return rm.rulesLen.Load() > 0
 }
 
 // RewriteWithDetails checks if a domain should be rewritten and returns the result
-func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16, qclass uint16) DNSRewriteResult {
+func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16, qclass uint16, clientIP net.IP) DNSRewriteResult {
 	result := DNSRewriteResult{
 		Domain:        domain,
 		ResponseCode:  dns.RcodeSuccess,
@@ -65,10 +102,19 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16, qclass
 	rules := *rulesPtr
 	domain = NormalizeDomain(domain)
 
+ruleLoop:
 	for i := range rules {
 		rule := &rules[i]
 		if domain != rule.NormalizedName {
 			continue
+		}
+
+		if len(rule.ExcludeClientCIDRs) > 0 && clientIP != nil {
+			for _, ipNet := range rule.ExcludeClientCIDRs {
+				if ipNet.Contains(clientIP) {
+					continue ruleLoop
+				}
+			}
 		}
 
 		// Check for response code override at rule level

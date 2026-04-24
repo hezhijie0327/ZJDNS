@@ -523,6 +523,12 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 
 	question := req.Question[0]
 
+	if clientIP != nil {
+		LogDebug("QUERY: client IP=%s query=%s type=%s", clientIP.String(), question.Name, dns.TypeToString[question.Qtype])
+	} else {
+		LogDebug("QUERY: client IP=<unknown> query=%s type=%s", question.Name, dns.TypeToString[question.Qtype])
+	}
+
 	if len(question.Name) > MaxDomainLength || question.Qtype == dns.TypeANY {
 		msg := &dns.Msg{}
 		msg.SetReply(req)
@@ -555,7 +561,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	}()
 
 	if s.rewriteMgr.hasRules() {
-		rewriteResult := s.rewriteMgr.RewriteWithDetails(question.Name, question.Qtype, question.Qclass)
+		rewriteResult := s.rewriteMgr.RewriteWithDetails(question.Name, question.Qtype, question.Qclass, clientIP)
 
 		if rewriteResult.ShouldRewrite {
 			rewrote = true
