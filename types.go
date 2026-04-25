@@ -52,13 +52,12 @@ type TimeCache struct {
 
 // ServerConfig represents the complete server configuration
 type ServerConfig struct {
-	Server         ServerSettings   `json:"server"`
-	Redis          RedisSettings    `json:"redis"`
-	Upstream       []UpstreamServer `json:"upstream"`
-	Fallback       []UpstreamServer `json:"fallback,omitempty"`
-	ExcludeClients []string         `json:"exclude_clients,omitempty"`
-	Rewrite        []RewriteRule    `json:"rewrite"`
-	CIDR           []CIDRConfig     `json:"cidr"`
+	Server   ServerSettings   `json:"server"`
+	Redis    RedisSettings    `json:"redis"`
+	Upstream []UpstreamServer `json:"upstream"`
+	Fallback []UpstreamServer `json:"fallback,omitempty"`
+	Rewrite  []RewriteRule    `json:"rewrite"`
+	CIDR     []CIDRConfig     `json:"cidr"`
 }
 
 // ServerSettings contains server-specific settings
@@ -346,9 +345,9 @@ type ipv4Net struct {
 
 // RewriteManager manages DNS rewrite rules
 type RewriteManager struct {
-	rules                    atomic.Pointer[[]RewriteRule]
-	rulesLen                 atomic.Uint64
-	globalExcludeClientCIDRs []*net.IPNet
+	rules              atomic.Pointer[[]RewriteRule]
+	rulesLen           atomic.Uint64
+	globalExcludeCIDRs atomic.Pointer[[]*net.IPNet]
 }
 
 // =============================================================================

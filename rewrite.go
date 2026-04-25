@@ -19,28 +19,18 @@ import (
 func NewRewriteManager() *RewriteManager {
 	rm := &RewriteManager{}
 	initialRules := make([]RewriteRule, 0, 16)
+	initialExcludes := make([]*net.IPNet, 0)
 	rm.rules.Store(&initialRules)
+	rm.globalExcludeCIDRs.Store(&initialExcludes)
 	rm.rulesLen.Store(0)
 	return rm
 }
 
 // LoadRules loads rewrite rules into the manager
-func (rm *RewriteManager) LoadRules(rules []RewriteRule, globalExcludeClients []string) error {
+func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 	validRules := make([]RewriteRule, 0, len(rules))
-
-	if len(globalExcludeClients) > 0 {
-		nets := make([]*net.IPNet, 0, len(globalExcludeClients))
-		for _, entry := range globalExcludeClients {
-			ipNet, err := parseRewriteCIDREntry(entry)
-			if err != nil {
-				return fmt.Errorf("rewrite global exclude_clients invalid entry '%s': %w", entry, err)
-			}
-			nets = append(nets, ipNet)
-		}
-		rm.globalExcludeClientCIDRs = nets
-	}
-
-	for _, rule := range rules {
+	globalExcludes := make([]*net.IPNet, 0)
+	for i, rule := range rules {
 		if len(rule.Name) > MaxDomainLength {
 			continue
 		}
@@ -57,12 +47,23 @@ func (rm *RewriteManager) LoadRules(rules []RewriteRule, globalExcludeClients []
 			rule.ExcludeClientCIDRs = nets
 		}
 
+		if rule.Name == "" {
+			if len(rule.Records) > 0 || len(rule.Additional) > 0 || rule.ResponseCode != nil {
+				return fmt.Errorf("rewrite rule %d: unnamed rules may only contain exclude_clients", i)
+			}
+			if len(rule.ExcludeClientCIDRs) > 0 {
+				globalExcludes = append(globalExcludes, rule.ExcludeClientCIDRs...)
+			}
+			continue
+		}
+
 		rule.NormalizedName = NormalizeDomain(rule.Name)
 		validRules = append(validRules, rule)
 	}
 
 	rm.rules.Store(&validRules)
 	rm.rulesLen.Store(uint64(len(validRules)))
+	rm.globalExcludeCIDRs.Store(&globalExcludes)
 	LogInfo("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
 	return nil
 }
@@ -104,7 +105,20 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16, qclass
 		qclass = dns.ClassINET
 	}
 
-	if !rm.hasRules() || len(domain) > MaxDomainLength {
+	if len(domain) > MaxDomainLength {
+		return result
+	}
+
+	excludePtr := rm.globalExcludeCIDRs.Load()
+	if excludePtr != nil && clientIP != nil {
+		for _, ipNet := range *excludePtr {
+			if ipNet.Contains(clientIP) {
+				return result
+			}
+		}
+	}
+
+	if !rm.hasRules() {
 		return result
 	}
 
@@ -114,14 +128,6 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16, qclass
 	}
 	rules := *rulesPtr
 	domain = NormalizeDomain(domain)
-
-	if len(rm.globalExcludeClientCIDRs) > 0 && clientIP != nil {
-		for _, ipNet := range rm.globalExcludeClientCIDRs {
-			if ipNet.Contains(clientIP) {
-				return result
-			}
-		}
-	}
 
 ruleLoop:
 	for i := range rules {
