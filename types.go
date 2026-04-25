@@ -139,7 +139,9 @@ type RewriteRule struct {
 	Records            []DNSRecordConfig `json:"records,omitempty"`
 	Additional         []DNSRecordConfig `json:"additional,omitempty"`
 	ExcludeClients     []string          `json:"exclude_clients,omitempty"`
+	IncludeClients     []string          `json:"include_clients,omitempty"`
 	ExcludeClientCIDRs []*net.IPNet      `json:"-"`
+	IncludeClientCIDRs []*net.IPNet      `json:"-"`
 }
 
 // DNSRecordConfig represents a DNS record configuration

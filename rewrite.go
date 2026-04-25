@@ -47,8 +47,20 @@ func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 			rule.ExcludeClientCIDRs = nets
 		}
 
+		if len(rule.IncludeClients) > 0 {
+			nets := make([]*net.IPNet, 0, len(rule.IncludeClients))
+			for _, entry := range rule.IncludeClients {
+				ipNet, err := parseRewriteCIDREntry(entry)
+				if err != nil {
+					return fmt.Errorf("rewrite rule '%s' invalid include_clients entry '%s': %w", rule.Name, entry, err)
+				}
+				nets = append(nets, ipNet)
+			}
+			rule.IncludeClientCIDRs = nets
+		}
+
 		if rule.Name == "" {
-			if len(rule.Records) > 0 || len(rule.Additional) > 0 || rule.ResponseCode != nil {
+			if len(rule.Records) > 0 || len(rule.Additional) > 0 || rule.ResponseCode != nil || len(rule.IncludeClientCIDRs) > 0 {
 				return fmt.Errorf("rewrite rule %d: unnamed rules may only contain exclude_clients", i)
 			}
 			if len(rule.ExcludeClientCIDRs) > 0 {
@@ -134,6 +146,22 @@ ruleLoop:
 		rule := &rules[i]
 		if domain != rule.NormalizedName {
 			continue
+		}
+
+		if len(rule.IncludeClientCIDRs) > 0 {
+			if clientIP == nil {
+				continue ruleLoop
+			}
+			included := false
+			for _, ipNet := range rule.IncludeClientCIDRs {
+				if ipNet.Contains(clientIP) {
+					included = true
+					break
+				}
+			}
+			if !included {
+				continue ruleLoop
+			}
 		}
 
 		if len(rule.ExcludeClientCIDRs) > 0 && clientIP != nil {

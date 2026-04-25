@@ -127,6 +127,18 @@
   "rewrite": [
     { "exclude_clients": ["10.0.0.100"] },
     {
+      "name": "client-specific.example.com",
+      "include_clients": ["192.168.0.0/24"],
+      "records": [
+        {
+          "type": "A",
+          "class": "IN",
+          "ttl": 10,
+          "content": "127.0.0.1"
+        }
+      ]
+    },
+    {
       "name": "blocked.example.com",
       "exclude_clients": ["192.168.1.0/24"],
       "records": [
