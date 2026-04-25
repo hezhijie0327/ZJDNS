@@ -26,6 +26,7 @@ func BuildStatsLogJSON(snapshot *StatsSnapshot) ([]byte, error) {
 			CacheMisses:        snapshot.CacheMisses,
 			ErrorResponses:     snapshot.ErrorResponses,
 			StaleResponses:     snapshot.StaleResponses,
+			FallbackRequests:   snapshot.FallbackRequests,
 			LastResponseTimeMs: snapshot.LastResponseTimeMs,
 		},
 		Protocols: StatsLogProtocolCounts{
@@ -45,11 +46,12 @@ func BuildStatsLogJSON(snapshot *StatsSnapshot) ([]byte, error) {
 	if snapshot.TotalRequests > 0 {
 		statsLog.Totals.AverageResponseTimeMs = snapshot.AverageResponseTimeMs()
 		statsLog.Rates = StatsLogRates{
-			FailureRate: float64(snapshot.ErrorResponses) / float64(snapshot.TotalRequests),
-			StaleRate:   float64(snapshot.StaleResponses) / float64(snapshot.TotalRequests),
-			CacheRate:   float64(snapshot.CacheHits) / float64(snapshot.TotalRequests),
-			RewriteRate: float64(snapshot.RewriteRequests) / float64(snapshot.TotalRequests),
-			HijackRate:  float64(snapshot.HijackDetections) / float64(snapshot.TotalRequests),
+			FailureRate:  float64(snapshot.ErrorResponses) / float64(snapshot.TotalRequests),
+			StaleRate:    float64(snapshot.StaleResponses) / float64(snapshot.TotalRequests),
+			CacheRate:    float64(snapshot.CacheHits) / float64(snapshot.TotalRequests),
+			RewriteRate:  float64(snapshot.RewriteRequests) / float64(snapshot.TotalRequests),
+			HijackRate:   float64(snapshot.HijackDetections) / float64(snapshot.TotalRequests),
+			FallbackRate: float64(snapshot.FallbackRequests) / float64(snapshot.TotalRequests),
 		}
 	}
 
@@ -123,7 +125,7 @@ func (sm *StatsManager) setNextResetAt(ctx context.Context, nextResetAt int64) {
 	sm.mu.Unlock()
 }
 
-func (sm *StatsManager) RecordRequest(duration time.Duration, cacheHit bool, hadError bool, protocol string, rewrote bool, hijackDetected bool, staleServed bool) {
+func (sm *StatsManager) RecordRequest(duration time.Duration, cacheHit bool, hadError bool, protocol string, rewrote bool, hijackDetected bool, staleServed bool, fallbackUsed bool) {
 	if sm == nil || !sm.enabled {
 		return
 	}
@@ -178,6 +180,9 @@ func (sm *StatsManager) RecordRequest(duration time.Duration, cacheHit bool, had
 	if staleServed {
 		sm.snapshot.StaleResponses++
 	}
+	if fallbackUsed {
+		sm.snapshot.FallbackRequests++
+	}
 
 	sm.mu.Unlock()
 
@@ -227,6 +232,9 @@ func (sm *StatsManager) RecordRequest(duration time.Duration, cacheHit bool, had
 	if staleServed {
 		pipe.HIncrBy(ctx, sm.redisKey, "stale_responses", 1)
 	}
+	if fallbackUsed {
+		pipe.HIncrBy(ctx, sm.redisKey, "fallback_requests", 1)
+	}
 	_, _ = pipe.Exec(ctx)
 }
 
@@ -274,6 +282,7 @@ func (sm *StatsManager) Reset() {
 		"doh_requests":           0,
 		"doh3_requests":          0,
 		"rewrite_requests":       0,
+		"fallback_requests":      0,
 		"hijack_detections":      0,
 		"updated_at":             now,
 		"reset_at":               nextResetAt,
@@ -310,6 +319,7 @@ func (sm *StatsManager) FetchStats(ctx context.Context) (*StatsSnapshot, error) 
 		CacheHits:           parseUint64OrZero(data["cache_hits"]),
 		CacheMisses:         parseUint64OrZero(data["cache_misses"]),
 		ErrorResponses:      parseUint64OrZero(data["error_responses"]),
+		FallbackRequests:    parseUint64OrZero(data["fallback_requests"]),
 		TotalResponseTimeMs: parseUint64OrZero(data["total_response_time_ms"]),
 		LastResponseTimeMs:  parseUint64OrZero(data["last_response_time_ms"]),
 		UDPRequests:         parseUint64OrZero(data["udp_requests"]),

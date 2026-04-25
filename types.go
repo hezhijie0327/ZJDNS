@@ -496,6 +496,7 @@ type StatsSnapshot struct {
 	CacheMisses         uint64 `json:"cache_misses"`
 	ErrorResponses      uint64 `json:"error_responses"`
 	StaleResponses      uint64 `json:"stale_responses"`
+	FallbackRequests    uint64 `json:"fallback_requests"`
 	TotalResponseTimeMs uint64 `json:"total_response_time_ms"`
 	LastResponseTimeMs  uint64 `json:"last_response_time_ms"`
 	UDPRequests         uint64 `json:"udp_requests"`
@@ -515,6 +516,7 @@ type StatsLogTotals struct {
 	CacheMisses           uint64  `json:"cache_misses"`
 	ErrorResponses        uint64  `json:"error_responses"`
 	StaleResponses        uint64  `json:"stale_responses,omitempty"`
+	FallbackRequests      uint64  `json:"fallback_requests,omitempty"`
 	LastResponseTimeMs    uint64  `json:"last_response_time_ms"`
 	AverageResponseTimeMs float64 `json:"average_response_time_ms,omitempty"`
 }
@@ -534,11 +536,12 @@ type StatsLogEvents struct {
 }
 
 type StatsLogRates struct {
-	FailureRate float64 `json:"failure_rate,omitempty"`
-	StaleRate   float64 `json:"stale_rate,omitempty"`
-	CacheRate   float64 `json:"cache_rate,omitempty"`
-	RewriteRate float64 `json:"rewrite_rate,omitempty"`
-	HijackRate  float64 `json:"hijack_rate,omitempty"`
+	FailureRate  float64 `json:"failure_rate,omitempty"`
+	StaleRate    float64 `json:"stale_rate,omitempty"`
+	CacheRate    float64 `json:"cache_rate,omitempty"`
+	RewriteRate  float64 `json:"rewrite_rate,omitempty"`
+	HijackRate   float64 `json:"hijack_rate,omitempty"`
+	FallbackRate float64 `json:"fallback_rate,omitempty"`
 }
 
 type StatsLog struct {

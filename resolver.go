@@ -82,9 +82,9 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, 
 
 		if len(fallbackServers) > 0 {
 			LogDebug("UPSTREAM: primary upstream failed, querying fallback servers")
-			answer, authority, additional, validated, ecsResponse, server, fallbackUsed, err = qm.queryUpstream(question, ecs, fallbackServers)
+			answer, authority, additional, validated, ecsResponse, server, _, err = qm.queryUpstream(question, ecs, fallbackServers)
 			if err == nil {
-				return answer, authority, additional, validated, ecsResponse, server, fallbackUsed, nil
+				return answer, authority, additional, validated, ecsResponse, server, true, nil
 			}
 		}
 
@@ -92,7 +92,8 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, 
 	}
 
 	if len(fallbackServers) > 0 {
-		return qm.queryUpstream(question, ecs, fallbackServers)
+		answer, authority, additional, validated, ecsResponse, server, _, err := qm.queryUpstream(question, ecs, fallbackServers)
+		return answer, authority, additional, validated, ecsResponse, server, true, err
 	}
 
 	ctx, cancel := context.WithTimeout(qm.server.ctx, IdleTimeout)
