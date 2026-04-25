@@ -85,8 +85,8 @@ func (bp *BufferPool) Get() []byte {
 // Put returns a buffer to the pool
 func (bp *BufferPool) Put(buf []byte) {
 	if buf != nil && cap(buf) >= bp.size {
-		bufCopy := make([]byte, bp.size)
-		copy(bufCopy, buf[:bp.size])
-		bp.pool.Put(&bufCopy)
+		// Zero out the buffer before returning to pool to prevent data leakage
+		clear(buf[:bp.size])
+		bp.pool.Put(&buf)
 	}
 }

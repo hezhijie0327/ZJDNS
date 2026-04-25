@@ -30,9 +30,10 @@ func NewMemoryCache(size int) *MemoryCache {
 	}
 	LogInfo("CACHE: Memory cache enabled (limit=%d)", size)
 	return &MemoryCache{
-		entries: make(map[string]*memoryCacheItem),
-		order:   list.New(),
-		limit:   size,
+		entries:  make(map[string]*memoryCacheItem),
+		order:    list.New(),
+		limit:    size,
+		ptrIndex: make(map[string]map[string]uint32),
 	}
 }
 
@@ -41,6 +42,89 @@ func (mc *MemoryCache) touchEntryLocked(item *memoryCacheItem) {
 		return
 	}
 	mc.order.MoveToFront(item.element)
+}
+
+// updatePTRIndexLocked updates the PTR index for a cache entry
+func (mc *MemoryCache) updatePTRIndexLocked(entry *CacheEntry, key string) {
+	if entry == nil {
+		return
+	}
+	for _, cr := range entry.Answer {
+		if cr == nil {
+			continue
+		}
+		rr := ExpandRecord(cr)
+		if rr == nil {
+			continue
+		}
+
+		var ip net.IP
+		var name string
+		ttl := uint32(0)
+		switch r := rr.(type) {
+		case *dns.A:
+			ip = r.A
+			name = r.Hdr.Name
+			ttl = r.Hdr.Ttl
+		case *dns.AAAA:
+			ip = r.AAAA
+			name = r.Hdr.Name
+			ttl = r.Hdr.Ttl
+		default:
+			continue
+		}
+
+		if ip == nil || name == "" {
+			continue
+		}
+
+		ipStr := ip.String()
+		if mc.ptrIndex[ipStr] == nil {
+			mc.ptrIndex[ipStr] = make(map[string]uint32)
+		}
+		mc.ptrIndex[ipStr][dns.Fqdn(name)] = ttl
+	}
+}
+
+// removeFromPTRIndexLocked removes a cache entry from the PTR index
+func (mc *MemoryCache) removeFromPTRIndexLocked(entry *CacheEntry, key string) {
+	if entry == nil {
+		return
+	}
+	for _, cr := range entry.Answer {
+		if cr == nil {
+			continue
+		}
+		rr := ExpandRecord(cr)
+		if rr == nil {
+			continue
+		}
+
+		var ip net.IP
+		var name string
+		switch r := rr.(type) {
+		case *dns.A:
+			ip = r.A
+			name = r.Hdr.Name
+		case *dns.AAAA:
+			ip = r.AAAA
+			name = r.Hdr.Name
+		default:
+			continue
+		}
+
+		if ip == nil || name == "" {
+			continue
+		}
+
+		ipStr := ip.String()
+		if domains, ok := mc.ptrIndex[ipStr]; ok {
+			delete(domains, dns.Fqdn(name))
+			if len(domains) == 0 {
+				delete(mc.ptrIndex, ipStr)
+			}
+		}
+	}
 }
 
 func (mc *MemoryCache) evictOldestLocked() {
@@ -52,6 +136,12 @@ func (mc *MemoryCache) evictOldestLocked() {
 	if !ok {
 		return
 	}
+
+	// Clean up PTR index for the evicted entry
+	if item, exists := mc.entries[key]; exists && item != nil && item.entry != nil {
+		mc.removeFromPTRIndexLocked(item.entry, key)
+	}
+
 	mc.order.Remove(oldest)
 	delete(mc.entries, key)
 }
@@ -62,16 +152,18 @@ func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
 		return nil, false, false
 	}
 
-	mc.mu.RLock()
+	mc.mu.Lock()
 	item, found := mc.entries[key]
-	mc.mu.RUnlock()
 	if !found || item == nil || item.entry == nil {
+		mc.mu.Unlock()
 		return nil, false, false
 	}
 
-	mc.mu.Lock()
+	// Update access time and LRU order
 	item.entry.AccessTime = time.Now().Unix()
 	mc.touchEntryLocked(item)
+
+	// Clone entry while still holding lock to ensure consistency
 	cloned := cloneCacheEntry(item.entry)
 	mc.mu.Unlock()
 
@@ -85,39 +177,12 @@ func (mc *MemoryCache) ReverseLookup(ip net.IP) []reverseLookupResult {
 		return nil
 	}
 
-	ip4 := ip.To4()
+	ipStr := ip.String()
 	mc.mu.RLock()
-	defer mc.mu.RUnlock()
+	candidates, ok := mc.ptrIndex[ipStr]
+	mc.mu.RUnlock()
 
-	candidates := make(map[string]uint32)
-	for _, item := range mc.entries {
-		if item == nil || item.entry == nil {
-			continue
-		}
-
-		for _, cr := range item.entry.Answer {
-			if cr == nil {
-				continue
-			}
-			rr := ExpandRecord(cr)
-			if rr == nil {
-				continue
-			}
-
-			switch rr := rr.(type) {
-			case *dns.A:
-				if ip4 != nil && rr.A.Equal(ip4) {
-					candidates[dns.Fqdn(rr.Hdr.Name)] = rr.Hdr.Ttl
-				}
-			case *dns.AAAA:
-				if ip4 == nil && rr.AAAA.Equal(ip) {
-					candidates[dns.Fqdn(rr.Hdr.Name)] = rr.Hdr.Ttl
-				}
-			}
-		}
-	}
-
-	if len(candidates) == 0 {
+	if !ok || len(candidates) == 0 {
 		return nil
 	}
 
@@ -175,13 +240,17 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	}
 
 	if existing, ok := mc.entries[key]; ok {
+		// Remove old entry from PTR index before updating
+		mc.removeFromPTRIndexLocked(existing.entry, key)
 		existing.entry = cloneCacheEntry(entry)
 		mc.touchEntryLocked(existing)
+		mc.updatePTRIndexLocked(existing.entry, key)
 		return
 	}
 
 	element := mc.order.PushFront(key)
 	mc.entries[key] = &memoryCacheItem{entry: cloneCacheEntry(entry), element: element}
+	mc.updatePTRIndexLocked(mc.entries[key].entry, key)
 	if mc.limit > 0 && mc.order.Len() > mc.limit {
 		mc.evictOldestLocked()
 	}

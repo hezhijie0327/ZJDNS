@@ -203,11 +203,12 @@ type CacheManager interface {
 
 // MemoryCache is a high-performance in-memory cache implementation.
 type MemoryCache struct {
-	mu      sync.RWMutex
-	entries map[string]*memoryCacheItem
-	order   *list.List
-	limit   int
-	closed  int32
+	mu       sync.RWMutex
+	entries  map[string]*memoryCacheItem
+	order    *list.List
+	limit    int
+	closed   int32
+	ptrIndex map[string]map[string]uint32 // IP string -> domain -> TTL for O(1) PTR lookup
 }
 
 type memoryCacheItem struct {
