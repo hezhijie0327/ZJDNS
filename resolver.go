@@ -130,6 +130,16 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 
 	servers = shuffleSlice(servers)
 
+	serverAddrs := make([]string, 0, len(servers))
+	for _, s := range servers {
+		proto := s.Protocol
+		if proto == "" {
+			proto = "udp"
+		}
+		serverAddrs = append(serverAddrs, fmt.Sprintf("%s(%s)", s.Address, proto))
+	}
+	LogDebug("UPSTREAM: querying %d servers for %s: %v", len(servers), question.Name, serverAddrs)
+
 	resultChan := make(chan UpstreamQueryResult, 1)
 	nxdomainChan := make(chan UpstreamQueryResult, 1) // Fallback for NXDOMAIN
 	queryCtx, cancel := context.WithCancelCause(context.Background())
@@ -163,6 +173,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 					if len(server.Match) > 0 {
 						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, server.Match)
 						if shouldRefuse {
+							LogDebug("UPSTREAM: CIDR filter refused all records for %s from recursive", question.Name)
 							return errors.New("cidr_filter_refused")
 						}
 						answer = filteredAnswer
@@ -202,6 +213,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
 							if shouldRefuse {
 								messagePool.Put(queryResult.Response)
+								LogDebug("UPSTREAM: CIDR filter refused all records for %s from %s", question.Name, serverDesc)
 								return errors.New("cidr_filter_refused")
 							}
 							queryResult.Response.Answer = filteredAnswer
@@ -219,6 +231,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 							ecs:        ecsResponse,
 							server:     serverDesc,
 						}:
+							LogDebug("UPSTREAM: NOERROR from %s for %s, validated=%t, answer=%d, authority=%d", serverDesc, question.Name, queryResult.Validated, len(queryResult.Response.Answer), len(queryResult.Response.Ns))
 							remaining := activeConnections.Load() - 1
 							if remaining > 0 {
 								LogDebug("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
@@ -231,6 +244,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 							return nil
 						}
 					case dns.RcodeNameError:
+						LogDebug("UPSTREAM: NXDOMAIN from %s for %s, storing as fallback", serverDesc, question.Name)
 						// NXDOMAIN - store as fallback, continue querying other servers
 						select {
 						case nxdomainChan <- UpstreamQueryResult{
@@ -418,6 +432,7 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 // It follows the DNS resolution algorithm: query root servers, follow referrals
 // to TLD servers, then to authoritative servers until an answer is found.
 func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
+	LogDebug("RECURSION: depth=%d, querying %s (type=%s, tcp=%t)", depth, question.Name, dns.TypeToString[question.Qtype], forceTCP)
 	if depth > MaxRecursionDep {
 		return nil, nil, nil, false, nil, "", false, fmt.Errorf("recursion depth exceeded: %d", depth)
 	}
@@ -429,6 +444,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 	normalizedQname := NormalizeDomain(qname)
 	var hijackDetected bool
 
+	LogDebug("RECURSION: root domain query, %d nameservers", len(nameservers))
 	if normalizedQname == "" {
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
 		if err != nil {
@@ -453,6 +469,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		server := RecursiveIndicator
 		err = nil
 		messagePool.Put(response)
+		LogDebug("RECURSION: root domain resolved, validated=%t, answer=%d, authority=%d", validated, len(answer), len(authority))
 		return answer, authority, additional, valid, ecsResp, server, false, err
 	}
 
@@ -466,6 +483,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
 		if err != nil {
 			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
+				LogDebug("HIJACK: query error indicates hijack, retrying with TCP for %s", question.Name)
 				return rr.recursiveQuery(ctx, question, ecs, depth, true)
 			}
 			return nil, nil, nil, false, nil, "", false, fmt.Errorf("query %s: %w", currentDomain, err)
@@ -488,6 +506,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		validated := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
 
+		LogDebug("RECURSION: query %s from %d nameservers (domain=%s), validated=%t, answer=%d", question.Name, len(nameservers), currentDomain, validated, len(response.Answer))
 		if len(response.Answer) > 0 {
 			answer, authority, additional := response.Answer, response.Ns, response.Extra
 			messagePool.Put(response)
@@ -551,6 +570,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 			nextNS = rr.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
 		}
 
+		LogDebug("RECURSION: following delegation to %s, %d NS records, %d glue addresses", currentDomain, len(bestNSRecords), len(nextNS))
 		if len(nextNS) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
 			messagePool.Put(response)
@@ -568,8 +588,10 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 // It returns an error that triggers TCP fallback if not already using TCP.
 func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
 	if !currentlyTCP {
+		LogDebug("HIJACK: UDP response suspicious, switching to TCP retry, reason=%s", reason)
 		return nil, nil, nil, false, nil, "", true, fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
 	}
+	LogDebug("HIJACK: TCP response still suspicious, rejecting completely, reason=%s", reason)
 	return nil, nil, nil, false, nil, "", true, fmt.Errorf("DNS hijacking detected (TCP): %s", reason)
 }
 

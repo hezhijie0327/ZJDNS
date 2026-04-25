@@ -63,6 +63,7 @@ func (em *EDNSManager) ParseFromDNS(msg *dns.Msg) *ECSOption {
 
 	for _, option := range opt.Option {
 		if subnet, ok := option.(*dns.EDNS0_SUBNET); ok {
+			LogDebug("EDNS: extracted ECS subnet %s/%d scope=%d", subnet.Address, subnet.SourceNetmask, subnet.SourceScope)
 			return &ECSOption{
 				Family:       subnet.Family,
 				SourcePrefix: subnet.SourceNetmask,

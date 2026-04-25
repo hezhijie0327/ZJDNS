@@ -589,3 +589,27 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 
 	return ip
 }
+
+// FormatAllRecords outputs raw DNS records with section headers for logging.
+func FormatAllRecords(answers, authority, additional []dns.RR) string {
+	var b strings.Builder
+	if len(answers) > 0 {
+		b.WriteString("\n  ;; ANSWER SECTION:")
+		for _, rr := range answers {
+			b.WriteString("\n  " + rr.String())
+		}
+	}
+	if len(authority) > 0 {
+		b.WriteString("\n  ;; AUTHORITY SECTION:")
+		for _, rr := range authority {
+			b.WriteString("\n  " + rr.String())
+		}
+	}
+	if len(additional) > 0 {
+		b.WriteString("\n  ;; ADDITIONAL SECTION:")
+		for _, rr := range additional {
+			b.WriteString("\n  " + rr.String())
+		}
+	}
+	return b.String()
+}
