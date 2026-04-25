@@ -398,6 +398,95 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 
 	expiration := time.Duration(cacheTTL)*time.Second + time.Duration(StaleMaxAge)*time.Second
 	rc.client.Set(ctx, key, data, expiration)
+
+	// Maintain Redis reverse PTR index for A/AAAA answers so PTR lookups can
+	// fall back to Redis when memory cache has no result.
+	if len(answer) > 0 {
+		rc.updateRedisPTRIndex(ctx, answer, now)
+	}
+}
+
+func (rc *RedisCache) updateRedisPTRIndex(ctx context.Context, answer []dns.RR, timestamp int64) {
+	for _, rr := range answer {
+		if rr == nil {
+			continue
+		}
+
+		var ip net.IP
+		switch r := rr.(type) {
+		case *dns.A:
+			ip = r.A
+		case *dns.AAAA:
+			ip = r.AAAA
+		default:
+			continue
+		}
+
+		if ip == nil {
+			continue
+		}
+
+		ptrKey := rc.ptrIndexKey(ip)
+		expiresAt := float64(timestamp + int64(rr.Header().Ttl))
+		member := dns.Fqdn(rr.Header().Name)
+
+		if err := rc.client.ZAdd(ctx, ptrKey, redis.Z{Score: expiresAt, Member: member}).Err(); err != nil {
+			LogError("CACHE: Failed to update PTR index for %s: %v", ptrKey, err)
+			continue
+		}
+
+		if err := rc.client.Expire(ctx, ptrKey, time.Duration(int64(rr.Header().Ttl)+int64(StaleMaxAge))*time.Second).Err(); err != nil {
+			LogError("CACHE: Failed to set expiration for PTR index %s: %v", ptrKey, err)
+		}
+	}
+}
+
+func (rc *RedisCache) ptrIndexKey(ip net.IP) string {
+	return fmt.Sprintf("%sptr:%s", RedisPrefixDNS, ip.String())
+}
+
+func (rc *RedisCache) ReverseLookup(ip net.IP) []reverseLookupResult {
+	if ip == nil || atomic.LoadInt32(&rc.closed) != 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(rc.ctx, OperationTimeout)
+	defer cancel()
+
+	ptrKey := rc.ptrIndexKey(ip)
+	now := float64(time.Now().Unix())
+	if err := rc.client.ZRemRangeByScore(ctx, ptrKey, "-inf", fmt.Sprintf("%f", now)).Err(); err != nil {
+		LogError("CACHE: Failed to clean expired PTR index %s: %v", ptrKey, err)
+	}
+
+	members, err := rc.client.ZRangeWithScores(ctx, ptrKey, 0, -1).Result()
+	if err != nil || len(members) == 0 {
+		return nil
+	}
+
+	results := make([]reverseLookupResult, 0, len(members))
+	for _, z := range members {
+		name, ok := z.Member.(string)
+		if !ok || name == "" {
+			continue
+		}
+
+		expiresAt := int64(z.Score)
+		ttl := uint32(expiresAt - time.Now().Unix())
+		if ttl == 0 {
+			continue
+		}
+		results = append(results, reverseLookupResult{Name: name, TTL: ttl})
+	}
+
+	if len(results) == 0 {
+		return nil
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Name < results[j].Name
+	})
+	return results
 }
 
 // Close shuts down the Redis cache
@@ -547,10 +636,22 @@ func (hc *HybridCache) Get(key string) (*CacheEntry, bool, bool) {
 }
 
 func (hc *HybridCache) ReverseLookup(ip net.IP) []reverseLookupResult {
-	if hc == nil || hc.memory == nil {
+	if hc == nil {
 		return nil
 	}
-	return hc.memory.ReverseLookup(ip)
+
+	if hc.memory != nil {
+		if results := hc.memory.ReverseLookup(ip); len(results) > 0 {
+			return results
+		}
+	}
+
+	if hc.redis == nil {
+		return nil
+	}
+
+	results := hc.redis.ReverseLookup(ip)
+	return results
 }
 
 func (hc *HybridCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
