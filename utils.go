@@ -516,6 +516,12 @@ func GenerateExampleConfig() string {
 		{Address: RecursiveIndicator},
 	}
 
+	config.Fallback = []UpstreamServer{
+		{Address: "builtin_recursive"},
+	}
+
+	config.ExcludeClients = []string{"192.168.1.0/24", "10.0.0.100"}
+
 	config.Rewrite = []RewriteRule{
 		{Name: "blocked.example.com", ExcludeClients: []string{"192.168.1.0/24", "10.0.0.100"}, Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultTTL}}},
 		{Name: "ipv6.blocked.example.com", Records: []DNSRecordConfig{{Type: "AAAA", Content: "::1", TTL: DefaultTTL}}},

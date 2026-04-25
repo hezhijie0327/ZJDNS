@@ -55,6 +55,7 @@ type ServerConfig struct {
 	Server         ServerSettings   `json:"server"`
 	Redis          RedisSettings    `json:"redis"`
 	Upstream       []UpstreamServer `json:"upstream"`
+	Fallback       []UpstreamServer `json:"fallback,omitempty"`
 	ExcludeClients []string         `json:"exclude_clients,omitempty"`
 	Rewrite        []RewriteRule    `json:"rewrite"`
 	CIDR           []CIDRConfig     `json:"cidr"`
@@ -443,6 +444,7 @@ type ConfigManager struct{}
 // QueryManager manages DNS queries
 type QueryManager struct {
 	upstream  *UpstreamHandler
+	fallback  *UpstreamHandler
 	recursive *RecursiveResolver
 	cname     *CNAMEHandler
 	validator *ResponseValidator

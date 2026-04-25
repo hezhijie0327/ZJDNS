@@ -102,7 +102,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	server.queryClient = queryClient
 
 	queryManager := NewQueryManager(server)
-	if err := queryManager.Initialize(config.Upstream); err != nil {
+	if err := queryManager.Initialize(config.Upstream, config.Fallback); err != nil {
 		cancel(fmt.Errorf("query manager init: %w", err))
 		return nil, fmt.Errorf("query manager init: %w", err)
 	}
@@ -720,22 +720,21 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 		additional []dns.RR
 		validated  bool
 		ecs        *ECSOption
+		fallback   bool
 		err        error
 	}
 
 	resultChan := make(chan queryResult, 1)
 	go func() {
 		defer HandlePanic("expired cache fallback query")
-		answer, authority, additional, validated, ecsResponse, _, _, err := s.queryMgr.Query(question, ecsOpt)
-		if err == nil {
-			s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
-		}
+		answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.queryMgr.Query(question, ecsOpt)
 		resultChan <- queryResult{
 			answer:     answer,
 			authority:  authority,
 			additional: additional,
 			validated:  validated,
 			ecs:        ecsResponse,
+			fallback:   fallbackUsed,
 			err:        err,
 		}
 	}()
@@ -744,7 +743,7 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 	select {
 	case res := <-resultChan:
 		if res.err == nil {
-			return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs, clientIP, isSecureConnection)
+			return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs, res.fallback, clientIP, isSecureConnection)
 		}
 		if staleServed != nil {
 			*staleServed = true
@@ -761,7 +760,7 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 // processCacheMiss handles DNS queries that do not have a cache hit,
 // performing upstream or recursive resolution.
 func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, cookieOpt *CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool) *dns.Msg {
-	answer, authority, additional, validated, ecsResponse, _, _, err := s.queryMgr.Query(question, ecsOpt)
+	answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.queryMgr.Query(question, ecsOpt)
 
 	if err != nil {
 		// Check if it's a CIDR filter refusal
@@ -774,7 +773,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
 	}
 
-	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, clientIP, isSecureConnection)
+	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, fallbackUsed, clientIP, isSecureConnection)
 }
 
 // processQueryError handles query failures, attempting to serve stale cache
@@ -826,7 +825,7 @@ func (s *DNSServer) processCIDRRefused(req *dns.Msg, question dns.Question, cook
 	return msg
 }
 
-func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, cookieOpt *CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, cookieOpt *CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, skipCache bool, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
 		msg = messagePool.Get()
@@ -847,8 +846,12 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 		}
 	}
 
-	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
-	s.startLatencyProbe(question, cacheKey, answer, authority, additional, validated, responseECS)
+	if !skipCache {
+		s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
+		s.startLatencyProbe(question, cacheKey, answer, authority, additional, validated, responseECS)
+	} else {
+		LogDebug("CACHE: fallback result, skipping cache population for %s", question.Name)
+	}
 
 	msg.Answer = ProcessRecords(answer, 0, clientRequestedDNSSEC)
 	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
@@ -867,13 +870,17 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 		return errors.New("server closed")
 	}
 
-	answer, authority, additional, validated, ecsResponse, _, _, err := s.queryMgr.Query(question, ecs)
+	answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.queryMgr.Query(question, ecs)
 	if err != nil {
 		return err
 	}
 
-	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
-	s.startLatencyProbe(question, cacheKey, answer, authority, additional, validated, ecsResponse)
+	if !fallbackUsed {
+		s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
+		s.startLatencyProbe(question, cacheKey, answer, authority, additional, validated, ecsResponse)
+	} else {
+		LogDebug("CACHE: refresh query used fallback for %s, skipping cache population", question.Name)
+	}
 
 	return nil
 }

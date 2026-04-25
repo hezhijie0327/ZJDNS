@@ -22,11 +22,14 @@ import (
 // NewQueryManager creates a new QueryManager instance with initialized handlers.
 func NewQueryManager(server *DNSServer) *QueryManager {
 	upstream := &UpstreamHandler{}
+	fallback := &UpstreamHandler{}
 	emptyServers := make([]*UpstreamServer, 0)
 	upstream.servers.Store(&emptyServers)
+	fallback.servers.Store(&emptyServers)
 
 	return &QueryManager{
 		upstream: upstream,
+		fallback: fallback,
 		recursive: &RecursiveResolver{
 			server: server,
 		},
@@ -39,9 +42,9 @@ func NewQueryManager(server *DNSServer) *QueryManager {
 	}
 }
 
-// Initialize initializes the QueryManager with upstream server configurations.
-// It processes the server list and sets default protocols where needed.
-func (qm *QueryManager) Initialize(servers []UpstreamServer) error {
+// Initialize initializes the QueryManager with upstream and fallback server configurations.
+// It processes the server lists and sets default protocols where needed.
+func (qm *QueryManager) Initialize(servers []UpstreamServer, fallback []UpstreamServer) error {
 	activeServers := make([]*UpstreamServer, 0, len(servers))
 	for i := range servers {
 		server := &servers[i]
@@ -50,20 +53,48 @@ func (qm *QueryManager) Initialize(servers []UpstreamServer) error {
 		}
 		activeServers = append(activeServers, server)
 	}
-
 	qm.upstream.servers.Store(&activeServers)
+
+	fallbackServers := make([]*UpstreamServer, 0, len(fallback))
+	for i := range fallback {
+		server := &fallback[i]
+		if server.Protocol == "" {
+			server.Protocol = "udp"
+		}
+		fallbackServers = append(fallbackServers, server)
+	}
+	qm.fallback.servers.Store(&fallbackServers)
 
 	return nil
 }
 
-// Query routes DNS queries between upstream servers and recursive resolution.
-// If upstream servers are configured, it queries them; otherwise, it performs
-// recursive resolution starting from the root servers.
+// Query routes DNS queries between upstream servers, fallback servers, and recursive resolution.
+// If primary upstream servers are configured, it queries them first and falls back if they fail.
 func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
 	servers := qm.upstream.getServers()
+	fallbackServers := qm.fallback.getServers()
+
 	if len(servers) > 0 {
-		return qm.queryUpstream(question, ecs)
+		answer, authority, additional, validated, ecsResponse, server, fallbackUsed, err := qm.queryUpstream(question, ecs, servers)
+		if err == nil {
+			return answer, authority, additional, validated, ecsResponse, server, fallbackUsed, nil
+		}
+
+		if len(fallbackServers) > 0 {
+			LogDebug("UPSTREAM: primary upstream failed, querying fallback servers")
+			answer, authority, additional, validated, ecsResponse, server, fallbackUsed, err = qm.queryUpstream(question, ecs, fallbackServers)
+			if err == nil {
+				return answer, authority, additional, validated, ecsResponse, server, fallbackUsed, nil
+			}
+		}
+
+		return nil, nil, nil, false, nil, "", false, err
 	}
+
+	if len(fallbackServers) > 0 {
+		return qm.queryUpstream(question, ecs, fallbackServers)
+	}
+
 	ctx, cancel := context.WithTimeout(qm.server.ctx, IdleTimeout)
 	defer cancel()
 
@@ -91,8 +122,7 @@ func (uh *UpstreamHandler) getServers() []*UpstreamServer {
 // queryUpstream performs concurrent queries to upstream DNS servers.
 // It implements the "first win" strategy where the first successful response
 // is returned immediately, canceling any pending queries.
-func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
-	servers := qm.upstream.getServers()
+func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, servers []*UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
 	if len(servers) == 0 {
 		return nil, nil, nil, false, nil, "", false, errors.New("no upstream servers")
 	}

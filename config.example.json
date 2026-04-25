@@ -116,6 +116,14 @@
       "skip_tls_verify": false
     }
   ],
+  "fallback": [
+    {
+      "address": "builtin_recursive",
+      "protocol": "",
+      "server_name": "",
+      "skip_tls_verify": false
+    }
+  ],
   "exclude_clients": ["192.168.1.0/24", "10.0.0.100"],
   "rewrite": [
     {
