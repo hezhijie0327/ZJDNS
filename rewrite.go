@@ -25,8 +25,21 @@ func NewRewriteManager() *RewriteManager {
 }
 
 // LoadRules loads rewrite rules into the manager
-func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
+func (rm *RewriteManager) LoadRules(rules []RewriteRule, globalExcludeClients []string) error {
 	validRules := make([]RewriteRule, 0, len(rules))
+
+	if len(globalExcludeClients) > 0 {
+		nets := make([]*net.IPNet, 0, len(globalExcludeClients))
+		for _, entry := range globalExcludeClients {
+			ipNet, err := parseRewriteCIDREntry(entry)
+			if err != nil {
+				return fmt.Errorf("rewrite global exclude_clients invalid entry '%s': %w", entry, err)
+			}
+			nets = append(nets, ipNet)
+		}
+		rm.globalExcludeClientCIDRs = nets
+	}
+
 	for _, rule := range rules {
 		if len(rule.Name) > MaxDomainLength {
 			continue
@@ -101,6 +114,14 @@ func (rm *RewriteManager) RewriteWithDetails(domain string, qtype uint16, qclass
 	}
 	rules := *rulesPtr
 	domain = NormalizeDomain(domain)
+
+	if len(rm.globalExcludeClientCIDRs) > 0 && clientIP != nil {
+		for _, ipNet := range rm.globalExcludeClientCIDRs {
+			if ipNet.Contains(clientIP) {
+				return result
+			}
+		}
+	}
 
 ruleLoop:
 	for i := range rules {

@@ -39,8 +39,8 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	}
 
 	rewriteManager := NewRewriteManager()
-	if len(config.Rewrite) > 0 {
-		if err := rewriteManager.LoadRules(config.Rewrite); err != nil {
+	if len(config.Rewrite) > 0 || len(config.ExcludeClients) > 0 {
+		if err := rewriteManager.LoadRules(config.Rewrite, config.ExcludeClients); err != nil {
 			cancel(fmt.Errorf("load rewrite rules: %w", err))
 			return nil, fmt.Errorf("load rewrite rules: %w", err)
 		}

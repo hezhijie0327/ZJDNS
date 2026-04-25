@@ -116,6 +116,7 @@
       "skip_tls_verify": false
     }
   ],
+  "exclude_clients": ["192.168.1.0/24", "10.0.0.100"],
   "rewrite": [
     {
       "name": "blocked.example.com",
