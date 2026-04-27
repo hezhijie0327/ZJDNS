@@ -11,6 +11,7 @@ const (
 	UDPBufferSize    = 1232 // Optimal UDP payload size for DNS to avoid fragmentation
 	TCPBufferSize    = 4096 // Buffer size for TCP DNS messages
 	SecureBufferSize = 8192 // Buffer size for secure DNS messages (DoT, DoH, DoQ)
+
 	MessagePoolSize  = 512  // Number of pre-allocated dns.Msg objects in the pool
 	BufferPoolSize   = 256  // Number of pre-allocated byte buffers in the pool
 )

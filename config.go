@@ -24,7 +24,6 @@ const (
 	DefaultPprofPort = "6060" // Default port for pprof profiling
 
 	DefaultQueryPath = "/dns-query"    // Default path for DoH queries
-	PprofPath        = "/debug/pprof/" // Path prefix for pprof endpoints
 )
 
 // ConfigManager handles loading and validating server configuration from files or defaults.
@@ -47,7 +46,6 @@ type ServerSettings struct {
 	LogLevel        string             `json:"log_level"`
 	DefaultECS      string             `json:"default_ecs_subnet"`
 	MemoryCacheSize int                `json:"memory_cache_size,omitempty"`
-	StatsInterval   int                `json:"stats_interval,omitempty"`
 	Stats           *StatsSettings     `json:"stats,omitempty"`
 	DDR             DDRSettings        `json:"ddr"`
 	TLS             TLSSettings        `json:"tls"`

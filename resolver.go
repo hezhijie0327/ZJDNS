@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	MaxDomainLength    = 253                 // Maximum length of a fully qualified domain name
+	RecursiveIndicator = "builtin_recursive" // Indicator for responses obtained from the built-in recursive resolver
+
 	MaxCNAMEChain      = 16                  // Maximum number of CNAME redirections to follow to prevent loops
 	MaxRecursionDep    = 16                  // Maximum recursion depth for resolving queries to prevent infinite loops
-	RecursiveIndicator = "builtin_recursive" // Indicator for responses obtained from the built-in recursive resolver
 )
 
 var DefaultRootServers = []string{

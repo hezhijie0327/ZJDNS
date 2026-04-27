@@ -21,13 +21,13 @@ golangci-lint run && golangci-lint fmt
 
 ## Architecture Overview
 
-**Single-package Go application** (~7.5K LOC) - High-performance recursive DNS server.
+**Single-package Go application** (~7.5K LOC, v1.6.0) - High-performance recursive DNS server.
 
 - **Protocols**: UDP/TCP (53), DoT (853), DoQ (853), DoH/DoH3 (443)
-- **Features**: DNSSEC validation, ECS, DNS Cookie, EDE, CIDR filtering, DNS rewrite, latency probing
-- **Cache**: Memory-first with optional Redis persistence (HybridCache)
+- **Features**: DNSSEC validation, ECS, DNS Cookie, EDE, CIDR filtering, DNS rewrite, latency probing, DNS padding (RFC 7830), DDR (RFC 9461/9462), CHAOS TXT records
+- **Cache**: Memory-first with optional Redis persistence (HybridCache). Serve-expired on upstream failure (RFC 8767)
 - **Security**: Hijack prevention (auto TCP fallback), lightweight DNSSEC (AD flag + record presence check)
-- **Stats**: Request statistics with Redis persistence and periodic reset
+- **Stats**: Request statistics with Redis persistence and periodic reset (requires Redis)
 
 ### Module Structure
 
@@ -51,7 +51,7 @@ golangci-lint run && golangci-lint fmt
 | `pool.go`          | Memory pools    | `MessagePool` (`dns.Msg`), `BufferPool` (`[]byte`) via `sync.Pool`       |
 | `utils.go`         | Utilities       | String ops, DNS record helpers, cache keys, client IP extraction         |
 
-**Constants and types are NOT in dedicated files** - they're scattered across `config.go`, `cache.go`, `server.go`, etc. Look for `const` blocks and `type` definitions in the relevant module file.
+**Constants and types are NOT in dedicated files** - scattered across module files. Key locations: `resolver.go` (limits), `cache.go` (TTLs), `server.go` (timeouts), `pool.go` (buffers).
 
 ### Execution Flow
 
@@ -266,22 +266,28 @@ LogError("CACHE: failed to refresh %v", err)
 ### Critical Constants
 
 ```go
-// Timeouts (scattered across files)
+// Timeouts (server.go)
 DefaultTimeout             = 2 * time.Second
 OperationTimeout           = 3 * time.Second
-IdleTimeout                = 5 * time.Second
-DefaultLatencyProbeTimeout = 100 * time.Millisecond
+IdleTimeout                = 4 * time.Second  // NOT 5s
+DefaultLatencyProbeTimeout = 100 * time.Millisecond  // cache.go
+ServeExpiredClientTimeout  = 1800 * time.Millisecond // RFC 8767, NOT 500
 
-// Limits
-MaxRecursionDep = 16
-MaxCNAMEChain   = 16
-MaxDomainLength = 253
+// Limits (resolver.go)
+MaxRecursionDep    = 16
+MaxCNAMEChain      = 16
+MaxDomainLength    = 253
+RecursiveIndicator = "builtin_recursive"
 
-// Cache
+// Cache (cache.go)
 DefaultTTL             = 10
 StaleTTL               = 30
 StaleMaxAge            = 30 * 86400  // 30 days
-ServeExpiredClientTimeout = 500       // RFC 8767
+
+// Buffer sizes (pool.go)
+UDPBufferSize    = 1232
+TCPBufferSize    = 4096
+SecureBufferSize = 8192
 ```
 
 ## Security Features
@@ -312,6 +318,18 @@ A/AAAA records checked against CIDR rules. All IPs filtered → REFUSED + EDE co
 ### Extended DNS Errors (EDE)
 
 Codes: `3` Stale, `5` DNSSEC Indeterminate, `6` DNSSEC Bogus, `15` Blocked, `16` Censored, `17` Filtered, `18` Prohibited.
+
+### DNS Padding (RFC 7830)
+
+Pads responses to 468 bytes on secure connections (DoT/DoQ/DoH) only. Configurable.
+
+### DDR (RFC 9461/9462)
+
+Auto-generates SVCB records for DoT/DoH/DoQ discovery via `server.ddr` config section.
+
+### CHAOS TXT Records
+
+Auto-enabled by `addChaosRecord()` in config.go. Provides `id.server`, `hostname.bind`, `version.server`, `version.bind`.
 
 ## Testing
 
@@ -368,8 +386,10 @@ Client → Protocol Handler → DNSServer → RewriteManager → CacheManager
 1. **No tests**: All verification is manual via `kdig`
 2. **No linter config**: Uses default `golangci-lint` rules
 3. **Single package**: All code in `main` package (no sub-packages)
-4. **Global state**: Heavy use of global variables for managers/pools
-5. **No `constants.go` or `types.go`**: Constants and types are scattered across module files
-6. **Deps pinned to HEAD**: Not released versions - `go mod tidy` may pull new commits
+4. **Global state**: Heavy use of globals - `globalLog`, `timeCache`, `globalRNG` (logger.go), `messagePool`, `bufferPool` (pool.go)
+5. **No `constants.go` or `types.go`**: Constants/types scattered across module files. Key ones: `resolver.go` (limits), `cache.go` (TTLs), `server.go` (timeouts), `pool.go` (buffers)
+6. **Deps pinned to HEAD**: Not released versions. Dockerfile does `go get -u ...@master` before build
 7. **Vibe coding**: Self-described as not production-verified
 8. **Stats require Redis**: `StatsManager` periodic reset only works when Redis is configured
+9. **`.gitignore` is ignore-everything-then-allowlist**: Only `.go`, `.md`, `.example.json`, `go.mod`, `go.sum`, `Dockerfile`, `LICENSE`, `.github/` tracked
+10. **`HandlePanic` is the goroutine safety net**: Defined in `utils.go`, used via `defer HandlePanic("op")` in all goroutines

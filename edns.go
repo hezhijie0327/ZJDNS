@@ -22,6 +22,7 @@ const (
 	DefaultECSv4Len = 24  // Default ECS prefix length for IPv4 (RFC 7871 recommends /24 for IPv4)
 	DefaultECSv6Len = 64  // Default ECS prefix length for IPv6 (RFC 7871 recommends /64 for IPv6)
 	DefaultECSScope = 0   // Default ECS scope prefix length (0 means no scope)
+
 	PaddingSize     = 468 // Target size for padded DNS messages (RFC 7830 recommends at least 256 bytes, 468 is a common choice for better security)
 
 	DefaultCookieClientLen = 8  // 8 bytes client cookie
