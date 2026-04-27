@@ -438,7 +438,7 @@ func (s *DNSServer) displayInfo() {
 	if len(servers) > 0 {
 		for _, server := range servers {
 			if server.IsRecursive() {
-				info := "Upstream server: recursive resolution"
+				info := fmt.Sprintf("Upstream server: %s", server.Address)
 				if len(server.Match) > 0 {
 					info += fmt.Sprintf(" [CIDR match: %v]", server.Match)
 				}
