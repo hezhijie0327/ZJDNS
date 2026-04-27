@@ -1,3 +1,4 @@
+// Package main implements ZJDNS, a high-performance DNS server with metrics and Redis persistence support.
 package main
 
 import (
@@ -6,11 +7,95 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
+const (
+	RedisPrefixStats = "stats:" // Prefix for Redis keys related to statistics
+)
+
+// StatsSnapshot contains the raw collected counters for server metrics.
+type StatsSnapshot struct {
+	TotalRequests       uint64 `json:"total_requests"`
+	CacheHits           uint64 `json:"cache_hits"`
+	CacheMisses         uint64 `json:"cache_misses"`
+	ErrorResponses      uint64 `json:"error_responses"`
+	StaleResponses      uint64 `json:"stale_responses"`
+	FallbackRequests    uint64 `json:"fallback_requests"`
+	TotalResponseTimeMs uint64 `json:"total_response_time_ms"`
+	LastResponseTimeMs  uint64 `json:"last_response_time_ms"`
+	UDPRequests         uint64 `json:"udp_requests"`
+	TCPRequests         uint64 `json:"tcp_requests"`
+	DoTRequests         uint64 `json:"dot_requests"`
+	DoQRequests         uint64 `json:"doq_requests"`
+	DoHRequests         uint64 `json:"doh_requests"`
+	DoH3Requests        uint64 `json:"doh3_requests"`
+	RewriteRequests     uint64 `json:"rewrite_requests"`
+	HijackDetections    uint64 `json:"hijack_detections"`
+	UpdatedAt           int64  `json:"updated_at"`
+}
+
+// StatsLogTotals contains aggregated totals for metrics export.
+type StatsLogTotals struct {
+	TotalRequests         uint64  `json:"total_requests"`
+	CacheHits             uint64  `json:"cache_hits"`
+	CacheMisses           uint64  `json:"cache_misses"`
+	ErrorResponses        uint64  `json:"error_responses"`
+	StaleResponses        uint64  `json:"stale_responses,omitempty"`
+	FallbackRequests      uint64  `json:"fallback_requests,omitempty"`
+	LastResponseTimeMs    uint64  `json:"last_response_time_ms"`
+	AverageResponseTimeMs float64 `json:"average_response_time_ms,omitempty"`
+}
+
+// StatsLogProtocolCounts contains request counts by DNS protocol.
+type StatsLogProtocolCounts struct {
+	UDPRequests  uint64 `json:"udp_requests,omitempty"`
+	TCPRequests  uint64 `json:"tcp_requests,omitempty"`
+	DoTRequests  uint64 `json:"dot_requests,omitempty"`
+	DoQRequests  uint64 `json:"doq_requests,omitempty"`
+	DoHRequests  uint64 `json:"doh_requests,omitempty"`
+	DoH3Requests uint64 `json:"doh3_requests,omitempty"`
+}
+
+// StatsLogEvents contains event counters such as rewrite and hijack detections.
+type StatsLogEvents struct {
+	RewriteRequests  uint64 `json:"rewrite_requests,omitempty"`
+	HijackDetections uint64 `json:"hijack_detections,omitempty"`
+}
+
+// StatsLogRates contains derived rates computed from raw metrics.
+type StatsLogRates struct {
+	FailureRate  float64 `json:"failure_rate,omitempty"`
+	StaleRate    float64 `json:"stale_rate,omitempty"`
+	CacheRate    float64 `json:"cache_rate,omitempty"`
+	RewriteRate  float64 `json:"rewrite_rate,omitempty"`
+	HijackRate   float64 `json:"hijack_rate,omitempty"`
+	FallbackRate float64 `json:"fallback_rate,omitempty"`
+}
+
+// StatsLog is the serialized log format for server metrics.
+type StatsLog struct {
+	Totals    StatsLogTotals         `json:"totals"`
+	Protocols StatsLogProtocolCounts `json:"protocols,omitempty"`
+	Events    StatsLogEvents         `json:"events,omitempty"`
+	Rates     StatsLogRates          `json:"rates,omitempty"`
+}
+
+// StatsManager manages collection, reset schedule, and optional Redis persistence for metrics.
+type StatsManager struct {
+	enabled       bool
+	redisKey      string
+	client        *redis.Client
+	mu            sync.RWMutex
+	snapshot      StatsSnapshot
+	resetInterval time.Duration
+	nextResetAt   int64
+}
+
+// AverageResponseTimeMs calculates the average response time in milliseconds based on total response time and total requests.
 func (s StatsSnapshot) AverageResponseTimeMs() float64 {
 	if s.TotalRequests == 0 {
 		return 0
@@ -18,6 +103,7 @@ func (s StatsSnapshot) AverageResponseTimeMs() float64 {
 	return float64(s.TotalResponseTimeMs) / float64(s.TotalRequests)
 }
 
+// BuildStatsLogJSON converts a metrics snapshot into JSON suitable for export.
 func BuildStatsLogJSON(snapshot *StatsSnapshot) ([]byte, error) {
 	statsLog := StatsLog{
 		Totals: StatsLogTotals{
@@ -58,6 +144,7 @@ func BuildStatsLogJSON(snapshot *StatsSnapshot) ([]byte, error) {
 	return json.Marshal(statsLog)
 }
 
+// NewStatsManager creates a new StatsManager and configures Redis persistence if enabled.
 func NewStatsManager(config *ServerConfig, redisClient *redis.Client) *StatsManager {
 	if config == nil {
 		return nil
@@ -79,6 +166,7 @@ func NewStatsManager(config *ServerConfig, redisClient *redis.Client) *StatsMana
 	return statsMgr
 }
 
+// loadResetSchedule loads the next reset time from Redis and schedules the next reset accordingly. If the reset time has already passed, it triggers an immediate reset.
 func (sm *StatsManager) loadResetSchedule() {
 	if sm == nil || sm.client == nil || sm.resetInterval <= 0 {
 		return
@@ -110,6 +198,7 @@ func (sm *StatsManager) loadResetSchedule() {
 	sm.mu.Unlock()
 }
 
+// setNextResetAt updates the next reset time in both the StatsManager and Redis. It ensures that the next reset time is persisted so that it can survive server restarts.
 func (sm *StatsManager) setNextResetAt(ctx context.Context, nextResetAt int64) {
 	if sm == nil || sm.client == nil || nextResetAt <= 0 {
 		return
@@ -125,6 +214,7 @@ func (sm *StatsManager) setNextResetAt(ctx context.Context, nextResetAt int64) {
 	sm.mu.Unlock()
 }
 
+// RecordRequest updates the in-memory snapshot with the details of a processed request and also increments the corresponding counters in Redis if persistence is enabled. It captures various dimensions such as protocol, cache hit/miss, errors, rewrites, hijack detections, stale responses, and fallback usage.
 func (sm *StatsManager) RecordRequest(duration time.Duration, cacheHit bool, hadError bool, protocol string, rewrote bool, hijackDetected bool, staleServed bool, fallbackUsed bool) {
 	if sm == nil || !sm.enabled {
 		return
@@ -238,6 +328,7 @@ func (sm *StatsManager) RecordRequest(duration time.Duration, cacheHit bool, had
 	_, _ = pipe.Exec(ctx)
 }
 
+// Snapshot returns a copy of the current in-memory metrics snapshot. This allows callers to retrieve the latest metrics without modifying the internal state of the StatsManager.
 func (sm *StatsManager) Snapshot() StatsSnapshot {
 	sm.mu.RLock()
 	snapshot := sm.snapshot
@@ -245,6 +336,7 @@ func (sm *StatsManager) Snapshot() StatsSnapshot {
 	return snapshot
 }
 
+// Reset clears all metrics counters in both the in-memory snapshot and Redis (if enabled). It also schedules the next reset time based on the configured reset interval. This method can be called periodically to maintain fresh metrics and prevent unbounded growth of counters.
 func (sm *StatsManager) Reset() {
 	if sm == nil || !sm.enabled {
 		return
@@ -293,6 +385,7 @@ func (sm *StatsManager) Reset() {
 	sm.mu.Unlock()
 }
 
+// FetchStats retrieves the current metrics snapshot. If Redis persistence is enabled, it fetches the latest counters from Redis; otherwise, it returns the in-memory snapshot. This allows for accurate metrics retrieval even in a distributed setup where multiple server instances may be updating the same Redis key.
 func (sm *StatsManager) FetchStats(ctx context.Context) (*StatsSnapshot, error) {
 	if sm == nil || !sm.enabled {
 		return nil, fmt.Errorf("stats disabled")
@@ -336,6 +429,7 @@ func (sm *StatsManager) FetchStats(ctx context.Context) (*StatsSnapshot, error) 
 	return &snapshot, nil
 }
 
+// parseUint64OrZero safely parses a string into a uint64, returning 0 if the string is empty or if parsing fails. This is used to handle Redis fields that may not be set or may contain invalid data without causing errors in the StatsManager.
 func parseUint64OrZero(value string) uint64 {
 	if value == "" {
 		return 0
@@ -347,6 +441,7 @@ func parseUint64OrZero(value string) uint64 {
 	return n
 }
 
+// parseInt64OrZero safely parses a string into an int64, returning 0 if the string is empty or if parsing fails. This is used for fields like timestamps that may not be set in Redis.
 func parseInt64OrZero(value string) int64 {
 	if value == "" {
 		return 0

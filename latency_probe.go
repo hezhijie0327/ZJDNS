@@ -19,6 +19,17 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
+const (
+	DefaultLatencyProbeTimeout = 100 * time.Millisecond // Default timeout for each latency probe step
+)
+
+// LatencyProbeStep defines a single step in the latency probing process, including the protocol to use, optional port, and timeout for the probe.
+type LatencyProbeStep struct {
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port,omitempty"`
+	Timeout  int    `json:"timeout,omitempty"`
+}
+
 // startLatencyProbe starts a background latency probe for A/AAAA records when configured.
 // It will reorder cached answers if a faster ordering is discovered.
 func (s *DNSServer) startLatencyProbe(question dns.Question, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption) {
@@ -61,6 +72,7 @@ func (s *DNSServer) startLatencyProbe(question dns.Question, cacheKey string, an
 	})
 }
 
+// performLatencyProbeAndReorder performs latency probes for A/AAAA records and reorders them in the cache if a faster order is found.
 func (s *DNSServer) performLatencyProbeAndReorder(ctx context.Context, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, steps []LatencyProbeStep) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -78,6 +90,7 @@ func (s *DNSServer) performLatencyProbeAndReorder(ctx context.Context, cacheKey 
 	return nil
 }
 
+// sortAAndAAAARecordsByLatency probes each A/AAAA record and sorts them by latency. It returns the sorted answer and whether the order was changed.
 func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []LatencyProbeStep) ([]dns.RR, bool) {
 	indices := make([]int, 0, len(answer))
 	for i, rr := range answer {
@@ -137,6 +150,7 @@ func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []
 	return sortedAnswer, changed
 }
 
+// measureRecordLatency probes the given A/AAAA record using the configured steps and returns the measured latency. If all probes fail, it returns MaxInt64.
 func measureRecordLatency(ctx context.Context, rr dns.RR, steps []LatencyProbeStep) time.Duration {
 	ip := extractIPAddress(rr)
 	if ip == nil {
@@ -165,6 +179,7 @@ func measureRecordLatency(ctx context.Context, rr dns.RR, steps []LatencyProbeSt
 	return time.Duration(math.MaxInt64)
 }
 
+// probeAddress performs a latency probe to the given IP address using the specified protocol and port. It returns an error if the probe fails.
 func probeAddress(ctx context.Context, ip net.IP, step LatencyProbeStep) error {
 	protocol := strings.ToLower(strings.TrimSpace(step.Protocol))
 	switch protocol {
@@ -205,6 +220,7 @@ func probeAddress(ctx context.Context, ip net.IP, step LatencyProbeStep) error {
 	}
 }
 
+// probeHTTP performs an HTTP or HTTPS latency probe to the given IP and port. It returns an error if the probe fails.
 func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool) error {
 	scheme := "http"
 	if useTLS {
@@ -250,6 +266,7 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool) 
 	return nil
 }
 
+// probeUDP performs a UDP latency probe to the given IP and port. It returns an error if the probe fails.
 func probeUDP(ctx context.Context, ip net.IP, port int) error {
 	addr := net.JoinHostPort(ip.String(), fmt.Sprint(port))
 	dialer := net.Dialer{}
@@ -276,6 +293,7 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 	return nil
 }
 
+// probeTCP performs a TCP latency probe to the given IP and port. It returns an error if the probe fails.
 func probeTCP(ctx context.Context, ip net.IP, port int) error {
 	addr := net.JoinHostPort(ip.String(), fmt.Sprint(port))
 	dialer := net.Dialer{}
@@ -287,6 +305,7 @@ func probeTCP(ctx context.Context, ip net.IP, port int) error {
 	return nil
 }
 
+// probeICMP performs a latency probe using ICMP echo requests (ping) to the given IP address. It returns an error if the probe fails.
 func probeICMP(ctx context.Context, ip net.IP) error {
 	var network string
 	var proto int
@@ -361,6 +380,7 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 	}
 }
 
+// extractIPAddress extracts the IP address from an A or AAAA DNS record. It returns nil if the record is not A/AAAA or if extraction fails.
 func extractIPAddress(rr dns.RR) net.IP {
 	switch record := rr.(type) {
 	case *dns.A:
@@ -372,6 +392,7 @@ func extractIPAddress(rr dns.RR) net.IP {
 	}
 }
 
+// isAOrAAAA checks if a DNS RR is an A or AAAA record. It returns false if the RR is nil or not A/AAAA.
 func isAOrAAAA(rr dns.RR) bool {
 	if rr == nil {
 		return false

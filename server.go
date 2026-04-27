@@ -21,9 +21,35 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// =============================================================================
-// DNSServer Implementation
-// =============================================================================
+const (
+	DefaultTimeout   = 2 * time.Second // Timeout for various operations like shutdown and cache refresh
+	OperationTimeout = 3 * time.Second // Timeout for individual operations like upstream queries
+	IdleTimeout      = 4 * time.Second // Idle timeout for servers
+)
+
+// DNSServer is the core server coordinating query processing and protocol handlers.
+type DNSServer struct {
+	config            *ServerConfig
+	cacheMgr          CacheManager
+	queryClient       *QueryClient
+	securityMgr       *SecurityManager
+	ednsMgr           *EDNSManager
+	rewriteMgr        *RewriteManager
+	cidrMgr           *CIDRManager
+	statsMgr          *StatsManager
+	pprofServer       *http.Server
+	redisClient       *redis.Client
+	redisCache        *RedisCache
+	ctx               context.Context
+	cancel            context.CancelCauseFunc
+	shutdown          chan struct{}
+	backgroundGroup   *errgroup.Group
+	backgroundCtx     context.Context
+	cacheRefreshGroup *errgroup.Group
+	cacheRefreshCtx   context.Context
+	closed            int32
+	queryMgr          *QueryManager
+}
 
 // NewDNSServer creates a new DNS server instance with all required managers.
 // It initializes the cache, security, EDNS, rewrite, CIDR, and query managers.
@@ -178,10 +204,6 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	return server, nil
 }
 
-// =============================================================================
-// DNSServer: Lifecycle Management
-// =============================================================================
-
 // setupSignalHandling configures signal handlers for graceful shutdown.
 // It listens for SIGINT and SIGTERM signals to initiate server shutdown.
 func (s *DNSServer) setupSignalHandling() {
@@ -201,6 +223,7 @@ func (s *DNSServer) setupSignalHandling() {
 	})
 }
 
+// logStatsNow fetches current statistics and logs them in JSON format.
 func (s *DNSServer) logStatsNow() {
 	if s == nil || s.statsMgr == nil {
 		return
@@ -438,9 +461,9 @@ func (s *DNSServer) displayInfo() {
 		LogInfo("UPSTREAM: Upstream mode: total %d servers", len(servers))
 	} else {
 		if s.config.Redis.Address == "" {
-			LogInfo("RECURSION: Recursive mode (no cache)")
+			LogInfo("RECURSION: Recursive mode (Memory cache)")
 		} else {
-			LogInfo("RECURSION: Recursive mode + Redis cache: %s", s.config.Redis.Address)
+			LogInfo("RECURSION: Recursive mode (Memory + Redis cache: %s)", s.config.Redis.Address)
 		}
 	}
 
@@ -475,10 +498,6 @@ func (s *DNSServer) displayInfo() {
 		LogInfo("EDNS: Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
 }
-
-// =============================================================================
-// DNSServer: Query Processing
-// =============================================================================
 
 // handleDNSRequest handles incoming DNS requests from UDP and TCP listeners.
 // It performs panic recovery and writes responses back to the client.
@@ -649,6 +668,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	return responseMsg
 }
 
+// lookupReversePTR performs a reverse DNS lookup for PTR queries using the cache manager.
 func (s *DNSServer) lookupReversePTR(question dns.Question, ecsOpt *ECSOption) []dns.RR {
 	ip := ParseReverseDNSName(question.Name)
 	if ip == nil {
@@ -675,6 +695,97 @@ func (s *DNSServer) lookupReversePTR(question dns.Question, ecsOpt *ECSOption) [
 	return records
 }
 
+// ParseReverseDNSName parses a PTR query name into an IP address.
+// It supports IPv4 reverse names under in-addr.arpa and IPv6 reverse names under ip6.arpa.
+func ParseReverseDNSName(name string) net.IP {
+	fqdn := strings.TrimSuffix(dns.Fqdn(name), ".")
+	lower := strings.ToLower(fqdn)
+
+	if strings.HasSuffix(lower, ".in-addr.arpa") {
+		octets := strings.Split(strings.TrimSuffix(strings.TrimSuffix(lower, ".in-addr.arpa"), "."), ".")
+		if len(octets) != 4 {
+			return nil
+		}
+		for i, j := 0, len(octets)-1; i < j; i, j = i+1, j-1 {
+			octets[i], octets[j] = octets[j], octets[i]
+		}
+		return net.ParseIP(strings.Join(octets, "."))
+	}
+
+	if strings.HasSuffix(lower, ".ip6.arpa") {
+		nibbles := strings.Split(strings.TrimSuffix(strings.TrimSuffix(lower, ".ip6.arpa"), "."), ".")
+		if len(nibbles) != 32 {
+			return nil
+		}
+		for i, j := 0, len(nibbles)-1; i < j; i, j = i+1, j-1 {
+			nibbles[i], nibbles[j] = nibbles[j], nibbles[i]
+		}
+		var builder strings.Builder
+		for i, nibble := range nibbles {
+			builder.WriteString(nibble)
+			if i%4 == 3 && i != len(nibbles)-1 {
+				builder.WriteByte(':')
+			}
+		}
+		return net.ParseIP(builder.String())
+	}
+
+	return nil
+}
+
+// BuildPTRRecord creates a PTR record for the given query name and target.
+func BuildPTRRecord(name, target string, ttl uint32, qclass uint16) dns.RR {
+	if ttl == 0 {
+		ttl = DefaultTTL
+	}
+	return &dns.PTR{
+		Hdr: dns.RR_Header{
+			Name:   dns.Fqdn(name),
+			Rrtype: dns.TypePTR,
+			Class:  qclass,
+			Ttl:    ttl,
+		},
+		Ptr: dns.Fqdn(target),
+	}
+}
+
+// GetClientIP extracts client IP from DNS response writer.
+func GetClientIP(w dns.ResponseWriter) net.IP {
+	if addr := w.RemoteAddr(); addr != nil {
+		switch a := addr.(type) {
+		case *net.UDPAddr:
+			return a.IP
+		case *net.TCPAddr:
+			return a.IP
+		}
+	}
+	return nil
+}
+
+// FormatAllRecords outputs raw DNS records with section headers for logging.
+func FormatAllRecords(answers, authority, additional []dns.RR) string {
+	var b strings.Builder
+	if len(answers) > 0 {
+		b.WriteString("\n  ;; ANSWER SECTION:")
+		for _, rr := range answers {
+			b.WriteString("\n  " + rr.String())
+		}
+	}
+	if len(authority) > 0 {
+		b.WriteString("\n  ;; AUTHORITY SECTION:")
+		for _, rr := range authority {
+			b.WriteString("\n  " + rr.String())
+		}
+	}
+	if len(additional) > 0 {
+		b.WriteString("\n  ;; ADDITIONAL SECTION:")
+		for _, rr := range additional {
+			b.WriteString("\n  " + rr.String())
+		}
+	}
+	return b.String()
+}
+
 // processCacheHit handles DNS queries that have a cache hit, returning cached
 // responses and optionally refreshing stale entries in the background.
 func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cookieOpt *CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool) *dns.Msg {
@@ -692,6 +803,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 	return msg
 }
 
+// buildCacheResponse constructs a DNS response message based on a cache entry, including
 func (s *DNSServer) buildCacheResponse(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, cookieOpt *CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
@@ -721,6 +833,7 @@ func (s *DNSServer) buildCacheResponse(req *dns.Msg, entry *CacheEntry, isExpire
 	return msg
 }
 
+// canServeExpiredEntry checks if an expired cache entry can be served based on its age and the configured stale max age.
 func (s *DNSServer) canServeExpiredEntry(entry *CacheEntry) bool {
 	if entry == nil || !entry.IsExpired() {
 		return false
@@ -728,6 +841,7 @@ func (s *DNSServer) canServeExpiredEntry(entry *CacheEntry) bool {
 	return entry.CanServeExpired(StaleMaxAge)
 }
 
+// processExpiredCacheHit handles cache hits for expired entries, attempting to refresh the data in the background while serving the stale response to the client. It waits for the refresh to complete or a timeout before returning the response.
 func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cookieOpt *CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool) *dns.Msg {
 	type queryResult struct {
 		answer     []dns.RR
@@ -819,6 +933,7 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 	return msg
 }
 
+// detectRequestProtocol determines the protocol (UDP or TCP) used for the incoming DNS request based on the network type of the remote address.
 func detectRequestProtocol(w dns.ResponseWriter) string {
 	addr := w.RemoteAddr()
 	if addr == nil {
@@ -850,6 +965,7 @@ func (s *DNSServer) processCIDRRefused(req *dns.Msg, question dns.Question, cook
 	return msg
 }
 
+// processQuerySuccess handles successful query results, building the DNS response message, populating the cache if applicable, and adding EDNS options.
 func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *ECSOption, cookieOpt *CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, skipCache bool, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
@@ -912,10 +1028,6 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 
 	return nil
 }
-
-// =============================================================================
-// DNSServer: Response Building Helpers
-// =============================================================================
 
 // addEDNS adds EDNS options to a DNS response message, including ECS,
 // DNSSEC flags, cookie, EDE, and padding for secure connections.

@@ -20,9 +20,39 @@ import (
 	"golang.org/x/net/http2"
 )
 
-// =============================================================================
-// QueryClient Implementation
-// =============================================================================
+// QueryResult contains the result of a DNS query execution.
+type QueryResult struct {
+	Response   *dns.Msg
+	Answer     []dns.RR
+	Authority  []dns.RR
+	Additional []dns.RR
+	Server     string
+	Error      error
+	Duration   time.Duration
+	Protocol   string
+	Validated  bool
+	ECS        *ECSOption
+}
+
+// UpstreamQueryResult contains internal upstream query fields used during aggregation.
+type UpstreamQueryResult struct {
+	answer     []dns.RR
+	authority  []dns.RR
+	additional []dns.RR
+	validated  bool
+	ecs        *ECSOption
+	server     string
+}
+
+// QueryClient is responsible for executing DNS queries to upstream servers using various protocols (UDP, TCP, DoT, DoH, DoQ).
+type QueryClient struct {
+	timeout    time.Duration
+	udpClient  *dns.Client
+	tcpClient  *dns.Client
+	tlsClient  *dns.Client
+	dohClient  *http.Client
+	doh3Client *http.Client
+}
 
 // NewQueryClient creates a new QueryClient with configured UDP, TCP, TLS, DoH, and DoH3 clients.
 // The client is configured with appropriate timeouts and buffer sizes for DNS queries.

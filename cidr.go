@@ -10,11 +10,44 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 )
 
-// =============================================================================
-// CIDRManager Implementation
-// =============================================================================
+// CIDRConfig defines the configuration for a CIDR-based client filter, including an optional file source and inline rules.
+type CIDRConfig struct {
+	File  string   `json:"file,omitempty"`
+	Rules []string `json:"rules,omitempty"`
+	Tag   string   `json:"tag"`
+}
+
+// CIDRRule represents a compiled set of CIDR networks associated with a tag, optimized for fast IP matching.
+type CIDRRule struct {
+	tag       string
+	nets      []*net.IPNet
+	ipv4Nets  []ipv4Net
+	ipv6Nets  []*net.IPNet
+	totalNets int
+}
+
+// CIDRManager manages multiple CIDR rules and provides efficient IP matching with caching.
+type CIDRManager struct {
+	rules      atomic.Value
+	matchCache atomic.Value
+}
+
+// CIDRMatchInfo stores the parsed information for a CIDR match tag, including whether it's negated and the original tag string.
+type CIDRMatchInfo struct {
+	Tag      string
+	Negate   bool
+	Original string
+}
+
+// ipv4Net is an optimized structure for storing IPv4 CIDR networks, allowing for fast bitwise matching.
+type ipv4Net struct {
+	ip     uint32
+	mask   uint32
+	prefix uint8
+}
 
 // NewCIDRManager creates a new CIDR manager from the provided configurations
 func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
@@ -114,7 +147,7 @@ func (cm *CIDRManager) loadCIDRConfig(config CIDRConfig) (*CIDRRule, error) {
 }
 
 // MatchIP checks if an IP address matches the specified CIDR tag
-// Returns: matched (bool), exists (bool)
+// MatchIP returns whether the IP matches the tag and whether the tag exists.
 func (cm *CIDRManager) MatchIP(ip net.IP, matchTag string) (matched bool, exists bool) {
 	if cm == nil || matchTag == "" {
 		return true, true
@@ -164,10 +197,7 @@ func (cm *CIDRManager) getMatchInfo(matchTag string) *CIDRMatchInfo {
 	return info
 }
 
-// =============================================================================
-// CIDRRule Implementation
-// =============================================================================
-
+// CIDRRule stores compiled CIDR networks for fast IP matching.
 // preprocessNetworks optimizes network storage for fast IP matching
 func (r *CIDRRule) preprocessNetworks() {
 	if r == nil {

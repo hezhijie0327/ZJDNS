@@ -7,13 +7,49 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/miekg/dns"
 )
 
-// =============================================================================
-// RewriteManager Implementation
-// =============================================================================
+// RewriteRule defines a domain rewrite rule and optional client filters.
+type RewriteRule struct {
+	Name               string            `json:"name"`
+	NormalizedName     string            `json:"normalized_name,omitempty"`
+	ResponseCode       *int              `json:"response_code,omitempty"`
+	Records            []DNSRecordConfig `json:"records,omitempty"`
+	Additional         []DNSRecordConfig `json:"additional,omitempty"`
+	ExcludeClients     []string          `json:"exclude_clients,omitempty"`
+	IncludeClients     []string          `json:"include_clients,omitempty"`
+	ExcludeClientCIDRs []*net.IPNet      `json:"-"`
+	IncludeClientCIDRs []*net.IPNet      `json:"-"`
+}
+
+// DNSRecordConfig defines a record entry for rewrite responses.
+type DNSRecordConfig struct {
+	Name         string `json:"name,omitempty"`
+	Type         string `json:"type"`
+	Class        string `json:"class,omitempty"`
+	TTL          uint32 `json:"ttl,omitempty"`
+	Content      string `json:"content"`
+	ResponseCode *int   `json:"response_code,omitempty"`
+}
+
+// DNSRewriteResult carries the result of evaluating rewrite rules for a query.
+type DNSRewriteResult struct {
+	Domain        string
+	ShouldRewrite bool
+	ResponseCode  int
+	Records       []dns.RR
+	Additional    []dns.RR
+}
+
+// RewriteManager manages DNS rewrite rules and applies them to incoming queries.
+type RewriteManager struct {
+	rules              atomic.Pointer[[]RewriteRule]
+	rulesLen           atomic.Uint64
+	globalExcludeCIDRs atomic.Pointer[[]*net.IPNet]
+}
 
 // NewRewriteManager creates a new DNS rewrite manager
 func NewRewriteManager() *RewriteManager {
@@ -80,6 +116,7 @@ func (rm *RewriteManager) LoadRules(rules []RewriteRule) error {
 	return nil
 }
 
+// parseRewriteCIDREntry parses a CIDR or IP address entry for rewrite client filters
 func parseRewriteCIDREntry(entry string) (*net.IPNet, error) {
 	entry = strings.TrimSpace(entry)
 	if entry == "" {

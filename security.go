@@ -4,14 +4,26 @@ package main
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
 )
 
-// =============================================================================
-// DNSSECValidator Methods
-// =============================================================================
+// DNSSECValidator validates DNSSEC-signed DNS responses.
+type DNSSECValidator struct{}
+
+// HijackPrevention detects and mitigates DNS hijack attempts.
+type HijackPrevention struct {
+	enabled atomic.Bool
+}
+
+// SecurityManager coordinates DNSSEC validation and hijack prevention.
+type SecurityManager struct {
+	tls    *TLSManager
+	dnssec *DNSSECValidator
+	hijack *HijackPrevention
+}
 
 // ValidateResponse validates DNSSEC records in a DNS response.
 // It checks if the response has DNSSEC records and if the AD flag is set.
@@ -53,10 +65,6 @@ func (v *DNSSECValidator) hasDNSSECRecords(response *dns.Msg) bool {
 
 	return false
 }
-
-// =============================================================================
-// HijackPrevention Methods
-// =============================================================================
 
 // IsEnabled returns whether hijack prevention is enabled.
 func (hp *HijackPrevention) IsEnabled() bool {
@@ -182,10 +190,6 @@ func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) b
 func (hp *HijackPrevention) SetHijackPreventionEnabled(enabled bool) {
 	hp.enabled.Store(enabled)
 }
-
-// =============================================================================
-// SecurityManager Methods
-// =============================================================================
 
 // NewSecurityManager creates a new SecurityManager with the given configuration.
 // It initializes DNSSEC validation, hijack prevention, and optional TLS management.

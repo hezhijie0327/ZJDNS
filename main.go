@@ -1,5 +1,4 @@
-// Package main implements ZJDNS - High Performance DNS Server
-// Supporting DoT/DoH/DoQ/DoH3 and recursive resolution
+// Package main implements ZJDNS, a high-performance DNS server that supports DoT, DoH, DoQ, DoH3, and recursive resolution.
 package main
 
 import (
@@ -9,10 +8,7 @@ import (
 	"os"
 )
 
-// =============================================================================
-// Main Entry Point
-// =============================================================================
-
+// main is the program entry point.
 func main() {
 	var configFile string
 	var generateConfig bool

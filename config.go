@@ -17,9 +17,93 @@ import (
 	"github.com/miekg/dns"
 )
 
-// =============================================================================
-// ConfigManager Implementation
-// =============================================================================
+const (
+	DefaultDNSPort   = "53"   // Default port for DNS over UDP/TCP
+	DefaultDOTPort   = "853"  // Default port for DNS over TLS
+	DefaultDOHPort   = "443"  // Default port for DNS over HTTPS
+	DefaultPprofPort = "6060" // Default port for pprof profiling
+
+	DefaultQueryPath = "/dns-query"    // Default path for DoH queries
+	PprofPath        = "/debug/pprof/" // Path prefix for pprof endpoints
+)
+
+// ConfigManager handles loading and validating server configuration from files or defaults.
+type ConfigManager struct{}
+
+// ServerConfig represents the complete configuration for the ZJDNS server, including server settings, Redis, upstream servers, rewrite rules, and CIDR client filters.
+type ServerConfig struct {
+	Server   ServerSettings   `json:"server"`
+	Redis    RedisSettings    `json:"redis"`
+	Upstream []UpstreamServer `json:"upstream"`
+	Fallback []UpstreamServer `json:"fallback,omitempty"`
+	Rewrite  []RewriteRule    `json:"rewrite"`
+	CIDR     []CIDRConfig     `json:"cidr"`
+}
+
+// ServerSettings contains runtime settings for the DNS server.
+type ServerSettings struct {
+	Port            string             `json:"port"`
+	Pprof           string             `json:"pprof"`
+	LogLevel        string             `json:"log_level"`
+	DefaultECS      string             `json:"default_ecs_subnet"`
+	MemoryCacheSize int                `json:"memory_cache_size,omitempty"`
+	StatsInterval   int                `json:"stats_interval,omitempty"`
+	Stats           *StatsSettings     `json:"stats,omitempty"`
+	DDR             DDRSettings        `json:"ddr"`
+	TLS             TLSSettings        `json:"tls"`
+	Features        FeatureFlags       `json:"features"`
+	LatencyProbe    []LatencyProbeStep `json:"latency_probe,omitempty"`
+}
+
+// DDRSettings contains DNS data replacement records and addresses.
+type DDRSettings struct {
+	Domain string `json:"domain"`
+	IPv4   string `json:"ipv4"`
+	IPv6   string `json:"ipv6"`
+}
+
+// TLSSettings contains TLS and HTTPS configuration for secure DNS listeners.
+type TLSSettings struct {
+	Port       string        `json:"port"`
+	CertFile   string        `json:"cert_file"`
+	KeyFile    string        `json:"key_file"`
+	SelfSigned bool          `json:"self_signed"`
+	HTTPS      HTTPSSettings `json:"https"`
+}
+
+// HTTPSSettings contains HTTPS endpoint configuration for DoH.
+type HTTPSSettings struct {
+	Port     string `json:"port"`
+	Endpoint string `json:"endpoint"`
+}
+
+// FeatureFlags enables optional server features.
+type FeatureFlags struct {
+	HijackProtection bool `json:"hijack_protection"`
+}
+
+// StatsSettings configures statistics collection and reset behavior.
+type StatsSettings struct {
+	Interval      int `json:"interval,omitempty"`
+	ResetInterval int `json:"reset_interval,omitempty"`
+}
+
+// RedisSettings contains Redis connection settings for caching and stats.
+type RedisSettings struct {
+	Address   string `json:"address"`
+	Password  string `json:"password"`
+	Database  int    `json:"database"`
+	KeyPrefix string `json:"key_prefix"`
+}
+
+// UpstreamServer defines an upstream DNS or recursive server endpoint.
+type UpstreamServer struct {
+	Address       string   `json:"address"`
+	Protocol      string   `json:"protocol"`
+	ServerName    string   `json:"server_name,omitempty"`
+	SkipTLSVerify bool     `json:"skip_tls_verify,omitempty"`
+	Match         []string `json:"match,omitempty"`
+}
 
 // LoadConfig loads configuration from a file or returns defaults
 func (cm *ConfigManager) LoadConfig(configFile string) (*ServerConfig, error) {
@@ -380,4 +464,73 @@ func (cm *ConfigManager) addChaosRecord(config *ServerConfig) {
 	}
 
 	LogInfo("CONFIG: CHAOS TXT rewrite records enabled")
+}
+
+// IsValidFilePath checks if a file path is safe and exists.
+func IsValidFilePath(path string) bool {
+	dangerousPrefixes := []string{"/etc/", "/proc/", "/sys/"}
+	if strings.Contains(path, "..") || slices.ContainsFunc(dangerousPrefixes, func(prefix string) bool {
+		return strings.HasPrefix(path, prefix)
+	}) {
+		return false
+	}
+
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+// GenerateExampleConfig generates an example configuration.
+func GenerateExampleConfig() string {
+	cm := &ConfigManager{}
+	config := cm.getDefaultConfig()
+
+	config.Redis.Address = "127.0.0.1:6379"
+
+	config.Server.Pprof = DefaultPprofPort
+	config.Server.LogLevel = DefaultLogLevel
+	config.Server.DefaultECS = "auto"
+	config.Server.StatsInterval = 0
+	config.Server.Stats = &StatsSettings{}
+	config.Server.TLS.CertFile = "/path/to/cert.pem"
+	config.Server.TLS.KeyFile = "/path/to/key.pem"
+
+	config.Server.LatencyProbe = []LatencyProbeStep{
+		{Protocol: "ping", Timeout: 100},
+		{Protocol: "tcp", Port: 443, Timeout: 100},
+		{Protocol: "tcp", Port: 80, Timeout: 100},
+		{Protocol: "udp", Port: 53, Timeout: 100},
+		{Protocol: "http", Port: 80, Timeout: 100},
+		{Protocol: "https", Port: 443, Timeout: 100},
+		{Protocol: "http3", Port: 443, Timeout: 100},
+	}
+
+	config.CIDR = []CIDRConfig{
+		{File: "whitelist.txt", Tag: "file"},
+		{Rules: []string{"192.168.0.0/16", "10.0.0.0/8", "2001:db8::/32"}, Tag: "rules"},
+		{File: "blacklist.txt", Rules: []string{"127.0.0.1/32"}, Tag: "mixed"},
+	}
+
+	config.Upstream = []UpstreamServer{
+		{Address: "223.5.5.5:53", Protocol: "tcp"},
+		{Address: "223.6.6.6:53", Protocol: "udp"},
+		{Address: "223.5.5.5:853", Protocol: "tls", ServerName: "dns.alidns.com"},
+		{Address: "223.6.6.6:853", Protocol: "quic", ServerName: "dns.alidns.com", SkipTLSVerify: true},
+		{Address: "https://223.5.5.5:443/dns-query", Protocol: "https", ServerName: "dns.alidns.com", Match: []string{"mixed"}},
+		{Address: "https://223.6.6.6:443/dns-query", Protocol: "http3", ServerName: "dns.alidns.com", Match: []string{"!mixed"}},
+		{Address: RecursiveIndicator},
+	}
+
+	config.Fallback = []UpstreamServer{
+		{Address: "builtin_recursive"},
+	}
+
+	config.Rewrite = []RewriteRule{
+		{ExcludeClients: []string{"10.0.0.100"}},
+		{Name: "client-specific.example.com", IncludeClients: []string{"192.168.0.0/24"}, Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultTTL}}},
+		{Name: "blocked.example.com", ExcludeClients: []string{"192.168.1.0/24"}, Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultTTL}}},
+		{Name: "ipv6.blocked.example.com", Records: []DNSRecordConfig{{Type: "AAAA", Content: "::1", TTL: DefaultTTL}}},
+	}
+
+	data, _ := json.MarshalIndent(config, "", "  ")
+	return string(data)
 }

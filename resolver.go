@@ -15,9 +15,59 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// =============================================================================
-// QueryManager Implementation
-// =============================================================================
+const (
+	MaxDomainLength    = 253                 // Maximum length of a fully qualified domain name
+	MaxCNAMEChain      = 16                  // Maximum number of CNAME redirections to follow to prevent loops
+	MaxRecursionDep    = 16                  // Maximum recursion depth for resolving queries to prevent infinite loops
+	RecursiveIndicator = "builtin_recursive" // Indicator for responses obtained from the built-in recursive resolver
+)
+
+var DefaultRootServers = []string{
+	"198.41.0.4:53", "[2001:503:ba3e::2:30]:53",
+	"170.247.170.2:53", "[2801:1b8:10::b]:53",
+	"192.33.4.12:53", "[2001:500:2::c]:53",
+	"199.7.91.13:53", "[2001:500:2d::d]:53",
+	"192.203.230.10:53", "[2001:500:a8::e]:53",
+	"192.5.5.241:53", "[2001:500:2f::f]:53",
+	"192.112.36.4:53", "[2001:500:12::d0d]:53",
+	"198.97.190.53:53", "[2001:500:1::53]:53",
+	"192.36.148.17:53", "[2001:7fe::53]:53",
+	"192.58.128.30:53", "[2001:503:c27::2:30]:53",
+	"193.0.14.129:53", "[2001:7fd::1]:53",
+	"199.7.83.42:53", "[2001:500:9f::42]:53",
+	"202.12.27.33:53", "[2001:dc3::35]:53",
+}
+
+// QueryManager orchestrates DNS query resolution, managing upstream servers,
+type QueryManager struct {
+	upstream  *UpstreamHandler
+	fallback  *UpstreamHandler
+	recursive *RecursiveResolver
+	cname     *CNAMEHandler
+	validator *ResponseValidator
+	server    *DNSServer
+}
+
+// UpstreamHandler manages querying upstream name servers, including primary and fallback lists.
+type UpstreamHandler struct {
+	servers atomic.Pointer[[]*UpstreamServer]
+}
+
+// UpstreamServer represents a configured upstream DNS server with optional client filters.
+type RecursiveResolver struct {
+	server *DNSServer
+}
+
+// CNAMEHandler manages CNAME resolution logic, including multi-level chains and loop detection.
+type CNAMEHandler struct {
+	server *DNSServer
+}
+
+// ResponseValidator coordinates DNSSEC validation and hijack prevention checks for DNS responses.
+type ResponseValidator struct {
+	hijackPrevention *HijackPrevention
+	dnssecValidator  *DNSSECValidator
+}
 
 // NewQueryManager creates a new QueryManager instance with initialized handlers.
 func NewQueryManager(server *DNSServer) *QueryManager {
@@ -39,6 +89,45 @@ func NewQueryManager(server *DNSServer) *QueryManager {
 			dnssecValidator:  server.securityMgr.dnssec,
 		},
 		server: server,
+	}
+}
+
+// shuffleSlice shuffles a slice randomly.
+func shuffleSlice[T any](slice []T) []T {
+	if len(slice) <= 1 {
+		return slice
+	}
+
+	shuffled := make([]T, len(slice))
+	copy(shuffled, slice)
+
+	for i := len(shuffled) - 1; i > 0; i-- {
+		j := globalRNG.Intn(i + 1)
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	}
+
+	return shuffled
+}
+
+// calculateConcurrencyLimit calculates the concurrency limit based on server count.
+func calculateConcurrencyLimit(serverCount int) int {
+	if serverCount <= 0 {
+		return 1
+	}
+
+	switch {
+	case serverCount <= 4:
+		return serverCount
+	case serverCount <= 12:
+		return (serverCount*2 + 2) / 3
+	case serverCount <= 20:
+		return (serverCount + 1) / 2
+	default:
+		limit := serverCount / 3
+		if limit < 8 {
+			return 8
+		}
+		return limit
 	}
 }
 
@@ -103,10 +192,6 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, 
 	return answer, authority, additional, validated, ecsResponse, server, hijackDetected, err
 }
 
-// =============================================================================
-// UpstreamHandler Implementation
-// =============================================================================
-
 // getServers returns the list of configured upstream servers.
 func (uh *UpstreamHandler) getServers() []*UpstreamServer {
 	serversPtr := uh.servers.Load()
@@ -115,10 +200,6 @@ func (uh *UpstreamHandler) getServers() []*UpstreamServer {
 	}
 	return *serversPtr
 }
-
-// =============================================================================
-// Upstream Query Implementation
-// =============================================================================
 
 // queryUpstream performs concurrent queries to upstream DNS servers.
 // It implements the "first win" strategy where the first successful response
@@ -342,10 +423,6 @@ func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string
 	return filtered, false
 }
 
-// =============================================================================
-// CNAMEHandler Implementation
-// =============================================================================
-
 // resolveWithCNAME resolves a DNS question while following CNAME chains.
 // It handles multi-level CNAME resolution and detects circular references.
 func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
@@ -423,10 +500,6 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, usedServer, hijackOccurred, nil
 }
-
-// =============================================================================
-// RecursiveResolver Implementation
-// =============================================================================
 
 // recursiveQuery performs recursive DNS resolution starting from root servers.
 // It follows the DNS resolution algorithm: query root servers, follow referrals
@@ -837,10 +910,6 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 
 	return nil
 }
-
-// =============================================================================
-// UpstreamServer Implementation
-// =============================================================================
 
 // IsRecursive returns true if this server is configured for recursive resolution.
 func (s *UpstreamServer) IsRecursive() bool {

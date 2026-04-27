@@ -3,15 +3,47 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// =============================================================================
-// Global Variables
-// =============================================================================
+type LogLevel int
 
+const (
+	Error LogLevel = iota
+	Warn
+	Info
+	Debug
+)
+
+const (
+	DefaultLogLevel = "info" // Default logging level (error, warn, info, debug)
+
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorYellow = "\033[33m"
+	ColorGreen  = "\033[32m"
+	ColorCyan   = "\033[36m"
+	ColorBold   = "\033[1m"
+)
+
+// LogManager handles logging with different levels and color formatting.
+type LogManager struct {
+	level    atomic.Int32
+	writer   io.Writer
+	colorMap map[LogLevel]string
+}
+
+// TimeCache caches current time values for low-latency access.
+type TimeCache struct {
+	currentTime atomic.Value
+	ticker      *time.Ticker
+}
+
+// Global Variables hold shared logger and runtime state.
 var (
 	globalLog = NewLogManager()
 	timeCache = NewTimeCache()
@@ -46,10 +78,6 @@ func (r *RNG) Intn(n int) int {
 	r.state ^= r.state >> 27
 	return int((r.state * 2685821657736338717) % uint64(n))
 }
-
-// =============================================================================
-// LogManager Implementation
-// =============================================================================
 
 // NewLogManager creates a new LogManager
 func NewLogManager() *LogManager {
@@ -147,10 +175,7 @@ func LogInfo(format string, args ...any) { globalLog.Info(format, args...) }
 // LogDebug logs a debug message using the global logger
 func LogDebug(format string, args ...any) { globalLog.Debug(format, args...) }
 
-// =============================================================================
-// TimeCache Implementation
-// =============================================================================
-
+// TimeCache caches current time values for low-latency access.
 // NewTimeCache creates a new TimeCache
 func NewTimeCache() *TimeCache {
 	tc := &TimeCache{

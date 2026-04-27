@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -27,9 +28,42 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// =============================================================================
-// TLS Manager: Certificate Generation
-// =============================================================================
+const (
+	TLSConnBufferSize  = 128            // Buffer size for TLS connections
+	DoHMaxRequestSize  = 8192           // Maximum request size for DoH (8 KB)
+	MaxIncomingStreams = math.MaxUint16 // Maximum number of incoming streams for QUIC servers
+)
+
+const (
+	QUICCodeNoError       quic.ApplicationErrorCode = 0
+	QUICCodeInternalError quic.ApplicationErrorCode = 1
+	QUICCodeProtocolError quic.ApplicationErrorCode = 2
+)
+
+var (
+	NextProtoDOT  = []string{"dot"}
+	NextProtoDoQ  = []string{"doq"}
+	NextProtoDoH3 = []string{"h3"}
+	NextProtoDoH  = []string{"h2"}
+)
+
+// TLSManager manages all TLS-related functionality, including certificate management and secure server handling for DoT, DoQ, DoH, and DoH3. It encapsulates the logic for starting and stopping secure servers, handling incoming connections, and processing DNS queries over secure protocols.
+type TLSManager struct {
+	server        *DNSServer
+	tlsConfig     *tls.Config
+	ctx           context.Context
+	cancel        context.CancelCauseFunc
+	serverGroup   *errgroup.Group
+	serverCtx     context.Context
+	dotListener   net.Listener
+	doqConn       *net.UDPConn
+	doqListener   *quic.EarlyListener
+	doqTransport  *quic.Transport
+	httpsServer   *http.Server
+	h3Server      *http3.Server
+	httpsListener net.Listener
+	h3Listener    *quic.EarlyListener
+}
 
 // generateSelfSignedCert generates a self-signed ECDSA certificate for the given domain.
 // It creates a CA certificate and uses it to sign a server certificate.
@@ -113,9 +147,31 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 	return cert, nil
 }
 
-// =============================================================================
-// TLSManager Implementation
-// =============================================================================
+// IsTemporaryError checks if an error is temporary/recoverable.
+func IsTemporaryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return true
+	}
+	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
+}
+
+// GetSecureClientIP extracts client IP from secure connection.
+func GetSecureClientIP(conn any) net.IP {
+	switch c := conn.(type) {
+	case *net.Conn:
+		if addr, ok := (*c).RemoteAddr().(*net.TCPAddr); ok {
+			return addr.IP
+		}
+	case interface{ RemoteAddr() net.Addr }:
+		if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+			return addr.IP
+		}
+	}
+	return nil
+}
 
 // NewTLSManager creates a new TLSManager with the given server and configuration.
 // It loads or generates TLS certificates and initializes the TLS configuration.
@@ -193,10 +249,6 @@ func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 	}
 }
 
-// =============================================================================
-// TLSManager: Server Management
-// =============================================================================
-
 // Start starts all secure DNS servers (DoT, DoQ, DoH, DoH3).
 // It launches each server in a separate goroutine and coordinates their lifecycle.
 func (tm *TLSManager) Start(httpsPort string) error {
@@ -267,10 +319,6 @@ func (tm *TLSManager) Start(httpsPort string) error {
 
 	return nil
 }
-
-// =============================================================================
-// TLSManager: DoT Implementation
-// =============================================================================
 
 // startDOTServer starts the DNS over TLS server.
 func (tm *TLSManager) startDOTServer() error {
@@ -422,10 +470,6 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		}
 	}
 }
-
-// =============================================================================
-// TLSManager: DoQ Implementation
-// =============================================================================
 
 // startDOQServer starts the DNS over QUIC server.
 func (tm *TLSManager) startDOQServer() error {
@@ -643,10 +687,6 @@ func (tm *TLSManager) respondQUIC(stream *quic.Stream, response *dns.Msg) error 
 	return nil
 }
 
-// =============================================================================
-// TLSManager: DoH Implementation
-// =============================================================================
-
 // startDOHServer starts the DNS over HTTPS server (HTTP/2).
 func (tm *TLSManager) startDOHServer(port string) error {
 	listener, err := net.Listen("tcp", ":"+port)
@@ -822,10 +862,6 @@ func (tm *TLSManager) respondDoH(w http.ResponseWriter, response *dns.Msg) error
 	_, err = w.Write(bytes)
 	return err
 }
-
-// =============================================================================
-// TLSManager: Shutdown
-// =============================================================================
 
 // shutdown gracefully shuts down all TLS services.
 func (tm *TLSManager) shutdown() error {

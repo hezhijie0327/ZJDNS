@@ -7,9 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,9 +23,91 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// =============================================================================
-// MemoryCache Implementation
-// =============================================================================
+const (
+	DefaultTTL                = 10         // Default TTL for cache entries in seconds
+	DefaultMemoryCacheSize    = 10000      // Default maximum number of entries in the in-memory cache
+	StaleTTL                  = 30         // Additional TTL for serving expired cache entries in seconds
+	StaleMaxAge               = 30 * 86400 // Maximum age for serving expired cache entries (30 days in seconds)
+	ServeExpiredClientTimeout = 300        // Maximum client timeout for serving expired cache entries in seconds. RFC 8767 recommends 1.8 seconds
+	RedisPrefixDNS            = "dns:"     // Prefix for DNS cache keys in Redis
+	ResultBufferCapacity      = 128        // Initial capacity for building cache keys to minimize allocations
+	MaxResultLength           = 512        // Maximum length for cache keys before hashing
+)
+
+// CacheEntry stores serialized DNS response data, metadata, and ECS state.
+type CacheEntry struct {
+	Answer          []*CompactRecord `json:"answer"`
+	Authority       []*CompactRecord `json:"authority"`
+	Additional      []*CompactRecord `json:"additional"`
+	ECSAddress      string           `json:"ecs_address,omitempty"`
+	Timestamp       int64            `json:"timestamp"`
+	AccessTime      int64            `json:"access_time"`
+	RefreshTime     int64            `json:"refresh_time,omitempty"`
+	TTL             int              `json:"ttl"`
+	OriginalTTL     int              `json:"original_ttl"`
+	ECSFamily       uint16           `json:"ecs_family,omitempty"`
+	ECSSourcePrefix uint8            `json:"ecs_source_prefix,omitempty"`
+	ECSScopePrefix  uint8            `json:"ecs_scope_prefix,omitempty"`
+	Validated       bool             `json:"validated"`
+}
+
+// CompactRecord stores a compact representation of a DNS RR.
+type CompactRecord struct {
+	Text    string `json:"text"`
+	OrigTTL uint32 `json:"orig_ttl"`
+	Type    uint16 `json:"type"`
+}
+
+// reverseLookupResult represents a candidate result for a reverse PTR lookup, including the target name and TTL.
+type reverseLookupResult struct {
+	Name string
+	TTL  uint32
+}
+
+// CacheManager defines the interface for DNS response caches.
+type CacheManager interface {
+	Get(key string) (*CacheEntry, bool, bool)
+	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption)
+	Close() error
+}
+
+// MemoryCache provides an in-memory LRU cache for DNS responses.
+type MemoryCache struct {
+	mu       sync.RWMutex
+	entries  map[string]*memoryCacheItem
+	order    *list.List
+	limit    int
+	closed   int32
+	ptrIndex map[string]map[string]uint32
+}
+
+// memoryCacheItem wraps a CacheEntry with its position in the LRU order.
+type memoryCacheItem struct {
+	entry   *CacheEntry
+	element *list.Element
+}
+
+// HybridCache combines an in-memory cache with Redis persistence.
+type HybridCache struct {
+	memory  *MemoryCache
+	redis   *RedisCache
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	bgGroup *errgroup.Group
+	bgCtx   context.Context
+	closed  int32
+}
+
+// RedisCache provides Redis-backed cache persistence for DNS entries.
+type RedisCache struct {
+	client  *redis.Client
+	config  *ServerConfig
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	closed  int32
+	bgGroup *errgroup.Group
+	bgCtx   context.Context
+}
 
 // NewMemoryCache creates a new high-performance in-memory cache.
 func NewMemoryCache(size int) *MemoryCache {
@@ -37,6 +123,185 @@ func NewMemoryCache(size int) *MemoryCache {
 	}
 }
 
+// CreateCompactRecord creates a compact representation of a DNS record.
+func CreateCompactRecord(rr dns.RR) *CompactRecord {
+	if rr == nil {
+		return nil
+	}
+	return &CompactRecord{
+		Text:    rr.String(),
+		OrigTTL: rr.Header().Ttl,
+		Type:    rr.Header().Rrtype,
+	}
+}
+
+// ExpandRecord expands a compact record back to a DNS RR.
+func ExpandRecord(cr *CompactRecord) dns.RR {
+	if cr == nil || cr.Text == "" {
+		return nil
+	}
+	rr, _ := dns.NewRR(cr.Text)
+	return rr
+}
+
+// compactRecords converts DNS RRs to compact records.
+func compactRecords(rrs []dns.RR) []*CompactRecord {
+	if len(rrs) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool, len(rrs))
+	result := make([]*CompactRecord, 0, len(rrs))
+
+	for _, rr := range rrs {
+		if rr == nil || rr.Header().Rrtype == dns.TypeOPT {
+			continue
+		}
+
+		rrText := rr.String()
+		if !seen[rrText] {
+			seen[rrText] = true
+			if cr := CreateCompactRecord(rr); cr != nil {
+				result = append(result, cr)
+			}
+		}
+	}
+	return result
+}
+
+// ExpandRecords expands compact records to DNS RRs.
+func ExpandRecords(crs []*CompactRecord) []dns.RR {
+	if len(crs) == 0 {
+		return nil
+	}
+	result := make([]dns.RR, 0, len(crs))
+	for _, cr := range crs {
+		if rr := ExpandRecord(cr); rr != nil {
+			result = append(result, rr)
+		}
+	}
+	return result
+}
+
+// ProcessRecords processes DNS records for response.
+func ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
+	if len(rrs) == 0 {
+		return nil
+	}
+
+	result := make([]dns.RR, 0, len(rrs))
+	for _, rr := range rrs {
+		if rr == nil {
+			continue
+		}
+
+		if !includeDNSSEC {
+			switch rr.(type) {
+			case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
+				continue
+			}
+		}
+
+		newRR := dns.Copy(rr)
+		if newRR != nil {
+			if ttl > 0 {
+				newRR.Header().Ttl = ttl
+			}
+			result = append(result, newRR)
+		}
+	}
+	return result
+}
+
+// BuildCacheKey generates a cache key from question and options.
+func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC bool, globalPrefix string) string {
+	var buf strings.Builder
+	buf.Grow(ResultBufferCapacity)
+
+	buf.WriteString(globalPrefix)
+	buf.WriteString(RedisPrefixDNS)
+
+	buf.WriteString(NormalizeDomain(question.Name))
+	buf.WriteByte(':')
+
+	buf.WriteString(strconv.FormatUint(uint64(question.Qtype), 10))
+	buf.WriteByte(':')
+	buf.WriteString(strconv.FormatUint(uint64(question.Qclass), 10))
+
+	if ecs != nil {
+		buf.WriteString(":ecs:")
+		buf.WriteString(ecs.Address.String())
+		buf.WriteByte('/')
+		buf.WriteString(strconv.FormatUint(uint64(ecs.SourcePrefix), 10))
+	}
+
+	if clientRequestedDNSSEC {
+		buf.WriteString(":dnssec")
+	}
+
+	result := buf.String()
+	if len(result) > MaxResultLength {
+		hash := fnv.New64a()
+		hash.Write([]byte(result))
+		return fmt.Sprintf("h:%x", hash.Sum64())
+	}
+	return result
+}
+
+// calculateTTL calculates the minimum TTL from DNS records.
+func calculateTTL(rrs []dns.RR) int {
+	if len(rrs) == 0 {
+		return DefaultTTL
+	}
+
+	minTTL := int(rrs[0].Header().Ttl)
+	for _, rr := range rrs {
+		if rr == nil {
+			continue
+		}
+		if ttl := int(rr.Header().Ttl); ttl > 0 && (minTTL == 0 || ttl < minTTL) {
+			minTTL = ttl
+		}
+	}
+
+	if minTTL <= 0 {
+		minTTL = DefaultTTL
+	}
+
+	return minTTL
+}
+
+// cloneCompactRecords creates a deep copy of a slice of compact records.
+func cloneCompactRecords(records []*CompactRecord) []*CompactRecord {
+	if len(records) == 0 {
+		return nil
+	}
+
+	cloned := make([]*CompactRecord, len(records))
+	for i, r := range records {
+		if r == nil {
+			continue
+		}
+		rr := *r
+		cloned[i] = &rr
+	}
+	return cloned
+}
+
+// cloneCacheEntry creates a deep copy of a CacheEntry.
+func cloneCacheEntry(entry *CacheEntry) *CacheEntry {
+	if entry == nil {
+		return nil
+	}
+
+	cloned := *entry
+	cloned.Answer = cloneCompactRecords(entry.Answer)
+	cloned.Authority = cloneCompactRecords(entry.Authority)
+	cloned.Additional = cloneCompactRecords(entry.Additional)
+	return &cloned
+}
+
+// touchEntryLocked moves the accessed cache entry to the front of the LRU order.
 func (mc *MemoryCache) touchEntryLocked(item *memoryCacheItem) {
 	if item == nil || item.element == nil {
 		return
@@ -127,6 +392,7 @@ func (mc *MemoryCache) removeFromPTRIndexLocked(entry *CacheEntry, key string) {
 	}
 }
 
+// evictOldestLocked evicts the oldest cache entry when the cache limit is exceeded.
 func (mc *MemoryCache) evictOldestLocked() {
 	oldest := mc.order.Back()
 	if oldest == nil {
@@ -270,10 +536,6 @@ func (mc *MemoryCache) Close() error {
 	return nil
 }
 
-// =============================================================================
-// RedisCache Implementation
-// =============================================================================
-
 // NewRedisCache creates a new Redis-backed cache
 func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 	logging.Disable()
@@ -406,6 +668,7 @@ func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, va
 	}
 }
 
+// updateRedisPTRIndex updates the Redis reverse PTR index for A and AAAA records in the answer section.
 func (rc *RedisCache) updateRedisPTRIndex(ctx context.Context, answer []dns.RR, timestamp int64) {
 	for _, rr := range answer {
 		if rr == nil {
@@ -441,10 +704,12 @@ func (rc *RedisCache) updateRedisPTRIndex(ctx context.Context, answer []dns.RR, 
 	}
 }
 
+// ptrIndexKey generates the Redis key for the PTR index of a given IP address.
 func (rc *RedisCache) ptrIndexKey(ip net.IP) string {
 	return fmt.Sprintf("%sptr:%s", RedisPrefixDNS, ip.String())
 }
 
+// ReverseLookup searches the Redis cache for A or AAAA answers that match the provided IP address and returns candidate reverse PTR targets.
 func (rc *RedisCache) ReverseLookup(ip net.IP) []reverseLookupResult {
 	if ip == nil || atomic.LoadInt32(&rc.closed) != 0 {
 		return nil
@@ -523,10 +788,7 @@ func (rc *RedisCache) Close() error {
 	return nil
 }
 
-// =============================================================================
-// CacheEntry Implementation
-// =============================================================================
-
+// CacheEntry stores serialized DNS response data and metadata.
 // IsExpired checks if the cache entry is expired
 func (c *CacheEntry) IsExpired() bool {
 	return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL)
@@ -595,10 +857,6 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 	return nil
 }
 
-// =============================================================================
-// HybridCache Implementation
-// =============================================================================
-
 // NewHybridCache creates an in-memory first-level cache with Redis persistence.
 func NewHybridCache(memory *MemoryCache, redisCache *RedisCache) *HybridCache {
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -613,6 +871,7 @@ func NewHybridCache(memory *MemoryCache, redisCache *RedisCache) *HybridCache {
 	}
 }
 
+// Get retrieves a cache entry from the hybrid cache, checking memory first and falling back to Redis if not found.
 func (hc *HybridCache) Get(key string) (*CacheEntry, bool, bool) {
 	if atomic.LoadInt32(&hc.closed) != 0 {
 		return nil, false, false
@@ -635,6 +894,7 @@ func (hc *HybridCache) Get(key string) (*CacheEntry, bool, bool) {
 	return entry, true, isExpired
 }
 
+// ReverseLookup performs a reverse lookup for the given IP address, checking memory first and falling back to Redis if not found.
 func (hc *HybridCache) ReverseLookup(ip net.IP) []reverseLookupResult {
 	if hc == nil {
 		return nil
@@ -654,6 +914,7 @@ func (hc *HybridCache) ReverseLookup(ip net.IP) []reverseLookupResult {
 	return results
 }
 
+// Set stores a cache entry in the hybrid cache, writing to memory and asynchronously writing through to Redis if enabled.
 func (hc *HybridCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
 	if atomic.LoadInt32(&hc.closed) != 0 {
 		return
@@ -674,6 +935,7 @@ func (hc *HybridCache) Set(key string, answer, authority, additional []dns.RR, v
 	})
 }
 
+// Close shuts down the hybrid cache and all underlying caches.
 func (hc *HybridCache) Close() error {
 	if !atomic.CompareAndSwapInt32(&hc.closed, 0, 1) {
 		return nil

@@ -2,22 +2,155 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/miekg/dns"
 )
 
-// =============================================================================
-// EDNSManager Implementation
-// =============================================================================
+const (
+	DefaultECSv4Len = 24  // Default ECS prefix length for IPv4 (RFC 7871 recommends /24 for IPv4)
+	DefaultECSv6Len = 64  // Default ECS prefix length for IPv6 (RFC 7871 recommends /64 for IPv6)
+	DefaultECSScope = 0   // Default ECS scope prefix length (0 means no scope)
+	PaddingSize     = 468 // Target size for padded DNS messages (RFC 7830 recommends at least 256 bytes, 468 is a common choice for better security)
+
+	DefaultCookieClientLen = 8  // 8 bytes client cookie
+	DefaultCookieServerLen = 16 // 16 bytes server cookie (recommended)
+	MaxCookieServerLen     = 32 // 32 bytes max server cookie
+)
+
+// Extended DNS Error codes (RFC 8914)
+/*
+	0 - 24 - Defined
+	25-49151 - Unassigned
+	49152-65535 - Reserved for Private Use
+*/
+const (
+	EDECodeOtherError                 uint16 = 0
+	EDECodeUnsupportedDNSKEYAlgorithm uint16 = 1
+	EDECodeUnsupportedDSDigestType    uint16 = 2
+	EDECodeStaleAnswer                uint16 = 3
+	EDECodeForgedAnswer               uint16 = 4
+	EDECodeDNSSECIndeterminate        uint16 = 5
+	EDECodeDNSSECBogus                uint16 = 6
+	EDECodeSignatureExpired           uint16 = 7
+	EDECodeSignatureNotYetValid       uint16 = 8
+	EDECodeDNSKEYMissing              uint16 = 9
+	EDECodeRRSIGsMissing              uint16 = 10
+	EDECodeNoZoneKeyBitSet            uint16 = 11
+	EDECodeNSECMissing                uint16 = 12
+	EDECodeCachedError                uint16 = 13
+	EDECodeNotReady                   uint16 = 14
+	EDECodeBlocked                    uint16 = 15
+	EDECodeCensored                   uint16 = 16
+	EDECodeFiltered                   uint16 = 17
+	EDECodeProhibited                 uint16 = 18
+	EDECodeStaleNXDomainAnswer        uint16 = 19
+	EDECodeNotAuthoritative           uint16 = 20
+	EDECodeNotSupported               uint16 = 21
+	EDECodeNoReachableAuthority       uint16 = 22
+	EDECodeNetworkError               uint16 = 23
+	EDECodeInvalidData                uint16 = 24
+)
+
+// CookieGenerator handles DNS cookie generation and validation
+type CookieGenerator struct {
+	secret         []byte // Current HMAC secret
+	previousSecret []byte // Previous secret for seamless rotation
+}
+
+// CookieOption represents the DNS Cookie option with client and server cookies
+type CookieOption struct {
+	ClientCookie []byte
+	ServerCookie []byte
+}
+
+// EDEOption represents the Extended DNS Error option with an info code and extra text
+type EDEOption struct {
+	InfoCode  uint16
+	ExtraText string
+}
+
+// ECSOption represents the EDNS Client Subnet option with address, family, and prefix lengths
+type ECSOption struct {
+	Address      net.IP
+	Family       uint16
+	SourcePrefix uint8
+	ScopePrefix  uint8
+}
+
+// EDNSManager handles EDNS option parsing and construction for DNS messages
+type EDNSManager struct {
+	defaultECS      *ECSOption
+	detector        *IPDetector
+	cookieGenerator *CookieGenerator
+}
+
+// IPDetector is responsible for detecting the server's public IP address for ECS auto-configuration
+type IPDetector struct {
+	httpClient *http.Client
+}
+
+// detectPublicIP detects the public IP address using Cloudflare's trace service.
+func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
+	if d == nil {
+		return nil
+	}
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: DefaultTimeout}
+			if forceIPv6 {
+				return dialer.DialContext(ctx, "tcp6", addr)
+			}
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
+	}
+
+	client := &http.Client{Timeout: OperationTimeout, Transport: transport}
+	defer transport.CloseIdleConnections()
+
+	resp, err := client.Get("https://api.cloudflare.com/cdn-cgi/trace")
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	re := regexp.MustCompile(`ip=([^\s\n]+)`)
+	matches := re.FindStringSubmatch(string(body))
+	if len(matches) < 2 {
+		return nil
+	}
+
+	ip := net.ParseIP(matches[1])
+	if ip == nil {
+		return nil
+	}
+
+	if forceIPv6 && ip.To4() != nil {
+		return nil
+	}
+	if !forceIPv6 && ip.To4() == nil {
+		return nil
+	}
+
+	return ip
+}
 
 // NewEDNSManager creates a new EDNS manager with optional default ECS subnet
 func NewEDNSManager(defaultSubnet string) (*EDNSManager, error) {
@@ -295,16 +428,6 @@ func (em *EDNSManager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption
 	return ecs, nil
 }
 
-// =============================================================================
-// CookieGenerator Implementation (RFC 7873 + RFC 9018)
-// =============================================================================
-
-// CookieGenerator handles DNS cookie generation and validation
-type CookieGenerator struct {
-	secret         []byte // Current HMAC secret
-	previousSecret []byte // Previous secret for seamless rotation
-}
-
 // NewCookieGenerator creates a new cookie generator with a random secret
 func NewCookieGenerator() *CookieGenerator {
 	secret := make([]byte, 32)
@@ -415,9 +538,7 @@ func BuildCookieResponse(clientCookie, serverCookie []byte) string {
 	return hex.EncodeToString(cookie)
 }
 
-// =============================================================================
 // Extended DNS Error (EDE) Helpers (RFC 8914)
-// =============================================================================
 
 // ExtendedErrorCodeToString returns human-readable description for EDE code
 func ExtendedErrorCodeToString(code uint16) string {
