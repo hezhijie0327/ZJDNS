@@ -939,7 +939,7 @@ func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool,
 	// Generate cookie response only when the client sent a cookie option.
 	cookieStr := s.generateCookieResponse(cookieOpt, clientIP)
 
-	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || ede != nil
+	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || ede != nil || isSecureConnection
 
 	if shouldAddEDNS {
 		s.ednsMgr.AddToMessage(msg, ecsOpt, clientRequestedDNSSEC, isSecureConnection, cookieStr, ede)

@@ -91,17 +91,20 @@ func (em *EDNSManager) ParseCookie(msg *dns.Msg) *CookieOption {
 			cookieHex := cookie.Cookie
 			cookieBytes, _ := hex.DecodeString(cookieHex)
 
-			// Client cookie is always 8 bytes (16 hex chars)
-			if len(cookieBytes) >= DefaultCookieClientLen {
-				clientCookie := cookieBytes[:DefaultCookieClientLen]
-				var serverCookie []byte
-				if len(cookieBytes) > DefaultCookieClientLen {
-					serverCookie = cookieBytes[DefaultCookieClientLen:]
-				}
-				return &CookieOption{
-					ClientCookie: clientCookie,
-					ServerCookie: serverCookie,
-				}
+			if len(cookieBytes) < DefaultCookieClientLen {
+				LogDebug("EDNS: invalid COOKIE option, too short=%d bytes", len(cookieBytes))
+				return nil
+			}
+
+			clientCookie := cookieBytes[:DefaultCookieClientLen]
+			var serverCookie []byte
+			if len(cookieBytes) > DefaultCookieClientLen {
+				serverCookie = cookieBytes[DefaultCookieClientLen:]
+			}
+			LogDebug("EDNS: extracted COOKIE client=%x server=%x", clientCookie, serverCookie)
+			return &CookieOption{
+				ClientCookie: clientCookie,
+				ServerCookie: serverCookie,
 			}
 		}
 	}
@@ -121,6 +124,7 @@ func (em *EDNSManager) ParseEDE(msg *dns.Msg) *EDEOption {
 
 	for _, option := range opt.Option {
 		if ede, ok := option.(*dns.EDNS0_EDE); ok {
+			LogDebug("EDNS: extracted EDE code=%d (%s) extra=%q", ede.InfoCode, ExtendedErrorCodeToString(ede.InfoCode), ede.ExtraText)
 			return &EDEOption{
 				InfoCode:  ede.InfoCode,
 				ExtraText: ede.ExtraText,
@@ -200,6 +204,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 	}
 
 	// Add padding for secure connections (RFC 7830)
+	paddingBytes := 0
 	if isSecureConnection {
 		opt.Option = options
 		msg.Extra = append(msg.Extra, opt)
@@ -208,6 +213,7 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 			if currentSize < PaddingSize {
 				paddingDataSize := PaddingSize - currentSize - 4
 				if paddingDataSize > 0 {
+					paddingBytes = paddingDataSize
 					options = append(options, &dns.EDNS0_PADDING{
 						Padding: make([]byte, paddingDataSize),
 					})
@@ -219,6 +225,13 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 
 	opt.Option = options
 	msg.Extra = append(msg.Extra, opt)
+	LogDebug("EDNS: built OPT secure=%t ecs=%t cookie=%t ede=%t padding=%d bytes totalOptions=%d",
+		isSecureConnection,
+		ecs != nil,
+		cookieStr != "",
+		ede != nil,
+		paddingBytes,
+		len(opt.Option))
 }
 
 // parseECSConfig parses ECS configuration string (auto, auto_v4, auto_v6, or CIDR)
