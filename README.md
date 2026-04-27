@@ -1,10 +1,6 @@
 # ZJDNS Server
 
-🚀 高性能递归 DNS 解析服务器，基于 Go 语言开发，支持内存/Redis 缓存、DNSSEC 验证、ECS、DoT/DoQ/DoH 等高级功能。
-
----
-
-## ⚠️ 免责声明
+🚀 高性能递归 DNS 解析服务器，基于 Go 语言开发，支持内存/Redis 缓存、DNSSEC 验证、ECS、DoT/DoQ/DoH/DoH3 等高级功能。
 
 > ⚠️ **警告**
 > 这个项目是一个 Vibe Coding 产品，具有复杂的代码结构，尚未在生产环境中得到充分验证。请不要在生产环境中使用。
@@ -15,109 +11,104 @@
 
 ### 🔧 DNS 解析核心
 
-- **递归 DNS 解析**：完整的 DNS 递归查询算法实现，从根服务器开始逐步解析
-- **智能协议协商**：支持 UDP 和 TCP 协议，当 UDP 响应被截断或超过缓冲区大小时**自动回退到 TCP 协议**，确保大数据响应的完整传输
-- **CNAME 链解析**：智能处理 CNAME 记录链，防止循环引用，支持多级 CNAME 解析
-- **A/AAAA 延迟探测**：后台对 A/AAAA 记录进行速度检测，支持可配置的 `ping`、`tcp`、`udp`、`http(s|3)` 探测步骤，检测结果会用于按最快顺序重排序记录，提升后续查询性能
-- **DNS 重写功能**：支持精确匹配域名重写规则，实现域名过滤和重定向；支持自定义响应码（如 NXDOMAIN、SERVFAIL 等）和 DNS 记录（如 A、AAAA、CNAME 等）返回
-- **混合模式**：可同时配置上游 DNS 服务器和递归解析器，实现灵活的查询策略
+- **递归 DNS 解析**：完整的 DNS 递归查询算法实现，从 13 组根服务器开始逐步解析，支持 TLD 服务器和权威服务器查询
+- **上游 DNS 转发**：支持配置多个上游 DNS 服务器，采用并发查询+首胜策略（First-Win），降低查询延迟
+- **混合模式**：可同时配置上游 DNS 服务器和内置递归解析器（`builtin_recursive`），实现灵活的查询策略
+- **智能协议协商**：UDP 响应被截断或超过缓冲区大小时**自动回退到 TCP 协议**，确保大数据响应的完整传输
+- **CNAME 链解析**：智能处理多级 CNAME 记录链，防止循环引用（最大 16 级）
+- **A/AAAA 延迟探测**：后台对 A/AAAA 记录进行速度检测，支持 `ping`、`tcp`、`udp`、`http`、`https`、`http3` 探测，按最快顺序重排序记录
+- **DNS 重写**：支持精确匹配域名重写规则，实现域名过滤和重定向；支持自定义响应码（NXDOMAIN、SERVFAIL 等）和 DNS 记录（A、AAAA、CNAME、TXT 等）
+- **客户端过滤**：重写规则支持 `include_clients` / `exclude_clients`，按客户端 IP/CIDR 选择性应用
 
 ### 🛡️ 安全与防御
 
-- **CIDR 过滤**：基于 CIDR 规则的智能 IP 地址过滤，支持精确的结果控制
-  - **文件配置**：通过外部文件定义 CIDR 规则，支持动态加载和管理
-  - **标签匹配**：使用标签系统将上游服务器与过滤规则关联，实现灵活的策略配置
-  - **记录过滤**：智能过滤 A 和 AAAA 记录，只允许符合 CIDR 规则的 IP 结果通过
-  - **拒绝策略**：当任何记录被过滤时，返回 REFUSED 响应，确保严格的访问控制
-
-- **DNS 劫持防护**：主动检测并智能响应根服务器的越权响应
-  - **步骤 1**：当检测到根服务器直接为非根域名返回最终记录时，判定为 DNS 劫持
-  - **步骤 2**：**自动切换到 TCP 协议重试**以绕过常见的 UDP 污染
-  - **步骤 3**：如果 TCP 查询结果**仍然**被劫持，完全拒绝该响应，从源头防止污染
-
-- **DNSSEC 验证**：轻量级 DNSSEC 验证机制
-  - **AD 标志检查**：验证响应中的 Authenticated Data 标志
-  - **DNSSEC 记录检查**：检测 RRSIG、NSEC、NSEC3、DNSKEY、DS 等 DNSSEC 相关记录类型
-  - **AD 标志传播**：当验证通过时，向客户端传播 Authenticated Data 标志
-
-- **ECS 支持**：EDNS 客户端子网（RFC [7871](https://www.rfc-editor.org/rfc/rfc7871.html)），提供地理位置感知解析，支持 `auto`、`auto_v4`、`auto_v6` 自动检测或手动 CIDR 配置
-- **DNS Cookie**：支持 RFC [7873](https://www.rfc-editor.org/rfc/rfc7873.html) 和 RFC [9018](https://www.rfc-editor.org/rfc/rfc9018.html) 标准，提供 HMAC-SHA256 服务端 Cookie 生成和验证，防范 DNS 放大攻击
-- **扩展 DNS 错误 (EDE)**：支持 RFC [8914](https://www.rfc-editor.org/rfc/rfc8914.html)，在响应中附带详细的错误信息（如 Stale Answer、Blocked、DNSSEC Bogus 等），提升调试能力
+- **CIDR 过滤**：基于 CIDR 规则的智能 IP 地址过滤
+  - **文件/内联配置**：通过外部文件或内联 rules 定义 CIDR 规则
+  - **标签匹配**：使用标签系统将上游服务器与过滤规则关联
+  - **记录过滤**：过滤 A/AAAA 记录，所有 IP 被过滤时返回 REFUSED + EDE
+- **DNS 劫持防护**：主动检测根服务器越权响应
+  1. 检测到根服务器直接为非根域名返回最终记录 → 判定为劫持
+  2. **自动切换到 TCP 协议重试**以绕过 UDP 污染
+  3. TCP 仍被劫持 → 完全拒绝响应（REFUSED + EDE）
+- **DNSSEC 验证**（轻量级）：
+  - AD 标志检查：验证 Authenticated Data 标志
+  - DNSSEC 记录检查：检测 RRSIG、NSEC、NSEC3、DNSKEY、DS 记录
+  - 验证通过时向客户端传播 AD 标志
+- **ECS 支持**：EDNS 客户端子网，支持 `auto`、`auto_v4`、`auto_v6` 自动检测或手动 CIDR 配置
+- **DNS Cookie**：HMAC-SHA256 服务端 Cookie 生成和验证，防范 DNS 放大攻击，支持密钥无缝轮换
+- **扩展 DNS错误 (EDE)**：24 种 EDE 代码，包括 Stale、Blocked、Censored、DNSSEC Bogus 等
 
 ### 🔐 安全传输协议
 
-- **DNS over TLS (DoT)**：支持标准 DNS over TLS 协议 (RFC [7858](https://www.rfc-editor.org/rfc/rfc7858.html))，在端口 `853` 上提供加密 DNS 查询，防止窃听和篡改
-- **DNS over QUIC (DoQ)**：支持前沿的 DNS over QUIC 协议 (RFC [9250](https://www.rfc-editor.org/rfc/rfc9250.html))，利用 QUIC 协议的 0-RTT、多路复用和连接迁移特性，提供更低延迟和更高可靠性的加密 DNS 服务
-- **DNS over HTTPS (DoH/DoH3)**：同时支持 HTTP/2 和 HTTP/3 DoH 服务 (RFC [8484](https://www.rfc-editor.org/rfc/rfc8484.html))，在端口 `443` 上提供基于 HTTPS 的 DNS 查询
-- **统一证书管理**：DoT、DoQ 和 DoH 共享相同的 TLS 证书配置，简化部署
-- **自签名 CA 支持**：内置自签名 CA 功能，可为域名动态签名 TLS 证书，简化开发环境配置
-- **调试证书自动生成**：在开发或调试模式下自动生成自签名 TLS 证书，无需外部证书文件
-- **增强的 TLS 日志**：提供详细的 TLS 握手和证书验证日志，便于问题诊断和安全监控
+| 协议                       | 端口 | 说明                            |
+| -------------------------- | ---- | ------------------------------- |
+| **DoT** (DNS over TLS)     | 853  | TLS 1.2/1.3 加密 DNS 查询       |
+| **DoQ** (DNS over QUIC)    | 853  | 基于 QUIC 协议，0-RTT、多路复用 |
+| **DoH** (DNS over HTTPS)   | 443  | HTTP/2 加密 DNS 查询            |
+| **DoH3** (DNS over HTTP/3) | 443  | HTTP/3 加密 DNS 查询            |
 
-### 🔧 TLS 证书管理
+- **统一证书管理**：DoT、DoQ、DoH、DoH3 共享相同的 TLS 证书配置
+- **自签名 CA**：内置自签名根 CA，使用 ECDSA P-384 密钥，可为任何域名动态签发证书
+- **自定义证书**：支持加载外部 PEM 格式证书和私钥
 
-- **自签名根 CA**：内置自签名根证书颁发机构，支持为任何域名签名 TLS 证书
-- **动态证书签发**：可根据配置的域名动态生成有效的 TLS 证书，无需外部证书文件
-- **开发调试支持**：在开发环境中自动生成临时证书，简化配置过程
-- **EC 密钥支持**：支持 ECDSA 私钥的生成、序列化和加载，提供更现代的加密算法
-- **证书验证日志**：详细的 TLS 证书验证过程日志，包括证书链验证、有效期检查等
+### 📦 DNS 填充 (RFC 7830)
 
-### 📦 DNS 填充
+- 填充到 468 字节，对抗基于流量大小的指纹识别
+- **仅对安全连接**（DoT/DoQ/DoH）生效
 
-- **RFC [7830](https://www.rfc-editor.org/rfc/rfc7830.html) 标准支持**：实现 DNS 填充功能，通过在 EDNS0 中添加填充字节来标准化 DNS 响应包大小，有效对抗基于流量大小的指纹识别和审查
-- **智能块大小填充**：填充到推荐的 468 字节，平衡隐私保护和带宽效率
-- **按需启用**：可通过配置文件灵活启用或禁用，**仅对安全连接（DoT/DoQ/DoH）生效**
+### 📍 DDR 自动发现 (RFC 9461/9462)
 
-### 📍 DDR 功能
-
-- **自动发现支持**：支持 RFC [9461](https://www.rfc-editor.org/rfc/rfc9461.html)/[9462](https://www.rfc-editor.org/rfc/rfc9462.html) DNS SVCB 记录，用于自动发现安全 DNS 服务器
-- **SVCB 记录生成**：自动为 DoT、DoH、DoQ 生成 SVCB 记录，支持 IPv4 和 IPv6 提示
-- **灵活配置**：通过配置文件指定 DDR 域名和对应的 IP 地址，支持 IPv4 和 IPv6 双栈配置
-- **智能响应**：当接收到 `_dns.resolver.arpa`、`_dns.dns.example.org`、`_non_53_port._dns.dns.example.org` 的 SVCB 查询时，自动返回配置的加密 DNS 服务信息
+- 自动生成 SVCB 记录，用于 DoT/DoH/DoQ 服务发现
+- 支持 IPv4 和 IPv6 双栈提示
 
 ### 💾 缓存系统
 
-- **双模式架构**：
-  - **内存缓存模式**（默认）：当 Redis 未配置时，使用纯内存缓存（MemoryCache）
-  - **混合缓存模式**：当配置 Redis 时，使用 MemoryCache + Redis 的混合架构（HybridCache）
+| 模式            | 触发条件     | 说明                    |
+| --------------- | ------------ | ----------------------- |
+| **MemoryCache** | 未配置 Redis | 纯 LRU 内存缓存         |
+| **HybridCache** | 配置 Redis   | 内存优先 + Redis 持久化 |
 
-- **混合缓存策略**：
-  - **内存优先读取**：查询时先检查内存缓存，未命中时回退到 Redis
-  - **写透（Write-through）**：写入时同时更新内存和 Redis（Redis 异步写入）
-  - **自动回填**：从 Redis 命中的缓存会自动回填到内存缓存
+**HybridCache 行为**：
 
-- **PTR 反查优化**：当接收到 PTR 查询时，会先查看本地缓存中是否存在对应 A/AAAA 记录并直接生成 PTR 反向映射响应，无需额外上游查询
+- **读**：内存优先 → 未命中回退 Redis → Redis 命中自动回填内存
+- **写**：立即更新内存 + 异步写入 Redis
 
-- **过期缓存服务**：当上游服务器不可用时返回过期缓存结果，提高可用性。该行为遵循 RFC [8767](https://www.rfc-editor.org/rfc/rfc8767.html) 的过期答案回退标准。
+**缓存特性**：
 
-- **预取机制**：后台刷新即将过期的缓存记录，减少用户等待时间
+- **过期缓存服务** (RFC 8767)：上游不可用时返回过期缓存，最大过期 30 天，客户端超时 1800ms
+- **预取机制**：后台刷新即将过期的缓存记录
+- **ECS 感知缓存**：基于客户端子网的缓存分区
+- **PTR 反查优化**：利用缓存中 A/AAAA 记录直接生成 PTR 响应
+- **访问限流**：减少 Redis 访问时间更新操作
 
-- **ECS 感知缓存**：基于客户端地理位置（EDNS Client Subnet）的缓存分区，提供精确的本地化解析
+### 📊 统计与监控
 
-- **访问限流**：减少缓存访问时间更新操作，降低 Redis 压力
+- 请求计数器（按协议：UDP、TCP、DoT、DoQ、DoH、DoH3）
+- 缓存命中率、重写次数、劫持检测次数、过期响应次数
+- 平均响应时间、Fallback 服务器使用统计
+- Redis 持久化 + 定期重置（需配置 `stats.reset_interval`）
+- **pprof 性能分析**：`http://127.0.0.1:6060/debug/pprof/`
 
 ---
 
-## 📁 项目结构
+## 📜 支持的 RFC 标准
 
-| 文件               | 说明                                                                       |
-| ------------------ | -------------------------------------------------------------------------- |
-| `main.go`          | 入口文件（CLI 参数、配置加载、服务器启动）                                 |
-| `version.go`       | 版本信息                                                                   |
-| `utils.go`         | 工具函数（字符串处理、DNS 记录、缓存键、客户端 IP 提取）                   |
-| `logger.go`        | 日志管理（LogManager、TimeCache、RNG）                                     |
-| `pool.go`          | 对象池（MessagePool、BufferPool）                                          |
-| `config.go`        | 配置管理（ConfigManager、JSON 验证、DDR 记录生成）                         |
-| `cache.go`         | 缓存系统（MemoryCache、RedisCache、HybridCache）                           |
-| `cidr.go`          | CIDR 过滤（CIDRManager、IP 过滤、REFUSED + EDE 响应）                      |
-| `edns.go`          | EDNS 扩展（ECS、DNS Cookie RFC 7873/9018、EDE RFC 8914）                   |
-| `rewrite.go`       | DNS 重写（RewriteManager、域名过滤、自定义响应码）                         |
-| `security.go`      | 安全管理（DNSSECValidator、HijackPrevention、SecurityManager）             |
-| `tls.go`           | TLS 协议（TLSManager、DoT/DoQ/DoH/DoH3、自签名 CA）                        |
-| `query.go`         | 查询客户端（QueryClient、协议特定查询）                                    |
-| `resolver.go`      | 解析器（QueryManager、RecursiveResolver、CNAMEHandler、ResponseValidator） |
-| `server.go`        | 服务器核心（DNSServer、UDP/TCP/DoT/DoQ/DoH 处理器、信号处理）              |
-| `latency_probe.go` | 延迟探测（A/AAAA 记录速度测试、按延迟重排序）                              |
+| RFC                                                     | 标准名称                          | 实现功能                 |
+| ------------------------------------------------------- | --------------------------------- | ------------------------ |
+| [RFC 3597](https://www.rfc-editor.org/rfc/rfc3597.html) | Handling Unknown DNS RR Types     | 未知记录类型回退处理     |
+| [RFC 7830](https://www.rfc-editor.org/rfc/rfc7830.html) | EDNS(0) Padding                   | DNS 响应填充（468 字节） |
+| [RFC 7858](https://www.rfc-editor.org/rfc/rfc7858.html) | DNS over TLS (DoT)                | TLS 加密 DNS 传输        |
+| [RFC 7871](https://www.rfc-editor.org/rfc/rfc7871.html) | EDNS Client Subnet (ECS)          | 客户端子网传递           |
+| [RFC 7873](https://www.rfc-editor.org/rfc/rfc7873.html) | DNS Cookies                       | DNS Cookie 机制          |
+| [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.html) | DNS over HTTPS (DoH)              | HTTPS 加密 DNS 传输      |
+| [RFC 8767](https://www.rfc-editor.org/rfc/rfc8767.html) | Serving Stale DNS Answers         | 过期缓存服务             |
+| [RFC 8914](https://www.rfc-editor.org/rfc/rfc8914.html) | Extended DNS Errors (EDE)         | 扩展 DNS 错误码          |
+| [RFC 9018](https://www.rfc-editor.org/rfc/rfc9018.html) | DNS Cookies for TLS               | TLS 连接上的 DNS Cookie  |
+| [RFC 9250](https://www.rfc-editor.org/rfc/rfc9250.html) | DNS over QUIC (DoQ)               | QUIC 加密 DNS 传输       |
+| [RFC 9461](https://www.rfc-editor.org/rfc/rfc9461.html) | SVCB/HTTPS RR for DNS             | DDR SVCB 记录            |
+| [RFC 9462](https://www.rfc-editor.org/rfc/rfc9462.html) | Discovery of Designated Resolvers | DDR 自动发现             |
+
+---
 
 ## 🏗️ 系统架构
 
@@ -127,131 +118,79 @@ graph TB
         A[DNS 客户端]
     end
 
-    subgraph "核心服务器"
-        B[DNSServer<br>服务器核心]
+    subgraph "协议接入层"
+        D[UDP:53]
+        E[TCP:53]
+        F[DoT:853]
+        G[DoQ:853]
+        H[DoH/DoH3:443]
+    end
+
+    subgraph "核心服务器 DNSServer"
+        B[DNSServer<br>统一查询入口]
         C[ConfigManager<br>配置管理]
     end
 
-    subgraph "协议处理器"
-        D[UDP Server<br>UDP:53]
-        E[TCP Server<br>TCP:53]
-        F[DoT Handler<br>DoT:853]
-        G[DoQ Handler<br>DoQ:853]
-        H[DoH/DoH3 Handler<br>DoH:443]
+    subgraph "查询处理链"
+        RM[RewriteManager<br>域名重写]
+        EM[EDNSManager<br>ECS/Cookie/EDE/Padding]
+        CM[CacheManager<br>内存/Redis/混合缓存]
+        QM[QueryManager<br>查询路由]
     end
 
-    subgraph "查询管理层"
-        I[QueryManager<br>查询管理器]
-        J[QueryClient<br>查询客户端]
-        K[UpstreamHandler<br>上游处理器]
-        L[RecursiveResolver<br>递归解析器]
-        M[CNAMEHandler<br>CNAME处理器]
-        N[ResponseValidator<br>响应验证器]
+    subgraph "查询执行层"
+        UH[UpstreamHandler<br>上游并发查询]
+        RR[RecursiveResolver<br>内置递归解析]
+        CH[CNAMEHandler<br>CNAME 链处理]
+        QC[QueryClient<br>多协议查询客户端]
     end
 
-    subgraph "安全与管理层"
-        O[SecurityManager<br>安全管理器]
-        P[EDNSManager<br>EDNS 管理器]
-        Q[TLSManager<br>TLS 证书管理]
-        R[DNSSECValidator<br>DNSSEC 验证器]
-        S[HijackPrevention<br>劫持防护]
-        T[CIDRManager<br>CIDR 过滤]
-        U[RewriteManager<br>DNS 重写]
-        V[IPDetector<br>IP 检测器]
-    end
-
-    subgraph "缓存系统"
-        W[CacheManager Interface<br>缓存管理接口]
-        X[MemoryCache<br>内存缓存实现]
-        Y[RedisCache<br>Redis 缓存实现<br>可选]
-        Z[HybridCache<br>混合缓存<br>MemoryCache + RedisCache]
-    end
-
-    subgraph "背景任务管理"
-        AA[Background Group<br>背景任务组]
-        BB[Cache Refresh Group<br>缓存刷新组]
-        CC[Shutdown Coordinator<br>关闭协调器]
-        DD[Signal Handler<br>信号处理器]
+    subgraph "安全验证层"
+        SM[SecurityManager<br>安全协调]
+        DS[DNSSECValidator<br>DNSSEC 验证]
+        HP[HijackPrevention<br>劫持防护]
+        CIDR[CIDRManager<br>IP 过滤]
     end
 
     subgraph "外部依赖"
-        EE[Upstream DNS Servers<br>上游 DNS 服务器]
-        FF[Redis Server<br>Redis 服务器<br>可选]
-        GG[Root DNS Servers<br>根 DNS 服务器]
-        HH[TLS Certificates<br>TLS 证书]
+        EE[上游 DNS 服务器]
+        GG[根 DNS 服务器]
+        FF[Redis 服务器<br>可选]
     end
 
-    %% Main connections
-    A -->|DNS 查询 | D
-    A -->|DNS 查询 | E
-    A -->|安全查询 | F
-    A -->|安全查询 | G
-    A -->|安全查询 | H
+    subgraph "后台任务"
+        BG[缓存预取 / 延迟探测 / 信号处理 / 统计重置]
+    end
 
-    D --> B
-    E --> B
-    F --> B
-    G --> B
-    H --> B
-
+    A --> D & E & F & G & H
+    D & E & F & G & H --> B
     B --> C
-    B --> I
-    B --> O
-    B --> P
-    B --> W
+    B --> RM --> EM --> CM
+    CM -->|命中| B
+    CM -->|未命中| QM
+    QM --> UH --> QC --> EE
+    QM --> RR --> QC --> GG
+    QM --> CH
+    B --> SM --> DS & HP & CIDR
+    CM -.-> FF
+    B --> BG
 
-    I --> J
-    I --> K
-    I --> L
-    I --> M
-    I --> N
-
-    J --> Q
-    J --> R
-    J --> S
-
-    O --> T
-    O --> U
-    O --> V
-
-    P --> V
-
-    W --> X
-    W --> Z
-    Z --> Y
-
-    B --> AA
-    B --> BB
-    B --> CC
-    B --> DD
-
-    %% External connections
-    K --> EE
-    L --> GG
-    Y --> FF
-    Q --> HH
-    F --> HH
-    G --> HH
-    H --> HH
-
-    %% Style definitions
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
-    classDef core fill:#2ecc71,stroke:#27ae60,color:#fff,font-weight:bold
     classDef protocol fill:#e67e22,stroke:#d35400,color:#fff
+    classDef core fill:#2ecc71,stroke:#27ae60,color:#fff,font-weight:bold
     classDef query fill:#9b59b6,stroke:#8e44ad,color:#fff
     classDef security fill:#e74c3c,stroke:#c0392b,color:#fff
-    classDef cache fill:#f39c12,stroke:#d68910,color:#fff
-    classDef background fill:#16a085,stroke:#138d75,color:#fff
     classDef external fill:#95a5a6,stroke:#7f8c8d,color:#fff
+    classDef bg fill:#16a085,stroke:#138d75,color:#fff
 
     class A client
-    class B,C core
     class D,E,F,G,H protocol
-    class I,J,K,L,M,N query
-    class O,P,Q,R,S,T,U,V security
-    class W,X,Y,Z cache
-    class AA,BB,CC,DD background
-    class EE,FF,GG,HH external
+    class B,C core
+    class RM,EM,CM,QM query
+    class UH,RR,CH,QC query
+    class SM,DS,HP,CIDR security
+    class EE,GG,FF external
+    class BG bg
 ```
 
 ---
@@ -260,121 +199,89 @@ graph TB
 
 ```mermaid
 sequenceDiagram
-    participant C as DNS 客户端
-    participant P as Protocol Handler<br>协议处理器
-    participant S as DNSServer<br>服务器核心
-    participant QM as QueryManager<br>查询管理器
-    participant CM as CacheManager<br>缓存管理器
-    participant RM as RewriteManager<br>重写管理器
-    participant EM as EDNSManager<br>EDNS 管理器
-    participant CIDR as CIDRManager<br>CIDR 过滤
-    participant QC as QueryClient<br>查询客户端
-    participant UH as UpstreamHandler<br>上游处理器
-    participant RR as RecursiveResolver<br>递归解析器
-    participant SM as SecurityManager<br>安全管理器
-    participant US as 上游 DNS
-    participant RS as 根服务器
-
-    Note over C,RS: 客户端查询 example.com
+    participant C as 客户端
+    participant P as 协议处理器
+    participant S as DNSServer
+    participant RM as RewriteManager
+    participant EM as EDNSManager
+    participant CM as CacheManager
+    participant QM as QueryManager
+    participant UH as UpstreamHandler
+    participant RR as RecursiveResolver
+    participant SM as SecurityManager
+    participant CIDR as CIDRManager
+    participant US as 上游/根服务器
 
     C->>P: DNS 查询 (UDP/TCP/DoT/DoQ/DoH)
-    P->>S: 统一请求处理
-
-    S->>S: 1. 检查服务器状态
-    S->>S: 2. 解析和验证请求
-    S->>RM: 3. 应用重写规则
-
-    alt 域名匹配重写规则
+    P->>S: processDNSQuery()
+    S->>S: 1. 服务器状态检查
+    S->>S: 2. 请求验证 (域名长度、ANY 查询)
+    S->>RM: 3. 匹配重写规则
+    alt 命中重写规则
         RM-->>S: 返回自定义响应
         S-->>C: 自定义 DNS 响应
     else 无重写规则
-        S->>EM: 4. 处理 ECS 选项
-        S->>CM: 5. 检查缓存
-
-        alt 缓存命中 (新鲜)
+        S->>EM: 4. 解析 EDNS 选项 (ECS/Cookie)
+        S->>CM: 5. 缓存查询
+        alt 缓存命中
             CM-->>S: 返回缓存响应
-            S->>SM: 应用安全规则
             S->>CIDR: 过滤响应 IP
+            CIDR-->>S: 过滤结果
             S-->>C: DNS 响应
-        else 缓存未命中或过期
-            S->>QM: 6. 开始查询流程
-
-            alt 配置了上游 DNS 服务器
+        else 缓存未命中
+            S->>QM: 6. 开始查询
+            alt 配置了上游服务器
                 QM->>UH: 上游查询模式
-                UH->>QC: 并发查询多个上游
-
-                loop 每个上游服务器
-                    QC->>US: 协议特定查询
-                    US-->>QC: 响应结果
-                end
-
-                QC-->>UH: 首个成功响应
-                UH-->>QM: 上游查询结果
+                UH->>US: 并发查询多个上游 (首胜策略)
+                US-->>UH: 首个成功响应
+                UH-->>QM: 上游结果
             else 递归解析模式
                 QM->>RR: 递归解析
-                RR->>SM: DNS 劫持检测
-
-                RR->>QC: 查询根服务器
-                QC->>RS: UDP 查询根服务器
-                RS-->>QC: 根服务器响应
-                QC-->>RR: 响应结果
-
-                alt 检测到 DNS 劫持
-                    SM->>QC: 自动切换 TCP 重试
-                    QC->>RS: TCP 查询根服务器
-                    RS-->>QC: TCP 响应
-                    QC-->>SM: TCP 响应结果
-
-                    alt TCP 查询仍被劫持
-                        SM-->>RR: 完全拒绝响应
-                        RR-->>QM: 劫持检测失败
-                        QM-->>S: 返回错误响应
-                        S-->>C: DNS 错误响应
-                    else TCP 查询正常
-                        SM-->>RR: 继续递归解析
-                        RR->>QC: 查询 TLD 服务器
-                        QC-->>RR: TLD 响应
-                        RR->>QC: 查询权威服务器
-                        QC-->>RR: 最终响应
-                        RR-->>QM: 递归解析结果
-                    end
-                else 正常响应流程
-                    SM-->>RR: 正常响应
-                    RR->>QC: 查询 TLD 服务器
-                    QC-->>RR: TLD 响应
-                    RR->>QC: 查询权威服务器
-                    QC-->>RR: 最终响应
-                    RR-->>QM: 递归解析结果
-                end
+                RR->>US: 根服务器 → TLD → 权威服务器
+                RR->>SM: DNS 劫持检测 (UDP→TCP 回退)
+                US-->>RR: 最终响应
+                RR-->>QM: 递归结果
             end
-
-            alt 查询成功
-                QM-->>S: 有效响应
-                S->>SM: 安全规则验证
-                S->>CIDR: 过滤响应 IP
-
-                alt 有 IP 通过过滤
-                    CIDR-->>S: 过滤后的响应
-                    S->>CM: 存储到缓存
-                    S-->>C: DNS 响应
-                else 所有 IP 被过滤
-                    CIDR-->>S: 返回 REFUSED
-                    S-->>C: DNS 拒绝响应
-                end
-            else 查询失败
-                QM-->>S: 查询错误
-                S->>CM: 尝试过期缓存
-
-                alt 过期缓存可用
-                    CM-->>S: 过期响应
-                    S-->>C: 过期响应
-                else 无过期缓存
-                    S-->>C: DNS 错误响应
-                end
+            QM-->>S: 查询结果
+            S->>SM: 安全验证 (DNSSEC + 劫持)
+            S->>CIDR: CIDR IP 过滤
+            alt 有 IP 通过
+                CIDR-->>S: 过滤后响应
+                S->>CM: 写入缓存
+                S-->>C: DNS 响应
+            else 所有 IP 被过滤
+                CIDR-->>S: REFUSED + EDE
+                S-->>C: DNS 拒绝响应
             end
         end
     end
+
+    Note over C,US: 查询失败时尝试过期缓存 (RFC 8767)
 ```
+
+---
+
+## 📁 项目结构
+
+| 文件               | 说明                                                                        |
+| ------------------ | --------------------------------------------------------------------------- |
+| `main.go`          | 入口文件（CLI 参数、配置加载、服务器启动）                                  |
+| `version.go`       | 版本信息 (`Version`, `CommitHash`, `BuildTime`，通过 ldflags 注入)          |
+| `config.go`        | 配置管理（`ServerConfig`、JSON 验证、DDR 记录、CHAOS TXT 记录）             |
+| `server.go`        | 服务器核心（`DNSServer`、UDP/TCP 处理器、统一查询处理、信号处理、pprof）    |
+| `cache.go`         | 缓存系统（`CacheManager` 接口、`MemoryCache`、`RedisCache`、`HybridCache`） |
+| `resolver.go`      | 解析器（`QueryManager`、`RecursiveResolver`、`CNAMEHandler`、根服务器列表） |
+| `query.go`         | 查询客户端（`QueryClient`、UDP/TCP/DoT/DoQ/DoH/DoH3 协议查询）              |
+| `security.go`      | 安全管理（`DNSSECValidator`、`HijackPrevention`、`SecurityManager`）        |
+| `edns.go`          | EDNS 扩展（ECS、DNS Cookie、EDE 24 种错误码、DNS Padding）                  |
+| `tls.go`           | TLS 协议（`TLSManager`、DoT/DoQ/DoH/DoH3、自签名 CA、ECDSA P-384）          |
+| `cidr.go`          | CIDR 过滤（`CIDRManager`、IP 过滤、REFUSED + EDE 响应）                     |
+| `rewrite.go`       | DNS 重写（`RewriteManager`、域名过滤、自定义响应码、客户端过滤）            |
+| `latency_probe.go` | 延迟探测（A/AAAA 记录速度测试、多协议探测、按延迟重排序）                   |
+| `stats.go`         | 统计管理（`StatsManager`、请求指标、Redis 持久化、定期重置）                |
+| `logger.go`        | 日志管理（`LogManager`、`TimeCache`、RNG、全局日志函数）                    |
+| `pool.go`          | 对象池（`MessagePool` 复用 `dns.Msg`、`BufferPool` 复用 `[]byte`）          |
+| `utils.go`         | 工具函数（字符串处理、DNS 记录、缓存键、客户端 IP 提取、`HandlePanic`）     |
 
 ---
 
@@ -394,68 +301,55 @@ sequenceDiagram
 
 # 使用配置文件启动（推荐）
 ./zjdns -config config.json
+
+# 查看版本信息
+./zjdns -version
 ```
 
 ### 测试 DNS 解析
 
 ```bash
-# 传统 DNS 测试
+# 传统 DNS (UDP/TCP)
 kdig @127.0.0.1 -p 53 example.com
 
-# DoT 测试
+# DoT (DNS over TLS)
 kdig @127.0.0.1 -p 853 example.com +tls
 
-# DoQ 测试
+# DoQ (DNS over QUIC)
 kdig @127.0.0.1 -p 853 example.com +quic
 
-# DoH 测试
+# DoH (DNS over HTTPS)
 kdig @127.0.0.1 -p 443 example.com +https
 ```
 
 ### 性能监控
 
 ```bash
-# 启用 pprof 性能分析
+# pprof 性能分析
 curl http://127.0.0.1:6060/debug/pprof/
 
-# 查看内存使用情况
+# 内存使用
 curl http://127.0.0.1:6060/debug/pprof/heap
 ```
 
 ---
 
-## 🛠️ 开发工具
+## 🛠️ 开发
 
-### golangci-lint
-
-提交代码前，请使用 [golangci-lint](https://golangci-lint.run/) 进行代码检查。
-
-**安装 golangci-lint：**
+### 构建
 
 ```bash
-brew install golangci-lint
+# 本地构建
+go build -o zjdns
+
+# 版本注入
+go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns
 ```
 
-**运行检查和代码格式化：**
+### 代码质量
 
 ```bash
 golangci-lint run && golangci-lint fmt
-```
-
-请确保 golangci-lint 检查通过后再提交代码，以保持代码质量和一致性。
-
-### 开发指南
-
-查看 [AGENTS.md](AGENTS.md) 了解项目代码风格、构建命令和开发规范。
-
-### 构建和测试
-
-```bash
-# 构建二进制文件
-go build -o zjdns
-
-# 生成配置示例
-./zjdns -generate-config
 ```
 
 ---
@@ -468,8 +362,6 @@ go build -o zjdns
 
 ## 🙏 致谢
 
-感谢以下开源项目：
-
-- [miekg/dns](https://github.com/miekg/dns) - Go DNS library
-- [redis/go-redis](https://github.com/redis/go-redis) - Redis Go client
-- [quic-go/quic-go](https://github.com/quic-go/quic-go) - QUIC protocol implementation
+- [miekg/dns](https://github.com/miekg/dns) - Go DNS 库
+- [redis/go-redis](https://github.com/redis/go-redis) - Redis Go 客户端
+- [quic-go/quic-go](https://github.com/quic-go/quic-go) - QUIC 协议实现
