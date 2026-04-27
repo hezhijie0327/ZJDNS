@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	DefaultTimeout   = 2 * time.Second // Timeout for various operations like shutdown and cache refresh
-	OperationTimeout = 3 * time.Second // Timeout for individual operations like upstream queries
-	IdleTimeout      = 4 * time.Second // Idle timeout for servers
+	DefaultTimeout            = 2 * time.Second        // Timeout for various operations like shutdown and cache refresh
+	OperationTimeout          = 3 * time.Second        // Timeout for individual operations like upstream queries
+	IdleTimeout               = 4 * time.Second        // Idle timeout for servers
+	ServeExpiredClientTimeout = 1800 * time.Millisecond // Maximum client timeout for serving expired cache entries in seconds. RFC 8767 recommends 1.8 seconds
 )
 
 // DNSServer is the core server coordinating query processing and protocol handlers.
@@ -868,7 +869,9 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 		}
 	}()
 
-	timeout := time.Duration(ServeExpiredClientTimeout) * time.Millisecond
+	timer := time.NewTimer(ServeExpiredClientTimeout)
+	defer timer.Stop()
+
 	select {
 	case res := <-resultChan:
 		if res.err == nil {
@@ -881,10 +884,19 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 			*staleServed = true
 		}
 		return s.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection)
-	case <-time.After(timeout):
+	case <-timer.C:
 		if staleServed != nil {
 			*staleServed = true
 		}
+		go func() {
+			res := <-resultChan
+			if res.err != nil || res.fallback {
+				return
+			}
+			LogDebug("CACHE: background refresh completed for slow expired query %s", question.Name)
+			s.cacheMgr.Set(cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
+			s.startLatencyProbe(question, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
+		}()
 		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
 	}
 }
