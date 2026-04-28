@@ -23,7 +23,7 @@ const (
 	DefaultDOHPort   = "443"  // Default port for DNS over HTTPS
 	DefaultPprofPort = "6060" // Default port for pprof profiling
 
-	DefaultQueryPath = "/dns-query"    // Default path for DoH queries
+	DefaultQueryPath = "/dns-query" // Default path for DoH queries
 )
 
 // ConfigManager handles loading and validating server configuration from files or defaults.
@@ -226,9 +226,6 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	if config.Server.MemoryCacheSize < 0 {
 		return fmt.Errorf("server memory cache size must be non-negative")
 	}
-	if config.Server.StatsInterval < 0 {
-		return fmt.Errorf("server stats interval must be zero or positive")
-	}
 	if config.Server.Stats != nil {
 		if config.Server.Stats.Interval < 0 {
 			return fmt.Errorf("server.stats.interval must be zero or positive")
@@ -332,15 +329,11 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 }
 
 // GetStatsInterval returns the configured stats logging interval in seconds.
-// It prefers the new stats config section but falls back to the legacy stats_interval.
 func (s *ServerSettings) GetStatsInterval() int {
-	if s == nil {
+	if s == nil || s.Stats == nil || s.Stats.Interval <= 0 {
 		return 0
 	}
-	if s.Stats != nil && s.Stats.Interval > 0 {
-		return s.Stats.Interval
-	}
-	return s.StatsInterval
+	return s.Stats.Interval
 }
 
 // GetStatsResetInterval returns the configured stats reset interval in seconds.
@@ -487,7 +480,6 @@ func GenerateExampleConfig() string {
 	config.Server.Pprof = DefaultPprofPort
 	config.Server.LogLevel = DefaultLogLevel
 	config.Server.DefaultECS = "auto"
-	config.Server.StatsInterval = 0
 	config.Server.Stats = &StatsSettings{}
 	config.Server.TLS.CertFile = "/path/to/cert.pem"
 	config.Server.TLS.KeyFile = "/path/to/key.pem"

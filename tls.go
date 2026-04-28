@@ -29,9 +29,9 @@ import (
 )
 
 const (
-	TLSConnBufferSize  = 128            // Buffer size for TLS connections
+	TLSConnBufferSize = 128 // Buffer size for TLS connections
 
-	DoHMaxRequestSize  = 8192           // Maximum request size for DoH (8 KB)
+	DoHMaxRequestSize = 8192 // Maximum request size for DoH (8 KB)
 
 	MaxIncomingStreams = math.MaxUint16 // Maximum number of incoming streams for QUIC servers
 

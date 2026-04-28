@@ -22,15 +22,15 @@ import (
 )
 
 const (
-	DefaultTimeout            = 2 * time.Second        // Timeout for various operations like shutdown and cache refresh
-	OperationTimeout          = 3 * time.Second        // Timeout for individual operations like upstream queries
-	IdleTimeout               = 4 * time.Second        // Idle timeout for servers
+	DefaultTimeout   = 2 * time.Second // Timeout for various operations like shutdown and cache refresh
+	OperationTimeout = 3 * time.Second // Timeout for individual operations like upstream queries
+	IdleTimeout      = 4 * time.Second // Idle timeout for servers
 
 	ServeExpiredClientTimeout = 1800 * time.Millisecond // Maximum client timeout for serving expired cache entries in seconds. RFC 8767 recommends 1.8 seconds
 
-	MaxDomainLength    = 253                 // Maximum length of a fully qualified domain name
+	MaxDomainLength = 253 // Maximum length of a fully qualified domain name
 
-	PprofPath        = "/debug/pprof/" // Path prefix for pprof endpoints
+	PprofPath = "/debug/pprof/" // Path prefix for pprof endpoints
 )
 
 // DNSServer is the core server coordinating query processing and protocol handlers.

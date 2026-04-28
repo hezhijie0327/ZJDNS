@@ -24,16 +24,16 @@ import (
 )
 
 const (
-	DefaultTTL             = 10         // Default TTL for cache entries in seconds
-	DefaultMemoryCacheSize = 10000      // Default maximum number of entries in the in-memory cache
+	DefaultTTL             = 10    // Default TTL for cache entries in seconds
+	DefaultMemoryCacheSize = 10000 // Default maximum number of entries in the in-memory cache
 
-	StaleTTL               = 30         // Additional TTL for serving expired cache entries in seconds
-	StaleMaxAge            = 30 * 86400 // Maximum age for serving expired cache entries (30 days in seconds)
+	StaleTTL    = 30         // Additional TTL for serving expired cache entries in seconds
+	StaleMaxAge = 30 * 86400 // Maximum age for serving expired cache entries (30 days in seconds)
 
-	ResultBufferCapacity   = 128        // Initial capacity for building cache keys to minimize allocations
-	MaxResultLength        = 512        // Maximum length for cache keys before hashing
+	ResultBufferCapacity = 128 // Initial capacity for building cache keys to minimize allocations
+	MaxResultLength      = 512 // Maximum length for cache keys before hashing
 
-	RedisPrefixDNS         = "dns:"     // Prefix for DNS cache keys in Redis
+	RedisPrefixDNS = "dns:" // Prefix for DNS cache keys in Redis
 )
 
 // CacheEntry stores serialized DNS response data, metadata, and ECS state.

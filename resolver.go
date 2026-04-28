@@ -18,8 +18,8 @@ import (
 const (
 	RecursiveIndicator = "builtin_recursive" // Indicator for responses obtained from the built-in recursive resolver
 
-	MaxCNAMEChain      = 16                  // Maximum number of CNAME redirections to follow to prevent loops
-	MaxRecursionDep    = 16                  // Maximum recursion depth for resolving queries to prevent infinite loops
+	MaxCNAMEChain   = 16 // Maximum number of CNAME redirections to follow to prevent loops
+	MaxRecursionDep = 16 // Maximum recursion depth for resolving queries to prevent infinite loops
 )
 
 var DefaultRootServers = []string{
