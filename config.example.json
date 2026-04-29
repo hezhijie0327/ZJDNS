@@ -30,7 +30,8 @@
         "persist": {
           "file": "cache.snapshot",
           "interval": 30
-        }
+        },
+        "prefer_stale": true
       },
       "latency_probe": [
         {

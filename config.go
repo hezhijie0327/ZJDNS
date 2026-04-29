@@ -84,8 +84,9 @@ type CachePersistenceSettings struct {
 
 // CacheSettings contains cache-specific configuration.
 type CacheSettings struct {
-	Size    int                      `json:"size,omitempty"`
-	Persist CachePersistenceSettings `json:"persist,omitempty"`
+	Size        int                      `json:"size,omitempty"`
+	Persist     CachePersistenceSettings `json:"persist,omitempty"`
+	PreferStale bool                     `json:"prefer_stale,omitempty"`
 }
 
 // FeatureFlags enables optional server features.
@@ -631,6 +632,7 @@ func GenerateExampleConfig() string {
 		File:     "cache.snapshot",
 		Interval: int(DefaultCachePersistInterval / time.Second),
 	}
+	config.Server.Features.Cache.PreferStale = true
 	config.Server.Features.ECS = DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	config.Server.Features.LatencyProbe = []LatencyProbeStep{
 		{Protocol: "ping", Timeout: 100},

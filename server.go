@@ -62,6 +62,17 @@ type DNSServer struct {
 	queryMgr          *QueryManager
 }
 
+// queryResult encapsulates the result of a DNS query, including the answer, authority, additional sections, validation status, ECS information, fallback status, and any error that occurred during processing.
+type queryResult struct {
+	answer     []dns.RR
+	authority  []dns.RR
+	additional []dns.RR
+	validated  bool
+	ecs        *ECSOption
+	fallback   bool
+	err        error
+}
+
 // NewDNSServer creates a new DNS server instance with all required managers.
 // It initializes the cache, security, EDNS, rewrite, CIDR, and query managers.
 func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
@@ -530,7 +541,7 @@ func (s *DNSServer) displayInfo() {
 	if s.rewriteMgr.hasRules() {
 		LogInfo("REWRITE: DNS rewriter: enabled (%d rules)", len(s.config.Rewrite))
 	}
-	LogInfo("CACHE: Serve expired enabled (ttl=%d, client timeout=%dms)", StaleMaxAge, ServeExpiredClientTimeout)
+	LogInfo("CACHE: Serve expired enabled (ttl=%d, client timeout=%s, prefer_stale=%t)", StaleMaxAge, ServeExpiredClientTimeout.String(), s.config.Server.Features.Cache.PreferStale)
 	if s.config.Server.Features.HijackProtection {
 		LogInfo("HIJACK: DNS hijacking prevention: enabled")
 	}
@@ -918,16 +929,21 @@ func (s *DNSServer) canServeExpiredEntry(entry *CacheEntry) bool {
 	return entry.CanServeExpired(StaleMaxAge)
 }
 
-// processExpiredCacheHit handles cache hits for expired entries, attempting to refresh the data in the background while serving the stale response to the client. It waits for the refresh to complete or a timeout before returning the response.
+// processExpiredCacheHit handles cache hits for expired entries, serving stale
+// responses and refreshing in the background. When prefer_stale is disabled,
+// it still waits briefly for a fresh upstream answer before falling back.
 func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cookieOpt *CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool) *dns.Msg {
-	type queryResult struct {
-		answer     []dns.RR
-		authority  []dns.RR
-		additional []dns.RR
-		validated  bool
-		ecs        *ECSOption
-		fallback   bool
-		err        error
+	if s.config.Server.Features.Cache.PreferStale {
+		if staleServed != nil {
+			*staleServed = true
+		}
+		s.cacheRefreshGroup.Go(func() error {
+			defer HandlePanic("expired cache refresh")
+			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, OperationTimeout)
+			defer cancel()
+			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
+		})
+		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
 	}
 
 	resultChan := make(chan queryResult, 1)
