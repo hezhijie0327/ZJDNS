@@ -442,16 +442,19 @@ func (c DefaultECSConfig) GetValueForQType(qtype uint16) string {
 	return c.IPv4
 }
 
-// validateECSConfigValue checks if the provided ECS configuration value is valid, allowing for "auto" or a valid CIDR notation.
+// validateECSConfigValue checks if the provided ECS configuration value is valid, allowing for "auto", CIDR, or a plain IP address.
 func validateECSConfigValue(value string) error {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "auto" {
 		return nil
 	}
-	if _, _, err := net.ParseCIDR(value); err != nil {
-		return err
+	if _, _, err := net.ParseCIDR(value); err == nil {
+		return nil
 	}
-	return nil
+	if net.ParseIP(value) != nil {
+		return nil
+	}
+	return fmt.Errorf("invalid ECS subnet value: %s", value)
 }
 
 // isAutoECSValue checks if the given value is "auto" (case-insensitive), indicating that the server should automatically detect the public IP for ECS.

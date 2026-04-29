@@ -420,20 +420,24 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 		len(opt.Option))
 }
 
-// parseECSConfig parses ECS configuration string (auto or CIDR)
+// parseECSConfig parses ECS configuration string (auto, CIDR, or plain IP).
 func (em *EDNSManager) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, error) {
-	switch strings.ToLower(strings.TrimSpace(subnet)) {
-	case "auto":
+	subnet = strings.ToLower(strings.TrimSpace(subnet))
+	if subnet == "auto" {
 		return em.detectPublicIP(forceIPv6, false)
-	default:
-		_, ipNet, err := net.ParseCIDR(subnet)
-		if err != nil {
-			return nil, fmt.Errorf("parse CIDR: %w", err)
-		}
+	}
+
+	if _, ipNet, err := net.ParseCIDR(subnet); err == nil {
 		prefix, _ := ipNet.Mask.Size()
 		family := uint16(1)
 		if ipNet.IP.To4() == nil {
 			family = 2
+		}
+		if forceIPv6 && family == 1 {
+			return nil, fmt.Errorf("expected IPv6 ECS value, got IPv4: %s", subnet)
+		}
+		if !forceIPv6 && family == 2 {
+			return nil, fmt.Errorf("expected IPv4 ECS value, got IPv6: %s", subnet)
 		}
 		return &ECSOption{
 			Family:       family,
@@ -442,6 +446,29 @@ func (em *EDNSManager) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption
 			Address:      ipNet.IP,
 		}, nil
 	}
+
+	ip := net.ParseIP(subnet)
+	if ip == nil {
+		return nil, fmt.Errorf("parse IP or CIDR: %s", subnet)
+	}
+	if forceIPv6 && ip.To4() != nil {
+		return nil, fmt.Errorf("expected IPv6 ECS value, got IPv4: %s", subnet)
+	}
+	if !forceIPv6 && ip.To4() == nil {
+		return nil, fmt.Errorf("expected IPv4 ECS value, got IPv6: %s", subnet)
+	}
+	family := uint16(1)
+	prefix := uint8(DefaultECSv4Len)
+	if ip.To4() == nil {
+		family = 2
+		prefix = DefaultECSv6Len
+	}
+	return &ECSOption{
+		Family:       family,
+		SourcePrefix: prefix,
+		ScopePrefix:  DefaultECSScope,
+		Address:      ip,
+	}, nil
 }
 
 func (em *EDNSManager) shouldRefreshDefaultECS() bool {
