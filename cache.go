@@ -186,7 +186,9 @@ func ExpandRecords(crs []*CompactRecord) []dns.RR {
 }
 
 // ProcessRecords processes DNS records for response.
-func ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
+// If isElapsed is false, the second parameter is treated as a fixed TTL to assign.
+// If isElapsed is true, the second parameter is treated as elapsed seconds to subtract from each record's original TTL.
+func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC bool) []dns.RR {
 	if len(rrs) == 0 {
 		return nil
 	}
@@ -206,8 +208,16 @@ func ProcessRecords(rrs []dns.RR, ttl uint32, includeDNSSEC bool) []dns.RR {
 
 		newRR := dns.Copy(rr)
 		if newRR != nil {
-			if ttl > 0 {
-				newRR.Header().Ttl = ttl
+			if value > 0 {
+				if isElapsed {
+					remaining := int64(newRR.Header().Ttl) - value
+					if remaining < 0 {
+						remaining = 0
+					}
+					newRR.Header().Ttl = uint32(remaining)
+				} else {
+					newRR.Header().Ttl = uint32(value)
+				}
 			}
 			result = append(result, newRR)
 		}

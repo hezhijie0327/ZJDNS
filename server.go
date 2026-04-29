@@ -850,9 +850,13 @@ func (s *DNSServer) buildCacheResponse(req *dns.Msg, entry *CacheEntry, isExpire
 	}
 
 	responseTTL := entry.GetRemainingTTL()
-	msg.Answer = ProcessRecords(ExpandRecords(entry.Answer), responseTTL, clientRequestedDNSSEC)
-	msg.Ns = ProcessRecords(ExpandRecords(entry.Authority), responseTTL, clientRequestedDNSSEC)
-	msg.Extra = ProcessRecords(ExpandRecords(entry.Additional), responseTTL, clientRequestedDNSSEC)
+	elapsed := int64(entry.TTL) - int64(responseTTL)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	msg.Answer = ProcessRecords(ExpandRecords(entry.Answer), elapsed, true, clientRequestedDNSSEC)
+	msg.Ns = ProcessRecords(ExpandRecords(entry.Authority), elapsed, true, clientRequestedDNSSEC)
+	msg.Extra = ProcessRecords(ExpandRecords(entry.Additional), elapsed, true, clientRequestedDNSSEC)
 
 	if entry.Validated {
 		msg.AuthenticatedData = true
@@ -1042,9 +1046,9 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 		LogDebug("CACHE: fallback result, skipping cache population for %s", question.Name)
 	}
 
-	msg.Answer = ProcessRecords(answer, 0, clientRequestedDNSSEC)
-	msg.Ns = ProcessRecords(authority, 0, clientRequestedDNSSEC)
-	msg.Extra = ProcessRecords(additional, 0, clientRequestedDNSSEC)
+	msg.Answer = ProcessRecords(answer, 0, false, clientRequestedDNSSEC)
+	msg.Ns = ProcessRecords(authority, 0, false, clientRequestedDNSSEC)
+	msg.Extra = ProcessRecords(additional, 0, false, clientRequestedDNSSEC)
 	LogDebug("RESULT: %s %s | rcode=NOERROR, answer=%d, authority=%d, additional=%d, validated=%t, skipCache=%t, ecs=%t", question.Name, dns.TypeToString[question.Qtype], len(answer), len(authority), len(additional), validated, skipCache, responseECS != nil)
 	LogDebug("CACHE: served response for %s (skipCache=%t)", question.Name, skipCache)
 
