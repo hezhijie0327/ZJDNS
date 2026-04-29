@@ -32,7 +32,6 @@ type ConfigManager struct{}
 // ServerConfig represents the complete configuration for the ZJDNS server, including server settings, Redis, upstream servers, rewrite rules, and CIDR client filters.
 type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
-	Redis    RedisSettings    `json:"redis"`
 	Upstream []UpstreamServer `json:"upstream"`
 	Fallback []UpstreamServer `json:"fallback,omitempty"`
 	Rewrite  []RewriteRule    `json:"rewrite"`
@@ -41,16 +40,11 @@ type ServerConfig struct {
 
 // ServerSettings contains runtime settings for the DNS server.
 type ServerSettings struct {
-	Port            string             `json:"port"`
-	Pprof           string             `json:"pprof"`
-	LogLevel        string             `json:"log_level"`
-	DefaultECS      DefaultECSConfig   `json:"default_ecs_subnet"`
-	MemoryCacheSize int                `json:"memory_cache_size,omitempty"`
-	Stats           *StatsSettings     `json:"stats,omitempty"`
-	DDR             DDRSettings        `json:"ddr"`
-	TLS             TLSSettings        `json:"tls"`
-	Features        FeatureFlags       `json:"features"`
-	LatencyProbe    []LatencyProbeStep `json:"latency_probe,omitempty"`
+	Port     string       `json:"port"`
+	Pprof    string       `json:"pprof"`
+	LogLevel string       `json:"log_level"`
+	TLS      TLSSettings  `json:"tls"`
+	Features FeatureFlags `json:"features"`
 }
 
 // DefaultECSConfig represents the default ECS configuration for the server, allowing for automatic or specified subnet values for IPv4 and IPv6.
@@ -82,9 +76,25 @@ type HTTPSSettings struct {
 	Endpoint string `json:"endpoint"`
 }
 
+// MemoryCacheSettings contains memory cache size options.
+type MemoryCacheSettings struct {
+	Size int `json:"size,omitempty"`
+}
+
+// CacheSettings contains cache-specific configuration for memory and Redis cache backends.
+type CacheSettings struct {
+	Memory MemoryCacheSettings `json:"memory,omitempty"`
+	Redis  RedisSettings       `json:"redis,omitempty"`
+}
+
 // FeatureFlags enables optional server features.
 type FeatureFlags struct {
-	HijackProtection bool `json:"hijack_protection"`
+	HijackProtection bool               `json:"hijack_protection"`
+	DDR              DDRSettings        `json:"ddr,omitempty"`
+	ECS              DefaultECSConfig   `json:"ecs_subnet,omitempty"`
+	Cache            CacheSettings      `json:"cache,omitempty"`
+	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitempty"`
+	Stats            *StatsSettings     `json:"stats,omitempty"`
 }
 
 // StatsSettings configures statistics collection and reset behavior.
@@ -161,8 +171,8 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		LogWarn("CONFIG: Invalid log level '%s', using default: info", config.Server.LogLevel)
 	}
 
-	if !config.Server.DefaultECS.IsEmpty() {
-		if err := config.Server.DefaultECS.Validate(); err != nil {
+	if !config.Server.Features.ECS.IsEmpty() {
+		if err := config.Server.Features.ECS.Validate(); err != nil {
 			return err
 		}
 	}
@@ -219,75 +229,32 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		}
 	}
 
-	if config.Redis.Address != "" {
-		if _, _, err := net.SplitHostPort(config.Redis.Address); err != nil {
-			return fmt.Errorf("redis address invalid: %w", err)
+	if config.Server.Features.Cache.Redis.Address != "" {
+		if _, _, err := net.SplitHostPort(config.Server.Features.Cache.Redis.Address); err != nil {
+			return fmt.Errorf("server.features.cache.redis.address invalid: %w", err)
 		}
 	}
 
-	if config.Server.MemoryCacheSize < 0 {
-		return fmt.Errorf("server memory cache size must be non-negative")
+	if config.Server.Features.Cache.Memory.Size < 0 {
+		return fmt.Errorf("server.features.cache.memory.size must be non-negative")
 	}
-	if config.Server.Stats != nil {
-		if config.Server.Stats.Interval < 0 {
-			return fmt.Errorf("server.stats.interval must be zero or positive")
+	if config.Server.Features.Stats != nil {
+		if config.Server.Features.Stats.Interval < 0 {
+			return fmt.Errorf("server.features.stats.interval must be zero or positive")
 		}
-		if config.Server.Stats.ResetInterval < 0 {
-			return fmt.Errorf("server.stats.reset_interval must be zero or positive")
+		if config.Server.Features.Stats.ResetInterval < 0 {
+			return fmt.Errorf("server.features.stats.reset_interval must be zero or positive")
 		}
 	}
 
-	if len(config.Server.LatencyProbe) > 0 {
-		for i, step := range config.Server.LatencyProbe {
-			protocol := strings.ToLower(strings.TrimSpace(step.Protocol))
-			if protocol == "" {
-				return fmt.Errorf("latency_probe step %d: protocol cannot be empty", i)
-			}
-			switch protocol {
-			case "ping", "icmp":
-				config.Server.LatencyProbe[i].Protocol = "ping"
-			case "tcp":
-				if step.Port <= 0 {
-					config.Server.LatencyProbe[i].Port = 80
-				}
-				if step.Port > 65535 {
-					return fmt.Errorf("latency_probe step %d: tcp port must be between 1 and 65535", i)
-				}
-			case "udp":
-				if step.Port <= 0 {
-					config.Server.LatencyProbe[i].Port = 53
-				}
-				if step.Port > 65535 {
-					return fmt.Errorf("latency_probe step %d: udp port must be between 1 and 65535", i)
-				}
-			case "http":
-				if step.Port <= 0 {
-					config.Server.LatencyProbe[i].Port = 80
-				}
-				if step.Port > 65535 {
-					return fmt.Errorf("latency_probe step %d: http port must be between 1 and 65535", i)
-				}
-			case "https":
-				if step.Port <= 0 {
-					config.Server.LatencyProbe[i].Port = 443
-				}
-				if step.Port > 65535 {
-					return fmt.Errorf("latency_probe step %d: https port must be between 1 and 65535", i)
-				}
-			case "http3":
-				if step.Port <= 0 {
-					config.Server.LatencyProbe[i].Port = 443
-				}
-				if step.Port > 65535 {
-					return fmt.Errorf("latency_probe step %d: http3 port must be between 1 and 65535", i)
-				}
-			default:
-				return fmt.Errorf("latency_probe step %d: unsupported protocol %s", i, step.Protocol)
-			}
-			if step.Timeout <= 0 {
-				config.Server.LatencyProbe[i].Timeout = int(DefaultLatencyProbeTimeout / time.Millisecond)
-			}
+	if !config.Server.Features.ECS.IsEmpty() {
+		if err := config.Server.Features.ECS.Validate(); err != nil {
+			return err
 		}
+	}
+
+	if err := validateLatencyProbeDefaults(config.Server.Features.LatencyProbe); err != nil {
+		return err
 	}
 
 	if config.Server.TLS.SelfSigned && (config.Server.TLS.CertFile != "" || config.Server.TLS.KeyFile != "") {
@@ -312,38 +279,101 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 	return nil
 }
 
+// validateLatencyProbeStep validates a single latency probe step and sets default ports based on protocol if not specified.
+func validateLatencyProbeStep(index int, step LatencyProbeStep) error {
+	protocol := strings.ToLower(strings.TrimSpace(step.Protocol))
+	if protocol == "" {
+		return fmt.Errorf("latency_probe step %d: protocol cannot be empty", index)
+	}
+	switch protocol {
+	case "ping", "icmp":
+	case "tcp":
+		if step.Port <= 0 {
+			step.Port = 80
+		}
+		if step.Port > 65535 {
+			return fmt.Errorf("latency_probe step %d: tcp port must be between 1 and 65535", index)
+		}
+	case "udp":
+		if step.Port <= 0 {
+			step.Port = 53
+		}
+		if step.Port > 65535 {
+			return fmt.Errorf("latency_probe step %d: udp port must be between 1 and 65535", index)
+		}
+	case "http":
+		if step.Port <= 0 {
+			step.Port = 80
+		}
+		if step.Port > 65535 {
+			return fmt.Errorf("latency_probe step %d: http port must be between 1 and 65535", index)
+		}
+	case "https":
+		if step.Port <= 0 {
+			step.Port = 443
+		}
+		if step.Port > 65535 {
+			return fmt.Errorf("latency_probe step %d: https port must be between 1 and 65535", index)
+		}
+	case "http3":
+		if step.Port <= 0 {
+			step.Port = 443
+		}
+		if step.Port > 65535 {
+			return fmt.Errorf("latency_probe step %d: http3 port must be between 1 and 65535", index)
+		}
+	default:
+		return fmt.Errorf("latency_probe step %d: unsupported protocol %s", index, step.Protocol)
+	}
+	return nil
+}
+
+// validateLatencyProbeDefaults validates all latency probe steps and sets default timeouts if not specified.
+func validateLatencyProbeDefaults(steps []LatencyProbeStep) error {
+	for i, step := range steps {
+		if err := validateLatencyProbeStep(i, step); err != nil {
+			return err
+		}
+		if step.Timeout <= 0 {
+			steps[i].Timeout = int(DefaultLatencyProbeTimeout / time.Millisecond)
+		}
+	}
+	return nil
+}
+
 // getDefaultConfig returns the default configuration
 func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config := &ServerConfig{}
-	config.Server.Port = DefaultDNSPort
 	config.Server.LogLevel = DefaultLogLevel
-	config.Server.DefaultECS = DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
-	config.Server.MemoryCacheSize = DefaultMemoryCacheSize
-	config.Server.DDR.Domain = "dns.example.com"
-	config.Server.DDR.IPv4 = "127.0.0.1"
-	config.Server.DDR.IPv6 = "::1"
+
+	config.Server.Port = DefaultDNSPort
+
 	config.Server.TLS.Port = DefaultDOTPort
 	config.Server.TLS.HTTPS.Port = DefaultDOHPort
 	config.Server.TLS.HTTPS.Endpoint = DefaultQueryPath
+
+	config.Server.Features.Cache.Memory.Size = DefaultMemoryCacheSize
+	config.Server.Features.DDR = DDRSettings{Domain: "dns.example.com", IPv4: "127.0.0.1", IPv6: "::1"}
+	config.Server.Features.ECS = DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	config.Server.Features.HijackProtection = true
-	config.Redis.KeyPrefix = "zjdns:"
+
 	return config
 }
 
 // GetStatsInterval returns the configured stats logging interval in seconds.
 func (s *ServerSettings) GetStatsInterval() int {
-	if s == nil || s.Stats == nil || s.Stats.Interval <= 0 {
+	if s == nil || s.Features.Stats == nil || s.Features.Stats.Interval <= 0 {
 		return 0
 	}
-	return s.Stats.Interval
+	return s.Features.Stats.Interval
 }
 
 // GetStatsResetInterval returns the configured stats reset interval in seconds.
 func (s *ServerSettings) GetStatsResetInterval() int {
-	if s == nil || s.Stats == nil {
+	if s == nil || s.Features.Stats == nil {
 		return 0
 	}
-	return s.Stats.ResetInterval
+	return s.Features.Stats.ResetInterval
 }
 
 func (c *DefaultECSConfig) UnmarshalJSON(data []byte) error {
@@ -464,13 +494,15 @@ func isAutoECSValue(value string) bool {
 
 // shouldEnableDDR checks if DDR should be enabled
 func (cm *ConfigManager) shouldEnableDDR(config *ServerConfig) bool {
-	return config.Server.DDR.Domain != "" &&
-		(config.Server.DDR.IPv4 != "" || config.Server.DDR.IPv6 != "")
+	ddr := config.Server.Features.DDR
+	return ddr.Domain != "" &&
+		(ddr.IPv4 != "" || ddr.IPv6 != "")
 }
 
 // addDDRRecords adds DDR records to the configuration
 func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
-	domain := strings.TrimSuffix(config.Server.DDR.Domain, ".")
+	ddr := config.Server.Features.DDR
+	domain := strings.TrimSuffix(ddr.Domain, ".")
 	nxdomainCode := dns.RcodeNameError
 
 	endpoint := config.Server.TLS.HTTPS.Endpoint
@@ -490,15 +522,15 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	var additionalRecords []DNSRecordConfig
 	var directRecords []DNSRecordConfig
 
-	if config.Server.DDR.IPv4 != "" {
+	if ddr.IPv4 != "" {
 		for i := range serviceRecords {
-			serviceRecords[i].Content += " ipv4hint=" + config.Server.DDR.IPv4
+			serviceRecords[i].Content += " ipv4hint=" + ddr.IPv4
 		}
 		additionalRecords = append(additionalRecords, DNSRecordConfig{
-			Name: domain, Type: "A", Content: config.Server.DDR.IPv4,
+			Name: domain, Type: "A", Content: ddr.IPv4,
 		})
 		directRecords = append(directRecords, DNSRecordConfig{
-			Type: "A", Content: config.Server.DDR.IPv4,
+			Type: "A", Content: ddr.IPv4,
 		})
 	} else {
 		directRecords = append(directRecords, DNSRecordConfig{
@@ -506,15 +538,15 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 		})
 	}
 
-	if config.Server.DDR.IPv6 != "" {
+	if ddr.IPv6 != "" {
 		for i := range serviceRecords {
-			serviceRecords[i].Content += " ipv6hint=" + config.Server.DDR.IPv6
+			serviceRecords[i].Content += " ipv6hint=" + ddr.IPv6
 		}
 		additionalRecords = append(additionalRecords, DNSRecordConfig{
-			Name: domain, Type: "AAAA", Content: config.Server.DDR.IPv6,
+			Name: domain, Type: "AAAA", Content: ddr.IPv6,
 		})
 		directRecords = append(directRecords, DNSRecordConfig{
-			Type: "AAAA", Content: config.Server.DDR.IPv6,
+			Type: "AAAA", Content: ddr.IPv6,
 		})
 	} else {
 		directRecords = append(directRecords, DNSRecordConfig{
@@ -541,7 +573,7 @@ func (cm *ConfigManager) addDDRRecords(config *ServerConfig) {
 	}
 
 	LogInfo("CONFIG: DDR enabled for domain %s (IPv4: %s, IPv6: %s)",
-		domain, config.Server.DDR.IPv4, config.Server.DDR.IPv6)
+		domain, ddr.IPv4, ddr.IPv6)
 }
 
 // addChaosRecord adds built-in CHAOS TXT records for resolver identity/version queries.
@@ -593,16 +625,16 @@ func GenerateExampleConfig() string {
 	cm := &ConfigManager{}
 	config := cm.getDefaultConfig()
 
-	config.Redis.Address = "127.0.0.1:6379"
-
 	config.Server.Pprof = DefaultPprofPort
 	config.Server.LogLevel = DefaultLogLevel
-	config.Server.DefaultECS = DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
-	config.Server.Stats = &StatsSettings{}
+
 	config.Server.TLS.CertFile = "/path/to/cert.pem"
 	config.Server.TLS.KeyFile = "/path/to/key.pem"
 
-	config.Server.LatencyProbe = []LatencyProbeStep{
+	config.Server.Features.Cache.Redis.Address = "127.0.0.1:6379"
+	config.Server.Features.Cache.Redis.KeyPrefix = "zjdns:"
+	config.Server.Features.ECS = DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
+	config.Server.Features.LatencyProbe = []LatencyProbeStep{
 		{Protocol: "ping", Timeout: 100},
 		{Protocol: "tcp", Port: 443, Timeout: 100},
 		{Protocol: "tcp", Port: 80, Timeout: 100},
@@ -611,12 +643,7 @@ func GenerateExampleConfig() string {
 		{Protocol: "https", Port: 443, Timeout: 100},
 		{Protocol: "http3", Port: 443, Timeout: 100},
 	}
-
-	config.CIDR = []CIDRConfig{
-		{File: "whitelist.txt", Tag: "file"},
-		{Rules: []string{"192.168.0.0/16", "10.0.0.0/8", "2001:db8::/32"}, Tag: "rules"},
-		{File: "blacklist.txt", Rules: []string{"127.0.0.1/32"}, Tag: "mixed"},
-	}
+	config.Server.Features.Stats = &StatsSettings{}
 
 	config.Upstream = []UpstreamServer{
 		{Address: "223.5.5.5:53", Protocol: "tcp"},
@@ -637,6 +664,12 @@ func GenerateExampleConfig() string {
 		{Name: "client-specific.example.com", IncludeClients: []string{"192.168.0.0/24"}, Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultTTL}}},
 		{Name: "blocked.example.com", ExcludeClients: []string{"192.168.1.0/24"}, Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultTTL}}},
 		{Name: "ipv6.blocked.example.com", Records: []DNSRecordConfig{{Type: "AAAA", Content: "::1", TTL: DefaultTTL}}},
+	}
+
+	config.CIDR = []CIDRConfig{
+		{File: "whitelist.txt", Tag: "file"},
+		{Rules: []string{"192.168.0.0/16", "10.0.0.0/8", "2001:db8::/32"}, Tag: "rules"},
+		{File: "blacklist.txt", Rules: []string{"127.0.0.1/32"}, Tag: "mixed"},
 	}
 
 	data, _ := json.MarshalIndent(config, "", "  ")

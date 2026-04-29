@@ -150,7 +150,7 @@ func NewStatsManager(config *ServerConfig, redisClient *redis.Client) *StatsMana
 		return nil
 	}
 
-	redisKey := config.Redis.KeyPrefix + RedisPrefixStats + "global"
+	redisKey := config.Server.Features.Cache.Redis.KeyPrefix + RedisPrefixStats + "global"
 	statsMgr := &StatsManager{
 		enabled:  true,
 		redisKey: redisKey,

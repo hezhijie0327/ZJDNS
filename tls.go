@@ -181,11 +181,11 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 
 	// Load or generate certificate
 	if config.Server.TLS.SelfSigned {
-		cert, err = generateSelfSignedCert(config.Server.DDR.Domain)
+		cert, err = generateSelfSignedCert(config.Server.Features.DDR.Domain)
 		if err != nil {
 			return nil, fmt.Errorf("generate self-signed certificate: %w", err)
 		}
-		LogInfo("TLS: Using self-signed certificate for domain: %s", config.Server.DDR.Domain)
+		LogInfo("TLS: Using self-signed certificate for domain: %s", config.Server.Features.DDR.Domain)
 	} else {
 		cert, err = tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
 		if err != nil {

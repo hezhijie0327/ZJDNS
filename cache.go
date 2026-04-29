@@ -542,10 +542,11 @@ func (mc *MemoryCache) Close() error {
 func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
 	logging.Disable()
 
+	redisSettings := config.Server.Features.Cache.Redis
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     config.Redis.Address,
-		Password: config.Redis.Password,
-		DB:       config.Redis.Database,
+		Addr:     redisSettings.Address,
+		Password: redisSettings.Password,
+		DB:       redisSettings.Database,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)

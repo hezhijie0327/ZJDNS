@@ -33,7 +33,7 @@ type LatencyProbeStep struct {
 // startLatencyProbe starts a background latency probe for A/AAAA records when configured.
 // It will reorder cached answers if a faster ordering is discovered.
 func (s *DNSServer) startLatencyProbe(question dns.Question, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption) {
-	if s == nil || len(s.config.Server.LatencyProbe) == 0 {
+	if s == nil || len(s.config.Server.Features.LatencyProbe) == 0 {
 		LogDebug("LATENCY: probe skipped for %s because latency_probe is not configured", question.Name)
 		return
 	}
@@ -60,7 +60,7 @@ func (s *DNSServer) startLatencyProbe(question dns.Question, cacheKey string, an
 		return
 	}
 
-	steps := s.config.Server.LatencyProbe
+	steps := s.config.Server.Features.LatencyProbe
 	LogDebug("LATENCY: starting background latency probe for %s with %d steps", question.Name, len(steps))
 
 	s.backgroundGroup.Go(func() error {

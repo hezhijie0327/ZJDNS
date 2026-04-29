@@ -3,21 +3,6 @@
     "port": "53",
     "pprof": "6060",
     "log_level": "info",
-    "default_ecs_subnet": {
-      "ipv4": "auto",
-      "ipv6": "auto",
-      "prefer_ipv4": true
-    },
-    "memory_cache_size": 10000,
-    "stats": {
-      "interval": 0,
-      "reset_interval": 0
-    },
-    "ddr": {
-      "domain": "dns.example.com",
-      "ipv4": "127.0.0.1",
-      "ipv6": "::1"
-    },
     "tls": {
       "port": "853",
       "cert_file": "/path/to/cert.pem",
@@ -29,50 +14,69 @@
       }
     },
     "features": {
-      "hijack_protection": true
-    },
-    "latency_probe": [
-      {
-        "protocol": "ping",
-        "timeout": 100
+      "ddr": {
+        "domain": "dns.example.com",
+        "ipv4": "127.0.0.1",
+        "ipv6": "::1"
       },
-      {
-        "protocol": "tcp",
-        "port": 443,
-        "timeout": 100
+      "ecs_subnet": {
+        "ipv4": "auto",
+        "ipv6": "auto",
+        "prefer_ipv4": true
       },
-      {
-        "protocol": "tcp",
-        "port": 80,
-        "timeout": 100
+      "hijack_protection": true,
+      "cache": {
+        "memory": {
+          "size": 10000
+        },
+        "redis": {
+          "address": "127.0.0.1:6379",
+          "password": "",
+          "database": 0,
+          "key_prefix": "zjdns:"
+        }
       },
-      {
-        "protocol": "udp",
-        "port": 53,
-        "timeout": 100
-      },
-      {
-        "protocol": "http",
-        "port": 80,
-        "timeout": 100
-      },
-      {
-        "protocol": "https",
-        "port": 443,
-        "timeout": 100
-      },
-      {
-        "protocol": "http3",
-        "port": 443,
-        "timeout": 100
+      "latency_probe": [
+        {
+          "protocol": "ping",
+          "timeout": 100
+        },
+        {
+          "protocol": "tcp",
+          "port": 443,
+          "timeout": 100
+        },
+        {
+          "protocol": "tcp",
+          "port": 80,
+          "timeout": 100
+        },
+        {
+          "protocol": "udp",
+          "port": 53,
+          "timeout": 100
+        },
+        {
+          "protocol": "http",
+          "port": 80,
+          "timeout": 100
+        },
+        {
+          "protocol": "https",
+          "port": 443,
+          "timeout": 100
+        },
+        {
+          "protocol": "http3",
+          "port": 443,
+          "timeout": 100
+        }
+      ],
+      "stats": {
+        "interval": 0,
+        "reset_interval": 0
       }
-    ]
-  },
-  "redis": {
-    "address": "127.0.0.1:6379",
-    "password": "",
-    "database": 0,
-    "key_prefix": "zjdns:"
+    }
   },
   "upstream": [
     {

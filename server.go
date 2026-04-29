@@ -67,7 +67,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 	cacheRefreshGroup, cacheRefreshCtx := errgroup.WithContext(ctx)
 
-	ednsManager, err := NewEDNSManager(config.Server.DefaultECS)
+	ednsManager, err := NewEDNSManager(config.Server.Features.ECS)
 	if err != nil {
 		cancel(fmt.Errorf("EDNS manager init: %w", err))
 		return nil, fmt.Errorf("EDNS manager init: %w", err)
@@ -93,8 +93,8 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	var redisClient *redis.Client
 	var redisCacheObj *RedisCache
 	var cache CacheManager
-	if config.Redis.Address == "" {
-		memoryCache := NewMemoryCache(config.Server.MemoryCacheSize)
+	if config.Server.Features.Cache.Redis.Address == "" {
+		memoryCache := NewMemoryCache(config.Server.Features.Cache.Memory.Size)
 		cache = memoryCache
 	} else {
 		redisCache, err := NewRedisCache(config)
@@ -102,7 +102,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 			cancel(fmt.Errorf("redis cache init: %w", err))
 			return nil, fmt.Errorf("redis cache init: %w", err)
 		}
-		memoryCache := NewMemoryCache(config.Server.MemoryCacheSize)
+		memoryCache := NewMemoryCache(config.Server.Features.Cache.Memory.Size)
 		cache = NewHybridCache(memoryCache, redisCache)
 		redisClient = redisCache.client
 		redisCacheObj = redisCache
@@ -489,10 +489,10 @@ func (s *DNSServer) displayInfo() {
 		}
 		LogInfo("UPSTREAM: Upstream mode: total %d servers", len(servers))
 	} else {
-		if s.config.Redis.Address == "" {
+		if s.config.Server.Features.Cache.Redis.Address == "" {
 			LogInfo("RECURSION: Recursive mode (Memory cache)")
 		} else {
-			LogInfo("RECURSION: Recursive mode (Memory + Redis cache: %s)", s.config.Redis.Address)
+			LogInfo("RECURSION: Recursive mode (Memory + Redis cache: %s)", s.config.Server.Features.Cache.Redis.Address)
 		}
 	}
 
@@ -662,7 +662,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		ecsOpt = s.ednsMgr.GetDefaultECSForQType(question.Qtype)
 	}
 
-	cacheKey := BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC, s.config.Redis.KeyPrefix)
+	cacheKey := BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC, s.config.Server.Features.Cache.Redis.KeyPrefix)
 
 	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
 		LogDebug("CACHE: hit key=%s expired=%t for %s, ttl=%d, validated=%t, answer=%d", cacheKey, isExpired, question.Name, entry.GetRemainingTTL(), entry.Validated, len(entry.Answer))
