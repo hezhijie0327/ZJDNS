@@ -494,7 +494,7 @@ func ecsOptionEqual(a, b *ECSOption) bool {
 }
 
 // RefreshDefaultECS re-detects the default ECS address for auto ECS modes.
-func (em *EDNSManager) RefreshDefaultECS() (*ECSOption, bool, error) {
+func (em *EDNSManager) RefreshDefaultECS() ([]*ECSOption, bool, error) {
 	if em == nil {
 		return nil, false, errors.New("EDNS manager is not initialized")
 	}
@@ -503,8 +503,8 @@ func (em *EDNSManager) RefreshDefaultECS() (*ECSOption, bool, error) {
 		return nil, false, nil
 	}
 
-	var lastECS *ECSOption
 	var changed bool
+	var changedECS []*ECSOption
 	var firstErr error
 	if em.defaultECSConfig.IPv4 != "" {
 		ecs, err := em.parseECSConfig(em.defaultECSConfig.IPv4, false)
@@ -515,8 +515,8 @@ func (em *EDNSManager) RefreshDefaultECS() (*ECSOption, bool, error) {
 			if !ecsOptionEqual(old, ecs) {
 				em.defaultECSIPv4.Store(ecs)
 				changed = true
+				changedECS = append(changedECS, ecs)
 			}
-			lastECS = ecs
 		}
 	}
 	if em.defaultECSConfig.IPv6 != "" {
@@ -532,15 +532,12 @@ func (em *EDNSManager) RefreshDefaultECS() (*ECSOption, bool, error) {
 			if !ecsOptionEqual(old, ecs) {
 				em.defaultECSIPv6.Store(ecs)
 				changed = true
+				changedECS = append(changedECS, ecs)
 			}
-			lastECS = ecs
 		}
 	}
 
-	if !changed {
-		return lastECS, false, firstErr
-	}
-	return lastECS, true, firstErr
+	return changedECS, changed, firstErr
 }
 
 // detectPublicIP detects the public IP address using external service

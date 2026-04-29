@@ -177,10 +177,14 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		server.backgroundGroup.Go(func() error {
 			defer HandlePanic("EDNS default ECS refresh")
 
-			if ecs, changed, err := server.ednsMgr.RefreshDefaultECS(); err != nil {
+			if ecsList, changed, err := server.ednsMgr.RefreshDefaultECS(); err != nil {
 				LogWarn("EDNS: initial default ECS refresh failed: %v", err)
-			} else if changed && ecs != nil {
-				LogInfo("EDNS: initial default ECS refreshed: %s/%d", ecs.Address, ecs.SourcePrefix)
+			} else if changed {
+				for _, ecs := range ecsList {
+					if ecs != nil {
+						LogInfo("EDNS: initial default ECS refreshed: %s/%d", ecs.Address, ecs.SourcePrefix)
+					}
+				}
 			}
 
 			ticker := time.NewTicker(DefaultECSRefreshInterval)
@@ -188,10 +192,14 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 			for {
 				select {
 				case <-ticker.C:
-					if ecs, changed, err := server.ednsMgr.RefreshDefaultECS(); err != nil {
+					if ecsList, changed, err := server.ednsMgr.RefreshDefaultECS(); err != nil {
 						LogWarn("EDNS: default ECS refresh failed: %v", err)
-					} else if changed && ecs != nil {
-						LogInfo("EDNS: refreshed default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
+					} else if changed {
+						for _, ecs := range ecsList {
+							if ecs != nil {
+								LogInfo("EDNS: refreshed default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
+							}
+						}
 					}
 				case <-server.backgroundCtx.Done():
 					return nil
