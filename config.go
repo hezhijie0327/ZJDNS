@@ -100,8 +100,9 @@ type FeatureFlags struct {
 
 // StatsSettings configures statistics collection and reset behavior.
 type StatsSettings struct {
-	Interval      int `json:"interval,omitempty"`
-	ResetInterval int `json:"reset_interval,omitempty"`
+	Interval      int    `json:"interval,omitempty"`
+	ResetInterval int    `json:"reset_interval,omitempty"`
+	File          string `json:"file,omitempty"`
 }
 
 // UpstreamServer defines an upstream DNS or recursive server endpoint.
@@ -640,7 +641,11 @@ func GenerateExampleConfig() string {
 		{Protocol: "https", Port: 443, Timeout: 100},
 		{Protocol: "http3", Port: 443, Timeout: 100},
 	}
-	config.Server.Features.Stats = &StatsSettings{}
+	config.Server.Features.Stats = &StatsSettings{
+		Interval:      3600,
+		ResetInterval: 86400,
+		File:          "stats.snapshot",
+	}
 
 	config.Upstream = []UpstreamServer{
 		{Address: "223.5.5.5:53", Protocol: "tcp"},

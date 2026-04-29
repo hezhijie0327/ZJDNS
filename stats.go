@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -158,6 +160,15 @@ func NewStatsManager(config *ServerConfig) *StatsManager {
 		statsMgr.nextResetAt = time.Now().Unix() + int64(statsMgr.resetInterval/time.Second)
 	}
 
+	// If a persistence file is configured, attempt to load previous stats
+	if config.Server.Features.Stats != nil && strings.TrimSpace(config.Server.Features.Stats.File) != "" {
+		if err := statsMgr.LoadFromFile(config.Server.Features.Stats.File); err != nil {
+			LogWarn("STATS: failed to load stats from file %s: %v", config.Server.Features.Stats.File, err)
+		} else {
+			LogInfo("STATS: loaded stats from %s", config.Server.Features.Stats.File)
+		}
+	}
+
 	return statsMgr
 }
 
@@ -258,4 +269,59 @@ func (sm *StatsManager) FetchStats(ctx context.Context) (*StatsSnapshot, error) 
 	}
 	snapshot := sm.Snapshot()
 	return &snapshot, nil
+}
+
+// SaveToFile writes the current stats snapshot to the provided file path as JSON.
+// It writes atomically by writing to a temporary file and renaming it.
+func (sm *StatsManager) SaveToFile(filePath string) error {
+	if sm == nil || !sm.enabled {
+		return fmt.Errorf("stats disabled")
+	}
+	if strings.TrimSpace(filePath) == "" {
+		return fmt.Errorf("empty file path")
+	}
+
+	snap := sm.Snapshot()
+	data, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+
+	dir := filepath.Dir(filePath)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create dirs: %w", err)
+		}
+	}
+
+	tmp := filePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("write tmp file: %w", err)
+	}
+	if err := os.Rename(tmp, filePath); err != nil {
+		return fmt.Errorf("rename tmp file: %w", err)
+	}
+	return nil
+}
+
+// LoadFromFile loads stats from a JSON file into the StatsManager snapshot.
+func (sm *StatsManager) LoadFromFile(filePath string) error {
+	if sm == nil {
+		return fmt.Errorf("stats manager nil")
+	}
+	if strings.TrimSpace(filePath) == "" {
+		return fmt.Errorf("empty file path")
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+	var snap StatsSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return fmt.Errorf("unmarshal snapshot: %w", err)
+	}
+	sm.mu.Lock()
+	sm.snapshot = snap
+	sm.mu.Unlock()
+	return nil
 }

@@ -201,7 +201,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 			for {
 				select {
 				case <-ticker.C:
-					server.logStatsNow()
+					server.logStatsNow("interval")
 				case <-server.backgroundCtx.Done():
 					return nil
 				}
@@ -220,6 +220,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 				case <-ticker.C:
 					server.statsMgr.Reset()
 					LogInfo("STATS: counters reset")
+					server.logStatsNow("reset")
 				case <-server.backgroundCtx.Done():
 					return nil
 				}
@@ -252,7 +253,7 @@ func (s *DNSServer) setupSignalHandling() {
 }
 
 // logStatsNow fetches current statistics and logs them in JSON format.
-func (s *DNSServer) logStatsNow() {
+func (s *DNSServer) logStatsNow(trigger string) {
 	if s == nil || s.statsMgr == nil {
 		return
 	}
@@ -272,7 +273,22 @@ func (s *DNSServer) logStatsNow() {
 		return
 	}
 
-	LogInfo("STATS: %s", payload)
+	if strings.TrimSpace(trigger) == "" {
+		trigger = "unknown"
+	}
+
+	LogInfo("STATS: trigger=%s payload=%s", trigger, payload)
+
+	statsFile := strings.TrimSpace(s.config.Server.Features.Stats.File)
+	if statsFile == "" {
+		return
+	}
+
+	if err := s.statsMgr.SaveToFile(statsFile); err != nil {
+		LogWarn("STATS: trigger=%s failed to persist stats to %s: %v", trigger, statsFile, err)
+		return
+	}
+	LogInfo("STATS: trigger=%s persisted stats to %s", trigger, statsFile)
 }
 
 // shutdownServer performs graceful server shutdown, closing all connections
@@ -283,8 +299,8 @@ func (s *DNSServer) shutdownServer() {
 	}
 
 	LogInfo("SERVER: Starting DNS server shutdown")
-	if s.config.Server.GetStatsInterval() > 0 {
-		s.logStatsNow()
+	if s.statsMgr != nil {
+		s.logStatsNow("shutdown")
 	}
 
 	if s.cancel != nil {
@@ -368,7 +384,7 @@ func (s *DNSServer) Start() error {
 
 	s.displayInfo()
 	if s.config.Server.GetStatsInterval() > 0 {
-		s.logStatsNow()
+		s.logStatsNow("startup")
 	}
 
 	g, ctx := errgroup.WithContext(serverCtx)
