@@ -28,6 +28,9 @@ const (
 
 	ServeExpiredClientTimeout = 1800 * time.Millisecond // Maximum client timeout for serving expired cache entries in seconds. RFC 8767 recommends 1.8 seconds
 
+	DefaultCookieSecretRotationInterval = 1 * time.Hour    // Interval for rotating DNS cookie secrets
+	DefaultECSRefreshInterval           = 15 * time.Minute // Interval for refreshing auto-configured ECS public IPs
+
 	MaxDomainLength = 253 // Maximum length of a fully qualified domain name
 
 	PprofPath = "/debug/pprof/" // Path prefix for pprof endpoints
@@ -156,13 +159,33 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	if server.ednsMgr != nil && server.ednsMgr.cookieGenerator != nil {
 		server.backgroundGroup.Go(func() error {
 			defer HandlePanic("DNS cookie secret rotation")
-			ticker := time.NewTicker(time.Hour)
+			ticker := time.NewTicker(DefaultCookieSecretRotationInterval)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ticker.C:
 					server.ednsMgr.cookieGenerator.RotateSecret()
 					LogDebug("EDNS: rotated DNS cookie secret")
+				case <-server.backgroundCtx.Done():
+					return nil
+				}
+			}
+		})
+	}
+
+	if server.ednsMgr != nil && server.ednsMgr.shouldRefreshDefaultECS() {
+		server.backgroundGroup.Go(func() error {
+			defer HandlePanic("EDNS default ECS refresh")
+			ticker := time.NewTicker(DefaultECSRefreshInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					if ecs, err := server.ednsMgr.RefreshDefaultECS(); err != nil {
+						LogWarn("EDNS: default ECS refresh failed: %v", err)
+					} else {
+						LogInfo("EDNS: refreshed default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
+					}
 				case <-server.backgroundCtx.Done():
 					return nil
 				}

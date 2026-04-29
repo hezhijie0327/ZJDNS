@@ -7,12 +7,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -92,9 +94,10 @@ type ECSOption struct {
 
 // EDNSManager handles EDNS option parsing and construction for DNS messages
 type EDNSManager struct {
-	defaultECS      *ECSOption
-	detector        *IPDetector
-	cookieGenerator *CookieGenerator
+	defaultECS       atomic.Pointer[ECSOption]
+	defaultECSConfig string
+	detector         *IPDetector
+	cookieGenerator  *CookieGenerator
 }
 
 // IPDetector is responsible for detecting the server's public IP address for ECS auto-configuration
@@ -163,12 +166,13 @@ func NewEDNSManager(defaultSubnet string) (*EDNSManager, error) {
 	}
 
 	if defaultSubnet != "" {
+		manager.defaultECSConfig = strings.ToLower(defaultSubnet)
 		ecs, err := manager.parseECSConfig(defaultSubnet)
 		if err != nil {
 			return nil, fmt.Errorf("parse ECS config: %w", err)
 		}
-		manager.defaultECS = ecs
 		if ecs != nil {
+			manager.defaultECS.Store(ecs)
 			LogInfo("EDNS: Default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
 		}
 	}
@@ -181,7 +185,7 @@ func (em *EDNSManager) GetDefaultECS() *ECSOption {
 	if em == nil {
 		return nil
 	}
-	return em.defaultECS
+	return em.defaultECS.Load()
 }
 
 // ParseFromDNS extracts ECS option from a DNS message
@@ -394,6 +398,50 @@ func (em *EDNSManager) parseECSConfig(subnet string) (*ECSOption, error) {
 			Address:      ipNet.IP,
 		}, nil
 	}
+}
+
+func (em *EDNSManager) shouldRefreshDefaultECS() bool {
+	if em == nil {
+		return false
+	}
+	switch em.defaultECSConfig {
+	case "auto", "auto_v4", "auto_v6":
+		return true
+	default:
+		return false
+	}
+}
+
+// RefreshDefaultECS re-detects the default ECS address for auto ECS modes.
+func (em *EDNSManager) RefreshDefaultECS() (*ECSOption, error) {
+	if em == nil {
+		return nil, errors.New("EDNS manager is not initialized")
+	}
+
+	if !em.shouldRefreshDefaultECS() {
+		return nil, nil
+	}
+
+	var ecs *ECSOption
+	var err error
+	switch em.defaultECSConfig {
+	case "auto":
+		ecs, err = em.detectPublicIP(false, true)
+	case "auto_v4":
+		ecs, err = em.detectPublicIP(false, false)
+	case "auto_v6":
+		ecs, err = em.detectPublicIP(true, false)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("detect public IP: %w", err)
+	}
+	if ecs == nil {
+		return nil, errors.New("public IP detection failed")
+	}
+
+	em.defaultECS.Store(ecs)
+	return ecs, nil
 }
 
 // detectPublicIP detects the public IP address using external service
