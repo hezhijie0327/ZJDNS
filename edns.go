@@ -169,23 +169,31 @@ func NewEDNSManager(defaultECS DefaultECSConfig) (*EDNSManager, error) {
 
 	if !defaultECS.IsEmpty() {
 		if defaultECS.IPv4 != "" {
-			ecs, err := manager.parseECSConfig(defaultECS.IPv4, false)
-			if err != nil {
-				return nil, fmt.Errorf("parse default_ecs_subnet.ipv4: %w", err)
-			}
-			if ecs != nil {
-				manager.defaultECSIPv4.Store(ecs)
-				LogInfo("EDNS: Default ECS IPv4: %s/%d", ecs.Address, ecs.SourcePrefix)
+			if strings.EqualFold(strings.TrimSpace(defaultECS.IPv4), "auto") {
+				LogInfo("EDNS: Default ECS IPv4 set to auto; refresh will run in background")
+			} else {
+				ecs, err := manager.parseECSConfig(defaultECS.IPv4, false)
+				if err != nil {
+					return nil, fmt.Errorf("parse default_ecs_subnet.ipv4: %w", err)
+				}
+				if ecs != nil {
+					manager.defaultECSIPv4.Store(ecs)
+					LogInfo("EDNS: Default ECS IPv4: %s/%d", ecs.Address, ecs.SourcePrefix)
+				}
 			}
 		}
 		if defaultECS.IPv6 != "" {
-			ecs, err := manager.parseECSConfig(defaultECS.IPv6, true)
-			if err != nil {
-				return nil, fmt.Errorf("parse default_ecs_subnet.ipv6: %w", err)
-			}
-			if ecs != nil {
-				manager.defaultECSIPv6.Store(ecs)
-				LogInfo("EDNS: Default ECS IPv6: %s/%d", ecs.Address, ecs.SourcePrefix)
+			if strings.EqualFold(strings.TrimSpace(defaultECS.IPv6), "auto") {
+				LogInfo("EDNS: Default ECS IPv6 set to auto; refresh will run in background")
+			} else {
+				ecs, err := manager.parseECSConfig(defaultECS.IPv6, true)
+				if err != nil {
+					return nil, fmt.Errorf("parse default_ecs_subnet.ipv6: %w", err)
+				}
+				if ecs != nil {
+					manager.defaultECSIPv6.Store(ecs)
+					LogInfo("EDNS: Default ECS IPv6: %s/%d", ecs.Address, ecs.SourcePrefix)
+				}
 			}
 		}
 	}
@@ -478,24 +486,36 @@ func (em *EDNSManager) shouldRefreshDefaultECS() bool {
 	return em.defaultECSConfig.HasAuto()
 }
 
+func ecsOptionEqual(a, b *ECSOption) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Address.Equal(b.Address) && a.Family == b.Family && a.SourcePrefix == b.SourcePrefix && a.ScopePrefix == b.ScopePrefix
+}
+
 // RefreshDefaultECS re-detects the default ECS address for auto ECS modes.
-func (em *EDNSManager) RefreshDefaultECS() (*ECSOption, error) {
+func (em *EDNSManager) RefreshDefaultECS() (*ECSOption, bool, error) {
 	if em == nil {
-		return nil, errors.New("EDNS manager is not initialized")
+		return nil, false, errors.New("EDNS manager is not initialized")
 	}
 
-	if em == nil || em.defaultECSConfig.IsEmpty() {
-		return nil, nil
+	if em.defaultECSConfig.IsEmpty() {
+		return nil, false, nil
 	}
 
 	var lastECS *ECSOption
+	var changed bool
 	var firstErr error
 	if em.defaultECSConfig.IPv4 != "" {
 		ecs, err := em.parseECSConfig(em.defaultECSConfig.IPv4, false)
 		if err != nil {
 			firstErr = fmt.Errorf("refresh IPv4 ECS: %w", err)
 		} else if ecs != nil {
-			em.defaultECSIPv4.Store(ecs)
+			old := em.defaultECSIPv4.Load()
+			if !ecsOptionEqual(old, ecs) {
+				em.defaultECSIPv4.Store(ecs)
+				changed = true
+			}
 			lastECS = ecs
 		}
 	}
@@ -508,12 +528,19 @@ func (em *EDNSManager) RefreshDefaultECS() (*ECSOption, error) {
 				firstErr = fmt.Errorf("%v; refresh IPv6 ECS: %w", firstErr, err)
 			}
 		} else if ecs != nil {
-			em.defaultECSIPv6.Store(ecs)
+			old := em.defaultECSIPv6.Load()
+			if !ecsOptionEqual(old, ecs) {
+				em.defaultECSIPv6.Store(ecs)
+				changed = true
+			}
 			lastECS = ecs
 		}
 	}
 
-	return lastECS, firstErr
+	if !changed {
+		return lastECS, false, firstErr
+	}
+	return lastECS, true, firstErr
 }
 
 // detectPublicIP detects the public IP address using external service

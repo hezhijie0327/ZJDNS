@@ -176,14 +176,21 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 	if server.ednsMgr != nil && server.ednsMgr.shouldRefreshDefaultECS() {
 		server.backgroundGroup.Go(func() error {
 			defer HandlePanic("EDNS default ECS refresh")
+
+			if ecs, changed, err := server.ednsMgr.RefreshDefaultECS(); err != nil {
+				LogWarn("EDNS: initial default ECS refresh failed: %v", err)
+			} else if changed && ecs != nil {
+				LogInfo("EDNS: initial default ECS refreshed: %s/%d", ecs.Address, ecs.SourcePrefix)
+			}
+
 			ticker := time.NewTicker(DefaultECSRefreshInterval)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ticker.C:
-					if ecs, err := server.ednsMgr.RefreshDefaultECS(); err != nil {
+					if ecs, changed, err := server.ednsMgr.RefreshDefaultECS(); err != nil {
 						LogWarn("EDNS: default ECS refresh failed: %v", err)
-					} else {
+					} else if changed && ecs != nil {
 						LogInfo("EDNS: refreshed default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
 					}
 				case <-server.backgroundCtx.Done():
