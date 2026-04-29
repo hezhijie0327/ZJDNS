@@ -22,6 +22,7 @@ type StatsSnapshot struct {
 	TotalRequests       uint64 `json:"total_requests"`
 	CacheHits           uint64 `json:"cache_hits"`
 	CacheMisses         uint64 `json:"cache_misses"`
+	PrefetchRequests    uint64 `json:"prefetch_requests"`
 	ErrorResponses      uint64 `json:"error_responses"`
 	StaleResponses      uint64 `json:"stale_responses"`
 	FallbackRequests    uint64 `json:"fallback_requests"`
@@ -41,13 +42,13 @@ type StatsSnapshot struct {
 // StatsLogTotals contains aggregated totals for metrics export.
 type StatsLogTotals struct {
 	TotalRequests         uint64  `json:"total_requests"`
-	CacheHits             uint64  `json:"cache_hits"`
-	CacheMisses           uint64  `json:"cache_misses"`
-	ErrorResponses        uint64  `json:"error_responses"`
-	StaleResponses        uint64  `json:"stale_responses,omitempty"`
-	FallbackRequests      uint64  `json:"fallback_requests,omitempty"`
+	TotalResponseTimeMs   uint64  `json:"total_response_time_ms"`
 	LastResponseTimeMs    uint64  `json:"last_response_time_ms"`
 	AverageResponseTimeMs float64 `json:"average_response_time_ms,omitempty"`
+	CacheHits             uint64  `json:"cache_hits"`
+	CacheMisses           uint64  `json:"cache_misses"`
+	StaleResponses        uint64  `json:"stale_responses,omitempty"`
+	ErrorResponses        uint64  `json:"error_responses,omitempty"`
 }
 
 // StatsLogProtocolCounts contains request counts by DNS protocol.
@@ -64,16 +65,19 @@ type StatsLogProtocolCounts struct {
 type StatsLogEvents struct {
 	RewriteRequests  uint64 `json:"rewrite_requests,omitempty"`
 	HijackDetections uint64 `json:"hijack_detections,omitempty"`
+	PrefetchRequests uint64 `json:"prefetch_requests,omitempty"`
+	FallbackRequests uint64 `json:"fallback_requests,omitempty"`
 }
 
 // StatsLogRates contains derived rates computed from raw metrics.
 type StatsLogRates struct {
+	CacheRate    float64 `json:"cache_rate,omitempty"`
+	PrefetchRate float64 `json:"prefetch_rate,omitempty"`
 	FailureRate  float64 `json:"failure_rate,omitempty"`
 	StaleRate    float64 `json:"stale_rate,omitempty"`
-	CacheRate    float64 `json:"cache_rate,omitempty"`
+	FallbackRate float64 `json:"fallback_rate,omitempty"`
 	RewriteRate  float64 `json:"rewrite_rate,omitempty"`
 	HijackRate   float64 `json:"hijack_rate,omitempty"`
-	FallbackRate float64 `json:"fallback_rate,omitempty"`
 }
 
 // StatsLog is the serialized log format for server metrics.
@@ -110,9 +114,8 @@ func BuildStatsLogJSON(snapshot *StatsSnapshot) ([]byte, error) {
 			TotalRequests:      snapshot.TotalRequests,
 			CacheHits:          snapshot.CacheHits,
 			CacheMisses:        snapshot.CacheMisses,
-			ErrorResponses:     snapshot.ErrorResponses,
 			StaleResponses:     snapshot.StaleResponses,
-			FallbackRequests:   snapshot.FallbackRequests,
+			ErrorResponses:     snapshot.ErrorResponses,
 			LastResponseTimeMs: snapshot.LastResponseTimeMs,
 		},
 		Protocols: StatsLogProtocolCounts{
@@ -124,19 +127,23 @@ func BuildStatsLogJSON(snapshot *StatsSnapshot) ([]byte, error) {
 			DoH3Requests: snapshot.DoH3Requests,
 		},
 		Events: StatsLogEvents{
-			RewriteRequests:  snapshot.RewriteRequests,
 			HijackDetections: snapshot.HijackDetections,
+			PrefetchRequests: snapshot.PrefetchRequests,
+			RewriteRequests:  snapshot.RewriteRequests,
+
+			FallbackRequests: snapshot.FallbackRequests,
 		},
 	}
 
 	if snapshot.TotalRequests > 0 {
 		statsLog.Totals.AverageResponseTimeMs = snapshot.AverageResponseTimeMs()
 		statsLog.Rates = StatsLogRates{
-			FailureRate:  float64(snapshot.ErrorResponses) / float64(snapshot.TotalRequests),
-			StaleRate:    float64(snapshot.StaleResponses) / float64(snapshot.TotalRequests),
 			CacheRate:    float64(snapshot.CacheHits) / float64(snapshot.TotalRequests),
-			RewriteRate:  float64(snapshot.RewriteRequests) / float64(snapshot.TotalRequests),
+			StaleRate:    float64(snapshot.StaleResponses) / float64(snapshot.TotalRequests),
+			FailureRate:  float64(snapshot.ErrorResponses) / float64(snapshot.TotalRequests),
 			HijackRate:   float64(snapshot.HijackDetections) / float64(snapshot.TotalRequests),
+			PrefetchRate: float64(snapshot.PrefetchRequests) / float64(snapshot.TotalRequests),
+			RewriteRate:  float64(snapshot.RewriteRequests) / float64(snapshot.TotalRequests),
 			FallbackRate: float64(snapshot.FallbackRequests) / float64(snapshot.TotalRequests),
 		}
 	}
@@ -215,7 +222,7 @@ func (sm *StatsManager) setNextResetAt(ctx context.Context, nextResetAt int64) {
 }
 
 // RecordRequest updates the in-memory snapshot with the details of a processed request and also increments the corresponding counters in Redis if persistence is enabled. It captures various dimensions such as protocol, cache hit/miss, errors, rewrites, hijack detections, stale responses, and fallback usage.
-func (sm *StatsManager) RecordRequest(duration time.Duration, cacheHit bool, hadError bool, protocol string, rewrote bool, hijackDetected bool, staleServed bool, fallbackUsed bool) {
+func (sm *StatsManager) RecordRequest(duration time.Duration, cacheHit bool, hadError bool, protocol string, rewrote bool, hijackDetected bool, staleServed bool, fallbackUsed bool, prefetchTriggered bool) {
 	if sm == nil || !sm.enabled {
 		return
 	}
@@ -273,6 +280,9 @@ func (sm *StatsManager) RecordRequest(duration time.Duration, cacheHit bool, had
 	if fallbackUsed {
 		sm.snapshot.FallbackRequests++
 	}
+	if prefetchTriggered {
+		sm.snapshot.PrefetchRequests++
+	}
 
 	sm.mu.Unlock()
 
@@ -325,6 +335,9 @@ func (sm *StatsManager) RecordRequest(duration time.Duration, cacheHit bool, had
 	if fallbackUsed {
 		pipe.HIncrBy(ctx, sm.redisKey, "fallback_requests", 1)
 	}
+	if prefetchTriggered {
+		pipe.HIncrBy(ctx, sm.redisKey, "prefetch_requests", 1)
+	}
 	_, _ = pipe.Exec(ctx)
 }
 
@@ -363,6 +376,7 @@ func (sm *StatsManager) Reset() {
 		"total_requests":         0,
 		"cache_hits":             0,
 		"cache_misses":           0,
+		"prefetch_requests":      0,
 		"error_responses":        0,
 		"stale_responses":        0,
 		"total_response_time_ms": 0,
@@ -411,6 +425,7 @@ func (sm *StatsManager) FetchStats(ctx context.Context) (*StatsSnapshot, error) 
 		TotalRequests:       parseUint64OrZero(data["total_requests"]),
 		CacheHits:           parseUint64OrZero(data["cache_hits"]),
 		CacheMisses:         parseUint64OrZero(data["cache_misses"]),
+		PrefetchRequests:    parseUint64OrZero(data["prefetch_requests"]),
 		ErrorResponses:      parseUint64OrZero(data["error_responses"]),
 		FallbackRequests:    parseUint64OrZero(data["fallback_requests"]),
 		TotalResponseTimeMs: parseUint64OrZero(data["total_response_time_ms"]),

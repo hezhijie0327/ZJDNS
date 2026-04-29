@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -25,6 +26,9 @@ const (
 	DefaultTimeout   = 2 * time.Second // Timeout for various operations like shutdown and cache refresh
 	OperationTimeout = 3 * time.Second // Timeout for individual operations like upstream queries
 	IdleTimeout      = 4 * time.Second // Idle timeout for servers
+
+	PrefetchThrottleInterval = 3 * time.Second // Minimum interval between prefetches for the same cache key to prevent thundering herd
+	PrefetchThresholdPercent = 10              // Prefetch window threshold in percent of original TTL
 
 	ServeExpiredClientTimeout = 1800 * time.Millisecond // Maximum client timeout for serving expired cache entries in seconds. RFC 8767 recommends 1.8 seconds
 
@@ -56,6 +60,7 @@ type DNSServer struct {
 	backgroundCtx     context.Context
 	cacheRefreshGroup *errgroup.Group
 	cacheRefreshCtx   context.Context
+	prefetchCooldown  sync.Map
 	closed            int32
 	queryMgr          *QueryManager
 }
@@ -613,6 +618,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	rewrote := false
 	hijackDetected := false
 	staleServed := false
+	prefetchTriggered := false
 	var responseMsg *dns.Msg
 	fallbackUsed := false
 	defer func() {
@@ -621,7 +627,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 			LogDebug("Query completed: %s %s | rcode=%s | Time:%v | answer=%d, authority=%d, additional=%d, ad=%t%s", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[responseMsg.Rcode], responseTime.Truncate(time.Microsecond), len(responseMsg.Answer), len(responseMsg.Ns), len(responseMsg.Extra), responseMsg.AuthenticatedData, FormatAllRecords(responseMsg.Answer, responseMsg.Ns, responseMsg.Extra))
 		}
 		if s.statsMgr != nil {
-			s.statsMgr.RecordRequest(responseTime, cacheHit, hadError, requestProtocol, rewrote, hijackDetected, staleServed, fallbackUsed)
+			s.statsMgr.RecordRequest(responseTime, cacheHit, hadError, requestProtocol, rewrote, hijackDetected, staleServed, fallbackUsed, prefetchTriggered)
 		}
 	}()
 
@@ -683,7 +689,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		LogDebug("CACHE: hit key=%s expired=%t for %s, ttl=%d, validated=%t, answer=%d", cacheKey, isExpired, question.Name, entry.GetRemainingTTL(), entry.Validated, len(entry.Answer))
 		cacheHit = true
 		if !isExpired {
-			responseMsg = s.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection)
+			responseMsg = s.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &prefetchTriggered)
 			return responseMsg
 		}
 
@@ -831,8 +837,8 @@ func FormatAllRecords(answers, authority, additional []dns.RR) string {
 }
 
 // processCacheHit handles DNS queries that have a cache hit, returning cached
-// responses and optionally refreshing stale entries in the background.
-func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cookieOpt *CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+// responses and optionally refreshing stale entries or near-expiry entries in the background.
+func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *ECSOption, cookieOpt *CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool) *dns.Msg {
 	msg := s.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
 
 	if isExpired && entry.ShouldRefresh() {
@@ -844,7 +850,39 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *CacheEntry, isExpired b
 		})
 	}
 
+	if !isExpired && entry.ShouldPrefetch(PrefetchThresholdPercent) && s.shouldStartPrefetch(cacheKey) {
+		if prefetchTriggered != nil {
+			*prefetchTriggered = true
+		}
+		s.cacheRefreshGroup.Go(func() error {
+			defer HandlePanic("cache prefetch")
+			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, OperationTimeout)
+			defer cancel()
+			LogDebug("CACHE: prefetch triggered for %s (threshold=%d%%)", question.Name, PrefetchThresholdPercent)
+			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
+		})
+	}
+
 	return msg
+}
+
+// shouldStartPrefetch applies lightweight per-key throttling to avoid repeated
+// prefetch attempts for hot keys within a short interval.
+func (s *DNSServer) shouldStartPrefetch(cacheKey string) bool {
+	if s == nil || cacheKey == "" {
+		return false
+	}
+
+	now := time.Now().UnixNano()
+	nextAllowed, ok := s.prefetchCooldown.Load(cacheKey)
+	if ok {
+		if nextTs, typeOK := nextAllowed.(int64); typeOK && now < nextTs {
+			return false
+		}
+	}
+
+	s.prefetchCooldown.Store(cacheKey, now+PrefetchThrottleInterval.Nanoseconds())
+	return true
 }
 
 // buildCacheResponse constructs a DNS response message based on a cache entry, including
@@ -930,7 +968,7 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *CacheEntry, ques
 		if staleServed != nil {
 			*staleServed = true
 		}
-		return s.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection)
+		return s.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, nil)
 	case <-timer.C:
 		if staleServed != nil {
 			*staleServed = true

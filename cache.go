@@ -821,6 +821,40 @@ func (c *CacheEntry) ShouldRefresh() bool {
 	return c.IsExpired() && (now-c.Timestamp) > refreshInterval
 }
 
+// ShouldPrefetch checks whether a non-expired cache entry has reached the
+// prefetch window based on a percentage of the original TTL.
+func (c *CacheEntry) ShouldPrefetch(thresholdPercent int) bool {
+	if c == nil || c.IsExpired() || thresholdPercent <= 0 {
+		return false
+	}
+
+	if thresholdPercent > 100 {
+		thresholdPercent = 100
+	}
+
+	now := time.Now().Unix()
+	remaining := int64(c.TTL) - (now - c.Timestamp)
+	if remaining <= 0 {
+		return false
+	}
+
+	originalTTL := c.OriginalTTL
+	if originalTTL <= 0 {
+		originalTTL = c.TTL
+	}
+	if originalTTL <= 0 {
+		return false
+	}
+
+	// Ceiling division to avoid a zero threshold window when original TTL is small.
+	threshold := int64((originalTTL*thresholdPercent + 99) / 100)
+	if threshold < 1 {
+		threshold = 1
+	}
+
+	return remaining <= threshold
+}
+
 // CanServeExpired checks whether an expired cache entry is within the allowed
 // serve-expired age window.
 func (c *CacheEntry) CanServeExpired(maxAgeSeconds int) bool {
