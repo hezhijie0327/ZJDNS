@@ -26,14 +26,10 @@
       },
       "hijack_protection": true,
       "cache": {
-        "memory": {
-          "size": 10000
-        },
-        "redis": {
-          "address": "127.0.0.1:6379",
-          "password": "",
-          "database": 0,
-          "key_prefix": "zjdns:"
+        "size": 16384,
+        "persist": {
+          "file": "cache.snapshot",
+          "interval": 30
         }
       },
       "latency_probe": [

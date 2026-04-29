@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -51,8 +50,6 @@ type DNSServer struct {
 	cidrMgr           *CIDRManager
 	statsMgr          *StatsManager
 	pprofServer       *http.Server
-	redisClient       *redis.Client
-	redisCache        *RedisCache
 	ctx               context.Context
 	cancel            context.CancelCauseFunc
 	shutdown          chan struct{}
@@ -95,32 +92,14 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		}
 	}
 
-	var redisClient *redis.Client
-	var redisCacheObj *RedisCache
-	var cache CacheManager
-	if config.Server.Features.Cache.Redis.Address == "" {
-		memoryCache := NewMemoryCache(config.Server.Features.Cache.Memory.Size)
-		cache = memoryCache
-	} else {
-		redisCache, err := NewRedisCache(config)
-		if err != nil {
-			cancel(fmt.Errorf("redis cache init: %w", err))
-			return nil, fmt.Errorf("redis cache init: %w", err)
-		}
-		memoryCache := NewMemoryCache(config.Server.Features.Cache.Memory.Size)
-		cache = NewHybridCache(memoryCache, redisCache)
-		redisClient = redisCache.client
-		redisCacheObj = redisCache
-	}
+	cache := NewMemoryCache(config.Server.Features.Cache)
 
 	server := &DNSServer{
 		config:            config,
 		ednsMgr:           ednsManager,
 		rewriteMgr:        rewriteManager,
 		cidrMgr:           cidrManager,
-		statsMgr:          NewStatsManager(config, redisClient),
-		redisClient:       redisClient,
-		redisCache:        redisCacheObj,
+		statsMgr:          NewStatsManager(config),
 		cacheMgr:          cache,
 		ctx:               ctx,
 		cancel:            cancel,
@@ -509,11 +488,7 @@ func (s *DNSServer) displayInfo() {
 		}
 		LogInfo("UPSTREAM: Upstream mode: total %d servers", len(servers))
 	} else {
-		if s.config.Server.Features.Cache.Redis.Address == "" {
-			LogInfo("RECURSION: Recursive mode (Memory cache)")
-		} else {
-			LogInfo("RECURSION: Recursive mode (Memory + Redis cache: %s)", s.config.Server.Features.Cache.Redis.Address)
-		}
+		LogInfo("RECURSION: Recursive mode (Memory cache)")
 	}
 
 	if s.cidrMgr != nil && len(s.config.CIDR) > 0 {
@@ -683,7 +658,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		ecsOpt = s.ednsMgr.GetDefaultECSForQType(question.Qtype)
 	}
 
-	cacheKey := BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC, s.config.Server.Features.Cache.Redis.KeyPrefix)
+	cacheKey := BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC)
 
 	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
 		LogDebug("CACHE: hit key=%s expired=%t for %s, ttl=%d, validated=%t, answer=%d", cacheKey, isExpired, question.Name, entry.GetRemainingTTL(), entry.Validated, len(entry.Answer))

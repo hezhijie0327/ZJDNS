@@ -3,12 +3,11 @@ package main
 
 import (
 	"container/list"
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"hash/fnv"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -18,9 +17,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/redis/go-redis/v9"
-	"github.com/redis/go-redis/v9/logging"
-	"golang.org/x/sync/errgroup"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 const (
@@ -32,9 +29,10 @@ const (
 	ResultBufferCapacity = 128 // Initial capacity for building cache keys to minimize allocations
 	MaxResultLength      = 512 // Maximum length for cache keys before hashing
 
-	DefaultMemoryCacheSize = 10000 // Default maximum number of entries in the in-memory cache
+	DefaultCachePersistInterval = 30 * time.Second // Default memory cache snapshot interval
+	DefaultCacheSize            = 16384            // Default maximum number of entries in the in-memory cache
 
-	RedisPrefixDNS = "dns:" // Prefix for DNS cache keys in Redis
+	CacheKeyDNSPrefix = "dns:" // Prefix for DNS cache keys
 )
 
 // CacheEntry stores serialized DNS response data, metadata, and ECS state.
@@ -82,6 +80,12 @@ type MemoryCache struct {
 	limit    int
 	closed   int32
 	ptrIndex map[string]map[string]uint32
+
+	persistPath     string
+	persistInterval time.Duration
+	persistStop     chan struct{}
+	persistDone     chan struct{}
+	persistDirty    atomic.Int32
 }
 
 // memoryCacheItem wraps a CacheEntry with its position in the LRU order.
@@ -90,40 +94,54 @@ type memoryCacheItem struct {
 	element *list.Element
 }
 
-// HybridCache combines an in-memory cache with Redis persistence.
-type HybridCache struct {
-	memory  *MemoryCache
-	redis   *RedisCache
-	ctx     context.Context
-	cancel  context.CancelCauseFunc
-	bgGroup *errgroup.Group
-	bgCtx   context.Context
-	closed  int32
+type persistedCacheSnapshot struct {
+	Version int                  `json:"version"`
+	SavedAt int64                `json:"saved_at"`
+	Entries []persistedCacheItem `json:"entries"`
 }
 
-// RedisCache provides Redis-backed cache persistence for DNS entries.
-type RedisCache struct {
-	client  *redis.Client
-	config  *ServerConfig
-	ctx     context.Context
-	cancel  context.CancelCauseFunc
-	closed  int32
-	bgGroup *errgroup.Group
-	bgCtx   context.Context
+type persistedCacheItem struct {
+	Key   string      `json:"key"`
+	Entry *CacheEntry `json:"entry"`
 }
 
 // NewMemoryCache creates a new high-performance in-memory cache.
-func NewMemoryCache(size int) *MemoryCache {
+func NewMemoryCache(settings CacheSettings) *MemoryCache {
+	size := settings.Size
 	if size <= 0 {
-		size = DefaultMemoryCacheSize
+		size = DefaultCacheSize
 	}
+
+	mc := &MemoryCache{
+		entries:         make(map[string]*memoryCacheItem),
+		order:           list.New(),
+		limit:           size,
+		ptrIndex:        make(map[string]map[string]uint32),
+		persistPath:     strings.TrimSpace(settings.Persist.File),
+		persistInterval: time.Duration(settings.Persist.Interval) * time.Second,
+	}
+
+	if mc.persistInterval <= 0 {
+		mc.persistInterval = DefaultCachePersistInterval
+	}
+
+	if mc.persistPath != "" {
+		if loaded, err := mc.loadSnapshotFromDisk(); err != nil {
+			LogWarn("CACHE: failed to load snapshot file %s: %v", mc.persistPath, err)
+		} else if loaded > 0 {
+			LogInfo("CACHE: restored %d entries from snapshot %s", loaded, mc.persistPath)
+		} else {
+			LogDebug("CACHE: snapshot file %s contained no valid entries or was empty", mc.persistPath)
+		}
+		mc.startPersistWorker()
+		LogInfo("CACHE: persistence enabled (file=%s interval=%s)", mc.persistPath, mc.persistInterval)
+		LogDebug("CACHE: persistence worker started for file %s", mc.persistPath)
+	} else {
+		LogDebug("CACHE: persistence disabled (no persist.file configured)")
+	}
+
 	LogInfo("CACHE: Memory cache enabled (limit=%d)", size)
-	return &MemoryCache{
-		entries:  make(map[string]*memoryCacheItem),
-		order:    list.New(),
-		limit:    size,
-		ptrIndex: make(map[string]map[string]uint32),
-	}
+	return mc
 }
 
 // CreateCompactRecord creates a compact representation of a DNS record.
@@ -227,12 +245,10 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC boo
 }
 
 // BuildCacheKey generates a cache key from question and options.
-func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC bool, globalPrefix string) string {
+func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC bool) string {
 	var buf strings.Builder
 	buf.Grow(ResultBufferCapacity)
-
-	buf.WriteString(globalPrefix)
-	buf.WriteString(RedisPrefixDNS)
+	buf.WriteString(CacheKeyDNSPrefix)
 
 	buf.WriteString(NormalizeDomain(question.Name))
 	buf.WriteByte(':')
@@ -322,7 +338,7 @@ func (mc *MemoryCache) touchEntryLocked(item *memoryCacheItem) {
 	mc.order.MoveToFront(item.element)
 }
 
-// updatePTRIndexLocked updates the PTR index for a cache entry
+// updatePTRIndexLocked updates the PTR index for a cache entry.
 func (mc *MemoryCache) updatePTRIndexLocked(entry *CacheEntry, key string) {
 	if entry == nil {
 		return
@@ -364,7 +380,7 @@ func (mc *MemoryCache) updatePTRIndexLocked(entry *CacheEntry, key string) {
 	}
 }
 
-// removeFromPTRIndexLocked removes a cache entry from the PTR index
+// removeFromPTRIndexLocked removes a cache entry from the PTR index.
 func (mc *MemoryCache) removeFromPTRIndexLocked(entry *CacheEntry, key string) {
 	if entry == nil {
 		return
@@ -416,7 +432,6 @@ func (mc *MemoryCache) evictOldestLocked() {
 		return
 	}
 
-	// Clean up PTR index for the evicted entry
 	if item, exists := mc.entries[key]; exists && item != nil && item.entry != nil {
 		mc.removeFromPTRIndexLocked(item.entry, key)
 	}
@@ -438,11 +453,8 @@ func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
 		return nil, false, false
 	}
 
-	// Update access time and LRU order
 	item.entry.AccessTime = time.Now().Unix()
 	mc.touchEntryLocked(item)
-
-	// Clone entry while still holding lock to ensure consistency
 	cloned := cloneCacheEntry(item.entry)
 	mc.mu.Unlock()
 
@@ -519,11 +531,11 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	}
 
 	if existing, ok := mc.entries[key]; ok {
-		// Remove old entry from PTR index before updating
 		mc.removeFromPTRIndexLocked(existing.entry, key)
 		existing.entry = cloneCacheEntry(entry)
 		mc.touchEntryLocked(existing)
 		mc.updatePTRIndexLocked(existing.entry, key)
+		mc.persistDirty.Store(1)
 		return
 	}
 
@@ -533,6 +545,157 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	if mc.limit > 0 && mc.order.Len() > mc.limit {
 		mc.evictOldestLocked()
 	}
+	mc.persistDirty.Store(1)
+}
+
+func (mc *MemoryCache) startPersistWorker() {
+	if mc.persistPath == "" {
+		return
+	}
+
+	mc.persistStop = make(chan struct{})
+	mc.persistDone = make(chan struct{})
+
+	go func() {
+		defer HandlePanic("cache persist worker")
+		defer close(mc.persistDone)
+
+		ticker := time.NewTicker(mc.persistInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if mc.persistDirty.Load() == 0 {
+					continue
+				}
+				LogDebug("CACHE: persist worker triggered snapshot write (dirty=1)")
+				if err := mc.persistSnapshotToDisk(); err != nil {
+					LogWarn("CACHE: persist snapshot failed: %v", err)
+				} else {
+					mc.persistDirty.Store(0)
+				}
+			case <-mc.persistStop:
+				return
+			}
+		}
+	}()
+}
+
+func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
+	data, err := os.ReadFile(mc.persistPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	var snapshot persistedCacheSnapshot
+	if err := msgpack.Unmarshal(data, &snapshot); err != nil {
+		return 0, err
+	}
+
+	if len(snapshot.Entries) == 0 {
+		return 0, nil
+	}
+
+	now := time.Now().Unix()
+	loaded := 0
+
+	mc.mu.Lock()
+	for _, item := range snapshot.Entries {
+		if item.Key == "" || item.Entry == nil || item.Entry.TTL <= 0 {
+			continue
+		}
+		if now-item.Entry.Timestamp > int64(item.Entry.TTL+StaleMaxAge) {
+			continue
+		}
+		if _, exists := mc.entries[item.Key]; exists {
+			continue
+		}
+		element := mc.order.PushFront(item.Key)
+		entryCopy := cloneCacheEntry(item.Entry)
+		mc.entries[item.Key] = &memoryCacheItem{entry: entryCopy, element: element}
+		mc.updatePTRIndexLocked(entryCopy, item.Key)
+		loaded++
+		if mc.limit > 0 && mc.order.Len() > mc.limit {
+			mc.evictOldestLocked()
+		}
+	}
+	mc.mu.Unlock()
+
+	mc.persistDirty.Store(0)
+	return loaded, nil
+}
+
+func (mc *MemoryCache) persistSnapshotToDisk() error {
+	if mc.persistPath == "" {
+		return nil
+	}
+
+	now := time.Now().Unix()
+	snapshot := persistedCacheSnapshot{
+		Version: 1,
+		SavedAt: now,
+	}
+
+	mc.mu.RLock()
+	if mc.entries != nil && mc.order != nil {
+		snapshot.Entries = make([]persistedCacheItem, 0, len(mc.entries))
+		for elem := mc.order.Front(); elem != nil; elem = elem.Next() {
+			key, ok := elem.Value.(string)
+			if !ok {
+				continue
+			}
+			item := mc.entries[key]
+			if item == nil || item.entry == nil || item.entry.TTL <= 0 {
+				continue
+			}
+			if now-item.entry.Timestamp > int64(item.entry.TTL+StaleMaxAge) {
+				continue
+			}
+			snapshot.Entries = append(snapshot.Entries, persistedCacheItem{
+				Key:   key,
+				Entry: cloneCacheEntry(item.entry),
+			})
+		}
+	}
+	mc.mu.RUnlock()
+
+	dir := filepath.Dir(mc.persistPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	tmp := mc.persistPath + ".tmp"
+	file, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	// marshal snapshot with msgpack and write atomically
+	encoded, err := msgpack.Marshal(&snapshot)
+	if err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.WriteFile(tmp, encoded, 0644); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, mc.persistPath); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+
+	LogDebug("CACHE: snapshot saved to %s (%d entries, %d bytes)", mc.persistPath, len(snapshot.Entries), len(encoded))
+
+	return nil
 }
 
 // Close shuts down the memory cache.
@@ -541,274 +704,42 @@ func (mc *MemoryCache) Close() error {
 		return nil
 	}
 
+	if mc.persistStop != nil {
+		close(mc.persistStop)
+		if mc.persistDone != nil {
+			select {
+			case <-mc.persistDone:
+			case <-time.After(IdleTimeout):
+				LogWarn("CACHE: persist worker shutdown timeout")
+			}
+		}
+	}
+
+	if mc.persistPath != "" {
+		if err := mc.persistSnapshotToDisk(); err != nil {
+			LogWarn("CACHE: final snapshot failed: %v", err)
+		} else {
+			LogInfo("CACHE: snapshot flushed to %s", mc.persistPath)
+		}
+	}
+
 	mc.mu.Lock()
 	mc.entries = nil
 	mc.order = nil
+	mc.ptrIndex = nil
 	mc.mu.Unlock()
+
 	LogInfo("CACHE: Memory cache shut down")
 	return nil
 }
 
-// NewRedisCache creates a new Redis-backed cache
-func NewRedisCache(config *ServerConfig) (*RedisCache, error) {
-	logging.Disable()
-
-	redisSettings := config.Server.Features.Cache.Redis
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     redisSettings.Address,
-		Password: redisSettings.Password,
-		DB:       redisSettings.Database,
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
-	defer cancel()
-
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis connection: %w", err)
-	}
-
-	cacheCtx, cacheCancel := context.WithCancelCause(context.Background())
-	bgGroup, bgCtx := errgroup.WithContext(cacheCtx)
-
-	cache := &RedisCache{
-		client:  rdb,
-		config:  config,
-		ctx:     cacheCtx,
-		cancel:  cacheCancel,
-		bgGroup: bgGroup,
-		bgCtx:   bgCtx,
-	}
-
-	LogInfo("CACHE: Redis cache initialized")
-	return cache, nil
-}
-
-// Get retrieves a value from the cache
-func (rc *RedisCache) Get(key string) (*CacheEntry, bool, bool) {
-	defer HandlePanic("Redis cache get")
-
-	if atomic.LoadInt32(&rc.closed) != 0 {
-		return nil, false, false
-	}
-
-	ctx, cancel := context.WithTimeout(rc.ctx, OperationTimeout)
-	defer cancel()
-
-	data, err := rc.client.Get(ctx, key).Result()
-	if err != nil {
-		return nil, false, false
-	}
-
-	var entry CacheEntry
-	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		rc.bgGroup.Go(func() error {
-			defer HandlePanic("Clean corrupted cache")
-			cleanCtx, cleanCancel := context.WithTimeout(rc.bgCtx, OperationTimeout)
-			defer cleanCancel()
-			if err := rc.client.Del(cleanCtx, key).Err(); err != nil {
-				LogError("CACHE: Failed to clean corrupted cache key %s: %v", key, err)
-				return nil
-			}
-			return nil
-		})
-		return nil, false, false
-	}
-
-	isExpired := entry.IsExpired()
-
-	entry.AccessTime = time.Now().Unix()
-	rc.bgGroup.Go(func() error {
-		defer HandlePanic("Update access time")
-		if atomic.LoadInt32(&rc.closed) == 0 {
-			updateCtx, updateCancel := context.WithTimeout(rc.bgCtx, OperationTimeout)
-			defer updateCancel()
-			if data, err := json.Marshal(entry); err == nil {
-				if err := rc.client.Set(updateCtx, key, data, redis.KeepTTL).Err(); err != nil {
-					LogError("CACHE: Failed to update access time for key %s: %v", key, err)
-				}
-			}
-		}
-		return nil
-	})
-
-	return &entry, true, isExpired
-}
-
-// Set stores a value in the cache
-func (rc *RedisCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
-	defer HandlePanic("Redis cache set")
-
-	if atomic.LoadInt32(&rc.closed) != 0 {
-		return
-	}
-
-	allRRs := slices.Concat(answer, authority, additional)
-	cacheTTL := calculateTTL(allRRs)
-	now := time.Now().Unix()
-
-	entry := &CacheEntry{
-		Answer:      compactRecords(answer),
-		Authority:   compactRecords(authority),
-		Additional:  compactRecords(additional),
-		TTL:         cacheTTL,
-		OriginalTTL: cacheTTL,
-		Timestamp:   now,
-		Validated:   validated,
-		AccessTime:  now,
-	}
-
-	if ecs != nil {
-		entry.ECSFamily = ecs.Family
-		entry.ECSSourcePrefix = ecs.SourcePrefix
-		entry.ECSScopePrefix = ecs.ScopePrefix
-		entry.ECSAddress = ecs.Address.String()
-	}
-
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(rc.ctx, OperationTimeout)
-	defer cancel()
-
-	expiration := time.Duration(cacheTTL)*time.Second + time.Duration(StaleMaxAge)*time.Second
-	rc.client.Set(ctx, key, data, expiration)
-
-	// Maintain Redis reverse PTR index for A/AAAA answers so PTR lookups can
-	// fall back to Redis when memory cache has no result.
-	if len(answer) > 0 {
-		rc.updateRedisPTRIndex(ctx, answer, now)
-	}
-}
-
-// updateRedisPTRIndex updates the Redis reverse PTR index for A and AAAA records in the answer section.
-func (rc *RedisCache) updateRedisPTRIndex(ctx context.Context, answer []dns.RR, timestamp int64) {
-	for _, rr := range answer {
-		if rr == nil {
-			continue
-		}
-
-		var ip net.IP
-		switch r := rr.(type) {
-		case *dns.A:
-			ip = r.A
-		case *dns.AAAA:
-			ip = r.AAAA
-		default:
-			continue
-		}
-
-		if ip == nil {
-			continue
-		}
-
-		ptrKey := rc.ptrIndexKey(ip)
-		expiresAt := float64(timestamp + int64(rr.Header().Ttl))
-		member := dns.Fqdn(rr.Header().Name)
-
-		if err := rc.client.ZAdd(ctx, ptrKey, redis.Z{Score: expiresAt, Member: member}).Err(); err != nil {
-			LogError("CACHE: Failed to update PTR index for %s: %v", ptrKey, err)
-			continue
-		}
-
-		if err := rc.client.Expire(ctx, ptrKey, time.Duration(int64(rr.Header().Ttl)+int64(StaleMaxAge))*time.Second).Err(); err != nil {
-			LogError("CACHE: Failed to set expiration for PTR index %s: %v", ptrKey, err)
-		}
-	}
-}
-
-// ptrIndexKey generates the Redis key for the PTR index of a given IP address.
-func (rc *RedisCache) ptrIndexKey(ip net.IP) string {
-	return fmt.Sprintf("%sptr:%s", RedisPrefixDNS, ip.String())
-}
-
-// ReverseLookup searches the Redis cache for A or AAAA answers that match the provided IP address and returns candidate reverse PTR targets.
-func (rc *RedisCache) ReverseLookup(ip net.IP) []reverseLookupResult {
-	if ip == nil || atomic.LoadInt32(&rc.closed) != 0 {
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(rc.ctx, OperationTimeout)
-	defer cancel()
-
-	ptrKey := rc.ptrIndexKey(ip)
-	now := float64(time.Now().Unix())
-	if err := rc.client.ZRemRangeByScore(ctx, ptrKey, "-inf", fmt.Sprintf("%f", now)).Err(); err != nil {
-		LogError("CACHE: Failed to clean expired PTR index %s: %v", ptrKey, err)
-	}
-
-	members, err := rc.client.ZRangeWithScores(ctx, ptrKey, 0, -1).Result()
-	if err != nil || len(members) == 0 {
-		return nil
-	}
-
-	results := make([]reverseLookupResult, 0, len(members))
-	for _, z := range members {
-		name, ok := z.Member.(string)
-		if !ok || name == "" {
-			continue
-		}
-
-		expiresAt := int64(z.Score)
-		ttl := uint32(expiresAt - time.Now().Unix())
-		if ttl == 0 {
-			continue
-		}
-		results = append(results, reverseLookupResult{Name: name, TTL: ttl})
-	}
-
-	if len(results) == 0 {
-		return nil
-	}
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Name < results[j].Name
-	})
-	return results
-}
-
-// Close shuts down the Redis cache
-func (rc *RedisCache) Close() error {
-	if !atomic.CompareAndSwapInt32(&rc.closed, 0, 1) {
-		return nil
-	}
-
-	LogInfo("CACHE: Shutting down Redis cache")
-
-	rc.cancel(errors.New("redis cache shutdown"))
-
-	done := make(chan error, 1)
-	go func() {
-		defer HandlePanic("Redis background group wait")
-		done <- rc.bgGroup.Wait()
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			LogError("CACHE: Background goroutine error: %v", err)
-		}
-		LogDebug("CACHE: All Redis background goroutines finished gracefully")
-	case <-time.After(IdleTimeout):
-		LogWarn("CACHE: Redis background goroutine shutdown timeout")
-	}
-
-	if err := rc.client.Close(); err != nil {
-		LogError("CACHE: Redis client shutdown failed: %v", err)
-	}
-
-	LogInfo("CACHE: Redis cache shut down")
-	return nil
-}
-
 // CacheEntry stores serialized DNS response data and metadata.
-// IsExpired checks if the cache entry is expired
+// IsExpired checks if the cache entry is expired.
 func (c *CacheEntry) IsExpired() bool {
 	return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL)
 }
 
-// ShouldRefresh checks if the cache entry should be refreshed
+// ShouldRefresh checks if the cache entry should be refreshed.
 func (c *CacheEntry) ShouldRefresh() bool {
 	if c == nil {
 		return false
@@ -846,7 +777,6 @@ func (c *CacheEntry) ShouldPrefetch(thresholdPercent int) bool {
 		return false
 	}
 
-	// Ceiling division to avoid a zero threshold window when original TTL is small.
 	threshold := int64((originalTTL*thresholdPercent + 99) / 100)
 	if threshold < 1 {
 		threshold = 1
@@ -868,7 +798,7 @@ func (c *CacheEntry) CanServeExpired(maxAgeSeconds int) bool {
 	return expiredAge <= int64(maxAgeSeconds)
 }
 
-// GetRemainingTTL returns the remaining TTL for the cache entry
+// GetRemainingTTL returns the remaining TTL for the cache entry.
 func (c *CacheEntry) GetRemainingTTL() uint32 {
 	if c == nil {
 		return 0
@@ -889,7 +819,7 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	return uint32(staleTTLRemaining)
 }
 
-// GetECSOption returns the ECS option from the cache entry
+// GetECSOption returns the ECS option from the cache entry.
 func (c *CacheEntry) GetECSOption() *ECSOption {
 	if c == nil || c.ECSAddress == "" {
 		return nil
@@ -902,124 +832,5 @@ func (c *CacheEntry) GetECSOption() *ECSOption {
 			Address:      ip,
 		}
 	}
-	return nil
-}
-
-// NewHybridCache creates an in-memory first-level cache with Redis persistence.
-func NewHybridCache(memory *MemoryCache, redisCache *RedisCache) *HybridCache {
-	ctx, cancel := context.WithCancelCause(context.Background())
-	bgGroup, bgCtx := errgroup.WithContext(ctx)
-	return &HybridCache{
-		memory:  memory,
-		redis:   redisCache,
-		ctx:     ctx,
-		cancel:  cancel,
-		bgGroup: bgGroup,
-		bgCtx:   bgCtx,
-	}
-}
-
-// Get retrieves a cache entry from the hybrid cache, checking memory first and falling back to Redis if not found.
-func (hc *HybridCache) Get(key string) (*CacheEntry, bool, bool) {
-	if atomic.LoadInt32(&hc.closed) != 0 {
-		return nil, false, false
-	}
-
-	if entry, found, isExpired := hc.memory.Get(key); found {
-		return entry, found, isExpired
-	}
-
-	if hc.redis == nil {
-		return nil, false, false
-	}
-
-	entry, found, isExpired := hc.redis.Get(key)
-	if !found {
-		return nil, false, false
-	}
-
-	hc.memory.SetEntry(key, entry)
-	return entry, true, isExpired
-}
-
-// ReverseLookup performs a reverse lookup for the given IP address, checking memory first and falling back to Redis if not found.
-func (hc *HybridCache) ReverseLookup(ip net.IP) []reverseLookupResult {
-	if hc == nil {
-		return nil
-	}
-
-	if hc.memory != nil {
-		if results := hc.memory.ReverseLookup(ip); len(results) > 0 {
-			return results
-		}
-	}
-
-	if hc.redis == nil {
-		return nil
-	}
-
-	results := hc.redis.ReverseLookup(ip)
-	return results
-}
-
-// Set stores a cache entry in the hybrid cache, writing to memory and asynchronously writing through to Redis if enabled.
-func (hc *HybridCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
-	if atomic.LoadInt32(&hc.closed) != 0 {
-		return
-	}
-
-	hc.memory.Set(key, answer, authority, additional, validated, ecs)
-	if hc.redis == nil {
-		return
-	}
-
-	hc.bgGroup.Go(func() error {
-		defer HandlePanic("Hybrid cache write-through")
-		if atomic.LoadInt32(&hc.closed) != 0 {
-			return nil
-		}
-		hc.redis.Set(key, answer, authority, additional, validated, ecs)
-		return nil
-	})
-}
-
-// Close shuts down the hybrid cache and all underlying caches.
-func (hc *HybridCache) Close() error {
-	if !atomic.CompareAndSwapInt32(&hc.closed, 0, 1) {
-		return nil
-	}
-
-	LogInfo("CACHE: Shutting down hybrid cache")
-	hc.cancel(errors.New("hybrid cache shutdown"))
-
-	if hc.memory != nil {
-		if err := hc.memory.Close(); err != nil {
-			LogError("CACHE: Memory cache shutdown failed: %v", err)
-		}
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		defer HandlePanic("Hybrid cache background wait")
-		done <- hc.bgGroup.Wait()
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			LogError("CACHE: Hybrid background goroutine error: %v", err)
-		}
-		LogDebug("CACHE: Hybrid background goroutines finished gracefully")
-	case <-time.After(IdleTimeout):
-		LogWarn("CACHE: Hybrid background goroutine shutdown timeout")
-	}
-
-	if hc.redis != nil {
-		if err := hc.redis.Close(); err != nil {
-			LogError("CACHE: Redis cache shutdown failed: %v", err)
-		}
-	}
-
-	LogInfo("CACHE: Hybrid cache shut down")
 	return nil
 }

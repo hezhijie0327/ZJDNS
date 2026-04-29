@@ -1,6 +1,6 @@
 # ZJDNS Server
 
-🚀 高性能递归 DNS 解析服务器，基于 Go 语言开发，支持内存/Redis 缓存、DNSSEC 验证、ECS、DoT/DoQ/DoH/DoH3 等高级功能。
+🚀 高性能递归 DNS 解析服务器，基于 Go 语言开发，支持高性能 LRU 内存缓存（可落盘持久化）、DNSSEC 验证、ECS、DoT/DoQ/DoH/DoH3 等高级功能。
 
 > ⚠️ **警告**
 > 这个项目是一个 Vibe Coding 产品，具有复杂的代码结构，尚未在生产环境中得到充分验证。请不要在生产环境中使用。
@@ -63,15 +63,15 @@
 
 ### 💾 缓存系统
 
-| 模式            | 触发条件     | 说明                    |
-| --------------- | ------------ | ----------------------- |
-| **MemoryCache** | 未配置 Redis | 纯 LRU 内存缓存         |
-| **HybridCache** | 配置 Redis   | 内存优先 + Redis 持久化 |
+| 模式            | 说明                                     |
+| --------------- | ---------------------------------------- |
+| **MemoryCache** | 纯 LRU 内存缓存 + 可选定时磁盘快照持久化 |
 
-**HybridCache 行为**：
+**持久化行为**：
 
-- **读**：内存优先 → 未命中回退 Redis → Redis 命中自动回填内存
-- **写**：立即更新内存 + 异步写入 Redis
+- **启动恢复**：从快照文件加载缓存（自动跳过过旧/无效记录）
+- **后台持久化**：按 `server.features.cache.memory.persist.interval` 定时落盘
+- **安全写入**：写入临时文件后原子替换，降低损坏风险
 
 **缓存特性**：
 
@@ -79,14 +79,14 @@
 - **预取机制**：后台刷新即将过期的缓存记录
 - **ECS 感知缓存**：基于客户端子网的缓存分区
 - **PTR 反查优化**：利用缓存中 A/AAAA 记录直接生成 PTR 响应
-- **访问限流**：减少 Redis 访问时间更新操作
+- **高性能内存路径**：所有读写请求均为本地内存路径
 
 ### 📊 统计与监控
 
 - 请求计数器（按协议：UDP、TCP、DoT、DoQ、DoH、DoH3）
 - 缓存命中率、重写次数、劫持检测次数、过期响应次数
 - 平均响应时间、Fallback 服务器使用统计
-- Redis 持久化 + 定期重置（需配置 `stats.reset_interval`）
+- 纯内存统计 + 定期重置（可配置 `stats.reset_interval`）
 - **pprof 性能分析**：`http://127.0.0.1:6060/debug/pprof/`
 
 ---
@@ -134,7 +134,7 @@ graph TB
     subgraph "查询处理链"
         RM[RewriteManager<br>域名重写]
         EM[EDNSManager<br>ECS/Cookie/EDE/Padding]
-        CM[CacheManager<br>内存/Redis/混合缓存]
+        CM[CacheManager<br>内存 LRU + 磁盘快照]
         QM[QueryManager<br>查询路由]
     end
 
@@ -155,7 +155,6 @@ graph TB
     subgraph "外部依赖"
         EE[上游 DNS 服务器]
         GG[根 DNS 服务器]
-        FF[Redis 服务器<br>可选]
     end
 
     subgraph "后台任务"
@@ -172,7 +171,6 @@ graph TB
     QM --> RR --> QC --> GG
     QM --> CH
     B --> SM --> DS & HP & CIDR
-    CM -.-> FF
     B --> BG
 
     classDef client fill:#3498db,stroke:#2980b9,color:#fff
@@ -189,7 +187,7 @@ graph TB
     class RM,EM,CM,QM query
     class UH,RR,CH,QC query
     class SM,DS,HP,CIDR security
-    class EE,GG,FF external
+    class EE,GG external
     class BG bg
 ```
 
@@ -269,7 +267,7 @@ sequenceDiagram
 | `version.go`       | 版本信息 (`Version`, `CommitHash`, `BuildTime`，通过 ldflags 注入)          |
 | `config.go`        | 配置管理（`ServerConfig`、JSON 验证、DDR 记录、CHAOS TXT 记录）             |
 | `server.go`        | 服务器核心（`DNSServer`、UDP/TCP 处理器、统一查询处理、信号处理、pprof）    |
-| `cache.go`         | 缓存系统（`CacheManager` 接口、`MemoryCache`、`RedisCache`、`HybridCache`） |
+| `cache.go`         | 缓存系统（`CacheManager` 接口、`MemoryCache`、磁盘快照持久化）              |
 | `resolver.go`      | 解析器（`QueryManager`、`RecursiveResolver`、`CNAMEHandler`、根服务器列表） |
 | `query.go`         | 查询客户端（`QueryClient`、UDP/TCP/DoT/DoQ/DoH/DoH3 协议查询）              |
 | `security.go`      | 安全管理（`DNSSECValidator`、`HijackPrevention`、`SecurityManager`）        |
@@ -278,7 +276,7 @@ sequenceDiagram
 | `cidr.go`          | CIDR 过滤（`CIDRManager`、IP 过滤、REFUSED + EDE 响应）                     |
 | `rewrite.go`       | DNS 重写（`RewriteManager`、域名过滤、自定义响应码、客户端过滤）            |
 | `latency_probe.go` | 延迟探测（A/AAAA 记录速度测试、多协议探测、按延迟重排序）                   |
-| `stats.go`         | 统计管理（`StatsManager`、请求指标、Redis 持久化、定期重置）                |
+| `stats.go`         | 统计管理（`StatsManager`、请求指标、定期重置）                              |
 | `logger.go`        | 日志管理（`LogManager`、`TimeCache`、RNG、全局日志函数）                    |
 | `pool.go`          | 对象池（`MessagePool` 复用 `dns.Msg`、`BufferPool` 复用 `[]byte`）          |
 | `utils.go`         | 工具函数（字符串处理、DNS 记录、缓存键、客户端 IP 提取、`HandlePanic`）     |
@@ -363,5 +361,4 @@ golangci-lint run && golangci-lint fmt
 ## 🙏 致谢
 
 - [miekg/dns](https://github.com/miekg/dns) - Go DNS 库
-- [redis/go-redis](https://github.com/redis/go-redis) - Redis Go 客户端
 - [quic-go/quic-go](https://github.com/quic-go/quic-go) - QUIC 协议实现

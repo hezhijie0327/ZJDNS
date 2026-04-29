@@ -29,7 +29,7 @@ const (
 // ConfigManager handles loading and validating server configuration from files or defaults.
 type ConfigManager struct{}
 
-// ServerConfig represents the complete configuration for the ZJDNS server, including server settings, Redis, upstream servers, rewrite rules, and CIDR client filters.
+// ServerConfig represents the complete configuration for the ZJDNS server, including server settings, upstream servers, rewrite rules, and CIDR client filters.
 type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
 	Upstream []UpstreamServer `json:"upstream"`
@@ -76,15 +76,16 @@ type HTTPSSettings struct {
 	Endpoint string `json:"endpoint"`
 }
 
-// MemoryCacheSettings contains memory cache size options.
-type MemoryCacheSettings struct {
-	Size int `json:"size,omitempty"`
+// CachePersistenceSettings contains disk persistence settings for memory cache snapshots.
+type CachePersistenceSettings struct {
+	File     string `json:"file,omitempty"`
+	Interval int    `json:"interval,omitempty"`
 }
 
-// CacheSettings contains cache-specific configuration for memory and Redis cache backends.
+// CacheSettings contains cache-specific configuration.
 type CacheSettings struct {
-	Memory MemoryCacheSettings `json:"memory,omitempty"`
-	Redis  RedisSettings       `json:"redis,omitempty"`
+	Size    int                      `json:"size,omitempty"`
+	Persist CachePersistenceSettings `json:"persist,omitempty"`
 }
 
 // FeatureFlags enables optional server features.
@@ -101,14 +102,6 @@ type FeatureFlags struct {
 type StatsSettings struct {
 	Interval      int `json:"interval,omitempty"`
 	ResetInterval int `json:"reset_interval,omitempty"`
-}
-
-// RedisSettings contains Redis connection settings for caching and stats.
-type RedisSettings struct {
-	Address   string `json:"address"`
-	Password  string `json:"password"`
-	Database  int    `json:"database"`
-	KeyPrefix string `json:"key_prefix"`
 }
 
 // UpstreamServer defines an upstream DNS or recursive server endpoint.
@@ -229,14 +222,14 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		}
 	}
 
-	if config.Server.Features.Cache.Redis.Address != "" {
-		if _, _, err := net.SplitHostPort(config.Server.Features.Cache.Redis.Address); err != nil {
-			return fmt.Errorf("server.features.cache.redis.address invalid: %w", err)
-		}
+	if config.Server.Features.Cache.Size < 0 {
+		return fmt.Errorf("server.features.cache.size must be non-negative")
 	}
-
-	if config.Server.Features.Cache.Memory.Size < 0 {
-		return fmt.Errorf("server.features.cache.memory.size must be non-negative")
+	if strings.Contains(config.Server.Features.Cache.Persist.File, "..") {
+		return fmt.Errorf("server.features.cache.persist.file must not contain '..'")
+	}
+	if config.Server.Features.Cache.Persist.Interval < 0 {
+		return fmt.Errorf("server.features.cache.persist.interval must be zero or positive")
 	}
 	if config.Server.Features.Stats != nil {
 		if config.Server.Features.Stats.Interval < 0 {
@@ -352,7 +345,8 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config.Server.TLS.HTTPS.Port = DefaultDOHPort
 	config.Server.TLS.HTTPS.Endpoint = DefaultQueryPath
 
-	config.Server.Features.Cache.Memory.Size = DefaultMemoryCacheSize
+	config.Server.Features.Cache.Size = DefaultCacheSize
+	config.Server.Features.Cache.Persist.Interval = int(DefaultCachePersistInterval / time.Second)
 	config.Server.Features.DDR = DDRSettings{Domain: "dns.example.com", IPv4: "127.0.0.1", IPv6: "::1"}
 	config.Server.Features.ECS = DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	config.Server.Features.HijackProtection = true
@@ -631,8 +625,11 @@ func GenerateExampleConfig() string {
 	config.Server.TLS.CertFile = "/path/to/cert.pem"
 	config.Server.TLS.KeyFile = "/path/to/key.pem"
 
-	config.Server.Features.Cache.Redis.Address = "127.0.0.1:6379"
-	config.Server.Features.Cache.Redis.KeyPrefix = "zjdns:"
+	config.Server.Features.Cache.Size = DefaultCacheSize
+	config.Server.Features.Cache.Persist = CachePersistenceSettings{
+		File:     "cache.snapshot",
+		Interval: int(DefaultCachePersistInterval / time.Second),
+	}
 	config.Server.Features.ECS = DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	config.Server.Features.LatencyProbe = []LatencyProbeStep{
 		{Protocol: "ping", Timeout: 100},
