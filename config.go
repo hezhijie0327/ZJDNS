@@ -44,13 +44,20 @@ type ServerSettings struct {
 	Port            string             `json:"port"`
 	Pprof           string             `json:"pprof"`
 	LogLevel        string             `json:"log_level"`
-	DefaultECS      string             `json:"default_ecs_subnet"`
+	DefaultECS      DefaultECSConfig   `json:"default_ecs_subnet"`
 	MemoryCacheSize int                `json:"memory_cache_size,omitempty"`
 	Stats           *StatsSettings     `json:"stats,omitempty"`
 	DDR             DDRSettings        `json:"ddr"`
 	TLS             TLSSettings        `json:"tls"`
 	Features        FeatureFlags       `json:"features"`
 	LatencyProbe    []LatencyProbeStep `json:"latency_probe,omitempty"`
+}
+
+// DefaultECSConfig represents the default ECS configuration for the server, allowing for automatic or specified subnet values for IPv4 and IPv6.
+type DefaultECSConfig struct {
+	IPv4       string `json:"ipv4,omitempty"`
+	IPv6       string `json:"ipv6,omitempty"`
+	PreferIPv4 bool   `json:"prefer_ipv4,omitempty"`
 }
 
 // DDRSettings contains DNS data replacement records and addresses.
@@ -154,14 +161,9 @@ func (cm *ConfigManager) validateConfig(config *ServerConfig) error {
 		LogWarn("CONFIG: Invalid log level '%s', using default: info", config.Server.LogLevel)
 	}
 
-	if config.Server.DefaultECS != "" {
-		ecs := strings.ToLower(config.Server.DefaultECS)
-		validPresets := []string{"auto", "auto_v4", "auto_v6"}
-		isValidPreset := slices.Contains(validPresets, ecs)
-		if !isValidPreset {
-			if _, _, err := net.ParseCIDR(config.Server.DefaultECS); err != nil {
-				return fmt.Errorf("invalid ECS subnet: %w", err)
-			}
+	if !config.Server.DefaultECS.IsEmpty() {
+		if err := config.Server.DefaultECS.Validate(); err != nil {
+			return err
 		}
 	}
 
@@ -315,7 +317,7 @@ func (cm *ConfigManager) getDefaultConfig() *ServerConfig {
 	config := &ServerConfig{}
 	config.Server.Port = DefaultDNSPort
 	config.Server.LogLevel = DefaultLogLevel
-	config.Server.DefaultECS = "auto"
+	config.Server.DefaultECS = DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	config.Server.MemoryCacheSize = DefaultMemoryCacheSize
 	config.Server.DDR.Domain = "dns.example.com"
 	config.Server.DDR.IPv4 = "127.0.0.1"
@@ -342,6 +344,119 @@ func (s *ServerSettings) GetStatsResetInterval() int {
 		return 0
 	}
 	return s.Stats.ResetInterval
+}
+
+func (c *DefaultECSConfig) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+
+	if data[0] != '{' {
+		return fmt.Errorf("default_ecs_subnet must be an object")
+	}
+
+	var aux struct {
+		IPv4       string `json:"ipv4"`
+		IPv6       string `json:"ipv6"`
+		PreferIPv4 bool   `json:"prefer_ipv4"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	c.IPv4 = strings.TrimSpace(aux.IPv4)
+	c.IPv6 = strings.TrimSpace(aux.IPv6)
+	c.PreferIPv4 = aux.PreferIPv4
+	return nil
+}
+
+// MarshalJSON customizes JSON marshalling for DefaultECSConfig to omit empty fields.
+func (c DefaultECSConfig) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		IPv4       string `json:"ipv4,omitempty"`
+		IPv6       string `json:"ipv6,omitempty"`
+		PreferIPv4 bool   `json:"prefer_ipv4,omitempty"`
+	}{
+		IPv4:       c.IPv4,
+		IPv6:       c.IPv6,
+		PreferIPv4: c.PreferIPv4,
+	})
+}
+
+// IsEmpty checks if both IPv4 and IPv6 fields are empty, indicating no default ECS configuration.
+func (c DefaultECSConfig) IsEmpty() bool {
+	return c.IPv4 == "" && c.IPv6 == ""
+}
+
+// Validate checks that at least one of IPv4 or IPv6 is specified and that any specified values are valid (either "auto" or a valid CIDR).
+func (c DefaultECSConfig) Validate() error {
+	if c.IPv4 == "" && c.IPv6 == "" {
+		return errors.New("default_ecs_subnet must specify ipv4 and/or ipv6")
+	}
+	if c.IPv4 != "" {
+		if err := validateECSConfigValue(c.IPv4); err != nil {
+			return fmt.Errorf("invalid default_ecs_subnet.ipv4: %w", err)
+		}
+	}
+	if c.IPv6 != "" {
+		if err := validateECSConfigValue(c.IPv6); err != nil {
+			return fmt.Errorf("invalid default_ecs_subnet.ipv6: %w", err)
+		}
+	}
+	return nil
+}
+
+// HasAuto checks if either IPv4 or IPv6 is set to "auto", indicating that the server should automatically detect the public IP for ECS.
+func (c DefaultECSConfig) HasAuto() bool {
+	if c.IPv4 != "" && isAutoECSValue(c.IPv4) {
+		return true
+	}
+	if c.IPv6 != "" && isAutoECSValue(c.IPv6) {
+		return true
+	}
+	return false
+}
+
+// GetValueForQType returns the appropriate default ECS value based on the query type (A or AAAA) and the configuration. It prioritizes matching the query type but falls back to the other if the preferred one is not set. If neither is set, it returns an empty string.
+func (c DefaultECSConfig) GetValueForQType(qtype uint16) string {
+	if qtype == dns.TypeA {
+		if c.IPv4 != "" {
+			return c.IPv4
+		}
+		return c.IPv6
+	}
+	if qtype == dns.TypeAAAA {
+		if c.IPv6 != "" {
+			return c.IPv6
+		}
+		return c.IPv4
+	}
+	if c.PreferIPv4 {
+		if c.IPv4 != "" {
+			return c.IPv4
+		}
+		return c.IPv6
+	}
+	if c.IPv6 != "" {
+		return c.IPv6
+	}
+	return c.IPv4
+}
+
+// validateECSConfigValue checks if the provided ECS configuration value is valid, allowing for "auto" or a valid CIDR notation.
+func validateECSConfigValue(value string) error {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "auto" {
+		return nil
+	}
+	if _, _, err := net.ParseCIDR(value); err != nil {
+		return err
+	}
+	return nil
+}
+
+// isAutoECSValue checks if the given value is "auto" (case-insensitive), indicating that the server should automatically detect the public IP for ECS.
+func isAutoECSValue(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "auto")
 }
 
 // shouldEnableDDR checks if DDR should be enabled
@@ -479,7 +594,7 @@ func GenerateExampleConfig() string {
 
 	config.Server.Pprof = DefaultPprofPort
 	config.Server.LogLevel = DefaultLogLevel
-	config.Server.DefaultECS = "auto"
+	config.Server.DefaultECS = DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	config.Server.Stats = &StatsSettings{}
 	config.Server.TLS.CertFile = "/path/to/cert.pem"
 	config.Server.TLS.KeyFile = "/path/to/key.pem"

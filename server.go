@@ -659,7 +659,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	}
 
 	if ecsOpt == nil {
-		ecsOpt = s.ednsMgr.GetDefaultECS()
+		ecsOpt = s.ednsMgr.GetDefaultECSForQType(question.Qtype)
 	}
 
 	cacheKey := BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC, s.config.Redis.KeyPrefix)
@@ -1085,7 +1085,7 @@ func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool,
 	}
 
 	if ecsOpt == nil {
-		ecsOpt = s.ednsMgr.GetDefaultECS()
+		ecsOpt = s.ednsMgr.GetDefaultECSForQType(req.Question[0].Qtype)
 	}
 
 	// Generate cookie response only when the client sent a cookie option.

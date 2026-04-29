@@ -94,8 +94,9 @@ type ECSOption struct {
 
 // EDNSManager handles EDNS option parsing and construction for DNS messages
 type EDNSManager struct {
-	defaultECS       atomic.Pointer[ECSOption]
-	defaultECSConfig string
+	defaultECSIPv4   atomic.Pointer[ECSOption]
+	defaultECSIPv6   atomic.Pointer[ECSOption]
+	defaultECSConfig DefaultECSConfig
 	detector         *IPDetector
 	cookieGenerator  *CookieGenerator
 }
@@ -156,36 +157,83 @@ func (d *IPDetector) detectPublicIP(forceIPv6 bool) net.IP {
 	return ip
 }
 
-// NewEDNSManager creates a new EDNS manager with optional default ECS subnet
-func NewEDNSManager(defaultSubnet string) (*EDNSManager, error) {
+// NewEDNSManager creates a new EDNS manager with default ECS subnet configuration.
+func NewEDNSManager(defaultECS DefaultECSConfig) (*EDNSManager, error) {
 	manager := &EDNSManager{
+		defaultECSConfig: defaultECS,
 		detector: &IPDetector{
 			httpClient: &http.Client{Timeout: OperationTimeout},
 		},
 		cookieGenerator: NewCookieGenerator(),
 	}
 
-	if defaultSubnet != "" {
-		manager.defaultECSConfig = strings.ToLower(defaultSubnet)
-		ecs, err := manager.parseECSConfig(defaultSubnet)
-		if err != nil {
-			return nil, fmt.Errorf("parse ECS config: %w", err)
+	if !defaultECS.IsEmpty() {
+		if defaultECS.IPv4 != "" {
+			ecs, err := manager.parseECSConfig(defaultECS.IPv4, false)
+			if err != nil {
+				return nil, fmt.Errorf("parse default_ecs_subnet.ipv4: %w", err)
+			}
+			if ecs != nil {
+				manager.defaultECSIPv4.Store(ecs)
+				LogInfo("EDNS: Default ECS IPv4: %s/%d", ecs.Address, ecs.SourcePrefix)
+			}
 		}
-		if ecs != nil {
-			manager.defaultECS.Store(ecs)
-			LogInfo("EDNS: Default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
+		if defaultECS.IPv6 != "" {
+			ecs, err := manager.parseECSConfig(defaultECS.IPv6, true)
+			if err != nil {
+				return nil, fmt.Errorf("parse default_ecs_subnet.ipv6: %w", err)
+			}
+			if ecs != nil {
+				manager.defaultECSIPv6.Store(ecs)
+				LogInfo("EDNS: Default ECS IPv6: %s/%d", ecs.Address, ecs.SourcePrefix)
+			}
 		}
 	}
 
 	return manager, nil
 }
 
-// GetDefaultECS returns the default ECS option if configured
+// GetDefaultECS returns the first available default ECS option if configured.
 func (em *EDNSManager) GetDefaultECS() *ECSOption {
 	if em == nil {
 		return nil
 	}
-	return em.defaultECS.Load()
+	if ecs := em.defaultECSIPv4.Load(); ecs != nil {
+		return ecs
+	}
+	return em.defaultECSIPv6.Load()
+}
+
+// GetDefaultECSForQType returns the default ECS option for a specific question type.
+func (em *EDNSManager) GetDefaultECSForQType(qtype uint16) *ECSOption {
+	if em == nil {
+		return nil
+	}
+	if em.defaultECSConfig.IsEmpty() {
+		return nil
+	}
+	if qtype == dns.TypeA {
+		if ecs := em.defaultECSIPv4.Load(); ecs != nil {
+			return ecs
+		}
+		return em.defaultECSIPv6.Load()
+	}
+	if qtype == dns.TypeAAAA {
+		if ecs := em.defaultECSIPv6.Load(); ecs != nil {
+			return ecs
+		}
+		return em.defaultECSIPv4.Load()
+	}
+	if em.defaultECSConfig.PreferIPv4 {
+		if ecs := em.defaultECSIPv4.Load(); ecs != nil {
+			return ecs
+		}
+		return em.defaultECSIPv6.Load()
+	}
+	if ecs := em.defaultECSIPv6.Load(); ecs != nil {
+		return ecs
+	}
+	return em.defaultECSIPv4.Load()
 }
 
 // ParseFromDNS extracts ECS option from a DNS message
@@ -372,15 +420,11 @@ func (em *EDNSManager) AddToMessage(msg *dns.Msg, ecs *ECSOption, clientRequeste
 		len(opt.Option))
 }
 
-// parseECSConfig parses ECS configuration string (auto, auto_v4, auto_v6, or CIDR)
-func (em *EDNSManager) parseECSConfig(subnet string) (*ECSOption, error) {
-	switch strings.ToLower(subnet) {
+// parseECSConfig parses ECS configuration string (auto or CIDR)
+func (em *EDNSManager) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, error) {
+	switch strings.ToLower(strings.TrimSpace(subnet)) {
 	case "auto":
-		return em.detectPublicIP(false, true)
-	case "auto_v4":
-		return em.detectPublicIP(false, false)
-	case "auto_v6":
-		return em.detectPublicIP(true, false)
+		return em.detectPublicIP(forceIPv6, false)
 	default:
 		_, ipNet, err := net.ParseCIDR(subnet)
 		if err != nil {
@@ -404,12 +448,7 @@ func (em *EDNSManager) shouldRefreshDefaultECS() bool {
 	if em == nil {
 		return false
 	}
-	switch em.defaultECSConfig {
-	case "auto", "auto_v4", "auto_v6":
-		return true
-	default:
-		return false
-	}
+	return em.defaultECSConfig.HasAuto()
 }
 
 // RefreshDefaultECS re-detects the default ECS address for auto ECS modes.
@@ -418,30 +457,36 @@ func (em *EDNSManager) RefreshDefaultECS() (*ECSOption, error) {
 		return nil, errors.New("EDNS manager is not initialized")
 	}
 
-	if !em.shouldRefreshDefaultECS() {
+	if em == nil || em.defaultECSConfig.IsEmpty() {
 		return nil, nil
 	}
 
-	var ecs *ECSOption
-	var err error
-	switch em.defaultECSConfig {
-	case "auto":
-		ecs, err = em.detectPublicIP(false, true)
-	case "auto_v4":
-		ecs, err = em.detectPublicIP(false, false)
-	case "auto_v6":
-		ecs, err = em.detectPublicIP(true, false)
+	var lastECS *ECSOption
+	var firstErr error
+	if em.defaultECSConfig.IPv4 != "" {
+		ecs, err := em.parseECSConfig(em.defaultECSConfig.IPv4, false)
+		if err != nil {
+			firstErr = fmt.Errorf("refresh IPv4 ECS: %w", err)
+		} else if ecs != nil {
+			em.defaultECSIPv4.Store(ecs)
+			lastECS = ecs
+		}
+	}
+	if em.defaultECSConfig.IPv6 != "" {
+		ecs, err := em.parseECSConfig(em.defaultECSConfig.IPv6, true)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("refresh IPv6 ECS: %w", err)
+			} else {
+				firstErr = fmt.Errorf("%v; refresh IPv6 ECS: %w", firstErr, err)
+			}
+		} else if ecs != nil {
+			em.defaultECSIPv6.Store(ecs)
+			lastECS = ecs
+		}
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("detect public IP: %w", err)
-	}
-	if ecs == nil {
-		return nil, errors.New("public IP detection failed")
-	}
-
-	em.defaultECS.Store(ecs)
-	return ecs, nil
+	return lastECS, firstErr
 }
 
 // detectPublicIP detects the public IP address using external service
