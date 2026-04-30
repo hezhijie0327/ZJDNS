@@ -110,7 +110,7 @@ func NewDNSServer(config *ServerConfig) (*DNSServer, error) {
 		ednsMgr:           ednsManager,
 		rewriteMgr:        rewriteManager,
 		cidrMgr:           cidrManager,
-		statsMgr:          NewStatsManager(config),
+		statsMgr:          NewStatsManager(config, cache),
 		cacheMgr:          cache,
 		ctx:               ctx,
 		cancel:            cancel,
@@ -263,7 +263,7 @@ func (s *DNSServer) setupSignalHandling() {
 	})
 }
 
-// logStatsNow fetches current statistics and logs them in JSON format.
+// logStatsNow fetches current statistics, logs them in JSON format, and persists them via the cache manager.
 func (s *DNSServer) logStatsNow(trigger string) {
 	if s == nil || s.statsMgr == nil {
 		return
@@ -290,16 +290,7 @@ func (s *DNSServer) logStatsNow(trigger string) {
 
 	LogInfo("STATS: trigger=%s payload=%s", trigger, payload)
 
-	statsFile := strings.TrimSpace(s.config.Server.Features.Stats.File)
-	if statsFile == "" {
-		return
-	}
-
-	if err := s.statsMgr.SaveToFile(statsFile); err != nil {
-		LogWarn("STATS: trigger=%s failed to persist stats to %s: %v", trigger, statsFile, err)
-		return
-	}
-	LogInfo("STATS: trigger=%s persisted stats to %s", trigger, statsFile)
+	s.statsMgr.Persist(s.cacheMgr)
 }
 
 // shutdownServer performs graceful server shutdown, closing all connections

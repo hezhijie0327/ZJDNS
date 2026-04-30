@@ -101,9 +101,8 @@ type FeatureFlags struct {
 
 // StatsSettings configures statistics collection and reset behavior.
 type StatsSettings struct {
-	Interval      int    `json:"interval,omitempty"`
-	ResetInterval int    `json:"reset_interval,omitempty"`
-	File          string `json:"file,omitempty"`
+	Interval      int `json:"interval,omitempty"`
+	ResetInterval int `json:"reset_interval,omitempty"`
 }
 
 // UpstreamServer defines an upstream DNS or recursive server endpoint.
@@ -372,6 +371,15 @@ func (s *ServerSettings) GetStatsResetInterval() int {
 	return s.Features.Stats.ResetInterval
 }
 
+// GetStatsPersistTTL returns the TTL to use for persisted stats snapshots in seconds.
+func (s *ServerSettings) GetStatsPersistTTL() int {
+	if s == nil || s.Features.Stats == nil || s.Features.Stats.ResetInterval <= 0 {
+		return DefaultStatsPersistTTL
+	}
+	return s.Features.Stats.ResetInterval
+}
+
+// UnmarshalJSON customizes JSON unmarshalling for DefaultECSConfig to handle empty or null values gracefully and trim whitespace.
 func (c *DefaultECSConfig) UnmarshalJSON(data []byte) error {
 	if len(data) == 0 || string(data) == "null" {
 		return nil
@@ -646,7 +654,6 @@ func GenerateExampleConfig() string {
 	config.Server.Features.Stats = &StatsSettings{
 		Interval:      3600,
 		ResetInterval: 86400,
-		File:          "stats.snapshot",
 	}
 
 	config.Upstream = []UpstreamServer{

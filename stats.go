@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	DefaultStatsPersistTTL = 86400 // Default TTL for persisted stats snapshots in seconds
+
+	StatsPersistKey = "__stats__" // Key used for storing stats snapshot in cache for persistence across restarts
 )
 
 // StatsSnapshot contains the raw collected counters for server metrics.
@@ -89,6 +93,7 @@ type StatsManager struct {
 	mu            sync.RWMutex
 	snapshot      StatsSnapshot
 	resetInterval time.Duration
+	persistTTL    int
 	nextResetAt   int64
 }
 
@@ -145,13 +150,14 @@ func BuildStatsLogJSON(snapshot *StatsSnapshot) ([]byte, error) {
 }
 
 // NewStatsManager creates a new in-memory StatsManager.
-func NewStatsManager(config *ServerConfig) *StatsManager {
+func NewStatsManager(config *ServerConfig, cache CacheManager) *StatsManager {
 	if config == nil {
 		return nil
 	}
 
 	statsMgr := &StatsManager{
-		enabled: true,
+		enabled:    true,
+		persistTTL: config.Server.GetStatsPersistTTL(),
 	}
 
 	resetInterval := config.Server.GetStatsResetInterval()
@@ -160,12 +166,14 @@ func NewStatsManager(config *ServerConfig) *StatsManager {
 		statsMgr.nextResetAt = time.Now().Unix() + int64(statsMgr.resetInterval/time.Second)
 	}
 
-	// If a persistence file is configured, attempt to load previous stats
-	if config.Server.Features.Stats != nil && strings.TrimSpace(config.Server.Features.Stats.File) != "" {
-		if err := statsMgr.LoadFromFile(config.Server.Features.Stats.File); err != nil {
-			LogWarn("STATS: failed to load stats from file %s: %v", config.Server.Features.Stats.File, err)
-		} else {
-			LogInfo("STATS: loaded stats from %s", config.Server.Features.Stats.File)
+	// If cache is available, attempt to restore stats from cache snapshot
+	if cache != nil {
+		if entry, found, _ := cache.Get(StatsPersistKey); found && entry != nil {
+			if err := statsMgr.LoadFromCacheEntry(entry); err != nil {
+				LogWarn("STATS: failed to restore stats from cache: %v", err)
+			} else {
+				LogInfo("STATS: restored stats from cache snapshot")
+			}
 		}
 	}
 
@@ -271,57 +279,63 @@ func (sm *StatsManager) FetchStats(ctx context.Context) (*StatsSnapshot, error) 
 	return &snapshot, nil
 }
 
-// SaveToFile writes the current stats snapshot to the provided file path as JSON.
-// It writes atomically by writing to a temporary file and renaming it.
-func (sm *StatsManager) SaveToFile(filePath string) error {
+// ToCacheEntry serializes the current stats snapshot into a CacheEntry for persistence via the cache system.
+func (sm *StatsManager) ToCacheEntry() (*CacheEntry, error) {
 	if sm == nil || !sm.enabled {
-		return fmt.Errorf("stats disabled")
-	}
-	if strings.TrimSpace(filePath) == "" {
-		return fmt.Errorf("empty file path")
+		return nil, fmt.Errorf("stats disabled")
 	}
 
 	snap := sm.Snapshot()
-	data, err := json.MarshalIndent(snap, "", "  ")
+	data, err := json.Marshal(snap)
 	if err != nil {
-		return fmt.Errorf("marshal snapshot: %w", err)
+		return nil, fmt.Errorf("marshal stats snapshot: %w", err)
 	}
 
-	dir := filepath.Dir(filePath)
-	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create dirs: %w", err)
-		}
+	now := time.Now().Unix()
+	ttl := sm.persistTTL
+	if ttl <= 0 {
+		ttl = DefaultStatsPersistTTL
 	}
-
-	tmp := filePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("write tmp file: %w", err)
-	}
-	if err := os.Rename(tmp, filePath); err != nil {
-		return fmt.Errorf("rename tmp file: %w", err)
-	}
-	return nil
+	return &CacheEntry{
+		Timestamp:   now,
+		AccessTime:  now,
+		TTL:         ttl,
+		OriginalTTL: ttl,
+		Payload:     data,
+	}, nil
 }
 
-// LoadFromFile loads stats from a JSON file into the StatsManager snapshot.
-func (sm *StatsManager) LoadFromFile(filePath string) error {
+// LoadFromCacheEntry restores stats from a CacheEntry previously created by ToCacheEntry.
+func (sm *StatsManager) LoadFromCacheEntry(entry *CacheEntry) error {
 	if sm == nil {
 		return fmt.Errorf("stats manager nil")
 	}
-	if strings.TrimSpace(filePath) == "" {
-		return fmt.Errorf("empty file path")
+	if entry == nil || len(entry.Payload) == 0 {
+		return fmt.Errorf("empty cache entry")
 	}
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return err
-	}
+
 	var snap StatsSnapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return fmt.Errorf("unmarshal snapshot: %w", err)
+	if err := json.Unmarshal(entry.Payload, &snap); err != nil {
+		return fmt.Errorf("unmarshal stats snapshot: %w", err)
 	}
+
 	sm.mu.Lock()
 	sm.snapshot = snap
 	sm.mu.Unlock()
 	return nil
+}
+
+// Persist saves the current stats snapshot into the provided cache manager.
+func (sm *StatsManager) Persist(cache CacheManager) {
+	if sm == nil || !sm.enabled || cache == nil {
+		return
+	}
+
+	entry, err := sm.ToCacheEntry()
+	if err != nil {
+		LogDebug("STATS: failed to serialize stats for cache persistence: %v", err)
+		return
+	}
+
+	cache.SetEntry(StatsPersistKey, entry)
 }

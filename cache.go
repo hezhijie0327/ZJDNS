@@ -54,6 +54,7 @@ type CacheEntry struct {
 	ECSSourcePrefix uint8            `json:"ecs_source_prefix,omitempty"`
 	ECSScopePrefix  uint8            `json:"ecs_scope_prefix,omitempty"`
 	Validated       bool             `json:"validated"`
+	Payload         []byte           `json:"payload,omitempty"`
 }
 
 // CompactRecord stores a compact representation of a DNS RR.
@@ -73,6 +74,7 @@ type reverseLookupResult struct {
 type CacheManager interface {
 	Get(key string) (*CacheEntry, bool, bool)
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption)
+	SetEntry(key string, entry *CacheEntry)
 	Close() error
 }
 

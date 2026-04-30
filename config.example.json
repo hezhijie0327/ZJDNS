@@ -71,8 +71,7 @@
       ],
       "stats": {
         "interval": 3600,
-        "reset_interval": 86400,
-        "file": "stats.snapshot"
+        "reset_interval": 86400
       }
     }
   },
