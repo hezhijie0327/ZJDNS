@@ -3,8 +3,10 @@ package main
 
 import (
 	"container/list"
+	"encoding/gob"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,8 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/miekg/dns"
-	"github.com/vmihailenco/msgpack/v5"
 )
 
 const (
@@ -32,7 +34,9 @@ const (
 	DefaultCachePersistInterval = 30 * time.Second // Default memory cache snapshot interval
 	DefaultCacheSize            = 16384            // Default maximum number of entries in the in-memory cache
 
-	CacheKeyDNSPrefix = "dns:" // Prefix for DNS cache keys
+	CacheKeyDNSPrefix     = "dns:" // Prefix for DNS cache keys
+	CacheSnapshotMagic    = "ZJDNSCACHE-GOB-ZSTD-v1"
+	CacheZSTDEncoderLevel = zstd.SpeedBetterCompression // Compression level for cache snapshot persistence (SpeedFastest, SpeedDefault, SpeedBetterCompression, SpeedBestCompression)
 )
 
 // CacheEntry stores serialized DNS response data, metadata, and ECS state.
@@ -103,6 +107,13 @@ type persistedCacheSnapshot struct {
 type persistedCacheItem struct {
 	Key   string      `json:"key"`
 	Entry *CacheEntry `json:"entry"`
+}
+
+func init() {
+	gob.Register(&persistedCacheSnapshot{})
+	gob.Register(&persistedCacheItem{})
+	gob.Register(&CacheEntry{})
+	gob.Register(&CompactRecord{})
 }
 
 // NewMemoryCache creates a new high-performance in-memory cache.
@@ -583,16 +594,31 @@ func (mc *MemoryCache) startPersistWorker() {
 }
 
 func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
-	data, err := os.ReadFile(mc.persistPath)
+	file, err := os.Open(mc.persistPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil
 		}
 		return 0, err
 	}
+	defer func() { _ = file.Close() }()
+
+	header := make([]byte, len(CacheSnapshotMagic))
+	if _, err := io.ReadFull(file, header); err != nil {
+		return 0, err
+	}
+	if string(header) != CacheSnapshotMagic {
+		return 0, fmt.Errorf("invalid cache snapshot format")
+	}
+
+	decoder, err := zstd.NewReader(file)
+	if err != nil {
+		return 0, err
+	}
+	defer decoder.Close()
 
 	var snapshot persistedCacheSnapshot
-	if err := msgpack.Unmarshal(data, &snapshot); err != nil {
+	if err := gob.NewDecoder(decoder).Decode(&snapshot); err != nil {
 		return 0, err
 	}
 
@@ -673,9 +699,26 @@ func (mc *MemoryCache) persistSnapshotToDisk() error {
 	if err != nil {
 		return err
 	}
-	// marshal snapshot with msgpack and write atomically
-	encoded, err := msgpack.Marshal(&snapshot)
+
+	if _, err := file.WriteString(CacheSnapshotMagic); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+
+	zw, err := zstd.NewWriter(file, zstd.WithEncoderLevel(CacheZSTDEncoderLevel))
 	if err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := gob.NewEncoder(zw).Encode(&snapshot); err != nil {
+		_ = zw.Close()
+		_ = file.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := zw.Close(); err != nil {
 		_ = file.Close()
 		_ = os.Remove(tmp)
 		return err
@@ -684,16 +727,17 @@ func (mc *MemoryCache) persistSnapshotToDisk() error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.WriteFile(tmp, encoded, 0644); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
+
 	if err := os.Rename(tmp, mc.persistPath); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
 
-	LogDebug("CACHE: snapshot saved to %s (%d entries, %d bytes)", mc.persistPath, len(snapshot.Entries), len(encoded))
+	if stat, err := os.Stat(mc.persistPath); err == nil {
+		LogDebug("CACHE: snapshot saved to %s (%d entries, %d bytes)", mc.persistPath, len(snapshot.Entries), stat.Size())
+	} else {
+		LogDebug("CACHE: snapshot saved to %s (%d entries)", mc.persistPath, len(snapshot.Entries))
+	}
 
 	return nil
 }

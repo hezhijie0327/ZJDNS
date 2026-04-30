@@ -25,9 +25,9 @@ golangci-lint run && golangci-lint fmt
 
 - **Protocols**: UDP/TCP (53), DoT (853), DoQ (853), DoH/DoH3 (443)
 - **Features**: DNSSEC validation, ECS, DNS Cookie, EDE, CIDR filtering, DNS rewrite, latency probing, DNS padding (RFC 7830), DDR (RFC 9461/9462), CHAOS TXT records
-- **Cache**: Memory-first with optional Redis persistence (HybridCache). Serve-expired on upstream failure (RFC 8767)
+- **Cache**: Memory LRU cache with optional disk snapshot persistence (gob+zstd). Serve-expired on upstream failure (RFC 8767)
 - **Security**: Hijack prevention (auto TCP fallback), lightweight DNSSEC (AD flag + record presence check)
-- **Stats**: Request statistics with Redis persistence and periodic reset (requires Redis)
+- **Stats**: In-memory request metrics with optional file snapshot persistence and periodic reset
 
 ### Module Structure
 
@@ -36,7 +36,7 @@ golangci-lint run && golangci-lint fmt
 | `main.go`          | Entry point     | CLI flags (`-config`, `-generate-config`, `-version`), server startup    |
 | `version.go`       | Version info    | `Version`, `CommitHash`, `BuildTime` (set via ldflags)                   |
 | `config.go`        | Configuration   | `ServerConfig` struct, `ConfigManager`, JSON validation, DDR records     |
-| `cache.go`         | Cache system    | `CacheManager` interface, `MemoryCache`, `RedisCache`, `HybridCache`     |
+| `cache.go`         | Cache system    | `CacheManager` interface, `MemoryCache` with disk snapshot (gob+zstd)    |
 | `cidr.go`          | CIDR filtering  | `CIDRManager`, IP filtering with REFUSED + EDE response                  |
 | `edns.go`          | EDNS extensions | ECS, DNS Cookie (RFC 7873/9018), EDE (RFC 8914)                          |
 | `rewrite.go`       | DNS rewrite     | `RewriteManager`, domain filtering, custom response codes                |
@@ -45,7 +45,7 @@ golangci-lint run && golangci-lint fmt
 | `query.go`         | Query client    | `QueryClient`, protocol-specific querying (udp/tcp/tls/quic/https/http3) |
 | `resolver.go`      | Resolution      | `QueryManager`, `RecursiveResolver`, `CNAMEHandler`, `ResponseValidator` |
 | `server.go`        | Server core     | `DNSServer`, protocol handlers, signal handling, stats                   |
-| `stats.go`         | Statistics      | `StatsManager`, request metrics, Redis persistence, periodic reset       |
+| `stats.go`         | Statistics      | `StatsManager`, request metrics, file snapshot, periodic reset           |
 | `latency_probe.go` | Latency probing | A/AAAA record speed testing, reordering by latency                       |
 | `logger.go`        | Logging         | `LogManager`, `TimeCache`, RNG, global log funcs (`LogInfo`, `LogError`) |
 | `pool.go`          | Memory pools    | `MessagePool` (`dns.Msg`), `BufferPool` (`[]byte`) via `sync.Pool`       |
@@ -63,9 +63,9 @@ main.go → ConfigManager.LoadConfig() → NewDNSServer() → DNSServer.Start()
 │ 1. EDNSManager (ECS auto-detection)                         │
 │ 2. RewriteManager (domain filtering)                        │
 │ 3. CIDRManager (IP filtering)                               │
-│ 4. CacheManager (Memory/Hybrid based on Redis config)       │
+│ 4. CacheManager (MemoryCache with optional disk snapshot)   │
 │ 5. SecurityManager (DNSSEC + HijackPrevention)              │
-│ 6. StatsManager (request metrics, optional Redis persist)   │
+│ 6. StatsManager (in-memory metrics, optional file snapshot) │
 │ 7. QueryClient (protocol-specific querying)                 │
 │ 8. QueryManager (upstream + recursive resolution)           │
 └─────────────────────────────────────────────────────────────┘
@@ -116,13 +116,13 @@ Dependency updates via `.github/workflows/deps.yml` (manual trigger, pins deps t
 
 ### Go Version
 
-**Required**: Go 1.25.1+ (from `go.mod`)
+**Required**: Go 1.25.1 (from `go.mod`)
 
 **Dependencies** (pinned to master/HEAD, not released versions):
 
+- `github.com/klauspost/compress` - zstd compression for cache snapshots
 - `github.com/miekg/dns` - DNS library
 - `github.com/quic-go/quic-go` - QUIC protocol
-- `github.com/redis/go-redis/v9` - Redis client
 - `golang.org/x/net`, `golang.org/x/sync` - Standard extensions
 
 ## Code Style & Conventions
@@ -138,9 +138,9 @@ import (
     "time"
 
     // Third-party (alphabetical)
+    "github.com/klauspost/compress/zstd"
     "github.com/miekg/dns"
     "github.com/quic-go/quic-go"
-    "github.com/redis/go-redis/v9"
     "golang.org/x/sync/errgroup"
 )
 ```
@@ -193,10 +193,6 @@ LogError("CACHE: failed to refresh %v", err)
     "port": "53",
     "pprof": "6060",
     "log_level": "info",
-    "default_ecs_subnet": "auto",
-    "memory_cache_size": 10000,
-    "stats": { "interval": 0, "reset_interval": 0 },
-    "ddr": { "domain": "dns.example.com", "ipv4": "127.0.0.1", "ipv6": "::1" },
     "tls": {
       "port": "853",
       "cert_file": "/path/to/cert.pem",
@@ -204,14 +200,18 @@ LogError("CACHE: failed to refresh %v", err)
       "self_signed": false,
       "https": { "port": "443", "endpoint": "/dns-query" }
     },
-    "features": { "hijack_protection": true },
-    "latency_probe": [{ "protocol": "ping", "timeout": 100 }, ...]
-  },
-  "redis": {
-    "address": "127.0.0.1:6379",
-    "password": "",
-    "database": 0,
-    "key_prefix": "zjdns:"
+    "features": {
+      "hijack_protection": true,
+      "ddr": { "domain": "dns.example.com", "ipv4": "127.0.0.1", "ipv6": "::1" },
+      "ecs_subnet": { "ipv4": "auto", "ipv6": "auto", "prefer_ipv4": true },
+      "cache": {
+        "size": 16384,
+        "persist": { "file": "cache.snapshot", "interval": 30 },
+        "prefer_stale": true
+      },
+      "latency_probe": [{ "protocol": "ping", "timeout": 100 }, ...],
+      "stats": { "interval": 3600, "reset_interval": 86400, "file": "stats.snapshot" }
+    }
   },
   "upstream": [
     { "address": "223.5.5.5:53", "protocol": "udp" },
@@ -236,17 +236,11 @@ LogError("CACHE: failed to refresh %v", err)
 }
 ```
 
+**Important**: All feature configs live under `server.features`, not directly under `server`. The example config in `config.example.json` is the source of truth.
+
 ### Key Configuration Options
 
-**Cache modes**:
-
-- **No Redis** (`redis.address` empty) → Pure `MemoryCache` (default)
-- **With Redis** → `HybridCache` (memory-first reads, write-through async to Redis)
-
-**HybridCache behavior**:
-
-- **Read**: Memory first → Redis on miss → auto-fill memory from Redis hit
-- **Write**: Update memory immediately + async write to Redis
+**Cache**: Only `MemoryCache` exists. Optional disk snapshot persistence via `server.features.cache.persist` (gob+zstd format). No external cache backend.
 
 **Upstream vs Fallback**:
 
@@ -256,7 +250,7 @@ LogError("CACHE: failed to refresh %v", err)
 
 **Upstream protocols**: `udp`, `tcp`, `tls`, `quic`, `https`, `http3`, or empty for `builtin_recursive`
 
-**ECS (EDNS Client Subnet)**: `auto` | `auto_v4` | `auto_v6` | manual CIDR
+**ECS (EDNS Client Subnet)**: `auto` | `auto_v4` | `auto_v6` | manual CIDR. Configured under `server.features.ecs_subnet`.
 
 **Rewrite client filtering**:
 
@@ -270,7 +264,7 @@ LogError("CACHE: failed to refresh %v", err)
 DefaultTimeout             = 2 * time.Second
 OperationTimeout           = 3 * time.Second
 IdleTimeout                = 4 * time.Second  // NOT 5s
-DefaultLatencyProbeTimeout = 100 * time.Millisecond  // cache.go
+DefaultLatencyProbeTimeout = 100 * time.Millisecond  // latency_probe.go
 ServeExpiredClientTimeout  = 1800 * time.Millisecond // RFC 8767, NOT 500
 
 // Limits (resolver.go)
@@ -282,7 +276,8 @@ RecursiveIndicator = "builtin_recursive"
 // Cache (cache.go)
 DefaultTTL             = 10
 StaleTTL               = 30
-StaleMaxAge            = 30 * 86400  // 30 days
+StaleMaxAge            = 3 * 86400  // 3 days
+DefaultCacheSize       = 16384
 
 // Buffer sizes (pool.go)
 UDPBufferSize    = 1232
@@ -325,7 +320,7 @@ Pads responses to 468 bytes on secure connections (DoT/DoQ/DoH) only. Configurab
 
 ### DDR (RFC 9461/9462)
 
-Auto-generates SVCB records for DoT/DoH/DoQ discovery via `server.ddr` config section.
+Auto-generates SVCB records for DoT/DoH/DoQ discovery via `server.features.ddr` config section.
 
 ### CHAOS TXT Records
 
@@ -379,7 +374,7 @@ Client → Protocol Handler → DNSServer → RewriteManager → CacheManager
 - Latency probing (A/AAAA speed testing)
 - TLS certificate management
 - Signal handling (graceful shutdown)
-- Stats periodic reset (when Redis configured with `reset_interval`)
+- Stats periodic reset (when `stats.reset_interval` configured)
 
 ## Gotchas
 
@@ -390,6 +385,7 @@ Client → Protocol Handler → DNSServer → RewriteManager → CacheManager
 5. **No `constants.go` or `types.go`**: Constants/types scattered across module files. Key ones: `resolver.go` (limits), `cache.go` (TTLs), `server.go` (timeouts), `pool.go` (buffers)
 6. **Deps pinned to HEAD**: Not released versions. Dockerfile does `go get -u ...@master` before build
 7. **Vibe coding**: Self-described as not production-verified
-8. **Stats require Redis**: `StatsManager` periodic reset only works when Redis is configured
-9. **`.gitignore` is ignore-everything-then-allowlist**: Only `.go`, `.md`, `.example.json`, `go.mod`, `go.sum`, `Dockerfile`, `LICENSE`, `.github/` tracked
-10. **`HandlePanic` is the goroutine safety net**: Defined in `utils.go`, used via `defer HandlePanic("op")` in all goroutines
+8. **`.gitignore` is ignore-everything-then-allowlist**: Only `.go`, `.md`, `.example.json`, `go.mod`, `go.sum`, `Dockerfile`, `LICENSE`, `.github/` tracked
+9. **`HandlePanic` is the goroutine safety net**: Defined in `utils.go`, used via `defer HandlePanic("op")` in all goroutines
+10. **Cache is memory-only**: No Redis or external cache. Persistence is disk snapshot (gob+zstd) only
+11. **Config features are nested under `server.features`**: `ddr`, `ecs_subnet`, `cache`, `latency_probe`, `stats` all live inside `server.features`, not directly under `server`
