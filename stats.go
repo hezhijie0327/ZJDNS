@@ -110,6 +110,7 @@ func BuildStatsLogJSON(snapshot *StatsSnapshot) ([]byte, error) {
 	statsLog := StatsLog{
 		Totals: StatsLogTotals{
 			TotalRequests:      snapshot.TotalRequests,
+			TotalResponseTimeMs: snapshot.TotalResponseTimeMs,
 			CacheHits:          snapshot.CacheHits,
 			CacheMisses:        snapshot.CacheMisses,
 			StaleResponses:     snapshot.StaleResponses,
