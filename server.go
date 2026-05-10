@@ -27,7 +27,7 @@ const (
 	IdleTimeout      = 4 * time.Second // Idle timeout for servers
 
 	PrefetchThrottleInterval = 3 * time.Second // Minimum interval between prefetches for the same cache key to prevent thundering herd
-	PrefetchThresholdPercent = 10              // Prefetch window threshold in percent of original TTL
+	PrefetchThresholdPercent = 25              // Prefetch window threshold in percent of original TTL
 
 	ServeExpiredClientTimeout = 1800 * time.Millisecond // Maximum client timeout for serving expired cache entries in seconds. RFC 8767 recommends 1.8 seconds
 

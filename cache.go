@@ -25,8 +25,8 @@ import (
 const (
 	DefaultTTL = 10 // Default TTL for cache entries in seconds
 
-	StaleTTL    = 30        // Additional TTL for serving expired cache entries in seconds
-	StaleMaxAge = 3 * 86400 // Maximum age for serving expired cache entries in seconds
+	StaleTTL    = 30         // Additional TTL for serving expired cache entries in seconds
+	StaleMaxAge = 45 * 86400 // Maximum age for serving expired cache entries in seconds (RFC 8767 recommends 1 to 3 days.)
 
 	ResultBufferCapacity = 128 // Initial capacity for building cache keys to minimize allocations
 	MaxResultLength      = 512 // Maximum length for cache keys before hashing

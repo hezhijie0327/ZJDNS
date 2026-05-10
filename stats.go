@@ -109,13 +109,13 @@ func (s StatsSnapshot) AverageResponseTimeMs() float64 {
 func BuildStatsLogJSON(snapshot *StatsSnapshot) ([]byte, error) {
 	statsLog := StatsLog{
 		Totals: StatsLogTotals{
-			TotalRequests:      snapshot.TotalRequests,
+			TotalRequests:       snapshot.TotalRequests,
 			TotalResponseTimeMs: snapshot.TotalResponseTimeMs,
-			CacheHits:          snapshot.CacheHits,
-			CacheMisses:        snapshot.CacheMisses,
-			StaleResponses:     snapshot.StaleResponses,
-			ErrorResponses:     snapshot.ErrorResponses,
-			LastResponseTimeMs: snapshot.LastResponseTimeMs,
+			CacheHits:           snapshot.CacheHits,
+			CacheMisses:         snapshot.CacheMisses,
+			StaleResponses:      snapshot.StaleResponses,
+			ErrorResponses:      snapshot.ErrorResponses,
+			LastResponseTimeMs:  snapshot.LastResponseTimeMs,
 		},
 		Protocols: StatsLogProtocolCounts{
 			UDPRequests:  snapshot.UDPRequests,
