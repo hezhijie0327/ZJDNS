@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"container/list"
 	"encoding/gob"
 	"fmt"
@@ -80,12 +81,13 @@ type CacheManager interface {
 
 // MemoryCache provides an in-memory LRU cache for DNS responses.
 type MemoryCache struct {
-	mu       sync.RWMutex
-	entries  map[string]*memoryCacheItem
-	order    *list.List
-	limit    int
-	closed   int32
-	ptrIndex map[string]map[string]uint32
+	mu        sync.RWMutex
+	entries   map[string]*memoryCacheItem
+	entryPTRs map[string][]ptrRecord
+	order     *list.List
+	limit     int
+	closed    int32
+	ptrIndex  map[string]map[string]uint32
 
 	persistPath     string
 	persistInterval time.Duration
@@ -96,8 +98,15 @@ type MemoryCache struct {
 
 // memoryCacheItem wraps a CacheEntry with its position in the LRU order.
 type memoryCacheItem struct {
-	entry   *CacheEntry
-	element *list.Element
+	compressed []byte
+	entry      *CacheEntry
+	element    *list.Element
+}
+
+// ptrRecord represents a single PTR record for reverse lookup indexing.
+type ptrRecord struct {
+	IP   string
+	Name string
 }
 
 type persistedCacheSnapshot struct {
@@ -127,6 +136,7 @@ func NewMemoryCache(settings CacheSettings) *MemoryCache {
 
 	mc := &MemoryCache{
 		entries:         make(map[string]*memoryCacheItem),
+		entryPTRs:       make(map[string][]ptrRecord),
 		order:           list.New(),
 		limit:           size,
 		ptrIndex:        make(map[string]map[string]uint32),
@@ -356,6 +366,8 @@ func (mc *MemoryCache) updatePTRIndexLocked(entry *CacheEntry, key string) {
 	if entry == nil {
 		return
 	}
+	// build ptr records for reverse lookup and bookkeeping so we can remove them
+	records := make([]ptrRecord, 0)
 	for _, cr := range entry.Answer {
 		if cr == nil {
 			continue
@@ -367,7 +379,7 @@ func (mc *MemoryCache) updatePTRIndexLocked(entry *CacheEntry, key string) {
 
 		var ip net.IP
 		var name string
-		ttl := uint32(0)
+		var ttl uint32
 		switch r := rr.(type) {
 		case *dns.A:
 			ip = r.A
@@ -390,48 +402,29 @@ func (mc *MemoryCache) updatePTRIndexLocked(entry *CacheEntry, key string) {
 			mc.ptrIndex[ipStr] = make(map[string]uint32)
 		}
 		mc.ptrIndex[ipStr][dns.Fqdn(name)] = ttl
+		records = append(records, ptrRecord{IP: ipStr, Name: dns.Fqdn(name)})
+	}
+	if len(records) > 0 {
+		mc.entryPTRs[key] = records
 	}
 }
 
 // removeFromPTRIndexLocked removes a cache entry from the PTR index.
-func (mc *MemoryCache) removeFromPTRIndexLocked(entry *CacheEntry, key string) {
-	if entry == nil {
+func (mc *MemoryCache) removeFromPTRIndexLocked(key string) {
+	records, ok := mc.entryPTRs[key]
+	if !ok || len(records) == 0 {
+		delete(mc.entryPTRs, key)
 		return
 	}
-	for _, cr := range entry.Answer {
-		if cr == nil {
-			continue
-		}
-		rr := ExpandRecord(cr)
-		if rr == nil {
-			continue
-		}
-
-		var ip net.IP
-		var name string
-		switch r := rr.(type) {
-		case *dns.A:
-			ip = r.A
-			name = r.Hdr.Name
-		case *dns.AAAA:
-			ip = r.AAAA
-			name = r.Hdr.Name
-		default:
-			continue
-		}
-
-		if ip == nil || name == "" {
-			continue
-		}
-
-		ipStr := ip.String()
-		if domains, ok := mc.ptrIndex[ipStr]; ok {
-			delete(domains, dns.Fqdn(name))
+	for _, rec := range records {
+		if domains, ok := mc.ptrIndex[rec.IP]; ok {
+			delete(domains, rec.Name)
 			if len(domains) == 0 {
-				delete(mc.ptrIndex, ipStr)
+				delete(mc.ptrIndex, rec.IP)
 			}
 		}
 	}
+	delete(mc.entryPTRs, key)
 }
 
 // evictOldestLocked evicts the oldest cache entry when the cache limit is exceeded.
@@ -445,8 +438,8 @@ func (mc *MemoryCache) evictOldestLocked() {
 		return
 	}
 
-	if item, exists := mc.entries[key]; exists && item != nil && item.entry != nil {
-		mc.removeFromPTRIndexLocked(item.entry, key)
+	if _, exists := mc.entries[key]; exists {
+		mc.removeFromPTRIndexLocked(key)
 	}
 
 	mc.order.Remove(oldest)
@@ -468,6 +461,27 @@ func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
 
 	item.entry.AccessTime = time.Now().Unix()
 	mc.touchEntryLocked(item)
+
+	// If we have a compressed payload stored, decompress it to reconstruct the full entry
+	if len(item.compressed) > 0 {
+		// decompress
+		rdr := bytes.NewReader(item.compressed)
+		dec, err := zstd.NewReader(rdr)
+		if err == nil {
+			var full CacheEntry
+			if err := gob.NewDecoder(dec).Decode(&full); err == nil {
+				// keep access time updated
+				full.AccessTime = item.entry.AccessTime
+				cloned := cloneCacheEntry(&full)
+				dec.Close()
+				mc.mu.Unlock()
+				return cloned, true, cloned.IsExpired()
+			}
+			dec.Close()
+		}
+		// fallback to metadata-only entry if decompression fails
+	}
+
 	cloned := cloneCacheEntry(item.entry)
 	mc.mu.Unlock()
 
@@ -543,9 +557,33 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 		return
 	}
 
+	// prepare the stored item; compress the full CacheEntry to save RAM (fallback to uncompressed on failure)
 	if existing, ok := mc.entries[key]; ok {
-		mc.removeFromPTRIndexLocked(existing.entry, key)
-		existing.entry = cloneCacheEntry(entry)
+		mc.removeFromPTRIndexLocked(key)
+		// create a fresh clone to avoid external mutation
+		fullCopy := cloneCacheEntry(entry)
+		// compress fullCopy
+		var buf bytes.Buffer
+		zw, err := zstd.NewWriter(&buf)
+		if err == nil {
+			if err := gob.NewEncoder(zw).Encode(fullCopy); err == nil {
+				_ = zw.Close()
+				meta := *fullCopy
+				meta.Answer = nil
+				meta.Authority = nil
+				meta.Additional = nil
+				existing.entry = &meta
+				existing.compressed = buf.Bytes()
+			} else {
+				_ = zw.Close()
+				existing.entry = cloneCacheEntry(entry)
+				existing.compressed = nil
+			}
+		} else {
+			existing.entry = cloneCacheEntry(entry)
+			existing.compressed = nil
+		}
+
 		mc.touchEntryLocked(existing)
 		mc.updatePTRIndexLocked(existing.entry, key)
 		mc.persistDirty.Store(1)
@@ -553,7 +591,28 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	}
 
 	element := mc.order.PushFront(key)
-	mc.entries[key] = &memoryCacheItem{entry: cloneCacheEntry(entry), element: element}
+	item := &memoryCacheItem{element: element}
+	fullCopy := cloneCacheEntry(entry)
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf)
+	if err == nil {
+		if err := gob.NewEncoder(zw).Encode(fullCopy); err == nil {
+			_ = zw.Close()
+			meta := *fullCopy
+			meta.Answer = nil
+			meta.Authority = nil
+			meta.Additional = nil
+			item.entry = &meta
+			item.compressed = buf.Bytes()
+		} else {
+			_ = zw.Close()
+			item.entry = cloneCacheEntry(entry)
+		}
+	} else {
+		item.entry = cloneCacheEntry(entry)
+	}
+
+	mc.entries[key] = item
 	mc.updatePTRIndexLocked(mc.entries[key].entry, key)
 	if mc.limit > 0 && mc.order.Len() > mc.limit {
 		mc.evictOldestLocked()
@@ -642,10 +701,33 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 		if _, exists := mc.entries[item.Key]; exists {
 			continue
 		}
+
+		// keep a full copy for indexing, then compress for in-memory storage
+		fullCopy := cloneCacheEntry(item.Entry)
 		element := mc.order.PushFront(item.Key)
-		entryCopy := cloneCacheEntry(item.Entry)
-		mc.entries[item.Key] = &memoryCacheItem{entry: entryCopy, element: element}
-		mc.updatePTRIndexLocked(entryCopy, item.Key)
+
+		// update PTR index using full copy
+		mc.updatePTRIndexLocked(fullCopy, item.Key)
+
+		// attempt to compress fullCopy for in-memory storage; on failure store uncompressed
+		var buf bytes.Buffer
+		zw, err := zstd.NewWriter(&buf)
+		if err == nil {
+			if err := gob.NewEncoder(zw).Encode(fullCopy); err == nil {
+				_ = zw.Close()
+				meta := *fullCopy
+				meta.Answer = nil
+				meta.Authority = nil
+				meta.Additional = nil
+				mc.entries[item.Key] = &memoryCacheItem{entry: &meta, element: element, compressed: buf.Bytes()}
+			} else {
+				_ = zw.Close()
+				mc.entries[item.Key] = &memoryCacheItem{entry: fullCopy, element: element}
+			}
+		} else {
+			mc.entries[item.Key] = &memoryCacheItem{entry: fullCopy, element: element}
+		}
+
 		loaded++
 		if mc.limit > 0 && mc.order.Len() > mc.limit {
 			mc.evictOldestLocked()
@@ -683,6 +765,24 @@ func (mc *MemoryCache) persistSnapshotToDisk() error {
 			if now-item.entry.Timestamp > int64(item.entry.TTL+StaleMaxAge) {
 				continue
 			}
+
+			// If we have a compressed full entry, decompress it for snapshot so disk snapshot remains full
+			if len(item.compressed) > 0 {
+				rdr := bytes.NewReader(item.compressed)
+				dec, err := zstd.NewReader(rdr)
+				if err == nil {
+					// Decode into CacheEntry directly
+					var fullEntry CacheEntry
+					if err := gob.NewDecoder(dec).Decode(&fullEntry); err == nil {
+						snapshot.Entries = append(snapshot.Entries, persistedCacheItem{Key: key, Entry: cloneCacheEntry(&fullEntry)})
+						dec.Close()
+						continue
+					}
+					dec.Close()
+				}
+				// fallthrough to store metadata-only entry if decompression fails
+			}
+
 			snapshot.Entries = append(snapshot.Entries, persistedCacheItem{
 				Key:   key,
 				Entry: cloneCacheEntry(item.entry),
