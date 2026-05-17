@@ -35,9 +35,13 @@ const (
 	DefaultCachePersistInterval = 30 * time.Second // Default memory cache snapshot interval
 	DefaultCacheSize            = 16384            // Default maximum number of entries in the in-memory cache
 
-	CacheKeyDNSPrefix     = "dns:" // Prefix for DNS cache keys
-	CacheSnapshotMagic    = "ZJDNSCACHE-GOB-ZSTD-v1"
-	CacheZSTDEncoderLevel = zstd.SpeedBetterCompression // Compression level for cache snapshot persistence (SpeedFastest, SpeedDefault, SpeedBetterCompression, SpeedBestCompression)
+	CacheKeyDNSPrefix     = "dns:"                      // Prefix for DNS cache keys
+	CacheSnapshotVersion  = 2                           // Version number for cache snapshot format (increment if the on-disk format changes in an incompatible way)
+	CacheZSTDEncoderLevel = zstd.SpeedBetterCompression // Compression level for cache entry compression (SpeedFastest, SpeedDefault, SpeedBetterCompression, SpeedBestCompression)
+)
+
+var (
+	CacheSnapshotMagic = "ZJDNS-CACHE-V" + strconv.Itoa(CacheSnapshotVersion) // CacheSnapshotMagic is derived from CacheSnapshotVersion so the file header stays in sync with the format version.
 )
 
 // CacheEntry stores serialized DNS response data, metadata, and ECS state.
@@ -107,6 +111,7 @@ type memoryCacheItem struct {
 type ptrRecord struct {
 	IP   string
 	Name string
+	TTL  uint32
 }
 
 type persistedCacheSnapshot struct {
@@ -116,8 +121,10 @@ type persistedCacheSnapshot struct {
 }
 
 type persistedCacheItem struct {
-	Key   string      `json:"key"`
-	Entry *CacheEntry `json:"entry"`
+	Key        string      `json:"key"`
+	Entry      *CacheEntry `json:"entry,omitempty"`
+	Compressed []byte      `json:"compressed,omitempty"`
+	PTRs       []ptrRecord `json:"ptrs,omitempty"`
 }
 
 func init() {
@@ -353,6 +360,17 @@ func cloneCacheEntry(entry *CacheEntry) *CacheEntry {
 	return &cloned
 }
 
+// clonePtrRecords creates a deep copy of a slice of ptrRecord.
+func clonePtrRecords(records []ptrRecord) []ptrRecord {
+	if len(records) == 0 {
+		return nil
+	}
+
+	cloned := make([]ptrRecord, len(records))
+	copy(cloned, records)
+	return cloned
+}
+
 // touchEntryLocked moves the accessed cache entry to the front of the LRU order.
 func (mc *MemoryCache) touchEntryLocked(item *memoryCacheItem) {
 	if item == nil || item.element == nil {
@@ -402,10 +420,27 @@ func (mc *MemoryCache) updatePTRIndexLocked(entry *CacheEntry, key string) {
 			mc.ptrIndex[ipStr] = make(map[string]uint32)
 		}
 		mc.ptrIndex[ipStr][dns.Fqdn(name)] = ttl
-		records = append(records, ptrRecord{IP: ipStr, Name: dns.Fqdn(name)})
+		records = append(records, ptrRecord{IP: ipStr, Name: dns.Fqdn(name), TTL: ttl})
 	}
 	if len(records) > 0 {
 		mc.entryPTRs[key] = records
+	}
+}
+
+// storePTRRecordsLocked stores PTR records for a cache entry and updates the PTR index.
+func (mc *MemoryCache) storePTRRecordsLocked(key string, records []ptrRecord) {
+	if len(records) == 0 {
+		delete(mc.entryPTRs, key)
+		return
+	}
+
+	cloned := clonePtrRecords(records)
+	mc.entryPTRs[key] = cloned
+	for _, rec := range cloned {
+		if mc.ptrIndex[rec.IP] == nil {
+			mc.ptrIndex[rec.IP] = make(map[string]uint32)
+		}
+		mc.ptrIndex[rec.IP][rec.Name] = rec.TTL
 	}
 }
 
@@ -557,63 +592,37 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 		return
 	}
 
-	// prepare the stored item; compress the full CacheEntry to save RAM (fallback to uncompressed on failure)
-	if existing, ok := mc.entries[key]; ok {
-		mc.removeFromPTRIndexLocked(key)
-		// create a fresh clone to avoid external mutation
-		fullCopy := cloneCacheEntry(entry)
-		// compress fullCopy
-		var buf bytes.Buffer
-		zw, err := zstd.NewWriter(&buf)
-		if err == nil {
-			if err := gob.NewEncoder(zw).Encode(fullCopy); err == nil {
-				_ = zw.Close()
-				meta := *fullCopy
-				meta.Answer = nil
-				meta.Authority = nil
-				meta.Additional = nil
-				existing.entry = &meta
-				existing.compressed = buf.Bytes()
-			} else {
-				_ = zw.Close()
-				existing.entry = cloneCacheEntry(entry)
-				existing.compressed = nil
+	fullCopy := cloneCacheEntry(entry)
+	var compressed []byte
+	var buf bytes.Buffer
+	if zw, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(CacheZSTDEncoderLevel)); err == nil {
+		if err := gob.NewEncoder(zw).Encode(fullCopy); err == nil {
+			if err := zw.Close(); err == nil {
+				compressed = append([]byte(nil), buf.Bytes()...)
 			}
 		} else {
-			existing.entry = cloneCacheEntry(entry)
-			existing.compressed = nil
+			_ = zw.Close()
 		}
+	}
 
+	meta := cloneCacheEntry(fullCopy)
+	meta.Answer = nil
+	meta.Authority = nil
+	meta.Additional = nil
+
+	if existing, ok := mc.entries[key]; ok {
+		mc.removeFromPTRIndexLocked(key)
+		existing.entry = meta
+		existing.compressed = compressed
 		mc.touchEntryLocked(existing)
-		mc.updatePTRIndexLocked(existing.entry, key)
+		mc.updatePTRIndexLocked(fullCopy, key)
 		mc.persistDirty.Store(1)
 		return
 	}
 
 	element := mc.order.PushFront(key)
-	item := &memoryCacheItem{element: element}
-	fullCopy := cloneCacheEntry(entry)
-	var buf bytes.Buffer
-	zw, err := zstd.NewWriter(&buf)
-	if err == nil {
-		if err := gob.NewEncoder(zw).Encode(fullCopy); err == nil {
-			_ = zw.Close()
-			meta := *fullCopy
-			meta.Answer = nil
-			meta.Authority = nil
-			meta.Additional = nil
-			item.entry = &meta
-			item.compressed = buf.Bytes()
-		} else {
-			_ = zw.Close()
-			item.entry = cloneCacheEntry(entry)
-		}
-	} else {
-		item.entry = cloneCacheEntry(entry)
-	}
-
-	mc.entries[key] = item
-	mc.updatePTRIndexLocked(mc.entries[key].entry, key)
+	mc.entries[key] = &memoryCacheItem{entry: meta, compressed: compressed, element: element}
+	mc.updatePTRIndexLocked(fullCopy, key)
 	if mc.limit > 0 && mc.order.Len() > mc.limit {
 		mc.evictOldestLocked()
 	}
@@ -672,15 +681,12 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 		return 0, fmt.Errorf("invalid cache snapshot format")
 	}
 
-	decoder, err := zstd.NewReader(file)
-	if err != nil {
+	var snapshot persistedCacheSnapshot
+	if err := gob.NewDecoder(file).Decode(&snapshot); err != nil {
 		return 0, err
 	}
-	defer decoder.Close()
-
-	var snapshot persistedCacheSnapshot
-	if err := gob.NewDecoder(decoder).Decode(&snapshot); err != nil {
-		return 0, err
+	if snapshot.Version != CacheSnapshotVersion {
+		return 0, fmt.Errorf("unsupported cache snapshot version: %d", snapshot.Version)
 	}
 
 	if len(snapshot.Entries) == 0 {
@@ -692,7 +698,10 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 
 	mc.mu.Lock()
 	for _, item := range snapshot.Entries {
-		if item.Key == "" || item.Entry == nil || item.Entry.TTL <= 0 {
+		if item.Key == "" {
+			continue
+		}
+		if item.Entry == nil || item.Entry.TTL <= 0 {
 			continue
 		}
 		if now-item.Entry.Timestamp > int64(item.Entry.TTL+StaleMaxAge) {
@@ -702,31 +711,11 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 			continue
 		}
 
-		// keep a full copy for indexing, then compress for in-memory storage
-		fullCopy := cloneCacheEntry(item.Entry)
 		element := mc.order.PushFront(item.Key)
-
-		// update PTR index using full copy
-		mc.updatePTRIndexLocked(fullCopy, item.Key)
-
-		// attempt to compress fullCopy for in-memory storage; on failure store uncompressed
-		var buf bytes.Buffer
-		zw, err := zstd.NewWriter(&buf)
-		if err == nil {
-			if err := gob.NewEncoder(zw).Encode(fullCopy); err == nil {
-				_ = zw.Close()
-				meta := *fullCopy
-				meta.Answer = nil
-				meta.Authority = nil
-				meta.Additional = nil
-				mc.entries[item.Key] = &memoryCacheItem{entry: &meta, element: element, compressed: buf.Bytes()}
-			} else {
-				_ = zw.Close()
-				mc.entries[item.Key] = &memoryCacheItem{entry: fullCopy, element: element}
-			}
-		} else {
-			mc.entries[item.Key] = &memoryCacheItem{entry: fullCopy, element: element}
-		}
+		entryCopy := cloneCacheEntry(item.Entry)
+		itemCopy := &memoryCacheItem{entry: entryCopy, compressed: append([]byte(nil), item.Compressed...), element: element}
+		mc.entries[item.Key] = itemCopy
+		mc.storePTRRecordsLocked(item.Key, item.PTRs)
 
 		loaded++
 		if mc.limit > 0 && mc.order.Len() > mc.limit {
@@ -746,7 +735,7 @@ func (mc *MemoryCache) persistSnapshotToDisk() error {
 
 	now := time.Now().Unix()
 	snapshot := persistedCacheSnapshot{
-		Version: 1,
+		Version: CacheSnapshotVersion,
 		SavedAt: now,
 	}
 
@@ -765,27 +754,11 @@ func (mc *MemoryCache) persistSnapshotToDisk() error {
 			if now-item.entry.Timestamp > int64(item.entry.TTL+StaleMaxAge) {
 				continue
 			}
-
-			// If we have a compressed full entry, decompress it for snapshot so disk snapshot remains full
-			if len(item.compressed) > 0 {
-				rdr := bytes.NewReader(item.compressed)
-				dec, err := zstd.NewReader(rdr)
-				if err == nil {
-					// Decode into CacheEntry directly
-					var fullEntry CacheEntry
-					if err := gob.NewDecoder(dec).Decode(&fullEntry); err == nil {
-						snapshot.Entries = append(snapshot.Entries, persistedCacheItem{Key: key, Entry: cloneCacheEntry(&fullEntry)})
-						dec.Close()
-						continue
-					}
-					dec.Close()
-				}
-				// fallthrough to store metadata-only entry if decompression fails
-			}
-
 			snapshot.Entries = append(snapshot.Entries, persistedCacheItem{
-				Key:   key,
-				Entry: cloneCacheEntry(item.entry),
+				Key:        key,
+				Entry:      cloneCacheEntry(item.entry),
+				Compressed: append([]byte(nil), item.compressed...),
+				PTRs:       clonePtrRecords(mc.entryPTRs[key]),
 			})
 		}
 	}
@@ -807,20 +780,7 @@ func (mc *MemoryCache) persistSnapshotToDisk() error {
 		_ = os.Remove(tmp)
 		return err
 	}
-
-	zw, err := zstd.NewWriter(file, zstd.WithEncoderLevel(CacheZSTDEncoderLevel))
-	if err != nil {
-		_ = file.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := gob.NewEncoder(zw).Encode(&snapshot); err != nil {
-		_ = zw.Close()
-		_ = file.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := zw.Close(); err != nil {
+	if err := gob.NewEncoder(file).Encode(&snapshot); err != nil {
 		_ = file.Close()
 		_ = os.Remove(tmp)
 		return err
