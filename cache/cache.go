@@ -826,6 +826,7 @@ func cloneRecords(records []*CompactRecord) []*CompactRecord {
 			continue
 		}
 		rr := *r
+		rr.RR = nil // don't serialize cached RR; re-parsed from Text on restore
 		cloned[i] = &rr
 	}
 	return cloned
