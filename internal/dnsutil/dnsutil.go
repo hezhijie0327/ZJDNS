@@ -1,4 +1,4 @@
-// Package dnsutil provides DNS-related utility functions used across the server.
+// Package dnsutil provides utility functions for DNS operations.
 package dnsutil
 
 import (
@@ -13,13 +13,13 @@ import (
 	"github.com/miekg/dns"
 )
 
-// NormalizeDomain lowercases the domain and removes the trailing dot.
+// NormalizeDomain converts a domain name to lowercase and removes the trailing
+// dot.
 func NormalizeDomain(domain string) string {
 	return strings.ToLower(strings.TrimSuffix(domain, "."))
 }
 
-// IsSecureProtocol reports whether the protocol string represents an encrypted
-// DNS transport (tls, quic, https, http3).
+// IsSecureProtocol reports whether the protocol is a secure DNS transport.
 func IsSecureProtocol(protocol string) bool {
 	switch protocol {
 	case "tls", "quic", "https", "http3":
@@ -29,7 +29,7 @@ func IsSecureProtocol(protocol string) bool {
 	}
 }
 
-// CloseWithLog attempts to close a resource and logs a warning on failure.
+// CloseWithLog closes a resource and logs any error that occurs.
 func CloseWithLog(c any, name string) {
 	if c == nil {
 		return
@@ -41,20 +41,17 @@ func CloseWithLog(c any, name string) {
 	}
 }
 
-// HandlePanic recovers from a panic in a goroutine, logs the stack trace, and
-// allows the goroutine to exit cleanly. Unlike the original implementation,
-// this does NOT call os.Exit — a single connection panic will not crash the
-// entire server.
+// HandlePanic recovers from a panic and logs the stack trace.
 func HandlePanic(operation string) {
 	if r := recover(); r != nil {
-		buf := make([]byte, 8192) // Large enough for deeply nested stack traces
+		buf := make([]byte, 8192)
 		n := runtime.Stack(buf, false)
 		log.Errorf("PANIC: Panic [%s]: %v\nStack:\n%s", operation, r, buf[:n])
 	}
 }
 
-// ParseReverseDNSName parses a PTR query name into an IP address.
-// Supports in-addr.arpa (IPv4) and ip6.arpa (IPv6) reverse names.
+// ParseReverseDNSName parses a reverse DNS name (in-addr.arpa or ip6.arpa)
+// into a net.IP.
 func ParseReverseDNSName(name string) net.IP {
 	fqdn := strings.TrimSuffix(dns.Fqdn(name), ".")
 	lower := strings.ToLower(fqdn)
@@ -91,7 +88,7 @@ func ParseReverseDNSName(name string) net.IP {
 	return nil
 }
 
-// BuildPTRRecord creates a PTR DNS record.
+// BuildPTRRecord builds a DNS PTR record.
 func BuildPTRRecord(name, target string, ttl uint32, qclass uint16) dns.RR {
 	return &dns.PTR{
 		Hdr: dns.RR_Header{
@@ -117,7 +114,8 @@ func ClientIP(w dns.ResponseWriter) net.IP {
 	return nil
 }
 
-// FormatRecords formats DNS record sections for debug logging.
+// FormatRecords formats DNS answer, authority, and additional sections into a
+// human-readable string.
 func FormatRecords(answers, authority, additional []dns.RR) string {
 	var b strings.Builder
 	if len(answers) > 0 {
@@ -141,19 +139,18 @@ func FormatRecords(answers, authority, additional []dns.RR) string {
 	return b.String()
 }
 
-// IsValidFilePath checks if a path is safe (no traversal, no dangerous prefixes,
-// no symlinks) and points to a regular file.
+// IsValidFilePath validates a file path for security and existence.
 func IsValidFilePath(path string) bool {
-	// Resolve absolute path and clean traversal components.
+
 	abs, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return false
 	}
-	// Reject paths with parent traversal after cleaning.
+
 	if strings.Contains(abs, "..") {
 		return false
 	}
-	// Block dangerous system directories after resolution.
+
 	dangerousPrefixes := []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 	for _, prefix := range dangerousPrefixes {
 		if strings.HasPrefix(abs, prefix) {
@@ -164,7 +161,7 @@ func IsValidFilePath(path string) bool {
 	if err != nil {
 		return false
 	}
-	// Reject symlinks.
+
 	if info.Mode()&os.ModeSymlink != 0 {
 		return false
 	}

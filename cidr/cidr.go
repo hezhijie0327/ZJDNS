@@ -1,4 +1,4 @@
-// Package cidr provides CIDR-based IP filtering with tag-based matching.
+// Package cidr provides IP filtering using CIDR rules with tag matching.
 package cidr
 
 import (
@@ -16,12 +16,10 @@ import (
 	"zjdns/internal/log"
 )
 
-// Sentinel errors.
-var (
-	ErrEmptyTag = errors.New("CIDR tag cannot be empty")
-)
+// ErrEmptyTag is returned when a CIDR tag is empty.
+var ErrEmptyTag = errors.New("CIDR tag cannot be empty")
 
-// CIDRRule represents a compiled set of CIDR networks associated with a tag, optimized for fast IP matching.
+// CIDRRule holds a set of parsed CIDR networks for a single tag.
 type CIDRRule struct {
 	tag       string
 	nets      []*net.IPNet
@@ -30,30 +28,29 @@ type CIDRRule struct {
 	totalNets int
 }
 
-// Manager manages multiple CIDR rules and provides efficient IP matching with caching.
-type Manager struct {
+// Filter manages CIDR rules for IP address matching.
+type Filter struct {
 	rules      map[string]*CIDRRule
 	matchCache map[string]*CIDRMatchInfo
 	mu         sync.RWMutex
 }
 
-// CIDRMatchInfo stores the parsed information for a CIDR match tag, including whether it's negated and the original tag string.
+// CIDRMatchInfo contains the parsed match tag with negation support.
 type CIDRMatchInfo struct {
 	Tag      string
 	Negate   bool
 	Original string
 }
 
-// ipv4Net is an optimized structure for storing IPv4 CIDR networks, allowing for fast bitwise matching.
 type ipv4Net struct {
 	ip     uint32
 	mask   uint32
 	prefix uint8
 }
 
-// New creates a new CIDR Manager from the provided configurations.
-func New(configs []config.CIDRConfig) (*Manager, error) {
-	cm := &Manager{
+// New creates a new Filter from the given CIDR configuration slice.
+func New(configs []config.CIDRConfig) (*Filter, error) {
+	cm := &Filter{
 		rules:      make(map[string]*CIDRRule),
 		matchCache: make(map[string]*CIDRMatchInfo),
 	}
@@ -86,8 +83,7 @@ func New(configs []config.CIDRConfig) (*Manager, error) {
 	return cm, nil
 }
 
-// loadConfig loads CIDR rules from file and inline configuration.
-func (cm *Manager) loadConfig(cfg config.CIDRConfig) (*CIDRRule, error) {
+func (cm *Filter) loadConfig(cfg config.CIDRConfig) (*CIDRRule, error) {
 	rule := &CIDRRule{tag: cfg.Tag, nets: make([]*net.IPNet, 0)}
 	validCount := 0
 
@@ -144,8 +140,8 @@ func (cm *Manager) loadConfig(cfg config.CIDRConfig) (*CIDRRule, error) {
 	return rule, nil
 }
 
-// MatchIP checks if an IP address matches the specified CIDR tag.
-func (cm *Manager) MatchIP(ip net.IP, matchTag string) (matched bool, exists bool) {
+// MatchIP checks if an IP matches the CIDR rule identified by matchTag.
+func (cm *Filter) MatchIP(ip net.IP, matchTag string) (matched bool, exists bool) {
 	if cm == nil || matchTag == "" {
 		return true, true
 	}
@@ -167,8 +163,7 @@ func (cm *Manager) MatchIP(ip net.IP, matchTag string) (matched bool, exists boo
 	return inList, true
 }
 
-// getMatchInfo retrieves or creates match info for a tag.
-func (cm *Manager) getMatchInfo(matchTag string) *CIDRMatchInfo {
+func (cm *Filter) getMatchInfo(matchTag string) *CIDRMatchInfo {
 	cm.mu.RLock()
 	if info, exists := cm.matchCache[matchTag]; exists {
 		cm.mu.RUnlock()
@@ -179,7 +174,6 @@ func (cm *Manager) getMatchInfo(matchTag string) *CIDRMatchInfo {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// Double-check after acquiring write lock
 	if info, exists := cm.matchCache[matchTag]; exists {
 		return info
 	}
@@ -197,8 +191,6 @@ func (cm *Manager) getMatchInfo(matchTag string) *CIDRMatchInfo {
 	return info
 }
 
-// CIDRRule stores compiled CIDR networks for fast IP matching.
-// preprocessNetworks optimizes network storage for fast IP matching
 func (r *CIDRRule) preprocessNetworks() {
 	if r == nil {
 		return
@@ -222,18 +214,16 @@ func (r *CIDRRule) preprocessNetworks() {
 		}
 	}
 
-	// Sort IPv4 networks by prefix length (longest first for more specific matches)
 	slices.SortFunc(r.ipv4Nets, func(a, b ipv4Net) int {
 		if a.prefix != b.prefix {
 			return int(b.prefix) - int(a.prefix)
 		}
 		return 0
 	})
-	// Release original nets slice to allow GC of *net.IPNet objects.
+
 	r.nets = nil
 }
 
-// toIPv4Net converts a net.IPNet to an optimized ipv4Net structure
 func toIPv4Net(ipNet *net.IPNet) *ipv4Net {
 	if ipNet == nil || ipNet.IP.To4() == nil {
 		return nil
@@ -259,7 +249,6 @@ func toIPv4Net(ipNet *net.IPNet) *ipv4Net {
 	}
 }
 
-// contains checks if an IP address is within any of the rule's networks
 func (r *CIDRRule) contains(ip net.IP) bool {
 	if r == nil || ip == nil {
 		return false
@@ -272,7 +261,6 @@ func (r *CIDRRule) contains(ip net.IP) bool {
 	return r.containsIPv6(ip)
 }
 
-// containsIPv4 checks if an IPv4 address is within any of the rule's IPv4 networks
 func (r *CIDRRule) containsIPv4(ipv4 net.IP) bool {
 	if len(r.ipv4Nets) == 0 {
 		return false
@@ -289,7 +277,6 @@ func (r *CIDRRule) containsIPv4(ipv4 net.IP) bool {
 	return false
 }
 
-// containsIPv6 checks if an IPv6 address is within any of the rule's IPv6 networks
 func (r *CIDRRule) containsIPv6(ip net.IP) bool {
 	for _, ipNet := range r.ipv6Nets {
 		if ipNet.Contains(ip) {

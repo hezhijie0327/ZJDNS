@@ -1,6 +1,4 @@
-// Package main implements ZJDNS - High Performance DNS Server
-// This file contains the main DNS server functionality including lifecycle
-// management, signal handling, query processing, and response building.
+// Package server implements the core DNS server, coordinating query processing, protocol listeners, and lifecycle.
 package server
 
 import (
@@ -27,34 +25,42 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/rewrite"
+	"zjdns/server/client"
+	"zjdns/server/latency"
+	"zjdns/server/ratelimit"
+	"zjdns/server/resolver"
+	"zjdns/server/security"
+	servertls "zjdns/server/tls"
 	"zjdns/stats"
 )
 
+// Server-level timeouts and intervals.
 const (
-	DefaultTimeout   = 2 * time.Second // Timeout for various operations like shutdown and cache refresh
-	OperationTimeout = 3 * time.Second // Timeout for individual operations like upstream queries
+	DefaultTimeout   = 2 * time.Second
+	OperationTimeout = 3 * time.Second
 
-	PrefetchThrottleInterval = 3 * time.Second // Minimum interval between prefetches for the same cache key to prevent thundering herd
-	PrefetchThresholdPercent = 25              // Prefetch window threshold in percent of original TTL
+	PrefetchThrottleInterval = 3 * time.Second
+	PrefetchThresholdPercent = 25
 
-	ServeExpiredClientTimeout = 1800 * time.Millisecond // Maximum client timeout for serving expired cache entries in seconds. RFC 8767 recommends 1.8 seconds
+	ServeExpiredClientTimeout = 1800 * time.Millisecond
 
-	DefaultCookieSecretRotationInterval = 1 * time.Hour    // Interval for rotating DNS cookie secrets
-	DefaultECSRefreshInterval           = 15 * time.Minute // Interval for refreshing auto-configured ECS public IPs
+	DefaultCookieSecretRotationInterval = 1 * time.Hour
+	DefaultECSRefreshInterval           = 15 * time.Minute
 
-	PprofPath = "/debug/pprof/" // Path prefix for pprof endpoints
+	PprofPath = "/debug/pprof/"
 )
 
-// DNSServer is the core server coordinating query processing and protocol handlers.
-type DNSServer struct {
+// Server is the core DNS server handling query processing, protocol listeners, and lifecycle.
+type Server struct {
 	config            *config.ServerConfig
-	cacheMgr          cache.Manager
-	queryClient       *QueryClient
-	securityMgr       *SecurityManager
-	ednsMgr           *edns.Manager
-	rewriteMgr        *rewrite.Manager
-	cidrMgr           *cidr.Manager
-	statsMgr          *stats.Manager
+	cacheMgr          cache.Store
+	queryClient       *client.Client
+	guard             *security.Guard
+	tls               *servertls.Server
+	ednsMgr           *edns.Handler
+	rewriteMgr        *rewrite.Evaluator
+	cidrMgr           *cidr.Filter
+	statsMgr          *stats.Collector
 	pprofServer       *http.Server
 	ctx               context.Context
 	cancel            context.CancelCauseFunc
@@ -65,25 +71,22 @@ type DNSServer struct {
 	cacheRefreshCtx   context.Context
 	prefetchCooldown  sync.Map
 	closed            int32
-	queryMgr          *QueryManager
-	limiter           *Limiter
-	semaphore         chan struct{} // Admission control semaphore
-	udpServer         *dns.Server   // stored for graceful shutdown
-	tcpServer         *dns.Server   // stored for graceful shutdown
-	tcpWriteMu        sync.Map      // key: RemoteAddr string → *tcpWriteEntry (TCP pipelining)
+	resolver          *resolver.Resolver
+	limiter           *ratelimit.Limiter
+	prober            *latency.Prober
+	semaphore         chan struct{}
+	udpServer         *dns.Server
+	tcpServer         *dns.Server
+	tcpWriteMu        sync.Map
 }
 
-// tcpWriteEntry wraps per-connection state: a write serialization mutex,
-// a last-access timestamp for periodic cleanup, and an in-flight capacity
-// semaphore to bound concurrent queries per TCP connection (RFC 7766).
 type tcpWriteEntry struct {
 	mu           sync.Mutex
-	lastAccess   atomic.Int64 // UnixNano
+	lastAccess   atomic.Int64
 	capacity     chan struct{}
 	capacityOnce sync.Once
 }
 
-// queryResult encapsulates the result of a DNS query, including the answer, authority, additional sections, validation status, ECS information, fallback status, and any error that occurred during processing.
 type queryResult struct {
 	answer     []dns.RR
 	authority  []dns.RR
@@ -94,46 +97,45 @@ type queryResult struct {
 	err        error
 }
 
-// NewDNSServer creates a new DNS server instance with all required managers.
-// It initializes the cache, security, EDNS, rewrite, CIDR, and query managers.
-func New(cfg *config.ServerConfig) (*DNSServer, error) {
+// New creates and initializes a Server from the given configuration.
+func New(cfg *config.ServerConfig) (*Server, error) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 	cacheRefreshGroup, cacheRefreshCtx := errgroup.WithContext(ctx)
 
-	ednsManager, err := edns.NewManager(cfg.Server.Features.ECS)
+	ednsHandler, err := edns.NewHandler(cfg.Server.Features.ECS)
 	if err != nil {
-		cancel(fmt.Errorf("EDNS manager init: %w", err))
-		return nil, fmt.Errorf("EDNS manager init: %w", err)
+		cancel(fmt.Errorf("EDNS handler init: %w", err))
+		return nil, fmt.Errorf("EDNS handler init: %w", err)
 	}
 
-	rewriteManager := rewrite.New()
+	rewriteEvaluator := rewrite.New()
 	if len(cfg.Rewrite) > 0 {
-		if err := rewriteManager.LoadRules(cfg.Rewrite); err != nil {
+		if err := rewriteEvaluator.LoadRules(cfg.Rewrite); err != nil {
 			cancel(fmt.Errorf("load rewrite rules: %w", err))
 			return nil, fmt.Errorf("load rewrite rules: %w", err)
 		}
 	}
 
-	var cidrManager *cidr.Manager
+	var cidrFilter *cidr.Filter
 	if len(cfg.CIDR) > 0 {
-		cidrManager, err = cidr.New(cfg.CIDR)
+		cidrFilter, err = cidr.New(cfg.CIDR)
 		if err != nil {
-			cancel(fmt.Errorf("CIDR manager init: %w", err))
-			return nil, fmt.Errorf("CIDR manager init: %w", err)
+			cancel(fmt.Errorf("CIDR filter init: %w", err))
+			return nil, fmt.Errorf("CIDR filter init: %w", err)
 		}
 	}
 
 	cache := cache.New(cfg.Server.Features.Cache)
 
-	server := &DNSServer{
+	server := &Server{
 		config:            cfg,
-		ednsMgr:           ednsManager,
-		rewriteMgr:        rewriteManager,
-		cidrMgr:           cidrManager,
+		ednsMgr:           ednsHandler,
+		rewriteMgr:        rewriteEvaluator,
+		cidrMgr:           cidrFilter,
 		statsMgr:          stats.New(cfg, cache),
 		cacheMgr:          cache,
-		limiter:           NewLimiter(cfg.Server.RateLimit, cfg.Server.RateBurst),
+		limiter:           ratelimit.New(cfg.Server.RateLimit, cfg.Server.RateBurst),
 		ctx:               ctx,
 		cancel:            cancel,
 		shutdown:          make(chan struct{}),
@@ -147,22 +149,38 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 		server.semaphore = make(chan struct{}, cfg.Server.MaxConcurrent)
 	}
 
-	securityManager, err := NewSecurityManager(cfg, server)
-	if err != nil {
-		cancel(fmt.Errorf("security manager init: %w", err))
-		return nil, fmt.Errorf("security manager init: %w", err)
-	}
-	server.securityMgr = securityManager
+	server.guard = security.New(cfg.Server.Features.HijackProtection)
 
-	queryClient := NewQueryClient()
+	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
+		tlsCfg := servertls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
+		tlsSrv, err := servertls.New(server, tlsCfg, OperationTimeout)
+		if err != nil {
+			cancel(fmt.Errorf("TLS server init: %w", err))
+			return nil, fmt.Errorf("TLS server init: %w", err)
+		}
+		server.tls = tlsSrv
+	}
+
+	queryClient := client.New()
 	server.queryClient = queryClient
 
-	queryManager := NewQueryManager(server)
-	if err := queryManager.Initialize(cfg.Upstream, cfg.Fallback); err != nil {
-		cancel(fmt.Errorf("query manager init: %w", err))
-		return nil, fmt.Errorf("query manager init: %w", err)
+	server.resolver = resolver.New(
+		queryClient,
+		server.guard,
+		ednsHandler,
+		cidrFilter,
+		server.buildQueryMessage,
+	)
+	server.resolver.InitServers(cfg.Upstream, cfg.Fallback)
+
+	if len(cfg.Server.Features.LatencyProbe) > 0 {
+		server.prober = latency.New(
+			cache,
+			func(fn func() error) { server.backgroundGroup.Go(fn) },
+			backgroundCtx,
+			cfg.Server.Features.LatencyProbe,
+		)
 	}
-	server.queryMgr = queryManager
 
 	if cfg.Server.Pprof != "" {
 		server.pprofServer = &http.Server{
@@ -172,8 +190,8 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 			IdleTimeout:       config.IdleTimeout,
 		}
 
-		if server.securityMgr != nil && server.securityMgr.tls != nil {
-			server.pprofServer.TLSConfig = server.securityMgr.tls.tlsConfig
+		if server.tls != nil {
+			server.pprofServer.TLSConfig = server.tls.TLSConfig()
 		}
 	}
 
@@ -229,7 +247,6 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 		})
 	}
 
-	// Background cleanup of prefetch cooldown map.
 	server.backgroundGroup.Go(func() error {
 		defer dnsutil.HandlePanic("prefetch cooldown cleanup")
 		ticker := time.NewTicker(PrefetchThrottleInterval * 10)
@@ -286,7 +303,6 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 		})
 	}
 
-	// Periodic cleanup of stale TCP write mutex entries (idle > 10 min).
 	server.backgroundGroup.Go(func() error {
 		defer dnsutil.HandlePanic("tcpWriteMu sweep")
 		ticker := time.NewTicker(5 * time.Minute)
@@ -312,13 +328,7 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 	return server, nil
 }
 
-// setupSignalHandling configures signal handlers for graceful shutdown.
-// It listens for SIGINT and SIGTERM signals to initiate server shutdown.
-// Runs in its own goroutine (not added to backgroundGroup) to avoid a
-// self-wait deadlock: shutdownServer() waits for backgroundGroup.Wait(),
-// and if the signal handler were a member of that group, it would wait
-// on itself.
-func (s *DNSServer) setupSignalHandling() {
+func (s *Server) setupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -334,8 +344,7 @@ func (s *DNSServer) setupSignalHandling() {
 	}()
 }
 
-// logStatsNow fetches current statistics, logs them in JSON format, and persists them via the cache manager.
-func (s *DNSServer) logStatsNow(trigger string) {
+func (s *Server) logStatsNow(trigger string) {
 	if s == nil || s.statsMgr == nil {
 		return
 	}
@@ -364,9 +373,7 @@ func (s *DNSServer) logStatsNow(trigger string) {
 	s.statsMgr.Persist(s.cacheMgr)
 }
 
-// shutdownServer performs graceful server shutdown, closing all connections
-// and waiting for background tasks to complete.
-func (s *DNSServer) shutdownServer() {
+func (s *Server) shutdownServer() {
 	if !atomic.CompareAndSwapInt32(&s.closed, 0, 1) {
 		return
 	}
@@ -381,14 +388,13 @@ func (s *DNSServer) shutdownServer() {
 	}
 
 	if s.cacheMgr != nil {
-		dnsutil.CloseWithLog(s.cacheMgr, "Cache manager")
+		dnsutil.CloseWithLog(s.cacheMgr, "Cache store")
 	}
 
 	if s.limiter != nil {
 		s.limiter.Shutdown()
 	}
 
-	// Gracefully shut down UDP/TCP listeners so ListenAndServe goroutines return.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), DefaultTimeout)
 	defer shutdownCancel()
 	if s.udpServer != nil {
@@ -406,9 +412,9 @@ func (s *DNSServer) shutdownServer() {
 		}
 	}
 
-	if s.securityMgr != nil {
-		if err := s.securityMgr.Shutdown(DefaultTimeout); err != nil {
-			log.Errorf("SECURITY: Security manager shutdown failed: %v", err)
+	if s.tls != nil {
+		if err := s.tls.Shutdown(); err != nil {
+			log.Errorf("TLS: TLS server shutdown failed: %v", err)
 		}
 	}
 
@@ -463,9 +469,8 @@ func (s *DNSServer) shutdownServer() {
 	log.Infof("SERVER: Shutdown complete")
 }
 
-// Start starts the DNS server, including UDP, TCP, and secure protocol handlers
-// (DoT, DoQ, DoH, DoH3) if configured.
-func (s *DNSServer) Start() error {
+// Start runs the DNS server and blocks until shutdown is triggered.
+func (s *Server) Start() error {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return errors.New("server is closed")
 	}
@@ -537,11 +542,11 @@ func (s *DNSServer) Start() error {
 		return nil
 	})
 
-	if s.securityMgr.tls != nil {
+	if s.tls != nil {
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("Secure DNS server")
 			httpsPort := s.config.Server.TLS.HTTPS.Port
-			err := s.securityMgr.tls.Start(httpsPort)
+			err := s.tls.Start(httpsPort)
 			if err != nil {
 				return fmt.Errorf("secure DNS startup: %w", err)
 			}
@@ -571,10 +576,8 @@ func (s *DNSServer) Start() error {
 	return nil
 }
 
-// displayInfo logs server configuration information including upstream servers,
-// cache settings, security features, and protocol listeners.
-func (s *DNSServer) displayInfo() {
-	servers := s.queryMgr.upstream.getServers()
+func (s *Server) displayInfo() {
+	servers := s.resolver.UpstreamServers()
 	if len(servers) > 0 {
 		for _, server := range servers {
 			if server.IsRecursive() {
@@ -604,14 +607,14 @@ func (s *DNSServer) displayInfo() {
 	}
 
 	if s.cidrMgr != nil && len(s.config.CIDR) > 0 {
-		log.Infof("CIDR: CIDR Manager: enabled (%d rules)", len(s.config.CIDR))
+		log.Infof("CIDR: CIDR Filter: enabled (%d rules)", len(s.config.CIDR))
 	}
 
 	if s.pprofServer != nil {
 		log.Infof("PPROF: pprof server enabled on: %s, via: %s, tls: %t", s.config.Server.Pprof, PprofPath, s.pprofServer.TLSConfig != nil)
 	}
 
-	if s.securityMgr.tls != nil {
+	if s.tls != nil {
 		log.Infof("TLS: Listening on port: %s (DoT/DoQ)", s.config.Server.TLS.Port)
 		httpsPort := s.config.Server.TLS.HTTPS.Port
 		if httpsPort != "" {

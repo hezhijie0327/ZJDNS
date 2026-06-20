@@ -1,4 +1,4 @@
-// Package sysmem provides cross-platform total system memory detection.
+// Package sysmem detects total system memory for budget calculations.
 package sysmem
 
 import (
@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// TotalBytes returns the total physical memory in bytes, or 0 if detection fails.
+// TotalBytes returns the total system RAM in bytes for the current OS.
 func TotalBytes() uint64 {
 	switch runtime.GOOS {
 	case "linux":
@@ -23,9 +23,7 @@ func TotalBytes() uint64 {
 	}
 }
 
-// BudgetBytes returns the memory budget in bytes for the cache, derived from
-// a percentage of total system memory. percent is the fraction (1-100).
-// Falls back to def bytes if memory detection fails.
+// BudgetBytes calculates a memory budget as a percentage of total RAM.
 func BudgetBytes(percent int, def int64) int64 {
 	total := TotalBytes()
 	if total == 0 {

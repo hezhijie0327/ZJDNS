@@ -1,4 +1,4 @@
-// Package config defines the configuration types and constants for ZJDNS.
+// Package config provides configuration types, loading, generation, and validation.
 package config
 
 import (
@@ -20,7 +20,34 @@ import (
 	"github.com/miekg/dns"
 )
 
-// ServerConfig is the top-level configuration.
+// Default network ports and timeouts.
+const (
+	DefaultDNSPort   = "53"
+	DefaultDOTPort   = "853"
+	DefaultDOHPort   = "443"
+	DefaultPprofPort = "6060"
+	DefaultQueryPath = "/dns-query"
+
+	DefaultCacheSize            = 4 * 1024 * 1024
+	DefaultCachePersistInterval = 30 * time.Second
+	DefaultTTL                  = 10
+
+	DefaultLatencyProbeTimeout = 100 * time.Millisecond
+	DefaultStatsPersistTTL     = 86400
+
+	RecursiveIndicator = "builtin_recursive"
+
+	MaxDomainLength = 253
+	IdleTimeout     = 4 * time.Second
+)
+
+// ProjectName is the application name, set at build time.
+var ProjectName = "ZJDNS"
+
+// Version is the build version, set at build time via ldflags.
+var Version = "dev"
+
+// ServerConfig is the top-level configuration structure for the DNS server.
 type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
 	Upstream []UpstreamServer `json:"upstream"`
@@ -29,7 +56,7 @@ type ServerConfig struct {
 	CIDR     []CIDRConfig     `json:"cidr"`
 }
 
-// ServerSettings contains runtime settings for the DNS server.
+// ServerSettings contains the server runtime settings and feature flags.
 type ServerSettings struct {
 	Port     string       `json:"port"`
 	Pprof    string       `json:"pprof"`
@@ -37,12 +64,12 @@ type ServerSettings struct {
 	TLS      TLSSettings  `json:"tls"`
 	Features FeatureFlags `json:"features"`
 
-	MaxConcurrent int `json:"max_concurrent,omitempty"` // 0 = no limit
-	RateLimit     int `json:"rate_limit,omitempty"`     // 0 = default 1000 qps per client
-	RateBurst     int `json:"rate_burst,omitempty"`     // 0 = default 2000 burst
+	MaxConcurrent int `json:"max_concurrent,omitempty"`
+	RateLimit     int `json:"rate_limit,omitempty"`
+	RateBurst     int `json:"rate_burst,omitempty"`
 }
 
-// TLSSettings contains TLS/HTTPS configuration.
+// TLSSettings configures TLS listener ports, certificates, and HTTPS settings.
 type TLSSettings struct {
 	Port       string        `json:"port"`
 	CertFile   string        `json:"cert_file"`
@@ -51,13 +78,14 @@ type TLSSettings struct {
 	HTTPS      HTTPSSettings `json:"https"`
 }
 
-// HTTPSSettings configures the DoH endpoint.
+// HTTPSSettings configures the HTTPS (DoH/DoH3) listener port and endpoint.
 type HTTPSSettings struct {
 	Port     string `json:"port"`
 	Endpoint string `json:"endpoint"`
 }
 
-// FeatureFlags enables optional server features.
+// FeatureFlags enables optional features: hijack protection, DDR, ECS, cache,
+// latency probes, and stats.
 type FeatureFlags struct {
 	HijackProtection bool                  `json:"hijack_protection"`
 	DDR              DDRSettings           `json:"ddr,omitempty"`
@@ -67,58 +95,35 @@ type FeatureFlags struct {
 	Stats            *StatsSettings        `json:"stats,omitempty"`
 }
 
-// DDRSettings configures DNS Discovery of Designated Resolvers.
+// DDRSettings configures Discovery of Designated Resolvers (DDR) advertisement.
 type DDRSettings struct {
 	Domain string `json:"domain"`
 	IPv4   string `json:"ipv4"`
 	IPv6   string `json:"ipv6"`
 }
 
-// CacheSettings configures the DNS response cache.
-// MemPercent is the percentage of system RAM to budget (1-100, default 5).
+// CacheSettings configures DNS response cache memory usage, persistence,
+// and stale serving.
 type CacheSettings struct {
 	MemPercent  int                      `json:"mem_percent,omitempty"`
 	Persist     CachePersistenceSettings `json:"persist,omitempty"`
 	PreferStale bool                     `json:"prefer_stale,omitempty"`
 }
 
-// CachePersistenceSettings configures disk snapshot persistence for the cache.
+// CachePersistenceSettings configures cache snapshot file persistence.
 type CachePersistenceSettings struct {
 	File     string `json:"file,omitempty"`
 	Interval int    `json:"interval,omitempty"`
 }
 
-// StatsInterval returns the configured stats logging interval in seconds.
-func (s *ServerSettings) StatsInterval() int {
-	if s == nil || s.Features.Stats == nil || s.Features.Stats.Interval <= 0 {
-		return 0
-	}
-	return s.Features.Stats.Interval
-}
-
-// StatsResetInterval returns the configured stats reset interval in seconds.
-func (s *ServerSettings) StatsResetInterval() int {
-	if s == nil || s.Features.Stats == nil {
-		return 0
-	}
-	return s.Features.Stats.ResetInterval
-}
-
-// StatsPersistTTL returns the TTL for persisted stats snapshots in seconds.
-func (s *ServerSettings) StatsPersistTTL() int {
-	if s == nil || s.Features.Stats == nil || s.Features.Stats.ResetInterval <= 0 {
-		return DefaultStatsPersistTTL
-	}
-	return s.Features.Stats.ResetInterval
-}
-
-// StatsSettings configures metrics collection.
+// StatsSettings configures periodic statistics collection and reset intervals.
 type StatsSettings struct {
 	Interval      int `json:"interval,omitempty"`
 	ResetInterval int `json:"reset_interval,omitempty"`
 }
 
-// UpstreamServer defines an upstream DNS or recursive server endpoint.
+// UpstreamServer defines a single upstream DNS server with address, protocol,
+// and optional matching.
 type UpstreamServer struct {
 	Address       string   `json:"address"`
 	Protocol      string   `json:"protocol"`
@@ -127,15 +132,8 @@ type UpstreamServer struct {
 	Match         []string `json:"match,omitempty"`
 }
 
-// IsRecursive reports whether this server represents the built-in recursive resolver.
-func (s *UpstreamServer) IsRecursive() bool {
-	if s == nil {
-		return false
-	}
-	return s.Address == RecursiveIndicator
-}
-
-// RewriteRule defines a domain rewrite rule with optional client filters.
+// RewriteRule defines a DNS rewrite rule with synthetic response, client
+// filtering, and record lists.
 type RewriteRule struct {
 	Name               string            `json:"name"`
 	NormalizedName     string            `json:"normalized_name,omitempty"`
@@ -148,7 +146,7 @@ type RewriteRule struct {
 	IncludeClientCIDRs []*net.IPNet      `json:"-"`
 }
 
-// DNSRecordConfig defines a DNS record entry for rewrite responses.
+// DNSRecordConfig defines a single DNS resource record for rewrite responses.
 type DNSRecordConfig struct {
 	Name         string `json:"name,omitempty"`
 	Type         string `json:"type"`
@@ -158,56 +156,64 @@ type DNSRecordConfig struct {
 	ResponseCode *int   `json:"response_code,omitempty"`
 }
 
-// CIDRConfig defines a CIDR-based client filter with optional file or inline rules.
+// CIDRConfig defines a CIDR rule set loaded from a file or inline rules,
+// associated with a tag.
 type CIDRConfig struct {
 	File  string   `json:"file,omitempty"`
 	Rules []string `json:"rules,omitempty"`
 	Tag   string   `json:"tag"`
 }
 
-// LatencyProbeStep defines a single latency probe step.
+// LatencyProbeStep defines a single latency probe step with protocol, port,
+// and timeout.
 type LatencyProbeStep struct {
 	Protocol string `json:"protocol"`
 	Port     int    `json:"port,omitempty"`
 	Timeout  int    `json:"timeout,omitempty"`
 }
 
-// ──────────────────────────────────────────
-// Constants
-// ──────────────────────────────────────────
+// Loader loads, validates, and prepares the server configuration.
+type Loader struct{}
 
-const (
-	DefaultDNSPort   = "53"
-	DefaultDOTPort   = "853"
-	DefaultDOHPort   = "443"
-	DefaultPprofPort = "6060"
-	DefaultQueryPath = "/dns-query"
+// StatsInterval returns the stats collection interval in seconds, or 0 if
+// not configured.
+func (s *ServerSettings) StatsInterval() int {
+	if s == nil || s.Features.Stats == nil || s.Features.Stats.Interval <= 0 {
+		return 0
+	}
+	return s.Features.Stats.Interval
+}
 
-	DefaultCacheSize            = 4 * 1024 * 1024 // 4 MB default cache budget (bytes)
-	DefaultCachePersistInterval = 30 * time.Second
-	DefaultTTL                  = 10
+// StatsResetInterval returns the stats reset interval in seconds, or 0 if
+// not configured.
+func (s *ServerSettings) StatsResetInterval() int {
+	if s == nil || s.Features.Stats == nil {
+		return 0
+	}
+	return s.Features.Stats.ResetInterval
+}
 
-	DefaultLatencyProbeTimeout = 100 * time.Millisecond
-	DefaultStatsPersistTTL     = 86400
+// StatsPersistTTL returns the stats persist TTL, defaulting to
+// DefaultStatsPersistTTL.
+func (s *ServerSettings) StatsPersistTTL() int {
+	if s == nil || s.Features.Stats == nil || s.Features.Stats.ResetInterval <= 0 {
+		return DefaultStatsPersistTTL
+	}
+	return s.Features.Stats.ResetInterval
+}
 
-	RecursiveIndicator = "builtin_recursive"
+// IsRecursive reports whether the upstream server is the built-in recursive
+// resolver.
+func (s *UpstreamServer) IsRecursive() bool {
+	if s == nil {
+		return false
+	}
+	return s.Address == RecursiveIndicator
+}
 
-	MaxDomainLength = 253 // Maximum length of a fully qualified domain name.
-	IdleTimeout     = 4 * time.Second
-)
-
-// note: net import is handled via a separate import for the RewriteRule type fields.
-
-// ProjectName is set by main during startup for CHAOS TXT records.
-var ProjectName = "ZJDNS"
-
-// Version is set by main during startup for CHAOS TXT records.
-var Version = "dev"
-
-type Manager struct{}
-
-// LoadConfig loads configuration from a file or returns defaults
-func (cm *Manager) LoadConfig(configFile string) (*ServerConfig, error) {
+// LoadConfig reads, parses, validates, and enriches the configuration from a
+// JSON file.
+func (cm *Loader) LoadConfig(configFile string) (*ServerConfig, error) {
 	if configFile == "" {
 		return cm.getDefaultConfig(), nil
 	}
@@ -236,8 +242,7 @@ func (cm *Manager) LoadConfig(configFile string) (*ServerConfig, error) {
 	return cfg, nil
 }
 
-// validateConfig validates the server configuration
-func (cm *Manager) validateConfig(cfg *ServerConfig) error {
+func (cm *Loader) validateConfig(cfg *ServerConfig) error {
 	validLevels := map[string]log.Level{
 		"error": log.Error,
 		"warn":  log.Warn,
@@ -368,7 +373,6 @@ func (cm *Manager) validateConfig(cfg *ServerConfig) error {
 	return nil
 }
 
-// validateLatencyProbeStep validates a single latency probe step and sets default ports based on protocol if not specified.
 func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 	protocol := strings.ToLower(strings.TrimSpace(step.Protocol))
 	if protocol == "" {
@@ -417,7 +421,6 @@ func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 	return nil
 }
 
-// validateLatencyProbeDefaults validates all latency probe steps and sets default timeouts if not specified.
 func validateLatencyProbeDefaults(steps []LatencyProbeStep) error {
 	for i, step := range steps {
 		if err := validateLatencyProbeStep(i, &steps[i]); err != nil {
@@ -430,8 +433,7 @@ func validateLatencyProbeDefaults(steps []LatencyProbeStep) error {
 	return nil
 }
 
-// getDefaultConfig returns the default configuration
-func (cm *Manager) getDefaultConfig() *ServerConfig {
+func (cm *Loader) getDefaultConfig() *ServerConfig {
 	cfg := &ServerConfig{}
 	cfg.Server.LogLevel = log.DefaultLevel
 
@@ -449,17 +451,15 @@ func (cm *Manager) getDefaultConfig() *ServerConfig {
 	return cfg
 }
 
-// shouldEnableDDR checks if DDR should be enabled
-func (cm *Manager) shouldEnableDDR(cfg *ServerConfig) bool {
+func (cm *Loader) shouldEnableDDR(cfg *ServerConfig) bool {
 	ddr := cfg.Server.Features.DDR
 	return ddr.Domain != "" &&
 		(ddr.IPv4 != "" || ddr.IPv6 != "")
 }
 
-// addDDRRecords adds DDR records to the configuration
-func (cm *Manager) addDDRRecords(cfg *ServerConfig) {
+func (cm *Loader) addDDRRecords(cfg *ServerConfig) {
 	ddr := cfg.Server.Features.DDR
-	// Validate DDR inputs to prevent SVCB record injection
+
 	if strings.ContainsAny(ddr.Domain, " \"") || strings.ContainsAny(ddr.IPv4, " \"") || strings.ContainsAny(ddr.IPv6, " \"") {
 		log.Warnf("CONFIG: DDR domain/IP contains unsafe characters, DDR records will not be added")
 		return
@@ -542,8 +542,7 @@ func (cm *Manager) addDDRRecords(cfg *ServerConfig) {
 		domain, ddr.IPv4, ddr.IPv6)
 }
 
-// addChaosRecord adds built-in CHAOS TXT records for resolver identity/version queries.
-func (cm *Manager) addChaosRecord(cfg *ServerConfig) {
+func (cm *Loader) addChaosRecord(cfg *ServerConfig) {
 	hostname, err := os.Hostname()
 	if err != nil || strings.TrimSpace(hostname) == "" {
 		hostname = ProjectName
@@ -573,9 +572,10 @@ func (cm *Manager) addChaosRecord(cfg *ServerConfig) {
 	log.Infof("CONFIG: CHAOS TXT rewrite records enabled")
 }
 
-// GenerateExampleConfig generates an example configuration.
+// GenerateExampleConfig returns a complete example configuration as indented
+// JSON.
 func GenerateExampleConfig() string {
-	cm := &Manager{}
+	cm := &Loader{}
 	cfg := cm.getDefaultConfig()
 
 	cfg.Server.Pprof = DefaultPprofPort
@@ -584,7 +584,7 @@ func GenerateExampleConfig() string {
 	cfg.Server.TLS.CertFile = "/path/to/cert.pem"
 	cfg.Server.TLS.KeyFile = "/path/to/key.pem"
 
-	cfg.Server.Features.Cache.MemPercent = 5 // % of system RAM for cache budget
+	cfg.Server.Features.Cache.MemPercent = 5
 	cfg.Server.Features.Cache.Persist = CachePersistenceSettings{
 		File:     "cache.snapshot",
 		Interval: int(DefaultCachePersistInterval / time.Second),

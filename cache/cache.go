@@ -1,33 +1,26 @@
-// Package cache provides an in-memory DNS response cache with optional disk persistence.
+// Package cache provides the DNS response cache interface and in-memory
+// implementation with optional disk persistence.
 package cache
 
 import (
 	"crypto/sha256"
 	"encoding/gob"
 	"fmt"
-	"io"
 	"net"
-	"os"
-	"path/filepath"
-	"slices"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
-	"zjdns/config"
+	"github.com/miekg/dns"
+
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
-	"zjdns/internal/log"
-	"zjdns/internal/sysmem"
-
-	"github.com/miekg/dns"
 )
 
 const (
-	StaleTTL    = 30
+	// StaleTTL is the TTL in seconds returned for expired cache entries.
+	StaleTTL = 30
+	// StaleMaxAge is the maximum age in seconds an expired entry may be served.
 	StaleMaxAge = 45 * 86400
 
 	resultBufferCapacity = 128
@@ -39,26 +32,15 @@ const (
 
 var cacheSnapshotMagic = "ZJDNS-CACHE-V" + strconv.Itoa(cacheSnapshotVersion)
 
-func init() {
-	gob.Register(&persistedCacheSnapshot{})
-	gob.Register(&persistedCacheItem{})
-	gob.Register(&CacheEntry{})
-	gob.Register(&CompactRecord{})
-}
-
-// ── Interfaces ──
-
-// Manager is the interface for DNS response caches.
-type Manager interface {
+// Store defines the cache storage interface.
+type Store interface {
 	Get(key string) (*CacheEntry, bool, bool)
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
 	SetEntry(key string, entry *CacheEntry)
 	Close() error
 }
 
-// ── Types ──
-
-// CacheEntry stores serialized DNS response data and metadata.
+// CacheEntry holds a cached DNS response with timing and EDNS metadata.
 type CacheEntry struct {
 	Answer          []*CompactRecord `json:"answer"`
 	Authority       []*CompactRecord `json:"authority"`
@@ -76,605 +58,36 @@ type CacheEntry struct {
 	Payload         []byte           `json:"payload,omitempty"`
 }
 
-// CompactRecord stores a compact representation of a DNS RR.
-// RR caches the parsed RR object for fast retrieval; it is not serialized and
-// will be re-parsed on demand after snapshot restore.
+// CompactRecord is a space-efficient representation of a DNS resource record.
 type CompactRecord struct {
 	Text    string `json:"text"`
 	OrigTTL uint32 `json:"orig_ttl"`
 	Type    uint16 `json:"type"`
-	RR      dns.RR `json:"-"` // cached parsed RR, immutable after creation
+	RR      dns.RR `json:"-"`
 }
 
-// LookupResult represents a candidate for reverse PTR lookup.
+// LookupResult holds a PTR reverse-lookup result.
 type LookupResult struct {
 	Name string
 	TTL  uint32
 }
 
-// ── MemoryCache ──
-
-// MemoryCache provides a concurrent in-memory DNS response cache.
-// Gets use RLock (no contention between readers). Sets use a full Lock.
-// Clone/size-estimate work is done outside the write lock. Eviction uses a
-// single sort pass (O(N log N)). Memory usage is bounded by limitBytes; when
-// exceeded, the least recently accessed entries are evicted.
-type MemoryCache struct {
-	mu          sync.RWMutex
-	entries     map[string]*cacheItem
-	entryPTRs   map[string][]ptrRecord
-	limitBytes  int64
-	currentSize int64
-	closed      int32
-	ptrIndex    map[string]map[string]uint32
-
-	persistPath     string
-	persistInterval time.Duration
-	persistStop     chan struct{}
-	persistDone     chan struct{}
-	persistGen      atomic.Int64 // generation counter avoids lost-dirty race
-}
-
-type cacheItem struct {
-	entry      *CacheEntry
-	size       int64
-	lastAccess atomic.Int64
-}
-
-type ptrRecord struct {
-	IP   string
-	Name string
-	TTL  uint32
-}
-
-type persistedCacheSnapshot struct {
-	Version int                  `json:"version"`
-	SavedAt int64                `json:"saved_at"`
-	Entries []persistedCacheItem `json:"entries"`
-}
-
-type persistedCacheItem struct {
-	Key   string      `json:"key"`
-	Entry *CacheEntry `json:"entry,omitempty"`
-	PTRs  []ptrRecord `json:"ptrs,omitempty"`
-}
-
-// ── Constructor ──
-
-// New creates a MemoryCache with the given settings.
-// Cache capacity is derived from settings.MemPercent of system RAM
-// (default 5%). Falls back to DefaultCacheSize bytes if memory detection fails.
-func New(settings config.CacheSettings) *MemoryCache {
-	pct := settings.MemPercent
-	if pct <= 0 || pct > 100 {
-		pct = 5
-	}
-	budget := sysmem.BudgetBytes(pct, config.DefaultCacheSize)
-	log.Infof("CACHE: %d MB budget (%d%% of system memory)", budget/(1024*1024), pct)
-
-	mc := &MemoryCache{
-		entries:         make(map[string]*cacheItem),
-		entryPTRs:       make(map[string][]ptrRecord),
-		limitBytes:      budget,
-		ptrIndex:        make(map[string]map[string]uint32),
-		persistPath:     strings.TrimSpace(settings.Persist.File),
-		persistInterval: time.Duration(settings.Persist.Interval) * time.Second,
-	}
-
-	if mc.persistInterval <= 0 {
-		mc.persistInterval = config.DefaultCachePersistInterval
-	}
-
-	if mc.persistPath != "" {
-		if loaded, err := mc.loadSnapshotFromDisk(); err != nil {
-			log.Warnf("CACHE: failed to load snapshot file %s: %v", mc.persistPath, err)
-		} else if loaded > 0 {
-			log.Infof("CACHE: restored %d entries (%d MB) from snapshot %s", loaded, mc.currentSize/(1024*1024), mc.persistPath)
-		}
-		mc.startPersistWorker()
-		log.Infof("CACHE: persistence enabled (file=%s interval=%s)", mc.persistPath, mc.persistInterval)
-	} else {
-		log.Debugf("CACHE: persistence disabled")
-	}
-
-	log.Infof("CACHE: Memory cache enabled (budget=%d MB)", budget/(1024*1024))
-	return mc
-}
-
-// ── Get (RLock — no contention between readers) ──
-
-func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
-	if atomic.LoadInt32(&mc.closed) != 0 {
-		return nil, false, false
-	}
-
-	mc.mu.RLock()
-	item, found := mc.entries[key]
-	if !found || item == nil || item.entry == nil {
-		mc.mu.RUnlock()
-		return nil, false, false
-	}
-
-	// Record access time atomically (for approximate LRU eviction).
-	// Capture entry pointer before releasing the lock; entries are immutable
-	// after insertion so cloning outside the lock is safe.
-	item.lastAccess.Store(time.Now().UnixNano())
-	entry := item.entry
-	mc.mu.RUnlock()
-
-	cloned := cloneEntry(entry)
-	return cloned, true, cloned.IsExpired()
-}
-
-// ── Set ──
-
-func (mc *MemoryCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption) {
-	if atomic.LoadInt32(&mc.closed) != 0 {
-		return
-	}
-	now := time.Now().Unix()
-	ttl := minTTL(answer, authority, additional)
-
-	entry := &CacheEntry{
-		Answer:      compact(answer),
-		Authority:   compact(authority),
-		Additional:  compact(additional),
-		TTL:         ttl,
-		OriginalTTL: ttl,
-		Timestamp:   now,
-		Validated:   validated,
-		AccessTime:  now,
-	}
-	if ecs != nil {
-		entry.ECSFamily = ecs.Family
-		entry.ECSSourcePrefix = ecs.SourcePrefix
-		entry.ECSScopePrefix = ecs.ScopePrefix
-		entry.ECSAddress = ecs.Address.String()
-	}
-	mc.SetEntry(key, entry)
-}
-
-func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
-	if atomic.LoadInt32(&mc.closed) != 0 || entry == nil {
-		return
-	}
-
-	// Pre-compute outside the write lock: deep copy, PTR records, size estimate.
-	fullCopy := cloneEntry(entry)
-	ptrRecords := extractPTRRecords(fullCopy)
-	estSize := estimateEntrySize(key, fullCopy, ptrRecords)
-
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-	if atomic.LoadInt32(&mc.closed) != 0 {
-		return
-	}
-
-	if existing, ok := mc.entries[key]; ok {
-		oldSize := existing.size
-		mc.removePTRLocked(key)
-		existing.entry = fullCopy
-		existing.lastAccess.Store(time.Now().UnixNano())
-		mc.storePTRLocked(key, ptrRecords)
-		existing.size = estSize
-		mc.currentSize += estSize - oldSize
-		mc.persistGen.Add(1)
-		mc.evictToBudget()
-		return
-	}
-
-	item := &cacheItem{entry: fullCopy}
-	item.lastAccess.Store(time.Now().UnixNano())
-	mc.entries[key] = item
-	mc.storePTRLocked(key, ptrRecords)
-	item.size = estSize
-	mc.currentSize += estSize
-
-	mc.persistGen.Add(1)
-	mc.evictToBudget()
-}
-
-// evictToBudget removes entries until memory usage falls under the byte budget
-// using approximate LRU via random sampling (O(k * samples) where k = evictions).
-// Must be called under mu.Lock.
-const evictSampleSize = 5
-
-func (mc *MemoryCache) evictToBudget() {
-	if mc.limitBytes <= 0 || mc.currentSize <= mc.limitBytes || len(mc.entries) == 0 {
-		return
-	}
-
-	// Flatten keys once for sampling
-	keys := make([]string, 0, max(len(mc.entries), evictSampleSize))
-	for k := range mc.entries {
-		keys = append(keys, k)
-	}
-
-	evicted := 0
-	for mc.currentSize > mc.limitBytes && len(mc.entries) > 0 {
-		// Sample a small random subset and evict the LRU among them.
-		oldestKey := ""
-		var oldestLast int64 = 1<<63 - 1
-		var oldestSize int64
-
-		for range evictSampleSize {
-			idx := int(fastRandN(uint32(len(keys))))
-			k := keys[idx]
-			item, ok := mc.entries[k]
-			if !ok {
-				continue
-			}
-			last := item.lastAccess.Load()
-			if last < oldestLast {
-				oldestLast = last
-				oldestKey = k
-				oldestSize = item.size
-			}
-		}
-
-		if oldestKey == "" {
-			break
-		}
-		mc.currentSize -= oldestSize
-		mc.removePTRLocked(oldestKey)
-		delete(mc.entries, oldestKey)
-		// Replace the removed key slot with the last element to keep the sample
-		// pool valid without rebuilding.
-		if n := len(keys); n > 1 {
-			for i, k := range keys {
-				if k == oldestKey {
-					keys[i] = keys[n-1]
-					keys = keys[:n-1]
-					break
-				}
-			}
-		} else {
-			keys = keys[:0]
-		}
-		evicted++
-	}
-
-	if evicted > 0 {
-		log.Debugf("CACHE: evicted %d entries to enforce budget (current=%d MB, limit=%d MB)", evicted, mc.currentSize/(1024*1024), mc.limitBytes/(1024*1024))
-	}
-}
-
-// fastRandN returns a pseudo-random number in [0, n) using a simple linear
-// congruential generator. This avoids locking and allocation overhead of
-// math/rand/v2 for hot-path sampling.
-var evictRngState atomic.Uint64
-
-func fastRandN(n uint32) uint32 {
-	if n <= 1 {
-		return 0
-	}
-	// LCG with parameters from Numerical Recipes.
-	state := evictRngState.Add(6364136223846793005)
-	return uint32((uint64(state) * uint64(n)) >> 32)
-}
-
-// estimateEntrySize returns an estimated memory footprint in bytes for a cache
-// entry, including the key string, CacheEntry, compact records, payload, PTR
-// records, and Go map overhead.
-func estimateEntrySize(key string, entry *CacheEntry, ptrs []ptrRecord) int64 {
-	if entry == nil {
-		return 0
-	}
-	// Base overhead: key string + map bucket + CacheEntry fixed fields + 3 slice headers.
-	size := int64(len(key)) + 64 + 208 + 72
-
-	// Variable: compact records (text + ~40 bytes struct overhead per record).
-	for _, cr := range entry.Answer {
-		if cr != nil {
-			size += int64(len(cr.Text)) + 44
-		}
-	}
-	for _, cr := range entry.Authority {
-		if cr != nil {
-			size += int64(len(cr.Text)) + 44
-		}
-	}
-	for _, cr := range entry.Additional {
-		if cr != nil {
-			size += int64(len(cr.Text)) + 44
-		}
-	}
-
-	// Compressed payload.
-	size += int64(len(entry.Payload))
-
-	// PTR records: IP + name strings + ~40 bytes struct overhead.
-	for _, pr := range ptrs {
-		size += int64(len(pr.IP)+len(pr.Name)) + 56
-	}
-
-	return size
-}
-
-// ── Reverse Lookup ──
-
-func (mc *MemoryCache) ReverseLookup(ip net.IP) []LookupResult {
-	if ip == nil {
-		return nil
-	}
-	mc.mu.RLock()
-	candidates, ok := mc.ptrIndex[ip.String()]
-	mc.mu.RUnlock()
-	if !ok || len(candidates) == 0 {
-		return nil
-	}
-	results := make([]LookupResult, 0, len(candidates))
-	for name, ttl := range candidates {
-		results = append(results, LookupResult{Name: name, TTL: ttl})
-	}
-	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
-	return results
-}
-
-// ── PTR index helpers ──
-
-// extractPTRRecords builds a slice of ptrRecord from a CacheEntry.
-// This is a pure function — no cache state is read or written.
-func extractPTRRecords(entry *CacheEntry) []ptrRecord {
-	if entry == nil {
-		return nil
-	}
-	records := make([]ptrRecord, 0, len(entry.Answer))
-	for _, cr := range entry.Answer {
-		if cr == nil {
-			continue
-		}
-		rr := expand(cr)
-		if rr == nil {
-			continue
-		}
-		var ip net.IP
-		var name string
-		var ttl uint32
-		switch r := rr.(type) {
-		case *dns.A:
-			ip, name, ttl = r.A, r.Hdr.Name, r.Hdr.Ttl
-		case *dns.AAAA:
-			ip, name, ttl = r.AAAA, r.Hdr.Name, r.Hdr.Ttl
-		default:
-			continue
-		}
-		if ip == nil || name == "" {
-			continue
-		}
-		records = append(records, ptrRecord{IP: ip.String(), Name: dns.Fqdn(name), TTL: ttl})
-	}
-	return records
-}
-
-func (mc *MemoryCache) storePTRLocked(key string, records []ptrRecord) {
-	if len(records) == 0 {
-		delete(mc.entryPTRs, key)
-		return
-	}
-	cloned := make([]ptrRecord, len(records))
-	copy(cloned, records)
-	mc.entryPTRs[key] = cloned
-	for _, rec := range cloned {
-		if mc.ptrIndex[rec.IP] == nil {
-			mc.ptrIndex[rec.IP] = make(map[string]uint32)
-		}
-		mc.ptrIndex[rec.IP][rec.Name] = rec.TTL
-	}
-}
-
-func (mc *MemoryCache) removePTRLocked(key string) {
-	records, ok := mc.entryPTRs[key]
-	if !ok || len(records) == 0 {
-		delete(mc.entryPTRs, key)
-		return
-	}
-	for _, rec := range records {
-		if domains, ok := mc.ptrIndex[rec.IP]; ok {
-			delete(domains, rec.Name)
-			if len(domains) == 0 {
-				delete(mc.ptrIndex, rec.IP)
-			}
-		}
-	}
-	delete(mc.entryPTRs, key)
-}
-
-// ── Persistence ──
-
-func (mc *MemoryCache) startPersistWorker() {
-	if mc.persistPath == "" {
-		return
-	}
-	mc.persistStop = make(chan struct{})
-	mc.persistDone = make(chan struct{})
-	go func() {
-		defer dnsutil.HandlePanic("cache persist worker")
-		defer close(mc.persistDone)
-		ticker := time.NewTicker(mc.persistInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				gen := mc.persistGen.Swap(0)
-				if gen == 0 {
-					continue
-				}
-				if err := mc.persistSnapshot(); err != nil {
-					mc.persistGen.Add(gen)
-					log.Errorf("CACHE: persist snapshot failed: %v", err)
-				}
-			case <-mc.persistStop:
-				return
-			}
-		}
-	}()
-}
-
-func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
-	file, err := os.Open(mc.persistPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	defer func() { _ = file.Close() }()
-
-	header := make([]byte, len(cacheSnapshotMagic))
-	if _, err := io.ReadFull(file, header); err != nil {
-		return 0, err
-	}
-	if string(header) != cacheSnapshotMagic {
-		return 0, fmt.Errorf("invalid cache snapshot format")
-	}
-
-	var snapshot persistedCacheSnapshot
-	if err := gob.NewDecoder(file).Decode(&snapshot); err != nil {
-		return 0, err
-	}
-	if snapshot.Version != cacheSnapshotVersion {
-		return 0, fmt.Errorf("unsupported snapshot version: %d", snapshot.Version)
-	}
-	if len(snapshot.Entries) == 0 {
-		return 0, nil
-	}
-
-	now := time.Now().Unix()
-	loaded := 0
-
-	mc.mu.Lock()
-	for _, item := range snapshot.Entries {
-		if item.Key == "" || item.Entry == nil || item.Entry.TTL <= 0 {
-			continue
-		}
-		if now-item.Entry.Timestamp > int64(item.Entry.TTL+StaleMaxAge) {
-			continue
-		}
-		if _, exists := mc.entries[item.Key]; exists {
-			continue
-		}
-		entryCopy := cloneEntry(item.Entry)
-		ci := &cacheItem{entry: entryCopy}
-		ci.lastAccess.Store(time.Now().UnixNano())
-		mc.entries[item.Key] = ci
-		mc.storePTRLocked(item.Key, item.PTRs)
-		ci.size = estimateEntrySize(item.Key, entryCopy, item.PTRs)
-		mc.currentSize += ci.size
-		loaded++
-	}
-	mc.evictToBudget() // evict once after all entries are loaded
-	mc.mu.Unlock()
-	mc.persistGen.Store(0)
-	return loaded, nil
-}
-
-func (mc *MemoryCache) persistSnapshot() error {
-	if mc.persistPath == "" {
-		return nil
-	}
-	now := time.Now().Unix()
-	snapshot := persistedCacheSnapshot{
-		Version: cacheSnapshotVersion,
-		SavedAt: now,
-	}
-
-	mc.mu.RLock()
-	if mc.entries != nil {
-		snapshot.Entries = make([]persistedCacheItem, 0, len(mc.entries))
-		for key, item := range mc.entries {
-			if item == nil || item.entry == nil || item.entry.TTL <= 0 {
-				continue
-			}
-			if now-item.entry.Timestamp > int64(item.entry.TTL+StaleMaxAge) {
-				continue
-			}
-			snapshot.Entries = append(snapshot.Entries, persistedCacheItem{
-				Key:   key,
-				Entry: cloneEntry(item.entry),
-				PTRs:  clonePTRs(mc.entryPTRs[key]),
-			})
-		}
-	}
-	mc.mu.RUnlock()
-
-	dir := filepath.Dir(mc.persistPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	tmp := mc.persistPath + ".tmp"
-	file, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	if _, err := file.WriteString(cacheSnapshotMagic); err != nil {
-		_ = file.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := gob.NewEncoder(file).Encode(&snapshot); err != nil {
-		_ = file.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, mc.persistPath); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
-}
-
-// ── Close ──
-
-func (mc *MemoryCache) Close() error {
-	if !atomic.CompareAndSwapInt32(&mc.closed, 0, 1) {
-		return nil
-	}
-	if mc.persistStop != nil {
-		close(mc.persistStop)
-		if mc.persistDone != nil {
-			select {
-			case <-mc.persistDone:
-			case <-time.After(config.IdleTimeout):
-				log.Errorf("CACHE: persist worker shutdown timeout")
-			}
-		}
-	}
-	if mc.persistPath != "" {
-		if err := mc.persistSnapshot(); err != nil {
-			log.Errorf("CACHE: final snapshot failed: %v", err)
-		} else {
-			log.Infof("CACHE: snapshot flushed to %s", mc.persistPath)
-		}
-	}
-	mc.mu.Lock()
-	mc.entries = nil
-	mc.ptrIndex = nil
-	mc.mu.Unlock()
-	log.Infof("CACHE: Memory cache shut down")
-	return nil
-}
-
-// ── CacheEntry methods ──
-
+// IsExpired reports whether the entry's TTL has elapsed.
 func (c *CacheEntry) IsExpired() bool {
 	return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL)
 }
+
+// ShouldRefresh reports whether the entry has passed both TTL and original TTL.
 func (c *CacheEntry) ShouldRefresh() bool {
 	return c != nil && c.IsExpired() && time.Now().Unix()-c.Timestamp > int64(max(c.OriginalTTL, c.TTL))
 }
+
+// CanServeExpired reports whether the expired entry is within the maxAge window.
 func (c *CacheEntry) CanServeExpired(maxAge int) bool {
 	return c != nil && c.IsExpired() && time.Now().Unix()-c.Timestamp-int64(c.TTL) <= int64(maxAge)
 }
+
+// GetRemainingTTL returns the remaining TTL, or StaleTTL if expired.
 func (c *CacheEntry) GetRemainingTTL() uint32 {
 	if c == nil {
 		return 0
@@ -685,6 +98,8 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	}
 	return uint32(StaleTTL)
 }
+
+// ECSOption returns the EDNS Client Subnet stored in the entry, if any.
 func (c *CacheEntry) ECSOption() *edns.ECSOption {
 	if c == nil || c.ECSAddress == "" {
 		return nil
@@ -694,6 +109,9 @@ func (c *CacheEntry) ECSOption() *edns.ECSOption {
 	}
 	return nil
 }
+
+// ShouldPrefetch reports whether the entry is due for refresh based on a
+// percentage threshold of its original TTL.
 func (c *CacheEntry) ShouldPrefetch(thresholdPercent int) bool {
 	if c == nil || c.IsExpired() || thresholdPercent <= 0 {
 		return false
@@ -715,8 +133,8 @@ func (c *CacheEntry) ShouldPrefetch(thresholdPercent int) bool {
 	return remaining <= (original*int64(thresholdPercent)+99)/100
 }
 
-// ── Public helpers ──
-
+// BuildCacheKey constructs a deterministic cache key from a DNS question,
+// optional ECS option, and DNSSEC flag.
 func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDNSSEC bool) string {
 	var buf strings.Builder
 	buf.Grow(resultBufferCapacity)
@@ -743,6 +161,7 @@ func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDN
 	return result
 }
 
+// CreateCompactRecord creates a CompactRecord from a DNS resource record.
 func CreateCompactRecord(rr dns.RR) *CompactRecord {
 	if rr == nil {
 		return nil
@@ -750,6 +169,7 @@ func CreateCompactRecord(rr dns.RR) *CompactRecord {
 	return &CompactRecord{Text: rr.String(), OrigTTL: rr.Header().Ttl, Type: rr.Header().Rrtype, RR: rr}
 }
 
+// ExpandRecord converts a CompactRecord back to a DNS resource record.
 func ExpandRecord(cr *CompactRecord) dns.RR {
 	if cr == nil || cr.Text == "" {
 		return nil
@@ -758,6 +178,7 @@ func ExpandRecord(cr *CompactRecord) dns.RR {
 	return rr
 }
 
+// ExpandRecords converts a slice of CompactRecords to DNS resource records.
 func ExpandRecords(crs []*CompactRecord) []dns.RR {
 	if len(crs) == 0 {
 		return nil
@@ -771,6 +192,8 @@ func ExpandRecords(crs []*CompactRecord) []dns.RR {
 	return result
 }
 
+// ProcessRecords adjusts TTLs on resource records and optionally filters
+// DNSSEC record types.
 func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC bool) []dns.RR {
 	if len(rrs) == 0 {
 		return nil
@@ -803,93 +226,9 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC boo
 	return result
 }
 
-// ── Internal helpers ──
-
-func cloneEntry(entry *CacheEntry) *CacheEntry {
-	if entry == nil {
-		return nil
-	}
-	cloned := *entry
-	cloned.Answer = cloneRecords(entry.Answer)
-	cloned.Authority = cloneRecords(entry.Authority)
-	cloned.Additional = cloneRecords(entry.Additional)
-	return &cloned
-}
-
-func cloneRecords(records []*CompactRecord) []*CompactRecord {
-	if len(records) == 0 {
-		return nil
-	}
-	cloned := make([]*CompactRecord, len(records))
-	for i, r := range records {
-		if r == nil {
-			continue
-		}
-		rr := *r
-		rr.RR = nil // don't serialize cached RR; re-parsed from Text on restore
-		cloned[i] = &rr
-	}
-	return cloned
-}
-
-func clonePTRs(records []ptrRecord) []ptrRecord {
-	if len(records) == 0 {
-		return nil
-	}
-	cloned := make([]ptrRecord, len(records))
-	copy(cloned, records)
-	return cloned
-}
-
-func compact(rrs []dns.RR) []*CompactRecord {
-	if len(rrs) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool, len(rrs))
-	result := make([]*CompactRecord, 0, len(rrs))
-	for _, rr := range rrs {
-		if rr == nil || rr.Header().Rrtype == dns.TypeOPT {
-			continue
-		}
-		rrText := rr.String()
-		if !seen[rrText] {
-			seen[rrText] = true
-			if cr := CreateCompactRecord(rr); cr != nil {
-				result = append(result, cr)
-			}
-		}
-	}
-	return result
-}
-
-func expand(cr *CompactRecord) dns.RR {
-	if cr == nil || cr.Text == "" {
-		return nil
-	}
-	if cr.RR != nil {
-		return cr.RR
-	}
-	rr, _ := dns.NewRR(cr.Text)
-	cr.RR = rr // cache for subsequent accesses
-	return rr
-}
-
-func minTTL(answer, authority, additional []dns.RR) int {
-	all := slices.Concat(answer, authority, additional)
-	if len(all) == 0 {
-		return config.DefaultTTL
-	}
-	minT := int(all[0].Header().Ttl)
-	for _, rr := range all {
-		if rr == nil {
-			continue
-		}
-		if ttl := int(rr.Header().Ttl); ttl > 0 && ttl < minT {
-			minT = ttl
-		}
-	}
-	if minT <= 0 {
-		minT = config.DefaultTTL
-	}
-	return minT
+func init() {
+	gob.Register(&persistedCacheSnapshot{})
+	gob.Register(&persistedCacheItem{})
+	gob.Register(&CacheEntry{})
+	gob.Register(&CompactRecord{})
 }

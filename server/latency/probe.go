@@ -1,8 +1,10 @@
-package server
+// Package latency provides A/AAAA latency probing and record reordering for
+// optimized client connectivity.
+package latency
 
 import (
 	"context"
-	"crypto/tls"
+	cryptotls "crypto/tls"
 	"fmt"
 	"math"
 	"net"
@@ -22,12 +24,39 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	servertls "zjdns/server/tls"
 )
 
-// startLatencyProbe starts a background latency probe for A/AAAA records when configured.
-// It will reorder cached answers if a faster ordering is discovered.
-func (s *DNSServer) startLatencyProbe(question dns.Question, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) {
-	if s == nil || len(s.config.Server.Features.LatencyProbe) == 0 {
+// CacheSetter is the interface for updating the DNS cache with reordered
+// records after latency probing.
+type CacheSetter interface {
+	Set(cacheKey string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
+}
+
+// Prober measures network latency to resolved IP addresses and reorders A/AAAA
+// records in the cache to prioritize faster endpoints.
+type Prober struct {
+	cache           CacheSetter
+	bgGroup         func(func() error)
+	bgCtx           context.Context
+	latencyProbeCfg []config.LatencyProbeStep
+}
+
+// New creates a new Prober with the given cache setter, background group
+// executor, context, and probe configuration steps.
+func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, steps []config.LatencyProbeStep) *Prober {
+	return &Prober{
+		cache:           cache,
+		bgGroup:         bgGroup,
+		bgCtx:           bgCtx,
+		latencyProbeCfg: steps,
+	}
+}
+
+// Start initiates a background latency probe for A/AAAA records when multiple
+// addresses exist. If probing finds a faster ordering, the cache is updated.
+func (p *Prober) Start(question dns.Question, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) {
+	if p == nil || len(p.latencyProbeCfg) == 0 {
 		log.Debugf("LATENCY: probe skipped for %s because latency_probe is not configured", question.Name)
 		return
 	}
@@ -54,38 +83,35 @@ func (s *DNSServer) startLatencyProbe(question dns.Question, cacheKey string, an
 		return
 	}
 
-	steps := s.config.Server.Features.LatencyProbe
-	log.Debugf("LATENCY: starting background latency probe for %s with %d steps", question.Name, len(steps))
+	log.Debugf("LATENCY: starting background latency probe for %s with %d steps", question.Name, len(p.latencyProbeCfg))
 
-	s.backgroundGroup.Go(func() error {
+	p.bgGroup(func() error {
 		defer dnsutil.HandlePanic("latency probe")
-		if err := s.performLatencyProbeAndReorder(s.backgroundCtx, cacheKey, answer, authority, additional, validated, ecsResponse, steps); err != nil {
+		if err := p.probeAndReorder(p.bgCtx, cacheKey, answer, authority, additional, validated, ecsResponse); err != nil {
 			log.Debugf("LATENCY: background probe failed for %s: %v", question.Name, err)
 		}
 		return nil
 	})
 }
 
-// performLatencyProbeAndReorder performs latency probes for A/AAAA records and reorders them in the cache if a faster order is found.
-func (s *DNSServer) performLatencyProbeAndReorder(ctx context.Context, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, steps []config.LatencyProbeStep) error {
+func (p *Prober) probeAndReorder(ctx context.Context, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	log.Debugf("LATENCY: performing latency probe for cache key %s", cacheKey)
-	sortedAnswer, changed := sortAAndAAAARecordsByLatency(ctx, answer, steps)
+	sortedAnswer, changed := sortByLatency(ctx, answer, p.latencyProbeCfg)
 	if !changed {
 		log.Debugf("LATENCY: no faster A/AAAA order found for %s", cacheKey)
 		return nil
 	}
 
-	s.cacheMgr.Set(cacheKey, sortedAnswer, authority, additional, validated, ecsResponse)
+	p.cache.Set(cacheKey, sortedAnswer, authority, additional, validated, ecsResponse)
 	log.Debugf("LATENCY: reordered A/AAAA records for %s", cacheKey)
 	return nil
 }
 
-// sortAAndAAAARecordsByLatency probes each A/AAAA record and sorts them by latency. It returns the sorted answer and whether the order was changed.
-func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []config.LatencyProbeStep) ([]dns.RR, bool) {
+func sortByLatency(ctx context.Context, answer []dns.RR, steps []config.LatencyProbeStep) ([]dns.RR, bool) {
 	indices := make([]int, 0, len(answer))
 	for i, rr := range answer {
 		if isAOrAAAA(rr) {
@@ -107,7 +133,6 @@ func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []
 		candidates[i] = candidate{idx: idx, rr: answer[idx], latency: time.Duration(math.MaxInt64)}
 	}
 
-	// Limit concurrent probes to avoid goroutine/file-descriptor exhaustion.
 	const maxProbes = 16
 	sem := make(chan struct{}, maxProbes)
 	results := make(chan candidate, len(candidates))
@@ -150,7 +175,6 @@ func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []
 	return sortedAnswer, changed
 }
 
-// measureRecordLatency probes the given A/AAAA record using the configured steps and returns the measured latency. If all probes fail, it returns MaxInt64.
 func measureRecordLatency(ctx context.Context, rr dns.RR, steps []config.LatencyProbeStep) time.Duration {
 	ip := extractIPAddress(rr)
 	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
@@ -179,7 +203,6 @@ func measureRecordLatency(ctx context.Context, rr dns.RR, steps []config.Latency
 	return time.Duration(math.MaxInt64)
 }
 
-// probeAddress performs a latency probe to the given IP address using the specified protocol and port. It returns an error if the probe fails.
 func probeAddress(ctx context.Context, ip net.IP, step config.LatencyProbeStep) error {
 	protocol := strings.ToLower(strings.TrimSpace(step.Protocol))
 	switch protocol {
@@ -220,7 +243,6 @@ func probeAddress(ctx context.Context, ip net.IP, step config.LatencyProbeStep) 
 	}
 }
 
-// probeHTTP performs an HTTP or HTTPS latency probe to the given IP and port. It returns an error if the probe fails.
 func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool) error {
 	scheme := "http"
 	if useTLS {
@@ -237,17 +259,15 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool) 
 
 	var client *http.Client
 	if useHTTP3 {
-		tlsConfig := &tls.Config{
+		tlsConfig := &cryptotls.Config{
 			InsecureSkipVerify: true,
-			NextProtos:         NextProtoDoH3,
+			NextProtos:         servertls.NextProtoDoH3,
 		}
-		transport := &http3.Transport{
-			TLSClientConfig: tlsConfig,
-		}
+		transport := &http3.Transport{TLSClientConfig: tlsConfig}
 		defer func() { _ = transport.Close() }()
 		client = &http.Client{Transport: transport}
 	} else {
-		tlsConfig := &tls.Config{InsecureSkipVerify: true}
+		tlsConfig := &cryptotls.Config{InsecureSkipVerify: true}
 		transport := &http.Transport{
 			Proxy:             nil,
 			DisableKeepAlives: true,
@@ -267,7 +287,6 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool) 
 	return nil
 }
 
-// probeUDP performs a UDP latency probe to the given IP and port. It returns an error if the probe fails.
 func probeUDP(ctx context.Context, ip net.IP, port int) error {
 	addr := net.JoinHostPort(ip.String(), fmt.Sprint(port))
 	dialer := net.Dialer{}
@@ -294,7 +313,6 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 	return nil
 }
 
-// probeTCP performs a TCP latency probe to the given IP and port. It returns an error if the probe fails.
 func probeTCP(ctx context.Context, ip net.IP, port int) error {
 	addr := net.JoinHostPort(ip.String(), fmt.Sprint(port))
 	dialer := net.Dialer{}
@@ -306,7 +324,6 @@ func probeTCP(ctx context.Context, ip net.IP, port int) error {
 	return nil
 }
 
-// probeICMP performs a latency probe using ICMP echo requests (ping) to the given IP address. It returns an error if the probe fails.
 func probeICMP(ctx context.Context, ip net.IP) error {
 	var network string
 	var proto int
@@ -324,7 +341,6 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 		replyType = ipv6.ICMPTypeEchoReply
 	}
 
-	// Use empty string to let the kernel choose the appropriate source address
 	conn, err := icmp.ListenPacket(network, "")
 	if err != nil {
 		return err
@@ -341,7 +357,7 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 		Body: &icmp.Echo{
 			ID:   os.Getpid() & 0xffff,
 			Seq:  1,
-			Data: make([]byte, 56), // Linux ping default payload size
+			Data: make([]byte, 56),
 		},
 	}
 	messageData, err := message.Marshal(nil)
@@ -382,7 +398,6 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 	}
 }
 
-// extractIPAddress extracts the IP address from an A or AAAA DNS record. It returns nil if the record is not A/AAAA or if extraction fails.
 func extractIPAddress(rr dns.RR) net.IP {
 	switch record := rr.(type) {
 	case *dns.A:
@@ -394,9 +409,6 @@ func extractIPAddress(rr dns.RR) net.IP {
 	}
 }
 
-// isAOrAAAA checks if a DNS RR is an A or AAAA record. It returns false if the RR is nil or not A/AAAA.
-// isAOrAAAA is kept for use in sortAAndAAAARecordsByLatency; extractIPAddress
-// performs the same type switch — a future cleanup could unify these.
 func isAOrAAAA(rr dns.RR) bool {
 	if rr == nil {
 		return false

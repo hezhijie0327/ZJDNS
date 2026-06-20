@@ -1,4 +1,4 @@
-package server
+package tls
 
 import (
 	"context"
@@ -19,26 +19,22 @@ import (
 	"zjdns/internal/pool"
 )
 
-// startDOQServer starts the DNS over QUIC server.
-func (tm *TLSManager) startDOQServer() error {
-	addr := ":" + tm.server.config.Server.TLS.Port
+func (s *Server) startDOQServer() error {
+	addr := ":" + s.cfg.Port
 
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return fmt.Errorf("resolve UDP address: %w", err)
 	}
 
-	tm.doqConn, err = net.ListenUDP("udp", udpAddr)
+	s.doqConn, err = net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		return fmt.Errorf("UDP listen: %w", err)
 	}
 
-	tm.doqTransport = &quic.Transport{
-		Conn: tm.doqConn,
-	}
+	s.doqTransport = &quic.Transport{Conn: s.doqConn}
 
-	// Configure TLS for DoQ
-	quicTLSConfig := tm.tlsConfig.Clone()
+	quicTLSConfig := s.tlsConfig.Clone()
 	quicTLSConfig.NextProtos = NextProtoDoQ
 
 	quicConfig := &quic.Config{
@@ -49,35 +45,34 @@ func (tm *TLSManager) startDOQServer() error {
 		EnableDatagrams:       true,
 	}
 
-	tm.doqListener, err = tm.doqTransport.ListenEarly(quicTLSConfig, quicConfig)
+	s.doqListener, err = s.doqTransport.ListenEarly(quicTLSConfig, quicConfig)
 	if err != nil {
-		_ = tm.doqConn.Close()
+		_ = s.doqConn.Close()
 		return fmt.Errorf("DoQ listen: %w", err)
 	}
 
-	log.Infof("TLS: DoQ server started on port %s", tm.server.config.Server.TLS.Port)
+	log.Infof("TLS: DoQ server started on port %s", s.cfg.Port)
 
-	tm.serverGroup.Go(func() error {
+	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoQ server")
-		tm.handleDOQConnections()
+		s.handleDOQConnections()
 		return nil
 	})
 
 	return nil
 }
 
-// handleDOQConnections accepts and handles incoming DoQ connections.
-func (tm *TLSManager) handleDOQConnections() {
+func (s *Server) handleDOQConnections() {
 	for {
 		select {
-		case <-tm.ctx.Done():
+		case <-s.ctx.Done():
 			return
 		default:
 		}
 
-		conn, err := tm.doqListener.Accept(tm.ctx)
+		conn, err := s.doqListener.Accept(s.ctx)
 		if err != nil {
-			if tm.ctx.Err() != nil {
+			if s.ctx.Err() != nil {
 				return
 			}
 			log.Errorf("TLS: DoQ Accept error: %v", err)
@@ -89,62 +84,51 @@ func (tm *TLSManager) handleDOQConnections() {
 			continue
 		}
 
-		tm.serverGroup.Go(func() error {
+		s.serverGroup.Go(func() error {
 			defer dnsutil.HandlePanic("DoQ connection handler")
-			tm.handleDOQConnection(conn)
+			s.handleDOQConnection(conn)
 			return nil
 		})
 	}
 }
 
-// handleDOQConnection handles a single DoQ connection.
-func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
+func (s *Server) handleDOQConnection(conn *quic.Conn) {
 	if conn == nil {
 		return
 	}
 
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), config.IdleTimeout)
 		defer cancel()
-
 		_ = conn.CloseWithError(QUICCodeNoError, "")
-
 		done := make(chan struct{})
 		go func() {
 			<-conn.Context().Done()
 			close(done)
 		}()
-
 		select {
 		case <-done:
 		case <-ctx.Done():
-			log.Debugf("TLS: Connection close timeout")
 		}
 	}()
 
-	streamGroup, _ := errgroup.WithContext(tm.ctx)
-	streamGroup.SetLimit(64) // Limit concurrent streams per DoQ connection
+	streamGroup, _ := errgroup.WithContext(s.ctx)
+	streamGroup.SetLimit(64)
 
 	for {
 		select {
-		case <-tm.ctx.Done():
-			if err := streamGroup.Wait(); err != nil {
-				log.Errorf("DoQ: Stream group finished with error: %v", err)
-			}
+		case <-s.ctx.Done():
+			_ = streamGroup.Wait()
 			return
 		case <-conn.Context().Done():
-			if err := streamGroup.Wait(); err != nil {
-				log.Errorf("DoQ: Stream group finished with error: %v", err)
-			}
+			_ = streamGroup.Wait()
 			return
 		default:
 		}
 
-		stream, err := conn.AcceptStream(tm.ctx)
+		stream, err := conn.AcceptStream(s.ctx)
 		if err != nil {
-			if err := streamGroup.Wait(); err != nil {
-				log.Errorf("DoQ: Stream group finished with error: %v", err)
-			}
+			_ = streamGroup.Wait()
 			return
 		}
 
@@ -156,19 +140,17 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 			defer dnsutil.HandlePanic("DoQ stream handler")
 			if stream != nil {
 				defer func() { _ = stream.Close() }()
-				tm.handleDOQStream(stream, conn)
+				s.handleDOQStream(stream, conn)
 			}
 			return nil
 		})
 	}
 }
 
-// handleDOQStream handles a single DoQ stream.
-func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
+func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	buf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(buf)
 
-	// Read message length
 	n, err := io.ReadFull(stream, buf[:2])
 	if err != nil || n < 2 {
 		return
@@ -180,13 +162,11 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	// Read message body
 	n, err = io.ReadFull(stream, buf[2:2+msgLen])
 	if err != nil || n != int(msgLen) {
 		return
 	}
 
-	// Parse DNS message
 	req := pool.DefaultMessagePool.Get()
 	if err := req.Unpack(buf[2 : 2+msgLen]); err != nil {
 		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid DNS message")
@@ -194,12 +174,11 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	// Get client IP and process query
 	clientIP := SecureClientIP(conn)
-	response := tm.server.processDNSQuery(req, clientIP, true, "DoQ")
+	response := s.handler.ServeDNS(req, clientIP, true, "DoQ")
 	pool.DefaultMessagePool.Put(req)
-	// Send response
-	if err := tm.respondQUIC(stream, response); err != nil {
+
+	if err := s.respondQUIC(stream, response); err != nil {
 		log.Debugf("TLS: DoQ response failed: %v", err)
 	}
 	if response != nil {
@@ -207,8 +186,7 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 }
 
-// respondQUIC sends a DNS response over a QUIC stream.
-func (tm *TLSManager) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
+func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 	if response == nil {
 		return errors.New("response is nil")
 	}

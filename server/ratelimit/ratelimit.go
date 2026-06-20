@@ -1,4 +1,6 @@
-package server
+// Package ratelimit provides per-IP token bucket rate limiting for DNS query
+// traffic.
+package ratelimit
 
 import (
 	"net"
@@ -10,25 +12,25 @@ import (
 )
 
 const (
-	defaultRate  = 1000 // queries per second per client
+	defaultRate  = 1000
 	defaultBurst = 2000
 	cleanupEvery = 5 * time.Minute
-	numShards    = 64 // Power of 2 — enables fast bitwise modulo
+	numShards    = 64
 )
 
-// Limiter is a sharded per-client-IP token bucket rate limiter.
-// 64 shards eliminate lock contention under high concurrency.
+// Limiter implements a sharded token bucket rate limiter keyed by client IP
+// address.
 type Limiter struct {
-	shards [numShards]limiterShard
+	shards [numShards]shard
 	rate   int
 	burst  int
 	done   chan struct{}
 	closed atomic.Bool
 }
 
-type limiterShard struct {
+type shard struct {
 	mu      sync.Mutex
-	clients map[[16]byte]*bucket // [16]byte key from ip.To16() avoids string allocation
+	clients map[[16]byte]*bucket
 }
 
 type bucket struct {
@@ -36,8 +38,10 @@ type bucket struct {
 	lastSeen time.Time
 }
 
-// NewLimiter creates a sharded rate limiter with the given rate (qps) and burst.
-func NewLimiter(rate, burst int) *Limiter {
+// New creates a new Limiter with the specified rate (tokens per second) and
+// burst size. Default values are used if the provided values are zero or
+// negative.
+func New(rate, burst int) *Limiter {
 	if rate <= 0 {
 		rate = defaultRate
 	}
@@ -56,7 +60,9 @@ func NewLimiter(rate, burst int) *Limiter {
 	return l
 }
 
-// Allow reports whether a request from the given IP is allowed.
+// Allow checks whether a request from the given IP should be permitted based
+// on the current token balance. Returns false if the IP has exceeded the rate
+// limit.
 func (l *Limiter) Allow(ip net.IP) bool {
 	if l == nil {
 		return true
@@ -87,14 +93,13 @@ func (l *Limiter) Allow(ip net.IP) bool {
 	return true
 }
 
-// Shutdown stops the cleanup goroutine.
+// Shutdown stops the background cleanup goroutine for the rate limiter.
 func (l *Limiter) Shutdown() {
 	if l != nil && l.closed.CompareAndSwap(false, true) {
 		close(l.done)
 	}
 }
 
-// ipToKey normalizes an IP to a [16]byte key for use as a map index.
 func ipToKey(ip net.IP) [16]byte {
 	var key [16]byte
 	normalized := ip.To16()
@@ -104,12 +109,11 @@ func ipToKey(ip net.IP) [16]byte {
 	return key
 }
 
-// hashIPKey maps a [16]byte IP key to a shard index using FNV-1a.
 func hashIPKey(key [16]byte) uint8 {
 	h := uint32(0)
 	for _, b := range key {
 		h ^= uint32(b)
-		h *= 16777619 // FNV-1a prime
+		h *= 16777619
 	}
 	return uint8(h & (numShards - 1))
 }

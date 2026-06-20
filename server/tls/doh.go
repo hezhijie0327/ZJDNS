@@ -1,7 +1,7 @@
-package server
+package tls
 
 import (
-	"crypto/tls"
+	cryptotls "crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -19,29 +19,28 @@ import (
 	"zjdns/internal/pool"
 )
 
-// startDOHServer starts the DNS over HTTPS server (HTTP/2).
-func (tm *TLSManager) startDOHServer(port string) error {
+func (s *Server) startDOHServer(port string) error {
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		return fmt.Errorf("DoH listen: %w", err)
+		return err
 	}
 
-	tlsConfig := tm.tlsConfig.Clone()
+	tlsConfig := s.tlsConfig.Clone()
 	tlsConfig.NextProtos = NextProtoDoH
 
-	tm.httpsListener = tls.NewListener(listener, tlsConfig)
+	s.httpsListener = cryptotls.NewListener(listener, tlsConfig)
 	log.Infof("TLS: DoH server started on port %s", port)
 
-	tm.httpsServer = &http.Server{
-		Handler:           tm,
-		ReadHeaderTimeout: OperationTimeout,
-		WriteTimeout:      OperationTimeout,
+	s.httpsServer = &http.Server{
+		Handler:           s,
+		ReadHeaderTimeout: config.IdleTimeout,
+		WriteTimeout:      config.IdleTimeout,
 		IdleTimeout:       config.IdleTimeout,
 	}
 
-	tm.serverGroup.Go(func() error {
+	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoH server")
-		if err := tm.httpsServer.Serve(tm.httpsListener); err != nil && err != http.ErrServerClosed {
+		if err := s.httpsServer.Serve(s.httpsListener); err != nil && err != http.ErrServerClosed {
 			log.Errorf("TLS: DoH server error: %v", err)
 			return err
 		}
@@ -51,11 +50,10 @@ func (tm *TLSManager) startDOHServer(port string) error {
 	return nil
 }
 
-// startDoH3Server starts the DNS over HTTPS server (HTTP/3).
-func (tm *TLSManager) startDoH3Server(port string) error {
+func (s *Server) startDoH3Server(port string) error {
 	addr := ":" + port
 
-	tlsConfig := tm.tlsConfig.Clone()
+	tlsConfig := s.tlsConfig.Clone()
 	tlsConfig.NextProtos = NextProtoDoH3
 
 	quicConfig := &quic.Config{
@@ -68,17 +66,17 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 
 	quicListener, err := quic.ListenAddrEarly(addr, tlsConfig, quicConfig)
 	if err != nil {
-		return fmt.Errorf("DoH3 listen: %w", err)
+		return err
 	}
 
-	tm.h3Listener = quicListener
+	s.h3Listener = quicListener
 	log.Infof("TLS: DoH3 server started on port %s", port)
 
-	tm.h3Server = &http3.Server{Handler: tm}
+	s.h3Server = &http3.Server{Handler: s}
 
-	tm.serverGroup.Go(func() error {
+	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoH3 server")
-		if err := tm.h3Server.ServeListener(tm.h3Listener); err != nil && err != http.ErrServerClosed {
+		if err := s.h3Server.ServeListener(s.h3Listener); err != nil && err != http.ErrServerClosed {
 			log.Errorf("TLS: DoH3 server error: %v", err)
 			return err
 		}
@@ -88,15 +86,15 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 	return nil
 }
 
-// ServeHTTP handles HTTP requests for DoH/DoH3 servers.
-func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if tm == nil || tm.server == nil {
+// ServeHTTP handles incoming DoH and DoH3 HTTP requests, parsing the DNS query
+// from GET or POST and returning the DNS response.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s == nil || s.handler == nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	// Check endpoint path
-	expectedPath := tm.server.config.Server.TLS.HTTPS.Endpoint
+	expectedPath := s.cfg.HTTPSEndpoint
 	if expectedPath == "" {
 		expectedPath = config.DefaultQueryPath
 	}
@@ -109,27 +107,25 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse the DNS request
-	req, statusCode := tm.parseDoHRequest(r, w)
+	req, statusCode := s.parseDoHRequest(r, w)
 	if req == nil {
 		http.Error(w, http.StatusText(statusCode), statusCode)
 		return
 	}
 
-	// Extract client IP from the HTTP request
 	var clientIP net.IP
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		clientIP = net.ParseIP(host)
 	}
-	// Process the query
+
 	protocol := "DoH"
 	if strings.HasPrefix(r.Proto, "HTTP/3") {
 		protocol = "DoH3"
 	}
-	response := tm.server.processDNSQuery(req, clientIP, true, protocol)
+	response := s.handler.ServeDNS(req, clientIP, true, protocol)
 	pool.DefaultMessagePool.Put(req)
 
-	if err := tm.respondDoH(w, response); err != nil {
+	if err := s.respondDoH(w, response); err != nil {
 		log.Errorf("TLS: DoH response failed: %v", err)
 	}
 	if response != nil {
@@ -137,9 +133,7 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// parseDoHRequest parses a DNS request from an HTTP request.
-// It supports both GET (with base64url encoded dns parameter) and POST methods.
-func (tm *TLSManager) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*dns.Msg, int) {
+func (s *Server) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*dns.Msg, int) {
 	var buf []byte
 	var err error
 
@@ -182,8 +176,7 @@ func (tm *TLSManager) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*
 	return req, http.StatusOK
 }
 
-// respondDoH sends a DNS response as an HTTP response.
-func (tm *TLSManager) respondDoH(w http.ResponseWriter, response *dns.Msg) error {
+func (s *Server) respondDoH(w http.ResponseWriter, response *dns.Msg) error {
 	if response == nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return nil

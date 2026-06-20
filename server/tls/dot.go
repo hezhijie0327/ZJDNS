@@ -1,11 +1,10 @@
-package server
+package tls
 
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
+	cryptotls "crypto/tls"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -16,43 +15,41 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/server/client"
 )
 
-// startDOTServer starts the DNS over TLS server.
-func (tm *TLSManager) startDOTServer() error {
-	listener, err := net.Listen("tcp", ":"+tm.server.config.Server.TLS.Port)
+func (s *Server) startDOTServer() error {
+	listener, err := net.Listen("tcp", ":"+s.cfg.Port)
 	if err != nil {
-		return fmt.Errorf("DoT listen: %w", err)
+		return err
 	}
 
-	// Configure TLS for DoT
-	dotTLSConfig := tm.tlsConfig.Clone()
+	dotTLSConfig := s.tlsConfig.Clone()
 	dotTLSConfig.NextProtos = NextProtoDOT
 
-	tm.dotListener = tls.NewListener(listener, dotTLSConfig)
-	log.Infof("TLS: DoT server started on port %s", tm.server.config.Server.TLS.Port)
+	s.dotListener = cryptotls.NewListener(listener, dotTLSConfig)
+	log.Infof("TLS: DoT server started on port %s", s.cfg.Port)
 
-	tm.serverGroup.Go(func() error {
+	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoT server")
-		tm.handleDOTConnections()
+		s.handleDOTConnections()
 		return nil
 	})
 
 	return nil
 }
 
-// handleDOTConnections accepts and handles incoming DoT connections.
-func (tm *TLSManager) handleDOTConnections() {
+func (s *Server) handleDOTConnections() {
 	for {
 		select {
-		case <-tm.ctx.Done():
+		case <-s.ctx.Done():
 			return
 		default:
 		}
 
-		conn, err := tm.dotListener.Accept()
+		conn, err := s.dotListener.Accept()
 		if err != nil {
-			if tm.ctx.Err() != nil {
+			if s.ctx.Err() != nil {
 				return
 			}
 			log.Errorf("TLS: Accept error: %v", err)
@@ -60,42 +57,34 @@ func (tm *TLSManager) handleDOTConnections() {
 			continue
 		}
 
-		tm.serverGroup.Go(func() error {
+		s.serverGroup.Go(func() error {
 			defer dnsutil.HandlePanic("DoT connection handler")
 			defer func() { _ = conn.Close() }()
-			tm.handleDOTConnection(conn)
+			s.handleDOTConnection(conn)
 			return nil
 		})
 	}
 }
 
-// handleDOTConnection handles a single DoT connection with RFC 7766 query
-// pipelining: queries are processed concurrently and responses are written
-// out of order through a dedicated writer goroutine.
-func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
-	tlsConn, ok := conn.(*tls.Conn)
+func (s *Server) handleDOTConnection(conn net.Conn) {
+	tlsConn, ok := conn.(*cryptotls.Conn)
 	if !ok {
 		return
 	}
 
 	reader := bufio.NewReaderSize(tlsConn, TLSConnBufferSize)
-	connCtx, connCancel := context.WithCancel(tm.ctx)
+	connCtx, connCancel := context.WithCancel(s.ctx)
 	defer connCancel()
 
-	// Writer channel: worker goroutines send packed responses here for
-	// serialized writing to the TLS connection.
-	type writeTask struct {
-		data []byte
-	}
+	type writeTask struct{ data []byte }
 	writeCh := make(chan writeTask, 64)
 
-	// Writer goroutine — single owner of the TLS socket for writes.
 	writerDone := make(chan struct{})
 	go func() {
 		defer dnsutil.HandlePanic("DoT writer")
 		defer close(writerDone)
 		for task := range writeCh {
-			_ = tlsConn.SetWriteDeadline(time.Now().Add(OperationTimeout))
+			_ = tlsConn.SetWriteDeadline(time.Now().Add(client.OperationTimeout))
 			if _, err := tlsConn.Write(task.data); err != nil {
 				log.Debugf("TLS: write error: %v", err)
 				connCancel()
@@ -104,31 +93,23 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		}
 	}()
 
-	// Cleanup: close write channel → wait for writer → connection teardown.
 	defer func() {
 		close(writeCh)
 		<-writerDone
 	}()
 
-	// Track in-flight workers for clean shutdown.
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	// Per-connection worker capacity — bounds concurrent query processing
-	// per DoT connection (mirrors client-side defaultMaxPipe).
-	workerCap := make(chan struct{}, defaultMaxPipe)
+	workerCap := make(chan struct{}, client.DefaultMaxPipe)
 
-	// Reader loop — processes queries sequentially on this goroutine
-	// (bufio.Reader is not goroutine-safe) and dispatches processing
-	// to worker goroutines.
 	for {
 		if connCtx.Err() != nil {
 			return
 		}
 
-		_ = tlsConn.SetReadDeadline(time.Now().Add(OperationTimeout))
+		_ = tlsConn.SetReadDeadline(time.Now().Add(client.OperationTimeout))
 
-		// Read 2-byte length prefix.
 		lengthBuf := make([]byte, 2)
 		n, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
@@ -138,17 +119,14 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			return
 		}
 		if n != 2 {
-			log.Debugf("TLS: invalid length read: %d bytes", n)
 			return
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
 		if msgLength == 0 || msgLength > pool.SecureBufferSize-2 {
-			log.Debugf("TLS: invalid message length: %d", msgLength)
 			return
 		}
 
-		// Read message body using buffer pool (msgLength ≤ TCPBufferSize ≤ SecureBufferSize).
 		buf := pool.DefaultBufferPool.Get()
 		msgBuf := buf
 		if cap(msgBuf) < int(msgLength) {
@@ -158,34 +136,27 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		}
 		n, err = io.ReadFull(reader, msgBuf)
 		if err != nil {
-			log.Debugf("TLS: read message error: %v", err)
 			pool.DefaultBufferPool.Put(buf)
 			return
 		}
 		if n != int(msgLength) {
-			log.Debugf("TLS: incomplete message read: %d/%d bytes", n, msgLength)
 			pool.DefaultBufferPool.Put(buf)
 			return
 		}
 
-		// Parse DNS message.
 		req := pool.DefaultMessagePool.Get()
 		if err := req.Unpack(msgBuf); err != nil {
-			log.Debugf("TLS: DNS message unpack error: %v", err)
 			pool.DefaultMessagePool.Put(req)
 			pool.DefaultBufferPool.Put(buf)
 			continue
 		}
 		pool.DefaultBufferPool.Put(buf)
 
-		// Get client IP.
 		var clientIP net.IP
 		if addr := tlsConn.RemoteAddr(); addr != nil {
 			clientIP = addr.(*net.TCPAddr).IP
 		}
 
-		// Acquire per-connection worker slot; block if at capacity to
-		// provide backpressure and bound memory under load.
 		select {
 		case workerCap <- struct{}{}:
 		case <-connCtx.Done():
@@ -193,7 +164,6 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		// Process query asynchronously — responses may complete out of order.
 		wg.Add(1)
 		go func(query *dns.Msg, ip net.IP) {
 			defer func() { <-workerCap }()
@@ -201,7 +171,7 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			defer wg.Done()
 			defer pool.DefaultMessagePool.Put(query)
 
-			response := tm.server.processDNSQuery(query, ip, true, "DoT")
+			response := s.handler.ServeDNS(query, ip, true, "DoT")
 			if response == nil {
 				return
 			}

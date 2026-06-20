@@ -1,4 +1,4 @@
-// Package log provides leveled logging with color output and a cached time source.
+// Package log provides a leveled logging manager with colored output.
 package log
 
 import (
@@ -9,9 +9,11 @@ import (
 	"time"
 )
 
-// Level represents the severity of a log message.
-type Level int
-
+// Error level indicates a component failure or data loss risk.
+// Warn level indicates a rare boundary condition or background task failure.
+// Info level indicates a startup/shutdown lifecycle event or configuration
+// summary.
+// Debug level provides detailed hot-path information for debugging.
 const (
 	Error Level = iota
 	Warn
@@ -19,8 +21,9 @@ const (
 	Debug
 )
 
+// DefaultLevel is the default logging level string.
 const (
-	DefaultLevel = "info" // Default logging level name.
+	DefaultLevel = "info"
 )
 
 const (
@@ -32,28 +35,30 @@ const (
 	colorBold   = "\033[1m"
 )
 
-// Manager handles leveled, color-coded logging.
+// Default is the package-level default Manager instance.
+var Default = NewManager()
+
+// DefaultTimeCache is the package-level default TimeCache.
+var DefaultTimeCache = NewTimeCache()
+
+// Level represents a logging severity level.
+type Level int
+
+// Manager manages leveled logging with configurable output.
 type Manager struct {
 	level    atomic.Int32
 	writer   io.Writer
 	colorMap map[Level]string
 }
 
-// TimeCache provides a low-cost cached current time, updated once per second.
+// TimeCache caches the current time with periodic one-second updates.
 type TimeCache struct {
 	currentTime atomic.Value
 	ticker      *time.Ticker
 	done        chan struct{}
 }
 
-// Default is the package-level logger instance. Call SetLevel on it during
-// startup to configure verbosity.
-var Default = NewManager()
-
-// DefaultTimeCache is the package-level time cache. Stop it during shutdown.
-var DefaultTimeCache = NewTimeCache()
-
-// NewManager creates a new Manager writing to stdout with Info level.
+// NewManager creates a new Manager with default settings.
 func NewManager() *Manager {
 	m := &Manager{
 		writer: os.Stdout,
@@ -68,7 +73,7 @@ func NewManager() *Manager {
 	return m
 }
 
-// SetLevel sets the logging level.
+// SetLevel sets the logging level, clamped to the valid range.
 func (m *Manager) SetLevel(lvl Level) {
 	if lvl < Error {
 		lvl = Error
@@ -83,7 +88,7 @@ func (m *Manager) Level() Level {
 	return Level(m.level.Load())
 }
 
-// String returns the level as a human-readable string.
+// String returns the string representation of the Level.
 func (l Level) String() string {
 	switch l {
 	case Error:
@@ -99,8 +104,7 @@ func (l Level) String() string {
 	}
 }
 
-// Log emits a message at the given level. Messages below the configured level
-// are suppressed.
+// Log logs a message at the specified level.
 func (m *Manager) Log(lvl Level, format string, args ...any) {
 	if lvl < Error {
 		lvl = Error
@@ -129,36 +133,50 @@ func (m *Manager) Log(lvl Level, format string, args ...any) {
 	_, _ = fmt.Fprint(m.writer, logLine)
 }
 
-// Error logs at ERROR level.
+// Error logs an error-level message.
 func (m *Manager) Error(format string, args ...any) { m.Log(Error, format, args...) }
 
-// Warn logs at WARN level.
+// Warn logs a warning-level message.
 func (m *Manager) Warn(format string, args ...any) { m.Log(Warn, format, args...) }
 
-// Info logs at INFO level.
+// Info logs an info-level message.
 func (m *Manager) Info(format string, args ...any) { m.Log(Info, format, args...) }
 
-// Debug logs at DEBUG level.
+// Debug logs a debug-level message.
 func (m *Manager) Debug(format string, args ...any) { m.Log(Debug, format, args...) }
 
-// Package-level convenience functions that operate on Default.
-
-// Error logs at ERROR level on the default logger.
+// Errorf logs an error-level message via the default manager.
 func Errorf(format string, args ...any) { Default.Error(format, args...) }
 
-// Warnf logs at WARN level on the default logger.
+// Warnf logs a warning-level message via the default manager.
 func Warnf(format string, args ...any) { Default.Warn(format, args...) }
 
-// Infof logs at INFO level on the default logger.
+// Infof logs an info-level message via the default manager.
 func Infof(format string, args ...any) { Default.Info(format, args...) }
 
-// Debugf logs at DEBUG level on the default logger.
+// Debugf logs a debug-level message via the default manager.
 func Debugf(format string, args ...any) { Default.Debug(format, args...) }
 
-// SetLevel configures the default logger's verbosity.
+// SetLevel sets the logging level on the default manager.
 func SetLevel(lvl Level) { Default.SetLevel(lvl) }
 
-// NewTimeCache creates a TimeCache that updates once per second.
+func sanitizeLogMessage(msg string) string {
+	if len(msg) == 0 {
+		return msg
+	}
+	b := make([]byte, 0, len(msg))
+	for i := 0; i < len(msg); i++ {
+		c := msg[i]
+		if c == 0x0a || c == 0x0d || c == 0x09 || (c < 32 && c != 0) {
+			b = append(b, ' ')
+		} else {
+			b = append(b, c)
+		}
+	}
+	return string(b)
+}
+
+// NewTimeCache creates and starts a new TimeCache.
 func NewTimeCache() *TimeCache {
 	tc := &TimeCache{
 		ticker: time.NewTicker(time.Second),
@@ -180,37 +198,17 @@ func NewTimeCache() *TimeCache {
 	return tc
 }
 
-// Now returns the cached current time with 1-second granularity.
+// Now returns the current cached time.
 func (tc *TimeCache) Now() time.Time {
 	return tc.currentTime.Load().(time.Time)
 }
 
-// Stop stops the time cache ticker.
-// sanitizeLogMessage strips control characters and newlines from log messages
-// to prevent log injection attacks via user-controlled input (e.g. DNS query names).
-func sanitizeLogMessage(msg string) string {
-	if len(msg) == 0 {
-		return msg
-	}
-	b := make([]byte, 0, len(msg))
-	for i := 0; i < len(msg); i++ {
-		c := msg[i]
-		if c == 0x0a || c == 0x0d || c == 0x09 || (c < 32 && c != 0) {
-			b = append(b, ' ')
-		} else {
-			b = append(b, c)
-		}
-	}
-	return string(b)
-}
-
-// Stop signals the background goroutine to exit and stops the ticker.
+// Stop stops the time cache ticker and goroutine.
 func (tc *TimeCache) Stop() {
 	if tc == nil {
 		return
 	}
-	// Signal the goroutine to exit by closing done before stopping
-	// the ticker; otherwise the goroutine would block on range forever.
+
 	if tc.done != nil {
 		close(tc.done)
 	}

@@ -1,4 +1,3 @@
-// Package main implements ZJDNS, a high-performance DNS server that supports DoT, DoH, DoQ, DoH3, and recursive resolution.
 package main
 
 import (
@@ -6,13 +5,15 @@ import (
 	"runtime"
 )
 
-// Version information contains the current build version.
-
+// ProjectName is the name of the project.
+// Version is the current semantic version of the server.
+// CommitHash is the git commit hash from which the binary was built.
+// BuildTime is the UTC timestamp of when the binary was built.
 var (
-	ProjectName = "ZJDNS" // ProjectName is the name of the project
-	Version     = "2.0.0" // Version is the current version of ZJDNS
-	CommitHash  = "dirty" // CommitHash is the git commit hash (set during build)
-	BuildTime   = "dev"   // BuildTime is the build timestamp (set during build)
+	ProjectName = "ZJDNS"
+	Version     = "2.0.0"
+	CommitHash  = "dirty"
+	BuildTime   = "dev"
 )
 
 func getVersion() string {

@@ -1,4 +1,4 @@
-// Package rewrite provides domain-based DNS rewrite rules.
+// Package rewrite provides domain-level DNS response rewriting.
 package rewrite
 
 import (
@@ -16,7 +16,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-// Result carries the result of evaluating rewrite rules for a query.
+// Result holds the outcome of a rewrite rule evaluation.
 type Result struct {
 	Domain        string
 	ShouldRewrite bool
@@ -25,16 +25,16 @@ type Result struct {
 	Additional    []dns.RR
 }
 
-// Manager manages DNS rewrite rules and applies them to incoming queries.
-type Manager struct {
+// Evaluator manages rewrite rules and evaluates them against queries.
+type Evaluator struct {
 	rules              atomic.Pointer[[]config.RewriteRule]
 	rulesLen           atomic.Uint64
 	globalExcludeCIDRs atomic.Pointer[[]*net.IPNet]
 }
 
-// New creates a new DNS rewrite Manager.
-func New() *Manager {
-	rm := &Manager{}
+// New creates an Evaluator with no rules loaded.
+func New() *Evaluator {
+	rm := &Evaluator{}
 	initialRules := make([]config.RewriteRule, 0, 16)
 	initialExcludes := make([]*net.IPNet, 0)
 	rm.rules.Store(&initialRules)
@@ -43,8 +43,8 @@ func New() *Manager {
 	return rm
 }
 
-// LoadRules loads rewrite rules into the Manager.
-func (rm *Manager) LoadRules(rules []config.RewriteRule) error {
+// LoadRules validates and loads rewrite rules into the Evaluator.
+func (re *Evaluator) LoadRules(rules []config.RewriteRule) error {
 	validRules := make([]config.RewriteRule, 0, len(rules))
 	globalExcludes := make([]*net.IPNet, 0)
 	for i, rule := range rules {
@@ -52,7 +52,7 @@ func (rm *Manager) LoadRules(rules []config.RewriteRule) error {
 			log.Warnf("REWRITE: rule name too long (%d chars, max %d), skipping", len(rule.Name), config.MaxDomainLength)
 			continue
 		}
-		// Validate record content to prevent DNS record injection
+
 		for j, rec := range rule.Records {
 			if strings.Contains(rec.Content, "\n") || strings.HasPrefix(rec.Content, " ") || strings.HasSuffix(rec.Content, " ") {
 				return fmt.Errorf("rewrite rule '%s': record %d content must not contain newlines or leading/trailing spaces", rule.Name, j)
@@ -97,14 +97,13 @@ func (rm *Manager) LoadRules(rules []config.RewriteRule) error {
 		validRules = append(validRules, rule)
 	}
 
-	rm.rules.Store(&validRules)
-	rm.rulesLen.Store(uint64(len(validRules)))
-	rm.globalExcludeCIDRs.Store(&globalExcludes)
+	re.rules.Store(&validRules)
+	re.rulesLen.Store(uint64(len(validRules)))
+	re.globalExcludeCIDRs.Store(&globalExcludes)
 	log.Infof("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
 	return nil
 }
 
-// parseCIDREntry parses a CIDR or IP address entry for rewrite client filters.
 func parseCIDREntry(entry string) (*net.IPNet, error) {
 	entry = strings.TrimSpace(entry)
 	if entry == "" {
@@ -123,13 +122,13 @@ func parseCIDREntry(entry string) (*net.IPNet, error) {
 	return ipNet, nil
 }
 
-// HasRules reports whether any rewrite rules are loaded.
-func (rm *Manager) HasRules() bool {
-	return rm.rulesLen.Load() > 0
+// HasRules reports whether any rewrite rules are currently loaded.
+func (re *Evaluator) HasRules() bool {
+	return re.rulesLen.Load() > 0
 }
 
-// Evaluate checks if a domain should be rewritten and returns the result.
-func (rm *Manager) Evaluate(domain string, qtype uint16, qclass uint16, clientIP net.IP) Result {
+// Evaluate checks a query against loaded rules and returns a rewrite Result.
+func (re *Evaluator) Evaluate(domain string, qtype uint16, qclass uint16, clientIP net.IP) Result {
 	result := Result{
 		Domain:        domain,
 		ResponseCode:  dns.RcodeSuccess,
@@ -142,7 +141,7 @@ func (rm *Manager) Evaluate(domain string, qtype uint16, qclass uint16, clientIP
 		return result
 	}
 
-	excludePtr := rm.globalExcludeCIDRs.Load()
+	excludePtr := re.globalExcludeCIDRs.Load()
 	if excludePtr != nil && clientIP != nil {
 		for _, ipNet := range *excludePtr {
 			if ipNet.Contains(clientIP) {
@@ -150,11 +149,11 @@ func (rm *Manager) Evaluate(domain string, qtype uint16, qclass uint16, clientIP
 			}
 		}
 	}
-	if !rm.HasRules() {
+	if !re.HasRules() {
 		return result
 	}
 
-	rulesPtr := rm.rules.Load()
+	rulesPtr := re.rules.Load()
 	if rulesPtr == nil {
 		return result
 	}
@@ -223,12 +222,12 @@ ruleLoop:
 				if record.Type != "" && recordType != qtype {
 					continue
 				}
-				if rr := rm.buildRecord(domain, record); rr != nil {
+				if rr := re.buildRecord(domain, record); rr != nil {
 					result.Records = append(result.Records, rr)
 				}
 			}
 			for _, record := range rule.Additional {
-				if rr := rm.buildRecord(domain, record); rr != nil {
+				if rr := re.buildRecord(domain, record); rr != nil {
 					result.Additional = append(result.Additional, rr)
 				}
 			}
@@ -239,8 +238,7 @@ ruleLoop:
 	return result
 }
 
-// buildRecord creates a DNS RR from a record configuration.
-func (rm *Manager) buildRecord(domain string, record config.DNSRecordConfig) dns.RR {
+func (re *Evaluator) buildRecord(domain string, record config.DNSRecordConfig) dns.RR {
 	ttl := record.TTL
 	if ttl == 0 {
 		ttl = config.DefaultTTL

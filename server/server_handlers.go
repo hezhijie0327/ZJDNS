@@ -17,12 +17,16 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/server/client"
+	"zjdns/server/resolver"
 )
 
-// handleDNSRequest handles incoming DNS requests from UDP and TCP listeners.
-// TCP queries are processed asynchronously for RFC 7766 pipelining support;
-// responses may complete out of order. Writes are serialized via per-connection mutex.
-func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
+// ServeDNS handles an incoming DNS query and returns a response.
+func (s *Server) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg {
+	return s.processDNSQuery(req, clientIP, isSecure, protocol)
+}
+
+func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	defer dnsutil.HandlePanic("DNS request processing")
 
 	select {
@@ -31,17 +35,14 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	default:
 	}
 
-	// TCP: spawn goroutine for concurrent pipelined processing.
 	if _, isTCP := w.RemoteAddr().(*net.TCPAddr); isTCP {
 		addr := w.RemoteAddr().String()
 		entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
 		entry := entryI.(*tcpWriteEntry)
 		entry.capacityOnce.Do(func() {
-			entry.capacity = make(chan struct{}, defaultMaxPipe)
+			entry.capacity = make(chan struct{}, client.DefaultMaxPipe)
 		})
 
-		// Acquire per-connection in-flight slot; drop if at capacity so the
-		// client will retry rather than accumulating unbounded goroutines.
 		select {
 		case entry.capacity <- struct{}{}:
 		default:
@@ -66,7 +67,6 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	// UDP: synchronous processing (current behavior).
 	response := s.processDNSQuery(req, dnsutil.ClientIP(w), false, detectRequestProtocol(w))
 	if response != nil {
 		response.Compress = true
@@ -75,9 +75,7 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	}
 }
 
-// processDNSQuery processes a DNS query, checking rewrites, cache, and
-// performing upstream or recursive resolution as needed.
-func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool, requestProtocol string) *dns.Msg {
+func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool, requestProtocol string) *dns.Msg {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		msg := s.buildResponse(req)
 		if msg != nil {
@@ -129,7 +127,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		msg := pool.DefaultMessagePool.Get()
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeRefused
-		// Add EDE for invalid queries
+
 		var ede *edns.EDEOption
 		if len(question.Name) > config.MaxDomainLength {
 			ede = edns.NewEDEOption(edns.EDECodeInvalidData, fmt.Sprintf("Domain name too long: %d characters (max %d)", len(question.Name), config.MaxDomainLength))
@@ -170,7 +168,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 				log.Debugf("RESULT: %s %s | rcode=%s, blocked by rewrite rule", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[rewriteResult.ResponseCode])
 				response := s.buildResponse(req)
 				response.Rcode = rewriteResult.ResponseCode
-				// Add EDE for rewrite-based blocks
+
 				ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "Response code modified by rewrite rule")
 				s.addEDNS(response, req, isSecureConnection, clientIP, nil, ede)
 				responseMsg = response
@@ -184,7 +182,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 				if len(rewriteResult.Additional) > 0 {
 					response.Extra = rewriteResult.Additional
 				}
-				// Add EDE for rewrite-based response
+
 				ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "Response modified by rewrite rule")
 				s.addEDNS(response, req, isSecureConnection, clientIP, nil, ede)
 				log.Debugf("RESULT: %s %s | rcode=NOERROR (rewrite), answer=%d, additional=%d", question.Name, dns.TypeToString[question.Qtype], len(rewriteResult.Records), len(rewriteResult.Additional))
@@ -246,8 +244,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	return responseMsg
 }
 
-// lookupReversePTR performs a reverse DNS lookup for PTR queries using the cache manager.
-func (s *DNSServer) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption) []dns.RR {
+func (s *Server) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption) []dns.RR {
 	ip := dnsutil.ParseReverseDNSName(question.Name)
 	if ip == nil {
 		return nil
@@ -273,9 +270,7 @@ func (s *DNSServer) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOpti
 	return records
 }
 
-// processCacheHit handles DNS queries that have a cache hit, returning cached
-// responses and optionally refreshing stale entries or near-expiry entries in the background.
-func (s *DNSServer) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool) *dns.Msg {
+func (s *Server) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool) *dns.Msg {
 	msg := s.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
 
 	if isExpired && entry.ShouldRefresh() {
@@ -303,9 +298,7 @@ func (s *DNSServer) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExp
 	return msg
 }
 
-// shouldStartPrefetch applies lightweight per-key throttling to avoid repeated
-// prefetch attempts for hot keys within a short interval.
-func (s *DNSServer) shouldStartPrefetch(cacheKey string) bool {
+func (s *Server) shouldStartPrefetch(cacheKey string) bool {
 	if s == nil || cacheKey == "" {
 		return false
 	}
@@ -322,8 +315,7 @@ func (s *DNSServer) shouldStartPrefetch(cacheKey string) bool {
 	return true
 }
 
-// buildCacheResponse constructs a DNS response message based on a cache entry, including
-func (s *DNSServer) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 
 	responseTTL := entry.GetRemainingTTL()
@@ -350,18 +342,14 @@ func (s *DNSServer) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, is
 	return msg
 }
 
-// canServeExpiredEntry checks if an expired cache entry can be served based on its age and the configured stale max age.
-func (s *DNSServer) canServeExpiredEntry(entry *cache.CacheEntry) bool {
+func (s *Server) canServeExpiredEntry(entry *cache.CacheEntry) bool {
 	if entry == nil || !entry.IsExpired() {
 		return false
 	}
 	return entry.CanServeExpired(cache.StaleMaxAge)
 }
 
-// processExpiredCacheHit handles cache hits for expired entries, serving stale
-// responses and refreshing in the background. When prefer_stale is disabled,
-// it still waits briefly for a fresh upstream answer before falling back.
-func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool) *dns.Msg {
+func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool) *dns.Msg {
 	if s.config.Server.Features.Cache.PreferStale {
 		if staleServed != nil {
 			*staleServed = true
@@ -378,7 +366,7 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry
 	resultChan := make(chan queryResult, 1)
 	go func() {
 		defer dnsutil.HandlePanic("expired cache fallback query")
-		answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.queryMgr.Query(question, ecsOpt)
+		answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.resolver.Query(question, ecsOpt)
 		resultChan <- queryResult{
 			answer:     answer,
 			authority:  authority,
@@ -417,7 +405,9 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry
 				}
 				log.Debugf("CACHE: background refresh completed for slow expired query %s", question.Name)
 				s.cacheMgr.Set(cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
-				s.startLatencyProbe(question, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
+				if s.prober != nil {
+					s.prober.Start(question, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
+				}
 			case <-s.ctx.Done():
 			}
 		}()
@@ -425,18 +415,16 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry
 	}
 }
 
-// processCacheMiss handles DNS queries that do not have a cache hit,
-// performing upstream or recursive resolution.
-func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool) *dns.Msg {
+func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool) *dns.Msg {
 	log.Debugf("CACHE: miss key=%s for %s, querying upstream/recursive", cacheKey, question.Name)
-	answer, authority, additional, validated, ecsResponse, _, usedFallback, err := s.queryMgr.Query(question, ecsOpt)
+	answer, authority, additional, validated, ecsResponse, _, usedFallback, err := s.resolver.Query(question, ecsOpt)
 	if fallbackUsed != nil && usedFallback {
 		*fallbackUsed = true
 	}
 
 	if err != nil {
-		// Check if it's a CIDR filter refusal
-		if errors.Is(err, ErrCIDRFilterRefused) {
+
+		if errors.Is(err, resolver.ErrCIDRFilterRefused) {
 			return s.processCIDRRefused(req, question, cookieOpt, clientIP, isSecureConnection)
 		}
 		if hadError != nil {
@@ -448,9 +436,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, usedFallback, clientIP, isSecureConnection)
 }
 
-// processQueryError handles query failures, attempting to serve stale cache
-// data if available, or returning a server failure response.
-func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found && s.canServeExpiredEntry(entry) {
 		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.GetRemainingTTL(), entry.Validated)
 		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
@@ -463,13 +449,12 @@ func (s *DNSServer) processQueryError(req *dns.Msg, cacheKey string, question dn
 		msg.SetReply(req)
 	}
 	msg.Rcode = dns.RcodeServerFailure
-	// Add EDE for query error
+
 	ede := edns.NewEDEOption(edns.EDECodeNetworkError, "All upstream queries failed")
 	s.addEDNS(msg, req, isSecureConnection, clientIP, cookieOpt, ede)
 	return msg
 }
 
-// detectRequestProtocol determines the protocol (UDP or TCP) used for the incoming DNS request based on the network type of the remote address.
 func detectRequestProtocol(w dns.ResponseWriter) string {
 	addr := w.RemoteAddr()
 	if addr == nil {
@@ -487,8 +472,7 @@ func detectRequestProtocol(w dns.ResponseWriter) string {
 	}
 }
 
-// processCIDRRefused handles CIDR filtering rejections by returning REFUSED with EDE
-func (s *DNSServer) processCIDRRefused(req *dns.Msg, question dns.Question, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *Server) processCIDRRefused(req *dns.Msg, question dns.Question, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
 		msg = pool.DefaultMessagePool.Get()
@@ -501,8 +485,7 @@ func (s *DNSServer) processCIDRRefused(req *dns.Msg, question dns.Question, cook
 	return msg
 }
 
-// processQuerySuccess handles successful query results, building the DNS response message, populating the cache if applicable, and adding EDNS options.
-func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, skipCache bool, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, skipCache bool, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	if msg == nil {
 		msg = pool.DefaultMessagePool.Get()
@@ -526,7 +509,9 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	if !skipCache {
 		log.Debugf("CACHE: populating cache key=%s for %s", cacheKey, question.Name)
 		s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
-		s.startLatencyProbe(question, cacheKey, answer, authority, additional, validated, responseECS)
+		if s.prober != nil {
+			s.prober.Start(question, cacheKey, answer, authority, additional, validated, responseECS)
+		}
 	} else {
 		log.Debugf("CACHE: fallback result, skipping cache population for %s", question.Name)
 	}
@@ -542,22 +527,23 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	return msg
 }
 
-// refreshCacheEntry refreshes a stale cache entry in the background.
-func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, ecs *edns.ECSOption, cacheKey string, _ *cache.CacheEntry) error {
+func (s *Server) refreshCacheEntry(_ context.Context, question dns.Question, ecs *edns.ECSOption, cacheKey string, _ *cache.CacheEntry) error {
 	defer dnsutil.HandlePanic("cache refresh")
 
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return errors.New("server closed")
 	}
 
-	answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.queryMgr.Query(question, ecs)
+	answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.resolver.Query(question, ecs)
 	if err != nil {
 		return err
 	}
 
 	if !fallbackUsed {
 		s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
-		s.startLatencyProbe(question, cacheKey, answer, authority, additional, validated, ecsResponse)
+		if s.prober != nil {
+			s.prober.Start(question, cacheKey, answer, authority, additional, validated, ecsResponse)
+		}
 	} else {
 		log.Debugf("CACHE: refresh query used fallback for %s, skipping cache population", question.Name)
 	}
@@ -565,9 +551,7 @@ func (s *DNSServer) refreshCacheEntry(_ context.Context, question dns.Question, 
 	return nil
 }
 
-// addEDNS adds EDNS options to a DNS response message, including ECS,
-// DNSSEC flags, cookie, EDE, and padding for secure connections.
-func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, clientIP net.IP, cookieOpt *edns.CookieOption, ede *edns.EDEOption) {
+func (s *Server) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, clientIP net.IP, cookieOpt *edns.CookieOption, ede *edns.EDEOption) {
 	if msg == nil || req == nil {
 		return
 	}
@@ -584,7 +568,6 @@ func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool,
 		ecsOpt = s.ednsMgr.DefaultECSForQType(req.Question[0].Qtype)
 	}
 
-	// Generate cookie response only when the client sent a cookie option.
 	cookieStr := s.generateCookieResponse(cookieOpt, clientIP)
 
 	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || ede != nil || isSecureConnection
@@ -594,9 +577,7 @@ func (s *DNSServer) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool,
 	}
 }
 
-// generateCookieResponse generates cookie string for response
-// Returns client_cookie || server_cookie format only when the client sent a cookie option.
-func (s *DNSServer) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP net.IP) string {
+func (s *Server) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP net.IP) string {
 	if s.ednsMgr == nil || s.ednsMgr.CookieGenerator == nil || cookieOpt == nil {
 		return ""
 	}
@@ -610,7 +591,6 @@ func (s *DNSServer) generateCookieResponse(cookieOpt *edns.CookieOption, clientI
 		return ""
 	}
 
-	// Client sent a cookie - validate server cookie if present, then generate a new one.
 	var serverCookie []byte
 	if len(cookieOpt.ServerCookie) >= 16 {
 		if s.ednsMgr.CookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
@@ -630,9 +610,7 @@ func (s *DNSServer) generateCookieResponse(cookieOpt *edns.CookieOption, clientI
 	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 }
 
-// buildResponse creates a new DNS response message from a request.
-// It sets the appropriate flags and initializes the message pool.
-func (s *DNSServer) buildResponse(req *dns.Msg) *dns.Msg {
+func (s *Server) buildResponse(req *dns.Msg) *dns.Msg {
 	msg := pool.DefaultMessagePool.Get()
 
 	if req != nil && len(req.Question) > 0 {
@@ -648,9 +626,7 @@ func (s *DNSServer) buildResponse(req *dns.Msg) *dns.Msg {
 	return msg
 }
 
-// restoreOriginalDomain restores the original domain name in DNS response
-// records when the query was rewritten. Returns early if no rewrite occurred.
-func (s *DNSServer) restoreOriginalDomain(msg *dns.Msg, currentName, originalName string) {
+func (s *Server) restoreOriginalDomain(msg *dns.Msg, currentName, originalName string) {
 	if msg == nil || strings.EqualFold(currentName, originalName) {
 		return
 	}
@@ -661,9 +637,7 @@ func (s *DNSServer) restoreOriginalDomain(msg *dns.Msg, currentName, originalNam
 	}
 }
 
-// buildQueryMessage creates a new DNS query message for the given question.
-// It sets the recursion desired flag and adds EDNS options.
-func (s *DNSServer) buildQueryMessage(question dns.Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {
+func (s *Server) buildQueryMessage(question dns.Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {
 	msg := pool.DefaultMessagePool.Get()
 
 	msg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)

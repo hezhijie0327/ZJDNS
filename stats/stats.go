@@ -1,4 +1,5 @@
-// Package stats provides lock-free DNS server metrics collection.
+// Package stats provides a lock-free atomic statistics collector for DNS server
+// metrics.
 package stats
 
 import (
@@ -16,7 +17,7 @@ import (
 
 const persistKey = "__stats__"
 
-// Snapshot contains the raw collected counters.
+// Snapshot contains a point-in-time copy of all DNS request counters.
 type Snapshot struct {
 	TotalRequests       uint64 `json:"total_requests"`
 	CacheHits           uint64 `json:"cache_hits"`
@@ -82,8 +83,8 @@ type logEntry struct {
 	Rates     logRates          `json:"rates,omitempty"`
 }
 
-// Manager manages lock-free metrics collection with periodic reset.
-type Manager struct {
+// Collector manages DNS server statistics using lock-free atomic counters.
+type Collector struct {
 	enabled bool
 
 	totalRequests       atomic.Uint64
@@ -108,7 +109,7 @@ type Manager struct {
 	persistTTL    int
 }
 
-// AverageResponseTimeMs calculates average response time in milliseconds.
+// AverageResponseTimeMs computes the mean response time in milliseconds.
 func (s Snapshot) AverageResponseTimeMs() float64 {
 	if s.TotalRequests == 0 {
 		return 0
@@ -116,7 +117,7 @@ func (s Snapshot) AverageResponseTimeMs() float64 {
 	return float64(s.TotalResponseTimeMs) / float64(s.TotalRequests)
 }
 
-// BuildStatsLogJSON converts a metrics snapshot into JSON for export.
+// BuildStatsLogJSON serializes a snapshot into JSON-formatted log entry bytes.
 func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
 	entry := logEntry{
 		Totals: logTotals{
@@ -158,42 +159,42 @@ func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
 	return json.Marshal(entry)
 }
 
-// New creates a lock-free stats Manager.
-func New(cfg *config.ServerConfig, c cache.Manager) *Manager {
+// New creates a Collector from the server config and optionally restores a
+// cached stats snapshot.
+func New(cfg *config.ServerConfig, c cache.Store) *Collector {
 	if cfg == nil {
 		return nil
 	}
-	mgr := &Manager{
+	sc := &Collector{
 		enabled:    true,
 		persistTTL: cfg.Server.StatsPersistTTL(),
 	}
 	if ri := cfg.Server.StatsResetInterval(); ri > 0 {
-		mgr.resetInterval = time.Duration(ri) * time.Second
+		sc.resetInterval = time.Duration(ri) * time.Second
 	}
 	if c != nil {
 		if entry, found, expired := c.Get(persistKey); found && entry != nil {
 			if expired {
 				log.Debugf("STATS: cached stats snapshot is expired, starting fresh")
-			} else if err := mgr.LoadFromCacheEntry(entry); err != nil {
+			} else if err := sc.LoadFromCacheEntry(entry); err != nil {
 				log.Warnf("STATS: failed to restore stats from cache: %v", err)
 			} else {
 				log.Infof("STATS: restored stats from cache snapshot")
 			}
 		}
 	}
-	return mgr
+	return sc
 }
 
-// RecordRequest updates counters (lock-free hot path).
-func (sm *Manager) RecordRequest(duration time.Duration, cacheHit bool, hadError bool,
+// RecordRequest atomically increments counters for a single DNS query event.
+func (sc *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadError bool,
 	protocol string, rewrote bool, hijackDetected bool, staleServed bool,
 	fallbackUsed bool, prefetchTriggered bool) {
 
-	if sm == nil || !sm.enabled {
+	if sc == nil || !sc.enabled {
 		return
 	}
-	// Note: sub-millisecond response times are rounded up to 1ms.
-	// This inflates average response times slightly for ultra-fast responses.
+
 	durationMs := uint64(duration.Milliseconds())
 	if durationMs == 0 {
 		durationMs = 1
@@ -203,124 +204,125 @@ func (sm *Manager) RecordRequest(duration time.Duration, cacheHit bool, hadError
 		protocol = "UDP"
 	}
 
-	sm.totalRequests.Add(1)
+	sc.totalRequests.Add(1)
 	if cacheHit {
-		sm.cacheHits.Add(1)
+		sc.cacheHits.Add(1)
 	} else {
-		sm.cacheMisses.Add(1)
+		sc.cacheMisses.Add(1)
 	}
 	if hadError {
-		sm.errorResponses.Add(1)
+		sc.errorResponses.Add(1)
 	}
-	sm.totalResponseTimeMs.Add(durationMs)
-	sm.lastResponseTimeMs.Store(durationMs)
+	sc.totalResponseTimeMs.Add(durationMs)
+	sc.lastResponseTimeMs.Store(durationMs)
 
 	switch protocol {
 	case "UDP":
-		sm.udpRequests.Add(1)
+		sc.udpRequests.Add(1)
 	case "TCP":
-		sm.tcpRequests.Add(1)
+		sc.tcpRequests.Add(1)
 	case "DOT":
-		sm.dotRequests.Add(1)
+		sc.dotRequests.Add(1)
 	case "DOQ":
-		sm.doqRequests.Add(1)
+		sc.doqRequests.Add(1)
 	case "DOH":
-		sm.dohRequests.Add(1)
+		sc.dohRequests.Add(1)
 	case "DOH3":
-		sm.doh3Requests.Add(1)
+		sc.doh3Requests.Add(1)
 	default:
-		sm.udpRequests.Add(1)
+		sc.udpRequests.Add(1)
 	}
 
 	if rewrote {
-		sm.rewriteRequests.Add(1)
+		sc.rewriteRequests.Add(1)
 	}
 	if hijackDetected {
-		sm.hijackDetections.Add(1)
+		sc.hijackDetections.Add(1)
 	}
 	if staleServed {
-		sm.staleResponses.Add(1)
+		sc.staleResponses.Add(1)
 	}
 	if fallbackUsed {
-		sm.fallbackRequests.Add(1)
+		sc.fallbackRequests.Add(1)
 	}
 	if prefetchTriggered {
-		sm.prefetchRequests.Add(1)
+		sc.prefetchRequests.Add(1)
 	}
 }
 
-// Snapshot returns a copy of the current counters.
-func (sm *Manager) Snapshot() Snapshot {
-	if sm == nil || !sm.enabled {
+// Snapshot returns a point-in-time copy of all accumulated counters.
+func (sc *Collector) Snapshot() Snapshot {
+	if sc == nil || !sc.enabled {
 		return Snapshot{}
 	}
 	return Snapshot{
-		TotalRequests:       sm.totalRequests.Load(),
-		CacheHits:           sm.cacheHits.Load(),
-		CacheMisses:         sm.cacheMisses.Load(),
-		PrefetchRequests:    sm.prefetchRequests.Load(),
-		ErrorResponses:      sm.errorResponses.Load(),
-		StaleResponses:      sm.staleResponses.Load(),
-		FallbackRequests:    sm.fallbackRequests.Load(),
-		TotalResponseTimeMs: sm.totalResponseTimeMs.Load(),
-		LastResponseTimeMs:  sm.lastResponseTimeMs.Load(),
-		UDPRequests:         sm.udpRequests.Load(),
-		TCPRequests:         sm.tcpRequests.Load(),
-		DoTRequests:         sm.dotRequests.Load(),
-		DoQRequests:         sm.doqRequests.Load(),
-		DoHRequests:         sm.dohRequests.Load(),
-		DoH3Requests:        sm.doh3Requests.Load(),
-		RewriteRequests:     sm.rewriteRequests.Load(),
-		HijackDetections:    sm.hijackDetections.Load(),
+		TotalRequests:       sc.totalRequests.Load(),
+		CacheHits:           sc.cacheHits.Load(),
+		CacheMisses:         sc.cacheMisses.Load(),
+		PrefetchRequests:    sc.prefetchRequests.Load(),
+		ErrorResponses:      sc.errorResponses.Load(),
+		StaleResponses:      sc.staleResponses.Load(),
+		FallbackRequests:    sc.fallbackRequests.Load(),
+		TotalResponseTimeMs: sc.totalResponseTimeMs.Load(),
+		LastResponseTimeMs:  sc.lastResponseTimeMs.Load(),
+		UDPRequests:         sc.udpRequests.Load(),
+		TCPRequests:         sc.tcpRequests.Load(),
+		DoTRequests:         sc.dotRequests.Load(),
+		DoQRequests:         sc.doqRequests.Load(),
+		DoHRequests:         sc.dohRequests.Load(),
+		DoH3Requests:        sc.doh3Requests.Load(),
+		RewriteRequests:     sc.rewriteRequests.Load(),
+		HijackDetections:    sc.hijackDetections.Load(),
 		UpdatedAt:           time.Now().Unix(),
 	}
 }
 
-// Reset clears all counters.
-func (sm *Manager) Reset() {
-	if sm == nil || !sm.enabled {
+// Reset zeroes all counters in the collector.
+func (sc *Collector) Reset() {
+	if sc == nil || !sc.enabled {
 		return
 	}
-	sm.totalRequests.Store(0)
-	sm.cacheHits.Store(0)
-	sm.cacheMisses.Store(0)
-	sm.prefetchRequests.Store(0)
-	sm.errorResponses.Store(0)
-	sm.staleResponses.Store(0)
-	sm.fallbackRequests.Store(0)
-	sm.totalResponseTimeMs.Store(0)
-	sm.lastResponseTimeMs.Store(0)
-	sm.udpRequests.Store(0)
-	sm.tcpRequests.Store(0)
-	sm.dotRequests.Store(0)
-	sm.doqRequests.Store(0)
-	sm.dohRequests.Store(0)
-	sm.doh3Requests.Store(0)
-	sm.rewriteRequests.Store(0)
-	sm.hijackDetections.Store(0)
+	sc.totalRequests.Store(0)
+	sc.cacheHits.Store(0)
+	sc.cacheMisses.Store(0)
+	sc.prefetchRequests.Store(0)
+	sc.errorResponses.Store(0)
+	sc.staleResponses.Store(0)
+	sc.fallbackRequests.Store(0)
+	sc.totalResponseTimeMs.Store(0)
+	sc.lastResponseTimeMs.Store(0)
+	sc.udpRequests.Store(0)
+	sc.tcpRequests.Store(0)
+	sc.dotRequests.Store(0)
+	sc.doqRequests.Store(0)
+	sc.dohRequests.Store(0)
+	sc.doh3Requests.Store(0)
+	sc.rewriteRequests.Store(0)
+	sc.hijackDetections.Store(0)
 }
 
-// FetchStats returns a snapshot for logging.
-func (sm *Manager) FetchStats(ctx context.Context) (*Snapshot, error) {
-	if sm == nil || !sm.enabled {
+// FetchStats returns a Snapshot pointer suitable for external consumption.
+func (sc *Collector) FetchStats(ctx context.Context) (*Snapshot, error) {
+	if sc == nil || !sc.enabled {
 		return nil, fmt.Errorf("stats disabled")
 	}
-	s := sm.Snapshot()
+	s := sc.Snapshot()
 	return &s, nil
 }
 
-// ToCacheEntry serializes the snapshot for cache persistence.
-func (sm *Manager) ToCacheEntry() (*cache.CacheEntry, error) {
-	if sm == nil || !sm.enabled {
+// ToCacheEntry serializes the current snapshot into a cache.CacheEntry for
+// persistence.
+func (sc *Collector) ToCacheEntry() (*cache.CacheEntry, error) {
+	if sc == nil || !sc.enabled {
 		return nil, fmt.Errorf("stats disabled")
 	}
-	snap := sm.Snapshot()
+	snap := sc.Snapshot()
 	data, err := json.Marshal(snap)
 	if err != nil {
 		return nil, fmt.Errorf("marshal stats snapshot: %w", err)
 	}
 	now := time.Now().Unix()
-	ttl := sm.persistTTL
+	ttl := sc.persistTTL
 	if ttl <= 0 {
 		ttl = config.DefaultStatsPersistTTL
 	}
@@ -333,10 +335,11 @@ func (sm *Manager) ToCacheEntry() (*cache.CacheEntry, error) {
 	}, nil
 }
 
-// LoadFromCacheEntry restores counters from a persisted snapshot.
-func (sm *Manager) LoadFromCacheEntry(entry *cache.CacheEntry) error {
-	if sm == nil {
-		return fmt.Errorf("stats manager nil")
+// LoadFromCacheEntry restores collector state from a previously persisted
+// cache entry.
+func (sc *Collector) LoadFromCacheEntry(entry *cache.CacheEntry) error {
+	if sc == nil {
+		return fmt.Errorf("stats Collector nil")
 	}
 	if entry == nil || len(entry.Payload) == 0 {
 		return fmt.Errorf("empty cache entry")
@@ -345,32 +348,32 @@ func (sm *Manager) LoadFromCacheEntry(entry *cache.CacheEntry) error {
 	if err := json.Unmarshal(entry.Payload, &snap); err != nil {
 		return fmt.Errorf("unmarshal stats snapshot: %w", err)
 	}
-	sm.totalRequests.Store(snap.TotalRequests)
-	sm.cacheHits.Store(snap.CacheHits)
-	sm.cacheMisses.Store(snap.CacheMisses)
-	sm.prefetchRequests.Store(snap.PrefetchRequests)
-	sm.errorResponses.Store(snap.ErrorResponses)
-	sm.staleResponses.Store(snap.StaleResponses)
-	sm.fallbackRequests.Store(snap.FallbackRequests)
-	sm.totalResponseTimeMs.Store(snap.TotalResponseTimeMs)
-	sm.lastResponseTimeMs.Store(snap.LastResponseTimeMs)
-	sm.udpRequests.Store(snap.UDPRequests)
-	sm.tcpRequests.Store(snap.TCPRequests)
-	sm.dotRequests.Store(snap.DoTRequests)
-	sm.doqRequests.Store(snap.DoQRequests)
-	sm.dohRequests.Store(snap.DoHRequests)
-	sm.doh3Requests.Store(snap.DoH3Requests)
-	sm.rewriteRequests.Store(snap.RewriteRequests)
-	sm.hijackDetections.Store(snap.HijackDetections)
+	sc.totalRequests.Store(snap.TotalRequests)
+	sc.cacheHits.Store(snap.CacheHits)
+	sc.cacheMisses.Store(snap.CacheMisses)
+	sc.prefetchRequests.Store(snap.PrefetchRequests)
+	sc.errorResponses.Store(snap.ErrorResponses)
+	sc.staleResponses.Store(snap.StaleResponses)
+	sc.fallbackRequests.Store(snap.FallbackRequests)
+	sc.totalResponseTimeMs.Store(snap.TotalResponseTimeMs)
+	sc.lastResponseTimeMs.Store(snap.LastResponseTimeMs)
+	sc.udpRequests.Store(snap.UDPRequests)
+	sc.tcpRequests.Store(snap.TCPRequests)
+	sc.dotRequests.Store(snap.DoTRequests)
+	sc.doqRequests.Store(snap.DoQRequests)
+	sc.dohRequests.Store(snap.DoHRequests)
+	sc.doh3Requests.Store(snap.DoH3Requests)
+	sc.rewriteRequests.Store(snap.RewriteRequests)
+	sc.hijackDetections.Store(snap.HijackDetections)
 	return nil
 }
 
-// Persist saves the current snapshot into the cache.
-func (sm *Manager) Persist(c cache.Manager) {
-	if sm == nil || !sm.enabled || c == nil {
+// Persist writes the current stats snapshot to the given cache store.
+func (sc *Collector) Persist(c cache.Store) {
+	if sc == nil || !sc.enabled || c == nil {
 		return
 	}
-	entry, err := sm.ToCacheEntry()
+	entry, err := sc.ToCacheEntry()
 	if err != nil {
 		log.Debugf("STATS: failed to serialize stats for cache persistence: %v", err)
 		return

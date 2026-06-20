@@ -1,4 +1,4 @@
-package server
+package client
 
 import (
 	"context"
@@ -18,9 +18,7 @@ import (
 	"zjdns/internal/pool"
 )
 
-// executeDoH3 executes a DNS query over DNS over HTTPS/3 (DoH3/HTTP3).
-// Uses a cached transport pool to avoid per-query transport creation.
-func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+func (c *Client) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
@@ -30,9 +28,9 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *co
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
 	}
 
-	client := qc.getDoH3Client(parsedURL.Host, server.ServerName, server.SkipTLSVerify)
+	client := c.getDoH3Client(parsedURL.Host, server.ServerName, server.SkipTLSVerify)
 	if client == nil {
-		client = qc.createDoH3Client(parsedURL.Host, server.ServerName, server.SkipTLSVerify, tlsConfig)
+		client = c.createDoH3Client(parsedURL.Host, server.ServerName, server.SkipTLSVerify, tlsConfig)
 	}
 
 	originalID := msg.Id
@@ -92,20 +90,18 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *co
 	return response, nil
 }
 
-// getDoH3Client retrieves a cached DoH3 HTTP client, or nil if not present.
-func (qc *QueryClient) getDoH3Client(host, serverName string, skipVerify bool) *http.Client {
-	qc.doh3TransportMu.Lock()
-	defer qc.doh3TransportMu.Unlock()
-	return qc.doh3Transports[dohTransportKey(host, serverName, skipVerify)]
+func (c *Client) getDoH3Client(host, serverName string, skipVerify bool) *http.Client {
+	c.doh3TransportMu.Lock()
+	defer c.doh3TransportMu.Unlock()
+	return c.doh3Transports[transportKey(host, serverName, skipVerify)]
 }
 
-// createDoH3Client builds and caches a DoH3 HTTP client for the given parameters.
-func (qc *QueryClient) createDoH3Client(host, serverName string, skipVerify bool, tlsConfig *tls.Config) *http.Client {
-	qc.doh3TransportMu.Lock()
-	defer qc.doh3TransportMu.Unlock()
+func (c *Client) createDoH3Client(host, serverName string, skipVerify bool, tlsConfig *tls.Config) *http.Client {
+	c.doh3TransportMu.Lock()
+	defer c.doh3TransportMu.Unlock()
 
-	key := dohTransportKey(host, serverName, skipVerify)
-	if client, ok := qc.doh3Transports[key]; ok {
+	key := transportKey(host, serverName, skipVerify)
+	if client, ok := c.doh3Transports[key]; ok {
 		return client
 	}
 
@@ -124,9 +120,9 @@ func (qc *QueryClient) createDoH3Client(host, serverName string, skipVerify bool
 	}
 
 	client := &http.Client{
-		Timeout:   qc.doh3Client.Timeout,
+		Timeout:   c.doh3Client.Timeout,
 		Transport: transport,
 	}
-	qc.doh3Transports[key] = client
+	c.doh3Transports[key] = client
 	return client
 }

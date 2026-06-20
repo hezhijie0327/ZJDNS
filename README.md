@@ -98,49 +98,62 @@
 
 ```
 zjdns/
-├── main.go                          # 入口 (~50 行)
+├── main.go                          # 入口
 ├── version.go                       # ldflags 变量
 ├── internal/
-│   ├── log/log.go                   # 日志管理器 (Error/Warn/Info/Debug)
+│   ├── log/log.go                   # 日志 (Error/Warn/Info/Debug)
 │   ├── pool/pool.go                 # MessagePool, BufferPool
 │   ├── dnsutil/dnsutil.go           # 工具函数
 │   └── ipdetect/ipdetect.go         # 公网 IP 检测
 ├── config/config.go                 # 配置类型 + 加载 + 验证 + DDR
-├── edns/edns.go                     # ECS, Cookie, EDE, Padding
-├── cidr/cidr.go                     # CIDR IP 过滤引擎
-├── rewrite/rewrite.go               # 域名重写引擎
-├── cache/cache.go                   # CacheManager 接口 + MemoryCache
-├── stats/stats.go                   # 无锁统计管理器
+├── edns/                            # EDNS(0) 扩展 (5 文件)
+│   ├── edns.go                      # Handler, ApplyToMessage
+│   ├── ecs.go                       # ECS 选项
+│   ├── cookie.go                    # Cookie 生成/验证
+│   ├── ede.go                       # EDE 错误码
+│   └── padding.go                   # RFC 7830 填充
+├── cache/                           # 缓存系统 (3 文件)
+│   ├── cache.go                     # Store 接口, CacheEntry, 工具函数
+│   ├── memory.go                    # MemoryCache, LRU 淘汰, PTR 索引
+│   └── persist.go                   # 磁盘快照
+├── cidr/cidr.go                     # Filter — IP 过滤
+├── rewrite/rewrite.go               # Evaluator — 域名重写
+├── stats/stats.go                   # Collector — 原子指标
 ├── server/                          # 核心服务
-│   ├── server.go                    # DNSServer 生命周期, 启停, 信号处理
-│   ├── server_handlers.go           # 查询管道, 缓存命中/未命中, 响应构造
-│   ├── resolver.go                  # QueryManager, CNAME 解析, 共享工具
-│   ├── upstream.go                  # UpstreamHandler, 首胜查询, CIDR 过滤
-│   ├── recursive.go                 # RecursiveResolver, 递归解析
-│   ├── query.go                     # QueryClient 核心: 类型, 路由
-│   ├── query_tcp.go                 # UDP/TCP 传统查询 + TCP 回退
-│   ├── query_dot.go                 # DoT 查询 (连接池 + 回退)
-│   ├── query_doq.go                 # DoQ 查询执行
-│   ├── doqpool.go                   # DoQ 连接池 (quicPool)
-│   ├── query_doh.go                 # DoH 查询 + HTTP/2 传输池
-│   ├── query_doh3.go                # DoH3 查询 + HTTP/3 传输池
-│   ├── security.go                  # SecurityManager, DNSSEC, 劫持防护
-│   ├── tls.go                       # TLSManager 核心, 证书管理
-│   ├── tls_dot.go                   # DoT 服务端 (RFC 7766 流水线)
-│   ├── tls_doq.go                   # DoQ 服务端 (stream 处理)
-│   ├── tls_doh.go                   # DoH/DoH3 服务端 (HTTP 处理)
-│   ├── tcppool.go                   # pipelinedConn + connPool (RFC 7766)
-│   ├── latency_probe.go             # 延迟探测
-│   └── ratelimit.go                 # 速率限制器
-└── cmd/
-    └── pipeline_test/               # 流水线测试工具
+│   ├── server.go                    # Server 生命周期
+│   ├── server_handlers.go           # 查询管道
+│   ├── client/                      # 出站查询 (8 文件)
+│   │   ├── client.go                # Client, ExecuteQuery
+│   │   ├── tcp.go, dot.go, doq.go, doh.go, doh3.go
+│   │   ├── tcppool.go               # RFC 7766 TCP/DoT 连接池
+│   │   └── quicpool.go              # QUIC 连接池
+│   ├── resolver/                    # 解析策略 (4 文件)
+│   │   ├── resolver.go              # Resolver, 首胜+
+│   │   ├── upstream.go              # 上游并发查询
+│   │   ├── recursive.go             # 递归 walk
+│   │   └── cname.go                 # CNAME 链
+│   ├── tls/                         # 安全传输 (4 文件)
+│   │   ├── tls.go                   # Server, 证书
+│   │   ├── dot.go, doq.go, doh.go
+│   ├── security/                    # 安全 (3 文件)
+│   │   ├── security.go              # Guard
+│   │   ├── dnssec.go                # DNSSEC 验证
+│   │   └── hijack.go                # 劫持检测
+│   ├── latency/probe.go             # 延迟探测
+│   └── ratelimit/ratelimit.go       # 速率限制
+└── cmd/pipeline_test/               # RFC 7766 测试工具
 ```
 
 ### 依赖关系（无循环）
 
 ```
 main → server, config
-server → cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite, stats
+server → cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite,
+         stats, client, ratelimit, resolver, security, tls, latency
+client → config, edns, dnsutil, log, pool
+resolver → config, edns, client, security, dnsutil, log, pool
+security → dnsutil, log
+tls → config, client, dnsutil, log, pool
 cache → config, edns, dnsutil, log
 edns → dnsutil, ipdetect, log
 stats → cache, config, log
@@ -151,15 +164,14 @@ stats → cache, config, log
 ## 🔍 DNS 查询流程
 
 ```
-客户端 → UDP/TCP/DoT/DoQ/DoH → DNSServer.processDNSQuery()
-  1. 速率限制检查
-  2. RewriteManager.Evaluate() — 匹配重写规则
-  3. EDNSManager — 解析 ECS/Cookie
-  4. CacheManager.Get() — 命中 → CIDR 过滤 → 响应
-  5. QueryManager.Query() — 上游(首胜) 或 递归解析
-  6. SecurityManager — DNSSEC 验证 + 劫持检测
-  7. CIDRManager.MatchIP() — 过滤 A/AAAA IP
-  8. 写入缓存 → 延迟探测 → 返回响应
+1. Server.processDNSQuery() — 入口
+2. rewrite.Evaluator.Evaluate() — 重写规则匹配
+3. edns.Handler — 解析 ECS/Cookie/EDE
+4. cache.Store.Get() — 命中 → CIDR 过滤 → 响应
+5. resolver.Resolver.Query() — 上游(首胜) 或 递归
+6. security.Guard — DNSSEC 验证 + 劫持检测
+7. cidr.Filter.MatchIP() — 过滤 A/AAAA IP
+8. 写入缓存 → 延迟探测 → 返回响应
 ```
 
 ---

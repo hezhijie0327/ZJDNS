@@ -1,5 +1,4 @@
-// Package pool provides sync.Pool-based object pools for dns.Msg and byte slices
-// to reduce GC pressure in the hot query path.
+// Package pool provides sync.Pool-based message and buffer pools.
 package pool
 
 import (
@@ -8,31 +7,33 @@ import (
 	"github.com/miekg/dns"
 )
 
-// Buffer size constants.
+// UDPBufferSize is the standard size for UDP DNS messages.
+// TCPBufferSize is the recommended size for TCP DNS message buffers.
+// SecureBufferSize is the recommended size for secure DNS message buffers.
 const (
-	UDPBufferSize    = 1232 // Optimal UDP payload size for DNS to avoid fragmentation.
-	TCPBufferSize    = 4096 // Buffer size for TCP DNS messages.
-	SecureBufferSize = 8192 // Buffer size for secure DNS messages (DoT, DoH, DoQ).
+	UDPBufferSize    = 1232
+	TCPBufferSize    = 4096
+	SecureBufferSize = 8192
 )
 
-// DefaultMessagePool is the shared pool for dns.Msg objects.
+// DefaultMessagePool is the package-level default MessagePool.
 var DefaultMessagePool = NewMessagePool()
 
-// DefaultBufferPool is the shared pool for byte buffers.
+// DefaultBufferPool is the package-level default BufferPool.
 var DefaultBufferPool = NewBufferPool(SecureBufferSize, 256)
 
-// MessagePool manages reusable dns.Msg objects.
+// MessagePool is a pooled allocator for dns.Msg values.
 type MessagePool struct {
 	pool sync.Pool
 }
 
-// BufferPool manages reusable byte buffers.
+// BufferPool is a pooled allocator for byte slices.
 type BufferPool struct {
 	pool sync.Pool
 	size int
 }
 
-// NewMessagePool creates a new pool for dns.Msg objects.
+// NewMessagePool creates a new MessagePool.
 func NewMessagePool() *MessagePool {
 	return &MessagePool{
 		pool: sync.Pool{
@@ -43,14 +44,14 @@ func NewMessagePool() *MessagePool {
 	}
 }
 
-// Get retrieves a zeroed dns.Msg from the pool.
+// Get acquires a zeroed dns.Msg from the pool.
 func (mp *MessagePool) Get() *dns.Msg {
 	msg := mp.pool.Get().(*dns.Msg)
 	*msg = dns.Msg{}
 	return msg
 }
 
-// Put returns a dns.Msg to the pool after zeroing it.
+// Put returns a dns.Msg to the pool.
 func (mp *MessagePool) Put(msg *dns.Msg) {
 	if msg != nil {
 		*msg = dns.Msg{}
@@ -58,7 +59,8 @@ func (mp *MessagePool) Put(msg *dns.Msg) {
 	}
 }
 
-// NewBufferPool creates a new pool for byte buffers of the given size.
+// NewBufferPool creates a new BufferPool pre-populated with the given number
+// of buffers.
 func NewBufferPool(size, poolSize int) *BufferPool {
 	bp := &BufferPool{
 		size: size,
@@ -71,7 +73,7 @@ func NewBufferPool(size, poolSize int) *BufferPool {
 	return bp
 }
 
-// Get retrieves a buffer from the pool.
+// Get acquires a byte slice from the pool.
 func (bp *BufferPool) Get() []byte {
 	bufPtr := bp.pool.Get()
 	if bufPtr == nil {
@@ -81,9 +83,7 @@ func (bp *BufferPool) Get() []byte {
 	return *buf
 }
 
-// Put returns a buffer to the pool after zeroing it.
-// The entire buffer is zeroed to prevent stale DNS data leakage
-// from callers that extended the buffer beyond bp.size.
+// Put returns a byte slice to the pool.
 func (bp *BufferPool) Put(buf []byte) {
 	if buf != nil && cap(buf) >= bp.size {
 		clear(buf[:cap(buf)])

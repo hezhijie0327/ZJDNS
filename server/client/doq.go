@@ -1,4 +1,4 @@
-package server
+package client
 
 import (
 	"context"
@@ -16,10 +16,7 @@ import (
 	"zjdns/internal/pool"
 )
 
-// executeQUIC executes a DNS query over DNS over QUIC (DoQ).
-// Uses a connection pool for connection reuse and concurrent query multiplexing.
-// Falls back to a single-shot connection if the pool is unavailable.
-func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	key := server.Address
 
 	quicCfg := &quic.Config{
@@ -38,43 +35,38 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *co
 		return quic.DialAddr(timeoutCtx, addr, dialTLS, quicCfg)
 	}
 
-	// Try pooled connection first.
-	if qc.quicPool != nil {
-		pc, err := qc.quicPool.acquire(ctx, key, dialQUIC)
+	if c.quicPool != nil {
+		pc, err := c.quicPool.Acquire(ctx, key, dialQUIC)
 		if err == nil {
-			response, err := qc.doQUICQuery(ctx, pc.conn, msg, qc.timeout)
+			response, err := c.doQUICQuery(ctx, pc.conn, msg, c.timeout)
 			if err == nil {
 				return response, nil
 			}
-			// Query failed — connection may be dead, remove from pool.
-			qc.quicPool.remove(pc)
+			c.quicPool.Remove(pc)
 			log.Debugf("UPSTREAM: pooled DoQ query to %s failed: %v, retrying with new connection", server.Address, err)
 		}
 	}
 
-	// Fallback: single-shot connection.
 	conn, err := dialQUIC(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("QUIC dial: %w", err)
 	}
 
-	response, err := qc.doQUICQuery(ctx, conn, msg, qc.timeout)
+	response, err := c.doQUICQuery(ctx, conn, msg, c.timeout)
 	if err != nil {
 		_ = conn.CloseWithError(QUICCodeNoError, "query failed")
 		return nil, err
 	}
 
-	// Return successful connection to pool for reuse.
-	if qc.quicPool != nil {
-		qc.quicPool.put(key, conn)
+	if c.quicPool != nil {
+		c.quicPool.Put(key, conn)
 	} else {
 		_ = conn.CloseWithError(QUICCodeNoError, "no pool, discarding")
 	}
 	return response, nil
 }
 
-// doQUICQuery performs the actual QUIC stream write/read on an established connection.
-func (qc *QueryClient) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg, timeout time.Duration) (*dns.Msg, error) {
+func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg, timeout time.Duration) (*dns.Msg, error) {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("open stream: %w", err)

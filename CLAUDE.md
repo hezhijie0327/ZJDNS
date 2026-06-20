@@ -23,37 +23,54 @@ There is no test suite. Module path: `zjdns` (Go 1.25).
 zjdns/
 ├── main.go / version.go           # Entry point + ldflags variables
 ├── internal/
-│   ├── log/log.go                 # LogManager, TimeCache, Level.String()
+│   ├── log/log.go                 # Logger, TimeCache, Level.String()
 │   ├── pool/pool.go               # MessagePool, BufferPool, constants (zero deps)
 │   ├── dnsutil/dnsutil.go         # NormalizeDomain, IsSecureProtocol, HandlePanic, etc.
 │   └── ipdetect/ipdetect.go       # Public IP detection for auto ECS
 ├── config/config.go               # All types + constants + loader + validation + DDR/CHAOS
-├── edns/edns.go                   # ECS, DNS Cookie, EDE (24 codes), Padding
-├── cidr/cidr.go                   # CIDRManager — IP filtering with tag matching
-├── rewrite/rewrite.go             # RewriteManager — domain rewrite rules
-├── cache/cache.go                 # Manager interface + MemoryCache + persistence
-├── stats/stats.go                 # Lock-free atomic metrics Manager
-├── server/                        # Core server (tightly coupled sub-components)
-│   ├── server.go                  # DNSServer lifecycle, signal handling, startup/shutdown
+├── edns/                           # EDNS(0) extensions (5 files)
+│   ├── edns.go                    # Handler, NewHandler, ApplyToMessage
+│   ├── ecs.go                     # ECSOption, DefaultECSConfig, ParseFromDNS
+│   ├── cookie.go                  # CookieGenerator, ParseCookie
+│   ├── ede.go                     # EDEOption, 24 error codes
+│   └── padding.go                 # RFC 7830 response padding
+├── cache/                          # DNS response cache (3 files)
+│   ├── cache.go                   # Store interface, CacheEntry, helpers
+│   ├── memory.go                  # MemoryCache, eviction, PTR index
+│   └── persist.go                 # Disk snapshot load/save
+├── cidr/cidr.go                   # CIDR Filter — IP filtering with tag matching
+├── rewrite/rewrite.go             # Rewrite Evaluator — domain rewrite rules
+├── stats/stats.go                 # Lock-free atomic metrics Collector
+├── server/                        # Core server + sub-packages
+│   ├── server.go                  # Server lifecycle, New(), Start(), shutdown
 │   ├── server_handlers.go         # Query pipeline, cache hit/miss, response builders
-│   ├── resolver.go                # QueryManager, CNAMEHandler, shared helpers
-│   ├── upstream.go                # UpstreamHandler, first-win query, CIDR filtering
-│   ├── recursive.go               # RecursiveResolver, root→TLD→auth walk, NS resolution
-│   ├── query.go                   # QueryClient core: types, NewQueryClient, routing
-│   ├── query_tcp.go               # Traditional UDP/TCP queries + TCP fallback
-│   ├── query_dot.go               # DoT queries (pool-based + fallback)
-│   ├── query_doq.go               # DoQ query execution (stream write/read)
-│   ├── doqpool.go                 # DoQ connection pool (quicPool)
-│   ├── query_doh.go               # DoH queries + HTTP/2 transport pool
-│   ├── query_doh3.go              # DoH3 queries + HTTP/3 transport pool
-│   ├── security.go                # SecurityManager, DNSSECValidator, HijackPrevention
-│   ├── tls.go                     # TLSManager core, cert management, lifecycle
-│   ├── tls_dot.go                 # DoT server (start, accept, RFC 7766 pipeline)
-│   ├── tls_doq.go                 # DoQ server (start, accept, stream handling)
-│   ├── tls_doh.go                 # DoH/DoH3 server (HTTP handlers)
-│   ├── tcppool.go                 # pipelinedConn + connPool (RFC 7766 TCP/DoT pipelining)
-│   ├── latency_probe.go           # A/AAAA latency probing and reordering
-│   └── ratelimit.go               # Per-IP token bucket rate limiter
+│   ├── client/                    # Outbound query execution + connection pools
+│   │   ├── client.go              # Client struct, ExecuteQuery, routing
+│   │   ├── tcp.go                 # Traditional UDP/TCP + TCP fallback
+│   │   ├── dot.go                 # DoT via pipelined pool
+│   │   ├── doq.go                 # DoQ via QUIC pool
+│   │   ├── doh.go                 # DoH via HTTP/2 transport
+│   │   ├── doh3.go                # DoH3 via HTTP/3 transport
+│   │   ├── tcppool.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
+│   │   └── quicpool.go            # QUIC connection pool (QuicPool)
+│   ├── resolver/                  # DNS resolution strategies
+│   │   ├── resolver.go            # Resolver struct, routing + helpers
+│   │   ├── upstream.go            # First-win concurrent upstream queries
+│   │   ├── recursive.go           # Recursive root→TLD→auth walk
+│   │   └── cname.go               # CNAME chain resolution
+│   ├── security/                  # Security features
+│   │   ├── security.go            # Guard (bundles Validator + Detector)
+│   │   ├── dnssec.go              # DNSSEC record-presence validation
+│   │   └── hijack.go              # Hijack detection + TCP fallback trigger
+│   ├── tls/                        # Secure transport listeners
+│   │   ├── tls.go                  # Server struct, cert management, Start/Shutdown
+│   │   ├── dot.go                  # DoT listener + per-connection handler
+│   │   ├── doq.go                  # DoQ listener + stream handler
+│   │   └── doh.go                  # DoH/DoH3 HTTP handlers
+│   ├── latency/                    # Latency probing
+│   │   └── probe.go                # A/AAAA latency probing + reordering
+│   └── ratelimit/                  # Per-IP token bucket rate limiter
+│       └── ratelimit.go            # Limiter (sharded, FNV-1a hash)
 └── cmd/
     └── pipeline_test/             # RFC 7766 pipelining test tool
 ```
@@ -62,7 +79,13 @@ zjdns/
 
 ```
 main ──→ server, config
-server ──→ cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite, stats
+server ──→ cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite,
+│          stats, client, ratelimit, resolver, security
+client ──→ config, edns, dnsutil, log, pool
+resolver ──→ config, edns, client, security, dnsutil, log, pool
+security ──→ dnsutil, log
+ratelimit ──→ log
+tls (in server) ──→ config, client, dnsutil, log, pool
 cache ──→ config, edns, dnsutil, log
 edns ──→ dnsutil, ipdetect, log
 cidr ──→ config, dnsutil, log
@@ -71,7 +94,7 @@ stats ──→ cache, config, log
 dnsutil ──→ log
 pool, log ──→ (zero deps)
 
-No circular dependencies.
+No circular dependencies. Sub-packages only import what they need.
 ```
 
 ## Architecture
@@ -80,27 +103,27 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 
 **Query processing pipeline** (`server/server.go:processDNSQuery`):
 1. Server status check → request validation (domain length, ANY query)
-2. `rewrite.Manager.Evaluate()` — synthetic response if rule matches
-3. `edns.Manager` — extract ECS, DNS Cookie from request
-4. `cache.Manager.Get()` — hit → serve (with CIDR filtering); miss → continue
-5. `QueryManager.Query()` — upstream (first-win) or recursive resolution
-6. `SecurityManager` — DNSSEC validation, hijack detection (UDP→TCP fallback)
-7. `cidr.Manager.MatchIP()` — filter A/AAAA IPs; all filtered → REFUSED + EDE
+2. `rewrite.Evaluator.Evaluate()` — synthetic response if rule matches
+3. `edns.Handler` — extract ECS, DNS Cookie from request
+4. `cache.Store.Get()` — hit → serve (with CIDR filtering); miss → continue
+5. `Resolver.Query()` — upstream (first-win) or recursive resolution
+6. `Guard` — DNSSEC validation, hijack detection (UDP→TCP fallback)
+7. `cidr.Filter.MatchIP()` — filter A/AAAA IPs; all filtered → REFUSED + EDE
 8. Populate cache, start latency probes, return response
 
-**Query routing** (`server/resolver.go:QueryManager.Query`):
+**Query routing** (`server/resolver/resolver.go:Resolver.Query`):
 - Upstream servers configured → concurrent first-win query; fallback on failure
 - No upstream → built-in recursive resolver (root→TLD→authoritative walk)
 - NXDOMAIN stored as secondary fallback; first NOERROR wins
 
-**TCP/DoT pipelining** (`server/tcppool.go`, RFC 7766):
-- Client: `connPool` manages per-upstream `pipelinedConn` instances; each multiplexes
+**TCP/DoT pipelining** (`server/client/tcppool.go`, RFC 7766):
+- Client: `Pool` manages per-upstream `Conn` instances; each multiplexes
   multiple in-flight queries over a single TCP/DoT connection with out-of-order
   response matching by DNS message ID. Falls back to single-shot `ExchangeContext`
   on connection failure.
-- Server: `handleDOTConnection` uses reader→worker→writer three-stage pipeline;
-  `handleDNSRequest` dispatches TCP queries to goroutines with per-connection write
-  mutex for concurrent out-of-order processing.
+- Server: `handleDOTConnection` in `server/tls/dot.go` uses reader→worker→writer
+  three-stage pipeline; `handleDNSRequest` dispatches TCP queries to goroutines
+  with per-connection write mutex for concurrent out-of-order processing.
 
 **Concurrency**: All queries use "first win" — fan out to all servers via `errgroup`, cancel remaining on first success. Adaptive concurrency limits based on server count.
 
@@ -109,15 +132,25 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | Type | Package | Notes |
 |------|---------|-------|
 | `ServerConfig`, `ServerSettings` | `config` | Top-level config |
-| `config.Manager` | `config` | Config loader (LoadConfig, GenerateExampleConfig) |
-| `edns.Manager` | `edns` | EDNS option parsing/construction |
-| `cidr.Manager` | `cidr` | IP filtering (New, MatchIP) |
-| `rewrite.Manager` | `rewrite` | Domain rewrite (New, LoadRules, Evaluate) |
-| `cache.Manager` | `cache` | Cache interface (Get, Set, SetEntry, Close) |
-| `stats.Manager` | `stats` | Lock-free metrics (RecordRequest, Snapshot) |
-| `DNSServer` | `server` | Core server (New, Start) |
-| `pipelinedConn` | `server` | Multiplexed TCP/DoT connection (reader goroutine, inflight tracking) |
-| `connPool` | `server` | Per-upstream pipelined connection pool (acquire, remove) |
+| `config.Loader` | `config` | Config loader (LoadConfig, GenerateExampleConfig) |
+| `edns.Handler` | `edns` | EDNS option parsing/construction |
+| `cidr.Filter` | `cidr` | IP filtering (New, MatchIP) |
+| `rewrite.Evaluator` | `rewrite` | Domain rewrite (New, LoadRules, Evaluate) |
+| `cache.Store` | `cache` | Store interface (Get, Set, SetEntry, Close) |
+| `stats.Collector` | `stats` | Lock-free metrics (RecordRequest, Snapshot) |
+| `Server` | `server` | Core server (New, Start) |
+| `Server` | `server/tls` | TLS listener server (DoT, DoQ, DoH, DoH3) |
+| `Prober` | `server/latency` | A/AAAA latency prober |
+| `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3) |
+| `Conn` | `server/client` | Multiplexed TCP/DoT connection (RFC 7766) |
+| `Pool` | `server/client` | TCP/DoT connection pool |
+| `QuicPool` | `server/client` | QUIC connection pool |
+| `Resolver` | `server/resolver` | DNS resolution (upstream + recursive) |
+| `Recursive` | `server/resolver` | Built-in recursive resolver |
+| `Guard` | `server/security` | DNSSEC + hijack detection |
+| `Validator` | `server/security` | DNSSEC record-presence validation |
+| `Detector` | `server/security` | DNS hijack detection |
+| `Limiter` | `server/ratelimit` | Per-IP token bucket rate limiter |
 
 ## Key Constants
 
@@ -131,10 +164,11 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `cache.StaleMaxAge` | cache | 45 days |
 | `pool.UDPBufferSize` | pool | 1232 |
 | `server.OperationTimeout` | server | 3s |
-| `server.MaxCNAMEChain` | server | 16 |
-| `server.MaxRecursionDep` | server | 16 |
-| `server.defaultMaxPipe` | server | 16 (max in-flight queries per connection) |
-| `server.defaultMaxConns` | server | 4 (max connections per upstream) |
+| `client.OperationTimeout` | server/client | 3s |
+| `client.DefaultMaxPipe` | server/client | 16 (max in-flight queries per connection) |
+| `client.DefaultMaxConns` | server/client | 4 (max connections per upstream) |
+| `resolver.MaxCNAMEChain` | server/resolver | 16 |
+| `resolver.MaxRecursionDep` | server/resolver | 16 |
 
 ## Logging Conventions
 
@@ -152,21 +186,21 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 
 | Prefix | Component | Files |
 |--------|-----------|-------|
-| `TLS` | All TLS + secure protocols | tls.go, tls_dot.go, tls_doq.go, tls_doh.go |
-| `CACHE` | Cache operations | cache.go, server.go |
-| `UPSTREAM` | Outbound upstream queries | query_tcp.go, query_dot.go, query_doq.go, query_doh.go, query_doh3.go, upstream.go |
-| `SERVER` | Server lifecycle | server.go, server_handlers.go, main.go |
-| `EDNS` | EDNS options | edns.go, server.go |
-| `RECURSION` | Recursive resolution | recursive.go |
-| `SECURITY` | DNSSEC, hijack detection | security.go, recursive.go |
-| `TCPPOOL` | TCP/DoT connection pool | tcppool.go, doqpool.go |
+| `TLS` | All TLS + secure protocols | server/tls/*.go |
+| `CACHE` | Cache operations | cache/*.go, server/server.go |
+| `UPSTREAM` | Outbound upstream queries | server/client/{tcp,dot,doq,doh,doh3}.go, server/resolver/upstream.go |
+| `SERVER` | Server lifecycle | server/server.go, server/server_handlers.go, main.go |
+| `EDNS` | EDNS options | edns/*.go, server/server.go |
+| `RECURSION` | Recursive resolution | server/resolver/recursive.go |
+| `SECURITY` | DNSSEC, hijack detection | server/security/*.go, server/resolver/recursive.go |
+| `TCPPOOL` | TCP/DoT connection pool | server/client/{tcppool,quicpool}.go |
 | `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `RATELIMIT`, `PTR`, `PANIC` | One component each | respective files |
 
 **Rules**: Prefix matches logical component, not Go package. No `HIJACK:`/`DNSSEC:` (merged→`SECURITY:`), no `DOT:`/`DOQ:`/`DOH:` (merged→`TLS:`). Hot-path logs are `Debug` only — `Warn`/`Info` on the query path would spam at scale.
 
 ## Notable Design Decisions
 
-- **TLS config isolation**: `server/query.go` clones TLS configs per-query to prevent
+- **TLS config isolation**: `server/client/client.go` clones TLS configs per-query to prevent
   concurrent requests with different `InsecureSkipVerify`/`ServerName` from
   cross-contaminating each other.
 - **Cache compression**: Full DNS records stored as zstd+gob compressed blobs;
@@ -180,14 +214,14 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   custom mutex-protected RNG.
 - **Lock-free stats**: All 16 counters use `atomic.Uint64` on the hot path;
   `sync.Mutex` only guards snapshot assembly.
-- **RFC 7766 TCP/DoT pipelining**: Client pools `pipelinedConn` per upstream,
+- **RFC 7766 TCP/DoT pipelining**: Client pools `Conn` per upstream,
   multiplexing queries over shared TCP/DoT connections. Each connection runs a
   reader goroutine that dispatches responses by DNS message ID to waiting callers.
   Server processes TCP queries concurrently via async handler dispatch (plain TCP)
   or three-stage reader→worker→writer pipeline (DoT). Falls back to single-shot
   `ExchangeContext` when pipelining is not supported by the peer.
-- **DoQ connection pool** (`server/doqpool.go`): Pools up to 4 QUIC
+- **DoQ connection pool** (`server/client/quicpool.go`): Pools up to 4 QUIC
   connections per upstream. Multiple goroutines share connections via QUIC's
   native stream multiplexing — no capacity semaphore needed.
 - **Config self-sufficiency**: `config.ProjectName` and `config.Version` are
-  package-level vars set by `main.go` before calling `config.Manager.LoadConfig()`.
+  package-level vars set by `main.go` before calling `config.Loader.LoadConfig()`.

@@ -1,4 +1,3 @@
-// Package main implements ZJDNS, a high-performance DNS server.
 package main
 
 import (
@@ -43,11 +42,10 @@ func main() {
 		return
 	}
 
-	// Set version info for CHAOS records
 	config.ProjectName = ProjectName
 	config.Version = getVersion()
 
-	cm := &config.Manager{}
+	cm := &config.Loader{}
 	cfg, err := cm.LoadConfig(configFile)
 	if err != nil {
 		log.Errorf("CONFIG: Config load failed: %v", err)

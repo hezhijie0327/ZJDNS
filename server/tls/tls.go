@@ -1,12 +1,13 @@
-// Package main implements ZJDNS - High Performance DNS Server
-package server
+// Package tls provides TLS-based secure DNS server implementation supporting DoT,
+// DoQ, DoH, and DoH3 protocols.
+package tls
 
 import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
+	cryptotls "crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
@@ -27,28 +29,62 @@ import (
 )
 
 const (
-	TLSConnBufferSize = 4096 // Buffer size for TLS connections (matches pool.TCPBufferSize)
+	// TLSConnBufferSize is the buffer size for TLS connection readers.
+	TLSConnBufferSize = 4096
 
-	DoHMaxRequestSize = 8192 // Maximum request size for DoH (8 KB)
+	// DoHMaxRequestSize is the maximum allowed DoH request size in bytes.
+	DoHMaxRequestSize = 8192
 
-	MaxIncomingStreams = 256 // Per-connection QUIC stream limit (RFC 7766 DoS mitigation)
+	// MaxIncomingStreams is the maximum number of concurrent incoming QUIC
+	// streams per connection.
+	MaxIncomingStreams = 256
 
-	QUICCodeNoError       quic.ApplicationErrorCode = 0
+	// QUICCodeNoError indicates a normal QUIC connection closure.
+	QUICCodeNoError quic.ApplicationErrorCode = 0
+
+	// QUICCodeInternalError indicates an internal server error in QUIC.
 	QUICCodeInternalError quic.ApplicationErrorCode = 1
+
+	// QUICCodeProtocolError indicates a protocol violation in QUIC.
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 )
 
 var (
-	NextProtoDOT  = []string{"dot"}
-	NextProtoDoQ  = []string{"doq"}
+	// NextProtoDOT is the ALPN protocol identifier for DNS-over-TLS.
+	NextProtoDOT = []string{"dot"}
+
+	// NextProtoDoQ is the ALPN protocol identifier for DNS-over-QUIC.
+	NextProtoDoQ = []string{"doq"}
+
+	// NextProtoDoH3 is the ALPN protocol identifier for DNS-over-HTTP/3.
 	NextProtoDoH3 = []string{"h3"}
-	NextProtoDoH  = []string{"h2"}
+
+	// NextProtoDoH is the ALPN protocol identifier for DNS-over-HTTP/2.
+	NextProtoDoH = []string{"h2"}
 )
 
-// TLSManager manages all TLS-related functionality, including certificate management and secure server handling for DoT, DoQ, DoH, and DoH3. It encapsulates the logic for starting and stopping secure servers, handling incoming connections, and processing DNS queries over secure protocols.
-type TLSManager struct {
-	server        *DNSServer
-	tlsConfig     *tls.Config
+// Config holds the configuration for the TLS server including ports,
+// certificate paths, and endpoint settings.
+type Config struct {
+	Port          string
+	HTTPSPort     string
+	HTTPSEndpoint string
+	SelfSigned    bool
+	CertFile      string
+	KeyFile       string
+	Domain        string
+}
+
+// DNSHandler is the interface for processing incoming DNS queries.
+type DNSHandler interface {
+	ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg
+}
+
+// Server manages TLS-based secure DNS protocol listeners and their lifecycle.
+type Server struct {
+	cfg           Config
+	handler       DNSHandler
+	tlsConfig     *cryptotls.Config
 	ctx           context.Context
 	cancel        context.CancelCauseFunc
 	serverGroup   *errgroup.Group
@@ -63,34 +99,28 @@ type TLSManager struct {
 	h3Listener    *quic.EarlyListener
 }
 
-// generateSelfSignedCert generates a self-signed ECDSA certificate for the given domain.
-// It creates a CA certificate and uses it to sign a server certificate.
-func generateSelfSignedCert(domain string) (tls.Certificate, error) {
-	// Generate CA private key using ECDSA P-384
+func generateSelfSignedCert(domain string) (cryptotls.Certificate, error) {
 	caPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("generate CA EC key: %w", err)
+		return cryptotls.Certificate{}, fmt.Errorf("generate CA EC key: %w", err)
 	}
 
-	// Generate server private key using ECDSA P-384
 	serverPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("generate server EC key: %w", err)
+		return cryptotls.Certificate{}, fmt.Errorf("generate server EC key: %w", err)
 	}
 
-	// Generate random serial numbers
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	caSerialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("generate CA serial number: %w", err)
+		return cryptotls.Certificate{}, fmt.Errorf("generate CA serial number: %w", err)
 	}
 
 	serverSerialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("generate server serial number: %w", err)
+		return cryptotls.Certificate{}, fmt.Errorf("generate server serial number: %w", err)
 	}
 
-	// Create CA certificate template
 	caTemplate := x509.Certificate{
 		SerialNumber: caSerialNumber,
 		Subject: pkix.Name{
@@ -99,14 +129,13 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 			Country:      []string{"CN"},
 		},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // 365 days validity for self-signed CA
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign | x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		MaxPathLen:            1,
 	}
 
-	// Create server certificate template
 	serverTemplate := x509.Certificate{
 		SerialNumber: serverSerialNumber,
 		Subject: pkix.Name{
@@ -114,30 +143,27 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 		},
 		DNSNames:    []string{domain},
 		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(365 * 24 * time.Hour), // 365 days validity for self-signed cert
+		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 
-	// Create and sign CA certificate
 	caCertDER, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &caPrivKey.PublicKey, caPrivKey)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("create CA certificate: %w", err)
+		return cryptotls.Certificate{}, fmt.Errorf("create CA certificate: %w", err)
 	}
 
 	caCert, err := x509.ParseCertificate(caCertDER)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("parse CA certificate: %w", err)
+		return cryptotls.Certificate{}, fmt.Errorf("parse CA certificate: %w", err)
 	}
 
-	// Create and sign server certificate using CA
 	certDER, err := x509.CreateCertificate(rand.Reader, &serverTemplate, caCert, &serverPrivKey.PublicKey, caPrivKey)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("create server certificate: %w", err)
+		return cryptotls.Certificate{}, fmt.Errorf("create server certificate: %w", err)
 	}
 
-	// Create tls.Certificate
-	cert := tls.Certificate{
+	cert := cryptotls.Certificate{
 		Certificate: [][]byte{certDER},
 		PrivateKey:  serverPrivKey,
 	}
@@ -145,7 +171,8 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 	return cert, nil
 }
 
-// IsTemporaryError checks if an error is temporary/recoverable.
+// IsTemporaryError returns true if the error is a temporary network error or
+// contains timeout or temporary in its message.
 func IsTemporaryError(err error) bool {
 	if err == nil {
 		return false
@@ -156,7 +183,8 @@ func IsTemporaryError(err error) bool {
 	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
 }
 
-// SecureClientIP extracts client IP from secure connection.
+// SecureClientIP extracts the client IP address from a connection, supporting
+// both TCP and UDP remote addresses.
 func SecureClientIP(conn any) net.IP {
 	switch c := conn.(type) {
 	case interface{ RemoteAddr() net.Addr }:
@@ -170,41 +198,39 @@ func SecureClientIP(conn any) net.IP {
 	return nil
 }
 
-// NewTLSManager creates a new TLSManager with the given server and configuration.
-// It loads or generates TLS certificates and initializes the TLS configuration.
-func NewTLSManager(server *DNSServer, config *config.ServerConfig) (*TLSManager, error) {
-	var cert tls.Certificate
+// New creates a new TLS Server with the given DNS handler and configuration,
+// loading or generating the TLS certificate as specified.
+func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Server, error) {
+	var cert cryptotls.Certificate
 	var err error
 
-	// Load or generate certificate
-	if config.Server.TLS.SelfSigned {
-		cert, err = generateSelfSignedCert(config.Server.Features.DDR.Domain)
+	if cfg.SelfSigned {
+		cert, err = generateSelfSignedCert(cfg.Domain)
 		if err != nil {
 			return nil, fmt.Errorf("generate self-signed certificate: %w", err)
 		}
-		log.Infof("TLS: Using self-signed certificate for domain: %s", config.Server.Features.DDR.Domain)
+		log.Infof("TLS: Using self-signed certificate for domain: %s", cfg.Domain)
 	} else {
-		cert, err = tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
+		cert, err = cryptotls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load certificate: %w", err)
 		}
-		log.Infof("TLS: Using certificate from files: %s, %s", config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
+		log.Infof("TLS: Using certificate from files: %s, %s", cfg.CertFile, cfg.KeyFile)
 	}
 
-	// Create TLS configuration
-	tlsConfig := &tls.Config{
-		Certificates:     []tls.Certificate{cert},
-		CurvePreferences: []tls.CurveID{}, // empty = use Go defaults (X25519, P-256, P-384, P-521)
-		MinVersion:       tls.VersionTLS13,
+	tlsConfig := &cryptotls.Config{
+		Certificates:     []cryptotls.Certificate{cert},
+		CurvePreferences: []cryptotls.CurveID{},
+		MinVersion:       cryptotls.VersionTLS13,
 	}
 
-	// Create context and error group for server management
 	ctx, cancel := context.WithCancelCause(context.Background())
 	serverGroup, serverCtx := errgroup.WithContext(ctx)
-	serverGroup.SetLimit(1024) // Cap concurrent DoT/DoQ connection handlers
+	serverGroup.SetLimit(1024)
 
-	tm := &TLSManager{
-		server:      server,
+	s := &Server{
+		cfg:         cfg,
+		handler:     handler,
 		tlsConfig:   tlsConfig,
 		ctx:         ctx,
 		cancel:      cancel,
@@ -212,14 +238,17 @@ func NewTLSManager(server *DNSServer, config *config.ServerConfig) (*TLSManager,
 		serverCtx:   serverCtx,
 	}
 
-	// Display certificate information
-	tm.displayCertificateInfo(cert)
+	s.displayCertificateInfo(cert)
 
-	return tm, nil
+	return s, nil
 }
 
-// displayCertificateInfo logs information about the TLS certificate.
-func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
+// TLSConfig returns the underlying crypto/tls configuration used by the server.
+func (s *Server) TLSConfig() *cryptotls.Config {
+	return s.tlsConfig
+}
+
+func (s *Server) displayCertificateInfo(cert cryptotls.Certificate) {
 	if len(cert.Certificate) == 0 {
 		log.Errorf("TLS: No certificate found")
 		return
@@ -238,7 +267,6 @@ func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 		x509Cert.NotAfter.Format("2006-01-02"),
 		x509Cert.SignatureAlgorithm.String())
 
-	// Check and warn about certificate expiry
 	daysUntilExpiry := int(time.Until(x509Cert.NotAfter).Hours() / 24)
 	if daysUntilExpiry < 0 {
 		log.Errorf("TLS: Certificate has EXPIRED for %d days!", -daysUntilExpiry)
@@ -247,28 +275,26 @@ func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 	}
 }
 
-// Start starts all secure DNS servers (DoT, DoQ, DoH, DoH3).
-// It launches each server in a separate goroutine and coordinates their lifecycle.
-func (tm *TLSManager) Start(httpsPort string) error {
+// Start launches all secure DNS protocol listeners (DoT, DoQ, DoH, DoH3) and
+// blocks until all servers have exited or an error occurs.
+func (s *Server) Start(httpsPort string) error {
 	errChan := make(chan error, 1)
 
-	g, ctx := errgroup.WithContext(tm.ctx)
+	g, ctx := errgroup.WithContext(s.ctx)
 
-	// Start DoH server if HTTPS port is configured
 	if httpsPort != "" {
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("DoH server")
-			if err := tm.startDOHServer(httpsPort); err != nil {
+			if err := s.startDOHServer(httpsPort); err != nil {
 				return fmt.Errorf("DoH startup: %w", err)
 			}
 			<-ctx.Done()
 			return nil
 		})
 
-		// Start DoH3 server
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("DoH3 server")
-			if err := tm.startDoH3Server(httpsPort); err != nil {
+			if err := s.startDoH3Server(httpsPort); err != nil {
 				return fmt.Errorf("DoH3 startup: %w", err)
 			}
 			<-ctx.Done()
@@ -276,29 +302,26 @@ func (tm *TLSManager) Start(httpsPort string) error {
 		})
 	}
 
-	// Start DoT server
 	g.Go(func() error {
 		defer dnsutil.HandlePanic("DoT server")
-		if err := tm.startDOTServer(); err != nil {
+		if err := s.startDOTServer(); err != nil {
 			return fmt.Errorf("DoT startup: %w", err)
 		}
 		<-ctx.Done()
 		return nil
 	})
 
-	// Start DoQ server
 	g.Go(func() error {
 		defer dnsutil.HandlePanic("DoQ server")
-		if err := tm.startDOQServer(); err != nil {
+		if err := s.startDOQServer(); err != nil {
 			return fmt.Errorf("DoQ startup: %w", err)
 		}
 		<-ctx.Done()
 		return nil
 	})
 
-	// Coordinate server goroutines
 	go func() {
-		defer dnsutil.HandlePanic("TLS manager coordinator")
+		defer dnsutil.HandlePanic("TLS server coordinator")
 		if err := g.Wait(); err != nil {
 			select {
 			case errChan <- err:
@@ -308,56 +331,47 @@ func (tm *TLSManager) Start(httpsPort string) error {
 		close(errChan)
 	}()
 
-	// Wait for errors
 	for err := range errChan {
 		if err != nil {
 			return err
 		}
+
 	}
 
 	return nil
 }
 
-func (tm *TLSManager) shutdown() error {
+// Shutdown gracefully stops all secure DNS listeners and waits for server
+// goroutines to finish.
+func (s *Server) Shutdown() error {
 	log.Infof("TLS: Shutting down secure DNS server")
 
-	// Cancel context to signal all goroutines
-	tm.cancel(errors.New("tls manager shutdown"))
+	s.cancel(errors.New("tls server shutdown"))
 
-	// Close DoT listener
-	if tm.dotListener != nil {
-		dnsutil.CloseWithLog(tm.dotListener, "DoT listener")
+	if s.dotListener != nil {
+		dnsutil.CloseWithLog(s.dotListener, "DoT listener")
 	}
-
-	// Close DoQ listener (also closes the underlying UDP conn).
-	if tm.doqListener != nil {
-		dnsutil.CloseWithLog(tm.doqListener, "DoQ listener")
+	if s.doqListener != nil {
+		dnsutil.CloseWithLog(s.doqListener, "DoQ listener")
 	}
-
-	// Shutdown HTTPS server
-	if tm.httpsServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+	if s.httpsServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), config.IdleTimeout)
 		defer cancel()
-		_ = tm.httpsServer.Shutdown(ctx)
+		_ = s.httpsServer.Shutdown(ctx)
 	}
-
-	// Shutdown HTTP/3 server
-	if tm.h3Server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+	if s.h3Server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), config.IdleTimeout)
 		defer cancel()
-		_ = tm.h3Server.Shutdown(ctx)
+		_ = s.h3Server.Shutdown(ctx)
+	}
+	if s.httpsListener != nil {
+		dnsutil.CloseWithLog(s.httpsListener, "HTTPS listener")
+	}
+	if s.h3Listener != nil {
+		dnsutil.CloseWithLog(s.h3Listener, "HTTP/3 listener")
 	}
 
-	// Close listeners
-	if tm.httpsListener != nil {
-		dnsutil.CloseWithLog(tm.httpsListener, "HTTPS listener")
-	}
-	if tm.h3Listener != nil {
-		dnsutil.CloseWithLog(tm.h3Listener, "HTTP/3 listener")
-	}
-
-	// Wait for all server goroutines to finish
-	if err := tm.serverGroup.Wait(); err != nil {
+	if err := s.serverGroup.Wait(); err != nil {
 		log.Errorf("TLS: Server goroutines finished with error: %v", err)
 	}
 

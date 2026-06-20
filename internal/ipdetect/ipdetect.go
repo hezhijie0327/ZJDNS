@@ -1,4 +1,4 @@
-// Package ipdetect detects the server's public IP for ECS auto-configuration.
+// Package ipdetect detects public IP addresses via external service.
 package ipdetect
 
 import (
@@ -12,13 +12,13 @@ import (
 
 var ipPattern = regexp.MustCompile(`ip=([^\s\n]+)`)
 
-// Detector detects public IP addresses via Cloudflare's trace service.
+// Detector detects public IP addresses via Cloudflare's trace endpoint.
 type Detector struct{}
 
-// IPv4 returns the server's public IPv4 address.
+// IPv4 returns the detected public IPv4 address.
 func (d *Detector) IPv4() net.IP { return detect(false) }
 
-// IPv6 returns the server's public IPv6 address.
+// IPv6 returns the detected public IPv6 address.
 func (d *Detector) IPv6() net.IP { return detect(true) }
 
 func detect(forceIPv6 bool) net.IP {
