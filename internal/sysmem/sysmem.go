@@ -3,6 +3,7 @@ package sysmem
 
 import (
 	"bufio"
+	"math"
 	"os"
 	"os/exec"
 	"runtime"
@@ -30,7 +31,11 @@ func BudgetBytes(percent int, def int64) int64 {
 	if total == 0 {
 		return def
 	}
-	budget := int64(total) * int64(percent) / 100
+	budgetU64 := total * uint64(percent) / 100
+	if budgetU64 > math.MaxInt64 {
+		budgetU64 = math.MaxInt64
+	}
+	budget := int64(budgetU64)
 	if budget < def {
 		return def
 	}
