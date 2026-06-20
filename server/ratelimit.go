@@ -4,6 +4,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"zjdns/internal/log"
 )
 
 const (
@@ -66,6 +68,7 @@ func (l *Limiter) Allow(ip net.IP) bool {
 	}
 	if b.tokens < 1 {
 		l.mu.Unlock()
+		log.Debugf("RATELIMIT: request from %s rate-limited (rate=%d qps, burst=%d)", key, l.rate, l.burst)
 		return false
 	}
 	b.tokens--

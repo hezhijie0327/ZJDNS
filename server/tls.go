@@ -337,7 +337,7 @@ func (tm *TLSManager) startDOTServer() error {
 	dotTLSConfig.NextProtos = NextProtoDOT
 
 	tm.dotListener = tls.NewListener(listener, dotTLSConfig)
-	log.Infof("DOT: DoT server started on port %s", tm.server.config.Server.TLS.Port)
+	log.Infof("TLS: DoT server started on port %s", tm.server.config.Server.TLS.Port)
 
 	tm.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoT server")
@@ -362,7 +362,7 @@ func (tm *TLSManager) handleDOTConnections() {
 			if tm.ctx.Err() != nil {
 				return
 			}
-			log.Errorf("DOT: Accept error: %v", err)
+			log.Errorf("TLS: Accept error: %v", err)
 			continue
 		}
 
@@ -402,18 +402,18 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		n, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
 			if err != io.EOF && !IsTemporaryError(err) {
-				log.Debugf("DOT: Read length error: %v", err)
+				log.Debugf("TLS: Read length error: %v", err)
 			}
 			return
 		}
 		if n != 2 {
-			log.Debugf("DOT: Invalid length read: %d bytes", n)
+			log.Debugf("TLS: Invalid length read: %d bytes", n)
 			return
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
 		if msgLength == 0 || msgLength > pool.TCPBufferSize {
-			log.Debugf("DOT: Invalid message length: %d", msgLength)
+			log.Debugf("TLS: Invalid message length: %d", msgLength)
 			return
 		}
 
@@ -421,18 +421,18 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		msgBuf := make([]byte, msgLength)
 		n, err = io.ReadFull(reader, msgBuf)
 		if err != nil {
-			log.Debugf("DOT: Read message error: %v", err)
+			log.Debugf("TLS: Read message error: %v", err)
 			return
 		}
 		if n != int(msgLength) {
-			log.Debugf("DOT: Incomplete message read: %d/%d bytes", n, msgLength)
+			log.Debugf("TLS: Incomplete message read: %d/%d bytes", n, msgLength)
 			return
 		}
 
 		// Parse DNS message
 		req := pool.DefaultMessagePool.Get()
 		if err := req.Unpack(msgBuf); err != nil {
-			log.Debugf("DOT: DNS message unpack error: %v", err)
+			log.Debugf("TLS: DNS message unpack error: %v", err)
 			pool.DefaultMessagePool.Put(req)
 			continue
 		}
@@ -450,7 +450,7 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		if response != nil {
 			respBuf, err := response.Pack()
 			if err != nil {
-				log.Debugf("DOT: Response pack error: %v", err)
+				log.Debugf("TLS: Response pack error: %v", err)
 				pool.DefaultMessagePool.Put(response)
 				return
 			}
@@ -460,13 +460,13 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			binary.BigEndian.PutUint16(lengthBuf, uint16(len(respBuf)))
 
 			if _, err := tlsConn.Write(lengthBuf); err != nil {
-				log.Debugf("DOT: Write length error: %v", err)
+				log.Debugf("TLS: Write length error: %v", err)
 				pool.DefaultMessagePool.Put(response)
 				return
 			}
 
 			if _, err := tlsConn.Write(respBuf); err != nil {
-				log.Debugf("DOT: Write response error: %v", err)
+				log.Debugf("TLS: Write response error: %v", err)
 				pool.DefaultMessagePool.Put(response)
 				return
 			}
@@ -512,7 +512,7 @@ func (tm *TLSManager) startDOQServer() error {
 		return fmt.Errorf("DoQ listen: %w", err)
 	}
 
-	log.Infof("DOQ: DoQ server started on port %s", tm.server.config.Server.TLS.Port)
+	log.Infof("TLS: DoQ server started on port %s", tm.server.config.Server.TLS.Port)
 
 	tm.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoQ server")
@@ -573,7 +573,7 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		select {
 		case <-done:
 		case <-ctx.Done():
-			log.Debugf("QUIC: Connection close timeout")
+			log.Debugf("TLS: Connection close timeout")
 		}
 	}()
 
@@ -653,7 +653,7 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	response := tm.server.processDNSQuery(req, clientIP, true, "DoQ")
 	// Send response
 	if err := tm.respondQUIC(stream, response); err != nil {
-		log.Debugf("PROTOCOL: DoQ response failed: %v", err)
+		log.Debugf("TLS: DoQ response failed: %v", err)
 	}
 	if response != nil {
 		pool.DefaultMessagePool.Put(response)
@@ -703,7 +703,7 @@ func (tm *TLSManager) startDOHServer(port string) error {
 	tlsConfig.NextProtos = NextProtoDoH
 
 	tm.httpsListener = tls.NewListener(listener, tlsConfig)
-	log.Infof("DOH: DoH server started on port %s", port)
+	log.Infof("TLS: DoH server started on port %s", port)
 
 	tm.httpsServer = &http.Server{
 		Handler:           tm,
@@ -715,7 +715,7 @@ func (tm *TLSManager) startDOHServer(port string) error {
 	tm.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoH server")
 		if err := tm.httpsServer.Serve(tm.httpsListener); err != nil && err != http.ErrServerClosed {
-			log.Errorf("DOH: DoH server error: %v", err)
+			log.Errorf("TLS: DoH server error: %v", err)
 			return err
 		}
 		return nil
@@ -745,14 +745,14 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 	}
 
 	tm.h3Listener = quicListener
-	log.Infof("DOH3: DoH3 server started on port %s", port)
+	log.Infof("TLS: DoH3 server started on port %s", port)
 
 	tm.h3Server = &http3.Server{Handler: tm}
 
 	tm.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoH3 server")
 		if err := tm.h3Server.ServeListener(tm.h3Listener); err != nil && err != http.ErrServerClosed {
-			log.Errorf("DOH3: DoH3 server error: %v", err)
+			log.Errorf("TLS: DoH3 server error: %v", err)
 			return err
 		}
 		return nil
@@ -797,7 +797,7 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	response := tm.server.processDNSQuery(req, nil, true, protocol)
 
 	if err := tm.respondDoH(w, response); err != nil {
-		log.Errorf("DOH: DoH response failed: %v", err)
+		log.Errorf("TLS: DoH response failed: %v", err)
 	}
 	if response != nil {
 		pool.DefaultMessagePool.Put(response)

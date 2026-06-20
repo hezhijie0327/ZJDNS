@@ -82,6 +82,22 @@ func (m *Manager) Level() Level {
 	return Level(m.level.Load())
 }
 
+// String returns the level as a human-readable string.
+func (l Level) String() string {
+	switch l {
+	case Error:
+		return "error"
+	case Warn:
+		return "warn"
+	case Info:
+		return "info"
+	case Debug:
+		return "debug"
+	default:
+		return "unknown"
+	}
+}
+
 // Log emits a message at the given level. Messages below the configured level
 // are suppressed.
 func (m *Manager) Log(lvl Level, format string, args ...any) {

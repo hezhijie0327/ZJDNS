@@ -372,7 +372,7 @@ func (s *DNSServer) shutdownServer() {
 		}
 		log.Infof("SERVER: All background tasks shut down")
 	case <-time.After(DefaultTimeout):
-		log.Warnf("SERVER: Background tasks shutdown timeout")
+		log.Errorf("SERVER: Background tasks shutdown timeout")
 	}
 
 	refreshDone := make(chan error, 1)
@@ -388,7 +388,7 @@ func (s *DNSServer) shutdownServer() {
 		}
 		log.Infof("SERVER: All cache refresh tasks shut down")
 	case <-time.After(DefaultTimeout):
-		log.Warnf("SERVER: Cache refresh tasks shutdown timeout")
+		log.Errorf("SERVER: Cache refresh tasks shutdown timeout")
 	}
 
 	log.DefaultTimeCache.Stop()
@@ -412,6 +412,7 @@ func (s *DNSServer) Start() error {
 	defer serverCancel(errors.New("server startup completed"))
 
 	log.Infof("SERVER: Starting ZJDNS Server %s", config.Version)
+	log.Infof("SERVER: Log level: %s", log.Default.Level().String())
 	log.Infof("SERVER: Listening on port: %s", s.config.Server.Port)
 
 	s.displayInfo()
@@ -429,7 +430,7 @@ func (s *DNSServer) Start() error {
 			Handler: dns.HandlerFunc(s.handleDNSRequest),
 			UDPSize: pool.UDPBufferSize,
 		}
-		log.Infof("DNS: UDP server started on port %s", s.config.Server.Port)
+		log.Infof("SERVER: UDP server started on port %s", s.config.Server.Port)
 		err := server.ListenAndServe()
 		if err != nil {
 			return fmt.Errorf("UDP startup: %w", err)
@@ -464,7 +465,7 @@ func (s *DNSServer) Start() error {
 			Net:     "tcp",
 			Handler: dns.HandlerFunc(s.handleDNSRequest),
 		}
-		log.Infof("DNS: TCP server started on port %s", s.config.Server.Port)
+		log.Infof("SERVER: TCP server started on port %s", s.config.Server.Port)
 		err := server.ListenAndServe()
 		if err != nil {
 			return fmt.Errorf("TCP startup: %w", err)
@@ -564,7 +565,7 @@ func (s *DNSServer) displayInfo() {
 	}
 	log.Infof("CACHE: Serve expired enabled (ttl=%d, client timeout=%s, prefer_stale=%t)", cache.StaleMaxAge, ServeExpiredClientTimeout.String(), s.config.Server.Features.Cache.PreferStale)
 	if s.config.Server.Features.HijackProtection {
-		log.Infof("HIJACK: DNS hijacking prevention: enabled")
+		log.Infof("SECURITY: DNS hijacking prevention: enabled")
 	}
 	if defaultECS := s.ednsMgr.DefaultECS(); defaultECS != nil {
 		log.Infof("EDNS: Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)

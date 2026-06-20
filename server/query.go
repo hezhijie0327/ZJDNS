@@ -126,7 +126,7 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *c
 	if len(msg.Question) > 0 {
 		qname = msg.Question[0].Name
 	}
-	log.Debugf("QUERY: querying %s (%s) for %s", server.Address, strings.ToUpper(server.Protocol), qname)
+	log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, strings.ToUpper(server.Protocol), qname)
 
 	// Create query context with timeout
 	queryCtx, cancel := context.WithTimeout(ctx, qc.timeout)
@@ -142,7 +142,7 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *c
 
 		// Handle TCP fallback for truncated UDP responses
 		if qc.needsTCPFallback(result, protocol) {
-			log.Debugf("QUERY: UDP truncated/failed for %s, falling back to TCP for %s", qname, server.Address)
+			log.Debugf("UPSTREAM: UDP truncated/failed for %s, falling back to TCP for %s", qname, server.Address)
 			tcpServer := *server
 			tcpServer.Protocol = "tcp"
 
@@ -150,9 +150,9 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *c
 				result.Response = tcpResp
 				result.Error = nil
 				result.Protocol = "TCP"
-				log.Debugf("QUERY: TCP fallback succeeded for %s via %s", qname, server.Address)
+				log.Debugf("UPSTREAM: TCP fallback succeeded for %s via %s", qname, server.Address)
 			} else {
-				log.Debugf("QUERY: TCP fallback failed for %s via %s: %v", qname, server.Address, tcpErr)
+				log.Debugf("UPSTREAM: TCP fallback failed for %s via %s: %v", qname, server.Address, tcpErr)
 			}
 		}
 	}
@@ -161,9 +161,9 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *c
 	result.Protocol = strings.ToUpper(protocol)
 
 	if result.Error != nil {
-		log.Debugf("QUERY: failed for %s via %s (%s) in %v, error=%v", qname, server.Address, result.Protocol, result.Duration, result.Error)
+		log.Debugf("UPSTREAM: query failed for %s via %s (%s) in %v, error=%v", qname, server.Address, result.Protocol, result.Duration, result.Error)
 	} else if result.Response != nil {
-		log.Debugf("QUERY: success for %s via %s (%s) in %v, rcode=%s, answer=%d", qname, server.Address, result.Protocol, result.Duration, dns.RcodeToString[result.Response.Rcode], len(result.Response.Answer))
+		log.Debugf("UPSTREAM: success for %s via %s (%s) in %v, rcode=%s, answer=%d", qname, server.Address, result.Protocol, result.Duration, dns.RcodeToString[result.Response.Rcode], len(result.Response.Answer))
 	}
 
 	return result
@@ -180,7 +180,7 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 	}
 
 	if server.SkipTLSVerify {
-		log.Debugf("QUERY: TLS verification disabled for %s - security risk!", server.ServerName)
+		log.Debugf("UPSTREAM: TLS verification disabled for %s - security risk!", server.ServerName)
 	}
 
 	// Route to appropriate protocol handler

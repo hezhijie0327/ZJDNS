@@ -38,15 +38,16 @@ func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) boo
 
 	// If the response has the Authenticated Data flag set, it's validated
 	if response.AuthenticatedData {
-		log.Debugf("DNSSEC: validated via AD flag")
+		log.Debugf("SECURITY: validated via AD flag")
 		return true
 	}
 
 	// Check for DNSSEC record types in the response
 	if v.hasDNSSECRecords(response) {
-		log.Debugf("DNSSEC: validated via DNSSEC record presence")
+		log.Debugf("SECURITY: validated via DNSSEC record presence")
 		return true
 	}
+	log.Debugf("SECURITY: validation failed (no AD flag and no DNSSEC records)")
 	return false
 }
 
@@ -103,7 +104,7 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 
 		// Validate the answer against the server's authority
 		if valid, reason := hp.validateAnswer(currentDomain, queryDomain, rrType); !valid {
-			log.Debugf("HIJACK: detected for %s from authority=%s, record=%s %s, reason=%s",
+			log.Warnf("SECURITY: detected for %s from authority=%s, record=%s %s, reason=%s",
 				queryDomain, currentDomain, dns.TypeToString[rrType], rr.Header().Name, reason)
 			return false, reason
 		}

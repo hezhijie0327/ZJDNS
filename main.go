@@ -4,10 +4,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
 
 	"zjdns/config"
+	"zjdns/internal/log"
 	"zjdns/server"
 )
 
@@ -50,17 +50,20 @@ func main() {
 	cm := &config.Manager{}
 	cfg, err := cm.LoadConfig(configFile)
 	if err != nil {
-		log.Fatalf("Config load failed: %v", err)
+		log.Errorf("CONFIG: Config load failed: %v", err)
+		os.Exit(1)
 	}
 
 	srv, err := server.New(cfg)
 	if err != nil {
-		log.Fatalf("Server creation failed: %v", err)
+		log.Errorf("SERVER: Server creation failed: %v", err)
+		os.Exit(1)
 	}
 
-	log.Println("SERVER: ZJDNS Server started successfully!")
+	log.Infof("SERVER: ZJDNS Server started successfully!")
 
 	if err := srv.Start(); err != nil {
-		log.Fatalf("Server startup failed: %v", err)
+		log.Errorf("SERVER: Server startup failed: %v", err)
+		os.Exit(1)
 	}
 }

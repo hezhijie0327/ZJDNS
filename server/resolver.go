@@ -379,6 +379,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *edns.ECSOption
 			}
 		default:
 		}
+		log.Debugf("UPSTREAM: all upstream queries failed for %s after %d attempts", question.Name, len(servers))
 		return nil, nil, nil, false, nil, "", false, errors.New("all upstream queries failed")
 	case <-queryCtx.Done():
 		return nil, nil, nil, false, nil, "", false, queryCtx.Err()
@@ -447,7 +448,8 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 	currentQuestion := question
 	visitedCNAMEs := make(map[string]bool)
 
-	for range MaxCNAMEChain {
+	cnameDepth := 0
+	for cnameDepth = range MaxCNAMEChain {
 		select {
 		case <-ctx.Done():
 			return nil, nil, nil, false, nil, "", false, ctx.Err()
@@ -456,6 +458,7 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 
 		currentName := dnsutil.NormalizeDomain(currentQuestion.Name)
 		if visitedCNAMEs[currentName] {
+			log.Warnf("RECURSION: CNAME loop detected for %s", currentName)
 			return nil, nil, nil, false, nil, "", false, fmt.Errorf("CNAME loop detected: %s", currentName)
 		}
 		visitedCNAMEs[currentName] = true
@@ -509,6 +512,9 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 		}
 	}
 
+	if cnameDepth >= MaxCNAMEChain-1 {
+		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", MaxCNAMEChain, dnsutil.NormalizeDomain(question.Name))
+	}
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, usedServer, hijackOccurred, nil
 }
 
@@ -518,6 +524,7 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *edns.ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	log.Debugf("RECURSION: depth=%d, querying %s (type=%s, tcp=%t)", depth, question.Name, dns.TypeToString[question.Qtype], forceTCP)
 	if depth > MaxRecursionDep {
+		log.Warnf("RECURSION: depth exceeded (depth=%d, max=%d) for %s", depth, MaxRecursionDep, question.Name)
 		return nil, nil, nil, false, nil, "", false, fmt.Errorf("recursion depth exceeded: %d", depth)
 	}
 
@@ -567,7 +574,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
 		if err != nil {
 			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
-				log.Debugf("HIJACK: query error indicates hijack, retrying with TCP for %s", question.Name)
+				log.Debugf("SECURITY: query error indicates hijack, retrying with TCP for %s", question.Name)
 				return rr.recursiveQuery(ctx, question, ecs, depth, true)
 			}
 			return nil, nil, nil, false, nil, "", false, fmt.Errorf("query %s: %w", currentDomain, err)
@@ -672,10 +679,10 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 // It returns an error that triggers TCP fallback if not already using TCP.
 func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *edns.ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	if !currentlyTCP {
-		log.Debugf("HIJACK: UDP response suspicious, switching to TCP retry, reason=%s", reason)
+		log.Debugf("SECURITY: UDP response suspicious, switching to TCP retry, reason=%s", reason)
 		return nil, nil, nil, false, nil, "", true, fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
 	}
-	log.Debugf("HIJACK: TCP response still suspicious, rejecting completely, reason=%s", reason)
+	log.Debugf("SECURITY: TCP response still suspicious, rejecting completely, reason=%s", reason)
 	return nil, nil, nil, false, nil, "", true, fmt.Errorf("DNS hijacking detected (TCP): %s", reason)
 }
 

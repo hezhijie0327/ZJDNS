@@ -270,8 +270,13 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 // evictToBudget removes the least recently accessed entries until memory usage
 // falls under the byte budget. Must be called under mu.Lock.
 func (mc *MemoryCache) evictToBudget() {
+	evicted := 0
 	for mc.limitBytes > 0 && mc.currentSize > mc.limitBytes && len(mc.entries) > 0 {
 		mc.evictLocked()
+		evicted++
+	}
+	if evicted > 0 {
+		log.Debugf("CACHE: evicted %d entries to enforce budget (current=%d MB, limit=%d MB)", evicted, mc.currentSize/(1024*1024), mc.limitBytes/(1024*1024))
 	}
 }
 
@@ -447,7 +452,7 @@ func (mc *MemoryCache) startPersistWorker() {
 					continue
 				}
 				if err := mc.persistSnapshot(); err != nil {
-					log.Warnf("CACHE: persist snapshot failed: %v", err)
+					log.Errorf("CACHE: persist snapshot failed: %v", err)
 				} else {
 					mc.persistDirty.Store(0)
 				}
@@ -587,13 +592,13 @@ func (mc *MemoryCache) Close() error {
 			select {
 			case <-mc.persistDone:
 			case <-time.After(config.IdleTimeout):
-				log.Warnf("CACHE: persist worker shutdown timeout")
+				log.Errorf("CACHE: persist worker shutdown timeout")
 			}
 		}
 	}
 	if mc.persistPath != "" {
 		if err := mc.persistSnapshot(); err != nil {
-			log.Warnf("CACHE: final snapshot failed: %v", err)
+			log.Errorf("CACHE: final snapshot failed: %v", err)
 		} else {
 			log.Infof("CACHE: snapshot flushed to %s", mc.persistPath)
 		}
