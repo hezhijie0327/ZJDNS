@@ -28,7 +28,7 @@ type Limiter struct {
 
 type limiterShard struct {
 	mu      sync.Mutex
-	clients map[string]*bucket
+	clients map[[16]byte]*bucket // [16]byte key from ip.To16() avoids string allocation
 }
 
 type bucket struct {
@@ -50,7 +50,7 @@ func NewLimiter(rate, burst int) *Limiter {
 		done:  make(chan struct{}),
 	}
 	for i := range l.shards {
-		l.shards[i].clients = make(map[string]*bucket)
+		l.shards[i].clients = make(map[[16]byte]*bucket)
 	}
 	go l.cleanup()
 	return l
@@ -61,9 +61,9 @@ func (l *Limiter) Allow(ip net.IP) bool {
 	if l == nil {
 		return true
 	}
-	key := ip.String()
+	key := ipToKey(ip)
 	now := time.Now()
-	s := &l.shards[hashIP(ip)]
+	s := &l.shards[hashIPKey(key)]
 
 	s.mu.Lock()
 	b, ok := s.clients[key]
@@ -79,7 +79,7 @@ func (l *Limiter) Allow(ip net.IP) bool {
 	}
 	if b.tokens < 1 {
 		s.mu.Unlock()
-		log.Debugf("RATELIMIT: request from %s rate-limited (rate=%d qps, burst=%d)", key, l.rate, l.burst)
+		log.Debugf("RATELIMIT: request from %s rate-limited (rate=%d qps, burst=%d)", ip.String(), l.rate, l.burst)
 		return false
 	}
 	b.tokens--
@@ -94,14 +94,20 @@ func (l *Limiter) Shutdown() {
 	}
 }
 
-// hashIP maps an IP to a shard index using FNV-1a on the normalized 16-byte form.
-func hashIP(ip net.IP) uint8 {
-	ip = ip.To16()
-	if len(ip) == 0 {
-		return 0
+// ipToKey normalizes an IP to a [16]byte key for use as a map index.
+func ipToKey(ip net.IP) [16]byte {
+	var key [16]byte
+	normalized := ip.To16()
+	if len(normalized) == 16 {
+		copy(key[:], normalized)
 	}
+	return key
+}
+
+// hashIPKey maps a [16]byte IP key to a shard index using FNV-1a.
+func hashIPKey(key [16]byte) uint8 {
 	h := uint32(0)
-	for _, b := range ip {
+	for _, b := range key {
 		h ^= uint32(b)
 		h *= 16777619 // FNV-1a prime
 	}
@@ -118,9 +124,9 @@ func (l *Limiter) cleanup() {
 			for i := range l.shards {
 				s := &l.shards[i]
 				s.mu.Lock()
-				for ip, b := range s.clients {
+				for key, b := range s.clients {
 					if b.lastSeen.Before(cutoff) {
-						delete(s.clients, ip)
+						delete(s.clients, key)
 					}
 				}
 				s.mu.Unlock()

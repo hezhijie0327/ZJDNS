@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -58,6 +59,16 @@ type QueryClient struct {
 	tlsClient  *dns.Client
 	dohClient  *http.Client
 	doh3Client *http.Client
+
+	// Connection pools for secure protocols to avoid per-query setup overhead.
+	dohTransportMu sync.Mutex
+	dohTransports  map[string]*http.Client // keyed by address|servername|skipVerify
+
+	doh3TransportMu sync.Mutex
+	doh3Transports  map[string]*http.Client // keyed by address|servername|skipVerify
+
+	quicConnMu sync.Mutex
+	quicConns  map[string]*quic.Conn // keyed by address
 }
 
 // NewQueryClient creates a new QueryClient with configured UDP, TCP, TLS, DoH, and DoH3 clients.
@@ -113,6 +124,9 @@ func NewQueryClient() *QueryClient {
 			Timeout:   OperationTimeout,
 			Transport: doh3Transport,
 		},
+		dohTransports:  make(map[string]*http.Client),
+		doh3Transports: make(map[string]*http.Client),
+		quicConns:      make(map[string]*quic.Conn),
 	}
 }
 
@@ -210,12 +224,24 @@ func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *con
 }
 
 // executeQUIC executes a DNS query over DNS over QUIC (DoQ).
+// Uses a cached connection pool to avoid per-query dial overhead.
 func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+	conn := qc.getQUICConn(server.Address)
+	if conn != nil {
+		// Try to use existing connection
+		response, err := qc.doQUICQuery(ctx, conn, msg, qc.timeout)
+		if err == nil {
+			return response, nil
+		}
+		// Connection is dead; close and remove from pool
+		_ = conn.CloseWithError(QUICCodeNoError, "connection expired")
+		qc.removeQUICConn(server.Address, conn)
+	}
+
 	// Clone and configure TLS for DoQ
 	tlsConfig = tlsConfig.Clone()
 	tlsConfig.NextProtos = NextProtoDoQ
 
-	// Configure QUIC
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        config.IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
@@ -224,39 +250,44 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *co
 		Allow0RTT:             false,
 	}
 
-	// Dial QUIC connection
 	dialCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
 	defer cancel()
 
-	conn, err := quic.DialAddr(dialCtx, server.Address, tlsConfig, quicConfig)
+	newConn, err := quic.DialAddr(dialCtx, server.Address, tlsConfig, quicConfig)
 	if err != nil {
 		return nil, fmt.Errorf("QUIC dial: %w", err)
 	}
-	defer func() {
-		_ = conn.CloseWithError(QUICCodeNoError, "query completed")
-	}()
 
-	// Open stream
+	response, err := qc.doQUICQuery(ctx, newConn, msg, qc.timeout)
+	if err != nil {
+		_ = newConn.CloseWithError(QUICCodeNoError, "query failed")
+		return nil, err
+	}
+
+	// Store connection for reuse
+	qc.putQUICConn(server.Address, newConn)
+	return response, nil
+}
+
+// doQUICQuery performs the actual QUIC stream write/read on an established connection.
+func (qc *QueryClient) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg, timeout time.Duration) (*dns.Msg, error) {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("open stream: %w", err)
 	}
 	defer func() { _ = stream.Close() }()
 
-	_ = stream.SetDeadline(time.Now().Add(qc.timeout))
+	_ = stream.SetDeadline(time.Now().Add(timeout))
 
-	// Set message ID to 0 for QUIC (per RFC)
 	originalID := msg.Id
 	msg.Id = 0
 
-	// Pack message
 	msgData, err := msg.Pack()
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("pack: %w", err)
 	}
 
-	// Write message with length prefix
 	buf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(buf)
 
@@ -272,11 +303,9 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *co
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	// Read response: first the 2-byte length prefix, then the message body (RFC 9250).
 	respBuf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(respBuf)
 
-	// Read 2-byte length prefix
 	if _, err := io.ReadFull(stream, respBuf[:2]); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("read length prefix: %w", err)
@@ -287,13 +316,11 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *co
 		return nil, fmt.Errorf("invalid response length: %d", msgLen)
 	}
 
-	// Read exactly msgLen bytes
 	if _, err := io.ReadFull(stream, respBuf[2:2+msgLen]); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("read message body: %w", err)
 	}
 
-	// Parse response
 	response := pool.DefaultMessagePool.Get()
 	if err := response.Unpack(respBuf[2 : 2+msgLen]); err != nil {
 		msg.Id = originalID
@@ -307,47 +334,65 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *co
 	return response, nil
 }
 
+// getQUICConn retrieves a cached QUIC connection by address.
+func (qc *QueryClient) getQUICConn(addr string) *quic.Conn {
+	qc.quicConnMu.Lock()
+	defer qc.quicConnMu.Unlock()
+	conn, ok := qc.quicConns[addr]
+	if ok {
+		delete(qc.quicConns, addr)
+		return conn
+	}
+	return nil
+}
+
+// putQUICConn stores a QUIC connection for reuse.
+func (qc *QueryClient) putQUICConn(addr string, conn *quic.Conn) {
+	qc.quicConnMu.Lock()
+	defer qc.quicConnMu.Unlock()
+	// Evict old connection if present to prevent leaks
+	if old, ok := qc.quicConns[addr]; ok {
+		_ = old.CloseWithError(QUICCodeNoError, "evicted by newer connection")
+	}
+	qc.quicConns[addr] = conn
+}
+
+// removeQUICConn removes a specific QUIC connection from the pool.
+func (qc *QueryClient) removeQUICConn(addr string, conn *quic.Conn) {
+	qc.quicConnMu.Lock()
+	defer qc.quicConnMu.Unlock()
+	if existing, ok := qc.quicConns[addr]; ok && existing == conn {
+		delete(qc.quicConns, addr)
+	}
+}
+
 // executeDoH executes a DNS query over DNS over HTTPS (DoH/HTTP2).
+// Uses a cached transport pool keyed by (address, serverName, skipVerify) to avoid
+// per-query transport cloning.
 func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	// Parse URL
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
 	}
 
-	// Add default port if not specified
 	if parsedURL.Port() == "" {
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
 	}
 
-	// Clone the transport to avoid mutating the shared transport's TLS config.
-	// This prevents a race condition where concurrent queries to upstreams with
-	// different TLS verification policies could cross-contaminate each other.
-	dohTransport := qc.dohClient.Transport.(*http.Transport).Clone()
-	dohTransport.TLSClientConfig = tlsConfig.Clone()
-	if err := http2.ConfigureTransport(dohTransport); err != nil {
-		return nil, fmt.Errorf("configure HTTP/2: %w", err)
+	client := qc.getDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify)
+	if client == nil {
+		client = qc.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, tlsConfig)
 	}
 
-	// Create a local HTTP client with the cloned transport to ensure
-	// TLS configuration isolation between concurrent requests.
-	dohClient := &http.Client{
-		Timeout:   qc.dohClient.Timeout,
-		Transport: dohTransport,
-	}
-
-	// Set message ID to 0 for DoH (privacy consideration)
 	originalID := msg.Id
 	msg.Id = 0
 
-	// Pack message
 	buf, err := msg.Pack()
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("pack: %w", err)
 	}
 
-	// Build request URL
 	q := url.Values{"dns": []string{base64.RawURLEncoding.EncodeToString(buf)}}
 	u := url.URL{
 		Scheme:   parsedURL.Scheme,
@@ -356,7 +401,6 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *con
 		RawQuery: q.Encode(),
 	}
 
-	// Create HTTP request
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		msg.Id = originalID
@@ -366,8 +410,7 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *con
 	httpReq.Header.Set("Accept", "application/dns-message")
 	httpReq.Header.Set("User-Agent", "")
 
-	// Execute request
-	httpResp, err := dohClient.Do(httpReq)
+	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("do request: %w", err)
@@ -379,14 +422,12 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *con
 		return nil, fmt.Errorf("HTTP status: %d", httpResp.StatusCode)
 	}
 
-	// Read response body
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	// Parse DNS response
 	response := pool.DefaultMessagePool.Get()
 	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
@@ -400,56 +441,66 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *con
 	return response, nil
 }
 
+// dohTransportKey builds a cache key for DoH transport pooling.
+func dohTransportKey(host, serverName string, skipVerify bool) string {
+	return fmt.Sprintf("%s|%s|%t", host, serverName, skipVerify)
+}
+
+// getDoHClient retrieves a cached DoH HTTP client, or nil if not present.
+func (qc *QueryClient) getDoHClient(host, serverName string, skipVerify bool) *http.Client {
+	qc.dohTransportMu.Lock()
+	defer qc.dohTransportMu.Unlock()
+	return qc.dohTransports[dohTransportKey(host, serverName, skipVerify)]
+}
+
+// createDoHClient builds and caches a DoH HTTP client for the given parameters.
+func (qc *QueryClient) createDoHClient(host, serverName string, skipVerify bool, tlsConfig *tls.Config) *http.Client {
+	qc.dohTransportMu.Lock()
+	defer qc.dohTransportMu.Unlock()
+
+	key := dohTransportKey(host, serverName, skipVerify)
+	if client, ok := qc.dohTransports[key]; ok {
+		return client
+	}
+
+	transport := qc.dohClient.Transport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig.Clone()
+	_ = http2.ConfigureTransport(transport)
+
+	client := &http.Client{
+		Timeout:   qc.dohClient.Timeout,
+		Transport: transport,
+	}
+	qc.dohTransports[key] = client
+	return client
+}
+
 // executeDoH3 executes a DNS query over DNS over HTTPS/3 (DoH3/HTTP3).
+// Uses a cached transport pool to avoid per-query transport creation.
 func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	// Parse URL
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
 	}
 
-	// Add default port if not specified
 	if parsedURL.Port() == "" {
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
 	}
 
-	// Configure TLS for HTTP/3
-	tlsConfig = tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoDoH3
-
-	// Create HTTP/3 transport
-	transport := &http3.Transport{
-		TLSClientConfig: tlsConfig,
-		QUICConfig: &quic.Config{
-			MaxIdleTimeout:        config.IdleTimeout,
-			MaxIncomingStreams:    MaxIncomingStreams,
-			MaxIncomingUniStreams: MaxIncomingStreams,
-			EnableDatagrams:       true,
-			Allow0RTT:             false,
-		},
+	client := qc.getDoH3Client(parsedURL.Host, server.ServerName, server.SkipTLSVerify)
+	if client == nil {
+		client = qc.createDoH3Client(parsedURL.Host, server.ServerName, server.SkipTLSVerify, tlsConfig)
 	}
 
-	// Create a local HTTP client with the new transport to ensure
-	// TLS configuration isolation between concurrent requests.
-	// We avoid mutating the shared qc.doh3Client.Transport to prevent
-	// race conditions across concurrent queries with different TLS settings.
-	doh3Client := &http.Client{
-		Transport: transport,
-	}
-	defer func() { _ = transport.Close() }()
-
-	// Set message ID to 0 for DoH (privacy consideration)
 	originalID := msg.Id
 	msg.Id = 0
 
-	// Pack message
 	buf, err := msg.Pack()
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("pack: %w", err)
 	}
 
-	// Build request URL
 	q := url.Values{"dns": []string{base64.RawURLEncoding.EncodeToString(buf)}}
 	u := url.URL{
 		Scheme:   parsedURL.Scheme,
@@ -458,7 +509,6 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *co
 		RawQuery: q.Encode(),
 	}
 
-	// Create HTTP request
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		msg.Id = originalID
@@ -468,8 +518,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *co
 	httpReq.Header.Set("Accept", "application/dns-message")
 	httpReq.Header.Set("User-Agent", "")
 
-	// Execute request
-	httpResp, err := doh3Client.Do(httpReq)
+	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("do request: %w", err)
@@ -481,14 +530,12 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *co
 		return nil, fmt.Errorf("HTTP status: %d", httpResp.StatusCode)
 	}
 
-	// Read response body
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	// Parse DNS response
 	response := pool.DefaultMessagePool.Get()
 	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
@@ -500,6 +547,44 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *co
 	response.Id = originalID
 
 	return response, nil
+}
+
+// getDoH3Client retrieves a cached DoH3 HTTP client, or nil if not present.
+func (qc *QueryClient) getDoH3Client(host, serverName string, skipVerify bool) *http.Client {
+	qc.doh3TransportMu.Lock()
+	defer qc.doh3TransportMu.Unlock()
+	return qc.doh3Transports[dohTransportKey(host, serverName, skipVerify)]
+}
+
+// createDoH3Client builds and caches a DoH3 HTTP client for the given parameters.
+func (qc *QueryClient) createDoH3Client(host, serverName string, skipVerify bool, tlsConfig *tls.Config) *http.Client {
+	qc.doh3TransportMu.Lock()
+	defer qc.doh3TransportMu.Unlock()
+
+	key := dohTransportKey(host, serverName, skipVerify)
+	if client, ok := qc.doh3Transports[key]; ok {
+		return client
+	}
+
+	tlsCfg := tlsConfig.Clone()
+	tlsCfg.NextProtos = NextProtoDoH3
+
+	transport := &http3.Transport{
+		TLSClientConfig: tlsCfg,
+		QUICConfig: &quic.Config{
+			MaxIdleTimeout:        config.IdleTimeout,
+			MaxIncomingStreams:    MaxIncomingStreams,
+			MaxIncomingUniStreams: MaxIncomingStreams,
+			EnableDatagrams:       true,
+			Allow0RTT:             false,
+		},
+	}
+
+	client := &http.Client{
+		Transport: transport,
+	}
+	qc.doh3Transports[key] = client
+	return client
 }
 
 // executeTraditionalQuery executes a DNS query over traditional UDP or TCP.

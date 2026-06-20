@@ -495,33 +495,22 @@ func (m *Manager) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDN
 	}
 
 	// Padding for secure connections (RFC 7830).
-	// Build a temporary OPT, pack the full message to get the exact wire size,
-	// then pad to the nearest block boundary. This avoids estimation errors
-	// that can leave the final packet a few bytes short of the block size.
+	// Use msg.Len() as an estimate of the wire size instead of a full
+	// Copy+Pack to avoid O(N) deep copy on the hot path. The estimate
+	// is close enough; padding block alignment tolerates small errors.
 	paddingBytes := 0
 	if isSecureConnection {
-		tmpOpt := &dns.OPT{
-			Hdr: dns.RR_Header{
-				Name:   ".",
-				Rrtype: dns.TypeOPT,
-				Class:  1232,
-			},
+		estimatedSize := msg.Len() + 64 // fudge factor: OPT header + options + EDNS0_PADDING header
+		targetSize := ((estimatedSize + PaddingSize - 1) / PaddingSize) * PaddingSize
+		paddingDataSize := targetSize - estimatedSize
+		if paddingDataSize < 0 {
+			paddingDataSize = 0
 		}
-		tmpOpt.Option = options
-		tmpMsg := msg.Copy()
-		tmpMsg.Extra = append(tmpMsg.Extra, tmpOpt)
-		if packed, err := tmpMsg.Pack(); err == nil {
-			currentSize := len(packed)
-			// Round up to the nearest PaddingSize block (RFC 7830 §4).
-			targetSize := ((currentSize + PaddingSize - 1) / PaddingSize) * PaddingSize
-			// Subtract 4 for the PADDING option header (2-byte code + 2-byte length).
-			paddingDataSize := targetSize - currentSize - 4
-			if paddingDataSize > 0 {
-				paddingBytes = paddingDataSize
-				options = append(options, &dns.EDNS0_PADDING{
-					Padding: make([]byte, paddingDataSize),
-				})
-			}
+		if paddingDataSize > 0 {
+			paddingBytes = paddingDataSize
+			options = append(options, &dns.EDNS0_PADDING{
+				Padding: make([]byte, paddingDataSize),
+			})
 		}
 	}
 

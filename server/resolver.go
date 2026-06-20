@@ -714,7 +714,6 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			protocol = "tcp"
 		}
 		server := &config.UpstreamServer{Address: nsAddr, Protocol: protocol}
-		msg := rr.server.buildQueryMessage(question, ecs, true, false)
 
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("Query nameserver")
@@ -723,10 +722,12 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 
 			select {
 			case <-queryCtx.Done():
-				pool.DefaultMessagePool.Put(msg)
 				return queryCtx.Err()
 			default:
 			}
+
+			msg := rr.server.buildQueryMessage(question, ecs, true, false)
+			defer pool.DefaultMessagePool.Put(msg)
 
 			// Create a sub-context with shorter timeout for individual queries
 			subCtx, subCancel := context.WithTimeout(queryCtx, DefaultTimeout/2)
@@ -743,17 +744,14 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 					case resultChan <- result.Response:
 						// First win - immediately cancel all other connections
 						cancel(errors.New("first win successful query completed"))
-						pool.DefaultMessagePool.Put(msg)
 						return nil
 					case <-queryCtx.Done():
-						pool.DefaultMessagePool.Put(msg)
 						pool.DefaultMessagePool.Put(result.Response)
 						return queryCtx.Err()
 					}
 				}
 				pool.DefaultMessagePool.Put(result.Response)
 			}
-			pool.DefaultMessagePool.Put(msg)
 			return nil
 		})
 	}

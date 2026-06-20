@@ -77,10 +77,13 @@ type CacheEntry struct {
 }
 
 // CompactRecord stores a compact representation of a DNS RR.
+// RR caches the parsed RR object for fast retrieval; it is not serialized and
+// will be re-parsed on demand after snapshot restore.
 type CompactRecord struct {
 	Text    string `json:"text"`
 	OrigTTL uint32 `json:"orig_ttl"`
 	Type    uint16 `json:"type"`
+	RR      dns.RR `json:"-"` // cached parsed RR, immutable after creation
 }
 
 // LookupResult represents a candidate for reverse PTR lookup.
@@ -193,10 +196,13 @@ func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
 	}
 
 	// Record access time atomically (for approximate LRU eviction).
+	// Capture entry pointer before releasing the lock; entries are immutable
+	// after insertion so cloning outside the lock is safe.
 	item.lastAccess.Store(time.Now().UnixNano())
-	cloned := cloneEntry(item.entry)
+	entry := item.entry
 	mc.mu.RUnlock()
 
+	cloned := cloneEntry(entry)
 	return cloned, true, cloned.IsExpired()
 }
 
@@ -268,40 +274,83 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	mc.evictToBudget()
 }
 
-// evictToBudget removes the least recently accessed entries until memory usage
-// falls under the byte budget. Must be called under mu.Lock.
-// Uses a single sort pass (O(N log N)) instead of repeated linear scans.
+// evictToBudget removes entries until memory usage falls under the byte budget
+// using approximate LRU via random sampling (O(k * samples) where k = evictions).
+// Must be called under mu.Lock.
+const evictSampleSize = 5
+
 func (mc *MemoryCache) evictToBudget() {
 	if mc.limitBytes <= 0 || mc.currentSize <= mc.limitBytes || len(mc.entries) == 0 {
 		return
 	}
 
-	type candidate struct {
-		key  string
-		last int64
-		size int64
+	// Flatten keys once for sampling
+	keys := make([]string, 0, max(len(mc.entries), evictSampleSize))
+	for k := range mc.entries {
+		keys = append(keys, k)
 	}
-	all := make([]candidate, 0, len(mc.entries))
-	for k, item := range mc.entries {
-		all = append(all, candidate{k, item.lastAccess.Load(), item.size})
-	}
-
-	sort.Slice(all, func(i, j int) bool { return all[i].last < all[j].last })
 
 	evicted := 0
-	for i := range all {
-		if mc.currentSize <= mc.limitBytes {
+	for mc.currentSize > mc.limitBytes && len(mc.entries) > 0 {
+		// Sample a small random subset and evict the LRU among them.
+		oldestKey := ""
+		var oldestLast int64 = 1<<63 - 1
+		var oldestSize int64
+
+		for range evictSampleSize {
+			idx := int(fastRandN(uint32(len(keys))))
+			k := keys[idx]
+			item, ok := mc.entries[k]
+			if !ok {
+				continue
+			}
+			last := item.lastAccess.Load()
+			if last < oldestLast {
+				oldestLast = last
+				oldestKey = k
+				oldestSize = item.size
+			}
+		}
+
+		if oldestKey == "" {
 			break
 		}
-		mc.currentSize -= all[i].size
-		mc.removePTRLocked(all[i].key)
-		delete(mc.entries, all[i].key)
+		mc.currentSize -= oldestSize
+		mc.removePTRLocked(oldestKey)
+		delete(mc.entries, oldestKey)
+		// Replace the removed key slot with the last element to keep the sample
+		// pool valid without rebuilding.
+		if n := len(keys); n > 1 {
+			for i, k := range keys {
+				if k == oldestKey {
+					keys[i] = keys[n-1]
+					keys = keys[:n-1]
+					break
+				}
+			}
+		} else {
+			keys = keys[:0]
+		}
 		evicted++
 	}
 
 	if evicted > 0 {
 		log.Debugf("CACHE: evicted %d entries to enforce budget (current=%d MB, limit=%d MB)", evicted, mc.currentSize/(1024*1024), mc.limitBytes/(1024*1024))
 	}
+}
+
+// fastRandN returns a pseudo-random number in [0, n) using a simple linear
+// congruential generator. This avoids locking and allocation overhead of
+// math/rand/v2 for hot-path sampling.
+var evictRngState atomic.Uint64
+
+func fastRandN(n uint32) uint32 {
+	if n <= 1 {
+		return 0
+	}
+	// LCG with parameters from Numerical Recipes.
+	state := evictRngState.Add(6364136223846793005)
+	return uint32((uint64(state) * uint64(n)) >> 32)
 }
 
 // estimateEntrySize returns an estimated memory footprint in bytes for a cache
@@ -513,8 +562,8 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 		ci.size = estimateEntrySize(item.Key, entryCopy, item.PTRs)
 		mc.currentSize += ci.size
 		loaded++
-		mc.evictToBudget()
 	}
+	mc.evictToBudget() // evict once after all entries are loaded
 	mc.mu.Unlock()
 	mc.persistGen.Store(0)
 	return loaded, nil
@@ -698,7 +747,7 @@ func CreateCompactRecord(rr dns.RR) *CompactRecord {
 	if rr == nil {
 		return nil
 	}
-	return &CompactRecord{Text: rr.String(), OrigTTL: rr.Header().Ttl, Type: rr.Header().Rrtype}
+	return &CompactRecord{Text: rr.String(), OrigTTL: rr.Header().Ttl, Type: rr.Header().Rrtype, RR: rr}
 }
 
 func ExpandRecord(cr *CompactRecord) dns.RR {
@@ -816,7 +865,11 @@ func expand(cr *CompactRecord) dns.RR {
 	if cr == nil || cr.Text == "" {
 		return nil
 	}
+	if cr.RR != nil {
+		return cr.RR
+	}
 	rr, _ := dns.NewRR(cr.Text)
+	cr.RR = rr // cache for subsequent accesses
 	return rr
 }
 

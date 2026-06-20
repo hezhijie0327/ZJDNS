@@ -69,6 +69,8 @@ type DNSServer struct {
 	queryMgr          *QueryManager
 	limiter           *Limiter
 	semaphore         chan struct{} // Admission control semaphore
+	udpServer         *dns.Server   // stored for graceful shutdown
+	tcpServer         *dns.Server   // stored for graceful shutdown
 }
 
 // queryResult encapsulates the result of a DNS query, including the answer, authority, additional sections, validation status, ECS information, fallback status, and any error that occurred during processing.
@@ -355,6 +357,24 @@ func (s *DNSServer) shutdownServer() {
 		s.limiter.Shutdown()
 	}
 
+	// Gracefully shut down UDP/TCP listeners so ListenAndServe goroutines return.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), DefaultTimeout)
+	defer shutdownCancel()
+	if s.udpServer != nil {
+		if err := s.udpServer.ShutdownContext(shutdownCtx); err != nil {
+			log.Errorf("SERVER: UDP server shutdown failed: %v", err)
+		} else {
+			log.Infof("SERVER: UDP server shut down")
+		}
+	}
+	if s.tcpServer != nil {
+		if err := s.tcpServer.ShutdownContext(shutdownCtx); err != nil {
+			log.Errorf("SERVER: TCP server shutdown failed: %v", err)
+		} else {
+			log.Infof("SERVER: TCP server shut down")
+		}
+	}
+
 	if s.securityMgr != nil {
 		if err := s.securityMgr.Shutdown(DefaultTimeout); err != nil {
 			log.Errorf("SECURITY: Security manager shutdown failed: %v", err)
@@ -436,14 +456,14 @@ func (s *DNSServer) Start() error {
 
 	g.Go(func() error {
 		defer dnsutil.HandlePanic("UDP server")
-		server := &dns.Server{
+		s.udpServer = &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
 			Net:     "udp",
 			Handler: dns.HandlerFunc(s.handleDNSRequest),
 			UDPSize: pool.UDPBufferSize,
 		}
 		log.Infof("SERVER: UDP server started on port %s", s.config.Server.Port)
-		err := server.ListenAndServe()
+		err := s.udpServer.ListenAndServe()
 		if err != nil {
 			return fmt.Errorf("UDP startup: %w", err)
 		}
@@ -472,13 +492,13 @@ func (s *DNSServer) Start() error {
 
 	g.Go(func() error {
 		defer dnsutil.HandlePanic("TCP server")
-		server := &dns.Server{
+		s.tcpServer = &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
 			Net:     "tcp",
 			Handler: dns.HandlerFunc(s.handleDNSRequest),
 		}
 		log.Infof("SERVER: TCP server started on port %s", s.config.Server.Port)
-		err := server.ListenAndServe()
+		err := s.tcpServer.ListenAndServe()
 		if err != nil {
 			return fmt.Errorf("TCP startup: %w", err)
 		}
@@ -1174,9 +1194,9 @@ func (s *DNSServer) buildResponse(req *dns.Msg) *dns.Msg {
 }
 
 // restoreOriginalDomain restores the original domain name in DNS response
-// records when the query was rewritten.
+// records when the query was rewritten. Returns early if no rewrite occurred.
 func (s *DNSServer) restoreOriginalDomain(msg *dns.Msg, currentName, originalName string) {
-	if msg == nil {
+	if msg == nil || strings.EqualFold(currentName, originalName) {
 		return
 	}
 	for _, rr := range msg.Answer {
