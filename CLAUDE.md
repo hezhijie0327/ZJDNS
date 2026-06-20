@@ -35,8 +35,16 @@ zjdns/
 ├── stats/stats.go                 # Lock-free atomic metrics Manager
 ├── server/                        # Core server (tightly coupled sub-components)
 │   ├── server.go                  # DNSServer, query pipeline, lifecycle, signal handling
-│   ├── resolver.go                # QueryManager, RecursiveResolver, CNAMEHandler
-│   ├── query.go                   # QueryClient (UDP/TCP/DoT/DoQ/DoH/DoH3)
+│   ├── resolver.go                # QueryManager, CNAMEHandler, shared helpers
+│   ├── upstream.go                # UpstreamHandler, first-win query, CIDR filtering
+│   ├── recursive.go               # RecursiveResolver, root→TLD→auth walk, NS resolution
+│   ├── query.go                   # QueryClient core: types, NewQueryClient, routing
+│   ├── query_tcp.go               # Traditional UDP/TCP queries + TCP fallback
+│   ├── query_dot.go               # DoT queries (pool-based + fallback)
+│   ├── query_doq.go               # DoQ query execution (stream write/read)
+│   ├── query_doqpool.go           # DoQ connection pool (quicPool)
+│   ├── query_doh.go               # DoH queries + HTTP/2 transport pool
+│   ├── query_doh3.go              # DoH3 queries + HTTP/3 transport pool
 │   ├── security.go                # SecurityManager, DNSSECValidator, HijackPrevention
 │   ├── tls.go                     # TLSManager, self-signed CA, secure protocol handlers
 │   ├── tcppool.go                 # pipelinedConn + connPool (RFC 7766 TCP/DoT pipelining)
@@ -142,12 +150,12 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 |--------|-----------|-------|
 | `TLS` | All TLS + secure protocols | tls.go |
 | `CACHE` | Cache operations | cache.go, server.go |
-| `UPSTREAM` | Outbound upstream queries | query.go, resolver.go |
+| `UPSTREAM` | Outbound upstream queries | query_tcp.go, query_dot.go, query_doq.go, query_doh.go, query_doh3.go, upstream.go |
 | `SERVER` | Server lifecycle | server.go, main.go |
 | `EDNS` | EDNS options | edns.go, server.go |
-| `RECURSION` | Recursive resolution | resolver.go |
-| `SECURITY` | DNSSEC, hijack detection | security.go, resolver.go |
-| `TCPPOOL` | TCP/DoT connection pool | tcppool.go |
+| `RECURSION` | Recursive resolution | recursive.go |
+| `SECURITY` | DNSSEC, hijack detection | security.go, recursive.go |
+| `TCPPOOL` | TCP/DoT connection pool | tcppool.go, query_doqpool.go |
 | `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `RATELIMIT`, `PTR`, `PANIC` | One component each | respective files |
 
 **Rules**: Prefix matches logical component, not Go package. No `HIJACK:`/`DNSSEC:` (merged→`SECURITY:`), no `DOT:`/`DOQ:`/`DOH:` (merged→`TLS:`). Hot-path logs are `Debug` only — `Warn`/`Info` on the query path would spam at scale.
@@ -174,5 +182,8 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   Server processes TCP queries concurrently via async handler dispatch (plain TCP)
   or three-stage reader→worker→writer pipeline (DoT). Falls back to single-shot
   `ExchangeContext` when pipelining is not supported by the peer.
+- **DoQ connection pool** (`server/query_doqpool.go`): Pools up to 4 QUIC
+  connections per upstream. Multiple goroutines share connections via QUIC's
+  native stream multiplexing — no capacity semaphore needed.
 - **Config self-sufficiency**: `config.ProjectName` and `config.Version` are
   package-level vars set by `main.go` before calling `config.Manager.LoadConfig()`.
