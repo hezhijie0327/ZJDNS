@@ -215,9 +215,6 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 	}
 }
 
-// executeTLS executes a DNS query over DNS over TLS (DoT).
-// Uses a pipelined connection pool for connection reuse and query multiplexing.
-// Falls back to single-shot ExchangeContext if the pool is unavailable.
 // SetTimeout sets the query timeout duration.
 func (qc *QueryClient) SetTimeout(timeout time.Duration) {
 	qc.timeout = timeout
