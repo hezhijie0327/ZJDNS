@@ -71,6 +71,7 @@ type DNSServer struct {
 	semaphore         chan struct{} // Admission control semaphore
 	udpServer         *dns.Server   // stored for graceful shutdown
 	tcpServer         *dns.Server   // stored for graceful shutdown
+	tcpWriteMu        sync.Map      // key: RemoteAddr string → *sync.Mutex (TCP pipelining)
 }
 
 // queryResult encapsulates the result of a DNS query, including the answer, authority, additional sections, validation status, ECS information, fallback status, and any error that occurred during processing.
@@ -605,7 +606,8 @@ func (s *DNSServer) displayInfo() {
 }
 
 // handleDNSRequest handles incoming DNS requests from UDP and TCP listeners.
-// It performs panic recovery and writes responses back to the client.
+// TCP queries are processed asynchronously for RFC 7766 pipelining support;
+// responses may complete out of order. Writes are serialized via per-connection mutex.
 func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	defer dnsutil.HandlePanic("DNS request processing")
 
@@ -615,6 +617,27 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	default:
 	}
 
+	// TCP: spawn goroutine for concurrent pipelined processing.
+	if _, isTCP := w.RemoteAddr().(*net.TCPAddr); isTCP {
+		addr := w.RemoteAddr().String()
+		muI, _ := s.tcpWriteMu.LoadOrStore(addr, &sync.Mutex{})
+		mu := muI.(*sync.Mutex)
+
+		go func() {
+			defer dnsutil.HandlePanic("TCP query handler")
+			response := s.processDNSQuery(req, dnsutil.ClientIP(w), false, "TCP")
+			if response != nil {
+				response.Compress = true
+				mu.Lock()
+				_ = w.WriteMsg(response)
+				mu.Unlock()
+				pool.DefaultMessagePool.Put(response)
+			}
+		}()
+		return
+	}
+
+	// UDP: synchronous processing (current behavior).
 	response := s.processDNSQuery(req, dnsutil.ClientIP(w), false, detectRequestProtocol(w))
 	if response != nil {
 		response.Compress = true

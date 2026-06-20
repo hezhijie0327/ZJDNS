@@ -69,6 +69,10 @@ type QueryClient struct {
 
 	quicConnMu sync.Mutex
 	quicConns  map[string]*quic.Conn // keyed by address
+
+	// Pipelined TCP/DoT connection pools (RFC 7766).
+	tcpPool *connPool // plain TCP, keyed by address
+	dotPool *connPool // DoT, keyed by "address|servername|skipVerify"
 }
 
 // NewQueryClient creates a new QueryClient with configured UDP, TCP, TLS, DoH, and DoH3 clients.
@@ -111,7 +115,7 @@ func NewQueryClient() *QueryClient {
 		ForceAttemptHTTP2:   false,
 	}
 
-	return &QueryClient{
+	qc := &QueryClient{
 		timeout:   OperationTimeout,
 		udpClient: udpClient,
 		tcpClient: tcpClient,
@@ -127,7 +131,10 @@ func NewQueryClient() *QueryClient {
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),
 		quicConns:      make(map[string]*quic.Conn),
+		tcpPool:        newConnPool(defaultMaxConns, defaultMaxPipe),
+		dotPool:        newConnPool(defaultMaxConns, defaultMaxPipe),
 	}
+	return qc
 }
 
 // ExecuteQuery executes a DNS query to the specified upstream server.
@@ -213,10 +220,29 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 }
 
 // executeTLS executes a DNS query over DNS over TLS (DoT).
+// Uses a pipelined connection pool for connection reuse and query multiplexing.
+// Falls back to single-shot ExchangeContext if the pool is unavailable.
 func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	// Clone the client via struct copy to avoid mutating the shared client's TLS config.
-	// This prevents a race condition where concurrent queries to upstreams with
-	// different TLS verification policies could cross-contaminate each other.
+	key := dohTransportKey(server.Address, server.ServerName, server.SkipTLSVerify)
+
+	// Try pipelined pool first.
+	pc, err := qc.dotPool.acquire(ctx, key, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+		dialer := tls.Dialer{Config: tlsConfig.Clone()}
+		return dialer.DialContext(dialCtx, "tcp", addr)
+	})
+	if err == nil {
+		response, err := pc.Exchange(ctx, msg)
+		if err == nil {
+			return response, nil
+		}
+		// Query failed — if the connection died, remove it from the pool.
+		if pc.isDead() {
+			qc.dotPool.remove(pc)
+		}
+		log.Debugf("UPSTREAM: pipelined DoT query to %s failed: %v, falling back", server.Address, err)
+	}
+
+	// Fallback: single-shot ExchangeContext (current behavior).
 	client := *qc.tlsClient
 	client.TLSConfig = tlsConfig
 	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
@@ -588,16 +614,33 @@ func (qc *QueryClient) createDoH3Client(host, serverName string, skipVerify bool
 }
 
 // executeTraditionalQuery executes a DNS query over traditional UDP or TCP.
+// TCP queries use a pipelined connection pool with fallback to single-shot.
 func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
-	var client *dns.Client
-
-	switch server.Protocol {
-	case "tcp":
-		client = qc.tcpClient
-	default:
-		client = qc.udpClient
+	if server.Protocol == "tcp" {
+		// Try pipelined pool first.
+		pc, err := qc.tcpPool.acquire(ctx, server.Address, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(dialCtx, "tcp", addr)
+		})
+		if err == nil {
+			response, err := pc.Exchange(ctx, msg)
+			if err == nil {
+				return response, nil
+			}
+			if pc.isDead() {
+				qc.tcpPool.remove(pc)
+			}
+			log.Debugf("UPSTREAM: pipelined TCP query to %s failed: %v, falling back", server.Address, err)
+		}
 	}
 
+	// UDP or TCP fallback: single-shot ExchangeContext.
+	var client *dns.Client
+	if server.Protocol == "tcp" {
+		client = qc.tcpClient
+	} else {
+		client = qc.udpClient
+	}
 	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
 	return response, err
 }

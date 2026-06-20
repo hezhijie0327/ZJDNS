@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -374,61 +375,94 @@ func (tm *TLSManager) handleDOTConnections() {
 	}
 }
 
-// handleDOTConnection handles a single DoT connection.
+// handleDOTConnection handles a single DoT connection with RFC 7766 query
+// pipelining: queries are processed concurrently and responses are written
+// out of order through a dedicated writer goroutine.
 func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 	tlsConn, ok := conn.(*tls.Conn)
 	if !ok {
 		return
 	}
 
-	_ = tlsConn.SetReadDeadline(time.Now().Add(OperationTimeout))
-	_ = tlsConn.SetWriteDeadline(time.Now().Add(OperationTimeout))
-
 	reader := bufio.NewReaderSize(tlsConn, TLSConnBufferSize)
+	connCtx, connCancel := context.WithCancel(tm.ctx)
+	defer connCancel()
 
+	// Writer channel: worker goroutines send packed responses here for
+	// serialized writing to the TLS connection.
+	type writeTask struct {
+		data []byte
+	}
+	writeCh := make(chan writeTask, 64)
+
+	// Writer goroutine — single owner of the TLS socket for writes.
+	writerDone := make(chan struct{})
+	go func() {
+		defer dnsutil.HandlePanic("DoT writer")
+		defer close(writerDone)
+		for task := range writeCh {
+			_ = tlsConn.SetWriteDeadline(time.Now().Add(OperationTimeout))
+			if _, err := tlsConn.Write(task.data); err != nil {
+				log.Debugf("TLS: write error: %v", err)
+				connCancel()
+				return
+			}
+		}
+	}()
+
+	// Cleanup: close write channel → wait for writer → connection teardown.
+	defer func() {
+		close(writeCh)
+		<-writerDone
+	}()
+
+	// Track in-flight workers for clean shutdown.
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	// Reader loop — processes queries sequentially on this goroutine
+	// (bufio.Reader is not goroutine-safe) and dispatches processing
+	// to worker goroutines.
 	for {
-		select {
-		case <-tm.ctx.Done():
+		if connCtx.Err() != nil {
 			return
-		default:
 		}
 
 		_ = tlsConn.SetReadDeadline(time.Now().Add(OperationTimeout))
-		_ = tlsConn.SetWriteDeadline(time.Now().Add(OperationTimeout))
 
-		// Read message length (2 bytes)
+		// Read 2-byte length prefix.
 		lengthBuf := make([]byte, 2)
 		n, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
 			if err != io.EOF && !IsTemporaryError(err) {
-				log.Debugf("TLS: Read length error: %v", err)
+				log.Debugf("TLS: read length error: %v", err)
 			}
 			return
 		}
 		if n != 2 {
-			log.Debugf("TLS: Invalid length read: %d bytes", n)
+			log.Debugf("TLS: invalid length read: %d bytes", n)
 			return
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
 		if msgLength == 0 || msgLength > pool.TCPBufferSize {
-			log.Debugf("TLS: Invalid message length: %d", msgLength)
+			log.Debugf("TLS: invalid message length: %d", msgLength)
 			return
 		}
 
-		// Read message body
+		// Read message body.
 		msgBuf := make([]byte, msgLength)
 		n, err = io.ReadFull(reader, msgBuf)
 		if err != nil {
-			log.Debugf("TLS: Read message error: %v", err)
+			log.Debugf("TLS: read message error: %v", err)
 			return
 		}
 		if n != int(msgLength) {
-			log.Debugf("TLS: Incomplete message read: %d/%d bytes", n, msgLength)
+			log.Debugf("TLS: incomplete message read: %d/%d bytes", n, msgLength)
 			return
 		}
 
-		// Parse DNS message
+		// Parse DNS message.
 		req := pool.DefaultMessagePool.Get()
 		if err := req.Unpack(msgBuf); err != nil {
 			log.Debugf("TLS: DNS message unpack error: %v", err)
@@ -436,42 +470,40 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			continue
 		}
 
-		// Get client IP
+		// Get client IP.
 		var clientIP net.IP
 		if addr := tlsConn.RemoteAddr(); addr != nil {
 			clientIP = addr.(*net.TCPAddr).IP
 		}
 
-		// Process query
-		response := tm.server.processDNSQuery(req, clientIP, true, "DoT")
-		pool.DefaultMessagePool.Put(req)
+		// Process query asynchronously — responses may complete out of order.
+		wg.Add(1)
+		go func(query *dns.Msg, ip net.IP) {
+			defer dnsutil.HandlePanic("DoT query worker")
+			defer wg.Done()
+			defer pool.DefaultMessagePool.Put(query)
 
-		if response != nil {
+			response := tm.server.processDNSQuery(query, ip, true, "DoT")
+			if response == nil {
+				return
+			}
+			defer pool.DefaultMessagePool.Put(response)
+
 			respBuf, err := response.Pack()
 			if err != nil {
-				log.Debugf("TLS: Response pack error: %v", err)
-				pool.DefaultMessagePool.Put(response)
+				log.Debugf("TLS: response pack error: %v", err)
 				return
 			}
 
-			// Write response with length prefix
-			lengthBuf := make([]byte, 2)
-			binary.BigEndian.PutUint16(lengthBuf, uint16(len(respBuf)))
+			buf := make([]byte, 2+len(respBuf))
+			binary.BigEndian.PutUint16(buf[:2], uint16(len(respBuf)))
+			copy(buf[2:], respBuf)
 
-			if _, err := tlsConn.Write(lengthBuf); err != nil {
-				log.Debugf("TLS: Write length error: %v", err)
-				pool.DefaultMessagePool.Put(response)
-				return
+			select {
+			case writeCh <- writeTask{data: buf}:
+			case <-connCtx.Done():
 			}
-
-			if _, err := tlsConn.Write(respBuf); err != nil {
-				log.Debugf("TLS: Write response error: %v", err)
-				pool.DefaultMessagePool.Put(response)
-				return
-			}
-
-			pool.DefaultMessagePool.Put(response)
-		}
+		}(req, clientIP)
 	}
 }
 
