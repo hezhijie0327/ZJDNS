@@ -488,13 +488,27 @@ func (m *Manager) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDN
 	}
 
 	// Padding for secure connections (RFC 7830).
-	// Use size estimation instead of a full Pack() to avoid the double-serialize
-	// that the original implementation had.
+	// Build a temporary OPT, pack the full message to get the exact wire size,
+	// then pad to the nearest block boundary. This avoids estimation errors
+	// that can leave the final packet a few bytes short of the block size.
 	paddingBytes := 0
 	if isSecureConnection {
-		estimatedSize := estimateDNSSize(msg, options)
-		if estimatedSize < PaddingSize {
-			paddingDataSize := PaddingSize - estimatedSize - 4
+		tmpOpt := &dns.OPT{
+			Hdr: dns.RR_Header{
+				Name:   ".",
+				Rrtype: dns.TypeOPT,
+				Class:  1232,
+			},
+		}
+		tmpOpt.Option = options
+		tmpMsg := msg.Copy()
+		tmpMsg.Extra = append(tmpMsg.Extra, tmpOpt)
+		if packed, err := tmpMsg.Pack(); err == nil {
+			currentSize := len(packed)
+			// Round up to the nearest PaddingSize block (RFC 7830 §4).
+			targetSize := ((currentSize + PaddingSize - 1) / PaddingSize) * PaddingSize
+			// Subtract 4 for the PADDING option header (2-byte code + 2-byte length).
+			paddingDataSize := targetSize - currentSize - 4
 			if paddingDataSize > 0 {
 				paddingBytes = paddingDataSize
 				options = append(options, &dns.EDNS0_PADDING{
@@ -509,22 +523,6 @@ func (m *Manager) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDN
 
 	log.Debugf("EDNS: built OPT secure=%t ecs=%t cookie=%t ede=%t padding=%d bytes",
 		isSecureConnection, ecs != nil, cookieStr != "", ede != nil, paddingBytes)
-}
-
-// estimateDNSSize provides a conservative estimate of the wire size of a DNS
-// message with the given EDNS0 options, avoiding a full Pack() call.
-func estimateDNSSize(msg *dns.Msg, options []dns.EDNS0) int {
-	// Use a real Pack() — cheaper than calling String() on every record.
-	packed, err := msg.Pack()
-	if err != nil {
-		return 0
-	}
-	size := len(packed)
-	// Add overhead for the options we're about to add.
-	for _, opt := range options {
-		size += 4 + len(opt.String())
-	}
-	return size
 }
 
 // ──────────────────────────────────────────
