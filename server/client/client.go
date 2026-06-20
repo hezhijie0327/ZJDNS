@@ -18,11 +18,21 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+
+	connpool "zjdns/server/client/pool"
 )
 
 // MaxIncomingStreams is the maximum number of concurrent incoming QUIC streams
 // per connection.
 const MaxIncomingStreams = 256
+
+// Re-exported pool constants for backward compatibility.
+const (
+	DefaultMaxPipe   = connpool.DefaultMaxPipe
+	DefaultMaxConns  = connpool.DefaultMaxConns
+	DefaultTimeout   = connpool.DefaultTimeout
+	OperationTimeout = connpool.OperationTimeout
+)
 
 // NextProtoDoQ is the ALPN protocol identifier for DNS over QUIC.
 var NextProtoDoQ = []string{"doq"}
@@ -72,30 +82,30 @@ type Client struct {
 	doh3TransportMu sync.Mutex
 	doh3Transports  map[string]*http.Client
 
-	quicPool *QuicPool
+	quicPool *connpool.QuicPool
 
 	SessionCache tls.ClientSessionCache
 
-	tcpPool *Pool
-	dotPool *Pool
+	tcpPool *connpool.Pool
+	dotPool *connpool.Pool
 }
 
 // New creates a Client with default timeouts, transport pools, and session
 // caches.
 func New() *Client {
 	udpClient := &dns.Client{
-		Timeout: OperationTimeout,
+		Timeout: connpool.OperationTimeout,
 		Net:     "udp",
 		UDPSize: pool.UDPBufferSize,
 	}
 
 	tcpClient := &dns.Client{
-		Timeout: OperationTimeout,
+		Timeout: connpool.OperationTimeout,
 		Net:     "tcp",
 	}
 
 	tlsClient := &dns.Client{
-		Timeout: OperationTimeout,
+		Timeout: connpool.OperationTimeout,
 		Net:     "tcp-tls",
 	}
 
@@ -116,24 +126,24 @@ func New() *Client {
 	}
 
 	return &Client{
-		timeout:   OperationTimeout,
+		timeout:   connpool.OperationTimeout,
 		udpClient: udpClient,
 		tcpClient: tcpClient,
 		tlsClient: tlsClient,
 		dohClient: &http.Client{
-			Timeout:   OperationTimeout,
+			Timeout:   connpool.OperationTimeout,
 			Transport: dohTransport,
 		},
 		doh3Client: &http.Client{
-			Timeout:   OperationTimeout,
+			Timeout:   connpool.OperationTimeout,
 			Transport: doh3Transport,
 		},
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),
-		quicPool:       NewQuicPool(DefaultMaxConns),
+		quicPool:       connpool.NewQuicPool(connpool.DefaultMaxConns),
 		SessionCache:   tls.NewLRUClientSessionCache(32),
-		tcpPool:        NewPool(DefaultMaxConns, DefaultMaxPipe),
-		dotPool:        NewPool(DefaultMaxConns, DefaultMaxPipe),
+		tcpPool:        connpool.NewPool(connpool.DefaultMaxConns, connpool.DefaultMaxPipe),
+		dotPool:        connpool.NewPool(connpool.DefaultMaxConns, connpool.DefaultMaxPipe),
 	}
 }
 

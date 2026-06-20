@@ -51,8 +51,9 @@ zjdns/
 │   │   ├── doq.go                 # DoQ via QUIC pool
 │   │   ├── doh.go                 # DoH via HTTP/2 transport
 │   │   ├── doh3.go                # DoH3 via HTTP/3 transport
-│   │   ├── tcppool.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
-│   │   └── quicpool.go            # QUIC connection pool (QuicPool)
+│   │   └── pool/                  # Connection pool sub-package
+│   │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
+│   │       └── quic.go            # QUIC connection pool (QuicPool, QuicConn)
 │   ├── resolver/                  # DNS resolution strategies
 │   │   ├── resolver.go            # Resolver struct, routing + helpers
 │   │   ├── upstream.go            # First-win concurrent upstream queries
@@ -81,7 +82,7 @@ zjdns/
 main ──→ server, config
 server ──→ cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite,
 │          stats, client, ratelimit, resolver, security
-client ──→ config, edns, dnsutil, log, pool
+client ──→ config, edns, dnsutil, log, pool, pool (in client)
 resolver ──→ config, edns, client, security, dnsutil, log, pool
 security ──→ dnsutil, log
 ratelimit ──→ log
@@ -116,7 +117,7 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 - No upstream → built-in recursive resolver (root→TLD→authoritative walk)
 - NXDOMAIN stored as secondary fallback; first NOERROR wins
 
-**TCP/DoT pipelining** (`server/client/tcppool.go`, RFC 7766):
+**TCP/DoT pipelining** (`server/client/pool/tcp.go`, RFC 7766):
 - Client: `Pool` manages per-upstream `Conn` instances; each multiplexes
   multiple in-flight queries over a single TCP/DoT connection with out-of-order
   response matching by DNS message ID. Falls back to single-shot `ExchangeContext`
@@ -142,9 +143,10 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `Server` | `server/tls` | TLS listener server (DoT, DoQ, DoH, DoH3) |
 | `Prober` | `server/latency` | A/AAAA latency prober |
 | `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3) |
-| `Conn` | `server/client` | Multiplexed TCP/DoT connection (RFC 7766) |
-| `Pool` | `server/client` | TCP/DoT connection pool |
-| `QuicPool` | `server/client` | QUIC connection pool |
+| `Conn` | `server/client/pool` | Multiplexed TCP/DoT connection (RFC 7766) |
+| `Pool` | `server/client/pool` | TCP/DoT connection pool |
+| `QuicPool` | `server/client/pool` | QUIC connection pool |
+| `QuicConn` | `server/client/pool` | Wrapped QUIC connection |
 | `Resolver` | `server/resolver` | DNS resolution (upstream + recursive) |
 | `Recursive` | `server/resolver` | Built-in recursive resolver |
 | `Guard` | `server/security` | DNSSEC + hijack detection |
@@ -164,9 +166,9 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `cache.StaleMaxAge` | cache | 45 days |
 | `pool.UDPBufferSize` | pool | 1232 |
 | `server.OperationTimeout` | server | 3s |
-| `client.OperationTimeout` | server/client | 3s |
-| `client.DefaultMaxPipe` | server/client | 16 (max in-flight queries per connection) |
-| `client.DefaultMaxConns` | server/client | 4 (max connections per upstream) |
+| `client.OperationTimeout` | server/client/pool | 3s |
+| `client.DefaultMaxPipe` | server/client/pool | 16 (max in-flight queries per connection) |
+| `client.DefaultMaxConns` | server/client/pool | 4 (max connections per upstream) |
 | `resolver.MaxCNAMEChain` | server/resolver | 16 |
 | `resolver.MaxRecursionDep` | server/resolver | 16 |
 
@@ -193,7 +195,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `EDNS` | EDNS options | edns/*.go, server/server.go |
 | `RECURSION` | Recursive resolution | server/resolver/recursive.go |
 | `SECURITY` | DNSSEC, hijack detection | server/security/*.go, server/resolver/recursive.go |
-| `TCPPOOL` | TCP/DoT connection pool | server/client/{tcppool,quicpool}.go |
+| `TCPPOOL` | TCP/DoT connection pool | server/client/pool/{tcp,quic}.go |
 | `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `RATELIMIT`, `PTR`, `PANIC` | One component each | respective files |
 
 **Rules**: Prefix matches logical component, not Go package. No `HIJACK:`/`DNSSEC:` (merged→`SECURITY:`), no `DOT:`/`DOQ:`/`DOH:` (merged→`TLS:`). Hot-path logs are `Debug` only — `Warn`/`Info` on the query path would spam at scale.
@@ -220,7 +222,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   Server processes TCP queries concurrently via async handler dispatch (plain TCP)
   or three-stage reader→worker→writer pipeline (DoT). Falls back to single-shot
   `ExchangeContext` when pipelining is not supported by the peer.
-- **DoQ connection pool** (`server/client/quicpool.go`): Pools up to 4 QUIC
+- **DoQ connection pool** (`server/client/pool/quic.go`): Pools up to 4 QUIC
   connections per upstream. Multiple goroutines share connections via QUIC's
   native stream multiplexing — no capacity semaphore needed.
 - **Config self-sufficiency**: `config.ProjectName` and `config.Version` are

@@ -1,4 +1,4 @@
-package client
+package pool
 
 import (
 	"context"
@@ -25,8 +25,9 @@ const (
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 )
 
-type quicConn struct {
-	conn      *quic.Conn
+// QuicConn wraps a QUIC connection with lifecycle tracking.
+type QuicConn struct {
+	Conn      *quic.Conn
 	addr      string
 	closed    atomic.Bool
 	closeOnce sync.Once
@@ -35,18 +36,18 @@ type quicConn struct {
 // QuicPool manages a set of QUIC connections per upstream server key.
 type QuicPool struct {
 	mu       sync.Mutex
-	conns    map[string][]*quicConn
+	conns    map[string][]*QuicConn
 	maxConns int
 }
 
-func (qpc *quicConn) close() {
+func (qpc *QuicConn) close() {
 	qpc.closeOnce.Do(func() {
 		qpc.closed.Store(true)
-		_ = qpc.conn.CloseWithError(QUICCodeNoError, "pool connection closed")
+		_ = qpc.Conn.CloseWithError(QUICCodeNoError, "pool connection closed")
 	})
 }
 
-func (qpc *quicConn) isDead() bool {
+func (qpc *QuicConn) isDead() bool {
 	return qpc.closed.Load()
 }
 
@@ -56,13 +57,13 @@ func NewQuicPool(maxConns int) *QuicPool {
 		maxConns = DefaultMaxConns
 	}
 	return &QuicPool{
-		conns:    make(map[string][]*quicConn),
+		conns:    make(map[string][]*QuicConn),
 		maxConns: maxConns,
 	}
 }
 
 // Acquire gets a reusable QUIC connection, dialing a new one if needed.
-func (qp *QuicPool) Acquire(ctx context.Context, key string, dialFunc func(context.Context, string) (*quic.Conn, error)) (*quicConn, error) {
+func (qp *QuicPool) Acquire(ctx context.Context, key string, dialFunc func(context.Context, string) (*quic.Conn, error)) (*QuicConn, error) {
 	qp.mu.Lock()
 
 	conns := qp.conns[key]
@@ -87,7 +88,7 @@ func (qp *QuicPool) Acquire(ctx context.Context, key string, dialFunc func(conte
 		if err != nil {
 			return nil, fmt.Errorf("client: dial %s: %w", key, err)
 		}
-		pc := &quicConn{conn: conn, addr: key}
+		pc := &QuicConn{Conn: conn, addr: key}
 		qp.mu.Lock()
 		if len(qp.conns[key]) >= qp.maxConns {
 			qp.mu.Unlock()
@@ -107,7 +108,7 @@ func (qp *QuicPool) Acquire(ctx context.Context, key string, dialFunc func(conte
 
 // Put returns a QUIC connection to the pool for reuse.
 func (qp *QuicPool) Put(key string, conn *quic.Conn) {
-	pc := &quicConn{conn: conn, addr: key}
+	pc := &QuicConn{Conn: conn, addr: key}
 	qp.mu.Lock()
 	defer qp.mu.Unlock()
 	if len(qp.conns[key]) >= qp.maxConns {
@@ -118,7 +119,7 @@ func (qp *QuicPool) Put(key string, conn *quic.Conn) {
 }
 
 // Remove closes and removes a QUIC connection from the pool.
-func (qp *QuicPool) Remove(pc *quicConn) {
+func (qp *QuicPool) Remove(pc *QuicConn) {
 	qp.mu.Lock()
 	defer qp.mu.Unlock()
 	conns := qp.conns[pc.addr]

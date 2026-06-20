@@ -1,4 +1,4 @@
-package client
+package pool
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
-	"zjdns/internal/pool"
+	bufpool "zjdns/internal/pool"
 )
 
 const (
@@ -155,7 +155,7 @@ func (pc *Conn) readLoop() {
 			return
 		}
 		msgLen := binary.BigEndian.Uint16(lengthBuf)
-		if msgLen == 0 || int(msgLen) > pool.SecureBufferSize {
+		if msgLen == 0 || int(msgLen) > bufpool.SecureBufferSize {
 			log.Debugf("TCPPOOL: invalid message length %d from %s", msgLen, pc.addr)
 			return
 		}
@@ -166,10 +166,10 @@ func (pc *Conn) readLoop() {
 			return
 		}
 
-		resp := pool.DefaultMessagePool.Get()
+		resp := bufpool.DefaultMessagePool.Get()
 		if err := resp.Unpack(body); err != nil {
 			log.Debugf("TCPPOOL: unpack error from %s: %v", pc.addr, err)
-			pool.DefaultMessagePool.Put(resp)
+			bufpool.DefaultMessagePool.Put(resp)
 			continue
 		}
 
@@ -180,10 +180,10 @@ func (pc *Conn) readLoop() {
 			select {
 			case pq.resultCh <- resp:
 			default:
-				pool.DefaultMessagePool.Put(resp)
+				bufpool.DefaultMessagePool.Put(resp)
 			}
 		} else {
-			pool.DefaultMessagePool.Put(resp)
+			bufpool.DefaultMessagePool.Put(resp)
 		}
 	}
 }

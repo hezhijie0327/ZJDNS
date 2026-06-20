@@ -14,6 +14,8 @@ import (
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+
+	connpool "zjdns/server/client/pool"
 )
 
 func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
@@ -30,7 +32,7 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	dialQUIC := func(dialCtx context.Context, addr string) (*quic.Conn, error) {
 		dialTLS := tlsConfig.Clone()
 		dialTLS.NextProtos = NextProtoDoQ
-		timeoutCtx, cancel := context.WithTimeout(dialCtx, DefaultTimeout)
+		timeoutCtx, cancel := context.WithTimeout(dialCtx, connpool.DefaultTimeout)
 		defer cancel()
 		return quic.DialAddr(timeoutCtx, addr, dialTLS, quicCfg)
 	}
@@ -38,7 +40,7 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	if c.quicPool != nil {
 		pc, err := c.quicPool.Acquire(ctx, key, dialQUIC)
 		if err == nil {
-			response, err := c.doQUICQuery(ctx, pc.conn, msg, c.timeout)
+			response, err := c.doQUICQuery(ctx, pc.Conn, msg, c.timeout)
 			if err == nil {
 				return response, nil
 			}
@@ -54,14 +56,14 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 
 	response, err := c.doQUICQuery(ctx, conn, msg, c.timeout)
 	if err != nil {
-		_ = conn.CloseWithError(QUICCodeNoError, "query failed")
+		_ = conn.CloseWithError(connpool.QUICCodeNoError, "query failed")
 		return nil, err
 	}
 
 	if c.quicPool != nil {
 		c.quicPool.Put(key, conn)
 	} else {
-		_ = conn.CloseWithError(QUICCodeNoError, "no pool, discarding")
+		_ = conn.CloseWithError(connpool.QUICCodeNoError, "no pool, discarding")
 	}
 	return response, nil
 }

@@ -122,11 +122,12 @@ zjdns/
 ├── server/                          # 核心服务
 │   ├── server.go                    # Server 生命周期
 │   ├── server_handlers.go           # 查询管道
-│   ├── client/                      # 出站查询 (8 文件)
+│   ├── client/                      # 出站查询 (5 文件 + pool/ 子包)
 │   │   ├── client.go                # Client, ExecuteQuery
 │   │   ├── tcp.go, dot.go, doq.go, doh.go, doh3.go
-│   │   ├── tcppool.go               # RFC 7766 TCP/DoT 连接池
-│   │   └── quicpool.go              # QUIC 连接池
+│   │   └── pool/                     # 连接池子包
+│   │       ├── tcp.go               # RFC 7766 TCP/DoT 连接池
+│   │       └── quic.go               # QUIC 连接池
 │   ├── resolver/                    # 解析策略 (4 文件)
 │   │   ├── resolver.go              # Resolver, 首胜+
 │   │   ├── upstream.go              # 上游并发查询
@@ -150,10 +151,10 @@ zjdns/
 main → server, config
 server → cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite,
          stats, client, ratelimit, resolver, security, tls, latency
-client → config, edns, dnsutil, log, pool
+client → config, edns, dnsutil, log, pool, client/pool
 resolver → config, edns, client, security, dnsutil, log, pool
 security → dnsutil, log
-tls → config, client, dnsutil, log, pool
+tls → config, client, dnsutil, log, pool, client/pool
 cache → config, edns, dnsutil, log
 edns → dnsutil, ipdetect, log
 stats → cache, config, log
