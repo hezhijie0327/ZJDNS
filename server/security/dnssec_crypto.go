@@ -23,13 +23,11 @@ const rootTrustAnchor38696 = ". IN DNSKEY 257 3 8 AwEAAa96jeuknZlaeSrvyAJj6ZHv28
 
 // Common DNSSEC-related errors.
 var (
-	ErrNoRRSIG               = errors.New("no RRSIG found for rrset")
-	ErrNoDNSKEY              = errors.New("no DNSKEY found for zone")
-	ErrNoDS                  = errors.New("no DS found for delegation")
-	ErrDSMismatch            = errors.New("DS digest does not match DNSKEY")
-	ErrTrustChainBroken      = errors.New("DNSSEC trust chain broken")
-	ErrBogusSignature        = errors.New("bogus DNSSEC signature")
-	ErrAlgorithmNotSupported = errors.New("DNSSEC algorithm not supported")
+	ErrNoRRSIG        = errors.New("no RRSIG found for rrset")
+	ErrNoDNSKEY       = errors.New("no DNSKEY found for zone")
+	ErrNoDS           = errors.New("no DS found for delegation")
+	ErrDSMismatch     = errors.New("DS digest does not match DNSKEY")
+	ErrBogusSignature = errors.New("bogus DNSSEC signature")
 )
 
 // CryptoValidator performs cryptographic DNSSEC validation using the
@@ -40,6 +38,7 @@ type CryptoValidator struct {
 	rootKeys     []*dns.DNSKEY
 	zoneKeyCache map[string]*zoneKeyEntry
 	mu           sync.RWMutex
+	stopCh       chan struct{}
 }
 
 type zoneKeyEntry struct {
@@ -58,9 +57,44 @@ type rrsetKey struct {
 func NewCryptoValidator() *CryptoValidator {
 	cv := &CryptoValidator{
 		zoneKeyCache: make(map[string]*zoneKeyEntry),
+		stopCh:       make(chan struct{}),
 	}
 	cv.loadRootTrustAnchors()
+	go cv.sweepExpiredKeys()
 	return cv
+}
+
+// sweepExpiredKeys periodically purges expired DNSKEY cache entries to prevent
+// unbounded memory growth under sustained queries to many unique zones.
+func (cv *CryptoValidator) sweepExpiredKeys() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			cv.mu.Lock()
+			for zone, entry := range cv.zoneKeyCache {
+				if entry != nil && time.Now().After(entry.expires) {
+					delete(cv.zoneKeyCache, zone)
+				}
+			}
+			cv.mu.Unlock()
+		case <-cv.stopCh:
+			return
+		}
+	}
+}
+
+// Stop terminates the background key cache sweeper.
+func (cv *CryptoValidator) Stop() {
+	if cv == nil || cv.stopCh == nil {
+		return
+	}
+	select {
+	case <-cv.stopCh:
+	default:
+		close(cv.stopCh)
+	}
 }
 
 func (cv *CryptoValidator) loadRootTrustAnchors() {
@@ -525,23 +559,37 @@ func (cv *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 
 // GetZoneKeys retrieves cached verified DNSKEYs for a zone. Expired entries
 // are lazily evicted to prevent unbounded memory growth.
+//
+// Uses a dual-lock pattern: RLock for the fast path (valid cache hit),
+// escalate to write lock only for expiry. Re-reads inside the write-locked
+// section to avoid a TOCTOU race where CacheZoneKeys replaces an expired
+// entry between the read-lock release and write-lock acquisition.
 func (cv *CryptoValidator) GetZoneKeys(zone string) []*dns.DNSKEY {
 	if cv == nil {
 		return nil
 	}
 	zone = strings.ToLower(strings.TrimSuffix(zone, "."))
+
 	cv.mu.RLock()
 	entry, ok := cv.zoneKeyCache[zone]
+	if ok && entry != nil && !time.Now().After(entry.expires) {
+		cv.mu.RUnlock()
+		return entry.keys
+	}
 	cv.mu.RUnlock()
+
+	cv.mu.Lock()
+	entry, ok = cv.zoneKeyCache[zone]
 	if !ok || entry == nil {
+		cv.mu.Unlock()
 		return nil
 	}
 	if time.Now().After(entry.expires) {
-		cv.mu.Lock()
 		delete(cv.zoneKeyCache, zone)
 		cv.mu.Unlock()
 		return nil
 	}
+	cv.mu.Unlock()
 	return entry.keys
 }
 

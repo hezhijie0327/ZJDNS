@@ -201,21 +201,32 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 				switch a := rrec.(type) {
 				case *dns.A:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
+						// Validate glue name is within the parent zone
+						glueName := dnsutil.NormalizeDomain(a.Header().Name)
+						curDom := dnsutil.NormalizeDomain(currentDomain)
+						if glueName != curDom && !strings.HasSuffix(glueName, "."+curDom) && curDom != "" {
+							continue
+						}
 						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
 					}
 				case *dns.AAAA:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
+						glueName := dnsutil.NormalizeDomain(a.Header().Name)
+						curDom := dnsutil.NormalizeDomain(currentDomain)
+						if glueName != curDom && !strings.HasSuffix(glueName, "."+curDom) && curDom != "" {
+							continue
+						}
 						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), config.DefaultDNSPort))
 					}
 				}
 			}
 		}
 
-		if len(nextNS) == 0 {
-			nextNS = rr.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
-		}
-
-		if len(nextNS) == 0 {
+		// Always verify glue IPs via independent resolution; prefer trusted results.
+		trustedNS := rr.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
+		if len(trustedNS) > 0 {
+			nextNS = trustedNS
+		} else if len(nextNS) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessagePool.Put(response)
 			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
@@ -545,7 +556,6 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 		return nil, errors.New("no nameservers")
 	}
 
-	nameservers = ShuffleSlice(nameservers)
 	queryCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errors.New("query resolution completed"))
 
@@ -647,19 +657,35 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 			var nsAddrs []string
 
 			aQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-			if ans, _, _, _, _, _, _, err := rr.resolve(resolveCtx, aQuestion, nil, depth+1, forceTCP); err == nil {
+			if ans, _, extra, _, _, _, _, err := rr.resolve(resolveCtx, aQuestion, nil, depth+1, forceTCP); err == nil {
 				for _, rrec := range ans {
 					if a, ok := rrec.(*dns.A); ok {
 						nsAddrs = append(nsAddrs, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
 					}
 				}
+				// Check Additional section for AAAA glue before making a separate query
+				for _, rrec := range extra {
+					if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsRecord.Ns) {
+						nsAddrs = append(nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
+					}
+				}
 			}
 
-			aaaaQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-			if ans, _, _, _, _, _, _, err := rr.resolve(resolveCtx, aaaaQuestion, nil, depth+1, forceTCP); err == nil {
-				for _, rrec := range ans {
-					if aaaa, ok := rrec.(*dns.AAAA); ok {
-						nsAddrs = append(nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
+			hasAaaa := false
+			for _, addr := range nsAddrs {
+				host, _, _ := net.SplitHostPort(addr)
+				if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+					hasAaaa = true
+					break
+				}
+			}
+			if !hasAaaa {
+				aaaaQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
+				if ans, _, _, _, _, _, _, err := rr.resolve(resolveCtx, aaaaQuestion, nil, depth+1, forceTCP); err == nil {
+					for _, rrec := range ans {
+						if aaaa, ok := rrec.(*dns.AAAA); ok {
+							nsAddrs = append(nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
+						}
 					}
 				}
 			}

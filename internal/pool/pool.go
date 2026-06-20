@@ -60,33 +60,29 @@ func (mp *MessagePool) Put(msg *dns.Msg) {
 }
 
 // NewBufferPool creates a new BufferPool pre-populated with the given number
-// of buffers.
+// of buffers. Buffers are stored as []byte directly (no pointer indirection).
 func NewBufferPool(size, poolSize int) *BufferPool {
 	bp := &BufferPool{
 		size: size,
-		pool: sync.Pool{},
+		pool: sync.Pool{
+			New: func() any { return make([]byte, size) },
+		},
 	}
 	for range poolSize {
-		buf := make([]byte, size)
-		bp.pool.Put(&buf)
+		bp.pool.Put(make([]byte, size))
 	}
 	return bp
 }
 
 // Get acquires a byte slice from the pool.
 func (bp *BufferPool) Get() []byte {
-	bufPtr := bp.pool.Get()
-	if bufPtr == nil {
-		return make([]byte, bp.size)
-	}
-	buf := bufPtr.(*[]byte)
-	return *buf
+	return bp.pool.Get().([]byte)
 }
 
 // Put returns a byte slice to the pool.
 func (bp *BufferPool) Put(buf []byte) {
 	if buf != nil && cap(buf) >= bp.size {
 		clear(buf[:cap(buf)])
-		bp.pool.Put(&buf)
+		bp.pool.Put(buf)
 	}
 }

@@ -244,6 +244,21 @@ func (cm *Loader) LoadConfig(configFile string) (*ServerConfig, error) {
 	return cfg, nil
 }
 
+// validatePort checks that a port string is a valid numeric port in [1, 65535].
+func validatePort(field, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	p, err := strconv.Atoi(value)
+	if err != nil {
+		return fmt.Errorf("%s must be a numeric port: %w", field, err)
+	}
+	if p < 1 || p > 65535 {
+		return fmt.Errorf("%s must be between 1 and 65535", field)
+	}
+	return nil
+}
+
 func (cm *Loader) validateConfig(cfg *ServerConfig) error {
 	validLevels := map[string]log.Level{
 		"error": log.Error,
@@ -347,6 +362,37 @@ func (cm *Loader) validateConfig(cfg *ServerConfig) error {
 	}
 	if cfg.Server.RateBurst < 0 {
 		return fmt.Errorf("server.rate_burst must be zero or positive")
+	}
+
+	// Port format validation — prevents opaque net.Listen failures at startup.
+	if err := validatePort("server.port", cfg.Server.Port); err != nil {
+		return err
+	}
+	if cfg.Server.Pprof != "" {
+		if err := validatePort("server.pprof", cfg.Server.Pprof); err != nil {
+			return err
+		}
+	}
+	if err := validatePort("server.tls.port", cfg.Server.TLS.Port); err != nil {
+		return err
+	}
+	if cfg.Server.TLS.HTTPS.Port != "" {
+		if err := validatePort("server.tls.https.port", cfg.Server.TLS.HTTPS.Port); err != nil {
+			return err
+		}
+	}
+
+	const maxRate = 1_000_000
+	const maxBurst = 1_000_000
+	const maxConcurrent = 100_000
+	if cfg.Server.RateLimit > maxRate {
+		return fmt.Errorf("server.rate_limit exceeds maximum %d", maxRate)
+	}
+	if cfg.Server.RateBurst > maxBurst {
+		return fmt.Errorf("server.rate_burst exceeds maximum %d", maxBurst)
+	}
+	if cfg.Server.MaxConcurrent > maxConcurrent {
+		return fmt.Errorf("server.max_concurrent exceeds maximum %d", maxConcurrent)
 	}
 
 	if err := validateLatencyProbeDefaults(cfg.Server.Features.LatencyProbe); err != nil {

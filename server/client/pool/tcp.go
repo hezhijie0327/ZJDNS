@@ -165,7 +165,7 @@ func (pc *Conn) readLoop() {
 			return
 		}
 		msgLen := binary.BigEndian.Uint16(lengthBuf)
-		if msgLen == 0 || int(msgLen) > bufpool.SecureBufferSize {
+		if msgLen == 0 {
 			log.Debugf("TCPPOOL: invalid message length %d from %s", msgLen, pc.addr)
 			return
 		}

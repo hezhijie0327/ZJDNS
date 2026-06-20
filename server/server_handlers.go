@@ -69,7 +69,9 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	response := s.processDNSQuery(req, dnsutil.ClientIP(w), false, detectRequestProtocol(w))
 	if response != nil {
 		response.Compress = true
-		_ = w.WriteMsg(response)
+		if err := w.WriteMsg(response); err != nil {
+			log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
+		}
 		pool.DefaultMessagePool.Put(response)
 	}
 }

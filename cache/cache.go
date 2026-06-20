@@ -171,15 +171,6 @@ func CreateCompactRecord(rr dns.RR) *CompactRecord {
 	return &CompactRecord{Text: rr.String(), OrigTTL: rr.Header().Ttl, Type: rr.Header().Rrtype, RR: rr}
 }
 
-// ExpandRecord converts a CompactRecord back to a DNS resource record.
-func ExpandRecord(cr *CompactRecord) dns.RR {
-	if cr == nil || cr.Text == "" {
-		return nil
-	}
-	rr, _ := dns.NewRR(cr.Text)
-	return rr
-}
-
 // ExpandRecords converts a slice of CompactRecords to DNS resource records.
 func ExpandRecords(crs []*CompactRecord) []dns.RR {
 	if len(crs) == 0 {

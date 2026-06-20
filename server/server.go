@@ -437,13 +437,15 @@ func (s *Server) shutdownServer() {
 		bgDone <- s.backgroundGroup.Wait()
 	}()
 
+	bgTimer := time.NewTimer(DefaultTimeout)
+	defer bgTimer.Stop()
 	select {
 	case err := <-bgDone:
 		if err != nil {
 			log.Errorf("SERVER: Background goroutines finished with error: %v", err)
 		}
 		log.Infof("SERVER: All background tasks shut down")
-	case <-time.After(DefaultTimeout):
+	case <-bgTimer.C:
 		log.Errorf("SERVER: Background tasks shutdown timeout")
 	}
 
@@ -453,13 +455,15 @@ func (s *Server) shutdownServer() {
 		refreshDone <- s.cacheRefreshGroup.Wait()
 	}()
 
+	refreshTimer := time.NewTimer(DefaultTimeout)
+	defer refreshTimer.Stop()
 	select {
 	case err := <-refreshDone:
 		if err != nil {
 			log.Errorf("SERVER: Cache refresh goroutines finished with error: %v", err)
 		}
 		log.Infof("SERVER: All cache refresh tasks shut down")
-	case <-time.After(DefaultTimeout):
+	case <-refreshTimer.C:
 		log.Errorf("SERVER: Cache refresh tasks shutdown timeout")
 	}
 

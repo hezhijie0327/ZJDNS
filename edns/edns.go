@@ -71,13 +71,15 @@ func (m *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDN
 		return
 	}
 
-	cleanExtra := make([]dns.RR, 0, len(msg.Extra))
-	for _, rr := range msg.Extra {
-		if rr != nil && rr.Header().Rrtype != dns.TypeOPT {
-			cleanExtra = append(cleanExtra, rr)
+	if len(msg.Extra) > 0 {
+		cleanExtra := make([]dns.RR, 0, len(msg.Extra))
+		for _, rr := range msg.Extra {
+			if rr != nil && rr.Header().Rrtype != dns.TypeOPT {
+				cleanExtra = append(cleanExtra, rr)
+			}
 		}
+		msg.Extra = cleanExtra
 	}
-	msg.Extra = cleanExtra
 
 	opt := &dns.OPT{
 		Hdr: dns.RR_Header{
