@@ -66,7 +66,7 @@
 
 - 请求计数器（按协议：UDP、TCP、DoT、DoQ、DoH、DoH3）
 - 缓存命中率、重写次数、劫持检测、过期响应、预取次数
-- JSON 日志输出 + 定期重置
+- JSON 日志输出 + 定期重置（`log_level` 可配：error/warn/info/debug）
 - **pprof**：`http://127.0.0.1:6060/debug/pprof/`
 
 ---
@@ -97,7 +97,7 @@ zjdns/
 ├── main.go                          # 入口 (~50 行)
 ├── version.go                       # ldflags 变量
 ├── internal/
-│   ├── log/log.go                   # LogManager, TimeCache
+│   ├── log/log.go                   # 日志管理器 (Error/Warn/Info/Debug)
 │   ├── pool/pool.go                 # MessagePool, BufferPool
 │   ├── dnsutil/dnsutil.go           # 工具函数
 │   └── ipdetect/ipdetect.go         # 公网 IP 检测

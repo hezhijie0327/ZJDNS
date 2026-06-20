@@ -23,9 +23,10 @@ There is no test suite. Module path: `zjdns` (Go 1.25).
 zjdns/
 ├── main.go / version.go           # Entry point + ldflags variables
 ├── internal/
-│   ├── log/log.go                 # LogManager, TimeCache (zero deps)
+│   ├── log/log.go                 # LogManager, TimeCache, Level.String()
 │   ├── pool/pool.go               # MessagePool, BufferPool, constants (zero deps)
-│   └── dnsutil/dnsutil.go         # NormalizeDomain, IsSecureProtocol, HandlePanic, etc.
+│   ├── dnsutil/dnsutil.go         # NormalizeDomain, IsSecureProtocol, HandlePanic, etc.
+│   └── ipdetect/ipdetect.go       # Public IP detection for auto ECS
 ├── config/config.go               # All types + constants + loader + validation + DDR/CHAOS
 ├── edns/edns.go                   # ECS, DNS Cookie, EDE (24 codes), Padding
 ├── cidr/cidr.go                   # CIDRManager — IP filtering with tag matching
@@ -38,16 +39,17 @@ zjdns/
     ├── query.go                   # QueryClient (UDP/TCP/DoT/DoQ/DoH/DoH3)
     ├── security.go                # SecurityManager, DNSSECValidator, HijackPrevention
     ├── tls.go                     # TLSManager, self-signed CA, secure protocol handlers
-    └── latency_probe.go           # A/AAAA latency probing and reordering
+    ├── latency_probe.go           # A/AAAA latency probing and reordering
+    └── ratelimit.go               # Per-IP token bucket rate limiter
 ```
 
 ### Dependency Graph
 
 ```
 main ──→ server, config
-server ──→ cache, cidr, config, edns, dnsutil, log, pool, rewrite, stats
+server ──→ cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite, stats
 cache ──→ config, edns, dnsutil, log
-edns ──→ dnsutil, log
+edns ──→ dnsutil, ipdetect, log
 cidr ──→ config, dnsutil, log
 rewrite ──→ config, dnsutil, log
 stats ──→ cache, config, log
@@ -104,6 +106,34 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `pool.UDPBufferSize` | pool | 1232 |
 | `server.OperationTimeout` | server | 3s |
 | `server.MaxCNAMEChain` | server | 16 |
+| `server.MaxRecursionDep` | server | 16 |
+
+## Logging Conventions
+
+All logs use the project-level `log` package (`zjdns/internal/log`). Default level: `info`.
+
+**Level usage**:
+| Level | Use case |
+|-------|----------|
+| `Error` | Component failure, data loss risk (persist failures, shutdown timeouts) |
+| `Warn` | Security events (hijack detection), rare boundary conditions (CNAME loop, depth exceeded), background task failures (ECS refresh) |
+| `Info` | Startup/shutdown lifecycle, configuration summary, one-time events |
+| `Debug` | Hot-path detail: every query, cache hit/miss, upstream result, CIDR match |
+
+**Prefixes** (19 canonical, one per logical component):
+
+| Prefix | Component | Files |
+|--------|-----------|-------|
+| `TLS` | All TLS + secure protocols | tls.go |
+| `CACHE` | Cache operations | cache.go, server.go |
+| `UPSTREAM` | Outbound upstream queries | query.go, resolver.go |
+| `SERVER` | Server lifecycle | server.go, main.go |
+| `EDNS` | EDNS options | edns.go, server.go |
+| `RECURSION` | Recursive resolution | resolver.go |
+| `SECURITY` | DNSSEC, hijack detection | security.go, resolver.go |
+| `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `RATELIMIT`, `PTR`, `PANIC` | One component each | respective files |
+
+**Rules**: Prefix matches logical component, not Go package. No `HIJACK:`/`DNSSEC:` (merged→`SECURITY:`), no `DOT:`/`DOQ:`/`DOH:` (merged→`TLS:`). Hot-path logs are `Debug` only — `Warn`/`Info` on the query path would spam at scale.
 
 ## Notable Design Decisions
 
