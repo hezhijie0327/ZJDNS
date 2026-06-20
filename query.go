@@ -194,8 +194,12 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 
 // executeTLS executes a DNS query over DNS over TLS (DoT).
 func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
-	qc.tlsClient.TLSConfig = tlsConfig
-	response, _, err := qc.tlsClient.ExchangeContext(ctx, msg, server.Address)
+	// Clone the client via struct copy to avoid mutating the shared client's TLS config.
+	// This prevents a race condition where concurrent queries to upstreams with
+	// different TLS verification policies could cross-contaminate each other.
+	client := *qc.tlsClient
+	client.TLSConfig = tlsConfig
+	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
 	return response, err
 }
 
@@ -304,11 +308,20 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultDOHPort)
 	}
 
-	// Configure HTTP/2 transport
-	dohTransport := qc.dohClient.Transport.(*http.Transport)
+	// Clone the transport to avoid mutating the shared transport's TLS config.
+	// This prevents a race condition where concurrent queries to upstreams with
+	// different TLS verification policies could cross-contaminate each other.
+	dohTransport := qc.dohClient.Transport.(*http.Transport).Clone()
 	dohTransport.TLSClientConfig = tlsConfig.Clone()
 	if err := http2.ConfigureTransport(dohTransport); err != nil {
 		return nil, fmt.Errorf("configure HTTP/2: %w", err)
+	}
+
+	// Create a local HTTP client with the cloned transport to ensure
+	// TLS configuration isolation between concurrent requests.
+	dohClient := &http.Client{
+		Timeout:   qc.dohClient.Timeout,
+		Transport: dohTransport,
 	}
 
 	// Set message ID to 0 for DoH (privacy consideration)
@@ -342,7 +355,7 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 	httpReq.Header.Set("User-Agent", "")
 
 	// Execute request
-	httpResp, err := qc.dohClient.Do(httpReq)
+	httpResp, err := dohClient.Do(httpReq)
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("do request: %w", err)
@@ -404,7 +417,13 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 		},
 	}
 
-	qc.doh3Client.Transport = transport
+	// Create a local HTTP client with the new transport to ensure
+	// TLS configuration isolation between concurrent requests.
+	// We avoid mutating the shared qc.doh3Client.Transport to prevent
+	// race conditions across concurrent queries with different TLS settings.
+	doh3Client := &http.Client{
+		Transport: transport,
+	}
 
 	// Set message ID to 0 for DoH (privacy consideration)
 	originalID := msg.Id
@@ -437,7 +456,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 	httpReq.Header.Set("User-Agent", "")
 
 	// Execute request
-	httpResp, err := qc.doh3Client.Do(httpReq)
+	httpResp, err := doh3Client.Do(httpReq)
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("do request: %w", err)
