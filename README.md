@@ -112,7 +112,8 @@ zjdns/
 ├── cache/cache.go                   # CacheManager 接口 + MemoryCache
 ├── stats/stats.go                   # 无锁统计管理器
 ├── server/                          # 核心服务
-│   ├── server.go                    # DNSServer, 查询管道, 信号处理
+│   ├── server.go                    # DNSServer 生命周期, 启停, 信号处理
+│   ├── server_handlers.go           # 查询管道, 缓存命中/未命中, 响应构造
 │   ├── resolver.go                  # QueryManager, CNAME 解析, 共享工具
 │   ├── upstream.go                  # UpstreamHandler, 首胜查询, CIDR 过滤
 │   ├── recursive.go                 # RecursiveResolver, 递归解析
@@ -124,7 +125,10 @@ zjdns/
 │   ├── query_doh.go                 # DoH 查询 + HTTP/2 传输池
 │   ├── query_doh3.go                # DoH3 查询 + HTTP/3 传输池
 │   ├── security.go                  # SecurityManager, DNSSEC, 劫持防护
-│   ├── tls.go                       # TLSManager, DoT/DoQ/DoH/DoH3
+│   ├── tls.go                       # TLSManager 核心, 证书管理
+│   ├── tls_dot.go                   # DoT 服务端 (RFC 7766 流水线)
+│   ├── tls_doq.go                   # DoQ 服务端 (stream 处理)
+│   ├── tls_doh.go                   # DoH/DoH3 服务端 (HTTP 处理)
 │   ├── tcppool.go                   # pipelinedConn + connPool (RFC 7766)
 │   ├── latency_probe.go             # 延迟探测
 │   └── ratelimit.go                 # 速率限制器

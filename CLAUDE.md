@@ -34,7 +34,8 @@ zjdns/
 ├── cache/cache.go                 # Manager interface + MemoryCache + persistence
 ├── stats/stats.go                 # Lock-free atomic metrics Manager
 ├── server/                        # Core server (tightly coupled sub-components)
-│   ├── server.go                  # DNSServer, query pipeline, lifecycle, signal handling
+│   ├── server.go                  # DNSServer lifecycle, signal handling, startup/shutdown
+│   ├── server_handlers.go         # Query pipeline, cache hit/miss, response builders
 │   ├── resolver.go                # QueryManager, CNAMEHandler, shared helpers
 │   ├── upstream.go                # UpstreamHandler, first-win query, CIDR filtering
 │   ├── recursive.go               # RecursiveResolver, root→TLD→auth walk, NS resolution
@@ -46,7 +47,10 @@ zjdns/
 │   ├── query_doh.go               # DoH queries + HTTP/2 transport pool
 │   ├── query_doh3.go              # DoH3 queries + HTTP/3 transport pool
 │   ├── security.go                # SecurityManager, DNSSECValidator, HijackPrevention
-│   ├── tls.go                     # TLSManager, self-signed CA, secure protocol handlers
+│   ├── tls.go                     # TLSManager core, cert management, lifecycle
+│   ├── tls_dot.go                 # DoT server (start, accept, RFC 7766 pipeline)
+│   ├── tls_doq.go                 # DoQ server (start, accept, stream handling)
+│   ├── tls_doh.go                 # DoH/DoH3 server (HTTP handlers)
 │   ├── tcppool.go                 # pipelinedConn + connPool (RFC 7766 TCP/DoT pipelining)
 │   ├── latency_probe.go           # A/AAAA latency probing and reordering
 │   └── ratelimit.go               # Per-IP token bucket rate limiter
@@ -148,10 +152,10 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 
 | Prefix | Component | Files |
 |--------|-----------|-------|
-| `TLS` | All TLS + secure protocols | tls.go |
+| `TLS` | All TLS + secure protocols | tls.go, tls_dot.go, tls_doq.go, tls_doh.go |
 | `CACHE` | Cache operations | cache.go, server.go |
 | `UPSTREAM` | Outbound upstream queries | query_tcp.go, query_dot.go, query_doq.go, query_doh.go, query_doh3.go, upstream.go |
-| `SERVER` | Server lifecycle | server.go, main.go |
+| `SERVER` | Server lifecycle | server.go, server_handlers.go, main.go |
 | `EDNS` | EDNS options | edns.go, server.go |
 | `RECURSION` | Recursive resolution | recursive.go |
 | `SECURITY` | DNSSEC, hijack detection | security.go, recursive.go |
