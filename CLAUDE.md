@@ -42,7 +42,7 @@ zjdns/
 │   ├── query_tcp.go               # Traditional UDP/TCP queries + TCP fallback
 │   ├── query_dot.go               # DoT queries (pool-based + fallback)
 │   ├── query_doq.go               # DoQ query execution (stream write/read)
-│   ├── query_doqpool.go           # DoQ connection pool (quicPool)
+│   ├── doqpool.go                 # DoQ connection pool (quicPool)
 │   ├── query_doh.go               # DoH queries + HTTP/2 transport pool
 │   ├── query_doh3.go              # DoH3 queries + HTTP/3 transport pool
 │   ├── security.go                # SecurityManager, DNSSECValidator, HijackPrevention
@@ -155,7 +155,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `EDNS` | EDNS options | edns.go, server.go |
 | `RECURSION` | Recursive resolution | recursive.go |
 | `SECURITY` | DNSSEC, hijack detection | security.go, recursive.go |
-| `TCPPOOL` | TCP/DoT connection pool | tcppool.go, query_doqpool.go |
+| `TCPPOOL` | TCP/DoT connection pool | tcppool.go, doqpool.go |
 | `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `RATELIMIT`, `PTR`, `PANIC` | One component each | respective files |
 
 **Rules**: Prefix matches logical component, not Go package. No `HIJACK:`/`DNSSEC:` (merged→`SECURITY:`), no `DOT:`/`DOQ:`/`DOH:` (merged→`TLS:`). Hot-path logs are `Debug` only — `Warn`/`Info` on the query path would spam at scale.
@@ -182,7 +182,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   Server processes TCP queries concurrently via async handler dispatch (plain TCP)
   or three-stage reader→worker→writer pipeline (DoT). Falls back to single-shot
   `ExchangeContext` when pipelining is not supported by the peer.
-- **DoQ connection pool** (`server/query_doqpool.go`): Pools up to 4 QUIC
+- **DoQ connection pool** (`server/doqpool.go`): Pools up to 4 QUIC
   connections per upstream. Multiple goroutines share connections via QUIC's
   native stream multiplexing — no capacity semaphore needed.
 - **Config self-sufficiency**: `config.ProjectName` and `config.Version` are

@@ -14,7 +14,7 @@
 - **递归 DNS 解析**：完整递归查询算法，从 13 组根服务器逐步解析至 TLD 和权威服务器
 - **上游 DNS 转发**：多上游并发查询 + 首胜策略（First-Win），降低延迟
 - **混合模式**：可同时配置上游 DNS 和内置递归解析器（`builtin_recursive`）
-- **TCP/DoT 连接池 (RFC 7766)**：持久连接复用 + 查询流水线 + 乱序响应匹配，fallback 单次连接
+- **TCP/DoT/DoQ 连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生 stream 复用，fallback 单次连接
 - **智能协议协商**：UDP 截断自动回退 TCP
 - **CNAME 链解析**：多级 CNAME 追踪，防循环（最大 16 级）
 - **A/AAAA 延迟探测**：后台多协议（ping/tcp/udp/http/https/http3）速度检测，按最快顺序重排
@@ -61,7 +61,7 @@
 - **对象池**：`sync.Pool` 复用 `dns.Msg` 和 `[]byte`
 - **CIDR IPv4 位运算**：uint32 掩码匹配，避免 `net.IPNet.Contains`
 - **TCP/DoT 流水线**：单连接 16 路并发查询，reader goroutine 按 DNS ID 分发响应
-- **连接池**：每上游 4 连接上限，容量背压，死连接自动驱逐重建
+- **连接池**：TCP/DoT/DoQ 每上游 4 连接上限，容量背压，死连接自动驱逐重建
 - **并发查询**：errgroup + 自适应并发限制 + 首胜即取消
 - **正则编译一次**：IP 检测 regex 包级编译
 
@@ -113,8 +113,16 @@ zjdns/
 ├── stats/stats.go                   # 无锁统计管理器
 ├── server/                          # 核心服务
 │   ├── server.go                    # DNSServer, 查询管道, 信号处理
-│   ├── resolver.go                  # QueryManager, RecursiveResolver
-│   ├── query.go                     # QueryClient (6 协议)
+│   ├── resolver.go                  # QueryManager, CNAME 解析, 共享工具
+│   ├── upstream.go                  # UpstreamHandler, 首胜查询, CIDR 过滤
+│   ├── recursive.go                 # RecursiveResolver, 递归解析
+│   ├── query.go                     # QueryClient 核心: 类型, 路由
+│   ├── query_tcp.go                 # UDP/TCP 传统查询 + TCP 回退
+│   ├── query_dot.go                 # DoT 查询 (连接池 + 回退)
+│   ├── query_doq.go                 # DoQ 查询执行
+│   ├── doqpool.go                   # DoQ 连接池 (quicPool)
+│   ├── query_doh.go                 # DoH 查询 + HTTP/2 传输池
+│   ├── query_doh3.go                # DoH3 查询 + HTTP/3 传输池
 │   ├── security.go                  # SecurityManager, DNSSEC, 劫持防护
 │   ├── tls.go                       # TLSManager, DoT/DoQ/DoH/DoH3
 │   ├── tcppool.go                   # pipelinedConn + connPool (RFC 7766)
