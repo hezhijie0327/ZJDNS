@@ -10,7 +10,7 @@ import (
 
 var (
 	ProjectName = "ZJDNS" // ProjectName is the name of the project
-	Version     = "1.6.0" // Version is the current version of ZJDNS
+	Version     = "2.0.0" // Version is the current version of ZJDNS
 	CommitHash  = "dirty" // CommitHash is the git commit hash (set during build)
 	BuildTime   = "dev"   // BuildTime is the build timestamp (set during build)
 )

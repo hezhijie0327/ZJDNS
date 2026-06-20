@@ -210,4 +210,3 @@ golangci-lint run && golangci-lint fmt
 
 - [miekg/dns](https://github.com/miekg/dns) — Go DNS 库
 - [quic-go/quic-go](https://github.com/quic-go/quic-go) — QUIC 协议实现
-- [klauspost/compress](https://github.com/klauspost/compress) — zstd 压缩

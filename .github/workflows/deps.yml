@@ -19,7 +19,6 @@ jobs:
         run: |
           go get -u github.com/miekg/dns@master
           go get -u github.com/quic-go/quic-go@master
-          go get -u github.com/klauspost/compress@master
           go mod tidy
 
       - name: Create Pull Request

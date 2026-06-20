@@ -3,7 +3,6 @@ module zjdns
 go 1.25.1
 
 require (
-	github.com/klauspost/compress v1.18.7-0.20260603081539-4705fcbaf515
 	github.com/miekg/dns v1.1.73-0.20260402044838-d1539a788a12
 	github.com/quic-go/quic-go v0.60.1-0.20260608021756-89690bfa7834
 	golang.org/x/net v0.56.0
