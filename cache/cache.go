@@ -192,6 +192,43 @@ func ExpandRecords(crs []*CompactRecord) []dns.RR {
 	return result
 }
 
+// ExpandAndProcessRecords combines expansion of CompactRecords with TTL
+// adjustment and optional DNSSEC filtering in a single pass, avoiding the
+// double-allocation of calling ExpandRecords then ProcessRecords separately.
+func ExpandAndProcessRecords(crs []*CompactRecord, value int64, isElapsed bool, includeDNSSEC bool) []dns.RR {
+	if len(crs) == 0 {
+		return nil
+	}
+	result := make([]dns.RR, 0, len(crs))
+	for _, cr := range crs {
+		rr := expand(cr)
+		if rr == nil {
+			continue
+		}
+		if !includeDNSSEC {
+			switch rr.(type) {
+			case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
+				continue
+			}
+		}
+		newRR := dns.Copy(rr)
+		if newRR == nil {
+			continue
+		}
+		if isElapsed {
+			remaining := int64(newRR.Header().Ttl) - value
+			if remaining < 0 {
+				remaining = 0
+			}
+			newRR.Header().Ttl = uint32(remaining)
+		} else if value > 0 {
+			newRR.Header().Ttl = uint32(value)
+		}
+		result = append(result, newRR)
+	}
+	return result
+}
+
 // ProcessRecords adjusts TTLs on resource records and optionally filters
 // DNSSEC record types.
 func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC bool) []dns.RR {

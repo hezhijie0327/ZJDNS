@@ -237,24 +237,20 @@ func (mc *MemoryCache) evictToBudget() {
 		return
 	}
 
-	keys := make([]string, 0, max(len(mc.entries), evictSampleSize))
-	for k := range mc.entries {
-		keys = append(keys, k)
-	}
-
 	evicted := 0
 	for mc.currentSize > mc.limitBytes && len(mc.entries) > 0 {
+		// Randomly sample entries from the map to approximate LRU without
+		// allocating a full keys slice under the write lock.
 		var oldestKey string
 		var oldestLast int64 = 1<<63 - 1
 		var oldestSize int64
 
-		for range evictSampleSize {
-			idx := int(fastRandN(uint32(len(keys))))
-			k := keys[idx]
-			item, ok := mc.entries[k]
-			if !ok {
-				continue
+		sampleCount := 0
+		for k, item := range mc.entries {
+			if sampleCount >= evictSampleSize {
+				break
 			}
+			sampleCount++
 			last := item.lastAccess.Load()
 			if last < oldestLast {
 				oldestLast = last
@@ -269,17 +265,6 @@ func (mc *MemoryCache) evictToBudget() {
 		mc.currentSize -= oldestSize
 		mc.removePTRLocked(oldestKey)
 		delete(mc.entries, oldestKey)
-		if n := len(keys); n > 1 {
-			for i, k := range keys {
-				if k == oldestKey {
-					keys[i] = keys[n-1]
-					keys = keys[:n-1]
-					break
-				}
-			}
-		} else {
-			keys = keys[:0]
-		}
 		evicted++
 	}
 

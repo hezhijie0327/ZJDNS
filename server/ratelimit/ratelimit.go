@@ -110,7 +110,11 @@ func ipToKey(ip net.IP) [16]byte {
 }
 
 func hashIPKey(key [16]byte) uint8 {
-	h := uint32(0)
+	// FNV-1a hash over the full 16-byte key. For IPv4-mapped IPv6
+	// addresses (::ffff:x.x.x.x), the zero-padded prefix bytes fold
+	// harmlessly through FNV-1a multiplication, and the significant
+	// last 4 bytes still produce good distribution across shards.
+	h := uint32(2166136261)
 	for _, b := range key {
 		h ^= uint32(b)
 		h *= 16777619

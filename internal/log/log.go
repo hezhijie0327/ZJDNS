@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -56,6 +57,7 @@ type TimeCache struct {
 	currentTime atomic.Value
 	ticker      *time.Ticker
 	done        chan struct{}
+	closeOnce   sync.Once
 }
 
 // NewManager creates a new Manager with default settings.
@@ -203,16 +205,18 @@ func (tc *TimeCache) Now() time.Time {
 	return tc.currentTime.Load().(time.Time)
 }
 
-// Stop stops the time cache ticker and goroutine.
+// Stop stops the time cache ticker and goroutine. It is safe to call multiple
+// times.
 func (tc *TimeCache) Stop() {
 	if tc == nil {
 		return
 	}
-
-	if tc.done != nil {
-		close(tc.done)
-	}
-	if tc.ticker != nil {
-		tc.ticker.Stop()
-	}
+	tc.closeOnce.Do(func() {
+		if tc.done != nil {
+			close(tc.done)
+		}
+		if tc.ticker != nil {
+			tc.ticker.Stop()
+		}
+	})
 }

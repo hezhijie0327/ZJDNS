@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 
@@ -48,7 +49,19 @@ func (qpc *QuicConn) close() {
 }
 
 func (qpc *QuicConn) isDead() bool {
-	return qpc.closed.Load()
+	if qpc.closed.Load() {
+		return true
+	}
+	// Also check the underlying quic-go connection context, which closes when
+	// the remote peer terminates the connection or an unrecoverable transport
+	// error occurs.
+	select {
+	case <-qpc.Conn.Context().Done():
+		qpc.closed.Store(true)
+		return true
+	default:
+		return false
+	}
 }
 
 // NewQuicPool creates a QuicPool with the specified maximum connections.
@@ -77,7 +90,10 @@ func (qp *QuicPool) Acquire(ctx context.Context, key string, dialFunc func(conte
 	qp.conns[key] = live
 
 	if len(live) > 0 {
-		pc := live[0]
+		// Round-robin across live connections rather than always returning
+		// live[0], which would leave connections[1..N] unused.
+		idx := rand.IntN(len(live))
+		pc := live[idx]
 		qp.mu.Unlock()
 		return pc, nil
 	}
@@ -104,6 +120,19 @@ func (qp *QuicPool) Acquire(ctx context.Context, key string, dialFunc func(conte
 
 	qp.mu.Unlock()
 	return nil, fmt.Errorf("client: no available connection to %s", key)
+}
+
+// Shutdown closes all pooled QUIC connections and clears the pool. It is safe
+// to call multiple times.
+func (qp *QuicPool) Shutdown() {
+	qp.mu.Lock()
+	defer qp.mu.Unlock()
+	for key, conns := range qp.conns {
+		for _, pc := range conns {
+			pc.close()
+		}
+		delete(qp.conns, key)
+	}
 }
 
 // Put returns a QUIC connection to the pool for reuse.

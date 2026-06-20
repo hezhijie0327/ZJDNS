@@ -6,27 +6,38 @@ import (
 	"zjdns/internal/log"
 )
 
-// Validator performs DNSSEC validation by checking the Authenticated Data flag
-// and the presence of DNSSEC resource records in responses.
+// Validator performs lightweight DNSSEC record-presence checking only.
+//
+// IMPORTANT: This does NOT perform cryptographic DNSSEC validation (RRSIG
+// signature verification, DNSKEY trust anchor validation, or chain-of-trust
+// construction). It only checks whether DNSSEC record types (RRSIG, NSEC,
+// NSEC3, DNSKEY, DS) are present in the response. The AuthenticatedData (AD)
+// flag from upstream servers is explicitly NOT trusted or propagated, as it
+// cannot be verified without full cryptographic validation.
+//
+// Operators who need real DNSSEC validation should deploy this server behind
+// a validating resolver (e.g., Unbound) or implement full RFC 4033-4035
+// validation using the miekg/dns dnssec package with configured trust anchors.
 type Validator struct{}
 
-// ValidateResponse checks whether a DNS response has been DNSSEC-signed by
-// verifying the AD flag or the presence of DNSSEC records.
+// ValidateResponse checks whether a DNS response contains DNSSEC record types.
+// It does NOT perform cryptographic validation. Returns true only when DNSSEC
+// record types are present in the response AND the client requested DNSSEC.
 func (v *Validator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
 	if !dnssecOK || response == nil {
 		return false
 	}
 
-	if response.AuthenticatedData {
-		log.Debugf("SECURITY: validated via AD flag")
-		return true
-	}
+	// We intentionally do NOT check response.AuthenticatedData here.
+	// The AD flag from upstreams cannot be trusted without full cryptographic
+	// chain-of-trust verification. Relying on it creates a false sense of
+	// security against MITM attackers who can forge the AD bit.
 
 	if v.hasDNSSECRecords(response) {
-		log.Debugf("SECURITY: validated via DNSSEC record presence")
+		log.Debugf("SECURITY: DNSSEC record-presence check passed")
 		return true
 	}
-	log.Debugf("SECURITY: validation failed (no AD flag and no DNSSEC records)")
+	log.Debugf("SECURITY: no DNSSEC records found in response")
 	return false
 }
 

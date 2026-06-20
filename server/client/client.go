@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/quic-go/quic-go/http3"
 
 	"zjdns/config"
 	"zjdns/edns"
@@ -110,16 +111,16 @@ func New() *Client {
 	}
 
 	dohTransport := &http.Transport{
-		MaxIdleConns:        1,
-		MaxIdleConnsPerHost: 1,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 25,
 		IdleConnTimeout:     config.IdleTimeout,
 		DisableCompression:  false,
 		ForceAttemptHTTP2:   true,
 	}
 
 	doh3Transport := &http.Transport{
-		MaxIdleConns:        1,
-		MaxIdleConnsPerHost: 1,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 25,
 		IdleConnTimeout:     config.IdleTimeout,
 		DisableCompression:  false,
 		ForceAttemptHTTP2:   false,
@@ -200,7 +201,7 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 	tlsConfig := &tls.Config{
 		CurvePreferences:   []tls.CurveID{},
 		InsecureSkipVerify: server.SkipTLSVerify,
-		MinVersion:         tls.VersionTLS12,
+		MinVersion:         tls.VersionTLS13,
 		ServerName:         server.ServerName,
 		ClientSessionCache: c.SessionCache,
 	}
@@ -220,6 +221,47 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		return c.executeDoH3(ctx, msg, server, tlsConfig)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
+	}
+}
+
+// Close shuts down all pooled connections and transports, releasing file
+// descriptors and goroutines. Safe to call multiple times.
+func (c *Client) Close() {
+	if c == nil {
+		return
+	}
+
+	// Close DoH transports (HTTP/2 connections)
+	c.dohTransportMu.Lock()
+	for _, client := range c.dohTransports {
+		if t, ok := client.Transport.(*http.Transport); ok {
+			t.CloseIdleConnections()
+		}
+	}
+	c.dohTransports = nil
+	c.dohTransportMu.Unlock()
+
+	// Close DoH3 transports (QUIC/HTTP3 connections)
+	c.doh3TransportMu.Lock()
+	for _, client := range c.doh3Transports {
+		if t, ok := client.Transport.(*http3.Transport); ok {
+			_ = t.Close()
+		}
+	}
+	c.doh3Transports = nil
+	c.doh3TransportMu.Unlock()
+
+	// Close pooled TCP/DoT connections
+	if c.tcpPool != nil {
+		c.tcpPool.Shutdown()
+	}
+	if c.dotPool != nil {
+		c.dotPool.Shutdown()
+	}
+
+	// Close pooled QUIC connections
+	if c.quicPool != nil {
+		c.quicPool.Shutdown()
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
-	"sync"
+	"sync/atomic"
 
 	"github.com/miekg/dns"
 )
@@ -25,11 +25,16 @@ type CookieOption struct {
 	ServerCookie []byte
 }
 
+type secretPair struct {
+	current  []byte
+	previous []byte
+}
+
 // CookieGenerator creates and validates DNS Cookies using HMAC-SHA256.
+// Uses lock-free atomic.Pointer for the hot path; only RotateSecret atomically
+// swaps the secret pair.
 type CookieGenerator struct {
-	mu             sync.RWMutex
-	secret         []byte
-	previousSecret []byte
+	secrets atomic.Pointer[secretPair]
 }
 
 // NewCookieGenerator creates a CookieGenerator with a random secret.
@@ -38,7 +43,9 @@ func NewCookieGenerator() *CookieGenerator {
 	if _, err := rand.Read(secret); err != nil {
 		panic(fmt.Sprintf("EDNS: failed to generate cookie secret: %v (system CSPRNG unavailable)", err))
 	}
-	return &CookieGenerator{secret: secret}
+	cg := &CookieGenerator{}
+	cg.secrets.Store(&secretPair{current: secret})
+	return cg
 }
 
 // RotateSecret rotates the cookie signing secret, keeping the previous one for
@@ -51,16 +58,27 @@ func (cg *CookieGenerator) RotateSecret() {
 	if _, err := rand.Read(newSecret); err != nil {
 		panic(fmt.Sprintf("EDNS: failed to rotate cookie secret: %v (system CSPRNG unavailable)", err))
 	}
-	cg.mu.Lock()
-	cg.previousSecret = cg.secret
-	cg.secret = newSecret
-	cg.mu.Unlock()
+	old := cg.secrets.Load()
+	if old == nil {
+		cg.secrets.Store(&secretPair{current: newSecret})
+		return
+	}
+	cg.secrets.Store(&secretPair{current: newSecret, previous: old.current})
+}
+
+// loadSecrets atomically loads the current secret pair.
+func (cg *CookieGenerator) loadSecrets() *secretPair {
+	if cg == nil {
+		return nil
+	}
+	return cg.secrets.Load()
 }
 
 // GenerateServerCookie creates a server cookie from the client IP and client
 // cookie.
 func (cg *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []byte) []byte {
-	if cg == nil || len(clientCookie) != DefaultCookieClientLen {
+	sp := cg.loadSecrets()
+	if sp == nil || len(clientCookie) != DefaultCookieClientLen {
 		return nil
 	}
 	if clientIP == nil {
@@ -72,9 +90,7 @@ func (cg *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []
 	data = append(data, clientIP...)
 	data = append(data, clientCookie...)
 
-	cg.mu.RLock()
-	h := hmac.New(sha256.New, cg.secret)
-	cg.mu.RUnlock()
+	h := hmac.New(sha256.New, sp.current)
 	h.Write(data)
 	mac := h.Sum(nil)
 
@@ -86,7 +102,8 @@ func (cg *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []
 // ValidateServerCookie verifies a server cookie against the current and
 // previous secrets.
 func (cg *CookieGenerator) ValidateServerCookie(clientIP net.IP, clientCookie, serverCookie []byte) bool {
-	if cg == nil || len(clientCookie) != DefaultCookieClientLen || len(serverCookie) != DefaultCookieServerLen {
+	sp := cg.loadSecrets()
+	if sp == nil || len(clientCookie) != DefaultCookieClientLen || len(serverCookie) != DefaultCookieServerLen {
 		return false
 	}
 	if clientIP == nil {
@@ -98,22 +115,13 @@ func (cg *CookieGenerator) ValidateServerCookie(clientIP net.IP, clientCookie, s
 	data = append(data, clientIP...)
 	data = append(data, clientCookie...)
 
-	cg.mu.RLock()
-	h := hmac.New(sha256.New, cg.secret)
-	prevLen := len(cg.previousSecret)
-	var prevSecret []byte
-	if prevLen > 0 {
-		prevSecret = make([]byte, prevLen)
-		copy(prevSecret, cg.previousSecret)
-	}
-	cg.mu.RUnlock()
-
+	h := hmac.New(sha256.New, sp.current)
 	h.Write(data)
 	if hmac.Equal(serverCookie, h.Sum(nil)[:DefaultCookieServerLen]) {
 		return true
 	}
-	if prevLen > 0 {
-		hPrev := hmac.New(sha256.New, prevSecret)
+	if len(sp.previous) > 0 {
+		hPrev := hmac.New(sha256.New, sp.previous)
 		hPrev.Write(data)
 		return hmac.Equal(serverCookie, hPrev.Sum(nil)[:DefaultCookieServerLen])
 	}
@@ -122,8 +130,12 @@ func (cg *CookieGenerator) ValidateServerCookie(clientIP net.IP, clientCookie, s
 
 // GenerateClientCookie generates a client cookie for the given IP address.
 func (cg *CookieGenerator) GenerateClientCookie(clientIP net.IP) []byte {
+	sp := cg.loadSecrets()
+	if sp == nil {
+		return nil
+	}
 	clientCookie := make([]byte, DefaultCookieClientLen)
-	h := hmac.New(sha256.New, cg.secret)
+	h := hmac.New(sha256.New, sp.current)
 	h.Write(clientIP)
 	h.Write([]byte("client"))
 	copy(clientCookie, h.Sum(nil))

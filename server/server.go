@@ -184,15 +184,14 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	if cfg.Server.Pprof != "" {
 		server.pprofServer = &http.Server{
-			Addr:              ":" + cfg.Server.Pprof,
+			Addr:              "127.0.0.1:" + cfg.Server.Pprof,
 			ReadHeaderTimeout: OperationTimeout,
 			ReadTimeout:       OperationTimeout,
 			IdleTimeout:       config.IdleTimeout,
 		}
 
-		if server.tls != nil {
-			server.pprofServer.TLSConfig = server.tls.TLSConfig()
-		}
+		// Never share the DNS TLS certificate with pprof — pprof exposes
+		// heap dumps, goroutine stacks, and other sensitive runtime data.
 	}
 
 	if server.ednsMgr != nil && server.ednsMgr.CookieGenerator != nil {
@@ -387,9 +386,9 @@ func (s *Server) shutdownServer() {
 		s.cancel(errors.New("server shutdown"))
 	}
 
-	if s.cacheMgr != nil {
-		dnsutil.CloseWithLog(s.cacheMgr, "Cache store")
-	}
+	// Cache is intentionally closed AFTER background tasks and cache-refresh
+	// goroutines finish, so that inflight cache writes during shutdown are
+	// completed rather than silently dropped.
 
 	if s.limiter != nil {
 		s.limiter.Shutdown()
@@ -418,14 +417,20 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
+	// Close pooled connections and transports to release file descriptors
+	// and goroutines before waiting for background tasks.
+	if s.queryClient != nil {
+		s.queryClient.Close()
+	}
+
 	if s.pprofServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+		defer cancel()
 		if err := s.pprofServer.Shutdown(ctx); err != nil {
 			log.Errorf("PPROF: pprof server shutdown failed: %v", err)
 		} else {
 			log.Infof("PPROF: pprof server shut down successfully")
 		}
-		cancel()
 	}
 
 	bgDone := make(chan error, 1)
@@ -458,6 +463,10 @@ func (s *Server) shutdownServer() {
 		log.Infof("SERVER: All cache refresh tasks shut down")
 	case <-time.After(DefaultTimeout):
 		log.Errorf("SERVER: Cache refresh tasks shutdown timeout")
+	}
+
+	if s.cacheMgr != nil {
+		dnsutil.CloseWithLog(s.cacheMgr, "Cache store")
 	}
 
 	log.DefaultTimeCache.Stop()

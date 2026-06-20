@@ -45,6 +45,8 @@ type Conn struct {
 	inflight  map[uint16]*pending
 	nextID    atomic.Uint32
 	capacity  chan struct{}
+	inFlight  atomic.Int32
+	maxPipe   int32
 	closed    atomic.Bool
 	closeOnce sync.Once
 	done      chan struct{}
@@ -67,6 +69,7 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 		addr:     addr,
 		inflight: make(map[uint16]*pending),
 		capacity: make(chan struct{}, maxPipe),
+		maxPipe:  int32(maxPipe),
 		done:     make(chan struct{}),
 	}
 	go pc.readLoop()
@@ -78,7 +81,11 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	select {
 	case pc.capacity <- struct{}{}:
-		defer func() { <-pc.capacity }()
+		pc.inFlight.Add(1)
+		defer func() {
+			pc.inFlight.Add(-1)
+			<-pc.capacity
+		}()
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -134,6 +141,7 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		resp.Id = originalID
 		return resp, nil
 	case <-ctx.Done():
+		pc.close()
 		return nil, ctx.Err()
 	}
 }
@@ -206,9 +214,9 @@ func (pc *Conn) close() {
 }
 
 // IsFull reports whether the connection has reached its maximum in-flight
-// query capacity.
+// query capacity. Uses an atomic counter to avoid the racy len(channel) call.
 func (pc *Conn) IsFull() bool {
-	return len(pc.capacity) == cap(pc.capacity)
+	return pc.inFlight.Load() >= pc.maxPipe
 }
 
 // IsDead reports whether the connection has been closed.
@@ -244,7 +252,7 @@ func (cp *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFu
 			continue
 		}
 		liveConns = append(liveConns, pc)
-		inFlight := len(pc.capacity)
+		inFlight := int(pc.inFlight.Load())
 		if !pc.IsFull() {
 			cp.conns[key] = liveConns
 			cp.mu.Unlock()
@@ -286,6 +294,19 @@ func (cp *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFu
 		return leastLoaded, nil
 	}
 	return nil, fmt.Errorf("client: no available connection to %s", key)
+}
+
+// Shutdown closes all pooled connections and clears the pool. It is safe to
+// call multiple times.
+func (cp *Pool) Shutdown() {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	for key, conns := range cp.conns {
+		for _, pc := range conns {
+			pc.close()
+		}
+		delete(cp.conns, key)
+	}
 }
 
 // Remove closes and removes a pipelined connection from the pool.

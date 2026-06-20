@@ -33,24 +33,75 @@ func (d *Detector) CheckResponse(currentDomain, queryDomain string, response *dn
 	queryDomain = dnsutil.NormalizeDomain(queryDomain)
 
 	for _, rr := range response.Answer {
-		answerName := dnsutil.NormalizeDomain(rr.Header().Name)
-		rrType := rr.Header().Rrtype
-
-		if answerName != queryDomain {
-			continue
-		}
-
-		if rrType == dns.TypeNS || rrType == dns.TypeDS {
-			continue
-		}
-
-		if valid, reason := d.validateAnswer(currentDomain, queryDomain, rrType); !valid {
-			log.Debugf("SECURITY: detected for %s from authority=%s, record=%s %s, reason=%s",
-				queryDomain, currentDomain, dns.TypeToString[rrType], rr.Header().Name, reason)
+		if valid, reason := d.checkRecord(rr, currentDomain, queryDomain); !valid {
 			return false, reason
 		}
 	}
 
+	// Also validate Authority and Additional sections for injected NS/glue
+	// records that could redirect future queries to attacker-controlled servers.
+	for _, rr := range response.Ns {
+		if valid, reason := d.checkAuthorityRecord(rr, currentDomain); !valid {
+			log.Debugf("SECURITY: suspicious NS in authority section from %s: %s %s, reason=%s",
+				currentDomain, dns.TypeToString[rr.Header().Rrtype], rr.Header().Name, reason)
+			return false, reason
+		}
+	}
+	for _, rr := range response.Extra {
+		rrType := rr.Header().Rrtype
+		if rrType != dns.TypeA && rrType != dns.TypeAAAA {
+			continue
+		}
+		if valid, reason := d.checkGlueRecord(rr, currentDomain, queryDomain); !valid {
+			log.Debugf("SECURITY: suspicious glue in additional section from %s: %s %s, reason=%s",
+				currentDomain, dns.TypeToString[rrType], rr.Header().Name, reason)
+			return false, reason
+		}
+	}
+
+	return true, ""
+}
+
+// checkRecord validates a single record in the Answer section.
+func (d *Detector) checkRecord(rr dns.RR, currentDomain, queryDomain string) (bool, string) {
+	answerName := dnsutil.NormalizeDomain(rr.Header().Name)
+	rrType := rr.Header().Rrtype
+
+	if answerName != queryDomain {
+		return true, ""
+	}
+
+	if rrType == dns.TypeNS || rrType == dns.TypeDS {
+		return true, ""
+	}
+
+	return d.validateAnswer(currentDomain, queryDomain, rrType)
+}
+
+// checkAuthorityRecord validates NS records in the Authority section to
+// prevent injection of malicious delegation redirects.
+func (d *Detector) checkAuthorityRecord(rr dns.RR, currentDomain string) (bool, string) {
+	rrType := rr.Header().Rrtype
+	if rrType != dns.TypeNS {
+		return true, "" // only validate NS records in authority
+	}
+	nsName := dnsutil.NormalizeDomain(rr.Header().Name)
+	// NS records in authority should name the delegated zone
+	if !d.isInAuthority(nsName, currentDomain) && !d.isInAuthority(currentDomain, nsName) {
+		return false, fmt.Sprintf("NS record in authority names unrelated zone '%s'", nsName)
+	}
+	return true, ""
+}
+
+// checkGlueRecord validates A/AAAA glue records in the Additional section.
+func (d *Detector) checkGlueRecord(rr dns.RR, currentDomain, queryDomain string) (bool, string) {
+	glueName := dnsutil.NormalizeDomain(rr.Header().Name)
+	rrType := rr.Header().Rrtype
+	// Glue records must name a server within the authority's domain
+	if !d.isInAuthority(glueName, currentDomain) && glueName != currentDomain {
+		return false, fmt.Sprintf("Glue %s record names server outside authority zone: '%s'",
+			dns.TypeToString[rrType], glueName)
+	}
 	return true, ""
 }
 

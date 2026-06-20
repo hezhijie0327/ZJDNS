@@ -15,7 +15,7 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	"zjdns/server/client"
+	connpool "zjdns/server/client/pool"
 )
 
 func (s *Server) startDOTServer() error {
@@ -84,7 +84,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		defer dnsutil.HandlePanic("DoT writer")
 		defer close(writerDone)
 		for task := range writeCh {
-			_ = tlsConn.SetWriteDeadline(time.Now().Add(client.OperationTimeout))
+			_ = tlsConn.SetWriteDeadline(time.Now().Add(connpool.OperationTimeout))
 			if _, err := tlsConn.Write(task.data); err != nil {
 				log.Debugf("TLS: write error: %v", err)
 				connCancel()
@@ -101,14 +101,14 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	workerCap := make(chan struct{}, client.DefaultMaxPipe)
+	workerCap := make(chan struct{}, connpool.DefaultMaxPipe)
 
 	for {
 		if connCtx.Err() != nil {
 			return
 		}
 
-		_ = tlsConn.SetReadDeadline(time.Now().Add(client.OperationTimeout))
+		_ = tlsConn.SetReadDeadline(time.Now().Add(connpool.OperationTimeout))
 
 		lengthBuf := make([]byte, 2)
 		n, err := io.ReadFull(reader, lengthBuf)

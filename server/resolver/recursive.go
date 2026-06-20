@@ -85,7 +85,7 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
 		if err != nil {
-			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
+			if !forceTCP && errors.Is(err, ErrHijackDetected) {
 				return rr.resolve(ctx, question, ecs, depth, true)
 			}
 			return nil, nil, nil, false, nil, "", false, fmt.Errorf("query %s: %w", currentDomain, err)
@@ -98,7 +98,7 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 				if hijackDetectedNow {
 					hijackDetected = true
 				}
-				if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
+				if !forceTCP && errors.Is(err, ErrHijackDetected) {
 					return rr.resolve(ctx, question, ecs, depth, true)
 				}
 				return answer, authority, additional, validated, ecsResponse, server, hijackDetected, err
@@ -182,7 +182,7 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 
 func (rr *Recursive) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *edns.ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	if !currentlyTCP {
-		return nil, nil, nil, false, nil, "", true, fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
+		return nil, nil, nil, false, nil, "", true, fmt.Errorf("%w: %s", ErrHijackDetected, reason)
 	}
 	return nil, nil, nil, false, nil, "", true, fmt.Errorf("DNS hijacking detected (TCP): %s", reason)
 }

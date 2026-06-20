@@ -548,11 +548,14 @@ func (cm *Loader) addChaosRecord(cfg *ServerConfig) {
 		hostname = ProjectName
 	}
 
-	version := ProjectName + " " + Version
+	// Use only the project name for version — never expose build commit hash,
+	// Go runtime version, or system hostname via CHAOS queries to avoid
+	// fingerprinting and targeted attacks against specific versions.
+	version := ProjectName
 
 	chaosRecords := map[string]string{
-		"id.server":      hostname,
-		"hostname.bind":  hostname,
+		"id.server":      ProjectName,
+		"hostname.bind":  ProjectName,
 		"version.server": version,
 		"version.bind":   version,
 	}
