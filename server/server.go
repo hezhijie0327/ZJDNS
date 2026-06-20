@@ -74,11 +74,14 @@ type DNSServer struct {
 	tcpWriteMu        sync.Map      // key: RemoteAddr string → *tcpWriteEntry (TCP pipelining)
 }
 
-// tcpWriteEntry wraps a per-connection mutex with a last-access timestamp
-// for periodic cleanup of stale entries.
+// tcpWriteEntry wraps per-connection state: a write serialization mutex,
+// a last-access timestamp for periodic cleanup, and an in-flight capacity
+// semaphore to bound concurrent queries per TCP connection (RFC 7766).
 type tcpWriteEntry struct {
-	mu         sync.Mutex
-	lastAccess atomic.Int64 // UnixNano
+	mu           sync.Mutex
+	lastAccess   atomic.Int64 // UnixNano
+	capacity     chan struct{}
+	capacityOnce sync.Once
 }
 
 // queryResult encapsulates the result of a DNS query, including the answer, authority, additional sections, validation status, ECS information, fallback status, and any error that occurred during processing.
@@ -650,8 +653,20 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		addr := w.RemoteAddr().String()
 		entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
 		entry := entryI.(*tcpWriteEntry)
+		entry.capacityOnce.Do(func() {
+			entry.capacity = make(chan struct{}, defaultMaxPipe)
+		})
+
+		// Acquire per-connection in-flight slot; drop if at capacity so the
+		// client will retry rather than accumulating unbounded goroutines.
+		select {
+		case entry.capacity <- struct{}{}:
+		default:
+			return
+		}
 
 		go func() {
+			defer func() { <-entry.capacity }()
 			defer dnsutil.HandlePanic("TCP query handler")
 			response := s.processDNSQuery(req, dnsutil.ClientIP(w), false, "TCP")
 			if response != nil {

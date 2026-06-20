@@ -421,6 +421,10 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
+	// Per-connection worker capacity — bounds concurrent query processing
+	// per DoT connection (mirrors client-side defaultMaxPipe).
+	workerCap := make(chan struct{}, defaultMaxPipe)
+
 	// Reader loop — processes queries sequentially on this goroutine
 	// (bufio.Reader is not goroutine-safe) and dispatches processing
 	// to worker goroutines.
@@ -487,9 +491,19 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			clientIP = addr.(*net.TCPAddr).IP
 		}
 
+		// Acquire per-connection worker slot; block if at capacity to
+		// provide backpressure and bound memory under load.
+		select {
+		case workerCap <- struct{}{}:
+		case <-connCtx.Done():
+			pool.DefaultMessagePool.Put(req)
+			return
+		}
+
 		// Process query asynchronously — responses may complete out of order.
 		wg.Add(1)
 		go func(query *dns.Msg, ip net.IP) {
+			defer func() { <-workerCap }()
 			defer dnsutil.HandlePanic("DoT query worker")
 			defer wg.Done()
 			defer pool.DefaultMessagePool.Put(query)
