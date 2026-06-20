@@ -159,8 +159,7 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 			if ns, ok := rrec.(*dns.NS); ok {
 				nsName := dnsutil.NormalizeDomain(rrec.Header().Name)
 				isMatch := normalizedQname == nsName ||
-					(nsName != "" && strings.HasSuffix(normalizedQname, "."+nsName)) ||
-					(nsName == "" && normalizedQname != "")
+					(nsName != "" && strings.HasSuffix(normalizedQname, "."+nsName))
 				if isMatch && len(nsName) >= len(bestMatch) {
 					if len(nsName) > len(bestMatch) {
 						bestMatch = nsName

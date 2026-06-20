@@ -16,7 +16,9 @@ func (c *Client) executeTLS(ctx context.Context, msg *dns.Msg, server *config.Up
 
 	if c.dotPool != nil {
 		pc, err := c.dotPool.Acquire(ctx, key, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
-			dialer := tls.Dialer{Config: tlsConfig.Clone()}
+			dialTLS := tlsConfig.Clone()
+			dialTLS.NextProtos = []string{"dot"}
+			dialer := tls.Dialer{Config: dialTLS}
 			return dialer.DialContext(dialCtx, "tcp", addr)
 		})
 		if err == nil {
@@ -32,7 +34,9 @@ func (c *Client) executeTLS(ctx context.Context, msg *dns.Msg, server *config.Up
 	}
 
 	client := *c.tlsClient
-	client.TLSConfig = tlsConfig
+	dialTLS := tlsConfig.Clone()
+	dialTLS.NextProtos = []string{"dot"}
+	client.TLSConfig = dialTLS
 	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
 	return response, err
 }

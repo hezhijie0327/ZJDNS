@@ -111,14 +111,11 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		_ = tlsConn.SetReadDeadline(time.Now().Add(connpool.OperationTimeout))
 
 		lengthBuf := make([]byte, 2)
-		n, err := io.ReadFull(reader, lengthBuf)
+		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
 			if err != io.EOF && !IsTemporaryError(err) {
 				log.Debugf("TLS: read length error: %v", err)
 			}
-			return
-		}
-		if n != 2 {
 			return
 		}
 
@@ -134,12 +131,8 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		} else {
 			msgBuf = msgBuf[:msgLength]
 		}
-		n, err = io.ReadFull(reader, msgBuf)
+		_, err = io.ReadFull(reader, msgBuf)
 		if err != nil {
-			pool.DefaultBufferPool.Put(buf)
-			return
-		}
-		if n != int(msgLength) {
 			pool.DefaultBufferPool.Put(buf)
 			return
 		}
@@ -154,7 +147,9 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 		var clientIP net.IP
 		if addr := tlsConn.RemoteAddr(); addr != nil {
-			clientIP = addr.(*net.TCPAddr).IP
+			if tcpAddr, ok := addr.(*net.TCPAddr); ok {
+				clientIP = tcpAddr.IP
+			}
 		}
 
 		select {

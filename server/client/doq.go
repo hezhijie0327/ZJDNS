@@ -110,18 +110,25 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 		return nil, fmt.Errorf("read length prefix: %w", err)
 	}
 	msgLen := binary.BigEndian.Uint16(respBuf[:2])
-	if msgLen == 0 || int(msgLen) > len(respBuf)-2 {
+	if msgLen == 0 {
 		msg.Id = originalID
-		return nil, fmt.Errorf("invalid response length: %d", msgLen)
+		return nil, fmt.Errorf("invalid response length: 0")
 	}
 
-	if _, err := io.ReadFull(stream, respBuf[2:2+msgLen]); err != nil {
+	var body []byte
+	if int(msgLen) <= len(respBuf)-2 {
+		body = respBuf[2 : 2+msgLen]
+	} else {
+		body = make([]byte, msgLen)
+	}
+
+	if _, err := io.ReadFull(stream, body); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("read message body: %w", err)
 	}
 
 	response := pool.DefaultMessagePool.Get()
-	if err := response.Unpack(respBuf[2 : 2+msgLen]); err != nil {
+	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
 		pool.DefaultMessagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)

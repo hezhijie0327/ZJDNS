@@ -138,18 +138,25 @@ func (mc *MemoryCache) SetWithDNSSEC(key string, answer, authority, additional [
 		entry.ECSScopePrefix = ecs.ScopePrefix
 		entry.ECSAddress = ecs.Address.String()
 	}
-	mc.SetEntry(key, entry)
+	mc.setEntryInternal(key, entry)
 }
 
 // SetEntry stores a pre-built CacheEntry in the cache under the given key.
+// It deep-clones the entry to protect against callers that retain a reference.
 func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	if atomic.LoadInt32(&mc.closed) != 0 || entry == nil {
 		return
 	}
+	mc.setEntryInternal(key, cloneEntry(entry))
+}
 
-	fullCopy := cloneEntry(entry)
-	ptrRecords := extractPTRRecords(fullCopy)
-	estSize := estimateEntrySize(key, fullCopy, ptrRecords)
+// setEntryInternal stores an entry in the cache without cloning. The caller
+// must not retain any reference to the entry after this call — ownership is
+// transferred to the cache. This avoids a wasted clone-and-copy when the
+// entry is freshly allocated (e.g. from SetWithDNSSEC).
+func (mc *MemoryCache) setEntryInternal(key string, entry *CacheEntry) {
+	ptrRecords := extractPTRRecords(entry)
+	estSize := estimateEntrySize(key, entry, ptrRecords)
 
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
@@ -160,7 +167,7 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	if existing, ok := mc.entries[key]; ok {
 		oldSize := existing.size
 		mc.removePTRLocked(key)
-		existing.entry = fullCopy
+		existing.entry = entry
 		existing.lastAccess.Store(time.Now().UnixNano())
 		mc.storePTRLocked(key, ptrRecords)
 		existing.size = estSize
@@ -170,7 +177,7 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 		return
 	}
 
-	item := &cacheItem{entry: fullCopy}
+	item := &cacheItem{entry: entry}
 	item.lastAccess.Store(time.Now().UnixNano())
 	mc.entries[key] = item
 	mc.storePTRLocked(key, ptrRecords)
@@ -457,6 +464,9 @@ func minTTL(answer, authority, additional []dns.RR) int {
 	}
 	if minT <= 0 {
 		minT = config.DefaultTTL
+	}
+	if minT > config.DefaultMaxTTL {
+		minT = config.DefaultMaxTTL
 	}
 	return minT
 }

@@ -22,16 +22,17 @@ func addPadding(msg *dns.Msg, options []dns.EDNS0, isSecureConnection bool) ([]d
 	savedExtra := msg.Extra
 	msg.Extra = append(msg.Extra, tmpOpt)
 
-	if packed, err := msg.Pack(); err == nil {
-		currentSize := len(packed)
-		targetSize := ((currentSize + PaddingSize - 1) / PaddingSize) * PaddingSize
-		paddingDataSize := targetSize - currentSize - 4
-		if paddingDataSize > 0 {
-			msg.Extra = savedExtra
-			return append(options, &dns.EDNS0_PADDING{
-				Padding: make([]byte, paddingDataSize),
-			}), paddingDataSize
-		}
+	// Use Len() instead of Pack() to compute wire size without serializing.
+	// The DNS library's response writer calls msg.Pack() again during WriteMsg,
+	// so serializing here would double-pack every secure-transport response.
+	currentSize := msg.Len()
+	targetSize := ((currentSize + PaddingSize - 1) / PaddingSize) * PaddingSize
+	paddingDataSize := targetSize - currentSize - 4
+	if paddingDataSize > 0 {
+		msg.Extra = savedExtra
+		return append(options, &dns.EDNS0_PADDING{
+			Padding: make([]byte, paddingDataSize),
+		}), paddingDataSize
 	}
 
 	msg.Extra = savedExtra

@@ -309,15 +309,12 @@ func (cv *CryptoValidator) VerifyAuthenticatedDenial(response *dns.Msg, qname st
 }
 
 // dnsutilCompareDomainInRange checks whether a domain name falls within the
-// NSEC range (lower, upper] using DNS canonical ordering.
+// NSEC range (lower, upper] using DNS canonical ordering per RFC 4034 §6.1.
+// Names are compared label-by-label right-to-left; within a label, bytes are
+// compared lexicographically. A shorter name sorts before a longer suffix.
 func dnsutilCompareDomainInRange(name, lower, upper string) bool {
-	if lower == upper {
-		return false
-	}
-	// Check if name is after lower and before/equal to upper
-	afterLower := dns.CompareDomainName(lower, name) < len(lower)
-	beforeUpper := dns.CompareDomainName(name, upper) >= len(name)
-	return afterLower && beforeUpper
+	// Canonical ordering: lower < name ≤ upper
+	return dns.CompareDomainName(lower, name) >= 0 && dns.CompareDomainName(name, upper) <= 0
 }
 
 // ValidateResponse performs full cryptographic DNSSEC validation of a
@@ -410,8 +407,28 @@ func (cv *CryptoValidator) validateNXDOMAIN(response *dns.Msg, zonename string, 
 		}
 	}
 
+	// Verify NSEC3 RRSIGs — RFC 5155 §8 requires valid signatures for
+	// authenticated denial, not mere record presence.
+	for _, nsec3 := range nsec3s {
+		ownerName := nsec3.Header().Name
+		rrsigs := FindRRSIGs(authSigs, ownerName, dns.TypeNSEC3)
+		if len(rrsigs) == 0 {
+			continue
+		}
+		rrset := []dns.RR{nsec3}
+		for _, sig := range rrsigs {
+			for _, key := range verifiedDNSKEYs {
+				if key.KeyTag() != sig.KeyTag {
+					continue
+				}
+				if err := cv.VerifyRRset(rrset, sig, key); err == nil {
+					return true, nil
+				}
+			}
+		}
+	}
 	if len(nsec3s) > 0 {
-		return true, nil // NSEC3 presence is sufficient
+		return false, errors.New("NSEC3 records present but not cryptographically signed")
 	}
 
 	return false, errors.New("no signed NSEC/NSEC3 for NXDOMAIN")
@@ -442,11 +459,26 @@ func (cv *CryptoValidator) validateNODATA(response *dns.Msg, zonename string, ve
 		}
 	}
 
-	// NSEC3 presence with valid RRSIG is accepted; full NSEC3 covering logic
-	// requires hash computation which adds complexity with minimal benefit for
-	// the common case.
+	// Verify NSEC3 RRSIGs — RFC 5155 §8 requires valid signatures.
+	for _, nsec3 := range nsec3s {
+		rrsigs := FindRRSIGs(authSigs, nsec3.Header().Name, dns.TypeNSEC3)
+		if len(rrsigs) == 0 {
+			continue
+		}
+		rrset := []dns.RR{nsec3}
+		for _, sig := range rrsigs {
+			for _, key := range verifiedDNSKEYs {
+				if key.KeyTag() != sig.KeyTag {
+					continue
+				}
+				if err := cv.VerifyRRset(rrset, sig, key); err == nil {
+					return true, nil
+				}
+			}
+		}
+	}
 	if len(nsec3s) > 0 {
-		return true, nil
+		return false, errors.New("NSEC3 records present but not cryptographically signed")
 	}
 
 	return false, errors.New("no signed NSEC/NSEC3 for NODATA")

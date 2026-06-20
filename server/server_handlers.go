@@ -77,9 +77,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool, requestProtocol string) *dns.Msg {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		msg := s.buildResponse(req)
-		if msg != nil {
-			msg.Rcode = dns.RcodeServerFailure
-		}
+		msg.Rcode = dns.RcodeServerFailure
 		return msg
 	}
 
@@ -90,9 +88,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 		default:
 			log.Debugf("QUERY: max concurrent reached, returning SERVFAIL")
 			msg := s.buildResponse(req)
-			if msg != nil {
-				msg.Rcode = dns.RcodeServerFailure
-			}
+			msg.Rcode = dns.RcodeServerFailure
 			return msg
 		}
 	}
@@ -446,10 +442,6 @@ func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Q
 
 	log.Debugf("RESULT: %s %s | rcode=SERVFAIL, no stale cache available", question.Name, dns.TypeToString[question.Qtype])
 	msg := s.buildResponse(req)
-	if msg == nil {
-		msg = pool.DefaultMessagePool.Get()
-		msg.SetReply(req)
-	}
 	msg.Rcode = dns.RcodeServerFailure
 
 	// Map error to appropriate RFC 8914 Extended DNS Error code.
@@ -492,10 +484,6 @@ func detectRequestProtocol(w dns.ResponseWriter) string {
 
 func (s *Server) processCIDRRefused(req *dns.Msg, question dns.Question, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
-	if msg == nil {
-		msg = pool.DefaultMessagePool.Get()
-		msg.SetReply(req)
-	}
 	log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", question.Name, dns.TypeToString[question.Qtype])
 	msg.Rcode = dns.RcodeRefused
 	ede := edns.NewEDEOption(edns.EDECodeBlocked, "")
@@ -505,10 +493,6 @@ func (s *Server) processCIDRRefused(req *dns.Msg, question dns.Question, cookieO
 
 func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, skipCache bool, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
-	if msg == nil {
-		msg = pool.DefaultMessagePool.Get()
-		msg.SetReply(req)
-	}
 
 	// Set AuthenticatedData when DNSSEC cryptographic validation passed.
 	// DNSSEC is always enabled; CryptoValidator runs on every recursive query.

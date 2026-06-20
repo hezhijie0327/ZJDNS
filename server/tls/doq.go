@@ -138,10 +138,8 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 
 		streamGroup.Go(func() error {
 			defer dnsutil.HandlePanic("DoQ stream handler")
-			if stream != nil {
-				defer func() { _ = stream.Close() }()
-				s.handleDOQStream(stream, conn)
-			}
+			defer func() { _ = stream.Close() }()
+			s.handleDOQStream(stream, conn)
 			return nil
 		})
 	}
@@ -151,24 +149,31 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	buf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(buf)
 
-	n, err := io.ReadFull(stream, buf[:2])
-	if err != nil || n < 2 {
+	_, err := io.ReadFull(stream, buf[:2])
+	if err != nil {
 		return
 	}
 
 	msgLen := binary.BigEndian.Uint16(buf[:2])
-	if msgLen == 0 || msgLen > pool.SecureBufferSize-2 {
+	if msgLen == 0 {
 		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid length")
 		return
 	}
 
-	n, err = io.ReadFull(stream, buf[2:2+msgLen])
-	if err != nil || n != int(msgLen) {
+	var body []byte
+	if int(msgLen) <= len(buf)-2 {
+		body = buf[2 : 2+msgLen]
+	} else {
+		body = make([]byte, msgLen)
+	}
+
+	_, err = io.ReadFull(stream, body)
+	if err != nil {
 		return
 	}
 
 	req := pool.DefaultMessagePool.Get()
-	if err := req.Unpack(buf[2 : 2+msgLen]); err != nil {
+	if err := req.Unpack(body); err != nil {
 		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid DNS message")
 		pool.DefaultMessagePool.Put(req)
 		return

@@ -51,6 +51,16 @@ func (e *DNSSECError) Error() string {
 	return fmt.Sprintf("DNSSEC validation failed [EDE %d]: %s", e.EDECode, e.Message)
 }
 
+// dnssecEDEError builds a DNSSECError from an EDE code stored as uint64
+// (matching atomic.Uint64.Load()), shared between upstream query result
+// handlers to keep EDE construction in one place.
+func dnssecEDEError(edeCode uint64) *DNSSECError {
+	return &DNSSECError{
+		EDECode: uint16(edeCode),
+		Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), edns.EDECodeString(uint16(edeCode))),
+	}
+}
+
 // BuildQueryFunc is a function type that constructs a DNS query message from a
 // question, ECS option, and connection parameters.
 type BuildQueryFunc func(question dns.Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg

@@ -31,6 +31,7 @@ const (
 	DefaultCacheSize            = 4 * 1024 * 1024
 	DefaultCachePersistInterval = 30 * time.Second
 	DefaultTTL                  = 10
+	DefaultMaxTTL               = 86400
 
 	DefaultLatencyProbeTimeout = 100 * time.Millisecond
 	DefaultStatsPersistTTL     = 86400

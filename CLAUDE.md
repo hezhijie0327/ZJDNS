@@ -207,7 +207,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 - **TLS config isolation**: `server/client/client.go` clones TLS configs per-query to prevent
   concurrent requests with different `InsecureSkipVerify`/`ServerName` from
   cross-contaminating each other.
-- **Cache compression**: Full DNS records stored as zstd+gob compressed blobs;
+- **Cache persistence**: Full DNS records persisted as gob-encoded blobs;
   metadata (timestamps, ECS) kept in memory for fast expiry checks.
 - **Hijack detection during recursion**: Root/TLD servers returning unauthorized
   final answers trigger automatic UDP→TCP retry; if TCP also hijacked, returns

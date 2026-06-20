@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -72,6 +73,7 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 		maxPipe:  int32(maxPipe),
 		done:     make(chan struct{}),
 	}
+	pc.nextID.Store(rand.Uint32())
 	go pc.readLoop()
 	return pc
 }

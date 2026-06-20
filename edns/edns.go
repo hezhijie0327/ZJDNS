@@ -71,19 +71,6 @@ func (m *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDN
 		return
 	}
 
-	if msg.Question == nil {
-		msg.Question = []dns.Question{}
-	}
-	if msg.Answer == nil {
-		msg.Answer = []dns.RR{}
-	}
-	if msg.Ns == nil {
-		msg.Ns = []dns.RR{}
-	}
-	if msg.Extra == nil {
-		msg.Extra = []dns.RR{}
-	}
-
 	cleanExtra := make([]dns.RR, 0, len(msg.Extra))
 	for _, rr := range msg.Extra {
 		if rr != nil && rr.Header().Rrtype != dns.TypeOPT {

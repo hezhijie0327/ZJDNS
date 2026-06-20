@@ -177,10 +177,7 @@ func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, ser
 		// Check if any upstream returned a DNSSEC-related EDE code
 		// (e.g. EDE 9 "DNSKEY Missing" from a validating resolver).
 		if edeCode := lastUpstreamDNSSECEDE.Load(); edeCode != 0 {
-			return nil, nil, nil, false, nil, "", false, &DNSSECError{
-				EDECode: uint16(edeCode),
-				Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), edns.EDECodeString(uint16(edeCode))),
-			}
+			return nil, nil, nil, false, nil, "", false, dnssecEDEError(edeCode)
 		}
 		return nil, nil, nil, false, nil, "", false, errors.New("all upstream queries failed")
 	case <-queryCtx.Done():
@@ -189,10 +186,7 @@ func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, ser
 		// Check for captured DNSSEC EDE codes here too so they are
 		// not lost to a "context canceled" error.
 		if edeCode := lastUpstreamDNSSECEDE.Load(); edeCode != 0 {
-			return nil, nil, nil, false, nil, "", false, &DNSSECError{
-				EDECode: uint16(edeCode),
-				Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), edns.EDECodeString(uint16(edeCode))),
-			}
+			return nil, nil, nil, false, nil, "", false, dnssecEDEError(edeCode)
 		}
 		return nil, nil, nil, false, nil, "", false, queryCtx.Err()
 	}
