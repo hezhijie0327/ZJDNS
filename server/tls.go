@@ -363,6 +363,7 @@ func (tm *TLSManager) handleDOTConnections() {
 				return
 			}
 			log.Errorf("TLS: Accept error: %v", err)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 
@@ -445,7 +446,7 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
-		if msgLength == 0 || msgLength > pool.TCPBufferSize {
+		if msgLength == 0 || msgLength > pool.SecureBufferSize-2 {
 			log.Debugf("TLS: invalid message length: %d", msgLength)
 			return
 		}
@@ -578,6 +579,8 @@ func (tm *TLSManager) handleDOQConnections() {
 			if tm.ctx.Err() != nil {
 				return
 			}
+			log.Errorf("TLS: DoQ Accept error: %v", err)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 

@@ -223,15 +223,17 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *edns.ECSOption
 
 	servers = shuffleSlice(servers)
 
-	serverAddrs := make([]string, 0, len(servers))
-	for _, s := range servers {
-		proto := s.Protocol
-		if proto == "" {
-			proto = "udp"
+	if log.Default.Level() >= log.Debug {
+		serverAddrs := make([]string, 0, len(servers))
+		for _, s := range servers {
+			proto := s.Protocol
+			if proto == "" {
+				proto = "udp"
+			}
+			serverAddrs = append(serverAddrs, fmt.Sprintf("%s(%s)", s.Address, proto))
 		}
-		serverAddrs = append(serverAddrs, fmt.Sprintf("%s(%s)", s.Address, proto))
+		log.Debugf("UPSTREAM: querying %d servers for %s: %v", len(servers), question.Name, serverAddrs)
 	}
-	log.Debugf("UPSTREAM: querying %d servers for %s: %v", len(servers), question.Name, serverAddrs)
 
 	resultChan := make(chan UpstreamQueryResult, 1)
 	nxdomainChan := make(chan UpstreamQueryResult, 1) // Fallback for NXDOMAIN

@@ -131,8 +131,8 @@ func NewQueryClient() *QueryClient {
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),
 		quicConns:      make(map[string]*quic.Conn),
-		tcpPool: newConnPool(defaultMaxConns, defaultMaxPipe),
-		dotPool: newConnPool(defaultMaxConns, defaultMaxPipe),
+		tcpPool:        newConnPool(defaultMaxConns, defaultMaxPipe),
+		dotPool:        newConnPool(defaultMaxConns, defaultMaxPipe),
 	}
 	return qc
 }

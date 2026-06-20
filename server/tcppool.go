@@ -32,14 +32,14 @@ type pendingQuery struct {
 type pipelinedConn struct {
 	conn      net.Conn
 	addr      string
-	writeMu   sync.Mutex          // serializes writes to the connection
-	mu        sync.RWMutex        // guards inflight map
+	writeMu   sync.Mutex   // serializes writes to the connection
+	mu        sync.RWMutex // guards inflight map
 	inflight  map[uint16]*pendingQuery
-	nextID    atomic.Uint32       // monotonic tracking ID source
-	capacity  chan struct{}       // concurrency limiter
+	nextID    atomic.Uint32 // monotonic tracking ID source
+	capacity  chan struct{} // concurrency limiter
 	closed    atomic.Bool
 	closeOnce sync.Once
-	done      chan struct{}       // closed when reader goroutine exits
+	done      chan struct{} // closed when reader goroutine exits
 }
 
 // newPipelinedConn creates a pipelinedConn, starts its reader goroutine,
@@ -199,7 +199,10 @@ func (pc *pipelinedConn) close() {
 
 		pc.mu.Lock()
 		for _, pq := range pc.inflight {
-			select { case pq.resultCh <- nil: default: } // signal error without closing (readLoop may still send)
+			select {
+			case pq.resultCh <- nil:
+			default:
+			} // signal error without closing (readLoop may still send)
 		}
 		pc.inflight = nil
 		pc.mu.Unlock()
@@ -279,6 +282,16 @@ func (cp *connPool) acquire(ctx context.Context, key string, dialAddr string, di
 		}
 		pc := newPipelinedConn(key, conn, cp.maxPipe)
 		cp.mu.Lock()
+		// Double-check: concurrent acquires might have filled the pool while we dialed.
+		if len(cp.conns[key]) >= cp.maxConns {
+			cp.mu.Unlock()
+			pc.close()
+			log.Debugf("TCPPOOL: pool for %s already at limit (%d), discarding extra connection", key, cp.maxConns)
+			if leastLoaded != nil {
+				return leastLoaded, nil
+			}
+			return nil, fmt.Errorf("tcppool: max conns reached for %s", key)
+		}
 		cp.conns[key] = append(cp.conns[key], pc)
 		n := len(cp.conns[key])
 		cp.mu.Unlock()
@@ -310,4 +323,3 @@ func (cp *connPool) remove(pc *pipelinedConn) {
 		}
 	}
 }
-

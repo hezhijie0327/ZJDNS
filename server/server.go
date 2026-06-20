@@ -71,7 +71,14 @@ type DNSServer struct {
 	semaphore         chan struct{} // Admission control semaphore
 	udpServer         *dns.Server   // stored for graceful shutdown
 	tcpServer         *dns.Server   // stored for graceful shutdown
-	tcpWriteMu        sync.Map      // key: RemoteAddr string → *sync.Mutex (TCP pipelining)
+	tcpWriteMu        sync.Map      // key: RemoteAddr string → *tcpWriteEntry (TCP pipelining)
+}
+
+// tcpWriteEntry wraps a per-connection mutex with a last-access timestamp
+// for periodic cleanup of stale entries.
+type tcpWriteEntry struct {
+	mu         sync.Mutex
+	lastAccess atomic.Int64 // UnixNano
 }
 
 // queryResult encapsulates the result of a DNS query, including the answer, authority, additional sections, validation status, ECS information, fallback status, and any error that occurred during processing.
@@ -276,6 +283,27 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 			}
 		})
 	}
+
+	// Periodic cleanup of stale TCP write mutex entries (idle > 10 min).
+	server.backgroundGroup.Go(func() error {
+		defer dnsutil.HandlePanic("tcpWriteMu sweep")
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				cutoff := time.Now().Add(-10 * time.Minute).UnixNano()
+				server.tcpWriteMu.Range(func(key, value any) bool {
+					if value.(*tcpWriteEntry).lastAccess.Load() < cutoff {
+						server.tcpWriteMu.Delete(key)
+					}
+					return true
+				})
+			case <-server.backgroundCtx.Done():
+				return nil
+			}
+		}
+	})
 
 	server.setupSignalHandling()
 
@@ -620,17 +648,20 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	// TCP: spawn goroutine for concurrent pipelined processing.
 	if _, isTCP := w.RemoteAddr().(*net.TCPAddr); isTCP {
 		addr := w.RemoteAddr().String()
-		muI, _ := s.tcpWriteMu.LoadOrStore(addr, &sync.Mutex{})
-		mu := muI.(*sync.Mutex)
+		entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
+		entry := entryI.(*tcpWriteEntry)
 
 		go func() {
 			defer dnsutil.HandlePanic("TCP query handler")
 			response := s.processDNSQuery(req, dnsutil.ClientIP(w), false, "TCP")
 			if response != nil {
 				response.Compress = true
-				mu.Lock()
-				_ = w.WriteMsg(response)
-				mu.Unlock()
+				entry.lastAccess.Store(time.Now().UnixNano())
+				entry.mu.Lock()
+				if err := w.WriteMsg(response); err != nil {
+					log.Debugf("SERVER: TCP write error for %s: %v", addr, err)
+				}
+				entry.mu.Unlock()
 				pool.DefaultMessagePool.Put(response)
 			}
 		}()
@@ -981,13 +1012,16 @@ func (s *DNSServer) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry
 			*staleServed = true
 		}
 		go func() {
-			res := <-resultChan
-			if res.err != nil || res.fallback {
-				return
+			select {
+			case res := <-resultChan:
+				if res.err != nil || res.fallback {
+					return
+				}
+				log.Debugf("CACHE: background refresh completed for slow expired query %s", question.Name)
+				s.cacheMgr.Set(cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
+				s.startLatencyProbe(question, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
+			case <-s.ctx.Done():
 			}
-			log.Debugf("CACHE: background refresh completed for slow expired query %s", question.Name)
-			s.cacheMgr.Set(cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
-			s.startLatencyProbe(question, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
 		}()
 		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
 	}
