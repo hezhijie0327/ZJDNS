@@ -260,7 +260,7 @@ func (rm *Manager) buildRecord(domain string, record config.DNSRecordConfig) dns
 	if rr, err := dns.NewRR(sb.String()); err == nil {
 		return rr
 	}
-	rrType, _ := dns.StringToType[record.Type]
+	rrType := dns.StringToType[record.Type]
 	classValue := uint16(dns.ClassINET)
 	if parsedClass, ok := dns.StringToClass[class]; ok {
 		classValue = parsedClass

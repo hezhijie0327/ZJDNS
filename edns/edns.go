@@ -218,8 +218,8 @@ func validateECSConfigValue(value string) error {
 func NewManager(defaultECS DefaultECSConfig) (*Manager, error) {
 	mgr := &Manager{
 		defaultECSConfig: defaultECS,
-		detector: &ipdetect.Detector{},
-		CookieGenerator: NewCookieGenerator(),
+		detector:         &ipdetect.Detector{},
+		CookieGenerator:  NewCookieGenerator(),
 	}
 
 	if !defaultECS.IsEmpty() {

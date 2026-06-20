@@ -403,7 +403,7 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 		}
 		return 0, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	header := make([]byte, len(cacheSnapshotMagic))
 	if _, err := io.ReadFull(file, header); err != nil {
@@ -492,21 +492,21 @@ func (mc *MemoryCache) persistSnapshot() error {
 		return err
 	}
 	if _, err := file.WriteString(cacheSnapshotMagic); err != nil {
-		file.Close()
-		os.Remove(tmp)
+		_ = file.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := gob.NewEncoder(file).Encode(&snapshot); err != nil {
-		file.Close()
-		os.Remove(tmp)
+		_ = file.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := file.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, mc.persistPath); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil
@@ -545,30 +545,52 @@ func (mc *MemoryCache) Close() error {
 
 // ── CacheEntry methods ──
 
-func (c *CacheEntry) IsExpired() bool                    { return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL) }
-func (c *CacheEntry) ShouldRefresh() bool                 { return c != nil && c.IsExpired() && time.Now().Unix()-c.Timestamp > int64(max(c.OriginalTTL, c.TTL)) }
-func (c *CacheEntry) CanServeExpired(maxAge int) bool     { return c != nil && c.IsExpired() && time.Now().Unix()-c.Timestamp-int64(c.TTL) <= int64(maxAge) }
+func (c *CacheEntry) IsExpired() bool {
+	return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL)
+}
+func (c *CacheEntry) ShouldRefresh() bool {
+	return c != nil && c.IsExpired() && time.Now().Unix()-c.Timestamp > int64(max(c.OriginalTTL, c.TTL))
+}
+func (c *CacheEntry) CanServeExpired(maxAge int) bool {
+	return c != nil && c.IsExpired() && time.Now().Unix()-c.Timestamp-int64(c.TTL) <= int64(maxAge)
+}
 func (c *CacheEntry) GetRemainingTTL() uint32 {
-	if c == nil { return 0 }
+	if c == nil {
+		return 0
+	}
 	remaining := int64(c.TTL) - (time.Now().Unix() - c.Timestamp)
-	if remaining > 0 { return uint32(remaining) }
+	if remaining > 0 {
+		return uint32(remaining)
+	}
 	return uint32(StaleTTL)
 }
 func (c *CacheEntry) ECSOption() *edns.ECSOption {
-	if c == nil || c.ECSAddress == "" { return nil }
+	if c == nil || c.ECSAddress == "" {
+		return nil
+	}
 	if ip := net.ParseIP(c.ECSAddress); ip != nil {
 		return &edns.ECSOption{Family: c.ECSFamily, SourcePrefix: c.ECSSourcePrefix, ScopePrefix: c.ECSScopePrefix, Address: ip}
 	}
 	return nil
 }
 func (c *CacheEntry) ShouldPrefetch(thresholdPercent int) bool {
-	if c == nil || c.IsExpired() || thresholdPercent <= 0 { return false }
-	if thresholdPercent > 100 { thresholdPercent = 100 }
+	if c == nil || c.IsExpired() || thresholdPercent <= 0 {
+		return false
+	}
+	if thresholdPercent > 100 {
+		thresholdPercent = 100
+	}
 	remaining := int64(c.TTL) - (time.Now().Unix() - c.Timestamp)
-	if remaining <= 0 { return false }
+	if remaining <= 0 {
+		return false
+	}
 	original := int64(c.OriginalTTL)
-	if original <= 0 { original = int64(c.TTL) }
-	if original <= 0 { return false }
+	if original <= 0 {
+		original = int64(c.TTL)
+	}
+	if original <= 0 {
+		return false
+	}
 	return remaining <= (original*int64(thresholdPercent)+99)/100
 }
 
@@ -602,30 +624,42 @@ func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDN
 }
 
 func CreateCompactRecord(rr dns.RR) *CompactRecord {
-	if rr == nil { return nil }
+	if rr == nil {
+		return nil
+	}
 	return &CompactRecord{Text: rr.String(), OrigTTL: rr.Header().Ttl, Type: rr.Header().Rrtype}
 }
 
 func ExpandRecord(cr *CompactRecord) dns.RR {
-	if cr == nil || cr.Text == "" { return nil }
+	if cr == nil || cr.Text == "" {
+		return nil
+	}
 	rr, _ := dns.NewRR(cr.Text)
 	return rr
 }
 
 func ExpandRecords(crs []*CompactRecord) []dns.RR {
-	if len(crs) == 0 { return nil }
+	if len(crs) == 0 {
+		return nil
+	}
 	result := make([]dns.RR, 0, len(crs))
 	for _, cr := range crs {
-		if rr := expand(cr); rr != nil { result = append(result, rr) }
+		if rr := expand(cr); rr != nil {
+			result = append(result, rr)
+		}
 	}
 	return result
 }
 
 func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC bool) []dns.RR {
-	if len(rrs) == 0 { return nil }
+	if len(rrs) == 0 {
+		return nil
+	}
 	result := make([]dns.RR, 0, len(rrs))
 	for _, rr := range rrs {
-		if rr == nil { continue }
+		if rr == nil {
+			continue
+		}
 		if !includeDNSSEC {
 			switch rr.(type) {
 			case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
@@ -636,7 +670,9 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC boo
 		if newRR != nil {
 			if isElapsed {
 				remaining := int64(newRR.Header().Ttl) - value
-				if remaining < 0 { remaining = 0 }
+				if remaining < 0 {
+					remaining = 0
+				}
 				newRR.Header().Ttl = uint32(remaining)
 			} else if value > 0 {
 				newRR.Header().Ttl = uint32(value)
@@ -650,7 +686,9 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC boo
 // ── Internal helpers ──
 
 func cloneEntry(entry *CacheEntry) *CacheEntry {
-	if entry == nil { return nil }
+	if entry == nil {
+		return nil
+	}
 	cloned := *entry
 	cloned.Answer = cloneRecords(entry.Answer)
 	cloned.Authority = cloneRecords(entry.Authority)
@@ -659,10 +697,14 @@ func cloneEntry(entry *CacheEntry) *CacheEntry {
 }
 
 func cloneRecords(records []*CompactRecord) []*CompactRecord {
-	if len(records) == 0 { return nil }
+	if len(records) == 0 {
+		return nil
+	}
 	cloned := make([]*CompactRecord, len(records))
 	for i, r := range records {
-		if r == nil { continue }
+		if r == nil {
+			continue
+		}
 		rr := *r
 		cloned[i] = &rr
 	}
@@ -670,18 +712,24 @@ func cloneRecords(records []*CompactRecord) []*CompactRecord {
 }
 
 func clonePTRs(records []ptrRecord) []ptrRecord {
-	if len(records) == 0 { return nil }
+	if len(records) == 0 {
+		return nil
+	}
 	cloned := make([]ptrRecord, len(records))
 	copy(cloned, records)
 	return cloned
 }
 
 func compact(rrs []dns.RR) []*CompactRecord {
-	if len(rrs) == 0 { return nil }
+	if len(rrs) == 0 {
+		return nil
+	}
 	seen := make(map[string]bool, len(rrs))
 	result := make([]*CompactRecord, 0, len(rrs))
 	for _, rr := range rrs {
-		if rr == nil || rr.Header().Rrtype == dns.TypeOPT { continue }
+		if rr == nil || rr.Header().Rrtype == dns.TypeOPT {
+			continue
+		}
 		rrText := rr.String()
 		if !seen[rrText] {
 			seen[rrText] = true
@@ -694,19 +742,29 @@ func compact(rrs []dns.RR) []*CompactRecord {
 }
 
 func expand(cr *CompactRecord) dns.RR {
-	if cr == nil || cr.Text == "" { return nil }
+	if cr == nil || cr.Text == "" {
+		return nil
+	}
 	rr, _ := dns.NewRR(cr.Text)
 	return rr
 }
 
 func minTTL(answer, authority, additional []dns.RR) int {
 	all := slices.Concat(answer, authority, additional)
-	if len(all) == 0 { return config.DefaultTTL }
+	if len(all) == 0 {
+		return config.DefaultTTL
+	}
 	minT := int(all[0].Header().Ttl)
 	for _, rr := range all {
-		if rr == nil { continue }
-		if ttl := int(rr.Header().Ttl); ttl > 0 && ttl < minT { minT = ttl }
+		if rr == nil {
+			continue
+		}
+		if ttl := int(rr.Header().Ttl); ttl > 0 && ttl < minT {
+			minT = ttl
+		}
 	}
-	if minT <= 0 { minT = config.DefaultTTL }
+	if minT <= 0 {
+		minT = config.DefaultTTL
+	}
 	return minT
 }

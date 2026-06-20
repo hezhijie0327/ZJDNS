@@ -25,8 +25,8 @@ type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
 	Upstream []UpstreamServer `json:"upstream"`
 	Fallback []UpstreamServer `json:"fallback,omitempty"`
-	Rewrite  []RewriteRule   `json:"rewrite"`
-	CIDR     []CIDRConfig    `json:"cidr"`
+	Rewrite  []RewriteRule    `json:"rewrite"`
+	CIDR     []CIDRConfig     `json:"cidr"`
 }
 
 // ServerSettings contains runtime settings for the DNS server.
@@ -55,12 +55,12 @@ type HTTPSSettings struct {
 
 // FeatureFlags enables optional server features.
 type FeatureFlags struct {
-	HijackProtection bool              `json:"hijack_protection"`
-	DDR              DDRSettings       `json:"ddr,omitempty"`
+	HijackProtection bool                  `json:"hijack_protection"`
+	DDR              DDRSettings           `json:"ddr,omitempty"`
 	ECS              edns.DefaultECSConfig `json:"ecs_subnet,omitempty"`
-	Cache            CacheSettings     `json:"cache,omitempty"`
-	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitempty"`
-	Stats            *StatsSettings    `json:"stats,omitempty"`
+	Cache            CacheSettings         `json:"cache,omitempty"`
+	LatencyProbe     []LatencyProbeStep    `json:"latency_probe,omitempty"`
+	Stats            *StatsSettings        `json:"stats,omitempty"`
 }
 
 // DDRSettings configures DNS Discovery of Designated Resolvers.
@@ -72,9 +72,9 @@ type DDRSettings struct {
 
 // CacheSettings configures the DNS response cache.
 type CacheSettings struct {
-	Size        int                    `json:"size,omitempty"`
+	Size        int                      `json:"size,omitempty"`
 	Persist     CachePersistenceSettings `json:"persist,omitempty"`
-	PreferStale bool                   `json:"prefer_stale,omitempty"`
+	PreferStale bool                     `json:"prefer_stale,omitempty"`
 }
 
 // CachePersistenceSettings configures disk snapshot persistence for the cache.
@@ -132,15 +132,15 @@ func (s *UpstreamServer) IsRecursive() bool {
 
 // RewriteRule defines a domain rewrite rule with optional client filters.
 type RewriteRule struct {
-	Name               string          `json:"name"`
-	NormalizedName     string          `json:"normalized_name,omitempty"`
-	ResponseCode       *int            `json:"response_code,omitempty"`
+	Name               string            `json:"name"`
+	NormalizedName     string            `json:"normalized_name,omitempty"`
+	ResponseCode       *int              `json:"response_code,omitempty"`
 	Records            []DNSRecordConfig `json:"records,omitempty"`
 	Additional         []DNSRecordConfig `json:"additional,omitempty"`
-	ExcludeClients     []string        `json:"exclude_clients,omitempty"`
-	IncludeClients     []string        `json:"include_clients,omitempty"`
-	ExcludeClientCIDRs []*net.IPNet    `json:"-"`
-	IncludeClientCIDRs []*net.IPNet    `json:"-"`
+	ExcludeClients     []string          `json:"exclude_clients,omitempty"`
+	IncludeClients     []string          `json:"include_clients,omitempty"`
+	ExcludeClientCIDRs []*net.IPNet      `json:"-"`
+	IncludeClientCIDRs []*net.IPNet      `json:"-"`
 }
 
 // DNSRecordConfig defines a DNS record entry for rewrite responses.
@@ -556,6 +556,7 @@ func (cm *Manager) addChaosRecord(cfg *ServerConfig) {
 
 	log.Infof("CONFIG: CHAOS TXT rewrite records enabled")
 }
+
 // GenerateExampleConfig generates an example configuration.
 func GenerateExampleConfig() string {
 	cm := &Manager{}

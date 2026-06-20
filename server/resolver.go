@@ -22,7 +22,6 @@ import (
 	"zjdns/internal/pool"
 )
 
-
 // Sentinel errors for query results.
 var (
 	ErrCIDRFilterRefused = errors.New("cidr_filter_refused")
@@ -581,7 +580,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 				if hijackDetectedNow {
 					hijackDetected = true
 				}
-				if err != nil && !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
+				if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
 					return rr.recursiveQuery(ctx, question, ecs, depth, true)
 				}
 				return answer, authority, additional, validated, ecsResponse, server, hijackDetected, err
@@ -922,4 +921,3 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 
 	return nil
 }
-

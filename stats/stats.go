@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -86,7 +85,6 @@ type logEntry struct {
 // Manager manages lock-free metrics collection with periodic reset.
 type Manager struct {
 	enabled bool
-	mu      sync.Mutex
 
 	totalRequests       atomic.Uint64
 	cacheHits           atomic.Uint64
