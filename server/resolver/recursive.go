@@ -140,7 +140,7 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 			// parent, a crypto verification failure means the answer is bogus.
 			// Return SERVFAIL to match RFC 4035 behavior (e.g. dnssec-failed.org).
 			if rr.resolver.DNSSECEnforce && len(chain.childDS) > 0 && !validated {
-				log.Warnf("SECURITY: DNSSEC validation failed for %s — zone has DS but DNSKEY/RRSIG verification failed", question.Name)
+				log.Debugf("SECURITY: DNSSEC validation failed for %s — zone has DS but DNSKEY/RRSIG verification failed", question.Name)
 				rr.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
 				pool.DefaultMessagePool.Put(response)
 				return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
@@ -291,7 +291,7 @@ func (rr *Recursive) updateDNSSECChain(response *dns.Msg, childZone string, chai
 		if len(verifiedDS) > 0 {
 			log.Debugf("SECURITY: verified %d DS record(s) for delegation to %s", len(verifiedDS), childZone)
 		} else {
-			log.Warnf("SECURITY: DS records for %s could not be verified (RRSIG check failed)", childZone)
+			log.Debugf("SECURITY: DS records for %s could not be verified (RRSIG check failed)", childZone)
 		}
 	} else {
 		chain.childDS = nil // Insecure delegation (no DS in parent)
@@ -327,7 +327,7 @@ func (rr *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string
 	allSigs := security.CollectRRSIGs(response.Ns, response.Extra)
 	dsRRSIGs := security.FindRRSIGs(allSigs, dns.Fqdn(childZone), dns.TypeDS)
 	if len(dsRRSIGs) == 0 {
-		log.Warnf("SECURITY: no RRSIG found for DS records of %s", childZone)
+		log.Debugf("SECURITY: no RRSIG found for DS records of %s", childZone)
 		return nil
 	}
 
@@ -348,7 +348,7 @@ func (rr *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string
 		}
 	}
 
-	log.Warnf("SECURITY: DS RRSIG verification failed for %s", childZone)
+	log.Debugf("SECURITY: DS RRSIG verification failed for %s", childZone)
 	return nil
 }
 
@@ -408,7 +408,7 @@ func (rr *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, name
 			log.Debugf("SECURITY: verified %s DNSKEY via DS from parent", currentDomain)
 		} else {
 			// DS exists but doesn't match — this is a bogus delegation.
-			log.Warnf("SECURITY: DS→DNSKEY mismatch for %s: %v (bogus delegation)", currentDomain, err)
+			log.Debugf("SECURITY: DS→DNSKEY mismatch for %s: %v (bogus delegation)", currentDomain, err)
 			chain.lastEDECode = edns.EDECodeDNSSECBogus
 			return false
 		}

@@ -190,9 +190,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			ReadTimeout:       OperationTimeout,
 			IdleTimeout:       config.IdleTimeout,
 		}
-
-		// Never share the DNS TLS certificate with pprof — pprof exposes
-		// heap dumps, goroutine stacks, and other sensitive runtime data.
 	}
 
 	if server.ednsMgr != nil && server.ednsMgr.CookieGenerator != nil {
@@ -521,12 +518,7 @@ func (s *Server) Start() error {
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("pprof server")
 			log.Infof("PPROF: pprof server started on port %s", s.config.Server.Pprof)
-			var err error
-			if s.pprofServer.TLSConfig != nil {
-				err = s.pprofServer.ListenAndServeTLS("", "")
-			} else {
-				err = s.pprofServer.ListenAndServe()
-			}
+			err := s.pprofServer.ListenAndServe()
 
 			if err != nil && err != http.ErrServerClosed {
 				return fmt.Errorf("pprof startup: %w", err)
@@ -621,7 +613,7 @@ func (s *Server) displayInfo() {
 	}
 
 	if s.pprofServer != nil {
-		log.Infof("PPROF: pprof server enabled on: %s, via: %s, tls: %t", s.config.Server.Pprof, PprofPath, s.pprofServer.TLSConfig != nil)
+		log.Infof("PPROF: pprof server enabled on: %s, via: %s", s.config.Server.Pprof, PprofPath)
 	}
 
 	if s.tls != nil {
