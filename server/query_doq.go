@@ -27,7 +27,7 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *co
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		EnableDatagrams:       true,
-		Allow0RTT:             false,
+		Allow0RTT:             true,
 	}
 
 	dialQUIC := func(dialCtx context.Context, addr string) (*quic.Conn, error) {

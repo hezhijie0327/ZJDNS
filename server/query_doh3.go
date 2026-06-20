@@ -119,7 +119,7 @@ func (qc *QueryClient) createDoH3Client(host, serverName string, skipVerify bool
 			MaxIncomingStreams:    MaxIncomingStreams,
 			MaxIncomingUniStreams: MaxIncomingStreams,
 			EnableDatagrams:       true,
-			Allow0RTT:             false,
+			Allow0RTT:             true,
 		},
 	}
 

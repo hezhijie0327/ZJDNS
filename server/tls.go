@@ -558,7 +558,7 @@ func (tm *TLSManager) startDOQServer() error {
 		MaxIdleTimeout:        config.IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
-		Allow0RTT:             false,
+		Allow0RTT:             true,
 		EnableDatagrams:       true,
 	}
 
@@ -796,7 +796,7 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 		MaxIdleTimeout:        config.IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
-		Allow0RTT:             false,
+		Allow0RTT:             true,
 		EnableDatagrams:       true,
 	}
 

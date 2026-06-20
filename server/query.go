@@ -61,6 +61,9 @@ type QueryClient struct {
 	// QUIC connection pool for DoQ query multiplexing.
 	quicPool *quicPool
 
+	// Shared TLS session cache for QUIC 0-RTT resumption across secure connections.
+	sessionCache tls.ClientSessionCache
+
 	// Pipelined TCP/DoT connection pools (RFC 7766).
 	tcpPool *connPool // plain TCP, keyed by address
 	dotPool *connPool // DoT, keyed by "address|servername|skipVerify"
@@ -122,6 +125,7 @@ func NewQueryClient() *QueryClient {
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),
 		quicPool:       newQuicPool(defaultMaxConns),
+		sessionCache:   tls.NewLRUClientSessionCache(32),
 		tcpPool:        newConnPool(defaultMaxConns, defaultMaxPipe),
 		dotPool:        newConnPool(defaultMaxConns, defaultMaxPipe),
 	}
@@ -189,6 +193,7 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 		InsecureSkipVerify: server.SkipTLSVerify,
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         server.ServerName,
+		ClientSessionCache: qc.sessionCache,
 	}
 
 	if server.SkipTLSVerify {
