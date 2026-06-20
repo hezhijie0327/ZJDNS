@@ -21,12 +21,14 @@ import (
 type Validator struct{}
 
 // ValidateResponse checks whether a DNS response appears DNSSEC-validated.
-// It trusts the AuthenticatedData (AD) flag when accompanied by DNSSEC records,
-// which covers both upstream-forwarded responses (where the upstream performed
-// validation) and recursive responses with our own crypto chain-of-trust.
+// It trusts the AuthenticatedData (AD) flag ONLY when accompanied by DNSSEC
+// records — the upstream resolver set AD, meaning it cryptographically validated
+// the response. Without the AD flag, the upstream either did not validate or
+// validation failed (e.g. bogus delegation like dnssec-failed.org); we must NOT
+// treat those as validated.
 //
 // The full CryptoValidator provides stronger guarantees for recursive queries;
-// this method serves as the lightweight fallback for upstream mode where we
+// this method serves as the lightweight check for upstream mode where we
 // rely on the upstream resolver's validation.
 func (v *Validator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
 	if !dnssecOK || response == nil {
@@ -41,11 +43,7 @@ func (v *Validator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
 		return true
 	}
 
-	if v.hasDNSSECRecords(response) {
-		log.Debugf("SECURITY: DNSSEC record-presence check passed (no AD flag)")
-		return true
-	}
-	log.Debugf("SECURITY: no DNSSEC records found in response")
+	log.Debugf("SECURITY: not DNSSEC-validated (AD=%t, records=%t)", response.AuthenticatedData, v.hasDNSSECRecords(response))
 	return false
 }
 

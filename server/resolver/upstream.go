@@ -54,6 +54,7 @@ func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, ser
 	g.SetLimit(ConcurrencyLimit(len(servers)))
 
 	var activeConnections atomic.Int32
+	var lastUpstreamDNSSECEDE atomic.Uint64 // EDE code from upstream SERVFAIL (DNSSEC-related)
 
 	for _, srv := range servers {
 		server := srv
@@ -136,6 +137,17 @@ func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, ser
 						}
 						pool.DefaultMessagePool.Put(queryResult.Response)
 					default:
+						// Capture DNSSEC-related EDE codes from upstream
+						// SERVFAIL so the client gets a meaningful error
+						// instead of a generic "Network Error".
+						if rcode == dns.RcodeServerFailure {
+							if ede := r.edns.ParseEDE(queryResult.Response); ede != nil {
+								if ede.InfoCode >= 1 && ede.InfoCode <= 12 {
+									lastUpstreamDNSSECEDE.Store(uint64(ede.InfoCode))
+									log.Debugf("UPSTREAM: captured DNSSEC EDE %d (%s) from %s", ede.InfoCode, edns.EDECodeString(ede.InfoCode), server.Address)
+								}
+							}
+						}
 						pool.DefaultMessagePool.Put(queryResult.Response)
 					}
 				}
@@ -162,8 +174,26 @@ func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, ser
 			}
 		default:
 		}
+		// Check if any upstream returned a DNSSEC-related EDE code
+		// (e.g. EDE 9 "DNSKEY Missing" from a validating resolver).
+		if edeCode := lastUpstreamDNSSECEDE.Load(); edeCode != 0 {
+			return nil, nil, nil, false, nil, "", false, &DNSSECError{
+				EDECode: uint16(edeCode),
+				Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), edns.EDECodeString(uint16(edeCode))),
+			}
+		}
 		return nil, nil, nil, false, nil, "", false, errors.New("all upstream queries failed")
 	case <-queryCtx.Done():
+		// When all goroutines finish, errgroup cancels the derived
+		// context, which can race with the channel-close goroutine.
+		// Check for captured DNSSEC EDE codes here too so they are
+		// not lost to a "context canceled" error.
+		if edeCode := lastUpstreamDNSSECEDE.Load(); edeCode != 0 {
+			return nil, nil, nil, false, nil, "", false, &DNSSECError{
+				EDECode: uint16(edeCode),
+				Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), edns.EDECodeString(uint16(edeCode))),
+			}
+		}
 		return nil, nil, nil, false, nil, "", false, queryCtx.Err()
 	}
 }

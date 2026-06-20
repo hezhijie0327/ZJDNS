@@ -1,0 +1,11 @@
+{
+  "server": {
+    "port": "53",
+    "pprof": "",
+    "log_level": "debug",
+    "features": {
+      "dnssec_enforce": true,
+      "hijack_protection": true
+    }
+  }
+}
