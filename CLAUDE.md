@@ -33,14 +33,17 @@ zjdns/
 ├── rewrite/rewrite.go             # RewriteManager — domain rewrite rules
 ├── cache/cache.go                 # Manager interface + MemoryCache + persistence
 ├── stats/stats.go                 # Lock-free atomic metrics Manager
-└── server/                        # Core server (tightly coupled sub-components)
-    ├── server.go                  # DNSServer, query pipeline, lifecycle, signal handling
-    ├── resolver.go                # QueryManager, RecursiveResolver, CNAMEHandler
-    ├── query.go                   # QueryClient (UDP/TCP/DoT/DoQ/DoH/DoH3)
-    ├── security.go                # SecurityManager, DNSSECValidator, HijackPrevention
-    ├── tls.go                     # TLSManager, self-signed CA, secure protocol handlers
-    ├── latency_probe.go           # A/AAAA latency probing and reordering
-    └── ratelimit.go               # Per-IP token bucket rate limiter
+├── server/                        # Core server (tightly coupled sub-components)
+│   ├── server.go                  # DNSServer, query pipeline, lifecycle, signal handling
+│   ├── resolver.go                # QueryManager, RecursiveResolver, CNAMEHandler
+│   ├── query.go                   # QueryClient (UDP/TCP/DoT/DoQ/DoH/DoH3)
+│   ├── security.go                # SecurityManager, DNSSECValidator, HijackPrevention
+│   ├── tls.go                     # TLSManager, self-signed CA, secure protocol handlers
+│   ├── tcppool.go                 # pipelinedConn + connPool (RFC 7766 TCP/DoT pipelining)
+│   ├── latency_probe.go           # A/AAAA latency probing and reordering
+│   └── ratelimit.go               # Per-IP token bucket rate limiter
+└── cmd/
+    └── pipeline_test/             # RFC 7766 pipelining test tool
 ```
 
 ### Dependency Graph
@@ -78,6 +81,15 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 - No upstream → built-in recursive resolver (root→TLD→authoritative walk)
 - NXDOMAIN stored as secondary fallback; first NOERROR wins
 
+**TCP/DoT pipelining** (`server/tcppool.go`, RFC 7766):
+- Client: `connPool` manages per-upstream `pipelinedConn` instances; each multiplexes
+  multiple in-flight queries over a single TCP/DoT connection with out-of-order
+  response matching by DNS message ID. Falls back to single-shot `ExchangeContext`
+  on connection failure.
+- Server: `handleDOTConnection` uses reader→worker→writer three-stage pipeline;
+  `handleDNSRequest` dispatches TCP queries to goroutines with per-connection write
+  mutex for concurrent out-of-order processing.
+
 **Concurrency**: All queries use "first win" — fan out to all servers via `errgroup`, cancel remaining on first success. Adaptive concurrency limits based on server count.
 
 ## Key Types (canonical names)
@@ -92,6 +104,8 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `cache.Manager` | `cache` | Cache interface (Get, Set, SetEntry, Close) |
 | `stats.Manager` | `stats` | Lock-free metrics (RecordRequest, Snapshot) |
 | `DNSServer` | `server` | Core server (New, Start) |
+| `pipelinedConn` | `server` | Multiplexed TCP/DoT connection (reader goroutine, inflight tracking) |
+| `connPool` | `server` | Per-upstream pipelined connection pool (acquire, remove) |
 
 ## Key Constants
 
@@ -107,6 +121,8 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `server.OperationTimeout` | server | 3s |
 | `server.MaxCNAMEChain` | server | 16 |
 | `server.MaxRecursionDep` | server | 16 |
+| `server.defaultMaxPipe` | server | 16 (max in-flight queries per connection) |
+| `server.defaultMaxConns` | server | 4 (max connections per upstream) |
 
 ## Logging Conventions
 
@@ -131,6 +147,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `EDNS` | EDNS options | edns.go, server.go |
 | `RECURSION` | Recursive resolution | resolver.go |
 | `SECURITY` | DNSSEC, hijack detection | security.go, resolver.go |
+| `TCPPOOL` | TCP/DoT connection pool | tcppool.go |
 | `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `RATELIMIT`, `PTR`, `PANIC` | One component each | respective files |
 
 **Rules**: Prefix matches logical component, not Go package. No `HIJACK:`/`DNSSEC:` (merged→`SECURITY:`), no `DOT:`/`DOQ:`/`DOH:` (merged→`TLS:`). Hot-path logs are `Debug` only — `Warn`/`Info` on the query path would spam at scale.
@@ -151,5 +168,11 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   custom mutex-protected RNG.
 - **Lock-free stats**: All 16 counters use `atomic.Uint64` on the hot path;
   `sync.Mutex` only guards snapshot assembly.
+- **RFC 7766 TCP/DoT pipelining**: Client pools `pipelinedConn` per upstream,
+  multiplexing queries over shared TCP/DoT connections. Each connection runs a
+  reader goroutine that dispatches responses by DNS message ID to waiting callers.
+  Server processes TCP queries concurrently via async handler dispatch (plain TCP)
+  or three-stage reader→worker→writer pipeline (DoT). Falls back to single-shot
+  `ExchangeContext` when pipelining is not supported by the peer.
 - **Config self-sufficiency**: `config.ProjectName` and `config.Version` are
   package-level vars set by `main.go` before calling `config.Manager.LoadConfig()`.

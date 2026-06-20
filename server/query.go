@@ -131,8 +131,8 @@ func NewQueryClient() *QueryClient {
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),
 		quicConns:      make(map[string]*quic.Conn),
-		tcpPool:        newConnPool(defaultMaxConns, defaultMaxPipe),
-		dotPool:        newConnPool(defaultMaxConns, defaultMaxPipe),
+		tcpPool: newConnPool(defaultMaxConns, defaultMaxPipe),
+		dotPool: newConnPool(defaultMaxConns, defaultMaxPipe),
 	}
 	return qc
 }
@@ -225,24 +225,26 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	key := dohTransportKey(server.Address, server.ServerName, server.SkipTLSVerify)
 
-	// Try pipelined pool first.
-	pc, err := qc.dotPool.acquire(ctx, key, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
-		dialer := tls.Dialer{Config: tlsConfig.Clone()}
-		return dialer.DialContext(dialCtx, "tcp", addr)
-	})
-	if err == nil {
-		response, err := pc.Exchange(ctx, msg)
+	// Try pipelined pool first (if enabled).
+	if qc.dotPool != nil {
+		pc, err := qc.dotPool.acquire(ctx, key, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+			dialer := tls.Dialer{Config: tlsConfig.Clone()}
+			return dialer.DialContext(dialCtx, "tcp", addr)
+		})
 		if err == nil {
-			return response, nil
+			response, err := pc.Exchange(ctx, msg)
+			if err == nil {
+				return response, nil
+			}
+			// Query failed — if the connection died, remove it from the pool.
+			if pc.isDead() {
+				qc.dotPool.remove(pc)
+			}
+			log.Debugf("UPSTREAM: pipelined DoT query to %s failed: %v, falling back", server.Address, err)
 		}
-		// Query failed — if the connection died, remove it from the pool.
-		if pc.isDead() {
-			qc.dotPool.remove(pc)
-		}
-		log.Debugf("UPSTREAM: pipelined DoT query to %s failed: %v, falling back", server.Address, err)
 	}
 
-	// Fallback: single-shot ExchangeContext (current behavior).
+	// Fallback: single-shot ExchangeContext.
 	client := *qc.tlsClient
 	client.TLSConfig = tlsConfig
 	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
@@ -317,14 +319,15 @@ func (qc *QueryClient) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dn
 	buf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(buf)
 
+	writeBuf := buf
 	if len(buf) < 2+len(msgData) {
-		buf = make([]byte, 2+len(msgData))
+		writeBuf = make([]byte, 2+len(msgData))
 	}
 
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
-	copy(buf[2:], msgData)
+	binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(msgData)))
+	copy(writeBuf[2:], msgData)
 
-	if _, err := stream.Write(buf[:2+len(msgData)]); err != nil {
+	if _, err := stream.Write(writeBuf[:2+len(msgData)]); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("write: %w", err)
 	}
@@ -448,7 +451,7 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *con
 		return nil, fmt.Errorf("HTTP status: %d", httpResp.StatusCode)
 	}
 
-	body, err := io.ReadAll(httpResp.Body)
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, dns.MaxMsgSize))
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("read body: %w", err)
@@ -556,7 +559,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *co
 		return nil, fmt.Errorf("HTTP status: %d", httpResp.StatusCode)
 	}
 
-	body, err := io.ReadAll(httpResp.Body)
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, dns.MaxMsgSize))
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("read body: %w", err)
@@ -616,7 +619,7 @@ func (qc *QueryClient) createDoH3Client(host, serverName string, skipVerify bool
 // executeTraditionalQuery executes a DNS query over traditional UDP or TCP.
 // TCP queries use a pipelined connection pool with fallback to single-shot.
 func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
-	if server.Protocol == "tcp" {
+	if server.Protocol == "tcp" && qc.tcpPool != nil {
 		// Try pipelined pool first.
 		pc, err := qc.tcpPool.acquire(ctx, server.Address, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			var d net.Dialer

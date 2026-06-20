@@ -14,6 +14,7 @@
 - **递归 DNS 解析**：完整递归查询算法，从 13 组根服务器逐步解析至 TLD 和权威服务器
 - **上游 DNS 转发**：多上游并发查询 + 首胜策略（First-Win），降低延迟
 - **混合模式**：可同时配置上游 DNS 和内置递归解析器（`builtin_recursive`）
+- **TCP/DoT 连接池 (RFC 7766)**：持久连接复用 + 查询流水线 + 乱序响应匹配，fallback 单次连接
 - **智能协议协商**：UDP 截断自动回退 TCP
 - **CNAME 链解析**：多级 CNAME 追踪，防循环（最大 16 级）
 - **A/AAAA 延迟探测**：后台多协议（ping/tcp/udp/http/https/http3）速度检测，按最快顺序重排
@@ -59,6 +60,8 @@
 - **无锁 RNG**：`math/rand/v2.IntN()` 替代自定义 mutex RNG
 - **对象池**：`sync.Pool` 复用 `dns.Msg` 和 `[]byte`
 - **CIDR IPv4 位运算**：uint32 掩码匹配，避免 `net.IPNet.Contains`
+- **TCP/DoT 流水线**：单连接 16 路并发查询，reader goroutine 按 DNS ID 分发响应
+- **连接池**：每上游 4 连接上限，容量背压，死连接自动驱逐重建
 - **并发查询**：errgroup + 自适应并发限制 + 首胜即取消
 - **正则编译一次**：IP 检测 regex 包级编译
 
@@ -78,6 +81,7 @@
 | [RFC 3597](https://www.rfc-editor.org/rfc/rfc3597.html) | Handling Unknown DNS RR Types | 未知记录类型回退 |
 | [RFC 7830](https://www.rfc-editor.org/rfc/rfc7830.html) | EDNS(0) Padding | DNS 响应填充 |
 | [RFC 7858](https://www.rfc-editor.org/rfc/rfc7858.html) | DNS over TLS (DoT) | TLS 加密传输 |
+| [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html) | DNS Transport over TCP | TCP/DoT 连接复用 + 查询流水线 + 乱序响应 |
 | [RFC 7871](https://www.rfc-editor.org/rfc/rfc7871.html) | EDNS Client Subnet (ECS) | 客户端子网 |
 | [RFC 7873](https://www.rfc-editor.org/rfc/rfc7873.html) | DNS Cookies | Cookie 机制 |
 | [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.html) | DNS over HTTPS (DoH) | HTTPS 加密传输 |
@@ -107,14 +111,17 @@ zjdns/
 ├── rewrite/rewrite.go               # 域名重写引擎
 ├── cache/cache.go                   # CacheManager 接口 + MemoryCache
 ├── stats/stats.go                   # 无锁统计管理器
-└── server/                          # 核心服务
-    ├── server.go                    # DNSServer, 查询管道, 信号处理
-    ├── resolver.go                  # QueryManager, RecursiveResolver
-    ├── query.go                     # QueryClient (6 协议)
-    ├── security.go                  # SecurityManager, DNSSEC, 劫持防护
-    ├── tls.go                       # TLSManager, DoT/DoQ/DoH/DoH3
-    ├── latency_probe.go             # 延迟探测
-    └── ratelimit.go                 # 速率限制器
+├── server/                          # 核心服务
+│   ├── server.go                    # DNSServer, 查询管道, 信号处理
+│   ├── resolver.go                  # QueryManager, RecursiveResolver
+│   ├── query.go                     # QueryClient (6 协议)
+│   ├── security.go                  # SecurityManager, DNSSEC, 劫持防护
+│   ├── tls.go                       # TLSManager, DoT/DoQ/DoH/DoH3
+│   ├── tcppool.go                   # pipelinedConn + connPool (RFC 7766)
+│   ├── latency_probe.go             # 延迟探测
+│   └── ratelimit.go                 # 速率限制器
+└── cmd/
+    └── pipeline_test/               # 流水线测试工具
 ```
 
 ### 依赖关系（无循环）
@@ -169,6 +176,16 @@ dig @127.0.0.1 -p 53 example.com +tcp          # TCP
 kdig @127.0.0.1 -p 853 example.com +tls        # DoT
 kdig @127.0.0.1 -p 853 example.com +quic       # DoQ
 kdig @127.0.0.1 -p 443 example.com +https      # DoH
+```
+
+### 流水线测试
+
+```bash
+# TCP 流水线
+go run ./cmd/pipeline_test/ 127.0.0.1:53
+
+# DoT 流水线（自签证书）
+go run ./cmd/pipeline_test/ -tls -skip-verify 127.0.0.1:853
 ```
 
 ### 性能监控

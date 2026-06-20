@@ -199,7 +199,7 @@ func (pc *pipelinedConn) close() {
 
 		pc.mu.Lock()
 		for _, pq := range pc.inflight {
-			close(pq.resultCh) // signals error to waiting callers
+			select { case pq.resultCh <- nil: default: } // signal error without closing (readLoop may still send)
 		}
 		pc.inflight = nil
 		pc.mu.Unlock()

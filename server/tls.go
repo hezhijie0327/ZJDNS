@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -39,7 +38,7 @@ const (
 
 	DoHMaxRequestSize = 8192 // Maximum request size for DoH (8 KB)
 
-	MaxIncomingStreams = math.MaxUint16 // Maximum number of incoming streams for QUIC servers
+	MaxIncomingStreams = 256 // Per-connection QUIC stream limit (RFC 7766 DoS mitigation)
 
 	QUICCodeNoError       quic.ApplicationErrorCode = 0
 	QUICCodeInternalError quic.ApplicationErrorCode = 1
@@ -209,6 +208,7 @@ func NewTLSManager(server *DNSServer, config *config.ServerConfig) (*TLSManager,
 	// Create context and error group for server management
 	ctx, cancel := context.WithCancelCause(context.Background())
 	serverGroup, serverCtx := errgroup.WithContext(ctx)
+	serverGroup.SetLimit(1024) // Cap concurrent DoT/DoQ connection handlers
 
 	tm := &TLSManager{
 		server:      server,
@@ -450,15 +450,23 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		// Read message body.
-		msgBuf := make([]byte, msgLength)
+		// Read message body using buffer pool (msgLength ≤ TCPBufferSize ≤ SecureBufferSize).
+		buf := pool.DefaultBufferPool.Get()
+		msgBuf := buf
+		if cap(msgBuf) < int(msgLength) {
+			msgBuf = make([]byte, msgLength)
+		} else {
+			msgBuf = msgBuf[:msgLength]
+		}
 		n, err = io.ReadFull(reader, msgBuf)
 		if err != nil {
 			log.Debugf("TLS: read message error: %v", err)
+			pool.DefaultBufferPool.Put(buf)
 			return
 		}
 		if n != int(msgLength) {
 			log.Debugf("TLS: incomplete message read: %d/%d bytes", n, msgLength)
+			pool.DefaultBufferPool.Put(buf)
 			return
 		}
 
@@ -467,8 +475,10 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		if err := req.Unpack(msgBuf); err != nil {
 			log.Debugf("TLS: DNS message unpack error: %v", err)
 			pool.DefaultMessagePool.Put(req)
+			pool.DefaultBufferPool.Put(buf)
 			continue
 		}
+		pool.DefaultBufferPool.Put(buf)
 
 		// Get client IP.
 		var clientIP net.IP
@@ -683,6 +693,7 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	// Get client IP and process query
 	clientIP := SecureClientIP(conn)
 	response := tm.server.processDNSQuery(req, clientIP, true, "DoQ")
+	pool.DefaultMessagePool.Put(req)
 	// Send response
 	if err := tm.respondQUIC(stream, response); err != nil {
 		log.Debugf("TLS: DoQ response failed: %v", err)
@@ -706,19 +717,20 @@ func (tm *TLSManager) respondQUIC(stream *quic.Stream, response *dns.Msg) error 
 	buf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(buf)
 
+	writeBuf := buf
 	if len(buf) < 2+len(respBuf) {
-		buf = make([]byte, 2+len(respBuf))
+		writeBuf = make([]byte, 2+len(respBuf))
 	}
 
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(respBuf)))
-	copy(buf[2:], respBuf)
+	binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(respBuf)))
+	copy(writeBuf[2:], respBuf)
 
-	n, err := stream.Write(buf[:2+len(respBuf)])
+	n, err := stream.Write(writeBuf[:2+len(respBuf)])
 	if err != nil {
 		return fmt.Errorf("stream write: %w", err)
 	}
-	if n != len(buf[:2+len(respBuf)]) {
-		return fmt.Errorf("write length mismatch: %d != %d", n, len(buf))
+	if n != len(writeBuf[:2+len(respBuf)]) {
+		return fmt.Errorf("write length mismatch: %d != %d", n, len(writeBuf[:2+len(respBuf)]))
 	}
 
 	return nil
@@ -832,6 +844,7 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		protocol = "DoH3"
 	}
 	response := tm.server.processDNSQuery(req, clientIP, true, protocol)
+	pool.DefaultMessagePool.Put(req)
 
 	if err := tm.respondDoH(w, response); err != nil {
 		log.Errorf("TLS: DoH response failed: %v", err)
@@ -917,12 +930,9 @@ func (tm *TLSManager) shutdown() error {
 		dnsutil.CloseWithLog(tm.dotListener, "DoT listener")
 	}
 
-	// Close DoQ listener and connection
+	// Close DoQ listener (also closes the underlying UDP conn).
 	if tm.doqListener != nil {
 		dnsutil.CloseWithLog(tm.doqListener, "DoQ listener")
-	}
-	if tm.doqConn != nil {
-		dnsutil.CloseWithLog(tm.doqConn, "DoQ connection")
 	}
 
 	// Shutdown HTTPS server

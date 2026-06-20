@@ -697,7 +697,7 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	}
 
 	if len(question.Name) > config.MaxDomainLength || question.Qtype == dns.TypeANY {
-		msg := &dns.Msg{}
+		msg := pool.DefaultMessagePool.Get()
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeRefused
 		// Add EDE for invalid queries
