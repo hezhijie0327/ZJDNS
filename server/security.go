@@ -1,5 +1,5 @@
 // Package main implements ZJDNS - High Performance DNS Server
-package main
+package server
 
 import (
 	"fmt"
@@ -8,6 +8,10 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+
+	"zjdns/config"
+	"zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 )
 
 // DNSSECValidator validates DNSSEC-signed DNS responses.
@@ -34,13 +38,13 @@ func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) boo
 
 	// If the response has the Authenticated Data flag set, it's validated
 	if response.AuthenticatedData {
-		LogDebug("DNSSEC: validated via AD flag")
+		log.Debugf("DNSSEC: validated via AD flag")
 		return true
 	}
 
 	// Check for DNSSEC record types in the response
 	if v.hasDNSSECRecords(response) {
-		LogDebug("DNSSEC: validated via DNSSEC record presence")
+		log.Debugf("DNSSEC: validated via DNSSEC record presence")
 		return true
 	}
 	return false
@@ -79,12 +83,12 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 		return true, ""
 	}
 
-	currentDomain = NormalizeDomain(currentDomain)
-	queryDomain = NormalizeDomain(queryDomain)
+	currentDomain = dnsutil.NormalizeDomain(currentDomain)
+	queryDomain = dnsutil.NormalizeDomain(queryDomain)
 
 	// Check each answer record for authorization violations
 	for _, rr := range response.Answer {
-		answerName := NormalizeDomain(rr.Header().Name)
+		answerName := dnsutil.NormalizeDomain(rr.Header().Name)
 		rrType := rr.Header().Rrtype
 
 		// Skip if the answer name doesn't match the query
@@ -99,7 +103,7 @@ func (hp *HijackPrevention) CheckResponse(currentDomain, queryDomain string, res
 
 		// Validate the answer against the server's authority
 		if valid, reason := hp.validateAnswer(currentDomain, queryDomain, rrType); !valid {
-			LogDebug("HIJACK: detected for %s from authority=%s, record=%s %s, reason=%s",
+			log.Debugf("HIJACK: detected for %s from authority=%s, record=%s %s, reason=%s",
 				queryDomain, currentDomain, dns.TypeToString[rrType], rr.Header().Name, reason)
 			return false, reason
 		}
@@ -187,13 +191,13 @@ func (hp *HijackPrevention) isInAuthority(queryDomain, authorityDomain string) b
 }
 
 // SetHijackPreventionEnabled enables or disables hijack prevention.
-func (hp *HijackPrevention) SetHijackPreventionEnabled(enabled bool) {
+func (hp *HijackPrevention) EnableHijackPrevention(enabled bool) {
 	hp.enabled.Store(enabled)
 }
 
 // NewSecurityManager creates a new SecurityManager with the given configuration.
 // It initializes DNSSEC validation, hijack prevention, and optional TLS management.
-func NewSecurityManager(config *ServerConfig, server *DNSServer) (*SecurityManager, error) {
+func NewSecurityManager(config *config.ServerConfig, server *DNSServer) (*SecurityManager, error) {
 	sm := &SecurityManager{
 		dnssec: &DNSSECValidator{},
 		hijack: &HijackPrevention{},

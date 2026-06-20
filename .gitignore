@@ -1,29 +1,9 @@
-# Ignore everything by default
-*
+# Binary
+/zjdns
 
-# Allow all directories so Git can traverse them
-!*/
+# OS
+.DS_Store
 
-# Allow .github directory and all its contents
-!.github/
-!.github/**
-
-# Git configuration
-!.gitignore
-
-# Go source files
-!*.go
-
-# Go module files
-!go.mod
-!go.sum
-
-# Markdown documentation
-!*.md
-
-# JSON files
-!*.example.json
-
-# Dockerfile
-!Dockerfile
-!LICENSE
+# Cache snapshots
+*.snapshot
+*.snapshot.tmp

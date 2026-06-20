@@ -1,5 +1,5 @@
-// Package main implements ZJDNS - High Performance DNS Server
-package main
+// Package cache provides an in-memory LRU DNS response cache with optional disk persistence.
+package cache
 
 import (
 	"bytes"
@@ -19,30 +19,38 @@ import (
 	"sync/atomic"
 	"time"
 
+	"zjdns/config"
+	"zjdns/edns"
+	"zjdns/internal/dnsutil"
+	"zjdns/internal/log"
+
 	"github.com/klauspost/compress/zstd"
 	"github.com/miekg/dns"
 )
 
 const (
-	DefaultTTL = 10 // Default TTL for cache entries in seconds
+	StaleTTL    = 30         // Additional TTL for serving expired cache entries in seconds.
+	StaleMaxAge = 45 * 86400 // Maximum age for serving expired cache entries (RFC 8767 recommends 1-3 days).
 
-	StaleTTL    = 30         // Additional TTL for serving expired cache entries in seconds
-	StaleMaxAge = 45 * 86400 // Maximum age for serving expired cache entries in seconds (RFC 8767 recommends 1 to 3 days.)
+	resultBufferCapacity = 128 // Initial capacity for building cache keys.
+	maxResultLength      = 512 // Maximum length for cache keys before hashing.
 
-	ResultBufferCapacity = 128 // Initial capacity for building cache keys to minimize allocations
-	MaxResultLength      = 512 // Maximum length for cache keys before hashing
-
-	DefaultCachePersistInterval = 30 * time.Second // Default memory cache snapshot interval
-	DefaultCacheSize            = 16384            // Default maximum number of entries in the in-memory cache
-
-	CacheKeyDNSPrefix     = "dns:"                      // Prefix for DNS cache keys
-	CacheSnapshotVersion  = 2                           // Version number for cache snapshot format (increment if the on-disk format changes in an incompatible way)
-	CacheZSTDEncoderLevel = zstd.SpeedBetterCompression // Compression level for cache entry compression (SpeedFastest, SpeedDefault, SpeedBetterCompression, SpeedBestCompression)
+	cacheKeyDNSPrefix     = "dns:"
+	cacheSnapshotVersion  = 2
+	cacheZSTDEncoderLevel = zstd.SpeedBetterCompression
 )
 
 var (
-	CacheSnapshotMagic = "ZJDNS-CACHE-V" + strconv.Itoa(CacheSnapshotVersion) // CacheSnapshotMagic is derived from CacheSnapshotVersion so the file header stays in sync with the format version.
+	cacheSnapshotMagic = "ZJDNS-CACHE-V" + strconv.Itoa(cacheSnapshotVersion)
 )
+
+// Manager is the interface for DNS response caches.
+type Manager interface {
+	Get(key string) (*CacheEntry, bool, bool)
+	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
+	SetEntry(key string, entry *CacheEntry)
+	Close() error
+}
 
 // CacheEntry stores serialized DNS response data, metadata, and ECS state.
 type CacheEntry struct {
@@ -69,18 +77,10 @@ type CompactRecord struct {
 	Type    uint16 `json:"type"`
 }
 
-// reverseLookupResult represents a candidate result for a reverse PTR lookup, including the target name and TTL.
-type reverseLookupResult struct {
+// LookupResult represents a candidate for a reverse PTR lookup.
+type LookupResult struct {
 	Name string
 	TTL  uint32
-}
-
-// CacheManager defines the interface for DNS response caches.
-type CacheManager interface {
-	Get(key string) (*CacheEntry, bool, bool)
-	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption)
-	SetEntry(key string, entry *CacheEntry)
-	Close() error
 }
 
 // MemoryCache provides an in-memory LRU cache for DNS responses.
@@ -127,18 +127,11 @@ type persistedCacheItem struct {
 	PTRs       []ptrRecord `json:"ptrs,omitempty"`
 }
 
-func init() {
-	gob.Register(&persistedCacheSnapshot{})
-	gob.Register(&persistedCacheItem{})
-	gob.Register(&CacheEntry{})
-	gob.Register(&CompactRecord{})
-}
-
 // NewMemoryCache creates a new high-performance in-memory cache.
-func NewMemoryCache(settings CacheSettings) *MemoryCache {
+func New(settings config.CacheSettings) *MemoryCache {
 	size := settings.Size
 	if size <= 0 {
-		size = DefaultCacheSize
+		size = config.DefaultCacheSize
 	}
 
 	mc := &MemoryCache{
@@ -152,25 +145,25 @@ func NewMemoryCache(settings CacheSettings) *MemoryCache {
 	}
 
 	if mc.persistInterval <= 0 {
-		mc.persistInterval = DefaultCachePersistInterval
+		mc.persistInterval = config.DefaultCachePersistInterval
 	}
 
 	if mc.persistPath != "" {
 		if loaded, err := mc.loadSnapshotFromDisk(); err != nil {
-			LogWarn("CACHE: failed to load snapshot file %s: %v", mc.persistPath, err)
+			log.Warnf("CACHE: failed to load snapshot file %s: %v", mc.persistPath, err)
 		} else if loaded > 0 {
-			LogInfo("CACHE: restored %d entries from snapshot %s", loaded, mc.persistPath)
+			log.Infof("CACHE: restored %d entries from snapshot %s", loaded, mc.persistPath)
 		} else {
-			LogDebug("CACHE: snapshot file %s contained no valid entries or was empty", mc.persistPath)
+			log.Debugf("CACHE: snapshot file %s contained no valid entries or was empty", mc.persistPath)
 		}
 		mc.startPersistWorker()
-		LogInfo("CACHE: persistence enabled (file=%s interval=%s)", mc.persistPath, mc.persistInterval)
-		LogDebug("CACHE: persistence worker started for file %s", mc.persistPath)
+		log.Infof("CACHE: persistence enabled (file=%s interval=%s)", mc.persistPath, mc.persistInterval)
+		log.Debugf("CACHE: persistence worker started for file %s", mc.persistPath)
 	} else {
-		LogDebug("CACHE: persistence disabled (no persist.file configured)")
+		log.Debugf("CACHE: persistence disabled (no persist.file configured)")
 	}
 
-	LogInfo("CACHE: Memory cache enabled (limit=%d)", size)
+	log.Infof("CACHE: Memory cache enabled (limit=%d)", size)
 	return mc
 }
 
@@ -275,12 +268,12 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC boo
 }
 
 // BuildCacheKey generates a cache key from question and options.
-func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC bool) string {
+func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDNSSEC bool) string {
 	var buf strings.Builder
-	buf.Grow(ResultBufferCapacity)
-	buf.WriteString(CacheKeyDNSPrefix)
+	buf.Grow(resultBufferCapacity)
+	buf.WriteString(cacheKeyDNSPrefix)
 
-	buf.WriteString(NormalizeDomain(question.Name))
+	buf.WriteString(dnsutil.NormalizeDomain(question.Name))
 	buf.WriteByte(':')
 
 	buf.WriteString(strconv.FormatUint(uint64(question.Qtype), 10))
@@ -299,7 +292,7 @@ func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC 
 	}
 
 	result := buf.String()
-	if len(result) > MaxResultLength {
+	if len(result) > maxResultLength {
 		hash := fnv.New64a()
 		hash.Write([]byte(result))
 		return fmt.Sprintf("h:%x", hash.Sum64())
@@ -310,7 +303,7 @@ func BuildCacheKey(question dns.Question, ecs *ECSOption, clientRequestedDNSSEC 
 // calculateTTL calculates the minimum TTL from DNS records.
 func calculateTTL(rrs []dns.RR) int {
 	if len(rrs) == 0 {
-		return DefaultTTL
+		return config.DefaultTTL
 	}
 
 	minTTL := int(rrs[0].Header().Ttl)
@@ -324,7 +317,7 @@ func calculateTTL(rrs []dns.RR) int {
 	}
 
 	if minTTL <= 0 {
-		minTTL = DefaultTTL
+		minTTL = config.DefaultTTL
 	}
 
 	return minTTL
@@ -525,7 +518,7 @@ func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
 
 // ReverseLookup searches the memory cache for A or AAAA answers that match the
 // provided IP address and returns candidate reverse PTR targets.
-func (mc *MemoryCache) ReverseLookup(ip net.IP) []reverseLookupResult {
+func (mc *MemoryCache) ReverseLookup(ip net.IP) []LookupResult {
 	if ip == nil {
 		return nil
 	}
@@ -539,9 +532,9 @@ func (mc *MemoryCache) ReverseLookup(ip net.IP) []reverseLookupResult {
 		return nil
 	}
 
-	results := make([]reverseLookupResult, 0, len(candidates))
+	results := make([]LookupResult, 0, len(candidates))
 	for name, ttl := range candidates {
-		results = append(results, reverseLookupResult{Name: name, TTL: ttl})
+		results = append(results, LookupResult{Name: name, TTL: ttl})
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Name < results[j].Name
@@ -550,7 +543,7 @@ func (mc *MemoryCache) ReverseLookup(ip net.IP) []reverseLookupResult {
 }
 
 // Set stores a value in the memory cache.
-func (mc *MemoryCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *ECSOption) {
+func (mc *MemoryCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption) {
 	if atomic.LoadInt32(&mc.closed) != 0 {
 		return
 	}
@@ -595,7 +588,7 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	fullCopy := cloneCacheEntry(entry)
 	var compressed []byte
 	var buf bytes.Buffer
-	if zw, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(CacheZSTDEncoderLevel)); err == nil {
+	if zw, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(cacheZSTDEncoderLevel)); err == nil {
 		if err := gob.NewEncoder(zw).Encode(fullCopy); err == nil {
 			if err := zw.Close(); err == nil {
 				compressed = append([]byte(nil), buf.Bytes()...)
@@ -638,7 +631,7 @@ func (mc *MemoryCache) startPersistWorker() {
 	mc.persistDone = make(chan struct{})
 
 	go func() {
-		defer HandlePanic("cache persist worker")
+		defer dnsutil.HandlePanic("cache persist worker")
 		defer close(mc.persistDone)
 
 		ticker := time.NewTicker(mc.persistInterval)
@@ -650,9 +643,9 @@ func (mc *MemoryCache) startPersistWorker() {
 				if mc.persistDirty.Load() == 0 {
 					continue
 				}
-				LogDebug("CACHE: persist worker triggered snapshot write (dirty=1)")
+				log.Debugf("CACHE: persist worker triggered snapshot write (dirty=1)")
 				if err := mc.persistSnapshotToDisk(); err != nil {
-					LogWarn("CACHE: persist snapshot failed: %v", err)
+					log.Warnf("CACHE: persist snapshot failed: %v", err)
 				} else {
 					mc.persistDirty.Store(0)
 				}
@@ -673,11 +666,11 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 	}
 	defer func() { _ = file.Close() }()
 
-	header := make([]byte, len(CacheSnapshotMagic))
+	header := make([]byte, len(cacheSnapshotMagic))
 	if _, err := io.ReadFull(file, header); err != nil {
 		return 0, err
 	}
-	if string(header) != CacheSnapshotMagic {
+	if string(header) != cacheSnapshotMagic {
 		return 0, fmt.Errorf("invalid cache snapshot format")
 	}
 
@@ -685,7 +678,7 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 	if err := gob.NewDecoder(file).Decode(&snapshot); err != nil {
 		return 0, err
 	}
-	if snapshot.Version != CacheSnapshotVersion {
+	if snapshot.Version != cacheSnapshotVersion {
 		return 0, fmt.Errorf("unsupported cache snapshot version: %d", snapshot.Version)
 	}
 
@@ -735,7 +728,7 @@ func (mc *MemoryCache) persistSnapshotToDisk() error {
 
 	now := time.Now().Unix()
 	snapshot := persistedCacheSnapshot{
-		Version: CacheSnapshotVersion,
+		Version: cacheSnapshotVersion,
 		SavedAt: now,
 	}
 
@@ -775,7 +768,7 @@ func (mc *MemoryCache) persistSnapshotToDisk() error {
 		return err
 	}
 
-	if _, err := file.WriteString(CacheSnapshotMagic); err != nil {
+	if _, err := file.WriteString(cacheSnapshotMagic); err != nil {
 		_ = file.Close()
 		_ = os.Remove(tmp)
 		return err
@@ -796,9 +789,9 @@ func (mc *MemoryCache) persistSnapshotToDisk() error {
 	}
 
 	if stat, err := os.Stat(mc.persistPath); err == nil {
-		LogDebug("CACHE: snapshot saved to %s (%d entries, %d bytes)", mc.persistPath, len(snapshot.Entries), stat.Size())
+		log.Debugf("CACHE: snapshot saved to %s (%d entries, %d bytes)", mc.persistPath, len(snapshot.Entries), stat.Size())
 	} else {
-		LogDebug("CACHE: snapshot saved to %s (%d entries)", mc.persistPath, len(snapshot.Entries))
+		log.Debugf("CACHE: snapshot saved to %s (%d entries)", mc.persistPath, len(snapshot.Entries))
 	}
 
 	return nil
@@ -815,17 +808,17 @@ func (mc *MemoryCache) Close() error {
 		if mc.persistDone != nil {
 			select {
 			case <-mc.persistDone:
-			case <-time.After(IdleTimeout):
-				LogWarn("CACHE: persist worker shutdown timeout")
+			case <-time.After(config.IdleTimeout):
+				log.Warnf("CACHE: persist worker shutdown timeout")
 			}
 		}
 	}
 
 	if mc.persistPath != "" {
 		if err := mc.persistSnapshotToDisk(); err != nil {
-			LogWarn("CACHE: final snapshot failed: %v", err)
+			log.Warnf("CACHE: final snapshot failed: %v", err)
 		} else {
-			LogInfo("CACHE: snapshot flushed to %s", mc.persistPath)
+			log.Infof("CACHE: snapshot flushed to %s", mc.persistPath)
 		}
 	}
 
@@ -835,7 +828,7 @@ func (mc *MemoryCache) Close() error {
 	mc.ptrIndex = nil
 	mc.mu.Unlock()
 
-	LogInfo("CACHE: Memory cache shut down")
+	log.Infof("CACHE: Memory cache shut down")
 	return nil
 }
 
@@ -925,13 +918,13 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	return uint32(staleTTLRemaining)
 }
 
-// GetECSOption returns the ECS option from the cache entry.
-func (c *CacheEntry) GetECSOption() *ECSOption {
+// ECSOption returns the ECS option from the cache entry.
+func (c *CacheEntry) ECSOption() *edns.ECSOption {
 	if c == nil || c.ECSAddress == "" {
 		return nil
 	}
 	if ip := net.ParseIP(c.ECSAddress); ip != nil {
-		return &ECSOption{
+		return &edns.ECSOption{
 			Family:       c.ECSFamily,
 			SourcePrefix: c.ECSSourcePrefix,
 			ScopePrefix:  c.ECSScopePrefix,

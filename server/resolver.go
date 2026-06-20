@@ -1,23 +1,28 @@
 // Package main implements ZJDNS - High Performance DNS Server
 // This file contains DNS resolution functionality including query management,
 // upstream handling, recursive resolution, and CNAME chain resolution.
-package main
+package server
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"strings"
 	"sync/atomic"
 
 	"github.com/miekg/dns"
 	"golang.org/x/sync/errgroup"
+
+	"zjdns/config"
+	"zjdns/edns"
+	"zjdns/internal/dnsutil"
+	"zjdns/internal/log"
+	"zjdns/internal/pool"
 )
 
 const (
-	RecursiveIndicator = "builtin_recursive" // Indicator for responses obtained from the built-in recursive resolver
-
 	MaxCNAMEChain   = 16 // Maximum number of CNAME redirections to follow to prevent loops
 	MaxRecursionDep = 16 // Maximum recursion depth for resolving queries to prevent infinite loops
 )
@@ -50,10 +55,10 @@ type QueryManager struct {
 
 // UpstreamHandler manages querying upstream name servers, including primary and fallback lists.
 type UpstreamHandler struct {
-	servers atomic.Pointer[[]*UpstreamServer]
+	servers atomic.Pointer[[]*config.UpstreamServer]
 }
 
-// UpstreamServer represents a configured upstream DNS server with optional client filters.
+// config.UpstreamServer represents a configured upstream DNS server with optional client filters.
 type RecursiveResolver struct {
 	server *DNSServer
 }
@@ -73,7 +78,7 @@ type ResponseValidator struct {
 func NewQueryManager(server *DNSServer) *QueryManager {
 	upstream := &UpstreamHandler{}
 	fallback := &UpstreamHandler{}
-	emptyServers := make([]*UpstreamServer, 0)
+	emptyServers := make([]*config.UpstreamServer, 0)
 	upstream.servers.Store(&emptyServers)
 	fallback.servers.Store(&emptyServers)
 
@@ -102,7 +107,7 @@ func shuffleSlice[T any](slice []T) []T {
 	copy(shuffled, slice)
 
 	for i := len(shuffled) - 1; i > 0; i-- {
-		j := globalRNG.Intn(i + 1)
+		j := rand.IntN(i + 1)
 		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
 
@@ -133,8 +138,8 @@ func calculateConcurrencyLimit(serverCount int) int {
 
 // Initialize initializes the QueryManager with upstream and fallback server configurations.
 // It processes the server lists and sets default protocols where needed.
-func (qm *QueryManager) Initialize(servers []UpstreamServer, fallback []UpstreamServer) error {
-	activeServers := make([]*UpstreamServer, 0, len(servers))
+func (qm *QueryManager) Initialize(servers []config.UpstreamServer, fallback []config.UpstreamServer) error {
+	activeServers := make([]*config.UpstreamServer, 0, len(servers))
 	for i := range servers {
 		server := &servers[i]
 		if server.Protocol == "" {
@@ -144,7 +149,7 @@ func (qm *QueryManager) Initialize(servers []UpstreamServer, fallback []Upstream
 	}
 	qm.upstream.servers.Store(&activeServers)
 
-	fallbackServers := make([]*UpstreamServer, 0, len(fallback))
+	fallbackServers := make([]*config.UpstreamServer, 0, len(fallback))
 	for i := range fallback {
 		server := &fallback[i]
 		if server.Protocol == "" {
@@ -159,7 +164,7 @@ func (qm *QueryManager) Initialize(servers []UpstreamServer, fallback []Upstream
 
 // Query routes DNS queries between upstream servers, fallback servers, and recursive resolution.
 // If primary upstream servers are configured, it queries them first and falls back if they fail.
-func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
+func (qm *QueryManager) Query(question dns.Question, ecs *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	servers := qm.upstream.getServers()
 	fallbackServers := qm.fallback.getServers()
 
@@ -170,7 +175,7 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, 
 		}
 
 		if len(fallbackServers) > 0 {
-			LogDebug("UPSTREAM: primary upstream failed, querying fallback servers")
+			log.Debugf("UPSTREAM: primary upstream failed, querying fallback servers")
 			answer, authority, additional, validated, ecsResponse, server, _, err = qm.queryUpstream(question, ecs, fallbackServers)
 			if err == nil {
 				return answer, authority, additional, validated, ecsResponse, server, true, nil
@@ -185,7 +190,7 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, 
 		return answer, authority, additional, validated, ecsResponse, server, true, err
 	}
 
-	ctx, cancel := context.WithTimeout(qm.server.ctx, IdleTimeout)
+	ctx, cancel := context.WithTimeout(qm.server.ctx, config.IdleTimeout)
 	defer cancel()
 
 	answer, authority, additional, validated, ecsResponse, server, hijackDetected, err := qm.cname.resolveWithCNAME(ctx, question, ecs)
@@ -193,10 +198,10 @@ func (qm *QueryManager) Query(question dns.Question, ecs *ECSOption) ([]dns.RR, 
 }
 
 // getServers returns the list of configured upstream servers.
-func (uh *UpstreamHandler) getServers() []*UpstreamServer {
+func (uh *UpstreamHandler) getServers() []*config.UpstreamServer {
 	serversPtr := uh.servers.Load()
 	if serversPtr == nil {
-		return []*UpstreamServer{}
+		return []*config.UpstreamServer{}
 	}
 	return *serversPtr
 }
@@ -204,7 +209,7 @@ func (uh *UpstreamHandler) getServers() []*UpstreamServer {
 // queryUpstream performs concurrent queries to upstream DNS servers.
 // It implements the "first win" strategy where the first successful response
 // is returned immediately, canceling any pending queries.
-func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, servers []*UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
+func (qm *QueryManager) queryUpstream(question dns.Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	if len(servers) == 0 {
 		return nil, nil, nil, false, nil, "", false, errors.New("no upstream servers")
 	}
@@ -219,7 +224,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 		}
 		serverAddrs = append(serverAddrs, fmt.Sprintf("%s(%s)", s.Address, proto))
 	}
-	LogDebug("UPSTREAM: querying %d servers for %s: %v", len(servers), question.Name, serverAddrs)
+	log.Debugf("UPSTREAM: querying %d servers for %s: %v", len(servers), question.Name, serverAddrs)
 
 	resultChan := make(chan UpstreamQueryResult, 1)
 	nxdomainChan := make(chan UpstreamQueryResult, 1) // Fallback for NXDOMAIN
@@ -245,7 +250,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 			defer activeConnections.Add(-1)
 
 			if server.IsRecursive() {
-				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, IdleTimeout)
+				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, config.IdleTimeout)
 				defer recursiveCancel()
 
 				answer, authority, additional, validated, ecsResponse, usedServer, _, err := qm.cname.resolveWithCNAME(recursiveCtx, question, ecs)
@@ -254,7 +259,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 					if len(server.Match) > 0 {
 						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, server.Match)
 						if shouldRefuse {
-							LogDebug("UPSTREAM: CIDR filter refused all records for %s from recursive", question.Name)
+							log.Debugf("UPSTREAM: CIDR filter refused all records for %s from recursive", question.Name)
 							return errors.New("cidr_filter_refused")
 						}
 						answer = filteredAnswer
@@ -278,7 +283,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 			} else {
 				msg := qm.server.buildQueryMessage(question, ecs, true, false)
 				queryResult := qm.server.queryClient.ExecuteQuery(queryCtx, msg, server)
-				messagePool.Put(msg)
+				pool.DefaultMessagePool.Put(msg)
 
 				if queryResult.Error == nil && queryResult.Response != nil {
 					rcode := queryResult.Response.Rcode
@@ -293,8 +298,8 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 						if len(server.Match) > 0 {
 							filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
 							if shouldRefuse {
-								messagePool.Put(queryResult.Response)
-								LogDebug("UPSTREAM: CIDR filter refused all records for %s from %s", question.Name, serverDesc)
+								pool.DefaultMessagePool.Put(queryResult.Response)
+								log.Debugf("UPSTREAM: CIDR filter refused all records for %s from %s", question.Name, serverDesc)
 								return errors.New("cidr_filter_refused")
 							}
 							queryResult.Response.Answer = filteredAnswer
@@ -312,20 +317,20 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 							ecs:        ecsResponse,
 							server:     serverDesc,
 						}:
-							LogDebug("UPSTREAM: NOERROR from %s for %s, validated=%t, answer=%d, authority=%d", serverDesc, question.Name, queryResult.Validated, len(queryResult.Response.Answer), len(queryResult.Response.Ns))
+							log.Debugf("UPSTREAM: NOERROR from %s for %s, validated=%t, answer=%d, authority=%d", serverDesc, question.Name, queryResult.Validated, len(queryResult.Response.Answer), len(queryResult.Response.Ns))
 							remaining := activeConnections.Load() - 1
 							if remaining > 0 {
-								LogDebug("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
+								log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
 							}
 							cancel(errors.New("successful result obtained from upstream"))
-							messagePool.Put(queryResult.Response)
+							pool.DefaultMessagePool.Put(queryResult.Response)
 							return nil
 						case <-queryCtx.Done():
-							messagePool.Put(queryResult.Response)
+							pool.DefaultMessagePool.Put(queryResult.Response)
 							return nil
 						}
 					case dns.RcodeNameError:
-						LogDebug("UPSTREAM: NXDOMAIN from %s for %s, storing as fallback", serverDesc, question.Name)
+						log.Debugf("UPSTREAM: NXDOMAIN from %s for %s, storing as fallback", serverDesc, question.Name)
 						// NXDOMAIN - store as fallback, continue querying other servers
 						select {
 						case nxdomainChan <- UpstreamQueryResult{
@@ -338,9 +343,9 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 						}:
 						default:
 						}
-						messagePool.Put(queryResult.Response)
+						pool.DefaultMessagePool.Put(queryResult.Response)
 					default:
-						messagePool.Put(queryResult.Response)
+						pool.DefaultMessagePool.Put(queryResult.Response)
 					}
 				}
 			}
@@ -363,7 +368,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *ECSOption, ser
 		select {
 		case nxRes, nxOk := <-nxdomainChan:
 			if nxOk && nxRes.server != "" {
-				LogDebug("UPSTREAM: Returning NXDOMAIN fallback after no successful response")
+				log.Debugf("UPSTREAM: Returning NXDOMAIN fallback after no successful response")
 				return nxRes.answer, nxRes.authority, nxRes.additional, nxRes.validated, nxRes.ecs, nxRes.server, false, nil
 			}
 		default:
@@ -425,10 +430,10 @@ func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string
 
 // resolveWithCNAME resolves a DNS question while following CNAME chains.
 // It handles multi-level CNAME resolution and detects circular references.
-func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
+func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Question, ecs *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	var allAnswers []dns.RR
 	var finalAuthority, finalAdditional []dns.RR
-	var finalECSResponse *ECSOption
+	var finalECSResponse *edns.ECSOption
 	var usedServer string
 	var hijackOccurred bool
 	allValidated := true
@@ -443,7 +448,7 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 		default:
 		}
 
-		currentName := NormalizeDomain(currentQuestion.Name)
+		currentName := dnsutil.NormalizeDomain(currentQuestion.Name)
 		if visitedCNAMEs[currentName] {
 			return nil, nil, nil, false, nil, "", false, fmt.Errorf("CNAME loop detected: %s", currentName)
 		}
@@ -504,8 +509,8 @@ func (ch *CNAMEHandler) resolveWithCNAME(ctx context.Context, question dns.Quest
 // recursiveQuery performs recursive DNS resolution starting from root servers.
 // It follows the DNS resolution algorithm: query root servers, follow referrals
 // to TLD servers, then to authoritative servers until an answer is found.
-func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
-	LogDebug("RECURSION: depth=%d, querying %s (type=%s, tcp=%t)", depth, question.Name, dns.TypeToString[question.Qtype], forceTCP)
+func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Question, ecs *edns.ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+	log.Debugf("RECURSION: depth=%d, querying %s (type=%s, tcp=%t)", depth, question.Name, dns.TypeToString[question.Qtype], forceTCP)
 	if depth > MaxRecursionDep {
 		return nil, nil, nil, false, nil, "", false, fmt.Errorf("recursion depth exceeded: %d", depth)
 	}
@@ -514,10 +519,10 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 	question.Name = qname
 	nameservers := shuffleSlice(DefaultRootServers)
 	currentDomain := "."
-	normalizedQname := NormalizeDomain(qname)
+	normalizedQname := dnsutil.NormalizeDomain(qname)
 	var hijackDetected bool
 
-	LogDebug("RECURSION: root domain query, %d nameservers", len(nameservers))
+	log.Debugf("RECURSION: root domain query, %d nameservers", len(nameservers))
 	if normalizedQname == "" {
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
 		if err != nil {
@@ -526,7 +531,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 		if rr.server.securityMgr.hijack.IsEnabled() {
 			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				messagePool.Put(response)
+				pool.DefaultMessagePool.Put(response)
 				return rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth)
 			}
 		}
@@ -539,10 +544,10 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		additional := response.Extra
 		valid := validated
 		ecsResp := ecsResponse
-		server := RecursiveIndicator
+		server := config.RecursiveIndicator
 		err = nil
-		messagePool.Put(response)
-		LogDebug("RECURSION: root domain resolved, validated=%t, answer=%d, authority=%d", validated, len(answer), len(authority))
+		pool.DefaultMessagePool.Put(response)
+		log.Debugf("RECURSION: root domain resolved, validated=%t, answer=%d, authority=%d", validated, len(answer), len(authority))
 		return answer, authority, additional, valid, ecsResp, server, false, err
 	}
 
@@ -556,7 +561,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
 		if err != nil {
 			if !forceTCP && strings.HasPrefix(err.Error(), "DNS_HIJACK_DETECTED") {
-				LogDebug("HIJACK: query error indicates hijack, retrying with TCP for %s", question.Name)
+				log.Debugf("HIJACK: query error indicates hijack, retrying with TCP for %s", question.Name)
 				return rr.recursiveQuery(ctx, question, ecs, depth, true)
 			}
 			return nil, nil, nil, false, nil, "", false, fmt.Errorf("query %s: %w", currentDomain, err)
@@ -564,7 +569,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 		if rr.server.securityMgr.hijack.IsEnabled() {
 			if valid, reason := rr.server.securityMgr.hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				messagePool.Put(response)
+				pool.DefaultMessagePool.Put(response)
 				answer, authority, additional, validated, ecsResponse, server, hijackDetectedNow, err := rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth)
 				if hijackDetectedNow {
 					hijackDetected = true
@@ -579,11 +584,11 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 		validated := rr.server.securityMgr.dnssec.ValidateResponse(response, true)
 		ecsResponse := rr.server.ednsMgr.ParseFromDNS(response)
 
-		LogDebug("RECURSION: query %s from %d nameservers (domain=%s), validated=%t, answer=%d", question.Name, len(nameservers), currentDomain, validated, len(response.Answer))
+		log.Debugf("RECURSION: query %s from %d nameservers (domain=%s), validated=%t, answer=%d", question.Name, len(nameservers), currentDomain, validated, len(response.Answer))
 		if len(response.Answer) > 0 {
 			answer, authority, additional := response.Answer, response.Ns, response.Extra
-			messagePool.Put(response)
-			return answer, authority, additional, validated, ecsResponse, RecursiveIndicator, false, nil
+			pool.DefaultMessagePool.Put(response)
+			return answer, authority, additional, validated, ecsResponse, config.RecursiveIndicator, false, nil
 		}
 
 		bestMatch := ""
@@ -591,7 +596,7 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 		for _, rrec := range response.Ns {
 			if ns, ok := rrec.(*dns.NS); ok {
-				nsName := NormalizeDomain(rrec.Header().Name)
+				nsName := dnsutil.NormalizeDomain(rrec.Header().Name)
 
 				isMatch := normalizedQname == nsName ||
 					(nsName != "" && strings.HasSuffix(normalizedQname, "."+nsName)) ||
@@ -610,15 +615,15 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 
 		if len(bestNSRecords) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
-			messagePool.Put(response)
-			return nil, nsSlice, extraSlice, validated, ecsResponse, RecursiveIndicator, false, nil
+			pool.DefaultMessagePool.Put(response)
+			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
 		}
 
-		currentDomainNormalized := NormalizeDomain(currentDomain)
+		currentDomainNormalized := dnsutil.NormalizeDomain(currentDomain)
 		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
 			nsSlice, extraSlice := response.Ns, response.Extra
-			messagePool.Put(response)
-			return nil, nsSlice, extraSlice, validated, ecsResponse, RecursiveIndicator, false, nil
+			pool.DefaultMessagePool.Put(response)
+			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
 		}
 
 		currentDomain = bestMatch + "."
@@ -629,11 +634,11 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 				switch a := rrec.(type) {
 				case *dns.A:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
-						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), DefaultDNSPort))
+						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
 					}
 				case *dns.AAAA:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
-						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), DefaultDNSPort))
+						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), config.DefaultDNSPort))
 					}
 				}
 			}
@@ -643,34 +648,34 @@ func (rr *RecursiveResolver) recursiveQuery(ctx context.Context, question dns.Qu
 			nextNS = rr.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
 		}
 
-		LogDebug("RECURSION: following delegation to %s, %d NS records, %d glue addresses", currentDomain, len(bestNSRecords), len(nextNS))
+		log.Debugf("RECURSION: following delegation to %s, %d NS records, %d glue addresses", currentDomain, len(bestNSRecords), len(nextNS))
 		if len(nextNS) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
-			messagePool.Put(response)
-			return nil, nsSlice, extraSlice, validated, ecsResponse, RecursiveIndicator, false, nil
+			pool.DefaultMessagePool.Put(response)
+			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
 		}
 
 		nextNS = shuffleSlice(nextNS)
 
-		messagePool.Put(response)
+		pool.DefaultMessagePool.Put(response)
 		nameservers = nextNS
 	}
 }
 
 // handleSuspiciousResponse handles potentially hijacked DNS responses.
 // It returns an error that triggers TCP fallback if not already using TCP.
-func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *ECSOption, string, bool, error) {
+func (rr *RecursiveResolver) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *edns.ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	if !currentlyTCP {
-		LogDebug("HIJACK: UDP response suspicious, switching to TCP retry, reason=%s", reason)
+		log.Debugf("HIJACK: UDP response suspicious, switching to TCP retry, reason=%s", reason)
 		return nil, nil, nil, false, nil, "", true, fmt.Errorf("DNS_HIJACK_DETECTED: %s", reason)
 	}
-	LogDebug("HIJACK: TCP response still suspicious, rejecting completely, reason=%s", reason)
+	log.Debugf("HIJACK: TCP response still suspicious, rejecting completely, reason=%s", reason)
 	return nil, nil, nil, false, nil, "", true, fmt.Errorf("DNS hijacking detected (TCP): %s", reason)
 }
 
 // queryNameserversConcurrent performs concurrent queries to multiple nameservers
 // using the "first win" strategy for optimal performance.
-func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *ECSOption, forceTCP bool) (*dns.Msg, error) {
+func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *edns.ECSOption, forceTCP bool) (*dns.Msg, error) {
 	if len(nameservers) == 0 {
 		return nil, errors.New("no nameservers")
 	}
@@ -694,17 +699,17 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 		if forceTCP {
 			protocol = "tcp"
 		}
-		server := &UpstreamServer{Address: nsAddr, Protocol: protocol}
+		server := &config.UpstreamServer{Address: nsAddr, Protocol: protocol}
 		msg := rr.server.buildQueryMessage(question, ecs, true, false)
 
 		g.Go(func() error {
-			defer HandlePanic("Query nameserver")
+			defer dnsutil.HandlePanic("Query nameserver")
 			activeConnections.Add(1)
 			defer activeConnections.Add(-1)
 
 			select {
 			case <-queryCtx.Done():
-				messagePool.Put(msg)
+				pool.DefaultMessagePool.Put(msg)
 				return queryCtx.Err()
 			default:
 			}
@@ -724,17 +729,17 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 					case resultChan <- result.Response:
 						// First win - immediately cancel all other connections
 						cancel(errors.New("first win successful query completed"))
-						messagePool.Put(msg)
+						pool.DefaultMessagePool.Put(msg)
 						return nil
 					case <-queryCtx.Done():
-						messagePool.Put(msg)
-						messagePool.Put(result.Response)
+						pool.DefaultMessagePool.Put(msg)
+						pool.DefaultMessagePool.Put(result.Response)
 						return queryCtx.Err()
 					}
 				}
-				messagePool.Put(result.Response)
+				pool.DefaultMessagePool.Put(result.Response)
 			}
-			messagePool.Put(msg)
+			pool.DefaultMessagePool.Put(msg)
 			return nil
 		})
 	}
@@ -751,7 +756,7 @@ func (rr *RecursiveResolver) queryNameserversConcurrent(ctx context.Context, nam
 			// Log connection termination stats
 			remaining := activeConnections.Load()
 			if remaining > 0 {
-				LogDebug("RECURSION: First win achieved, terminating %d remaining connections", remaining)
+				log.Debugf("RECURSION: First win achieved, terminating %d remaining connections", remaining)
 			}
 			return result, nil
 		}
@@ -791,7 +796,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 		nsRecord := ns
 
 		g.Go(func() error {
-			defer HandlePanic("Resolve NS addresses")
+			defer dnsutil.HandlePanic("Resolve NS addresses")
 			activeResolutions.Add(1)
 			defer activeResolutions.Add(-1)
 
@@ -814,7 +819,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 
 			// IPv4 resolution
 			queryGroup.Go(func() error {
-				defer HandlePanic("Resolve NS IPv4")
+				defer dnsutil.HandlePanic("Resolve NS IPv4")
 
 				nsQuestion := dns.Question{
 					Name:   dns.Fqdn(nsRecord.Ns),
@@ -830,7 +835,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				if nsAnswer, _, _, _, _, _, _, err := rr.recursiveQuery(ipv4Ctx, nsQuestion, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswer {
 						if a, ok := rrec.(*dns.A); ok {
-							ipv4Addresses = append(ipv4Addresses, net.JoinHostPort(a.A.String(), DefaultDNSPort))
+							ipv4Addresses = append(ipv4Addresses, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
 						}
 					}
 				}
@@ -850,7 +855,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 
 			// IPv6 resolution
 			queryGroup.Go(func() error {
-				defer HandlePanic("Resolve NS IPv6")
+				defer dnsutil.HandlePanic("Resolve NS IPv6")
 
 				nsQuestionV6 := dns.Question{
 					Name:   dns.Fqdn(nsRecord.Ns),
@@ -866,7 +871,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				if nsAnswerV6, _, _, _, _, _, _, err := rr.recursiveQuery(ipv6Ctx, nsQuestionV6, nil, depth+1, forceTCP); err == nil {
 					for _, rrec := range nsAnswerV6 {
 						if aaaa, ok := rrec.(*dns.AAAA); ok {
-							ipv6Addresses = append(ipv6Addresses, net.JoinHostPort(aaaa.AAAA.String(), DefaultDNSPort))
+							ipv6Addresses = append(ipv6Addresses, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
 						}
 					}
 				}
@@ -894,7 +899,7 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 				// First win optimization: if we have enough addresses, cancel remaining NS resolutions
 				if foundAddresses.Add(1) >= int32(calculateConcurrencyLimit(len(nsRecords))) {
 					resolveCancel()
-					LogDebug("RECURSION: First win NS resolution - canceling %d remaining NS lookups", activeResolutions.Load())
+					log.Debugf("RECURSION: First win NS resolution - canceling %d remaining NS lookups", activeResolutions.Load())
 				}
 			}
 
@@ -911,10 +916,3 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	return nil
 }
 
-// IsRecursive returns true if this server is configured for recursive resolution.
-func (s *UpstreamServer) IsRecursive() bool {
-	if s == nil {
-		return false
-	}
-	return s.Address == RecursiveIndicator
-}

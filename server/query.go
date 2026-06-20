@@ -1,5 +1,5 @@
 // Package main implements ZJDNS - High Performance DNS Server
-package main
+package server
 
 import (
 	"context"
@@ -18,6 +18,12 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/http2"
+
+	"zjdns/config"
+	"zjdns/edns"
+	"zjdns/internal/dnsutil"
+	"zjdns/internal/log"
+	"zjdns/internal/pool"
 )
 
 // QueryResult contains the result of a DNS query execution.
@@ -31,7 +37,7 @@ type QueryResult struct {
 	Duration   time.Duration
 	Protocol   string
 	Validated  bool
-	ECS        *ECSOption
+	ECS        *edns.ECSOption
 }
 
 // UpstreamQueryResult contains internal upstream query fields used during aggregation.
@@ -40,7 +46,7 @@ type UpstreamQueryResult struct {
 	authority  []dns.RR
 	additional []dns.RR
 	validated  bool
-	ecs        *ECSOption
+	ecs        *edns.ECSOption
 	server     string
 }
 
@@ -61,7 +67,7 @@ func NewQueryClient() *QueryClient {
 	udpClient := &dns.Client{
 		Timeout: OperationTimeout,
 		Net:     "udp",
-		UDPSize: UDPBufferSize,
+		UDPSize: pool.UDPBufferSize,
 	}
 
 	// Configure TCP client
@@ -80,7 +86,7 @@ func NewQueryClient() *QueryClient {
 	dohTransport := &http.Transport{
 		MaxIdleConns:        1,
 		MaxIdleConnsPerHost: 1,
-		IdleConnTimeout:     IdleTimeout,
+		IdleConnTimeout:     config.IdleTimeout,
 		DisableCompression:  false,
 		ForceAttemptHTTP2:   true,
 	}
@@ -89,7 +95,7 @@ func NewQueryClient() *QueryClient {
 	doh3Transport := &http.Transport{
 		MaxIdleConns:        1,
 		MaxIdleConnsPerHost: 1,
-		IdleConnTimeout:     IdleTimeout,
+		IdleConnTimeout:     config.IdleTimeout,
 		DisableCompression:  false,
 		ForceAttemptHTTP2:   false,
 	}
@@ -112,7 +118,7 @@ func NewQueryClient() *QueryClient {
 
 // ExecuteQuery executes a DNS query to the specified upstream server.
 // It automatically selects the appropriate protocol and handles fallback from UDP to TCP if needed.
-func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer) *QueryResult {
+func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) *QueryResult {
 	start := time.Now()
 	result := &QueryResult{Server: server.Address, Protocol: server.Protocol}
 
@@ -120,7 +126,7 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 	if len(msg.Question) > 0 {
 		qname = msg.Question[0].Name
 	}
-	LogDebug("QUERY: querying %s (%s) for %s", server.Address, strings.ToUpper(server.Protocol), qname)
+	log.Debugf("QUERY: querying %s (%s) for %s", server.Address, strings.ToUpper(server.Protocol), qname)
 
 	// Create query context with timeout
 	queryCtx, cancel := context.WithTimeout(ctx, qc.timeout)
@@ -129,14 +135,14 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 	protocol := strings.ToLower(server.Protocol)
 
 	// Execute query based on protocol type
-	if IsSecureProtocol(protocol) {
+	if dnsutil.IsSecureProtocol(protocol) {
 		result.Response, result.Error = qc.executeSecureQuery(queryCtx, msg, server, protocol)
 	} else {
 		result.Response, result.Error = qc.executeTraditionalQuery(queryCtx, msg, server)
 
 		// Handle TCP fallback for truncated UDP responses
 		if qc.needsTCPFallback(result, protocol) {
-			LogDebug("QUERY: UDP truncated/failed for %s, falling back to TCP for %s", qname, server.Address)
+			log.Debugf("QUERY: UDP truncated/failed for %s, falling back to TCP for %s", qname, server.Address)
 			tcpServer := *server
 			tcpServer.Protocol = "tcp"
 
@@ -144,9 +150,9 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 				result.Response = tcpResp
 				result.Error = nil
 				result.Protocol = "TCP"
-				LogDebug("QUERY: TCP fallback succeeded for %s via %s", qname, server.Address)
+				log.Debugf("QUERY: TCP fallback succeeded for %s via %s", qname, server.Address)
 			} else {
-				LogDebug("QUERY: TCP fallback failed for %s via %s: %v", qname, server.Address, tcpErr)
+				log.Debugf("QUERY: TCP fallback failed for %s via %s: %v", qname, server.Address, tcpErr)
 			}
 		}
 	}
@@ -155,16 +161,16 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *U
 	result.Protocol = strings.ToUpper(protocol)
 
 	if result.Error != nil {
-		LogDebug("QUERY: failed for %s via %s (%s) in %v, error=%v", qname, server.Address, result.Protocol, result.Duration, result.Error)
+		log.Debugf("QUERY: failed for %s via %s (%s) in %v, error=%v", qname, server.Address, result.Protocol, result.Duration, result.Error)
 	} else if result.Response != nil {
-		LogDebug("QUERY: success for %s via %s (%s) in %v, rcode=%s, answer=%d", qname, server.Address, result.Protocol, result.Duration, dns.RcodeToString[result.Response.Rcode], len(result.Response.Answer))
+		log.Debugf("QUERY: success for %s via %s (%s) in %v, rcode=%s, answer=%d", qname, server.Address, result.Protocol, result.Duration, dns.RcodeToString[result.Response.Rcode], len(result.Response.Answer))
 	}
 
 	return result
 }
 
 // executeSecureQuery executes a DNS query over a secure protocol (TLS, QUIC, HTTPS, HTTP3).
-func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer, protocol string) (*dns.Msg, error) {
+func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, protocol string) (*dns.Msg, error) {
 	// Configure TLS
 	tlsConfig := &tls.Config{
 		CurvePreferences:   []tls.CurveID{},
@@ -174,7 +180,7 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 	}
 
 	if server.SkipTLSVerify {
-		LogDebug("QUERY: TLS verification disabled for %s - security risk!", server.ServerName)
+		log.Debugf("QUERY: TLS verification disabled for %s - security risk!", server.ServerName)
 	}
 
 	// Route to appropriate protocol handler
@@ -193,7 +199,7 @@ func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, ser
 }
 
 // executeTLS executes a DNS query over DNS over TLS (DoT).
-func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	// Clone the client via struct copy to avoid mutating the shared client's TLS config.
 	// This prevents a race condition where concurrent queries to upstreams with
 	// different TLS verification policies could cross-contaminate each other.
@@ -204,14 +210,14 @@ func (qc *QueryClient) executeTLS(ctx context.Context, msg *dns.Msg, server *Ups
 }
 
 // executeQUIC executes a DNS query over DNS over QUIC (DoQ).
-func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	// Clone and configure TLS for DoQ
 	tlsConfig = tlsConfig.Clone()
 	tlsConfig.NextProtos = NextProtoDoQ
 
 	// Configure QUIC
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        IdleTimeout,
+		MaxIdleTimeout:        config.IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		EnableDatagrams:       true,
@@ -251,8 +257,8 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 	}
 
 	// Write message with length prefix
-	buf := bufferPool.Get()
-	defer bufferPool.Put(buf)
+	buf := pool.DefaultBufferPool.Get()
+	defer pool.DefaultBufferPool.Put(buf)
 
 	if len(buf) < 2+len(msgData) {
 		buf = make([]byte, 2+len(msgData))
@@ -267,8 +273,8 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 	}
 
 	// Read response
-	respBuf := bufferPool.Get()
-	defer bufferPool.Put(respBuf)
+	respBuf := pool.DefaultBufferPool.Get()
+	defer pool.DefaultBufferPool.Put(respBuf)
 
 	n, err := stream.Read(respBuf)
 	if err != nil && n == 0 {
@@ -282,10 +288,10 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 	}
 
 	// Parse response
-	response := messagePool.Get()
+	response := pool.DefaultMessagePool.Get()
 	if err := response.Unpack(respBuf[2:n]); err != nil {
 		msg.Id = originalID
-		messagePool.Put(response)
+		pool.DefaultMessagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 
@@ -296,7 +302,7 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *Up
 }
 
 // executeDoH executes a DNS query over DNS over HTTPS (DoH/HTTP2).
-func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	// Parse URL
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
@@ -305,7 +311,7 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 
 	// Add default port if not specified
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultDOHPort)
+		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
 	}
 
 	// Clone the transport to avoid mutating the shared transport's TLS config.
@@ -375,10 +381,10 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 	}
 
 	// Parse DNS response
-	response := messagePool.Get()
+	response := pool.DefaultMessagePool.Get()
 	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
-		messagePool.Put(response)
+		pool.DefaultMessagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 
@@ -389,7 +395,7 @@ func (qc *QueryClient) executeDoH(ctx context.Context, msg *dns.Msg, server *Ups
 }
 
 // executeDoH3 executes a DNS query over DNS over HTTPS/3 (DoH3/HTTP3).
-func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	// Parse URL
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
@@ -398,7 +404,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 
 	// Add default port if not specified
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, DefaultDOHPort)
+		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
 	}
 
 	// Configure TLS for HTTP/3
@@ -409,7 +415,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 	transport := &http3.Transport{
 		TLSClientConfig: tlsConfig,
 		QUICConfig: &quic.Config{
-			MaxIdleTimeout:        IdleTimeout,
+			MaxIdleTimeout:        config.IdleTimeout,
 			MaxIncomingStreams:    MaxIncomingStreams,
 			MaxIncomingUniStreams: MaxIncomingStreams,
 			EnableDatagrams:       true,
@@ -476,10 +482,10 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 	}
 
 	// Parse DNS response
-	response := messagePool.Get()
+	response := pool.DefaultMessagePool.Get()
 	if err := response.Unpack(body); err != nil {
 		msg.Id = originalID
-		messagePool.Put(response)
+		pool.DefaultMessagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 
@@ -490,7 +496,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *Up
 }
 
 // executeTraditionalQuery executes a DNS query over traditional UDP or TCP.
-func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *UpstreamServer) (*dns.Msg, error) {
+func (qc *QueryClient) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	var client *dns.Client
 
 	switch server.Protocol {

@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -17,32 +17,26 @@ import (
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
-)
 
-const (
-	DefaultLatencyProbeTimeout = 100 * time.Millisecond // Default timeout for each latency probe step
+	"zjdns/config"
+	"zjdns/edns"
+	"zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 )
-
-// LatencyProbeStep defines a single step in the latency probing process, including the protocol to use, optional port, and timeout for the probe.
-type LatencyProbeStep struct {
-	Protocol string `json:"protocol"`
-	Port     int    `json:"port,omitempty"`
-	Timeout  int    `json:"timeout,omitempty"`
-}
 
 // startLatencyProbe starts a background latency probe for A/AAAA records when configured.
 // It will reorder cached answers if a faster ordering is discovered.
-func (s *DNSServer) startLatencyProbe(question dns.Question, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption) {
+func (s *DNSServer) startLatencyProbe(question dns.Question, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) {
 	if s == nil || len(s.config.Server.Features.LatencyProbe) == 0 {
-		LogDebug("LATENCY: probe skipped for %s because latency_probe is not configured", question.Name)
+		log.Debugf("LATENCY: probe skipped for %s because latency_probe is not configured", question.Name)
 		return
 	}
 	if question.Qtype != dns.TypeA && question.Qtype != dns.TypeAAAA {
-		LogDebug("LATENCY: probe skipped for %s because query type is not A/AAAA", question.Name)
+		log.Debugf("LATENCY: probe skipped for %s because query type is not A/AAAA", question.Name)
 		return
 	}
 	if len(answer) <= 1 {
-		LogDebug("LATENCY: probe skipped for %s because answer length <= 1", question.Name)
+		log.Debugf("LATENCY: probe skipped for %s because answer length <= 1", question.Name)
 		return
 	}
 
@@ -56,42 +50,42 @@ func (s *DNSServer) startLatencyProbe(question dns.Question, cacheKey string, an
 		}
 	}
 	if aaaaCount <= 1 {
-		LogDebug("LATENCY: probe skipped for %s because only one A/AAAA record present", question.Name)
+		log.Debugf("LATENCY: probe skipped for %s because only one A/AAAA record present", question.Name)
 		return
 	}
 
 	steps := s.config.Server.Features.LatencyProbe
-	LogDebug("LATENCY: starting background latency probe for %s with %d steps", question.Name, len(steps))
+	log.Debugf("LATENCY: starting background latency probe for %s with %d steps", question.Name, len(steps))
 
 	s.backgroundGroup.Go(func() error {
-		defer HandlePanic("latency probe")
+		defer dnsutil.HandlePanic("latency probe")
 		if err := s.performLatencyProbeAndReorder(s.backgroundCtx, cacheKey, answer, authority, additional, validated, ecsResponse, steps); err != nil {
-			LogDebug("LATENCY: background probe failed for %s: %v", question.Name, err)
+			log.Debugf("LATENCY: background probe failed for %s: %v", question.Name, err)
 		}
 		return nil
 	})
 }
 
 // performLatencyProbeAndReorder performs latency probes for A/AAAA records and reorders them in the cache if a faster order is found.
-func (s *DNSServer) performLatencyProbeAndReorder(ctx context.Context, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *ECSOption, steps []LatencyProbeStep) error {
+func (s *DNSServer) performLatencyProbeAndReorder(ctx context.Context, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, steps []config.LatencyProbeStep) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	LogDebug("LATENCY: performing latency probe for cache key %s", cacheKey)
+	log.Debugf("LATENCY: performing latency probe for cache key %s", cacheKey)
 	sortedAnswer, changed := sortAAndAAAARecordsByLatency(ctx, answer, steps)
 	if !changed {
-		LogDebug("LATENCY: no faster A/AAAA order found for %s", cacheKey)
+		log.Debugf("LATENCY: no faster A/AAAA order found for %s", cacheKey)
 		return nil
 	}
 
 	s.cacheMgr.Set(cacheKey, sortedAnswer, authority, additional, validated, ecsResponse)
-	LogDebug("LATENCY: reordered A/AAAA records for %s", cacheKey)
+	log.Debugf("LATENCY: reordered A/AAAA records for %s", cacheKey)
 	return nil
 }
 
 // sortAAndAAAARecordsByLatency probes each A/AAAA record and sorts them by latency. It returns the sorted answer and whether the order was changed.
-func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []LatencyProbeStep) ([]dns.RR, bool) {
+func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []config.LatencyProbeStep) ([]dns.RR, bool) {
 	indices := make([]int, 0, len(answer))
 	for i, rr := range answer {
 		if isAOrAAAA(rr) {
@@ -128,7 +122,7 @@ func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []
 	close(results)
 
 	for _, c := range candidates {
-		LogDebug("LATENCY: probe result %s latency=%s", c.rr.String(), c.latency)
+		log.Debugf("LATENCY: probe result %s latency=%s", c.rr.String(), c.latency)
 	}
 
 	sort.SliceStable(candidates, func(i, j int) bool {
@@ -151,7 +145,7 @@ func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []
 }
 
 // measureRecordLatency probes the given A/AAAA record using the configured steps and returns the measured latency. If all probes fail, it returns MaxInt64.
-func measureRecordLatency(ctx context.Context, rr dns.RR, steps []LatencyProbeStep) time.Duration {
+func measureRecordLatency(ctx context.Context, rr dns.RR, steps []config.LatencyProbeStep) time.Duration {
 	ip := extractIPAddress(rr)
 	if ip == nil {
 		return time.Duration(math.MaxInt64)
@@ -165,11 +159,11 @@ func measureRecordLatency(ctx context.Context, rr dns.RR, steps []LatencyProbeSt
 		}
 		stepTimeout := time.Duration(step.Timeout) * time.Millisecond
 		if stepTimeout <= 0 {
-			stepTimeout = DefaultLatencyProbeTimeout
+			stepTimeout = config.DefaultLatencyProbeTimeout
 		}
 
 		stepCtx, cancel := context.WithTimeout(ctx, stepTimeout)
-		if err := probeAddress(stepCtx, ip, LatencyProbeStep{Protocol: protocol, Port: step.Port}); err == nil {
+		if err := probeAddress(stepCtx, ip, config.LatencyProbeStep{Protocol: protocol, Port: step.Port}); err == nil {
 			cancel()
 			return time.Since(start)
 		}
@@ -180,7 +174,7 @@ func measureRecordLatency(ctx context.Context, rr dns.RR, steps []LatencyProbeSt
 }
 
 // probeAddress performs a latency probe to the given IP address using the specified protocol and port. It returns an error if the probe fails.
-func probeAddress(ctx context.Context, ip net.IP, step LatencyProbeStep) error {
+func probeAddress(ctx context.Context, ip net.IP, step config.LatencyProbeStep) error {
 	protocol := strings.ToLower(strings.TrimSpace(step.Protocol))
 	switch protocol {
 	case "ping", "icmp":
@@ -253,7 +247,7 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool) 
 			ForceAttemptHTTP2: false,
 			TLSClientConfig:   tlsConfig,
 			DialContext:       (&net.Dialer{}).DialContext,
-			IdleConnTimeout:   DefaultLatencyProbeTimeout,
+			IdleConnTimeout:   config.DefaultLatencyProbeTimeout,
 		}
 		client = &http.Client{Transport: transport}
 	}

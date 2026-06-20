@@ -1,24 +1,25 @@
-// Package main implements ZJDNS - High Performance DNS Server
-package main
+// Package cidr provides CIDR-based IP filtering with tag-based matching.
+package cidr
 
 import (
 	"bufio"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"os"
 	"slices"
 	"strings"
-	"sync/atomic"
+	"sync"
+
+	"zjdns/config"
+	"zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 )
 
-// CIDRConfig defines the configuration for a CIDR-based client filter, including an optional file source and inline rules.
-type CIDRConfig struct {
-	File  string   `json:"file,omitempty"`
-	Rules []string `json:"rules,omitempty"`
-	Tag   string   `json:"tag"`
-}
+// Sentinel errors.
+var (
+	ErrEmptyTag = errors.New("CIDR tag cannot be empty")
+)
 
 // CIDRRule represents a compiled set of CIDR networks associated with a tag, optimized for fast IP matching.
 type CIDRRule struct {
@@ -29,10 +30,11 @@ type CIDRRule struct {
 	totalNets int
 }
 
-// CIDRManager manages multiple CIDR rules and provides efficient IP matching with caching.
-type CIDRManager struct {
-	rules      atomic.Value
-	matchCache atomic.Value
+// Manager manages multiple CIDR rules and provides efficient IP matching with caching.
+type Manager struct {
+	rules      map[string]*CIDRRule
+	matchCache map[string]*CIDRMatchInfo
+	mu         sync.RWMutex
 }
 
 // CIDRMatchInfo stores the parsed information for a CIDR match tag, including whether it's negated and the original tag string.
@@ -49,69 +51,65 @@ type ipv4Net struct {
 	prefix uint8
 }
 
-// NewCIDRManager creates a new CIDR manager from the provided configurations
-func NewCIDRManager(configs []CIDRConfig) (*CIDRManager, error) {
-	cm := &CIDRManager{}
-	rules := make(map[string]*CIDRRule)
-	matchCache := make(map[string]*CIDRMatchInfo)
-	cm.rules.Store(rules)
-	cm.matchCache.Store(matchCache)
-
-	for _, config := range configs {
-		if config.Tag == "" {
-			return nil, errors.New("CIDR tag cannot be empty")
-		}
-		if _, exists := rules[config.Tag]; exists {
-			return nil, fmt.Errorf("duplicate CIDR tag: %s", config.Tag)
-		}
-
-		rule, err := cm.loadCIDRConfig(config)
-		if err != nil {
-			return nil, fmt.Errorf("load CIDR config for tag '%s': %w", config.Tag, err)
-		}
-		rules[config.Tag] = rule
-
-		sourceInfo := ""
-		if config.File != "" && len(config.Rules) > 0 {
-			sourceInfo = fmt.Sprintf("%s + %d inline rules", config.File, len(config.Rules))
-		} else if config.File != "" {
-			sourceInfo = config.File
-		} else {
-			sourceInfo = fmt.Sprintf("%d inline rules", len(config.Rules))
-		}
-		LogInfo("CIDR: Loaded tag=%s, source=%s, total=%d", config.Tag, sourceInfo, len(rule.nets))
+// New creates a new CIDR Manager from the provided configurations.
+func New(configs []config.CIDRConfig) (*Manager, error) {
+	cm := &Manager{
+		rules:      make(map[string]*CIDRRule),
+		matchCache: make(map[string]*CIDRMatchInfo),
 	}
 
-	cm.rules.Store(rules)
+	for _, cfg := range configs {
+		if cfg.Tag == "" {
+			return nil, ErrEmptyTag
+		}
+		if _, exists := cm.rules[cfg.Tag]; exists {
+			return nil, fmt.Errorf("duplicate CIDR tag: %s", cfg.Tag)
+		}
+
+		rule, err := cm.loadConfig(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("load CIDR config for tag '%s': %w", cfg.Tag, err)
+		}
+		cm.rules[cfg.Tag] = rule
+
+		sourceInfo := ""
+		if cfg.File != "" && len(cfg.Rules) > 0 {
+			sourceInfo = fmt.Sprintf("%s + %d inline rules", cfg.File, len(cfg.Rules))
+		} else if cfg.File != "" {
+			sourceInfo = cfg.File
+		} else {
+			sourceInfo = fmt.Sprintf("%d inline rules", len(cfg.Rules))
+		}
+		log.Infof("CIDR: Loaded tag=%s, source=%s, total=%d", cfg.Tag, sourceInfo, len(rule.nets))
+	}
+
 	return cm, nil
 }
 
-// loadCIDRConfig loads CIDR rules from file and inline configuration
-func (cm *CIDRManager) loadCIDRConfig(config CIDRConfig) (*CIDRRule, error) {
-	rule := &CIDRRule{tag: config.Tag, nets: make([]*net.IPNet, 0)}
+// loadConfig loads CIDR rules from file and inline configuration.
+func (cm *Manager) loadConfig(cfg config.CIDRConfig) (*CIDRRule, error) {
+	rule := &CIDRRule{tag: cfg.Tag, nets: make([]*net.IPNet, 0)}
 	validCount := 0
 
-	// Process inline rules
-	for i, cidr := range config.Rules {
+	for i, cidr := range cfg.Rules {
 		cidr = strings.TrimSpace(cidr)
 		if cidr == "" || strings.HasPrefix(cidr, "#") {
 			continue
 		}
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
-			LogWarn("CIDR: Invalid CIDR in rules[%d] for tag '%s': %s - %v", i, config.Tag, cidr, err)
+			log.Warnf("CIDR: Invalid CIDR in rules[%d] for tag '%s': %s - %v", i, cfg.Tag, cidr, err)
 			continue
 		}
 		rule.nets = append(rule.nets, ipNet)
 		validCount++
 	}
 
-	// Process file if specified
-	if config.File != "" {
-		if !IsValidFilePath(config.File) {
-			return nil, fmt.Errorf("invalid file path: %s", config.File)
+	if cfg.File != "" {
+		if !dnsutil.IsValidFilePath(cfg.File) {
+			return nil, fmt.Errorf("invalid file path: %s", cfg.File)
 		}
-		f, err := os.Open(config.File)
+		f, err := os.Open(cfg.File)
 		if err != nil {
 			return nil, fmt.Errorf("open CIDR file: %w", err)
 		}
@@ -127,7 +125,7 @@ func (cm *CIDRManager) loadCIDRConfig(config CIDRConfig) (*CIDRRule, error) {
 			}
 			_, ipNet, err := net.ParseCIDR(line)
 			if err != nil {
-				LogWarn("CIDR: Invalid CIDR at %s:%d: %s - %v", config.File, lineNum, line, err)
+				log.Warnf("CIDR: Invalid CIDR at %s:%d: %s - %v", cfg.File, lineNum, line, err)
 				continue
 			}
 			rule.nets = append(rule.nets, ipNet)
@@ -139,16 +137,15 @@ func (cm *CIDRManager) loadCIDRConfig(config CIDRConfig) (*CIDRRule, error) {
 	}
 
 	if validCount == 0 {
-		return nil, fmt.Errorf("no valid CIDR entries for tag '%s'", config.Tag)
+		return nil, fmt.Errorf("no valid CIDR entries for tag '%s'", cfg.Tag)
 	}
 
 	rule.preprocessNetworks()
 	return rule, nil
 }
 
-// MatchIP checks if an IP address matches the specified CIDR tag
-// MatchIP returns whether the IP matches the tag and whether the tag exists.
-func (cm *CIDRManager) MatchIP(ip net.IP, matchTag string) (matched bool, exists bool) {
+// MatchIP checks if an IP address matches the specified CIDR tag.
+func (cm *Manager) MatchIP(ip net.IP, matchTag string) (matched bool, exists bool) {
 	if cm == nil || matchTag == "" {
 		return true, true
 	}
@@ -158,9 +155,7 @@ func (cm *CIDRManager) MatchIP(ip net.IP, matchTag string) (matched bool, exists
 		return false, false
 	}
 
-	rules := cm.rules.Load().(map[string]*CIDRRule)
-	rule, exists := rules[matchInfo.Tag]
-
+	rule, exists := cm.rules[matchInfo.Tag]
 	if !exists {
 		return false, false
 	}
@@ -172,11 +167,12 @@ func (cm *CIDRManager) MatchIP(ip net.IP, matchTag string) (matched bool, exists
 	return inList, true
 }
 
-// getMatchInfo retrieves or creates match info for a tag, caching the result
-func (cm *CIDRManager) getMatchInfo(matchTag string) *CIDRMatchInfo {
-	matchCache := cm.matchCache.Load().(map[string]*CIDRMatchInfo)
+// getMatchInfo retrieves or creates match info for a tag.
+func (cm *Manager) getMatchInfo(matchTag string) *CIDRMatchInfo {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
 
-	if info, exists := matchCache[matchTag]; exists {
+	if info, exists := cm.matchCache[matchTag]; exists {
 		return info
 	}
 
@@ -189,11 +185,10 @@ func (cm *CIDRManager) getMatchInfo(matchTag string) *CIDRMatchInfo {
 		Original: matchTag,
 	}
 
-	newCache := make(map[string]*CIDRMatchInfo, len(matchCache)+1)
-	maps.Copy(newCache, matchCache)
-	newCache[matchTag] = info
-	cm.matchCache.Store(newCache)
-
+	if cm.matchCache == nil {
+		cm.matchCache = make(map[string]*CIDRMatchInfo)
+	}
+	cm.matchCache[matchTag] = info
 	return info
 }
 

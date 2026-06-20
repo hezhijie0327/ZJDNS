@@ -1,5 +1,5 @@
 // Package main implements ZJDNS - High Performance DNS Server
-package main
+package server
 
 import (
 	"bufio"
@@ -26,6 +26,11 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
+
+	"zjdns/config"
+	"zjdns/internal/dnsutil"
+	"zjdns/internal/log"
+	"zjdns/internal/pool"
 )
 
 const (
@@ -158,8 +163,8 @@ func IsTemporaryError(err error) bool {
 	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
 }
 
-// GetSecureClientIP extracts client IP from secure connection.
-func GetSecureClientIP(conn any) net.IP {
+// SecureClientIP extracts client IP from secure connection.
+func SecureClientIP(conn any) net.IP {
 	switch c := conn.(type) {
 	case *net.Conn:
 		if addr, ok := (*c).RemoteAddr().(*net.TCPAddr); ok {
@@ -175,7 +180,7 @@ func GetSecureClientIP(conn any) net.IP {
 
 // NewTLSManager creates a new TLSManager with the given server and configuration.
 // It loads or generates TLS certificates and initializes the TLS configuration.
-func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error) {
+func NewTLSManager(server *DNSServer, config *config.ServerConfig) (*TLSManager, error) {
 	var cert tls.Certificate
 	var err error
 
@@ -185,13 +190,13 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 		if err != nil {
 			return nil, fmt.Errorf("generate self-signed certificate: %w", err)
 		}
-		LogInfo("TLS: Using self-signed certificate for domain: %s", config.Server.Features.DDR.Domain)
+		log.Infof("TLS: Using self-signed certificate for domain: %s", config.Server.Features.DDR.Domain)
 	} else {
 		cert, err = tls.LoadX509KeyPair(config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load certificate: %w", err)
 		}
-		LogInfo("TLS: Using certificate from files: %s, %s", config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
+		log.Infof("TLS: Using certificate from files: %s, %s", config.Server.TLS.CertFile, config.Server.TLS.KeyFile)
 	}
 
 	// Create TLS configuration
@@ -223,17 +228,17 @@ func NewTLSManager(server *DNSServer, config *ServerConfig) (*TLSManager, error)
 // displayCertificateInfo logs information about the TLS certificate.
 func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 	if len(cert.Certificate) == 0 {
-		LogError("TLS: No certificate found")
+		log.Errorf("TLS: No certificate found")
 		return
 	}
 
 	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
-		LogError("TLS: Failed to parse certificate: %v", err)
+		log.Errorf("TLS: Failed to parse certificate: %v", err)
 		return
 	}
 
-	LogInfo("TLS: Certificate: Subject: %s | Issuer: %s | Valid: %s -> %s | Algorithm: %s",
+	log.Infof("TLS: Certificate: Subject: %s | Issuer: %s | Valid: %s -> %s | Algorithm: %s",
 		x509Cert.Subject.CommonName,
 		x509Cert.Issuer.String(),
 		x509Cert.NotBefore.Format("2006-01-02"),
@@ -243,9 +248,9 @@ func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 	// Check and warn about certificate expiry
 	daysUntilExpiry := int(time.Until(x509Cert.NotAfter).Hours() / 24)
 	if daysUntilExpiry < 0 {
-		LogError("TLS: Certificate has EXPIRED for %d days!", -daysUntilExpiry)
+		log.Errorf("TLS: Certificate has EXPIRED for %d days!", -daysUntilExpiry)
 	} else if daysUntilExpiry <= 30 {
-		LogWarn("TLS: Certificate expires in %d days!", daysUntilExpiry)
+		log.Warnf("TLS: Certificate expires in %d days!", daysUntilExpiry)
 	}
 }
 
@@ -259,7 +264,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 	// Start DoH server if HTTPS port is configured
 	if httpsPort != "" {
 		g.Go(func() error {
-			defer HandlePanic("DoH server")
+			defer dnsutil.HandlePanic("DoH server")
 			if err := tm.startDOHServer(httpsPort); err != nil {
 				return fmt.Errorf("DoH startup: %w", err)
 			}
@@ -269,7 +274,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 
 		// Start DoH3 server
 		g.Go(func() error {
-			defer HandlePanic("DoH3 server")
+			defer dnsutil.HandlePanic("DoH3 server")
 			if err := tm.startDoH3Server(httpsPort); err != nil {
 				return fmt.Errorf("DoH3 startup: %w", err)
 			}
@@ -280,7 +285,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 
 	// Start DoT server
 	g.Go(func() error {
-		defer HandlePanic("DoT server")
+		defer dnsutil.HandlePanic("DoT server")
 		if err := tm.startDOTServer(); err != nil {
 			return fmt.Errorf("DoT startup: %w", err)
 		}
@@ -290,7 +295,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 
 	// Start DoQ server
 	g.Go(func() error {
-		defer HandlePanic("DoQ server")
+		defer dnsutil.HandlePanic("DoQ server")
 		if err := tm.startDOQServer(); err != nil {
 			return fmt.Errorf("DoQ startup: %w", err)
 		}
@@ -300,7 +305,7 @@ func (tm *TLSManager) Start(httpsPort string) error {
 
 	// Coordinate server goroutines
 	go func() {
-		defer HandlePanic("TLS manager coordinator")
+		defer dnsutil.HandlePanic("TLS manager coordinator")
 		if err := g.Wait(); err != nil {
 			select {
 			case errChan <- err:
@@ -332,10 +337,10 @@ func (tm *TLSManager) startDOTServer() error {
 	dotTLSConfig.NextProtos = NextProtoDOT
 
 	tm.dotListener = tls.NewListener(listener, dotTLSConfig)
-	LogInfo("DOT: DoT server started on port %s", tm.server.config.Server.TLS.Port)
+	log.Infof("DOT: DoT server started on port %s", tm.server.config.Server.TLS.Port)
 
 	tm.serverGroup.Go(func() error {
-		defer HandlePanic("DoT server")
+		defer dnsutil.HandlePanic("DoT server")
 		tm.handleDOTConnections()
 		return nil
 	})
@@ -357,12 +362,12 @@ func (tm *TLSManager) handleDOTConnections() {
 			if tm.ctx.Err() != nil {
 				return
 			}
-			LogError("DOT: Accept error: %v", err)
+			log.Errorf("DOT: Accept error: %v", err)
 			continue
 		}
 
 		tm.serverGroup.Go(func() error {
-			defer HandlePanic("DoT connection handler")
+			defer dnsutil.HandlePanic("DoT connection handler")
 			defer func() { _ = conn.Close() }()
 			tm.handleDOTConnection(conn)
 			return nil
@@ -397,18 +402,18 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		n, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
 			if err != io.EOF && !IsTemporaryError(err) {
-				LogDebug("DOT: Read length error: %v", err)
+				log.Debugf("DOT: Read length error: %v", err)
 			}
 			return
 		}
 		if n != 2 {
-			LogDebug("DOT: Invalid length read: %d bytes", n)
+			log.Debugf("DOT: Invalid length read: %d bytes", n)
 			return
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
-		if msgLength == 0 || msgLength > TCPBufferSize {
-			LogDebug("DOT: Invalid message length: %d", msgLength)
+		if msgLength == 0 || msgLength > pool.TCPBufferSize {
+			log.Debugf("DOT: Invalid message length: %d", msgLength)
 			return
 		}
 
@@ -416,19 +421,19 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 		msgBuf := make([]byte, msgLength)
 		n, err = io.ReadFull(reader, msgBuf)
 		if err != nil {
-			LogDebug("DOT: Read message error: %v", err)
+			log.Debugf("DOT: Read message error: %v", err)
 			return
 		}
 		if n != int(msgLength) {
-			LogDebug("DOT: Incomplete message read: %d/%d bytes", n, msgLength)
+			log.Debugf("DOT: Incomplete message read: %d/%d bytes", n, msgLength)
 			return
 		}
 
 		// Parse DNS message
-		req := messagePool.Get()
+		req := pool.DefaultMessagePool.Get()
 		if err := req.Unpack(msgBuf); err != nil {
-			LogDebug("DOT: DNS message unpack error: %v", err)
-			messagePool.Put(req)
+			log.Debugf("DOT: DNS message unpack error: %v", err)
+			pool.DefaultMessagePool.Put(req)
 			continue
 		}
 
@@ -440,13 +445,13 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 
 		// Process query
 		response := tm.server.processDNSQuery(req, clientIP, true, "DoT")
-		messagePool.Put(req)
+		pool.DefaultMessagePool.Put(req)
 
 		if response != nil {
 			respBuf, err := response.Pack()
 			if err != nil {
-				LogDebug("DOT: Response pack error: %v", err)
-				messagePool.Put(response)
+				log.Debugf("DOT: Response pack error: %v", err)
+				pool.DefaultMessagePool.Put(response)
 				return
 			}
 
@@ -455,18 +460,18 @@ func (tm *TLSManager) handleDOTConnection(conn net.Conn) {
 			binary.BigEndian.PutUint16(lengthBuf, uint16(len(respBuf)))
 
 			if _, err := tlsConn.Write(lengthBuf); err != nil {
-				LogDebug("DOT: Write length error: %v", err)
-				messagePool.Put(response)
+				log.Debugf("DOT: Write length error: %v", err)
+				pool.DefaultMessagePool.Put(response)
 				return
 			}
 
 			if _, err := tlsConn.Write(respBuf); err != nil {
-				LogDebug("DOT: Write response error: %v", err)
-				messagePool.Put(response)
+				log.Debugf("DOT: Write response error: %v", err)
+				pool.DefaultMessagePool.Put(response)
 				return
 			}
 
-			messagePool.Put(response)
+			pool.DefaultMessagePool.Put(response)
 		}
 	}
 }
@@ -494,7 +499,7 @@ func (tm *TLSManager) startDOQServer() error {
 	quicTLSConfig.NextProtos = NextProtoDoQ
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        IdleTimeout,
+		MaxIdleTimeout:        config.IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             false,
@@ -507,10 +512,10 @@ func (tm *TLSManager) startDOQServer() error {
 		return fmt.Errorf("DoQ listen: %w", err)
 	}
 
-	LogInfo("DOQ: DoQ server started on port %s", tm.server.config.Server.TLS.Port)
+	log.Infof("DOQ: DoQ server started on port %s", tm.server.config.Server.TLS.Port)
 
 	tm.serverGroup.Go(func() error {
-		defer HandlePanic("DoQ server")
+		defer dnsutil.HandlePanic("DoQ server")
 		tm.handleDOQConnections()
 		return nil
 	})
@@ -540,7 +545,7 @@ func (tm *TLSManager) handleDOQConnections() {
 		}
 
 		tm.serverGroup.Go(func() error {
-			defer HandlePanic("DoQ connection handler")
+			defer dnsutil.HandlePanic("DoQ connection handler")
 			tm.handleDOQConnection(conn)
 			return nil
 		})
@@ -568,7 +573,7 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		select {
 		case <-done:
 		case <-ctx.Done():
-			LogDebug("QUIC: Connection close timeout")
+			log.Debugf("QUIC: Connection close timeout")
 		}
 	}()
 
@@ -578,12 +583,12 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		select {
 		case <-tm.ctx.Done():
 			if err := streamGroup.Wait(); err != nil {
-				LogError("DoQ: Stream group finished with error: %v", err)
+				log.Errorf("DoQ: Stream group finished with error: %v", err)
 			}
 			return
 		case <-conn.Context().Done():
 			if err := streamGroup.Wait(); err != nil {
-				LogError("DoQ: Stream group finished with error: %v", err)
+				log.Errorf("DoQ: Stream group finished with error: %v", err)
 			}
 			return
 		default:
@@ -592,7 +597,7 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		stream, err := conn.AcceptStream(tm.ctx)
 		if err != nil {
 			if err := streamGroup.Wait(); err != nil {
-				LogError("DoQ: Stream group finished with error: %v", err)
+				log.Errorf("DoQ: Stream group finished with error: %v", err)
 			}
 			return
 		}
@@ -602,7 +607,7 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 		}
 
 		streamGroup.Go(func() error {
-			defer HandlePanic("DoQ stream handler")
+			defer dnsutil.HandlePanic("DoQ stream handler")
 			if stream != nil {
 				defer func() { _ = stream.Close() }()
 				tm.handleDOQStream(stream, conn)
@@ -614,8 +619,8 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 
 // handleDOQStream handles a single DoQ stream.
 func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
-	buf := bufferPool.Get()
-	defer bufferPool.Put(buf)
+	buf := pool.DefaultBufferPool.Get()
+	defer pool.DefaultBufferPool.Put(buf)
 
 	// Read message length
 	n, err := io.ReadFull(stream, buf[:2])
@@ -624,7 +629,7 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	msgLen := binary.BigEndian.Uint16(buf[:2])
-	if msgLen == 0 || msgLen > SecureBufferSize-2 {
+	if msgLen == 0 || msgLen > pool.SecureBufferSize-2 {
 		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid length")
 		return
 	}
@@ -636,22 +641,22 @@ func (tm *TLSManager) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	// Parse DNS message
-	req := messagePool.Get()
+	req := pool.DefaultMessagePool.Get()
 	if err := req.Unpack(buf[2 : 2+msgLen]); err != nil {
 		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid DNS message")
-		messagePool.Put(req)
+		pool.DefaultMessagePool.Put(req)
 		return
 	}
 
 	// Get client IP and process query
-	clientIP := GetSecureClientIP(conn)
+	clientIP := SecureClientIP(conn)
 	response := tm.server.processDNSQuery(req, clientIP, true, "DoQ")
 	// Send response
 	if err := tm.respondQUIC(stream, response); err != nil {
-		LogDebug("PROTOCOL: DoQ response failed: %v", err)
+		log.Debugf("PROTOCOL: DoQ response failed: %v", err)
 	}
 	if response != nil {
-		messagePool.Put(response)
+		pool.DefaultMessagePool.Put(response)
 	}
 }
 
@@ -666,8 +671,8 @@ func (tm *TLSManager) respondQUIC(stream *quic.Stream, response *dns.Msg) error 
 		return fmt.Errorf("pack response: %w", err)
 	}
 
-	buf := bufferPool.Get()
-	defer bufferPool.Put(buf)
+	buf := pool.DefaultBufferPool.Get()
+	defer pool.DefaultBufferPool.Put(buf)
 
 	if len(buf) < 2+len(respBuf) {
 		buf = make([]byte, 2+len(respBuf))
@@ -698,19 +703,19 @@ func (tm *TLSManager) startDOHServer(port string) error {
 	tlsConfig.NextProtos = NextProtoDoH
 
 	tm.httpsListener = tls.NewListener(listener, tlsConfig)
-	LogInfo("DOH: DoH server started on port %s", port)
+	log.Infof("DOH: DoH server started on port %s", port)
 
 	tm.httpsServer = &http.Server{
 		Handler:           tm,
 		ReadHeaderTimeout: OperationTimeout,
 		WriteTimeout:      OperationTimeout,
-		IdleTimeout:       IdleTimeout,
+		IdleTimeout:       config.IdleTimeout,
 	}
 
 	tm.serverGroup.Go(func() error {
-		defer HandlePanic("DoH server")
+		defer dnsutil.HandlePanic("DoH server")
 		if err := tm.httpsServer.Serve(tm.httpsListener); err != nil && err != http.ErrServerClosed {
-			LogError("DOH: DoH server error: %v", err)
+			log.Errorf("DOH: DoH server error: %v", err)
 			return err
 		}
 		return nil
@@ -727,7 +732,7 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 	tlsConfig.NextProtos = NextProtoDoH3
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        IdleTimeout,
+		MaxIdleTimeout:        config.IdleTimeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             false,
@@ -740,14 +745,14 @@ func (tm *TLSManager) startDoH3Server(port string) error {
 	}
 
 	tm.h3Listener = quicListener
-	LogInfo("DOH3: DoH3 server started on port %s", port)
+	log.Infof("DOH3: DoH3 server started on port %s", port)
 
 	tm.h3Server = &http3.Server{Handler: tm}
 
 	tm.serverGroup.Go(func() error {
-		defer HandlePanic("DoH3 server")
+		defer dnsutil.HandlePanic("DoH3 server")
 		if err := tm.h3Server.ServeListener(tm.h3Listener); err != nil && err != http.ErrServerClosed {
-			LogError("DOH3: DoH3 server error: %v", err)
+			log.Errorf("DOH3: DoH3 server error: %v", err)
 			return err
 		}
 		return nil
@@ -766,7 +771,7 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Check endpoint path
 	expectedPath := tm.server.config.Server.TLS.HTTPS.Endpoint
 	if expectedPath == "" {
-		expectedPath = DefaultQueryPath
+		expectedPath = config.DefaultQueryPath
 	}
 	if !strings.HasPrefix(expectedPath, "/") {
 		expectedPath = "/" + expectedPath
@@ -792,10 +797,10 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	response := tm.server.processDNSQuery(req, nil, true, protocol)
 
 	if err := tm.respondDoH(w, response); err != nil {
-		LogError("DOH: DoH response failed: %v", err)
+		log.Errorf("DOH: DoH response failed: %v", err)
 	}
 	if response != nil {
-		messagePool.Put(response)
+		pool.DefaultMessagePool.Put(response)
 	}
 }
 
@@ -835,9 +840,9 @@ func (tm *TLSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
 		return nil, http.StatusBadRequest
 	}
 
-	req := messagePool.Get()
+	req := pool.DefaultMessagePool.Get()
 	if err := req.Unpack(buf); err != nil {
-		messagePool.Put(req)
+		pool.DefaultMessagePool.Put(req)
 		return nil, http.StatusBadRequest
 	}
 
@@ -865,22 +870,22 @@ func (tm *TLSManager) respondDoH(w http.ResponseWriter, response *dns.Msg) error
 
 // shutdown gracefully shuts down all TLS services.
 func (tm *TLSManager) shutdown() error {
-	LogInfo("TLS: Shutting down secure DNS server")
+	log.Infof("TLS: Shutting down secure DNS server")
 
 	// Cancel context to signal all goroutines
 	tm.cancel(errors.New("tls manager shutdown"))
 
 	// Close DoT listener
 	if tm.dotListener != nil {
-		CloseWithLog(tm.dotListener, "DoT listener")
+		dnsutil.CloseWithLog(tm.dotListener, "DoT listener")
 	}
 
 	// Close DoQ listener and connection
 	if tm.doqListener != nil {
-		CloseWithLog(tm.doqListener, "DoQ listener")
+		dnsutil.CloseWithLog(tm.doqListener, "DoQ listener")
 	}
 	if tm.doqConn != nil {
-		CloseWithLog(tm.doqConn, "DoQ connection")
+		dnsutil.CloseWithLog(tm.doqConn, "DoQ connection")
 	}
 
 	// Shutdown HTTPS server
@@ -899,17 +904,17 @@ func (tm *TLSManager) shutdown() error {
 
 	// Close listeners
 	if tm.httpsListener != nil {
-		CloseWithLog(tm.httpsListener, "HTTPS listener")
+		dnsutil.CloseWithLog(tm.httpsListener, "HTTPS listener")
 	}
 	if tm.h3Listener != nil {
-		CloseWithLog(tm.h3Listener, "HTTP/3 listener")
+		dnsutil.CloseWithLog(tm.h3Listener, "HTTP/3 listener")
 	}
 
 	// Wait for all server goroutines to finish
 	if err := tm.serverGroup.Wait(); err != nil {
-		LogError("TLS: Server goroutines finished with error: %v", err)
+		log.Errorf("TLS: Server goroutines finished with error: %v", err)
 	}
 
-	LogInfo("TLS: Secure DNS server shut down")
+	log.Infof("TLS: Secure DNS server shut down")
 	return nil
 }

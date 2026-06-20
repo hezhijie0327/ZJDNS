@@ -1,4 +1,4 @@
-// Package main implements ZJDNS, a high-performance DNS server that supports DoT, DoH, DoQ, DoH3, and recursive resolution.
+// Package main implements ZJDNS, a high-performance DNS server.
 package main
 
 import (
@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"zjdns/config"
+	"zjdns/server"
 )
 
-// main is the program entry point.
 func main() {
 	var configFile string
 	var generateConfig bool
@@ -37,24 +39,28 @@ func main() {
 	}
 
 	if generateConfig {
-		fmt.Println(GenerateExampleConfig())
+		fmt.Println(config.GenerateExampleConfig())
 		return
 	}
 
-	cm := &ConfigManager{}
-	config, err := cm.LoadConfig(configFile)
+	// Set version info for CHAOS records
+	config.ProjectName = ProjectName
+	config.Version = getVersion()
+
+	cm := &config.Manager{}
+	cfg, err := cm.LoadConfig(configFile)
 	if err != nil {
 		log.Fatalf("Config load failed: %v", err)
 	}
 
-	server, err := NewDNSServer(config)
+	srv, err := server.New(cfg)
 	if err != nil {
 		log.Fatalf("Server creation failed: %v", err)
 	}
 
-	LogInfo("SERVER: ZJDNS Server started successfully!")
+	log.Println("SERVER: ZJDNS Server started successfully!")
 
-	if err := server.Start(); err != nil {
+	if err := srv.Start(); err != nil {
 		log.Fatalf("Server startup failed: %v", err)
 	}
 }
