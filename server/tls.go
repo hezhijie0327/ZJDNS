@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	TLSConnBufferSize = 128 // Buffer size for TLS connections
+	TLSConnBufferSize = 4096 // Buffer size for TLS connections (matches pool.TCPBufferSize)
 
 	DoHMaxRequestSize = 8192 // Maximum request size for DoH (8 KB)
 
@@ -106,7 +106,7 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 			Country:      []string{"CN"},
 		},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(90 * 24 * time.Hour), // 90 days validity
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // 365 days validity for self-signed CA
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign | x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -121,7 +121,7 @@ func generateSelfSignedCert(domain string) (tls.Certificate, error) {
 		},
 		DNSNames:    []string{domain},
 		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(90 * 24 * time.Hour), // 90 days validity
+		NotAfter:    time.Now().Add(365 * 24 * time.Hour), // 365 days validity for self-signed cert
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -166,12 +166,11 @@ func IsTemporaryError(err error) bool {
 // SecureClientIP extracts client IP from secure connection.
 func SecureClientIP(conn any) net.IP {
 	switch c := conn.(type) {
-	case *net.Conn:
-		if addr, ok := (*c).RemoteAddr().(*net.TCPAddr); ok {
-			return addr.IP
-		}
 	case interface{ RemoteAddr() net.Addr }:
 		if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+			return addr.IP
+		}
+		if addr, ok := c.RemoteAddr().(*net.UDPAddr); ok {
 			return addr.IP
 		}
 	}
@@ -202,7 +201,7 @@ func NewTLSManager(server *DNSServer, config *config.ServerConfig) (*TLSManager,
 	// Create TLS configuration
 	tlsConfig := &tls.Config{
 		Certificates:     []tls.Certificate{cert},
-		CurvePreferences: []tls.CurveID{},
+		CurvePreferences: []tls.CurveID{}, // empty = use Go defaults (X25519, P-256, P-384, P-521)
 		MinVersion:       tls.VersionTLS13,
 	}
 
@@ -259,7 +258,7 @@ func (tm *TLSManager) displayCertificateInfo(cert tls.Certificate) {
 func (tm *TLSManager) Start(httpsPort string) error {
 	errChan := make(chan error, 1)
 
-	g, ctx := errgroup.WithContext(context.Background())
+	g, ctx := errgroup.WithContext(tm.ctx)
 
 	// Start DoH server if HTTPS port is configured
 	if httpsPort != "" {
@@ -578,6 +577,7 @@ func (tm *TLSManager) handleDOQConnection(conn *quic.Conn) {
 	}()
 
 	streamGroup, _ := errgroup.WithContext(tm.ctx)
+	streamGroup.SetLimit(64) // Limit concurrent streams per DoQ connection
 
 	for {
 		select {
@@ -789,12 +789,17 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract client IP from the HTTP request
+	var clientIP net.IP
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		clientIP = net.ParseIP(host)
+	}
 	// Process the query
 	protocol := "DoH"
 	if strings.HasPrefix(r.Proto, "HTTP/3") {
 		protocol = "DoH3"
 	}
-	response := tm.server.processDNSQuery(req, nil, true, protocol)
+	response := tm.server.processDNSQuery(req, clientIP, true, protocol)
 
 	if err := tm.respondDoH(w, response); err != nil {
 		log.Errorf("TLS: DoH response failed: %v", err)
@@ -813,7 +818,7 @@ func (tm *TLSManager) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*
 	switch r.Method {
 	case http.MethodGet:
 		dnsParam := r.URL.Query().Get("dns")
-		if dnsParam == "" {
+		if dnsParam == "" || len(dnsParam) > DoHMaxRequestSize {
 			return nil, http.StatusBadRequest
 		}
 		buf, err = base64.RawURLEncoding.DecodeString(dnsParam)

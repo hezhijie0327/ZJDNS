@@ -2,9 +2,9 @@
 package cache
 
 import (
+	"crypto/sha256"
 	"encoding/gob"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"net"
 	"os"
@@ -93,10 +93,9 @@ type LookupResult struct {
 
 // MemoryCache provides a concurrent in-memory DNS response cache.
 // Gets use RLock (no contention between readers). Sets use a full Lock.
-// Eviction scans for the entry with the lowest access time (O(n), acceptable
-// at 16K entries since Sets are infrequent relative to Gets).
-// Memory usage is bounded by limitBytes; when exceeded, the least recently
-// accessed entries are evicted until usage drops back under the budget.
+// Clone/size-estimate work is done outside the write lock. Eviction uses a
+// single sort pass (O(N log N)). Memory usage is bounded by limitBytes; when
+// exceeded, the least recently accessed entries are evicted.
 type MemoryCache struct {
 	mu          sync.RWMutex
 	entries     map[string]*cacheItem
@@ -110,7 +109,7 @@ type MemoryCache struct {
 	persistInterval time.Duration
 	persistStop     chan struct{}
 	persistDone     chan struct{}
-	persistDirty    atomic.Int32
+	persistGen      atomic.Int64 // generation counter avoids lost-dirty race
 }
 
 type cacheItem struct {
@@ -234,24 +233,26 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 		return
 	}
 
+	// Pre-compute outside the write lock: deep copy, PTR records, size estimate.
+	fullCopy := cloneEntry(entry)
+	ptrRecords := extractPTRRecords(fullCopy)
+	estSize := estimateEntrySize(key, fullCopy, ptrRecords)
+
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 	if atomic.LoadInt32(&mc.closed) != 0 {
 		return
 	}
 
-	fullCopy := cloneEntry(entry)
-
 	if existing, ok := mc.entries[key]; ok {
 		oldSize := existing.size
 		mc.removePTRLocked(key)
 		existing.entry = fullCopy
 		existing.lastAccess.Store(time.Now().UnixNano())
-		mc.updatePTRLocked(fullCopy, key)
-		newSize := estimateEntrySize(key, fullCopy, mc.entryPTRs[key])
-		existing.size = newSize
-		mc.currentSize += newSize - oldSize
-		mc.persistDirty.Store(1)
+		mc.storePTRLocked(key, ptrRecords)
+		existing.size = estSize
+		mc.currentSize += estSize - oldSize
+		mc.persistGen.Add(1)
 		mc.evictToBudget()
 		return
 	}
@@ -259,44 +260,47 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	item := &cacheItem{entry: fullCopy}
 	item.lastAccess.Store(time.Now().UnixNano())
 	mc.entries[key] = item
-	mc.updatePTRLocked(fullCopy, key)
-	item.size = estimateEntrySize(key, fullCopy, mc.entryPTRs[key])
-	mc.currentSize += item.size
+	mc.storePTRLocked(key, ptrRecords)
+	item.size = estSize
+	mc.currentSize += estSize
 
-	mc.persistDirty.Store(1)
+	mc.persistGen.Add(1)
 	mc.evictToBudget()
 }
 
 // evictToBudget removes the least recently accessed entries until memory usage
 // falls under the byte budget. Must be called under mu.Lock.
+// Uses a single sort pass (O(N log N)) instead of repeated linear scans.
 func (mc *MemoryCache) evictToBudget() {
+	if mc.limitBytes <= 0 || mc.currentSize <= mc.limitBytes || len(mc.entries) == 0 {
+		return
+	}
+
+	type candidate struct {
+		key  string
+		last int64
+		size int64
+	}
+	all := make([]candidate, 0, len(mc.entries))
+	for k, item := range mc.entries {
+		all = append(all, candidate{k, item.lastAccess.Load(), item.size})
+	}
+
+	sort.Slice(all, func(i, j int) bool { return all[i].last < all[j].last })
+
 	evicted := 0
-	for mc.limitBytes > 0 && mc.currentSize > mc.limitBytes && len(mc.entries) > 0 {
-		mc.evictLocked()
+	for i := range all {
+		if mc.currentSize <= mc.limitBytes {
+			break
+		}
+		mc.currentSize -= all[i].size
+		mc.removePTRLocked(all[i].key)
+		delete(mc.entries, all[i].key)
 		evicted++
 	}
+
 	if evicted > 0 {
 		log.Debugf("CACHE: evicted %d entries to enforce budget (current=%d MB, limit=%d MB)", evicted, mc.currentSize/(1024*1024), mc.limitBytes/(1024*1024))
-	}
-}
-
-// evictLocked removes the entry with the oldest access time. Must be called under mu.Lock.
-func (mc *MemoryCache) evictLocked() {
-	var oldestKey string
-	var oldestTime int64 = -1
-	for k, item := range mc.entries {
-		t := item.lastAccess.Load()
-		if oldestTime == -1 || t < oldestTime {
-			oldestTime = t
-			oldestKey = k
-		}
-	}
-	if oldestKey != "" {
-		if item, ok := mc.entries[oldestKey]; ok {
-			mc.currentSize -= item.size
-		}
-		mc.removePTRLocked(oldestKey)
-		delete(mc.entries, oldestKey)
 	}
 }
 
@@ -360,11 +364,13 @@ func (mc *MemoryCache) ReverseLookup(ip net.IP) []LookupResult {
 
 // ── PTR index helpers ──
 
-func (mc *MemoryCache) updatePTRLocked(entry *CacheEntry, key string) {
+// extractPTRRecords builds a slice of ptrRecord from a CacheEntry.
+// This is a pure function — no cache state is read or written.
+func extractPTRRecords(entry *CacheEntry) []ptrRecord {
 	if entry == nil {
-		return
+		return nil
 	}
-	records := make([]ptrRecord, 0)
+	records := make([]ptrRecord, 0, len(entry.Answer))
 	for _, cr := range entry.Answer {
 		if cr == nil {
 			continue
@@ -387,16 +393,9 @@ func (mc *MemoryCache) updatePTRLocked(entry *CacheEntry, key string) {
 		if ip == nil || name == "" {
 			continue
 		}
-		ipStr := ip.String()
-		if mc.ptrIndex[ipStr] == nil {
-			mc.ptrIndex[ipStr] = make(map[string]uint32)
-		}
-		mc.ptrIndex[ipStr][dns.Fqdn(name)] = ttl
-		records = append(records, ptrRecord{IP: ipStr, Name: dns.Fqdn(name), TTL: ttl})
+		records = append(records, ptrRecord{IP: ip.String(), Name: dns.Fqdn(name), TTL: ttl})
 	}
-	if len(records) > 0 {
-		mc.entryPTRs[key] = records
-	}
+	return records
 }
 
 func (mc *MemoryCache) storePTRLocked(key string, records []ptrRecord) {
@@ -448,13 +447,13 @@ func (mc *MemoryCache) startPersistWorker() {
 		for {
 			select {
 			case <-ticker.C:
-				if mc.persistDirty.Load() == 0 {
+				gen := mc.persistGen.Swap(0)
+				if gen == 0 {
 					continue
 				}
 				if err := mc.persistSnapshot(); err != nil {
+					mc.persistGen.Add(gen)
 					log.Errorf("CACHE: persist snapshot failed: %v", err)
-				} else {
-					mc.persistDirty.Store(0)
 				}
 			case <-mc.persistStop:
 				return
@@ -517,7 +516,7 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 		mc.evictToBudget()
 	}
 	mc.mu.Unlock()
-	mc.persistDirty.Store(0)
+	mc.persistGen.Store(0)
 	return loaded, nil
 }
 
@@ -551,11 +550,11 @@ func (mc *MemoryCache) persistSnapshot() error {
 	mc.mu.RUnlock()
 
 	dir := filepath.Dir(mc.persistPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 	tmp := mc.persistPath + ".tmp"
-	file, err := os.Create(tmp)
+	file, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
@@ -565,6 +564,11 @@ func (mc *MemoryCache) persistSnapshot() error {
 		return err
 	}
 	if err := gob.NewEncoder(file).Encode(&snapshot); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := file.Sync(); err != nil {
 		_ = file.Close()
 		_ = os.Remove(tmp)
 		return err
@@ -684,9 +688,8 @@ func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDN
 	}
 	result := buf.String()
 	if len(result) > maxResultLength {
-		hash := fnv.New64a()
-		hash.Write([]byte(result))
-		return fmt.Sprintf("h:%x", hash.Sum64())
+		hash := sha256.Sum256([]byte(result))
+		return fmt.Sprintf("h:%x", hash[:16])
 	}
 	return result
 }

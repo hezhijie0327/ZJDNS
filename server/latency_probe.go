@@ -114,6 +114,7 @@ func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []
 	for _, c := range candidates {
 		c := c
 		go func() {
+			defer dnsutil.HandlePanic("latency probe worker")
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			c.latency = measureRecordLatency(ctx, c.rr, steps)
@@ -152,7 +153,7 @@ func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []
 // measureRecordLatency probes the given A/AAAA record using the configured steps and returns the measured latency. If all probes fail, it returns MaxInt64.
 func measureRecordLatency(ctx context.Context, rr dns.RR, steps []config.LatencyProbeStep) time.Duration {
 	ip := extractIPAddress(rr)
-	if ip == nil {
+	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
 		return time.Duration(math.MaxInt64)
 	}
 
@@ -243,6 +244,7 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool) 
 		transport := &http3.Transport{
 			TLSClientConfig: tlsConfig,
 		}
+		defer func() { _ = transport.Close() }()
 		client = &http.Client{Transport: transport}
 	} else {
 		tlsConfig := &tls.Config{InsecureSkipVerify: true}
@@ -322,7 +324,8 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 		replyType = ipv6.ICMPTypeEchoReply
 	}
 
-	conn, err := icmp.ListenPacket(network, "0.0.0.0")
+	// Use empty string to let the kernel choose the appropriate source address
+	conn, err := icmp.ListenPacket(network, "")
 	if err != nil {
 		return err
 	}
@@ -392,6 +395,8 @@ func extractIPAddress(rr dns.RR) net.IP {
 }
 
 // isAOrAAAA checks if a DNS RR is an A or AAAA record. It returns false if the RR is nil or not A/AAAA.
+// isAOrAAAA is kept for use in sortAAndAAAARecordsByLatency; extractIPAddress
+// performs the same type switch — a future cleanup could unify these.
 func isAOrAAAA(rr dns.RR) bool {
 	if rr == nil {
 		return false

@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/miekg/dns"
@@ -77,7 +78,7 @@ type CNAMEHandler struct {
 // ResponseValidator coordinates DNSSEC validation and hijack prevention checks for DNS responses.
 type ResponseValidator struct {
 	hijackPrevention *HijackPrevention
-	dnssecValidator  *DNSSECValidator
+	dnssecValidator  *DNSSECIndicator
 }
 
 // NewQueryManager creates a new QueryManager instance with initialized handlers.
@@ -428,7 +429,7 @@ func (qm *QueryManager) filterRecordsByCIDR(records []dns.RR, matchTags []string
 		}
 	}
 
-	if refusedCount > 0 {
+	if len(filtered) == 0 {
 		return nil, true
 	}
 
@@ -794,9 +795,8 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 	g, queryCtx := errgroup.WithContext(resolveCtx)
 	g.SetLimit(calculateConcurrencyLimit(len(nsRecords)))
 
-	var allAddresses atomic.Pointer[[]string]
-	empty := []string{}
-	allAddresses.Store(&empty)
+	var allMu sync.Mutex
+	var allAddresses []string
 
 	// For first-win optimization: cancel when we get sufficient addresses
 	addressCtx, addressCancel := context.WithCancelCause(queryCtx)
@@ -905,9 +905,9 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 			_ = queryGroup.Wait()
 
 			if nsAddrs := nsAddresses.Load().([]string); len(nsAddrs) > 0 {
-				current := allAddresses.Load()
-				newAddresses := append(*current, nsAddrs...)
-				allAddresses.Store(&newAddresses)
+				allMu.Lock()
+				allAddresses = append(allAddresses, nsAddrs...)
+				allMu.Unlock()
 
 				// First win optimization: if we have enough addresses, cancel remaining NS resolutions
 				if foundAddresses.Add(1) >= int32(calculateConcurrencyLimit(len(nsRecords))) {
@@ -922,9 +922,8 @@ func (rr *RecursiveResolver) resolveNSAddressesConcurrent(ctx context.Context, n
 
 	_ = g.Wait()
 
-	if finalAddresses := allAddresses.Load(); finalAddresses != nil {
-		return *finalAddresses
-	}
-
-	return nil
+	allMu.Lock()
+	finalAddresses := allAddresses
+	allMu.Unlock()
+	return finalAddresses
 }

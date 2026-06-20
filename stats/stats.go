@@ -171,8 +171,10 @@ func New(cfg *config.ServerConfig, c cache.Manager) *Manager {
 		mgr.resetInterval = time.Duration(ri) * time.Second
 	}
 	if c != nil {
-		if entry, found, _ := c.Get(persistKey); found && entry != nil {
-			if err := mgr.LoadFromCacheEntry(entry); err != nil {
+		if entry, found, expired := c.Get(persistKey); found && entry != nil {
+			if expired {
+				log.Debugf("STATS: cached stats snapshot is expired, starting fresh")
+			} else if err := mgr.LoadFromCacheEntry(entry); err != nil {
 				log.Warnf("STATS: failed to restore stats from cache: %v", err)
 			} else {
 				log.Infof("STATS: restored stats from cache snapshot")
@@ -190,6 +192,8 @@ func (sm *Manager) RecordRequest(duration time.Duration, cacheHit bool, hadError
 	if sm == nil || !sm.enabled {
 		return
 	}
+	// Note: sub-millisecond response times are rounded up to 1ms.
+	// This inflates average response times slightly for ultra-fast responses.
 	durationMs := uint64(duration.Milliseconds())
 	if durationMs == 0 {
 		durationMs = 1

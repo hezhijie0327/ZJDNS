@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
-	"time"
 
 	"zjdns/internal/ipdetect"
 	"zjdns/internal/log"
@@ -183,7 +183,14 @@ func (c *DefaultECSConfig) UnmarshalJSON(data []byte) error {
 	}
 	c.IPv4 = strings.TrimSpace(aux.IPv4)
 	c.IPv6 = strings.TrimSpace(aux.IPv6)
-	c.PreferIPv4 = aux.PreferIPv4
+	// Default PreferIPv4 to true when the JSON omits the field,
+	// matching getDefaultConfig(). Without this, Go's bool zero-value
+	// (false) would silently override the default.
+	if !strings.Contains(string(data), `"prefer_ipv4"`) {
+		c.PreferIPv4 = true
+	} else {
+		c.PreferIPv4 = aux.PreferIPv4
+	}
 	return nil
 }
 
@@ -468,7 +475,7 @@ func (m *Manager) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDN
 			Code:          dns.EDNS0SUBNET,
 			Family:        ecs.Family,
 			SourceNetmask: ecs.SourcePrefix,
-			SourceScope:   DefaultECSScope,
+			SourceScope:   DefaultECSScope, // 0 = scope not set (RFC 7871: authoritative servers SHOULD set this)
 			Address:       ecs.Address,
 		})
 	}
@@ -531,6 +538,7 @@ func (m *Manager) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDN
 
 // CookieGenerator handles DNS cookie generation and validation.
 type CookieGenerator struct {
+	mu             sync.RWMutex
 	secret         []byte
 	previousSecret []byte
 }
@@ -539,7 +547,7 @@ type CookieGenerator struct {
 func NewCookieGenerator() *CookieGenerator {
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
-		secret = []byte(fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix()))
+		panic(fmt.Sprintf("EDNS: failed to generate cookie secret: %v (system CSPRNG unavailable)", err))
 	}
 	return &CookieGenerator{secret: secret}
 }
@@ -551,10 +559,12 @@ func (cg *CookieGenerator) RotateSecret() {
 	}
 	newSecret := make([]byte, 32)
 	if _, err := rand.Read(newSecret); err != nil {
-		newSecret = []byte(fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix()))
+		panic(fmt.Sprintf("EDNS: failed to rotate cookie secret: %v (system CSPRNG unavailable)", err))
 	}
+	cg.mu.Lock()
 	cg.previousSecret = cg.secret
 	cg.secret = newSecret
+	cg.mu.Unlock()
 }
 
 // GenerateServerCookie creates an HMAC-SHA256 server cookie.
@@ -571,7 +581,9 @@ func (cg *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []
 	data = append(data, clientIP...)
 	data = append(data, clientCookie...)
 
+	cg.mu.RLock()
 	h := hmac.New(sha256.New, cg.secret)
+	cg.mu.RUnlock()
 	h.Write(data)
 	mac := h.Sum(nil)
 
@@ -594,13 +606,22 @@ func (cg *CookieGenerator) ValidateServerCookie(clientIP net.IP, clientCookie, s
 	data = append(data, clientIP...)
 	data = append(data, clientCookie...)
 
+	cg.mu.RLock()
 	h := hmac.New(sha256.New, cg.secret)
+	prevLen := len(cg.previousSecret)
+	var prevSecret []byte
+	if prevLen > 0 {
+		prevSecret = make([]byte, prevLen)
+		copy(prevSecret, cg.previousSecret)
+	}
+	cg.mu.RUnlock()
+
 	h.Write(data)
 	if hmac.Equal(serverCookie, h.Sum(nil)[:DefaultCookieServerLen]) {
 		return true
 	}
-	if len(cg.previousSecret) > 0 {
-		hPrev := hmac.New(sha256.New, cg.previousSecret)
+	if prevLen > 0 {
+		hPrev := hmac.New(sha256.New, prevSecret)
 		hPrev.Write(data)
 		return hmac.Equal(serverCookie, hPrev.Sum(nil)[:DefaultCookieServerLen])
 	}

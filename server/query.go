@@ -173,7 +173,7 @@ func (qc *QueryClient) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *c
 func (qc *QueryClient) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, protocol string) (*dns.Msg, error) {
 	// Configure TLS
 	tlsConfig := &tls.Config{
-		CurvePreferences:   []tls.CurveID{},
+		CurvePreferences:   []tls.CurveID{}, // empty = use Go defaults
 		InsecureSkipVerify: server.SkipTLSVerify,
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         server.ServerName,
@@ -272,24 +272,30 @@ func (qc *QueryClient) executeQUIC(ctx context.Context, msg *dns.Msg, server *co
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	// Read response
+	// Read response: first the 2-byte length prefix, then the message body (RFC 9250).
 	respBuf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(respBuf)
 
-	n, err := stream.Read(respBuf)
-	if err != nil && n == 0 {
+	// Read 2-byte length prefix
+	if _, err := io.ReadFull(stream, respBuf[:2]); err != nil {
 		msg.Id = originalID
-		return nil, fmt.Errorf("read: %w", err)
+		return nil, fmt.Errorf("read length prefix: %w", err)
+	}
+	msgLen := binary.BigEndian.Uint16(respBuf[:2])
+	if msgLen == 0 || int(msgLen) > len(respBuf)-2 {
+		msg.Id = originalID
+		return nil, fmt.Errorf("invalid response length: %d", msgLen)
 	}
 
-	if n < 2 {
+	// Read exactly msgLen bytes
+	if _, err := io.ReadFull(stream, respBuf[2:2+msgLen]); err != nil {
 		msg.Id = originalID
-		return nil, fmt.Errorf("response too short: %d", n)
+		return nil, fmt.Errorf("read message body: %w", err)
 	}
 
 	// Parse response
 	response := pool.DefaultMessagePool.Get()
-	if err := response.Unpack(respBuf[2:n]); err != nil {
+	if err := response.Unpack(respBuf[2 : 2+msgLen]); err != nil {
 		msg.Id = originalID
 		pool.DefaultMessagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
@@ -430,6 +436,7 @@ func (qc *QueryClient) executeDoH3(ctx context.Context, msg *dns.Msg, server *co
 	doh3Client := &http.Client{
 		Transport: transport,
 	}
+	defer func() { _ = transport.Close() }()
 
 	// Set message ID to 0 for DoH (privacy consideration)
 	originalID := msg.Id

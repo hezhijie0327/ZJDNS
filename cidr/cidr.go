@@ -169,9 +169,17 @@ func (cm *Manager) MatchIP(ip net.IP, matchTag string) (matched bool, exists boo
 
 // getMatchInfo retrieves or creates match info for a tag.
 func (cm *Manager) getMatchInfo(matchTag string) *CIDRMatchInfo {
+	cm.mu.RLock()
+	if info, exists := cm.matchCache[matchTag]; exists {
+		cm.mu.RUnlock()
+		return info
+	}
+	cm.mu.RUnlock()
+
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
+	// Double-check after acquiring write lock
 	if info, exists := cm.matchCache[matchTag]; exists {
 		return info
 	}
@@ -185,9 +193,6 @@ func (cm *Manager) getMatchInfo(matchTag string) *CIDRMatchInfo {
 		Original: matchTag,
 	}
 
-	if cm.matchCache == nil {
-		cm.matchCache = make(map[string]*CIDRMatchInfo)
-	}
 	cm.matchCache[matchTag] = info
 	return info
 }
@@ -224,6 +229,8 @@ func (r *CIDRRule) preprocessNetworks() {
 		}
 		return 0
 	})
+	// Release original nets slice to allow GC of *net.IPNet objects.
+	r.nets = nil
 }
 
 // toIPv4Net converts a net.IPNet to an optimized ipv4Net structure

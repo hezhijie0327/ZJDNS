@@ -43,6 +43,7 @@ type Manager struct {
 type TimeCache struct {
 	currentTime atomic.Value
 	ticker      *time.Ticker
+	done        chan struct{}
 }
 
 // Default is the package-level logger instance. Call SetLevel on it during
@@ -118,7 +119,7 @@ func (m *Manager) Log(lvl Level, format string, args ...any) {
 	}
 
 	timestamp := DefaultTimeCache.Now().Format("2006-01-02 15:04:05")
-	message := fmt.Sprintf(format, args...)
+	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
 
 	logLine := fmt.Sprintf("%s[%s]%s %s%-5s%s %s\n",
 		colorBold, timestamp, colorReset,
@@ -161,12 +162,18 @@ func SetLevel(lvl Level) { Default.SetLevel(lvl) }
 func NewTimeCache() *TimeCache {
 	tc := &TimeCache{
 		ticker: time.NewTicker(time.Second),
+		done:   make(chan struct{}),
 	}
 	tc.currentTime.Store(time.Now())
 
 	go func() {
-		for range tc.ticker.C {
-			tc.currentTime.Store(time.Now())
+		for {
+			select {
+			case <-tc.ticker.C:
+				tc.currentTime.Store(time.Now())
+			case <-tc.done:
+				return
+			}
 		}
 	}()
 
@@ -179,8 +186,35 @@ func (tc *TimeCache) Now() time.Time {
 }
 
 // Stop stops the time cache ticker.
+// sanitizeLogMessage strips control characters and newlines from log messages
+// to prevent log injection attacks via user-controlled input (e.g. DNS query names).
+func sanitizeLogMessage(msg string) string {
+	if len(msg) == 0 {
+		return msg
+	}
+	b := make([]byte, 0, len(msg))
+	for i := 0; i < len(msg); i++ {
+		c := msg[i]
+		if c == 0x0a || c == 0x0d || c == 0x09 || (c < 32 && c != 0) {
+			b = append(b, ' ')
+		} else {
+			b = append(b, c)
+		}
+	}
+	return string(b)
+}
+
+// Stop signals the background goroutine to exit and stops the ticker.
 func (tc *TimeCache) Stop() {
-	if tc != nil && tc.ticker != nil {
+	if tc == nil {
+		return
+	}
+	// Signal the goroutine to exit by closing done before stopping
+	// the ticker; otherwise the goroutine would block on range forever.
+	if tc.done != nil {
+		close(tc.done)
+	}
+	if tc.ticker != nil {
 		tc.ticker.Stop()
 	}
 }

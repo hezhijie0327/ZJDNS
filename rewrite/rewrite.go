@@ -49,7 +49,14 @@ func (rm *Manager) LoadRules(rules []config.RewriteRule) error {
 	globalExcludes := make([]*net.IPNet, 0)
 	for i, rule := range rules {
 		if len(rule.Name) > config.MaxDomainLength {
+			log.Warnf("REWRITE: rule name too long (%d chars, max %d), skipping", len(rule.Name), config.MaxDomainLength)
 			continue
+		}
+		// Validate record content to prevent DNS record injection
+		for j, rec := range rule.Records {
+			if strings.Contains(rec.Content, "\n") || strings.HasPrefix(rec.Content, " ") || strings.HasSuffix(rec.Content, " ") {
+				return fmt.Errorf("rewrite rule '%s': record %d content must not contain newlines or leading/trailing spaces", rule.Name, j)
+			}
 		}
 
 		if len(rule.ExcludeClients) > 0 {

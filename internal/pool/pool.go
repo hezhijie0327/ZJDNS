@@ -13,16 +13,13 @@ const (
 	UDPBufferSize    = 1232 // Optimal UDP payload size for DNS to avoid fragmentation.
 	TCPBufferSize    = 4096 // Buffer size for TCP DNS messages.
 	SecureBufferSize = 8192 // Buffer size for secure DNS messages (DoT, DoH, DoQ).
-
-	messagePoolSize = 512 // Number of pre-allocated dns.Msg objects in the pool.
-	bufferPoolSize  = 256 // Number of pre-allocated byte buffers in the pool.
 )
 
 // DefaultMessagePool is the shared pool for dns.Msg objects.
 var DefaultMessagePool = NewMessagePool()
 
 // DefaultBufferPool is the shared pool for byte buffers.
-var DefaultBufferPool = NewBufferPool(SecureBufferSize, bufferPoolSize)
+var DefaultBufferPool = NewBufferPool(SecureBufferSize, 256)
 
 // MessagePool manages reusable dns.Msg objects.
 type MessagePool struct {
@@ -85,9 +82,11 @@ func (bp *BufferPool) Get() []byte {
 }
 
 // Put returns a buffer to the pool after zeroing it.
+// The entire buffer is zeroed to prevent stale DNS data leakage
+// from callers that extended the buffer beyond bp.size.
 func (bp *BufferPool) Put(buf []byte) {
 	if buf != nil && cap(buf) >= bp.size {
-		clear(buf[:bp.size])
+		clear(buf[:cap(buf)])
 		bp.pool.Put(&buf)
 	}
 }

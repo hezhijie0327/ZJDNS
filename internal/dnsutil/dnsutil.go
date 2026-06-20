@@ -47,7 +47,7 @@ func CloseWithLog(c any, name string) {
 // entire server.
 func HandlePanic(operation string) {
 	if r := recover(); r != nil {
-		buf := make([]byte, 4096)
+		buf := make([]byte, 8192) // Large enough for deeply nested stack traces
 		n := runtime.Stack(buf, false)
 		log.Errorf("PANIC: Panic [%s]: %v\nStack:\n%s", operation, r, buf[:n])
 	}

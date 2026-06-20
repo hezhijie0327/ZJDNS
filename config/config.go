@@ -36,6 +36,10 @@ type ServerSettings struct {
 	LogLevel string       `json:"log_level"`
 	TLS      TLSSettings  `json:"tls"`
 	Features FeatureFlags `json:"features"`
+
+	MaxConcurrent int `json:"max_concurrent,omitempty"` // 0 = no limit
+	RateLimit     int `json:"rate_limit,omitempty"`     // 0 = default 1000 qps per client
+	RateBurst     int `json:"rate_burst,omitempty"`     // 0 = default 2000 burst
 }
 
 // TLSSettings contains TLS/HTTPS configuration.
@@ -328,11 +332,14 @@ func (cm *Manager) validateConfig(cfg *ServerConfig) error {
 			return fmt.Errorf("server.features.stats.reset_interval must be zero or positive")
 		}
 	}
-
-	if !cfg.Server.Features.ECS.IsEmpty() {
-		if err := cfg.Server.Features.ECS.Validate(); err != nil {
-			return err
-		}
+	if cfg.Server.MaxConcurrent < 0 {
+		return fmt.Errorf("server.max_concurrent must be zero or positive")
+	}
+	if cfg.Server.RateLimit < 0 {
+		return fmt.Errorf("server.rate_limit must be zero or positive")
+	}
+	if cfg.Server.RateBurst < 0 {
+		return fmt.Errorf("server.rate_burst must be zero or positive")
 	}
 
 	if err := validateLatencyProbeDefaults(cfg.Server.Features.LatencyProbe); err != nil {
@@ -362,7 +369,7 @@ func (cm *Manager) validateConfig(cfg *ServerConfig) error {
 }
 
 // validateLatencyProbeStep validates a single latency probe step and sets default ports based on protocol if not specified.
-func validateLatencyProbeStep(index int, step LatencyProbeStep) error {
+func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 	protocol := strings.ToLower(strings.TrimSpace(step.Protocol))
 	if protocol == "" {
 		return fmt.Errorf("latency_probe step %d: protocol cannot be empty", index)
@@ -413,7 +420,7 @@ func validateLatencyProbeStep(index int, step LatencyProbeStep) error {
 // validateLatencyProbeDefaults validates all latency probe steps and sets default timeouts if not specified.
 func validateLatencyProbeDefaults(steps []LatencyProbeStep) error {
 	for i, step := range steps {
-		if err := validateLatencyProbeStep(i, step); err != nil {
+		if err := validateLatencyProbeStep(i, &steps[i]); err != nil {
 			return err
 		}
 		if step.Timeout <= 0 {
@@ -452,6 +459,15 @@ func (cm *Manager) shouldEnableDDR(cfg *ServerConfig) bool {
 // addDDRRecords adds DDR records to the configuration
 func (cm *Manager) addDDRRecords(cfg *ServerConfig) {
 	ddr := cfg.Server.Features.DDR
+	// Validate DDR inputs to prevent SVCB record injection
+	if strings.ContainsAny(ddr.Domain, " \"") || strings.ContainsAny(ddr.IPv4, " \"") || strings.ContainsAny(ddr.IPv6, " \"") {
+		log.Warnf("CONFIG: DDR domain/IP contains unsafe characters, DDR records will not be added")
+		return
+	}
+	if ddr.Domain == "" {
+		log.Warnf("CONFIG: DDR domain is empty, DDR records will not be added")
+		return
+	}
 	domain := strings.TrimSuffix(ddr.Domain, ".")
 	nxdomainCode := dns.RcodeNameError
 

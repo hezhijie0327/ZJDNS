@@ -14,8 +14,13 @@ import (
 	"zjdns/internal/log"
 )
 
-// DNSSECValidator validates DNSSEC-signed DNS responses.
-type DNSSECValidator struct{}
+// DNSSECIndicator checks whether a DNS response carries DNSSEC indicators
+// (AD flag or RRSIG/NSEC/NSEC3/DNSKEY/DS records). Note: this does NOT perform
+// cryptographic signature verification — it trusts the upstream resolver's AD flag
+// and only falls back to a record-presence check when the flag is absent.
+// For stub-resolver deployments, this is the expected behavior: the upstream is
+// responsible for actual chain-of-trust validation.
+type DNSSECIndicator struct{}
 
 // HijackPrevention detects and mitigates DNS hijack attempts.
 type HijackPrevention struct {
@@ -25,13 +30,13 @@ type HijackPrevention struct {
 // SecurityManager coordinates DNSSEC validation and hijack prevention.
 type SecurityManager struct {
 	tls    *TLSManager
-	dnssec *DNSSECValidator
+	dnssec *DNSSECIndicator
 	hijack *HijackPrevention
 }
 
 // ValidateResponse validates DNSSEC records in a DNS response.
 // It checks if the response has DNSSEC records and if the AD flag is set.
-func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
+func (v *DNSSECIndicator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
 	if !dnssecOK || response == nil {
 		return false
 	}
@@ -53,7 +58,7 @@ func (v *DNSSECValidator) ValidateResponse(response *dns.Msg, dnssecOK bool) boo
 
 // hasDNSSECRecords checks if the response contains any DNSSEC-related record types.
 // DNSSEC record types include: RRSIG, NSEC, NSEC3, DNSKEY, DS
-func (v *DNSSECValidator) hasDNSSECRecords(response *dns.Msg) bool {
+func (v *DNSSECIndicator) hasDNSSECRecords(response *dns.Msg) bool {
 	if response == nil {
 		return false
 	}
@@ -200,7 +205,7 @@ func (hp *HijackPrevention) EnableHijackPrevention(enabled bool) {
 // It initializes DNSSEC validation, hijack prevention, and optional TLS management.
 func NewSecurityManager(config *config.ServerConfig, server *DNSServer) (*SecurityManager, error) {
 	sm := &SecurityManager{
-		dnssec: &DNSSECValidator{},
+		dnssec: &DNSSECIndicator{},
 		hijack: &HijackPrevention{},
 	}
 
@@ -228,8 +233,8 @@ func (sm *SecurityManager) Shutdown(timeout time.Duration) error {
 	return nil
 }
 
-// GetDNSSECValidator returns the DNSSEC validator instance.
-func (sm *SecurityManager) GetDNSSECValidator() *DNSSECValidator {
+// GetDNSSECIndicator returns the DNSSEC indicator instance.
+func (sm *SecurityManager) GetDNSSECIndicator() *DNSSECIndicator {
 	return sm.dnssec
 }
 

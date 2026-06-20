@@ -68,6 +68,7 @@ type DNSServer struct {
 	closed            int32
 	queryMgr          *QueryManager
 	limiter           *Limiter
+	semaphore         chan struct{} // Admission control semaphore
 }
 
 // queryResult encapsulates the result of a DNS query, including the answer, authority, additional sections, validation status, ECS information, fallback status, and any error that occurred during processing.
@@ -120,7 +121,7 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 		cidrMgr:           cidrManager,
 		statsMgr:          stats.New(cfg, cache),
 		cacheMgr:          cache,
-		limiter:           NewLimiter(defaultRate, defaultBurst),
+		limiter:           NewLimiter(cfg.Server.RateLimit, cfg.Server.RateBurst),
 		ctx:               ctx,
 		cancel:            cancel,
 		shutdown:          make(chan struct{}),
@@ -128,6 +129,10 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 		backgroundCtx:     backgroundCtx,
 		cacheRefreshGroup: cacheRefreshGroup,
 		cacheRefreshCtx:   cacheRefreshCtx,
+	}
+
+	if cfg.Server.MaxConcurrent > 0 {
+		server.semaphore = make(chan struct{}, cfg.Server.MaxConcurrent)
 	}
 
 	securityManager, err := NewSecurityManager(cfg, server)
@@ -276,21 +281,24 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 
 // setupSignalHandling configures signal handlers for graceful shutdown.
 // It listens for SIGINT and SIGTERM signals to initiate server shutdown.
+// Runs in its own goroutine (not added to backgroundGroup) to avoid a
+// self-wait deadlock: shutdownServer() waits for backgroundGroup.Wait(),
+// and if the signal handler were a member of that group, it would wait
+// on itself.
 func (s *DNSServer) setupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	s.backgroundGroup.Go(func() error {
+	go func() {
 		defer dnsutil.HandlePanic("Signal handler")
+		defer signal.Stop(sigChan)
 		select {
 		case sig := <-sigChan:
 			log.Infof("SIGNAL: Received signal %v, starting graceful shutdown", sig)
 			s.shutdownServer()
-		case <-s.backgroundCtx.Done():
-			return nil
+		case <-s.ctx.Done():
 		}
-		return nil
-	})
+	}()
 }
 
 // logStatsNow fetches current statistics, logs them in JSON format, and persists them via the cache manager.
@@ -341,6 +349,10 @@ func (s *DNSServer) shutdownServer() {
 
 	if s.cacheMgr != nil {
 		dnsutil.CloseWithLog(s.cacheMgr, "Cache manager")
+	}
+
+	if s.limiter != nil {
+		s.limiter.Shutdown()
 	}
 
 	if s.securityMgr != nil {
@@ -397,7 +409,7 @@ func (s *DNSServer) shutdownServer() {
 		close(s.shutdown)
 	}
 
-	os.Exit(0)
+	log.Infof("SERVER: Shutdown complete")
 }
 
 // Start starts the DNS server, including UDP, TCP, and secure protocol handlers
@@ -537,7 +549,7 @@ func (s *DNSServer) displayInfo() {
 		}
 		log.Infof("UPSTREAM: Upstream mode: total %d servers", len(servers))
 	} else {
-		log.Infof("RECURSION: Recursive mode (Memory cache)")
+		log.Infof("RECURSION: Recursive mode")
 	}
 
 	if s.cidrMgr != nil && len(s.config.CIDR) > 0 {
@@ -602,6 +614,20 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		return msg
 	}
 
+	if s.semaphore != nil {
+		select {
+		case s.semaphore <- struct{}{}:
+			defer func() { <-s.semaphore }()
+		default:
+			log.Debugf("QUERY: max concurrent reached, returning SERVFAIL")
+			msg := s.buildResponse(req)
+			if msg != nil {
+				msg.Rcode = dns.RcodeServerFailure
+			}
+			return msg
+		}
+	}
+
 	if !s.limiter.Allow(clientIP) {
 		msg := s.buildResponse(req)
 		msg.Rcode = dns.RcodeRefused
@@ -609,8 +635,8 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 	}
 
 	if req == nil || len(req.Question) == 0 {
-		msg := &dns.Msg{}
-		if req != nil && len(req.Question) > 0 {
+		msg := pool.DefaultMessagePool.Get()
+		if req != nil {
 			msg.SetReply(req)
 		} else {
 			msg.Response = true
@@ -827,12 +853,6 @@ func (s *DNSServer) shouldStartPrefetch(cacheKey string) bool {
 // buildCacheResponse constructs a DNS response message based on a cache entry, including
 func (s *DNSServer) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
-	if msg == nil {
-		msg := pool.DefaultMessagePool.Get()
-		msg.SetReply(req)
-		msg.Rcode = dns.RcodeServerFailure
-		return msg
-	}
 
 	responseTTL := entry.GetRemainingTTL()
 	elapsed := int64(entry.TTL) - int64(responseTTL)
@@ -854,7 +874,7 @@ func (s *DNSServer) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, is
 		s.addEDNS(msg, req, isSecureConnection, clientIP, cookieOpt, nil)
 	}
 
-	s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
+	s.restoreOriginalDomain(msg, question.Name, req.Question[0].Name)
 	return msg
 }
 
@@ -1043,7 +1063,7 @@ func (s *DNSServer) processQuerySuccess(req *dns.Msg, question dns.Question, ecs
 	log.Debugf("CACHE: served response for %s (skipCache=%t)", question.Name, skipCache)
 
 	s.addEDNS(msg, req, isSecureConnection, clientIP, cookieOpt, nil)
-	s.restoreOriginalDomain(msg, req.Question[0].Name, question.Name)
+	s.restoreOriginalDomain(msg, question.Name, req.Question[0].Name)
 	return msg
 }
 
