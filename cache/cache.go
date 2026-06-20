@@ -21,7 +21,7 @@ const (
 	// StaleTTL is the TTL in seconds returned for expired cache entries.
 	StaleTTL = 30
 	// StaleMaxAge is the maximum age in seconds an expired entry may be served.
-	StaleMaxAge = 45 * 86400
+	StaleMaxAge = 3 * 86400
 
 	resultBufferCapacity = 128
 	maxResultLength      = 512
@@ -36,6 +36,7 @@ var cacheSnapshotMagic = "ZJDNS-CACHE-V" + strconv.Itoa(cacheSnapshotVersion)
 type Store interface {
 	Get(key string) (*CacheEntry, bool, bool)
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
+	SetWithDNSSEC(key string, answer, authority, additional []dns.RR, validated bool, dnssecValidated bool, ecs *edns.ECSOption)
 	SetEntry(key string, entry *CacheEntry)
 	Close() error
 }
@@ -55,6 +56,7 @@ type CacheEntry struct {
 	ECSSourcePrefix uint8            `json:"ecs_source_prefix,omitempty"`
 	ECSScopePrefix  uint8            `json:"ecs_scope_prefix,omitempty"`
 	Validated       bool             `json:"validated"`
+	DNSSECValidated bool             `json:"dnssec_validated,omitempty"`
 	Payload         []byte           `json:"payload,omitempty"`
 }
 

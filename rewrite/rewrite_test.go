@@ -194,7 +194,7 @@ func TestEvaluator_HasRules(t *testing.T) {
 		t.Error("HasRules should be false with no rules")
 	}
 
-	re.LoadRules([]config.RewriteRule{
+	_ = re.LoadRules([]config.RewriteRule{
 		{Name: "test.example.com", Records: []config.DNSRecordConfig{{Type: "A", Content: "127.0.0.1"}}},
 	})
 	if !re.HasRules() {

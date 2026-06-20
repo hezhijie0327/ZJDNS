@@ -326,9 +326,12 @@ func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExp
 	msg.Ns = cache.ExpandAndProcessRecords(entry.Authority, elapsed, true, clientRequestedDNSSEC)
 	msg.Extra = cache.ExpandAndProcessRecords(entry.Additional, elapsed, true, clientRequestedDNSSEC)
 
-	// DNSSEC: we do NOT propagate AuthenticatedData here because our Validator
-	// only checks for DNSSEC record presence, not cryptographic chain-of-trust.
-	// Setting AD=true without real validation creates a false sense of security.
+	// Restore AuthenticatedData if the entry was cryptographically validated
+	// by the full DNSSEC chain-of-trust verification. The record-presence-only
+	// Validator (entry.Validated) does NOT set AD — only CryptoValidator does.
+	if entry.Validated {
+		msg.AuthenticatedData = true
+	}
 
 	if isExpired {
 		ede := edns.NewEDEOption(edns.EDECodeStaleAnswer, "")
@@ -429,13 +432,13 @@ func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *e
 		if hadError != nil {
 			*hadError = true
 		}
-		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
+		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, err)
 	}
 
 	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, usedFallback, clientIP, isSecureConnection)
 }
 
-func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error) *dns.Msg {
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found && s.canServeExpiredEntry(entry) {
 		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.GetRemainingTTL(), entry.Validated)
 		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
@@ -449,7 +452,23 @@ func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Q
 	}
 	msg.Rcode = dns.RcodeServerFailure
 
-	ede := edns.NewEDEOption(edns.EDECodeNetworkError, "")
+	// Map error to appropriate RFC 8914 Extended DNS Error code.
+	// Check the recursive resolver's DNSSEC state first (more reliable
+	// than error type matching since the error can be lost in the chain).
+	edeCode := edns.EDECodeNetworkError
+	if s.resolver != nil && s.resolver.Recursive() != nil && s.resolver.Recursive().DNSSECEDECode() != 0 {
+		edeCode = s.resolver.Recursive().DNSSECEDECode()
+		log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
+	} else {
+		var dnsErr *resolver.DNSSECError
+		if errors.As(queryErr, &dnsErr) {
+			edeCode = dnsErr.EDECode
+			log.Debugf("SECURITY: DNSSEC error mapped to EDE %d: %s", edeCode, dnsErr.Message)
+		} else if queryErr != nil {
+			log.Debugf("RESULT: non-DNSSEC error, using EDE %d: %v", edeCode, queryErr)
+		}
+	}
+	ede := edns.NewEDEOption(edeCode, "")
 	s.addEDNS(msg, req, isSecureConnection, clientIP, cookieOpt, ede)
 	return msg
 }
@@ -491,9 +510,11 @@ func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt
 		msg.SetReply(req)
 	}
 
-	// DNSSEC: we do NOT propagate AuthenticatedData — see Validator docs.
-	// Setting AD=true without cryptographic chain-of-trust verification is
-	// misleading and creates a false sense of security for clients.
+	// Set AuthenticatedData when DNSSEC cryptographic validation passed.
+	// DNSSEC is always enabled; CryptoValidator runs on every recursive query.
+	if validated {
+		msg.AuthenticatedData = true
+	}
 
 	responseECS := ecsResponse
 	if responseECS == nil && ecsOpt != nil {

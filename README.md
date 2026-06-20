@@ -25,10 +25,10 @@
 - **速率限制**：全协议 per-IP token bucket，自动清理空闲客户端
 - **CIDR 过滤**：基于标签的 IP 过滤，支持文件/内联规则，IPv4 位运算优化匹配
 - **DNS 劫持防护**：根/TLD 越权响应检测，UDP→TCP 自动回退
-- **DNSSEC 验证**：AD 标志 + RRSIG/NSEC/DNSKEY/DS 记录检查
+- **DNSSEC 密码学验证**：递归模式完整信任链（根 KSK→TLD DS→权威 DNSKEY→RRSIG），上游模式 AD 标志检测，`dnssec_enforce` 开关控制 bogus 响应拒绝
 - **ECS 支持**：EDNS 客户端子网，支持 auto/auto_v4/auto_v6 自动检测
 - **DNS Cookie**：HMAC-SHA256 服务端 Cookie，密钥无缝轮换
-- **扩展 DNS 错误 (EDE)**：24 种 EDE 代码
+- **扩展 DNS 错误 (EDE)**：24 种 EDE 代码，DNSSEC 失败自动映射（EDE 6/9/10）
 - **路径安全**：`filepath.Clean` + 绝对路径解析 + 符号链接拒绝 + 危险目录拦截
 
 ### 🔐 安全传输协议
@@ -79,6 +79,9 @@
 | RFC | 标准名称 | 实现功能 |
 |-----|---------|---------|
 | [RFC 3597](https://www.rfc-editor.org/rfc/rfc3597.html) | Handling Unknown DNS RR Types | 未知记录类型回退 |
+| [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033.html) | DNS Security Introduction and Requirements | DNSSEC 基础 |
+| [RFC 4034](https://www.rfc-editor.org/rfc/rfc4034.html) | Resource Records for DNSSEC | RRSIG/NSEC/DNSKEY/DS 类型 |
+| [RFC 4035](https://www.rfc-editor.org/rfc/rfc4035.html) | Protocol Modifications for DNSSEC | 信任链 + AD/CD 标志 |
 | [RFC 7830](https://www.rfc-editor.org/rfc/rfc7830.html) | EDNS(0) Padding | DNS 响应填充 |
 | [RFC 7858](https://www.rfc-editor.org/rfc/rfc7858.html) | DNS over TLS (DoT) | TLS 加密传输 |
 | [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html) | DNS Transport over TCP | TCP/DoT 连接复用 + 查询流水线 + 乱序响应 |
@@ -136,9 +139,10 @@ zjdns/
 │   ├── tls/                         # 安全传输 (4 文件)
 │   │   ├── tls.go                   # Server, 证书
 │   │   ├── dot.go, doq.go, doh.go
-│   ├── security/                    # 安全 (3 文件)
+│   ├── security/                    # 安全 (4 文件 + 测试)
 │   │   ├── security.go              # Guard
-│   │   ├── dnssec.go                # DNSSEC 验证
+│   │   ├── dnssec.go                # DNSSEC 记录存在检查
+│   │   ├── dnssec_crypto.go         # 完整密码学 DNSSEC 验证
 │   │   └── hijack.go                # 劫持检测
 │   ├── latency/probe.go             # 延迟探测
 │   └── ratelimit/ratelimit.go       # 速率限制
@@ -154,7 +158,7 @@ server → cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite,
 client → config, edns, dnsutil, log, pool, client/pool
 resolver → config, edns, client, security, dnsutil, log, pool
 security → dnsutil, log
-tls → config, client, dnsutil, log, pool, client/pool
+tls → config, dnsutil, log, pool, client/pool
 cache → config, edns, dnsutil, log
 edns → dnsutil, ipdetect, log
 stats → cache, config, log
@@ -201,6 +205,16 @@ dig @127.0.0.1 -p 53 example.com +tcp          # TCP
 kdig @127.0.0.1 -p 853 example.com +tls        # DoT
 kdig @127.0.0.1 -p 853 example.com +quic       # DoQ
 kdig @127.0.0.1 -p 443 example.com +https      # DoH
+```
+
+### DNSSEC 验证
+
+```bash
+# 测试 bogus 委托（应返回 SERVFAIL + EDE 6）
+kdig dnssec-failed.org a +dnssec @127.0.0.1
+
+# 测试有效 DNSSEC（应返回 NOERROR + AD 标志）
+kdig cloudflare.com a +dnssec @127.0.0.1
 ```
 
 ### 流水线测试

@@ -2,18 +2,23 @@
 // recursive resolution responses.
 package security
 
-// Guard aggregates the DNSSEC validator and hijack detector into a single
+// Guard aggregates the DNSSEC validators and hijack detector into a single
 // configuration unit.
 type Guard struct {
-	Validator *Validator
-	Detector  *Detector
+	RecordPresence *Validator       // Lightweight record-presence check
+	Crypto         *CryptoValidator // Full cryptographic DNSSEC validation
+	Detector       *Detector        // Hijack detection
 }
 
-// New creates a new Guard with optional hijack detection enabled.
+// New creates a new Guard. DNSSEC cryptographic validation is always enabled;
+// the CryptoValidator always loads IANA root trust anchors and performs
+// chain-of-trust verification. The dnssec_enforce config option (not here)
+// controls whether bogus responses are rejected or passed through.
 func New(hijackEnabled bool) *Guard {
 	g := &Guard{
-		Validator: &Validator{},
-		Detector:  &Detector{},
+		RecordPresence: &Validator{},
+		Crypto:         NewCryptoValidator(),
+		Detector:       &Detector{},
 	}
 	g.Detector.Enable(hijackEnabled)
 	return g

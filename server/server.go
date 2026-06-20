@@ -171,6 +171,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cidrFilter,
 		server.buildQueryMessage,
 	)
+	server.resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
 	server.resolver.InitServers(cfg.Upstream, cfg.Fallback)
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {

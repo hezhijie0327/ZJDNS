@@ -88,6 +88,7 @@ type HTTPSSettings struct {
 // latency probes, and stats.
 type FeatureFlags struct {
 	HijackProtection bool                  `json:"hijack_protection"`
+	DNSSECEnforce    bool                  `json:"dnssec_enforce,omitempty"`
 	DDR              DDRSettings           `json:"ddr,omitempty"`
 	ECS              edns.DefaultECSConfig `json:"ecs_subnet,omitempty"`
 	Cache            CacheSettings         `json:"cache,omitempty"`
@@ -543,12 +544,7 @@ func (cm *Loader) addDDRRecords(cfg *ServerConfig) {
 }
 
 func (cm *Loader) addChaosRecord(cfg *ServerConfig) {
-	hostname, err := os.Hostname()
-	if err != nil || strings.TrimSpace(hostname) == "" {
-		hostname = ProjectName
-	}
-
-	// Use only the project name for version — never expose build commit hash,
+	// Use only the project name — never expose build commit hash,
 	// Go runtime version, or system hostname via CHAOS queries to avoid
 	// fingerprinting and targeted attacks against specific versions.
 	version := ProjectName

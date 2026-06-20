@@ -17,8 +17,6 @@ import (
 
 const evictSampleSize = 5
 
-var evictRngState atomic.Uint64
-
 // MemoryCache is an in-memory DNS response cache with optional disk persistence.
 type MemoryCache struct {
 	mu          sync.RWMutex
@@ -111,6 +109,12 @@ func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
 
 // Set stores a DNS response in the cache with the given key and metadata.
 func (mc *MemoryCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption) {
+	mc.SetWithDNSSEC(key, answer, authority, additional, validated, false, ecs)
+}
+
+// SetWithDNSSEC stores a DNS response with explicit DNSSEC cryptographic
+// validation status.
+func (mc *MemoryCache) SetWithDNSSEC(key string, answer, authority, additional []dns.RR, validated bool, dnssecValidated bool, ecs *edns.ECSOption) {
 	if atomic.LoadInt32(&mc.closed) != 0 {
 		return
 	}
@@ -118,14 +122,15 @@ func (mc *MemoryCache) Set(key string, answer, authority, additional []dns.RR, v
 	ttl := minTTL(answer, authority, additional)
 
 	entry := &CacheEntry{
-		Answer:      compact(answer),
-		Authority:   compact(authority),
-		Additional:  compact(additional),
-		TTL:         ttl,
-		OriginalTTL: ttl,
-		Timestamp:   now,
-		Validated:   validated,
-		AccessTime:  now,
+		Answer:          compact(answer),
+		Authority:       compact(authority),
+		Additional:      compact(additional),
+		TTL:             ttl,
+		OriginalTTL:     ttl,
+		Timestamp:       now,
+		Validated:       validated,
+		DNSSECValidated: dnssecValidated,
+		AccessTime:      now,
 	}
 	if ecs != nil {
 		entry.ECSFamily = ecs.Family
@@ -271,14 +276,6 @@ func (mc *MemoryCache) evictToBudget() {
 	if evicted > 0 {
 		log.Debugf("CACHE: evicted %d entries to enforce budget (current=%d MB, limit=%d MB)", evicted, mc.currentSize/(1024*1024), mc.limitBytes/(1024*1024))
 	}
-}
-
-func fastRandN(n uint32) uint32 {
-	if n <= 1 {
-		return 0
-	}
-	state := evictRngState.Add(6364136223846793005)
-	return uint32((uint64(state) * uint64(n)) >> 32)
 }
 
 func extractPTRRecords(entry *CacheEntry) []ptrRecord {

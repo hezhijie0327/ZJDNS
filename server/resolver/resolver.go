@@ -5,6 +5,7 @@ package resolver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net"
 	"sync/atomic"
@@ -40,6 +41,16 @@ var (
 	ErrHijackDetected = errors.New("DNS hijack detected")
 )
 
+// DNSSECError wraps a DNSSEC validation failure with the RFC 8914 EDE code.
+type DNSSECError struct {
+	EDECode uint16
+	Message string
+}
+
+func (e *DNSSECError) Error() string {
+	return fmt.Sprintf("DNSSEC validation failed [EDE %d]: %s", e.EDECode, e.Message)
+}
+
 // BuildQueryFunc is a function type that constructs a DNS query message from a
 // question, ECS option, and connection parameters.
 type BuildQueryFunc func(question dns.Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg
@@ -57,22 +68,24 @@ type upstreamSet struct {
 // Resolver handles DNS query resolution by dispatching to upstream servers,
 // recursive resolution, or fallback servers as configured.
 type Resolver struct {
-	client    *client.Client
-	edns      *edns.Handler
-	cidr      CIDRMatcher
-	buildMsg  BuildQueryFunc
-	upstream  *upstreamSet
-	fallback  *upstreamSet
-	recursive *Recursive
-	cname     *CNAME
-	validator *Validator
+	client        *client.Client
+	edns          *edns.Handler
+	cidr          CIDRMatcher
+	buildMsg      BuildQueryFunc
+	upstream      *upstreamSet
+	fallback      *upstreamSet
+	recursive     *Recursive
+	cname         *CNAME
+	validator     *Validator
+	DNSSECEnforce bool
 }
 
 // Validator holds the DNSSEC and hijack detection components for response
 // validation.
 type Validator struct {
-	DNSSEC *security.Validator
-	Hijack *security.Detector
+	DNSSEC *security.Validator       // Lightweight record-presence check
+	Crypto *security.CryptoValidator // Full cryptographic DNSSEC validation
+	Hijack *security.Detector        // DNS hijack detection
 }
 
 func (us *upstreamSet) list() []*config.UpstreamServer {
@@ -100,7 +113,7 @@ func New(c *client.Client, g *security.Guard, e *edns.Handler, cidr CIDRMatcher,
 	}
 	r.recursive = &Recursive{resolver: r}
 	r.cname = &CNAME{resolver: r}
-	r.validator = &Validator{DNSSEC: g.Validator, Hijack: g.Detector}
+	r.validator = &Validator{DNSSEC: g.RecordPresence, Crypto: g.Crypto, Hijack: g.Detector}
 	return r
 }
 
@@ -125,6 +138,14 @@ func (r *Resolver) InitServers(servers, fallback []config.UpstreamServer) {
 		fb = append(fb, s)
 	}
 	r.fallback.store(fb)
+}
+
+// Recursive returns the built-in recursive resolver, or nil if not initialized.
+func (r *Resolver) Recursive() *Recursive {
+	if r == nil {
+		return nil
+	}
+	return r.recursive
 }
 
 // UpstreamServers returns the current list of primary upstream servers.

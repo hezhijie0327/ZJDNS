@@ -15,7 +15,7 @@ go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X mai
 golangci-lint run && golangci-lint fmt
 ```
 
-There is no test suite. Module path: `zjdns` (Go 1.25).
+Test suites exist for `cidr`, `edns`, `rewrite`, and `server/security` packages (37 test cases). Module path: `zjdns` (Go 1.25).
 
 ## Package Structure
 
@@ -59,9 +59,10 @@ zjdns/
 │   │   ├── upstream.go            # First-win concurrent upstream queries
 │   │   ├── recursive.go           # Recursive root→TLD→auth walk
 │   │   └── cname.go               # CNAME chain resolution
-│   ├── security/                  # Security features
-│   │   ├── security.go            # Guard (bundles Validator + Detector)
-│   │   ├── dnssec.go              # DNSSEC record-presence validation
+│   ├── security/                  # Security features (4 files)
+│   │   ├── security.go            # Guard (bundles RecordPresence + CryptoValidator + Detector)
+│   │   ├── dnssec.go              # DNSSEC record-presence validation (upstream AD check)
+│   │   ├── dnssec_crypto.go       # Full cryptographic DNSSEC validation (RRSIG, DS, trust anchors)
 │   │   └── hijack.go              # Hijack detection + TCP fallback trigger
 │   ├── tls/                        # Secure transport listeners
 │   │   ├── tls.go                  # Server struct, cert management, Start/Shutdown
@@ -86,7 +87,7 @@ client ──→ config, edns, dnsutil, log, pool, pool (in client)
 resolver ──→ config, edns, client, security, dnsutil, log, pool
 security ──→ dnsutil, log
 ratelimit ──→ log
-tls (in server) ──→ config, client, dnsutil, log, pool
+tls (in server) ──→ config, dnsutil, log, pool, pool (in client)
 cache ──→ config, edns, dnsutil, log
 edns ──→ dnsutil, ipdetect, log
 cidr ──→ config, dnsutil, log
@@ -108,7 +109,7 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 3. `edns.Handler` — extract ECS, DNS Cookie from request
 4. `cache.Store.Get()` — hit → serve (with CIDR filtering); miss → continue
 5. `Resolver.Query()` — upstream (first-win) or recursive resolution
-6. `Guard` — DNSSEC validation, hijack detection (UDP→TCP fallback)
+6. `Guard` — DNSSEC validation (crypto chain-of-trust + record-presence), hijack detection (UDP→TCP fallback)
 7. `cidr.Filter.MatchIP()` — filter A/AAAA IPs; all filtered → REFUSED + EDE
 8. Populate cache, start latency probes, return response
 
@@ -150,8 +151,11 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `Resolver` | `server/resolver` | DNS resolution (upstream + recursive) |
 | `Recursive` | `server/resolver` | Built-in recursive resolver |
 | `Guard` | `server/security` | DNSSEC + hijack detection |
-| `Validator` | `server/security` | DNSSEC record-presence validation |
+| `Validator` | `server/security` | DNSSEC record-presence validation (RecordPresence) |
+| `CryptoValidator` | `server/security` | Full cryptographic DNSSEC (RRSIG, DS, trust anchors) |
 | `Detector` | `server/security` | DNS hijack detection |
+| `DNSSECError` | `server/resolver` | Typed error with RFC 8914 EDE code |
+| `dnssecChain` | `server/resolver` | Trust chain state during recursive resolution |
 | `Limiter` | `server/ratelimit` | Per-IP token bucket rate limiter |
 
 ## Key Constants
@@ -227,3 +231,15 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   native stream multiplexing — no capacity semaphore needed.
 - **Config self-sufficiency**: `config.ProjectName` and `config.Version` are
   package-level vars set by `main.go` before calling `config.Loader.LoadConfig()`.
+- **DNSSEC chain-of-trust**: `CryptoValidator` embeds IANA root KSK trust anchors
+  (key tags 20326 + 38696). The recursive resolver builds a cryptographic chain at
+  each delegation step: extracts DS records from the parent zone, verifies their
+  RRSIGs against verified parent DNSKEYs, queries child zone for DNSKEY, matches
+  against the verified DS, then verifies answer RRSIGs against the child DNSKEY.
+  `dnssec_enforce: true` returns SERVFAIL on bogus delegations (e.g.
+  dnssec-failed.org); `false` passes through without AD flag.
+- **Upstream DNSSEC**: Non-recursive (forwarder) mode trusts the upstream resolver's
+  AD flag when accompanied by DNSSEC records (`Validator.ValidateResponse`).
+- **EDE propagation**: DNSSEC failure EDE codes are stored atomically on
+  `Recursive.lastDNSSECEDECode` and read directly by `processQueryError` to avoid
+  error-chain corruption from context cancellation.
