@@ -22,21 +22,19 @@ func TotalBytes() uint64 {
 	}
 }
 
-// CacheSize returns a recommended cache entry count based on a percentage of
-// system memory. percent is the fraction (1-100) of total memory to budget.
-// avgEntryBytes is the estimated average size of a cache entry in bytes.
-// Falls back to def entries if memory detection fails.
-func CacheSize(percent int, avgEntryBytes, def int) int {
+// BudgetBytes returns the memory budget in bytes for the cache, derived from
+// a percentage of total system memory. percent is the fraction (1-100).
+// Falls back to def bytes if memory detection fails.
+func BudgetBytes(percent int, def int64) int64 {
 	total := TotalBytes()
 	if total == 0 {
 		return def
 	}
-	budget := total * uint64(percent) / 100
-	entries := int(budget / uint64(avgEntryBytes))
-	if entries < def {
+	budget := int64(total) * int64(percent) / 100
+	if budget < def {
 		return def
 	}
-	return entries
+	return budget
 }
 
 func detectLinux() uint64 {

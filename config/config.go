@@ -179,7 +179,7 @@ const (
 	DefaultPprofPort = "6060"
 	DefaultQueryPath = "/dns-query"
 
-	DefaultCacheSize            = 4096
+	DefaultCacheSize            = 4 * 1024 * 1024 // 4 MB default cache budget (bytes)
 	DefaultCachePersistInterval = 30 * time.Second
 	DefaultTTL                  = 10
 

@@ -95,13 +95,16 @@ type LookupResult struct {
 // Gets use RLock (no contention between readers). Sets use a full Lock.
 // Eviction scans for the entry with the lowest access time (O(n), acceptable
 // at 16K entries since Sets are infrequent relative to Gets).
+// Memory usage is bounded by limitBytes; when exceeded, the least recently
+// accessed entries are evicted until usage drops back under the budget.
 type MemoryCache struct {
-	mu        sync.RWMutex
-	entries   map[string]*cacheItem
-	entryPTRs map[string][]ptrRecord
-	limit     int
-	closed    int32
-	ptrIndex  map[string]map[string]uint32
+	mu          sync.RWMutex
+	entries     map[string]*cacheItem
+	entryPTRs   map[string][]ptrRecord
+	limitBytes  int64
+	currentSize int64
+	closed      int32
+	ptrIndex    map[string]map[string]uint32
 
 	persistPath     string
 	persistInterval time.Duration
@@ -112,6 +115,7 @@ type MemoryCache struct {
 
 type cacheItem struct {
 	entry      *CacheEntry
+	size       int64
 	lastAccess atomic.Int64
 }
 
@@ -137,20 +141,19 @@ type persistedCacheItem struct {
 
 // New creates a MemoryCache with the given settings.
 // Cache capacity is derived from settings.MemPercent of system RAM
-// (default 5%) divided by 1KB average entry size. Falls back to
-// DefaultCacheSize if memory detection fails.
+// (default 5%). Falls back to DefaultCacheSize bytes if memory detection fails.
 func New(settings config.CacheSettings) *MemoryCache {
 	pct := settings.MemPercent
 	if pct <= 0 || pct > 100 {
 		pct = 5
 	}
-	size := sysmem.CacheSize(pct, 1024, config.DefaultCacheSize)
-	log.Infof("CACHE: %d entries (%d%% of system memory)", size, pct)
+	budget := sysmem.BudgetBytes(pct, config.DefaultCacheSize)
+	log.Infof("CACHE: %d MB budget (%d%% of system memory)", budget/(1024*1024), pct)
 
 	mc := &MemoryCache{
 		entries:         make(map[string]*cacheItem),
 		entryPTRs:       make(map[string][]ptrRecord),
-		limit:           size,
+		limitBytes:      budget,
 		ptrIndex:        make(map[string]map[string]uint32),
 		persistPath:     strings.TrimSpace(settings.Persist.File),
 		persistInterval: time.Duration(settings.Persist.Interval) * time.Second,
@@ -164,7 +167,7 @@ func New(settings config.CacheSettings) *MemoryCache {
 		if loaded, err := mc.loadSnapshotFromDisk(); err != nil {
 			log.Warnf("CACHE: failed to load snapshot file %s: %v", mc.persistPath, err)
 		} else if loaded > 0 {
-			log.Infof("CACHE: restored %d entries from snapshot %s", loaded, mc.persistPath)
+			log.Infof("CACHE: restored %d entries (%d MB) from snapshot %s", loaded, mc.currentSize/(1024*1024), mc.persistPath)
 		}
 		mc.startPersistWorker()
 		log.Infof("CACHE: persistence enabled (file=%s interval=%s)", mc.persistPath, mc.persistInterval)
@@ -172,7 +175,7 @@ func New(settings config.CacheSettings) *MemoryCache {
 		log.Debugf("CACHE: persistence disabled")
 	}
 
-	log.Infof("CACHE: Memory cache enabled (limit=%d)", size)
+	log.Infof("CACHE: Memory cache enabled (budget=%d MB)", budget/(1024*1024))
 	return mc
 }
 
@@ -240,11 +243,16 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	fullCopy := cloneEntry(entry)
 
 	if existing, ok := mc.entries[key]; ok {
+		oldSize := existing.size
 		mc.removePTRLocked(key)
 		existing.entry = fullCopy
 		existing.lastAccess.Store(time.Now().UnixNano())
 		mc.updatePTRLocked(fullCopy, key)
+		newSize := estimateEntrySize(key, fullCopy, mc.entryPTRs[key])
+		existing.size = newSize
+		mc.currentSize += newSize - oldSize
 		mc.persistDirty.Store(1)
+		mc.evictToBudget()
 		return
 	}
 
@@ -252,11 +260,19 @@ func (mc *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 	item.lastAccess.Store(time.Now().UnixNano())
 	mc.entries[key] = item
 	mc.updatePTRLocked(fullCopy, key)
+	item.size = estimateEntrySize(key, fullCopy, mc.entryPTRs[key])
+	mc.currentSize += item.size
 
-	if mc.limit > 0 && len(mc.entries) > mc.limit {
+	mc.persistDirty.Store(1)
+	mc.evictToBudget()
+}
+
+// evictToBudget removes the least recently accessed entries until memory usage
+// falls under the byte budget. Must be called under mu.Lock.
+func (mc *MemoryCache) evictToBudget() {
+	for mc.limitBytes > 0 && mc.currentSize > mc.limitBytes && len(mc.entries) > 0 {
 		mc.evictLocked()
 	}
-	mc.persistDirty.Store(1)
 }
 
 // evictLocked removes the entry with the oldest access time. Must be called under mu.Lock.
@@ -271,9 +287,50 @@ func (mc *MemoryCache) evictLocked() {
 		}
 	}
 	if oldestKey != "" {
+		if item, ok := mc.entries[oldestKey]; ok {
+			mc.currentSize -= item.size
+		}
 		mc.removePTRLocked(oldestKey)
 		delete(mc.entries, oldestKey)
 	}
+}
+
+// estimateEntrySize returns an estimated memory footprint in bytes for a cache
+// entry, including the key string, CacheEntry, compact records, payload, PTR
+// records, and Go map overhead.
+func estimateEntrySize(key string, entry *CacheEntry, ptrs []ptrRecord) int64 {
+	if entry == nil {
+		return 0
+	}
+	// Base overhead: key string + map bucket + CacheEntry fixed fields + 3 slice headers.
+	size := int64(len(key)) + 64 + 208 + 72
+
+	// Variable: compact records (text + ~40 bytes struct overhead per record).
+	for _, cr := range entry.Answer {
+		if cr != nil {
+			size += int64(len(cr.Text)) + 44
+		}
+	}
+	for _, cr := range entry.Authority {
+		if cr != nil {
+			size += int64(len(cr.Text)) + 44
+		}
+	}
+	for _, cr := range entry.Additional {
+		if cr != nil {
+			size += int64(len(cr.Text)) + 44
+		}
+	}
+
+	// Compressed payload.
+	size += int64(len(entry.Payload))
+
+	// PTR records: IP + name strings + ~40 bytes struct overhead.
+	for _, pr := range ptrs {
+		size += int64(len(pr.IP)+len(pr.Name)) + 56
+	}
+
+	return size
 }
 
 // ── Reverse Lookup ──
@@ -449,10 +506,10 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 		ci.lastAccess.Store(time.Now().UnixNano())
 		mc.entries[item.Key] = ci
 		mc.storePTRLocked(item.Key, item.PTRs)
+		ci.size = estimateEntrySize(item.Key, entryCopy, item.PTRs)
+		mc.currentSize += ci.size
 		loaded++
-		if mc.limit > 0 && len(mc.entries) > mc.limit {
-			mc.evictLocked()
-		}
+		mc.evictToBudget()
 	}
 	mc.mu.Unlock()
 	mc.persistDirty.Store(0)
