@@ -21,6 +21,7 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/sysmem"
 
 	"github.com/miekg/dns"
 )
@@ -135,11 +136,16 @@ type persistedCacheItem struct {
 // ── Constructor ──
 
 // New creates a MemoryCache with the given settings.
+// Cache capacity is derived from settings.MemPercent of system RAM
+// (default 5%) divided by 1KB average entry size. Falls back to
+// DefaultCacheSize if memory detection fails.
 func New(settings config.CacheSettings) *MemoryCache {
-	size := settings.Size
-	if size <= 0 {
-		size = config.DefaultCacheSize
+	pct := settings.MemPercent
+	if pct <= 0 || pct > 100 {
+		pct = 5
 	}
+	size := sysmem.CacheSize(pct, 1024, config.DefaultCacheSize)
+	log.Infof("CACHE: %d entries (%d%% of system memory)", size, pct)
 
 	mc := &MemoryCache{
 		entries:         make(map[string]*cacheItem),

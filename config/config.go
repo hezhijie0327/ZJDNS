@@ -71,8 +71,9 @@ type DDRSettings struct {
 }
 
 // CacheSettings configures the DNS response cache.
+// MemPercent is the percentage of system RAM to budget (1-100, default 5).
 type CacheSettings struct {
-	Size        int                      `json:"size,omitempty"`
+	MemPercent  int                      `json:"mem_percent,omitempty"`
 	Persist     CachePersistenceSettings `json:"persist,omitempty"`
 	PreferStale bool                     `json:"prefer_stale,omitempty"`
 }
@@ -178,7 +179,7 @@ const (
 	DefaultPprofPort = "6060"
 	DefaultQueryPath = "/dns-query"
 
-	DefaultCacheSize            = 16384
+	DefaultCacheSize            = 4096
 	DefaultCachePersistInterval = 30 * time.Second
 	DefaultTTL                  = 10
 
@@ -310,8 +311,8 @@ func (cm *Manager) validateConfig(cfg *ServerConfig) error {
 		}
 	}
 
-	if cfg.Server.Features.Cache.Size < 0 {
-		return fmt.Errorf("server.features.cache.size must be non-negative")
+	if pct := cfg.Server.Features.Cache.MemPercent; pct < 0 || pct > 100 {
+		return fmt.Errorf("server.features.cache.mem_percent must be between 0 and 100")
 	}
 	if strings.Contains(cfg.Server.Features.Cache.Persist.File, "..") {
 		return fmt.Errorf("server.features.cache.persist.file must not contain '..'")
@@ -433,7 +434,6 @@ func (cm *Manager) getDefaultConfig() *ServerConfig {
 	cfg.Server.TLS.HTTPS.Port = DefaultDOHPort
 	cfg.Server.TLS.HTTPS.Endpoint = DefaultQueryPath
 
-	cfg.Server.Features.Cache.Size = DefaultCacheSize
 	cfg.Server.Features.Cache.Persist.Interval = int(DefaultCachePersistInterval / time.Second)
 	cfg.Server.Features.DDR = DDRSettings{Domain: "dns.example.com", IPv4: "127.0.0.1", IPv6: "::1"}
 	cfg.Server.Features.ECS = edns.DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
@@ -568,7 +568,7 @@ func GenerateExampleConfig() string {
 	cfg.Server.TLS.CertFile = "/path/to/cert.pem"
 	cfg.Server.TLS.KeyFile = "/path/to/key.pem"
 
-	cfg.Server.Features.Cache.Size = DefaultCacheSize
+	cfg.Server.Features.Cache.MemPercent = 5 // % of system RAM for cache budget
 	cfg.Server.Features.Cache.Persist = CachePersistenceSettings{
 		File:     "cache.snapshot",
 		Interval: int(DefaultCachePersistInterval / time.Second),

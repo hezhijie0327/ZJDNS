@@ -14,6 +14,7 @@
       }
     },
     "features": {
+      "hijack_protection": true,
       "ddr": {
         "domain": "dns.example.com",
         "ipv4": "127.0.0.1",
@@ -24,9 +25,8 @@
         "ipv6": "auto",
         "prefer_ipv4": true
       },
-      "hijack_protection": true,
       "cache": {
-        "size": 16384,
+        "mem_percent": 5,
         "persist": {
           "file": "cache.snapshot",
           "interval": 30
@@ -78,21 +78,16 @@
   "upstream": [
     {
       "address": "223.5.5.5:53",
-      "protocol": "tcp",
-      "server_name": "",
-      "skip_tls_verify": false
+      "protocol": "tcp"
     },
     {
       "address": "223.6.6.6:53",
-      "protocol": "udp",
-      "server_name": "",
-      "skip_tls_verify": false
+      "protocol": "udp"
     },
     {
       "address": "223.5.5.5:853",
       "protocol": "tls",
-      "server_name": "dns.alidns.com",
-      "skip_tls_verify": false
+      "server_name": "dns.alidns.com"
     },
     {
       "address": "223.6.6.6:853",
@@ -104,56 +99,48 @@
       "address": "https://223.5.5.5:443/dns-query",
       "protocol": "https",
       "server_name": "dns.alidns.com",
-      "skip_tls_verify": false,
       "match": ["mixed"]
     },
     {
       "address": "https://223.6.6.6:443/dns-query",
       "protocol": "http3",
       "server_name": "dns.alidns.com",
-      "skip_tls_verify": false,
       "match": ["!mixed"]
     },
     {
-      "address": "builtin_recursive",
-      "protocol": "",
-      "server_name": "",
-      "skip_tls_verify": false
+      "address": "builtin_recursive"
     }
   ],
   "fallback": [
     {
-      "address": "builtin_recursive",
-      "protocol": "",
-      "server_name": "",
-      "skip_tls_verify": false
+      "address": "builtin_recursive"
     }
   ],
   "rewrite": [
-    { "exclude_clients": ["10.0.0.100"] },
+    {
+      "exclude_clients": ["10.0.0.100"]
+    },
     {
       "name": "client-specific.example.com",
-      "include_clients": ["192.168.0.0/24"],
       "records": [
         {
           "type": "A",
-          "class": "IN",
           "ttl": 10,
           "content": "127.0.0.1"
         }
-      ]
+      ],
+      "include_clients": ["192.168.0.0/24"]
     },
     {
       "name": "blocked.example.com",
-      "exclude_clients": ["192.168.1.0/24"],
       "records": [
         {
           "type": "A",
-          "class": "IN",
           "ttl": 10,
           "content": "127.0.0.1"
         }
-      ]
+      ],
+      "exclude_clients": ["192.168.1.0/24"]
     },
     {
       "name": "ipv6.blocked.example.com",
