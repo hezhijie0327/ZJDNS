@@ -116,7 +116,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | Level | Use case |
 |-------|----------|
 | `Error` | Component failure, data loss risk (persist failures, shutdown timeouts) |
-| `Warn` | Security events (hijack detection), rare boundary conditions (CNAME loop, depth exceeded), background task failures (ECS refresh) |
+| `Warn` | Rare boundary conditions (CNAME loop, depth exceeded), background task failures (ECS refresh) |
 | `Info` | Startup/shutdown lifecycle, configuration summary, one-time events |
 | `Debug` | Hot-path detail: every query, cache hit/miss, upstream result, CIDR match |
 
