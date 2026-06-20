@@ -33,12 +33,12 @@
 
 ### 🔐 安全传输协议
 
-| 协议 | 端口 | 说明 |
-|------|------|------|
-| **DoT** (DNS over TLS) | 853 | TLS 1.3 加密 |
-| **DoQ** (DNS over QUIC) | 853 | QUIC 协议，0-RTT |
-| **DoH** (DNS over HTTPS) | 443 | HTTP/2 加密 |
-| **DoH3** (DNS over HTTP/3) | 443 | HTTP/3 加密 |
+| 协议                       | 端口 | 说明             |
+| -------------------------- | ---- | ---------------- |
+| **DoT** (DNS over TLS)     | 853  | TLS 1.3 加密     |
+| **DoQ** (DNS over QUIC)    | 853  | QUIC 协议，0-RTT |
+| **DoH** (DNS over HTTPS)   | 443  | HTTP/2 加密      |
+| **DoH3** (DNS over HTTP/3) | 443  | HTTP/3 加密      |
 
 - **统一证书管理**：自签名 ECDSA P-384 CA，动态签发
 - **DNS 填充 (RFC 7830)**：安全连接填充至 468 字节
@@ -76,24 +76,24 @@
 
 ## 📜 支持的 RFC 标准
 
-| RFC | 标准名称 | 实现功能 |
-|-----|---------|---------|
-| [RFC 3597](https://www.rfc-editor.org/rfc/rfc3597.html) | Handling Unknown DNS RR Types | 未知记录类型回退 |
-| [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033.html) | DNS Security Introduction and Requirements | DNSSEC 基础 |
-| [RFC 4034](https://www.rfc-editor.org/rfc/rfc4034.html) | Resource Records for DNSSEC | RRSIG/NSEC/DNSKEY/DS 类型 |
-| [RFC 4035](https://www.rfc-editor.org/rfc/rfc4035.html) | Protocol Modifications for DNSSEC | 信任链 + AD/CD 标志 |
-| [RFC 7830](https://www.rfc-editor.org/rfc/rfc7830.html) | EDNS(0) Padding | DNS 响应填充 |
-| [RFC 7858](https://www.rfc-editor.org/rfc/rfc7858.html) | DNS over TLS (DoT) | TLS 加密传输 |
-| [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html) | DNS Transport over TCP | TCP/DoT 连接复用 + 查询流水线 + 乱序响应 |
-| [RFC 7871](https://www.rfc-editor.org/rfc/rfc7871.html) | EDNS Client Subnet (ECS) | 客户端子网 |
-| [RFC 7873](https://www.rfc-editor.org/rfc/rfc7873.html) | DNS Cookies | Cookie 机制 |
-| [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.html) | DNS over HTTPS (DoH) | HTTPS 加密传输 |
-| [RFC 8767](https://www.rfc-editor.org/rfc/rfc8767.html) | Serving Stale DNS Answers | 过期缓存服务 |
-| [RFC 8914](https://www.rfc-editor.org/rfc/rfc8914.html) | Extended DNS Errors (EDE) | 扩展错误码 |
-| [RFC 9018](https://www.rfc-editor.org/rfc/rfc9018.html) | DNS Cookies for TLS | TLS Cookie |
-| [RFC 9250](https://www.rfc-editor.org/rfc/rfc9250.html) | DNS over QUIC (DoQ) | QUIC 加密传输 |
-| [RFC 9461](https://www.rfc-editor.org/rfc/rfc9461.html) | SVCB/HTTPS RR for DNS | DDR SVCB 记录 |
-| [RFC 9462](https://www.rfc-editor.org/rfc/rfc9462.html) | Discovery of Designated Resolvers | DDR 自动发现 |
+| RFC                                                     | 标准名称                                   | 实现功能                                 |
+| ------------------------------------------------------- | ------------------------------------------ | ---------------------------------------- |
+| [RFC 3597](https://www.rfc-editor.org/rfc/rfc3597.html) | Handling Unknown DNS RR Types              | 未知记录类型回退                         |
+| [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033.html) | DNS Security Introduction and Requirements | DNSSEC 基础                              |
+| [RFC 4034](https://www.rfc-editor.org/rfc/rfc4034.html) | Resource Records for DNSSEC                | RRSIG/NSEC/DNSKEY/DS 类型                |
+| [RFC 4035](https://www.rfc-editor.org/rfc/rfc4035.html) | Protocol Modifications for DNSSEC          | 信任链 + AD/CD 标志                      |
+| [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html) | DNS Transport over TCP                     | TCP/DoT 连接复用 + 查询流水线 + 乱序响应 |
+| [RFC 7830](https://www.rfc-editor.org/rfc/rfc7830.html) | EDNS(0) Padding                            | DNS 响应填充                             |
+| [RFC 7858](https://www.rfc-editor.org/rfc/rfc7858.html) | DNS over TLS (DoT)                         | TLS 加密传输                             |
+| [RFC 7871](https://www.rfc-editor.org/rfc/rfc7871.html) | EDNS Client Subnet (ECS)                   | 客户端子网                               |
+| [RFC 7873](https://www.rfc-editor.org/rfc/rfc7873.html) | DNS Cookies                                | Cookie 机制                              |
+| [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.html) | DNS over HTTPS (DoH)                       | HTTPS 加密传输                           |
+| [RFC 8767](https://www.rfc-editor.org/rfc/rfc8767.html) | Serving Stale DNS Answers                  | 过期缓存服务                             |
+| [RFC 8914](https://www.rfc-editor.org/rfc/rfc8914.html) | Extended DNS Errors (EDE)                  | 扩展错误码                               |
+| [RFC 9018](https://www.rfc-editor.org/rfc/rfc9018.html) | DNS Cookies for TLS                        | TLS Cookie                               |
+| [RFC 9250](https://www.rfc-editor.org/rfc/rfc9250.html) | DNS over QUIC (DoQ)                        | QUIC 加密传输                            |
+| [RFC 9461](https://www.rfc-editor.org/rfc/rfc9461.html) | SVCB/HTTPS RR for DNS                      | DDR SVCB 记录                            |
+| [RFC 9462](https://www.rfc-editor.org/rfc/rfc9462.html) | Discovery of Designated Resolvers          | DDR 自动发现                             |
 
 ---
 
@@ -122,46 +122,30 @@ zjdns/
 ├── cidr/cidr.go                     # Filter — IP 过滤
 ├── rewrite/rewrite.go               # Evaluator — 域名重写
 ├── stats/stats.go                   # Collector — 原子指标
-├── server/                          # 核心服务
-│   ├── server.go                    # Server 生命周期
-│   ├── server_handlers.go           # 查询管道
-│   ├── client/                      # 出站查询 (5 文件 + pool/ 子包)
-│   │   ├── client.go                # Client, ExecuteQuery
-│   │   ├── tcp.go, dot.go, doq.go, doh.go, doh3.go
-│   │   └── pool/                     # 连接池子包
-│   │       ├── tcp.go               # RFC 7766 TCP/DoT 连接池
-│   │       └── quic.go               # QUIC 连接池
-│   ├── resolver/                    # 解析策略 (4 文件)
-│   │   ├── resolver.go              # Resolver, 首胜+
-│   │   ├── upstream.go              # 上游并发查询
-│   │   ├── recursive.go             # 递归 walk
-│   │   └── cname.go                 # CNAME 链
-│   ├── tls/                         # 安全传输 (4 文件)
-│   │   ├── tls.go                   # Server, 证书
-│   │   ├── dot.go, doq.go, doh.go
-│   ├── security/                    # 安全 (4 文件 + 测试)
-│   │   ├── security.go              # Guard
-│   │   ├── dnssec.go                # DNSSEC 记录存在检查
-│   │   ├── dnssec_crypto.go         # 完整密码学 DNSSEC 验证
-│   │   └── hijack.go                # 劫持检测
-│   ├── latency/probe.go             # 延迟探测
-│   └── ratelimit/ratelimit.go       # 速率限制
-└── cmd/pipeline_test/               # RFC 7766 测试工具
-```
-
-### 依赖关系（无循环）
-
-```
-main → server, config
-server → cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite,
-         stats, client, ratelimit, resolver, security, tls, latency
-client → config, edns, dnsutil, log, pool, client/pool
-resolver → config, edns, client, security, dnsutil, log, pool
-security → dnsutil, log
-tls → config, dnsutil, log, pool, client/pool
-cache → config, edns, dnsutil, log
-edns → dnsutil, ipdetect, log
-stats → cache, config, log
+└── server/                          # 核心服务
+    ├── server.go                    # Server 生命周期
+    ├── server_handlers.go           # 查询管道
+    ├── client/                      # 出站查询 (5 文件 + pool/ 子包)
+    │   ├── client.go                # Client, ExecuteQuery
+    │   ├── tcp.go, dot.go, doq.go, doh.go, doh3.go
+    │   └── pool/                     # 连接池子包
+    │       ├── tcp.go               # RFC 7766 TCP/DoT 连接池
+    │       └── quic.go               # QUIC 连接池
+    ├── resolver/                    # 解析策略 (4 文件)
+    │   ├── resolver.go              # Resolver, 首胜+
+    │   ├── upstream.go              # 上游并发查询
+    │   ├── recursive.go             # 递归 walk
+    │   └── cname.go                 # CNAME 链
+    ├── tls/                         # 安全传输 (4 文件)
+    │   ├── tls.go                   # Server, 证书
+    │   ├── dot.go, doq.go, doh.go
+    ├── security/                    # 安全 (4 文件 + 测试)
+    │   ├── security.go              # Guard
+    │   ├── dnssec.go                # DNSSEC 记录存在检查
+    │   ├── dnssec_crypto.go         # 完整密码学 DNSSEC 验证
+    │   └── hijack.go                # 劫持检测
+    ├── latency/probe.go             # 延迟探测
+    └── ratelimit/ratelimit.go       # 速率限制
 ```
 
 ---
@@ -215,16 +199,6 @@ kdig dnssec-failed.org a +dnssec @127.0.0.1
 
 # 测试有效 DNSSEC（应返回 NOERROR + AD 标志）
 kdig cloudflare.com a +dnssec @127.0.0.1
-```
-
-### 流水线测试
-
-```bash
-# TCP 流水线
-go run ./cmd/pipeline_test/ 127.0.0.1:53
-
-# DoT 流水线（自签证书）
-go run ./cmd/pipeline_test/ -tls -skip-verify 127.0.0.1:853
 ```
 
 ### 性能监控

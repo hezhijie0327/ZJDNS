@@ -41,40 +41,38 @@ zjdns/
 ├── cidr/cidr.go                   # CIDR Filter — IP filtering with tag matching
 ├── rewrite/rewrite.go             # Rewrite Evaluator — domain rewrite rules
 ├── stats/stats.go                 # Lock-free atomic metrics Collector
-├── server/                        # Core server + sub-packages
-│   ├── server.go                  # Server lifecycle, New(), Start(), shutdown
-│   ├── server_handlers.go         # Query pipeline, cache hit/miss, response builders
-│   ├── client/                    # Outbound query execution + connection pools
-│   │   ├── client.go              # Client struct, ExecuteQuery, routing
-│   │   ├── tcp.go                 # Traditional UDP/TCP + TCP fallback
-│   │   ├── dot.go                 # DoT via pipelined pool
-│   │   ├── doq.go                 # DoQ via QUIC pool
-│   │   ├── doh.go                 # DoH via HTTP/2 transport
-│   │   ├── doh3.go                # DoH3 via HTTP/3 transport
-│   │   └── pool/                  # Connection pool sub-package
-│   │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
-│   │       └── quic.go            # QUIC connection pool (QuicPool, QuicConn)
-│   ├── resolver/                  # DNS resolution strategies
-│   │   ├── resolver.go            # Resolver struct, routing + helpers
-│   │   ├── upstream.go            # First-win concurrent upstream queries
-│   │   ├── recursive.go           # Recursive root→TLD→auth walk
-│   │   └── cname.go               # CNAME chain resolution
-│   ├── security/                  # Security features (4 files)
-│   │   ├── security.go            # Guard (bundles RecordPresence + CryptoValidator + Detector)
-│   │   ├── dnssec.go              # DNSSEC record-presence validation (upstream AD check)
-│   │   ├── dnssec_crypto.go       # Full cryptographic DNSSEC validation (RRSIG, DS, trust anchors)
-│   │   └── hijack.go              # Hijack detection + TCP fallback trigger
-│   ├── tls/                        # Secure transport listeners
-│   │   ├── tls.go                  # Server struct, cert management, Start/Shutdown
-│   │   ├── dot.go                  # DoT listener + per-connection handler
-│   │   ├── doq.go                  # DoQ listener + stream handler
-│   │   └── doh.go                  # DoH/DoH3 HTTP handlers
-│   ├── latency/                    # Latency probing
-│   │   └── probe.go                # A/AAAA latency probing + reordering
-│   └── ratelimit/                  # Per-IP token bucket rate limiter
-│       └── ratelimit.go            # Limiter (sharded, FNV-1a hash)
-└── cmd/
-    └── pipeline_test/             # RFC 7766 pipelining test tool
+└── server/                        # Core server + sub-packages
+    ├── server.go                  # Server lifecycle, New(), Start(), shutdown
+    ├── server_handlers.go         # Query pipeline, cache hit/miss, response builders
+    ├── client/                    # Outbound query execution + connection pools
+    │   ├── client.go              # Client struct, ExecuteQuery, routing
+    │   ├── tcp.go                 # Traditional UDP/TCP + TCP fallback
+    │   ├── dot.go                 # DoT via pipelined pool
+    │   ├── doq.go                 # DoQ via QUIC pool
+    │   ├── doh.go                 # DoH via HTTP/2 transport
+    │   ├── doh3.go                # DoH3 via HTTP/3 transport
+    │   └── pool/                  # Connection pool sub-package
+    │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
+    │       └── quic.go            # QUIC connection pool (QuicPool, QuicConn)
+    ├── resolver/                  # DNS resolution strategies
+    │   ├── resolver.go            # Resolver struct, routing + helpers
+    │   ├── upstream.go            # First-win concurrent upstream queries
+    │   ├── recursive.go           # Recursive root→TLD→auth walk
+    │   └── cname.go               # CNAME chain resolution
+    ├── security/                  # Security features (4 files)
+    │   ├── security.go            # Guard (bundles RecordPresence + CryptoValidator + Detector)
+    │   ├── dnssec.go              # DNSSEC record-presence validation (upstream AD check)
+    │   ├── dnssec_crypto.go       # Full cryptographic DNSSEC validation (RRSIG, DS, trust anchors)
+    │   └── hijack.go              # Hijack detection + TCP fallback trigger
+    ├── tls/                        # Secure transport listeners
+    │   ├── tls.go                  # Server struct, cert management, Start/Shutdown
+    │   ├── dot.go                  # DoT listener + per-connection handler
+    │   ├── doq.go                  # DoQ listener + stream handler
+    │   └── doh.go                  # DoH/DoH3 HTTP handlers
+    ├── latency/                    # Latency probing
+    │   └── probe.go                # A/AAAA latency probing + reordering
+    └── ratelimit/                  # Per-IP token bucket rate limiter
+        └── ratelimit.go            # Limiter (sharded, FNV-1a hash)
 ```
 
 ### Dependency Graph

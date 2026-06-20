@@ -15,6 +15,7 @@
     },
     "features": {
       "hijack_protection": true,
+      "dnssec_enforce": true,
       "ddr": {
         "domain": "dns.example.com",
         "ipv4": "127.0.0.1",
