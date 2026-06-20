@@ -67,6 +67,7 @@ type DNSServer struct {
 	prefetchCooldown  sync.Map
 	closed            int32
 	queryMgr          *QueryManager
+	limiter           *Limiter
 }
 
 // queryResult encapsulates the result of a DNS query, including the answer, authority, additional sections, validation status, ECS information, fallback status, and any error that occurred during processing.
@@ -119,6 +120,7 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 		cidrMgr:           cidrManager,
 		statsMgr:          stats.New(cfg, cache),
 		cacheMgr:          cache,
+		limiter:           NewLimiter(defaultRate, defaultBurst),
 		ctx:               ctx,
 		cancel:            cancel,
 		shutdown:          make(chan struct{}),
@@ -209,6 +211,27 @@ func New(cfg *config.ServerConfig) (*DNSServer, error) {
 			}
 		})
 	}
+
+	// Background cleanup of prefetch cooldown map.
+	server.backgroundGroup.Go(func() error {
+		defer dnsutil.HandlePanic("prefetch cooldown cleanup")
+		ticker := time.NewTicker(PrefetchThrottleInterval * 10)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				now := time.Now().UnixNano()
+				server.prefetchCooldown.Range(func(key, value any) bool {
+					if ts, ok := value.(int64); ok && now > ts {
+						server.prefetchCooldown.Delete(key)
+					}
+					return true
+				})
+			case <-server.backgroundCtx.Done():
+				return nil
+			}
+		}
+	})
 
 	if statsInterval := server.config.Server.StatsInterval(); statsInterval > 0 && server.statsMgr != nil {
 		interval := time.Duration(statsInterval) * time.Second
@@ -578,6 +601,12 @@ func (s *DNSServer) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConne
 		return msg
 	}
 
+	if !s.limiter.Allow(clientIP) {
+		msg := s.buildResponse(req)
+		msg.Rcode = dns.RcodeRefused
+		return msg
+	}
+
 	if req == nil || len(req.Question) == 0 {
 		msg := &dns.Msg{}
 		if req != nil && len(req.Question) > 0 {
@@ -911,7 +940,7 @@ func (s *DNSServer) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt
 
 	if err != nil {
 		// Check if it's a CIDR filter refusal
-		if err.Error() == "cidr_filter_refused" {
+		if errors.Is(err, ErrCIDRFilterRefused) {
 			return s.processCIDRRefused(req, question, cookieOpt, clientIP, isSecureConnection)
 		}
 		if hadError != nil {

@@ -783,7 +783,7 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse the DNS request
-	req, statusCode := tm.parseDoHRequest(r)
+	req, statusCode := tm.parseDoHRequest(r, w)
 	if req == nil {
 		http.Error(w, http.StatusText(statusCode), statusCode)
 		return
@@ -806,7 +806,7 @@ func (tm *TLSManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // parseDoHRequest parses a DNS request from an HTTP request.
 // It supports both GET (with base64url encoded dns parameter) and POST methods.
-func (tm *TLSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
+func (tm *TLSManager) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*dns.Msg, int) {
 	var buf []byte
 	var err error
 
@@ -825,7 +825,7 @@ func (tm *TLSManager) parseDoHRequest(r *http.Request) (*dns.Msg, int) {
 		if r.Header.Get("Content-Type") != "application/dns-message" {
 			return nil, http.StatusUnsupportedMediaType
 		}
-		r.Body = http.MaxBytesReader(nil, r.Body, DoHMaxRequestSize)
+		r.Body = http.MaxBytesReader(w, r.Body, DoHMaxRequestSize)
 		buf, err = io.ReadAll(r.Body)
 		defer func() { _ = r.Body.Close() }()
 		if err != nil {

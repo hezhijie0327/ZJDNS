@@ -22,6 +22,13 @@ import (
 	"zjdns/internal/pool"
 )
 
+
+// Sentinel errors for query results.
+var (
+	ErrCIDRFilterRefused = errors.New("cidr_filter_refused")
+	ErrAllUpstreamFailed = errors.New("all upstream queries failed")
+)
+
 const (
 	MaxCNAMEChain   = 16 // Maximum number of CNAME redirections to follow to prevent loops
 	MaxRecursionDep = 16 // Maximum recursion depth for resolving queries to prevent infinite loops
@@ -260,7 +267,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *edns.ECSOption
 						filteredAnswer, shouldRefuse := qm.filterRecordsByCIDR(answer, server.Match)
 						if shouldRefuse {
 							log.Debugf("UPSTREAM: CIDR filter refused all records for %s from recursive", question.Name)
-							return errors.New("cidr_filter_refused")
+							return ErrCIDRFilterRefused
 						}
 						answer = filteredAnswer
 					}
@@ -300,7 +307,7 @@ func (qm *QueryManager) queryUpstream(question dns.Question, ecs *edns.ECSOption
 							if shouldRefuse {
 								pool.DefaultMessagePool.Put(queryResult.Response)
 								log.Debugf("UPSTREAM: CIDR filter refused all records for %s from %s", question.Name, serverDesc)
-								return errors.New("cidr_filter_refused")
+								return ErrCIDRFilterRefused
 							}
 							queryResult.Response.Answer = filteredAnswer
 						}

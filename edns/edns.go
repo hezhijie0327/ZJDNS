@@ -4,7 +4,6 @@
 package edns
 
 import (
-	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -12,14 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"zjdns/internal/ipdetect"
 	"zjdns/internal/log"
 
 	"github.com/miekg/dns"
@@ -103,7 +100,7 @@ type Manager struct {
 	defaultECSIPv4   atomic.Pointer[ECSOption]
 	defaultECSIPv6   atomic.Pointer[ECSOption]
 	defaultECSConfig DefaultECSConfig
-	detector         *ipDetector
+	detector         *ipdetect.Detector
 	CookieGenerator  *CookieGenerator
 }
 
@@ -221,9 +218,7 @@ func validateECSConfigValue(value string) error {
 func NewManager(defaultECS DefaultECSConfig) (*Manager, error) {
 	mgr := &Manager{
 		defaultECSConfig: defaultECS,
-		detector: &ipDetector{
-			httpClient: &http.Client{Timeout: 3 * time.Second},
-		},
+		detector: &ipdetect.Detector{},
 		CookieGenerator: NewCookieGenerator(),
 	}
 
@@ -519,37 +514,16 @@ func (m *Manager) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDN
 // estimateDNSSize provides a conservative estimate of the wire size of a DNS
 // message with the given EDNS0 options, avoiding a full Pack() call.
 func estimateDNSSize(msg *dns.Msg, options []dns.EDNS0) int {
-	// DNS header: 12 bytes.
-	size := 12
-
-	// Question section.
-	for _, q := range msg.Question {
-		size += len(q.Name) + 4
+	// Use a real Pack() — cheaper than calling String() on every record.
+	packed, err := msg.Pack()
+	if err != nil {
+		return 0
 	}
-
-	// Answer / Authority / Additional sections.
-	for _, rr := range msg.Answer {
-		if rr != nil {
-			size += len(rr.String()) // conservative over-estimate
-		}
-	}
-	for _, rr := range msg.Ns {
-		if rr != nil {
-			size += len(rr.String())
-		}
-	}
-	for _, rr := range msg.Extra {
-		if rr != nil {
-			size += len(rr.String())
-		}
-	}
-
-	// OPT record overhead.
-	size += 11 // name(1) + type(2) + class(2) + ttl(4) + rdlen(2)
+	size := len(packed)
+	// Add overhead for the options we're about to add.
 	for _, opt := range options {
 		size += 4 + len(opt.String())
 	}
-
 	return size
 }
 
@@ -735,66 +709,23 @@ func EDECodeString(code uint16) string {
 // Internal helpers
 // ──────────────────────────────────────────
 
-// ipDetector detects the server's public IP address.
-type ipDetector struct {
-	httpClient *http.Client
+func isAutoECSValue(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "auto")
 }
 
-var ipPattern = regexp.MustCompile(`ip=([^\s\n]+)`)
-
-func (d *ipDetector) detectPublicIP(forceIPv6 bool) net.IP {
-	if d == nil {
-		return nil
+func ecsOptionEqual(a, b *ECSOption) bool {
+	if a == nil || b == nil {
+		return a == b
 	}
-
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: 2 * time.Second}
-			if forceIPv6 {
-				return dialer.DialContext(ctx, "tcp6", addr)
-			}
-			return dialer.DialContext(ctx, "tcp4", addr)
-		},
-	}
-
-	client := &http.Client{Timeout: 3 * time.Second, Transport: transport}
-	defer transport.CloseIdleConnections()
-
-	resp, err := client.Get("https://api.cloudflare.com/cdn-cgi/trace")
-	if err != nil {
-		return nil
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil
-	}
-
-	matches := ipPattern.FindStringSubmatch(string(body))
-	if len(matches) < 2 {
-		return nil
-	}
-
-	ip := net.ParseIP(matches[1])
-	if ip == nil {
-		return nil
-	}
-	if forceIPv6 && ip.To4() != nil {
-		return nil
-	}
-	if !forceIPv6 && ip.To4() == nil {
-		return nil
-	}
-	return ip
+	return a.Address.Equal(b.Address) && a.Family == b.Family &&
+		a.SourcePrefix == b.SourcePrefix && a.ScopePrefix == b.ScopePrefix
 }
 
 func (m *Manager) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, error) {
 	subnet = strings.ToLower(strings.TrimSpace(subnet))
 	if subnet == "auto" {
-		return m.detectPublicIP(forceIPv6, false)
+		return m.detectVia(forceIPv6, false)
 	}
-
 	if _, ipNet, err := net.ParseCIDR(subnet); err == nil {
 		prefix, _ := ipNet.Mask.Size()
 		family := uint16(1)
@@ -807,14 +738,8 @@ func (m *Manager) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 		if !forceIPv6 && family == 2 {
 			return nil, fmt.Errorf("expected IPv4 ECS value, got IPv6: %s", subnet)
 		}
-		return &ECSOption{
-			Family:       family,
-			SourcePrefix: uint8(prefix),
-			ScopePrefix:  DefaultECSScope,
-			Address:      ipNet.IP,
-		}, nil
+		return &ECSOption{Family: family, SourcePrefix: uint8(prefix), ScopePrefix: DefaultECSScope, Address: ipNet.IP}, nil
 	}
-
 	ip := net.ParseIP(subnet)
 	if ip == nil {
 		return nil, fmt.Errorf("parse IP or CIDR: %s", subnet)
@@ -831,51 +756,28 @@ func (m *Manager) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 		family = 2
 		prefix = DefaultECSv6Len
 	}
-	return &ECSOption{
-		Family:       family,
-		SourcePrefix: prefix,
-		ScopePrefix:  DefaultECSScope,
-		Address:      ip,
-	}, nil
+	return &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}, nil
 }
 
-func (m *Manager) detectPublicIP(forceIPv6, allowFallback bool) (*ECSOption, error) {
-	var ecs *ECSOption
-	if ip := m.detector.detectPublicIP(forceIPv6); ip != nil {
-		family := uint16(1)
-		prefix := uint8(DefaultECSv4Len)
-		if forceIPv6 {
-			family = 2
-			prefix = DefaultECSv6Len
-		}
-		ecs = &ECSOption{
-			Family:       family,
-			SourcePrefix: prefix,
-			ScopePrefix:  DefaultECSScope,
-			Address:      ip,
-		}
+// detectVia delegates to ipdetect for public IP detection.
+func (m *Manager) detectVia(forceIPv6, allowFallback bool) (*ECSOption, error) {
+	var ip net.IP
+	if forceIPv6 {
+		ip = m.detector.IPv6()
+	} else {
+		ip = m.detector.IPv4()
 	}
-	if ecs == nil && allowFallback && !forceIPv6 {
-		if ip := m.detector.detectPublicIP(true); ip != nil {
-			ecs = &ECSOption{
-				Family:       2,
-				SourcePrefix: DefaultECSv6Len,
-				ScopePrefix:  DefaultECSScope,
-				Address:      ip,
-			}
-		}
+	if ip == nil && allowFallback && !forceIPv6 {
+		ip = m.detector.IPv6()
 	}
-	return ecs, nil
-}
-
-func ecsOptionEqual(a, b *ECSOption) bool {
-	if a == nil || b == nil {
-		return a == b
+	if ip == nil {
+		return nil, nil
 	}
-	return a.Address.Equal(b.Address) && a.Family == b.Family &&
-		a.SourcePrefix == b.SourcePrefix && a.ScopePrefix == b.ScopePrefix
-}
-
-func isAutoECSValue(value string) bool {
-	return strings.EqualFold(strings.TrimSpace(value), "auto")
+	family := uint16(1)
+	prefix := uint8(DefaultECSv4Len)
+	if ip.To4() == nil {
+		family = 2
+		prefix = DefaultECSv6Len
+	}
+	return &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}, nil
 }

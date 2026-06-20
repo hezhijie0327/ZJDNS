@@ -107,10 +107,15 @@ func sortAAndAAAARecordsByLatency(ctx context.Context, answer []dns.RR, steps []
 		candidates[i] = candidate{idx: idx, rr: answer[idx], latency: time.Duration(math.MaxInt64)}
 	}
 
+	// Limit concurrent probes to avoid goroutine/file-descriptor exhaustion.
+	const maxProbes = 16
+	sem := make(chan struct{}, maxProbes)
 	results := make(chan candidate, len(candidates))
 	for _, c := range candidates {
 		c := c
 		go func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			c.latency = measureRecordLatency(ctx, c.rr, steps)
 			results <- c
 		}()

@@ -4,8 +4,8 @@ package dnsutil
 import (
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 
 	"zjdns/internal/log"
@@ -144,17 +144,27 @@ func FormatRecords(answers, authority, additional []dns.RR) string {
 // IsValidFilePath checks if a path is safe (no traversal, no dangerous prefixes,
 // no symlinks) and points to a regular file.
 func IsValidFilePath(path string) bool {
-	dangerousPrefixes := []string{"/etc/", "/proc/", "/sys/", "/dev/"}
-	if strings.Contains(path, "..") || slices.ContainsFunc(dangerousPrefixes, func(prefix string) bool {
-		return strings.HasPrefix(path, prefix)
-	}) {
-		return false
-	}
-
-	info, err := os.Lstat(path)
+	// Resolve absolute path and clean traversal components.
+	abs, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return false
 	}
+	// Reject paths with parent traversal after cleaning.
+	if strings.Contains(abs, "..") {
+		return false
+	}
+	// Block dangerous system directories after resolution.
+	dangerousPrefixes := []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
+	for _, prefix := range dangerousPrefixes {
+		if strings.HasPrefix(abs, prefix) {
+			return false
+		}
+	}
+	info, err := os.Lstat(abs)
+	if err != nil {
+		return false
+	}
+	// Reject symlinks.
 	if info.Mode()&os.ModeSymlink != 0 {
 		return false
 	}
