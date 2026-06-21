@@ -1,0 +1,18 @@
+{
+  "server": {
+    "port": "15353",
+    "log_level": "debug",
+    "tls": {
+      "port": "853"
+    },
+    "features": {
+      "dnssec_enforce": true,
+      "hijack_protection": true
+    }
+  },
+  "upstream": [
+    {
+      "address": "builtin_recursive"
+    }
+  ]
+}

@@ -39,10 +39,13 @@ type bucket struct {
 }
 
 // New creates a new Limiter with the specified rate (tokens per second) and
-// burst size. Default values are used if the provided values are zero or
-// negative.
+// burst size. Returns nil when rate is 0, which disables rate limiting.
+// Negative values fall back to defaults.
 func New(rate, burst int) *Limiter {
-	if rate <= 0 {
+	if rate == 0 {
+		return nil
+	}
+	if rate < 0 {
 		rate = defaultRate
 	}
 	if burst <= 0 {

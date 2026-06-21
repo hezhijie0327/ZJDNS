@@ -8,13 +8,31 @@ import (
 )
 
 func TestNew_DefaultValues(t *testing.T) {
-	l := New(0, 0)
+	l := New(-1, -1)
 	defer l.Shutdown()
 	if l.rate != defaultRate {
 		t.Errorf("default rate = %d, want %d", l.rate, defaultRate)
 	}
 	if l.burst != defaultBurst {
 		t.Errorf("default burst = %d, want %d", l.burst, defaultBurst)
+	}
+}
+
+func TestNew_ZeroRateDisabled(t *testing.T) {
+	l := New(0, 0)
+	if l != nil {
+		t.Error("rate=0 should return nil (disabled)")
+	}
+}
+
+func TestNew_NegativeRateUsesDefault(t *testing.T) {
+	l := New(-1, 0)
+	defer l.Shutdown()
+	if l.rate != defaultRate {
+		t.Errorf("negative rate should use default, got %d", l.rate)
+	}
+	if l.burst != defaultBurst {
+		t.Errorf("zero burst should use default, got %d", l.burst)
 	}
 }
 

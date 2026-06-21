@@ -280,10 +280,6 @@ func (cm *Loader) validateConfig(cfg *ServerConfig) error {
 		return err
 	}
 
-	if err := validateServerLimits(cfg); err != nil {
-		return err
-	}
-
 	if err := validatePorts(cfg); err != nil {
 		return err
 	}
@@ -403,22 +399,6 @@ func validateCacheAndStats(cfg *ServerConfig) error {
 	}
 	if cfg.Server.RateBurst < 0 {
 		return fmt.Errorf("server.rate_burst must be zero or positive")
-	}
-	return nil
-}
-
-func validateServerLimits(cfg *ServerConfig) error {
-	const maxRate = 1_000_000
-	const maxBurst = 1_000_000
-	const maxConcurrent = 100_000
-	if cfg.Server.RateLimit > maxRate {
-		return fmt.Errorf("server.rate_limit exceeds maximum %d", maxRate)
-	}
-	if cfg.Server.RateBurst > maxBurst {
-		return fmt.Errorf("server.rate_burst exceeds maximum %d", maxBurst)
-	}
-	if cfg.Server.MaxConcurrent > maxConcurrent {
-		return fmt.Errorf("server.max_concurrent exceeds maximum %d", maxConcurrent)
 	}
 	return nil
 }
