@@ -25,7 +25,7 @@
 - **速率限制**：全协议 per-IP token bucket，自动清理空闲客户端
 - **CIDR 过滤**：基于标签的 IP 过滤，支持文件/内联规则，IPv4 位运算优化匹配
 - **DNS 劫持防护**：根/TLD 越权响应检测，UDP→TCP 自动回退
-- **DNSSEC 密码学验证**：递归模式完整信任链（根 KSK→TLD DS→权威 DNSKEY→RRSIG），上游模式 AD 标志检测，`dnssec_enforce` 开关控制 bogus 响应拒绝
+- **DNSSEC 密码学验证**：递归模式完整信任链（根 KSK→TLD DS→权威 DNSKEY→RRSIG），NSEC/NSEC3 认证拒绝验证（RFC 5155），上游模式 AD 标志信任，`dnssec_enforce` 开关控制 bogus 响应拒绝，EDE 错误码传播
 - **ECS 支持**：EDNS 客户端子网，支持 auto/auto_v4/auto_v6 自动检测
 - **DNS Cookie**：HMAC-SHA256 服务端 Cookie，密钥无缝轮换
 - **扩展 DNS 错误 (EDE)**：24 种 EDE 代码，DNSSEC 失败自动映射（EDE 6/9/10）
@@ -47,7 +47,7 @@
 ### 💾 缓存系统
 
 - **自适应容量**：`size=0` 时自动按系统内存 5% 分配（≈1KB/条目），也可手动指定
-- **LRU 内存缓存**：RLock 读取（零读争用），atomic 访问时间淘汰
+- **LRU 内存缓存**：RLock 读取（零读争用），atomic 访问时间淘汰，TTL 上下界保护（10s–86400s）防投毒
 - **磁盘持久化**：gob 快照，启动恢复，定时落盘，原子写入
 - **过期缓存服务 (RFC 8767)**：上游不可用时返回过期缓存（最大 45 天）
 - **预取机制**：TTL 剩余 ≤25% 时后台刷新
@@ -82,6 +82,7 @@
 | [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033.html) | DNS Security Introduction and Requirements | DNSSEC 基础                              |
 | [RFC 4034](https://www.rfc-editor.org/rfc/rfc4034.html) | Resource Records for DNSSEC                | RRSIG/NSEC/DNSKEY/DS 类型                |
 | [RFC 4035](https://www.rfc-editor.org/rfc/rfc4035.html) | Protocol Modifications for DNSSEC          | 信任链 + AD/CD 标志                      |
+| [RFC 5155](https://www.rfc-editor.org/rfc/rfc5155.html) | NSEC3 Hashed Authenticated Denial         | NSEC3 认证拒绝 + RRSIG 验证               |
 | [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html) | DNS Transport over TCP                     | TCP/DoT 连接复用 + 查询流水线 + 乱序响应 |
 | [RFC 7830](https://www.rfc-editor.org/rfc/rfc7830.html) | EDNS(0) Padding                            | DNS 响应填充                             |
 | [RFC 7858](https://www.rfc-editor.org/rfc/rfc7858.html) | DNS over TLS (DoT)                         | TLS 加密传输                             |
@@ -127,7 +128,7 @@ zjdns/
     ├── server_handlers.go           # 查询管道
     ├── client/                      # 出站查询 (5 文件 + pool/ 子包)
     │   ├── client.go                # Client, ExecuteQuery
-    │   ├── tcp.go, dot.go, doq.go, doh.go, doh3.go
+    │   ├── tcp.go, dot.go, doq.go, doh.go, doh3.go, doh_request.go
     │   └── pool/                     # 连接池子包
     │       ├── tcp.go               # RFC 7766 TCP/DoT 连接池
     │       └── quic.go               # QUIC 连接池

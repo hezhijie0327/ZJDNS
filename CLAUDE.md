@@ -15,7 +15,7 @@ go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X mai
 golangci-lint run && golangci-lint fmt
 ```
 
-Test suites exist for `cidr`, `edns`, `rewrite`, and `server/security` packages (37 test cases). Module path: `zjdns` (Go 1.25).
+Test suites exist for `cidr`, `edns`, `rewrite`, and `server/security` packages (37 test cases). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
 
 ## Package Structure
 
@@ -51,6 +51,7 @@ zjdns/
     │   ├── doq.go                 # DoQ via QUIC pool
     │   ├── doh.go                 # DoH via HTTP/2 transport
     │   ├── doh3.go                # DoH3 via HTTP/3 transport
+    │   ├── doh_request.go          # Shared DoH/DoH3 HTTP request builder
     │   └── pool/                  # Connection pool sub-package
     │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
     │       └── quic.go            # QUIC connection pool (QuicPool, QuicConn)
@@ -153,7 +154,9 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `CryptoValidator` | `server/security` | Full cryptographic DNSSEC (RRSIG, DS, trust anchors) |
 | `Detector` | `server/security` | DNS hijack detection |
 | `DNSSECError` | `server/resolver` | Typed error with RFC 8914 EDE code |
+| `dnssecEDEError` | `server/resolver` | Shared constructor for DNSSECError from EDE code |
 | `dnssecChain` | `server/resolver` | Trust chain state during recursive resolution |
+| `ensureZoneDNSKEYs` | `server/resolver` | Explicit DNSKEY fetch at delegation steps |
 | `Limiter` | `server/ratelimit` | Per-IP token bucket rate limiter |
 
 ## Key Constants
@@ -162,6 +165,7 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 |----------|---------|-------|
 | `config.IdleTimeout` | config | 4s |
 | `config.DefaultTTL` | config | 10 |
+| `config.DefaultMaxTTL` | config | 86400 |
 | `config.DefaultCacheSize` | config | 16384 |
 | `config.MaxDomainLength` | config | 253 |
 | `config.RecursiveIndicator` | config | "builtin_recursive" |
@@ -207,8 +211,14 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 - **TLS config isolation**: `server/client/client.go` clones TLS configs per-query to prevent
   concurrent requests with different `InsecureSkipVerify`/`ServerName` from
   cross-contaminating each other.
-- **Cache persistence**: Full DNS records persisted as gob-encoded blobs;
+- **Cache persistence**: Full DNS records persisted as gob-encoded blobs (`.RR`
+  interface fields zeroed before encoding to avoid type-registration errors);
   metadata (timestamps, ECS) kept in memory for fast expiry checks.
+- **Cache TTL bounds**: `minTTL` enforces both minimum (10s) and maximum (86400s)
+  TTL to prevent cache-poisoned entries with extreme TTLs from persisting forever.
+- **Cache Get path**: Returns entry pointer directly (no deep-copy) — `expand()`
+  is non-mutating (parses from `.Text` on every call), so concurrent readers
+  sharing CompactRecords cannot race. Deep-copy reserved for write path only.
 - **Hijack detection during recursion**: Root/TLD servers returning unauthorized
   final answers trigger automatic UDP→TCP retry; if TCP also hijacked, returns
   REFUSED + EDE.
@@ -231,13 +241,33 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   package-level vars set by `main.go` before calling `config.Loader.LoadConfig()`.
 - **DNSSEC chain-of-trust**: `CryptoValidator` embeds IANA root KSK trust anchors
   (key tags 20326 + 38696). The recursive resolver builds a cryptographic chain at
-  each delegation step: extracts DS records from the parent zone, verifies their
-  RRSIGs against verified parent DNSKEYs, queries child zone for DNSKEY, matches
-  against the verified DS, then verifies answer RRSIGs against the child DNSKEY.
-  `dnssec_enforce: true` returns SERVFAIL on bogus delegations (e.g.
-  dnssec-failed.org); `false` passes through without AD flag.
-- **Upstream DNSSEC**: Non-recursive (forwarder) mode trusts the upstream resolver's
-  AD flag when accompanied by DNSSEC records (`Validator.ValidateResponse`).
+  each delegation step: queries parent zone for DNSKEY, verifies against trust
+  anchors (root) or parent DS (non-root), then verifies child DS RRSIGs against
+  verified parent DNSKEYs, queries child for DNSKEY matching verified DS, and
+  finally verifies answer RRSIGs against child DNSKEY. `ensureZoneDNSKEYs()` 
+  explicitly fetches DNSKEY records at each delegation step (delegation responses
+  do not carry DNSKEY records). `dnssec_enforce: true` returns SERVFAIL on bogus
+  delegations (e.g. dnssec-failed.org); `false` passes through without AD flag.
+- **NSEC/NSEC3 verified denial**: `validateNXDOMAIN` and `validateNODATA`
+  cryptographically verify RRSIGs over NSEC/NSEC3 records using the zone's
+  verified DNSKEYs (RFC 5155 §8). Unsigned NSEC3 records are rejected.
+- **SelfVerifyDNSKEY root-only**: `validateWithDNSSEC` only accepts self-signed
+  DNSKEY RRsets for the root zone (`currentDomain == "."`). Non-root zones must
+  authenticate via DS from the verified parent.
+- **Upstream DNSSEC**: Non-recursive (forwarder) mode trusts the upstream
+  resolver's AD flag when accompanied by DNSSEC records. Validation result
+  logged at Debug level; AD flag propagated to clients and cache.
 - **EDE propagation**: DNSSEC failure EDE codes are stored atomically on
   `Recursive.lastDNSSECEDECode` and read directly by `processQueryError` to avoid
-  error-chain corruption from context cancellation.
+  error-chain corruption from context cancellation. Upstream SERVFAIL responses
+  with DNSSEC EDE codes (1-12) are captured and propagated as DNSSECError.
+- **Glue record validation**: Glue A/AAAA records from delegation responses are
+  validated against the parent zone (the zone that published the delegation),
+  rejecting out-of-bailiwick glue. Glue is used directly when available;
+  independent NS resolution is the fallback only when glue is absent.
+- **DNSKEY cache lifecycle**: `GetZoneKeys` uses a dual-lock pattern (RLock for
+  fast path, Lock with re-read for expiry) to prevent TOCTOU races with
+  `CacheZoneKeys`. A background goroutine sweeps expired entries every 5 minutes;
+  `Guard.Close()` terminates the sweeper on shutdown.
+- **BufferPool pointer storage**: Buffers are stored as `*[]byte` pointers in
+  `sync.Pool` to avoid interface-boxing allocations on every `Put` (SA6002).
