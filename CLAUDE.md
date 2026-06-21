@@ -15,17 +15,24 @@ go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X mai
 golangci-lint run && golangci-lint fmt
 ```
 
-Test suites exist for `cidr`, `edns`, `rewrite`, and `server/security` packages (37 test cases). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
+Test suites exist for `cidr`, `edns`, `rewrite`, `internal/dnsutil`, `internal/pool`, `server/ratelimit`, `server/resolver`, and `server/security` packages (75+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
+
+Target coverage: ≥90% for utility packages (`dnsutil` 95.7%, `pool` 91.3%). Rate limiter at 85.7% (cleanup goroutine requires 5-minute ticker).
+
+Run benchmarks: `go test -bench=. -short ./...` (unit) or `go test -bench=BenchmarkServerProcessQuery -benchtime=3s .` (QPS).
 
 ## Package Structure
 
 ```
 zjdns/
 ├── main.go / version.go           # Entry point + ldflags variables
+├── bench_test.go                  # Global benchmarks (pool, cache, DNSSEC, QPS)
 ├── internal/
 │   ├── log/log.go                 # Logger, TimeCache, Level.String()
 │   ├── pool/pool.go               # MessagePool, BufferPool, constants (zero deps)
+│   ├── pool/pool_test.go          # Pool tests (Get/Put, drain/refill, nil safety, bench)
 │   ├── dnsutil/dnsutil.go         # NormalizeDomain, IsSecureProtocol, HandlePanic, etc.
+│   ├── dnsutil/dnsutil_test.go    # DNS util tests (NormalizeDomain, ParseReverseDNSName, etc.)
 │   └── ipdetect/ipdetect.go       # Public IP detection for auto ECS
 ├── config/config.go               # All types + constants + loader + validation + DDR/CHAOS
 ├── edns/                           # EDNS(0) extensions (5 files)
@@ -59,7 +66,8 @@ zjdns/
     │   ├── resolver.go            # Resolver struct, routing + helpers
     │   ├── upstream.go            # First-win concurrent upstream queries
     │   ├── recursive.go           # Recursive root→TLD→auth walk
-    │   └── cname.go               # CNAME chain resolution
+    │   ├── cname.go               # CNAME chain resolution
+    │   └── dnssec_test.go         # DNSSEC tests (zone cut, EDE, lame delegation, 21 cases)
     ├── security/                  # Security features (4 files)
     │   ├── security.go            # Guard (bundles RecordPresence + CryptoValidator + Detector)
     │   ├── dnssec.go              # DNSSEC record-presence validation (upstream AD check)
@@ -73,7 +81,8 @@ zjdns/
     ├── latency/                    # Latency probing
     │   └── probe.go                # A/AAAA latency probing + reordering
     └── ratelimit/                  # Per-IP token bucket rate limiter
-        └── ratelimit.go            # Limiter (sharded, FNV-1a hash)
+            ├── ratelimit.go            # Limiter (sharded, FNV-1a hash)
+            └── ratelimit_test.go       # Tests (burst, refill, IPv6, parallel bench)
 ```
 
 ### Dependency Graph
@@ -155,9 +164,12 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `Detector` | `server/security` | DNS hijack detection |
 | `DNSSECError` | `server/resolver` | Typed error with RFC 8914 EDE code |
 | `dnssecEDEError` | `server/resolver` | Shared constructor for DNSSECError from EDE code |
-| `dnssecChain` | `server/resolver` | Trust chain state during recursive resolution |
+| `dnssecChain` | `server/resolver` | Trust chain state (zoneDNSKEYs, childDS, lastEDECode, zoneCutDetected) |
 | `ensureZoneDNSKEYs` | `server/resolver` | Explicit DNSKEY fetch at delegation steps |
+| `resolveZoneCut` | `server/resolver` | Builds DNSSEC chain for delegated child zone on-the-fly |
+| `isZoneCut` / `getZoneCutSigner` | `server/resolver` | Detects when answer RRSIGs are signed by child zone keys |
 | `Limiter` | `server/ratelimit` | Per-IP token bucket rate limiter |
+| `MessagePool` / `BufferPool` | `pool` | sync.Pool-based message and buffer allocators |
 
 ## Key Constants
 
@@ -268,5 +280,20 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   fast path, Lock with re-read for expiry) to prevent TOCTOU races with
   `CacheZoneKeys`. A background goroutine sweeps expired entries every 5 minutes;
   `Guard.Close()` terminates the sweeper on shutdown.
+- **Zone cut detection** (`isZoneCut`): When the recursive resolver queries an
+  authoritative server and receives an answer signed by a child zone's DNSKEY
+  (RRSIG signer name is a proper subdomain of `currentDomain`), the answer is
+  processed via `resolveZoneCut()` instead of failing validation. This function
+  queries the child zone's DS and DNSKEY records directly, verifies the chain
+  of trust against the parent zone's verified keys, and validates the original
+  answer against the child zone's DNSKEYs. This handles cases where the same
+  server hosts both parent and child zones (e.g. sigok.ippacket.stream).
+- **Lame delegation detection**: When a non-authoritative response has NS records
+  pointing back to the same zone (`bestMatch == currentDomain` without AA flag),
+  the server returns SERVFAIL with EDE 22 (No Reachable Authority) instead of
+  silently accepting the response. Matches Cloudflare/Google behavior.
+- **NSEC/NSEC3 validation for NODATA**: Negative responses (no answer section)
+  have their NSEC/NSEC3 records cryptographically verified against the zone's
+  DNSKEYs before setting the AD flag (RFC 4035 §3.1.3).
 - **BufferPool pointer storage**: Buffers are stored as `*[]byte` pointers in
   `sync.Pool` to avoid interface-boxing allocations on every `Put` (SA6002).
