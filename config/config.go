@@ -145,6 +145,8 @@ type RewriteRule struct {
 	IncludeClients     []string          `json:"include_clients,omitempty"`
 	ExcludeClientCIDRs []*net.IPNet      `json:"-"`
 	IncludeClientCIDRs []*net.IPNet      `json:"-"`
+	CachedRecords      []dns.RR          `json:"-"`
+	CachedAdditional   []dns.RR          `json:"-"`
 }
 
 // DNSRecordConfig defines a single DNS resource record for rewrite responses.

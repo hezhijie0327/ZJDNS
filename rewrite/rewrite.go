@@ -94,6 +94,28 @@ func (re *Evaluator) LoadRules(rules []config.RewriteRule) error {
 		}
 
 		rule.NormalizedName = dnsutil.NormalizeDomain(rule.Name)
+
+		// Pre-build DNS records from config so they are not re-parsed
+		// from zone file strings on every query.
+		rule.CachedRecords = make([]dns.RR, 0, len(rule.Records))
+		for _, rec := range rule.Records {
+			if rec.ResponseCode != nil {
+				continue // handled in Evaluate, not a real RR
+			}
+			if rr := re.buildRecord(rule.Name, rec); rr != nil {
+				rule.CachedRecords = append(rule.CachedRecords, rr)
+			}
+		}
+		rule.CachedAdditional = make([]dns.RR, 0, len(rule.Additional))
+		for _, rec := range rule.Additional {
+			if rec.ResponseCode != nil {
+				continue
+			}
+			if rr := re.buildRecord(rule.Name, rec); rr != nil {
+				rule.CachedAdditional = append(rule.CachedAdditional, rr)
+			}
+		}
+
 		validRules = append(validRules, rule)
 	}
 
@@ -193,10 +215,13 @@ ruleLoop:
 			result.ShouldRewrite = true
 			return result
 		}
-		if len(rule.Records) > 0 || len(rule.Additional) > 0 {
-			result.Records = make([]dns.RR, 0, len(rule.Records))
-			result.Additional = make([]dns.RR, 0, len(rule.Additional))
+		if len(rule.CachedRecords) > 0 || len(rule.CachedAdditional) > 0 || len(rule.Records) > 0 {
+			// Check for per-record response_code overrides first
+			// (these are not pre-built into CachedRecords).
 			for _, record := range rule.Records {
+				if record.ResponseCode == nil {
+					continue
+				}
 				recordType := dns.StringToType[record.Type]
 				var recordClass uint16 = dns.ClassINET
 				if record.Class != "" {
@@ -206,29 +231,27 @@ ruleLoop:
 						continue
 					}
 				}
-				if record.ResponseCode != nil {
-					if (record.Type == "" || recordType == qtype) && recordClass == qclass {
-						result.ResponseCode = *record.ResponseCode
-						result.ShouldRewrite = true
-						result.Records = nil
-						result.Additional = nil
-						return result
-					}
-					continue
-				}
-				if recordClass != qclass {
-					continue
-				}
-				if record.Type != "" && recordType != qtype {
-					continue
-				}
-				if rr := re.buildRecord(domain, record); rr != nil {
-					result.Records = append(result.Records, rr)
+				if (record.Type == "" || recordType == qtype) && recordClass == qclass {
+					result.ResponseCode = *record.ResponseCode
+					result.ShouldRewrite = true
+					result.Records = nil
+					result.Additional = nil
+					return result
 				}
 			}
-			for _, record := range rule.Additional {
-				if rr := re.buildRecord(domain, record); rr != nil {
-					result.Additional = append(result.Additional, rr)
+
+			// Use pre-built RRs (built once at LoadRules time) —
+			// filter by query type and class.
+			for _, rr := range rule.CachedRecords {
+				hdr := rr.Header()
+				if hdr.Class == qclass && hdr.Rrtype == qtype {
+					result.Records = append(result.Records, dns.Copy(rr))
+				}
+			}
+			for _, rr := range rule.CachedAdditional {
+				hdr := rr.Header()
+				if hdr.Class == qclass && hdr.Rrtype == qtype {
+					result.Additional = append(result.Additional, dns.Copy(rr))
 				}
 			}
 			result.ShouldRewrite = true
