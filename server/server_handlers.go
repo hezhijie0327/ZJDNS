@@ -144,13 +144,14 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 	prefetchTriggered := false
 	var responseMsg *dns.Msg
 	fallbackUsed := false
+	dnssecStatus := ""
 	defer func() {
 		responseTime := time.Since(startTime)
 		if log.Default.Level() >= log.Debug && responseMsg != nil {
 			log.Debugf("Query completed: %s %s | rcode=%s | Time:%v | answer=%d, authority=%d, additional=%d, ad=%t%s", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[responseMsg.Rcode], responseTime.Truncate(time.Microsecond), len(responseMsg.Answer), len(responseMsg.Ns), len(responseMsg.Extra), responseMsg.AuthenticatedData, dnsutil.FormatRecords(responseMsg.Answer, responseMsg.Ns, responseMsg.Extra))
 		}
 		if s.statsMgr != nil {
-			s.statsMgr.RecordRequest(responseTime, cacheHit, hadError, requestProtocol, rewrote, hijackDetected, staleServed, fallbackUsed, prefetchTriggered)
+			s.statsMgr.RecordRequest(responseTime, cacheHit, hadError, requestProtocol, rewrote, hijackDetected, staleServed, fallbackUsed, prefetchTriggered, dnssecStatus)
 		}
 	}()
 
@@ -212,16 +213,16 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 		log.Debugf("CACHE: hit key=%s expired=%t for %s, ttl=%d, validated=%t, answer=%d", cacheKey, isExpired, question.Name, entry.GetRemainingTTL(), entry.Validated, len(entry.Answer))
 		cacheHit = true
 		if !isExpired {
-			responseMsg = s.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &prefetchTriggered)
+			responseMsg = s.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &prefetchTriggered, &dnssecStatus)
 			return responseMsg
 		}
 
 		if entry.CanServeExpired(cache.StaleMaxAge) {
-			responseMsg = s.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &staleServed, &fallbackUsed)
+			responseMsg = s.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &staleServed, &fallbackUsed, &dnssecStatus)
 			return responseMsg
 		}
 
-		responseMsg = s.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &hadError, &fallbackUsed)
+		responseMsg = s.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &hadError, &fallbackUsed, &dnssecStatus)
 		return responseMsg
 	}
 
@@ -237,7 +238,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 		}
 	}
 
-	responseMsg = s.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &hadError, &fallbackUsed)
+	responseMsg = s.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &hadError, &fallbackUsed, &dnssecStatus)
 	return responseMsg
 }
 
@@ -267,7 +268,14 @@ func (s *Server) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption)
 	return records
 }
 
-func (s *Server) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool) *dns.Msg {
+func (s *Server) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool, dnssecStatus *string) *dns.Msg {
+	// Record DNSSEC status for cache hits
+	if entry.Validated {
+		*dnssecStatus = "secure"
+	} else {
+		*dnssecStatus = "insecure"
+	}
+
 	msg := s.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
 
 	if isExpired && entry.ShouldRefresh() {
@@ -349,10 +357,16 @@ func (s *Server) canServeExpiredEntry(entry *cache.CacheEntry) bool {
 	return entry.CanServeExpired(cache.StaleMaxAge)
 }
 
-func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool) *dns.Msg {
+func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool, dnssecStatus *string) *dns.Msg {
 	if s.config.Server.Features.Cache.PreferStale {
 		if staleServed != nil {
 			*staleServed = true
+		}
+		// Record DNSSEC status for stale cache hits
+		if entry.Validated {
+			*dnssecStatus = "secure"
+		} else {
+			*dnssecStatus = "insecure"
 		}
 		s.cacheRefreshGroup.Go(func() error {
 			defer dnsutil.HandlePanic("expired cache refresh")
@@ -389,15 +403,21 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 			if fallbackUsed != nil && res.fallback {
 				*fallbackUsed = true
 			}
-			return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs, res.fallback, clientIP, isSecureConnection)
+			return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs, res.fallback, clientIP, isSecureConnection, dnssecStatus)
 		}
 		if staleServed != nil {
 			*staleServed = true
 		}
-		return s.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, nil)
+		return s.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, nil, dnssecStatus)
 	case <-timer.C:
 		if staleServed != nil {
 			*staleServed = true
+		}
+		// Record DNSSEC status for stale cache hit (timeout fallback)
+		if entry.Validated {
+			*dnssecStatus = "secure"
+		} else {
+			*dnssecStatus = "insecure"
 		}
 		go func() {
 			select {
@@ -417,7 +437,7 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 	}
 }
 
-func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool) *dns.Msg {
+func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool, dnssecStatus *string) *dns.Msg {
 	log.Debugf("CACHE: miss key=%s for %s, querying upstream/recursive", cacheKey, question.Name)
 	answer, authority, additional, validated, ecsResponse, _, usedFallback, err := s.resolver.Query(s.ctx, question, ecsOpt)
 	if fallbackUsed != nil && usedFallback {
@@ -432,14 +452,20 @@ func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *e
 		if hadError != nil {
 			*hadError = true
 		}
-		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, err)
+		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, err, dnssecStatus)
 	}
 
-	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, usedFallback, clientIP, isSecureConnection)
+	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, usedFallback, clientIP, isSecureConnection, dnssecStatus)
 }
 
-func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error) *dns.Msg {
+func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string) *dns.Msg {
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found && s.canServeExpiredEntry(entry) {
+		// Serving stale cache on error fallback
+		if entry.Validated {
+			*dnssecStatus = "secure"
+		} else {
+			*dnssecStatus = "insecure"
+		}
 		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.GetRemainingTTL(), entry.Validated)
 		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
 	}
@@ -454,11 +480,13 @@ func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Q
 	edeCode := edns.EDECodeNetworkError
 	if s.resolver != nil && s.resolver.Recursive() != nil && s.resolver.Recursive().DNSSECEDECode() != 0 {
 		edeCode = s.resolver.Recursive().DNSSECEDECode()
+		*dnssecStatus = "bogus"
 		log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
 	} else {
 		var dnsErr *resolver.DNSSECError
 		if errors.As(queryErr, &dnsErr) {
 			edeCode = dnsErr.EDECode
+			*dnssecStatus = "bogus"
 			log.Debugf("SECURITY: DNSSEC error mapped to EDE %d: %s", edeCode, dnsErr.Message)
 		} else if queryErr != nil {
 			log.Debugf("RESULT: non-DNSSEC error, using EDE %d: %v", edeCode, queryErr)
@@ -495,8 +523,22 @@ func (s *Server) processCIDRRefused(req *dns.Msg, question dns.Question, ecsOpt 
 	return msg
 }
 
-func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, skipCache bool, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, skipCache bool, clientIP net.IP, isSecureConnection bool, dnssecStatus *string) *dns.Msg {
 	msg := s.buildResponse(req)
+
+	// Determine DNSSEC status for stats
+	if validated {
+		*dnssecStatus = "secure"
+	} else {
+		// Distinguished bogus from insecure: if the recursive resolver set an
+		// EDE code, validation was attempted and failed (bogus). Otherwise the
+		// domain is unsigned (insecure delegation).
+		if s.resolver != nil && s.resolver.Recursive() != nil && s.resolver.Recursive().DNSSECEDECode() != 0 {
+			*dnssecStatus = "bogus"
+		} else {
+			*dnssecStatus = "insecure"
+		}
+	}
 
 	// Set AuthenticatedData when DNSSEC cryptographic validation passed.
 	// DNSSEC is always enabled; CryptoValidator runs on every recursive query.

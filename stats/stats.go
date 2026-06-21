@@ -36,6 +36,9 @@ type Snapshot struct {
 	DoH3Requests        uint64 `json:"doh3_requests"`
 	RewriteRequests     uint64 `json:"rewrite_requests"`
 	HijackDetections    uint64 `json:"hijack_detections"`
+	DNSSECSecure        uint64 `json:"dnssec_secure"`
+	DNSSECBogus         uint64 `json:"dnssec_bogus"`
+	DNSSECInsecure      uint64 `json:"dnssec_insecure"`
 	UpdatedAt           int64  `json:"updated_at"`
 }
 
@@ -66,20 +69,29 @@ type logEvents struct {
 	FallbackRequests uint64 `json:"fallback_requests,omitempty"`
 }
 
+type logDNSSEC struct {
+	Secure   uint64 `json:"secure,omitempty"`
+	Bogus    uint64 `json:"bogus,omitempty"`
+	Insecure uint64 `json:"insecure,omitempty"`
+}
+
 type logRates struct {
-	CacheRate    float64 `json:"cache_rate,omitempty"`
-	PrefetchRate float64 `json:"prefetch_rate,omitempty"`
-	FailureRate  float64 `json:"failure_rate,omitempty"`
-	StaleRate    float64 `json:"stale_rate,omitempty"`
-	FallbackRate float64 `json:"fallback_rate,omitempty"`
-	RewriteRate  float64 `json:"rewrite_rate,omitempty"`
-	HijackRate   float64 `json:"hijack_rate,omitempty"`
+	CacheRate       float64 `json:"cache_rate,omitempty"`
+	PrefetchRate    float64 `json:"prefetch_rate,omitempty"`
+	FailureRate     float64 `json:"failure_rate,omitempty"`
+	StaleRate       float64 `json:"stale_rate,omitempty"`
+	FallbackRate    float64 `json:"fallback_rate,omitempty"`
+	RewriteRate     float64 `json:"rewrite_rate,omitempty"`
+	HijackRate      float64 `json:"hijack_rate,omitempty"`
+	DNSSECSecureRate float64 `json:"dnssec_secure_rate,omitempty"`
+	DNSSECBogusRate  float64 `json:"dnssec_bogus_rate,omitempty"`
 }
 
 type logEntry struct {
 	Totals    logTotals         `json:"totals"`
 	Protocols logProtocolCounts `json:"protocols,omitempty"`
 	Events    logEvents         `json:"events,omitempty"`
+	DNSSEC    logDNSSEC         `json:"dnssec,omitempty"`
 	Rates     logRates          `json:"rates,omitempty"`
 }
 
@@ -104,6 +116,9 @@ type Collector struct {
 	doh3Requests        atomic.Uint64
 	rewriteRequests     atomic.Uint64
 	hijackDetections    atomic.Uint64
+	dnssecSecure        atomic.Uint64
+	dnssecBogus         atomic.Uint64
+	dnssecInsecure      atomic.Uint64
 
 	resetInterval time.Duration
 	persistTTL    int
@@ -143,17 +158,24 @@ func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
 			RewriteRequests:  snapshot.RewriteRequests,
 			FallbackRequests: snapshot.FallbackRequests,
 		},
+		DNSSEC: logDNSSEC{
+			Secure:   snapshot.DNSSECSecure,
+			Bogus:    snapshot.DNSSECBogus,
+			Insecure: snapshot.DNSSECInsecure,
+		},
 	}
 	if snapshot.TotalRequests > 0 {
 		entry.Totals.AverageResponseTimeMs = snapshot.AverageResponseTimeMs()
 		entry.Rates = logRates{
-			CacheRate:    float64(snapshot.CacheHits) / float64(snapshot.TotalRequests),
-			StaleRate:    float64(snapshot.StaleResponses) / float64(snapshot.TotalRequests),
-			FailureRate:  float64(snapshot.ErrorResponses) / float64(snapshot.TotalRequests),
-			HijackRate:   float64(snapshot.HijackDetections) / float64(snapshot.TotalRequests),
-			PrefetchRate: float64(snapshot.PrefetchRequests) / float64(snapshot.TotalRequests),
-			RewriteRate:  float64(snapshot.RewriteRequests) / float64(snapshot.TotalRequests),
-			FallbackRate: float64(snapshot.FallbackRequests) / float64(snapshot.TotalRequests),
+			CacheRate:        float64(snapshot.CacheHits) / float64(snapshot.TotalRequests),
+			StaleRate:        float64(snapshot.StaleResponses) / float64(snapshot.TotalRequests),
+			FailureRate:      float64(snapshot.ErrorResponses) / float64(snapshot.TotalRequests),
+			HijackRate:       float64(snapshot.HijackDetections) / float64(snapshot.TotalRequests),
+			PrefetchRate:     float64(snapshot.PrefetchRequests) / float64(snapshot.TotalRequests),
+			RewriteRate:      float64(snapshot.RewriteRequests) / float64(snapshot.TotalRequests),
+			FallbackRate:     float64(snapshot.FallbackRequests) / float64(snapshot.TotalRequests),
+			DNSSECSecureRate: float64(snapshot.DNSSECSecure) / float64(snapshot.TotalRequests),
+			DNSSECBogusRate:  float64(snapshot.DNSSECBogus) / float64(snapshot.TotalRequests),
 		}
 	}
 	return json.Marshal(entry)
@@ -189,7 +211,7 @@ func New(cfg *config.ServerConfig, c cache.Store) *Collector {
 // RecordRequest atomically increments counters for a single DNS query event.
 func (sc *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadError bool,
 	protocol string, rewrote bool, hijackDetected bool, staleServed bool,
-	fallbackUsed bool, prefetchTriggered bool) {
+	fallbackUsed bool, prefetchTriggered bool, dnssecStatus string) {
 
 	if sc == nil || !sc.enabled {
 		return
@@ -248,6 +270,15 @@ func (sc *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadErr
 	if prefetchTriggered {
 		sc.prefetchRequests.Add(1)
 	}
+
+	switch dnssecStatus {
+	case "secure":
+		sc.dnssecSecure.Add(1)
+	case "bogus":
+		sc.dnssecBogus.Add(1)
+	case "insecure":
+		sc.dnssecInsecure.Add(1)
+	}
 }
 
 // Snapshot returns a point-in-time copy of all accumulated counters.
@@ -273,6 +304,9 @@ func (sc *Collector) Snapshot() Snapshot {
 		DoH3Requests:        sc.doh3Requests.Load(),
 		RewriteRequests:     sc.rewriteRequests.Load(),
 		HijackDetections:    sc.hijackDetections.Load(),
+		DNSSECSecure:        sc.dnssecSecure.Load(),
+		DNSSECBogus:         sc.dnssecBogus.Load(),
+		DNSSECInsecure:      sc.dnssecInsecure.Load(),
 		UpdatedAt:           time.Now().Unix(),
 	}
 }
@@ -299,6 +333,9 @@ func (sc *Collector) Reset() {
 	sc.doh3Requests.Store(0)
 	sc.rewriteRequests.Store(0)
 	sc.hijackDetections.Store(0)
+	sc.dnssecSecure.Store(0)
+	sc.dnssecBogus.Store(0)
+	sc.dnssecInsecure.Store(0)
 }
 
 // FetchStats returns a Snapshot pointer suitable for external consumption.
@@ -365,6 +402,9 @@ func (sc *Collector) LoadFromCacheEntry(entry *cache.CacheEntry) error {
 	sc.doh3Requests.Store(snap.DoH3Requests)
 	sc.rewriteRequests.Store(snap.RewriteRequests)
 	sc.hijackDetections.Store(snap.HijackDetections)
+	sc.dnssecSecure.Store(snap.DNSSECSecure)
+	sc.dnssecBogus.Store(snap.DNSSECBogus)
+	sc.dnssecInsecure.Store(snap.DNSSECInsecure)
 	return nil
 }
 
