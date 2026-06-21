@@ -1,6 +1,10 @@
 package edns
 
-import "github.com/miekg/dns"
+import (
+	"github.com/miekg/dns"
+
+	"zjdns/internal/pool"
+)
 
 // PaddingSize is the block size boundary (468 bytes) for DNS message padding
 // on secure transports.
@@ -15,7 +19,7 @@ func addPadding(msg *dns.Msg, options []dns.EDNS0, isSecureConnection bool) ([]d
 		Hdr: dns.RR_Header{
 			Name:   ".",
 			Rrtype: dns.TypeOPT,
-			Class:  1232,
+			Class:  pool.UDPBufferSize,
 		},
 	}
 	tmpOpt.Option = options

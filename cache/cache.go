@@ -163,8 +163,8 @@ func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDN
 	return result
 }
 
-// CreateCompactRecord creates a CompactRecord from a DNS resource record.
-func CreateCompactRecord(rr dns.RR) *CompactRecord {
+// createCompactRecord creates a CompactRecord from a DNS resource record.
+func createCompactRecord(rr dns.RR) *CompactRecord {
 	if rr == nil {
 		return nil
 	}
@@ -185,6 +185,34 @@ func ExpandRecords(crs []*CompactRecord) []dns.RR {
 	return result
 }
 
+// processRR applies DNSSEC filtering, copies, and adjusts TTL on a single
+// resource record. Returns nil if the record should be excluded.
+func processRR(rr dns.RR, value int64, isElapsed bool, includeDNSSEC bool) dns.RR {
+	if rr == nil {
+		return nil
+	}
+	if !includeDNSSEC {
+		switch rr.(type) {
+		case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
+			return nil
+		}
+	}
+	newRR := dns.Copy(rr)
+	if newRR == nil {
+		return nil
+	}
+	if isElapsed {
+		remaining := int64(newRR.Header().Ttl) - value
+		if remaining < 0 {
+			remaining = 0
+		}
+		newRR.Header().Ttl = uint32(remaining)
+	} else if value > 0 {
+		newRR.Header().Ttl = uint32(value)
+	}
+	return newRR
+}
+
 // ExpandAndProcessRecords combines expansion of CompactRecords with TTL
 // adjustment and optional DNSSEC filtering in a single pass, avoiding the
 // double-allocation of calling ExpandRecords then ProcessRecords separately.
@@ -194,30 +222,9 @@ func ExpandAndProcessRecords(crs []*CompactRecord, value int64, isElapsed bool, 
 	}
 	result := make([]dns.RR, 0, len(crs))
 	for _, cr := range crs {
-		rr := expand(cr)
-		if rr == nil {
-			continue
+		if rr := processRR(expand(cr), value, isElapsed, includeDNSSEC); rr != nil {
+			result = append(result, rr)
 		}
-		if !includeDNSSEC {
-			switch rr.(type) {
-			case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
-				continue
-			}
-		}
-		newRR := dns.Copy(rr)
-		if newRR == nil {
-			continue
-		}
-		if isElapsed {
-			remaining := int64(newRR.Header().Ttl) - value
-			if remaining < 0 {
-				remaining = 0
-			}
-			newRR.Header().Ttl = uint32(remaining)
-		} else if value > 0 {
-			newRR.Header().Ttl = uint32(value)
-		}
-		result = append(result, newRR)
 	}
 	return result
 }
@@ -230,27 +237,8 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC boo
 	}
 	result := make([]dns.RR, 0, len(rrs))
 	for _, rr := range rrs {
-		if rr == nil {
-			continue
-		}
-		if !includeDNSSEC {
-			switch rr.(type) {
-			case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
-				continue
-			}
-		}
-		newRR := dns.Copy(rr)
-		if newRR != nil {
-			if isElapsed {
-				remaining := int64(newRR.Header().Ttl) - value
-				if remaining < 0 {
-					remaining = 0
-				}
-				newRR.Header().Ttl = uint32(remaining)
-			} else if value > 0 {
-				newRR.Header().Ttl = uint32(value)
-			}
-			result = append(result, newRR)
+		if nr := processRR(rr, value, isElapsed, includeDNSSEC); nr != nil {
+			result = append(result, nr)
 		}
 	}
 	return result

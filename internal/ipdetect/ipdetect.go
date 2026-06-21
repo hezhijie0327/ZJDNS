@@ -10,18 +10,30 @@ import (
 	"time"
 )
 
+// DefaultTraceURL is the default endpoint used for public IP detection.
+const DefaultTraceURL = "https://api.cloudflare.com/cdn-cgi/trace"
+
 var ipPattern = regexp.MustCompile(`ip=([^\s\n]+)`)
 
-// Detector detects public IP addresses via Cloudflare's trace endpoint.
-type Detector struct{}
+// Detector detects public IP addresses via an HTTP trace endpoint.
+type Detector struct {
+	// TraceURL is the HTTP(S) endpoint used for IP detection.
+	// If empty, DefaultTraceURL is used.
+	TraceURL string
+}
 
 // IPv4 returns the detected public IPv4 address.
-func (d *Detector) IPv4() net.IP { return detect(false) }
+func (d *Detector) IPv4() net.IP { return d.detect(false) }
 
 // IPv6 returns the detected public IPv6 address.
-func (d *Detector) IPv6() net.IP { return detect(true) }
+func (d *Detector) IPv6() net.IP { return d.detect(true) }
 
-func detect(forceIPv6 bool) net.IP {
+func (d *Detector) detect(forceIPv6 bool) net.IP {
+	traceURL := d.TraceURL
+	if traceURL == "" {
+		traceURL = DefaultTraceURL
+	}
+
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialer := &net.Dialer{Timeout: 2 * time.Second}
@@ -34,7 +46,7 @@ func detect(forceIPv6 bool) net.IP {
 	client := &http.Client{Timeout: 3 * time.Second, Transport: transport}
 	defer transport.CloseIdleConnections()
 
-	resp, err := client.Get("https://api.cloudflare.com/cdn-cgi/trace")
+	resp, err := client.Get(traceURL)
 	if err != nil {
 		return nil
 	}

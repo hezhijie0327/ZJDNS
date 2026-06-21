@@ -10,6 +10,7 @@ import (
 
 	"zjdns/internal/ipdetect"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 )
 
 // Handler manages EDNS(0) options for outgoing DNS queries and response
@@ -26,8 +27,10 @@ type Handler struct {
 func NewHandler(defaultECS DefaultECSConfig) (*Handler, error) {
 	h := &Handler{
 		defaultECSConfig: defaultECS,
-		detector:         &ipdetect.Detector{},
-		CookieGenerator:  NewCookieGenerator(),
+		detector: &ipdetect.Detector{
+			TraceURL: defaultECS.AutoDetectURL,
+		},
+		CookieGenerator: NewCookieGenerator(),
 	}
 
 	if !defaultECS.IsEmpty() {
@@ -85,7 +88,7 @@ func (m *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDN
 		Hdr: dns.RR_Header{
 			Name:   ".",
 			Rrtype: dns.TypeOPT,
-			Class:  1232,
+			Class:  pool.UDPBufferSize,
 		},
 	}
 	opt.SetDo()

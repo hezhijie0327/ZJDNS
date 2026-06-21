@@ -133,7 +133,7 @@ func (mc *MemoryCache) persistSnapshot() error {
 			}
 			snapshot.Entries = append(snapshot.Entries, persistedCacheItem{
 				Key:   key,
-				Entry: cloneEntry(item.entry),
+				Entry: cloneEntryForPersist(item.entry),
 				PTRs:  clonePTRs(mc.entryPTRs[key]),
 			})
 		}

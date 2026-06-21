@@ -26,7 +26,7 @@ type result struct {
 	Server     string
 }
 
-func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	if len(servers) == 0 {
 		return nil, nil, nil, false, nil, "", false, errors.New("no upstream servers")
 	}
@@ -46,12 +46,12 @@ func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, ser
 	}
 
 	resultChan := make(chan result, 1)
-	nxdomainChan := make(chan result, 1)
-	queryCtx, cancel := context.WithCancelCause(context.Background())
+	var nxdomainResult atomic.Pointer[result]
+	queryCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errors.New("query completed"))
 
 	g, queryCtx := errgroup.WithContext(queryCtx)
-	g.SetLimit(ConcurrencyLimit(len(servers)))
+	g.SetLimit(concurrencyLimit(len(servers)))
 
 	var activeConnections atomic.Int32
 	var lastUpstreamDNSSECEDE atomic.Uint64 // EDE code from upstream SERVFAIL (DNSSEC-related)
@@ -114,7 +114,11 @@ func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, ser
 							queryResult.Response.Answer = filteredAnswer
 						}
 
+						// Trust the upstream resolver's AD flag for DNSSEC
+						// validation in forwarding mode — the upstream
+						// performed the cryptographic verification.
 						queryResult.Validated = r.validator.DNSSEC.ValidateResponse(queryResult.Response, true)
+						log.Debugf("UPSTREAM: DNSSEC validation result=%t for %s via %s", queryResult.Validated, question.Name, server.Address)
 						ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 
 						select {
@@ -131,10 +135,14 @@ func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, ser
 							return nil
 						}
 					case dns.RcodeNameError:
-						select {
-						case nxdomainChan <- result{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: false, ECS: r.edns.ParseFromDNS(queryResult.Response), Server: serverDesc}:
-						default:
-						}
+						nxdomainResult.CompareAndSwap(nil, &result{
+							Answer:     queryResult.Response.Answer,
+							Authority:  queryResult.Response.Ns,
+							Additional: queryResult.Response.Extra,
+							Validated:  false,
+							ECS:        r.edns.ParseFromDNS(queryResult.Response),
+							Server:     serverDesc,
+						})
 						pool.DefaultMessagePool.Put(queryResult.Response)
 					default:
 						// Capture DNSSEC-related EDE codes from upstream
@@ -159,7 +167,6 @@ func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, ser
 	go func() {
 		_ = g.Wait()
 		close(resultChan)
-		close(nxdomainChan)
 	}()
 
 	select {
@@ -167,12 +174,8 @@ func (r *Resolver) queryUpstream(question dns.Question, ecs *edns.ECSOption, ser
 		if ok && res.Server != "" {
 			return res.Answer, res.Authority, res.Additional, res.Validated, res.ECS, res.Server, false, nil
 		}
-		select {
-		case nxRes, nxOk := <-nxdomainChan:
-			if nxOk && nxRes.Server != "" {
-				return nxRes.Answer, nxRes.Authority, nxRes.Additional, nxRes.Validated, nxRes.ECS, nxRes.Server, false, nil
-			}
-		default:
+		if nxRes := nxdomainResult.Load(); nxRes != nil && nxRes.Server != "" {
+			return nxRes.Answer, nxRes.Authority, nxRes.Additional, nxRes.Validated, nxRes.ECS, nxRes.Server, false, nil
 		}
 		// Check if any upstream returned a DNSSEC-related EDE code
 		// (e.g. EDE 9 "DNSKEY Missing" from a validating resolver).

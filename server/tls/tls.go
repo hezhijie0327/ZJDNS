@@ -171,9 +171,9 @@ func generateSelfSignedCert(domain string) (cryptotls.Certificate, error) {
 	return cert, nil
 }
 
-// IsTemporaryError returns true if the error is a temporary network error or
+// isTemporaryError returns true if the error is a temporary network error or
 // contains timeout or temporary in its message.
-func IsTemporaryError(err error) bool {
+func isTemporaryError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -183,9 +183,9 @@ func IsTemporaryError(err error) bool {
 	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
 }
 
-// SecureClientIP extracts the client IP address from a connection, supporting
+// secureClientIP extracts the client IP address from a connection, supporting
 // both TCP and UDP remote addresses.
-func SecureClientIP(conn any) net.IP {
+func secureClientIP(conn any) net.IP {
 	switch c := conn.(type) {
 	case interface{ RemoteAddr() net.Addr }:
 		if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {

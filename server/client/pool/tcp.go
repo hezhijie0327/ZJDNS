@@ -57,6 +57,7 @@ type Conn struct {
 type Pool struct {
 	mu       sync.Mutex
 	conns    map[string][]*Conn
+	dialing  map[string]int
 	maxConns int
 	maxPipe  int
 }
@@ -236,6 +237,7 @@ func NewPool(maxConns, maxPipe int) *Pool {
 	}
 	return &Pool{
 		conns:    make(map[string][]*Conn),
+		dialing:  make(map[string]int),
 		maxConns: maxConns,
 		maxPipe:  maxPipe,
 	}
@@ -267,18 +269,29 @@ func (cp *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFu
 	}
 	cp.conns[key] = liveConns
 
-	if len(liveConns) < cp.maxConns {
+	if len(liveConns)+cp.dialing[key] < cp.maxConns {
+		cp.dialing[key]++
 		cp.mu.Unlock()
 		conn, err := dialFunc(ctx, dialAddr)
 		if err != nil {
+			cp.mu.Lock()
+			cp.dialing[key]--
+			if cp.dialing[key] == 0 {
+				delete(cp.dialing, key)
+			}
+			cp.mu.Unlock()
 			return nil, fmt.Errorf("client: dial %s: %w", key, err)
 		}
 		pc := newConn(key, conn, cp.maxPipe)
 		cp.mu.Lock()
+		cp.dialing[key]--
 		if len(cp.conns[key]) >= cp.maxConns {
-			cp.mu.Unlock()
 			pc.close()
 			log.Debugf("TCPPOOL: pool for %s already at limit (%d), discarding extra connection", key, cp.maxConns)
+			if cp.dialing[key] == 0 {
+				delete(cp.dialing, key)
+			}
+			cp.mu.Unlock()
 			if leastLoaded != nil {
 				return leastLoaded, nil
 			}
@@ -286,6 +299,9 @@ func (cp *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFu
 		}
 		cp.conns[key] = append(cp.conns[key], pc)
 		n := len(cp.conns[key])
+		if cp.dialing[key] == 0 {
+			delete(cp.dialing, key)
+		}
 		cp.mu.Unlock()
 		log.Debugf("TCPPOOL: dialed new connection to %s (pool=%d/%d)", key, n, cp.maxConns)
 		return pc, nil

@@ -231,7 +231,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 			response := s.buildResponse(req)
 			response.Answer = ptrAnswer
 			ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
-			s.addEDNS(response, req, isSecureConnection, clientIP, cookieOpt, ede)
+			s.applyEDNS(response, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede)
 			responseMsg = response
 			return responseMsg
 		}
@@ -268,7 +268,7 @@ func (s *Server) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption)
 }
 
 func (s *Server) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool) *dns.Msg {
-	msg := s.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
+	msg := s.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
 
 	if isExpired && entry.ShouldRefresh() {
 		s.cacheRefreshGroup.Go(func() error {
@@ -312,7 +312,7 @@ func (s *Server) shouldStartPrefetch(cacheKey string) bool {
 	return true
 }
 
-func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 
 	responseTTL := entry.GetRemainingTTL()
@@ -333,9 +333,9 @@ func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExp
 
 	if isExpired {
 		ede := edns.NewEDEOption(edns.EDECodeStaleAnswer, "")
-		s.addEDNS(msg, req, isSecureConnection, clientIP, cookieOpt, ede)
+		s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede)
 	} else {
-		s.addEDNS(msg, req, isSecureConnection, clientIP, cookieOpt, nil)
+		s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, nil)
 	}
 
 	s.restoreOriginalDomain(msg, question.Name, req.Question[0].Name)
@@ -360,14 +360,16 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 			defer cancel()
 			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
 		})
-		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
+		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
 	}
 
-	resultChan := make(chan queryResult, 1)
+	var res queryResult
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer dnsutil.HandlePanic("expired cache fallback query")
-		answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.resolver.Query(question, ecsOpt)
-		resultChan <- queryResult{
+		answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.resolver.Query(s.ctx, question, ecsOpt)
+		res = queryResult{
 			answer:     answer,
 			authority:  authority,
 			additional: additional,
@@ -382,7 +384,7 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 	defer timer.Stop()
 
 	select {
-	case res := <-resultChan:
+	case <-done:
 		if res.err == nil {
 			if fallbackUsed != nil && res.fallback {
 				*fallbackUsed = true
@@ -399,7 +401,7 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 		}
 		go func() {
 			select {
-			case res := <-resultChan:
+			case <-done:
 				if res.err != nil || res.fallback {
 					return
 				}
@@ -411,13 +413,13 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 			case <-s.ctx.Done():
 			}
 		}()
-		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
+		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
 	}
 }
 
 func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool) *dns.Msg {
 	log.Debugf("CACHE: miss key=%s for %s, querying upstream/recursive", cacheKey, question.Name)
-	answer, authority, additional, validated, ecsResponse, _, usedFallback, err := s.resolver.Query(question, ecsOpt)
+	answer, authority, additional, validated, ecsResponse, _, usedFallback, err := s.resolver.Query(s.ctx, question, ecsOpt)
 	if fallbackUsed != nil && usedFallback {
 		*fallbackUsed = true
 	}
@@ -425,7 +427,7 @@ func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *e
 	if err != nil {
 
 		if errors.Is(err, resolver.ErrCIDRFilterRefused) {
-			return s.processCIDRRefused(req, question, cookieOpt, clientIP, isSecureConnection)
+			return s.processCIDRRefused(req, question, ecsOpt, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
 		}
 		if hadError != nil {
 			*hadError = true
@@ -436,10 +438,10 @@ func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *e
 	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, usedFallback, clientIP, isSecureConnection)
 }
 
-func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, _ *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error) *dns.Msg {
+func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error) *dns.Msg {
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found && s.canServeExpiredEntry(entry) {
 		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.GetRemainingTTL(), entry.Validated)
-		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
+		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
 	}
 
 	log.Debugf("RESULT: %s %s | rcode=SERVFAIL, no stale cache available", question.Name, dns.TypeToString[question.Qtype])
@@ -463,7 +465,7 @@ func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Q
 		}
 	}
 	ede := edns.NewEDEOption(edeCode, "")
-	s.addEDNS(msg, req, isSecureConnection, clientIP, cookieOpt, ede)
+	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede)
 	return msg
 }
 
@@ -484,12 +486,12 @@ func detectRequestProtocol(w dns.ResponseWriter) string {
 	}
 }
 
-func (s *Server) processCIDRRefused(req *dns.Msg, question dns.Question, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *Server) processCIDRRefused(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 	log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", question.Name, dns.TypeToString[question.Qtype])
 	msg.Rcode = dns.RcodeRefused
 	ede := edns.NewEDEOption(edns.EDECodeBlocked, "")
-	s.addEDNS(msg, req, isSecureConnection, clientIP, cookieOpt, ede)
+	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede)
 	return msg
 }
 
@@ -528,7 +530,7 @@ func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt
 	log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, authority=%d, additional=%d, validated=%t, skipCache=%t, ecs=%t", question.Name, dns.TypeToString[question.Qtype], len(answer), len(authority), len(additional), validated, skipCache, responseECS != nil)
 	log.Debugf("CACHE: served response for %s (skipCache=%t)", question.Name, skipCache)
 
-	s.addEDNS(msg, req, isSecureConnection, clientIP, cookieOpt, nil)
+	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, nil)
 	s.restoreOriginalDomain(msg, question.Name, req.Question[0].Name)
 	return msg
 }
@@ -540,16 +542,15 @@ func (s *Server) refreshCacheEntry(ctx context.Context, question dns.Question, e
 		return errors.New("server closed")
 	}
 
-	// Check context before making an expensive query. Note: Resolver.Query
-	// creates its own internal context; a future refactor should thread ctx
-	// through the resolver chain for proper cancellation.
+	// Check context before making an expensive query. The ctx is now threaded
+	// through the resolver chain for proper cancellation of in-flight queries.
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 	}
 
-	answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.resolver.Query(question, ecs)
+	answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.resolver.Query(ctx, question, ecs)
 	if err != nil {
 		return err
 	}

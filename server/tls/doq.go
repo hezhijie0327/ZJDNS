@@ -179,7 +179,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	clientIP := SecureClientIP(conn)
+	clientIP := secureClientIP(conn)
 	response := s.handler.ServeDNS(req, clientIP, true, "DoQ")
 	pool.DefaultMessagePool.Put(req)
 

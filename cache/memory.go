@@ -2,7 +2,6 @@ package cache
 
 import (
 	"net"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,8 +102,7 @@ func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
 	entry := item.entry
 	mc.mu.RUnlock()
 
-	cloned := cloneEntry(entry)
-	return cloned, true, cloned.IsExpired()
+	return entry, true, entry.IsExpired()
 }
 
 // Set stores a DNS response in the cache with the given key and metadata.
@@ -225,14 +223,15 @@ func (mc *MemoryCache) ReverseLookup(ip net.IP) []LookupResult {
 	}
 	mc.mu.RLock()
 	candidates, ok := mc.ptrIndex[ip.String()]
-	mc.mu.RUnlock()
 	if !ok || len(candidates) == 0 {
+		mc.mu.RUnlock()
 		return nil
 	}
 	results := make([]LookupResult, 0, len(candidates))
 	for name, ttl := range candidates {
 		results = append(results, LookupResult{Name: name, TTL: ttl})
 	}
+	mc.mu.RUnlock()
 
 	for i := 1; i < len(results); i++ {
 		j := i
@@ -390,6 +389,27 @@ func cloneEntry(entry *CacheEntry) *CacheEntry {
 	return &cloned
 }
 
+// cloneEntryForPersist deep-copies a CacheEntry and clears cached RR fields
+// (which are interface types) so gob can encode without type registration.
+func cloneEntryForPersist(entry *CacheEntry) *CacheEntry {
+	cloned := cloneEntry(entry)
+	if cloned == nil {
+		return nil
+	}
+	clearRRFields(cloned.Answer)
+	clearRRFields(cloned.Authority)
+	clearRRFields(cloned.Additional)
+	return cloned
+}
+
+func clearRRFields(records []*CompactRecord) {
+	for _, r := range records {
+		if r != nil {
+			r.RR = nil
+		}
+	}
+}
+
 func cloneRecords(records []*CompactRecord) []*CompactRecord {
 	if len(records) == 0 {
 		return nil
@@ -400,7 +420,6 @@ func cloneRecords(records []*CompactRecord) []*CompactRecord {
 			continue
 		}
 		rr := *r
-		rr.RR = nil
 		cloned[i] = &rr
 	}
 	return cloned
@@ -428,7 +447,7 @@ func compact(rrs []dns.RR) []*CompactRecord {
 		rrText := rr.String()
 		if !seen[rrText] {
 			seen[rrText] = true
-			if cr := CreateCompactRecord(rr); cr != nil {
+			if cr := createCompactRecord(rr); cr != nil {
 				result = append(result, cr)
 			}
 		}
@@ -444,26 +463,23 @@ func expand(cr *CompactRecord) dns.RR {
 		return cr.RR
 	}
 	rr, _ := dns.NewRR(cr.Text)
-	cr.RR = rr
 	return rr
 }
 
 func minTTL(answer, authority, additional []dns.RR) int {
-	all := slices.Concat(answer, authority, additional)
-	if len(all) == 0 {
-		return config.DefaultTTL
-	}
-	minT := int(all[0].Header().Ttl)
-	for _, rr := range all {
-		if rr == nil {
-			continue
-		}
-		if ttl := int(rr.Header().Ttl); ttl > 0 && ttl < minT {
-			minT = ttl
+	minT := -1
+	for _, rrs := range [][]dns.RR{answer, authority, additional} {
+		for _, rr := range rrs {
+			if rr == nil {
+				continue
+			}
+			if ttl := int(rr.Header().Ttl); ttl > 0 && (minT < 0 || ttl < minT) {
+				minT = ttl
+			}
 		}
 	}
 	if minT <= 0 {
-		minT = config.DefaultTTL
+		return config.DefaultTTL
 	}
 	if minT > config.DefaultMaxTTL {
 		minT = config.DefaultMaxTTL

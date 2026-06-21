@@ -56,17 +56,6 @@ type Result struct {
 	ECS        *edns.ECSOption
 }
 
-// UpstreamResult contains the parsed answer sections from an upstream DNS
-// response.
-type UpstreamResult struct {
-	Answer     []dns.RR
-	Authority  []dns.RR
-	Additional []dns.RR
-	Validated  bool
-	ECS        *edns.ECSOption
-	Server     string
-}
-
 // Client manages outbound DNS queries across multiple transport protocols with
 // pooling.
 type Client struct {
@@ -77,10 +66,10 @@ type Client struct {
 	dohClient  *http.Client
 	doh3Client *http.Client
 
-	dohTransportMu sync.Mutex
+	dohTransportMu sync.RWMutex
 	dohTransports  map[string]*http.Client
 
-	doh3TransportMu sync.Mutex
+	doh3TransportMu sync.RWMutex
 	doh3Transports  map[string]*http.Client
 
 	quicPool *connpool.QuicPool
@@ -263,17 +252,4 @@ func (c *Client) Close() {
 	if c.quicPool != nil {
 		c.quicPool.Shutdown()
 	}
-}
-
-// SetTimeout sets the per-query timeout for all transport protocols.
-func (c *Client) SetTimeout(timeout time.Duration) {
-	c.timeout = timeout
-	c.udpClient.Timeout = timeout
-	c.tcpClient.Timeout = timeout
-	c.tlsClient.Timeout = timeout
-}
-
-// Timeout returns the current per-query timeout duration.
-func (c *Client) Timeout() time.Duration {
-	return c.timeout
 }

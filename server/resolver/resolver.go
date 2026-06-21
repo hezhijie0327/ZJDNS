@@ -165,19 +165,19 @@ func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 
 // Query resolves a DNS question by querying upstream servers, falling back to
 // recursive resolution if no upstream is configured.
-func (r *Resolver) Query(question dns.Question, ecs *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+func (r *Resolver) Query(ctx context.Context, question dns.Question, ecs *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	servers := r.upstream.list()
 	fallbackServers := r.fallback.list()
 
 	if len(servers) > 0 {
 		answer, authority, additional, validated, ecsResponse, server, fallbackUsed, err :=
-			r.queryUpstream(question, ecs, servers)
+			r.queryUpstream(ctx, question, ecs, servers)
 		if err == nil {
 			return answer, authority, additional, validated, ecsResponse, server, fallbackUsed, nil
 		}
 		if len(fallbackServers) > 0 {
 			log.Debugf("UPSTREAM: primary upstream failed, querying fallback servers")
-			a, au, ad, v, e, s, _, err2 := r.queryUpstream(question, ecs, fallbackServers)
+			a, au, ad, v, e, s, _, err2 := r.queryUpstream(ctx, question, ecs, fallbackServers)
 			if err2 == nil {
 				return a, au, ad, v, e, s, true, nil
 			}
@@ -186,13 +186,13 @@ func (r *Resolver) Query(question dns.Question, ecs *edns.ECSOption) ([]dns.RR, 
 	}
 
 	if len(fallbackServers) > 0 {
-		a, au, ad, v, e, s, _, err := r.queryUpstream(question, ecs, fallbackServers)
+		a, au, ad, v, e, s, _, err := r.queryUpstream(ctx, question, ecs, fallbackServers)
 		return a, au, ad, v, e, s, true, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), config.IdleTimeout)
+	resolveCtx, cancel := context.WithTimeout(ctx, config.IdleTimeout)
 	defer cancel()
-	return r.cname.resolve(ctx, question, ecs)
+	return r.cname.resolve(resolveCtx, question, ecs)
 }
 
 // ShuffleSlice returns a shuffled copy of the input slice using a modern
@@ -210,9 +210,9 @@ func ShuffleSlice[T any](slice []T) []T {
 	return shuffled
 }
 
-// ConcurrencyLimit returns an adaptive concurrency limit based on the number of
+// concurrencyLimit returns an adaptive concurrency limit based on the number of
 // servers to query simultaneously.
-func ConcurrencyLimit(serverCount int) int {
+func concurrencyLimit(serverCount int) int {
 	if serverCount <= 0 {
 		return 1
 	}

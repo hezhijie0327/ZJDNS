@@ -33,7 +33,8 @@ var (
 // CryptoValidator performs cryptographic DNSSEC validation using the
 // miekg/dns RRSIG.Verify() and DNSKEY.ToDS() primitives. It is always active;
 // the dnssec_enforce config option controls error behavior, not whether
-// validation runs.
+// validation runs. Call Stop() when the validator is no longer needed to
+// terminate the background key cache sweeper goroutine.
 type CryptoValidator struct {
 	rootKeys     []*dns.DNSKEY
 	zoneKeyCache map[string]*zoneKeyEntry
@@ -291,8 +292,8 @@ func FindDS(rrs []dns.RR) []*dns.DS {
 	return records
 }
 
-// FindNSEC extracts NSEC records from an RR slice.
-func FindNSEC(rrs []dns.RR) []*dns.NSEC {
+// findNSEC extracts NSEC records from an RR slice.
+func findNSEC(rrs []dns.RR) []*dns.NSEC {
 	var records []*dns.NSEC
 	for _, rr := range rrs {
 		if nsec, ok := rr.(*dns.NSEC); ok {
@@ -302,8 +303,8 @@ func FindNSEC(rrs []dns.RR) []*dns.NSEC {
 	return records
 }
 
-// FindNSEC3 extracts NSEC3 records from an RR slice.
-func FindNSEC3(rrs []dns.RR) []*dns.NSEC3 {
+// findNSEC3 extracts NSEC3 records from an RR slice.
+func findNSEC3(rrs []dns.RR) []*dns.NSEC3 {
 	var records []*dns.NSEC3
 	for _, rr := range rrs {
 		if nsec3, ok := rr.(*dns.NSEC3); ok {
@@ -313,12 +314,88 @@ func FindNSEC3(rrs []dns.RR) []*dns.NSEC3 {
 	return records
 }
 
+// canonicalCompare compares two domain names according to DNS canonical
+// ordering per RFC 4034 section 6.1. Returns -1 if a < b, 0 if equal, 1 if a > b.
+//
+// DNS canonical ordering compares labels from the rightmost (TLD) label
+// working leftwards. Within each label, bytes are compared lexicographically
+// (case-insensitively). A name that is a suffix of another name from the
+// right sorts before the longer name.
+func canonicalCompare(a, b string) int {
+	a = strings.ToLower(strings.TrimSuffix(a, "."))
+	b = strings.ToLower(strings.TrimSuffix(b, "."))
+
+	if a == "" && b == "" {
+		return 0
+	}
+	if a == "" {
+		return -1 // root sorts before everything
+	}
+	if b == "" {
+		return 1
+	}
+
+	la := strings.Split(a, ".")
+	lb := strings.Split(b, ".")
+
+	// Compare from the rightmost label (TLD side) going leftwards
+	i, j := len(la)-1, len(lb)-1
+	for i >= 0 && j >= 0 {
+		if la[i] < lb[j] {
+			return -1
+		}
+		if la[i] > lb[j] {
+			return 1
+		}
+		i--
+		j--
+	}
+
+	// One is a suffix of the other. A shorter name (parent zone) sorts first.
+	if i < 0 && j < 0 {
+		return 0
+	}
+	if i < 0 {
+		return -1 // a is shorter, so a < b
+	}
+	return 1 // b is shorter, so a > b
+}
+
+// dnsutilCompareDomainInRange checks whether a domain name falls within an
+// NSEC record's coverage range using DNS canonical ordering (RFC 4034 section 6.1).
+//
+// In the normal case (lower < upper), the name is covered if
+// lower < name < upper, i.e., strictly between the NSEC owner and the Next
+// Domain Name.
+//
+// In the wrap-around case (lower >= upper), where the NSEC covers the last
+// name in the zone and wraps back to the first, the name is covered if
+// lower < name OR name < upper.
+func dnsutilCompareDomainInRange(name, lower, upper string) bool {
+	loName := canonicalCompare(lower, name) // lower vs name
+	naUp := canonicalCompare(name, upper)   // name vs upper
+	loUp := canonicalCompare(lower, upper)  // lower vs upper
+
+	// Normal case: lower < name < upper
+	if loName < 0 && naUp < 0 {
+		return true
+	}
+
+	// Wrap-around case: lower >= upper, range covers everything except
+	// [upper, lower]. Name is covered if > lower OR < upper.
+	if loUp >= 0 {
+		return loName < 0 || naUp < 0
+	}
+
+	return false
+}
+
 // VerifyAuthenticatedDenial checks NSEC/NSEC3 records to confirm that a
 // negative response (NXDOMAIN or NODATA) is cryptographically proven.
 func (cv *CryptoValidator) VerifyAuthenticatedDenial(response *dns.Msg, qname string, qtype uint16) error {
 	normalized := strings.ToLower(qname)
-	nsecs := FindNSEC(response.Ns)
-	nsec3s := FindNSEC3(response.Ns)
+	nsecs := findNSEC(response.Ns)
+	nsec3s := findNSEC3(response.Ns)
 
 	if len(nsecs) == 0 && len(nsec3s) == 0 {
 		return errors.New("no NSEC/NSEC3 records for authenticated denial")
@@ -342,15 +419,6 @@ func (cv *CryptoValidator) VerifyAuthenticatedDenial(response *dns.Msg, qname st
 	return fmt.Errorf("NSEC/NSEC3 does not cover name %s", qname)
 }
 
-// dnsutilCompareDomainInRange checks whether a domain name falls within the
-// NSEC range (lower, upper] using DNS canonical ordering per RFC 4034 §6.1.
-// Names are compared label-by-label right-to-left; within a label, bytes are
-// compared lexicographically. A shorter name sorts before a longer suffix.
-func dnsutilCompareDomainInRange(name, lower, upper string) bool {
-	// Canonical ordering: lower < name ≤ upper
-	return dns.CompareDomainName(lower, name) >= 0 && dns.CompareDomainName(name, upper) <= 0
-}
-
 // ValidateResponse performs full cryptographic DNSSEC validation of a
 // response. It expects the zone's verified DNSKEY to be provided.
 //
@@ -367,13 +435,22 @@ func (cv *CryptoValidator) ValidateResponse(response *dns.Msg, zonename string, 
 		return cv.validateAnswerSection(response.Answer, response.Extra, verifiedDNSKEYs)
 	}
 
+	// Extract the queried name and type for denial-of-existence validation.
+	// DNS servers echo the question back in the response, so it should be present.
+	qname := ""
+	qtype := uint16(0)
+	if len(response.Question) > 0 {
+		qname = response.Question[0].Name
+		qtype = response.Question[0].Qtype
+	}
+
 	if rcode == dns.RcodeNameError {
-		return cv.validateNXDOMAIN(response, zonename, verifiedDNSKEYs)
+		return cv.validateNXDOMAIN(response, qname, qtype, verifiedDNSKEYs)
 	}
 
 	// NODATA (NOERROR with no answer and NSEC)
 	if rcode == dns.RcodeSuccess && len(response.Answer) == 0 {
-		return cv.validateNODATA(response, zonename, verifiedDNSKEYs)
+		return cv.validateNODATA(response, qname, qtype, verifiedDNSKEYs)
 	}
 
 	return false, nil
@@ -416,65 +493,17 @@ func (cv *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifie
 	return anyValidated, nil
 }
 
-func (cv *CryptoValidator) validateNXDOMAIN(response *dns.Msg, zonename string, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
-	// Verify NSEC/NSEC3 records are signed
-	nsecs := FindNSEC(response.Ns)
-	nsec3s := FindNSEC3(response.Ns)
+// validateDenialOfExistence verifies signed NSEC/NSEC3 records against the
+// trusted DNSKEYs and checks that they cryptographically prove the non-existence
+// of the queried name (NXDOMAIN) or type (NODATA). This prevents an attacker
+// from satisfying validation with a validly-signed NSEC from the same zone
+// that covers a different name. (RFC 4035 section 3.1.3, RFC 6840 section 5.3)
+func (cv *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY, denialType string) (bool, error) {
+	nsecs := findNSEC(response.Ns)
+	nsec3s := findNSEC3(response.Ns)
 	authSigs := CollectRRSIGs(response.Ns, response.Extra)
 
-	// For each NSEC record, find its RRSIG by owner name and verify
-	for _, nsec := range nsecs {
-		ownerName := nsec.Header().Name
-		rrsigs := FindRRSIGs(authSigs, ownerName, dns.TypeNSEC)
-		if len(rrsigs) == 0 {
-			continue
-		}
-		rrset := []dns.RR{nsec}
-		for _, sig := range rrsigs {
-			for _, key := range verifiedDNSKEYs {
-				if key.KeyTag() == sig.KeyTag {
-					if err := cv.VerifyRRset(rrset, sig, key); err == nil {
-						return true, nil
-					}
-				}
-			}
-		}
-	}
-
-	// Verify NSEC3 RRSIGs — RFC 5155 §8 requires valid signatures for
-	// authenticated denial, not mere record presence.
-	for _, nsec3 := range nsec3s {
-		ownerName := nsec3.Header().Name
-		rrsigs := FindRRSIGs(authSigs, ownerName, dns.TypeNSEC3)
-		if len(rrsigs) == 0 {
-			continue
-		}
-		rrset := []dns.RR{nsec3}
-		for _, sig := range rrsigs {
-			for _, key := range verifiedDNSKEYs {
-				if key.KeyTag() != sig.KeyTag {
-					continue
-				}
-				if err := cv.VerifyRRset(rrset, sig, key); err == nil {
-					return true, nil
-				}
-			}
-		}
-	}
-	if len(nsec3s) > 0 {
-		return false, errors.New("NSEC3 records present but not cryptographically signed")
-	}
-
-	return false, errors.New("no signed NSEC/NSEC3 for NXDOMAIN")
-}
-
-func (cv *CryptoValidator) validateNODATA(response *dns.Msg, zonename string, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
-	// NODATA: the name exists but the requested type does not. This is proven
-	// by an NSEC record at the queried name that lists all types present at
-	// the name, omitting the requested type. NSEC3 is handled similarly.
-	nsecs := FindNSEC(response.Ns)
-	nsec3s := FindNSEC3(response.Ns)
-	authSigs := CollectRRSIGs(response.Ns, response.Extra)
+	normalizedQname := strings.ToLower(qname)
 
 	for _, nsec := range nsecs {
 		rrsigs := FindRRSIGs(authSigs, nsec.Header().Name, dns.TypeNSEC)
@@ -486,14 +515,40 @@ func (cv *CryptoValidator) validateNODATA(response *dns.Msg, zonename string, ve
 			for _, key := range verifiedDNSKEYs {
 				if key.KeyTag() == sig.KeyTag {
 					if err := cv.VerifyRRset(rrset, sig, key); err == nil {
-						return true, nil
+						// Valid RRSIG on this NSEC. Now verify that it actually
+						// proves the denial.
+						switch denialType {
+						case "NXDOMAIN":
+							// The queried name must fall within the NSEC range
+							// [owner name, next domain) in canonical ordering.
+							lower := strings.ToLower(nsec.Header().Name)
+							upper := strings.ToLower(nsec.NextDomain)
+							if dnsutilCompareDomainInRange(normalizedQname, lower, upper) {
+								return true, nil
+							}
+						case "NODATA":
+							// The NSEC owner name must match the queried name
+							// and the type bitmap must exclude the queried type.
+							owner := strings.ToLower(nsec.Header().Name)
+							if owner == normalizedQname {
+								typeCovered := false
+								for _, t := range nsec.TypeBitMap {
+									if t == qtype {
+										typeCovered = true
+										break
+									}
+								}
+								if !typeCovered {
+									return true, nil
+								}
+							}
+						}
 					}
 				}
 			}
 		}
 	}
 
-	// Verify NSEC3 RRSIGs — RFC 5155 §8 requires valid signatures.
 	for _, nsec3 := range nsec3s {
 		rrsigs := FindRRSIGs(authSigs, nsec3.Header().Name, dns.TypeNSEC3)
 		if len(rrsigs) == 0 {
@@ -515,7 +570,15 @@ func (cv *CryptoValidator) validateNODATA(response *dns.Msg, zonename string, ve
 		return false, errors.New("NSEC3 records present but not cryptographically signed")
 	}
 
-	return false, errors.New("no signed NSEC/NSEC3 for NODATA")
+	return false, fmt.Errorf("no signed NSEC/NSEC3 for %s", denialType)
+}
+
+func (cv *CryptoValidator) validateNXDOMAIN(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+	return cv.validateDenialOfExistence(response, qname, qtype, verifiedDNSKEYs, "NXDOMAIN")
+}
+
+func (cv *CryptoValidator) validateNODATA(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+	return cv.validateDenialOfExistence(response, qname, qtype, verifiedDNSKEYs, "NODATA")
 }
 
 func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {
@@ -530,6 +593,11 @@ func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {
 	}
 	return groups
 }
+
+// zoneKeyCacheMax is the maximum number of zone key cache entries. When
+// exceeded, expired entries are purged and the oldest non-expired entry is
+// evicted to cap memory growth under an attacker flooding many unique zones.
+const zoneKeyCacheMax = 25000
 
 // ZoneKeyCache operations
 
@@ -553,6 +621,28 @@ func (cv *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 		keys:     copied,
 		verified: true,
 		expires:  time.Now().Add(1 * time.Hour),
+	}
+	if len(cv.zoneKeyCache) > zoneKeyCacheMax {
+		// Purge expired entries first.
+		for z, e := range cv.zoneKeyCache {
+			if e != nil && time.Now().After(e.expires) {
+				delete(cv.zoneKeyCache, z)
+			}
+		}
+		// If still over the cap, evict the single oldest non-expired entry.
+		if len(cv.zoneKeyCache) > zoneKeyCacheMax {
+			var oldest string
+			var oldestExpiry time.Time
+			for z, e := range cv.zoneKeyCache {
+				if e != nil && (oldest == "" || e.expires.Before(oldestExpiry)) {
+					oldest = z
+					oldestExpiry = e.expires
+				}
+			}
+			if oldest != "" {
+				delete(cv.zoneKeyCache, oldest)
+			}
+		}
 	}
 	cv.mu.Unlock()
 }

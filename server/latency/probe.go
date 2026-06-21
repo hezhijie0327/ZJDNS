@@ -27,6 +27,9 @@ import (
 	servertls "zjdns/server/tls"
 )
 
+// maxProbes is the maximum number of concurrent latency probe goroutines.
+const maxProbes = 16
+
 // CacheSetter is the interface for updating the DNS cache with reordered
 // records after latency probing.
 type CacheSetter interface {
@@ -133,7 +136,6 @@ func sortByLatency(ctx context.Context, answer []dns.RR, steps []config.LatencyP
 		candidates[i] = candidate{idx: idx, rr: answer[idx], latency: time.Duration(math.MaxInt64)}
 	}
 
-	const maxProbes = 16
 	sem := make(chan struct{}, maxProbes)
 	results := make(chan candidate, len(candidates))
 	for _, c := range candidates {
@@ -148,7 +150,11 @@ func sortByLatency(ctx context.Context, answer []dns.RR, steps []config.LatencyP
 	}
 
 	for i := 0; i < len(candidates); i++ {
-		candidates[i] = <-results
+		select {
+		case candidates[i] = <-results:
+		case <-ctx.Done():
+			return answer, false
+		}
 	}
 	close(results)
 

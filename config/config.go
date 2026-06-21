@@ -260,6 +260,46 @@ func validatePort(field, value string) error {
 }
 
 func (cm *Loader) validateConfig(cfg *ServerConfig) error {
+	validateLogLevel(cfg)
+
+	if !cfg.Server.Features.ECS.IsEmpty() {
+		if err := cfg.Server.Features.ECS.Validate(); err != nil {
+			return err
+		}
+	}
+
+	cidrTags, err := validateCIDRConfigs(cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := validateUpstreamServers(cfg, cidrTags); err != nil {
+		return err
+	}
+
+	if err := validateCacheAndStats(cfg); err != nil {
+		return err
+	}
+
+	if err := validateServerLimits(cfg); err != nil {
+		return err
+	}
+
+	if err := validatePorts(cfg); err != nil {
+		return err
+	}
+
+	if err := validateLatencyProbeDefaults(cfg.Server.Features.LatencyProbe); err != nil {
+		return err
+	}
+
+	if err := validateTLSCertConfig(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateLogLevel(cfg *ServerConfig) {
 	validLevels := map[string]log.Level{
 		"error": log.Error,
 		"warn":  log.Warn,
@@ -278,31 +318,30 @@ func (cm *Loader) validateConfig(cfg *ServerConfig) error {
 		log.Default.SetLevel(log.Info)
 		log.Warnf("CONFIG: Invalid log level '%s', using default: info", cfg.Server.LogLevel)
 	}
+}
 
-	if !cfg.Server.Features.ECS.IsEmpty() {
-		if err := cfg.Server.Features.ECS.Validate(); err != nil {
-			return err
-		}
-	}
-
+func validateCIDRConfigs(cfg *ServerConfig) (map[string]bool, error) {
 	cidrTags := make(map[string]bool)
 	for i, cidrConfig := range cfg.CIDR {
 		if cidrConfig.Tag == "" {
-			return fmt.Errorf("CIDR config %d: tag cannot be empty", i)
+			return nil, fmt.Errorf("CIDR config %d: tag cannot be empty", i)
 		}
 		if cidrTags[cidrConfig.Tag] {
-			return fmt.Errorf("CIDR config %d: duplicate tag '%s'", i, cidrConfig.Tag)
+			return nil, fmt.Errorf("CIDR config %d: duplicate tag '%s'", i, cidrConfig.Tag)
 		}
 		cidrTags[cidrConfig.Tag] = true
 
 		if cidrConfig.File == "" && len(cidrConfig.Rules) == 0 {
-			return fmt.Errorf("CIDR config %d: either 'file' or 'rules' must be specified", i)
+			return nil, fmt.Errorf("CIDR config %d: either 'file' or 'rules' must be specified", i)
 		}
 		if cidrConfig.File != "" && !dnsutil.IsValidFilePath(cidrConfig.File) {
-			return fmt.Errorf("CIDR config %d: file not found: %s", i, cidrConfig.File)
+			return nil, fmt.Errorf("CIDR config %d: file not found: %s", i, cidrConfig.File)
 		}
 	}
+	return cidrTags, nil
+}
 
+func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error {
 	for i, server := range cfg.Upstream {
 		if !server.IsRecursive() {
 			if _, _, err := net.SplitHostPort(server.Address); err != nil {
@@ -336,7 +375,10 @@ func (cm *Loader) validateConfig(cfg *ServerConfig) error {
 			}
 		}
 	}
+	return nil
+}
 
+func validateCacheAndStats(cfg *ServerConfig) error {
 	if pct := cfg.Server.Features.Cache.MemPercent; pct < 0 || pct > 100 {
 		return fmt.Errorf("server.features.cache.mem_percent must be between 0 and 100")
 	}
@@ -363,8 +405,26 @@ func (cm *Loader) validateConfig(cfg *ServerConfig) error {
 	if cfg.Server.RateBurst < 0 {
 		return fmt.Errorf("server.rate_burst must be zero or positive")
 	}
+	return nil
+}
 
-	// Port format validation — prevents opaque net.Listen failures at startup.
+func validateServerLimits(cfg *ServerConfig) error {
+	const maxRate = 1_000_000
+	const maxBurst = 1_000_000
+	const maxConcurrent = 100_000
+	if cfg.Server.RateLimit > maxRate {
+		return fmt.Errorf("server.rate_limit exceeds maximum %d", maxRate)
+	}
+	if cfg.Server.RateBurst > maxBurst {
+		return fmt.Errorf("server.rate_burst exceeds maximum %d", maxBurst)
+	}
+	if cfg.Server.MaxConcurrent > maxConcurrent {
+		return fmt.Errorf("server.max_concurrent exceeds maximum %d", maxConcurrent)
+	}
+	return nil
+}
+
+func validatePorts(cfg *ServerConfig) error {
 	if err := validatePort("server.port", cfg.Server.Port); err != nil {
 		return err
 	}
@@ -381,43 +441,40 @@ func (cm *Loader) validateConfig(cfg *ServerConfig) error {
 			return err
 		}
 	}
+	return nil
+}
 
-	const maxRate = 1_000_000
-	const maxBurst = 1_000_000
-	const maxConcurrent = 100_000
-	if cfg.Server.RateLimit > maxRate {
-		return fmt.Errorf("server.rate_limit exceeds maximum %d", maxRate)
-	}
-	if cfg.Server.RateBurst > maxBurst {
-		return fmt.Errorf("server.rate_burst exceeds maximum %d", maxBurst)
-	}
-	if cfg.Server.MaxConcurrent > maxConcurrent {
-		return fmt.Errorf("server.max_concurrent exceeds maximum %d", maxConcurrent)
-	}
-
-	if err := validateLatencyProbeDefaults(cfg.Server.Features.LatencyProbe); err != nil {
-		return err
-	}
-
+func validateTLSCertConfig(cfg *ServerConfig) error {
 	if cfg.Server.TLS.SelfSigned && (cfg.Server.TLS.CertFile != "" || cfg.Server.TLS.KeyFile != "") {
 		log.Warnf("CONFIG: TLS: Self-signed enabled, ignoring cert/key files")
+		return nil
 	}
 
-	if !cfg.Server.TLS.SelfSigned && (cfg.Server.TLS.CertFile != "" || cfg.Server.TLS.KeyFile != "") {
-		if cfg.Server.TLS.CertFile == "" || cfg.Server.TLS.KeyFile == "" {
-			return errors.New("config: cert and key files must be configured together")
-		}
-		if !dnsutil.IsValidFilePath(cfg.Server.TLS.CertFile) {
-			return fmt.Errorf("config: cert file not found: %s", cfg.Server.TLS.CertFile)
-		}
-		if !dnsutil.IsValidFilePath(cfg.Server.TLS.KeyFile) {
-			return fmt.Errorf("config: key file not found: %s", cfg.Server.TLS.KeyFile)
-		}
-		if _, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile); err != nil {
-			return fmt.Errorf("config: load certificate: %w", err)
-		}
+	if cfg.Server.TLS.CertFile == "" && cfg.Server.TLS.KeyFile == "" {
+		return nil
 	}
+	if cfg.Server.TLS.CertFile == "" || cfg.Server.TLS.KeyFile == "" {
+		return errors.New("config: cert and key files must be configured together")
+	}
+	if !dnsutil.IsValidFilePath(cfg.Server.TLS.CertFile) {
+		return fmt.Errorf("config: cert file not found: %s", cfg.Server.TLS.CertFile)
+	}
+	if !dnsutil.IsValidFilePath(cfg.Server.TLS.KeyFile) {
+		return fmt.Errorf("config: key file not found: %s", cfg.Server.TLS.KeyFile)
+	}
+	if _, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile); err != nil {
+		return fmt.Errorf("config: load certificate: %w", err)
+	}
+	return nil
+}
 
+func validateProbePort(index int, protocol string, port *int, defaultPort int) error {
+	if *port <= 0 {
+		*port = defaultPort
+	}
+	if *port > 65535 {
+		return fmt.Errorf("latency_probe step %d: %s port must be between 1 and 65535", index, protocol)
+	}
 	return nil
 }
 
@@ -429,40 +486,15 @@ func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 	switch protocol {
 	case "ping", "icmp":
 	case "tcp":
-		if step.Port <= 0 {
-			step.Port = 80
-		}
-		if step.Port > 65535 {
-			return fmt.Errorf("latency_probe step %d: tcp port must be between 1 and 65535", index)
-		}
+		return validateProbePort(index, "tcp", &step.Port, 80)
 	case "udp":
-		if step.Port <= 0 {
-			step.Port = 53
-		}
-		if step.Port > 65535 {
-			return fmt.Errorf("latency_probe step %d: udp port must be between 1 and 65535", index)
-		}
+		return validateProbePort(index, "udp", &step.Port, 53)
 	case "http":
-		if step.Port <= 0 {
-			step.Port = 80
-		}
-		if step.Port > 65535 {
-			return fmt.Errorf("latency_probe step %d: http port must be between 1 and 65535", index)
-		}
+		return validateProbePort(index, "http", &step.Port, 80)
 	case "https":
-		if step.Port <= 0 {
-			step.Port = 443
-		}
-		if step.Port > 65535 {
-			return fmt.Errorf("latency_probe step %d: https port must be between 1 and 65535", index)
-		}
+		return validateProbePort(index, "https", &step.Port, 443)
 	case "http3":
-		if step.Port <= 0 {
-			step.Port = 443
-		}
-		if step.Port > 65535 {
-			return fmt.Errorf("latency_probe step %d: http3 port must be between 1 and 65535", index)
-		}
+		return validateProbePort(index, "http3", &step.Port, 443)
 	default:
 		return fmt.Errorf("latency_probe step %d: unsupported protocol %s", index, step.Protocol)
 	}

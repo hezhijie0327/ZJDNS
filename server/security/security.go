@@ -23,3 +23,10 @@ func New(hijackEnabled bool) *Guard {
 	g.Detector.Enable(hijackEnabled)
 	return g
 }
+
+// Close terminates background goroutines owned by the Guard.
+func (g *Guard) Close() {
+	if g != nil && g.Crypto != nil {
+		g.Crypto.Stop()
+	}
+}

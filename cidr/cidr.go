@@ -16,11 +16,11 @@ import (
 	"zjdns/internal/log"
 )
 
-// ErrEmptyTag is returned when a CIDR tag is empty.
-var ErrEmptyTag = errors.New("CIDR tag cannot be empty")
+// errEmptyTag is returned when a CIDR tag is empty.
+var errEmptyTag = errors.New("CIDR tag cannot be empty")
 
-// CIDRRule holds a set of parsed CIDR networks for a single tag.
-type CIDRRule struct {
+// cidrRule holds a set of parsed CIDR networks for a single tag.
+type cidrRule struct {
 	tag       string
 	nets      []*net.IPNet
 	ipv4Nets  []ipv4Net
@@ -30,7 +30,7 @@ type CIDRRule struct {
 
 // Filter manages CIDR rules for IP address matching.
 type Filter struct {
-	rules      map[string]*CIDRRule
+	rules      map[string]*cidrRule
 	matchCache map[string]*CIDRMatchInfo
 	mu         sync.RWMutex
 }
@@ -51,13 +51,13 @@ type ipv4Net struct {
 // New creates a new Filter from the given CIDR configuration slice.
 func New(configs []config.CIDRConfig) (*Filter, error) {
 	cm := &Filter{
-		rules:      make(map[string]*CIDRRule),
+		rules:      make(map[string]*cidrRule),
 		matchCache: make(map[string]*CIDRMatchInfo),
 	}
 
 	for _, cfg := range configs {
 		if cfg.Tag == "" {
-			return nil, ErrEmptyTag
+			return nil, errEmptyTag
 		}
 		if _, exists := cm.rules[cfg.Tag]; exists {
 			return nil, fmt.Errorf("duplicate CIDR tag: %s", cfg.Tag)
@@ -83,8 +83,8 @@ func New(configs []config.CIDRConfig) (*Filter, error) {
 	return cm, nil
 }
 
-func (cm *Filter) loadConfig(cfg config.CIDRConfig) (*CIDRRule, error) {
-	rule := &CIDRRule{tag: cfg.Tag, nets: make([]*net.IPNet, 0)}
+func (cm *Filter) loadConfig(cfg config.CIDRConfig) (*cidrRule, error) {
+	rule := &cidrRule{tag: cfg.Tag, nets: make([]*net.IPNet, 0)}
 	validCount := 0
 
 	for i, cidr := range cfg.Rules {
@@ -191,7 +191,7 @@ func (cm *Filter) getMatchInfo(matchTag string) *CIDRMatchInfo {
 	return info
 }
 
-func (r *CIDRRule) preprocessNetworks() {
+func (r *cidrRule) preprocessNetworks() {
 	if r == nil {
 		return
 	}
@@ -249,7 +249,7 @@ func toIPv4Net(ipNet *net.IPNet) *ipv4Net {
 	}
 }
 
-func (r *CIDRRule) contains(ip net.IP) bool {
+func (r *cidrRule) contains(ip net.IP) bool {
 	if r == nil || ip == nil {
 		return false
 	}
@@ -261,7 +261,7 @@ func (r *CIDRRule) contains(ip net.IP) bool {
 	return r.containsIPv6(ip)
 }
 
-func (r *CIDRRule) containsIPv4(ipv4 net.IP) bool {
+func (r *cidrRule) containsIPv4(ipv4 net.IP) bool {
 	if len(r.ipv4Nets) == 0 {
 		return false
 	}
@@ -277,7 +277,7 @@ func (r *CIDRRule) containsIPv4(ipv4 net.IP) bool {
 	return false
 }
 
-func (r *CIDRRule) containsIPv6(ip net.IP) bool {
+func (r *cidrRule) containsIPv6(ip net.IP) bool {
 	for _, ipNet := range r.ipv6Nets {
 		if ipNet.Contains(ip) {
 			return true

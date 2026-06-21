@@ -85,7 +85,9 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		defer close(writerDone)
 		for task := range writeCh {
 			_ = tlsConn.SetWriteDeadline(time.Now().Add(connpool.OperationTimeout))
-			if _, err := tlsConn.Write(task.data); err != nil {
+			_, err := tlsConn.Write(task.data)
+			pool.DefaultBufferPool.Put(task.data)
+			if err != nil {
 				log.Debugf("TLS: write error: %v", err)
 				connCancel()
 				return
@@ -113,7 +115,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		lengthBuf := make([]byte, 2)
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
-			if err != io.EOF && !IsTemporaryError(err) {
+			if err != io.EOF && !isTemporaryError(err) {
 				log.Debugf("TLS: read length error: %v", err)
 			}
 			return
@@ -178,13 +180,24 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 				return
 			}
 
-			buf := make([]byte, 2+len(respBuf))
-			binary.BigEndian.PutUint16(buf[:2], uint16(len(respBuf)))
-			copy(buf[2:], respBuf)
+			poolBuf := pool.DefaultBufferPool.Get()
+			writeBuf := poolBuf
+			if len(poolBuf) < 2+len(respBuf) {
+				writeBuf = make([]byte, 2+len(respBuf))
+				pool.DefaultBufferPool.Put(poolBuf)
+			}
+			writeBuf = writeBuf[:2+len(respBuf)]
+			binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(respBuf)))
+			copy(writeBuf[2:], respBuf)
 
 			select {
-			case writeCh <- writeTask{data: buf}:
+			case writeCh <- writeTask{data: writeBuf}:
 			case <-connCtx.Done():
+				if len(poolBuf) < 2+len(respBuf) {
+					pool.DefaultBufferPool.Put(writeBuf)
+				} else {
+					pool.DefaultBufferPool.Put(poolBuf)
+				}
 			}
 		}(req, clientIP)
 	}

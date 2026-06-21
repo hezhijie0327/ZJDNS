@@ -288,7 +288,7 @@ func TestValidateResponse_NoDNSKEYs(t *testing.T) {
 func TestFindNSEC(t *testing.T) {
 	nsec := &dns.NSEC{Hdr: dns.RR_Header{Name: "a.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET}}
 	rrs := []dns.RR{nsec, &dns.A{Hdr: dns.RR_Header{Name: "a.com.", Rrtype: dns.TypeA, Class: dns.ClassINET}}}
-	if len(FindNSEC(rrs)) != 1 {
+	if len(findNSEC(rrs)) != 1 {
 		t.Error("should find NSEC record")
 	}
 }
@@ -296,7 +296,7 @@ func TestFindNSEC(t *testing.T) {
 func TestFindNSEC3(t *testing.T) {
 	nsec3 := &dns.NSEC3{Hdr: dns.RR_Header{Name: "abc.a.com.", Rrtype: dns.TypeNSEC3, Class: dns.ClassINET}}
 	rrs := []dns.RR{nsec3}
-	if len(FindNSEC3(rrs)) != 1 {
+	if len(findNSEC3(rrs)) != 1 {
 		t.Error("should find NSEC3 record")
 	}
 }
@@ -307,9 +307,15 @@ func TestValidateResponse_NXDOMAIN(t *testing.T) {
 	_, _ = genTestKey(zone, dns.SEP|dns.ZONE)
 	zsk, zskPriv := genTestKey(zone, dns.ZONE)
 
+	// Query for a name that doesn't exist. The NSEC range
+	// [aaaa.signed.example.com., zzzz.signed.example.com.) covers
+	// nonexistent.signed.example.com. in canonical ordering (aaaa < nonexistent < zzzz).
+	qname := "nonexistent.signed.example.com."
+	qtype := dns.TypeA
+
 	nsec := &dns.NSEC{
-		Hdr:        dns.RR_Header{Name: "missing.signed.example.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: 300},
-		NextDomain: "ns.signed.example.com.",
+		Hdr:        dns.RR_Header{Name: "aaaa.signed.example.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: 300},
+		NextDomain: "zzzz.signed.example.com.",
 		TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC},
 	}
 	rrsig := signRRset([]dns.RR{nsec}, zone, zskPriv, zsk.KeyTag())
@@ -318,6 +324,7 @@ func TestValidateResponse_NXDOMAIN(t *testing.T) {
 		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeNameError},
 		Ns:     []dns.RR{nsec, rrsig},
 	}
+	response.SetQuestion(dns.Fqdn(qname), qtype)
 	verified, err := cv.ValidateResponse(response, zone, []*dns.DNSKEY{zsk})
 	if err != nil {
 		t.Errorf("NXDOMAIN with signed NSEC should pass: %v", err)

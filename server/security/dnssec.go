@@ -12,12 +12,13 @@ import (
 // signature verification, DNSKEY trust anchor validation, or chain-of-trust
 // construction). It only checks whether DNSSEC record types (RRSIG, NSEC,
 // NSEC3, DNSKEY, DS) are present in the response. The AuthenticatedData (AD)
-// flag from upstream servers is explicitly NOT trusted or propagated, as it
-// cannot be verified without full cryptographic validation.
+// flag from upstream servers is trusted only when accompanied by DNSSEC
+// records, as this indicates the upstream resolver performed cryptographic
+// validation.
 //
-// Operators who need real DNSSEC validation should deploy this server behind
-// a validating resolver (e.g., Unbound) or implement full RFC 4033-4035
-// validation using the miekg/dns dnssec package with configured trust anchors.
+// Operators who need stronger guarantees should deploy this server behind
+// a validating resolver (e.g., Unbound) or use CryptoValidator for
+// full RFC 4033-4035 validation with trust anchors.
 type Validator struct{}
 
 // ValidateResponse checks whether a DNS response appears DNSSEC-validated.

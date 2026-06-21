@@ -192,59 +192,85 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}
 
-	if server.ednsMgr != nil && server.ednsMgr.CookieGenerator != nil {
-		server.backgroundGroup.Go(func() error {
-			defer dnsutil.HandlePanic("DNS cookie secret rotation")
-			ticker := time.NewTicker(DefaultCookieSecretRotationInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					server.ednsMgr.CookieGenerator.RotateSecret()
-					log.Debugf("EDNS: rotated DNS cookie secret")
-				case <-server.backgroundCtx.Done():
-					return nil
-				}
-			}
-		})
+	server.startBackgroundTasks()
+
+	return server, nil
+}
+
+// startBackgroundTasks launches all background goroutines owned by the server.
+func (s *Server) startBackgroundTasks() {
+	s.startCookieRotation()
+	s.startECSRefresh()
+	s.startPrefetchCooldownCleanup()
+	s.startStatsLogger()
+	s.startStatsReset()
+	s.startTCPWriteMuSweep()
+	s.setupSignalHandling()
+}
+
+// startCookieRotation rotates the DNS cookie secret on a fixed interval.
+func (s *Server) startCookieRotation() {
+	if s.ednsMgr == nil || s.ednsMgr.CookieGenerator == nil {
+		return
 	}
+	s.backgroundGroup.Go(func() error {
+		defer dnsutil.HandlePanic("DNS cookie secret rotation")
+		ticker := time.NewTicker(DefaultCookieSecretRotationInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.ednsMgr.CookieGenerator.RotateSecret()
+				log.Debugf("EDNS: rotated DNS cookie secret")
+			case <-s.backgroundCtx.Done():
+				return nil
+			}
+		}
+	})
+}
 
-	if server.ednsMgr != nil && server.ednsMgr.ShouldRefreshDefaultECS() {
-		server.backgroundGroup.Go(func() error {
-			defer dnsutil.HandlePanic("EDNS default ECS refresh")
+// startECSRefresh periodically refreshes the default EDNS Client Subnet value.
+func (s *Server) startECSRefresh() {
+	if s.ednsMgr == nil || !s.ednsMgr.ShouldRefreshDefaultECS() {
+		return
+	}
+	s.backgroundGroup.Go(func() error {
+		defer dnsutil.HandlePanic("EDNS default ECS refresh")
 
-			if ecsList, changed, err := server.ednsMgr.RefreshDefaultECS(); err != nil {
-				log.Warnf("EDNS: initial default ECS refresh failed: %v", err)
-			} else if changed {
-				for _, ecs := range ecsList {
-					if ecs != nil {
-						log.Infof("EDNS: initial default ECS refreshed: %s/%d", ecs.Address, ecs.SourcePrefix)
-					}
+		if ecsList, changed, err := s.ednsMgr.RefreshDefaultECS(); err != nil {
+			log.Warnf("EDNS: initial default ECS refresh failed: %v", err)
+		} else if changed {
+			for _, ecs := range ecsList {
+				if ecs != nil {
+					log.Infof("EDNS: initial default ECS refreshed: %s/%d", ecs.Address, ecs.SourcePrefix)
 				}
 			}
+		}
 
-			ticker := time.NewTicker(DefaultECSRefreshInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					if ecsList, changed, err := server.ednsMgr.RefreshDefaultECS(); err != nil {
-						log.Warnf("EDNS: default ECS refresh failed: %v", err)
-					} else if changed {
-						for _, ecs := range ecsList {
-							if ecs != nil {
-								log.Infof("EDNS: refreshed default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
-							}
+		ticker := time.NewTicker(DefaultECSRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if ecsList, changed, err := s.ednsMgr.RefreshDefaultECS(); err != nil {
+					log.Warnf("EDNS: default ECS refresh failed: %v", err)
+				} else if changed {
+					for _, ecs := range ecsList {
+						if ecs != nil {
+							log.Infof("EDNS: refreshed default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
 						}
 					}
-				case <-server.backgroundCtx.Done():
-					return nil
 				}
+			case <-s.backgroundCtx.Done():
+				return nil
 			}
-		})
-	}
+		}
+	})
+}
 
-	server.backgroundGroup.Go(func() error {
+// startPrefetchCooldownCleanup periodically evicts stale entries from the prefetch cooldown map.
+func (s *Server) startPrefetchCooldownCleanup() {
+	s.backgroundGroup.Go(func() error {
 		defer dnsutil.HandlePanic("prefetch cooldown cleanup")
 		ticker := time.NewTicker(PrefetchThrottleInterval * 10)
 		defer ticker.Stop()
@@ -252,55 +278,68 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			select {
 			case <-ticker.C:
 				now := time.Now().UnixNano()
-				server.prefetchCooldown.Range(func(key, value any) bool {
+				s.prefetchCooldown.Range(func(key, value any) bool {
 					if ts, ok := value.(int64); ok && now > ts {
-						server.prefetchCooldown.Delete(key)
+						s.prefetchCooldown.Delete(key)
 					}
 					return true
 				})
-			case <-server.backgroundCtx.Done():
+			case <-s.backgroundCtx.Done():
 				return nil
 			}
 		}
 	})
+}
 
-	if statsInterval := server.config.Server.StatsInterval(); statsInterval > 0 && server.statsMgr != nil {
-		interval := time.Duration(statsInterval) * time.Second
-		server.backgroundGroup.Go(func() error {
-			defer dnsutil.HandlePanic("stats logger")
-			ticker := time.NewTicker(interval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					server.logStatsNow("interval")
-				case <-server.backgroundCtx.Done():
-					return nil
-				}
-			}
-		})
+// startStatsLogger logs stats snapshots at a periodic interval.
+func (s *Server) startStatsLogger() {
+	statsInterval := s.config.Server.StatsInterval()
+	if statsInterval <= 0 || s.statsMgr == nil {
+		return
 	}
-
-	if statsResetInterval := server.config.Server.StatsResetInterval(); statsResetInterval > 0 && server.statsMgr != nil {
-		resetInterval := time.Duration(statsResetInterval) * time.Second
-		server.backgroundGroup.Go(func() error {
-			defer dnsutil.HandlePanic("stats reset")
-			ticker := time.NewTicker(resetInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					server.statsMgr.Reset()
-					log.Infof("STATS: counters reset")
-					server.logStatsNow("reset")
-				case <-server.backgroundCtx.Done():
-					return nil
-				}
+	interval := time.Duration(statsInterval) * time.Second
+	s.backgroundGroup.Go(func() error {
+		defer dnsutil.HandlePanic("stats logger")
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.logStatsNow("interval")
+			case <-s.backgroundCtx.Done():
+				return nil
 			}
-		})
-	}
+		}
+	})
+}
 
-	server.backgroundGroup.Go(func() error {
+// startStatsReset periodically resets stats counters and logs the final snapshot.
+func (s *Server) startStatsReset() {
+	statsResetInterval := s.config.Server.StatsResetInterval()
+	if statsResetInterval <= 0 || s.statsMgr == nil {
+		return
+	}
+	resetInterval := time.Duration(statsResetInterval) * time.Second
+	s.backgroundGroup.Go(func() error {
+		defer dnsutil.HandlePanic("stats reset")
+		ticker := time.NewTicker(resetInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.statsMgr.Reset()
+				log.Infof("STATS: counters reset")
+				s.logStatsNow("reset")
+			case <-s.backgroundCtx.Done():
+				return nil
+			}
+		}
+	})
+}
+
+// startTCPWriteMuSweep periodically removes stale tcpWriteMu entries to prevent unbounded map growth.
+func (s *Server) startTCPWriteMuSweep() {
+	s.backgroundGroup.Go(func() error {
 		defer dnsutil.HandlePanic("tcpWriteMu sweep")
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
@@ -308,21 +347,17 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			select {
 			case <-ticker.C:
 				cutoff := time.Now().Add(-10 * time.Minute).UnixNano()
-				server.tcpWriteMu.Range(func(key, value any) bool {
+				s.tcpWriteMu.Range(func(key, value any) bool {
 					if value.(*tcpWriteEntry).lastAccess.Load() < cutoff {
-						server.tcpWriteMu.Delete(key)
+						s.tcpWriteMu.Delete(key)
 					}
 					return true
 				})
-			case <-server.backgroundCtx.Done():
+			case <-s.backgroundCtx.Done():
 				return nil
 			}
 		}
 	})
-
-	server.setupSignalHandling()
-
-	return server, nil
 }
 
 func (s *Server) setupSignalHandling() {
@@ -472,6 +507,10 @@ func (s *Server) shutdownServer() {
 	}
 
 	log.DefaultTimeCache.Stop()
+
+	if s.guard != nil {
+		s.guard.Crypto.Stop()
+	}
 
 	if s.shutdown != nil {
 		close(s.shutdown)

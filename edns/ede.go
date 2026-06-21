@@ -47,15 +47,6 @@ func NewEDEOption(infoCode uint16, extraText string) *EDEOption {
 	return &EDEOption{InfoCode: infoCode, ExtraText: extraText}
 }
 
-// NewEDEWithError creates an EDE option from an error, using the error text as
-// extra text.
-func NewEDEWithError(infoCode uint16, err error) *EDEOption {
-	if err == nil {
-		return nil
-	}
-	return &EDEOption{InfoCode: infoCode, ExtraText: err.Error()}
-}
-
 // EDECodeString returns a human-readable description for the given EDE info
 // code.
 func EDECodeString(code uint16) string {

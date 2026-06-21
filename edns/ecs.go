@@ -29,9 +29,10 @@ type ECSOption struct {
 // DefaultECSConfig holds the default ECS subnet configuration for IPv4 and
 // IPv6.
 type DefaultECSConfig struct {
-	IPv4       string
-	IPv6       string
-	PreferIPv4 bool
+	IPv4          string
+	IPv6          string
+	PreferIPv4    bool
+	AutoDetectURL string `json:"auto_detect_url,omitempty"` // optional custom URL for auto-detection
 }
 
 // IsEmpty returns true if neither IPv4 nor IPv6 is configured.
@@ -99,15 +100,17 @@ func (c *DefaultECSConfig) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("default_ecs_subnet must be an object")
 	}
 	var aux struct {
-		IPv4       string `json:"ipv4"`
-		IPv6       string `json:"ipv6"`
-		PreferIPv4 bool   `json:"prefer_ipv4"`
+		IPv4          string `json:"ipv4"`
+		IPv6          string `json:"ipv6"`
+		PreferIPv4    bool   `json:"prefer_ipv4"`
+		AutoDetectURL string `json:"auto_detect_url"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 	c.IPv4 = strings.TrimSpace(aux.IPv4)
 	c.IPv6 = strings.TrimSpace(aux.IPv6)
+	c.AutoDetectURL = strings.TrimSpace(aux.AutoDetectURL)
 	if !strings.Contains(string(data), `"prefer_ipv4"`) {
 		c.PreferIPv4 = true
 	} else {

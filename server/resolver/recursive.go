@@ -57,7 +57,6 @@ type dnssecChain struct {
 	parentDNSKEYs []*dns.DNSKEY
 	childDS       []*dns.DS
 	zoneDNSKEYs   []*dns.DNSKEY
-	cryptoValid   bool
 	lastEDECode   uint16 // EDE code for the most recent validation failure
 }
 
@@ -193,6 +192,10 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 		// child's DS RRSIGs.
 		rr.updateDNSSECChain(ctx, response, currentDomain, bestMatch, nameservers, chain)
 
+		// Save parent zone before updating — glue name validation uses
+		// the parent zone (the zone that published the delegation),
+		// not the delegated-to zone.
+		parentDomain := currentDomain
 		currentDomain = bestMatch + "."
 
 		var nextNS []string
@@ -203,8 +206,8 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
 						// Validate glue name is within the parent zone
 						glueName := dnsutil.NormalizeDomain(a.Header().Name)
-						curDom := dnsutil.NormalizeDomain(currentDomain)
-						if glueName != curDom && !strings.HasSuffix(glueName, "."+curDom) && curDom != "" {
+						parDom := dnsutil.NormalizeDomain(parentDomain)
+						if glueName != parDom && !strings.HasSuffix(glueName, "."+parDom) && parDom != "" {
 							continue
 						}
 						nextNS = append(nextNS, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
@@ -212,8 +215,8 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 				case *dns.AAAA:
 					if strings.EqualFold(a.Header().Name, ns.Ns) {
 						glueName := dnsutil.NormalizeDomain(a.Header().Name)
-						curDom := dnsutil.NormalizeDomain(currentDomain)
-						if glueName != curDom && !strings.HasSuffix(glueName, "."+curDom) && curDom != "" {
+						parDom := dnsutil.NormalizeDomain(parentDomain)
+						if glueName != parDom && !strings.HasSuffix(glueName, "."+parDom) && parDom != "" {
 							continue
 						}
 						nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), config.DefaultDNSPort))
@@ -222,11 +225,13 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 			}
 		}
 
-		// Always verify glue IPs via independent resolution; prefer trusted results.
-		trustedNS := rr.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
-		if len(trustedNS) > 0 {
-			nextNS = trustedNS
-		} else if len(nextNS) == 0 {
+		// Use glue records directly when available; only fall back to
+		// independent NS resolution when the delegation has no glue.
+		if len(nextNS) == 0 {
+			nextNS = rr.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
+		}
+
+		if len(nextNS) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessagePool.Put(response)
 			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
@@ -250,7 +255,6 @@ func (rr *Recursive) validateWithDNSSEC(response *dns.Msg, currentDomain string,
 	if len(chain.zoneDNSKEYs) > 0 && len(response.Answer) > 0 {
 		validated, _ := crypto.ValidateResponse(response, currentDomain, chain.zoneDNSKEYs)
 		if validated {
-			chain.cryptoValid = true
 			return true
 		}
 	}
@@ -270,17 +274,21 @@ func (rr *Recursive) validateWithDNSSEC(response *dns.Msg, currentDomain string,
 			}
 		}
 
-		// Verify using self-signature (for root zone)
-		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
-			chain.zoneDNSKEYs = dnskeyRecords
-			crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
+		// Verify using self-signature (root zone only -- embedded trust anchors
+		// provide the root of trust; self-signed keys from any other zone are
+		// not trustworthy without a DS chain from a verified parent).
+		if currentDomain == "." {
+			if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
+				chain.zoneDNSKEYs = dnskeyRecords
+				crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
 
-			// Now verify the answer with the newly verified keys
-			if len(response.Answer) > 0 {
-				validated, _ := crypto.ValidateResponse(response, currentDomain, dnskeyRecords)
-				return validated
+				// Now verify the answer with the newly verified keys
+				if len(response.Answer) > 0 {
+					validated, _ := crypto.ValidateResponse(response, currentDomain, dnskeyRecords)
+					return validated
+				}
+				return true
 			}
-			return true
 		}
 	}
 
@@ -531,7 +539,6 @@ func (rr *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, name
 	// Cache the verified DNSKEY and verify the original answer's RRSIGs
 	crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
 	chain.zoneDNSKEYs = dnskeyRecords
-	chain.cryptoValid = true
 
 	validated, err := crypto.ValidateResponse(response, currentDomain, dnskeyRecords)
 	if err != nil {
@@ -561,7 +568,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 
 	resultChan := make(chan *dns.Msg, 1)
 	g, queryCtx := errgroup.WithContext(queryCtx)
-	g.SetLimit(ConcurrencyLimit(len(nameservers)))
+	g.SetLimit(concurrencyLimit(len(nameservers)))
 
 	var activeConnections atomic.Int32
 
@@ -635,7 +642,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
-	g.SetLimit(ConcurrencyLimit(len(nsRecords)))
+	g.SetLimit(concurrencyLimit(len(nsRecords)))
 
 	var allMu sync.Mutex
 	var allAddresses []string
