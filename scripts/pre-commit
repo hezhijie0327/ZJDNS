@@ -1,0 +1,12 @@
+#!/bin/sh
+# Pre-commit hook: auto-format and lint check before every commit.
+
+set -e
+
+echo "==> golangci-lint fmt..."
+golangci-lint fmt ./...
+
+echo "==> golangci-lint run..."
+golangci-lint run ./...
+
+echo "==> All checks passed."

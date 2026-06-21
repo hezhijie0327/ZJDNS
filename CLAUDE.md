@@ -11,6 +11,9 @@ go build -o zjdns
 # Build with version info
 go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns
 
+# Install git pre-commit hook (lint fmt + run)
+cp scripts/pre-commit .git/hooks/ && chmod +x .git/hooks/pre-commit
+
 # Lint
 golangci-lint run && golangci-lint fmt
 ```
