@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -266,7 +267,7 @@ func TestRecordRequest_NilCollector(t *testing.T) {
 
 func TestFetchStats_Disabled(t *testing.T) {
 	var sc *Collector
-	_, err := sc.FetchStats(nil)
+	_, err := sc.FetchStats(context.TODO())
 	if err == nil {
 		t.Error("FetchStats on nil should return error")
 	}

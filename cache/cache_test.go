@@ -66,7 +66,7 @@ func TestBuildCacheKey_DifferentTypes(t *testing.T) {
 
 func TestSet_Get_RoundTrip(t *testing.T) {
 	mc := testStore()
-	defer mc.Close()
+	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: netParseIP("192.0.2.1")}
 	key := BuildCacheKey(dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
@@ -89,7 +89,7 @@ func TestSet_Get_RoundTrip(t *testing.T) {
 
 func TestGet_Miss(t *testing.T) {
 	mc := testStore()
-	defer mc.Close()
+	defer func() { _ = mc.Close() }()
 
 	_, found, _ := mc.Get("nonexistent")
 	if found {
@@ -99,7 +99,7 @@ func TestGet_Miss(t *testing.T) {
 
 func TestSetEntry_CustomEntry(t *testing.T) {
 	mc := testStore()
-	defer mc.Close()
+	defer func() { _ = mc.Close() }()
 
 	now := time.Now().Unix()
 	entry := &CacheEntry{
@@ -225,7 +225,7 @@ func TestExpandAndProcessRecords_ElapsedTTL(t *testing.T) {
 
 func TestSet_ZeroTTLFloored(t *testing.T) {
 	mc := testStore()
-	defer mc.Close()
+	defer func() { _ = mc.Close() }()
 
 	// Record with TTL=0 should be floored to config.DefaultTTL
 	rr := &dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}, A: netParseIP("192.0.2.1")}
