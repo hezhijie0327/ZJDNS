@@ -9,6 +9,7 @@ import (
 	"github.com/miekg/dns"
 
 	"zjdns/cache"
+	"zjdns/config"
 	"zjdns/internal/log"
 )
 
@@ -45,7 +46,6 @@ type rrsetKey struct {
 }
 
 const dnsKeyCachePrefix = "dnskey:"
-const dnsKeyCacheTTL = 3600 // 1 hour
 
 func dnsKeyCacheKey(zone string) string {
 	return dnsKeyCachePrefix + zone
@@ -583,12 +583,24 @@ func (cv *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 	}
 	zone = strings.ToLower(strings.TrimSuffix(zone, "."))
 
+	// Use the minimum TTL from the DNSKEY records themselves (respecting the
+	// zone operator's chosen TTL), with a 60-second floor to avoid thrashing.
+	ttl := config.DefaultDNSKeyCacheTTL
+	for _, k := range keys {
+		if k != nil && int(k.Header().Ttl) > 0 && int(k.Header().Ttl) < ttl {
+			ttl = int(k.Header().Ttl)
+		}
+	}
+	if ttl < config.DefaultTTL {
+		ttl = config.DefaultTTL
+	}
+
 	now := time.Now().Unix()
 	entry := &cache.CacheEntry{
 		Timestamp:   now,
 		AccessTime:  now,
-		TTL:         dnsKeyCacheTTL,
-		OriginalTTL: dnsKeyCacheTTL,
+		TTL:         ttl,
+		OriginalTTL: ttl,
 		Validated:   true,
 		Answer:      make([]*cache.CompactRecord, 0, len(keys)),
 	}

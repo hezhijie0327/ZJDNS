@@ -76,13 +76,13 @@ type logDNSSEC struct {
 }
 
 type logRates struct {
-	CacheRate       float64 `json:"cache_rate,omitempty"`
-	PrefetchRate    float64 `json:"prefetch_rate,omitempty"`
-	FailureRate     float64 `json:"failure_rate,omitempty"`
-	StaleRate       float64 `json:"stale_rate,omitempty"`
-	FallbackRate    float64 `json:"fallback_rate,omitempty"`
-	RewriteRate     float64 `json:"rewrite_rate,omitempty"`
-	HijackRate      float64 `json:"hijack_rate,omitempty"`
+	CacheRate        float64 `json:"cache_rate,omitempty"`
+	PrefetchRate     float64 `json:"prefetch_rate,omitempty"`
+	FailureRate      float64 `json:"failure_rate,omitempty"`
+	StaleRate        float64 `json:"stale_rate,omitempty"`
+	FallbackRate     float64 `json:"fallback_rate,omitempty"`
+	RewriteRate      float64 `json:"rewrite_rate,omitempty"`
+	HijackRate       float64 `json:"hijack_rate,omitempty"`
 	DNSSECSecureRate float64 `json:"dnssec_secure_rate,omitempty"`
 	DNSSECBogusRate  float64 `json:"dnssec_bogus_rate,omitempty"`
 }

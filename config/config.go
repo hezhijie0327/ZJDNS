@@ -34,6 +34,7 @@ const (
 
 	DefaultLatencyProbeTimeout = 100 * time.Millisecond
 	DefaultStatsPersistTTL     = 86400
+	DefaultDNSKeyCacheTTL      = 86400
 
 	RecursiveIndicator = "builtin_recursive"
 

@@ -25,4 +25,3 @@ func New(c cache.Store, hijackEnabled bool) *Guard {
 	g.Detector.Enable(hijackEnabled)
 	return g
 }
-
