@@ -18,9 +18,9 @@ cp scripts/pre-commit .git/hooks/ && chmod +x .git/hooks/pre-commit
 golangci-lint run && golangci-lint fmt
 ```
 
-Test suites exist for `cidr`, `edns`, `rewrite`, `internal/dnsutil`, `internal/pool`, `server/ratelimit`, `server/resolver`, and `server/security` packages (75+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
+Test suites exist for `cache`, `cidr`, `config`, `edns`, `rewrite`, `stats`, `internal/dnsutil`, `internal/pool`, `server/ratelimit`, `server/resolver`, and `server/security` packages (75+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
 
-Target coverage: ≥90% for utility packages (`dnsutil` 95.7%, `pool` 91.3%). Rate limiter at 85.7% (cleanup goroutine requires 5-minute ticker).
+Target coverage: ≥90% for utility packages (`dnsutil` 95.7%, `pool` 91.3%). Rate limiter at 85.7% (cleanup goroutine requires 5-minute ticker). New test suites added for `cache`, `config`, `stats`.
 
 Run benchmarks: `go test -bench=. -short ./...` (unit) or `go test -bench=BenchmarkServerProcessQuery -benchtime=3s .` (QPS).
 
@@ -33,10 +33,9 @@ zjdns/
 ├── internal/
 │   ├── log/log.go                 # Logger, TimeCache, Level.String()
 │   ├── pool/pool.go               # MessagePool, BufferPool, constants (zero deps)
-│   ├── pool/pool_test.go          # Pool tests (Get/Put, drain/refill, nil safety, bench)
 │   ├── dnsutil/dnsutil.go         # NormalizeDomain, IsSecureProtocol, HandlePanic, etc.
-│   ├── dnsutil/dnsutil_test.go    # DNS util tests (NormalizeDomain, ParseReverseDNSName, etc.)
-│   └── ipdetect/ipdetect.go       # Public IP detection for auto ECS
+│   ├── ipdetect/ipdetect.go       # Public IP detection for auto ECS
+│   └── sysmem/sysmem.go           # System memory detection for cache budget
 ├── config/config.go               # All types + constants + loader + validation + DDR/CHAOS
 ├── edns/                           # EDNS(0) extensions (5 files)
 │   ├── edns.go                    # Handler, NewHandler, ApplyToMessage
@@ -70,7 +69,9 @@ zjdns/
     │   ├── upstream.go            # First-win concurrent upstream queries
     │   ├── recursive.go           # Recursive root→TLD→auth walk
     │   ├── cname.go               # CNAME chain resolution
-    │   └── dnssec_test.go         # DNSSEC tests (zone cut, EDE, lame delegation, 21 cases)
+    │   ├── dnssec_chain.go        # DNSSEC trust chain (dnssecChain, validateWithDNSSEC)
+    │   ├── nameserver.go          # Concurrent NS querying, suspicious response handling
+    │   └── zonecut.go             # Zone cut detection (isZoneCut, getZoneCutSigner, resolveZoneCut)
     ├── security/                  # Security features (4 files)
     │   ├── security.go            # Guard (bundles RecordPresence + CryptoValidator + Detector)
     │   ├── dnssec.go              # DNSSEC record-presence validation (upstream AD check)
@@ -84,8 +85,7 @@ zjdns/
     ├── latency/                    # Latency probing
     │   └── probe.go                # A/AAAA latency probing + reordering
     └── ratelimit/                  # Per-IP token bucket rate limiter
-            ├── ratelimit.go            # Limiter (sharded, FNV-1a hash)
-            └── ratelimit_test.go       # Tests (burst, refill, IPv6, parallel bench)
+            └── ratelimit.go            # Limiter (sharded, FNV-1a hash)
 ```
 
 ### Dependency Graph
@@ -213,8 +213,8 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `UPSTREAM` | Outbound upstream queries | server/client/{tcp,dot,doq,doh,doh3}.go, server/resolver/upstream.go |
 | `SERVER` | Server lifecycle | server/server.go, server/server_handlers.go, main.go |
 | `EDNS` | EDNS options | edns/*.go, server/server.go |
-| `RECURSION` | Recursive resolution | server/resolver/recursive.go |
-| `SECURITY` | DNSSEC, hijack detection | server/security/*.go, server/resolver/recursive.go |
+| `RECURSION` | Recursive resolution | server/resolver/{recursive,dnssec_chain,nameserver,zonecut}.go |
+| `SECURITY` | DNSSEC, hijack detection | server/security/*.go, server/resolver/{dnssec_chain,zonecut}.go |
 | `TCPPOOL` | TCP/DoT connection pool | server/client/pool/{tcp,quic}.go |
 | `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `RATELIMIT`, `PTR`, `PANIC` | One component each | respective files |
 

@@ -82,7 +82,7 @@
 | [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033.html) | DNS Security Introduction and Requirements | DNSSEC 基础                              |
 | [RFC 4034](https://www.rfc-editor.org/rfc/rfc4034.html) | Resource Records for DNSSEC                | RRSIG/NSEC/DNSKEY/DS 类型                |
 | [RFC 4035](https://www.rfc-editor.org/rfc/rfc4035.html) | Protocol Modifications for DNSSEC          | 信任链 + AD/CD 标志                      |
-| [RFC 5155](https://www.rfc-editor.org/rfc/rfc5155.html) | NSEC3 Hashed Authenticated Denial         | NSEC3 认证拒绝 + RRSIG 验证               |
+| [RFC 5155](https://www.rfc-editor.org/rfc/rfc5155.html) | NSEC3 Hashed Authenticated Denial          | NSEC3 认证拒绝 + RRSIG 验证              |
 | [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html) | DNS Transport over TCP                     | TCP/DoT 连接复用 + 查询流水线 + 乱序响应 |
 | [RFC 7830](https://www.rfc-editor.org/rfc/rfc7830.html) | EDNS(0) Padding                            | DNS 响应填充                             |
 | [RFC 7858](https://www.rfc-editor.org/rfc/rfc7858.html) | DNS over TLS (DoT)                         | TLS 加密传输                             |
@@ -108,7 +108,8 @@ zjdns/
 │   ├── log/log.go                   # 日志 (Error/Warn/Info/Debug)
 │   ├── pool/pool.go                 # MessagePool, BufferPool
 │   ├── dnsutil/dnsutil.go           # 工具函数
-│   └── ipdetect/ipdetect.go         # 公网 IP 检测
+│   ├── ipdetect/ipdetect.go         # 公网 IP 检测
+│   └── sysmem/sysmem.go             # 系统内存检测
 ├── config/config.go                 # 配置类型 + 加载 + 验证 + DDR
 ├── edns/                            # EDNS(0) 扩展 (5 文件)
 │   ├── edns.go                      # Handler, ApplyToMessage
@@ -126,21 +127,24 @@ zjdns/
 └── server/                          # 核心服务
     ├── server.go                    # Server 生命周期
     ├── server_handlers.go           # 查询管道
-    ├── client/                      # 出站查询 (5 文件 + pool/ 子包)
+    ├── client/                      # 出站查询 (7 文件 + pool/ 子包)
     │   ├── client.go                # Client, ExecuteQuery
     │   ├── tcp.go, dot.go, doq.go, doh.go, doh3.go, doh_request.go
     │   └── pool/                     # 连接池子包
     │       ├── tcp.go               # RFC 7766 TCP/DoT 连接池
     │       └── quic.go               # QUIC 连接池
-    ├── resolver/                    # 解析策略 (4 文件)
+    ├── resolver/                    # 解析策略 (7 文件)
     │   ├── resolver.go              # Resolver, 首胜+
     │   ├── upstream.go              # 上游并发查询
     │   ├── recursive.go             # 递归 walk
-    │   └── cname.go                 # CNAME 链
+    │   ├── cname.go                 # CNAME 链
+    │   ├── dnssec_chain.go          # DNSSEC 信任链
+    │   ├── nameserver.go            # NS 并发查询
+    │   └── zonecut.go               # 区域切割检测
     ├── tls/                         # 安全传输 (4 文件)
     │   ├── tls.go                   # Server, 证书
     │   ├── dot.go, doq.go, doh.go
-    ├── security/                    # 安全 (4 文件 + 测试)
+    ├── security/                    # 安全 (4 文件)
     │   ├── security.go              # Guard
     │   ├── dnssec.go                # DNSSEC 记录存在检查
     │   ├── dnssec_crypto.go         # 完整密码学 DNSSEC 验证
