@@ -399,4 +399,55 @@ func TestDNSSEC_BogusDelegation(t *testing.T) {
 	}
 }
 
+// TestValidateResponse_MixedRRsetWithForeignRRSIG verifies that when a response
+// contains multiple RRsets and one has RRSIGs from a foreign zone's keys (zone cut),
+// validateAnswerSection returns an error rather than silently skipping the
+// unverifiable RRset. This prevents a valid parent-zone RRSIG from masking a broken
+// or foreign child-zone RRSIG.
+func TestValidateResponse_MixedRRsetWithForeignRRSIG(t *testing.T) {
+	cv := NewCryptoValidator()
+	parentZone := "parent.example.com"
+	childZone := "child.parent.example.com"
+
+	// Parent zone keys
+	parentZSK, parentZSKPriv := genTestKey(parentZone, dns.ZONE)
+
+	// Child zone has DIFFERENT keys — parent cannot verify child's RRSIGs
+	childZSK, childZSKPriv := genTestKey(childZone, dns.ZONE)
+
+	// Build a response that mimics a typical zone-cut scenario:
+	// CNAME record signed by parent zone (valid) +
+	// A record signed by child zone (parent can't verify this RRSIG)
+	cnameRec := &dns.CNAME{
+		Hdr:    dns.RR_Header{Name: dns.Fqdn("query.parent.example.com"), Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 300},
+		Target: dns.Fqdn("target.child.parent.example.com"),
+	}
+	cnameRRSIG := signRRset([]dns.RR{cnameRec}, parentZone, parentZSKPriv, parentZSK.KeyTag())
+
+	aRec := &dns.A{
+		Hdr: dns.RR_Header{Name: dns.Fqdn("target.child.parent.example.com"), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
+		A:   aRec("target.child.parent.example.com", "192.0.2.1").A,
+	}
+	// Signed by child zone's key — parent zone keys can't verify this
+	aRRSIG := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag())
+
+	response := &dns.Msg{
+		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess},
+		Answer: []dns.RR{cnameRec, cnameRRSIG, aRec, aRRSIG},
+	}
+
+	// Validate with ONLY parent zone keys.
+	// The CNAME RRSIG should validate, but the A RRSIG comes from child zone
+	// whose key is NOT in the verified set.
+	// validateAnswerSection must return an error because the A record's RRSIG
+	// cannot be verified — this signals a zone cut to the caller.
+	verified, err := cv.ValidateResponse(response, parentZone, []*dns.DNSKEY{parentZSK})
+	if err == nil {
+		t.Error("ValidateResponse should return error when an RRset has RRSIGs that don't match any verified DNSKEY")
+	}
+	if verified {
+		t.Error("should not claim validated when one RRset's RRSIG can't be verified")
+	}
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────

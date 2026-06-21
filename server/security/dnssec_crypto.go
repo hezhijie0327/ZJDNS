@@ -473,6 +473,7 @@ func (cv *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifie
 			continue
 		}
 
+		var groupValidated bool
 		for _, sig := range sigs {
 			for _, key := range verifiedDNSKEYs {
 				if key.KeyTag() != sig.KeyTag {
@@ -480,10 +481,23 @@ func (cv *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifie
 				}
 				if err := cv.VerifyRRset(group, sig, key); err == nil {
 					anyValidated = true
+					groupValidated = true
 					log.Debugf("SECURITY: validated %s/%s with key_tag=%d", header.Name, dns.TypeToString[header.Rrtype], key.KeyTag())
 					break
 				}
 			}
+			if groupValidated {
+				break
+			}
+		}
+
+		// An RRset with RRSIGs whose key tags don't match any verified DNSKEY
+		// indicates either a bogus signature or a zone cut (child zone keys).
+		// Return an error so the caller can perform zone-cut detection rather
+		// than silently accepting the unverifiable RRset.
+		if !groupValidated {
+			return false, fmt.Errorf("%w: no matching DNSKEY for RRSIG over %s/%s (key tags in RRSIGs do not match verified zone keys)",
+				ErrBogusSignature, header.Name, dns.TypeToString[header.Rrtype])
 		}
 	}
 

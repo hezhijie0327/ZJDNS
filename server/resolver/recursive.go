@@ -163,6 +163,17 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 					}
 				} else {
 					log.Debugf("SECURITY: zone cut resolution failed for %s: %v", question.Name, cutErr)
+					// Zone cut resolution failed (e.g. no DS, DS verification
+					// failure). Treat as a DNSSEC validation failure when the
+					// zone had DS records and enforcement is on — the delegation
+					// is bogus and the response must not be served.
+					if rr.resolver.DNSSECEnforce && len(chain.childDS) > 0 {
+						log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut resolution failed with DS present", question.Name)
+						rr.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
+						pool.DefaultMessagePool.Put(response)
+						return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
+							fmt.Errorf("DNSSEC validation failed: zone cut resolution error for %s: %w", question.Name, cutErr)
+					}
 					validated = false
 				}
 				answer, authority, additional := response.Answer, response.Ns, response.Extra
@@ -749,6 +760,11 @@ func (rr *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, name
 	if len(verifiedDS) == 0 {
 		return false, fmt.Errorf("DS RRSIG verification failed for %s", childZone)
 	}
+
+	// Update the trust chain with the verified DS records so the caller's
+	// DNSSECEnforce check uses the correct child zone DS rather than stale
+	// DS records from a prior delegation step.
+	chain.childDS = verifiedDS
 
 	// Query for the child zone's DNSKEY records
 	dnskeyQuestion := dns.Question{Name: dns.Fqdn(childZone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
