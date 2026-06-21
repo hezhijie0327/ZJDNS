@@ -44,9 +44,9 @@ const (
 
 // ALPN protocol identifiers for secure DNS transports.
 var (
-	NextProtoDOT = []string{"dot"}
-	NextProtoDoH = []string{"h2"}
-	NextProtoDoQ = []string{"doq"}
+	NextProtoDOT  = []string{"dot"}
+	NextProtoDoH  = []string{"h2"}
+	NextProtoDoQ  = []string{"doq"}
 	NextProtoDoH3 = []string{"h3"}
 )
 
