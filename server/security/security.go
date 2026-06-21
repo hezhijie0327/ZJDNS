@@ -2,6 +2,8 @@
 // recursive resolution responses.
 package security
 
+import "zjdns/cache"
+
 // Guard aggregates the DNSSEC validators and hijack detector into a single
 // configuration unit.
 type Guard struct {
@@ -14,19 +16,13 @@ type Guard struct {
 // the CryptoValidator always loads IANA root trust anchors and performs
 // chain-of-trust verification. The dnssec_enforce config option (not here)
 // controls whether bogus responses are rejected or passed through.
-func New(hijackEnabled bool) *Guard {
+func New(c cache.Store, hijackEnabled bool) *Guard {
 	g := &Guard{
 		RecordPresence: &Validator{},
-		Crypto:         NewCryptoValidator(),
+		Crypto:         NewCryptoValidator(c),
 		Detector:       &Detector{},
 	}
 	g.Detector.Enable(hijackEnabled)
 	return g
 }
 
-// Close terminates background goroutines owned by the Guard.
-func (g *Guard) Close() {
-	if g != nil && g.Crypto != nil {
-		g.Crypto.Stop()
-	}
-}

@@ -14,7 +14,7 @@ import (
 	"zjdns/internal/sysmem"
 )
 
-const evictSampleSize = 5
+const evictSampleSize = 25
 
 // MemoryCache is an in-memory DNS response cache with optional disk persistence.
 type MemoryCache struct {

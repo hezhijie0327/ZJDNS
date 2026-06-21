@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"zjdns/cache"
+	"zjdns/config"
+
 	"github.com/miekg/dns"
 )
 
@@ -56,7 +59,7 @@ func aRec(name string, ip string) *dns.A {
 // ── VerifyRRset ───────────────────────────────────────────────────────────────
 
 func TestVerifyRRset_ValidSignature(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	zone := "test.example.com"
 	ksk, priv := genTestKey(zone, dns.SEP|dns.ZONE)
 
@@ -70,7 +73,7 @@ func TestVerifyRRset_ValidSignature(t *testing.T) {
 }
 
 func TestVerifyRRset_WrongKey(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	zone := "test.example.com"
 	ksk, priv := genTestKey(zone, dns.SEP|dns.ZONE)
 	wrongKey, _ := genTestKey(zone, dns.SEP|dns.ZONE) // different key pair
@@ -84,7 +87,7 @@ func TestVerifyRRset_WrongKey(t *testing.T) {
 }
 
 func TestVerifyRRset_ExpiredSignature(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	zone := "test.example.com"
 	ksk, priv := genTestKey(zone, dns.SEP|dns.ZONE)
 
@@ -110,7 +113,7 @@ func TestVerifyRRset_ExpiredSignature(t *testing.T) {
 // ── VerifyDelegationDS ────────────────────────────────────────────────────────
 
 func TestVerifyDelegationDS_Matching(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	childZone := "child.example.com"
 	ksk, _ := genTestKey(childZone, dns.SEP|dns.ZONE)
 
@@ -130,7 +133,7 @@ func TestVerifyDelegationDS_Matching(t *testing.T) {
 }
 
 func TestVerifyDelegationDS_Mismatch(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	childZone := "child.example.com"
 	ksk, _ := genTestKey(childZone, dns.SEP|dns.ZONE)
 	otherKey, _ := genTestKey("other.example.com", dns.SEP|dns.ZONE)
@@ -145,7 +148,7 @@ func TestVerifyDelegationDS_Mismatch(t *testing.T) {
 }
 
 func TestVerifyDelegationDS_SkipsNonSEP(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	childZone := "child.example.com"
 	zsk, _ := genTestKey(childZone, dns.ZONE) // ZSK, no SEP flag
 	ksk, _ := genTestKey(childZone, dns.SEP|dns.ZONE)
@@ -166,7 +169,7 @@ func TestVerifyDelegationDS_SkipsNonSEP(t *testing.T) {
 // ── SelfVerifyDNSKEY ─────────────────────────────────────────────────────────
 
 func TestSelfVerifyDNSKEY_Valid(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	zone := "example.net"
 	ksk, kskPriv := genTestKey(zone, dns.SEP|dns.ZONE)
 	zsk, _ := genTestKey(zone, dns.ZONE)
@@ -184,7 +187,7 @@ func TestSelfVerifyDNSKEY_Valid(t *testing.T) {
 }
 
 func TestSelfVerifyDNSKEY_ForeignSignature(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	zone := "example.net"
 	ksk, _ := genTestKey(zone, dns.SEP|dns.ZONE)
 	zsk, _ := genTestKey(zone, dns.ZONE)
@@ -204,7 +207,7 @@ func TestSelfVerifyDNSKEY_ForeignSignature(t *testing.T) {
 }
 
 func TestSelfVerifyDNSKEY_NoSEPKey(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	zone := "example.net"
 	zsk, zskPriv := genTestKey(zone, dns.ZONE) // ZSK only, no KSK
 
@@ -224,7 +227,7 @@ func TestSelfVerifyDNSKEY_NoSEPKey(t *testing.T) {
 // ── ValidateResponse (end-to-end answer validation) ──────────────────────────
 
 func TestValidateResponse_SignedAnswer(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	zone := "signed.example.com"
 	ksk, _ := genTestKey(zone, dns.SEP|dns.ZONE)
 	zsk, zskPriv := genTestKey(zone, dns.ZONE)
@@ -251,7 +254,7 @@ func TestValidateResponse_SignedAnswer(t *testing.T) {
 }
 
 func TestValidateResponse_UnsignedAnswer(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	zone := "unsigned.example.com"
 	_, _ = genTestKey(zone, dns.SEP|dns.ZONE)
 	zsk, _ := genTestKey(zone, dns.ZONE)
@@ -272,7 +275,7 @@ func TestValidateResponse_UnsignedAnswer(t *testing.T) {
 }
 
 func TestValidateResponse_NoDNSKEYs(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	response := &dns.Msg{
 		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess},
 		Answer: []dns.RR{aRec("test.example.com", "192.0.2.1")},
@@ -302,7 +305,7 @@ func TestFindNSEC3(t *testing.T) {
 }
 
 func TestValidateResponse_NXDOMAIN(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	zone := "signed.example.com"
 	_, _ = genTestKey(zone, dns.SEP|dns.ZONE)
 	zsk, zskPriv := genTestKey(zone, dns.ZONE)
@@ -336,8 +339,12 @@ func TestValidateResponse_NXDOMAIN(t *testing.T) {
 
 // ── Full chain: DS → DNSKEY → answer ────────────────────────────────────────
 
+func testCache() cache.Store {
+	return cache.New(config.CacheSettings{MemPercent: 1})
+}
+
 func TestFullDNSSECChain(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(testCache())
 	childZone := "child.example.net"
 
 	// Parent has KSK, creates DS for child
@@ -382,7 +389,7 @@ func TestFullDNSSECChain(t *testing.T) {
 // ── Edge cases ────────────────────────────────────────────────────────────────
 
 func TestDNSSEC_BogusDelegation(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	childZone := "bogus.example.com"
 
 	// Parent creates DS from one KSK
@@ -405,7 +412,7 @@ func TestDNSSEC_BogusDelegation(t *testing.T) {
 // unverifiable RRset. This prevents a valid parent-zone RRSIG from masking a broken
 // or foreign child-zone RRSIG.
 func TestValidateResponse_MixedRRsetWithForeignRRSIG(t *testing.T) {
-	cv := NewCryptoValidator()
+	cv := NewCryptoValidator(nil)
 	parentZone := "parent.example.com"
 	childZone := "child.parent.example.com"
 

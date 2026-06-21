@@ -4,11 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/miekg/dns"
 
+	"zjdns/cache"
 	"zjdns/internal/log"
 )
 
@@ -33,19 +33,10 @@ var (
 // CryptoValidator performs cryptographic DNSSEC validation using the
 // miekg/dns RRSIG.Verify() and DNSKEY.ToDS() primitives. It is always active;
 // the dnssec_enforce config option controls error behavior, not whether
-// validation runs. Call Stop() when the validator is no longer needed to
-// terminate the background key cache sweeper goroutine.
+// validation runs.
 type CryptoValidator struct {
-	rootKeys     []*dns.DNSKEY
-	zoneKeyCache map[string]*zoneKeyEntry
-	mu           sync.RWMutex
-	stopCh       chan struct{}
-}
-
-type zoneKeyEntry struct {
-	keys     []*dns.DNSKEY
-	verified bool
-	expires  time.Time
+	rootKeys []*dns.DNSKEY
+	cache    cache.Store
 }
 
 type rrsetKey struct {
@@ -53,49 +44,23 @@ type rrsetKey struct {
 	rrtype uint16
 }
 
+const dnsKeyCachePrefix = "dnskey:"
+const dnsKeyCacheTTL = 3600 // 1 hour
+
+func dnsKeyCacheKey(zone string) string {
+	return dnsKeyCachePrefix + zone
+}
+
 // NewCryptoValidator creates a CryptoValidator with the IANA root trust
-// anchors embedded. DNSSEC validation is always active.
-func NewCryptoValidator() *CryptoValidator {
+// anchors embedded. DNSSEC validation is always active. The cache store is
+// used to persist verified zone DNSKEYs, sharing the same memory budget and
+// eviction policy as DNS record cache entries.
+func NewCryptoValidator(c cache.Store) *CryptoValidator {
 	cv := &CryptoValidator{
-		zoneKeyCache: make(map[string]*zoneKeyEntry),
-		stopCh:       make(chan struct{}),
+		cache: c,
 	}
 	cv.loadRootTrustAnchors()
-	go cv.sweepExpiredKeys()
 	return cv
-}
-
-// sweepExpiredKeys periodically purges expired DNSKEY cache entries to prevent
-// unbounded memory growth under sustained queries to many unique zones.
-func (cv *CryptoValidator) sweepExpiredKeys() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			cv.mu.Lock()
-			for zone, entry := range cv.zoneKeyCache {
-				if entry != nil && time.Now().After(entry.expires) {
-					delete(cv.zoneKeyCache, zone)
-				}
-			}
-			cv.mu.Unlock()
-		case <-cv.stopCh:
-			return
-		}
-	}
-}
-
-// Stop terminates the background key cache sweeper.
-func (cv *CryptoValidator) Stop() {
-	if cv == nil || cv.stopCh == nil {
-		return
-	}
-	select {
-	case <-cv.stopCh:
-	default:
-		close(cv.stopCh)
-	}
 }
 
 func (cv *CryptoValidator) loadRootTrustAnchors() {
@@ -608,93 +573,54 @@ func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {
 	return groups
 }
 
-// zoneKeyCacheMax is the maximum number of zone key cache entries. When
-// exceeded, expired entries are purged and the oldest non-expired entry is
-// evicted to cap memory growth under an attacker flooding many unique zones.
-const zoneKeyCacheMax = 25000
-
-// ZoneKeyCache operations
-
-// CacheZoneKeys stores verified DNSKEYs for a zone. Keys are deep-copied to
-// avoid pinning pooled message backing arrays. Oldest entries are lazily
-// evicted by GetZoneKeys; a background sweep runs periodically.
+// CacheZoneKeys stores verified DNSKEYs for a zone in the unified cache.
+// Keys are stored as CompactRecords in the Answer section of a CacheEntry
+// so they share the same memory budget, eviction policy, and persistence
+// as DNS response records.
 func (cv *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
-	if cv == nil || len(keys) == 0 {
+	if cv == nil || cv.cache == nil || len(keys) == 0 {
 		return
 	}
-	// Deep-copy to avoid holding pointers into pooled dns.Msg backing arrays
-	copied := make([]*dns.DNSKEY, len(keys))
-	for i, k := range keys {
-		if k != nil {
-			copied[i] = dns.Copy(k).(*dns.DNSKEY)
-		}
-	}
 	zone = strings.ToLower(strings.TrimSuffix(zone, "."))
-	cv.mu.Lock()
-	cv.zoneKeyCache[zone] = &zoneKeyEntry{
-		keys:     copied,
-		verified: true,
-		expires:  time.Now().Add(1 * time.Hour),
+
+	now := time.Now().Unix()
+	entry := &cache.CacheEntry{
+		Timestamp:   now,
+		AccessTime:  now,
+		TTL:         dnsKeyCacheTTL,
+		OriginalTTL: dnsKeyCacheTTL,
+		Validated:   true,
+		Answer:      make([]*cache.CompactRecord, 0, len(keys)),
 	}
-	if len(cv.zoneKeyCache) > zoneKeyCacheMax {
-		// Purge expired entries first.
-		for z, e := range cv.zoneKeyCache {
-			if e != nil && time.Now().After(e.expires) {
-				delete(cv.zoneKeyCache, z)
-			}
-		}
-		// If still over the cap, evict the single oldest non-expired entry.
-		if len(cv.zoneKeyCache) > zoneKeyCacheMax {
-			var oldest string
-			var oldestExpiry time.Time
-			for z, e := range cv.zoneKeyCache {
-				if e != nil && (oldest == "" || e.expires.Before(oldestExpiry)) {
-					oldest = z
-					oldestExpiry = e.expires
-				}
-			}
-			if oldest != "" {
-				delete(cv.zoneKeyCache, oldest)
-			}
+	for _, k := range keys {
+		if k != nil {
+			entry.Answer = append(entry.Answer, &cache.CompactRecord{
+				Text:    k.String(),
+				OrigTTL: k.Header().Ttl,
+				Type:    dns.TypeDNSKEY,
+			})
 		}
 	}
-	cv.mu.Unlock()
+	cv.cache.SetEntry(dnsKeyCacheKey(zone), entry)
 }
 
-// GetZoneKeys retrieves cached verified DNSKEYs for a zone. Expired entries
-// are lazily evicted to prevent unbounded memory growth.
-//
-// Uses a dual-lock pattern: RLock for the fast path (valid cache hit),
-// escalate to write lock only for expiry. Re-reads inside the write-locked
-// section to avoid a TOCTOU race where CacheZoneKeys replaces an expired
-// entry between the read-lock release and write-lock acquisition.
+// GetZoneKeys retrieves cached verified DNSKEYs for a zone from the unified
+// cache. Returns nil when the zone is not cached or the entry has expired.
 func (cv *CryptoValidator) GetZoneKeys(zone string) []*dns.DNSKEY {
-	if cv == nil {
+	if cv == nil || cv.cache == nil {
 		return nil
 	}
 	zone = strings.ToLower(strings.TrimSuffix(zone, "."))
 
-	cv.mu.RLock()
-	entry, ok := cv.zoneKeyCache[zone]
-	if ok && entry != nil && !time.Now().After(entry.expires) {
-		cv.mu.RUnlock()
-		return entry.keys
+	cachedEntry, found, expired := cv.cache.Get(dnsKeyCacheKey(zone))
+	if !found || cachedEntry == nil || expired {
+		return nil
 	}
-	cv.mu.RUnlock()
 
-	cv.mu.Lock()
-	entry, ok = cv.zoneKeyCache[zone]
-	if !ok || entry == nil {
-		cv.mu.Unlock()
-		return nil
-	}
-	if time.Now().After(entry.expires) {
-		delete(cv.zoneKeyCache, zone)
-		cv.mu.Unlock()
-		return nil
-	}
-	cv.mu.Unlock()
-	return entry.keys
+	// Expand CompactRecords back to dns.RR, then filter for DNSKEYs.
+	// includeDNSSEC must be true — otherwise processRR strips RRSIG/NSEC/NSEC3/DNSKEY/DS.
+	records := cache.ExpandAndProcessRecords(cachedEntry.Answer, 0, false, true)
+	return FindDNSKEYs(records)
 }
 
 // GetRootKeys returns the root trust anchor DNSKEYs.

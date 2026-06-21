@@ -94,8 +94,7 @@ func benchGenKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 
 func BenchmarkCryptoValidator_VerifyRRset(b *testing.B) {
 	disableLogging()
-	cv := security.NewCryptoValidator()
-	defer cv.Stop()
+	cv := security.NewCryptoValidator(nil)
 	zone := "bench.example.com"
 	ksk, priv := benchGenKey(zone, dns.SEP|dns.ZONE)
 	a := &dns.A{Hdr: dns.RR_Header{Name: dns.Fqdn(zone), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.IPv4(192, 0, 2, 1)}
@@ -116,8 +115,7 @@ func BenchmarkCryptoValidator_VerifyRRset(b *testing.B) {
 
 func BenchmarkCryptoValidator_VerifyDelegationDS(b *testing.B) {
 	disableLogging()
-	cv := security.NewCryptoValidator()
-	defer cv.Stop()
+	cv := security.NewCryptoValidator(nil)
 	childZone := "child.bench.example.com"
 	ksk, _ := benchGenKey(childZone, dns.SEP|dns.ZONE)
 	ds := ksk.ToDS(dns.SHA256)

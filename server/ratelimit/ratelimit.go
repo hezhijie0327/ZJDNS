@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	defaultRate  = 1000
-	cleanupEvery = 5 * time.Minute
-	numShards    = 64
+	defaultRate    = 1000
+	cleanupEvery   = 5 * time.Minute
+	numShards      = 64
+	maxIPsPerShard = 1600 // ~100K total across all shards, ~8 MB worst-case
 )
 
 // Limiter implements a sharded token bucket rate limiter keyed by client IP
@@ -74,6 +75,21 @@ func (l *Limiter) Allow(ip net.IP) bool {
 	s.mu.Lock()
 	b, ok := s.clients[key]
 	if !ok {
+		// Enforce per-shard IP cap to bound memory under flood attacks.
+		// Evict the least recently seen entry when the shard is full.
+		if len(s.clients) >= maxIPsPerShard {
+			var oldestKey [16]byte
+			var oldestSeen time.Time
+			first := true
+			for k2, b2 := range s.clients {
+				if first || b2.lastSeen.Before(oldestSeen) {
+					oldestKey = k2
+					oldestSeen = b2.lastSeen
+					first = false
+				}
+			}
+			delete(s.clients, oldestKey)
+		}
 		b = &bucket{tokens: float64(l.burst)}
 		s.clients[key] = b
 	}
