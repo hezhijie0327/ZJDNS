@@ -54,10 +54,11 @@ func (r *Recursive) DNSSECEDECode() uint16 {
 // resolution. At each delegation level, verified parent DNSKEYs and child DS
 // records are used to authenticate the child zone's DNSKEYs.
 type dnssecChain struct {
-	parentDNSKEYs []*dns.DNSKEY
-	childDS       []*dns.DS
-	zoneDNSKEYs   []*dns.DNSKEY
-	lastEDECode   uint16 // EDE code for the most recent validation failure
+	parentDNSKEYs   []*dns.DNSKEY
+	childDS         []*dns.DS
+	zoneDNSKEYs     []*dns.DNSKEY
+	lastEDECode     uint16 // EDE code for the most recent validation failure
+	zoneCutDetected bool   // set when answer RRSIGs are signed by a child zone's keys
 }
 
 func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edns.ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
@@ -133,28 +134,84 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 		cryptoValidated := rr.validateWithDNSSEC(response, currentDomain, chain)
 		ecsResponse := rr.resolver.edns.ParseFromDNS(response)
 
+		validated := cryptoValidated
+
 		if len(response.Answer) > 0 {
-			validated := rr.finalizeDNSSEC(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain)
-			// When DNSSEC crypto is enabled and the zone has DS records in the
-			// parent, a crypto verification failure means the answer is bogus.
-			// Return SERVFAIL to match RFC 4035 behavior (e.g. dnssec-failed.org).
-			if rr.resolver.DNSSECEnforce && len(chain.childDS) > 0 && !validated {
-				log.Debugf("SECURITY: DNSSEC validation failed for %s — zone has DS but DNSKEY/RRSIG verification failed", question.Name)
-				rr.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
+			validated = rr.finalizeDNSSEC(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain)
+
+			// If the answer RRSIGs are signed by a child zone's keys
+			// (zone cut), process the response as a referral instead of
+			// returning it as the final answer. This handles cases where
+			// an authoritative server returns an answer directly from a
+			// delegated subdomain instead of issuing a referral.
+			if !validated && chain.zoneCutDetected {
+				log.Debugf("SECURITY: zone cut — resolving DNSSEC chain for child zone of %s", question.Name)
+				chain.zoneCutDetected = false
+				// Build the DNSSEC chain for the child zone directly by querying
+				// for DS and DNSKEY records, then validate the original answer
+				// against the child zone's verified keys. This avoids relying on
+				// the delegation-following path which requires NS+DS records in
+				// specific response sections that may not be present.
+				if cutValidated, cutErr := rr.resolveZoneCut(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain); cutErr == nil {
+					validated = cutValidated
+					if rr.resolver.DNSSECEnforce && len(chain.childDS) > 0 && !validated {
+						log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
+						rr.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
+						pool.DefaultMessagePool.Put(response)
+						return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
+							fmt.Errorf("DNSSEC validation failed: bogus zone cut delegation for %s", question.Name)
+					}
+				} else {
+					log.Debugf("SECURITY: zone cut resolution failed for %s: %v", question.Name, cutErr)
+					validated = false
+				}
+				answer, authority, additional := response.Answer, response.Ns, response.Extra
 				pool.DefaultMessagePool.Put(response)
-				return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
-					fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name)
+				return answer, authority, additional, validated, ecsResponse, config.RecursiveIndicator, false, nil
+			} else {
+				// When DNSSEC crypto is enabled and the zone has DS records in the
+				// parent, a crypto verification failure means the answer is bogus.
+				// Return SERVFAIL to match RFC 4035 behavior (e.g. dnssec-failed.org).
+				if rr.resolver.DNSSECEnforce && len(chain.childDS) > 0 && !validated {
+					log.Debugf("SECURITY: DNSSEC validation failed for %s — zone has DS but DNSKEY/RRSIG verification failed", question.Name)
+					rr.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
+					pool.DefaultMessagePool.Put(response)
+					return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
+						fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name)
+				}
+				answer, authority, additional := response.Answer, response.Ns, response.Extra
+				pool.DefaultMessagePool.Put(response)
+				return answer, authority, additional, validated, ecsResponse, config.RecursiveIndicator, false, nil
 			}
-			answer, authority, additional := response.Answer, response.Ns, response.Extra
-			pool.DefaultMessagePool.Put(response)
-			return answer, authority, additional, validated, ecsResponse, config.RecursiveIndicator, false, nil
 		}
 
-		validated := cryptoValidated
+		// For NODATA/NXDOMAIN responses (no answer section), cryptographically
+		// verify NSEC/NSEC3 records against the zone's verified DNSKEYs to
+		// enable the AuthenticatedData flag when denial-of-existence is proven
+		// (RFC 4035 §3.1.3). Genuine DNSSEC failures (bad RRSIGs on answer
+		// records) are caught by the answer-path SERVFAIL check above.
+		if len(response.Answer) == 0 {
+			if len(chain.zoneDNSKEYs) == 0 {
+				rr.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
+			}
+			if len(chain.zoneDNSKEYs) > 0 {
+				if nsecValidated, _ := rr.resolver.validator.Crypto.ValidateResponse(response, currentDomain, chain.zoneDNSKEYs); nsecValidated {
+					validated = true
+				}
+			}
+		}
+
+		// Collect NS records from both Authority and Answer sections.
+		// NS records appear in the Answer section when the queried
+		// server is authoritative for the delegated zone (common when
+		// the same server hosts both parent and child zones).
+		var allRRSections []dns.RR
+		allRRSections = append(allRRSections, response.Ns...)
+		allRRSections = append(allRRSections, response.Answer...)
 
 		bestMatch := ""
 		var bestNSRecords []*dns.NS
-		for _, rrec := range response.Ns {
+		for _, rrec := range allRRSections {
 			if ns, ok := rrec.(*dns.NS); ok {
 				nsName := dnsutil.NormalizeDomain(rrec.Header().Name)
 				isMatch := normalizedQname == nsName ||
@@ -178,6 +235,21 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 
 		currentDomainNormalized := dnsutil.NormalizeDomain(currentDomain)
 		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
+			// When the response has no answer and the NS records point
+			// back to the same zone, verify this is actually an
+			// authoritative response (AA flag). A non-authoritative
+			// response with matching NS records indicates a lame
+			// delegation — the server is not actually authoritative
+			// for this zone and we should return SERVFAIL rather than
+			// silently accepting the response (Cloudflare/Google both
+			// return SERVFAIL for these cases).
+			if len(response.Answer) == 0 && !response.Authoritative {
+				log.Debugf("RECURSION: lame delegation detected for %s — NS records point to same zone but response is not authoritative", currentDomain)
+				pool.DefaultMessagePool.Put(response)
+				rr.lastDNSSECEDECode.Store(uint64(edns.EDECodeNoReachableAuthority))
+				return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
+					fmt.Errorf("lame delegation: no reachable authority for %s", currentDomain)
+			}
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessagePool.Put(response)
 			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
@@ -310,7 +382,11 @@ func (rr *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, c
 	// cryptographically signed by the parent zone's DNSKEY. Without this
 	// verification, an on-path attacker can inject forged DS records and
 	// completely bypass the DNSSEC chain of trust.
+	// Look for DS records in both Authority and Answer sections.
+	// When the same server hosts both parent and child zones, DS
+	// records may appear in the Answer section instead of Authority.
 	dsRecords := security.FindDS(response.Ns)
+	dsRecords = append(dsRecords, security.FindDS(response.Answer)...)
 	if len(dsRecords) > 0 {
 		// Ensure we have verified DNSKEYs for the current (parent) zone.
 		// Delegation responses don't carry DNSKEY records — query explicitly.
@@ -429,7 +505,9 @@ func (rr *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string
 		return nil
 	}
 
-	allSigs := security.CollectRRSIGs(response.Ns, response.Extra)
+	// Collect RRSIGs from all sections — DS RRSIGs may appear in
+	// Answer section when the server is authoritative for the child zone.
+	allSigs := security.CollectRRSIGs(response.Ns, response.Extra, response.Answer)
 	dsRRSIGs := security.FindRRSIGs(allSigs, dns.Fqdn(childZone), dns.TypeDS)
 	if len(dsRRSIGs) == 0 {
 		log.Debugf("SECURITY: no RRSIG found for DS records of %s", childZone)
@@ -474,6 +552,15 @@ func (rr *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, name
 		if err != nil {
 			log.Debugf("SECURITY: answer RRSIG verification failed for %s: %v", question.Name, err)
 			chain.lastEDECode = edns.EDECodeDNSSECBogus
+			// Before treating as bogus, check if the RRSIG signer is from a
+			// different zone (zone cut). If so, the answer was signed by child
+			// zone keys and we need to follow the delegation instead of
+			// returning SERVFAIL.
+			if rr.isZoneCut(response, currentDomain) {
+				log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
+				chain.zoneCutDetected = true
+			}
+			// Return false regardless — zone cut is signaled via zoneCutDetected flag
 			return false
 		}
 		if !validated {
@@ -544,11 +631,173 @@ func (rr *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, name
 	if err != nil {
 		log.Debugf("SECURITY: answer RRSIG verification failed for %s: %v", question.Name, err)
 		chain.lastEDECode = edns.EDECodeDNSSECBogus
-	}
-	if !validated {
+		// Check for zone cut: RRSIG signer from child zone, not current zone.
+		if rr.isZoneCut(response, currentDomain) {
+			log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
+			chain.zoneCutDetected = true
+			return false
+		}
+	} else if !validated {
 		chain.lastEDECode = edns.EDECodeRRSIGsMissing
 	}
 	return validated
+}
+
+// getZoneCutSigner returns the zone name of the first RRSIG in the answer
+// section whose signer name is a proper subdomain of currentDomain. This
+// identifies the actual child zone that signed the answer when a zone cut
+// is detected.
+func (rr *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) string {
+	if response == nil || len(response.Answer) == 0 {
+		return ""
+	}
+
+	normalizedCurrent := dnsutil.NormalizeDomain(currentDomain)
+	if normalizedCurrent == "" {
+		return ""
+	}
+
+	rrsigs := security.CollectRRSIGs(response.Answer, response.Extra)
+	for _, rrsig := range rrsigs {
+		if rrsig == nil {
+			continue
+		}
+		signerName := dnsutil.NormalizeDomain(rrsig.SignerName)
+		if signerName != normalizedCurrent &&
+			strings.HasSuffix(signerName, "."+normalizedCurrent) {
+			return signerName
+		}
+	}
+
+	return ""
+}
+
+// resolveZoneCut builds the DNSSEC chain of trust for a delegated child zone
+// when the authoritative server returns an answer signed by the child zone's
+// keys instead of issuing a referral. It queries for the child zone's DS and
+// DNSKEY records, verifies them against the parent's trusted keys, and
+// validates the original answer against the child zone's verified DNSKEYs.
+//
+// Returns (validated, error). On success, validated indicates whether the
+// answer passed DNSSEC verification. On error, the zone cut could not be
+// resolved (e.g. DS/DNSKEY queries failed) and the answer should be returned
+// without DNSSEC validation.
+func (rr *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, nameservers []string, question dns.Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain) (bool, error) {
+	crypto := rr.resolver.validator.Crypto
+
+	// Extract the child zone name from the RRSIG signer
+	childZone := rr.getZoneCutSigner(response, currentDomain)
+	if childZone == "" {
+		return false, fmt.Errorf("could not determine child zone name from RRSIG signer")
+	}
+
+	// Ensure we have verified DNSKEYs for the parent zone
+	if len(chain.zoneDNSKEYs) == 0 {
+		rr.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
+	}
+	parentKeys := chain.zoneDNSKEYs
+	if len(parentKeys) == 0 {
+		parentKeys = chain.parentDNSKEYs
+	}
+	if len(parentKeys) == 0 {
+		return false, fmt.Errorf("no parent DNSKEYs available to verify DS for %s", childZone)
+	}
+
+	// Query for the child zone's DS records from the parent zone.
+	// These are used to verify the child zone's DNSKEYs.
+	dsQuestion := dns.Question{Name: dns.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
+	dsResp, dsErr := rr.queryNameserversConcurrent(ctx, nameservers, dsQuestion, ecs, forceTCP)
+	if dsErr != nil {
+		return false, fmt.Errorf("DS query for %s failed: %w", childZone, dsErr)
+	}
+	defer pool.DefaultMessagePool.Put(dsResp)
+
+	dsRecords := security.FindDS(dsResp.Answer)
+	dsRecords = append(dsRecords, security.FindDS(dsResp.Ns)...)
+	if len(dsRecords) == 0 {
+		return false, fmt.Errorf("no DS records found for %s", childZone)
+	}
+
+	// Verify DS RRSIGs against the parent zone's DNSKEYs
+	allSigs := security.CollectRRSIGs(dsResp.Answer, dsResp.Ns, dsResp.Extra)
+	dsRRSIGs := security.FindRRSIGs(allSigs, dns.Fqdn(childZone), dns.TypeDS)
+	if len(dsRRSIGs) == 0 {
+		return false, fmt.Errorf("no RRSIG for DS records of %s", childZone)
+	}
+
+	rrset := make([]dns.RR, len(dsRecords))
+	for i, ds := range dsRecords {
+		rrset[i] = ds
+	}
+
+	var verifiedDS []*dns.DS
+	for _, rrsig := range dsRRSIGs {
+		for _, key := range parentKeys {
+			if key.KeyTag() != rrsig.KeyTag {
+				continue
+			}
+			if err := crypto.VerifyRRset(rrset, rrsig, key); err == nil {
+				verifiedDS = dsRecords
+				log.Debugf("SECURITY: zone cut — verified DS for %s (key_tag=%d)", childZone, key.KeyTag())
+				break
+			}
+		}
+		if len(verifiedDS) > 0 {
+			break
+		}
+	}
+	if len(verifiedDS) == 0 {
+		return false, fmt.Errorf("DS RRSIG verification failed for %s", childZone)
+	}
+
+	// Query for the child zone's DNSKEY records
+	dnskeyQuestion := dns.Question{Name: dns.Fqdn(childZone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
+	dnskeyResp, dnskeyErr := rr.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP)
+	if dnskeyErr != nil {
+		return false, fmt.Errorf("DNSKEY query for %s failed: %w", childZone, dnskeyErr)
+	}
+	defer pool.DefaultMessagePool.Put(dnskeyResp)
+
+	dnskeyRecords := security.FindDNSKEYs(dnskeyResp.Answer)
+	if len(dnskeyRecords) == 0 {
+		return false, fmt.Errorf("no DNSKEY records found for %s", childZone)
+	}
+
+	// Verify child DNSKEYs against the verified DS records
+	matchedKey, dsMatchErr := crypto.VerifyDelegationDS(verifiedDS, dnskeyRecords)
+	if dsMatchErr != nil {
+		log.Debugf("SECURITY: zone cut — DS→DNSKEY mismatch for %s: %v", childZone, dsMatchErr)
+		chain.lastEDECode = edns.EDECodeDNSSECBogus
+		return false, nil
+	}
+	log.Debugf("SECURITY: zone cut — verified DNSKEY for %s (key_tag=%d)", childZone, matchedKey.KeyTag())
+
+	// Cache the verified child zone DNSKEYs
+	crypto.CacheZoneKeys(childZone, dnskeyRecords)
+
+	// Validate the original answer against the child zone's DNSKEYs.
+	// Return (false, nil) on DNSSEC validation failure so the caller applies
+	// the SERVFAIL check. The EDE code is set in chain.lastEDECode.
+	validated, valErr := crypto.ValidateResponse(response, childZone, dnskeyRecords)
+	if valErr != nil {
+		log.Debugf("SECURITY: zone cut — answer RRSIG verification failed for %s: %v", question.Name, valErr)
+		chain.lastEDECode = edns.EDECodeDNSSECBogus
+		return false, nil
+	}
+	if !validated {
+		chain.lastEDECode = edns.EDECodeRRSIGsMissing
+		return false, nil
+	}
+	return true, nil
+}
+
+// isZoneCut checks whether the answer RRSIGs in the response are signed by a
+// zone different from currentDomain. This indicates the authoritative server
+// returned an answer from a delegated child zone instead of a referral, and
+// the recursive resolver should follow the delegation rather than failing
+// DNSSEC validation against the wrong zone's keys.
+func (rr *Recursive) isZoneCut(response *dns.Msg, currentDomain string) bool {
+	return rr.getZoneCutSigner(response, currentDomain) != ""
 }
 
 func (rr *Recursive) handleSuspiciousResponse(reason string, currentlyTCP bool, _ context.Context, _ dns.Question, _ *edns.ECSOption, _ int) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
