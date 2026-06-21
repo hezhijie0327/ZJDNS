@@ -8,47 +8,47 @@ import (
 )
 
 func TestNew_DefaultValues(t *testing.T) {
-	l := New(-1, -1)
+	l := New(-1)
 	defer l.Shutdown()
 	if l.rate != defaultRate {
 		t.Errorf("default rate = %d, want %d", l.rate, defaultRate)
 	}
-	if l.burst != defaultBurst {
-		t.Errorf("default burst = %d, want %d", l.burst, defaultBurst)
+	if l.burst != defaultRate*5 {
+		t.Errorf("burst = %d, want rate×5=%d", l.burst, defaultRate)
 	}
 }
 
 func TestNew_ZeroRateDisabled(t *testing.T) {
-	l := New(0, 0)
+	l := New(0)
 	if l != nil {
 		t.Error("rate=0 should return nil (disabled)")
 	}
 }
 
 func TestNew_NegativeRateUsesDefault(t *testing.T) {
-	l := New(-1, 0)
+	l := New(-1)
 	defer l.Shutdown()
 	if l.rate != defaultRate {
 		t.Errorf("negative rate should use default, got %d", l.rate)
 	}
-	if l.burst != defaultBurst {
-		t.Errorf("zero burst should use default, got %d", l.burst)
+	if l.burst != defaultRate*5 {
+		t.Errorf("burst should equal rate×5, got burst=%d, rate=%d", l.burst, l.rate)
 	}
 }
 
 func TestNew_CustomValues(t *testing.T) {
-	l := New(500, 100)
+	l := New(500)
 	defer l.Shutdown()
 	if l.rate != 500 {
 		t.Errorf("rate = %d, want 500", l.rate)
 	}
-	if l.burst != 100 {
-		t.Errorf("burst = %d, want 100", l.burst)
+	if l.burst != 2500 {
+		t.Errorf("burst = %d, want 2500 (rate×5)", l.burst)
 	}
 }
 
 func TestAllow_FirstRequestSucceeds(t *testing.T) {
-	l := New(10, 5)
+	l := New(10)
 	defer l.Shutdown()
 	if !l.Allow(net.ParseIP("192.0.2.1")) {
 		t.Error("first request should always be allowed")
@@ -56,14 +56,14 @@ func TestAllow_FirstRequestSucceeds(t *testing.T) {
 }
 
 func TestAllow_BurstExhausted(t *testing.T) {
-	l := New(10, 3)
+	l := New(10)
 	defer l.Shutdown()
 	ip := net.ParseIP("192.0.2.2")
 
-	// Consume the burst
-	for i := 0; i < 3; i++ {
+	// Consume the burst (burst = rate×5 = 50)
+	for i := 0; i < 50; i++ {
 		if !l.Allow(ip) {
-			t.Errorf("request %d should be allowed (burst=3)", i+1)
+			t.Errorf("request %d should be allowed (burst=50)", i+1)
 		}
 	}
 	// Burst exhausted
@@ -73,7 +73,7 @@ func TestAllow_BurstExhausted(t *testing.T) {
 }
 
 func TestAllow_DifferentIPsIndependent(t *testing.T) {
-	l := New(10, 1)
+	l := New(1)
 	defer l.Shutdown()
 	ip1 := net.ParseIP("192.0.2.3")
 	ip2 := net.ParseIP("198.51.100.1")
@@ -87,18 +87,19 @@ func TestAllow_DifferentIPsIndependent(t *testing.T) {
 }
 
 func TestAllow_Refill(t *testing.T) {
-	l := New(100, 2) // 100 tokens/sec
+	l := New(100) // 100 tokens/sec, burst = 500
 	defer l.Shutdown()
 	ip := net.ParseIP("192.0.2.4")
 
 	// Exhaust burst
-	l.Allow(ip)
-	l.Allow(ip)
+	for i := 0; i < 500; i++ {
+		l.Allow(ip)
+	}
 	if l.Allow(ip) {
-		t.Error("should be exhausted")
+		t.Error("should be exhausted after 500 requests")
 	}
 
-	// Wait for refill (100 tokens/sec → 0.5 tokens per 5ms)
+	// Wait for refill (100 tokens/sec → 5 tokens per 50ms)
 	time.Sleep(50 * time.Millisecond)
 	if !l.Allow(ip) {
 		t.Error("should have refilled at least 1 token after 50ms at rate=100")
@@ -106,7 +107,7 @@ func TestAllow_Refill(t *testing.T) {
 }
 
 func TestAllow_IPv6(t *testing.T) {
-	l := New(10, 5)
+	l := New(10)
 	defer l.Shutdown()
 	ip := net.ParseIP("2001:db8::1")
 	if !l.Allow(ip) {
@@ -115,13 +116,16 @@ func TestAllow_IPv6(t *testing.T) {
 }
 
 func TestAllow_IPv4MappedIPv6(t *testing.T) {
-	l := New(10, 1)
+	l := New(10)
 	defer l.Shutdown()
 	// IPv4-mapped IPv6 and plain IPv4 should share the same bucket
 	ip4 := net.ParseIP("192.0.2.5")
 	ip6 := net.ParseIP("::ffff:192.0.2.5") // same address
 
-	l.Allow(ip4) // exhaust
+	// Exhaust the bucket (burst = rate×5 = 50)
+	for i := 0; i < 50; i++ {
+		l.Allow(ip4)
+	}
 	if l.Allow(ip6) {
 		t.Error("IPv4-mapped IPv6 from same address should be rate-limited")
 	}
@@ -135,7 +139,7 @@ func TestAllow_NilLimiter(t *testing.T) {
 }
 
 func TestShutdown_NoPanic(t *testing.T) {
-	l := New(10, 5)
+	l := New(10)
 	l.Shutdown()
 	l.Shutdown() // double shutdown must not panic
 }
@@ -150,7 +154,7 @@ func TestIpToKey_IPv4(t *testing.T) {
 }
 
 func TestCleanup_RemovesExpiredClients(t *testing.T) {
-	l := New(10, 5)
+	l := New(10)
 	defer l.Shutdown()
 	ip := net.ParseIP("192.0.2.1")
 
@@ -189,7 +193,7 @@ func TestCleanup_RemovesExpiredClients(t *testing.T) {
 }
 
 func TestCleanup_RunsAutomatically(t *testing.T) {
-	l := New(10, 5)
+	l := New(10)
 	// Trigger cleanup through the channel to exercise the goroutine path
 	l.Shutdown()
 	time.Sleep(50 * time.Millisecond)
@@ -200,7 +204,7 @@ func TestCleanup_RunsAutomatically(t *testing.T) {
 }
 
 func TestShutdown_StopsCleanup(t *testing.T) {
-	l := New(10, 5)
+	l := New(10)
 	l.Shutdown()
 	// Verify done channel is closed
 	select {
@@ -228,7 +232,7 @@ func TestHashIPKey_Distribution(t *testing.T) {
 }
 
 func BenchmarkAllow_SameIP(b *testing.B) {
-	l := New(100000, 50000)
+	l := New(100000)
 	defer l.Shutdown()
 	ip := net.ParseIP("192.0.2.1")
 	b.ResetTimer()
@@ -238,7 +242,7 @@ func BenchmarkAllow_SameIP(b *testing.B) {
 }
 
 func BenchmarkAllow_ManyIPs(b *testing.B) {
-	l := New(100000, 50000)
+	l := New(100000)
 	defer l.Shutdown()
 	ips := make([]net.IP, 1024)
 	for i := range ips {
@@ -254,7 +258,7 @@ func BenchmarkAllow_ManyIPs(b *testing.B) {
 }
 
 func BenchmarkAllow_ParallelSameIP(b *testing.B) {
-	l := New(1000000, 100000)
+	l := New(1000000)
 	defer l.Shutdown()
 	ip := net.ParseIP("192.0.2.1")
 	b.ResetTimer()

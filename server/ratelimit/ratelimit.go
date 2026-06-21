@@ -13,7 +13,6 @@ import (
 
 const (
 	defaultRate  = 1000
-	defaultBurst = 2000
 	cleanupEvery = 5 * time.Minute
 	numShards    = 64
 )
@@ -38,22 +37,20 @@ type bucket struct {
 	lastSeen time.Time
 }
 
-// New creates a new Limiter with the specified rate (tokens per second) and
-// burst size. Returns nil when rate is 0, which disables rate limiting.
-// Negative values fall back to defaults.
-func New(rate, burst int) *Limiter {
+// New creates a new Limiter with the specified rate (tokens per second).
+// The burst size defaults to 5× the rate (5 seconds' worth of tokens).
+// Returns nil when rate is 0, which disables rate limiting.
+// Negative values fall back to the default rate.
+func New(rate int) *Limiter {
 	if rate == 0 {
 		return nil
 	}
 	if rate < 0 {
 		rate = defaultRate
 	}
-	if burst <= 0 {
-		burst = defaultBurst
-	}
 	l := &Limiter{
 		rate:  rate,
-		burst: burst,
+		burst: rate * 5,
 		done:  make(chan struct{}),
 	}
 	for i := range l.shards {

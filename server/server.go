@@ -135,7 +135,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cidrMgr:           cidrFilter,
 		statsMgr:          stats.New(cfg, cache),
 		cacheMgr:          cache,
-		limiter:           ratelimit.New(cfg.Server.RateLimit, cfg.Server.RateBurst),
+		limiter:           ratelimit.New(cfg.Server.RateLimit),
 		ctx:               ctx,
 		cancel:            cancel,
 		shutdown:          make(chan struct{}),

@@ -30,7 +30,7 @@ const (
 
 	DefaultCacheSize            = 4 * 1024 * 1024
 	DefaultCachePersistInterval = 30 * time.Second
-	DefaultTTL                  = 10
+	DefaultTTL                  = 30
 
 	DefaultLatencyProbeTimeout = 100 * time.Millisecond
 	DefaultStatsPersistTTL     = 86400
@@ -66,7 +66,6 @@ type ServerSettings struct {
 
 	MaxConcurrent int `json:"max_concurrent,omitempty"`
 	RateLimit     int `json:"rate_limit,omitempty"`
-	RateBurst     int `json:"rate_burst,omitempty"`
 }
 
 // TLSSettings configures TLS listener ports, certificates, and HTTPS settings.
@@ -398,9 +397,6 @@ func validateCacheAndStats(cfg *ServerConfig) error {
 	}
 	if cfg.Server.RateLimit < 0 {
 		return fmt.Errorf("server.rate_limit must be zero or positive")
-	}
-	if cfg.Server.RateBurst < 0 {
-		return fmt.Errorf("server.rate_burst must be zero or positive")
 	}
 	return nil
 }
