@@ -481,8 +481,5 @@ func minTTL(answer, authority, additional []dns.RR) int {
 	if minT <= 0 {
 		return config.DefaultTTL
 	}
-	if minT > config.DefaultMaxTTL {
-		minT = config.DefaultMaxTTL
-	}
 	return minT
 }

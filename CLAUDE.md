@@ -165,7 +165,6 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 |----------|---------|-------|
 | `config.IdleTimeout` | config | 4s |
 | `config.DefaultTTL` | config | 10 |
-| `config.DefaultMaxTTL` | config | 86400 |
 | `config.DefaultCacheSize` | config | 16384 |
 | `config.MaxDomainLength` | config | 253 |
 | `config.RecursiveIndicator` | config | "builtin_recursive" |
@@ -214,8 +213,8 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 - **Cache persistence**: Full DNS records persisted as gob-encoded blobs (`.RR`
   interface fields zeroed before encoding to avoid type-registration errors);
   metadata (timestamps, ECS) kept in memory for fast expiry checks.
-- **Cache TTL bounds**: `minTTL` enforces both minimum (10s) and maximum (86400s)
-  TTL to prevent cache-poisoned entries with extreme TTLs from persisting forever.
+- **Cache TTL floor**: `minTTL` enforces a minimum TTL of 10s (`DefaultTTL`) to
+  ensure cached entries have a useful lifetime; no upper bound is enforced.
 - **Cache Get path**: Returns entry pointer directly (no deep-copy) — `expand()`
   is non-mutating (parses from `.Text` on every call), so concurrent readers
   sharing CompactRecords cannot race. Deep-copy reserved for write path only.
