@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -83,6 +84,7 @@ type Server struct {
 	h3Server      *http3.Server
 	httpsListener net.Listener
 	h3Listener    *quic.EarlyListener
+	doqIPCounts   sync.Map // IP string → *atomic.Int32, per-IP DoQ connection limit
 }
 
 func generateSelfSignedCert(domain string) (cryptotls.Certificate, error) {
