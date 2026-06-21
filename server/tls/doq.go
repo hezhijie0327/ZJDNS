@@ -35,7 +35,7 @@ func (s *Server) startDOQServer() error {
 	s.doqTransport = &quic.Transport{Conn: s.doqConn}
 
 	quicTLSConfig := s.tlsConfig.Clone()
-	quicTLSConfig.NextProtos = NextProtoDoQ
+	quicTLSConfig.NextProtos = config.NextProtoDoQ
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        config.IdleTimeout,
@@ -155,7 +155,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	msgLen := binary.BigEndian.Uint16(buf[:2])
-	if msgLen == 0 {
+	if msgLen == 0 || msgLen > pool.SecureBufferSize-2 {
 		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid length")
 		return
 	}

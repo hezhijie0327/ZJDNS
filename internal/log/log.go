@@ -169,7 +169,7 @@ func sanitizeLogMessage(msg string) string {
 	b := make([]byte, 0, len(msg))
 	for i := 0; i < len(msg); i++ {
 		c := msg[i]
-		if c == 0x0a || c == 0x0d || c == 0x09 || (c < 32 && c != 0) {
+		if c == 0x0a || c == 0x0d || c == 0x09 || c == 0x7f || (c < 32 && c != 0) {
 			b = append(b, ' ')
 		} else {
 			b = append(b, c)

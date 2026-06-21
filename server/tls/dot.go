@@ -12,6 +12,7 @@ import (
 
 	"github.com/miekg/dns"
 
+	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -25,7 +26,7 @@ func (s *Server) startDOTServer() error {
 	}
 
 	dotTLSConfig := s.tlsConfig.Clone()
-	dotTLSConfig.NextProtos = NextProtoDOT
+	dotTLSConfig.NextProtos = config.NextProtoDOT
 
 	s.dotListener = cryptotls.NewListener(listener, dotTLSConfig)
 	log.Infof("TLS: DoT server started on port %s", s.cfg.Port)

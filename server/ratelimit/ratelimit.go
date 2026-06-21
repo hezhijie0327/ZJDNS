@@ -118,10 +118,14 @@ func (l *Limiter) Shutdown() {
 
 func ipToKey(ip net.IP) [16]byte {
 	var key [16]byte
-	normalized := ip.To16()
-	if len(normalized) == 16 {
-		copy(key[:], normalized)
+	// Fast path for IPv4: build IPv4-mapped IPv6 inline without allocating.
+	if ip4 := ip.To4(); ip4 != nil {
+		key[10] = 0xff
+		key[11] = 0xff
+		copy(key[12:], ip4)
+		return key
 	}
+	copy(key[:], ip)
 	return key
 }
 

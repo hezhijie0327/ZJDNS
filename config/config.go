@@ -42,6 +42,14 @@ const (
 	IdleTimeout     = 4 * time.Second
 )
 
+// ALPN protocol identifiers for secure DNS transports.
+var (
+	NextProtoDOT = []string{"dot"}
+	NextProtoDoH = []string{"h2"}
+	NextProtoDoQ = []string{"doq"}
+	NextProtoDoH3 = []string{"h3"}
+)
+
 // ProjectName is the application name, set at build time.
 var ProjectName = "ZJDNS"
 
@@ -439,6 +447,12 @@ func validateTLSCertConfig(cfg *ServerConfig) error {
 	}
 	if !dnsutil.IsValidFilePath(cfg.Server.TLS.KeyFile) {
 		return fmt.Errorf("config: key file not found: %s", cfg.Server.TLS.KeyFile)
+	}
+	if info, err := os.Stat(cfg.Server.TLS.KeyFile); err == nil {
+		if info.Mode().Perm()&0077 != 0 {
+			log.Warnf("CONFIG: TLS key file has insecure permissions (%04o). Consider 'chmod 600 %s'",
+				info.Mode().Perm(), cfg.Server.TLS.KeyFile)
+		}
 	}
 	if _, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile); err != nil {
 		return fmt.Errorf("config: load certificate: %w", err)

@@ -31,7 +31,7 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 
 	dialQUIC := func(dialCtx context.Context, addr string) (*quic.Conn, error) {
 		dialTLS := tlsConfig.Clone()
-		dialTLS.NextProtos = NextProtoDoQ
+		dialTLS.NextProtos = config.NextProtoDoQ
 		timeoutCtx, cancel := context.WithTimeout(dialCtx, connpool.DefaultTimeout)
 		defer cancel()
 		return quic.DialAddr(timeoutCtx, addr, dialTLS, quicCfg)

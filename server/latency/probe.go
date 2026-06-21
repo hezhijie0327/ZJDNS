@@ -24,7 +24,6 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
-	servertls "zjdns/server/tls"
 )
 
 // maxProbes is the maximum number of concurrent latency probe goroutines.
@@ -267,7 +266,7 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool) 
 	if useHTTP3 {
 		tlsConfig := &cryptotls.Config{
 			InsecureSkipVerify: true,
-			NextProtos:         servertls.NextProtoDoH3,
+			NextProtos:         config.NextProtoDoH3,
 		}
 		transport := &http3.Transport{TLSClientConfig: tlsConfig}
 		defer func() { _ = transport.Close() }()

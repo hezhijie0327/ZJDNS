@@ -26,7 +26,7 @@ func (s *Server) startDOHServer(port string) error {
 	}
 
 	tlsConfig := s.tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoDoH
+	tlsConfig.NextProtos = config.NextProtoDoH
 
 	s.httpsListener = cryptotls.NewListener(listener, tlsConfig)
 	log.Infof("TLS: DoH server started on port %s", port)
@@ -54,7 +54,7 @@ func (s *Server) startDoH3Server(port string) error {
 	addr := ":" + port
 
 	tlsConfig := s.tlsConfig.Clone()
-	tlsConfig.NextProtos = NextProtoDoH3
+	tlsConfig.NextProtos = config.NextProtoDoH3
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        config.IdleTimeout,

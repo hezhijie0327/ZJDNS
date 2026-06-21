@@ -16,7 +16,7 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	"zjdns/server/client"
+	connpool "zjdns/server/client/pool"
 	"zjdns/server/resolver"
 )
 
@@ -39,7 +39,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
 		entry := entryI.(*tcpWriteEntry)
 		entry.capacityOnce.Do(func() {
-			entry.capacity = make(chan struct{}, client.DefaultMaxPipe)
+			entry.capacity = make(chan struct{}, connpool.DefaultMaxPipe)
 		})
 
 		select {

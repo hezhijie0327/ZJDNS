@@ -194,9 +194,11 @@ func (mc *MemoryCache) Close() error {
 	if mc.persistStop != nil {
 		close(mc.persistStop)
 		if mc.persistDone != nil {
+			timer := time.NewTimer(config.IdleTimeout)
 			select {
 			case <-mc.persistDone:
-			case <-time.After(config.IdleTimeout):
+				timer.Stop()
+			case <-timer.C:
 				log.Errorf("CACHE: persist worker shutdown timeout")
 			}
 		}

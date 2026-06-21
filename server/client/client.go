@@ -27,20 +27,6 @@ import (
 // per connection.
 const MaxIncomingStreams = 256
 
-// Re-exported pool constants for backward compatibility.
-const (
-	DefaultMaxPipe   = connpool.DefaultMaxPipe
-	DefaultMaxConns  = connpool.DefaultMaxConns
-	DefaultTimeout   = connpool.DefaultTimeout
-	OperationTimeout = connpool.OperationTimeout
-)
-
-// NextProtoDoQ is the ALPN protocol identifier for DNS over QUIC.
-var NextProtoDoQ = []string{"doq"}
-
-// NextProtoDoH3 is the ALPN protocol identifier for DNS over HTTP/3.
-var NextProtoDoH3 = []string{"h3"}
-
 // Result holds the outcome of a single DNS query including response, timing,
 // and metadata.
 type Result struct {

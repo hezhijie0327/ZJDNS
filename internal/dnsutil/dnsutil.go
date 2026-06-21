@@ -8,9 +8,9 @@ import (
 	"runtime"
 	"strings"
 
-	"zjdns/internal/log"
-
 	"github.com/miekg/dns"
+
+	"zjdns/internal/log"
 )
 
 // NormalizeDomain converts a domain name to lowercase and removes the trailing
@@ -166,4 +166,17 @@ func IsValidFilePath(path string) bool {
 		return false
 	}
 	return info.Mode().IsRegular()
+}
+
+// ExtractIP returns the IP address from an A or AAAA DNS record, or nil if the
+// record is neither type.
+func ExtractIP(rr dns.RR) net.IP {
+	switch r := rr.(type) {
+	case *dns.A:
+		return r.A
+	case *dns.AAAA:
+		return r.AAAA
+	default:
+		return nil
+	}
 }

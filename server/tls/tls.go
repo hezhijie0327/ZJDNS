@@ -49,20 +49,6 @@ const (
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 )
 
-var (
-	// NextProtoDOT is the ALPN protocol identifier for DNS-over-TLS.
-	NextProtoDOT = []string{"dot"}
-
-	// NextProtoDoQ is the ALPN protocol identifier for DNS-over-QUIC.
-	NextProtoDoQ = []string{"doq"}
-
-	// NextProtoDoH3 is the ALPN protocol identifier for DNS-over-HTTP/3.
-	NextProtoDoH3 = []string{"h3"}
-
-	// NextProtoDoH is the ALPN protocol identifier for DNS-over-HTTP/2.
-	NextProtoDoH = []string{"h2"}
-)
-
 // Config holds the configuration for the TLS server including ports,
 // certificate paths, and endpoint settings.
 type Config struct {

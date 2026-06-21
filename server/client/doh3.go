@@ -49,7 +49,7 @@ func (c *Client) createDoH3Client(host, serverName string, skipVerify bool, tlsC
 	}
 
 	tlsCfg := tlsConfig.Clone()
-	tlsCfg.NextProtos = NextProtoDoH3
+	tlsCfg.NextProtos = config.NextProtoDoH3
 
 	transport := &http3.Transport{
 		TLSClientConfig: tlsCfg,
