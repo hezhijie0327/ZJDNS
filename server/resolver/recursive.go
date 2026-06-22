@@ -143,25 +143,30 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 				// specific response sections that may not be present.
 				if cutValidated, cutErr := rr.resolveZoneCut(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain); cutErr == nil {
 					validated = cutValidated
-					if rr.resolver.DNSSECEnforce && len(chain.childDS) > 0 && !validated {
-						log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
+					// Always record the DNSSEC EDE code for stats and client EDE hints,
+					// even when enforcement is off.
+					if len(chain.childDS) > 0 && !validated {
 						rr.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
-						pool.DefaultMessagePool.Put(response)
-						return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
-							fmt.Errorf("DNSSEC validation failed: bogus zone cut delegation for %s", question.Name)
+						if rr.resolver.DNSSECEnforce {
+							log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
+							pool.DefaultMessagePool.Put(response)
+							return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
+								fmt.Errorf("DNSSEC validation failed: bogus zone cut delegation for %s", question.Name)
+						}
 					}
 				} else {
 					log.Debugf("SECURITY: zone cut resolution failed for %s: %v", question.Name, cutErr)
 					// Zone cut resolution failed (e.g. no DS, DS verification
-					// failure). Treat as a DNSSEC validation failure when the
-					// zone had DS records and enforcement is on — the delegation
-					// is bogus and the response must not be served.
-					if rr.resolver.DNSSECEnforce && len(chain.childDS) > 0 {
-						log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut resolution failed with DS present", question.Name)
+					// failure). Always record the EDE code; return SERVFAIL only
+					// when enforcement is on.
+					if len(chain.childDS) > 0 {
 						rr.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
-						pool.DefaultMessagePool.Put(response)
-						return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
-							fmt.Errorf("DNSSEC validation failed: zone cut resolution error for %s: %w", question.Name, cutErr)
+						if rr.resolver.DNSSECEnforce {
+							log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut resolution failed with DS present", question.Name)
+							pool.DefaultMessagePool.Put(response)
+							return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
+								fmt.Errorf("DNSSEC validation failed: zone cut resolution error for %s: %w", question.Name, cutErr)
+						}
 					}
 					validated = false
 				}
@@ -171,13 +176,16 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 			} else {
 				// When DNSSEC crypto is enabled and the zone has DS records in the
 				// parent, a crypto verification failure means the answer is bogus.
-				// Return SERVFAIL to match RFC 4035 behavior (e.g. dnssec-failed.org).
-				if rr.resolver.DNSSECEnforce && len(chain.childDS) > 0 && !validated {
-					log.Debugf("SECURITY: DNSSEC validation failed for %s — zone has DS but DNSKEY/RRSIG verification failed", question.Name)
+				// Always record the EDE code for client hints and stats; return
+				// SERVFAIL only when enforcement is on (RFC 4035).
+				if len(chain.childDS) > 0 && !validated {
 					rr.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
-					pool.DefaultMessagePool.Put(response)
-					return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
-						fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name)
+					if rr.resolver.DNSSECEnforce {
+						log.Debugf("SECURITY: DNSSEC validation failed for %s — zone has DS but DNSKEY/RRSIG verification failed", question.Name)
+						pool.DefaultMessagePool.Put(response)
+						return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
+							fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name)
+					}
 				}
 				answer, authority, additional := response.Answer, response.Ns, response.Extra
 				pool.DefaultMessagePool.Put(response)

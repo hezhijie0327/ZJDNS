@@ -572,7 +572,15 @@ func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt
 	log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, authority=%d, additional=%d, validated=%t, skipCache=%t, ecs=%t", question.Name, dns.TypeToString[question.Qtype], len(answer), len(authority), len(additional), validated, skipCache, responseECS != nil)
 	log.Debugf("CACHE: served response for %s (skipCache=%t)", question.Name, skipCache)
 
-	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, nil)
+	// When DNSSEC validation failed but enforcement is off (bogus + NOERROR),
+	// include an EDE hint so clients can detect the bogus response.
+	var edeOpt *edns.EDEOption
+	if *dnssecStatus == "bogus" && s.resolver != nil && s.resolver.Recursive() != nil {
+		if code := s.resolver.Recursive().DNSSECEDECode(); code != 0 {
+			edeOpt = edns.NewEDEOption(code, "")
+		}
+	}
+	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, edeOpt)
 	s.restoreOriginalDomain(msg, question.Name, req.Question[0].Name)
 	return msg
 }
