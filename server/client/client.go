@@ -23,10 +23,6 @@ import (
 	connpool "zjdns/server/client/pool"
 )
 
-// MaxIncomingStreams is the maximum number of concurrent incoming QUIC streams
-// per connection.
-const MaxIncomingStreams = 256
-
 // Result holds the outcome of a single DNS query including response, timing,
 // and metadata.
 type Result struct {
@@ -116,10 +112,10 @@ func New() *Client {
 		},
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),
-		quicPool:       connpool.NewQuicPool(connpool.DefaultMaxConns),
+		quicPool:       connpool.NewQuicPool(config.DefaultMaxConns),
 		SessionCache:   tls.NewLRUClientSessionCache(32),
-		tcpPool:        connpool.NewPool(connpool.DefaultMaxConns, connpool.DefaultMaxPipe),
-		dotPool:        connpool.NewPool(connpool.DefaultMaxConns, connpool.DefaultMaxPipe),
+		tcpPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		dotPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 	}
 }
 

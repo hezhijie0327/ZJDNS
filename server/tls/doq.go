@@ -40,8 +40,8 @@ func (s *Server) startDOQServer() error {
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        config.Timeout,
-		MaxIncomingStreams:    MaxIncomingStreams,
-		MaxIncomingUniStreams: MaxIncomingStreams,
+		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
+		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
 	}

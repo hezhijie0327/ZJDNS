@@ -126,7 +126,7 @@
       "records": [
         {
           "type": "A",
-          "ttl": 30,
+          "ttl": 10,
           "content": "127.0.0.1"
         }
       ],
@@ -137,7 +137,7 @@
       "records": [
         {
           "type": "A",
-          "ttl": 30,
+          "ttl": 10,
           "content": "127.0.0.1"
         }
       ],
@@ -148,7 +148,7 @@
       "records": [
         {
           "type": "AAAA",
-          "ttl": 30,
+          "ttl": 10,
           "content": "::1"
         }
       ]

@@ -16,7 +16,6 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	connpool "zjdns/server/client/pool"
 	"zjdns/server/resolver"
 )
 
@@ -39,7 +38,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
 		entry := entryI.(*tcpWriteEntry)
 		entry.capacityOnce.Do(func() {
-			entry.capacity = make(chan struct{}, connpool.DefaultMaxPipe)
+			entry.capacity = make(chan struct{}, config.DefaultMaxPipe)
 		})
 
 		select {
@@ -215,7 +214,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 			return responseMsg
 		}
 
-		if entry.CanServeExpired(cache.StaleMaxAge) {
+		if entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			responseMsg = s.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &staleServed, &fallbackUsed, &dnssecStatus)
 			return responseMsg
 		}
@@ -285,7 +284,7 @@ func (s *Server) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpire
 		})
 	}
 
-	if !isExpired && entry.ShouldPrefetch(PrefetchThresholdPercent) && s.shouldStartPrefetch(cacheKey) {
+	if !isExpired && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) && s.shouldStartPrefetch(cacheKey) {
 		if prefetchTriggered != nil {
 			*prefetchTriggered = true
 		}
@@ -293,7 +292,7 @@ func (s *Server) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpire
 			defer dnsutil.HandlePanic("cache prefetch")
 			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, config.Timeout)
 			defer cancel()
-			log.Debugf("CACHE: prefetch triggered for %s (threshold=%d%%)", question.Name, PrefetchThresholdPercent)
+			log.Debugf("CACHE: prefetch triggered for %s (threshold=%d%%)", question.Name, config.DefaultPrefetchThresholdPercent)
 			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
 		})
 	}
@@ -314,7 +313,7 @@ func (s *Server) shouldStartPrefetch(cacheKey string) bool {
 		}
 	}
 
-	s.prefetchCooldown.Store(cacheKey, now+PrefetchThrottleInterval.Nanoseconds())
+	s.prefetchCooldown.Store(cacheKey, now+config.DefaultPrefetchThrottleInterval.Nanoseconds())
 	return true
 }
 
@@ -352,7 +351,7 @@ func (s *Server) canServeExpiredEntry(entry *cache.CacheEntry) bool {
 	if entry == nil || !entry.IsExpired() {
 		return false
 	}
-	return entry.CanServeExpired(cache.StaleMaxAge)
+	return entry.CanServeExpired(config.DefaultStaleMaxAge)
 }
 
 func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool, dnssecStatus *string) *dns.Msg {
@@ -392,7 +391,7 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 		}
 	}()
 
-	timer := time.NewTimer(ServeExpiredClientTimeout)
+	timer := time.NewTimer(config.DefaultServeExpiredClientTimeout)
 	defer timer.Stop()
 
 	select {

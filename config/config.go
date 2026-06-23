@@ -20,43 +20,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-// Default network ports and timeouts.
-const (
-	DefaultDNSPort   = "53"
-	DefaultDOTPort   = "853"
-	DefaultDOHPort   = "443"
-	DefaultPprofPort = "6060"
-	DefaultQueryPath = "/dns-query"
-
-	DefaultCacheSize            = 4 * 1024 * 1024
-	DefaultCachePersistInterval = 30 * time.Second
-	DefaultTTL                  = 30
-
-	DefaultLatencyProbeTimeout = 100 * time.Millisecond
-	DefaultStatsPersistTTL     = 86400
-	DefaultDNSKeyCacheTTL      = 86400
-
-	RecursiveIndicator = "builtin_recursive"
-
-	MaxDomainLength = 253
-
-	Timeout = 5 * time.Second // Global timeout for DNS queries, connections, and idle
-)
-
-// ALPN protocol identifiers for secure DNS transports.
-var (
-	NextProtoDOT  = []string{"dot"}
-	NextProtoDoH  = []string{"h2"}
-	NextProtoDoQ  = []string{"doq"}
-	NextProtoDoH3 = []string{"h3"}
-)
-
-// ProjectName is the application name, set at build time.
-var ProjectName = "ZJDNS"
-
-// Version is the build version, set at build time via ldflags.
-var Version = "dev"
-
 // ServerConfig is the top-level configuration structure for the DNS server.
 type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`

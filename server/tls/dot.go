@@ -16,7 +16,6 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	connpool "zjdns/server/client/pool"
 )
 
 func (s *Server) startDOTServer() error {
@@ -104,7 +103,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	workerCap := make(chan struct{}, connpool.DefaultMaxPipe)
+	workerCap := make(chan struct{}, config.DefaultMaxPipe)
 
 	for {
 		if connCtx.Err() != nil {

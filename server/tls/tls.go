@@ -36,10 +36,6 @@ const (
 	// DoHMaxRequestSize is the maximum allowed DoH request size in bytes.
 	DoHMaxRequestSize = 8192
 
-	// MaxIncomingStreams is the maximum number of concurrent incoming QUIC
-	// streams per connection.
-	MaxIncomingStreams = 256
-
 	// QUICCodeNoError indicates a normal QUIC connection closure.
 	QUICCodeNoError quic.ApplicationErrorCode = 0
 

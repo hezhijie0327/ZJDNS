@@ -33,19 +33,6 @@ import (
 	"zjdns/stats"
 )
 
-// Server-level timeouts and intervals.
-const (
-	PrefetchThrottleInterval = 3 * time.Second
-	PrefetchThresholdPercent = 40
-
-	ServeExpiredClientTimeout = 1800 * time.Millisecond
-
-	DefaultCookieSecretRotationInterval = 1 * time.Hour
-	DefaultECSRefreshInterval           = 15 * time.Minute
-
-	PprofPath = "/debug/pprof/"
-)
-
 // Server is the core DNS server handling query processing, protocol listeners, and lifecycle.
 type Server struct {
 	config            *config.ServerConfig
@@ -209,7 +196,7 @@ func (s *Server) startCookieRotation() {
 	}
 	s.backgroundGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DNS cookie secret rotation")
-		ticker := time.NewTicker(DefaultCookieSecretRotationInterval)
+		ticker := time.NewTicker(config.DefaultCookieSecretRotationInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -241,7 +228,7 @@ func (s *Server) startECSRefresh() {
 			}
 		}
 
-		ticker := time.NewTicker(DefaultECSRefreshInterval)
+		ticker := time.NewTicker(config.DefaultECSRefreshInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -266,7 +253,7 @@ func (s *Server) startECSRefresh() {
 func (s *Server) startPrefetchCooldownCleanup() {
 	s.backgroundGroup.Go(func() error {
 		defer dnsutil.HandlePanic("prefetch cooldown cleanup")
-		ticker := time.NewTicker(PrefetchThrottleInterval * 10)
+		ticker := time.NewTicker(config.DefaultPrefetchThrottleInterval * 10)
 		defer ticker.Stop()
 		for {
 			select {
@@ -642,7 +629,7 @@ func (s *Server) displayInfo() {
 	}
 
 	if s.pprofServer != nil {
-		log.Infof("PPROF: pprof server enabled on: %s, via: %s", s.config.Server.Pprof, PprofPath)
+		log.Infof("PPROF: pprof server enabled on: %s, via: %s", s.config.Server.Pprof, config.DefaultPprofPath)
 	}
 
 	if s.tls != nil {
@@ -660,7 +647,7 @@ func (s *Server) displayInfo() {
 	if s.rewriteMgr.HasRules() {
 		log.Infof("REWRITE: DNS rewriter: enabled (%d rules)", len(s.config.Rewrite))
 	}
-	log.Infof("CACHE: Serve expired enabled (ttl=%d, client timeout=%s, prefer_stale=%t)", cache.StaleMaxAge, ServeExpiredClientTimeout.String(), s.config.Server.Features.Cache.PreferStale)
+	log.Infof("CACHE: Serve expired enabled (ttl=%d, client timeout=%s, prefer_stale=%t)", config.DefaultStaleMaxAge, config.DefaultServeExpiredClientTimeout.String(), s.config.Server.Features.Cache.PreferStale)
 	if s.config.Server.Features.HijackProtection {
 		log.Infof("SECURITY: DNS hijacking prevention: enabled")
 	}

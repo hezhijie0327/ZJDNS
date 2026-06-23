@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
@@ -90,7 +91,7 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 		if item.Key == "" || item.Entry == nil || item.Entry.TTL <= 0 {
 			continue
 		}
-		if now-item.Entry.Timestamp > int64(item.Entry.TTL+StaleMaxAge) {
+		if now-item.Entry.Timestamp > int64(item.Entry.TTL+config.DefaultStaleMaxAge) {
 			continue
 		}
 		if _, exists := mc.entries[item.Key]; exists {
@@ -128,7 +129,7 @@ func (mc *MemoryCache) persistSnapshot() error {
 			if item == nil || item.entry == nil || item.entry.TTL <= 0 {
 				continue
 			}
-			if now-item.entry.Timestamp > int64(item.entry.TTL+StaleMaxAge) {
+			if now-item.entry.Timestamp > int64(item.entry.TTL+config.DefaultStaleMaxAge) {
 				continue
 			}
 			snapshot.Entries = append(snapshot.Entries, persistedCacheItem{

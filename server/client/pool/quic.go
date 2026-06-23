@@ -9,6 +9,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 
+	"zjdns/config"
 	"zjdns/internal/log"
 )
 
@@ -67,7 +68,7 @@ func (qpc *QuicConn) isDead() bool {
 // NewQuicPool creates a QuicPool with the specified maximum connections.
 func NewQuicPool(maxConns int) *QuicPool {
 	if maxConns <= 0 {
-		maxConns = DefaultMaxConns
+		maxConns = config.DefaultMaxConns
 	}
 	return &QuicPool{
 		conns:    make(map[string][]*QuicConn),

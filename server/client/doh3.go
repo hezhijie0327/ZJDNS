@@ -55,8 +55,8 @@ func (c *Client) createDoH3Client(host, serverName string, skipVerify bool, tlsC
 		TLSClientConfig: tlsCfg,
 		QUICConfig: &quic.Config{
 			MaxIdleTimeout:        config.Timeout,
-			MaxIncomingStreams:    MaxIncomingStreams,
-			MaxIncomingUniStreams: MaxIncomingStreams,
+			MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
+			MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
 			EnableDatagrams:       true,
 			Allow0RTT:             true,
 		},

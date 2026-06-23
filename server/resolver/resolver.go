@@ -19,14 +19,6 @@ import (
 	"zjdns/server/security"
 )
 
-const (
-	// MaxCNAMEChain is the maximum number of CNAME redirections to follow.
-	MaxCNAMEChain = 16
-
-	// MaxRecursionDep is the maximum recursion depth for iterative resolution.
-	MaxRecursionDep = 16
-)
-
 var (
 	// ErrCIDRFilterRefused is returned when all A/AAAA records are filtered by
 	// CIDR rules.

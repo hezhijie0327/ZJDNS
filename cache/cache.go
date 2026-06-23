@@ -13,16 +13,12 @@ import (
 
 	"github.com/miekg/dns"
 
+	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 )
 
 const (
-	// StaleTTL is the TTL in seconds returned for expired cache entries.
-	StaleTTL = 30
-	// StaleMaxAge is the maximum age in seconds an expired entry may be served.
-	StaleMaxAge = 3 * 86400
-
 	resultBufferCapacity = 128
 	maxResultLength      = 512
 
@@ -89,7 +85,7 @@ func (c *CacheEntry) CanServeExpired(maxAge int) bool {
 	return c != nil && c.IsExpired() && time.Now().Unix()-c.Timestamp-int64(c.TTL) <= int64(maxAge)
 }
 
-// GetRemainingTTL returns the remaining TTL, or StaleTTL if expired.
+// GetRemainingTTL returns the remaining TTL, or DefaultStaleTTL if expired.
 func (c *CacheEntry) GetRemainingTTL() uint32 {
 	if c == nil {
 		return 0
@@ -98,7 +94,7 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	if remaining > 0 {
 		return uint32(remaining)
 	}
-	return uint32(StaleTTL)
+	return uint32(config.DefaultStaleTTL)
 }
 
 // ECSOption returns the EDNS Client Subnet stored in the entry, if any.

@@ -35,7 +35,9 @@ zjdns/
 │   ├── pool/pool.go               # MessagePool, BufferPool, constants (zero deps)
 │   ├── dnsutil/dnsutil.go         # NormalizeDomain, IsSecureProtocol, HandlePanic, etc.
 │   └── ipdetect/ipdetect.go       # Public IP detection for auto ECS
-├── config/config.go               # All types + constants + loader + validation + DDR/CHAOS
+├── config/                         # Configuration system (2 files)
+│   ├── config.go                   # Types + loader + validation + DDR/CHAOS
+│   └── defaults.go                 # All tunable runtime defaults (ports, timeouts, limits)
 ├── edns/                           # EDNS(0) extensions (5 files)
 │   ├── edns.go                    # Handler, NewHandler, ApplyToMessage
 │   ├── ecs.go                     # ECSOption, DefaultECSConfig, ParseFromDNS
@@ -170,19 +172,24 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 
 ## Key Constants
 
+All tunable runtime defaults are centralized in `config/defaults.go`.
+
 | Constant | Package | Value |
 |----------|---------|-------|
 | `config.DefaultTTL` | config | 30 |
 | `config.DefaultCacheSize` | config | 4 MB (4 * 1024 * 1024) |
+| `config.DefaultStaleTTL` | config | 30s (TTL returned for expired entries) |
+| `config.DefaultStaleMaxAge` | config | 3 days (max age for serve-expired) |
 | `config.MaxDomainLength` | config | 253 |
 | `config.RecursiveIndicator` | config | "builtin_recursive" |
-| `cache.StaleMaxAge` | cache | 45 days |
-| `pool.UDPBufferSize` | pool | 1232 |
 | `config.Timeout` | config | 5s (global: query, dial, idle, shutdown) |
-| `client.DefaultMaxPipe` | server/client/pool | 16 (max in-flight queries per connection) |
-| `client.DefaultMaxConns` | server/client/pool | 4 (max connections per upstream) |
-| `resolver.MaxCNAMEChain` | server/resolver | 16 |
-| `resolver.MaxRecursionDep` | server/resolver | 16 |
+| `config.DefaultMaxPipe` | config | 16 (max in-flight queries per connection) |
+| `config.DefaultMaxConns` | config | 4 (max connections per upstream) |
+| `config.DefaultMaxCNAMEChain` | config | 16 (CNAME redirection limit) |
+| `config.DefaultMaxRecursionDepth` | config | 16 (recursion depth limit) |
+| `config.DefaultMaxIncomingStreams` | config | 256 (QUIC stream limit) |
+| `config.DefaultMaxProbes` | config | 16 (concurrent latency probes) |
+| `pool.UDPBufferSize` | pool | 1232 |
 
 ## Logging Conventions
 

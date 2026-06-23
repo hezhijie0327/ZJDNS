@@ -19,14 +19,6 @@ import (
 	bufpool "zjdns/internal/pool"
 )
 
-const (
-	// DefaultMaxPipe is the default maximum in-flight queries per TCP connection.
-	DefaultMaxPipe = 16
-
-	// DefaultMaxConns is the default maximum connections per upstream server.
-	DefaultMaxConns = 4
-)
-
 type pending struct {
 	resultCh chan *dns.Msg
 }
@@ -59,7 +51,7 @@ type Pool struct {
 
 func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 	if maxPipe <= 0 {
-		maxPipe = DefaultMaxPipe
+		maxPipe = config.DefaultMaxPipe
 	}
 	pc := &Conn{
 		conn:     conn,
@@ -225,10 +217,10 @@ func (pc *Conn) IsDead() bool {
 // NewPool creates a Pool with the specified connection and in-flight limits.
 func NewPool(maxConns, maxPipe int) *Pool {
 	if maxConns <= 0 {
-		maxConns = DefaultMaxConns
+		maxConns = config.DefaultMaxConns
 	}
 	if maxPipe <= 0 {
-		maxPipe = DefaultMaxPipe
+		maxPipe = config.DefaultMaxPipe
 	}
 	return &Pool{
 		conns:    make(map[string][]*Conn),

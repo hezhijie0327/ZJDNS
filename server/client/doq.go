@@ -23,8 +23,8 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 
 	quicCfg := &quic.Config{
 		MaxIdleTimeout:        config.Timeout,
-		MaxIncomingStreams:    MaxIncomingStreams,
-		MaxIncomingUniStreams: MaxIncomingStreams,
+		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
+		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
 		EnableDatagrams:       true,
 		Allow0RTT:             true,
 	}

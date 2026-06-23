@@ -108,7 +108,9 @@ zjdns/
 │   ├── pool/pool.go                 # sync.Pool 对象池 (MessagePool, BufferPool)
 │   ├── dnsutil/dnsutil.go           # DNS 工具函数 (域名规范化、Panic 恢复等)
 │   └── ipdetect/ipdetect.go         # 公网 IP 检测 (ECS 自动配置)
-├── config/config.go                 # 配置定义、加载、校验、DDR/CHAOS
+├── config/                          # 配置系统 (2 文件)
+│   ├── config.go                    # 类型定义 + 加载 + 校验 + DDR/CHAOS
+│   └── defaults.go                  # 可调优运行默认值 (端口/超时/限制/缓存)
 ├── edns/                            # EDNS(0) 扩展 (5 文件)
 │   ├── edns.go                      # Handler, ApplyToMessage
 │   ├── ecs.go                       # ECS 客户端子网选项

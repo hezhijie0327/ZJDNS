@@ -7,13 +7,14 @@ import (
 
 	"github.com/miekg/dns"
 
+	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
-// redirection chain up to MaxCNAMEChain hops.
+// redirection chain up to config.DefaultMaxCNAMEChain hops.
 type CNAME struct {
 	resolver *Resolver
 }
@@ -30,7 +31,7 @@ func (ch *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.E
 	visitedCNAMEs := make(map[string]bool)
 	cnameDepth := 0
 
-	for cnameDepth = range MaxCNAMEChain {
+	for cnameDepth = range config.DefaultMaxCNAMEChain {
 		select {
 		case <-ctx.Done():
 			return nil, nil, nil, false, nil, "", false, ctx.Err()
@@ -89,8 +90,8 @@ func (ch *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.E
 		}
 	}
 
-	if cnameDepth >= MaxCNAMEChain-1 {
-		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", MaxCNAMEChain, dnsutil.NormalizeDomain(question.Name))
+	if cnameDepth >= config.DefaultMaxCNAMEChain-1 {
+		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.NormalizeDomain(question.Name))
 	}
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, usedServer, hijackOccurred, nil
 }
