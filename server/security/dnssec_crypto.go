@@ -457,10 +457,30 @@ func (cv *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifie
 		}
 
 		// An RRset with RRSIGs whose key tags don't match any verified DNSKEY
-		// indicates either a bogus signature or a zone cut (child zone keys).
-		// Return an error so the caller can perform zone-cut detection rather
-		// than silently accepting the unverifiable RRset.
+		// indicates either a bogus signature, a zone cut (child zone keys),
+		// or a cross-zone CNAME target (e.g. an A record signed by a CDN
+		// zone's keys that is completely unrelated to the current zone).
+		// For cross-zone records, skip the RRset — the CNAME resolver will
+		// validate them against their own zone's DNSKEYs.
 		if !groupValidated {
+			crossZone := true
+			for _, sig := range sigs {
+				signer := strings.ToLower(strings.TrimSuffix(sig.SignerName, "."))
+				for _, key := range verifiedDNSKEYs {
+					keyZone := strings.ToLower(strings.TrimSuffix(key.Header().Name, "."))
+					if signer == keyZone || strings.HasSuffix(signer, "."+keyZone) {
+						crossZone = false
+						break
+					}
+				}
+				if !crossZone {
+					break
+				}
+			}
+			if crossZone {
+				log.Debugf("SECURITY: skipping %s/%s — RRSIG signer is not in verified zone", header.Name, dns.TypeToString[header.Rrtype])
+				continue
+			}
 			return false, fmt.Errorf("%w: no matching DNSKEY for RRSIG over %s/%s (key tags in RRSIGs do not match verified zone keys)",
 				ErrBogusSignature, header.Name, dns.TypeToString[header.Rrtype])
 		}

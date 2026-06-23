@@ -57,6 +57,11 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 		return nil, nil, nil, false, nil, "", false, fmt.Errorf("recursion depth exceeded: %d", depth)
 	}
 
+	// Clear any stale DNSSEC EDE code from a previous CNAME hop or recursive
+	// call. Without this, a DNSSEC failure in one hop can leak through a
+	// successful validation in the next hop, causing false "bogus" verdicts.
+	rr.lastDNSSECEDECode.Store(0)
+
 	qname := dns.Fqdn(question.Name)
 	question.Name = qname
 	nameservers := ShuffleSlice(DefaultRootServers)
@@ -170,9 +175,13 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 					}
 					validated = false
 				}
-				answer, authority, additional := response.Answer, response.Ns, response.Extra
+				// Strip cross-zone answer records so the CNAME resolver follows the
+				// chain independently. Records signed by unrelated zone keys (e.g.
+				// A records for CDN CNAME targets) are validated via separate
+				// recursive resolution against their own zone's DNSKEYs.
+				answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
 				pool.DefaultMessagePool.Put(response)
-				return answer, authority, additional, validated, ecsResponse, config.RecursiveIndicator, false, nil
+				return answer, response.Ns, response.Extra, validated, ecsResponse, config.RecursiveIndicator, false, nil
 			} else {
 				// When DNSSEC crypto is enabled and the zone has DS records in the
 				// parent, a crypto verification failure means the answer is bogus.
@@ -187,9 +196,13 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 							fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name)
 					}
 				}
-				answer, authority, additional := response.Answer, response.Ns, response.Extra
+				// Strip cross-zone answer records so the CNAME resolver follows the
+				// chain independently. Records signed by unrelated zone keys (e.g.
+				// A records for CDN CNAME targets) are validated via separate
+				// recursive resolution against their own zone's DNSKEYs.
+				answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
 				pool.DefaultMessagePool.Put(response)
-				return answer, authority, additional, validated, ecsResponse, config.RecursiveIndicator, false, nil
+				return answer, response.Ns, response.Extra, validated, ecsResponse, config.RecursiveIndicator, false, nil
 			}
 		}
 

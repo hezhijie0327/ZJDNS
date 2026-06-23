@@ -2,10 +2,12 @@ package resolver
 
 import (
 	"context"
+	"strings"
 
 	"github.com/miekg/dns"
 
 	"zjdns/edns"
+	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/security"
@@ -322,4 +324,46 @@ func (rr *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, name
 		chain.lastEDECode = edns.EDECodeRRSIGsMissing
 	}
 	return validated
+}
+
+// stripCrossZoneRecords removes answer records whose RRSIG signer name is
+// from a different zone hierarchy than the given zone. These records need
+// independent DNSSEC validation via CNAME chain following — they cannot be
+// validated with the current zone's DNSKEYs and would otherwise cause a false
+// bogus verdict (e.g. CDN A records for CNAME targets like aaplimg.com
+// returned alongside CNAME records in the cdn-apple.com zone).
+func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
+	normalized := dnsutil.NormalizeDomain(zone)
+	if normalized == "" {
+		return answer
+	}
+	allSigs := security.CollectRRSIGs(answer, extra)
+
+	result := make([]dns.RR, 0, len(answer))
+	for _, rr := range answer {
+		if rr == nil {
+			continue
+		}
+		h := rr.Header()
+		sigs := security.FindRRSIGs(allSigs, h.Name, h.Rrtype)
+		if len(sigs) == 0 {
+			// No RRSIG — record belongs to this zone (unsigned).
+			result = append(result, rr)
+			continue
+		}
+		inZone := false
+		for _, sig := range sigs {
+			signer := dnsutil.NormalizeDomain(sig.SignerName)
+			if signer == normalized || strings.HasSuffix(signer, "."+normalized) {
+				inZone = true
+				break
+			}
+		}
+		if inZone {
+			result = append(result, rr)
+		} else {
+			log.Debugf("SECURITY: stripping cross-zone record %s/%s from %s answer", h.Name, dns.TypeToString[h.Rrtype], zone)
+		}
+	}
+	return result
 }
