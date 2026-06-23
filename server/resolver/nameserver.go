@@ -61,7 +61,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 			msg := rr.resolver.buildMsg(question, ecs, true, false)
 			defer pool.DefaultMessagePool.Put(msg)
 
-			subCtx, subCancel := context.WithTimeout(queryCtx, config.IdleTimeout/2)
+			subCtx, subCancel := context.WithTimeout(queryCtx, config.IdleTimeout)
 			defer subCancel()
 
 			result := rr.resolver.client.ExecuteQuery(subCtx, msg, server)
