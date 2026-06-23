@@ -38,10 +38,21 @@ func (d *Detector) CheckResponse(currentDomain, queryDomain string, response *dn
 		}
 	}
 
+	// Collect CNAME targets from the answer section. When an authoritative
+	// server returns a CNAME to a different zone, it may also include NS
+	// records for the target zone in the Authority section. This is standard
+	// DNS referral behavior, not hijacking.
+	var cnameTargets []string
+	for _, rr := range response.Answer {
+		if cname, ok := rr.(*dns.CNAME); ok {
+			cnameTargets = append(cnameTargets, dnsutil.NormalizeDomain(cname.Target))
+		}
+	}
+
 	// Also validate Authority and Additional sections for injected NS/glue
 	// records that could redirect future queries to attacker-controlled servers.
 	for _, rr := range response.Ns {
-		if valid, reason := d.checkAuthorityRecord(rr, currentDomain); !valid {
+		if valid, reason := d.checkAuthorityRecord(rr, currentDomain, cnameTargets); !valid {
 			log.Debugf("SECURITY: suspicious NS in authority section from %s: %s %s, reason=%s",
 				currentDomain, dns.TypeToString[rr.Header().Rrtype], rr.Header().Name, reason)
 			return false, reason
@@ -80,17 +91,25 @@ func (d *Detector) checkRecord(rr dns.RR, currentDomain, queryDomain string) (bo
 
 // checkAuthorityRecord validates NS records in the Authority section to
 // prevent injection of malicious delegation redirects.
-func (d *Detector) checkAuthorityRecord(rr dns.RR, currentDomain string) (bool, string) {
+func (d *Detector) checkAuthorityRecord(rr dns.RR, currentDomain string, cnameTargets []string) (bool, string) {
 	rrType := rr.Header().Rrtype
 	if rrType != dns.TypeNS {
 		return true, "" // only validate NS records in authority
 	}
 	nsName := dnsutil.NormalizeDomain(rr.Header().Name)
 	// NS records in authority should name the delegated zone
-	if !d.isInAuthority(nsName, currentDomain) && !d.isInAuthority(currentDomain, nsName) {
-		return false, fmt.Sprintf("NS record in authority names unrelated zone '%s'", nsName)
+	if d.isInAuthority(nsName, currentDomain) || d.isInAuthority(currentDomain, nsName) {
+		return true, ""
 	}
-	return true, ""
+	// When the answer contains a CNAME to a different zone, the authority
+	// section may include NS records for the CNAME target's zone. This is
+	// standard DNS referral behavior, not hijacking (RFC 1034 §4.3.2).
+	for _, target := range cnameTargets {
+		if d.isInAuthority(target, nsName) {
+			return true, ""
+		}
+	}
+	return false, fmt.Sprintf("NS record in authority names unrelated zone '%s'", nsName)
 }
 
 // checkGlueRecord validates A/AAAA glue records in the Additional section.
