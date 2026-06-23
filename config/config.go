@@ -75,7 +75,6 @@ type ServerSettings struct {
 	Features FeatureFlags `json:"features"`
 
 	MaxConcurrent int `json:"max_concurrent,omitempty"`
-	RateLimit     int `json:"rate_limit,omitempty"`
 }
 
 // TLSSettings configures TLS listener ports, certificates, and HTTPS settings.
@@ -404,9 +403,6 @@ func validateCacheAndStats(cfg *ServerConfig) error {
 	}
 	if cfg.Server.MaxConcurrent < 0 {
 		return fmt.Errorf("server.max_concurrent must be zero or positive")
-	}
-	if cfg.Server.RateLimit < 0 {
-		return fmt.Errorf("server.rate_limit must be zero or positive")
 	}
 	return nil
 }

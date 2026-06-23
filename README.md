@@ -1,6 +1,6 @@
 # ZJDNS Server
 
-🚀 高性能递归 DNS 解析服务器，基于 Go 语言开发。支持 LRU 内存缓存（落盘持久化）、DNSSEC 验证、ECS、DoT/DoQ/DoH/DoH3、速率限制等高级功能。
+🚀 高性能递归 DNS 解析服务器，基于 Go 语言开发。支持 LRU 内存缓存（落盘持久化）、DNSSEC 验证、ECS、DoT/DoQ/DoH/DoH3 等高级功能。
 
 > ⚠️ **警告**
 > 本项目尚未在生产环境中得到充分验证。请勿在生产环境中使用。
@@ -14,7 +14,7 @@
 - **递归 DNS 解析**：完整递归查询算法，从 13 组根服务器逐步解析至 TLD 和权威服务器
 - **上游 DNS 转发**：多上游并发查询 + 首胜策略（First-Win），降低延迟
 - **混合模式**：可同时配置上游 DNS 和内置递归解析器（`builtin_recursive`）
-- **TCP/DoT/DoQ 连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生 stream 复用，fallback 单次连接
+- **TCP/DoT/DoQ 连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生 stream 复用，连接失败回退单次连接
 - **智能协议协商**：UDP 截断自动回退 TCP
 - **CNAME 链解析**：多级 CNAME 追踪，防循环（最大 16 级）
 - **A/AAAA 延迟探测**：后台多协议（ping/tcp/udp/http/https/http3）速度检测，按最快顺序重排
@@ -22,10 +22,9 @@
 
 ### 🛡️ 安全与防御
 
-- **速率限制**：全协议 per-IP token bucket，自动清理空闲客户端
 - **CIDR 过滤**：基于标签的 IP 过滤，支持文件/内联规则，IPv4 位运算优化匹配
 - **DNS 劫持防护**：根/TLD 越权响应检测，UDP→TCP 自动回退
-- **DNSSEC 密码学验证**：递归模式完整信任链（根 KSK→TLD DS→权威 DNSKEY→RRSIG），NSEC/NSEC3 认证拒绝验证（RFC 5155），上游模式 AD 标志信任，`dnssec_enforce` 开关控制 bogus 响应拒绝，EDE 错误码传播
+- **DNSSEC 密码学验证**：递归模式完整信任链（根 KSK→TLD DS→权威 DNSKEY→RRSIG），NSEC/NSEC3 已验证否定验证（RFC 5155），上游模式 AD 标志信任，`dnssec_enforce` 开关控制 bogus 响应拒绝，EDE 错误码传播
 - **ECS 支持**：EDNS 客户端子网，支持 auto/auto_v4/auto_v6 自动检测
 - **DNS Cookie**：HMAC-SHA256 服务端 Cookie，密钥无缝轮换
 - **扩展 DNS 错误 (EDE)**：24 种 EDE 代码，DNSSEC 失败自动映射（EDE 6/9/10）
@@ -47,16 +46,16 @@
 ### 💾 缓存系统
 
 - **自适应容量**：`size=0` 时自动按系统内存 5% 分配（≈1KB/条目），也可手动指定
-- **LRU 内存缓存**：RLock 读取（零读争用），atomic 访问时间淘汰，TTL 下限保护（10s）
+- **LRU 内存缓存**：RLock 读取（零读争用），atomic 访问时间淘汰，TTL 下限保护（30s）
 - **磁盘持久化**：gob 快照，启动恢复，定时落盘，原子写入
 - **过期缓存服务 (RFC 8767)**：上游不可用时返回过期缓存（最大 45 天）
-- **预取机制**：TTL 剩余 ≤25% 时后台刷新
+- **预取机制**：TTL 剩余 ≤40% 时后台刷新
 - **ECS 感知缓存**：基于客户端子网分区
 - **PTR 反查优化**：IP→域名索引，O(1) 反查
 
 ### ⚡ 性能优化
 
-- **锁无关统计**：16 个计数器全部 `atomic.Uint64`，热路径无 mutex
+- **锁无关统计**：全部计数器使用 `atomic.Uint64`，热路径无 mutex
 - **无锁 RNG**：`math/rand/v2.IntN()` 替代自定义 mutex RNG
 - **对象池**：`sync.Pool` 复用 `dns.Msg` 和 `[]byte`
 - **CIDR IPv4 位运算**：uint32 掩码匹配，避免 `net.IPNet.Contains`
@@ -82,7 +81,7 @@
 | [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033.html) | DNS Security Introduction and Requirements | DNSSEC 基础                              |
 | [RFC 4034](https://www.rfc-editor.org/rfc/rfc4034.html) | Resource Records for DNSSEC                | RRSIG/NSEC/DNSKEY/DS 类型                |
 | [RFC 4035](https://www.rfc-editor.org/rfc/rfc4035.html) | Protocol Modifications for DNSSEC          | 信任链 + AD/CD 标志                      |
-| [RFC 5155](https://www.rfc-editor.org/rfc/rfc5155.html) | NSEC3 Hashed Authenticated Denial          | NSEC3 认证拒绝 + RRSIG 验证              |
+| [RFC 5155](https://www.rfc-editor.org/rfc/rfc5155.html) | NSEC3 Hashed Authenticated Denial          | NSEC3 已验证否定 + RRSIG 验证            |
 | [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html) | DNS Transport over TCP                     | TCP/DoT 连接复用 + 查询流水线 + 乱序响应 |
 | [RFC 7830](https://www.rfc-editor.org/rfc/rfc7830.html) | EDNS(0) Padding                            | DNS 响应填充                             |
 | [RFC 7858](https://www.rfc-editor.org/rfc/rfc7858.html) | DNS over TLS (DoT)                         | TLS 加密传输                             |
@@ -105,52 +104,58 @@ zjdns/
 ├── main.go                          # 入口
 ├── version.go                       # ldflags 变量
 ├── internal/
-│   ├── log/log.go                   # 日志 (Error/Warn/Info/Debug)
-│   ├── pool/pool.go                 # MessagePool, BufferPool
-│   ├── dnsutil/dnsutil.go           # 工具函数
-│   ├── ipdetect/ipdetect.go         # 公网 IP 检测
-│   └── sysmem/sysmem.go             # 系统内存检测
-├── config/config.go                 # 配置类型 + 加载 + 验证 + DDR
+│   ├── log/log.go                   # 日志组件 (Error/Warn/Info/Debug)
+│   ├── pool/pool.go                 # sync.Pool 对象池 (MessagePool, BufferPool)
+│   ├── dnsutil/dnsutil.go           # DNS 工具函数 (域名规范化、Panic 恢复等)
+│   ├── ipdetect/ipdetect.go         # 公网 IP 检测 (ECS 自动配置)
+│   └── sysmem/sysmem.go             # 系统内存检测 (缓存预算计算)
+├── config/config.go                 # 配置定义、加载、校验、DDR/CHAOS
 ├── edns/                            # EDNS(0) 扩展 (5 文件)
 │   ├── edns.go                      # Handler, ApplyToMessage
-│   ├── ecs.go                       # ECS 选项
-│   ├── cookie.go                    # Cookie 生成/验证
-│   ├── ede.go                       # EDE 错误码
-│   └── padding.go                   # RFC 7830 填充
-├── cache/                           # 缓存系统 (3 文件)
+│   ├── ecs.go                       # ECS 客户端子网选项
+│   ├── cookie.go                    # DNS Cookie 生成与验证
+│   ├── ede.go                       # EDE 扩展错误码 (24 种)
+│   └── padding.go                   # RFC 7830 响应填充
+├── cache/                           # DNS 缓存系统 (3 文件)
 │   ├── cache.go                     # Store 接口, CacheEntry, 工具函数
-│   ├── memory.go                    # MemoryCache, LRU 淘汰, PTR 索引
-│   └── persist.go                   # 磁盘快照
-├── cidr/cidr.go                     # Filter — IP 过滤
-├── rewrite/rewrite.go               # Evaluator — 域名重写
-├── stats/stats.go                   # Collector — 原子指标
+│   ├── memory.go                    # MemoryCache, LRU 淘汰, PTR 反查索引
+│   └── persist.go                   # 磁盘快照持久化
+├── cidr/cidr.go                     # CIDR IP 过滤 (标签匹配与位运算)
+├── rewrite/rewrite.go               # 域名重写 (规则匹配与合成响应)
+├── stats/stats.go                   # 锁无关统计采集器 (27 个原子计数器)
 └── server/                          # 核心服务
-    ├── server.go                    # Server 生命周期
-    ├── server_handlers.go           # 查询管道
-    ├── client/                      # 出站查询 (7 文件 + pool/ 子包)
-    │   ├── client.go                # Client, ExecuteQuery
-    │   ├── tcp.go, dot.go, doq.go, doh.go, doh3.go, doh_request.go
-    │   └── pool/                     # 连接池子包
-    │       ├── tcp.go               # RFC 7766 TCP/DoT 连接池
+    ├── server.go                    # Server 生命周期与启动
+    ├── server_handlers.go           # DNS 查询处理管线
+    ├── client/                      # 上游查询客户端 + 连接池
+    │   ├── client.go                # Client 路由分发
+    │   ├── tcp.go                   # UDP/TCP + TCP 回退
+    │   ├── dot.go                   # DoT 查询
+    │   ├── doq.go                   # DoQ 查询 (QUIC 池)
+    │   ├── doh.go                   # DoH 查询 (HTTP/2)
+    │   ├── doh3.go                  # DoH3 查询 (HTTP/3)
+    │   ├── doh_request.go           # DoH/DoH3 共享请求构建
+    │   └── pool/                    # 连接池子包
+    │       ├── tcp.go               # RFC 7766 TCP/DoT 流水线连接池
     │       └── quic.go               # QUIC 连接池
-    ├── resolver/                    # 解析策略 (7 文件)
-    │   ├── resolver.go              # Resolver, 首胜+
-    │   ├── upstream.go              # 上游并发查询
-    │   ├── recursive.go             # 递归 walk
-    │   ├── cname.go                 # CNAME 链
-    │   ├── dnssec_chain.go          # DNSSEC 信任链
-    │   ├── nameserver.go            # NS 并发查询
-    │   └── zonecut.go               # 区域切割检测
-    ├── tls/                         # 安全传输 (4 文件)
-    │   ├── tls.go                   # Server, 证书
-    │   ├── dot.go, doq.go, doh.go
-    ├── security/                    # 安全 (4 文件)
-    │   ├── security.go              # Guard
-    │   ├── dnssec.go                # DNSSEC 记录存在检查
-    │   ├── dnssec_crypto.go         # 完整密码学 DNSSEC 验证
-    │   └── hijack.go                # 劫持检测
-    ├── latency/probe.go             # 延迟探测
-    └── ratelimit/ratelimit.go       # 速率限制
+    ├── resolver/                    # DNS 解析引擎 (7 文件)
+    │   ├── resolver.go              # 解析路由 (上游首胜 / 递归)
+    │   ├── upstream.go              # 多上游并发首胜查询
+    │   ├── recursive.go             # 递归解析 (根→TLD→权威)
+    │   ├── cname.go                 # CNAME 链追踪
+    │   ├── dnssec_chain.go          # DNSSEC 信任链构建与验证
+    │   ├── nameserver.go            # NS 并发查询与劫持检测
+    │   └── zonecut.go               # 域切割检测
+    ├── tls/                         # 安全传输监听器
+    │   ├── tls.go                   # TLS Server + 证书管理
+    │   ├── dot.go                   # DoT 监听器
+    │   ├── doq.go                   # DoQ 监听器
+    │   └── doh.go                   # DoH/DoH3 监听器
+    ├── security/                    # DNS 安全机制
+    │   ├── security.go              # Guard 安全门面
+    │   ├── dnssec.go                # 上游 DNSSEC 轻量验证 (AD 标志)
+    │   ├── dnssec_crypto.go         # 密码学 DNSSEC (RRSIG/DS/信任锚)
+    │   └── hijack.go                # DNS 劫持检测 + UDP→TCP 回退
+    └── latency/probe.go             # 延迟探测与重排
 ```
 
 ---

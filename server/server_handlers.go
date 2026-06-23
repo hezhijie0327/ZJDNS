@@ -95,12 +95,6 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 		}
 	}
 
-	if !s.limiter.Allow(clientIP) {
-		msg := s.buildResponse(req)
-		msg.Rcode = dns.RcodeRefused
-		return msg
-	}
-
 	if req == nil || len(req.Question) == 0 {
 		msg := pool.DefaultMessagePool.Get()
 		if req != nil {

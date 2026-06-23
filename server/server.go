@@ -27,7 +27,6 @@ import (
 	"zjdns/rewrite"
 	"zjdns/server/client"
 	"zjdns/server/latency"
-	"zjdns/server/ratelimit"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
 	servertls "zjdns/server/tls"
@@ -69,7 +68,6 @@ type Server struct {
 	prefetchCooldown  sync.Map
 	closed            int32
 	resolver          *resolver.Resolver
-	limiter           *ratelimit.Limiter
 	prober            *latency.Prober
 	semaphore         chan struct{}
 	udpServer         *dns.Server
@@ -132,7 +130,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cidrMgr:           cidrFilter,
 		statsMgr:          stats.New(cfg, cache),
 		cacheMgr:          cache,
-		limiter:           ratelimit.New(cfg.Server.RateLimit),
 		ctx:               ctx,
 		cancel:            cancel,
 		shutdown:          make(chan struct{}),
@@ -419,10 +416,6 @@ func (s *Server) shutdownServer() {
 	// Cache is intentionally closed AFTER background tasks and cache-refresh
 	// goroutines finish, so that inflight cache writes during shutdown are
 	// completed rather than silently dropped.
-
-	if s.limiter != nil {
-		s.limiter.Shutdown()
-	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer shutdownCancel()

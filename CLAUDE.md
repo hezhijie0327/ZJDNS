@@ -18,9 +18,9 @@ cp scripts/pre-commit .git/hooks/ && chmod +x .git/hooks/pre-commit
 golangci-lint run && golangci-lint fmt
 ```
 
-Test suites exist for `cache`, `cidr`, `config`, `edns`, `rewrite`, `stats`, `internal/dnsutil`, `internal/pool`, `server/ratelimit`, `server/resolver`, and `server/security` packages (75+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
+Test suites exist for `cache`, `cidr`, `config`, `edns`, `rewrite`, `stats`, `internal/dnsutil`, `internal/pool`, `server/resolver`, and `server/security` packages (75+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
 
-Target coverage: ≥90% for utility packages (`dnsutil` 95.7%, `pool` 91.3%). Rate limiter at 85.7% (cleanup goroutine requires 5-minute ticker). New test suites added for `cache`, `config`, `stats`.
+Target coverage: ≥90% for utility packages (`dnsutil` 95.7%, `pool` 91.3%). New test suites added for `cache`, `config`, `stats`.
 
 Run benchmarks: `go test -bench=. -short ./...` (unit) or `go test -bench=BenchmarkServerProcessQuery -benchtime=3s .` (QPS).
 
@@ -84,8 +84,6 @@ zjdns/
     │   └── doh.go                  # DoH/DoH3 HTTP handlers
     ├── latency/                    # Latency probing
     │   └── probe.go                # A/AAAA latency probing + reordering
-    └── ratelimit/                  # Per-IP token bucket rate limiter
-            └── ratelimit.go            # Limiter (sharded, FNV-1a hash)
 ```
 
 ### Dependency Graph
@@ -93,11 +91,9 @@ zjdns/
 ```
 main ──→ server, config
 server ──→ cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite,
-│          stats, client, ratelimit, resolver, security
 client ──→ config, edns, dnsutil, log, pool, pool (in client)
 resolver ──→ config, edns, client, security, dnsutil, log, pool
 security ──→ dnsutil, log
-ratelimit ──→ log
 tls (in server) ──→ config, dnsutil, log, pool, pool (in client)
 cache ──→ config, edns, dnsutil, log
 edns ──→ dnsutil, ipdetect, log
@@ -171,16 +167,14 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `ensureZoneDNSKEYs` | `server/resolver` | Explicit DNSKEY fetch at delegation steps |
 | `resolveZoneCut` | `server/resolver` | Builds DNSSEC chain for delegated child zone on-the-fly |
 | `isZoneCut` / `getZoneCutSigner` | `server/resolver` | Detects when answer RRSIGs are signed by child zone keys |
-| `Limiter` | `server/ratelimit` | Per-IP token bucket rate limiter |
 | `MessagePool` / `BufferPool` | `pool` | sync.Pool-based message and buffer allocators |
 
 ## Key Constants
 
 | Constant | Package | Value |
 |----------|---------|-------|
-| `config.IdleTimeout` | config | 4s |
-| `config.DefaultTTL` | config | 10 |
-| `config.DefaultCacheSize` | config | 16384 |
+| `config.DefaultTTL` | config | 30 |
+| `config.DefaultCacheSize` | config | 4 MB (4 * 1024 * 1024) |
 | `config.MaxDomainLength` | config | 253 |
 | `config.RecursiveIndicator` | config | "builtin_recursive" |
 | `cache.StaleMaxAge` | cache | 45 days |
@@ -203,7 +197,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `Info` | Startup/shutdown lifecycle, configuration summary, one-time events |
 | `Debug` | Hot-path detail: every query, cache hit/miss, upstream result, CIDR match |
 
-**Prefixes** (19 canonical, one per logical component):
+**Prefixes** (18 canonical, one per logical component):
 
 | Prefix | Component | Files |
 |--------|-----------|-------|
@@ -215,7 +209,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `RECURSION` | Recursive resolution | server/resolver/{recursive,dnssec_chain,nameserver,zonecut}.go |
 | `SECURITY` | DNSSEC, hijack detection | server/security/*.go, server/resolver/{dnssec_chain,zonecut}.go |
 | `TCPPOOL` | TCP/DoT connection pool | server/client/pool/{tcp,quic}.go |
-| `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `RATELIMIT`, `PTR`, `PANIC` | One component each | respective files |
+| `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC` | One component each | respective files |
 
 **Rules**: Prefix matches logical component, not Go package. No `HIJACK:`/`DNSSEC:` (merged→`SECURITY:`), no `DOT:`/`DOQ:`/`DOH:` (merged→`TLS:`). Hot-path logs are `Debug` only — `Warn`/`Info` on the query path would spam at scale.
 
@@ -239,7 +233,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   terminates only that goroutine, not the entire server.
 - **Lock-free RNG**: `shuffleSlice` uses `math/rand/v2.IntN()` instead of a
   custom mutex-protected RNG.
-- **Lock-free stats**: All 16 counters use `atomic.Uint64` on the hot path;
+- **Lock-free stats**: All counters use `atomic.Uint64` on the hot path;
   `sync.Mutex` only guards snapshot assembly.
 - **RFC 7766 TCP/DoT pipelining**: Client pools `Conn` per upstream,
   multiplexing queries over shared TCP/DoT connections. Each connection runs a

@@ -222,7 +222,6 @@ func buildBenchServer(b *testing.B) *server.Server {
 		Server: config.ServerSettings{
 			Port:          "15353",
 			LogLevel:      "error",
-			RateLimit:     0,
 			MaxConcurrent: 0,
 			TLS:           config.TLSSettings{Port: "853"},
 			Features: config.FeatureFlags{
