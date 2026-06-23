@@ -515,7 +515,7 @@ func (cm *Loader) getDefaultConfig() *ServerConfig {
 	cfg.Server.Features.Cache.Persist.Interval = int(DefaultCachePersistInterval / time.Second)
 	cfg.Server.Features.DDR = DDRSettings{Domain: "dns.example.com", IPv4: "127.0.0.1", IPv6: "::1"}
 	cfg.Server.Features.ECS = edns.DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
-	cfg.Server.Features.DNSSECEnforce = false
+	cfg.Server.Features.DNSSECEnforce = true
 	cfg.Server.Features.HijackProtection = true
 
 	return cfg
