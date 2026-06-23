@@ -45,7 +45,7 @@
 
 ### 💾 缓存系统
 
-- **自适应容量**：`size=0` 时自动按系统内存 5% 分配（≈1KB/条目），也可手动指定
+- **固定容量**：`size` 指定缓存上限（字节），默认 4 MB
 - **LRU 内存缓存**：RLock 读取（零读争用），atomic 访问时间淘汰，TTL 下限保护（30s）
 - **磁盘持久化**：gob 快照，启动恢复，定时落盘，原子写入
 - **过期缓存服务 (RFC 8767)**：上游不可用时返回过期缓存（最大 45 天）
@@ -107,8 +107,7 @@ zjdns/
 │   ├── log/log.go                   # 日志组件 (Error/Warn/Info/Debug)
 │   ├── pool/pool.go                 # sync.Pool 对象池 (MessagePool, BufferPool)
 │   ├── dnsutil/dnsutil.go           # DNS 工具函数 (域名规范化、Panic 恢复等)
-│   ├── ipdetect/ipdetect.go         # 公网 IP 检测 (ECS 自动配置)
-│   └── sysmem/sysmem.go             # 系统内存检测 (缓存预算计算)
+│   └── ipdetect/ipdetect.go         # 公网 IP 检测 (ECS 自动配置)
 ├── config/config.go                 # 配置定义、加载、校验、DDR/CHAOS
 ├── edns/                            # EDNS(0) 扩展 (5 文件)
 │   ├── edns.go                      # Handler, ApplyToMessage

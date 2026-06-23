@@ -114,7 +114,7 @@ type DDRSettings struct {
 // CacheSettings configures DNS response cache memory usage, persistence,
 // and stale serving.
 type CacheSettings struct {
-	MemPercent  int                      `json:"mem_percent,omitempty"`
+	Size        int64                    `json:"size,omitempty"`
 	Persist     CachePersistenceSettings `json:"persist,omitempty"`
 	PreferStale bool                     `json:"prefer_stale,omitempty"`
 }
@@ -384,8 +384,8 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 }
 
 func validateCacheAndStats(cfg *ServerConfig) error {
-	if pct := cfg.Server.Features.Cache.MemPercent; pct < 0 || pct > 100 {
-		return fmt.Errorf("server.features.cache.mem_percent must be between 0 and 100")
+	if cfg.Server.Features.Cache.Size < 0 {
+		return fmt.Errorf("server.features.cache.size must be zero or positive")
 	}
 	if strings.Contains(cfg.Server.Features.Cache.Persist.File, "..") {
 		return fmt.Errorf("server.features.cache.persist.file must not contain '..'")
@@ -652,7 +652,7 @@ func GenerateExampleConfig() string {
 	cfg.Server.TLS.CertFile = "/path/to/cert.pem"
 	cfg.Server.TLS.KeyFile = "/path/to/key.pem"
 
-	cfg.Server.Features.Cache.MemPercent = 5
+	cfg.Server.Features.Cache.Size = DefaultCacheSize
 	cfg.Server.Features.Cache.Persist = CachePersistenceSettings{
 		File:     "cache.snapshot",
 		Interval: int(DefaultCachePersistInterval / time.Second),

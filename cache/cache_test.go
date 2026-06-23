@@ -12,7 +12,7 @@ import (
 )
 
 func testStore() *MemoryCache {
-	return New(config.CacheSettings{MemPercent: 1})
+	return New(config.CacheSettings{Size: config.DefaultCacheSize})
 }
 
 // ── BuildCacheKey ────────────────────────────────────────────────────────────────

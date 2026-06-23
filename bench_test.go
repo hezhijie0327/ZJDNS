@@ -47,7 +47,7 @@ func BenchmarkPoolBufferGetPut(b *testing.B) {
 
 func BenchmarkCacheSetGet(b *testing.B) {
 	disableLogging()
-	cfg := config.CacheSettings{MemPercent: 1}
+	cfg := config.CacheSettings{Size: config.DefaultCacheSize}
 	c := cache.New(cfg)
 	defer func() { _ = c.Close() }()
 
@@ -63,7 +63,7 @@ func BenchmarkCacheSetGet(b *testing.B) {
 
 func BenchmarkCacheParallel(b *testing.B) {
 	disableLogging()
-	cfg := config.CacheSettings{MemPercent: 1}
+	cfg := config.CacheSettings{Size: config.DefaultCacheSize}
 	c := cache.New(cfg)
 	defer func() { _ = c.Close() }()
 
@@ -227,7 +227,7 @@ func buildBenchServer(b *testing.B) *server.Server {
 			Features: config.FeatureFlags{
 				HijackProtection: false,
 				DNSSECEnforce:    false,
-				Cache:            config.CacheSettings{MemPercent: 1},
+				Cache:            config.CacheSettings{Size: config.DefaultCacheSize},
 			},
 		},
 		Rewrite: []config.RewriteRule{

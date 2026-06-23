@@ -11,7 +11,6 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
-	"zjdns/internal/sysmem"
 )
 
 const evictSampleSize = 25
@@ -48,17 +47,16 @@ type ptrRecord struct {
 // New creates a MemoryCache configured with the given settings, restoring any
 // persisted snapshot and starting the persistence worker if configured.
 func New(settings config.CacheSettings) *MemoryCache {
-	pct := settings.MemPercent
-	if pct <= 0 || pct > 100 {
-		pct = 5
+	limit := settings.Size
+	if limit <= 0 {
+		limit = config.DefaultCacheSize
 	}
-	budget := sysmem.BudgetBytes(pct, config.DefaultCacheSize)
-	log.Infof("CACHE: %d MB budget (%d%% of system memory)", budget/(1024*1024), pct)
+	log.Infof("CACHE: %d MB cache budget", limit/(1024*1024))
 
 	mc := &MemoryCache{
 		entries:         make(map[string]*cacheItem),
 		entryPTRs:       make(map[string][]ptrRecord),
-		limitBytes:      budget,
+		limitBytes:      limit,
 		ptrIndex:        make(map[string]map[string]uint32),
 		persistPath:     settings.Persist.File,
 		persistInterval: time.Duration(settings.Persist.Interval) * time.Second,
@@ -80,7 +78,7 @@ func New(settings config.CacheSettings) *MemoryCache {
 		log.Debugf("CACHE: persistence disabled")
 	}
 
-	log.Infof("CACHE: Memory cache enabled (budget=%d MB)", budget/(1024*1024))
+	log.Infof("CACHE: Memory cache enabled (budget=%d MB)", limit/(1024*1024))
 	return mc
 }
 

@@ -99,11 +99,10 @@ func TestUpstreamServer_IsRecursive(t *testing.T) {
 	}
 }
 
-func TestCacheSettings_MemPercentDefaults(t *testing.T) {
-	// MemPercent 0 should be handled by the cache package (defaults to 5)
-	// This test verifies the config doesn't reject 0
-	s := ServerSettings{Features: FeatureFlags{Cache: CacheSettings{MemPercent: 0}}}
-	if s.Features.Cache.MemPercent != 0 {
-		t.Error("MemPercent=0 should be allowed (cache will default to 5)")
+func TestCacheSettings_SizeDefaults(t *testing.T) {
+	// Size 0 should be handled by the cache package (defaults to DefaultCacheSize)
+	s := ServerSettings{Features: FeatureFlags{Cache: CacheSettings{Size: 0}}}
+	if s.Features.Cache.Size != 0 {
+		t.Error("Size=0 should be allowed (cache will default to DefaultCacheSize)")
 	}
 }

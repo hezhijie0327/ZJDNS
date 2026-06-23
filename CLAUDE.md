@@ -34,8 +34,7 @@ zjdns/
 │   ├── log/log.go                 # Logger, TimeCache, Level.String()
 │   ├── pool/pool.go               # MessagePool, BufferPool, constants (zero deps)
 │   ├── dnsutil/dnsutil.go         # NormalizeDomain, IsSecureProtocol, HandlePanic, etc.
-│   ├── ipdetect/ipdetect.go       # Public IP detection for auto ECS
-│   └── sysmem/sysmem.go           # System memory detection for cache budget
+│   └── ipdetect/ipdetect.go       # Public IP detection for auto ECS
 ├── config/config.go               # All types + constants + loader + validation + DDR/CHAOS
 ├── edns/                           # EDNS(0) extensions (5 files)
 │   ├── edns.go                    # Handler, NewHandler, ApplyToMessage

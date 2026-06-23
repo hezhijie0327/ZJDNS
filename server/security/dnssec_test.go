@@ -340,7 +340,7 @@ func TestValidateResponse_NXDOMAIN(t *testing.T) {
 // ── Full chain: DS → DNSKEY → answer ────────────────────────────────────────
 
 func testCache() cache.Store {
-	return cache.New(config.CacheSettings{MemPercent: 1})
+	return cache.New(config.CacheSettings{Size: config.DefaultCacheSize})
 }
 
 func TestFullDNSSECChain(t *testing.T) {
