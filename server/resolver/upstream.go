@@ -54,7 +54,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 	queryCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errors.New("query completed"))
 
-	g, queryCtx := errgroup.WithContext(queryCtx)
+	g, groupCtx := errgroup.WithContext(queryCtx)
 	g.SetLimit(concurrencyLimit(len(servers)))
 
 	var activeConnections atomic.Int32
@@ -64,7 +64,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 
 		g.Go(func() error {
 			select {
-			case <-queryCtx.Done():
+			case <-groupCtx.Done():
 				return nil
 			default:
 			}
@@ -73,7 +73,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 			defer activeConnections.Add(-1)
 
 			if server.IsRecursive() {
-				recursiveCtx, recursiveCancel := context.WithTimeout(queryCtx, config.IdleTimeout)
+				recursiveCtx, recursiveCancel := context.WithTimeout(groupCtx, config.IdleTimeout)
 				defer recursiveCancel()
 
 				answer, authority, additional, validated, ecsResponse, usedServer, _, err := r.cname.resolve(recursiveCtx, question, ecs)
@@ -90,13 +90,13 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 					case resultChan <- result{Answer: answer, Authority: authority, Additional: additional, Validated: validated, ECS: ecsResponse, Server: usedServer}:
 						cancel(errors.New("successful result"))
 						return nil
-					case <-queryCtx.Done():
+					case <-groupCtx.Done():
 						return nil
 					}
 				}
 			} else {
 				msg := r.buildMsg(question, ecs, true, false)
-				queryResult := r.client.ExecuteQuery(queryCtx, msg, server)
+				queryResult := r.client.ExecuteQuery(groupCtx, msg, server)
 				pool.DefaultMessagePool.Put(msg)
 
 				if queryResult.Error == nil && queryResult.Response != nil {
@@ -141,7 +141,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 							cancel(errors.New("successful result"))
 							pool.DefaultMessagePool.Put(queryResult.Response)
 							return nil
-						case <-queryCtx.Done():
+						case <-groupCtx.Done():
 							pool.DefaultMessagePool.Put(queryResult.Response)
 							return nil
 						}
