@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/miekg/dns"
+
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/internal/log"
@@ -39,6 +41,13 @@ type Snapshot struct {
 	DNSSECSecure        uint64 `json:"dnssec_secure"`
 	DNSSECBogus         uint64 `json:"dnssec_bogus"`
 	DNSSECInsecure      uint64 `json:"dnssec_insecure"`
+	RcodeNoError        uint64 `json:"rcode_noerror"`
+	RcodeFormErr        uint64 `json:"rcode_formerr"`
+	RcodeServFail       uint64 `json:"rcode_servfail"`
+	RcodeNXDomain       uint64 `json:"rcode_nxdomain"`
+	RcodeNotImp         uint64 `json:"rcode_notimp"`
+	RcodeRefused        uint64 `json:"rcode_refused"`
+	RcodeOther          uint64 `json:"rcode_other"`
 	UpdatedAt           int64  `json:"updated_at"`
 }
 
@@ -75,6 +84,16 @@ type logDNSSEC struct {
 	Insecure uint64 `json:"insecure,omitempty"`
 }
 
+type logErrorCodes struct {
+	NoError  uint64 `json:"noerror,omitempty"`
+	FormErr  uint64 `json:"formerr,omitempty"`
+	ServFail uint64 `json:"servfail,omitempty"`
+	NXDomain uint64 `json:"nxdomain,omitempty"`
+	NotImp   uint64 `json:"notimp,omitempty"`
+	Refused  uint64 `json:"refused,omitempty"`
+	Other    uint64 `json:"other,omitempty"`
+}
+
 type logRates struct {
 	CacheRate        float64 `json:"cache_rate,omitempty"`
 	PrefetchRate     float64 `json:"prefetch_rate,omitempty"`
@@ -88,11 +107,12 @@ type logRates struct {
 }
 
 type logEntry struct {
-	Totals    logTotals         `json:"totals"`
-	Protocols logProtocolCounts `json:"protocols,omitempty"`
-	Events    logEvents         `json:"events,omitempty"`
-	DNSSEC    logDNSSEC         `json:"dnssec,omitempty"`
-	Rates     logRates          `json:"rates,omitempty"`
+	Totals     logTotals         `json:"totals"`
+	Protocols  logProtocolCounts `json:"protocols,omitempty"`
+	Events     logEvents         `json:"events,omitempty"`
+	DNSSEC     logDNSSEC         `json:"dnssec,omitempty"`
+	ErrorCodes logErrorCodes     `json:"error_codes,omitempty"`
+	Rates      logRates          `json:"rates,omitempty"`
 }
 
 // Collector manages DNS server statistics using lock-free atomic counters.
@@ -119,6 +139,13 @@ type Collector struct {
 	dnssecSecure        atomic.Uint64
 	dnssecBogus         atomic.Uint64
 	dnssecInsecure      atomic.Uint64
+	rcodeNoError        atomic.Uint64
+	rcodeFormErr        atomic.Uint64
+	rcodeServFail       atomic.Uint64
+	rcodeNXDomain       atomic.Uint64
+	rcodeNotImp         atomic.Uint64
+	rcodeRefused        atomic.Uint64
+	rcodeOther          atomic.Uint64
 
 	resetInterval time.Duration
 	persistTTL    int
@@ -162,6 +189,15 @@ func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
 			Secure:   snapshot.DNSSECSecure,
 			Bogus:    snapshot.DNSSECBogus,
 			Insecure: snapshot.DNSSECInsecure,
+		},
+		ErrorCodes: logErrorCodes{
+			NoError:  snapshot.RcodeNoError,
+			FormErr:  snapshot.RcodeFormErr,
+			ServFail: snapshot.RcodeServFail,
+			NXDomain: snapshot.RcodeNXDomain,
+			NotImp:   snapshot.RcodeNotImp,
+			Refused:  snapshot.RcodeRefused,
+			Other:    snapshot.RcodeOther,
 		},
 	}
 	if snapshot.TotalRequests > 0 {
@@ -211,7 +247,7 @@ func New(cfg *config.ServerConfig, c cache.Store) *Collector {
 // RecordRequest atomically increments counters for a single DNS query event.
 func (sc *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadError bool,
 	protocol string, rewrote bool, hijackDetected bool, staleServed bool,
-	fallbackUsed bool, prefetchTriggered bool, dnssecStatus string) {
+	fallbackUsed bool, prefetchTriggered bool, dnssecStatus string, rcode int) {
 
 	if sc == nil || !sc.enabled {
 		return
@@ -279,6 +315,23 @@ func (sc *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadErr
 	case "insecure":
 		sc.dnssecInsecure.Add(1)
 	}
+
+	switch rcode {
+	case dns.RcodeSuccess:
+		sc.rcodeNoError.Add(1)
+	case dns.RcodeFormatError:
+		sc.rcodeFormErr.Add(1)
+	case dns.RcodeServerFailure:
+		sc.rcodeServFail.Add(1)
+	case dns.RcodeNameError:
+		sc.rcodeNXDomain.Add(1)
+	case dns.RcodeNotImplemented:
+		sc.rcodeNotImp.Add(1)
+	case dns.RcodeRefused:
+		sc.rcodeRefused.Add(1)
+	default:
+		sc.rcodeOther.Add(1)
+	}
 }
 
 // Snapshot returns a point-in-time copy of all accumulated counters.
@@ -307,6 +360,13 @@ func (sc *Collector) Snapshot() Snapshot {
 		DNSSECSecure:        sc.dnssecSecure.Load(),
 		DNSSECBogus:         sc.dnssecBogus.Load(),
 		DNSSECInsecure:      sc.dnssecInsecure.Load(),
+		RcodeNoError:        sc.rcodeNoError.Load(),
+		RcodeFormErr:        sc.rcodeFormErr.Load(),
+		RcodeServFail:       sc.rcodeServFail.Load(),
+		RcodeNXDomain:       sc.rcodeNXDomain.Load(),
+		RcodeNotImp:         sc.rcodeNotImp.Load(),
+		RcodeRefused:        sc.rcodeRefused.Load(),
+		RcodeOther:          sc.rcodeOther.Load(),
 		UpdatedAt:           time.Now().Unix(),
 	}
 }
@@ -336,6 +396,13 @@ func (sc *Collector) Reset() {
 	sc.dnssecSecure.Store(0)
 	sc.dnssecBogus.Store(0)
 	sc.dnssecInsecure.Store(0)
+	sc.rcodeNoError.Store(0)
+	sc.rcodeFormErr.Store(0)
+	sc.rcodeServFail.Store(0)
+	sc.rcodeNXDomain.Store(0)
+	sc.rcodeNotImp.Store(0)
+	sc.rcodeRefused.Store(0)
+	sc.rcodeOther.Store(0)
 }
 
 // FetchStats returns a Snapshot pointer suitable for external consumption.
@@ -405,6 +472,13 @@ func (sc *Collector) LoadFromCacheEntry(entry *cache.CacheEntry) error {
 	sc.dnssecSecure.Store(snap.DNSSECSecure)
 	sc.dnssecBogus.Store(snap.DNSSECBogus)
 	sc.dnssecInsecure.Store(snap.DNSSECInsecure)
+	sc.rcodeNoError.Store(snap.RcodeNoError)
+	sc.rcodeFormErr.Store(snap.RcodeFormErr)
+	sc.rcodeServFail.Store(snap.RcodeServFail)
+	sc.rcodeNXDomain.Store(snap.RcodeNXDomain)
+	sc.rcodeNotImp.Store(snap.RcodeNotImp)
+	sc.rcodeRefused.Store(snap.RcodeRefused)
+	sc.rcodeOther.Store(snap.RcodeOther)
 	return nil
 }
 

@@ -85,7 +85,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		defer dnsutil.HandlePanic("DoT writer")
 		defer close(writerDone)
 		for task := range writeCh {
-			_ = tlsConn.SetWriteDeadline(time.Now().Add(connpool.OperationTimeout))
+			_ = tlsConn.SetWriteDeadline(time.Now().Add(config.Timeout))
 			_, err := tlsConn.Write(task.data)
 			pool.DefaultBufferPool.Put(task.data)
 			if err != nil {
@@ -111,7 +111,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		_ = tlsConn.SetReadDeadline(time.Now().Add(connpool.OperationTimeout))
+		_ = tlsConn.SetReadDeadline(time.Now().Add(config.Timeout))
 
 		lengthBuf := make([]byte, 2)
 		_, err := io.ReadFull(reader, lengthBuf)

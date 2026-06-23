@@ -54,7 +54,7 @@ func (c *Client) createDoH3Client(host, serverName string, skipVerify bool, tlsC
 	transport := &http3.Transport{
 		TLSClientConfig: tlsCfg,
 		QUICConfig: &quic.Config{
-			MaxIdleTimeout:        config.IdleTimeout,
+			MaxIdleTimeout:        config.Timeout,
 			MaxIncomingStreams:    MaxIncomingStreams,
 			MaxIncomingUniStreams: MaxIncomingStreams,
 			EnableDatagrams:       true,

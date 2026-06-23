@@ -13,6 +13,7 @@ import (
 
 	"github.com/miekg/dns"
 
+	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	bufpool "zjdns/internal/pool"
@@ -24,12 +25,6 @@ const (
 
 	// DefaultMaxConns is the default maximum connections per upstream server.
 	DefaultMaxConns = 4
-
-	// DefaultTimeout is the default dial timeout for new connections.
-	DefaultTimeout = 2 * time.Second
-
-	// OperationTimeout is the timeout for individual DNS query operations.
-	OperationTimeout = 3 * time.Second
 )
 
 type pending struct {
@@ -157,7 +152,7 @@ func (pc *Conn) readLoop() {
 	lengthBuf := make([]byte, 2)
 
 	for {
-		_ = pc.conn.SetReadDeadline(time.Now().Add(OperationTimeout))
+		_ = pc.conn.SetReadDeadline(time.Now().Add(config.Timeout))
 
 		if _, err := io.ReadFull(pc.conn, lengthBuf); err != nil {
 			if err != io.EOF {

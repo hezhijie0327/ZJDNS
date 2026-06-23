@@ -39,7 +39,8 @@ const (
 	RecursiveIndicator = "builtin_recursive"
 
 	MaxDomainLength = 253
-	IdleTimeout     = 4 * time.Second
+
+	Timeout = 5 * time.Second // Global timeout for DNS queries, connections, and idle
 )
 
 // ALPN protocol identifiers for secure DNS transports.

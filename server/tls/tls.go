@@ -343,12 +343,12 @@ func (s *Server) Shutdown() error {
 		dnsutil.CloseWithLog(s.doqListener, "DoQ listener")
 	}
 	if s.httpsServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), config.IdleTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 		defer cancel()
 		_ = s.httpsServer.Shutdown(ctx)
 	}
 	if s.h3Server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), config.IdleTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 		defer cancel()
 		_ = s.h3Server.Shutdown(ctx)
 	}

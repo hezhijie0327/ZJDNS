@@ -36,11 +36,8 @@ import (
 
 // Server-level timeouts and intervals.
 const (
-	DefaultTimeout   = 2 * time.Second
-	OperationTimeout = 3 * time.Second
-
 	PrefetchThrottleInterval = 3 * time.Second
-	PrefetchThresholdPercent = 25
+	PrefetchThresholdPercent = 40
 
 	ServeExpiredClientTimeout = 1800 * time.Millisecond
 
@@ -153,7 +150,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
 		tlsCfg := servertls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
-		tlsSrv, err := servertls.New(server, tlsCfg, OperationTimeout)
+		tlsSrv, err := servertls.New(server, tlsCfg, config.Timeout)
 		if err != nil {
 			cancel(fmt.Errorf("TLS server init: %w", err))
 			return nil, fmt.Errorf("TLS server init: %w", err)
@@ -186,9 +183,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	if cfg.Server.Pprof != "" {
 		server.pprofServer = &http.Server{
 			Addr:              "127.0.0.1:" + cfg.Server.Pprof,
-			ReadHeaderTimeout: OperationTimeout,
-			ReadTimeout:       OperationTimeout,
-			IdleTimeout:       config.IdleTimeout,
+			ReadHeaderTimeout: config.Timeout,
+			ReadTimeout:       config.Timeout,
+			IdleTimeout:       config.Timeout,
 		}
 	}
 
@@ -381,7 +378,7 @@ func (s *Server) logStatsNow(trigger string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), OperationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 
 	snapshot, err := s.statsMgr.FetchStats(ctx)
@@ -427,7 +424,7 @@ func (s *Server) shutdownServer() {
 		s.limiter.Shutdown()
 	}
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), DefaultTimeout)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer shutdownCancel()
 	if s.udpServer != nil {
 		if err := s.udpServer.ShutdownContext(shutdownCtx); err != nil {
@@ -457,7 +454,7 @@ func (s *Server) shutdownServer() {
 	}
 
 	if s.pprofServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 		defer cancel()
 		if err := s.pprofServer.Shutdown(ctx); err != nil {
 			log.Errorf("PPROF: pprof server shutdown failed: %v", err)
@@ -472,7 +469,7 @@ func (s *Server) shutdownServer() {
 		bgDone <- s.backgroundGroup.Wait()
 	}()
 
-	bgTimer := time.NewTimer(DefaultTimeout)
+	bgTimer := time.NewTimer(config.Timeout)
 	defer bgTimer.Stop()
 	select {
 	case err := <-bgDone:
@@ -490,7 +487,7 @@ func (s *Server) shutdownServer() {
 		refreshDone <- s.cacheRefreshGroup.Wait()
 	}()
 
-	refreshTimer := time.NewTimer(DefaultTimeout)
+	refreshTimer := time.NewTimer(config.Timeout)
 	defer refreshTimer.Stop()
 	select {
 	case err := <-refreshDone:

@@ -185,8 +185,7 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `config.RecursiveIndicator` | config | "builtin_recursive" |
 | `cache.StaleMaxAge` | cache | 45 days |
 | `pool.UDPBufferSize` | pool | 1232 |
-| `server.OperationTimeout` | server | 3s |
-| `client.OperationTimeout` | server/client/pool | 3s |
+| `config.Timeout` | config | 5s (global: query, dial, idle, shutdown) |
 | `client.DefaultMaxPipe` | server/client/pool | 16 (max in-flight queries per connection) |
 | `client.DefaultMaxConns` | server/client/pool | 4 (max connections per upstream) |
 | `resolver.MaxCNAMEChain` | server/resolver | 16 |

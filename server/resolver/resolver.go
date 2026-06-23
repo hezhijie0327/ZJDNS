@@ -202,7 +202,7 @@ func (r *Resolver) Query(ctx context.Context, question dns.Question, ecs *edns.E
 		return a, au, ad, v, e, s, true, err
 	}
 
-	resolveCtx, cancel := context.WithTimeout(ctx, config.IdleTimeout)
+	resolveCtx, cancel := context.WithTimeout(ctx, config.Timeout)
 	defer cancel()
 	return r.cname.resolve(resolveCtx, question, ecs)
 }

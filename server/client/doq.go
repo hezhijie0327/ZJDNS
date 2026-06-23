@@ -22,7 +22,7 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	key := server.Address
 
 	quicCfg := &quic.Config{
-		MaxIdleTimeout:        config.IdleTimeout,
+		MaxIdleTimeout:        config.Timeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		EnableDatagrams:       true,
@@ -32,7 +32,7 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	dialQUIC := func(dialCtx context.Context, addr string) (*quic.Conn, error) {
 		dialTLS := tlsConfig.Clone()
 		dialTLS.NextProtos = config.NextProtoDoQ
-		timeoutCtx, cancel := context.WithTimeout(dialCtx, connpool.DefaultTimeout)
+		timeoutCtx, cancel := context.WithTimeout(dialCtx, config.Timeout)
 		defer cancel()
 		return quic.DialAddr(timeoutCtx, addr, dialTLS, quicCfg)
 	}

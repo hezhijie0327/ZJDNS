@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
+
 	"zjdns/cache"
 	"zjdns/config"
 )
@@ -67,7 +69,7 @@ func TestRecordRequest_CounterIncrements(t *testing.T) {
 			sc.Reset()
 			sc.RecordRequest(10*time.Millisecond, tt.cacheHit, tt.hadError,
 				tt.protocol, tt.rewrote, tt.hijackDetect, tt.staleServed,
-				tt.fallbackUsed, tt.prefetch, tt.dnssecStatus)
+				tt.fallbackUsed, tt.prefetch, tt.dnssecStatus, dns.RcodeSuccess)
 
 			snap := sc.Snapshot()
 			if snap.TotalRequests != 1 {
@@ -108,7 +110,7 @@ func TestRecordRequest_Protocols(t *testing.T) {
 		t.Run(tt.protocol, func(t *testing.T) {
 			sc := New(testConfig(), nil)
 			sc.RecordRequest(1*time.Millisecond, false, false, tt.protocol,
-				false, false, false, false, false, "")
+				false, false, false, false, false, "", dns.RcodeSuccess)
 			snap := sc.Snapshot()
 			if got := tt.wantKey(snap); got != 1 {
 				t.Errorf("protocol %q: got %d, want 1", tt.protocol, got)
@@ -120,7 +122,7 @@ func TestRecordRequest_Protocols(t *testing.T) {
 func TestSnapshot_Reset(t *testing.T) {
 	sc := New(testConfig(), nil)
 	sc.RecordRequest(5*time.Millisecond, true, false, "UDP",
-		false, false, false, false, false, "secure")
+		false, false, false, false, false, "secure", dns.RcodeSuccess)
 
 	snap := sc.Snapshot()
 	if snap.TotalRequests != 1 {
@@ -140,9 +142,9 @@ func TestSnapshot_Reset(t *testing.T) {
 func TestSnapshot_ResponseTime(t *testing.T) {
 	sc := New(testConfig(), nil)
 	sc.RecordRequest(123*time.Millisecond, false, false, "UDP",
-		false, false, false, false, false, "")
+		false, false, false, false, false, "", dns.RcodeSuccess)
 	sc.RecordRequest(77*time.Millisecond, false, false, "UDP",
-		false, false, false, false, false, "")
+		false, false, false, false, false, "", dns.RcodeSuccess)
 
 	snap := sc.Snapshot()
 	if snap.TotalResponseTimeMs < 199 || snap.TotalResponseTimeMs > 201 {
@@ -156,7 +158,7 @@ func TestSnapshot_ResponseTime(t *testing.T) {
 func TestToCacheEntry_LoadFromCacheEntry_RoundTrip(t *testing.T) {
 	sc := New(testConfig(), nil)
 	sc.RecordRequest(10*time.Millisecond, true, false, "DoT",
-		true, true, true, true, true, "bogus")
+		true, true, true, true, true, "bogus", dns.RcodeSuccess)
 
 	entry, err := sc.ToCacheEntry()
 	if err != nil {
@@ -192,7 +194,7 @@ func TestToCacheEntry_LoadFromCacheEntry_RoundTrip(t *testing.T) {
 func TestBuildStatsLogJSON(t *testing.T) {
 	sc := New(testConfig(), nil)
 	sc.RecordRequest(50*time.Millisecond, true, false, "DoQ",
-		false, false, false, false, false, "secure")
+		false, false, false, false, false, "secure", dns.RcodeSuccess)
 
 	snap := sc.Snapshot()
 	data, err := BuildStatsLogJSON(&snap)
@@ -241,7 +243,7 @@ func TestBuildStatsLogJSON(t *testing.T) {
 func TestNew_RestoresFromCache(t *testing.T) {
 	sc := New(testConfig(), nil)
 	sc.RecordRequest(1*time.Millisecond, false, false, "UDP",
-		false, false, false, false, false, "")
+		false, false, false, false, false, "", dns.RcodeSuccess)
 
 	entry, _ := sc.ToCacheEntry()
 	// Use a simple in-memory store to simulate cache persistence
@@ -259,7 +261,7 @@ func TestRecordRequest_NilCollector(t *testing.T) {
 	var sc *Collector
 	// Must not panic
 	sc.RecordRequest(1*time.Millisecond, false, false, "UDP",
-		false, false, false, false, false, "")
+		false, false, false, false, false, "", dns.RcodeSuccess)
 	if snap := sc.Snapshot(); snap.TotalRequests != 0 {
 		t.Error("nil collector Snapshot should be empty")
 	}

@@ -73,7 +73,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 			defer activeConnections.Add(-1)
 
 			if server.IsRecursive() {
-				recursiveCtx, recursiveCancel := context.WithTimeout(groupCtx, config.IdleTimeout)
+				recursiveCtx, recursiveCancel := context.WithTimeout(groupCtx, config.Timeout)
 				defer recursiveCancel()
 
 				answer, authority, additional, validated, ecsResponse, usedServer, _, err := r.cname.resolve(recursiveCtx, question, ecs)

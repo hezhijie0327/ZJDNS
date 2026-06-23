@@ -33,9 +33,9 @@ func (s *Server) startDOHServer(port string) error {
 
 	s.httpsServer = &http.Server{
 		Handler:           s,
-		ReadHeaderTimeout: config.IdleTimeout,
-		WriteTimeout:      config.IdleTimeout,
-		IdleTimeout:       config.IdleTimeout,
+		ReadHeaderTimeout: config.Timeout,
+		WriteTimeout:      config.Timeout,
+		IdleTimeout:       config.Timeout,
 	}
 
 	s.serverGroup.Go(func() error {
@@ -57,7 +57,7 @@ func (s *Server) startDoH3Server(port string) error {
 	tlsConfig.NextProtos = config.NextProtoDoH3
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        config.IdleTimeout,
+		MaxIdleTimeout:        config.Timeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             true,

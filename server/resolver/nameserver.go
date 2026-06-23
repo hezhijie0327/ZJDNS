@@ -61,7 +61,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 			msg := rr.resolver.buildMsg(question, ecs, true, false)
 			defer pool.DefaultMessagePool.Put(msg)
 
-			subCtx, subCancel := context.WithTimeout(queryCtx, config.IdleTimeout)
+			subCtx, subCancel := context.WithTimeout(queryCtx, config.Timeout)
 			defer subCancel()
 
 			result := rr.resolver.client.ExecuteQuery(subCtx, msg, server)
@@ -105,7 +105,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 	}
 
 	nsRecords = ShuffleSlice(nsRecords)
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, config.IdleTimeout)
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, config.Timeout)
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)

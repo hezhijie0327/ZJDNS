@@ -70,25 +70,25 @@ type Client struct {
 // caches.
 func New() *Client {
 	udpClient := &dns.Client{
-		Timeout: connpool.OperationTimeout,
+		Timeout: config.Timeout,
 		Net:     "udp",
 		UDPSize: pool.UDPBufferSize,
 	}
 
 	tcpClient := &dns.Client{
-		Timeout: connpool.OperationTimeout,
+		Timeout: config.Timeout,
 		Net:     "tcp",
 	}
 
 	tlsClient := &dns.Client{
-		Timeout: connpool.OperationTimeout,
+		Timeout: config.Timeout,
 		Net:     "tcp-tls",
 	}
 
 	dohTransport := &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 25,
-		IdleConnTimeout:     config.IdleTimeout,
+		IdleConnTimeout:     config.Timeout,
 		DisableCompression:  false,
 		ForceAttemptHTTP2:   true,
 	}
@@ -96,22 +96,22 @@ func New() *Client {
 	doh3Transport := &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 25,
-		IdleConnTimeout:     config.IdleTimeout,
+		IdleConnTimeout:     config.Timeout,
 		DisableCompression:  false,
 		ForceAttemptHTTP2:   false,
 	}
 
 	return &Client{
-		timeout:   connpool.OperationTimeout,
+		timeout:   config.Timeout,
 		udpClient: udpClient,
 		tcpClient: tcpClient,
 		tlsClient: tlsClient,
 		dohClient: &http.Client{
-			Timeout:   connpool.OperationTimeout,
+			Timeout:   config.Timeout,
 			Transport: dohTransport,
 		},
 		doh3Client: &http.Client{
-			Timeout:   connpool.OperationTimeout,
+			Timeout:   config.Timeout,
 			Transport: doh3Transport,
 		},
 		dohTransports:  make(map[string]*http.Client),

@@ -194,7 +194,7 @@ func (mc *MemoryCache) Close() error {
 	if mc.persistStop != nil {
 		close(mc.persistStop)
 		if mc.persistDone != nil {
-			timer := time.NewTimer(config.IdleTimeout)
+			timer := time.NewTimer(config.Timeout)
 			select {
 			case <-mc.persistDone:
 				timer.Stop()

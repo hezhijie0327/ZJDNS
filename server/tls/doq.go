@@ -39,7 +39,7 @@ func (s *Server) startDOQServer() error {
 	quicTLSConfig.NextProtos = config.NextProtoDoQ
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        config.IdleTimeout,
+		MaxIdleTimeout:        config.Timeout,
 		MaxIncomingStreams:    MaxIncomingStreams,
 		MaxIncomingUniStreams: MaxIncomingStreams,
 		Allow0RTT:             true,
@@ -118,7 +118,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 	}
 
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), config.IdleTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 		defer cancel()
 		_ = conn.CloseWithError(QUICCodeNoError, "")
 		done := make(chan struct{})
