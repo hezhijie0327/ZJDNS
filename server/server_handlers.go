@@ -580,6 +580,15 @@ func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt
 			edeOpt = edns.NewEDEOption(code, "")
 		}
 	}
+	// In upstream (forwarder) mode, pass through EDE from the upstream
+	// resolver so downstream clients receive diagnostic codes (e.g. EDE 6
+	// DNSSEC Bogus) instead of silently dropped EDE information.
+	if edeOpt == nil && s.resolver != nil {
+		if upstreamEDE := s.resolver.UpstreamEDEOption(); upstreamEDE != nil {
+			edeOpt = upstreamEDE
+			log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", upstreamEDE.InfoCode, edns.EDECodeString(upstreamEDE.InfoCode))
+		}
+	}
 	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, edeOpt)
 	s.restoreOriginalDomain(msg, question.Name, req.Question[0].Name)
 	return msg

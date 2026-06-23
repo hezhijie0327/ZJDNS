@@ -31,6 +31,10 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 		return nil, nil, nil, false, nil, "", false, errors.New("no upstream servers")
 	}
 
+	// Clear any stale EDE from a previous query so it does not leak into
+	// this query's response.
+	r.lastUpstreamEDE.Store(nil)
+
 	servers = ShuffleSlice(servers)
 
 	if log.Default.Level() >= log.Debug {
@@ -54,7 +58,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 	g.SetLimit(concurrencyLimit(len(servers)))
 
 	var activeConnections atomic.Int32
-	var lastUpstreamEDE atomic.Uint64 // EDE code from upstream SERVFAIL
 
 	for _, srv := range servers {
 		server := srv
@@ -121,6 +124,14 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 						log.Debugf("UPSTREAM: DNSSEC validation result=%t for %s via %s", queryResult.Validated, question.Name, server.Address)
 						ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 
+						// Capture EDE from upstream response for passthrough to
+						// the downstream client. Upstream resolvers may attach EDE
+						// codes (e.g. DNSSEC Bogus) even to NOERROR responses.
+						if upstreamEDE := r.edns.ParseEDE(queryResult.Response); upstreamEDE != nil {
+							r.lastUpstreamEDE.Store(upstreamEDE)
+							log.Debugf("UPSTREAM: captured EDE %d (%s) from successful response via %s", upstreamEDE.InfoCode, edns.EDECodeString(upstreamEDE.InfoCode), server.Address)
+						}
+
 						select {
 						case resultChan <- result{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, ECS: ecsResponse, Server: serverDesc}:
 							remaining := activeConnections.Load() - 1
@@ -135,6 +146,11 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 							return nil
 						}
 					case dns.RcodeNameError:
+						// Capture EDE from upstream NXDOMAIN for passthrough.
+						if upstreamEDE := r.edns.ParseEDE(queryResult.Response); upstreamEDE != nil {
+							r.lastUpstreamEDE.Store(upstreamEDE)
+							log.Debugf("UPSTREAM: captured EDE %d (%s) from NXDOMAIN via %s", upstreamEDE.InfoCode, edns.EDECodeString(upstreamEDE.InfoCode), server.Address)
+						}
 						nxdomainResult.CompareAndSwap(nil, &result{
 							Answer:     queryResult.Response.Answer,
 							Authority:  queryResult.Response.Ns,
@@ -145,14 +161,12 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 						})
 						pool.DefaultMessagePool.Put(queryResult.Response)
 					default:
-						// Capture EDE codes from upstream SERVFAIL so the
+						// Capture EDE codes from upstream error responses so the
 						// client gets a meaningful error instead of a
 						// generic "Network Error".
-						if rcode == dns.RcodeServerFailure {
-							if ede := r.edns.ParseEDE(queryResult.Response); ede != nil {
-								lastUpstreamEDE.Store(uint64(ede.InfoCode))
-								log.Debugf("UPSTREAM: captured EDE %d (%s) from %s", ede.InfoCode, edns.EDECodeString(ede.InfoCode), server.Address)
-							}
+						if ede := r.edns.ParseEDE(queryResult.Response); ede != nil {
+							r.lastUpstreamEDE.Store(ede)
+							log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)", ede.InfoCode, edns.EDECodeString(ede.InfoCode), server.Address, dns.RcodeToString[rcode])
 						}
 						pool.DefaultMessagePool.Put(queryResult.Response)
 					}
@@ -176,8 +190,8 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 			return nxRes.Answer, nxRes.Authority, nxRes.Additional, nxRes.Validated, nxRes.ECS, nxRes.Server, false, nil
 		}
 		// Propagate any EDE code captured from upstream SERVFAIL.
-		if edeCode := lastUpstreamEDE.Load(); edeCode != 0 {
-			return nil, nil, nil, false, nil, "", false, dnssecEDEError(edeCode)
+		if opt := r.lastUpstreamEDE.Load(); opt != nil {
+			return nil, nil, nil, false, nil, "", false, dnssecEDEError(uint64(opt.InfoCode))
 		}
 		return nil, nil, nil, false, nil, "", false, errors.New("all upstream queries failed")
 	case <-queryCtx.Done():
@@ -185,8 +199,8 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 		// context, which can race with the channel-close goroutine.
 		// Check for captured EDE codes here too so they are
 		// not lost to a "context canceled" error.
-		if edeCode := lastUpstreamEDE.Load(); edeCode != 0 {
-			return nil, nil, nil, false, nil, "", false, dnssecEDEError(edeCode)
+		if opt := r.lastUpstreamEDE.Load(); opt != nil {
+			return nil, nil, nil, false, nil, "", false, dnssecEDEError(uint64(opt.InfoCode))
 		}
 		return nil, nil, nil, false, nil, "", false, queryCtx.Err()
 	}

@@ -78,16 +78,17 @@ type upstreamSet struct {
 // Resolver handles DNS query resolution by dispatching to upstream servers,
 // recursive resolution, or fallback servers as configured.
 type Resolver struct {
-	client        *client.Client
-	edns          *edns.Handler
-	cidr          CIDRMatcher
-	buildMsg      BuildQueryFunc
-	upstream      *upstreamSet
-	fallback      *upstreamSet
-	recursive     *Recursive
-	cname         *CNAME
-	validator     *Validator
-	DNSSECEnforce bool
+	client           *client.Client
+	edns             *edns.Handler
+	cidr             CIDRMatcher
+	buildMsg         BuildQueryFunc
+	upstream         *upstreamSet
+	fallback         *upstreamSet
+	recursive        *Recursive
+	cname            *CNAME
+	validator        *Validator
+	DNSSECEnforce    bool
+	lastUpstreamEDE  atomic.Pointer[edns.EDEOption] // EDE from upstream response for passthrough
 }
 
 // Validator holds the DNSSEC and hijack detection components for response
@@ -156,6 +157,17 @@ func (r *Resolver) Recursive() *Recursive {
 		return nil
 	}
 	return r.recursive
+}
+
+// UpstreamEDEOption returns the EDE option parsed from the last upstream
+// response (any rcode). Returns nil when no EDE was present or the resolver
+// used recursive mode. Callers should pass this through to downstream clients
+// so upstream DNSSEC bogus and other diagnostic EDE codes are not dropped.
+func (r *Resolver) UpstreamEDEOption() *edns.EDEOption {
+	if r == nil {
+		return nil
+	}
+	return r.lastUpstreamEDE.Load()
 }
 
 // UpstreamServers returns the current list of primary upstream servers.
