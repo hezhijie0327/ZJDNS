@@ -381,12 +381,14 @@ func validatePorts(cfg *ServerConfig) error {
 			return err
 		}
 	}
-	if err := validatePort("server.tls.port", cfg.Server.TLS.Port); err != nil {
-		return err
-	}
-	if cfg.Server.TLS.HTTPS.Port != "" {
-		if err := validatePort("server.tls.https.port", cfg.Server.TLS.HTTPS.Port); err != nil {
+	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
+		if err := validatePort("server.tls.port", cfg.Server.TLS.Port); err != nil {
 			return err
+		}
+		if cfg.Server.TLS.HTTPS.Port != "" {
+			if err := validatePort("server.tls.https.port", cfg.Server.TLS.HTTPS.Port); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

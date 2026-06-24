@@ -78,6 +78,44 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 						return queryCtx.Err()
 					}
 				}
+
+				// FORMERR fallback: some authoritative servers (e.g. Microsoft
+				// mail.protection.outlook.com) reject all EDNS queries with FORMERR.
+				// Retry once without EDNS to recover (RFC 6891 §6.2.2).
+				if rcode == dns.RcodeFormatError {
+					pool.DefaultMessagePool.Put(result.Response)
+					log.Debugf("RECURSION: ns=%s FORMERR, retrying without EDNS for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
+
+					// Build a bare query without EDNS options
+					bareMsg := pool.DefaultMessagePool.Get()
+					bareMsg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
+					bareMsg.RecursionDesired = true
+
+					retryCtx, retryCancel := context.WithTimeout(queryCtx, config.Timeout)
+					retryResult := rr.resolver.client.ExecuteQuery(retryCtx, bareMsg, server)
+					retryCancel()
+					pool.DefaultMessagePool.Put(bareMsg)
+
+					if retryResult.Error == nil && retryResult.Response != nil {
+						retryRcode := retryResult.Response.Rcode
+						if retryRcode == dns.RcodeSuccess || retryRcode == dns.RcodeNameError {
+							select {
+							case resultChan <- retryResult.Response:
+								cancel(errors.New("first win after FORMERR retry"))
+								return nil
+							case <-queryCtx.Done():
+								pool.DefaultMessagePool.Put(retryResult.Response)
+								return queryCtx.Err()
+							}
+						}
+						log.Debugf("RECURSION: ns=%s FORMERR retry rcode=%s for %s %s", nsAddr, dns.RcodeToString[retryRcode], question.Name, dns.TypeToString[question.Qtype])
+						pool.DefaultMessagePool.Put(retryResult.Response)
+					} else if retryResult.Error != nil {
+						log.Debugf("RECURSION: ns=%s FORMERR retry error=%v for %s %s", nsAddr, retryResult.Error, question.Name, dns.TypeToString[question.Qtype])
+					}
+					return nil
+				}
+
 				log.Debugf("RECURSION: ns=%s rcode=%s for %s %s", nsAddr, dns.RcodeToString[rcode], question.Name, dns.TypeToString[question.Qtype])
 				pool.DefaultMessagePool.Put(result.Response)
 			} else if result.Error != nil {
