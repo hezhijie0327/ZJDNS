@@ -16,7 +16,6 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	"zjdns/server/querylog"
 	"zjdns/server/resolver"
 )
 
@@ -78,7 +77,6 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool, requestProtocol string) *dns.Msg {
 	if atomic.LoadInt32(&s.closed) != 0 {
-		s.logQueryEarly(req, clientIP, requestProtocol, dns.RcodeServerFailure, "server closed")
 		msg := s.buildResponse(req)
 		msg.Rcode = dns.RcodeServerFailure
 		return msg
@@ -90,7 +88,6 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 			defer func() { <-s.semaphore }()
 		default:
 			log.Debugf("QUERY: max concurrent reached, returning SERVFAIL")
-			s.logQueryEarly(req, clientIP, requestProtocol, dns.RcodeServerFailure, "max concurrent reached")
 			msg := s.buildResponse(req)
 			msg.Rcode = dns.RcodeServerFailure
 			return msg
@@ -98,7 +95,6 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 	}
 
 	if req == nil || len(req.Question) == 0 {
-		s.logQueryEarly(req, clientIP, requestProtocol, dns.RcodeFormatError, "nil request or empty question")
 		msg := pool.DefaultMessagePool.Get()
 		if req != nil {
 			msg.SetReply(req)
@@ -118,7 +114,6 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 	}
 
 	if len(question.Name) > config.MaxDomainLength || question.Qtype == dns.TypeANY {
-		s.logQueryEarly(req, clientIP, requestProtocol, dns.RcodeRefused, "domain too long or ANY query")
 		msg := pool.DefaultMessagePool.Get()
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeRefused
@@ -143,8 +138,6 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 	var responseMsg *dns.Msg
 	fallbackUsed := false
 	dnssecStatus := ""
-	var queryLogErr error
-	var queryLogEDE uint16
 	defer func() {
 		responseTime := time.Since(startTime)
 		rcode := dns.RcodeServerFailure // default for early returns without responseMsg
@@ -157,9 +150,6 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 		if s.statsMgr != nil {
 			s.statsMgr.RecordRequest(responseTime, cacheHit, hadError, requestProtocol, rewrote, hijackDetected, staleServed, fallbackUsed, prefetchTriggered, dnssecStatus, rcode)
 		}
-
-		// Query event logging
-		s.logQueryDefer(question, clientIP, requestProtocol, rcode, responseTime, cacheHit, queryLogErr, queryLogEDE, dnssecStatus, staleServed, fallbackUsed, hijackDetected, responseMsg)
 	}()
 
 	if s.rewriteMgr.HasRules() {
@@ -229,7 +219,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 			return responseMsg
 		}
 
-		responseMsg = s.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &hadError, &fallbackUsed, &dnssecStatus, &queryLogErr, &queryLogEDE)
+		responseMsg = s.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &hadError, &fallbackUsed, &dnssecStatus)
 		return responseMsg
 	}
 
@@ -245,7 +235,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 		}
 	}
 
-	responseMsg = s.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &hadError, &fallbackUsed, &dnssecStatus, &queryLogErr, &queryLogEDE)
+	responseMsg = s.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &hadError, &fallbackUsed, &dnssecStatus)
 	return responseMsg
 }
 
@@ -444,7 +434,7 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 	}
 }
 
-func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool, dnssecStatus *string, queryLogErr *error, queryLogEDE *uint16) *dns.Msg {
+func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool, dnssecStatus *string) *dns.Msg {
 	log.Debugf("CACHE: miss key=%s for %s, querying upstream/recursive", cacheKey, question.Name)
 	answer, authority, additional, validated, ecsResponse, _, usedFallback, err := s.resolver.Query(s.ctx, question, ecsOpt)
 	if fallbackUsed != nil && usedFallback {
@@ -459,13 +449,13 @@ func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *e
 		if hadError != nil {
 			*hadError = true
 		}
-		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, err, dnssecStatus, queryLogErr, queryLogEDE)
+		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, err, dnssecStatus)
 	}
 
 	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, usedFallback, clientIP, isSecureConnection, dnssecStatus)
 }
 
-func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string, queryLogErr *error, queryLogEDE *uint16) *dns.Msg {
+func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string) *dns.Msg {
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found && s.canServeExpiredEntry(entry) {
 		// Serving stale cache on error fallback
 		if entry.Validated {
@@ -499,15 +489,6 @@ func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Q
 			log.Debugf("RESULT: non-DNSSEC error, using EDE %d: %v", edeCode, queryErr)
 		}
 	}
-
-	// Capture error and EDE code for query logging (read by defer).
-	if queryLogErr != nil {
-		*queryLogErr = queryErr
-	}
-	if queryLogEDE != nil {
-		*queryLogEDE = edeCode
-	}
-
 	ede := edns.NewEDEOption(edeCode, "")
 	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede)
 	return msg
@@ -733,72 +714,6 @@ func (s *Server) restoreOriginalDomain(msg *dns.Msg, currentName, originalName s
 			rr.Header().Name = originalName
 		}
 	}
-}
-
-// logQueryEarly logs a query event for early returns that happen before the
-// defer block is set up (server closed, max concurrent, malformed requests).
-func (s *Server) logQueryEarly(req *dns.Msg, clientIP net.IP, protocol string, rcode int, errMsg string) {
-	if s.queryLogger == nil {
-		return
-	}
-	entry := querylog.Entry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		ClientIP:  querylog.ClientIPString(clientIP),
-		Protocol:  protocol,
-		Rcode:     dns.RcodeToString[rcode],
-		RcodeNum:  rcode,
-		Error:     errMsg,
-		Mode:      s.queryLogMode(),
-	}
-	if req != nil && len(req.Question) > 0 {
-		entry.Domain = req.Question[0].Name
-		entry.QType = dns.TypeToString[req.Question[0].Qtype]
-	}
-	s.queryLogger.Log(entry)
-}
-
-// logQueryDefer logs a query event from the defer block with full context.
-func (s *Server) logQueryDefer(question dns.Question, clientIP net.IP, protocol string, rcode int, responseTime time.Duration, cacheHit bool, queryLogErr error, queryLogEDE uint16, dnssecStatus string, staleServed, fallbackUsed, hijackDetected bool, responseMsg *dns.Msg) {
-	if s.queryLogger == nil {
-		return
-	}
-	entry := querylog.Entry{
-		Timestamp:      time.Now().UTC().Format(time.RFC3339Nano),
-		Domain:         question.Name,
-		QType:          dns.TypeToString[question.Qtype],
-		ClientIP:       querylog.ClientIPString(clientIP),
-		Protocol:       protocol,
-		Rcode:          dns.RcodeToString[rcode],
-		RcodeNum:       rcode,
-		ResponseTimeMs: responseTime.Milliseconds(),
-		CacheHit:       cacheHit,
-		DNSSECStatus:   dnssecStatus,
-		Mode:           s.queryLogMode(),
-		StaleServed:    staleServed,
-		FallbackUsed:   fallbackUsed,
-		HijackDetected: hijackDetected,
-	}
-	if responseMsg != nil {
-		entry.AnswerCount = len(responseMsg.Answer)
-		entry.AuthorityCount = len(responseMsg.Ns)
-		entry.AdditionalCount = len(responseMsg.Extra)
-	}
-	if queryLogErr != nil {
-		entry.Error = queryLogErr.Error()
-	}
-	if queryLogEDE != 0 {
-		entry.EDECode = queryLogEDE
-		entry.EDEName = edns.EDECodeString(queryLogEDE)
-	}
-	s.queryLogger.Log(entry)
-}
-
-// queryLogMode returns the resolution mode string for query logging.
-func (s *Server) queryLogMode() string {
-	if s.resolver != nil && len(s.resolver.UpstreamServers()) > 0 {
-		return "upstream"
-	}
-	return "recursive"
 }
 
 func (s *Server) buildQueryMessage(question dns.Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {

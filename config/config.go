@@ -56,7 +56,7 @@ type HTTPSSettings struct {
 }
 
 // FeatureFlags enables optional features: hijack protection, DDR, ECS, cache,
-// latency probes, stats, and query logging.
+// latency probes, and stats.
 type FeatureFlags struct {
 	HijackProtection bool                  `json:"hijack_protection"`
 	DNSSECEnforce    bool                  `json:"dnssec_enforce,omitempty"`
@@ -65,8 +65,6 @@ type FeatureFlags struct {
 	Cache            CacheSettings         `json:"cache,omitempty"`
 	LatencyProbe     []LatencyProbeStep    `json:"latency_probe,omitempty"`
 	Stats            *StatsSettings        `json:"stats,omitempty"`
-	QueryLog         string                `json:"query_log,omitempty"`
-	QueryLogRcode    string                `json:"query_log_rcode,omitempty"`
 }
 
 // DDRSettings configures Discovery of Designated Resolvers (DDR) advertisement.

@@ -27,7 +27,6 @@ import (
 	"zjdns/rewrite"
 	"zjdns/server/client"
 	"zjdns/server/latency"
-	"zjdns/server/querylog"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
 	servertls "zjdns/server/tls"
@@ -45,7 +44,6 @@ type Server struct {
 	rewriteMgr        *rewrite.Evaluator
 	cidrMgr           *cidr.Filter
 	statsMgr          *stats.Collector
-	queryLogger       *querylog.Logger
 	pprofServer       *http.Server
 	ctx               context.Context
 	cancel            context.CancelCauseFunc
@@ -130,17 +128,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	if cfg.Server.MaxConcurrent > 0 {
 		server.semaphore = make(chan struct{}, cfg.Server.MaxConcurrent)
-	}
-
-	if cfg.Server.Features.QueryLog != "" {
-		rcodeFilter := querylog.ParseRcodeFilter(cfg.Server.Features.QueryLogRcode)
-		ql, err := querylog.New(cfg.Server.Features.QueryLog, rcodeFilter)
-		if err != nil {
-			cancel(fmt.Errorf("query logger init: %w", err))
-			return nil, fmt.Errorf("query logger init: %w", err)
-		}
-		server.queryLogger = ql
-		log.Infof("QUERY_LOG: logging to %s (rcode_filter=%s)", cfg.Server.Features.QueryLog, cfg.Server.Features.QueryLogRcode)
 	}
 
 	server.guard = security.New(cache, cfg.Server.Features.HijackProtection)
@@ -494,12 +481,6 @@ func (s *Server) shutdownServer() {
 
 	if s.cacheMgr != nil {
 		dnsutil.CloseWithLog(s.cacheMgr, "Cache store")
-	}
-
-	if s.queryLogger != nil {
-		if err := s.queryLogger.Close(); err != nil {
-			log.Debugf("QUERY_LOG: close error: %v", err)
-		}
 	}
 
 	log.DefaultTimeCache.Stop()
