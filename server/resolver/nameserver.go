@@ -170,41 +170,54 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 				return nil
 			}
 
+			// Query A and AAAA concurrently per NS record —
+			// collect results from both as they arrive.
 			var nsAddrs []string
+			var addrMu sync.Mutex
+			var wg sync.WaitGroup
+			wg.Add(2)
 
-			aQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-			if ans, _, extra, _, _, _, _, err := rr.resolve(resolveCtx, aQuestion, nil, depth+1, forceTCP); err == nil {
+			go func() {
+				defer dnsutil.HandlePanic("Resolve NS A")
+				defer wg.Done()
+				aQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
+				ans, _, extra, _, _, _, _, err := rr.resolve(queryCtx, aQuestion, nil, depth+1, forceTCP)
+				if err != nil {
+					return
+				}
+				addrMu.Lock()
 				for _, rrec := range ans {
 					if a, ok := rrec.(*dns.A); ok {
 						nsAddrs = append(nsAddrs, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
 					}
 				}
-				// Check Additional section for AAAA glue before making a separate query
+				// Also collect AAAA glue from the Additional section
 				for _, rrec := range extra {
 					if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsRecord.Ns) {
 						nsAddrs = append(nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
 					}
 				}
-			}
+				addrMu.Unlock()
+			}()
 
-			hasAaaa := false
-			for _, addr := range nsAddrs {
-				host, _, _ := net.SplitHostPort(addr)
-				if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
-					hasAaaa = true
-					break
-				}
-			}
-			if !hasAaaa {
+			go func() {
+				defer dnsutil.HandlePanic("Resolve NS AAAA")
+				defer wg.Done()
 				aaaaQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-				if ans, _, _, _, _, _, _, err := rr.resolve(resolveCtx, aaaaQuestion, nil, depth+1, forceTCP); err == nil {
-					for _, rrec := range ans {
-						if aaaa, ok := rrec.(*dns.AAAA); ok {
-							nsAddrs = append(nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
-						}
+				ans, _, _, _, _, _, _, err := rr.resolve(queryCtx, aaaaQuestion, nil, depth+1, forceTCP)
+				if err != nil {
+					return
+				}
+				addrMu.Lock()
+				for _, rrec := range ans {
+					if aaaa, ok := rrec.(*dns.AAAA); ok {
+						nsAddrs = append(nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
 					}
 				}
-			}
+				addrMu.Unlock()
+			}()
+
+			wg.Wait()
 
 			if len(nsAddrs) > 0 {
 				allMu.Lock()

@@ -23,7 +23,7 @@ const (
 
 // Default timeouts and intervals.
 const (
-	Timeout = 5 * time.Second // Global timeout for DNS queries, connections, and idle
+	Timeout = 10 * time.Second // Global timeout for DNS queries, connections, and idle
 
 	DefaultLatencyProbeTimeout          = 100 * time.Millisecond
 	DefaultStatsPersistTTL              = 86400
