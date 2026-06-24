@@ -85,13 +85,15 @@ zjdns/
     │   └── doh.go                  # DoH/DoH3 HTTP handlers
     ├── latency/                    # Latency probing
     │   └── probe.go                # A/AAAA latency probing + reordering
+    ├── querylog/                   # Query event logging
+    │   └── querylog.go             # JSON-lines logger with rcode filtering
 ```
 
 ### Dependency Graph
 
 ```
 main ──→ server, config
-server ──→ cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite,
+server ──→ cache, cidr, config, edns, dnsutil, ipdetect, log, pool, querylog, rewrite,
 client ──→ config, edns, dnsutil, log, pool, pool (in client)
 resolver ──→ config, edns, client, security, dnsutil, log, pool
 security ──→ dnsutil, log
@@ -102,6 +104,7 @@ cidr ──→ config, dnsutil, log
 rewrite ──→ config, dnsutil, log
 stats ──→ cache, config, log
 dnsutil ──→ log
+	querylog ──→ log
 pool, log ──→ (zero deps)
 
 No circular dependencies. Sub-packages only import what they need.
@@ -151,6 +154,7 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `Server` | `server` | Core server (New, Start) |
 | `Server` | `server/tls` | TLS listener server (DoT, DoQ, DoH, DoH3) |
 | `Prober` | `server/latency` | A/AAAA latency prober |
+| `Logger` | `server/querylog` | JSON-lines query event logger with rcode filtering |
 | `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3) |
 | `Conn` | `server/client/pool` | Multiplexed TCP/DoT connection (RFC 7766) |
 | `Pool` | `server/client/pool` | TCP/DoT connection pool |
@@ -203,7 +207,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `Info` | Startup/shutdown lifecycle, configuration summary, one-time events |
 | `Debug` | Hot-path detail: every query, cache hit/miss, upstream result, CIDR match |
 
-**Prefixes** (18 canonical, one per logical component):
+**Prefixes** (19 canonical, one per logical component):
 
 | Prefix | Component | Files |
 |--------|-----------|-------|
@@ -215,7 +219,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `RECURSION` | Recursive resolution | server/resolver/{recursive,dnssec_chain,nameserver,zonecut}.go |
 | `SECURITY` | DNSSEC, hijack detection | server/security/*.go, server/resolver/{dnssec_chain,zonecut}.go |
 | `TCPPOOL` | TCP/DoT connection pool | server/client/pool/{tcp,quic}.go |
-| `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC` | One component each | respective files |
+| `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `QUERY_LOG` | One component each | respective files |
 
 **Rules**: Prefix matches logical component, not Go package. No `HIJACK:`/`DNSSEC:` (merged→`SECURITY:`), no `DOT:`/`DOQ:`/`DOH:` (merged→`TLS:`). Hot-path logs are `Debug` only — `Warn`/`Info` on the query path would spam at scale.
 
@@ -252,6 +256,11 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   native stream multiplexing — no capacity semaphore needed.
 - **Config self-sufficiency**: `config.ProjectName` and `config.Version` are
   package-level vars set by `main.go` before calling `config.Loader.LoadConfig()`.
+- **Query event logging**: `server/querylog.Logger` writes JSON-lines to a
+  configurable file (`query_log`/`query_log_rcode`). The logger is mutex-protected
+  with a buffered writer. Event capture happens in the defer block with error/EDE
+  context threaded via pointer params. Early-return paths (server closed, max
+  concurrent, malformed requests) log directly via `logQueryEarly`.
 - **DNSSEC chain-of-trust**: `CryptoValidator` embeds IANA root KSK trust anchors
   (key tags 20326 + 38696). The recursive resolver builds a cryptographic chain at
   each delegation step: queries parent zone for DNSKEY, verifies against trust
