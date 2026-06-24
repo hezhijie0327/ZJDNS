@@ -15,6 +15,7 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 	"zjdns/internal/pool"
 )
 
@@ -77,7 +78,10 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 						return queryCtx.Err()
 					}
 				}
+				log.Debugf("RECURSION: ns=%s rcode=%s for %s %s", nsAddr, dns.RcodeToString[rcode], question.Name, dns.TypeToString[question.Qtype])
 				pool.DefaultMessagePool.Put(result.Response)
+			} else if result.Error != nil {
+				log.Debugf("RECURSION: ns=%s error=%v for %s %s", nsAddr, result.Error, question.Name, dns.TypeToString[question.Qtype])
 			}
 			return nil
 		})
