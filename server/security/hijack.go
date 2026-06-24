@@ -49,16 +49,23 @@ func (d *Detector) CheckResponse(currentDomain, queryDomain string, response *dn
 		}
 	}
 
-	// Collect NS names from the Authority section so glue-record
-	// validation can also accept names that match NS targets even when
-	// they are outside the current zone (cross-zone delegation).
-	// Example: qq.com.cn NS ns1.qq.com — glue ns-cmn1.qq.com is under
-	// .com, not .com.cn, but is still legitimate as it is part of the
-	// same CDN pool.
-	nsRecordNames := make(map[string]bool)
+	// Pre-compute the set of domains that glue records are allowed to
+	// be under. This includes both the exact NS target names and their
+	// parent domains (e.g. ns1.qq.com → {ns1.qq.com, qq.com}).
+	// Glue records in the Additional section are legitimate as long as
+	// they relate to an NS target that has already been validated by
+	// checkAuthorityRecord.
+	nsTargetDomains := make(map[string]bool)
 	for _, rr := range response.Ns {
 		if ns, ok := rr.(*dns.NS); ok {
-			nsRecordNames[dnsutil.NormalizeDomain(ns.Ns)] = true
+			nsName := dnsutil.NormalizeDomain(ns.Ns)
+			nsTargetDomains[nsName] = true
+			// Strip the first label to get the parent domain so
+			// CDN-pool glue records (ns-cmn1.qq.com) sharing the
+			// same parent (qq.com) as an NS target are accepted.
+			if dotIdx := strings.IndexByte(nsName, '.'); dotIdx != -1 {
+				nsTargetDomains[nsName[dotIdx+1:]] = true
+			}
 		}
 	}
 
@@ -76,7 +83,7 @@ func (d *Detector) CheckResponse(currentDomain, queryDomain string, response *dn
 		if rrType != dns.TypeA && rrType != dns.TypeAAAA {
 			continue
 		}
-		if valid, reason := d.checkGlueRecord(rr, currentDomain, queryDomain, nsRecordNames); !valid {
+		if valid, reason := d.checkGlueRecord(rr, currentDomain, nsTargetDomains); !valid {
 			log.Debugf("SECURITY: suspicious glue in additional section from %s: %s %s, reason=%s",
 				currentDomain, dns.TypeToString[rrType], rr.Header().Name, reason)
 			return false, reason
@@ -126,38 +133,25 @@ func (d *Detector) checkAuthorityRecord(rr dns.RR, currentDomain string, cnameTa
 }
 
 // checkGlueRecord validates A/AAAA glue records in the Additional section.
-// Glue records must either name a server within the authority's domain or
-// match an NS target from the Authority section (cross-zone delegation).
-func (d *Detector) checkGlueRecord(rr dns.RR, currentDomain, queryDomain string, nsRecordNames map[string]bool) (bool, string) {
+// Glue is legitimate if it falls within the current zone or relates to an
+// NS target from the already-validated Authority section (cross-zone delegation).
+// nsTargetDomains is a pre-computed set of NS target names and their parent
+// domains (e.g. {ns1.qq.com, qq.com}).
+func (d *Detector) checkGlueRecord(rr dns.RR, currentDomain string, nsTargetDomains map[string]bool) (bool, string) {
 	glueName := dnsutil.NormalizeDomain(rr.Header().Name)
 	rrType := rr.Header().Rrtype
 
-	// Within the current zone → legitimate glue
+	// In-bailiwick: within the current zone
 	if d.isInAuthority(glueName, currentDomain) || glueName == currentDomain {
 		return true, ""
 	}
 
-	// Matches an NS target from the Authority section → cross-zone
-	// delegation glue (e.g. qq.com.cn NS → ns1.qq.com, glue ns-cmn1.qq.com
-	// is in the same CDN pool under .com).
-	if nsRecordNames[glueName] {
-		return true, ""
-	}
-
-	// Extract parent domains from NS targets. Glue records for cross-zone
-	// delegations (e.g. qq.com.cn → ns1.qq.com) often include additional
-	// IPs under the same parent domain (ns-cmn1.qq.com, ns-cnc1.qq.com).
-	// These share the same infrastructure as the NS targets and are legitimate.
-	for nsName := range nsRecordNames {
-		if d.isInAuthority(glueName, nsName) {
+	// Cross-zone delegation: under an NS target or its parent domain.
+	// The Authority section NS records have already passed checkAuthorityRecord,
+	// so any glue that helps resolve those NS targets is legitimate.
+	for targetDomain := range nsTargetDomains {
+		if d.isInAuthority(glueName, targetDomain) {
 			return true, ""
-		}
-		// Extract parent domain by stripping the first label
-		if dotIdx := strings.IndexByte(nsName, '.'); dotIdx != -1 {
-			parentDomain := nsName[dotIdx+1:]
-			if d.isInAuthority(glueName, parentDomain) {
-				return true, ""
-			}
 		}
 	}
 
