@@ -377,23 +377,25 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
 		}
 
-		// Only probe when addresses came from glue/resolution (not cache).
-		if len(nsGlue) > 0 || len(nextNS) > 0 {
-			nextNS = rr.orderNSAddresses(nextNS)
-		}
-
-		// Cache latency-sorted A/AAAA glue records per NS name so
-		// future queries (including after restart) hit warm cache.
+		// Cache A/AAAA glue records per NS name immediately so
+		// future queries hit warm cache. A background latency probe
+		// will reorder them later — the current query uses addresses
+		// as-is to avoid blocking the resolution pipeline.
 		if rr.cache != nil && len(nsGlue) > 0 {
 			for nsName, records := range nsGlue {
-				sortedRecords := reorderRecordsByAddrs(records, nextNS)
-				if len(sortedRecords) > 0 {
+				if len(records) > 0 {
 					qtype := records[0].Header().Rrtype
 					cacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, false)
-					rr.cache.Set(cacheKey, sortedRecords, nil, nil, false, nil)
-					log.Debugf("RECURSION: cached %d latency-sorted glue records for NS %s", len(sortedRecords), nsName)
+					rr.cache.Set(cacheKey, records, nil, nil, false, nil)
 				}
 			}
+			// Fire async latency probe to update cache with sorted records.
+			// Copy the map so the goroutine owns the data.
+			glueCopy := make(map[string][]dns.RR, len(nsGlue))
+			for nsName, records := range nsGlue {
+				glueCopy[nsName] = records
+			}
+			go rr.probeAndCacheNSGlue(glueCopy)
 		}
 
 		pool.DefaultMessagePool.Put(response)
@@ -486,17 +488,59 @@ func (rr *Recursive) maybeProbeRootServers() {
 	}
 }
 
-// orderNSAddresses orders NS addresses by latency using built-in ICMP/UDP53/TCP53
-// probing. It runs inline with a capped timeout so it does not stall resolution.
+// orderNSAddresses returns NS addresses as-is. Latency probing is done
+// asynchronously via probeAndCacheNSGlue so the resolution pipeline is not
+// blocked. Future queries benefit from cached latency-sorted ordering via
+// lookupNSAddrsFromCache.
 func (rr *Recursive) orderNSAddresses(addresses []string) []string {
-	if len(addresses) <= 1 || rr == nil {
-		return addresses
+	return addresses
+}
+
+// probeAndCacheNSGlue runs latency probes against all IPs in the nsGlue map
+// and updates the per-NS cache with latency-sorted A/AAAA records. This runs
+// asynchronously so it does not block the resolution pipeline.
+func (rr *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
+	defer dnsutil.HandlePanic("probeAndCacheNSGlue")
+	if rr.cache == nil || len(nsGlue) == 0 {
+		return
 	}
-	sorted := sortAddrsByLatency(addresses, infrastructureProbeSteps, config.Timeout)
-	if len(sorted) > 0 && sorted[0] != addresses[0] {
-		log.Debugf("RECURSION: NS reordered by latency (fastest=%s, was=%s)", sorted[0], addresses[0])
+
+	// Collect all addresses from glue records.
+	var allAddrs []string
+	for _, records := range nsGlue {
+		for _, rrec := range records {
+			switch r := rrec.(type) {
+			case *dns.A:
+				if r != nil {
+					allAddrs = append(allAddrs, net.JoinHostPort(r.A.String(), config.DefaultDNSPort))
+				}
+			case *dns.AAAA:
+				if r != nil {
+					allAddrs = append(allAddrs, net.JoinHostPort(r.AAAA.String(), config.DefaultDNSPort))
+				}
+			}
+		}
 	}
-	return sorted
+
+	if len(allAddrs) <= 1 {
+		return
+	}
+
+	sorted := sortAddrsByLatency(allAddrs, infrastructureProbeSteps, 30*time.Second)
+	if len(sorted) == 0 {
+		return
+	}
+
+	// Reorder each NS name's records by the probed latency order and cache.
+	for nsName, records := range nsGlue {
+		sortedRecords := reorderRecordsByAddrs(records, sorted)
+		if len(sortedRecords) > 0 {
+			qtype := records[0].Header().Rrtype
+			cacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, false)
+			rr.cache.Set(cacheKey, sortedRecords, nil, nil, false, nil)
+			log.Debugf("RECURSION: async-cached %d latency-sorted glue records for NS %s", len(sortedRecords), nsName)
+		}
+	}
 }
 
 // sortAddrsByLatency extracts IPs from addr:port strings, probes them

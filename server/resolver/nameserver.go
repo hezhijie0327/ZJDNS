@@ -245,11 +245,14 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 				return nil
 			}
 
-			// Sort resolved addresses by latency before using.
+			// Use addresses as-is for the current query. Latency
+			// ordering happens asynchronously via probeAndCacheNSGlue
+			// for glue-sourced addresses, so future cache hits return
+			// latency-sorted records via lookupNSAddrsFromCache.
 			nsAddrs = rr.orderNSAddresses(nsAddrs)
 
-			// Reorder A/AAAA records to match latency-sorted order
-			// before caching, so future cache hits return fast IPs first.
+			// Cache A/AAAA records (unsorted) so future queries hit warm
+			// cache. The async latency probe will reorder them later.
 			ansARecords = reorderRecordsByAddrs(ansARecords, nsAddrs)
 			ansAAAARecords = reorderRecordsByAddrs(ansAAAARecords, nsAddrs)
 
