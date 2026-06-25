@@ -46,9 +46,11 @@ type Recursive struct {
 	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
 	cache             cache.Store
 
-	// Root server latency ordering — probed once asynchronously on first use.
+	// Root server latency ordering — probed asynchronously, refreshed
+	// every config.DefaultRootProbeInterval (cache TTL) or on expiry.
 	sortedRootServers atomic.Value // stores []string
-	rootServersOnce   sync.Once
+	rootProbeTime     atomic.Int64 // unix timestamp of last successful probe
+	rootProbeMu       sync.Mutex   // prevents concurrent re-probes
 }
 
 // infrastructureProbeSteps defines the built-in latency probe sequence for
@@ -405,55 +407,77 @@ const rootServersCacheKey = "dns:_internal:root-servers:16:1"
 
 // getRootServers returns root servers ordered by latency. It checks memory
 // first, then the DNS cache (survives restarts via snapshot), then falls back
-// to the default IANA order while an async probe runs.
+// to the default IANA order. A background re-probe is triggered when the
+// cached order is older than config.DefaultRootProbeInterval.
 func (rr *Recursive) getRootServers() []string {
 	if rr == nil {
 		return DefaultRootServers
 	}
 
+	// Fast path: in-memory, still fresh.
 	if sorted := rr.sortedRootServers.Load(); sorted != nil {
+		elapsed := time.Now().Unix() - rr.rootProbeTime.Load()
+		if elapsed < config.DefaultRootProbeInterval {
+			return sorted.([]string)
+		}
+		// Stale — trigger background refresh, keep serving current order.
+		go rr.maybeProbeRootServers()
 		return sorted.([]string)
 	}
 
 	// Check persisted cache from previous run.
 	if rr.cache != nil {
-		if entry, found, _ := rr.cache.Get(rootServersCacheKey); found && entry != nil {
+		if entry, found, expired := rr.cache.Get(rootServersCacheKey); found && entry != nil {
 			records := cache.ExpandRecords(entry.Answer)
 			addrs := make([]string, 0, len(records))
-			for _, rr := range records {
-				if txt, ok := rr.(*dns.TXT); ok && len(txt.Txt) > 0 {
+			for _, r := range records {
+				if txt, ok := r.(*dns.TXT); ok && len(txt.Txt) > 0 {
 					addrs = append(addrs, txt.Txt...)
 				}
 			}
 			if len(addrs) > 0 {
 				rr.sortedRootServers.Store(addrs)
-				log.Debugf("RECURSION: root server order loaded from cache (%d addresses)", len(addrs))
-				return addrs
+				if expired {
+					rr.rootProbeTime.Store(0) // force re-probe below
+				} else {
+					rr.rootProbeTime.Store(entry.Timestamp)
+				}
+				log.Debugf("RECURSION: root server order loaded from cache (%d addresses, expired=%v)", len(addrs), expired)
 			}
 		}
 	}
 
-	rr.rootServersOnce.Do(func() {
-		go rr.probeRootServers()
-	})
+	// Trigger probe if nothing loaded or cache was expired.
+	if rr.sortedRootServers.Load() == nil || rr.rootProbeTime.Load() == 0 {
+		go rr.maybeProbeRootServers()
+	}
 
+	if sorted := rr.sortedRootServers.Load(); sorted != nil {
+		return sorted.([]string)
+	}
 	return DefaultRootServers
 }
 
-// probeRootServers measures latency to all root server IPs and stores the
-// sorted order in memory and the DNS cache for persistence across restarts.
-func (rr *Recursive) probeRootServers() {
+// maybeProbeRootServers runs a root server latency probe if one isn't already
+// in progress. Called from getRootServers when the cached order is stale.
+func (rr *Recursive) maybeProbeRootServers() {
+	if !rr.rootProbeMu.TryLock() {
+		return // another probe already running
+	}
+	defer rr.rootProbeMu.Unlock()
+
 	sorted := sortAddrsByLatency(DefaultRootServers, infrastructureProbeSteps, 30*time.Second)
 	if len(sorted) > 0 {
 		rr.sortedRootServers.Store(sorted)
+		rr.rootProbeTime.Store(time.Now().Unix())
 		log.Debugf("RECURSION: root servers reordered by latency (%d total)", len(sorted))
 
-		// Persist to DNS cache as TXT records so the order survives restarts.
+		// Persist as TXT records with TTL matching probe interval.
 		if rr.cache != nil {
 			txtRecords := make([]dns.RR, 0, len(sorted))
 			for _, addr := range sorted {
 				txtRecords = append(txtRecords, &dns.TXT{
-					Hdr: dns.RR_Header{Name: "_internal.", Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 86400},
+					Hdr: dns.RR_Header{Name: "_internal.", Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: uint32(config.DefaultRootProbeInterval)},
 					Txt: []string{addr},
 				})
 			}
