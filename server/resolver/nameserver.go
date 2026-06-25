@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	"github.com/miekg/dns"
 	"golang.org/x/sync/errgroup"
 
+	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
@@ -36,7 +38,11 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 
 	resultChan := make(chan *dns.Msg, 1)
 	g, queryCtx := errgroup.WithContext(queryCtx)
-	g.SetLimit(concurrencyLimit(len(nameservers)))
+	limit := len(nameservers)
+	if limit > config.DefaultMaxConcurrentNS {
+		limit = config.DefaultMaxConcurrentNS
+	}
+	g.SetLimit(limit)
 
 	var activeConnections atomic.Int32
 
@@ -146,7 +152,9 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 		return nil
 	}
 
-	nsRecords = ShuffleSlice(nsRecords)
+	// Process NS records in delegation order — no ShuffleSlice.
+	// Latency-based ordering is applied after address resolution.
+
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, config.Timeout)
 	defer resolveCancel()
 
@@ -170,9 +178,21 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 				return nil
 			}
 
-			// Query A and AAAA concurrently per NS record —
-			// collect results from both as they arrive.
+			nsName := dns.Fqdn(nsRecord.Ns)
+
+			// Try cache first — records may already be latency-probed.
+			cachedAddrs := rr.lookupNSAddrsFromCache(nsName)
+			if len(cachedAddrs) > 0 {
+				allMu.Lock()
+				allAddresses = append(allAddresses, cachedAddrs...)
+				allMu.Unlock()
+				return nil
+			}
+
+			// Cache miss: resolve A and AAAA concurrently.
 			var nsAddrs []string
+			var ansARecords []dns.RR
+			var ansAAAARecords []dns.RR
 			var addrMu sync.Mutex
 			var wg sync.WaitGroup
 			wg.Add(2)
@@ -180,12 +200,13 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 			go func() {
 				defer dnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
-				aQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeA, Qclass: dns.ClassINET}
+				aQuestion := dns.Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}
 				ans, _, extra, _, _, _, _, err := rr.resolve(queryCtx, aQuestion, nil, depth+1, forceTCP)
 				if err != nil {
 					return
 				}
 				addrMu.Lock()
+				ansARecords = ans
 				for _, rrec := range ans {
 					if a, ok := rrec.(*dns.A); ok {
 						nsAddrs = append(nsAddrs, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
@@ -193,7 +214,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 				}
 				// Also collect AAAA glue from the Additional section
 				for _, rrec := range extra {
-					if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsRecord.Ns) {
+					if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsName) {
 						nsAddrs = append(nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
 					}
 				}
@@ -203,12 +224,13 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 			go func() {
 				defer dnsutil.HandlePanic("Resolve NS AAAA")
 				defer wg.Done()
-				aaaaQuestion := dns.Question{Name: dns.Fqdn(nsRecord.Ns), Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
+				aaaaQuestion := dns.Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
 				ans, _, _, _, _, _, _, err := rr.resolve(queryCtx, aaaaQuestion, nil, depth+1, forceTCP)
 				if err != nil {
 					return
 				}
 				addrMu.Lock()
+				ansAAAARecords = ans
 				for _, rrec := range ans {
 					if aaaa, ok := rrec.(*dns.AAAA); ok {
 						nsAddrs = append(nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
@@ -219,11 +241,33 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 
 			wg.Wait()
 
-			if len(nsAddrs) > 0 {
-				allMu.Lock()
-				allAddresses = append(allAddresses, nsAddrs...)
-				allMu.Unlock()
+			if len(nsAddrs) == 0 {
+				return nil
 			}
+
+			// Sort resolved addresses by latency before using.
+			nsAddrs = rr.orderNSAddresses(nsAddrs)
+
+			// Reorder A/AAAA records to match latency-sorted order
+			// before caching, so future cache hits return fast IPs first.
+			ansARecords = reorderRecordsByAddrs(ansARecords, nsAddrs)
+			ansAAAARecords = reorderRecordsByAddrs(ansAAAARecords, nsAddrs)
+
+			// Cache A records so future queries hit warm cache
+			// with latency-sorted ordering preserved.
+			if rr.cache != nil && len(ansARecords) > 0 {
+				aCacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
+				rr.cache.Set(aCacheKey, ansARecords, nil, nil, false, nil)
+			}
+			// Cache AAAA records with latency-sorted ordering.
+			if rr.cache != nil && len(ansAAAARecords) > 0 {
+				aaaaCacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}, nil, false)
+				rr.cache.Set(aaaaCacheKey, ansAAAARecords, nil, nil, false, nil)
+			}
+
+			allMu.Lock()
+			allAddresses = append(allAddresses, nsAddrs...)
+			allMu.Unlock()
 			return nil
 		})
 	}
@@ -232,4 +276,57 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 	allMu.Lock()
 	defer allMu.Unlock()
 	return allAddresses
+}
+
+// reorderRecordsByAddrs reorders A or AAAA DNS records so that records
+// matching the sorted address list come first, preserving the latency-based
+// ordering that orderNSAddresses determined. Records not in the sorted list
+// retain their relative order at the end.
+func reorderRecordsByAddrs(records []dns.RR, sortedAddrs []string) []dns.RR {
+	if len(records) <= 1 || len(sortedAddrs) <= 1 {
+		return records
+	}
+
+	// Build rank map from sorted addresses: IP → position (lower = faster).
+	rank := make(map[string]int, len(sortedAddrs))
+	for i, addr := range sortedAddrs {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if ip != nil {
+			rank[ip.String()] = i
+		}
+	}
+
+	// Default rank for IPs not in the sorted list — sorts after all known IPs.
+	const unknownRank = 1<<31 - 1
+
+	sorted := make([]dns.RR, len(records))
+	copy(sorted, records)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ri, okI := rank[rrIP(sorted[i])]
+		if !okI {
+			ri = unknownRank
+		}
+		rj, okJ := rank[rrIP(sorted[j])]
+		if !okJ {
+			rj = unknownRank
+		}
+		return ri < rj
+	})
+	return sorted
+}
+
+// rrIP extracts the IP string from an A or AAAA record.
+func rrIP(rr dns.RR) string {
+	switch r := rr.(type) {
+	case *dns.A:
+		return r.A.String()
+	case *dns.AAAA:
+		return r.AAAA.String()
+	default:
+		return ""
+	}
 }

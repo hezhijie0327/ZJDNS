@@ -151,6 +151,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		ednsHandler,
 		cidrFilter,
 		server.buildQueryMessage,
+		cache,
 	)
 	server.resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
 	server.resolver.InitServers(cfg.Upstream, cfg.Fallback)

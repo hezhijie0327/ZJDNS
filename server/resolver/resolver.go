@@ -12,6 +12,7 @@ import (
 
 	"github.com/miekg/dns"
 
+	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
@@ -81,6 +82,7 @@ type Resolver struct {
 	validator       *Validator
 	DNSSECEnforce   bool
 	lastUpstreamEDE atomic.Pointer[edns.EDEOption] // EDE from upstream response for passthrough
+	cache           cache.Store                    // DNS response cache for NS A/AAAA lookups
 }
 
 // Validator holds the DNSSEC and hijack detection components for response
@@ -105,7 +107,7 @@ func (us *upstreamSet) store(s []*config.UpstreamServer) {
 
 // New creates a new Resolver with the given client, security guard, EDNS
 // handler, CIDR matcher, and query builder function.
-func New(c *client.Client, g *security.Guard, e *edns.Handler, cidr CIDRMatcher, buildMsg BuildQueryFunc) *Resolver {
+func New(c *client.Client, g *security.Guard, e *edns.Handler, cidr CIDRMatcher, buildMsg BuildQueryFunc, cacheStore cache.Store) *Resolver {
 	r := &Resolver{
 		client:   c,
 		edns:     e,
@@ -113,8 +115,9 @@ func New(c *client.Client, g *security.Guard, e *edns.Handler, cidr CIDRMatcher,
 		buildMsg: buildMsg,
 		upstream: &upstreamSet{},
 		fallback: &upstreamSet{},
+		cache:    cacheStore,
 	}
-	r.recursive = &Recursive{resolver: r}
+	r.recursive = &Recursive{resolver: r, cache: cacheStore}
 	r.cname = &CNAME{resolver: r}
 	r.validator = &Validator{DNSSEC: g.RecordPresence, Crypto: g.Crypto, Hijack: g.Detector}
 	return r

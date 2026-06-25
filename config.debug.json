@@ -1,0 +1,27 @@
+{
+  "server": {
+    "port": "15353",
+    "log_level": "debug",
+    "features": {
+      "hijack_protection": true,
+      "dnssec_enforce": true,
+      "cache": {
+        "size": 4194304,
+        "persist": {
+          "file": "/tmp/zjdns-cache.snapshot",
+          "interval": 5
+        }
+      },
+      "latency_probe": [
+        { "protocol": "ping", "timeout": 100 },
+        { "protocol": "tcp", "port": 53, "timeout": 100 },
+        { "protocol": "udp", "port": 53, "timeout": 100 }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "address": "builtin_recursive"
+    }
+  ]
+}

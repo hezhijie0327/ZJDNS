@@ -18,6 +18,48 @@ cp scripts/pre-commit .git/hooks/ && chmod +x .git/hooks/pre-commit
 golangci-lint run && golangci-lint fmt
 ```
 
+### Debug Test Config
+
+`config.debug.json` is the local test configuration (not committed):
+
+```json
+{
+  "server": {
+    "port": "15353",
+    "log_level": "debug",
+    "features": {
+      "hijack_protection": true,
+      "dnssec_enforce": true,
+      "cache": {
+        "size": 4194304,
+        "persist": {
+          "file": "/tmp/zjdns-cache.snapshot",
+          "interval": 5
+        }
+      },
+      "latency_probe": [
+        { "protocol": "ping", "timeout": 100 },
+        { "protocol": "tcp", "port": 53, "timeout": 100 },
+        { "protocol": "udp", "port": 53, "timeout": 100 }
+      ]
+    }
+  },
+  "upstream": [
+    { "address": "builtin_recursive" }
+  ]
+}
+```
+
+Key points:
+- Port 15353 (non-privileged, avoids conflicts with system DNS)
+- Pure recursive mode (`builtin_recursive`, no external upstreams)
+- Cache snapshot at `/tmp/zjdns-cache.snapshot` with 5s persist interval
+- Latency probe enabled for verifying both client-facing and infrastructure probe paths
+- Debug log level for full visibility into resolution, caching, and latency sorting
+
+Start server: `./zjdns -config config.debug.json`
+Test query: `dig @127.0.0.1 -p 15353 baidu.com A +short`
+
 Test suites exist for `cache`, `cidr`, `config`, `edns`, `rewrite`, `stats`, `internal/dnsutil`, `internal/pool`, `server/resolver`, and `server/security` packages (75+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
 
 Target coverage: ≥90% for utility packages (`dnsutil` 95.7%, `pool` 91.3%). New test suites added for `cache`, `config`, `stats`.

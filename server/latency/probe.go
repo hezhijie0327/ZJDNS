@@ -178,7 +178,67 @@ func sortByLatency(ctx context.Context, answer []dns.RR, steps []config.LatencyP
 }
 
 func measureRecordLatency(ctx context.Context, rr dns.RR, steps []config.LatencyProbeStep) time.Duration {
-	ip := extractIPAddress(rr)
+	return measureIPLatency(ctx, extractIPAddress(rr), steps)
+}
+
+// SortIPsByLatency probes IP addresses using the configured latency probe steps
+// and returns them sorted by measured latency (fastest first). IPs that cannot be
+// probed (loopback, private, link-local) are placed at the end.
+func SortIPsByLatency(ctx context.Context, ips []net.IP, steps []config.LatencyProbeStep) []net.IP {
+	if len(ips) <= 1 || len(steps) == 0 {
+		return ips
+	}
+
+	type candidate struct {
+		ip      net.IP
+		latency time.Duration
+	}
+
+	candidates := make([]candidate, len(ips))
+	for i, ip := range ips {
+		candidates[i] = candidate{ip: ip, latency: time.Duration(math.MaxInt64)}
+	}
+
+	sem := make(chan struct{}, config.DefaultMaxProbes)
+	results := make(chan candidate, len(candidates))
+	for _, c := range candidates {
+		c := c
+		go func() {
+			defer dnsutil.HandlePanic("SortIPsByLatency worker")
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			c.latency = measureIPLatency(ctx, c.ip, steps)
+			results <- c
+		}()
+	}
+
+	for i := 0; i < len(candidates); i++ {
+		select {
+		case candidates[i] = <-results:
+		case <-ctx.Done():
+			return ips // return original order on timeout
+		}
+	}
+	close(results)
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].latency < candidates[j].latency
+	})
+
+	for _, c := range candidates {
+		log.Debugf("LATENCY: probe result %s latency=%s", c.ip.String(), c.latency)
+	}
+
+	sorted := make([]net.IP, len(ips))
+	for i, c := range candidates {
+		sorted[i] = c.ip
+	}
+	return sorted
+}
+
+// measureIPLatency probes a single IP address using the configured latency
+// probe steps, returning the total elapsed time for the first successful probe.
+func measureIPLatency(ctx context.Context, ip net.IP, steps []config.LatencyProbeStep) time.Duration {
 	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
 		return time.Duration(math.MaxInt64)
 	}

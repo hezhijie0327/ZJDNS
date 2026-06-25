@@ -46,6 +46,7 @@ const (
 	DefaultMaxConns = 4
 
 	DefaultMaxProbes          = 16
+	DefaultMaxConcurrentNS    = 3 // max concurrent NS queries per recursion level
 	DefaultMaxIncomingStreams = 256
 )
 
