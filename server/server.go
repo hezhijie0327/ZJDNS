@@ -330,7 +330,8 @@ func (s *Server) startTCPWriteMuSweep() {
 			case <-ticker.C:
 				cutoff := time.Now().Add(-10 * time.Minute).UnixNano()
 				s.tcpWriteMu.Range(func(key, value any) bool {
-					if value.(*tcpWriteEntry).lastAccess.Load() < cutoff {
+					entry, ok := value.(*tcpWriteEntry)
+					if !ok || entry.lastAccess.Load() < cutoff {
 						s.tcpWriteMu.Delete(key)
 					}
 					return true

@@ -50,7 +50,8 @@ type Recursive struct {
 	// every config.DefaultRootProbeInterval (cache TTL) or on expiry.
 	sortedRootServers atomic.Value // stores []string
 	rootProbeTime     atomic.Int64 // unix timestamp of last successful probe
-	rootProbeMu       sync.Mutex   // prevents concurrent re-probes
+	rootProbeMu       sync.Mutex   // prevents concurrent root re-probes
+	nsProbeMu         sync.Mutex   // prevents concurrent NS glue re-probes
 }
 
 // infrastructureProbeSteps defines the built-in latency probe sequence for
@@ -504,6 +505,12 @@ func (rr *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 	if rr.cache == nil || len(nsGlue) == 0 {
 		return
 	}
+
+	// Prevent duplicate concurrent probes for the same address set.
+	if !rr.nsProbeMu.TryLock() {
+		return
+	}
+	defer rr.nsProbeMu.Unlock()
 
 	// Collect all addresses from glue records.
 	var allAddrs []string

@@ -251,18 +251,16 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 			// latency-sorted records via lookupNSAddrsFromCache.
 			nsAddrs = rr.orderNSAddresses(nsAddrs)
 
-			// Cache A/AAAA records (unsorted) so future queries hit warm
-			// cache. The async latency probe will reorder them later.
-			ansARecords = reorderRecordsByAddrs(ansARecords, nsAddrs)
-			ansAAAARecords = reorderRecordsByAddrs(ansAAAARecords, nsAddrs)
+			// Cache A/AAAA records so future queries hit warm cache.
+			// The async latency probe (probeAndCacheNSGlue) reorders
+			// them later for latency-optimized cache hits.
 
-			// Cache A records so future queries hit warm cache
-			// with latency-sorted ordering preserved.
+			// Cache A records so future queries hit warm cache.
 			if rr.cache != nil && len(ansARecords) > 0 {
 				aCacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
 				rr.cache.Set(aCacheKey, ansARecords, nil, nil, false, nil)
 			}
-			// Cache AAAA records with latency-sorted ordering.
+			// Cache AAAA records.
 			if rr.cache != nil && len(ansAAAARecords) > 0 {
 				aaaaCacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}, nil, false)
 				rr.cache.Set(aaaaCacheKey, ansAAAARecords, nil, nil, false, nil)
