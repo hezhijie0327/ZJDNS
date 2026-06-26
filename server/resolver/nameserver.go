@@ -288,7 +288,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 
 	// Merge A and AAAA records per NS name so probeAndCacheNSGlue
 	// ranks all addresses together and stores them under the unified
-	// latency-sorted key (addrCacheKey).
+	// latency-sorted key (nsAddrKey).
 	if rr.cache != nil && (len(aRecordsMap) > 0 || len(aaaaRecordsMap) > 0) {
 		combinedMap := make(map[string][]dns.RR)
 		for nsName, records := range aRecordsMap {

@@ -70,9 +70,9 @@ const (
 	DefaultMaxPipe  = 16
 	DefaultMaxConns = 4
 
-	DefaultRootProbeInterval = 900
-	DefaultMaxProbes         = 16
-	DefaultMaxConcurrentNS   = 3
+	DefaultNSLatencyTTL    = 900 // TTL for sorted NS address cache (root zone is just another NS set)
+	DefaultMaxProbes       = 16
+	DefaultMaxConcurrentNS = 3
 
 	DefaultMaxIncomingStreams = 256
 

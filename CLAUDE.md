@@ -260,7 +260,7 @@ convention.
 | `config.DefaultMaxRecursionDepth` | config | 16 (recursion depth limit) |
 | `config.DefaultMaxIncomingStreams` | config | 256 (QUIC stream limit) |
 | `config.DefaultMaxProbes` | config | 16 (concurrent latency probes) |
-| `config.DefaultRootProbeInterval` | config | 900s (root server latency re-probe interval) |
+| `config.DefaultNSLatencyTTL` | config | 900s (nsAddrKey TTL — NS latency sort refresh; root is just another NS set) |
 | `config.DefaultLatencyProbeTimeout` | config | 100ms (per-step probe timeout) |
 | `config.DefaultAcceptRetryDelay` | config | 100ms (DoT/DoQ accept retry sleep) |
 | `config.DefaultSweepInterval` | config | 5 min (periodic cleanup sweep) |

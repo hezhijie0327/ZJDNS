@@ -154,7 +154,7 @@ func TestCacheEntry_CanServeExpired(t *testing.T) {
 		t.Error("entry within config.DefaultStaleMaxAge should be servable")
 	}
 
-	veryOld := time.Now().Add(-4 * 86400 * time.Second).Unix()
+	veryOld := time.Now().Add(-time.Duration(config.DefaultStaleMaxAge+3600) * time.Second).Unix()
 	entry = &CacheEntry{Timestamp: veryOld, TTL: 60, OriginalTTL: 60}
 	if entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		t.Error("entry older than config.DefaultStaleMaxAge should not be servable")
