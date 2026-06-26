@@ -225,7 +225,11 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 }
 
 func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool, httpPool *httpClientPool) error {
-	url := fmt.Sprintf("%s://%s/", scheme(useTLS), net.JoinHostPort(ip.String(), fmt.Sprint(port)))
+	scheme := "http"
+	if useTLS {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s/", scheme, net.JoinHostPort(ip.String(), fmt.Sprint(port)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return err
@@ -242,9 +246,3 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool, 
 	return nil
 }
 
-func scheme(useTLS bool) string {
-	if useTLS {
-		return "https"
-	}
-	return "http"
-}
