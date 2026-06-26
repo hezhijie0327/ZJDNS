@@ -533,7 +533,12 @@ func (s *Server) Start() error {
 		log.Infof("SERVER: UDP server started on port %s", s.config.Server.Port)
 		err := s.udpServer.ListenAndServe()
 		if err != nil {
-			return fmt.Errorf("UDP startup: %w", err)
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+				return fmt.Errorf("UDP startup: %w", err)
+			}
 		}
 		<-ctx.Done()
 		return nil
@@ -563,7 +568,12 @@ func (s *Server) Start() error {
 		log.Infof("SERVER: TCP server started on port %s", s.config.Server.Port)
 		err := s.tcpServer.ListenAndServe()
 		if err != nil {
-			return fmt.Errorf("TCP startup: %w", err)
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+				return fmt.Errorf("TCP startup: %w", err)
+			}
 		}
 		<-ctx.Done()
 		return nil
