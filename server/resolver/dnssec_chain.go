@@ -193,6 +193,10 @@ func (rr *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string
 	log.Debugf("SECURITY: insecure delegation for %s — DNSKEYs not trusted (no DS in parent)", zone)
 }
 
+// verifyDelegationDSRRSIG cryptographically verifies the RRSIGs over DS records
+// at a delegation point. The 'chain' parameter carries the current delegation's
+// DNSSEC state (zone DNSKEYs, parent DNSKEYs), while 'rr' provides access to
+// the CryptoValidator for signature verification.
 func (rr *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string, chain *dnssecChain, dsRecords []*dns.DS) []*dns.DS {
 	crypto := rr.resolver.validator.Crypto
 	parentKeys := chain.zoneDNSKEYs

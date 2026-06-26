@@ -721,7 +721,10 @@ func lookupCachedRRs(store cache.Store, name string, qtype uint16) []string {
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
-// redirection chain up to config.DefaultMaxCNAMEChain hops.
+// redirection chain up to config.DefaultMaxCNAMEChain hops. Defined in the same
+// file as Recursive because CNAME resolution depends directly on recursive
+// resolution (ch.resolve → rr.resolve). Splitting into a separate file would
+// add unnecessary indirection without reducing coupling.
 type CNAME struct {
 	resolver *Resolver
 }
