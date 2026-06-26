@@ -90,17 +90,17 @@ func New() *Client {
 
 	dohTransport := &http.Transport{
 		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 25,
-		IdleConnTimeout:     config.Timeout,
-		DisableCompression:  false,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     5 * time.Minute,
+		DisableCompression:  true,
 		ForceAttemptHTTP2:   true,
 	}
 
 	doh3Transport := &http.Transport{
 		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 25,
-		IdleConnTimeout:     config.Timeout,
-		DisableCompression:  false,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     5 * time.Minute,
+		DisableCompression:  true,
 		ForceAttemptHTTP2:   false,
 	}
 

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 
 	"github.com/miekg/dns"
@@ -208,6 +209,11 @@ func isQUICRetryable(err error) bool {
 
 	var qTransportError *quic.TransportError
 	if errors.As(err, &qTransportError) && qTransportError.ErrorCode == quic.NoError {
+		return true
+	}
+
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		// A timeout that could happen when the server has been restarted.
 		return true
 	}
 
