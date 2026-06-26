@@ -94,7 +94,7 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 		if rr.resolver.validator.Hijack.IsEnabled() {
 			if valid, reason := rr.resolver.validator.Hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
 				pool.DefaultMessagePool.Put(response)
-				return rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth)
+				return rr.handleSuspiciousResponse(reason, forceTCP)
 			}
 		}
 
@@ -124,7 +124,7 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 		if rr.resolver.validator.Hijack.IsEnabled() {
 			if valid, reason := rr.resolver.validator.Hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
 				pool.DefaultMessagePool.Put(response)
-				answer, authority, additional, validated, ecsResponse, server, hijackDetectedNow, err := rr.handleSuspiciousResponse(reason, forceTCP, ctx, question, ecs, depth)
+				answer, authority, additional, validated, ecsResponse, server, hijackDetectedNow, err := rr.handleSuspiciousResponse(reason, forceTCP)
 				if hijackDetectedNow {
 					hijackDetected = true
 				}
