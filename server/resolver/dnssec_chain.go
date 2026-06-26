@@ -50,6 +50,12 @@ func (rr *Recursive) validateWithDNSSEC(response *dns.Msg, currentDomain string,
 				chain.zoneDNSKEYs = dnskeyRecords
 				crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
 				log.Debugf("SECURITY: verified zone DNSKEY for %s via DS match", currentDomain)
+
+				// Now verify the answer with the newly verified keys
+				if len(response.Answer) > 0 {
+					validated, _ := crypto.ValidateResponse(response, currentDomain, dnskeyRecords)
+					return validated
+				}
 				return true
 			}
 		}
