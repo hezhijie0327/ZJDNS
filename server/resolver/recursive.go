@@ -79,10 +79,11 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 
 	log.Debugf("RECURSION: depth=%d, querying %s (type=%s, tcp=%t, zone=%s, ns=%v)", depth, question.Name, dns.TypeToString[question.Qtype], forceTCP, currentDomain, nameservers)
 
-	// Initialize DNSSEC trust chain with root trust anchors
-	crypto := rr.resolver.validator.Crypto
+	// Initialize DNSSEC trust chain with root trust anchors (when available).
 	chain := &dnssecChain{}
-	chain.parentDNSKEYs = crypto.GetRootKeys()
+	if crypto := rr.resolver.validator.Crypto; crypto != nil {
+		chain.parentDNSKEYs = crypto.GetRootKeys()
+	}
 
 	if normalizedQname == "" {
 		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
