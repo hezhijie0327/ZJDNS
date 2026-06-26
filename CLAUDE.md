@@ -60,7 +60,7 @@ Key points:
 Start server: `./zjdns -config config.debug.json`
 Test query: `dig @127.0.0.1 -p 15353 baidu.com A +short`
 
-Test suites exist for `cache`, `cidr`, `config`, `edns`, `rewrite`, `stats`, `internal/dnsutil`, `internal/pool`, `server/resolver`, and `server/security` packages (75+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
+Test suites exist for `cache`, `cidr`, `config`, `edns`, `rewrite`, `stats`, `internal/dnsutil`, `internal/latency`, `internal/pool`, `server/resolver`, and `server/security` packages (90+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
 
 Target coverage: ≥90% for utility packages (`dnsutil` 95.7%, `pool` 91.3%). New test suites added for `cache`, `config`, `stats`.
 
@@ -76,9 +76,14 @@ zjdns/
 │   ├── log/log.go                 # Logger, TimeCache, Level.String()
 │   ├── pool/pool.go               # MessagePool, BufferPool, constants (zero deps)
 │   ├── dnsutil/dnsutil.go         # NormalizeDomain, IsSecureProtocol, HandlePanic, etc.
-│   └── ipdetect/ipdetect.go       # Public IP detection for auto ECS
+│   ├── ipdetect/ipdetect.go       # Public IP detection for auto ECS
+│   └── latency/                   # Unified latency probing engine (4 files)
+│       ├── prober.go              # Prober, probeSlice[T] generic sorter, dedup, concurrency
+│       ├── probes.go              # ICMP/TCP/UDP/HTTP/HTTPS/HTTP3 probe implementations
+│       ├── dedup.go               # Probe result dedup cache (FNV hash, TTL-based)
+│       └── httppool.go            # HTTP/HTTPS/HTTP3 client pool (per-proto port caching)
 ├── config/                         # Configuration system (2 files)
-│   ├── config.go                   # Types + loader + validation + DDR/CHAOS
+│   ├── config.go                   # Types + loader + validation + DDR/CHAOS + JoinDNSPort helper
 │   └── defaults.go                 # All tunable runtime defaults (ports, timeouts, limits)
 ├── edns/                           # EDNS(0) extensions (5 files)
 │   ├── edns.go                    # Handler, NewHandler, ApplyToMessage
@@ -125,17 +130,17 @@ zjdns/
     │   ├── dot.go                  # DoT listener + per-connection handler
     │   ├── doq.go                  # DoQ listener + stream handler
     │   └── doh.go                  # DoH/DoH3 HTTP handlers
-    ├── latency/                    # Latency probing
-    │   └── probe.go                # A/AAAA latency probing + reordering
+    ├── latency/                    # Client-facing latency probe adapter
+    │   └── probe.go                # Thin adapter delegating to internal/latency; SortIPsByLatency + InitInfraProber
 ```
 
 ### Dependency Graph
 
 ```
 main ──→ server, config
-server ──→ cache, cidr, config, edns, dnsutil, ipdetect, log, pool, rewrite,
+server ──→ cache, cidr, config, edns, dnsutil, ipdetect, latency(internal), log, pool, rewrite,
 client ──→ config, edns, dnsutil, log, pool, pool (in client)
-resolver ──→ config, edns, client, security, dnsutil, log, pool
+resolver ──→ config, edns, client, security, dnsutil, latency(server), log, pool
 security ──→ dnsutil, log
 tls (in server) ──→ config, dnsutil, log, pool, pool (in client)
 cache ──→ config, edns, dnsutil, log
@@ -143,6 +148,8 @@ edns ──→ dnsutil, ipdetect, log
 cidr ──→ config, dnsutil, log
 rewrite ──→ config, dnsutil, log
 stats ──→ cache, config, log
+latency (server) ──→ config, edns, dnsutil, latency(internal), log
+latency (internal) ──→ config, dnsutil, log
 dnsutil ──→ log
 pool, log ──→ (zero deps)
 
@@ -192,7 +199,9 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `stats.Collector` | `stats` | Lock-free metrics (RecordRequest, Snapshot) |
 | `Server` | `server` | Core server (New, Start) |
 | `Server` | `server/tls` | TLS listener server (DoT, DoQ, DoH, DoH3) |
-| `Prober` | `server/latency` | A/AAAA latency prober |
+| `Prober` | `internal/latency` | Unified latency probe engine (generic sorter, dedup, HTTP pool) |
+| `Prober` | `server/latency` | Thin adapter: cache reordering, SortIPsByLatency, InitInfraProber |
+| `DedupCache` | `internal/latency` | Probe result dedup cache (FNV hash, TTL-based eviction) |
 | `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3) |
 | `Conn` | `server/client/pool` | Multiplexed TCP/DoT connection (RFC 7766) |
 | `Pool` | `server/client/pool` | TCP/DoT connection pool |
@@ -211,6 +220,9 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `resolveZoneCut` | `server/resolver` | Builds DNSSEC chain for delegated child zone on-the-fly |
 | `isZoneCut` / `getZoneCutSigner` | `server/resolver` | Detects when answer RRSIGs are signed by child zone keys |
 | `MessagePool` / `BufferPool` | `pool` | sync.Pool-based message and buffer allocators |
+| `config.JoinDNSPort` | `config` | Helper: `net.JoinHostPort(ip, DefaultDNSPort)` |
+| `recordDNSSECFailure` | `server/resolver` | Records EDE code + checks enforcement; eliminates 3x duplicated pattern |
+| `captureUpstreamEDE` | `server/resolver` | Single-point EDE extraction from upstream responses |
 
 ## Key Constants
 
@@ -231,6 +243,8 @@ All tunable runtime defaults are centralized in `config/defaults.go`.
 | `config.DefaultMaxRecursionDepth` | config | 16 (recursion depth limit) |
 | `config.DefaultMaxIncomingStreams` | config | 256 (QUIC stream limit) |
 | `config.DefaultMaxProbes` | config | 16 (concurrent latency probes) |
+| `config.DefaultRootProbeInterval` | config | 900s (root server latency re-probe interval) |
+| `config.DefaultLatencyProbeTimeout` | config | 100ms (per-step probe timeout) |
 | `pool.UDPBufferSize` | pool | 1232 |
 
 ## Logging Conventions
@@ -341,3 +355,28 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   DNSKEYs before setting the AD flag (RFC 4035 §3.1.3).
 - **BufferPool pointer storage**: Buffers are stored as `*[]byte` pointers in
   `sync.Pool` to avoid interface-boxing allocations on every `Put` (SA6002).
+- **Unified latency probe engine** (`internal/latency`): All latency probing
+  (user-facing A/AAAA reorder + infrastructure root/NS server ordering) shares a
+  single engine with generic `probeSlice[T]` sorting, FNV-hash dedup cache (avoids
+  redundant probes within TTL), HTTP/HTTPS/HTTP3 client pool reuse, and
+  context-cancellable goroutine workers with bounded semaphore. The `server/latency`
+  package is now a thin adapter: it holds the `CacheSetter` interface for cache
+  reordering and provides `InitInfraProber()` for infrastructure-level probes.
+  `SortIPsByLatency` delegates directly to the internal engine.
+- **ICMP probe hardening**: Echo ID and Seq are randomly generated per probe; the
+  response loop verifies both fields match before accepting a reply, preventing
+  concurrent probes to the same IP from stealing each other's echo replies.
+- **UDP probe is generic**: All ports send a single zero-byte datagram (valid per
+  RFC 768 §3.1) for universal compatibility regardless of target service.
+- **persistGen fix**: Cache persistence worker uses `Load()` + `Add(-gen)` instead
+  of `Swap(0)` + `Add(gen)`, preserving Set() increments that arrive during
+  `persistSnapshot()`.
+- **EDE capture unified**: `captureUpstreamEDE()` extracts EDE from upstream
+  responses once per query, replacing 3 identical code blocks across rcode cases.
+- **DNSSEC enforcement extracted**: `recordDNSSECFailure()` consolidates the
+  repeated pattern of storing the EDE code and checking `dnssec_enforce`, used
+  across zone cut and delegation validation paths.
+- **DoQ IP count sweep**: A periodic goroutine sweeps stale (zero-count) entries
+  from `doqIPCounts` every 5 minutes to prevent unbounded map growth.
+- **pprof fix**: Added `_ "net/http/pprof"` import so the pprof HTTP server
+  actually registers its debug endpoints on `http.DefaultServeMux`.

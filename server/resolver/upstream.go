@@ -106,6 +106,12 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 						serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
 					}
 
+					// Capture EDE from upstream response for passthrough.
+					// Applies to all rcodes — upstream resolvers attach EDE
+					// codes (e.g. DNSSEC Bogus) to NOERROR, NXDOMAIN, and
+					// SERVFAIL responses alike.
+					captureUpstreamEDE(r, queryResult.Response, server.Address)
+
 					switch rcode {
 					case dns.RcodeSuccess:
 						if len(server.Match) > 0 {
@@ -124,14 +130,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 						log.Debugf("UPSTREAM: DNSSEC validation result=%t for %s via %s", queryResult.Validated, question.Name, server.Address)
 						ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 
-						// Capture EDE from upstream response for passthrough to
-						// the downstream client. Upstream resolvers may attach EDE
-						// codes (e.g. DNSSEC Bogus) even to NOERROR responses.
-						if upstreamEDE := r.edns.ParseEDE(queryResult.Response); upstreamEDE != nil {
-							r.lastUpstreamEDE.Store(upstreamEDE)
-							log.Debugf("UPSTREAM: captured EDE %d (%s) from successful response via %s", upstreamEDE.InfoCode, edns.EDECodeString(upstreamEDE.InfoCode), server.Address)
-						}
-
 						select {
 						case resultChan <- result{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, ECS: ecsResponse, Server: serverDesc}:
 							remaining := activeConnections.Load() - 1
@@ -146,11 +144,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 							return nil
 						}
 					case dns.RcodeNameError:
-						// Capture EDE from upstream NXDOMAIN for passthrough.
-						if upstreamEDE := r.edns.ParseEDE(queryResult.Response); upstreamEDE != nil {
-							r.lastUpstreamEDE.Store(upstreamEDE)
-							log.Debugf("UPSTREAM: captured EDE %d (%s) from NXDOMAIN via %s", upstreamEDE.InfoCode, edns.EDECodeString(upstreamEDE.InfoCode), server.Address)
-						}
 						nxdomainResult.CompareAndSwap(nil, &result{
 							Answer:     queryResult.Response.Answer,
 							Authority:  queryResult.Response.Ns,
@@ -161,13 +154,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 						})
 						pool.DefaultMessagePool.Put(queryResult.Response)
 					default:
-						// Capture EDE codes from upstream error responses so the
-						// client gets a meaningful error instead of a
-						// generic "Network Error".
-						if ede := r.edns.ParseEDE(queryResult.Response); ede != nil {
-							r.lastUpstreamEDE.Store(ede)
-							log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)", ede.InfoCode, edns.EDECodeString(ede.InfoCode), server.Address, dns.RcodeToString[rcode])
-						}
 						pool.DefaultMessagePool.Put(queryResult.Response)
 					}
 				}
@@ -203,6 +189,21 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 			return nil, nil, nil, false, nil, "", false, dnssecEDEError(uint64(opt.InfoCode))
 		}
 		return nil, nil, nil, false, nil, "", false, queryCtx.Err()
+	}
+}
+
+// captureUpstreamEDE extracts and stores the EDE option from an upstream
+// response for passthrough to downstream clients. Upstream resolvers attach
+// EDE codes (e.g. DNSSEC Bogus) to any rcode, so this is called once per
+// response before rcode-specific handling.
+func captureUpstreamEDE(r *Resolver, resp *dns.Msg, serverAddr string) {
+	if resp == nil {
+		return
+	}
+	if ede := r.edns.ParseEDE(resp); ede != nil {
+		r.lastUpstreamEDE.Store(ede)
+		log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
+			ede.InfoCode, edns.EDECodeString(ede.InfoCode), serverAddr, dns.RcodeToString[resp.Rcode])
 	}
 }
 

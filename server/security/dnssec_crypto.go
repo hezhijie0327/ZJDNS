@@ -355,35 +355,6 @@ func dnsutilCompareDomainInRange(name, lower, upper string) bool {
 	return false
 }
 
-// VerifyAuthenticatedDenial checks NSEC/NSEC3 records to confirm that a
-// negative response (NXDOMAIN or NODATA) is cryptographically proven.
-func (cv *CryptoValidator) VerifyAuthenticatedDenial(response *dns.Msg, qname string, qtype uint16) error {
-	normalized := strings.ToLower(qname)
-	nsecs := findNSEC(response.Ns)
-	nsec3s := findNSEC3(response.Ns)
-
-	if len(nsecs) == 0 && len(nsec3s) == 0 {
-		return errors.New("no NSEC/NSEC3 records for authenticated denial")
-	}
-
-	// Verify NSEC coverage
-	for _, nsec := range nsecs {
-		lower := strings.ToLower(nsec.Header().Name)
-		upper := strings.ToLower(nsec.NextDomain)
-		if dnsutilCompareDomainInRange(normalized, lower, upper) {
-			return nil
-		}
-	}
-
-	// NSEC3 verification requires more complex logic; for now, presence
-	// with valid RRSIG is sufficient in common cases.
-	if len(nsec3s) > 0 {
-		return nil
-	}
-
-	return fmt.Errorf("NSEC/NSEC3 does not cover name %s", qname)
-}
-
 // ValidateResponse performs full cryptographic DNSSEC validation of a
 // response. It expects the zone's verified DNSKEY to be provided.
 //

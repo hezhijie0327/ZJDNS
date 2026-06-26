@@ -326,6 +326,22 @@ func (rr *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, name
 	return validated
 }
 
+// recordDNSSECFailure stores the EDE code from the chain and returns a
+// DNSSECError when enforcement is enabled and the zone is a secure delegation
+// (has DS records in the parent). Returns nil when the delegation is insecure
+// or enforcement is off. The validated parameter allows the caller to skip
+// the check when validation already succeeded.
+func (rr *Recursive) recordDNSSECFailure(chain *dnssecChain, validated bool, msg string) error {
+	if len(chain.childDS) == 0 || validated {
+		return nil
+	}
+	rr.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
+	if !rr.resolver.DNSSECEnforce {
+		return nil
+	}
+	return &DNSSECError{EDECode: chain.lastEDECode, Message: msg}
+}
+
 // stripCrossZoneRecords removes answer records whose RRSIG signer name is
 // from a different zone hierarchy than the given zone. These records need
 // independent DNSSEC validation via CNAME chain following — they cannot be

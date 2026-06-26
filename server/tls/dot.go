@@ -181,23 +181,29 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			}
 
 			poolBuf := pool.DefaultBufferPool.Get()
-			writeBuf := poolBuf
-			if len(poolBuf) < 2+len(respBuf) {
+			// Record whether poolBuf was large enough BEFORE any Put call,
+			// so the error path does not read metadata of a buffer that
+			// may already be reused by another goroutine.
+			poolBufOK := len(poolBuf) >= 2+len(respBuf)
+			var writeBuf []byte
+			if poolBufOK {
+				writeBuf = poolBuf[:2+len(respBuf)]
+			} else {
 				writeBuf = make([]byte, 2+len(respBuf))
 				pool.DefaultBufferPool.Put(poolBuf)
+				poolBuf = nil // prevent accidental reuse below
 			}
-			writeBuf = writeBuf[:2+len(respBuf)]
 			binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(respBuf)))
 			copy(writeBuf[2:], respBuf)
 
 			select {
 			case writeCh <- writeTask{data: writeBuf}:
 			case <-connCtx.Done():
-				if len(poolBuf) < 2+len(respBuf) {
+				if poolBufOK {
 					pool.DefaultBufferPool.Put(writeBuf)
-				} else {
-					pool.DefaultBufferPool.Put(poolBuf)
 				}
+				// else: poolBuf was already returned, and writeBuf is a
+				// separately allocated slice that will be GC'd.
 			}
 		}(req, clientIP)
 	}

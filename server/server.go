@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	_ "net/http/pprof" // register pprof handlers on http.DefaultServeMux
 	"os"
 	"os/signal"
 	"strings"
@@ -155,6 +156,12 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	)
 	server.resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
 	server.resolver.InitServers(cfg.Upstream, cfg.Fallback)
+	server.resolver.SetBackgroundContext(backgroundCtx)
+
+	// Initialize the infrastructure-level latency prober for root/NS
+	// server reordering. This is independent of the user-facing
+	// latency_probe configuration.
+	latency.InitInfraProber(backgroundCtx)
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
 		server.prober = latency.New(

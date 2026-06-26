@@ -154,6 +154,15 @@ func (r *Resolver) Recursive() *Recursive {
 	return r.recursive
 }
 
+// SetBackgroundContext sets the background context for async probe goroutines
+// in the recursive resolver. Probes check this context before starting work and
+// abort on cancellation (server shutdown).
+func (r *Resolver) SetBackgroundContext(ctx context.Context) {
+	if r != nil && r.recursive != nil {
+		r.recursive.bgCtx = ctx
+	}
+}
+
 // UpstreamEDEOption returns the EDE option parsed from the last upstream
 // response (any rcode). Returns nil when no EDE was present or the resolver
 // used recursive mode. Callers should pass this through to downstream clients

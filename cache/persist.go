@@ -39,13 +39,19 @@ func (mc *MemoryCache) startPersistWorker() {
 		for {
 			select {
 			case <-ticker.C:
-				gen := mc.persistGen.Swap(0)
+				// Peek without resetting: Load()+Add(-gen) preserves
+				// concurrent Set() increments during persistSnapshot().
+				gen := mc.persistGen.Load()
 				if gen == 0 {
 					continue
 				}
 				if err := mc.persistSnapshot(); err != nil {
-					mc.persistGen.Add(gen)
+					// Leave the counter as-is so the next tick retries.
 					log.Errorf("CACHE: persist snapshot failed: %v", err)
+				} else {
+					// Subtract only what we just persisted; increments during
+					// persistSnapshot() remain for the next tick.
+					mc.persistGen.Add(-gen)
 				}
 			case <-mc.persistStop:
 				return

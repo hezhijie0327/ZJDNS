@@ -45,6 +45,7 @@ type Recursive struct {
 	resolver          *Resolver
 	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
 	cache             cache.Store
+	bgCtx             context.Context // background context for async probes; cancelled on shutdown
 
 	// Root server latency ordering — probed asynchronously, refreshed
 	// every config.DefaultRootProbeInterval (cache TTL) or on expiry.
@@ -52,16 +53,6 @@ type Recursive struct {
 	rootProbeTime     atomic.Int64 // unix timestamp of last successful probe
 	rootProbeMu       sync.Mutex   // prevents concurrent root re-probes
 	nsProbeMu         sync.Mutex   // prevents concurrent NS glue re-probes
-}
-
-// infrastructureProbeSteps defines the built-in latency probe sequence for
-// root and authoritative nameserver IPs: ICMP ping first (fastest), then
-// UDP port 53, then TCP port 53. This is independent of the user-facing
-// latency_probe configuration which may include HTTP/HTTPS/HTTP3 steps.
-var infrastructureProbeSteps = []config.LatencyProbeStep{
-	{Protocol: "ping", Timeout: 100},
-	{Protocol: "udp", Port: 53, Timeout: 100},
-	{Protocol: "tcp", Port: 53, Timeout: 100},
 }
 
 // DNSSECEDECode returns the last DNSSEC EDE code atomically.
@@ -173,14 +164,11 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 					validated = cutValidated
 					// Always record the DNSSEC EDE code for stats and client EDE hints,
 					// even when enforcement is off.
-					if len(chain.childDS) > 0 && !validated {
-						rr.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
-						if rr.resolver.DNSSECEnforce {
-							log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
-							pool.DefaultMessagePool.Put(response)
-							return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
-								fmt.Errorf("DNSSEC validation failed: bogus zone cut delegation for %s", question.Name)
-						}
+					if err := rr.recordDNSSECFailure(chain, validated,
+						fmt.Sprintf("bogus zone cut delegation for %s", question.Name)); err != nil {
+						log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
+						pool.DefaultMessagePool.Put(response)
+						return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false, err
 					}
 				} else {
 					log.Debugf("SECURITY: zone cut resolution failed for %s: %v", question.Name, cutErr)
@@ -469,7 +457,11 @@ func (rr *Recursive) maybeProbeRootServers() {
 	}
 	defer rr.rootProbeMu.Unlock()
 
-	sorted := sortAddrsByLatency(DefaultRootServers, infrastructureProbeSteps, 30*time.Second)
+	ctx := rr.bgCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sorted := sortAddrsByLatency(ctx, DefaultRootServers, 30*time.Second)
 	if len(sorted) > 0 {
 		rr.sortedRootServers.Store(sorted)
 		rr.rootProbeTime.Store(time.Now().Unix())
@@ -487,14 +479,6 @@ func (rr *Recursive) maybeProbeRootServers() {
 			rr.cache.Set(rootServersCacheKey, txtRecords, nil, nil, false, nil)
 		}
 	}
-}
-
-// orderNSAddresses returns NS addresses as-is. Latency probing is done
-// asynchronously via probeAndCacheNSGlue so the resolution pipeline is not
-// blocked. Future queries benefit from cached latency-sorted ordering via
-// lookupNSAddrsFromCache.
-func (rr *Recursive) orderNSAddresses(addresses []string) []string {
-	return addresses
 }
 
 // probeAndCacheNSGlue runs latency probes against all IPs in the nsGlue map
@@ -533,7 +517,11 @@ func (rr *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 		return
 	}
 
-	sorted := sortAddrsByLatency(allAddrs, infrastructureProbeSteps, 30*time.Second)
+	ctx := rr.bgCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sorted := sortAddrsByLatency(ctx, allAddrs, 30*time.Second)
 	if len(sorted) == 0 {
 		return
 	}
@@ -553,7 +541,7 @@ func (rr *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 // sortAddrsByLatency extracts IPs from addr:port strings, probes them
 // concurrently, and returns the addresses sorted fastest-first. Addresses
 // without valid public IPs are placed at the end in original order.
-func sortAddrsByLatency(addresses []string, steps []config.LatencyProbeStep, timeout time.Duration) []string {
+func sortAddrsByLatency(parentCtx context.Context, addresses []string, timeout time.Duration) []string {
 	if len(addresses) <= 1 {
 		return addresses
 	}
@@ -582,9 +570,9 @@ func sortAddrsByLatency(addresses []string, steps []config.LatencyProbeStep, tim
 		return addresses
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
-	sortedIPs := latency.SortIPsByLatency(ctx, probeIPs, steps)
+	sortedIPs := latency.SortIPsByLatency(ctx, probeIPs)
 
 	// Map IPs back to original addresses preserving probe order.
 	ipToAddr := make(map[string]string, len(entries))

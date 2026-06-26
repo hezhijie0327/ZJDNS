@@ -347,13 +347,6 @@ func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExp
 	return msg
 }
 
-func (s *Server) canServeExpiredEntry(entry *cache.CacheEntry) bool {
-	if entry == nil || !entry.IsExpired() {
-		return false
-	}
-	return entry.CanServeExpired(config.DefaultStaleMaxAge)
-}
-
 func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool, dnssecStatus *string) *dns.Msg {
 	if s.config.Server.Features.Cache.PreferStale {
 		if staleServed != nil {
@@ -456,7 +449,7 @@ func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *e
 }
 
 func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string) *dns.Msg {
-	if entry, found, _ := s.cacheMgr.Get(cacheKey); found && s.canServeExpiredEntry(entry) {
+	if entry, found, _ := s.cacheMgr.Get(cacheKey); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		// Serving stale cache on error fallback
 		if entry.Validated {
 			*dnssecStatus = "secure"

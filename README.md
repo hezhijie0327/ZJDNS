@@ -17,7 +17,7 @@
 - **TCP/DoT/DoQ 连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生 stream 复用，连接失败回退单次连接
 - **智能协议协商**：UDP 截断自动回退 TCP
 - **CNAME 链解析**：多级 CNAME 追踪，防循环（最大 16 级）
-- **A/AAAA 延迟探测**：后台多协议（ping/tcp/udp/http/https/http3）速度检测，按最快顺序重排
+- **A/AAAA 延迟探测**：统一引擎 + 多协议（ping/tcp/udp/http/https/http3）速度检测，按最快顺序重排，去重缓存避免重复探测，UDP 支持任意端口通用检测
 - **DNS 重写**：精确域名匹配 + 客户端 IP 过滤 + 自定义响应码
 
 ### 🛡️ 安全与防御
@@ -59,6 +59,8 @@
 - **无锁 RNG**：`math/rand/v2.IntN()` 替代自定义 mutex RNG
 - **对象池**：`sync.Pool` 复用 `dns.Msg` 和 `[]byte`
 - **CIDR IPv4 位运算**：uint32 掩码匹配，避免 `net.IPNet.Contains`
+- **延迟探测去重**：FNV hash 缓存探测结果，TTL 控制避免高 QPS 下重复探测
+- **HTTP 探测连接池**：按 (端口, TLS, HTTP3) 缓存客户端，避免重复 TLS 握手
 - **TCP/DoT 流水线**：单连接 16 路并发查询，reader goroutine 按 DNS ID 分发响应
 - **连接池**：TCP/DoT/DoQ 每上游 4 连接上限，容量背压，死连接自动驱逐重建
 - **并发查询**：errgroup + 自适应并发限制 + 首胜即取消
@@ -107,7 +109,12 @@ zjdns/
 │   ├── log/log.go                   # 日志组件 (Error/Warn/Info/Debug)
 │   ├── pool/pool.go                 # sync.Pool 对象池 (MessagePool, BufferPool)
 │   ├── dnsutil/dnsutil.go           # DNS 工具函数 (域名规范化、Panic 恢复等)
-│   └── ipdetect/ipdetect.go         # 公网 IP 检测 (ECS 自动配置)
+│   ├── ipdetect/ipdetect.go         # 公网 IP 检测 (ECS 自动配置)
+│   └── latency/                     # 统一延迟探测引擎 (4 文件)
+│       ├── prober.go                # Prober 引擎 + 泛型排序 + 去重 + 并发控制
+│       ├── probes.go                # ICMP (随机 ID)/TCP/UDP (通用)/HTTP/HTTPS/HTTP3
+│       ├── dedup.go                 # FNV hash 去重缓存 (TTL-based)
+│       └── httppool.go              # HTTP/HTTPS/HTTP3 客户端池 (按协议端口缓存)
 ├── config/                          # 配置系统 (2 文件)
 │   ├── config.go                    # 类型定义 + 加载 + 校验 + DDR/CHAOS
 │   └── defaults.go                  # 可调优运行默认值 (端口/超时/限制/缓存)
@@ -156,7 +163,7 @@ zjdns/
     │   ├── dnssec.go                # 上游 DNSSEC 轻量验证 (AD 标志)
     │   ├── dnssec_crypto.go         # 密码学 DNSSEC (RRSIG/DS/信任锚)
     │   └── hijack.go                # DNS 劫持检测 + UDP→TCP 回退
-    └── latency/probe.go             # 延迟探测与重排
+    └── latency/probe.go             # 客户面延迟探测适配层 (委托 internal/latency 引擎)
 ```
 
 ---

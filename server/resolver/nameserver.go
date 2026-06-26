@@ -209,13 +209,13 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 				ansARecords = ans
 				for _, rrec := range ans {
 					if a, ok := rrec.(*dns.A); ok {
-						nsAddrs = append(nsAddrs, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
+						nsAddrs = append(nsAddrs, config.JoinDNSPort(a.A.String()))
 					}
 				}
 				// Also collect AAAA glue from the Additional section
 				for _, rrec := range extra {
 					if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsName) {
-						nsAddrs = append(nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
+						nsAddrs = append(nsAddrs, config.JoinDNSPort(aaaa.AAAA.String()))
 					}
 				}
 				addrMu.Unlock()
@@ -233,7 +233,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 				ansAAAARecords = ans
 				for _, rrec := range ans {
 					if aaaa, ok := rrec.(*dns.AAAA); ok {
-						nsAddrs = append(nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultDNSPort))
+						nsAddrs = append(nsAddrs, config.JoinDNSPort(aaaa.AAAA.String()))
 					}
 				}
 				addrMu.Unlock()
@@ -245,11 +245,10 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 				return nil
 			}
 
-			// Use addresses as-is for the current query. Latency
+			// Use addresses as-is for the current query — latency
 			// ordering happens asynchronously via probeAndCacheNSGlue
 			// for glue-sourced addresses, so future cache hits return
 			// latency-sorted records via lookupNSAddrsFromCache.
-			nsAddrs = rr.orderNSAddresses(nsAddrs)
 
 			// Cache A/AAAA records so future queries hit warm cache.
 			// The async latency probe (probeAndCacheNSGlue) reorders
@@ -281,8 +280,8 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 
 // reorderRecordsByAddrs reorders A or AAAA DNS records so that records
 // matching the sorted address list come first, preserving the latency-based
-// ordering that orderNSAddresses determined. Records not in the sorted list
-// retain their relative order at the end.
+// ordering. Records not in the sorted list retain their relative order at
+// the end.
 func reorderRecordsByAddrs(records []dns.RR, sortedAddrs []string) []dns.RR {
 	if len(records) <= 1 || len(sortedAddrs) <= 1 {
 		return records

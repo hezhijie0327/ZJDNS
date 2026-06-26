@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -302,6 +303,27 @@ func (s *Server) Start(httpsPort string) error {
 		}
 		<-ctx.Done()
 		return nil
+	})
+
+	// Periodic sweep of stale doqIPCounts entries to prevent unbounded
+	// growth from unique client IPs over long-running deployments.
+	g.Go(func() error {
+		defer dnsutil.HandlePanic("doqIPCounts sweep")
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.doqIPCounts.Range(func(key, value any) bool {
+					if count := value.(*atomic.Int32); count.Load() <= 0 {
+						s.doqIPCounts.Delete(key)
+					}
+					return true
+				})
+			case <-ctx.Done():
+				return nil
+			}
+		}
 	})
 
 	go func() {
