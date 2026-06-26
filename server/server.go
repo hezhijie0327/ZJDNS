@@ -70,10 +70,10 @@ type rateLimitEntry struct {
 }
 
 type rateLimiter struct {
-	mu       sync.Mutex
-	entries  map[string]*rateLimitEntry
-	rate     int64 // tokens per second
-	burst    int64 // max tokens
+	mu      sync.Mutex
+	entries map[string]*rateLimitEntry
+	rate    int64 // tokens per second
+	burst   int64 // max tokens
 }
 
 func newRateLimiter(rate, burst int) *rateLimiter {
@@ -202,7 +202,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	if cfg.Server.MaxConcurrent > 0 {
 		server.semaphore = make(chan struct{}, cfg.Server.MaxConcurrent)
-	server.udpRateLimiter = newRateLimiter(config.DefaultUDPRateLimit, config.DefaultUDPRateBurst)
+		server.udpRateLimiter = newRateLimiter(config.DefaultUDPRateLimit, config.DefaultUDPRateBurst)
 	}
 
 	server.guard = security.New(cache, cfg.Server.Features.HijackProtection)
