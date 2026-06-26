@@ -100,7 +100,7 @@ zjdns/
 ├── stats/stats.go                 # Lock-free atomic metrics Collector
 └── server/                        # Core server + sub-packages
     ├── server.go                  # Server lifecycle, New(), Start(), shutdown
-    ├── server_handlers.go         # Query pipeline, cache hit/miss, response builders
+    ├── handler.go                # Query pipeline, cache hit/miss, response builders
     ├── client/                    # Outbound query execution + connection pools
     │   ├── client.go              # Client struct, ExecuteQuery, routing
     │   ├── tcp.go                 # Traditional UDP/TCP + TCP fallback
@@ -116,10 +116,9 @@ zjdns/
     │   ├── resolver.go            # Resolver struct, routing + helpers
     │   ├── upstream.go            # First-win concurrent upstream queries
     │   ├── recursive.go           # Recursive root→TLD→auth walk
-    │   ├── cname.go               # CNAME chain resolution
-    │   ├── dnssec_chain.go        # DNSSEC trust chain (dnssecChain, validateWithDNSSEC)
+    │   ├── recursive.go           # Recursive root→TLD→auth walk + CNAME chain resolution
+    │   ├── dnssec_chain.go        # DNSSEC trust chain + zone cut detection (isZoneCut, getZoneCutSigner, resolveZoneCut)
     │   ├── nameserver.go          # Concurrent NS querying, suspicious response handling
-    │   └── zonecut.go             # Zone cut detection (isZoneCut, getZoneCutSigner, resolveZoneCut)
     ├── security/                  # Security features (4 files)
     │   ├── security.go            # Guard (bundles RecordPresence + CryptoValidator + Detector)
     │   ├── dnssec.go              # DNSSEC record-presence validation (upstream AD check)
@@ -160,7 +159,7 @@ No circular dependencies. Sub-packages only import what they need.
 
 ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 
-**Query processing pipeline** (`server/server.go:processDNSQuery`):
+**Query processing pipeline** (`server/handler.go:processDNSQuery`):
 1. Server status check → request validation (domain length, ANY query)
 2. `rewrite.Evaluator.Evaluate()` — synthetic response if rule matches
 3. `edns.Handler` — extract ECS, DNS Cookie from request
@@ -251,7 +250,7 @@ convention.
 | `config.DefaultTTL` | config | 10 |
 | `config.DefaultCacheSize` | config | 4 MB (4 * 1024 * 1024) |
 | `config.DefaultStaleTTL` | config | 30s (TTL returned for expired entries) |
-| `config.DefaultStaleMaxAge` | config | 3 days (max age for serve-expired) |
+| `config.DefaultStaleMaxAge` | config | 45 days (max age for serve-expired) |
 | `config.MaxDomainLength` | config | 253 |
 | `config.RecursiveIndicator` | config | "builtin_recursive" |
 | `config.DefaultMaxPipe` | config | 16 (max in-flight queries per connection) |
@@ -264,7 +263,7 @@ convention.
 | `config.DefaultLatencyProbeTimeout` | config | 100ms (per-step probe timeout) |
 | `config.DefaultAcceptRetryDelay` | config | 100ms (DoT/DoQ accept retry sleep) |
 | `config.DefaultSweepInterval` | config | 5 min (periodic cleanup sweep) |
-| `config.DefaultCertValidity` | config | 365 days (self-signed cert lifetime) |
+| `config.DefaultCertValidity` | config | 45 days (self-signed cert lifetime) |
 | `config.DefaultProbePortDNS` | config | 53 (latency probe DNS port) |
 | `config.DefaultProbePortHTTP` | config | 80 (latency probe HTTP port) |
 | `config.DefaultProbePortHTTPS` | config | 443 (latency probe HTTPS port) |
@@ -291,7 +290,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `TLS` | All TLS + secure protocols | server/tls/*.go |
 | `CACHE` | Cache operations | cache/*.go, server/server.go |
 | `UPSTREAM` | Outbound upstream queries | server/client/{tcp,dot,doq,doh,doh3}.go, server/resolver/upstream.go |
-| `SERVER` | Server lifecycle | server/server.go, server/server_handlers.go, main.go |
+| `SERVER` | Server lifecycle | server/server.go, server/handler.go, main.go |
 | `EDNS` | EDNS options | edns/*.go, server/server.go |
 | `RECURSION` | Recursive resolution | server/resolver/{recursive,dnssec_chain,nameserver,zonecut}.go |
 | `SECURITY` | DNSSEC, hijack detection | server/security/*.go, server/resolver/{dnssec_chain,zonecut}.go |
