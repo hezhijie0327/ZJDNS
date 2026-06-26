@@ -61,6 +61,79 @@ type Server struct {
 	udpServer         *dns.Server
 	tcpServer         *dns.Server
 	tcpWriteMu        sync.Map
+	udpRateLimiter    *rateLimiter
+}
+
+type rateLimitEntry struct {
+	tokens     atomic.Int64
+	lastRefill atomic.Int64 // unix nano
+}
+
+type rateLimiter struct {
+	mu       sync.Mutex
+	entries  map[string]*rateLimitEntry
+	rate     int64 // tokens per second
+	burst    int64 // max tokens
+}
+
+func newRateLimiter(rate, burst int) *rateLimiter {
+	return &rateLimiter{
+		entries: make(map[string]*rateLimitEntry),
+		rate:    int64(rate),
+		burst:   int64(burst),
+	}
+}
+
+// allow reports whether a request from the given key is allowed under the
+// token-bucket rate limit. Returns true if allowed, false if rate-limited.
+func (rl *rateLimiter) allow(key string) bool {
+	now := time.Now().UnixNano()
+	rl.mu.Lock()
+	e, ok := rl.entries[key]
+	if !ok {
+		e = &rateLimitEntry{}
+		e.tokens.Store(rl.burst - 1)
+		e.lastRefill.Store(now)
+		rl.entries[key] = e
+		rl.mu.Unlock()
+		return true
+	}
+	rl.mu.Unlock()
+
+	last := e.lastRefill.Load()
+	elapsed := now - last
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	newTokens := elapsed * rl.rate / 1e9
+	if newTokens > 0 {
+		e.lastRefill.Store(now)
+	}
+
+	tokens := e.tokens.Add(newTokens)
+	if tokens > rl.burst {
+		e.tokens.Store(rl.burst)
+		tokens = rl.burst
+	}
+
+	if tokens <= 0 {
+		return false
+	}
+	e.tokens.Add(-1)
+	return true
+}
+
+// sweep removes entries that haven't been accessed recently to prevent
+// unbounded map growth.
+func (rl *rateLimiter) sweep(maxAge time.Duration) {
+	cutoff := time.Now().Add(-maxAge).UnixNano()
+	rl.mu.Lock()
+	for k, e := range rl.entries {
+		if e.lastRefill.Load() < cutoff {
+			delete(rl.entries, k)
+		}
+	}
+	rl.mu.Unlock()
 }
 
 type tcpWriteEntry struct {
@@ -129,6 +202,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	if cfg.Server.MaxConcurrent > 0 {
 		server.semaphore = make(chan struct{}, cfg.Server.MaxConcurrent)
+	server.udpRateLimiter = newRateLimiter(config.DefaultUDPRateLimit, config.DefaultUDPRateBurst)
 	}
 
 	server.guard = security.New(cache, cfg.Server.Features.HijackProtection)
@@ -194,6 +268,7 @@ func (s *Server) startBackgroundTasks() {
 	s.startStatsLogger()
 	s.startStatsReset()
 	s.startTCPWriteMuSweep()
+	s.startRateLimiterSweep()
 	s.setupSignalHandling()
 }
 
@@ -299,6 +374,17 @@ func (s *Server) startStatsReset() {
 		s.statsMgr.Reset()
 		log.Infof("STATS: counters reset")
 		s.logStatsNow("reset")
+	})
+}
+
+// startRateLimiterSweep periodically removes stale rate limiter entries.
+func (s *Server) startRateLimiterSweep() {
+	if s.udpRateLimiter == nil {
+		return
+	}
+	rl := s.udpRateLimiter
+	s.runBackgroundTicker("UDP rate limiter sweep", config.DefaultSweepInterval, func() {
+		rl.sweep(config.DefaultSweepInterval)
 	})
 }
 

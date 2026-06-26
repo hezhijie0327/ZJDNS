@@ -88,7 +88,21 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	response := s.processDNSQuery(req, dnsutil.ClientIP(w), false, detectRequestProtocol(w))
+	// UDP per-client rate limiting to prevent DoS via query flooding.
+	clientIP := dnsutil.ClientIP(w)
+	if s.udpRateLimiter != nil && clientIP != nil {
+		if !s.udpRateLimiter.allow(clientIP.String()) {
+			log.Debugf("QUERY: UDP rate limit exceeded for %s", clientIP.String())
+			msg := pool.DefaultMessagePool.Get()
+			msg.SetReply(req)
+			msg.Rcode = dns.RcodeServerFailure
+			_ = w.WriteMsg(msg)
+			pool.DefaultMessagePool.Put(msg)
+			return
+		}
+	}
+
+	response := s.processDNSQuery(req, clientIP, false, detectRequestProtocol(w))
 	if response != nil {
 		response.Compress = true
 		if err := w.WriteMsg(response); err != nil {

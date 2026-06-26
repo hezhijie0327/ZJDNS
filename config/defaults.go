@@ -79,6 +79,8 @@ const (
 	// Pool sizes, capacities, and operational limits.
 	DefaultServerGoroutineLimit = 1024
 	DefaultMaxConnsPerIP        = 64
+	DefaultUDPRateLimit         = 500  // max UDP queries/sec per client IP
+	DefaultUDPRateBurst         = 1000 // max burst size for UDP rate limiter
 	DefaultMaxConcurrentStreams = 64
 	DefaultTransportMax         = 32
 	DefaultTLSSessionCacheSize  = 32
