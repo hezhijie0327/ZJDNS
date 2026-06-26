@@ -53,7 +53,7 @@ func (s *Server) handleDOTConnections() {
 				return
 			}
 			log.Errorf("TLS: Accept error: %v", err)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(config.DefaultAcceptRetryDelay)
 			continue
 		}
 
@@ -77,14 +77,14 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 	defer connCancel()
 
 	type writeTask struct{ data []byte }
-	writeCh := make(chan writeTask, 64)
+	writeCh := make(chan writeTask, config.DefaultDoTWriteChannelSize)
 
 	writerDone := make(chan struct{})
 	go func() {
 		defer dnsutil.HandlePanic("DoT writer")
 		defer close(writerDone)
 		for task := range writeCh {
-			_ = tlsConn.SetWriteDeadline(time.Now().Add(config.Timeout))
+			_ = tlsConn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
 			_, err := tlsConn.Write(task.data)
 			pool.DefaultBufferPool.Put(task.data)
 			if err != nil {
@@ -109,7 +109,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		_ = tlsConn.SetReadDeadline(time.Now().Add(config.Timeout))
+		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
 
 		lengthBuf := make([]byte, 2)
 		_, err := io.ReadFull(reader, lengthBuf)

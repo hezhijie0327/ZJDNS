@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/miekg/dns"
 	"golang.org/x/net/http2"
@@ -110,8 +109,8 @@ func (c *Client) createDoHClient(host, serverName string, skipVerify bool, tlsCo
 		return client
 	}
 
-	// Evict oldest entry when at capacity (32).
-	const transportMax = 32
+	// Evict oldest entry when at capacity.
+	const transportMax = config.DefaultTransportMax
 	if len(c.dohTransports) >= transportMax {
 		for k := range c.dohTransports {
 			if t, ok := c.dohTransports[k].Transport.(*http.Transport); ok {
@@ -128,7 +127,7 @@ func (c *Client) createDoHClient(host, serverName string, skipVerify bool, tlsCo
 	if err == nil {
 		// Send HTTP/2 pings on idle connections to keep NAT bindings alive
 		// and detect dead peers early.
-		h2Transport.ReadIdleTimeout = 30 * time.Second
+		h2Transport.ReadIdleTimeout = config.DefaultH2ReadIdleTimeout
 	}
 
 	client := &http.Client{

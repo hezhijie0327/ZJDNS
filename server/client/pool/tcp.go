@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"net"
 	"sync"
@@ -152,7 +153,7 @@ func (pc *Conn) readLoop() {
 	lengthBuf := make([]byte, 2)
 
 	for {
-		_ = pc.conn.SetReadDeadline(time.Now().Add(config.Timeout))
+		_ = pc.conn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
 
 		if _, err := io.ReadFull(pc.conn, lengthBuf); err != nil {
 			if err != io.EOF {
@@ -250,7 +251,7 @@ func (cp *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFu
 	cp.mu.Lock()
 
 	var leastLoaded *Conn
-	leastCount := int(^uint(0) >> 1)
+	leastCount := math.MaxInt
 	conns := cp.conns[key]
 	liveConns := conns[:0]
 	for _, pc := range conns {

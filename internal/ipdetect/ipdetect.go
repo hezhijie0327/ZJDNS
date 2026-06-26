@@ -13,6 +13,12 @@ import (
 // DefaultTraceURL is the default endpoint used for public IP detection.
 const DefaultTraceURL = "https://api.cloudflare.com/cdn-cgi/trace"
 
+// IP detection timeouts.
+const (
+	ipDetectDialTimeout = 2 * time.Second
+	ipDetectTimeout     = 3 * time.Second
+)
+
 var ipPattern = regexp.MustCompile(`ip=([^\s\n]+)`)
 
 // Detector detects public IP addresses via an HTTP trace endpoint.
@@ -36,14 +42,14 @@ func (d *Detector) detect(forceIPv6 bool) net.IP {
 
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: 2 * time.Second}
+			dialer := &net.Dialer{Timeout: ipDetectDialTimeout}
 			if forceIPv6 {
 				return dialer.DialContext(ctx, "tcp6", addr)
 			}
 			return dialer.DialContext(ctx, "tcp4", addr)
 		},
 	}
-	client := &http.Client{Timeout: 3 * time.Second, Transport: transport}
+	client := &http.Client{Timeout: ipDetectTimeout, Transport: transport}
 	defer transport.CloseIdleConnections()
 
 	resp, err := client.Get(traceURL)

@@ -285,7 +285,7 @@ func (s *Server) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpire
 	if isExpired && entry.ShouldRefresh() {
 		s.cacheRefreshGroup.Go(func() error {
 			defer dnsutil.HandlePanic("cache refresh")
-			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, config.Timeout)
+			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
 			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
 		})
@@ -297,7 +297,7 @@ func (s *Server) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpire
 		}
 		s.cacheRefreshGroup.Go(func() error {
 			defer dnsutil.HandlePanic("cache prefetch")
-			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, config.Timeout)
+			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
 			log.Debugf("CACHE: prefetch triggered for %s (threshold=%d%%)", question.Name, config.DefaultPrefetchThresholdPercent)
 			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
@@ -367,7 +367,7 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 		}
 		s.cacheRefreshGroup.Go(func() error {
 			defer dnsutil.HandlePanic("expired cache refresh")
-			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, config.Timeout)
+			ctx, cancel := context.WithTimeout(s.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
 			return s.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
 		})
@@ -622,4 +622,3 @@ func (s *Server) refreshCacheEntry(ctx context.Context, question dns.Question, e
 
 	return nil
 }
-

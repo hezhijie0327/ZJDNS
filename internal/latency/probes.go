@@ -16,6 +16,13 @@ import (
 	"zjdns/config"
 )
 
+// Probe buffer and payload sizes.
+const (
+	probeUDPReadBufSize  = 512  // UDP probe read buffer
+	probeICMPDataSize    = 56   // ICMP echo data payload
+	probeICMPReadBufSize = 1500 // ICMP response read buffer
+)
+
 // measureIPLatency probes a single IP using the configured steps and returns
 // the total elapsed time for the first successful probe. The bgCtx is the
 // Prober's background context checked during long-running operations.
@@ -49,31 +56,31 @@ func probeAddress(ctx context.Context, bgCtx context.Context, ip net.IP, step co
 	case "tcp":
 		port := step.Port
 		if port <= 0 {
-			port = 80
+			port = config.DefaultProbePortHTTP
 		}
 		return probeTCP(ctx, ip, port)
 	case "udp":
 		port := step.Port
 		if port <= 0 {
-			port = 53
+			port = config.DefaultProbePortDNS
 		}
 		return probeUDP(ctx, ip, port)
 	case "http":
 		port := step.Port
 		if port <= 0 {
-			port = 80
+			port = config.DefaultProbePortHTTP
 		}
 		return probeHTTP(ctx, ip, port, false, false, httpPool)
 	case "https":
 		port := step.Port
 		if port <= 0 {
-			port = 443
+			port = config.DefaultProbePortHTTPS
 		}
 		return probeHTTP(ctx, ip, port, true, false, httpPool)
 	case "http3":
 		port := step.Port
 		if port <= 0 {
-			port = 443
+			port = config.DefaultProbePortHTTPS
 		}
 		return probeHTTP(ctx, ip, port, true, true, httpPool)
 	default:
@@ -114,7 +121,7 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 		return err
 	}
 
-	buffer := make([]byte, 512)
+	buffer := make([]byte, probeUDPReadBufSize)
 	_, err = conn.Read(buffer)
 	return err
 }
@@ -157,7 +164,7 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 		Body: &icmp.Echo{
 			ID:   int(echoID),
 			Seq:  int(echoSeq),
-			Data: make([]byte, 56),
+			Data: make([]byte, probeICMPDataSize),
 		},
 	}
 	messageData, err := message.Marshal(nil)
@@ -169,7 +176,7 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 		return err
 	}
 
-	buffer := make([]byte, 1500)
+	buffer := make([]byte, probeICMPReadBufSize)
 	for {
 		n, peer, err := conn.ReadFrom(buffer)
 		if err != nil {

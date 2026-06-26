@@ -132,7 +132,7 @@ func (p *Prober) ProbeAddrs(ctx context.Context, addrs []string) []net.IP {
 	}
 
 	sortedIPs := p.ProbeIPs(ctx, probeIPs)
-	p.dedup.Set(hash, sortedIPs, 300*time.Second)
+	p.dedup.Set(hash, sortedIPs, dedupTTL)
 
 	return sortedIPs
 }

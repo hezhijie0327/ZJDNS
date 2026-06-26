@@ -11,16 +11,17 @@ import (
 // TCPBufferSize is the recommended size for TCP DNS message buffers.
 // SecureBufferSize is the recommended size for secure DNS message buffers.
 const (
-	UDPBufferSize    = 1232
-	TCPBufferSize    = 4096
-	SecureBufferSize = 8192
+	UDPBufferSize         = 1232
+	TCPBufferSize         = 4096
+	SecureBufferSize      = 8192
+	defaultBufferPoolSize = 256
 )
 
 // DefaultMessagePool is the package-level default MessagePool.
 var DefaultMessagePool = NewMessagePool()
 
 // DefaultBufferPool is the package-level default BufferPool.
-var DefaultBufferPool = NewBufferPool(SecureBufferSize, 256)
+var DefaultBufferPool = NewBufferPool(SecureBufferSize, defaultBufferPoolSize)
 
 // MessagePool is a pooled allocator for dns.Msg values.
 type MessagePool struct {

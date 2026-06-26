@@ -168,8 +168,8 @@ var infraProber *ilatency.Prober
 func InitInfraProber(bgCtx context.Context) {
 	infraProber = ilatency.New([]config.LatencyProbeStep{
 		{Protocol: "ping", Timeout: 100},
-		{Protocol: "udp", Port: 53, Timeout: 100},
-		{Protocol: "tcp", Port: 53, Timeout: 100},
+		{Protocol: "udp", Port: config.DefaultProbePortDNS, Timeout: 100},
+		{Protocol: "tcp", Port: config.DefaultProbePortDNS, Timeout: 100},
 	}, bgCtx)
 }
 

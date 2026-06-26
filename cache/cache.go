@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	resultBufferCapacity = 128
-	maxResultLength      = 512
+	resultBufferCapacity = config.DefaultCacheKeyBufferSize
+	maxResultLength      = config.DefaultCacheKeyMaxLength
 
 	cacheKeyDNSPrefix    = "dns:"
 	cacheSnapshotVersion = 2

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"sort"
 	"strings"
@@ -68,7 +69,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 			msg := rr.resolver.buildMsg(question, ecs, true, false)
 			defer pool.DefaultMessagePool.Put(msg)
 
-			subCtx, subCancel := context.WithTimeout(queryCtx, config.Timeout)
+			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 			defer subCancel()
 
 			result := rr.resolver.client.ExecuteQuery(subCtx, msg, server)
@@ -97,7 +98,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 					bareMsg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
 					bareMsg.RecursionDesired = true
 
-					retryCtx, retryCancel := context.WithTimeout(queryCtx, config.Timeout)
+					retryCtx, retryCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 					retryResult := rr.resolver.client.ExecuteQuery(retryCtx, bareMsg, server)
 					retryCancel()
 					pool.DefaultMessagePool.Put(bareMsg)
@@ -155,7 +156,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 	// Process NS records in delegation order — no ShuffleSlice.
 	// Latency-based ordering is applied after address resolution.
 
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, config.Timeout)
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
@@ -301,7 +302,7 @@ func reorderRecordsByAddrs(records []dns.RR, sortedAddrs []string) []dns.RR {
 	}
 
 	// Default rank for IPs not in the sorted list — sorts after all known IPs.
-	const unknownRank = 1<<31 - 1
+	const unknownRank = math.MaxInt32
 
 	sorted := make([]dns.RR, len(records))
 	copy(sorted, records)

@@ -440,15 +440,15 @@ func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 	switch protocol {
 	case "ping", "icmp":
 	case "tcp":
-		return validateProbePort(index, "tcp", &step.Port, 80)
+		return validateProbePort(index, "tcp", &step.Port, DefaultProbePortHTTP)
 	case "udp":
-		return validateProbePort(index, "udp", &step.Port, 53)
+		return validateProbePort(index, "udp", &step.Port, DefaultProbePortDNS)
 	case "http":
-		return validateProbePort(index, "http", &step.Port, 80)
+		return validateProbePort(index, "http", &step.Port, DefaultProbePortHTTP)
 	case "https":
-		return validateProbePort(index, "https", &step.Port, 443)
+		return validateProbePort(index, "https", &step.Port, DefaultProbePortHTTPS)
 	case "http3":
-		return validateProbePort(index, "http3", &step.Port, 443)
+		return validateProbePort(index, "http3", &step.Port, DefaultProbePortHTTPS)
 	default:
 		return fmt.Errorf("latency_probe step %d: unsupported protocol %s", index, step.Protocol)
 	}
@@ -626,12 +626,12 @@ func GenerateExampleConfig() string {
 	cfg.Server.Features.ECS = edns.DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []LatencyProbeStep{
 		{Protocol: "ping", Timeout: 100},
-		{Protocol: "tcp", Port: 443, Timeout: 100},
-		{Protocol: "tcp", Port: 80, Timeout: 100},
-		{Protocol: "udp", Port: 53, Timeout: 100},
-		{Protocol: "http", Port: 80, Timeout: 100},
-		{Protocol: "https", Port: 443, Timeout: 100},
-		{Protocol: "http3", Port: 443, Timeout: 100},
+		{Protocol: "tcp", Port: DefaultProbePortHTTPS, Timeout: 100},
+		{Protocol: "tcp", Port: DefaultProbePortHTTP, Timeout: 100},
+		{Protocol: "udp", Port: DefaultProbePortDNS, Timeout: 100},
+		{Protocol: "http", Port: DefaultProbePortHTTP, Timeout: 100},
+		{Protocol: "https", Port: DefaultProbePortHTTPS, Timeout: 100},
+		{Protocol: "http3", Port: DefaultProbePortHTTPS, Timeout: 100},
 	}
 	cfg.Server.Features.Stats = &StatsSettings{
 		Interval:      3600,

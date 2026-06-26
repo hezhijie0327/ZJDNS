@@ -206,7 +206,7 @@ func (r *Resolver) Query(ctx context.Context, question dns.Question, ecs *edns.E
 		return a, au, ad, v, e, s, true, err
 	}
 
-	resolveCtx, cancel := context.WithTimeout(ctx, config.Timeout)
+	resolveCtx, cancel := context.WithTimeout(ctx, config.DefaultRecursiveResolveTimeout)
 	defer cancel()
 	return r.cname.resolve(resolveCtx, question, ecs)
 }
@@ -241,8 +241,8 @@ func concurrencyLimit(serverCount int) int {
 		return (serverCount + 1) / 2
 	default:
 		limit := serverCount / 3
-		if limit < 8 {
-			return 8
+		if limit < config.DefaultMinConcurrencyLimit {
+			return config.DefaultMinConcurrencyLimit
 		}
 		return limit
 	}

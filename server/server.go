@@ -135,7 +135,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
 		tlsCfg := servertls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
-		tlsSrv, err := servertls.New(server, tlsCfg, config.Timeout)
+		tlsSrv, err := servertls.New(server, tlsCfg, config.DefaultBackgroundTimeout)
 		if err != nil {
 			cancel(fmt.Errorf("TLS server init: %w", err))
 			return nil, fmt.Errorf("TLS server init: %w", err)
@@ -175,9 +175,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	if cfg.Server.Pprof != "" {
 		server.pprofServer = &http.Server{
 			Addr:              "127.0.0.1:" + cfg.Server.Pprof,
-			ReadHeaderTimeout: config.Timeout,
-			ReadTimeout:       config.Timeout,
-			IdleTimeout:       config.Timeout,
+			ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
+			ReadTimeout:       0, // Disabled: pprof endpoints (profile, trace, heap) take >10s
+			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
 		}
 	}
 
@@ -330,12 +330,12 @@ func (s *Server) startStatsReset() {
 func (s *Server) startTCPWriteMuSweep() {
 	s.backgroundGroup.Go(func() error {
 		defer dnsutil.HandlePanic("tcpWriteMu sweep")
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(config.DefaultSweepInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				cutoff := time.Now().Add(-10 * time.Minute).UnixNano()
+				cutoff := time.Now().Add(-config.DefaultTCPWriteMuStaleCutoff).UnixNano()
 				s.tcpWriteMu.Range(func(key, value any) bool {
 					entry, ok := value.(*tcpWriteEntry)
 					if !ok || entry.lastAccess.Load() < cutoff {
@@ -371,7 +371,7 @@ func (s *Server) logStatsNow(trigger string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
 	defer cancel()
 
 	snapshot, err := s.statsMgr.FetchStats(ctx)
@@ -413,7 +413,7 @@ func (s *Server) shutdownServer() {
 	// goroutines finish, so that inflight cache writes during shutdown are
 	// completed rather than silently dropped.
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.Timeout)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 	defer shutdownCancel()
 	if s.udpServer != nil {
 		if err := s.udpServer.ShutdownContext(shutdownCtx); err != nil {
@@ -443,7 +443,7 @@ func (s *Server) shutdownServer() {
 	}
 
 	if s.pprofServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
 		if err := s.pprofServer.Shutdown(ctx); err != nil {
 			log.Errorf("PPROF: pprof server shutdown failed: %v", err)
@@ -458,7 +458,7 @@ func (s *Server) shutdownServer() {
 		bgDone <- s.backgroundGroup.Wait()
 	}()
 
-	bgTimer := time.NewTimer(config.Timeout)
+	bgTimer := time.NewTimer(config.DefaultBackgroundTimeout)
 	defer bgTimer.Stop()
 	select {
 	case err := <-bgDone:
@@ -476,7 +476,7 @@ func (s *Server) shutdownServer() {
 		refreshDone <- s.cacheRefreshGroup.Wait()
 	}()
 
-	refreshTimer := time.NewTimer(config.Timeout)
+	refreshTimer := time.NewTimer(config.DefaultBackgroundTimeout)
 	defer refreshTimer.Stop()
 	select {
 	case err := <-refreshDone:

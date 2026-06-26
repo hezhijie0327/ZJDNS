@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"math"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -13,7 +14,7 @@ import (
 	"zjdns/internal/log"
 )
 
-const evictSampleSize = 25
+const evictSampleSize = config.DefaultCacheEvictSampleSize
 
 // MemoryCache is an in-memory DNS response cache with optional disk persistence.
 type MemoryCache struct {
@@ -192,7 +193,7 @@ func (mc *MemoryCache) Close() error {
 	if mc.persistStop != nil {
 		close(mc.persistStop)
 		if mc.persistDone != nil {
-			timer := time.NewTimer(config.Timeout)
+			timer := time.NewTimer(config.DefaultBackgroundTimeout)
 			select {
 			case <-mc.persistDone:
 				timer.Stop()
@@ -253,7 +254,7 @@ func (mc *MemoryCache) evictToBudget() {
 		// Randomly sample entries from the map to approximate LRU without
 		// allocating a full keys slice under the write lock.
 		var oldestKey string
-		var oldestLast int64 = 1<<63 - 1
+		var oldestLast int64 = math.MaxInt64
 		var oldestSize int64
 
 		sampleCount := 0

@@ -114,7 +114,7 @@ func generateSelfSignedCert(domain string) (cryptotls.Certificate, error) {
 			Country:      []string{"CN"},
 		},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(config.DefaultCertValidity),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign | x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -211,7 +211,7 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	serverGroup, serverCtx := errgroup.WithContext(ctx)
-	serverGroup.SetLimit(1024)
+	serverGroup.SetLimit(config.DefaultServerGoroutineLimit)
 
 	s := &Server{
 		cfg:         cfg,
@@ -309,7 +309,7 @@ func (s *Server) Start(httpsPort string) error {
 	// growth from unique client IPs over long-running deployments.
 	g.Go(func() error {
 		defer dnsutil.HandlePanic("doqIPCounts sweep")
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(config.DefaultSweepInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -361,12 +361,12 @@ func (s *Server) Shutdown() error {
 		dnsutil.CloseWithLog(s.doqListener, "DoQ listener")
 	}
 	if s.httpsServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
 		_ = s.httpsServer.Shutdown(ctx)
 	}
 	if s.h3Server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
 		_ = s.h3Server.Shutdown(ctx)
 	}

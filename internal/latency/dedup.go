@@ -4,6 +4,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"zjdns/config"
 )
 
 // dedupTTL is the default TTL for probe result caching.
@@ -58,7 +60,7 @@ func (dc *DedupCache) Set(hash uint64, ips []net.IP, ttl time.Duration) {
 		expiry: time.Now().Add(ttl),
 	}
 	// Sweep expired entries opportunistically during Set to bound map growth.
-	if len(dc.items) > 1024 {
+	if len(dc.items) > config.DefaultDedupSweepThreshold {
 		now := time.Now()
 		for k, v := range dc.items {
 			if now.After(v.expiry) {

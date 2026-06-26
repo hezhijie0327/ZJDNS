@@ -136,8 +136,8 @@ func (c *Client) createDoH3Client(key, host string, tlsConfig *tls.Config) *http
 		return client
 	}
 
-	// Evict oldest entry when at capacity (32).
-	const transportMax = 32
+	// Evict oldest entry when at capacity.
+	const transportMax = config.DefaultTransportMax
 	if len(c.doh3Transports) >= transportMax {
 		for k := range c.doh3Transports {
 			if t, ok := c.doh3Transports[k].Transport.(*http3Transport); ok {

@@ -461,7 +461,7 @@ func (rr *Recursive) maybeProbeRootServers() {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	sorted := sortAddrsByLatency(ctx, DefaultRootServers, 30*time.Second)
+	sorted := sortAddrsByLatency(ctx, DefaultRootServers, config.DefaultInfraProbeTimeout)
 	if len(sorted) > 0 {
 		rr.sortedRootServers.Store(sorted)
 		rr.rootProbeTime.Store(time.Now().Unix())
@@ -521,7 +521,7 @@ func (rr *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	sorted := sortAddrsByLatency(ctx, allAddrs, 30*time.Second)
+	sorted := sortAddrsByLatency(ctx, allAddrs, config.DefaultInfraProbeTimeout)
 	if len(sorted) == 0 {
 		return
 	}
@@ -647,6 +647,7 @@ func lookupCachedRRs(store cache.Store, name string, qtype uint16) []string {
 	}
 	return addrs
 }
+
 // CNAME handles CNAME record chasing during DNS resolution, following the
 // redirection chain up to config.DefaultMaxCNAMEChain hops.
 type CNAME struct {

@@ -35,7 +35,7 @@ type Evaluator struct {
 // New creates an Evaluator with no rules loaded.
 func New() *Evaluator {
 	rm := &Evaluator{}
-	initialRules := make([]config.RewriteRule, 0, 16)
+	initialRules := make([]config.RewriteRule, 0, config.DefaultRewriteRulesCapacity)
 	initialExcludes := make([]*net.IPNet, 0)
 	rm.rules.Store(&initialRules)
 	rm.globalExcludeCIDRs.Store(&initialExcludes)

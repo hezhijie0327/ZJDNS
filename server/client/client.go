@@ -23,10 +23,6 @@ import (
 	connpool "zjdns/server/client/pool"
 )
 
-// quicKeepAlivePeriod controls the interval at which QUIC keep-alive frames are
-// sent. 20s matches the quic-go internal MaxKeepAliveInterval.
-const quicKeepAlivePeriod = 20 * time.Second
-
 // Result holds the outcome of a single DNS query including response, timing,
 // and metadata.
 type Result struct {
@@ -73,55 +69,55 @@ type Client struct {
 // caches.
 func New() *Client {
 	udpClient := &dns.Client{
-		Timeout: config.Timeout,
+		Timeout: config.DefaultDNSQueryTimeout,
 		Net:     "udp",
 		UDPSize: pool.UDPBufferSize,
 	}
 
 	tcpClient := &dns.Client{
-		Timeout: config.Timeout,
+		Timeout: config.DefaultDNSQueryTimeout,
 		Net:     "tcp",
 	}
 
 	tlsClient := &dns.Client{
-		Timeout: config.Timeout,
+		Timeout: config.DefaultDNSQueryTimeout,
 		Net:     "tcp-tls",
 	}
 
 	dohTransport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 2,
-		IdleConnTimeout:     5 * time.Minute,
+		MaxIdleConns:        config.DefaultMaxIdleConns,
+		MaxIdleConnsPerHost: config.DefaultMaxIdleConnsPerHost,
+		IdleConnTimeout:     config.DefaultHTTPIdleConnTimeout,
 		DisableCompression:  true,
 		ForceAttemptHTTP2:   true,
 	}
 
 	doh3Transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 2,
-		IdleConnTimeout:     5 * time.Minute,
+		MaxIdleConns:        config.DefaultMaxIdleConns,
+		MaxIdleConnsPerHost: config.DefaultMaxIdleConnsPerHost,
+		IdleConnTimeout:     config.DefaultHTTPIdleConnTimeout,
 		DisableCompression:  true,
 		ForceAttemptHTTP2:   false,
 	}
 
 	return &Client{
-		timeout:   config.Timeout,
+		timeout:   config.DefaultDNSQueryTimeout,
 		udpClient: udpClient,
 		tcpClient: tcpClient,
 		tlsClient: tlsClient,
 		dohClient: &http.Client{
-			Timeout:   config.Timeout,
+			Timeout:   config.DefaultDNSQueryTimeout,
 			Transport: dohTransport,
 		},
 		doh3Client: &http.Client{
-			Timeout:   config.Timeout,
+			Timeout:   config.DefaultDNSQueryTimeout,
 			Transport: doh3Transport,
 		},
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),
 		quicConfigs:    make(map[string]*quic.Config),
 		quicPool:       connpool.NewQuicPool(config.DefaultMaxConns),
-		SessionCache:   tls.NewLRUClientSessionCache(32),
+		SessionCache:   tls.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
 		tcpPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		dotPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 	}
@@ -137,12 +133,12 @@ func (c *Client) getQUICConfig(key string) *quic.Config {
 		return cfg
 	}
 	cfg := &quic.Config{
-		MaxIdleTimeout:        config.Timeout,
+		MaxIdleTimeout:        config.DefaultQUICClientIdleTimeout,
 		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
 		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
 		EnableDatagrams:       true,
 		Allow0RTT:             true,
-		KeepAlivePeriod:       quicKeepAlivePeriod,
+		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 		TokenStore:            quic.NewLRUTokenStore(1, 10),
 	}
 	c.quicConfigs[key] = cfg

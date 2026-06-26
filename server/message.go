@@ -59,7 +59,7 @@ func (s *Server) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP n
 	}
 
 	var serverCookie []byte
-	if len(cookieOpt.ServerCookie) >= 16 {
+	if len(cookieOpt.ServerCookie) >= edns.DefaultCookieServerLen {
 		if s.ednsMgr.CookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
 			log.Debugf("EDNS: server cookie validated for %s", clientIP)
 			serverCookie = s.ednsMgr.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)

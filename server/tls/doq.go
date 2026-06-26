@@ -39,7 +39,7 @@ func (s *Server) startDOQServer() error {
 	quicTLSConfig.NextProtos = config.NextProtoDoQ
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        config.Timeout,
+		MaxIdleTimeout:        config.DefaultQUICServerIdleTimeout,
 		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
 		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
 		Allow0RTT:             true,
@@ -77,7 +77,7 @@ func (s *Server) handleDOQConnections() {
 				return
 			}
 			log.Errorf("TLS: DoQ Accept error: %v", err)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(config.DefaultAcceptRetryDelay)
 			continue
 		}
 
@@ -87,7 +87,7 @@ func (s *Server) handleDOQConnections() {
 
 		// Per-IP DoQ connection limit to prevent a single client from
 		// exhausting the server goroutine budget.
-		const maxConnsPerIP = 64
+		const maxConnsPerIP = config.DefaultMaxConnsPerIP
 		var ip string
 		var ipCount *atomic.Int32
 		if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
@@ -118,7 +118,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 	}
 
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
 		defer cancel()
 		_ = conn.CloseWithError(QUICCodeNoError, "")
 		done := make(chan struct{})
@@ -133,7 +133,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 	}()
 
 	streamGroup, _ := errgroup.WithContext(s.ctx)
-	streamGroup.SetLimit(64)
+	streamGroup.SetLimit(config.DefaultMaxConcurrentStreams)
 
 	for {
 		select {

@@ -226,17 +226,34 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 
 ## Key Constants
 
-All tunable runtime defaults are centralized in `config/defaults.go`.
+All tunable runtime defaults are centralized in `config/defaults.go`. **All numeric literals
+(port numbers, buffer sizes, timeouts, limits) must be defined as named `const` or `var` —
+never hardcoded inline.** When adding a new value, check if an existing constant already
+covers it; if not, add one to `config/defaults.go` with a descriptive `Default` prefix.
+Leaf utility packages that cannot import `config` (due to the dependency graph — see
+the "Dependency Graph" section) should use local `const` blocks with the same naming
+convention.
 
 | Constant | Package | Value |
 |----------|---------|-------|
-| `config.DefaultTTL` | config | 30 |
+| `config.DefaultDNSQueryTimeout` | config | 10s (single DNS query / dial / per-message I/O) |
+| `config.DefaultBackgroundTimeout` | config | 10s (bounded wait for background tasks / shutdown) |
+| `config.DefaultRecursiveResolveTimeout` | config | 30s (full recursive resolution) |
+| `config.DefaultHTTPServerIdleTimeout` | config | 60s (HTTP keep-alive) |
+| `config.DefaultHTTPServerWriteTimeout` | config | 30s (DoH response write) |
+| `config.DefaultHTTPReadHeaderTimeout` | config | 5s (Slowloris protection) |
+| `config.DefaultQUICClientIdleTimeout` | config | 60s (client QUIC idle, must exceed KeepAlive) |
+| `config.DefaultQUICServerIdleTimeout` | config | 30s (server QUIC idle, RFC 9000 default) |
+| `config.DefaultQUICKeepAlive` | config | 20s (QUIC keep-alive period) |
+| `config.DefaultH2ReadIdleTimeout` | config | 30s (HTTP/2 ping keep-alive) |
+| `config.DefaultHTTPIdleConnTimeout` | config | 5 min (HTTP transport idle) |
+| `config.DefaultShutdownTimeout` | config | 15s (graceful shutdown deadline) |
+| `config.DefaultTTL` | config | 10 |
 | `config.DefaultCacheSize` | config | 4 MB (4 * 1024 * 1024) |
 | `config.DefaultStaleTTL` | config | 30s (TTL returned for expired entries) |
 | `config.DefaultStaleMaxAge` | config | 3 days (max age for serve-expired) |
 | `config.MaxDomainLength` | config | 253 |
 | `config.RecursiveIndicator` | config | "builtin_recursive" |
-| `config.Timeout` | config | 5s (global: query, dial, idle, shutdown) |
 | `config.DefaultMaxPipe` | config | 16 (max in-flight queries per connection) |
 | `config.DefaultMaxConns` | config | 4 (max connections per upstream) |
 | `config.DefaultMaxCNAMEChain` | config | 16 (CNAME redirection limit) |
@@ -245,7 +262,15 @@ All tunable runtime defaults are centralized in `config/defaults.go`.
 | `config.DefaultMaxProbes` | config | 16 (concurrent latency probes) |
 | `config.DefaultRootProbeInterval` | config | 900s (root server latency re-probe interval) |
 | `config.DefaultLatencyProbeTimeout` | config | 100ms (per-step probe timeout) |
+| `config.DefaultAcceptRetryDelay` | config | 100ms (DoT/DoQ accept retry sleep) |
+| `config.DefaultSweepInterval` | config | 5 min (periodic cleanup sweep) |
+| `config.DefaultCertValidity` | config | 365 days (self-signed cert lifetime) |
+| `config.DefaultProbePortDNS` | config | 53 (latency probe DNS port) |
+| `config.DefaultProbePortHTTP` | config | 80 (latency probe HTTP port) |
+| `config.DefaultProbePortHTTPS` | config | 443 (latency probe HTTPS port) |
 | `pool.UDPBufferSize` | pool | 1232 |
+| `pool.TCPBufferSize` | pool | 4096 |
+| `pool.SecureBufferSize` | pool | 8192 |
 
 ## Logging Conventions
 
