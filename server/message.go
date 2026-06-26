@@ -97,8 +97,21 @@ func (s *Server) restoreOriginalDomain(msg *dns.Msg, currentName, originalName s
 	if msg == nil || strings.EqualFold(currentName, originalName) {
 		return
 	}
+	normalized := strings.ToLower(currentName)
 	for _, rr := range msg.Answer {
-		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
+		if rr != nil && strings.ToLower(rr.Header().Name) == normalized {
+			rr.Header().Name = originalName
+		}
+	}
+	// Also restore in Authority and Additional sections — NS and glue records
+	// may reference the rewritten domain name.
+	for _, rr := range msg.Ns {
+		if rr != nil && strings.ToLower(rr.Header().Name) == normalized {
+			rr.Header().Name = originalName
+		}
+	}
+	for _, rr := range msg.Extra {
+		if rr != nil && strings.ToLower(rr.Header().Name) == normalized {
 			rr.Header().Name = originalName
 		}
 	}
