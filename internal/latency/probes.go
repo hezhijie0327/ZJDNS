@@ -220,6 +220,17 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 			if p.IP.Equal(ip) {
 				return nil
 			}
+		case *net.TCPAddr:
+			if p.IP.Equal(ip) {
+				return nil
+			}
+		default:
+			// Fallback: extract IP from any net.Addr via SplitHostPort.
+			if host, _, err := net.SplitHostPort(peer.String()); err == nil {
+				if peerIP := net.ParseIP(host); peerIP != nil && peerIP.Equal(ip) {
+					return nil
+				}
+			}
 		}
 	}
 }
