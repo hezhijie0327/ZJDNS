@@ -111,7 +111,7 @@ zjdns/
     │   ├── doh_request.go          # Shared DoH/DoH3 HTTP request builder
     │   └── pool/                  # Connection pool sub-package
     │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
-    │       └── quic.go            # QUIC connection pool (QuicPool, QuicConn)
+    │       └── quic.go            # QUIC connection pool (QUICPool, QUICConn)
     ├── resolver/                  # DNS resolution strategies
     │   ├── resolver.go            # Resolver struct, routing + helpers
     │   ├── upstream.go            # First-win concurrent upstream queries
@@ -204,8 +204,8 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3) |
 | `Conn` | `server/client/pool` | Multiplexed TCP/DoT connection (RFC 7766) |
 | `Pool` | `server/client/pool` | TCP/DoT connection pool |
-| `QuicPool` | `server/client/pool` | QUIC connection pool |
-| `QuicConn` | `server/client/pool` | Wrapped QUIC connection |
+| `QUICPool` | `server/client/pool` | QUIC connection pool |
+| `QUICConn` | `server/client/pool` | Wrapped QUIC connection |
 | `Resolver` | `server/resolver` | DNS resolution (upstream + recursive) |
 | `Recursive` | `server/resolver` | Built-in recursive resolver |
 | `Guard` | `server/security` | DNSSEC + hijack detection |
@@ -247,29 +247,53 @@ convention.
 | `config.DefaultH2ReadIdleTimeout` | config | 30s (HTTP/2 ping keep-alive) |
 | `config.DefaultHTTPIdleConnTimeout` | config | 5 min (HTTP transport idle) |
 | `config.DefaultShutdownTimeout` | config | 15s (graceful shutdown deadline) |
+| `config.DefaultCertValidity` | config | 45 days (CA self-signed cert lifetime) |
+| `config.DefaultServerCertValidity` | config | 365 days (server self-signed cert lifetime) |
+| `config.DefaultCertExpiryWarnDays` | config | 30 (certificate expiry warning threshold) |
+| `config.DefaultPrefetchThrottleInterval` | config | 3s (prefetch cooldown) |
+| `config.DefaultAcceptRetryDelay` | config | 100ms (DoT/DoQ accept retry sleep) |
+| `config.DefaultSweepInterval` | config | 5 min (periodic cleanup sweep) |
 | `config.DefaultTTL` | config | 10 |
 | `config.DefaultCacheSize` | config | 4 MB (4 * 1024 * 1024) |
 | `config.DefaultStaleTTL` | config | 30s (TTL returned for expired entries) |
 | `config.DefaultStaleMaxAge` | config | 45 days (max age for serve-expired) |
 | `config.MaxDomainLength` | config | 253 |
-| `config.RecursiveIndicator` | config | "builtin_recursive" |
 | `config.DefaultMaxPipe` | config | 16 (max in-flight queries per connection) |
 | `config.DefaultMaxConns` | config | 4 (max connections per upstream) |
 | `config.DefaultMaxCNAMEChain` | config | 16 (CNAME redirection limit) |
 | `config.DefaultMaxRecursionDepth` | config | 16 (recursion depth limit) |
 | `config.DefaultMaxIncomingStreams` | config | 256 (QUIC stream limit) |
 | `config.DefaultMaxProbes` | config | 16 (concurrent latency probes) |
-| `config.DefaultNSLatencyTTL` | config | 900s (nsAddrKey TTL — NS latency sort refresh; root is just another NS set) |
+| `config.DefaultNSLatencyTTL` | config | 900s (nsAddrKey TTL — NS latency sort refresh) |
 | `config.DefaultLatencyProbeTimeout` | config | 100ms (per-step probe timeout) |
-| `config.DefaultAcceptRetryDelay` | config | 100ms (DoT/DoQ accept retry sleep) |
-| `config.DefaultSweepInterval` | config | 5 min (periodic cleanup sweep) |
-| `config.DefaultCertValidity` | config | 45 days (self-signed cert lifetime) |
+| `config.DefaultMaxNSEC3Iterations` | config | 150 (NSEC3 iteration cap, RFC 5155) |
+| `config.DefaultSecureTransportRetries` | config | 2 (DoH/DoH3 retry count) |
+| `config.DefaultTokenStoreCapacity` | config | 1 (QUIC LRU token store capacity) |
+| `config.DefaultTokenStoreMaxEntries` | config | 10 (QUIC LRU token store max entries) |
+| `config.DefaultStatsInterval` | config | 3600 (stats collection interval) |
+| `config.DefaultStatsResetInterval` | config | 86400 (stats reset interval) |
+| `config.DefaultTransportMax` | config | 32 (max cached transports/configs per type) |
+| `config.DefaultTLSSessionCacheSize` | config | 32 (client TLS session cache entries) |
+| `config.DefaultRewriteRulesCapacity` | config | 16 (rewrite rule slice pre-allocation) |
+| `config.GroupOtherPermMask` | config | 0077 (TLS cert/key file permission check) |
+| `config.RecursiveIndicator` | config | "builtin_recursive" (sentinel for built-in recursive mode) |
+| `config.DNSSECStatusSecure` | config | "secure" (DNSSEC validation status constant) |
+| `config.DNSSECStatusInsecure` | config | "insecure" |
+| `config.DNSSECStatusBogus` | config | "bogus" |
+| `config.DoHContentType` | config | "application/dns-message" (RFC 8484) |
+| `config.ProtoUDP` / `ProtoTCP` / `ProtoTLS` | config | "udp" / "tcp" / "tls" (protocol identifiers) |
+| `config.ProtoQUIC` / `ProtoHTTP` / `ProtoHTTP3` | config | "quic" / "https" / "http3" |
+| `config.NextProtoDOT` | config | []string{"dot"} (ALPN for DoT) |
+| `config.NextProtoDOH` | config | []string{"h2"} (ALPN for DoH) |
+| `config.NextProtoDOQ` | config | []string{"doq"} (ALPN for DoQ) |
+| `config.NextProtoDOH3` | config | []string{"h3"} (ALPN for DoH3) |
 | `config.DefaultProbePortDNS` | config | 53 (latency probe DNS port) |
 | `config.DefaultProbePortHTTP` | config | 80 (latency probe HTTP port) |
 | `config.DefaultProbePortHTTPS` | config | 443 (latency probe HTTPS port) |
 | `pool.UDPBufferSize` | pool | 1232 |
 | `pool.TCPBufferSize` | pool | 4096 |
 | `pool.SecureBufferSize` | pool | 8192 |
+| `dnsutil.DNSFramePrefixLen` | dnsutil | 2 (DNS TCP/DoT/DoQ length prefix, RFC 1035 §4.2.2) |
 
 ## Logging Conventions
 
@@ -404,3 +428,21 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   from `doqIPCounts` every 5 minutes to prevent unbounded map growth.
 - **pprof fix**: Added `_ "net/http/pprof"` import so the pprof HTTP server
   actually registers its debug endpoints on `http.DefaultServeMux`.
+- **Shared DNS frame prefix**: `dnsutil.DNSFramePrefixLen = 2` is the canonical
+  constant for the 2-byte DNS-over-TCP/DoT/DoQ length prefix (RFC 1035 §4.2.2,
+  RFC 9250). All frame read/write code in `dot.go`, `doq.go` (server+client),
+  and `pool/tcp.go` uses this constant. Helper functions `WriteDNSFrame`/`ReadDNSFrame`
+  in `dnsutil` provide shared frame I/O.
+- **Protocol identifier constants**: `config.ProtoUDP`, `ProtoTCP`, `ProtoTLS`,
+  `ProtoQUIC`, `ProtoHTTP`, `ProtoHTTP3` replace all hardcoded `"udp"`, `"tcp"`, etc.
+  across the codebase. Used for `dns.Server.Net`, `net.Dialer`, upstream routing,
+  and protocol comparisons. Transport aliases (`"dot"`/`"tls"`, `"doq"`/`"quic"`,
+  `"doh"`/`"https"`, `"doh3"`/`"http3"`) in `executeSecureQuery` remain as switch
+  labels since they represent user-facing config values that map to the same transport.
+- **DNSSEC status constants**: `config.DNSSECStatusSecure`/`Insecure`/`Bogus` replace
+  hardcoded `"secure"`, `"insecure"`, `"bogus"` strings in `handler.go` (12 sites)
+  and `stats.go` (3 sites), ensuring consistent spelling across validation and metrics.
+- **QUIC type naming**: Exported types use all-caps acronym per Go convention:
+  `QUICConn`, `QUICPool`, `NewQUICPool` (not `QuicConn`/`QuicPool`). ALPN protocol
+  vars follow the same rule: `NextProtoDOH`, `NextProtoDOQ`, `NextProtoDOH3`
+  (consistent with `NextProtoDOT`).
