@@ -46,7 +46,7 @@
 ### 💾 缓存系统
 
 - **固定容量**：`size` 指定缓存上限（字节），默认 4 MB
-- **LRU 内存缓存**：RLock 读取（零读争用），atomic 访问时间淘汰，TTL 下限保护（30s）
+- **LRU 内存缓存**：RLock 读取（零读争用），atomic 访问时间淘汰，TTL 下限保护（10s）
 - **磁盘持久化**：gob 快照，启动恢复，定时落盘，原子写入
 - **过期缓存服务 (RFC 8767)**：上游不可用时返回过期缓存（最大 45 天）
 - **预取机制**：TTL 剩余 ≤40% 时后台刷新
@@ -133,7 +133,7 @@ zjdns/
 ├── stats/stats.go                   # 锁无关统计采集器 (27 个原子计数器)
 └── server/                          # 核心服务
     ├── server.go                    # Server 生命周期与启动
-    ├── server_handlers.go           # DNS 查询处理管线
+    ├── handler.go + message.go       # DNS 查询处理管线
     ├── client/                      # 上游查询客户端 + 连接池
     │   ├── client.go                # Client 路由分发
     │   ├── tcp.go                   # UDP/TCP + TCP 回退
@@ -145,14 +145,12 @@ zjdns/
     │   └── pool/                    # 连接池子包
     │       ├── tcp.go               # RFC 7766 TCP/DoT 流水线连接池
     │       └── quic.go               # QUIC 连接池
-    ├── resolver/                    # DNS 解析引擎 (7 文件)
+    ├── resolver/                    # DNS 解析引擎 (6 文件)
     │   ├── resolver.go              # 解析路由 (上游首胜 / 递归)
     │   ├── upstream.go              # 多上游并发首胜查询
-    │   ├── recursive.go             # 递归解析 (根→TLD→权威)
-    │   ├── cname.go                 # CNAME 链追踪
-    │   ├── dnssec_chain.go          # DNSSEC 信任链构建与验证
+    │   ├── recursive.go             # 递归解析 (根→TLD→权威) + CNAME 链追踪
+    │   ├── dnssec_chain.go          # DNSSEC 信任链构建 + 域切割检测
     │   ├── nameserver.go            # NS 并发查询与劫持检测
-    │   └── zonecut.go               # 域切割检测
     ├── tls/                         # 安全传输监听器
     │   ├── tls.go                   # TLS Server + 证书管理
     │   ├── dot.go                   # DoT 监听器

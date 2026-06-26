@@ -459,10 +459,18 @@ func (cv *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifie
 	return anyValidated, nil
 }
 
+// maxNSEC3Iterations caps the number of hash iterations to prevent CPU exhaustion
+// from malicious NSEC3 records. RFC 9277 §4 recommends a maximum of 100.
+const maxNSEC3Iterations = 150
+
 // nsec3HashName hashes a domain name using the NSEC3 parameters specified in the
 // record (algorithm, iterations, salt) per RFC 5155 §5. It returns the
 // base32hex-encoded hash without padding as a lowercase string.
+// Iterations are capped at maxNSEC3Iterations to prevent DoS attacks.
 func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) string {
+	if iterations > maxNSEC3Iterations {
+		iterations = maxNSEC3Iterations
+	}
 	// Normalize: lowercase, fully qualified, wire-format label encoding.
 	name = strings.ToLower(dns.Fqdn(name))
 	labels := strings.Split(strings.TrimSuffix(name, "."), ".")

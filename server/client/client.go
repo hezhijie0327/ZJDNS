@@ -125,12 +125,20 @@ func New() *Client {
 
 // getQUICConfig returns a cached QUIC config for the given upstream key, creating
 // one with a TokenStore if none exists. The TokenStore persists across connections
-// to the same upstream, enabling 0-RTT session resumption.
+// to the same upstream, enabling 0-RTT session resumption. Evicts the oldest entry
+// when the map exceeds quicConfigMaxSize to prevent unbounded memory growth.
 func (c *Client) getQUICConfig(key string) *quic.Config {
 	c.quicConfigsMu.Lock()
 	defer c.quicConfigsMu.Unlock()
 	if cfg, ok := c.quicConfigs[key]; ok {
 		return cfg
+	}
+	const maxSize = config.DefaultTransportMax
+	if len(c.quicConfigs) >= maxSize {
+		for k := range c.quicConfigs {
+			delete(c.quicConfigs, k)
+			break
+		}
 	}
 	cfg := &quic.Config{
 		MaxIdleTimeout:        config.DefaultQUICClientIdleTimeout,
