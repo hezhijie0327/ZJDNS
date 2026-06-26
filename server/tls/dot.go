@@ -40,6 +40,10 @@ func (s *Server) startDOTServer() error {
 }
 
 func (s *Server) handleDOTConnections() {
+	// Per-listener connection semaphore to prevent unbounded goroutine
+	// growth from DoT connection flooding.
+	sem := make(chan struct{}, config.DefaultMaxConnsPerIP)
+
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -57,7 +61,16 @@ func (s *Server) handleDOTConnections() {
 			continue
 		}
 
+		select {
+		case sem <- struct{}{}:
+		default:
+			_ = conn.Close()
+			log.Debugf("TLS: DoT connection limit reached, rejecting new connection")
+			continue
+		}
+
 		s.serverGroup.Go(func() error {
+			defer func() { <-sem }()
 			defer dnsutil.HandlePanic("DoT connection handler")
 			defer func() { _ = conn.Close() }()
 			s.handleDOTConnection(conn)
