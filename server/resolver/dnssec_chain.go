@@ -144,7 +144,7 @@ func (rr *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string
 
 	// Query the zone's authoritative nameservers for DNSKEY records
 	dnskeyQuestion := dns.Question{Name: dns.Fqdn(zone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
-	dnskeyResp, err := rr.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, nil, false)
+	dnskeyResp, _, err := rr.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, nil, false, zone, rr.resolver.validator.Hijack)
 	if err != nil {
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", zone, err)
 		return
@@ -271,7 +271,7 @@ func (rr *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, name
 
 	// Query the authoritative nameservers explicitly for DNSKEY + RRSIG
 	dnskeyQuestion := dns.Question{Name: dns.Fqdn(currentDomain), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
-	dnskeyResp, err := rr.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP)
+	dnskeyResp, _, err := rr.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP, currentDomain, rr.resolver.validator.Hijack)
 	if err != nil {
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", currentDomain, err)
 		// DNSKEY query failure means the zone's DNSKEY records cannot be
@@ -450,7 +450,7 @@ func (rr *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, name
 	// Query for the child zone's DS records from the parent zone.
 	// These are used to verify the child zone's DNSKEYs.
 	dsQuestion := dns.Question{Name: dns.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
-	dsResp, dsErr := rr.queryNameserversConcurrent(ctx, nameservers, dsQuestion, ecs, forceTCP)
+	dsResp, _, dsErr := rr.queryNameserversConcurrent(ctx, nameservers, dsQuestion, ecs, forceTCP, currentDomain, rr.resolver.validator.Hijack)
 	if dsErr != nil {
 		return false, fmt.Errorf("DS query for %s failed: %w", childZone, dsErr)
 	}
@@ -501,7 +501,7 @@ func (rr *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, name
 
 	// Query for the child zone's DNSKEY records
 	dnskeyQuestion := dns.Question{Name: dns.Fqdn(childZone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
-	dnskeyResp, dnskeyErr := rr.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP)
+	dnskeyResp, _, dnskeyErr := rr.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP, currentDomain, rr.resolver.validator.Hijack)
 	if dnskeyErr != nil {
 		return false, fmt.Errorf("DNSKEY query for %s failed: %w", childZone, dnskeyErr)
 	}

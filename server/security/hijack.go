@@ -22,6 +22,11 @@ const rootServersDomain = "root-servers.net"
 // A records for www.google.com, or a TLD server returning A records for a
 // subdomain. Detection triggers a UDP→TCP fallback which often bypasses the
 // middlebox.
+//
+// To prevent GFW-injected responses from winning the first-win race in
+// queryNameserversConcurrent, CheckResponse is called both inside the query
+// layer (rejecting hijacked responses before they reach resultChan) and in
+// the recursive loop (as a defense-in-depth check for the TCP path).
 type Detector struct {
 	enabled atomic.Bool
 }
@@ -31,8 +36,9 @@ func (d *Detector) IsEnabled() bool {
 	return d.enabled.Load()
 }
 
-// CheckResponse validates a DNS response for hijacking. Only the Answer section
-// is checked — each record must be within the answering server's authority.
+// CheckResponse validates a DNS response for hijacking. Only the Answer
+// section is checked — each record must be within the answering server's
+// delegated authority.
 func (d *Detector) CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string) {
 	if !d.enabled.Load() || response == nil {
 		return true, ""

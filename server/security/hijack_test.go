@@ -256,6 +256,60 @@ func TestHijack_GoogleAtComTLD_Flagged(t *testing.T) {
 	}
 }
 
+// ── Delegation section regression tests ─────────────────────────────────────────
+// CheckResponse only inspects the Answer section. Authority and Additional
+// sections carry delegation/glue data and are never checked for hijacking.
+
+func TestCheckResponse_LegitimateGlueNotFlagged(t *testing.T) {
+	// Legitimate delegation with glue in Additional section should never
+	// be flagged — only the Answer section is inspected.
+	d := newDetector()
+	resp := &dns.Msg{}
+	resp.Answer = []dns.RR{
+		nsRec("youtube.com.", "ns1.google.com."),
+		nsRec("youtube.com.", "ns2.google.com."),
+	}
+	resp.Extra = []dns.RR{
+		aRec("ns1.google.com.", "216.239.32.10"),
+		aRec("ns2.google.com.", "216.239.34.10"),
+		aRec("ns3.google.com.", "216.239.36.10"),
+	}
+
+	ok, reason := d.CheckResponse("com", "www.youtube.com", resp)
+	if !ok {
+		t.Fatalf("legitimate glue should not be flagged: %s", reason)
+	}
+}
+
+func TestCheckResponse_RootServerGlueNotFlagged(t *testing.T) {
+	// Root server glue records (root-servers.net) pass through because
+	// CheckResponse only inspects the Answer section.
+	d := newDetector()
+	resp := &dns.Msg{}
+	resp.Extra = []dns.RR{
+		aRec("a.root-servers.net.", "198.41.0.4"),
+	}
+
+	ok, reason := d.CheckResponse("", "a.root-servers.net", resp)
+	if !ok {
+		t.Fatalf("root server glue in Additional section should be allowed: %s", reason)
+	}
+}
+
+func TestCheckResponse_NonMatchingAdditionalNotFlagged(t *testing.T) {
+	// Answer-only inspection — Additional section records are never checked.
+	d := newDetector()
+	resp := &dns.Msg{}
+	resp.Extra = []dns.RR{
+		aRec("www.google.com.", "185.45.5.35"), // would be GFW injection, but in Additional not Answer
+	}
+
+	ok, reason := d.CheckResponse("", "www.google.com", resp)
+	if !ok {
+		t.Fatalf("Additional section is not inspected: %s", reason)
+	}
+}
+
 // ── isInAuthority ──────────────────────────────────────────────────────────────
 
 func TestIsInAuthority_Exact(t *testing.T) {

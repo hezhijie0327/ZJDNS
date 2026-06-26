@@ -91,9 +91,16 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 	}
 
 	if normalizedQname == "" {
-		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
+		response, hijackRejected, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, rr.resolver.validator.Hijack)
 		if err != nil {
 			return nil, nil, nil, false, nil, "", false, fmt.Errorf("root domain query: %w", err)
+		}
+
+		// If any response was rejected as hijack, restart via TCP
+		// to bypass GFW UDP injection at all levels.
+		if hijackRejected && !forceTCP {
+			pool.DefaultMessagePool.Put(response)
+			return rr.resolve(ctx, question, ecs, depth, true)
 		}
 
 		if rr.resolver.validator.Hijack.IsEnabled() {
@@ -118,12 +125,20 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 		default:
 		}
 
-		response, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP)
+		response, hijackRejected, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, rr.resolver.validator.Hijack)
 		if err != nil {
 			if !forceTCP && errors.Is(err, ErrHijackDetected) {
 				return rr.resolve(ctx, question, ecs, depth, true)
 			}
 			return nil, nil, nil, false, nil, "", false, fmt.Errorf("query %s: %w", currentDomain, err)
+		}
+
+		// If any response was rejected as hijack at this level,
+		// restart via TCP to bypass GFW UDP injection at all
+		// subsequent levels (including authoritative NS spoofing).
+		if hijackRejected && !forceTCP {
+			pool.DefaultMessagePool.Put(response)
+			return rr.resolve(ctx, question, ecs, depth, true)
 		}
 
 		if rr.resolver.validator.Hijack.IsEnabled() {

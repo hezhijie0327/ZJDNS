@@ -20,6 +20,7 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/server/security"
 )
 
 func (rr *Recursive) handleSuspiciousResponse(reason string, currentlyTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
@@ -29,9 +30,9 @@ func (rr *Recursive) handleSuspiciousResponse(reason string, currentlyTCP bool) 
 	return nil, nil, nil, false, nil, "", true, fmt.Errorf("DNS hijacking detected (TCP): %s", reason)
 }
 
-func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *edns.ECSOption, forceTCP bool) (*dns.Msg, error) {
+func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *security.Detector) (*dns.Msg, bool, error) {
 	if len(nameservers) == 0 {
-		return nil, errors.New("no nameservers")
+		return nil, false, errors.New("no nameservers")
 	}
 
 	// Create a child context with a deadline to bound per-batch query time.
@@ -53,6 +54,8 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 	g.SetLimit(limit)
 
 	var activeConnections atomic.Int32
+	var hijackRejected atomic.Bool
+	normalizedQname := dnsutil.NormalizeDomain(question.Name)
 
 	for _, ns := range nameservers {
 		nsAddr := ns
@@ -83,6 +86,21 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+					// Reject hijacked responses before they can win the
+					// first-win race. GFW injection at the root/TLD level
+					// returns A/AAAA records outside the server's authority
+					// (e.g. root returning A for www.google.com). If all
+					// responses are hijacked, the result channel stays empty
+					// and the caller triggers TCP fallback.
+					if detector != nil && detector.IsEnabled() {
+						if valid, reason := detector.CheckResponse(currentDomain, normalizedQname, result.Response); !valid {
+							log.Debugf("RECURSION: rejecting hijacked response from %s: %s", nsAddr, reason)
+							hijackRejected.Store(true)
+							pool.DefaultMessagePool.Put(result.Response)
+							return nil
+						}
+					}
+
 					select {
 					case resultChan <- result.Response:
 						cancel(errors.New("first win"))
@@ -113,6 +131,15 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 					if retryResult.Error == nil && retryResult.Response != nil {
 						retryRcode := retryResult.Response.Rcode
 						if retryRcode == dns.RcodeSuccess || retryRcode == dns.RcodeNameError {
+							// Reject hijacked responses in FORMERR retry path as well.
+							if detector != nil && detector.IsEnabled() {
+								if valid, reason := detector.CheckResponse(currentDomain, normalizedQname, retryResult.Response); !valid {
+									log.Debugf("RECURSION: rejecting hijacked FORMERR retry from %s: %s", nsAddr, reason)
+									pool.DefaultMessagePool.Put(retryResult.Response)
+									return nil
+								}
+							}
+
 							select {
 							case resultChan <- retryResult.Response:
 								cancel(errors.New("first win after FORMERR retry"))
@@ -147,11 +174,11 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 	select {
 	case result, ok := <-resultChan:
 		if ok && result != nil {
-			return result, nil
+			return result, hijackRejected.Load(), nil
 		}
-		return nil, errors.New("no successful response")
+		return nil, hijackRejected.Load(), errors.New("no successful response")
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, hijackRejected.Load(), ctx.Err()
 	}
 }
 
