@@ -3,7 +3,6 @@
 package stats
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -406,7 +405,7 @@ func (sc *Collector) Reset() {
 }
 
 // FetchStats returns a Snapshot pointer suitable for external consumption.
-func (sc *Collector) FetchStats(ctx context.Context) (*Snapshot, error) {
+func (sc *Collector) FetchStats() (*Snapshot, error) {
 	if sc == nil || !sc.enabled {
 		return nil, fmt.Errorf("stats disabled")
 	}

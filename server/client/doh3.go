@@ -151,7 +151,7 @@ func (c *Client) createDoH3Client(key, host string, tlsConfig *tls.Config) *http
 	tlsCfg := tlsConfig.Clone()
 	tlsCfg.NextProtos = config.NextProtoDoH3
 
-	quicCfg := c.getQUICConfig(key)
+	quicCfg := c.getQUICConfig(key, tlsConfig.InsecureSkipVerify)
 
 	transport := &http3Transport{
 		baseTransport: &http3.Transport{

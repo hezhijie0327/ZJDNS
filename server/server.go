@@ -371,10 +371,7 @@ func (s *Server) logStatsNow(trigger string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
-	defer cancel()
-
-	snapshot, err := s.statsMgr.FetchStats(ctx)
+	snapshot, err := s.statsMgr.FetchStats()
 	if err != nil {
 		log.Warnf("STATS: fetch failed: %v", err)
 		return

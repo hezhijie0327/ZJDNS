@@ -27,7 +27,7 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 		dialTLS.NextProtos = config.NextProtoDoQ
 		timeoutCtx, cancel := context.WithTimeout(dialCtx, config.DefaultDNSQueryTimeout)
 		defer cancel()
-		return quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig(key))
+		return quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig(key, tlsConfig.InsecureSkipVerify))
 	}
 
 	if c.quicPool != nil {

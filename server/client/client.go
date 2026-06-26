@@ -124,10 +124,10 @@ func New() *Client {
 }
 
 // getQUICConfig returns a cached QUIC config for the given upstream key, creating
-// one with a TokenStore if none exists. The TokenStore persists across connections
-// to the same upstream, enabling 0-RTT session resumption. Evicts the oldest entry
-// when the map exceeds quicConfigMaxSize to prevent unbounded memory growth.
-func (c *Client) getQUICConfig(key string) *quic.Config {
+// one with a TokenStore if none exists. When skipVerify is true (TLS verification
+// disabled), 0-RTT is also disabled to prevent replay attacks — without certificate
+// verification there is no way to authenticate the server receiving 0-RTT data.
+func (c *Client) getQUICConfig(key string, skipVerify bool) *quic.Config {
 	c.quicConfigsMu.Lock()
 	defer c.quicConfigsMu.Unlock()
 	if cfg, ok := c.quicConfigs[key]; ok {
@@ -145,7 +145,7 @@ func (c *Client) getQUICConfig(key string) *quic.Config {
 		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
 		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
 		EnableDatagrams:       true,
-		Allow0RTT:             true,
+		Allow0RTT:             !skipVerify,
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 		TokenStore:            quic.NewLRUTokenStore(1, 10),
 	}
