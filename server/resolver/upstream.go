@@ -42,7 +42,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 		for _, s := range servers {
 			proto := s.Protocol
 			if proto == "" {
-				proto = "udp"
+				proto = config.ProtoUDP
 			}
 			serverAddrs = append(serverAddrs, fmt.Sprintf("%s(%s)", s.Address, proto))
 		}
@@ -102,7 +102,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 				if queryResult.Error == nil && queryResult.Response != nil {
 					rcode := queryResult.Response.Rcode
 					serverDesc := server.Address
-					if server.Protocol != "" && server.Protocol != "udp" {
+					if server.Protocol != "" && server.Protocol != config.ProtoUDP {
 						serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
 					}
 

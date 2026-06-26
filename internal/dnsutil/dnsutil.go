@@ -15,6 +15,12 @@ import (
 	"zjdns/internal/log"
 )
 
+// DNSFramePrefixLen is the number of bytes used for the 2-byte DNS message
+// length prefix in TCP, DoT, and DoQ transports (RFC 1035 §4.2.2, RFC 9250).
+const DNSFramePrefixLen = 2
+
+var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
+
 // NormalizeDomain converts a domain name to lowercase and removes the trailing
 // dot.
 func NormalizeDomain(domain string) string {
@@ -153,7 +159,6 @@ func IsValidFilePath(path string) bool {
 		return false
 	}
 
-	dangerousPrefixes := []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 	for _, prefix := range dangerousPrefixes {
 		if strings.HasPrefix(abs, prefix) {
 			return false
@@ -186,7 +191,7 @@ func ExtractIP(rr dns.RR) net.IP {
 // WriteDNSFrame writes a 2-byte big-endian length prefix followed by data to w.
 // Used by TCP, DoT, and DoQ transports for DNS message framing (RFC 1035 §4.2.2).
 func WriteDNSFrame(w io.Writer, data []byte) error {
-	prefix := make([]byte, 2)
+	prefix := make([]byte, DNSFramePrefixLen)
 	binary.BigEndian.PutUint16(prefix, uint16(len(data)))
 	if _, err := w.Write(prefix); err != nil {
 		return err
@@ -198,7 +203,7 @@ func WriteDNSFrame(w io.Writer, data []byte) error {
 // ReadDNSFrame reads a 2-byte big-endian length prefix from r and returns the
 // following data of that length. Used by TCP, DoT, and DoQ transports.
 func ReadDNSFrame(r io.Reader) ([]byte, error) {
-	prefix := make([]byte, 2)
+	prefix := make([]byte, DNSFramePrefixLen)
 	if _, err := io.ReadFull(r, prefix); err != nil {
 		return nil, err
 	}

@@ -57,7 +57,7 @@ type Client struct {
 	quicConfigs   map[string]*quic.Config
 	quicConfigsMu sync.Mutex
 
-	quicPool *connpool.QuicPool
+	quicPool *connpool.QUICPool
 
 	SessionCache tls.ClientSessionCache
 
@@ -70,13 +70,13 @@ type Client struct {
 func New() *Client {
 	udpClient := &dns.Client{
 		Timeout: config.DefaultDNSQueryTimeout,
-		Net:     "udp",
+		Net:     config.ProtoUDP,
 		UDPSize: pool.UDPBufferSize,
 	}
 
 	tcpClient := &dns.Client{
 		Timeout: config.DefaultDNSQueryTimeout,
-		Net:     "tcp",
+		Net:     config.ProtoTCP,
 	}
 
 	tlsClient := &dns.Client{
@@ -116,7 +116,7 @@ func New() *Client {
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),
 		quicConfigs:    make(map[string]*quic.Config),
-		quicPool:       connpool.NewQuicPool(config.DefaultMaxConns),
+		quicPool:       connpool.NewQUICPool(config.DefaultMaxConns),
 		SessionCache:   tls.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
 		tcpPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		dotPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
@@ -133,8 +133,7 @@ func (c *Client) getQUICConfig(key string, skipVerify bool) *quic.Config {
 	if cfg, ok := c.quicConfigs[key]; ok {
 		return cfg
 	}
-	const maxSize = config.DefaultTransportMax
-	if len(c.quicConfigs) >= maxSize {
+	if len(c.quicConfigs) >= config.DefaultTransportMax {
 		for k := range c.quicConfigs {
 			delete(c.quicConfigs, k)
 			break
@@ -147,7 +146,7 @@ func (c *Client) getQUICConfig(key string, skipVerify bool) *quic.Config {
 		EnableDatagrams:       true,
 		Allow0RTT:             !skipVerify,
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
-		TokenStore:            quic.NewLRUTokenStore(1, 10),
+		TokenStore:            quic.NewLRUTokenStore(config.DefaultTokenStoreCapacity, config.DefaultTokenStoreMaxEntries),
 	}
 	c.quicConfigs[key] = cfg
 	return cfg
@@ -164,7 +163,7 @@ func (c *Client) resetQUICConfig(key string) {
 		return
 	}
 	cfg = cfg.Clone()
-	cfg.TokenStore = quic.NewLRUTokenStore(1, 10)
+	cfg.TokenStore = quic.NewLRUTokenStore(config.DefaultTokenStoreCapacity, config.DefaultTokenStoreMaxEntries)
 	c.quicConfigs[key] = cfg
 }
 
@@ -192,7 +191,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 		if c.needsTCPFallback(result, protocol) {
 			log.Debugf("UPSTREAM: UDP truncated/failed for %s, falling back to TCP for %s", qname, server.Address)
 			tcpServer := *server
-			tcpServer.Protocol = "tcp"
+			tcpServer.Protocol = config.ProtoTCP
 
 			if tcpResp, tcpErr := c.executeTraditionalQuery(queryCtx, msg, &tcpServer); tcpErr == nil {
 				result.Response = tcpResp

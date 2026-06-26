@@ -56,9 +56,9 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 
 	for _, ns := range nameservers {
 		nsAddr := ns
-		protocol := "udp"
+		protocol := config.ProtoUDP
 		if forceTCP {
-			protocol = "tcp"
+			protocol = config.ProtoTCP
 		}
 		server := &config.UpstreamServer{Address: nsAddr, Protocol: protocol}
 

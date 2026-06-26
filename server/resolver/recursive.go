@@ -37,6 +37,11 @@ var DefaultRootServers = []string{
 	"202.12.27.33:53", "[2001:dc3::35]:53",
 }
 
+const (
+	nsAddrKeyPrefix = "dns:_addrs:"
+	nsAddrKeySuffix = ":0:1"
+)
+
 // Recursive performs iterative DNS resolution by walking the root, TLD, and
 // authoritative nameserver hierarchy. When DNSSEC validation is enabled, it
 // builds a cryptographic chain of trust at each delegation step.
@@ -422,7 +427,7 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 
 // nsAddrKey returns the unified cache key for latency-sorted server addresses.
 func nsAddrKey(zone string) string {
-	return "dns:_addrs:" + dnsutil.NormalizeDomain(zone) + ":0:1"
+	return nsAddrKeyPrefix + dnsutil.NormalizeDomain(zone) + nsAddrKeySuffix
 }
 
 // addrsToTXTRecords converts "ip:port" strings to TXT DNS records with the

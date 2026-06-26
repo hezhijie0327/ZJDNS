@@ -13,6 +13,7 @@ import (
 	"github.com/quic-go/quic-go"
 
 	"zjdns/config"
+	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
@@ -24,7 +25,7 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 
 	dialQUIC := func(dialCtx context.Context, addr string) (*quic.Conn, error) {
 		dialTLS := tlsConfig.Clone()
-		dialTLS.NextProtos = config.NextProtoDoQ
+		dialTLS.NextProtos = config.NextProtoDOQ
 		timeoutCtx, cancel := context.WithTimeout(dialCtx, config.DefaultDNSQueryTimeout)
 		defer cancel()
 		return quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig(key, tlsConfig.InsecureSkipVerify))
@@ -91,14 +92,14 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	defer pool.DefaultBufferPool.Put(buf)
 
 	writeBuf := buf
-	if len(buf) < 2+len(msgData) {
-		writeBuf = make([]byte, 2+len(msgData))
+	if len(buf) < dnsutil.DNSFramePrefixLen+len(msgData) {
+		writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(msgData))
 	}
 
-	binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(msgData)))
-	copy(writeBuf[2:], msgData)
+	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(msgData)))
+	copy(writeBuf[dnsutil.DNSFramePrefixLen:], msgData)
 
-	if _, err := stream.Write(writeBuf[:2+len(msgData)]); err != nil {
+	if _, err := stream.Write(writeBuf[:dnsutil.DNSFramePrefixLen+len(msgData)]); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("write: %w", err)
 	}
@@ -106,19 +107,19 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	respBuf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(respBuf)
 
-	if _, err := io.ReadFull(stream, respBuf[:2]); err != nil {
+	if _, err := io.ReadFull(stream, respBuf[:dnsutil.DNSFramePrefixLen]); err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("read length prefix: %w", err)
 	}
-	msgLen := binary.BigEndian.Uint16(respBuf[:2])
+	msgLen := binary.BigEndian.Uint16(respBuf[:dnsutil.DNSFramePrefixLen])
 	if msgLen == 0 {
 		msg.Id = originalID
 		return nil, fmt.Errorf("invalid response length: 0")
 	}
 
 	var body []byte
-	if int(msgLen) <= len(respBuf)-2 {
-		body = respBuf[2 : 2+msgLen]
+	if int(msgLen) <= len(respBuf)-dnsutil.DNSFramePrefixLen {
+		body = respBuf[dnsutil.DNSFramePrefixLen : dnsutil.DNSFramePrefixLen+msgLen]
 	} else {
 		body = make([]byte, msgLen)
 	}

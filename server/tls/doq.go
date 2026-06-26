@@ -37,7 +37,7 @@ func (s *Server) startDOQServer() error {
 	s.doqTransport = &quic.Transport{Conn: s.doqConn}
 
 	quicTLSConfig := s.tlsConfig.Clone()
-	quicTLSConfig.NextProtos = config.NextProtoDoQ
+	quicTLSConfig.NextProtos = config.NextProtoDOQ
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        config.DefaultQUICServerIdleTimeout,
@@ -171,20 +171,20 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	buf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(buf)
 
-	_, err := io.ReadFull(stream, buf[:2])
+	_, err := io.ReadFull(stream, buf[:dnsutil.DNSFramePrefixLen])
 	if err != nil {
 		return
 	}
 
-	msgLen := binary.BigEndian.Uint16(buf[:2])
-	if msgLen == 0 || msgLen > pool.SecureBufferSize-2 {
+	msgLen := binary.BigEndian.Uint16(buf[:dnsutil.DNSFramePrefixLen])
+	if msgLen == 0 || msgLen > pool.SecureBufferSize-dnsutil.DNSFramePrefixLen {
 		_ = conn.CloseWithError(connpool.QUICCodeProtocolError, "invalid length")
 		return
 	}
 
 	var body []byte
-	if int(msgLen) <= len(buf)-2 {
-		body = buf[2 : 2+msgLen]
+	if int(msgLen) <= len(buf)-dnsutil.DNSFramePrefixLen {
+		body = buf[dnsutil.DNSFramePrefixLen : dnsutil.DNSFramePrefixLen+msgLen]
 	} else {
 		body = make([]byte, msgLen)
 	}
@@ -227,19 +227,19 @@ func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 	defer pool.DefaultBufferPool.Put(buf)
 
 	writeBuf := buf
-	if len(buf) < 2+len(respBuf) {
-		writeBuf = make([]byte, 2+len(respBuf))
+	if len(buf) < dnsutil.DNSFramePrefixLen+len(respBuf) {
+		writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(respBuf))
 	}
 
-	binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(respBuf)))
-	copy(writeBuf[2:], respBuf)
+	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(respBuf)))
+	copy(writeBuf[dnsutil.DNSFramePrefixLen:], respBuf)
 
-	n, err := stream.Write(writeBuf[:2+len(respBuf)])
+	n, err := stream.Write(writeBuf[:dnsutil.DNSFramePrefixLen+len(respBuf)])
 	if err != nil {
 		return fmt.Errorf("stream write: %w", err)
 	}
-	if n != len(writeBuf[:2+len(respBuf)]) {
-		return fmt.Errorf("write length mismatch: %d != %d", n, len(writeBuf[:2+len(respBuf)]))
+	if n != len(writeBuf[:dnsutil.DNSFramePrefixLen+len(respBuf)]) {
+		return fmt.Errorf("write length mismatch: %d != %d", n, len(writeBuf[:dnsutil.DNSFramePrefixLen+len(respBuf)]))
 	}
 
 	return nil

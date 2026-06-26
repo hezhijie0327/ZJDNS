@@ -44,7 +44,7 @@ func (p *httpClientPool) get(port int, useTLS, useHTTP3 bool) *http.Client {
 	if useHTTP3 {
 		tlsConfig := &tls.Config{
 			InsecureSkipVerify: true,
-			NextProtos:         config.NextProtoDoH3,
+			NextProtos:         config.NextProtoDOH3,
 		}
 		client = &http.Client{
 			Transport: &http3.Transport{TLSClientConfig: tlsConfig},

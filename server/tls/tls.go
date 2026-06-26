@@ -119,7 +119,7 @@ func generateSelfSignedCert(domain string) (cryptotls.Certificate, error) {
 		},
 		DNSNames:    []string{domain},
 		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
+		NotAfter:    time.Now().Add(config.DefaultServerCertValidity),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -246,7 +246,7 @@ func (s *Server) displayCertificateInfo(cert cryptotls.Certificate) {
 	daysUntilExpiry := int(time.Until(x509Cert.NotAfter).Hours() / 24)
 	if daysUntilExpiry < 0 {
 		log.Errorf("TLS: Certificate has EXPIRED for %d days!", -daysUntilExpiry)
-	} else if daysUntilExpiry <= 30 {
+	} else if daysUntilExpiry <= config.DefaultCertExpiryWarnDays {
 		log.Warnf("TLS: Certificate expires in %d days!", daysUntilExpiry)
 	}
 }

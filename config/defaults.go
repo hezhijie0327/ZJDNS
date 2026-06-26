@@ -94,18 +94,51 @@ const (
 	DefaultCacheEvictSampleSize = 25
 	DefaultRewriteRulesCapacity = 16
 	DefaultMinConcurrencyLimit  = 8
+
+	DefaultMaxNSEC3Iterations     = 150
+	DefaultTokenStoreCapacity     = 1
+	DefaultTokenStoreMaxEntries   = 10
+	DefaultSecureTransportRetries = 2
+	DefaultServerCertValidity     = 365 * 24 * time.Hour
+	DefaultCertExpiryWarnDays     = 30
+	DefaultStatsInterval          = 3600
+	DefaultStatsResetInterval     = 86400
+	GroupOtherPermMask            = 0077
 )
 
 // RecursiveIndicator is the sentinel address value that enables the built-in
 // recursive resolver instead of upstream forwarding.
 const RecursiveIndicator = "builtin_recursive"
 
+// DNSSEC validation status strings used across handler and stats.
+const (
+	DNSSECStatusSecure   = "secure"
+	DNSSECStatusInsecure = "insecure"
+	DNSSECStatusBogus    = "bogus"
+)
+
+// DoHContentType is the RFC 8484 DNS wire-format media type for DoH requests and responses.
+const DoHContentType = "application/dns-message"
+
+// Protocol identifiers for upstream servers and transport selection.
+const (
+	ProtoUDP       = "udp"
+	ProtoTCP       = "tcp"
+	ProtoTLS       = "tls"
+	ProtoQUIC      = "quic"
+	ProtoHTTP      = "https"
+	ProtoHTTP3     = "http3"
+	ProtoPing      = "ping"
+	ProtoICMP      = "icmp"
+	ProtoHTTPPlain = "http"
+)
+
 // ALPN protocol identifiers for secure DNS transports.
 var (
 	NextProtoDOT  = []string{"dot"}
-	NextProtoDoH  = []string{"h2"}
-	NextProtoDoQ  = []string{"doq"}
-	NextProtoDoH3 = []string{"h3"}
+	NextProtoDOH  = []string{"h2"}
+	NextProtoDOQ  = []string{"doq"}
+	NextProtoDOH3 = []string{"h3"}
 )
 
 // ProjectName is the application name, set at build time.

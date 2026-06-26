@@ -34,6 +34,8 @@ import (
 	"zjdns/stats"
 )
 
+const nanosPerSecond int64 = 1e9
+
 // Server is the core DNS server handling query processing, protocol listeners, and lifecycle.
 type Server struct {
 	config            *config.ServerConfig
@@ -105,7 +107,7 @@ func (rl *rateLimiter) allow(key string) bool {
 	if elapsed < 0 {
 		elapsed = 0
 	}
-	newTokens := elapsed * rl.rate / 1e9
+	newTokens := elapsed * rl.rate / nanosPerSecond
 	if newTokens > 0 {
 		e.lastRefill.Store(now)
 	}
@@ -575,7 +577,7 @@ func (s *Server) Start() error {
 		defer dnsutil.HandlePanic("UDP server")
 		s.udpServer = &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
-			Net:     "udp",
+			Net:     config.ProtoUDP,
 			Handler: dns.HandlerFunc(s.handleDNSRequest),
 			UDPSize: pool.UDPBufferSize,
 		}
@@ -611,7 +613,7 @@ func (s *Server) Start() error {
 		defer dnsutil.HandlePanic("TCP server")
 		s.tcpServer = &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
-			Net:     "tcp",
+			Net:     config.ProtoTCP,
 			Handler: dns.HandlerFunc(s.handleDNSRequest),
 		}
 		log.Infof("SERVER: TCP server started on port %s", s.config.Server.Port)

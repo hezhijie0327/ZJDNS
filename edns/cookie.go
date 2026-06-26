@@ -19,6 +19,10 @@ const (
 	MaxCookieServerLen     = 32
 )
 
+const cookieSecretSize = 32
+
+const hmacContextClient = "client"
+
 // CookieOption holds the parsed client and server DNS Cookie values.
 type CookieOption struct {
 	ClientCookie []byte
@@ -39,7 +43,7 @@ type CookieGenerator struct {
 
 // NewCookieGenerator creates a CookieGenerator with a random secret.
 func NewCookieGenerator() *CookieGenerator {
-	secret := make([]byte, 32)
+	secret := make([]byte, cookieSecretSize)
 	if _, err := rand.Read(secret); err != nil {
 		panic(fmt.Sprintf("EDNS: failed to generate cookie secret: %v (system CSPRNG unavailable)", err))
 	}
@@ -54,7 +58,7 @@ func (cg *CookieGenerator) RotateSecret() {
 	if cg == nil {
 		return
 	}
-	newSecret := make([]byte, 32)
+	newSecret := make([]byte, cookieSecretSize)
 	if _, err := rand.Read(newSecret); err != nil {
 		panic(fmt.Sprintf("EDNS: failed to rotate cookie secret: %v (system CSPRNG unavailable)", err))
 	}
@@ -137,7 +141,7 @@ func (cg *CookieGenerator) GenerateClientCookie(clientIP net.IP) []byte {
 	clientCookie := make([]byte, DefaultCookieClientLen)
 	h := hmac.New(sha256.New, sp.current)
 	h.Write(clientIP)
-	h.Write([]byte("client"))
+	h.Write([]byte(hmacContextClient))
 	copy(clientCookie, h.Sum(nil))
 	return clientCookie
 }

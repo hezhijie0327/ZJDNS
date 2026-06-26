@@ -14,6 +14,8 @@ import (
 	"zjdns/server/security"
 )
 
+const rootZone = "."
+
 // dnssecChain tracks the cryptographic trust chain state during recursive
 // resolution. At each delegation level, verified parent DNSKEYs and child DS
 // records are used to authenticate the child zone's DNSKEYs.
@@ -63,7 +65,7 @@ func (rr *Recursive) validateWithDNSSEC(response *dns.Msg, currentDomain string,
 		// Verify using self-signature (root zone only -- embedded trust anchors
 		// provide the root of trust; self-signed keys from any other zone are
 		// not trustworthy without a DS chain from a verified parent).
-		if currentDomain == "." {
+		if currentDomain == rootZone {
 			if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
 				chain.zoneDNSKEYs = dnskeyRecords
 				crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
@@ -176,7 +178,7 @@ func (rr *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string
 	// The root KSKs in trust anchors are the same keys returned in the root
 	// DNSKEY query; SelfVerifyDNSKEY checks the RRSIG over the DNSKEY RRset
 	// against the KSK present in the RRset.
-	if zone == "." {
+	if zone == rootZone {
 		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
 			chain.zoneDNSKEYs = dnskeyRecords
 			crypto.CacheZoneKeys(zone, dnskeyRecords)
@@ -304,7 +306,7 @@ func (rr *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, name
 		}
 	} else {
 		// No DS in parent — insecure delegation. Self-verify for root zone.
-		if currentDomain == "." {
+		if currentDomain == rootZone {
 			if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
 				keysVerified = true
 				log.Debugf("SECURITY: self-verified root DNSKEY")

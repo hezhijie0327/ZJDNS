@@ -461,7 +461,7 @@ func (cv *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifie
 
 // maxNSEC3Iterations caps the number of hash iterations to prevent CPU exhaustion
 // from malicious NSEC3 records. RFC 9277 §4 recommends a maximum of 100.
-const maxNSEC3Iterations = 150
+const maxNSEC3Iterations = config.DefaultMaxNSEC3Iterations
 
 // nsec3HashName hashes a domain name using the NSEC3 parameters specified in the
 // record (algorithm, iterations, salt) per RFC 5155 §5. It returns the

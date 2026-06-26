@@ -16,6 +16,11 @@ import (
 	"zjdns/internal/log"
 )
 
+const (
+	cidrCommentPrefix  = "#"
+	cidrNegationPrefix = "!"
+)
+
 // errEmptyTag is returned when a CIDR tag is empty.
 var errEmptyTag = errors.New("CIDR tag cannot be empty")
 
@@ -89,7 +94,7 @@ func (cm *Filter) loadConfig(cfg config.CIDRConfig) (*cidrRule, error) {
 
 	for i, cidr := range cfg.Rules {
 		cidr = strings.TrimSpace(cidr)
-		if cidr == "" || strings.HasPrefix(cidr, "#") {
+		if cidr == "" || strings.HasPrefix(cidr, cidrCommentPrefix) {
 			continue
 		}
 		_, ipNet, err := net.ParseCIDR(cidr)
@@ -116,7 +121,7 @@ func (cm *Filter) loadConfig(cfg config.CIDRConfig) (*cidrRule, error) {
 		for scanner.Scan() {
 			lineNum++
 			line := strings.TrimSpace(scanner.Text())
-			if line == "" || strings.HasPrefix(line, "#") {
+			if line == "" || strings.HasPrefix(line, cidrCommentPrefix) {
 				continue
 			}
 			_, ipNet, err := net.ParseCIDR(line)
@@ -178,8 +183,8 @@ func (cm *Filter) getMatchInfo(matchTag string) *CIDRMatchInfo {
 		return info
 	}
 
-	negate := strings.HasPrefix(matchTag, "!")
-	tag := strings.TrimPrefix(matchTag, "!")
+	negate := strings.HasPrefix(matchTag, cidrNegationPrefix)
+	tag := strings.TrimPrefix(matchTag, cidrNegationPrefix)
 
 	info := &CIDRMatchInfo{
 		Tag:      tag,

@@ -411,7 +411,7 @@ func validateTLSCertConfig(cfg *ServerConfig) error {
 		return fmt.Errorf("config: key file not found: %s", cfg.Server.TLS.KeyFile)
 	}
 	if info, err := os.Stat(cfg.Server.TLS.KeyFile); err == nil {
-		if info.Mode().Perm()&0077 != 0 {
+		if info.Mode().Perm()&GroupOtherPermMask != 0 {
 			log.Warnf("CONFIG: TLS key file has insecure permissions (%04o). Consider 'chmod 600 %s'",
 				info.Mode().Perm(), cfg.Server.TLS.KeyFile)
 		}
@@ -634,8 +634,8 @@ func GenerateExampleConfig() string {
 		{Protocol: "http3", Port: DefaultProbePortHTTPS, Timeout: 100},
 	}
 	cfg.Server.Features.Stats = &StatsSettings{
-		Interval:      3600,
-		ResetInterval: 86400,
+		Interval:      DefaultStatsInterval,
+		ResetInterval: DefaultStatsResetInterval,
 	}
 
 	cfg.Upstream = []UpstreamServer{
@@ -649,7 +649,7 @@ func GenerateExampleConfig() string {
 	}
 
 	cfg.Fallback = []UpstreamServer{
-		{Address: "builtin_recursive"},
+		{Address: RecursiveIndicator},
 	}
 
 	cfg.Rewrite = []RewriteRule{

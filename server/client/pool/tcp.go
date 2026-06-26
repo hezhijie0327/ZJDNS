@@ -20,6 +20,8 @@ import (
 	bufpool "zjdns/internal/pool"
 )
 
+const dnsIDMask = 0xFFFF // 16-bit DNS message ID space
+
 type pending struct {
 	resultCh chan *dns.Msg
 }
@@ -86,7 +88,7 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	}
 
 	originalID := msg.Id
-	trackingID := uint16(pc.nextID.Add(1) & 0xFFFF)
+	trackingID := uint16(pc.nextID.Add(1) & dnsIDMask)
 	msg.Id = trackingID
 
 	msgData, err := msg.Pack()
@@ -98,12 +100,12 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	poolBuf := bufpool.DefaultBufferPool.Get()
 	defer bufpool.DefaultBufferPool.Put(poolBuf)
 	writeBuf := poolBuf
-	if len(poolBuf) < 2+len(msgData) {
-		writeBuf = make([]byte, 2+len(msgData))
+	if len(poolBuf) < dnsutil.DNSFramePrefixLen+len(msgData) {
+		writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(msgData))
 	}
-	writeBuf = writeBuf[:2+len(msgData)]
-	binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(msgData)))
-	copy(writeBuf[2:], msgData)
+	writeBuf = writeBuf[:dnsutil.DNSFramePrefixLen+len(msgData)]
+	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(msgData)))
+	copy(writeBuf[dnsutil.DNSFramePrefixLen:], msgData)
 
 	resultCh := make(chan *dns.Msg, 1)
 	pc.mu.Lock()
@@ -150,7 +152,7 @@ func (pc *Conn) readLoop() {
 	defer close(pc.done)
 	defer pc.close()
 
-	lengthBuf := make([]byte, 2)
+	lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
 
 	for {
 		_ = pc.conn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))

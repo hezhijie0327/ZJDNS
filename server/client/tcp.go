@@ -11,7 +11,7 @@ import (
 )
 
 func (c *Client) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
-	if server.Protocol == "tcp" && c.tcpPool != nil {
+	if server.Protocol == config.ProtoTCP && c.tcpPool != nil {
 		pc, err := c.tcpPool.Acquire(ctx, server.Address, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(dialCtx, "tcp", addr)
@@ -29,7 +29,7 @@ func (c *Client) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, serv
 	}
 
 	var client *dns.Client
-	if server.Protocol == "tcp" {
+	if server.Protocol == config.ProtoTCP {
 		client = c.tcpClient
 	} else {
 		client = c.udpClient
@@ -39,5 +39,5 @@ func (c *Client) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, serv
 }
 
 func (c *Client) needsTCPFallback(result *Result, protocol string) bool {
-	return protocol != "tcp" && (result.Error != nil || (result.Response != nil && result.Response.Truncated))
+	return protocol != config.ProtoTCP && (result.Error != nil || (result.Response != nil && result.Response.Truncated))
 }

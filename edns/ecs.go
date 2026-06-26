@@ -17,6 +17,13 @@ const (
 	DefaultECSScope = 0
 )
 
+const ecsModeAuto = "auto"
+
+const (
+	ianaAFINET  = uint16(1)
+	ianaAFINET6 = uint16(2)
+)
+
 // ECSOption represents an EDNS Client Subnet option with address and prefix
 // information.
 type ECSOption struct {
@@ -133,7 +140,7 @@ func (c DefaultECSConfig) MarshalJSON() ([]byte, error) {
 }
 
 func isAutoECSValue(value string) bool {
-	return strings.EqualFold(strings.TrimSpace(value), "auto")
+	return strings.EqualFold(strings.TrimSpace(value), ecsModeAuto)
 }
 
 // ParseFromDNS extracts the ECS option from a DNS message's OPT record.
@@ -266,19 +273,19 @@ func ecsOptionEqual(a, b *ECSOption) bool {
 
 func (m *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, error) {
 	subnet = strings.ToLower(strings.TrimSpace(subnet))
-	if subnet == "auto" {
+	if subnet == ecsModeAuto {
 		return m.detectVia(forceIPv6, false)
 	}
 	if _, ipNet, err := net.ParseCIDR(subnet); err == nil {
 		prefix, _ := ipNet.Mask.Size()
-		family := uint16(1)
+		family := ianaAFINET
 		if ipNet.IP.To4() == nil {
-			family = 2
+			family = ianaAFINET6
 		}
-		if forceIPv6 && family == 1 {
+		if forceIPv6 && family == ianaAFINET {
 			return nil, fmt.Errorf("expected IPv6 ECS value, got IPv4: %s", subnet)
 		}
-		if !forceIPv6 && family == 2 {
+		if !forceIPv6 && family == ianaAFINET6 {
 			return nil, fmt.Errorf("expected IPv4 ECS value, got IPv6: %s", subnet)
 		}
 		return &ECSOption{Family: family, SourcePrefix: uint8(prefix), ScopePrefix: DefaultECSScope, Address: ipNet.IP}, nil
@@ -293,10 +300,10 @@ func (m *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 	if !forceIPv6 && ip.To4() == nil {
 		return nil, fmt.Errorf("expected IPv4 ECS value, got IPv6: %s", subnet)
 	}
-	family := uint16(1)
+	family := ianaAFINET
 	prefix := uint8(DefaultECSv4Len)
 	if ip.To4() == nil {
-		family = 2
+		family = ianaAFINET6
 		prefix = DefaultECSv6Len
 	}
 	return &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}, nil
@@ -315,10 +322,10 @@ func (m *Handler) detectVia(forceIPv6, allowFallback bool) (*ECSOption, error) {
 	if ip == nil {
 		return nil, nil
 	}
-	family := uint16(1)
+	family := ianaAFINET
 	prefix := uint8(DefaultECSv4Len)
 	if ip.To4() == nil {
-		family = 2
+		family = ianaAFINET6
 		prefix = DefaultECSv6Len
 	}
 	return &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}, nil
@@ -326,7 +333,7 @@ func (m *Handler) detectVia(forceIPv6, allowFallback bool) (*ECSOption, error) {
 
 func validateECSConfigValue(value string) error {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "auto" {
+	if value == ecsModeAuto {
 		return nil
 	}
 	if _, _, err := net.ParseCIDR(value); err == nil {

@@ -124,7 +124,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
 
-		lengthBuf := make([]byte, 2)
+		lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
 			if err != io.EOF && !isTemporaryError(err) {
@@ -134,7 +134,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
-		if msgLength == 0 || msgLength > pool.SecureBufferSize-2 {
+		if msgLength == 0 || msgLength > pool.SecureBufferSize-dnsutil.DNSFramePrefixLen {
 			return
 		}
 
@@ -196,17 +196,17 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			// Record whether poolBuf was large enough BEFORE any Put call,
 			// so the error path does not read metadata of a buffer that
 			// may already be reused by another goroutine.
-			poolBufOK := len(poolBuf) >= 2+len(respBuf)
+			poolBufOK := len(poolBuf) >= dnsutil.DNSFramePrefixLen+len(respBuf)
 			var writeBuf []byte
 			if poolBufOK {
-				writeBuf = poolBuf[:2+len(respBuf)]
+				writeBuf = poolBuf[:dnsutil.DNSFramePrefixLen+len(respBuf)]
 			} else {
-				writeBuf = make([]byte, 2+len(respBuf))
+				writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(respBuf))
 				pool.DefaultBufferPool.Put(poolBuf)
 				poolBuf = nil // prevent accidental reuse below
 			}
-			binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(respBuf)))
-			copy(writeBuf[2:], respBuf)
+			binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(respBuf)))
+			copy(writeBuf[dnsutil.DNSFramePrefixLen:], respBuf)
 
 			select {
 			case writeCh <- writeTask{data: writeBuf}:

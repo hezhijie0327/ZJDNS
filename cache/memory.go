@@ -14,7 +14,12 @@ import (
 	"zjdns/internal/log"
 )
 
-const evictSampleSize = config.DefaultCacheEvictSampleSize
+const (
+	evictSampleSize     = config.DefaultCacheEvictSampleSize
+	entryBaseOverhead   = 64 + 208 + 72
+	entryRecordOverhead = 44
+	entryPTROverhead    = 56
+)
 
 // MemoryCache is an in-memory DNS response cache with optional disk persistence.
 type MemoryCache struct {
@@ -360,27 +365,27 @@ func estimateEntrySize(key string, entry *CacheEntry, ptrs []ptrRecord) int64 {
 	if entry == nil {
 		return 0
 	}
-	size := int64(len(key)) + 64 + 208 + 72
+	size := int64(len(key)) + entryBaseOverhead
 
 	for _, cr := range entry.Answer {
 		if cr != nil {
-			size += int64(len(cr.Text)) + 44
+			size += int64(len(cr.Text)) + entryRecordOverhead
 		}
 	}
 	for _, cr := range entry.Authority {
 		if cr != nil {
-			size += int64(len(cr.Text)) + 44
+			size += int64(len(cr.Text)) + entryRecordOverhead
 		}
 	}
 	for _, cr := range entry.Additional {
 		if cr != nil {
-			size += int64(len(cr.Text)) + 44
+			size += int64(len(cr.Text)) + entryRecordOverhead
 		}
 	}
 	size += int64(len(entry.Payload))
 
 	for _, pr := range ptrs {
-		size += int64(len(pr.IP)+len(pr.Name)) + 56
+		size += int64(len(pr.IP)+len(pr.Name)) + entryPTROverhead
 	}
 	return size
 }

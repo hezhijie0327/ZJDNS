@@ -11,6 +11,8 @@ import (
 	"zjdns/internal/log"
 )
 
+const rootServersDomain = "root-servers.net"
+
 // Detector detects DNS hijacking by validating that a server does not return
 // answer records outside its delegated zone authority. Only the Answer section
 // is inspected — Authority and Additional sections carry delegation/glue data
@@ -116,7 +118,7 @@ func (d *Detector) isRootServerGlue(domain string, rrType uint16) bool {
 	if rrType != dns.TypeA && rrType != dns.TypeAAAA {
 		return false
 	}
-	return strings.HasSuffix(domain, ".root-servers.net") || domain == "root-servers.net"
+	return strings.HasSuffix(domain, "."+rootServersDomain) || domain == rootServersDomain
 }
 
 func (d *Detector) isTLD(domain string) bool {

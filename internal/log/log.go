@@ -36,6 +36,8 @@ const (
 	colorBold   = "\033[1m"
 )
 
+const logTimeFormat = "2006-01-02 15:04:05"
+
 // Default is the package-level default Manager instance.
 var Default = NewManager()
 
@@ -124,7 +126,7 @@ func (m *Manager) Log(lvl Level, format string, args ...any) {
 		color = colorReset
 	}
 
-	timestamp := DefaultTimeCache.Now().Format("2006-01-02 15:04:05")
+	timestamp := DefaultTimeCache.Now().Format(logTimeFormat)
 	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
 
 	logLine := fmt.Sprintf("%s[%s]%s %s%-5s%s %s\n",

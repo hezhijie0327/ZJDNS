@@ -307,11 +307,11 @@ func (sc *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadErr
 	}
 
 	switch dnssecStatus {
-	case "secure":
+	case config.DNSSECStatusSecure:
 		sc.dnssecSecure.Add(1)
-	case "bogus":
+	case config.DNSSECStatusBogus:
 		sc.dnssecBogus.Add(1)
-	case "insecure":
+	case config.DNSSECStatusInsecure:
 		sc.dnssecInsecure.Add(1)
 	}
 

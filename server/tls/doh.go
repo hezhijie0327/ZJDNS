@@ -26,7 +26,7 @@ func (s *Server) startDOHServer(port string) error {
 	}
 
 	tlsConfig := s.tlsConfig.Clone()
-	tlsConfig.NextProtos = config.NextProtoDoH
+	tlsConfig.NextProtos = config.NextProtoDOH
 
 	s.httpsListener = cryptotls.NewListener(listener, tlsConfig)
 	log.Infof("TLS: DoH server started on port %s", port)
@@ -54,7 +54,7 @@ func (s *Server) startDoH3Server(port string) error {
 	addr := ":" + port
 
 	tlsConfig := s.tlsConfig.Clone()
-	tlsConfig.NextProtos = config.NextProtoDoH3
+	tlsConfig.NextProtos = config.NextProtoDOH3
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        config.DefaultQUICServerIdleTimeout,
@@ -149,7 +149,7 @@ func (s *Server) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*dns.M
 		}
 
 	case http.MethodPost:
-		if r.Header.Get("Content-Type") != "application/dns-message" {
+		if r.Header.Get("Content-Type") != config.DoHContentType {
 			return nil, http.StatusUnsupportedMediaType
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, DoHMaxRequestSize)
@@ -188,7 +188,7 @@ func (s *Server) respondDoH(w http.ResponseWriter, response *dns.Msg) error {
 		return fmt.Errorf("pack response: %w", err)
 	}
 
-	w.Header().Set("Content-Type", "application/dns-message")
+	w.Header().Set("Content-Type", config.DoHContentType)
 	w.Header().Set("Cache-Control", "max-age=0")
 	_, err = w.Write(bytes)
 	return err

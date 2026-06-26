@@ -296,9 +296,9 @@ func (s *Server) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption)
 func (s *Server) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool, dnssecStatus *string) *dns.Msg {
 	// Record DNSSEC status for cache hits
 	if entry.Validated {
-		*dnssecStatus = "secure"
+		*dnssecStatus = config.DNSSECStatusSecure
 	} else {
-		*dnssecStatus = "insecure"
+		*dnssecStatus = config.DNSSECStatusInsecure
 	}
 
 	msg := s.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
@@ -382,9 +382,9 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 		}
 		// Record DNSSEC status for stale cache hits
 		if entry.Validated {
-			*dnssecStatus = "secure"
+			*dnssecStatus = config.DNSSECStatusSecure
 		} else {
-			*dnssecStatus = "insecure"
+			*dnssecStatus = config.DNSSECStatusInsecure
 		}
 		s.cacheRefreshGroup.Go(func() error {
 			defer dnsutil.HandlePanic("expired cache refresh")
@@ -433,9 +433,9 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 		}
 		// Record DNSSEC status for stale cache hit (timeout fallback)
 		if entry.Validated {
-			*dnssecStatus = "secure"
+			*dnssecStatus = config.DNSSECStatusSecure
 		} else {
-			*dnssecStatus = "insecure"
+			*dnssecStatus = config.DNSSECStatusInsecure
 		}
 		go func() {
 			select {
@@ -480,9 +480,9 @@ func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Q
 	if entry, found, _ := s.cacheMgr.Get(cacheKey); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		// Serving stale cache on error fallback
 		if entry.Validated {
-			*dnssecStatus = "secure"
+			*dnssecStatus = config.DNSSECStatusSecure
 		} else {
-			*dnssecStatus = "insecure"
+			*dnssecStatus = config.DNSSECStatusInsecure
 		}
 		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.GetRemainingTTL(), entry.Validated)
 		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
@@ -498,13 +498,13 @@ func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Q
 	edeCode := edns.EDECodeNetworkError
 	if s.resolver != nil && s.resolver.Recursive() != nil && s.resolver.Recursive().DNSSECEDECode() != 0 {
 		edeCode = s.resolver.Recursive().DNSSECEDECode()
-		*dnssecStatus = "bogus"
+		*dnssecStatus = config.DNSSECStatusBogus
 		log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
 	} else {
 		var dnsErr *resolver.DNSSECError
 		if errors.As(queryErr, &dnsErr) {
 			edeCode = dnsErr.EDECode
-			*dnssecStatus = "bogus"
+			*dnssecStatus = config.DNSSECStatusBogus
 			log.Debugf("SECURITY: DNSSEC error mapped to EDE %d: %s", edeCode, dnsErr.Message)
 		} else if queryErr != nil {
 			log.Debugf("RESULT: non-DNSSEC error, using EDE %d: %v", edeCode, queryErr)
@@ -546,15 +546,15 @@ func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt
 
 	// Determine DNSSEC status for stats
 	if validated {
-		*dnssecStatus = "secure"
+		*dnssecStatus = config.DNSSECStatusSecure
 	} else {
 		// Distinguished bogus from insecure: if the recursive resolver set an
 		// EDE code, validation was attempted and failed (bogus). Otherwise the
 		// domain is unsigned (insecure delegation).
 		if s.resolver != nil && s.resolver.Recursive() != nil && s.resolver.Recursive().DNSSECEDECode() != 0 {
-			*dnssecStatus = "bogus"
+			*dnssecStatus = config.DNSSECStatusBogus
 		} else {
-			*dnssecStatus = "insecure"
+			*dnssecStatus = config.DNSSECStatusInsecure
 		}
 	}
 
@@ -593,7 +593,7 @@ func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt
 	// When DNSSEC validation failed but enforcement is off (bogus + NOERROR),
 	// include an EDE hint so clients can detect the bogus response.
 	var edeOpt *edns.EDEOption
-	if *dnssecStatus == "bogus" && s.resolver != nil && s.resolver.Recursive() != nil {
+	if *dnssecStatus == config.DNSSECStatusBogus && s.resolver != nil && s.resolver.Recursive() != nil {
 		if code := s.resolver.Recursive().DNSSECEDECode(); code != 0 {
 			edeOpt = edns.NewEDEOption(code, "")
 		}

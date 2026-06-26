@@ -10,6 +10,8 @@ import (
 // on secure transports.
 const PaddingSize = 468
 
+const paddingHeaderSize = 4
+
 func addPadding(msg *dns.Msg, options []dns.EDNS0, isSecureConnection bool) ([]dns.EDNS0, int) {
 	if !isSecureConnection {
 		return options, 0
@@ -31,7 +33,7 @@ func addPadding(msg *dns.Msg, options []dns.EDNS0, isSecureConnection bool) ([]d
 	// so serializing here would double-pack every secure-transport response.
 	currentSize := msg.Len()
 	targetSize := ((currentSize + PaddingSize - 1) / PaddingSize) * PaddingSize
-	paddingDataSize := targetSize - currentSize - 4
+	paddingDataSize := targetSize - currentSize - paddingHeaderSize
 	if paddingDataSize > 0 {
 		msg.Extra = savedExtra
 		return append(options, &dns.EDNS0_PADDING{

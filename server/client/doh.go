@@ -42,7 +42,7 @@ func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.Up
 	// This handles cases where idle connections were closed by the server
 	// or a network change broke the existing H2 connection.
 	if isCached {
-		for i := 0; shouldRetryHTTP(err) && i < 2; i++ {
+		for i := 0; shouldRetryHTTP(err) && i < config.DefaultSecureTransportRetries; i++ {
 			c.dohTransportMu.Lock()
 			if old, ok := c.dohTransports[key]; ok && old == client {
 				if t, ok := old.Transport.(*http.Transport); ok {
@@ -110,8 +110,7 @@ func (c *Client) createDoHClient(host, serverName string, skipVerify bool, tlsCo
 	}
 
 	// Evict oldest entry when at capacity.
-	const transportMax = config.DefaultTransportMax
-	if len(c.dohTransports) >= transportMax {
+	if len(c.dohTransports) >= config.DefaultTransportMax {
 		for k := range c.dohTransports {
 			if t, ok := c.dohTransports[k].Transport.(*http.Transport); ok {
 				t.CloseIdleConnections()

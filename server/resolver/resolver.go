@@ -34,6 +34,14 @@ var (
 	ErrHijackDetected = errors.New("DNS hijack detected")
 )
 
+const (
+	concurrencyTier1 = 4
+	concurrencyTier2 = 12
+	concurrencyTier3 = 20
+	concurrencyDiv2  = 2
+	concurrencyDiv3  = 3
+)
+
 // DNSSECError wraps a DNSSEC validation failure with the RFC 8914 EDE code.
 type DNSSECError struct {
 	EDECode uint16
@@ -142,7 +150,7 @@ func (r *Resolver) InitServers(servers, fallback []config.UpstreamServer) {
 	for i := range servers {
 		s := &servers[i]
 		if s.Protocol == "" {
-			s.Protocol = "udp"
+			s.Protocol = config.ProtoUDP
 		}
 		active = append(active, s)
 	}
@@ -152,7 +160,7 @@ func (r *Resolver) InitServers(servers, fallback []config.UpstreamServer) {
 	for i := range fallback {
 		s := &fallback[i]
 		if s.Protocol == "" {
-			s.Protocol = "udp"
+			s.Protocol = config.ProtoUDP
 		}
 		fb = append(fb, s)
 	}
@@ -246,14 +254,14 @@ func concurrencyLimit(serverCount int) int {
 		return 1
 	}
 	switch {
-	case serverCount <= 4:
+	case serverCount <= concurrencyTier1:
 		return serverCount
-	case serverCount <= 12:
-		return (serverCount*2 + 2) / 3
-	case serverCount <= 20:
-		return (serverCount + 1) / 2
+	case serverCount <= concurrencyTier2:
+		return (serverCount*concurrencyDiv2 + concurrencyDiv2) / concurrencyDiv3
+	case serverCount <= concurrencyTier3:
+		return (serverCount + 1) / concurrencyDiv2
 	default:
-		limit := serverCount / 3
+		limit := serverCount / concurrencyDiv3
 		if limit < config.DefaultMinConcurrencyLimit {
 			return config.DefaultMinConcurrencyLimit
 		}

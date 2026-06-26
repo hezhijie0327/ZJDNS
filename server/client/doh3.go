@@ -80,7 +80,7 @@ func (c *Client) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.U
 	// This handles the case where the server closed the idle connection AND
 	// rejects 0-RTT, requiring a fresh full handshake.
 	if isCached {
-		for i := 0; i < 2; i++ {
+		for i := 0; i < config.DefaultSecureTransportRetries; i++ {
 			if !isQUICRetryable(err) {
 				break
 			}
@@ -137,8 +137,7 @@ func (c *Client) createDoH3Client(key, host string, tlsConfig *tls.Config) *http
 	}
 
 	// Evict oldest entry when at capacity.
-	const transportMax = config.DefaultTransportMax
-	if len(c.doh3Transports) >= transportMax {
+	if len(c.doh3Transports) >= config.DefaultTransportMax {
 		for k := range c.doh3Transports {
 			if t, ok := c.doh3Transports[k].Transport.(*http3Transport); ok {
 				_ = t.Close()
@@ -149,7 +148,7 @@ func (c *Client) createDoH3Client(key, host string, tlsConfig *tls.Config) *http
 	}
 
 	tlsCfg := tlsConfig.Clone()
-	tlsCfg.NextProtos = config.NextProtoDoH3
+	tlsCfg.NextProtos = config.NextProtoDOH3
 
 	quicCfg := c.getQUICConfig(key, tlsConfig.InsecureSkipVerify)
 
