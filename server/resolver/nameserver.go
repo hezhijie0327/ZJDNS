@@ -169,8 +169,8 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 	// latency-probed and re-cached asynchronously — matching the glue
 	// record path in resolve().
 	var nsRecordsMu sync.Mutex
-	aRecordsMap := make(map[string][]dns.RR)
-	aaaaRecordsMap := make(map[string][]dns.RR)
+	var aRecordsMap map[string][]dns.RR
+	var aaaaRecordsMap map[string][]dns.RR
 
 	for _, ns := range nsRecords {
 		nsRecord := ns
@@ -268,6 +268,10 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 			// Accumulate records for async latency probe.
 			if rr.cache != nil && (len(ansARecords) > 0 || len(ansAAAARecords) > 0) {
 				nsRecordsMu.Lock()
+				if aRecordsMap == nil {
+					aRecordsMap = make(map[string][]dns.RR)
+					aaaaRecordsMap = make(map[string][]dns.RR)
+				}
 				if len(ansARecords) > 0 {
 					aRecordsMap[nsName] = append(aRecordsMap[nsName], ansARecords...)
 				}

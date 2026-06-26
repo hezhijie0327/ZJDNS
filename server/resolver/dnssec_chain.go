@@ -80,6 +80,7 @@ func (rr *Recursive) validateWithDNSSEC(response *dns.Msg, currentDomain string,
 
 	return false
 }
+
 func (rr *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, currentDomain, childZone string, nameservers []string, chain *dnssecChain) {
 	crypto := rr.resolver.validator.Crypto
 
@@ -120,6 +121,7 @@ func (rr *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, c
 		chain.zoneDNSKEYs = nil
 	}
 }
+
 func (rr *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) {
 	if len(chain.zoneDNSKEYs) > 0 {
 		return // Already have verified DNSKEYs for this zone
@@ -190,6 +192,7 @@ func (rr *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string
 	// verifying child DS RRSIGs.
 	log.Debugf("SECURITY: insecure delegation for %s — DNSKEYs not trusted (no DS in parent)", zone)
 }
+
 func (rr *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string, chain *dnssecChain, dsRecords []*dns.DS) []*dns.DS {
 	crypto := rr.resolver.validator.Crypto
 	parentKeys := chain.zoneDNSKEYs
@@ -230,6 +233,7 @@ func (rr *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string
 	log.Debugf("SECURITY: DS RRSIG verification failed for %s", childZone)
 	return nil
 }
+
 func (rr *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, nameservers []string, question dns.Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain) bool {
 	crypto := rr.resolver.validator.Crypto
 	if len(response.Answer) == 0 {
@@ -390,6 +394,7 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 	}
 	return result
 }
+
 func (rr *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) string {
 	if response == nil || len(response.Answer) == 0 {
 		return ""
@@ -414,6 +419,7 @@ func (rr *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) s
 
 	return ""
 }
+
 func (rr *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, nameservers []string, question dns.Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain) (bool, error) {
 	crypto := rr.resolver.validator.Crypto
 
@@ -527,6 +533,7 @@ func (rr *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, name
 	}
 	return true, nil
 }
+
 func (rr *Recursive) isZoneCut(response *dns.Msg, currentDomain string) bool {
 	return rr.getZoneCutSigner(response, currentDomain) != ""
 }
