@@ -137,13 +137,13 @@ zjdns/
 
 ```
 main ──→ server, config
-server ──→ cache, cidr, config, edns, dnsutil, ipdetect, latency(internal), log, pool, rewrite,
+server ──→ cache, cidr, config, edns, dnsutil, log, pool, rewrite, latency(server), resolver, security, stats,
 client ──→ config, edns, dnsutil, log, pool, pool (in client)
 resolver ──→ config, edns, client, security, dnsutil, latency(server), log, pool
 security ──→ dnsutil, log
-tls (in server) ──→ config, dnsutil, log, pool, pool (in client)
+tls (in server) ──→ config, dnsutil, log, pool, connpool (client/pool)
 cache ──→ config, edns, dnsutil, log
-edns ──→ dnsutil, ipdetect, log
+edns ──→ dnsutil, ipdetect, log, pool
 cidr ──→ config, dnsutil, log
 rewrite ──→ config, dnsutil, log
 stats ──→ cache, config, log
@@ -190,11 +190,11 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | Type | Package | Notes |
 |------|---------|-------|
 | `ServerConfig`, `ServerSettings` | `config` | Top-level config |
-| `config.Loader` | `config` | Config loader (LoadConfig, GenerateExampleConfig) |
+| `config.Loader` | `config` | Config loader (LoadConfig) |
 | `edns.Handler` | `edns` | EDNS option parsing/construction |
 | `cidr.Filter` | `cidr` | IP filtering (New, MatchIP) |
 | `rewrite.Evaluator` | `rewrite` | Domain rewrite (New, LoadRules, Evaluate) |
-| `cache.Store` | `cache` | Store interface (Get, Set, SetEntry, Close) |
+| `cache.Store` | `cache` | Store interface (Get, Set, SetWithDNSSEC, SetEntry, ReverseLookup, Close) |
 | `stats.Collector` | `stats` | Lock-free metrics (RecordRequest, Snapshot) |
 | `Server` | `server` | Core server (New, Start) |
 | `Server` | `server/tls` | TLS listener server (DoT, DoQ, DoH, DoH3) |
@@ -283,7 +283,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `Info` | Startup/shutdown lifecycle, configuration summary, one-time events |
 | `Debug` | Hot-path detail: every query, cache hit/miss, upstream result, CIDR match |
 
-**Prefixes** (18 canonical, one per logical component):
+**Prefixes** (19 canonical, one per logical component):
 
 | Prefix | Component | Files |
 |--------|-----------|-------|

@@ -245,4 +245,3 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool, 
 	defer func() { _ = resp.Body.Close() }()
 	return nil
 }
-
