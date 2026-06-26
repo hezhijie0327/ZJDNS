@@ -247,8 +247,8 @@ convention.
 | `config.DefaultH2ReadIdleTimeout` | config | 30s (HTTP/2 ping keep-alive) |
 | `config.DefaultHTTPIdleConnTimeout` | config | 5 min (HTTP transport idle) |
 | `config.DefaultShutdownTimeout` | config | 15s (graceful shutdown deadline) |
-| `config.DefaultCertValidity` | config | 45 days (CA self-signed cert lifetime) |
-| `config.DefaultServerCertValidity` | config | 365 days (server self-signed cert lifetime) |
+| `config.DefaultCACertValidity` | config | 45 days (CA self-signed cert lifetime) |
+| `config.DefaultServerCertValidity` | config | 45 days (server self-signed cert lifetime) |
 | `config.DefaultCertExpiryWarnDays` | config | 30 (certificate expiry warning threshold) |
 | `config.DefaultPrefetchThrottleInterval` | config | 3s (prefetch cooldown) |
 | `config.DefaultAcceptRetryDelay` | config | 100ms (DoT/DoQ accept retry sleep) |

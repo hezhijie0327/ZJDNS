@@ -105,7 +105,7 @@ func generateSelfSignedCert(domain string) (cryptotls.Certificate, error) {
 			Country:      []string{"CN"},
 		},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(config.DefaultCertValidity),
+		NotAfter:              time.Now().Add(config.DefaultCACertValidity),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign | x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,

@@ -48,7 +48,7 @@ const (
 	DefaultH2ReadIdleTimeout     = 30 * time.Second       // HTTP/2 ping keep-alive timeout
 	DefaultHTTPIdleConnTimeout   = 5 * time.Minute        // HTTP transport idle connection timeout
 	DefaultQUICKeepAlive         = 20 * time.Second       // QUIC keep-alive period
-	DefaultCertValidity          = 45 * 24 * time.Hour    // Self-signed certificate validity (https://letsencrypt.org/2025/12/02/from-90-to-45)
+	DefaultCACertValidity        = 45 * 24 * time.Hour    // CA self-signed certificate validity
 
 	// Protocol-level connection timeouts (server and client).
 	DefaultQUICClientIdleTimeout   = 60 * time.Second // Client-side QUIC idle (must exceed KeepAlive)
@@ -99,7 +99,7 @@ const (
 	DefaultTokenStoreCapacity     = 1
 	DefaultTokenStoreMaxEntries   = 10
 	DefaultSecureTransportRetries = 2
-	DefaultServerCertValidity     = 365 * 24 * time.Hour
+	DefaultServerCertValidity     = 45 * 24 * time.Hour
 	DefaultCertExpiryWarnDays     = 30
 	DefaultStatsInterval          = 3600
 	DefaultStatsResetInterval     = 86400
