@@ -7,12 +7,10 @@ import (
 	"github.com/miekg/dns"
 )
 
-// UDPBufferSize is the standard size for UDP DNS messages.
-// TCPBufferSize is the recommended size for TCP DNS message buffers.
+// UDPBufferSize is the standard size for UDP DNS messages (RFC 6891).
 // SecureBufferSize is the recommended size for secure DNS message buffers.
 const (
 	UDPBufferSize         = 1232
-	TCPBufferSize         = 4096
 	SecureBufferSize      = 8192
 	defaultBufferPoolSize = 256
 )

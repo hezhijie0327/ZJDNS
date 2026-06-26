@@ -14,6 +14,19 @@ import (
 	"zjdns/internal/log"
 )
 
+// entryBaseOverhead estimates the per-cache-entry fixed memory cost:
+//
+//	64 B — map bucket overhead (Go runtime estimate)
+//
+//	208 B — cacheItem struct (timestamps, flags, ECS option, CompactRecord slice header)
+//
+//	72 B — CompactRecord struct (Text string header + Type/Class/TTL fields)
+//
+// entryRecordOverhead (44 B) is the per-record cost: CompactRecord.Text string
+// payload plus Go string header overhead.
+//
+// entryPTROverhead (56 B) is the per-PTR-index cost: ptrRecord struct plus
+// reverse-lookup map bucket allocation.
 const (
 	evictSampleSize     = config.DefaultCacheEvictSampleSize
 	entryBaseOverhead   = 64 + 208 + 72

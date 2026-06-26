@@ -16,7 +16,6 @@ import (
 const (
 	DefaultCookieClientLen = 8
 	DefaultCookieServerLen = 16
-	MaxCookieServerLen     = 32
 )
 
 const cookieSecretSize = 32

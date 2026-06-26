@@ -2,7 +2,7 @@ package config
 
 import "time"
 
-// Default network ports, paths, and protocol identifiers.
+// Network ports, paths, and probe port numbers.
 const (
 	DefaultDNSPort   = "53"
 	DefaultDOTPort   = "853"
@@ -11,117 +11,118 @@ const (
 	DefaultQueryPath = "/dns-query"
 	DefaultPprofPath = "/debug/pprof/"
 
-	// Default probe ports (integer form for latency probe steps).
 	DefaultProbePortDNS   = 53
 	DefaultProbePortHTTP  = 80
 	DefaultProbePortHTTPS = 443
 )
 
-// Default cache and TTL values.
+// Cache sizing, TTL, and serve-stale parameters.
 const (
 	DefaultCacheSize            = 4 * 1024 * 1024
 	DefaultCachePersistInterval = 30 * time.Second
 	DefaultTTL                  = 10
 	DefaultStaleTTL             = 30
-	DefaultStaleMaxAge          = 45 * 86400
+	DefaultStaleMaxAge          = 30 * 86400 // RFC 8767 §6 recommends ≤ 30 days
+
+	DefaultPrefetchThresholdPercent  = 40
+	DefaultServeExpiredClientTimeout = 1800 * time.Millisecond // RFC 8767 §5.2
+	DefaultPrefetchThrottleInterval  = 3 * time.Second
 )
 
-// Default timeouts and intervals.
+// Timeout values for DNS queries, connections, and background tasks.
 const (
-	DefaultDNSQueryTimeout   = 10 * time.Second // Single DNS query / dial timeout (RFC 8767 §4.2)
-	DefaultBackgroundTimeout = 10 * time.Second // Bounded wait for background tasks and shutdown
+	DefaultDNSQueryTimeout   = 10 * time.Second // RFC 8767 §4.2
+	DefaultBackgroundTimeout = 10 * time.Second // Bounded wait for background tasks
 
-	DefaultLatencyProbeTimeout          = 100 * time.Millisecond
-	DefaultStatsPersistTTL              = 86400
-	DefaultDNSKeyCacheTTL               = 86400
-	DefaultDNSKeyCacheMinTTL            = 300 // minimum TTL for DNSKEY cache entries
-	DefaultServeExpiredClientTimeout    = 1800 * time.Millisecond
-	DefaultCookieSecretRotationInterval = 30 * time.Minute
-	DefaultECSRefreshInterval           = 15 * time.Minute
-	DefaultPrefetchThrottleInterval     = 3 * time.Second
-
-	// Subsystem-specific timeouts.
+	DefaultLatencyProbeTimeout   = 100 * time.Millisecond
+	DefaultInfraProbeTimeout     = 5 * time.Second
 	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
-	DefaultSweepInterval         = 5 * time.Minute        // Periodic cleanup sweep interval
-	DefaultTCPWriteMuStaleCutoff = 10 * time.Minute       // Stale TCP write mutex entry cutoff
-	DefaultInfraProbeTimeout     = 30 * time.Second       // Root/NS latency probe timeout
-	DefaultH2ReadIdleTimeout     = 30 * time.Second       // HTTP/2 ping keep-alive timeout
-	DefaultHTTPIdleConnTimeout   = 5 * time.Minute        // HTTP transport idle connection timeout
-	DefaultQUICKeepAlive         = 20 * time.Second       // QUIC keep-alive period
-	DefaultCACertValidity        = 45 * 24 * time.Hour    // CA self-signed certificate validity
+	DefaultSweepInterval         = 5 * time.Minute        // Periodic cleanup sweep
+	DefaultTCPWriteMuStaleCutoff = 10 * time.Minute       // Stale TCP write mutex cutoff
 
-	// Protocol-level connection timeouts (server and client).
-	DefaultQUICClientIdleTimeout   = 60 * time.Second // Client-side QUIC idle (must exceed KeepAlive)
-	DefaultQUICServerIdleTimeout   = 30 * time.Second // Server-side QUIC idle (RFC 9000 default)
-	DefaultHTTPServerIdleTimeout   = 60 * time.Second // HTTP keep-alive idle timeout
-	DefaultHTTPServerWriteTimeout  = 30 * time.Second // HTTP response write timeout
-	DefaultHTTPReadHeaderTimeout   = 5 * time.Second  // HTTP header read timeout (Slowloris protection)
-	DefaultRecursiveResolveTimeout = 30 * time.Second // Full recursive resolution timeout
+	DefaultH2ReadIdleTimeout   = 30 * time.Second // HTTP/2 ping keep-alive
+	DefaultHTTPIdleConnTimeout = 5 * time.Minute  // HTTP transport idle connection
+	DefaultQUICKeepAlive       = 20 * time.Second // QUIC keep-alive period
+
+	DefaultQUICClientIdleTimeout   = 60 * time.Second // Client QUIC idle (must exceed KeepAlive)
+	DefaultQUICServerIdleTimeout   = 30 * time.Second // Server QUIC idle (RFC 9000 default)
+	DefaultHTTPServerIdleTimeout   = 60 * time.Second // HTTP keep-alive idle
+	DefaultHTTPServerWriteTimeout  = 10 * time.Second // HTTP response write
+	DefaultHTTPReadHeaderTimeout   = 5 * time.Second  // HTTP header read (Slowloris protection)
+	DefaultRecursiveResolveTimeout = 30 * time.Second // Full recursive resolution
 	DefaultShutdownTimeout         = 15 * time.Second // Graceful shutdown deadline
 )
 
-// Default limits and thresholds.
+// Security parameters: certificates, DNSSEC, keys, and access control.
 const (
-	DefaultPrefetchThresholdPercent = 40
-	MaxDomainLength                 = 253
+	DefaultCACertValidity     = 45 * 24 * time.Hour // CA self-signed certificate lifetime
+	DefaultServerCertValidity = 45 * 24 * time.Hour // Server certificate lifetime
+	DefaultCertExpiryWarnDays = 14                  // Days before expiry to emit warning
+
+	DefaultCookieSecretRotationInterval = 30 * time.Minute
+	DefaultECSRefreshInterval           = 15 * time.Minute
+
+	DefaultDNSKeyCacheTTL     = 86400 // DNSKEY record cache TTL (seconds)
+	DefaultDNSKeyCacheMinTTL  = 300   // DNSKEY cache minimum TTL (seconds)
+	DefaultMaxNSEC3Iterations = 150   // NSEC3 iteration cap (RFC 5155 §10.3)
+
+	DefaultStatsPersistTTL = 86400 // Stats cache persist TTL (seconds)
+
+	GroupOtherPermMask = 0077 // TLS cert/key files must be owner-only
+)
+
+// Operational limits: concurrency, pool sizes, rate limits, capacities.
+const (
+	MaxDomainLength = 253
 
 	DefaultMaxCNAMEChain     = 16
 	DefaultMaxRecursionDepth = 16
 
-	DefaultMaxPipe  = 16
-	DefaultMaxConns = 4
+	DefaultMaxPipe              = 16  // Max in-flight queries per TCP/DoT connection
+	DefaultMaxConns             = 4   // Max connections per upstream
+	DefaultMaxConcurrentNS      = 3   // Max concurrent NS queries during resolution
+	DefaultMaxProbes            = 16  // Max concurrent latency probes
+	DefaultMaxIncomingStreams   = 256 // QUIC max incoming streams
+	DefaultMaxConcurrentStreams = 64
 
-	DefaultNSLatencyTTL    = 900 // TTL for sorted NS address cache (root zone is just another NS set)
-	DefaultMaxProbes       = 16
-	DefaultMaxConcurrentNS = 3
-
-	DefaultMaxIncomingStreams = 256
-
-	// Pool sizes, capacities, and operational limits.
 	DefaultServerGoroutineLimit = 1024
 	DefaultMaxConnsPerIP        = 64
-	DefaultUDPRateLimit         = 500  // max UDP queries/sec per client IP
-	DefaultUDPRateBurst         = 1000 // max burst size for UDP rate limiter
-	DefaultMaxConcurrentStreams = 64
-	DefaultTransportMax         = 32
-	DefaultTLSSessionCacheSize  = 32
-	DefaultMaxIdleConns         = 100
-	DefaultMaxIdleConnsPerHost  = 2
-	DefaultDoTWriteChannelSize  = 64
-	DefaultDedupSweepThreshold  = 1024
+	DefaultUDPRateLimit         = 500  // Max UDP queries/sec per client IP
+	DefaultUDPRateBurst         = 1000 // Max burst for UDP rate limiter
+	DefaultMinConcurrencyLimit  = 8
+
+	DefaultTransportMax        = 32
+	DefaultTLSSessionCacheSize = 32
+	DefaultMaxIdleConns        = 100
+	DefaultMaxIdleConnsPerHost = 2
+	DefaultDoTWriteChannelSize = 64
+	DefaultDedupSweepThreshold = 1024
+
 	DefaultCacheKeyBufferSize   = 128
 	DefaultCacheKeyMaxLength    = 512
 	DefaultCacheEvictSampleSize = 25
 	DefaultRewriteRulesCapacity = 16
-	DefaultMinConcurrencyLimit  = 8
 
-	DefaultMaxNSEC3Iterations     = 150
-	DefaultTokenStoreCapacity     = 1
-	DefaultTokenStoreMaxEntries   = 10
-	DefaultSecureTransportRetries = 2
-	DefaultServerCertValidity     = 45 * 24 * time.Hour
-	DefaultCertExpiryWarnDays     = 30
-	DefaultStatsInterval          = 3600
-	DefaultStatsResetInterval     = 86400
-	GroupOtherPermMask            = 0077
+	DefaultTokenStoreCapacity     = 4  // QUIC LRU token store capacity per key
+	DefaultTokenStoreMaxEntries   = 10 // QUIC LRU token store max total entries
+	DefaultSecureTransportRetries = 2  // DoH/DoH3 recreate-and-retry attempts
+
+	DefaultStatsInterval      = 3600  // Stats collection interval (seconds)
+	DefaultStatsResetInterval = 86400 // Stats reset interval (seconds)
+
+	DefaultNSLatencyTTL = 900 // NS address sort cache TTL (seconds)
 )
 
-// RecursiveIndicator is the sentinel address value that enables the built-in
-// recursive resolver instead of upstream forwarding.
-const RecursiveIndicator = "builtin_recursive"
-
-// DNSSEC validation status strings used across handler and stats.
+// String sentinels and protocol identifiers.
 const (
+	RecursiveIndicator = "builtin_recursive"
+
 	DNSSECStatusSecure   = "secure"
 	DNSSECStatusInsecure = "insecure"
 	DNSSECStatusBogus    = "bogus"
-)
 
-// DoHContentType is the RFC 8484 DNS wire-format media type for DoH requests and responses.
-const DoHContentType = "application/dns-message"
+	DoHContentType = "application/dns-message" // RFC 8484
 
-// Protocol identifiers for upstream servers and transport selection.
-const (
 	ProtoUDP       = "udp"
 	ProtoTCP       = "tcp"
 	ProtoTLS       = "tls"

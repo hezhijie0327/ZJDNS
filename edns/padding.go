@@ -6,8 +6,10 @@ import (
 	"zjdns/internal/pool"
 )
 
-// PaddingSize is the block size boundary (468 bytes) for DNS message padding
-// on secure transports.
+// PaddingSize is the block size boundary for DNS message padding on secure
+// transports (RFC 8467 §4). 468 bytes aligns responses to a 128-byte boundary
+// within a 512-byte block, reducing the risk of traffic analysis via
+// encrypted DNS message length.
 const PaddingSize = 468
 
 const paddingHeaderSize = 4

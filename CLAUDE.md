@@ -239,7 +239,7 @@ convention.
 | `config.DefaultBackgroundTimeout` | config | 10s (bounded wait for background tasks / shutdown) |
 | `config.DefaultRecursiveResolveTimeout` | config | 30s (full recursive resolution) |
 | `config.DefaultHTTPServerIdleTimeout` | config | 60s (HTTP keep-alive) |
-| `config.DefaultHTTPServerWriteTimeout` | config | 30s (DoH response write) |
+| `config.DefaultHTTPServerWriteTimeout` | config | 10s (DoH response write) |
 | `config.DefaultHTTPReadHeaderTimeout` | config | 5s (Slowloris protection) |
 | `config.DefaultQUICClientIdleTimeout` | config | 60s (client QUIC idle, must exceed KeepAlive) |
 | `config.DefaultQUICServerIdleTimeout` | config | 30s (server QUIC idle, RFC 9000 default) |
@@ -249,14 +249,14 @@ convention.
 | `config.DefaultShutdownTimeout` | config | 15s (graceful shutdown deadline) |
 | `config.DefaultCACertValidity` | config | 45 days (CA self-signed cert lifetime) |
 | `config.DefaultServerCertValidity` | config | 45 days (server self-signed cert lifetime) |
-| `config.DefaultCertExpiryWarnDays` | config | 30 (certificate expiry warning threshold) |
+| `config.DefaultCertExpiryWarnDays` | config | 14 (certificate expiry warning threshold, days) |
 | `config.DefaultPrefetchThrottleInterval` | config | 3s (prefetch cooldown) |
 | `config.DefaultAcceptRetryDelay` | config | 100ms (DoT/DoQ accept retry sleep) |
 | `config.DefaultSweepInterval` | config | 5 min (periodic cleanup sweep) |
 | `config.DefaultTTL` | config | 10 |
 | `config.DefaultCacheSize` | config | 4 MB (4 * 1024 * 1024) |
 | `config.DefaultStaleTTL` | config | 30s (TTL returned for expired entries) |
-| `config.DefaultStaleMaxAge` | config | 45 days (max age for serve-expired) |
+| `config.DefaultStaleMaxAge` | config | 30 days (max age for serve-expired, RFC 8767 §6) |
 | `config.MaxDomainLength` | config | 253 |
 | `config.DefaultMaxPipe` | config | 16 (max in-flight queries per connection) |
 | `config.DefaultMaxConns` | config | 4 (max connections per upstream) |
@@ -268,7 +268,7 @@ convention.
 | `config.DefaultLatencyProbeTimeout` | config | 100ms (per-step probe timeout) |
 | `config.DefaultMaxNSEC3Iterations` | config | 150 (NSEC3 iteration cap, RFC 5155) |
 | `config.DefaultSecureTransportRetries` | config | 2 (DoH/DoH3 retry count) |
-| `config.DefaultTokenStoreCapacity` | config | 1 (QUIC LRU token store capacity) |
+| `config.DefaultTokenStoreCapacity` | config | 4 (QUIC LRU token store capacity per key) |
 | `config.DefaultTokenStoreMaxEntries` | config | 10 (QUIC LRU token store max entries) |
 | `config.DefaultStatsInterval` | config | 3600 (stats collection interval) |
 | `config.DefaultStatsResetInterval` | config | 86400 (stats reset interval) |
@@ -291,7 +291,6 @@ convention.
 | `config.DefaultProbePortHTTP` | config | 80 (latency probe HTTP port) |
 | `config.DefaultProbePortHTTPS` | config | 443 (latency probe HTTPS port) |
 | `pool.UDPBufferSize` | pool | 1232 |
-| `pool.TCPBufferSize` | pool | 4096 |
 | `pool.SecureBufferSize` | pool | 8192 |
 | `dnsutil.DNSFramePrefixLen` | dnsutil | 2 (DNS TCP/DoT/DoQ length prefix, RFC 1035 §4.2.2) |
 
