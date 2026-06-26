@@ -298,16 +298,33 @@ func (cp *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFu
 		cp.mu.Lock()
 		cp.dialing[key]--
 		if len(cp.conns[key]) >= cp.maxConns {
-			pc.close()
-			log.Debugf("TCPPOOL: pool for %s already at limit (%d), discarding extra connection", key, cp.maxConns)
+			// Pool filled while we were dialing — try replacing a dead
+			// connection before discarding this new one.
+			replaced := false
+			for i, c := range cp.conns[key] {
+				if c.IsDead() {
+					c.close()
+					cp.conns[key][i] = pc
+					replaced = true
+					log.Debugf("TCPPOOL: replaced dead connection in pool for %s", key)
+					break
+				}
+			}
+			if !replaced {
+				pc.close()
+				log.Debugf("TCPPOOL: pool for %s already at limit (%d), discarding extra connection", key, cp.maxConns)
+			}
 			if cp.dialing[key] == 0 {
 				delete(cp.dialing, key)
 			}
 			cp.mu.Unlock()
-			if leastLoaded != nil {
+			if !replaced && leastLoaded != nil {
 				return leastLoaded, nil
 			}
-			return nil, fmt.Errorf("client: max conns reached for %s", key)
+			if !replaced {
+				return nil, fmt.Errorf("client: max conns reached for %s", key)
+			}
+			return pc, nil
 		}
 		cp.conns[key] = append(cp.conns[key], pc)
 		n := len(cp.conns[key])

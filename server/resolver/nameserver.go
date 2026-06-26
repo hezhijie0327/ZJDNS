@@ -34,8 +34,15 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 		return nil, errors.New("no nameservers")
 	}
 
-	queryCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(errors.New("query resolution completed"))
+	// Create a child context with a deadline to bound per-batch query time.
+	// This prevents goroutines from lingering for the full recursive resolve
+	// timeout (30s) when upstream servers are slow or unresponsive.
+	deadlineCtx, deadlineCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
+	queryCtx, cancel := context.WithCancelCause(deadlineCtx)
+	defer func() {
+		cancel(errors.New("query resolution completed"))
+		deadlineCancel()
+	}()
 
 	resultChan := make(chan *dns.Msg, 1)
 	g, queryCtx := errgroup.WithContext(queryCtx)

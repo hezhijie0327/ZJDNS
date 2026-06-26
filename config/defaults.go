@@ -34,8 +34,9 @@ const (
 	DefaultLatencyProbeTimeout          = 100 * time.Millisecond
 	DefaultStatsPersistTTL              = 86400
 	DefaultDNSKeyCacheTTL               = 86400
+	DefaultDNSKeyCacheMinTTL            = 300 // minimum TTL for DNSKEY cache entries
 	DefaultServeExpiredClientTimeout    = 1800 * time.Millisecond
-	DefaultCookieSecretRotationInterval = 1 * time.Hour
+	DefaultCookieSecretRotationInterval = 30 * time.Minute
 	DefaultECSRefreshInterval           = 15 * time.Minute
 	DefaultPrefetchThrottleInterval     = 3 * time.Second
 

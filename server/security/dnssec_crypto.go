@@ -646,8 +646,8 @@ func (cv *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 			ttl = int(k.Header().Ttl)
 		}
 	}
-	if ttl < config.DefaultTTL {
-		ttl = config.DefaultTTL
+	if ttl < config.DefaultDNSKeyCacheMinTTL {
+		ttl = config.DefaultDNSKeyCacheMinTTL
 	}
 
 	now := time.Now().Unix()

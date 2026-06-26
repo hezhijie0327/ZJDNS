@@ -137,7 +137,7 @@ func (rl *rateLimiter) sweep(maxAge time.Duration) {
 }
 
 type tcpWriteEntry struct {
-	mu           sync.Mutex
+	writeMu      chan struct{} // buffered size 1, acts as timeout-capable mutex
 	lastAccess   atomic.Int64
 	capacity     chan struct{}
 	capacityOnce sync.Once

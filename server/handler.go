@@ -55,6 +55,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		entry := entryI.(*tcpWriteEntry)
 		entry.capacityOnce.Do(func() {
 			entry.capacity = make(chan struct{}, config.DefaultMaxPipe)
+			entry.writeMu = make(chan struct{}, 1)
 		})
 
 		select {
@@ -77,11 +78,17 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			if response != nil {
 				response.Compress = true
 				entry.lastAccess.Store(time.Now().UnixNano())
-				entry.mu.Lock()
+				select {
+				case entry.writeMu <- struct{}{}:
+					defer func() { <-entry.writeMu }()
+				case <-time.After(config.DefaultDNSQueryTimeout):
+					log.Debugf("SERVER: TCP write lock timeout for %s", addr)
+					pool.DefaultMessagePool.Put(response)
+					return
+				}
 				if err := w.WriteMsg(response); err != nil {
 					log.Debugf("SERVER: TCP write error for %s: %v", addr, err)
 				}
-				entry.mu.Unlock()
 				pool.DefaultMessagePool.Put(response)
 			}
 		}()

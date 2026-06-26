@@ -252,14 +252,20 @@ func (mc *MemoryCache) evictToBudget() {
 	evicted := 0
 	for mc.currentSize > mc.limitBytes && len(mc.entries) > 0 {
 		// Randomly sample entries from the map to approximate LRU without
-		// allocating a full keys slice under the write lock.
+		// allocating a full keys slice under the write lock. Scale sample
+		// size with sqrt(|entries|) to maintain fidelity in large caches
+		// while staying O(√n) per eviction.
+		sampleSize := evictSampleSize
+		if n := len(mc.entries); n > sampleSize*sampleSize {
+			sampleSize = int(math.Sqrt(float64(n)))
+		}
 		var oldestKey string
 		var oldestLast int64 = math.MaxInt64
 		var oldestSize int64
 
 		sampleCount := 0
 		for k, item := range mc.entries {
-			if sampleCount >= evictSampleSize {
+			if sampleCount >= sampleSize {
 				break
 			}
 			sampleCount++
