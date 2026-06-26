@@ -1,6 +1,8 @@
 package security
 
 import (
+	"crypto/sha1"
+	"encoding/base32"
 	"errors"
 	"fmt"
 	"strings"
@@ -93,12 +95,6 @@ func (cv *CryptoValidator) loadRootTrustAnchors() {
 	}
 	cv.rootKeys = keys
 	log.Infof("SECURITY: initialized with %d root trust anchor(s)", len(keys))
-}
-
-// IsEnabled reports whether cryptographic DNSSEC validation is active.
-// Always returns true — DNSSEC is always on.
-func (cv *CryptoValidator) IsEnabled() bool {
-	return cv != nil
 }
 
 // VerifyRRset verifies an RRSIG over an RRset using the given DNSKEY.
@@ -463,6 +459,40 @@ func (cv *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifie
 	return anyValidated, nil
 }
 
+// nsec3HashName hashes a domain name using the NSEC3 parameters specified in the
+// record (algorithm, iterations, salt) per RFC 5155 §5. It returns the
+// base32hex-encoded hash without padding as a lowercase string.
+func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) string {
+	// Normalize: lowercase, fully qualified, wire-format label encoding.
+	name = strings.ToLower(dns.Fqdn(name))
+	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
+	var wire []byte
+	for _, label := range labels {
+		wire = append(wire, byte(len(label)))
+		wire = append(wire, label...)
+	}
+	wire = append(wire, 0) // root label
+
+	// Build initial input: salt || wire_format_name.
+	input := make([]byte, len(salt)+len(wire))
+	copy(input, salt)
+	copy(input[len(salt):], wire)
+
+	h := sha1.New()
+	h.Write(input)
+	hash := h.Sum(nil)
+
+	// Additional iterations: H(salt || previous_hash).
+	for i := uint16(0); i < iterations; i++ {
+		h.Reset()
+		h.Write([]byte(salt))
+		h.Write(hash)
+		hash = h.Sum(nil)
+	}
+
+	return strings.ToLower(base32.HexEncoding.WithPadding(base32.NoPadding).EncodeToString(hash))
+}
+
 // validateDenialOfExistence verifies signed NSEC/NSEC3 records against the
 // trusted DNSKEYs and checks that they cryptographically prove the non-existence
 // of the queried name (NXDOMAIN) or type (NODATA). This prevents an attacker
@@ -530,14 +560,40 @@ func (cv *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname st
 				if key.KeyTag() != sig.KeyTag {
 					continue
 				}
-				if err := cv.VerifyRRset(rrset, sig, key); err == nil {
-					return true, nil
+				if err := cv.VerifyRRset(rrset, sig, key); err != nil {
+					continue
+				}
+				// RRSIG verified. Per RFC 5155 §8, verify that this
+				// NSEC3 record actually proves non-existence of the
+				// queried name (NXDOMAIN) or type (NODATA).
+				hashedQname := nsec3HashName(normalizedQname, nsec3.Hash, nsec3.Iterations, nsec3.Salt)
+				switch denialType {
+				case "NXDOMAIN":
+					owner := strings.ToLower(nsec3.Header().Name)
+					next := strings.ToLower(nsec3.NextDomain)
+					if dnsutilCompareDomainInRange(hashedQname, owner, next) {
+						return true, nil
+					}
+				case "NODATA":
+					owner := strings.ToLower(nsec3.Header().Name)
+					if owner == hashedQname {
+						typeCovered := false
+						for _, t := range nsec3.TypeBitMap {
+							if t == qtype {
+								typeCovered = true
+								break
+							}
+						}
+						if !typeCovered {
+							return true, nil
+						}
+					}
 				}
 			}
 		}
 	}
 	if len(nsec3s) > 0 {
-		return false, errors.New("NSEC3 records present but not cryptographically signed")
+		return false, fmt.Errorf("NSEC3 records present but do not prove %s of %s (type=%s)", denialType, qname, dns.TypeToString[qtype])
 	}
 
 	return false, fmt.Errorf("no signed NSEC/NSEC3 for %s", denialType)

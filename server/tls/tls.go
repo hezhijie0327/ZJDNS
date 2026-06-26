@@ -36,15 +36,6 @@ const (
 
 	// DoHMaxRequestSize is the maximum allowed DoH request size in bytes.
 	DoHMaxRequestSize = 8192
-
-	// QUICCodeNoError indicates a normal QUIC connection closure.
-	QUICCodeNoError quic.ApplicationErrorCode = 0
-
-	// QUICCodeInternalError indicates an internal server error in QUIC.
-	QUICCodeInternalError quic.ApplicationErrorCode = 1
-
-	// QUICCodeProtocolError indicates a protocol violation in QUIC.
-	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 )
 
 // Config holds the configuration for the TLS server including ports,

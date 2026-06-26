@@ -80,63 +80,6 @@ func TestProbeIPs_LoopbackPrivate(t *testing.T) {
 	// Since all are unprobeable, order should be unchanged.
 }
 
-func TestProbeAddrs_Empty(t *testing.T) {
-	p := New([]config.LatencyProbeStep{{Protocol: "tcp", Timeout: 50}}, context.Background())
-	result := p.ProbeAddrs(context.Background(), nil)
-	if len(result) != 0 {
-		t.Errorf("ProbeAddrs with nil input should return empty slice, got %d", len(result))
-	}
-}
-
-func TestProbeAddrs_InvalidAddr(t *testing.T) {
-	p := New([]config.LatencyProbeStep{{Protocol: "tcp", Timeout: 50}}, context.Background())
-	addrs := []string{"invalid:53"}
-	result := p.ProbeAddrs(context.Background(), addrs)
-	if len(result) != 1 {
-		t.Fatalf("invalid addr should produce one nil IP, got %d", len(result))
-	}
-	if result[0] != nil {
-		t.Errorf("invalid addr should produce nil IP, got %v", result[0])
-	}
-}
-
-func TestShuffleIPs(t *testing.T) {
-	ips := []net.IP{
-		net.ParseIP("1.1.1.1"),
-		net.ParseIP("8.8.8.8"),
-		net.ParseIP("9.9.9.9"),
-	}
-	shuffled := ShuffleIPs(ips)
-	if len(shuffled) != len(ips) {
-		t.Fatalf("length mismatch: %d != %d", len(shuffled), len(ips))
-	}
-	// Verify all IPs are present (order may differ).
-	seen := make(map[string]bool)
-	for _, ip := range shuffled {
-		seen[ip.String()] = true
-	}
-	for _, ip := range ips {
-		if !seen[ip.String()] {
-			t.Errorf("IP %s missing from shuffled result", ip.String())
-		}
-	}
-}
-
-func TestShuffleIPs_Single(t *testing.T) {
-	ips := []net.IP{net.ParseIP("1.1.1.1")}
-	shuffled := ShuffleIPs(ips)
-	if len(shuffled) != 1 || !shuffled[0].Equal(ips[0]) {
-		t.Error("single IP should be unchanged")
-	}
-}
-
-func TestShuffleIPs_Empty(t *testing.T) {
-	shuffled := ShuffleIPs(nil)
-	if shuffled != nil {
-		t.Error("nil should return nil")
-	}
-}
-
 func TestHashIPs(t *testing.T) {
 	ips1 := []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8")}
 	ips2 := []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8")}

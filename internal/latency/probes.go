@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"golang.org/x/net/icmp"
@@ -15,6 +16,14 @@ import (
 
 	"zjdns/config"
 )
+
+// icmpBufPool reuses ICMP read buffers to avoid per-probe 1500-byte allocations.
+var icmpBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, probeICMPReadBufSize)
+		return &buf
+	},
+}
 
 // Probe buffer and payload sizes.
 const (
@@ -176,7 +185,9 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 		return err
 	}
 
-	buffer := make([]byte, probeICMPReadBufSize)
+	bufPtr := icmpBufPool.Get().(*[]byte)
+	defer icmpBufPool.Put(bufPtr)
+	buffer := *bufPtr
 	for {
 		n, peer, err := conn.ReadFrom(buffer)
 		if err != nil {

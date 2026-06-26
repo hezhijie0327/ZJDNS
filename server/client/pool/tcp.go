@@ -169,22 +169,31 @@ func (pc *Conn) readLoop() {
 
 		bodyBuf := bufpool.DefaultBufferPool.Get()
 		var body []byte
-		if int(msgLen) <= len(bodyBuf) {
+		pooled := int(msgLen) <= len(bodyBuf)
+		if pooled {
 			body = bodyBuf[:msgLen]
-			defer bufpool.DefaultBufferPool.Put(bodyBuf)
 		} else {
 			body = make([]byte, msgLen)
 		}
 		if _, err := io.ReadFull(pc.conn, body); err != nil {
+			if pooled {
+				bufpool.DefaultBufferPool.Put(bodyBuf)
+			}
 			log.Debugf("TCPPOOL: read body error from %s: %v", pc.addr, err)
 			return
 		}
 
 		resp := bufpool.DefaultMessagePool.Get()
 		if err := resp.Unpack(body); err != nil {
+			if pooled {
+				bufpool.DefaultBufferPool.Put(bodyBuf)
+			}
 			log.Debugf("TCPPOOL: unpack error from %s: %v", pc.addr, err)
 			bufpool.DefaultMessagePool.Put(resp)
 			continue
+		}
+		if pooled {
+			bufpool.DefaultBufferPool.Put(bodyBuf)
 		}
 
 		pc.mu.RLock()

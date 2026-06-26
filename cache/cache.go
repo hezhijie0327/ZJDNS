@@ -3,9 +3,9 @@
 package cache
 
 import (
-	"crypto/sha256"
 	"encoding/gob"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"strconv"
 	"strings"
@@ -154,8 +154,9 @@ func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDN
 	}
 	result := buf.String()
 	if len(result) > maxResultLength {
-		hash := sha256.Sum256([]byte(result))
-		return fmt.Sprintf("h:%x", hash[:16])
+		h := fnv.New64a()
+		h.Write([]byte(result))
+		return fmt.Sprintf("h:%x", h.Sum(nil))
 	}
 	return result
 }

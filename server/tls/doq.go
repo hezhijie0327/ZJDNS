@@ -18,6 +18,7 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	connpool "zjdns/server/client/pool"
 )
 
 func (s *Server) startDOQServer() error {
@@ -95,7 +96,7 @@ func (s *Server) handleDOQConnections() {
 			val, _ := s.doqIPCounts.LoadOrStore(ip, new(atomic.Int32))
 			if val.(*atomic.Int32).Add(1) > maxConnsPerIP {
 				val.(*atomic.Int32).Add(-1)
-				_ = conn.CloseWithError(QUICCodeInternalError, "too many connections")
+				_ = conn.CloseWithError(connpool.QUICCodeInternalError, "too many connections")
 				continue
 			}
 			ipCount = val.(*atomic.Int32)
@@ -120,7 +121,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
 		defer cancel()
-		_ = conn.CloseWithError(QUICCodeNoError, "")
+		_ = conn.CloseWithError(connpool.QUICCodeNoError, "")
 		done := make(chan struct{})
 		go func() {
 			<-conn.Context().Done()
@@ -177,7 +178,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 
 	msgLen := binary.BigEndian.Uint16(buf[:2])
 	if msgLen == 0 || msgLen > pool.SecureBufferSize-2 {
-		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid length")
+		_ = conn.CloseWithError(connpool.QUICCodeProtocolError, "invalid length")
 		return
 	}
 
@@ -195,7 +196,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 
 	req := pool.DefaultMessagePool.Get()
 	if err := req.Unpack(body); err != nil {
-		_ = conn.CloseWithError(QUICCodeProtocolError, "invalid DNS message")
+		_ = conn.CloseWithError(connpool.QUICCodeProtocolError, "invalid DNS message")
 		pool.DefaultMessagePool.Put(req)
 		return
 	}

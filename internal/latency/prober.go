@@ -6,7 +6,6 @@ package latency
 import (
 	"context"
 	"math"
-	"math/rand/v2"
 	"net"
 	"sort"
 	"sync"
@@ -87,56 +86,6 @@ func (p *Prober) ProbeIPs(ctx context.Context, ips []net.IP) []net.IP {
 	return result
 }
 
-// ProbeAddrs probes the given "ip:port" address strings and returns them
-// sorted by measured latency. Addresses without valid, public IPs are placed
-// at the end in original order.
-func (p *Prober) ProbeAddrs(ctx context.Context, addrs []string) []net.IP {
-	if p == nil || len(addrs) <= 1 || len(p.steps) == 0 {
-		ips := make([]net.IP, len(addrs))
-		for i, a := range addrs {
-			if host, _, err := net.SplitHostPort(a); err == nil {
-				ips[i] = net.ParseIP(host)
-			}
-		}
-		return ips
-	}
-
-	probeIPs := make([]net.IP, 0, len(addrs))
-
-	for _, addr := range addrs {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			continue
-		}
-		ip := net.ParseIP(host)
-		if ip != nil && !ip.IsLoopback() && !ip.IsPrivate() {
-			probeIPs = append(probeIPs, ip)
-		}
-	}
-
-	if len(probeIPs) <= 1 {
-		ips := make([]net.IP, len(addrs))
-		for i, a := range addrs {
-			if h, _, e := net.SplitHostPort(a); e == nil {
-				ips[i] = net.ParseIP(h)
-			}
-		}
-		return ips
-	}
-
-	// Check dedup cache — skip probe if we recently probed this exact set.
-	hash := hashIPs(probeIPs)
-	if cached, ok := p.dedup.Get(hash); ok {
-		log.Debugf("LATENCY: dedup hit for %d IPs (hash=%x)", len(probeIPs), hash)
-		return cached
-	}
-
-	sortedIPs := p.ProbeIPs(ctx, probeIPs)
-	p.dedup.Set(hash, sortedIPs, dedupTTL)
-
-	return sortedIPs
-}
-
 // probeSlice is the generic probe-and-sort core. It spawns concurrent workers
 // bounded by the semaphore, measures latency for each item, and returns items
 // sorted by latency. All workers respect ctx and bgCtx cancellation.
@@ -207,16 +156,11 @@ func probeSlice[T any](
 		sorted[i] = items[r.idx]
 	}
 
-	// Log results.
-	for _, c := range sorted {
+	// Log results (O(n): after sorting, results[i] corresponds to sorted[i]).
+	for i, c := range sorted {
 		ip := extractIP(&c)
 		if ip != nil {
-			for _, r := range results {
-				if extractIP(&sorted[r.idx]) != nil && extractIP(&sorted[r.idx]).Equal(ip) {
-					log.Debugf("LATENCY: probe result %s latency=%s", ip.String(), r.latency)
-					break
-				}
-			}
+			log.Debugf("LATENCY: probe result %s latency=%s", ip.String(), results[i].latency)
 		}
 	}
 
@@ -245,18 +189,4 @@ func normalizeProbeProtocol(p string) string {
 	default:
 		return p
 	}
-}
-
-// ShuffleIPs returns a shuffled copy using crypto/rand for unbiased ordering.
-func ShuffleIPs(ips []net.IP) []net.IP {
-	if len(ips) <= 1 {
-		return ips
-	}
-	shuffled := make([]net.IP, len(ips))
-	copy(shuffled, ips)
-	for i := len(shuffled) - 1; i > 0; i-- {
-		j := rand.IntN(i + 1)
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-	}
-	return shuffled
 }

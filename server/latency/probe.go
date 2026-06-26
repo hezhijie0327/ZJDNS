@@ -187,14 +187,7 @@ func SortIPsByLatency(ctx context.Context, ips []net.IP) []net.IP {
 // --- Shared helpers ---
 
 func extractIPAddress(rr dns.RR) net.IP {
-	switch record := rr.(type) {
-	case *dns.A:
-		return record.A
-	case *dns.AAAA:
-		return record.AAAA
-	default:
-		return nil
-	}
+	return dnsutil.ExtractIP(rr)
 }
 
 func isAOrAAAA(rr dns.RR) bool {
