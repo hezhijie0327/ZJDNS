@@ -393,15 +393,15 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 	go func() {
 		defer close(done)
 		defer dnsutil.HandlePanic("expired cache fallback query")
-		answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.resolver.Query(s.ctx, question, ecsOpt)
+		qr := s.resolver.Query(s.ctx, question, ecsOpt)
 		res = queryResult{
-			answer:     answer,
-			authority:  authority,
-			additional: additional,
-			validated:  validated,
-			ecs:        ecsResponse,
-			fallback:   fallbackUsed,
-			err:        err,
+			answer:     qr.Answer,
+			authority:  qr.Authority,
+			additional: qr.Additional,
+			validated:  qr.Validated,
+			ecs:        qr.ECS,
+			fallback:   qr.Fallback,
+			err:        qr.Err,
 		}
 	}()
 
@@ -450,23 +450,23 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 
 func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool, dnssecStatus *string) *dns.Msg {
 	log.Debugf("CACHE: miss key=%s for %s, querying upstream/recursive", cacheKey, question.Name)
-	answer, authority, additional, validated, ecsResponse, _, usedFallback, err := s.resolver.Query(s.ctx, question, ecsOpt)
-	if fallbackUsed != nil && usedFallback {
+	qr := s.resolver.Query(s.ctx, question, ecsOpt)
+	if fallbackUsed != nil && qr.Fallback {
 		*fallbackUsed = true
 	}
 
-	if err != nil {
+	if qr.Err != nil {
 
-		if errors.Is(err, resolver.ErrCIDRFilterRefused) {
+		if errors.Is(qr.Err, resolver.ErrCIDRFilterRefused) {
 			return s.processCIDRRefused(req, question, ecsOpt, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
 		}
 		if hadError != nil {
 			*hadError = true
 		}
-		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, err, dnssecStatus)
+		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, qr.Err, dnssecStatus)
 	}
 
-	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, answer, authority, additional, validated, ecsResponse, usedFallback, clientIP, isSecureConnection, dnssecStatus)
+	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS, qr.Fallback, clientIP, isSecureConnection, dnssecStatus)
 }
 
 func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string) *dns.Msg {
@@ -620,15 +620,15 @@ func (s *Server) refreshCacheEntry(ctx context.Context, question dns.Question, e
 	default:
 	}
 
-	answer, authority, additional, validated, ecsResponse, _, fallbackUsed, err := s.resolver.Query(ctx, question, ecs)
-	if err != nil {
-		return err
+	qr := s.resolver.Query(ctx, question, ecs)
+	if qr.Err != nil {
+		return qr.Err
 	}
 
-	if !fallbackUsed {
-		s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, ecsResponse)
+	if !qr.Fallback {
+		s.cacheMgr.Set(cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
 		if s.prober != nil {
-			s.prober.Start(question, cacheKey, answer, authority, additional, validated, ecsResponse)
+			s.prober.Start(question, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
 		}
 	} else {
 		log.Debugf("CACHE: refresh query used fallback for %s, skipping cache population", question.Name)

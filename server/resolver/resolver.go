@@ -54,6 +54,19 @@ func dnssecEDEError(edeCode uint64) *DNSSECError {
 	}
 }
 
+// QueryResult bundles the return values of a DNS resolution query, replacing
+// the previous 8-return-value tuple at the public API boundary.
+type QueryResult struct {
+	Answer     []dns.RR
+	Authority  []dns.RR
+	Additional []dns.RR
+	Validated  bool
+	ECS        *edns.ECSOption
+	Server     string
+	Fallback   bool
+	Err        error
+}
+
 // BuildQueryFunc is a function type that constructs a DNS query message from a
 // question, ECS option, and connection parameters.
 type BuildQueryFunc func(question dns.Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg
@@ -181,34 +194,34 @@ func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 
 // Query resolves a DNS question by querying upstream servers, falling back to
 // recursive resolution if no upstream is configured.
-func (r *Resolver) Query(ctx context.Context, question dns.Question, ecs *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+func (r *Resolver) Query(ctx context.Context, question dns.Question, ecs *edns.ECSOption) *QueryResult {
 	servers := r.upstream.list()
 	fallbackServers := r.fallback.list()
 
 	if len(servers) > 0 {
-		answer, authority, additional, validated, ecsResponse, server, fallbackUsed, err :=
-			r.queryUpstream(ctx, question, ecs, servers)
+		a, au, ad, v, e, s, f, err := r.queryUpstream(ctx, question, ecs, servers)
 		if err == nil {
-			return answer, authority, additional, validated, ecsResponse, server, fallbackUsed, nil
+			return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f}
 		}
 		if len(fallbackServers) > 0 {
 			log.Debugf("UPSTREAM: primary upstream failed, querying fallback servers")
-			a, au, ad, v, e, s, _, err2 := r.queryUpstream(ctx, question, ecs, fallbackServers)
+			a2, au2, ad2, v2, e2, s2, _, err2 := r.queryUpstream(ctx, question, ecs, fallbackServers)
 			if err2 == nil {
-				return a, au, ad, v, e, s, true, nil
+				return &QueryResult{Answer: a2, Authority: au2, Additional: ad2, Validated: v2, ECS: e2, Server: s2, Fallback: true}
 			}
 		}
-		return nil, nil, nil, false, nil, "", false, err
+		return &QueryResult{Err: err}
 	}
 
 	if len(fallbackServers) > 0 {
 		a, au, ad, v, e, s, _, err := r.queryUpstream(ctx, question, ecs, fallbackServers)
-		return a, au, ad, v, e, s, true, err
+		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: true, Err: err}
 	}
 
 	resolveCtx, cancel := context.WithTimeout(ctx, config.DefaultRecursiveResolveTimeout)
 	defer cancel()
-	return r.cname.resolve(resolveCtx, question, ecs)
+	a, au, ad, v, e, s, f, err := r.cname.resolve(resolveCtx, question, ecs)
+	return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f, Err: err}
 }
 
 // ShuffleSlice returns a shuffled copy of the input slice using a modern
