@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/quic-go/quic-go/http3"
+	"github.com/quic-go/quic-go"
 
 	"zjdns/config"
 	"zjdns/edns"
@@ -22,6 +22,10 @@ import (
 
 	connpool "zjdns/server/client/pool"
 )
+
+// quicKeepAlivePeriod controls the interval at which QUIC keep-alive frames are
+// sent. 20s matches the quic-go internal MaxKeepAliveInterval.
+const quicKeepAlivePeriod = 20 * time.Second
 
 // Result holds the outcome of a single DNS query including response, timing,
 // and metadata.
@@ -53,6 +57,9 @@ type Client struct {
 
 	doh3TransportMu sync.RWMutex
 	doh3Transports  map[string]*http.Client
+
+	quicConfigs   map[string]*quic.Config
+	quicConfigsMu sync.Mutex
 
 	quicPool *connpool.QuicPool
 
@@ -112,11 +119,49 @@ func New() *Client {
 		},
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),
+		quicConfigs:    make(map[string]*quic.Config),
 		quicPool:       connpool.NewQuicPool(config.DefaultMaxConns),
 		SessionCache:   tls.NewLRUClientSessionCache(32),
 		tcpPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		dotPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 	}
+}
+
+// getQUICConfig returns a cached QUIC config for the given upstream key, creating
+// one with a TokenStore if none exists. The TokenStore persists across connections
+// to the same upstream, enabling 0-RTT session resumption.
+func (c *Client) getQUICConfig(key string) *quic.Config {
+	c.quicConfigsMu.Lock()
+	defer c.quicConfigsMu.Unlock()
+	if cfg, ok := c.quicConfigs[key]; ok {
+		return cfg
+	}
+	cfg := &quic.Config{
+		MaxIdleTimeout:        config.Timeout,
+		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
+		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
+		EnableDatagrams:       true,
+		Allow0RTT:             true,
+		KeepAlivePeriod:       quicKeepAlivePeriod,
+		TokenStore:            quic.NewLRUTokenStore(1, 10),
+	}
+	c.quicConfigs[key] = cfg
+	return cfg
+}
+
+// resetQUICConfig recreates the TokenStore for the given upstream key. Call this
+// when the server rejects 0-RTT (quic.Err0RTTRejected) to clear stale
+// address-validation tokens.
+func (c *Client) resetQUICConfig(key string) {
+	c.quicConfigsMu.Lock()
+	defer c.quicConfigsMu.Unlock()
+	cfg, ok := c.quicConfigs[key]
+	if !ok {
+		return
+	}
+	cfg = cfg.Clone()
+	cfg.TokenStore = quic.NewLRUTokenStore(1, 10)
+	c.quicConfigs[key] = cfg
 }
 
 // ExecuteQuery sends a DNS query to an upstream server and returns the result.
@@ -215,7 +260,7 @@ func (c *Client) Close() {
 	// Close DoH3 transports (QUIC/HTTP3 connections)
 	c.doh3TransportMu.Lock()
 	for _, client := range c.doh3Transports {
-		if t, ok := client.Transport.(*http3.Transport); ok {
+		if t, ok := client.Transport.(*http3Transport); ok {
 			_ = t.Close()
 		}
 	}

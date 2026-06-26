@@ -9,6 +9,7 @@ import (
 	"net/url"
 
 	"github.com/miekg/dns"
+	"github.com/quic-go/quic-go/http3"
 
 	"zjdns/internal/pool"
 )
@@ -35,7 +36,13 @@ func executeDoHHTTPRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpCl
 		RawQuery: q.Encode(),
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
+	// Use http3.MethodGet0RTT for HTTP/3 transports so the request is sent as
+	// 0-RTT early data, skipping a round-trip on reconnections.
+	method := http.MethodGet
+	if _, ok := httpClient.Transport.(*http3Transport); ok {
+		method = http3.MethodGet0RTT
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, method, requestURL.String(), nil)
 	if err != nil {
 		msg.Id = originalID
 		return nil, fmt.Errorf("create request: %w", err)

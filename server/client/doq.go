@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -21,20 +22,12 @@ import (
 func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	key := server.Address
 
-	quicCfg := &quic.Config{
-		MaxIdleTimeout:        config.Timeout,
-		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
-		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
-		EnableDatagrams:       true,
-		Allow0RTT:             true,
-	}
-
 	dialQUIC := func(dialCtx context.Context, addr string) (*quic.Conn, error) {
 		dialTLS := tlsConfig.Clone()
 		dialTLS.NextProtos = config.NextProtoDoQ
 		timeoutCtx, cancel := context.WithTimeout(dialCtx, config.Timeout)
 		defer cancel()
-		return quic.DialAddr(timeoutCtx, addr, dialTLS, quicCfg)
+		return quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig(key))
 	}
 
 	if c.quicPool != nil {
@@ -45,12 +38,20 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 				return response, nil
 			}
 			c.quicPool.Remove(pc)
+			if errors.Is(err, quic.Err0RTTRejected) {
+				c.resetQUICConfig(key)
+			}
 			log.Debugf("UPSTREAM: pooled DoQ query to %s failed: %v, retrying with new connection", server.Address, err)
 		}
 	}
 
 	conn, err := dialQUIC(ctx, key)
 	if err != nil {
+		// On 0-RTT rejection, reset the TokenStore so the next connection
+		// attempt starts with a clean address-validation token cache.
+		if errors.Is(err, quic.Err0RTTRejected) {
+			c.resetQUICConfig(key)
+		}
 		return nil, fmt.Errorf("QUIC dial: %w", err)
 	}
 
