@@ -51,6 +51,18 @@ func (c *Client) createDoHClient(host, serverName string, skipVerify bool, tlsCo
 		return client
 	}
 
+	// Evict oldest entry when at capacity (32).
+	const transportMax = 32
+	if len(c.dohTransports) >= transportMax {
+		for k := range c.dohTransports {
+			if t, ok := c.dohTransports[k].Transport.(*http.Transport); ok {
+				t.CloseIdleConnections()
+			}
+			delete(c.dohTransports, k)
+			break
+		}
+	}
+
 	transport := c.dohClient.Transport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig.Clone()
 	_ = http2.ConfigureTransport(transport)

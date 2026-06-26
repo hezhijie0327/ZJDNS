@@ -39,6 +39,7 @@ type QuicConn struct {
 type QuicPool struct {
 	mu       sync.Mutex
 	conns    map[string][]*QuicConn
+	dialing  map[string]int
 	maxConns int
 }
 
@@ -72,6 +73,7 @@ func NewQuicPool(maxConns int) *QuicPool {
 	}
 	return &QuicPool{
 		conns:    make(map[string][]*QuicConn),
+		dialing:  make(map[string]int),
 		maxConns: maxConns,
 	}
 }
@@ -99,21 +101,36 @@ func (qp *QuicPool) Acquire(ctx context.Context, key string, dialFunc func(conte
 		return pc, nil
 	}
 
-	if len(live) < qp.maxConns {
+	if len(live)+qp.dialing[key] < qp.maxConns {
+		qp.dialing[key]++
 		qp.mu.Unlock()
 		conn, err := dialFunc(ctx, key)
 		if err != nil {
+			qp.mu.Lock()
+			qp.dialing[key]--
+			if qp.dialing[key] == 0 {
+				delete(qp.dialing, key)
+			}
+			qp.mu.Unlock()
 			return nil, fmt.Errorf("client: dial %s: %w", key, err)
 		}
 		pc := &QuicConn{Conn: conn, addr: key}
 		qp.mu.Lock()
+		qp.dialing[key]--
 		if len(qp.conns[key]) >= qp.maxConns {
+			if qp.dialing[key] == 0 {
+				delete(qp.dialing, key)
+			}
 			qp.mu.Unlock()
 			pc.close()
 			return nil, fmt.Errorf("client: pool filled during dial for %s", key)
 		}
 		qp.conns[key] = append(qp.conns[key], pc)
 		n := len(qp.conns[key])
+		qp.dialing[key]--
+		if qp.dialing[key] == 0 {
+			delete(qp.dialing, key)
+		}
 		qp.mu.Unlock()
 		log.Debugf("UPSTREAM: dialed new QUIC connection to %s (pool=%d/%d)", key, n, qp.maxConns)
 		return pc, nil

@@ -94,9 +94,15 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		return nil, fmt.Errorf("client: pack: %w", err)
 	}
 
-	buf := make([]byte, 2+len(msgData))
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(msgData)))
-	copy(buf[2:], msgData)
+	poolBuf := bufpool.DefaultBufferPool.Get()
+	defer bufpool.DefaultBufferPool.Put(poolBuf)
+	writeBuf := poolBuf
+	if len(poolBuf) < 2+len(msgData) {
+		writeBuf = make([]byte, 2+len(msgData))
+	}
+	writeBuf = writeBuf[:2+len(msgData)]
+	binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(msgData)))
+	copy(writeBuf[2:], msgData)
 
 	resultCh := make(chan *dns.Msg, 1)
 	pc.mu.Lock()
@@ -116,7 +122,7 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	}()
 
 	pc.writeMu.Lock()
-	_, writeErr := pc.conn.Write(buf)
+	_, writeErr := pc.conn.Write(writeBuf)
 	pc.writeMu.Unlock()
 	if writeErr != nil {
 		pc.close()
@@ -131,7 +137,9 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		resp.Id = originalID
 		return resp, nil
 	case <-ctx.Done():
-		pc.close()
+		// Only cancel this query, not the connection.
+		// The deferred cleanup unlinks trackingID; late
+		// responses are discarded by readLoop's default branch.
 		return nil, ctx.Err()
 	}
 }
@@ -158,7 +166,14 @@ func (pc *Conn) readLoop() {
 			return
 		}
 
-		body := make([]byte, msgLen)
+		bodyBuf := bufpool.DefaultBufferPool.Get()
+		var body []byte
+		if int(msgLen) <= len(bodyBuf) {
+			body = bodyBuf[:msgLen]
+			defer bufpool.DefaultBufferPool.Put(bodyBuf)
+		} else {
+			body = make([]byte, msgLen)
+		}
 		if _, err := io.ReadFull(pc.conn, body); err != nil {
 			log.Debugf("TCPPOOL: read body error from %s: %v", pc.addr, err)
 			return

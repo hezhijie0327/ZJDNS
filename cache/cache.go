@@ -34,6 +34,7 @@ type Store interface {
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
 	SetWithDNSSEC(key string, answer, authority, additional []dns.RR, validated bool, dnssecValidated bool, ecs *edns.ECSOption)
 	SetEntry(key string, entry *CacheEntry)
+	ReverseLookup(ip net.IP) []LookupResult
 	Close() error
 }
 

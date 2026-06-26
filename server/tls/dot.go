@@ -95,13 +95,12 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		}
 	}()
 
+	var wg sync.WaitGroup
 	defer func() {
 		close(writeCh)
 		<-writerDone
+		wg.Wait()
 	}()
-
-	var wg sync.WaitGroup
-	defer wg.Wait()
 
 	workerCap := make(chan struct{}, config.DefaultMaxPipe)
 

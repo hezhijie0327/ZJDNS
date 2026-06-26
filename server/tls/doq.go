@@ -166,6 +166,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 }
 
 func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
+	defer dnsutil.HandlePanic("DoQ stream handler")
 	buf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(buf)
 
