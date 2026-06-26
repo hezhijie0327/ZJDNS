@@ -165,6 +165,13 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 	var allMu sync.Mutex
 	var allAddresses []string
 
+	// Accumulate resolved A/AAAA records per NS name so they can be
+	// latency-probed and re-cached asynchronously — matching the glue
+	// record path in resolve().
+	var nsRecordsMu sync.Mutex
+	aRecordsMap := make(map[string][]dns.RR)
+	aaaaRecordsMap := make(map[string][]dns.RR)
+
 	for _, ns := range nsRecords {
 		nsRecord := ns
 		g.Go(func() error {
@@ -246,24 +253,28 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 				return nil
 			}
 
-			// Use addresses as-is for the current query — latency
-			// ordering happens asynchronously via probeAndCacheNSGlue
-			// for glue-sourced addresses, so future cache hits return
-			// latency-sorted records via lookupNSAddrsFromCache.
-
 			// Cache A/AAAA records so future queries hit warm cache.
-			// The async latency probe (probeAndCacheNSGlue) reorders
-			// them later for latency-optimized cache hits.
-
-			// Cache A records so future queries hit warm cache.
+			// The async latency probe below reorders them later for
+			// latency-optimized cache hits.
 			if rr.cache != nil && len(ansARecords) > 0 {
 				aCacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
 				rr.cache.Set(aCacheKey, ansARecords, nil, nil, false, nil)
 			}
-			// Cache AAAA records.
 			if rr.cache != nil && len(ansAAAARecords) > 0 {
 				aaaaCacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}, nil, false)
 				rr.cache.Set(aaaaCacheKey, ansAAAARecords, nil, nil, false, nil)
+			}
+
+			// Accumulate records for async latency probe.
+			if rr.cache != nil && (len(ansARecords) > 0 || len(ansAAAARecords) > 0) {
+				nsRecordsMu.Lock()
+				if len(ansARecords) > 0 {
+					aRecordsMap[nsName] = append(aRecordsMap[nsName], ansARecords...)
+				}
+				if len(ansAAAARecords) > 0 {
+					aaaaRecordsMap[nsName] = append(aaaaRecordsMap[nsName], ansAAAARecords...)
+				}
+				nsRecordsMu.Unlock()
 			}
 
 			allMu.Lock()
@@ -274,6 +285,23 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 	}
 
 	_ = g.Wait()
+
+	// Merge A and AAAA records per NS name so probeAndCacheNSGlue
+	// ranks all addresses together and stores them under the unified
+	// latency-sorted key (addrCacheKey).
+	if rr.cache != nil && (len(aRecordsMap) > 0 || len(aaaaRecordsMap) > 0) {
+		combinedMap := make(map[string][]dns.RR)
+		for nsName, records := range aRecordsMap {
+			combinedMap[nsName] = append(combinedMap[nsName], records...)
+		}
+		for nsName, records := range aaaaRecordsMap {
+			combinedMap[nsName] = append(combinedMap[nsName], records...)
+		}
+		if len(combinedMap) > 0 {
+			go rr.probeAndCacheNSGlue(combinedMap)
+		}
+	}
+
 	allMu.Lock()
 	defer allMu.Unlock()
 	return allAddresses
