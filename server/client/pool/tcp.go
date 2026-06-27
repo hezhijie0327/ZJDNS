@@ -122,6 +122,15 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 			delete(pc.inflight, trackingID)
 		}
 		pc.mu.Unlock()
+		// Drain orphaned response that may have arrived after ctx cancellation.
+		select {
+		case orphan := <-resultCh:
+			if orphan != nil {
+				bufpool.DefaultMessagePool.Put(orphan)
+			}
+		default:
+		}
+
 	}()
 
 	pc.writeMu.Lock()

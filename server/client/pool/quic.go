@@ -127,7 +127,6 @@ func (qp *QUICPool) Acquire(ctx context.Context, key string, dialFunc func(conte
 		}
 		qp.conns[key] = append(qp.conns[key], pc)
 		n := len(qp.conns[key])
-		qp.dialing[key]--
 		if qp.dialing[key] == 0 {
 			delete(qp.dialing, key)
 		}
