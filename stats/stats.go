@@ -16,7 +16,7 @@ import (
 	"zjdns/internal/log"
 )
 
-const persistKey = "__stats__"
+const persistKey = config.StatsPersistKey
 
 // Snapshot contains a point-in-time copy of all DNS request counters.
 type Snapshot struct {
@@ -224,7 +224,7 @@ func New(cfg *config.ServerConfig, c cache.Store) *Collector {
 	}
 	sc := &Collector{
 		enabled:    true,
-		persistTTL: cfg.Server.StatsPersistTTL(),
+		persistTTL: cfg.Server.StatsPersistInterval(),
 	}
 	if ri := cfg.Server.StatsResetInterval(); ri > 0 {
 		sc.resetInterval = time.Duration(ri) * time.Second
@@ -427,7 +427,7 @@ func (sc *Collector) ToCacheEntry() (*cache.CacheEntry, error) {
 	now := time.Now().Unix()
 	ttl := sc.persistTTL
 	if ttl <= 0 {
-		ttl = config.DefaultStatsPersistTTL
+		ttl = config.DefaultStatsPersistInterval
 	}
 	return &cache.CacheEntry{
 		Timestamp:   now,

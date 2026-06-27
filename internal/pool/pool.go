@@ -7,7 +7,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-// UDPBufferSize is the standard size for UDP DNS messages (RFC 6891).
+// UDPBufferSize is the recommended EDNS0 UDP payload size to avoid IP fragmentation (RFC 6891).
 // SecureBufferSize is the recommended size for secure DNS message buffers.
 const (
 	UDPBufferSize         = 1232

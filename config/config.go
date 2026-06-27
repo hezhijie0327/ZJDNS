@@ -168,11 +168,11 @@ func (s *ServerSettings) StatsResetInterval() int {
 	return s.Features.Stats.ResetInterval
 }
 
-// StatsPersistTTL returns the stats persist TTL, defaulting to
-// DefaultStatsPersistTTL.
-func (s *ServerSettings) StatsPersistTTL() int {
+// StatsPersistInterval returns the stats persist TTL, defaulting to
+// DefaultStatsPersistInterval.
+func (s *ServerSettings) StatsPersistInterval() int {
 	if s == nil || s.Features.Stats == nil || s.Features.Stats.ResetInterval <= 0 {
-		return DefaultStatsPersistTTL
+		return DefaultStatsPersistInterval
 	}
 	return s.Features.Stats.ResetInterval
 }

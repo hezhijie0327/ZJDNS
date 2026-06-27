@@ -80,10 +80,10 @@ func TestServerSettings_StatsInterval_Default(t *testing.T) {
 	}
 }
 
-func TestServerSettings_StatsPersistTTL_Default(t *testing.T) {
+func TestServerSettings_StatsPersistInterval_Default(t *testing.T) {
 	s := &ServerSettings{}
-	if got := s.StatsPersistTTL(); got != DefaultStatsPersistTTL {
-		t.Errorf("StatsPersistTTL = %d, want %d", got, DefaultStatsPersistTTL)
+	if got := s.StatsPersistInterval(); got != DefaultStatsPersistInterval {
+		t.Errorf("StatsPersistInterval = %d, want %d", got, DefaultStatsPersistInterval)
 	}
 }
 

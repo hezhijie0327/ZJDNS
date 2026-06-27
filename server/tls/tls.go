@@ -12,7 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
-	cryptotls "gitlab.com/go-extension/tls"
+	eTLS "gitlab.com/go-extension/tls"
 	"math/big"
 	"net"
 	"net/http"
@@ -60,8 +60,8 @@ type DNSHandler interface {
 type Server struct {
 	cfg           Config
 	handler       DNSHandler
-	tlsConfig     *cryptotls.Config // TCP-based TLS (DoT, DoH) with KTLS
-	quicTLSConfig *stdtls.Config    // QUIC-based protocols (DoQ, DoH3)
+	tlsConfig     *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
+	quicTLSConfig *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
 	ctx           context.Context
 	cancel        context.CancelCauseFunc
 	serverGroup   *errgroup.Group
@@ -78,26 +78,26 @@ type Server struct {
 	dotIPCounts   sync.Map // IP string → *atomic.Int32, per-IP DoT connection limit
 }
 
-func generateSelfSignedCert(domain string) (cryptotls.Certificate, error) {
+func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 	caPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return cryptotls.Certificate{}, fmt.Errorf("generate CA EC key: %w", err)
+		return eTLS.Certificate{}, fmt.Errorf("generate CA EC key: %w", err)
 	}
 
 	serverPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return cryptotls.Certificate{}, fmt.Errorf("generate server EC key: %w", err)
+		return eTLS.Certificate{}, fmt.Errorf("generate server EC key: %w", err)
 	}
 
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	caSerialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		return cryptotls.Certificate{}, fmt.Errorf("generate CA serial number: %w", err)
+		return eTLS.Certificate{}, fmt.Errorf("generate CA serial number: %w", err)
 	}
 
 	serverSerialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		return cryptotls.Certificate{}, fmt.Errorf("generate server serial number: %w", err)
+		return eTLS.Certificate{}, fmt.Errorf("generate server serial number: %w", err)
 	}
 
 	caTemplate := x509.Certificate{
@@ -129,20 +129,20 @@ func generateSelfSignedCert(domain string) (cryptotls.Certificate, error) {
 
 	caCertDER, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &caPrivKey.PublicKey, caPrivKey)
 	if err != nil {
-		return cryptotls.Certificate{}, fmt.Errorf("create CA certificate: %w", err)
+		return eTLS.Certificate{}, fmt.Errorf("create CA certificate: %w", err)
 	}
 
 	caCert, err := x509.ParseCertificate(caCertDER)
 	if err != nil {
-		return cryptotls.Certificate{}, fmt.Errorf("parse CA certificate: %w", err)
+		return eTLS.Certificate{}, fmt.Errorf("parse CA certificate: %w", err)
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, &serverTemplate, caCert, &serverPrivKey.PublicKey, caPrivKey)
 	if err != nil {
-		return cryptotls.Certificate{}, fmt.Errorf("create server certificate: %w", err)
+		return eTLS.Certificate{}, fmt.Errorf("create server certificate: %w", err)
 	}
 
-	cert := cryptotls.Certificate{
+	cert := eTLS.Certificate{
 		Certificate: [][]byte{certDER},
 		PrivateKey:  serverPrivKey,
 	}
@@ -180,7 +180,7 @@ func secureClientIP(conn any) net.IP {
 // New creates a new TLS Server with the given DNS handler and configuration,
 // loading or generating the TLS certificate as specified.
 func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Server, error) {
-	var eCert cryptotls.Certificate
+	var eCert eTLS.Certificate
 	var sCert stdtls.Certificate
 	var err error
 
@@ -193,7 +193,7 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 		sCert = stdtls.Certificate{Certificate: eCert.Certificate, PrivateKey: eCert.PrivateKey}
 		log.Infof("TLS: Using self-signed certificate for domain: %s", cfg.Domain)
 	} else {
-		eCert, err = cryptotls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		eCert, err = eTLS.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load certificate: %w", err)
 		}
@@ -205,12 +205,12 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 	}
 
 	// TCP-based TLS config (DoT, DoH) with kernel TLS offload.
-	baseConfig := &cryptotls.Config{
+	baseConfig := &eTLS.Config{
 		KernelTX:         true,
 		KernelRX:         true,
-		Certificates:     []cryptotls.Certificate{eCert},
-		CurvePreferences: []cryptotls.CurveID{},
-		MinVersion:       cryptotls.VersionTLS13,
+		Certificates:     []eTLS.Certificate{eCert},
+		CurvePreferences: []eTLS.CurveID{},
+		MinVersion:       eTLS.VersionTLS13,
 	}
 
 	// QUIC-based TLS config (DoQ, DoH3) — KTLS does not apply.
@@ -225,10 +225,10 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 	// a per-handshake clone with VerifyConnection installed so the log
 	// fires once per connection across all four protocols (DoT/DoQ/DoH/DoH3).
 	tlsConfig := baseConfig.Clone()
-	tlsConfig.GetConfigForClient = func(info *cryptotls.ClientHelloInfo) (*cryptotls.Config, error) {
+	tlsConfig.GetConfigForClient = func(info *eTLS.ClientHelloInfo) (*eTLS.Config, error) {
 		remoteAddr := info.Conn.RemoteAddr().String()
 		cfg := baseConfig.Clone()
-		cfg.VerifyConnection = func(cs cryptotls.ConnectionState) error {
+		cfg.VerifyConnection = func(cs eTLS.ConnectionState) error {
 			dnsutil.LogTLSConnectionState("TLS", "handshake from", remoteAddr, cs.Version, cs.CipherSuite, cs.CurveID)
 			return nil
 		}
@@ -262,7 +262,7 @@ func (s *Server) QUICTLSConfig() *stdtls.Config {
 	return s.quicTLSConfig
 }
 
-func (s *Server) displayCertificateInfo(cert cryptotls.Certificate) {
+func (s *Server) displayCertificateInfo(cert eTLS.Certificate) {
 	if len(cert.Certificate) == 0 {
 		log.Errorf("TLS: No certificate found")
 		return

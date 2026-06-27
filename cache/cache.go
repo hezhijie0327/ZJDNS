@@ -139,24 +139,24 @@ func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDN
 	buf.Grow(resultBufferCapacity)
 	buf.WriteString(cacheKeyDNSPrefix)
 	buf.WriteString(dnsutil.NormalizeDomain(question.Name))
-	buf.WriteByte(':')
+	buf.WriteByte(byte(config.DefaultCacheKeySeparator))
 	buf.WriteString(strconv.FormatUint(uint64(question.Qtype), 10))
-	buf.WriteByte(':')
+	buf.WriteByte(byte(config.DefaultCacheKeySeparator))
 	buf.WriteString(strconv.FormatUint(uint64(question.Qclass), 10))
 	if ecs != nil {
-		buf.WriteString(":ecs:")
+		buf.WriteString(config.DefaultCacheKeyECSPrefix)
 		buf.WriteString(ecs.Address.String())
-		buf.WriteByte('/')
+		buf.WriteByte(byte(config.DefaultCacheKeyECSDelim))
 		buf.WriteString(strconv.FormatUint(uint64(ecs.SourcePrefix), 10))
 	}
 	if clientRequestedDNSSEC {
-		buf.WriteString(":dnssec")
+		buf.WriteString(config.DefaultCacheKeyDNSSECSuffix)
 	}
 	result := buf.String()
 	if len(result) > maxResultLength {
 		h := fnv.New64a()
 		h.Write([]byte(result))
-		return fmt.Sprintf("h:%x", h.Sum(nil))
+		return fmt.Sprintf(config.DefaultCacheKeyHashFormat, h.Sum(nil))
 	}
 	return result
 }

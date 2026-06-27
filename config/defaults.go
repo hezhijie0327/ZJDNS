@@ -56,11 +56,13 @@ const (
 	DefaultCookieSecretRotationInterval = 30 * time.Minute
 	DefaultECSRefreshInterval           = 15 * time.Minute
 
+	DefaultCookieSecretSize   = 32    // DNS cookie secret size in bytes
 	DefaultDNSKeyCacheTTL     = 86400 // DNSKEY record cache TTL (seconds)
 	DefaultDNSKeyCacheMinTTL  = 300   // DNSKEY cache minimum TTL (seconds)
 	DefaultMaxNSEC3Iterations = 150   // NSEC3 iteration cap (RFC 5155 §10.3)
+	DefaultPaddingBlockSize   = 468   // RFC 7830: EDNS padding block size
 
-	DefaultStatsPersistTTL = 86400 // Stats cache persist TTL (seconds)
+	DefaultStatsPersistInterval = 86400 // Stats cache persist TTL (seconds)
 
 	GroupOtherPermMask = 0077 // TLS cert/key files must be owner-only
 )
@@ -86,15 +88,29 @@ const (
 	DefaultRateLimiterMaxEntries = 10000 // Max unique client IPs tracked before rejecting new IPs
 	DefaultMinConcurrencyLimit   = 8
 
+	DefaultSocks5WriteBufSize = 1500 // MTU-sized buffer for SOCKS5 write pool
+	Socks5UDPHeaderLenIPv4    = 10   // IPv4 SOCKS5 UDP header length
+	Socks5UDPHeaderLenIPv6    = 22   // IPv6 SOCKS5 UDP header length
+	Socks5MaxAuthLen          = 255  // RFC 1929 max username/password length
+
 	DefaultTransportMax        = 32
 	DefaultTLSSessionCacheSize = 32
 	DefaultMaxIdleConns        = 100
 	DefaultMaxIdleConnsPerHost = 2
 	DefaultDoTWriteChannelSize = 64
+	DefaultTLSConnBufferSize   = 4096 // TLS connection reader buffer size
+	DefaultDoHMaxRequestSize   = 8192 // Max DoH request body size
+	DefaultPanicStackBufSize   = 8192 // Panic recovery stack trace buffer
 	DefaultDedupSweepThreshold = 1024
 
 	DefaultCacheKeyBufferSize   = 128
 	DefaultCacheKeyMaxLength    = 512
+	DefaultCacheKeyECSPrefix    = ":ecs:"
+	DefaultCacheKeyDNSSECSuffix = ":dnssec"
+	DefaultCacheKeySeparator    = ':'
+	DefaultCacheKeyECSDelim     = '/'
+	DefaultCacheKeyHashFormat   = "h:%x"
+	BytesPerMB                  = 1024 * 1024
 	DefaultCacheEvictSampleSize = 25
 	DefaultRewriteRulesCapacity = 16
 
@@ -106,12 +122,22 @@ const (
 	DefaultStatsResetInterval = 86400 // Stats reset interval (seconds)
 
 	DefaultNSLatencyTTL = 900 // NS address sort cache TTL (seconds)
+
+	DefaultDNSClass  = "IN"        // Default DNS resource record class
+	StatsPersistKey  = "__stats__" // Stats cache persistence key
+	CertSerialBitLen = 128         // X509 certificate serial number bit length
+	FallbackClientIP = "0.0.0.0"   // Fallback IP when client address is nil
+	DNSRootZone      = "."         // DNS root zone label
 )
 
 // Latency probe defaults.
 const (
 	DefaultLatencyProbeTimeout = 100 * time.Millisecond
 	DefaultInfraProbeTimeout   = 5 * time.Second
+
+	DefaultProbeUDPReadBufSize  = 512  // UDP probe read buffer
+	DefaultProbeICMPDataSize    = 56   // ICMP probe payload size
+	DefaultProbeICMPReadBufSize = 1500 // ICMP read buffer (MTU)
 
 	DefaultProbePortDNS   = 53
 	DefaultProbePortHTTP  = 80
@@ -143,14 +169,21 @@ const (
 	ProtoPing      = "ping"
 	ProtoICMP      = "icmp"
 	ProtoHTTPPlain = "http"
+
+	// User-facing protocol aliases (map to config file values).
+	ProtoDOT    = "dot"     // DoT user config alias
+	ProtoDOQ    = "doq"     // DoQ user config alias
+	ProtoDOH    = "doh"     // DoH user config alias
+	ProtoDOH3   = "doh3"    // DoH3 user config alias
+	ProtoTLSTCP = "tcp-tls" // dns.Client.Net for TLS-wrapped TCP
 )
 
 // ALPN protocol identifiers for secure DNS transports.
 var (
-	NextProtoDOT  = []string{"dot"}
-	NextProtoDOH  = []string{"h2"}
-	NextProtoDOQ  = []string{"doq"}
-	NextProtoDOH3 = []string{"h3"}
+	NextProtoDOT  = []string{"dot"} // RFC 7858: DNS-over-TLS
+	NextProtoDOH  = []string{"h2"}  // RFC 8484: DNS-over-HTTPS (HTTP/2)
+	NextProtoDOQ  = []string{"doq"} // RFC 9250: DNS-over-QUIC
+	NextProtoDOH3 = []string{"h3"}  // DNS-over-HTTP/3
 )
 
 // ProjectName is the application name, set at build time.

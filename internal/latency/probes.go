@@ -60,33 +60,33 @@ func measureIPLatency(ctx context.Context, bgCtx context.Context, ip net.IP, ste
 
 func probeAddress(ctx context.Context, bgCtx context.Context, ip net.IP, step config.LatencyProbeStep, httpPool *httpClientPool) error {
 	switch step.Protocol {
-	case "ping", "icmp":
+	case config.ProtoPing, config.ProtoICMP:
 		return probeICMP(ctx, ip)
-	case "tcp":
+	case config.ProtoTCP:
 		port := step.Port
 		if port <= 0 {
 			port = config.DefaultProbePortHTTP
 		}
 		return probeTCP(ctx, ip, port)
-	case "udp":
+	case config.ProtoUDP:
 		port := step.Port
 		if port <= 0 {
 			port = config.DefaultProbePortDNS
 		}
 		return probeUDP(ctx, ip, port)
-	case "http":
+	case config.ProtoHTTPPlain:
 		port := step.Port
 		if port <= 0 {
 			port = config.DefaultProbePortHTTP
 		}
 		return probeHTTP(ctx, ip, port, false, false, httpPool)
-	case "https":
+	case config.ProtoHTTP:
 		port := step.Port
 		if port <= 0 {
 			port = config.DefaultProbePortHTTPS
 		}
 		return probeHTTP(ctx, ip, port, true, false, httpPool)
-	case "http3":
+	case config.ProtoHTTP3:
 		port := step.Port
 		if port <= 0 {
 			port = config.DefaultProbePortHTTPS

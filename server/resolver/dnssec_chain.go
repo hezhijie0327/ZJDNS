@@ -2,11 +2,11 @@ package resolver
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/miekg/dns"
 
-	"fmt"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"

@@ -85,7 +85,7 @@ func New() *Client {
 
 	tlsClient := &dns.Client{
 		Timeout: config.DefaultDNSQueryTimeout,
-		Net:     "tcp-tls",
+		Net:     config.ProtoTLSTCP,
 	}
 
 	dohTransport := &http.Transport{
@@ -280,13 +280,13 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 	}
 
 	switch protocol {
-	case "dot", "tls":
+	case config.ProtoDOT, config.ProtoTLS:
 		return c.executeTLS(ctx, msg, server, c.eTLSClientConfig(server))
-	case "doq", "quic":
+	case config.ProtoDOQ, config.ProtoQUIC:
 		return c.executeQUIC(ctx, msg, server, c.stdTLSConfig(server))
-	case "doh", "https":
+	case config.ProtoDOH, config.ProtoHTTP:
 		return c.executeDoH(ctx, msg, server, c.eTLSClientConfig(server))
-	case "doh3", "http3":
+	case config.ProtoDOH3, config.ProtoHTTP3:
 		return c.executeDoH3(ctx, msg, server, c.stdTLSConfig(server))
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
