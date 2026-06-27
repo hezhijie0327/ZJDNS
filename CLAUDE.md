@@ -437,7 +437,8 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   enabled. `server/tls/tls.go` holds dual configs from the same cert — go-extension
   for TCP listeners, crypto/tls for QUIC. Client uses `DialTLSContext → eTLS.Client()`.
   KTLS is silently skipped on non-Linux or when the kernel
-  TLS module is absent; QUIC (DoQ/DoH3) does not support KTLS (requires TCP).
+  TLS module is absent (load via `modprobe tls` on the host).
+  QUIC (DoQ/DoH3) does not support KTLS (requires TCP).
 - **SOCKS5 proxy support** (`server/client/socks5.go`): Per-upstream optional SOCKS5 proxy
   (`socks5://[user:pass@]host:port`) routes all outbound DNS queries through the proxy.
   TCP CONNECT for stream protocols (TCP, DoT, DoH) and UDP ASSOCIATE for datagram protocols

@@ -524,20 +524,24 @@ func (c *socks5PacketConn) SetWriteDeadline(t time.Time) error {
 
 // buildSOCKS5Request builds a SOCKS5 request: VER | CMD | RSV | ATYP | ADDR | PORT.
 func buildSOCKS5Request(cmd byte, host string, port int) []byte {
+	if port < 0 || port > 65535 {
+		return nil
+	}
+	uport := uint16(port)
 	if ip := net.ParseIP(host); ip != nil {
 		if ip4 := ip.To4(); ip4 != nil {
 			buf := make([]byte, 10) // 4 + 4 + 2
 			buf[0], buf[1], buf[2] = socks5Version, cmd, 0x00
 			buf[3] = socks5ATYPIPv4
 			copy(buf[4:8], ip4)
-			binary.BigEndian.PutUint16(buf[8:10], uint16(port))
+			binary.BigEndian.PutUint16(buf[8:10], uport)
 			return buf
 		}
 		buf := make([]byte, 22) // 4 + 16 + 2
 		buf[0], buf[1], buf[2] = socks5Version, cmd, 0x00
 		buf[3] = socks5ATYPIPv6
 		copy(buf[4:20], ip)
-		binary.BigEndian.PutUint16(buf[20:22], uint16(port))
+		binary.BigEndian.PutUint16(buf[20:22], uport)
 		return buf
 	}
 
@@ -547,7 +551,7 @@ func buildSOCKS5Request(cmd byte, host string, port int) []byte {
 	buf[3] = socks5ATYPDomain
 	buf[4] = byte(len(host))
 	copy(buf[5:], host)
-	binary.BigEndian.PutUint16(buf[5+len(host):], uint16(port))
+	binary.BigEndian.PutUint16(buf[5+len(host):], uport)
 	return buf
 }
 
