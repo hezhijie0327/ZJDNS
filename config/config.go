@@ -60,7 +60,6 @@ type HTTPSSettings struct {
 type FeatureFlags struct {
 	HijackProtection bool                  `json:"hijack_protection"`
 	DNSSECEnforce    bool                  `json:"dnssec_enforce,omitempty"`
-	EnforceTLSVerify bool                  `json:"enforce_tls_verify,omitempty"`
 	DDR              DDRSettings           `json:"ddr,omitempty"`
 	ECS              edns.DefaultECSConfig `json:"ecs_subnet,omitempty"`
 	Cache            CacheSettings         `json:"cache,omitempty"`
@@ -606,15 +605,24 @@ func (cm *Loader) addDDRRecords(cfg *ServerConfig) {
 }
 
 func (cm *Loader) addChaosRecord(cfg *ServerConfig) {
-	// Only expose the project name via CHAOS queries. Never expose the
-	// full version string, build commit hash, Go runtime version, or system
-	// hostname — these enable fingerprinting and targeted attacks against
-	// specific versions.
-	version := ProjectName
+	// version.server / version.bind expose the real server version by design —
+	// config.Version is set by main.go from getVersion() before LoadConfig runs.
+	// this helps operators identify which ZJDNS instance is serving a query.
+	version := Version
+	if version == "" || version == "dev" {
+		version = ProjectName
+	}
+
+	// id.server / hostname.bind try the system hostname first; fall back to
+	// ProjectName when the hostname cannot be determined.
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = ProjectName
+	}
 
 	chaosRecords := map[string]string{
-		"id.server":      ProjectName,
-		"hostname.bind":  ProjectName,
+		"id.server":      hostname,
+		"hostname.bind":  hostname,
 		"version.server": version,
 		"version.bind":   version,
 	}

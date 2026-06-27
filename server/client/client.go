@@ -191,7 +191,7 @@ func (c *Client) getProxyDialer(server *config.UpstreamServer) *Socks5Dialer {
 
 	d, err := NewSocks5Dialer(server.Proxy, c.timeout)
 	if err != nil {
-		log.Warnf("UPSTREAM: invalid proxy %q for %s: %v", server.Proxy, server.Address, err)
+		log.Warnf("UPSTREAM: invalid proxy %s for %s: %v", d.SafeURL(), server.Address, err)
 		// Cache nil so we don't retry parsing the same bad URL.
 		c.proxyDialers[server.Proxy] = nil
 		return nil

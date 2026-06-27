@@ -172,6 +172,17 @@ func (d *Socks5Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error)
 	return d.wrapPacketConn(), nil
 }
 
+// SafeURL returns the proxy URL with password redacted for logging.
+func (d *Socks5Dialer) SafeURL() string {
+	if d.password != "" {
+		return fmt.Sprintf("socks5://%s:***@%s", d.username, d.proxyAddr)
+	}
+	if d.username != "" {
+		return fmt.Sprintf("socks5://%s@%s", d.username, d.proxyAddr)
+	}
+	return "socks5://" + d.proxyAddr
+}
+
 // Close terminates the UDP relay control connection and releases resources.
 // Pending UDP operations will fail after Close.
 func (d *Socks5Dialer) Close() error {
@@ -408,37 +419,47 @@ var socks5ReadPool = sync.Pool{
 // a SOCKS5 UDP header on write and unwrapped on read.
 // ---------------------------------------------------------------------------
 
+// socks5ReadBufPool reuses 64 KB buffers for SOCKS5 UDP reads, avoiding a
+// per-connection 64 KB heap allocation from an embedded array.
+var socks5ReadBufPool = sync.Pool{
+	New: func() any { b := make([]byte, 65535); return &b },
+}
+
 type socks5PacketConn struct {
-	conn  *net.UDPConn
-	cache [65535]byte // reusable read buffer
+	conn *net.UDPConn
 }
 
 // ReadFrom reads a datagram from the relay, strips the SOCKS5 UDP header,
 // and returns the payload with the real source address.
 func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	nr, err := c.conn.Read(c.cache[:])
+	buf := socks5ReadBufPool.Get().(*[]byte)
+	defer socks5ReadBufPool.Put(buf)
+
+	nr, err := c.conn.Read((*buf)[:])
 	if err != nil {
 		return 0, nil, fmt.Errorf("socks5: read: %w", err)
 	}
+
+	data := (*buf)[:nr]
 
 	// SOCKS5 UDP header: RSV(2) | FRAG(1) | ATYP(1) | DST.ADDR(var) | DST.PORT(2)
 	if nr < 10 {
 		return 0, nil, fmt.Errorf("socks5: UDP datagram too short: %d bytes", nr)
 	}
-	if c.cache[0] != 0x00 || c.cache[1] != 0x00 {
+	if data[0] != 0x00 || data[1] != 0x00 {
 		return 0, nil, fmt.Errorf("socks5: invalid reserved bytes in UDP reply")
 	}
-	if c.cache[2] != 0x00 {
+	if data[2] != 0x00 {
 		return 0, nil, fmt.Errorf("socks5: fragmented UDP datagram not supported")
 	}
 
-	atyp := c.cache[3]
-	srcAddr, headerLen, err := parseAddressFromBytes(c.cache[4:nr], atyp)
+	atyp := data[3]
+	srcAddr, headerLen, err := parseAddressFromBytes(data[4:nr], atyp)
 	if err != nil {
 		return 0, nil, fmt.Errorf("socks5: parse UDP header: %w", err)
 	}
 
-	payload := c.cache[4+headerLen : nr]
+	payload := data[4+headerLen : nr]
 	if len(p) < len(payload) {
 		return 0, nil, io.ErrShortBuffer
 	}

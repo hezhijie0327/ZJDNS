@@ -123,11 +123,11 @@ const (
 
 	DefaultNSLatencyTTL = 900 // NS address sort cache TTL (seconds)
 
-	DefaultDNSClass  = "IN"        // Default DNS resource record class
-	StatsPersistKey  = "__stats__" // Stats cache persistence key
-	CertSerialBitLen = 128         // X509 certificate serial number bit length
-	FallbackClientIP = "0.0.0.0"   // Fallback IP when client address is nil
-	DNSRootZone      = "."         // DNS root zone label
+	DefaultDNSClass  = "IN"      // Default DNS resource record class
+	StatsPersistKey  = "stats:"  // Stats cache persistence key (matches dns:/dnskey: convention)
+	CertSerialBitLen = 128       // X509 certificate serial number bit length
+	FallbackClientIP = "0.0.0.0" // Fallback IP when client address is nil
+	DNSRootZone      = "."       // DNS root zone label
 )
 
 // Latency probe defaults.

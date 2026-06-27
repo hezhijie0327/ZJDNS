@@ -247,7 +247,7 @@ func TestNew_RestoresFromCache(t *testing.T) {
 	entry, _ := sc.ToCacheEntry()
 	// Use a simple in-memory store to simulate cache persistence
 	mc := cache.New(config.CacheSettings{Size: config.DefaultCacheSize})
-	mc.SetEntry("__stats__", entry)
+	mc.SetEntry(config.StatsPersistKey, entry)
 
 	sc2 := New(testConfig(), mc)
 	snap := sc2.Snapshot()
