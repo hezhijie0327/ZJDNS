@@ -2,6 +2,7 @@
 package dnsutil
 
 import (
+	"crypto/tls"
 	"encoding/binary"
 	"io"
 	"net"
@@ -216,4 +217,13 @@ func ReadDNSFrame(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	return data, nil
+}
+
+// LogTLSConnectionState emits a debug-level log of the negotiated TLS version,
+// key exchange group, and cipher suite. It is shared by both the upstream client
+// (role="UPSTREAM", dir="negotiated for") and the server-side TLS listener
+// (role="TLS", dir="handshake from").
+func LogTLSConnectionState(cs tls.ConnectionState, role, dir, addr string) {
+	log.Debugf("%s: TLS %s %s — version(codepoint)=0x%04X, group(name)=%s, cipher(codepoint)=0x%04X",
+		role, dir, addr, cs.Version, cs.CurveID, cs.CipherSuite)
 }

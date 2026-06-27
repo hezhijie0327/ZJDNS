@@ -220,9 +220,13 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 	tlsConfig := &tls.Config{
 		CurvePreferences:   []tls.CurveID{},
 		InsecureSkipVerify: server.SkipTLSVerify,
-		MinVersion:         tls.VersionTLS13,
+		MinVersion:         tls.VersionTLS12,
 		ServerName:         server.ServerName,
 		ClientSessionCache: c.SessionCache,
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			dnsutil.LogTLSConnectionState(cs, "UPSTREAM", "negotiated for", server.Address)
+			return nil
+		},
 	}
 
 	if server.SkipTLSVerify {

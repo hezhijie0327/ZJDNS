@@ -194,10 +194,25 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 		log.Infof("TLS: Using certificate from files: %s, %s", cfg.CertFile, cfg.KeyFile)
 	}
 
-	tlsConfig := &cryptotls.Config{
+	baseConfig := &cryptotls.Config{
 		Certificates:     []cryptotls.Certificate{cert},
 		CurvePreferences: []cryptotls.CurveID{},
 		MinVersion:       cryptotls.VersionTLS13,
+	}
+
+	// Wrap baseConfig with GetConfigForClient to log negotiated TLS
+	// parameters after each client handshake. GetConfigForClient returns
+	// a per-handshake clone with VerifyConnection installed so the log
+	// fires once per connection across all four protocols (DoT/DoQ/DoH/DoH3).
+	tlsConfig := baseConfig.Clone()
+	tlsConfig.GetConfigForClient = func(info *cryptotls.ClientHelloInfo) (*cryptotls.Config, error) {
+		remoteAddr := info.Conn.RemoteAddr().String()
+		cfg := baseConfig.Clone()
+		cfg.VerifyConnection = func(cs cryptotls.ConnectionState) error {
+			dnsutil.LogTLSConnectionState(cs, "TLS", "handshake from", remoteAddr)
+			return nil
+		}
+		return cfg, nil
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
