@@ -658,14 +658,13 @@ func GenerateExampleConfig() string {
 	}
 
 	cfg.Upstream = []UpstreamServer{
-		{Address: "223.5.5.5:53", Protocol: "tcp"},
+		{Address: "223.5.5.5:53", Protocol: "tcp", Proxy: "socks5://127.0.0.1:1080"},
 		{Address: "223.6.6.6:53", Protocol: "udp"},
 		{Address: "223.5.5.5:853", Protocol: "tls", ServerName: "dns.alidns.com"},
 		{Address: "223.6.6.6:853", Protocol: "quic", ServerName: "dns.alidns.com", SkipTLSVerify: true},
 		{Address: "https://223.5.5.5:443/dns-query", Protocol: "https", ServerName: "dns.alidns.com", Match: []string{"mixed"}},
 		{Address: "https://223.6.6.6:443/dns-query", Protocol: "http3", ServerName: "dns.alidns.com", Match: []string{"!mixed"}},
 		{Address: RecursiveIndicator},
-		{Address: "8.8.8.8:53", Protocol: "tcp", Proxy: "socks5://127.0.0.1:1080"},
 	}
 
 	cfg.Fallback = []UpstreamServer{

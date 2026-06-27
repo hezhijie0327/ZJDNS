@@ -79,7 +79,8 @@
   "upstream": [
     {
       "address": "223.5.5.5:53",
-      "protocol": "tcp"
+      "protocol": "tcp",
+      "proxy": "socks5://127.0.0.1:1080"
     },
     {
       "address": "223.6.6.6:53",
@@ -110,11 +111,6 @@
     },
     {
       "address": "builtin_recursive"
-    },
-    {
-      "address": "8.8.8.8:53",
-      "protocol": "tcp",
-      "proxy": "socks5://127.0.0.1:1080"
     }
   ],
   "fallback": [
