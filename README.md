@@ -26,7 +26,7 @@
 - **DNS 劫持防护**：根/TLD 越权响应检测，UDP→TCP 自动回退
 - **DNSSEC 密码学验证**：递归模式完整信任链（根 KSK→TLD DS→权威 DNSKEY→RRSIG），NSEC/NSEC3 已验证否定验证（RFC 5155），上游模式 AD 标志信任，`dnssec_enforce` 开关控制 bogus 响应拒绝，EDE 错误码传播
 - **ECS 支持**：EDNS 客户端子网，支持 auto/auto_v4/auto_v6 自动检测
-- **DNS Cookie**：HMAC-SHA256 服务端 Cookie，密钥无缝轮换
+- **DNS Cookie**：HMAC-SHA256 服务端 Cookie，密钥无缝轮换，入口早期验证 (RFC 7873)
 - **扩展 DNS 错误 (EDE)**：24 种 EDE 代码，DNSSEC 失败自动映射（EDE 6/9/10）
 - **路径安全**：`filepath.Clean` + 绝对路径解析 + 符号链接拒绝 + 危险目录拦截
 
@@ -112,10 +112,9 @@ zjdns/
 │   ├── pool/pool.go                 # sync.Pool 对象池 (MessagePool, BufferPool)
 │   ├── dnsutil/dnsutil.go           # DNS 工具函数 (域名规范化、Panic 恢复等)
 │   ├── ipdetect/ipdetect.go         # 公网 IP 检测 (ECS 自动配置)
-│   └── latency/                     # 统一延迟探测引擎 (4 文件)
-│       ├── prober.go                # Prober 引擎 + 泛型排序 + 去重 + 并发控制
+│   └── latency/                     # 统一延迟探测引擎 (3 文件)
+│       ├── prober.go                # Prober 引擎 + 泛型排序 + 并发控制
 │       ├── probes.go                # ICMP (随机 ID)/TCP/UDP (通用)/HTTP/HTTPS/HTTP3
-│       ├── dedup.go                 # FNV hash 去重缓存 (TTL-based)
 │       └── httppool.go              # HTTP/HTTPS/HTTP3 客户端池 (按协议端口缓存)
 ├── config/                          # 配置系统 (2 文件)
 │   ├── config.go                    # 类型定义 + 加载 + 校验 + DDR/CHAOS
@@ -144,7 +143,7 @@ zjdns/
     │   ├── doh.go                   # DoH 查询 (HTTP/2)
     │   ├── doh3.go                  # DoH3 查询 (HTTP/3)
     │   ├── doh_request.go           # DoH/DoH3 共享请求构建
-    │   ├── socks5.go                # SOCKS5 代理客户端 (RFC 1928/1929, TCP+UDP)
+    │   ├── socks5.go                # SOCKS5 代理客户端 (RFC 1928/1929, TCP+UDP, SafeURL 密码脱敏)
     │   ├── ktls.go                  # KTLS 配置构建 + DoT 拨号/TLS 交换
     │   └── pool/                    # 连接池子包
     │       ├── tcp.go               # RFC 7766 TCP/DoT 流水线连接池
@@ -175,7 +174,7 @@ zjdns/
 ```
 1. Server.processDNSQuery() — 入口
 2. rewrite.Evaluator.Evaluate() — 重写规则匹配
-3. edns.Handler — 解析 ECS/Cookie/EDE
+3. edns.Handler — 解析 ECS/Cookie/EDE，Cookie 入口验证
 4. cache.Store.Get() — 命中 → CIDR 过滤 → 响应
 5. resolver.Resolver.Query() — 上游(首胜) 或 递归
 6. security.Guard — DNSSEC 验证 + 劫持检测
