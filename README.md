@@ -14,8 +14,8 @@
 - **递归 DNS 解析**：完整递归查询算法，从 13 组根服务器逐步解析至 TLD 和权威服务器
 - **上游 DNS 转发**：多上游并发查询 + 首胜策略（First-Win），降低延迟
 - **混合模式**：可同时配置上游 DNS 和内置递归解析器（`builtin_recursive`）
+- **SOCKS5 代理**：每上游可选 SOCKS5 代理（TCP CONNECT + UDP ASSOCIATE），规避 DNS 屏蔽/劫持，所有协议 + 递归模式全覆盖
 - **TCP/DoT/DoQ 连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生 stream 复用，连接失败回退单次连接
-- **智能协议协商**：UDP 截断自动回退 TCP
 - **CNAME 链解析**：多级 CNAME 追踪，防循环（最大 16 级）
 - **A/AAAA 延迟探测**：统一引擎 + 多协议（ping/tcp/udp/http/https/http3）速度检测，按最快顺序重排，去重缓存避免重复探测，UDP 支持任意端口通用检测
 - **DNS 重写**：精确域名匹配 + 客户端 IP 过滤 + 自定义响应码
@@ -79,6 +79,7 @@
 
 | RFC                                                     | 标准名称                                   | 实现功能                                 |
 | ------------------------------------------------------- | ------------------------------------------ | ---------------------------------------- |
+| [RFC 1928](https://www.rfc-editor.org/rfc/rfc1928.html) | SOCKS Protocol Version 5                   | SOCKS5 代理客户端                        |
 | [RFC 3597](https://www.rfc-editor.org/rfc/rfc3597.html) | Handling Unknown DNS RR Types              | 未知记录类型回退                         |
 | [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033.html) | DNS Security Introduction and Requirements | DNSSEC 基础                              |
 | [RFC 4034](https://www.rfc-editor.org/rfc/rfc4034.html) | Resource Records for DNSSEC                | RRSIG/NSEC/DNSKEY/DS 类型                |

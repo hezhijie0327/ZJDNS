@@ -102,6 +102,7 @@ type UpstreamServer struct {
 	ServerName    string   `json:"server_name,omitempty"`
 	SkipTLSVerify bool     `json:"skip_tls_verify,omitempty"`
 	Match         []string `json:"match,omitempty"`
+	Proxy         string   `json:"proxy,omitempty"` // socks5://[user:pass@]host:port
 }
 
 // RewriteRule defines a DNS rewrite rule with synthetic response, client
@@ -334,6 +335,24 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 		protocol := strings.ToLower(server.Protocol)
 		if dnsutil.IsSecureProtocol(protocol) && server.ServerName == "" {
 			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
+		}
+
+		if server.Proxy != "" {
+			u, err := url.Parse(server.Proxy)
+			if err != nil {
+				return fmt.Errorf("upstream server %d proxy URL invalid: %w", i, err)
+			}
+			if u.Scheme != "socks5" {
+				return fmt.Errorf("upstream server %d proxy scheme must be socks5 (got %q)", i, u.Scheme)
+			}
+			if u.Hostname() == "" {
+				return fmt.Errorf("upstream server %d proxy host required", i)
+			}
+			if p := u.Port(); p != "" {
+				if port, err := strconv.Atoi(p); err != nil || port < 1 || port > 65535 {
+					return fmt.Errorf("upstream server %d proxy port invalid: %s", i, p)
+				}
+			}
 		}
 
 		for _, matchTag := range server.Match {
@@ -646,6 +665,7 @@ func GenerateExampleConfig() string {
 		{Address: "https://223.5.5.5:443/dns-query", Protocol: "https", ServerName: "dns.alidns.com", Match: []string{"mixed"}},
 		{Address: "https://223.6.6.6:443/dns-query", Protocol: "http3", ServerName: "dns.alidns.com", Match: []string{"!mixed"}},
 		{Address: RecursiveIndicator},
+		{Address: "8.8.8.8:53", Protocol: "tcp", Proxy: "socks5://127.0.0.1:1080"},
 	}
 
 	cfg.Fallback = []UpstreamServer{

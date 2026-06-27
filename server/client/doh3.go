@@ -63,11 +63,11 @@ func (c *Client) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.U
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
 	}
 
-	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify)
+	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 
 	client, isCached := c.getDoH3Client(key)
 	if !isCached {
-		client = c.createDoH3Client(key, parsedURL.Host, tlsConfig)
+		client = c.createDoH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 	}
 
 	// First attempt with the cached client.
@@ -98,7 +98,7 @@ func (c *Client) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.U
 			}
 			c.doh3TransportMu.Unlock()
 
-			client = c.createDoH3Client(key, parsedURL.Host, tlsConfig)
+			client = c.createDoH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 			resp, err = executeDoHHTTPRequest(ctx, msg, parsedURL, client)
 			if err == nil {
 				return resp, nil
@@ -128,7 +128,7 @@ func (c *Client) getDoH3Client(key string) (*http.Client, bool) {
 	return client, ok
 }
 
-func (c *Client) createDoH3Client(key, host string, tlsConfig *tls.Config) *http.Client {
+func (c *Client) createDoH3Client(key, host, proxyURL string, tlsConfig *tls.Config) *http.Client {
 	c.doh3TransportMu.Lock()
 	defer c.doh3TransportMu.Unlock()
 
@@ -152,6 +152,12 @@ func (c *Client) createDoH3Client(key, host string, tlsConfig *tls.Config) *http
 
 	quicCfg := c.getQUICConfig(key, tlsConfig.InsecureSkipVerify)
 
+	// Resolve proxy dialer once, outside the Dial closure.
+	var proxyDialer *Socks5Dialer
+	if proxyURL != "" {
+		proxyDialer = c.getProxyDialer(&config.UpstreamServer{Proxy: proxyURL})
+	}
+
 	transport := &http3Transport{
 		baseTransport: &http3.Transport{
 			Dial: func(ctx context.Context, _ string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
@@ -160,6 +166,17 @@ func (c *Client) createDoH3Client(key, host string, tlsConfig *tls.Config) *http
 				cpy := quicCfg.Clone()
 				if cfg != nil {
 					cpy.Tracer = cfg.Tracer
+				}
+				if proxyDialer != nil {
+					pconn, err := proxyDialer.ListenPacket(ctx)
+					if err != nil {
+						return nil, fmt.Errorf("proxy ListenPacket: %w", err)
+					}
+					remoteAddr, err := net.ResolveUDPAddr("udp", host)
+					if err != nil {
+						return nil, fmt.Errorf("resolve %s: %w", host, err)
+					}
+					return quic.Dial(ctx, pconn, remoteAddr, tlsCfg, cpy)
 				}
 				return quic.DialAddrEarly(ctx, host, tlsCfg, cpy)
 			},

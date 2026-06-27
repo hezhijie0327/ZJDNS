@@ -2,7 +2,7 @@ package config
 
 import "time"
 
-// Network ports, paths, and probe port numbers.
+// Network ports and paths.
 const (
 	DefaultDNSPort   = "53"
 	DefaultDOTPort   = "853"
@@ -10,10 +10,6 @@ const (
 	DefaultPprofPort = "6060"
 	DefaultQueryPath = "/dns-query"
 	DefaultPprofPath = "/debug/pprof/"
-
-	DefaultProbePortDNS   = 53
-	DefaultProbePortHTTP  = 80
-	DefaultProbePortHTTPS = 443
 )
 
 // Cache sizing, TTL, and serve-stale parameters.
@@ -34,8 +30,6 @@ const (
 	DefaultDNSQueryTimeout   = 10 * time.Second // RFC 8767 §4.2
 	DefaultBackgroundTimeout = 10 * time.Second // Bounded wait for background tasks
 
-	DefaultLatencyProbeTimeout   = 100 * time.Millisecond
-	DefaultInfraProbeTimeout     = 5 * time.Second
 	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
 	DefaultSweepInterval         = 5 * time.Minute        // Periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 10 * time.Minute       // Stale TCP write mutex cutoff
@@ -111,6 +105,22 @@ const (
 	DefaultStatsResetInterval = 86400 // Stats reset interval (seconds)
 
 	DefaultNSLatencyTTL = 900 // NS address sort cache TTL (seconds)
+)
+
+// Latency probe defaults.
+const (
+	DefaultLatencyProbeTimeout = 100 * time.Millisecond
+	DefaultInfraProbeTimeout   = 5 * time.Second
+
+	DefaultProbePortDNS   = 53
+	DefaultProbePortHTTP  = 80
+	DefaultProbePortHTTPS = 443
+)
+
+// Proxy defaults.
+const (
+	DefaultProxyScheme = "socks5"
+	DefaultProxyPort   = "1080"
 )
 
 // String sentinels and protocol identifiers.

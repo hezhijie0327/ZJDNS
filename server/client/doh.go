@@ -25,11 +25,11 @@ func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.Up
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
 	}
 
-	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify)
+	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 
 	client, isCached := c.getDoHClient(key)
 	if !isCached {
-		client = c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, tlsConfig)
+		client = c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
 	}
 
 	// First attempt with the cached client.
@@ -52,7 +52,7 @@ func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.Up
 			}
 			c.dohTransportMu.Unlock()
 
-			client = c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, tlsConfig)
+			client = c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
 			resp, err = executeDoHHTTPRequest(ctx, msg, parsedURL, client)
 			if err == nil {
 				return resp, nil
@@ -75,8 +75,12 @@ func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.Up
 	return resp, err
 }
 
-func transportKey(host, serverName string, skipVerify bool) string {
-	return fmt.Sprintf("%s|%s|%t", host, serverName, skipVerify)
+func transportKey(host, serverName string, skipVerify bool, proxyURL string) string {
+	key := fmt.Sprintf("%s|%s|%t", host, serverName, skipVerify)
+	if proxyURL != "" {
+		key += "|" + proxyURL
+	}
+	return key
 }
 
 func (c *Client) getDoHClient(key string) (*http.Client, bool) {
@@ -100,11 +104,11 @@ func shouldRetryHTTP(err error) bool {
 	return false
 }
 
-func (c *Client) createDoHClient(host, serverName string, skipVerify bool, tlsConfig *tls.Config) *http.Client {
+func (c *Client) createDoHClient(host, serverName string, skipVerify bool, proxyURL string, tlsConfig *tls.Config) *http.Client {
 	c.dohTransportMu.Lock()
 	defer c.dohTransportMu.Unlock()
 
-	key := transportKey(host, serverName, skipVerify)
+	key := transportKey(host, serverName, skipVerify, proxyURL)
 	if client, ok := c.dohTransports[key]; ok {
 		return client
 	}
@@ -122,6 +126,15 @@ func (c *Client) createDoHClient(host, serverName string, skipVerify bool, tlsCo
 
 	transport := c.dohClient.Transport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig.Clone()
+
+	// Route through SOCKS5 proxy when configured.
+	if proxyURL != "" {
+		proxyDialer := c.getProxyDialer(&config.UpstreamServer{Proxy: proxyURL})
+		if proxyDialer != nil {
+			transport.DialContext = proxyDialer.DialContext
+		}
+	}
+
 	h2Transport, err := http2.ConfigureTransports(transport)
 	if err == nil {
 		// Send HTTP/2 pings on idle connections to keep NAT bindings alive

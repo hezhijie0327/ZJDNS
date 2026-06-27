@@ -109,6 +109,7 @@ zjdns/
     │   ├── doh.go                 # DoH via HTTP/2 transport
     │   ├── doh3.go                # DoH3 via HTTP/3 transport
     │   ├── doh_request.go          # Shared DoH/DoH3 HTTP request builder
+    │   ├── socks5.go               # SOCKS5 proxy client (RFC 1928/1929, TCP+UDP)
     │   └── pool/                  # Connection pool sub-package
     │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
     │       └── quic.go            # QUIC connection pool (QUICPool, QUICConn)
@@ -201,7 +202,8 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `Prober` | `internal/latency` | Unified latency probe engine (generic sorter, dedup, HTTP pool) |
 | `Prober` | `server/latency` | Thin adapter: cache reordering, SortIPsByLatency, InitInfraProber |
 | `DedupCache` | `internal/latency` | Probe result dedup cache (FNV hash, TTL-based eviction) |
-| `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3) |
+| `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3, SOCKS5 proxy) |
+| `Socks5Dialer` | `server/client` | SOCKS5 proxy dialer (RFC 1928 TCP CONNECT + UDP ASSOCIATE, RFC 1929 auth) |
 | `Conn` | `server/client/pool` | Multiplexed TCP/DoT connection (RFC 7766) |
 | `Pool` | `server/client/pool` | TCP/DoT connection pool |
 | `QUICPool` | `server/client/pool` | QUIC connection pool |
@@ -287,6 +289,8 @@ convention.
 | `config.NextProtoDOH` | config | []string{"h2"} (ALPN for DoH) |
 | `config.NextProtoDOQ` | config | []string{"doq"} (ALPN for DoQ) |
 | `config.NextProtoDOH3` | config | []string{"h3"} (ALPN for DoH3) |
+| `config.DefaultProxyScheme` | config | "socks5" (SOCKS5 proxy scheme) |
+| `config.DefaultProxyPort` | config | "1080" (SOCKS5 proxy default port) |
 | `config.DefaultProbePortDNS` | config | 53 (latency probe DNS port) |
 | `config.DefaultProbePortHTTP` | config | 80 (latency probe HTTP port) |
 | `config.DefaultProbePortHTTPS` | config | 443 (latency probe HTTPS port) |
@@ -427,6 +431,12 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   from `doqIPCounts` every 5 minutes to prevent unbounded map growth.
 - **pprof fix**: Added `_ "net/http/pprof"` import so the pprof HTTP server
   actually registers its debug endpoints on `http.DefaultServeMux`.
+- **SOCKS5 proxy support** (`server/client/socks5.go`): Per-upstream optional SOCKS5 proxy
+  (`socks5://[user:pass@]host:port`) routes all outbound DNS queries through the proxy.
+  TCP CONNECT for stream protocols (TCP, DoT, DoH) and UDP ASSOCIATE for datagram protocols
+  (UDP, DoQ, DoH3). Connected UDP socket to relay (mosdns-x pattern) avoids stray datagrams.
+  Pool keys include proxy URL for isolation. Built-in recursive resolver also goes through
+  proxy when `builtin_recursive` upstream has `proxy` set. Zero overhead on non-proxy path.
 - **Shared DNS frame prefix**: `dnsutil.DNSFramePrefixLen = 2` is the canonical
   constant for the 2-byte DNS-over-TCP/DoT/DoQ length prefix (RFC 1035 §4.2.2,
   RFC 9250). All frame read/write code in `dot.go`, `doq.go` (server+client),

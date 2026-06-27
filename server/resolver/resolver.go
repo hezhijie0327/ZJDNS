@@ -111,6 +111,8 @@ type Resolver struct {
 	DNSSECEnforce   bool
 	lastUpstreamEDE atomic.Pointer[edns.EDEOption] // EDE from upstream response for passthrough
 	cache           cache.Store                    // DNS response cache for NS A/AAAA lookups
+
+	recursiveProxyURL string // proxy for recursive mode (from builtin_recursive upstream)
 }
 
 // Validator holds the DNSSEC and hijack detection components for response
@@ -159,6 +161,9 @@ func (r *Resolver) InitServers(servers, fallback []config.UpstreamServer) {
 		if s.Protocol == "" {
 			s.Protocol = config.ProtoUDP
 		}
+		if s.IsRecursive() && s.Proxy != "" {
+			r.recursiveProxyURL = s.Proxy
+		}
 		active = append(active, s)
 	}
 	r.upstream.store(active)
@@ -168,6 +173,9 @@ func (r *Resolver) InitServers(servers, fallback []config.UpstreamServer) {
 		s := &fallback[i]
 		if s.Protocol == "" {
 			s.Protocol = config.ProtoUDP
+		}
+		if s.IsRecursive() && s.Proxy != "" && r.recursiveProxyURL == "" {
+			r.recursiveProxyURL = s.Proxy
 		}
 		fb = append(fb, s)
 	}

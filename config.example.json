@@ -110,6 +110,11 @@
     },
     {
       "address": "builtin_recursive"
+    },
+    {
+      "address": "8.8.8.8:53",
+      "protocol": "tcp",
+      "proxy": "socks5://127.0.0.1:1080"
     }
   ],
   "fallback": [
