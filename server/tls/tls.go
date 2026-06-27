@@ -261,10 +261,6 @@ func (s *Server) QUICTLSConfig() *stdtls.Config {
 	return s.quicTLSConfig
 }
 
-func (s *Server) TLSConfig() *cryptotls.Config {
-	return s.tlsConfig
-}
-
 func (s *Server) displayCertificateInfo(cert cryptotls.Certificate) {
 	if len(cert.Certificate) == 0 {
 		log.Errorf("TLS: No certificate found")

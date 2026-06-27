@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"testing"
-	"time"
 
 	"zjdns/config"
 )
@@ -80,31 +79,6 @@ func TestProbeIPs_LoopbackPrivate(t *testing.T) {
 	// Since all are unprobeable, order should be unchanged.
 }
 
-func TestHashIPs(t *testing.T) {
-	ips1 := []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8")}
-	ips2 := []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8")}
-	ips3 := []net.IP{net.ParseIP("8.8.8.8"), net.ParseIP("1.1.1.1")}
-
-	h1 := hashIPs(ips1)
-	h2 := hashIPs(ips2)
-	h3 := hashIPs(ips3)
-
-	if h1 != h2 {
-		t.Errorf("same IPs in same order should produce same hash: %x != %x", h1, h2)
-	}
-	if h1 == h3 {
-		t.Errorf("same IPs in different order should produce different hash: %x == %x", h1, h3)
-	}
-}
-
-func TestHashIPs_DifferentLength(t *testing.T) {
-	h1 := hashIPs([]net.IP{net.ParseIP("1.1.1.1")})
-	h2 := hashIPs([]net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8")})
-	if h1 == h2 {
-		t.Error("different lengths should produce different hashes")
-	}
-}
-
 func TestNormalizeProbeProtocol(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"ping", "ping"},
@@ -119,52 +93,5 @@ func TestNormalizeProbeProtocol(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("normalizeProbeProtocol(%q) = %q, want %q", tt.in, got, tt.want)
 		}
-	}
-}
-
-// --- DedupCache tests ---
-
-func TestDedupCache_GetMiss(t *testing.T) {
-	dc := NewDedupCache()
-	ips, ok := dc.Get(42)
-	if ok || ips != nil {
-		t.Error("expected miss for unknown hash")
-	}
-}
-
-func TestDedupCache_SetAndGet(t *testing.T) {
-	dc := NewDedupCache()
-	ips := []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8")}
-	dc.Set(42, ips, 10*time.Second)
-
-	got, ok := dc.Get(42)
-	if !ok {
-		t.Fatal("expected cache hit")
-	}
-	if len(got) != len(ips) || !got[0].Equal(ips[0]) || !got[1].Equal(ips[1]) {
-		t.Error("cached IPs don't match")
-	}
-}
-
-func TestDedupCache_Expiry(t *testing.T) {
-	dc := NewDedupCache()
-	ips := []net.IP{net.ParseIP("1.1.1.1")}
-	dc.Set(42, ips, 1*time.Nanosecond)
-	time.Sleep(10 * time.Millisecond) // ensure expiry
-
-	_, ok := dc.Get(42)
-	if ok {
-		t.Error("expected miss for expired entry")
-	}
-}
-
-func TestDedupCache_ZeroTTL(t *testing.T) {
-	dc := NewDedupCache()
-	ips := []net.IP{net.ParseIP("1.1.1.1")}
-	dc.Set(42, ips, 0) // should use default TTL
-
-	got, ok := dc.Get(42)
-	if !ok || len(got) != 1 {
-		t.Error("zero TTL should use default dedupTTL")
 	}
 }

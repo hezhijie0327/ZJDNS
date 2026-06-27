@@ -97,7 +97,7 @@ func (p *Prober) probeAndReorder(ctx context.Context, cacheKey string, answer, a
 	}
 	records := make([]indexedRecord, 0, len(answer))
 	for i, rr := range answer {
-		if ip := extractIPAddress(rr); ip != nil {
+		if ip := dnsutil.ExtractIP(rr); ip != nil {
 			records = append(records, indexedRecord{idx: i, rr: rr, ip: ip})
 		}
 	}
@@ -185,10 +185,6 @@ func SortIPsByLatency(ctx context.Context, ips []net.IP) []net.IP {
 }
 
 // --- Shared helpers ---
-
-func extractIPAddress(rr dns.RR) net.IP {
-	return dnsutil.ExtractIP(rr)
-}
 
 func isAOrAAAA(rr dns.RR) bool {
 	if rr == nil {

@@ -35,7 +35,6 @@ const (
 	DefaultSweepInterval         = 5 * time.Minute        // Periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 10 * time.Minute       // Stale TCP write mutex cutoff
 
-	DefaultH2ReadIdleTimeout   = 30 * time.Second // HTTP/2 ping keep-alive
 	DefaultHTTPIdleConnTimeout = 5 * time.Minute  // HTTP transport idle connection
 	DefaultQUICKeepAlive       = 20 * time.Second // QUIC keep-alive period
 

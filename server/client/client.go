@@ -96,14 +96,6 @@ func New() *Client {
 		ForceAttemptHTTP2:   true,
 	}
 
-	doh3Transport := &http.Transport{
-		MaxIdleConns:        config.DefaultMaxIdleConns,
-		MaxIdleConnsPerHost: config.DefaultMaxIdleConnsPerHost,
-		IdleConnTimeout:     config.DefaultHTTPIdleConnTimeout,
-		DisableCompression:  true,
-		ForceAttemptHTTP2:   false,
-	}
-
 	return &Client{
 		timeout:   config.DefaultDNSQueryTimeout,
 		udpClient: udpClient,
@@ -114,8 +106,7 @@ func New() *Client {
 			Transport: dohTransport,
 		},
 		doh3Client: &http.Client{
-			Timeout:   config.DefaultDNSQueryTimeout,
-			Transport: doh3Transport,
+			Timeout: config.DefaultDNSQueryTimeout,
 		},
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),

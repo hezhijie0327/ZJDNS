@@ -21,7 +21,6 @@ import (
 type Prober struct {
 	steps    []config.LatencyProbeStep
 	sem      chan struct{}
-	dedup    *DedupCache
 	httpPool *httpClientPool
 	ctx      context.Context
 }
@@ -36,7 +35,6 @@ func New(steps []config.LatencyProbeStep, bgCtx context.Context) *Prober {
 	p := &Prober{
 		steps:    normalizeSteps(steps),
 		sem:      make(chan struct{}, config.DefaultMaxProbes),
-		dedup:    NewDedupCache(),
 		httpPool: newHTTPClientPool(),
 		ctx:      bgCtx,
 	}
@@ -165,20 +163,6 @@ func probeSlice[T any](
 	}
 
 	return sorted, true
-}
-
-// hashIPs produces a quick, non-cryptographic fingerprint for dedup.
-func hashIPs(ips []net.IP) uint64 {
-	var h uint64 = 14695981039346656037 // FNV offset basis
-	for _, ip := range ips {
-		for _, b := range ip {
-			h ^= uint64(b)
-			h *= 1099511628211 // FNV prime
-		}
-	}
-	// Mix in the length to distinguish [a,b] from [a,b,c].
-	h ^= uint64(len(ips)) << 32
-	return h
 }
 
 // normalizeProbeProtocol canonicalizes protocol names (e.g. "ICMP" → "ping").
