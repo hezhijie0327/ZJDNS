@@ -21,10 +21,28 @@ const DNSFramePrefixLen = 2
 
 var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 
+// MaxLabelLength is the maximum length of a single DNS label per RFC 1035 §2.3.4.
+const MaxLabelLength = 63
+
 // NormalizeDomain converts a domain name to lowercase and removes the trailing
 // dot.
 func NormalizeDomain(domain string) string {
 	return strings.ToLower(strings.TrimSuffix(domain, "."))
+}
+
+// ValidateDomainLabels checks that each label in the domain name does not exceed
+// the RFC 1035 maximum of 63 bytes. Returns true if all labels are valid.
+func ValidateDomainLabels(domain string) bool {
+	name := strings.TrimSuffix(strings.TrimSuffix(domain, "."), ".")
+	if name == "" {
+		return true // root zone
+	}
+	for _, label := range strings.Split(name, ".") {
+		if len(label) > MaxLabelLength {
+			return false
+		}
+	}
+	return true
 }
 
 // IsSecureProtocol reports whether the protocol is a secure DNS transport.

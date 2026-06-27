@@ -159,13 +159,15 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 		log.Debugf("QUERY: client IP=<unknown> query=%s type=%s", question.Name, dns.TypeToString[question.Qtype])
 	}
 
-	if len(question.Name) > config.MaxDomainLength || question.Qtype == dns.TypeANY {
+	if len(question.Name) > config.MaxDomainLength || question.Qtype == dns.TypeANY ||
+		question.Qtype == dns.TypeAXFR || question.Qtype == dns.TypeIXFR ||
+		!dnsutil.ValidateDomainLabels(question.Name) {
 		msg := pool.DefaultMessagePool.Get()
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeRefused
 
 		var ede *edns.EDEOption
-		if len(question.Name) > config.MaxDomainLength {
+		if len(question.Name) > config.MaxDomainLength || !dnsutil.ValidateDomainLabels(question.Name) {
 			ede = edns.NewEDEOption(edns.EDECodeInvalidData, "")
 		} else {
 			ede = edns.NewEDEOption(edns.EDECodeNotSupported, "")
