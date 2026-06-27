@@ -98,6 +98,7 @@ func New(settings config.CacheSettings) *MemoryCache {
 	}
 
 	log.Infof("CACHE: Memory cache enabled (budget=%d MB)", limit/(1024*1024))
+	mc.startPTRSweeper()
 	return mc
 }
 
@@ -204,6 +205,38 @@ func (mc *MemoryCache) setEntryInternal(key string, entry *CacheEntry) {
 }
 
 // Close shuts down the cache, finalizing any pending persistence write.
+// startPTRSweeper periodically removes stale PTR index entries that no longer
+// have a corresponding cache entry, preventing unbounded ptrIndex growth.
+func (mc *MemoryCache) startPTRSweeper() {
+	if mc.persistInterval <= 0 {
+		mc.persistInterval = config.DefaultCachePersistInterval
+	}
+	go func() {
+		ticker := time.NewTicker(config.DefaultSweepInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			if atomic.LoadInt32(&mc.closed) != 0 {
+				return
+			}
+			mc.mu.Lock()
+			for key, records := range mc.entryPTRs {
+				if _, ok := mc.entries[key]; !ok {
+					for _, rec := range records {
+						if domains, exists := mc.ptrIndex[rec.IP]; exists {
+							delete(domains, rec.Name)
+							if len(domains) == 0 {
+								delete(mc.ptrIndex, rec.IP)
+							}
+						}
+					}
+					delete(mc.entryPTRs, key)
+				}
+			}
+			mc.mu.Unlock()
+		}
+	}()
+}
+
 func (mc *MemoryCache) Close() error {
 	if !atomic.CompareAndSwapInt32(&mc.closed, 0, 1) {
 		return nil

@@ -75,6 +75,7 @@ type Server struct {
 	httpsListener net.Listener
 	h3Listener    *quic.EarlyListener
 	doqIPCounts   sync.Map // IP string → *atomic.Int32, per-IP DoQ connection limit
+	dotIPCounts   sync.Map // IP string → *atomic.Int32, per-IP DoT connection limit
 }
 
 func generateSelfSignedCert(domain string) (cryptotls.Certificate, error) {
@@ -343,7 +344,8 @@ func (s *Server) Start(httpsPort string) error {
 			select {
 			case <-ticker.C:
 				s.doqIPCounts.Range(func(key, value any) bool {
-					if count := value.(*atomic.Int32); count.Load() <= 0 {
+					count, ok := value.(*atomic.Int32)
+					if !ok || count == nil || count.Load() <= 0 {
 						s.doqIPCounts.Delete(key)
 					}
 					return true

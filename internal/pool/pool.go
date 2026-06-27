@@ -88,9 +88,11 @@ func (bp *BufferPool) Get() []byte {
 	return *(bufPtr.(*[]byte))
 }
 
-// Put returns a byte slice to the pool.
+// Put returns a byte slice to the pool. The slice is normalized to full
+// capacity before clearing to ensure the next Get returns the full buffer.
 func (bp *BufferPool) Put(buf []byte) {
 	if buf != nil && cap(buf) >= bp.size {
+		buf = buf[:cap(buf)]
 		clear(buf[:cap(buf)])
 		bp.pool.Put(&buf)
 	}

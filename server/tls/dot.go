@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -40,9 +41,9 @@ func (s *Server) startDOTServer() error {
 }
 
 func (s *Server) handleDOTConnections() {
-	// Per-listener connection semaphore to prevent unbounded goroutine
-	// growth from DoT connection flooding.
-	sem := make(chan struct{}, config.DefaultMaxConnsPerIP)
+	// Per-IP DoT connection limit to prevent a single client from
+	// flooding the server with connections, matching DoQ's per-IP policy.
+	const maxConnsPerIP = config.DefaultMaxConnsPerIP
 
 	for {
 		select {
@@ -61,16 +62,23 @@ func (s *Server) handleDOTConnections() {
 			continue
 		}
 
-		select {
-		case sem <- struct{}{}:
-		default:
-			_ = conn.Close()
-			log.Debugf("TLS: DoT connection limit reached, rejecting new connection")
-			continue
+		// Per-IP connection limit.
+		var ipCount *atomic.Int32
+		if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+			val, _ := s.dotIPCounts.LoadOrStore(host, new(atomic.Int32))
+			ipCount = val.(*atomic.Int32)
+			if ipCount.Add(1) > maxConnsPerIP {
+				ipCount.Add(-1)
+				_ = conn.Close()
+				log.Debugf("TLS: DoT per-IP connection limit reached for %s, rejecting", host)
+				continue
+			}
 		}
 
 		s.serverGroup.Go(func() error {
-			defer func() { <-sem }()
+			if ipCount != nil {
+				defer ipCount.Add(-1)
+			}
 			defer dnsutil.HandlePanic("DoT connection handler")
 			defer func() { _ = conn.Close() }()
 			s.handleDOTConnection(conn)

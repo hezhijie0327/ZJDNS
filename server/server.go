@@ -72,17 +72,19 @@ type rateLimitEntry struct {
 }
 
 type rateLimiter struct {
-	mu      sync.Mutex
-	entries map[string]*rateLimitEntry
-	rate    int64 // tokens per second
-	burst   int64 // max tokens
+	mu         sync.Mutex
+	entries    map[string]*rateLimitEntry
+	rate       int64 // tokens per second
+	burst      int64 // max tokens
+	maxEntries int   // max unique client IPs before rejecting new entries
 }
 
 func newRateLimiter(rate, burst int) *rateLimiter {
 	return &rateLimiter{
-		entries: make(map[string]*rateLimitEntry),
-		rate:    int64(rate),
-		burst:   int64(burst),
+		entries:    make(map[string]*rateLimitEntry),
+		maxEntries: config.DefaultRateLimiterMaxEntries,
+		rate:       int64(rate),
+		burst:      int64(burst),
 	}
 }
 
@@ -93,6 +95,11 @@ func (rl *rateLimiter) allow(key string) bool {
 	rl.mu.Lock()
 	e, ok := rl.entries[key]
 	if !ok {
+		if len(rl.entries) >= rl.maxEntries {
+			rl.mu.Unlock()
+			return false
+		}
+
 		e = &rateLimitEntry{}
 		e.tokens.Store(rl.burst - 1)
 		e.lastRefill.Store(now)
@@ -509,7 +516,11 @@ func (s *Server) shutdownServer() {
 		bgDone <- s.backgroundGroup.Wait()
 	}()
 
-	bgTimer := time.NewTimer(config.DefaultBackgroundTimeout)
+	bgWaitTimeout := config.DefaultBackgroundTimeout
+	if config.DefaultRecursiveResolveTimeout > bgWaitTimeout {
+		bgWaitTimeout = config.DefaultRecursiveResolveTimeout
+	}
+	bgTimer := time.NewTimer(bgWaitTimeout)
 	defer bgTimer.Stop()
 	select {
 	case err := <-bgDone:
@@ -527,7 +538,7 @@ func (s *Server) shutdownServer() {
 		refreshDone <- s.cacheRefreshGroup.Wait()
 	}()
 
-	refreshTimer := time.NewTimer(config.DefaultBackgroundTimeout)
+	refreshTimer := time.NewTimer(bgWaitTimeout)
 	defer refreshTimer.Stop()
 	select {
 	case err := <-refreshDone:
