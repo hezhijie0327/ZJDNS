@@ -1,7 +1,6 @@
 package security
 
 import (
-	"fmt"
 	"strings"
 	"sync/atomic"
 
@@ -13,6 +12,40 @@ import (
 
 const rootServersDomain = "root-servers.net"
 
+// Verdict classifies a DNS response from a server that claims authority for
+// a given zone.  It answers: "is this response suspicious for this zone?"
+type Verdict int
+
+const (
+	// VerdictClean means the response is consistent with the zone's
+	// authority — no hijacking detected.
+	VerdictClean Verdict = iota
+
+	// VerdictHijack means the response contains records the zone's
+	// server should never return (e.g. a root server returning an A
+	// record for www.google.com).
+	VerdictHijack
+
+	// VerdictUncertain means the zone *could* legitimately return
+	// these records, but content analysis alone cannot distinguish a
+	// real authoritative answer from a GFW-injected one.  This is the
+	// authoritative-level blind spot.
+	VerdictUncertain
+)
+
+func (v Verdict) String() string {
+	switch v {
+	case VerdictClean:
+		return "clean"
+	case VerdictHijack:
+		return "hijack"
+	case VerdictUncertain:
+		return "uncertain"
+	default:
+		return "unknown"
+	}
+}
+
 // Detector detects DNS hijacking by validating that a server does not return
 // answer records outside its delegated zone authority. Only the Answer section
 // is inspected — Authority and Additional sections carry delegation/glue data
@@ -22,11 +55,6 @@ const rootServersDomain = "root-servers.net"
 // A records for www.google.com, or a TLD server returning A records for a
 // subdomain. Detection triggers a UDP→TCP fallback which often bypasses the
 // middlebox.
-//
-// To prevent GFW-injected responses from winning the first-win race in
-// queryNameserversConcurrent, CheckResponse is called both inside the query
-// layer (rejecting hijacked responses before they reach resultChan) and in
-// the recursive loop (as a defense-in-depth check for the TCP path).
 type Detector struct {
 	enabled atomic.Bool
 }
@@ -36,89 +64,93 @@ func (d *Detector) IsEnabled() bool {
 	return d.enabled.Load()
 }
 
-// CheckResponse validates a DNS response for hijacking. Only the Answer
-// section is checked — each record must be within the answering server's
-// delegated authority.
-func (d *Detector) CheckResponse(currentDomain, queryDomain string, response *dns.Msg) (bool, string) {
+// Enable activates or deactivates hijack detection.
+func (d *Detector) Enable(enabled bool) {
+	d.enabled.Store(enabled)
+}
+
+// ── Public API ──────────────────────────────────────────────────────────────
+
+// Validate checks whether a DNS response from a server authoritative for zone
+// is legitimate for the given queryName.  Only the Answer section is inspected.
+//
+//	zone == ""        → root server
+//	isTLD(zone)       → TLD server (e.g. "com", "cn")
+//	otherwise         → authoritative server
+func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 	if !d.enabled.Load() || response == nil {
-		return true, ""
+		return VerdictClean
 	}
 
-	currentDomain = dnsutil.NormalizeDomain(currentDomain)
-	queryDomain = dnsutil.NormalizeDomain(queryDomain)
+	z := dnsutil.NormalizeDomain(zone)
+	n := dnsutil.NormalizeDomain(queryName)
 
 	for _, rr := range response.Answer {
-		if valid, reason := d.checkRecord(rr, currentDomain, queryDomain); !valid {
-			log.Debugf("SECURITY: hijack detected from %s: %s", currentDomain, reason)
-			return false, reason
+		if dnsutil.NormalizeDomain(rr.Header().Name) != n {
+			continue
+		}
+		if v := d.classify(z, n, rr.Header().Rrtype); v != VerdictClean {
+			if v == VerdictHijack {
+				log.Debugf("SECURITY: hijack detected from %s: %s record for '%s'",
+					zone, dns.TypeToString[rr.Header().Rrtype], queryName)
+			}
+			return v
 		}
 	}
-
-	return true, ""
+	return VerdictClean
 }
 
-// checkRecord validates a single record in the Answer section.
-func (d *Detector) checkRecord(rr dns.RR, currentDomain, queryDomain string) (bool, string) {
-	answerName := dnsutil.NormalizeDomain(rr.Header().Name)
-	rrType := rr.Header().Rrtype
+// ── Classification ──────────────────────────────────────────────────────────
 
-	// Only validate records that match the exact query name. Records for
-	// other names (CNAME targets, sibling records) are not suspect.
-	if answerName != queryDomain {
-		return true, ""
+// classify returns the Verdict for a single RR that matches the query name.
+func (d *Detector) classify(zone, name string, rrtype uint16) Verdict {
+	switch {
+	case zone == "":
+		return d.classifyRoot(name, rrtype)
+	case d.isTLD(zone):
+		return d.classifyTLD(zone, name, rrtype)
+	default:
+		// Authoritative level: the zone can legitimately return
+		// these records, but we can't distinguish real answers from
+		// GFW-injected ones by content alone.
+		return VerdictUncertain
 	}
-
-	// NS and DS records in the Answer section are delegation responses,
-	// not injected answers.
-	if rrType == dns.TypeNS || rrType == dns.TypeDS {
-		return true, ""
-	}
-
-	return d.validateAnswer(currentDomain, queryDomain, rrType)
 }
 
-// validateAnswer checks that the answering server is authorized to return
-// records for the queried domain.
-func (d *Detector) validateAnswer(authorityDomain, queryDomain string, rrType uint16) (bool, string) {
-	// Query domain must be within the server's authority zone.
-	if !d.isInAuthority(queryDomain, authorityDomain) {
-		return false, fmt.Sprintf("Server '%s' returned out-of-authority %s record for '%s'",
-			authorityDomain, dns.TypeToString[rrType], queryDomain)
+// classifyRoot validates responses from root servers.  Legitimate root
+// responses only contain:
+//   - Glue A/AAAA records for root-servers.net
+//   - NS/DS records for TLDs (e.g. "com", "cn")
+//
+// Everything else (A/AAAA for non-TLDs, NS/DS for non-TLDs) is hijacking.
+func (d *Detector) classifyRoot(name string, rrtype uint16) Verdict {
+	// Glue records for root server hostnames.
+	if d.isRootServerGlue(name, rrtype) {
+		return VerdictClean
 	}
 
-	// Root zone (authorityDomain == ""): only glue records for root-servers.net
-	// are allowed. Any other answer from a root server is hijacking.
-	if authorityDomain == "" {
-		return d.validateRootServer(queryDomain, rrType)
+	// NS/DS records for TLDs are legitimate root delegations.
+	if (rrtype == dns.TypeNS || rrtype == dns.TypeDS) && d.isTLD(name) {
+		return VerdictClean
 	}
 
-	// TLD zone (e.g. "com", "cn"): TLD servers should only return records for
-	// the TLD itself, never A/AAAA for subdomains.
-	if d.isTLD(authorityDomain) {
-		return d.validateTLDServer(authorityDomain, queryDomain, rrType)
+	if name != "" {
+		return VerdictHijack
 	}
-
-	return true, ""
+	return VerdictClean
 }
 
-func (d *Detector) validateRootServer(queryDomain string, rrType uint16) (bool, string) {
-	if d.isRootServerGlue(queryDomain, rrType) {
-		return true, ""
+// classifyTLD validates responses from TLD servers.  TLD servers should only
+// return records for the TLD itself (e.g. SOA for "com"), never A/AAAA for
+// subdomains.
+func (d *Detector) classifyTLD(zone, name string, rrtype uint16) Verdict {
+	if name != zone {
+		return VerdictHijack
 	}
-	if queryDomain != "" {
-		return false, fmt.Sprintf("Root server returned unauthorized %s record for '%s'",
-			dns.TypeToString[rrType], queryDomain)
-	}
-	return true, ""
+	return VerdictClean
 }
 
-func (d *Detector) validateTLDServer(tldDomain, queryDomain string, rrType uint16) (bool, string) {
-	if queryDomain != tldDomain {
-		return false, fmt.Sprintf("TLD '%s' returned %s record in Answer for subdomain '%s'",
-			tldDomain, dns.TypeToString[rrType], queryDomain)
-	}
-	return true, ""
-}
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 func (d *Detector) isRootServerGlue(domain string, rrType uint16) bool {
 	if rrType != dns.TypeA && rrType != dns.TypeAAAA {
@@ -129,16 +161,4 @@ func (d *Detector) isRootServerGlue(domain string, rrType uint16) bool {
 
 func (d *Detector) isTLD(domain string) bool {
 	return domain != "" && !strings.Contains(domain, ".")
-}
-
-func (d *Detector) isInAuthority(queryDomain, authorityDomain string) bool {
-	if queryDomain == authorityDomain || authorityDomain == "" {
-		return true
-	}
-	return strings.HasSuffix(queryDomain, "."+authorityDomain)
-}
-
-// Enable activates or deactivates hijack detection.
-func (d *Detector) Enable(enabled bool) {
-	d.enabled.Store(enabled)
 }

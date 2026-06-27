@@ -2,7 +2,6 @@ package resolver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/latency"
+	"zjdns/server/security"
 )
 
 // DefaultRootServers is the IANA root server address list.
@@ -80,7 +80,11 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 	nameservers := rr.getRootServers()
 	currentDomain := "."
 	normalizedQname := dnsutil.NormalizeDomain(qname)
-	var hijackDetected bool
+
+	// hijackSeen is set to true when any VerdictHijack is observed at any
+	// delegation level, including through internal TCP restarts.  The CNAME
+	// resolver uses this to force TCP for subsequent CNAME targets.
+	var hijackSeen bool
 
 	log.Debugf("RECURSION: depth=%d, querying %s (type=%s, tcp=%t, zone=%s, ns=%v)", depth, question.Name, dns.TypeToString[question.Qtype], forceTCP, currentDomain, nameservers)
 
@@ -90,70 +94,54 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 		chain.parentDNSKEYs = crypto.GetRootKeys()
 	}
 
+	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "" {
-		response, hijackRejected, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, rr.resolver.validator.Hijack)
+		response, verdict, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, rr.resolver.validator.Hijack)
+		if verdict == security.VerdictHijack {
+			hijackSeen = true
+		}
 		if err != nil {
-			return nil, nil, nil, false, nil, "", false, fmt.Errorf("root domain query: %w", err)
-		}
-
-		// If any response was rejected as hijack, restart via TCP
-		// to bypass GFW UDP injection at all levels.
-		if hijackRejected && !forceTCP {
-			pool.DefaultMessagePool.Put(response)
-			return rr.resolve(ctx, question, ecs, depth, true)
-		}
-
-		if rr.resolver.validator.Hijack.IsEnabled() {
-			if valid, reason := rr.resolver.validator.Hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				pool.DefaultMessagePool.Put(response)
-				return rr.handleSuspiciousResponse(reason, forceTCP)
+			if verdict == security.VerdictHijack && !forceTCP {
+				_, _, _, _, _, _, _, err := rr.resolve(ctx, question, ecs, depth, true)
+				return nil, nil, nil, false, nil, "", true, err
 			}
+			return nil, nil, nil, false, nil, "", hijackSeen, fmt.Errorf("root domain query: %w", err)
 		}
-
 		cryptoValidated := rr.validateWithDNSSEC(response, currentDomain, chain)
-		validated := cryptoValidated
 		ecsResponse := rr.resolver.edns.ParseFromDNS(response)
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessagePool.Put(response)
-		return answer, authority, additional, validated, ecsResponse, config.RecursiveIndicator, false, nil
+		return answer, authority, additional, cryptoValidated, ecsResponse, config.RecursiveIndicator, hijackSeen, nil
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, nil, nil, false, nil, "", false, ctx.Err()
+			return nil, nil, nil, false, nil, "", hijackSeen, ctx.Err()
 		default:
 		}
 
-		response, hijackRejected, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, rr.resolver.validator.Hijack)
-		if err != nil {
-			if !forceTCP && errors.Is(err, ErrHijackDetected) {
+		response, verdict, err := rr.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, rr.resolver.validator.Hijack)
+
+		// ── Single TCP fallback decision point ──────────────────────
+		// If any response at this delegation level was flagged as
+		// hijack, restart the ENTIRE resolution via TCP.  GFW cannot
+		// inject TCP responses, so all subsequent levels (including
+		// authoritative) are protected.
+		if verdict == security.VerdictHijack {
+			hijackSeen = true
+			if !forceTCP {
+				if response != nil {
+					pool.DefaultMessagePool.Put(response)
+				}
 				return rr.resolve(ctx, question, ecs, depth, true)
 			}
-			return nil, nil, nil, false, nil, "", false, fmt.Errorf("query %s: %w", currentDomain, err)
 		}
 
-		// If any response was rejected as hijack at this level,
-		// restart via TCP to bypass GFW UDP injection at all
-		// subsequent levels (including authoritative NS spoofing).
-		if hijackRejected && !forceTCP {
-			pool.DefaultMessagePool.Put(response)
-			return rr.resolve(ctx, question, ecs, depth, true)
+		if err != nil {
+			return nil, nil, nil, false, nil, "", hijackSeen, fmt.Errorf("query %s: %w", currentDomain, err)
 		}
-
-		if rr.resolver.validator.Hijack.IsEnabled() {
-			if valid, reason := rr.resolver.validator.Hijack.CheckResponse(currentDomain, normalizedQname, response); !valid {
-				pool.DefaultMessagePool.Put(response)
-				answer, authority, additional, validated, ecsResponse, server, hijackDetectedNow, err := rr.handleSuspiciousResponse(reason, forceTCP)
-				if hijackDetectedNow {
-					hijackDetected = true
-				}
-				if !forceTCP && errors.Is(err, ErrHijackDetected) {
-					return rr.resolve(ctx, question, ecs, depth, true)
-				}
-				return answer, authority, additional, validated, ecsResponse, server, hijackDetected, err
-			}
-		}
+		// ── End TCP fallback ────────────────────────────────────────
 
 		// Cryptographic DNSSEC validation at this delegation level
 		cryptoValidated := rr.validateWithDNSSEC(response, currentDomain, chain)
@@ -775,7 +763,13 @@ func (ch *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.E
 		}
 		visitedCNAMEs[currentName] = true
 
-		answer, authority, additional, validated, ecsResponse, server, hijackDetectedNow, err := ch.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, false)
+		// When hijack was detected anywhere in the CNAME chain,
+		// subsequent CNAME targets also use TCP so GFW cannot
+		// inject at the authoritative level (where hijack
+		// detection can't distinguish real from spoofed answers).
+		forceTCP := hijackOccurred
+
+		answer, authority, additional, validated, ecsResponse, server, hijackDetectedNow, err := ch.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP)
 		if err != nil {
 			return nil, nil, nil, false, nil, "", false, err
 		}

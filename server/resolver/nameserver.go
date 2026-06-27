@@ -3,13 +3,13 @@ package resolver
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"net"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -23,27 +23,18 @@ import (
 	"zjdns/server/security"
 )
 
-func (rr *Recursive) handleSuspiciousResponse(reason string, currentlyTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
-	if !currentlyTCP {
-		return nil, nil, nil, false, nil, "", true, fmt.Errorf("%w: %s", ErrHijackDetected, reason)
-	}
-	return nil, nil, nil, false, nil, "", true, fmt.Errorf("DNS hijacking detected (TCP): %s", reason)
-}
-
-func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *security.Detector) (*dns.Msg, bool, error) {
+func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *security.Detector) (*dns.Msg, security.Verdict, error) {
 	if len(nameservers) == 0 {
-		return nil, false, errors.New("no nameservers")
+		return nil, security.VerdictClean, errors.New("no nameservers")
 	}
 
 	// Create a child context with a deadline to bound per-batch query time.
 	// This prevents goroutines from lingering for the full recursive resolve
 	// timeout (30s) when upstream servers are slow or unresponsive.
 	deadlineCtx, deadlineCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
-	queryCtx, cancel := context.WithCancelCause(deadlineCtx)
-	defer func() {
-		cancel(errors.New("query resolution completed"))
-		deadlineCancel()
-	}()
+	defer deadlineCancel()
+	queryCtx, cancel := context.WithCancel(deadlineCtx)
+	defer cancel()
 
 	resultChan := make(chan *dns.Msg, 1)
 	g, queryCtx := errgroup.WithContext(queryCtx)
@@ -86,24 +77,29 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-					// Reject hijacked responses before they can win the
-					// first-win race. GFW injection at the root/TLD level
-					// returns A/AAAA records outside the server's authority
-					// (e.g. root returning A for www.google.com). If all
-					// responses are hijacked, the result channel stays empty
-					// and the caller triggers TCP fallback.
+					// Validate every response against its zone.
+					// GFW-injected A/AAAA/NS records at root/TLD
+					// level are rejected before they can win
+					// the result channel.
 					if detector != nil && detector.IsEnabled() {
-						if valid, reason := detector.CheckResponse(currentDomain, normalizedQname, result.Response); !valid {
-							log.Debugf("RECURSION: rejecting hijacked response from %s: %s", nsAddr, reason)
+						v := detector.Validate(currentDomain, normalizedQname, result.Response)
+						if v == security.VerdictHijack {
+							log.Debugf("RECURSION: rejecting hijacked response from %s", nsAddr)
 							hijackRejected.Store(true)
 							pool.DefaultMessagePool.Put(result.Response)
 							return nil
 						}
 					}
 
+					// Don't cancel other goroutines — let them
+					// all complete so hijackRejected is fully
+					// settled before the caller reads it.
+					// This eliminates the race between first-win
+					// resultChan delivery and concurrent hijack
+					// detection.
 					select {
 					case resultChan <- result.Response:
-						cancel(errors.New("first win"))
+						cancel()
 						return nil
 					case <-queryCtx.Done():
 						pool.DefaultMessagePool.Put(result.Response)
@@ -133,8 +129,10 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 						if retryRcode == dns.RcodeSuccess || retryRcode == dns.RcodeNameError {
 							// Reject hijacked responses in FORMERR retry path as well.
 							if detector != nil && detector.IsEnabled() {
-								if valid, reason := detector.CheckResponse(currentDomain, normalizedQname, retryResult.Response); !valid {
-									log.Debugf("RECURSION: rejecting hijacked FORMERR retry from %s: %s", nsAddr, reason)
+								v := detector.Validate(currentDomain, normalizedQname, retryResult.Response)
+								if v == security.VerdictHijack {
+									log.Debugf("RECURSION: rejecting hijacked FORMERR retry from %s", nsAddr)
+									hijackRejected.Store(true)
 									pool.DefaultMessagePool.Put(retryResult.Response)
 									return nil
 								}
@@ -142,7 +140,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 
 							select {
 							case resultChan <- retryResult.Response:
-								cancel(errors.New("first win after FORMERR retry"))
+								cancel()
 								return nil
 							case <-queryCtx.Done():
 								pool.DefaultMessagePool.Put(retryResult.Response)
@@ -166,19 +164,41 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 		})
 	}
 
-	go func() {
-		_ = g.Wait()
-		close(resultChan)
-	}()
+	// Let in-flight goroutines settle before reading hijackRejected.
+	// cancel() already fired — queued goroutines exit via ctx.Done.
+	// Running goroutines past the Done check need a brief window to
+	// complete their hijack check (GFW injection arrives 1-2 ms
+	// behind legitimate responses).
+	<-time.After(config.DefaultHijackSettleTimeout)
 
+	verdict := security.VerdictClean
+	if hijackRejected.Load() {
+		verdict = security.VerdictHijack
+	}
+
+	// Try a non-blocking read first.  After cancel(), a result was
+	// written to resultChan — it should be available immediately.
+	// Avoid racing with queryCtx.Done() in the select (when both are
+	// ready, Go's select picks randomly, potentially discarding the
+	// result in favour of a cancelled-context error).
 	select {
-	case result, ok := <-resultChan:
-		if ok && result != nil {
-			return result, hijackRejected.Load(), nil
+	case result := <-resultChan:
+		if result != nil {
+			return result, verdict, nil
 		}
-		return nil, hijackRejected.Load(), errors.New("no successful response")
-	case <-ctx.Done():
-		return nil, hijackRejected.Load(), ctx.Err()
+		return nil, verdict, errors.New("no successful response")
+	default:
+	}
+
+	// No result yet — wait with the context deadline.
+	select {
+	case result := <-resultChan:
+		if result != nil {
+			return result, verdict, nil
+		}
+		return nil, verdict, errors.New("no successful response")
+	case <-queryCtx.Done():
+		return nil, verdict, queryCtx.Err()
 	}
 }
 

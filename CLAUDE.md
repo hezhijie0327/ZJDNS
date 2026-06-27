@@ -31,17 +31,8 @@ golangci-lint run && golangci-lint fmt
       "hijack_protection": true,
       "dnssec_enforce": true,
       "cache": {
-        "size": 4194304,
-        "persist": {
-          "file": "/tmp/zjdns-cache.snapshot",
-          "interval": 5
-        }
-      },
-      "latency_probe": [
-        { "protocol": "ping", "timeout": 100 },
-        { "protocol": "tcp", "port": 53, "timeout": 100 },
-        { "protocol": "udp", "port": 53, "timeout": 100 }
-      ]
+        "size": 0
+      }
     }
   },
   "upstream": [
@@ -53,12 +44,49 @@ golangci-lint run && golangci-lint fmt
 Key points:
 - Port 15353 (non-privileged, avoids conflicts with system DNS)
 - Pure recursive mode (`builtin_recursive`, no external upstreams)
-- Cache snapshot at `/tmp/zjdns-cache.snapshot` with 5s persist interval
-- Latency probe enabled for verifying both client-facing and infrastructure probe paths
-- Debug log level for full visibility into resolution, caching, and latency sorting
+- Cache disabled (`size: 0`) to see fresh resolution every query
+- DNSSEC enforcement disabled to avoid interference with hijack detection
+- Debug log level for full visibility into resolution and hijack detection
 
 Start server: `./zjdns -config config.debug.json`
-Test query: `dig @127.0.0.1 -p 15353 baidu.com A +short`
+
+### Test Domains
+
+**Should trigger hijack detection + TCP fallback (blocked by GFW):**
+```bash
+dig @127.0.0.1 -p 15353 www.google.com A +short
+dig @127.0.0.1 -p 15353 www.youtube.com A +short
+dig @127.0.0.1 -p 15353 www.facebook.com A +short
+dig @127.0.0.1 -p 15353 chatgpt.com A +short
+```
+
+**Should resolve normally without TCP fallback:**
+```bash
+dig @127.0.0.1 -p 15353 www.baidu.com A +short
+dig @127.0.0.1 -p 15353 dns.weixin.qq.com.cn A +short
+dig @127.0.0.1 -p 15353 updates.cdn-apple.com A +short
+```
+
+**DNSSEC validation tests (require `dnssec_enforce: true` in debug config):**
+```bash
+# Should fail DNSSEC (bogus signature / bad DS)
+dig @127.0.0.1 -p 15353 dnssec-failed.org A +short
+dig @127.0.0.1 -p 15353 badsign-a.test.dnssec-tools.org A +short
+dig @127.0.0.1 -p 15353 sigfail.ippacket.stream A +short
+
+# Should pass DNSSEC (valid chain)
+dig @127.0.0.1 -p 15353 sigok.ippacket.stream A +short
+```
+
+**EDNS FORMERR retry test:**
+```bash
+# Microsoft mail.protection.outlook.com rejects EDNS queries with FORMERR.
+# ZJDNS should retry without EDNS and still get the answer.
+dig @127.0.0.1 -p 15353 zhijie-online.mail.protection.outlook.com A +short
+```
+
+Verify hijack detection from logs: `grep -E "hijack detected|rejecting hijacked|tcp=true" /tmp/zjdns.log`
+Normal domains should show `tcp=false` throughout; blocked domains should show hijack detection + `tcp=true` restart.
 
 Test suites exist for `cache`, `cidr`, `config`, `edns`, `rewrite`, `stats`, `internal/dnsutil`, `internal/latency`, `internal/pool`, `server/resolver`, and `server/security` packages (90+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.25). Zero `golangci-lint` warnings.
 

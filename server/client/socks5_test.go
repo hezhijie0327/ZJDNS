@@ -7,10 +7,28 @@ import (
 	"time"
 )
 
+// socks5TestProxy is the default proxy URL used by integration tests.
+const socks5TestProxy = "socks5://127.0.0.1:1080"
+
+// requireSocks5Proxy skips t if no SOCKS5 proxy is listening on proxyURL.
+func requireSocks5Proxy(t *testing.T, proxyURL string) {
+	t.Helper()
+	u, err := net.ResolveTCPAddr("tcp", "127.0.0.1:1080")
+	if err != nil {
+		t.Skipf("SOCKS5 proxy not available: resolve: %v", err)
+	}
+	conn, err := net.DialTimeout("tcp", u.String(), 2*time.Second)
+	if err != nil {
+		t.Skipf("SOCKS5 proxy not available on %s: %v", proxyURL, err)
+	}
+	_ = conn.Close()
+}
+
 // TestSocks5TCPConnect verifies that the SOCKS5 dialer can establish a TCP
 // connection through a running proxy.
 func TestSocks5TCPConnect(t *testing.T) {
-	proxyURL := "socks5://127.0.0.1:1080"
+	proxyURL := socks5TestProxy
+	requireSocks5Proxy(t, proxyURL)
 
 	d, err := NewSocks5Dialer(proxyURL, 5*time.Second)
 	if err != nil {
@@ -23,7 +41,7 @@ func TestSocks5TCPConnect(t *testing.T) {
 
 	conn, err := d.DialContext(ctx, "tcp", "8.8.8.8:53")
 	if err != nil {
-		t.Fatalf("DialContext: %v (is a SOCKS5 proxy running on %s?)", err, proxyURL)
+		t.Fatalf("DialContext: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -48,7 +66,8 @@ func TestSocks5TCPConnect(t *testing.T) {
 // TestSocks5UDPAssociate verifies that the SOCKS5 dialer can establish a UDP
 // relay through a running proxy.
 func TestSocks5UDPAssociate(t *testing.T) {
-	proxyURL := "socks5://127.0.0.1:1080"
+	proxyURL := socks5TestProxy
+	requireSocks5Proxy(t, proxyURL)
 
 	d, err := NewSocks5Dialer(proxyURL, 5*time.Second)
 	if err != nil {
@@ -103,7 +122,7 @@ func TestSocks5UDPAssociate(t *testing.T) {
 // TestSocks5DialerReuse verifies that the same proxy URL produces the same
 // dialer from the cache.
 func TestSocks5DialerReuse(t *testing.T) {
-	proxyURL := "socks5://127.0.0.1:1080"
+	proxyURL := socks5TestProxy
 
 	d1, err := NewSocks5Dialer(proxyURL, 5*time.Second)
 	if err != nil {

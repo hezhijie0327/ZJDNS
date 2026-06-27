@@ -28,10 +28,6 @@ var (
 	// ErrAllUpstreamFailed is returned when no upstream server responds
 	// successfully.
 	ErrAllUpstreamFailed = errors.New("all upstream queries failed")
-
-	// ErrHijackDetected is returned when DNS hijacking is detected in a
-	// response from an authoritative server.
-	ErrHijackDetected = errors.New("DNS hijack detected")
 )
 
 // concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency

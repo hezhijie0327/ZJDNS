@@ -1,6 +1,7 @@
 package security
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -23,147 +24,140 @@ func newDetector() *Detector {
 	return d
 }
 
-// ── checkRecord ────────────────────────────────────────────────────────────────
+// classifyRecord is a test helper that classifies a single record.
+func classifyRecord(d *Detector, rr dns.RR, zone, queryName string) Verdict {
+	answerName := dnsutil.NormalizeDomain(rr.Header().Name)
+	if answerName != queryName {
+		return VerdictClean
+	}
+	return d.classify(zone, queryName, rr.Header().Rrtype)
+}
 
-func TestCheckRecord_WithinAuthority(t *testing.T) {
+// ── Classification (per-record) ───────────────────────────────────────────────
+
+func TestClassify_WithinAuthority(t *testing.T) {
 	d := newDetector()
-	ok, _ := d.checkRecord(
+	v := classifyRecord(d,
 		aRec("www.example.com.", "10.0.0.1"),
-		"example.com",
-		"www.example.com",
+		"example.com", "www.example.com",
 	)
-	if !ok {
-		t.Fatal("answer within authority should be accepted")
+	if v != VerdictClean && v != VerdictUncertain {
+		t.Fatalf("answer within authority should be accepted, got %s", v)
 	}
 }
 
-func TestCheckRecord_NSInAnswer(t *testing.T) {
+func TestClassify_NSInAnswer(t *testing.T) {
 	d := newDetector()
-	// NS records in answer section are delegation, not hijack.
-	ok, _ := d.checkRecord(
+	v := classifyRecord(d,
 		nsRec("sub.example.com.", "ns1.example.com."),
-		"example.com",
-		"sub.example.com",
+		"example.com", "sub.example.com",
 	)
-	if !ok {
-		t.Fatal("NS records in answer section should be accepted")
+	if v == VerdictHijack {
+		t.Fatal("NS records in answer section should not be flagged as hijack")
 	}
 }
 
-func TestCheckRecord_DSInAnswer(t *testing.T) {
+func TestClassify_DSInAnswer(t *testing.T) {
 	d := newDetector()
 	ds := &dns.DS{
 		Hdr: dns.RR_Header{Name: dns.Fqdn("sub.example.com."), Rrtype: dns.TypeDS, Class: dns.ClassINET, Ttl: 86400},
 	}
-	ok, _ := d.checkRecord(ds, "example.com", "sub.example.com")
-	if !ok {
-		t.Fatal("DS records in answer section should be accepted")
+	v := classifyRecord(d, ds, "example.com", "sub.example.com")
+	if v == VerdictHijack {
+		t.Fatal("DS records in answer section should not be flagged as hijack")
 	}
 }
 
-func TestCheckRecord_DifferentName(t *testing.T) {
+func TestClassify_DifferentName(t *testing.T) {
 	d := newDetector()
-	// Answer for a different name (e.g. CNAME target) — not suspect.
-	ok, _ := d.checkRecord(
+	v := classifyRecord(d,
 		aRec("other.example.com.", "10.0.0.1"),
-		"example.com",
-		"www.example.com",
+		"example.com", "www.example.com",
 	)
-	if !ok {
+	if v == VerdictHijack {
 		t.Fatal("answer for a different name should be accepted")
 	}
 }
 
-func TestCheckRecord_OutOfAuthority(t *testing.T) {
+func TestClassify_OutOfAuthority(t *testing.T) {
 	d := newDetector()
-	// TLD server should never return A records for subdomains.
-	ok, reason := d.checkRecord(
+	v := classifyRecord(d,
 		aRec("www.example.com.", "10.0.0.1"),
-		"com",
-		"www.example.com",
+		"com", "www.example.com",
 	)
-	if ok {
-		t.Fatalf("TLD returning A for subdomain should be rejected: %s", reason)
+	if v != VerdictHijack {
+		t.Fatalf("TLD returning A for subdomain should be VerdictHijack, got %s", v)
 	}
 }
 
-func TestCheckRecord_RootServerGlue(t *testing.T) {
+func TestClassify_RootServerGlue(t *testing.T) {
 	d := newDetector()
-	ok, _ := d.checkRecord(
+	v := classifyRecord(d,
 		aRec("a.root-servers.net.", "198.41.0.4"),
-		"",
-		"a.root-servers.net",
+		"", "a.root-servers.net",
 	)
-	if !ok {
+	if v == VerdictHijack {
 		t.Fatal("root server glue should be accepted")
 	}
 }
 
-func TestCheckRecord_RootServerUnauthorized(t *testing.T) {
+func TestClassify_RootServerUnauthorized(t *testing.T) {
 	d := newDetector()
-	// Root server returning A for random domain → hijack.
-	ok, _ := d.checkRecord(
+	v := classifyRecord(d,
 		aRec("www.google.com.", "185.45.5.35"),
-		"",
-		"www.google.com",
+		"", "www.google.com",
 	)
-	if ok {
-		t.Fatal("root server returning non-glue A should be rejected")
+	if v != VerdictHijack {
+		t.Fatalf("root server returning non-glue A should be VerdictHijack, got %s", v)
 	}
 }
 
-// ── CheckResponse ──────────────────────────────────────────────────────────────
+// ── Validate (full response) ──────────────────────────────────────────────────
 
-func TestCheckResponse_NormalAnswer(t *testing.T) {
+func TestValidate_NormalAnswer(t *testing.T) {
 	d := newDetector()
 	resp := &dns.Msg{}
 	resp.Answer = []dns.RR{
 		aRec("www.example.com.", "10.0.0.1"),
 	}
-	ok, reason := d.CheckResponse("example.com", "www.example.com", resp)
-	if !ok {
-		t.Fatalf("normal answer should be accepted: %s", reason)
+	v := d.Validate("example.com", "www.example.com", resp)
+	if v == VerdictHijack {
+		t.Fatalf("normal answer should not be hijack, got %s", v)
 	}
 }
 
-func TestCheckResponse_RootHijack(t *testing.T) {
+func TestValidate_RootHijack(t *testing.T) {
 	d := newDetector()
 
-	// GFW intercepts root server query for www.google.com and injects fake A.
-	// Root servers should only return delegations (NS), never A for google.com.
 	resp := &dns.Msg{}
 	resp.Answer = []dns.RR{
 		aRec("www.google.com.", "185.45.5.35"),
 	}
 
-	ok, reason := d.CheckResponse("", "www.google.com", resp)
-	if ok {
-		t.Fatalf("root server returning A for www.google.com should be rejected: %s", reason)
+	v := d.Validate("", "www.google.com", resp)
+	if v != VerdictHijack {
+		t.Fatalf("root server returning A for www.google.com should be VerdictHijack, got %s", v)
 	}
 }
 
-func TestCheckResponse_TLDHijack(t *testing.T) {
+func TestValidate_TLDHijack(t *testing.T) {
 	d := newDetector()
 
-	// GFW intercepts TLD query and injects fake A record.
 	resp := &dns.Msg{}
 	resp.Answer = []dns.RR{
 		aRec("www.google.com.", "185.45.5.35"),
 	}
 
-	ok, reason := d.CheckResponse("com", "www.google.com", resp)
-	if ok {
-		t.Fatalf("TLD server returning A for subdomain should be rejected: %s", reason)
+	v := d.Validate("com", "www.google.com", resp)
+	if v != VerdictHijack {
+		t.Fatalf("TLD server returning A for subdomain should be VerdictHijack, got %s", v)
 	}
 }
 
-func TestCheckResponse_DelegationIsNotHijack(t *testing.T) {
+func TestValidate_DelegationIsNotHijack(t *testing.T) {
 	d := newDetector()
 
-	// Normal delegation: .cn servers return NS for qq.com.cn.
-	// Authority/Additional sections carry NS+glue — not checked.
 	resp := &dns.Msg{}
-	// Answer section is empty except possibly NS/DS for the delegation
 	resp.Ns = []dns.RR{
 		nsRec("qq.com.cn.", "ns1.qq.com."),
 	}
@@ -172,13 +166,13 @@ func TestCheckResponse_DelegationIsNotHijack(t *testing.T) {
 		aRec("ns-cmn1.qq.com.", "43.130.172.24"),
 	}
 
-	ok, reason := d.CheckResponse("cn", "dns.weixin.qq.com.cn", resp)
-	if !ok {
-		t.Fatalf("delegation response should be accepted: %s", reason)
+	v := d.Validate("cn", "dns.weixin.qq.com.cn", resp)
+	if v == VerdictHijack {
+		t.Fatalf("delegation response should not be hijack, got %s", v)
 	}
 }
 
-func TestCheckResponse_Disabled(t *testing.T) {
+func TestValidate_Disabled(t *testing.T) {
 	d := &Detector{}
 	d.Enable(false)
 
@@ -187,26 +181,23 @@ func TestCheckResponse_Disabled(t *testing.T) {
 		aRec("www.google.com.", "185.45.5.35"),
 	}
 
-	ok, _ := d.CheckResponse("", "www.google.com", resp)
-	if !ok {
-		t.Fatal("disabled detector should accept everything")
+	v := d.Validate("", "www.google.com", resp)
+	if v != VerdictClean {
+		t.Fatalf("disabled detector should return clean, got %s", v)
 	}
 }
 
-func TestCheckResponse_NilResponse(t *testing.T) {
+func TestValidate_NilResponse(t *testing.T) {
 	d := newDetector()
-	ok, _ := d.CheckResponse("example.com", "www.example.com", nil)
-	if !ok {
-		t.Fatal("nil response should be accepted")
+	v := d.Validate("example.com", "www.example.com", nil)
+	if v != VerdictClean {
+		t.Fatalf("nil response should be clean, got %s", v)
 	}
 }
 
 // ── Real-world regression tests ────────────────────────────────────────────────
 
 func TestHijack_WeixinQQComCN_NotFlagged(t *testing.T) {
-	// Regression: dns.weixin.qq.com.cn delegation was falsely flagged.
-	// The .cn → qq.com.cn delegation has NS in authority and
-	// cross-zone CDN-pool glue in additional. Neither triggers hijack.
 	d := newDetector()
 	resp := &dns.Msg{}
 	resp.Answer = []dns.RR{
@@ -220,49 +211,41 @@ func TestHijack_WeixinQQComCN_NotFlagged(t *testing.T) {
 		aRec("ns-cmn1.qq.com.", "43.130.172.24"),
 	}
 
-	ok, reason := d.CheckResponse("qq.com.cn", "dns.weixin.qq.com.cn", resp)
-	if !ok {
-		t.Fatalf("dns.weixin.qq.com.cn response should be accepted: %s", reason)
+	v := d.Validate("qq.com.cn", "dns.weixin.qq.com.cn", resp)
+	if v == VerdictHijack {
+		t.Fatalf("dns.weixin.qq.com.cn response should not be hijack, got %s", v)
 	}
 }
 
 func TestHijack_GoogleAtRoot_Flagged(t *testing.T) {
-	// GFW intercepts root query for www.google.com.
-	// Root servers must not return A records for www.google.com.
 	d := newDetector()
 	resp := &dns.Msg{}
 	resp.Answer = []dns.RR{
 		aRec("www.google.com.", "185.45.5.35"),
 	}
 
-	ok, _ := d.CheckResponse("", "www.google.com", resp)
-	if ok {
-		t.Fatal("GFW hijack at root level should be flagged")
+	v := d.Validate("", "www.google.com", resp)
+	if v != VerdictHijack {
+		t.Fatalf("GFW hijack at root level should be VerdictHijack, got %s", v)
 	}
 }
 
 func TestHijack_GoogleAtComTLD_Flagged(t *testing.T) {
-	// GFW intercepts .com TLD query for www.google.com.
-	// TLD servers must not return A records for subdomains.
 	d := newDetector()
 	resp := &dns.Msg{}
 	resp.Answer = []dns.RR{
 		aRec("www.google.com.", "185.45.5.35"),
 	}
 
-	ok, _ := d.CheckResponse("com", "www.google.com", resp)
-	if ok {
-		t.Fatal("GFW hijack at TLD level should be flagged")
+	v := d.Validate("com", "www.google.com", resp)
+	if v != VerdictHijack {
+		t.Fatalf("GFW hijack at TLD level should be VerdictHijack, got %s", v)
 	}
 }
 
-// ── Delegation section regression tests ─────────────────────────────────────────
-// CheckResponse only inspects the Answer section. Authority and Additional
-// sections carry delegation/glue data and are never checked for hijacking.
+// ── Delegation section tests (Answer section only) ─────────────────────────────
 
-func TestCheckResponse_LegitimateGlueNotFlagged(t *testing.T) {
-	// Legitimate delegation with glue in Additional section should never
-	// be flagged — only the Answer section is inspected.
+func TestValidate_LegitimateGlueNotFlagged(t *testing.T) {
 	d := newDetector()
 	resp := &dns.Msg{}
 	resp.Answer = []dns.RR{
@@ -275,72 +258,39 @@ func TestCheckResponse_LegitimateGlueNotFlagged(t *testing.T) {
 		aRec("ns3.google.com.", "216.239.36.10"),
 	}
 
-	ok, reason := d.CheckResponse("com", "www.youtube.com", resp)
-	if !ok {
-		t.Fatalf("legitimate glue should not be flagged: %s", reason)
+	v := d.Validate("com", "www.youtube.com", resp)
+	if v == VerdictHijack {
+		t.Fatalf("legitimate glue should not be hijack, got %s", v)
 	}
 }
 
-func TestCheckResponse_RootServerGlueNotFlagged(t *testing.T) {
-	// Root server glue records (root-servers.net) pass through because
-	// CheckResponse only inspects the Answer section.
+func TestValidate_RootServerGlueNotFlagged(t *testing.T) {
 	d := newDetector()
 	resp := &dns.Msg{}
 	resp.Extra = []dns.RR{
 		aRec("a.root-servers.net.", "198.41.0.4"),
 	}
 
-	ok, reason := d.CheckResponse("", "a.root-servers.net", resp)
-	if !ok {
-		t.Fatalf("root server glue in Additional section should be allowed: %s", reason)
+	v := d.Validate("", "a.root-servers.net", resp)
+	if v == VerdictHijack {
+		t.Fatalf("root server glue in Additional should not be hijack, got %s", v)
 	}
 }
 
-func TestCheckResponse_NonMatchingAdditionalNotFlagged(t *testing.T) {
-	// Answer-only inspection — Additional section records are never checked.
+func TestValidate_NonMatchingAdditionalNotFlagged(t *testing.T) {
 	d := newDetector()
 	resp := &dns.Msg{}
 	resp.Extra = []dns.RR{
-		aRec("www.google.com.", "185.45.5.35"), // would be GFW injection, but in Additional not Answer
+		aRec("www.google.com.", "185.45.5.35"),
 	}
 
-	ok, reason := d.CheckResponse("", "www.google.com", resp)
-	if !ok {
-		t.Fatalf("Additional section is not inspected: %s", reason)
-	}
-}
-
-// ── isInAuthority ──────────────────────────────────────────────────────────────
-
-func TestIsInAuthority_Exact(t *testing.T) {
-	d := newDetector()
-	if !d.isInAuthority("example.com", "example.com") {
-		t.Fatal("exact match should be in authority")
+	v := d.Validate("", "www.google.com", resp)
+	if v == VerdictHijack {
+		t.Fatalf("Additional section is not inspected, got %s", v)
 	}
 }
 
-func TestIsInAuthority_Subdomain(t *testing.T) {
-	d := newDetector()
-	if !d.isInAuthority("www.example.com", "example.com") {
-		t.Fatal("subdomain should be in authority")
-	}
-}
-
-func TestIsInAuthority_Empty(t *testing.T) {
-	d := newDetector()
-	if !d.isInAuthority("anything", "") {
-		t.Fatal("empty authority (root) accepts everything")
-	}
-}
-
-func TestIsInAuthority_NotInAuthority(t *testing.T) {
-	d := newDetector()
-	if d.isInAuthority("other.com", "example.com") {
-		t.Fatal("different domain should not be in authority")
-	}
-}
-
-// ── isTLD ──────────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 func TestIsTLD_Simple(t *testing.T) {
 	d := newDetector()
@@ -352,24 +302,14 @@ func TestIsTLD_Simple(t *testing.T) {
 	}
 }
 
-// ── isRootServerGlue ───────────────────────────────────────────────────────────
-
-func TestIsRootServerGlue_A(t *testing.T) {
+func TestIsRootServerGlue(t *testing.T) {
 	d := newDetector()
 	if !d.isRootServerGlue("a.root-servers.net", dns.TypeA) {
 		t.Fatal("root server A glue should be recognized")
 	}
-}
-
-func TestIsRootServerGlue_AAAA(t *testing.T) {
-	d := newDetector()
 	if !d.isRootServerGlue("a.root-servers.net", dns.TypeAAAA) {
 		t.Fatal("root server AAAA glue should be recognized")
 	}
-}
-
-func TestIsRootServerGlue_NotGlue(t *testing.T) {
-	d := newDetector()
 	if d.isRootServerGlue("evil.com", dns.TypeA) {
 		t.Fatal("non-root-server name should not be root glue")
 	}
@@ -378,47 +318,87 @@ func TestIsRootServerGlue_NotGlue(t *testing.T) {
 	}
 }
 
-// ── validateRootServer ─────────────────────────────────────────────────────────
+// ── classifyRoot ───────────────────────────────────────────────────────────────
 
-func TestValidateRootServer_GlueOK(t *testing.T) {
+func TestClassifyRoot_GlueOK(t *testing.T) {
 	d := newDetector()
-	ok, _ := d.validateRootServer("a.root-servers.net", dns.TypeA)
-	if !ok {
-		t.Fatal("root server glue should be accepted")
+	v := d.classifyRoot("a.root-servers.net", dns.TypeA)
+	if v != VerdictClean {
+		t.Fatalf("root server glue should be clean, got %s", v)
 	}
 }
 
-func TestValidateRootServer_EmptyQuery(t *testing.T) {
+func TestClassifyRoot_EmptyQuery(t *testing.T) {
 	d := newDetector()
-	ok, _ := d.validateRootServer("", dns.TypeA)
-	if !ok {
-		t.Fatal("empty query domain for root should be accepted")
+	v := d.classifyRoot("", dns.TypeA)
+	if v != VerdictClean {
+		t.Fatalf("empty query domain for root should be clean, got %s", v)
 	}
 }
 
-func TestValidateRootServer_NonGlueAnswer(t *testing.T) {
+func TestClassifyRoot_NonGlueAnswer(t *testing.T) {
 	d := newDetector()
-	ok, _ := d.validateRootServer("www.google.com", dns.TypeA)
-	if ok {
-		t.Fatal("root server returning non-glue A should be rejected")
+	v := d.classifyRoot("www.google.com", dns.TypeA)
+	if v != VerdictHijack {
+		t.Fatalf("root server returning non-glue A should be VerdictHijack, got %s", v)
 	}
 }
 
-// ── validateTLDServer ──────────────────────────────────────────────────────────
+// ── classifyTLD ────────────────────────────────────────────────────────────────
 
-func TestValidateTLDServer_SelfQuery(t *testing.T) {
+func TestClassifyTLD_SelfQuery(t *testing.T) {
 	d := newDetector()
-	ok, _ := d.validateTLDServer("com", "com", dns.TypeSOA)
-	if !ok {
-		t.Fatal("TLD querying itself should be accepted")
+	v := d.classifyTLD("com", "com", dns.TypeSOA)
+	if v != VerdictClean {
+		t.Fatalf("TLD querying itself should be clean, got %s", v)
 	}
 }
 
-func TestValidateTLDServer_SubdomainAnswer(t *testing.T) {
+func TestClassifyTLD_SubdomainAnswer(t *testing.T) {
 	d := newDetector()
-	ok, _ := d.validateTLDServer("com", "www.example.com", dns.TypeA)
-	if ok {
-		t.Fatal("TLD returning A for subdomain should be rejected")
+	v := d.classifyTLD("com", "www.example.com", dns.TypeA)
+	if v != VerdictHijack {
+		t.Fatalf("TLD returning A for subdomain should be VerdictHijack, got %s", v)
+	}
+}
+
+// ── NS record at root level ───────────────────────────────────────────────────
+
+func TestClassify_NSatRootForNonTLD(t *testing.T) {
+	// GFW-injected NS record for www.youtube.com at root level.
+	d := newDetector()
+	v := classifyRecord(d,
+		nsRec("www.youtube.com.", "fake.gfw.cn."),
+		"", "www.youtube.com",
+	)
+	if v != VerdictHijack {
+		t.Fatalf("NS record for non-TLD at root should be VerdictHijack, got %s", v)
+	}
+}
+
+func TestClassify_NSatRootForTLD(t *testing.T) {
+	// Legitimate NS delegation for .com at root level.
+	d := newDetector()
+	v := classifyRecord(d,
+		nsRec("com.", "a.gtld-servers.net."),
+		"", "com",
+	)
+	if v == VerdictHijack {
+		t.Fatalf("NS record for TLD at root should be clean, got %s", v)
+	}
+}
+
+// ── Verdict.String ─────────────────────────────────────────────────────────────
+
+func TestVerdict_String(t *testing.T) {
+	if s := VerdictClean.String(); s != "clean" {
+		t.Fatalf("Clean string: got %q, want %q", s, "clean")
+	}
+	if s := VerdictHijack.String(); s != "hijack" {
+		t.Fatalf("Hijack string: got %q, want %q", s, "hijack")
+	}
+	if s := VerdictUncertain.String(); s != "uncertain" {
+		t.Fatalf("Uncertain string: got %q, want %q", s, "uncertain")
 	}
 }
 
@@ -447,7 +427,7 @@ func TestDomainNormalization(t *testing.T) {
 	if normalized == "" {
 		t.Fatal("normalized domain should not be empty")
 	}
-	if normalized[len(normalized)-1] == '.' {
+	if strings.HasSuffix(normalized, ".") {
 		t.Fatal("normalized domain should not end with trailing dot")
 	}
 }

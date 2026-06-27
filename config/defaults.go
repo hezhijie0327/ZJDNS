@@ -31,6 +31,7 @@ const (
 	DefaultBackgroundTimeout = 10 * time.Second // Bounded wait for background tasks
 
 	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
+	DefaultHijackSettleTimeout   = 5 * time.Millisecond   // Max window for GFW detection race after clean response wins
 	DefaultSweepInterval         = 5 * time.Minute        // Periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 10 * time.Minute       // Stale TCP write mutex cutoff
 
