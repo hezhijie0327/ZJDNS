@@ -232,6 +232,23 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 		cookieOpt = s.ednsMgr.ParseCookie(req)
 	}
 
+	// Early DNS Cookie validation (RFC 7873): reject queries with an invalid
+	// server cookie before spending CPU on resolution. This prevents an attacker
+	// from using spoofed source IPs to amplify traffic through the resolver.
+	if cookieOpt != nil && len(cookieOpt.ServerCookie) >= edns.DefaultCookieServerLen {
+		if !s.ednsMgr.CookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
+			log.Debugf("EDNS: bad server cookie from %s, returning BADCOOKIE", clientIP)
+			msg := s.buildResponse(req)
+			msg.Rcode = dns.RcodeFormatError
+			// Generate a valid server cookie so the legitimate client can retry.
+			serverCookie := s.ednsMgr.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+			cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
+			s.ednsMgr.ApplyToMessage(msg, ecsOpt, clientRequestedDNSSEC, false, cookieStr, nil)
+			responseMsg = msg
+			return responseMsg
+		}
+	}
+
 	if ecsOpt == nil {
 		ecsOpt = s.ednsMgr.DefaultECSForQType(question.Qtype)
 	}
