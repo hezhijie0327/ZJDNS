@@ -52,6 +52,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Detect kernel TLS (KTLS) support early so the user sees it at startup.
+	// go-extension/tls handles fallback automatically — this is informational.
+	if _, err := os.Stat("/sys/module/tls"); err == nil {
+		log.Infof("SERVER: KTLS kernel module detected, TLS offload available")
+	} else {
+		log.Infof("SERVER: KTLS not available, using user-space TLS")
+	}
+
 	srv, err := server.New(cfg)
 	if err != nil {
 		log.Errorf("SERVER: Server creation failed: %v", err)

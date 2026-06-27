@@ -2,20 +2,20 @@ package client
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 
+	eTLS "gitlab.com/go-extension/tls"
+
 	"github.com/miekg/dns"
-	"golang.org/x/net/http2"
 
 	"zjdns/config"
 )
 
-func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *eTLS.Config) (*dns.Msg, error) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
@@ -104,7 +104,7 @@ func shouldRetryHTTP(err error) bool {
 	return false
 }
 
-func (c *Client) createDoHClient(host, serverName string, skipVerify bool, proxyURL string, tlsConfig *tls.Config) *http.Client {
+func (c *Client) createDoHClient(host, serverName string, skipVerify bool, proxyURL string, tlsConfig *eTLS.Config) *http.Client {
 	c.dohTransportMu.Lock()
 	defer c.dohTransportMu.Unlock()
 
@@ -125,7 +125,20 @@ func (c *Client) createDoHClient(host, serverName string, skipVerify bool, proxy
 	}
 
 	transport := c.dohClient.Transport.(*http.Transport).Clone()
-	transport.TLSClientConfig = tlsConfig.Clone()
+	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		tcpConn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		cfg := tlsConfig.Clone()
+		cfg.ServerName = serverName
+		eTLSConn := eTLS.Client(tcpConn, cfg)
+		if err := eTLSConn.HandshakeContext(ctx); err != nil {
+			_ = tcpConn.Close()
+			return nil, err
+		}
+		return eTLSConn, nil
+	}
 
 	// Route through SOCKS5 proxy when configured.
 	if proxyURL != "" {
@@ -133,13 +146,6 @@ func (c *Client) createDoHClient(host, serverName string, skipVerify bool, proxy
 		if proxyDialer != nil {
 			transport.DialContext = proxyDialer.DialContext
 		}
-	}
-
-	h2Transport, err := http2.ConfigureTransports(transport)
-	if err == nil {
-		// Send HTTP/2 pings on idle connections to keep NAT bindings alive
-		// and detect dead peers early.
-		h2Transport.ReadIdleTimeout = config.DefaultH2ReadIdleTimeout
 	}
 
 	client := &http.Client{

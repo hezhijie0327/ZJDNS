@@ -7,11 +7,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	cryptotls "crypto/tls"
+	stdtls "crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	cryptotls "gitlab.com/go-extension/tls"
 	"math/big"
 	"net"
 	"net/http"
@@ -59,7 +60,8 @@ type DNSHandler interface {
 type Server struct {
 	cfg           Config
 	handler       DNSHandler
-	tlsConfig     *cryptotls.Config
+	tlsConfig     *cryptotls.Config // TCP-based TLS (DoT, DoH) with KTLS
+	quicTLSConfig *stdtls.Config    // QUIC-based protocols (DoQ, DoH3)
 	ctx           context.Context
 	cancel        context.CancelCauseFunc
 	serverGroup   *errgroup.Group
@@ -177,27 +179,44 @@ func secureClientIP(conn any) net.IP {
 // New creates a new TLS Server with the given DNS handler and configuration,
 // loading or generating the TLS certificate as specified.
 func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Server, error) {
-	var cert cryptotls.Certificate
+	var eCert cryptotls.Certificate
+	var sCert stdtls.Certificate
 	var err error
 
 	if cfg.SelfSigned {
-		cert, err = generateSelfSignedCert(cfg.Domain)
+		eCert, err = generateSelfSignedCert(cfg.Domain)
 		if err != nil {
 			return nil, fmt.Errorf("generate self-signed certificate: %w", err)
 		}
+		// Build standard crypto/tls certificate from the same DER + key.
+		sCert = stdtls.Certificate{Certificate: eCert.Certificate, PrivateKey: eCert.PrivateKey}
 		log.Infof("TLS: Using self-signed certificate for domain: %s", cfg.Domain)
 	} else {
-		cert, err = cryptotls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		eCert, err = cryptotls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load certificate: %w", err)
+		}
+		sCert, err = stdtls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load certificate (std): %w", err)
 		}
 		log.Infof("TLS: Using certificate from files: %s, %s", cfg.CertFile, cfg.KeyFile)
 	}
 
+	// TCP-based TLS config (DoT, DoH) with kernel TLS offload.
 	baseConfig := &cryptotls.Config{
-		Certificates:     []cryptotls.Certificate{cert},
+		KernelTX:         true,
+		KernelRX:         true,
+		Certificates:     []cryptotls.Certificate{eCert},
 		CurvePreferences: []cryptotls.CurveID{},
 		MinVersion:       cryptotls.VersionTLS13,
+	}
+
+	// QUIC-based TLS config (DoQ, DoH3) — KTLS does not apply.
+	baseQUICConfig := &stdtls.Config{
+		Certificates:     []stdtls.Certificate{sCert},
+		CurvePreferences: []stdtls.CurveID{},
+		MinVersion:       stdtls.VersionTLS13,
 	}
 
 	// Wrap baseConfig with GetConfigForClient to log negotiated TLS
@@ -209,7 +228,7 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 		remoteAddr := info.Conn.RemoteAddr().String()
 		cfg := baseConfig.Clone()
 		cfg.VerifyConnection = func(cs cryptotls.ConnectionState) error {
-			dnsutil.LogTLSConnectionState(cs, "TLS", "handshake from", remoteAddr)
+			dnsutil.LogTLSConnectionState("TLS", "handshake from", remoteAddr, cs.Version, cs.CipherSuite, cs.CurveID)
 			return nil
 		}
 		return cfg, nil
@@ -220,21 +239,28 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 	serverGroup.SetLimit(config.DefaultServerGoroutineLimit)
 
 	s := &Server{
-		cfg:         cfg,
-		handler:     handler,
-		tlsConfig:   tlsConfig,
-		ctx:         ctx,
-		cancel:      cancel,
-		serverGroup: serverGroup,
-		serverCtx:   serverCtx,
+		cfg:           cfg,
+		handler:       handler,
+		tlsConfig:     tlsConfig,
+		quicTLSConfig: baseQUICConfig,
+		ctx:           ctx,
+		cancel:        cancel,
+		serverGroup:   serverGroup,
+		serverCtx:     serverCtx,
 	}
 
-	s.displayCertificateInfo(cert)
+	s.displayCertificateInfo(eCert)
 
 	return s, nil
 }
 
 // TLSConfig returns the underlying crypto/tls configuration used by the server.
+// QUICTLSConfig returns the TLS config for QUIC-based protocols (DoQ, DoH3).
+// KTLS does not apply to QUIC, so this uses the standard crypto/tls.
+func (s *Server) QUICTLSConfig() *stdtls.Config {
+	return s.quicTLSConfig
+}
+
 func (s *Server) TLSConfig() *cryptotls.Config {
 	return s.tlsConfig
 }

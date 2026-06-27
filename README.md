@@ -39,6 +39,7 @@
 | **DoH** (DNS over HTTPS)   | 443  | HTTP/2 加密      |
 | **DoH3** (DNS over HTTP/3) | 443  | HTTP/3 加密      |
 
+- **内核 TLS 卸载 (KTLS)**：TCP TLS（DoT/DoH）支持 Linux 内核 TLS 卸载，零拷贝加解密，不支持时静默回退用户态
 - **统一证书管理**：自签名 ECDSA P-384 CA，动态签发
 - **DNS 填充 (RFC 7830)**：安全连接填充至 468 字节
 - **DDR 自动发现 (RFC 9461/9462)**：SVCB 记录自动生成
@@ -143,6 +144,8 @@ zjdns/
     │   ├── doh.go                   # DoH 查询 (HTTP/2)
     │   ├── doh3.go                  # DoH3 查询 (HTTP/3)
     │   ├── doh_request.go           # DoH/DoH3 共享请求构建
+    │   ├── socks5.go                # SOCKS5 代理客户端 (RFC 1928/1929, TCP+UDP)
+    │   ├── ktls.go                  # KTLS 配置构建 + DoT 拨号/TLS 交换
     │   └── pool/                    # 连接池子包
     │       ├── tcp.go               # RFC 7766 TCP/DoT 流水线连接池
     │       └── quic.go               # QUIC 连接池

@@ -13,6 +13,7 @@ RUN \
     wget "https://curl.se/ca/cacert.pem" \
     && go get -u github.com/miekg/dns@master \
     && go get -u github.com/quic-go/quic-go@master \
+    && go get -u gitlab.com/go-extension/tls@master \
     && go mod tidy \
     && BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC') \
     && COMMIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") \

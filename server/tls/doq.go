@@ -36,7 +36,7 @@ func (s *Server) startDOQServer() error {
 
 	s.doqTransport = &quic.Transport{Conn: s.doqConn}
 
-	quicTLSConfig := s.tlsConfig.Clone()
+	quicTLSConfig := s.QUICTLSConfig().Clone()
 	quicTLSConfig.NextProtos = config.NextProtoDOQ
 
 	quicConfig := &quic.Config{

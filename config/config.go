@@ -2,10 +2,10 @@
 package config
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	eTLS "gitlab.com/go-extension/tls"
 	"net"
 	"net/url"
 	"os"
@@ -435,7 +435,7 @@ func validateTLSCertConfig(cfg *ServerConfig) error {
 				info.Mode().Perm(), cfg.Server.TLS.KeyFile)
 		}
 	}
-	if _, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile); err != nil {
+	if _, err := eTLS.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile); err != nil {
 		return fmt.Errorf("config: load certificate: %w", err)
 	}
 	return nil

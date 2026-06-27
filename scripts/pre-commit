@@ -6,6 +6,9 @@ set -e
 echo "==> golangci-lint fmt..."
 golangci-lint fmt ./...
 
+# Re-stage tracked files that may have been touched by golangci-lint fmt.
+git add -u
+
 echo "==> golangci-lint run..."
 golangci-lint run ./...
 

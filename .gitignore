@@ -4,7 +4,32 @@
 
 # OS
 .DS_Store
+Thumbs.db
 
-# Cache snapshots
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Go
+*.test
+*.out
+*.prof
+/coverage.txt
+
+# Build artifacts
+/tmp/
+/dist/
 *.snapshot
 *.snapshot.tmp
+
+# Local config (may contain secrets/proxy credentials)
+config.debug.json
+
+# Logs
+*.log
+
+# Environment
+.env

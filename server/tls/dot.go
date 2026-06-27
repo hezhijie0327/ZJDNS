@@ -3,8 +3,8 @@ package tls
 import (
 	"bufio"
 	"context"
-	cryptotls "crypto/tls"
 	"encoding/binary"
+	cryptotls "gitlab.com/go-extension/tls"
 	"io"
 	"net"
 	"sync"

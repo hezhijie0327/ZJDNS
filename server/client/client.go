@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	eTLS "gitlab.com/go-extension/tls"
 	"net/http"
 	"strings"
 	"sync"
@@ -59,7 +60,7 @@ type Client struct {
 
 	quicPool *connpool.QUICPool
 
-	SessionCache tls.ClientSessionCache
+	SessionCache eTLS.ClientSessionCache
 
 	tcpPool *connpool.Pool
 	dotPool *connpool.Pool
@@ -120,7 +121,7 @@ func New() *Client {
 		doh3Transports: make(map[string]*http.Client),
 		quicConfigs:    make(map[string]*quic.Config),
 		quicPool:       connpool.NewQUICPool(config.DefaultMaxConns),
-		SessionCache:   tls.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
+		SessionCache:   eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
 		tcpPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		dotPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		proxyDialers:   make(map[string]*Socks5Dialer),
@@ -266,32 +267,36 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	return result
 }
 
-func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, protocol string) (*dns.Msg, error) {
-	tlsConfig := &tls.Config{
+// stdTLSConfig builds a standard crypto/tls Config for QUIC-based upstream
+// protocols (DoQ, DoH3). KTLS does not apply to QUIC. ClientSessionCache is
+// omitted — QUIC uses 0-RTT tokens for session resumption.
+func (c *Client) stdTLSConfig(server *config.UpstreamServer) *tls.Config {
+	return &tls.Config{
 		CurvePreferences:   []tls.CurveID{},
 		InsecureSkipVerify: server.SkipTLSVerify,
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         server.ServerName,
-		ClientSessionCache: c.SessionCache,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			dnsutil.LogTLSConnectionState(cs, "UPSTREAM", "negotiated for", server.Address)
+			dnsutil.LogTLSConnectionState("UPSTREAM", "negotiated for", server.Address, cs.Version, cs.CipherSuite, cs.CurveID)
 			return nil
 		},
 	}
+}
 
+func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, protocol string) (*dns.Msg, error) {
 	if server.SkipTLSVerify {
 		log.Debugf("UPSTREAM: TLS verification disabled for %s - security risk!", server.ServerName)
 	}
 
 	switch protocol {
 	case "dot", "tls":
-		return c.executeTLS(ctx, msg, server, tlsConfig)
+		return c.executeTLS(ctx, msg, server, c.eTLSClientConfig(server))
 	case "doq", "quic":
-		return c.executeQUIC(ctx, msg, server, tlsConfig)
+		return c.executeQUIC(ctx, msg, server, c.stdTLSConfig(server))
 	case "doh", "https":
-		return c.executeDoH(ctx, msg, server, tlsConfig)
+		return c.executeDoH(ctx, msg, server, c.eTLSClientConfig(server))
 	case "doh3", "http3":
-		return c.executeDoH3(ctx, msg, server, tlsConfig)
+		return c.executeDoH3(ctx, msg, server, c.stdTLSConfig(server))
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}

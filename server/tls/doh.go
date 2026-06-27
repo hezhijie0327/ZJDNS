@@ -1,9 +1,9 @@
 package tls
 
 import (
-	cryptotls "crypto/tls"
 	"encoding/base64"
 	"fmt"
+	cryptotls "gitlab.com/go-extension/tls"
 	"io"
 	"net"
 	"net/http"
@@ -53,7 +53,7 @@ func (s *Server) startDOHServer(port string) error {
 func (s *Server) startDoH3Server(port string) error {
 	addr := ":" + port
 
-	tlsConfig := s.tlsConfig.Clone()
+	tlsConfig := s.QUICTLSConfig().Clone()
 	tlsConfig.NextProtos = config.NextProtoDOH3
 
 	quicConfig := &quic.Config{

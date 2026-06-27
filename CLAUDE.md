@@ -110,6 +110,7 @@ zjdns/
     │   ├── doh3.go                # DoH3 via HTTP/3 transport
     │   ├── doh_request.go          # Shared DoH/DoH3 HTTP request builder
     │   ├── socks5.go               # SOCKS5 proxy client (RFC 1928/1929, TCP+UDP)
+    │   ├── ktls.go                 # KTLS config builders + DoT dial/exchange helpers
     │   └── pool/                  # Connection pool sub-package
     │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
     │       └── quic.go            # QUIC connection pool (QUICPool, QUICConn)
@@ -139,10 +140,10 @@ zjdns/
 ```
 main ──→ server, config
 server ──→ cache, cidr, config, edns, dnsutil, log, pool, rewrite, latency(server), resolver, security, stats,
-client ──→ config, edns, dnsutil, log, pool, pool (in client)
+client ──→ config, edns, dnsutil, log, pool, pool (in client), go-extension/tls
 resolver ──→ config, edns, client, security, dnsutil, latency(server), log, pool
 security ──→ dnsutil, log
-tls (in server) ──→ config, dnsutil, log, pool, connpool (client/pool)
+tls (in server) ──→ config, dnsutil, log, pool, connpool (client/pool), go-extension/tls
 cache ──→ config, edns, dnsutil, log
 edns ──→ dnsutil, ipdetect, log, pool
 cidr ──→ config, dnsutil, log
@@ -431,6 +432,12 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   from `doqIPCounts` every 5 minutes to prevent unbounded map growth.
 - **pprof fix**: Added `_ "net/http/pprof"` import so the pprof HTTP server
   actually registers its debug endpoints on `http.DefaultServeMux`.
+- **Kernel TLS (KTLS) offload**: Client and server TCP-based TLS (DoT, DoH) use
+  `gitlab.com/go-extension/tls` (drop-in `crypto/tls` replacement) with `KernelTX`/`KernelRX`
+  enabled. `server/tls/tls.go` holds dual configs from the same cert — go-extension
+  for TCP listeners, crypto/tls for QUIC. Client uses `DialTLSContext → eTLS.Client()`.
+  KTLS is silently skipped on non-Linux or when the kernel
+  TLS module is absent; QUIC (DoQ/DoH3) does not support KTLS (requires TCP).
 - **SOCKS5 proxy support** (`server/client/socks5.go`): Per-upstream optional SOCKS5 proxy
   (`socks5://[user:pass@]host:port`) routes all outbound DNS queries through the proxy.
   TCP CONNECT for stream protocols (TCP, DoT, DoH) and UDP ASSOCIATE for datagram protocols

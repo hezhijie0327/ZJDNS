@@ -2,7 +2,6 @@
 package dnsutil
 
 import (
-	"crypto/tls"
 	"encoding/binary"
 	"io"
 	"net"
@@ -223,7 +222,10 @@ func ReadDNSFrame(r io.Reader) ([]byte, error) {
 // key exchange group, and cipher suite. It is shared by both the upstream client
 // (role="UPSTREAM", dir="negotiated for") and the server-side TLS listener
 // (role="TLS", dir="handshake from").
-func LogTLSConnectionState(cs tls.ConnectionState, role, dir, addr string) {
+//
+// It accepts the individual fields to work with both crypto/tls.ConnectionState
+// and go-extension/tls.ConnectionState without type coupling.
+func LogTLSConnectionState(role, dir, addr string, version uint16, cipherSuite uint16, curveID interface{ String() string }) {
 	log.Debugf("%s: TLS %s %s — version(codepoint)=0x%04X, group(name)=%s, cipher(codepoint)=0x%04X",
-		role, dir, addr, cs.Version, cs.CurveID, cs.CipherSuite)
+		role, dir, addr, version, curveID, cipherSuite)
 }
