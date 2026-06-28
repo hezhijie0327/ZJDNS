@@ -688,11 +688,7 @@ func parseAddressFromBytes(data []byte, atyp byte) (*net.UDPAddr, int, error) {
 			return &net.UDPAddr{IP: ip, Port: port}, 1 + domainLen + 2, nil
 		}
 		// For domain names in UDP replies (unusual), resolve.
-		ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip", host)
-		if err != nil || len(ips) == 0 {
-			return nil, 0, fmt.Errorf("resolve %q: %w", host, err)
-		}
-		return &net.UDPAddr{IP: ips[0], Port: port}, 1 + domainLen + 2, nil
+		return nil, 0, fmt.Errorf("domain name in UDP reply not supported (got %q)", host)
 
 	default:
 		return nil, 0, fmt.Errorf("unsupported address type %#x", atyp)

@@ -142,8 +142,6 @@ func BenchmarkEDNSApplyToMessage(b *testing.B) {
 
 func BenchmarkShuffleSlice(b *testing.B) {
 	disableLogging()
-	servers := resolver.ShuffleSlice[[]string](nil)
-	_ = servers
 	s := make([]string, 13)
 	for i := range s {
 		s[i] = fmt.Sprintf("ns%d.example.com:53", i)

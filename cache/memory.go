@@ -48,6 +48,7 @@ type MemoryCache struct {
 	persistInterval time.Duration
 	persistStop     chan struct{}
 	persistDone     chan struct{}
+	ptrSweepStop    chan struct{}
 	persistGen      atomic.Int64
 }
 
@@ -211,10 +212,16 @@ func (mc *MemoryCache) startPTRSweeper() {
 	if mc.persistInterval <= 0 {
 		mc.persistInterval = config.DefaultCachePersistInterval
 	}
+	mc.ptrSweepStop = make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(config.DefaultSweepInterval)
 		defer ticker.Stop()
-		for range ticker.C {
+		for {
+			select {
+			case <-ticker.C:
+			case <-mc.ptrSweepStop:
+				return
+			}
 			if atomic.LoadInt32(&mc.closed) != 0 {
 				return
 			}
@@ -240,6 +247,9 @@ func (mc *MemoryCache) startPTRSweeper() {
 func (mc *MemoryCache) Close() error {
 	if !atomic.CompareAndSwapInt32(&mc.closed, 0, 1) {
 		return nil
+	}
+	if mc.ptrSweepStop != nil {
+		close(mc.ptrSweepStop)
 	}
 	if mc.persistStop != nil {
 		close(mc.persistStop)

@@ -323,6 +323,10 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 | `config.DefaultQUICKeepAlive` | config | 20s (QUIC keep-alive period) |
 | `config.DefaultHTTPIdleConnTimeout` | config | 5 min (HTTP transport idle) |
 | `config.DefaultShutdownTimeout` | config | 15s (graceful shutdown deadline) |
+| `config.DefaultDNSCryptTCPReadTimeout` | config | 2s (DNSCrypt TCP first read deadline) |
+| `config.DefaultDNSCryptTCPIdleTimeout` | config | 8s (DNSCrypt TCP subsequent read deadline) |
+| `config.DefaultInfraProbeTimeout` | config | 5s (infrastructure-level root/NS latency probe timeout) |
+| `config.DefaultRateLimitSweepInterval` | config | 30s (rate limiter entry sweep interval) |
 | `config.DefaultCACertValidity` | config | 45 days (CA self-signed cert lifetime) |
 | `config.DefaultServerCertValidity` | config | 45 days (server self-signed cert lifetime) |
 | `config.DefaultCertExpiryWarnDays` | config | 14 (certificate expiry warning threshold, days) |

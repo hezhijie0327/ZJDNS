@@ -59,21 +59,18 @@ func (s *Server) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP n
 		return ""
 	}
 
-	var serverCookie []byte
+	// Always generate a fresh server cookie per RFC 7873 §5.3.
+	// Validation is informational only — we rotate regardless.
 	if len(cookieOpt.ServerCookie) >= edns.DefaultCookieServerLen {
 		if s.ednsMgr.CookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
 			log.Debugf("EDNS: server cookie validated for %s", clientIP)
-			serverCookie = s.ednsMgr.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 		} else {
 			log.Debugf("EDNS: server cookie invalid for %s, regenerating", clientIP)
-			serverCookie = s.ednsMgr.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 		}
-	}
-
-	if serverCookie == nil {
+	} else {
 		log.Debugf("EDNS: generating new server cookie for %s", clientIP)
-		serverCookie = s.ednsMgr.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 	}
+	serverCookie := s.ednsMgr.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 
 	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 }

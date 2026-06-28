@@ -35,10 +35,11 @@ const (
 	DefaultDNSCryptTCPReadTimeout = 2 * time.Second // DNSCrypt TCP first read deadline
 	DefaultDNSCryptTCPIdleTimeout = 8 * time.Second // DNSCrypt TCP subsequent read deadline
 
-	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
-	DefaultHijackSettleTimeout   = 5 * time.Millisecond   // Max window for GFW detection race after clean response wins
-	DefaultSweepInterval         = 5 * time.Minute        // Periodic cleanup sweep
-	DefaultTCPWriteMuStaleCutoff = 10 * time.Minute       // Stale TCP write mutex cutoff
+	DefaultAcceptRetryDelay       = 100 * time.Millisecond // DoT/DoQ accept retry sleep
+	DefaultHijackSettleTimeout    = 5 * time.Millisecond   // Max window for GFW detection race after clean response wins
+	DefaultSweepInterval          = 5 * time.Minute        // Periodic cleanup sweep
+	DefaultRateLimitSweepInterval = 30 * time.Second       // Rate limiter sweep (faster than default)
+	DefaultTCPWriteMuStaleCutoff  = 2 * time.Minute        // Stale TCP write mutex cutoff
 
 	DefaultHTTPIdleConnTimeout = 5 * time.Minute  // HTTP transport idle connection
 	DefaultQUICKeepAlive       = 20 * time.Second // QUIC keep-alive period

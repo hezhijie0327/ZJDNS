@@ -140,14 +140,14 @@ func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDN
 	buf.WriteString(cacheKeyDNSPrefix)
 	buf.WriteString(dnsutil.NormalizeDomain(question.Name))
 	buf.WriteByte(byte(config.DefaultCacheKeySeparator))
-	buf.WriteString(strconv.FormatUint(uint64(question.Qtype), 10))
+	writeUint(&buf, uint64(question.Qtype))
 	buf.WriteByte(byte(config.DefaultCacheKeySeparator))
-	buf.WriteString(strconv.FormatUint(uint64(question.Qclass), 10))
+	writeUint(&buf, uint64(question.Qclass))
 	if ecs != nil {
 		buf.WriteString(config.DefaultCacheKeyECSPrefix)
 		buf.WriteString(ecs.Address.String())
 		buf.WriteByte(byte(config.DefaultCacheKeyECSDelim))
-		buf.WriteString(strconv.FormatUint(uint64(ecs.SourcePrefix), 10))
+		writeUint(&buf, uint64(ecs.SourcePrefix))
 	}
 	if clientRequestedDNSSEC {
 		buf.WriteString(config.DefaultCacheKeyDNSSECSuffix)
@@ -159,6 +159,22 @@ func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDN
 		return fmt.Sprintf(config.DefaultCacheKeyHashFormat, h.Sum(nil))
 	}
 	return result
+}
+
+// writeUint appends the decimal representation of n to b without allocating
+// an intermediate string (avoids the allocation of strconv.FormatUint).
+func writeUint(b *strings.Builder, n uint64) {
+	var buf [20]byte // max uint64 is 20 decimal digits
+	i := len(buf)
+	for {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+		if n == 0 {
+			break
+		}
+	}
+	b.Write(buf[i:])
 }
 
 // createCompactRecord creates a CompactRecord from a DNS resource record.

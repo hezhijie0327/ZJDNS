@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -538,16 +537,16 @@ func detectRequestProtocol(w dns.ResponseWriter) string {
 	if addr == nil {
 		return config.ProtoUDP
 	}
-
-	network := strings.ToLower(addr.Network())
-	switch {
-	case strings.HasPrefix(network, config.ProtoTCP):
-		return config.ProtoTCP
-	case strings.HasPrefix(network, config.ProtoUDP):
-		return config.ProtoUDP
-	default:
-		return config.ProtoUDP
+	// Case-insensitive protocol detection without allocation:
+	// check the first byte of the network string.
+	network := addr.Network()
+	if len(network) > 0 {
+		switch network[0] {
+		case 't', 'T':
+			return config.ProtoTCP
+		}
 	}
+	return config.ProtoUDP
 }
 
 func (s *Server) processCIDRRefused(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {

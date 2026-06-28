@@ -171,10 +171,11 @@ func sanitizeLogMessage(msg string) string {
 		return msg
 	}
 	// Fast path: scan for any byte that needs replacement.
+	// Replace NUL (0x00), control chars (0x01-0x1F except \t=0x09), DEL (0x7F).
 	needsReplace := false
 	for i := 0; i < len(msg); i++ {
 		c := msg[i]
-		if c == 0x0a || c == 0x0d || c == 0x7f || (c < 32 && c != 0) {
+		if c <= 0x1f || c == 0x7f {
 			needsReplace = true
 			break
 		}
@@ -185,7 +186,7 @@ func sanitizeLogMessage(msg string) string {
 	b := make([]byte, 0, len(msg))
 	for i := 0; i < len(msg); i++ {
 		c := msg[i]
-		if c == 0x0a || c == 0x0d || c == 0x7f || (c < 32 && c != 0) {
+		if c <= 0x1f || c == 0x7f {
 			b = append(b, ' ')
 		} else {
 			b = append(b, c)

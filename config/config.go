@@ -435,6 +435,35 @@ func validatePorts(cfg *ServerConfig) error {
 			}
 		}
 	}
+	// Detect port conflicts: DNS port must not overlap with TLS/HTTPS/DNSCrypt/pprof.
+	seen := map[string]string{cfg.Server.Port: "server.port"}
+	if cfg.Server.Pprof != "" {
+		if first, ok := seen[cfg.Server.Pprof]; ok {
+			return fmt.Errorf("port conflict: server.pprof=%s and %s=%s both use port %s",
+				cfg.Server.Pprof, first, cfg.Server.Pprof, cfg.Server.Pprof)
+		}
+		seen[cfg.Server.Pprof] = "server.pprof"
+	}
+	if cfg.Server.TLS.Port != "" {
+		if first, ok := seen[cfg.Server.TLS.Port]; ok {
+			return fmt.Errorf("port conflict: server.tls.port=%s and %s=%s both use port %s",
+				cfg.Server.TLS.Port, first, cfg.Server.TLS.Port, cfg.Server.TLS.Port)
+		}
+		seen[cfg.Server.TLS.Port] = "server.tls.port"
+	}
+	if cfg.Server.TLS.HTTPS.Port != "" {
+		if first, ok := seen[cfg.Server.TLS.HTTPS.Port]; ok {
+			return fmt.Errorf("port conflict: server.tls.https.port=%s and %s=%s both use port %s",
+				cfg.Server.TLS.HTTPS.Port, first, cfg.Server.TLS.HTTPS.Port, cfg.Server.TLS.HTTPS.Port)
+		}
+		seen[cfg.Server.TLS.HTTPS.Port] = "server.tls.https.port"
+	}
+	if cfg.Server.DNSCrypt.Port != "" {
+		if first, ok := seen[cfg.Server.DNSCrypt.Port]; ok {
+			return fmt.Errorf("port conflict: server.dnscrypt.port=%s and %s=%s both use port %s",
+				cfg.Server.DNSCrypt.Port, first, cfg.Server.DNSCrypt.Port, cfg.Server.DNSCrypt.Port)
+		}
+	}
 	return nil
 }
 

@@ -36,10 +36,12 @@ import (
 	"zjdns/stats"
 )
 
-const nanosPerSecond int64 = 1e9
+const nanosPerSecond = int64(time.Second)
 
 // Server is the core DNS server handling query processing, protocol listeners, and lifecycle.
 type Server struct {
+	closed int32 // hot-path: checked on every query via atomic load
+
 	config       *config.ServerConfig
 	cacheMgr     cache.Store
 	reverseCache interface {
@@ -62,7 +64,6 @@ type Server struct {
 	cacheRefreshGroup *errgroup.Group
 	cacheRefreshCtx   context.Context
 	prefetchCooldown  sync.Map
-	closed            int32
 	resolver          *resolver.Resolver
 	prober            *latency.Prober
 	semaphore         chan struct{}
@@ -331,6 +332,23 @@ func (s *Server) startCookieRotation() {
 	})
 }
 
+// refreshECSOnce attempts a single ECS refresh and logs the result.
+func (s *Server) refreshECSOnce() {
+	ecsList, changed, err := s.ednsMgr.RefreshDefaultECS()
+	if err != nil {
+		log.Warnf("EDNS: default ECS refresh failed: %v", err)
+		return
+	}
+	if !changed {
+		return
+	}
+	for _, ecs := range ecsList {
+		if ecs != nil {
+			log.Infof("EDNS: refreshed default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
+		}
+	}
+}
+
 // startECSRefresh periodically refreshes the default EDNS Client Subnet value.
 func (s *Server) startECSRefresh() {
 	if s.ednsMgr == nil || !s.ednsMgr.ShouldRefreshDefaultECS() {
@@ -338,30 +356,13 @@ func (s *Server) startECSRefresh() {
 	}
 	s.backgroundGroup.Go(func() error {
 		defer dnsutil.HandlePanic("EDNS default ECS refresh")
-		// Run once immediately before starting the ticker.
-		if ecsList, changed, err := s.ednsMgr.RefreshDefaultECS(); err != nil {
-			log.Warnf("EDNS: initial default ECS refresh failed: %v", err)
-		} else if changed {
-			for _, ecs := range ecsList {
-				if ecs != nil {
-					log.Infof("EDNS: initial default ECS refreshed: %s/%d", ecs.Address, ecs.SourcePrefix)
-				}
-			}
-		}
+		s.refreshECSOnce()
 		ticker := time.NewTicker(config.DefaultECSRefreshInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				if ecsList, changed, err := s.ednsMgr.RefreshDefaultECS(); err != nil {
-					log.Warnf("EDNS: default ECS refresh failed: %v", err)
-				} else if changed {
-					for _, ecs := range ecsList {
-						if ecs != nil {
-							log.Infof("EDNS: refreshed default ECS: %s/%d", ecs.Address, ecs.SourcePrefix)
-						}
-					}
-				}
+				s.refreshECSOnce()
 			case <-s.backgroundCtx.Done():
 				return nil
 			}
@@ -412,8 +413,8 @@ func (s *Server) startRateLimiterSweep() {
 		return
 	}
 	rl := s.udpRateLimiter
-	s.runBackgroundTicker("UDP rate limiter sweep", config.DefaultSweepInterval, func() {
-		rl.sweep(config.DefaultSweepInterval)
+	s.runBackgroundTicker("UDP rate limiter sweep", config.DefaultRateLimitSweepInterval, func() {
+		rl.sweep(config.DefaultRateLimitSweepInterval)
 	})
 }
 
