@@ -3,7 +3,6 @@ package tls
 import (
 	"encoding/base64"
 	"fmt"
-	cryptotls "gitlab.com/go-extension/tls"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +11,8 @@ import (
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	cryptotls "gitlab.com/go-extension/tls"
+	"golang.org/x/net/http2"
 
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
@@ -31,8 +32,11 @@ func (s *Server) startDOHServer(port string) error {
 	s.httpsListener = cryptotls.NewListener(listener, tlsConfig)
 	log.Infof("TLS: DoH server started on port %s", port)
 
-	s.httpsServer = &http.Server{
-		Handler:           s,
+	// Go's net/http only detects TLS on standard *tls.Conn, not
+	// *cryptotls.Conn, so HTTP/2 is silently disabled. We serve
+	// HTTP/2 explicitly via an accept loop so KTLS remains active.
+	s.dohServer = new(http2.Server)
+	baseCfg := &http.Server{
 		ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
 		WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
 		IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
@@ -40,11 +44,16 @@ func (s *Server) startDOHServer(port string) error {
 
 	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoH server")
-		if err := s.httpsServer.Serve(s.httpsListener); err != nil && err != http.ErrServerClosed {
-			log.Errorf("TLS: DoH server error: %v", err)
-			return err
+		for {
+			conn, err := s.httpsListener.Accept()
+			if err != nil {
+				return nil // listener closed
+			}
+			go s.dohServer.ServeConn(conn, &http2.ServeConnOpts{
+				Handler:    s,
+				BaseConfig: baseCfg,
+			})
 		}
-		return nil
 	})
 
 	return nil

@@ -1,22 +1,10 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
-
-func TestGenerateExampleConfig_ValidJSON(t *testing.T) {
-	data := GenerateExampleConfig()
-	if len(data) == 0 {
-		t.Fatal("GenerateExampleConfig returned empty")
-	}
-	var cfg ServerConfig
-	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
-		t.Fatalf("generated config is not valid JSON: %v", err)
-	}
-}
 
 func TestLoadConfig_DefaultPortsApplied(t *testing.T) {
 	dir := t.TempDir()

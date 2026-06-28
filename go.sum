@@ -12,14 +12,10 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d h1:CPqTNIigGweVPT4CYb+OO2E6XyRKFOmvTHwWRLgCAlE=
 github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d/go.mod h1:QX5ZVULjAfZJux/W62Y91HvCh9hyW6enAwcrrv/sLj0=
-github.com/emmansun/gmsm v0.42.0 h1:4lKCm4uay1ZjzJmdOzxCZHa4WvIbz64Z3NEJn9itMHg=
-github.com/emmansun/gmsm v0.42.0/go.mod h1:FD1EQk4XcSMkahZFzNwFoI/uXzAlODB9JVsJ9G5N7Do=
 github.com/emmansun/gmsm v0.44.0 h1:QAg/Xuha84+AUPFIe7T8Ly4S8z54+UPwpBnHS8Y8Ubc=
 github.com/emmansun/gmsm v0.44.0/go.mod h1:CHti5ihGbTOI0pCtdoC8HLjBxGFktH/ksbpsCgsCzkQ=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
-github.com/klauspost/compress v1.18.5 h1:/h1gH5Ce+VWNLSWqPzOVn6XBO+vJbCNGvjoaGBFW2IE=
-github.com/klauspost/compress v1.18.5/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/klauspost/compress v1.18.6 h1:2jupLlAwFm95+YDR+NwD2MEfFO9d4z4Prjl1XXDjuao=
 github.com/klauspost/compress v1.18.6/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/miekg/dns v1.1.73-0.20260622091530-fa041eedc7a8 h1:xB0muGyS97xteVCqmlR26Um92T2SFw2KPEHdj6vQEA0=
@@ -32,8 +28,8 @@ github.com/quic-go/go-ossfuzz-seeds v0.1.0 h1:APacT+iIaNF6fd8AGEiN3bT/Jtkd2jz4v4
 github.com/quic-go/go-ossfuzz-seeds v0.1.0/go.mod h1:3IOHRbJIc+L6YKMwfDtJAM9Vj9k0YY4muhuyUYk5tbk=
 github.com/quic-go/qpack v0.6.0 h1:g7W+BMYynC1LbYLSqRt8PBg5Tgwxn214ZZR34VIOjz8=
 github.com/quic-go/qpack v0.6.0/go.mod h1:lUpLKChi8njB4ty2bFLX2x4gzDqXwUpaO1DP9qMDZII=
-github.com/quic-go/quic-go v0.60.1-0.20260622040909-9b0474c9b997 h1:5SQyRn5WCtUp4ivwnn61LU3HBJFQ9H0efupsNZiTp6Q=
-github.com/quic-go/quic-go v0.60.1-0.20260622040909-9b0474c9b997/go.mod h1:wpKpjmPpftl30sL6pFh7REVpjbcCVy4zt2vDyK1TuJk=
+github.com/quic-go/quic-go v0.60.1-0.20260627063742-8dfc5ee8766a h1:MUJC/oeuJv4Q3fzqEy/Jo+oBiguUDe0dj9XVYQ7Lh3w=
+github.com/quic-go/quic-go v0.60.1-0.20260627063742-8dfc5ee8766a/go.mod h1:wpKpjmPpftl30sL6pFh7REVpjbcCVy4zt2vDyK1TuJk=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
@@ -48,8 +44,6 @@ gitlab.com/go-extension/hash v0.0.0-20250912170447-263d1d8375e4 h1:SMsGMMkGS9WBY
 gitlab.com/go-extension/hash v0.0.0-20250912170447-263d1d8375e4/go.mod h1:fgbJOB/r2jzfdhIdj6N0Hz6hahFqzSdU5TH1Hpoqq7c=
 gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5 h1:xQA0rfVPqW3G6dnb4qtgBdxr9XLu9vzDfdqKfLqGFXA=
 gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5/go.mod h1:nRmjyZOSF6N/6yuRl7ui9wKb1DjMX9ELGzOwELwWVSU=
-gitlab.com/go-extension/tls v0.0.0-20260519093151-a11971e4240d h1:fm37KHdWKab5XhLwCgnfsaiIP+N9D7eyzjGdBmhnIXc=
-gitlab.com/go-extension/tls v0.0.0-20260519093151-a11971e4240d/go.mod h1:YDOE3Bcr2glufOLkR1iTOguApmrXdmJGTg5XuAij9bY=
 gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246 h1:XTZfR1rJjtphieZYO4VdVO4WjsDPOBuSPY9ryauAyyc=
 gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246/go.mod h1:YDOE3Bcr2glufOLkR1iTOguApmrXdmJGTg5XuAij9bY=
 gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891 h1:b45Hl2gyHbV6GANcg/7BSZ0A0JUjq/gBEq+OeJlAuM0=

@@ -15,7 +15,6 @@ import (
 	eTLS "gitlab.com/go-extension/tls"
 	"math/big"
 	"net"
-	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +23,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"golang.org/x/net/http2"
 	"golang.org/x/sync/errgroup"
 
 	"zjdns/config"
@@ -70,7 +70,7 @@ type Server struct {
 	doqConn       *net.UDPConn
 	doqListener   *quic.EarlyListener
 	doqTransport  *quic.Transport
-	httpsServer   *http.Server
+	dohServer     *http2.Server
 	h3Server      *http3.Server
 	httpsListener net.Listener
 	h3Listener    *quic.EarlyListener
@@ -389,11 +389,6 @@ func (s *Server) Shutdown() error {
 	}
 	if s.doqListener != nil {
 		dnsutil.CloseWithLog(s.doqListener, "DoQ listener")
-	}
-	if s.httpsServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
-		defer cancel()
-		_ = s.httpsServer.Shutdown(ctx)
 	}
 	if s.h3Server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)

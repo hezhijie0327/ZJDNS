@@ -2,6 +2,8 @@
 package config
 
 import (
+	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,11 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/miekg/dns"
+
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
-
-	"github.com/miekg/dns"
 )
 
 // ServerConfig is the top-level configuration structure for the DNS server.
@@ -31,11 +33,12 @@ type ServerConfig struct {
 
 // ServerSettings contains the server runtime settings and feature flags.
 type ServerSettings struct {
-	Port     string       `json:"port"`
-	Pprof    string       `json:"pprof"`
-	LogLevel string       `json:"log_level"`
-	TLS      TLSSettings  `json:"tls"`
-	Features FeatureFlags `json:"features"`
+	Port     string           `json:"port"`
+	Pprof    string           `json:"pprof"`
+	LogLevel string           `json:"log_level"`
+	TLS      TLSSettings      `json:"tls"`
+	DNSCrypt DNSCryptSettings `json:"dnscrypt"`
+	Features FeatureFlags     `json:"features"`
 
 	MaxConcurrent int `json:"max_concurrent,omitempty"`
 }
@@ -53,6 +56,16 @@ type TLSSettings struct {
 type HTTPSSettings struct {
 	Port     string `json:"port"`
 	Endpoint string `json:"endpoint"`
+}
+
+// DNSCryptSettings configures the DNSCrypt v2 encrypted DNS listener.
+type DNSCryptSettings struct {
+	Port         string `json:"port,omitempty"`       // Listener port for UDP and TCP (default "8443")
+	ProviderName string `json:"provider_name"`        // e.g. "2.dnscrypt-cert.example.org"
+	PrivateKey   string `json:"private_key"`          // hex-encoded Ed25519 private key (128 hex chars)
+	PublicKey    string `json:"public_key,omitempty"` // hex-encoded Ed25519 public key (informational, ignored by server)
+	CertTTL      int    `json:"cert_ttl,omitempty"`   // Certificate lifetime in seconds (default 31536000 = 365d)
+	ESVersion    string `json:"es_version,omitempty"` // Crypto construction: "xsalsa20" (default) or "xchacha20"
 }
 
 // FeatureFlags enables optional features: hijack protection, DDR, ECS, cache,
@@ -97,12 +110,14 @@ type StatsSettings struct {
 // UpstreamServer defines a single upstream DNS server with address, protocol,
 // and optional matching.
 type UpstreamServer struct {
-	Address       string   `json:"address"`
-	Protocol      string   `json:"protocol"`
-	ServerName    string   `json:"server_name,omitempty"`
-	SkipTLSVerify bool     `json:"skip_tls_verify,omitempty"`
-	Match         []string `json:"match,omitempty"`
-	Proxy         string   `json:"proxy,omitempty"` // socks5://[user:pass@]host:port
+	Address           string   `json:"address"`
+	Protocol          string   `json:"protocol"`
+	ServerName        string   `json:"server_name,omitempty"`
+	SkipTLSVerify     bool     `json:"skip_tls_verify,omitempty"`
+	Match             []string `json:"match,omitempty"`
+	Proxy             string   `json:"proxy,omitempty"`               // socks5://[user:pass@]host:port
+	DNSCryptPublicKey string   `json:"dnscrypt_public_key,omitempty"` // hex-encoded Ed25519 public key (DNSCrypt only)
+	DNSCryptTCP       bool     `json:"dnscrypt_tcp,omitempty"`        // use TCP for DNSCrypt upstream (default: UDP)
 }
 
 // RewriteRule defines a DNS rewrite rule with synthetic response, client
@@ -190,7 +205,7 @@ func (s *UpstreamServer) IsRecursive() bool {
 // JSON file.
 func (cm *Loader) LoadConfig(configFile string) (*ServerConfig, error) {
 	if configFile == "" {
-		return cm.getDefaultConfig(), nil
+		return NewDefaultServerConfig(), nil
 	}
 
 	data, err := os.ReadFile(configFile)
@@ -273,6 +288,9 @@ func (cm *Loader) validateConfig(cfg *ServerConfig) error {
 	if err := validateTLSCertConfig(cfg); err != nil {
 		return err
 	}
+	if err := validateDNSCryptConfig(cfg); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -335,6 +353,7 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 		validProtocols := map[string]bool{
 			"udp": true, "tcp": true, "tls": true,
 			"quic": true, "https": true, "http3": true,
+			"dnscrypt": true,
 		}
 		if server.Protocol != "" && !validProtocols[strings.ToLower(server.Protocol)] {
 			return fmt.Errorf("upstream server %d protocol invalid: %s", i, server.Protocol)
@@ -449,6 +468,45 @@ func validateTLSCertConfig(cfg *ServerConfig) error {
 	return nil
 }
 
+// NormalizeDNSCryptProviderName ensures the provider name includes the
+// 2.dnscrypt-cert. prefix required by the DNSCrypt v2 protocol.
+func NormalizeDNSCryptProviderName(name string) string {
+	if !strings.HasPrefix(name, DNSCryptV2Prefix) {
+		name = DNSCryptV2Prefix + name
+	}
+	return name
+}
+
+func validateDNSCryptConfig(cfg *ServerConfig) error {
+	d := cfg.Server.DNSCrypt
+	if d.Port == "" {
+		return nil
+	}
+	if d.ProviderName == "" {
+		return errors.New("config: dnscrypt.provider_name is required when port is set")
+	}
+	name := NormalizeDNSCryptProviderName(d.ProviderName)
+	if len(name) > 253 {
+		return fmt.Errorf("config: dnscrypt.provider_name too long (%d bytes, max 253)", len(name))
+	}
+	if d.PrivateKey == "" {
+		return errors.New("config: dnscrypt.private_key is required (generate with -generate-dnscrypt-keys)")
+	}
+	keyStr := strings.ReplaceAll(d.PrivateKey, ":", "")
+	keyBytes, err := hex.DecodeString(keyStr)
+	if err != nil {
+		return fmt.Errorf("config: dnscrypt.private_key is not valid hex: %w", err)
+	}
+	if len(keyBytes) != ed25519.PrivateKeySize {
+		return fmt.Errorf("config: dnscrypt.private_key must be %d bytes (%d hex chars), got %d bytes",
+			ed25519.PrivateKeySize, ed25519.PrivateKeySize*2, len(keyBytes))
+	}
+	if d.CertTTL < 0 || d.CertTTL > 315360000 {
+		return fmt.Errorf("config: dnscrypt.cert_ttl must be between 0 and 315360000 (10 years), got %d", d.CertTTL)
+	}
+	return nil
+}
+
 func validateProbePort(index int, protocol string, port *int, defaultPort int) error {
 	if *port <= 0 {
 		*port = defaultPort
@@ -494,7 +552,8 @@ func validateLatencyProbeDefaults(steps []LatencyProbeStep) error {
 	return nil
 }
 
-func (cm *Loader) getDefaultConfig() *ServerConfig {
+// NewDefaultServerConfig returns a ServerConfig with sensible defaults.
+func NewDefaultServerConfig() *ServerConfig {
 	cfg := &ServerConfig{}
 	cfg.Server.LogLevel = log.DefaultLevel
 
@@ -640,70 +699,6 @@ func (cm *Loader) addChaosRecord(cfg *ServerConfig) {
 	}
 
 	log.Infof("CONFIG: CHAOS TXT rewrite records enabled")
-}
-
-// GenerateExampleConfig returns a complete example configuration as indented
-// JSON.
-func GenerateExampleConfig() string {
-	cm := &Loader{}
-	cfg := cm.getDefaultConfig()
-
-	cfg.Server.Pprof = DefaultPprofPort
-	cfg.Server.LogLevel = log.DefaultLevel
-
-	cfg.Server.TLS.CertFile = "/path/to/cert.pem"
-	cfg.Server.TLS.KeyFile = "/path/to/key.pem"
-
-	cfg.Server.Features.Cache.Size = DefaultCacheSize
-	cfg.Server.Features.Cache.Persist = CachePersistenceSettings{
-		File:     "cache.snapshot",
-		Interval: int(DefaultCachePersistInterval / time.Second),
-	}
-	cfg.Server.Features.Cache.PreferStale = true
-	cfg.Server.Features.ECS = edns.DefaultECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
-	cfg.Server.Features.LatencyProbe = []LatencyProbeStep{
-		{Protocol: "ping", Timeout: 100},
-		{Protocol: "tcp", Port: DefaultProbePortHTTPS, Timeout: 100},
-		{Protocol: "tcp", Port: DefaultProbePortHTTP, Timeout: 100},
-		{Protocol: "udp", Port: DefaultProbePortDNS, Timeout: 100},
-		{Protocol: "http", Port: DefaultProbePortHTTP, Timeout: 100},
-		{Protocol: "https", Port: DefaultProbePortHTTPS, Timeout: 100},
-		{Protocol: "http3", Port: DefaultProbePortHTTPS, Timeout: 100},
-	}
-	cfg.Server.Features.Stats = &StatsSettings{
-		Interval:      DefaultStatsInterval,
-		ResetInterval: DefaultStatsResetInterval,
-	}
-
-	cfg.Upstream = []UpstreamServer{
-		{Address: "223.5.5.5:53", Protocol: "tcp", Proxy: "socks5://127.0.0.1:1080"},
-		{Address: "223.6.6.6:53", Protocol: "udp"},
-		{Address: "223.5.5.5:853", Protocol: "tls", ServerName: "dns.alidns.com"},
-		{Address: "223.6.6.6:853", Protocol: "quic", ServerName: "dns.alidns.com", SkipTLSVerify: true},
-		{Address: "https://223.5.5.5:443/dns-query", Protocol: "https", ServerName: "dns.alidns.com", Match: []string{"mixed"}},
-		{Address: "https://223.6.6.6:443/dns-query", Protocol: "http3", ServerName: "dns.alidns.com", Match: []string{"!mixed"}},
-		{Address: RecursiveIndicator},
-	}
-
-	cfg.Fallback = []UpstreamServer{
-		{Address: RecursiveIndicator},
-	}
-
-	cfg.Rewrite = []RewriteRule{
-		{ExcludeClients: []string{"10.0.0.100"}},
-		{Name: "client-specific.example.com", IncludeClients: []string{"192.168.0.0/24"}, Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultTTL}}},
-		{Name: "blocked.example.com", ExcludeClients: []string{"192.168.1.0/24"}, Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultTTL}}},
-		{Name: "ipv6.blocked.example.com", Records: []DNSRecordConfig{{Type: "AAAA", Content: "::1", TTL: DefaultTTL}}},
-	}
-
-	cfg.CIDR = []CIDRConfig{
-		{File: "whitelist.txt", Tag: "file"},
-		{Rules: []string{"192.168.0.0/16", "10.0.0.0/8", "2001:db8::/32"}, Tag: "rules"},
-		{File: "blacklist.txt", Rules: []string{"127.0.0.1/32"}, Tag: "mixed"},
-	}
-
-	data, _ := json.MarshalIndent(cfg, "", "  ")
-	return string(data)
 }
 
 // JoinDNSPort appends the default DNS port (53) to an IP address string,

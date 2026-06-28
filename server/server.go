@@ -27,6 +27,7 @@ import (
 	"zjdns/internal/pool"
 	"zjdns/rewrite"
 	"zjdns/server/client"
+	dnscrypt "zjdns/server/dnscrypt"
 	"zjdns/server/latency"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
@@ -43,6 +44,7 @@ type Server struct {
 	queryClient       *client.Client
 	guard             *security.Guard
 	tls               *servertls.Server
+	dnscrypt          *dnscrypt.Server
 	ednsMgr           *edns.Handler
 	rewriteMgr        *rewrite.Evaluator
 	cidrMgr           *cidr.Filter
@@ -224,6 +226,15 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			return nil, fmt.Errorf("TLS server init: %w", err)
 		}
 		server.tls = tlsSrv
+	}
+
+	if cfg.Server.DNSCrypt.Port != "" {
+		dnscryptSrv, err := dnscrypt.New(server, cfg.Server.DNSCrypt)
+		if err != nil {
+			cancel(fmt.Errorf("DNSCrypt server init: %w", err))
+			return nil, fmt.Errorf("DNSCrypt server init: %w", err)
+		}
+		server.dnscrypt = dnscryptSrv
 	}
 
 	queryClient := client.New()
@@ -488,6 +499,14 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
+	if s.dnscrypt != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
+		defer cancel()
+		if err := s.dnscrypt.Shutdown(ctx); err != nil {
+			log.Errorf("DNSCRYPT: Shutdown failed: %v", err)
+		}
+	}
+
 	if s.tls != nil {
 		if err := s.tls.Shutdown(); err != nil {
 			log.Errorf("TLS: TLS server shutdown failed: %v", err)
@@ -641,6 +660,28 @@ func (s *Server) Start() error {
 		return nil
 	})
 
+	if s.dnscrypt != nil {
+		g.Go(func() error {
+			defer dnsutil.HandlePanic("DNSCrypt UDP server")
+			if err := s.dnscrypt.StartUDP(ctx); err != nil {
+				return fmt.Errorf("DNSCrypt UDP startup: %w", err)
+			}
+			<-ctx.Done()
+			return nil
+		})
+		g.Go(func() error {
+			defer dnsutil.HandlePanic("DNSCrypt TCP server")
+			if err := s.dnscrypt.StartTCP(ctx); err != nil {
+				shutCtx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
+				defer cancel()
+				_ = s.dnscrypt.Shutdown(shutCtx)
+				return fmt.Errorf("DNSCrypt TCP startup: %w", err)
+			}
+			<-ctx.Done()
+			return nil
+		})
+	}
+
 	if s.tls != nil {
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("Secure DNS server")
@@ -691,7 +732,8 @@ func (s *Server) displayInfo() {
 					protocol = "UDP"
 				}
 				serverInfo := fmt.Sprintf("%s (%s)", server.Address, protocol)
-				if server.SkipTLSVerify && dnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) {
+				if server.SkipTLSVerify && dnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) &&
+					strings.ToLower(server.Protocol) != config.ProtoDNSCrypt {
 					serverInfo += " [Skip TLS verification]"
 				}
 				if len(server.Match) > 0 {
@@ -723,6 +765,11 @@ func (s *Server) displayInfo() {
 			}
 			log.Infof("TLS: Listening on port: %s (DoH/DoH3, endpoint: %s)", httpsPort, endpoint)
 		}
+	}
+
+	if s.dnscrypt != nil {
+		cfg := s.dnscrypt.Config()
+		log.Infof("DNSCRYPT: Listening on port: %s (provider: %s)", cfg.Port, cfg.ProviderName)
 	}
 
 	if s.rewriteMgr.HasRules() {

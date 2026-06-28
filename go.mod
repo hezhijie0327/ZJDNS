@@ -4,8 +4,9 @@ go 1.26.0
 
 require (
 	github.com/miekg/dns v1.1.73-0.20260622091530-fa041eedc7a8
-	github.com/quic-go/quic-go v0.60.1-0.20260622040909-9b0474c9b997
+	github.com/quic-go/quic-go v0.60.1-0.20260627063742-8dfc5ee8766a
 	gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246
+	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.56.0
 	golang.org/x/sync v0.21.0
 )
@@ -26,7 +27,6 @@ require (
 	gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5 // indirect
 	gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891 // indirect
 	go.uber.org/mock v0.6.0 // indirect
-	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect

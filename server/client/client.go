@@ -67,6 +67,11 @@ type Client struct {
 
 	proxyDialers map[string]*Socks5Dialer
 	proxyMu      sync.Mutex
+
+	// DNSCrypt resolver session cache.
+	dnscryptResolvers  map[string]*dnscryptCacheEntry
+	dnscryptResolverMu sync.Mutex
+	dnscryptPending    map[string]chan struct{}
 }
 
 // New creates a Client with default timeouts, transport pools, and session
@@ -288,6 +293,8 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		return c.executeDoH(ctx, msg, server, c.eTLSClientConfig(server))
 	case config.ProtoDOH3, config.ProtoHTTP3:
 		return c.executeDoH3(ctx, msg, server, c.stdTLSConfig(server))
+	case config.ProtoDNSCrypt:
+		return c.executeDNSCrypt(ctx, msg, server)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}

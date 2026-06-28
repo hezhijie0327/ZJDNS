@@ -98,6 +98,37 @@ dig @127.0.0.1 -p 15353 zhijie-online.mail.protection.outlook.com A +short
 Verify hijack detection from logs: `grep -E "hijack detected|rejecting hijacked|tcp=true" /tmp/zjdns.log`
 Normal domains should show `tcp=false` throughout; blocked domains should show hijack detection + `tcp=true` restart.
 
+**DNSCrypt tests (local server + client):**
+```bash
+# 1. Generate keys
+./zjdns -generate-dnscrypt-keys -cert-ttl=86400
+
+# 2. Start DNSCrypt server (independent port 8443)
+cat > /tmp/dnscrypt_test.json << EOF
+{"server":{"port":"15353","log_level":"debug","dnscrypt":{"port":"8443","provider_name":"zjdns.local","private_key":"<KEY>","cert_ttl":86400},"features":{"cache":{"size":0}}},"upstream":[{"address":"builtin_recursive"}]}
+EOF
+./zjdns -config /tmp/dnscrypt_test.json &
+
+# 3. Start DNSCrypt client → server
+cat > /tmp/dnscrypt_client.json << EOF
+{"server":{"port":"15354","log_level":"debug","features":{"cache":{"size":0}}},"upstream":[{"address":"127.0.0.1:8443","protocol":"dnscrypt","server_name":"zjdns.local","dnscrypt_public_key":"<PUBKEY>"}]}
+EOF
+./zjdns -config /tmp/dnscrypt_client.json &
+
+# 4. Test plain DNS and DNSCrypt tunnel
+dig @127.0.0.1 -p 15353 www.baidu.com A +short    # plain DNS
+dig @127.0.0.1 -p 15354 www.baidu.com A +short    # DNSCrypt encrypted
+```
+
+**DNSCrypt external resolver test (Quad9):**
+```bash
+cat > /tmp/quad9.json << EOF
+{"server":{"port":"15355","log_level":"debug","features":{"cache":{"size":0}}},"upstream":[{"address":"9.9.9.9:8443","protocol":"dnscrypt","server_name":"2.dnscrypt-cert.quad9.net","dnscrypt_public_key":"67c847b8c8758cd120245543be756746df34df1d84c00b8c470368df821d863e"}]}
+EOF
+./zjdns -config /tmp/quad9.json &
+dig @127.0.0.1 -p 15355 www.baidu.com A +short    # via Quad9 DNSCrypt
+```
+
 Test suites for `cache`, `cidr`, `config`, `edns`, `rewrite`, `stats`, `internal/dnsutil`, `internal/latency`, `internal/pool`, `server/resolver`, and `server/security` packages (90+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings.
 
 Target coverage: ≥90% for utility packages (`dnsutil` 95.7%, `pool` 91.3%).
@@ -110,6 +141,9 @@ Run benchmarks: `go test -bench=. -short ./...` (unit) or `go test -bench=Benchm
 zjdns/
 ├── main.go / version.go           # Entry point + ldflags variables
 ├── bench_test.go                  # Global benchmarks (pool, cache, DNSSEC, QPS)
+├── cli/                           # CLI helper functions (2 files)
+│   ├── dns_stamp.go               # DNS stamp (sdns://) parsing
+│   └── dnscrypt_keys.go           # DNSCrypt Ed25519 key pair generation
 ├── internal/
 │   ├── log/log.go                 # Logger, TimeCache, Level.String()
 │   ├── pool/pool.go               # MessagePool, BufferPool, constants (zero deps)
@@ -149,6 +183,7 @@ zjdns/
     │   ├── doh_request.go          # Shared DoH/DoH3 HTTP request builder
     │   ├── socks5.go               # SOCKS5 proxy client (RFC 1928/1929, TCP+UDP) + SafeURL
     │   ├── ktls.go                 # KTLS config builders + DoT dial/exchange helpers
+    │   ├── dnscrypt.go             # DNSCrypt encrypted upstream client
     │   └── pool/                  # Connection pool sub-package
     │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
     │       └── quic.go            # QUIC connection pool (QUICPool, QUICConn)
@@ -168,6 +203,11 @@ zjdns/
     │   ├── dot.go                  # DoT listener + per-IP connection limiting
     │   ├── doq.go                  # DoQ listener + stream handler
     │   └── doh.go                  # DoH/DoH3 HTTP handlers
+    ├── dnscrypt/                   # DNSCrypt v2 native implementation (4 files)
+    │   ├── server.go               # UDP/TCP listeners
+    │   ├── cert.go                 # Ed25519 certificate generation, signing, serialization
+    │   ├── crypto.go               # X25519 ECDH + XSalsa20-Poly1305 encrypt/decrypt
+    │   └── xsecretbox.go           # XChacha20-Poly1305 Seal/Open + HChaCha20 shared key
     ├── latency/                    # Client-facing latency probe adapter
     │   └── probe.go                # Thin adapter delegating to internal/latency; SortIPsByLatency + InitInfraProber
 ```
@@ -320,6 +360,10 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 | `config.ProtoUDP` / `TCP` / `TLS` | config | "udp" / "tcp" / "tls" |
 | `config.ProtoQUIC` / `HTTP` / `HTTP3` | config | "quic" / "https" / "http3" |
 | `config.ProtoDOT` / `DOQ` / `DOH` / `DOH3` | config | "dot" / "doq" / "doh" / "doh3" (user config aliases) |
+| `config.ProtoDNSCrypt` | config | "dnscrypt" (DNSCrypt v2 protocol identifier) |
+| `config.DefaultDNSCryptPort` | config | "8443" (DNSCrypt standalone port) |
+| `config.DefaultDNSCryptCertTTL` | config | 365 days (DNSCrypt certificate lifetime) |
+| `config.DNSCryptV2Prefix` | config | "2.dnscrypt-cert." (cert TXT query prefix) |
 | `config.ProtoTLSTCP` | config | "tcp-tls" (dns.Client.Net for TLS-wrapped TCP) |
 | `config.NextProtoDOT` | config | []string{"dot"} (ALPN for DoT, RFC 7858) |
 | `config.NextProtoDOH` | config | []string{"h2"} (ALPN for DoH, RFC 8484) |
@@ -486,3 +530,15 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 - **CHAOS TXT records**: `version.server`/`version.bind` expose the full version
   from `getVersion()`. `id.server`/`hostname.bind` use `os.Hostname()` with
   `ProjectName` fallback.
+- **DNSCrypt v2** (`server/dnscrypt/` 4 files + `server/client/dnscrypt.go`):
+  Native Go implementation with zero external DNSCrypt dependencies. Ed25519
+  (stdlib) for long-term certificate signing; X25519 ECDH (`golang.org/x/crypto`)
+  for per-session key exchange; XSalsa20-Poly1305 AEAD (default) or
+  XChacha20-Poly1305 (optional) for query/response encryption. Server listens
+  UDP+TCP on a standalone port (default 8443). Client caches ephemeral sessions
+  per upstream for 1 hour (forward secrecy) and reuses a persistent UDP socket for
+  stable 5-tuple routing. Certificates are published as DNS TXT records at
+  `2.dnscrypt-cert.<provider>`. Clients default to UDP; set `dnscrypt_tcp: true`
+  for TCP. Cert fetch deduplication prevents thundering herd on cache miss.
+  Provider names auto-prefix with `DNSCryptV2Prefix`. Colon-formatted hex keys
+  accepted everywhere.
