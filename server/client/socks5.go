@@ -15,6 +15,13 @@ import (
 	"zjdns/config"
 )
 
+// SOCKS5 pool buffer sizes.
+const (
+	socks5WriteBufSize = 1500 // MTU-sized buffer
+	socks5ReadBufSize  = 8192 // Common DNS response size
+	socks5MaxReadBuf   = 65535
+)
+
 // SOCKS5 protocol constants (RFC 1928).
 const (
 	socks5Version = 0x05
@@ -401,14 +408,14 @@ func (d *Socks5Dialer) cleanupLocked() {
 // MTU-sized (1500) buffer covers DNS queries and typical QUIC datagrams;
 // oversized writes fall back to heap allocation.
 var socks5WritePool = sync.Pool{
-	New: func() any { b := make([]byte, 1500); return &b },
+	New: func() any { b := make([]byte, socks5WriteBufSize); return &b },
 }
 
 // socks5ReadPool reuses buffers for SOCKS5 UDP read path (exchangeViaProxyUDP).
 // 8 KB covers the common DNS response size (~512–1232); larger responses
 // get a fresh buffer from ReadFrom's internal cache.
 var socks5ReadPool = sync.Pool{
-	New: func() any { b := make([]byte, 8192); return &b },
+	New: func() any { b := make([]byte, socks5ReadBufSize); return &b },
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +429,7 @@ var socks5ReadPool = sync.Pool{
 // socks5ReadBufPool reuses 64 KB buffers for SOCKS5 UDP reads, avoiding a
 // per-connection 64 KB heap allocation from an embedded array.
 var socks5ReadBufPool = sync.Pool{
-	New: func() any { b := make([]byte, 65535); return &b },
+	New: func() any { b := make([]byte, socks5MaxReadBuf); return &b },
 }
 
 type socks5PacketConn struct {
@@ -481,7 +488,7 @@ func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	}
 
 	totalLen := headerLen + len(p)
-	if totalLen > 65535 {
+	if totalLen > socks5MaxReadBuf {
 		return 0, fmt.Errorf("socks5: datagram too large: %d bytes", totalLen)
 	}
 
@@ -696,10 +703,10 @@ func parseAddressFromBytes(data []byte, atyp byte) (*net.UDPAddr, int, error) {
 // header for the given destination address.
 func socks5UDPHeaderLen(addr *net.UDPAddr) (int, error) {
 	if addr.IP.To4() != nil {
-		return 10, nil // RSV(2) + FRAG(1) + ATYP(1) + IPv4(4) + PORT(2)
+		return config.Socks5UDPHeaderLenIPv4, nil
 	}
 	if addr.IP.To16() != nil {
-		return 22, nil // RSV(2) + FRAG(1) + ATYP(1) + IPv6(16) + PORT(2)
+		return config.Socks5UDPHeaderLenIPv6, nil
 	}
 	return 0, fmt.Errorf("socks5: invalid destination IP: %v", addr.IP)
 }

@@ -17,7 +17,10 @@ import (
 
 // DNSFramePrefixLen is the number of bytes used for the 2-byte DNS message
 // length prefix in TCP, DoT, and DoQ transports (RFC 1035 §4.2.2, RFC 9250).
-const DNSFramePrefixLen = 2
+const (
+	DNSFramePrefixLen        = 2
+	defaultPanicStackBufSize = 8192
+)
 
 var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 
@@ -70,7 +73,7 @@ func CloseWithLog(c any, name string) {
 // HandlePanic recovers from a panic and logs the stack trace.
 func HandlePanic(operation string) {
 	if r := recover(); r != nil {
-		buf := make([]byte, 8192)
+		buf := make([]byte, defaultPanicStackBufSize)
 		n := runtime.Stack(buf, false)
 		log.Errorf("PANIC: Panic [%s]: %v\nStack:\n%s", operation, r, buf[:n])
 	}
@@ -147,19 +150,22 @@ func FormatRecords(answers, authority, additional []dns.RR) string {
 	if len(answers) > 0 {
 		b.WriteString("\n  ;; ANSWER SECTION:")
 		for _, rr := range answers {
-			b.WriteString("\n  " + rr.String())
+			b.WriteString("\n  ")
+			b.WriteString(rr.String())
 		}
 	}
 	if len(authority) > 0 {
 		b.WriteString("\n  ;; AUTHORITY SECTION:")
 		for _, rr := range authority {
-			b.WriteString("\n  " + rr.String())
+			b.WriteString("\n  ")
+			b.WriteString(rr.String())
 		}
 	}
 	if len(additional) > 0 {
 		b.WriteString("\n  ;; ADDITIONAL SECTION:")
 		for _, rr := range additional {
-			b.WriteString("\n  " + rr.String())
+			b.WriteString("\n  ")
+			b.WriteString(rr.String())
 		}
 	}
 	return b.String()
