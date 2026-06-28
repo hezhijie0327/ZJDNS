@@ -26,7 +26,7 @@ func main() {
 	flag.BoolVar(&generateDNSCrypt, "generate-dnscrypt-keys", false, "Generate DNSCrypt v2 key pair and config snippet")
 	flag.StringVar(&dnscryptProvider, "provider-name", "", "Provider name for DNSCrypt key generation")
 	flag.IntVar(&dnscryptCertTTL, "cert-ttl", 0, "Certificate TTL in seconds (default: 31536000)")
-	flag.StringVar(&dnscryptESVersion, "es-version", "", "Crypto construction: xsalsa20 (default) or xchacha20")
+	flag.StringVar(&dnscryptESVersion, "es-version", "", "Crypto construction: xsalsa20 (default), xchacha20, xsalsa20-pq, xchacha20-pq")
 	flag.StringVar(&stampStr, "dns-stamp", "", "Decode a DNS stamp (sdns://) and output config snippet")
 	flag.BoolVar(&showVersion, "version", false, "Show version information and exit")
 
@@ -36,8 +36,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  %s -config <config file>     # Start with config file\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -generate-config          # Generate example config\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -generate-dnscrypt-keys   # Generate DNSCrypt v2 key pair\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -version                  # Show version information\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s                            # Start with default config\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "DNSCrypt options (with -generate-dnscrypt-keys):\n")
+		fmt.Fprintf(os.Stderr, "  -provider-name <name>         Provider name (default: 2.dnscrypt-cert.ZJDNS)\n")
+		fmt.Fprintf(os.Stderr, "  -cert-ttl <seconds>           Certificate TTL in seconds (default: 31536000)\n")
+		fmt.Fprintf(os.Stderr, "  -es-version <version>         xsalsa20 | xchacha20 | xsalsa20-pq | xchacha20-pq\n")
 	}
 
 	flag.Parse()

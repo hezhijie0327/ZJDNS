@@ -538,11 +538,15 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   Native Go implementation with zero external DNSCrypt dependencies. Ed25519
   (stdlib) for long-term certificate signing; X25519 ECDH (`golang.org/x/crypto`)
   for per-session key exchange; XSalsa20-Poly1305 AEAD (default) or
-  XChacha20-Poly1305 (optional) for query/response encryption. Server listens
+  XChacha20-Poly1305 (optional) for query/response encryption. Post-quantum
+  hybrid key exchange: X25519 + ML-KEM-768 (`crypto/mlkem`, Go 1.26 stdlib)
+  combined via HKDF-SHA256 (`0x0101`/`0x0102` construction codes). Extended
+  certificate format (1308 bytes) carries ML-KEM-768 encapsulation key.
+  PQ query header prepends 1088-byte ML-KEM ciphertext. Server listens
   UDP+TCP on a standalone port (default 8443). Client caches ephemeral sessions
   per upstream for 1 hour (forward secrecy) and reuses a persistent UDP socket for
   stable 5-tuple routing. Certificates are published as DNS TXT records at
   `2.dnscrypt-cert.<provider>`. Clients default to UDP; set `dnscrypt_tcp: true`
   for TCP. Cert fetch deduplication prevents thundering herd on cache miss.
   Provider names auto-prefix with `DNSCryptV2Prefix`. Colon-formatted hex keys
-  accepted everywhere.
+  accepted everywhere. Use `-es-version xsalsa20-pq` or `xchacha20-pq` for PQC.

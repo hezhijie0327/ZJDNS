@@ -110,14 +110,15 @@ type StatsSettings struct {
 // UpstreamServer defines a single upstream DNS server with address, protocol,
 // and optional matching.
 type UpstreamServer struct {
-	Address           string   `json:"address"`
-	Protocol          string   `json:"protocol"`
-	ServerName        string   `json:"server_name,omitempty"`
-	SkipTLSVerify     bool     `json:"skip_tls_verify,omitempty"`
-	Match             []string `json:"match,omitempty"`
-	Proxy             string   `json:"proxy,omitempty"`               // socks5://[user:pass@]host:port
-	DNSCryptPublicKey string   `json:"dnscrypt_public_key,omitempty"` // hex-encoded Ed25519 public key (DNSCrypt only)
-	DNSCryptTCP       bool     `json:"dnscrypt_tcp,omitempty"`        // use TCP for DNSCrypt upstream (default: UDP)
+	Address                string   `json:"address"`
+	Protocol               string   `json:"protocol"`
+	ServerName             string   `json:"server_name,omitempty"`
+	SkipTLSVerify          bool     `json:"skip_tls_verify,omitempty"`
+	Match                  []string `json:"match,omitempty"`
+	Proxy                  string   `json:"proxy,omitempty"`                     // socks5://[user:pass@]host:port
+	DNSCryptPublicKey      string   `json:"dnscrypt_public_key,omitempty"`       // hex-encoded Ed25519 public key (DNSCrypt only)
+	DNSCryptMlkemPublicKey string   `json:"dnscrypt_mlkem_public_key,omitempty"` // hex-encoded ML-KEM-768 public key (DNSCrypt PQ only)
+	DNSCryptTCP            bool     `json:"dnscrypt_tcp,omitempty"`              // use TCP for DNSCrypt upstream (default: UDP)
 }
 
 // RewriteRule defines a DNS rewrite rule with synthetic response, client

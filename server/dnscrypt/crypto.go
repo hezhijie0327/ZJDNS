@@ -1,26 +1,39 @@
 package dnscrypt
 
 import (
+	"crypto/mlkem"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/secretbox"
 )
 
 // Wire protocol constants.
 const (
-	clientMagicSize   = 8
-	KeySize           = 32
-	SharedKeySize     = 32
-	nonceSize         = 24
-	ResolverMagicSize = 8
-	MinDNSPacketSize  = 12 + 5
-	minUDPQuerySize   = 256
+	clientMagicSize    = 8
+	KeySize            = 32
+	SharedKeySize      = 32
+	nonceSize          = 24
+	ResolverMagicSize  = 8
+	MinDNSPacketSize   = 12 + 5
+	minUDPQuerySize    = 256
+	mlkemCiphertextLen = 1088 // ML-KEM-768 ciphertext size (NIST FIPS 203)
+)
+
+// DNSCrypt query header sizes.
+// Classic:  clientMagic(8) + clientPk(32) + nonceHalf(12) = 52
+// PQ:       + mlkemCiphertext(1088) = 1140
+const (
+	QueryHeaderLen   = clientMagicSize + KeySize + nonceSize/2                      // 52
+	QueryHeaderLenPQ = clientMagicSize + KeySize + mlkemCiphertextLen + nonceSize/2 // 1140
 )
 
 // ResolverMagic is prepended to every encrypted response.
@@ -33,28 +46,45 @@ type encryptedQuery struct {
 	Nonce       [nonceSize]byte
 }
 
+// pqtQuery extends encryptedQuery with the ML-KEM ciphertext for PQ sessions.
+type pqQuery struct {
+	encryptedQuery
+	MlkemCiphertext [mlkemCiphertextLen]byte
+}
+
 // parseQuery extracts the DNSCrypt header from a raw query packet.
-// Returns nil if the packet is not a valid encrypted query.
-func parseQuery(b []byte, cert *Certificate) (*encryptedQuery, []byte, error) {
-	headerLen := clientMagicSize + KeySize + nonceSize/2
+// For PQ constructions, it also extracts the ML-KEM ciphertext.
+func parseQuery(b []byte, cert *Certificate) (*encryptedQuery, *pqQuery, []byte, error) {
+	headerLen := QueryHeaderLen
+	if cert.ESVersion.IsPQ() {
+		headerLen = QueryHeaderLenPQ
+	}
 	if len(b) < headerLen+secretbox.Overhead+MinDNSPacketSize {
-		return nil, nil, errTooShort
+		return nil, nil, nil, errTooShort
 	}
 
 	q := &encryptedQuery{}
 	copy(q.ClientMagic[:], b[:clientMagicSize])
 	copy(q.ClientPk[:], b[clientMagicSize:clientMagicSize+KeySize])
-	copy(q.Nonce[:nonceSize/2], b[clientMagicSize+KeySize:headerLen])
+
+	var pq *pqQuery
+	if cert.ESVersion.IsPQ() {
+		pq = &pqQuery{encryptedQuery: *q}
+		copy(pq.MlkemCiphertext[:], b[clientMagicSize+KeySize:clientMagicSize+KeySize+mlkemCiphertextLen])
+		copy(pq.Nonce[:nonceSize/2], b[clientMagicSize+KeySize+mlkemCiphertextLen:headerLen])
+	} else {
+		copy(q.Nonce[:nonceSize/2], b[clientMagicSize+KeySize:headerLen])
+	}
 
 	if q.ClientMagic != cert.ClientMagic {
-		return nil, nil, errClientMagic
+		return nil, nil, nil, errClientMagic
 	}
 
 	encrypted := b[headerLen:]
-	return q, encrypted, nil
+	return q, pq, encrypted, nil
 }
 
-// decryptQuery decrypts an encrypted DNS query.
+// decrypt decrypts an encrypted DNS query using the classic X25519-only key exchange.
 func (q *encryptedQuery) decrypt(encrypted []byte, cert *Certificate) ([]byte, error) {
 	sharedKey, err := ComputeSharedKey(cert.ESVersion, &cert.ResolverSk, &q.ClientPk)
 	if err != nil {
@@ -64,11 +94,36 @@ func (q *encryptedQuery) decrypt(encrypted []byte, cert *Certificate) ([]byte, e
 	var nonce [nonceSize]byte
 	copy(nonce[:], q.Nonce[:])
 
+	return decryptPayload(encrypted, &nonce, &sharedKey, cert.ESVersion)
+}
+
+// decryptPQ decrypts an encrypted DNS query using the hybrid post-quantum
+// key exchange (X25519 + ML-KEM-768 → HKDF-SHA256).
+func (pq *pqQuery) decryptPQ(encrypted []byte, cert *Certificate, mlkemDK *mlkem.DecapsulationKey768) ([]byte, error) {
+	mlkemSS, err := mlkemDK.Decapsulate(pq.MlkemCiphertext[:])
+	if err != nil {
+		return nil, fmt.Errorf("dnscrypt: mlkem decapsulate: %w", err)
+	}
+
+	sharedKey, err := ComputeSharedKeyPQ(&cert.ResolverSk, &pq.ClientPk, mlkemSS)
+	if err != nil {
+		return nil, fmt.Errorf("dnscrypt: pq shared key: %w", err)
+	}
+
+	var nonce [nonceSize]byte
+	copy(nonce[:], pq.Nonce[:])
+
+	return decryptPayload(encrypted, &nonce, &sharedKey, cert.ESVersion.AEAD())
+}
+
+// decryptPayload decrypts a payload using the given AEAD construction.
+func decryptPayload(encrypted []byte, nonce *[nonceSize]byte, sharedKey *[SharedKeySize]byte, aead CryptoConstruction) ([]byte, error) {
 	var decrypted []byte
-	switch cert.ESVersion {
+	var err error
+	switch aead {
 	case XSalsa20Poly1305:
 		var ok bool
-		decrypted, ok = secretbox.Open(nil, encrypted, &nonce, &sharedKey)
+		decrypted, ok = secretbox.Open(nil, encrypted, nonce, sharedKey)
 		if !ok {
 			return nil, errors.New("dnscrypt: decryption failed")
 		}
@@ -78,14 +133,18 @@ func (q *encryptedQuery) decrypt(encrypted []byte, cert *Certificate) ([]byte, e
 			return nil, fmt.Errorf("dnscrypt: xchacha open: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("dnscrypt: unknown crypto construction %d", cert.ESVersion)
+		return nil, fmt.Errorf("dnscrypt: unknown crypto construction %d", aead)
 	}
-
 	return Unpad(decrypted)
 }
 
 // encryptResponse encrypts a DNS response using the query's parameters.
 func encryptResponse(esVersion CryptoConstruction, packet []byte, sharedKey *[SharedKeySize]byte, queryNonce *[nonceSize]byte) ([]byte, error) {
+	aead := esVersion
+	if esVersion.IsPQ() {
+		aead = esVersion.AEAD()
+	}
+
 	var nonce [nonceSize]byte
 	copy(nonce[:nonceSize/2], queryNonce[:nonceSize/2])
 
@@ -100,20 +159,20 @@ func encryptResponse(esVersion CryptoConstruction, packet []byte, sharedKey *[Sh
 	response := make([]byte, 0, ResolverMagicSize+nonceSize+len(padded)+secretbox.Overhead)
 	response = append(response, ResolverMagic...)
 	response = append(response, nonce[:]...)
-	switch esVersion {
+	switch aead {
 	case XSalsa20Poly1305:
 		response = secretbox.Seal(response, padded, &nonce, sharedKey)
 	case XChacha20Poly1305:
 		response = XChachaSeal(response, nonce[:], padded, sharedKey[:])
 	default:
-		return nil, fmt.Errorf("dnscrypt: unknown crypto construction %d", esVersion)
+		return nil, fmt.Errorf("dnscrypt: unknown crypto construction %d", aead)
 	}
 	return response, nil
 }
 
 // ComputeSharedKey derives the shared key via X25519 ECDH followed by the
 // construction-specific key derivation (HSalsa20 for XSalsa20Poly1305,
-// HChaCha20 for XChacha20Poly1305).
+// HChaCha20 for XChacha20Poly1305). For PQ constructions, use computeSharedKeyPQ.
 func ComputeSharedKey(esVersion CryptoConstruction, secretKey, publicKey *[KeySize]byte) ([SharedKeySize]byte, error) {
 	var sharedKey [SharedKeySize]byte
 	switch esVersion {
@@ -125,6 +184,34 @@ func ComputeSharedKey(esVersion CryptoConstruction, secretKey, publicKey *[KeySi
 	default:
 		return sharedKey, fmt.Errorf("dnscrypt: unknown crypto construction %d", esVersion)
 	}
+}
+
+// ComputeSharedKeyPQ combines X25519 ECDH and ML-KEM-768 shared secret via
+// HKDF-SHA256 into a single 32-byte AEAD key.  The caller is responsible for
+// the asymmetric ML-KEM-768 operation:
+//
+//	Client: mlkemSS, ciphertext = ek.Encapsulate()
+//	Server: mlkemSS = mlkemDK.Decapsulate(ciphertext)
+//
+//	shared_key = HKDF-SHA256(x25519_ss || mlkem_ss, "dnscrypt-pq-v1", 32)
+func ComputeSharedKeyPQ(x25519Sk, x25519Pk *[KeySize]byte, mlkemSS []byte) ([SharedKeySize]byte, error) {
+	var zero [SharedKeySize]byte
+
+	x25519SS, err := curve25519.X25519(x25519Sk[:], x25519Pk[:])
+	if err != nil {
+		return zero, fmt.Errorf("dnscrypt: x25519: %w", err)
+	}
+
+	combined := make([]byte, 0, KeySize+len(mlkemSS))
+	combined = append(combined, x25519SS...)
+	combined = append(combined, mlkemSS...)
+
+	var sharedKey [SharedKeySize]byte
+	kdf := hkdf.New(sha256.New, combined, nil, []byte("dnscrypt-pq-v1"))
+	if _, err := io.ReadFull(kdf, sharedKey[:]); err != nil {
+		return zero, fmt.Errorf("dnscrypt: hkdf: %w", err)
+	}
+	return sharedKey, nil
 }
 
 // GenerateX25519KeyPair creates an ephemeral X25519 key pair.

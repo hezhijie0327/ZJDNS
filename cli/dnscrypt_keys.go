@@ -32,6 +32,10 @@ func GenerateDNSCryptKeys(providerName string, certTTLHours int, esVersion strin
 	switch esVersionStr {
 	case "xchacha20", "xchacha20poly1305":
 		cryptoCon = dnscrypt.XChacha20Poly1305
+	case "xsalsa20-pq", "xsalsa20poly1305-pq":
+		cryptoCon = dnscrypt.X25519_MLKEM768_XSalsa20Poly1305
+	case "xchacha20-pq", "xchacha20poly1305-pq":
+		cryptoCon = dnscrypt.X25519_MLKEM768_XChacha20Poly1305
 	}
 
 	// Generate Ed25519 provider key pair (long-term signing key).
@@ -40,7 +44,7 @@ func GenerateDNSCryptKeys(providerName string, certTTLHours int, esVersion strin
 		return fmt.Sprintf(`{"error": "failed to generate Ed25519 key: %v"}`, err)
 	}
 
-	_, err = dnscrypt.GenerateCertificate(providerSK, cryptoCon, certTTL)
+	cert, err := dnscrypt.GenerateCertificate(providerSK, cryptoCon, certTTL)
 	if err != nil {
 		return fmt.Sprintf(`{"error": "failed to generate certificate: %v"}`, err)
 	}
@@ -48,6 +52,17 @@ func GenerateDNSCryptKeys(providerName string, certTTLHours int, esVersion strin
 	skHex := hex.EncodeToString(providerSK)
 	pkHex := hex.EncodeToString(providerPK)
 	addr := "127.0.0.1:" + config.DefaultDNSCryptPort
+
+	// Include ML-KEM public key in client config for PQ constructions.
+	clientCfg := config.UpstreamServer{
+		Address:           addr,
+		Protocol:          config.ProtoDNSCrypt,
+		ServerName:        providerName,
+		DNSCryptPublicKey: pkHex,
+	}
+	if cryptoCon.IsPQ() {
+		clientCfg.DNSCryptMlkemPublicKey = hex.EncodeToString(cert.ResolverMlkemPk[:])
+	}
 
 	data, _ := json.MarshalIndent(map[string]any{
 		"server": config.DNSCryptSettings{
@@ -57,12 +72,7 @@ func GenerateDNSCryptKeys(providerName string, certTTLHours int, esVersion strin
 			CertTTL:      certTTLHours,
 			ESVersion:    esVersionStr,
 		},
-		"client": config.UpstreamServer{
-			Address:           addr,
-			Protocol:          config.ProtoDNSCrypt,
-			ServerName:        providerName,
-			DNSCryptPublicKey: pkHex,
-		},
+		"client": clientCfg,
 	}, "", "  ")
 	return string(data)
 }

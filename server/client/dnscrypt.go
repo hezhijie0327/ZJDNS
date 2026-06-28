@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/mlkem"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -26,22 +27,28 @@ const (
 	// dnscryptSessionTTL is how long a cached session (ephemeral key pair +
 	// shared key) is reused before rotating for forward secrecy.
 	dnscryptSessionTTL = 1 * time.Hour
-
-	// dnscryptQueryHeaderLen = clientMagic(8) + clientPk(32) + nonceHalf(12).
-	dnscryptQueryHeaderLen = 8 + 32 + 12
 )
 
 // dnscryptSession holds a cached DNSCrypt session with pre-computed shared key
 // and a persistent UDP socket for stable SO_REUSEPORT routing.
 type dnscryptSession struct {
-	esVersion   dnscrypt.CryptoConstruction
-	clientMagic [8]byte
-	clientSk    [32]byte
-	clientPk    [32]byte
-	serverPk    [32]byte
-	sharedKey   [32]byte
-	cachedAt    time.Time
-	udpConn     *net.UDPConn // persistent UDP socket per upstream
+	esVersion       dnscrypt.CryptoConstruction
+	clientMagic     [8]byte
+	clientSk        [32]byte
+	clientPk        [32]byte
+	serverPk        [32]byte
+	sharedKey       [32]byte
+	mlkemCiphertext [1088]byte // ML-KEM-768 ciphertext (PQ only)
+	cachedAt        time.Time
+	udpConn         *net.UDPConn // persistent UDP socket per upstream
+}
+
+// queryHeaderLen returns the wire header size for this session.
+func (s *dnscryptSession) queryHeaderLen() int {
+	if s.esVersion.IsPQ() {
+		return dnscrypt.QueryHeaderLenPQ
+	}
+	return dnscrypt.QueryHeaderLen
 }
 
 // dnscryptCacheEntry is the per-upstream cached session.
@@ -75,7 +82,7 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		serverAddr = net.JoinHostPort(serverAddr, config.DefaultDNSCryptPort)
 	}
 
-	session, err := c.getDNSCryptSession(ctx, serverAddr, providerName, server.DNSCryptPublicKey)
+	session, err := c.getDNSCryptSession(ctx, serverAddr, providerName, server.DNSCryptPublicKey, server.DNSCryptMlkemPublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +110,8 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 }
 
 // getDNSCryptSession returns a cached or newly-established DNSCrypt session.
-func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, providerName, pubkeyHex string) (*dnscryptSession, error) {
+// mlkemPubkeyHex is optional — the ML-KEM PK is read from the certificate.
+func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, providerName, pubkeyHex, mlkemPubkeyHex string) (*dnscryptSession, error) {
 	cacheKey := serverAddr + "|" + providerName
 
 	c.dnscryptResolverMu.Lock()
@@ -163,26 +171,52 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, providerNam
 		return nil, fmt.Errorf("DNSCRYPT: fetch cert from %s: %w", serverAddr, err)
 	}
 
+	// Optional: pin the ML-KEM public key for PQ constructions.
+	if cert.ESVersion.IsPQ() && mlkemPubkeyHex != "" {
+		expectedPK, _ := hex.DecodeString(strings.ReplaceAll(mlkemPubkeyHex, ":", ""))
+		if !bytes.Equal(expectedPK, cert.ResolverMlkemPk[:]) {
+			return nil, fmt.Errorf("DNSCRYPT: ML-KEM public key mismatch for %s", serverAddr)
+		}
+	}
+
 	// Generate ephemeral X25519 key pair (pub, secret).
 	clientPk, clientSk, err := dnscrypt.GenerateX25519KeyPair()
 	if err != nil {
 		return nil, fmt.Errorf("DNSCRYPT: generate key pair: %w", err)
 	}
 
-	// Compute shared key: our secret × server's public.
-	sharedKey, err := dnscrypt.ComputeSharedKey(cert.ESVersion, &clientSk, &cert.ResolverPk)
-	if err != nil {
-		return nil, fmt.Errorf("DNSCRYPT: compute shared key: %w", err)
+	// Compute shared key: classic X25519 ECDH or hybrid X25519 + ML-KEM-768.
+	var sharedKey [32]byte
+	var mlkemCt [1088]byte
+	if cert.ESVersion.IsPQ() {
+		// ML-KEM-768: encapsulate against the server's public key.
+		ek, err := mlkem.NewEncapsulationKey768(cert.ResolverMlkemPk[:])
+		if err != nil {
+			return nil, fmt.Errorf("DNSCRYPT: parse ML-KEM public key: %w", err)
+		}
+		mlkemSS, ciphertext := ek.Encapsulate()
+		copy(mlkemCt[:], ciphertext)
+
+		sharedKey, err = dnscrypt.ComputeSharedKeyPQ(&clientSk, &cert.ResolverPk, mlkemSS)
+		if err != nil {
+			return nil, fmt.Errorf("DNSCRYPT: compute PQ shared key: %w", err)
+		}
+	} else {
+		sharedKey, err = dnscrypt.ComputeSharedKey(cert.ESVersion, &clientSk, &cert.ResolverPk)
+		if err != nil {
+			return nil, fmt.Errorf("DNSCRYPT: compute shared key: %w", err)
+		}
 	}
 
 	session := &dnscryptSession{
-		esVersion:   cert.ESVersion,
-		clientMagic: cert.ClientMagic,
-		clientSk:    clientSk,
-		clientPk:    clientPk,
-		serverPk:    cert.ResolverPk,
-		sharedKey:   sharedKey,
-		cachedAt:    time.Now(),
+		esVersion:       cert.ESVersion,
+		clientMagic:     cert.ClientMagic,
+		clientSk:        clientSk,
+		clientPk:        clientPk,
+		serverPk:        cert.ResolverPk,
+		sharedKey:       sharedKey,
+		mlkemCiphertext: mlkemCt,
+		cachedAt:        time.Now(),
 	}
 
 	c.dnscryptResolverMu.Lock()
@@ -485,12 +519,20 @@ func encryptQuery(msg *dns.Msg, session *dnscryptSession, esVersion dnscrypt.Cry
 
 	padded := dnscrypt.PadPacket(packet)
 
-	encrypted := make([]byte, 0, dnscryptQueryHeaderLen+len(padded)+16)
+	hdrLen := session.queryHeaderLen()
+	encrypted := make([]byte, 0, hdrLen+len(padded)+16)
 	encrypted = append(encrypted, session.clientMagic[:]...)
 	encrypted = append(encrypted, session.clientPk[:]...)
+	if esVersion.IsPQ() {
+		encrypted = append(encrypted, session.mlkemCiphertext[:]...)
+	}
 	encrypted = append(encrypted, nonce[:12]...)
 
-	switch esVersion {
+	aead := esVersion
+	if esVersion.IsPQ() {
+		aead = esVersion.AEAD()
+	}
+	switch aead {
 	case dnscrypt.XSalsa20Poly1305:
 		var xsalsaNonce [24]byte
 		copy(xsalsaNonce[:], nonce[:])
@@ -498,7 +540,7 @@ func encryptQuery(msg *dns.Msg, session *dnscryptSession, esVersion dnscrypt.Cry
 	case dnscrypt.XChacha20Poly1305:
 		encrypted = dnscrypt.XChachaSeal(encrypted, nonce[:], padded, session.sharedKey[:])
 	default:
-		return nil, nil, fmt.Errorf("DNSCRYPT: unknown crypto construction %d", esVersion)
+		return nil, nil, fmt.Errorf("DNSCRYPT: unknown crypto construction %d", aead)
 	}
 
 	return encrypted, &nonce, nil
@@ -520,7 +562,11 @@ func decryptResponse(packet []byte, sharedKey *[32]byte, queryNonce *[24]byte, e
 	copy(nonce[:], packet[8:32])
 
 	var decrypted []byte
-	switch esVersion {
+	aead := esVersion
+	if esVersion.IsPQ() {
+		aead = esVersion.AEAD()
+	}
+	switch aead {
 	case dnscrypt.XSalsa20Poly1305:
 		var ok bool
 		decrypted, ok = secretbox.Open(nil, packet[32:], &nonce, sharedKey)
@@ -534,7 +580,7 @@ func decryptResponse(packet []byte, sharedKey *[32]byte, queryNonce *[24]byte, e
 			return nil, fmt.Errorf("DNSCRYPT: xchacha open: %w", derr)
 		}
 	default:
-		return nil, fmt.Errorf("DNSCRYPT: unknown crypto construction %d", esVersion)
+		return nil, fmt.Errorf("DNSCRYPT: unknown crypto construction %d", aead)
 	}
 
 	unpadded, err := dnscrypt.Unpad(decrypted)

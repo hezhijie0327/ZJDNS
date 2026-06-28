@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/mlkem"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -35,6 +36,10 @@ type Server struct {
 	cert         *Certificate
 	certTXT      string
 	providerName string
+
+	// mlkemDK is the ML-KEM-768 decapsulation key for PQ constructions.
+	// It is nil for classical (non-PQ) certificates.
+	mlkemDK *mlkem.DecapsulationKey768
 
 	udpConn     *net.UDPConn
 	tcpListener net.Listener
@@ -82,6 +87,10 @@ func New(handler DNSHandler, dnsCfg config.DNSCryptSettings) (*Server, error) {
 	switch strings.ToLower(dnsCfg.ESVersion) {
 	case "xchacha20", "xchacha20poly1305":
 		esVersion = XChacha20Poly1305
+	case "xsalsa20-pq", "xsalsa20poly1305-pq":
+		esVersion = X25519_MLKEM768_XSalsa20Poly1305
+	case "xchacha20-pq", "xchacha20poly1305-pq":
+		esVersion = X25519_MLKEM768_XChacha20Poly1305
 	}
 
 	cert, err := GenerateCertificate(ed25519.PrivateKey(providerKey), esVersion, certTTL)
@@ -106,6 +115,7 @@ func New(handler DNSHandler, dnsCfg config.DNSCryptSettings) (*Server, error) {
 		cert:         cert,
 		certTXT:      cert.TXTString(),
 		providerName: providerName,
+		mlkemDK:      cert.MlkemDecapsulationKey(),
 		udpSem:       make(chan struct{}, config.DefaultMinConcurrencyLimit),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -232,13 +242,18 @@ func (s *Server) handleUDPPacket(ctx context.Context, packet []byte, addr *net.U
 
 // handleEncryptedQuery decrypts and processes a DNSCrypt encrypted query.
 func (s *Server) handleEncryptedQuery(ctx context.Context, packet []byte, addr *net.UDPAddr) {
-	query, encrypted, err := parseQuery(packet, s.cert)
+	query, pq, encrypted, err := parseQuery(packet, s.cert)
 	if err != nil {
 		log.Debugf("DNSCRYPT: parse query from %s: %v", addr, err)
 		return
 	}
 
-	decrypted, err := query.decrypt(encrypted, s.cert)
+	var decrypted []byte
+	if s.cert.ESVersion.IsPQ() && pq != nil && s.mlkemDK != nil {
+		decrypted, err = pq.decryptPQ(encrypted, s.cert, s.mlkemDK)
+	} else {
+		decrypted, err = query.decrypt(encrypted, s.cert)
+	}
 	if err != nil {
 		log.Debugf("DNSCRYPT: decrypt query from %s: %v", addr, err)
 		return
@@ -350,11 +365,16 @@ func (s *Server) handleTCPConn(ctx context.Context, conn net.Conn) {
 
 		// TCP also supports cert TXT queries.
 		if len(packet) >= clientMagicSize && bytes.Equal(packet[:clientMagicSize], s.cert.ClientMagic[:]) {
-			query, encrypted, err := parseQuery(packet, s.cert)
+			query, pq, encrypted, err := parseQuery(packet, s.cert)
 			if err != nil {
 				continue
 			}
-			decrypted, err := query.decrypt(encrypted, s.cert)
+			var decrypted []byte
+			if s.cert.ESVersion.IsPQ() && pq != nil && s.mlkemDK != nil {
+				decrypted, err = pq.decryptPQ(encrypted, s.cert, s.mlkemDK)
+			} else {
+				decrypted, err = query.decrypt(encrypted, s.cert)
+			}
 			if err != nil {
 				continue
 			}

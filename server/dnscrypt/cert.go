@@ -2,6 +2,7 @@ package dnscrypt
 
 import (
 	"crypto/ed25519"
+	"crypto/mlkem"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -14,7 +15,8 @@ import (
 // DNSCrypt v2 certificate wire format constants.
 const (
 	certMagicBytes = 4
-	certMinSize    = 124
+	certMinSize    = 124  // standard cert size (X25519 only)
+	pqCertMinSize  = 1308 // PQ cert size (X25519 + ML-KEM-768 PK)
 	minorVersion   = 0
 )
 
@@ -26,7 +28,17 @@ type CryptoConstruction uint16
 const (
 	XSalsa20Poly1305  CryptoConstruction = 0x0001
 	XChacha20Poly1305 CryptoConstruction = 0x0002
+	// Hybrid post-quantum constructions: X25519 + ML-KEM-768 key exchange,
+	// combined via HKDF-SHA256, then classical AEAD.
+	X25519_MLKEM768_XSalsa20Poly1305  CryptoConstruction = 0x0101
+	X25519_MLKEM768_XChacha20Poly1305 CryptoConstruction = 0x0102
 )
+
+// IsPQ reports whether this construction uses post-quantum hybrid key exchange.
+func (c CryptoConstruction) IsPQ() bool { return c&0xff00 != 0 }
+
+// AEAD returns the classical AEAD sub-construction for hybrid PQ constructions.
+func (c CryptoConstruction) AEAD() CryptoConstruction { return c & 0xff }
 
 func (c CryptoConstruction) String() string {
 	switch c {
@@ -34,21 +46,39 @@ func (c CryptoConstruction) String() string {
 		return "XSalsa20Poly1305"
 	case XChacha20Poly1305:
 		return "XChacha20Poly1305"
+	case X25519_MLKEM768_XSalsa20Poly1305:
+		return "X25519_MLKEM768_XSalsa20Poly1305"
+	case X25519_MLKEM768_XChacha20Poly1305:
+		return "X25519_MLKEM768_XChacha20Poly1305"
 	default:
 		return fmt.Sprintf("Unknown(%d)", c)
 	}
 }
 
+// ML-KEM-768 key and ciphertext sizes (NIST FIPS 203).
+const (
+	mlkemPublicKeySize  = 1184
+	mlkemCiphertextSize = 1088
+)
+
 // Certificate is a DNSCrypt server certificate.
 type Certificate struct {
-	Serial      uint32
-	ESVersion   CryptoConstruction
-	Signature   [ed25519.SignatureSize]byte
-	ResolverPk  [KeySize]byte
-	ResolverSk  [KeySize]byte
-	ClientMagic [clientMagicSize]byte
-	NotBefore   uint32
-	NotAfter    uint32
+	Serial          uint32
+	ESVersion       CryptoConstruction
+	Signature       [ed25519.SignatureSize]byte
+	ResolverPk      [KeySize]byte              // X25519 public key (serialized)
+	ResolverSk      [KeySize]byte              // X25519 secret key (server-side only)
+	ResolverMlkemPk [mlkemPublicKeySize]byte   // ML-KEM-768 encapsulation key (serialized for PQ)
+	resolverMlkemDK *mlkem.DecapsulationKey768 // ML-KEM-768 decapsulation key (server-side only)
+	ClientMagic     [clientMagicSize]byte
+	NotBefore       uint32
+	NotAfter        uint32
+}
+
+// MlkemDecapsulationKey returns the ML-KEM-768 decapsulation key for PQ
+// constructions, or nil for classic certs.
+func (c *Certificate) MlkemDecapsulationKey() *mlkem.DecapsulationKey768 {
+	return c.resolverMlkemDK
 }
 
 // GenerateCertificate creates a new signed certificate for the given provider.
@@ -79,6 +109,17 @@ func GenerateCertificate(providerPrivateKey ed25519.PrivateKey, esVersion Crypto
 		return nil, fmt.Errorf("dnscrypt: derive resolver public key: %w", err)
 	}
 	copy(cert.ResolverPk[:], pk)
+
+	// For PQ constructions, also generate an ML-KEM-768 key pair.
+	if esVersion.IsPQ() {
+		mlkemDK, err := mlkem.GenerateKey768()
+		if err != nil {
+			return nil, fmt.Errorf("dnscrypt: generate ML-KEM-768 key: %w", err)
+		}
+		ek := mlkemDK.EncapsulationKey()
+		copy(cert.ResolverMlkemPk[:], ek.Bytes())
+		cert.resolverMlkemDK = mlkemDK
+	}
 
 	// Generate client magic (random 8 bytes).
 	if _, err := rand.Read(cert.ClientMagic[:]); err != nil {
@@ -135,9 +176,14 @@ func (c *Certificate) VerifyDate() bool {
 	return now >= c.NotBefore && now <= c.NotAfter
 }
 
-// Serialize encodes the certificate to its 124-byte wire format.
+// Serialize encodes the certificate to wire format (124 bytes for classic,
+// 1308 bytes for PQ).
 func (c *Certificate) Serialize() ([]byte, error) {
-	buf := make([]byte, certMinSize)
+	size := certMinSize
+	if c.ESVersion.IsPQ() {
+		size = pqCertMinSize
+	}
+	buf := make([]byte, size)
 	copy(buf[0:4], certMagic[:])
 	binary.BigEndian.PutUint16(buf[4:6], uint16(c.ESVersion))
 	binary.BigEndian.PutUint16(buf[6:8], minorVersion)
@@ -147,12 +193,15 @@ func (c *Certificate) Serialize() ([]byte, error) {
 	binary.BigEndian.PutUint32(buf[112:116], c.Serial)
 	binary.BigEndian.PutUint32(buf[116:120], c.NotBefore)
 	binary.BigEndian.PutUint32(buf[120:124], c.NotAfter)
+	if c.ESVersion.IsPQ() {
+		copy(buf[124:], c.ResolverMlkemPk[:])
+	}
 	return buf, nil
 }
 
-// Deserialize parses a certificate from its wire format.
+// Deserialize parses a certificate from its wire format (124 or 1308 bytes).
 func (c *Certificate) Deserialize(b []byte) error {
-	if len(b) != certMinSize || string(b[:certMagicBytes]) != string(certMagic[:]) {
+	if (len(b) != certMinSize && len(b) != pqCertMinSize) || string(b[:certMagicBytes]) != string(certMagic[:]) {
 		return errors.New("dnscrypt: invalid certificate format")
 	}
 	c.ESVersion = CryptoConstruction(binary.BigEndian.Uint16(b[4:6]))
@@ -163,6 +212,13 @@ func (c *Certificate) Deserialize(b []byte) error {
 	c.Serial = binary.BigEndian.Uint32(b[112:116])
 	c.NotBefore = binary.BigEndian.Uint32(b[116:120])
 	c.NotAfter = binary.BigEndian.Uint32(b[120:124])
+	// Read ML-KEM-768 PK from extended cert.
+	if c.ESVersion.IsPQ() {
+		if len(b) < pqCertMinSize {
+			return errors.New("dnscrypt: PQ cert too short for ML-KEM-768 key")
+		}
+		copy(c.ResolverMlkemPk[:], b[124:])
+	}
 	return nil
 }
 
