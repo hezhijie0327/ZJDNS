@@ -149,7 +149,7 @@ func (s *Server) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*dns.M
 	switch r.Method {
 	case http.MethodGet:
 		dnsParam := r.URL.Query().Get("dns")
-		if dnsParam == "" || len(dnsParam) > DoHMaxRequestSize {
+		if dnsParam == "" || len(dnsParam) > config.DefaultDoHMaxRequestSize {
 			return nil, http.StatusBadRequest
 		}
 		buf, err = base64.RawURLEncoding.DecodeString(dnsParam)
@@ -161,7 +161,7 @@ func (s *Server) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*dns.M
 		if r.Header.Get("Content-Type") != config.DoHContentType {
 			return nil, http.StatusUnsupportedMediaType
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, DoHMaxRequestSize)
+		r.Body = http.MaxBytesReader(w, r.Body, config.DefaultDoHMaxRequestSize)
 		buf, err = io.ReadAll(r.Body)
 		defer func() { _ = r.Body.Close() }()
 		if err != nil {

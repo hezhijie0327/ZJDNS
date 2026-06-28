@@ -16,7 +16,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const defaultDNSClass = "IN"
+// No local DNS class constant; use config.DefaultDNSClass.
 
 // Result holds the outcome of a rewrite rule evaluation.
 type Result struct {
@@ -270,7 +270,7 @@ func (re *Evaluator) buildRecord(domain string, record config.DNSRecordConfig) d
 	}
 	class := strings.ToUpper(strings.TrimSpace(record.Class))
 	if class == "" {
-		class = defaultDNSClass
+		class = config.DefaultDNSClass
 	}
 	name := dns.Fqdn(domain)
 	if record.Name != "" {

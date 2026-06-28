@@ -34,9 +34,6 @@ import (
 const (
 	// TLSConnBufferSize is the buffer size for TLS connection readers.
 	TLSConnBufferSize = 4096
-
-	// DoHMaxRequestSize is the maximum allowed DoH request size in bytes.
-	DoHMaxRequestSize = 8192
 )
 
 // Config holds the configuration for the TLS server including ports,

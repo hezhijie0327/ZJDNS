@@ -94,21 +94,12 @@ const (
 	DefaultRateLimiterMaxEntries = 10000 // Max unique client IPs tracked before rejecting new IPs
 	DefaultMinConcurrencyLimit   = 8
 
-	DefaultSocks5WriteBufSize = 1500 // MTU-sized buffer for SOCKS5 write pool
-	Socks5UDPHeaderLenIPv4    = 10   // IPv4 SOCKS5 UDP header length
-	Socks5UDPHeaderLenIPv6    = 22   // IPv6 SOCKS5 UDP header length
-	Socks5MaxAuthLen          = 255  // RFC 1929 max username/password length
-
-	DefaultTransportMax        = 32
-	DefaultTLSSessionCacheSize = 32
-	DefaultMaxIdleConns        = 100
-	DefaultMaxIdleConnsPerHost = 2
-	DefaultDoTWriteChannelSize = 64
-	DefaultTLSConnBufferSize   = 4096 // TLS connection reader buffer size
-	DefaultDoHMaxRequestSize   = 8192 // Max DoH request body size
-	DefaultPanicStackBufSize   = 8192 // Panic recovery stack trace buffer
-	DefaultDedupSweepThreshold = 1024
-
+	DefaultTransportMax         = 32
+	DefaultTLSSessionCacheSize  = 32
+	DefaultMaxIdleConns         = 100
+	DefaultMaxIdleConnsPerHost  = 2
+	DefaultDoTWriteChannelSize  = 64
+	DefaultDoHMaxRequestSize    = 8192 // Max DoH request body size
 	DefaultCacheKeyBufferSize   = 128
 	DefaultCacheKeyMaxLength    = 512
 	DefaultCacheKeyECSPrefix    = ":ecs:"
@@ -116,7 +107,6 @@ const (
 	DefaultCacheKeySeparator    = ':'
 	DefaultCacheKeyECSDelim     = '/'
 	DefaultCacheKeyHashFormat   = "h:%x"
-	BytesPerMB                  = 1024 * 1024
 	DefaultCacheEvictSampleSize = 25
 	DefaultRewriteRulesCapacity = 16
 
@@ -131,7 +121,6 @@ const (
 
 	DefaultDNSClass  = "IN"      // Default DNS resource record class
 	StatsPersistKey  = "stats:"  // Stats cache persistence key (matches dns:/dnskey: convention)
-	CertSerialBitLen = 128       // X509 certificate serial number bit length
 	FallbackClientIP = "0.0.0.0" // Fallback IP when client address is nil
 	DNSRootZone      = "."       // DNS root zone label
 )
@@ -140,10 +129,6 @@ const (
 const (
 	DefaultLatencyProbeTimeout = 100 * time.Millisecond
 	DefaultInfraProbeTimeout   = 5 * time.Second
-
-	DefaultProbeUDPReadBufSize  = 512  // UDP probe read buffer
-	DefaultProbeICMPDataSize    = 56   // ICMP probe payload size
-	DefaultProbeICMPReadBufSize = 1500 // ICMP read buffer (MTU)
 
 	DefaultProbePortDNS   = 53
 	DefaultProbePortHTTP  = 80
@@ -154,6 +139,13 @@ const (
 const (
 	DefaultProxyScheme = "socks5"
 	DefaultProxyPort   = "1080"
+)
+
+// SOCKS5 protocol constants (RFC 1928).
+const (
+	Socks5UDPHeaderLenIPv4 = 10  // IPv4 SOCKS5 UDP header length
+	Socks5UDPHeaderLenIPv6 = 22  // IPv6 SOCKS5 UDP header length
+	Socks5MaxAuthLen       = 255 // RFC 1929 max username/password length
 )
 
 // String sentinels and protocol identifiers.

@@ -24,10 +24,6 @@ var (
 	// ErrCIDRFilterRefused is returned when all A/AAAA records are filtered by
 	// CIDR rules.
 	ErrCIDRFilterRefused = errors.New("cidr_filter_refused")
-
-	// ErrAllUpstreamFailed is returned when no upstream server responds
-	// successfully.
-	ErrAllUpstreamFailed = errors.New("all upstream queries failed")
 )
 
 // concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency

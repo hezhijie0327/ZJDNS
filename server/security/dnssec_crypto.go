@@ -3,6 +3,7 @@ package security
 import (
 	"crypto/sha1"
 	"encoding/base32"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -468,8 +469,23 @@ const maxNSEC3Iterations = config.DefaultMaxNSEC3Iterations
 // base32hex-encoded hash without padding as a lowercase string.
 // Iterations are capped at maxNSEC3Iterations to prevent DoS attacks.
 func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) string {
+	// RFC 5155 §5 mandates SHA-1 (algorithm 1) for NSEC3 hashing.
+	if hashAlg != dns.SHA1 {
+		return ""
+	}
 	if iterations > maxNSEC3Iterations {
 		iterations = maxNSEC3Iterations
+	}
+	// Decode salt from hex presentation format (RFC 5155 §3.1.4).
+	// The miekg/dns library stores NSEC3 salt as an uppercase hex string.
+	// An empty salt is represented as "-" (RFC 5155 §3.1.4).
+	var saltBytes []byte
+	if salt != "" && salt != "-" {
+		var err error
+		saltBytes, err = hex.DecodeString(salt)
+		if err != nil {
+			return ""
+		}
 	}
 	// Normalize: lowercase, fully qualified, wire-format label encoding.
 	name = strings.ToLower(dns.Fqdn(name))
@@ -482,18 +498,15 @@ func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) s
 	wire = append(wire, 0) // root label
 
 	// Build initial input: salt || wire_format_name.
-	input := make([]byte, len(salt)+len(wire))
-	copy(input, salt)
-	copy(input[len(salt):], wire)
-
 	h := sha1.New()
-	h.Write(input)
+	h.Write(saltBytes)
+	h.Write(wire)
 	hash := h.Sum(nil)
 
 	// Additional iterations: H(salt || previous_hash).
 	for i := uint16(0); i < iterations; i++ {
 		h.Reset()
-		h.Write([]byte(salt))
+		h.Write(saltBytes)
 		h.Write(hash)
 		hash = h.Sum(nil)
 	}

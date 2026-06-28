@@ -524,11 +524,7 @@ func expand(cr *CompactRecord) dns.RR {
 	if cr == nil || cr.Text == "" {
 		return nil
 	}
-	if cr.RR != nil {
-		return cr.RR
-	}
 	rr, _ := dns.NewRR(cr.Text)
-	cr.RR = rr
 	return rr
 }
 

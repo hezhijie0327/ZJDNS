@@ -539,17 +539,17 @@ func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Q
 func detectRequestProtocol(w dns.ResponseWriter) string {
 	addr := w.RemoteAddr()
 	if addr == nil {
-		return "UDP"
+		return config.ProtoUDP
 	}
 
 	network := strings.ToLower(addr.Network())
 	switch {
-	case strings.HasPrefix(network, "tcp"):
-		return "TCP"
-	case strings.HasPrefix(network, "udp"):
-		return "UDP"
+	case strings.HasPrefix(network, config.ProtoTCP):
+		return config.ProtoTCP
+	case strings.HasPrefix(network, config.ProtoUDP):
+		return config.ProtoUDP
 	default:
-		return "UDP"
+		return config.ProtoUDP
 	}
 }
 

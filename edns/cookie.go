@@ -85,7 +85,7 @@ func (cg *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []
 		return nil
 	}
 	if clientIP == nil {
-		clientIP = net.ParseIP("0.0.0.0")
+		clientIP = net.IPv4zero
 	}
 	clientIP = clientIP.To16()
 
@@ -110,7 +110,7 @@ func (cg *CookieGenerator) ValidateServerCookie(clientIP net.IP, clientCookie, s
 		return false
 	}
 	if clientIP == nil {
-		clientIP = net.ParseIP("0.0.0.0")
+		clientIP = net.IPv4zero
 	}
 	clientIP = clientIP.To16()
 

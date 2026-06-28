@@ -6,6 +6,7 @@ import (
 
 	"github.com/miekg/dns"
 
+	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -50,7 +51,7 @@ func (s *Server) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP n
 	}
 
 	if clientIP == nil {
-		clientIP = net.ParseIP("0.0.0.0")
+		clientIP = net.ParseIP(config.FallbackClientIP)
 	}
 
 	if len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen {

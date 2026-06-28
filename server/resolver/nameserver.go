@@ -116,13 +116,13 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 
 					// Build a bare query without EDNS options
 					bareMsg := pool.DefaultMessagePool.Get()
+					defer pool.DefaultMessagePool.Put(bareMsg)
 					bareMsg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
 					bareMsg.RecursionDesired = true
 
 					retryCtx, retryCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
+					defer retryCancel()
 					retryResult := rr.resolver.client.ExecuteQuery(retryCtx, bareMsg, server)
-					retryCancel()
-					pool.DefaultMessagePool.Put(bareMsg)
 
 					if retryResult.Error == nil && retryResult.Response != nil {
 						retryRcode := retryResult.Response.Rcode
