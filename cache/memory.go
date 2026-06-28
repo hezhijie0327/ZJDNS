@@ -497,24 +497,18 @@ func compact(rrs []dns.RR) []*CompactRecord {
 		return nil
 	}
 	result := make([]*CompactRecord, 0, len(rrs))
-	var seen []string
+	seen := make(map[string]struct{}, len(rrs))
 	for _, rr := range rrs {
 		if rr == nil || rr.Header().Rrtype == dns.TypeOPT {
 			continue
 		}
 		rrText := rr.String()
-		dup := false
-		for _, s := range seen {
-			if s == rrText {
-				dup = true
-				break
-			}
+		if _, dup := seen[rrText]; dup {
+			continue
 		}
-		if !dup {
-			seen = append(seen, rrText)
-			if cr := createCompactRecord(rr); cr != nil {
-				result = append(result, cr)
-			}
+		seen[rrText] = struct{}{}
+		if cr := createCompactRecord(rr); cr != nil {
+			result = append(result, cr)
 		}
 	}
 	return result

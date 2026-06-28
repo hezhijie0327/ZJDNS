@@ -294,14 +294,11 @@ func (s *Server) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption)
 		return nil
 	}
 
-	reverseCache, ok := s.cacheMgr.(interface {
-		ReverseLookup(net.IP) []cache.LookupResult
-	})
-	if !ok {
+	if s.reverseCache == nil {
 		return nil
 	}
 
-	results := reverseCache.ReverseLookup(ip)
+	results := s.reverseCache.ReverseLookup(ip)
 	if len(results) == 0 {
 		return nil
 	}

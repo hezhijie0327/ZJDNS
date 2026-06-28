@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	_ "net/http/pprof" // register pprof handlers on http.DefaultServeMux
 	"os"
@@ -39,8 +40,11 @@ const nanosPerSecond int64 = 1e9
 
 // Server is the core DNS server handling query processing, protocol listeners, and lifecycle.
 type Server struct {
-	config            *config.ServerConfig
-	cacheMgr          cache.Store
+	config       *config.ServerConfig
+	cacheMgr     cache.Store
+	reverseCache interface {
+		ReverseLookup(net.IP) []cache.LookupResult
+	}
 	queryClient       *client.Client
 	guard             *security.Guard
 	tls               *servertls.Server
@@ -193,15 +197,15 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}
 
-	cache := cache.New(cfg.Server.Features.Cache)
+	cacheStore := cache.New(cfg.Server.Features.Cache)
 
 	server := &Server{
 		config:            cfg,
 		ednsMgr:           ednsHandler,
 		rewriteMgr:        rewriteEvaluator,
 		cidrMgr:           cidrFilter,
-		statsMgr:          stats.New(cfg, cache),
-		cacheMgr:          cache,
+		statsMgr:          stats.New(cfg, cacheStore),
+		cacheMgr:          cacheStore,
 		ctx:               ctx,
 		cancel:            cancel,
 		shutdown:          make(chan struct{}),
@@ -216,7 +220,12 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.udpRateLimiter = newRateLimiter(config.DefaultUDPRateLimit, config.DefaultUDPRateBurst)
 	}
 
-	server.guard = security.New(cache, cfg.Server.Features.HijackProtection)
+	server.guard = security.New(cacheStore, cfg.Server.Features.HijackProtection)
+	// Cache the reverse lookup capability once — avoids a type assertion
+	// on every PTR query.
+	server.reverseCache, _ = server.cacheMgr.(interface {
+		ReverseLookup(net.IP) []cache.LookupResult
+	})
 
 	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
 		tlsCfg := servertls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
@@ -246,7 +255,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		ednsHandler,
 		cidrFilter,
 		server.buildQueryMessage,
-		cache,
+		cacheStore,
 	)
 	server.resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
 	server.resolver.InitServers(cfg.Upstream, cfg.Fallback)
@@ -259,7 +268,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
 		server.prober = latency.New(
-			cache,
+			cacheStore,
 			func(fn func() error) { server.backgroundGroup.Go(fn) },
 			backgroundCtx,
 			cfg.Server.Features.LatencyProbe,

@@ -38,6 +38,8 @@ const (
 
 const logTimeFormat = "2006-01-02 15:04:05"
 
+var levelNames = [...]string{"ERROR", "WARN", "INFO", "DEBUG"}
+
 // Default is the package-level default Manager instance.
 var Default = NewManager()
 
@@ -119,7 +121,7 @@ func (m *Manager) Log(lvl Level, format string, args ...any) {
 		return
 	}
 
-	levelStr := [...]string{"ERROR", "WARN", "INFO", "DEBUG"}[lvl]
+	levelStr := levelNames[lvl]
 
 	color, ok := m.colorMap[lvl]
 	if !ok {
@@ -168,10 +170,22 @@ func sanitizeLogMessage(msg string) string {
 	if len(msg) == 0 {
 		return msg
 	}
+	// Fast path: scan for any byte that needs replacement.
+	needsReplace := false
+	for i := 0; i < len(msg); i++ {
+		c := msg[i]
+		if c == 0x0a || c == 0x0d || c == 0x7f || (c < 32 && c != 0) {
+			needsReplace = true
+			break
+		}
+	}
+	if !needsReplace {
+		return msg
+	}
 	b := make([]byte, 0, len(msg))
 	for i := 0; i < len(msg); i++ {
 		c := msg[i]
-		if c == 0x0a || c == 0x0d || c == 0x09 || c == 0x7f || (c < 32 && c != 0) {
+		if c == 0x0a || c == 0x0d || c == 0x7f || (c < 32 && c != 0) {
 			b = append(b, ' ')
 		} else {
 			b = append(b, c)

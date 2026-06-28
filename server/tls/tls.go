@@ -353,6 +353,28 @@ func (s *Server) Start(httpsPort string) error {
 		}
 	})
 
+	// Periodic sweep of dotIPCounts to prevent unbounded growth over long
+	// deployments (matches the doqIPCounts sweep pattern above).
+	g.Go(func() error {
+		defer dnsutil.HandlePanic("dotIPCounts sweep")
+		ticker := time.NewTicker(config.DefaultSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.dotIPCounts.Range(func(key, value any) bool {
+					count, ok := value.(*atomic.Int32)
+					if !ok || count == nil || count.Load() <= 0 {
+						s.dotIPCounts.Delete(key)
+					}
+					return true
+				})
+			case <-ctx.Done():
+				return nil
+			}
+		}
+	})
+
 	go func() {
 		defer dnsutil.HandlePanic("TLS server coordinator")
 		if err := g.Wait(); err != nil {
