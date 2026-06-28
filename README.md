@@ -101,6 +101,7 @@
 | [RFC 9250](https://www.rfc-editor.org/rfc/rfc9250.html) | DNS over QUIC (DoQ)                        | QUIC 加密传输                            |
 | [RFC 9461](https://www.rfc-editor.org/rfc/rfc9461.html) | SVCB/HTTPS RR for DNS                      | DDR SVCB 记录                            |
 | [RFC 9462](https://www.rfc-editor.org/rfc/rfc9462.html) | Discovery of Designated Resolvers          | DDR 自动发现                             |
+| [DNSCrypt](https://www.ietf.org/archive/id/draft-denis-dprive-dnscrypt-10.txt) | DNSCrypt Protocol Specification (v2) | X25519+XSalsa20 加密传输 |
 
 ---
 
