@@ -240,40 +240,20 @@ func (s *Server) serveUDP(ctx context.Context) {
 	}
 }
 
-// handleUDPPacket dispatches a UDP packet: encrypted query, cert TXT request,
-// plain DNS query, or unknown (dropped — QUIC/DoH3).
+// handleUDPPacket dispatches a UDP packet. Only DNSCrypt encrypted queries
+// (starting with the client magic) are processed; everything else (plain DNS,
+// cert TXT, QUIC, DoH3, etc.) is silently dropped. Certificate TXT queries
+// are served from the main DNS port via a rewrite rule.
 func (s *Server) handleUDPPacket(ctx context.Context, packet []byte, addr *net.UDPAddr) {
-	// DNSCrypt encrypted query: starts with client-magic.
 	if len(packet) >= clientMagicSize && bytes.Equal(packet[:clientMagicSize], s.cert.ClientMagic[:]) {
+		log.Debugf("DNSCRYPT: received encrypted query from %s (%d bytes)", addr, len(packet))
 		s.handleEncryptedQuery(ctx, packet, addr)
 		return
 	}
-
-	// Try to parse as DNS — handles both cert TXT requests and plain DNS.
-	msg := pool.DefaultMessagePool.Get()
-	defer pool.DefaultMessagePool.Put(msg)
-	if err := msg.Unpack(packet); err != nil {
-		return // not DNS, drop silently (e.g. QUIC/DoH3)
+	// Not an encrypted query — drop silently.
+	if len(packet) > 0 {
+		log.Debugf("DNSCRYPT: dropped non-DNSCrypt packet from %s (%d bytes, first byte 0x%02x)", addr, len(packet), packet[0])
 	}
-
-	// Cert TXT query for our provider name.
-	if len(msg.Question) == 1 && msg.Question[0].Qtype == dns.TypeTXT &&
-		strings.EqualFold(msg.Question[0].Name, dns.Fqdn(s.providerName)) {
-		s.handleCertQuery(ctx, msg, addr)
-		return
-	}
-
-	// Plain DNS query — forward to the DNS handler (enables port sharing with :53).
-	response := s.handler.ServeDNS(msg, addr.IP, false, "UDP")
-	if response == nil {
-		return
-	}
-	respPacket, err := response.Pack()
-	pool.DefaultMessagePool.Put(response)
-	if err != nil {
-		return
-	}
-	_, _ = s.udpConn.WriteToUDP(respPacket, addr)
 }
 
 // handleEncryptedQuery decrypts and processes a DNSCrypt encrypted query.
@@ -326,25 +306,6 @@ func (s *Server) handleEncryptedQuery(ctx context.Context, packet []byte, addr *
 	}
 
 	_, _ = s.udpConn.WriteToUDP(encryptedResp, addr)
-}
-
-// handleCertQuery responds to a certificate TXT query.
-func (s *Server) handleCertQuery(ctx context.Context, msg *dns.Msg, addr *net.UDPAddr) {
-	reply := new(dns.Msg)
-	reply.SetReply(msg)
-	reply.Authoritative = true
-	reply.RecursionAvailable = true
-	reply.Answer = append(reply.Answer, &dns.TXT{
-		Hdr: dns.RR_Header{
-			Name:   msg.Question[0].Name,
-			Rrtype: dns.TypeTXT,
-			Ttl:    60,
-			Class:  dns.ClassINET,
-		},
-		Txt: []string{s.certTXT},
-	})
-	resp, _ := reply.Pack()
-	_, _ = s.udpConn.WriteToUDP(resp, addr)
 }
 
 // serveTCP accepts and processes TCP connections with per-IP limiting.
@@ -431,107 +392,64 @@ func (s *Server) handleTCPConn(ctx context.Context, conn net.Conn) {
 		}
 
 		// TCP also supports encrypted DNSCrypt queries.
-		if len(packet) >= clientMagicSize && bytes.Equal(packet[:clientMagicSize], s.cert.ClientMagic[:]) {
-			query, xq, encrypted, err := parseQuery(packet, s.cert)
-			if err != nil {
-				continue
-			}
+		if len(packet) < clientMagicSize || !bytes.Equal(packet[:clientMagicSize], s.cert.ClientMagic[:]) {
+			continue // not encrypted — drop silently
+		}
 
-			var decrypted []byte
-			var sharedKey [SharedKeySize]byte
-			var nonce [nonceSize]byte
+		query, xq, encrypted, err := parseQuery(packet, s.cert)
+		if err != nil {
+			continue
+		}
 
-			if s.cert.ESVersion == XWingPQ && xq != nil && s.xwingSK != nil {
-				copy(nonce[:], xq.Nonce[:])
-				decrypted, sharedKey, err = xq.decrypt(encrypted, s.cert, s.xwingSK)
-			} else {
-				copy(nonce[:], query.Nonce[:])
-				decrypted, sharedKey, err = query.decrypt(encrypted, s.cert)
-			}
-			if err != nil {
-				continue
-			}
+		var decrypted []byte
+		var sharedKey [SharedKeySize]byte
+		var nonce [nonceSize]byte
 
-			req := pool.DefaultMessagePool.Get()
-			if err := req.Unpack(decrypted); err != nil {
-				pool.DefaultMessagePool.Put(req)
-				continue
-			}
-
-			var clientIP net.IP
-			if tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
-				clientIP = tcpAddr.IP
-			}
-			response := s.handler.ServeDNS(req, clientIP, true, "DNSCrypt")
-			pool.DefaultMessagePool.Put(req)
-			if response == nil {
-				continue
-			}
-
-			respPacket, err := response.Pack()
-			pool.DefaultMessagePool.Put(response)
-			if err != nil {
-				continue
-			}
-
-			encryptedResp, err := encryptResponse(s.cert.ESVersion, respPacket, &sharedKey, &nonce, nil)
-			if err != nil {
-				continue
-			}
-
-			// TCP: prepend 2-byte length prefix.
-			_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-			if err := binary.Write(conn, binary.BigEndian, uint16(len(encryptedResp))); err != nil {
-				return
-			}
-			if _, err := conn.Write(encryptedResp); err != nil {
-				return
-			}
+		if s.cert.ESVersion == XWingPQ && xq != nil && s.xwingSK != nil {
+			copy(nonce[:], xq.Nonce[:])
+			decrypted, sharedKey, err = xq.decrypt(encrypted, s.cert, s.xwingSK)
 		} else {
-			// Cert TXT or plain DNS query over TCP.
-			msg := &dns.Msg{}
-			if err := msg.Unpack(packet); err != nil {
-				continue
-			}
+			copy(nonce[:], query.Nonce[:])
+			decrypted, sharedKey, err = query.decrypt(encrypted, s.cert)
+		}
+		if err != nil {
+			continue
+		}
 
-			var clientIP net.IP
-			if tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
-				clientIP = tcpAddr.IP
-			}
+		req := pool.DefaultMessagePool.Get()
+		if err := req.Unpack(decrypted); err != nil {
+			pool.DefaultMessagePool.Put(req)
+			continue
+		}
 
-			if len(msg.Question) == 1 && msg.Question[0].Qtype == dns.TypeTXT &&
-				strings.EqualFold(msg.Question[0].Name, dns.Fqdn(s.providerName)) {
-				reply := new(dns.Msg)
-				reply.SetReply(msg)
-				reply.Authoritative = true
-				reply.RecursionAvailable = true
-				reply.Answer = append(reply.Answer, &dns.TXT{
-					Hdr: dns.RR_Header{
-						Name: msg.Question[0].Name, Rrtype: dns.TypeTXT,
-						Ttl: 60, Class: dns.ClassINET,
-					},
-					Txt: []string{s.certTXT},
-				})
-				resp, _ := reply.Pack()
-				_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-				_ = binary.Write(conn, binary.BigEndian, uint16(len(resp)))
-				_, _ = conn.Write(resp)
-				continue
-			}
+		var clientIP net.IP
+		if tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+			clientIP = tcpAddr.IP
+		}
+		response := s.handler.ServeDNS(req, clientIP, true, "DNSCrypt")
+		pool.DefaultMessagePool.Put(req)
+		if response == nil {
+			continue
+		}
 
-			// Plain DNS query — forward to handler (port sharing with :53).
-			response := s.handler.ServeDNS(msg, clientIP, false, "TCP")
-			if response == nil {
-				continue
-			}
-			respPacket, err := response.Pack()
-			pool.DefaultMessagePool.Put(response)
-			if err != nil {
-				continue
-			}
-			_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-			_ = binary.Write(conn, binary.BigEndian, uint16(len(respPacket)))
-			_, _ = conn.Write(respPacket)
+		respPacket, err := response.Pack()
+		pool.DefaultMessagePool.Put(response)
+		if err != nil {
+			continue
+		}
+
+		encryptedResp, err := encryptResponse(s.cert.ESVersion, respPacket, &sharedKey, &nonce, nil)
+		if err != nil {
+			continue
+		}
+
+		// TCP: prepend 2-byte length prefix.
+		_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
+		if err := binary.Write(conn, binary.BigEndian, uint16(len(encryptedResp))); err != nil {
+			return
+		}
+		if _, err := conn.Write(encryptedResp); err != nil {
+			return
 		}
 	}
 }
@@ -565,4 +483,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // Config returns the DNSCrypt server configuration.
 func (s *Server) Config() config.DNSCryptSettings {
 	return s.cfg
+}
+
+// ProviderName returns the normalized provider name (e.g. 2.dnscrypt-cert.zjdns).
+func (s *Server) ProviderName() string {
+	return s.providerName
+}
+
+// CertTXT returns the hex-encoded certificate suitable for a DNS TXT record.
+func (s *Server) CertTXT() string {
+	return s.certTXT
 }

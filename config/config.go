@@ -125,6 +125,7 @@ type UpstreamServer struct {
 	Proxy             string   `json:"proxy,omitempty"`               // socks5://[user:pass@]host:port
 	DNSCryptPublicKey string   `json:"dnscrypt_public_key,omitempty"` // hex-encoded Ed25519 public key (DNSCrypt only)
 	DNSCryptTCP       bool     `json:"dnscrypt_tcp,omitempty"`        // use TCP for DNSCrypt upstream (default: UDP)
+	CertFetchAddress  string   `json:"cert_fetch_address,omitempty"`  // separate address for cert TXT queries (default: same as Address)
 }
 
 // RewriteRule defines a DNS rewrite rule with synthetic response, client

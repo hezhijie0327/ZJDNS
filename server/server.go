@@ -253,6 +253,20 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			return nil, fmt.Errorf("DNSCrypt server init: %w", err)
 		}
 		server.dnscrypt = dnscryptSrv
+
+		// Auto-add a rewrite rule so the cert TXT record is served from the
+		// main DNS port.  The DNSCrypt port only accepts encrypted queries.
+		certRule := config.RewriteRule{
+			Name: dnscryptSrv.ProviderName(),
+			Records: []config.DNSRecordConfig{{
+				Type:    "TXT",
+				Content: `"` + dnscryptSrv.CertTXT() + `"`,
+				TTL:     config.DefaultTTL,
+			}},
+		}
+		if err := rewriteEvaluator.AddRule(certRule); err != nil {
+			log.Warnf("SERVER: failed to add DNSCrypt cert TXT rewrite rule: %v", err)
+		}
 	}
 
 	queryClient := client.New()

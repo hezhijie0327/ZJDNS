@@ -118,14 +118,16 @@ func New() *Client {
 		doh3Client: &http.Client{
 			Timeout: config.DefaultDNSQueryTimeout,
 		},
-		dohTransports:  make(map[string]*http.Client),
-		doh3Transports: make(map[string]*http.Client),
-		quicConfigs:    make(map[string]*quic.Config),
-		quicPool:       connpool.NewQUICPool(config.DefaultMaxConns),
-		SessionCache:   eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
-		tcpPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		dotPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		proxyDialers:   make(map[string]*Socks5Dialer),
+		dohTransports:     make(map[string]*http.Client),
+		doh3Transports:    make(map[string]*http.Client),
+		quicConfigs:       make(map[string]*quic.Config),
+		quicPool:          connpool.NewQUICPool(config.DefaultMaxConns),
+		SessionCache:      eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
+		tcpPool:           connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		dotPool:           connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		proxyDialers:      make(map[string]*Socks5Dialer),
+		dnscryptResolvers: make(map[string]*dnscryptCacheEntry),
+		dnscryptPending:   make(map[string]chan struct{}),
 	}
 }
 

@@ -84,7 +84,15 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		serverAddr = net.JoinHostPort(serverAddr, config.DefaultDNSCryptPort)
 	}
 
-	session, err := c.getDNSCryptSession(ctx, serverAddr, providerName, server.DNSCryptPublicKey)
+	certAddr := serverAddr
+	if server.CertFetchAddress != "" {
+		certAddr = server.CertFetchAddress
+		if _, _, err := net.SplitHostPort(certAddr); err != nil {
+			certAddr = net.JoinHostPort(certAddr, config.DefaultDNSPort)
+		}
+	}
+
+	session, err := c.getDNSCryptSession(ctx, serverAddr, certAddr, providerName, server.DNSCryptPublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +120,7 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 }
 
 // getDNSCryptSession returns a cached or newly-established DNSCrypt session.
-func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, providerName, pubkeyHex string) (*dnscryptSession, error) {
+func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, providerName, pubkeyHex string) (*dnscryptSession, error) {
 	cacheKey := serverAddr + "|" + providerName
 
 	c.dnscryptResolverMu.Lock()
@@ -167,7 +175,7 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, providerNam
 	}
 
 	// Fetch and verify the server certificate.
-	cert, err := fetchCert(ctx, serverAddr, providerName, providerPK)
+	cert, err := fetchCert(ctx, certAddr, providerName, providerPK)
 	if err != nil {
 		return nil, fmt.Errorf("DNSCRYPT: fetch cert from %s: %w", serverAddr, err)
 	}
@@ -312,6 +320,8 @@ func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK 
 	msg.SetQuestion(dns.Fqdn(providerName), dns.TypeTXT)
 	msg.RecursionDesired = true
 
+	log.Debugf("DNSCRYPT: fetching cert for %s from %s", providerName, serverAddr)
+
 	// Try UDP first, fall back to TCP.  On port-shared servers
 	// (SO_REUSEPORT with DoH3), UDP cert queries may be routed to
 	// the QUIC socket and dropped — TCP avoids this because the
@@ -319,6 +329,7 @@ func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK 
 	query, _ := msg.Pack()
 	certBytes, err := fetchCertViaUDP(serverAddr, query)
 	if err != nil {
+		log.Debugf("DNSCRYPT: UDP cert fetch from %s failed: %v, trying TCP", serverAddr, err)
 		certBytes, err = fetchCertViaTCP(serverAddr, query)
 		if err != nil {
 			return nil, fmt.Errorf("cert query (UDP+TCP): %w", err)
