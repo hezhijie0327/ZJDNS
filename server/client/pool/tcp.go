@@ -274,13 +274,16 @@ func (cp *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFu
 	leastCount := math.MaxInt
 	conns := cp.conns[key]
 	liveConns := conns[:0]
-	for _, pc := range conns {
+	for i, pc := range conns {
 		if pc.IsDead() {
 			continue
 		}
 		liveConns = append(liveConns, pc)
 		inFlight := int(pc.inFlight.Load())
 		if !pc.IsFull() {
+			// Append remaining (unchecked) connections so they are not
+			// silently dropped from the pool on early return.
+			liveConns = append(liveConns, conns[i+1:]...)
 			cp.conns[key] = liveConns
 			cp.mu.Unlock()
 			return pc, nil
@@ -329,7 +332,7 @@ func (cp *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFu
 				delete(cp.dialing, key)
 			}
 			cp.mu.Unlock()
-			if !replaced && leastLoaded != nil {
+			if !replaced && leastLoaded != nil && !leastLoaded.IsDead() {
 				return leastLoaded, nil
 			}
 			if !replaced {
