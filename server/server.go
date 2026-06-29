@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof" // register pprof handlers on http.DefaultServeMux
+	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -254,6 +256,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	queryClient := client.New()
+	if cfg.Server.TLS.KTLS != nil {
+		queryClient.SetKTLS(cfg.Server.TLS.KTLS.KernelTX, cfg.Server.TLS.KTLS.KernelRX)
+	}
 	server.queryClient = queryClient
 
 	server.resolver = resolver.New(
@@ -486,6 +491,17 @@ func (s *Server) displayInfo() {
 				endpoint = strings.TrimPrefix(config.DefaultQueryPath, "/")
 			}
 			log.Infof("TLS: Listening on port: %s (DoH/DoH3, endpoint: %s)", httpsPort, endpoint)
+		}
+		if runtime.GOOS == "linux" {
+			ktlsTX, ktlsRX := false, false
+			if s.config.Server.TLS.KTLS != nil {
+				ktlsTX, ktlsRX = s.config.Server.TLS.KTLS.KernelTX, s.config.Server.TLS.KTLS.KernelRX
+			}
+			if _, err := os.Stat("/sys/module/tls"); err == nil {
+				log.Infof("TLS: kTLS available, TX=%t RX=%t", ktlsTX, ktlsRX)
+			} else {
+				log.Infof("TLS: kTLS unavailable (load with: modprobe tls)")
+			}
 		}
 	}
 

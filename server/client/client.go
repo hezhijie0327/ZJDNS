@@ -68,6 +68,11 @@ type Client struct {
 	proxyDialers map[string]*Socks5Dialer
 	proxyMu      sync.Mutex
 
+	// KTLS offload settings — defaults to false (off). Set via SetKTLS() from
+	// the server config before use.
+	ktlsTX bool
+	ktlsRX bool
+
 	// DNSCrypt resolver session cache.
 	dnscryptResolvers  map[string]*dnscryptCacheEntry
 	dnscryptResolverMu sync.Mutex
@@ -298,6 +303,14 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}
+}
+
+// SetKTLS configures kernel TLS offload for upstream DoT/DoH connections.
+// Both default to false (off). TX (encryption) is typically safe; RX
+// (decryption) may produce "bad record MAC" on some kernel/NIC combos.
+func (c *Client) SetKTLS(tx, rx bool) {
+	c.ktlsTX = tx
+	c.ktlsRX = rx
 }
 
 // Close shuts down all pooled connections and transports, releasing file

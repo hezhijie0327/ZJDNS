@@ -14,6 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 8. User instructions always override this file.
 9. Commit incrementally — every batch of related changes should be committed
    with a descriptive message to prevent data loss.
+10. Present changes for review before committing. Do not commit automatically
+   after each fix — wait for user confirmation.
 
 ## Coding Standards
 

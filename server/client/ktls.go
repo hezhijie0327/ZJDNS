@@ -12,11 +12,14 @@ import (
 )
 
 // eTLSClientConfig builds a go-extension/tls Config with kernel TLS offload
-// (KTLS) enabled for TCP-based upstream protocols (DoT, DoH).
+// (KTLS) for TCP-based upstream protocols (DoT, DoH).
+//
+// KTLS settings are controlled via Client.SetKTLS(), which mirrors the server
+// config (server.tls.ktls.kernel_tx / kernel_rx). Both default to false.
 func (c *Client) eTLSClientConfig(server *config.UpstreamServer) *eTLS.Config {
 	return &eTLS.Config{
-		KernelTX:           true,
-		KernelRX:           true,
+		KernelTX:           c.ktlsTX,
+		KernelRX:           c.ktlsRX,
 		CurvePreferences:   []eTLS.CurveID{},
 		InsecureSkipVerify: server.SkipTLSVerify,
 		MinVersion:         eTLS.VersionTLS12,

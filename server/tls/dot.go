@@ -99,9 +99,6 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		return
 	}
 
-	log.Debugf("TLS: DoT connection handler started, remote=%s, kTLS(TX=%v,RX=%v)",
-		tlsConn.RemoteAddr(), tlsConn.KernelTX(), tlsConn.KernelRX())
-
 	reader := bufio.NewReaderSize(tlsConn, TLSConnBufferSize)
 	connCtx, connCancel := context.WithCancel(s.ctx)
 	defer connCancel()
@@ -135,7 +132,6 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 	workerCap := make(chan struct{}, config.DefaultMaxPipe)
 
 	lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
-	firstFrame := true
 	for {
 		if connCtx.Err() != nil {
 			return
@@ -148,17 +144,10 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
 			if err != io.EOF && !isTemporaryError(err) {
-				log.Debugf("TLS: read length error remote=%s kTLS(TX=%v,RX=%v): %v",
-					tlsConn.RemoteAddr(), tlsConn.KernelTX(), tlsConn.KernelRX(), err)
+				log.Debugf("TLS: read length error remote=%s: %v",
+					tlsConn.RemoteAddr(), err)
 			}
 			return
-		}
-
-		// Log kTLS status after first successful read (handshake complete).
-		if firstFrame {
-			firstFrame = false
-			log.Debugf("TLS: DoT first frame read, kTLS(TX=%v,RX=%v), remote=%s",
-				tlsConn.KernelTX(), tlsConn.KernelRX(), tlsConn.RemoteAddr())
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
