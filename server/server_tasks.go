@@ -25,7 +25,6 @@ func (s *Server) startBackgroundTasks() {
 	s.startStatsReset()
 	s.startTCPWriteMuSweep()
 	s.startRateLimiterSweep()
-	s.startTCPIPCountsSweep()
 	s.setupSignalHandling()
 }
 
@@ -131,13 +130,6 @@ func (s *Server) startStatsReset() {
 		s.statsMgr.Reset()
 		log.Infof("STATS: counters reset")
 		s.logStatsNow("reset")
-	})
-}
-
-// startTCPIPCountsSweep periodically removes stale per-IP plain TCP counters.
-func (s *Server) startTCPIPCountsSweep() {
-	s.runBackgroundTicker("tcpIPCounts sweep", config.DefaultSweepInterval, func() {
-		s.tcpLimiter.Sweep()
 	})
 }
 

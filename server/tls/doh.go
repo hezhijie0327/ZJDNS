@@ -68,35 +68,18 @@ func (s *Server) startDOHServer(port string) error {
 
 	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoH server")
-		const maxConnsPerIP = config.DefaultMaxConnsPerIP
 		for {
 			conn, err := s.httpsListener.Accept()
 			if err != nil {
-				// When the TLS listener fails Accept, it could be a TLS
-				// handshake error (cryptotls wraps it) or listener closure.
-				// Log it so we know the handshake reached us but failed.
 				if s.ctx.Err() == nil {
 					log.Warnf("TLS: DoH Accept failed: %v (type=%T)", err, err)
 				}
-				return nil // listener closed
+				return nil
 			}
 
 			log.Debugf("TLS: DoH TCP accepted from %s, TLS handshake pending", conn.RemoteAddr())
 
-			var cleanup func()
-			if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
-				cleanup = s.dohLimiter.Allow(host, maxConnsPerIP)
-				if cleanup == nil {
-					_ = conn.Close()
-					log.Debugf("TLS: DoH per-IP connection limit reached for %s, rejecting", host)
-					continue
-				}
-			}
-
 			go func(c net.Conn) {
-				if cleanup != nil {
-					defer cleanup()
-				}
 				defer dnsutil.HandlePanic("DoH connection handler")
 				log.Debugf("TLS: DoH starting HTTP/2 ServeConn for %s", c.RemoteAddr())
 				s.dohServer.ServeConn(c, &http2.ServeConnOpts{
@@ -136,7 +119,6 @@ func (s *Server) startDoH3Server(port string) error {
 
 	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoH3 server")
-		const maxConnsPerIP = config.DefaultMaxConnsPerIP
 		for {
 			conn, err := s.h3Listener.Accept(s.ctx)
 			if err != nil {
@@ -147,20 +129,7 @@ func (s *Server) startDoH3Server(port string) error {
 				continue
 			}
 
-			var cleanup func()
-			if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
-				cleanup = s.doh3Limiter.Allow(host, maxConnsPerIP)
-				if cleanup == nil {
-					_ = conn.CloseWithError(0, "too many connections")
-					log.Debugf("TLS: DoH3 per-IP connection limit reached for %s, rejecting", host)
-					continue
-				}
-			}
-
 			s.serverGroup.Go(func() error {
-				if cleanup != nil {
-					defer cleanup()
-				}
 				defer dnsutil.HandlePanic("DoH3 connection handler")
 				if err := s.h3Server.ServeQUICConn(conn); err != nil && err != http.ErrServerClosed {
 					log.Debugf("TLS: DoH3 connection error: %v", err)

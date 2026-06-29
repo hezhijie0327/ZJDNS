@@ -46,10 +46,6 @@ func (s *Server) startDOTServer() error {
 }
 
 func (s *Server) handleDOTConnections() {
-	// Per-IP DoT connection limit to prevent a single client from
-	// flooding the server with connections, matching DoQ's per-IP policy.
-	const maxConnsPerIP = config.DefaultMaxConnsPerIP
-
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -69,20 +65,7 @@ func (s *Server) handleDOTConnections() {
 
 		log.Debugf("TLS: DoT TCP accepted from %s, TLS handshake pending", conn.RemoteAddr())
 
-		var cleanup func()
-		if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
-			cleanup = s.dotLimiter.Allow(host, maxConnsPerIP)
-			if cleanup == nil {
-				_ = conn.Close()
-				log.Debugf("TLS: DoT per-IP connection limit reached for %s, rejecting", host)
-				continue
-			}
-		}
-
 		s.serverGroup.Go(func() error {
-			if cleanup != nil {
-				defer cleanup()
-			}
 			defer dnsutil.HandlePanic("DoT connection handler")
 			defer func() { _ = conn.Close() }()
 			log.Debugf("TLS: DoT starting connection handler for %s", conn.RemoteAddr())

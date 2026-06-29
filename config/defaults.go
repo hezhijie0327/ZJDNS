@@ -86,7 +86,6 @@ const (
 	DefaultMaxConcurrentStreams = 64
 
 	DefaultServerGoroutineLimit  = 1024
-	DefaultMaxConnsPerIP         = 64
 	DefaultUDPRateLimit          = 500   // Max UDP queries/sec per client IP
 	DefaultUDPRateBurst          = 1000  // Max burst for UDP rate limiter
 	DefaultRateLimiterMaxEntries = 10000 // Max unique client IPs tracked before rejecting new IPs

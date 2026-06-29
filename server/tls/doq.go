@@ -64,8 +64,6 @@ func (s *Server) startDOQServer() error {
 }
 
 func (s *Server) handleDOQConnections() {
-	const maxConnsPerIP = config.DefaultMaxConnsPerIP
-
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -87,19 +85,7 @@ func (s *Server) handleDOQConnections() {
 			continue
 		}
 
-		var cleanup func()
-		if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
-			cleanup = s.doqLimiter.Allow(host, maxConnsPerIP)
-			if cleanup == nil {
-				_ = conn.CloseWithError(connpool.QUICCodeInternalError, "too many connections")
-				continue
-			}
-		}
-
 		s.serverGroup.Go(func() error {
-			if cleanup != nil {
-				defer cleanup()
-			}
 			defer dnsutil.HandlePanic("DoQ connection handler")
 			s.handleDOQConnection(conn)
 			return nil
