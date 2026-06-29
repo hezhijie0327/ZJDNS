@@ -493,7 +493,10 @@ func (s *Server) serveCertTXT(packet []byte) []byte {
 
 	log.Debugf("DNSCRYPT: serving cert TXT for %s (%d bytes)", s.providerName, len(s.certBytes))
 
-	// Split raw cert bytes into 255-byte chunks (DNS TXT character-string limit).
+	// Split raw cert bytes into 255-byte chunks (DNS TXT character-string
+	// limit).  miekg stores TXT strings in presentation format with \DDD
+	// escape sequences, so we must escape non-printable bytes before Pack
+	// converts them back to wire format.
 	const txtChunkSize = 255
 	var chunks []string
 	for i := 0; i < len(s.certBytes); i += txtChunkSize {
@@ -501,7 +504,7 @@ func (s *Server) serveCertTXT(packet []byte) []byte {
 		if end > len(s.certBytes) {
 			end = len(s.certBytes)
 		}
-		chunks = append(chunks, string(s.certBytes[i:end]))
+		chunks = append(chunks, escapeTXT(s.certBytes[i:end]))
 	}
 
 	resp := pool.DefaultMessagePool.Get()
@@ -559,6 +562,24 @@ func (s *Server) Config() config.DNSCryptSettings {
 // ProviderName returns the normalized provider name (e.g. 2.dnscrypt-cert.zjdns).
 func (s *Server) ProviderName() string {
 	return s.providerName
+}
+
+// escapeTXT converts raw bytes to a miekg/dns TXT presentation-format string.
+// Non-printable bytes and backslash are escaped as \DDD so that miekg's Pack
+// correctly writes them to the wire as single bytes.
+func escapeTXT(b []byte) string {
+	buf := make([]byte, 0, len(b))
+	for _, c := range b {
+		switch {
+		case c == '\\':
+			buf = append(buf, '\\', '\\')
+		case c < 0x20 || c > 0x7e:
+			buf = append(buf, '\\', '0'+c/100, '0'+(c/10)%10, '0'+c%10)
+		default:
+			buf = append(buf, c)
+		}
+	}
+	return string(buf)
 }
 
 // CertBytes returns the raw certificate bytes suitable for a DNS TXT record.

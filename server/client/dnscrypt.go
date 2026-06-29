@@ -349,8 +349,10 @@ func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK 
 		return nil, fmt.Errorf("invalid cert TXT response")
 	}
 
-	// Extract raw cert bytes, handling both hex and raw binary.  Concatentate
-	// all TXT segments before decoding.
+	// Extract raw cert bytes, handling both hex and raw binary.
+	// Concatenate all TXT segments before decoding.
+	// miekg/dns stores TXT strings in presentation format with \DDD
+	// escape sequences for non-printable bytes.
 	certRaw := strings.Join(txt.Txt, "")
 
 	var certRawBytes []byte
@@ -360,9 +362,9 @@ func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK 
 			return nil, fmt.Errorf("decode cert hex: %w", err)
 		}
 	} else {
-		// Raw binary — convert directly from TXT strings.
+		// Raw binary — unescape \DDD presentation format.
 		for _, s := range txt.Txt {
-			certRawBytes = append(certRawBytes, []byte(s)...)
+			certRawBytes = append(certRawBytes, unescapeTXT(s)...)
 		}
 	}
 
@@ -570,6 +572,31 @@ func decryptResponse(packet []byte, sharedKey *[32]byte, queryNonce *[24]byte, e
 		return nil, fmt.Errorf("DNSCRYPT: unpack: %w", err)
 	}
 	return resp, nil
+}
+
+// unescapeTXT reverses miekg/dns TXT presentation-format escaping (\DDD → byte).
+func unescapeTXT(s string) []byte {
+	buf := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) && isDDD(s[i+1:]) {
+			buf = append(buf, dddToByte(s[i+1:]))
+			i += 3
+		} else if s[i] == '\\' && i+1 < len(s) {
+			i++
+			buf = append(buf, s[i])
+		} else {
+			buf = append(buf, s[i])
+		}
+	}
+	return buf
+}
+
+func isDDD(s string) bool {
+	return len(s) >= 3 && s[0] >= '0' && s[0] <= '9' && s[1] >= '0' && s[1] <= '9' && s[2] >= '0' && s[2] <= '9'
+}
+
+func dddToByte(s string) byte {
+	return (s[0]-'0')*100 + (s[1]-'0')*10 + (s[2] - '0')
 }
 
 func isHex(s string) bool {
