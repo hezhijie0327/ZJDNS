@@ -47,7 +47,18 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "  -es-version <version>         xsalsa20 | xchacha20 | xwing-pq\n")
 	}
 
-	_ = fs.Parse(osArgs[1:])
+	// Check for help flags before parsing, since custom FlagSet does not
+	// auto-register -h/-help.
+	for _, arg := range osArgs[1:] {
+		if arg == "-h" || arg == "--help" {
+			fs.Usage()
+			return "", true
+		}
+	}
+
+	if err := fs.Parse(osArgs[1:]); err != nil {
+		return "", true
+	}
 
 	if showVersion {
 		fmt.Printf("ZJDNS Server\n")
