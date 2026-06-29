@@ -59,14 +59,21 @@ func (s *dnscryptSession) queryHeaderLen() int {
 }
 
 // startReader launches the background goroutine that reads UDP responses and
-// dispatches them to waiting query goroutines by nonce.
+// dispatches them to waiting query goroutines by nonce.  Blocks until the
+// reader goroutine is ready.
 func (s *dnscryptSession) startReader() {
 	s.readerOnce.Do(func() {
+		ready := make(chan struct{})
 		go func() {
+			defer func() { _ = recover() }()
+			close(ready)
 			buf := make([]byte, pool.SecureBufferSize)
 			for {
 				n, err := s.udpConn.Read(buf)
 				if err != nil {
+					if !isConnClosed(err) {
+						log.Debugf("DNSCRYPT: reader read error: %v", err)
+					}
 					return
 				}
 				// Response: resolverMagic(8) + nonce(24) + encrypted.
@@ -91,6 +98,7 @@ func (s *dnscryptSession) startReader() {
 				}
 			}
 		}()
+		<-ready
 	})
 }
 
@@ -561,6 +569,14 @@ func isDDD(s string) bool {
 
 func dddToByte(s string) byte {
 	return (s[0]-'0')*100 + (s[1]-'0')*10 + (s[2] - '0')
+}
+
+// isConnClosed reports whether err is due to a closed network connection.
+func isConnClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "use of closed network connection")
 }
 
 func isHex(s string) bool {
