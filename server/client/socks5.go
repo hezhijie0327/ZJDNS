@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"zjdns/config"
+	"zjdns/internal/log"
 )
 
 // SOCKS5 pool buffer sizes.
@@ -133,6 +134,7 @@ func (d *Socks5Dialer) DialContext(ctx context.Context, network string, targetAd
 	// Clear deadline — the caller manages I/O timeouts from here.
 	_ = conn.SetDeadline(time.Time{})
 
+	log.Debugf("UPSTREAM: SOCKS5 connected to %s via %s", targetAddr, d.SafeURL())
 	return conn, nil
 }
 

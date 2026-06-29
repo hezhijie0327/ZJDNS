@@ -186,6 +186,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 		if result != nil {
 			return result, verdict, nil
 		}
+		log.Debugf("RECURSION: all %d nameservers failed for %s (zone=%s)", len(nameservers), question.Name, currentDomain)
 		return nil, verdict, errors.New("no successful response")
 	default:
 	}
@@ -196,8 +197,10 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 		if result != nil {
 			return result, verdict, nil
 		}
+		log.Debugf("RECURSION: all %d nameservers failed for %s (zone=%s, deadline exceeded)", len(nameservers), question.Name, currentDomain)
 		return nil, verdict, errors.New("no successful response")
 	case <-queryCtx.Done():
+		log.Debugf("RECURSION: context cancelled while waiting for %s (zone=%s)", question.Name, currentDomain)
 		return nil, verdict, queryCtx.Err()
 	}
 }

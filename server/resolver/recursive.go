@@ -320,7 +320,7 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 					nextNS = append(nextNS, cached...)
 					// Log per-NS latency ranking (fastest first) so
 					// operators can verify the probe is working.
-					if len(cached) > 1 {
+					if len(cached) > 1 && log.Default.Level() >= log.Debug {
 						rankParts := make([]string, 0, len(cached))
 						for i, addr := range cached {
 							rankParts = append(rankParts, fmt.Sprintf("#%d=%s", i+1, addr))
@@ -762,6 +762,7 @@ func (ch *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.E
 			return nil, nil, nil, false, nil, "", false, fmt.Errorf("CNAME loop detected: %s", currentName)
 		}
 		visitedCNAMEs[currentName] = true
+		log.Debugf("RECURSION: CNAME step %d/%d: resolving %s %s", cnameDepth+1, config.DefaultMaxCNAMEChain, currentQuestion.Name, dns.TypeToString[currentQuestion.Qtype])
 
 		// When hijack was detected anywhere in the CNAME chain,
 		// subsequent CNAME targets also use TCP so GFW cannot
@@ -812,6 +813,7 @@ func (ch *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.E
 			Qtype:  question.Qtype,
 			Qclass: question.Qclass,
 		}
+		log.Debugf("RECURSION: CNAME chain: %s → %s", currentName, nextCNAME.Target)
 	}
 
 	if cnameDepth >= config.DefaultMaxCNAMEChain-1 {

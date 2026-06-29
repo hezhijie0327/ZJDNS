@@ -177,8 +177,10 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 		}
 		// Propagate any EDE code captured from upstream SERVFAIL.
 		if opt := r.lastUpstreamEDE.Load(); opt != nil {
+			log.Warnf("UPSTREAM: all %d servers failed for %s, propagating EDE %d", len(servers), question.Name, opt.InfoCode)
 			return nil, nil, nil, false, nil, "", false, dnssecEDEError(uint64(opt.InfoCode))
 		}
+		log.Warnf("UPSTREAM: all %d servers failed for %s", len(servers), question.Name)
 		return nil, nil, nil, false, nil, "", false, errors.New("all upstream queries failed")
 	case <-queryCtx.Done():
 		// When all goroutines finish, errgroup cancels the derived

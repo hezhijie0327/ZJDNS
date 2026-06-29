@@ -670,7 +670,7 @@ func (s *Server) recordQueryMetrics(m *queryMetrics, responseMsg **dns.Msg, ques
 	if *responseMsg != nil {
 		rcode = (*responseMsg).Rcode
 		if log.Default.Level() >= log.Debug {
-			log.Debugf("Query completed: %s %s | rcode=%s | Time:%v | answer=%d, authority=%d, additional=%d, ad=%t%s",
+			log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t%s",
 				question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[(*responseMsg).Rcode],
 				responseTime.Truncate(time.Microsecond), len((*responseMsg).Answer), len((*responseMsg).Ns),
 				len((*responseMsg).Extra), (*responseMsg).AuthenticatedData,
