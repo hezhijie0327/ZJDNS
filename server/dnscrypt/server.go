@@ -504,11 +504,12 @@ func (s *Server) serveCertTXT(packet []byte) []byte {
 		if end > len(s.certBytes) {
 			end = len(s.certBytes)
 		}
-		chunks = append(chunks, escapeTXT(s.certBytes[i:end]))
+		chunks = append(chunks, packTxtString(s.certBytes[i:end]))
 	}
 
 	resp := pool.DefaultMessagePool.Get()
 	resp.SetReply(req)
+	resp.Authoritative = true
 	resp.RecursionAvailable = true
 	resp.Answer = append(resp.Answer, &dns.TXT{
 		Hdr: dns.RR_Header{
@@ -564,10 +565,10 @@ func (s *Server) ProviderName() string {
 	return s.providerName
 }
 
-// escapeTXT converts raw bytes to a miekg/dns TXT presentation-format string.
+// packTxtString converts raw bytes to a miekg/dns TXT presentation-format string.
 // Non-printable bytes and backslash are escaped as \DDD so that miekg's Pack
 // correctly writes them to the wire as single bytes.
-func escapeTXT(b []byte) string {
+func packTxtString(b []byte) string {
 	buf := make([]byte, 0, len(b))
 	for _, c := range b {
 		switch {

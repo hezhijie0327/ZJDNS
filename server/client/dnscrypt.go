@@ -313,7 +313,7 @@ func parseCertTXT(txt []string) []byte {
 	// Raw binary — miekg stores TXT in \DDD presentation format.
 	var buf []byte
 	for _, s := range txt {
-		buf = append(buf, unescapeTXT(s)...)
+		buf = append(buf, unpackTxtString(s)...)
 	}
 	return buf
 }
@@ -490,8 +490,8 @@ func decryptResponse(packet []byte, sharedKey *[32]byte, esVersion dnscrypt.Cryp
 	return resp, nil
 }
 
-// unescapeTXT reverses miekg/dns TXT presentation-format escaping (\DDD → byte).
-func unescapeTXT(s string) []byte {
+// unpackTxtString unpacks a TXT string by unescaping \DDD sequences back to bytes.
+func unpackTxtString(s string) []byte {
 	buf := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\\' && i+3 < len(s) && isDDD(s[i+1:]) {
