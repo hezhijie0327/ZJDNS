@@ -247,7 +247,7 @@ func (s *Server) serveUDP(ctx context.Context) {
 // silently dropped.
 func (s *Server) handleUDPPacket(ctx context.Context, packet []byte, addr *net.UDPAddr) {
 	if len(packet) >= clientMagicSize && bytes.Equal(packet[:clientMagicSize], s.cert.ClientMagic[:]) {
-		log.Debugf("DNSCRYPT: received encrypted query from %s (%d bytes)", addr, len(packet))
+		log.Infof("DNSCRYPT: received encrypted query from %s (%d bytes)", addr, len(packet))
 		s.handleEncryptedQuery(ctx, packet, addr)
 		return
 	}
@@ -266,7 +266,7 @@ func (s *Server) handleUDPPacket(ctx context.Context, packet []byte, addr *net.U
 func (s *Server) handleEncryptedQuery(ctx context.Context, packet []byte, addr *net.UDPAddr) {
 	query, xq, encrypted, err := parseQuery(packet, s.cert)
 	if err != nil {
-		log.Debugf("DNSCRYPT: parse query from %s: %v", addr, err)
+		log.Warnf("DNSCRYPT: parse query from %s: %v", addr, err)
 		return
 	}
 
@@ -274,7 +274,11 @@ func (s *Server) handleEncryptedQuery(ctx context.Context, packet []byte, addr *
 	var sharedKey [SharedKeySize]byte
 	var nonce [nonceSize]byte
 
-	if s.cert.ESVersion == XWingPQ && xq != nil && s.xwingSK != nil {
+	if s.cert.ESVersion == XWingPQ && xq != nil {
+		if s.xwingSK == nil {
+			log.Warnf("DNSCRYPT: XWingPQ cert but xwingSK is nil — key derivation missing?")
+			return
+		}
 		copy(nonce[:], xq.Nonce[:])
 		decrypted, sharedKey, err = xq.decrypt(encrypted, s.cert, s.xwingSK)
 	} else {
@@ -282,7 +286,7 @@ func (s *Server) handleEncryptedQuery(ctx context.Context, packet []byte, addr *
 		decrypted, sharedKey, err = query.decrypt(encrypted, s.cert)
 	}
 	if err != nil {
-		log.Debugf("DNSCRYPT: decrypt query from %s: %v", addr, err)
+		log.Warnf("DNSCRYPT: decrypt query from %s: %v", addr, err)
 		return
 	}
 
@@ -421,7 +425,11 @@ func (s *Server) handleTCPConn(ctx context.Context, conn net.Conn) {
 		var sharedKey [SharedKeySize]byte
 		var nonce [nonceSize]byte
 
-		if s.cert.ESVersion == XWingPQ && xq != nil && s.xwingSK != nil {
+		if s.cert.ESVersion == XWingPQ && xq != nil {
+			if s.xwingSK == nil {
+				log.Warnf("DNSCRYPT: XWingPQ cert but xwingSK is nil — key derivation missing?")
+				continue
+			}
 			copy(nonce[:], xq.Nonce[:])
 			decrypted, sharedKey, err = xq.decrypt(encrypted, s.cert, s.xwingSK)
 		} else {
@@ -429,6 +437,7 @@ func (s *Server) handleTCPConn(ctx context.Context, conn net.Conn) {
 			decrypted, sharedKey, err = query.decrypt(encrypted, s.cert)
 		}
 		if err != nil {
+			log.Warnf("DNSCRYPT: decrypt TCP query: %v", err)
 			continue
 		}
 
