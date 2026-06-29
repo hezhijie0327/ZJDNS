@@ -19,6 +19,8 @@ func GenerateExampleConfig() string {
 	cfg.Server.TLS.CertFile = "/path/to/cert.pem"
 	cfg.Server.TLS.KeyFile = "/path/to/key.pem"
 
+	cfg.Server.TLS.KTLS = &config.KTLSsettings{KernelTX: true}
+
 	cfg.Server.DNSCrypt = config.DNSCryptSettings{
 		Port:         config.DefaultDNSCryptPort,
 		ProviderName: config.DefaultDNSCryptProviderName,

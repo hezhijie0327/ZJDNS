@@ -61,8 +61,8 @@ type HTTPSSettings struct {
 
 // KTLSsettings configures kernel TLS offload for DoT/DoH server listeners.
 type KTLSsettings struct {
-	KernelTX *bool `json:"kernel_tx,omitempty"` // nil=default(true); set false to disable kernel TLS TX offload
-	KernelRX *bool `json:"kernel_rx,omitempty"` // nil=default(true); set false to disable kernel TLS RX offload
+	KernelTX bool `json:"kernel_tx"` // kernel TLS TX offload (default false)
+	KernelRX bool `json:"kernel_rx"` // kernel TLS RX offload (default false)
 }
 
 // DNSCryptSettings configures the DNSCrypt v2 encrypted DNS listener.

@@ -56,8 +56,8 @@ func (dl *debugListener) Accept() (net.Conn, error) {
 
 // KTLSsettings configures kernel TLS offload for DoT/DoH server listeners.
 type KTLSsettings struct {
-	KernelTX *bool // nil=default(true); set false to disable kernel TLS TX offload
-	KernelRX *bool // nil=default(true); set false to disable kernel TLS RX offload
+	KernelTX bool // kernel TLS TX offload (default false)
+	KernelRX bool // kernel TLS RX offload (default false)
 }
 
 // Config holds the configuration for the TLS server including ports,
@@ -230,22 +230,12 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 	}
 
 	// TCP-based TLS config (DoT, DoH).
-	// KTLS is configurable via server.tls.ktls.kernel_tx / kernel_rx;
-	// nil defaults to true.  Set kernel_rx=false to work around
-	// kernel/NIC combos that produce "bad record MAC".
-	kernelTX := true
-	kernelRX := true
-	if cfg.KTLS != nil {
-		if cfg.KTLS.KernelTX != nil {
-			kernelTX = *cfg.KTLS.KernelTX
-		}
-		if cfg.KTLS.KernelRX != nil {
-			kernelRX = *cfg.KTLS.KernelRX
-		}
-	}
+	// KTLS defaults to off. Enable kernel_tx for TX offload (usually
+	// safe); enable kernel_rx only if your kernel/NIC combination
+	// does not produce "bad record MAC" errors.
 	baseConfig := &eTLS.Config{
-		KernelTX:         kernelTX,
-		KernelRX:         kernelRX,
+		KernelTX:         cfg.KTLS != nil && cfg.KTLS.KernelTX,
+		KernelRX:         cfg.KTLS != nil && cfg.KTLS.KernelRX,
 		Certificates:     []eTLS.Certificate{eCert},
 		CurvePreferences: []eTLS.CurveID{},
 		MinVersion:       eTLS.VersionTLS13,
