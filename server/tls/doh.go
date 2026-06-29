@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	stdlog "log"
 	"net"
 	"net/http"
 	"strings"
@@ -19,6 +20,20 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 )
+
+// http2LogWriter routes http2.Server errors to ZJDNS's internal/log,
+// detecting KTLS "bad record MAC" errors and suggesting kernel_rx=false.
+type http2LogWriter struct{}
+
+func (w http2LogWriter) Write(p []byte) (n int, err error) {
+	msg := strings.TrimSpace(string(p))
+	if strings.Contains(msg, "bad record MAC") {
+		log.Warnf("TLS: %s — try setting server.tls.ktls.kernel_rx=false to disable kernel RX offload", msg)
+	} else {
+		log.Warnf("TLS: %s", msg)
+	}
+	return len(p), nil
+}
 
 func (s *Server) startDOHServer(port string) error {
 	listener, err := net.Listen("tcp", ":"+port)
@@ -48,6 +63,7 @@ func (s *Server) startDOHServer(port string) error {
 		ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
 		WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
 		IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
+		ErrorLog:          stdlog.New(http2LogWriter{}, "", 0),
 	}
 
 	s.serverGroup.Go(func() error {
