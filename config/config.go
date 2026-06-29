@@ -72,7 +72,7 @@ type DNSCryptSettings struct {
 	PrivateKey   string `json:"private_key"`          // hex-encoded Ed25519 private key (128 hex chars)
 	PublicKey    string `json:"public_key,omitempty"` // hex-encoded Ed25519 public key (informational, ignored by server)
 	CertTTL      int    `json:"cert_ttl,omitempty"`   // Certificate lifetime in seconds (default 31536000 = 365d)
-	ESVersion    string `json:"es_version,omitempty"` // Crypto construction: "xsalsa20" (default), "xchacha20", "xwing-pq"
+	ESVersion    string `json:"es_version,omitempty"` // Crypto construction: "xsalsa20" (default), "xchacha20", "xwing"
 }
 
 // FeatureFlags enables optional features: hijack protection, DDR, ECS, cache,
@@ -539,9 +539,9 @@ func validateDNSCryptConfig(cfg *ServerConfig) error {
 	}
 	if d.ESVersion != "" {
 		switch strings.ToLower(d.ESVersion) {
-		case "xsalsa20", "xchacha20", "xwing-pq":
+		case "xsalsa20", "xchacha20", "xwing":
 		default:
-			return fmt.Errorf("config: dnscrypt.es_version must be one of: xsalsa20, xchacha20, xwing-pq, got: %s", d.ESVersion)
+			return fmt.Errorf("config: dnscrypt.es_version must be one of: xsalsa20, xchacha20, xwing, got: %s", d.ESVersion)
 		}
 	}
 	return nil

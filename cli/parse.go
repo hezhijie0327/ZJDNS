@@ -28,7 +28,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.BoolVar(&generateDNSCrypt, "generate-dnscrypt-keys", false, "Generate DNSCrypt v2 key pair and config snippet")
 	fs.StringVar(&dnscryptProvider, "provider-name", "", "Provider name for DNSCrypt key generation")
 	fs.IntVar(&dnscryptCertTTL, "cert-ttl", 0, "Certificate TTL in seconds (default: 31536000)")
-	fs.StringVar(&dnscryptESVersion, "es-version", "", "Crypto construction: xsalsa20 (default), xchacha20, xwing-pq")
+	fs.StringVar(&dnscryptESVersion, "es-version", "", "Crypto construction: xsalsa20 (default), xchacha20, xwing")
 	fs.StringVar(&stampStr, "dns-stamp", "", "Decode a DNS stamp (sdns://) and output config snippet")
 	fs.BoolVar(&showVersion, "version", false, "Show version information and exit")
 
@@ -44,7 +44,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "DNSCrypt options (with -generate-dnscrypt-keys):\n")
 		fmt.Fprintf(os.Stderr, "  -provider-name <name>         Provider name (default: 2.dnscrypt-cert.ZJDNS)\n")
 		fmt.Fprintf(os.Stderr, "  -cert-ttl <seconds>           Certificate TTL in seconds (default: 31536000)\n")
-		fmt.Fprintf(os.Stderr, "  -es-version <version>         xsalsa20 | xchacha20 | xwing-pq\n")
+		fmt.Fprintf(os.Stderr, "  -es-version <version>         xsalsa20 | xchacha20 | xwing\n")
 	}
 
 	// Check for help flags before parsing, since custom FlagSet does not

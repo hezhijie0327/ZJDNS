@@ -32,7 +32,7 @@ func GenerateDNSCryptKeys(providerName string, certTTLHours int, esVersion strin
 	switch esVersionStr {
 	case "xchacha20", "xchacha20poly1305":
 		cryptoCon = dnscrypt.XChacha20Poly1305
-	case "xwing-pq", "xwing":
+	case "xwing":
 		cryptoCon = dnscrypt.XWingPQ
 	}
 

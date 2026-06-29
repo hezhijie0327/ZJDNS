@@ -90,7 +90,7 @@ func New(handler DNSHandler, dnsCfg config.DNSCryptSettings) (*Server, error) {
 	switch strings.ToLower(dnsCfg.ESVersion) {
 	case "xchacha20", "xchacha20poly1305":
 		esVersion = XChacha20Poly1305
-	case "xwing-pq", "xwing":
+	case "xwing":
 		esVersion = XWingPQ
 	}
 

@@ -634,4 +634,4 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   `2.dnscrypt-cert.<provider>`. Clients default to UDP; set `dnscrypt_tcp: true`
   for TCP. Cert fetch deduplication prevents thundering herd on cache miss.
   Provider names auto-prefix with `DNSCryptV2Prefix`. Colon-formatted hex keys
-  accepted everywhere. Use `-es-version xwing-pq` for post-quantum X-Wing KEM.
+  accepted everywhere. Use `-es-version xwing` for post-quantum X-Wing KEM.
