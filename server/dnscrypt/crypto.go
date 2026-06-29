@@ -25,6 +25,7 @@ const (
 	ResolverMagicSize = 8
 	MinDNSPacketSize  = 12 + 5
 	minUDPQuerySize   = 256
+	padAlignment      = 64 // encrypt to multiple of 64 bytes for traffic analysis resistance
 	// mlkemCiphertextSize defined in cert.go (1088 bytes, NIST FIPS 203)
 )
 
@@ -235,9 +236,9 @@ func PadPacket(packet []byte) []byte {
 	if minLen < minUDPQuerySize {
 		minLen = minUDPQuerySize
 	}
-	// Round up to next 64-byte boundary.
-	if minLen%64 != 0 {
-		minLen += 64 - minLen%64
+	// Round up to next padAlignment-byte boundary.
+	if minLen%padAlignment != 0 {
+		minLen += padAlignment - minLen%padAlignment
 	}
 	padded := make([]byte, minLen)
 	copy(padded, packet)
