@@ -30,7 +30,7 @@ const (
 // Timeout values for DNS queries, connections, and background tasks.
 const (
 	// RFC 8767 §4.2: timeout SHOULD default to less than 10 seconds.
-	DefaultDNSQueryTimeout = 5 * time.Second // single DNS query / dial / per-message I/O
+	DefaultDNSQueryTimeout = 10 * time.Second // single DNS query / dial / per-message I/O
 
 	DefaultBackgroundTimeout         = 10 * time.Second // bounded wait for background tasks
 	DefaultBackgroundShutdownTimeout = 30 * time.Second // bounded wait for background tasks during shutdown (matches recursive timeout)
