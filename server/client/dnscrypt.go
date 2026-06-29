@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cloudflare/circl/kem/xwing"
@@ -26,29 +27,71 @@ import (
 )
 
 const (
-	// dnscryptSessionTTL is how long a cached session (ephemeral key pair +
-	// shared key) is reused before rotating for forward secrecy.
 	dnscryptSessionTTL = 1 * time.Hour
 )
 
-// dnscryptSession holds a cached DNSCrypt session with pre-computed shared key.
+// dnscryptSession holds a cached DNSCrypt session with a persistent UDP socket.
+// A single reader goroutine demuxes responses by nonce to waiting query goroutines.
 type dnscryptSession struct {
 	esVersion       dnscrypt.CryptoConstruction
 	clientMagic     [8]byte
-	clientSk        [32]byte // X25519 secret key (classic only)
-	clientPk        [32]byte // X25519 public key (classic only)
-	serverPk        [32]byte // X25519 server public key (classic only)
+	clientSk        [32]byte
+	clientPk        [32]byte
+	serverPk        [32]byte
 	sharedKey       [32]byte
-	xwingCiphertext [1120]byte // X-Wing ciphertext (PQ only)
+	xwingCiphertext [1120]byte
 	cachedAt        time.Time
+
+	udpConn *net.UDPConn
+	// pending maps query nonce (first 12 bytes) to a buffered response channel.
+	pending   map[[12]byte]chan []byte
+	pendingMu sync.Mutex
+	// readerOnce ensures the reader goroutine is started exactly once.
+	readerOnce sync.Once
 }
 
 // queryHeaderLen returns the wire header size for this session.
 func (s *dnscryptSession) queryHeaderLen() int {
 	if s.esVersion == dnscrypt.XWingPQ {
-		return dnscrypt.QueryHeaderLenXWing // 1140
+		return dnscrypt.QueryHeaderLenXWing
 	}
-	return dnscrypt.QueryHeaderLen // 52
+	return dnscrypt.QueryHeaderLen
+}
+
+// startReader launches the background goroutine that reads UDP responses and
+// dispatches them to waiting query goroutines by nonce.
+func (s *dnscryptSession) startReader() {
+	s.readerOnce.Do(func() {
+		go func() {
+			buf := make([]byte, pool.SecureBufferSize)
+			for {
+				n, err := s.udpConn.Read(buf)
+				if err != nil {
+					return
+				}
+				// Response: resolverMagic(8) + nonce(24) + encrypted.
+				if n < 32 {
+					continue
+				}
+				var nonceKey [12]byte
+				copy(nonceKey[:], buf[8:20])
+
+				s.pendingMu.Lock()
+				ch := s.pending[nonceKey]
+				delete(s.pending, nonceKey)
+				s.pendingMu.Unlock()
+
+				if ch != nil {
+					resp := make([]byte, n)
+					copy(resp, buf[:n])
+					select {
+					case ch <- resp:
+					default:
+					}
+				}
+			}
+		}()
+	})
 }
 
 // dnscryptCacheEntry is the per-upstream cached session.
@@ -95,7 +138,6 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		return nil, err
 	}
 
-	// Encrypt and send the query.  Save/restore DNS message ID for privacy.
 	originalID := msg.Id
 	msg.Id = 0
 
@@ -130,7 +172,6 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 	}
 	c.dnscryptResolverMu.Unlock()
 
-	// Deduplicate concurrent fetches.
 	c.dnscryptResolverMu.Lock()
 	if wait, ok := c.dnscryptPending[cacheKey]; ok {
 		c.dnscryptResolverMu.Unlock()
@@ -159,7 +200,6 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 		}()
 	}
 
-	// Decode public key (only on cache miss).
 	pkStr := strings.ReplaceAll(pubkeyHex, ":", "")
 	providerPK, err := hex.DecodeString(pkStr)
 	if err != nil {
@@ -170,13 +210,11 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 			ed25519.PublicKeySize, len(providerPK))
 	}
 
-	// Fetch and verify the server certificate.
 	cert, err := fetchCert(ctx, certAddr, providerName, providerPK)
 	if err != nil {
 		return nil, fmt.Errorf("DNSCRYPT: fetch cert from %s: %w", serverAddr, err)
 	}
 
-	// Compute shared key: classic X25519 ECDH or X-Wing hybrid KEM.
 	var sharedKey [32]byte
 	var xwingCT [1120]byte
 	var clientPk, clientSk, serverPk [32]byte
@@ -211,11 +249,15 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 		sharedKey:       sharedKey,
 		xwingCiphertext: xwingCT,
 		cachedAt:        time.Now(),
+		pending:         make(map[[12]byte]chan []byte),
 	}
 
 	c.dnscryptResolverMu.Lock()
 	if len(c.dnscryptResolvers) >= config.DefaultTransportMax {
 		for k := range c.dnscryptResolvers {
+			if entry := c.dnscryptResolvers[k]; entry != nil && entry.session != nil && entry.session.udpConn != nil {
+				_ = entry.session.udpConn.Close()
+			}
 			delete(c.dnscryptResolvers, k)
 			break
 		}
@@ -230,8 +272,6 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 	return session, nil
 }
 
-// dnscryptXWingDeriveSharedKey derives the per-query symmetric key from an
-// X-Wing shared secret.
 func dnscryptXWingDeriveSharedKey(esVersion dnscrypt.CryptoConstruction, clientMagic, xwingSS, xwingCT, certCtx []byte) [32]byte {
 	salt := make([]byte, 2+len(clientMagic))
 	binary.BigEndian.PutUint16(salt[:2], uint16(esVersion))
@@ -250,7 +290,7 @@ func dnscryptXWingDeriveSharedKey(esVersion dnscrypt.CryptoConstruction, clientM
 }
 
 // fetchCert fetches and verifies the DNSCrypt server certificate via a plain
-// DNS TXT query using standard dns.Client (UDP with automatic TCP fallback).
+// DNS TXT query using standard dns.Client.
 func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK ed25519.PublicKey) (*dnscrypt.Certificate, error) {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(providerName), dns.TypeTXT)
@@ -267,50 +307,36 @@ func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK 
 		return nil, fmt.Errorf("cert TXT query returned %s", dns.RcodeToString[resp.Rcode])
 	}
 
-	// Collect TXT records.  Multiple TXT answers may be present (different
-	// certificates); pick the first valid one.
 	for _, rr := range resp.Answer {
 		txt, ok := rr.(*dns.TXT)
 		if !ok || len(txt.Txt) == 0 {
 			continue
 		}
-
 		certRawBytes := parseCertTXT(txt.Txt)
 		if len(certRawBytes) == 0 {
 			continue
 		}
-
 		cert := &dnscrypt.Certificate{}
 		if err := cert.Deserialize(certRawBytes); err != nil {
-			log.Debugf("DNSCRYPT: deserialize cert (%d bytes): %v", len(certRawBytes), err)
 			continue
 		}
 		if !cert.VerifyDate() {
-			log.Debugf("DNSCRYPT: cert expired or not yet valid")
 			continue
 		}
 		if !cert.VerifySignature(providerPK) {
-			log.Debugf("DNSCRYPT: cert signature verification failed")
 			continue
 		}
 		return cert, nil
 	}
-
 	return nil, fmt.Errorf("no valid cert TXT record at %s", providerName)
 }
 
-// parseCertTXT extracts raw certificate bytes from miekg TXT strings.
-// Handles both hex-encoded (legacy) and raw binary (standard) formats.
 func parseCertTXT(txt []string) []byte {
 	raw := strings.Join(txt, "")
 	if isHex(raw) {
-		b, err := hex.DecodeString(raw)
-		if err != nil {
-			return nil
-		}
+		b, _ := hex.DecodeString(raw)
 		return b
 	}
-	// Raw binary — miekg stores TXT in \DDD presentation format.
 	var buf []byte
 	for _, s := range txt {
 		buf = append(buf, unpackTxtString(s)...)
@@ -318,35 +344,62 @@ func parseCertTXT(txt []string) []byte {
 	return buf
 }
 
-// exchangeDNSCryptUDP encrypts a query, sends it over UDP, and decrypts the
-// response.  Each query uses a fresh UDP connection (matching the approach
-// of dnscrypt-proxy and AdGuardTeam/dnscrypt).
+// exchangeDNSCryptUDP encrypts a query, sends it over UDP via a persistent
+// socket, and waits for the matching response by nonce.  A background reader
+// goroutine demuxes responses to the correct caller.
 func (c *Client) exchangeDNSCryptUDP(ctx context.Context, msg *dns.Msg, session *dnscryptSession, serverAddr string) (*dns.Msg, error) {
-	encrypted, _, err := encryptQuery(msg, session, session.esVersion)
+	encrypted, nonce, err := encryptQuery(msg, session, session.esVersion)
 	if err != nil {
 		return nil, err
 	}
 
-	dialer := &net.Dialer{Timeout: config.DefaultDNSQueryTimeout}
-	conn, err := dialer.DialContext(ctx, "udp", serverAddr)
+	conn, err := c.getDNSCryptUDPConn(session, serverAddr)
 	if err != nil {
-		return nil, fmt.Errorf("dial UDP: %w", err)
+		return nil, err
 	}
-	defer func() { _ = conn.Close() }()
+	session.startReader()
+
+	// Register nonce → response channel.
+	var nonceKey [12]byte
+	copy(nonceKey[:], nonce[:12])
+	ch := make(chan []byte, 1)
+	session.pendingMu.Lock()
+	session.pending[nonceKey] = ch
+	session.pendingMu.Unlock()
+
+	defer func() {
+		session.pendingMu.Lock()
+		delete(session.pending, nonceKey)
+		session.pendingMu.Unlock()
+	}()
 
 	_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
 	if _, err := conn.Write(encrypted); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	_ = conn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-	buf := make([]byte, pool.SecureBufferSize)
-	n, err := conn.Read(buf)
-	if err != nil {
-		return nil, fmt.Errorf("read: %w", err)
+	select {
+	case resp := <-ch:
+		return decryptResponse(resp, &session.sharedKey, session.esVersion)
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
+}
 
-	return decryptResponse(buf[:n], &session.sharedKey, session.esVersion)
+func (c *Client) getDNSCryptUDPConn(session *dnscryptSession, serverAddr string) (*net.UDPConn, error) {
+	if session.udpConn != nil {
+		return session.udpConn, nil
+	}
+	addr, err := net.ResolveUDPAddr("udp", serverAddr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve UDP addr: %w", err)
+	}
+	conn, err := net.DialUDP("udp", nil, addr)
+	if err != nil {
+		return nil, fmt.Errorf("dial UDP: %w", err)
+	}
+	session.udpConn = conn
+	return conn, nil
 }
 
 // exchangeDNSCryptTCP encrypts a query, sends it over TCP, and decrypts the response.
@@ -387,14 +440,12 @@ func (c *Client) exchangeDNSCryptTCP(ctx context.Context, msg *dns.Msg, session 
 	return decryptResponse(buf, &session.sharedKey, session.esVersion)
 }
 
-// encryptQuery builds an encrypted DNSCrypt query packet.
 func encryptQuery(msg *dns.Msg, session *dnscryptSession, esVersion dnscrypt.CryptoConstruction) ([]byte, *[24]byte, error) {
 	packet, err := msg.Pack()
 	if err != nil {
 		return nil, nil, fmt.Errorf("pack: %w", err)
 	}
 
-	// Generate query nonce: 8 bytes timestamp + 4 bytes random + 12 zero.
 	var nonce [24]byte
 	binary.BigEndian.PutUint64(nonce[:8], uint64(time.Now().UnixNano()))
 	if _, err := rand.Read(nonce[8:12]); err != nil {
@@ -431,7 +482,6 @@ func encryptQuery(msg *dns.Msg, session *dnscryptSession, esVersion dnscrypt.Cry
 	return encrypted, &nonce, nil
 }
 
-// decryptResponse decrypts a DNSCrypt response packet.
 func decryptResponse(packet []byte, sharedKey *[32]byte, esVersion dnscrypt.CryptoConstruction) (*dns.Msg, error) {
 	const respHeaderLen = 8 + 24
 	if len(packet) < respHeaderLen+16+dnscrypt.MinDNSPacketSize {
@@ -470,7 +520,6 @@ func decryptResponse(packet []byte, sharedKey *[32]byte, esVersion dnscrypt.Cryp
 		return nil, fmt.Errorf("DNSCRYPT: unpad: %w", err)
 	}
 
-	// Strip control block from X-Wing responses.
 	if esVersion == dnscrypt.XWingPQ {
 		if len(unpadded) < 2 {
 			return nil, fmt.Errorf("DNSCRYPT: PQ response too short for control block")
@@ -490,7 +539,6 @@ func decryptResponse(packet []byte, sharedKey *[32]byte, esVersion dnscrypt.Cryp
 	return resp, nil
 }
 
-// unpackTxtString unpacks a TXT string by unescaping \DDD sequences back to bytes.
 func unpackTxtString(s string) []byte {
 	buf := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
