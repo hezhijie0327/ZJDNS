@@ -26,12 +26,19 @@ func (s *Server) startDOHServer(port string) error {
 		return err
 	}
 
+	// Wrap raw listener to log every TCP connection before TLS handshake,
+	// so we can distinguish "never reached us" from "reached us but TLS failed".
+	rawListener := &debugListener{Listener: listener, name: "DoH"}
+
 	tlsConfig := s.tlsConfig.Clone()
 	tlsConfig.NextProtos = config.NextProtoDOH
 	tlsConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOH)
 
-	s.httpsListener = cryptotls.NewListener(listener, tlsConfig)
+	s.httpsListener = cryptotls.NewListener(rawListener, tlsConfig)
 	log.Infof("TLS: DoH server started on port %s", port)
+
+	// Warn if only loopback is reachable — helps diagnose LAN access issues.
+	log.Infof("TLS: DoH accepting on all interfaces (0.0.0.0:%s, [::]:%s)", port, port)
 
 	// Go's net/http only detects TLS on standard *tls.Conn, not
 	// *cryptotls.Conn, so HTTP/2 is silently disabled. We serve
@@ -49,8 +56,16 @@ func (s *Server) startDOHServer(port string) error {
 		for {
 			conn, err := s.httpsListener.Accept()
 			if err != nil {
+				// When the TLS listener fails Accept, it could be a TLS
+				// handshake error (cryptotls wraps it) or listener closure.
+				// Log it so we know the handshake reached us but failed.
+				if s.ctx.Err() == nil {
+					log.Warnf("TLS: DoH Accept failed: %v (type=%T)", err, err)
+				}
 				return nil // listener closed
 			}
+
+			log.Debugf("TLS: DoH TCP accepted from %s, TLS handshake pending", conn.RemoteAddr())
 
 			var cleanup func()
 			if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
@@ -67,6 +82,7 @@ func (s *Server) startDOHServer(port string) error {
 					defer cleanup()
 				}
 				defer dnsutil.HandlePanic("DoH connection handler")
+				log.Debugf("TLS: DoH starting HTTP/2 ServeConn for %s", c.RemoteAddr())
 				s.dohServer.ServeConn(c, &http2.ServeConnOpts{
 					Handler:    s,
 					BaseConfig: baseCfg,

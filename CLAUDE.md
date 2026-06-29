@@ -60,6 +60,28 @@ Key points:
 
 Start server: `./zjdns -config config.debug.json`
 
+### KTLS Tuning
+
+If you see `"local error: tls: bad record MAC"` in logs (kernel TLS offload
+corrupting record decryption on certain kernel/NIC combinations), disable
+kernel RX offload:
+
+```json
+{
+  "server": {
+    "tls": {
+      "ktls": {
+        "kernel_rx": false
+      }
+    }
+  }
+}
+```
+
+Both `kernel_tx` and `kernel_rx` default to `true` (when the ktls block is
+omitted). TX (encryption) is typically reliable; RX (decryption) is where
+the kernel bug manifests.
+
 ### Test Domains
 
 **Should trigger hijack detection + TCP fallback (blocked by GFW):**
@@ -526,7 +548,9 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 - **Kernel TLS (KTLS) offload**: Client and server TCP-based TLS use
   `gitlab.com/go-extension/tls` (import alias `eTLS`) with `KernelTX`/`KernelRX`.
   Dual configs from same cert — eTLS for TCP, crypto/tls for QUIC. Silent fallback
-  on non-Linux.
+  on non-Linux. Server-side KTLS is configurable via `server.tls.ktls.kernel_tx`
+  and `kernel_rx` (both default `true`); set `kernel_rx: false` to work around
+  kernel/NIC combos that produce `"local error: tls: bad record MAC"`.
 - **SOCKS5 proxy support** (`server/client/socks5.go`): Per-upstream optional SOCKS5
   proxy routes all outbound DNS queries. TCP CONNECT for streams, UDP ASSOCIATE for
   datagrams. `SafeURL()` redacts password in logs. `socks5ReadBufPool` avoids 64 KB

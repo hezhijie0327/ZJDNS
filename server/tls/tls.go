@@ -36,6 +36,30 @@ const (
 	TLSConnBufferSize = 4096
 )
 
+// debugListener wraps a net.Listener to log every raw TCP connection before
+// the TLS handshake. This helps distinguish "TCP never reached us" from
+// "TCP connected but TLS handshake failed/hung".
+type debugListener struct {
+	net.Listener
+	name string
+}
+
+func (dl *debugListener) Accept() (net.Conn, error) {
+	conn, err := dl.Listener.Accept()
+	if err != nil {
+		log.Debugf("TLS: %s raw Accept error: %v", dl.name, err)
+		return nil, err
+	}
+	log.Debugf("TLS: %s raw TCP connection from %s", dl.name, conn.RemoteAddr())
+	return conn, nil
+}
+
+// KTLSsettings configures kernel TLS offload for DoT/DoH server listeners.
+type KTLSsettings struct {
+	KernelTX *bool // nil=default(true); set false to disable kernel TLS TX offload
+	KernelRX *bool // nil=default(true); set false to disable kernel TLS RX offload
+}
+
 // Config holds the configuration for the TLS server including ports,
 // certificate paths, and endpoint settings.
 type Config struct {
@@ -46,6 +70,7 @@ type Config struct {
 	CertFile      string
 	KeyFile       string
 	Domain        string
+	KTLS          *KTLSsettings
 }
 
 // DNSHandler is the interface for processing incoming DNS queries.
@@ -204,10 +229,23 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 		log.Infof("TLS: Using certificate from files: %s, %s", cfg.CertFile, cfg.KeyFile)
 	}
 
-	// TCP-based TLS config (DoT, DoH) with kernel TLS offload.
+	// TCP-based TLS config (DoT, DoH).
+	// KTLS is configurable via server.tls.ktls.kernel_tx / kernel_rx;
+	// nil defaults to true.  Set kernel_rx=false to work around
+	// kernel/NIC combos that produce "bad record MAC".
+	kernelTX := true
+	kernelRX := true
+	if cfg.KTLS != nil {
+		if cfg.KTLS.KernelTX != nil {
+			kernelTX = *cfg.KTLS.KernelTX
+		}
+		if cfg.KTLS.KernelRX != nil {
+			kernelRX = *cfg.KTLS.KernelRX
+		}
+	}
 	baseConfig := &eTLS.Config{
-		KernelTX:         true,
-		KernelRX:         true,
+		KernelTX:         kernelTX,
+		KernelRX:         kernelRX,
 		Certificates:     []eTLS.Certificate{eCert},
 		CurvePreferences: []eTLS.CurveID{},
 		MinVersion:       eTLS.VersionTLS13,
@@ -262,6 +300,11 @@ func (s *Server) QUICTLSConfig() *stdtls.Config {
 func (s *Server) getConfigForClient(nextProtos []string) func(*eTLS.ClientHelloInfo) (*eTLS.Config, error) {
 	return func(info *eTLS.ClientHelloInfo) (*eTLS.Config, error) {
 		remoteAddr := info.Conn.RemoteAddr().String()
+		sni := info.ServerName
+		if sni == "" {
+			sni = "(empty)"
+		}
+		log.Debugf("TLS: ClientHello from %s, SNI=%s, supported curves=%d", remoteAddr, sni, len(info.SupportedCurves))
 		cfg := s.baseTLSConfig.Clone()
 		cfg.NextProtos = nextProtos
 		cfg.VerifyConnection = func(cs eTLS.ConnectionState) error {

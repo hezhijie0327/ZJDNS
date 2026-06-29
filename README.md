@@ -42,7 +42,7 @@
 | **DNSCrypt** (v2)           | 8443 | X25519+XSalsa20  |
 
 - **DNSCrypt 独立服务器**：原生 Go 实现，Ed25519 证书签发 + X25519 ECDH + XSalsa20-Poly1305 AEAD 加密
-- **内核 TLS 卸载 (KTLS)**：TCP TLS（DoT/DoH）支持 Linux 内核 TLS 卸载，零拷贝加解密，不支持时静默回退用户态
+- **内核 TLS 卸载 (KTLS)**：TCP TLS（DoT/DoH）支持 Linux 内核 TLS 卸载，零拷贝加解密，不支持时静默回退用户态。服务端 TX/RX 可通过 `server.tls.ktls.kernel_tx` / `kernel_rx` 独立控制
 - **统一证书管理**：自签名 ECDSA P-384 CA，动态签发
 - **DNS 填充 (RFC 7830)**：安全连接填充至 468 字节
 - **DDR 自动发现 (RFC 9461/9462)**：SVCB 记录自动生成

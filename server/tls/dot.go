@@ -24,12 +24,17 @@ func (s *Server) startDOTServer() error {
 		return err
 	}
 
+	// Wrap raw listener to log every TCP connection before TLS handshake,
+	// so we can distinguish "never reached us" from "reached us but TLS failed".
+	rawListener := &debugListener{Listener: listener, name: "DoT"}
+
 	dotTLSConfig := s.tlsConfig.Clone()
 	dotTLSConfig.NextProtos = config.NextProtoDOT
 	dotTLSConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOT)
 
-	s.dotListener = cryptotls.NewListener(listener, dotTLSConfig)
+	s.dotListener = cryptotls.NewListener(rawListener, dotTLSConfig)
 	log.Infof("TLS: DoT server started on port %s", s.cfg.Port)
+	log.Infof("TLS: DoT accepting on all interfaces (0.0.0.0:%s, [::]:%s)", s.cfg.Port, s.cfg.Port)
 
 	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoT server")
@@ -57,10 +62,12 @@ func (s *Server) handleDOTConnections() {
 			if s.ctx.Err() != nil {
 				return
 			}
-			log.Errorf("TLS: Accept error: %v", err)
+			log.Warnf("TLS: DoT Accept failed: %v (type=%T)", err, err)
 			time.Sleep(config.DefaultAcceptRetryDelay)
 			continue
 		}
+
+		log.Debugf("TLS: DoT TCP accepted from %s, TLS handshake pending", conn.RemoteAddr())
 
 		var cleanup func()
 		if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
@@ -78,6 +85,7 @@ func (s *Server) handleDOTConnections() {
 			}
 			defer dnsutil.HandlePanic("DoT connection handler")
 			defer func() { _ = conn.Close() }()
+			log.Debugf("TLS: DoT starting connection handler for %s", conn.RemoteAddr())
 			s.handleDOTConnection(conn)
 			return nil
 		})
@@ -87,8 +95,12 @@ func (s *Server) handleDOTConnections() {
 func (s *Server) handleDOTConnection(conn net.Conn) {
 	tlsConn, ok := conn.(*cryptotls.Conn)
 	if !ok {
+		log.Debugf("TLS: DoT connection is not *cryptotls.Conn, type=%T, remote=%s", conn, conn.RemoteAddr())
 		return
 	}
+
+	log.Debugf("TLS: DoT connection handler started, remote=%s, kTLS(TX=%v,RX=%v)",
+		tlsConn.RemoteAddr(), tlsConn.KernelTX(), tlsConn.KernelRX())
 
 	reader := bufio.NewReaderSize(tlsConn, TLSConnBufferSize)
 	connCtx, connCancel := context.WithCancel(s.ctx)
@@ -122,20 +134,31 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 	workerCap := make(chan struct{}, config.DefaultMaxPipe)
 
+	firstFrame := true
 	for {
 		if connCtx.Err() != nil {
 			return
 		}
 
+		// The first ReadFull triggers the TLS handshake (lazy handshake in
+		// crypto/tls). After a successful handshake, kTLS may be negotiated.
 		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
 
 		lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
 			if err != io.EOF && !isTemporaryError(err) {
-				log.Debugf("TLS: read length error: %v", err)
+				log.Debugf("TLS: read length error remote=%s kTLS(TX=%v,RX=%v): %v",
+					tlsConn.RemoteAddr(), tlsConn.KernelTX(), tlsConn.KernelRX(), err)
 			}
 			return
+		}
+
+		// Log kTLS status after first successful read (handshake complete).
+		if firstFrame {
+			firstFrame = false
+			log.Debugf("TLS: DoT first frame read, kTLS(TX=%v,RX=%v), remote=%s",
+				tlsConn.KernelTX(), tlsConn.KernelRX(), tlsConn.RemoteAddr())
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)

@@ -50,12 +50,19 @@ type TLSSettings struct {
 	KeyFile    string        `json:"key_file"`
 	SelfSigned bool          `json:"self_signed"`
 	HTTPS      HTTPSSettings `json:"https"`
+	KTLS       *KTLSsettings `json:"ktls,omitempty"`
 }
 
 // HTTPSSettings configures the HTTPS (DoH/DoH3) listener port and endpoint.
 type HTTPSSettings struct {
 	Port     string `json:"port"`
 	Endpoint string `json:"endpoint"`
+}
+
+// KTLSsettings configures kernel TLS offload for DoT/DoH server listeners.
+type KTLSsettings struct {
+	KernelTX *bool `json:"kernel_tx,omitempty"` // nil=default(true); set false to disable kernel TLS TX offload
+	KernelRX *bool `json:"kernel_rx,omitempty"` // nil=default(true); set false to disable kernel TLS RX offload
 }
 
 // DNSCryptSettings configures the DNSCrypt v2 encrypted DNS listener.
