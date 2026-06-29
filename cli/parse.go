@@ -13,14 +13,12 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	var (
 		configFileFlag string
 		generateConfig bool
-		stampStr       string
 		showVersion    bool
 	)
 
 	fs := flag.NewFlagSet(osArgs[0], flag.ContinueOnError)
 	fs.StringVar(&configFileFlag, "config", "", "Configuration file path (JSON format)")
 	fs.BoolVar(&generateConfig, "generate-config", false, "Generate example configuration file")
-	fs.StringVar(&stampStr, "dns-stamp", "", "Decode a DNS stamp (sdns://) and output config snippet")
 	fs.BoolVar(&showVersion, "version", false, "Show version information and exit")
 
 	fs.Usage = func() {
