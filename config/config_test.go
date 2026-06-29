@@ -14,8 +14,7 @@ func TestLoadConfig_DefaultPortsApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loader := &Loader{}
-	cfg, err := loader.LoadConfig(path)
+	cfg, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
@@ -26,8 +25,7 @@ func TestLoadConfig_DefaultPortsApplied(t *testing.T) {
 }
 
 func TestLoadConfig_FileNotFound(t *testing.T) {
-	loader := &Loader{}
-	_, err := loader.LoadConfig("/nonexistent/config.json")
+	_, err := LoadConfig("/nonexistent/config.json")
 	if err == nil {
 		t.Error("expected error for nonexistent config file")
 	}
@@ -40,8 +38,7 @@ func TestLoadConfig_InvalidJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loader := &Loader{}
-	_, err := loader.LoadConfig(path)
+	_, err := LoadConfig(path)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
@@ -54,8 +51,7 @@ func TestLoadConfig_MissingServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loader := &Loader{}
-	_, err := loader.LoadConfig(path)
+	_, err := LoadConfig(path)
 	if err == nil {
 		t.Error("expected error for missing server port")
 	}

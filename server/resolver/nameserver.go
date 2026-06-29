@@ -5,7 +5,7 @@ import (
 	"errors"
 	"math"
 	"net"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -392,16 +392,16 @@ func reorderRecordsByAddrs(records []dns.RR, sortedAddrs []string) []dns.RR {
 
 	sorted := make([]dns.RR, len(records))
 	copy(sorted, records)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		ri, okI := rank[rrIP(sorted[i])]
-		if !okI {
-			ri = unknownRank
+	slices.SortStableFunc(sorted, func(a, b dns.RR) int {
+		ra, okA := rank[rrIP(a)]
+		if !okA {
+			ra = unknownRank
 		}
-		rj, okJ := rank[rrIP(sorted[j])]
-		if !okJ {
-			rj = unknownRank
+		rb, okB := rank[rrIP(b)]
+		if !okB {
+			rb = unknownRank
 		}
-		return ri < rj
+		return ra - rb
 	})
 	return sorted
 }

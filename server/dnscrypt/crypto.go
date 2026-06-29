@@ -18,22 +18,22 @@ import (
 
 // Wire protocol constants.
 const (
-	clientMagicSize    = 8
-	KeySize            = 32
-	SharedKeySize      = 32
-	nonceSize          = 24
-	ResolverMagicSize  = 8
-	MinDNSPacketSize   = 12 + 5
-	minUDPQuerySize    = 256
-	mlkemCiphertextLen = 1088 // ML-KEM-768 ciphertext size (NIST FIPS 203)
+	clientMagicSize   = 8
+	KeySize           = 32
+	SharedKeySize     = 32
+	nonceSize         = 24
+	ResolverMagicSize = 8
+	MinDNSPacketSize  = 12 + 5
+	minUDPQuerySize   = 256
+	// mlkemCiphertextSize defined in cert.go (1088 bytes, NIST FIPS 203)
 )
 
 // DNSCrypt query header sizes.
 // Classic:  clientMagic(8) + clientPk(32) + nonceHalf(12) = 52
 // PQ:       + mlkemCiphertext(1088) = 1140
 const (
-	QueryHeaderLen   = clientMagicSize + KeySize + nonceSize/2                      // 52
-	QueryHeaderLenPQ = clientMagicSize + KeySize + mlkemCiphertextLen + nonceSize/2 // 1140
+	QueryHeaderLen   = clientMagicSize + KeySize + nonceSize/2                       // 52
+	QueryHeaderLenPQ = clientMagicSize + KeySize + mlkemCiphertextSize + nonceSize/2 // 1140
 )
 
 // ResolverMagic is prepended to every encrypted response.
@@ -49,7 +49,7 @@ type encryptedQuery struct {
 // pqtQuery extends encryptedQuery with the ML-KEM ciphertext for PQ sessions.
 type pqQuery struct {
 	encryptedQuery
-	MlkemCiphertext [mlkemCiphertextLen]byte
+	MlkemCiphertext [mlkemCiphertextSize]byte
 }
 
 // parseQuery extracts the DNSCrypt header from a raw query packet.
@@ -70,8 +70,8 @@ func parseQuery(b []byte, cert *Certificate) (*encryptedQuery, *pqQuery, []byte,
 	var pq *pqQuery
 	if cert.ESVersion.IsPQ() {
 		pq = &pqQuery{encryptedQuery: *q}
-		copy(pq.MlkemCiphertext[:], b[clientMagicSize+KeySize:clientMagicSize+KeySize+mlkemCiphertextLen])
-		copy(pq.Nonce[:nonceSize/2], b[clientMagicSize+KeySize+mlkemCiphertextLen:headerLen])
+		copy(pq.MlkemCiphertext[:], b[clientMagicSize+KeySize:clientMagicSize+KeySize+mlkemCiphertextSize])
+		copy(pq.Nonce[:nonceSize/2], b[clientMagicSize+KeySize+mlkemCiphertextSize:headerLen])
 	} else {
 		copy(q.Nonce[:nonceSize/2], b[clientMagicSize+KeySize:headerLen])
 	}

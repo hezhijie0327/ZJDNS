@@ -54,8 +54,8 @@ func (dl *debugListener) Accept() (net.Conn, error) {
 	return conn, nil
 }
 
-// KTLSsettings configures kernel TLS offload for DoT/DoH server listeners.
-type KTLSsettings struct {
+// KTLSSettings configures kernel TLS offload for DoT/DoH server listeners.
+type KTLSSettings struct {
 	KernelTX bool // kernel TLS TX offload (default false)
 	KernelRX bool // kernel TLS RX offload (default false)
 }
@@ -70,7 +70,7 @@ type Config struct {
 	CertFile      string
 	KeyFile       string
 	Domain        string
-	KTLS          *KTLSsettings
+	KTLS          *KTLSSettings
 }
 
 // DNSHandler is the interface for processing incoming DNS queries.

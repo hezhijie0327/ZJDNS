@@ -12,10 +12,13 @@ import (
 var (
 	ProjectName = "ZJDNS"
 	Version     = "2.0.0"
-	CommitHash  = "dirty"
-	BuildTime   = "dev"
+	CommitHash  = "" // set via ldflags: -X main.CommitHash=$(git rev-parse --short HEAD)
+	BuildTime   = "" // set via ldflags: -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 )
 
 func getVersion() string {
-	return fmt.Sprintf("v%s-%s@%s (%s)", Version, CommitHash, BuildTime, runtime.Version())
+	if CommitHash != "" && BuildTime != "" {
+		return fmt.Sprintf("v%s-%s@%s (%s)", Version, CommitHash, BuildTime, runtime.Version())
+	}
+	return fmt.Sprintf("v%s (%s)", Version, runtime.Version())
 }

@@ -19,8 +19,7 @@ func main() {
 	config.ProjectName = ProjectName
 	config.Version = versionStr
 
-	cm := &config.Loader{}
-	cfg, err := cm.LoadConfig(configFile)
+	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
 		log.Errorf("CONFIG: Config load failed: %v", err)
 		os.Exit(1)

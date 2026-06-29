@@ -50,7 +50,7 @@ type TLSSettings struct {
 	KeyFile    string        `json:"key_file"`
 	SelfSigned bool          `json:"self_signed"`
 	HTTPS      HTTPSSettings `json:"https"`
-	KTLS       *KTLSsettings `json:"ktls,omitempty"`
+	KTLS       *KTLSSettings `json:"ktls,omitempty"`
 }
 
 // HTTPSSettings configures the HTTPS (DoH/DoH3) listener port and endpoint.
@@ -59,8 +59,8 @@ type HTTPSSettings struct {
 	Endpoint string `json:"endpoint"`
 }
 
-// KTLSsettings configures kernel TLS offload for DoT/DoH server listeners.
-type KTLSsettings struct {
+// KTLSSettings configures kernel TLS offload for DoT/DoH server listeners.
+type KTLSSettings struct {
 	KernelTX bool `json:"kernel_tx"` // kernel TLS TX offload (default false)
 	KernelRX bool `json:"kernel_rx"` // kernel TLS RX offload (default false)
 }
@@ -170,9 +170,6 @@ type LatencyProbeStep struct {
 	Timeout  int    `json:"timeout,omitempty"`
 }
 
-// Loader loads, validates, and prepares the server configuration.
-type Loader struct{}
-
 // StatsInterval returns the stats collection interval in seconds, or 0 if
 // not configured.
 func (s *ServerSettings) StatsInterval() int {
@@ -211,7 +208,7 @@ func (s *UpstreamServer) IsRecursive() bool {
 
 // LoadConfig reads, parses, validates, and enriches the configuration from a
 // JSON file.
-func (cm *Loader) LoadConfig(configFile string) (*ServerConfig, error) {
+func LoadConfig(configFile string) (*ServerConfig, error) {
 	if configFile == "" {
 		return NewDefaultServerConfig(), nil
 	}
@@ -234,15 +231,15 @@ func (cm *Loader) LoadConfig(configFile string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	if err := cm.validateConfig(cfg); err != nil {
+	if err := validateConfig(cfg); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 
-	if cm.shouldEnableDDR(cfg) {
-		cm.addDDRRecords(cfg)
+	if shouldEnableDDR(cfg) {
+		addDDRRecords(cfg)
 	}
 
-	cm.addChaosRecord(cfg)
+	addChaosRecord(cfg)
 
 	log.Infof("CONFIG: Configuration loaded successfully")
 	return cfg, nil
@@ -263,7 +260,7 @@ func validatePort(field, value string) error {
 	return nil
 }
 
-func (cm *Loader) validateConfig(cfg *ServerConfig) error {
+func validateConfig(cfg *ServerConfig) error {
 	validateLogLevel(cfg)
 
 	if !cfg.Server.Features.ECS.IsEmpty() {
@@ -609,13 +606,13 @@ func NewDefaultServerConfig() *ServerConfig {
 	return cfg
 }
 
-func (cm *Loader) shouldEnableDDR(cfg *ServerConfig) bool {
+func shouldEnableDDR(cfg *ServerConfig) bool {
 	ddr := cfg.Server.Features.DDR
 	return ddr.Domain != "" &&
 		(ddr.IPv4 != "" || ddr.IPv6 != "")
 }
 
-func (cm *Loader) addDDRRecords(cfg *ServerConfig) {
+func addDDRRecords(cfg *ServerConfig) {
 	ddr := cfg.Server.Features.DDR
 
 	if strings.ContainsAny(ddr.Domain, " \"") || strings.ContainsAny(ddr.IPv4, " \"") || strings.ContainsAny(ddr.IPv6, " \"") {
@@ -700,7 +697,7 @@ func (cm *Loader) addDDRRecords(cfg *ServerConfig) {
 		domain, ddr.IPv4, ddr.IPv6)
 }
 
-func (cm *Loader) addChaosRecord(cfg *ServerConfig) {
+func addChaosRecord(cfg *ServerConfig) {
 	// version.server / version.bind expose the real server version by design —
 	// config.Version is set by main.go from getVersion() before LoadConfig runs.
 	// this helps operators identify which ZJDNS instance is serving a query.

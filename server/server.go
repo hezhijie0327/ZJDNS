@@ -234,7 +234,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
 		tlsCfg := servertls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
 		if cfg.Server.TLS.KTLS != nil {
-			tlsCfg.KTLS = &servertls.KTLSsettings{
+			tlsCfg.KTLS = &servertls.KTLSSettings{
 				KernelTX: cfg.Server.TLS.KTLS.KernelTX,
 				KernelRX: cfg.Server.TLS.KTLS.KernelRX,
 			}

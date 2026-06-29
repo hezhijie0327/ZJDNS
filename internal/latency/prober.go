@@ -7,7 +7,7 @@ import (
 	"context"
 	"math"
 	"net"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -145,8 +145,14 @@ func probeSlice[T any](
 	}
 
 	// Sort items by probed latency.
-	sort.SliceStable(results, func(i, j int) bool {
-		return results[i].latency < results[j].latency
+	slices.SortStableFunc(results, func(a, b candidate) int {
+		if a.latency < b.latency {
+			return -1
+		}
+		if a.latency > b.latency {
+			return 1
+		}
+		return 0
 	})
 
 	sorted := make([]T, n)
