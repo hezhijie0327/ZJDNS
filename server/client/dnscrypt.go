@@ -360,10 +360,9 @@ func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK 
 			return nil, fmt.Errorf("decode cert hex: %w", err)
 		}
 	} else {
-		// Raw binary — reconstruct from the DNS wire directly.
-		certRawBytes, err = extractTXTBytes(certBytes)
-		if err != nil {
-			return nil, fmt.Errorf("extract cert bytes: %w", err)
+		// Raw binary — convert directly from TXT strings.
+		for _, s := range txt.Txt {
+			certRawBytes = append(certRawBytes, []byte(s)...)
 		}
 	}
 
@@ -379,66 +378,6 @@ func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK 
 	}
 
 	return cert, nil
-}
-
-// extractTXTBytes extracts raw TXT record bytes from a DNS response packet.
-// Used when miekg's string conversion would corrupt binary cert data.
-func extractTXTBytes(packet []byte) ([]byte, error) {
-	if len(packet) < 12 {
-		return nil, fmt.Errorf("packet too short")
-	}
-	// Skip DNS header (12 bytes) + question section.
-	offset := 12
-	// Skip question: QNAME + QTYPE(2) + QCLASS(2).
-	for offset < len(packet) && packet[offset] != 0 {
-		if packet[offset]&0xC0 == 0xC0 {
-			offset += 2 // compression pointer
-			break
-		}
-		offset += int(packet[offset]) + 1
-	}
-	offset += 5 // past QTYPE+QCLASS or compression terminator
-
-	// Parse answer section to find TXT record.
-	if offset+10 >= len(packet) {
-		return nil, fmt.Errorf("no answer section")
-	}
-	// Skip name (could be pointer).
-	if packet[offset]&0xC0 == 0xC0 {
-		offset += 2
-	} else {
-		for offset < len(packet) && packet[offset] != 0 {
-			offset += int(packet[offset]) + 1
-		}
-		offset++ // null terminator
-	}
-	if offset+10 > len(packet) {
-		return nil, fmt.Errorf("answer too short")
-	}
-	offset += 2 // TYPE
-	offset += 2 // CLASS
-	offset += 4 // TTL
-	rdLen := int(binary.BigEndian.Uint16(packet[offset : offset+2]))
-	offset += 2
-	if offset+rdLen > len(packet) {
-		return nil, fmt.Errorf("RDLENGTH exceeds packet")
-	}
-	// TXT RDATA: one or more <length><data> character-strings.
-	txtData := packet[offset : offset+rdLen]
-	var result []byte
-	for i := 0; i < len(txtData); {
-		if i >= len(txtData) {
-			break
-		}
-		chunkLen := int(txtData[i])
-		i++
-		if i+chunkLen > len(txtData) {
-			break
-		}
-		result = append(result, txtData[i:i+chunkLen]...)
-		i += chunkLen
-	}
-	return result, nil
 }
 
 // exchangeDNSCryptUDP encrypts a query, sends it over UDP, and decrypts the
