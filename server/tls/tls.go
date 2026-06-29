@@ -58,6 +58,7 @@ type Server struct {
 	cfg           Config
 	handler       DNSHandler
 	tlsConfig     *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
+	baseTLSConfig *eTLS.Config   // base config for per-listener GetConfigForClient clones
 	quicTLSConfig *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
 	ctx           context.Context
 	cancel        context.CancelCauseFunc
@@ -73,6 +74,8 @@ type Server struct {
 	h3Listener    *quic.EarlyListener
 	doqIPCounts   sync.Map // IP string → *atomic.Int32, per-IP DoQ connection limit
 	dotIPCounts   sync.Map // IP string → *atomic.Int32, per-IP DoT connection limit
+	dohIPCounts   sync.Map // IP string → *atomic.Int32, per-IP DoH connection limit
+	doh3IPCounts  sync.Map // IP string → *atomic.Int32, per-IP DoH3 connection limit
 }
 
 func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
@@ -217,20 +220,10 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 		MinVersion:       stdtls.VersionTLS13,
 	}
 
-	// Wrap baseConfig with GetConfigForClient to log negotiated TLS
-	// parameters after each client handshake. GetConfigForClient returns
-	// a per-handshake clone with VerifyConnection installed so the log
-	// fires once per connection across all four protocols (DoT/DoQ/DoH/DoH3).
+	// tlsConfig is the default per-connection TLS config for DoT/DoH.
+	// Each listener sets its own GetConfigForClient via getConfigForClient()
+	// so that NextProtos is scoped to the correct ALPN protocol (dot vs h2).
 	tlsConfig := baseConfig.Clone()
-	tlsConfig.GetConfigForClient = func(info *eTLS.ClientHelloInfo) (*eTLS.Config, error) {
-		remoteAddr := info.Conn.RemoteAddr().String()
-		cfg := baseConfig.Clone()
-		cfg.VerifyConnection = func(cs eTLS.ConnectionState) error {
-			dnsutil.LogTLSConnectionState("TLS", "handshake from", remoteAddr, cs.Version, cs.CipherSuite, cs.CurveID)
-			return nil
-		}
-		return cfg, nil
-	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	serverGroup, serverCtx := errgroup.WithContext(ctx)
@@ -240,6 +233,7 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 		cfg:           cfg,
 		handler:       handler,
 		tlsConfig:     tlsConfig,
+		baseTLSConfig: baseConfig,
 		quicTLSConfig: baseQUICConfig,
 		ctx:           ctx,
 		cancel:        cancel,
@@ -252,11 +246,26 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 	return s, nil
 }
 
-// TLSConfig returns the underlying crypto/tls configuration used by the server.
 // QUICTLSConfig returns the TLS config for QUIC-based protocols (DoQ, DoH3).
 // KTLS does not apply to QUIC, so this uses the standard crypto/tls.
 func (s *Server) QUICTLSConfig() *stdtls.Config {
 	return s.quicTLSConfig
+}
+
+// getConfigForClient returns a GetConfigForClient callback that clones the
+// server's base TLS config, scopes NextProtos to the given listener-specific
+// protocols, and logs the negotiated TLS parameters once per handshake.
+func (s *Server) getConfigForClient(nextProtos []string) func(*eTLS.ClientHelloInfo) (*eTLS.Config, error) {
+	return func(info *eTLS.ClientHelloInfo) (*eTLS.Config, error) {
+		remoteAddr := info.Conn.RemoteAddr().String()
+		cfg := s.baseTLSConfig.Clone()
+		cfg.NextProtos = nextProtos
+		cfg.VerifyConnection = func(cs eTLS.ConnectionState) error {
+			dnsutil.LogTLSConnectionState("TLS", "handshake from", remoteAddr, cs.Version, cs.CipherSuite, cs.CurveID)
+			return nil
+		}
+		return cfg, nil
+	}
 }
 
 func (s *Server) displayCertificateInfo(cert eTLS.Certificate) {
@@ -331,44 +340,29 @@ func (s *Server) Start(httpsPort string) error {
 		return nil
 	})
 
-	// Periodic sweep of stale doqIPCounts entries to prevent unbounded
-	// growth from unique client IPs over long-running deployments.
+	// Periodic sweep of per-IP connection counters (DoQ, DoT, DoH/DoH3)
+	// to prevent unbounded growth from unique client IPs over long-running
+	// deployments.
 	g.Go(func() error {
-		defer dnsutil.HandlePanic("doqIPCounts sweep")
+		defer dnsutil.HandlePanic("ipCounts sweep")
 		ticker := time.NewTicker(config.DefaultSweepInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				s.doqIPCounts.Range(func(key, value any) bool {
-					count, ok := value.(*atomic.Int32)
-					if !ok || count == nil || count.Load() <= 0 {
-						s.doqIPCounts.Delete(key)
-					}
-					return true
-				})
-			case <-ctx.Done():
-				return nil
-			}
-		}
-	})
-
-	// Periodic sweep of dotIPCounts to prevent unbounded growth over long
-	// deployments (matches the doqIPCounts sweep pattern above).
-	g.Go(func() error {
-		defer dnsutil.HandlePanic("dotIPCounts sweep")
-		ticker := time.NewTicker(config.DefaultSweepInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				s.dotIPCounts.Range(func(key, value any) bool {
-					count, ok := value.(*atomic.Int32)
-					if !ok || count == nil || count.Load() <= 0 {
-						s.dotIPCounts.Delete(key)
-					}
-					return true
-				})
+				sweepIPCounts := func(m *sync.Map) {
+					m.Range(func(key, value any) bool {
+						count, ok := value.(*atomic.Int32)
+						if !ok || count == nil || count.Load() <= 0 {
+							m.Delete(key)
+						}
+						return true
+					})
+				}
+				sweepIPCounts(&s.doqIPCounts)
+				sweepIPCounts(&s.dotIPCounts)
+				sweepIPCounts(&s.dohIPCounts)
+				sweepIPCounts(&s.doh3IPCounts)
 			case <-ctx.Done():
 				return nil
 			}

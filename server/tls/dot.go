@@ -27,6 +27,7 @@ func (s *Server) startDOTServer() error {
 
 	dotTLSConfig := s.tlsConfig.Clone()
 	dotTLSConfig.NextProtos = config.NextProtoDOT
+	dotTLSConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOT)
 
 	s.dotListener = cryptotls.NewListener(listener, dotTLSConfig)
 	log.Infof("TLS: DoT server started on port %s", s.cfg.Port)

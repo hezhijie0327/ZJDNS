@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
@@ -28,6 +29,7 @@ func (s *Server) startDOHServer(port string) error {
 
 	tlsConfig := s.tlsConfig.Clone()
 	tlsConfig.NextProtos = config.NextProtoDOH
+	tlsConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOH)
 
 	s.httpsListener = cryptotls.NewListener(listener, tlsConfig)
 	log.Infof("TLS: DoH server started on port %s", port)
@@ -44,15 +46,36 @@ func (s *Server) startDOHServer(port string) error {
 
 	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoH server")
+		const maxConnsPerIP = config.DefaultMaxConnsPerIP
 		for {
 			conn, err := s.httpsListener.Accept()
 			if err != nil {
 				return nil // listener closed
 			}
-			go s.dohServer.ServeConn(conn, &http2.ServeConnOpts{
-				Handler:    s,
-				BaseConfig: baseCfg,
-			})
+
+			// Per-IP DoH connection limit (matches DoT/DoQ policy).
+			var ipCount *atomic.Int32
+			if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+				val, _ := s.dohIPCounts.LoadOrStore(host, new(atomic.Int32))
+				ipCount = val.(*atomic.Int32)
+				if ipCount.Add(1) > maxConnsPerIP {
+					ipCount.Add(-1)
+					_ = conn.Close()
+					log.Debugf("TLS: DoH per-IP connection limit reached for %s, rejecting", host)
+					continue
+				}
+			}
+
+			go func(c net.Conn) {
+				if ipCount != nil {
+					defer ipCount.Add(-1)
+				}
+				defer dnsutil.HandlePanic("DoH connection handler")
+				s.dohServer.ServeConn(c, &http2.ServeConnOpts{
+					Handler:    s,
+					BaseConfig: baseCfg,
+				})
+			}(conn)
 		}
 	})
 
@@ -85,11 +108,41 @@ func (s *Server) startDoH3Server(port string) error {
 
 	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoH3 server")
-		if err := s.h3Server.ServeListener(s.h3Listener); err != nil && err != http.ErrServerClosed {
-			log.Errorf("TLS: DoH3 server error: %v", err)
-			return err
+		const maxConnsPerIP = config.DefaultMaxConnsPerIP
+		for {
+			conn, err := s.h3Listener.Accept(s.ctx)
+			if err != nil {
+				if s.ctx.Err() != nil {
+					return nil
+				}
+				log.Errorf("TLS: DoH3 Accept error: %v", err)
+				continue
+			}
+
+			// Per-IP DoH3 connection limit (matches DoT/DoQ/DoH policy).
+			var ipCount *atomic.Int32
+			if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+				val, _ := s.doh3IPCounts.LoadOrStore(host, new(atomic.Int32))
+				ipCount = val.(*atomic.Int32)
+				if ipCount.Add(1) > maxConnsPerIP {
+					ipCount.Add(-1)
+					_ = conn.CloseWithError(0, "too many connections")
+					log.Debugf("TLS: DoH3 per-IP connection limit reached for %s, rejecting", host)
+					continue
+				}
+			}
+
+			s.serverGroup.Go(func() error {
+				if ipCount != nil {
+					defer ipCount.Add(-1)
+				}
+				defer dnsutil.HandlePanic("DoH3 connection handler")
+				if err := s.h3Server.ServeQUICConn(conn); err != nil && err != http.ErrServerClosed {
+					log.Debugf("TLS: DoH3 connection error: %v", err)
+				}
+				return nil
+			})
 		}
-		return nil
 	})
 
 	return nil
