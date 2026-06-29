@@ -240,17 +240,23 @@ func (s *Server) serveUDP(ctx context.Context) {
 	}
 }
 
-// handleUDPPacket dispatches a UDP packet. Only DNSCrypt encrypted queries
-// (starting with the client magic) are processed; everything else (plain DNS,
-// cert TXT, QUIC, DoH3, etc.) is silently dropped. Certificate TXT queries
-// are served from the main DNS port via a rewrite rule.
+// handleUDPPacket dispatches a UDP packet. DNSCrypt encrypted queries
+// (starting with the client magic) are processed as encrypted DNS.
+// Plain DNS TXT queries for the provider name are answered with the
+// certificate (standard DNSCrypt cert retrieval). Everything else is
+// silently dropped.
 func (s *Server) handleUDPPacket(ctx context.Context, packet []byte, addr *net.UDPAddr) {
 	if len(packet) >= clientMagicSize && bytes.Equal(packet[:clientMagicSize], s.cert.ClientMagic[:]) {
 		log.Debugf("DNSCRYPT: received encrypted query from %s (%d bytes)", addr, len(packet))
 		s.handleEncryptedQuery(ctx, packet, addr)
 		return
 	}
-	// Not an encrypted query — drop silently.
+	// Try cert TXT query (plain DNS).
+	if resp := s.serveCertTXT(packet); resp != nil {
+		_, _ = s.udpConn.WriteToUDP(resp, addr)
+		return
+	}
+	// Not an encrypted query or cert TXT — drop silently.
 	if len(packet) > 0 {
 		log.Debugf("DNSCRYPT: dropped non-DNSCrypt packet from %s (%d bytes, first byte 0x%02x)", addr, len(packet), packet[0])
 	}
@@ -393,6 +399,16 @@ func (s *Server) handleTCPConn(ctx context.Context, conn net.Conn) {
 
 		// TCP also supports encrypted DNSCrypt queries.
 		if len(packet) < clientMagicSize || !bytes.Equal(packet[:clientMagicSize], s.cert.ClientMagic[:]) {
+			// Try cert TXT query (plain DNS).
+			if resp := s.serveCertTXT(packet); resp != nil {
+				_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
+				if err := binary.Write(conn, binary.BigEndian, uint16(len(resp))); err != nil {
+					return
+				}
+				if _, err := conn.Write(resp); err != nil {
+					return
+				}
+			}
 			continue // not encrypted — drop silently
 		}
 
@@ -452,6 +468,60 @@ func (s *Server) handleTCPConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
+}
+
+// serveCertTXT answers a plain DNS TXT query for the provider's certificate.
+// Returns the packed DNS response, or nil if the packet is not a cert TXT query.
+func (s *Server) serveCertTXT(packet []byte) []byte {
+	req := pool.DefaultMessagePool.Get()
+	defer pool.DefaultMessagePool.Put(req)
+	if err := req.Unpack(packet); err != nil {
+		return nil
+	}
+	if len(req.Question) != 1 {
+		return nil
+	}
+	q := req.Question[0]
+	if q.Qtype != dns.TypeTXT || q.Qclass != dns.ClassINET {
+		return nil
+	}
+	if !strings.EqualFold(q.Name, dns.Fqdn(s.providerName)) {
+		return nil
+	}
+
+	log.Debugf("DNSCRYPT: serving cert TXT for %s", s.providerName)
+
+	// Split cert hex into 255-byte chunks (DNS TXT character-string limit).
+	const txtChunkSize = 255
+	certHex := s.certTXT
+	var chunks []string
+	for i := 0; i < len(certHex); i += txtChunkSize {
+		end := i + txtChunkSize
+		if end > len(certHex) {
+			end = len(certHex)
+		}
+		chunks = append(chunks, certHex[i:end])
+	}
+
+	resp := pool.DefaultMessagePool.Get()
+	resp.SetReply(req)
+	resp.RecursionAvailable = true
+	resp.Answer = append(resp.Answer, &dns.TXT{
+		Hdr: dns.RR_Header{
+			Name:   q.Name,
+			Rrtype: dns.TypeTXT,
+			Class:  dns.ClassINET,
+			Ttl:    config.DefaultTTL,
+		},
+		Txt: chunks,
+	})
+
+	packed, err := resp.Pack()
+	pool.DefaultMessagePool.Put(resp)
+	if err != nil {
+		return nil
+	}
+	return packed
 }
 
 // Shutdown gracefully stops both listeners.

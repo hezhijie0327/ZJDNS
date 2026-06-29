@@ -153,11 +153,12 @@ func GenerateCertificate(providerPrivateKey ed25519.PrivateKey, esVersion Crypto
 
 	if esVersion == XWingPQ {
 		// Generate X-Wing key pair: 32-byte seed → DeriveKeyPair.
+		// DeriveKeyPair returns (privateKey, publicKey).
 		if _, err := rand.Read(cert.XWingSeed[:]); err != nil {
 			return nil, fmt.Errorf("dnscrypt: generate xwing seed: %w", err)
 		}
-		pk, _ := xwing.DeriveKeyPair(cert.XWingSeed[:])
-		pkPacked, err := pk.MarshalBinary()
+		_, publicKey := xwing.DeriveKeyPair(cert.XWingSeed[:])
+		pkPacked, err := publicKey.MarshalBinary()
 		if err != nil {
 			return nil, fmt.Errorf("dnscrypt: marshal xwing public key: %w", err)
 		}
@@ -213,8 +214,8 @@ func isAllZero(b []byte) bool {
 func (c *Certificate) Sign(privateKey ed25519.PrivateKey) {
 	if c.ESVersion == XWingPQ {
 		raw, _ := c.Serialize()
-		// Sign everything after the 8-byte header (certMagic + es_version + minor).
-		copy(c.Signature[:], ed25519.Sign(privateKey, raw[8:]))
+		// Sign everything after the signature field (header 8 + signature 64 = 72).
+		copy(c.Signature[:], ed25519.Sign(privateKey, raw[72:]))
 		return
 	}
 	msg := make([]byte, 0, KeySize+clientMagicSize+12)
@@ -239,7 +240,7 @@ func (c *Certificate) VerifySignature(publicKey ed25519.PublicKey) bool {
 	}
 	if c.ESVersion == XWingPQ {
 		raw, _ := c.Serialize()
-		return ed25519.Verify(publicKey, raw[8:], c.Signature[:])
+		return ed25519.Verify(publicKey, raw[72:], c.Signature[:])
 	}
 	msg := make([]byte, 0, KeySize+clientMagicSize+12)
 	msg = append(msg, c.ResolverPk[:KeySize]...)

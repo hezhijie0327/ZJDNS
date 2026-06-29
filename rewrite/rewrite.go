@@ -151,49 +151,6 @@ func (re *Evaluator) HasRules() bool {
 	return re.rulesLen.Load() > 0
 }
 
-// AddRule appends a runtime-generated rewrite rule to the current rule set.
-// The rule is validated and pre-built like LoadRules, but added atomically
-// alongside the existing rules.  Returns an error if validation fails.
-func (re *Evaluator) AddRule(rule config.RewriteRule) error {
-	if rule.Name == "" {
-		return errors.New("rewrite rule name is required")
-	}
-	if len(rule.Name) > config.MaxDomainLength {
-		return fmt.Errorf("rewrite rule name too long (%d chars, max %d)", len(rule.Name), config.MaxDomainLength)
-	}
-	rule.NormalizedName = dnsutil.NormalizeDomain(rule.Name)
-
-	rule.CachedRecords = make([]dns.RR, 0, len(rule.Records))
-	for _, rec := range rule.Records {
-		if rec.ResponseCode != nil {
-			continue
-		}
-		if rr := re.buildRecord(rule.Name, rec); rr != nil {
-			rule.CachedRecords = append(rule.CachedRecords, rr)
-		}
-	}
-	rule.CachedAdditional = make([]dns.RR, 0, len(rule.Additional))
-	for _, rec := range rule.Additional {
-		if rec.ResponseCode != nil {
-			continue
-		}
-		if rr := re.buildRecord(rule.Name, rec); rr != nil {
-			rule.CachedAdditional = append(rule.CachedAdditional, rr)
-		}
-	}
-
-	rulesPtr := re.rules.Load()
-	var newRules []config.RewriteRule
-	if rulesPtr != nil {
-		newRules = append(newRules, *rulesPtr...)
-	}
-	newRules = append(newRules, rule)
-	re.rules.Store(&newRules)
-	re.rulesLen.Store(uint64(len(newRules)))
-	log.Infof("REWRITE: added runtime rule: %s (%d records)", rule.Name, len(rule.CachedRecords))
-	return nil
-}
-
 // Evaluate checks a query against loaded rules and returns a rewrite Result.
 func (re *Evaluator) Evaluate(domain string, qtype uint16, qclass uint16, clientIP net.IP) Result {
 	result := Result{
