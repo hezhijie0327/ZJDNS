@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 
 	eTLS "gitlab.com/go-extension/tls"
 
@@ -76,11 +77,22 @@ func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.Up
 }
 
 func transportKey(host, serverName string, skipVerify bool, proxyURL string) string {
-	key := fmt.Sprintf("%s|%s|%t", host, serverName, skipVerify)
-	if proxyURL != "" {
-		key += "|" + proxyURL
+	var b strings.Builder
+	b.Grow(len(host) + len(serverName) + len(proxyURL) + 16)
+	b.WriteString(host)
+	b.WriteByte('|')
+	b.WriteString(serverName)
+	b.WriteByte('|')
+	if skipVerify {
+		b.WriteString("true")
+	} else {
+		b.WriteString("false")
 	}
-	return key
+	if proxyURL != "" {
+		b.WriteByte('|')
+		b.WriteString(proxyURL)
+	}
+	return b.String()
 }
 
 func (c *Client) getDoHClient(key string) (*http.Client, bool) {

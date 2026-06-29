@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -98,7 +99,7 @@ func probeAddress(ctx context.Context, bgCtx context.Context, ip net.IP, step co
 }
 
 func probeTCP(ctx context.Context, ip net.IP, port int) error {
-	addr := net.JoinHostPort(ip.String(), fmt.Sprint(port))
+	addr := net.JoinHostPort(ip.String(), strconv.Itoa(port))
 	dialer := net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
@@ -109,7 +110,7 @@ func probeTCP(ctx context.Context, ip net.IP, port int) error {
 }
 
 func probeUDP(ctx context.Context, ip net.IP, port int) error {
-	addr := net.JoinHostPort(ip.String(), fmt.Sprint(port))
+	addr := net.JoinHostPort(ip.String(), strconv.Itoa(port))
 	dialer := net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "udp", addr)
 	if err != nil {
@@ -240,7 +241,7 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool, 
 	if useTLS {
 		scheme = "https"
 	}
-	url := fmt.Sprintf("%s://%s/", scheme, net.JoinHostPort(ip.String(), fmt.Sprint(port)))
+	url := fmt.Sprintf("%s://%s/", scheme, net.JoinHostPort(ip.String(), strconv.Itoa(port)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return err

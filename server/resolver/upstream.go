@@ -103,7 +103,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 					rcode := queryResult.Response.Rcode
 					serverDesc := server.Address
 					if server.Protocol != "" && server.Protocol != config.ProtoUDP {
-						serverDesc = fmt.Sprintf("%s (%s)", server.Address, strings.ToUpper(server.Protocol))
+						serverDesc = server.Address + " (" + strings.ToUpper(server.Protocol) + ")"
 					}
 
 					// Capture EDE from upstream response for passthrough.

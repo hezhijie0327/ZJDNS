@@ -236,7 +236,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 			default:
 			}
 
-			if strings.EqualFold(strings.TrimSuffix(nsRecord.Ns, "."), strings.TrimSuffix(qname, ".")) {
+			if equalFoldTrimDot(nsRecord.Ns, qname) {
 				return nil
 			}
 
@@ -416,4 +416,17 @@ func rrIP(rr dns.RR) string {
 	default:
 		return ""
 	}
+}
+
+// equalFoldTrimDot compares two strings case-insensitively, ignoring a single
+// trailing dot on either string. Uses sub-slicing (no allocation) instead of
+// strings.TrimSuffix (which allocates when the suffix is present).
+func equalFoldTrimDot(a, b string) bool {
+	if len(a) > 0 && a[len(a)-1] == '.' {
+		a = a[:len(a)-1]
+	}
+	if len(b) > 0 && b[len(b)-1] == '.' {
+		b = b[:len(b)-1]
+	}
+	return strings.EqualFold(a, b)
 }
