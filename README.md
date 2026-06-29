@@ -116,6 +116,7 @@ zjdns/
 │   ├── pool/pool.go                 # sync.Pool 对象池 (MessagePool, BufferPool)
 │   ├── dnsutil/dnsutil.go           # DNS 工具函数 (域名规范化、Panic 恢复等)
 │   ├── ipdetect/ipdetect.go         # 公网 IP 检测 (ECS 自动配置)
+│   ├── perip/perip.go               # 统一 per-IP 连接/并发限制器 (Allow/Sweep)
 │   └── latency/                     # 统一延迟探测引擎 (3 文件)
 │       ├── prober.go                # Prober 引擎 + 泛型排序 + 并发控制
 │       ├── probes.go                # ICMP (随机 ID)/TCP/UDP (通用)/HTTP/HTTPS/HTTP3

@@ -21,6 +21,7 @@ import (
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/perip"
 	"zjdns/internal/pool"
 )
 
@@ -44,6 +45,8 @@ type Server struct {
 	udpConn     *net.UDPConn
 	tcpListener net.Listener
 	udpSem      chan struct{}
+	tcpLimiter  *perip.Limiter // per-IP TCP connection limit
+	udpLimiter  *perip.Limiter // per-IP UDP concurrent packet limit
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -117,6 +120,8 @@ func New(handler DNSHandler, dnsCfg config.DNSCryptSettings) (*Server, error) {
 		providerName: providerName,
 		mlkemDK:      cert.MlkemDecapsulationKey(),
 		udpSem:       make(chan struct{}, config.DefaultMinConcurrencyLimit),
+		tcpLimiter:   &perip.Limiter{},
+		udpLimiter:   &perip.Limiter{},
 		ctx:          ctx,
 		cancel:       cancel,
 	}, nil
@@ -166,11 +171,29 @@ func (s *Server) StartTCP(ctx context.Context) error {
 	return nil
 }
 
-// serveUDP reads and processes UDP packets.
+// serveUDP reads and processes UDP packets with per-IP concurrency limiting.
 func (s *Server) serveUDP(ctx context.Context) {
 	defer dnsutil.HandlePanic("DNSCrypt UDP server")
 	buf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(buf)
+
+	// The perip sweeper is started in serveTCP. If DNSCrypt is UDP-only
+	// there would be no sweeper, so start a dedicated one here.
+	go func() {
+		defer dnsutil.HandlePanic("DNSCrypt perip sweep (UDP)")
+		ticker := time.NewTicker(config.DefaultSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.udpLimiter.Sweep()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	const maxConcurrentPerIP = config.DefaultMinConcurrencyLimit
 
 	for {
 		if s.closed.Load() {
@@ -189,12 +212,19 @@ func (s *Server) serveUDP(ctx context.Context) {
 			continue
 		}
 
+		// Per-IP UDP concurrency limit.
+		cleanup := s.udpLimiter.Allow(addr.IP.String(), maxConcurrentPerIP)
+		if cleanup == nil {
+			continue
+		}
+
 		// Copy packet from shared buffer, then dispatch.
 		packet := make([]byte, n)
 		copy(packet, buf[:n])
 
 		s.wg.Add(1)
 		go func() {
+			defer cleanup()
 			s.udpSem <- struct{}{}
 			defer func() { <-s.udpSem }()
 			defer s.wg.Done()
@@ -312,9 +342,27 @@ func (s *Server) handleCertQuery(ctx context.Context, msg *dns.Msg, addr *net.UD
 	_, _ = s.udpConn.WriteToUDP(resp, addr)
 }
 
-// serveTCP accepts and processes TCP connections.
+// serveTCP accepts and processes TCP connections with per-IP limiting.
 func (s *Server) serveTCP(ctx context.Context) {
 	defer dnsutil.HandlePanic("DNSCrypt TCP server")
+
+	// Periodic sweep of per-IP limiters.
+	go func() {
+		defer dnsutil.HandlePanic("DNSCrypt perip sweep")
+		ticker := time.NewTicker(config.DefaultSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.tcpLimiter.Sweep()
+				s.udpLimiter.Sweep()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	const maxConnsPerIP = config.DefaultMaxConnsPerIP
 	for {
 		if s.closed.Load() {
 			return
@@ -327,8 +375,22 @@ func (s *Server) serveTCP(ctx context.Context) {
 			time.Sleep(config.DefaultAcceptRetryDelay)
 			continue
 		}
+
+		var cleanup func()
+		if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+			cleanup = s.tcpLimiter.Allow(host, maxConnsPerIP)
+			if cleanup == nil {
+				_ = conn.Close()
+				log.Debugf("DNSCRYPT: per-IP connection limit reached for %s, rejecting", host)
+				continue
+			}
+		}
+
 		s.wg.Add(1)
 		go func() {
+			if cleanup != nil {
+				defer cleanup()
+			}
 			defer s.wg.Done()
 			defer func() { _ = conn.Close() }()
 			defer dnsutil.HandlePanic("DNSCrypt TCP handler")

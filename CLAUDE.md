@@ -149,6 +149,7 @@ zjdns/
 │   ├── pool/pool.go               # MessagePool, BufferPool, constants (zero deps)
 │   ├── dnsutil/dnsutil.go         # NormalizeDomain, ValidateDomainLabels, HandlePanic, etc.
 │   ├── ipdetect/ipdetect.go       # Public IP detection for auto ECS
+│   ├── perip/perip.go             # Unified per-IP connection/concurrency limiter (Allow/Sweep)
 │   └── latency/                   # Unified latency probing engine (3 files)
 │       ├── prober.go              # Prober, probeSlice[T] generic sorter, concurrency
 │       ├── probes.go              # ICMP/TCP/UDP/HTTP/HTTPS/HTTP3 probe implementations
@@ -216,11 +217,12 @@ zjdns/
 
 ```
 main ──→ server, config
-server ──→ cache, cidr, config, edns, dnsutil, log, pool, rewrite, latency(server), resolver, security, stats,
+server ──→ cache, cidr, config, dnscrypt, edns, dnsutil, log, perip, pool, rewrite, latency(server), resolver, security, stats,
 client ──→ config, edns, dnsutil, log, pool, pool (in client), go-extension/tls
 resolver ──→ config, edns, client, security, dnsutil, latency(server), log, pool
 security ──→ dnsutil, log
-tls (in server) ──→ config, dnsutil, log, pool, connpool (client/pool), go-extension/tls
+tls (in server) ──→ config, dnsutil, log, perip, pool, connpool (client/pool), go-extension/tls
+dnscrypt (in server) ──→ config, dnsutil, log, perip, pool
 cache ──→ config, edns, dnsutil, log
 edns ──→ dnsutil, ipdetect, log, pool
 cidr ──→ config, dnsutil, log
@@ -229,7 +231,7 @@ stats ──→ cache, config, log
 latency (server) ──→ config, edns, dnsutil, latency(internal), log
 latency (internal) ──→ config, dnsutil, log
 dnsutil ──→ log
-pool, log ──→ (zero deps)
+pool, log, perip ──→ (zero deps)
 
 No circular dependencies. Sub-packages only import what they need.
 ```
@@ -298,6 +300,7 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `dnssecEDEError` | `server/resolver` | Shared constructor for DNSSECError from EDE code |
 | `dnssecChain` | `server/resolver` | Trust chain state (zoneDNSKEYs, childDS, lastEDECode, zoneCutDetected) |
 | `MessagePool` / `BufferPool` | `pool` | sync.Pool-based message and buffer allocators |
+| `Limiter` | `perip` | Per-IP connection/concurrency limiter (Allow, Sweep) |
 | `config.JoinDNSPort` | `config` | Helper: `net.JoinHostPort(ip, DefaultDNSPort)` |
 
 ## Key Constants
@@ -500,8 +503,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   request validation to prevent unauthorized zone data exposure.
 - **DNS label validation**: `dnsutil.ValidateDomainLabels` enforces RFC 1035
   per-label maximum of 63 bytes, checked before resolution.
-- **Per-IP DoT connection limiting**: `dotIPCounts` sync.Map tracks per-client
-  DoT connections, matching DoQ's existing per-IP policy. Rejects connections
+- **Unified per-IP limiting (`internal/perip`): A single `Limiter` type with
   from IPs exceeding `DefaultMaxConnsPerIP` (64).
 - **BufferPool pointer storage**: Buffers stored as `*[]byte` in
   `sync.Pool` to avoid interface-boxing on every `Put` (SA6002). `Put` normalizes

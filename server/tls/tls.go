@@ -16,9 +16,9 @@ import (
 	"math/big"
 	"net"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
+
+	"zjdns/internal/perip"
 
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
@@ -72,10 +72,10 @@ type Server struct {
 	h3Server      *http3.Server
 	httpsListener net.Listener
 	h3Listener    *quic.EarlyListener
-	doqIPCounts   sync.Map // IP string → *atomic.Int32, per-IP DoQ connection limit
-	dotIPCounts   sync.Map // IP string → *atomic.Int32, per-IP DoT connection limit
-	dohIPCounts   sync.Map // IP string → *atomic.Int32, per-IP DoH connection limit
-	doh3IPCounts  sync.Map // IP string → *atomic.Int32, per-IP DoH3 connection limit
+	doqLimiter    *perip.Limiter // per-IP DoQ connection limit
+	dotLimiter    *perip.Limiter // per-IP DoT connection limit
+	dohLimiter    *perip.Limiter // per-IP DoH connection limit
+	doh3Limiter   *perip.Limiter // per-IP DoH3 connection limit
 }
 
 func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
@@ -239,6 +239,10 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 		cancel:        cancel,
 		serverGroup:   serverGroup,
 		serverCtx:     serverCtx,
+		doqLimiter:    &perip.Limiter{},
+		dotLimiter:    &perip.Limiter{},
+		dohLimiter:    &perip.Limiter{},
+		doh3Limiter:   &perip.Limiter{},
 	}
 
 	s.displayCertificateInfo(eCert)
@@ -340,29 +344,19 @@ func (s *Server) Start(httpsPort string) error {
 		return nil
 	})
 
-	// Periodic sweep of per-IP connection counters (DoQ, DoT, DoH/DoH3)
-	// to prevent unbounded growth from unique client IPs over long-running
-	// deployments.
+	// Periodic sweep of per-IP connection limiters to prevent unbounded
+	// growth from unique client IPs over long-running deployments.
 	g.Go(func() error {
-		defer dnsutil.HandlePanic("ipCounts sweep")
+		defer dnsutil.HandlePanic("perip sweep")
 		ticker := time.NewTicker(config.DefaultSweepInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				sweepIPCounts := func(m *sync.Map) {
-					m.Range(func(key, value any) bool {
-						count, ok := value.(*atomic.Int32)
-						if !ok || count == nil || count.Load() <= 0 {
-							m.Delete(key)
-						}
-						return true
-					})
-				}
-				sweepIPCounts(&s.doqIPCounts)
-				sweepIPCounts(&s.dotIPCounts)
-				sweepIPCounts(&s.dohIPCounts)
-				sweepIPCounts(&s.doh3IPCounts)
+				s.doqLimiter.Sweep()
+				s.dotLimiter.Sweep()
+				s.dohLimiter.Sweep()
+				s.doh3Limiter.Sweep()
 			case <-ctx.Done():
 				return nil
 			}

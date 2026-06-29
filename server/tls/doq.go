@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -65,6 +64,8 @@ func (s *Server) startDOQServer() error {
 }
 
 func (s *Server) handleDOQConnections() {
+	const maxConnsPerIP = config.DefaultMaxConnsPerIP
+
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -86,25 +87,18 @@ func (s *Server) handleDOQConnections() {
 			continue
 		}
 
-		// Per-IP DoQ connection limit to prevent a single client from
-		// exhausting the server goroutine budget.
-		const maxConnsPerIP = config.DefaultMaxConnsPerIP
-		var ip string
-		var ipCount *atomic.Int32
+		var cleanup func()
 		if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
-			ip = host
-			val, _ := s.doqIPCounts.LoadOrStore(ip, new(atomic.Int32))
-			if val.(*atomic.Int32).Add(1) > maxConnsPerIP {
-				val.(*atomic.Int32).Add(-1)
+			cleanup = s.doqLimiter.Allow(host, maxConnsPerIP)
+			if cleanup == nil {
 				_ = conn.CloseWithError(connpool.QUICCodeInternalError, "too many connections")
 				continue
 			}
-			ipCount = val.(*atomic.Int32)
 		}
 
 		s.serverGroup.Go(func() error {
-			if ipCount != nil {
-				defer ipCount.Add(-1)
+			if cleanup != nil {
+				defer cleanup()
 			}
 			defer dnsutil.HandlePanic("DoQ connection handler")
 			s.handleDOQConnection(conn)

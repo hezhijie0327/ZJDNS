@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync/atomic"
 
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
@@ -53,13 +52,10 @@ func (s *Server) startDOHServer(port string) error {
 				return nil // listener closed
 			}
 
-			// Per-IP DoH connection limit (matches DoT/DoQ policy).
-			var ipCount *atomic.Int32
+			var cleanup func()
 			if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
-				val, _ := s.dohIPCounts.LoadOrStore(host, new(atomic.Int32))
-				ipCount = val.(*atomic.Int32)
-				if ipCount.Add(1) > maxConnsPerIP {
-					ipCount.Add(-1)
+				cleanup = s.dohLimiter.Allow(host, maxConnsPerIP)
+				if cleanup == nil {
 					_ = conn.Close()
 					log.Debugf("TLS: DoH per-IP connection limit reached for %s, rejecting", host)
 					continue
@@ -67,8 +63,8 @@ func (s *Server) startDOHServer(port string) error {
 			}
 
 			go func(c net.Conn) {
-				if ipCount != nil {
-					defer ipCount.Add(-1)
+				if cleanup != nil {
+					defer cleanup()
 				}
 				defer dnsutil.HandlePanic("DoH connection handler")
 				s.dohServer.ServeConn(c, &http2.ServeConnOpts{
@@ -119,13 +115,10 @@ func (s *Server) startDoH3Server(port string) error {
 				continue
 			}
 
-			// Per-IP DoH3 connection limit (matches DoT/DoQ/DoH policy).
-			var ipCount *atomic.Int32
+			var cleanup func()
 			if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
-				val, _ := s.doh3IPCounts.LoadOrStore(host, new(atomic.Int32))
-				ipCount = val.(*atomic.Int32)
-				if ipCount.Add(1) > maxConnsPerIP {
-					ipCount.Add(-1)
+				cleanup = s.doh3Limiter.Allow(host, maxConnsPerIP)
+				if cleanup == nil {
 					_ = conn.CloseWithError(0, "too many connections")
 					log.Debugf("TLS: DoH3 per-IP connection limit reached for %s, rejecting", host)
 					continue
@@ -133,8 +126,8 @@ func (s *Server) startDoH3Server(port string) error {
 			}
 
 			s.serverGroup.Go(func() error {
-				if ipCount != nil {
-					defer ipCount.Add(-1)
+				if cleanup != nil {
+					defer cleanup()
 				}
 				defer dnsutil.HandlePanic("DoH3 connection handler")
 				if err := s.h3Server.ServeQUICConn(conn); err != nil && err != http.ErrServerClosed {

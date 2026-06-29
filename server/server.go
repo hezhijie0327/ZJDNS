@@ -25,6 +25,7 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/perip"
 	"zjdns/internal/pool"
 	"zjdns/rewrite"
 	"zjdns/server/client"
@@ -71,6 +72,7 @@ type Server struct {
 	tcpServer         *dns.Server
 	tcpWriteMu        sync.Map
 	udpRateLimiter    *rateLimiter
+	tcpLimiter        *perip.Limiter // per-IP plain TCP connection limit
 }
 
 type rateLimitEntry struct {
@@ -214,6 +216,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		backgroundCtx:     backgroundCtx,
 		cacheRefreshGroup: cacheRefreshGroup,
 		cacheRefreshCtx:   cacheRefreshCtx,
+		tcpLimiter:        &perip.Limiter{},
 	}
 
 	if cfg.Server.MaxConcurrent > 0 {
@@ -299,6 +302,7 @@ func (s *Server) startBackgroundTasks() {
 	s.startStatsReset()
 	s.startTCPWriteMuSweep()
 	s.startRateLimiterSweep()
+	s.startTCPIPCountsSweep()
 	s.setupSignalHandling()
 }
 
@@ -404,6 +408,13 @@ func (s *Server) startStatsReset() {
 		s.statsMgr.Reset()
 		log.Infof("STATS: counters reset")
 		s.logStatsNow("reset")
+	})
+}
+
+// startTCPIPCountsSweep periodically removes stale per-IP plain TCP counters.
+func (s *Server) startTCPIPCountsSweep() {
+	s.runBackgroundTicker("tcpIPCounts sweep", config.DefaultSweepInterval, func() {
+		s.tcpLimiter.Sweep()
 	})
 }
 
@@ -651,13 +662,21 @@ func (s *Server) Start() error {
 
 	g.Go(func() error {
 		defer dnsutil.HandlePanic("TCP server")
+		rawListener, err := net.Listen("tcp", ":"+s.config.Server.Port)
+		if err != nil {
+			return fmt.Errorf("TCP listen: %w", err)
+		}
+		wrappedListener := &perip.Listener{
+			Listener: rawListener,
+			Limiter:  s.tcpLimiter,
+			Limit:    config.DefaultMaxConnsPerIP,
+		}
 		s.tcpServer = &dns.Server{
-			Addr:    ":" + s.config.Server.Port,
-			Net:     config.ProtoTCP,
-			Handler: dns.HandlerFunc(s.handleDNSRequest),
+			Listener: wrappedListener,
+			Handler:  dns.HandlerFunc(s.handleDNSRequest),
 		}
 		log.Infof("SERVER: TCP server started on port %s", s.config.Server.Port)
-		err := s.tcpServer.ListenAndServe()
+		err = s.tcpServer.ListenAndServe()
 		if err != nil {
 			select {
 			case <-ctx.Done():
