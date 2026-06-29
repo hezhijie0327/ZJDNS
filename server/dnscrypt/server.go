@@ -199,7 +199,7 @@ func (s *Server) serveUDP(ctx context.Context) {
 		if s.closed.Load() {
 			return
 		}
-		_ = s.udpConn.SetReadDeadline(time.Now().Add(config.DefaultDNSCryptTCPReadTimeout))
+		_ = s.udpConn.SetReadDeadline(time.Now().Add(config.DefaultDNSCryptUDPReadTimeout))
 		n, addr, err := s.udpConn.ReadFromUDP(buf)
 		if err != nil {
 			if s.closed.Load() || errors.Is(err, net.ErrClosed) {

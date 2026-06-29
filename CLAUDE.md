@@ -391,8 +391,9 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 
 | Constant | Package | Value |
 |----------|---------|-------|
-| `config.DefaultDNSQueryTimeout` | config | 10s (single DNS query / dial / per-message I/O) |
-| `config.DefaultBackgroundTimeout` | config | 10s (bounded wait for background tasks; increased to recursive timeout during shutdown) |
+| `config.DefaultDNSQueryTimeout` | config | 5s (single DNS query / dial / per-message I/O; RFC 8767 §4.2: <10s) |
+| `config.DefaultBackgroundTimeout` | config | 10s (bounded wait for background tasks) |
+| `config.DefaultBackgroundShutdownTimeout` | config | 30s (bounded wait for background tasks during shutdown, matches recursive timeout) |
 | `config.DefaultRecursiveResolveTimeout` | config | 30s (full recursive resolution) |
 | `config.DefaultHTTPServerIdleTimeout` | config | 60s (HTTP keep-alive) |
 | `config.DefaultHTTPServerWriteTimeout` | config | 10s (DoH response write) |

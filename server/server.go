@@ -562,11 +562,7 @@ func (s *Server) shutdownServer() {
 		bgDone <- s.backgroundGroup.Wait()
 	}()
 
-	bgWaitTimeout := config.DefaultBackgroundTimeout
-	if config.DefaultRecursiveResolveTimeout > bgWaitTimeout {
-		bgWaitTimeout = config.DefaultRecursiveResolveTimeout
-	}
-	bgTimer := time.NewTimer(bgWaitTimeout)
+	bgTimer := time.NewTimer(config.DefaultBackgroundShutdownTimeout)
 	defer bgTimer.Stop()
 	select {
 	case err := <-bgDone:
@@ -584,7 +580,7 @@ func (s *Server) shutdownServer() {
 		refreshDone <- s.cacheRefreshGroup.Wait()
 	}()
 
-	refreshTimer := time.NewTimer(bgWaitTimeout)
+	refreshTimer := time.NewTimer(config.DefaultBackgroundShutdownTimeout)
 	defer refreshTimer.Stop()
 	select {
 	case err := <-refreshDone:
