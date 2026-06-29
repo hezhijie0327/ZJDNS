@@ -105,84 +105,27 @@
 
 ```
 zjdns/
-├── main.go                          # 入口
-├── version.go                       # ldflags 变量
+├── main.go / version.go           # Entry point + ldflags variables
+├── cli/                           # CLI helper functions
 ├── internal/
-│   ├── log/log.go                   # 日志组件 (Error/Warn/Info/Debug)
-│   ├── pool/pool.go                 # sync.Pool 对象池 (MessagePool, BufferPool)
-│   ├── dnsutil/dnsutil.go           # DNS 工具函数 (域名规范化、Panic 恢复等)
-│   ├── ipdetect/ipdetect.go         # 公网 IP 检测 (ECS 自动配置)
-│   ├── perip/perip.go               # 统一 per-IP 连接/并发限制器 (Allow/Sweep)
-│   └── latency/                     # 统一延迟探测引擎 (3 文件)
-│       ├── prober.go                # Prober 引擎 + 泛型排序 + 并发控制
-│       ├── probes.go                # ICMP (随机 ID)/TCP/UDP (通用)/HTTP/HTTPS/HTTP3
-│       └── httppool.go              # HTTP/HTTPS/HTTP3 客户端池 (按协议端口缓存)
-├── config/                          # 配置系统 (2 文件)
-│   ├── config.go                    # 类型定义 + 加载 + 校验 + DDR/CHAOS
-│   └── defaults.go                  # 可调优运行默认值 (端口/超时/限制/缓存)
-├── edns/                            # EDNS(0) 扩展 (5 文件)
-│   ├── edns.go                      # Handler, ApplyToMessage
-│   ├── ecs.go                       # ECS 客户端子网选项
-│   ├── cookie.go                    # DNS Cookie 生成与验证
-│   ├── ede.go                       # EDE 扩展错误码 (24 种)
-│   └── padding.go                   # RFC 7830 响应填充
-├── cache/                           # DNS 缓存系统 (3 文件)
-│   ├── cache.go                     # Store 接口, CacheEntry, 工具函数
-│   ├── memory.go                    # MemoryCache, LRU 淘汰, PTR 反查索引
-│   └── persist.go                   # 磁盘快照持久化
-├── cidr/cidr.go                     # CIDR IP 过滤 (标签匹配与位运算)
-├── rewrite/rewrite.go               # 域名重写 (规则匹配与合成响应)
-├── stats/stats.go                   # 锁无关统计采集器 (27 个原子计数器)
-└── server/                          # 核心服务
-    ├── server.go                    # Server 生命周期与启动
-    ├── server_tasks.go              # 后台任务、信号处理、关闭流程
-    ├── handler.go + message.go       # DNS 查询处理管线
-    ├── client/                      # 上游查询客户端 + 连接池
-    │   ├── client.go                # Client 路由分发
-    │   ├── tcp.go                   # UDP/TCP + TCP 回退
-    │   ├── dot.go                   # DoT 查询
-    │   ├── doq.go                   # DoQ 查询 (QUIC 池)
-    │   ├── doh.go                   # DoH 查询 (HTTP/2)
-    │   ├── doh3.go                  # DoH3 查询 (HTTP/3)
-    │   ├── doh_request.go           # DoH/DoH3 共享请求构建
-    │   ├── socks5.go                # SOCKS5 代理客户端 (RFC 1928/1929, TCP+UDP, SafeURL 密码脱敏)
-    │   ├── ktls.go                  # KTLS 配置构建 + DoT 拨号/TLS 交换
-    │   └── pool/                    # 连接池子包
-    │       ├── tcp.go               # RFC 7766 TCP/DoT 流水线连接池
-    │       └── quic.go               # QUIC 连接池
-    ├── resolver/                    # DNS 解析引擎 (7 文件)
-    │   ├── resolver.go              # 解析路由 (上游首胜 / 递归)
-    │   ├── upstream.go              # 多上游并发首胜查询
-    │   ├── recursive.go             # 递归解析核心 (resolve 循环 + CNAME 追踪)
-    │   ├── recursive_cache.go       # NS 地址延迟排序缓存 + 探测辅助
-    │   ├── dnssec_chain.go          # DNSSEC 信任链构建 + 域切割检测
-    │   ├── nameserver.go            # NS 并发查询与劫持检测
-    ├── tls/                         # 安全传输监听器
-    │   ├── tls.go                   # TLS Server + 证书管理
-    │   ├── dot.go                   # DoT 监听器
-    │   ├── doq.go                   # DoQ 监听器
-    │   └── doh.go                   # DoH/DoH3 监听器
-    ├── security/                    # DNS 安全机制
-    │   ├── security.go              # Guard 安全门面
-    │   ├── dnssec.go                # 上游 DNSSEC 轻量验证 (AD 标志)
-    │   ├── dnssec_crypto.go         # 密码学 DNSSEC (RRSIG/DS/信任锚)
-    │   └── hijack.go                # DNS 劫持检测 + UDP→TCP 回退
-    └── latency/probe.go             # 客户面延迟探测适配层 (委托 internal/latency 引擎)
-```
-
----
-
-## 🔍 DNS 查询流程
-
-```
-1. Server.processDNSQuery() — 入口
-2. rewrite.Evaluator.Evaluate() — 重写规则匹配
-3. edns.Handler — 解析 ECS/Cookie/EDE，Cookie 入口验证
-4. cache.Store.Get() — 命中 → CIDR 过滤 → 响应
-5. resolver.Resolver.Query() — 上游(首胜) 或 递归
-6. security.Guard — DNSSEC 验证 + 劫持检测
-7. cidr.Filter.MatchIP() — 过滤 A/AAAA IP
-8. 写入缓存 → 延迟探测 → 返回响应
+│   ├── log/                       # Logger, TimeCache
+│   ├── pool/                      # sync.Pool (MessagePool, BufferPool)
+│   ├── dnsutil/                   # DNS utilities (NormalizeDomain, HandlePanic)
+│   ├── ipdetect/                  # Public IP detection for ECS
+│   └── latency/                   # Unified latency probe engine
+├── config/                        # Configuration (types, loader, defaults)
+├── edns/                          # EDNS(0) extensions (ECS, Cookie, EDE, Padding)
+├── cache/                         # LRU memory cache + disk persistence
+├── cidr/                          # CIDR IP filtering
+├── rewrite/                       # Domain rewrite rules
+├── stats/                         # Lock-free atomic metrics
+└── server/                        # Core server
+    ├── client/                    # Outbound query client (UDP, TCP, DoT, DoQ, DoH, DoH3, SOCKS5)
+    │   └── pool/                  # TCP/DoT/QUIC connection pools
+    ├── resolver/                  # Recursive + upstream DNS resolution
+    ├── security/                  # DNSSEC + hijack detection
+    ├── tls/                       # Secure transport listeners (DoT, DoQ, DoH, DoH3)
+    └── latency/                   # Client-facing latency probe adapter
 ```
 
 ---
@@ -257,10 +200,3 @@ golangci-lint run && golangci-lint fmt
 ## 📝 许可证
 
 [Apache License 2.0 with Commons Clause v1.0](LICENSE)
-
-## 🙏 致谢
-
-- [miekg/dns](https://github.com/miekg/dns) — Go DNS 库
-- [quic-go/quic-go](https://github.com/quic-go/quic-go) — QUIC 协议实现
-- [cloudflare/circl](https://github.com/cloudflare/circl) — X-Wing 后量子混合 KEM
-- [go-extension/tls](https://gitlab.com/go-extension/tls) — 内核 TLS (KTLS) 卸载支持

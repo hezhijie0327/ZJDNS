@@ -15,14 +15,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 9. Commit incrementally — every batch of related changes should be committed
    with a descriptive message to prevent data loss.
 10. Present changes for review before committing. Do not commit automatically
-   after each fix — wait for user confirmation.
+    after each fix — wait for user confirmation.
 
 ## Coding Standards
 
 ### Naming
 
-- **PascalCase for all exported types**: `KTLSSettings`, `TLSSettings`, `DNSCryptSettings`,
-  not `KTLSsettings`. Acronyms are all-caps (URL, IP, TLS, DNS, QUIC).
+- **PascalCase for all exported types**: `KTLSSettings`, `TLSSettings`, not
+  `KTLSsettings`. Acronyms are all-caps (URL, IP, TLS, DNS, QUIC).
 - **Package-level functions over empty structs**: A type with no fields (e.g. `type Loader struct{}`)
   should be eliminated — use package-level functions instead.
 
@@ -58,10 +58,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   ciphertext size 1088) defined in multiple files must be unified into a single
   definition.
 - **All magic numbers must be named constants**: even "obvious" values like `64`
-  (DNSCrypt padding alignment) must have descriptive names.
+  (padding alignment) must have descriptive names.
 - **Leaf packages that cannot import `config`** (due to dependency graph) may use
   local `const` blocks; all other numeric/timing defaults belong in
   `config/defaults.go` with a `Default` prefix.
+
+### Anti-patterns (DO NOT implement)
+
+- **No rate limiting**: Do not add per-client rate limiters, token buckets, or
+  query throttling. The server should accept all queries unconditionally.
+- **No per-IP connection limiting**: Do not add MaxConnsPerIP or any per-address
+  connection counters. All listeners accept unlimited connections.
+- **No DNSCrypt**: DNSCrypt v2 has been removed. Do not reintroduce it. Do not
+  add the `github.com/AdguardTeam/dnscrypt` or any other DNSCrypt dependency.
 
 ### Build & ldflags
 
@@ -176,37 +185,6 @@ dig @127.0.0.1 -p 15353 zhijie-online.mail.protection.outlook.com A +short
 Verify hijack detection from logs: `grep -E "hijack detected|rejecting hijacked|tcp=true" /tmp/zjdns.log`
 Normal domains should show `tcp=false` throughout; blocked domains should show hijack detection + `tcp=true` restart.
 
-**DNSCrypt tests (local server + client):**
-```bash
-# 1. Generate keys
-./zjdns -generate-dnscrypt-keys -cert-ttl=86400
-
-# 2. Start DNSCrypt server (independent port 8443)
-cat > /tmp/dnscrypt_test.json << EOF
-{"server":{"port":"15353","log_level":"debug","dnscrypt":{"port":"8443","provider_name":"zjdns.local","private_key":"<KEY>","cert_ttl":86400},"features":{"cache":{"size":0}}},"upstream":[{"address":"builtin_recursive"}]}
-EOF
-./zjdns -config /tmp/dnscrypt_test.json &
-
-# 3. Start DNSCrypt client → server
-cat > /tmp/dnscrypt_client.json << EOF
-{"server":{"port":"15354","log_level":"debug","features":{"cache":{"size":0}}},"upstream":[{"address":"127.0.0.1:8443","protocol":"dnscrypt","server_name":"zjdns.local","dnscrypt_public_key":"<PUBKEY>"}]}
-EOF
-./zjdns -config /tmp/dnscrypt_client.json &
-
-# 4. Test plain DNS and DNSCrypt tunnel
-dig @127.0.0.1 -p 15353 www.baidu.com A +short    # plain DNS
-dig @127.0.0.1 -p 15354 www.baidu.com A +short    # DNSCrypt encrypted
-```
-
-**DNSCrypt external resolver test (Quad9):**
-```bash
-cat > /tmp/quad9.json << EOF
-{"server":{"port":"15355","log_level":"debug","features":{"cache":{"size":0}}},"upstream":[{"address":"9.9.9.9:8443","protocol":"dnscrypt","server_name":"2.dnscrypt-cert.quad9.net","dnscrypt_public_key":"67c847b8c8758cd120245543be756746df34df1d84c00b8c470368df821d863e"}]}
-EOF
-./zjdns -config /tmp/quad9.json &
-dig @127.0.0.1 -p 15355 www.baidu.com A +short    # via Quad9 DNSCrypt
-```
-
 Test suites for `cache`, `cidr`, `config`, `edns`, `rewrite`, `stats`, `internal/dnsutil`, `internal/latency`, `internal/pool`, `server/resolver`, and `server/security` packages (90+ test cases + 19 benchmarks). Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings.
 
 Target coverage: ≥90% for utility packages (`dnsutil` 95.7%, `pool` 91.3%).
@@ -219,15 +197,14 @@ Run benchmarks: `go test -bench=. -short ./...` (unit) or `go test -bench=Benchm
 zjdns/
 ├── main.go / version.go           # Entry point + ldflags variables
 ├── bench_test.go                  # Global benchmarks (pool, cache, DNSSEC, QPS)
-├── cli/                           # CLI helper functions (2 files)
-│   ├── dns_stamp.go               # DNS stamp (sdns://) parsing
-│   └── dnscrypt_keys.go           # DNSCrypt Ed25519 key pair generation
+├── cli/                           # CLI helper functions (3 files)
+│   ├── parse.go                   # Flag parsing + -generate-config
+│   └── config_example.go          # Example config generator
 ├── internal/
 │   ├── log/log.go                 # Logger, TimeCache, Level.String()
 │   ├── pool/pool.go               # MessagePool, BufferPool, constants (zero deps)
 │   ├── dnsutil/dnsutil.go         # NormalizeDomain, ValidateDomainLabels, HandlePanic, etc.
 │   ├── ipdetect/ipdetect.go       # Public IP detection for auto ECS
-│   ├── perip/perip.go             # Unified per-IP connection/concurrency limiter (Allow/Sweep)
 │   └── latency/                   # Unified latency probing engine (3 files)
 │       ├── prober.go              # Prober, probeSlice[T] generic sorter, concurrency
 │       ├── probes.go              # ICMP/TCP/UDP/HTTP/HTTPS/HTTP3 probe implementations
@@ -263,7 +240,6 @@ zjdns/
     │   ├── doh_request.go          # Shared DoH/DoH3 HTTP request builder
     │   ├── socks5.go               # SOCKS5 proxy client (RFC 1928/1929, TCP+UDP) + SafeURL
     │   ├── ktls.go                 # KTLS config builders + DoT dial/exchange helpers
-    │   ├── dnscrypt.go             # DNSCrypt encrypted upstream client
     │   └── pool/                  # Connection pool sub-package
     │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
     │       └── quic.go            # QUIC connection pool (QUICPool, QUICConn)
@@ -281,14 +257,9 @@ zjdns/
     │   └── hijack.go              # Hijack detection + TCP fallback trigger
     ├── tls/                        # Secure transport listeners
     │   ├── tls.go                  # Server struct, cert management, Start/Shutdown
-    │   ├── dot.go                  # DoT listener + per-IP connection limiting
+    │   ├── dot.go                  # DoT listener
     │   ├── doq.go                  # DoQ listener + stream handler
     │   └── doh.go                  # DoH/DoH3 HTTP handlers
-    ├── dnscrypt/                   # DNSCrypt v2 native implementation (4 files)
-    │   ├── server.go               # UDP/TCP listeners
-    │   ├── cert.go                 # Ed25519 certificate generation, signing, serialization
-    │   ├── crypto.go               # X25519 ECDH + XSalsa20-Poly1305 encrypt/decrypt
-    │   └── xsecretbox.go           # XChacha20-Poly1305 Seal/Open + HChaCha20 shared key
     ├── latency/                    # Client-facing latency probe adapter
     │   └── probe.go                # Thin adapter delegating to internal/latency; SortIPsByLatency + InitInfraProber
 ```
@@ -297,12 +268,11 @@ zjdns/
 
 ```
 main ──→ server, config
-server ──→ cache, cidr, config, dnscrypt, edns, dnsutil, log, perip, pool, rewrite, latency(server), resolver, security, stats,
+server ──→ cache, cidr, config, edns, dnsutil, log, pool, rewrite, latency(server), resolver, security, stats
 client ──→ config, edns, dnsutil, log, pool, pool (in client), go-extension/tls
 resolver ──→ config, edns, client, security, dnsutil, latency(server), log, pool
 security ──→ dnsutil, log
-tls (in server) ──→ config, dnsutil, log, perip, pool, connpool (client/pool), go-extension/tls
-dnscrypt (in server) ──→ config, dnsutil, log, perip, pool
+tls (in server) ──→ config, dnsutil, log, pool, connpool (client/pool), go-extension/tls
 cache ──→ config, edns, dnsutil, log
 edns ──→ dnsutil, ipdetect, log, pool
 cidr ──→ config, dnsutil, log
@@ -311,7 +281,7 @@ stats ──→ cache, config, log
 latency (server) ──→ config, edns, dnsutil, latency(internal), log
 latency (internal) ──→ config, dnsutil, log
 dnsutil ──→ log
-pool, log, perip ──→ (zero deps)
+pool, log ──→ (zero deps)
 
 No circular dependencies. Sub-packages only import what they need.
 ```
@@ -343,11 +313,11 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
   response matching by DNS message ID. Falls back to single-shot `ExchangeContext`
   on connection failure.
 - Server: `handleDOTConnection` in `server/tls/dot.go` uses reader→worker→writer
-  three-stage pipeline; per-IP connection limiting via `dotIPCounts` sync.Map.
-  `handleDNSRequest` dispatches TCP queries to goroutines with per-connection
-  write mutex for concurrent out-of-order processing.
+  three-stage pipeline. `handleDNSRequest` dispatches TCP queries to goroutines
+  with per-connection write mutex for concurrent out-of-order processing.
 
-**Concurrency**: All queries use "first win" — fan out to all servers via `errgroup`, cancel remaining on first success. Adaptive concurrency limits based on server count.
+**Concurrency**: All queries use "first win" — fan out to all servers via `errgroup`,
+cancel remaining on first success. Adaptive concurrency limits based on server count.
 
 ## Key Types (canonical names)
 
@@ -373,14 +343,11 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | `Resolver` | `server/resolver` | DNS resolution (upstream + recursive) |
 | `Recursive` | `server/resolver` | Built-in recursive resolver |
 | `Guard` | `server/security` | DNSSEC + hijack detection |
-| `Validator` | `server/security` | DNSSEC record-presence validation (RecordPresence) |
+| `Validator` | `server/security` | DNSSEC record-presence validation |
 | `CryptoValidator` | `server/security` | Full cryptographic DNSSEC (RRSIG, DS, trust anchors) |
 | `Detector` | `server/security` | DNS hijack detection |
 | `DNSSECError` | `server/resolver` | Typed error with RFC 8914 EDE code |
-| `dnssecEDEError` | `server/resolver` | Shared constructor for DNSSECError from EDE code |
-| `dnssecChain` | `server/resolver` | Trust chain state (zoneDNSKEYs, childDS, lastEDECode, zoneCutDetected) |
 | `MessagePool` / `BufferPool` | `pool` | sync.Pool-based message and buffer allocators |
-| `Limiter` | `perip` | Per-IP connection/concurrency limiter (Allow, Sweep) |
 | `config.JoinDNSPort` | `config` | Helper: `net.JoinHostPort(ip, DefaultDNSPort)` |
 
 ## Key Constants
@@ -397,7 +364,7 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 |----------|---------|-------|
 | `config.DefaultDNSQueryTimeout` | config | 5s (single DNS query / dial / per-message I/O; RFC 8767 §4.2: <10s) |
 | `config.DefaultBackgroundTimeout` | config | 10s (bounded wait for background tasks) |
-| `config.DefaultBackgroundShutdownTimeout` | config | 30s (bounded wait for background tasks during shutdown, matches recursive timeout) |
+| `config.DefaultBackgroundShutdownTimeout` | config | 30s (bounded wait for background tasks during shutdown) |
 | `config.DefaultRecursiveResolveTimeout` | config | 30s (full recursive resolution) |
 | `config.DefaultHTTPServerIdleTimeout` | config | 60s (HTTP keep-alive) |
 | `config.DefaultHTTPServerWriteTimeout` | config | 10s (DoH response write) |
@@ -407,10 +374,7 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 | `config.DefaultQUICKeepAlive` | config | 20s (QUIC keep-alive period) |
 | `config.DefaultHTTPIdleConnTimeout` | config | 5 min (HTTP transport idle) |
 | `config.DefaultShutdownTimeout` | config | 15s (graceful shutdown deadline) |
-| `config.DefaultDNSCryptTCPReadTimeout` | config | 2s (DNSCrypt TCP first read deadline) |
-| `config.DefaultDNSCryptTCPIdleTimeout` | config | 8s (DNSCrypt TCP subsequent read deadline) |
 | `config.DefaultInfraProbeTimeout` | config | 5s (infrastructure-level root/NS latency probe timeout) |
-| `config.DefaultRateLimitSweepInterval` | config | 30s (rate limiter entry sweep interval) |
 | `config.DefaultCACertValidity` | config | 45 days (CA self-signed cert lifetime) |
 | `config.DefaultServerCertValidity` | config | 45 days (server self-signed cert lifetime) |
 | `config.DefaultCertExpiryWarnDays` | config | 14 (certificate expiry warning threshold, days) |
@@ -448,10 +412,6 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 | `config.ProtoUDP` / `TCP` / `TLS` | config | "udp" / "tcp" / "tls" |
 | `config.ProtoQUIC` / `HTTP` / `HTTP3` | config | "quic" / "https" / "http3" |
 | `config.ProtoDOT` / `DOQ` / `DOH` / `DOH3` | config | "dot" / "doq" / "doh" / "doh3" (user config aliases) |
-| `config.ProtoDNSCrypt` | config | "dnscrypt" (DNSCrypt v2 protocol identifier) |
-| `config.DefaultDNSCryptPort` | config | "8443" (DNSCrypt standalone port) |
-| `config.DefaultDNSCryptCertTTL` | config | 365 days (DNSCrypt certificate lifetime) |
-| `config.DNSCryptV2Prefix` | config | "2.dnscrypt-cert." (cert TXT query prefix) |
 | `config.ProtoTLSTCP` | config | "tcp-tls" (dns.Client.Net for TLS-wrapped TCP) |
 | `config.NextProtoDOT` | config | []string{"dot"} (ALPN for DoT, RFC 7858) |
 | `config.NextProtoDOH` | config | []string{"h2"} (ALPN for DoH, RFC 8484) |
@@ -464,7 +424,6 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 | `config.DefaultProbePortHTTPS` | config | 443 (latency probe HTTPS port) |
 | `config.DefaultCookieSecretSize` | config | 32 (DNS cookie secret bytes) |
 | `config.DefaultPaddingBlockSize` | config | 468 (RFC 7830 padding block) |
-| `config.DefaultRateLimiterMaxEntries` | config | 10000 (max tracked client IPs) |
 | `config.DefaultDNSClass` | config | "IN" (default RR class) |
 | `config.StatsPersistKey` | config | "stats:" (cache key for stats persistence) |
 | `config.DNSRootZone` | config | "." (root zone label) |
@@ -485,7 +444,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `Info` | Startup/shutdown lifecycle, configuration summary, one-time events |
 | `Debug` | Hot-path detail: every query, cache hit/miss, upstream result, CIDR match |
 
-**Prefixes** (19 canonical, one per logical component):
+**Prefixes** (18 canonical, one per logical component):
 
 | Prefix | Component | Files |
 |--------|-----------|-------|
@@ -584,13 +543,9 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   request validation to prevent unauthorized zone data exposure.
 - **DNS label validation**: `dnsutil.ValidateDomainLabels` enforces RFC 1035
   per-label maximum of 63 bytes, checked before resolution.
-- **Unified per-IP limiting (`internal/perip`): A single `Limiter` type with
-  from IPs exceeding `DefaultMaxConnsPerIP` (64).
 - **BufferPool pointer storage**: Buffers stored as `*[]byte` in
   `sync.Pool` to avoid interface-boxing on every `Put` (SA6002). `Put` normalizes
   the slice to full capacity before storing.
-- **Rate limiter bound**: `DefaultRateLimiterMaxEntries` caps unique client IPs
-  tracked, preventing unbounded map growth from spoofed-source floods.
 - **Unified latency probe engine** (`internal/latency`): All latency probing
   shares a single engine with generic `probeSlice[T]` sorting, HTTP/HTTPS/HTTP3
   client pool reuse, and bounded semaphore workers. The `server/latency` package
@@ -619,19 +574,3 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 - **CHAOS TXT records**: `version.server`/`version.bind` expose the full version
   from `getVersion()`. `id.server`/`hostname.bind` use `os.Hostname()` with
   `ProjectName` fallback.
-- **DNSCrypt v2** (`server/dnscrypt/` 4 files + `server/client/dnscrypt.go`):
-  Native Go implementation with zero external DNSCrypt dependencies. Ed25519
-  (stdlib) for long-term certificate signing; X25519 ECDH (`golang.org/x/crypto`)
-  for per-session key exchange; XSalsa20-Poly1305 AEAD (default) or
-  XChacha20-Poly1305 (optional) for query/response encryption. Post-quantum
-  hybrid key exchange: X25519 + ML-KEM-768 (`crypto/mlkem`, Go 1.26 stdlib)
-  combined via X-Wing KEM (`0x0003` construction code, draft-connolly-cfrg-xwing-kem). Extended
-  certificate format (1308 bytes) carries ML-KEM-768 encapsulation key.
-  PQ query header prepends 1088-byte ML-KEM ciphertext. Server listens
-  UDP+TCP on a standalone port (default 8443). Client caches ephemeral sessions
-  per upstream for 1 hour (forward secrecy) and reuses a persistent UDP socket for
-  stable 5-tuple routing. Certificates are published as DNS TXT records at
-  `2.dnscrypt-cert.<provider>`. Clients default to UDP; set `dnscrypt_tcp: true`
-  for TCP. Cert fetch deduplication prevents thundering herd on cache miss.
-  Provider names auto-prefix with `DNSCryptV2Prefix`. Colon-formatted hex keys
-  accepted everywhere. Use `-es-version xwing` for post-quantum X-Wing KEM.

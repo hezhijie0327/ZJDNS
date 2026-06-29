@@ -11,7 +11,6 @@ ENV \
 
 RUN \
     wget "https://curl.se/ca/cacert.pem" \
-    && go get -u github.com/cloudflare/circl@main \
     && go get -u github.com/miekg/dns@master \
     && go get -u github.com/quic-go/quic-go@master \
     && go get -u gitlab.com/go-extension/tls@master \
