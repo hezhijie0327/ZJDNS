@@ -33,11 +33,10 @@ const (
 	DefaultBackgroundTimeout         = 10 * time.Second // bounded wait for background tasks
 	DefaultBackgroundShutdownTimeout = 30 * time.Second // bounded wait for background tasks during shutdown (matches recursive timeout)
 
-	DefaultAcceptRetryDelay       = 100 * time.Millisecond // DoT/DoQ accept retry sleep
-	DefaultHijackSettleTimeout    = 5 * time.Millisecond   // Max window for GFW detection race after clean response wins
-	DefaultSweepInterval          = 5 * time.Minute        // Periodic cleanup sweep
-	DefaultRateLimitSweepInterval = 30 * time.Second       // Rate limiter sweep (faster than default)
-	DefaultTCPWriteMuStaleCutoff  = 2 * time.Minute        // Stale TCP write mutex cutoff
+	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
+	DefaultHijackSettleTimeout   = 5 * time.Millisecond   // Max window for GFW detection race after clean response wins
+	DefaultSweepInterval         = 5 * time.Minute        // Periodic cleanup sweep
+	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // Stale TCP write mutex cutoff
 
 	DefaultHTTPIdleConnTimeout = 5 * time.Minute  // HTTP transport idle connection
 	DefaultQUICKeepAlive       = 20 * time.Second // QUIC keep-alive period
@@ -85,11 +84,8 @@ const (
 	DefaultMaxIncomingStreams   = 256 // QUIC max incoming streams
 	DefaultMaxConcurrentStreams = 64
 
-	DefaultServerGoroutineLimit  = 1024
-	DefaultUDPRateLimit          = 500   // Max UDP queries/sec per client IP
-	DefaultUDPRateBurst          = 1000  // Max burst for UDP rate limiter
-	DefaultRateLimiterMaxEntries = 10000 // Max unique client IPs tracked before rejecting new IPs
-	DefaultMinConcurrencyLimit   = 8
+	DefaultServerGoroutineLimit = 1024
+	DefaultMinConcurrencyLimit  = 8
 
 	DefaultTransportMax         = 32
 	DefaultTLSSessionCacheSize  = 32

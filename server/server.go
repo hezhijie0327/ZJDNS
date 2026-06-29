@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -33,8 +32,6 @@ import (
 	servertls "zjdns/server/tls"
 	"zjdns/stats"
 )
-
-const nanosPerSecond = int64(time.Second)
 
 // Server is the core DNS server handling query processing, protocol listeners, and lifecycle.
 type Server struct {
@@ -67,86 +64,6 @@ type Server struct {
 	udpServer         *dns.Server
 	tcpServer         *dns.Server
 	tcpWriteMu        sync.Map
-	udpRateLimiter    *rateLimiter
-}
-
-type rateLimitEntry struct {
-	tokens     atomic.Int64
-	lastRefill atomic.Int64 // unix nano
-}
-
-type rateLimiter struct {
-	mu         sync.Mutex
-	entries    map[string]*rateLimitEntry
-	rate       int64 // tokens per second
-	burst      int64 // max tokens
-	maxEntries int   // max unique client IPs before rejecting new entries
-}
-
-func newRateLimiter(rate, burst int) *rateLimiter {
-	return &rateLimiter{
-		entries:    make(map[string]*rateLimitEntry),
-		maxEntries: config.DefaultRateLimiterMaxEntries,
-		rate:       int64(rate),
-		burst:      int64(burst),
-	}
-}
-
-// allow reports whether a request from the given key is allowed under the
-// token-bucket rate limit. Returns true if allowed, false if rate-limited.
-func (rl *rateLimiter) allow(key string) bool {
-	now := time.Now().UnixNano()
-	rl.mu.Lock()
-	e, ok := rl.entries[key]
-	if !ok {
-		if len(rl.entries) >= rl.maxEntries {
-			rl.mu.Unlock()
-			return false
-		}
-
-		e = &rateLimitEntry{}
-		e.tokens.Store(rl.burst - 1)
-		e.lastRefill.Store(now)
-		rl.entries[key] = e
-		rl.mu.Unlock()
-		return true
-	}
-	rl.mu.Unlock()
-
-	last := e.lastRefill.Load()
-	elapsed := now - last
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	newTokens := elapsed * rl.rate / nanosPerSecond
-	if newTokens > 0 {
-		e.lastRefill.Store(now)
-	}
-
-	tokens := e.tokens.Add(newTokens)
-	if tokens > rl.burst {
-		e.tokens.Store(rl.burst)
-		tokens = rl.burst
-	}
-
-	if tokens <= 0 {
-		return false
-	}
-	e.tokens.Add(-1)
-	return true
-}
-
-// sweep removes entries that haven't been accessed recently to prevent
-// unbounded map growth.
-func (rl *rateLimiter) sweep(maxAge time.Duration) {
-	cutoff := time.Now().Add(-maxAge).UnixNano()
-	rl.mu.Lock()
-	for k, e := range rl.entries {
-		if e.lastRefill.Load() < cutoff {
-			delete(rl.entries, k)
-		}
-	}
-	rl.mu.Unlock()
 }
 
 type tcpWriteEntry struct {
@@ -215,7 +132,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	if cfg.Server.MaxConcurrent > 0 {
 		server.semaphore = make(chan struct{}, cfg.Server.MaxConcurrent)
-		server.udpRateLimiter = newRateLimiter(config.DefaultUDPRateLimit, config.DefaultUDPRateBurst)
 	}
 
 	server.guard = security.New(cacheStore, cfg.Server.Features.HijackProtection)

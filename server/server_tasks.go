@@ -24,7 +24,6 @@ func (s *Server) startBackgroundTasks() {
 	s.startStatsLogger()
 	s.startStatsReset()
 	s.startTCPWriteMuSweep()
-	s.startRateLimiterSweep()
 	s.setupSignalHandling()
 }
 
@@ -130,17 +129,6 @@ func (s *Server) startStatsReset() {
 		s.statsMgr.Reset()
 		log.Infof("STATS: counters reset")
 		s.logStatsNow("reset")
-	})
-}
-
-// startRateLimiterSweep periodically removes stale rate limiter entries.
-func (s *Server) startRateLimiterSweep() {
-	if s.udpRateLimiter == nil {
-		return
-	}
-	rl := s.udpRateLimiter
-	s.runBackgroundTicker("UDP rate limiter sweep", config.DefaultRateLimitSweepInterval, func() {
-		rl.sweep(config.DefaultRateLimitSweepInterval)
 	})
 }
 
