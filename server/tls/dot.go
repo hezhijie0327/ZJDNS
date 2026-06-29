@@ -101,7 +101,6 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 	reader := bufio.NewReaderSize(tlsConn, TLSConnBufferSize)
 	connCtx, connCancel := context.WithCancel(s.ctx)
-	defer connCancel()
 
 	type writeTask struct{ data []byte }
 	writeCh := make(chan writeTask, config.DefaultDoTWriteChannelSize)
@@ -124,9 +123,10 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 	var wg sync.WaitGroup
 	defer func() {
-		close(writeCh)
-		<-writerDone
-		wg.Wait()
+		connCancel()   // signal workers to stop
+		wg.Wait()      // wait for workers to finish
+		close(writeCh) // now close writer channel
+		<-writerDone   // wait for writer to drain
 	}()
 
 	workerCap := make(chan struct{}, config.DefaultMaxPipe)
