@@ -1,8 +1,6 @@
 package main
 
 import (
-	"flag"
-	"fmt"
 	"os"
 
 	"zjdns/cli"
@@ -12,64 +10,14 @@ import (
 )
 
 func main() {
-	var configFile string
-	var generateConfig bool
-	var generateDNSCrypt bool
-	var dnscryptProvider string
-	var dnscryptCertTTL int
-	var dnscryptESVersion string
-	var stampStr string
-	var showVersion bool
-
-	flag.StringVar(&configFile, "config", "", "Configuration file path (JSON format)")
-	flag.BoolVar(&generateConfig, "generate-config", false, "Generate example configuration file")
-	flag.BoolVar(&generateDNSCrypt, "generate-dnscrypt-keys", false, "Generate DNSCrypt v2 key pair and config snippet")
-	flag.StringVar(&dnscryptProvider, "provider-name", "", "Provider name for DNSCrypt key generation")
-	flag.IntVar(&dnscryptCertTTL, "cert-ttl", 0, "Certificate TTL in seconds (default: 31536000)")
-	flag.StringVar(&dnscryptESVersion, "es-version", "", "Crypto construction: xsalsa20 (default), xchacha20, xsalsa20-pq, xchacha20-pq")
-	flag.StringVar(&stampStr, "dns-stamp", "", "Decode a DNS stamp (sdns://) and output config snippet")
-	flag.BoolVar(&showVersion, "version", false, "Show version information and exit")
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "ZJDNS Server - High Performance DNS Server\n\n")
-		fmt.Fprintf(os.Stderr, "Version: %s\n\n", getVersion())
-		fmt.Fprintf(os.Stderr, "Usage:\n")
-		fmt.Fprintf(os.Stderr, "  %s -config <config file>     # Start with config file\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s -generate-config          # Generate example config\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s -generate-dnscrypt-keys   # Generate DNSCrypt v2 key pair\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s -version                  # Show version information\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s                            # Start with default config\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "DNSCrypt options (with -generate-dnscrypt-keys):\n")
-		fmt.Fprintf(os.Stderr, "  -provider-name <name>         Provider name (default: 2.dnscrypt-cert.ZJDNS)\n")
-		fmt.Fprintf(os.Stderr, "  -cert-ttl <seconds>           Certificate TTL in seconds (default: 31536000)\n")
-		fmt.Fprintf(os.Stderr, "  -es-version <version>         xsalsa20 | xchacha20 | xsalsa20-pq | xchacha20-pq\n")
-	}
-
-	flag.Parse()
-
-	if showVersion {
-		fmt.Printf("ZJDNS Server\n")
-		fmt.Printf("Version: %s\n", getVersion())
-		return
-	}
-
-	if generateConfig {
-		fmt.Println(cli.GenerateExampleConfig())
-		return
-	}
-
-	if generateDNSCrypt {
-		fmt.Println(cli.GenerateDNSCryptKeys(dnscryptProvider, dnscryptCertTTL, dnscryptESVersion))
-		return
-	}
-
-	if stampStr != "" {
-		fmt.Println(cli.ParseStamp(stampStr))
+	versionStr := getVersion()
+	configFile, exitAfter := cli.ParseFlags(os.Args, versionStr)
+	if exitAfter {
 		return
 	}
 
 	config.ProjectName = ProjectName
-	config.Version = getVersion()
+	config.Version = versionStr
 
 	cm := &config.Loader{}
 	cfg, err := cm.LoadConfig(configFile)
@@ -81,11 +29,11 @@ func main() {
 	// Detect kernel TLS (KTLS) support early so the user sees it at startup.
 	// go-extension/tls handles fallback automatically — this is informational.
 	if _, err := os.Stat("/sys/module/tls"); err == nil {
-		log.Infof("SERVER: KTLS kernel module detected — TLS offload enabled")
+		log.Infof("SERVER: KTLS kernel module detected, TLS offload available")
 	} else if os.IsNotExist(err) {
-		log.Infof("SERVER: KTLS not available — kernel TLS module not loaded (modprobe tls)")
+		log.Infof("SERVER: KTLS kernel module not loaded, TLS offload unavailable (load with: modprobe tls)")
 	} else {
-		log.Infof("SERVER: KTLS not available — %v", err)
+		log.Infof("SERVER: KTLS detection failed: %v, TLS offload unavailable", err)
 	}
 
 	srv, err := server.New(cfg)
