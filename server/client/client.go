@@ -4,6 +4,7 @@ package client
 
 import (
 	"context"
+	crypto_rand "crypto/rand"
 	"crypto/tls"
 	"fmt"
 	eTLS "gitlab.com/go-extension/tls"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/curve25519"
 
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
@@ -73,6 +76,13 @@ type Client struct {
 	ktlsTX bool
 	ktlsRX bool
 
+	// DNSCrypt: global client key pair (matching dnscrypt-proxy design).
+	// The same key pair is used for all upstreams; shared keys are
+	// pre-computed for classic constructions.
+	proxySecretKey [32]byte
+	proxyPublicKey [32]byte
+	cryptoKeyMu    sync.RWMutex
+
 	// DNSCrypt resolver session cache.
 	dnscryptResolvers  map[string]*dnscryptCacheEntry
 	dnscryptResolverMu sync.Mutex
@@ -106,7 +116,7 @@ func New() *Client {
 		ForceAttemptHTTP2:   true,
 	}
 
-	return &Client{
+	c := &Client{
 		timeout:   config.DefaultDNSQueryTimeout,
 		udpClient: udpClient,
 		tcpClient: tcpClient,
@@ -129,6 +139,15 @@ func New() *Client {
 		dnscryptResolvers: make(map[string]*dnscryptCacheEntry),
 		dnscryptPending:   make(map[string]chan struct{}),
 	}
+	c.setDNSCryptClientKey()
+	return c
+}
+
+func (c *Client) setDNSCryptClientKey() {
+	if _, err := crypto_rand.Read(c.proxySecretKey[:]); err != nil {
+		panic("dnscrypt: failed to generate client secret key: " + err.Error())
+	}
+	curve25519.ScalarBaseMult(&c.proxyPublicKey, &c.proxySecretKey)
 }
 
 // getQUICConfig returns a cached QUIC config for the given upstream key, creating

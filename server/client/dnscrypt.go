@@ -32,21 +32,21 @@ const (
 
 // dnscryptSession holds a cached DNSCrypt session with a persistent UDP socket.
 // A single reader goroutine demuxes responses by nonce to waiting query goroutines.
+//
+// For classic constructions the sharedKey is pre-computed from the global client
+// key pair (matching dnscrypt-proxy), not from a per-session ephemeral key.
+// For XWingPQ the sharedKey is derived from a fresh X-Wing encapsulation.
 type dnscryptSession struct {
 	esVersion       dnscrypt.CryptoConstruction
 	clientMagic     [8]byte
-	clientSk        [32]byte
-	clientPk        [32]byte
-	serverPk        [32]byte
 	sharedKey       [32]byte
-	xwingCiphertext [1120]byte
+	proxyPublicKey  [32]byte   // snapshot of Client.proxyPublicKey
+	xwingCiphertext [1120]byte // PQ only: per-session X-Wing ciphertext
 	cachedAt        time.Time
 
-	udpConn *net.UDPConn
-	// pending maps query nonce (first 12 bytes) to a buffered response channel.
-	pending   map[[12]byte]chan []byte
-	pendingMu sync.Mutex
-	// readerOnce ensures the reader goroutine is started exactly once.
+	udpConn    *net.UDPConn
+	pending    map[[12]byte]chan []byte
+	pendingMu  sync.Mutex
 	readerOnce sync.Once
 }
 
@@ -225,7 +225,7 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 
 	var sharedKey [32]byte
 	var xwingCT [1120]byte
-	var clientPk, clientSk, serverPk [32]byte
+	var sessionPPK [32]byte
 
 	if cert.ESVersion == dnscrypt.XWingPQ {
 		xwingPK := cert.XWingPublicKey()
@@ -234,27 +234,21 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 			return nil, fmt.Errorf("DNSCRYPT: xwing encapsulate: %w", err)
 		}
 		copy(xwingCT[:], ct)
-		certCtx := cert.CertContext()
-		sharedKey = dnscryptXWingDeriveSharedKey(cert.ESVersion, cert.ClientMagic[:], ss, ct, certCtx)
+		sharedKey = dnscryptXWingDeriveSharedKey(cert.ESVersion, cert.ClientMagic[:], ss, ct, cert.CertContext())
 	} else {
-		clientPk, clientSk, err = dnscrypt.GenerateX25519KeyPair()
-		if err != nil {
-			return nil, fmt.Errorf("DNSCRYPT: generate key pair: %w", err)
-		}
+		var serverPk [32]byte
 		copy(serverPk[:], cert.ResolverPk[:32])
-		sharedKey, err = dnscrypt.ComputeSharedKey(cert.ESVersion, &clientSk, &serverPk)
-		if err != nil {
-			return nil, fmt.Errorf("DNSCRYPT: compute shared key: %w", err)
-		}
+		c.cryptoKeyMu.RLock()
+		sharedKey = computeSharedKey(cert.ESVersion, &c.proxySecretKey, &serverPk)
+		copy(sessionPPK[:], c.proxyPublicKey[:])
+		c.cryptoKeyMu.RUnlock()
 	}
 
 	session := &dnscryptSession{
 		esVersion:       cert.ESVersion,
 		clientMagic:     cert.ClientMagic,
-		clientSk:        clientSk,
-		clientPk:        clientPk,
-		serverPk:        serverPk,
 		sharedKey:       sharedKey,
+		proxyPublicKey:  sessionPPK,
 		xwingCiphertext: xwingCT,
 		cachedAt:        time.Now(),
 		pending:         make(map[[12]byte]chan []byte),
@@ -448,6 +442,19 @@ func (c *Client) exchangeDNSCryptTCP(ctx context.Context, msg *dns.Msg, session 
 	return decryptResponse(buf, &session.sharedKey, session.esVersion)
 }
 
+// computeSharedKey pre-computes the shared key from the global client secret key
+// and the server's public key.  Matches dnscrypt-proxy's design.
+func computeSharedKey(esVersion dnscrypt.CryptoConstruction, secretKey, serverPk *[32]byte) [32]byte {
+	sk, err := dnscrypt.ComputeSharedKey(esVersion, secretKey, serverPk)
+	if err != nil {
+		log.Warnf("DNSCRYPT: weak public key for %s", esVersion)
+		if _, randErr := rand.Read(sk[:]); randErr != nil {
+			panic("dnscrypt: random fallback: " + randErr.Error())
+		}
+	}
+	return sk
+}
+
 func encryptQuery(msg *dns.Msg, session *dnscryptSession, esVersion dnscrypt.CryptoConstruction) ([]byte, *[24]byte, error) {
 	packet, err := msg.Pack()
 	if err != nil {
@@ -472,7 +479,7 @@ func encryptQuery(msg *dns.Msg, session *dnscryptSession, esVersion dnscrypt.Cry
 		encrypted = append(encrypted, nonce[:12]...)
 	} else {
 		encrypted = append(encrypted, session.clientMagic[:]...)
-		encrypted = append(encrypted, session.clientPk[:]...)
+		encrypted = append(encrypted, session.proxyPublicKey[:]...)
 		encrypted = append(encrypted, nonce[:12]...)
 	}
 
