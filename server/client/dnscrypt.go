@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/mlkem"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudflare/circl/kem/xwing"
 	"github.com/miekg/dns"
+	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/nacl/secretbox"
 
 	"zjdns/config"
@@ -34,21 +36,21 @@ const (
 type dnscryptSession struct {
 	esVersion       dnscrypt.CryptoConstruction
 	clientMagic     [8]byte
-	clientSk        [32]byte
-	clientPk        [32]byte
-	serverPk        [32]byte
+	clientSk        [32]byte // X25519 secret key (classic only)
+	clientPk        [32]byte // X25519 public key (classic only)
+	serverPk        [32]byte // X25519 server public key (classic only)
 	sharedKey       [32]byte
-	mlkemCiphertext [1088]byte // ML-KEM-768 ciphertext (PQ only)
+	xwingCiphertext [1120]byte // X-Wing ciphertext (PQ only, xwing.CiphertextSize)
 	cachedAt        time.Time
 	udpConn         *net.UDPConn // persistent UDP socket per upstream
 }
 
 // queryHeaderLen returns the wire header size for this session.
 func (s *dnscryptSession) queryHeaderLen() int {
-	if s.esVersion.IsPQ() {
-		return dnscrypt.QueryHeaderLenPQ
+	if s.esVersion == dnscrypt.XWingPQ {
+		return dnscrypt.QueryHeaderLenXWing // 1140
 	}
-	return dnscrypt.QueryHeaderLen
+	return dnscrypt.QueryHeaderLen // 52
 }
 
 // dnscryptCacheEntry is the per-upstream cached session.
@@ -82,7 +84,7 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		serverAddr = net.JoinHostPort(serverAddr, config.DefaultDNSCryptPort)
 	}
 
-	session, err := c.getDNSCryptSession(ctx, serverAddr, providerName, server.DNSCryptPublicKey, server.DNSCryptMlkemPublicKey)
+	session, err := c.getDNSCryptSession(ctx, serverAddr, providerName, server.DNSCryptPublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -110,8 +112,7 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 }
 
 // getDNSCryptSession returns a cached or newly-established DNSCrypt session.
-// mlkemPubkeyHex is optional — the ML-KEM PK is read from the certificate.
-func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, providerName, pubkeyHex, mlkemPubkeyHex string) (*dnscryptSession, error) {
+func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, providerName, pubkeyHex string) (*dnscryptSession, error) {
 	cacheKey := serverAddr + "|" + providerName
 
 	c.dnscryptResolverMu.Lock()
@@ -171,38 +172,30 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, providerNam
 		return nil, fmt.Errorf("DNSCRYPT: fetch cert from %s: %w", serverAddr, err)
 	}
 
-	// Optional: pin the ML-KEM public key for PQ constructions.
-	if cert.ESVersion.IsPQ() && mlkemPubkeyHex != "" {
-		expectedPK, _ := hex.DecodeString(strings.ReplaceAll(mlkemPubkeyHex, ":", ""))
-		if !bytes.Equal(expectedPK, cert.ResolverMlkemPk[:]) {
-			return nil, fmt.Errorf("DNSCRYPT: ML-KEM public key mismatch for %s", serverAddr)
-		}
-	}
-
-	// Generate ephemeral X25519 key pair (pub, secret).
-	clientPk, clientSk, err := dnscrypt.GenerateX25519KeyPair()
-	if err != nil {
-		return nil, fmt.Errorf("DNSCRYPT: generate key pair: %w", err)
-	}
-
-	// Compute shared key: classic X25519 ECDH or hybrid X25519 + ML-KEM-768.
+	// Compute shared key: classic X25519 ECDH or X-Wing hybrid KEM.
 	var sharedKey [32]byte
-	var mlkemCt [1088]byte
-	if cert.ESVersion.IsPQ() {
-		// ML-KEM-768: encapsulate against the server's public key.
-		ek, err := mlkem.NewEncapsulationKey768(cert.ResolverMlkemPk[:])
-		if err != nil {
-			return nil, fmt.Errorf("DNSCRYPT: parse ML-KEM public key: %w", err)
-		}
-		mlkemSS, ciphertext := ek.Encapsulate()
-		copy(mlkemCt[:], ciphertext)
+	var xwingCT [1120]byte
+	var clientPk, clientSk, serverPk [32]byte
 
-		sharedKey, err = dnscrypt.ComputeSharedKeyPQ(&clientSk, &cert.ResolverPk, mlkemSS)
+	if cert.ESVersion == dnscrypt.XWingPQ {
+		// X-Wing hybrid KEM: encapsulate against the server's X-Wing public key.
+		xwingPK := cert.XWingPublicKey()
+		ss, ct, err := xwing.Encapsulate(xwingPK, nil)
 		if err != nil {
-			return nil, fmt.Errorf("DNSCRYPT: compute PQ shared key: %w", err)
+			return nil, fmt.Errorf("DNSCRYPT: xwing encapsulate: %w", err)
 		}
+		copy(xwingCT[:], ct)
+
+		certCtx := cert.CertContext()
+		sharedKey = dnscryptXWingDeriveSharedKey(cert.ESVersion, cert.ClientMagic[:], ss, ct, certCtx)
 	} else {
-		sharedKey, err = dnscrypt.ComputeSharedKey(cert.ESVersion, &clientSk, &cert.ResolverPk)
+		// Classic: generate ephemeral X25519 key pair.
+		clientPk, clientSk, err = dnscrypt.GenerateX25519KeyPair()
+		if err != nil {
+			return nil, fmt.Errorf("DNSCRYPT: generate key pair: %w", err)
+		}
+		copy(serverPk[:], cert.ResolverPk[:32])
+		sharedKey, err = dnscrypt.ComputeSharedKey(cert.ESVersion, &clientSk, &serverPk)
 		if err != nil {
 			return nil, fmt.Errorf("DNSCRYPT: compute shared key: %w", err)
 		}
@@ -213,9 +206,9 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, providerNam
 		clientMagic:     cert.ClientMagic,
 		clientSk:        clientSk,
 		clientPk:        clientPk,
-		serverPk:        cert.ResolverPk,
+		serverPk:        serverPk,
 		sharedKey:       sharedKey,
-		mlkemCiphertext: mlkemCt,
+		xwingCiphertext: xwingCT,
 		cachedAt:        time.Now(),
 	}
 
@@ -237,6 +230,26 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, providerNam
 
 	log.Debugf("DNSCRYPT: established session with %s (%s)", serverAddr, providerName)
 	return session, nil
+}
+
+// dnscryptXWingDeriveSharedKey derives the per-query symmetric key from an
+// X-Wing shared secret. This mirrors dnscrypt.deriveSharedKeyXWing; it is
+// duplicated here because the client package cannot import internal packages.
+func dnscryptXWingDeriveSharedKey(esVersion dnscrypt.CryptoConstruction, clientMagic, xwingSS, xwingCT, certCtx []byte) [32]byte {
+	salt := make([]byte, 2+len(clientMagic))
+	binary.BigEndian.PutUint16(salt[:2], uint16(esVersion))
+	copy(salt[2:], clientMagic)
+
+	info := make([]byte, len(certCtx)+len(xwingCT))
+	copy(info, certCtx)
+	copy(info[len(certCtx):], xwingCT)
+
+	var key [32]byte
+	kdf := hkdf.New(sha256.New, xwingSS, salt, info)
+	if _, err := io.ReadFull(kdf, key[:]); err != nil {
+		panic("dnscrypt: hkdf: " + err.Error())
+	}
+	return key
 }
 
 // fetchCertViaUDP sends a cert TXT query over UDP and returns the raw
@@ -519,19 +532,22 @@ func encryptQuery(msg *dns.Msg, session *dnscryptSession, esVersion dnscrypt.Cry
 
 	padded := dnscrypt.PadPacket(packet)
 
+	aead := esVersion.AEAD()
 	hdrLen := session.queryHeaderLen()
 	encrypted := make([]byte, 0, hdrLen+len(padded)+16)
-	encrypted = append(encrypted, session.clientMagic[:]...)
-	encrypted = append(encrypted, session.clientPk[:]...)
-	if esVersion.IsPQ() {
-		encrypted = append(encrypted, session.mlkemCiphertext[:]...)
-	}
-	encrypted = append(encrypted, nonce[:12]...)
 
-	aead := esVersion
-	if esVersion.IsPQ() {
-		aead = esVersion.AEAD()
+	if esVersion == dnscrypt.XWingPQ {
+		// X-Wing wire format: magic(8) || xwing_ct(1120) || nonce(12) || encrypted
+		encrypted = append(encrypted, session.clientMagic[:]...)
+		encrypted = append(encrypted, session.xwingCiphertext[:]...)
+		encrypted = append(encrypted, nonce[:12]...)
+	} else {
+		// Classic wire format: magic(8) || clientPk(32) || nonce(12) || encrypted
+		encrypted = append(encrypted, session.clientMagic[:]...)
+		encrypted = append(encrypted, session.clientPk[:]...)
+		encrypted = append(encrypted, nonce[:12]...)
 	}
+
 	switch aead {
 	case dnscrypt.XSalsa20Poly1305:
 		var xsalsaNonce [24]byte
@@ -561,11 +577,9 @@ func decryptResponse(packet []byte, sharedKey *[32]byte, queryNonce *[24]byte, e
 	var nonce [24]byte
 	copy(nonce[:], packet[8:32])
 
+	aead := esVersion.AEAD()
+
 	var decrypted []byte
-	aead := esVersion
-	if esVersion.IsPQ() {
-		aead = esVersion.AEAD()
-	}
 	switch aead {
 	case dnscrypt.XSalsa20Poly1305:
 		var ok bool
@@ -586,6 +600,19 @@ func decryptResponse(packet []byte, sharedKey *[32]byte, queryNonce *[24]byte, e
 	unpadded, err := dnscrypt.Unpad(decrypted)
 	if err != nil {
 		return nil, fmt.Errorf("DNSCRYPT: unpad: %w", err)
+	}
+
+	// Strip control block from X-Wing responses.
+	if esVersion == dnscrypt.XWingPQ {
+		if len(unpadded) < 2 {
+			return nil, fmt.Errorf("DNSCRYPT: PQ response too short for control block")
+		}
+		cbLen := int(binary.BigEndian.Uint16(unpadded[:2]))
+		offset := 2 + cbLen
+		if offset > len(unpadded) {
+			return nil, fmt.Errorf("DNSCRYPT: PQ control block overflows response")
+		}
+		unpadded = unpadded[offset:]
 	}
 
 	resp := &dns.Msg{}

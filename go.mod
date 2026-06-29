@@ -3,8 +3,9 @@ module zjdns
 go 1.26.0
 
 require (
+	github.com/cloudflare/circl v1.6.4
 	github.com/miekg/dns v1.1.73-0.20260622091530-fa041eedc7a8
-	github.com/quic-go/quic-go v0.60.1-0.20260627063742-8dfc5ee8766a
+	github.com/quic-go/quic-go v0.60.1-0.20260629040301-af4bd46e551d
 	gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246
 	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.56.0

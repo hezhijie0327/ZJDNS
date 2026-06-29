@@ -625,7 +625,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   for per-session key exchange; XSalsa20-Poly1305 AEAD (default) or
   XChacha20-Poly1305 (optional) for query/response encryption. Post-quantum
   hybrid key exchange: X25519 + ML-KEM-768 (`crypto/mlkem`, Go 1.26 stdlib)
-  combined via HKDF-SHA256 (`0x0101`/`0x0102` construction codes). Extended
+  combined via X-Wing KEM (`0x0003` construction code, draft-connolly-cfrg-xwing-kem). Extended
   certificate format (1308 bytes) carries ML-KEM-768 encapsulation key.
   PQ query header prepends 1088-byte ML-KEM ciphertext. Server listens
   UDP+TCP on a standalone port (default 8443). Client caches ephemeral sessions
@@ -634,4 +634,4 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   `2.dnscrypt-cert.<provider>`. Clients default to UDP; set `dnscrypt_tcp: true`
   for TCP. Cert fetch deduplication prevents thundering herd on cache miss.
   Provider names auto-prefix with `DNSCryptV2Prefix`. Colon-formatted hex keys
-  accepted everywhere. Use `-es-version xsalsa20-pq` or `xchacha20-pq` for PQC.
+  accepted everywhere. Use `-es-version xwing-pq` for post-quantum X-Wing KEM.

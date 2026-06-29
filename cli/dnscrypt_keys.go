@@ -32,10 +32,8 @@ func GenerateDNSCryptKeys(providerName string, certTTLHours int, esVersion strin
 	switch esVersionStr {
 	case "xchacha20", "xchacha20poly1305":
 		cryptoCon = dnscrypt.XChacha20Poly1305
-	case "xsalsa20-pq", "xsalsa20poly1305-pq":
-		cryptoCon = dnscrypt.X25519_MLKEM768_XSalsa20Poly1305
-	case "xchacha20-pq", "xchacha20poly1305-pq":
-		cryptoCon = dnscrypt.X25519_MLKEM768_XChacha20Poly1305
+	case "xwing-pq", "xwing":
+		cryptoCon = dnscrypt.XWingPQ
 	}
 
 	// Generate Ed25519 provider key pair (long-term signing key).
@@ -48,6 +46,7 @@ func GenerateDNSCryptKeys(providerName string, certTTLHours int, esVersion strin
 	if err != nil {
 		return fmt.Sprintf(`{"error": "failed to generate certificate: %v"}`, err)
 	}
+	_ = cert // validated above; server regenerates from private key at startup
 
 	skHex := hex.EncodeToString(providerSK)
 	pkHex := hex.EncodeToString(providerPK)
@@ -60,9 +59,7 @@ func GenerateDNSCryptKeys(providerName string, certTTLHours int, esVersion strin
 		ServerName:        providerName,
 		DNSCryptPublicKey: pkHex,
 	}
-	if cryptoCon.IsPQ() {
-		clientCfg.DNSCryptMlkemPublicKey = hex.EncodeToString(cert.ResolverMlkemPk[:])
-	}
+	// X-Wing public key is embedded in the certificate; no separate client-side key needed.
 
 	data, _ := json.MarshalIndent(map[string]any{
 		"server": config.DNSCryptSettings{

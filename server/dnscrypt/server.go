@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/mlkem"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -16,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cloudflare/circl/kem/xwing"
 	"github.com/miekg/dns"
 
 	"zjdns/config"
@@ -38,9 +38,9 @@ type Server struct {
 	certTXT      string
 	providerName string
 
-	// mlkemDK is the ML-KEM-768 decapsulation key for PQ constructions.
-	// It is nil for classical (non-PQ) certificates.
-	mlkemDK *mlkem.DecapsulationKey768
+	// xwingSK is the X-Wing private key for XWingPQ constructions.
+	// It is nil for classic (non-PQ) certificates.
+	xwingSK *xwing.PrivateKey
 
 	udpConn     *net.UDPConn
 	tcpListener net.Listener
@@ -90,10 +90,8 @@ func New(handler DNSHandler, dnsCfg config.DNSCryptSettings) (*Server, error) {
 	switch strings.ToLower(dnsCfg.ESVersion) {
 	case "xchacha20", "xchacha20poly1305":
 		esVersion = XChacha20Poly1305
-	case "xsalsa20-pq", "xsalsa20poly1305-pq":
-		esVersion = X25519_MLKEM768_XSalsa20Poly1305
-	case "xchacha20-pq", "xchacha20poly1305-pq":
-		esVersion = X25519_MLKEM768_XChacha20Poly1305
+	case "xwing-pq", "xwing":
+		esVersion = XWingPQ
 	}
 
 	cert, err := GenerateCertificate(ed25519.PrivateKey(providerKey), esVersion, certTTL)
@@ -112,19 +110,27 @@ func New(handler DNSHandler, dnsCfg config.DNSCryptSettings) (*Server, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &Server{
+	s := &Server{
 		handler:      handler,
 		cfg:          dnsCfg,
 		cert:         cert,
 		certTXT:      cert.TXTString(),
 		providerName: providerName,
-		mlkemDK:      cert.MlkemDecapsulationKey(),
 		udpSem:       make(chan struct{}, config.DefaultMinConcurrencyLimit),
 		tcpLimiter:   &perip.Limiter{},
 		udpLimiter:   &perip.Limiter{},
 		ctx:          ctx,
 		cancel:       cancel,
-	}, nil
+	}
+
+	if esVersion == XWingPQ {
+		xwingSK, xwingPK := xwing.DeriveKeyPair(cert.XWingSeed[:])
+		_ = xwingPK // public key is in the certificate already
+		s.xwingSK = xwingSK
+		log.Infof("DNSCRYPT: X-Wing post-quantum key exchange enabled")
+	}
+
+	return s, nil
 }
 
 // StartUDP launches the DNSCrypt UDP listener.  Blocks until ctx is cancelled
@@ -272,17 +278,22 @@ func (s *Server) handleUDPPacket(ctx context.Context, packet []byte, addr *net.U
 
 // handleEncryptedQuery decrypts and processes a DNSCrypt encrypted query.
 func (s *Server) handleEncryptedQuery(ctx context.Context, packet []byte, addr *net.UDPAddr) {
-	query, pq, encrypted, err := parseQuery(packet, s.cert)
+	query, xq, encrypted, err := parseQuery(packet, s.cert)
 	if err != nil {
 		log.Debugf("DNSCRYPT: parse query from %s: %v", addr, err)
 		return
 	}
 
 	var decrypted []byte
-	if s.cert.ESVersion.IsPQ() && pq != nil && s.mlkemDK != nil {
-		decrypted, err = pq.decryptPQ(encrypted, s.cert, s.mlkemDK)
+	var sharedKey [SharedKeySize]byte
+	var nonce [nonceSize]byte
+
+	if s.cert.ESVersion == XWingPQ && xq != nil && s.xwingSK != nil {
+		copy(nonce[:], xq.Nonce[:])
+		decrypted, sharedKey, err = xq.decrypt(encrypted, s.cert, s.xwingSK)
 	} else {
-		decrypted, err = query.decrypt(encrypted, s.cert)
+		copy(nonce[:], query.Nonce[:])
+		decrypted, sharedKey, err = query.decrypt(encrypted, s.cert)
 	}
 	if err != nil {
 		log.Debugf("DNSCRYPT: decrypt query from %s: %v", addr, err)
@@ -308,13 +319,7 @@ func (s *Server) handleEncryptedQuery(ctx context.Context, packet []byte, addr *
 		return
 	}
 
-	sharedKey, err := ComputeSharedKey(s.cert.ESVersion, &s.cert.ResolverSk, &query.ClientPk)
-	if err != nil {
-		log.Debugf("DNSCRYPT: shared key: %v", err)
-		return
-	}
-
-	encryptedResp, err := encryptResponse(s.cert.ESVersion, respPacket, &sharedKey, &query.Nonce)
+	encryptedResp, err := encryptResponse(s.cert.ESVersion, respPacket, &sharedKey, &nonce, nil)
 	if err != nil {
 		log.Debugf("DNSCRYPT: encrypt response: %v", err)
 		return
@@ -425,21 +430,28 @@ func (s *Server) handleTCPConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 
-		// TCP also supports cert TXT queries.
+		// TCP also supports encrypted DNSCrypt queries.
 		if len(packet) >= clientMagicSize && bytes.Equal(packet[:clientMagicSize], s.cert.ClientMagic[:]) {
-			query, pq, encrypted, err := parseQuery(packet, s.cert)
+			query, xq, encrypted, err := parseQuery(packet, s.cert)
 			if err != nil {
 				continue
 			}
+
 			var decrypted []byte
-			if s.cert.ESVersion.IsPQ() && pq != nil && s.mlkemDK != nil {
-				decrypted, err = pq.decryptPQ(encrypted, s.cert, s.mlkemDK)
+			var sharedKey [SharedKeySize]byte
+			var nonce [nonceSize]byte
+
+			if s.cert.ESVersion == XWingPQ && xq != nil && s.xwingSK != nil {
+				copy(nonce[:], xq.Nonce[:])
+				decrypted, sharedKey, err = xq.decrypt(encrypted, s.cert, s.xwingSK)
 			} else {
-				decrypted, err = query.decrypt(encrypted, s.cert)
+				copy(nonce[:], query.Nonce[:])
+				decrypted, sharedKey, err = query.decrypt(encrypted, s.cert)
 			}
 			if err != nil {
 				continue
 			}
+
 			req := pool.DefaultMessagePool.Get()
 			if err := req.Unpack(decrypted); err != nil {
 				pool.DefaultMessagePool.Put(req)
@@ -462,11 +474,7 @@ func (s *Server) handleTCPConn(ctx context.Context, conn net.Conn) {
 				continue
 			}
 
-			sharedKey, err := ComputeSharedKey(s.cert.ESVersion, &s.cert.ResolverSk, &query.ClientPk)
-			if err != nil {
-				continue
-			}
-			encryptedResp, err := encryptResponse(s.cert.ESVersion, respPacket, &sharedKey, &query.Nonce)
+			encryptedResp, err := encryptResponse(s.cert.ESVersion, respPacket, &sharedKey, &nonce, nil)
 			if err != nil {
 				continue
 			}

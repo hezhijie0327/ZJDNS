@@ -72,7 +72,7 @@ type DNSCryptSettings struct {
 	PrivateKey   string `json:"private_key"`          // hex-encoded Ed25519 private key (128 hex chars)
 	PublicKey    string `json:"public_key,omitempty"` // hex-encoded Ed25519 public key (informational, ignored by server)
 	CertTTL      int    `json:"cert_ttl,omitempty"`   // Certificate lifetime in seconds (default 31536000 = 365d)
-	ESVersion    string `json:"es_version,omitempty"` // Crypto construction: "xsalsa20" (default) or "xchacha20"
+	ESVersion    string `json:"es_version,omitempty"` // Crypto construction: "xsalsa20" (default), "xchacha20", "xwing-pq"
 }
 
 // FeatureFlags enables optional features: hijack protection, DDR, ECS, cache,
@@ -117,15 +117,14 @@ type StatsSettings struct {
 // UpstreamServer defines a single upstream DNS server with address, protocol,
 // and optional matching.
 type UpstreamServer struct {
-	Address                string   `json:"address"`
-	Protocol               string   `json:"protocol"`
-	ServerName             string   `json:"server_name,omitempty"`
-	SkipTLSVerify          bool     `json:"skip_tls_verify,omitempty"`
-	Match                  []string `json:"match,omitempty"`
-	Proxy                  string   `json:"proxy,omitempty"`                     // socks5://[user:pass@]host:port
-	DNSCryptPublicKey      string   `json:"dnscrypt_public_key,omitempty"`       // hex-encoded Ed25519 public key (DNSCrypt only)
-	DNSCryptMlkemPublicKey string   `json:"dnscrypt_mlkem_public_key,omitempty"` // hex-encoded ML-KEM-768 public key (DNSCrypt PQ only)
-	DNSCryptTCP            bool     `json:"dnscrypt_tcp,omitempty"`              // use TCP for DNSCrypt upstream (default: UDP)
+	Address           string   `json:"address"`
+	Protocol          string   `json:"protocol"`
+	ServerName        string   `json:"server_name,omitempty"`
+	SkipTLSVerify     bool     `json:"skip_tls_verify,omitempty"`
+	Match             []string `json:"match,omitempty"`
+	Proxy             string   `json:"proxy,omitempty"`               // socks5://[user:pass@]host:port
+	DNSCryptPublicKey string   `json:"dnscrypt_public_key,omitempty"` // hex-encoded Ed25519 public key (DNSCrypt only)
+	DNSCryptTCP       bool     `json:"dnscrypt_tcp,omitempty"`        // use TCP for DNSCrypt upstream (default: UDP)
 }
 
 // RewriteRule defines a DNS rewrite rule with synthetic response, client
@@ -537,6 +536,13 @@ func validateDNSCryptConfig(cfg *ServerConfig) error {
 	}
 	if d.CertTTL < 0 || d.CertTTL > 315360000 {
 		return fmt.Errorf("config: dnscrypt.cert_ttl must be between 0 and 315360000 (10 years), got %d", d.CertTTL)
+	}
+	if d.ESVersion != "" {
+		switch strings.ToLower(d.ESVersion) {
+		case "xsalsa20", "xchacha20", "xwing-pq":
+		default:
+			return fmt.Errorf("config: dnscrypt.es_version must be one of: xsalsa20, xchacha20, xwing-pq, got: %s", d.ESVersion)
+		}
 	}
 	return nil
 }

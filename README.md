@@ -266,3 +266,5 @@ golangci-lint run && golangci-lint fmt
 
 - [miekg/dns](https://github.com/miekg/dns) — Go DNS 库
 - [quic-go/quic-go](https://github.com/quic-go/quic-go) — QUIC 协议实现
+- [cloudflare/circl](https://github.com/cloudflare/circl) — X-Wing 后量子混合 KEM
+- [go-extension/tls](https://gitlab.com/go-extension/tls) — 内核 TLS (KTLS) 卸载支持
