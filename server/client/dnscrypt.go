@@ -258,7 +258,7 @@ func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK 
 
 	log.Debugf("DNSCRYPT: fetching cert for %s from %s", providerName, serverAddr)
 
-	client := dns.Client{Net: "udp"}
+	client := dns.Client{Net: "udp", UDPSize: pool.SecureBufferSize}
 	resp, _, err := client.ExchangeContext(ctx, msg, serverAddr)
 	if err != nil {
 		return nil, fmt.Errorf("cert TXT query: %w", err)
