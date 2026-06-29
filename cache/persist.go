@@ -112,9 +112,19 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 		mc.currentSize += ci.size
 		loaded++
 	}
+	beforeEvict := mc.currentSize
 	mc.evictToBudget()
+	evicted := beforeEvict - mc.currentSize
 	mc.mu.Unlock()
-	mc.persistGen.Store(0)
+	if evicted > 0 {
+		// Budget was reduced — set gen=1 so the next persist tick writes
+		// a trimmed snapshot instead of waiting for new entries to arrive.
+		log.Infof("CACHE: evicted %d MB to match new budget (%d MB), next persist will trim snapshot",
+			evicted/(1024*1024), mc.limitBytes/(1024*1024))
+		mc.persistGen.Store(1)
+	} else {
+		mc.persistGen.Store(0)
+	}
 	return loaded, nil
 }
 
