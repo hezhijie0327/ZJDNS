@@ -51,7 +51,7 @@ func ValidateDomainLabels(domain string) bool {
 // IsSecureProtocol reports whether the protocol is a secure DNS transport.
 func IsSecureProtocol(protocol string) bool {
 	switch protocol {
-	case "tls", "quic", "https", "http3", "dnscrypt":
+	case "tls", "quic", "https", "http3":
 		return true
 	default:
 		return false

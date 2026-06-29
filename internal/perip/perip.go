@@ -1,5 +1,5 @@
 // Package perip provides a shared per-IP connection/concurrency limiter
-// used by all protocol listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, DNSCrypt).
+// used by all protocol listeners (UDP, TCP, DoT, DoQ, DoH, DoH3).
 package perip
 
 import (

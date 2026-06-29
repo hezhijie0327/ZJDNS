@@ -4,7 +4,6 @@ package client
 
 import (
 	"context"
-	crypto_rand "crypto/rand"
 	"crypto/tls"
 	"fmt"
 	eTLS "gitlab.com/go-extension/tls"
@@ -12,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/crypto/curve25519"
 
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
@@ -75,18 +72,6 @@ type Client struct {
 	// the server config before use.
 	ktlsTX bool
 	ktlsRX bool
-
-	// DNSCrypt: global client key pair (matching dnscrypt-proxy design).
-	// The same key pair is used for all upstreams; shared keys are
-	// pre-computed for classic constructions.
-	proxySecretKey [32]byte
-	proxyPublicKey [32]byte
-	cryptoKeyMu    sync.RWMutex
-
-	// DNSCrypt resolver session cache.
-	dnscryptResolvers  map[string]*dnscryptCacheEntry
-	dnscryptResolverMu sync.Mutex
-	dnscryptPending    map[string]chan struct{}
 }
 
 // New creates a Client with default timeouts, transport pools, and session
@@ -128,26 +113,16 @@ func New() *Client {
 		doh3Client: &http.Client{
 			Timeout: config.DefaultDNSQueryTimeout,
 		},
-		dohTransports:     make(map[string]*http.Client),
-		doh3Transports:    make(map[string]*http.Client),
-		quicConfigs:       make(map[string]*quic.Config),
-		quicPool:          connpool.NewQUICPool(config.DefaultMaxConns),
-		SessionCache:      eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
-		tcpPool:           connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		dotPool:           connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		proxyDialers:      make(map[string]*Socks5Dialer),
-		dnscryptResolvers: make(map[string]*dnscryptCacheEntry),
-		dnscryptPending:   make(map[string]chan struct{}),
+		dohTransports:  make(map[string]*http.Client),
+		doh3Transports: make(map[string]*http.Client),
+		quicConfigs:    make(map[string]*quic.Config),
+		quicPool:       connpool.NewQUICPool(config.DefaultMaxConns),
+		SessionCache:   eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
+		tcpPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		dotPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		proxyDialers:   make(map[string]*Socks5Dialer),
 	}
-	c.setDNSCryptClientKey()
 	return c
-}
-
-func (c *Client) setDNSCryptClientKey() {
-	if _, err := crypto_rand.Read(c.proxySecretKey[:]); err != nil {
-		panic("dnscrypt: failed to generate client secret key: " + err.Error())
-	}
-	curve25519.ScalarBaseMult(&c.proxyPublicKey, &c.proxySecretKey)
 }
 
 // getQUICConfig returns a cached QUIC config for the given upstream key, creating
@@ -319,8 +294,6 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		return c.executeDoH(ctx, msg, server, c.eTLSClientConfig(server))
 	case config.ProtoDOH3, config.ProtoHTTP3:
 		return c.executeDoH3(ctx, msg, server, c.stdTLSConfig(server))
-	case config.ProtoDNSCrypt:
-		return c.executeDNSCrypt(ctx, msg, server)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}

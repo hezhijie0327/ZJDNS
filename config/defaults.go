@@ -4,14 +4,12 @@ import "time"
 
 // Network ports and paths.
 const (
-	DefaultDNSPort      = "53"
-	DefaultDOTPort      = "853"
-	DefaultDOHPort      = "443"
-	DefaultDNSCryptPort = "8443"
-	DefaultPprofPort    = "6060"
-	DefaultQueryPath    = "/dns-query"
-	DefaultPprofPath    = "/debug/pprof/"
-	DNSCryptV2Prefix    = "2.dnscrypt-cert."
+	DefaultDNSPort   = "53"
+	DefaultDOTPort   = "853"
+	DefaultDOHPort   = "443"
+	DefaultPprofPort = "6060"
+	DefaultQueryPath = "/dns-query"
+	DefaultPprofPath = "/debug/pprof/"
 )
 
 // Cache sizing, TTL, and serve-stale parameters.
@@ -34,10 +32,6 @@ const (
 
 	DefaultBackgroundTimeout         = 10 * time.Second // bounded wait for background tasks
 	DefaultBackgroundShutdownTimeout = 30 * time.Second // bounded wait for background tasks during shutdown (matches recursive timeout)
-
-	DefaultDNSCryptUDPReadTimeout = 2 * time.Second // DNSCrypt UDP read deadline (prevents blocking forever)
-	DefaultDNSCryptTCPReadTimeout = 2 * time.Second // DNSCrypt TCP first read deadline
-	DefaultDNSCryptTCPIdleTimeout = 8 * time.Second // DNSCrypt TCP subsequent read deadline
 
 	DefaultAcceptRetryDelay       = 100 * time.Millisecond // DoT/DoQ accept retry sleep
 	DefaultHijackSettleTimeout    = 5 * time.Millisecond   // Max window for GFW detection race after clean response wins
@@ -66,12 +60,11 @@ const (
 	DefaultCookieSecretRotationInterval = 30 * time.Minute
 	DefaultECSRefreshInterval           = 15 * time.Minute
 
-	DefaultCookieSecretSize   = 32                   // DNS cookie secret size in bytes
-	DefaultDNSKeyCacheTTL     = 86400                // DNSKEY record cache TTL (seconds)
-	DefaultDNSKeyCacheMinTTL  = 300                  // DNSKEY cache minimum TTL (seconds)
-	DefaultMaxNSEC3Iterations = 150                  // NSEC3 iteration cap (RFC 5155 §10.3)
-	DefaultPaddingBlockSize   = 468                  // RFC 7830: EDNS padding block size
-	DefaultDNSCryptCertTTL    = 365 * 24 * time.Hour // DNSCrypt certificate TTL (365 days)
+	DefaultCookieSecretSize   = 32    // DNS cookie secret size in bytes
+	DefaultDNSKeyCacheTTL     = 86400 // DNSKEY record cache TTL (seconds)
+	DefaultDNSKeyCacheMinTTL  = 300   // DNSKEY cache minimum TTL (seconds)
+	DefaultMaxNSEC3Iterations = 150   // NSEC3 iteration cap (RFC 5155 §10.3)
+	DefaultPaddingBlockSize   = 468   // RFC 7830: EDNS padding block size
 
 	DefaultStatsPersistInterval = 86400 // Stats cache persist TTL (seconds)
 
@@ -174,12 +167,11 @@ const (
 	ProtoHTTPPlain = "http"
 
 	// User-facing protocol aliases (map to config file values).
-	ProtoDOT      = "dot"      // DoT user config alias
-	ProtoDOQ      = "doq"      // DoQ user config alias
-	ProtoDOH      = "doh"      // DoH user config alias
-	ProtoDOH3     = "doh3"     // DoH3 user config alias
-	ProtoDNSCrypt = "dnscrypt" // DNSCrypt v2 protocol identifier
-	ProtoTLSTCP   = "tcp-tls"  // dns.Client.Net for TLS-wrapped TCP
+	ProtoDOT    = "dot"     // DoT user config alias
+	ProtoDOQ    = "doq"     // DoQ user config alias
+	ProtoDOH    = "doh"     // DoH user config alias
+	ProtoDOH3   = "doh3"    // DoH3 user config alias
+	ProtoTLSTCP = "tcp-tls" // dns.Client.Net for TLS-wrapped TCP
 )
 
 // ALPN protocol identifiers for secure DNS transports.
@@ -192,9 +184,6 @@ var (
 
 // ProjectName is the application name, set at build time.
 var ProjectName = "ZJDNS"
-
-// DefaultDNSCryptProviderName is the default DNSCrypt provider name.
-var DefaultDNSCryptProviderName = DNSCryptV2Prefix + ProjectName
 
 // Version is the build version, set at build time via ldflags.
 var Version = "dev"

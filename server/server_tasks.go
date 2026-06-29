@@ -243,14 +243,6 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
-	if s.dnscrypt != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
-		defer cancel()
-		if err := s.dnscrypt.Shutdown(ctx); err != nil {
-			log.Errorf("DNSCRYPT: Shutdown failed: %v", err)
-		}
-	}
-
 	if s.tls != nil {
 		if err := s.tls.Shutdown(); err != nil {
 			log.Errorf("TLS: TLS server shutdown failed: %v", err)

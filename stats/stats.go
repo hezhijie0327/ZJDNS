@@ -34,7 +34,6 @@ type Snapshot struct {
 	DoQRequests         uint64 `json:"doq_requests"`
 	DoHRequests         uint64 `json:"doh_requests"`
 	DoH3Requests        uint64 `json:"doh3_requests"`
-	DNSCryptRequests    uint64 `json:"dnscrypt_requests"`
 	RewriteRequests     uint64 `json:"rewrite_requests"`
 	HijackDetections    uint64 `json:"hijack_detections"`
 	DNSSECSecure        uint64 `json:"dnssec_secure"`
@@ -62,13 +61,12 @@ type logTotals struct {
 }
 
 type logProtocolCounts struct {
-	UDPRequests      uint64 `json:"udp_requests,omitempty"`
-	TCPRequests      uint64 `json:"tcp_requests,omitempty"`
-	DoTRequests      uint64 `json:"dot_requests,omitempty"`
-	DoQRequests      uint64 `json:"doq_requests,omitempty"`
-	DoHRequests      uint64 `json:"doh_requests,omitempty"`
-	DoH3Requests     uint64 `json:"doh3_requests,omitempty"`
-	DNSCryptRequests uint64 `json:"dnscrypt_requests,omitempty"`
+	UDPRequests  uint64 `json:"udp_requests,omitempty"`
+	TCPRequests  uint64 `json:"tcp_requests,omitempty"`
+	DoTRequests  uint64 `json:"dot_requests,omitempty"`
+	DoQRequests  uint64 `json:"doq_requests,omitempty"`
+	DoHRequests  uint64 `json:"doh_requests,omitempty"`
+	DoH3Requests uint64 `json:"doh3_requests,omitempty"`
 }
 
 type logEvents struct {
@@ -134,7 +132,6 @@ type Collector struct {
 	doqRequests         atomic.Uint64
 	dohRequests         atomic.Uint64
 	doh3Requests        atomic.Uint64
-	dnscryptRequests    atomic.Uint64
 	rewriteRequests     atomic.Uint64
 	hijackDetections    atomic.Uint64
 	dnssecSecure        atomic.Uint64
@@ -173,13 +170,12 @@ func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
 			LastResponseTimeMs:  snapshot.LastResponseTimeMs,
 		},
 		Protocols: logProtocolCounts{
-			UDPRequests:      snapshot.UDPRequests,
-			TCPRequests:      snapshot.TCPRequests,
-			DoTRequests:      snapshot.DoTRequests,
-			DoQRequests:      snapshot.DoQRequests,
-			DoHRequests:      snapshot.DoHRequests,
-			DoH3Requests:     snapshot.DoH3Requests,
-			DNSCryptRequests: snapshot.DNSCryptRequests,
+			UDPRequests:  snapshot.UDPRequests,
+			TCPRequests:  snapshot.TCPRequests,
+			DoTRequests:  snapshot.DoTRequests,
+			DoQRequests:  snapshot.DoQRequests,
+			DoHRequests:  snapshot.DoHRequests,
+			DoH3Requests: snapshot.DoH3Requests,
 		},
 		Events: logEvents{
 			HijackDetections: snapshot.HijackDetections,
@@ -308,7 +304,6 @@ func (sc *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadErr
 	case "DOH3":
 		sc.doh3Requests.Add(1)
 	case "DNSCRYPT":
-		sc.dnscryptRequests.Add(1)
 	default:
 		sc.udpRequests.Add(1)
 	}
@@ -377,7 +372,6 @@ func (sc *Collector) Snapshot() Snapshot {
 		DoQRequests:         sc.doqRequests.Load(),
 		DoHRequests:         sc.dohRequests.Load(),
 		DoH3Requests:        sc.doh3Requests.Load(),
-		DNSCryptRequests:    sc.dnscryptRequests.Load(),
 		RewriteRequests:     sc.rewriteRequests.Load(),
 		HijackDetections:    sc.hijackDetections.Load(),
 		DNSSECSecure:        sc.dnssecSecure.Load(),
@@ -414,7 +408,6 @@ func (sc *Collector) Reset() {
 	sc.doqRequests.Store(0)
 	sc.dohRequests.Store(0)
 	sc.doh3Requests.Store(0)
-	sc.dnscryptRequests.Store(0)
 	sc.rewriteRequests.Store(0)
 	sc.hijackDetections.Store(0)
 	sc.dnssecSecure.Store(0)
@@ -491,7 +484,6 @@ func (sc *Collector) LoadFromCacheEntry(entry *cache.CacheEntry) error {
 	sc.doqRequests.Store(snap.DoQRequests)
 	sc.dohRequests.Store(snap.DoHRequests)
 	sc.doh3Requests.Store(snap.DoH3Requests)
-	sc.dnscryptRequests.Store(snap.DNSCryptRequests)
 	sc.rewriteRequests.Store(snap.RewriteRequests)
 	sc.hijackDetections.Store(snap.HijackDetections)
 	sc.dnssecSecure.Store(snap.DNSSECSecure)

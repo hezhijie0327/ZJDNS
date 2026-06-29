@@ -15,7 +15,6 @@
 - **上游 DNS 转发**：多上游并发查询 + 首胜策略（First-Win），降低延迟
 - **混合模式**：可同时配置上游 DNS 和内置递归解析器（`builtin_recursive`）
 - **SOCKS5 代理**：每上游可选 SOCKS5 代理（TCP CONNECT + UDP ASSOCIATE），规避 DNS 屏蔽/劫持，所有协议 + 递归模式全覆盖
-- **DNSCrypt 上游**：支持 DNSCrypt v2 加密上游解析器（如 Quad9），独立端口 UDP+TCP 监听
 - **TCP/DoT/DoQ 连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生 stream 复用，连接失败回退单次连接
 - **CNAME 链解析**：多级 CNAME 追踪，防循环（最大 16 级）
 - **A/AAAA 延迟探测**：统一引擎 + 多协议（ping/tcp/udp/http/https/http3）速度检测，按最快顺序重排，去重缓存避免重复探测，UDP 支持任意端口通用检测
@@ -39,9 +38,7 @@
 | **DoQ** (DNS over QUIC)    | 853  | QUIC 协议，0-RTT |
 | **DoH** (DNS over HTTPS)   | 443  | HTTP/2 加密      |
 | **DoH3** (DNS over HTTP/3) | 443  | HTTP/3 加密      |
-| **DNSCrypt** (v2)           | 8443 | X25519+XSalsa20  |
 
-- **DNSCrypt 独立服务器**：原生 Go 实现，Ed25519 证书签发 + X25519 ECDH + XSalsa20-Poly1305 AEAD 加密
 - **内核 TLS 卸载 (KTLS)**：TCP TLS（DoT/DoH）支持 Linux 内核 TLS 卸载，零拷贝加解密，不支持时静默回退用户态。服务端 TX/RX 可通过 `server.tls.ktls.kernel_tx` / `kernel_rx` 独立控制
 - **统一证书管理**：自签名 ECDSA P-384 CA，动态签发
 - **DNS 填充 (RFC 7830)**：安全连接填充至 468 字节
@@ -101,7 +98,6 @@
 | [RFC 9250](https://www.rfc-editor.org/rfc/rfc9250.html) | DNS over QUIC (DoQ)                        | QUIC 加密传输                            |
 | [RFC 9461](https://www.rfc-editor.org/rfc/rfc9461.html) | SVCB/HTTPS RR for DNS                      | DDR SVCB 记录                            |
 | [RFC 9462](https://www.rfc-editor.org/rfc/rfc9462.html) | Discovery of Designated Resolvers          | DDR 自动发现                             |
-| [DNSCrypt](https://www.ietf.org/archive/id/draft-denis-dprive-dnscrypt-10.txt) | DNSCrypt Protocol Specification (v2) | X25519+XSalsa20 加密传输 |
 
 ---
 
