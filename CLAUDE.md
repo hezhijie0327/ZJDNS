@@ -12,6 +12,60 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 6. No sycophantic openers or closing fluff.
 7. Keep solutions simple and direct.
 8. User instructions always override this file.
+9. Commit incrementally — every batch of related changes should be committed
+   with a descriptive message to prevent data loss.
+
+## Coding Standards
+
+### Naming
+
+- **PascalCase for all exported types**: `KTLSSettings`, `TLSSettings`, `DNSCryptSettings`,
+  not `KTLSsettings`. Acronyms are all-caps (URL, IP, TLS, DNS, QUIC).
+- **Package-level functions over empty structs**: A type with no fields (e.g. `type Loader struct{}`)
+  should be eliminated — use package-level functions instead.
+
+### Performance (Hot Path)
+
+- **Use `log.NowUnix()` / `log.NowUnixNano()` instead of `time.Now()`** in hot paths
+  (cache TTL checks, DNSSEC RRSIG validation, last-access timestamps, cooldown maps).
+  The `TimeCache` updates once per second via `atomic.Value` — sufficient for TTL
+  expiry (second granularity) and ordering (eviction, cooldown). Use real `time.Now()`
+  only when sub-second precision is required (metrics timing, write deadlines, nonces).
+- **Avoid `fmt.Sprintf` on the query path**: use `strings.Builder` for map keys
+  (transport keys, cache keys), string concatenation for simple joins, `strconv.Itoa`
+  over `fmt.Sprint` for integers.
+- **Use `strconv.Itoa` not `fmt.Sprint` for int→string** conversion.
+- **Protocol string normalization**: `strings.ToUpper(strings.TrimSpace(protocol))` on every
+  query is wasteful. Use a byte-prefix switch — all protocol strings are well-known constants.
+- **Zero-allocation string trimming**: prefer sub-slicing (`s[:len(s)-1]`) over
+  `strings.TrimSuffix` when the suffix is a single known byte — it does not allocate.
+- **`slices.SortStableFunc` over `sort.SliceStable`**: the generics-based version avoids
+  reflect-based closure dispatch per comparison. Use the `cmp(a, b) int` signature.
+
+### Concurrency
+
+- **Channel close safety**: never `close(ch)` in a `defer` of a goroutine that shares
+  the channel with external callers. Close the channel inside the same `sync.Once`
+  that closes the underlying resource, so double-close is impossible.
+- **Hoist fixed-size allocations out of loops**: `make([]byte, 2)` in a connection
+  read loop allocates per frame — move it before the loop.
+
+### Constants
+
+- **No duplicate constants in the same package**: identical values (e.g. ML-KEM
+  ciphertext size 1088) defined in multiple files must be unified into a single
+  definition.
+- **All magic numbers must be named constants**: even "obvious" values like `64`
+  (DNSCrypt padding alignment) must have descriptive names.
+- **Leaf packages that cannot import `config`** (due to dependency graph) may use
+  local `const` blocks; all other numeric/timing defaults belong in
+  `config/defaults.go` with a `Default` prefix.
+
+### Build & ldflags
+
+- `version.go` vars (`CommitHash`, `BuildTime`) default to empty strings, not
+  `"dirty"` / `"dev"`. `getVersion()` gracefully omits them when unset, producing
+  `v2.0.0 (go1.26.0)` instead of `v2.0.0-dirty@dev (go1.26.0)`.
 
 ## Build & Development
 
@@ -78,9 +132,9 @@ kernel RX offload:
 }
 ```
 
-Both `kernel_tx` and `kernel_rx` default to `true` (when the ktls block is
-omitted). TX (encryption) is typically reliable; RX (decryption) is where
-the kernel bug manifests.
+Both `kernel_tx` and `kernel_rx` default to `false` (KTLS is opt-in).
+TX (encryption) is typically reliable; RX (decryption) is where the
+kernel bug manifests.
 
 ### Test Domains
 
@@ -296,7 +350,7 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 | Type | Package | Notes |
 |------|---------|-------|
 | `ServerConfig`, `ServerSettings` | `config` | Top-level config |
-| `config.Loader` | `config` | Config loader (LoadConfig) |
+| `config.LoadConfig` | `config` | Config loader (package-level function) |
 | `edns.Handler` | `edns` | EDNS option parsing/construction |
 | `cidr.Filter` | `cidr` | IP filtering (New, MatchIP) |
 | `rewrite.Evaluator` | `rewrite` | Domain rewrite (New, LoadRules, Evaluate) |
@@ -483,7 +537,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   connections per upstream. Multiple goroutines share connections via QUIC's
   native stream multiplexing — no capacity semaphore needed.
 - **Config self-sufficiency**: `config.ProjectName` and `config.Version` are
-  package-level vars set by `main.go` before calling `config.Loader.LoadConfig()`.
+  package-level vars set by `main.go` before calling `config.LoadConfig()`.
 - **DNSSEC chain-of-trust**: `CryptoValidator` embeds IANA root KSK trust anchors
   (key tags 20326 + 38696). The recursive resolver builds a cryptographic chain at
   each delegation step: queries parent zone for DNSKEY, verifies against trust
