@@ -35,7 +35,7 @@ type Server struct {
 	handler      DNSHandler
 	cfg          config.DNSCryptSettings
 	cert         *Certificate
-	certTXT      string
+	certBytes    []byte
 	providerName string
 
 	// xwingSK is the X-Wing private key for XWingPQ constructions.
@@ -114,7 +114,7 @@ func New(handler DNSHandler, dnsCfg config.DNSCryptSettings) (*Server, error) {
 		handler:      handler,
 		cfg:          dnsCfg,
 		cert:         cert,
-		certTXT:      cert.TXTString(),
+		certBytes:    cert.CertBytes(),
 		providerName: providerName,
 		udpSem:       make(chan struct{}, config.DefaultMinConcurrencyLimit),
 		tcpLimiter:   &perip.Limiter{},
@@ -472,6 +472,8 @@ func (s *Server) handleTCPConn(ctx context.Context, conn net.Conn) {
 
 // serveCertTXT answers a plain DNS TXT query for the provider's certificate.
 // Returns the packed DNS response, or nil if the packet is not a cert TXT query.
+// The certificate is stored as raw binary (like OpenDNS/Quad9), split into
+// 255-byte chunks per the DNS TXT character-string limit.
 func (s *Server) serveCertTXT(packet []byte) []byte {
 	req := pool.DefaultMessagePool.Get()
 	defer pool.DefaultMessagePool.Put(req)
@@ -489,18 +491,17 @@ func (s *Server) serveCertTXT(packet []byte) []byte {
 		return nil
 	}
 
-	log.Debugf("DNSCRYPT: serving cert TXT for %s", s.providerName)
+	log.Debugf("DNSCRYPT: serving cert TXT for %s (%d bytes)", s.providerName, len(s.certBytes))
 
-	// Split cert hex into 255-byte chunks (DNS TXT character-string limit).
+	// Split raw cert bytes into 255-byte chunks (DNS TXT character-string limit).
 	const txtChunkSize = 255
-	certHex := s.certTXT
 	var chunks []string
-	for i := 0; i < len(certHex); i += txtChunkSize {
+	for i := 0; i < len(s.certBytes); i += txtChunkSize {
 		end := i + txtChunkSize
-		if end > len(certHex) {
-			end = len(certHex)
+		if end > len(s.certBytes) {
+			end = len(s.certBytes)
 		}
-		chunks = append(chunks, certHex[i:end])
+		chunks = append(chunks, string(s.certBytes[i:end]))
 	}
 
 	resp := pool.DefaultMessagePool.Get()
@@ -560,7 +561,7 @@ func (s *Server) ProviderName() string {
 	return s.providerName
 }
 
-// CertTXT returns the hex-encoded certificate suitable for a DNS TXT record.
-func (s *Server) CertTXT() string {
-	return s.certTXT
+// CertBytes returns the raw certificate bytes suitable for a DNS TXT record.
+func (s *Server) CertBytes() []byte {
+	return s.certBytes
 }

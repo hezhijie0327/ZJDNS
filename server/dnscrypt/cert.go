@@ -331,19 +331,10 @@ func (c *Certificate) Deserialize(b []byte) error {
 	return nil
 }
 
-// TXTString returns the certificate as a hex-encoded TXT record value.
-func (c *Certificate) TXTString() string {
+// CertBytes returns the raw serialized certificate bytes for use in a
+// DNSCrypt TXT record.  Standard DNSCrypt implementations (OpenDNS, Quad9,
+// dnscrypt-proxy) store the certificate as raw binary, not hex-encoded.
+func (c *Certificate) CertBytes() []byte {
 	raw, _ := c.Serialize()
-	return packTXT(raw)
-}
-
-// packTXT encodes binary data as a DNSCrypt TXT record (hex without colons).
-func packTXT(data []byte) string {
-	const hexDigits = "0123456789abcdef"
-	buf := make([]byte, len(data)*2)
-	for i, b := range data {
-		buf[i*2] = hexDigits[b>>4]
-		buf[i*2+1] = hexDigits[b&0x0f]
-	}
-	return string(buf)
+	return raw
 }
