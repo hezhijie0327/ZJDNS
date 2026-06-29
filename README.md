@@ -139,6 +139,7 @@ zjdns/
 ├── stats/stats.go                   # 锁无关统计采集器 (27 个原子计数器)
 └── server/                          # 核心服务
     ├── server.go                    # Server 生命周期与启动
+    ├── server_tasks.go              # 后台任务、信号处理、关闭流程
     ├── handler.go + message.go       # DNS 查询处理管线
     ├── client/                      # 上游查询客户端 + 连接池
     │   ├── client.go                # Client 路由分发
@@ -153,10 +154,11 @@ zjdns/
     │   └── pool/                    # 连接池子包
     │       ├── tcp.go               # RFC 7766 TCP/DoT 流水线连接池
     │       └── quic.go               # QUIC 连接池
-    ├── resolver/                    # DNS 解析引擎 (6 文件)
+    ├── resolver/                    # DNS 解析引擎 (7 文件)
     │   ├── resolver.go              # 解析路由 (上游首胜 / 递归)
     │   ├── upstream.go              # 多上游并发首胜查询
-    │   ├── recursive.go             # 递归解析 (根→TLD→权威) + CNAME 链追踪
+    │   ├── recursive.go             # 递归解析核心 (resolve 循环 + CNAME 追踪)
+    │   ├── recursive_cache.go       # NS 地址延迟排序缓存 + 探测辅助
     │   ├── dnssec_chain.go          # DNSSEC 信任链构建 + 域切割检测
     │   ├── nameserver.go            # NS 并发查询与劫持检测
     ├── tls/                         # 安全传输监听器

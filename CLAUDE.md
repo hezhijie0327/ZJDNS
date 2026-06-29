@@ -247,7 +247,8 @@ zjdns/
 ├── rewrite/rewrite.go             # Rewrite Evaluator — domain rewrite rules
 ├── stats/stats.go                 # Lock-free atomic metrics Collector
 └── server/                        # Core server + sub-packages
-    ├── server.go                  # Server lifecycle, New(), Start(), shutdown
+    ├── server.go                  # Server lifecycle, New(), Start(), displayInfo()
+    ├── server_tasks.go            # Background tasks, signal handling, shutdown
     ├── handler.go                # Query pipeline, cache hit/miss, response builders
     ├── message.go                # EDNS response helpers, Cookie validation, buildResponse
     ├── client/                    # Outbound query execution + connection pools
@@ -267,7 +268,8 @@ zjdns/
     ├── resolver/                  # DNS resolution strategies
     │   ├── resolver.go            # Resolver struct, routing + helpers
     │   ├── upstream.go            # First-win concurrent upstream queries
-    │   ├── recursive.go           # Recursive root→TLD→auth walk + CNAME chain resolution
+    │   ├── recursive.go           # Recursive resolver core (resolve loop + CNAME chase)
+    │   ├── recursive_cache.go     # NS address latency-sorted cache + probe helpers
     │   ├── dnssec_chain.go        # DNSSEC trust chain + zone cut detection
     │   ├── nameserver.go          # Concurrent NS querying, suspicious response handling
     ├── security/                  # Security features (4 files)
@@ -488,9 +490,9 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `TLS` | All TLS + secure protocols | server/tls/*.go |
 | `CACHE` | Cache operations | cache/*.go, server/server.go |
 | `UPSTREAM` | Outbound upstream queries | server/client/{tcp,dot,doq,doh,doh3}.go, server/resolver/upstream.go |
-| `SERVER` | Server lifecycle | server/server.go, server/handler.go, main.go |
+| `SERVER` | Server lifecycle | server/server.go, server/server_tasks.go, server/handler.go, main.go |
 | `EDNS` | EDNS options | edns/*.go, server/server.go |
-| `RECURSION` | Recursive resolution | server/resolver/{recursive,dnssec_chain,nameserver}.go |
+| `RECURSION` | Recursive resolution | server/resolver/{recursive,recursive_cache,dnssec_chain,nameserver}.go |
 | `SECURITY` | DNSSEC, hijack detection | server/security/*.go, server/resolver/{dnssec_chain}.go |
 | `TCPPOOL` | TCP/DoT connection pool | server/client/pool/{tcp,quic}.go |
 | `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC` | One component each | respective files |
