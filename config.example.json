@@ -112,10 +112,6 @@
       "protocol": "http3",
       "server_name": "dns.alidns.com",
       "match": ["!mixed"]
-    },
-    {
-      "address": "builtin_recursive",
-      "protocol": ""
     }
   ],
   "fallback": [

@@ -209,34 +209,94 @@ func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 
 // Query resolves a DNS question by querying upstream servers, falling back to
 // recursive resolution if no upstream is configured.
+//
+// When both upstream and fallback servers are configured, they are queried
+// concurrently. The upstream result is preferred; if upstream fails, the
+// fallback result is immediately available without waiting for a sequential
+// retry. Fallback results are cacheable — the concurrent model ensures they
+// are fresh, not stale second-attempt data.
 func (r *Resolver) Query(ctx context.Context, question dns.Question, ecs *edns.ECSOption) *QueryResult {
 	servers := r.upstream.list()
 	fallbackServers := r.fallback.list()
 
-	if len(servers) > 0 {
+	// No servers configured — use built-in recursive resolver.
+	if len(servers) == 0 && len(fallbackServers) == 0 {
+		resolveCtx, cancel := context.WithTimeout(ctx, config.DefaultRecursiveResolveTimeout)
+		defer cancel()
+		a, au, ad, v, e, s, f, err := r.cname.resolve(resolveCtx, question, ecs)
+		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f, Err: err}
+	}
+
+	// Only one set of servers — query directly without coordination overhead.
+	if len(fallbackServers) == 0 {
 		a, au, ad, v, e, s, f, err := r.queryUpstream(ctx, question, ecs, servers)
 		if err == nil {
 			return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f}
 		}
-		if len(fallbackServers) > 0 {
-			log.Debugf("UPSTREAM: primary upstream failed, querying fallback servers")
-			a2, au2, ad2, v2, e2, s2, _, err2 := r.queryUpstream(ctx, question, ecs, fallbackServers)
-			if err2 == nil {
-				return &QueryResult{Answer: a2, Authority: au2, Additional: ad2, Validated: v2, ECS: e2, Server: s2, Fallback: true}
-			}
-		}
-		return &QueryResult{Err: err}
+		resolveCtx, cancel := context.WithTimeout(ctx, config.DefaultRecursiveResolveTimeout)
+		defer cancel()
+		a2, au2, ad2, v2, e2, s2, f2, err2 := r.cname.resolve(resolveCtx, question, ecs)
+		return &QueryResult{Answer: a2, Authority: au2, Additional: ad2, Validated: v2, ECS: e2, Server: s2, Fallback: f2, Err: err2}
 	}
 
-	if len(fallbackServers) > 0 {
+	if len(servers) == 0 {
 		a, au, ad, v, e, s, _, err := r.queryUpstream(ctx, question, ecs, fallbackServers)
 		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: true, Err: err}
 	}
 
-	resolveCtx, cancel := context.WithTimeout(ctx, config.DefaultRecursiveResolveTimeout)
-	defer cancel()
-	a, au, ad, v, e, s, f, err := r.cname.resolve(resolveCtx, question, ecs)
-	return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f, Err: err}
+	// Both upstream and fallback configured — query concurrently so the
+	// fallback answer is already ready if upstream fails.
+	type outcome struct {
+		answers    []dns.RR
+		authority  []dns.RR
+		additional []dns.RR
+		validated  bool
+		ecs        *edns.ECSOption
+		server     string
+		err        error
+	}
+
+	upstreamCh := make(chan outcome, 1)
+	fallbackCh := make(chan outcome, 1)
+	queryCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(errors.New("query completed"))
+
+	go func() {
+		a, au, ad, v, e, s, _, err := r.queryUpstream(queryCtx, question, ecs, servers)
+		select {
+		case upstreamCh <- outcome{a, au, ad, v, e, s, err}:
+		case <-queryCtx.Done():
+		}
+	}()
+
+	go func() {
+		a, au, ad, v, e, s, _, err := r.queryUpstream(queryCtx, question, ecs, fallbackServers)
+		select {
+		case fallbackCh <- outcome{a, au, ad, v, e, s, err}:
+		case <-queryCtx.Done():
+		}
+	}()
+
+	// Prefer upstream; if it fails, the concurrent fallback is already
+	// available (or nearly so) instead of starting a fresh sequential query.
+	select {
+	case up := <-upstreamCh:
+		if up.err == nil {
+			return &QueryResult{Answer: up.answers, Authority: up.authority, Additional: up.additional, Validated: up.validated, ECS: up.ecs, Server: up.server, Fallback: false}
+		}
+		log.Debugf("UPSTREAM: primary upstream failed for %s, waiting for concurrent fallback", question.Name)
+		select {
+		case fb := <-fallbackCh:
+			if fb.err == nil {
+				return &QueryResult{Answer: fb.answers, Authority: fb.authority, Additional: fb.additional, Validated: fb.validated, ECS: fb.ecs, Server: fb.server, Fallback: true}
+			}
+			return &QueryResult{Err: fb.err}
+		case <-ctx.Done():
+			return &QueryResult{Err: ctx.Err()}
+		}
+	case <-ctx.Done():
+		return &QueryResult{Err: ctx.Err()}
+	}
 }
 
 // ShuffleSlice returns a shuffled copy of the input slice using a modern

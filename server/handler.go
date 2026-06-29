@@ -426,7 +426,7 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 			if fallbackUsed != nil && res.fallback {
 				*fallbackUsed = true
 			}
-			return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs, res.fallback, clientIP, isSecureConnection, dnssecStatus)
+			return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs, clientIP, isSecureConnection, dnssecStatus)
 		}
 		if staleServed != nil {
 			*staleServed = true
@@ -445,7 +445,7 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 		go func() {
 			select {
 			case <-done:
-				if res.err != nil || res.fallback {
+				if res.err != nil {
 					return
 				}
 				log.Debugf("CACHE: background refresh completed for slow expired query %s", question.Name)
@@ -478,7 +478,7 @@ func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *e
 		return s.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, qr.Err, dnssecStatus)
 	}
 
-	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS, qr.Fallback, clientIP, isSecureConnection, dnssecStatus)
+	return s.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS, clientIP, isSecureConnection, dnssecStatus)
 }
 
 func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string) *dns.Msg {
@@ -546,7 +546,7 @@ func (s *Server) processCIDRRefused(req *dns.Msg, question dns.Question, ecsOpt 
 	return msg
 }
 
-func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, skipCache bool, clientIP net.IP, isSecureConnection bool, dnssecStatus *string) *dns.Msg {
+func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, clientIP net.IP, isSecureConnection bool, dnssecStatus *string) *dns.Msg {
 	msg := s.buildResponse(req)
 
 	// Determine DNSSEC status for stats
@@ -579,21 +579,17 @@ func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt
 		}
 	}
 
-	if !skipCache {
-		log.Debugf("CACHE: populating cache key=%s for %s", cacheKey, question.Name)
-		s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
-		if s.prober != nil {
-			s.prober.Start(question, cacheKey, answer, authority, additional, validated, responseECS)
-		}
-	} else {
-		log.Debugf("CACHE: fallback result, skipping cache population for %s", question.Name)
+	log.Debugf("CACHE: populating cache key=%s for %s", cacheKey, question.Name)
+	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
+	if s.prober != nil {
+		s.prober.Start(question, cacheKey, answer, authority, additional, validated, responseECS)
 	}
 
 	msg.Answer = cache.ProcessRecords(answer, 0, false, clientRequestedDNSSEC)
 	msg.Ns = cache.ProcessRecords(authority, 0, false, clientRequestedDNSSEC)
 	msg.Extra = cache.ProcessRecords(additional, 0, false, clientRequestedDNSSEC)
-	log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, authority=%d, additional=%d, validated=%t, skipCache=%t, ecs=%t", question.Name, dns.TypeToString[question.Qtype], len(answer), len(authority), len(additional), validated, skipCache, responseECS != nil)
-	log.Debugf("CACHE: served response for %s (skipCache=%t)", question.Name, skipCache)
+	log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, authority=%d, additional=%d, validated=%t, ecs=%t", question.Name, dns.TypeToString[question.Qtype], len(answer), len(authority), len(additional), validated, responseECS != nil)
+	log.Debugf("CACHE: served response for %s ", question.Name)
 
 	// When DNSSEC validation failed but enforcement is off (bogus + NOERROR),
 	// include an EDE hint so clients can detect the bogus response.
@@ -637,13 +633,9 @@ func (s *Server) refreshCacheEntry(ctx context.Context, question dns.Question, e
 		return qr.Err
 	}
 
-	if !qr.Fallback {
-		s.cacheMgr.Set(cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
-		if s.prober != nil {
-			s.prober.Start(question, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
-		}
-	} else {
-		log.Debugf("CACHE: refresh query used fallback for %s, skipping cache population", question.Name)
+	s.cacheMgr.Set(cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
+	if s.prober != nil {
+		s.prober.Start(question, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
 	}
 
 	return nil

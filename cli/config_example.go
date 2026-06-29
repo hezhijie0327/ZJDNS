@@ -49,7 +49,6 @@ func GenerateExampleConfig() string {
 		{Address: "223.6.6.6:853", Protocol: "quic", ServerName: "dns.alidns.com", SkipTLSVerify: true},
 		{Address: "https://223.5.5.5:443/dns-query", Protocol: "https", ServerName: "dns.alidns.com", Match: []string{"mixed"}},
 		{Address: "https://223.6.6.6:443/dns-query", Protocol: "http3", ServerName: "dns.alidns.com", Match: []string{"!mixed"}},
-		{Address: config.RecursiveIndicator},
 	}
 
 	cfg.Fallback = []config.UpstreamServer{

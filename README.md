@@ -12,7 +12,7 @@
 ### 🔧 DNS 解析核心
 
 - **递归 DNS 解析**：完整递归查询算法，从 13 组根服务器逐步解析至 TLD 和权威服务器
-- **上游 DNS 转发**：多上游并发查询 + 首胜策略（First-Win），降低延迟
+- **上游 DNS 转发**：主/备上游并发查询 + 首胜策略（First-Win），上游优先，失败时备路结果立即可用
 - **混合模式**：可同时配置上游 DNS 和内置递归解析器（`builtin_recursive`）
 - **SOCKS5 代理**：每上游可选 SOCKS5 代理（TCP CONNECT + UDP ASSOCIATE），规避 DNS 屏蔽/劫持，所有协议 + 递归模式全覆盖
 - **TCP/DoT/DoQ 连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生 stream 复用，连接失败回退单次连接

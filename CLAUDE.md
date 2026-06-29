@@ -302,9 +302,12 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 9. Populate cache, start latency probes, return response (with server cookie in EDNS)
 
 **Query routing** (`server/resolver/resolver.go:Resolver.Query`):
-- Upstream servers configured → concurrent first-win query; fallback on failure
-- No upstream → built-in recursive resolver (root→TLD→authoritative walk)
-- NXDOMAIN stored as secondary fallback; first NOERROR wins
+- Upstream + fallback servers queried concurrently via goroutines; upstream has priority
+- If upstream succeeds → return immediately (fallback cancelled / discarded)
+- If upstream fails → fallback result immediately available (no sequential retry delay)
+- Fallback results are cached like normal results (queried concurrently, not stale)
+- No servers configured → built-in recursive resolver (root→TLD→authoritative walk)
+- NXDOMAIN stored as secondary fallback within each query group; first NOERROR wins
 - CNAME chain exceeded → SERVFAIL (not partial results)
 
 **TCP/DoT pipelining** (`server/client/pool/tcp.go`, RFC 7766):
@@ -479,6 +482,13 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 - **Hijack detection during recursion**: Root/TLD servers returning unauthorized
   final answers trigger automatic UDP→TCP retry; if TCP also hijacked, returns
   REFUSED + EDE.
+- **Concurrent upstream + fallback**: When both `upstream` and `fallback` are
+  configured, `Query()` launches them concurrently via separate goroutines sharing
+  a cancellable context. Upstream result takes priority; if it fails, the fallback
+  result is immediately available — no sequential retry delay. Fallback results are
+  cached like normal results (they were queried concurrently, not stale
+  second-attempt data). Single-server-mode (only upstream or only fallback) skips
+  the extra goroutine to avoid coordination overhead.
 - **HandlePanic no longer calls `os.Exit(1)`** — a single connection panic
   terminates only that goroutine, not the entire server.
 - **DNS Cookie early validation (RFC 7873)**: Server cookies are validated in
