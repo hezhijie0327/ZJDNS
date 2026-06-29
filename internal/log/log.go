@@ -222,6 +222,16 @@ func (tc *TimeCache) Now() time.Time {
 	return tc.currentTime.Load().(time.Time)
 }
 
+// NowUnix returns the current cached Unix timestamp (seconds).
+func NowUnix() int64 {
+	return DefaultTimeCache.Now().Unix()
+}
+
+// NowUnixNano returns the current cached Unix timestamp (nanoseconds).
+func NowUnixNano() int64 {
+	return DefaultTimeCache.Now().UnixNano()
+}
+
 // Stop stops the time cache ticker and goroutine. It is safe to call multiple
 // times.
 func (tc *TimeCache) Stop() {

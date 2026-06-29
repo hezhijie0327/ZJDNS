@@ -9,13 +9,13 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/miekg/dns"
 
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 )
 
 const (
@@ -73,17 +73,17 @@ type LookupResult struct {
 
 // IsExpired reports whether the entry's TTL has elapsed.
 func (c *CacheEntry) IsExpired() bool {
-	return c != nil && time.Now().Unix()-c.Timestamp > int64(c.TTL)
+	return c != nil && log.NowUnix()-c.Timestamp > int64(c.TTL)
 }
 
 // ShouldRefresh reports whether the entry has passed both TTL and original TTL.
 func (c *CacheEntry) ShouldRefresh() bool {
-	return c != nil && c.IsExpired() && time.Now().Unix()-c.Timestamp > int64(max(c.OriginalTTL, c.TTL))
+	return c != nil && c.IsExpired() && log.NowUnix()-c.Timestamp > int64(max(c.OriginalTTL, c.TTL))
 }
 
 // CanServeExpired reports whether the expired entry is within the maxAge window.
 func (c *CacheEntry) CanServeExpired(maxAge int) bool {
-	return c != nil && c.IsExpired() && time.Now().Unix()-c.Timestamp-int64(c.TTL) <= int64(maxAge)
+	return c != nil && c.IsExpired() && log.NowUnix()-c.Timestamp-int64(c.TTL) <= int64(maxAge)
 }
 
 // GetRemainingTTL returns the remaining TTL, or DefaultStaleTTL if expired.
@@ -91,7 +91,7 @@ func (c *CacheEntry) GetRemainingTTL() uint32 {
 	if c == nil {
 		return 0
 	}
-	remaining := int64(c.TTL) - (time.Now().Unix() - c.Timestamp)
+	remaining := int64(c.TTL) - (log.NowUnix() - c.Timestamp)
 	if remaining > 0 {
 		return uint32(remaining)
 	}
@@ -118,7 +118,7 @@ func (c *CacheEntry) ShouldPrefetch(thresholdPercent int) bool {
 	if thresholdPercent > 100 {
 		thresholdPercent = 100
 	}
-	remaining := int64(c.TTL) - (time.Now().Unix() - c.Timestamp)
+	remaining := int64(c.TTL) - (log.NowUnix() - c.Timestamp)
 	if remaining <= 0 {
 		return false
 	}

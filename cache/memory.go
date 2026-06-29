@@ -117,7 +117,7 @@ func (mc *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
 		return nil, false, false
 	}
 
-	item.lastAccess.Store(time.Now().UnixNano())
+	item.lastAccess.Store(log.NowUnixNano())
 	entry := item.entry
 	mc.mu.RUnlock()
 
@@ -135,7 +135,7 @@ func (mc *MemoryCache) SetWithDNSSEC(key string, answer, authority, additional [
 	if atomic.LoadInt32(&mc.closed) != 0 {
 		return
 	}
-	now := time.Now().Unix()
+	now := log.NowUnix()
 	ttl := minTTL(answer, authority, additional)
 
 	entry := &CacheEntry{
@@ -185,7 +185,7 @@ func (mc *MemoryCache) setEntryInternal(key string, entry *CacheEntry) {
 		oldSize := existing.size
 		mc.removePTRLocked(key)
 		existing.entry = entry
-		existing.lastAccess.Store(time.Now().UnixNano())
+		existing.lastAccess.Store(log.NowUnixNano())
 		mc.storePTRLocked(key, ptrRecords)
 		existing.size = estSize
 		mc.currentSize += estSize - oldSize
@@ -195,7 +195,7 @@ func (mc *MemoryCache) setEntryInternal(key string, entry *CacheEntry) {
 	}
 
 	item := &cacheItem{entry: entry}
-	item.lastAccess.Store(time.Now().UnixNano())
+	item.lastAccess.Store(log.NowUnixNano())
 	mc.entries[key] = item
 	mc.storePTRLocked(key, ptrRecords)
 	item.size = estSize

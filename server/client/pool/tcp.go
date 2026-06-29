@@ -158,7 +158,6 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 
 func (pc *Conn) readLoop() {
 	defer dnsutil.HandlePanic("client reader")
-	defer close(pc.done)
 	defer pc.close()
 
 	lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
@@ -225,6 +224,7 @@ func (pc *Conn) readLoop() {
 func (pc *Conn) close() {
 	pc.closeOnce.Do(func() {
 		pc.closed.Store(true)
+		close(pc.done)
 		_ = pc.conn.Close()
 
 		pc.mu.Lock()

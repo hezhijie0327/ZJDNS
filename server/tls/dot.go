@@ -134,6 +134,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 	workerCap := make(chan struct{}, config.DefaultMaxPipe)
 
+	lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
 	firstFrame := true
 	for {
 		if connCtx.Err() != nil {
@@ -144,7 +145,6 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		// crypto/tls). After a successful handshake, kTLS may be negotiated.
 		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
 
-		lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
 			if err != io.EOF && !isTemporaryError(err) {

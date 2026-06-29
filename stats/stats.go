@@ -5,7 +5,6 @@ package stats
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -260,8 +259,26 @@ func (sc *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadErr
 	if durationMs == 0 {
 		durationMs = 1
 	}
-	protocol = strings.ToUpper(strings.TrimSpace(protocol))
-	if protocol == "" {
+	// Fast protocol normalization without allocation: all protocol strings
+	// are well-known constants; switch on first byte avoids ToUpper+TrimSpace.
+	switch {
+	case len(protocol) >= 3 && (protocol[0] == 'u' || protocol[0] == 'U') && (protocol[1] == 'd' || protocol[1] == 'D') && (protocol[2] == 'p' || protocol[2] == 'P'):
+		protocol = "UDP"
+	case len(protocol) >= 3 && (protocol[0] == 't' || protocol[0] == 'T') && (protocol[1] == 'c' || protocol[1] == 'C') && (protocol[2] == 'p' || protocol[2] == 'P'):
+		protocol = "TCP"
+	case len(protocol) >= 3 && (protocol[0] == 'd' || protocol[0] == 'D') && (protocol[1] == 'o' || protocol[1] == 'O') && (protocol[2] == 't' || protocol[2] == 'T'):
+		protocol = "DOT"
+	case len(protocol) >= 3 && (protocol[0] == 'd' || protocol[0] == 'D') && (protocol[1] == 'o' || protocol[1] == 'O') && (protocol[2] == 'q' || protocol[2] == 'Q'):
+		protocol = "DOQ"
+	case len(protocol) >= 3 && (protocol[0] == 'd' || protocol[0] == 'D') && (protocol[1] == 'o' || protocol[1] == 'O') && (protocol[2] == 'h' || protocol[2] == 'H'):
+		if len(protocol) >= 4 && (protocol[3] == '3') {
+			protocol = "DOH3"
+		} else {
+			protocol = "DOH"
+		}
+	case len(protocol) >= 8 && (protocol[0] == 'd' || protocol[0] == 'D') && (protocol[1] == 'n' || protocol[1] == 'N'):
+		protocol = "DNSCRYPT"
+	default:
 		protocol = "UDP"
 	}
 

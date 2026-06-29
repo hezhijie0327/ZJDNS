@@ -109,7 +109,7 @@ func (cv *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey 
 	}
 
 	// Check the RRSIG validity period manually (RFC 4034 §3.1.5)
-	now := uint32(time.Now().Unix())
+	now := uint32(log.NowUnix())
 	if rrsig.Inception > now || rrsig.Expiration < now {
 		return fmt.Errorf("%w: RRSIG outside validity period (inception=%s, expiration=%s)",
 			ErrBogusSignature, time.Unix(int64(rrsig.Inception), 0).UTC(), time.Unix(int64(rrsig.Expiration), 0).UTC())
@@ -663,7 +663,7 @@ func (cv *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 		ttl = config.DefaultDNSKeyCacheMinTTL
 	}
 
-	now := time.Now().Unix()
+	now := log.NowUnix()
 	entry := &cache.CacheEntry{
 		Timestamp:   now,
 		AccessTime:  now,

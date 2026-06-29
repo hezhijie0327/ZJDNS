@@ -76,7 +76,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			response := s.processDNSQuery(req, dnsutil.ClientIP(w), false, "TCP")
 			if response != nil {
 				response.Compress = true
-				entry.lastAccess.Store(time.Now().UnixNano())
+				entry.lastAccess.Store(log.NowUnixNano())
 				writeTimer := time.NewTimer(config.DefaultDNSQueryTimeout)
 				select {
 				case entry.writeMu <- struct{}{}:
@@ -350,7 +350,7 @@ func (s *Server) shouldStartPrefetch(cacheKey string) bool {
 		return false
 	}
 
-	now := time.Now().UnixNano()
+	now := log.NowUnixNano()
 	nextAllowed, ok := s.prefetchCooldown.Load(cacheKey)
 	if ok {
 		if nextTs, typeOK := nextAllowed.(int64); typeOK && now < nextTs {
