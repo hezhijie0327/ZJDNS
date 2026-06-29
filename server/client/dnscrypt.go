@@ -31,8 +31,7 @@ const (
 	dnscryptSessionTTL = 1 * time.Hour
 )
 
-// dnscryptSession holds a cached DNSCrypt session with pre-computed shared key
-// and a persistent UDP socket for stable SO_REUSEPORT routing.
+// dnscryptSession holds a cached DNSCrypt session with pre-computed shared key.
 type dnscryptSession struct {
 	esVersion       dnscrypt.CryptoConstruction
 	clientMagic     [8]byte
@@ -40,9 +39,8 @@ type dnscryptSession struct {
 	clientPk        [32]byte // X25519 public key (classic only)
 	serverPk        [32]byte // X25519 server public key (classic only)
 	sharedKey       [32]byte
-	xwingCiphertext [1120]byte // X-Wing ciphertext (PQ only, xwing.CiphertextSize)
+	xwingCiphertext [1120]byte // X-Wing ciphertext (PQ only)
 	cachedAt        time.Time
-	udpConn         *net.UDPConn // persistent UDP socket per upstream
 }
 
 // queryHeaderLen returns the wire header size for this session.
@@ -132,8 +130,7 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 	}
 	c.dnscryptResolverMu.Unlock()
 
-	// Deduplicate concurrent fetches: if another goroutine is already
-	// fetching this cert, wait for it and retry the cache lookup.
+	// Deduplicate concurrent fetches.
 	c.dnscryptResolverMu.Lock()
 	if wait, ok := c.dnscryptPending[cacheKey]; ok {
 		c.dnscryptResolverMu.Unlock()
@@ -142,7 +139,6 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		// Retry cache after the in-flight fetch completes.
 		c.dnscryptResolverMu.Lock()
 		entry, ok := c.dnscryptResolvers[cacheKey]
 		if ok && entry != nil && time.Since(entry.cachedAt) < dnscryptSessionTTL {
@@ -186,18 +182,15 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 	var clientPk, clientSk, serverPk [32]byte
 
 	if cert.ESVersion == dnscrypt.XWingPQ {
-		// X-Wing hybrid KEM: encapsulate against the server's X-Wing public key.
 		xwingPK := cert.XWingPublicKey()
 		ss, ct, err := xwing.Encapsulate(xwingPK, nil)
 		if err != nil {
 			return nil, fmt.Errorf("DNSCRYPT: xwing encapsulate: %w", err)
 		}
 		copy(xwingCT[:], ct)
-
 		certCtx := cert.CertContext()
 		sharedKey = dnscryptXWingDeriveSharedKey(cert.ESVersion, cert.ClientMagic[:], ss, ct, certCtx)
 	} else {
-		// Classic: generate ephemeral X25519 key pair.
 		clientPk, clientSk, err = dnscrypt.GenerateX25519KeyPair()
 		if err != nil {
 			return nil, fmt.Errorf("DNSCRYPT: generate key pair: %w", err)
@@ -223,9 +216,6 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 	c.dnscryptResolverMu.Lock()
 	if len(c.dnscryptResolvers) >= config.DefaultTransportMax {
 		for k := range c.dnscryptResolvers {
-			if entry := c.dnscryptResolvers[k]; entry != nil && entry.session != nil && entry.session.udpConn != nil {
-				_ = entry.session.udpConn.Close()
-			}
 			delete(c.dnscryptResolvers, k)
 			break
 		}
@@ -241,8 +231,7 @@ func (c *Client) getDNSCryptSession(ctx context.Context, serverAddr, certAddr, p
 }
 
 // dnscryptXWingDeriveSharedKey derives the per-query symmetric key from an
-// X-Wing shared secret. This mirrors dnscrypt.deriveSharedKeyXWing; it is
-// duplicated here because the client package cannot import internal packages.
+// X-Wing shared secret.
 func dnscryptXWingDeriveSharedKey(esVersion dnscrypt.CryptoConstruction, clientMagic, xwingSS, xwingCT, certCtx []byte) [32]byte {
 	salt := make([]byte, 2+len(clientMagic))
 	binary.BigEndian.PutUint16(salt[:2], uint16(esVersion))
@@ -260,61 +249,8 @@ func dnscryptXWingDeriveSharedKey(esVersion dnscrypt.CryptoConstruction, clientM
 	return key
 }
 
-// fetchCertViaUDP sends a cert TXT query over UDP and returns the raw
-// response bytes.
-func fetchCertViaUDP(serverAddr string, query []byte) ([]byte, error) {
-	conn, err := net.DialTimeout("udp", serverAddr, config.DefaultDNSQueryTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("UDP dial: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-	_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-	if _, err := conn.Write(query); err != nil {
-		return nil, fmt.Errorf("UDP write: %w", err)
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-	buf := make([]byte, pool.SecureBufferSize)
-	n, err := conn.Read(buf)
-	if err != nil {
-		return nil, fmt.Errorf("UDP read: %w", err)
-	}
-	return buf[:n], nil
-}
-
-// fetchCertViaTCP sends a cert TXT query over TCP (2-byte length prefix)
-// and returns the raw response bytes.  Used as fallback when UDP cert
-// queries get routed to the wrong SO_REUSEPORT socket (e.g. DoH3).
-func fetchCertViaTCP(serverAddr string, query []byte) ([]byte, error) {
-	conn, err := net.DialTimeout("tcp", serverAddr, config.DefaultDNSQueryTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("TCP dial: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-	_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-	if err := binary.Write(conn, binary.BigEndian, uint16(len(query))); err != nil {
-		return nil, fmt.Errorf("TCP write length: %w", err)
-	}
-	if _, err := conn.Write(query); err != nil {
-		return nil, fmt.Errorf("TCP write: %w", err)
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-	var respLen uint16
-	if err := binary.Read(conn, binary.BigEndian, &respLen); err != nil {
-		return nil, fmt.Errorf("TCP read length: %w", err)
-	}
-	if respLen == 0 || int(respLen) > pool.SecureBufferSize {
-		return nil, fmt.Errorf("TCP invalid response length: %d", respLen)
-	}
-	buf := make([]byte, respLen)
-	if _, err := io.ReadFull(conn, buf); err != nil {
-		return nil, fmt.Errorf("TCP read: %w", err)
-	}
-	return buf, nil
-}
-
 // fetchCert fetches and verifies the DNSCrypt server certificate via a plain
-// DNS TXT query.  Uses raw wire parsing to avoid miekg's TXT string conversion
-// which corrupts binary certificate data.
+// DNS TXT query using standard dns.Client (UDP with automatic TCP fallback).
 func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK ed25519.PublicKey) (*dnscrypt.Certificate, error) {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(providerName), dns.TypeTXT)
@@ -322,79 +258,81 @@ func fetchCert(ctx context.Context, serverAddr, providerName string, providerPK 
 
 	log.Debugf("DNSCRYPT: fetching cert for %s from %s", providerName, serverAddr)
 
-	// Try UDP first, fall back to TCP.  On port-shared servers
-	// (SO_REUSEPORT with DoH3), UDP cert queries may be routed to
-	// the QUIC socket and dropped — TCP avoids this because the
-	// DNSCrypt TCP handler does protocol detection.
-	query, _ := msg.Pack()
-	certBytes, err := fetchCertViaUDP(serverAddr, query)
+	client := dns.Client{Net: "udp"}
+	resp, _, err := client.ExchangeContext(ctx, msg, serverAddr)
 	if err != nil {
-		log.Debugf("DNSCRYPT: UDP cert fetch from %s failed: %v, trying TCP", serverAddr, err)
-		certBytes, err = fetchCertViaTCP(serverAddr, query)
+		return nil, fmt.Errorf("cert TXT query: %w", err)
+	}
+	if resp.Rcode != dns.RcodeSuccess {
+		return nil, fmt.Errorf("cert TXT query returned %s", dns.RcodeToString[resp.Rcode])
+	}
+
+	// Collect TXT records.  Multiple TXT answers may be present (different
+	// certificates); pick the first valid one.
+	for _, rr := range resp.Answer {
+		txt, ok := rr.(*dns.TXT)
+		if !ok || len(txt.Txt) == 0 {
+			continue
+		}
+
+		certRawBytes := parseCertTXT(txt.Txt)
+		if len(certRawBytes) == 0 {
+			continue
+		}
+
+		cert := &dnscrypt.Certificate{}
+		if err := cert.Deserialize(certRawBytes); err != nil {
+			log.Debugf("DNSCRYPT: deserialize cert (%d bytes): %v", len(certRawBytes), err)
+			continue
+		}
+		if !cert.VerifyDate() {
+			log.Debugf("DNSCRYPT: cert expired or not yet valid")
+			continue
+		}
+		if !cert.VerifySignature(providerPK) {
+			log.Debugf("DNSCRYPT: cert signature verification failed")
+			continue
+		}
+		return cert, nil
+	}
+
+	return nil, fmt.Errorf("no valid cert TXT record at %s", providerName)
+}
+
+// parseCertTXT extracts raw certificate bytes from miekg TXT strings.
+// Handles both hex-encoded (legacy) and raw binary (standard) formats.
+func parseCertTXT(txt []string) []byte {
+	raw := strings.Join(txt, "")
+	if isHex(raw) {
+		b, err := hex.DecodeString(raw)
 		if err != nil {
-			return nil, fmt.Errorf("cert query (UDP+TCP): %w", err)
+			return nil
 		}
+		return b
 	}
-
-	// Parse raw DNS response to extract TXT record bytes directly.
-	resp := new(dns.Msg)
-	if err := resp.Unpack(certBytes); err != nil {
-		return nil, fmt.Errorf("cert query unpack: %w", err)
+	// Raw binary — miekg stores TXT in \DDD presentation format.
+	var buf []byte
+	for _, s := range txt {
+		buf = append(buf, unescapeTXT(s)...)
 	}
-	if len(resp.Answer) == 0 {
-		return nil, fmt.Errorf("no cert TXT record at %s", providerName)
-	}
-	txt, ok := resp.Answer[0].(*dns.TXT)
-	if !ok || len(txt.Txt) == 0 {
-		return nil, fmt.Errorf("invalid cert TXT response")
-	}
-
-	// Extract raw cert bytes, handling both hex and raw binary.
-	// Concatenate all TXT segments before decoding.
-	// miekg/dns stores TXT strings in presentation format with \DDD
-	// escape sequences for non-printable bytes.
-	certRaw := strings.Join(txt.Txt, "")
-
-	var certRawBytes []byte
-	if isHex(certRaw) {
-		certRawBytes, err = hex.DecodeString(certRaw)
-		if err != nil {
-			return nil, fmt.Errorf("decode cert hex: %w", err)
-		}
-	} else {
-		// Raw binary — unescape \DDD presentation format.
-		for _, s := range txt.Txt {
-			certRawBytes = append(certRawBytes, unescapeTXT(s)...)
-		}
-	}
-
-	cert := &dnscrypt.Certificate{}
-	if err := cert.Deserialize(certRawBytes); err != nil {
-		return nil, fmt.Errorf("deserialize cert (%d bytes): %w", len(certRawBytes), err)
-	}
-	if !cert.VerifyDate() {
-		return nil, fmt.Errorf("cert expired or not yet valid")
-	}
-	if !cert.VerifySignature(providerPK) {
-		return nil, fmt.Errorf("cert signature verification failed")
-	}
-
-	return cert, nil
+	return buf
 }
 
 // exchangeDNSCryptUDP encrypts a query, sends it over UDP, and decrypts the
-// response.  Uses a persistent UDP socket per session so the 5-tuple
-// (and thus SO_REUSEPORT routing) is stable across queries.
+// response.  Each query uses a fresh UDP connection (matching the approach
+// of dnscrypt-proxy and AdGuardTeam/dnscrypt).
 func (c *Client) exchangeDNSCryptUDP(ctx context.Context, msg *dns.Msg, session *dnscryptSession, serverAddr string) (*dns.Msg, error) {
-	encrypted, nonce, err := encryptQuery(msg, session, session.esVersion)
+	encrypted, _, err := encryptQuery(msg, session, session.esVersion)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := c.getDNSCryptUDPConn(session, serverAddr)
+	dialer := &net.Dialer{Timeout: config.DefaultDNSQueryTimeout}
+	conn, err := dialer.DialContext(ctx, "udp", serverAddr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dial UDP: %w", err)
 	}
+	defer func() { _ = conn.Close() }()
 
 	_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
 	if _, err := conn.Write(encrypted); err != nil {
@@ -408,43 +346,24 @@ func (c *Client) exchangeDNSCryptUDP(ctx context.Context, msg *dns.Msg, session 
 		return nil, fmt.Errorf("read: %w", err)
 	}
 
-	return decryptResponse(buf[:n], &session.sharedKey, nonce, session.esVersion)
+	return decryptResponse(buf[:n], &session.sharedKey, session.esVersion)
 }
 
-// getDNSCryptUDPConn returns the persistent UDP socket for this session,
-// creating one lazily on first use.
-func (c *Client) getDNSCryptUDPConn(session *dnscryptSession, serverAddr string) (*net.UDPConn, error) {
-	if session.udpConn != nil {
-		return session.udpConn, nil
-	}
-	addr, err := net.ResolveUDPAddr("udp", serverAddr)
-	if err != nil {
-		return nil, fmt.Errorf("resolve UDP addr: %w", err)
-	}
-	conn, err := net.DialUDP("udp", nil, addr)
-	if err != nil {
-		return nil, fmt.Errorf("dial UDP: %w", err)
-	}
-	session.udpConn = conn
-	return conn, nil
-}
-
-// exchangeDNSCryptTCP encrypts a query, sends it over TCP (with 2-byte length
-// prefix), and decrypts the response.
+// exchangeDNSCryptTCP encrypts a query, sends it over TCP, and decrypts the response.
 func (c *Client) exchangeDNSCryptTCP(ctx context.Context, msg *dns.Msg, session *dnscryptSession, serverAddr string) (*dns.Msg, error) {
-	encrypted, nonce, err := encryptQuery(msg, session, session.esVersion)
+	encrypted, _, err := encryptQuery(msg, session, session.esVersion)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := net.DialTimeout("tcp", serverAddr, config.DefaultDNSQueryTimeout)
+	dialer := &net.Dialer{Timeout: config.DefaultDNSQueryTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", serverAddr)
 	if err != nil {
 		return nil, fmt.Errorf("dial TCP: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-	// TCP: prepend 2-byte length prefix.
 	if err := binary.Write(conn, binary.BigEndian, uint16(len(encrypted))); err != nil {
 		return nil, fmt.Errorf("write length: %w", err)
 	}
@@ -465,7 +384,7 @@ func (c *Client) exchangeDNSCryptTCP(ctx context.Context, msg *dns.Msg, session 
 		return nil, fmt.Errorf("read: %w", err)
 	}
 
-	return decryptResponse(buf, &session.sharedKey, nonce, session.esVersion)
+	return decryptResponse(buf, &session.sharedKey, session.esVersion)
 }
 
 // encryptQuery builds an encrypted DNSCrypt query packet.
@@ -489,12 +408,10 @@ func encryptQuery(msg *dns.Msg, session *dnscryptSession, esVersion dnscrypt.Cry
 	encrypted := make([]byte, 0, hdrLen+len(padded)+16)
 
 	if esVersion == dnscrypt.XWingPQ {
-		// X-Wing wire format: magic(8) || xwing_ct(1120) || nonce(12) || encrypted
 		encrypted = append(encrypted, session.clientMagic[:]...)
 		encrypted = append(encrypted, session.xwingCiphertext[:]...)
 		encrypted = append(encrypted, nonce[:12]...)
 	} else {
-		// Classic wire format: magic(8) || clientPk(32) || nonce(12) || encrypted
 		encrypted = append(encrypted, session.clientMagic[:]...)
 		encrypted = append(encrypted, session.clientPk[:]...)
 		encrypted = append(encrypted, nonce[:12]...)
@@ -515,8 +432,7 @@ func encryptQuery(msg *dns.Msg, session *dnscryptSession, esVersion dnscrypt.Cry
 }
 
 // decryptResponse decrypts a DNSCrypt response packet.
-func decryptResponse(packet []byte, sharedKey *[32]byte, queryNonce *[24]byte, esVersion dnscrypt.CryptoConstruction) (*dns.Msg, error) {
-	// Response format: resolverMagic(8) + nonce(24) + encrypted
+func decryptResponse(packet []byte, sharedKey *[32]byte, esVersion dnscrypt.CryptoConstruction) (*dns.Msg, error) {
 	const respHeaderLen = 8 + 24
 	if len(packet) < respHeaderLen+16+dnscrypt.MinDNSPacketSize {
 		return nil, fmt.Errorf("DNSCRYPT: response too short")
