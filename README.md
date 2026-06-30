@@ -38,10 +38,12 @@
 | **DoQ** (DNS over QUIC)    | 853  | QUIC 协议，0-RTT |
 | **DoH** (DNS over HTTPS)   | 443  | HTTP/2 加密      |
 | **DoH3** (DNS over HTTP/3) | 443  | HTTP/3 加密      |
+| **DNSCrypt** (DNS Encryption) | 8443 | DNSCrypt v2 加密 |
 
 - **内核 TLS 卸载 (KTLS)**：TCP TLS（DoT/DoH）支持 Linux 内核 TLS 卸载，零拷贝加解密，不支持时静默回退用户态。服务端 TX/RX 可通过 `server.tls.ktls.kernel_tx` / `kernel_rx` 独立控制
 - **统一证书管理**：自签名 ECDSA P-384 CA，动态签发
 - **DNS 填充 (RFC 7830)**：安全连接填充至 468 字节
+- **DNSCrypt v2**：`github.com/AdguardTeam/dnscrypt`，支持 XSalsa20-Poly1305 / XChacha20-Poly1305，UDP + TCP 双通道，Ed25519 证书签名，密钥可配置或自动生成（`-generate-dnscrypt-keys` 预生成）
 - **DDR 自动发现 (RFC 9461/9462)**：SVCB 记录自动生成
 
 ### 💾 缓存系统
@@ -69,7 +71,7 @@
 
 ### 📊 统计与监控
 
-- 请求计数器（按协议：UDP、TCP、DoT、DoQ、DoH、DoH3）
+- 请求计数器（按协议：UDP、TCP、DoT、DoQ、DoH、DoH3、DNSCrypt）
 - 缓存命中率、重写次数、劫持检测、过期响应、预取次数
 - JSON 日志输出 + 定期重置（`log_level` 可配：error/warn/info/debug）
 - **pprof**：`http://127.0.0.1:6060/debug/pprof/`
@@ -98,6 +100,7 @@
 | [RFC 9250](https://www.rfc-editor.org/rfc/rfc9250.html) | DNS over QUIC (DoQ)                        | QUIC 加密传输                            |
 | [RFC 9461](https://www.rfc-editor.org/rfc/rfc9461.html) | SVCB/HTTPS RR for DNS                      | DDR SVCB 记录                            |
 | [RFC 9462](https://www.rfc-editor.org/rfc/rfc9462.html) | Discovery of Designated Resolvers          | DDR 自动发现                             |
+| [DNSCrypt](https://dnscrypt.info/protocol)               | DNSCrypt v2 Protocol                       | DNSCrypt 加密传输                        |
 
 ---
 
@@ -123,6 +126,7 @@ zjdns/
     ├── client/                    # Outbound query client (UDP, TCP, DoT, DoQ, DoH, DoH3, SOCKS5)
     │   └── pool/                  # TCP/DoT/QUIC connection pools
     ├── resolver/                  # Recursive + upstream DNS resolution
+    ├── dnscrypt/                  # DNSCrypt v2 server wrapper (AdGuardTeam/dnscrypt)
     ├── security/                  # DNSSEC + hijack detection
     ├── tls/                       # Secure transport listeners (DoT, DoQ, DoH, DoH3)
     └── latency/                   # Client-facing latency probe adapter
@@ -143,7 +147,8 @@ zjdns/
 ```bash
 ./zjdns -config config.json   # 指定配置
 ./zjdns                        # 默认配置（纯递归 + 内存缓存）
-./zjdns -version               # 版本信息
+./zjdns -version                              # 版本信息
+./zjdns -generate-dnscrypt-keys example.com    # 生成 DNSCrypt 密钥对
 ```
 
 ### 测试解析
@@ -154,6 +159,7 @@ dig @127.0.0.1 -p 53 example.com +tcp          # TCP
 kdig @127.0.0.1 -p 853 example.com +tls        # DoT
 kdig @127.0.0.1 -p 853 example.com +quic       # DoQ
 kdig @127.0.0.1 -p 443 example.com +https      # DoH
+# DNSCrypt 需要使用 dnscrypt-proxy 或兼容客户端
 ```
 
 ### DNSSEC 验证

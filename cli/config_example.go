@@ -21,6 +21,11 @@ func GenerateExampleConfig() string {
 
 	cfg.Server.TLS.KTLS = &config.KTLSSettings{KernelTX: true}
 
+	cfg.Server.DNSCrypt = config.DNSCryptSettings{
+		Port:         config.DefaultDNSCryptPort,
+		ProviderName: "example.com",
+	}
+
 	cfg.Server.Features.Cache.Size = config.DefaultCacheSize
 	cfg.Server.Features.Cache.Persist = config.CachePersistenceSettings{
 		File:     "cache.snapshot",
@@ -49,6 +54,7 @@ func GenerateExampleConfig() string {
 		{Address: "223.6.6.6:853", Protocol: "quic", ServerName: "dns.alidns.com", SkipTLSVerify: true},
 		{Address: "https://223.5.5.5:443/dns-query", Protocol: "https", ServerName: "dns.alidns.com", Match: []string{"mixed"}},
 		{Address: "https://223.6.6.6:443/dns-query", Protocol: "http3", ServerName: "dns.alidns.com", Match: []string{"!mixed"}},
+		{Address: "9.9.9.9:8443", Protocol: "dnscrypt", DNSCryptPublicKey: "PUBLICKEYHEX", DNSCryptProviderName: "2.dnscrypt-cert.example.com"},
 	}
 
 	cfg.Fallback = []config.UpstreamServer{

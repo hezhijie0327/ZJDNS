@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AdguardTeam/dnscrypt"
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 
@@ -68,6 +69,11 @@ type Client struct {
 	proxyDialers map[string]*Socks5Dialer
 	proxyMu      sync.Mutex
 
+	// DNSCrypt clients and session cache.
+	dnscryptUDPClient *dnscrypt.Client
+	dnscryptTCPClient *dnscrypt.Client
+	dnscryptSessions  sync.Map // map[string]*dnscryptSession
+
 	// KTLS offload settings — defaults to false (off). Set via SetKTLS() from
 	// the server config before use.
 	ktlsTX bool
@@ -113,14 +119,16 @@ func New() *Client {
 		doh3Client: &http.Client{
 			Timeout: config.DefaultDNSQueryTimeout,
 		},
-		dohTransports:  make(map[string]*http.Client),
-		doh3Transports: make(map[string]*http.Client),
-		quicConfigs:    make(map[string]*quic.Config),
-		quicPool:       connpool.NewQUICPool(config.DefaultMaxConns),
-		SessionCache:   eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
-		tcpPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		dotPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		proxyDialers:   make(map[string]*Socks5Dialer),
+		dohTransports:     make(map[string]*http.Client),
+		doh3Transports:    make(map[string]*http.Client),
+		quicConfigs:       make(map[string]*quic.Config),
+		quicPool:          connpool.NewQUICPool(config.DefaultMaxConns),
+		SessionCache:      eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
+		tcpPool:           connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		dotPool:           connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		proxyDialers:      make(map[string]*Socks5Dialer),
+		dnscryptUDPClient: dnscrypt.NewClient(&dnscrypt.ClientConfig{Proto: dnscrypt.ProtoUDP, UDPSize: pool.UDPBufferSize}),
+		dnscryptTCPClient: dnscrypt.NewClient(&dnscrypt.ClientConfig{Proto: dnscrypt.ProtoTCP}),
 	}
 	return c
 }
@@ -294,6 +302,8 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		return c.executeDoH(ctx, msg, server, c.eTLSClientConfig(server))
 	case config.ProtoDOH3, config.ProtoHTTP3:
 		return c.executeDoH3(ctx, msg, server, c.stdTLSConfig(server))
+	case config.ProtoDNSCrypt:
+		return c.executeDNSCrypt(ctx, msg, server, protocol)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}
@@ -356,4 +366,7 @@ func (c *Client) Close() {
 	}
 	c.proxyDialers = nil
 	c.proxyMu.Unlock()
+
+	// Clean up DNSCrypt sessions
+	c.cleanupDNSCryptSessions()
 }

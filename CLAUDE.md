@@ -69,8 +69,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   query throttling. The server should accept all queries unconditionally.
 - **No per-IP connection limiting**: Do not add MaxConnsPerIP or any per-address
   connection counters. All listeners accept unlimited connections.
-- **No DNSCrypt**: DNSCrypt v2 has been removed. Do not reintroduce it. Do not
-  add the `github.com/AdguardTeam/dnscrypt` or any other DNSCrypt dependency.
 
 ### Build & ldflags
 
@@ -250,6 +248,9 @@ zjdns/
     │   ├── recursive_cache.go     # NS address latency-sorted cache + probe helpers
     │   ├── dnssec_chain.go        # DNSSEC trust chain + zone cut detection
     │   ├── nameserver.go          # Concurrent NS querying, suspicious response handling
+    ├── dnscrypt/                   # DNSCrypt v2 server (using AdGuardTeam/dnscrypt)
+    │   ├── server.go              # Server wrapper: UDP+TCP instances, key gen, lifecycle
+    │   └── handler.go             # Handler adapter: dnscrypt.Handler → DNSHandler bridge
     ├── security/                  # Security features (4 files)
     │   ├── security.go            # Guard (bundles RecordPresence + CryptoValidator + Detector)
     │   ├── dnssec.go              # DNSSEC record-presence validation (upstream AD check)
@@ -268,11 +269,12 @@ zjdns/
 
 ```
 main ──→ server, config
-server ──→ cache, cidr, config, edns, dnsutil, log, pool, rewrite, latency(server), resolver, security, stats
-client ──→ config, edns, dnsutil, log, pool, pool (in client), go-extension/tls
+server ──→ cache, cidr, config, dnscrypt(server), edns, dnsutil, log, pool, rewrite, latency(server), resolver, security, stats
+client ──→ config, edns, dnsutil, log, pool, pool (in client), go-extension/tls, github.com/AdguardTeam/dnscrypt
 resolver ──→ config, edns, client, security, dnsutil, latency(server), log, pool
 security ──→ dnsutil, log
 tls (in server) ──→ config, dnsutil, log, pool, connpool (client/pool), go-extension/tls
+dnscrypt (in server) ──→ config, dnsutil, log, github.com/AdguardTeam/dnscrypt
 cache ──→ config, edns, dnsutil, log
 edns ──→ dnsutil, ipdetect, log, pool
 cidr ──→ config, dnsutil, log
@@ -335,9 +337,10 @@ cancel remaining on first success. Adaptive concurrency limits based on server c
 | `stats.Collector` | `stats` | Lock-free metrics (RecordRequest, Snapshot) |
 | `Server` | `server` | Core server (New, Start) |
 | `Server` | `server/tls` | TLS listener server (DoT, DoQ, DoH, DoH3) |
+| `Server` | `server/dnscrypt` | DNSCrypt v2 server wrapper (New, Start, Shutdown, GenerateKeys) |
 | `Prober` | `internal/latency` | Unified latency probe engine (generic sorter, HTTP pool) |
 | `Prober` | `server/latency` | Thin adapter: cache reordering, SortIPsByLatency, InitInfraProber |
-| `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3, SOCKS5 proxy) |
+| `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3, DNSCrypt, SOCKS5 proxy) |
 | `Socks5Dialer` | `server/client` | SOCKS5 proxy dialer (RFC 1928 TCP CONNECT + UDP ASSOCIATE, RFC 1929 auth, SafeURL) |
 | `Conn` | `server/client/pool` | Multiplexed TCP/DoT connection (RFC 7766) |
 | `Pool` | `server/client/pool` | TCP/DoT connection pool |
@@ -380,6 +383,7 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 | `config.DefaultInfraProbeTimeout` | config | 5s (infrastructure-level root/NS latency probe timeout) |
 | `config.DefaultCACertValidity` | config | 45 days (CA self-signed cert lifetime) |
 | `config.DefaultServerCertValidity` | config | 45 days (server self-signed cert lifetime) |
+| `config.DefaultDNSCryptCertValidity` | config | 24h (DNSCrypt resolver certificate lifetime) |
 | `config.DefaultCertExpiryWarnDays` | config | 14 (certificate expiry warning threshold, days) |
 | `config.DefaultPrefetchThrottleInterval` | config | 3s (prefetch cooldown) |
 | `config.DefaultAcceptRetryDelay` | config | 100ms (DoT/DoQ accept retry sleep) |
@@ -414,7 +418,7 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 | `config.DoHContentType` | config | "application/dns-message" (RFC 8484) |
 | `config.ProtoUDP` / `TCP` / `TLS` | config | "udp" / "tcp" / "tls" |
 | `config.ProtoQUIC` / `HTTP` / `HTTP3` | config | "quic" / "https" / "http3" |
-| `config.ProtoDOT` / `DOQ` / `DOH` / `DOH3` | config | "dot" / "doq" / "doh" / "doh3" (user config aliases) |
+| `config.ProtoDOT` / `DOQ` / `DOH` / `DOH3` / `DNSCrypt` | config | "dot" / "doq" / "doh" / "doh3" / "dnscrypt" (user config aliases) |
 | `config.ProtoTLSTCP` | config | "tcp-tls" (dns.Client.Net for TLS-wrapped TCP) |
 | `config.NextProtoDOT` | config | []string{"dot"} (ALPN for DoT, RFC 7858) |
 | `config.NextProtoDOH` | config | []string{"h2"} (ALPN for DoH, RFC 8484) |
@@ -458,6 +462,7 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `EDNS` | EDNS options | edns/*.go, server/server.go |
 | `RECURSION` | Recursive resolution | server/resolver/{recursive,recursive_cache,dnssec_chain,nameserver}.go |
 | `SECURITY` | DNSSEC, hijack detection | server/security/*.go, server/resolver/{dnssec_chain}.go |
+| `DNSCRYPT` | DNSCrypt v2 server | server/dnscrypt/*.go |
 | `TCPPOOL` | TCP/DoT connection pool | server/client/pool/{tcp,quic}.go |
 | `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC` | One component each | respective files |
 
@@ -584,3 +589,13 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 - **CHAOS TXT records**: `version.server`/`version.bind` expose the full version
   from `getVersion()`. `id.server`/`hostname.bind` use `os.Hostname()` with
   `ProjectName` fallback.
+- **DNSCrypt v2** (`server/dnscrypt/`): Wraps the `github.com/AdguardTeam/dnscrypt`
+  library. Two `dnscrypt.Server` instances (UDP + TCP) share a single
+  `ResolverCert` and `ProviderName`. A handler adapter bridges the library's
+  `dnscrypt.Handler` interface to the internal `DNSHandler`. Keys are configured
+  via `server.dnscrypt` JSON config (hex-encoded Ed25519 + X25519); when left
+  empty, they are auto-generated and logged prominently—copy them into config to
+  persist across restarts. Use `-generate-dnscrypt-keys <name>` to pre-generate.
+  The `isSecure` flag is `false` for DNSCrypt queries: EDNS padding is skipped
+  because DNSCrypt pads at the encryption layer. Client-side session caching
+  maps `(address|provider|publicKey)` → `*ResolverInfo` for cert exchange reuse.

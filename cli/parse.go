@@ -11,24 +11,33 @@ import (
 // caller should exit (true after running a special command).
 func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfter bool) {
 	var (
-		configFileFlag string
-		generateConfig bool
-		showVersion    bool
+		configFileFlag       string
+		generateConfig       bool
+		showVersion          bool
+		generateDNSCryptKeys string
+		dnscryptCertTTL      int
+		dnscryptESVersion    int
 	)
 
 	fs := flag.NewFlagSet(osArgs[0], flag.ContinueOnError)
 	fs.StringVar(&configFileFlag, "config", "", "Configuration file path (JSON format)")
 	fs.BoolVar(&generateConfig, "generate-config", false, "Generate example configuration file")
 	fs.BoolVar(&showVersion, "version", false, "Show version information and exit")
+	fs.StringVar(&generateDNSCryptKeys, "generate-dnscrypt-keys", "", "Generate DNSCrypt key pair for the given provider name")
+	fs.IntVar(&dnscryptCertTTL, "dnscrypt-cert-ttl", 0, "DNSCrypt certificate TTL in seconds (default: 86400)")
+	fs.IntVar(&dnscryptESVersion, "dnscrypt-es-version", 0, "DNSCrypt crypto construction (1=XSalsa20Poly1305, 2=XChacha20Poly1305)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "ZJDNS Server - High Performance DNS Server\n\n")
 		fmt.Fprintf(os.Stderr, "Version: %s\n\n", versionStr)
 		fmt.Fprintf(os.Stderr, "Usage:\n")
-		fmt.Fprintf(os.Stderr, "  %s -config <config file>     # Start with config file\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s -generate-config          # Generate example config\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s -version                  # Show version information\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s                            # Start with default config\n\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s -config <config file>              # Start with config file\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s -generate-config                   # Generate example config\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s -generate-dnscrypt-keys <name>     # Generate DNSCrypt key pair\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "        -dnscrypt-cert-ttl <seconds>    #   Optional: certificate TTL\n")
+		fmt.Fprintf(os.Stderr, "        -dnscrypt-es-version <1|2>      #   Optional: crypto construction\n")
+		fmt.Fprintf(os.Stderr, "  %s -version                           # Show version information\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s                                     # Start with default config\n\n", fs.Name())
 	}
 
 	// Check for help flags before parsing, since custom FlagSet does not
@@ -52,6 +61,11 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 
 	if generateConfig {
 		fmt.Println(GenerateExampleConfig())
+		return "", true
+	}
+
+	if generateDNSCryptKeys != "" {
+		fmt.Println(GenerateDNSCryptKeys(generateDNSCryptKeys, dnscryptCertTTL, dnscryptESVersion))
 		return "", true
 	}
 

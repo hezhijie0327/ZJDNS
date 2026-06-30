@@ -229,6 +229,12 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
+	if s.dnscrypt != nil {
+		if err := s.dnscrypt.Shutdown(); err != nil {
+			log.Errorf("DNSCRYPT: DNSCrypt server shutdown failed: %v", err)
+		}
+	}
+
 	// Close pooled connections and transports to release file descriptors
 	// and goroutines before waiting for background tasks.
 	if s.queryClient != nil {

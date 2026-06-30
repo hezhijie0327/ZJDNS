@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -26,6 +27,7 @@ import (
 	"zjdns/internal/pool"
 	"zjdns/rewrite"
 	"zjdns/server/client"
+	serverdnscrypt "zjdns/server/dnscrypt"
 	"zjdns/server/latency"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
@@ -45,6 +47,7 @@ type Server struct {
 	queryClient       *client.Client
 	guard             *security.Guard
 	tls               *servertls.Server
+	dnscrypt          *serverdnscrypt.Server
 	ednsMgr           *edns.Handler
 	rewriteMgr        *rewrite.Evaluator
 	cidrMgr           *cidr.Filter
@@ -155,6 +158,28 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			return nil, fmt.Errorf("TLS server init: %w", err)
 		}
 		server.tls = tlsSrv
+	}
+
+	if cfg.Server.DNSCrypt.Port != "" {
+		dnscryptCfg := serverdnscrypt.Config{
+			Port:         cfg.Server.DNSCrypt.Port,
+			ProviderName: cfg.Server.DNSCrypt.ProviderName,
+			PrivateKey:   cfg.Server.DNSCrypt.PrivateKey,
+			PublicKey:    cfg.Server.DNSCrypt.PublicKey,
+			ResolverSk:   cfg.Server.DNSCrypt.ResolverSk,
+			ResolverPk:   cfg.Server.DNSCrypt.ResolverPk,
+			ESVersion:    cfg.Server.DNSCrypt.ESVersion,
+		}
+		if cfg.Server.DNSCrypt.CertTTL > 0 {
+			dnscryptCfg.CertTTL = time.Duration(cfg.Server.DNSCrypt.CertTTL) * time.Second
+		}
+
+		dnscryptSrv, err := serverdnscrypt.New(server, dnscryptCfg)
+		if err != nil {
+			cancel(fmt.Errorf("DNSCrypt server init: %w", err))
+			return nil, fmt.Errorf("DNSCrypt server init: %w", err)
+		}
+		server.dnscrypt = dnscryptSrv
 	}
 
 	queryClient := client.New()
@@ -297,6 +322,18 @@ func (s *Server) Start() error {
 		})
 	}
 
+	if s.dnscrypt != nil {
+		g.Go(func() error {
+			defer dnsutil.HandlePanic("DNSCrypt server")
+			err := s.dnscrypt.Start()
+			if err != nil {
+				return fmt.Errorf("DNSCrypt startup: %w", err)
+			}
+			<-ctx.Done()
+			return nil
+		})
+	}
+
 	go func() {
 		defer dnsutil.HandlePanic("Server coordinator")
 		if err := g.Wait(); err != nil {
@@ -377,6 +414,10 @@ func (s *Server) displayInfo() {
 				log.Infof("TLS: kTLS unavailable (load with: modprobe tls)")
 			}
 		}
+	}
+
+	if s.dnscrypt != nil {
+		log.Infof("DNSCRYPT: Listening on port: %s (DNSCrypt)", s.config.Server.DNSCrypt.Port)
 	}
 
 	if s.rewriteMgr.HasRules() {

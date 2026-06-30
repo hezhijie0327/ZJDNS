@@ -4,12 +4,13 @@ import "time"
 
 // Network ports and paths.
 const (
-	DefaultDNSPort   = "53"
-	DefaultDOTPort   = "853"
-	DefaultDOHPort   = "443"
-	DefaultPprofPort = "6060"
-	DefaultQueryPath = "/dns-query"
-	DefaultPprofPath = "/debug/pprof/"
+	DefaultDNSPort      = "53"
+	DefaultDOTPort      = "853"
+	DefaultDOHPort      = "443"
+	DefaultDNSCryptPort = "8443"
+	DefaultPprofPort    = "6060"
+	DefaultQueryPath    = "/dns-query"
+	DefaultPprofPath    = "/debug/pprof/"
 )
 
 // Cache sizing, TTL, and serve-stale parameters.
@@ -52,9 +53,10 @@ const (
 
 // Security parameters: certificates, DNSSEC, keys, and access control.
 const (
-	DefaultCACertValidity     = 45 * 24 * time.Hour // CA self-signed certificate lifetime
-	DefaultServerCertValidity = 45 * 24 * time.Hour // Server certificate lifetime
-	DefaultCertExpiryWarnDays = 14                  // Days before expiry to emit warning
+	DefaultCACertValidity       = 45 * 24 * time.Hour // CA self-signed certificate lifetime
+	DefaultServerCertValidity   = 45 * 24 * time.Hour // Server certificate lifetime
+	DefaultDNSCryptCertValidity = 24 * time.Hour      // DNSCrypt resolver certificate lifetime
+	DefaultCertExpiryWarnDays   = 14                  // Days before expiry to emit warning
 
 	DefaultCookieSecretRotationInterval = 30 * time.Minute
 	DefaultECSRefreshInterval           = 15 * time.Minute
@@ -162,11 +164,12 @@ const (
 	ProtoHTTPPlain = "http"
 
 	// User-facing protocol aliases (map to config file values).
-	ProtoDOT    = "dot"     // DoT user config alias
-	ProtoDOQ    = "doq"     // DoQ user config alias
-	ProtoDOH    = "doh"     // DoH user config alias
-	ProtoDOH3   = "doh3"    // DoH3 user config alias
-	ProtoTLSTCP = "tcp-tls" // dns.Client.Net for TLS-wrapped TCP
+	ProtoDOT      = "dot"      // DoT user config alias
+	ProtoDOQ      = "doq"      // DoQ user config alias
+	ProtoDOH      = "doh"      // DoH user config alias
+	ProtoDOH3     = "doh3"     // DoH3 user config alias
+	ProtoDNSCrypt = "dnscrypt" // DNSCrypt v2 user config alias
+	ProtoTLSTCP   = "tcp-tls"  // dns.Client.Net for TLS-wrapped TCP
 )
 
 // ALPN protocol identifiers for secure DNS transports.

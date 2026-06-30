@@ -31,11 +31,12 @@ type ServerConfig struct {
 
 // ServerSettings contains the server runtime settings and feature flags.
 type ServerSettings struct {
-	Port     string       `json:"port"`
-	Pprof    string       `json:"pprof"`
-	LogLevel string       `json:"log_level"`
-	TLS      TLSSettings  `json:"tls"`
-	Features FeatureFlags `json:"features"`
+	Port     string           `json:"port"`
+	Pprof    string           `json:"pprof"`
+	LogLevel string           `json:"log_level"`
+	TLS      TLSSettings      `json:"tls"`
+	DNSCrypt DNSCryptSettings `json:"dnscrypt,omitempty"`
+	Features FeatureFlags     `json:"features"`
 
 	MaxConcurrent int `json:"max_concurrent,omitempty"`
 }
@@ -60,6 +61,20 @@ type HTTPSSettings struct {
 type KTLSSettings struct {
 	KernelTX bool `json:"kernel_tx"` // kernel TLS TX offload (default false)
 	KernelRX bool `json:"kernel_rx"` // kernel TLS RX offload (default false)
+}
+
+// DNSCryptSettings configures the DNSCrypt v2 server listener.
+// If PrivateKey is empty, keys are auto-generated at startup and logged —
+// copy the logged keys into the config to keep them stable across restarts.
+type DNSCryptSettings struct {
+	Port         string `json:"port"`
+	ProviderName string `json:"provider_name"`
+	PrivateKey   string `json:"private_key,omitempty"` // Ed25519 private key (hex-encoded)
+	PublicKey    string `json:"public_key,omitempty"`  // Ed25519 public key (hex-encoded)
+	ResolverSk   string `json:"resolver_sk,omitempty"` // Short-term X25519 secret key (hex-encoded)
+	ResolverPk   string `json:"resolver_pk,omitempty"` // Short-term X25519 public key (hex-encoded)
+	CertTTL      int    `json:"cert_ttl,omitempty"`    // Certificate TTL in seconds
+	ESVersion    int    `json:"es_version,omitempty"`  // 1=XSalsa20Poly1305, 2=XChacha20Poly1305
 }
 
 // FeatureFlags enables optional features: hijack protection, DDR, ECS, cache,
@@ -104,12 +119,15 @@ type StatsSettings struct {
 // UpstreamServer defines a single upstream DNS server with address, protocol,
 // and optional matching.
 type UpstreamServer struct {
-	Address       string   `json:"address"`
-	Protocol      string   `json:"protocol"`
-	ServerName    string   `json:"server_name,omitempty"`
-	SkipTLSVerify bool     `json:"skip_tls_verify,omitempty"`
-	Match         []string `json:"match,omitempty"`
-	Proxy         string   `json:"proxy,omitempty"` // socks5://[user:pass@]host:port
+	Address              string   `json:"address"`
+	Protocol             string   `json:"protocol"`
+	ServerName           string   `json:"server_name,omitempty"`
+	SkipTLSVerify        bool     `json:"skip_tls_verify,omitempty"`
+	Match                []string `json:"match,omitempty"`
+	Proxy                string   `json:"proxy,omitempty"`                  // socks5://[user:pass@]host:port
+	DNSCryptPublicKey    string   `json:"dnscrypt_public_key,omitempty"`    // hex-encoded Ed25519 public key
+	DNSCryptProviderName string   `json:"dnscrypt_provider_name,omitempty"` // DNSCrypt provider name (e.g. "2.dnscrypt-cert.example.com")
+	CertFetchAddress     string   `json:"cert_fetch_address,omitempty"`     // separate address for cert TXT queries
 }
 
 // RewriteRule defines a DNS rewrite rule with synthetic response, client
@@ -339,6 +357,7 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 		validProtocols := map[string]bool{
 			"udp": true, "tcp": true, "tls": true,
 			"quic": true, "https": true, "http3": true,
+			"dnscrypt": true,
 		}
 		if server.Protocol != "" && !validProtocols[strings.ToLower(server.Protocol)] {
 			return fmt.Errorf("upstream server %d protocol invalid: %s", i, server.Protocol)
@@ -346,7 +365,18 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 
 		protocol := strings.ToLower(server.Protocol)
 		if dnsutil.IsSecureProtocol(protocol) && server.ServerName == "" {
-			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
+			if protocol != ProtoDNSCrypt {
+				return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
+			}
+		}
+
+		if protocol == ProtoDNSCrypt {
+			if server.DNSCryptPublicKey == "" {
+				return fmt.Errorf("upstream server %d using dnscrypt requires dnscrypt_public_key", i)
+			}
+			if server.DNSCryptProviderName == "" {
+				return fmt.Errorf("upstream server %d using dnscrypt requires dnscrypt_provider_name", i)
+			}
 		}
 
 		if server.Proxy != "" {
@@ -420,6 +450,11 @@ func validatePorts(cfg *ServerConfig) error {
 			}
 		}
 	}
+	if cfg.Server.DNSCrypt.Port != "" {
+		if err := validatePort("server.dnscrypt.port", cfg.Server.DNSCrypt.Port); err != nil {
+			return err
+		}
+	}
 	// Detect port conflicts: DNS port must not overlap with TLS/HTTPS/pprof.
 	seen := map[string]string{cfg.Server.Port: "server.port"}
 	if cfg.Server.Pprof != "" {
@@ -442,6 +477,13 @@ func validatePorts(cfg *ServerConfig) error {
 				cfg.Server.TLS.HTTPS.Port, first, cfg.Server.TLS.HTTPS.Port, cfg.Server.TLS.HTTPS.Port)
 		}
 		seen[cfg.Server.TLS.HTTPS.Port] = "server.tls.https.port"
+	}
+	if cfg.Server.DNSCrypt.Port != "" {
+		if first, ok := seen[cfg.Server.DNSCrypt.Port]; ok {
+			return fmt.Errorf("port conflict: server.dnscrypt.port=%s and %s=%s both use port %s",
+				cfg.Server.DNSCrypt.Port, first, cfg.Server.DNSCrypt.Port, cfg.Server.DNSCrypt.Port)
+		}
+		seen[cfg.Server.DNSCrypt.Port] = "server.dnscrypt.port"
 	}
 	return nil
 }
