@@ -123,28 +123,6 @@ Key points:
 
 Start server: `./zjdns -config config.debug.json`
 
-### KTLS Tuning
-
-If you see `"local error: tls: bad record MAC"` in logs (kernel TLS offload
-corrupting record decryption on certain kernel/NIC combinations), disable
-kernel RX offload:
-
-```json
-{
-  "server": {
-    "tls": {
-      "ktls": {
-        "kernel_rx": false
-      }
-    }
-  }
-}
-```
-
-Both `kernel_tx` and `kernel_rx` default to `false` (KTLS is opt-in).
-TX (encryption) is typically reliable; RX (decryption) is where the
-kernel bug manifests.
-
 ### Test Domains
 
 **Should trigger hijack detection + TCP fallback (blocked by GFW):**
@@ -270,11 +248,10 @@ zjdns/
 ```
 main ──→ server, config
 server ──→ cache, cidr, config, dnscrypt(server), edns, dnsutil, log, pool, rewrite, latency(server), resolver, security, stats
-client ──→ config, edns, dnsutil, log, pool, pool (in client), go-extension/tls, github.com/AdguardTeam/dnscrypt
+client ──→ config, edns, dnsutil, log, pool, pool (in client), github.com/AdguardTeam/dnscrypt
 resolver ──→ config, edns, client, security, dnsutil, latency(server), log, pool
 security ──→ dnsutil, log
-tls (in server) ──→ config, dnsutil, log, pool, connpool (client/pool), go-extension/tls
-dnscrypt (in server) ──→ config, dnsutil, log, github.com/AdguardTeam/dnscrypt
+server ──→ dnsproxy, dnscrypt
 cache ──→ config, edns, dnsutil, log
 edns ──→ dnsutil, ipdetect, log, pool
 cidr ──→ config, dnsutil, log
@@ -336,16 +313,9 @@ cancel remaining on first success. Adaptive concurrency limits based on server c
 | `cache.Store` | `cache` | Store interface (Get, Set, SetWithDNSSEC, SetEntry, ReverseLookup, Close) |
 | `stats.Collector` | `stats` | Lock-free metrics (RecordRequest, Snapshot) |
 | `Server` | `server` | Core server (New, Start) |
-| `Server` | `server/tls` | TLS listener server (DoT, DoQ, DoH, DoH3) |
-| `Server` | `server/dnscrypt` | DNSCrypt v2 server wrapper (New, Start, Shutdown, GenerateKeys) |
 | `Prober` | `internal/latency` | Unified latency probe engine (generic sorter, HTTP pool) |
 | `Prober` | `server/latency` | Thin adapter: cache reordering, SortIPsByLatency, InitInfraProber |
-| `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3, DNSCrypt, SOCKS5 proxy) |
-| `Socks5Dialer` | `server/client` | SOCKS5 proxy dialer (RFC 1928 TCP CONNECT + UDP ASSOCIATE, RFC 1929 auth, SafeURL) |
-| `Conn` | `server/client/pool` | Multiplexed TCP/DoT connection (RFC 7766) |
-| `Pool` | `server/client/pool` | TCP/DoT connection pool |
-| `QUICPool` | `server/client/pool` | QUIC connection pool |
-| `QUICConn` | `server/client/pool` | Wrapped QUIC connection |
+| `Client` | `server/client` | Outbound DNS client (UDP, TCP, DoT, DoQ, DoH, DoH3, DNSCrypt) |
 | `Resolver` | `server/resolver` | DNS resolution (upstream + recursive) |
 | `Recursive` | `server/resolver` | Built-in recursive resolver |
 | `Guard` | `server/security` | DNSSEC + hijack detection |
@@ -424,8 +394,6 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 | `config.NextProtoDOH` | config | []string{"h2"} (ALPN for DoH, RFC 8484) |
 | `config.NextProtoDOQ` | config | []string{"doq"} (ALPN for DoQ, RFC 9250) |
 | `config.NextProtoDOH3` | config | []string{"h3"} (ALPN for DoH3) |
-| `config.DefaultProxyScheme` | config | "socks5" (SOCKS5 proxy scheme) |
-| `config.DefaultProxyPort` | config | "1080" (SOCKS5 proxy default port) |
 | `config.DefaultProbePortDNS` | config | 53 (latency probe DNS port) |
 | `config.DefaultProbePortHTTP` | config | 80 (latency probe HTTP port) |
 | `config.DefaultProbePortHTTPS` | config | 443 (latency probe HTTPS port) |
@@ -463,7 +431,6 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 | `RECURSION` | Recursive resolution | server/resolver/{recursive,recursive_cache,dnssec_chain,nameserver}.go |
 | `SECURITY` | DNSSEC, hijack detection | server/security/*.go, server/resolver/{dnssec_chain}.go |
 | `DNSCRYPT` | DNSCrypt v2 server | server/dnscrypt/*.go |
-| `TCPPOOL` | TCP/DoT connection pool | server/client/pool/{tcp,quic}.go |
 | `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC` | One component each | respective files |
 
 **Rules**: Prefix matches logical component, not Go package. No `HIJACK:`/`DNSSEC:` (merged→`SECURITY:`), no `DOT:`/`DOQ:`/`DOH:` (merged→`TLS:`). Hot-path logs are `Debug` only — `Warn`/`Info` on the query path would spam at scale.
@@ -512,9 +479,6 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
   `MessagePool`. Server processes TCP queries concurrently via async handler
   dispatch (plain TCP) or three-stage reader→worker→writer pipeline (DoT).
   Falls back to single-shot `ExchangeContext` when pipelining is not supported.
-- **DoQ connection pool** (`server/client/pool/quic.go`): Pools up to 4 QUIC
-  connections per upstream. Multiple goroutines share connections via QUIC's
-  native stream multiplexing — no capacity semaphore needed.
 - **Config self-sufficiency**: `config.ProjectName` and `config.Version` are
   package-level vars set by `main.go` before calling `config.LoadConfig()`.
 - **DNSSEC chain-of-trust**: `CryptoValidator` embeds IANA root KSK trust anchors
@@ -574,28 +538,15 @@ All logs use the project-level `log` package (`zjdns/internal/log`). Default lev
 - **Protocol identifier constants**: `config.ProtoUDP`, `ProtoTCP`, etc. replace
   all hardcoded protocol strings. Transport alias constants (`ProtoDOT`, `ProtoDOQ`,
   `ProtoDOH`, `ProtoDOH3`, `ProtoTLSTCP`) cover user-facing config values.
-- **Kernel TLS (KTLS) offload**: Client and server TCP-based TLS use
-  `gitlab.com/go-extension/tls` (import alias `eTLS`) with `KernelTX`/`KernelRX`.
-  Dual configs from same cert — eTLS for TCP, crypto/tls for QUIC. Silent fallback
-  on non-Linux. Server-side KTLS is configurable via `server.tls.ktls.kernel_tx`
-  and `kernel_rx` (both default `true`); set `kernel_rx: false` to work around
-  kernel/NIC combos that produce `"local error: tls: bad record MAC"`.
-- **SOCKS5 proxy support** (`server/client/socks5.go`): Per-upstream optional SOCKS5
-  proxy routes all outbound DNS queries. TCP CONNECT for streams, UDP ASSOCIATE for
-  datagrams. `SafeURL()` redacts password in logs. `socks5ReadBufPool` avoids 64 KB
-  per-connection heap allocation.
 - **Stats cache key convention**: `config.StatsPersistKey = "stats:"` follows the
   project-wide `prefix:` key format (matching `dns:`, `dnskey:`).
 - **CHAOS TXT records**: `version.server`/`version.bind` expose the full version
   from `getVersion()`. `id.server`/`hostname.bind` use `os.Hostname()` with
   `ProjectName` fallback.
-- **DNSCrypt v2** (`server/dnscrypt/`): Wraps the `github.com/AdguardTeam/dnscrypt`
-  library. Two `dnscrypt.Server` instances (UDP + TCP) share a single
-  `ResolverCert` and `ProviderName`. A handler adapter bridges the library's
-  `dnscrypt.Handler` interface to the internal `DNSHandler`. Keys are configured
-  via `server.dnscrypt` JSON config (hex-encoded Ed25519 + X25519); when left
-  empty, they are auto-generated and logged prominently—copy them into config to
-  persist across restarts. Use `-generate-dnscrypt-keys <name>` to pre-generate.
-  The `isSecure` flag is `false` for DNSCrypt queries: EDNS padding is skipped
-  because DNSCrypt pads at the encryption layer. Client-side session caching
-  maps `(address|provider|publicKey)` → `*ResolverInfo` for cert exchange reuse.
+- **All transport protocols via dnsproxy**: The `github.com/AdguardTeam/dnsproxy`
+  library handles all DNS listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, DNSCrypt) and
+  outbound upstream connections. Our `Server` implements `proxy.Handler` as the
+  middleware chain (rewrite → cookie → cache → security → CIDR), falling through
+  to dnsproxy's default resolution. Upstreams are configured via `upstream.AddressToUpstream()`.
+  Recursive resolver implements `upstream.Upstream` for `builtin_recursive` support.
+  `server/dnsproxy_config.go` maps our config to `proxy.Config`.

@@ -14,8 +14,7 @@
 - **递归 DNS 解析**：完整递归查询算法，从 13 组根服务器逐步解析至 TLD 和权威服务器
 - **上游 DNS 转发**：主/备上游并发查询 + 首胜策略（First-Win），上游优先，失败时备路结果立即可用
 - **混合模式**：可同时配置上游 DNS 和内置递归解析器（`builtin_recursive`）
-- **SOCKS5 代理**：每上游可选 SOCKS5 代理（TCP CONNECT + UDP ASSOCIATE），规避 DNS 屏蔽/劫持，所有协议 + 递归模式全覆盖
-- **TCP/DoT/DoQ 连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生 stream 复用，连接失败回退单次连接
+- **传输层基于 dnsproxy**：所有监听 + 出站连接由 `github.com/AdguardTeam/dnsproxy` 统一管理
 - **CNAME 链解析**：多级 CNAME 追踪，防循环（最大 16 级）
 - **A/AAAA 延迟探测**：统一引擎 + 多协议（ping/tcp/udp/http/https/http3）速度检测，按最快顺序重排，去重缓存避免重复探测，UDP 支持任意端口通用检测
 - **DNS 重写**：精确域名匹配 + 客户端 IP 过滤 + 自定义响应码
@@ -40,8 +39,7 @@
 | **DoH3** (DNS over HTTP/3) | 443  | HTTP/3 加密      |
 | **DNSCrypt** (DNS Encryption) | 8443 | DNSCrypt v2 加密 |
 
-- **内核 TLS 卸载 (KTLS)**：TCP TLS（DoT/DoH）支持 Linux 内核 TLS 卸载，零拷贝加解密，不支持时静默回退用户态。服务端 TX/RX 可通过 `server.tls.ktls.kernel_tx` / `kernel_rx` 独立控制
-- **统一证书管理**：自签名 ECDSA P-384 CA，动态签发
+- **统一证书管理**：自签名 ECDSA P-384 或外部证书，标准 `crypto/tls`
 - **DNS 填充 (RFC 7830)**：安全连接填充至 468 字节
 - **DNSCrypt v2**：`github.com/AdguardTeam/dnscrypt`，支持 XSalsa20-Poly1305 / XChacha20-Poly1305，UDP + TCP 双通道，Ed25519 证书签名，密钥可配置或自动生成（`-generate-dnscrypt-keys` 预生成）
 - **DDR 自动发现 (RFC 9461/9462)**：SVCB 记录自动生成
