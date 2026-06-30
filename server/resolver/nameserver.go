@@ -91,12 +91,13 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 						}
 					}
 
-					// Don't cancel other goroutines — let them
-					// all complete so hijackRejected is fully
-					// settled before the caller reads it.
-					// This eliminates the race between first-win
-					// resultChan delivery and concurrent hijack
-					// detection.
+					// Send to resultChan and cancel the
+					// parent context so queued goroutines
+					// exit before starting work.  Running
+					// goroutines past their initial Done
+					// check continue — their hijack
+					// validation is captured by the
+					// settle timer below.
 					select {
 					case resultChan <- result.Response:
 						cancel()
@@ -165,15 +166,20 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 	}
 
 	// Let in-flight goroutines settle before reading hijackRejected.
-	// cancel() already fired — queued goroutines exit via ctx.Done.
-	// Running goroutines past the Done check need a brief window to
-	// complete their hijack check (GFW injection arrives 1-2 ms
-	// behind legitimate responses).
+	// cancel() may have fired via the resultChan path, stopping queued
+	// goroutines from starting.  Running goroutines past their initial
+	// Done check continue to completion — the hijack check needs a
+	// brief window to catch GFW-injected responses that arrive 1-2 ms
+	// behind legitimate ones.
+	//
+	// Use ctx (parent) instead of queryCtx so the settle window is
+	// always honoured — queryCtx is cancelled by the first clean
+	// response and would short-circuit the hijack detection window.
 	hijackTimer := time.NewTimer(config.DefaultHijackSettleTimeout)
 	defer hijackTimer.Stop()
 	select {
 	case <-hijackTimer.C:
-	case <-queryCtx.Done():
+	case <-ctx.Done():
 	}
 
 	verdict := security.VerdictClean
