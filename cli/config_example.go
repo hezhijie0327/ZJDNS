@@ -19,8 +19,6 @@ func GenerateExampleConfig() string {
 	cfg.Server.TLS.CertFile = "/path/to/cert.pem"
 	cfg.Server.TLS.KeyFile = "/path/to/key.pem"
 
-	cfg.Server.TLS.KTLS = &config.KTLSSettings{KernelTX: true}
-
 	cfg.Server.DNSCrypt = config.DNSCryptSettings{
 		Port:         config.DefaultDNSCryptPort,
 		ProviderName: "example.com",
@@ -48,7 +46,7 @@ func GenerateExampleConfig() string {
 	}
 
 	cfg.Upstream = []config.UpstreamServer{
-		{Address: "223.5.5.5:53", Protocol: "tcp", Proxy: "socks5://127.0.0.1:1080"},
+		{Address: "223.5.5.5:53", Protocol: "tcp"},
 		{Address: "223.6.6.6:53", Protocol: "udp"},
 		{Address: "223.5.5.5:853", Protocol: "tls", ServerName: "dns.alidns.com"},
 		{Address: "223.6.6.6:853", Protocol: "quic", ServerName: "dns.alidns.com", SkipTLSVerify: true},

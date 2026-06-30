@@ -2,10 +2,10 @@
 package config
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	eTLS "gitlab.com/go-extension/tls"
 	"net"
 	"net/url"
 	"os"
@@ -48,19 +48,12 @@ type TLSSettings struct {
 	KeyFile    string        `json:"key_file"`
 	SelfSigned bool          `json:"self_signed"`
 	HTTPS      HTTPSSettings `json:"https"`
-	KTLS       *KTLSSettings `json:"ktls,omitempty"`
 }
 
 // HTTPSSettings configures the HTTPS (DoH/DoH3) listener port and endpoint.
 type HTTPSSettings struct {
 	Port     string `json:"port"`
 	Endpoint string `json:"endpoint"`
-}
-
-// KTLSSettings configures kernel TLS offload for DoT/DoH server listeners.
-type KTLSSettings struct {
-	KernelTX bool `json:"kernel_tx"` // kernel TLS TX offload (default false)
-	KernelRX bool `json:"kernel_rx"` // kernel TLS RX offload (default false)
 }
 
 // DNSCryptSettings configures the DNSCrypt v2 server listener.
@@ -379,24 +372,6 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 			}
 		}
 
-		if server.Proxy != "" {
-			u, err := url.Parse(server.Proxy)
-			if err != nil {
-				return fmt.Errorf("upstream server %d proxy URL invalid: %w", i, err)
-			}
-			if u.Scheme != "socks5" {
-				return fmt.Errorf("upstream server %d proxy scheme must be socks5 (got %q)", i, u.Scheme)
-			}
-			if u.Hostname() == "" {
-				return fmt.Errorf("upstream server %d proxy host required", i)
-			}
-			if p := u.Port(); p != "" {
-				if port, err := strconv.Atoi(p); err != nil || port < 1 || port > 65535 {
-					return fmt.Errorf("upstream server %d proxy port invalid: %s", i, p)
-				}
-			}
-		}
-
 		for _, matchTag := range server.Match {
 			cleanTag := strings.TrimPrefix(matchTag, "!")
 			if !cidrTags[cleanTag] {
@@ -512,7 +487,7 @@ func validateTLSCertConfig(cfg *ServerConfig) error {
 				info.Mode().Perm(), cfg.Server.TLS.KeyFile)
 		}
 	}
-	if _, err := eTLS.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile); err != nil {
+	if _, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile); err != nil {
 		return fmt.Errorf("config: load certificate: %w", err)
 	}
 	return nil
