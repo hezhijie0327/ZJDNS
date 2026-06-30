@@ -167,9 +167,9 @@ var infraProber *ilatency.Prober
 // Must be called once during server startup before any recursive resolution.
 func InitInfraProber(bgCtx context.Context) {
 	infraProber = ilatency.New([]config.LatencyProbeStep{
-		{Protocol: "ping", Timeout: 100},
-		{Protocol: "udp", Port: config.DefaultProbePortDNS, Timeout: 100},
-		{Protocol: "tcp", Port: config.DefaultProbePortDNS, Timeout: 100},
+		{Protocol: config.ProtoPing, Timeout: 100},
+		{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: 100},
+		{Protocol: config.ProtoTCP, Port: config.DefaultProbePortDNS, Timeout: 100},
 	}, bgCtx)
 }
 

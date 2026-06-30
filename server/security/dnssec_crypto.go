@@ -460,21 +460,17 @@ func (cv *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifie
 	return anyValidated, nil
 }
 
-// maxNSEC3Iterations caps the number of hash iterations to prevent CPU exhaustion
-// from malicious NSEC3 records. RFC 9277 §4 recommends a maximum of 100.
-const maxNSEC3Iterations = config.DefaultMaxNSEC3Iterations
-
 // nsec3HashName hashes a domain name using the NSEC3 parameters specified in the
 // record (algorithm, iterations, salt) per RFC 5155 §5. It returns the
 // base32hex-encoded hash without padding as a lowercase string.
-// Iterations are capped at maxNSEC3Iterations to prevent DoS attacks.
+// Iterations are capped at config.DefaultMaxNSEC3Iterations to prevent DoS attacks.
 func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) string {
 	// RFC 5155 §5 mandates SHA-1 (algorithm 1) for NSEC3 hashing.
 	if hashAlg != dns.SHA1 {
 		return ""
 	}
-	if iterations > maxNSEC3Iterations {
-		iterations = maxNSEC3Iterations
+	if iterations > config.DefaultMaxNSEC3Iterations {
+		iterations = config.DefaultMaxNSEC3Iterations
 	}
 	// Decode salt from hex presentation format (RFC 5155 §3.1.4).
 	// The miekg/dns library stores NSEC3 salt as an uppercase hex string.

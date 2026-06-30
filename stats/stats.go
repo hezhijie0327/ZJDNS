@@ -145,8 +145,7 @@ type Collector struct {
 	rcodeRefused        atomic.Uint64
 	rcodeOther          atomic.Uint64
 
-	resetInterval time.Duration
-	persistTTL    int
+	persistTTL int
 }
 
 // AverageResponseTimeMs computes the mean response time in milliseconds.
@@ -159,6 +158,9 @@ func (s Snapshot) AverageResponseTimeMs() float64 {
 
 // BuildStatsLogJSON serializes a snapshot into JSON-formatted log entry bytes.
 func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("nil snapshot")
+	}
 	entry := logEntry{
 		Totals: logTotals{
 			TotalRequests:       snapshot.TotalRequests,
@@ -224,9 +226,6 @@ func New(cfg *config.ServerConfig, c cache.Store) *Collector {
 	sc := &Collector{
 		enabled:    true,
 		persistTTL: cfg.Server.StatsPersistInterval(),
-	}
-	if ri := cfg.Server.StatsResetInterval(); ri > 0 {
-		sc.resetInterval = time.Duration(ri) * time.Second
 	}
 	if c != nil {
 		if entry, found, expired := c.Get(persistKey); found && entry != nil {

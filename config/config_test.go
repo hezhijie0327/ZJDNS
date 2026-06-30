@@ -9,7 +9,7 @@ import (
 func TestLoadConfig_DefaultPortsApplied(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	content := `{"server": {"port": "53", "tls": {"port": "853"}}, "upstream_servers": [{"address": "8.8.8.8:53", "protocol": "udp"}]}`
+	content := `{"server": {"port": "53", "tls": {"port": "853"}}, "upstream": [{"address": "8.8.8.8:53", "protocol": "udp"}]}`
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}

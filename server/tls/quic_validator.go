@@ -56,7 +56,7 @@ func (v *quicAddrValidator) sweepLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			cutoff := time.Now().Add(-30 * time.Minute)
+			cutoff := time.Now().Add(-config.DefaultQUICAddrCacheTTL)
 			v.mu.Lock()
 			for ip, t := range v.seen {
 				if t.Before(cutoff) {

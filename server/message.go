@@ -95,21 +95,20 @@ func (s *Server) restoreOriginalDomain(msg *dns.Msg, currentName, originalName s
 	if msg == nil || strings.EqualFold(currentName, originalName) {
 		return
 	}
-	normalized := strings.ToLower(currentName)
+	// Use strings.EqualFold instead of strings.ToLower to avoid
+	// per-RR allocations on the cache-hit hot path.
 	for _, rr := range msg.Answer {
-		if rr != nil && strings.ToLower(rr.Header().Name) == normalized {
+		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
 			rr.Header().Name = originalName
 		}
 	}
-	// Also restore in Authority and Additional sections — NS and glue records
-	// may reference the rewritten domain name.
 	for _, rr := range msg.Ns {
-		if rr != nil && strings.ToLower(rr.Header().Name) == normalized {
+		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
 			rr.Header().Name = originalName
 		}
 	}
 	for _, rr := range msg.Extra {
-		if rr != nil && strings.ToLower(rr.Header().Name) == normalized {
+		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
 			rr.Header().Name = originalName
 		}
 	}

@@ -223,8 +223,8 @@ func (r *Resolver) Query(ctx context.Context, question dns.Question, ecs *edns.E
 	if len(servers) == 0 && len(fallbackServers) == 0 {
 		resolveCtx, cancel := context.WithTimeout(ctx, config.DefaultRecursiveResolveTimeout)
 		defer cancel()
-		a, au, ad, v, e, s, f, err := r.cname.resolve(resolveCtx, question, ecs)
-		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f, Err: err}
+		a, au, ad, v, e, s, _, err := r.cname.resolve(resolveCtx, question, ecs)
+		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: false, Err: err}
 	}
 
 	// Only one set of servers — query directly without coordination overhead.

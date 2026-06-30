@@ -163,11 +163,15 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 		Subject: pkix.Name{
 			CommonName: domain,
 		},
-		DNSNames:    []string{domain},
 		NotBefore:   time.Now(),
 		NotAfter:    time.Now().Add(config.DefaultServerCertValidity),
-		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		KeyUsage:    x509.KeyUsageDigitalSignature, // ECDSA — KeyEncipherment is RSA-only
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	if ip := net.ParseIP(domain); ip != nil {
+		serverTemplate.IPAddresses = []net.IP{ip}
+	} else {
+		serverTemplate.DNSNames = []string{domain}
 	}
 
 	caCertDER, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &caPrivKey.PublicKey, caPrivKey)

@@ -169,7 +169,12 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 	// Running goroutines past the Done check need a brief window to
 	// complete their hijack check (GFW injection arrives 1-2 ms
 	// behind legitimate responses).
-	<-time.After(config.DefaultHijackSettleTimeout)
+	hijackTimer := time.NewTimer(config.DefaultHijackSettleTimeout)
+	defer hijackTimer.Stop()
+	select {
+	case <-hijackTimer.C:
+	case <-queryCtx.Done():
+	}
 
 	verdict := security.VerdictClean
 	if hijackRejected.Load() {

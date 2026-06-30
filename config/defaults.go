@@ -43,6 +43,7 @@ const (
 
 	DefaultQUICClientIdleTimeout   = 60 * time.Second  // Client QUIC idle (must exceed KeepAlive)
 	DefaultQUICServerIdleTimeout   = 30 * time.Second  // Server QUIC idle (RFC 9000 default)
+	DefaultQUICAddrCacheTTL        = 30 * time.Minute  // QUIC address cache sweep cutoff
 	DefaultTCPPoolIdleTimeout      = 120 * time.Second // TCP/DoT pool connection idle (must exceed typical query intervals)
 	DefaultTCPKeepAlivePeriod      = 30 * time.Second  // TCP keep-alive probe interval
 	DefaultHTTPServerIdleTimeout   = 60 * time.Second  // HTTP keep-alive idle
