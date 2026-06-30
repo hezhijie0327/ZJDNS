@@ -1,202 +1,159 @@
-# ZJDNS Server
+# ZJDNS
 
-🚀 高性能递归 DNS 解析服务器，基于 Go 语言开发。支持 LRU 内存缓存（落盘持久化）、DNSSEC 验证、ECS、DoT/DoQ/DoH/DoH3 等高级功能。
+[![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
+[![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
-> ⚠️ **警告**
-> 本项目尚未在生产环境中得到充分验证。请勿在生产环境中使用。
+高性能递归 DNS 解析服务器，支持 DNSSEC 密码学验证、LRU 内存缓存（磁盘持久化）、ECS、DoT/DoQ/DoH/DoH3 安全传输协议。
 
----
+> **生产就绪状态**：本项目尚未经过生产环境充分验证，请谨慎用于关键业务。
 
-## 🌟 核心特性
+## 快速开始
 
-### 🔧 DNS 解析核心
+```bash
+# 构建
+go build -o zjdns .
 
-- **递归 DNS 解析**：完整递归查询算法，从 13 组根服务器逐步解析至 TLD 和权威服务器
-- **上游 DNS 转发**：主/备上游并发查询 + 首胜策略（First-Win），上游优先，失败时备路结果立即可用
-- **混合模式**：可同时配置上游 DNS 和内置递归解析器（`builtin_recursive`）
-- **SOCKS5 代理**：每上游可选 SOCKS5 代理（TCP CONNECT + UDP ASSOCIATE），规避 DNS 屏蔽/劫持，所有协议 + 递归模式全覆盖
-- **TCP/DoT/DoQ 连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生 stream 复用，连接失败回退单次连接
-- **CNAME 链解析**：多级 CNAME 追踪，防循环（最大 16 级）
-- **A/AAAA 延迟探测**：统一引擎 + 多协议（ping/tcp/udp/http/https/http3）速度检测，按最快顺序重排，去重缓存避免重复探测，UDP 支持任意端口通用检测
-- **DNS 重写**：精确域名匹配 + 客户端 IP 过滤 + 自定义响应码
+# 生成默认配置
+./zjdns -generate-config > config.json
 
-### 🛡️ 安全与防御
+# 启动（纯递归模式）
+./zjdns
 
-- **CIDR 过滤**：基于标签的 IP 过滤，支持文件/内联规则，IPv4 位运算优化匹配
-- **DNS 劫持防护**：根/TLD 越权响应检测，UDP→TCP 自动回退
-- **DNSSEC 密码学验证**：递归模式完整信任链（根 KSK→TLD DS→权威 DNSKEY→RRSIG），NSEC/NSEC3 已验证否定验证（RFC 5155），上游模式 AD 标志信任，`dnssec_enforce` 开关控制 bogus 响应拒绝，EDE 错误码传播
-- **ECS 支持**：EDNS 客户端子网，支持 auto/auto_v4/auto_v6 自动检测
-- **DNS Cookie**：HMAC-SHA256 服务端 Cookie，密钥无缝轮换，入口早期验证 (RFC 7873)
-- **扩展 DNS 错误 (EDE)**：24 种 EDE 代码，DNSSEC 失败自动映射（EDE 6/9/10）
-- **路径安全**：`filepath.Clean` + 绝对路径解析 + 符号链接拒绝 + 危险目录拦截
+# 启动（指定配置）
+./zjdns -config config.json
+```
 
-### 🔐 安全传输协议
+```bash
+# 测试解析
+dig @127.0.0.1 -p 53 example.com                # UDP
+dig @127.0.0.1 -p 53 example.com +tcp            # TCP
+kdig @127.0.0.1 -p 853 example.com +tls          # DoT
+kdig @127.0.0.1 -p 853 example.com +quic         # DoQ
+kdig @127.0.0.1 -p 443 example.com +https        # DoH
+```
 
-| 协议                       | 端口 | 说明             |
-| -------------------------- | ---- | ---------------- |
-| **DoT** (DNS over TLS)     | 853  | TLS 1.3 加密     |
-| **DoQ** (DNS over QUIC)    | 853  | QUIC 协议，0-RTT |
-| **DoH** (DNS over HTTPS)   | 443  | HTTP/2 加密      |
-| **DoH3** (DNS over HTTP/3) | 443  | HTTP/3 加密      |
+## 核心特性
 
-- **内核 TLS 卸载 (KTLS)**：TCP TLS（DoT/DoH）支持 Linux 内核 TLS 卸载，零拷贝加解密，不支持时静默回退用户态。服务端 TX/RX 可通过 `server.tls.ktls.kernel_tx` / `kernel_rx` 独立控制
-- **统一证书管理**：自签名 ECDSA P-384 CA，动态签发
-- **DNS 填充 (RFC 7830)**：安全连接填充至 468 字节
-- **DDR 自动发现 (RFC 9461/9462)**：SVCB 记录自动生成
+### DNS 解析
 
-### 💾 缓存系统
+- **递归解析**：从 IANA 根服务器（13 组）逐步解析至 TLD 和权威服务器，完整 DNSSEC 信任链
+- **上游转发**：主/备服务器并发查询 + 首胜策略（First-Win），上游优先，备路结果立即可用
+- **混合模式**：上游 DNS 与内置递归（`builtin_recursive`）可同时配置
+- **SOCKS5 代理**：每上游可选代理（TCP CONNECT + UDP ASSOCIATE，RFC 1928/1929），所有协议 + 递归模式全覆盖
+- **连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生流复用，连接失败回退单次连接
+- **CNAME 解析**：多级追踪（最大 16 级），防循环，超限返回 SERVFAIL
+- **延迟探测**：统一探测引擎（ICMP/TCP/UDP/HTTP/HTTPS/HTTP3），按最快 IP 动态重排 A/AAAA 记录
 
-- **固定容量**：`size` 指定缓存上限（字节），默认 4 MB
-- **LRU 内存缓存**：RLock 读取（零读争用），atomic 访问时间淘汰，TTL 下限保护（10s）
-- **磁盘持久化**：gob 快照，启动恢复，定期落盘 (默认 30s)，原子写入
-- **过期缓存服务 (RFC 8767)**：上游不可用时返回过期缓存（最大 30 天）
-- **预取机制**：TTL 剩余 ≤40% 时后台刷新
-- **ECS 感知缓存**：基于客户端子网分区
-- **PTR 反查优化**：IP→域名索引，O(1) 反查
+### 安全
 
-### ⚡ 性能优化
+- **DNSSEC**：递归模式完整信任链验证（根 KSK→TLD DS→权威 DNSKEY→RRSIG），NSEC/NSEC3 已验证否定（RFC 5155），EDE 错误码传播
+- **劫持防护**：根/TLD 越权响应检测 + UDP→TCP 自动回退
+- **DNS Cookie**：HMAC-SHA256 服务端 Cookie（RFC 7873），密钥无缝轮换，入口早期验证
+- **CIDR 过滤**：基于标签的 IP 过滤（文件/内联规则），IPv4 位运算优化
+- **安全传输**：DoT (RFC 7858)、DoQ (RFC 9250)、DoH (RFC 8484)、DoH3，TLS 1.3 + KTLS 零拷贝卸载
+- **证书管理**：自签名 ECDSA P-384 CA，动态签发，过期预警
 
-- **锁无关统计**：全部计数器使用 `atomic.Uint64`，热路径无 mutex
-- **无锁 RNG**：`math/rand/v2.IntN()` 替代自定义 mutex RNG
-- **对象池**：`sync.Pool` 复用 `dns.Msg` 和 `[]byte`
-- **CIDR IPv4 位运算**：uint32 掩码匹配，避免 `net.IPNet.Contains`
-- **延迟探测去重**：FNV hash 缓存探测结果，TTL 控制避免高 QPS 下重复探测
-- **HTTP 探测连接池**：按 (端口, TLS, HTTP3) 缓存客户端，避免重复 TLS 握手
-- **TCP/DoT 流水线**：单连接 16 路并发查询，reader goroutine 按 DNS ID 分发响应
-- **连接池**：TCP/DoT/DoQ 每上游 4 连接上限，容量背压，死连接自动驱逐重建
-- **并发查询**：errgroup + 自适应并发限制 + 首胜即取消
-- **正则编译一次**：IP 检测 regex 包级编译
+### 缓存
 
-### 📊 统计与监控
+- **LRU 内存缓存**：固定容量（默认 4 MB），RLock 零读争用，atomic 访问时间淘汰
+- **磁盘持久化**：gob 快照，启动恢复，定期落盘（默认 30s），原子写入
+- **过期服务**：RFC 8767 过期缓存服务（最大 30 天），上游不可用时兜底
+- **预取**：TTL 剩余 ≤40% 时后台异步刷新，ECS 感知分区
 
-- 请求计数器（按协议：UDP、TCP、DoT、DoQ、DoH、DoH3）
-- 缓存命中率、重写次数、劫持检测、过期响应、预取次数
-- JSON 日志输出 + 定期重置（`log_level` 可配：error/warn/info/debug）
-- **pprof**：`http://127.0.0.1:6060/debug/pprof/`
+### 可观测性
 
----
+- **锁无关统计**：全部计数器使用 `atomic.Uint64`，热路径零 mutex
+- **组件级日志过滤**：`debug:UPSTREAM,SECURITY` 仅输出指定组件 Debug 日志，避免刷屏
+- **pprof**：标准 Go 性能分析端点
+- **JSON 统计日志**：定期输出（可配间隔），含命中率/劫持/DNSSEC 等
 
-## 📜 支持的 RFC 标准
+## 支持的 RFC
 
-| RFC                                                     | 标准名称                                   | 实现功能                                 |
-| ------------------------------------------------------- | ------------------------------------------ | ---------------------------------------- |
-| [RFC 1928](https://www.rfc-editor.org/rfc/rfc1928.html) | SOCKS Protocol Version 5                   | SOCKS5 代理客户端                        |
-| [RFC 3597](https://www.rfc-editor.org/rfc/rfc3597.html) | Handling Unknown DNS RR Types              | 未知记录类型回退                         |
-| [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033.html) | DNS Security Introduction and Requirements | DNSSEC 基础                              |
-| [RFC 4034](https://www.rfc-editor.org/rfc/rfc4034.html) | Resource Records for DNSSEC                | RRSIG/NSEC/DNSKEY/DS 类型                |
-| [RFC 4035](https://www.rfc-editor.org/rfc/rfc4035.html) | Protocol Modifications for DNSSEC          | 信任链 + AD/CD 标志                      |
-| [RFC 5155](https://www.rfc-editor.org/rfc/rfc5155.html) | NSEC3 Hashed Authenticated Denial          | NSEC3 已验证否定 + RRSIG 验证            |
-| [RFC 7766](https://www.rfc-editor.org/rfc/rfc7766.html) | DNS Transport over TCP                     | TCP/DoT 连接复用 + 查询流水线 + 乱序响应 |
-| [RFC 7830](https://www.rfc-editor.org/rfc/rfc7830.html) | EDNS(0) Padding                            | DNS 响应填充                             |
-| [RFC 7858](https://www.rfc-editor.org/rfc/rfc7858.html) | DNS over TLS (DoT)                         | TLS 加密传输                             |
-| [RFC 7871](https://www.rfc-editor.org/rfc/rfc7871.html) | EDNS Client Subnet (ECS)                   | 客户端子网                               |
-| [RFC 7873](https://www.rfc-editor.org/rfc/rfc7873.html) | DNS Cookies                                | Cookie 机制                              |
-| [RFC 8484](https://www.rfc-editor.org/rfc/rfc8484.html) | DNS over HTTPS (DoH)                       | HTTPS 加密传输                           |
-| [RFC 8767](https://www.rfc-editor.org/rfc/rfc8767.html) | Serving Stale DNS Answers                  | 过期缓存服务                             |
-| [RFC 8914](https://www.rfc-editor.org/rfc/rfc8914.html) | Extended DNS Errors (EDE)                  | 扩展错误码                               |
-| [RFC 9018](https://www.rfc-editor.org/rfc/rfc9018.html) | DNS Cookies for TLS                        | TLS Cookie                               |
-| [RFC 9250](https://www.rfc-editor.org/rfc/rfc9250.html) | DNS over QUIC (DoQ)                        | QUIC 加密传输                            |
-| [RFC 9461](https://www.rfc-editor.org/rfc/rfc9461.html) | SVCB/HTTPS RR for DNS                      | DDR SVCB 记录                            |
-| [RFC 9462](https://www.rfc-editor.org/rfc/rfc9462.html) | Discovery of Designated Resolvers          | DDR 自动发现                             |
+| RFC | 标准 | 实现 |
+|-----|------|------|
+| [1928](https://www.rfc-editor.org/rfc/rfc1928) | SOCKS Protocol Version 5 | 代理客户端 |
+| [4033-4035](https://www.rfc-editor.org/rfc/rfc4033) | DNSSEC | 信任链 + RRSIG + AD/CD |
+| [5155](https://www.rfc-editor.org/rfc/rfc5155) | NSEC3 | 已验证否定 + 迭代上限 |
+| [7766](https://www.rfc-editor.org/rfc/rfc7766) | DNS over TCP | 连接复用 + 流水线 + 乱序 |
+| [7830](https://www.rfc-editor.org/rfc/rfc7830) | EDNS(0) Padding | 响应填充 |
+| [7858](https://www.rfc-editor.org/rfc/rfc7858) | DNS over TLS | DoT TLS 1.3 |
+| [7871](https://www.rfc-editor.org/rfc/rfc7871) | EDNS Client Subnet | ECS 客户端子网 |
+| [7873](https://www.rfc-editor.org/rfc/rfc7873) | DNS Cookies | Cookie 验证 + 轮换 |
+| [8484](https://www.rfc-editor.org/rfc/rfc8484) | DNS over HTTPS | DoH HTTP/2 |
+| [8767](https://www.rfc-editor.org/rfc/rfc8767) | Serving Stale | 过期缓存 + 预取 |
+| [8914](https://www.rfc-editor.org/rfc/rfc8914) | Extended DNS Errors | 24 种 EDE 代码 |
+| [9250](https://www.rfc-editor.org/rfc/rfc9250) | DNS over QUIC | DoQ + 0-RTT |
+| [9461/9462](https://www.rfc-editor.org/rfc/rfc9461) | SVCB / DDR | 自动发现 |
 
----
+## 配置示例
 
-## 🏗️ 包结构
+```json
+{
+  "server": {
+    "port": "53",
+    "log_level": "debug:UPSTREAM,SECURITY",
+    "tls": { "port": "853", "self_signed": true },
+    "features": {
+      "hijack_protection": true,
+      "dnssec_enforce": true,
+      "cache": { "size": 4194304 },
+      "ecs_subnet": { "ipv4": "auto", "ipv6": "auto" }
+    }
+  },
+  "upstream": [
+    { "address": "builtin_recursive" }
+  ]
+}
+```
+
+`log_level` 支持组件过滤：`debug:UPSTREAM,RECURSION` 仅输出 UPSTREAM + RECURSION 的 Debug 日志。无前缀的消息始终通过（安全性设计）。
+
+## 包结构
 
 ```
 zjdns/
-├── main.go / version.go           # Entry point + ldflags variables
-├── cli/                           # CLI helper functions
+├── main.go / version.go              # 入口 + ldflags
+├── bench_test.go                     # 全局基准测试
+├── cli/                              # CLI 辅助
+├── config/                           # 配置系统（类型、加载、验证、默认值）
+├── edns/                             # EDNS(0) 扩展（ECS、Cookie、EDE、Padding）
+├── cache/                            # LRU 缓存 + 磁盘持久化 + PTR 索引
+├── cidr/                             # CIDR IP 过滤
+├── rewrite/                          # 域名重写
+├── stats/                            # 锁无关统计
 ├── internal/
-│   ├── log/                       # Logger, TimeCache
-│   ├── pool/                      # sync.Pool (MessagePool, BufferPool)
-│   ├── dnsutil/                   # DNS utilities (NormalizeDomain, HandlePanic)
-│   ├── ipdetect/                  # Public IP detection for ECS
-│   └── latency/                   # Unified latency probe engine
-├── config/                        # Configuration (types, loader, defaults)
-├── edns/                          # EDNS(0) extensions (ECS, Cookie, EDE, Padding)
-├── cache/                         # LRU memory cache + disk persistence
-├── cidr/                          # CIDR IP filtering
-├── rewrite/                       # Domain rewrite rules
-├── stats/                         # Lock-free atomic metrics
-└── server/                        # Core server
-    ├── client/                    # Outbound query client (UDP, TCP, DoT, DoQ, DoH, DoH3, SOCKS5)
-    │   └── pool/                  # TCP/DoT/QUIC connection pools
-    ├── resolver/                  # Recursive + upstream DNS resolution
-    ├── security/                  # DNSSEC + hijack detection
-    ├── tls/                       # Secure transport listeners (DoT, DoQ, DoH, DoH3)
-    └── latency/                   # Client-facing latency probe adapter
+│   ├── log/                          # 分级日志 + TimeCache + 组件过滤
+│   ├── pool/                         # sync.Pool（MessagePool、BufferPool）
+│   ├── dnsutil/                      # DNS 工具函数
+│   ├── ipdetect/                     # ECS 公网 IP 检测
+│   └── latency/                      # 统一延迟探测引擎
+└── server/
+    ├── server.go / handler.go        # 查询流水线 + 生命周期
+    ├── client/                       # 出站查询客户端（UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5）
+    │   └── pool/                     # TCP/DoT/QUIC 连接池
+    ├── resolver/                     # 递归解析 + 上游转发 + DNSSEC 信任链
+    ├── security/                     # DNSSEC 密码学 + 劫持检测
+    ├── tls/                          # 安全传输监听器
+    └── latency/                      # 面向客户端的延迟探测适配器
 ```
 
----
-
-## 📋 使用示例
-
-### 生成配置
+## 开发
 
 ```bash
-./zjdns -generate-config > config.json
-```
-
-### 启动服务器
-
-```bash
-./zjdns -config config.json   # 指定配置
-./zjdns                        # 默认配置（纯递归 + 内存缓存）
-./zjdns -version               # 版本信息
-```
-
-### 测试解析
-
-```bash
-dig @127.0.0.1 -p 53 example.com              # UDP
-dig @127.0.0.1 -p 53 example.com +tcp          # TCP
-kdig @127.0.0.1 -p 853 example.com +tls        # DoT
-kdig @127.0.0.1 -p 853 example.com +quic       # DoQ
-kdig @127.0.0.1 -p 443 example.com +https      # DoH
-```
-
-### DNSSEC 验证
-
-```bash
-# 测试 bogus 委托（应返回 SERVFAIL + EDE 6）
-kdig dnssec-failed.org a +dnssec @127.0.0.1
-
-# 测试有效 DNSSEC（应返回 NOERROR + AD 标志）
-kdig cloudflare.com a +dnssec @127.0.0.1
-```
-
-### 性能监控
-
-```bash
-curl http://127.0.0.1:6060/debug/pprof/heap    # 内存分析
-curl http://127.0.0.1:6060/debug/pprof/profile # CPU 分析
-```
-
----
-
-## 🛠️ 开发
-
-### 构建
-
-```bash
-go build -o zjdns
-
-# 带版本信息
+# 构建
 go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns
 
-# Docker
-docker build -t zjdns .
-```
+# 测试
+go test ./... -short
 
-### 代码质量
+# 基准测试
+go test -bench=. -short ./...
 
-```bash
+# 代码检查（零警告）
 golangci-lint run && golangci-lint fmt
 ```
 
----
-
-## 📝 许可证
+## 许可证
 
 [Apache License 2.0 with Commons Clause v1.0](LICENSE)
