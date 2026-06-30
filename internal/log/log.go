@@ -1,10 +1,24 @@
-// Package log provides a leveled logging manager with colored output.
+// Package log provides a leveled logging manager with colored output and
+// component-based filtering.
+//
+// Log Level Format:
+//
+//	error | warn | info | debug
+//
+// Component Filtering:
+//
+//	debug:UPSTREAM,RECURSION  → Debug level, only UPSTREAM + RECURSION components
+//	info                       → Info level, all components
+//
+// Messages with a "PREFIX: " prefix are filtered by component; messages
+// without a recognized prefix always pass through.
 package log
 
 import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,9 +37,7 @@ const (
 )
 
 // DefaultLevel is the default logging level string.
-const (
-	DefaultLevel = "info"
-)
+const DefaultLevel = "info"
 
 const (
 	colorReset  = "\033[0m"
@@ -49,11 +61,14 @@ var DefaultTimeCache = NewTimeCache()
 // Level represents a logging severity level.
 type Level int
 
-// Manager manages leveled logging with configurable output.
+// Manager manages leveled logging with configurable output and optional
+// component-based filtering.
 type Manager struct {
-	level    atomic.Int32
-	writer   io.Writer
-	colorMap map[Level]string
+	level           atomic.Int32
+	writer          io.Writer
+	colorMap        map[Level]string
+	componentFilter map[string]bool // nil = all enabled; non-nil = only listed components
+	mu              sync.RWMutex    // protects componentFilter
 }
 
 // TimeCache caches the current time with periodic one-second updates.
@@ -110,7 +125,86 @@ func (l Level) String() string {
 	}
 }
 
-// Log logs a message at the specified level.
+// SetComponentFilter sets the component filter. If components is empty, all
+// components pass through (no filtering). Otherwise, only messages with a
+// matching "PREFIX:" prefix are emitted. Messages without a recognized prefix
+// always pass through.
+func (m *Manager) SetComponentFilter(components []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(components) == 0 {
+		m.componentFilter = nil
+		return
+	}
+	filter := make(map[string]bool, len(components))
+	for _, c := range components {
+		c = strings.ToUpper(strings.TrimSpace(c))
+		if c != "" {
+			filter[c] = true
+		}
+	}
+	if len(filter) == 0 {
+		m.componentFilter = nil
+	} else {
+		m.componentFilter = filter
+	}
+}
+
+// ParseLevelFilter parses a log level string that may include component
+// filters in the format "level:comp1,comp2,...". Returns the level and a
+// component list (nil components means no filtering). The defaultLevel is
+// used when parsing fails.
+func ParseLevelFilter(s string, defaultLevel Level) (Level, []string) {
+	if s == "" {
+		return defaultLevel, nil
+	}
+
+	// Split on colon: "debug:upstream,recursion" or plain "info".
+	parts := strings.SplitN(s, ":", 2)
+	levelStr := strings.TrimSpace(strings.ToLower(parts[0]))
+
+	var lvl Level
+	switch levelStr {
+	case "error":
+		lvl = Error
+	case "warn":
+		lvl = Warn
+	case "info":
+		lvl = Info
+	case "debug":
+		lvl = Debug
+	default:
+		return defaultLevel, nil
+	}
+
+	if len(parts) == 2 && parts[1] != "" {
+		raw := strings.Split(parts[1], ",")
+		components := make([]string, 0, len(raw))
+		for _, c := range raw {
+			c = strings.TrimSpace(c)
+			if c != "" {
+				components = append(components, c)
+			}
+		}
+		return lvl, components
+	}
+
+	return lvl, nil
+}
+
+// extractPrefix extracts the component prefix from a log message. Messages
+// are expected to start with "PREFIX: " (e.g., "UPSTREAM: querying...").
+// Returns the prefix in uppercase, or empty string if no prefix found.
+func extractPrefix(msg string) string {
+	idx := strings.Index(msg, ":")
+	if idx <= 0 || idx >= len(msg)-1 || msg[idx+1] != ' ' {
+		return ""
+	}
+	return strings.ToUpper(msg[:idx])
+}
+
+// Log logs a message at the specified level, respecting both the level
+// threshold and any component filter.
 func (m *Manager) Log(lvl Level, format string, args ...any) {
 	if lvl < Error {
 		lvl = Error
@@ -121,6 +215,20 @@ func (m *Manager) Log(lvl Level, format string, args ...any) {
 		return
 	}
 
+	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
+
+	// Check component filter: if set, only emit messages whose prefix
+	// matches. Messages without a recognizable "PREFIX: " always pass.
+	m.mu.RLock()
+	filter := m.componentFilter
+	m.mu.RUnlock()
+	if filter != nil {
+		prefix := extractPrefix(message)
+		if prefix != "" && !filter[prefix] {
+			return
+		}
+	}
+
 	levelStr := levelNames[lvl]
 
 	color, ok := m.colorMap[lvl]
@@ -129,7 +237,6 @@ func (m *Manager) Log(lvl Level, format string, args ...any) {
 	}
 
 	timestamp := DefaultTimeCache.Now().Format(logTimeFormat)
-	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
 
 	logLine := fmt.Sprintf("%s[%s]%s %s%-5s%s %s\n",
 		colorBold, timestamp, colorReset,
@@ -165,6 +272,14 @@ func Debugf(format string, args ...any) { Default.Debug(format, args...) }
 
 // SetLevel sets the logging level on the default manager.
 func SetLevel(lvl Level) { Default.SetLevel(lvl) }
+
+// SetLevelFilter applies both a level and optional component filter to the
+// default manager. The logLevelStr is in the format "level:comp1,comp2".
+func SetLevelFilter(logLevelStr string) {
+	lvl, components := ParseLevelFilter(logLevelStr, Info)
+	Default.SetLevel(lvl)
+	Default.SetComponentFilter(components)
+}
 
 func sanitizeLogMessage(msg string) string {
 	if len(msg) == 0 {

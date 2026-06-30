@@ -282,7 +282,7 @@ func (s *Server) shutdownServer() {
 	}
 
 	if s.cacheMgr != nil {
-		dnsutil.CloseWithLog(s.cacheMgr, "Cache store")
+		dnsutil.CloseWithLog(s.cacheMgr, "Cache store", "SERVER")
 	}
 
 	log.DefaultTimeCache.Stop()

@@ -176,7 +176,7 @@ func TestIsValidFilePath(t *testing.T) {
 
 func TestCloseWithLog_Nil(t *testing.T) {
 	// Must not panic with nil input
-	CloseWithLog(nil, "test")
+	CloseWithLog(nil, "test-closer", "TEST")
 }
 
 type testCloser struct{ err error }
@@ -185,18 +185,16 @@ func (c *testCloser) Close() error { return c.err }
 
 func TestCloseWithLog_Success(t *testing.T) {
 	c := &testCloser{err: nil}
-	CloseWithLog(c, "test-closer")
+	CloseWithLog(c, "test-closer", "TEST")
 }
 
 func TestCloseWithLog_Error(t *testing.T) {
 	c := &testCloser{err: os.ErrClosed}
-	CloseWithLog(c, "test-closer")
+	CloseWithLog(c, "test-closer", "TEST")
 }
 
-func TestCloseWithLog_NotACloser(t *testing.T) {
-	// Passing something that doesn't implement Close() should not panic
-	CloseWithLog(42, "int")
-}
+// CloseWithLog now accepts io.Closer at compile time, so non-closable types
+// are rejected by the type system — no longer a runtime concern.
 
 func TestHandlePanic_Recovers(t *testing.T) {
 	func() {

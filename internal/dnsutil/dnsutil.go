@@ -65,14 +65,13 @@ func IsSecureProtocol(protocol string) bool {
 }
 
 // CloseWithLog closes a resource and logs any error that occurs.
-func CloseWithLog(c any, name string) {
+// The prefix parameter sets the log component prefix (e.g., "SERVER", "TLS").
+func CloseWithLog(c io.Closer, name, prefix string) {
 	if c == nil {
 		return
 	}
-	if closer, ok := c.(interface{ Close() error }); ok {
-		if err := closer.Close(); err != nil {
-			log.Warnf("SERVER: Close %s failed: %v", name, err)
-		}
+	if err := c.Close(); err != nil {
+		log.Warnf("%s: Close %s failed: %v", prefix, name, err)
 	}
 }
 

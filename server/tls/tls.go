@@ -427,13 +427,13 @@ func (s *Server) Shutdown() error {
 	s.cancel(errors.New("tls server shutdown"))
 
 	if s.dotListener != nil {
-		dnsutil.CloseWithLog(s.dotListener, "DoT listener")
+		dnsutil.CloseWithLog(s.dotListener, "DoT listener", "TLS")
 	}
 	if s.doqListener != nil {
-		dnsutil.CloseWithLog(s.doqListener, "DoQ listener")
+		dnsutil.CloseWithLog(s.doqListener, "DoQ listener", "TLS")
 	}
 	if s.doqConn != nil {
-		dnsutil.CloseWithLog(s.doqConn, "DoQ socket")
+		dnsutil.CloseWithLog(s.doqConn, "DoQ socket", "TLS")
 	}
 	if s.doqValidator != nil {
 		s.doqValidator.close()
@@ -444,16 +444,16 @@ func (s *Server) Shutdown() error {
 		_ = s.h3Server.Shutdown(ctx)
 	}
 	if s.httpsListener != nil {
-		dnsutil.CloseWithLog(s.httpsListener, "HTTPS listener")
+		dnsutil.CloseWithLog(s.httpsListener, "HTTPS listener", "TLS")
 	}
 	if s.h3Listener != nil {
-		dnsutil.CloseWithLog(s.h3Listener, "HTTP/3 listener")
+		dnsutil.CloseWithLog(s.h3Listener, "HTTP/3 listener", "TLS")
 	}
 	if s.h3Transport != nil {
 		_ = s.h3Transport.Close()
 	}
 	if s.h3Conn != nil {
-		dnsutil.CloseWithLog(s.h3Conn, "DoH3 socket")
+		dnsutil.CloseWithLog(s.h3Conn, "DoH3 socket", "TLS")
 	}
 	if s.h3Validator != nil {
 		s.h3Validator.close()

@@ -286,22 +286,27 @@ func validateConfig(cfg *ServerConfig) error {
 }
 
 func validateLogLevel(cfg *ServerConfig) {
-	validLevels := map[string]log.Level{
-		"error": log.Error,
-		"warn":  log.Warn,
-		"info":  log.Info,
-		"debug": log.Debug,
+	levelStr := strings.TrimSpace(cfg.Server.LogLevel)
+	if levelStr == "" {
+		levelStr = log.DefaultLevel
 	}
 
-	logLevelStr := strings.ToLower(cfg.Server.LogLevel)
-	if logLevelStr == "" {
-		logLevelStr = log.DefaultLevel
-	}
-
-	if level, ok := validLevels[logLevelStr]; ok {
-		log.Default.SetLevel(level)
+	// ParseLevelFilter supports both plain levels ("debug") and
+	// component-filtered levels ("debug:upstream,recursion").
+	lvl, components := log.ParseLevelFilter(levelStr, log.Info)
+	log.Default.SetLevel(lvl)
+	if len(components) > 0 {
+		log.Default.SetComponentFilter(components)
+		log.Infof("CONFIG: Log level set to %s, components filtered to: %v", lvl.String(), components)
 	} else {
-		log.Default.SetLevel(log.Info)
+		log.Infof("CONFIG: Log level set to %s", lvl.String())
+	}
+
+	// Warn if the original string didn't parse as a known level.
+	baseLevel := strings.SplitN(strings.ToLower(levelStr), ":", 2)[0]
+	switch baseLevel {
+	case "error", "warn", "info", "debug":
+	default:
 		log.Warnf("CONFIG: Invalid log level '%s', using default: info", cfg.Server.LogLevel)
 	}
 }

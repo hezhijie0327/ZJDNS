@@ -68,7 +68,7 @@ func (mc *MemoryCache) loadSnapshotFromDisk() (int, error) {
 		}
 		return 0, err
 	}
-	defer func() { dnsutil.CloseWithLog(file, "persist snapshot") }()
+	defer func() { dnsutil.CloseWithLog(file, "persist snapshot", "CACHE") }()
 
 	header := make([]byte, len(cacheSnapshotMagic))
 	if _, err := io.ReadFull(file, header); err != nil {
@@ -167,17 +167,17 @@ func (mc *MemoryCache) persistSnapshot() error {
 		return err
 	}
 	if _, err := file.WriteString(cacheSnapshotMagic); err != nil {
-		dnsutil.CloseWithLog(file, "persist snapshot")
+		dnsutil.CloseWithLog(file, "persist snapshot", "CACHE")
 		_ = os.Remove(tmp)
 		return err
 	}
 	if err := gob.NewEncoder(file).Encode(&snapshot); err != nil {
-		dnsutil.CloseWithLog(file, "persist snapshot")
+		dnsutil.CloseWithLog(file, "persist snapshot", "CACHE")
 		_ = os.Remove(tmp)
 		return err
 	}
 	if err := file.Sync(); err != nil {
-		dnsutil.CloseWithLog(file, "persist snapshot")
+		dnsutil.CloseWithLog(file, "persist snapshot", "CACHE")
 		_ = os.Remove(tmp)
 		return err
 	}
