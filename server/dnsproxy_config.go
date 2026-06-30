@@ -73,7 +73,7 @@ func (s *Server) buildProxyConfig() (*proxy.Config, error) {
 	}
 
 	upstreamOpts := &upstream.Options{Timeout: config.DefaultDNSQueryTimeout}
-	pc.UpstreamConfig, pc.Fallbacks = buildUpstreamConfig(cfg, upstreamOpts)
+	pc.UpstreamConfig, pc.Fallbacks = s.buildUpstreamConfig(cfg, upstreamOpts)
 
 	return pc, nil
 }
@@ -181,18 +181,19 @@ func setupDNSCryptConfig(pc *proxy.Config, cfg *config.ServerConfig) error {
 	return nil
 }
 
-func buildUpstreamConfig(cfg *config.ServerConfig, opts *upstream.Options) (main, fallback *proxy.UpstreamConfig) {
-	main = serversToUpstreamConfig(cfg.Upstream, opts)
+func (s *Server) buildUpstreamConfig(cfg *config.ServerConfig, opts *upstream.Options) (main, fallback *proxy.UpstreamConfig) {
+	main = s.serversToUpstreamConfig(cfg.Upstream, opts)
 	if len(cfg.Fallback) > 0 {
-		fallback = serversToUpstreamConfig(cfg.Fallback, opts)
+		fallback = s.serversToUpstreamConfig(cfg.Fallback, opts)
 	}
 	return
 }
 
-func serversToUpstreamConfig(servers []config.UpstreamServer, opts *upstream.Options) *proxy.UpstreamConfig {
+func (s *Server) serversToUpstreamConfig(servers []config.UpstreamServer, opts *upstream.Options) *proxy.UpstreamConfig {
 	uc := &proxy.UpstreamConfig{}
 	for _, srv := range servers {
 		if srv.IsRecursive() {
+			uc.Upstreams = append(uc.Upstreams, &recursiveUpstream{server: s})
 			continue
 		}
 		u, err := upstream.AddressToUpstream(upstreamURL(srv), opts)

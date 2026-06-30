@@ -24,6 +24,7 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/rewrite"
+	"zjdns/server/client"
 	"zjdns/server/latency"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
@@ -167,9 +168,12 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 	server.dnsProxy = dnsProxy
 
-	// Initialize the resolver with a client wrapper that uses dnsproxy's upstream.
+	// Create a client for the resolver to use for upstream forwarding.
+	// dnsproxy handles the server-side listeners; the resolver still needs
+	// a client for outbound queries to upstream DNS servers.
+	queryClient := client.New()
 	server.resolver = resolver.New(
-		nil, // client — replaced by dnsproxy upstream resolution
+		queryClient,
 		server.guard,
 		ednsHandler,
 		cidrFilter,
@@ -177,6 +181,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cacheStore,
 	)
 	server.resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
+	server.resolver.InitServers(cfg.Upstream, cfg.Fallback)
 	server.resolver.SetBackgroundContext(backgroundCtx)
 
 	latency.InitInfraProber(backgroundCtx)
