@@ -53,10 +53,17 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 			if err == nil {
 				return response, nil
 			}
-			c.quicPool.Remove(pc)
+			// Err0RTTRejected means the server rejected 0-RTT data on the
+			// stream, but the connection is still valid (fell back to 1-RTT).
+			// Reset stale tokens and retry on the same connection.
 			if errors.Is(err, quic.Err0RTTRejected) {
 				c.resetQUICConfig("doq:" + key)
+				response, err = c.doQUICQuery(ctx, pc.Conn, msg, c.timeout)
+				if err == nil {
+					return response, nil
+				}
 			}
+			c.quicPool.Remove(pc)
 			log.Debugf("UPSTREAM: pooled DoQ query to %s failed: %v, retrying with new connection", server.Address, err)
 		}
 	}
@@ -73,6 +80,20 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 
 	response, err := c.doQUICQuery(ctx, conn, msg, c.timeout)
 	if err != nil {
+		// Same as the pooled path: a 0-RTT rejection on stream open does
+		// not invalidate the connection. Reset tokens and retry.
+		if errors.Is(err, quic.Err0RTTRejected) {
+			c.resetQUICConfig("doq:" + key)
+			response, err = c.doQUICQuery(ctx, conn, msg, c.timeout)
+			if err == nil {
+				if c.quicPool != nil {
+					c.quicPool.Put(poolKey, conn)
+				} else {
+					_ = conn.CloseWithError(connpool.QUICCodeNoError, "no pool, discarding")
+				}
+				return response, nil
+			}
+		}
 		_ = conn.CloseWithError(connpool.QUICCodeNoError, "query failed")
 		return nil, err
 	}

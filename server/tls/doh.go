@@ -96,6 +96,16 @@ func (s *Server) startDOHServer(port string) error {
 func (s *Server) startDoH3Server(port string) error {
 	addr := ":" + port
 
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return fmt.Errorf("resolve UDP address: %w", err)
+	}
+
+	s.h3Conn, err = net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return fmt.Errorf("UDP listen: %w", err)
+	}
+
 	tlsConfig := s.QUICTLSConfig().Clone()
 	tlsConfig.NextProtos = config.NextProtoDOH3
 
@@ -108,12 +118,17 @@ func (s *Server) startDoH3Server(port string) error {
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 	}
 
-	quicListener, err := quic.ListenAddrEarly(addr, tlsConfig, quicConfig)
+	s.h3Validator = newQUICAddrValidator()
+	s.h3Transport = &quic.Transport{
+		Conn:                s.h3Conn,
+		VerifySourceAddress: s.h3Validator.requiresValidation,
+	}
+	s.h3Listener, err = s.h3Transport.ListenEarly(tlsConfig, quicConfig)
 	if err != nil {
-		return err
+		_ = s.h3Conn.Close()
+		return fmt.Errorf("DoH3 listen: %w", err)
 	}
 
-	s.h3Listener = quicListener
 	log.Infof("TLS: DoH3 server started on port %s", port)
 
 	s.h3Server = &http3.Server{Handler: s}

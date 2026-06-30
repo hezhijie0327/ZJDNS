@@ -33,7 +33,11 @@ func (s *Server) startDOQServer() error {
 		return fmt.Errorf("UDP listen: %w", err)
 	}
 
-	s.doqTransport = &quic.Transport{Conn: s.doqConn}
+	s.doqValidator = newQUICAddrValidator()
+	s.doqTransport = &quic.Transport{
+		Conn:                s.doqConn,
+		VerifySourceAddress: s.doqValidator.requiresValidation,
+	}
 
 	quicTLSConfig := s.QUICTLSConfig().Clone()
 	quicTLSConfig.NextProtos = config.NextProtoDOQ

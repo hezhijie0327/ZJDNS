@@ -111,10 +111,14 @@ type Server struct {
 	doqConn       *net.UDPConn
 	doqListener   *quic.EarlyListener
 	doqTransport  *quic.Transport
+	doqValidator  *quicAddrValidator
 	dohServer     *http2.Server
 	h3Server      *http3.Server
 	httpsListener net.Listener
+	h3Conn        *net.UDPConn
 	h3Listener    *quic.EarlyListener
+	h3Transport   *quic.Transport
+	h3Validator   *quicAddrValidator
 }
 
 func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
@@ -421,6 +425,12 @@ func (s *Server) Shutdown() error {
 	if s.doqListener != nil {
 		dnsutil.CloseWithLog(s.doqListener, "DoQ listener")
 	}
+	if s.doqConn != nil {
+		dnsutil.CloseWithLog(s.doqConn, "DoQ socket")
+	}
+	if s.doqValidator != nil {
+		s.doqValidator.close()
+	}
 	if s.h3Server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
@@ -431,6 +441,15 @@ func (s *Server) Shutdown() error {
 	}
 	if s.h3Listener != nil {
 		dnsutil.CloseWithLog(s.h3Listener, "HTTP/3 listener")
+	}
+	if s.h3Transport != nil {
+		_ = s.h3Transport.Close()
+	}
+	if s.h3Conn != nil {
+		dnsutil.CloseWithLog(s.h3Conn, "DoH3 socket")
+	}
+	if s.h3Validator != nil {
+		s.h3Validator.close()
 	}
 
 	if err := s.serverGroup.Wait(); err != nil {
