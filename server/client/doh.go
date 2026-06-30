@@ -26,11 +26,11 @@ func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.Up
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
 	}
 
-	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
+	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify)
 
 	client, isCached := c.getDoHClient(key)
 	if !isCached {
-		client = c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
+		client = c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, tlsConfig)
 	}
 
 	// First attempt with the cached client.
@@ -53,7 +53,7 @@ func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.Up
 			}
 			c.dohTransportMu.Unlock()
 
-			client = c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
+			client = c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, tlsConfig)
 			resp, err = executeDoHHTTPRequest(ctx, msg, parsedURL, client)
 			if err == nil {
 				return resp, nil
@@ -76,9 +76,9 @@ func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.Up
 	return resp, err
 }
 
-func transportKey(host, serverName string, skipVerify bool, proxyURL string) string {
+func transportKey(host, serverName string, skipVerify bool) string {
 	var b strings.Builder
-	b.Grow(len(host) + len(serverName) + len(proxyURL) + 16)
+	b.Grow(len(host) + len(serverName) + 16)
 	b.WriteString(host)
 	b.WriteByte('|')
 	b.WriteString(serverName)
@@ -87,10 +87,6 @@ func transportKey(host, serverName string, skipVerify bool, proxyURL string) str
 		b.WriteString("true")
 	} else {
 		b.WriteString("false")
-	}
-	if proxyURL != "" {
-		b.WriteByte('|')
-		b.WriteString(proxyURL)
 	}
 	return b.String()
 }
@@ -116,11 +112,11 @@ func shouldRetryHTTP(err error) bool {
 	return false
 }
 
-func (c *Client) createDoHClient(host, serverName string, skipVerify bool, proxyURL string, tlsConfig *eTLS.Config) *http.Client {
+func (c *Client) createDoHClient(host, serverName string, skipVerify bool, tlsConfig *eTLS.Config) *http.Client {
 	c.dohTransportMu.Lock()
 	defer c.dohTransportMu.Unlock()
 
-	key := transportKey(host, serverName, skipVerify, proxyURL)
+	key := transportKey(host, serverName, skipVerify)
 	if client, ok := c.dohTransports[key]; ok {
 		return client
 	}
@@ -150,14 +146,6 @@ func (c *Client) createDoHClient(host, serverName string, skipVerify bool, proxy
 			return nil, err
 		}
 		return eTLSConn, nil
-	}
-
-	// Route through SOCKS5 proxy when configured.
-	if proxyURL != "" {
-		proxyDialer := c.getProxyDialer(&config.UpstreamServer{Proxy: proxyURL})
-		if proxyDialer != nil {
-			transport.DialContext = proxyDialer.DialContext
-		}
 	}
 
 	client := &http.Client{

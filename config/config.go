@@ -117,7 +117,6 @@ type UpstreamServer struct {
 	ServerName           string   `json:"server_name,omitempty"`
 	SkipTLSVerify        bool     `json:"skip_tls_verify,omitempty"`
 	Match                []string `json:"match,omitempty"`
-	Proxy                string   `json:"proxy,omitempty"`                  // socks5://[user:pass@]host:port
 	DNSCryptPublicKey    string   `json:"dnscrypt_public_key,omitempty"`    // hex-encoded Ed25519 public key
 	DNSCryptProviderName string   `json:"dnscrypt_provider_name,omitempty"` // DNSCrypt provider name (e.g. "2.dnscrypt-cert.example.com")
 	CertFetchAddress     string   `json:"cert_fetch_address,omitempty"`     // separate address for cert TXT queries
@@ -213,7 +212,7 @@ func LoadConfig(configFile string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	// Warn if config file has group/other read permissions — it may contain
-	// SOCKS5 proxy credentials and other sensitive values.
+	// sensitive values (TLS keys, DNSCrypt keys, etc.).
 	if info, err := os.Stat(configFile); err == nil {
 		if info.Mode().Perm()&GroupOtherPermMask != 0 {
 			log.Warnf("CONFIG: config file has insecure permissions (%04o). Consider 'chmod 600 %s'",

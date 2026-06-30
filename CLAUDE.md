@@ -214,8 +214,6 @@ zjdns/
     │   ├── doh.go                 # DoH via HTTP/2 transport
     │   ├── doh3.go                # DoH3 via HTTP/3 transport
     │   ├── doh_request.go          # Shared DoH/DoH3 HTTP request builder
-    │   ├── socks5.go               # SOCKS5 proxy client (RFC 1928/1929, TCP+UDP) + SafeURL
-    │   ├── ktls.go                 # KTLS config builders + DoT dial/exchange helpers
     │   └── pool/                  # Connection pool sub-package
     │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
     │       └── quic.go            # QUIC connection pool (QUICPool, QUICConn)

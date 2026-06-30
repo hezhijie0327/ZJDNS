@@ -130,19 +130,6 @@ const (
 	DefaultProbePortHTTPS = 443
 )
 
-// Proxy defaults.
-const (
-	DefaultProxyScheme = "socks5"
-	DefaultProxyPort   = "1080"
-)
-
-// SOCKS5 protocol constants (RFC 1928).
-const (
-	Socks5UDPHeaderLenIPv4 = 10  // IPv4 SOCKS5 UDP header length
-	Socks5UDPHeaderLenIPv6 = 22  // IPv6 SOCKS5 UDP header length
-	Socks5MaxAuthLen       = 255 // RFC 1929 max username/password length
-)
-
 // String sentinels and protocol identifiers.
 const (
 	RecursiveIndicator = "builtin_recursive"

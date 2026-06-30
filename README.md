@@ -80,7 +80,6 @@
 
 | RFC                                                     | 标准名称                                   | 实现功能                                 |
 | ------------------------------------------------------- | ------------------------------------------ | ---------------------------------------- |
-| [RFC 1928](https://www.rfc-editor.org/rfc/rfc1928.html) | SOCKS Protocol Version 5                   | SOCKS5 代理客户端                        |
 | [RFC 3597](https://www.rfc-editor.org/rfc/rfc3597.html) | Handling Unknown DNS RR Types              | 未知记录类型回退                         |
 | [RFC 4033](https://www.rfc-editor.org/rfc/rfc4033.html) | DNS Security Introduction and Requirements | DNSSEC 基础                              |
 | [RFC 4034](https://www.rfc-editor.org/rfc/rfc4034.html) | Resource Records for DNSSEC                | RRSIG/NSEC/DNSKEY/DS 类型                |
@@ -121,7 +120,7 @@ zjdns/
 ├── rewrite/                       # Domain rewrite rules
 ├── stats/                         # Lock-free atomic metrics
 └── server/                        # Core server
-    ├── client/                    # Outbound query client (UDP, TCP, DoT, DoQ, DoH, DoH3, SOCKS5)
+    ├── client/                    # Outbound query client (UDP, TCP, DoT, DoQ, DoH, DoH3)
     │   └── pool/                  # TCP/DoT/QUIC connection pools
     ├── resolver/                  # Recursive + upstream DNS resolution
     ├── dnscrypt/                  # DNSCrypt v2 server wrapper (AdGuardTeam/dnscrypt)

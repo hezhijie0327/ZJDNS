@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"time"
 
 	"github.com/miekg/dns"
@@ -23,8 +22,6 @@ import (
 
 func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	key := server.Address
-	poolKey := proxyPoolKey(key, server.Proxy)
-	proxyDialer := c.getProxyDialer(server)
 
 	dialQUIC := func(dialCtx context.Context, addr string) (*quic.Conn, error) {
 		dialTLS := tlsConfig.Clone()
@@ -32,22 +29,11 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 		timeoutCtx, cancel := context.WithTimeout(dialCtx, config.DefaultDNSQueryTimeout)
 		defer cancel()
 
-		if proxyDialer != nil {
-			pconn, err := proxyDialer.ListenPacket(timeoutCtx)
-			if err != nil {
-				return nil, fmt.Errorf("proxy ListenPacket: %w", err)
-			}
-			remoteAddr, err := net.ResolveUDPAddr("udp", addr)
-			if err != nil {
-				return nil, fmt.Errorf("resolve %s: %w", addr, err)
-			}
-			return quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig(key, tlsConfig.InsecureSkipVerify))
-		}
 		return quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig(key, tlsConfig.InsecureSkipVerify))
 	}
 
 	if c.quicPool != nil {
-		pc, err := c.quicPool.Acquire(ctx, poolKey, dialQUIC)
+		pc, err := c.quicPool.Acquire(ctx, key, dialQUIC)
 		if err == nil {
 			response, err := c.doQUICQuery(ctx, pc.Conn, msg, c.timeout)
 			if err == nil {
@@ -78,7 +64,7 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	}
 
 	if c.quicPool != nil {
-		c.quicPool.Put(poolKey, conn)
+		c.quicPool.Put(key, conn)
 	} else {
 		_ = conn.CloseWithError(connpool.QUICCodeNoError, "no pool, discarding")
 	}

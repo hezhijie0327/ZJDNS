@@ -54,7 +54,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 		if forceTCP {
 			protocol = config.ProtoTCP
 		}
-		server := &config.UpstreamServer{Address: nsAddr, Protocol: protocol, Proxy: rr.resolver.recursiveProxyURL}
+		server := &config.UpstreamServer{Address: nsAddr, Protocol: protocol}
 
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("Query nameserver")

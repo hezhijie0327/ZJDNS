@@ -66,9 +66,6 @@ type Client struct {
 	tcpPool *connpool.Pool
 	dotPool *connpool.Pool
 
-	proxyDialers map[string]*Socks5Dialer
-	proxyMu      sync.Mutex
-
 	// DNSCrypt clients and session cache.
 	dnscryptUDPClient *dnscrypt.Client
 	dnscryptTCPClient *dnscrypt.Client
@@ -126,7 +123,6 @@ func New() *Client {
 		SessionCache:      eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
 		tcpPool:           connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		dotPool:           connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		proxyDialers:      make(map[string]*Socks5Dialer),
 		dnscryptUDPClient: dnscrypt.NewClient(&dnscrypt.ClientConfig{Proto: dnscrypt.ProtoUDP, UDPSize: pool.UDPBufferSize}),
 		dnscryptTCPClient: dnscrypt.NewClient(&dnscrypt.ClientConfig{Proto: dnscrypt.ProtoTCP}),
 	}
@@ -175,52 +171,6 @@ func (c *Client) resetQUICConfig(key string) {
 	cfg = cfg.Clone()
 	cfg.TokenStore = quic.NewLRUTokenStore(config.DefaultTokenStoreCapacity, config.DefaultTokenStoreMaxEntries)
 	c.quicConfigs[key] = cfg
-}
-
-// getProxyDialer returns a cached Socks5Dialer for the server's proxy URL.
-// Returns nil when no proxy is configured or the proxy URL is invalid
-// (the validation error is logged once and the nil is cached).
-func (c *Client) getProxyDialer(server *config.UpstreamServer) *Socks5Dialer {
-	if server.Proxy == "" {
-		return nil
-	}
-
-	c.proxyMu.Lock()
-	defer c.proxyMu.Unlock()
-
-	if d, ok := c.proxyDialers[server.Proxy]; ok {
-		return d
-	}
-
-	// Evict oldest entry when at capacity (same pattern as dohTransports).
-	if len(c.proxyDialers) >= config.DefaultTransportMax {
-		for k, d := range c.proxyDialers {
-			if d != nil {
-				_ = d.Close()
-			}
-			delete(c.proxyDialers, k)
-			break
-		}
-	}
-
-	d, err := NewSocks5Dialer(server.Proxy, c.timeout)
-	if err != nil {
-		log.Warnf("UPSTREAM: invalid proxy %s for %s: %v", d.SafeURL(), server.Address, err)
-		// Cache nil so we don't retry parsing the same bad URL.
-		c.proxyDialers[server.Proxy] = nil
-		return nil
-	}
-	c.proxyDialers[server.Proxy] = d
-	return d
-}
-
-// proxyPoolKey returns a pool key that includes the proxy URL to ensure
-// proxied and non-proxied connections to the same upstream are isolated.
-func proxyPoolKey(baseKey, proxyURL string) string {
-	if proxyURL == "" {
-		return baseKey
-	}
-	return baseKey + "|" + proxyURL
 }
 
 // ExecuteQuery sends a DNS query to an upstream server and returns the result.
@@ -356,16 +306,6 @@ func (c *Client) Close() {
 	if c.quicPool != nil {
 		c.quicPool.Shutdown()
 	}
-
-	// Close proxy dialers
-	c.proxyMu.Lock()
-	for _, d := range c.proxyDialers {
-		if d != nil {
-			_ = d.Close()
-		}
-	}
-	c.proxyDialers = nil
-	c.proxyMu.Unlock()
 
 	// Clean up DNSCrypt sessions
 	c.cleanupDNSCryptSessions()
