@@ -276,7 +276,7 @@ func (s *Server) Start() error {
 			return fmt.Errorf("TCP listen: %w", err)
 		}
 		s.tcpServer = &dns.Server{
-			Listener: listener,
+			Listener: &servertls.TCPKeepAliveListener{Listener: listener},
 			Handler:  dns.HandlerFunc(s.handleDNSRequest),
 		}
 		log.Infof("SERVER: TCP server started on port %s", s.config.Server.Port)

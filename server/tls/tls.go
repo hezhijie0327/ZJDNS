@@ -52,6 +52,26 @@ func (dl *debugListener) Accept() (net.Conn, error) {
 	return conn, nil
 }
 
+// TCPKeepAliveListener wraps a net.Listener to enable TCP keep-alive on every
+// accepted connection. This ensures both server-side and client-side keep-alive
+// are active, preventing unilateral connection teardown by intermediate NAT or
+// firewall state timeouts.
+type TCPKeepAliveListener struct {
+	net.Listener
+}
+
+func (kl *TCPKeepAliveListener) Accept() (net.Conn, error) {
+	conn, err := kl.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
+	}
+	return conn, nil
+}
+
 // KTLSSettings configures kernel TLS offload for DoT/DoH server listeners.
 type KTLSSettings struct {
 	KernelTX bool // kernel TLS TX offload (default false)

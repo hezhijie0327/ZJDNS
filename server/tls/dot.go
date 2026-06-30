@@ -26,7 +26,7 @@ func (s *Server) startDOTServer() error {
 
 	// Wrap raw listener to log every TCP connection before TLS handshake,
 	// so we can distinguish "never reached us" from "reached us but TLS failed".
-	rawListener := &debugListener{Listener: listener, name: "DoT"}
+	rawListener := &debugListener{Listener: &TCPKeepAliveListener{Listener: listener}, name: "DoT"}
 
 	dotTLSConfig := s.tlsConfig.Clone()
 	dotTLSConfig.NextProtos = config.NextProtoDOT

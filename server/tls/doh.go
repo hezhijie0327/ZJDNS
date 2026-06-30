@@ -43,7 +43,7 @@ func (s *Server) startDOHServer(port string) error {
 
 	// Wrap raw listener to log every TCP connection before TLS handshake,
 	// so we can distinguish "never reached us" from "reached us but TLS failed".
-	rawListener := &debugListener{Listener: listener, name: "DoH"}
+	rawListener := &debugListener{Listener: &TCPKeepAliveListener{Listener: listener}, name: "DoH"}
 
 	tlsConfig := s.tlsConfig.Clone()
 	tlsConfig.NextProtos = config.NextProtoDOH
