@@ -228,15 +228,12 @@ func (r *Resolver) Query(ctx context.Context, question dns.Question, ecs *edns.E
 	}
 
 	// Only one set of servers — query directly without coordination overhead.
+	// Do not fall back to recursive resolution when no fallback servers are
+	// configured; return the upstream error so the client receives a clear
+	// failure signal instead of silently switching to recursive mode.
 	if len(fallbackServers) == 0 {
 		a, au, ad, v, e, s, f, err := r.queryUpstream(ctx, question, ecs, servers)
-		if err == nil {
-			return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f}
-		}
-		resolveCtx, cancel := context.WithTimeout(ctx, config.DefaultRecursiveResolveTimeout)
-		defer cancel()
-		a2, au2, ad2, v2, e2, s2, f2, err2 := r.cname.resolve(resolveCtx, question, ecs)
-		return &QueryResult{Answer: a2, Authority: au2, Additional: ad2, Validated: v2, ECS: e2, Server: s2, Fallback: f2, Err: err2}
+		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f, Err: err}
 	}
 
 	if len(servers) == 0 {
