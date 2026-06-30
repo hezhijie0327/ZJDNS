@@ -23,7 +23,6 @@ func (s *Server) startBackgroundTasks() {
 	s.startPrefetchCooldownCleanup()
 	s.startStatsLogger()
 	s.startStatsReset()
-	s.startTCPWriteMuSweep()
 	s.setupSignalHandling()
 }
 
@@ -132,20 +131,6 @@ func (s *Server) startStatsReset() {
 	})
 }
 
-// startTCPWriteMuSweep periodically removes stale tcpWriteMu entries.
-func (s *Server) startTCPWriteMuSweep() {
-	s.runBackgroundTicker("tcpWriteMu sweep", config.DefaultSweepInterval, func() {
-		cutoff := time.Now().Add(-config.DefaultTCPWriteMuStaleCutoff).UnixNano()
-		s.tcpWriteMu.Range(func(key, value any) bool {
-			entry, ok := value.(*tcpWriteEntry)
-			if !ok || entry.lastAccess.Load() < cutoff {
-				s.tcpWriteMu.Delete(key)
-			}
-			return true
-		})
-	})
-}
-
 func (s *Server) setupSignalHandling() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -208,37 +193,14 @@ func (s *Server) shutdownServer() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 	defer shutdownCancel()
-	if s.udpServer != nil {
-		if err := s.udpServer.ShutdownContext(shutdownCtx); err != nil {
-			log.Errorf("SERVER: UDP server shutdown failed: %v", err)
+
+	// Shutdown dnsproxy (handles all DNS listeners + upstream connections).
+	if s.dnsProxy != nil {
+		if err := s.dnsProxy.Shutdown(shutdownCtx); err != nil {
+			log.Errorf("SERVER: DNS proxy shutdown failed: %v", err)
 		} else {
-			log.Infof("SERVER: UDP server shut down")
+			log.Infof("SERVER: DNS proxy shut down")
 		}
-	}
-	if s.tcpServer != nil {
-		if err := s.tcpServer.ShutdownContext(shutdownCtx); err != nil {
-			log.Errorf("SERVER: TCP server shutdown failed: %v", err)
-		} else {
-			log.Infof("SERVER: TCP server shut down")
-		}
-	}
-
-	if s.tls != nil {
-		if err := s.tls.Shutdown(); err != nil {
-			log.Errorf("TLS: TLS server shutdown failed: %v", err)
-		}
-	}
-
-	if s.dnscrypt != nil {
-		if err := s.dnscrypt.Shutdown(); err != nil {
-			log.Errorf("DNSCRYPT: DNSCrypt server shutdown failed: %v", err)
-		}
-	}
-
-	// Close pooled connections and transports to release file descriptors
-	// and goroutines before waiting for background tasks.
-	if s.queryClient != nil {
-		s.queryClient.Close()
 	}
 
 	if s.pprofServer != nil {

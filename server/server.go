@@ -7,14 +7,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof" // register pprof handlers on http.DefaultServeMux
-	"os"
-	"runtime"
+	_ "net/http/pprof"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
+	"github.com/AdguardTeam/dnsproxy/proxy"
 	"github.com/miekg/dns"
 	"golang.org/x/sync/errgroup"
 
@@ -24,35 +23,31 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
-	"zjdns/internal/pool"
 	"zjdns/rewrite"
-	"zjdns/server/client"
-	serverdnscrypt "zjdns/server/dnscrypt"
 	"zjdns/server/latency"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
-	servertls "zjdns/server/tls"
 	"zjdns/stats"
 )
 
 // Server is the core DNS server handling query processing, protocol listeners, and lifecycle.
 type Server struct {
-	closed int32 // hot-path: checked on every query via atomic load
+	closed int32
 
 	config       *config.ServerConfig
 	cacheMgr     cache.Store
 	reverseCache interface {
 		ReverseLookup(net.IP) []cache.LookupResult
 	}
-	queryClient       *client.Client
-	guard             *security.Guard
-	tls               *servertls.Server
-	dnscrypt          *serverdnscrypt.Server
-	ednsMgr           *edns.Handler
-	rewriteMgr        *rewrite.Evaluator
-	cidrMgr           *cidr.Filter
-	statsMgr          *stats.Collector
-	pprofServer       *http.Server
+	guard      *security.Guard
+	ednsMgr    *edns.Handler
+	rewriteMgr *rewrite.Evaluator
+	cidrMgr    *cidr.Filter
+	statsMgr   *stats.Collector
+
+	dnsProxy    *proxy.Proxy
+	pprofServer *http.Server
+
 	ctx               context.Context
 	cancel            context.CancelCauseFunc
 	shutdown          chan struct{}
@@ -64,16 +59,6 @@ type Server struct {
 	resolver          *resolver.Resolver
 	prober            *latency.Prober
 	semaphore         chan struct{}
-	udpServer         *dns.Server
-	tcpServer         *dns.Server
-	tcpWriteMu        sync.Map
-}
-
-type tcpWriteEntry struct {
-	writeMu      chan struct{} // buffered size 1, acts as timeout-capable mutex
-	lastAccess   atomic.Int64
-	capacity     chan struct{}
-	capacityOnce sync.Once
 }
 
 type queryResult struct {
@@ -84,6 +69,33 @@ type queryResult struct {
 	ecs        *edns.ECSOption
 	fallback   bool
 	err        error
+}
+
+// ServeDNS implements proxy.Handler for dnsproxy integration.
+func (s *Server) ServeDNS(ctx context.Context, p *proxy.Proxy, dctx *proxy.DNSContext) error {
+	clientIP := clientIPFromAddr(dctx.Addr)
+	proto := string(dctx.Proto)
+	response := s.processDNSQuery(dctx.Req, clientIP, protoIsSecure(proto), proto)
+	if response != nil {
+		dctx.Res = response
+	}
+	return nil
+}
+
+func clientIPFromAddr(addr netip.AddrPort) net.IP {
+	if !addr.Addr().IsValid() || addr.Addr().IsUnspecified() {
+		return nil
+	}
+	ip := addr.Addr().AsSlice()
+	return net.IP(ip)
+}
+
+func protoIsSecure(proto string) bool {
+	switch proto {
+	case "tls", "quic", "https", "dnscrypt":
+		return true
+	}
+	return false
 }
 
 // New creates and initializes a Server from the given configuration.
@@ -138,58 +150,26 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	server.guard = security.New(cacheStore, cfg.Server.Features.HijackProtection)
-	// Cache the reverse lookup capability once — avoids a type assertion
-	// on every PTR query.
 	server.reverseCache, _ = server.cacheMgr.(interface {
 		ReverseLookup(net.IP) []cache.LookupResult
 	})
 
-	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
-		tlsCfg := servertls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
-		if cfg.Server.TLS.KTLS != nil {
-			tlsCfg.KTLS = &servertls.KTLSSettings{
-				KernelTX: cfg.Server.TLS.KTLS.KernelTX,
-				KernelRX: cfg.Server.TLS.KTLS.KernelRX,
-			}
-		}
-		tlsSrv, err := servertls.New(server, tlsCfg, config.DefaultBackgroundTimeout)
-		if err != nil {
-			cancel(fmt.Errorf("TLS server init: %w", err))
-			return nil, fmt.Errorf("TLS server init: %w", err)
-		}
-		server.tls = tlsSrv
+	// Build dnsproxy config and create the proxy.
+	pc, err := server.buildProxyConfig()
+	if err != nil {
+		cancel(fmt.Errorf("proxy config: %w", err))
+		return nil, fmt.Errorf("proxy config: %w", err)
 	}
-
-	if cfg.Server.DNSCrypt.Port != "" {
-		dnscryptCfg := serverdnscrypt.Config{
-			Port:         cfg.Server.DNSCrypt.Port,
-			ProviderName: cfg.Server.DNSCrypt.ProviderName,
-			PrivateKey:   cfg.Server.DNSCrypt.PrivateKey,
-			PublicKey:    cfg.Server.DNSCrypt.PublicKey,
-			ResolverSk:   cfg.Server.DNSCrypt.ResolverSk,
-			ResolverPk:   cfg.Server.DNSCrypt.ResolverPk,
-			ESVersion:    cfg.Server.DNSCrypt.ESVersion,
-		}
-		if cfg.Server.DNSCrypt.CertTTL > 0 {
-			dnscryptCfg.CertTTL = time.Duration(cfg.Server.DNSCrypt.CertTTL) * time.Second
-		}
-
-		dnscryptSrv, err := serverdnscrypt.New(server, dnscryptCfg)
-		if err != nil {
-			cancel(fmt.Errorf("DNSCrypt server init: %w", err))
-			return nil, fmt.Errorf("DNSCrypt server init: %w", err)
-		}
-		server.dnscrypt = dnscryptSrv
+	dnsProxy, err := proxy.New(pc)
+	if err != nil {
+		cancel(fmt.Errorf("proxy init: %w", err))
+		return nil, fmt.Errorf("proxy init: %w", err)
 	}
+	server.dnsProxy = dnsProxy
 
-	queryClient := client.New()
-	if cfg.Server.TLS.KTLS != nil {
-		queryClient.SetKTLS(cfg.Server.TLS.KTLS.KernelTX, cfg.Server.TLS.KTLS.KernelRX)
-	}
-	server.queryClient = queryClient
-
+	// Initialize the resolver with a client wrapper that uses dnsproxy's upstream.
 	server.resolver = resolver.New(
-		queryClient,
+		nil, // client — replaced by dnsproxy upstream resolution
 		server.guard,
 		ednsHandler,
 		cidrFilter,
@@ -197,12 +177,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cacheStore,
 	)
 	server.resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
-	server.resolver.InitServers(cfg.Upstream, cfg.Fallback)
 	server.resolver.SetBackgroundContext(backgroundCtx)
 
-	// Initialize the infrastructure-level latency prober for root/NS
-	// server reordering. This is independent of the user-facing
-	// latency_probe configuration.
 	latency.InitInfraProber(backgroundCtx)
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
@@ -218,7 +194,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.pprofServer = &http.Server{
 			Addr:              "127.0.0.1:" + cfg.Server.Pprof,
 			ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
-			ReadTimeout:       0, // Disabled: pprof endpoints (profile, trace, heap) take >10s
 			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
 		}
 	}
@@ -234,38 +209,26 @@ func (s *Server) Start() error {
 		return errors.New("server is closed")
 	}
 
-	errChan := make(chan error, 1)
-	serverCtx, serverCancel := context.WithCancelCause(context.Background())
-	defer serverCancel(errors.New("server startup completed"))
-
 	log.Infof("SERVER: Starting ZJDNS Server %s", config.Version)
 	log.Infof("SERVER: Log level: %s", log.Default.Level().String())
-	log.Infof("SERVER: Listening on port: %s", s.config.Server.Port)
 
 	s.displayInfo()
 	if s.config.Server.StatsInterval() > 0 {
 		s.logStatsNow("startup")
 	}
 
+	errChan := make(chan error, 1)
+	serverCtx, serverCancel := context.WithCancelCause(context.Background())
+	defer serverCancel(errors.New("server startup completed"))
+
 	g, ctx := errgroup.WithContext(serverCtx)
 
+	// dnsproxy handles all DNS listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, DNSCrypt).
 	g.Go(func() error {
-		defer dnsutil.HandlePanic("UDP server")
-		s.udpServer = &dns.Server{
-			Addr:    ":" + s.config.Server.Port,
-			Net:     config.ProtoUDP,
-			Handler: dns.HandlerFunc(s.handleDNSRequest),
-			UDPSize: pool.UDPBufferSize,
-		}
-		log.Infof("SERVER: UDP server started on port %s", s.config.Server.Port)
-		err := s.udpServer.ListenAndServe()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				return fmt.Errorf("UDP startup: %w", err)
-			}
+		defer dnsutil.HandlePanic("DNS proxy")
+		log.Infof("SERVER: Starting DNS proxy")
+		if err := s.dnsProxy.Start(ctx); err != nil {
+			return fmt.Errorf("DNS proxy: %w", err)
 		}
 		<-ctx.Done()
 		return nil
@@ -276,58 +239,8 @@ func (s *Server) Start() error {
 			defer dnsutil.HandlePanic("pprof server")
 			log.Infof("PPROF: pprof server started on port %s", s.config.Server.Pprof)
 			err := s.pprofServer.ListenAndServe()
-
 			if err != nil && err != http.ErrServerClosed {
 				return fmt.Errorf("pprof startup: %w", err)
-			}
-			<-ctx.Done()
-			return nil
-		})
-	}
-
-	g.Go(func() error {
-		defer dnsutil.HandlePanic("TCP server")
-		listener, err := net.Listen("tcp", ":"+s.config.Server.Port)
-		if err != nil {
-			return fmt.Errorf("TCP listen: %w", err)
-		}
-		s.tcpServer = &dns.Server{
-			Listener: listener,
-			Handler:  dns.HandlerFunc(s.handleDNSRequest),
-		}
-		log.Infof("SERVER: TCP server started on port %s", s.config.Server.Port)
-		err = s.tcpServer.ListenAndServe()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				return fmt.Errorf("TCP startup: %w", err)
-			}
-		}
-		<-ctx.Done()
-		return nil
-	})
-
-	if s.tls != nil {
-		g.Go(func() error {
-			defer dnsutil.HandlePanic("Secure DNS server")
-			httpsPort := s.config.Server.TLS.HTTPS.Port
-			err := s.tls.Start(httpsPort)
-			if err != nil {
-				return fmt.Errorf("secure DNS startup: %w", err)
-			}
-			<-ctx.Done()
-			return nil
-		})
-	}
-
-	if s.dnscrypt != nil {
-		g.Go(func() error {
-			defer dnsutil.HandlePanic("DNSCrypt server")
-			err := s.dnscrypt.Start()
-			if err != nil {
-				return fmt.Errorf("DNSCrypt startup: %w", err)
 			}
 			<-ctx.Done()
 			return nil
@@ -371,9 +284,6 @@ func (s *Server) displayInfo() {
 					protocol = "UDP"
 				}
 				serverInfo := fmt.Sprintf("%s (%s)", server.Address, protocol)
-				if server.SkipTLSVerify && dnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) {
-					serverInfo += " [Skip TLS verification]"
-				}
 				if len(server.Match) > 0 {
 					serverInfo += fmt.Sprintf(" [CIDR match: %v]", server.Match)
 				}
@@ -393,31 +303,24 @@ func (s *Server) displayInfo() {
 		log.Infof("PPROF: pprof server enabled on: %s, via: %s", s.config.Server.Pprof, config.DefaultPprofPath)
 	}
 
-	if s.tls != nil {
-		log.Infof("TLS: Listening on port: %s (DoT/DoQ)", s.config.Server.TLS.Port)
-		httpsPort := s.config.Server.TLS.HTTPS.Port
-		if httpsPort != "" {
-			endpoint := s.config.Server.TLS.HTTPS.Endpoint
-			if endpoint == "" {
-				endpoint = strings.TrimPrefix(config.DefaultQueryPath, "/")
-			}
-			log.Infof("TLS: Listening on port: %s (DoH/DoH3, endpoint: %s)", httpsPort, endpoint)
-		}
-		if runtime.GOOS == "linux" {
-			ktlsTX, ktlsRX := false, false
-			if s.config.Server.TLS.KTLS != nil {
-				ktlsTX, ktlsRX = s.config.Server.TLS.KTLS.KernelTX, s.config.Server.TLS.KTLS.KernelRX
-			}
-			if _, err := os.Stat("/sys/module/tls"); err == nil {
-				log.Infof("TLS: kTLS available, TX=%t RX=%t", ktlsTX, ktlsRX)
-			} else {
-				log.Infof("TLS: kTLS unavailable (load with: modprobe tls)")
-			}
-		}
+	// Log listener addresses from dnsproxy.
+	for _, addr := range s.dnsProxy.Addrs(proxy.ProtoUDP) {
+		log.Infof("SERVER: Listening on %s (UDP)", addr)
 	}
-
-	if s.dnscrypt != nil {
-		log.Infof("DNSCRYPT: Listening on port: %s (DNSCrypt)", s.config.Server.DNSCrypt.Port)
+	for _, addr := range s.dnsProxy.Addrs(proxy.ProtoTCP) {
+		log.Infof("SERVER: Listening on %s (TCP)", addr)
+	}
+	for _, addr := range s.dnsProxy.Addrs(proxy.ProtoTLS) {
+		log.Infof("TLS: Listening on %s (DoT)", addr)
+	}
+	for _, addr := range s.dnsProxy.Addrs(proxy.ProtoQUIC) {
+		log.Infof("TLS: Listening on %s (DoQ)", addr)
+	}
+	for _, addr := range s.dnsProxy.Addrs(proxy.ProtoHTTPS) {
+		log.Infof("TLS: Listening on %s (DoH)", addr)
+	}
+	for _, addr := range s.dnsProxy.Addrs(proxy.ProtoDNSCrypt) {
+		log.Infof("DNSCRYPT: Listening on %s (DNSCrypt)", addr)
 	}
 
 	if s.rewriteMgr.HasRules() {

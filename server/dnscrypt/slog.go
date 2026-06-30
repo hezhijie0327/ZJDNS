@@ -43,4 +43,4 @@ func (slogHandler) Handle(_ context.Context, r slog.Record) error {
 }
 
 func (h slogHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
-func (h slogHandler) WithGroup(_ string) slog.Handler       { return h }
+func (h slogHandler) WithGroup(_ string) slog.Handler      { return h }

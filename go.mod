@@ -4,6 +4,7 @@ go 1.26.4
 
 require (
 	github.com/AdguardTeam/dnscrypt v0.0.1
+	github.com/AdguardTeam/dnsproxy v0.82.0
 	github.com/ameshkov/dnsstamps v1.0.3
 	github.com/miekg/dns v1.1.73-0.20260622091530-fa041eedc7a8
 	github.com/quic-go/quic-go v0.60.1-0.20260629040301-af4bd46e551d
@@ -17,6 +18,7 @@ require (
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
+	github.com/bluele/gcache v0.0.2 // indirect
 	github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
 	github.com/emmansun/gmsm v0.44.0 // indirect
@@ -29,11 +31,11 @@ require (
 	gitlab.com/go-extension/hash v0.0.0-20250912170447-263d1d8375e4 // indirect
 	gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5 // indirect
 	gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891 // indirect
-	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
+	gonum.org/v1/gonum v0.17.0 // indirect
 )
