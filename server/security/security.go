@@ -4,12 +4,12 @@ package security
 
 import "zjdns/cache"
 
-// Guard aggregates the DNSSEC validators and hijack detector into a single
-// configuration unit.
+// Guard aggregates DNSSEC crypto validation and hijack detection into a single
+// configuration unit. Lightweight record-presence checking is provided by the
+// package-level ValidateResponse function.
 type Guard struct {
-	RecordPresence *Validator       // Lightweight record-presence check
-	Crypto         *CryptoValidator // Full cryptographic DNSSEC validation
-	Detector       *Detector        // Hijack detection
+	Crypto   *CryptoValidator // Full cryptographic DNSSEC validation
+	Detector *Detector        // Hijack detection
 }
 
 // New creates a new Guard. DNSSEC cryptographic validation is always enabled;
@@ -18,9 +18,8 @@ type Guard struct {
 // controls whether bogus responses are rejected or passed through.
 func New(c cache.Store, hijackEnabled bool) *Guard {
 	g := &Guard{
-		RecordPresence: &Validator{},
-		Crypto:         NewCryptoValidator(c),
-		Detector:       &Detector{},
+		Crypto:   NewCryptoValidator(c),
+		Detector: &Detector{},
 	}
 	g.Detector.Enable(hijackEnabled)
 	return g

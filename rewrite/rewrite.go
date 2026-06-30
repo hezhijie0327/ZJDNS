@@ -97,6 +97,31 @@ func (re *Evaluator) LoadRules(rules []config.RewriteRule) error {
 
 		rule.NormalizedName = dnsutil.NormalizeDomain(rule.Name)
 
+		// Pre-parse Type/Class strings to uint16 to avoid allocation-heavy
+		// map lookups and string normalizations on every query (hot path).
+		for j := range rule.Records {
+			rule.Records[j].ParsedType = dns.StringToType[rule.Records[j].Type]
+			if rule.Records[j].Class != "" {
+				if parsed, ok := dns.StringToClass[strings.ToUpper(strings.TrimSpace(rule.Records[j].Class))]; ok {
+					rule.Records[j].ParsedClass = parsed
+				}
+			}
+			if rule.Records[j].ParsedClass == 0 {
+				rule.Records[j].ParsedClass = dns.ClassINET
+			}
+		}
+		for j := range rule.Additional {
+			rule.Additional[j].ParsedType = dns.StringToType[rule.Additional[j].Type]
+			if rule.Additional[j].Class != "" {
+				if parsed, ok := dns.StringToClass[strings.ToUpper(strings.TrimSpace(rule.Additional[j].Class))]; ok {
+					rule.Additional[j].ParsedClass = parsed
+				}
+			}
+			if rule.Additional[j].ParsedClass == 0 {
+				rule.Additional[j].ParsedClass = dns.ClassINET
+			}
+		}
+
 		// Pre-build DNS records from config so they are not re-parsed
 		// from zone file strings on every query.
 		rule.CachedRecords = make([]dns.RR, 0, len(rule.Records))
@@ -224,16 +249,7 @@ ruleLoop:
 				if record.ResponseCode == nil {
 					continue
 				}
-				recordType := dns.StringToType[record.Type]
-				var recordClass uint16 = dns.ClassINET
-				if record.Class != "" {
-					if parsedClass, ok := dns.StringToClass[strings.ToUpper(strings.TrimSpace(record.Class))]; ok {
-						recordClass = parsedClass
-					} else {
-						continue
-					}
-				}
-				if (record.Type == "" || recordType == qtype) && recordClass == qclass {
+				if (record.Type == "" || record.ParsedType == qtype) && record.ParsedClass == qclass {
 					result.ResponseCode = *record.ResponseCode
 					result.ShouldRewrite = true
 					result.Records = nil

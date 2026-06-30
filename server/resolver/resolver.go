@@ -108,9 +108,9 @@ type Resolver struct {
 }
 
 // Validator holds the DNSSEC and hijack detection components for response
-// validation.
+// validation. Lightweight record-presence checking is provided by the
+// package-level security.ValidateResponse function.
 type Validator struct {
-	DNSSEC *security.Validator       // Lightweight record-presence check
 	Crypto *security.CryptoValidator // Full cryptographic DNSSEC validation
 	Hijack *security.Detector        // DNS hijack detection
 }
@@ -141,7 +141,7 @@ func New(c *client.Client, g *security.Guard, e *edns.Handler, cidr CIDRMatcher,
 	}
 	r.recursive = &Recursive{resolver: r, cache: cacheStore}
 	r.cname = &CNAME{resolver: r}
-	r.validator = &Validator{DNSSEC: g.RecordPresence, Crypto: g.Crypto, Hijack: g.Detector}
+	r.validator = &Validator{Crypto: g.Crypto, Hijack: g.Detector}
 	return r
 }
 

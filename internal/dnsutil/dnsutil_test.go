@@ -41,7 +41,9 @@ func TestIsSecureProtocol(t *testing.T) {
 		{"tls", true}, {"TLS", false}, {"quic", true},
 		{"https", true}, {"http3", true},
 		{"udp", false}, {"tcp", false}, {"", false},
-		{"dot", false}, {"doq", false}, {"DoT", false},
+		{"tls", true}, {"quic", true}, {"https", true}, {"http3", true},
+		{"dot", true}, {"doq", true}, {"doh", true}, {"doh3", true},
+		{"DoT", false}, // case-sensitive — callers normalize to lowercase first
 	}
 	for _, tc := range tests {
 		if got := IsSecureProtocol(tc.proto); got != tc.want {

@@ -81,7 +81,6 @@ func newTestRecursive() *Recursive {
 		edns:     ednsHandler,
 		buildMsg: func(q dns.Question, ecs *edns.ECSOption, rd bool, secure bool) *dns.Msg { return new(dns.Msg) },
 		validator: &Validator{
-			DNSSEC: &security.Validator{},
 			Crypto: guard.Crypto,
 			Hijack: guard.Detector,
 		},

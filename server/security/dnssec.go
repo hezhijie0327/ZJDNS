@@ -6,21 +6,6 @@ import (
 	"zjdns/internal/log"
 )
 
-// Validator performs lightweight DNSSEC record-presence checking only.
-//
-// IMPORTANT: This does NOT perform cryptographic DNSSEC validation (RRSIG
-// signature verification, DNSKEY trust anchor validation, or chain-of-trust
-// construction). It only checks whether DNSSEC record types (RRSIG, NSEC,
-// NSEC3, DNSKEY, DS) are present in the response. The AuthenticatedData (AD)
-// flag from upstream servers is trusted only when accompanied by DNSSEC
-// records, as this indicates the upstream resolver performed cryptographic
-// validation.
-//
-// Operators who need stronger guarantees should deploy this server behind
-// a validating resolver (e.g., Unbound) or use CryptoValidator for
-// full RFC 4033-4035 validation with trust anchors.
-type Validator struct{}
-
 // ValidateResponse checks whether a DNS response appears DNSSEC-validated.
 // It trusts the AuthenticatedData (AD) flag ONLY when accompanied by DNSSEC
 // records — the upstream resolver set AD, meaning it cryptographically validated
@@ -29,9 +14,9 @@ type Validator struct{}
 // treat those as validated.
 //
 // The full CryptoValidator provides stronger guarantees for recursive queries;
-// this method serves as the lightweight check for upstream mode where we
+// this function serves as the lightweight check for upstream mode where we
 // rely on the upstream resolver's validation.
-func (v *Validator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
+func ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
 	if !dnssecOK || response == nil {
 		return false
 	}
@@ -39,16 +24,16 @@ func (v *Validator) ValidateResponse(response *dns.Msg, dnssecOK bool) bool {
 	// Trust the AD flag when DNSSEC records are present. In upstream forwarding
 	// mode, the upstream resolver performed the validation. In recursive mode,
 	// CryptoValidator provides the definitive answer; this is the fallback.
-	if response.AuthenticatedData && v.hasDNSSECRecords(response) {
+	if response.AuthenticatedData && hasDNSSECRecords(response) {
 		log.Debugf("SECURITY: validated via AD flag + DNSSEC record presence")
 		return true
 	}
 
-	log.Debugf("SECURITY: not DNSSEC-validated (AD=%t, records=%t)", response.AuthenticatedData, v.hasDNSSECRecords(response))
+	log.Debugf("SECURITY: not DNSSEC-validated (AD=%t, records=%t)", response.AuthenticatedData, hasDNSSECRecords(response))
 	return false
 }
 
-func (v *Validator) hasDNSSECRecords(response *dns.Msg) bool {
+func hasDNSSECRecords(response *dns.Msg) bool {
 	if response == nil {
 		return false
 	}

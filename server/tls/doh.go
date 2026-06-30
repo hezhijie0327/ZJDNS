@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
@@ -71,10 +72,12 @@ func (s *Server) startDOHServer(port string) error {
 		for {
 			conn, err := s.httpsListener.Accept()
 			if err != nil {
-				if s.ctx.Err() == nil {
-					log.Warnf("TLS: DoH Accept failed: %v (type=%T)", err, err)
+				if s.ctx.Err() != nil {
+					return nil
 				}
-				return nil
+				log.Warnf("TLS: DoH Accept failed: %v (type=%T)", err, err)
+				time.Sleep(config.DefaultAcceptRetryDelay)
+				continue
 			}
 
 			log.Debugf("TLS: DoH TCP accepted from %s, TLS handshake pending", conn.RemoteAddr())
@@ -142,6 +145,7 @@ func (s *Server) startDoH3Server(port string) error {
 					return nil
 				}
 				log.Errorf("TLS: DoH3 Accept error: %v", err)
+				time.Sleep(config.DefaultAcceptRetryDelay)
 				continue
 			}
 

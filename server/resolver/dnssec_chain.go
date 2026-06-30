@@ -21,11 +21,12 @@ import (
 // resolution. At each delegation level, verified parent DNSKEYs and child DS
 // records are used to authenticate the child zone's DNSKEYs.
 type dnssecChain struct {
-	parentDNSKEYs   []*dns.DNSKEY
-	childDS         []*dns.DS
-	zoneDNSKEYs     []*dns.DNSKEY
-	lastEDECode     uint16 // EDE code for the most recent validation failure
-	zoneCutDetected bool   // set when answer RRSIGs are signed by a child zone's keys
+	parentDNSKEYs          []*dns.DNSKEY
+	childDS                []*dns.DS
+	zoneDNSKEYs            []*dns.DNSKEY
+	lastEDECode            uint16 // EDE code for the most recent validation failure
+	zoneCutDetected        bool   // set when answer RRSIGs are signed by a child zone's keys
+	dsPresentButUnverified bool   // DS records found but RRSIG verification failed
 }
 
 func (rr *Recursive) validateWithDNSSEC(response *dns.Msg, currentDomain string, chain *dnssecChain) bool {
@@ -102,13 +103,16 @@ func (rr *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, c
 		rr.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
 		verifiedDS := rr.verifyDelegationDSRRSIG(response, childZone, chain, dsRecords)
 		chain.childDS = verifiedDS
+		chain.dsPresentButUnverified = false
 		if len(verifiedDS) > 0 {
 			log.Debugf("SECURITY: verified %d DS record(s) for delegation to %s", len(verifiedDS), childZone)
 		} else {
+			chain.dsPresentButUnverified = true
 			log.Debugf("SECURITY: DS records for %s could not be verified (RRSIG check failed)", childZone)
 		}
 	} else {
-		chain.childDS = nil // Insecure delegation (no DS in parent)
+		chain.childDS = nil
+		chain.dsPresentButUnverified = false // Insecure delegation (no DS in parent)
 	}
 
 	// The current zone's DNSKEYs become parent DNSKEYs for the child
@@ -305,6 +309,12 @@ func (rr *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, name
 			chain.lastEDECode = edns.EDECodeDNSSECBogus
 			return false
 		}
+	} else if chain.dsPresentButUnverified {
+		// DS records were found but RRSIG verification failed — bogus delegation
+		// (not insecure). An attacker could inject unverifiable DS records to
+		// bypass DNSSEC; treat as bogus.
+		chain.lastEDECode = edns.EDECodeDNSSECBogus
+		return false
 	} else {
 		// No DS in parent — insecure delegation. Self-verify for root zone.
 		if currentDomain == config.DNSRootZone {

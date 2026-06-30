@@ -136,6 +136,11 @@ type DNSRecordConfig struct {
 	TTL          uint32 `json:"ttl,omitempty"`
 	Content      string `json:"content"`
 	ResponseCode *int   `json:"response_code,omitempty"`
+
+	// Pre-parsed during LoadRules to avoid string-to-uint16 lookups
+	// and string normalizations on the query hot path.
+	ParsedType  uint16
+	ParsedClass uint16
 }
 
 // CIDRConfig defines a CIDR rule set loaded from a file or inline rules,
@@ -323,10 +328,24 @@ func validateCIDRConfigs(cfg *ServerConfig) (map[string]bool, error) {
 }
 
 func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error {
+	validProtocols := map[string]bool{
+		"udp": true, "tcp": true, "tls": true, "dot": true,
+		"quic": true, "doq": true,
+		"https": true, "doh": true,
+		"http3": true, "doh3": true,
+		"tcp-tls": true,
+	}
+
 	for i, server := range cfg.Upstream {
+		protocol := strings.ToLower(server.Protocol)
+		if server.Protocol != "" && !validProtocols[protocol] {
+			return fmt.Errorf("upstream server %d protocol invalid: %s", i, server.Protocol)
+		}
+
 		if !server.IsRecursive() {
 			if _, _, err := net.SplitHostPort(server.Address); err != nil {
-				if server.Protocol == "https" || server.Protocol == "http3" {
+				if protocol == ProtoHTTP || protocol == ProtoHTTP3 ||
+					protocol == ProtoDOH || protocol == ProtoDOH3 {
 					if _, err := url.Parse(server.Address); err != nil {
 						return fmt.Errorf("upstream server %d address invalid: %w", i, err)
 					}
@@ -335,16 +354,6 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 				}
 			}
 		}
-
-		validProtocols := map[string]bool{
-			"udp": true, "tcp": true, "tls": true,
-			"quic": true, "https": true, "http3": true,
-		}
-		if server.Protocol != "" && !validProtocols[strings.ToLower(server.Protocol)] {
-			return fmt.Errorf("upstream server %d protocol invalid: %s", i, server.Protocol)
-		}
-
-		protocol := strings.ToLower(server.Protocol)
 		if dnsutil.IsSecureProtocol(protocol) && server.ServerName == "" {
 			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
 		}

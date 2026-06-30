@@ -15,6 +15,7 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/server/security"
 )
 
 type result struct {
@@ -24,6 +25,7 @@ type result struct {
 	Validated  bool
 	ECS        *edns.ECSOption
 	Server     string
+	Err        error // set when errgroup detects a sentinel error (e.g. CIDR refusal)
 }
 
 func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
@@ -126,7 +128,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 						// Trust the upstream resolver's AD flag for DNSSEC
 						// validation in forwarding mode — the upstream
 						// performed the cryptographic verification.
-						queryResult.Validated = r.validator.DNSSEC.ValidateResponse(queryResult.Response, true)
+						queryResult.Validated = security.ValidateResponse(queryResult.Response, true)
 						log.Debugf("UPSTREAM: DNSSEC validation result=%t for %s via %s", queryResult.Validated, question.Name, server.Address)
 						ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 
@@ -163,14 +165,26 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 	}
 
 	go func() {
-		_ = g.Wait()
+		if err := g.Wait(); err != nil && errors.Is(err, ErrCIDRFilterRefused) {
+			// All successful answers were filtered by CIDR rules —
+			// propagate the specific error so callers can return REFUSED.
+			select {
+			case resultChan <- result{Err: ErrCIDRFilterRefused}:
+			default:
+			}
+		}
 		close(resultChan)
 	}()
 
 	select {
 	case res, ok := <-resultChan:
-		if ok && res.Server != "" {
-			return res.Answer, res.Authority, res.Additional, res.Validated, res.ECS, res.Server, false, nil
+		if ok {
+			if errors.Is(res.Err, ErrCIDRFilterRefused) {
+				return nil, nil, nil, false, nil, "", false, ErrCIDRFilterRefused
+			}
+			if res.Server != "" {
+				return res.Answer, res.Authority, res.Additional, res.Validated, res.ECS, res.Server, false, nil
+			}
 		}
 		if nxRes := nxdomainResult.Load(); nxRes != nil && nxRes.Server != "" {
 			return nxRes.Answer, nxRes.Authority, nxRes.Additional, nxRes.Validated, nxRes.ECS, nxRes.Server, false, nil

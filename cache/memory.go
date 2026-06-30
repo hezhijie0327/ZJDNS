@@ -209,9 +209,6 @@ func (mc *MemoryCache) setEntryInternal(key string, entry *CacheEntry) {
 // startPTRSweeper periodically removes stale PTR index entries that no longer
 // have a corresponding cache entry, preventing unbounded ptrIndex growth.
 func (mc *MemoryCache) startPTRSweeper() {
-	if mc.persistInterval <= 0 {
-		mc.persistInterval = config.DefaultCachePersistInterval
-	}
 	mc.ptrSweepStop = make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(config.DefaultSweepInterval)
