@@ -94,8 +94,8 @@ const (
 	DefaultTLSSessionCacheSize  = 256
 	DefaultMaxIdleConns         = 100
 	DefaultMaxIdleConnsPerHost  = 8
-	DefaultDoTWriteChannelSize  = 64
-	DefaultDoHMaxRequestSize    = 8192 // Max DoH request body size
+	DefaultDOTWriteChannelSize  = 64
+	DefaultDOHMaxRequestSize    = 8192 // Max DoH request body size
 	DefaultCacheKeyBufferSize   = 128
 	DefaultCacheKeyMaxLength    = 512
 	DefaultCacheKeyECSPrefix    = ":ecs:"

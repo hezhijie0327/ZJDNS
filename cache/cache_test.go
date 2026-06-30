@@ -243,4 +243,10 @@ func TestSet_ZeroTTLFloored(t *testing.T) {
 
 // ── Helper ─────────────────────────────────────────────────────────────────────────
 
-func netParseIP(s string) net.IP { return net.ParseIP(s).To4() }
+func netParseIP(s string) net.IP {
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return nil
+	}
+	return ip.To4()
+}

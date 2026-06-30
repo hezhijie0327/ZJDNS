@@ -47,7 +47,7 @@ type Server struct {
 	tls               *servertls.Server
 	ednsMgr           *edns.Handler
 	rewriteMgr        *rewrite.Evaluator
-	cidrMgr           *cidr.Filter
+	cidrFilter        *cidr.Filter
 	statsMgr          *stats.Collector
 	pprofServer       *http.Server
 	ctx               context.Context
@@ -118,7 +118,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		config:            cfg,
 		ednsMgr:           ednsHandler,
 		rewriteMgr:        rewriteEvaluator,
-		cidrMgr:           cidrFilter,
+		cidrFilter:        cidrFilter,
 		statsMgr:          stats.New(cfg, cacheStore),
 		cacheMgr:          cacheStore,
 		ctx:               ctx,
@@ -357,7 +357,7 @@ func (s *Server) displayInfo() {
 		log.Infof("RECURSION: Recursive mode")
 	}
 
-	if s.cidrMgr != nil && len(s.config.CIDR) > 0 {
+	if s.cidrFilter != nil && len(s.config.CIDR) > 0 {
 		log.Infof("CIDR: CIDR Filter: enabled (%d rules)", len(s.config.CIDR))
 	}
 

@@ -271,8 +271,6 @@ func (sc *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadErr
 		} else {
 			protocol = "DOH"
 		}
-	case len(protocol) >= 8 && (protocol[0] == 'd' || protocol[0] == 'D') && (protocol[1] == 'n' || protocol[1] == 'N'):
-		protocol = "DNSCRYPT"
 	default:
 		protocol = "UDP"
 	}
@@ -302,7 +300,6 @@ func (sc *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadErr
 		sc.dohRequests.Add(1)
 	case "DOH3":
 		sc.doh3Requests.Add(1)
-	case "DNSCRYPT":
 	default:
 		sc.udpRequests.Add(1)
 	}

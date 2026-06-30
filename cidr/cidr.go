@@ -235,9 +235,6 @@ func toIPv4Net(ipNet *net.IPNet) *ipv4Net {
 	}
 
 	ipv4 := ipNet.IP.To4()
-	if ipv4 == nil {
-		return nil
-	}
 
 	ipUint := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
 

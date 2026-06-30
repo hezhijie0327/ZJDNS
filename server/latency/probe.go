@@ -57,16 +57,16 @@ func (p *Prober) Start(question dns.Question, cacheKey string, answer, authority
 		return
 	}
 
-	var aaaaCount int
+	var ipRRCount int
 	for _, rr := range answer {
 		if isAOrAAAA(rr) {
-			aaaaCount++
-			if aaaaCount > 1 {
+			ipRRCount++
+			if ipRRCount > 1 {
 				break
 			}
 		}
 	}
-	if aaaaCount <= 1 {
+	if ipRRCount <= 1 {
 		log.Debugf("LATENCY: probe skipped for %s because only one A/AAAA record present", question.Name)
 		return
 	}

@@ -9,6 +9,8 @@ import (
 	"net"
 	"sync/atomic"
 
+	"zjdns/internal/log"
+
 	"github.com/miekg/dns"
 )
 
@@ -168,7 +170,11 @@ func (m *Handler) ParseCookie(msg *dns.Msg) *CookieOption {
 	}
 	for _, option := range opt.Option {
 		if cookie, ok := option.(*dns.EDNS0_COOKIE); ok {
-			cookieBytes, _ := hex.DecodeString(cookie.Cookie)
+			cookieBytes, err := hex.DecodeString(cookie.Cookie)
+			if err != nil {
+				log.Debugf("EDNS: invalid cookie hex: %v", err)
+				return nil
+			}
 			if len(cookieBytes) < DefaultCookieClientLen {
 				return nil
 			}

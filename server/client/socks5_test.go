@@ -13,11 +13,9 @@ const socks5TestProxy = "socks5://127.0.0.1:1080"
 // requireSocks5Proxy skips t if no SOCKS5 proxy is listening on proxyURL.
 func requireSocks5Proxy(t *testing.T, proxyURL string) {
 	t.Helper()
-	u, err := net.ResolveTCPAddr("tcp", "127.0.0.1:1080")
-	if err != nil {
-		t.Skipf("SOCKS5 proxy not available: resolve: %v", err)
-	}
-	conn, err := net.DialTimeout("tcp", u.String(), 2*time.Second)
+	// Use the proxy host as the test address — the actual proxy URL may
+	// contain a scheme (socks5://) which is handled by Socks5Dialer.
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:1080", 2*time.Second)
 	if err != nil {
 		t.Skipf("SOCKS5 proxy not available on %s: %v", proxyURL, err)
 	}

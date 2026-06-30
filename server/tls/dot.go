@@ -94,7 +94,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 	connCtx, connCancel := context.WithCancel(s.ctx)
 
 	type writeTask struct{ data []byte }
-	writeCh := make(chan writeTask, config.DefaultDoTWriteChannelSize)
+	writeCh := make(chan writeTask, config.DefaultDOTWriteChannelSize)
 
 	writerDone := make(chan struct{})
 	go func() {

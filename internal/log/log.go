@@ -171,7 +171,7 @@ func sanitizeLogMessage(msg string) string {
 		return msg
 	}
 	// Fast path: scan for any byte that needs replacement.
-	// Replace NUL (0x00), control chars (0x01-0x1F except \t=0x09), DEL (0x7F).
+	// Replace NUL (0x00), control chars (0x01-0x1F), DEL (0x7F).
 	needsReplace := false
 	for i := 0; i < len(msg); i++ {
 		c := msg[i]

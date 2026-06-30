@@ -162,7 +162,7 @@ func (mc *MemoryCache) persistSnapshot() error {
 		return err
 	}
 	tmp := mc.persistPath + ".tmp"
-	file, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_TRUNC, 0600)
+	file, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}

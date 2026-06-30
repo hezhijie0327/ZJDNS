@@ -28,9 +28,13 @@ var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 const MaxLabelLength = 63
 
 // NormalizeDomain converts a domain name to lowercase and removes the trailing
-// dot.
+// dot. Uses sub-slicing (zero-alloc) instead of strings.TrimSuffix to avoid
+// allocation on the hot path.
 func NormalizeDomain(domain string) string {
-	return strings.ToLower(strings.TrimSuffix(domain, "."))
+	if len(domain) > 0 && domain[len(domain)-1] == '.' {
+		domain = domain[:len(domain)-1]
+	}
+	return strings.ToLower(domain)
 }
 
 // ValidateDomainLabels checks that each label in the domain name does not exceed
