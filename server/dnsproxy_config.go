@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/netip"
@@ -32,6 +33,7 @@ func (s *Server) buildProxyConfig() (*proxy.Config, error) {
 	cfg := s.config
 
 	pc := &proxy.Config{
+		Logger:        slog.New(dnsproxyLogHandler{}),
 		UDPBufferSize: pool.UDPBufferSize,
 		CacheEnabled:  false,
 		DNSSECEnabled: true,
