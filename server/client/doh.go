@@ -142,6 +142,11 @@ func (c *Client) createDoHClient(host, serverName string, skipVerify bool, proxy
 		if err != nil {
 			return nil, err
 		}
+		// Enable TCP keep-alive to detect dead connections and maintain NAT bindings.
+		if tc, ok := tcpConn.(*net.TCPConn); ok {
+			_ = tc.SetKeepAlive(true)
+			_ = tc.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
+		}
 		cfg := tlsConfig.Clone()
 		cfg.ServerName = serverName
 		eTLSConn := eTLS.Client(tcpConn, cfg)

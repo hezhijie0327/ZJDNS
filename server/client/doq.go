@@ -41,9 +41,9 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 			if err != nil {
 				return nil, fmt.Errorf("resolve %s: %w", addr, err)
 			}
-			return quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig(key, tlsConfig.InsecureSkipVerify))
+			return quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))
 		}
-		return quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig(key, tlsConfig.InsecureSkipVerify))
+		return quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))
 	}
 
 	if c.quicPool != nil {
@@ -55,7 +55,7 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 			}
 			c.quicPool.Remove(pc)
 			if errors.Is(err, quic.Err0RTTRejected) {
-				c.resetQUICConfig(key)
+				c.resetQUICConfig("doq:" + key)
 			}
 			log.Debugf("UPSTREAM: pooled DoQ query to %s failed: %v, retrying with new connection", server.Address, err)
 		}
@@ -66,7 +66,7 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 		// On 0-RTT rejection, reset the TokenStore so the next connection
 		// attempt starts with a clean address-validation token cache.
 		if errors.Is(err, quic.Err0RTTRejected) {
-			c.resetQUICConfig(key)
+			c.resetQUICConfig("doq:" + key)
 		}
 		return nil, fmt.Errorf("QUIC dial: %w", err)
 	}

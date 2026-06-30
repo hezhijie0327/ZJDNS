@@ -86,7 +86,7 @@ func (c *Client) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.U
 			}
 
 			if errors.Is(err, quic.Err0RTTRejected) {
-				c.resetQUICConfig(key)
+				c.resetQUICConfig("doh3:" + key)
 			}
 
 			c.doh3TransportMu.Lock()
@@ -150,7 +150,7 @@ func (c *Client) createDoH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 	tlsCfg := tlsConfig.Clone()
 	tlsCfg.NextProtos = config.NextProtoDOH3
 
-	quicCfg := c.getQUICConfig(key, tlsConfig.InsecureSkipVerify)
+	quicCfg := c.getQUICConfig("doh3:"+key, tlsConfig.InsecureSkipVerify)
 
 	// Resolve proxy dialer once, outside the Dial closure.
 	var proxyDialer *Socks5Dialer

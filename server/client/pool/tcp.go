@@ -56,6 +56,13 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 	if maxPipe <= 0 {
 		maxPipe = config.DefaultMaxPipe
 	}
+	// Enable TCP keep-alive to detect dead connections without relying
+	// solely on the read deadline, and to keep NAT/firewall bindings alive
+	// during idle periods.
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
+	}
 	pc := &Conn{
 		conn:     conn,
 		addr:     addr,
@@ -163,7 +170,7 @@ func (pc *Conn) readLoop() {
 	lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
 
 	for {
-		_ = pc.conn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
+		_ = pc.conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
 		if _, err := io.ReadFull(pc.conn, lengthBuf); err != nil {
 			if err != io.EOF {

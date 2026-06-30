@@ -41,8 +41,10 @@ const (
 	DefaultHTTPIdleConnTimeout = 5 * time.Minute  // HTTP transport idle connection
 	DefaultQUICKeepAlive       = 20 * time.Second // QUIC keep-alive period
 
-	DefaultQUICClientIdleTimeout   = 60 * time.Second // Client QUIC idle (must exceed KeepAlive)
-	DefaultQUICServerIdleTimeout   = 30 * time.Second // Server QUIC idle (RFC 9000 default)
+	DefaultQUICClientIdleTimeout   = 60 * time.Second  // Client QUIC idle (must exceed KeepAlive)
+	DefaultQUICServerIdleTimeout   = 30 * time.Second  // Server QUIC idle (RFC 9000 default)
+	DefaultTCPPoolIdleTimeout      = 120 * time.Second // TCP/DoT pool connection idle (must exceed typical query intervals)
+	DefaultTCPKeepAlivePeriod      = 30 * time.Second  // TCP keep-alive probe interval
 	DefaultHTTPServerIdleTimeout   = 60 * time.Second // HTTP keep-alive idle
 	DefaultHTTPServerWriteTimeout  = 10 * time.Second // HTTP response write
 	DefaultHTTPReadHeaderTimeout   = 5 * time.Second  // HTTP header read (Slowloris protection)
@@ -87,10 +89,10 @@ const (
 	DefaultServerGoroutineLimit = 1024
 	DefaultMinConcurrencyLimit  = 8
 
-	DefaultTransportMax         = 32
-	DefaultTLSSessionCacheSize  = 32
+	DefaultTransportMax         = 64
+	DefaultTLSSessionCacheSize  = 256
 	DefaultMaxIdleConns         = 100
-	DefaultMaxIdleConnsPerHost  = 2
+	DefaultMaxIdleConnsPerHost  = 8
 	DefaultDoTWriteChannelSize  = 64
 	DefaultDoHMaxRequestSize    = 8192 // Max DoH request body size
 	DefaultCacheKeyBufferSize   = 128
@@ -103,8 +105,8 @@ const (
 	DefaultCacheEvictSampleSize = 25
 	DefaultRewriteRulesCapacity = 16
 
-	DefaultTokenStoreCapacity     = 4  // QUIC LRU token store capacity per key
-	DefaultTokenStoreMaxEntries   = 10 // QUIC LRU token store max total entries
+	DefaultTokenStoreCapacity     = 32  // QUIC LRU token store capacity per key
+	DefaultTokenStoreMaxEntries   = 100 // QUIC LRU token store max total entries
 	DefaultSecureTransportRetries = 2  // DoH/DoH3 recreate-and-retry attempts
 
 	DefaultStatsInterval      = 3600  // Stats collection interval (seconds)

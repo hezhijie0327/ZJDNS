@@ -175,6 +175,15 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	server.resolver.InitServers(cfg.Upstream, cfg.Fallback)
 	server.resolver.SetBackgroundContext(backgroundCtx)
 
+	// Pre-warm transport connections for configured upstream servers so
+	// the first query does not pay the full TLS/QUIC handshake cost.
+	if len(cfg.Upstream) > 0 || len(cfg.Fallback) > 0 {
+		allServers := make([]config.UpstreamServer, 0, len(cfg.Upstream)+len(cfg.Fallback))
+		allServers = append(allServers, cfg.Upstream...)
+		allServers = append(allServers, cfg.Fallback...)
+		server.queryClient.WarmUpConnections(allServers)
+	}
+
 	// Initialize the infrastructure-level latency prober for root/NS
 	// server reordering. This is independent of the user-facing
 	// latency_probe configuration.

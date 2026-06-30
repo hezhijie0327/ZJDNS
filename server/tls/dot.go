@@ -82,6 +82,14 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		return
 	}
 
+	// Enable TCP keep-alive on the underlying connection so idle DoT
+	// connections are not silently torn down by intermediate NAT/firewall
+	// state timeouts. The read deadline handles idle connection cleanup.
+	if tcpConn, ok := tlsConn.NetConn().(*net.TCPConn); ok {
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
+	}
+
 	reader := bufio.NewReaderSize(tlsConn, TLSConnBufferSize)
 	connCtx, connCancel := context.WithCancel(s.ctx)
 
@@ -122,7 +130,10 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 		// The first ReadFull triggers the TLS handshake (lazy handshake in
 		// crypto/tls). After a successful handshake, kTLS may be negotiated.
-		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
+		// Use a long read deadline for idle-connection detection; the
+		// per-message I/O is bounded by TCP keep-alive (DefaultTCPKeepAlivePeriod)
+		// and client-side query timeouts.
+		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {

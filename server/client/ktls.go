@@ -47,6 +47,11 @@ func (c *Client) dialTLSConn(ctx context.Context, addr string, tlsConfig *eTLS.C
 	if err != nil {
 		return nil, err
 	}
+	// Enable TCP keep-alive to detect dead connections and maintain NAT bindings.
+	if tc, ok := tcpConn.(*net.TCPConn); ok {
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
+	}
 	tlsConn := eTLS.Client(tcpConn, tlsConfig)
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		_ = tcpConn.Close()
