@@ -45,11 +45,11 @@ const (
 	DefaultQUICServerIdleTimeout   = 30 * time.Second  // Server QUIC idle (RFC 9000 default)
 	DefaultTCPPoolIdleTimeout      = 120 * time.Second // TCP/DoT pool connection idle (must exceed typical query intervals)
 	DefaultTCPKeepAlivePeriod      = 30 * time.Second  // TCP keep-alive probe interval
-	DefaultHTTPServerIdleTimeout   = 60 * time.Second // HTTP keep-alive idle
-	DefaultHTTPServerWriteTimeout  = 10 * time.Second // HTTP response write
-	DefaultHTTPReadHeaderTimeout   = 5 * time.Second  // HTTP header read (Slowloris protection)
-	DefaultRecursiveResolveTimeout = 30 * time.Second // Full recursive resolution
-	DefaultShutdownTimeout         = 15 * time.Second // Graceful shutdown deadline
+	DefaultHTTPServerIdleTimeout   = 60 * time.Second  // HTTP keep-alive idle
+	DefaultHTTPServerWriteTimeout  = 10 * time.Second  // HTTP response write
+	DefaultHTTPReadHeaderTimeout   = 5 * time.Second   // HTTP header read (Slowloris protection)
+	DefaultRecursiveResolveTimeout = 30 * time.Second  // Full recursive resolution
+	DefaultShutdownTimeout         = 15 * time.Second  // Graceful shutdown deadline
 )
 
 // Security parameters: certificates, DNSSEC, keys, and access control.
@@ -107,7 +107,7 @@ const (
 
 	DefaultTokenStoreCapacity     = 32  // QUIC LRU token store capacity per key
 	DefaultTokenStoreMaxEntries   = 100 // QUIC LRU token store max total entries
-	DefaultSecureTransportRetries = 2  // DoH/DoH3 recreate-and-retry attempts
+	DefaultSecureTransportRetries = 2   // DoH/DoH3 recreate-and-retry attempts
 
 	DefaultStatsInterval      = 3600  // Stats collection interval (seconds)
 	DefaultStatsResetInterval = 86400 // Stats reset interval (seconds)

@@ -105,6 +105,7 @@ func (s *Server) startDoH3Server(port string) error {
 		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
+		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 	}
 
 	quicListener, err := quic.ListenAddrEarly(addr, tlsConfig, quicConfig)

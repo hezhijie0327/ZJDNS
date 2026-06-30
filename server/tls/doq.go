@@ -44,6 +44,7 @@ func (s *Server) startDOQServer() error {
 		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
+		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 	}
 
 	s.doqListener, err = s.doqTransport.ListenEarly(quicTLSConfig, quicConfig)
