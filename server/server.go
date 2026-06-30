@@ -280,7 +280,7 @@ func (s *Server) Start() error {
 			Handler:  dns.HandlerFunc(s.handleDNSRequest),
 		}
 		log.Infof("SERVER: TCP server started on port %s", s.config.Server.Port)
-		err = s.tcpServer.ListenAndServe()
+		err = s.tcpServer.ActivateAndServe()
 		if err != nil {
 			select {
 			case <-ctx.Done():
