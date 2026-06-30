@@ -365,7 +365,7 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 
 | Constant | Package | Value |
 |----------|---------|-------|
-| `config.DefaultDNSQueryTimeout` | config | 5s (single DNS query / dial / per-message I/O; RFC 8767 §4.2: <10s) |
+| `config.DefaultDNSQueryTimeout` | config | 10s (single DNS query / dial / per-message I/O; RFC 8767 §4.2: <10s) |
 | `config.DefaultBackgroundTimeout` | config | 10s (bounded wait for background tasks) |
 | `config.DefaultBackgroundShutdownTimeout` | config | 30s (bounded wait for background tasks during shutdown) |
 | `config.DefaultRecursiveResolveTimeout` | config | 30s (full recursive resolution) |
@@ -399,12 +399,12 @@ convention. Cache key strings follow the `prefix:` convention (e.g. `dns:`, `dns
 | `config.DefaultLatencyProbeTimeout` | config | 100ms (per-step probe timeout) |
 | `config.DefaultMaxNSEC3Iterations` | config | 150 (NSEC3 iteration cap, RFC 5155) |
 | `config.DefaultSecureTransportRetries` | config | 2 (DoH/DoH3 retry count) |
-| `config.DefaultTokenStoreCapacity` | config | 4 (QUIC LRU token store capacity per key) |
-| `config.DefaultTokenStoreMaxEntries` | config | 10 (QUIC LRU token store max entries) |
+| `config.DefaultTokenStoreCapacity` | config | 32 (QUIC LRU token store capacity per key) |
+| `config.DefaultTokenStoreMaxEntries` | config | 100 (QUIC LRU token store max entries) |
 | `config.DefaultStatsInterval` | config | 3600 (stats collection interval) |
 | `config.DefaultStatsResetInterval` | config | 86400 (stats reset interval) |
-| `config.DefaultTransportMax` | config | 32 (max cached transports/configs per type) |
-| `config.DefaultTLSSessionCacheSize` | config | 32 (client TLS session cache entries) |
+| `config.DefaultTransportMax` | config | 64 (max cached transports/configs per type) |
+| `config.DefaultTLSSessionCacheSize` | config | 256 (client TLS session cache entries) |
 | `config.DefaultRewriteRulesCapacity` | config | 16 (rewrite rule slice pre-allocation) |
 | `config.GroupOtherPermMask` | config | 0077 (TLS cert/key file permission check) |
 | `config.RecursiveIndicator` | config | "builtin_recursive" (sentinel for built-in recursive mode) |

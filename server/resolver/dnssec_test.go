@@ -73,7 +73,7 @@ func aRec(name string, ip string) *dns.A {
 // newTestRecursive creates a minimal Recursive for unit testing.
 func newTestRecursive() *Recursive {
 	guard := security.New(nil, false)
-	ednsHandler, _ := edns.NewHandler(edns.DefaultECSConfig{})
+	ednsHandler, _ := edns.NewHandler(edns.ECSConfig{})
 	queryClient := client.New()
 
 	r := &Resolver{

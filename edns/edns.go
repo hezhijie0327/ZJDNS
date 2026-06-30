@@ -18,13 +18,13 @@ import (
 type Handler struct {
 	defaultECSIPv4   atomic.Pointer[ECSOption]
 	defaultECSIPv6   atomic.Pointer[ECSOption]
-	defaultECSConfig DefaultECSConfig
+	defaultECSConfig ECSConfig
 	detector         *ipdetect.Detector
 	CookieGenerator  *CookieGenerator
 }
 
 // NewHandler creates a Handler with the given default ECS configuration.
-func NewHandler(defaultECS DefaultECSConfig) (*Handler, error) {
+func NewHandler(defaultECS ECSConfig) (*Handler, error) {
 	h := &Handler{
 		defaultECSConfig: defaultECS,
 		detector: &ipdetect.Detector{
@@ -69,7 +69,7 @@ func NewHandler(defaultECS DefaultECSConfig) (*Handler, error) {
 
 // ApplyToMessage adds EDNS(0) options (ECS, Cookie, EDE, Padding) to a DNS
 // message.
-func (m *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, clientRequestedDNSSEC bool, isSecureConnection bool, cookieStr string, ede *EDEOption) {
+func (m *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption) {
 	if m == nil || msg == nil {
 		return
 	}

@@ -230,7 +230,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 			// Generate a valid server cookie so the legitimate client can retry.
 			serverCookie := s.ednsMgr.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 			cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
-			s.ednsMgr.ApplyToMessage(msg, ecsOpt, clientRequestedDNSSEC, false, cookieStr, nil)
+			s.ednsMgr.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil)
 			responseMsg = msg
 			return responseMsg
 		}

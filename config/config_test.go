@@ -21,7 +21,7 @@ func TestLoadConfig_DefaultPortsApplied(t *testing.T) {
 	if cfg.Server.TLS.Port != "853" {
 		t.Errorf("TLS port = %q, want 853", cfg.Server.TLS.Port)
 	}
-	// HTTPS port is optional; defaults only applied by getDefaultConfig, not LoadConfig
+	// HTTPS port is optional; defaults only applied by NewDefaultServerConfig, not LoadConfig
 }
 
 func TestLoadConfig_FileNotFound(t *testing.T) {

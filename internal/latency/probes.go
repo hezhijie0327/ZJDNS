@@ -122,7 +122,7 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 		_ = conn.SetDeadline(deadline)
 	}
 
-	// Send a single zero-byte datagram — valid per RFC 768 §3.1 and
+	// Send a single-byte datagram — valid per RFC 768 §3.1 and
 	// universally applicable regardless of the target service. The Read
 	// will return either a response from the service or an ICMP
 	// port-unreachable that manifests as a read error; either way we

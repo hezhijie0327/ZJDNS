@@ -43,11 +43,11 @@ func NewMessagePool() *MessagePool {
 	}
 }
 
-// Get acquires a zeroed dns.Msg from the pool.
+// Get acquires a dns.Msg from the pool. The message is already zeroed by Put(),
+// so callers that need a clean slate are covered; callers that pre-populate
+// fields before use can rely on the zero state.
 func (mp *MessagePool) Get() *dns.Msg {
-	msg := mp.pool.Get().(*dns.Msg)
-	*msg = dns.Msg{}
-	return msg
+	return mp.pool.Get().(*dns.Msg)
 }
 
 // Put returns a dns.Msg to the pool.

@@ -41,7 +41,7 @@ func (s *Server) applyEDNS(msg *dns.Msg, isSecureConnection bool, clientIP net.I
 	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || ede != nil || isSecureConnection
 
 	if shouldAddEDNS {
-		s.ednsMgr.ApplyToMessage(msg, ecsOpt, clientRequestedDNSSEC, isSecureConnection, cookieStr, ede)
+		s.ednsMgr.ApplyToMessage(msg, ecsOpt, isSecureConnection, cookieStr, ede)
 	}
 }
 
@@ -121,7 +121,7 @@ func (s *Server) buildQueryMessage(question dns.Question, ecs *edns.ECSOption, r
 	msg.RecursionDesired = recursionDesired
 
 	if s.ednsMgr != nil {
-		s.ednsMgr.ApplyToMessage(msg, ecs, true, isSecureConnection, "", nil)
+		s.ednsMgr.ApplyToMessage(msg, ecs, isSecureConnection, "", nil)
 	}
 
 	return msg

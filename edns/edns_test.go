@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestDefaultECSConfig_ValueForQType(t *testing.T) {
-	cfg := DefaultECSConfig{
+func TestECSConfig_ValueForQType(t *testing.T) {
+	cfg := ECSConfig{
 		IPv4:       "1.2.3.0/24",
 		IPv6:       "2001:db8::/32",
 		PreferIPv4: true,
@@ -39,18 +39,18 @@ func TestDefaultECSConfig_ValueForQType(t *testing.T) {
 	}
 }
 
-func TestDefaultECSConfig_Validate(t *testing.T) {
+func TestECSConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     DefaultECSConfig
+		cfg     ECSConfig
 		wantErr bool
 	}{
-		{"empty config", DefaultECSConfig{}, true},
-		{"IPv4 only valid", DefaultECSConfig{IPv4: "1.2.3.0/24"}, false},
-		{"IPv6 only valid", DefaultECSConfig{IPv6: "2001:db8::/32"}, false},
-		{"both valid", DefaultECSConfig{IPv4: "1.2.3.0/24", IPv6: "2001:db8::/32"}, false},
-		{"invalid value", DefaultECSConfig{IPv4: "not-an-ip"}, true},
-		{"auto value valid", DefaultECSConfig{IPv4: "auto", IPv6: "auto"}, false},
+		{"empty config", ECSConfig{}, true},
+		{"IPv4 only valid", ECSConfig{IPv4: "1.2.3.0/24"}, false},
+		{"IPv6 only valid", ECSConfig{IPv6: "2001:db8::/32"}, false},
+		{"both valid", ECSConfig{IPv4: "1.2.3.0/24", IPv6: "2001:db8::/32"}, false},
+		{"invalid value", ECSConfig{IPv4: "not-an-ip"}, true},
+		{"auto value valid", ECSConfig{IPv4: "auto", IPv6: "auto"}, false},
 	}
 
 	for _, tt := range tests {
@@ -63,23 +63,23 @@ func TestDefaultECSConfig_Validate(t *testing.T) {
 	}
 }
 
-func TestDefaultECSConfig_IsEmpty(t *testing.T) {
-	empty := DefaultECSConfig{}
+func TestECSConfig_IsEmpty(t *testing.T) {
+	empty := ECSConfig{}
 	if !empty.IsEmpty() {
 		t.Error("empty config should be empty")
 	}
-	v4 := DefaultECSConfig{IPv4: "1.2.3.0/24"}
+	v4 := ECSConfig{IPv4: "1.2.3.0/24"}
 	if v4.IsEmpty() {
 		t.Error("config with IPv4 should not be empty")
 	}
 }
 
-func TestDefaultECSConfig_HasAuto(t *testing.T) {
-	static := DefaultECSConfig{IPv4: "1.2.3.0/24"}
+func TestECSConfig_HasAuto(t *testing.T) {
+	static := ECSConfig{IPv4: "1.2.3.0/24"}
 	if static.HasAuto() {
 		t.Error("static config should not have auto")
 	}
-	auto := DefaultECSConfig{IPv4: "auto"}
+	auto := ECSConfig{IPv4: "auto"}
 	if !auto.HasAuto() {
 		t.Error("auto config should have auto")
 	}

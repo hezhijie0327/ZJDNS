@@ -128,7 +128,7 @@ func BenchmarkCryptoValidator_VerifyDelegationDS(b *testing.B) {
 
 func BenchmarkEDNSApplyToMessage(b *testing.B) {
 	disableLogging()
-	h, _ := edns.NewHandler(edns.DefaultECSConfig{})
+	h, _ := edns.NewHandler(edns.ECSConfig{})
 	msg := new(dns.Msg)
 	msg.SetQuestion("bench.example.com.", dns.TypeA)
 	ecs := &edns.ECSOption{Family: 1, SourcePrefix: 24, Address: net.IPv4(192, 0, 2, 1)}
@@ -136,7 +136,7 @@ func BenchmarkEDNSApplyToMessage(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		m := msg.Copy()
-		h.ApplyToMessage(m, ecs, true, false, "", nil)
+		h.ApplyToMessage(m, ecs, false, "", nil)
 	}
 }
 
@@ -156,7 +156,7 @@ func BenchmarkShuffleSlice(b *testing.B) {
 
 func BenchmarkBuildQueryMessage(b *testing.B) {
 	disableLogging()
-	h, _ := edns.NewHandler(edns.DefaultECSConfig{})
+	h, _ := edns.NewHandler(edns.ECSConfig{})
 	cfg := &config.ServerConfig{Server: config.ServerSettings{Port: "5353", TLS: config.TLSSettings{Port: "853"}}}
 	srv, err := server.New(cfg)
 	if err != nil {
@@ -172,7 +172,7 @@ func BenchmarkBuildQueryMessage(b *testing.B) {
 		msg := new(dns.Msg)
 		msg.SetQuestion(q.Name, q.Qtype)
 		msg.RecursionDesired = true
-		h.ApplyToMessage(msg, ecs, true, false, "", nil)
+		h.ApplyToMessage(msg, ecs, false, "", nil)
 	}
 }
 

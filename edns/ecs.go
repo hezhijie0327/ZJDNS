@@ -33,9 +33,9 @@ type ECSOption struct {
 	ScopePrefix  uint8
 }
 
-// DefaultECSConfig holds the default ECS subnet configuration for IPv4 and
+// ECSConfig holds the default ECS subnet configuration for IPv4 and
 // IPv6.
-type DefaultECSConfig struct {
+type ECSConfig struct {
 	IPv4          string
 	IPv6          string
 	PreferIPv4    bool
@@ -43,19 +43,19 @@ type DefaultECSConfig struct {
 }
 
 // IsEmpty returns true if neither IPv4 nor IPv6 is configured.
-func (c DefaultECSConfig) IsEmpty() bool {
+func (c ECSConfig) IsEmpty() bool {
 	return c.IPv4 == "" && c.IPv6 == ""
 }
 
 // HasAuto returns true if either IPv4 or IPv6 is set to the auto-detection
 // value.
-func (c DefaultECSConfig) HasAuto() bool {
+func (c ECSConfig) HasAuto() bool {
 	return isAutoECSValue(c.IPv4) || isAutoECSValue(c.IPv6)
 }
 
 // ValueForQType returns the ECS subnet string appropriate for the given query
 // type.
-func (c DefaultECSConfig) ValueForQType(qtype uint16) string {
+func (c ECSConfig) ValueForQType(qtype uint16) string {
 	if qtype == dns.TypeA {
 		if c.IPv4 != "" {
 			return c.IPv4
@@ -81,7 +81,7 @@ func (c DefaultECSConfig) ValueForQType(qtype uint16) string {
 }
 
 // Validate checks that the ECS configuration contains valid subnet values.
-func (c DefaultECSConfig) Validate() error {
+func (c ECSConfig) Validate() error {
 	if c.IPv4 == "" && c.IPv6 == "" {
 		return errors.New("default_ecs_subnet must specify ipv4 and/or ipv6")
 	}
@@ -98,8 +98,8 @@ func (c DefaultECSConfig) Validate() error {
 	return nil
 }
 
-// UnmarshalJSON implements json.Unmarshaler for DefaultECSConfig.
-func (c *DefaultECSConfig) UnmarshalJSON(data []byte) error {
+// UnmarshalJSON implements json.Unmarshaler for ECSConfig.
+func (c *ECSConfig) UnmarshalJSON(data []byte) error {
 	if len(data) == 0 || string(data) == "null" {
 		return nil
 	}
@@ -126,8 +126,8 @@ func (c *DefaultECSConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// MarshalJSON implements json.Marshaler for DefaultECSConfig.
-func (c DefaultECSConfig) MarshalJSON() ([]byte, error) {
+// MarshalJSON implements json.Marshaler for ECSConfig.
+func (c ECSConfig) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		IPv4       string `json:"ipv4,omitempty"`
 		IPv6       string `json:"ipv6,omitempty"`
