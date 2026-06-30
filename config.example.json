@@ -11,10 +11,6 @@
       "https": {
         "port": "443",
         "endpoint": "/dns-query"
-      },
-      "ktls": {
-        "kernel_tx": true,
-        "kernel_rx": false
       }
     },
     "features": {

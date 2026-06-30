@@ -214,6 +214,7 @@ zjdns/
     │   ├── doh.go                 # DoH via HTTP/2 transport
     │   ├── doh3.go                # DoH3 via HTTP/3 transport
     │   ├── doh_request.go          # Shared DoH/DoH3 HTTP request builder
+    │   ├── tls_helpers.go          # eTLS client config, dialTLSConn, exchangeOverTLS
     │   └── pool/                  # Connection pool sub-package
     │       ├── tcp.go             # RFC 7766 pipelined TCP/DoT pool (Conn, Pool)
     │       └── quic.go            # QUIC connection pool (QUICPool, QUICConn)

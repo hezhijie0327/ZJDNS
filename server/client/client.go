@@ -71,10 +71,6 @@ type Client struct {
 	dnscryptTCPClient *dnscrypt.Client
 	dnscryptSessions  sync.Map // map[string]*dnscryptSession
 
-	// KTLS offload settings — defaults to false (off). Set via SetKTLS() from
-	// the server config before use.
-	ktlsTX bool
-	ktlsRX bool
 }
 
 // New creates a Client with default timeouts, transport pools, and session
@@ -223,8 +219,8 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 }
 
 // stdTLSConfig builds a standard crypto/tls Config for QUIC-based upstream
-// protocols (DoQ, DoH3). KTLS does not apply to QUIC. ClientSessionCache is
-// omitted — QUIC uses 0-RTT tokens for session resumption.
+// protocols (DoQ, DoH3). ClientSessionCache is omitted — QUIC uses 0-RTT
+// tokens for session resumption.
 func (c *Client) stdTLSConfig(server *config.UpstreamServer) *tls.Config {
 	return &tls.Config{
 		CurvePreferences:   []tls.CurveID{},
@@ -257,14 +253,6 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}
-}
-
-// SetKTLS configures kernel TLS offload for upstream DoT/DoH connections.
-// Both default to false (off). TX (encryption) is typically safe; RX
-// (decryption) may produce "bad record MAC" on some kernel/NIC combos.
-func (c *Client) SetKTLS(tx, rx bool) {
-	c.ktlsTX = tx
-	c.ktlsRX = rx
 }
 
 // Close shuts down all pooled connections and transports, releasing file
