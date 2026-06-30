@@ -194,8 +194,9 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 				// A records for CDN CNAME targets) are validated via separate
 				// recursive resolution against their own zone's DNSKEYs.
 				answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
+				nsSlice, extraSlice := response.Ns, response.Extra
 				pool.DefaultMessagePool.Put(response)
-				return answer, response.Ns, response.Extra, validated, ecsResponse, config.RecursiveIndicator, false, nil
+				return answer, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
 			} else {
 				// When DNSSEC crypto is enabled and the zone has DS records in the
 				// parent, a crypto verification failure means the answer is bogus.
@@ -215,8 +216,9 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 				// A records for CDN CNAME targets) are validated via separate
 				// recursive resolution against their own zone's DNSKEYs.
 				answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
+				nsSlice, extraSlice := response.Ns, response.Extra
 				pool.DefaultMessagePool.Put(response)
-				return answer, response.Ns, response.Extra, validated, ecsResponse, config.RecursiveIndicator, false, nil
+				return answer, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
 			}
 		}
 

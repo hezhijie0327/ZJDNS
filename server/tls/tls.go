@@ -404,6 +404,9 @@ func (s *Server) Start(httpsPort string) error {
 
 	for err := range errChan {
 		if err != nil {
+			// Cancel server context to stop accept loops that may have
+			// already started in other listeners before this one failed.
+			s.cancel(fmt.Errorf("tls startup failed: %w", err))
 			return err
 		}
 

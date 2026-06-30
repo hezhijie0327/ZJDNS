@@ -68,16 +68,11 @@ func (c *Client) exchangeOverTLS(ctx context.Context, msg *dns.Msg, addr string,
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = tlsConn.Close() }()
 	dnsConn := new(dns.Conn)
 	dnsConn.Conn = tlsConn
 	if err := dnsConn.WriteMsg(msg); err != nil {
-		_ = tlsConn.Close()
 		return nil, err
 	}
-	response, err := dnsConn.ReadMsg()
-	if err != nil {
-		_ = tlsConn.Close()
-		return nil, err
-	}
-	return response, nil
+	return dnsConn.ReadMsg()
 }

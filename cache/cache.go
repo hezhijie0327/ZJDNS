@@ -182,7 +182,9 @@ func createCompactRecord(rr dns.RR) *CompactRecord {
 	if rr == nil {
 		return nil
 	}
-	return &CompactRecord{Text: rr.String(), OrigTTL: rr.Header().Ttl, Type: rr.Header().Rrtype, RR: rr}
+	// RR field intentionally not stored — expand() re-parses from Text;
+	// storing the original dns.RR pointer would waste memory with no benefit.
+	return &CompactRecord{Text: rr.String(), OrigTTL: rr.Header().Ttl, Type: rr.Header().Rrtype}
 }
 
 // ExpandRecords converts a slice of CompactRecords to DNS resource records.
