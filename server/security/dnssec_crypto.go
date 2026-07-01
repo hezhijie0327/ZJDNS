@@ -58,15 +58,15 @@ func dnsKeyCacheKey(zone string) string {
 // anchors embedded. DNSSEC validation is always active. The cache store is
 // used to persist verified zone DNSKEYs, sharing the same memory budget and
 // eviction policy as DNS record cache entries.
-func NewCryptoValidator(c cache.Store) *CryptoValidator {
-	cv := &CryptoValidator{
-		cache: c,
+func NewCryptoValidator(store cache.Store) *CryptoValidator {
+	val := &CryptoValidator{
+		cache: store,
 	}
-	cv.loadRootTrustAnchors()
-	return cv
+	val.loadRootTrustAnchors()
+	return val
 }
 
-func (cv *CryptoValidator) loadRootTrustAnchors() {
+func (c *CryptoValidator) loadRootTrustAnchors() {
 	rootAnchors := []string{rootTrustAnchor20326, rootTrustAnchor38696}
 	var keys []*dns.DNSKEY
 
@@ -94,13 +94,13 @@ func (cv *CryptoValidator) loadRootTrustAnchors() {
 		log.Errorf("SECURITY: no valid root trust anchors loaded")
 		return
 	}
-	cv.rootKeys = keys
+	c.rootKeys = keys
 	log.Infof("SECURITY: initialized with %d root trust anchor(s)", len(keys))
 }
 
 // VerifyRRset verifies an RRSIG over an RRset using the given DNSKEY.
 // Returns nil on success, or an error describing the failure.
-func (cv *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *dns.DNSKEY) error {
+func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *dns.DNSKEY) error {
 	if rrsig == nil {
 		return ErrNoRRSIG
 	}
@@ -125,7 +125,7 @@ func (cv *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey 
 
 // VerifyDelegationDS verifies that a child zone's DNSKEY matches the parent
 // zone's DS record. Returns the matching DNSKEY on success.
-func (cv *CryptoValidator) VerifyDelegationDS(dsRecords []*dns.DS, childDNSKEYs []*dns.DNSKEY) (*dns.DNSKEY, error) {
+func (c *CryptoValidator) VerifyDelegationDS(dsRecords []*dns.DS, childDNSKEYs []*dns.DNSKEY) (*dns.DNSKEY, error) {
 	if len(dsRecords) == 0 {
 		return nil, ErrNoDS
 	}
@@ -158,7 +158,7 @@ func (cv *CryptoValidator) VerifyDelegationDS(dsRecords []*dns.DS, childDNSKEYs 
 
 // SelfVerifyDNSKEY verifies that a zone's DNSKEY RRset is self-signed by the
 // zone's KSK. This confirms that the DNSKEY records are authentic.
-func (cv *CryptoValidator) SelfVerifyDNSKEY(dnskeys []*dns.DNSKEY, dnskeyRRSIGs []*dns.RRSIG) error {
+func (c *CryptoValidator) SelfVerifyDNSKEY(dnskeys []*dns.DNSKEY, dnskeyRRSIGs []*dns.RRSIG) error {
 	if len(dnskeys) == 0 {
 		return ErrNoDNSKEY
 	}
@@ -179,7 +179,7 @@ func (cv *CryptoValidator) SelfVerifyDNSKEY(dnskeys []*dns.DNSKEY, dnskeyRRSIGs 
 			if ksk.KeyTag() != rrsig.KeyTag {
 				continue
 			}
-			if err := cv.VerifyRRset(rrset, rrsig, ksk); err == nil {
+			if err := c.VerifyRRset(rrset, rrsig, ksk); err == nil {
 				verified = true
 				log.Debugf("SECURITY: self-verified zone DNSKEY (key_tag=%d)", ksk.KeyTag())
 				break
@@ -357,7 +357,7 @@ func dnsutilCompareDomainInRange(name, lower, upper string) bool {
 //
 // Returns (validated bool, error). If error is non-nil, validation failed.
 // If validated is true, the AuthenticatedData flag may be set.
-func (cv *CryptoValidator) ValidateResponse(response *dns.Msg, zonename string, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+func (c *CryptoValidator) ValidateResponse(response *dns.Msg, zonename string, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
 	if response == nil || len(verifiedDNSKEYs) == 0 {
 		return false, nil
 	}
@@ -365,7 +365,7 @@ func (cv *CryptoValidator) ValidateResponse(response *dns.Msg, zonename string, 
 	// For NOERROR/NXDOMAIN responses, validate the RRSIGs on answer records
 	rcode := response.Rcode
 	if rcode == dns.RcodeSuccess && len(response.Answer) > 0 {
-		return cv.validateAnswerSection(response.Answer, response.Extra, verifiedDNSKEYs)
+		return c.validateAnswerSection(response.Answer, response.Extra, verifiedDNSKEYs)
 	}
 
 	// Extract the queried name and type for denial-of-existence validation.
@@ -378,18 +378,18 @@ func (cv *CryptoValidator) ValidateResponse(response *dns.Msg, zonename string, 
 	}
 
 	if rcode == dns.RcodeNameError {
-		return cv.validateNXDOMAIN(response, qname, qtype, verifiedDNSKEYs)
+		return c.validateNXDOMAIN(response, qname, qtype, verifiedDNSKEYs)
 	}
 
 	// NODATA (NOERROR with no answer and NSEC)
 	if rcode == dns.RcodeSuccess && len(response.Answer) == 0 {
-		return cv.validateNODATA(response, qname, qtype, verifiedDNSKEYs)
+		return c.validateNODATA(response, qname, qtype, verifiedDNSKEYs)
 	}
 
 	return false, nil
 }
 
-func (cv *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+func (c *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
 	// Group records by owner name and type
 	groups := groupRRset(answer)
 	allRRSIGs := CollectRRSIGs(answer, extra)
@@ -412,7 +412,7 @@ func (cv *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifie
 				if key.KeyTag() != sig.KeyTag {
 					continue
 				}
-				if err := cv.VerifyRRset(group, sig, key); err == nil {
+				if err := c.VerifyRRset(group, sig, key); err == nil {
 					anyValidated = true
 					groupValidated = true
 					log.Debugf("SECURITY: validated %s/%s with key_tag=%d", header.Name, dns.TypeToString[header.Rrtype], key.KeyTag())
@@ -515,7 +515,7 @@ func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) s
 // of the queried name (NXDOMAIN) or type (NODATA). This prevents an attacker
 // from satisfying validation with a validly-signed NSEC from the same zone
 // that covers a different name. (RFC 4035 section 3.1.3, RFC 6840 section 5.3)
-func (cv *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY, denialType string) (bool, error) {
+func (c *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY, denialType string) (bool, error) {
 	nsecs := findNSEC(response.Ns)
 	nsec3s := findNSEC3(response.Ns)
 	authSigs := CollectRRSIGs(response.Ns, response.Extra)
@@ -531,7 +531,7 @@ func (cv *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname st
 		for _, sig := range rrsigs {
 			for _, key := range verifiedDNSKEYs {
 				if key.KeyTag() == sig.KeyTag {
-					if err := cv.VerifyRRset(rrset, sig, key); err == nil {
+					if err := c.VerifyRRset(rrset, sig, key); err == nil {
 						// Valid RRSIG on this NSEC. Now verify that it actually
 						// proves the denial.
 						switch denialType {
@@ -577,7 +577,7 @@ func (cv *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname st
 				if key.KeyTag() != sig.KeyTag {
 					continue
 				}
-				if err := cv.VerifyRRset(rrset, sig, key); err != nil {
+				if err := c.VerifyRRset(rrset, sig, key); err != nil {
 					continue
 				}
 				// RRSIG verified. Per RFC 5155 §8, verify that this
@@ -616,12 +616,12 @@ func (cv *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname st
 	return false, fmt.Errorf("no signed NSEC/NSEC3 for %s", denialType)
 }
 
-func (cv *CryptoValidator) validateNXDOMAIN(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
-	return cv.validateDenialOfExistence(response, qname, qtype, verifiedDNSKEYs, "NXDOMAIN")
+func (c *CryptoValidator) validateNXDOMAIN(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+	return c.validateDenialOfExistence(response, qname, qtype, verifiedDNSKEYs, "NXDOMAIN")
 }
 
-func (cv *CryptoValidator) validateNODATA(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
-	return cv.validateDenialOfExistence(response, qname, qtype, verifiedDNSKEYs, "NODATA")
+func (c *CryptoValidator) validateNODATA(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+	return c.validateDenialOfExistence(response, qname, qtype, verifiedDNSKEYs, "NODATA")
 }
 
 func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {
@@ -641,8 +641,8 @@ func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {
 // Keys are stored as CompactRecords in the Answer section of a CacheEntry
 // so they share the same memory budget, eviction policy, and persistence
 // as DNS response records.
-func (cv *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
-	if cv == nil || cv.cache == nil || len(keys) == 0 {
+func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
+	if c == nil || c.cache == nil || len(keys) == 0 {
 		return
 	}
 	zone = strings.ToLower(strings.TrimSuffix(zone, "."))
@@ -677,18 +677,18 @@ func (cv *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 			})
 		}
 	}
-	cv.cache.SetEntry(dnsKeyCacheKey(zone), entry)
+	c.cache.SetEntry(dnsKeyCacheKey(zone), entry)
 }
 
 // ZoneKeys retrieves cached verified DNSKEYs for a zone from the unified
 // cache. Returns nil when the zone is not cached or the entry has expired.
-func (cv *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
-	if cv == nil || cv.cache == nil {
+func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
+	if c == nil || c.cache == nil {
 		return nil
 	}
 	zone = strings.ToLower(strings.TrimSuffix(zone, "."))
 
-	cachedEntry, found, expired := cv.cache.Get(dnsKeyCacheKey(zone))
+	cachedEntry, found, expired := c.cache.Get(dnsKeyCacheKey(zone))
 	if !found || cachedEntry == nil || expired {
 		return nil
 	}
@@ -700,6 +700,6 @@ func (cv *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 }
 
 // RootKeys returns the root trust anchor DNSKEYs.
-func (cv *CryptoValidator) RootKeys() []*dns.DNSKEY {
-	return cv.rootKeys
+func (c *CryptoValidator) RootKeys() []*dns.DNSKEY {
+	return c.rootKeys
 }
