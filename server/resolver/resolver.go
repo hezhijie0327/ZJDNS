@@ -115,16 +115,16 @@ type Validator struct {
 	Hijack *security.Detector        // DNS hijack detection
 }
 
-func (us *upstreamSet) list() []*config.UpstreamServer {
-	p := us.servers.Load()
+func (u *upstreamSet) list() []*config.UpstreamServer {
+	p := u.servers.Load()
 	if p == nil {
 		return nil
 	}
 	return *p
 }
 
-func (us *upstreamSet) store(s []*config.UpstreamServer) {
-	us.servers.Store(&s)
+func (u *upstreamSet) store(s []*config.UpstreamServer) {
+	u.servers.Store(&s)
 }
 
 // New creates a new Resolver with the given client, security guard, EDNS

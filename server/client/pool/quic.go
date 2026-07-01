@@ -43,23 +43,23 @@ type QUICPool struct {
 	maxConns int
 }
 
-func (qpc *QUICConn) close() {
-	qpc.closeOnce.Do(func() {
-		qpc.closed.Store(true)
-		_ = qpc.Conn.CloseWithError(QUICCodeNoError, "pool connection closed")
+func (c *QUICConn) close() {
+	c.closeOnce.Do(func() {
+		c.closed.Store(true)
+		_ = c.Conn.CloseWithError(QUICCodeNoError, "pool connection closed")
 	})
 }
 
-func (qpc *QUICConn) isDead() bool {
-	if qpc.closed.Load() {
+func (c *QUICConn) isDead() bool {
+	if c.closed.Load() {
 		return true
 	}
 	// Also check the underlying quic-go connection context, which closes when
 	// the remote peer terminates the connection or an unrecoverable transport
 	// error occurs.
 	select {
-	case <-qpc.Conn.Context().Done():
-		qpc.closed.Store(true)
+	case <-c.Conn.Context().Done():
+		c.closed.Store(true)
 		return true
 	default:
 		return false
@@ -79,10 +79,10 @@ func NewQUICPool(maxConns int) *QUICPool {
 }
 
 // Acquire gets a reusable QUIC connection, dialing a new one if needed.
-func (qp *QUICPool) Acquire(ctx context.Context, key string, dialFunc func(context.Context, string) (*quic.Conn, error)) (*QUICConn, error) {
-	qp.mu.Lock()
+func (p *QUICPool) Acquire(ctx context.Context, key string, dialFunc func(context.Context, string) (*quic.Conn, error)) (*QUICConn, error) {
+	p.mu.Lock()
 
-	conns := qp.conns[key]
+	conns := p.conns[key]
 	live := conns[:0]
 	for _, pc := range conns {
 		if pc.isDead() {
@@ -90,90 +90,90 @@ func (qp *QUICPool) Acquire(ctx context.Context, key string, dialFunc func(conte
 		}
 		live = append(live, pc)
 	}
-	qp.conns[key] = live
+	p.conns[key] = live
 
 	if len(live) > 0 {
 		// Round-robin across live connections rather than always returning
 		// live[0], which would leave connections[1..N] unused.
 		idx := rand.IntN(len(live))
 		pc := live[idx]
-		qp.mu.Unlock()
+		p.mu.Unlock()
 		return pc, nil
 	}
 
-	if len(live)+qp.dialing[key] < qp.maxConns {
-		qp.dialing[key]++
-		qp.mu.Unlock()
+	if len(live)+p.dialing[key] < p.maxConns {
+		p.dialing[key]++
+		p.mu.Unlock()
 		conn, err := dialFunc(ctx, key)
 		if err != nil {
-			qp.mu.Lock()
-			qp.dialing[key]--
-			if qp.dialing[key] == 0 {
-				delete(qp.dialing, key)
+			p.mu.Lock()
+			p.dialing[key]--
+			if p.dialing[key] == 0 {
+				delete(p.dialing, key)
 			}
-			qp.mu.Unlock()
+			p.mu.Unlock()
 			return nil, fmt.Errorf("client: dial %s: %w", key, err)
 		}
 		pc := &QUICConn{Conn: conn, addr: key}
-		qp.mu.Lock()
-		qp.dialing[key]--
-		if len(qp.conns[key]) >= qp.maxConns {
-			if qp.dialing[key] == 0 {
-				delete(qp.dialing, key)
+		p.mu.Lock()
+		p.dialing[key]--
+		if len(p.conns[key]) >= p.maxConns {
+			if p.dialing[key] == 0 {
+				delete(p.dialing, key)
 			}
-			qp.mu.Unlock()
+			p.mu.Unlock()
 			pc.close()
 			return nil, fmt.Errorf("client: pool filled during dial for %s", key)
 		}
-		qp.conns[key] = append(qp.conns[key], pc)
-		n := len(qp.conns[key])
-		if qp.dialing[key] == 0 {
-			delete(qp.dialing, key)
+		p.conns[key] = append(p.conns[key], pc)
+		n := len(p.conns[key])
+		if p.dialing[key] == 0 {
+			delete(p.dialing, key)
 		}
-		qp.mu.Unlock()
-		log.Debugf("UPSTREAM: dialed new QUIC connection to %s (pool=%d/%d)", key, n, qp.maxConns)
+		p.mu.Unlock()
+		log.Debugf("UPSTREAM: dialed new QUIC connection to %s (pool=%d/%d)", key, n, p.maxConns)
 		return pc, nil
 	}
 
-	qp.mu.Unlock()
+	p.mu.Unlock()
 	return nil, fmt.Errorf("client: no available connection to %s", key)
 }
 
 // Shutdown closes all pooled QUIC connections and clears the pool. It is safe
 // to call multiple times.
-func (qp *QUICPool) Shutdown() {
-	qp.mu.Lock()
-	defer qp.mu.Unlock()
-	for key, conns := range qp.conns {
+func (p *QUICPool) Shutdown() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, conns := range p.conns {
 		for _, pc := range conns {
 			pc.close()
 		}
-		delete(qp.conns, key)
+		delete(p.conns, key)
 	}
 }
 
 // Put returns a QUIC connection to the pool for reuse.
-func (qp *QUICPool) Put(key string, conn *quic.Conn) {
+func (p *QUICPool) Put(key string, conn *quic.Conn) {
 	pc := &QUICConn{Conn: conn, addr: key}
-	qp.mu.Lock()
-	defer qp.mu.Unlock()
-	if len(qp.conns[key]) >= qp.maxConns {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.conns[key]) >= p.maxConns {
 		pc.close()
 		return
 	}
-	qp.conns[key] = append(qp.conns[key], pc)
+	p.conns[key] = append(p.conns[key], pc)
 }
 
 // Remove closes and removes a QUIC connection from the pool.
-func (qp *QUICPool) Remove(pc *QUICConn) {
-	qp.mu.Lock()
-	defer qp.mu.Unlock()
-	conns := qp.conns[pc.addr]
+func (p *QUICPool) Remove(pc *QUICConn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	conns := p.conns[pc.addr]
 	for i, c := range conns {
 		if c == pc {
-			qp.conns[pc.addr] = append(conns[:i], conns[i+1:]...)
-			if len(qp.conns[pc.addr]) == 0 {
-				delete(qp.conns, pc.addr)
+			p.conns[pc.addr] = append(conns[:i], conns[i+1:]...)
+			if len(p.conns[pc.addr]) == 0 {
+				delete(p.conns, pc.addr)
 			}
 			pc.close()
 			return

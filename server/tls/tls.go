@@ -42,13 +42,13 @@ type debugListener struct {
 	name string
 }
 
-func (dl *debugListener) Accept() (net.Conn, error) {
-	conn, err := dl.Listener.Accept()
+func (d *debugListener) Accept() (net.Conn, error) {
+	conn, err := d.Listener.Accept()
 	if err != nil {
-		log.Debugf("TLS: %s raw Accept error: %v", dl.name, err)
+		log.Debugf("TLS: %s raw Accept error: %v", d.name, err)
 		return nil, err
 	}
-	log.Debugf("TLS: %s raw TCP connection from %s", dl.name, conn.RemoteAddr())
+	log.Debugf("TLS: %s raw TCP connection from %s", d.name, conn.RemoteAddr())
 	return conn, nil
 }
 
@@ -60,8 +60,8 @@ type TCPKeepAliveListener struct {
 	net.Listener
 }
 
-func (kl *TCPKeepAliveListener) Accept() (net.Conn, error) {
-	conn, err := kl.Listener.Accept()
+func (k *TCPKeepAliveListener) Accept() (net.Conn, error) {
+	conn, err := k.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}

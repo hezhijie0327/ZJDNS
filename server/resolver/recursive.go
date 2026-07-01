@@ -423,13 +423,13 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 // CNAME handles CNAME record chasing during DNS resolution, following the
 // redirection chain up to config.DefaultMaxCNAMEChain hops. Defined in the same
 // file as Recursive because CNAME resolution depends directly on recursive
-// resolution (ch.resolve → rr.resolve). Splitting into a separate file would
+// resolution (c.resolve → rr.resolve). Splitting into a separate file would
 // add unnecessary indirection without reducing coupling.
 type CNAME struct {
 	resolver *Resolver
 }
 
-func (ch *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+func (c *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	var allAnswers []dns.RR
 	var finalAuthority, finalAdditional []dns.RR
 	var finalECSResponse *edns.ECSOption
@@ -462,7 +462,7 @@ func (ch *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.E
 		// detection can't distinguish real from spoofed answers).
 		forceTCP := hijackOccurred
 
-		answer, authority, additional, validated, ecsResponse, server, hijackDetectedNow, err := ch.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP)
+		answer, authority, additional, validated, ecsResponse, server, hijackDetectedNow, err := c.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP)
 		if err != nil {
 			return nil, nil, nil, false, nil, "", false, err
 		}

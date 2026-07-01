@@ -63,7 +63,7 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 		_ = tcpConn.SetKeepAlive(true)
 		_ = tcpConn.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
 	}
-	pc := &Conn{
+	c := &Conn{
 		conn:     conn,
 		addr:     addr,
 		inflight: make(map[uint16]*pending),
@@ -71,31 +71,31 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 		maxPipe:  int32(maxPipe),
 		done:     make(chan struct{}),
 	}
-	pc.nextID.Store(rand.Uint32())
-	go pc.readLoop()
-	return pc
+	c.nextID.Store(rand.Uint32())
+	go c.readLoop()
+	return c
 }
 
 // Exchange sends a DNS message over the pipelined connection and returns the
 // response.
-func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
+func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	select {
-	case pc.capacity <- struct{}{}:
-		pc.inFlight.Add(1)
+	case c.capacity <- struct{}{}:
+		c.inFlight.Add(1)
 		defer func() {
-			pc.inFlight.Add(-1)
-			<-pc.capacity
+			c.inFlight.Add(-1)
+			<-c.capacity
 		}()
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 
-	if pc.closed.Load() {
-		return nil, fmt.Errorf("client: connection to %s is closed", pc.addr)
+	if c.closed.Load() {
+		return nil, fmt.Errorf("client: connection to %s is closed", c.addr)
 	}
 
 	originalID := msg.Id
-	trackingID := uint16(pc.nextID.Add(1) & dnsIDMask)
+	trackingID := uint16(c.nextID.Add(1) & dnsIDMask)
 	msg.Id = trackingID
 
 	msgData, err := msg.Pack()
@@ -115,20 +115,20 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	copy(writeBuf[dnsutil.DNSFramePrefixLen:], msgData)
 
 	resultCh := make(chan *dns.Msg, 1)
-	pc.mu.Lock()
-	if pc.closed.Load() {
-		pc.mu.Unlock()
-		return nil, fmt.Errorf("client: connection to %s closed before write", pc.addr)
+	c.mu.Lock()
+	if c.closed.Load() {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("client: connection to %s closed before write", c.addr)
 	}
-	pc.inflight[trackingID] = &pending{resultCh: resultCh}
-	pc.mu.Unlock()
+	c.inflight[trackingID] = &pending{resultCh: resultCh}
+	c.mu.Unlock()
 
 	defer func() {
-		pc.mu.Lock()
-		if pc.inflight != nil {
-			delete(pc.inflight, trackingID)
+		c.mu.Lock()
+		if c.inflight != nil {
+			delete(c.inflight, trackingID)
 		}
-		pc.mu.Unlock()
+		c.mu.Unlock()
 		// Drain orphaned response that may have arrived after ctx cancellation.
 		select {
 		case orphan := <-resultCh:
@@ -140,18 +140,18 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 
 	}()
 
-	pc.writeMu.Lock()
-	_, writeErr := pc.conn.Write(writeBuf)
-	pc.writeMu.Unlock()
+	c.writeMu.Lock()
+	_, writeErr := c.conn.Write(writeBuf)
+	c.writeMu.Unlock()
 	if writeErr != nil {
-		pc.close()
-		return nil, fmt.Errorf("client: write to %s: %w", pc.addr, writeErr)
+		c.close()
+		return nil, fmt.Errorf("client: write to %s: %w", c.addr, writeErr)
 	}
 
 	select {
 	case resp := <-resultCh:
 		if resp == nil {
-			return nil, fmt.Errorf("client: connection to %s closed", pc.addr)
+			return nil, fmt.Errorf("client: connection to %s closed", c.addr)
 		}
 		resp.Id = originalID
 		return resp, nil
@@ -163,24 +163,24 @@ func (pc *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	}
 }
 
-func (pc *Conn) readLoop() {
+func (c *Conn) readLoop() {
 	defer dnsutil.HandlePanic("client reader")
-	defer pc.close()
+	defer c.close()
 
 	lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
 
 	for {
-		_ = pc.conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
+		_ = c.conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
-		if _, err := io.ReadFull(pc.conn, lengthBuf); err != nil {
+		if _, err := io.ReadFull(c.conn, lengthBuf); err != nil {
 			if err != io.EOF {
-				log.Debugf("TCPPOOL: read length error from %s: %v", pc.addr, err)
+				log.Debugf("TCPPOOL: read length error from %s: %v", c.addr, err)
 			}
 			return
 		}
 		msgLen := binary.BigEndian.Uint16(lengthBuf)
 		if msgLen == 0 {
-			log.Debugf("TCPPOOL: invalid message length %d from %s", msgLen, pc.addr)
+			log.Debugf("TCPPOOL: invalid message length %d from %s", msgLen, c.addr)
 			return
 		}
 
@@ -192,11 +192,11 @@ func (pc *Conn) readLoop() {
 		} else {
 			body = make([]byte, msgLen)
 		}
-		if _, err := io.ReadFull(pc.conn, body); err != nil {
+		if _, err := io.ReadFull(c.conn, body); err != nil {
 			if pooled {
 				bufpool.DefaultBufferPool.Put(bodyBuf)
 			}
-			log.Debugf("TCPPOOL: read body error from %s: %v", pc.addr, err)
+			log.Debugf("TCPPOOL: read body error from %s: %v", c.addr, err)
 			return
 		}
 
@@ -205,7 +205,7 @@ func (pc *Conn) readLoop() {
 			if pooled {
 				bufpool.DefaultBufferPool.Put(bodyBuf)
 			}
-			log.Debugf("TCPPOOL: unpack error from %s: %v", pc.addr, err)
+			log.Debugf("TCPPOOL: unpack error from %s: %v", c.addr, err)
 			bufpool.DefaultMessagePool.Put(resp)
 			continue
 		}
@@ -213,9 +213,9 @@ func (pc *Conn) readLoop() {
 			bufpool.DefaultBufferPool.Put(bodyBuf)
 		}
 
-		pc.mu.RLock()
-		pq, ok := pc.inflight[resp.Id]
-		pc.mu.RUnlock()
+		c.mu.RLock()
+		pq, ok := c.inflight[resp.Id]
+		c.mu.RUnlock()
 		if ok {
 			select {
 			case pq.resultCh <- resp:
@@ -228,33 +228,33 @@ func (pc *Conn) readLoop() {
 	}
 }
 
-func (pc *Conn) close() {
-	pc.closeOnce.Do(func() {
-		pc.closed.Store(true)
-		close(pc.done)
-		_ = pc.conn.Close()
+func (c *Conn) close() {
+	c.closeOnce.Do(func() {
+		c.closed.Store(true)
+		close(c.done)
+		_ = c.conn.Close()
 
-		pc.mu.Lock()
-		for _, pq := range pc.inflight {
+		c.mu.Lock()
+		for _, pq := range c.inflight {
 			select {
 			case pq.resultCh <- nil:
 			default:
 			}
 		}
-		pc.inflight = nil
-		pc.mu.Unlock()
+		c.inflight = nil
+		c.mu.Unlock()
 	})
 }
 
 // IsFull reports whether the connection has reached its maximum in-flight
 // query capacity. Uses an atomic counter to avoid the racy len(channel) call.
-func (pc *Conn) IsFull() bool {
-	return pc.inFlight.Load() >= pc.maxPipe
+func (c *Conn) IsFull() bool {
+	return c.inFlight.Load() >= c.maxPipe
 }
 
 // IsDead reports whether the connection has been closed.
-func (pc *Conn) IsDead() bool {
-	return pc.closed.Load()
+func (c *Conn) IsDead() bool {
+	return c.closed.Load()
 }
 
 // NewPool creates a Pool with the specified connection and in-flight limits.
@@ -274,90 +274,90 @@ func NewPool(maxConns, maxPipe int) *Pool {
 }
 
 // Acquire gets a reusable pipelined connection, dialing a new one if needed.
-func (cp *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*Conn, error) {
-	cp.mu.Lock()
+func (p *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*Conn, error) {
+	p.mu.Lock()
 
 	var leastLoaded *Conn
 	leastCount := math.MaxInt
-	conns := cp.conns[key]
+	conns := p.conns[key]
 	liveConns := conns[:0]
-	for i, pc := range conns {
-		if pc.IsDead() {
+	for i, c := range conns {
+		if c.IsDead() {
 			continue
 		}
-		liveConns = append(liveConns, pc)
-		inFlight := int(pc.inFlight.Load())
-		if !pc.IsFull() {
+		liveConns = append(liveConns, c)
+		inFlight := int(c.inFlight.Load())
+		if !c.IsFull() {
 			// Append remaining (unchecked) connections so they are not
 			// silently dropped from the pool on early return.
 			liveConns = append(liveConns, conns[i+1:]...)
-			cp.conns[key] = liveConns
-			cp.mu.Unlock()
-			return pc, nil
+			p.conns[key] = liveConns
+			p.mu.Unlock()
+			return c, nil
 		}
 		if inFlight < leastCount {
 			leastCount = inFlight
-			leastLoaded = pc
+			leastLoaded = c
 		}
 	}
-	cp.conns[key] = liveConns
+	p.conns[key] = liveConns
 
-	if len(liveConns)+cp.dialing[key] < cp.maxConns {
-		cp.dialing[key]++
-		cp.mu.Unlock()
+	if len(liveConns)+p.dialing[key] < p.maxConns {
+		p.dialing[key]++
+		p.mu.Unlock()
 		conn, err := dialFunc(ctx, dialAddr)
 		if err != nil {
-			cp.mu.Lock()
-			cp.dialing[key]--
-			if cp.dialing[key] == 0 {
-				delete(cp.dialing, key)
+			p.mu.Lock()
+			p.dialing[key]--
+			if p.dialing[key] == 0 {
+				delete(p.dialing, key)
 			}
-			cp.mu.Unlock()
+			p.mu.Unlock()
 			return nil, fmt.Errorf("client: dial %s: %w", key, err)
 		}
-		pc := newConn(key, conn, cp.maxPipe)
-		cp.mu.Lock()
-		cp.dialing[key]--
-		if len(cp.conns[key]) >= cp.maxConns {
+		c := newConn(key, conn, p.maxPipe)
+		p.mu.Lock()
+		p.dialing[key]--
+		if len(p.conns[key]) >= p.maxConns {
 			// Pool filled while we were dialing — try replacing a dead
 			// connection before discarding this new one.
 			replaced := false
-			for i, c := range cp.conns[key] {
+			for i, c := range p.conns[key] {
 				if c.IsDead() {
 					c.close()
-					cp.conns[key][i] = pc
+					p.conns[key][i] = c
 					replaced = true
 					log.Debugf("TCPPOOL: replaced dead connection in pool for %s", key)
 					break
 				}
 			}
 			if !replaced {
-				pc.close()
-				log.Debugf("TCPPOOL: pool for %s already at limit (%d), discarding extra connection", key, cp.maxConns)
+				c.close()
+				log.Debugf("TCPPOOL: pool for %s already at limit (%d), discarding extra connection", key, p.maxConns)
 			}
-			if cp.dialing[key] == 0 {
-				delete(cp.dialing, key)
+			if p.dialing[key] == 0 {
+				delete(p.dialing, key)
 			}
-			cp.mu.Unlock()
+			p.mu.Unlock()
 			if !replaced && leastLoaded != nil && !leastLoaded.IsDead() {
 				return leastLoaded, nil
 			}
 			if !replaced {
 				return nil, fmt.Errorf("client: max conns reached for %s", key)
 			}
-			return pc, nil
+			return c, nil
 		}
-		cp.conns[key] = append(cp.conns[key], pc)
-		n := len(cp.conns[key])
-		if cp.dialing[key] == 0 {
-			delete(cp.dialing, key)
+		p.conns[key] = append(p.conns[key], c)
+		n := len(p.conns[key])
+		if p.dialing[key] == 0 {
+			delete(p.dialing, key)
 		}
-		cp.mu.Unlock()
-		log.Debugf("TCPPOOL: dialed new connection to %s (pool=%d/%d)", key, n, cp.maxConns)
-		return pc, nil
+		p.mu.Unlock()
+		log.Debugf("TCPPOOL: dialed new connection to %s (pool=%d/%d)", key, n, p.maxConns)
+		return c, nil
 	}
 
-	cp.mu.Unlock()
+	p.mu.Unlock()
 	if leastLoaded != nil {
 		return leastLoaded, nil
 	}
@@ -366,29 +366,29 @@ func (cp *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFu
 
 // Shutdown closes all pooled connections and clears the pool. It is safe to
 // call multiple times.
-func (cp *Pool) Shutdown() {
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-	for key, conns := range cp.conns {
-		for _, pc := range conns {
-			pc.close()
+func (p *Pool) Shutdown() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, conns := range p.conns {
+		for _, c := range conns {
+			c.close()
 		}
-		delete(cp.conns, key)
+		delete(p.conns, key)
 	}
 }
 
 // Remove closes and removes a pipelined connection from the pool.
-func (cp *Pool) Remove(pc *Conn) {
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-	conns := cp.conns[pc.addr]
+func (p *Pool) Remove(target *Conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	conns := p.conns[target.addr]
 	for i, c := range conns {
-		if c == pc {
-			cp.conns[pc.addr] = append(conns[:i], conns[i+1:]...)
-			if len(cp.conns[pc.addr]) == 0 {
-				delete(cp.conns, pc.addr)
+		if c == target {
+			p.conns[target.addr] = append(conns[:i], conns[i+1:]...)
+			if len(p.conns[target.addr]) == 0 {
+				delete(p.conns, target.addr)
 			}
-			pc.close()
+			target.close()
 			return
 		}
 	}
