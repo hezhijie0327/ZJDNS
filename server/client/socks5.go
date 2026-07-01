@@ -44,13 +44,13 @@ const (
 	socks5RepSuccess = 0x00
 )
 
-// Socks5Dialer provides TCP and UDP connections through a SOCKS5 proxy.
+// SOCKS5Dialer provides TCP and UDP connections through a SOCKS5 proxy.
 // It implements both RFC 1928 (SOCKS5) and RFC 1929 (Username/Password auth).
 //
-// A single Socks5Dialer reuses its UDP relay — the TCP control connection
+// A single SOCKS5Dialer reuses its UDP relay — the TCP control connection
 // stays alive as long as the relay is needed. If the control connection dies,
 // the next ListenPacket call re-establishes it transparently.
-type Socks5Dialer struct {
+type SOCKS5Dialer struct {
 	proxyAddr string // host:port of the SOCKS5 proxy
 	username  string // empty means no auth
 	password  string
@@ -63,10 +63,10 @@ type Socks5Dialer struct {
 	ctrlClosed chan struct{} // closed when ctrlConn dies
 }
 
-// NewSocks5Dialer parses a socks5://[user:pass@]host:port URL and returns
+// NewSOCKS5Dialer parses a socks5://[user:pass@]host:port URL and returns
 // a ready-to-use dialer. The timeout is used for proxy connection and
 // negotiation.
-func NewSocks5Dialer(proxyURL string, timeout time.Duration) (*Socks5Dialer, error) {
+func NewSOCKS5Dialer(proxyURL string, timeout time.Duration) (*SOCKS5Dialer, error) {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse proxy URL: %w", err)
@@ -84,7 +84,7 @@ func NewSocks5Dialer(proxyURL string, timeout time.Duration) (*Socks5Dialer, err
 		port = config.DefaultProxyPort
 	}
 
-	d := &Socks5Dialer{
+	d := &SOCKS5Dialer{
 		proxyAddr:  net.JoinHostPort(host, port),
 		timeout:    timeout,
 		ctrlClosed: make(chan struct{}),
@@ -98,7 +98,7 @@ func NewSocks5Dialer(proxyURL string, timeout time.Duration) (*Socks5Dialer, err
 
 // DialContext connects to targetAddr through the SOCKS5 proxy via TCP CONNECT.
 // The returned net.Conn is a raw TCP connection forwarded through the proxy.
-func (d *Socks5Dialer) DialContext(ctx context.Context, network string, targetAddr string) (net.Conn, error) {
+func (d *SOCKS5Dialer) DialContext(ctx context.Context, network string, targetAddr string) (net.Conn, error) {
 	if network != "tcp" {
 		return nil, fmt.Errorf("socks5: unsupported network %q (only tcp)", network)
 	}
@@ -146,7 +146,7 @@ func (d *Socks5Dialer) DialContext(ctx context.Context, network string, targetAd
 //
 // The underlying TCP control connection stays alive; if the proxy closes it,
 // the next ListenPacket call re-establishes the relay automatically.
-func (d *Socks5Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error) {
+func (d *SOCKS5Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	// Fast path: read-lock to check if the relay is alive.
 	d.mu.RLock()
 	if d.ctrlConn != nil {
@@ -182,7 +182,7 @@ func (d *Socks5Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error)
 }
 
 // SafeURL returns the proxy URL with password redacted for logging.
-func (d *Socks5Dialer) SafeURL() string {
+func (d *SOCKS5Dialer) SafeURL() string {
 	if d.password != "" {
 		return fmt.Sprintf("socks5://%s:***@%s", d.username, d.proxyAddr)
 	}
@@ -194,7 +194,7 @@ func (d *Socks5Dialer) SafeURL() string {
 
 // Close terminates the UDP relay control connection and releases resources.
 // Pending UDP operations will fail after Close.
-func (d *Socks5Dialer) Close() error {
+func (d *SOCKS5Dialer) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.cleanupLocked()
@@ -205,7 +205,7 @@ func (d *Socks5Dialer) Close() error {
 // Internal: handshake + request helpers
 // ---------------------------------------------------------------------------
 
-func (d *Socks5Dialer) handshake(conn net.Conn) error {
+func (d *SOCKS5Dialer) handshake(conn net.Conn) error {
 	// Build method list
 	var methods []byte
 	if d.username != "" {
@@ -240,7 +240,7 @@ func (d *Socks5Dialer) handshake(conn net.Conn) error {
 	}
 }
 
-func (d *Socks5Dialer) authUserPass(conn net.Conn) error {
+func (d *SOCKS5Dialer) authUserPass(conn net.Conn) error {
 	if len(d.username) > 255 || len(d.password) > 255 {
 		return errors.New("socks5: username or password exceeds 255 bytes")
 	}
@@ -268,7 +268,7 @@ func (d *Socks5Dialer) authUserPass(conn net.Conn) error {
 }
 
 // connect sends a CONNECT request and skips the bind address in the response.
-func (d *Socks5Dialer) connect(conn net.Conn, targetAddr string) error {
+func (d *SOCKS5Dialer) connect(conn net.Conn, targetAddr string) error {
 	host, port, err := splitHostPort(targetAddr)
 	if err != nil {
 		return err
@@ -292,7 +292,7 @@ func (d *Socks5Dialer) connect(conn net.Conn, targetAddr string) error {
 // Internal: UDP ASSOCIATE
 // ---------------------------------------------------------------------------
 
-func (d *Socks5Dialer) establishUDPRelay(ctx context.Context) error {
+func (d *SOCKS5Dialer) establishUDPRelay(ctx context.Context) error {
 	deadline, hasDeadline := ctx.Deadline()
 
 	dialer := net.Dialer{}
@@ -387,13 +387,13 @@ func (d *Socks5Dialer) establishUDPRelay(ctx context.Context) error {
 	return nil
 }
 
-func (d *Socks5Dialer) wrapPacketConn() net.PacketConn {
+func (d *SOCKS5Dialer) wrapPacketConn() net.PacketConn {
 	return &socks5PacketConn{
 		conn: d.udpConn,
 	}
 }
 
-func (d *Socks5Dialer) cleanupLocked() {
+func (d *SOCKS5Dialer) cleanupLocked() {
 	if d.ctrlConn != nil {
 		_ = d.ctrlConn.Close()
 		d.ctrlConn = nil
@@ -701,10 +701,10 @@ func parseAddressFromBytes(data []byte, atyp byte) (*net.UDPAddr, int, error) {
 // header for the given destination address.
 func socks5UDPHeaderLen(addr *net.UDPAddr) (int, error) {
 	if addr.IP.To4() != nil {
-		return config.Socks5UDPHeaderLenIPv4, nil
+		return config.SOCKS5UDPHeaderLenIPv4, nil
 	}
 	if addr.IP.To16() != nil {
-		return config.Socks5UDPHeaderLenIPv6, nil
+		return config.SOCKS5UDPHeaderLenIPv6, nil
 	}
 	return 0, fmt.Errorf("socks5: invalid destination IP: %v", addr.IP)
 }

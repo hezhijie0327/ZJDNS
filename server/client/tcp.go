@@ -56,7 +56,7 @@ func (c *Client) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, serv
 
 // exchangeViaProxy sends a DNS query over TCP through a SOCKS5 proxy using
 // manual dial + dns.Conn exchange.
-func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *Socks5Dialer) (*dns.Msg, error) {
+func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *SOCKS5Dialer) (*dns.Msg, error) {
 	conn, err := proxyDialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
@@ -80,7 +80,7 @@ func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string
 // using UDP ASSOCIATE (RFC 1928 §6). Because DNS over UDP is a single
 // request-response exchange, we create a PacketConn, send one query, read
 // the reply, and close it.
-func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *Socks5Dialer) (*dns.Msg, error) {
+func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *SOCKS5Dialer) (*dns.Msg, error) {
 	pconn, err := proxyDialer.ListenPacket(ctx)
 	if err != nil {
 		return nil, err

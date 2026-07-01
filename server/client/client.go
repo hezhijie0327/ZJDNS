@@ -67,7 +67,7 @@ type Client struct {
 	tcpPool *connpool.Pool
 	dotPool *connpool.Pool
 
-	proxyDialers map[string]*Socks5Dialer
+	proxyDialers map[string]*SOCKS5Dialer
 	proxyMu      sync.Mutex
 
 	// KTLS offload settings — defaults to false (off). Set via SetKTLS() from
@@ -122,7 +122,7 @@ func New() *Client {
 		SessionCache:   eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
 		tcpPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		dotPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		proxyDialers:   make(map[string]*Socks5Dialer),
+		proxyDialers:   make(map[string]*SOCKS5Dialer),
 	}
 	return c
 }
@@ -171,10 +171,10 @@ func (c *Client) resetQUICConfig(key string) {
 	c.quicConfigs[key] = cfg
 }
 
-// getProxyDialer returns a cached Socks5Dialer for the server's proxy URL.
+// getProxyDialer returns a cached SOCKS5Dialer for the server's proxy URL.
 // Returns nil when no proxy is configured or the proxy URL is invalid
 // (the validation error is logged once and the nil is cached).
-func (c *Client) getProxyDialer(server *config.UpstreamServer) *Socks5Dialer {
+func (c *Client) getProxyDialer(server *config.UpstreamServer) *SOCKS5Dialer {
 	if server.Proxy == "" {
 		return nil
 	}
@@ -197,7 +197,7 @@ func (c *Client) getProxyDialer(server *config.UpstreamServer) *Socks5Dialer {
 		}
 	}
 
-	d, err := NewSocks5Dialer(server.Proxy, c.timeout)
+	d, err := NewSOCKS5Dialer(server.Proxy, c.timeout)
 	if err != nil {
 		log.Warnf("UPSTREAM: invalid proxy %s for %s: %v", d.SafeURL(), server.Address, err)
 		// Cache nil so we don't retry parsing the same bad URL.

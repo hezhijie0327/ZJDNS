@@ -153,7 +153,7 @@ func (c *Client) createDoH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 	quicCfg := c.getQUICConfig("doh3:"+key, tlsConfig.InsecureSkipVerify)
 
 	// Resolve proxy dialer once, outside the Dial closure.
-	var proxyDialer *Socks5Dialer
+	var proxyDialer *SOCKS5Dialer
 	if proxyURL != "" {
 		proxyDialer = c.getProxyDialer(&config.UpstreamServer{Proxy: proxyURL})
 	}
