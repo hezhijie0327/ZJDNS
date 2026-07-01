@@ -292,7 +292,7 @@ func (s *Server) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption)
 
 	records := make([]dns.RR, 0, len(results))
 	for _, result := range results {
-		records = append(records, dnsutil.BuildPTRRecord(question.Name, result.Name, config.DefaultTTL, question.Qclass))
+		records = append(records, dnsutil.NewPTRRecord(question.Name, result.Name, config.DefaultTTL, question.Qclass))
 	}
 
 	return records

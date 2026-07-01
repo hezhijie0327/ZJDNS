@@ -122,8 +122,8 @@ func ParseReverseDNSName(name string) net.IP {
 	return nil
 }
 
-// BuildPTRRecord builds a DNS PTR record.
-func BuildPTRRecord(name, target string, ttl uint32, qclass uint16) dns.RR {
+// NewPTRRecord returns a DNS PTR record.
+func NewPTRRecord(name, target string, ttl uint32, qclass uint16) dns.RR {
 	return &dns.PTR{
 		Hdr: dns.RR_Header{
 			Name:   dns.Fqdn(name),

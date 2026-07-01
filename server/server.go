@@ -172,7 +172,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cacheStore,
 	)
 	server.resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
-	server.resolver.InitServers(cfg.Upstream, cfg.Fallback)
+	server.resolver.ConfigureServers(cfg.Upstream, cfg.Fallback)
 	server.resolver.SetBackgroundContext(backgroundCtx)
 
 	// Pre-warm transport connections for configured upstream servers so
@@ -187,7 +187,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	// Initialize the infrastructure-level latency prober for root/NS
 	// server reordering. This is independent of the user-facing
 	// latency_probe configuration.
-	latency.InitInfraProber(backgroundCtx)
+	latency.NewInfraProber(backgroundCtx)
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
 		server.prober = latency.New(

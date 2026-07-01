@@ -163,9 +163,9 @@ func extractIndices(answer []dns.RR) []int {
 // the Prober's background context for graceful shutdown.
 var infraProber *ilatency.Prober
 
-// InitInfraProber initializes the package-level infrastructure prober.
+// NewInfraProber initializes the package-level infrastructure prober.
 // Must be called once during server startup before any recursive resolution.
-func InitInfraProber(bgCtx context.Context) {
+func NewInfraProber(bgCtx context.Context) {
 	infraProber = ilatency.New([]config.LatencyProbeStep{
 		{Protocol: config.ProtoPing, Timeout: 100},
 		{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: 100},

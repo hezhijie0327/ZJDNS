@@ -130,10 +130,10 @@ func TestClientIP_Nil(t *testing.T) {
 	}
 }
 
-func TestBuildPTRRecord(t *testing.T) {
-	rr := BuildPTRRecord("4.3.2.1.in-addr.arpa", "test.example.com", 300, dns.ClassINET)
+func TestNewPTRRecord(t *testing.T) {
+	rr := NewPTRRecord("4.3.2.1.in-addr.arpa", "test.example.com", 300, dns.ClassINET)
 	if rr == nil {
-		t.Fatal("BuildPTRRecord returned nil")
+		t.Fatal("NewPTRRecord returned nil")
 	}
 	ptr, ok := rr.(*dns.PTR)
 	if !ok {
@@ -145,7 +145,7 @@ func TestBuildPTRRecord(t *testing.T) {
 }
 
 func TestFormatRecords(t *testing.T) {
-	rr := BuildPTRRecord("1.2.3.4.in-addr.arpa", "host.example.com", 300, dns.ClassINET)
+	rr := NewPTRRecord("1.2.3.4.in-addr.arpa", "host.example.com", 300, dns.ClassINET)
 	s := FormatRecords([]dns.RR{rr}, nil, nil)
 	if s == "" {
 		t.Error("FormatRecords returned empty string for non-empty input")
@@ -214,7 +214,7 @@ func TestParseReverseDNSName_IPv6Full(t *testing.T) {
 }
 
 func TestFormatRecords_AllSections(t *testing.T) {
-	ptr := BuildPTRRecord("1.0.0.127.in-addr.arpa", "localhost", 300, dns.ClassINET)
+	ptr := NewPTRRecord("1.0.0.127.in-addr.arpa", "localhost", 300, dns.ClassINET)
 	s := FormatRecords([]dns.RR{ptr}, []dns.RR{ptr}, []dns.RR{ptr})
 	if !stringsContains(s, "ANSWER SECTION") || !stringsContains(s, "AUTHORITY SECTION") || !stringsContains(s, "ADDITIONAL SECTION") {
 		t.Error("FormatRecords should include all three section headers")

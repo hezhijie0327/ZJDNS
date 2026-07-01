@@ -145,8 +145,8 @@ func New(c *client.Client, g *security.Guard, e *edns.Handler, cidr CIDRMatcher,
 	return r
 }
 
-// InitServers initializes the primary and fallback upstream server lists.
-func (r *Resolver) InitServers(servers, fallback []config.UpstreamServer) {
+// ConfigureServers initializes the primary and fallback upstream server lists.
+func (r *Resolver) ConfigureServers(servers, fallback []config.UpstreamServer) {
 	active := make([]*config.UpstreamServer, 0, len(servers))
 	for i := range servers {
 		s := &servers[i]
