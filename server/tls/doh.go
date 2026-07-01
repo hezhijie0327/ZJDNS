@@ -225,7 +225,7 @@ func (s *Server) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*dns.M
 		}
 
 	case http.MethodPost:
-		if r.Header.Get("Content-Type") != config.DoHContentType {
+		if r.Header.Get("Content-Type") != config.DOHContentType {
 			return nil, http.StatusUnsupportedMediaType
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, config.DefaultDOHMaxRequestSize)
@@ -264,7 +264,7 @@ func (s *Server) respondDoH(w http.ResponseWriter, response *dns.Msg) error {
 		return fmt.Errorf("pack response: %w", err)
 	}
 
-	w.Header().Set("Content-Type", config.DoHContentType)
+	w.Header().Set("Content-Type", config.DOHContentType)
 	w.Header().Set("Cache-Control", "max-age=0")
 	_, err = w.Write(bytes)
 	return err

@@ -49,7 +49,7 @@ func executeDoHHTTPRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpCl
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	httpReq.Header.Set("Accept", config.DoHContentType)
+	httpReq.Header.Set("Accept", config.DOHContentType)
 	httpReq.Header.Set("User-Agent", "")
 
 	httpResp, err := httpClient.Do(httpReq)
