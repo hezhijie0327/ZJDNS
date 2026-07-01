@@ -23,7 +23,7 @@ import (
 	"zjdns/server/security"
 )
 
-func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *security.Detector) (*dns.Msg, security.Verdict, error) {
+func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *security.Detector) (*dns.Msg, security.Verdict, error) {
 	if len(nameservers) == 0 {
 		return nil, security.VerdictClean, errors.New("no nameservers")
 	}
@@ -54,7 +54,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 		if forceTCP {
 			protocol = config.ProtoTCP
 		}
-		server := &config.UpstreamServer{Address: nsAddr, Protocol: protocol, Proxy: rr.resolver.recursiveProxyURL}
+		server := &config.UpstreamServer{Address: nsAddr, Protocol: protocol, Proxy: r.resolver.recursiveProxyURL}
 
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("Query nameserver")
@@ -67,13 +67,13 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 			default:
 			}
 
-			msg := rr.resolver.buildMsg(question, ecs, true, false)
+			msg := r.resolver.buildMsg(question, ecs, true, false)
 			defer pool.DefaultMessagePool.Put(msg)
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 			defer subCancel()
 
-			result := rr.resolver.client.ExecuteQuery(subCtx, msg, server)
+			result := r.resolver.client.ExecuteQuery(subCtx, msg, server)
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
@@ -123,7 +123,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 
 					retryCtx, retryCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 					defer retryCancel()
-					retryResult := rr.resolver.client.ExecuteQuery(retryCtx, bareMsg, server)
+					retryResult := r.resolver.client.ExecuteQuery(retryCtx, bareMsg, server)
 
 					if retryResult.Error == nil && retryResult.Response != nil {
 						retryRcode := retryResult.Response.Rcode
@@ -216,7 +216,7 @@ func (rr *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers
 	}
 }
 
-func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int, forceTCP bool) []string {
+func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int, forceTCP bool) []string {
 	if len(nsRecords) == 0 {
 		return nil
 	}
@@ -257,7 +257,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 			nsName := dns.Fqdn(nsRecord.Ns)
 
 			// Try cache first — records may already be latency-probed.
-			cachedAddrs := rr.lookupNSAddrsFromCache(nsName)
+			cachedAddrs := r.lookupNSAddrsFromCache(nsName)
 			if len(cachedAddrs) > 0 {
 				allMu.Lock()
 				allAddresses = append(allAddresses, cachedAddrs...)
@@ -277,7 +277,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 				defer dnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
 				aQuestion := dns.Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}
-				ans, _, extra, _, _, _, _, err := rr.resolve(queryCtx, aQuestion, nil, depth+1, forceTCP)
+				ans, _, extra, _, _, _, _, err := r.resolve(queryCtx, aQuestion, nil, depth+1, forceTCP)
 				if err != nil {
 					return
 				}
@@ -301,7 +301,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 				defer dnsutil.HandlePanic("Resolve NS AAAA")
 				defer wg.Done()
 				aaaaQuestion := dns.Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-				ans, _, _, _, _, _, _, err := rr.resolve(queryCtx, aaaaQuestion, nil, depth+1, forceTCP)
+				ans, _, _, _, _, _, _, err := r.resolve(queryCtx, aaaaQuestion, nil, depth+1, forceTCP)
 				if err != nil {
 					return
 				}
@@ -324,17 +324,17 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 			// Cache A/AAAA records so future queries hit warm cache.
 			// The async latency probe below reorders them later for
 			// latency-optimized cache hits.
-			if rr.cache != nil && len(ansARecords) > 0 {
+			if r.cache != nil && len(ansARecords) > 0 {
 				aCacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
-				rr.cache.Set(aCacheKey, ansARecords, nil, nil, false, nil)
+				r.cache.Set(aCacheKey, ansARecords, nil, nil, false, nil)
 			}
-			if rr.cache != nil && len(ansAAAARecords) > 0 {
+			if r.cache != nil && len(ansAAAARecords) > 0 {
 				aaaaCacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}, nil, false)
-				rr.cache.Set(aaaaCacheKey, ansAAAARecords, nil, nil, false, nil)
+				r.cache.Set(aaaaCacheKey, ansAAAARecords, nil, nil, false, nil)
 			}
 
 			// Accumulate records for async latency probe.
-			if rr.cache != nil && (len(ansARecords) > 0 || len(ansAAAARecords) > 0) {
+			if r.cache != nil && (len(ansARecords) > 0 || len(ansAAAARecords) > 0) {
 				nsRecordsMu.Lock()
 				if aRecordsMap == nil {
 					aRecordsMap = make(map[string][]dns.RR)
@@ -361,7 +361,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 	// Merge A and AAAA records per NS name so probeAndCacheNSGlue
 	// ranks all addresses together and stores them under the unified
 	// latency-sorted key (nsAddrKey).
-	if rr.cache != nil && (len(aRecordsMap) > 0 || len(aaaaRecordsMap) > 0) {
+	if r.cache != nil && (len(aRecordsMap) > 0 || len(aaaaRecordsMap) > 0) {
 		combinedMap := make(map[string][]dns.RR)
 		for nsName, records := range aRecordsMap {
 			combinedMap[nsName] = append(combinedMap[nsName], records...)
@@ -370,7 +370,7 @@ func (rr *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords
 			combinedMap[nsName] = append(combinedMap[nsName], records...)
 		}
 		if len(combinedMap) > 0 {
-			go rr.probeAndCacheNSGlue(combinedMap)
+			go r.probeAndCacheNSGlue(combinedMap)
 		}
 	}
 
@@ -421,8 +421,8 @@ func reorderRecordsByAddrs(records []dns.RR, sortedAddrs []string) []dns.RR {
 }
 
 // rrIP extracts the IP string from an A or AAAA record.
-func rrIP(rr dns.RR) string {
-	switch r := rr.(type) {
+func rrIP(r dns.RR) string {
+	switch r := r.(type) {
 	case *dns.A:
 		return r.A.String()
 	case *dns.AAAA:
