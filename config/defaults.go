@@ -62,11 +62,12 @@ const (
 	DefaultCookieSecretRotationInterval = 30 * time.Minute
 	DefaultECSRefreshInterval           = 15 * time.Minute
 
-	DefaultCookieSecretSize   = 32    // DNS cookie secret size in bytes
-	DefaultDNSKeyCacheTTL     = 86400 // DNSKEY record cache TTL (seconds)
-	DefaultDNSKeyCacheMinTTL  = 300   // DNSKEY cache minimum TTL (seconds)
-	DefaultMaxNSEC3Iterations = 150   // NSEC3 iteration cap (RFC 5155 §10.3)
-	DefaultPaddingBlockSize   = 468   // RFC 7830: EDNS padding block size
+	DefaultCookieSecretSize         = 32    // DNS cookie secret size in bytes
+	DefaultDNSKeyCacheTTL           = 86400 // DNSKEY record cache TTL (seconds)
+	DefaultDNSKeyCacheMinTTL        = 300   // DNSKEY cache minimum TTL (seconds)
+	DefaultMaxNSEC3Iterations       = 150   // NSEC3 iteration cap (RFC 5155 §10.3)
+	DefaultPaddingRequestBlockSize  = 128   // RFC 8467: EDNS request padding block size
+	DefaultPaddingResponseBlockSize = 468   // RFC 8467: EDNS response padding block size
 
 	DefaultStatsPersistInterval = 86400 // Stats cache persist TTL (seconds)
 

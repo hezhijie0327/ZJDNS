@@ -230,7 +230,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 			// Generate a valid server cookie so the legitimate client can retry.
 			serverCookie := s.ednsMgr.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 			cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
-			s.ednsMgr.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil)
+			s.ednsMgr.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req))
 			responseMsg = msg
 			return responseMsg
 		}
@@ -265,7 +265,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 			response := s.buildResponse(req)
 			response.Answer = ptrAnswer
 			ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
-			s.applyEDNS(response, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede)
+			s.applyEDNS(response, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req))
 			responseMsg = response
 			return responseMsg
 		}
@@ -371,9 +371,9 @@ func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExp
 
 	if isExpired {
 		ede := edns.NewEDEOption(edns.EDECodeStaleAnswer, "")
-		s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede)
+		s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req))
 	} else {
-		s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, nil)
+		s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, nil, edns.HasPaddingOption(req))
 	}
 
 	s.restoreOriginalDomain(msg, question.Name, req.Question[0].Name)
@@ -516,7 +516,7 @@ func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Q
 		}
 	}
 	ede := edns.NewEDEOption(edeCode, "")
-	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede)
+	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req))
 	return msg
 }
 
@@ -542,7 +542,7 @@ func (s *Server) processCIDRRefused(req *dns.Msg, question dns.Question, ecsOpt 
 	log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", question.Name, dns.TypeToString[question.Qtype])
 	msg.Rcode = dns.RcodeRefused
 	ede := edns.NewEDEOption(edns.EDECodeBlocked, "")
-	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede)
+	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req))
 	return msg
 }
 
@@ -608,7 +608,7 @@ func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt
 			log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", upstreamEDE.InfoCode, edns.EDECodeString(upstreamEDE.InfoCode))
 		}
 	}
-	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, edeOpt)
+	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, edeOpt, edns.HasPaddingOption(req))
 	s.restoreOriginalDomain(msg, question.Name, req.Question[0].Name)
 	return msg
 }

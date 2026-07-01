@@ -76,7 +76,8 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 | [4033-4035](https://www.rfc-editor.org/rfc/rfc4033) | DNSSEC | 信任链 + RRSIG + AD/CD |
 | [5155](https://www.rfc-editor.org/rfc/rfc5155) | NSEC3 | 已验证否定 + 迭代上限 |
 | [7766](https://www.rfc-editor.org/rfc/rfc7766) | DNS over TCP | 连接复用 + 流水线 + 乱序 |
-| [7830](https://www.rfc-editor.org/rfc/rfc7830) | EDNS(0) Padding | 响应填充 |
+| [7830](https://www.rfc-editor.org/rfc/rfc7830) | EDNS(0) Padding | 响应 + 查询填充 |
+| [8467](https://www.rfc-editor.org/rfc/rfc8467) | EDNS(0) Padding Policies | 128B 查询 / 468B 响应块对齐 |
 | [7858](https://www.rfc-editor.org/rfc/rfc7858) | DNS over TLS | DoT TLS 1.3 |
 | [7871](https://www.rfc-editor.org/rfc/rfc7871) | EDNS Client Subnet | ECS 客户端子网 |
 | [7873](https://www.rfc-editor.org/rfc/rfc7873) | DNS Cookies | Cookie 验证 + 轮换 |

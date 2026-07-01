@@ -68,8 +68,10 @@ func NewHandler(defaultECS ECSConfig) (*Handler, error) {
 }
 
 // ApplyToMessage adds EDNS(0) options (ECS, Cookie, EDE, Padding) to a DNS
-// message.
-func (m *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption) {
+// message. isRequest selects the padding block size: 128 bytes for queries
+// (RFC 8467), 468 bytes for responses. clientWantsPadding, parsed via
+// HasPaddingOption, lets the client opt out via +nopadding / +noalignment.
+func (m *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption, isRequest bool, clientWantsPadding bool) {
 	if m == nil || msg == nil {
 		return
 	}
@@ -120,11 +122,15 @@ func (m *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 	}
 
 	var paddingBytes int
-	options, paddingBytes = addPadding(msg, options, isSecureConnection)
+	paddingBlockSize := paddingResponseBlockSize
+	if isRequest {
+		paddingBlockSize = paddingRequestBlockSize
+	}
+	options, paddingBytes = addPadding(msg, options, isSecureConnection, paddingBlockSize, clientWantsPadding)
 
 	opt.Option = options
 	msg.Extra = append(msg.Extra, opt)
 
-	log.Debugf("EDNS: built OPT secure=%t ecs=%t cookie=%t ede=%t padding=%d bytes",
-		isSecureConnection, ecs != nil, cookieStr != "", ede != nil, paddingBytes)
+	log.Debugf("EDNS: built OPT secure=%t ecs=%t cookie=%t ede=%t padding=%d bytes block=%d req=%t wantPad=%t",
+		isSecureConnection, ecs != nil, cookieStr != "", ede != nil, paddingBytes, paddingBlockSize, isRequest, clientWantsPadding)
 }

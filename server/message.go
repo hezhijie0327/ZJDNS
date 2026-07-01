@@ -29,19 +29,20 @@ func (s *Server) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, cl
 		ecsOpt = s.ednsMgr.DefaultECSForQType(req.Question[0].Qtype)
 	}
 
-	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede)
+	clientWantsPadding := edns.HasPaddingOption(req)
+	s.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, clientWantsPadding)
 }
 
 // applyEDNS applies EDNS options to a response without re-parsing the request.
 // It accepts already-parsed ECS and DNSSEC values to avoid redundant work on
 // the hot path where these are already known from the initial request parse.
-func (s *Server) applyEDNS(msg *dns.Msg, isSecureConnection bool, clientIP net.IP, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, ede *edns.EDEOption) {
+func (s *Server) applyEDNS(msg *dns.Msg, isSecureConnection bool, clientIP net.IP, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, ede *edns.EDEOption, clientWantsPadding bool) {
 	cookieStr := s.generateCookieResponse(cookieOpt, clientIP)
 
 	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || ede != nil || isSecureConnection
 
 	if shouldAddEDNS {
-		s.ednsMgr.ApplyToMessage(msg, ecsOpt, isSecureConnection, cookieStr, ede)
+		s.ednsMgr.ApplyToMessage(msg, ecsOpt, isSecureConnection, cookieStr, ede, false, clientWantsPadding)
 	}
 }
 
@@ -121,7 +122,7 @@ func (s *Server) buildQueryMessage(question dns.Question, ecs *edns.ECSOption, r
 	msg.RecursionDesired = recursionDesired
 
 	if s.ednsMgr != nil {
-		s.ednsMgr.ApplyToMessage(msg, ecs, isSecureConnection, "", nil)
+		s.ednsMgr.ApplyToMessage(msg, ecs, isSecureConnection, "", nil, true, true)
 	}
 
 	return msg

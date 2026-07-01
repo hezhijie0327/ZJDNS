@@ -97,7 +97,8 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 					}
 				}
 			} else {
-				msg := r.buildMsg(question, ecs, true, false)
+				isSecure := server.Protocol == config.ProtoTLS || server.Protocol == config.ProtoQUIC || server.Protocol == config.ProtoHTTP || server.Protocol == config.ProtoHTTP3
+				msg := r.buildMsg(question, ecs, true, isSecure)
 				queryResult := r.client.ExecuteQuery(groupCtx, msg, server)
 				pool.DefaultMessagePool.Put(msg)
 
