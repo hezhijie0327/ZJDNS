@@ -52,17 +52,27 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 ### Naming
 
 **General conventions:**
-- **PascalCase** for exported, **camelCase** for unexported. No `snake_case` identifiers.
+- **PascalCase** for exported, **camelCase** for unexported. No `snake_case` identifiers. Applies to all declarations: `type`, `func`, `const`, `var`, struct fields, method receivers, parameters.
 - **Acronyms all-caps**: `DNS`, `TLS`, `QUIC`, `ECS`, `EDNS`, `EDE`, `CIDR`, `PTR`, `RCODE`, `DNSSEC`, `TCP`, `UDP`, `DOH`, `DOQ`, `DOT`, `SOCKS5`, `HTTP`, `HTTPS`, `IP`, `TTL`, `CNAME`, `DDR`, `KTLS`, `ALPN`.
   - Exported: `DOHRequests`, `SOCKS5Dialer`, `RCODENoError`
   - Unexported first word: `dnssecStatus`, `udpRequests` (acronym lowered as first word)
   - Unexported later word: `lastDNSSECStatus`, `maxTCPConns` (acronym stays all-caps)
 - **`Default` prefix reserved for value constants**: `DefaultDNSQueryTimeout`, not `DefaultECSConfig` (that's a type — use `ECSConfig`).
+- **No `Mgr`/`Manager`/`Handler` suffixes** on field or variable names: the type already carries the semantics. `cache cache.Store`, not `cacheMgr cache.Store`.
 
-**Fields & receivers:**
-- **Field names describe what it IS, not the pattern**: `cache cache.Store`, not `cacheMgr cache.Store`. The type already says it's a Store — the suffix is noise.
-- **No `Mgr`/`Manager` suffixes**: prefer descriptive names or drop the suffix entirely. `cacheMgr` → `cache`. `log.Manager` → `log.Logger`.
-- **Method receivers**: single letter, first letter of type, lowercased. `(s *Server)` not `(svr *Server)`. Use value receiver only for small immutable types.
+**Parameters:**
+- **camelCase**, short in narrow scopes, descriptive in exported functions.
+- **Single-letter convention**: the smaller the scope, the shorter the name.
+  - **Receivers**: always single letter, first letter of type. `(s *Server)`, `(c *Client)`.
+  - **Loop variables**: `for i, r := range records` — `i` for index, single letter for element.
+  - **Short-function params**: 1–2 letters acceptable when the function body fits on screen.
+  - **Longer scopes** (>20 lines): use descriptive names (`cacheKey`, `verifiedDNSKEYs`).
+- **No Hungarian notation**: no `iCount`, `strName`, `bEnabled`, `pConn`.
+  When renaming receivers with global regex, check for local vars / params / loop vars that share the target name first — rename those, then the receiver. `go build` immediately after; the compiler catches what regex misses.
+
+**Const / Var:**
+- **No `UPPER_SNAKE_CASE`**: Go uses PascalCase or camelCase for all identifiers. `DefaultDNSPort`, not `DEFAULT_DNS_PORT`.
+- **Sentinel errors**: `ErrXxx` for exported (`ErrCIDRFilterRefused`), `errXxx` for unexported (`errEmptyTag`).
 
 **Function/method naming:**
 - **No `Get` prefix on getters**: `RemainingTTL()` not `GetRemainingTTL()`. Plain noun for accessors.
@@ -70,7 +80,6 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 - **Boolean predicates use assertion prefixes**: `IsXxx`, `HasXxx`, `CanXxx`, `ShouldXxx`. `ValidateXxx` returning only `bool` → rename to `IsXxxValid`.
 - **Conversion methods**: `ToXxx()` not `AsXxx()` or `IntoXxx()`.
 - **Package-level functions over empty structs**: `type Foo struct{}` with methods → convert to functions.
-- **Sentinel errors**: `ErrXxx` for exported, `errXxx` for unexported.
 
 **Type naming:**
 - **Avoid stutter with package name**: `cache.CacheEntry` → `cache.Entry`. But standard Go types like `server.Server`, `http.Server` are idiomatic — don't force-rename these.
@@ -89,6 +98,10 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 - No duplicate constants in the same package.
 - Leaf packages that can't import `config` may use local `const` blocks with same naming convention.
 - Cache key strings follow `prefix:` convention (`dns:`, `dnskey:`, `stats:`).
+- **Code is canonical**: docs and comments must match the actual constant values. Verify, don't assume.
+
+### Gotchas
+- **`sync.Pool.Put()` zeroes state**: never read fields from an object after `Put()` — the next `Get()` caller owns it. No linter catches this.
 
 ### Anti-patterns (DO NOT implement)
 - **No rate limiting** — accept all queries unconditionally.
@@ -251,14 +264,4 @@ If `"local error: tls: bad record MAC"` appears, disable kernel RX offload:
 
 Both `kernel_tx` and `kernel_rx` default to `false` (KTLS is opt-in).
 
-## Refactoring Lessons (2026-06-30 Audit)
 
-66 issues fixed across 7 commits covering 18,184 lines. Key takeaways:
-
-1. **Pool discipline**: `sync.Pool.Put()` zeroes state — any code reading fields after `Put()` is a bug no linter catches.
-2. **Acronym casing drifts**: `DoH`/`DoT`/`DoQ`/`DNS`/`TLS`/`QUIC` are all-caps everywhere — `DefaultDoHMaxRequestSize` → `DefaultDOHMaxRequestSize`.
-3. **Constants diverge between doc and code**: CLAUDE.md documented 5 wrong values. Code is canonical; docs must be verified.
-4. **Empty structs are a smell**: `type Validator struct{}` → `func ValidateResponse(...)`.
-5. **`Default` prefix on types is misleading**: `DefaultECSConfig` → `ECSConfig`. `Default` means "default value of this constant", not "default configuration".
-6. **Commit per batch**: Each batch independently reviewable and revertible. No mega-commit.
-7. **Pre-commit hook prevents regression**: `golangci-lint fmt` + `run` catches drift immediately.
