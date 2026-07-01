@@ -30,22 +30,22 @@ type Snapshot struct {
 	LastResponseTimeMs  uint64 `json:"last_response_time_ms"`
 	UDPRequests         uint64 `json:"udp_requests"`
 	TCPRequests         uint64 `json:"tcp_requests"`
-	DoTRequests         uint64 `json:"dot_requests"`
-	DoQRequests         uint64 `json:"doq_requests"`
-	DoHRequests         uint64 `json:"doh_requests"`
-	DoH3Requests        uint64 `json:"doh3_requests"`
+	DOTRequests         uint64 `json:"dot_requests"`
+	DOQRequests         uint64 `json:"doq_requests"`
+	DOHRequests         uint64 `json:"doh_requests"`
+	DOH3Requests        uint64 `json:"doh3_requests"`
 	RewriteRequests     uint64 `json:"rewrite_requests"`
 	HijackDetections    uint64 `json:"hijack_detections"`
 	DNSSECSecure        uint64 `json:"dnssec_secure"`
 	DNSSECBogus         uint64 `json:"dnssec_bogus"`
 	DNSSECInsecure      uint64 `json:"dnssec_insecure"`
-	RcodeNoError        uint64 `json:"rcode_noerror"`
-	RcodeFormErr        uint64 `json:"rcode_formerr"`
-	RcodeServFail       uint64 `json:"rcode_servfail"`
-	RcodeNXDomain       uint64 `json:"rcode_nxdomain"`
-	RcodeNotImp         uint64 `json:"rcode_notimp"`
-	RcodeRefused        uint64 `json:"rcode_refused"`
-	RcodeOther          uint64 `json:"rcode_other"`
+	RCODENoError        uint64 `json:"rcode_noerror"`
+	RCODEFormErr        uint64 `json:"rcode_formerr"`
+	RCODEServFail       uint64 `json:"rcode_servfail"`
+	RCODENXDomain       uint64 `json:"rcode_nxdomain"`
+	RCODENotImp         uint64 `json:"rcode_notimp"`
+	RCODERefused        uint64 `json:"rcode_refused"`
+	RCODEOther          uint64 `json:"rcode_other"`
 	UpdatedAt           int64  `json:"updated_at"`
 }
 
@@ -63,10 +63,10 @@ type logTotals struct {
 type logProtocolCounts struct {
 	UDPRequests  uint64 `json:"udp_requests,omitempty"`
 	TCPRequests  uint64 `json:"tcp_requests,omitempty"`
-	DoTRequests  uint64 `json:"dot_requests,omitempty"`
-	DoQRequests  uint64 `json:"doq_requests,omitempty"`
-	DoHRequests  uint64 `json:"doh_requests,omitempty"`
-	DoH3Requests uint64 `json:"doh3_requests,omitempty"`
+	DOTRequests  uint64 `json:"dot_requests,omitempty"`
+	DOQRequests  uint64 `json:"doq_requests,omitempty"`
+	DOHRequests  uint64 `json:"doh_requests,omitempty"`
+	DOH3Requests uint64 `json:"doh3_requests,omitempty"`
 }
 
 type logEvents struct {
@@ -174,10 +174,10 @@ func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
 		Protocols: logProtocolCounts{
 			UDPRequests:  snapshot.UDPRequests,
 			TCPRequests:  snapshot.TCPRequests,
-			DoTRequests:  snapshot.DoTRequests,
-			DoQRequests:  snapshot.DoQRequests,
-			DoHRequests:  snapshot.DoHRequests,
-			DoH3Requests: snapshot.DoH3Requests,
+			DOTRequests:  snapshot.DOTRequests,
+			DOQRequests:  snapshot.DOQRequests,
+			DOHRequests:  snapshot.DOHRequests,
+			DOH3Requests: snapshot.DOH3Requests,
 		},
 		Events: logEvents{
 			HijackDetections: snapshot.HijackDetections,
@@ -191,13 +191,13 @@ func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
 			Insecure: snapshot.DNSSECInsecure,
 		},
 		ErrorCodes: logErrorCodes{
-			NoError:  snapshot.RcodeNoError,
-			FormErr:  snapshot.RcodeFormErr,
-			ServFail: snapshot.RcodeServFail,
-			NXDomain: snapshot.RcodeNXDomain,
-			NotImp:   snapshot.RcodeNotImp,
-			Refused:  snapshot.RcodeRefused,
-			Other:    snapshot.RcodeOther,
+			NoError:  snapshot.RCODENoError,
+			FormErr:  snapshot.RCODEFormErr,
+			ServFail: snapshot.RCODEServFail,
+			NXDomain: snapshot.RCODENXDomain,
+			NotImp:   snapshot.RCODENotImp,
+			Refused:  snapshot.RCODERefused,
+			Other:    snapshot.RCODEOther,
 		},
 	}
 	if snapshot.TotalRequests > 0 {
@@ -364,22 +364,22 @@ func (sc *Collector) Snapshot() Snapshot {
 		LastResponseTimeMs:  sc.lastResponseTimeMs.Load(),
 		UDPRequests:         sc.udpRequests.Load(),
 		TCPRequests:         sc.tcpRequests.Load(),
-		DoTRequests:         sc.dotRequests.Load(),
-		DoQRequests:         sc.doqRequests.Load(),
-		DoHRequests:         sc.dohRequests.Load(),
-		DoH3Requests:        sc.doh3Requests.Load(),
+		DOTRequests:         sc.dotRequests.Load(),
+		DOQRequests:         sc.doqRequests.Load(),
+		DOHRequests:         sc.dohRequests.Load(),
+		DOH3Requests:        sc.doh3Requests.Load(),
 		RewriteRequests:     sc.rewriteRequests.Load(),
 		HijackDetections:    sc.hijackDetections.Load(),
 		DNSSECSecure:        sc.dnssecSecure.Load(),
 		DNSSECBogus:         sc.dnssecBogus.Load(),
 		DNSSECInsecure:      sc.dnssecInsecure.Load(),
-		RcodeNoError:        sc.rcodeNoError.Load(),
-		RcodeFormErr:        sc.rcodeFormErr.Load(),
-		RcodeServFail:       sc.rcodeServFail.Load(),
-		RcodeNXDomain:       sc.rcodeNXDomain.Load(),
-		RcodeNotImp:         sc.rcodeNotImp.Load(),
-		RcodeRefused:        sc.rcodeRefused.Load(),
-		RcodeOther:          sc.rcodeOther.Load(),
+		RCODENoError:        sc.rcodeNoError.Load(),
+		RCODEFormErr:        sc.rcodeFormErr.Load(),
+		RCODEServFail:       sc.rcodeServFail.Load(),
+		RCODENXDomain:       sc.rcodeNXDomain.Load(),
+		RCODENotImp:         sc.rcodeNotImp.Load(),
+		RCODERefused:        sc.rcodeRefused.Load(),
+		RCODEOther:          sc.rcodeOther.Load(),
 		UpdatedAt:           time.Now().Unix(),
 	}
 }
@@ -476,22 +476,22 @@ func (sc *Collector) LoadFromCacheEntry(entry *cache.CacheEntry) error {
 	sc.lastResponseTimeMs.Store(snap.LastResponseTimeMs)
 	sc.udpRequests.Store(snap.UDPRequests)
 	sc.tcpRequests.Store(snap.TCPRequests)
-	sc.dotRequests.Store(snap.DoTRequests)
-	sc.doqRequests.Store(snap.DoQRequests)
-	sc.dohRequests.Store(snap.DoHRequests)
-	sc.doh3Requests.Store(snap.DoH3Requests)
+	sc.dotRequests.Store(snap.DOTRequests)
+	sc.doqRequests.Store(snap.DOQRequests)
+	sc.dohRequests.Store(snap.DOHRequests)
+	sc.doh3Requests.Store(snap.DOH3Requests)
 	sc.rewriteRequests.Store(snap.RewriteRequests)
 	sc.hijackDetections.Store(snap.HijackDetections)
 	sc.dnssecSecure.Store(snap.DNSSECSecure)
 	sc.dnssecBogus.Store(snap.DNSSECBogus)
 	sc.dnssecInsecure.Store(snap.DNSSECInsecure)
-	sc.rcodeNoError.Store(snap.RcodeNoError)
-	sc.rcodeFormErr.Store(snap.RcodeFormErr)
-	sc.rcodeServFail.Store(snap.RcodeServFail)
-	sc.rcodeNXDomain.Store(snap.RcodeNXDomain)
-	sc.rcodeNotImp.Store(snap.RcodeNotImp)
-	sc.rcodeRefused.Store(snap.RcodeRefused)
-	sc.rcodeOther.Store(snap.RcodeOther)
+	sc.rcodeNoError.Store(snap.RCODENoError)
+	sc.rcodeFormErr.Store(snap.RCODEFormErr)
+	sc.rcodeServFail.Store(snap.RCODEServFail)
+	sc.rcodeNXDomain.Store(snap.RCODENXDomain)
+	sc.rcodeNotImp.Store(snap.RCODENotImp)
+	sc.rcodeRefused.Store(snap.RCODERefused)
+	sc.rcodeOther.Store(snap.RCODEOther)
 	return nil
 }
 

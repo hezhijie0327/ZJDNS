@@ -97,10 +97,10 @@ func TestRecordRequest_Protocols(t *testing.T) {
 	}{
 		{"UDP", func(s Snapshot) uint64 { return s.UDPRequests }},
 		{"TCP", func(s Snapshot) uint64 { return s.TCPRequests }},
-		{"DOT", func(s Snapshot) uint64 { return s.DoTRequests }},
-		{"DOQ", func(s Snapshot) uint64 { return s.DoQRequests }},
-		{"DOH", func(s Snapshot) uint64 { return s.DoHRequests }},
-		{"DOH3", func(s Snapshot) uint64 { return s.DoH3Requests }},
+		{"DOT", func(s Snapshot) uint64 { return s.DOTRequests }},
+		{"DOQ", func(s Snapshot) uint64 { return s.DOQRequests }},
+		{"DOH", func(s Snapshot) uint64 { return s.DOHRequests }},
+		{"DOH3", func(s Snapshot) uint64 { return s.DOH3Requests }},
 		{"unknown", func(s Snapshot) uint64 { return s.UDPRequests }},
 		{"", func(s Snapshot) uint64 { return s.UDPRequests }},
 	}
@@ -179,8 +179,8 @@ func TestToCacheEntry_LoadFromCacheEntry_RoundTrip(t *testing.T) {
 	if snap.CacheHits != 1 {
 		t.Errorf("CacheHits = %d, want 1", snap.CacheHits)
 	}
-	if snap.DoTRequests != 1 {
-		t.Errorf("DoTRequests = %d, want 1", snap.DoTRequests)
+	if snap.DOTRequests != 1 {
+		t.Errorf("DOTRequests = %d, want 1", snap.DOTRequests)
 	}
 	if snap.RewriteRequests != 1 {
 		t.Errorf("RewriteRequests = %d, want 1", snap.RewriteRequests)
