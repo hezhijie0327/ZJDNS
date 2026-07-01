@@ -50,9 +50,30 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 ## Coding Standards
 
 ### Naming
-- **PascalCase, acronyms all-caps**: `KTLSSettings`, `DOH`, `QUIC`, not `KTLSsettings`, `Doh`, `Quic`.
+
+**General conventions:**
+- **PascalCase** for exported, **camelCase** for unexported. No `snake_case` identifiers.
+- **Acronyms all-caps**: `DNS`, `TLS`, `QUIC`, `ECS`, `EDNS`, `EDE`, `CIDR`, `PTR`, `RCODE`, `DNSSEC`, `TCP`, `UDP`, `DOH`, `DOQ`, `DOT`, `SOCKS5`, `HTTP`, `HTTPS`, `IP`, `TTL`, `CNAME`, `DDR`, `KTLS`, `ALPN`.
+  - Exported: `DOHRequests`, `SOCKS5Dialer`, `RCODENoError`
+  - Unexported first word: `dnssecStatus`, `udpRequests` (acronym lowered as first word)
+  - Unexported later word: `lastDNSSECStatus`, `maxTCPConns` (acronym stays all-caps)
 - **`Default` prefix reserved for value constants**: `DefaultDNSQueryTimeout`, not `DefaultECSConfig` (that's a type — use `ECSConfig`).
+
+**Fields & receivers:**
+- **Field names describe what it IS, not the pattern**: `cache cache.Store`, not `cacheMgr cache.Store`. The type already says it's a Store — the suffix is noise.
+- **No `Mgr`/`Manager` suffixes**: prefer descriptive names or drop the suffix entirely. `cacheMgr` → `cache`. `log.Manager` → `log.Logger`.
+- **Method receivers**: single letter, first letter of type, lowercased. `(s *Server)` not `(svr *Server)`. Use value receiver only for small immutable types.
+
+**Function/method naming:**
+- **No `Get` prefix on getters**: `RemainingTTL()` not `GetRemainingTTL()`. Plain noun for accessors.
+- **Constructors use `New` / `NewXxx`**: not `Build`, `Create`, `Init`, `Make`. Exception: `BuildXxx` for building derived values (strings, byte slices), not type instances.
+- **Boolean predicates use assertion prefixes**: `IsXxx`, `HasXxx`, `CanXxx`, `ShouldXxx`. `ValidateXxx` returning only `bool` → rename to `IsXxxValid`.
+- **Conversion methods**: `ToXxx()` not `AsXxx()` or `IntoXxx()`.
 - **Package-level functions over empty structs**: `type Foo struct{}` with methods → convert to functions.
+- **Sentinel errors**: `ErrXxx` for exported, `errXxx` for unexported.
+
+**Type naming:**
+- **Avoid stutter with package name**: `cache.CacheEntry` → `cache.Entry`. But standard Go types like `server.Server`, `http.Server` are idiomatic — don't force-rename these.
 
 ### Performance (Hot Path)
 - **`log.NowUnix()` / `log.NowUnixNano()`** instead of `time.Now()` in cache TTL checks, DNSSEC RRSIG validation, last-access timestamps. `TimeCache` updates once per second via `atomic.Value`.

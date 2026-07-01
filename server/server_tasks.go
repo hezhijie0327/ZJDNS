@@ -48,18 +48,18 @@ func (s *Server) runBackgroundTicker(name string, interval time.Duration, fn fun
 
 // startCookieRotation rotates the DNS cookie secret on a fixed interval.
 func (s *Server) startCookieRotation() {
-	if s.ednsMgr == nil || s.ednsMgr.CookieGenerator == nil {
+	if s.edns == nil || s.edns.CookieGenerator == nil {
 		return
 	}
 	s.runBackgroundTicker("DNS cookie secret rotation", config.DefaultCookieSecretRotationInterval, func() {
-		s.ednsMgr.CookieGenerator.RotateSecret()
+		s.edns.CookieGenerator.RotateSecret()
 		log.Debugf("EDNS: rotated DNS cookie secret")
 	})
 }
 
 // refreshECSOnce attempts a single ECS refresh and logs the result.
 func (s *Server) refreshECSOnce() {
-	ecsList, changed, err := s.ednsMgr.RefreshDefaultECS()
+	ecsList, changed, err := s.edns.RefreshDefaultECS()
 	if err != nil {
 		log.Warnf("EDNS: default ECS refresh failed: %v", err)
 		return
@@ -76,7 +76,7 @@ func (s *Server) refreshECSOnce() {
 
 // startECSRefresh periodically refreshes the default EDNS Client Subnet value.
 func (s *Server) startECSRefresh() {
-	if s.ednsMgr == nil || !s.ednsMgr.ShouldRefreshDefaultECS() {
+	if s.edns == nil || !s.edns.ShouldRefreshDefaultECS() {
 		return
 	}
 	s.backgroundGroup.Go(func() error {
@@ -111,7 +111,7 @@ func (s *Server) startPrefetchCooldownCleanup() {
 // startStatsLogger logs stats snapshots at a periodic interval.
 func (s *Server) startStatsLogger() {
 	statsInterval := s.config.Server.StatsInterval()
-	if statsInterval <= 0 || s.statsMgr == nil {
+	if statsInterval <= 0 || s.stats == nil {
 		return
 	}
 	s.runBackgroundTicker("stats logger", time.Duration(statsInterval)*time.Second, func() {
@@ -122,11 +122,11 @@ func (s *Server) startStatsLogger() {
 // startStatsReset periodically resets stats counters and logs the final snapshot.
 func (s *Server) startStatsReset() {
 	statsResetInterval := s.config.Server.StatsResetInterval()
-	if statsResetInterval <= 0 || s.statsMgr == nil {
+	if statsResetInterval <= 0 || s.stats == nil {
 		return
 	}
 	s.runBackgroundTicker("stats reset", time.Duration(statsResetInterval)*time.Second, func() {
-		s.statsMgr.Reset()
+		s.stats.Reset()
 		log.Infof("STATS: counters reset")
 		s.logStatsNow("reset")
 	})
@@ -163,11 +163,11 @@ func (s *Server) setupSignalHandling() {
 }
 
 func (s *Server) logStatsNow(trigger string) {
-	if s == nil || s.statsMgr == nil {
+	if s == nil || s.stats == nil {
 		return
 	}
 
-	snapshot, err := s.statsMgr.FetchStats()
+	snapshot, err := s.stats.FetchStats()
 	if err != nil {
 		log.Warnf("STATS: fetch failed: %v", err)
 		return
@@ -185,7 +185,7 @@ func (s *Server) logStatsNow(trigger string) {
 
 	log.Infof("STATS: trigger=%s payload=%s", trigger, payload)
 
-	s.statsMgr.Persist(s.cacheMgr)
+	s.stats.Persist(s.cache)
 }
 
 func (s *Server) shutdownServer() {
@@ -194,7 +194,7 @@ func (s *Server) shutdownServer() {
 	}
 
 	log.Infof("SERVER: Starting DNS server shutdown")
-	if s.statsMgr != nil {
+	if s.stats != nil {
 		s.logStatsNow("shutdown")
 	}
 
@@ -281,8 +281,8 @@ func (s *Server) shutdownServer() {
 		log.Errorf("SERVER: Cache refresh tasks shutdown timeout")
 	}
 
-	if s.cacheMgr != nil {
-		dnsutil.CloseWithLog(s.cacheMgr, "Cache store", "SERVER")
+	if s.cache != nil {
+		dnsutil.CloseWithLog(s.cache, "Cache store", "SERVER")
 	}
 
 	log.DefaultTimeCache.Stop()

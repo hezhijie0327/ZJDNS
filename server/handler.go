@@ -171,9 +171,9 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 	var responseMsg *dns.Msg
 	defer s.recordQueryMetrics(m, &responseMsg, question)
 
-	if s.rewriteMgr.HasRules() {
+	if s.rewrite.HasRules() {
 		log.Debugf("REWRITE: evaluating rules for %s qtype=%s client=%s", question.Name, dns.TypeToString[question.Qtype], clientIP)
-		rewriteResult := s.rewriteMgr.Evaluate(question.Name, question.Qtype, question.Qclass, clientIP)
+		rewriteResult := s.rewrite.Evaluate(question.Name, question.Qtype, question.Qclass, clientIP)
 
 		if rewriteResult.ShouldRewrite {
 			m.rewrote = true
@@ -215,34 +215,34 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 
 	if opt := req.IsEdns0(); opt != nil {
 		clientRequestedDNSSEC = opt.Do()
-		ecsOpt = s.ednsMgr.ParseFromDNS(req)
-		cookieOpt = s.ednsMgr.ParseCookie(req)
+		ecsOpt = s.edns.ParseFromDNS(req)
+		cookieOpt = s.edns.ParseCookie(req)
 	}
 
 	// Early DNS Cookie validation (RFC 7873): reject queries with an invalid
 	// server cookie before spending CPU on resolution. This prevents an attacker
 	// from using spoofed source IPs to amplify traffic through the resolver.
 	if cookieOpt != nil && len(cookieOpt.ServerCookie) >= edns.DefaultCookieServerLen {
-		if !s.ednsMgr.CookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
+		if !s.edns.CookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
 			log.Debugf("EDNS: bad server cookie from %s, returning BADCOOKIE", clientIP)
 			msg := s.buildResponse(req)
 			msg.Rcode = dns.RcodeFormatError
 			// Generate a valid server cookie so the legitimate client can retry.
-			serverCookie := s.ednsMgr.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+			serverCookie := s.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 			cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
-			s.ednsMgr.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req))
+			s.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req))
 			responseMsg = msg
 			return responseMsg
 		}
 	}
 
 	if ecsOpt == nil {
-		ecsOpt = s.ednsMgr.DefaultECSForQType(question.Qtype)
+		ecsOpt = s.edns.DefaultECSForQType(question.Qtype)
 	}
 
 	cacheKey := cache.BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC)
 
-	if entry, found, isExpired := s.cacheMgr.Get(cacheKey); found {
+	if entry, found, isExpired := s.cache.Get(cacheKey); found {
 		log.Debugf("CACHE: hit key=%s expired=%t for %s, ttl=%d, validated=%t, answer=%d", cacheKey, isExpired, question.Name, entry.GetRemainingTTL(), entry.Validated, len(entry.Answer))
 		m.cacheHit = true
 		if !isExpired {
@@ -449,7 +449,7 @@ func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, q
 					return
 				}
 				log.Debugf("CACHE: background refresh completed for slow expired query %s", question.Name)
-				s.cacheMgr.Set(cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
+				s.cache.Set(cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
 				if s.prober != nil {
 					s.prober.Start(question, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
 				}
@@ -482,7 +482,7 @@ func (s *Server) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *e
 }
 
 func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string) *dns.Msg {
-	if entry, found, _ := s.cacheMgr.Get(cacheKey); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
+	if entry, found, _ := s.cache.Get(cacheKey); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		// Serving stale cache on error fallback
 		if entry.Validated {
 			*dnssecStatus = config.DNSSECStatusSecure
@@ -580,7 +580,7 @@ func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt
 	}
 
 	log.Debugf("CACHE: populating cache key=%s for %s", cacheKey, question.Name)
-	s.cacheMgr.Set(cacheKey, answer, authority, additional, validated, responseECS)
+	s.cache.Set(cacheKey, answer, authority, additional, validated, responseECS)
 	if s.prober != nil {
 		s.prober.Start(question, cacheKey, answer, authority, additional, validated, responseECS)
 	}
@@ -633,7 +633,7 @@ func (s *Server) refreshCacheEntry(ctx context.Context, question dns.Question, e
 		return qr.Err
 	}
 
-	s.cacheMgr.Set(cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
+	s.cache.Set(cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
 	if s.prober != nil {
 		s.prober.Start(question, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
 	}
@@ -657,8 +657,8 @@ func (s *Server) recordQueryMetrics(m *queryMetrics, responseMsg **dns.Msg, ques
 				dnsutil.FormatRecords((*responseMsg).Answer, (*responseMsg).Ns, (*responseMsg).Extra))
 		}
 	}
-	if s.statsMgr != nil {
-		s.statsMgr.RecordRequest(responseTime, m.cacheHit, m.hadError, m.requestProtocol,
+	if s.stats != nil {
+		s.stats.RecordRequest(responseTime, m.cacheHit, m.hadError, m.requestProtocol,
 			m.rewrote, m.hijackDetected, m.staleServed, m.fallbackUsed, m.prefetchTriggered,
 			m.dnssecStatus, rcode)
 	}

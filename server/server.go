@@ -38,17 +38,17 @@ type Server struct {
 	closed int32 // hot-path: checked on every query via atomic load
 
 	config       *config.ServerConfig
-	cacheMgr     cache.Store
+	cache        cache.Store
 	reverseCache interface {
 		ReverseLookup(net.IP) []cache.LookupResult
 	}
 	queryClient       *client.Client
 	guard             *security.Guard
 	tls               *servertls.Server
-	ednsMgr           *edns.Handler
-	rewriteMgr        *rewrite.Evaluator
+	edns              *edns.Handler
+	rewrite           *rewrite.Evaluator
 	cidrFilter        *cidr.Filter
-	statsMgr          *stats.Collector
+	stats             *stats.Collector
 	pprofServer       *http.Server
 	ctx               context.Context
 	cancel            context.CancelCauseFunc
@@ -116,11 +116,11 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	server := &Server{
 		config:            cfg,
-		ednsMgr:           ednsHandler,
-		rewriteMgr:        rewriteEvaluator,
+		edns:              ednsHandler,
+		rewrite:           rewriteEvaluator,
 		cidrFilter:        cidrFilter,
-		statsMgr:          stats.New(cfg, cacheStore),
-		cacheMgr:          cacheStore,
+		stats:             stats.New(cfg, cacheStore),
+		cache:             cacheStore,
 		ctx:               ctx,
 		cancel:            cancel,
 		shutdown:          make(chan struct{}),
@@ -137,7 +137,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	server.guard = security.New(cacheStore, cfg.Server.Features.HijackProtection)
 	// Cache the reverse lookup capability once — avoids a type assertion
 	// on every PTR query.
-	server.reverseCache, _ = server.cacheMgr.(interface {
+	server.reverseCache, _ = server.cache.(interface {
 		ReverseLookup(net.IP) []cache.LookupResult
 	})
 
@@ -388,14 +388,14 @@ func (s *Server) displayInfo() {
 		}
 	}
 
-	if s.rewriteMgr.HasRules() {
+	if s.rewrite.HasRules() {
 		log.Infof("REWRITE: DNS rewriter: enabled (%d rules)", len(s.config.Rewrite))
 	}
 	log.Infof("CACHE: Serve expired enabled (ttl=%d, client timeout=%s, prefer_stale=%t)", config.DefaultStaleMaxAge, config.DefaultServeExpiredClientTimeout.String(), s.config.Server.Features.Cache.PreferStale)
 	if s.config.Server.Features.HijackProtection {
 		log.Infof("SECURITY: DNS hijacking prevention: enabled")
 	}
-	if defaultECS := s.ednsMgr.DefaultECS(); defaultECS != nil {
+	if defaultECS := s.edns.DefaultECS(); defaultECS != nil {
 		log.Infof("EDNS: Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
 }

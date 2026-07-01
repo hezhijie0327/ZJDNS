@@ -22,11 +22,11 @@ func (s *Server) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, cl
 
 	if opt := req.IsEdns0(); opt != nil {
 		clientRequestedDNSSEC = opt.Do()
-		ecsOpt = s.ednsMgr.ParseFromDNS(req)
+		ecsOpt = s.edns.ParseFromDNS(req)
 	}
 
 	if ecsOpt == nil && len(req.Question) > 0 {
-		ecsOpt = s.ednsMgr.DefaultECSForQType(req.Question[0].Qtype)
+		ecsOpt = s.edns.DefaultECSForQType(req.Question[0].Qtype)
 	}
 
 	clientWantsPadding := edns.HasPaddingOption(req)
@@ -42,12 +42,12 @@ func (s *Server) applyEDNS(msg *dns.Msg, isSecureConnection bool, clientIP net.I
 	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || ede != nil || isSecureConnection
 
 	if shouldAddEDNS {
-		s.ednsMgr.ApplyToMessage(msg, ecsOpt, isSecureConnection, cookieStr, ede, false, clientWantsPadding)
+		s.edns.ApplyToMessage(msg, ecsOpt, isSecureConnection, cookieStr, ede, false, clientWantsPadding)
 	}
 }
 
 func (s *Server) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP net.IP) string {
-	if s.ednsMgr == nil || s.ednsMgr.CookieGenerator == nil || cookieOpt == nil {
+	if s.edns == nil || s.edns.CookieGenerator == nil || cookieOpt == nil {
 		return ""
 	}
 
@@ -63,7 +63,7 @@ func (s *Server) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP n
 	// Always generate a fresh server cookie per RFC 7873 §5.3.
 	// Validation is informational only — we rotate regardless.
 	if len(cookieOpt.ServerCookie) >= edns.DefaultCookieServerLen {
-		if s.ednsMgr.CookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
+		if s.edns.CookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
 			log.Debugf("EDNS: server cookie validated for %s", clientIP)
 		} else {
 			log.Debugf("EDNS: server cookie invalid for %s, regenerating", clientIP)
@@ -71,7 +71,7 @@ func (s *Server) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP n
 	} else {
 		log.Debugf("EDNS: generating new server cookie for %s", clientIP)
 	}
-	serverCookie := s.ednsMgr.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+	serverCookie := s.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 
 	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 }
@@ -121,8 +121,8 @@ func (s *Server) buildQueryMessage(question dns.Question, ecs *edns.ECSOption, r
 	msg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
 	msg.RecursionDesired = recursionDesired
 
-	if s.ednsMgr != nil {
-		s.ednsMgr.ApplyToMessage(msg, ecs, isSecureConnection, "", nil, true, true)
+	if s.edns != nil {
+		s.edns.ApplyToMessage(msg, ecs, isSecureConnection, "", nil, true, true)
 	}
 
 	return msg
