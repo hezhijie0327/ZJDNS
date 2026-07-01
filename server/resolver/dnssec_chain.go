@@ -121,7 +121,7 @@ func (rr *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, c
 	}
 
 	// Check for cached DNSKEYs for the child zone
-	cachedKeys := crypto.GetZoneKeys(childZone)
+	cachedKeys := crypto.ZoneKeys(childZone)
 	if len(cachedKeys) > 0 {
 		chain.zoneDNSKEYs = cachedKeys
 	} else {
@@ -137,7 +137,7 @@ func (rr *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string
 	crypto := rr.resolver.validator.Crypto
 
 	// Check cache first
-	if cached := crypto.GetZoneKeys(zone); len(cached) > 0 {
+	if cached := crypto.ZoneKeys(zone); len(cached) > 0 {
 		chain.zoneDNSKEYs = cached
 		return
 	}

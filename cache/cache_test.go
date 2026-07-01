@@ -161,9 +161,9 @@ func TestCacheEntry_CanServeExpired(t *testing.T) {
 	}
 }
 
-func TestCacheEntry_GetRemainingTTL(t *testing.T) {
+func TestCacheEntry_RemainingTTL(t *testing.T) {
 	entry := &CacheEntry{Timestamp: time.Now().Unix(), TTL: 300}
-	remaining := entry.GetRemainingTTL()
+	remaining := entry.RemainingTTL()
 	if remaining < 299 || remaining > 300 {
 		t.Errorf("remaining TTL = %d, want ~300", remaining)
 	}

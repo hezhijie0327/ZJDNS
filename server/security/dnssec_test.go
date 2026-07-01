@@ -373,7 +373,7 @@ func TestFullDNSSECChain(t *testing.T) {
 		Answer: []dns.RR{aRec, rrsig},
 	}
 
-	verifiedKeys := cv.GetZoneKeys(childZone)
+	verifiedKeys := cv.ZoneKeys(childZone)
 	if len(verifiedKeys) == 0 {
 		t.Fatal("zone keys not cached")
 	}

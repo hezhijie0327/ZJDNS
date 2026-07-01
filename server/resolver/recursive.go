@@ -89,7 +89,7 @@ func (rr *Recursive) resolve(ctx context.Context, question dns.Question, ecs *ed
 	// Initialize DNSSEC trust chain with root trust anchors (when available).
 	chain := &dnssecChain{}
 	if crypto := rr.resolver.validator.Crypto; crypto != nil {
-		chain.parentDNSKEYs = crypto.GetRootKeys()
+		chain.parentDNSKEYs = crypto.RootKeys()
 	}
 
 	// Root-domain query (normalizedQname is empty for the root zone ".").

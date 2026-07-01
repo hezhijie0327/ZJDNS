@@ -243,7 +243,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 	cacheKey := cache.BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC)
 
 	if entry, found, isExpired := s.cache.Get(cacheKey); found {
-		log.Debugf("CACHE: hit key=%s expired=%t for %s, ttl=%d, validated=%t, answer=%d", cacheKey, isExpired, question.Name, entry.GetRemainingTTL(), entry.Validated, len(entry.Answer))
+		log.Debugf("CACHE: hit key=%s expired=%t for %s, ttl=%d, validated=%t, answer=%d", cacheKey, isExpired, question.Name, entry.RemainingTTL(), entry.Validated, len(entry.Answer))
 		m.cacheHit = true
 		if !isExpired {
 			responseMsg = s.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &m.prefetchTriggered, &m.dnssecStatus)
@@ -353,7 +353,7 @@ func (s *Server) shouldStartPrefetch(cacheKey string) bool {
 func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 
-	responseTTL := entry.GetRemainingTTL()
+	responseTTL := entry.RemainingTTL()
 	elapsed := int64(entry.TTL) - int64(responseTTL)
 	if elapsed < 0 {
 		elapsed = 0
@@ -489,7 +489,7 @@ func (s *Server) processQueryError(req *dns.Msg, cacheKey string, question dns.Q
 		} else {
 			*dnssecStatus = config.DNSSECStatusInsecure
 		}
-		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.GetRemainingTTL(), entry.Validated)
+		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.RemainingTTL(), entry.Validated)
 		return s.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
 	}
 

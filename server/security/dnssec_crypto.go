@@ -680,9 +680,9 @@ func (cv *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 	cv.cache.SetEntry(dnsKeyCacheKey(zone), entry)
 }
 
-// GetZoneKeys retrieves cached verified DNSKEYs for a zone from the unified
+// ZoneKeys retrieves cached verified DNSKEYs for a zone from the unified
 // cache. Returns nil when the zone is not cached or the entry has expired.
-func (cv *CryptoValidator) GetZoneKeys(zone string) []*dns.DNSKEY {
+func (cv *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	if cv == nil || cv.cache == nil {
 		return nil
 	}
@@ -699,7 +699,7 @@ func (cv *CryptoValidator) GetZoneKeys(zone string) []*dns.DNSKEY {
 	return FindDNSKEYs(records)
 }
 
-// GetRootKeys returns the root trust anchor DNSKEYs.
-func (cv *CryptoValidator) GetRootKeys() []*dns.DNSKEY {
+// RootKeys returns the root trust anchor DNSKEYs.
+func (cv *CryptoValidator) RootKeys() []*dns.DNSKEY {
 	return cv.rootKeys
 }

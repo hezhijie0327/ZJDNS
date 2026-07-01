@@ -86,8 +86,8 @@ func (c *CacheEntry) CanServeExpired(maxAge int) bool {
 	return c != nil && c.IsExpired() && log.NowUnix()-c.Timestamp-int64(c.TTL) <= int64(maxAge)
 }
 
-// GetRemainingTTL returns the remaining TTL, or DefaultStaleTTL if expired.
-func (c *CacheEntry) GetRemainingTTL() uint32 {
+// RemainingTTL returns the remaining TTL, or DefaultStaleTTL if expired.
+func (c *CacheEntry) RemainingTTL() uint32 {
 	if c == nil {
 		return 0
 	}
