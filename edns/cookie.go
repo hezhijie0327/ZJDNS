@@ -104,9 +104,9 @@ func (cg *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []
 	return serverCookie
 }
 
-// ValidateServerCookie verifies a server cookie against the current and
+// IsServerCookieValid verifies a server cookie against the current and
 // previous secrets.
-func (cg *CookieGenerator) ValidateServerCookie(clientIP net.IP, clientCookie, serverCookie []byte) bool {
+func (cg *CookieGenerator) IsServerCookieValid(clientIP net.IP, clientCookie, serverCookie []byte) bool {
 	sp := cg.loadSecrets()
 	if sp == nil || len(clientCookie) != DefaultCookieClientLen || len(serverCookie) != DefaultCookieServerLen {
 		return false

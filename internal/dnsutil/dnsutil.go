@@ -37,9 +37,9 @@ func NormalizeDomain(domain string) string {
 	return strings.ToLower(domain)
 }
 
-// ValidateDomainLabels checks that each label in the domain name does not exceed
+// IsValidDomainLabels checks that each label in the domain name does not exceed
 // the RFC 1035 maximum of 63 bytes. Returns true if all labels are valid.
-func ValidateDomainLabels(domain string) bool {
+func IsValidDomainLabels(domain string) bool {
 	name := strings.TrimSuffix(strings.TrimSuffix(domain, "."), ".")
 	if name == "" {
 		return true // root zone

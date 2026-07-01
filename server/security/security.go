@@ -6,7 +6,7 @@ import "zjdns/cache"
 
 // Guard aggregates DNSSEC crypto validation and hijack detection into a single
 // configuration unit. Lightweight record-presence checking is provided by the
-// package-level ValidateResponse function.
+// package-level IsResponseValid function.
 type Guard struct {
 	Crypto   *CryptoValidator // Full cryptographic DNSSEC validation
 	Detector *Detector        // Hijack detection

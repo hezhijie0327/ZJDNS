@@ -129,7 +129,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 						// Trust the upstream resolver's AD flag for DNSSEC
 						// validation in forwarding mode — the upstream
 						// performed the cryptographic verification.
-						queryResult.Validated = security.ValidateResponse(queryResult.Response, true)
+						queryResult.Validated = security.IsResponseValid(queryResult.Response, true)
 						log.Debugf("UPSTREAM: DNSSEC validation result=%t for %s via %s", queryResult.Validated, question.Name, server.Address)
 						ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 

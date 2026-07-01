@@ -63,7 +63,7 @@ func (s *Server) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP n
 	// Always generate a fresh server cookie per RFC 7873 §5.3.
 	// Validation is informational only — we rotate regardless.
 	if len(cookieOpt.ServerCookie) >= edns.DefaultCookieServerLen {
-		if s.edns.CookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
+		if s.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
 			log.Debugf("EDNS: server cookie validated for %s", clientIP)
 		} else {
 			log.Debugf("EDNS: server cookie invalid for %s, regenerating", clientIP)

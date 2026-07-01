@@ -109,7 +109,7 @@ type Resolver struct {
 
 // Validator holds the DNSSEC and hijack detection components for response
 // validation. Lightweight record-presence checking is provided by the
-// package-level security.ValidateResponse function.
+// package-level security.IsResponseValid function.
 type Validator struct {
 	Crypto *security.CryptoValidator // Full cryptographic DNSSEC validation
 	Hijack *security.Detector        // DNS hijack detection

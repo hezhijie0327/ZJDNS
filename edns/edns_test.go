@@ -116,13 +116,13 @@ func TestCookieGenerator_Basic(t *testing.T) {
 	}
 
 	// Validate server cookie
-	if !cg.ValidateServerCookie(clientIP, clientCookie, serverCookie) {
-		t.Error("ValidateServerCookie should succeed with fresh cookie")
+	if !cg.IsServerCookieValid(clientIP, clientCookie, serverCookie) {
+		t.Error("IsServerCookieValid should succeed with fresh cookie")
 	}
 
 	// Invalid client cookie
-	if cg.ValidateServerCookie(clientIP, []byte{0, 0, 0, 0}, serverCookie) {
-		t.Error("ValidateServerCookie should fail with short client cookie")
+	if cg.IsServerCookieValid(clientIP, []byte{0, 0, 0, 0}, serverCookie) {
+		t.Error("IsServerCookieValid should fail with short client cookie")
 	}
 }
 
@@ -141,12 +141,12 @@ func TestCookieGenerator_Rotation(t *testing.T) {
 	}
 
 	// Old cookie should still validate (previous secret retained)
-	if !cg.ValidateServerCookie(clientIP, clientCookie, oldCookie) {
+	if !cg.IsServerCookieValid(clientIP, clientCookie, oldCookie) {
 		t.Error("old cookie should still validate after rotation")
 	}
 
 	// New cookie should validate
-	if !cg.ValidateServerCookie(clientIP, clientCookie, newCookie) {
+	if !cg.IsServerCookieValid(clientIP, clientCookie, newCookie) {
 		t.Error("new cookie should validate after rotation")
 	}
 }
@@ -156,7 +156,7 @@ func TestCookieGenerator_Nil(t *testing.T) {
 	if cg.GenerateServerCookie(nil, nil) != nil {
 		t.Error("nil CookieGenerator should return nil")
 	}
-	if cg.ValidateServerCookie(nil, nil, nil) {
+	if cg.IsServerCookieValid(nil, nil, nil) {
 		t.Error("nil CookieGenerator should return false")
 	}
 	cg.RotateSecret() // should not panic

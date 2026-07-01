@@ -148,13 +148,13 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 
 	if len(question.Name) > config.MaxDomainLength || question.Qtype == dns.TypeANY ||
 		question.Qtype == dns.TypeAXFR || question.Qtype == dns.TypeIXFR ||
-		!dnsutil.ValidateDomainLabels(question.Name) {
+		!dnsutil.IsValidDomainLabels(question.Name) {
 		msg := pool.DefaultMessagePool.Get()
 		msg.SetReply(req)
 		msg.Rcode = dns.RcodeRefused
 
 		var ede *edns.EDEOption
-		if len(question.Name) > config.MaxDomainLength || !dnsutil.ValidateDomainLabels(question.Name) {
+		if len(question.Name) > config.MaxDomainLength || !dnsutil.IsValidDomainLabels(question.Name) {
 			ede = edns.NewEDEOption(edns.EDECodeInvalidData, "")
 		} else {
 			ede = edns.NewEDEOption(edns.EDECodeNotSupported, "")
@@ -223,7 +223,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 	// server cookie before spending CPU on resolution. This prevents an attacker
 	// from using spoofed source IPs to amplify traffic through the resolver.
 	if cookieOpt != nil && len(cookieOpt.ServerCookie) >= edns.DefaultCookieServerLen {
-		if !s.edns.CookieGenerator.ValidateServerCookie(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
+		if !s.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
 			log.Debugf("EDNS: bad server cookie from %s, returning BADCOOKIE", clientIP)
 			msg := s.buildResponse(req)
 			msg.Rcode = dns.RcodeFormatError
