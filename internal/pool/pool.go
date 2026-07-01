@@ -46,15 +46,15 @@ func NewMessagePool() *MessagePool {
 // Get acquires a dns.Msg from the pool. The message is already zeroed by Put(),
 // so callers that need a clean slate are covered; callers that pre-populate
 // fields before use can rely on the zero state.
-func (mp *MessagePool) Get() *dns.Msg {
-	return mp.pool.Get().(*dns.Msg)
+func (m *MessagePool) Get() *dns.Msg {
+	return m.pool.Get().(*dns.Msg)
 }
 
 // Put returns a dns.Msg to the pool.
-func (mp *MessagePool) Put(msg *dns.Msg) {
+func (m *MessagePool) Put(msg *dns.Msg) {
 	if msg != nil {
 		*msg = dns.Msg{}
-		mp.pool.Put(msg)
+		m.pool.Put(msg)
 	}
 }
 
@@ -62,7 +62,7 @@ func (mp *MessagePool) Put(msg *dns.Msg) {
 // of buffers. Buffers are stored as *[]byte pointers to avoid interface-boxing
 // allocations on every Put (see staticcheck SA6002).
 func NewBufferPool(size, poolSize int) *BufferPool {
-	bp := &BufferPool{
+	bufPool := &BufferPool{
 		size: size,
 		pool: sync.Pool{
 			New: func() any {
@@ -73,16 +73,16 @@ func NewBufferPool(size, poolSize int) *BufferPool {
 	}
 	for range poolSize {
 		b := make([]byte, size)
-		bp.pool.Put(&b)
+		bufPool.pool.Put(&b)
 	}
-	return bp
+	return bufPool
 }
 
 // Get acquires a byte slice from the pool.
-func (bp *BufferPool) Get() []byte {
-	bufPtr := bp.pool.Get()
+func (b *BufferPool) Get() []byte {
+	bufPtr := b.pool.Get()
 	if bufPtr == nil {
-		b := make([]byte, bp.size)
+		b := make([]byte, b.size)
 		return b
 	}
 	return *(bufPtr.(*[]byte))
@@ -90,10 +90,10 @@ func (bp *BufferPool) Get() []byte {
 
 // Put returns a byte slice to the pool. The slice is normalized to full
 // capacity before clearing to ensure the next Get returns the full buffer.
-func (bp *BufferPool) Put(buf []byte) {
-	if buf != nil && cap(buf) >= bp.size {
+func (b *BufferPool) Put(buf []byte) {
+	if buf != nil && cap(buf) >= b.size {
 		buf = buf[:cap(buf)]
 		clear(buf[:cap(buf)])
-		bp.pool.Put(&buf)
+		b.pool.Put(&buf)
 	}
 }

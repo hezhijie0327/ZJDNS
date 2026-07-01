@@ -46,7 +46,7 @@ func New() *Evaluator {
 }
 
 // LoadRules validates and loads rewrite rules into the Evaluator.
-func (re *Evaluator) LoadRules(rules []config.RewriteRule) error {
+func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 	validRules := make([]config.RewriteRule, 0, len(rules))
 	globalExcludes := make([]*net.IPNet, 0)
 	for i, rule := range rules {
@@ -122,14 +122,14 @@ func (re *Evaluator) LoadRules(rules []config.RewriteRule) error {
 			}
 		}
 
-		// Pre-build DNS records from config so they are not re-parsed
+		// Pre-build DNS records from config so they are not e-parsed
 		// from zone file strings on every query.
 		rule.CachedRecords = make([]dns.RR, 0, len(rule.Records))
 		for _, rec := range rule.Records {
 			if rec.ResponseCode != nil {
 				continue // handled in Evaluate, not a real RR
 			}
-			if rr := re.buildRecord(rule.Name, rec); rr != nil {
+			if rr := e.buildRecord(rule.Name, rec); rr != nil {
 				rule.CachedRecords = append(rule.CachedRecords, rr)
 			}
 		}
@@ -138,7 +138,7 @@ func (re *Evaluator) LoadRules(rules []config.RewriteRule) error {
 			if rec.ResponseCode != nil {
 				continue
 			}
-			if rr := re.buildRecord(rule.Name, rec); rr != nil {
+			if rr := e.buildRecord(rule.Name, rec); rr != nil {
 				rule.CachedAdditional = append(rule.CachedAdditional, rr)
 			}
 		}
@@ -146,9 +146,9 @@ func (re *Evaluator) LoadRules(rules []config.RewriteRule) error {
 		validRules = append(validRules, rule)
 	}
 
-	re.rules.Store(&validRules)
-	re.rulesLen.Store(uint64(len(validRules)))
-	re.globalExcludeCIDRs.Store(&globalExcludes)
+	e.rules.Store(&validRules)
+	e.rulesLen.Store(uint64(len(validRules)))
+	e.globalExcludeCIDRs.Store(&globalExcludes)
 	log.Infof("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
 	return nil
 }
@@ -172,12 +172,12 @@ func parseCIDREntry(entry string) (*net.IPNet, error) {
 }
 
 // HasRules reports whether any rewrite rules are currently loaded.
-func (re *Evaluator) HasRules() bool {
-	return re.rulesLen.Load() > 0
+func (e *Evaluator) HasRules() bool {
+	return e.rulesLen.Load() > 0
 }
 
 // Evaluate checks a query against loaded rules and returns a rewrite Result.
-func (re *Evaluator) Evaluate(domain string, qtype uint16, qclass uint16, clientIP net.IP) Result {
+func (e *Evaluator) Evaluate(domain string, qtype uint16, qclass uint16, clientIP net.IP) Result {
 	result := Result{
 		Domain:        domain,
 		ResponseCode:  dns.RcodeSuccess,
@@ -190,7 +190,7 @@ func (re *Evaluator) Evaluate(domain string, qtype uint16, qclass uint16, client
 		return result
 	}
 
-	excludePtr := re.globalExcludeCIDRs.Load()
+	excludePtr := e.globalExcludeCIDRs.Load()
 	if excludePtr != nil && clientIP != nil {
 		for _, ipNet := range *excludePtr {
 			if ipNet.Contains(clientIP) {
@@ -198,11 +198,11 @@ func (re *Evaluator) Evaluate(domain string, qtype uint16, qclass uint16, client
 			}
 		}
 	}
-	if !re.HasRules() {
+	if !e.HasRules() {
 		return result
 	}
 
-	rulesPtr := re.rules.Load()
+	rulesPtr := e.rules.Load()
 	if rulesPtr == nil {
 		return result
 	}
@@ -279,7 +279,7 @@ ruleLoop:
 	return result
 }
 
-func (re *Evaluator) buildRecord(domain string, record config.DNSRecordConfig) dns.RR {
+func (e *Evaluator) buildRecord(domain string, record config.DNSRecordConfig) dns.RR {
 	ttl := record.TTL
 	if ttl == 0 {
 		ttl = config.DefaultTTL

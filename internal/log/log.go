@@ -312,29 +312,29 @@ func sanitizeLogMessage(msg string) string {
 
 // NewTimeCache creates and starts a new TimeCache.
 func NewTimeCache() *TimeCache {
-	tc := &TimeCache{
+	t := &TimeCache{
 		ticker: time.NewTicker(time.Second),
 		done:   make(chan struct{}),
 	}
-	tc.currentTime.Store(time.Now())
+	t.currentTime.Store(time.Now())
 
 	go func() {
 		for {
 			select {
-			case <-tc.ticker.C:
-				tc.currentTime.Store(time.Now())
-			case <-tc.done:
+			case <-t.ticker.C:
+				t.currentTime.Store(time.Now())
+			case <-t.done:
 				return
 			}
 		}
 	}()
 
-	return tc
+	return t
 }
 
 // Now returns the current cached time.
-func (tc *TimeCache) Now() time.Time {
-	return tc.currentTime.Load().(time.Time)
+func (t *TimeCache) Now() time.Time {
+	return t.currentTime.Load().(time.Time)
 }
 
 // NowUnix returns the current cached Unix timestamp (seconds).
@@ -349,16 +349,16 @@ func NowUnixNano() int64 {
 
 // Stop stops the time cache ticker and goroutine. It is safe to call multiple
 // times.
-func (tc *TimeCache) Stop() {
-	if tc == nil {
+func (t *TimeCache) Stop() {
+	if t == nil {
 		return
 	}
-	tc.closeOnce.Do(func() {
-		if tc.done != nil {
-			close(tc.done)
+	t.closeOnce.Do(func() {
+		if t.done != nil {
+			close(t.done)
 		}
-		if tc.ticker != nil {
-			tc.ticker.Stop()
+		if t.ticker != nil {
+			t.ticker.Stop()
 		}
 	})
 }

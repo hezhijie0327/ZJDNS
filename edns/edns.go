@@ -71,8 +71,8 @@ func NewHandler(defaultECS ECSConfig) (*Handler, error) {
 // message. isRequest selects the padding block size: 128 bytes for queries
 // (RFC 8467), 468 bytes for responses. clientWantsPadding, parsed via
 // HasPaddingOption, lets the client opt out via +nopadding / +noalignment.
-func (m *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption, isRequest bool, clientWantsPadding bool) {
-	if m == nil || msg == nil {
+func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption, isRequest bool, clientWantsPadding bool) {
+	if h == nil || msg == nil {
 		return
 	}
 

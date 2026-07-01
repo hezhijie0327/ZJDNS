@@ -55,34 +55,34 @@ func NewCookieGenerator() *CookieGenerator {
 
 // RotateSecret rotates the cookie signing secret, keeping the previous one for
 // validation.
-func (cg *CookieGenerator) RotateSecret() {
-	if cg == nil {
+func (c *CookieGenerator) RotateSecret() {
+	if c == nil {
 		return
 	}
 	newSecret := make([]byte, cookieSecretSize)
 	if _, err := rand.Read(newSecret); err != nil {
 		panic(fmt.Sprintf("EDNS: failed to rotate cookie secret: %v (system CSPRNG unavailable)", err))
 	}
-	old := cg.secrets.Load()
+	old := c.secrets.Load()
 	if old == nil {
-		cg.secrets.Store(&secretPair{current: newSecret})
+		c.secrets.Store(&secretPair{current: newSecret})
 		return
 	}
-	cg.secrets.Store(&secretPair{current: newSecret, previous: old.current})
+	c.secrets.Store(&secretPair{current: newSecret, previous: old.current})
 }
 
 // loadSecrets atomically loads the current secret pair.
-func (cg *CookieGenerator) loadSecrets() *secretPair {
-	if cg == nil {
+func (c *CookieGenerator) loadSecrets() *secretPair {
+	if c == nil {
 		return nil
 	}
-	return cg.secrets.Load()
+	return c.secrets.Load()
 }
 
 // GenerateServerCookie creates a server cookie from the client IP and client
 // cookie.
-func (cg *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []byte) []byte {
-	sp := cg.loadSecrets()
+func (c *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []byte) []byte {
+	sp := c.loadSecrets()
 	if sp == nil || len(clientCookie) != DefaultCookieClientLen {
 		return nil
 	}
@@ -106,8 +106,8 @@ func (cg *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []
 
 // IsServerCookieValid verifies a server cookie against the current and
 // previous secrets.
-func (cg *CookieGenerator) IsServerCookieValid(clientIP net.IP, clientCookie, serverCookie []byte) bool {
-	sp := cg.loadSecrets()
+func (c *CookieGenerator) IsServerCookieValid(clientIP net.IP, clientCookie, serverCookie []byte) bool {
+	sp := c.loadSecrets()
 	if sp == nil || len(clientCookie) != DefaultCookieClientLen || len(serverCookie) != DefaultCookieServerLen {
 		return false
 	}
@@ -134,8 +134,8 @@ func (cg *CookieGenerator) IsServerCookieValid(clientIP net.IP, clientCookie, se
 }
 
 // GenerateClientCookie generates a client cookie for the given IP address.
-func (cg *CookieGenerator) GenerateClientCookie(clientIP net.IP) []byte {
-	sp := cg.loadSecrets()
+func (c *CookieGenerator) GenerateClientCookie(clientIP net.IP) []byte {
+	sp := c.loadSecrets()
 	if sp == nil {
 		return nil
 	}

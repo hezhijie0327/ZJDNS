@@ -144,8 +144,8 @@ func isAutoECSValue(value string) bool {
 }
 
 // ParseFromDNS extracts the ECS option from a DNS message's OPT record.
-func (m *Handler) ParseFromDNS(msg *dns.Msg) *ECSOption {
-	if m == nil || msg == nil || msg.Extra == nil {
+func (h *Handler) ParseFromDNS(msg *dns.Msg) *ECSOption {
+	if h == nil || msg == nil || msg.Extra == nil {
 		return nil
 	}
 	opt := msg.IsEdns0()
@@ -166,62 +166,62 @@ func (m *Handler) ParseFromDNS(msg *dns.Msg) *ECSOption {
 }
 
 // DefaultECS returns the default ECS option, preferring IPv4 over IPv6.
-func (m *Handler) DefaultECS() *ECSOption {
-	if m == nil {
+func (h *Handler) DefaultECS() *ECSOption {
+	if h == nil {
 		return nil
 	}
-	if ecs := m.defaultECSIPv4.Load(); ecs != nil {
+	if ecs := h.defaultECSIPv4.Load(); ecs != nil {
 		return ecs
 	}
-	return m.defaultECSIPv6.Load()
+	return h.defaultECSIPv6.Load()
 }
 
 // DefaultECSForQType returns the default ECS option appropriate for the given
 // query type.
-func (m *Handler) DefaultECSForQType(qtype uint16) *ECSOption {
-	if m == nil || m.defaultECSConfig.IsEmpty() {
+func (h *Handler) DefaultECSForQType(qtype uint16) *ECSOption {
+	if h == nil || h.defaultECSConfig.IsEmpty() {
 		return nil
 	}
 	if qtype == dns.TypeA {
-		if ecs := m.defaultECSIPv4.Load(); ecs != nil {
+		if ecs := h.defaultECSIPv4.Load(); ecs != nil {
 			return ecs
 		}
-		return m.defaultECSIPv6.Load()
+		return h.defaultECSIPv6.Load()
 	}
 	if qtype == dns.TypeAAAA {
-		if ecs := m.defaultECSIPv6.Load(); ecs != nil {
+		if ecs := h.defaultECSIPv6.Load(); ecs != nil {
 			return ecs
 		}
-		return m.defaultECSIPv4.Load()
+		return h.defaultECSIPv4.Load()
 	}
-	if m.defaultECSConfig.PreferIPv4 {
-		if ecs := m.defaultECSIPv4.Load(); ecs != nil {
+	if h.defaultECSConfig.PreferIPv4 {
+		if ecs := h.defaultECSIPv4.Load(); ecs != nil {
 			return ecs
 		}
-		return m.defaultECSIPv6.Load()
+		return h.defaultECSIPv6.Load()
 	}
-	if ecs := m.defaultECSIPv6.Load(); ecs != nil {
+	if ecs := h.defaultECSIPv6.Load(); ecs != nil {
 		return ecs
 	}
-	return m.defaultECSIPv4.Load()
+	return h.defaultECSIPv4.Load()
 }
 
 // ShouldRefreshDefaultECS reports whether any ECS value uses auto-detection
 // and should be refreshed.
-func (m *Handler) ShouldRefreshDefaultECS() bool {
-	if m == nil {
+func (h *Handler) ShouldRefreshDefaultECS() bool {
+	if h == nil {
 		return false
 	}
-	return m.defaultECSConfig.HasAuto()
+	return h.defaultECSConfig.HasAuto()
 }
 
 // RefreshDefaultECS re-evaluates auto-detected ECS values and updates them if
 // they changed.
-func (m *Handler) RefreshDefaultECS() ([]*ECSOption, bool, error) {
-	if m == nil {
+func (h *Handler) RefreshDefaultECS() ([]*ECSOption, bool, error) {
+	if h == nil {
 		return nil, false, errors.New("EDNS handler is not initialized")
 	}
-	if m.defaultECSConfig.IsEmpty() {
+	if h.defaultECSConfig.IsEmpty() {
 		return nil, false, nil
 	}
 
@@ -229,21 +229,21 @@ func (m *Handler) RefreshDefaultECS() ([]*ECSOption, bool, error) {
 	var changedECS []*ECSOption
 	var firstErr error
 
-	if m.defaultECSConfig.IPv4 != "" {
-		ecs, err := m.parseECSConfig(m.defaultECSConfig.IPv4, false)
+	if h.defaultECSConfig.IPv4 != "" {
+		ecs, err := h.parseECSConfig(h.defaultECSConfig.IPv4, false)
 		if err != nil {
 			firstErr = fmt.Errorf("refresh IPv4 ECS: %w", err)
 		} else if ecs != nil {
-			old := m.defaultECSIPv4.Load()
+			old := h.defaultECSIPv4.Load()
 			if !ecsOptionEqual(old, ecs) {
-				m.defaultECSIPv4.Store(ecs)
+				h.defaultECSIPv4.Store(ecs)
 				changed = true
 				changedECS = append(changedECS, ecs)
 			}
 		}
 	}
-	if m.defaultECSConfig.IPv6 != "" {
-		ecs, err := m.parseECSConfig(m.defaultECSConfig.IPv6, true)
+	if h.defaultECSConfig.IPv6 != "" {
+		ecs, err := h.parseECSConfig(h.defaultECSConfig.IPv6, true)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("refresh IPv6 ECS: %w", err)
@@ -251,9 +251,9 @@ func (m *Handler) RefreshDefaultECS() ([]*ECSOption, bool, error) {
 				firstErr = fmt.Errorf("%v; refresh IPv6 ECS: %w", firstErr, err)
 			}
 		} else if ecs != nil {
-			old := m.defaultECSIPv6.Load()
+			old := h.defaultECSIPv6.Load()
 			if !ecsOptionEqual(old, ecs) {
-				m.defaultECSIPv6.Store(ecs)
+				h.defaultECSIPv6.Store(ecs)
 				changed = true
 				changedECS = append(changedECS, ecs)
 			}
@@ -271,10 +271,10 @@ func ecsOptionEqual(a, b *ECSOption) bool {
 		a.SourcePrefix == b.SourcePrefix && a.ScopePrefix == b.ScopePrefix
 }
 
-func (m *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, error) {
+func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, error) {
 	subnet = strings.ToLower(strings.TrimSpace(subnet))
 	if subnet == ecsModeAuto {
-		return m.detectVia(forceIPv6, false)
+		return h.detectVia(forceIPv6, false)
 	}
 	if _, ipNet, err := net.ParseCIDR(subnet); err == nil {
 		prefix, _ := ipNet.Mask.Size()
@@ -309,15 +309,15 @@ func (m *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 	return &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}, nil
 }
 
-func (m *Handler) detectVia(forceIPv6, allowFallback bool) (*ECSOption, error) {
+func (h *Handler) detectVia(forceIPv6, allowFallback bool) (*ECSOption, error) {
 	var ip net.IP
 	if forceIPv6 {
-		ip = m.detector.IPv6()
+		ip = h.detector.IPv6()
 	} else {
-		ip = m.detector.IPv4()
+		ip = h.detector.IPv4()
 	}
 	if ip == nil && allowFallback && !forceIPv6 {
-		ip = m.detector.IPv6()
+		ip = h.detector.IPv6()
 	}
 	if ip == nil {
 		return nil, nil

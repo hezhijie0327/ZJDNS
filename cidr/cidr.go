@@ -55,7 +55,7 @@ type ipv4Net struct {
 
 // New creates a new Filter from the given CIDR configuration slice.
 func New(configs []config.CIDRConfig) (*Filter, error) {
-	cm := &Filter{
+	f := &Filter{
 		rules:      make(map[string]*cidrRule),
 		matchCache: make(map[string]*CIDRMatchInfo),
 	}
@@ -64,15 +64,15 @@ func New(configs []config.CIDRConfig) (*Filter, error) {
 		if cfg.Tag == "" {
 			return nil, errEmptyTag
 		}
-		if _, exists := cm.rules[cfg.Tag]; exists {
+		if _, exists := f.rules[cfg.Tag]; exists {
 			return nil, fmt.Errorf("duplicate CIDR tag: %s", cfg.Tag)
 		}
 
-		rule, err := cm.loadConfig(cfg)
+		rule, err := f.loadConfig(cfg)
 		if err != nil {
 			return nil, fmt.Errorf("load CIDR config for tag '%s': %w", cfg.Tag, err)
 		}
-		cm.rules[cfg.Tag] = rule
+		f.rules[cfg.Tag] = rule
 
 		sourceInfo := ""
 		if cfg.File != "" && len(cfg.Rules) > 0 {
@@ -85,10 +85,10 @@ func New(configs []config.CIDRConfig) (*Filter, error) {
 		log.Infof("CIDR: Loaded tag=%s, source=%s, total=%d", cfg.Tag, sourceInfo, len(rule.nets))
 	}
 
-	return cm, nil
+	return f, nil
 }
 
-func (cm *Filter) loadConfig(cfg config.CIDRConfig) (*cidrRule, error) {
+func (f *Filter) loadConfig(cfg config.CIDRConfig) (*cidrRule, error) {
 	rule := &cidrRule{tag: cfg.Tag, nets: make([]*net.IPNet, 0)}
 	validCount := 0
 
@@ -146,17 +146,17 @@ func (cm *Filter) loadConfig(cfg config.CIDRConfig) (*cidrRule, error) {
 }
 
 // MatchIP checks if an IP matches the CIDR rule identified by matchTag.
-func (cm *Filter) MatchIP(ip net.IP, matchTag string) (matched bool, exists bool) {
-	if cm == nil || matchTag == "" {
+func (f *Filter) MatchIP(ip net.IP, matchTag string) (matched bool, exists bool) {
+	if f == nil || matchTag == "" {
 		return true, true
 	}
 
-	matchInfo := cm.getMatchInfo(matchTag)
+	matchInfo := f.getMatchInfo(matchTag)
 	if matchInfo == nil {
 		return false, false
 	}
 
-	rule, exists := cm.rules[matchInfo.Tag]
+	rule, exists := f.rules[matchInfo.Tag]
 	if !exists {
 		return false, false
 	}
@@ -168,18 +168,18 @@ func (cm *Filter) MatchIP(ip net.IP, matchTag string) (matched bool, exists bool
 	return inList, true
 }
 
-func (cm *Filter) getMatchInfo(matchTag string) *CIDRMatchInfo {
-	cm.mu.RLock()
-	if info, exists := cm.matchCache[matchTag]; exists {
-		cm.mu.RUnlock()
+func (f *Filter) getMatchInfo(matchTag string) *CIDRMatchInfo {
+	f.mu.RLock()
+	if info, exists := f.matchCache[matchTag]; exists {
+		f.mu.RUnlock()
 		return info
 	}
-	cm.mu.RUnlock()
+	f.mu.RUnlock()
 
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 
-	if info, exists := cm.matchCache[matchTag]; exists {
+	if info, exists := f.matchCache[matchTag]; exists {
 		return info
 	}
 
@@ -192,7 +192,7 @@ func (cm *Filter) getMatchInfo(matchTag string) *CIDRMatchInfo {
 		Original: matchTag,
 	}
 
-	cm.matchCache[matchTag] = info
+	f.matchCache[matchTag] = info
 	return info
 }
 

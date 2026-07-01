@@ -107,8 +107,8 @@ func EDECodeString(code uint16) string {
 }
 
 // ParseEDE extracts the Extended DNS Error option from a DNS message.
-func (m *Handler) ParseEDE(msg *dns.Msg) *EDEOption {
-	if m == nil || msg == nil || msg.Extra == nil {
+func (h *Handler) ParseEDE(msg *dns.Msg) *EDEOption {
+	if h == nil || msg == nil || msg.Extra == nil {
 		return nil
 	}
 	opt := msg.IsEdns0()
