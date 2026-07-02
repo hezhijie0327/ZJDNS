@@ -240,6 +240,146 @@ func TestSet_ZeroTTLFloored(t *testing.T) {
 	}
 }
 
+// ── RFC 9077: NSEC/NSEC3 TTL capping ────────────────────────────────────────────────
+
+func TestHasNSECOrNSEC3(t *testing.T) {
+	if hasNSECOrNSEC3(nil) {
+		t.Error("nil authority should return false")
+	}
+	if hasNSECOrNSEC3([]dns.RR{}) {
+		t.Error("empty authority should return false")
+	}
+
+	aRec := &dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: netParseIP("192.0.2.1")}
+	if hasNSECOrNSEC3([]dns.RR{aRec}) {
+		t.Error("A record should not trigger NSEC detection")
+	}
+
+	nsec := &dns.NSEC{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: 300}}
+	if !hasNSECOrNSEC3([]dns.RR{nsec}) {
+		t.Error("NSEC record should be detected")
+	}
+
+	nsec3 := &dns.NSEC3{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeNSEC3, Class: dns.ClassINET, Ttl: 300}}
+	if !hasNSECOrNSEC3([]dns.RR{nsec3}) {
+		t.Error("NSEC3 record should be detected")
+	}
+}
+
+func TestNegativeTTLCap_NoSOA(t *testing.T) {
+	capTTL := negativeTTLCap(nil)
+	if capTTL != config.DefaultMaxNegativeTTL {
+		t.Errorf("no SOA: cap = %d, want %d (DefaultMaxNegativeTTL)", capTTL, config.DefaultMaxNegativeTTL)
+	}
+}
+
+func TestNegativeTTLCap_SOAMinLower(t *testing.T) {
+	// SOA TTL=900, MINIMUM=86400 → SOA-based cap = 900
+	soa := &dns.SOA{
+		Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 900},
+		Ns:     "ns1.example.com.",
+		Mbox:   "admin.example.com.",
+		Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 86400,
+	}
+	capTTL := negativeTTLCap([]dns.RR{soa})
+	if capTTL != 900 {
+		t.Errorf("SOA TTL=900 MINIMUM=86400: cap = %d, want 900", capTTL)
+	}
+}
+
+func TestNegativeTTLCap_MinimumLower(t *testing.T) {
+	// SOA TTL=86400, MINIMUM=900 → SOA-based cap = 900
+	soa := &dns.SOA{
+		Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 86400},
+		Ns:     "ns1.example.com.",
+		Mbox:   "admin.example.com.",
+		Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 900,
+	}
+	capTTL := negativeTTLCap([]dns.RR{soa})
+	if capTTL != 900 {
+		t.Errorf("SOA TTL=86400 MINIMUM=900: cap = %d, want 900", capTTL)
+	}
+}
+
+func TestNegativeTTLCap_ExceedsDefaultMax(t *testing.T) {
+	// SOA TTL=86400, MINIMUM=172800 → SOA-based cap = 86400,
+	// but DefaultMaxNegativeTTL = 10800 should win.
+	soa := &dns.SOA{
+		Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 86400},
+		Ns:     "ns1.example.com.",
+		Mbox:   "admin.example.com.",
+		Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 172800,
+	}
+	capTTL := negativeTTLCap([]dns.RR{soa})
+	if capTTL != config.DefaultMaxNegativeTTL {
+		t.Errorf("SOA TTL=86400 MINIMUM=172800: cap = %d, want %d (DefaultMaxNegativeTTL)", capTTL, config.DefaultMaxNegativeTTL)
+	}
+}
+
+func TestNegativeTTLCap_SOAWithNSEC(t *testing.T) {
+	// Realistic negative response: NSEC + SOA in authority.
+	soa := &dns.SOA{
+		Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 900},
+		Ns:     "ns1.example.com.",
+		Mbox:   "admin.example.com.",
+		Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600,
+	}
+	nsec := &dns.NSEC{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: 600}}
+	capTTL := negativeTTLCap([]dns.RR{soa, nsec})
+	// min(SOA TTL=900, Minttl=600) = 600
+	if capTTL != 600 {
+		t.Errorf("SOA+NSEC: cap = %d, want 600", capTTL)
+	}
+}
+
+func TestSet_NegativeTTLCapped(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	// Negative response with NSEC (TTL=86400) and SOA (TTL=900, Minttl=600).
+	// The cache entry TTL should be capped at 600, not 86400.
+	soa := &dns.SOA{
+		Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 900},
+		Ns:     "ns1.example.com.",
+		Mbox:   "admin.example.com.",
+		Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600,
+	}
+	nsec := &dns.NSEC{
+		Hdr:        dns.RR_Header{Name: "alpha.example.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: 86400},
+		NextDomain: "zulu.example.com.",
+	}
+	key := BuildCacheKey(dns.Question{Name: "beta.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
+	mc.Set(key, nil, []dns.RR{soa, nsec}, nil, false, nil)
+
+	entry, found, _ := mc.Get(key)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	// The TTL should be capped at the SOA-based value (600), not the NSEC TTL (86400)
+	// and not the SOA TTL (900).
+	if entry.TTL > 600 {
+		t.Errorf("negative cache TTL = %d, want ≤ 600 (capped by min(SOA TTL=900, Minttl=600))", entry.TTL)
+	}
+}
+
+func TestSet_NegativeTTLUncapped_NoNSEC(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	// Positive response (no NSEC/NSEC3) — should NOT be capped.
+	aRec := &dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: netParseIP("192.0.2.1")}
+	key := BuildCacheKey(dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
+	mc.Set(key, []dns.RR{aRec}, nil, nil, false, nil)
+
+	entry, found, _ := mc.Get(key)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	if entry.TTL != 300 {
+		t.Errorf("positive cache TTL = %d, want 300 (no capping)", entry.TTL)
+	}
+}
+
 // ── Helper ─────────────────────────────────────────────────────────────────────────
 
 func netParseIP(s string) net.IP {

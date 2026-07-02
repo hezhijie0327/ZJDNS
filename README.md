@@ -48,6 +48,8 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 ### 安全
 
 - **DNSSEC**：递归模式完整信任链验证（根 KSK→TLD DS→权威 DNSKEY→RRSIG），NSEC/NSEC3 已验证否定（RFC 5155），EDE 错误码传播
+- **NSEC/NSEC3 TTL 上限**：RFC 9077，负面缓存 TTL 取 `min(SOA.TTL, SOA.Minttl, 10800)`，防止过度否定
+- **QNAME 最小化**：RFC 9156，递归解析时仅向各级权威发送最小必要 QNAME，默认启用
 - **劫持防护**：根/TLD 越权响应检测 + UDP→TCP 自动回退
 - **DNS Cookie**：HMAC-SHA256 服务端 Cookie（RFC 7873），密钥无缝轮换，入口早期验证
 - **CIDR 过滤**：基于标签的 IP 过滤（文件/内联规则），IPv4 位运算优化
@@ -76,6 +78,8 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 | [4033-4035](https://www.rfc-editor.org/rfc/rfc4033) | DNSSEC | 信任链 + RRSIG + AD/CD |
 | [5155](https://www.rfc-editor.org/rfc/rfc5155) | NSEC3 | 已验证否定 + 迭代上限 |
 | [7766](https://www.rfc-editor.org/rfc/rfc7766) | DNS over TCP | 连接复用 + 流水线 + 乱序 |
+| [9077](https://www.rfc-editor.org/rfc/rfc9077) | NSEC/NSEC3 TTL | 负面 TTL 封顶 + 积极缓存 |
+| [9156](https://www.rfc-editor.org/rfc/rfc9156) | QNAME Minimisation | 递归最小化查询（默认启用）|
 | [6891](https://www.rfc-editor.org/rfc/rfc6891) | EDNS(0) Extensions | FORMERR 自动回退（无 EDNS 重试）|
 | [7830](https://www.rfc-editor.org/rfc/rfc7830) | EDNS(0) Padding | 响应 + 查询填充 |
 | [8467](https://www.rfc-editor.org/rfc/rfc8467) | EDNS(0) Padding Policies | 128B 查询 / 468B 响应块对齐 |

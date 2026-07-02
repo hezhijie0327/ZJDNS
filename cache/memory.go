@@ -137,6 +137,13 @@ func (m *MemoryCache) SetWithDNSSEC(key string, answer, authority, additional []
 	now := log.NowUnix()
 	ttl := minTTL(answer, authority, additional)
 
+	// RFC 9077: cap TTL for negative responses (NSEC/NSEC3 in authority).
+	if hasNSECOrNSEC3(authority) {
+		if capTTL := negativeTTLCap(authority); capTTL < ttl {
+			ttl = capTTL
+		}
+	}
+
 	entry := &Entry{
 		Answer:          compact(answer),
 		Authority:       compact(authority),
@@ -544,4 +551,47 @@ func minTTL(answer, authority, additional []dns.RR) int {
 		return config.DefaultTTL
 	}
 	return minT
+}
+
+// hasNSECOrNSEC3 reports whether any record in the authority section is an
+// NSEC or NSEC3 record, indicating a negative (NXDOMAIN/NODATA) response.
+func hasNSECOrNSEC3(authority []dns.RR) bool {
+	for _, rr := range authority {
+		if rr == nil {
+			continue
+		}
+		switch rr.Header().Rrtype {
+		case dns.TypeNSEC, dns.TypeNSEC3:
+			return true
+		}
+	}
+	return false
+}
+
+// negativeTTLCap returns the maximum TTL for a negative cache entry per
+// RFC 9077. It extracts the SOA record from the authority section and
+// computes min(SOA.MINIMUM, SOA TTL), capped at DefaultMaxNegativeTTL.
+// If no SOA is present, returns DefaultMaxNegativeTTL.
+func negativeTTLCap(authority []dns.RR) int {
+	capTTL := config.DefaultMaxNegativeTTL
+	for _, rr := range authority {
+		if rr == nil {
+			continue
+		}
+		soa, ok := rr.(*dns.SOA)
+		if !ok {
+			continue
+		}
+		soaTTL := int(soa.Header().Ttl)
+		soaMin := int(soa.Minttl)
+		soaBased := soaTTL
+		if soaMin < soaBased {
+			soaBased = soaMin
+		}
+		if soaBased < capTTL {
+			capTTL = soaBased
+		}
+		break // first SOA is authoritative
+	}
+	return capTTL
 }

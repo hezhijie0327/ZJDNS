@@ -102,6 +102,7 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 - Leaf packages that can't import `config` may use local `const` blocks with same naming convention.
 - Cache key strings follow `prefix:` convention (`dns:`, `dnskey:`, `stats:`).
 - **Code is canonical**: docs and comments must match the actual constant values. Verify, don't assume.
+- **RFC 9077/9156 defaults**: `DefaultMaxNegativeTTL = 10800`, `DefaultQnameMinimiseCount = 10`, `DefaultMinimiseOneLabel = 4`.
 
 ### Constructors
 
@@ -163,7 +164,7 @@ zjdns/
 ├── cmd/zjdns/                     ← main.go, version.go, bench_test.go (binary)
 ├── config/                        ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── cache/                         ← Store interface, memory/persist implementations
+├── cache/                         ← Store interface, memory/persist, negative TTL capping (RFC 9077)
 ├── cidr/                          ← IP filtering with tag matching
 ├── rewrite/                       ← Query rewrite rules
 ├── stats/                         ← Lock-free atomic collector (PersistStore interface)
@@ -181,7 +182,7 @@ zjdns/
     ├── handler/                   ← DNS query pipeline (handler.go + message.go)
     ├── client/                    ← Outbound transports (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5)
     ├── client/pool/               ← RFC 7766 pipelined TCP + QUIC connection pools
-    ├── resolver/                  ← Upstream + recursive resolution
+    ├── resolver/                  ← Upstream + recursive + qname_minimise (RFC 9156)
     ├── security/                  ← DNSSEC validation (crypto + nsec) + hijack detection
     ├── tls/                       ← TLS listeners (DoT, DoQ, DoH, DoH3)
     └── probe/                     ← A/AAAA latency probing and record reordering
@@ -247,6 +248,9 @@ Top layer (wiring):
 
 ### Recursive Resolution (`server/resolver/recursive.go`)
 - Root hints → TLD NS → authoritative NS walk
+- QNAME minimisation (RFC 9156): each delegation level queries only one label past the current zone
+- Minimisation QTYPE=A (hides original QTYPE); DS/NSEC/NSEC3 use original QTYPE
+- DefaultMaxQnameMinimiseCount=10 steps before full QNAME exposure
 - NS address latency-sorted cache (ICMP/TCP/UDP probes) via unified engine
 - DNSSEC chain-of-trust at each delegation: parent DNSKEY → DS RRSIG → child DNSKEY → answer RRSIG
 - Zone cut detection, lame delegation detection, glue record validation
@@ -300,7 +304,8 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## Notable Design Decisions
 
-- **Cache**: RLock reads (zero contention), entry pointer returned directly — `expand()` re-parses from `.Text` non-mutatingly. TTL floor 10s. `CompactRecord.RR` intentionally nil (saves memory; `expand()` uses `.Text`).
+- **Cache**: RLock reads (zero contention), entry pointer returned directly — `expand()` re-parses from `.Text` non-mutatingly. TTL floor 10s. `CompactRecord.RR` intentionally nil (saves memory; `expand()` uses `.Text`). Negative response TTL capped at `min(SOA.TTL, SOA.Minttl, 10800)` per RFC 9077.
+- **QNAME minimisation (RFC 9156)**: Enabled by default for all recursive resolutions at depth 0. Internal infrastructure queries (NS address resolution) use full QNAME. Minimisation steps tracked per-resolution; after DefaultQnameMinimiseCount (10) steps, all remaining labels are exposed. QTYPE=A is used to hide original QTYPE except for DS/NSEC/NSEC3 parent-side types.
 - **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read fields after `Put()`. Double-zeroing removed: `Put` zeroes, `Get` trusts.
 - **KTLS**: `gitlab.com/go-extension/tls` with `KernelTX`/`KernelRX` (both default `false`, opt-in). Dual configs: eTLS for TCP, crypto/tls for QUIC. Silent fallback on non-Linux.
 - **SOCKS5**: Per-upstream optional proxy. TCP CONNECT + UDP ASSOCIATE. `SafeURL()` redacts passwords.

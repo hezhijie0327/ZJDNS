@@ -66,7 +66,10 @@ const (
 	DefaultCookieSecretSize         = 32    // DNS cookie secret size in bytes
 	DefaultDNSKeyCacheTTL           = 86400 // DNSKEY record cache TTL (seconds)
 	DefaultDNSKeyCacheMinTTL        = 300   // DNSKEY cache minimum TTL (seconds)
+	DefaultMaxNegativeTTL           = 10800 // RFC 9077 / RFC 2308 §5: max negative cache TTL (3 hours)
 	DefaultMaxNSEC3Iterations       = 150   // NSEC3 iteration cap (RFC 5155 §10.3)
+	DefaultQnameMinimiseCount       = 10    // RFC 9156 §2.3: max QNAME minimisation iterations
+	DefaultMinimiseOneLabel         = 4     // RFC 9156 §2.3: labels added one-at-a-time before proportional division
 	DefaultPaddingRequestBlockSize  = 128   // RFC 8467: EDNS request padding block size
 	DefaultPaddingResponseBlockSize = 468   // RFC 8467: EDNS response padding block size
 

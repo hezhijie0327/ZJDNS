@@ -84,6 +84,12 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 	// resolver uses this to force TCP for subsequent CNAME targets.
 	var hijackSeen bool
 
+	// QNAME minimisation (RFC 9156). Only applied at the top-level resolve
+	// call (depth == 0). Internal infrastructure queries (NS address
+	// resolution, CNAME follow-up) use full QNAME.
+	qnameMinimise := depth == 0 && r.resolver != nil
+	var minimiseSteps int
+
 	log.Debugf("RECURSION: depth=%d, querying %s (type=%s, tcp=%t, zone=%s, ns=%v)", depth, question.Name, dns.TypeToString[question.Qtype], forceTCP, currentDomain, nameservers)
 
 	// Initialize DNSSEC trust chain with root trust anchors (when available).
@@ -119,7 +125,22 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 		default:
 		}
 
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
+		// Build the query question with QNAME minimisation (RFC 9156).
+		queryQuestion := question
+		if qnameMinimise {
+			addLabels := labelsToAdd(qname, currentDomain, minimiseSteps,
+				config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
+			minQname := minimiseQNAME(qname, currentDomain, addLabels)
+			if minQname != qname {
+				qtype := minimisationQtype(question.Qtype)
+				queryQuestion = dns.Question{Name: minQname, Qtype: qtype, Qclass: question.Qclass}
+				log.Debugf("RECURSION: qname minimisation step=%d zone=%s, querying minimised name=%s type=%s",
+					minimiseSteps, currentDomain, minQname, dns.TypeToString[qtype])
+				minimiseSteps++
+			}
+		}
+
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
 
 		// ── Single TCP fallback decision point ──────────────────────
 		// If any response at this delegation level was flagged as
