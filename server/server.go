@@ -12,7 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
+	"time"
 
 	"github.com/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -26,12 +26,12 @@ import (
 	"zjdns/internal/pool"
 	"zjdns/rewrite"
 	"zjdns/server/client"
+	"zjdns/server/handler"
 	"zjdns/server/latency"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
 	servertls "zjdns/server/tls"
 	"zjdns/stats"
-	"time"
 )
 
 // statsPersistAdapter bridges cache.Store to stats.PersistStore for stats
@@ -59,55 +59,24 @@ func (a *statsPersistAdapter) LoadStats(key string) ([]byte, bool) {
 	return entry.Payload, true
 }
 
-// Server is the core DNS server handling query processing, protocol listeners, and lifecycle.
+// Server is the core DNS server handling lifecycle, protocol listeners, and background tasks.
 type Server struct {
-	closed int32 // hot-path: checked on every query via atomic load
-
-	config       *config.ServerConfig
-	cache        cache.Store
-	reverseCache interface {
-		ReverseLookup(net.IP) []cache.LookupResult
-	}
-	queryClient       *client.Client
-	guard             *security.Guard
-	tls               *servertls.Server
-	edns              *edns.Handler
-	rewrite           *rewrite.Evaluator
-	cidrFilter        *cidr.Filter
-	stats             *stats.Collector
-	statsAdapter      *statsPersistAdapter
-	pprofServer       *http.Server
-	ctx               context.Context
-	cancel            context.CancelCauseFunc
-	shutdown          chan struct{}
-	backgroundGroup   *errgroup.Group
-	backgroundCtx     context.Context
-	cacheRefreshGroup *errgroup.Group
-	cacheRefreshCtx   context.Context
-	prefetchCooldown  sync.Map
-	resolver          *resolver.Resolver
-	prober            *latency.Prober
-	semaphore         chan struct{}
-	udpServer         *dns.Server
-	tcpServer         *dns.Server
-	tcpWriteMu        sync.Map
-}
-
-type tcpWriteEntry struct {
-	writeMu      chan struct{} // buffered size 1, acts as timeout-capable mutex
-	lastAccess   atomic.Int64
-	capacity     chan struct{}
-	capacityOnce sync.Once
-}
-
-type queryResult struct {
-	answer     []dns.RR
-	authority  []dns.RR
-	additional []dns.RR
-	validated  bool
-	ecs        *edns.ECSOption
-	fallback   bool
-	err        error
+	config          *config.ServerConfig
+	handler         *handler.Handler
+	queryClient     *client.Client
+	guard           *security.Guard
+	tls             *servertls.Server
+	cidrFilter      *cidr.Filter
+	statsAdapter    *statsPersistAdapter
+	pprofServer     *http.Server
+	ctx             context.Context
+	cancel          context.CancelCauseFunc
+	shutdown        chan struct{}
+	backgroundGroup *errgroup.Group
+	backgroundCtx   context.Context
+	udpServer       *dns.Server
+	tcpServer       *dns.Server
+	tcpWriteMu      sync.Map
 }
 
 // New creates and initializes a Server from the given configuration.
@@ -156,33 +125,30 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	statsAdapter := &statsPersistAdapter{store: cacheStore}
 
-	server := &Server{
-		config:            cfg,
-		edns:              ednsHandler,
-		rewrite:           rewriteEvaluator,
-		cidrFilter:        cidrFilter,
-		stats:             statsCollector,
-		statsAdapter:      statsAdapter,
-		cache:             cacheStore,
-		ctx:               ctx,
-		cancel:            cancel,
-		shutdown:          make(chan struct{}),
-		backgroundGroup:   backgroundGroup,
-		backgroundCtx:     backgroundCtx,
-		cacheRefreshGroup: cacheRefreshGroup,
-		cacheRefreshCtx:   cacheRefreshCtx,
-	}
-
+	var semaphore chan struct{}
 	if cfg.Server.MaxConcurrent > 0 {
-		server.semaphore = make(chan struct{}, cfg.Server.MaxConcurrent)
+		semaphore = make(chan struct{}, cfg.Server.MaxConcurrent)
 	}
 
-	server.guard = security.New(cacheStore, cfg.Server.Features.HijackProtection)
-	// Cache the reverse lookup capability once — avoids a type assertion
-	// on every PTR query.
-	server.reverseCache, _ = server.cache.(interface {
-		ReverseLookup(net.IP) []cache.LookupResult
-	})
+	h := handler.New(
+		cfg, cacheStore, ednsHandler, rewriteEvaluator,
+		statsCollector, semaphore,
+		cacheRefreshGroup, cacheRefreshCtx, ctx,
+	)
+
+	guard := security.New(cacheStore, cfg.Server.Features.HijackProtection)
+
+	server := &Server{
+		config:          cfg,
+		handler:         h,
+		cidrFilter:      cidrFilter,
+		statsAdapter:    statsAdapter,
+		ctx:             ctx,
+		cancel:          cancel,
+		shutdown:        make(chan struct{}),
+		backgroundGroup: backgroundGroup,
+		backgroundCtx:   backgroundCtx,
+	}
 
 	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
 		tlsCfg := servertls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
@@ -192,7 +158,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				KernelRX: cfg.Server.TLS.KTLS.KernelRX,
 			}
 		}
-		tlsSrv, err := servertls.New(server, tlsCfg, config.DefaultBackgroundTimeout)
+		tlsSrv, err := servertls.New(h, tlsCfg, config.DefaultBackgroundTimeout)
 		if err != nil {
 			cancel(fmt.Errorf("TLS server init: %w", err))
 			return nil, fmt.Errorf("TLS server init: %w", err)
@@ -206,17 +172,19 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 	server.queryClient = queryClient
 
-	server.resolver = resolver.New(
+	resolver := resolver.New(
 		queryClient,
-		server.guard,
+		guard,
 		ednsHandler,
 		cidrFilter,
-		server.buildQueryMessage,
+		h.BuildQueryMessage,
 		cacheStore,
 	)
-	server.resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
-	server.resolver.ConfigureServers(cfg.Upstream, cfg.Fallback)
-	server.resolver.SetBackgroundContext(backgroundCtx)
+	resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
+	resolver.ConfigureServers(cfg.Upstream, cfg.Fallback)
+	resolver.SetBackgroundContext(backgroundCtx)
+	h.SetResolver(resolver)
+	server.guard = guard
 
 	// Pre-warm transport connections for configured upstream servers so
 	// the first query does not pay the full TLS/QUIC handshake cost.
@@ -233,12 +201,13 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	latency.NewInfraProber(backgroundCtx)
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
-		server.prober = latency.New(
+		prober := latency.New(
 			cacheStore,
 			func(fn func() error) { server.backgroundGroup.Go(fn) },
 			backgroundCtx,
 			cfg.Server.Features.LatencyProbe,
 		)
+		h.SetProber(prober)
 	}
 
 	if cfg.Server.Pprof != "" {
@@ -255,9 +224,15 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	return server, nil
 }
 
+// ServeDNS delegates to the query handler. Required by server/tls.DNSHandler
+// interface and external benchmarks.
+func (s *Server) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg {
+	return s.handler.ServeDNS(req, clientIP, isSecure, protocol)
+}
+
 // Start runs the DNS server and blocks until shutdown is triggered.
 func (s *Server) Start() error {
-	if atomic.LoadInt32(&s.closed) != 0 {
+	if s.handler.IsClosed() {
 		return errors.New("server is closed")
 	}
 
@@ -371,7 +346,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) displayInfo() {
-	servers := s.resolver.UpstreamServers()
+	servers := s.handler.UpstreamServers()
 	if len(servers) > 0 {
 		for _, server := range servers {
 			if server.IsRecursive() {
@@ -431,14 +406,14 @@ func (s *Server) displayInfo() {
 		}
 	}
 
-	if s.rewrite.HasRules() {
+	if s.handler.HasRewriteRules() {
 		log.Infof("REWRITE: DNS rewriter: enabled (%d rules)", len(s.config.Rewrite))
 	}
 	log.Infof("CACHE: Serve expired enabled (ttl=%d, client timeout=%s, prefer_stale=%t)", config.DefaultStaleMaxAge, config.DefaultServeExpiredClientTimeout.String(), s.config.Server.Features.Cache.PreferStale)
 	if s.config.Server.Features.HijackProtection {
 		log.Infof("SECURITY: DNS hijacking prevention: enabled")
 	}
-	if defaultECS := s.edns.DefaultECS(); defaultECS != nil {
+	if defaultECS := s.handler.DefaultECS(); defaultECS != nil {
 		log.Infof("EDNS: Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
 }
