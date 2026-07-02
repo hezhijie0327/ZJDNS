@@ -45,12 +45,12 @@ type Snapshot struct {
 	DNSSECSecure        uint64 `json:"dnssec_secure"`
 	DNSSECBogus         uint64 `json:"dnssec_bogus"`
 	DNSSECInsecure      uint64 `json:"dnssec_insecure"`
-	RCODENoError        uint64 `json:"rcode_noerror"`
-	RCODEFormErr        uint64 `json:"rcode_formerr"`
-	RCODEServFail       uint64 `json:"rcode_servfail"`
-	RCODENXDomain       uint64 `json:"rcode_nxdomain"`
+	RCODENOERROR        uint64 `json:"rcode_noerror"`
+	RCODEFORMERR        uint64 `json:"rcode_formerr"`
+	RCODESERVFAIL       uint64 `json:"rcode_servfail"`
+	RCODENXDOMAIN       uint64 `json:"rcode_nxdomain"`
 	RCODENotImp         uint64 `json:"rcode_notimp"`
-	RCODERefused        uint64 `json:"rcode_refused"`
+	RCODEREFUSED        uint64 `json:"rcode_refused"`
 	RCODEOther          uint64 `json:"rcode_other"`
 	UpdatedAt           int64  `json:"updated_at"`
 }
@@ -89,12 +89,12 @@ type logDNSSEC struct {
 }
 
 type logErrorCodes struct {
-	NoError  uint64 `json:"noerror,omitempty"`
-	FormErr  uint64 `json:"formerr,omitempty"`
-	ServFail uint64 `json:"servfail,omitempty"`
-	NXDomain uint64 `json:"nxdomain,omitempty"`
+	NOERROR  uint64 `json:"noerror,omitempty"`
+	FORMERR  uint64 `json:"formerr,omitempty"`
+	SERVFAIL uint64 `json:"servfail,omitempty"`
+	NXDOMAIN uint64 `json:"nxdomain,omitempty"`
 	NotImp   uint64 `json:"notimp,omitempty"`
-	Refused  uint64 `json:"refused,omitempty"`
+	REFUSED  uint64 `json:"refused,omitempty"`
 	Other    uint64 `json:"other,omitempty"`
 }
 
@@ -143,12 +143,12 @@ type Collector struct {
 	dnssecSecure        atomic.Uint64
 	dnssecBogus         atomic.Uint64
 	dnssecInsecure      atomic.Uint64
-	rcodeNoError        atomic.Uint64
-	rcodeFormErr        atomic.Uint64
-	rcodeServFail       atomic.Uint64
-	rcodeNXDomain       atomic.Uint64
+	rcodeNOERROR        atomic.Uint64
+	rcodeFORMERR        atomic.Uint64
+	rcodeSERVFAIL       atomic.Uint64
+	rcodeNXDOMAIN       atomic.Uint64
 	rcodeNotImp         atomic.Uint64
-	rcodeRefused        atomic.Uint64
+	rcodeREFUSED        atomic.Uint64
 	rcodeOther          atomic.Uint64
 
 	persistTTL int
@@ -197,12 +197,12 @@ func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
 			Insecure: snapshot.DNSSECInsecure,
 		},
 		ErrorCodes: logErrorCodes{
-			NoError:  snapshot.RCODENoError,
-			FormErr:  snapshot.RCODEFormErr,
-			ServFail: snapshot.RCODEServFail,
-			NXDomain: snapshot.RCODENXDomain,
+			NOERROR:  snapshot.RCODENOERROR,
+			FORMERR:  snapshot.RCODEFORMERR,
+			SERVFAIL: snapshot.RCODESERVFAIL,
+			NXDOMAIN: snapshot.RCODENXDOMAIN,
 			NotImp:   snapshot.RCODENotImp,
-			Refused:  snapshot.RCODERefused,
+			REFUSED:  snapshot.RCODEREFUSED,
 			Other:    snapshot.RCODEOther,
 		},
 	}
@@ -286,12 +286,12 @@ func (c *Collector) Deserialize(data []byte) error {
 	c.dnssecSecure.Store(snap.DNSSECSecure)
 	c.dnssecBogus.Store(snap.DNSSECBogus)
 	c.dnssecInsecure.Store(snap.DNSSECInsecure)
-	c.rcodeNoError.Store(snap.RCODENoError)
-	c.rcodeFormErr.Store(snap.RCODEFormErr)
-	c.rcodeServFail.Store(snap.RCODEServFail)
-	c.rcodeNXDomain.Store(snap.RCODENXDomain)
+	c.rcodeNOERROR.Store(snap.RCODENOERROR)
+	c.rcodeFORMERR.Store(snap.RCODEFORMERR)
+	c.rcodeSERVFAIL.Store(snap.RCODESERVFAIL)
+	c.rcodeNXDOMAIN.Store(snap.RCODENXDOMAIN)
 	c.rcodeNotImp.Store(snap.RCODENotImp)
-	c.rcodeRefused.Store(snap.RCODERefused)
+	c.rcodeREFUSED.Store(snap.RCODEREFUSED)
 	c.rcodeOther.Store(snap.RCODEOther)
 	return nil
 }
@@ -399,17 +399,17 @@ func (c *Collector) RecordRequest(duration time.Duration, cacheHit bool, hadErro
 
 	switch rcode {
 	case dns.RcodeSuccess:
-		c.rcodeNoError.Add(1)
+		c.rcodeNOERROR.Add(1)
 	case dns.RcodeFormatError:
-		c.rcodeFormErr.Add(1)
+		c.rcodeFORMERR.Add(1)
 	case dns.RcodeServerFailure:
-		c.rcodeServFail.Add(1)
+		c.rcodeSERVFAIL.Add(1)
 	case dns.RcodeNameError:
-		c.rcodeNXDomain.Add(1)
+		c.rcodeNXDOMAIN.Add(1)
 	case dns.RcodeNotImplemented:
 		c.rcodeNotImp.Add(1)
 	case dns.RcodeRefused:
-		c.rcodeRefused.Add(1)
+		c.rcodeREFUSED.Add(1)
 	default:
 		c.rcodeOther.Add(1)
 	}
@@ -441,12 +441,12 @@ func (c *Collector) Snapshot() Snapshot {
 		DNSSECSecure:        c.dnssecSecure.Load(),
 		DNSSECBogus:         c.dnssecBogus.Load(),
 		DNSSECInsecure:      c.dnssecInsecure.Load(),
-		RCODENoError:        c.rcodeNoError.Load(),
-		RCODEFormErr:        c.rcodeFormErr.Load(),
-		RCODEServFail:       c.rcodeServFail.Load(),
-		RCODENXDomain:       c.rcodeNXDomain.Load(),
+		RCODENOERROR:        c.rcodeNOERROR.Load(),
+		RCODEFORMERR:        c.rcodeFORMERR.Load(),
+		RCODESERVFAIL:       c.rcodeSERVFAIL.Load(),
+		RCODENXDOMAIN:       c.rcodeNXDOMAIN.Load(),
 		RCODENotImp:         c.rcodeNotImp.Load(),
-		RCODERefused:        c.rcodeRefused.Load(),
+		RCODEREFUSED:        c.rcodeREFUSED.Load(),
 		RCODEOther:          c.rcodeOther.Load(),
 		UpdatedAt:           time.Now().Unix(),
 	}
@@ -477,12 +477,12 @@ func (c *Collector) Reset() {
 	c.dnssecSecure.Store(0)
 	c.dnssecBogus.Store(0)
 	c.dnssecInsecure.Store(0)
-	c.rcodeNoError.Store(0)
-	c.rcodeFormErr.Store(0)
-	c.rcodeServFail.Store(0)
-	c.rcodeNXDomain.Store(0)
+	c.rcodeNOERROR.Store(0)
+	c.rcodeFORMERR.Store(0)
+	c.rcodeSERVFAIL.Store(0)
+	c.rcodeNXDOMAIN.Store(0)
 	c.rcodeNotImp.Store(0)
-	c.rcodeRefused.Store(0)
+	c.rcodeREFUSED.Store(0)
 	c.rcodeOther.Store(0)
 }
 

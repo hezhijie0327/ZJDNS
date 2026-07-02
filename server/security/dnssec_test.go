@@ -224,9 +224,9 @@ func TestSelfVerifyDNSKEY_NoSEPKey(t *testing.T) {
 	}
 }
 
-// ── ValidateResponse (end-to-end answer validation) ──────────────────────────
+// ── IsResponseValid (end-to-end answer validation) ──────────────────────────
 
-func TestValidateResponse_SignedAnswer(t *testing.T) {
+func TestIsResponseValid_SignedAnswer(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "signed.example.com"
 	ksk, _ := genTestKey(zone, dns.SEP|dns.ZONE)
@@ -244,16 +244,16 @@ func TestValidateResponse_SignedAnswer(t *testing.T) {
 		Answer: []dns.RR{aRec, rrsig},
 	}
 	// Both ZSK and KSK as verified keys (ZSK signed the A record)
-	verified, err := cv.ValidateResponse(response, zone, []*dns.DNSKEY{zsk, ksk})
+	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk, ksk})
 	if err != nil {
-		t.Errorf("ValidateResponse should pass: %v", err)
+		t.Errorf("IsResponseValid should pass: %v", err)
 	}
 	if !verified {
 		t.Error("signed answer should be verified")
 	}
 }
 
-func TestValidateResponse_UnsignedAnswer(t *testing.T) {
+func TestIsResponseValid_UnsignedAnswer(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "unsigned.example.com"
 	_, _ = genTestKey(zone, dns.SEP|dns.ZONE)
@@ -268,19 +268,19 @@ func TestValidateResponse_UnsignedAnswer(t *testing.T) {
 		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess},
 		Answer: []dns.RR{aRec},
 	}
-	verified, _ := cv.ValidateResponse(response, zone, []*dns.DNSKEY{zsk})
+	verified, _ := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if verified {
 		t.Error("unsigned answer should not be verified")
 	}
 }
 
-func TestValidateResponse_NoDNSKEYs(t *testing.T) {
+func TestIsResponseValid_NoDNSKEYs(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	response := &dns.Msg{
 		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess},
 		Answer: []dns.RR{aRec("test.example.com", "192.0.2.1")},
 	}
-	verified, _ := cv.ValidateResponse(response, "test.example.com", nil)
+	verified, _ := cv.IsResponseValid(response, "test.example.com", nil)
 	if verified {
 		t.Error("should return false with no DNSKEYs")
 	}
@@ -304,7 +304,7 @@ func TestFindNSEC3(t *testing.T) {
 	}
 }
 
-func TestValidateResponse_NXDOMAIN(t *testing.T) {
+func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "signed.example.com"
 	_, _ = genTestKey(zone, dns.SEP|dns.ZONE)
@@ -328,7 +328,7 @@ func TestValidateResponse_NXDOMAIN(t *testing.T) {
 		Ns:     []dns.RR{nsec, rrsig},
 	}
 	response.SetQuestion(dns.Fqdn(qname), qtype)
-	verified, err := cv.ValidateResponse(response, zone, []*dns.DNSKEY{zsk})
+	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if err != nil {
 		t.Errorf("NXDOMAIN with signed NSEC should pass: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestFullDNSSECChain(t *testing.T) {
 	if len(verifiedKeys) == 0 {
 		t.Fatal("zone keys not cached")
 	}
-	validated, err := cv.ValidateResponse(response, childZone, verifiedKeys)
+	validated, err := cv.IsResponseValid(response, childZone, verifiedKeys)
 	if err != nil {
 		t.Errorf("full chain validation should pass: %v", err)
 	}
@@ -406,12 +406,12 @@ func TestDNSSEC_BogusDelegation(t *testing.T) {
 	}
 }
 
-// TestValidateResponse_MixedRRsetWithForeignRRSIG verifies that when a response
+// TestIsResponseValid_MixedRRsetWithForeignRRSIG verifies that when a response
 // contains multiple RRsets and one has RRSIGs from a foreign zone's keys (zone cut),
 // validateAnswerSection returns an error rather than silently skipping the
 // unverifiable RRset. This prevents a valid parent-zone RRSIG from masking a broken
 // or foreign child-zone RRSIG.
-func TestValidateResponse_MixedRRsetWithForeignRRSIG(t *testing.T) {
+func TestIsResponseValid_MixedRRsetWithForeignRRSIG(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	parentZone := "parent.example.com"
 	childZone := "child.parent.example.com"
@@ -448,9 +448,9 @@ func TestValidateResponse_MixedRRsetWithForeignRRSIG(t *testing.T) {
 	// whose key is NOT in the verified set.
 	// validateAnswerSection must return an error because the A record's RRSIG
 	// cannot be verified — this signals a zone cut to the caller.
-	verified, err := cv.ValidateResponse(response, parentZone, []*dns.DNSKEY{parentZSK})
+	verified, err := cv.IsResponseValid(response, parentZone, []*dns.DNSKEY{parentZSK})
 	if err == nil {
-		t.Error("ValidateResponse should return error when an RRset has RRSIGs that don't match any verified DNSKEY")
+		t.Error("IsResponseValid should return error when an RRset has RRSIGs that don't match any verified DNSKEY")
 	}
 	if verified {
 		t.Error("should not claim validated when one RRset's RRSIG can't be verified")

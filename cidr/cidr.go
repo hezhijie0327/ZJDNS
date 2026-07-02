@@ -211,7 +211,7 @@ func (r *rule) preprocessNetworks() {
 		}
 
 		if ipNet.IP.To4() != nil {
-			if ipv4Net := toIPv4Net(ipNet); ipv4Net != nil {
+			if ipv4Net := asIPv4Net(ipNet); ipv4Net != nil {
 				r.ipv4Nets = append(r.ipv4Nets, *ipv4Net)
 			}
 		} else {
@@ -229,7 +229,7 @@ func (r *rule) preprocessNetworks() {
 	r.nets = nil
 }
 
-func toIPv4Net(ipNet *net.IPNet) *ipv4Net {
+func asIPv4Net(ipNet *net.IPNet) *ipv4Net {
 	if ipNet == nil || ipNet.IP.To4() == nil {
 		return nil
 	}

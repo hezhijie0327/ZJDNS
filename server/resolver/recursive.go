@@ -232,7 +232,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 				r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
 			}
 			if len(chain.zoneDNSKEYs) > 0 {
-				if nsecValidated, _ := r.resolver.validator.Crypto.ValidateResponse(response, currentDomain, chain.zoneDNSKEYs); nsecValidated {
+				if nsecValidated, _ := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs); nsecValidated {
 					validated = true
 				}
 			}

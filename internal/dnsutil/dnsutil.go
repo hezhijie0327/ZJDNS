@@ -254,3 +254,9 @@ func LogTLSConnectionState(role, dir, addr string, version uint16, cipherSuite u
 	log.Debugf("%s: TLS %s %s — version(codepoint)=0x%04X, group(name)=%s, cipher(codepoint)=0x%04X",
 		role, dir, addr, version, curveID, cipherSuite)
 }
+
+// JoinDNSPort appends the default DNS port (53) to an IP address string,
+// producing an "ip:53" pair suitable for use as a nameserver address.
+func JoinDNSPort(ip string) string {
+	return net.JoinHostPort(ip, "53")
+}

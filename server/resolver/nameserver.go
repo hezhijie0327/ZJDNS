@@ -285,13 +285,13 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				ansARecords = ans
 				for _, rrec := range ans {
 					if a, ok := rrec.(*dns.A); ok {
-						nsAddrs = append(nsAddrs, config.JoinDNSPort(a.A.String()))
+						nsAddrs = append(nsAddrs, dnsutil.JoinDNSPort(a.A.String()))
 					}
 				}
 				// Also collect AAAA glue from the Additional section
 				for _, rrec := range extra {
 					if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsName) {
-						nsAddrs = append(nsAddrs, config.JoinDNSPort(aaaa.AAAA.String()))
+						nsAddrs = append(nsAddrs, dnsutil.JoinDNSPort(aaaa.AAAA.String()))
 					}
 				}
 				addrMu.Unlock()
@@ -309,7 +309,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				ansAAAARecords = ans
 				for _, rrec := range ans {
 					if aaaa, ok := rrec.(*dns.AAAA); ok {
-						nsAddrs = append(nsAddrs, config.JoinDNSPort(aaaa.AAAA.String()))
+						nsAddrs = append(nsAddrs, dnsutil.JoinDNSPort(aaaa.AAAA.String()))
 					}
 				}
 				addrMu.Unlock()

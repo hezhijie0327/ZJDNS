@@ -352,12 +352,12 @@ func isDomainInRange(name, lower, upper string) bool {
 	return false
 }
 
-// ValidateResponse performs full cryptographic DNSSEC validation of a
+// IsResponseValid performs full cryptographic DNSSEC validation of a
 // response. It expects the zone's verified DNSKEY to be provided.
 //
 // Returns (validated bool, error). If error is non-nil, validation failed.
 // If validated is true, the AuthenticatedData flag may be set.
-func (c *CryptoValidator) ValidateResponse(response *dns.Msg, zonename string, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+func (c *CryptoValidator) IsResponseValid(response *dns.Msg, zonename string, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
 	if response == nil || len(verifiedDNSKEYs) == 0 {
 		return false, nil
 	}
@@ -365,7 +365,7 @@ func (c *CryptoValidator) ValidateResponse(response *dns.Msg, zonename string, v
 	// For NOERROR/NXDOMAIN responses, validate the RRSIGs on answer records
 	rcode := response.Rcode
 	if rcode == dns.RcodeSuccess && len(response.Answer) > 0 {
-		return c.validateAnswerSection(response.Answer, response.Extra, verifiedDNSKEYs)
+		return c.isAnswerSectionValid(response.Answer, response.Extra, verifiedDNSKEYs)
 	}
 
 	// Extract the queried name and type for denial-of-existence validation.
@@ -378,18 +378,18 @@ func (c *CryptoValidator) ValidateResponse(response *dns.Msg, zonename string, v
 	}
 
 	if rcode == dns.RcodeNameError {
-		return c.validateNXDOMAIN(response, qname, qtype, verifiedDNSKEYs)
+		return c.isNXDOMAINValid(response, qname, qtype, verifiedDNSKEYs)
 	}
 
 	// NODATA (NOERROR with no answer and NSEC)
 	if rcode == dns.RcodeSuccess && len(response.Answer) == 0 {
-		return c.validateNODATA(response, qname, qtype, verifiedDNSKEYs)
+		return c.isNODATAValid(response, qname, qtype, verifiedDNSKEYs)
 	}
 
 	return false, nil
 }
 
-func (c *CryptoValidator) validateAnswerSection(answer, extra []dns.RR, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
 	// Group records by owner name and type
 	groups := groupRRset(answer)
 	allRRSIGs := CollectRRSIGs(answer, extra)
@@ -510,12 +510,12 @@ func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) s
 	return strings.ToLower(base32.HexEncoding.WithPadding(base32.NoPadding).EncodeToString(hash))
 }
 
-// validateDenialOfExistence verifies signed NSEC/NSEC3 records against the
+// isDenialOfExistenceValid verifies signed NSEC/NSEC3 records against the
 // trusted DNSKEYs and checks that they cryptographically prove the non-existence
 // of the queried name (NXDOMAIN) or type (NODATA). This prevents an attacker
 // from satisfying validation with a validly-signed NSEC from the same zone
 // that covers a different name. (RFC 4035 section 3.1.3, RFC 6840 section 5.3)
-func (c *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY, denialType string) (bool, error) {
+func (c *CryptoValidator) isDenialOfExistenceValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY, denialType string) (bool, error) {
 	nsecs := findNSEC(response.Ns)
 	nsec3s := findNSEC3(response.Ns)
 	authSigs := CollectRRSIGs(response.Ns, response.Extra)
@@ -616,12 +616,12 @@ func (c *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname str
 	return false, fmt.Errorf("no signed NSEC/NSEC3 for %s", denialType)
 }
 
-func (c *CryptoValidator) validateNXDOMAIN(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
-	return c.validateDenialOfExistence(response, qname, qtype, verifiedDNSKEYs, "NXDOMAIN")
+func (c *CryptoValidator) isNXDOMAINValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+	return c.isDenialOfExistenceValid(response, qname, qtype, verifiedDNSKEYs, "NXDOMAIN")
 }
 
-func (c *CryptoValidator) validateNODATA(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
-	return c.validateDenialOfExistence(response, qname, qtype, verifiedDNSKEYs, "NODATA")
+func (c *CryptoValidator) isNODATAValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+	return c.isDenialOfExistenceValid(response, qname, qtype, verifiedDNSKEYs, "NODATA")
 }
 
 func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {

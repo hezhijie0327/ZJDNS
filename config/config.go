@@ -682,9 +682,3 @@ func addChaosRecord(cfg *ServerConfig) {
 
 	log.Infof("CONFIG: CHAOS TXT rewrite records enabled")
 }
-
-// JoinDNSPort appends the default DNS port (53) to an IP address string,
-// producing an "ip:53" pair suitable for use as a nameserver address.
-func JoinDNSPort(ip string) string {
-	return net.JoinHostPort(ip, DefaultDNSPort)
-}

@@ -19,7 +19,7 @@ const (
 	EDECodeSignatureNotYetValid       uint16 = 8
 	EDECodeDNSKEYMissing              uint16 = 9
 	EDECodeRRSIGsMissing              uint16 = 10
-	EDECodeNoZoneKeyBitSet            uint16 = 11
+	EDECodeNoZONEKeyBitSet            uint16 = 11
 	EDECodeNSECMissing                uint16 = 12
 	EDECodeCachedError                uint16 = 13
 	EDECodeNotReady                   uint16 = 14
@@ -27,7 +27,7 @@ const (
 	EDECodeCensored                   uint16 = 16
 	EDECodeFiltered                   uint16 = 17
 	EDECodeProhibited                 uint16 = 18
-	EDECodeStaleNXDomainAnswer        uint16 = 19
+	EDECodeStaleNXDOMAINAnswer        uint16 = 19
 	EDECodeNotAuthoritative           uint16 = 20
 	EDECodeNotSupported               uint16 = 21
 	EDECodeNoReachableAuthority       uint16 = 22
@@ -73,7 +73,7 @@ func EDECodeString(code uint16) string {
 		return "DNSKEY Missing"
 	case EDECodeRRSIGsMissing:
 		return "RRSIGs Missing"
-	case EDECodeNoZoneKeyBitSet:
+	case EDECodeNoZONEKeyBitSet:
 		return "No Zone Key Bit Set"
 	case EDECodeNSECMissing:
 		return "NSEC Missing"
@@ -89,7 +89,7 @@ func EDECodeString(code uint16) string {
 		return "Filtered"
 	case EDECodeProhibited:
 		return "Prohibited"
-	case EDECodeStaleNXDomainAnswer:
+	case EDECodeStaleNXDOMAINAnswer:
 		return "Stale NXDOMAIN Answer"
 	case EDECodeNotAuthoritative:
 		return "Not Authoritative"

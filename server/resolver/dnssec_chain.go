@@ -37,7 +37,7 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 
 	// If the response came from a zone with known DNSKEYs, verify the answer
 	if len(chain.zoneDNSKEYs) > 0 && len(response.Answer) > 0 {
-		validated, _ := crypto.ValidateResponse(response, currentDomain, chain.zoneDNSKEYs)
+		validated, _ := crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
 		if validated {
 			return true
 		}
@@ -57,7 +57,7 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 
 				// Now verify the answer with the newly verified keys
 				if len(response.Answer) > 0 {
-					validated, _ := crypto.ValidateResponse(response, currentDomain, dnskeyRecords)
+					validated, _ := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
 					return validated
 				}
 				return true
@@ -74,7 +74,7 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 
 				// Now verify the answer with the newly verified keys
 				if len(response.Answer) > 0 {
-					validated, _ := crypto.ValidateResponse(response, currentDomain, dnskeyRecords)
+					validated, _ := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
 					return validated
 				}
 				return true
@@ -253,7 +253,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 
 	// If we already have verified DNSKEYs for this zone, verify directly
 	if len(chain.zoneDNSKEYs) > 0 {
-		validated, err := crypto.ValidateResponse(response, currentDomain, chain.zoneDNSKEYs)
+		validated, err := crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
 		if err != nil {
 			log.Debugf("SECURITY: answer RRSIG verification failed for %s: %v", question.Name, err)
 			chain.lastEDECode = edns.EDECodeDNSSECBogus
@@ -338,7 +338,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
 	chain.zoneDNSKEYs = dnskeyRecords
 
-	validated, err := crypto.ValidateResponse(response, currentDomain, dnskeyRecords)
+	validated, err := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
 	if err != nil {
 		log.Debugf("SECURITY: answer RRSIG verification failed for %s: %v", question.Name, err)
 		chain.lastEDECode = edns.EDECodeDNSSECBogus
@@ -538,7 +538,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	// Validate the original answer against the child zone's DNSKEYs.
 	// Return (false, nil) on DNSSEC validation failure so the caller applies
 	// the SERVFAIL check. The EDE code is set in chain.lastEDECode.
-	validated, valErr := crypto.ValidateResponse(response, childZone, dnskeyRecords)
+	validated, valErr := crypto.IsResponseValid(response, childZone, dnskeyRecords)
 	if valErr != nil {
 		log.Debugf("SECURITY: zone cut — answer RRSIG verification failed for %s: %v", question.Name, valErr)
 		chain.lastEDECode = edns.EDECodeDNSSECBogus

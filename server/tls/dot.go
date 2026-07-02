@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
-	cryptotls "gitlab.com/go-extension/tls"
+	eTLS "gitlab.com/go-extension/tls"
 	"io"
 	"net"
 	"sync"
@@ -32,7 +32,7 @@ func (s *Server) startDOTServer() error {
 	dotTLSConfig.NextProtos = config.NextProtoDOT
 	dotTLSConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOT)
 
-	s.dotListener = cryptotls.NewListener(rawListener, dotTLSConfig)
+	s.dotListener = eTLS.NewListener(rawListener, dotTLSConfig)
 	log.Infof("TLS: DoT server started on port %s", s.cfg.Port)
 	log.Infof("TLS: DoT accepting on all interfaces (0.0.0.0:%s, [::]:%s)", s.cfg.Port, s.cfg.Port)
 
@@ -76,9 +76,9 @@ func (s *Server) handleDOTConnections() {
 }
 
 func (s *Server) handleDOTConnection(conn net.Conn) {
-	tlsConn, ok := conn.(*cryptotls.Conn)
+	tlsConn, ok := conn.(*eTLS.Conn)
 	if !ok {
-		log.Debugf("TLS: DoT connection is not *cryptotls.Conn, type=%T, remote=%s", conn, conn.RemoteAddr())
+		log.Debugf("TLS: DoT connection is not *eTLS.Conn, type=%T, remote=%s", conn, conn.RemoteAddr())
 		return
 	}
 
