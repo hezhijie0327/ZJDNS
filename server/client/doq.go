@@ -17,8 +17,6 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-
-	connpool "zjdns/server/client/pool"
 )
 
 func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
@@ -89,19 +87,19 @@ func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 				if c.quicPool != nil {
 					c.quicPool.Put(poolKey, conn)
 				} else {
-					_ = conn.CloseWithError(connpool.QUICCodeNoError, "no pool, discarding")
+					_ = conn.CloseWithError(pool.QUICCodeNoError, "no pool, discarding")
 				}
 				return response, nil
 			}
 		}
-		_ = conn.CloseWithError(connpool.QUICCodeNoError, "query failed")
+		_ = conn.CloseWithError(pool.QUICCodeNoError, "query failed")
 		return nil, err
 	}
 
 	if c.quicPool != nil {
 		c.quicPool.Put(poolKey, conn)
 	} else {
-		_ = conn.CloseWithError(connpool.QUICCodeNoError, "no pool, discarding")
+		_ = conn.CloseWithError(pool.QUICCodeNoError, "no pool, discarding")
 	}
 	return response, nil
 }

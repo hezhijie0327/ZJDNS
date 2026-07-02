@@ -17,7 +17,6 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	connpool "zjdns/server/client/pool"
 )
 
 func (s *Server) startDOQServer() error {
@@ -106,7 +105,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
 		defer cancel()
-		_ = conn.CloseWithError(connpool.QUICCodeNoError, "")
+		_ = conn.CloseWithError(pool.QUICCodeNoError, "")
 		done := make(chan struct{})
 		go func() {
 			<-conn.Context().Done()
@@ -163,7 +162,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 
 	msgLen := binary.BigEndian.Uint16(buf[:dnsutil.DNSFramePrefixLen])
 	if msgLen == 0 || msgLen > pool.SecureBufferSize-dnsutil.DNSFramePrefixLen {
-		_ = conn.CloseWithError(connpool.QUICCodeProtocolError, "invalid length")
+		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "invalid length")
 		return
 	}
 
@@ -181,7 +180,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 
 	req := pool.DefaultMessagePool.Get()
 	if err := req.Unpack(body); err != nil {
-		_ = conn.CloseWithError(connpool.QUICCodeProtocolError, "invalid DNS message")
+		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "invalid DNS message")
 		pool.DefaultMessagePool.Put(req)
 		return
 	}

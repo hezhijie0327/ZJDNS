@@ -11,20 +11,7 @@ import (
 
 	"zjdns/config"
 	"zjdns/internal/log"
-)
-
-const (
-	// QUICCodeNoError is the QUIC application error code for normal connection
-	// close.
-	QUICCodeNoError quic.ApplicationErrorCode = 0
-
-	// QUICCodeInternalError is the QUIC application error code for internal
-	// errors.
-	QUICCodeInternalError quic.ApplicationErrorCode = 1
-
-	// QUICCodeProtocolError is the QUIC application error code for protocol
-	// errors.
-	QUICCodeProtocolError quic.ApplicationErrorCode = 2
+	bufpool "zjdns/internal/pool"
 )
 
 // QUICConn wraps a QUIC connection with lifecycle tracking.
@@ -46,7 +33,7 @@ type QUICPool struct {
 func (c *QUICConn) close() {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
-		_ = c.Conn.CloseWithError(QUICCodeNoError, "pool connection closed")
+		_ = c.Conn.CloseWithError(bufpool.QUICCodeNoError, "pool connection closed")
 	})
 }
 
