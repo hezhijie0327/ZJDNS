@@ -12,7 +12,7 @@
 
 ```bash
 # 构建
-go build -o zjdns .
+go build -o zjdns ./cmd/zjdns
 
 # 生成默认配置
 ./zjdns -generate-config > config.json
@@ -115,9 +115,8 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 
 ```
 zjdns/
-├── main.go / version.go              # 入口 + ldflags
+├── cmd/zjdns/                        # 二进制入口（main.go + version.go）
 ├── bench_test.go                     # 全局基准测试
-├── cli/                              # CLI 辅助（参数解析、示例配置）
 ├── config/                           # 配置类型（ECSConfig + ECSOption）、加载、验证、默认值
 ├── edns/                             # EDNS(0) 扩展（ECS、Cookie、EDE、Padding）
 │                                     #   ECSOption 为 config.ECSOption 的类型别名
@@ -127,6 +126,7 @@ zjdns/
 ├── rewrite/                          # 域名重写规则
 ├── stats/                            # 锁无关统计（PersistStore 接口，不依赖 cache）
 ├── internal/
+│   ├── cli/                          # CLI 辅助（参数解析、示例配置）
 │   ├── log/                          # 分级日志 + TimeCache + 组件过滤
 │   ├── pool/                         # sync.Pool + QUIC 应用层错误码
 │   ├── dnsutil/                      # DNS 工具函数（含 JoinDNSPort）
@@ -144,7 +144,7 @@ zjdns/
     ├── resolver/                     # 递归解析 + 上游转发 + DNSSEC 信任链
     ├── security/                     # DNSSEC 密码学 (crypto.go + nsec.go) + 劫持检测
     ├── tls/                          # TLS 安全传输监听器（DoT/DoQ/DoH/DoH3）
-    └── latency/                      # A/AAAA 延迟探测与记录重排
+    └── probe/                        # A/AAAA 延迟探测与记录重排
 ```
 
 **依赖分层** — 严格单向无环：
@@ -159,7 +159,7 @@ internal/（基础层）→ config（域基础）→ edns/cache/cidr/rewrite/sta
 
 ```bash
 # 构建
-go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns
+go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns ./cmd/zjdns
 
 # 测试
 go test ./... -short

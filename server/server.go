@@ -27,7 +27,7 @@ import (
 	"zjdns/rewrite"
 	"zjdns/server/client"
 	"zjdns/server/handler"
-	"zjdns/server/latency"
+	"zjdns/server/probe"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
 	servertls "zjdns/server/tls"
@@ -202,10 +202,10 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	// Initialize the infrastructure-level latency prober for root/NS
 	// server reordering. This is independent of the user-facing
 	// latency_probe configuration.
-	latency.NewInfraProber(backgroundCtx)
+	probe.NewInfraProber(backgroundCtx)
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
-		prober := latency.New(
+		prober := probe.New(
 			cacheStore,
 			func(fn func() error) { server.backgroundGroup.Go(fn) },
 			backgroundCtx,

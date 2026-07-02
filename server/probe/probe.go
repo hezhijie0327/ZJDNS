@@ -1,6 +1,6 @@
-// Package latency provides A/AAAA latency probing and record reordering for
+// Package probe provides A/AAAA latency probing and record reordering for
 // optimized client connectivity.
-package latency
+package probe
 
 import (
 	"context"

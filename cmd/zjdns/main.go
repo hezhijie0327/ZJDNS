@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"zjdns/cli"
+	"zjdns/internal/cli"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/server"

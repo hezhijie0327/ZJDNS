@@ -12,7 +12,7 @@ import (
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
-	"zjdns/server/latency"
+	"zjdns/server/probe"
 )
 
 // ── Unified latency-sorted address cache ──────────────────────────────────────
@@ -89,7 +89,7 @@ func (r *Recursive) probeAndCacheAddrs(zone string, addrs []string) {
 	}
 }
 
-// getRootServers returns root servers ordered by latency. It reads from the
+// getRootServers returns root servers ordered by probe latency. It reads from the
 // unified nsAddrKey(".") — the same cache space as per-nameserver addresses.
 // On cache miss (cold start) it returns DefaultRootServers and triggers an
 // initial probe. On expiry it serves the stale order and triggers a background
@@ -238,7 +238,7 @@ func sortAddrsByLatency(parentCtx context.Context, addresses []string, timeout t
 
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
-	sortedIPs := latency.SortIPsByLatency(ctx, probeIPs)
+	sortedIPs := probe.SortIPsByLatency(ctx, probeIPs)
 
 	// Map IPs back to original addresses preserving probe order.
 	ipToAddr := make(map[string]string, len(entries))

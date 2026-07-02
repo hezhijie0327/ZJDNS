@@ -20,10 +20,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build
-go build -o zjdns
+go build -o zjdns ./cmd/zjdns
 
 # Build with version info
-go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns
+go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns ./cmd/zjdns
 
 # All tests
 go test ./... -short
@@ -160,15 +160,15 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 
 ```
 zjdns/
-├── main.go, version.go            (package main)
+├── cmd/zjdns/                     ← main.go + version.go (binary entry point)
 ├── config/                        ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
 ├── cache/                         ← Store interface, memory/persist implementations
 ├── cidr/                          ← IP filtering with tag matching
 ├── rewrite/                       ← Query rewrite rules
 ├── stats/                         ← Lock-free atomic collector (PersistStore interface)
-├── cli/                           ← Flag parsing, example config generation
 ├── internal/
+│   ├── cli/                       ← Flag parsing, example config generation
 │   ├── log/                       ← Structured logging (zero internal deps)
 │   ├── pool/                      ← sync.Pool allocators + QUIC error codes
 │   ├── dnsutil/                   ← DNS utilities: validation, PTR, panic recovery
@@ -184,7 +184,7 @@ zjdns/
     ├── resolver/                  ← Upstream + recursive resolution
     ├── security/                  ← DNSSEC validation (crypto + nsec) + hijack detection
     ├── tls/                       ← TLS listeners (DoT, DoQ, DoH, DoH3)
-    └── latency/                   ← A/AAAA latency probing and record reordering
+    └── probe/                     ← A/AAAA latency probing and record reordering
 ```
 
 ### Import Rules (strict layering, no cycles)
@@ -211,14 +211,14 @@ Layer 4 (server sub-packages — import domain + internal, never server/ parent)
   server/security → cache, config, dnsutil, log
   server/client → config, edns, dnsutil, log, pool
   server/client/pool → config, dnsutil, log, pool
-  server/latency → config, edns, dnsutil, internal/latency, log
+  server/probe → config, edns, dnsutil, internal/latency, log
   server/resolver → cache, config, edns, dnsutil, log, pool, server/client, server/security
   server/tls → config, dnsutil, log, pool
   server/handler → cache, config, edns, dnsutil, log, pool, rewrite, server/resolver, stats
 
 Top layer (wiring):
   server → all domain + all server sub-packages
-  main → cli, config, log, server
+  cmd/zjdns → internal/cli, config, log, server
 ```
 
 **Key rules:**
@@ -284,7 +284,7 @@ Top layer (wiring):
 | `Guard` | `server/security` | Bundles CryptoValidator + Detector |
 | `Filter` | `cidr` | CIDR-based IP matching; `MatchInfo` + unexported `rule` types |
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |
-| `Prober` | `server/latency` | A/AAAA latency probe + record reordering; `infraProber` (sync.Once) |
+| `Prober` | `server/probe` | A/AAAA latency probe + record reordering; `infraProber` (sync.Once) |
 | `MessagePool` / `BufferPool` | `internal/pool` | sync.Pool allocators; also holds `QUICCode*` constants |
 | `JoinDNSPort` | `internal/dnsutil` | Utility: `ip` → `ip:53` (moved from config) |
 
