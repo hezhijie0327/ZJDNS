@@ -17,7 +17,7 @@ RUN \
     && go mod tidy \
     && BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC') \
     && COMMIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") \
-    && go build -o zjdns -trimpath -ldflags "-s -w -buildid= -X main.BuildTime=${BUILD_TIME} -X main.CommitHash=${COMMIT_SHA}"
+    && go build -o zjdns -trimpath -ldflags "-s -w -buildid= -X main.BuildTime=${BUILD_TIME} -X main.CommitHash=${COMMIT_SHA}" ./cmd/zjdns
 
 FROM scratch AS rebase_zjdns
 
