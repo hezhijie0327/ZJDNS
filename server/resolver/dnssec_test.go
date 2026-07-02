@@ -10,6 +10,7 @@ import (
 
 	"github.com/miekg/dns"
 
+	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -73,7 +74,7 @@ func aRec(name string, ip string) *dns.A {
 // newTestRecursive creates a minimal Recursive for unit testing.
 func newTestRecursive() *Recursive {
 	guard := security.New(nil, false)
-	ednsHandler, _ := edns.NewHandler(edns.ECSConfig{})
+	ednsHandler, _ := edns.NewHandler(config.ECSConfig{})
 	queryClient := client.New()
 
 	r := &Resolver{

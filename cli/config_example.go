@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"zjdns/config"
-	"zjdns/edns"
 )
 
 // GenerateExampleConfig returns a complete example configuration as indented
@@ -27,7 +26,7 @@ func GenerateExampleConfig() string {
 		Interval: int(config.DefaultCachePersistInterval / time.Second),
 	}
 	cfg.Server.Features.Cache.PreferStale = true
-	cfg.Server.Features.ECS = edns.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
+	cfg.Server.Features.ECS = config.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []config.LatencyProbeStep{
 		{Protocol: "ping", Timeout: 100},
 		{Protocol: "tcp", Port: config.DefaultProbePortHTTPS, Timeout: 100},

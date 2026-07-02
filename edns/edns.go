@@ -8,6 +8,7 @@ import (
 
 	"github.com/miekg/dns"
 
+	"zjdns/config"
 	"zjdns/internal/ipdetect"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -18,13 +19,13 @@ import (
 type Handler struct {
 	defaultECSIPv4   atomic.Pointer[ECSOption]
 	defaultECSIPv6   atomic.Pointer[ECSOption]
-	defaultECSConfig ECSConfig
+	defaultECSConfig config.ECSConfig
 	detector         *ipdetect.Detector
 	CookieGenerator  *CookieGenerator
 }
 
 // NewHandler creates a Handler with the given default ECS configuration.
-func NewHandler(defaultECS ECSConfig) (*Handler, error) {
+func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 	h := &Handler{
 		defaultECSConfig: defaultECS,
 		detector: &ipdetect.Detector{
@@ -35,7 +36,7 @@ func NewHandler(defaultECS ECSConfig) (*Handler, error) {
 
 	if !defaultECS.IsEmpty() {
 		if defaultECS.IPv4 != "" {
-			if isAutoECSValue(defaultECS.IPv4) {
+			if config.IsAutoECSValue(defaultECS.IPv4) {
 				log.Infof("EDNS: Default ECS IPv4 set to auto; refresh will run in background")
 			} else {
 				ecs, err := h.parseECSConfig(defaultECS.IPv4, false)
@@ -49,7 +50,7 @@ func NewHandler(defaultECS ECSConfig) (*Handler, error) {
 			}
 		}
 		if defaultECS.IPv6 != "" {
-			if isAutoECSValue(defaultECS.IPv6) {
+			if config.IsAutoECSValue(defaultECS.IPv6) {
 				log.Infof("EDNS: Default ECS IPv6 set to auto; refresh will run in background")
 			} else {
 				ecs, err := h.parseECSConfig(defaultECS.IPv6, true)
@@ -122,9 +123,9 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 	}
 
 	var paddingBytes int
-	paddingBlockSize := paddingResponseBlockSize
+	paddingBlockSize := config.DefaultPaddingResponseBlockSize
 	if isRequest {
-		paddingBlockSize = paddingRequestBlockSize
+		paddingBlockSize = config.DefaultPaddingRequestBlockSize
 	}
 	options, paddingBytes = addPadding(msg, options, isSecureConnection, paddingBlockSize, clientWantsPadding)
 

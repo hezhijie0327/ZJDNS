@@ -15,7 +15,6 @@ import (
 
 	"github.com/miekg/dns"
 
-	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
@@ -68,7 +67,7 @@ type FeatureFlags struct {
 	HijackProtection bool               `json:"hijack_protection"`
 	DNSSECEnforce    bool               `json:"dnssec_enforce,omitempty"`
 	DDR              DDRSettings        `json:"ddr,omitempty"`
-	ECS              edns.ECSConfig     `json:"ecs_subnet,omitempty"`
+	ECS              ECSConfig          `json:"ecs_subnet,omitempty"`
 	Cache            CacheSettings      `json:"cache,omitempty"`
 	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitempty"`
 	Stats            *StatsSettings     `json:"stats,omitempty"`
@@ -548,7 +547,7 @@ func NewDefaultServerConfig() *ServerConfig {
 
 	cfg.Server.Features.Cache.Persist.Interval = int(DefaultCachePersistInterval / time.Second)
 	cfg.Server.Features.DDR = DDRSettings{Domain: "dns.example.com", IPv4: "127.0.0.1", IPv6: "::1"}
-	cfg.Server.Features.ECS = edns.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
+	cfg.Server.Features.ECS = ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.DNSSECEnforce = true
 	cfg.Server.Features.HijackProtection = true
 

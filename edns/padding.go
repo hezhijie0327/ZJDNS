@@ -6,19 +6,6 @@ import (
 	"zjdns/internal/pool"
 )
 
-// paddingRequestBlockSize aligns outgoing DNS queries to a 128-byte boundary
-// (RFC 8467). Most queries are 50–110 bytes, so a single 128-byte block obscures
-// the exact query name while minimising upload-bandwidth waste.
-const paddingRequestBlockSize = 128
-
-// paddingResponseBlockSize aligns DNS responses to a 468-byte boundary. This is
-// the largest multiple of 128 that fits safely below the 512-byte standard DNS
-// UDP limit (512 − 44 bytes of IP/UDP/buffer headroom), so nearly all responses
-// in the 0–468 range share the same size. This matches
-// config.DefaultPaddingResponseBlockSize but is defined locally because the edns
-// package cannot import config (import cycle).
-const paddingResponseBlockSize = 468
-
 const paddingHeaderSize = 4
 
 // HasPaddingOption checks whether the client's EDNS(0) request includes a

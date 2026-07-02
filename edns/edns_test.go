@@ -3,10 +3,12 @@ package edns
 import (
 	"net"
 	"testing"
+
+	"zjdns/config"
 )
 
 func TestECSConfig_ValueForQType(t *testing.T) {
-	cfg := ECSConfig{
+	cfg := config.ECSConfig{
 		IPv4:       "1.2.3.0/24",
 		IPv6:       "2001:db8::/32",
 		PreferIPv4: true,
@@ -42,15 +44,15 @@ func TestECSConfig_ValueForQType(t *testing.T) {
 func TestECSConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     ECSConfig
+		cfg     config.ECSConfig
 		wantErr bool
 	}{
-		{"empty config", ECSConfig{}, true},
-		{"IPv4 only valid", ECSConfig{IPv4: "1.2.3.0/24"}, false},
-		{"IPv6 only valid", ECSConfig{IPv6: "2001:db8::/32"}, false},
-		{"both valid", ECSConfig{IPv4: "1.2.3.0/24", IPv6: "2001:db8::/32"}, false},
-		{"invalid value", ECSConfig{IPv4: "not-an-ip"}, true},
-		{"auto value valid", ECSConfig{IPv4: "auto", IPv6: "auto"}, false},
+		{"empty config", config.ECSConfig{}, true},
+		{"IPv4 only valid", config.ECSConfig{IPv4: "1.2.3.0/24"}, false},
+		{"IPv6 only valid", config.ECSConfig{IPv6: "2001:db8::/32"}, false},
+		{"both valid", config.ECSConfig{IPv4: "1.2.3.0/24", IPv6: "2001:db8::/32"}, false},
+		{"invalid value", config.ECSConfig{IPv4: "not-an-ip"}, true},
+		{"auto value valid", config.ECSConfig{IPv4: "auto", IPv6: "auto"}, false},
 	}
 
 	for _, tt := range tests {
@@ -64,22 +66,22 @@ func TestECSConfig_Validate(t *testing.T) {
 }
 
 func TestECSConfig_IsEmpty(t *testing.T) {
-	empty := ECSConfig{}
+	empty := config.ECSConfig{}
 	if !empty.IsEmpty() {
 		t.Error("empty config should be empty")
 	}
-	v4 := ECSConfig{IPv4: "1.2.3.0/24"}
+	v4 := config.ECSConfig{IPv4: "1.2.3.0/24"}
 	if v4.IsEmpty() {
 		t.Error("config with IPv4 should not be empty")
 	}
 }
 
 func TestECSConfig_HasAuto(t *testing.T) {
-	static := ECSConfig{IPv4: "1.2.3.0/24"}
+	static := config.ECSConfig{IPv4: "1.2.3.0/24"}
 	if static.HasAuto() {
 		t.Error("static config should not have auto")
 	}
-	auto := ECSConfig{IPv4: "auto"}
+	auto := config.ECSConfig{IPv4: "auto"}
 	if !auto.HasAuto() {
 		t.Error("auto config should have auto")
 	}
