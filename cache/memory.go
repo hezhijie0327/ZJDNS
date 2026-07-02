@@ -10,7 +10,6 @@ import (
 	"github.com/miekg/dns"
 
 	"zjdns/config"
-	"zjdns/edns"
 	"zjdns/internal/log"
 )
 
@@ -125,13 +124,13 @@ func (m *MemoryCache) Get(key string) (*Entry, bool, bool) {
 }
 
 // Set stores a DNS response in the cache with the given key and metadata.
-func (m *MemoryCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption) {
+func (m *MemoryCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *config.ECSOption) {
 	m.SetWithDNSSEC(key, answer, authority, additional, validated, false, ecs)
 }
 
 // SetWithDNSSEC stores a DNS response with explicit DNSSEC cryptographic
 // validation status.
-func (m *MemoryCache) SetWithDNSSEC(key string, answer, authority, additional []dns.RR, validated bool, dnssecValidated bool, ecs *edns.ECSOption) {
+func (m *MemoryCache) SetWithDNSSEC(key string, answer, authority, additional []dns.RR, validated bool, dnssecValidated bool, ecs *config.ECSOption) {
 	if atomic.LoadInt32(&m.closed) != 0 {
 		return
 	}

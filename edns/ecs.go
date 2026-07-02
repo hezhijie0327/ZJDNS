@@ -23,14 +23,9 @@ const (
 	ianaAFINET6 = uint16(2)
 )
 
-// ECSOption represents an EDNS Client Subnet option with address and prefix
-// information.
-type ECSOption struct {
-	Address      net.IP
-	Family       uint16
-	SourcePrefix uint8
-	ScopePrefix  uint8
-}
+// ECSOption is an alias for config.ECSOption, kept here for compatibility
+// with packages that already depend on the edns package.
+type ECSOption = config.ECSOption
 
 // ParseFromDNS extracts the ECS option from a DNS message's OPT record.
 func (h *Handler) ParseFromDNS(msg *dns.Msg) *ECSOption {

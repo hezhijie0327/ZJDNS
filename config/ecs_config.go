@@ -13,6 +13,15 @@ import (
 // ECSModeAuto is the sentinel value for auto-detection of ECS subnets.
 const ECSModeAuto = "auto"
 
+// ECSOption represents an EDNS Client Subnet option with address and prefix
+// information.
+type ECSOption struct {
+	Address      net.IP
+	Family       uint16
+	SourcePrefix uint8
+	ScopePrefix  uint8
+}
+
 // ECSConfig holds the default ECS subnet configuration for IPv4 and
 // IPv6.
 type ECSConfig struct {
@@ -109,13 +118,15 @@ func (c *ECSConfig) UnmarshalJSON(data []byte) error {
 // MarshalJSON implements json.Marshaler for ECSConfig.
 func (c ECSConfig) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		IPv4       string `json:"ipv4,omitempty"`
-		IPv6       string `json:"ipv6,omitempty"`
-		PreferIPv4 bool   `json:"prefer_ipv4,omitempty"`
+		IPv4          string `json:"ipv4,omitempty"`
+		IPv6          string `json:"ipv6,omitempty"`
+		PreferIPv4    bool   `json:"prefer_ipv4,omitempty"`
+		AutoDetectURL string `json:"auto_detect_url,omitempty"`
 	}{
-		IPv4:       c.IPv4,
-		IPv6:       c.IPv6,
-		PreferIPv4: c.PreferIPv4,
+		IPv4:          c.IPv4,
+		IPv6:          c.IPv6,
+		PreferIPv4:    c.PreferIPv4,
+		AutoDetectURL: c.AutoDetectURL,
 	})
 }
 

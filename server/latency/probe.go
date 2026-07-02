@@ -5,6 +5,7 @@ package latency
 import (
 	"context"
 	"net"
+	"sync"
 
 	"github.com/miekg/dns"
 
@@ -159,18 +160,22 @@ func extractIndices(answer []dns.RR) []int {
 // --- Infrastructure-level API (used by resolver for root/NS server ordering) ---
 
 // infraProber holds the package-level prober for infrastructure (root/NS)
-// latency probes. It uses the built-in ping+udp+tcp probe steps and shares
-// the Prober's background context for graceful shutdown.
-var infraProber *ilatency.Prober
+// latency probes. Protected by infraProberOnce for safe concurrent initialization.
+var (
+	infraProber     *ilatency.Prober
+	infraProberOnce sync.Once
+)
 
 // NewInfraProber initializes the package-level infrastructure prober.
-// Must be called once during server startup before any recursive resolution.
+// Safe to call multiple times; only the first call takes effect.
 func NewInfraProber(bgCtx context.Context) {
-	infraProber = ilatency.New([]config.LatencyProbeStep{
-		{Protocol: config.ProtoPing, Timeout: 100},
-		{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: 100},
-		{Protocol: config.ProtoTCP, Port: config.DefaultProbePortDNS, Timeout: 100},
-	}, bgCtx)
+	infraProberOnce.Do(func() {
+		infraProber = ilatency.New([]config.LatencyProbeStep{
+			{Protocol: config.ProtoPing, Timeout: 100},
+			{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: 100},
+			{Protocol: config.ProtoTCP, Port: config.DefaultProbePortDNS, Timeout: 100},
+		}, bgCtx)
+	})
 }
 
 // SortIPsByLatency probes IP addresses using the built-in infrastructure

@@ -13,7 +13,6 @@ import (
 	"github.com/miekg/dns"
 
 	"zjdns/config"
-	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
@@ -31,8 +30,8 @@ var cacheSnapshotMagic = "ZJDNS-CACHE-V" + strconv.Itoa(cacheSnapshotVersion)
 // Store defines the cache storage interface.
 type Store interface {
 	Get(key string) (*Entry, bool, bool)
-	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
-	SetWithDNSSEC(key string, answer, authority, additional []dns.RR, validated bool, dnssecValidated bool, ecs *edns.ECSOption)
+	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *config.ECSOption)
+	SetWithDNSSEC(key string, answer, authority, additional []dns.RR, validated bool, dnssecValidated bool, ecs *config.ECSOption)
 	SetEntry(key string, entry *Entry)
 	ReverseLookup(ip net.IP) []LookupResult
 	Close() error
@@ -99,12 +98,12 @@ func (c *Entry) RemainingTTL() uint32 {
 }
 
 // ECSOption returns the EDNS Client Subnet stored in the entry, if any.
-func (c *Entry) ECSOption() *edns.ECSOption {
+func (c *Entry) ECSOption() *config.ECSOption {
 	if c == nil || c.ECSAddress == "" {
 		return nil
 	}
 	if ip := net.ParseIP(c.ECSAddress); ip != nil {
-		return &edns.ECSOption{Family: c.ECSFamily, SourcePrefix: c.ECSSourcePrefix, ScopePrefix: c.ECSScopePrefix, Address: ip}
+		return &config.ECSOption{Family: c.ECSFamily, SourcePrefix: c.ECSSourcePrefix, ScopePrefix: c.ECSScopePrefix, Address: ip}
 	}
 	return nil
 }
@@ -134,7 +133,7 @@ func (c *Entry) ShouldPrefetch(thresholdPercent int) bool {
 
 // BuildCacheKey constructs a deterministic cache key from a DNS question,
 // optional ECS option, and DNSSEC flag.
-func BuildCacheKey(question dns.Question, ecs *edns.ECSOption, clientRequestedDNSSEC bool) string {
+func BuildCacheKey(question dns.Question, ecs *config.ECSOption, clientRequestedDNSSEC bool) string {
 	var buf strings.Builder
 	buf.Grow(resultBufferCapacity)
 	buf.WriteString(cacheKeyDNSPrefix)

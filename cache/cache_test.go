@@ -8,7 +8,6 @@ import (
 	"github.com/miekg/dns"
 
 	"zjdns/config"
-	"zjdns/edns"
 )
 
 func testStore() *MemoryCache {
@@ -40,7 +39,7 @@ func TestBuildCacheKey_DNSSEC(t *testing.T) {
 func TestBuildCacheKey_ECS(t *testing.T) {
 	q := dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
 	keyNo := BuildCacheKey(q, nil, false)
-	keyECS := BuildCacheKey(q, &edns.ECSOption{
+	keyECS := BuildCacheKey(q, &config.ECSOption{
 		Family:       1,
 		SourcePrefix: 24,
 		ScopePrefix:  0,
