@@ -113,46 +113,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 				// Retry once without EDNS to recover (RFC 6891 §6.2.2).
 				if rcode == dns.RcodeFormatError {
 					pool.DefaultMessagePool.Put(result.Response)
-					log.Debugf("RECURSION: ns=%s FORMERR, retrying without EDNS for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
-
-					// Build a bare query without EDNS options
-					bareMsg := pool.DefaultMessagePool.Get()
-					defer pool.DefaultMessagePool.Put(bareMsg)
-					bareMsg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
-					bareMsg.RecursionDesired = true
-
-					retryCtx, retryCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
-					defer retryCancel()
-					retryResult := r.resolver.client.ExecuteQuery(retryCtx, bareMsg, server)
-
-					if retryResult.Error == nil && retryResult.Response != nil {
-						retryRcode := retryResult.Response.Rcode
-						if retryRcode == dns.RcodeSuccess || retryRcode == dns.RcodeNameError {
-							// Reject hijacked responses in FORMERR retry path as well.
-							if detector != nil && detector.IsEnabled() {
-								v := detector.Validate(currentDomain, normalizedQname, retryResult.Response)
-								if v == security.VerdictHijack {
-									log.Debugf("RECURSION: rejecting hijacked FORMERR retry from %s", nsAddr)
-									hijackRejected.Store(true)
-									pool.DefaultMessagePool.Put(retryResult.Response)
-									return nil
-								}
-							}
-
-							select {
-							case resultChan <- retryResult.Response:
-								cancel()
-								return nil
-							case <-queryCtx.Done():
-								pool.DefaultMessagePool.Put(retryResult.Response)
-								return queryCtx.Err()
-							}
-						}
-						log.Debugf("RECURSION: ns=%s FORMERR retry rcode=%s for %s %s", nsAddr, dns.RcodeToString[retryRcode], question.Name, dns.TypeToString[question.Qtype])
-						pool.DefaultMessagePool.Put(retryResult.Response)
-					} else if retryResult.Error != nil {
-						log.Debugf("RECURSION: ns=%s FORMERR retry error=%v for %s %s", nsAddr, retryResult.Error, question.Name, dns.TypeToString[question.Qtype])
-					}
+					r.retryWithoutEDNS(queryCtx, resultChan, cancel, server, question, nsAddr, detector, currentDomain, normalizedQname, &hijackRejected)
 					return nil
 				}
 
@@ -443,4 +404,52 @@ func isEqualFoldTrimDot(a, b string) bool {
 		b = b[:len(b)-1]
 	}
 	return strings.EqualFold(a, b)
+}
+
+// retryWithoutEDNS attempts a query without EDNS options and sends the result
+// to resultChan. Used as a FORMERR fallback per RFC 6891 §6.2.2.
+func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question dns.Question, nsAddr string, detector *security.Detector, currentDomain, normalizedQname string, hijackRejected *atomic.Bool) {
+	log.Debugf("RECURSION: ns=%s FORMERR, retrying without EDNS for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
+
+	bareMsg := pool.DefaultMessagePool.Get()
+	defer pool.DefaultMessagePool.Put(bareMsg)
+	bareMsg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
+	bareMsg.RecursionDesired = true
+
+	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
+	defer retryCancel()
+	retryResult := r.resolver.client.ExecuteQuery(retryCtx, bareMsg, server)
+
+	if retryResult.Error != nil {
+		log.Debugf("RECURSION: ns=%s FORMERR retry error=%v for %s %s", nsAddr, retryResult.Error, question.Name, dns.TypeToString[question.Qtype])
+		return
+	}
+	if retryResult.Response == nil {
+		return
+	}
+
+	retryRcode := retryResult.Response.Rcode
+	if retryRcode != dns.RcodeSuccess && retryRcode != dns.RcodeNameError {
+		log.Debugf("RECURSION: ns=%s FORMERR retry rcode=%s for %s %s", nsAddr, dns.RcodeToString[retryRcode], question.Name, dns.TypeToString[question.Qtype])
+		pool.DefaultMessagePool.Put(retryResult.Response)
+		return
+	}
+
+	// Reject hijacked responses in FORMERR retry path as well.
+	if detector != nil && detector.IsEnabled() {
+		v := detector.Validate(currentDomain, normalizedQname, retryResult.Response)
+		if v == security.VerdictHijack {
+			log.Debugf("RECURSION: rejecting hijacked FORMERR retry from %s", nsAddr)
+			hijackRejected.Store(true)
+			pool.DefaultMessagePool.Put(retryResult.Response)
+			return
+		}
+	}
+
+	select {
+	case resultChan <- retryResult.Response:
+		cancel()
+	case <-ctx.Done():
+		pool.DefaultMessagePool.Put(retryResult.Response)
+	}
 }
