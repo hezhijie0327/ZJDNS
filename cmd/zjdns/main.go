@@ -31,7 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Infof("SERVER: ZJDNS Server started successfully!")
+	log.Debugf("SERVER: ZJDNS Server started successfully!")
 
 	if err := srv.Start(); err != nil {
 		log.Errorf("SERVER: Server startup failed: %v", err)

@@ -70,7 +70,7 @@ func New(settings config.CacheSettings) *MemoryCache {
 	if limit <= 0 {
 		limit = config.DefaultCacheSize
 	}
-	log.Infof("CACHE: %d MB cache budget", limit/(1024*1024))
+	log.Debugf("CACHE: %d MB cache budget", limit/(1024*1024))
 
 	m := &MemoryCache{
 		entries:         make(map[string]*cacheItem),

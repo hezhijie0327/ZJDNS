@@ -245,8 +245,6 @@ func (s *Server) Start() error {
 	defer serverCancel(errors.New("server startup completed"))
 
 	log.Infof("SERVER: Starting ZJDNS Server %s", config.Version)
-	log.Infof("SERVER: Log level: %s", log.Default.Level().String())
-	log.Infof("SERVER: Listening on port: %s", s.config.Server.Port)
 
 	s.displayInfo()
 	if s.config.Server.StatsInterval() > 0 {
@@ -379,24 +377,11 @@ func (s *Server) displayInfo() {
 		log.Infof("RECURSION: Recursive mode")
 	}
 
-	if s.cidrFilter != nil && len(s.config.CIDR) > 0 {
-		log.Infof("CIDR: CIDR Filter: enabled (%d rules)", len(s.config.CIDR))
-	}
-
 	if s.pprofServer != nil {
 		log.Infof("PPROF: pprof server enabled on: %s, via: %s", s.config.Server.Pprof, config.DefaultPprofPath)
 	}
 
 	if s.tls != nil {
-		log.Infof("TLS: Listening on port: %s (DoT/DoQ)", s.config.Server.TLS.Port)
-		httpsPort := s.config.Server.TLS.HTTPS.Port
-		if httpsPort != "" {
-			endpoint := s.config.Server.TLS.HTTPS.Endpoint
-			if endpoint == "" {
-				endpoint = strings.TrimPrefix(config.DefaultQueryPath, "/")
-			}
-			log.Infof("TLS: Listening on port: %s (DoH/DoH3, endpoint: %s)", httpsPort, endpoint)
-		}
 		if runtime.GOOS == "linux" {
 			ktlsTX, ktlsRX := false, false
 			if s.config.Server.TLS.KTLS != nil {
@@ -410,14 +395,7 @@ func (s *Server) displayInfo() {
 		}
 	}
 
-	if s.handler.HasRewriteRules() {
-		log.Infof("REWRITE: DNS rewriter: enabled (%d rules)", len(s.config.Rewrite))
-	}
-	log.Infof("CACHE: Serve expired enabled (ttl=%d, client timeout=%s, prefer_stale=%t)", config.DefaultStaleMaxAge, config.DefaultServeExpiredClientTimeout.String(), s.config.Server.Features.Cache.PreferStale)
 	if s.config.Server.Features.HijackProtection {
 		log.Infof("SECURITY: DNS hijacking prevention: enabled")
-	}
-	if defaultECS := s.handler.DefaultECS(); defaultECS != nil {
-		log.Infof("EDNS: Default ECS: %s/%d", defaultECS.Address, defaultECS.SourcePrefix)
 	}
 }
