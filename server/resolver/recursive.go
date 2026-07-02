@@ -473,13 +473,11 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 	}
 }
 
-// probeTLDForHijack sends a single UDP probe to a parent server for the full
-// QNAME. If the response contains A/AAAA records (GFW injection at the
-// delegation level), it returns true so the caller can switch to TCP before
-// querying the authoritative servers.
-func (r *Recursive) probeTLDForHijack(ctx context.Context, parentServers []string, qname string) bool {
+// probeTLDForHijack sends a single UDP probe to a TLD server for the full
+// QNAME and delegates the verdict to security.Detector.IsHijackedByTLD.
+func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, qname string) bool {
 	detector := r.resolver.validator.Hijack
-	if detector == nil || !detector.IsEnabled() || len(parentServers) == 0 {
+	if detector == nil || !detector.IsEnabled() || len(tldServers) == 0 {
 		return false
 	}
 
@@ -489,11 +487,11 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, parentServers []strin
 	msg.RecursionDesired = false
 
 	server := &config.UpstreamServer{
-		Address:  parentServers[0],
+		Address:  tldServers[0],
 		Protocol: config.ProtoUDP,
 	}
 
-	probeCtx, probeCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
+	probeCtx, probeCancel := context.WithTimeout(ctx, config.DefaultHijackProbeTimeout)
 	defer probeCancel()
 
 	result := r.resolver.client.ExecuteQuery(probeCtx, msg, server)
@@ -502,19 +500,10 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, parentServers []strin
 	}
 	defer pool.DefaultMessagePool.Put(result.Response)
 
-	// Check for A/AAAA records in the Answer section. A legitimate
-	// parent server returns a referral (NS in Authority), never
-	// direct A/AAAA answers for a subdomain.
-	normalizedQname := dnsutil.NormalizeDomain(qname)
-	for _, rr := range result.Response.Answer {
-		if dnsutil.NormalizeDomain(rr.Header().Name) == normalizedQname {
-			switch rr.Header().Rrtype {
-			case dns.TypeA, dns.TypeAAAA:
-				log.Debugf("RECURSION: hijack probe detected A/AAAA for %s from parent server %s, forcing TCP",
-					qname, parentServers[0])
-				return true
-			}
-		}
+	if detector.IsHijackedByTLD(result.Response, qname) {
+		log.Debugf("RECURSION: hijack probe detected A/AAAA for %s from TLD server %s, forcing TCP",
+			qname, tldServers[0])
+		return true
 	}
 	return false
 }

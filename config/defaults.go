@@ -30,6 +30,13 @@ const (
 	// RFC 8767 §4.2: timeout SHOULD default to less than 10 seconds.
 	DefaultDNSQueryTimeout = 10 * time.Second // single DNS query / dial / per-message I/O
 
+	// DefaultHijackProbeTimeout bounds the TLD hijack probe query.
+	// The probe detects GFW-injected A/AAAA records at the delegation
+	// level before the authoritative query.  A short timeout avoids
+	// blocking the resolution pipeline when a TLD server is
+	// unresponsive.
+	DefaultHijackProbeTimeout = 2 * time.Second
+
 	DefaultBackgroundTimeout         = 10 * time.Second // bounded wait for background tasks
 	DefaultBackgroundShutdownTimeout = 30 * time.Second // bounded wait for background tasks during shutdown (matches recursive timeout)
 

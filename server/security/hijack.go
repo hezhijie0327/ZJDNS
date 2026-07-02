@@ -152,6 +152,27 @@ func (d *Detector) classifyTLD(zone, name string, rrtype uint16) Verdict {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+// IsHijackedByTLD checks whether a TLD or root server returned
+// direct A/AAAA answers for a query name.  Those servers never
+// put A/AAAA in the Answer section for a subdomain — if they
+// do, the response was injected by a middlebox.
+func (d *Detector) IsHijackedByTLD(response *dns.Msg, queryName string) bool {
+	if !d.enabled.Load() || response == nil {
+		return false
+	}
+	n := dnsutil.NormalizeDomain(queryName)
+	for _, rr := range response.Answer {
+		if dnsutil.NormalizeDomain(rr.Header().Name) != n {
+			continue
+		}
+		switch rr.Header().Rrtype {
+		case dns.TypeA, dns.TypeAAAA:
+			return true
+		}
+	}
+	return false
+}
+
 func (d *Detector) isRootServerGlue(domain string, rrType uint16) bool {
 	if rrType != dns.TypeA && rrType != dns.TypeAAAA {
 		return false
