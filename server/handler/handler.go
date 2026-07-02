@@ -72,7 +72,6 @@ type Handler struct {
 	resolver          *resolver.Resolver
 	prober            LatencyProber
 	prefetchCooldown  sync.Map
-	semaphore         chan struct{}
 	cacheRefreshGroup *errgroup.Group
 	cacheRefreshCtx   context.Context
 	ctx               context.Context
@@ -94,7 +93,6 @@ func New(
 	ednsHandler *edns.Handler,
 	rewriteEvaluator *rewrite.Evaluator,
 	statsCollector *stats.Collector,
-	semaphore chan struct{},
 	bg BackgroundConfig,
 ) *Handler {
 	h := &Handler{
@@ -103,7 +101,6 @@ func New(
 		edns:              ednsHandler,
 		rewrite:           rewriteEvaluator,
 		stats:             statsCollector,
-		semaphore:         semaphore,
 		cacheRefreshGroup: bg.RefreshGroup,
 		cacheRefreshCtx:   bg.RefreshCtx,
 		ctx:               bg.Ctx,
@@ -180,18 +177,6 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		msg := h.buildResponse(req)
 		msg.Rcode = dns.RcodeServerFailure
 		return msg
-	}
-
-	if h.semaphore != nil {
-		select {
-		case h.semaphore <- struct{}{}:
-			defer func() { <-h.semaphore }()
-		default:
-			log.Debugf("QUERY: max concurrent reached, returning SERVFAIL")
-			msg := h.buildResponse(req)
-			msg.Rcode = dns.RcodeServerFailure
-			return msg
-		}
 	}
 
 	if req == nil || len(req.Question) == 0 {

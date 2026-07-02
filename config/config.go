@@ -35,8 +35,6 @@ type ServerSettings struct {
 	LogLevel string       `json:"log_level"`
 	TLS      TLSSettings  `json:"tls"`
 	Features FeatureFlags `json:"features"`
-
-	MaxConcurrent int `json:"max_concurrent,omitempty"`
 }
 
 // TLSSettings configures TLS listener ports, certificates, and HTTPS settings.
@@ -407,9 +405,6 @@ func validateCacheAndStats(cfg *ServerConfig) error {
 		if cfg.Server.Features.Stats.ResetInterval < 0 {
 			return fmt.Errorf("server.features.stats.reset_interval must be zero or positive")
 		}
-	}
-	if cfg.Server.MaxConcurrent < 0 {
-		return fmt.Errorf("server.max_concurrent must be zero or positive")
 	}
 	return nil
 }

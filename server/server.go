@@ -125,14 +125,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	statsAdapter := &statsPersistAdapter{store: cacheStore}
 
-	var semaphore chan struct{}
-	if cfg.Server.MaxConcurrent > 0 {
-		semaphore = make(chan struct{}, cfg.Server.MaxConcurrent)
-	}
-
 	h := handler.New(
 		cfg, cacheStore, ednsHandler, rewriteEvaluator,
-		statsCollector, semaphore,
+		statsCollector,
 		handler.BackgroundConfig{
 			RefreshGroup: cacheRefreshGroup,
 			RefreshCtx:   cacheRefreshCtx,
