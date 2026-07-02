@@ -61,9 +61,11 @@ type LatencyProber interface {
 type Handler struct {
 	closed int32 // hot-path: checked on every query via atomic load
 
-	config            *config.ServerConfig
-	cache             cache.Store
-	reverseCache      interface{ ReverseLookup(net.IP) []cache.LookupResult }
+	config       *config.ServerConfig
+	cache        cache.Store
+	reverseCache interface {
+		ReverseLookup(net.IP) []cache.LookupResult
+	}
 	edns              *edns.Handler
 	rewrite           *rewrite.Evaluator
 	stats             *stats.Collector
