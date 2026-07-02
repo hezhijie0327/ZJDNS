@@ -111,9 +111,10 @@ func (r *Recursive) getRootServers() []string {
 		}
 	}
 
-	// Cold start: probe in background, return IANA order.
+	// Cold start: probe in background, return shuffled order so the
+	// concurrency-limited first batch is not always the same IANA set.
 	go r.probeRootAddrs()
-	return DefaultRootServers
+	return ShuffleSlice(DefaultRootServers)
 }
 
 // probeRootAddrs re-probes the full IANA root server list. Delegates to

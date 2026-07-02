@@ -83,7 +83,7 @@ const (
 
 	DefaultMaxPipe              = 16  // Max in-flight queries per TCP/DoT connection
 	DefaultMaxConns             = 4   // Max connections per upstream
-	DefaultMaxConcurrentNS      = 3   // Max concurrent NS queries during resolution
+	DefaultMaxConcurrentNS      = 6   // Max concurrent NS queries during resolution
 	DefaultMaxProbes            = 16  // Max concurrent latency probes
 	DefaultMaxIncomingStreams   = 256 // QUIC max incoming streams
 	DefaultMaxConcurrentStreams = 64

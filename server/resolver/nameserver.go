@@ -182,8 +182,10 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 		return nil
 	}
 
-	// Process NS records in delegation order — no ShuffleSlice.
-	// Latency-based ordering is applied after address resolution.
+	// Resolve NS addresses concurrently, then shuffle so the
+	// concurrency-limited first batch is not biased toward the
+	// delegation order. Latency-probed order is restored on
+	// subsequent queries via the cache.
 
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
 	defer resolveCancel()
@@ -336,8 +338,9 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	}
 
 	allMu.Lock()
-	defer allMu.Unlock()
-	return allAddresses
+	addresses := ShuffleSlice(allAddresses)
+	allMu.Unlock()
+	return addresses
 }
 
 // reorderRecordsByAddrs reorders A or AAAA DNS records so that records
