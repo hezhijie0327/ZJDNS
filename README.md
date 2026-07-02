@@ -115,8 +115,7 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 
 ```
 zjdns/
-├── cmd/zjdns/                        # 二进制入口（main.go + version.go）
-├── bench_test.go                     # 全局基准测试
+├── cmd/zjdns/                        # 二进制入口（main.go + version.go + bench_test.go）
 ├── config/                           # 配置类型（ECSConfig + ECSOption）、加载、验证、默认值
 ├── edns/                             # EDNS(0) 扩展（ECS、Cookie、EDE、Padding）
 │                                     #   ECSOption 为 config.ECSOption 的类型别名

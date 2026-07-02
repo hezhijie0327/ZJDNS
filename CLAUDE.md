@@ -160,7 +160,7 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 
 ```
 zjdns/
-├── cmd/zjdns/                     ← main.go + version.go (binary entry point)
+├── cmd/zjdns/                     ← main.go, version.go, bench_test.go (binary)
 ├── config/                        ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
 ├── cache/                         ← Store interface, memory/persist implementations
