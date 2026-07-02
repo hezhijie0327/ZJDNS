@@ -7,7 +7,6 @@ import (
 
 	"github.com/miekg/dns"
 
-	"zjdns/cache"
 	"zjdns/config"
 )
 
@@ -22,7 +21,7 @@ func testConfig() *config.ServerConfig {
 }
 
 func TestRecordRequest_CounterIncrements(t *testing.T) {
-	sc := New(testConfig(), nil)
+	sc := New(testConfig())
 	if sc == nil {
 		t.Fatal("New returned nil")
 	}
@@ -107,7 +106,7 @@ func TestRecordRequest_Protocols(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.protocol, func(t *testing.T) {
-			sc := New(testConfig(), nil)
+			sc := New(testConfig())
 			sc.RecordRequest(1*time.Millisecond, false, false, tt.protocol,
 				false, false, false, false, false, "", dns.RcodeSuccess)
 			snap := sc.Snapshot()
@@ -119,7 +118,7 @@ func TestRecordRequest_Protocols(t *testing.T) {
 }
 
 func TestSnapshot_Reset(t *testing.T) {
-	sc := New(testConfig(), nil)
+	sc := New(testConfig())
 	sc.RecordRequest(5*time.Millisecond, true, false, "UDP",
 		false, false, false, false, false, "secure", dns.RcodeSuccess)
 
@@ -139,7 +138,7 @@ func TestSnapshot_Reset(t *testing.T) {
 }
 
 func TestSnapshot_ResponseTime(t *testing.T) {
-	sc := New(testConfig(), nil)
+	sc := New(testConfig())
 	sc.RecordRequest(123*time.Millisecond, false, false, "UDP",
 		false, false, false, false, false, "", dns.RcodeSuccess)
 	sc.RecordRequest(77*time.Millisecond, false, false, "UDP",
@@ -154,22 +153,25 @@ func TestSnapshot_ResponseTime(t *testing.T) {
 	}
 }
 
-func TestToCacheEntry_LoadFromCacheEntry_RoundTrip(t *testing.T) {
-	sc := New(testConfig(), nil)
+func TestSerialize_Deserialize_RoundTrip(t *testing.T) {
+	sc := New(testConfig())
 	sc.RecordRequest(10*time.Millisecond, true, false, "DoT",
 		true, true, true, true, true, "bogus", dns.RcodeSuccess)
 
-	entry, err := sc.ToCacheEntry()
+	data, ttl, err := sc.Serialize()
 	if err != nil {
-		t.Fatalf("ToCacheEntry: %v", err)
+		t.Fatalf("Serialize: %v", err)
 	}
-	if entry == nil {
-		t.Fatal("ToCacheEntry returned nil")
+	if len(data) == 0 {
+		t.Fatal("Serialize returned empty data")
+	}
+	if ttl <= 0 {
+		t.Errorf("Serialize ttl = %d, want > 0", ttl)
 	}
 
-	sc2 := New(testConfig(), nil)
-	if err := sc2.LoadFromCacheEntry(entry); err != nil {
-		t.Fatalf("LoadFromCacheEntry: %v", err)
+	sc2 := New(testConfig())
+	if err := sc2.Deserialize(data); err != nil {
+		t.Fatalf("Deserialize: %v", err)
 	}
 
 	snap := sc2.Snapshot()
@@ -191,7 +193,7 @@ func TestToCacheEntry_LoadFromCacheEntry_RoundTrip(t *testing.T) {
 }
 
 func TestBuildStatsLogJSON(t *testing.T) {
-	sc := New(testConfig(), nil)
+	sc := New(testConfig())
 	sc.RecordRequest(50*time.Millisecond, true, false, "DoQ",
 		false, false, false, false, false, "secure", dns.RcodeSuccess)
 
@@ -239,17 +241,43 @@ func TestBuildStatsLogJSON(t *testing.T) {
 	}
 }
 
-func TestNew_RestoresFromCache(t *testing.T) {
-	sc := New(testConfig(), nil)
+// mockPersistStore is an in-memory PersistStore for testing.
+type mockPersistStore struct {
+	data map[string][]byte
+	ttl  map[string]int
+}
+
+func (m *mockPersistStore) SaveStats(key string, data []byte, ttl int) {
+	if m.data == nil {
+		m.data = make(map[string][]byte)
+		m.ttl = make(map[string]int)
+	}
+	m.data[key] = data
+	m.ttl[key] = ttl
+}
+
+func (m *mockPersistStore) LoadStats(key string) ([]byte, bool) {
+	d, ok := m.data[key]
+	return d, ok
+}
+
+func TestPersist_RoundTrip(t *testing.T) {
+	sc := New(testConfig())
 	sc.RecordRequest(1*time.Millisecond, false, false, "UDP",
 		false, false, false, false, false, "", dns.RcodeSuccess)
 
-	entry, _ := sc.ToCacheEntry()
-	// Use a simple in-memory store to simulate cache persistence
-	mc := cache.New(config.CacheSettings{Size: config.DefaultCacheSize})
-	mc.SetEntry(config.StatsPersistKey, entry)
+	store := &mockPersistStore{}
+	sc.Persist(store)
 
-	sc2 := New(testConfig(), mc)
+	sc2 := New(testConfig())
+	if data, ok := store.LoadStats(config.StatsPersistKey); ok {
+		if err := sc2.Deserialize(data); err != nil {
+			t.Fatalf("Deserialize: %v", err)
+		}
+	} else {
+		t.Fatal("LoadStats returned false after Persist")
+	}
+
 	snap := sc2.Snapshot()
 	if snap.TotalRequests != 1 {
 		t.Errorf("restored TotalRequests = %d, want 1", snap.TotalRequests)

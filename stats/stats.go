@@ -10,12 +10,18 @@ import (
 
 	"github.com/miekg/dns"
 
-	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/internal/log"
 )
 
 const persistKey = config.StatsPersistKey
+
+// PersistStore is the minimal interface for persisting and restoring stats
+// snapshots. Implementations are responsible for TTL management.
+type PersistStore interface {
+	SaveStats(key string, data []byte, ttl int)
+	LoadStats(key string) ([]byte, bool)
+}
 
 // Snapshot contains a point-in-time copy of all DNS request counters.
 type Snapshot struct {
@@ -217,28 +223,90 @@ func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
 	return json.Marshal(entry)
 }
 
-// New creates a Collector from the server config and optionally restores a
-// cached stats snapshot.
-func New(cfg *config.ServerConfig, store cache.Store) *Collector {
+// New creates a Collector from the server config. Callers that wish to
+// restore a previously persisted snapshot should call Deserialize after
+// construction.
+func New(cfg *config.ServerConfig) *Collector {
 	if cfg == nil {
 		return nil
 	}
-	coll := &Collector{
+	return &Collector{
 		enabled:    true,
 		persistTTL: cfg.Server.StatsPersistInterval(),
 	}
-	if store != nil {
-		if entry, found, expired := store.Get(persistKey); found && entry != nil {
-			if expired {
-				log.Debugf("STATS: cached stats snapshot is expired, starting fresh")
-			} else if err := coll.LoadFromCacheEntry(entry); err != nil {
-				log.Warnf("STATS: failed to restore stats from cache: %v", err)
-			} else {
-				log.Infof("STATS: restored stats from cache snapshot")
-			}
-		}
+}
+
+// Serialize returns the JSON-encoded snapshot payload and its TTL for
+// storage by a PersistStore.
+func (c *Collector) Serialize() ([]byte, int, error) {
+	if c == nil || !c.enabled {
+		return nil, 0, fmt.Errorf("stats disabled")
 	}
-	return coll
+	snap := c.Snapshot()
+	data, err := json.Marshal(snap)
+	if err != nil {
+		return nil, 0, fmt.Errorf("marshal stats snapshot: %w", err)
+	}
+	ttl := c.persistTTL
+	if ttl <= 0 {
+		ttl = config.DefaultStatsPersistInterval
+	}
+	return data, ttl, nil
+}
+
+// Deserialize restores collector state from a previously serialized payload.
+func (c *Collector) Deserialize(data []byte) error {
+	if c == nil {
+		return fmt.Errorf("stats Collector nil")
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("empty data")
+	}
+	var snap Snapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return fmt.Errorf("unmarshal stats snapshot: %w", err)
+	}
+	c.totalRequests.Store(snap.TotalRequests)
+	c.cacheHits.Store(snap.CacheHits)
+	c.cacheMisses.Store(snap.CacheMisses)
+	c.prefetchRequests.Store(snap.PrefetchRequests)
+	c.errorResponses.Store(snap.ErrorResponses)
+	c.staleResponses.Store(snap.StaleResponses)
+	c.fallbackRequests.Store(snap.FallbackRequests)
+	c.totalResponseTimeMs.Store(snap.TotalResponseTimeMs)
+	c.lastResponseTimeMs.Store(snap.LastResponseTimeMs)
+	c.udpRequests.Store(snap.UDPRequests)
+	c.tcpRequests.Store(snap.TCPRequests)
+	c.dotRequests.Store(snap.DOTRequests)
+	c.doqRequests.Store(snap.DOQRequests)
+	c.dohRequests.Store(snap.DOHRequests)
+	c.doh3Requests.Store(snap.DOH3Requests)
+	c.rewriteRequests.Store(snap.RewriteRequests)
+	c.hijackDetections.Store(snap.HijackDetections)
+	c.dnssecSecure.Store(snap.DNSSECSecure)
+	c.dnssecBogus.Store(snap.DNSSECBogus)
+	c.dnssecInsecure.Store(snap.DNSSECInsecure)
+	c.rcodeNoError.Store(snap.RCODENoError)
+	c.rcodeFormErr.Store(snap.RCODEFormErr)
+	c.rcodeServFail.Store(snap.RCODEServFail)
+	c.rcodeNXDomain.Store(snap.RCODENXDomain)
+	c.rcodeNotImp.Store(snap.RCODENotImp)
+	c.rcodeRefused.Store(snap.RCODERefused)
+	c.rcodeOther.Store(snap.RCODEOther)
+	return nil
+}
+
+// Persist writes the current stats snapshot to the given store.
+func (c *Collector) Persist(store PersistStore) {
+	if c == nil || !c.enabled || store == nil {
+		return
+	}
+	data, ttl, err := c.Serialize()
+	if err != nil {
+		log.Debugf("STATS: failed to serialize stats for persistence: %v", err)
+		return
+	}
+	store.SaveStats(persistKey, data, ttl)
 }
 
 // RecordRequest atomically increments counters for a single DNS query event.
@@ -425,85 +493,4 @@ func (c *Collector) FetchStats() (*Snapshot, error) {
 	}
 	s := c.Snapshot()
 	return &s, nil
-}
-
-// ToCacheEntry serializes the current snapshot into a cache.Entry for
-// persistence.
-func (c *Collector) ToCacheEntry() (*cache.Entry, error) {
-	if c == nil || !c.enabled {
-		return nil, fmt.Errorf("stats disabled")
-	}
-	snap := c.Snapshot()
-	data, err := json.Marshal(snap)
-	if err != nil {
-		return nil, fmt.Errorf("marshal stats snapshot: %w", err)
-	}
-	now := time.Now().Unix()
-	ttl := c.persistTTL
-	if ttl <= 0 {
-		ttl = config.DefaultStatsPersistInterval
-	}
-	return &cache.Entry{
-		Timestamp:   now,
-		AccessTime:  now,
-		TTL:         ttl,
-		OriginalTTL: ttl,
-		Payload:     data,
-	}, nil
-}
-
-// LoadFromCacheEntry restores collector state from a previously persisted
-// cache entry.
-func (c *Collector) LoadFromCacheEntry(entry *cache.Entry) error {
-	if c == nil {
-		return fmt.Errorf("stats Collector nil")
-	}
-	if entry == nil || len(entry.Payload) == 0 {
-		return fmt.Errorf("empty cache entry")
-	}
-	var snap Snapshot
-	if err := json.Unmarshal(entry.Payload, &snap); err != nil {
-		return fmt.Errorf("unmarshal stats snapshot: %w", err)
-	}
-	c.totalRequests.Store(snap.TotalRequests)
-	c.cacheHits.Store(snap.CacheHits)
-	c.cacheMisses.Store(snap.CacheMisses)
-	c.prefetchRequests.Store(snap.PrefetchRequests)
-	c.errorResponses.Store(snap.ErrorResponses)
-	c.staleResponses.Store(snap.StaleResponses)
-	c.fallbackRequests.Store(snap.FallbackRequests)
-	c.totalResponseTimeMs.Store(snap.TotalResponseTimeMs)
-	c.lastResponseTimeMs.Store(snap.LastResponseTimeMs)
-	c.udpRequests.Store(snap.UDPRequests)
-	c.tcpRequests.Store(snap.TCPRequests)
-	c.dotRequests.Store(snap.DOTRequests)
-	c.doqRequests.Store(snap.DOQRequests)
-	c.dohRequests.Store(snap.DOHRequests)
-	c.doh3Requests.Store(snap.DOH3Requests)
-	c.rewriteRequests.Store(snap.RewriteRequests)
-	c.hijackDetections.Store(snap.HijackDetections)
-	c.dnssecSecure.Store(snap.DNSSECSecure)
-	c.dnssecBogus.Store(snap.DNSSECBogus)
-	c.dnssecInsecure.Store(snap.DNSSECInsecure)
-	c.rcodeNoError.Store(snap.RCODENoError)
-	c.rcodeFormErr.Store(snap.RCODEFormErr)
-	c.rcodeServFail.Store(snap.RCODEServFail)
-	c.rcodeNXDomain.Store(snap.RCODENXDomain)
-	c.rcodeNotImp.Store(snap.RCODENotImp)
-	c.rcodeRefused.Store(snap.RCODERefused)
-	c.rcodeOther.Store(snap.RCODEOther)
-	return nil
-}
-
-// Persist writes the current stats snapshot to the given cache store.
-func (c *Collector) Persist(store cache.Store) {
-	if c == nil || !c.enabled || store == nil {
-		return
-	}
-	entry, err := c.ToCacheEntry()
-	if err != nil {
-		log.Debugf("STATS: failed to serialize stats for cache persistence: %v", err)
-		return
-	}
-	store.SetEntry(persistKey, entry)
 }

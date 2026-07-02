@@ -185,7 +185,7 @@ func (s *Server) logStatsNow(trigger string) {
 
 	log.Infof("STATS: trigger=%s payload=%s", trigger, payload)
 
-	s.stats.Persist(s.cache)
+	s.stats.Persist(s.statsAdapter)
 }
 
 func (s *Server) shutdownServer() {

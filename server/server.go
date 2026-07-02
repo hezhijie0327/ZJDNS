@@ -31,7 +31,33 @@ import (
 	"zjdns/server/security"
 	servertls "zjdns/server/tls"
 	"zjdns/stats"
+	"time"
 )
+
+// statsPersistAdapter bridges cache.Store to stats.PersistStore for stats
+// persistence without importing cache from the stats package.
+type statsPersistAdapter struct {
+	store cache.Store
+}
+
+func (a *statsPersistAdapter) SaveStats(key string, data []byte, ttl int) {
+	now := time.Now().Unix()
+	a.store.SetEntry(key, &cache.Entry{
+		Timestamp:   now,
+		AccessTime:  now,
+		TTL:         ttl,
+		OriginalTTL: ttl,
+		Payload:     data,
+	})
+}
+
+func (a *statsPersistAdapter) LoadStats(key string) ([]byte, bool) {
+	entry, found, expired := a.store.Get(key)
+	if !found || entry == nil || expired {
+		return nil, false
+	}
+	return entry.Payload, true
+}
 
 // Server is the core DNS server handling query processing, protocol listeners, and lifecycle.
 type Server struct {
@@ -49,6 +75,7 @@ type Server struct {
 	rewrite           *rewrite.Evaluator
 	cidrFilter        *cidr.Filter
 	stats             *stats.Collector
+	statsAdapter      *statsPersistAdapter
 	pprofServer       *http.Server
 	ctx               context.Context
 	cancel            context.CancelCauseFunc
@@ -114,12 +141,28 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	cacheStore := cache.New(cfg.Server.Features.Cache)
 
+	statsCollector := stats.New(cfg)
+
+	// Restore stats from cache if a snapshot was persisted.
+	if entry, found, expired := cacheStore.Get(config.StatsPersistKey); found && entry != nil {
+		if expired {
+			log.Debugf("STATS: cached stats snapshot is expired, starting fresh")
+		} else if err := statsCollector.Deserialize(entry.Payload); err != nil {
+			log.Warnf("STATS: failed to restore stats from cache: %v", err)
+		} else {
+			log.Infof("STATS: restored stats from cache snapshot")
+		}
+	}
+
+	statsAdapter := &statsPersistAdapter{store: cacheStore}
+
 	server := &Server{
 		config:            cfg,
 		edns:              ednsHandler,
 		rewrite:           rewriteEvaluator,
 		cidrFilter:        cidrFilter,
-		stats:             stats.New(cfg, cacheStore),
+		stats:             statsCollector,
+		statsAdapter:      statsAdapter,
 		cache:             cacheStore,
 		ctx:               ctx,
 		cancel:            cancel,
