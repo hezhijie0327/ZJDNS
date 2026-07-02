@@ -96,7 +96,7 @@ func (s *Server) startDOHServer(port string) error {
 	return nil
 }
 
-func (s *Server) startDoH3Server(port string) error {
+func (s *Server) startDOH3Server(port string) error {
 	addr := ":" + port
 
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
@@ -183,7 +183,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, statusCode := s.parseDoHRequest(r, w)
+	req, statusCode := s.parseDOHRequest(r, w)
 	if req == nil {
 		http.Error(w, http.StatusText(statusCode), statusCode)
 		return
@@ -201,7 +201,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	response := s.handler.ServeDNS(req, clientIP, true, protocol)
 	pool.DefaultMessagePool.Put(req)
 
-	if err := s.respondDoH(w, response); err != nil {
+	if err := s.respondDOH(w, response); err != nil {
 		log.Errorf("TLS: DoH response failed: %v", err)
 	}
 	if response != nil {
@@ -209,7 +209,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*dns.Msg, int) {
+func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (*dns.Msg, int) {
 	var buf []byte
 	var err error
 
@@ -252,7 +252,7 @@ func (s *Server) parseDoHRequest(r *http.Request, w http.ResponseWriter) (*dns.M
 	return req, http.StatusOK
 }
 
-func (s *Server) respondDoH(w http.ResponseWriter, response *dns.Msg) error {
+func (s *Server) respondDOH(w http.ResponseWriter, response *dns.Msg) error {
 	if response == nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return nil

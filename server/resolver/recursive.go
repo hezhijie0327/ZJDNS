@@ -105,7 +105,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 			}
 			return nil, nil, nil, false, nil, "", hijackSeen, fmt.Errorf("root domain query: %w", err)
 		}
-		cryptoValidated := r.validateWithDNSSEC(response, currentDomain, chain)
+		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessagePool.Put(response)
@@ -142,13 +142,13 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 		// ── End TCP fallback ────────────────────────────────────────
 
 		// Cryptographic DNSSEC validation at this delegation level
-		cryptoValidated := r.validateWithDNSSEC(response, currentDomain, chain)
+		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 
 		validated := cryptoValidated
 
 		if len(response.Answer) > 0 {
-			validated = r.finalizeDNSSEC(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain)
+			validated = r.isDNSSECValid(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain)
 
 			// If the answer RRSIGs are signed by a child zone's keys
 			// (zone cut), process the response as a referral instead of

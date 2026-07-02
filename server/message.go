@@ -26,7 +26,7 @@ func (s *Server) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, cl
 	}
 
 	if ecsOpt == nil && len(req.Question) > 0 {
-		ecsOpt = s.edns.DefaultECSForQType(req.Question[0].Qtype)
+		ecsOpt = s.edns.ECSForQType(req.Question[0].Qtype)
 	}
 
 	clientWantsPadding := edns.HasPaddingOption(req)

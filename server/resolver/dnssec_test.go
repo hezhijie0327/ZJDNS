@@ -204,7 +204,7 @@ func TestIsZoneCut_ConsolidatedWithGetZoneCutSigner(t *testing.T) {
 	}
 }
 
-// ── DNSSEC Chain: finalizeDNSSEC EDE codes ────────────────────────────────────
+// ── DNSSEC Chain: isDNSSECValid EDE codes ────────────────────────────────────
 
 func TestDnssecChain_EDECodeNotOverwritten(t *testing.T) {
 	// Verify that when RRSIG verification fails with an error,
@@ -318,7 +318,7 @@ func TestLameDelegation_AuthoritativeNODATA(t *testing.T) {
 	}
 }
 
-// ── DNSSEC Chain: validateWithDNSSEC ──────────────────────────────────────────
+// ── DNSSEC Chain: isValidWithDNSSEC ──────────────────────────────────────────
 
 func TestValidateWithDNSSEC_NoDNSKEYs(t *testing.T) {
 	rr := newTestRecursive()
@@ -327,9 +327,9 @@ func TestValidateWithDNSSEC_NoDNSKEYs(t *testing.T) {
 	msg := &dns.Msg{Answer: []dns.RR{a}}
 	chain := &dnssecChain{} // no zoneDNSKEYs, no childDS
 
-	validated := rr.validateWithDNSSEC(msg, zone+".", chain)
+	validated := rr.isValidWithDNSSEC(msg, zone+".", chain)
 	if validated {
-		t.Error("validateWithDNSSEC should return false when no DNSKEYs available")
+		t.Error("isValidWithDNSSEC should return false when no DNSKEYs available")
 	}
 }
 
@@ -347,9 +347,9 @@ func TestValidateWithDNSSEC_WithVerifiedKeys(t *testing.T) {
 		zoneDNSKEYs: []*dns.DNSKEY{ksk, zsk},
 	}
 
-	validated := rr.validateWithDNSSEC(msg, zone+".", chain)
+	validated := rr.isValidWithDNSSEC(msg, zone+".", chain)
 	if !validated {
-		t.Error("validateWithDNSSEC should return true when DNSKEYs verify the answer RRSIGs")
+		t.Error("isValidWithDNSSEC should return true when DNSKEYs verify the answer RRSIGs")
 	}
 }
 
@@ -369,9 +369,9 @@ func TestValidateWithDNSSEC_WrongDNSKEY(t *testing.T) {
 		zoneDNSKEYs: []*dns.DNSKEY{wrongKSK, wrongZSK}, // wrong zone's keys
 	}
 
-	validated := rr.validateWithDNSSEC(msg, zone+".", chain)
+	validated := rr.isValidWithDNSSEC(msg, zone+".", chain)
 	if validated {
-		t.Error("validateWithDNSSEC should return false when DNSKEYs don't match RRSIG")
+		t.Error("isValidWithDNSSEC should return false when DNSKEYs don't match RRSIG")
 	}
 }
 

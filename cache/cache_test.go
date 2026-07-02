@@ -102,7 +102,7 @@ func TestSetEntry_CustomEntry(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	now := time.Now().Unix()
-	entry := &CacheEntry{
+	entry := &Entry{
 		Timestamp:   now,
 		AccessTime:  now,
 		TTL:         60,
@@ -125,44 +125,44 @@ func TestSetEntry_CustomEntry(t *testing.T) {
 
 // ── TTL / Expiry ──────────────────────────────────────────────────────────────────
 
-func TestCacheEntry_IsExpired(t *testing.T) {
+func TestEntry_IsExpired(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour).Unix()
-	entry := &CacheEntry{Timestamp: past, TTL: 60}
+	entry := &Entry{Timestamp: past, TTL: 60}
 	if !entry.IsExpired() {
 		t.Error("entry in the past should be expired")
 	}
 
 	future := time.Now().Unix()
-	entry = &CacheEntry{Timestamp: future, TTL: 3600}
+	entry = &Entry{Timestamp: future, TTL: 3600}
 	if entry.IsExpired() {
 		t.Error("entry with future timestamp should not be expired")
 	}
 }
 
-func TestCacheEntry_ShouldRefresh(t *testing.T) {
+func TestEntry_ShouldRefresh(t *testing.T) {
 	past := time.Now().Add(-2 * time.Hour).Unix()
-	entry := &CacheEntry{Timestamp: past, TTL: 60, OriginalTTL: 3600}
+	entry := &Entry{Timestamp: past, TTL: 60, OriginalTTL: 3600}
 	if !entry.ShouldRefresh() {
 		t.Error("expired entry beyond OriginalTTL should refresh")
 	}
 }
 
-func TestCacheEntry_CanServeExpired(t *testing.T) {
+func TestEntry_CanServeExpired(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour).Unix()
-	entry := &CacheEntry{Timestamp: past, TTL: 300, OriginalTTL: 3600}
+	entry := &Entry{Timestamp: past, TTL: 300, OriginalTTL: 3600}
 	if !entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		t.Error("entry within config.DefaultStaleMaxAge should be servable")
 	}
 
 	veryOld := time.Now().Add(-time.Duration(config.DefaultStaleMaxAge+3600) * time.Second).Unix()
-	entry = &CacheEntry{Timestamp: veryOld, TTL: 60, OriginalTTL: 60}
+	entry = &Entry{Timestamp: veryOld, TTL: 60, OriginalTTL: 60}
 	if entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		t.Error("entry older than config.DefaultStaleMaxAge should not be servable")
 	}
 }
 
-func TestCacheEntry_RemainingTTL(t *testing.T) {
-	entry := &CacheEntry{Timestamp: time.Now().Unix(), TTL: 300}
+func TestEntry_RemainingTTL(t *testing.T) {
+	entry := &Entry{Timestamp: time.Now().Unix(), TTL: 300}
 	remaining := entry.RemainingTTL()
 	if remaining < 299 || remaining > 300 {
 		t.Errorf("remaining TTL = %d, want ~300", remaining)

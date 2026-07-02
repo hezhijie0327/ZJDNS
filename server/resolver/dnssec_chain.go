@@ -29,7 +29,7 @@ type dnssecChain struct {
 	dsPresentButUnverified bool   // DS records found but RRSIG verification failed
 }
 
-func (r *Recursive) validateWithDNSSEC(response *dns.Msg, currentDomain string, chain *dnssecChain) bool {
+func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, chain *dnssecChain) bool {
 	crypto := r.resolver.validator.Crypto
 	// Extract DNSKEY records from the response
 	dnskeyRecords := security.FindDNSKEYs(response.Answer)
@@ -245,7 +245,7 @@ func (r *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string,
 	return nil
 }
 
-func (r *Recursive) finalizeDNSSEC(ctx context.Context, response *dns.Msg, nameservers []string, question dns.Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain) bool {
+func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, nameservers []string, question dns.Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain) bool {
 	crypto := r.resolver.validator.Crypto
 	if len(response.Answer) == 0 {
 		return false

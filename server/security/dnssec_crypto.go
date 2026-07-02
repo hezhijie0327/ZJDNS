@@ -323,7 +323,7 @@ func canonicalCompare(a, b string) int {
 	return 1 // b is shorter, so a > b
 }
 
-// dnsutilCompareDomainInRange checks whether a domain name falls within an
+// isDomainInRange checks whether a domain name falls within an
 // NSEC record's coverage range using DNS canonical ordering (RFC 4034 section 6.1).
 //
 // In the normal case (lower < upper), the name is covered if
@@ -333,7 +333,7 @@ func canonicalCompare(a, b string) int {
 // In the wrap-around case (lower >= upper), where the NSEC covers the last
 // name in the zone and wraps back to the first, the name is covered if
 // lower < name OR name < upper.
-func dnsutilCompareDomainInRange(name, lower, upper string) bool {
+func isDomainInRange(name, lower, upper string) bool {
 	loName := canonicalCompare(lower, name) // lower vs name
 	naUp := canonicalCompare(name, upper)   // name vs upper
 	loUp := canonicalCompare(lower, upper)  // lower vs upper
@@ -540,7 +540,7 @@ func (c *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname str
 							// [owner name, next domain) in canonical ordering.
 							lower := strings.ToLower(nsec.Header().Name)
 							upper := strings.ToLower(nsec.NextDomain)
-							if dnsutilCompareDomainInRange(normalizedQname, lower, upper) {
+							if isDomainInRange(normalizedQname, lower, upper) {
 								return true, nil
 							}
 						case "NODATA":
@@ -588,7 +588,7 @@ func (c *CryptoValidator) validateDenialOfExistence(response *dns.Msg, qname str
 				case "NXDOMAIN":
 					owner := strings.ToLower(nsec3.Header().Name)
 					next := strings.ToLower(nsec3.NextDomain)
-					if dnsutilCompareDomainInRange(hashedQname, owner, next) {
+					if isDomainInRange(hashedQname, owner, next) {
 						return true, nil
 					}
 				case "NODATA":
@@ -660,7 +660,7 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 	}
 
 	now := log.NowUnix()
-	entry := &cache.CacheEntry{
+	entry := &cache.Entry{
 		Timestamp:   now,
 		AccessTime:  now,
 		TTL:         ttl,

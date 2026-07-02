@@ -237,7 +237,7 @@ func (s *Server) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnecti
 	}
 
 	if ecsOpt == nil {
-		ecsOpt = s.edns.DefaultECSForQType(question.Qtype)
+		ecsOpt = s.edns.ECSForQType(question.Qtype)
 	}
 
 	cacheKey := cache.BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC)
@@ -298,7 +298,7 @@ func (s *Server) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption)
 	return records
 }
 
-func (s *Server) processCacheHit(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool, dnssecStatus *string) *dns.Msg {
+func (s *Server) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool, dnssecStatus *string) *dns.Msg {
 	// Record DNSSEC status for cache hits
 	if entry.Validated {
 		*dnssecStatus = config.DNSSECStatusSecure
@@ -350,7 +350,7 @@ func (s *Server) shouldStartPrefetch(cacheKey string) bool {
 	return true
 }
 
-func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.Entry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
 	msg := s.buildResponse(req)
 
 	responseTTL := entry.RemainingTTL()
@@ -380,7 +380,7 @@ func (s *Server) buildCacheResponse(req *dns.Msg, entry *cache.CacheEntry, isExp
 	return msg
 }
 
-func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.CacheEntry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool, dnssecStatus *string) *dns.Msg {
+func (s *Server) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool, dnssecStatus *string) *dns.Msg {
 	if s.config.Server.Features.Cache.PreferStale {
 		if staleServed != nil {
 			*staleServed = true
@@ -613,7 +613,7 @@ func (s *Server) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt
 	return msg
 }
 
-func (s *Server) refreshCacheEntry(ctx context.Context, question dns.Question, ecs *edns.ECSOption, cacheKey string, _ *cache.CacheEntry) error {
+func (s *Server) refreshCacheEntry(ctx context.Context, question dns.Question, ecs *edns.ECSOption, cacheKey string, _ *cache.Entry) error {
 	defer dnsutil.HandlePanic("cache refresh")
 
 	if atomic.LoadInt32(&s.closed) != 0 {

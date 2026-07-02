@@ -53,7 +53,7 @@ func (h *http3Transport) Close() (err error) {
 	return h.baseTransport.Close()
 }
 
-func (c *Client) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
+func (c *Client) executeDOH3(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
@@ -65,13 +65,13 @@ func (c *Client) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.U
 
 	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 
-	client, isCached := c.getDoH3Client(key)
+	client, isCached := c.getDOH3Client(key)
 	if !isCached {
-		client = c.createDoH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
+		client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 	}
 
 	// First attempt with the cached client.
-	resp, err := executeDoHHTTPRequest(ctx, msg, parsedURL, client)
+	resp, err := executeDOHHTTPRequest(ctx, msg, parsedURL, client)
 	if err == nil {
 		return resp, nil
 	}
@@ -98,8 +98,8 @@ func (c *Client) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.U
 			}
 			c.doh3TransportMu.Unlock()
 
-			client = c.createDoH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
-			resp, err = executeDoHHTTPRequest(ctx, msg, parsedURL, client)
+			client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
+			resp, err = executeDOHHTTPRequest(ctx, msg, parsedURL, client)
 			if err == nil {
 				return resp, nil
 			}
@@ -121,14 +121,14 @@ func (c *Client) executeDoH3(ctx context.Context, msg *dns.Msg, server *config.U
 	return resp, err
 }
 
-func (c *Client) getDoH3Client(key string) (*http.Client, bool) {
+func (c *Client) getDOH3Client(key string) (*http.Client, bool) {
 	c.doh3TransportMu.RLock()
 	defer c.doh3TransportMu.RUnlock()
 	client, ok := c.doh3Transports[key]
 	return client, ok
 }
 
-func (c *Client) createDoH3Client(key, host, proxyURL string, tlsConfig *tls.Config) *http.Client {
+func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Config) *http.Client {
 	c.doh3TransportMu.Lock()
 	defer c.doh3TransportMu.Unlock()
 

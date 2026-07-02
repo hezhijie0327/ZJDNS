@@ -21,7 +21,7 @@ type persistedCacheSnapshot struct {
 
 type persistedCacheItem struct {
 	Key   string      `json:"key"`
-	Entry *CacheEntry `json:"entry,omitempty"`
+	Entry *Entry `json:"entry,omitempty"`
 	PTRs  []ptrRecord `json:"ptrs,omitempty"`
 }
 

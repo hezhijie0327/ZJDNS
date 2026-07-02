@@ -293,9 +293,9 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 	case config.ProtoDOQ, config.ProtoQUIC:
 		return c.executeQUIC(ctx, msg, server, c.stdTLSConfig(server))
 	case config.ProtoDOH, config.ProtoHTTP:
-		return c.executeDoH(ctx, msg, server, c.eTLSClientConfig(server))
+		return c.executeDOH(ctx, msg, server, c.eTLSClientConfig(server))
 	case config.ProtoDOH3, config.ProtoHTTP3:
-		return c.executeDoH3(ctx, msg, server, c.stdTLSConfig(server))
+		return c.executeDOH3(ctx, msg, server, c.stdTLSConfig(server))
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}
@@ -392,7 +392,7 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 		}
 		key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 		tlsConfig := c.eTLSClientConfig(server)
-		c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
+		c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
 		// H2 connections are established lazily on first use; the transport
 		// is now ready and will pool connections once used.
 		log.Debugf("UPSTREAM: pre-warmed DoH transport for %s (key=%s)", server.Address, key)
@@ -408,7 +408,7 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 		}
 		key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 		tlsConfig := c.stdTLSConfig(server)
-		c.createDoH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
+		c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 		log.Debugf("UPSTREAM: pre-warmed DoH3 transport for %s (key=%s)", server.Address, key)
 	}
 }

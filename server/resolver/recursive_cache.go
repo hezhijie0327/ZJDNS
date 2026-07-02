@@ -44,7 +44,7 @@ func addrsToTXTRecords(name string, addrs []string, ttlSeconds int) []dns.RR {
 
 // readTXTAddrs extracts "ip:port" strings from a cache entry stored by
 // addrsToTXTRecords (or by probeAndCacheNSGlue).
-func readTXTAddrs(entry *cache.CacheEntry) []string {
+func readTXTAddrs(entry *cache.Entry) []string {
 	if entry == nil || len(entry.Answer) == 0 {
 		return nil
 	}

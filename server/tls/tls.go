@@ -369,7 +369,7 @@ func (s *Server) Start(httpsPort string) error {
 
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("DoH3 server")
-			if err := s.startDoH3Server(httpsPort); err != nil {
+			if err := s.startDOH3Server(httpsPort); err != nil {
 				return fmt.Errorf("DoH3 startup: %w", err)
 			}
 			<-ctx.Done()

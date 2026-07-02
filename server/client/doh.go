@@ -16,7 +16,7 @@ import (
 	"zjdns/config"
 )
 
-func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *eTLS.Config) (*dns.Msg, error) {
+func (c *Client) executeDOH(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *eTLS.Config) (*dns.Msg, error) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
@@ -28,13 +28,13 @@ func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.Up
 
 	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 
-	client, isCached := c.getDoHClient(key)
+	client, isCached := c.getDOHClient(key)
 	if !isCached {
-		client = c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
+		client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
 	}
 
 	// First attempt with the cached client.
-	resp, err := executeDoHHTTPRequest(ctx, msg, parsedURL, client)
+	resp, err := executeDOHHTTPRequest(ctx, msg, parsedURL, client)
 	if err == nil {
 		return resp, nil
 	}
@@ -53,8 +53,8 @@ func (c *Client) executeDoH(ctx context.Context, msg *dns.Msg, server *config.Up
 			}
 			c.dohTransportMu.Unlock()
 
-			client = c.createDoHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
-			resp, err = executeDoHHTTPRequest(ctx, msg, parsedURL, client)
+			client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
+			resp, err = executeDOHHTTPRequest(ctx, msg, parsedURL, client)
 			if err == nil {
 				return resp, nil
 			}
@@ -95,7 +95,7 @@ func transportKey(host, serverName string, skipVerify bool, proxyURL string) str
 	return b.String()
 }
 
-func (c *Client) getDoHClient(key string) (*http.Client, bool) {
+func (c *Client) getDOHClient(key string) (*http.Client, bool) {
 	c.dohTransportMu.RLock()
 	defer c.dohTransportMu.RUnlock()
 	client, ok := c.dohTransports[key]
@@ -116,7 +116,7 @@ func shouldRetryHTTP(err error) bool {
 	return false
 }
 
-func (c *Client) createDoHClient(host, serverName string, skipVerify bool, proxyURL string, tlsConfig *eTLS.Config) *http.Client {
+func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxyURL string, tlsConfig *eTLS.Config) *http.Client {
 	c.dohTransportMu.Lock()
 	defer c.dohTransportMu.Unlock()
 

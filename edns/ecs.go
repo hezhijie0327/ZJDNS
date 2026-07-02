@@ -176,9 +176,9 @@ func (h *Handler) DefaultECS() *ECSOption {
 	return h.defaultECSIPv6.Load()
 }
 
-// DefaultECSForQType returns the default ECS option appropriate for the given
+// ECSForQType returns the default ECS option appropriate for the given
 // query type.
-func (h *Handler) DefaultECSForQType(qtype uint16) *ECSOption {
+func (h *Handler) ECSForQType(qtype uint16) *ECSOption {
 	if h == nil || h.defaultECSConfig.IsEmpty() {
 		return nil
 	}
@@ -235,7 +235,7 @@ func (h *Handler) RefreshDefaultECS() ([]*ECSOption, bool, error) {
 			firstErr = fmt.Errorf("refresh IPv4 ECS: %w", err)
 		} else if ecs != nil {
 			old := h.defaultECSIPv4.Load()
-			if !ecsOptionEqual(old, ecs) {
+			if !isECSOptionEqual(old, ecs) {
 				h.defaultECSIPv4.Store(ecs)
 				changed = true
 				changedECS = append(changedECS, ecs)
@@ -252,7 +252,7 @@ func (h *Handler) RefreshDefaultECS() ([]*ECSOption, bool, error) {
 			}
 		} else if ecs != nil {
 			old := h.defaultECSIPv6.Load()
-			if !ecsOptionEqual(old, ecs) {
+			if !isECSOptionEqual(old, ecs) {
 				h.defaultECSIPv6.Store(ecs)
 				changed = true
 				changedECS = append(changedECS, ecs)
@@ -263,7 +263,7 @@ func (h *Handler) RefreshDefaultECS() ([]*ECSOption, bool, error) {
 	return changedECS, changed, firstErr
 }
 
-func ecsOptionEqual(a, b *ECSOption) bool {
+func isECSOptionEqual(a, b *ECSOption) bool {
 	if a == nil || b == nil {
 		return a == b
 	}

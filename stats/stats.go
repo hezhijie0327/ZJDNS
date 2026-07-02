@@ -427,9 +427,9 @@ func (c *Collector) FetchStats() (*Snapshot, error) {
 	return &s, nil
 }
 
-// ToCacheEntry serializes the current snapshot into a cache.CacheEntry for
+// ToCacheEntry serializes the current snapshot into a cache.Entry for
 // persistence.
-func (c *Collector) ToCacheEntry() (*cache.CacheEntry, error) {
+func (c *Collector) ToCacheEntry() (*cache.Entry, error) {
 	if c == nil || !c.enabled {
 		return nil, fmt.Errorf("stats disabled")
 	}
@@ -443,7 +443,7 @@ func (c *Collector) ToCacheEntry() (*cache.CacheEntry, error) {
 	if ttl <= 0 {
 		ttl = config.DefaultStatsPersistInterval
 	}
-	return &cache.CacheEntry{
+	return &cache.Entry{
 		Timestamp:   now,
 		AccessTime:  now,
 		TTL:         ttl,
@@ -454,7 +454,7 @@ func (c *Collector) ToCacheEntry() (*cache.CacheEntry, error) {
 
 // LoadFromCacheEntry restores collector state from a previously persisted
 // cache entry.
-func (c *Collector) LoadFromCacheEntry(entry *cache.CacheEntry) error {
+func (c *Collector) LoadFromCacheEntry(entry *cache.Entry) error {
 	if c == nil {
 		return fmt.Errorf("stats Collector nil")
 	}

@@ -53,7 +53,7 @@ type MemoryCache struct {
 }
 
 type cacheItem struct {
-	entry      *CacheEntry
+	entry      *Entry
 	size       int64
 	lastAccess atomic.Int64
 }
@@ -105,7 +105,7 @@ func New(settings config.CacheSettings) *MemoryCache {
 
 // Get retrieves a cache entry by key, returning the entry, whether found,
 // and whether the entry is expired.
-func (m *MemoryCache) Get(key string) (*CacheEntry, bool, bool) {
+func (m *MemoryCache) Get(key string) (*Entry, bool, bool) {
 	if atomic.LoadInt32(&m.closed) != 0 {
 		return nil, false, false
 	}
@@ -138,7 +138,7 @@ func (m *MemoryCache) SetWithDNSSEC(key string, answer, authority, additional []
 	now := log.NowUnix()
 	ttl := minTTL(answer, authority, additional)
 
-	entry := &CacheEntry{
+	entry := &Entry{
 		Answer:          compact(answer),
 		Authority:       compact(authority),
 		Additional:      compact(additional),
@@ -158,9 +158,9 @@ func (m *MemoryCache) SetWithDNSSEC(key string, answer, authority, additional []
 	m.setEntryInternal(key, entry)
 }
 
-// SetEntry stores a pre-built CacheEntry in the cache under the given key.
+// SetEntry stores a pre-built Entry in the cache under the given key.
 // It deep-clones the entry to protect against callers that retain a reference.
-func (m *MemoryCache) SetEntry(key string, entry *CacheEntry) {
+func (m *MemoryCache) SetEntry(key string, entry *Entry) {
 	if atomic.LoadInt32(&m.closed) != 0 || entry == nil {
 		return
 	}
@@ -171,7 +171,7 @@ func (m *MemoryCache) SetEntry(key string, entry *CacheEntry) {
 // must not retain any reference to the entry after this call — ownership is
 // transferred to the cache. This avoids a wasted clone-and-copy when the
 // entry is freshly allocated (e.g. from SetWithDNSSEC).
-func (m *MemoryCache) setEntryInternal(key string, entry *CacheEntry) {
+func (m *MemoryCache) setEntryInternal(key string, entry *Entry) {
 	ptrRecords := extractPTRRecords(entry)
 	estSize := estimateEntrySize(key, entry, ptrRecords)
 
@@ -349,7 +349,7 @@ func (m *MemoryCache) evictToBudget() {
 	}
 }
 
-func extractPTRRecords(entry *CacheEntry) []ptrRecord {
+func extractPTRRecords(entry *Entry) []ptrRecord {
 	if entry == nil {
 		return nil
 	}
@@ -414,7 +414,7 @@ func (m *MemoryCache) removePTRLocked(key string) {
 	delete(m.entryPTRs, key)
 }
 
-func estimateEntrySize(key string, entry *CacheEntry, ptrs []ptrRecord) int64 {
+func estimateEntrySize(key string, entry *Entry, ptrs []ptrRecord) int64 {
 	if entry == nil {
 		return 0
 	}
@@ -443,7 +443,7 @@ func estimateEntrySize(key string, entry *CacheEntry, ptrs []ptrRecord) int64 {
 	return size
 }
 
-func cloneEntry(entry *CacheEntry) *CacheEntry {
+func cloneEntry(entry *Entry) *Entry {
 	if entry == nil {
 		return nil
 	}
@@ -454,9 +454,9 @@ func cloneEntry(entry *CacheEntry) *CacheEntry {
 	return &cloned
 }
 
-// cloneEntryForPersist deep-copies a CacheEntry and clears cached RR fields
+// cloneEntryForPersist deep-copies a Entry and clears cached RR fields
 // (which are interface types) so gob can encode without type registration.
-func cloneEntryForPersist(entry *CacheEntry) *CacheEntry {
+func cloneEntryForPersist(entry *Entry) *Entry {
 	cloned := cloneEntry(entry)
 	if cloned == nil {
 		return nil
@@ -514,7 +514,7 @@ func compact(rrs []dns.RR) []*CompactRecord {
 			continue
 		}
 		seen[rrText] = struct{}{}
-		if cr := createCompactRecord(rr); cr != nil {
+		if cr := newCompactRecord(rr); cr != nil {
 			result = append(result, cr)
 		}
 	}

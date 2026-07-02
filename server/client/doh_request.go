@@ -15,11 +15,11 @@ import (
 	"zjdns/internal/pool"
 )
 
-// executeDoHHTTPRequest is the shared DoH/DoH3 request logic.
-// Both executeDoH and executeDoH3 differ only in which *http.Client they
+// executeDOHHTTPRequest is the shared DoH/DoH3 request logic.
+// Both executeDOH and executeDOH3 differ only in which *http.Client they
 // construct (HTTP/2 vs HTTP/3 transport); the HTTP request/response dance
 // is identical. This function factors out that common body.
-func executeDoHHTTPRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient *http.Client) (*dns.Msg, error) {
+func executeDOHHTTPRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient *http.Client) (*dns.Msg, error) {
 	originalID := msg.Id
 	msg.Id = 0
 

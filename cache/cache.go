@@ -30,16 +30,16 @@ var cacheSnapshotMagic = "ZJDNS-CACHE-V" + strconv.Itoa(cacheSnapshotVersion)
 
 // Store defines the cache storage interface.
 type Store interface {
-	Get(key string) (*CacheEntry, bool, bool)
+	Get(key string) (*Entry, bool, bool)
 	Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
 	SetWithDNSSEC(key string, answer, authority, additional []dns.RR, validated bool, dnssecValidated bool, ecs *edns.ECSOption)
-	SetEntry(key string, entry *CacheEntry)
+	SetEntry(key string, entry *Entry)
 	ReverseLookup(ip net.IP) []LookupResult
 	Close() error
 }
 
-// CacheEntry holds a cached DNS response with timing and EDNS metadata.
-type CacheEntry struct {
+// Entry holds a cached DNS response with timing and EDNS metadata.
+type Entry struct {
 	Answer          []*CompactRecord `json:"answer"`
 	Authority       []*CompactRecord `json:"authority"`
 	Additional      []*CompactRecord `json:"additional"`
@@ -72,22 +72,22 @@ type LookupResult struct {
 }
 
 // IsExpired reports whether the entry's TTL has elapsed.
-func (c *CacheEntry) IsExpired() bool {
+func (c *Entry) IsExpired() bool {
 	return c != nil && log.NowUnix()-c.Timestamp > int64(c.TTL)
 }
 
 // ShouldRefresh reports whether the entry has passed both TTL and original TTL.
-func (c *CacheEntry) ShouldRefresh() bool {
+func (c *Entry) ShouldRefresh() bool {
 	return c != nil && c.IsExpired() && log.NowUnix()-c.Timestamp > int64(max(c.OriginalTTL, c.TTL))
 }
 
 // CanServeExpired reports whether the expired entry is within the maxAge window.
-func (c *CacheEntry) CanServeExpired(maxAge int) bool {
+func (c *Entry) CanServeExpired(maxAge int) bool {
 	return c != nil && c.IsExpired() && log.NowUnix()-c.Timestamp-int64(c.TTL) <= int64(maxAge)
 }
 
 // RemainingTTL returns the remaining TTL, or DefaultStaleTTL if expired.
-func (c *CacheEntry) RemainingTTL() uint32 {
+func (c *Entry) RemainingTTL() uint32 {
 	if c == nil {
 		return 0
 	}
@@ -99,7 +99,7 @@ func (c *CacheEntry) RemainingTTL() uint32 {
 }
 
 // ECSOption returns the EDNS Client Subnet stored in the entry, if any.
-func (c *CacheEntry) ECSOption() *edns.ECSOption {
+func (c *Entry) ECSOption() *edns.ECSOption {
 	if c == nil || c.ECSAddress == "" {
 		return nil
 	}
@@ -111,7 +111,7 @@ func (c *CacheEntry) ECSOption() *edns.ECSOption {
 
 // ShouldPrefetch reports whether the entry is due for refresh based on a
 // percentage threshold of its original TTL.
-func (c *CacheEntry) ShouldPrefetch(thresholdPercent int) bool {
+func (c *Entry) ShouldPrefetch(thresholdPercent int) bool {
 	if c == nil || c.IsExpired() || thresholdPercent <= 0 {
 		return false
 	}
@@ -177,8 +177,8 @@ func writeUint(b *strings.Builder, n uint64) {
 	b.Write(buf[i:])
 }
 
-// createCompactRecord creates a CompactRecord from a DNS resource record.
-func createCompactRecord(rr dns.RR) *CompactRecord {
+// newCompactRecord creates a CompactRecord from a DNS resource record.
+func newCompactRecord(rr dns.RR) *CompactRecord {
 	if rr == nil {
 		return nil
 	}
@@ -263,6 +263,6 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC boo
 func init() {
 	gob.Register(&persistedCacheSnapshot{})
 	gob.Register(&persistedCacheItem{})
-	gob.Register(&CacheEntry{})
+	gob.Register(&Entry{})
 	gob.Register(&CompactRecord{})
 }
