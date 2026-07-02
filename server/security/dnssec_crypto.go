@@ -86,7 +86,7 @@ func (c *CryptoValidator) loadRootTrustAnchors() {
 			continue
 		}
 		keys = append(keys, dnskey)
-		log.Infof("SECURITY: loaded root trust anchor (key tag=%d, algorithm=%s)",
+		log.Debugf("SECURITY: loaded root trust anchor (key tag=%d, algorithm=%s)",
 			dnskey.KeyTag(), dns.AlgorithmToString[dnskey.Algorithm])
 	}
 

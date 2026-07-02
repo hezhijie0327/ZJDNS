@@ -679,6 +679,4 @@ func addChaosRecord(cfg *ServerConfig) {
 			}},
 		})
 	}
-
-	log.Infof("CONFIG: CHAOS TXT rewrite records enabled")
 }

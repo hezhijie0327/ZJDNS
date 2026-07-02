@@ -248,7 +248,7 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 		if err != nil {
 			return nil, fmt.Errorf("load certificate (std): %w", err)
 		}
-		log.Infof("TLS: Using certificate from files: %s, %s", cfg.CertFile, cfg.KeyFile)
+		log.Debugf("TLS: Using certificate from files: %s, %s", cfg.CertFile, cfg.KeyFile)
 	}
 
 	// TCP-based TLS config (DoT, DoH).

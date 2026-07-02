@@ -53,8 +53,6 @@ func (s *Server) startDOHServer(port string) error {
 	s.httpsListener = cryptotls.NewListener(rawListener, tlsConfig)
 	log.Infof("TLS: DoH server started on port %s", port)
 
-	// Warn if only loopback is reachable — helps diagnose LAN access issues.
-	log.Infof("TLS: DoH accepting on all interfaces (0.0.0.0:%s, [::]:%s)", port, port)
 
 	// Go's net/http only detects TLS on standard *tls.Conn, not
 	// *cryptotls.Conn, so HTTP/2 is silently disabled. We serve

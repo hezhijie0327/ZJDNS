@@ -34,7 +34,6 @@ func (s *Server) startDOTServer() error {
 
 	s.dotListener = eTLS.NewListener(rawListener, dotTLSConfig)
 	log.Infof("TLS: DoT server started on port %s", s.cfg.Port)
-	log.Infof("TLS: DoT accepting on all interfaces (0.0.0.0:%s, [::]:%s)", s.cfg.Port, s.cfg.Port)
 
 	s.serverGroup.Go(func() error {
 		defer dnsutil.HandlePanic("DoT server")
