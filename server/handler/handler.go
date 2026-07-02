@@ -166,10 +166,22 @@ func (h *Handler) BuildQueryMessage(question dns.Question, ecs *edns.ECSOption, 
 	msg.RecursionDesired = recursionDesired
 
 	if h.edns != nil {
-		h.edns.ApplyToMessage(msg, ecs, isSecureConnection, "", nil, true, true)
+		h.edns.ApplyToMessage(msg, ecs, isSecureConnection, "", nil, true, true, 0)
 	}
 
 	return msg
+}
+
+// tcpKeepaliveTimeoutForProtocol returns the EDNS TCP Keepalive timeout value
+// (in 100ms units, RFC 7828) for responses sent over the given protocol.
+// Returns 0 for protocols where TCP keepalive is not applicable (UDP, DoH, DoQ).
+func tcpKeepaliveTimeoutForProtocol(protocol string) uint16 {
+	switch protocol {
+	case "TCP", "tcp", "DoT":
+		return uint16(config.DefaultEDNSTCPKeepaliveTimeout)
+	default:
+		return 0
+	}
 }
 
 func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool, requestProtocol string) *dns.Msg {
@@ -198,6 +210,8 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		log.Debugf("QUERY: client IP=<unknown> query=%s type=%s", question.Name, dns.TypeToString[question.Qtype])
 	}
 
+	tcpKeepaliveTimeout := tcpKeepaliveTimeoutForProtocol(requestProtocol)
+
 	if len(question.Name) > config.MaxDomainLength || question.Qtype == dns.TypeANY ||
 		question.Qtype == dns.TypeAXFR || question.Qtype == dns.TypeIXFR ||
 		!dnsutil.IsValidDomainLabels(question.Name) {
@@ -211,7 +225,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		} else {
 			ede = edns.NewEDEOption(edns.EDECodeNotSupported, "")
 		}
-		h.addEDNS(msg, req, isSecureConnection, clientIP, nil, ede)
+		h.addEDNS(msg, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
 		return msg
 	}
 
@@ -236,7 +250,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 				response.Rcode = rewriteResult.ResponseCode
 
 				ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
-				h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede)
+				h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
 				responseMsg = response
 				return responseMsg
 			}
@@ -250,7 +264,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 				}
 
 				ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
-				h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede)
+				h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
 				log.Debugf("RESULT: %s %s | rcode=NOERROR (rewrite), answer=%d, additional=%d", question.Name, dns.TypeToString[question.Qtype], len(rewriteResult.Records), len(rewriteResult.Additional))
 				responseMsg = response
 				return responseMsg
@@ -282,7 +296,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 			// Generate a valid server cookie so the legitimate client can retry.
 			serverCookie := h.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 			cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
-			h.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req))
+			h.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
 			responseMsg = msg
 			return responseMsg
 		}
@@ -298,16 +312,16 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		log.Debugf("CACHE: hit key=%s expired=%t for %s, ttl=%d, validated=%t, answer=%d", cacheKey, isExpired, question.Name, entry.RemainingTTL(), entry.Validated, len(entry.Answer))
 		m.cacheHit = true
 		if !isExpired {
-			responseMsg = h.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &m.prefetchTriggered, &m.dnssecStatus)
+			responseMsg = h.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &m.prefetchTriggered, &m.dnssecStatus, tcpKeepaliveTimeout)
 			return responseMsg
 		}
 
 		if entry.CanServeExpired(config.DefaultStaleMaxAge) {
-			responseMsg = h.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &m.staleServed, &m.fallbackUsed, &m.dnssecStatus)
+			responseMsg = h.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &m.staleServed, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
 			return responseMsg
 		}
 
-		responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &m.hadError, &m.fallbackUsed, &m.dnssecStatus)
+		responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &m.hadError, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
 		return responseMsg
 	}
 
@@ -317,13 +331,13 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 			response := h.buildResponse(req)
 			response.Answer = ptrAnswer
 			ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
-			h.applyEDNS(response, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req))
+			h.applyEDNS(response, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
 			responseMsg = response
 			return responseMsg
 		}
 	}
 
-	responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &m.hadError, &m.fallbackUsed, &m.dnssecStatus)
+	responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &m.hadError, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
 	return responseMsg
 }
 
@@ -350,14 +364,14 @@ func (h *Handler) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption
 	return records
 }
 
-func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool, dnssecStatus *string) *dns.Msg {
+func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	if entry.Validated {
 		*dnssecStatus = config.DNSSECStatusSecure
 	} else {
 		*dnssecStatus = config.DNSSECStatusInsecure
 	}
 
-	msg := h.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
+	msg := h.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 
 	if isExpired && entry.ShouldRefresh() {
 		h.cacheRefreshGroup.Go(func() error {
@@ -401,7 +415,7 @@ func (h *Handler) shouldStartPrefetch(cacheKey string) bool {
 	return true
 }
 
-func (h *Handler) buildCacheResponse(req *dns.Msg, entry *cache.Entry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (h *Handler) buildCacheResponse(req *dns.Msg, entry *cache.Entry, isExpired bool, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16) *dns.Msg {
 	msg := h.buildResponse(req)
 
 	responseTTL := entry.RemainingTTL()
@@ -419,16 +433,16 @@ func (h *Handler) buildCacheResponse(req *dns.Msg, entry *cache.Entry, isExpired
 
 	if isExpired {
 		ede := edns.NewEDEOption(edns.EDECodeStaleAnswer, "")
-		h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req))
+		h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
 	} else {
-		h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, nil, edns.HasPaddingOption(req))
+		h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, nil, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
 	}
 
 	h.restoreOriginalDomain(msg, question.Name, req.Question[0].Name)
 	return msg
 }
 
-func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool, dnssecStatus *string) *dns.Msg {
+func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	if h.config.Server.Features.Cache.PreferStale {
 		if staleServed != nil {
 			*staleServed = true
@@ -444,7 +458,7 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 			defer cancel()
 			return h.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
 		})
-		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
+		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
 
 	var res queryResult
@@ -473,12 +487,12 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 			if fallbackUsed != nil && res.fallback {
 				*fallbackUsed = true
 			}
-			return h.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs, clientIP, isSecureConnection, dnssecStatus)
+			return h.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs, clientIP, isSecureConnection, dnssecStatus, tcpKeepaliveTimeout)
 		}
 		if staleServed != nil {
 			*staleServed = true
 		}
-		return h.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, nil, dnssecStatus)
+		return h.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, nil, dnssecStatus, tcpKeepaliveTimeout)
 	case <-timer.C:
 		if staleServed != nil {
 			*staleServed = true
@@ -502,11 +516,11 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 			case <-h.ctx.Done():
 			}
 		}()
-		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
+		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
 }
 
-func (h *Handler) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool, dnssecStatus *string) *dns.Msg {
+func (h *Handler) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	log.Debugf("CACHE: miss key=%s for %s, querying upstream/recursive", cacheKey, question.Name)
 	qr := h.resolver.Query(h.ctx, question, ecsOpt)
 	if fallbackUsed != nil && qr.Fallback {
@@ -516,18 +530,18 @@ func (h *Handler) processCacheMiss(req *dns.Msg, question dns.Question, ecsOpt *
 	if qr.Err != nil {
 
 		if errors.Is(qr.Err, resolver.ErrCIDRFilterRefused) {
-			return h.processCIDRRefused(req, question, ecsOpt, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection)
+			return h.processCIDRRefused(req, question, ecsOpt, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 		}
 		if hadError != nil {
 			*hadError = true
 		}
-		return h.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, qr.Err, dnssecStatus)
+		return h.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, qr.Err, dnssecStatus, tcpKeepaliveTimeout)
 	}
 
-	return h.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS, clientIP, isSecureConnection, dnssecStatus)
+	return h.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS, clientIP, isSecureConnection, dnssecStatus, tcpKeepaliveTimeout)
 }
 
-func (h *Handler) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string) *dns.Msg {
+func (h *Handler) processQueryError(req *dns.Msg, cacheKey string, question dns.Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	if entry, found, _ := h.cache.Get(cacheKey); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		if entry.Validated {
 			*dnssecStatus = config.DNSSECStatusSecure
@@ -535,7 +549,7 @@ func (h *Handler) processQueryError(req *dns.Msg, cacheKey string, question dns.
 			*dnssecStatus = config.DNSSECStatusInsecure
 		}
 		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.RemainingTTL(), entry.Validated)
-		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection)
+		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
 
 	log.Debugf("RESULT: %s %s | rcode=SERVFAIL, no stale cache available", question.Name, dns.TypeToString[question.Qtype])
@@ -558,20 +572,20 @@ func (h *Handler) processQueryError(req *dns.Msg, cacheKey string, question dns.
 		}
 	}
 	ede := edns.NewEDEOption(edeCode, "")
-	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req))
+	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
 	return msg
 }
 
-func (h *Handler) processCIDRRefused(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool) *dns.Msg {
+func (h *Handler) processCIDRRefused(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16) *dns.Msg {
 	msg := h.buildResponse(req)
 	log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", question.Name, dns.TypeToString[question.Qtype])
 	msg.Rcode = dns.RcodeRefused
 	ede := edns.NewEDEOption(edns.EDECodeBlocked, "")
-	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req))
+	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
 	return msg
 }
 
-func (h *Handler) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, clientIP net.IP, isSecureConnection bool, dnssecStatus *string) *dns.Msg {
+func (h *Handler) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, clientIP net.IP, isSecureConnection bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	msg := h.buildResponse(req)
 
 	if validated {
@@ -622,7 +636,7 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question dns.Question, ecsOp
 			log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", upstreamEDE.InfoCode, edns.EDECodeString(upstreamEDE.InfoCode))
 		}
 	}
-	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, edeOpt, edns.HasPaddingOption(req))
+	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, edeOpt, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
 	h.restoreOriginalDomain(msg, question.Name, req.Question[0].Name)
 	return msg
 }

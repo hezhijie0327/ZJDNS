@@ -4,6 +4,8 @@ import (
 	"net"
 	"testing"
 
+	"github.com/miekg/dns"
+
 	"zjdns/config"
 )
 
@@ -170,6 +172,104 @@ func TestCookieGenerator_ClientCookie(t *testing.T) {
 	cookie := cg.GenerateClientCookie(clientIP)
 	if len(cookie) != DefaultCookieClientLen {
 		t.Errorf("client cookie len = %d, want %d", len(cookie), DefaultCookieClientLen)
+	}
+}
+
+func TestHasTCPKeepaliveOption(t *testing.T) {
+	msg := new(dns.Msg)
+	msg.SetQuestion("example.com.", dns.TypeA)
+
+	// No OPT record at all → false
+	if HasTCPKeepaliveOption(msg) {
+		t.Error("expected false for message without OPT")
+	}
+
+	// OPT record without keepalive option → false
+	msg.SetEdns0(512, false)
+	if HasTCPKeepaliveOption(msg) {
+		t.Error("expected false for OPT without keepalive")
+	}
+
+	// OPT record with keepalive option → true
+	opt := msg.IsEdns0()
+	opt.Option = append(opt.Option, &dns.EDNS0_TCP_KEEPALIVE{Code: dns.EDNS0TCPKEEPALIVE, Timeout: 1200})
+	if !HasTCPKeepaliveOption(msg) {
+		t.Error("expected true for OPT with keepalive option")
+	}
+}
+
+func TestParseTCPKeepalive(t *testing.T) {
+	msg := new(dns.Msg)
+	msg.SetQuestion("example.com.", dns.TypeA)
+
+	// No OPT → 0
+	if timeout := ParseTCPKeepalive(msg); timeout != 0 {
+		t.Errorf("expected 0 for no OPT, got %d", timeout)
+	}
+
+	// OPT with keepalive timeout=1200 → 1200
+	opt := &dns.OPT{
+		Hdr: dns.RR_Header{Name: ".", Rrtype: dns.TypeOPT, Class: 512},
+		Option: []dns.EDNS0{
+			&dns.EDNS0_TCP_KEEPALIVE{Code: dns.EDNS0TCPKEEPALIVE, Timeout: 1200},
+		},
+	}
+	msg.Extra = append(msg.Extra, opt)
+	if timeout := ParseTCPKeepalive(msg); timeout != 1200 {
+		t.Errorf("expected 1200, got %d", timeout)
+	}
+}
+
+func TestApplyToMessage_Keepalive(t *testing.T) {
+	h, _ := NewHandler(config.ECSConfig{})
+	msg := new(dns.Msg)
+	msg.SetQuestion("example.com.", dns.TypeA)
+
+	// tcpKeepaliveTimeout=0 → no keepalive option in response
+	h.ApplyToMessage(msg, nil, false, "", nil, false, true, 0)
+	opt := msg.IsEdns0()
+	if opt == nil {
+		t.Fatal("expected OPT record")
+	}
+	for _, o := range opt.Option {
+		if _, ok := o.(*dns.EDNS0_TCP_KEEPALIVE); ok {
+			t.Error("unexpected keepalive option with timeout=0")
+		}
+	}
+
+	// tcpKeepaliveTimeout=1200 → keepalive option present in response
+	msg2 := new(dns.Msg)
+	msg2.SetQuestion("example.com.", dns.TypeA)
+	h.ApplyToMessage(msg2, nil, false, "", nil, false, true, 1200)
+	opt2 := msg2.IsEdns0()
+	if opt2 == nil {
+		t.Fatal("expected OPT record")
+	}
+	var found bool
+	for _, o := range opt2.Option {
+		if ka, ok := o.(*dns.EDNS0_TCP_KEEPALIVE); ok {
+			found = true
+			if ka.Timeout != 1200 {
+				t.Errorf("expected timeout=1200, got %d", ka.Timeout)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected keepalive option with timeout=1200")
+	}
+
+	// tcpKeepaliveTimeout=1200 but isRequest=true → no keepalive (client-side)
+	msg3 := new(dns.Msg)
+	msg3.SetQuestion("example.com.", dns.TypeA)
+	h.ApplyToMessage(msg3, nil, false, "", nil, true, true, 1200)
+	opt3 := msg3.IsEdns0()
+	if opt3 == nil {
+		t.Fatal("expected OPT record")
+	}
+	for _, o := range opt3.Option {
+		if _, ok := o.(*dns.EDNS0_TCP_KEEPALIVE); ok {
+			t.Error("keepalive should not be included in requests")
+		}
 	}
 }
 

@@ -46,6 +46,7 @@ const (
 	DefaultQUICAddrCacheTTL        = 30 * time.Minute  // QUIC address cache sweep cutoff
 	DefaultTCPPoolIdleTimeout      = 120 * time.Second // TCP/DoT pool connection idle (must exceed typical query intervals)
 	DefaultTCPKeepAlivePeriod      = 30 * time.Second  // TCP keep-alive probe interval
+	DefaultEDNSTCPKeepaliveTimeout = 1200              // EDNS TCP keepalive idle timeout (100ms units = 120s)
 	DefaultHTTPServerIdleTimeout   = 60 * time.Second  // HTTP keep-alive idle
 	DefaultHTTPServerWriteTimeout  = 10 * time.Second  // HTTP response write
 	DefaultHTTPReadHeaderTimeout   = 5 * time.Second   // HTTP header read (Slowloris protection)

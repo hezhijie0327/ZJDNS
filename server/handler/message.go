@@ -12,7 +12,7 @@ import (
 	"zjdns/internal/pool"
 )
 
-func (h *Handler) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, clientIP net.IP, cookieOpt *edns.CookieOption, ede *edns.EDEOption) {
+func (h *Handler) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, clientIP net.IP, cookieOpt *edns.CookieOption, ede *edns.EDEOption, tcpKeepaliveTimeout uint16) {
 	if msg == nil || req == nil {
 		return
 	}
@@ -30,16 +30,16 @@ func (h *Handler) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, c
 	}
 
 	clientWantsPadding := edns.HasPaddingOption(req)
-	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, clientWantsPadding)
+	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, clientWantsPadding, tcpKeepaliveTimeout)
 }
 
-func (h *Handler) applyEDNS(msg *dns.Msg, isSecureConnection bool, clientIP net.IP, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, ede *edns.EDEOption, clientWantsPadding bool) {
+func (h *Handler) applyEDNS(msg *dns.Msg, isSecureConnection bool, clientIP net.IP, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, ede *edns.EDEOption, clientWantsPadding bool, tcpKeepaliveTimeout uint16) {
 	cookieStr := h.generateCookieResponse(cookieOpt, clientIP)
 
-	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || ede != nil || isSecureConnection
+	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || ede != nil || isSecureConnection || tcpKeepaliveTimeout > 0
 
 	if shouldAddEDNS {
-		h.edns.ApplyToMessage(msg, ecsOpt, isSecureConnection, cookieStr, ede, false, clientWantsPadding)
+		h.edns.ApplyToMessage(msg, ecsOpt, isSecureConnection, cookieStr, ede, false, clientWantsPadding, tcpKeepaliveTimeout)
 	}
 }
 

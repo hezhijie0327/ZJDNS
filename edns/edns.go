@@ -68,11 +68,13 @@ func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 	return h, nil
 }
 
-// ApplyToMessage adds EDNS(0) options (ECS, Cookie, EDE, Padding) to a DNS
-// message. isRequest selects the padding block size: 128 bytes for queries
-// (RFC 8467), 468 bytes for responses. clientWantsPadding, parsed via
-// HasPaddingOption, lets the client opt out via +nopadding / +noalignment.
-func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption, isRequest bool, clientWantsPadding bool) {
+// ApplyToMessage adds EDNS(0) options (ECS, Cookie, EDE, Padding, TCP
+// Keepalive) to a DNS message. isRequest selects the padding block size:
+// 128 bytes for queries (RFC 8467), 468 bytes for responses.
+// clientWantsPadding, parsed via HasPaddingOption, lets the client opt out
+// via +nopadding / +noalignment. tcpKeepaliveTimeout, in 100ms units
+// (RFC 7828), is only included in TCP-server responses (not requests).
+func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption, isRequest bool, clientWantsPadding bool, tcpKeepaliveTimeout uint16) {
 	if h == nil || msg == nil {
 		return
 	}
@@ -122,6 +124,13 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 		})
 	}
 
+	if !isRequest && tcpKeepaliveTimeout > 0 {
+		options = append(options, &dns.EDNS0_TCP_KEEPALIVE{
+			Code:    dns.EDNS0TCPKEEPALIVE,
+			Timeout: tcpKeepaliveTimeout,
+		})
+	}
+
 	var paddingBytes int
 	paddingBlockSize := config.DefaultPaddingResponseBlockSize
 	if isRequest {
@@ -132,6 +141,6 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 	opt.Option = options
 	msg.Extra = append(msg.Extra, opt)
 
-	log.Debugf("EDNS: built OPT secure=%t ecs=%t cookie=%t ede=%t padding=%d bytes block=%d req=%t wantPad=%t",
-		isSecureConnection, ecs != nil, cookieStr != "", ede != nil, paddingBytes, paddingBlockSize, isRequest, clientWantsPadding)
+	log.Debugf("EDNS: built OPT secure=%t ecs=%t cookie=%t ede=%t keepalive=%d padding=%d bytes block=%d req=%t wantPad=%t",
+		isSecureConnection, ecs != nil, cookieStr != "", ede != nil, tcpKeepaliveTimeout, paddingBytes, paddingBlockSize, isRequest, clientWantsPadding)
 }

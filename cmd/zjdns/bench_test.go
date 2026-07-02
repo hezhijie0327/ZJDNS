@@ -136,7 +136,7 @@ func BenchmarkEDNSApplyToMessage(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		m := msg.Copy()
-		h.ApplyToMessage(m, ecs, false, "", nil, false, true)
+		h.ApplyToMessage(m, ecs, false, "", nil, false, true, 0)
 	}
 }
 
@@ -172,7 +172,7 @@ func BenchmarkBuildQueryMessage(b *testing.B) {
 		msg := new(dns.Msg)
 		msg.SetQuestion(q.Name, q.Qtype)
 		msg.RecursionDesired = true
-		h.ApplyToMessage(msg, ecs, false, "", nil, true, true)
+		h.ApplyToMessage(msg, ecs, false, "", nil, true, true, 0)
 	}
 }
 
