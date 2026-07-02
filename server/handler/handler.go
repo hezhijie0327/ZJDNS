@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +20,6 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/rewrite"
-	"zjdns/server/latency"
 	"zjdns/server/resolver"
 	"zjdns/stats"
 )
@@ -53,6 +51,12 @@ type queryResult struct {
 	err        error
 }
 
+// LatencyProber is the interface for latency-probing cache entries after
+// successful resolution.
+type LatencyProber interface {
+	Start(question dns.Question, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
+}
+
 // Handler processes DNS queries through the caching and resolution pipeline.
 type Handler struct {
 	closed int32 // hot-path: checked on every query via atomic load
@@ -64,12 +68,20 @@ type Handler struct {
 	rewrite           *rewrite.Evaluator
 	stats             *stats.Collector
 	resolver          *resolver.Resolver
-	prober            *latency.Prober
+	prober            LatencyProber
 	prefetchCooldown  sync.Map
 	semaphore         chan struct{}
 	cacheRefreshGroup *errgroup.Group
 	cacheRefreshCtx   context.Context
 	ctx               context.Context
+}
+
+// BackgroundConfig groups lifecycle-related dependencies that the Handler
+// uses for cache refresh scheduling and graceful shutdown coordination.
+type BackgroundConfig struct {
+	RefreshGroup *errgroup.Group
+	RefreshCtx   context.Context
+	Ctx          context.Context
 }
 
 // New creates a Handler with the given dependencies. The resolver and prober
@@ -81,9 +93,7 @@ func New(
 	rewriteEvaluator *rewrite.Evaluator,
 	statsCollector *stats.Collector,
 	semaphore chan struct{},
-	cacheRefreshGroup *errgroup.Group,
-	cacheRefreshCtx context.Context,
-	ctx context.Context,
+	bg BackgroundConfig,
 ) *Handler {
 	h := &Handler{
 		config:            cfg,
@@ -92,9 +102,9 @@ func New(
 		rewrite:           rewriteEvaluator,
 		stats:             statsCollector,
 		semaphore:         semaphore,
-		cacheRefreshGroup: cacheRefreshGroup,
-		cacheRefreshCtx:   cacheRefreshCtx,
-		ctx:               ctx,
+		cacheRefreshGroup: bg.RefreshGroup,
+		cacheRefreshCtx:   bg.RefreshCtx,
+		ctx:               bg.Ctx,
 	}
 	h.reverseCache, _ = cacheStore.(interface {
 		ReverseLookup(net.IP) []cache.LookupResult
@@ -106,7 +116,7 @@ func New(
 func (h *Handler) SetResolver(r *resolver.Resolver) { h.resolver = r }
 
 // SetProber sets the latency prober after construction.
-func (h *Handler) SetProber(p *latency.Prober) { h.prober = p }
+func (h *Handler) SetProber(p LatencyProber) { h.prober = p }
 
 // IsClosed reports whether the handler has been shut down.
 func (h *Handler) IsClosed() bool { return atomic.LoadInt32(&h.closed) != 0 }
@@ -673,103 +683,5 @@ func (h *Handler) recordQueryMetrics(m *queryMetrics, responseMsg **dns.Msg, que
 		h.stats.RecordRequest(responseTime, m.cacheHit, m.hadError, m.requestProtocol,
 			m.rewrote, m.hijackDetected, m.staleServed, m.fallbackUsed, m.prefetchTriggered,
 			m.dnssecStatus, rcode)
-	}
-}
-
-// ── Message helpers ───────────────────────────────────────────────────────────
-
-func (h *Handler) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, clientIP net.IP, cookieOpt *edns.CookieOption, ede *edns.EDEOption) {
-	if msg == nil || req == nil {
-		return
-	}
-
-	clientRequestedDNSSEC := false
-	var ecsOpt *edns.ECSOption
-
-	if opt := req.IsEdns0(); opt != nil {
-		clientRequestedDNSSEC = opt.Do()
-		ecsOpt = h.edns.ParseFromDNS(req)
-	}
-
-	if ecsOpt == nil && len(req.Question) > 0 {
-		ecsOpt = h.edns.ECSForQType(req.Question[0].Qtype)
-	}
-
-	clientWantsPadding := edns.HasPaddingOption(req)
-	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, clientWantsPadding)
-}
-
-func (h *Handler) applyEDNS(msg *dns.Msg, isSecureConnection bool, clientIP net.IP, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, ede *edns.EDEOption, clientWantsPadding bool) {
-	cookieStr := h.generateCookieResponse(cookieOpt, clientIP)
-
-	shouldAddEDNS := ecsOpt != nil || clientRequestedDNSSEC || cookieStr != "" || ede != nil || isSecureConnection
-
-	if shouldAddEDNS {
-		h.edns.ApplyToMessage(msg, ecsOpt, isSecureConnection, cookieStr, ede, false, clientWantsPadding)
-	}
-}
-
-func (h *Handler) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP net.IP) string {
-	if h.edns == nil || h.edns.CookieGenerator == nil || cookieOpt == nil {
-		return ""
-	}
-
-	if clientIP == nil {
-		clientIP = net.ParseIP(config.FallbackClientIP)
-	}
-
-	if len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen {
-		log.Debugf("EDNS: invalid client cookie length %d (expected %d)", len(cookieOpt.ClientCookie), edns.DefaultCookieClientLen)
-		return ""
-	}
-
-	if len(cookieOpt.ServerCookie) >= edns.DefaultCookieServerLen {
-		if h.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
-			log.Debugf("EDNS: server cookie validated for %s", clientIP)
-		} else {
-			log.Debugf("EDNS: server cookie invalid for %s, regenerating", clientIP)
-		}
-	} else {
-		log.Debugf("EDNS: generating new server cookie for %s", clientIP)
-	}
-	serverCookie := h.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
-
-	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
-}
-
-func (h *Handler) buildResponse(req *dns.Msg) *dns.Msg {
-	msg := pool.DefaultMessagePool.Get()
-
-	if req != nil && len(req.Question) > 0 {
-		msg.SetReply(req)
-	} else if req != nil {
-		msg.Response = true
-		msg.Rcode = dns.RcodeFormatError
-	}
-
-	msg.Authoritative = false
-	msg.RecursionAvailable = true
-	msg.Compress = true
-	return msg
-}
-
-func (h *Handler) restoreOriginalDomain(msg *dns.Msg, currentName, originalName string) {
-	if msg == nil || strings.EqualFold(currentName, originalName) {
-		return
-	}
-	for _, rr := range msg.Answer {
-		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
-			rr.Header().Name = originalName
-		}
-	}
-	for _, rr := range msg.Ns {
-		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
-			rr.Header().Name = originalName
-		}
-	}
-	for _, rr := range msg.Extra {
-		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
-			rr.Header().Name = originalName
-		}
 	}
 }

@@ -133,7 +133,11 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	h := handler.New(
 		cfg, cacheStore, ednsHandler, rewriteEvaluator,
 		statsCollector, semaphore,
-		cacheRefreshGroup, cacheRefreshCtx, ctx,
+		handler.BackgroundConfig{
+			RefreshGroup: cacheRefreshGroup,
+			RefreshCtx:   cacheRefreshCtx,
+			Ctx:          ctx,
+		},
 	)
 
 	guard := security.New(cacheStore, cfg.Server.Features.HijackProtection)

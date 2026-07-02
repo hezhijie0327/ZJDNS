@@ -288,8 +288,6 @@ func (p *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFun
 		liveConns = append(liveConns, c)
 		inFlight := int(c.inFlight.Load())
 		if !c.IsFull() {
-			// Append remaining (unchecked) connections so they are not
-			// silently dropped from the pool on early return.
 			liveConns = append(liveConns, conns[i+1:]...)
 			p.conns[key] = liveConns
 			p.mu.Unlock()
@@ -303,58 +301,11 @@ func (p *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFun
 	p.conns[key] = liveConns
 
 	if len(liveConns)+p.dialing[key] < p.maxConns {
-		p.dialing[key]++
-		p.mu.Unlock()
-		conn, err := dialFunc(ctx, dialAddr)
-		if err != nil {
-			p.mu.Lock()
-			p.dialing[key]--
-			if p.dialing[key] == 0 {
-				delete(p.dialing, key)
-			}
-			p.mu.Unlock()
-			return nil, fmt.Errorf("client: dial %s: %w", key, err)
+		c, err := p.dialAndAdd(ctx, key, dialAddr, dialFunc)
+		if err != nil && leastLoaded != nil && !leastLoaded.IsDead() {
+			return leastLoaded, nil
 		}
-		c := newConn(key, conn, p.maxPipe)
-		p.mu.Lock()
-		p.dialing[key]--
-		if len(p.conns[key]) >= p.maxConns {
-			// Pool filled while we were dialing — try replacing a dead
-			// connection before discarding this new one.
-			replaced := false
-			for i, c := range p.conns[key] {
-				if c.IsDead() {
-					c.close()
-					p.conns[key][i] = c
-					replaced = true
-					log.Debugf("TCPPOOL: replaced dead connection in pool for %s", key)
-					break
-				}
-			}
-			if !replaced {
-				c.close()
-				log.Debugf("TCPPOOL: pool for %s already at limit (%d), discarding extra connection", key, p.maxConns)
-			}
-			if p.dialing[key] == 0 {
-				delete(p.dialing, key)
-			}
-			p.mu.Unlock()
-			if !replaced && leastLoaded != nil && !leastLoaded.IsDead() {
-				return leastLoaded, nil
-			}
-			if !replaced {
-				return nil, fmt.Errorf("client: max conns reached for %s", key)
-			}
-			return c, nil
-		}
-		p.conns[key] = append(p.conns[key], c)
-		n := len(p.conns[key])
-		if p.dialing[key] == 0 {
-			delete(p.dialing, key)
-		}
-		p.mu.Unlock()
-		log.Debugf("TCPPOOL: dialed new connection to %s (pool=%d/%d)", key, n, p.maxConns)
-		return c, nil
+		return c, err
 	}
 
 	p.mu.Unlock()
@@ -362,6 +313,60 @@ func (p *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFun
 		return leastLoaded, nil
 	}
 	return nil, fmt.Errorf("client: no available connection to %s", key)
+}
+
+// dialAndAdd dials a new connection and adds it to the pool. Returns the new
+// connection or the least-loaded existing one if the pool filled during dial.
+// Must be called with p.mu held; releases and re-acquires the lock during dial.
+func (p *Pool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*Conn, error) {
+	p.dialing[key]++
+	p.mu.Unlock()
+
+	conn, dialErr := dialFunc(ctx, dialAddr)
+
+	p.mu.Lock()
+	p.dialing[key]--
+	if p.dialing[key] == 0 {
+		delete(p.dialing, key)
+	}
+	if dialErr != nil {
+		p.mu.Unlock()
+		return nil, fmt.Errorf("client: dial %s: %w", key, dialErr)
+	}
+
+	c := newConn(key, conn, p.maxPipe)
+
+	// Pool already at capacity — try replacing a dead connection.
+	if len(p.conns[key]) >= p.maxConns {
+		if !p.replaceDead(key, c) {
+			c.close()
+			log.Debugf("TCPPOOL: pool for %s already at limit (%d), discarding extra connection", key, p.maxConns)
+			p.mu.Unlock()
+			return nil, fmt.Errorf("client: max conns reached for %s", key)
+		}
+		p.mu.Unlock()
+		return c, nil
+	}
+
+	p.conns[key] = append(p.conns[key], c)
+	n := len(p.conns[key])
+	p.mu.Unlock()
+	log.Debugf("TCPPOOL: dialed new connection to %s (pool=%d/%d)", key, n, p.maxConns)
+	return c, nil
+}
+
+// replaceDead replaces a dead connection in the pool with a new one. Returns
+// true if a replacement was made. Must be called with p.mu held.
+func (p *Pool) replaceDead(key string, newConn *Conn) bool {
+	for i, c := range p.conns[key] {
+		if c.IsDead() {
+			c.close()
+			p.conns[key][i] = newConn
+			log.Debugf("TCPPOOL: replaced dead connection in pool for %s", key)
+			return true
+		}
+	}
+	return false
 }
 
 // Shutdown closes all pooled connections and clears the pool. It is safe to
