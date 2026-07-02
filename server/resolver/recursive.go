@@ -131,7 +131,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 			addLabels := labelsToAdd(qname, currentDomain, minimiseSteps,
 				config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
 			minQname := minimiseQNAME(qname, currentDomain, addLabels)
-			if minQname != qname {
+			if !strings.EqualFold(minQname, qname) {
 				qtype := minimisationQtype(question.Qtype)
 				queryQuestion = dns.Question{Name: minQname, Qtype: qtype, Qclass: question.Qclass}
 				log.Debugf("RECURSION: qname minimisation step=%d zone=%s, querying minimised name=%s type=%s",
@@ -286,6 +286,17 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 		}
 
 		if len(bestNSRecords) == 0 {
+			// RFC 9156 §2.3: a NXDOMAIN/NODATA response
+			// for a minimised QNAME with no delegation
+			// means the intermediate name is not a zone
+			// cut. Expose all remaining labels and
+			// retry with the same nameservers instead
+			// of returning empty-handed.
+			if qnameMinimise && !strings.EqualFold(queryQuestion.Name, qname) {
+				pool.DefaultMessagePool.Put(response)
+				minimiseSteps = config.DefaultQnameMinimiseCount
+				continue
+			}
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessagePool.Put(response)
 			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
