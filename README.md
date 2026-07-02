@@ -41,7 +41,7 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 - **上游转发**：主/备服务器并发查询 + 首胜策略（First-Win），上游优先，备路结果立即可用
 - **混合模式**：上游 DNS 与内置递归（`builtin_recursive`）可同时配置
 - **SOCKS5 代理**：每上游可选代理（TCP CONNECT + UDP ASSOCIATE，RFC 1928/1929），所有协议 + 递归模式全覆盖
-- **连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生流复用，连接失败回退单次连接
+- **连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生流复用，连接失败自动回退单次连接，死连接自动替换
 - **CNAME 解析**：多级追踪（最大 16 级），防循环，超限返回 SERVFAIL
 - **延迟探测**：统一探测引擎（ICMP/TCP/UDP/HTTP/HTTPS/HTTP3），按最快 IP 动态重排 A/AAAA 记录
 
@@ -76,6 +76,7 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 | [4033-4035](https://www.rfc-editor.org/rfc/rfc4033) | DNSSEC | 信任链 + RRSIG + AD/CD |
 | [5155](https://www.rfc-editor.org/rfc/rfc5155) | NSEC3 | 已验证否定 + 迭代上限 |
 | [7766](https://www.rfc-editor.org/rfc/rfc7766) | DNS over TCP | 连接复用 + 流水线 + 乱序 |
+| [6891](https://www.rfc-editor.org/rfc/rfc6891) | EDNS(0) Extensions | FORMERR 自动回退（无 EDNS 重试）|
 | [7830](https://www.rfc-editor.org/rfc/rfc7830) | EDNS(0) Padding | 响应 + 查询填充 |
 | [8467](https://www.rfc-editor.org/rfc/rfc8467) | EDNS(0) Padding Policies | 128B 查询 / 468B 响应块对齐 |
 | [7858](https://www.rfc-editor.org/rfc/rfc7858) | DNS over TLS | DoT TLS 1.3 |
@@ -116,27 +117,42 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 zjdns/
 ├── main.go / version.go              # 入口 + ldflags
 ├── bench_test.go                     # 全局基准测试
-├── cli/                              # CLI 辅助
-├── config/                           # 配置系统（类型、加载、验证、默认值）
+├── cli/                              # CLI 辅助（参数解析、示例配置）
+├── config/                           # 配置类型（ECSConfig + ECSOption）、加载、验证、默认值
 ├── edns/                             # EDNS(0) 扩展（ECS、Cookie、EDE、Padding）
-├── cache/                            # LRU 缓存 + 磁盘持久化 + PTR 索引
-├── cidr/                             # CIDR IP 过滤
-├── rewrite/                          # 域名重写
-├── stats/                            # 锁无关统计
+│                                     #   ECSOption 为 config.ECSOption 的类型别名
+├── cache/                            # LRU 缓存 + 磁盘持久化 + PTR 反向索引
+│                                     #   不依赖 edns，直接使用 config.ECSOption
+├── cidr/                             # CIDR IP 过滤（基于标签的匹配、IPv4 位运算优化）
+├── rewrite/                          # 域名重写规则
+├── stats/                            # 锁无关统计（PersistStore 接口，不依赖 cache）
 ├── internal/
 │   ├── log/                          # 分级日志 + TimeCache + 组件过滤
-│   ├── pool/                         # sync.Pool（MessagePool、BufferPool）
-│   ├── dnsutil/                      # DNS 工具函数
-│   ├── ipdetect/                     # ECS 公网 IP 检测
+│   ├── pool/                         # sync.Pool + QUIC 应用层错误码
+│   ├── dnsutil/                      # DNS 工具函数（含 JoinDNSPort）
+│   ├── ipdetect/                     # ECS 公网 IP 自动检测
 │   └── latency/                      # 统一延迟探测引擎
 └── server/
-    ├── server.go / handler.go        # 查询流水线 + 生命周期
+    ├── server.go                     # 生命周期、构造、监听器编排
+    ├── listen.go                     # 协议桥接（UDP/TCP dispatch）
+    ├── server_tasks.go               # 后台任务 + 优雅关闭
+    ├── handler/                      # DNS 查询处理管线
+    │   ├── handler.go                #   主流程（缓存命中/过期/缺失、DNSSEC、指标）
+    │   └── message.go                #   EDNS 构建、Cookie 生成、域名恢复
     ├── client/                       # 出站查询客户端（UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5）
-    │   └── pool/                     # TCP/DoT/QUIC 连接池
+    │   └── pool/                     # TCP/DoT RFC 7766 流水线 + QUIC 连接池
     ├── resolver/                     # 递归解析 + 上游转发 + DNSSEC 信任链
-    ├── security/                     # DNSSEC 密码学 + 劫持检测
-    ├── tls/                          # 安全传输监听器
-    └── latency/                      # 面向客户端的延迟探测适配器
+    ├── security/                     # DNSSEC 密码学 (crypto.go + nsec.go) + 劫持检测
+    ├── tls/                          # TLS 安全传输监听器（DoT/DoQ/DoH/DoH3）
+    └── latency/                      # A/AAAA 延迟探测与记录重排
+```
+
+**依赖分层** — 严格单向无环：
+
+```
+internal/（基础层）→ config（域基础）→ edns/cache/cidr/rewrite/stats（域包）
+    → server/子包（resolver/security/client/tls/handler）
+        → server/（顶层装配）→ main
 ```
 
 ## 开发
