@@ -90,6 +90,9 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 	qnameMinimise := depth == 0 && r.resolver != nil
 	var minimiseSteps int
 
+	// tldServers saves the TLD nameservers for the hijack probe.
+	var tldServers []string
+
 	log.Debugf("RECURSION: depth=%d, querying %s (type=%s, tcp=%t, zone=%s, ns=%v)", depth, question.Name, dns.TypeToString[question.Qtype], forceTCP, currentDomain, nameservers)
 
 	// Initialize DNSSEC trust chain with root trust anchors (when available).
@@ -140,7 +143,20 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 			}
 		}
 
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
+		// When QNAME minimisation exposes the full QNAME at a
+		// non-authoritative zone (root/TLD/intermediate), probe
+		// the servers we are about to query.  A legitimate
+		// delegation server never returns A/AAAA for a
+		// subdomain — if it does, the GFW is injecting at this
+		// level; switch to TCP before querying.
+		authoritativeForceTCP := forceTCP
+		if !authoritativeForceTCP && qnameMinimise &&
+			strings.EqualFold(queryQuestion.Name, qname) &&
+			len(tldServers) > 0 {
+			authoritativeForceTCP = r.probeTLDForHijack(ctx, tldServers, qname)
+		}
+
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, authoritativeForceTCP, currentDomain, r.resolver.validator.Hijack)
 
 		// ── Single TCP fallback decision point ──────────────────────
 		// If any response at this delegation level was flagged as
@@ -449,7 +465,58 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 
 		pool.DefaultMessagePool.Put(response)
 		nameservers = nextNS
+		// Save TLD servers after updating. Used for the
+		// full-QNAME hijack probe at the authoritative step.
+		if labelCount(currentDomain) == 1 {
+			tldServers = nameservers
+		}
 	}
+}
+
+// probeTLDForHijack sends a single UDP probe to a parent server for the full
+// QNAME. If the response contains A/AAAA records (GFW injection at the
+// delegation level), it returns true so the caller can switch to TCP before
+// querying the authoritative servers.
+func (r *Recursive) probeTLDForHijack(ctx context.Context, parentServers []string, qname string) bool {
+	detector := r.resolver.validator.Hijack
+	if detector == nil || !detector.IsEnabled() || len(parentServers) == 0 {
+		return false
+	}
+
+	msg := pool.DefaultMessagePool.Get()
+	defer pool.DefaultMessagePool.Put(msg)
+	msg.SetQuestion(dns.Fqdn(qname), dns.TypeA)
+	msg.RecursionDesired = false
+
+	server := &config.UpstreamServer{
+		Address:  parentServers[0],
+		Protocol: config.ProtoUDP,
+	}
+
+	probeCtx, probeCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
+	defer probeCancel()
+
+	result := r.resolver.client.ExecuteQuery(probeCtx, msg, server)
+	if result.Error != nil || result.Response == nil {
+		return false
+	}
+	defer pool.DefaultMessagePool.Put(result.Response)
+
+	// Check for A/AAAA records in the Answer section. A legitimate
+	// parent server returns a referral (NS in Authority), never
+	// direct A/AAAA answers for a subdomain.
+	normalizedQname := dnsutil.NormalizeDomain(qname)
+	for _, rr := range result.Response.Answer {
+		if dnsutil.NormalizeDomain(rr.Header().Name) == normalizedQname {
+			switch rr.Header().Rrtype {
+			case dns.TypeA, dns.TypeAAAA:
+				log.Debugf("RECURSION: hijack probe detected A/AAAA for %s from parent server %s, forcing TCP",
+					qname, parentServers[0])
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
