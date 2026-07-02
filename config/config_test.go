@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,5 +89,70 @@ func TestCacheSettings_SizeDefaults(t *testing.T) {
 	s := ServerSettings{Features: FeatureFlags{Cache: CacheSettings{Size: 0}}}
 	if s.Features.Cache.Size != 0 {
 		t.Error("Size=0 should be allowed (cache will default to DefaultCacheSize)")
+	}
+}
+
+func TestECSOption_Normalize(t *testing.T) {
+	tests := []struct {
+		name   string
+		opt    *ECSOption
+		wantIP string
+	}{
+		{
+			name:   "nil option",
+			opt:    nil,
+			wantIP: "",
+		},
+		{
+			name:   "nil address",
+			opt:    &ECSOption{Family: 1, SourcePrefix: 24, Address: nil},
+			wantIP: "",
+		},
+		{
+			name:   "zero prefix",
+			opt:    &ECSOption{Family: 1, SourcePrefix: 0, Address: net.ParseIP("1.2.3.4")},
+			wantIP: "1.2.3.4",
+		},
+		{
+			name:   "IPv4 /24 masks to network",
+			opt:    &ECSOption{Family: 1, SourcePrefix: 24, Address: net.ParseIP("101.132.169.46")},
+			wantIP: "101.132.169.0",
+		},
+		{
+			name:   "IPv4 /24 already network",
+			opt:    &ECSOption{Family: 1, SourcePrefix: 24, Address: net.ParseIP("101.132.169.0")},
+			wantIP: "101.132.169.0",
+		},
+		{
+			name:   "IPv6 /64 masks to network",
+			opt:    &ECSOption{Family: 2, SourcePrefix: 64, Address: net.ParseIP("2408:4002:100b:6900:d57c:9d51:9858:25a4")},
+			wantIP: "2408:4002:100b:6900::",
+		},
+		{
+			name:   "IPv4 /32 keeps host",
+			opt:    &ECSOption{Family: 1, SourcePrefix: 32, Address: net.ParseIP("192.168.1.100")},
+			wantIP: "192.168.1.100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.opt.Normalize()
+			if tt.opt == nil {
+				if tt.wantIP != "" {
+					t.Error("expected non-nil option")
+				}
+				return
+			}
+			if tt.wantIP == "" {
+				if tt.opt.Address != nil {
+					t.Errorf("Address = %v, want nil", tt.opt.Address)
+				}
+				return
+			}
+			if tt.opt.Address.String() != tt.wantIP {
+				t.Errorf("Address = %v, want %v", tt.opt.Address, tt.wantIP)
+			}
+		})
 	}
 }

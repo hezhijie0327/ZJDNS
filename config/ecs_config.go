@@ -22,6 +22,22 @@ type ECSOption struct {
 	ScopePrefix  uint8
 }
 
+// Normalize masks the Address to the network address based on SourcePrefix,
+// ensuring that different IPs within the same subnet produce identical cache keys.
+func (e *ECSOption) Normalize() {
+	if e == nil || e.Address == nil || e.SourcePrefix == 0 {
+		return
+	}
+	bits := 128
+	if e.Address.To4() != nil {
+		bits = 32
+	}
+	mask := net.CIDRMask(int(e.SourcePrefix), bits)
+	if mask != nil {
+		e.Address = e.Address.Mask(mask)
+	}
+}
+
 // ECSConfig holds the default ECS subnet configuration for IPv4 and
 // IPv6.
 type ECSConfig struct {

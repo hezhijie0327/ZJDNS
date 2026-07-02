@@ -38,12 +38,14 @@ func (h *Handler) ParseFromDNS(msg *dns.Msg) *ECSOption {
 	}
 	for _, option := range opt.Option {
 		if subnet, ok := option.(*dns.EDNS0_SUBNET); ok {
-			return &ECSOption{
+			ecs := &ECSOption{
 				Family:       subnet.Family,
 				SourcePrefix: subnet.SourceNetmask,
 				ScopePrefix:  subnet.SourceScope,
 				Address:      subnet.Address,
 			}
+			ecs.Normalize()
+			return ecs
 		}
 	}
 	return nil
@@ -172,7 +174,9 @@ func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 		if !forceIPv6 && family == ianaAFINET6 {
 			return nil, fmt.Errorf("expected IPv4 ECS value, got IPv6: %s", subnet)
 		}
-		return &ECSOption{Family: family, SourcePrefix: uint8(prefix), ScopePrefix: DefaultECSScope, Address: ipNet.IP}, nil
+		ecs := &ECSOption{Family: family, SourcePrefix: uint8(prefix), ScopePrefix: DefaultECSScope, Address: ipNet.IP}
+		ecs.Normalize()
+		return ecs, nil
 	}
 	ip := net.ParseIP(subnet)
 	if ip == nil {
@@ -190,7 +194,9 @@ func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 		family = ianaAFINET6
 		prefix = DefaultECSv6Len
 	}
-	return &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}, nil
+	ecs := &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}
+	ecs.Normalize()
+	return ecs, nil
 }
 
 func (h *Handler) detectVia(forceIPv6, allowFallback bool) (*ECSOption, error) {
@@ -212,5 +218,7 @@ func (h *Handler) detectVia(forceIPv6, allowFallback bool) (*ECSOption, error) {
 		family = ianaAFINET6
 		prefix = DefaultECSv6Len
 	}
-	return &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}, nil
+	ecs := &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}
+	ecs.Normalize()
+	return ecs, nil
 }
