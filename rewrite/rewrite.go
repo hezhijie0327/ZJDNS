@@ -25,6 +25,7 @@ type Result struct {
 	ResponseCode  int
 	Records       []dns.RR
 	Additional    []dns.RR
+	CreatedAt     int64 // Unix timestamp when the rules were loaded (for TTL decrement)
 }
 
 // Evaluator manages rewrite rules and evaluates them against queries.
@@ -32,6 +33,7 @@ type Evaluator struct {
 	rules              atomic.Pointer[[]config.RewriteRule]
 	rulesLen           atomic.Uint64
 	globalExcludeCIDRs atomic.Pointer[[]*net.IPNet]
+	loadedAt           atomic.Int64 // Unix timestamp of last LoadRules
 }
 
 // New creates an Evaluator with no rules loaded.
@@ -149,6 +151,7 @@ func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 	e.rules.Store(&validRules)
 	e.rulesLen.Store(uint64(len(validRules)))
 	e.globalExcludeCIDRs.Store(&globalExcludes)
+	e.loadedAt.Store(log.NowUnix())
 	log.Infof("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
 	return nil
 }
@@ -273,6 +276,7 @@ ruleLoop:
 				}
 			}
 			result.ShouldRewrite = true
+			result.CreatedAt = e.loadedAt.Load()
 			return result
 		}
 	}

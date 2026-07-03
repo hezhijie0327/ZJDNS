@@ -43,11 +43,10 @@ type statsPersistAdapter struct {
 func (a *statsPersistAdapter) SaveStats(key string, data []byte, ttl int) {
 	now := time.Now().Unix()
 	a.store.SetEntry(key, &cache.Entry{
-		Timestamp:   now,
-		AccessTime:  now,
-		TTL:         ttl,
-		OriginalTTL: ttl,
-		Payload:     data,
+		Timestamp:  now,
+		AccessTime: now,
+		TTL:        ttl,
+		Payload:    data,
 	})
 }
 

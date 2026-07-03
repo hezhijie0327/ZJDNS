@@ -14,7 +14,7 @@ import (
 
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
-	"zjdns/internal/log"
+	"zjdns/internal/ttl"
 )
 
 const (
@@ -22,7 +22,7 @@ const (
 	maxResultLength      = config.DefaultCacheKeyMaxLength
 
 	cacheKeyDNSPrefix    = "dns:"
-	cacheSnapshotVersion = 2
+	cacheSnapshotVersion = 3
 )
 
 var cacheSnapshotMagic = "ZJDNS-CACHE-V" + strconv.Itoa(cacheSnapshotVersion)
@@ -45,9 +45,7 @@ type Entry struct {
 	ECSAddress      string           `json:"ecs_address,omitempty"`
 	Timestamp       int64            `json:"timestamp"`
 	AccessTime      int64            `json:"access_time"`
-	RefreshTime     int64            `json:"refresh_time,omitempty"`
 	TTL             int              `json:"ttl"`
-	OriginalTTL     int              `json:"original_ttl"`
 	ECSFamily       uint16           `json:"ecs_family,omitempty"`
 	ECSSourcePrefix uint8            `json:"ecs_source_prefix,omitempty"`
 	ECSScopePrefix  uint8            `json:"ecs_scope_prefix,omitempty"`
@@ -72,29 +70,20 @@ type LookupResult struct {
 
 // IsExpired reports whether the entry's TTL has elapsed.
 func (c *Entry) IsExpired() bool {
-	return c != nil && log.NowUnix()-c.Timestamp > int64(c.TTL)
-}
-
-// ShouldRefresh reports whether the entry has passed both TTL and original TTL.
-func (c *Entry) ShouldRefresh() bool {
-	return c != nil && c.IsExpired() && log.NowUnix()-c.Timestamp > int64(max(c.OriginalTTL, c.TTL))
+	return c != nil && ttl.IsExpired(c.Timestamp, c.TTL)
 }
 
 // CanServeExpired reports whether the expired entry is within the maxAge window.
 func (c *Entry) CanServeExpired(maxAge int) bool {
-	return c != nil && c.IsExpired() && log.NowUnix()-c.Timestamp-int64(c.TTL) <= int64(maxAge)
+	return c != nil && ttl.CanServeExpired(c.Timestamp, c.TTL, maxAge)
 }
 
-// RemainingTTL returns the remaining TTL, or DefaultStaleTTL if expired.
+// RemainingTTL returns the remaining TTL, or a cyclical stale TTL if expired.
 func (c *Entry) RemainingTTL() uint32 {
 	if c == nil {
 		return 0
 	}
-	remaining := int64(c.TTL) - (log.NowUnix() - c.Timestamp)
-	if remaining > 0 {
-		return uint32(remaining)
-	}
-	return uint32(config.DefaultStaleTTL)
+	return ttl.RemainingTTL(c.Timestamp, c.TTL, uint32(config.DefaultStaleTTL))
 }
 
 // ECSOption returns the EDNS Client Subnet stored in the entry, if any.
@@ -111,24 +100,10 @@ func (c *Entry) ECSOption() *config.ECSOption {
 // ShouldPrefetch reports whether the entry is due for refresh based on a
 // percentage threshold of its original TTL.
 func (c *Entry) ShouldPrefetch(thresholdPercent int) bool {
-	if c == nil || c.IsExpired() || thresholdPercent <= 0 {
+	if c == nil {
 		return false
 	}
-	if thresholdPercent > 100 {
-		thresholdPercent = 100
-	}
-	remaining := int64(c.TTL) - (log.NowUnix() - c.Timestamp)
-	if remaining <= 0 {
-		return false
-	}
-	original := int64(c.OriginalTTL)
-	if original <= 0 {
-		original = int64(c.TTL)
-	}
-	if original <= 0 {
-		return false
-	}
-	return remaining <= (original*int64(thresholdPercent)+99)/100
+	return ttl.ShouldPrefetch(c.Timestamp, c.TTL, thresholdPercent)
 }
 
 // BuildCacheKey constructs a deterministic cache key from a DNS question,

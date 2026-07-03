@@ -102,11 +102,11 @@ func TestSetEntry_CustomEntry(t *testing.T) {
 
 	now := time.Now().Unix()
 	entry := &Entry{
-		Timestamp:   now,
-		AccessTime:  now,
-		TTL:         60,
-		OriginalTTL: 60,
-		Validated:   true,
+		Timestamp:  now,
+		AccessTime: now,
+		TTL:        60,
+
+		Validated: true,
 		Answer: []*CompactRecord{
 			{Text: "example.com.\t300\tIN\tA\t192.0.2.1", OrigTTL: 300, Type: dns.TypeA},
 		},
@@ -138,23 +138,15 @@ func TestEntry_IsExpired(t *testing.T) {
 	}
 }
 
-func TestEntry_ShouldRefresh(t *testing.T) {
-	past := time.Now().Add(-2 * time.Hour).Unix()
-	entry := &Entry{Timestamp: past, TTL: 60, OriginalTTL: 3600}
-	if !entry.ShouldRefresh() {
-		t.Error("expired entry beyond OriginalTTL should refresh")
-	}
-}
-
 func TestEntry_CanServeExpired(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour).Unix()
-	entry := &Entry{Timestamp: past, TTL: 300, OriginalTTL: 3600}
+	entry := &Entry{Timestamp: past, TTL: 300}
 	if !entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		t.Error("entry within config.DefaultStaleMaxAge should be servable")
 	}
 
 	veryOld := time.Now().Add(-time.Duration(config.DefaultStaleMaxAge+3600) * time.Second).Unix()
-	entry = &Entry{Timestamp: veryOld, TTL: 60, OriginalTTL: 60}
+	entry = &Entry{Timestamp: veryOld, TTL: 60}
 	if entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		t.Error("entry older than config.DefaultStaleMaxAge should not be servable")
 	}

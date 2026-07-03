@@ -149,7 +149,6 @@ func (m *MemoryCache) SetWithDNSSEC(key string, answer, authority, additional []
 		Authority:       compact(authority),
 		Additional:      compact(additional),
 		TTL:             ttl,
-		OriginalTTL:     ttl,
 		Timestamp:       now,
 		Validated:       validated,
 		DNSSECValidated: dnssecValidated,

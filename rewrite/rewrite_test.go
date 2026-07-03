@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"zjdns/config"
+	"zjdns/internal/ttl"
 
 	"github.com/miekg/dns"
 )
@@ -199,5 +200,126 @@ func TestEvaluator_HasRules(t *testing.T) {
 	})
 	if !re.HasRules() {
 		t.Error("HasRules should be true with rules")
+	}
+}
+
+// ── Rewrite TTL ──────────────────────────────────────────────────────────────
+
+func TestEvaluator_CreatedAt(t *testing.T) {
+	re := New()
+	err := re.LoadRules([]config.RewriteRule{
+		{
+			Name: "ttl.example.com",
+			Records: []config.DNSRecordConfig{
+				{Type: "A", Content: "10.0.0.1", TTL: 120},
+				{Type: "AAAA", Content: "::1", TTL: 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules() error = %v", err)
+	}
+
+	clientIP := net.ParseIP("192.168.1.1")
+	result := re.Evaluate("ttl.example.com.", dns.TypeA, dns.ClassINET, clientIP)
+
+	if !result.ShouldRewrite {
+		t.Fatal("ShouldRewrite should be true")
+	}
+	if result.CreatedAt <= 0 {
+		t.Errorf("CreatedAt = %d, should be > 0", result.CreatedAt)
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("Records len = %d, want 1 (filtered by qtype=A)", len(result.Records))
+	}
+}
+
+// TestEvaluator_RewriteTTLCyclical simulates the handler pipeline:
+// Evaluate → DeductElapsedCyclical with elapsed time since LoadRules.
+func TestEvaluator_RewriteTTLCyclical(t *testing.T) {
+	re := New()
+	err := re.LoadRules([]config.RewriteRule{
+		{
+			Name: "cycle.example.com",
+			Records: []config.DNSRecordConfig{
+				{Type: "A", Content: "10.0.0.1", TTL: 120},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules() error = %v", err)
+	}
+
+	clientIP := net.ParseIP("10.0.0.1")
+	result := re.Evaluate("cycle.example.com.", dns.TypeA, dns.ClassINET, clientIP)
+	if !result.ShouldRewrite {
+		t.Fatal("ShouldRewrite should be true")
+	}
+
+	// Simulate elapsed time since LoadRules by overriding NowUnix.
+	origNow := ttl.NowUnix
+	defer func() { ttl.NowUnix = origNow }()
+
+	tests := []struct {
+		name    string
+		elapsed int64
+		wantTTL uint32
+	}{
+		{"fresh start", 0, 120},
+		{"mid cycle", 40, 80},
+		{"near expiry", 119, 1},
+		{"reset at boundary", 120, 120},
+		{"second cycle", 140, 100},        // 120 - (140 % 120) = 100
+		{"third cycle near end", 350, 10}, // 120 - (350 % 120) = 120 - 110 = 10
+		{"many cycles", 1200, 120},        // 1200 % 120 = 0 → 120
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the handler: elapsed = now - loadedAt
+			records := ttl.DeductElapsedCyclical(result.Records, tt.elapsed)
+			if len(records) != 1 {
+				t.Fatalf("got %d records, want 1", len(records))
+			}
+			if got := records[0].Header().Ttl; got != tt.wantTTL {
+				t.Errorf("elapsed=%ds → TTL=%d, want %d", tt.elapsed, got, tt.wantTTL)
+			}
+		})
+	}
+}
+
+// TestEvaluator_RewriteTTLMultipleRRs verifies that records with different
+// TTLs cycle independently.
+func TestEvaluator_RewriteTTLMultipleRRs(t *testing.T) {
+	re := New()
+	err := re.LoadRules([]config.RewriteRule{
+		{
+			Name: "multi.example.com",
+			Records: []config.DNSRecordConfig{
+				{Type: "A", Content: "10.0.0.1", TTL: 60},
+				{Type: "A", Content: "10.0.0.2", TTL: 120},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules() error = %v", err)
+	}
+
+	clientIP := net.ParseIP("10.0.0.1")
+	result := re.Evaluate("multi.example.com.", dns.TypeA, dns.ClassINET, clientIP)
+	if !result.ShouldRewrite {
+		t.Fatal("ShouldRewrite should be true")
+	}
+	if len(result.Records) != 2 {
+		t.Fatalf("Records len = %d, want 2", len(result.Records))
+	}
+
+	// Elapsed=80: rr1 (TTL=60): 80%60=20 → 60-20=40; rr2 (TTL=120): 80%120=80 → 120-80=40
+	records := ttl.DeductElapsedCyclical(result.Records, 80)
+	if records[0].Header().Ttl != 40 {
+		t.Errorf("rr1 TTL=%d, want 40", records[0].Header().Ttl)
+	}
+	if records[1].Header().Ttl != 40 {
+		t.Errorf("rr2 TTL=%d, want 40", records[1].Header().Ttl)
 	}
 }

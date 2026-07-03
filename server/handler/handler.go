@@ -19,6 +19,7 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/internal/ttl"
 	"zjdns/rewrite"
 	"zjdns/server/resolver"
 	"zjdns/stats"
@@ -256,11 +257,12 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 			}
 
 			if len(rewriteResult.Records) > 0 {
+				elapsed := ttl.Elapsed(rewriteResult.CreatedAt)
 				response := h.buildResponse(req)
-				response.Answer = rewriteResult.Records
+				response.Answer = ttl.DeductElapsedCyclical(rewriteResult.Records, elapsed)
 				response.Rcode = dns.RcodeSuccess
 				if len(rewriteResult.Additional) > 0 {
-					response.Extra = rewriteResult.Additional
+					response.Extra = ttl.DeductElapsedCyclical(rewriteResult.Additional, elapsed)
 				}
 
 				ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
@@ -373,7 +375,7 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 
 	msg := h.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 
-	if isExpired && entry.ShouldRefresh() {
+	if isExpired {
 		h.cacheRefreshGroup.Go(func() error {
 			defer dnsutil.HandlePanic("cache refresh")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
@@ -419,13 +421,19 @@ func (h *Handler) buildCacheResponse(req *dns.Msg, entry *cache.Entry, isExpired
 	msg := h.buildResponse(req)
 
 	responseTTL := entry.RemainingTTL()
-	elapsed := int64(entry.TTL) - int64(responseTTL)
-	if elapsed < 0 {
-		elapsed = 0
+
+	if isExpired {
+		// Stale: set all RR TTLs directly to the cyclical stale countdown.
+		msg.Answer = cache.ExpandAndProcessRecords(entry.Answer, int64(responseTTL), false, clientRequestedDNSSEC)
+		msg.Ns = cache.ExpandAndProcessRecords(entry.Authority, int64(responseTTL), false, clientRequestedDNSSEC)
+		msg.Extra = cache.ExpandAndProcessRecords(entry.Additional, int64(responseTTL), false, clientRequestedDNSSEC)
+	} else {
+		// Fresh: subtract actual elapsed time from each RR's original TTL.
+		elapsed := ttl.Elapsed(entry.Timestamp)
+		msg.Answer = cache.ExpandAndProcessRecords(entry.Answer, elapsed, true, clientRequestedDNSSEC)
+		msg.Ns = cache.ExpandAndProcessRecords(entry.Authority, elapsed, true, clientRequestedDNSSEC)
+		msg.Extra = cache.ExpandAndProcessRecords(entry.Additional, elapsed, true, clientRequestedDNSSEC)
 	}
-	msg.Answer = cache.ExpandAndProcessRecords(entry.Answer, elapsed, true, clientRequestedDNSSEC)
-	msg.Ns = cache.ExpandAndProcessRecords(entry.Authority, elapsed, true, clientRequestedDNSSEC)
-	msg.Extra = cache.ExpandAndProcessRecords(entry.Additional, elapsed, true, clientRequestedDNSSEC)
 
 	if entry.Validated {
 		msg.AuthenticatedData = true
