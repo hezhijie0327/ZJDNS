@@ -180,6 +180,10 @@ go test -bench=. -short ./...
 
 # 代码检查（零警告）
 golangci-lint run && golangci-lint fmt
+
+# 安装 pre-commit hook
+sh scripts/install-hook.sh                 # Linux / macOS
+pwsh scripts/install-hook.ps1              # Windows PowerShell
 ```
 
 ## 许可证

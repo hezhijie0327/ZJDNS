@@ -42,7 +42,8 @@ go test -bench=BenchmarkServerProcessQuery -benchtime=3s .
 golangci-lint run && golangci-lint fmt
 
 # Install pre-commit hook
-cp scripts/pre-commit .git/hooks/ && chmod +x .git/hooks/pre-commit
+sh scripts/install-hook.sh                 # Linux / macOS
+pwsh scripts/install-hook.ps1              # Windows PowerShell
 ```
 
 Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
