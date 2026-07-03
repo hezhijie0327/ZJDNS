@@ -121,9 +121,10 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 ### File Organization
 
 - **One file per logical concern** within a package. Split when a file exceeds ~500 lines.
-- **Message vs processing split**: `handler.go` (query pipeline) + `message.go` (EDNS/response helpers).
-- **Main vs nsec split**: `dnssec_crypto.go` (RRSIG/DNSKEY/DS validation) + `dnssec_nsec.go` (NSEC/NSEC3 denial-of-existence).
-- **Protocol split**: `socks5.go` could be split into `socks5_tcp.go` + `socks5_udp.go` when it exceeds 500 lines.
+- **Message vs processing split**: `handler.go` (query pipeline) + `handler_cache.go` (cache hit/miss/refresh) + `message.go` (EDNS/response helpers).
+- **Main vs nsec split**: `dnssec_crypto.go` (RRSIG/DNSKEY/DS validation) + `dnssec_nsec.go` (NSEC/NSEC3 denial-of-existence, including `nsec3HashName` + `isDenialOfExistenceValid`).
+- **Protocol split**: `socks5.go` (types, handshake, shared helpers) + `socks5_tcp.go` (TCP CONNECT) + `socks5_udp.go` (UDP ASSOCIATE + PacketConn wrapper).
+- **Config split**: `config.go` (types, loading, defaults, DDR/Chaos) + `config_validate.go` (all validation functions).
 - **Do NOT split** when the split would require exporting internal helpers or when the split crosses 2–3 tightly coupled concerns (a 400-line file is fine).
 
 ### Concurrency
@@ -172,6 +173,7 @@ zjdns/
 │   ├── cli/                       ← Flag parsing, example config generation
 │   ├── log/                       ← Structured logging (zero internal deps)
 │   ├── pool/                      ← sync.Pool allocators + QUIC error codes
+│   ├── ttl/                       ← Stateless TTL functions (cache + rewrite)
 │   ├── dnsutil/                   ← DNS utilities: validation, PTR, panic recovery
 │   ├── ipdetect/                  ← Public IP auto-detection
 │   └── latency/                   ← Unified probe engine (generic sorter)
@@ -179,7 +181,7 @@ zjdns/
     ├── server.go                  ← Lifecycle, wiring, listeners
     ├── listen.go                  ← Protocol bridge (UDP/TCP dispatch)
     ├── server_tasks.go            ← Background tasks, shutdown
-    ├── handler/                   ← DNS query pipeline (handler.go + message.go)
+    ├── handler/                   ← Query pipeline (handler + handler_cache + message)
     ├── client/                    ← Outbound transports (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5)
     ├── client/pool/               ← RFC 7766 pipelined TCP + QUIC connection pools
     ├── resolver/                  ← Upstream + recursive + qname_minimise (RFC 9156)
@@ -309,7 +311,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **QNAME minimisation (RFC 9156)**: Enabled by default for all recursive resolutions at depth 0. Internal infrastructure queries (NS address resolution) use full QNAME. Minimisation steps tracked per-resolution; after DefaultQnameMinimiseCount (10) steps, all remaining labels are exposed. QTYPE=A is used to hide original QTYPE except for DS/NSEC/NSEC3 parent-side types. When a minimised query returns answer records whose owner names don't match the original QNAME (CNAME for the minimised name, not the target), the resolver retries with the full QNAME per RFC 9156 §2.3.
 - **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read fields after `Put()`. Double-zeroing removed: `Put` zeroes, `Get` trusts.
 - **KTLS**: `gitlab.com/go-extension/tls` with `KernelTX`/`KernelRX` (both default `false`, opt-in). Dual configs: eTLS for TCP, crypto/tls for QUIC. Silent fallback on non-Linux.
-- **SOCKS5**: Per-upstream optional proxy. TCP CONNECT + UDP ASSOCIATE. `SafeURL()` redacts passwords.
+- **SOCKS5**: Per-upstream optional proxy. TCP CONNECT (`socks5_tcp.go`) + UDP ASSOCIATE (`socks5_udp.go`). `SafeURL()` redacts passwords. Shared handshake/auth/helpers in `socks5.go`.
 - **DNSSEC**: IANA root KSK trust anchors (key tags 20326 + 38696). `dnssec_enforce: true` → SERVFAIL on bogus; `false` → pass through without AD.
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
 - **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.

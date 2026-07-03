@@ -121,7 +121,7 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 ```
 zjdns/
 ├── cmd/zjdns/                        # 二进制入口（main.go + version.go + bench_test.go）
-├── config/                           # 配置类型（ECSConfig + ECSOption）、加载、验证、默认值
+├── config/                           # 配置类型、加载、验证（config_validate.go）、默认值
 ├── edns/                             # EDNS(0) 扩展（ECS、Cookie、EDE、Padding）
 │                                     #   ECSOption 为 config.ECSOption 的类型别名
 ├── cache/                            # LRU 缓存 + 磁盘持久化 + PTR 反向索引
@@ -142,12 +142,16 @@ zjdns/
     ├── listen.go                     # 协议桥接（UDP/TCP dispatch）
     ├── server_tasks.go               # 后台任务 + 优雅关闭
     ├── handler/                      # DNS 查询处理管线
-    │   ├── handler.go                #   主流程（缓存命中/过期/缺失、DNSSEC、指标）
+    │   ├── handler.go                #   主流程（管线入口、类型、构造器、指标）
+    │   ├── handler_cache.go          #   缓存处理（命中/过期/缺失、后台刷新、预取）
     │   └── message.go                #   EDNS 构建、Cookie 生成、域名恢复
     ├── client/                       # 出站查询客户端（UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5）
+    │   ├── socks5.go                 #   SOCKS5：类型、握手、共享辅助函数
+    │   ├── socks5_tcp.go             #   SOCKS5 TCP CONNECT 路径
+    │   ├── socks5_udp.go             #   SOCKS5 UDP ASSOCIATE 路径 + PacketConn
     │   └── pool/                     # TCP/DoT RFC 7766 流水线 + QUIC 连接池
     ├── resolver/                     # 递归解析 + 上游转发 + DNSSEC 信任链
-    ├── security/                     # DNSSEC 密码学 (crypto.go + nsec.go) + 劫持检测
+    ├── security/                     # DNSSEC 密码学 + NSEC/NSEC3 否定 + 劫持检测
     ├── tls/                          # TLS 安全传输监听器（DoT/DoQ/DoH/DoH3）
     └── probe/                        # A/AAAA 延迟探测与记录重排
 ```
@@ -155,9 +159,9 @@ zjdns/
 **依赖分层** — 严格单向无环：
 
 ```
-internal/（基础层：ttl/log/pool/dnsutil/ipdetect/latency）
-    → config（域基础）
-        → edns/cache/cidr/rewrite/stats（域包）
+internal/（基础层：log/pool/ttl/dnsutil/ipdetect/latency）
+    → config（域基础层）
+        → edns/cache/cidr/rewrite/stats（域包层）
             → server/子包（resolver/security/client/tls/handler）
                 → server/（顶层装配）→ main
 ```
