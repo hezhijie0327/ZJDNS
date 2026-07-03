@@ -1,13 +1,31 @@
 #!/bin/sh
 # Pre-commit hook: auto-format and lint check before every commit.
+# Works on Unix and Windows (via Git Bash).
+#
+# Only files that were already staged are re-added after formatting —
+# unstaged files touched by golangci-lint fmt stay in the working tree
+# for the user to review separately.
 
 set -e
 
 echo "==> golangci-lint fmt..."
+
+# Remember which files were already staged (C=copy, A=add, M=modified).
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+
 golangci-lint fmt ./...
 
-# Re-stage tracked files that may have been touched by golangci-lint fmt.
-git add -u
+# Re-stage only files that were in the original staged set AND were
+# modified by golangci-lint fmt. Unstaged files touched by fmt are
+# left in the working tree — the user can review and add them separately.
+if [ -n "$staged" ]; then
+	for f in $staged; do
+		if [ -f "$f" ] && ! git diff --quiet -- "$f"; then
+			echo "  re-staging: $f"
+			git add "$f"
+		fi
+	done
+fi
 
 echo "==> golangci-lint run..."
 golangci-lint run ./...
