@@ -184,6 +184,28 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 
 		validated := cryptoValidated
 
+		// RFC 9156 §2.3: if a minimised QNAME query returns answer
+		// records whose owner names don't match the original QNAME,
+		// the minimised name is not a zone cut — it has its own
+		// records (e.g. a CNAME). Expose the full QNAME and retry
+		// with the same nameservers.
+		if qnameMinimise && !strings.EqualFold(queryQuestion.Name, qname) && len(response.Answer) > 0 {
+			matchesQname := false
+			for _, rr := range response.Answer {
+				if rr != nil && strings.EqualFold(dnsutil.NormalizeDomain(rr.Header().Name), normalizedQname) {
+					matchesQname = true
+					break
+				}
+			}
+			if !matchesQname {
+				log.Debugf("RECURSION: qname minimisation step=%d — answer for %s doesn't match %s, retrying with full QNAME",
+					minimiseSteps, queryQuestion.Name, qname)
+				pool.DefaultMessagePool.Put(response)
+				minimiseSteps = config.DefaultQnameMinimiseCount
+				continue
+			}
+		}
+
 		if len(response.Answer) > 0 {
 			validated = r.isDNSSECValid(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain)
 
