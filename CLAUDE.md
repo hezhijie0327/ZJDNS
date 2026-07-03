@@ -305,7 +305,8 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 ## Notable Design Decisions
 
 - **Cache**: RLock reads (zero contention), entry pointer returned directly — `expand()` re-parses from `.Text` non-mutatingly. TTL floor 10s. `CompactRecord.RR` intentionally nil (saves memory; `expand()` uses `.Text`). Negative response TTL capped at `min(SOA.TTL, SOA.Minttl, 10800)` per RFC 9077.
-- **QNAME minimisation (RFC 9156)**: Enabled by default for all recursive resolutions at depth 0. Internal infrastructure queries (NS address resolution) use full QNAME. Minimisation steps tracked per-resolution; after DefaultQnameMinimiseCount (10) steps, all remaining labels are exposed. QTYPE=A is used to hide original QTYPE except for DS/NSEC/NSEC3 parent-side types.
+- **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and rewrite (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
+- **QNAME minimisation (RFC 9156)**: Enabled by default for all recursive resolutions at depth 0. Internal infrastructure queries (NS address resolution) use full QNAME. Minimisation steps tracked per-resolution; after DefaultQnameMinimiseCount (10) steps, all remaining labels are exposed. QTYPE=A is used to hide original QTYPE except for DS/NSEC/NSEC3 parent-side types. When a minimised query returns answer records whose owner names don't match the original QNAME (CNAME for the minimised name, not the target), the resolver retries with the full QNAME per RFC 9156 §2.3.
 - **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read fields after `Put()`. Double-zeroing removed: `Put` zeroes, `Get` trusts.
 - **KTLS**: `gitlab.com/go-extension/tls` with `KernelTX`/`KernelRX` (both default `false`, opt-in). Dual configs: eTLS for TCP, crypto/tls for QUIC. Silent fallback on non-Linux.
 - **SOCKS5**: Per-upstream optional proxy. TCP CONNECT + UDP ASSOCIATE. `SafeURL()` redacts passwords.
@@ -313,6 +314,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
 - **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
+- **Rewite TTL**: Rewrite rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently (`origTTL - (elapsed % origTTL)`) rather than staying static. Rewrite responses bypass cache (client-IP filtering), but TTL now decrements correctly.
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns).
 - **stats PersistStore**: stats defines a local interface (`SaveStats`/`LoadStats` with raw `[]byte`) and does not import cache. The `server` package adapts `cache.Store` via `statsPersistAdapter`.
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
@@ -376,6 +378,16 @@ dig @127.0.0.1 -p 15353 sigok.ippacket.stream A +short
 # Microsoft mail.protection.outlook.com rejects EDNS queries with FORMERR.
 # ZJDNS should retry without EDNS and still get the answer.
 dig @127.0.0.1 -p 15353 zhijie-online.mail.protection.outlook.com A +short
+```
+
+**QNAME minimisation CNAME corner case (RFC 9156 §2.3):**
+```bash
+# home.console.aliyun.com has a deep CNAME chain. The minimised query
+# 'console.aliyun.com. A' returns a CNAME for console.aliyun.com — NOT
+# home.console.aliyun.com. The resolver must detect the owner-name
+# mismatch, retry with the full QNAME, then follow the full CNAME chain.
+# Should return NOERROR with 15 answer records covering all CNAME hops.
+dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 ```
 
 Verify hijack detection from logs: `grep -E "hijack detected|rejecting hijacked|tcp=true" /tmp/zjdns.log`

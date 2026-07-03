@@ -49,7 +49,7 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 
 - **DNSSEC**：递归模式完整信任链验证（根 KSK→TLD DS→权威 DNSKEY→RRSIG），NSEC/NSEC3 已验证否定（RFC 5155），EDE 错误码传播
 - **NSEC/NSEC3 TTL 上限**：RFC 9077，负面缓存 TTL 取 `min(SOA.TTL, SOA.Minttl, 10800)`，防止过度否定
-- **QNAME 最小化**：RFC 9156，递归解析时仅向各级权威发送最小必要 QNAME，默认启用
+- **QNAME 最小化**：RFC 9156，递归解析时仅向各级权威发送最小必要 QNAME，默认启用。检测 minimised 查询返回的 CNAME 与原始 QNAME 不匹配时自动用完整 QNAME 重试（§2.3）
 - **劫持防护**：根/TLD 越权响应检测 + UDP→TCP 自动回退
 - **DNS Cookie**：HMAC-SHA256 服务端 Cookie（RFC 7873），密钥无缝轮换，入口早期验证
 - **CIDR 过滤**：基于标签的 IP 过滤（文件/内联规则），IPv4 位运算优化
@@ -59,6 +59,7 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 ### 缓存
 
 - **LRU 内存缓存**：固定容量（默认 4 MB），RLock 零读争用，atomic 访问时间淘汰
+- **全局 TTL 管理器**（`internal/ttl`）：统一 TTL 计算，cache 与 rewrite 共用。Stale TTL 周期性倒数（30→1→30），每轮给后台刷新新的机会；Rewrite TTL 独立周期性倒数（每个 RR 单独取模）
 - **磁盘持久化**：gob 快照，启动恢复，定期落盘（默认 30s），原子写入
 - **过期服务**：RFC 8767 过期缓存服务（最大 30 天），上游不可用时兜底
 - **预取**：TTL 剩余 ≤40% 时后台异步刷新，ECS 感知分区
@@ -132,6 +133,7 @@ zjdns/
 │   ├── cli/                          # CLI 辅助（参数解析、示例配置）
 │   ├── log/                          # 分级日志 + TimeCache + 组件过滤
 │   ├── pool/                         # sync.Pool + QUIC 应用层错误码
+│   ├── ttl/                          # 全局 TTL 管理器（周期性 stale 倒数、预取判断）
 │   ├── dnsutil/                      # DNS 工具函数（含 JoinDNSPort）
 │   ├── ipdetect/                     # ECS 公网 IP 自动检测
 │   └── latency/                      # 统一延迟探测引擎
@@ -153,9 +155,11 @@ zjdns/
 **依赖分层** — 严格单向无环：
 
 ```
-internal/（基础层）→ config（域基础）→ edns/cache/cidr/rewrite/stats（域包）
-    → server/子包（resolver/security/client/tls/handler）
-        → server/（顶层装配）→ main
+internal/（基础层：ttl/log/pool/dnsutil/ipdetect/latency）
+    → config（域基础）
+        → edns/cache/cidr/rewrite/stats（域包）
+            → server/子包（resolver/security/client/tls/handler）
+                → server/（顶层装配）→ main
 ```
 
 ## 开发
