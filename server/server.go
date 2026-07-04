@@ -57,6 +57,17 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 	cacheRefreshGroup, cacheRefreshCtx := errgroup.WithContext(ctx)
 
+	server := &Server{
+		config:          cfg,
+		ctx:             ctx,
+		cancel:          cancel,
+		shutdown:        make(chan struct{}),
+		backgroundGroup: backgroundGroup,
+		backgroundCtx:   backgroundCtx,
+	}
+
+	// ── Foundation: database ──────────────────────────────────────────────
+
 	cacheStore, err := cache.NewSQLiteCache(
 		cfg.Server.Features.Cache.DBPath,
 		cfg.Server.Features.Cache.MaxEntries,
@@ -67,6 +78,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cancel(fmt.Errorf("cache init: %w", err))
 		return nil, fmt.Errorf("cache init: %w", err)
 	}
+
+	// ── Domain services: EDNS, rewrite, CIDR ──────────────────────────────
 
 	ednsHandler, err := edns.NewHandler(cfg.Server.Features.ECS)
 	if err != nil {
@@ -90,6 +103,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			return nil, fmt.Errorf("CIDR filter init: %w", err)
 		}
 	}
+	server.cidrFilter = cidrFilter
+
+	// ── Core: handler + security ──────────────────────────────────────────
 
 	h := handler.New(
 		cfg, cacheStore, ednsHandler, rewriteEvaluator,
@@ -99,35 +115,12 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			Ctx:          ctx,
 		},
 	)
+	server.handler = h
 
 	guard := security.New(cacheStore, cfg.Server.Features.HijackProtection)
+	server.guard = guard
 
-	server := &Server{
-		config:          cfg,
-		handler:         h,
-		cidrFilter:      cidrFilter,
-		ctx:             ctx,
-		cancel:          cancel,
-		shutdown:        make(chan struct{}),
-		backgroundGroup: backgroundGroup,
-		backgroundCtx:   backgroundCtx,
-	}
-
-	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
-		tlsCfg := servertls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
-		if cfg.Server.TLS.KTLS != nil {
-			tlsCfg.KTLS = &servertls.KTLSSettings{
-				KernelTX: cfg.Server.TLS.KTLS.KernelTX,
-				KernelRX: cfg.Server.TLS.KTLS.KernelRX,
-			}
-		}
-		tlsSrv, err := servertls.New(h, tlsCfg, config.DefaultBackgroundTimeout)
-		if err != nil {
-			cancel(fmt.Errorf("TLS server init: %w", err))
-			return nil, fmt.Errorf("TLS server init: %w", err)
-		}
-		server.tls = tlsSrv
-	}
+	// ── Outbound: query client ────────────────────────────────────────────
 
 	queryClient := client.New()
 	if cfg.Server.TLS.KTLS != nil {
@@ -135,11 +128,10 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 	server.queryClient = queryClient
 
+	// ── Resolution: resolver + upstream config ────────────────────────────
+
 	resolver := resolver.New(
-		queryClient,
-		guard,
-		ednsHandler,
-		cidrFilter,
+		queryClient, guard, ednsHandler, cidrFilter,
 		func(q resolver.Question, ecs *edns.ECSOption, rd bool, secure bool) *dns.Msg {
 			return h.BuildQueryMessage(handler.Question{Name: q.Name, Qtype: q.Qtype, Qclass: q.Qclass}, ecs, rd, secure)
 		},
@@ -150,10 +142,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	resolver.SetBackgroundContext(backgroundCtx)
 	resolver.SetBackgroundGroup(backgroundGroup)
 	h.SetResolver(resolver)
-	server.guard = guard
 
-	// Pre-warm transport connections for configured upstream servers so
-	// the first query does not pay the full TLS/QUIC handshake cost.
 	if len(cfg.Upstream) > 0 || len(cfg.Fallback) > 0 {
 		allServers := make([]config.UpstreamServer, 0, len(cfg.Upstream)+len(cfg.Fallback))
 		allServers = append(allServers, cfg.Upstream...)
@@ -161,9 +150,23 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.queryClient.WarmUpConnections(allServers)
 	}
 
-	// Initialize the infrastructure-level latency prober for root/NS
-	// server reordering. This is independent of the user-facing
-	// latency_probe configuration.
+	// ── Transport listeners ───────────────────────────────────────────────
+
+	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
+		tlsCfg := servertls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
+		if cfg.Server.TLS.KTLS != nil {
+			tlsCfg.KTLS = &servertls.KTLSSettings{KernelTX: cfg.Server.TLS.KTLS.KernelTX, KernelRX: cfg.Server.TLS.KTLS.KernelRX}
+		}
+		tlsSrv, err := servertls.New(h, tlsCfg, config.DefaultBackgroundTimeout)
+		if err != nil {
+			cancel(fmt.Errorf("TLS server init: %w", err))
+			return nil, fmt.Errorf("TLS server init: %w", err)
+		}
+		server.tls = tlsSrv
+	}
+
+	// ── Observability: probes + pprof ─────────────────────────────────────
+
 	probe.NewInfraProber(backgroundCtx)
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
@@ -188,6 +191,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			}
 		}
 	}
+
+	// ── Background tasks ──────────────────────────────────────────────────
 
 	server.startBackgroundTasks()
 
