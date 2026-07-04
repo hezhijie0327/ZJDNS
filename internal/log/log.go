@@ -73,10 +73,10 @@ type Manager struct {
 
 // TimeCache caches the current time with periodic one-second updates.
 type TimeCache struct {
-	currentTime atomic.Value
-	ticker      *time.Ticker
-	done        chan struct{}
-	closeOnce   sync.Once
+	unixNano  atomic.Int64
+	ticker    *time.Ticker
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewManager creates a new Manager with default settings.
@@ -319,13 +319,13 @@ func NewTimeCache() *TimeCache {
 		ticker: time.NewTicker(time.Second),
 		done:   make(chan struct{}),
 	}
-	t.currentTime.Store(time.Now())
+	t.unixNano.Store(time.Now().UnixNano())
 
 	go func() {
 		for {
 			select {
 			case <-t.ticker.C:
-				t.currentTime.Store(time.Now())
+				t.unixNano.Store(time.Now().UnixNano())
 			case <-t.done:
 				return
 			}
@@ -337,17 +337,17 @@ func NewTimeCache() *TimeCache {
 
 // Now returns the current cached time.
 func (t *TimeCache) Now() time.Time {
-	return t.currentTime.Load().(time.Time)
+	return time.Unix(0, t.unixNano.Load())
 }
 
 // NowUnix returns the current cached Unix timestamp (seconds).
 func NowUnix() int64 {
-	return DefaultTimeCache.Now().Unix()
+	return DefaultTimeCache.unixNano.Load() / 1e9
 }
 
 // NowUnixNano returns the current cached Unix timestamp (nanoseconds).
 func NowUnixNano() int64 {
-	return DefaultTimeCache.Now().UnixNano()
+	return DefaultTimeCache.unixNano.Load()
 }
 
 // Stop stops the time cache ticker and goroutine. It is safe to call multiple

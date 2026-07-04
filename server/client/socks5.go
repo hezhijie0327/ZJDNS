@@ -293,7 +293,9 @@ func readAddress(conn net.Conn, atyp byte) (*net.UDPAddr, error) {
 		port := int(binary.BigEndian.Uint16(rest[domainLen:]))
 		// Resolve the relay hostname to IP — SOCKS5 proxies usually return an
 		// IP, but some return a domain. Use the standard resolver.
-		ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip", host)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 		if err != nil || len(ips) == 0 {
 			return nil, fmt.Errorf("socks5: resolve relay host %q: %w", host, err)
 		}
