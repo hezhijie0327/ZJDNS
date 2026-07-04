@@ -471,7 +471,12 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	dsRecords := security.FindDS(dsResp.Answer)
 	dsRecords = append(dsRecords, security.FindDS(dsResp.Ns)...)
 	if len(dsRecords) == 0 {
-		return false, fmt.Errorf("no DS records found for %s", childZone)
+		// No DS at parent — the child zone is an insecure
+		// delegation (unsigned). Clear the chain so the
+		// bogus check does not fire on stale parent DS.
+		chain.childDS = nil
+		chain.dsPresentButUnverified = false
+		return false, nil
 	}
 
 	// Verify DS RRSIGs against the parent zone's DNSKEYs

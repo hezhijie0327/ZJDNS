@@ -164,6 +164,13 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 
 	if !*validated && chain.zoneCutDetected {
 		chain.zoneCutDetected = false
+		// The parent zone's DS records are for the parent→child
+		// delegation; they do not apply to sub-zones discovered
+		// via RRSIG signer mismatch. Clear them so failed zone
+		// cut resolution is treated as insecure, not bogus.
+		chain.childDS = nil
+		chain.dsPresentButUnverified = false
+
 		if cutValidated, cutErr := r.resolveZoneCut(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain); cutErr == nil {
 			*validated = cutValidated
 			if err := r.recordDNSSECFailure(chain, *validated,
@@ -172,13 +179,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 				return &terminalResult{server: config.RecursiveIndicator, ecs: ecsResponse, err: err}
 			}
 		} else {
-			if len(chain.childDS) > 0 || chain.dsPresentButUnverified {
-				r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
-				if r.resolver.DNSSECEnforce {
-					return &terminalResult{server: config.RecursiveIndicator, ecs: ecsResponse,
-						err: fmt.Errorf("DNSSEC validation failed: zone cut resolution error for %s: %w", question.Name, cutErr)}
-				}
-			}
+			log.Debugf("SECURITY: zone cut resolution failed for %s: %v (treating as insecure)", question.Name, cutErr)
 			*validated = false
 		}
 		return &terminalResult{answer: stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
