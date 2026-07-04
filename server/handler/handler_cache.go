@@ -32,7 +32,7 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 			defer dnsutil.HandlePanic("cache refresh")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
-			return h.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
+			return h.refreshCacheEntry(ctx, question, ecsOpt, cacheKey)
 		})
 	}
 
@@ -45,7 +45,7 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
 			log.Debugf("CACHE: prefetch triggered for %s (threshold=%d%%)", question.Name, config.DefaultPrefetchThresholdPercent)
-			return h.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
+			return h.refreshCacheEntry(ctx, question, ecsOpt, cacheKey)
 		})
 	}
 
@@ -116,7 +116,7 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 			defer dnsutil.HandlePanic("expired cache refresh")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
-			return h.refreshCacheEntry(ctx, question, ecsOpt, cacheKey, entry)
+			return h.refreshCacheEntry(ctx, question, ecsOpt, cacheKey)
 		})
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
@@ -301,7 +301,7 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	return msg
 }
 
-func (h *Handler) refreshCacheEntry(ctx context.Context, question Question, ecs *edns.ECSOption, cacheKey string, _ *cache.Entry) error {
+func (h *Handler) refreshCacheEntry(ctx context.Context, question Question, ecs *edns.ECSOption, cacheKey string) error {
 	defer dnsutil.HandlePanic("cache refresh")
 
 	if atomic.LoadInt32(&h.closed) != 0 {

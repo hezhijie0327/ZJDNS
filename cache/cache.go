@@ -182,7 +182,7 @@ func processRR(rr dns.RR, value int64, isElapsed bool, includeDNSSEC bool) dns.R
 			return nil
 		}
 	}
-	newRR := func() dns.RR { r, _ := dns.New(rr.String()); return r }()
+	newRR := rr.Clone()
 	if newRR == nil {
 		return nil
 	}

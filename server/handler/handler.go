@@ -216,10 +216,12 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		Qclass: req.Question[0].Header().Class,
 	}
 
-	if clientIP != nil {
-		log.Debugf("QUERY: client IP=%s query=%s type=%s", clientIP.String(), question.Name, dns.TypeToString[question.Qtype])
-	} else {
-		log.Debugf("QUERY: client IP=<unknown> query=%s type=%s", question.Name, dns.TypeToString[question.Qtype])
+	if log.IsDebug() {
+		if clientIP != nil {
+			log.Debugf("QUERY: client IP=%s query=%s type=%s", clientIP.String(), question.Name, dns.TypeToString[question.Qtype])
+		} else {
+			log.Debugf("QUERY: client IP=<unknown> query=%s type=%s", question.Name, dns.TypeToString[question.Qtype])
+		}
 	}
 
 	tcpKeepaliveTimeout := tcpKeepaliveTimeoutForProtocol(requestProtocol)

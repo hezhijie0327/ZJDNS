@@ -270,6 +270,9 @@ func Infof(format string, args ...any) { Default.Info(format, args...) }
 // Debugf logs a debug-level message via the default manager.
 func Debugf(format string, args ...any) { Default.Debug(format, args...) }
 
+// IsDebug reports whether the default manager is at Debug level or higher.
+func IsDebug() bool { return Default.Level() >= Debug }
+
 // SetLevel sets the logging level on the default manager.
 func SetLevel(lvl Level) { Default.SetLevel(lvl) }
 
