@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	"codeberg.org/miekg/dns"
 	_ "modernc.org/sqlite"
@@ -16,10 +15,7 @@ import (
 	"zjdns/internal/ttl"
 )
 
-const (
-	defaultStaleMaxAge        = int64(config.DefaultStaleMaxAge)
-	defaultStatsFlushInterval = 5 * time.Minute
-)
+const defaultStaleMaxAge = int64(config.DefaultStaleMaxAge)
 
 // SQLiteCache is a DNS response cache backed entirely by SQLite.
 type SQLiteCache struct {
@@ -28,7 +24,6 @@ type SQLiteCache struct {
 	mmapSizeMB  int
 	cacheSizeMB int
 	closed      int32
-	stopCh      chan struct{}
 	entryCount  atomic.Int64
 	stats       statsAccumulator
 }
@@ -99,7 +94,6 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 		maxEntries:  maxEntries,
 		mmapSizeMB:  mmapSizeMB,
 		cacheSizeMB: cacheSizeMB,
-		stopCh:      make(chan struct{}),
 	}
 
 	if err := s.migrate(); err != nil {
@@ -113,7 +107,6 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 		s.entryCount.Store(count)
 	}
 	s.restoreStats()
-	s.startPeriodicStatsFlush()
 
 	persistLabel := path
 	if persistLabel == "" {
@@ -344,7 +337,6 @@ func (s *SQLiteCache) Close() error {
 	if !atomic.CompareAndSwapInt32(&s.closed, 0, 1) {
 		return nil
 	}
-	close(s.stopCh)
 	s.flushStats()
 	s.flushStats()
 	if err := s.db.Close(); err != nil {
@@ -698,26 +690,6 @@ func (s *SQLiteCache) evictOldest(n int64) {
 
 	s.entryCount.Add(-n)
 	log.Debugf("CACHE: evicted %d entries (max=%d)", n, s.maxEntries)
-}
-
-// ── Periodic stats flush ────────────────────────────────────────────────────
-
-func (s *SQLiteCache) startPeriodicStatsFlush() {
-	go func() {
-		ticker := time.NewTicker(defaultStatsFlushInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-			case <-s.stopCh:
-				return
-			}
-			if atomic.LoadInt32(&s.closed) != 0 {
-				return
-			}
-			s.flushStats()
-		}
-	}()
 }
 
 // UpdateLatency sets the latency for a specific record identified by entry lookup
