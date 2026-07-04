@@ -75,16 +75,11 @@ type DDRSettings struct {
 
 // CacheSettings configures DNS response cache size, persistence, and stale serving.
 type CacheSettings struct {
-	MaxEntries  int                      `json:"max_entries,omitempty"`
-	MMapSizeMB  int                      `json:"mmap_size_mb,omitempty"`
-	CacheSizeMB int                      `json:"cache_size_mb,omitempty"`
-	Persist     CachePersistenceSettings `json:"persist,omitempty"`
-	PreferStale bool                     `json:"prefer_stale,omitempty"`
-}
-
-// CachePersistenceSettings configures the SQLite database file for cache persistence.
-type CachePersistenceSettings struct {
-	File string `json:"file,omitempty"`
+	MaxEntries  int    `json:"max_entries,omitempty"`
+	MMapSizeMB  int    `json:"mmap_size_mb,omitempty"`
+	CacheSizeMB int    `json:"cache_size_mb,omitempty"`
+	DBPath      string `json:"db_path,omitempty"`
+	PreferStale bool   `json:"prefer_stale,omitempty"`
 }
 
 // StatsRow mirrors the stats table columns for persistence without JSON.

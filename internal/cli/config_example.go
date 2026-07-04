@@ -20,10 +20,10 @@ func GenerateExampleConfig() string {
 	cfg.Server.TLS.KTLS = &config.KTLSSettings{KernelTX: true}
 
 	cfg.Server.Features.Cache.MaxEntries = config.DefaultMaxCacheEntries
-	cfg.Server.Features.Cache.Persist = config.CachePersistenceSettings{
-		File: "cache.db",
-	}
+	cfg.Server.Features.Cache.MMapSizeMB = 16
+	cfg.Server.Features.Cache.CacheSizeMB = 4
 	cfg.Server.Features.Cache.PreferStale = true
+	cfg.Server.Features.Cache.DBPath = "cache.db"
 	cfg.Server.Features.ECS = config.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []config.LatencyProbeStep{
 		{Protocol: "ping", Timeout: 100},
@@ -34,7 +34,7 @@ func GenerateExampleConfig() string {
 		{Protocol: "https", Port: config.DefaultProbePortHTTPS, Timeout: 100},
 		{Protocol: "http3", Port: config.DefaultProbePortHTTPS, Timeout: 100},
 	}
-	cfg.Server.Features.Stats = &config.StatsSettings{}
+	cfg.Server.Features.Stats = &config.StatsSettings{Interval: 3600, ResetInterval: 86400}
 
 	cfg.Upstream = []config.UpstreamServer{
 		{Address: "223.5.5.5:53", Protocol: "tcp", Proxy: "socks5://127.0.0.1:1080"},

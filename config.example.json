@@ -31,11 +31,10 @@
         "prefer_ipv4": true
       },
       "cache": {
-        "size": 4194304,
-        "persist": {
-          "file": "cache.db",
-          "interval": 30
-        },
+        "max_entries": 10000,
+        "mmap_size_mb": 16,
+        "cache_size_mb": 4,
+        "db_path": "cache.db",
         "prefer_stale": true
       },
       "latency_probe": [

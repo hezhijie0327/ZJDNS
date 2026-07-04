@@ -81,7 +81,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	cacheStore, err := cache.NewSQLiteCache(
-		cfg.Server.Features.Cache.Persist.File,
+		cfg.Server.Features.Cache.DBPath,
 		cfg.Server.Features.Cache.MaxEntries,
 		cfg.Server.Features.Cache.MMapSizeMB,
 		cfg.Server.Features.Cache.CacheSizeMB,

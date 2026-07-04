@@ -89,7 +89,7 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 - **Conversion helpers use `as` prefix**: `asIPv4Net` (converts `*net.IPNet` → `*ipv4Net`). Not `toXxx`.
 
 ### Performance (Hot Path)
-- **`log.NowUnix()` / `log.NowUnixNano()`** instead of `time.Now()` in cache TTL checks, DNSSEC RRSIG validation, last-access timestamps. `TimeCache` updates once per second via `atomic.Value`.
+- **`log.NowUnix()` / `log.NowUnixNano()`** instead of `time.Now()` in cache TTL checks, DNSSEC RRSIG validation, last-access timestamps. `TimeCache updates once per second via `atomic.Int64` (zero-alloc).
 - **Avoid `fmt.Sprintf` on the query path**: use `strings.Builder` for map keys, `strconv.Itoa` over `fmt.Sprint`.
 - **Zero-allocation trimming**: prefer sub-slicing (`s[:len(s)-1]`) over `strings.TrimSuffix` for single known bytes.
 - **`strings.EqualFold`** over `strings.ToLower` for case-insensitive comparison on the hot path.
@@ -107,7 +107,7 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 ### Constructors
 
 - **Use `New` / `NewXxx`**: not `Build`, `Create`, `Init`, `Make`. Exception: `BuildXxx` for derived values (strings, byte slices), not type instances.
-- **Return concrete types, accept interfaces**: `func New() *MemoryCache` (concrete), but parameters accept interfaces: `func Persist(store PersistStore)`.
+- **Return concrete types, accept interfaces**: `func NewSQLiteCache() *SQLiteCache` (concrete), but parameters accept interfaces: `func Persist(store cache.Store)`.
 - **Group related params into config structs** when a constructor exceeds ~5 parameters. Use a `BackgroundConfig` or `Dependencies` struct rather than functional options unless options are truly optional.
 - **Two-phase initialization** is acceptable for circular dependencies: `New()` creates the object, `SetResolver()` / `SetProber()` inject dependencies that could not exist at construction time. Document the required call order.
 - **Package-level constructors with `sync.Once`**: infrastructure objects that must be a singleton (like `infraProber`) use `sync.Once` inside the constructor so it is safe to call multiple times.
@@ -115,7 +115,6 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 ### Interfaces
 
 - **Define interfaces in the consumer package**, not the producer. Example: `handler.LatencyProber` is defined in `server/handler`, satisfied implicitly by `*server/latency.Prober`.
-- **Keep interfaces small**: `PersistStore` has 2 methods, `LatencyProber` has 1. Split large interfaces (`cache.Store` has 6 — acceptable for the cache abstraction, but only because consumers use the subset they need via Go's implicit satisfaction).
 - **Use `any` not `interface{}`**: Go 1.18+.
 
 ### File Organization
@@ -151,7 +150,6 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 - **No `As`/`Into` conversion prefixes** — use `To` or package-level `asXxx` helpers.
 - **No `interface{}`** — use `any` (Go 1.18+).
 - **No copying of `sync.Mutex`/`atomic.*` values** — always use pointer receivers.
-- **No `init()` with side effects** beyond `gob.Register` / driver registration.
 - **No importing `edns` from `cache`** — cache uses `config.ECSOption` directly.
 
 ## Architecture
