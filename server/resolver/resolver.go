@@ -250,25 +250,16 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 
 	// Both upstream and fallback configured — query concurrently so the
 	// fallback answer is already ready if upstream fails.
-	type outcome struct {
-		answers    []dns.RR
-		authority  []dns.RR
-		additional []dns.RR
-		validated  bool
-		ecs        *edns.ECSOption
-		server     string
-		err        error
-	}
 
-	upstreamCh := make(chan outcome, 1)
-	fallbackCh := make(chan outcome, 1)
+	upstreamCh := make(chan result, 1)
+	fallbackCh := make(chan result, 1)
 	queryCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errors.New("query completed"))
 
 	go func() {
 		a, au, ad, v, e, s, _, err := r.queryUpstream(queryCtx, question, ecs, servers)
 		select {
-		case upstreamCh <- outcome{a, au, ad, v, e, s, err}:
+		case upstreamCh <- result{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Err: err}:
 		case <-queryCtx.Done():
 		}
 	}()
@@ -276,7 +267,7 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	go func() {
 		a, au, ad, v, e, s, _, err := r.queryUpstream(queryCtx, question, ecs, fallbackServers)
 		select {
-		case fallbackCh <- outcome{a, au, ad, v, e, s, err}:
+		case fallbackCh <- result{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Err: err}:
 		case <-queryCtx.Done():
 		}
 	}()
@@ -285,16 +276,16 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	// available (or nearly so) instead of starting a fresh sequential query.
 	select {
 	case up := <-upstreamCh:
-		if up.err == nil {
-			return &QueryResult{Answer: up.answers, Authority: up.authority, Additional: up.additional, Validated: up.validated, ECS: up.ecs, Server: up.server, Fallback: false}
+		if up.Err == nil {
+			return &QueryResult{Answer: up.Answer, Authority: up.Authority, Additional: up.Additional, Validated: up.Validated, ECS: up.ECS, Server: up.Server, Fallback: false}
 		}
 		log.Debugf("UPSTREAM: primary upstream failed for %s, waiting for concurrent fallback", question.Name)
 		select {
 		case fb := <-fallbackCh:
-			if fb.err == nil {
-				return &QueryResult{Answer: fb.answers, Authority: fb.authority, Additional: fb.additional, Validated: fb.validated, ECS: fb.ecs, Server: fb.server, Fallback: true}
+			if fb.Err == nil {
+				return &QueryResult{Answer: fb.Answer, Authority: fb.Authority, Additional: fb.Additional, Validated: fb.Validated, ECS: fb.ECS, Server: fb.Server, Fallback: true}
 			}
-			return &QueryResult{Err: fb.err}
+			return &QueryResult{Err: fb.Err}
 		case <-ctx.Done():
 			return &QueryResult{Err: ctx.Err()}
 		}
