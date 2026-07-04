@@ -258,7 +258,7 @@ func (r *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 
 		// Update latency_ms for probed IPs.
 		for _, rrec := range sortedRecords {
-			if ip := ipFromRR(rrec); ip != "" {
+			if ip, ok := dnsutil.ExtractIPString(rrec); ok {
 				if lat, ok := latencies[ip]; ok {
 					r.cache.UpdateLatency(nsName, dns.TypeNone, dns.ClassINET, nil, false, ip, lat)
 				}
@@ -309,17 +309,6 @@ func reorderRecordsByAddrRank(records []dns.RR, addrRank map[string]int) []dns.R
 		result[i] = item.rr
 	}
 	return result
-}
-
-// ipFromRR extracts the IP string from an A or AAAA record.
-func ipFromRR(rr dns.RR) string {
-	switch r := rr.(type) {
-	case *dns.A:
-		return r.A.String()
-	case *dns.AAAA:
-		return r.AAAA.String()
-	}
-	return ""
 }
 
 // lookupNSAddrsFromCache looks up latency-sorted NS addresses via the TypeNone

@@ -217,6 +217,23 @@ func ExtractIP(rr any) net.IP {
 	return nil
 }
 
+// ExtractIPString returns the IP address string from an A or AAAA record.
+func ExtractIPString(rr dns.RR) (string, bool) {
+	switch r := rr.(type) {
+	case *dns.A:
+		return r.A.String(), true
+	case *dns.AAAA:
+		return r.AAAA.String(), true
+	}
+	return "", false
+}
+
+// IsAOrAAAA reports whether rr is an A or AAAA record.
+func IsAOrAAAA(rr dns.RR) bool {
+	t := dns.RRToType(rr)
+	return t == dns.TypeA || t == dns.TypeAAAA
+}
+
 // WriteDNSFrame writes a 2-byte big-endian length prefix followed by data to w.
 // Used by TCP, DoT, and DoQ transports for DNS message framing (RFC 1035 §4.2.2).
 func WriteDNSFrame(w io.Writer, data []byte) error {

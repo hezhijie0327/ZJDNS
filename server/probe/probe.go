@@ -61,7 +61,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 
 	var ipRRCount int
 	for _, rr := range answer {
-		if isAOrAAAA(rr) {
+		if dnsutil.IsAOrAAAA(rr) {
 			ipRRCount++
 			if ipRRCount > 1 {
 				break
@@ -156,11 +156,3 @@ func SortIPsByLatencyMap(ctx context.Context, ips []net.IP) ([]net.IP, map[strin
 }
 
 // --- Shared helpers ---
-
-func isAOrAAAA(rr dns.RR) bool {
-	if rr == nil {
-		return false
-	}
-	rtype := dns.RRToType(rr)
-	return rtype == dns.TypeA || rtype == dns.TypeAAAA
-}

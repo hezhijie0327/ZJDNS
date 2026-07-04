@@ -790,13 +790,8 @@ func insertRecords(tx *sql.Tx, entryID int64, section string, rrs []dns.RR) {
 }
 
 func extractIP(rr dns.RR) string {
-	switch r := rr.(type) {
-	case *dns.A:
-		return r.A.String()
-	case *dns.AAAA:
-		return r.AAAA.String()
-	}
-	return ""
+	ip, _ := dnsutil.ExtractIPString(rr)
+	return ip
 }
 
 func join(parts []string, sep string) string {

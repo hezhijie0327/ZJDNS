@@ -281,6 +281,7 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	msg.Answer = cache.ProcessRecords(answer, 0, false, clientRequestedDNSSEC)
 	msg.Ns = cache.ProcessRecords(authority, 0, false, clientRequestedDNSSEC)
 	msg.Extra = cache.ProcessRecords(additional, 0, false, clientRequestedDNSSEC)
+
 	log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, authority=%d, additional=%d, validated=%t, ecs=%t", question.Name, dns.TypeToString[question.Qtype], len(answer), len(authority), len(additional), validated, responseECS != nil)
 	log.Debugf("CACHE: served response for %s ", question.Name)
 
