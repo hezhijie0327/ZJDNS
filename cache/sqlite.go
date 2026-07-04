@@ -3,6 +3,7 @@ package cache
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -751,19 +752,40 @@ func (s *SQLiteCache) loadRecords(entryID int64) (*Entry, error) {
 }
 
 func insertRecords(tx *sql.Tx, entryID int64, section string, rrs []dns.RR) {
+	// Filter and collect valid records.
+	type rec struct {
+		seq     int
+		name    string
+		rtype   int
+		ttl     int
+		rrText  string
+		rdataIP string
+	}
+	var recs []rec
 	for i, rr := range rrs {
 		if rr == nil || dns.RRToType(rr) == dns.TypeOPT {
 			continue
 		}
-		rrText := rr.String()
-		_, err := tx.Exec(
-			`INSERT INTO records (entry_id, section, seq, name, rtype, ttl, rr_text, rdata_ip)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			entryID, section, i, rr.Header().Name, int(dns.RRToType(rr)), int(rr.Header().TTL), rrText, extractIP(rr),
-		)
-		if err != nil {
-			log.Warnf("CACHE: insert record failed: %v", err)
-		}
+		recs = append(recs, rec{
+			seq: i, name: rr.Header().Name, rtype: int(dns.RRToType(rr)),
+			ttl: int(rr.Header().TTL), rrText: rr.String(), rdataIP: extractIP(rr),
+		})
+	}
+	if len(recs) == 0 {
+		return
+	}
+
+	// Build multi-row INSERT.
+	placeholders := make([]string, len(recs))
+	args := make([]any, 0, len(recs)*8)
+	for i, r := range recs {
+		placeholders[i] = "(?, ?, ?, ?, ?, ?, ?, ?)"
+		args = append(args, entryID, section, r.seq, r.name, r.rtype, r.ttl, r.rrText, r.rdataIP)
+	}
+	stmt := `INSERT INTO records (entry_id, section, seq, name, rtype, ttl, rr_text, rdata_ip) VALUES ` +
+		join(placeholders, ",")
+	if _, err := tx.Exec(stmt, args...); err != nil {
+		log.Warnf("CACHE: insert records failed: %v", err)
 	}
 }
 
@@ -775,6 +797,19 @@ func extractIP(rr dns.RR) string {
 		return r.AAAA.String()
 	}
 	return ""
+}
+
+func join(parts []string, sep string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(parts[0])
+	for _, p := range parts[1:] {
+		b.WriteString(sep)
+		b.WriteString(p)
+	}
+	return b.String()
 }
 
 func minTTL(answer, authority, additional []dns.RR) int {
