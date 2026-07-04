@@ -129,20 +129,8 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		default:
 		}
 
-		// Build the query question with QNAME minimisation (RFC 9156).
-		queryQuestion := question
-		if qnameMinimise {
-			addLabels := labelsToAdd(qname, currentDomain, minimiseSteps,
-				config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
-			minQname := minimiseQNAME(qname, currentDomain, addLabels)
-			if !strings.EqualFold(minQname, qname) {
-				qtype := minimisationQtype(question.Qtype)
-				queryQuestion = Question{Name: minQname, Qtype: qtype, Qclass: question.Qclass}
-				log.Debugf("RECURSION: qname minimisation step=%d zone=%s, querying minimised name=%s type=%s",
-					minimiseSteps, currentDomain, minQname, dns.TypeToString[qtype])
-				minimiseSteps++
-			}
-		}
+		var queryQuestion Question
+		queryQuestion, minimiseSteps = r.applyQnameMinimisation(question, qname, currentDomain, qnameMinimise, minimiseSteps)
 
 		// When QNAME minimisation exposes the full QNAME at a
 		// non-authoritative zone (root/TLD/intermediate), probe
@@ -643,4 +631,22 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 		}
 	}
 	return bestMatch, bestNSRecords, false, nil
+}
+
+// applyQnameMinimisation applies RFC 9156 QNAME minimisation to the query
+// question. Returns the (possibly minimised) question and the updated step count.
+func (r *Recursive) applyQnameMinimisation(question Question, qname, currentDomain string, qnameMinimise bool, minimiseSteps int) (Question, int) {
+	if !qnameMinimise {
+		return question, minimiseSteps
+	}
+	addLabels := labelsToAdd(qname, currentDomain, minimiseSteps,
+		config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
+	minQname := minimiseQNAME(qname, currentDomain, addLabels)
+	if !strings.EqualFold(minQname, qname) {
+		qtype := minimisationQtype(question.Qtype)
+		log.Debugf("RECURSION: qname minimisation step=%d zone=%s, querying minimised name=%s type=%s",
+			minimiseSteps, currentDomain, minQname, dns.TypeToString[qtype])
+		return Question{Name: minQname, Qtype: qtype, Qclass: question.Qclass}, minimiseSteps + 1
+	}
+	return question, minimiseSteps
 }
