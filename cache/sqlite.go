@@ -112,7 +112,7 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
 		s.entryCount.Store(count)
 	}
-	s.flushStats()
+	s.restoreStats()
 	s.startPeriodicStatsFlush()
 
 	persistLabel := path
@@ -572,8 +572,44 @@ func (s *SQLiteCache) SaveStats(row config.StatsRow) {
 	}
 }
 
-// LoadStats retrieves the persisted stats row. Returns zero value and false
-// if no row exists.
+// restoreStats reads the persisted stats row and seeds the in-memory
+// accumulators so counters survive restarts.
+func (s *SQLiteCache) restoreStats() {
+	row, ok := s.LoadStats()
+	if !ok {
+		return
+	}
+	a := &s.stats
+	a.totalRequests.Store(row.TotalRequests)
+	a.cacheHits.Store(row.CacheHits)
+	a.cacheMisses.Store(row.CacheMisses)
+	a.prefetchRequests.Store(row.PrefetchRequests)
+	a.errorResponses.Store(row.ErrorResponses)
+	a.staleResponses.Store(row.StaleResponses)
+	a.fallbackRequests.Store(row.FallbackRequests)
+	a.totalResponseTimeMs.Store(row.TotalResponseTimeMs)
+	a.lastResponseTimeMs.Store(row.LastResponseTimeMs)
+	a.udpRequests.Store(row.UDPRequests)
+	a.tcpRequests.Store(row.TCPRequests)
+	a.dotRequests.Store(row.DOTRequests)
+	a.doqRequests.Store(row.DOQRequests)
+	a.dohRequests.Store(row.DOHRequests)
+	a.doh3Requests.Store(row.DOH3Requests)
+	a.rewriteRequests.Store(row.RewriteRequests)
+	a.hijackDetections.Store(row.HijackDetections)
+	a.dnssecSecure.Store(row.DNSSECSecure)
+	a.dnssecBogus.Store(row.DNSSECBogus)
+	a.dnssecInsecure.Store(row.DNSSECInsecure)
+	a.rcodeNOERROR.Store(row.RCODENOERROR)
+	a.rcodeFORMERR.Store(row.RCODEFORMERR)
+	a.rcodeSERVFAIL.Store(row.RCODESERVFAIL)
+	a.rcodeNXDOMAIN.Store(row.RCODENXDOMAIN)
+	a.rcodeNotImp.Store(row.RCODENotImp)
+	a.rcodeREFUSED.Store(row.RCODEREFUSED)
+	a.rcodeOther.Store(row.RCODEOther)
+}
+
+// LoadStats flushes in-memory counters and returns the persisted stats row.
 func (s *SQLiteCache) LoadStats() (config.StatsRow, bool) {
 	s.flushStats()
 	var row config.StatsRow
