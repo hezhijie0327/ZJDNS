@@ -43,6 +43,7 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 - **SOCKS5 代理**：每上游可选代理（TCP CONNECT + UDP ASSOCIATE，RFC 1928/1929），所有协议 + 递归模式全覆盖
 - **连接池**：TCP/DoT RFC 7766 查询流水线 + DoQ QUIC 原生流复用，连接失败自动回退单次连接，死连接自动替换
 - **CNAME 解析**：多级追踪（最大 16 级），防循环，超限返回 SERVFAIL
+- **EDNS 缓冲区**：上游查询 1232 字节（DNS Flag Day 2020），递归查询 4096 字节，避免根区域 DNSSEC 签名委托 UDP 截断
 - **延迟探测**：统一探测引擎（ICMP/TCP/UDP/HTTP/HTTPS/HTTP3），按最快 IP 动态重排 A/AAAA 记录
 
 ### 安全

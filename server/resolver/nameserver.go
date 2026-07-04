@@ -69,6 +69,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			}
 
 			msg := r.resolver.buildMsg(question, ecs, true, false)
+			msg.UDPSize = pool.RecursiveUDPBufferSize // larger buffer for DNSSEC-signed referrals
 			defer pool.DefaultMessagePool.Put(msg)
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
@@ -419,6 +420,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	defer pool.DefaultMessagePool.Put(bareMsg)
 	dnsutilv2.SetQuestion(bareMsg, dnsutilv2.Fqdn(question.Name), question.Qtype)
 	bareMsg.RecursionDesired = true
+	bareMsg.UDPSize = pool.RecursiveUDPBufferSize // larger read buffer; minimal OPT (no ECS/Cookie)
 
 	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
 	defer retryCancel()

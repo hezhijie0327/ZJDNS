@@ -7,12 +7,15 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// UDPBufferSize is the recommended EDNS0 UDP payload size to avoid IP fragmentation (RFC 6891).
-// SecureBufferSize is the recommended size for secure DNS message buffers.
+// UDPBufferSize is the EDNS0 UDP payload size for standard upstream queries per
+// DNS Flag Day 2020: 1232 bytes avoids IP fragmentation on any path.
+// RecursiveUDPBufferSize is used for recursive (root/TLD) queries where
+// DNSSEC-signed referrals commonly exceed 1232 bytes.
 const (
-	UDPBufferSize         = 1232
-	SecureBufferSize      = 8192
-	defaultBufferPoolSize = 256
+	UDPBufferSize          = 1232
+	RecursiveUDPBufferSize = 4096
+	SecureBufferSize       = 8192
+	defaultBufferPoolSize  = 256
 )
 
 // DefaultMessagePool is the package-level default MessagePool.

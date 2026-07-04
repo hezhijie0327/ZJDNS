@@ -341,6 +341,7 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 	defer pool.DefaultMessagePool.Put(msg)
 	dnsutilv2.SetQuestion(msg, dnsutilv2.Fqdn(qname), dns.TypeA)
 	msg.RecursionDesired = false
+	msg.UDPSize = pool.RecursiveUDPBufferSize
 
 	server := &config.UpstreamServer{
 		Address:  tldServers[0],

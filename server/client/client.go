@@ -235,7 +235,19 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 		result.Response, result.Error = c.executeTraditionalQuery(queryCtx, msg, server)
 
 		if c.needsTCPFallback(result, protocol) {
-			log.Debugf("UPSTREAM: UDP truncated/failed for %s, falling back to TCP for %s", qname, server.Address)
+			// Skip TCP fallback when the context is already cancelled — the
+			// errgroup first-win pattern cancels sibling goroutines after one
+			// succeeds, making TCP retry pointless and noisy in logs.
+			if queryCtx.Err() != nil {
+				return result
+			}
+
+			if result.Response != nil && result.Response.Truncated {
+				log.Debugf("UPSTREAM: UDP response truncated for %s, falling back to TCP for %s", qname, server.Address)
+			} else {
+				log.Debugf("UPSTREAM: UDP query failed for %s, falling back to TCP for %s: %v", qname, server.Address, result.Error)
+			}
+
 			tcpServer := *server
 			tcpServer.Protocol = config.ProtoTCP
 
