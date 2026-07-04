@@ -33,3 +33,8 @@ config.debug.json
 
 # Environment
 .env
+
+# Database
+*.db
+cache.db
+cache.db*

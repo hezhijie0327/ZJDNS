@@ -271,9 +271,9 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok, timestamp, ttl, validated)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt, now, entryTTL, boolToInt(validated),
+		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok, timestamp, ttl, expires_at, validated)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt, now, entryTTL, now+int64(entryTTL), boolToInt(validated),
 	); err != nil {
 		log.Warnf("CACHE: insert entry failed: %v", err)
 		return
@@ -503,7 +503,7 @@ func (s *SQLiteCache) flushStats() {
 			dnssec_secure, dnssec_bogus, dnssec_insecure,
 			rcode_noerror, rcode_formerr, rcode_servfail, rcode_nxdomain,
 			rcode_notimp, rcode_refused, rcode_other, updated_at
-		) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		1,
 		row.TotalRequests, row.CacheHits, row.CacheMisses, row.PrefetchRequests,
 		row.ErrorResponses, row.StaleResponses, row.FallbackRequests,
