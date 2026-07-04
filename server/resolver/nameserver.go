@@ -430,7 +430,6 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	defer pool.DefaultMessagePool.Put(bareMsg)
 	dnsutilv2.SetQuestion(bareMsg, dnsutilv2.Fqdn(question.Name), question.Qtype)
 	bareMsg.RecursionDesired = true
-	bareMsg.UDPSize = pool.RecursiveUDPBufferSize // larger read buffer; minimal OPT (no ECS/Cookie)
 
 	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
 	defer retryCancel()
