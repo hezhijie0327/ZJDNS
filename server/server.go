@@ -252,16 +252,16 @@ func (s *Server) Start() error {
 		return fmt.Errorf("UDP address resolution: %w", err)
 	}
 	for _, addr := range udpAddrs {
-		addr := addr // capture for goroutine closure
+		addr := addr
+		srv := &dns.Server{
+			Addr:    addr,
+			Net:     config.ProtoUDP,
+			Handler: dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
+			UDPSize: pool.UDPBufferSize,
+		}
+		s.udpServers = append(s.udpServers, srv)
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("UDP server")
-			srv := &dns.Server{
-				Addr:    addr,
-				Net:     config.ProtoUDP,
-				Handler: dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
-				UDPSize: pool.UDPBufferSize,
-			}
-			s.udpServers = append(s.udpServers, srv)
 			log.Infof("SERVER: UDP server started on %s", addr)
 			err := srv.ListenAndServe()
 			if err != nil {
@@ -296,20 +296,20 @@ func (s *Server) Start() error {
 		return fmt.Errorf("TCP address resolution: %w", err)
 	}
 	for _, addr := range tcpAddrs {
-		addr := addr // capture for goroutine closure
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("TCP listen on %s: %w", addr, err)
+		}
+		addr := addr
+		srv := &dns.Server{
+			Listener: &servertls.TCPKeepAliveListener{Listener: listener},
+			Handler:  dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
+		}
+		s.tcpServers = append(s.tcpServers, srv)
 		g.Go(func() error {
 			defer dnsutil.HandlePanic("TCP server")
-			listener, err := net.Listen("tcp", addr)
-			if err != nil {
-				return fmt.Errorf("TCP listen on %s: %w", addr, err)
-			}
-			srv := &dns.Server{
-				Listener: &servertls.TCPKeepAliveListener{Listener: listener},
-				Handler:  dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
-			}
-			s.tcpServers = append(s.tcpServers, srv)
 			log.Infof("SERVER: TCP server started on %s", addr)
-			err = srv.ListenAndServe()
+			err := srv.ListenAndServe()
 			if err != nil {
 				select {
 				case <-ctx.Done():

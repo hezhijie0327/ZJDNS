@@ -37,16 +37,15 @@ func ResolveBindAddrs(network, port string) ([]string, error) {
 		}
 		for _, ip := range ips {
 			ipNet, ok := ip.(*net.IPNet)
-			if !ok || ipNet.IP.IsLoopback() {
+			if !ok || ipNet.IP.IsLoopback() || ipNet.IP.IsLinkLocalUnicast() {
 				continue
 			}
 			addr := net.JoinHostPort(ipNet.IP.String(), port)
 			if err := tryBind(network, addr); err != nil {
-				if errors.Is(err, syscall.EADDRINUSE) {
-					log.Warnf("SERVER: skipping occupied %s address %s", network, addr)
-					continue
-				}
-				return nil, fmt.Errorf("%s listen on %s: %w", network, addr, err)
+				// Fallback is best-effort: skip addresses that can't be
+				// bound (occupied, link-local without scope, etc).
+				log.Debugf("SERVER: skipping %s address %s: %v", network, addr, err)
+				continue
 			}
 			addrs = append(addrs, addr)
 		}
