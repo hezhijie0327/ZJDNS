@@ -31,6 +31,37 @@ type SQLiteCache struct {
 	closed      int32
 	stopCh      chan struct{}
 	entryCount  atomic.Int64
+	stats       statsAccumulator
+}
+
+type statsAccumulator struct {
+	totalRequests       atomic.Int64
+	cacheHits           atomic.Int64
+	cacheMisses         atomic.Int64
+	prefetchRequests    atomic.Int64
+	errorResponses      atomic.Int64
+	staleResponses      atomic.Int64
+	fallbackRequests    atomic.Int64
+	totalResponseTimeMs atomic.Int64
+	lastResponseTimeMs  atomic.Int64
+	udpRequests         atomic.Int64
+	tcpRequests         atomic.Int64
+	dotRequests         atomic.Int64
+	doqRequests         atomic.Int64
+	dohRequests         atomic.Int64
+	doh3Requests        atomic.Int64
+	rewriteRequests     atomic.Int64
+	hijackDetections    atomic.Int64
+	dnssecSecure        atomic.Int64
+	dnssecBogus         atomic.Int64
+	dnssecInsecure      atomic.Int64
+	rcodeNOERROR        atomic.Int64
+	rcodeFORMERR        atomic.Int64
+	rcodeSERVFAIL       atomic.Int64
+	rcodeNXDOMAIN       atomic.Int64
+	rcodeNotImp         atomic.Int64
+	rcodeREFUSED        atomic.Int64
+	rcodeOther          atomic.Int64
 }
 
 // NewSQLiteCache opens or creates a SQLite database and returns a ready-to-use
@@ -79,6 +110,7 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 	}
 
 	s.deleteExpiredEntries()
+	s.flushStats()
 	s.startPeriodicCleanup()
 
 	persistLabel := path
@@ -311,7 +343,9 @@ func (s *SQLiteCache) Close() error {
 		return nil
 	}
 	close(s.stopCh)
+	s.flushStats()
 	s.deleteExpiredEntries()
+	s.flushStats()
 	if err := s.db.Close(); err != nil {
 		log.Errorf("CACHE: sqlite close failed: %v", err)
 		return err
@@ -453,6 +487,69 @@ func protoBits(protocol string) protoBitsStruct {
 // ── Stats persistence ────────────────────────────────────────────────────────
 
 // SaveStats writes a StatsRow to the stats table.
+
+// flushStats writes the in-memory stats accumulator to the SQLite stats table
+// in a single atomic operation.
+func (s *SQLiteCache) flushStats() {
+	row := s.stats.toRow()
+	if _, err := s.db.Exec(
+		`INSERT OR REPLACE INTO stats (id,
+			total_requests, cache_hits, cache_misses, prefetch_requests,
+			error_responses, stale_responses, fallback_requests,
+			total_response_time_ms, last_response_time_ms,
+			udp_requests, tcp_requests, dot_requests, doq_requests, doh_requests, doh3_requests,
+			rewrite_requests, hijack_detections,
+			dnssec_secure, dnssec_bogus, dnssec_insecure,
+			rcode_noerror, rcode_formerr, rcode_servfail, rcode_nxdomain,
+			rcode_notimp, rcode_refused, rcode_other, updated_at
+		) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		1,
+		row.TotalRequests, row.CacheHits, row.CacheMisses, row.PrefetchRequests,
+		row.ErrorResponses, row.StaleResponses, row.FallbackRequests,
+		row.TotalResponseTimeMs, row.LastResponseTimeMs,
+		row.UDPRequests, row.TCPRequests, row.DOTRequests, row.DOQRequests, row.DOHRequests, row.DOH3Requests,
+		row.RewriteRequests, row.HijackDetections,
+		row.DNSSECSecure, row.DNSSECBogus, row.DNSSECInsecure,
+		row.RCODENOERROR, row.RCODEFORMERR, row.RCODESERVFAIL, row.RCODENXDOMAIN,
+		row.RCODENotImp, row.RCODEREFUSED, row.RCODEOther, row.UpdatedAt,
+	); err != nil {
+		log.Warnf("CACHE: flush stats failed: %v", err)
+	}
+}
+
+func (a *statsAccumulator) toRow() config.StatsRow {
+	return config.StatsRow{
+		TotalRequests:       a.totalRequests.Load(),
+		CacheHits:           a.cacheHits.Load(),
+		CacheMisses:         a.cacheMisses.Load(),
+		PrefetchRequests:    a.prefetchRequests.Load(),
+		ErrorResponses:      a.errorResponses.Load(),
+		StaleResponses:      a.staleResponses.Load(),
+		FallbackRequests:    a.fallbackRequests.Load(),
+		TotalResponseTimeMs: a.totalResponseTimeMs.Load(),
+		LastResponseTimeMs:  a.lastResponseTimeMs.Load(),
+		UDPRequests:         a.udpRequests.Load(),
+		TCPRequests:         a.tcpRequests.Load(),
+		DOTRequests:         a.dotRequests.Load(),
+		DOQRequests:         a.doqRequests.Load(),
+		DOHRequests:         a.dohRequests.Load(),
+		DOH3Requests:        a.doh3Requests.Load(),
+		RewriteRequests:     a.rewriteRequests.Load(),
+		HijackDetections:    a.hijackDetections.Load(),
+		DNSSECSecure:        a.dnssecSecure.Load(),
+		DNSSECBogus:         a.dnssecBogus.Load(),
+		DNSSECInsecure:      a.dnssecInsecure.Load(),
+		RCODENOERROR:        a.rcodeNOERROR.Load(),
+		RCODEFORMERR:        a.rcodeFORMERR.Load(),
+		RCODESERVFAIL:       a.rcodeSERVFAIL.Load(),
+		RCODENXDOMAIN:       a.rcodeNXDOMAIN.Load(),
+		RCODENotImp:         a.rcodeNotImp.Load(),
+		RCODEREFUSED:        a.rcodeREFUSED.Load(),
+		RCODEOther:          a.rcodeOther.Load(),
+		UpdatedAt:           log.NowUnix(),
+	}
+}
+
 func (s *SQLiteCache) SaveStats(row config.StatsRow) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
@@ -485,6 +582,7 @@ func (s *SQLiteCache) SaveStats(row config.StatsRow) {
 // LoadStats retrieves the persisted stats row. Returns zero value and false
 // if no row exists.
 func (s *SQLiteCache) LoadStats() (config.StatsRow, bool) {
+	s.flushStats()
 	var row config.StatsRow
 	err := s.db.QueryRow(
 		`SELECT total_requests, cache_hits, cache_misses, prefetch_requests,
@@ -578,6 +676,7 @@ func (s *SQLiteCache) startPeriodicCleanup() {
 				return
 			}
 			s.deleteExpiredEntries()
+			s.flushStats()
 		}
 	}()
 }
