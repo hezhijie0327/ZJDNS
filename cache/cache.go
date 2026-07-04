@@ -18,7 +18,8 @@ type Store interface {
 		rewrote, hijackDetected, staleServed, fallbackUsed, prefetchTriggered bool,
 		dnssecStatus string, rcode int)
 	ReverseLookup(ip string) []LookupResult
-	LoadStats() (config.StatsRow, bool)
+	Stats() config.StatsRow
+	FlushStats()
 	Close() error
 }
 

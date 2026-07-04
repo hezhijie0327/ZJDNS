@@ -166,10 +166,8 @@ func (s *Server) logStatsNow(trigger string) {
 		return
 	}
 
-	row, ok := cs.LoadStats()
-	if !ok {
-		return
-	}
+	cs.FlushStats()
+	row := cs.Stats()
 
 	if strings.TrimSpace(trigger) == "" {
 		trigger = "unknown"

@@ -611,10 +611,15 @@ func (s *SQLiteCache) restoreStats() {
 	a.rcodeOther.Store(row.RCODEOther)
 }
 
-// LoadStats flushes in-memory counters and returns the persisted stats row.
-func (s *SQLiteCache) LoadStats() (config.StatsRow, bool) {
+// Stats returns a snapshot of the in-memory stats accumulators.
+// No DB read — reads directly from atomic counters.
+func (s *SQLiteCache) Stats() config.StatsRow {
+	return s.stats.toRow()
+}
+
+// FlushStats persists the in-memory stats accumulators to the SQLite stats table.
+func (s *SQLiteCache) FlushStats() {
 	s.flushStats()
-	return s.loadStatsFromDB()
 }
 
 // loadStatsFromDB reads the stats row directly from SQLite without flushing.
