@@ -116,8 +116,6 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, qtype uint16
 	return nil
 }
 
-// extractIndices returns the indices of A/AAAA records in the answer slice.
-
 // --- Infrastructure-level API (used by resolver for root/NS server ordering) ---
 
 // infraProber holds the package-level prober for infrastructure (root/NS)

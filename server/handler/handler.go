@@ -130,8 +130,6 @@ func (h *Handler) MarkClosed() { atomic.StoreInt32(&h.closed, 1) }
 // Edns returns the EDNS handler.
 func (h *Handler) Edns() *edns.Handler { return h.edns }
 
-// Stats returns the stats collector.
-
 // CacheStore returns the cache store (used for persistence and shutdown).
 func (h *Handler) CacheStore() cache.Store { return h.cache }
 

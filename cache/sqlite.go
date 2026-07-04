@@ -554,7 +554,9 @@ func (s *SQLiteCache) evictOldest(n int64) {
 	); err != nil {
 		return
 	}
-	_ = tx.Commit()
+	if err := tx.Commit(); err != nil {
+		log.Warnf("CACHE: commit tx failed: %v", err)
+	}
 
 	s.entryCount.Add(-n)
 	log.Debugf("CACHE: evicted %d oldest entries (max=%d)", n, s.maxEntries)
