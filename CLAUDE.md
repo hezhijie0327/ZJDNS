@@ -101,7 +101,6 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 - All magic numbers must be named constants in `config/defaults.go` with a `Default` prefix.
 - No duplicate constants in the same package.
 - Leaf packages that can't import `config` may use local `const` blocks with same naming convention.
-- Stats persistence key: `config.StatsPersistKey = "stats:"`.
 - **Code is canonical**: docs and comments must match the actual constant values. Verify, don't assume.
 - **RFC 9077/9156 defaults**: `DefaultMaxNegativeTTL = 10800`, `DefaultQnameMinimiseCount = 10`, `DefaultMinimiseOneLabel = 4`.
 
@@ -166,10 +165,9 @@ zjdns/
 ├── cmd/zjdns/                     ← main.go, banner.go, version.go, bench_test.go (binary)
 ├── config/                        ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── cache/                         ← Store interface, SQLite relational cache (entries + records + stats tables)
+├── cache/                         ← Store interface, SQLite relational cache (entries + records tables)
 ├── cidr/                          ← IP filtering with tag matching
 ├── rewrite/                       ← Query rewrite rules
-├── stats/                         ← Lock-free atomic collector (PersistStore interface)
 ├── internal/
 │   ├── cli/                       ← Flag parsing, example config generation
 │   ├── log/                       ← Structured logging + IsDebug guard (zero internal deps)
@@ -211,7 +209,6 @@ Layer 3 (domain packages — import config + internal/*, never each other):
   cache → config, dnsutil, log              (no longer imports edns — uses config.ECSOption)
   cidr → config, dnsutil, log
   rewrite → config, dnsutil, log
-  stats → config, log                       (PersistStore interface — no cache dependency)
 
 Layer 4 (server sub-packages — import domain + internal, never server/ parent):
   server/security → cache, config, dnsutil, log
@@ -274,10 +271,8 @@ Top layer (wiring):
 | `ECSConfig` | `config` | User-facing ECS subnet configuration (moved from edns) |
 | `ECSOption` | `config` | Parsed EDNS Client Subnet (edns has type alias: `type ECSOption = config.ECSOption`) |
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
-| `Store` | `cache` | Interface: Get(qname,qtype,qclass,ecs,dnssecOK), Set(params+RRs), UpdateLatency, ReverseLookup, Close |
+| `Store` | `cache` | Interface: Get/Set/UpdateLatency/IncrementStats/ReverseLookup/LoadStats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
-| `Collector` | `stats` | Lock-free atomic metrics; uses `PersistStore` interface (no cache dependency) |
-| `PersistStore` | `stats` | Interface: SaveStats(key, data, ttl), LoadStats(key) ([]byte, bool) |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `Handler` | `server/handler` | DNS query processing pipeline; owns `BackgroundConfig`, `LatencyProber` |
 | `BackgroundConfig` | `server/handler` | Groups RefreshGroup/RefreshCtx/Ctx lifecycle params |
@@ -324,7 +319,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
 - **Rewite TTL**: Rewrite rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently (`origTTL - (elapsed % origTTL)`) rather than staying static. Rewrite responses bypass cache (client-IP filtering), but TTL now decrements correctly.
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns).
-- **stats PersistStore**: stats defines a local interface (`SaveStats`/`LoadStats` with raw `[]byte`) and does not import cache. `server.go`'s `statsPersistAdapter` wraps `SQLiteCache.SaveStats/LoadStats` which write directly to a `stats` table.
+- **Stats persistence**: Each DNS request increments counters directly in the `stats` SQLite table via `IncrementStats()` (single `UPDATE stats SET col = col + 1`). No in-memory collector, no periodic snapshots, no JSON. Counters survive restarts naturally and are queryable via `SELECT * FROM stats`.
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
 - **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
 - **eTLS alias**: Always use `eTLS` (not `cryptotls`) for `gitlab.com/go-extension/tls`. Used in `server/tls`, `server/client`, `config`.
@@ -363,12 +358,12 @@ CREATE TABLE records (
     latency_ms INTEGER              -- NULL = not probed; non-NULL = measured latency
 );
 
--- Stats snapshots (JSON). Written periodically and on shutdown.
+-- Stats counters (one row, updated atomically per request).
 CREATE TABLE stats (
-    key       TEXT PRIMARY KEY,     -- "stats:"
-    data      BLOB NOT NULL,        -- JSON
-    ttl       INTEGER NOT NULL,
-    timestamp INTEGER NOT NULL
+    total_requests        INTEGER NOT NULL DEFAULT 0,
+    cache_hits            INTEGER NOT NULL DEFAULT 0,
+    ...
+    updated_at            INTEGER NOT NULL DEFAULT 0
 );
 ```
 
@@ -379,6 +374,7 @@ CREATE TABLE stats (
 - **PTR reverse lookup**: `SELECT DISTINCT name FROM records r JOIN entries e ON r.entry_id = e.id WHERE r.rdata_ip = ? AND e.timestamp + e.ttl > unixepoch()`
 - **Eviction**: size-based (oldest `timestamp` first) on Set; TTL-based periodic cleanup (5 min sweep)
 - **Probe updates**: `UPDATE records SET latency_ms = ? WHERE entry_id = ? AND rdata_ip = ?` — no entry overwrite needed
+- **Stats**: Per-request `UPDATE stats SET col = col + 1` (atomic, single row). Query via `SELECT * FROM stats`. No periodic save, no JSON.
 
 ## Debug Config
 

@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
-高性能递归 DNS 解析服务器，支持 DNSSEC 密码学验证、SQLite 关系型缓存、ECS、DoT/DoQ/DoH/DoH3 安全传输协议。
+高性能递归 DNS 解析服务器，支持 DNSSEC 密码学验证、SQLite 关系型缓存与统计、ECS、DoT/DoQ/DoH/DoH3 安全传输协议。
 
 > **生产就绪状态**：本项目尚未经过生产环境充分验证，请谨慎用于关键业务。
 
