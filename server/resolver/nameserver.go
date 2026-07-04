@@ -78,6 +78,16 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			result := r.resolver.client.ExecuteQuery(subCtx, msg, server)
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
+
+				// NXDOMAIN with answer records is a malformed response —
+				// the GFW injects fake A records (e.g. 1.1.1.1) into
+				// negative responses. Treat as hijack.
+				if rcode == dns.RcodeNameError && len(result.Response.Answer) > 0 {
+					log.Debugf("RECURSION: rejecting malformed NXDOMAIN+answer from %s (hijack)", nsAddr)
+					hijackRejected.Store(true)
+					pool.DefaultMessagePool.Put(result.Response)
+					return nil
+				}
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 					// Validate every response against its zone.
 					// GFW-injected A/AAAA/NS records at root/TLD
