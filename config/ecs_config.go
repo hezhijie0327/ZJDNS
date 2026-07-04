@@ -123,7 +123,11 @@ func (c *ECSConfig) UnmarshalJSON(data []byte) error {
 	c.IPv4 = strings.TrimSpace(aux.IPv4)
 	c.IPv6 = strings.TrimSpace(aux.IPv6)
 	c.AutoDetectURL = strings.TrimSpace(aux.AutoDetectURL)
-	if !strings.Contains(string(data), `"prefer_ipv4"`) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["prefer_ipv4"]; !ok {
 		c.PreferIPv4 = true
 	} else {
 		c.PreferIPv4 = aux.PreferIPv4

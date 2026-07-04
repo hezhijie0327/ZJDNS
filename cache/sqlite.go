@@ -89,8 +89,14 @@ func (s *sqliteStore) SaveEntry(key string, entry *Entry, ptrs []ptrRecord) erro
 		return fmt.Errorf("insert entry: %w", err)
 	}
 
-	if _, err := tx.Exec(`DELETE FROM ptr_index WHERE name = ?`, entryKey(key, ptrs)); err != nil {
-		return fmt.Errorf("delete ptrs: %w", err)
+	ipMap := make(map[string]struct{}, len(ptrs))
+	for _, pr := range ptrs {
+		ipMap[pr.IP] = struct{}{}
+	}
+	for ip := range ipMap {
+		if _, err := tx.Exec(`DELETE FROM ptr_index WHERE ip = ? AND name = ?`, ip, entryKey(key, ptrs)); err != nil {
+			return fmt.Errorf("delete ptrs: %w", err)
+		}
 	}
 	for _, pr := range ptrs {
 		if _, err := tx.Exec(
