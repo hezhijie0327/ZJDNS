@@ -287,27 +287,8 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if cont {
 			continue
 		}
-
-		currentDomainNormalized := dnsutil.NormalizeDomain(currentDomain)
-		if bestMatch == currentDomainNormalized && currentDomainNormalized != "" {
-			// When the response has no answer and the NS records point
-			// back to the same zone, verify this is actually an
-			// authoritative response (AA flag). A non-authoritative
-			// response with matching NS records indicates a lame
-			// delegation — the server is not actually authoritative
-			// for this zone and we should return SERVFAIL rather than
-			// silently accepting the response (Cloudflare/Google both
-			// return SERVFAIL for these cases).
-			if len(response.Answer) == 0 && !response.Authoritative {
-				log.Debugf("RECURSION: lame delegation detected for %s — NS records point to same zone but response is not authoritative", currentDomain)
-				pool.DefaultMessagePool.Put(response)
-				r.lastDNSSECEDECode.Store(uint64(edns.EDECodeNoReachableAuthority))
-				return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
-					fmt.Errorf("lame delegation: no reachable authority for %s", currentDomain)
-			}
-			nsSlice, extraSlice := response.Ns, response.Extra
-			pool.DefaultMessagePool.Put(response)
-			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
+		if termRes := r.checkLameDelegation(response, currentDomain, bestMatch, validated, ecsResponse); termRes != nil {
+			return termRes.answer, termRes.authority, termRes.additional, termRes.validated, termRes.ecs, termRes.server, termRes.hijack, termRes.err
 		}
 
 		// Update DNSSEC chain: extract DS from current delegation, prepare
@@ -649,4 +630,30 @@ func (r *Recursive) applyQnameMinimisation(question Question, qname, currentDoma
 		return Question{Name: minQname, Qtype: qtype, Qclass: question.Qclass}, minimiseSteps + 1
 	}
 	return question, minimiseSteps
+}
+
+// checkLameDelegation detects lame delegations where NS records point back
+// to the same zone but the response is not authoritative (AA flag not set).
+// Returns a terminal result for the caller to return, or nil if not lame.
+func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMatch string, validated bool, ecsResponse *edns.ECSOption) *terminalResult {
+	currentDomainNormalized := dnsutil.NormalizeDomain(currentDomain)
+	if bestMatch != currentDomainNormalized || currentDomainNormalized == "" {
+		return nil
+	}
+	if len(response.Answer) == 0 && !response.Authoritative {
+		log.Debugf("RECURSION: lame delegation detected for %s — NS records point to same zone but response is not authoritative", currentDomain)
+		pool.DefaultMessagePool.Put(response)
+		r.lastDNSSECEDECode.Store(uint64(edns.EDECodeNoReachableAuthority))
+		return &terminalResult{
+			server: config.RecursiveIndicator, ecs: ecsResponse,
+			err: fmt.Errorf("lame delegation: no reachable authority for %s", currentDomain),
+		}
+	}
+	nsSlice, extraSlice := response.Ns, response.Extra
+	pool.DefaultMessagePool.Put(response)
+	return &terminalResult{
+		authority: nsSlice, additional: extraSlice,
+		validated: validated, ecs: ecsResponse,
+		server: config.RecursiveIndicator,
+	}
 }
