@@ -20,23 +20,12 @@ import (
 )
 
 func (s *Server) startDOQServer() error {
-	addr := ":" + s.cfg.Port
-
-	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	addrs, err := dnsutil.ResolveBindAddrs("udp", s.cfg.Port)
 	if err != nil {
-		return fmt.Errorf("resolve UDP address: %w", err)
-	}
-
-	s.doqConn, err = net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		return fmt.Errorf("UDP listen: %w", err)
+		return fmt.Errorf("DoQ address resolution: %w", err)
 	}
 
 	s.doqValidator = newQUICAddrValidator()
-	s.doqTransport = &quic.Transport{
-		Conn:                s.doqConn,
-		VerifySourceAddress: s.doqValidator.requiresValidation,
-	}
 
 	quicTLSConfig := s.QUICTLSConfig().Clone()
 	quicTLSConfig.NextProtos = config.NextProtoDOQ
@@ -50,24 +39,45 @@ func (s *Server) startDOQServer() error {
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 	}
 
-	s.doqListener, err = s.doqTransport.ListenEarly(quicTLSConfig, quicConfig)
-	if err != nil {
-		_ = s.doqConn.Close()
-		return fmt.Errorf("DoQ listen: %w", err)
+	for _, addr := range addrs {
+		udpAddr, err := net.ResolveUDPAddr("udp", addr)
+		if err != nil {
+			return fmt.Errorf("resolve UDP address %s: %w", addr, err)
+		}
+
+		conn, err := net.ListenUDP("udp", udpAddr)
+		if err != nil {
+			return fmt.Errorf("UDP listen on %s: %w", addr, err)
+		}
+		s.doqConns = append(s.doqConns, conn)
+
+		transport := &quic.Transport{
+			Conn:                conn,
+			VerifySourceAddress: s.doqValidator.requiresValidation,
+		}
+		s.doqTransports = append(s.doqTransports, transport)
+
+		listener, err := transport.ListenEarly(quicTLSConfig, quicConfig)
+		if err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("DoQ listen on %s: %w", addr, err)
+		}
+		s.doqListeners = append(s.doqListeners, listener)
+
+		log.Infof("TLS: DoQ server started on %s", addr)
+
+		capturedDoQ := listener
+		s.serverGroup.Go(func() error {
+			defer dnsutil.HandlePanic("DoQ server")
+			s.handleDOQConnections(capturedDoQ)
+			return nil
+		})
 	}
-
-	log.Infof("TLS: DoQ server started on port %s", s.cfg.Port)
-
-	s.serverGroup.Go(func() error {
-		defer dnsutil.HandlePanic("DoQ server")
-		s.handleDOQConnections()
-		return nil
-	})
 
 	return nil
 }
 
-func (s *Server) handleDOQConnections() {
+func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -75,7 +85,7 @@ func (s *Server) handleDOQConnections() {
 		default:
 		}
 
-		conn, err := s.doqListener.Accept(s.ctx)
+		conn, err := doqListener.Accept(s.ctx)
 		if err != nil {
 			if s.ctx.Err() != nil {
 				return

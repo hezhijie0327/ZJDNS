@@ -98,27 +98,27 @@ type DNSHandler interface {
 
 // Server manages TLS-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
-	cfg           Config
-	handler       DNSHandler
-	tlsConfig     *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
-	baseTLSConfig *eTLS.Config   // base config for per-listener GetConfigForClient clones
-	quicTLSConfig *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
-	ctx           context.Context
-	cancel        context.CancelCauseFunc
-	serverGroup   *errgroup.Group
-	serverCtx     context.Context
-	dotListener   net.Listener
-	doqConn       *net.UDPConn
-	doqListener   *quic.EarlyListener
-	doqTransport  *quic.Transport
-	doqValidator  *quicAddrValidator
-	dohServer     *http2.Server
-	h3Server      *http3.Server
-	httpsListener net.Listener
-	h3Conn        *net.UDPConn
-	h3Listener    *quic.EarlyListener
-	h3Transport   *quic.Transport
-	h3Validator   *quicAddrValidator
+	cfg            Config
+	handler        DNSHandler
+	tlsConfig      *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
+	baseTLSConfig  *eTLS.Config   // base config for per-listener GetConfigForClient clones
+	quicTLSConfig  *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
+	ctx            context.Context
+	cancel         context.CancelCauseFunc
+	serverGroup    *errgroup.Group
+	serverCtx      context.Context
+	dotListeners   []net.Listener
+	doqConns       []*net.UDPConn
+	doqTransports  []*quic.Transport
+	doqListeners   []*quic.EarlyListener
+	doqValidator   *quicAddrValidator
+	dohServer      *http2.Server
+	h3Server       *http3.Server
+	httpsListeners []net.Listener
+	h3Conns        []*net.UDPConn
+	h3Transports   []*quic.Transport
+	h3Listeners    []*quic.EarlyListener
+	h3Validator    *quicAddrValidator
 }
 
 func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
@@ -426,14 +426,20 @@ func (s *Server) Shutdown() error {
 
 	s.cancel(errors.New("tls server shutdown"))
 
-	if s.dotListener != nil {
-		dnsutil.CloseWithLog(s.dotListener, "DoT listener", "TLS")
+	for _, l := range s.dotListeners {
+		if l != nil {
+			dnsutil.CloseWithLog(l, "DoT listener", "TLS")
+		}
 	}
-	if s.doqListener != nil {
-		dnsutil.CloseWithLog(s.doqListener, "DoQ listener", "TLS")
+	for _, l := range s.doqListeners {
+		if l != nil {
+			dnsutil.CloseWithLog(l, "DoQ listener", "TLS")
+		}
 	}
-	if s.doqConn != nil {
-		dnsutil.CloseWithLog(s.doqConn, "DoQ socket", "TLS")
+	for _, c := range s.doqConns {
+		if c != nil {
+			dnsutil.CloseWithLog(c, "DoQ socket", "TLS")
+		}
 	}
 	if s.doqValidator != nil {
 		s.doqValidator.close()
@@ -443,17 +449,25 @@ func (s *Server) Shutdown() error {
 		defer cancel()
 		_ = s.h3Server.Shutdown(ctx)
 	}
-	if s.httpsListener != nil {
-		dnsutil.CloseWithLog(s.httpsListener, "HTTPS listener", "TLS")
+	for _, l := range s.httpsListeners {
+		if l != nil {
+			dnsutil.CloseWithLog(l, "HTTPS listener", "TLS")
+		}
 	}
-	if s.h3Listener != nil {
-		dnsutil.CloseWithLog(s.h3Listener, "HTTP/3 listener", "TLS")
+	for _, l := range s.h3Listeners {
+		if l != nil {
+			dnsutil.CloseWithLog(l, "HTTP/3 listener", "TLS")
+		}
 	}
-	if s.h3Transport != nil {
-		_ = s.h3Transport.Close()
+	for _, t := range s.h3Transports {
+		if t != nil {
+			_ = t.Close()
+		}
 	}
-	if s.h3Conn != nil {
-		dnsutil.CloseWithLog(s.h3Conn, "DoH3 socket", "TLS")
+	for _, c := range s.h3Conns {
+		if c != nil {
+			dnsutil.CloseWithLog(c, "DoH3 socket", "TLS")
+		}
 	}
 	if s.h3Validator != nil {
 		s.h3Validator.close()

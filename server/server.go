@@ -73,8 +73,8 @@ type Server struct {
 	shutdown        chan struct{}
 	backgroundGroup *errgroup.Group
 	backgroundCtx   context.Context
-	udpServer       *dns.Server
-	tcpServer       *dns.Server
+	udpServers      []*dns.Server // per-address listeners
+	tcpServers      []*dns.Server // per-address listeners
 	tcpWriteMu      sync.Map
 }
 
@@ -247,27 +247,35 @@ func (s *Server) Start() error {
 
 	g, ctx := errgroup.WithContext(serverCtx)
 
-	g.Go(func() error {
-		defer dnsutil.HandlePanic("UDP server")
-		s.udpServer = &dns.Server{
-			Addr:    ":" + s.config.Server.Port,
-			Net:     config.ProtoUDP,
-			Handler: dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
-			UDPSize: pool.UDPBufferSize,
-		}
-		log.Infof("SERVER: UDP server started on port %s", s.config.Server.Port)
-		err := s.udpServer.ListenAndServe()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				return fmt.Errorf("UDP startup: %w", err)
+	udpAddrs, err := dnsutil.ResolveBindAddrs(config.ProtoUDP, s.config.Server.Port)
+	if err != nil {
+		return fmt.Errorf("UDP address resolution: %w", err)
+	}
+	for _, addr := range udpAddrs {
+		addr := addr // capture for goroutine closure
+		g.Go(func() error {
+			defer dnsutil.HandlePanic("UDP server")
+			srv := &dns.Server{
+				Addr:    addr,
+				Net:     config.ProtoUDP,
+				Handler: dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
+				UDPSize: pool.UDPBufferSize,
 			}
-		}
-		<-ctx.Done()
-		return nil
-	})
+			s.udpServers = append(s.udpServers, srv)
+			log.Infof("SERVER: UDP server started on %s", addr)
+			err := srv.ListenAndServe()
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return nil
+				default:
+					return fmt.Errorf("UDP startup on %s: %w", addr, err)
+				}
+			}
+			<-ctx.Done()
+			return nil
+		})
+	}
 
 	if s.pprofServer != nil {
 		g.Go(func() error {
@@ -283,29 +291,37 @@ func (s *Server) Start() error {
 		})
 	}
 
-	g.Go(func() error {
-		defer dnsutil.HandlePanic("TCP server")
-		listener, err := net.Listen("tcp", ":"+s.config.Server.Port)
-		if err != nil {
-			return fmt.Errorf("TCP listen: %w", err)
-		}
-		s.tcpServer = &dns.Server{
-			Listener: &servertls.TCPKeepAliveListener{Listener: listener},
-			Handler:  dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
-		}
-		log.Infof("SERVER: TCP server started on port %s", s.config.Server.Port)
-		err = s.tcpServer.ListenAndServe()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				return fmt.Errorf("TCP startup: %w", err)
+	tcpAddrs, err := dnsutil.ResolveBindAddrs("tcp", s.config.Server.Port)
+	if err != nil {
+		return fmt.Errorf("TCP address resolution: %w", err)
+	}
+	for _, addr := range tcpAddrs {
+		addr := addr // capture for goroutine closure
+		g.Go(func() error {
+			defer dnsutil.HandlePanic("TCP server")
+			listener, err := net.Listen("tcp", addr)
+			if err != nil {
+				return fmt.Errorf("TCP listen on %s: %w", addr, err)
 			}
-		}
-		<-ctx.Done()
-		return nil
-	})
+			srv := &dns.Server{
+				Listener: &servertls.TCPKeepAliveListener{Listener: listener},
+				Handler:  dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
+			}
+			s.tcpServers = append(s.tcpServers, srv)
+			log.Infof("SERVER: TCP server started on %s", addr)
+			err = srv.ListenAndServe()
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return nil
+				default:
+					return fmt.Errorf("TCP startup on %s: %w", addr, err)
+				}
+			}
+			<-ctx.Done()
+			return nil
+		})
+	}
 
 	if s.tls != nil {
 		g.Go(func() error {

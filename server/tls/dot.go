@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"fmt"
 	eTLS "gitlab.com/go-extension/tls"
 	"io"
 	"net"
@@ -19,32 +20,39 @@ import (
 )
 
 func (s *Server) startDOTServer() error {
-	listener, err := net.Listen("tcp", ":"+s.cfg.Port)
+	addrs, err := dnsutil.ResolveBindAddrs("tcp", s.cfg.Port)
 	if err != nil {
-		return err
+		return fmt.Errorf("DoT address resolution: %w", err)
 	}
 
-	// Wrap raw listener to log every TCP connection before TLS handshake,
-	// so we can distinguish "never reached us" from "reached us but TLS failed".
-	rawListener := &debugListener{Listener: &TCPKeepAliveListener{Listener: listener}, name: "DoT"}
+	for _, addr := range addrs {
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("TCP listen on %s: %w", addr, err)
+		}
 
-	dotTLSConfig := s.tlsConfig.Clone()
-	dotTLSConfig.NextProtos = config.NextProtoDOT
-	dotTLSConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOT)
+		rawListener := &debugListener{Listener: &TCPKeepAliveListener{Listener: listener}, name: "DoT"}
 
-	s.dotListener = eTLS.NewListener(rawListener, dotTLSConfig)
-	log.Infof("TLS: DoT server started on port %s", s.cfg.Port)
+		dotTLSConfig := s.tlsConfig.Clone()
+		dotTLSConfig.NextProtos = config.NextProtoDOT
+		dotTLSConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOT)
 
-	s.serverGroup.Go(func() error {
-		defer dnsutil.HandlePanic("DoT server")
-		s.handleDOTConnections()
-		return nil
-	})
+		dotListener := eTLS.NewListener(rawListener, dotTLSConfig)
+		s.dotListeners = append(s.dotListeners, dotListener)
+		log.Infof("TLS: DoT server started on %s", addr)
+
+		capturedDot := dotListener
+		s.serverGroup.Go(func() error {
+			defer dnsutil.HandlePanic("DoT server")
+			s.handleDOTConnections(capturedDot)
+			return nil
+		})
+	}
 
 	return nil
 }
 
-func (s *Server) handleDOTConnections() {
+func (s *Server) handleDOTConnections(dotListener net.Listener) {
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -52,7 +60,7 @@ func (s *Server) handleDOTConnections() {
 		default:
 		}
 
-		conn, err := s.dotListener.Accept()
+		conn, err := dotListener.Accept()
 		if err != nil {
 			if s.ctx.Err() != nil {
 				return
