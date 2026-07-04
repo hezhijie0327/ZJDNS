@@ -12,7 +12,6 @@ import (
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
-	"zjdns/stats"
 )
 
 // startBackgroundTasks launches all background goroutines owned by the server.
@@ -168,15 +167,17 @@ func (s *Server) logStatsNow(trigger string) {
 		return
 	}
 
-	snapshot, err := s.handler.Stats().FetchStats()
-	if err != nil {
-		log.Warnf("STATS: fetch failed: %v", err)
+	st := s.handler.Stats()
+	cs := s.handler.CacheStore()
+	if cs == nil {
 		return
 	}
 
-	payload, err := stats.BuildStatsLogJSON(snapshot)
-	if err != nil {
-		log.Errorf("STATS: build payload failed: %v", err)
+	// Persist current counters to DB, then read back for log output.
+	cs.SaveStats(st.ToRow())
+	row, ok := cs.LoadStats()
+	if !ok {
+		log.Warnf("STATS: failed to load stats from DB")
 		return
 	}
 
@@ -184,11 +185,17 @@ func (s *Server) logStatsNow(trigger string) {
 		trigger = "unknown"
 	}
 
-	log.Infof("STATS: trigger=%s payload=%s", trigger, payload)
-
-	if cs := s.handler.CacheStore(); cs != nil {
-		cs.SaveStats(s.handler.Stats().ToRow())
-	}
+	log.Infof("STATS: trigger=%s total=%d hits=%d miss=%d stale=%d err=%d prefetch=%d fallback=%d avg=%.1fms last=%dms udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d rewrite=%d hijack=%d sec=%d bogus=%d ins=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d",
+		trigger,
+		row.TotalRequests, row.CacheHits, row.CacheMisses, row.StaleResponses,
+		row.ErrorResponses, row.PrefetchRequests, row.FallbackRequests,
+		float64(row.TotalResponseTimeMs)/float64(max(row.TotalRequests, 1)), row.LastResponseTimeMs,
+		row.UDPRequests, row.TCPRequests, row.DOTRequests, row.DOQRequests, row.DOHRequests, row.DOH3Requests,
+		row.RewriteRequests, row.HijackDetections,
+		row.DNSSECSecure, row.DNSSECBogus, row.DNSSECInsecure,
+		row.RCODENOERROR, row.RCODEFORMERR, row.RCODESERVFAIL, row.RCODENXDOMAIN,
+		row.RCODENotImp, row.RCODEREFUSED, row.RCODEOther,
+	)
 }
 
 func (s *Server) shutdownServer() {

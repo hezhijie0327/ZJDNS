@@ -3,8 +3,6 @@
 package stats
 
 import (
-	"encoding/json"
-	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -46,70 +44,6 @@ type Snapshot struct {
 	UpdatedAt           int64  `json:"updated_at"`
 }
 
-type logTotals struct {
-	TotalRequests         uint64  `json:"total_requests"`
-	TotalResponseTimeMs   uint64  `json:"total_response_time_ms"`
-	LastResponseTimeMs    uint64  `json:"last_response_time_ms"`
-	AverageResponseTimeMs float64 `json:"average_response_time_ms,omitempty"`
-	CacheHits             uint64  `json:"cache_hits"`
-	CacheMisses           uint64  `json:"cache_misses"`
-	StaleResponses        uint64  `json:"stale_responses,omitempty"`
-	ErrorResponses        uint64  `json:"error_responses,omitempty"`
-}
-
-type logProtocolCounts struct {
-	UDPRequests  uint64 `json:"udp_requests,omitempty"`
-	TCPRequests  uint64 `json:"tcp_requests,omitempty"`
-	DOTRequests  uint64 `json:"dot_requests,omitempty"`
-	DOQRequests  uint64 `json:"doq_requests,omitempty"`
-	DOHRequests  uint64 `json:"doh_requests,omitempty"`
-	DOH3Requests uint64 `json:"doh3_requests,omitempty"`
-}
-
-type logEvents struct {
-	RewriteRequests  uint64 `json:"rewrite_requests,omitempty"`
-	HijackDetections uint64 `json:"hijack_detections,omitempty"`
-	PrefetchRequests uint64 `json:"prefetch_requests,omitempty"`
-	FallbackRequests uint64 `json:"fallback_requests,omitempty"`
-}
-
-type logDNSSEC struct {
-	Secure   uint64 `json:"secure,omitempty"`
-	Bogus    uint64 `json:"bogus,omitempty"`
-	Insecure uint64 `json:"insecure,omitempty"`
-}
-
-type logErrorCodes struct {
-	NOERROR  uint64 `json:"noerror,omitempty"`
-	FORMERR  uint64 `json:"formerr,omitempty"`
-	SERVFAIL uint64 `json:"servfail,omitempty"`
-	NXDOMAIN uint64 `json:"nxdomain,omitempty"`
-	NotImp   uint64 `json:"notimp,omitempty"`
-	REFUSED  uint64 `json:"refused,omitempty"`
-	Other    uint64 `json:"other,omitempty"`
-}
-
-type logRates struct {
-	CacheRate        float64 `json:"cache_rate,omitempty"`
-	PrefetchRate     float64 `json:"prefetch_rate,omitempty"`
-	FailureRate      float64 `json:"failure_rate,omitempty"`
-	StaleRate        float64 `json:"stale_rate,omitempty"`
-	FallbackRate     float64 `json:"fallback_rate,omitempty"`
-	RewriteRate      float64 `json:"rewrite_rate,omitempty"`
-	HijackRate       float64 `json:"hijack_rate,omitempty"`
-	DNSSECSecureRate float64 `json:"dnssec_secure_rate,omitempty"`
-	DNSSECBogusRate  float64 `json:"dnssec_bogus_rate,omitempty"`
-}
-
-type logEntry struct {
-	Totals     logTotals         `json:"totals"`
-	Protocols  logProtocolCounts `json:"protocols,omitempty"`
-	Events     logEvents         `json:"events,omitempty"`
-	DNSSEC     logDNSSEC         `json:"dnssec,omitempty"`
-	ErrorCodes logErrorCodes     `json:"error_codes,omitempty"`
-	Rates      logRates          `json:"rates,omitempty"`
-}
-
 // Collector manages DNS server statistics using lock-free atomic counters.
 type Collector struct {
 	enabled bool
@@ -144,73 +78,6 @@ type Collector struct {
 }
 
 // AverageResponseTimeMs computes the mean response time in milliseconds.
-func (s Snapshot) AverageResponseTimeMs() float64 {
-	if s.TotalRequests == 0 {
-		return 0
-	}
-	return float64(s.TotalResponseTimeMs) / float64(s.TotalRequests)
-}
-
-// BuildStatsLogJSON serializes a snapshot into JSON-formatted log entry bytes.
-func BuildStatsLogJSON(snapshot *Snapshot) ([]byte, error) {
-	if snapshot == nil {
-		return nil, fmt.Errorf("nil snapshot")
-	}
-	entry := logEntry{
-		Totals: logTotals{
-			TotalRequests:       snapshot.TotalRequests,
-			TotalResponseTimeMs: snapshot.TotalResponseTimeMs,
-			CacheHits:           snapshot.CacheHits,
-			CacheMisses:         snapshot.CacheMisses,
-			StaleResponses:      snapshot.StaleResponses,
-			ErrorResponses:      snapshot.ErrorResponses,
-			LastResponseTimeMs:  snapshot.LastResponseTimeMs,
-		},
-		Protocols: logProtocolCounts{
-			UDPRequests:  snapshot.UDPRequests,
-			TCPRequests:  snapshot.TCPRequests,
-			DOTRequests:  snapshot.DOTRequests,
-			DOQRequests:  snapshot.DOQRequests,
-			DOHRequests:  snapshot.DOHRequests,
-			DOH3Requests: snapshot.DOH3Requests,
-		},
-		Events: logEvents{
-			HijackDetections: snapshot.HijackDetections,
-			PrefetchRequests: snapshot.PrefetchRequests,
-			RewriteRequests:  snapshot.RewriteRequests,
-			FallbackRequests: snapshot.FallbackRequests,
-		},
-		DNSSEC: logDNSSEC{
-			Secure:   snapshot.DNSSECSecure,
-			Bogus:    snapshot.DNSSECBogus,
-			Insecure: snapshot.DNSSECInsecure,
-		},
-		ErrorCodes: logErrorCodes{
-			NOERROR:  snapshot.RCODENOERROR,
-			FORMERR:  snapshot.RCODEFORMERR,
-			SERVFAIL: snapshot.RCODESERVFAIL,
-			NXDOMAIN: snapshot.RCODENXDOMAIN,
-			NotImp:   snapshot.RCODENotImp,
-			REFUSED:  snapshot.RCODEREFUSED,
-			Other:    snapshot.RCODEOther,
-		},
-	}
-	if snapshot.TotalRequests > 0 {
-		entry.Totals.AverageResponseTimeMs = snapshot.AverageResponseTimeMs()
-		entry.Rates = logRates{
-			CacheRate:        float64(snapshot.CacheHits) / float64(snapshot.TotalRequests),
-			StaleRate:        float64(snapshot.StaleResponses) / float64(snapshot.TotalRequests),
-			FailureRate:      float64(snapshot.ErrorResponses) / float64(snapshot.TotalRequests),
-			HijackRate:       float64(snapshot.HijackDetections) / float64(snapshot.TotalRequests),
-			PrefetchRate:     float64(snapshot.PrefetchRequests) / float64(snapshot.TotalRequests),
-			RewriteRate:      float64(snapshot.RewriteRequests) / float64(snapshot.TotalRequests),
-			FallbackRate:     float64(snapshot.FallbackRequests) / float64(snapshot.TotalRequests),
-			DNSSECSecureRate: float64(snapshot.DNSSECSecure) / float64(snapshot.TotalRequests),
-			DNSSECBogusRate:  float64(snapshot.DNSSECBogus) / float64(snapshot.TotalRequests),
-		}
-	}
-	return json.Marshal(entry)
-}
 
 // New creates a Collector from the server config. Callers that wish to
 // restore a previously persisted snapshot should call Deserialize after
@@ -470,13 +337,4 @@ func (c *Collector) Reset() {
 	c.rcodeNotImp.Store(0)
 	c.rcodeREFUSED.Store(0)
 	c.rcodeOther.Store(0)
-}
-
-// FetchStats returns a Snapshot pointer suitable for external consumption.
-func (c *Collector) FetchStats() (*Snapshot, error) {
-	if c == nil || !c.enabled {
-		return nil, fmt.Errorf("stats disabled")
-	}
-	s := c.Snapshot()
-	return &s, nil
 }

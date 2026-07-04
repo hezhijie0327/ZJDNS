@@ -1,7 +1,6 @@
 package stats
 
 import (
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -148,8 +147,8 @@ func TestSnapshot_ResponseTime(t *testing.T) {
 	if snap.TotalResponseTimeMs < 199 || snap.TotalResponseTimeMs > 201 {
 		t.Errorf("TotalResponseTimeMs = %d, want ~200", snap.TotalResponseTimeMs)
 	}
-	if avg := snap.AverageResponseTimeMs(); avg < 99 || avg > 101 {
-		t.Errorf("AverageResponseTimeMs = %f, want ~100", avg)
+	if avg := float64(snap.TotalResponseTimeMs) / float64(snap.TotalRequests); avg < 99 || avg > 101 {
+		t.Errorf("avg response time = %f, want ~100", avg)
 	}
 }
 
@@ -184,55 +183,6 @@ func TestToRow_Restore_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestBuildStatsLogJSON(t *testing.T) {
-	sc := New(testConfig())
-	sc.RecordRequest(50*time.Millisecond, true, false, "DoQ",
-		false, false, false, false, false, "secure", dns.RcodeSuccess)
-
-	snap := sc.Snapshot()
-	data, err := BuildStatsLogJSON(&snap)
-	if err != nil {
-		t.Fatalf("BuildStatsLogJSON: %v", err)
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	totals, ok := parsed["totals"].(map[string]any)
-	if !ok {
-		t.Fatal("missing 'totals' key")
-	}
-	if totals["cache_hits"].(float64) != 1 {
-		t.Error("totals.cache_hits != 1")
-	}
-
-	protocols, ok := parsed["protocols"].(map[string]any)
-	if !ok {
-		t.Fatal("missing 'protocols' key")
-	}
-	if protocols["doq_requests"].(float64) != 1 {
-		t.Error("protocols.doq_requests != 1")
-	}
-
-	dnssec, ok := parsed["dnssec"].(map[string]any)
-	if !ok {
-		t.Fatal("missing 'dnssec' key")
-	}
-	if dnssec["secure"].(float64) != 1 {
-		t.Error("dnssec.secure != 1")
-	}
-
-	rates, ok := parsed["rates"].(map[string]any)
-	if !ok {
-		t.Fatal("missing 'rates' key")
-	}
-	if rates["dnssec_secure_rate"].(float64) != 1.0 {
-		t.Error("dnssec_secure_rate != 1.0")
-	}
-}
-
 func TestToRow_Restore_AllFields(t *testing.T) {
 	sc := New(testConfig())
 	sc.RecordRequest(1*time.Millisecond, false, false, "UDP",
@@ -255,13 +205,5 @@ func TestRecordRequest_NilCollector(t *testing.T) {
 		false, false, false, false, false, "", dns.RcodeSuccess)
 	if snap := sc.Snapshot(); snap.TotalRequests != 0 {
 		t.Error("nil collector Snapshot should be empty")
-	}
-}
-
-func TestFetchStats_Disabled(t *testing.T) {
-	var sc *Collector
-	_, err := sc.FetchStats()
-	if err == nil {
-		t.Error("FetchStats on nil should return error")
 	}
 }
