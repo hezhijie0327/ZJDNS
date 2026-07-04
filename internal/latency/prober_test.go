@@ -25,27 +25,27 @@ func TestNew_EmptySteps(t *testing.T) {
 	}
 }
 
-func TestProbeIPs_NilProber(t *testing.T) {
+func TestProbeIPsLatency_NilProber(t *testing.T) {
 	var p *Prober
 	ips := []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8")}
-	result := p.ProbeIPs(context.Background(), ips)
+	result, _ := p.ProbeIPsLatency(context.Background(), ips)
 	if len(result) != len(ips) {
 		t.Fatalf("nil Prober should return input as-is, got %d", len(result))
 	}
 }
 
-func TestProbeIPs_Empty(t *testing.T) {
+func TestProbeIPsLatency_Empty(t *testing.T) {
 	p := New([]config.LatencyProbeStep{{Protocol: "tcp", Timeout: 50}}, context.Background())
-	result := p.ProbeIPs(context.Background(), nil)
+	result, _ := p.ProbeIPsLatency(context.Background(), nil)
 	if result != nil {
-		t.Error("ProbeIPs with nil input should return nil")
+		t.Error("ProbeIPsLatency with nil input should return nil")
 	}
 }
 
-func TestProbeIPs_Single(t *testing.T) {
+func TestProbeIPsLatency_Single(t *testing.T) {
 	p := New([]config.LatencyProbeStep{{Protocol: "tcp", Timeout: 50}}, context.Background())
 	ips := []net.IP{net.ParseIP("1.1.1.1")}
-	result := p.ProbeIPs(context.Background(), ips)
+	result, _ := p.ProbeIPsLatency(context.Background(), ips)
 	if len(result) != 1 {
 		t.Fatalf("single IP should be returned, got %d", len(result))
 	}
@@ -54,16 +54,16 @@ func TestProbeIPs_Single(t *testing.T) {
 	}
 }
 
-func TestProbeIPs_NoSteps(t *testing.T) {
+func TestProbeIPsLatency_NoSteps(t *testing.T) {
 	p := New(nil, context.Background())
 	ips := []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8")}
-	result := p.ProbeIPs(context.Background(), ips)
+	result, _ := p.ProbeIPsLatency(context.Background(), ips)
 	if len(result) != 2 {
 		t.Fatalf("no steps should return input as-is, got %d", len(result))
 	}
 }
 
-func TestProbeIPs_LoopbackPrivate(t *testing.T) {
+func TestProbeIPsLatency_LoopbackPrivate(t *testing.T) {
 	p := New([]config.LatencyProbeStep{{Protocol: "tcp", Timeout: 50}}, context.Background())
 	ips := []net.IP{
 		net.ParseIP("127.0.0.1"),
@@ -71,7 +71,7 @@ func TestProbeIPs_LoopbackPrivate(t *testing.T) {
 		net.ParseIP("10.0.0.1"),
 		net.ParseIP("::1"),
 	}
-	result := p.ProbeIPs(context.Background(), ips)
+	result, _ := p.ProbeIPsLatency(context.Background(), ips)
 	if len(result) != 4 {
 		t.Fatalf("loopback/private IPs should be returned as-is, got %d", len(result))
 	}

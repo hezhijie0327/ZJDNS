@@ -143,7 +143,8 @@ func SortIPsByLatency(ctx context.Context, ips []net.IP) []net.IP {
 	if infraProber == nil {
 		return ips
 	}
-	return infraProber.ProbeIPs(ctx, ips)
+	sorted, _ := infraProber.ProbeIPsLatency(ctx, ips)
+	return sorted
 }
 
 // SortIPsByLatencyMap probes IP addresses and returns them sorted by latency

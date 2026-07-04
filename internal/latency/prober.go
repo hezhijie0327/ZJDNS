@@ -55,18 +55,6 @@ func normalizeSteps(steps []config.LatencyProbeStep) []config.LatencyProbeStep {
 	return normalized
 }
 
-// ProbeIPs probes the given IP addresses and returns them sorted by measured
-// latency (fastest first). IPs that cannot be probed (loopback, private,
-// link-local) are placed at the end in original order. Returns the input
-// unmodified when there are 0-1 IPs or no probe steps configured.
-func (p *Prober) ProbeIPs(ctx context.Context, ips []net.IP) []net.IP {
-	if p == nil || len(ips) <= 1 || len(p.steps) == 0 {
-		return ips
-	}
-	sorted, _, _ := p.probeIPs(ctx, ips)
-	return sorted
-}
-
 // ProbeIPsLatency probes the given IP addresses and returns them sorted by
 // measured latency along with a map of IP → latency in milliseconds.
 func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, map[string]int) {
@@ -74,22 +62,6 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, m
 		return ips, nil
 	}
 
-	sorted, latencies, changed := p.probeIPs(ctx, ips)
-	if !changed {
-		return ips, nil
-	}
-
-	latencyMS := make(map[string]int, len(sorted))
-	for ip, lat := range latencies {
-		latencyMS[ip] = int(lat / time.Millisecond)
-	}
-	return sorted, latencyMS
-}
-
-// probeIPs is the probe-and-sort core. It spawns concurrent workers bounded
-// by the semaphore, measures latency for each IP, and returns them sorted
-// fastest-first. All workers respect ctx and bgCtx cancellation.
-func (p *Prober) probeIPs(ctx context.Context, ips []net.IP) ([]net.IP, map[string]time.Duration, bool) {
 	n := len(ips)
 
 	type result struct {
@@ -125,15 +97,15 @@ func (p *Prober) probeIPs(ctx context.Context, ips []net.IP) ([]net.IP, map[stri
 	wg.Wait()
 
 	changed := false
-	latencies := make(map[string]time.Duration, n)
+	latencyMS := make(map[string]int, n)
 	for _, r := range results {
 		if r.latency != time.Duration(math.MaxInt64) {
 			changed = true
-			latencies[ips[r.idx].String()] = r.latency
+			latencyMS[ips[r.idx].String()] = int(r.latency / time.Millisecond)
 		}
 	}
 	if !changed {
-		return ips, nil, false
+		return ips, nil
 	}
 
 	slices.SortStableFunc(results, func(a, b result) int {
@@ -152,7 +124,7 @@ func (p *Prober) probeIPs(ctx context.Context, ips []net.IP) ([]net.IP, map[stri
 		log.Debugf("LATENCY: probe result %s latency=%s", sorted[i].String(), r.latency)
 	}
 
-	return sorted, latencies, true
+	return sorted, latencyMS
 }
 
 // normalizeProbeProtocol canonicalizes protocol names (e.g. "ICMP" → "ping").
