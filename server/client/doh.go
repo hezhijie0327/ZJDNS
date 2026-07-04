@@ -148,6 +148,7 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 			_ = tc.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
 		}
 		cfg := tlsConfig.Clone()
+		cfg.NextProtos = config.NextProtoDOH
 		cfg.ServerName = serverName
 		eTLSConn := eTLS.Client(tcpConn, cfg)
 		if err := eTLSConn.HandshakeContext(ctx); err != nil {

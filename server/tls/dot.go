@@ -176,7 +176,11 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			pool.DefaultBufferPool.Put(buf)
 			continue
 		}
-		pool.DefaultBufferPool.Put(buf)
+		// buf must NOT be returned to the pool here: req.Data points into it
+		// and the query worker calls req.Unpack() again during processing.
+		// Returning buf early would zero req.Data, corrupting the re-unpack.
+		// Instead, buf ownership transfers to the worker goroutine.
+		pooled := cap(msgBuf) >= cap(buf)
 
 		var clientIP net.IP
 		if addr := tlsConn.RemoteAddr(); addr != nil {
@@ -189,15 +193,21 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		case workerCap <- struct{}{}:
 		case <-connCtx.Done():
 			pool.DefaultMessagePool.Put(req)
+			pool.DefaultBufferPool.Put(buf)
 			return
 		}
 
 		wg.Add(1)
-		go func(query *dns.Msg, ip net.IP) {
+		go func(query *dns.Msg, ip net.IP, pooledBuf []byte, isPooled bool) {
 			defer func() { <-workerCap }()
 			defer dnsutil.HandlePanic("DoT query worker")
 			defer wg.Done()
 			defer pool.DefaultMessagePool.Put(query)
+			defer func() {
+				if isPooled {
+					pool.DefaultBufferPool.Put(pooledBuf)
+				}
+			}()
 
 			response := s.handler.ServeDNS(query, ip, true, "DoT")
 			if response == nil {
@@ -237,6 +247,6 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 				// else: poolBuf was already returned, and writeBuf is a
 				// separately allocated slice that will be GC'd.
 			}
-		}(req, clientIP)
+		}(req, clientIP, buf, pooled)
 	}
 }

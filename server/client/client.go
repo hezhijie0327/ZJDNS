@@ -347,7 +347,7 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 		key := transportKey(server.Address, server.ServerName, server.SkipTLSVerify, server.Proxy)
 		proxyDialer := c.getProxyDialer(server)
 		dotConfig := c.eTLSClientConfig(server).Clone()
-		dotConfig.NextProtos = []string{"dot"}
+		dotConfig.NextProtos = config.NextProtoDOT
 		if c.dotPool != nil {
 			pc, err := c.dotPool.Acquire(ctx, key, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 				return c.dialTLSConn(dialCtx, addr, dotConfig, proxyDialer)
