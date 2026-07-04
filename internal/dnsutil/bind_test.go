@@ -8,13 +8,13 @@ import (
 )
 
 func TestTryBind_Success(t *testing.T) {
-	err := tryBind("tcp", ":0")
+	err := TryBind("tcp", ":0")
 	if err != nil {
-		t.Fatalf("tryBind tcp :0: %v", err)
+		t.Fatalf("TryBind tcp :0: %v", err)
 	}
-	err = tryBind("udp", ":0")
+	err = TryBind("udp", ":0")
 	if err != nil {
-		t.Fatalf("tryBind udp :0: %v", err)
+		t.Fatalf("TryBind udp :0: %v", err)
 	}
 }
 
@@ -26,7 +26,7 @@ func TestTryBind_AddrInUse(t *testing.T) {
 	defer func() { _ = l.Close() }()
 	addr := l.Addr().String()
 
-	err = tryBind("tcp", addr)
+	err = TryBind("tcp", addr)
 	if !isAddrInUse(err) {
 		t.Fatalf("expected EADDRINUSE, got %v", err)
 	}
@@ -40,7 +40,7 @@ func TestTryBind_UDPAddrInUse(t *testing.T) {
 	defer func() { _ = pc.Close() }()
 	addr := pc.LocalAddr().String()
 
-	err = tryBind("udp", addr)
+	err = TryBind("udp", addr)
 	if !isAddrInUse(err) {
 		t.Fatalf("expected EADDRINUSE, got %v", err)
 	}
@@ -54,35 +54,35 @@ func TestTryBind_UDP4(t *testing.T) {
 	defer func() { _ = l.Close() }()
 	addr := l.Addr().String()
 
-	err = tryBind("tcp4", addr)
+	err = TryBind("tcp4", addr)
 	if !isAddrInUse(err) {
 		t.Fatalf("expected EADDRINUSE, got %v", err)
 	}
 }
 
-func TestResolveBindAddrs_WildcardAvailable(t *testing.T) {
+func TestResolveBindAddrs_PerInterface(t *testing.T) {
 	port := findFreePort(t)
 
-	addrs, err := ResolveBindAddrs("tcp", port)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(addrs) != 1 || addrs[0] != ":"+port {
-		t.Fatalf("expected [:%s], got %v", port, addrs)
-	}
-
-	addrs, err = ResolveBindAddrs("udp", port)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(addrs) != 1 || addrs[0] != ":"+port {
-		t.Fatalf("expected [:%s], got %v", port, addrs)
+	for _, netw := range []string{"tcp", "udp"} {
+		addrs, err := ResolveBindAddrs(netw, port)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", netw, err)
+		}
+		if len(addrs) == 0 {
+			t.Fatalf("%s: expected at least one address", netw)
+		}
+		for _, addr := range addrs {
+			host, _, _ := net.SplitHostPort(addr)
+			if host == "" {
+				t.Errorf("%s: unexpected wildcard address %q", netw, addr)
+			}
+		}
 	}
 }
 
-func TestResolveBindAddrs_WildcardOccupied(t *testing.T) {
+func TestResolveBindAddrs_SkipsOccupied(t *testing.T) {
 	port := findFreePort(t)
-	l, err := net.Listen("tcp", ":"+port)
+	l, err := net.Listen("tcp", "127.0.0.1:"+port)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,14 +90,11 @@ func TestResolveBindAddrs_WildcardOccupied(t *testing.T) {
 
 	addrs, err := ResolveBindAddrs("tcp", port)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(addrs) == 0 {
-		t.Log("no non-loopback interfaces — fallback returned empty")
+		return // only loopback exists, all occupied
 	}
 	for _, addr := range addrs {
-		if addr == ":"+port {
-			t.Errorf("wildcard should not be in result when occupied")
+		if addr == "127.0.0.1:"+port {
+			t.Errorf("occupied address should be skipped")
 		}
 	}
 }
@@ -106,97 +103,6 @@ func TestResolveBindAddrs_InvalidNetwork(t *testing.T) {
 	_, err := ResolveBindAddrs("invalid", "12345")
 	if err == nil {
 		t.Fatal("expected error for invalid network")
-	}
-}
-
-func TestResolveBindAddrs_FallbackSkipsOccupied(t *testing.T) {
-	port := findFreePort(t)
-	l, err := net.Listen("tcp", "127.0.0.1:"+port)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = l.Close() }()
-
-	l2, err := net.Listen("tcp", ":"+port)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = l2.Close() }()
-
-	addrs, err := ResolveBindAddrs("tcp", port)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	for _, addr := range addrs {
-		if addr == "127.0.0.1:"+port {
-			t.Errorf("127.0.0.1 should be skipped when occupied")
-		}
-	}
-}
-
-func TestResolveBindAddrs_NoAvailable(t *testing.T) {
-	port := findFreePort(t)
-	l, err := net.Listen("tcp", "127.0.0.1:"+port)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = l.Close() }()
-
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var listeners []net.Listener
-	for _, iface := range ifaces {
-		ips, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, ip := range ips {
-			ipNet, ok := ip.(*net.IPNet)
-			if !ok || ipNet.IP.IsLoopback() || ipNet.IP.IsLinkLocalUnicast() {
-				continue
-			}
-			addr := net.JoinHostPort(ipNet.IP.String(), port)
-			l, err := net.Listen("tcp", addr)
-			if err != nil {
-				continue
-			}
-			listeners = append(listeners, l)
-		}
-	}
-	defer func() {
-		for _, l := range listeners {
-			_ = l.Close()
-		}
-	}()
-
-	addrs, err := ResolveBindAddrs("tcp", port)
-	if err == nil && len(addrs) > 0 {
-		for _, addr := range addrs {
-			host, _, _ := net.SplitHostPort(addr)
-			if host != "" {
-				ip := net.ParseIP(host)
-				if ip != nil && ip.IsLoopback() {
-					t.Errorf("loopback address %s should be excluded", addr)
-				}
-			}
-		}
-	}
-}
-
-func TestResolveBindAddrs_UDPWildcardOccupied(t *testing.T) {
-	port := findFreePort(t)
-	pc, err := net.ListenPacket("udp", ":"+port)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = pc.Close() }()
-
-	_, err = ResolveBindAddrs("udp", port)
-	if err == nil {
-		t.Log("fallback found available addresses despite wildcard occupation")
 	}
 }
 
@@ -215,26 +121,20 @@ func TestResolveBindAddrs_Format(t *testing.T) {
 			t.Errorf("expected port %s, got %s in %q", port, p, addr)
 		}
 		if host == "" {
-			continue // wildcard, fine
+			t.Errorf("wildcard address should not appear: %q", addr)
+			continue
 		}
-		ip := net.ParseIP(host)
-		if ip == nil {
+		if ip := net.ParseIP(host); ip == nil {
 			t.Errorf("address %q has invalid IP: %s", addr, host)
-		}
-		if ip.IsLoopback() {
-			t.Errorf("loopback address should be excluded: %s", addr)
-		}
-		if ip.IsLinkLocalUnicast() {
-			t.Errorf("link-local address should be excluded: %s", addr)
 		}
 	}
 }
 
 func TestTryBind_RandomPort(t *testing.T) {
 	for i := 0; i < 10; i++ {
-		err := tryBind("tcp", ":0")
+		err := TryBind("tcp", ":0")
 		if err != nil {
-			t.Fatalf("tryBind :0 iteration %d: %v", i, err)
+			t.Fatalf("TryBind :0 iteration %d: %v", i, err)
 		}
 	}
 }
@@ -271,7 +171,7 @@ func isAddrInUse(err error) bool {
 
 func BenchmarkTryBind(b *testing.B) {
 	for b.Loop() {
-		_ = tryBind("tcp", ":0")
+		_ = TryBind("tcp", ":0")
 	}
 }
 

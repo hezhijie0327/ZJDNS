@@ -211,11 +211,15 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	if cfg.Server.Pprof != "" {
-		server.pprofServer = &http.Server{
-			Addr:              "127.0.0.1:" + cfg.Server.Pprof,
-			ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
-			ReadTimeout:       0, // Disabled: pprof endpoints (profile, trace, heap) take >10s
-			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
+		if err := dnsutil.TryBind("tcp", "127.0.0.1:"+cfg.Server.Pprof); err != nil {
+			log.Warnf("PPROF: skipping — address 127.0.0.1:%s is unavailable: %v", cfg.Server.Pprof, err)
+		} else {
+			server.pprofServer = &http.Server{
+				Addr:              "127.0.0.1:" + cfg.Server.Pprof,
+				ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
+				ReadTimeout:       0,
+				IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
+			}
 		}
 	}
 

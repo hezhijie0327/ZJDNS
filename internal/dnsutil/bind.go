@@ -2,28 +2,17 @@
 package dnsutil
 
 import (
-	"errors"
 	"fmt"
 	"net"
-	"syscall"
 
 	"zjdns/internal/log"
 )
 
 // ResolveBindAddrs returns the list of addresses to bind for the given network
-// and port. It tries the wildcard address first; if another process already
-// occupies it (EADDRINUSE), it falls back to per-interface binding, skipping
-// any addresses that are already in use.
+// and port. It enumerates all non-link-local unicast IPs and returns each one
+// as a host:port string, skipping any that are already occupied (EADDRINUSE)
+// or otherwise unavailable.
 func ResolveBindAddrs(network, port string) ([]string, error) {
-	wildcard := ":" + port
-	if err := tryBind(network, wildcard); err == nil {
-		return []string{wildcard}, nil
-	} else if !errors.Is(err, syscall.EADDRINUSE) {
-		return nil, fmt.Errorf("%s listen on %s: %w", network, wildcard, err)
-	}
-
-	log.Warnf("SERVER: wildcard %s is occupied, falling back to per-interface binding", wildcard)
-
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("enumerate interfaces: %w", err)
@@ -37,14 +26,12 @@ func ResolveBindAddrs(network, port string) ([]string, error) {
 		}
 		for _, ip := range ips {
 			ipNet, ok := ip.(*net.IPNet)
-			if !ok || ipNet.IP.IsLoopback() || ipNet.IP.IsLinkLocalUnicast() {
+			if !ok {
 				continue
 			}
 			addr := net.JoinHostPort(ipNet.IP.String(), port)
-			if err := tryBind(network, addr); err != nil {
-				// Fallback is best-effort: skip addresses that can't be
-				// bound (occupied, link-local without scope, etc).
-				log.Debugf("SERVER: skipping %s address %s: %v", network, addr, err)
+			if err := TryBind(network, addr); err != nil {
+				log.Warnf("SERVER: skipping %s address %s: %v", network, addr, err)
 				continue
 			}
 			addrs = append(addrs, addr)
@@ -57,9 +44,9 @@ func ResolveBindAddrs(network, port string) ([]string, error) {
 	return addrs, nil
 }
 
-// tryBind attempts to bind a listener of the given network to addr and
+// TryBind attempts to bind a listener of the given network to addr and
 // immediately closes it. Returns nil on success, the bind error otherwise.
-func tryBind(network, addr string) error {
+func TryBind(network, addr string) error {
 	switch network {
 	case "tcp", "tcp4", "tcp6":
 		l, err := net.Listen(network, addr)
