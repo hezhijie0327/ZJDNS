@@ -367,93 +367,84 @@ func (s *SQLiteCache) IncrementStats(durationMs int64, cacheHit, hadError bool, 
 		return
 	}
 
-	cacheHitVal := 0
-	cacheMissVal := 0
-	if cacheHit {
-		cacheHitVal = 1
-	} else {
-		cacheMissVal = 1
+	a := &s.stats
+	a.totalRequests.Add(1)
+	a.totalResponseTimeMs.Add(durationMs)
+	for {
+		old := a.lastResponseTimeMs.Load()
+		if durationMs <= old || a.lastResponseTimeMs.CompareAndSwap(old, durationMs) {
+			break
+		}
 	}
 
-	errVal, staleVal, fallbackVal, prefetchVal, rewriteVal, hijackVal := 0, 0, 0, 0, 0, 0
+	if cacheHit {
+		a.cacheHits.Add(1)
+	} else {
+		a.cacheMisses.Add(1)
+	}
 	if hadError {
-		errVal = 1
+		a.errorResponses.Add(1)
 	}
 	if staleServed {
-		staleVal = 1
+		a.staleResponses.Add(1)
 	}
 	if fallbackUsed {
-		fallbackVal = 1
+		a.fallbackRequests.Add(1)
 	}
 	if prefetchTriggered {
-		prefetchVal = 1
+		a.prefetchRequests.Add(1)
 	}
 	if rewrote {
-		rewriteVal = 1
+		a.rewriteRequests.Add(1)
 	}
 	if hijackDetected {
-		hijackVal = 1
+		a.hijackDetections.Add(1)
 	}
 
-	secureVal, bogusVal, insecureVal := 0, 0, 0
 	switch dnssecStatus {
 	case config.DNSSECStatusSecure:
-		secureVal = 1
+		a.dnssecSecure.Add(1)
 	case config.DNSSECStatusBogus:
-		bogusVal = 1
+		a.dnssecBogus.Add(1)
 	case config.DNSSECStatusInsecure:
-		insecureVal = 1
+		a.dnssecInsecure.Add(1)
 	}
 
-	noerrVal, formerrVal, servfailVal, nxVal, nimpVal, refVal, otherVal := 0, 0, 0, 0, 0, 0, 0
 	switch rcode {
 	case dns.RcodeSuccess:
-		noerrVal = 1
+		a.rcodeNOERROR.Add(1)
 	case dns.RcodeFormatError:
-		formerrVal = 1
+		a.rcodeFORMERR.Add(1)
 	case dns.RcodeServerFailure:
-		servfailVal = 1
+		a.rcodeSERVFAIL.Add(1)
 	case dns.RcodeNameError:
-		nxVal = 1
+		a.rcodeNXDOMAIN.Add(1)
 	case dns.RcodeNotImplemented:
-		nimpVal = 1
+		a.rcodeNotImp.Add(1)
 	case dns.RcodeRefused:
-		refVal = 1
+		a.rcodeREFUSED.Add(1)
 	default:
-		otherVal = 1
+		a.rcodeOther.Add(1)
 	}
 
-	protocolBits := protoBits(protocol)
-
-	_, err := s.db.Exec(
-		`UPDATE stats SET
-			total_requests = total_requests + 1,
-			cache_hits = cache_hits + ?, cache_misses = cache_misses + ?,
-			error_responses = error_responses + ?, stale_responses = stale_responses + ?,
-			fallback_requests = fallback_requests + ?, prefetch_requests = prefetch_requests + ?,
-			rewrite_requests = rewrite_requests + ?, hijack_detections = hijack_detections + ?,
-			total_response_time_ms = total_response_time_ms + ?,
-			last_response_time_ms = MAX(last_response_time_ms, ?),
-			udp_requests = udp_requests + ?, tcp_requests = tcp_requests + ?,
-			dot_requests = dot_requests + ?, doq_requests = doq_requests + ?,
-			doh_requests = doh_requests + ?, doh3_requests = doh3_requests + ?,
-			dnssec_secure = dnssec_secure + ?, dnssec_bogus = dnssec_bogus + ?,
-			dnssec_insecure = dnssec_insecure + ?,
-			rcode_noerror = rcode_noerror + ?, rcode_formerr = rcode_formerr + ?,
-			rcode_servfail = rcode_servfail + ?, rcode_nxdomain = rcode_nxdomain + ?,
-			rcode_notimp = rcode_notimp + ?, rcode_refused = rcode_refused + ?,
-			rcode_other = rcode_other + ?,
-			updated_at = ?`,
-		cacheHitVal, cacheMissVal,
-		errVal, staleVal, fallbackVal, prefetchVal, rewriteVal, hijackVal,
-		durationMs, durationMs,
-		protocolBits.udp, protocolBits.tcp, protocolBits.dot, protocolBits.doq, protocolBits.doh, protocolBits.doh3,
-		secureVal, bogusVal, insecureVal,
-		noerrVal, formerrVal, servfailVal, nxVal, nimpVal, refVal, otherVal,
-		log.NowUnix(),
-	)
-	if err != nil {
-		log.Warnf("CACHE: increment stats failed: %v", err)
+	pb := protoBits(protocol)
+	if pb.udp != 0 {
+		a.udpRequests.Add(1)
+	}
+	if pb.tcp != 0 {
+		a.tcpRequests.Add(1)
+	}
+	if pb.dot != 0 {
+		a.dotRequests.Add(1)
+	}
+	if pb.doq != 0 {
+		a.doqRequests.Add(1)
+	}
+	if pb.doh != 0 {
+		a.dohRequests.Add(1)
+	}
+	if pb.doh3 != 0 {
+		a.doh3Requests.Add(1)
 	}
 }
 
@@ -556,7 +547,7 @@ func (s *SQLiteCache) SaveStats(row config.StatsRow) {
 		return
 	}
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO stats (
+		`INSERT OR REPLACE INTO stats (id,
 			total_requests, cache_hits, cache_misses, prefetch_requests,
 			error_responses, stale_responses, fallback_requests,
 			total_response_time_ms, last_response_time_ms,
@@ -565,7 +556,8 @@ func (s *SQLiteCache) SaveStats(row config.StatsRow) {
 			dnssec_secure, dnssec_bogus, dnssec_insecure,
 			rcode_noerror, rcode_formerr, rcode_servfail, rcode_nxdomain,
 			rcode_notimp, rcode_refused, rcode_other, updated_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		1,
 		row.TotalRequests, row.CacheHits, row.CacheMisses, row.PrefetchRequests,
 		row.ErrorResponses, row.StaleResponses, row.FallbackRequests,
 		row.TotalResponseTimeMs, row.LastResponseTimeMs,
