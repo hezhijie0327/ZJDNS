@@ -12,6 +12,7 @@ import (
 
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/ttl"
 )
 
 // entryBaseOverhead estimates the per-cache-entry fixed memory cost:
@@ -25,13 +26,13 @@ import (
 // entryRecordOverhead (44 B) is the per-record cost: CompactRecord.Text string
 // payload plus Go string header overhead.
 //
-// entryPTROverhead (56 B) is the per-PTR-index cost: ptrRecord struct plus
+// entryPTROverhead (72 B) is the per-PTR-index cost: ptrTTL struct plus
 // reverse-lookup map bucket allocation.
 const (
 	evictSampleSize     = config.DefaultCacheEvictSampleSize
 	entryBaseOverhead   = 64 + 208 + 72
 	entryRecordOverhead = 44
-	entryPTROverhead    = 56
+	entryPTROverhead    = 72
 )
 
 // MemoryCache is an in-memory DNS response cache with optional SQLite persistence.
@@ -42,7 +43,7 @@ type MemoryCache struct {
 	limitBytes  int64
 	currentSize int64
 	closed      int32
-	ptrIndex    map[string]map[string]uint32
+	ptrIndex    map[string]map[string]ptrTTL
 
 	sqlite       *sqliteStore
 	persistPath  string
@@ -61,6 +62,13 @@ type ptrRecord struct {
 	TTL  uint32
 }
 
+// ptrTTL wraps a TTL with the cache insertion timestamp so the
+// reverse-lookup index can return a countdown TTL via ttl.RemainingTTL.
+type ptrTTL struct {
+	TTL       uint32
+	Timestamp int64
+}
+
 // New creates a MemoryCache configured with the given settings, restoring any
 // persisted SQLite database and writing entries on each Set.
 func New(settings config.CacheSettings) *MemoryCache {
@@ -74,7 +82,7 @@ func New(settings config.CacheSettings) *MemoryCache {
 		entries:     make(map[string]*cacheItem),
 		entryPTRs:   make(map[string][]ptrRecord),
 		limitBytes:  limit,
-		ptrIndex:    make(map[string]map[string]uint32),
+		ptrIndex:    make(map[string]map[string]ptrTTL),
 		persistPath: settings.Persist.File,
 	}
 
@@ -106,7 +114,7 @@ func New(settings config.CacheSettings) *MemoryCache {
 					ci := &cacheItem{entry: entryCopy}
 					ci.lastAccess.Store(time.Now().UnixNano())
 					m.entries[item.Key] = ci
-					m.storePTRLocked(item.Key, ptrs)
+					m.storePTRLocked(item.Key, ptrs, item.Entry.Timestamp)
 					ci.size = estimateEntrySize(item.Key, entryCopy, ptrs)
 					m.currentSize += ci.size
 					loaded++
@@ -215,7 +223,7 @@ func (m *MemoryCache) setEntryInternal(key string, entry *Entry) {
 		m.removePTRLocked(key)
 		existing.entry = entry
 		existing.lastAccess.Store(log.NowUnixNano())
-		m.storePTRLocked(key, ptrRecords)
+		m.storePTRLocked(key, ptrRecords, entry.Timestamp)
 		existing.size = estSize
 		m.currentSize += estSize - oldSize
 		m.evictToBudget()
@@ -228,7 +236,7 @@ func (m *MemoryCache) setEntryInternal(key string, entry *Entry) {
 	item := &cacheItem{entry: entry}
 	item.lastAccess.Store(log.NowUnixNano())
 	m.entries[key] = item
-	m.storePTRLocked(key, ptrRecords)
+	m.storePTRLocked(key, ptrRecords, entry.Timestamp)
 	item.size = estSize
 	m.currentSize += estSize
 
@@ -311,8 +319,8 @@ func (m *MemoryCache) ReverseLookup(ip net.IP) []LookupResult {
 		return nil
 	}
 	results := make([]LookupResult, 0, len(candidates))
-	for name, ttl := range candidates {
-		results = append(results, LookupResult{Name: name, TTL: ttl})
+	for name, pttl := range candidates {
+		results = append(results, LookupResult{Name: name, TTL: ttl.RemainingTTL(pttl.Timestamp, int(pttl.TTL), uint32(config.DefaultStaleTTL))})
 	}
 	m.mu.RUnlock()
 
@@ -405,7 +413,7 @@ func extractPTRRecords(entry *Entry) []ptrRecord {
 	return records
 }
 
-func (m *MemoryCache) storePTRLocked(key string, records []ptrRecord) {
+func (m *MemoryCache) storePTRLocked(key string, records []ptrRecord, timestamp int64) {
 	if len(records) == 0 {
 		delete(m.entryPTRs, key)
 		return
@@ -415,9 +423,9 @@ func (m *MemoryCache) storePTRLocked(key string, records []ptrRecord) {
 	m.entryPTRs[key] = cloned
 	for _, rec := range cloned {
 		if m.ptrIndex[rec.IP] == nil {
-			m.ptrIndex[rec.IP] = make(map[string]uint32)
+			m.ptrIndex[rec.IP] = make(map[string]ptrTTL)
 		}
-		m.ptrIndex[rec.IP][rec.Name] = rec.TTL
+		m.ptrIndex[rec.IP][rec.Name] = ptrTTL{TTL: rec.TTL, Timestamp: timestamp}
 	}
 }
 
