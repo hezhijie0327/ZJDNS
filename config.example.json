@@ -33,7 +33,7 @@
       "cache": {
         "size": 4194304,
         "persist": {
-          "file": "cache.snapshot",
+          "file": "cache.db",
           "interval": 30
         },
         "prefer_stale": true

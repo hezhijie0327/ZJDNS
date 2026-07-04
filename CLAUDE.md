@@ -163,10 +163,10 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 
 ```
 zjdns/
-├── cmd/zjdns/                     ← main.go, version.go, bench_test.go (binary)
+├── cmd/zjdns/                     ← main.go, banner.go, version.go, bench_test.go (binary)
 ├── config/                        ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── cache/                         ← Store interface, memory/persist, negative TTL capping (RFC 9077)
+├── cache/                         ← Store interface, memory/SQLite persistence, negative TTL capping (RFC 9077)
 ├── cidr/                          ← IP filtering with tag matching
 ├── rewrite/                       ← Query rewrite rules
 ├── stats/                         ← Lock-free atomic collector (PersistStore interface)
@@ -307,7 +307,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## Notable Design Decisions
 
-- **Cache**: RLock reads (zero contention), entry pointer returned directly — `expand()` re-parses from `.Text` non-mutatingly. TTL floor 10s. `CompactRecord.RR` intentionally nil (saves memory; `expand()` uses `.Text`). Negative response TTL capped at `min(SOA.TTL, SOA.Minttl, 10800)` per RFC 9077.
+- **Cache**: RLock reads (zero contention), entry pointer returned directly — `expand()` re-parses from `.Text` non-mutatingly. TTL floor 10s. `CompactRecord.RR` intentionally nil (saves memory; `expand()` uses `.Text`). Negative response TTL capped at `min(SOA.TTL, SOA.Minttl, 10800)` per RFC 9077. SQLite persistence via `modernc.org/sqlite` (pure Go, no CGo, write-through on each Set).
 - **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and rewrite (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
 - **QNAME minimisation (RFC 9156)**: Enabled by default for all recursive resolutions at depth 0. Internal infrastructure queries (NS address resolution) use full QNAME. Minimisation steps tracked per-resolution; after DefaultQnameMinimiseCount (10) steps, all remaining labels are exposed. QTYPE=A is used to hide original QTYPE except for DS/NSEC/NSEC3 parent-side types. When a minimised query returns answer records whose owner names don't match the original QNAME (CNAME for the minimised name, not the target), the resolver retries with the full QNAME per RFC 9156 §2.3.
 - **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read fields after `Put()`. Double-zeroing removed: `Put` zeroes, `Get` trusts.
@@ -393,7 +393,7 @@ dig @127.0.0.1 -p 15353 zhijie-online.mail.protection.outlook.com A +short
 dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 ```
 
-Verify hijack detection from logs: `grep -E "hijack detected|rejecting hijacked|tcp=true" /tmp/zjdns.log`
+Verify hijack detection from logs: `grep -E "hijack probe detected|hijack detected|rejecting hijacked|tcp=true" /tmp/zjdns.log`
 Normal domains should show `tcp=false` throughout; blocked domains should show hijack detection + `tcp=true` restart.
 
 ## KTLS Tuning

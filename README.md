@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
-高性能递归 DNS 解析服务器，支持 DNSSEC 密码学验证、LRU 内存缓存（磁盘持久化）、ECS、DoT/DoQ/DoH/DoH3 安全传输协议。
+高性能递归 DNS 解析服务器，支持 DNSSEC 密码学验证、LRU 内存缓存（SQLite 持久化）、ECS、DoT/DoQ/DoH/DoH3 安全传输协议。
 
 > **生产就绪状态**：本项目尚未经过生产环境充分验证，请谨慎用于关键业务。
 
@@ -60,7 +60,7 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 
 - **LRU 内存缓存**：固定容量（默认 4 MB），RLock 零读争用，atomic 访问时间淘汰
 - **全局 TTL 管理器**（`internal/ttl`）：统一 TTL 计算，cache 与 rewrite 共用。Stale TTL 周期性倒数（30→1→30），每轮给后台刷新新的机会；Rewrite TTL 独立周期性倒数（每个 RR 单独取模）
-- **磁盘持久化**：gob 快照，启动恢复，定期落盘（默认 30s），原子写入
+- **SQLite 持久化**：每条写入即时持久化（write-through），启动自动恢复，WAL 模式高性能并发。纯 Go 无 CGo，支持静态编译
 - **过期服务**：RFC 8767 过期缓存服务（最大 30 天），上游不可用时兜底
 - **预取**：TTL 剩余 ≤40% 时后台异步刷新，ECS 感知分区
 
@@ -104,7 +104,7 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
     "features": {
       "hijack_protection": true,
       "dnssec_enforce": true,
-      "cache": { "size": 4194304 },
+      "cache": { "size": 4194304, "persist": { "file": "/var/lib/zjdns/cache.db" } },
       "ecs_subnet": { "ipv4": "auto", "ipv6": "auto" }
     }
   },
@@ -120,11 +120,11 @@ kdig @127.0.0.1 -p 443 example.com +https        # DoH
 
 ```
 zjdns/
-├── cmd/zjdns/                        # 二进制入口（main.go + version.go + bench_test.go）
+├── cmd/zjdns/                        # 二进制入口（main.go + banner.go + version.go + bench_test.go）
 ├── config/                           # 配置类型、加载、验证（config_validate.go）、默认值
 ├── edns/                             # EDNS(0) 扩展（ECS、Cookie、EDE、Padding）
 │                                     #   ECSOption 为 config.ECSOption 的类型别名
-├── cache/                            # LRU 缓存 + 磁盘持久化 + PTR 反向索引
+├── cache/                            # LRU 内存缓存 + SQLite 持久化 + PTR 反向索引
 │                                     #   不依赖 edns，直接使用 config.ECSOption
 ├── cidr/                             # CIDR IP 过滤（基于标签的匹配、IPv4 位运算优化）
 ├── rewrite/                          # 域名重写规则
