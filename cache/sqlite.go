@@ -3,7 +3,6 @@ package cache
 import (
 	"database/sql"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -91,16 +90,13 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 }
 
 func (s *SQLiteCache) migrate() error {
-	pragmas := []string{
-		fmt.Sprintf("PRAGMA mmap_size = %d", s.mmapSizeMB*1024*1024),
-		fmt.Sprintf("PRAGMA cache_size = %d", -s.cacheSizeMB*1024),
-		"PRAGMA page_size = 4096",
-		"PRAGMA temp_store = MEMORY",
-	}
-	for _, p := range pragmas {
-		if _, err := s.db.Exec(p); err != nil {
-			log.Warnf("CACHE: pragma failed (non-fatal): %s: %v", p, err)
-		}
+	// 2.8: WAL autocheckpoint tuning
+	pragmaSQL := fmt.Sprintf(
+		"PRAGMA mmap_size = %d; PRAGMA cache_size = %d; PRAGMA page_size = 4096; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 500;",
+		s.mmapSizeMB*1024*1024, -s.cacheSizeMB*1024,
+	)
+	if _, err := s.db.Exec(pragmaSQL); err != nil {
+		log.Warnf("CACHE: pragma failed (non-fatal): %v", err)
 	}
 
 	_, err := s.db.Exec(`
@@ -114,6 +110,7 @@ func (s *SQLiteCache) migrate() error {
 			dnssec_ok  INTEGER NOT NULL DEFAULT 0,
 			timestamp  INTEGER NOT NULL,
 			ttl        INTEGER NOT NULL,
+			expires_at INTEGER NOT NULL DEFAULT 0,
 			validated  INTEGER NOT NULL DEFAULT 0,
 			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 		);
@@ -132,9 +129,9 @@ func (s *SQLiteCache) migrate() error {
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
-		CREATE INDEX IF NOT EXISTS idx_entries_lookup ON entries(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok);
-		CREATE INDEX IF NOT EXISTS idx_records_entry ON records(entry_id);
-		CREATE INDEX IF NOT EXISTS idx_records_ip ON records(rdata_ip) WHERE rdata_ip IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS idx_entries_expires_at ON entries(expires_at);
+		CREATE INDEX IF NOT EXISTS idx_records_entry_section_seq ON records(entry_id, section, seq);
+		CREATE INDEX IF NOT EXISTS idx_records_ip_entry ON records(rdata_ip, entry_id) WHERE rdata_ip IS NOT NULL;
 
 		CREATE TABLE IF NOT EXISTS stats (
 			id                    INTEGER PRIMARY KEY CHECK (id = 1),
@@ -279,9 +276,9 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	rows, err := s.db.Query(
 		`SELECT DISTINCT r.name, r.ttl, e.timestamp FROM records r
 		 JOIN entries e ON r.entry_id = e.id
-		 WHERE r.rdata_ip = ? AND e.timestamp + e.ttl > ? AND e.timestamp + e.ttl + ? >= ?
+		 WHERE r.rdata_ip = ? AND e.expires_at + ? >= ?
 		 ORDER BY r.name`,
-		ip, log.NowUnix(), s.staleMaxAge, log.NowUnix(),
+		ip, s.staleMaxAge, log.NowUnix(),
 	)
 	if err != nil {
 		log.Warnf("CACHE: PTR lookup failed for %s: %v", ip, err)
@@ -551,32 +548,16 @@ func (s *SQLiteCache) evictOldest(n int64) {
 		return
 	}
 
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			continue
-		}
-		ids = append(ids, id)
-	}
 	_ = rows.Close()
 
-	if len(ids) == 0 {
-		return
-	}
-
-	// Build IN clause. Records cascade-delete automatically.
-	stmt := `DELETE FROM entries WHERE id IN (?` + strings.Repeat(`,?`, len(ids)-1) + `)`
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	if _, err := tx.Exec(stmt, args...); err != nil {
+	if _, err := tx.Exec(
+		`DELETE FROM entries WHERE id IN (SELECT id FROM entries ORDER BY timestamp ASC LIMIT ?)`, n,
+	); err != nil {
 		return
 	}
 	_ = tx.Commit()
 
-	log.Debugf("CACHE: evicted %d oldest entries (max=%d)", len(ids), s.maxEntries)
+	log.Debugf("CACHE: evicted %d oldest entries (max=%d)", n, s.maxEntries)
 }
 
 // ── Periodic cleanup ─────────────────────────────────────────────────────────
@@ -601,7 +582,7 @@ func (s *SQLiteCache) startPeriodicCleanup() {
 
 func (s *SQLiteCache) deleteExpiredEntries() {
 	cutoff := log.NowUnix() - s.staleMaxAge
-	res, err := s.db.Exec(`DELETE FROM entries WHERE timestamp + ttl < ?`, cutoff)
+	res, err := s.db.Exec(`DELETE FROM entries WHERE expires_at < ?`, cutoff)
 	if err != nil {
 		log.Warnf("CACHE: expired entry cleanup failed: %v", err)
 		return
@@ -636,7 +617,7 @@ func (s *SQLiteCache) UpdateLatency(qname string, qtype, qclass uint16, ecs *con
 
 func (s *SQLiteCache) loadRecords(entryID int64) (*Entry, error) {
 	rows, err := s.db.Query(
-		`SELECT section, name, rtype, ttl, rr_text FROM records WHERE entry_id = ? ORDER BY latency_ms IS NULL, latency_ms ASC, section, seq`, entryID,
+		`SELECT section, name, rtype, ttl, rr_text FROM records WHERE entry_id = ? ORDER BY latency_ms ASC, section, seq`, entryID,
 	)
 	if err != nil {
 		return nil, err
