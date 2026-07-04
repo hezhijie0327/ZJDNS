@@ -340,7 +340,9 @@ func testCache() cache.Store {
 }
 
 func TestFullDNSSECChain(t *testing.T) {
-	cv := NewCryptoValidator(testCache())
+	store := testCache()
+	t.Cleanup(func() { _ = store.Close() })
+	cv := NewCryptoValidator(store)
 	childZone := "child.example.net"
 
 	childKSK, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)

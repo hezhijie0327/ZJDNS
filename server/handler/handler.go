@@ -240,7 +240,9 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	// early validation. Force a full unpack so EDNS flags (DO bit, ECS)
 	// are available.
 	req.Options = 0
-	_ = req.Unpack()
+	if h.edns != nil {
+		_ = req.Unpack()
+	}
 
 	clientRequestedDNSSEC := false
 	var ecsOpt *edns.ECSOption

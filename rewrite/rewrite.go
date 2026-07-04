@@ -272,7 +272,7 @@ ruleLoop:
 			for _, rr := range rule.CachedRecords {
 				// hdr removed
 				if rr.Header().Class == qclass && dns.RRToType(rr) == qtype {
-					if r, e := dns.New(rr.String()); e == nil {
+					if r := rr.Clone(); r != nil {
 						result.Records = append(result.Records, r)
 					}
 				}
@@ -280,7 +280,7 @@ ruleLoop:
 			for _, rr := range rule.CachedAdditional {
 				// hdr removed
 				if rr.Header().Class == qclass && dns.RRToType(rr) == qtype {
-					if r, e := dns.New(rr.String()); e == nil {
+					if r := rr.Clone(); r != nil {
 						result.Additional = append(result.Additional, r)
 					}
 				}

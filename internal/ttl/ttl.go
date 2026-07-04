@@ -81,10 +81,7 @@ func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {
 		if rr == nil {
 			continue
 		}
-		copied, err := dns.New(rr.String())
-		if err != nil {
-			continue
-		}
+		copied := rr.Clone()
 		origTTL := int64(copied.Header().TTL)
 		if origTTL <= 0 {
 			result = append(result, copied)
