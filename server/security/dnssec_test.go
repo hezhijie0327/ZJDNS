@@ -332,7 +332,11 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 // ── Full chain: DS → DNSKEY → answer ────────────────────────────────────────
 
 func testCache() cache.Store {
-	return cache.New(config.CacheSettings{Size: config.DefaultCacheSize})
+	c, err := cache.NewSQLiteCache("", config.DefaultMaxCacheEntries, 0, 0)
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
 
 func TestFullDNSSECChain(t *testing.T) {

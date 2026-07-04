@@ -173,14 +173,11 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 }
 
 func validateCacheAndStats(cfg *ServerConfig) error {
-	if cfg.Server.Features.Cache.Size < 0 {
-		return fmt.Errorf("server.features.cache.size must be zero or positive")
+	if cfg.Server.Features.Cache.MaxEntries < 0 {
+		return fmt.Errorf("server.features.cache.max_entries must be zero or positive")
 	}
 	if strings.Contains(cfg.Server.Features.Cache.Persist.File, "..") {
 		return fmt.Errorf("server.features.cache.persist.file must not contain '..'")
-	}
-	if cfg.Server.Features.Cache.Persist.Interval < 0 {
-		return fmt.Errorf("server.features.cache.persist.interval must be zero or positive")
 	}
 	if cfg.Server.Features.Stats != nil {
 		if cfg.Server.Features.Stats.Interval < 0 {

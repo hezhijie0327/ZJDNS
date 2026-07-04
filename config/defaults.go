@@ -14,11 +14,12 @@ const (
 
 // Cache sizing, TTL, and serve-stale parameters.
 const (
-	DefaultCacheSize            = 4 * 1024 * 1024
-	DefaultCachePersistInterval = 30 * time.Second
-	DefaultTTL                  = 10
-	DefaultStaleTTL             = 30
-	DefaultStaleMaxAge          = 30 * 86400 // RFC 8767 §6 recommends ≤ 30 days
+	DefaultMaxCacheEntries  = 10000
+	DefaultCacheMMapSizeMB  = 16
+	DefaultCacheCacheSizeMB = 4
+	DefaultTTL              = 10
+	DefaultStaleTTL         = 30
+	DefaultStaleMaxAge      = 30 * 86400 // RFC 8767 §6 recommends ≤ 30 days
 
 	DefaultPrefetchThresholdPercent  = 40
 	DefaultServeExpiredClientTimeout = 1800 * time.Millisecond // RFC 8767 §5.2
@@ -115,7 +116,6 @@ const (
 	DefaultCacheKeySeparator    = ':'
 	DefaultCacheKeyECSDelim     = '/'
 	DefaultCacheKeyHashFormat   = "h:%x"
-	DefaultCacheEvictSampleSize = 25
 	DefaultRewriteRulesCapacity = 16
 
 	DefaultTokenStoreCapacity     = 32  // QUIC LRU token store capacity per key

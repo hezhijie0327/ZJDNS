@@ -8,7 +8,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"codeberg.org/miekg/dns"
 
@@ -74,18 +73,18 @@ type DDRSettings struct {
 	IPv6   string `json:"ipv6"`
 }
 
-// CacheSettings configures DNS response cache memory usage, persistence,
-// and stale serving.
+// CacheSettings configures DNS response cache size, persistence, and stale serving.
 type CacheSettings struct {
-	Size        int64                    `json:"size,omitempty"`
+	MaxEntries  int                      `json:"max_entries,omitempty"`
+	MMapSizeMB  int                      `json:"mmap_size_mb,omitempty"`
+	CacheSizeMB int                      `json:"cache_size_mb,omitempty"`
 	Persist     CachePersistenceSettings `json:"persist,omitempty"`
 	PreferStale bool                     `json:"prefer_stale,omitempty"`
 }
 
-// CachePersistenceSettings configures cache snapshot file persistence.
+// CachePersistenceSettings configures the SQLite database file for cache persistence.
 type CachePersistenceSettings struct {
-	File     string `json:"file,omitempty"`
-	Interval int    `json:"interval,omitempty"`
+	File string `json:"file,omitempty"`
 }
 
 // StatsSettings configures periodic statistics collection and reset intervals.
@@ -238,7 +237,6 @@ func NewDefaultServerConfig() *ServerConfig {
 	cfg.Server.TLS.HTTPS.Port = DefaultDOHPort
 	cfg.Server.TLS.HTTPS.Endpoint = DefaultQueryPath
 
-	cfg.Server.Features.Cache.Persist.Interval = int(DefaultCachePersistInterval / time.Second)
 	cfg.Server.Features.DDR = DDRSettings{Domain: "dns.example.com", IPv4: "127.0.0.1", IPv6: "::1"}
 	cfg.Server.Features.ECS = ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.DNSSECEnforce = true

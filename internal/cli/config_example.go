@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"time"
 
 	"zjdns/config"
 )
@@ -20,10 +19,9 @@ func GenerateExampleConfig() string {
 
 	cfg.Server.TLS.KTLS = &config.KTLSSettings{KernelTX: true}
 
-	cfg.Server.Features.Cache.Size = config.DefaultCacheSize
+	cfg.Server.Features.Cache.MaxEntries = config.DefaultMaxCacheEntries
 	cfg.Server.Features.Cache.Persist = config.CachePersistenceSettings{
-		File:     "cache.db",
-		Interval: int(config.DefaultCachePersistInterval / time.Second),
+		File: "cache.db",
 	}
 	cfg.Server.Features.Cache.PreferStale = true
 	cfg.Server.Features.ECS = config.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
@@ -36,10 +34,7 @@ func GenerateExampleConfig() string {
 		{Protocol: "https", Port: config.DefaultProbePortHTTPS, Timeout: 100},
 		{Protocol: "http3", Port: config.DefaultProbePortHTTPS, Timeout: 100},
 	}
-	cfg.Server.Features.Stats = &config.StatsSettings{
-		Interval:      config.DefaultStatsInterval,
-		ResetInterval: config.DefaultStatsResetInterval,
-	}
+	cfg.Server.Features.Stats = &config.StatsSettings{}
 
 	cfg.Upstream = []config.UpstreamServer{
 		{Address: "223.5.5.5:53", Protocol: "tcp", Proxy: "socks5://127.0.0.1:1080"},

@@ -18,8 +18,12 @@ type testQ struct {
 	Qclass uint16
 }
 
-func testStore() *MemoryCache {
-	return New(config.CacheSettings{Size: config.DefaultCacheSize})
+func testStore() *SQLiteCache {
+	c, err := NewSQLiteCache("", config.DefaultMaxCacheEntries, 0, 0)
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
 
 // ── BuildCacheKey ────────────────────────────────────────────────────────────────
@@ -110,9 +114,8 @@ func TestSetEntry_CustomEntry(t *testing.T) {
 
 	now := time.Now().Unix()
 	entry := &Entry{
-		Timestamp:  now,
-		AccessTime: now,
-		TTL:        60,
+		Timestamp: now,
+		TTL:       60,
 
 		Validated: true,
 		Answer: []*CompactRecord{

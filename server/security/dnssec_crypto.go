@@ -494,11 +494,10 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 
 	now := log.NowUnix()
 	entry := &cache.Entry{
-		Timestamp:  now,
-		AccessTime: now,
-		TTL:        ttl,
-		Validated:  true,
-		Answer:     make([]*cache.CompactRecord, 0, len(keys)),
+		Timestamp: now,
+		TTL:       ttl,
+		Validated: true,
+		Answer:    make([]*cache.CompactRecord, 0, len(keys)),
 	}
 	for _, k := range keys {
 		if k != nil {

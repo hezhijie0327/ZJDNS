@@ -50,8 +50,7 @@ func BenchmarkPoolBufferGetPut(b *testing.B) {
 
 func BenchmarkCacheSetGet(b *testing.B) {
 	disableLogging()
-	cfg := config.CacheSettings{Size: config.DefaultCacheSize}
-	c := cache.New(cfg)
+	c, _ := cache.NewSQLiteCache("", config.DefaultMaxCacheEntries, 0, 0)
 	defer func() { _ = c.Close() }()
 
 	a := &dns.A{
@@ -69,8 +68,7 @@ func BenchmarkCacheSetGet(b *testing.B) {
 
 func BenchmarkCacheParallel(b *testing.B) {
 	disableLogging()
-	cfg := config.CacheSettings{Size: config.DefaultCacheSize}
-	c := cache.New(cfg)
+	c, _ := cache.NewSQLiteCache("", config.DefaultMaxCacheEntries, 0, 0)
 	defer func() { _ = c.Close() }()
 
 	b.ResetTimer()
@@ -241,7 +239,7 @@ func buildBenchServer(b *testing.B) *server.Server {
 			Features: config.FeatureFlags{
 				HijackProtection: false,
 				DNSSECEnforce:    false,
-				Cache:            config.CacheSettings{Size: config.DefaultCacheSize},
+				Cache:            config.CacheSettings{MaxEntries: config.DefaultMaxCacheEntries},
 			},
 		},
 		Rewrite: []config.RewriteRule{

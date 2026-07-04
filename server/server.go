@@ -43,10 +43,9 @@ type statsPersistAdapter struct {
 func (a *statsPersistAdapter) SaveStats(key string, data []byte, ttl int) {
 	now := time.Now().Unix()
 	a.store.SetEntry(key, &cache.Entry{
-		Timestamp:  now,
-		AccessTime: now,
-		TTL:        ttl,
-		Payload:    data,
+		Timestamp: now,
+		TTL:       ttl,
+		Payload:   data,
 	})
 }
 
@@ -107,7 +106,16 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}
 
-	cacheStore := cache.New(cfg.Server.Features.Cache)
+	cacheStore, err := cache.NewSQLiteCache(
+		cfg.Server.Features.Cache.Persist.File,
+		cfg.Server.Features.Cache.MaxEntries,
+		cfg.Server.Features.Cache.MMapSizeMB,
+		cfg.Server.Features.Cache.CacheSizeMB,
+	)
+	if err != nil {
+		cancel(fmt.Errorf("cache init: %w", err))
+		return nil, fmt.Errorf("cache init: %w", err)
+	}
 
 	statsCollector := stats.New(cfg)
 

@@ -39,7 +39,6 @@ type Entry struct {
 	Additional      []*CompactRecord `json:"additional"`
 	ECSAddress      string           `json:"ecs_address,omitempty"`
 	Timestamp       int64            `json:"timestamp"`
-	AccessTime      int64            `json:"access_time"`
 	TTL             int              `json:"ttl"`
 	ECSFamily       uint16           `json:"ecs_family,omitempty"`
 	ECSSourcePrefix uint8            `json:"ecs_source_prefix,omitempty"`
