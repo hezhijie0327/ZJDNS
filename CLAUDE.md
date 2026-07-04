@@ -101,7 +101,7 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 - All magic numbers must be named constants in `config/defaults.go` with a `Default` prefix.
 - No duplicate constants in the same package.
 - Leaf packages that can't import `config` may use local `const` blocks with same naming convention.
-- Cache key strings follow `prefix:` convention (`dns:`, `dnskey:`, `stats:`).
+- Stats persistence key: `config.StatsPersistKey = "stats:"`.
 - **Code is canonical**: docs and comments must match the actual constant values. Verify, don't assume.
 - **RFC 9077/9156 defaults**: `DefaultMaxNegativeTTL = 10800`, `DefaultQnameMinimiseCount = 10`, `DefaultMinimiseOneLabel = 4`.
 
@@ -166,8 +166,7 @@ zjdns/
 ├── cmd/zjdns/                     ← main.go, banner.go, version.go, bench_test.go (binary)
 ├── config/                        ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── cache/                         ← Store interface, memory/SQLite persistence, negative TTL capping (RFC 9077)
-│                                  ←   memory.go (LRU) + sqlite.go (write-through, modernc.org/sqlite)
+├── cache/                         ← Store interface, SQLite relational cache (entries + records + stats tables)
 ├── cidr/                          ← IP filtering with tag matching
 ├── rewrite/                       ← Query rewrite rules
 ├── stats/                         ← Lock-free atomic collector (PersistStore interface)
@@ -275,14 +274,14 @@ Top layer (wiring):
 | `ECSConfig` | `config` | User-facing ECS subnet configuration (moved from edns) |
 | `ECSOption` | `config` | Parsed EDNS Client Subnet (edns has type alias: `type ECSOption = config.ECSOption`) |
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
-| `Store` | `cache` | Interface: Get, Set, SetWithDNSSEC, ReverseLookup, Close, SetEntry |
-| `Entry` | `cache` | Cached DNS response (renamed from CacheEntry) |
+| `Store` | `cache` | Interface: Get(qname,qtype,qclass,ecs,dnssecOK), Set(params+RRs), UpdateLatency, ReverseLookup, Close |
+| `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
 | `Collector` | `stats` | Lock-free atomic metrics; uses `PersistStore` interface (no cache dependency) |
 | `PersistStore` | `stats` | Interface: SaveStats(key, data, ttl), LoadStats(key) ([]byte, bool) |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `Handler` | `server/handler` | DNS query processing pipeline; owns `BackgroundConfig`, `LatencyProber` |
 | `BackgroundConfig` | `server/handler` | Groups RefreshGroup/RefreshCtx/Ctx lifecycle params |
-| `LatencyProber` | `server/handler` | Interface: Start(question, key, answer, ...) — accepts `*latency.Prober` implicitly |
+| `LatencyProber` | `server/handler` | Interface: Start(qname, qtype, answer, ...) — latency-probes A/AAAA records and updates latency_ms |
 | `Server` | `server/tls` | TLS listeners (DoT, DoQ, DoH, DoH3) |
 | `Client` | `server/client` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5) |
 | `SOCKS5Dialer` | `server/client` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
@@ -310,7 +309,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## Notable Design Decisions
 
-- **Cache**: RLock reads (zero contention), entry pointer returned directly — `expand()` re-parses from `.Text` non-mutatingly. TTL floor 10s. `CompactRecord.RR` intentionally nil (saves memory; `expand()` uses `.Text`). Negative response TTL capped at `min(SOA.TTL, SOA.Minttl, 10800)` per RFC 9077. SQLite persistence via `modernc.org/sqlite` (pure Go, no CGo, write-through on each Set).
+- **Cache (SQLite relational store)**: All DNS responses, NS latency data, DNSKEYs, and PTR mappings share three SQLite tables — no in-memory Go map, no gob encoding. WAL mode + mmap for hot-data-in-memory performance. TTL floor 10s. Negative response TTL capped per RFC 9077. `modernc.org/sqlite` (pure Go, no CGo). See [DB Schema](#db-schema) below.
 - **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and rewrite (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
 - **EDNS buffer sizing**: Dual-size strategy — standard upstream queries use 1232 bytes (DNS Flag Day 2020) while recursive (root/TLD) queries use 4096 bytes (`RecursiveUDPBufferSize`) to avoid UDP truncation on DNSSEC-signed root zone referrals (~1400 bytes). Applied in `queryNameserversConcurrent` after `buildMsg` and in `probeTLDForHijack`.
 - **Per-interface binding** (`internal/dnsutil/bind.go`): All listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, pprof) bind per-interface IP instead of wildcard. `TryBind` pre-checks each address; unavailable ones are skipped with a WARN log. When another process occupies a port on a specific interface (e.g. warp-svc on 100.96.0.21:53), ZJDNS binds to remaining free IPs without conflict.
@@ -325,11 +324,61 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
 - **Rewite TTL**: Rewrite rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently (`origTTL - (elapsed % origTTL)`) rather than staying static. Rewrite responses bypass cache (client-IP filtering), but TTL now decrements correctly.
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns).
-- **stats PersistStore**: stats defines a local interface (`SaveStats`/`LoadStats` with raw `[]byte`) and does not import cache. The `server` package adapts `cache.Store` via `statsPersistAdapter`.
+- **stats PersistStore**: stats defines a local interface (`SaveStats`/`LoadStats` with raw `[]byte`) and does not import cache. `server.go`'s `statsPersistAdapter` wraps `SQLiteCache.SaveStats/LoadStats` which write directly to a `stats` table.
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
 - **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
 - **eTLS alias**: Always use `eTLS` (not `cryptotls`) for `gitlab.com/go-extension/tls`. Used in `server/tls`, `server/client`, `config`.
 - **Error wrapping**: Always use `%w` in `fmt.Errorf` when wrapping errors that callers may check with `errors.Is`/`errors.As`. Use `%v` only for informational logging.
+
+## DB Schema
+
+The cache uses three SQLite tables (`modernc.org/sqlite`, WAL mode, mmap):
+
+```sql
+-- One row per cached DNS query. Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
+CREATE TABLE entries (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    qname      TEXT NOT NULL,       -- normalized FQDN (dnsutil.NormalizeDomain)
+    qtype      INTEGER NOT NULL,    -- dns.TypeA=1, DNSKEY=48, TypeNone=0 (NS latency sentinel)
+    qclass     INTEGER NOT NULL DEFAULT 1,
+    ecs_addr   TEXT NOT NULL DEFAULT '',
+    ecs_prefix INTEGER NOT NULL DEFAULT 0,
+    dnssec_ok  INTEGER NOT NULL DEFAULT 0,
+    timestamp  INTEGER NOT NULL,    -- insertion time (unix seconds)
+    ttl        INTEGER NOT NULL,    -- entry TTL (min of all RR TTLs, floor 10s)
+    validated  INTEGER NOT NULL DEFAULT 0
+);
+
+-- One row per DNS RR within an entry. DELETE CASCADE when entry is evicted/expired.
+CREATE TABLE records (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    section    TEXT NOT NULL,       -- 'answer', 'authority', 'additional'
+    seq        INTEGER NOT NULL DEFAULT 0,
+    name       TEXT NOT NULL,
+    rtype      INTEGER NOT NULL,
+    ttl        INTEGER NOT NULL,    -- original RR TTL
+    rr_text    TEXT NOT NULL,       -- full presentation format (dns.New(rr_text) reconstructs RR)
+    rdata_ip   TEXT,                -- A/AAAA IP for PTR reverse lookup
+    latency_ms INTEGER              -- NULL = not probed; non-NULL = measured latency
+);
+
+-- Stats snapshots (JSON). Written periodically and on shutdown.
+CREATE TABLE stats (
+    key       TEXT PRIMARY KEY,     -- "stats:"
+    data      BLOB NOT NULL,        -- JSON
+    ttl       INTEGER NOT NULL,
+    timestamp INTEGER NOT NULL
+);
+```
+
+**Key patterns**:
+- **DNS response cache**: `qtype` = original query type, records in original order
+- **NS latency cache**: `qtype` = `dns.TypeNone` (0), A/AAAA records with `latency_ms` populated by probe engine. `loadRecords` orders by `latency_ms IS NULL, latency_ms ASC` so probed records sort fastest-first.
+- **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
+- **PTR reverse lookup**: `SELECT DISTINCT name FROM records r JOIN entries e ON r.entry_id = e.id WHERE r.rdata_ip = ? AND e.timestamp + e.ttl > unixepoch()`
+- **Eviction**: size-based (oldest `timestamp` first) on Set; TTL-based periodic cleanup (5 min sweep)
+- **Probe updates**: `UPDATE records SET latency_ms = ? WHERE entry_id = ? AND rdata_ip = ?` — no entry overwrite needed
 
 ## Debug Config
 
@@ -343,7 +392,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
     "features": {
       "hijack_protection": true,
       "dnssec_enforce": true,
-      "cache": { "size": 0 }
+      "cache": { "max_entries": 0 }
     }
   },
   "upstream": [
