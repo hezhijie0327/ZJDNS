@@ -119,15 +119,16 @@ func (s *SQLiteCache) migrate() error {
 		);
 
 		CREATE TABLE IF NOT EXISTS records (
-			id        INTEGER PRIMARY KEY AUTOINCREMENT,
-			entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-			section   TEXT NOT NULL,
-			seq       INTEGER NOT NULL DEFAULT 0,
-			name      TEXT NOT NULL,
-			rtype     INTEGER NOT NULL,
-			ttl       INTEGER NOT NULL,
-			rr_text   TEXT NOT NULL,
-			rdata_ip  TEXT
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			section    TEXT NOT NULL,
+			seq        INTEGER NOT NULL DEFAULT 0,
+			name       TEXT NOT NULL,
+			rtype      INTEGER NOT NULL,
+			ttl        INTEGER NOT NULL,
+			rr_text    TEXT NOT NULL,
+			rdata_ip   TEXT,
+			latency_ms INTEGER
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
@@ -426,11 +427,32 @@ func (s *SQLiteCache) deleteExpiredEntries() {
 	}
 }
 
+// UpdateLatency sets the latency for a specific record identified by entry lookup
+// key + IP address. Used by the probe engine after measuring A/AAAA response times.
+func (s *SQLiteCache) UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int) {
+	qname = dnsutil.NormalizeDomain(qname)
+	ecsAddr, ecsPrefix := ecsParams(ecs)
+
+	var entryID int64
+	err := s.db.QueryRow(
+		`SELECT id FROM entries WHERE qname=? AND qtype=? AND qclass=? AND ecs_addr=? AND ecs_prefix=? AND dnssec_ok=?`,
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
+	).Scan(&entryID)
+	if err != nil {
+		return
+	}
+
+	_, _ = s.db.Exec(
+		`UPDATE records SET latency_ms = ? WHERE entry_id = ? AND rdata_ip = ?`,
+		latencyMS, entryID, ip,
+	)
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func (s *SQLiteCache) loadRecords(entryID int64) (*Entry, error) {
 	rows, err := s.db.Query(
-		`SELECT section, name, rtype, ttl, rr_text FROM records WHERE entry_id = ? ORDER BY section, seq`, entryID,
+		`SELECT section, name, rtype, ttl, rr_text FROM records WHERE entry_id = ? ORDER BY latency_ms IS NULL, latency_ms ASC, section, seq`, entryID,
 	)
 	if err != nil {
 		return nil, err

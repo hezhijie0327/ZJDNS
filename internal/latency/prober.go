@@ -84,6 +84,40 @@ func (p *Prober) ProbeIPs(ctx context.Context, ips []net.IP) []net.IP {
 	return result
 }
 
+// ProbeIPsLatency probes the given IP addresses and returns them sorted by
+// measured latency along with a map of IP → latency in milliseconds.
+func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, map[string]int) {
+	if p == nil || len(ips) <= 1 || len(p.steps) == 0 {
+		return ips, nil
+	}
+
+	type candidate struct {
+		ip      net.IP
+		latency time.Duration
+	}
+
+	candidates := make([]candidate, len(ips))
+	for i, ip := range ips {
+		candidates[i] = candidate{ip: ip, latency: time.Duration(math.MaxInt64)}
+	}
+
+	sorted, changed := probeSlice(ctx, p.sem, p.ctx, candidates, func(c *candidate) net.IP { return c.ip },
+		p.steps, p.httpPool)
+	if !changed {
+		return ips, nil
+	}
+
+	result := make([]net.IP, len(sorted))
+	latencies := make(map[string]int, len(sorted))
+	for i, c := range sorted {
+		result[i] = c.ip
+		if c.latency != time.Duration(math.MaxInt64) {
+			latencies[c.ip.String()] = int(c.latency / time.Millisecond)
+		}
+	}
+	return result, latencies
+}
+
 // probeSlice is the generic probe-and-sort core. It spawns concurrent workers
 // bounded by the semaphore, measures latency for each item, and returns items
 // sorted by latency. All workers respect ctx and bgCtx cancellation.

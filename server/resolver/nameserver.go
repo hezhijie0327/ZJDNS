@@ -3,9 +3,6 @@ package resolver
 import (
 	"context"
 	"errors"
-	"math"
-	"net"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -356,54 +353,8 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 // matching the sorted address list come first, preserving the latency-based
 // ordering. Records not in the sorted list retain their relative order at
 // the end.
-func reorderRecordsByAddrs(records []dns.RR, sortedAddrs []string) []dns.RR {
-	if len(records) <= 1 || len(sortedAddrs) <= 1 {
-		return records
-	}
-
-	// Build rank map from sorted addresses: IP → position (lower = faster).
-	rank := make(map[string]int, len(sortedAddrs))
-	for i, addr := range sortedAddrs {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			continue
-		}
-		ip := net.ParseIP(strings.Trim(host, "[]"))
-		if ip != nil {
-			rank[ip.String()] = i
-		}
-	}
-
-	// Default rank for IPs not in the sorted list — sorts after all known IPs.
-	const unknownRank = math.MaxInt32
-
-	sorted := make([]dns.RR, len(records))
-	copy(sorted, records)
-	slices.SortStableFunc(sorted, func(a, b dns.RR) int {
-		ra, okA := rank[rrIP(a)]
-		if !okA {
-			ra = unknownRank
-		}
-		rb, okB := rank[rrIP(b)]
-		if !okB {
-			rb = unknownRank
-		}
-		return ra - rb
-	})
-	return sorted
-}
 
 // rrIP extracts the IP string from an A or AAAA record.
-func rrIP(r dns.RR) string {
-	switch r := r.(type) {
-	case *dns.A:
-		return r.A.String()
-	case *dns.AAAA:
-		return r.AAAA.String()
-	default:
-		return ""
-	}
-}
 
 // isEqualFoldTrimDot compares two strings case-insensitively, ignoring a single
 // trailing dot on either string. Uses sub-slicing (no allocation) instead of

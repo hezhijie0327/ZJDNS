@@ -16,10 +16,11 @@ import (
 	"zjdns/internal/log"
 )
 
-// CacheSetter is the interface for updating the DNS cache with reordered
-// records after latency probing.
+// CacheSetter is the interface for updating latency measurements in the
+// cache after probing.
 type CacheSetter interface {
 	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, dnssecOK bool, answer, authority, additional []dns.RR, validated bool)
+	UpdateLatency(qname string, qtype, qclass uint16, ecs *edns.ECSOption, dnssecOK bool, ip string, latencyMS int)
 }
 
 // Prober measures network latency to resolved IP addresses and reorders A/AAAA
@@ -91,71 +92,31 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, qtype uint16
 	log.Debugf("LATENCY: performing latency probe for %s", qname)
 
 	// Extract IPs from A/AAAA records.
-	type indexedRecord struct {
-		idx int
-		rr  dns.RR
-		ip  net.IP
-	}
-	records := make([]indexedRecord, 0, len(answer))
-	for i, rr := range answer {
+	ips := make([]net.IP, 0, len(answer))
+	for _, rr := range answer {
 		if ip := dnsutil.ExtractIP(rr); ip != nil {
-			records = append(records, indexedRecord{idx: i, rr: rr, ip: ip})
+			ips = append(ips, ip)
 		}
 	}
-	if len(records) <= 1 {
+	if len(ips) <= 1 {
 		log.Debugf("LATENCY: no multiple probeable IPs for %s", qname)
 		return nil
 	}
 
-	ips := make([]net.IP, len(records))
-	for i, r := range records {
-		ips[i] = r.ip
-	}
-
-	sortedIPs := p.engine.ProbeIPs(ctx, ips)
-
-	// Build sorted answer, preserving non-A/AAAA records at original positions.
-	sortedAnswer := make([]dns.RR, len(answer))
-	copy(sortedAnswer, answer)
-
-	// Map IP back to original record.
-	ipToRR := make(map[string]dns.RR, len(records))
-	for _, r := range records {
-		ipToRR[r.ip.String()] = r.rr
-	}
-
-	pos := 0
-	changed := false
-	for _, idx := range extractIndices(answer) {
-		if pos < len(sortedIPs) {
-			sortedAnswer[idx] = ipToRR[sortedIPs[pos].String()]
-			if sortedAnswer[idx].String() != answer[idx].String() {
-				changed = true
-			}
-			pos++
-		}
-	}
-
-	if !changed {
-		log.Debugf("LATENCY: no faster A/AAAA order found for %s", qname)
+	_, latencies := p.engine.ProbeIPsLatency(ctx, ips)
+	if len(latencies) == 0 {
+		log.Debugf("LATENCY: all probes failed for %s", qname)
 		return nil
 	}
 
-	p.cache.Set(qname, qtype, dns.ClassINET, ecsResponse, false, sortedAnswer, authority, additional, validated)
-	log.Debugf("LATENCY: reordered A/AAAA records for %s", qname)
+	for ipStr, lat := range latencies {
+		p.cache.UpdateLatency(qname, qtype, dns.ClassINET, ecsResponse, false, ipStr, lat)
+	}
+	log.Debugf("LATENCY: updated %d latency values for %s", len(latencies), qname)
 	return nil
 }
 
 // extractIndices returns the indices of A/AAAA records in the answer slice.
-func extractIndices(answer []dns.RR) []int {
-	indices := make([]int, 0, len(answer))
-	for i, rr := range answer {
-		if isAOrAAAA(rr) {
-			indices = append(indices, i)
-		}
-	}
-	return indices
-}
 
 // --- Infrastructure-level API (used by resolver for root/NS server ordering) ---
 
@@ -180,13 +141,20 @@ func NewInfraProber(bgCtx context.Context) {
 
 // SortIPsByLatency probes IP addresses using the built-in infrastructure
 // probe steps and returns them sorted by measured latency (fastest first).
-// IPs that cannot be probed (loopback, private, link-local) are placed at
-// the end. Uses the package-level infrastructure prober.
 func SortIPsByLatency(ctx context.Context, ips []net.IP) []net.IP {
 	if infraProber == nil {
 		return ips
 	}
 	return infraProber.ProbeIPs(ctx, ips)
+}
+
+// SortIPsByLatencyMap probes IP addresses and returns them sorted by latency
+// along with a map of IP string → latency in milliseconds.
+func SortIPsByLatencyMap(ctx context.Context, ips []net.IP) ([]net.IP, map[string]int) {
+	if infraProber == nil {
+		return ips, nil
+	}
+	return infraProber.ProbeIPsLatency(ctx, ips)
 }
 
 // --- Shared helpers ---
