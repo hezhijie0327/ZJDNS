@@ -87,6 +87,38 @@ type CachePersistenceSettings struct {
 	File string `json:"file,omitempty"`
 }
 
+// StatsRow mirrors the stats table columns for persistence without JSON.
+type StatsRow struct {
+	TotalRequests       int64
+	CacheHits           int64
+	CacheMisses         int64
+	PrefetchRequests    int64
+	ErrorResponses      int64
+	StaleResponses      int64
+	FallbackRequests    int64
+	TotalResponseTimeMs int64
+	LastResponseTimeMs  int64
+	UDPRequests         int64
+	TCPRequests         int64
+	DOTRequests         int64
+	DOQRequests         int64
+	DOHRequests         int64
+	DOH3Requests        int64
+	RewriteRequests     int64
+	HijackDetections    int64
+	DNSSECSecure        int64
+	DNSSECBogus         int64
+	DNSSECInsecure      int64
+	RCODENOERROR        int64
+	RCODEFORMERR        int64
+	RCODESERVFAIL       int64
+	RCODENXDOMAIN       int64
+	RCODENotImp         int64
+	RCODEREFUSED        int64
+	RCODEOther          int64
+	UpdatedAt           int64
+}
+
 // StatsSettings configures periodic statistics collection and reset intervals.
 type StatsSettings struct {
 	Interval      int `json:"interval,omitempty"`
@@ -165,15 +197,6 @@ func (s *ServerSettings) StatsInterval() int {
 func (s *ServerSettings) StatsResetInterval() int {
 	if s == nil || s.Features.Stats == nil {
 		return 0
-	}
-	return s.Features.Stats.ResetInterval
-}
-
-// StatsPersistInterval returns the stats persist TTL, defaulting to
-// DefaultStatsPersistInterval.
-func (s *ServerSettings) StatsPersistInterval() int {
-	if s == nil || s.Features.Stats == nil || s.Features.Stats.ResetInterval <= 0 {
-		return DefaultStatsPersistInterval
 	}
 	return s.Features.Stats.ResetInterval
 }

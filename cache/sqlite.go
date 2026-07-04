@@ -137,10 +137,34 @@ func (s *SQLiteCache) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_records_ip ON records(rdata_ip) WHERE rdata_ip IS NOT NULL;
 
 		CREATE TABLE IF NOT EXISTS stats (
-			key       TEXT PRIMARY KEY,
-			data      BLOB NOT NULL,
-			ttl       INTEGER NOT NULL,
-			timestamp INTEGER NOT NULL
+			total_requests        INTEGER NOT NULL DEFAULT 0,
+			cache_hits            INTEGER NOT NULL DEFAULT 0,
+			cache_misses          INTEGER NOT NULL DEFAULT 0,
+			prefetch_requests     INTEGER NOT NULL DEFAULT 0,
+			error_responses       INTEGER NOT NULL DEFAULT 0,
+			stale_responses       INTEGER NOT NULL DEFAULT 0,
+			fallback_requests     INTEGER NOT NULL DEFAULT 0,
+			total_response_time_ms INTEGER NOT NULL DEFAULT 0,
+			last_response_time_ms  INTEGER NOT NULL DEFAULT 0,
+			udp_requests          INTEGER NOT NULL DEFAULT 0,
+			tcp_requests          INTEGER NOT NULL DEFAULT 0,
+			dot_requests          INTEGER NOT NULL DEFAULT 0,
+			doq_requests          INTEGER NOT NULL DEFAULT 0,
+			doh_requests          INTEGER NOT NULL DEFAULT 0,
+			doh3_requests         INTEGER NOT NULL DEFAULT 0,
+			rewrite_requests      INTEGER NOT NULL DEFAULT 0,
+			hijack_detections     INTEGER NOT NULL DEFAULT 0,
+			dnssec_secure         INTEGER NOT NULL DEFAULT 0,
+			dnssec_bogus          INTEGER NOT NULL DEFAULT 0,
+			dnssec_insecure       INTEGER NOT NULL DEFAULT 0,
+			rcode_noerror         INTEGER NOT NULL DEFAULT 0,
+			rcode_formerr         INTEGER NOT NULL DEFAULT 0,
+			rcode_servfail        INTEGER NOT NULL DEFAULT 0,
+			rcode_nxdomain        INTEGER NOT NULL DEFAULT 0,
+			rcode_notimp          INTEGER NOT NULL DEFAULT 0,
+			rcode_refused         INTEGER NOT NULL DEFAULT 0,
+			rcode_other           INTEGER NOT NULL DEFAULT 0,
+			updated_at            INTEGER NOT NULL DEFAULT 0
 		);
 	`)
 	return err
@@ -298,39 +322,68 @@ func (s *SQLiteCache) Close() error {
 
 // ── Stats persistence ────────────────────────────────────────────────────────
 
-// SaveStats stores a JSON stats snapshot in the stats table.
-func (s *SQLiteCache) SaveStats(data []byte, ttlSeconds int) {
+// SaveStats writes a StatsRow to the stats table.
+func (s *SQLiteCache) SaveStats(row config.StatsRow) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
 	}
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO stats (key, data, ttl, timestamp) VALUES (?, ?, ?, ?)`,
-		config.StatsPersistKey, data, ttlSeconds, log.NowUnix(),
+		`INSERT OR REPLACE INTO stats (
+			total_requests, cache_hits, cache_misses, prefetch_requests,
+			error_responses, stale_responses, fallback_requests,
+			total_response_time_ms, last_response_time_ms,
+			udp_requests, tcp_requests, dot_requests, doq_requests, doh_requests, doh3_requests,
+			rewrite_requests, hijack_detections,
+			dnssec_secure, dnssec_bogus, dnssec_insecure,
+			rcode_noerror, rcode_formerr, rcode_servfail, rcode_nxdomain,
+			rcode_notimp, rcode_refused, rcode_other, updated_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		row.TotalRequests, row.CacheHits, row.CacheMisses, row.PrefetchRequests,
+		row.ErrorResponses, row.StaleResponses, row.FallbackRequests,
+		row.TotalResponseTimeMs, row.LastResponseTimeMs,
+		row.UDPRequests, row.TCPRequests, row.DOTRequests, row.DOQRequests, row.DOHRequests, row.DOH3Requests,
+		row.RewriteRequests, row.HijackDetections,
+		row.DNSSECSecure, row.DNSSECBogus, row.DNSSECInsecure,
+		row.RCODENOERROR, row.RCODEFORMERR, row.RCODESERVFAIL, row.RCODENXDOMAIN,
+		row.RCODENotImp, row.RCODEREFUSED, row.RCODEOther, row.UpdatedAt,
 	)
 	if err != nil {
 		log.Warnf("CACHE: save stats failed: %v", err)
 	}
 }
 
-// LoadStats retrieves a non-expired stats snapshot from the stats table.
-func (s *SQLiteCache) LoadStats() ([]byte, bool) {
-	var data []byte
-	var ts int64
-	var ttlSeconds int
+// LoadStats retrieves the persisted stats row. Returns zero value and false
+// if no row exists.
+func (s *SQLiteCache) LoadStats() (config.StatsRow, bool) {
+	var row config.StatsRow
 	err := s.db.QueryRow(
-		`SELECT data, timestamp, ttl FROM stats WHERE key = ?`, config.StatsPersistKey,
-	).Scan(&data, &ts, &ttlSeconds)
+		`SELECT total_requests, cache_hits, cache_misses, prefetch_requests,
+			error_responses, stale_responses, fallback_requests,
+			total_response_time_ms, last_response_time_ms,
+			udp_requests, tcp_requests, dot_requests, doq_requests, doh_requests, doh3_requests,
+			rewrite_requests, hijack_detections,
+			dnssec_secure, dnssec_bogus, dnssec_insecure,
+			rcode_noerror, rcode_formerr, rcode_servfail, rcode_nxdomain,
+			rcode_notimp, rcode_refused, rcode_other, updated_at
+		FROM stats`,
+	).Scan(
+		&row.TotalRequests, &row.CacheHits, &row.CacheMisses, &row.PrefetchRequests,
+		&row.ErrorResponses, &row.StaleResponses, &row.FallbackRequests,
+		&row.TotalResponseTimeMs, &row.LastResponseTimeMs,
+		&row.UDPRequests, &row.TCPRequests, &row.DOTRequests, &row.DOQRequests, &row.DOHRequests, &row.DOH3Requests,
+		&row.RewriteRequests, &row.HijackDetections,
+		&row.DNSSECSecure, &row.DNSSECBogus, &row.DNSSECInsecure,
+		&row.RCODENOERROR, &row.RCODEFORMERR, &row.RCODESERVFAIL, &row.RCODENXDOMAIN,
+		&row.RCODENotImp, &row.RCODEREFUSED, &row.RCODEOther, &row.UpdatedAt,
+	)
 	if err == sql.ErrNoRows {
-		return nil, false
+		return row, false
 	}
 	if err != nil {
 		log.Warnf("CACHE: load stats failed: %v", err)
-		return nil, false
+		return row, false
 	}
-	if ttl.IsExpired(ts, ttlSeconds) {
-		return nil, false
-	}
-	return data, true
+	return row, true
 }
 
 // ── Eviction ─────────────────────────────────────────────────────────────────

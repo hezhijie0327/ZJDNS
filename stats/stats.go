@@ -14,15 +14,6 @@ import (
 	"zjdns/internal/log"
 )
 
-const persistKey = config.StatsPersistKey
-
-// PersistStore is the minimal interface for persisting and restoring stats
-// snapshots. Implementations are responsible for TTL management.
-type PersistStore interface {
-	SaveStats(key string, data []byte, ttl int)
-	LoadStats(key string) ([]byte, bool)
-}
-
 // Snapshot contains a point-in-time copy of all DNS request counters.
 type Snapshot struct {
 	TotalRequests       uint64 `json:"total_requests"`
@@ -150,8 +141,6 @@ type Collector struct {
 	rcodeNotImp         atomic.Uint64
 	rcodeREFUSED        atomic.Uint64
 	rcodeOther          atomic.Uint64
-
-	persistTTL int
 }
 
 // AverageResponseTimeMs computes the mean response time in milliseconds.
@@ -231,82 +220,79 @@ func New(cfg *config.ServerConfig) *Collector {
 		return nil
 	}
 	return &Collector{
-		enabled:    true,
-		persistTTL: cfg.Server.StatsPersistInterval(),
+		enabled: true,
 	}
 }
 
-// Serialize returns the JSON-encoded snapshot payload and its TTL for
-// storage by a PersistStore.
-func (c *Collector) Serialize() ([]byte, int, error) {
+// ToRow returns a config.StatsRow snapshot of the current counters.
+func (c *Collector) ToRow() config.StatsRow {
 	if c == nil || !c.enabled {
-		return nil, 0, fmt.Errorf("stats disabled")
+		return config.StatsRow{}
 	}
-	snap := c.Snapshot()
-	data, err := json.Marshal(snap)
-	if err != nil {
-		return nil, 0, fmt.Errorf("marshal stats snapshot: %w", err)
+	return config.StatsRow{
+		TotalRequests:       int64(c.totalRequests.Load()),
+		CacheHits:           int64(c.cacheHits.Load()),
+		CacheMisses:         int64(c.cacheMisses.Load()),
+		PrefetchRequests:    int64(c.prefetchRequests.Load()),
+		ErrorResponses:      int64(c.errorResponses.Load()),
+		StaleResponses:      int64(c.staleResponses.Load()),
+		FallbackRequests:    int64(c.fallbackRequests.Load()),
+		TotalResponseTimeMs: int64(c.totalResponseTimeMs.Load()),
+		LastResponseTimeMs:  int64(c.lastResponseTimeMs.Load()),
+		UDPRequests:         int64(c.udpRequests.Load()),
+		TCPRequests:         int64(c.tcpRequests.Load()),
+		DOTRequests:         int64(c.dotRequests.Load()),
+		DOQRequests:         int64(c.doqRequests.Load()),
+		DOHRequests:         int64(c.dohRequests.Load()),
+		DOH3Requests:        int64(c.doh3Requests.Load()),
+		RewriteRequests:     int64(c.rewriteRequests.Load()),
+		HijackDetections:    int64(c.hijackDetections.Load()),
+		DNSSECSecure:        int64(c.dnssecSecure.Load()),
+		DNSSECBogus:         int64(c.dnssecBogus.Load()),
+		DNSSECInsecure:      int64(c.dnssecInsecure.Load()),
+		RCODENOERROR:        int64(c.rcodeNOERROR.Load()),
+		RCODEFORMERR:        int64(c.rcodeFORMERR.Load()),
+		RCODESERVFAIL:       int64(c.rcodeSERVFAIL.Load()),
+		RCODENXDOMAIN:       int64(c.rcodeNXDOMAIN.Load()),
+		RCODENotImp:         int64(c.rcodeNotImp.Load()),
+		RCODEREFUSED:        int64(c.rcodeREFUSED.Load()),
+		RCODEOther:          int64(c.rcodeOther.Load()),
+		UpdatedAt:           log.NowUnix(),
 	}
-	ttl := c.persistTTL
-	if ttl <= 0 {
-		ttl = config.DefaultStatsPersistInterval
-	}
-	return data, ttl, nil
 }
 
-// Deserialize restores collector state from a previously serialized payload.
-func (c *Collector) Deserialize(data []byte) error {
-	if c == nil {
-		return fmt.Errorf("stats Collector nil")
-	}
-	if len(data) == 0 {
-		return fmt.Errorf("empty data")
-	}
-	var snap Snapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return fmt.Errorf("unmarshal stats snapshot: %w", err)
-	}
-	c.totalRequests.Store(snap.TotalRequests)
-	c.cacheHits.Store(snap.CacheHits)
-	c.cacheMisses.Store(snap.CacheMisses)
-	c.prefetchRequests.Store(snap.PrefetchRequests)
-	c.errorResponses.Store(snap.ErrorResponses)
-	c.staleResponses.Store(snap.StaleResponses)
-	c.fallbackRequests.Store(snap.FallbackRequests)
-	c.totalResponseTimeMs.Store(snap.TotalResponseTimeMs)
-	c.lastResponseTimeMs.Store(snap.LastResponseTimeMs)
-	c.udpRequests.Store(snap.UDPRequests)
-	c.tcpRequests.Store(snap.TCPRequests)
-	c.dotRequests.Store(snap.DOTRequests)
-	c.doqRequests.Store(snap.DOQRequests)
-	c.dohRequests.Store(snap.DOHRequests)
-	c.doh3Requests.Store(snap.DOH3Requests)
-	c.rewriteRequests.Store(snap.RewriteRequests)
-	c.hijackDetections.Store(snap.HijackDetections)
-	c.dnssecSecure.Store(snap.DNSSECSecure)
-	c.dnssecBogus.Store(snap.DNSSECBogus)
-	c.dnssecInsecure.Store(snap.DNSSECInsecure)
-	c.rcodeNOERROR.Store(snap.RCODENOERROR)
-	c.rcodeFORMERR.Store(snap.RCODEFORMERR)
-	c.rcodeSERVFAIL.Store(snap.RCODESERVFAIL)
-	c.rcodeNXDOMAIN.Store(snap.RCODENXDOMAIN)
-	c.rcodeNotImp.Store(snap.RCODENotImp)
-	c.rcodeREFUSED.Store(snap.RCODEREFUSED)
-	c.rcodeOther.Store(snap.RCODEOther)
-	return nil
-}
-
-// Persist writes the current stats snapshot to the given store.
-func (c *Collector) Persist(store PersistStore) {
-	if c == nil || !c.enabled || store == nil {
+// Restore restores collector state from a persisted StatsRow.
+func (c *Collector) Restore(row config.StatsRow) {
+	if c == nil || !c.enabled {
 		return
 	}
-	data, ttl, err := c.Serialize()
-	if err != nil {
-		log.Debugf("STATS: failed to serialize stats for persistence: %v", err)
-		return
-	}
-	store.SaveStats(persistKey, data, ttl)
+	c.totalRequests.Store(uint64(row.TotalRequests))
+	c.cacheHits.Store(uint64(row.CacheHits))
+	c.cacheMisses.Store(uint64(row.CacheMisses))
+	c.prefetchRequests.Store(uint64(row.PrefetchRequests))
+	c.errorResponses.Store(uint64(row.ErrorResponses))
+	c.staleResponses.Store(uint64(row.StaleResponses))
+	c.fallbackRequests.Store(uint64(row.FallbackRequests))
+	c.totalResponseTimeMs.Store(uint64(row.TotalResponseTimeMs))
+	c.lastResponseTimeMs.Store(uint64(row.LastResponseTimeMs))
+	c.udpRequests.Store(uint64(row.UDPRequests))
+	c.tcpRequests.Store(uint64(row.TCPRequests))
+	c.dotRequests.Store(uint64(row.DOTRequests))
+	c.doqRequests.Store(uint64(row.DOQRequests))
+	c.dohRequests.Store(uint64(row.DOHRequests))
+	c.doh3Requests.Store(uint64(row.DOH3Requests))
+	c.rewriteRequests.Store(uint64(row.RewriteRequests))
+	c.hijackDetections.Store(uint64(row.HijackDetections))
+	c.dnssecSecure.Store(uint64(row.DNSSECSecure))
+	c.dnssecBogus.Store(uint64(row.DNSSECBogus))
+	c.dnssecInsecure.Store(uint64(row.DNSSECInsecure))
+	c.rcodeNOERROR.Store(uint64(row.RCODENOERROR))
+	c.rcodeFORMERR.Store(uint64(row.RCODEFORMERR))
+	c.rcodeSERVFAIL.Store(uint64(row.RCODESERVFAIL))
+	c.rcodeNXDOMAIN.Store(uint64(row.RCODENXDOMAIN))
+	c.rcodeNotImp.Store(uint64(row.RCODENotImp))
+	c.rcodeREFUSED.Store(uint64(row.RCODEREFUSED))
+	c.rcodeOther.Store(uint64(row.RCODEOther))
 }
 
 // RecordRequest atomically increments counters for a single DNS query event.

@@ -65,13 +65,6 @@ func TestServerSettings_StatsInterval_Default(t *testing.T) {
 	}
 }
 
-func TestServerSettings_StatsPersistInterval_Default(t *testing.T) {
-	s := &ServerSettings{}
-	if got := s.StatsPersistInterval(); got != DefaultStatsPersistInterval {
-		t.Errorf("StatsPersistInterval = %d, want %d", got, DefaultStatsPersistInterval)
-	}
-}
-
 func TestUpstreamServer_IsRecursive(t *testing.T) {
 	s := &UpstreamServer{Address: "builtin_recursive"}
 	if !s.IsRecursive() {

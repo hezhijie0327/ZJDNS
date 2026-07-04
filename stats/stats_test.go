@@ -153,26 +153,18 @@ func TestSnapshot_ResponseTime(t *testing.T) {
 	}
 }
 
-func TestSerialize_Deserialize_RoundTrip(t *testing.T) {
+func TestToRow_Restore_RoundTrip(t *testing.T) {
 	sc := New(testConfig())
 	sc.RecordRequest(10*time.Millisecond, true, false, "DoT",
 		true, true, true, true, true, "bogus", dns.RcodeSuccess)
 
-	data, ttl, err := sc.Serialize()
-	if err != nil {
-		t.Fatalf("Serialize: %v", err)
-	}
-	if len(data) == 0 {
-		t.Fatal("Serialize returned empty data")
-	}
-	if ttl <= 0 {
-		t.Errorf("Serialize ttl = %d, want > 0", ttl)
+	row := sc.ToRow()
+	if row.TotalRequests != 1 {
+		t.Errorf("TotalRequests = %d, want 1", row.TotalRequests)
 	}
 
 	sc2 := New(testConfig())
-	if err := sc2.Deserialize(data); err != nil {
-		t.Fatalf("Deserialize: %v", err)
-	}
+	sc2.Restore(row)
 
 	snap := sc2.Snapshot()
 	if snap.TotalRequests != 1 {
@@ -241,42 +233,14 @@ func TestBuildStatsLogJSON(t *testing.T) {
 	}
 }
 
-// mockPersistStore is an in-memory PersistStore for testing.
-type mockPersistStore struct {
-	data map[string][]byte
-	ttl  map[string]int
-}
-
-func (m *mockPersistStore) SaveStats(key string, data []byte, ttl int) {
-	if m.data == nil {
-		m.data = make(map[string][]byte)
-		m.ttl = make(map[string]int)
-	}
-	m.data[key] = data
-	m.ttl[key] = ttl
-}
-
-func (m *mockPersistStore) LoadStats(key string) ([]byte, bool) {
-	d, ok := m.data[key]
-	return d, ok
-}
-
-func TestPersist_RoundTrip(t *testing.T) {
+func TestToRow_Restore_AllFields(t *testing.T) {
 	sc := New(testConfig())
 	sc.RecordRequest(1*time.Millisecond, false, false, "UDP",
 		false, false, false, false, false, "", dns.RcodeSuccess)
 
-	store := &mockPersistStore{}
-	sc.Persist(store)
-
+	row := sc.ToRow()
 	sc2 := New(testConfig())
-	if data, ok := store.LoadStats(config.StatsPersistKey); ok {
-		if err := sc2.Deserialize(data); err != nil {
-			t.Fatalf("Deserialize: %v", err)
-		}
-	} else {
-		t.Fatal("LoadStats returned false after Persist")
-	}
+	sc2.Restore(row)
 
 	snap := sc2.Snapshot()
 	if snap.TotalRequests != 1 {

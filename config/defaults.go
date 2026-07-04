@@ -81,8 +81,6 @@ const (
 	DefaultPaddingRequestBlockSize  = 128   // RFC 8467: EDNS request padding block size
 	DefaultPaddingResponseBlockSize = 468   // RFC 8467: EDNS response padding block size
 
-	DefaultStatsPersistInterval = 86400 // Stats cache persist TTL (seconds)
-
 	GroupOtherPermMask = 0077 // TLS cert/key files must be owner-only
 )
 
@@ -121,7 +119,6 @@ const (
 	DefaultNSLatencyTTL = 900 // NS address sort cache TTL (seconds)
 
 	DefaultDNSClass  = "IN"      // Default DNS resource record class
-	StatsPersistKey  = "stats:"  // Stats cache persistence key (matches dns:/dnskey: convention)
 	FallbackClientIP = "0.0.0.0" // Fallback IP when client address is nil
 	DNSRootZone      = "."       // DNS root zone label
 )

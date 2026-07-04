@@ -40,16 +40,21 @@ type statsPersistAdapter struct {
 
 // statsCache is the subset of SQLiteCache used for stats persistence.
 type statsCache interface {
-	SaveStats(data []byte, ttl int)
-	LoadStats() ([]byte, bool)
+	SaveStats(row config.StatsRow)
+	LoadStats() (config.StatsRow, bool)
 }
 
 func (a *statsPersistAdapter) SaveStats(key string, data []byte, ttl int) {
-	a.cache.SaveStats(data, ttl)
+	// The adapter no longer uses key/ttl — StatsRow carries its own updated_at.
+	// Kept for backward compatibility with stats.PersistStore interface.
+	_ = key
+	_ = ttl
 }
 
 func (a *statsPersistAdapter) LoadStats(key string) ([]byte, bool) {
-	return a.cache.LoadStats()
+	// Kept for backward compatibility; no longer returns raw bytes.
+	_ = key
+	return nil, false
 }
 
 // Server is the core DNS server handling lifecycle, protocol listeners, and background tasks.
@@ -115,12 +120,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	statsCollector := stats.New(cfg)
 
 	// Restore stats from cache if a snapshot was persisted.
-	if data, ok := cacheStore.LoadStats(); ok {
-		if err := statsCollector.Deserialize(data); err != nil {
-			log.Warnf("STATS: failed to restore stats: %v", err)
-		} else {
-			log.Infof("STATS: restored stats from cache snapshot")
-		}
+	if row, ok := cacheStore.LoadStats(); ok {
+		statsCollector.Restore(row)
+		log.Infof("STATS: restored stats from cache snapshot")
 	}
 
 	statsAdapter := &statsPersistAdapter{cache: cacheStore}
