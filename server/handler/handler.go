@@ -226,21 +226,8 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 
 	tcpKeepaliveTimeout := tcpKeepaliveTimeoutForProtocol(requestProtocol)
 
-	if len(question.Name) > config.MaxDomainLength || question.Qtype == dns.TypeANY ||
-		question.Qtype == dns.TypeAXFR || question.Qtype == dns.TypeIXFR ||
-		!dnsutil.IsValidDomainLabels(question.Name) {
-		msg := pool.DefaultMessagePool.Get()
-		dnsutilv2.SetReply(msg, req)
-		msg.Rcode = dns.RcodeRefused
-
-		var ede *edns.EDEOption
-		if len(question.Name) > config.MaxDomainLength || !dnsutil.IsValidDomainLabels(question.Name) {
-			ede = edns.NewEDEOption(edns.EDECodeInvalidData, "")
-		} else {
-			ede = edns.NewEDEOption(edns.EDECodeNotSupported, "")
-		}
-		h.addEDNS(msg, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
-		return msg
+	if resp := h.validateDNSQuery(req, &question, clientIP, isSecureConnection, tcpKeepaliveTimeout); resp != nil {
+		return resp
 	}
 
 	startTime := time.Now()
@@ -251,44 +238,9 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	var responseMsg *dns.Msg
 	defer h.recordQueryMetrics(m, &responseMsg, question)
 
-	if h.rewrite.HasRules() {
-		log.Debugf("REWRITE: evaluating rules for %s qtype=%s client=%s", question.Name, dns.TypeToString[question.Qtype], clientIP)
-		rewriteResult := h.rewrite.Evaluate(question.Name, question.Qtype, question.Qclass, clientIP)
-
-		if rewriteResult.ShouldRewrite {
-			m.rewrote = true
-			log.Debugf("REWRITE: matched rule for %s -> domain=%s responseCode=%d records=%d additional=%d", question.Name, rewriteResult.Domain, uint16(rewriteResult.ResponseCode), len(rewriteResult.Records), len(rewriteResult.Additional))
-			if uint16(rewriteResult.ResponseCode) != dns.RcodeSuccess {
-				log.Debugf("RESULT: %s %s | rcode=%s, blocked by rewrite rule", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[uint16(rewriteResult.ResponseCode)])
-				response := h.buildResponse(req)
-				response.Rcode = uint16(rewriteResult.ResponseCode)
-
-				ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
-				h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
-				responseMsg = response
-				return responseMsg
-			}
-
-			if len(rewriteResult.Records) > 0 {
-				elapsed := ttl.Elapsed(rewriteResult.CreatedAt)
-				response := h.buildResponse(req)
-				// rewrite.Result uses v2 dns.RR; convert back to v1 for response.
-				response.Answer = ttl.DeductElapsedCyclical(rewriteResult.Records, elapsed)
-				response.Rcode = dns.RcodeSuccess
-				if len(rewriteResult.Additional) > 0 {
-					response.Extra = ttl.DeductElapsedCyclical(rewriteResult.Additional, elapsed)
-				}
-
-				ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
-				h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
-				log.Debugf("RESULT: %s %s | rcode=NOERROR (rewrite), answer=%d, additional=%d", question.Name, dns.TypeToString[question.Qtype], len(rewriteResult.Records), len(rewriteResult.Additional))
-				responseMsg = response
-				return responseMsg
-			}
-			if rewriteResult.Domain != question.Name {
-				question.Name = rewriteResult.Domain
-			}
-		}
+	if resp, done := h.processRewrite(req, &question, clientIP, isSecureConnection, tcpKeepaliveTimeout, m); done {
+		responseMsg = resp
+		return responseMsg
 	}
 
 	clientRequestedDNSSEC := false
@@ -396,4 +348,70 @@ func (h *Handler) recordQueryMetrics(m *queryMetrics, responseMsg **dns.Msg, que
 			m.rewrote, m.hijackDetected, m.staleServed, m.fallbackUsed, m.prefetchTriggered,
 			m.dnssecStatus, rcode)
 	}
+}
+
+// validateDNSQuery rejects queries with invalid domain names, label lengths,
+// or unsupported query types (ANY, AXFR, IXFR). Returns nil if the query is valid.
+func (h *Handler) validateDNSQuery(req *dns.Msg, question *Question, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16) *dns.Msg {
+	if len(question.Name) <= config.MaxDomainLength && question.Qtype != dns.TypeANY &&
+		question.Qtype != dns.TypeAXFR && question.Qtype != dns.TypeIXFR &&
+		dnsutil.IsValidDomainLabels(question.Name) {
+		return nil
+	}
+	msg := pool.DefaultMessagePool.Get()
+	dnsutilv2.SetReply(msg, req)
+	msg.Rcode = dns.RcodeRefused
+
+	var ede *edns.EDEOption
+	if len(question.Name) > config.MaxDomainLength || !dnsutil.IsValidDomainLabels(question.Name) {
+		ede = edns.NewEDEOption(edns.EDECodeInvalidData, "")
+	} else {
+		ede = edns.NewEDEOption(edns.EDECodeNotSupported, "")
+	}
+	h.addEDNS(msg, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
+	return msg
+}
+
+// processRewrite evaluates rewrite rules and returns a synthetic response if
+// a rule matches. The caller must return the response immediately when done=true.
+func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16, m *queryMetrics) (*dns.Msg, bool) {
+	if !h.rewrite.HasRules() {
+		return nil, false
+	}
+	log.Debugf("REWRITE: evaluating rules for %s qtype=%s client=%s", question.Name, dns.TypeToString[question.Qtype], clientIP)
+	rewriteResult := h.rewrite.Evaluate(question.Name, question.Qtype, question.Qclass, clientIP)
+	if !rewriteResult.ShouldRewrite {
+		return nil, false
+	}
+
+	m.rewrote = true
+	log.Debugf("REWRITE: matched rule for %s -> domain=%s responseCode=%d records=%d additional=%d", question.Name, rewriteResult.Domain, uint16(rewriteResult.ResponseCode), len(rewriteResult.Records), len(rewriteResult.Additional))
+
+	if uint16(rewriteResult.ResponseCode) != dns.RcodeSuccess {
+		log.Debugf("RESULT: %s %s | rcode=%s, blocked by rewrite rule", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[uint16(rewriteResult.ResponseCode)])
+		response := h.buildResponse(req)
+		response.Rcode = uint16(rewriteResult.ResponseCode)
+		ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
+		h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
+		return response, true
+	}
+
+	if len(rewriteResult.Records) > 0 {
+		elapsed := ttl.Elapsed(rewriteResult.CreatedAt)
+		response := h.buildResponse(req)
+		response.Answer = ttl.DeductElapsedCyclical(rewriteResult.Records, elapsed)
+		response.Rcode = dns.RcodeSuccess
+		if len(rewriteResult.Additional) > 0 {
+			response.Extra = ttl.DeductElapsedCyclical(rewriteResult.Additional, elapsed)
+		}
+		ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
+		h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
+		log.Debugf("RESULT: %s %s | rcode=NOERROR (rewrite), answer=%d, additional=%d", question.Name, dns.TypeToString[question.Qtype], len(rewriteResult.Records), len(rewriteResult.Additional))
+		return response, true
+	}
+
+	if rewriteResult.Domain != question.Name {
+		question.Name = rewriteResult.Domain
+	}
+	return nil, false
 }
