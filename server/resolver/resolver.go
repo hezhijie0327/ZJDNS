@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/errgroup"
+
 	"math/rand/v2"
 	"net"
 	"sync/atomic"
@@ -195,6 +197,14 @@ func (r *Resolver) Recursive() *Recursive {
 func (r *Resolver) SetBackgroundContext(ctx context.Context) {
 	if r != nil && r.recursive != nil {
 		r.recursive.bgCtx = ctx
+	}
+}
+
+// SetBackgroundGroup sets the errgroup for tracking background probe goroutines
+// so shutdown can wait for them to complete before closing the cache store.
+func (r *Resolver) SetBackgroundGroup(g *errgroup.Group) {
+	if r != nil && r.recursive != nil {
+		r.recursive.bgGroup = g
 	}
 }
 

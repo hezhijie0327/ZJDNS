@@ -173,14 +173,14 @@ func (r *Recursive) getRootServers() []string {
 		if entry, found, expired := r.cache.Get(".", dns.TypeNone, dns.ClassINET, nil, false); found && entry != nil {
 			if addrs := readAddrsFromEntry(entry); len(addrs) > 0 {
 				if expired {
-					go r.probeRootAddrs()
+					r.bgGroup.Go(func() error { r.probeRootAddrs(); return nil })
 				}
 				return addrs
 			}
 		}
 	}
 
-	go r.probeRootAddrs()
+	r.bgGroup.Go(func() error { r.probeRootAddrs(); return nil })
 	return ShuffleSlice(DefaultRootServers)
 }
 
@@ -322,7 +322,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string) []string {
 	if entry, found, expired := r.cache.Get(nsName, dns.TypeNone, dns.ClassINET, nil, false); found && entry != nil {
 		if addrs := readAddrsFromEntry(entry); len(addrs) > 0 {
 			if expired {
-				go r.refreshNSAddrOrder(nsName, addrs)
+				r.bgGroup.Go(func() error { r.refreshNSAddrOrder(nsName, addrs); return nil })
 			}
 			return addrs
 		}

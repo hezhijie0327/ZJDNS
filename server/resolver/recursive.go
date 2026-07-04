@@ -3,6 +3,8 @@ package resolver
 import (
 	"context"
 	"fmt"
+	"golang.org/x/sync/errgroup"
+
 	"net"
 	"strings"
 	"sync/atomic"
@@ -50,6 +52,7 @@ type Recursive struct {
 	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
 	cache             cache.Store
 	bgCtx             context.Context // background context for async probes; cancelled on shutdown
+	bgGroup           *errgroup.Group // tracks background probe goroutines for clean shutdown
 }
 
 // DNSSECEDECode returns the last DNSSEC EDE code atomically.
@@ -312,7 +315,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			for nsName, records := range nsGlue {
 				glueCopy[nsName] = records
 			}
-			go r.probeAndCacheNSGlue(glueCopy)
+			r.bgGroup.Go(func() error { r.probeAndCacheNSGlue(glueCopy); return nil })
 		}
 
 		pool.DefaultMessagePool.Put(response)

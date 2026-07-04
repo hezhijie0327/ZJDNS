@@ -339,7 +339,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			combinedMap[nsName] = append(combinedMap[nsName], records...)
 		}
 		if len(combinedMap) > 0 {
-			go r.probeAndCacheNSGlue(combinedMap)
+			r.bgGroup.Go(func() error { r.probeAndCacheNSGlue(combinedMap); return nil })
 		}
 	}
 

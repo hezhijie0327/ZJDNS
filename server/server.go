@@ -148,6 +148,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
 	resolver.ConfigureServers(cfg.Upstream, cfg.Fallback)
 	resolver.SetBackgroundContext(backgroundCtx)
+	resolver.SetBackgroundGroup(backgroundGroup)
 	h.SetResolver(resolver)
 	server.guard = guard
 
