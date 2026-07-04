@@ -26,7 +26,7 @@ func ResolveBindAddrs(network, port string) ([]string, error) {
 		}
 		for _, ip := range ips {
 			ipNet, ok := ip.(*net.IPNet)
-			if !ok {
+			if !ok || ipNet.IP.IsLinkLocalUnicast() {
 				continue
 			}
 			addr := net.JoinHostPort(ipNet.IP.String(), port)
