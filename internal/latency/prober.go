@@ -63,25 +63,8 @@ func (p *Prober) ProbeIPs(ctx context.Context, ips []net.IP) []net.IP {
 	if p == nil || len(ips) <= 1 || len(p.steps) == 0 {
 		return ips
 	}
-
-	type candidate struct {
-		ip      net.IP
-		latency time.Duration
-	}
-
-	candidates := make([]candidate, len(ips))
-	for i, ip := range ips {
-		candidates[i] = candidate{ip: ip, latency: time.Duration(math.MaxInt64)}
-	}
-
-	sorted, _ := probeSlice(ctx, p.sem, p.ctx, candidates, func(c *candidate) net.IP { return c.ip },
-		func(c *candidate, lat time.Duration) { c.latency = lat }, p.steps, p.httpPool)
-
-	result := make([]net.IP, len(sorted))
-	for i, c := range sorted {
-		result[i] = c.ip
-	}
-	return result
+	sorted, _, _ := p.probeIPs(ctx, ips)
+	return sorted
 }
 
 // ProbeIPsLatency probes the given IP addresses and returns them sorted by
@@ -91,61 +74,36 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, m
 		return ips, nil
 	}
 
-	type candidate struct {
-		ip      net.IP
-		latency time.Duration
-	}
-
-	candidates := make([]candidate, len(ips))
-	for i, ip := range ips {
-		candidates[i] = candidate{ip: ip, latency: time.Duration(math.MaxInt64)}
-	}
-
-	sorted, changed := probeSlice(ctx, p.sem, p.ctx, candidates, func(c *candidate) net.IP { return c.ip },
-		func(c *candidate, lat time.Duration) { c.latency = lat }, p.steps, p.httpPool)
+	sorted, latencies, changed := p.probeIPs(ctx, ips)
 	if !changed {
 		return ips, nil
 	}
 
-	result := make([]net.IP, len(sorted))
-	latencies := make(map[string]int, len(sorted))
-	for i, c := range sorted {
-		result[i] = c.ip
-		if c.latency != time.Duration(math.MaxInt64) {
-			latencies[c.ip.String()] = int(c.latency / time.Millisecond)
-		}
+	latencyMS := make(map[string]int, len(sorted))
+	for ip, lat := range latencies {
+		latencyMS[ip] = int(lat / time.Millisecond)
 	}
-	return result, latencies
+	return sorted, latencyMS
 }
 
-// probeSlice is the generic probe-and-sort core. It spawns concurrent workers
-// bounded by the semaphore, measures latency for each item, and returns items
-// sorted by latency. All workers respect ctx and bgCtx cancellation.
-func probeSlice[T any](
-	ctx context.Context,
-	sem chan struct{},
-	bgCtx context.Context,
-	items []T,
-	extractIP func(*T) net.IP,
-	setLatency func(*T, time.Duration),
-	steps []config.LatencyProbeStep,
-	httpPool *httpClientPool,
-) ([]T, bool) {
+// probeIPs is the probe-and-sort core. It spawns concurrent workers bounded
+// by the semaphore, measures latency for each IP, and returns them sorted
+// fastest-first. All workers respect ctx and bgCtx cancellation.
+func (p *Prober) probeIPs(ctx context.Context, ips []net.IP) ([]net.IP, map[string]time.Duration, bool) {
+	n := len(ips)
 
-	type candidate struct {
+	type result struct {
 		idx     int
 		latency time.Duration
 	}
 
-	n := len(items)
-	results := make([]candidate, n)
+	results := make([]result, n)
 	for i := range results {
-		results[i] = candidate{idx: i, latency: time.Duration(math.MaxInt64)}
+		results[i] = result{idx: i, latency: time.Duration(math.MaxInt64)}
 	}
 
-	// Launch one goroutine per item, bounded by the semaphore.
 	var wg sync.WaitGroup
-	for i := range items {
+	for i := range ips {
 		idx := i
 		wg.Add(1)
 		go func() {
@@ -153,35 +111,32 @@ func probeSlice[T any](
 			defer wg.Done()
 
 			select {
-			case sem <- struct{}{}:
+			case p.sem <- struct{}{}:
 			case <-ctx.Done():
 				return
-			case <-bgCtx.Done():
+			case <-p.ctx.Done():
 				return
 			}
-			defer func() { <-sem }()
+			defer func() { <-p.sem }()
 
-			latency := measureIPLatency(ctx, bgCtx, extractIP(&items[idx]), steps, httpPool)
-			results[idx].latency = latency
-			setLatency(&items[idx], latency)
+			results[idx].latency = measureIPLatency(ctx, p.ctx, ips[idx], p.steps, p.httpPool)
 		}()
 	}
 	wg.Wait()
 
-	// Check if any probe succeeded.
 	changed := false
+	latencies := make(map[string]time.Duration, n)
 	for _, r := range results {
 		if r.latency != time.Duration(math.MaxInt64) {
 			changed = true
-			break
+			latencies[ips[r.idx].String()] = r.latency
 		}
 	}
 	if !changed {
-		return items, false
+		return ips, nil, false
 	}
 
-	// Sort items by probed latency.
-	slices.SortStableFunc(results, func(a, b candidate) int {
+	slices.SortStableFunc(results, func(a, b result) int {
 		if a.latency < b.latency {
 			return -1
 		}
@@ -191,20 +146,13 @@ func probeSlice[T any](
 		return 0
 	})
 
-	sorted := make([]T, n)
+	sorted := make([]net.IP, n)
 	for i, r := range results {
-		sorted[i] = items[r.idx]
+		sorted[i] = ips[r.idx]
+		log.Debugf("LATENCY: probe result %s latency=%s", sorted[i].String(), r.latency)
 	}
 
-	// Log results (O(n): after sorting, results[i] corresponds to sorted[i]).
-	for i, c := range sorted {
-		ip := extractIP(&c)
-		if ip != nil {
-			log.Debugf("LATENCY: probe result %s latency=%s", ip.String(), results[i].latency)
-		}
-	}
-
-	return sorted, true
+	return sorted, latencies, true
 }
 
 // normalizeProbeProtocol canonicalizes protocol names (e.g. "ICMP" → "ping").
