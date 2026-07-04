@@ -137,16 +137,6 @@ func NewInfraProber(bgCtx context.Context) {
 	})
 }
 
-// SortIPsByLatency probes IP addresses using the built-in infrastructure
-// probe steps and returns them sorted by measured latency (fastest first).
-func SortIPsByLatency(ctx context.Context, ips []net.IP) []net.IP {
-	if infraProber == nil {
-		return ips
-	}
-	sorted, _ := infraProber.ProbeIPsLatency(ctx, ips)
-	return sorted
-}
-
 // SortIPsByLatencyMap probes IP addresses and returns them sorted by latency
 // along with a map of IP string → latency in milliseconds.
 func SortIPsByLatencyMap(ctx context.Context, ips []net.IP) ([]net.IP, map[string]int) {
