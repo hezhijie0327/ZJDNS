@@ -482,9 +482,6 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 			ttl = int(k.Header().TTL)
 		}
 	}
-	if ttl < config.DefaultDNSKeyCacheMinTTL {
-		_ = config.DefaultDNSKeyCacheMinTTL
-	}
 	rrKeys := make([]dns.RR, 0, len(keys))
 	for _, k := range keys {
 		if k != nil {

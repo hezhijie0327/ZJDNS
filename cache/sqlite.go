@@ -137,6 +137,7 @@ func (s *SQLiteCache) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_records_ip ON records(rdata_ip) WHERE rdata_ip IS NOT NULL;
 
 		CREATE TABLE IF NOT EXISTS stats (
+			id                    INTEGER PRIMARY KEY CHECK (id = 1),
 			total_requests        INTEGER NOT NULL DEFAULT 0,
 			cache_hits            INTEGER NOT NULL DEFAULT 0,
 			cache_misses          INTEGER NOT NULL DEFAULT 0,
