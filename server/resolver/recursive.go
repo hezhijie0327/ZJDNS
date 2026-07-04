@@ -253,10 +253,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				// chain independently. Records signed by unrelated zone keys (e.g.
 				// A records for CDN CNAME targets) are validated via separate
 				// recursive resolution against their own zone's DNSKEYs.
-				answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
-				nsSlice, extraSlice := response.Ns, response.Extra
-				pool.DefaultMessagePool.Put(response)
-				return answer, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
+				return r.finalizeResponse(response, currentDomain, validated, ecsResponse)
 			} else {
 				// When DNSSEC crypto is enabled and the zone has DS records in the
 				// parent, a crypto verification failure means the answer is bogus.
@@ -275,10 +272,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				// chain independently. Records signed by unrelated zone keys (e.g.
 				// A records for CDN CNAME targets) are validated via separate
 				// recursive resolution against their own zone's DNSKEYs.
-				answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
-				nsSlice, extraSlice := response.Ns, response.Extra
-				pool.DefaultMessagePool.Put(response)
-				return answer, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
+				return r.finalizeResponse(response, currentDomain, validated, ecsResponse)
 			}
 		}
 
@@ -623,4 +617,13 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.NormalizeDomain(question.Name))
 	}
 	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, usedServer, hijackOccurred, nil
+}
+
+// finalizeResponse strips cross-zone records, pools the response, and returns
+// the extracted sections for the CNAME resolver to follow independently.
+func (r *Recursive) finalizeResponse(response *dns.Msg, currentDomain string, validated bool, ecsResponse *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+	answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
+	nsSlice, extraSlice := response.Ns, response.Extra
+	pool.DefaultMessagePool.Put(response)
+	return answer, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
 }
