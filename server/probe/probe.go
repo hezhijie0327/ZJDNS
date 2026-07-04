@@ -7,7 +7,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/config"
 	"zjdns/edns"
@@ -44,17 +44,17 @@ func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, s
 
 // Start initiates a background latency probe for A/AAAA records when multiple
 // addresses exist. If probing finds a faster ordering, the cache is updated.
-func (p *Prober) Start(question dns.Question, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) {
+func (p *Prober) Start(qname string, qtype uint16, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) {
 	if p == nil || p.engine == nil {
-		log.Debugf("LATENCY: probe skipped for %s because latency_probe is not configured", question.Name)
+		log.Debugf("LATENCY: probe skipped for %s because latency_probe is not configured", qname)
 		return
 	}
-	if question.Qtype != dns.TypeA && question.Qtype != dns.TypeAAAA {
-		log.Debugf("LATENCY: probe skipped for %s because query type is not A/AAAA", question.Name)
+	if qtype != dns.TypeA && qtype != dns.TypeAAAA {
+		log.Debugf("LATENCY: probe skipped for %s because query type is not A/AAAA", qname)
 		return
 	}
 	if len(answer) <= 1 {
-		log.Debugf("LATENCY: probe skipped for %s because answer length <= 1", question.Name)
+		log.Debugf("LATENCY: probe skipped for %s because answer length <= 1", qname)
 		return
 	}
 
@@ -68,16 +68,16 @@ func (p *Prober) Start(question dns.Question, cacheKey string, answer, authority
 		}
 	}
 	if ipRRCount <= 1 {
-		log.Debugf("LATENCY: probe skipped for %s because only one A/AAAA record present", question.Name)
+		log.Debugf("LATENCY: probe skipped for %s because only one A/AAAA record present", qname)
 		return
 	}
 
-	log.Debugf("LATENCY: starting background latency probe for %s", question.Name)
+	log.Debugf("LATENCY: starting background latency probe for %s", qname)
 
 	p.bgGroup(func() error {
 		defer dnsutil.HandlePanic("latency probe")
 		if err := p.probeAndReorder(p.bgCtx, cacheKey, answer, authority, additional, validated, ecsResponse); err != nil {
-			log.Debugf("LATENCY: background probe failed for %s: %v", question.Name, err)
+			log.Debugf("LATENCY: background probe failed for %s: %v", qname, err)
 		}
 		return nil
 	})
@@ -195,6 +195,6 @@ func isAOrAAAA(rr dns.RR) bool {
 	if rr == nil {
 		return false
 	}
-	rtype := rr.Header().Rrtype
+	rtype := dns.RRToType(rr)
 	return rtype == dns.TypeA || rtype == dns.TypeAAAA
 }

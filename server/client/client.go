@@ -14,14 +14,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
-	"zjdns/internal/pool"
 
 	connpool "zjdns/server/client/pool"
 )
@@ -79,21 +78,18 @@ type Client struct {
 // New creates a Client with default timeouts, transport pools, and session
 // caches.
 func New() *Client {
-	udpClient := &dns.Client{
-		Timeout: config.DefaultDNSQueryTimeout,
-		Net:     config.ProtoUDP,
-		UDPSize: pool.UDPBufferSize,
+	defaultTransport := &dns.Transport{
+		Dialer: &net.Dialer{
+			Timeout:   config.DefaultDNSQueryTimeout,
+			KeepAlive: 30 * time.Second,
+		},
+		ReadTimeout:  config.DefaultDNSQueryTimeout,
+		WriteTimeout: config.DefaultDNSQueryTimeout,
 	}
 
-	tcpClient := &dns.Client{
-		Timeout: config.DefaultDNSQueryTimeout,
-		Net:     config.ProtoTCP,
-	}
-
-	tlsClient := &dns.Client{
-		Timeout: config.DefaultDNSQueryTimeout,
-		Net:     config.ProtoTLSTCP,
-	}
+	udpClient := &dns.Client{Transport: defaultTransport}
+	tcpClient := &dns.Client{Transport: defaultTransport}
+	tlsClient := &dns.Client{Transport: defaultTransport}
 
 	dohTransport := &http.Transport{
 		MaxIdleConns:        config.DefaultMaxIdleConns,
@@ -224,7 +220,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 
 	qname := ""
 	if len(msg.Question) > 0 {
-		qname = msg.Question[0].Name
+		qname = msg.Question[0].Header().Name
 	}
 	log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, strings.ToUpper(server.Protocol), qname)
 

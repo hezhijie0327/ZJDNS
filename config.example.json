@@ -131,7 +131,9 @@
         {
           "type": "A",
           "ttl": 10,
-          "content": "127.0.0.1"
+          "content": "127.0.0.1",
+          "ParsedType": 0,
+          "ParsedClass": 0
         }
       ],
       "include_clients": ["192.168.0.0/24"]
@@ -142,7 +144,9 @@
         {
           "type": "A",
           "ttl": 10,
-          "content": "127.0.0.1"
+          "content": "127.0.0.1",
+          "ParsedType": 0,
+          "ParsedClass": 0
         }
       ],
       "exclude_clients": ["192.168.1.0/24"]
@@ -153,7 +157,9 @@
         {
           "type": "AAAA",
           "ttl": 10,
-          "content": "::1"
+          "content": "::1",
+          "ParsedType": 0,
+          "ParsedClass": 0
         }
       ]
     }

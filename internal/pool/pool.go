@@ -4,7 +4,7 @@ package pool
 import (
 	"sync"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 // UDPBufferSize is the recommended EDNS0 UDP payload size to avoid IP fragmentation (RFC 6891).

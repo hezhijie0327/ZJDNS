@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
 
 	"zjdns/config"
@@ -28,7 +28,7 @@ type result struct {
 	Err        error // set when errgroup detects a sentinel error (e.g. CIDR refusal)
 }
 
-func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	if len(servers) == 0 {
 		return nil, nil, nil, false, nil, "", false, errors.New("no upstream servers")
 	}
@@ -131,7 +131,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 						// performed the cryptographic verification.
 						queryResult.Validated = security.IsResponseValid(queryResult.Response, true)
 						log.Debugf("UPSTREAM: DNSSEC validation result=%t for %s via %s", queryResult.Validated, question.Name, server.Address)
-						ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
+						ecsResponse := r.edns.ParseFromDNS((queryResult.Response))
 
 						select {
 						case resultChan <- result{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, ECS: ecsResponse, Server: serverDesc}:
@@ -152,7 +152,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question dns.Question, ecs
 							Authority:  queryResult.Response.Ns,
 							Additional: queryResult.Response.Extra,
 							Validated:  false,
-							ECS:        r.edns.ParseFromDNS(queryResult.Response),
+							ECS:        r.edns.ParseFromDNS((queryResult.Response)),
 							Server:     serverDesc,
 						})
 						pool.DefaultMessagePool.Put(queryResult.Response)
@@ -217,7 +217,7 @@ func captureUpstreamEDE(r *Resolver, resp *dns.Msg, serverAddr string) {
 	if resp == nil {
 		return
 	}
-	if ede := r.edns.ParseEDE(resp); ede != nil {
+	if ede := r.edns.ParseEDE((resp)); ede != nil {
 		r.lastUpstreamEDE.Store(ede)
 		log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
 			ede.InfoCode, edns.EDECodeString(ede.InfoCode), serverAddr, dns.RcodeToString[resp.Rcode])
@@ -234,9 +234,9 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 		var ip net.IP
 		switch record := rr.(type) {
 		case *dns.A:
-			ip = record.A
+			ip = net.IP(record.Addr.AsSlice())
 		case *dns.AAAA:
-			ip = record.AAAA
+			ip = net.IP(record.Addr.AsSlice())
 		default:
 			filtered = append(filtered, rr)
 			continue

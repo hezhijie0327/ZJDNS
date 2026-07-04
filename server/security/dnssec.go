@@ -1,7 +1,7 @@
 package security
 
 import (
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/internal/log"
 )

@@ -13,7 +13,9 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 )
 
 // No local DNS class constant; use config.DefaultDNSClass.
@@ -102,9 +104,11 @@ func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 		// Pre-parse Type/Class strings to uint16 to avoid allocation-heavy
 		// map lookups and string normalizations on every query (hot path).
 		for j := range rule.Records {
-			rule.Records[j].ParsedType = dns.StringToType[rule.Records[j].Type]
+			if t, _ := dnsutilv2.StringToType(rule.Records[j].Type); t != 0 {
+				rule.Records[j].ParsedType = t
+			}
 			if rule.Records[j].Class != "" {
-				if parsed, ok := dns.StringToClass[strings.ToUpper(strings.TrimSpace(rule.Records[j].Class))]; ok {
+				if parsed, err := dnsutilv2.StringToClass(strings.ToUpper(strings.TrimSpace(rule.Records[j].Class))); err == nil {
 					rule.Records[j].ParsedClass = parsed
 				}
 			}
@@ -113,9 +117,11 @@ func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 			}
 		}
 		for j := range rule.Additional {
-			rule.Additional[j].ParsedType = dns.StringToType[rule.Additional[j].Type]
+			if t, _ := dnsutilv2.StringToType(rule.Additional[j].Type); t != 0 {
+				rule.Additional[j].ParsedType = t
+			}
 			if rule.Additional[j].Class != "" {
-				if parsed, ok := dns.StringToClass[strings.ToUpper(strings.TrimSpace(rule.Additional[j].Class))]; ok {
+				if parsed, err := dnsutilv2.StringToClass(strings.ToUpper(strings.TrimSpace(rule.Additional[j].Class))); err == nil {
 					rule.Additional[j].ParsedClass = parsed
 				}
 			}
@@ -264,15 +270,19 @@ ruleLoop:
 			// Use pre-built RRs (built once at LoadRules time) —
 			// filter by query type and class.
 			for _, rr := range rule.CachedRecords {
-				hdr := rr.Header()
-				if hdr.Class == qclass && hdr.Rrtype == qtype {
-					result.Records = append(result.Records, dns.Copy(rr))
+				// hdr removed
+				if rr.Header().Class == qclass && dns.RRToType(rr) == qtype {
+					if r, e := dns.New(rr.String()); e == nil {
+						result.Records = append(result.Records, r)
+					}
 				}
 			}
 			for _, rr := range rule.CachedAdditional {
-				hdr := rr.Header()
-				if hdr.Class == qclass && hdr.Rrtype == qtype {
-					result.Additional = append(result.Additional, dns.Copy(rr))
+				// hdr removed
+				if rr.Header().Class == qclass && dns.RRToType(rr) == qtype {
+					if r, e := dns.New(rr.String()); e == nil {
+						result.Additional = append(result.Additional, r)
+					}
 				}
 			}
 			result.ShouldRewrite = true
@@ -292,9 +302,9 @@ func (e *Evaluator) buildRecord(domain string, record config.DNSRecordConfig) dn
 	if class == "" {
 		class = config.DefaultDNSClass
 	}
-	name := dns.Fqdn(domain)
+	name := dnsutilv2.Fqdn(domain)
 	if record.Name != "" {
-		name = dns.Fqdn(record.Name)
+		name = dnsutilv2.Fqdn(record.Name)
 	}
 	var sb strings.Builder
 	sb.Grow(len(name) + len(class) + len(record.Type) + len(record.Content) + 20)
@@ -307,16 +317,16 @@ func (e *Evaluator) buildRecord(domain string, record config.DNSRecordConfig) dn
 	sb.WriteString(record.Type)
 	sb.WriteByte(' ')
 	sb.WriteString(record.Content)
-	if rr, err := dns.NewRR(sb.String()); err == nil {
+	if rr, err := dns.New(sb.String()); err == nil {
 		return rr
 	}
-	rrType := dns.StringToType[record.Type]
+	rrType, _ := dnsutilv2.StringToType(record.Type)
 	classValue := uint16(dns.ClassINET)
-	if parsedClass, ok := dns.StringToClass[class]; ok {
+	if parsedClass, err := dnsutilv2.StringToClass(class); err == nil {
 		classValue = parsedClass
 	}
 	return &dns.RFC3597{
-		Hdr:   dns.RR_Header{Name: name, Rrtype: rrType, Class: classValue, Ttl: ttl},
-		Rdata: record.Content,
+		Hdr:     dns.Header{Name: name, Class: classValue, TTL: ttl},
+		RFC3597: rdata.RFC3597{RRType: rrType, Data: record.Content},
 	}
 }

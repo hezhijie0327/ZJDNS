@@ -7,7 +7,8 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 
 	"zjdns/cache"
 	"zjdns/config"
@@ -62,7 +63,7 @@ func (r *Recursive) DNSSECEDECode() uint16 {
 // dnssecChain tracks the cryptographic trust chain state during recursive
 // resolution. At each delegation level, verified parent DNSKEYs and child DS
 // records are used to authenticate the child zone's DNSKEYs.
-func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edns.ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	if depth > config.DefaultMaxRecursionDepth {
 		log.Warnf("RECURSION: depth exceeded (depth=%d, max=%d) for %s", depth, config.DefaultMaxRecursionDepth, question.Name)
 		return nil, nil, nil, false, nil, "", false, fmt.Errorf("recursion depth exceeded: %d", depth)
@@ -73,7 +74,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 	// successful validation in the next hop, causing false "bogus" verdicts.
 	r.lastDNSSECEDECode.Store(0)
 
-	qname := dns.Fqdn(question.Name)
+	qname := dnsutilv2.Fqdn(question.Name)
 	question.Name = qname
 	nameservers := r.getRootServers()
 	currentDomain := "."
@@ -115,7 +116,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 			return nil, nil, nil, false, nil, "", hijackSeen, fmt.Errorf("root domain query: %w", err)
 		}
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
-		ecsResponse := r.resolver.edns.ParseFromDNS(response)
+		ecsResponse := r.resolver.edns.ParseFromDNS((response))
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessagePool.Put(response)
 		return answer, authority, additional, cryptoValidated, ecsResponse, config.RecursiveIndicator, hijackSeen, nil
@@ -136,7 +137,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 			minQname := minimiseQNAME(qname, currentDomain, addLabels)
 			if !strings.EqualFold(minQname, qname) {
 				qtype := minimisationQtype(question.Qtype)
-				queryQuestion = dns.Question{Name: minQname, Qtype: qtype, Qclass: question.Qclass}
+				queryQuestion = Question{Name: minQname, Qtype: qtype, Qclass: question.Qclass}
 				log.Debugf("RECURSION: qname minimisation step=%d zone=%s, querying minimised name=%s type=%s",
 					minimiseSteps, currentDomain, minQname, dns.TypeToString[qtype])
 				minimiseSteps++
@@ -180,7 +181,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 
 		// Cryptographic DNSSEC validation at this delegation level
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
-		ecsResponse := r.resolver.edns.ParseFromDNS(response)
+		ecsResponse := r.resolver.edns.ParseFromDNS((response))
 
 		validated := cryptoValidated
 
@@ -237,7 +238,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 					// Zone cut resolution failed (e.g. no DS, DS verification
 					// failure). Always record the EDE code; return SERVFAIL only
 					// when enforcement is on.
-					if len(chain.childDS) > 0 {
+					if len(chain.childDS) > 0 || chain.dsPresentButUnverified {
 						r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
 						if r.resolver.DNSSECEnforce {
 							log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut resolution failed with DS present", question.Name)
@@ -261,7 +262,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 				// parent, a crypto verification failure means the answer is bogus.
 				// Always record the EDE code for client hints and stats; return
 				// SERVFAIL only when enforcement is on (RFC 4035).
-				if len(chain.childDS) > 0 && !validated {
+				if (len(chain.childDS) > 0 || chain.dsPresentButUnverified) && !validated {
 					r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
 					if r.resolver.DNSSECEnforce {
 						log.Debugf("SECURITY: DNSSEC validation failed for %s — zone has DS but DNSKEY/RRSIG verification failed", question.Name)
@@ -384,7 +385,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 		var nextNSSource string // "cache" or "glue" or "resolution"
 		if r.cache != nil {
 			for _, ns := range bestNSRecords {
-				nsName := dns.Fqdn(ns.Ns)
+				nsName := dnsutilv2.Fqdn(ns.Ns)
 				cached := r.lookupNSAddrsFromCache(nsName)
 				if len(cached) > 0 {
 					nextNS = append(nextNS, cached...)
@@ -418,7 +419,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 							if glueName != parDom && !strings.HasSuffix(glueName, "."+parDom) && parDom != "" {
 								continue
 							}
-							nsKey := dns.Fqdn(a.Header().Name)
+							nsKey := dnsutilv2.Fqdn(a.Header().Name)
 							nsGlue[nsKey] = append(nsGlue[nsKey], a)
 							nextNS = append(nextNS, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
 						}
@@ -429,7 +430,7 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 							if glueName != parDom && !strings.HasSuffix(glueName, "."+parDom) && parDom != "" {
 								continue
 							}
-							nsKey := dns.Fqdn(a.Header().Name)
+							nsKey := dnsutilv2.Fqdn(a.Header().Name)
 							nsGlue[nsKey] = append(nsGlue[nsKey], a)
 							nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), config.DefaultDNSPort))
 						}
@@ -471,8 +472,8 @@ func (r *Recursive) resolve(ctx context.Context, question dns.Question, ecs *edn
 		if r.cache != nil && len(nsGlue) > 0 {
 			for nsName, records := range nsGlue {
 				if len(records) > 0 {
-					qtype := records[0].Header().Rrtype
-					cacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, false)
+					qtype := dns.RRToType(records[0])
+					cacheKey := cache.BuildCacheKey(nsName, qtype, dns.ClassINET, nil, false)
 					r.cache.Set(cacheKey, records, nil, nil, false, nil)
 				}
 			}
@@ -505,7 +506,7 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 
 	msg := pool.DefaultMessagePool.Get()
 	defer pool.DefaultMessagePool.Put(msg)
-	msg.SetQuestion(dns.Fqdn(qname), dns.TypeA)
+	dnsutilv2.SetQuestion(msg, dnsutilv2.Fqdn(qname), dns.TypeA)
 	msg.RecursionDesired = false
 
 	server := &config.UpstreamServer{
@@ -539,7 +540,7 @@ type CNAME struct {
 	resolver *Resolver
 }
 
-func (c *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
 	var allAnswers []dns.RR
 	var finalAuthority, finalAdditional []dns.RR
 	var finalECSResponse *edns.ECSOption
@@ -601,7 +602,7 @@ func (c *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.EC
 				if strings.EqualFold(r.Header().Name, currentQuestion.Name) {
 					nextCNAME = cname
 				}
-			} else if r.Header().Rrtype == currentQuestion.Qtype {
+			} else if dns.RRToType(r) == currentQuestion.Qtype {
 				hasTargetType = true
 			}
 		}
@@ -610,7 +611,7 @@ func (c *CNAME) resolve(ctx context.Context, question dns.Question, ecs *edns.EC
 			break
 		}
 
-		currentQuestion = dns.Question{
+		currentQuestion = Question{
 			Name:   nextCNAME.Target,
 			Qtype:  question.Qtype,
 			Qclass: question.Qclass,

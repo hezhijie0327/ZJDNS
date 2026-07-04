@@ -11,7 +11,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 

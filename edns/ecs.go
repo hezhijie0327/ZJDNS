@@ -6,7 +6,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/config"
 )
@@ -29,20 +29,16 @@ type ECSOption = config.ECSOption
 
 // ParseFromDNS extracts the ECS option from a DNS message's OPT record.
 func (h *Handler) ParseFromDNS(msg *dns.Msg) *ECSOption {
-	if h == nil || msg == nil || msg.Extra == nil {
+	if h == nil || msg == nil {
 		return nil
 	}
-	opt := msg.IsEdns0()
-	if opt == nil {
-		return nil
-	}
-	for _, option := range opt.Option {
-		if subnet, ok := option.(*dns.EDNS0_SUBNET); ok {
+	for _, rr := range msg.Pseudo {
+		if subnet, ok := rr.(*dns.SUBNET); ok {
 			ecs := &ECSOption{
 				Family:       subnet.Family,
-				SourcePrefix: subnet.SourceNetmask,
-				ScopePrefix:  subnet.SourceScope,
-				Address:      subnet.Address,
+				SourcePrefix: subnet.Netmask,
+				ScopePrefix:  subnet.Scope,
+				Address:      netipToIP(subnet.Address),
 			}
 			ecs.Normalize()
 			return ecs

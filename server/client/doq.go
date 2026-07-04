@@ -10,7 +10,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 
 	"zjdns/config"
@@ -113,12 +113,13 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 
 	_ = stream.SetDeadline(time.Now().Add(timeout))
 
-	originalID := msg.Id
-	msg.Id = 0
+	originalID := msg.ID
+	msg.ID = 0
 
-	msgData, err := msg.Pack()
+	err = msg.Pack()
+	msgData := msg.Data
 	if err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("pack: %w", err)
 	}
 
@@ -134,7 +135,7 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	copy(writeBuf[dnsutil.DNSFramePrefixLen:], msgData)
 
 	if _, err := stream.Write(writeBuf[:dnsutil.DNSFramePrefixLen+len(msgData)]); err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
@@ -142,12 +143,12 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	defer pool.DefaultBufferPool.Put(respBuf)
 
 	if _, err := io.ReadFull(stream, respBuf[:dnsutil.DNSFramePrefixLen]); err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("read length prefix: %w", err)
 	}
 	msgLen := binary.BigEndian.Uint16(respBuf[:dnsutil.DNSFramePrefixLen])
 	if msgLen == 0 {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("invalid response length: 0")
 	}
 
@@ -159,19 +160,20 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	}
 
 	if _, err := io.ReadFull(stream, body); err != nil {
-		msg.Id = originalID
+		msg.ID = originalID
 		return nil, fmt.Errorf("read message body: %w", err)
 	}
 
 	response := pool.DefaultMessagePool.Get()
-	if err := response.Unpack(body); err != nil {
-		msg.Id = originalID
+	response.Data = body
+	if err := response.Unpack(); err != nil {
+		msg.ID = originalID
 		pool.DefaultMessagePool.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 
-	msg.Id = originalID
-	response.Id = originalID
+	msg.ID = originalID
+	response.ID = originalID
 
 	return response, nil
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	eTLS "gitlab.com/go-extension/tls"
 
 	"zjdns/config"
@@ -69,10 +69,15 @@ func (c *Client) exchangeOverTLS(ctx context.Context, msg *dns.Msg, addr string,
 		return nil, err
 	}
 	defer func() { _ = tlsConn.Close() }()
-	dnsConn := new(dns.Conn)
-	dnsConn.Conn = tlsConn
-	if err := dnsConn.WriteMsg(msg); err != nil {
+	if _, err := msg.WriteTo(tlsConn); err != nil {
 		return nil, err
 	}
-	return dnsConn.ReadMsg()
+	response := new(dns.Msg)
+	if _, err := response.ReadFrom(tlsConn); err != nil {
+		return nil, err
+	}
+	if err := response.Unpack(); err != nil {
+		return nil, err
+	}
+	return response, nil
 }

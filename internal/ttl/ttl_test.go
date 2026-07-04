@@ -1,10 +1,11 @@
 package ttl
 
 import (
-	"net"
 	"testing"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/rdata"
+	"net/netip"
 )
 
 // setNow sets NowUnix to a fixed value for deterministic tests.
@@ -232,79 +233,79 @@ func TestElapsed_Future(t *testing.T) {
 
 func TestDeductElapsedCyclical_Normal(t *testing.T) {
 	rr := &dns.A{
-		Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 120},
-		A:   netParseIP(t, "192.0.2.1"),
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
+		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr}, 40)
 	if len(result) != 1 {
 		t.Fatalf("got %d records, want 1", len(result))
 	}
-	if result[0].Header().Ttl != 80 {
-		t.Errorf("TTL = %d, want 80 (120 - 40%%120)", result[0].Header().Ttl)
+	if result[0].Header().TTL != 80 {
+		t.Errorf("TTL = %d, want 80 (120 - 40%%120)", result[0].Header().TTL)
 	}
 }
 
 func TestDeductElapsedCyclical_ResetsAtBoundary(t *testing.T) {
 	rr := &dns.A{
-		Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 120},
-		A:   netParseIP(t, "192.0.2.1"),
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
+		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr}, 120)
-	if result[0].Header().Ttl != 120 {
-		t.Errorf("TTL = %d, want 120 (reset at boundary)", result[0].Header().Ttl)
+	if result[0].Header().TTL != 120 {
+		t.Errorf("TTL = %d, want 120 (reset at boundary)", result[0].Header().TTL)
 	}
 }
 
 func TestDeductElapsedCyclical_MultipleCycles(t *testing.T) {
 	rr := &dns.A{
-		Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 120},
-		A:   netParseIP(t, "192.0.2.1"),
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
+		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr}, 260)
 	// 260 % 120 = 20, 120 - 20 = 100
-	if result[0].Header().Ttl != 100 {
-		t.Errorf("TTL = %d, want 100 (120 - 260%%120)", result[0].Header().Ttl)
+	if result[0].Header().TTL != 100 {
+		t.Errorf("TTL = %d, want 100 (120 - 260%%120)", result[0].Header().TTL)
 	}
 }
 
 func TestDeductElapsedCyclical_DifferentRRs(t *testing.T) {
 	rr1 := &dns.A{
-		Hdr: dns.RR_Header{Name: "a.example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-		A:   netParseIP(t, "192.0.2.1"),
+		Hdr: dns.Header{Name: "a.example.com.", Class: dns.ClassINET, TTL: 60},
+		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
 	}
 	rr2 := &dns.A{
-		Hdr: dns.RR_Header{Name: "b.example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 120},
-		A:   netParseIP(t, "192.0.2.2"),
+		Hdr: dns.Header{Name: "b.example.com.", Class: dns.ClassINET, TTL: 120},
+		A:   rdata.A{Addr: netParseIP(t, "192.0.2.2")},
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr1, rr2}, 80)
 	// rr1: 80 % 60 = 20, 60 - 20 = 40
 	// rr2: 80 % 120 = 80, 120 - 80 = 40
-	if result[0].Header().Ttl != 40 {
-		t.Errorf("rr1 TTL = %d, want 40", result[0].Header().Ttl)
+	if result[0].Header().TTL != 40 {
+		t.Errorf("rr1 TTL = %d, want 40", result[0].Header().TTL)
 	}
-	if result[1].Header().Ttl != 40 {
-		t.Errorf("rr2 TTL = %d, want 40", result[1].Header().Ttl)
+	if result[1].Header().TTL != 40 {
+		t.Errorf("rr2 TTL = %d, want 40", result[1].Header().TTL)
 	}
 }
 
 func TestDeductElapsedCyclical_ZeroTTL(t *testing.T) {
 	rr := &dns.A{
-		Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0},
-		A:   netParseIP(t, "192.0.2.1"),
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0},
+		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr}, 50)
-	if result[0].Header().Ttl != 0 {
-		t.Errorf("TTL = %d, want 0 (zero TTL unchanged)", result[0].Header().Ttl)
+	if result[0].Header().TTL != 0 {
+		t.Errorf("TTL = %d, want 0 (zero TTL unchanged)", result[0].Header().TTL)
 	}
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func netParseIP(t *testing.T, s string) net.IP {
+func netParseIP(t *testing.T, s string) netip.Addr {
 	t.Helper()
-	ip := net.ParseIP(s)
-	if ip == nil {
+	addr, err := netip.ParseAddr(s)
+	if err != nil {
 		t.Fatalf("failed to parse IP: %s", s)
 	}
-	return ip
+	return addr
 }

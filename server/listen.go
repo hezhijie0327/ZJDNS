@@ -1,12 +1,14 @@
 package server
 
 import (
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
@@ -46,9 +48,12 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		case entry.capacity <- struct{}{}:
 		default:
 			msg := pool.DefaultMessagePool.Get()
-			msg.SetReply(req)
+			dnsutilv2.SetReply(msg, req)
 			msg.Rcode = dns.RcodeServerFailure
-			if err := w.WriteMsg(msg); err != nil {
+			if err := msg.Pack(); err != nil {
+				log.Debugf("SERVER: TCP SERVFAIL pack error for %s: %v", addr, err)
+			}
+			if _, err := io.Copy(w, msg); err != nil {
 				log.Debugf("SERVER: TCP SERVFAIL write error for %s: %v", addr, err)
 			}
 			pool.DefaultMessagePool.Put(msg)
@@ -60,7 +65,6 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			defer dnsutil.HandlePanic("TCP query handler")
 			response := s.handler.ServeDNS(req, dnsutil.ClientIP(w), false, "TCP")
 			if response != nil {
-				response.Compress = true
 				entry.lastAccess.Store(log.NowUnixNano())
 				writeTimer := time.NewTimer(config.DefaultDNSQueryTimeout)
 				select {
@@ -72,7 +76,10 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 					pool.DefaultMessagePool.Put(response)
 					return
 				}
-				if err := w.WriteMsg(response); err != nil {
+				if err := response.Pack(); err != nil {
+					log.Debugf("SERVER: TCP pack error for %s: %v", addr, err)
+				}
+				if _, err := io.Copy(w, response); err != nil {
 					log.Debugf("SERVER: TCP write error for %s: %v", addr, err)
 				}
 				pool.DefaultMessagePool.Put(response)
@@ -85,8 +92,10 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 	response := s.handler.ServeDNS(req, clientIP, false, detectRequestProtocol(w))
 	if response != nil {
-		response.Compress = true
-		if err := w.WriteMsg(response); err != nil {
+		if err := response.Pack(); err != nil {
+			log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
+		}
+		if _, err := io.Copy(w, response); err != nil {
 			log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
 		}
 		pool.DefaultMessagePool.Put(response)

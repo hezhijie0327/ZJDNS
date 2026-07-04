@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 func TestNormalizeDomain(t *testing.T) {
@@ -246,11 +246,10 @@ type mockResponseWriter struct {
 
 func (m *mockResponseWriter) LocalAddr() net.Addr       { return nil }
 func (m *mockResponseWriter) RemoteAddr() net.Addr      { return m.remote }
-func (m *mockResponseWriter) WriteMsg(*dns.Msg) error   { return nil }
+func (m *mockResponseWriter) Conn() net.Conn            { return nil }
 func (m *mockResponseWriter) Write([]byte) (int, error) { return 0, nil }
 func (m *mockResponseWriter) Close() error              { return nil }
-func (m *mockResponseWriter) TsigStatus() error         { return nil }
-func (m *mockResponseWriter) TsigTimersOnly(bool)       {}
+func (m *mockResponseWriter) Session() *dns.Session     { return nil }
 func (m *mockResponseWriter) Hijack()                   {}
 
 func stringsContains(s, substr string) bool {

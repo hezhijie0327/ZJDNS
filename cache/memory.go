@@ -7,7 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 
 	"zjdns/config"
 	"zjdns/internal/log"
@@ -372,16 +373,16 @@ func extractPTRRecords(entry *Entry) []ptrRecord {
 		var ttl uint32
 		switch r := rr.(type) {
 		case *dns.A:
-			ip, name, ttl = r.A, r.Hdr.Name, r.Hdr.Ttl
+			ip, name, ttl = net.IP(r.Addr.AsSlice()), r.Hdr.Name, r.Hdr.TTL
 		case *dns.AAAA:
-			ip, name, ttl = r.AAAA, r.Hdr.Name, r.Hdr.Ttl
+			ip, name, ttl = net.IP(r.Addr.AsSlice()), r.Hdr.Name, r.Hdr.TTL
 		default:
 			continue
 		}
 		if ip == nil || name == "" {
 			continue
 		}
-		records = append(records, ptrRecord{IP: ip.String(), Name: dns.Fqdn(name), TTL: ttl})
+		records = append(records, ptrRecord{IP: ip.String(), Name: dnsutilv2.Fqdn(name), TTL: ttl})
 	}
 	return records
 }
@@ -511,7 +512,7 @@ func compact(rrs []dns.RR) []*CompactRecord {
 	result := make([]*CompactRecord, 0, len(rrs))
 	seen := make(map[string]struct{}, len(rrs))
 	for _, rr := range rrs {
-		if rr == nil || rr.Header().Rrtype == dns.TypeOPT {
+		if rr == nil || dns.RRToType(rr) == dns.TypeOPT {
 			continue
 		}
 		rrText := rr.String()
@@ -530,7 +531,7 @@ func expand(cr *CompactRecord) dns.RR {
 	if cr == nil || cr.Text == "" {
 		return nil
 	}
-	rr, _ := dns.NewRR(cr.Text)
+	rr, _ := dns.New(cr.Text)
 	return rr
 }
 
@@ -541,7 +542,7 @@ func minTTL(answer, authority, additional []dns.RR) int {
 			if rr == nil {
 				continue
 			}
-			if ttl := int(rr.Header().Ttl); ttl > 0 && (minT < 0 || ttl < minT) {
+			if ttl := int(rr.Header().TTL); ttl > 0 && (minT < 0 || ttl < minT) {
 				minT = ttl
 			}
 		}
@@ -559,7 +560,7 @@ func hasNSECOrNSEC3(authority []dns.RR) bool {
 		if rr == nil {
 			continue
 		}
-		switch rr.Header().Rrtype {
+		switch dns.RRToType(rr) {
 		case dns.TypeNSEC, dns.TypeNSEC3:
 			return true
 		}
@@ -581,7 +582,7 @@ func negativeTTLCap(authority []dns.RR) int {
 		if !ok {
 			continue
 		}
-		soaTTL := int(soa.Header().Ttl)
+		soaTTL := int(soa.Header().TTL)
 		soaMin := int(soa.Minttl)
 		soaBased := soaTTL
 		if soaMin < soaBased {

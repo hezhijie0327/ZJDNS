@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/config"
 )

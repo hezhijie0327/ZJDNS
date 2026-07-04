@@ -11,7 +11,7 @@ import (
 
 	"zjdns/internal/log"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 // Cookie length constants.
@@ -161,15 +161,11 @@ func BuildCookieResponse(clientCookie, serverCookie []byte) string {
 
 // ParseCookie extracts the DNS Cookie option from a DNS message.
 func (m *Handler) ParseCookie(msg *dns.Msg) *CookieOption {
-	if m == nil || msg == nil || msg.Extra == nil {
+	if m == nil || msg == nil {
 		return nil
 	}
-	opt := msg.IsEdns0()
-	if opt == nil {
-		return nil
-	}
-	for _, option := range opt.Option {
-		if cookie, ok := option.(*dns.EDNS0_COOKIE); ok {
+	for _, rr := range msg.Pseudo {
+		if cookie, ok := rr.(*dns.COOKIE); ok {
 			cookieBytes, err := hex.DecodeString(cookie.Cookie)
 			if err != nil {
 				log.Debugf("EDNS: invalid cookie hex: %v", err)

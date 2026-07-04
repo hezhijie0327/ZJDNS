@@ -10,7 +10,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 
 	"zjdns/internal/log"
 )
@@ -87,7 +89,7 @@ func HandlePanic(operation string) {
 // ParseReverseDNSName parses a reverse DNS name (in-addr.arpa or ip6.arpa)
 // into a net.IP.
 func ParseReverseDNSName(name string) net.IP {
-	fqdn := strings.TrimSuffix(dns.Fqdn(name), ".")
+	fqdn := strings.TrimSuffix(dnsutilv2.Fqdn(name), ".")
 	lower := strings.ToLower(fqdn)
 
 	if strings.HasSuffix(lower, ".in-addr.arpa") {
@@ -125,13 +127,12 @@ func ParseReverseDNSName(name string) net.IP {
 // NewPTRRecord returns a DNS PTR record.
 func NewPTRRecord(name, target string, ttl uint32, qclass uint16) dns.RR {
 	return &dns.PTR{
-		Hdr: dns.RR_Header{
-			Name:   dns.Fqdn(name),
-			Rrtype: dns.TypePTR,
-			Class:  qclass,
-			Ttl:    ttl,
+		Hdr: dns.Header{
+			Name:  dnsutilv2.Fqdn(name),
+			Class: qclass,
+			TTL:   ttl,
 		},
-		Ptr: dns.Fqdn(target),
+		PTR: rdata.PTR{Ptr: dnsutilv2.Fqdn(target)},
 	}
 }
 
@@ -202,15 +203,18 @@ func IsValidFilePath(path string) bool {
 
 // ExtractIP returns the IP address from an A or AAAA DNS record, or nil if the
 // record is neither type.
-func ExtractIP(rr dns.RR) net.IP {
+func ExtractIP(rr any) net.IP {
 	switch r := rr.(type) {
 	case *dns.A:
-		return r.A
+		if r.Addr.IsValid() {
+			return net.IP(r.Addr.AsSlice())
+		}
 	case *dns.AAAA:
-		return r.AAAA
-	default:
-		return nil
+		if r.Addr.IsValid() {
+			return net.IP(r.Addr.AsSlice())
+		}
 	}
+	return nil
 }
 
 // WriteDNSFrame writes a 2-byte big-endian length prefix followed by data to w.

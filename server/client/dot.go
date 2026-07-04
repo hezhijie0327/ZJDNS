@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	eTLS "gitlab.com/go-extension/tls"
 
 	"zjdns/config"

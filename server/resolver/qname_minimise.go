@@ -3,7 +3,8 @@ package resolver
 import (
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 
 	"zjdns/internal/dnsutil"
 )
@@ -22,34 +23,34 @@ func minimiseQNAME(originalQname, currentZone string, labelsToAdd int) string {
 	if zone == "" {
 		labels := strings.Split(strings.TrimSuffix(orig, "."), ".")
 		if labelsToAdd >= len(labels) {
-			return dns.Fqdn(orig)
+			return dnsutilv2.Fqdn(orig)
 		}
-		return dns.Fqdn(strings.Join(labels[len(labels)-labelsToAdd:], "."))
+		return dnsutilv2.Fqdn(strings.Join(labels[len(labels)-labelsToAdd:], "."))
 	}
 
 	// QNAME equals the zone — reached the target
 	if orig == zone {
-		return dns.Fqdn(orig)
+		return dnsutilv2.Fqdn(orig)
 	}
 
 	// QNAME is not a subdomain of the current zone — return original
 	if !strings.HasSuffix(orig, "."+zone) {
-		return dns.Fqdn(orig)
+		return dnsutilv2.Fqdn(orig)
 	}
 
 	remaining := orig[:len(orig)-len(zone)-1] // strip "." + zone
 	if remaining == "" {
-		return dns.Fqdn(orig)
+		return dnsutilv2.Fqdn(orig)
 	}
 
 	remainingLabels := strings.Split(remaining, ".")
 	if labelsToAdd >= len(remainingLabels) {
-		return dns.Fqdn(orig) // reached the target
+		return dnsutilv2.Fqdn(orig) // reached the target
 	}
 
 	// Take the rightmost 'labelsToAdd' labels from the remaining prefix
 	suffix := strings.Join(remainingLabels[len(remainingLabels)-labelsToAdd:], ".")
-	return dns.Fqdn(suffix + "." + zone)
+	return dnsutilv2.Fqdn(suffix + "." + zone)
 }
 
 // labelCount returns the number of labels in a domain name. The root zone (".")

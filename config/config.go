@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/internal/log"
 )

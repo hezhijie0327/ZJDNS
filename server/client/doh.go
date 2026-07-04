@@ -11,7 +11,7 @@ import (
 
 	eTLS "gitlab.com/go-extension/tls"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/config"
 )

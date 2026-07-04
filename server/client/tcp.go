@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/config"
 	"zjdns/internal/log"
@@ -50,7 +50,7 @@ func (c *Client) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, serv
 	} else {
 		client = c.udpClient
 	}
-	response, _, err := client.ExchangeContext(ctx, msg, server.Address)
+	response, _, err := client.Exchange(ctx, msg, server.Protocol, server.Address)
 	return response, err
 }
 
@@ -63,16 +63,17 @@ func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string
 	}
 	defer func() { _ = conn.Close() }()
 
-	dnsConn := new(dns.Conn)
-	dnsConn.Conn = conn
-	if err := dnsConn.WriteMsg(msg); err != nil {
+	if _, err := msg.WriteTo(conn); err != nil {
 		return nil, err
 	}
-	response, err := dnsConn.ReadMsg()
-	if err != nil {
+	response := new(dns.Msg)
+	if _, err := response.ReadFrom(conn); err != nil {
 		return nil, err
 	}
-	response.Id = msg.Id
+	if err := response.Unpack(); err != nil {
+		return nil, err
+	}
+	response.ID = msg.ID
 	return response, nil
 }
 
@@ -91,7 +92,8 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 		return nil, err
 	}
 
-	packed, err := msg.Pack()
+	err = msg.Pack()
+	packed := msg.Data
 	if err != nil {
 		return nil, err
 	}
@@ -115,13 +117,14 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 	}
 
 	response := new(dns.Msg)
-	if err := response.Unpack((*respBuf)[:n]); err != nil {
+	response.Data = (*respBuf)[:n]
+	if err := response.Unpack(); err != nil {
 		socks5ReadPool.Put(respBuf)
 		return nil, err
 	}
 	socks5ReadPool.Put(respBuf)
 
-	response.Id = msg.Id
+	response.ID = msg.ID
 	return response, nil
 }
 

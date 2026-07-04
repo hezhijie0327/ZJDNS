@@ -6,7 +6,7 @@ package ttl
 import (
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 // NowUnix returns the current Unix timestamp. Override in tests for
@@ -81,13 +81,16 @@ func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {
 		if rr == nil {
 			continue
 		}
-		copied := dns.Copy(rr)
-		origTTL := int64(copied.Header().Ttl)
+		copied, err := dns.New(rr.String())
+		if err != nil {
+			continue
+		}
+		origTTL := int64(copied.Header().TTL)
 		if origTTL <= 0 {
 			result = append(result, copied)
 			continue
 		}
-		copied.Header().Ttl = uint32(origTTL - (elapsed % origTTL))
+		copied.Header().TTL = uint32(origTTL - (elapsed % origTTL))
 		result = append(result, copied)
 	}
 	return result

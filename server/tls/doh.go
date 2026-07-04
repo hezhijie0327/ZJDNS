@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	cryptotls "gitlab.com/go-extension/tls"
@@ -241,7 +241,8 @@ func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (*dns.M
 	}
 
 	req := pool.DefaultMessagePool.Get()
-	if err := req.Unpack(buf); err != nil {
+	req.Data = buf
+	if err := req.Unpack(); err != nil {
 		pool.DefaultMessagePool.Put(req)
 		return nil, http.StatusBadRequest
 	}
@@ -255,7 +256,8 @@ func (s *Server) respondDOH(w http.ResponseWriter, response *dns.Msg) error {
 		return nil
 	}
 
-	bytes, err := response.Pack()
+	err := response.Pack()
+	bytes := response.Data
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return fmt.Errorf("pack response: %w", err)

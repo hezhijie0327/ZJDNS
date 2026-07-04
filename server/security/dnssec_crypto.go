@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/cache"
 	"zjdns/config"
@@ -68,7 +68,7 @@ func (c *CryptoValidator) loadRootTrustAnchors() {
 	var keys []*dns.DNSKEY
 
 	for i, anchor := range rootAnchors {
-		rr, err := dns.NewRR(anchor)
+		rr, err := dns.New(anchor)
 		if err != nil {
 			log.Errorf("SECURITY: failed to parse root trust anchor %d: %v", i, err)
 			continue
@@ -78,7 +78,7 @@ func (c *CryptoValidator) loadRootTrustAnchors() {
 			log.Errorf("SECURITY: root trust anchor %d is not a DNSKEY record", i)
 			continue
 		}
-		if dnskey.Flags&dns.SEP == 0 || dnskey.Flags&dns.ZONE == 0 {
+		if dnskey.Flags&dns.FlagSEP == 0 || dnskey.Flags&dns.FlagZONE == 0 {
 			log.Errorf("SECURITY: root trust anchor %d missing required DNSKEY flags (SEP/ZONE)", i)
 			continue
 		}
@@ -113,7 +113,7 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 	}
 
 	// Verify the cryptographic signature
-	if err := rrsig.Verify(dnskey, rrset); err != nil {
+	if err := rrsig.Verify(dnskey, rrset, &dns.SignOption{}); err != nil {
 		return fmt.Errorf("%w: %w", ErrBogusSignature, err)
 	}
 
@@ -133,7 +133,7 @@ func (c *CryptoValidator) VerifyDelegationDS(dsRecords []*dns.DS, childDNSKEYs [
 	for _, ds := range dsRecords {
 		for _, dnskey := range childDNSKEYs {
 			// Only KSK (SEP bit set) should match the DS
-			if dnskey.Flags&dns.SEP == 0 {
+			if dnskey.Flags&dns.FlagSEP == 0 {
 				continue
 			}
 			computedDS := dnskey.ToDS(ds.DigestType)
@@ -170,7 +170,7 @@ func (c *CryptoValidator) SelfVerifyDNSKEY(dnskeys []*dns.DNSKEY, dnskeyRRSIGs [
 	var verified bool
 	for _, rrsig := range dnskeyRRSIGs {
 		for _, ksk := range dnskeys {
-			if ksk.Flags&dns.SEP == 0 {
+			if ksk.Flags&dns.FlagSEP == 0 {
 				continue
 			}
 			if ksk.KeyTag() != rrsig.KeyTag {
@@ -370,8 +370,8 @@ func (c *CryptoValidator) IsResponseValid(response *dns.Msg, zonename string, ve
 	qname := ""
 	qtype := uint16(0)
 	if len(response.Question) > 0 {
-		qname = response.Question[0].Name
-		qtype = response.Question[0].Qtype
+		qname = response.Question[0].Header().Name
+		qtype = dns.RRToType(response.Question[0])
 	}
 
 	if rcode == dns.RcodeNameError {
@@ -397,9 +397,9 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 			continue
 		}
 		header := group[0].Header()
-		sigs := FindRRSIGs(allRRSIGs, header.Name, header.Rrtype)
+		sigs := FindRRSIGs(allRRSIGs, header.Name, dns.RRToType(group[0]))
 		if len(sigs) == 0 {
-			log.Debugf("SECURITY: no RRSIG for %s/%s", header.Name, dns.TypeToString[header.Rrtype])
+			log.Debugf("SECURITY: no RRSIG for %s/%s", header.Name, dns.TypeToString[dns.RRToType(group[0])])
 			continue
 		}
 
@@ -412,7 +412,7 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 				if err := c.VerifyRRset(group, sig, key); err == nil {
 					anyValidated = true
 					groupValidated = true
-					log.Debugf("SECURITY: validated %s/%s with key_tag=%d", header.Name, dns.TypeToString[header.Rrtype], key.KeyTag())
+					log.Debugf("SECURITY: validated %s/%s with key_tag=%d", header.Name, dns.TypeToString[dns.RRToType(group[0])], key.KeyTag())
 					break
 				}
 			}
@@ -443,11 +443,11 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 				}
 			}
 			if crossZone {
-				log.Debugf("SECURITY: skipping %s/%s — RRSIG signer is not in verified zone", header.Name, dns.TypeToString[header.Rrtype])
+				log.Debugf("SECURITY: skipping %s/%s — RRSIG signer is not in verified zone", header.Name, dns.TypeToString[dns.RRToType(group[0])])
 				continue
 			}
 			return false, fmt.Errorf("%w: no matching DNSKEY for RRSIG over %s/%s (key tags in RRSIGs do not match verified zone keys)",
-				ErrBogusSignature, header.Name, dns.TypeToString[header.Rrtype])
+				ErrBogusSignature, header.Name, dns.TypeToString[dns.RRToType(group[0])])
 		}
 	}
 
@@ -464,7 +464,7 @@ func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {
 			continue
 		}
 		h := rr.Header()
-		key := rrsetKey{name: strings.ToLower(h.Name), rrtype: h.Rrtype}
+		key := rrsetKey{name: strings.ToLower(h.Name), rrtype: dns.RRToType(rr)}
 		groups[key] = append(groups[key], rr)
 	}
 	return groups
@@ -484,8 +484,8 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 	// zone operator's chosen TTL), with a 60-second floor to avoid thrashing.
 	ttl := config.DefaultDNSKeyCacheTTL
 	for _, k := range keys {
-		if k != nil && int(k.Header().Ttl) > 0 && int(k.Header().Ttl) < ttl {
-			ttl = int(k.Header().Ttl)
+		if k != nil && int(k.Header().TTL) > 0 && int(k.Header().TTL) < ttl {
+			ttl = int(k.Header().TTL)
 		}
 	}
 	if ttl < config.DefaultDNSKeyCacheMinTTL {
@@ -504,7 +504,7 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 		if k != nil {
 			entry.Answer = append(entry.Answer, &cache.CompactRecord{
 				Text:    k.String(),
-				OrigTTL: k.Header().Ttl,
+				OrigTTL: k.Header().TTL,
 				Type:    dns.TypeDNSKEY,
 			})
 		}

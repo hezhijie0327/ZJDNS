@@ -3,7 +3,7 @@ package edns
 import (
 	"fmt"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 // EDE info codes as defined in RFC 8914.
@@ -108,15 +108,11 @@ func EDECodeString(code uint16) string {
 
 // ParseEDE extracts the Extended DNS Error option from a DNS message.
 func (h *Handler) ParseEDE(msg *dns.Msg) *EDEOption {
-	if h == nil || msg == nil || msg.Extra == nil {
+	if h == nil || msg == nil {
 		return nil
 	}
-	opt := msg.IsEdns0()
-	if opt == nil {
-		return nil
-	}
-	for _, option := range opt.Option {
-		if ede, ok := option.(*dns.EDNS0_EDE); ok {
+	for _, rr := range msg.Pseudo {
+		if ede, ok := rr.(*dns.EDE); ok {
 			return &EDEOption{
 				InfoCode:  ede.InfoCode,
 				ExtraText: ede.ExtraText,

@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
@@ -94,12 +94,13 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		return nil, fmt.Errorf("client: connection to %s is closed", c.addr)
 	}
 
-	originalID := msg.Id
+	originalID := msg.ID
 	trackingID := uint16(c.nextID.Add(1) & dnsIDMask)
-	msg.Id = trackingID
+	msg.ID = trackingID
 
-	msgData, err := msg.Pack()
-	msg.Id = originalID
+	err := msg.Pack()
+	msgData := msg.Data
+	msg.ID = originalID
 	if err != nil {
 		return nil, fmt.Errorf("client: pack: %w", err)
 	}
@@ -153,7 +154,7 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		if resp == nil {
 			return nil, fmt.Errorf("client: connection to %s closed", c.addr)
 		}
-		resp.Id = originalID
+		resp.ID = originalID
 		return resp, nil
 	case <-ctx.Done():
 		// Only cancel this query, not the connection.
@@ -201,7 +202,8 @@ func (c *Conn) readLoop() {
 		}
 
 		resp := bufpool.DefaultMessagePool.Get()
-		if err := resp.Unpack(body); err != nil {
+		resp.Data = body
+		if err := resp.Unpack(); err != nil {
 			if pooled {
 				bufpool.DefaultBufferPool.Put(bodyBuf)
 			}
@@ -214,7 +216,7 @@ func (c *Conn) readLoop() {
 		}
 
 		c.mu.RLock()
-		pq, ok := c.inflight[resp.Id]
+		pq, ok := c.inflight[resp.ID]
 		c.mu.RUnlock()
 		if ok {
 			select {

@@ -4,15 +4,38 @@ package edns
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"sync/atomic"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/config"
 	"zjdns/internal/ipdetect"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 )
+
+// addrToNetip converts a net.IP to netip.Addr for v2 dns.SUBNET.Address.
+func addrToNetip(ip net.IP) netip.Addr {
+	if ip == nil {
+		return netip.Addr{}
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		addr, _ := netip.AddrFromSlice(ip4)
+		return addr
+	}
+	addr, _ := netip.AddrFromSlice(ip)
+	return addr
+}
+
+// netipToIP converts a netip.Addr back to net.IP for ECSOption compatibility.
+func netipToIP(addr netip.Addr) net.IP {
+	if !addr.IsValid() {
+		return nil
+	}
+	return net.IP(addr.AsSlice())
+}
 
 // Handler manages EDNS(0) options for outgoing DNS queries and response
 // parsing.
@@ -79,54 +102,32 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 		return
 	}
 
-	if len(msg.Extra) > 0 {
-		cleanExtra := make([]dns.RR, 0, len(msg.Extra))
-		for _, rr := range msg.Extra {
-			if rr != nil && rr.Header().Rrtype != dns.TypeOPT {
-				cleanExtra = append(cleanExtra, rr)
-			}
-		}
-		msg.Extra = cleanExtra
-	}
-
-	opt := &dns.OPT{
-		Hdr: dns.RR_Header{
-			Name:   ".",
-			Rrtype: dns.TypeOPT,
-			Class:  pool.UDPBufferSize,
-		},
-	}
-	opt.SetDo()
-
-	var options []dns.EDNS0
+	// Set EDNS flags directly on the message header (v2 API).
+	msg.UDPSize = pool.UDPBufferSize
+	msg.Security = true
 
 	if ecs != nil {
-		options = append(options, &dns.EDNS0_SUBNET{
-			Code:          dns.EDNS0SUBNET,
-			Family:        ecs.Family,
-			SourceNetmask: ecs.SourcePrefix,
-			SourceScope:   DefaultECSScope,
-			Address:       ecs.Address,
+		msg.Pseudo = append(msg.Pseudo, &dns.SUBNET{
+			Family:  ecs.Family,
+			Netmask: ecs.SourcePrefix,
+			Scope:   DefaultECSScope,
+			Address: addrToNetip(ecs.Address),
 		})
 	}
 
 	if cookieStr != "" {
-		options = append(options, &dns.EDNS0_COOKIE{
-			Code:   dns.EDNS0COOKIE,
-			Cookie: cookieStr,
-		})
+		msg.Pseudo = append(msg.Pseudo, &dns.COOKIE{Cookie: cookieStr})
 	}
 
 	if ede != nil {
-		options = append(options, &dns.EDNS0_EDE{
+		msg.Pseudo = append(msg.Pseudo, &dns.EDE{
 			InfoCode:  ede.InfoCode,
 			ExtraText: ede.ExtraText,
 		})
 	}
 
 	if !isRequest && tcpKeepaliveTimeout > 0 {
-		options = append(options, &dns.EDNS0_TCP_KEEPALIVE{
-			Code:    dns.EDNS0TCPKEEPALIVE,
+		msg.Pseudo = append(msg.Pseudo, &dns.TCPKEEPALIVE{
 			Timeout: tcpKeepaliveTimeout,
 		})
 	}
@@ -136,10 +137,7 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 	if isRequest {
 		paddingBlockSize = config.DefaultPaddingRequestBlockSize
 	}
-	options, paddingBytes = addPadding(msg, options, isSecureConnection, paddingBlockSize, clientWantsPadding)
-
-	opt.Option = options
-	msg.Extra = append(msg.Extra, opt)
+	paddingBytes = addPaddingV2(msg, isSecureConnection, paddingBlockSize, clientWantsPadding)
 
 	log.Debugf("EDNS: built OPT secure=%t ecs=%t cookie=%t ede=%t keepalive=%d padding=%d bytes block=%d req=%t wantPad=%t",
 		isSecureConnection, ecs != nil, cookieStr != "", ede != nil, tcpKeepaliveTimeout, paddingBytes, paddingBlockSize, isRequest, clientWantsPadding)

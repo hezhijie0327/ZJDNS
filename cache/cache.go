@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
@@ -106,17 +106,17 @@ func (c *Entry) ShouldPrefetch(thresholdPercent int) bool {
 	return ttl.ShouldPrefetch(c.Timestamp, c.TTL, thresholdPercent)
 }
 
-// BuildCacheKey constructs a deterministic cache key from a DNS question,
-// optional ECS option, and DNSSEC flag.
-func BuildCacheKey(question dns.Question, ecs *config.ECSOption, clientRequestedDNSSEC bool) string {
+// BuildCacheKey constructs a deterministic cache key from a DNS question name,
+// type, class, optional ECS option, and DNSSEC flag.
+func BuildCacheKey(qname string, qtype, qclass uint16, ecs *config.ECSOption, clientRequestedDNSSEC bool) string {
 	var buf strings.Builder
 	buf.Grow(resultBufferCapacity)
 	buf.WriteString(cacheKeyDNSPrefix)
-	buf.WriteString(dnsutil.NormalizeDomain(question.Name))
+	buf.WriteString(dnsutil.NormalizeDomain(qname))
 	buf.WriteByte(byte(config.DefaultCacheKeySeparator))
-	writeUint(&buf, uint64(question.Qtype))
+	writeUint(&buf, uint64(qtype))
 	buf.WriteByte(byte(config.DefaultCacheKeySeparator))
-	writeUint(&buf, uint64(question.Qclass))
+	writeUint(&buf, uint64(qclass))
 	if ecs != nil {
 		buf.WriteString(config.DefaultCacheKeyECSPrefix)
 		buf.WriteString(ecs.Address.String())
@@ -158,7 +158,7 @@ func newCompactRecord(rr dns.RR) *CompactRecord {
 	}
 	// RR field intentionally not stored — expand() re-parses from Text;
 	// storing the original dns.RR pointer would waste memory with no benefit.
-	return &CompactRecord{Text: rr.String(), OrigTTL: rr.Header().Ttl, Type: rr.Header().Rrtype}
+	return &CompactRecord{Text: rr.String(), OrigTTL: rr.Header().TTL, Type: dns.RRToType(rr)}
 }
 
 // ExpandRecords converts a slice of CompactRecords to DNS resource records.
@@ -187,18 +187,18 @@ func processRR(rr dns.RR, value int64, isElapsed bool, includeDNSSEC bool) dns.R
 			return nil
 		}
 	}
-	newRR := dns.Copy(rr)
+	newRR := func() dns.RR { r, _ := dns.New(rr.String()); return r }()
 	if newRR == nil {
 		return nil
 	}
 	if isElapsed {
-		remaining := int64(newRR.Header().Ttl) - value
+		remaining := int64(newRR.Header().TTL) - value
 		if remaining < 0 {
 			remaining = 0
 		}
-		newRR.Header().Ttl = uint32(remaining)
+		newRR.Header().TTL = uint32(remaining)
 	} else if value > 0 {
-		newRR.Header().Ttl = uint32(value)
+		newRR.Header().TTL = uint32(value)
 	}
 	return newRR
 }

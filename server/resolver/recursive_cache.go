@@ -6,7 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/rdata"
 
 	"zjdns/cache"
 	"zjdns/config"
@@ -35,8 +36,8 @@ func addrsToTXTRecords(name string, addrs []string, ttlSeconds int) []dns.RR {
 	records := make([]dns.RR, 0, len(addrs))
 	for _, addr := range addrs {
 		records = append(records, &dns.TXT{
-			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: uint32(ttlSeconds)},
-			Txt: []string{addr},
+			Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: uint32(ttlSeconds)},
+			TXT: rdata.TXT{Txt: []string{addr}},
 		})
 	}
 	return records
@@ -195,11 +196,11 @@ func (r *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 		// latency ordering for normal DNS query responses.
 		typeGroups := make(map[uint16][]dns.RR)
 		for _, r := range sortedRecords {
-			qtype := r.Header().Rrtype
+			qtype := dns.RRToType(r)
 			typeGroups[qtype] = append(typeGroups[qtype], r)
 		}
 		for qtype, typeRecords := range typeGroups {
-			cacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, false)
+			cacheKey := cache.BuildCacheKey(nsName, qtype, dns.ClassINET, nil, false)
 			r.cache.Set(cacheKey, typeRecords, nil, nil, false, nil)
 		}
 	}
@@ -304,8 +305,8 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string) []string {
 // are still returned to avoid triggering expensive re-resolution for NS
 // addresses whose TTL just expired — NS IPs change very rarely.
 func lookupCachedRRs(store cache.Store, name string, qtype uint16) []string {
-	q := dns.Question{Name: name, Qtype: qtype, Qclass: dns.ClassINET}
-	key := cache.BuildCacheKey(q, nil, false)
+	q := Question{Name: name, Qtype: qtype, Qclass: dns.ClassINET}
+	key := cache.BuildCacheKey(q.Name, q.Qtype, q.Qclass, nil, false)
 	entry, found, expired := store.Get(key)
 	if !found || entry == nil || len(entry.Answer) == 0 {
 		return nil

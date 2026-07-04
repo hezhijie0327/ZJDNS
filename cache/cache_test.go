@@ -5,10 +5,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/rdata"
+	"net/netip"
 
 	"zjdns/config"
 )
+
+type testQ struct {
+	Name   string
+	Qtype  uint16
+	Qclass uint16
+}
 
 func testStore() *MemoryCache {
 	return New(config.CacheSettings{Size: config.DefaultCacheSize})
@@ -17,8 +25,8 @@ func testStore() *MemoryCache {
 // ── BuildCacheKey ────────────────────────────────────────────────────────────────
 
 func TestBuildCacheKey_Basic(t *testing.T) {
-	q := dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	key := BuildCacheKey(q, nil, false)
+	q := testQ{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	key := BuildCacheKey(q.Name, q.Qtype, q.Qclass, nil, false)
 	if key == "" {
 		t.Fatal("empty key")
 	}
@@ -28,22 +36,22 @@ func TestBuildCacheKey_Basic(t *testing.T) {
 }
 
 func TestBuildCacheKey_DNSSEC(t *testing.T) {
-	q := dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	keyNo := BuildCacheKey(q, nil, false)
-	keyYes := BuildCacheKey(q, nil, true)
+	q := testQ{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	keyNo := BuildCacheKey(q.Name, q.Qtype, q.Qclass, nil, false)
+	keyYes := BuildCacheKey(q.Name, q.Qtype, q.Qclass, nil, true)
 	if keyNo == keyYes {
 		t.Error("DNSSEC flag should affect cache key")
 	}
 }
 
 func TestBuildCacheKey_ECS(t *testing.T) {
-	q := dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	keyNo := BuildCacheKey(q, nil, false)
-	keyECS := BuildCacheKey(q, &config.ECSOption{
+	q := testQ{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	keyNo := BuildCacheKey(q.Name, q.Qtype, q.Qclass, nil, false)
+	keyECS := BuildCacheKey(q.Name, q.Qtype, q.Qclass, &config.ECSOption{
 		Family:       1,
 		SourcePrefix: 24,
 		ScopePrefix:  0,
-		Address:      netParseIP("192.0.2.0"),
+		Address:      net.IP(netParseIP("192.0.2.0").AsSlice()),
 	}, false)
 	if keyNo == keyECS {
 		t.Error("ECS should affect cache key")
@@ -54,9 +62,9 @@ func TestBuildCacheKey_ECS(t *testing.T) {
 }
 
 func TestBuildCacheKey_DifferentTypes(t *testing.T) {
-	a := dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	aaaa := dns.Question{Name: "example.com.", Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-	if BuildCacheKey(a, nil, false) == BuildCacheKey(aaaa, nil, false) {
+	a := testQ{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	aaaa := testQ{Name: "example.com.", Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
+	if BuildCacheKey(a.Name, a.Qtype, a.Qclass, nil, false) == BuildCacheKey(aaaa.Name, aaaa.Qtype, aaaa.Qclass, nil, false) {
 		t.Error("A and AAAA should have different keys")
 	}
 }
@@ -67,8 +75,8 @@ func TestSet_Get_RoundTrip(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	rr := &dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: netParseIP("192.0.2.1")}
-	key := BuildCacheKey(dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	key := BuildCacheKey("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	mc.Set(key, []dns.RR{rr}, nil, nil, false, nil)
 
 	entry, found, expired := mc.Get(key)
@@ -180,12 +188,12 @@ func TestExpandAndProcessRecords_PreservesTTL(t *testing.T) {
 }
 
 func TestProcessRecords_DNSSECFiltering(t *testing.T) {
-	aRec := &dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: netParseIP("192.0.2.1")}
-	rrsig := &dns.RRSIG{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeRRSIG, Class: dns.ClassINET, Ttl: 300},
-		TypeCovered: dns.TypeA, Algorithm: 8, Labels: 2, OrigTtl: 300,
-		Expiration: uint32(time.Now().Add(1 * time.Hour).Unix()),
-		Inception:  uint32(time.Now().Add(-1 * time.Hour).Unix()),
-		KeyTag:     1234, SignerName: "example.com."}
+	aRec := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	rrsig := &dns.RRSIG{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		RRSIG: rdata.RRSIG{TypeCovered: dns.TypeA, Algorithm: 8, Labels: 2, OrigTTL: 300,
+			Expiration: uint32(time.Now().Add(1 * time.Hour).Unix()),
+			Inception:  uint32(time.Now().Add(-1 * time.Hour).Unix()),
+			KeyTag:     1234, SignerName: "example.com."}}
 	rrs := []dns.RR{aRec, rrsig}
 
 	withDNSSEC := ProcessRecords(rrs, 0, false, true)
@@ -207,8 +215,8 @@ func TestExpandAndProcessRecords_ElapsedTTL(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatal("expected 1 record")
 	}
-	if result[0].Header().Ttl != 200 {
-		t.Errorf("TTL = %d, want 200 (300 - 100 elapsed)", result[0].Header().Ttl)
+	if result[0].Header().TTL != 200 {
+		t.Errorf("TTL = %d, want 200 (300 - 100 elapsed)", result[0].Header().TTL)
 	}
 }
 
@@ -219,8 +227,8 @@ func TestSet_ZeroTTLFloored(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	// Record with TTL=0 should be floored to config.DefaultTTL
-	rr := &dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}, A: netParseIP("192.0.2.1")}
-	key := BuildCacheKey(dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	key := BuildCacheKey("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	mc.Set(key, []dns.RR{rr}, nil, nil, false, nil)
 
 	entry, found, _ := mc.Get(key)
@@ -242,17 +250,17 @@ func TestHasNSECOrNSEC3(t *testing.T) {
 		t.Error("empty authority should return false")
 	}
 
-	aRec := &dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: netParseIP("192.0.2.1")}
+	aRec := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 	if hasNSECOrNSEC3([]dns.RR{aRec}) {
 		t.Error("A record should not trigger NSEC detection")
 	}
 
-	nsec := &dns.NSEC{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: 300}}
+	nsec := &dns.NSEC{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}}
 	if !hasNSECOrNSEC3([]dns.RR{nsec}) {
 		t.Error("NSEC record should be detected")
 	}
 
-	nsec3 := &dns.NSEC3{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeNSEC3, Class: dns.ClassINET, Ttl: 300}}
+	nsec3 := &dns.NSEC3{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}}
 	if !hasNSECOrNSEC3([]dns.RR{nsec3}) {
 		t.Error("NSEC3 record should be detected")
 	}
@@ -268,10 +276,9 @@ func TestNegativeTTLCap_NoSOA(t *testing.T) {
 func TestNegativeTTLCap_SOAMinLower(t *testing.T) {
 	// SOA TTL=900, MINIMUM=86400 → SOA-based cap = 900
 	soa := &dns.SOA{
-		Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 900},
-		Ns:     "ns1.example.com.",
-		Mbox:   "admin.example.com.",
-		Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 86400,
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
+		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 86400},
 	}
 	capTTL := negativeTTLCap([]dns.RR{soa})
 	if capTTL != 900 {
@@ -282,10 +289,9 @@ func TestNegativeTTLCap_SOAMinLower(t *testing.T) {
 func TestNegativeTTLCap_MinimumLower(t *testing.T) {
 	// SOA TTL=86400, MINIMUM=900 → SOA-based cap = 900
 	soa := &dns.SOA{
-		Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 86400},
-		Ns:     "ns1.example.com.",
-		Mbox:   "admin.example.com.",
-		Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 900,
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 86400},
+		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 900},
 	}
 	capTTL := negativeTTLCap([]dns.RR{soa})
 	if capTTL != 900 {
@@ -297,10 +303,9 @@ func TestNegativeTTLCap_ExceedsDefaultMax(t *testing.T) {
 	// SOA TTL=86400, MINIMUM=172800 → SOA-based cap = 86400,
 	// but DefaultMaxNegativeTTL = 10800 should win.
 	soa := &dns.SOA{
-		Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 86400},
-		Ns:     "ns1.example.com.",
-		Mbox:   "admin.example.com.",
-		Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 172800,
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 86400},
+		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 172800},
 	}
 	capTTL := negativeTTLCap([]dns.RR{soa})
 	if capTTL != config.DefaultMaxNegativeTTL {
@@ -311,12 +316,11 @@ func TestNegativeTTLCap_ExceedsDefaultMax(t *testing.T) {
 func TestNegativeTTLCap_SOAWithNSEC(t *testing.T) {
 	// Realistic negative response: NSEC + SOA in authority.
 	soa := &dns.SOA{
-		Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 900},
-		Ns:     "ns1.example.com.",
-		Mbox:   "admin.example.com.",
-		Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600,
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
+		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
 	}
-	nsec := &dns.NSEC{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: 600}}
+	nsec := &dns.NSEC{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 600}}
 	capTTL := negativeTTLCap([]dns.RR{soa, nsec})
 	// min(SOA TTL=900, Minttl=600) = 600
 	if capTTL != 600 {
@@ -331,16 +335,15 @@ func TestSet_NegativeTTLCapped(t *testing.T) {
 	// Negative response with NSEC (TTL=86400) and SOA (TTL=900, Minttl=600).
 	// The cache entry TTL should be capped at 600, not 86400.
 	soa := &dns.SOA{
-		Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 900},
-		Ns:     "ns1.example.com.",
-		Mbox:   "admin.example.com.",
-		Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600,
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
+		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
 	}
 	nsec := &dns.NSEC{
-		Hdr:        dns.RR_Header{Name: "alpha.example.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: 86400},
-		NextDomain: "zulu.example.com.",
+		Hdr:  dns.Header{Name: "alpha.example.com.", Class: dns.ClassINET, TTL: 86400},
+		NSEC: rdata.NSEC{NextDomain: "zulu.example.com."},
 	}
-	key := BuildCacheKey(dns.Question{Name: "beta.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
+	key := BuildCacheKey("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	mc.Set(key, nil, []dns.RR{soa, nsec}, nil, false, nil)
 
 	entry, found, _ := mc.Get(key)
@@ -359,8 +362,8 @@ func TestSet_NegativeTTLUncapped_NoNSEC(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	// Positive response (no NSEC/NSEC3) — should NOT be capped.
-	aRec := &dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: netParseIP("192.0.2.1")}
-	key := BuildCacheKey(dns.Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
+	aRec := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	key := BuildCacheKey("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	mc.Set(key, []dns.RR{aRec}, nil, nil, false, nil)
 
 	entry, found, _ := mc.Get(key)
@@ -374,10 +377,10 @@ func TestSet_NegativeTTLUncapped_NoNSEC(t *testing.T) {
 
 // ── Helper ─────────────────────────────────────────────────────────────────────────
 
-func netParseIP(s string) net.IP {
-	ip := net.ParseIP(s)
-	if ip == nil {
-		return nil
+func netParseIP(s string) netip.Addr {
+	addr, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Addr{}
 	}
-	return ip.To4()
+	return addr
 }

@@ -2,14 +2,16 @@ package security
 
 import (
 	"crypto/ecdsa"
-	"net"
+	"net/netip"
 	"testing"
 	"time"
 
 	"zjdns/cache"
 	"zjdns/config"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 )
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
@@ -17,10 +19,8 @@ import (
 // genTestKey generates an ECDSA P-256 key pair + DNSKEY + private key for signing.
 func genTestKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 	dnskey := &dns.DNSKEY{
-		Hdr:       dns.RR_Header{Name: dns.Fqdn(zone), Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 3600},
-		Flags:     flags,
-		Protocol:  3,
-		Algorithm: dns.ECDSAP256SHA256,
+		Hdr:    dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		DNSKEY: rdata.DNSKEY{Flags: flags, Protocol: 3, Algorithm: dns.ECDSAP256SHA256},
 	}
 	priv, _ := dnskey.Generate(256)
 	return dnskey, priv.(*ecdsa.PrivateKey)
@@ -29,41 +29,41 @@ func genTestKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 // signRRset signs an RRset with the given private key and returns the RRSIG.
 func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uint16) *dns.RRSIG {
 	rrsig := &dns.RRSIG{
-		Hdr: dns.RR_Header{
-			Name:   dns.Fqdn(signer),
-			Rrtype: dns.TypeRRSIG,
-			Class:  dns.ClassINET,
-			Ttl:    3600,
+		Hdr: dns.Header{
+			Name:  dnsutilv2.Fqdn(signer),
+			Class: dns.ClassINET,
+			TTL:   3600,
 		},
-		TypeCovered: rrset[0].Header().Rrtype,
-		Algorithm:   dns.ECDSAP256SHA256,
-		Labels:      uint8(dns.CountLabel(rrset[0].Header().Name)),
-		OrigTtl:     rrset[0].Header().Ttl,
-		Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()),
-		Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()),
-		KeyTag:      keyTag,
-		SignerName:  dns.Fqdn(signer),
+		RRSIG: rdata.RRSIG{
+			TypeCovered: dns.RRToType(rrset[0]),
+			Algorithm:   dns.ECDSAP256SHA256,
+			Labels:      uint8(dnsutilv2.Labels(rrset[0].Header().Name)),
+			OrigTTL:     rrset[0].Header().TTL,
+			Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()),
+			Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()),
+			KeyTag:      keyTag,
+			SignerName:  dnsutilv2.Fqdn(signer),
+		},
 	}
-	_ = rrsig.Sign(priv, rrset)
+	_ = rrsig.Sign(priv, rrset, &dns.SignOption{})
 	return rrsig
 }
 
-// aRec is a helper to create an A record with a net.IP.
+// aRec is a helper to create an A record with an IP address.
 func aRec(name string, ip string) *dns.A {
 	return &dns.A{
-		Hdr: dns.RR_Header{Name: dns.Fqdn(name), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
-		A:   net.IP{net.ParseIP(ip).To4()[0], net.ParseIP(ip).To4()[1], net.ParseIP(ip).To4()[2], net.ParseIP(ip).To4()[3]},
+		Hdr: dns.Header{Name: dnsutilv2.Fqdn(name), Class: dns.ClassINET, TTL: 300},
+		A:   rdata.A{Addr: netip.MustParseAddr(ip)},
 	}
 }
 
-// ── VerifyRRset ───────────────────────────────────────────────────────────────
+// ── VerifyRRset ──────────────────────────────────────────────────────────────
 
 func TestVerifyRRset_ValidSignature(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "test.example.com"
-	ksk, priv := genTestKey(zone, dns.SEP|dns.ZONE)
+	ksk, priv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
 
-	// Create an A record + sign it
 	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
 	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag())
 
@@ -75,8 +75,8 @@ func TestVerifyRRset_ValidSignature(t *testing.T) {
 func TestVerifyRRset_WrongKey(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "test.example.com"
-	ksk, priv := genTestKey(zone, dns.SEP|dns.ZONE)
-	wrongKey, _ := genTestKey(zone, dns.SEP|dns.ZONE) // different key pair
+	ksk, priv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	wrongKey, _ := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
 
 	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
 	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag())
@@ -89,35 +89,36 @@ func TestVerifyRRset_WrongKey(t *testing.T) {
 func TestVerifyRRset_ExpiredSignature(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "test.example.com"
-	ksk, priv := genTestKey(zone, dns.SEP|dns.ZONE)
+	ksk, priv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
 
 	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
 	rrsig := &dns.RRSIG{
-		Hdr:         dns.RR_Header{Name: dns.Fqdn(zone), Rrtype: dns.TypeRRSIG, Class: dns.ClassINET, Ttl: 300},
-		TypeCovered: dns.TypeA,
-		Algorithm:   dns.ECDSAP256SHA256,
-		Labels:      3,
-		OrigTtl:     300,
-		Expiration:  uint32(time.Now().Add(-48 * time.Hour).Unix()), // expired!
-		Inception:   uint32(time.Now().Add(-72 * time.Hour).Unix()),
-		KeyTag:      ksk.KeyTag(),
-		SignerName:  dns.Fqdn(zone),
+		Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		RRSIG: rdata.RRSIG{
+			TypeCovered: dns.TypeA,
+			Algorithm:   dns.ECDSAP256SHA256,
+			Labels:      3,
+			OrigTTL:     300,
+			Expiration:  uint32(time.Now().Add(-48 * time.Hour).Unix()),
+			Inception:   uint32(time.Now().Add(-72 * time.Hour).Unix()),
+			KeyTag:      ksk.KeyTag(),
+			SignerName:  dnsutilv2.Fqdn(zone),
+		},
 	}
-	_ = rrsig.Sign(priv, rrset)
+	_ = rrsig.Sign(priv, rrset, &dns.SignOption{})
 
 	if err := cv.VerifyRRset(rrset, rrsig, ksk); err == nil {
 		t.Error("expired signature should fail")
 	}
 }
 
-// ── VerifyDelegationDS ────────────────────────────────────────────────────────
+// ── VerifyDelegationDS ───────────────────────────────────────────────────────
 
 func TestVerifyDelegationDS_Matching(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	childZone := "child.example.com"
-	ksk, _ := genTestKey(childZone, dns.SEP|dns.ZONE)
+	ksk, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
 
-	// Parent computes DS from child's KSK
 	ds := ksk.ToDS(dns.SHA256)
 	if ds == nil {
 		t.Fatal("ToDS returned nil")
@@ -135,10 +136,9 @@ func TestVerifyDelegationDS_Matching(t *testing.T) {
 func TestVerifyDelegationDS_Mismatch(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	childZone := "child.example.com"
-	ksk, _ := genTestKey(childZone, dns.SEP|dns.ZONE)
-	otherKey, _ := genTestKey("other.example.com", dns.SEP|dns.ZONE)
+	ksk, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
+	otherKey, _ := genTestKey("other.example.com", dns.FlagSEP|dns.FlagZONE)
 
-	// DS computed from ksk, but we present otherKey — should fail
 	ds := ksk.ToDS(dns.SHA256)
 
 	_, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{otherKey})
@@ -150,18 +150,16 @@ func TestVerifyDelegationDS_Mismatch(t *testing.T) {
 func TestVerifyDelegationDS_SkipsNonSEP(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	childZone := "child.example.com"
-	zsk, _ := genTestKey(childZone, dns.ZONE) // ZSK, no SEP flag
-	ksk, _ := genTestKey(childZone, dns.SEP|dns.ZONE)
+	zsk, _ := genTestKey(childZone, dns.FlagZONE)
+	ksk, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
 
-	// DS from KSK
 	ds := ksk.ToDS(dns.SHA256)
 
-	// Present both ZSK and KSK; DS should match KSK, not ZSK
 	matchedKey, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{zsk, ksk})
 	if err != nil {
 		t.Errorf("DS should match KSK even when ZSK present: %v", err)
 	}
-	if matchedKey.Flags&dns.SEP == 0 {
+	if matchedKey.Flags&dns.FlagSEP == 0 {
 		t.Error("matched key should have SEP flag set")
 	}
 }
@@ -171,8 +169,8 @@ func TestVerifyDelegationDS_SkipsNonSEP(t *testing.T) {
 func TestSelfVerifyDNSKEY_Valid(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "example.net"
-	ksk, kskPriv := genTestKey(zone, dns.SEP|dns.ZONE)
-	zsk, _ := genTestKey(zone, dns.ZONE)
+	ksk, kskPriv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, _ := genTestKey(zone, dns.FlagZONE)
 
 	dnskeys := []*dns.DNSKEY{ksk, zsk}
 	rrset := make([]dns.RR, len(dnskeys))
@@ -189,16 +187,15 @@ func TestSelfVerifyDNSKEY_Valid(t *testing.T) {
 func TestSelfVerifyDNSKEY_ForeignSignature(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "example.net"
-	ksk, _ := genTestKey(zone, dns.SEP|dns.ZONE)
-	zsk, _ := genTestKey(zone, dns.ZONE)
-	wrongKey, wrongPriv := genTestKey("attacker.com", dns.SEP|dns.ZONE)
+	ksk, _ := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, _ := genTestKey(zone, dns.FlagZONE)
+	wrongKey, wrongPriv := genTestKey("attacker.com", dns.FlagSEP|dns.FlagZONE)
 
 	dnskeys := []*dns.DNSKEY{ksk, zsk}
 	rrset := make([]dns.RR, len(dnskeys))
 	for i, k := range dnskeys {
 		rrset[i] = k
 	}
-	// Signed by attacker's key, not the zone's KSK
 	rrsig := signRRset(rrset, zone, wrongPriv, wrongKey.KeyTag())
 
 	if err := cv.SelfVerifyDNSKEY(dnskeys, []*dns.RRSIG{rrsig}); err == nil {
@@ -209,7 +206,7 @@ func TestSelfVerifyDNSKEY_ForeignSignature(t *testing.T) {
 func TestSelfVerifyDNSKEY_NoSEPKey(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "example.net"
-	zsk, zskPriv := genTestKey(zone, dns.ZONE) // ZSK only, no KSK
+	zsk, zskPriv := genTestKey(zone, dns.FlagZONE)
 
 	dnskeys := []*dns.DNSKEY{zsk}
 	rrset := make([]dns.RR, len(dnskeys))
@@ -218,7 +215,6 @@ func TestSelfVerifyDNSKEY_NoSEPKey(t *testing.T) {
 	}
 	rrsig := signRRset(rrset, zone, zskPriv, zsk.KeyTag())
 
-	// ZSK can sign, but SelfVerifyDNSKEY only checks KSK (SEP bit)
 	if err := cv.SelfVerifyDNSKEY(dnskeys, []*dns.RRSIG{rrsig}); err == nil {
 		t.Error("self-verify should fail when no KSK (SEP) is present")
 	}
@@ -229,21 +225,19 @@ func TestSelfVerifyDNSKEY_NoSEPKey(t *testing.T) {
 func TestIsResponseValid_SignedAnswer(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "signed.example.com"
-	ksk, _ := genTestKey(zone, dns.SEP|dns.ZONE)
-	zsk, zskPriv := genTestKey(zone, dns.ZONE)
+	ksk, _ := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, zskPriv := genTestKey(zone, dns.FlagZONE)
 
-	// Build a signed A record answer
 	aRec := &dns.A{
-		Hdr: dns.RR_Header{Name: dns.Fqdn(zone), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
-		A:   aRec(zone, "203.0.113.1").A,
+		Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		A:   rdata.A{Addr: netip.MustParseAddr("203.0.113.1")},
 	}
 	rrsig := signRRset([]dns.RR{aRec}, zone, zskPriv, zsk.KeyTag())
 
 	response := &dns.Msg{
-		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess},
-		Answer: []dns.RR{aRec, rrsig},
+		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
+		Answer:    []dns.RR{aRec, rrsig},
 	}
-	// Both ZSK and KSK as verified keys (ZSK signed the A record)
 	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk, ksk})
 	if err != nil {
 		t.Errorf("IsResponseValid should pass: %v", err)
@@ -256,17 +250,16 @@ func TestIsResponseValid_SignedAnswer(t *testing.T) {
 func TestIsResponseValid_UnsignedAnswer(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "unsigned.example.com"
-	_, _ = genTestKey(zone, dns.SEP|dns.ZONE)
-	zsk, _ := genTestKey(zone, dns.ZONE)
+	_, _ = genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, _ := genTestKey(zone, dns.FlagZONE)
 
 	aRec := &dns.A{
-		Hdr: dns.RR_Header{Name: dns.Fqdn(zone), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
-		A:   aRec(zone, "203.0.113.1").A,
+		Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		A:   rdata.A{Addr: netip.MustParseAddr("203.0.113.1")},
 	}
-	// No RRSIG present
 	response := &dns.Msg{
-		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess},
-		Answer: []dns.RR{aRec},
+		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
+		Answer:    []dns.RR{aRec},
 	}
 	verified, _ := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if verified {
@@ -277,8 +270,8 @@ func TestIsResponseValid_UnsignedAnswer(t *testing.T) {
 func TestIsResponseValid_NoDNSKEYs(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	response := &dns.Msg{
-		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess},
-		Answer: []dns.RR{aRec("test.example.com", "192.0.2.1")},
+		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
+		Answer:    []dns.RR{aRec("test.example.com", "192.0.2.1")},
 	}
 	verified, _ := cv.IsResponseValid(response, "test.example.com", nil)
 	if verified {
@@ -289,15 +282,15 @@ func TestIsResponseValid_NoDNSKEYs(t *testing.T) {
 // ── NSEC / NSEC3 ─────────────────────────────────────────────────────────────
 
 func TestFindNSEC(t *testing.T) {
-	nsec := &dns.NSEC{Hdr: dns.RR_Header{Name: "a.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET}}
-	rrs := []dns.RR{nsec, &dns.A{Hdr: dns.RR_Header{Name: "a.com.", Rrtype: dns.TypeA, Class: dns.ClassINET}}}
+	nsec := &dns.NSEC{Hdr: dns.Header{Name: "a.com.", Class: dns.ClassINET}}
+	rrs := []dns.RR{nsec, &dns.A{Hdr: dns.Header{Name: "a.com.", Class: dns.ClassINET}}}
 	if len(findNSEC(rrs)) != 1 {
 		t.Error("should find NSEC record")
 	}
 }
 
 func TestFindNSEC3(t *testing.T) {
-	nsec3 := &dns.NSEC3{Hdr: dns.RR_Header{Name: "abc.a.com.", Rrtype: dns.TypeNSEC3, Class: dns.ClassINET}}
+	nsec3 := &dns.NSEC3{Hdr: dns.Header{Name: "abc.a.com.", Class: dns.ClassINET}}
 	rrs := []dns.RR{nsec3}
 	if len(findNSEC3(rrs)) != 1 {
 		t.Error("should find NSEC3 record")
@@ -307,8 +300,8 @@ func TestFindNSEC3(t *testing.T) {
 func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "signed.example.com"
-	_, _ = genTestKey(zone, dns.SEP|dns.ZONE)
-	zsk, zskPriv := genTestKey(zone, dns.ZONE)
+	_, _ = genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, zskPriv := genTestKey(zone, dns.FlagZONE)
 
 	// Query for a name that doesn't exist. The NSEC range
 	// [aaaa.signed.example.com., zzzz.signed.example.com.) covers
@@ -317,17 +310,16 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 	qtype := dns.TypeA
 
 	nsec := &dns.NSEC{
-		Hdr:        dns.RR_Header{Name: "aaaa.signed.example.com.", Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: 300},
-		NextDomain: "zzzz.signed.example.com.",
-		TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC},
+		Hdr:  dns.Header{Name: "aaaa.signed.example.com.", Class: dns.ClassINET, TTL: 300},
+		NSEC: rdata.NSEC{NextDomain: "zzzz.signed.example.com.", TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC}},
 	}
 	rrsig := signRRset([]dns.RR{nsec}, zone, zskPriv, zsk.KeyTag())
 
 	response := &dns.Msg{
-		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeNameError},
-		Ns:     []dns.RR{nsec, rrsig},
+		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeNameError},
+		Ns:        []dns.RR{nsec, rrsig},
 	}
-	response.SetQuestion(dns.Fqdn(qname), qtype)
+	dnsutilv2.SetQuestion(response, dnsutilv2.Fqdn(qname), qtype)
 	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if err != nil {
 		t.Errorf("NXDOMAIN with signed NSEC should pass: %v", err)
@@ -347,9 +339,8 @@ func TestFullDNSSECChain(t *testing.T) {
 	cv := NewCryptoValidator(testCache())
 	childZone := "child.example.net"
 
-	// Parent has KSK, creates DS for child
-	childKSK, _ := genTestKey(childZone, dns.SEP|dns.ZONE)
-	childZSK, childZSKPriv := genTestKey(childZone, dns.ZONE)
+	childKSK, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
+	childZSK, childZSKPriv := genTestKey(childZone, dns.FlagZONE)
 	ds := childKSK.ToDS(dns.SHA256)
 
 	// Step 1: verify child DNSKEY against parent DS
@@ -364,13 +355,13 @@ func TestFullDNSSECChain(t *testing.T) {
 
 	// Step 2: verify a signed A record against child's verified DNSKEYs
 	aRec := &dns.A{
-		Hdr: dns.RR_Header{Name: dns.Fqdn(childZone), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
-		A:   aRec(childZone, "198.51.100.1").A,
+		Hdr: dns.Header{Name: dnsutilv2.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
+		A:   rdata.A{Addr: netip.MustParseAddr("198.51.100.1")},
 	}
 	rrsig := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag())
 	response := &dns.Msg{
-		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess},
-		Answer: []dns.RR{aRec, rrsig},
+		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
+		Answer:    []dns.RR{aRec, rrsig},
 	}
 
 	verifiedKeys := cv.ZoneKeys(childZone)
@@ -386,20 +377,18 @@ func TestFullDNSSECChain(t *testing.T) {
 	}
 }
 
-// ── Edge cases ────────────────────────────────────────────────────────────────
+// ── Edge cases ───────────────────────────────────────────────────────────────
 
 func TestDNSSEC_BogusDelegation(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	childZone := "bogus.example.com"
 
-	// Parent creates DS from one KSK
-	realKSK, _ := genTestKey(childZone, dns.SEP|dns.ZONE)
+	realKSK, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
 	ds := realKSK.ToDS(dns.SHA256)
 
 	// Child presents a DIFFERENT KSK (not matching the DS)
-	fakeKSK, _ := genTestKey(childZone, dns.SEP|dns.ZONE)
+	fakeKSK, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
 
-	// DS→DNSKEY should FAIL — this is a bogus delegation
 	_, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{fakeKSK})
 	if err == nil {
 		t.Error("bogus delegation: DS from parent must not match a different child KSK")
@@ -416,38 +405,32 @@ func TestIsResponseValid_MixedRRsetWithForeignRRSIG(t *testing.T) {
 	parentZone := "parent.example.com"
 	childZone := "child.parent.example.com"
 
-	// Parent zone keys
-	parentZSK, parentZSKPriv := genTestKey(parentZone, dns.ZONE)
-
-	// Child zone has DIFFERENT keys — parent cannot verify child's RRSIGs
-	childZSK, childZSKPriv := genTestKey(childZone, dns.ZONE)
+	parentZSK, parentZSKPriv := genTestKey(parentZone, dns.FlagZONE)
+	childZSK, childZSKPriv := genTestKey(childZone, dns.FlagZONE)
 
 	// Build a response that mimics a typical zone-cut scenario:
 	// CNAME record signed by parent zone (valid) +
 	// A record signed by child zone (parent can't verify this RRSIG)
 	cnameRec := &dns.CNAME{
-		Hdr:    dns.RR_Header{Name: dns.Fqdn("query.parent.example.com"), Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 300},
-		Target: dns.Fqdn("target.child.parent.example.com"),
+		Hdr:   dns.Header{Name: dnsutilv2.Fqdn("query.parent.example.com"), Class: dns.ClassINET, TTL: 300},
+		CNAME: rdata.CNAME{Target: dnsutilv2.Fqdn("target.child.parent.example.com")},
 	}
 	cnameRRSIG := signRRset([]dns.RR{cnameRec}, parentZone, parentZSKPriv, parentZSK.KeyTag())
 
 	aRec := &dns.A{
-		Hdr: dns.RR_Header{Name: dns.Fqdn("target.child.parent.example.com"), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300},
-		A:   aRec("target.child.parent.example.com", "192.0.2.1").A,
+		Hdr: dns.Header{Name: dnsutilv2.Fqdn("target.child.parent.example.com"), Class: dns.ClassINET, TTL: 300},
+		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
 	}
-	// Signed by child zone's key — parent zone keys can't verify this
 	aRRSIG := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag())
 
 	response := &dns.Msg{
-		MsgHdr: dns.MsgHdr{Rcode: dns.RcodeSuccess},
-		Answer: []dns.RR{cnameRec, cnameRRSIG, aRec, aRRSIG},
+		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
+		Answer:    []dns.RR{cnameRec, cnameRRSIG, aRec, aRRSIG},
 	}
 
 	// Validate with ONLY parent zone keys.
 	// The CNAME RRSIG should validate, but the A RRSIG comes from child zone
 	// whose key is NOT in the verified set.
-	// validateAnswerSection must return an error because the A record's RRSIG
-	// cannot be verified — this signals a zone cut to the caller.
 	verified, err := cv.IsResponseValid(response, parentZone, []*dns.DNSKEY{parentZSK})
 	if err == nil {
 		t.Error("IsResponseValid should return error when an RRset has RRSIGs that don't match any verified DNSKEY")
@@ -456,5 +439,3 @@ func TestIsResponseValid_MixedRRsetWithForeignRRSIG(t *testing.T) {
 		t.Error("should not claim validated when one RRset's RRSIG can't be verified")
 	}
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────────────

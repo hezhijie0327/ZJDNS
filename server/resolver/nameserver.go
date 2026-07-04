@@ -11,7 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 	"golang.org/x/sync/errgroup"
 
 	"zjdns/cache"
@@ -23,7 +24,7 @@ import (
 	"zjdns/server/security"
 )
 
-func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question dns.Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *security.Detector) (*dns.Msg, security.Verdict, error) {
+func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *security.Detector) (*dns.Msg, security.Verdict, error) {
 	if len(nameservers) == 0 {
 		return nil, security.VerdictClean, errors.New("no nameservers")
 	}
@@ -217,7 +218,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				return nil
 			}
 
-			nsName := dns.Fqdn(nsRecord.Ns)
+			nsName := dnsutilv2.Fqdn(nsRecord.Ns)
 
 			// Try cache first — records may already be latency-probed.
 			cachedAddrs := r.lookupNSAddrsFromCache(nsName)
@@ -239,7 +240,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			go func() {
 				defer dnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
-				aQuestion := dns.Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}
+				aQuestion := Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}
 				ans, _, extra, _, _, _, _, err := r.resolve(queryCtx, aQuestion, nil, depth+1, forceTCP)
 				if err != nil {
 					return
@@ -263,7 +264,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			go func() {
 				defer dnsutil.HandlePanic("Resolve NS AAAA")
 				defer wg.Done()
-				aaaaQuestion := dns.Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
+				aaaaQuestion := Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
 				ans, _, _, _, _, _, _, err := r.resolve(queryCtx, aaaaQuestion, nil, depth+1, forceTCP)
 				if err != nil {
 					return
@@ -288,11 +289,11 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			// The async latency probe below reorders them later for
 			// latency-optimized cache hits.
 			if r.cache != nil && len(ansARecords) > 0 {
-				aCacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false)
+				aCacheKey := cache.BuildCacheKey(nsName, dns.TypeA, dns.ClassINET, nil, false)
 				r.cache.Set(aCacheKey, ansARecords, nil, nil, false, nil)
 			}
 			if r.cache != nil && len(ansAAAARecords) > 0 {
-				aaaaCacheKey := cache.BuildCacheKey(dns.Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}, nil, false)
+				aaaaCacheKey := cache.BuildCacheKey(nsName, dns.TypeAAAA, dns.ClassINET, nil, false)
 				r.cache.Set(aaaaCacheKey, ansAAAARecords, nil, nil, false, nil)
 			}
 
@@ -411,12 +412,12 @@ func isEqualFoldTrimDot(a, b string) bool {
 
 // retryWithoutEDNS attempts a query without EDNS options and sends the result
 // to resultChan. Used as a FORMERR fallback per RFC 6891 §6.2.2.
-func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question dns.Question, nsAddr string, detector *security.Detector, currentDomain, normalizedQname string, hijackRejected *atomic.Bool) {
+func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector *security.Detector, currentDomain, normalizedQname string, hijackRejected *atomic.Bool) {
 	log.Debugf("RECURSION: ns=%s FORMERR, retrying without EDNS for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
 
 	bareMsg := pool.DefaultMessagePool.Get()
 	defer pool.DefaultMessagePool.Put(bareMsg)
-	bareMsg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
+	dnsutilv2.SetQuestion(bareMsg, dnsutilv2.Fqdn(question.Name), question.Qtype)
 	bareMsg.RecursionDesired = true
 
 	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)

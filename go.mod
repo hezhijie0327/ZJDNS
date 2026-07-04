@@ -3,7 +3,7 @@ module zjdns
 go 1.26.4
 
 require (
-	github.com/miekg/dns v1.1.73-0.20260622091530-fa041eedc7a8
+	codeberg.org/miekg/dns v0.6.84-0.20260703045444-a041bf0cea90
 	github.com/quic-go/quic-go v0.60.1-0.20260629040301-af4bd46e551d
 	gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246
 	golang.org/x/net v0.56.0
@@ -17,7 +17,6 @@ require (
 	github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
 	github.com/emmansun/gmsm v0.44.0 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/klauspost/compress v1.19.0 // indirect
 	github.com/pmorjan/kmod v1.1.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
@@ -29,8 +28,6 @@ require (
 	gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
-	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
-	golang.org/x/tools v0.47.0 // indirect
 )

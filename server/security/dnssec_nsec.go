@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 
 	"zjdns/config"
 )
@@ -153,7 +154,7 @@ func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) s
 		}
 	}
 	// Normalize: lowercase, fully qualified, wire-format label encoding.
-	name = strings.ToLower(dns.Fqdn(name))
+	name = strings.ToLower(dnsutilv2.Fqdn(name))
 	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
 	var wire []byte
 	for _, label := range labels {

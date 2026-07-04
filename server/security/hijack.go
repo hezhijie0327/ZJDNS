@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -89,10 +89,10 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 		if dnsutil.NormalizeDomain(rr.Header().Name) != n {
 			continue
 		}
-		if v := d.classify(z, n, rr.Header().Rrtype); v != VerdictClean {
+		if v := d.classify(z, n, dns.RRToType(rr)); v != VerdictClean {
 			if v == VerdictHijack {
 				log.Debugf("SECURITY: hijack detected from %s: %s record for '%s'",
-					zone, dns.TypeToString[rr.Header().Rrtype], queryName)
+					zone, dns.TypeToString[dns.RRToType(rr)], queryName)
 			}
 			return v
 		}
@@ -165,7 +165,7 @@ func (d *Detector) IsHijackedByTLD(response *dns.Msg, queryName string) bool {
 		if dnsutil.NormalizeDomain(rr.Header().Name) != n {
 			continue
 		}
-		switch rr.Header().Rrtype {
+		switch dns.RRToType(rr) {
 		case dns.TypeA, dns.TypeAAAA:
 			return true
 		}

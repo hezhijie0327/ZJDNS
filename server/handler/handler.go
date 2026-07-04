@@ -9,7 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 	"golang.org/x/sync/errgroup"
 
 	"zjdns/cache"
@@ -23,6 +24,13 @@ import (
 	"zjdns/server/resolver"
 	"zjdns/stats"
 )
+
+// Question is a DNS question compatible with both v1 and v2 dns packages.
+type Question struct {
+	Name   string
+	Qtype  uint16
+	Qclass uint16
+}
 
 // queryMetrics bundles the per-query state needed for deferred metric
 // recording. Using a struct avoids a 13-variable closure heap escape on every
@@ -54,7 +62,7 @@ type queryResult struct {
 // LatencyProber is the interface for latency-probing cache entries after
 // successful resolution.
 type LatencyProber interface {
-	Start(question dns.Question, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
+	Start(qname string, qtype uint16, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
 }
 
 // Handler processes DNS queries through the caching and resolution pipeline.
@@ -159,10 +167,10 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 }
 
 // BuildQueryMessage constructs an outbound DNS query message for the resolver.
-func (h *Handler) BuildQueryMessage(question dns.Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {
+func (h *Handler) BuildQueryMessage(question Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {
 	msg := pool.DefaultMessagePool.Get()
 
-	msg.SetQuestion(dns.Fqdn(question.Name), question.Qtype)
+	dnsutilv2.SetQuestion(msg, dnsutilv2.Fqdn(question.Name), question.Qtype)
 	msg.RecursionDesired = recursionDesired
 
 	if h.edns != nil {
@@ -194,7 +202,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	if req == nil || len(req.Question) == 0 {
 		msg := pool.DefaultMessagePool.Get()
 		if req != nil {
-			msg.SetReply(req)
+			dnsutilv2.SetReply(msg, req)
 		} else {
 			msg.Response = true
 		}
@@ -202,7 +210,11 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		return msg
 	}
 
-	question := req.Question[0]
+	question := Question{
+		Name:   req.Question[0].Header().Name,
+		Qtype:  dns.RRToType(req.Question[0]),
+		Qclass: req.Question[0].Header().Class,
+	}
 
 	if clientIP != nil {
 		log.Debugf("QUERY: client IP=%s query=%s type=%s", clientIP.String(), question.Name, dns.TypeToString[question.Qtype])
@@ -216,7 +228,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		question.Qtype == dns.TypeAXFR || question.Qtype == dns.TypeIXFR ||
 		!dnsutil.IsValidDomainLabels(question.Name) {
 		msg := pool.DefaultMessagePool.Get()
-		msg.SetReply(req)
+		dnsutilv2.SetReply(msg, req)
 		msg.Rcode = dns.RcodeRefused
 
 		var ede *edns.EDEOption
@@ -243,11 +255,11 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 
 		if rewriteResult.ShouldRewrite {
 			m.rewrote = true
-			log.Debugf("REWRITE: matched rule for %s -> domain=%s responseCode=%d records=%d additional=%d", question.Name, rewriteResult.Domain, rewriteResult.ResponseCode, len(rewriteResult.Records), len(rewriteResult.Additional))
-			if rewriteResult.ResponseCode != dns.RcodeSuccess {
-				log.Debugf("RESULT: %s %s | rcode=%s, blocked by rewrite rule", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[rewriteResult.ResponseCode])
+			log.Debugf("REWRITE: matched rule for %s -> domain=%s responseCode=%d records=%d additional=%d", question.Name, rewriteResult.Domain, uint16(rewriteResult.ResponseCode), len(rewriteResult.Records), len(rewriteResult.Additional))
+			if uint16(rewriteResult.ResponseCode) != dns.RcodeSuccess {
+				log.Debugf("RESULT: %s %s | rcode=%s, blocked by rewrite rule", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[uint16(rewriteResult.ResponseCode)])
 				response := h.buildResponse(req)
-				response.Rcode = rewriteResult.ResponseCode
+				response.Rcode = uint16(rewriteResult.ResponseCode)
 
 				ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
 				h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
@@ -258,6 +270,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 			if len(rewriteResult.Records) > 0 {
 				elapsed := ttl.Elapsed(rewriteResult.CreatedAt)
 				response := h.buildResponse(req)
+				// rewrite.Result uses v2 dns.RR; convert back to v1 for response.
 				response.Answer = ttl.DeductElapsedCyclical(rewriteResult.Records, elapsed)
 				response.Rcode = dns.RcodeSuccess
 				if len(rewriteResult.Additional) > 0 {
@@ -280,11 +293,9 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	var ecsOpt *edns.ECSOption
 	var cookieOpt *edns.CookieOption
 
-	if opt := req.IsEdns0(); opt != nil {
-		clientRequestedDNSSEC = opt.Do()
-		ecsOpt = h.edns.ParseFromDNS(req)
-		cookieOpt = h.edns.ParseCookie(req)
-	}
+	clientRequestedDNSSEC = req.Security
+	ecsOpt = h.edns.ParseFromDNS(req)
+	cookieOpt = h.edns.ParseCookie(req)
 
 	// Early DNS Cookie validation (RFC 7873): reject queries with an invalid
 	// server cookie before spending CPU on resolution. This prevents an attacker
@@ -307,7 +318,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		ecsOpt = h.edns.ECSForQType(question.Qtype)
 	}
 
-	cacheKey := cache.BuildCacheKey(question, ecsOpt, clientRequestedDNSSEC)
+	cacheKey := cache.BuildCacheKey(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC)
 
 	if entry, found, isExpired := h.cache.Get(cacheKey); found {
 		log.Debugf("CACHE: hit key=%s expired=%t for %s, ttl=%d, validated=%t, answer=%d", cacheKey, isExpired, question.Name, entry.RemainingTTL(), entry.Validated, len(entry.Answer))
@@ -342,7 +353,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	return responseMsg
 }
 
-func (h *Handler) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption) []dns.RR {
+func (h *Handler) lookupReversePTR(question Question, ecsOpt *edns.ECSOption) []dns.RR {
 	ip := dnsutil.ParseReverseDNSName(question.Name)
 	if ip == nil {
 		return nil
@@ -365,11 +376,11 @@ func (h *Handler) lookupReversePTR(question dns.Question, ecsOpt *edns.ECSOption
 	return records
 }
 
-func (h *Handler) recordQueryMetrics(m *queryMetrics, responseMsg **dns.Msg, question dns.Question) {
+func (h *Handler) recordQueryMetrics(m *queryMetrics, responseMsg **dns.Msg, question Question) {
 	responseTime := time.Since(m.startTime)
 	rcode := dns.RcodeServerFailure
 	if *responseMsg != nil {
-		rcode = (*responseMsg).Rcode
+		rcode = int((*responseMsg).Rcode)
 		if log.Default.Level() >= log.Debug {
 			log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t%s",
 				question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[(*responseMsg).Rcode],

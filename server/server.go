@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
 
 	"zjdns/cache"
@@ -175,7 +175,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		guard,
 		ednsHandler,
 		cidrFilter,
-		h.BuildQueryMessage,
+		func(q resolver.Question, ecs *edns.ECSOption, rd bool, secure bool) *dns.Msg {
+			return h.BuildQueryMessage(handler.Question{Name: q.Name, Qtype: q.Qtype, Qclass: q.Qclass}, ecs, rd, secure)
+		},
 		cacheStore,
 	)
 	resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
@@ -252,7 +254,7 @@ func (s *Server) Start() error {
 		s.udpServer = &dns.Server{
 			Addr:    ":" + s.config.Server.Port,
 			Net:     config.ProtoUDP,
-			Handler: dns.HandlerFunc(s.handleDNSRequest),
+			Handler: dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
 			UDPSize: pool.UDPBufferSize,
 		}
 		log.Infof("SERVER: UDP server started on port %s", s.config.Server.Port)
@@ -291,10 +293,10 @@ func (s *Server) Start() error {
 		}
 		s.tcpServer = &dns.Server{
 			Listener: &servertls.TCPKeepAliveListener{Listener: listener},
-			Handler:  dns.HandlerFunc(s.handleDNSRequest),
+			Handler:  dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
 		}
 		log.Infof("SERVER: TCP server started on port %s", s.config.Server.Port)
-		err = s.tcpServer.ActivateAndServe()
+		err = s.tcpServer.ListenAndServe()
 		if err != nil {
 			select {
 			case <-ctx.Done():

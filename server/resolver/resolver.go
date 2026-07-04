@@ -10,7 +10,7 @@ import (
 	"net"
 	"sync/atomic"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/cache"
 	"zjdns/config"
@@ -19,6 +19,13 @@ import (
 	"zjdns/server/client"
 	"zjdns/server/security"
 )
+
+// Question is a DNS question compatible with both v1 and v2 dns packages.
+type Question struct {
+	Name   string
+	Qtype  uint16
+	Qclass uint16
+}
 
 var (
 	// ErrCIDRFilterRefused is returned when all A/AAAA records are filtered by
@@ -76,7 +83,7 @@ type QueryResult struct {
 
 // BuildQueryFunc is a function type that constructs a DNS query message from a
 // question, ECS option, and connection parameters.
-type BuildQueryFunc func(question dns.Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg
+type BuildQueryFunc func(question Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg
 
 // CIDRMatcher is the interface for matching IP addresses against CIDR rules
 // with optional tags.
@@ -215,7 +222,7 @@ func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 // fallback result is immediately available without waiting for a sequential
 // retry. Fallback results are cacheable — the concurrent model ensures they
 // are fresh, not stale second-attempt data.
-func (r *Resolver) Query(ctx context.Context, question dns.Question, ecs *edns.ECSOption) *QueryResult {
+func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOption) *QueryResult {
 	servers := r.upstream.list()
 	fallbackServers := r.fallback.list()
 

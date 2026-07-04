@@ -9,7 +9,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/errgroup"
 
@@ -179,7 +179,8 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	req := pool.DefaultMessagePool.Get()
-	if err := req.Unpack(body); err != nil {
+	req.Data = body
+	if err := req.Unpack(); err != nil {
 		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "invalid DNS message")
 		pool.DefaultMessagePool.Put(req)
 		return
@@ -202,7 +203,8 @@ func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 		return errors.New("response is nil")
 	}
 
-	respBuf, err := response.Pack()
+	err := response.Pack()
+	respBuf := response.Data
 	if err != nil {
 		return fmt.Errorf("pack response: %w", err)
 	}

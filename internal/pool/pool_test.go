@@ -3,7 +3,7 @@ package pool
 import (
 	"testing"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 func TestMessagePool_GetPut(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
@@ -162,7 +162,8 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		}
 
 		req := pool.DefaultMessagePool.Get()
-		if err := req.Unpack(msgBuf); err != nil {
+		req.Data = msgBuf
+		if err := req.Unpack(); err != nil {
 			pool.DefaultMessagePool.Put(req)
 			pool.DefaultBufferPool.Put(buf)
 			continue
@@ -196,7 +197,8 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			}
 			defer pool.DefaultMessagePool.Put(response)
 
-			respBuf, err := response.Pack()
+			err := response.Pack()
+			respBuf := response.Data
 			if err != nil {
 				log.Debugf("TLS: response pack error: %v", err)
 				return

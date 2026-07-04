@@ -7,7 +7,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 // ECSModeAuto is the sentinel value for auto-detection of ECS subnets.

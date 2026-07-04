@@ -3,7 +3,7 @@ package resolver
 import (
 	"testing"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 
 	"zjdns/config"
 )

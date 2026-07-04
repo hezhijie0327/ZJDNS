@@ -7,7 +7,7 @@ import (
 	"zjdns/config"
 	"zjdns/internal/ttl"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 )
 
 func TestEvaluator_LoadRules(t *testing.T) {
@@ -281,7 +281,7 @@ func TestEvaluator_RewriteTTLCyclical(t *testing.T) {
 			if len(records) != 1 {
 				t.Fatalf("got %d records, want 1", len(records))
 			}
-			if got := records[0].Header().Ttl; got != tt.wantTTL {
+			if got := records[0].Header().TTL; got != tt.wantTTL {
 				t.Errorf("elapsed=%ds → TTL=%d, want %d", tt.elapsed, got, tt.wantTTL)
 			}
 		})
@@ -316,10 +316,10 @@ func TestEvaluator_RewriteTTLMultipleRRs(t *testing.T) {
 
 	// Elapsed=80: rr1 (TTL=60): 80%60=20 → 60-20=40; rr2 (TTL=120): 80%120=80 → 120-80=40
 	records := ttl.DeductElapsedCyclical(result.Records, 80)
-	if records[0].Header().Ttl != 40 {
-		t.Errorf("rr1 TTL=%d, want 40", records[0].Header().Ttl)
+	if records[0].Header().TTL != 40 {
+		t.Errorf("rr1 TTL=%d, want 40", records[0].Header().TTL)
 	}
-	if records[1].Header().Ttl != 40 {
-		t.Errorf("rr2 TTL=%d, want 40", records[1].Header().Ttl)
+	if records[1].Header().TTL != 40 {
+		t.Errorf("rr2 TTL=%d, want 40", records[1].Header().TTL)
 	}
 }

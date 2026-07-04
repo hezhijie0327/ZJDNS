@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 
 	"zjdns/internal/dnsutil"
 )
@@ -13,8 +15,8 @@ import (
 
 func nsRec(name, target string) *dns.NS {
 	return &dns.NS{
-		Hdr: dns.RR_Header{Name: dns.Fqdn(name), Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 86400},
-		Ns:  dns.Fqdn(target),
+		Hdr: dns.Header{Name: dnsutilv2.Fqdn(name), Class: dns.ClassINET, TTL: 86400},
+		NS:  rdata.NS{Ns: dnsutilv2.Fqdn(target)},
 	}
 }
 
@@ -30,7 +32,7 @@ func classifyRecord(d *Detector, rr dns.RR, zone, queryName string) Verdict {
 	if answerName != queryName {
 		return VerdictClean
 	}
-	return d.classify(zone, queryName, rr.Header().Rrtype)
+	return d.classify(zone, queryName, dns.RRToType(rr))
 }
 
 // ── Classification (per-record) ───────────────────────────────────────────────
@@ -60,7 +62,7 @@ func TestClassify_NSInAnswer(t *testing.T) {
 func TestClassify_DSInAnswer(t *testing.T) {
 	d := newDetector()
 	ds := &dns.DS{
-		Hdr: dns.RR_Header{Name: dns.Fqdn("sub.example.com."), Rrtype: dns.TypeDS, Class: dns.ClassINET, Ttl: 86400},
+		Hdr: dns.Header{Name: dnsutilv2.Fqdn("sub.example.com."), Class: dns.ClassINET, TTL: 86400},
 	}
 	v := classifyRecord(d, ds, "example.com", "sub.example.com")
 	if v == VerdictHijack {

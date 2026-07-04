@@ -4,7 +4,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 
 	"zjdns/config"
 	"zjdns/edns"
@@ -17,16 +18,13 @@ func (h *Handler) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, c
 		return
 	}
 
-	clientRequestedDNSSEC := false
+	clientRequestedDNSSEC := req.Security
 	var ecsOpt *edns.ECSOption
 
-	if opt := req.IsEdns0(); opt != nil {
-		clientRequestedDNSSEC = opt.Do()
-		ecsOpt = h.edns.ParseFromDNS(req)
-	}
+	ecsOpt = h.edns.ParseFromDNS(req)
 
 	if ecsOpt == nil && len(req.Question) > 0 {
-		ecsOpt = h.edns.ECSForQType(req.Question[0].Qtype)
+		ecsOpt = h.edns.ECSForQType(dns.RRToType(req.Question[0]))
 	}
 
 	clientWantsPadding := edns.HasPaddingOption(req)
@@ -75,7 +73,7 @@ func (h *Handler) buildResponse(req *dns.Msg) *dns.Msg {
 	msg := pool.DefaultMessagePool.Get()
 
 	if req != nil && len(req.Question) > 0 {
-		msg.SetReply(req)
+		dnsutilv2.SetReply(msg, req)
 	} else if req != nil {
 		msg.Response = true
 		msg.Rcode = dns.RcodeFormatError
@@ -83,7 +81,6 @@ func (h *Handler) buildResponse(req *dns.Msg) *dns.Msg {
 
 	msg.Authoritative = false
 	msg.RecursionAvailable = true
-	msg.Compress = true
 	return msg
 }
 
