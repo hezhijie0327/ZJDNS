@@ -25,6 +25,9 @@ go build -o zjdns ./cmd/zjdns
 # Build with version info
 go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns ./cmd/zjdns
 
+# Cross-compile (pure Go, no CGo required)
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o zjdns ./cmd/zjdns
+
 # All tests
 go test ./... -short
 
@@ -41,12 +44,17 @@ go test -bench=BenchmarkServerProcessQuery -benchtime=3s .
 # Lint (pre-commit hook runs this automatically)
 golangci-lint run && golangci-lint fmt
 
-# Install pre-commit hook
+# Docker
+docker build -t zjdns .
+
+# Install pre-commit hook (auto fmt + lint on commit)
 sh scripts/install-hook.sh                 # Linux / macOS
 pwsh scripts/install-hook.ps1              # Windows PowerShell
 ```
 
-Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
+Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible). Zero `golangci-lint` warnings required.
+
+Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `modernc.org/sqlite` (pure-Go SQLite).
 
 ## Coding Standards
 
@@ -89,7 +97,7 @@ Module path: `zjdns` (Go 1.26). Zero `golangci-lint` warnings required.
 - **Conversion helpers use `as` prefix**: `asIPv4Net` (converts `*net.IPNet` → `*ipv4Net`). Not `toXxx`.
 
 ### Performance (Hot Path)
-- **`log.NowUnix()` / `log.NowUnixNano()`** instead of `time.Now()` in cache TTL checks, DNSSEC RRSIG validation, last-access timestamps. `TimeCache updates once per second via `atomic.Int64` (zero-alloc).
+- **`log.NowUnix()` / `log.NowUnixNano()`** instead of `time.Now()` in cache TTL checks, DNSSEC RRSIG validation, last-access timestamps. `log.TimeCache` updates once per second via `atomic.Int64` (zero-alloc).
 - **Avoid `fmt.Sprintf` on the query path**: use `strings.Builder` for map keys, `strconv.Itoa` over `fmt.Sprint`.
 - **Zero-allocation trimming**: prefer sub-slicing (`s[:len(s)-1]`) over `strings.TrimSuffix` for single known bytes.
 - **`strings.EqualFold`** over `strings.ToLower` for case-insensitive comparison on the hot path.
@@ -373,6 +381,10 @@ CREATE TABLE stats (
 - **Eviction**: size-based (oldest `timestamp` first) on Set; TTL-based periodic cleanup (5 min sweep)
 - **Probe updates**: `UPDATE records SET latency_ms = ? WHERE entry_id = ? AND rdata_ip = ?` — no entry overwrite needed
 - **Stats**: Per-request `UPDATE stats SET col = col + 1` (atomic, single row). Query via `SELECT * FROM stats`. No periodic save, no JSON.
+
+## CI/CD
+
+GitHub Actions (`.github/workflows/main.yml`) builds multi-arch Docker images (linux/amd64, linux/arm64) on a cron schedule (04:00/16:00 UTC+8 daily) and pushes to both GHCR and Docker Hub. Uses `docker/build-push-action` with digest-based multi-platform manifest merging. Also triggers on `workflow_dispatch`.
 
 ## Debug Config
 
