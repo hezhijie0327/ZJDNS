@@ -264,21 +264,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			}
 		}
 
-		// For NODATA/NXDOMAIN responses (no answer section), cryptographically
-		// verify NSEC/NSEC3 records against the zone's verified DNSKEYs to
-		// enable the AuthenticatedData flag when denial-of-existence is proven
-		// (RFC 4035 §3.1.3). Genuine DNSSEC failures (bad RRSIGs on answer
-		// records) are caught by the answer-path SERVFAIL check above.
-		if len(response.Answer) == 0 {
-			if len(chain.zoneDNSKEYs) == 0 {
-				r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
-			}
-			if len(chain.zoneDNSKEYs) > 0 {
-				if nsecValidated, _ := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs); nsecValidated {
-					validated = true
-				}
-			}
-		}
+		validated = r.validateNODATAWithNSEC(response, ctx, nameservers, currentDomain, chain, validated)
 
 		bestMatch, bestNSRecords, cont, termRes := r.collectBestNSMatch(response, normalizedQname, queryQuestion.Name, qname, qnameMinimise, validated, ecsResponse)
 		if termRes != nil {
@@ -656,4 +642,21 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 		validated: validated, ecs: ecsResponse,
 		server: config.RecursiveIndicator,
 	}
+}
+
+// validateNODATAWithNSEC verifies NSEC/NSEC3 denial-of-existence records
+// for NODATA/NXDOMAIN responses against the zone's verified DNSKEYs (RFC 4035).
+func (r *Recursive) validateNODATAWithNSEC(response *dns.Msg, ctx context.Context, nameservers []string, currentDomain string, chain *dnssecChain, validated bool) bool {
+	if len(response.Answer) > 0 {
+		return validated
+	}
+	if len(chain.zoneDNSKEYs) == 0 {
+		r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
+	}
+	if len(chain.zoneDNSKEYs) > 0 {
+		if nsecValidated, _ := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs); nsecValidated {
+			return true
+		}
+	}
+	return validated
 }
