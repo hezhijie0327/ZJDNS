@@ -320,6 +320,136 @@ func (s *SQLiteCache) Close() error {
 	return nil
 }
 
+// ── Stats ──────────────────────────────────────────────────────────────────
+
+// IncrementStats atomically increments the stats counters for a single DNS
+// request. All counters are updated in a single UPDATE for efficiency.
+func (s *SQLiteCache) IncrementStats(durationMs int64, cacheHit, hadError bool, protocol string,
+	rewrote, hijackDetected, staleServed, fallbackUsed, prefetchTriggered bool,
+	dnssecStatus string, rcode int) {
+
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return
+	}
+
+	cacheHitVal := 0
+	cacheMissVal := 0
+	if cacheHit {
+		cacheHitVal = 1
+	} else {
+		cacheMissVal = 1
+	}
+
+	errVal, staleVal, fallbackVal, prefetchVal, rewriteVal, hijackVal := 0, 0, 0, 0, 0, 0
+	if hadError {
+		errVal = 1
+	}
+	if staleServed {
+		staleVal = 1
+	}
+	if fallbackUsed {
+		fallbackVal = 1
+	}
+	if prefetchTriggered {
+		prefetchVal = 1
+	}
+	if rewrote {
+		rewriteVal = 1
+	}
+	if hijackDetected {
+		hijackVal = 1
+	}
+
+	secureVal, bogusVal, insecureVal := 0, 0, 0
+	switch dnssecStatus {
+	case config.DNSSECStatusSecure:
+		secureVal = 1
+	case config.DNSSECStatusBogus:
+		bogusVal = 1
+	case config.DNSSECStatusInsecure:
+		insecureVal = 1
+	}
+
+	noerrVal, formerrVal, servfailVal, nxVal, nimpVal, refVal, otherVal := 0, 0, 0, 0, 0, 0, 0
+	switch rcode {
+	case dns.RcodeSuccess:
+		noerrVal = 1
+	case dns.RcodeFormatError:
+		formerrVal = 1
+	case dns.RcodeServerFailure:
+		servfailVal = 1
+	case dns.RcodeNameError:
+		nxVal = 1
+	case dns.RcodeNotImplemented:
+		nimpVal = 1
+	case dns.RcodeRefused:
+		refVal = 1
+	default:
+		otherVal = 1
+	}
+
+	protocolBits := protoBits(protocol)
+
+	_, err := s.db.Exec(
+		`UPDATE stats SET
+			total_requests = total_requests + 1,
+			cache_hits = cache_hits + ?, cache_misses = cache_misses + ?,
+			error_responses = error_responses + ?, stale_responses = stale_responses + ?,
+			fallback_requests = fallback_requests + ?, prefetch_requests = prefetch_requests + ?,
+			rewrite_requests = rewrite_requests + ?, hijack_detections = hijack_detections + ?,
+			total_response_time_ms = total_response_time_ms + ?,
+			last_response_time_ms = MAX(last_response_time_ms, ?),
+			udp_requests = udp_requests + ?, tcp_requests = tcp_requests + ?,
+			dot_requests = dot_requests + ?, doq_requests = doq_requests + ?,
+			doh_requests = doh_requests + ?, doh3_requests = doh3_requests + ?,
+			dnssec_secure = dnssec_secure + ?, dnssec_bogus = dnssec_bogus + ?,
+			dnssec_insecure = dnssec_insecure + ?,
+			rcode_noerror = rcode_noerror + ?, rcode_formerr = rcode_formerr + ?,
+			rcode_servfail = rcode_servfail + ?, rcode_nxdomain = rcode_nxdomain + ?,
+			rcode_notimp = rcode_notimp + ?, rcode_refused = rcode_refused + ?,
+			rcode_other = rcode_other + ?,
+			updated_at = ?`,
+		cacheHitVal, cacheMissVal,
+		errVal, staleVal, fallbackVal, prefetchVal, rewriteVal, hijackVal,
+		durationMs, durationMs,
+		protocolBits.udp, protocolBits.tcp, protocolBits.dot, protocolBits.doq, protocolBits.doh, protocolBits.doh3,
+		secureVal, bogusVal, insecureVal,
+		noerrVal, formerrVal, servfailVal, nxVal, nimpVal, refVal, otherVal,
+		log.NowUnix(),
+	)
+	if err != nil {
+		log.Warnf("CACHE: increment stats failed: %v", err)
+	}
+}
+
+type protoBitsStruct struct {
+	udp, tcp, dot, doq, doh, doh3 int
+}
+
+func protoBits(protocol string) protoBitsStruct {
+	var p protoBitsStruct
+	switch {
+	case len(protocol) >= 3 && (protocol[0] == 'u' || protocol[0] == 'U'):
+		p.udp = 1
+	case len(protocol) >= 3 && (protocol[0] == 't' || protocol[0] == 'T'):
+		p.tcp = 1
+	case len(protocol) >= 3 && (protocol[1] == 'o' || protocol[1] == 'O'):
+		switch protocol[2] {
+		case 't', 'T':
+			p.dot = 1
+		case 'q', 'Q':
+			p.doq = 1
+		case 'h', 'H':
+			if len(protocol) >= 4 && (protocol[3] == '3') {
+				p.doh3 = 1
+			} else {
+				p.doh = 1
+			}
+		}
+	}
+	return p
+}
+
 // ── Stats persistence ────────────────────────────────────────────────────────
 
 // SaveStats writes a StatsRow to the stats table.

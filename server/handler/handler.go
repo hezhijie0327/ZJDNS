@@ -22,7 +22,6 @@ import (
 	"zjdns/internal/ttl"
 	"zjdns/rewrite"
 	"zjdns/server/resolver"
-	"zjdns/stats"
 )
 
 // Question is a DNS question compatible with both v1 and v2 dns packages.
@@ -76,7 +75,6 @@ type Handler struct {
 	}
 	edns              *edns.Handler
 	rewrite           *rewrite.Evaluator
-	stats             *stats.Collector
 	resolver          *resolver.Resolver
 	prober            LatencyProber
 	prefetchCooldown  sync.Map
@@ -100,7 +98,6 @@ func New(
 	cacheStore cache.Store,
 	ednsHandler *edns.Handler,
 	rewriteEvaluator *rewrite.Evaluator,
-	statsCollector *stats.Collector,
 	bg BackgroundConfig,
 ) *Handler {
 	h := &Handler{
@@ -108,7 +105,6 @@ func New(
 		cache:             cacheStore,
 		edns:              ednsHandler,
 		rewrite:           rewriteEvaluator,
-		stats:             statsCollector,
 		cacheRefreshGroup: bg.RefreshGroup,
 		cacheRefreshCtx:   bg.RefreshCtx,
 		ctx:               bg.Ctx,
@@ -135,7 +131,6 @@ func (h *Handler) MarkClosed() { atomic.StoreInt32(&h.closed, 1) }
 func (h *Handler) Edns() *edns.Handler { return h.edns }
 
 // Stats returns the stats collector.
-func (h *Handler) Stats() *stats.Collector { return h.stats }
 
 // CacheStore returns the cache store (used for persistence and shutdown).
 func (h *Handler) CacheStore() cache.Store { return h.cache }
@@ -347,11 +342,9 @@ func (h *Handler) recordQueryMetrics(m *queryMetrics, responseMsg **dns.Msg, que
 				dnsutil.FormatRecords((*responseMsg).Answer, (*responseMsg).Ns, (*responseMsg).Extra))
 		}
 	}
-	if h.stats != nil {
-		h.stats.RecordRequest(responseTime, m.cacheHit, m.hadError, m.requestProtocol,
-			m.rewrote, m.hijackDetected, m.staleServed, m.fallbackUsed, m.prefetchTriggered,
-			m.dnssecStatus, rcode)
-	}
+	h.cache.IncrementStats(responseTime.Milliseconds(), m.cacheHit, m.hadError, m.requestProtocol,
+		m.rewrote, m.hijackDetected, m.staleServed, m.fallbackUsed, m.prefetchTriggered,
+		m.dnssecStatus, rcode)
 }
 
 // validateDNSQuery rejects queries with invalid domain names, label lengths,

@@ -14,8 +14,10 @@ type Store interface {
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 		answer, authority, additional []dns.RR, validated bool)
 	UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int)
+	IncrementStats(durationMs int64, cacheHit, hadError bool, protocol string,
+		rewrote, hijackDetected, staleServed, fallbackUsed, prefetchTriggered bool,
+		dnssecStatus string, rcode int)
 	ReverseLookup(ip string) []LookupResult
-	SaveStats(row config.StatsRow)
 	LoadStats() (config.StatsRow, bool)
 	Close() error
 }

@@ -30,32 +30,7 @@ import (
 	"zjdns/server/resolver"
 	"zjdns/server/security"
 	servertls "zjdns/server/tls"
-	"zjdns/stats"
 )
-
-// statsPersistAdapter bridges SQLiteCache to stats.PersistStore.
-type statsPersistAdapter struct {
-	cache statsCache
-}
-
-// statsCache is the subset of SQLiteCache used for stats persistence.
-type statsCache interface {
-	SaveStats(row config.StatsRow)
-	LoadStats() (config.StatsRow, bool)
-}
-
-func (a *statsPersistAdapter) SaveStats(key string, data []byte, ttl int) {
-	// The adapter no longer uses key/ttl — StatsRow carries its own updated_at.
-	// Kept for backward compatibility with stats.PersistStore interface.
-	_ = key
-	_ = ttl
-}
-
-func (a *statsPersistAdapter) LoadStats(key string) ([]byte, bool) {
-	// Kept for backward compatibility; no longer returns raw bytes.
-	_ = key
-	return nil, false
-}
 
 // Server is the core DNS server handling lifecycle, protocol listeners, and background tasks.
 type Server struct {
@@ -65,7 +40,6 @@ type Server struct {
 	guard           *security.Guard
 	tls             *servertls.Server
 	cidrFilter      *cidr.Filter
-	statsAdapter    *statsPersistAdapter
 	pprofServer     *http.Server
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
@@ -117,19 +91,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("cache init: %w", err)
 	}
 
-	statsCollector := stats.New(cfg)
-
-	// Restore stats from cache if a snapshot was persisted.
-	if row, ok := cacheStore.LoadStats(); ok {
-		statsCollector.Restore(row)
-		log.Infof("STATS: restored stats from cache snapshot")
-	}
-
-	statsAdapter := &statsPersistAdapter{cache: cacheStore}
-
 	h := handler.New(
 		cfg, cacheStore, ednsHandler, rewriteEvaluator,
-		statsCollector,
 		handler.BackgroundConfig{
 			RefreshGroup: cacheRefreshGroup,
 			RefreshCtx:   cacheRefreshCtx,
@@ -143,7 +106,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		config:          cfg,
 		handler:         h,
 		cidrFilter:      cidrFilter,
-		statsAdapter:    statsAdapter,
 		ctx:             ctx,
 		cancel:          cancel,
 		shutdown:        make(chan struct{}),

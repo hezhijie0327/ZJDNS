@@ -111,7 +111,7 @@ func (s *Server) startPrefetchCooldownCleanup() {
 // startStatsLogger logs stats snapshots at a periodic interval.
 func (s *Server) startStatsLogger() {
 	statsInterval := s.config.Server.StatsInterval()
-	if statsInterval <= 0 || s.handler.Stats() == nil {
+	if statsInterval <= 0 {
 		return
 	}
 	s.runBackgroundTicker("stats logger", time.Duration(statsInterval)*time.Second, func() {
@@ -122,12 +122,10 @@ func (s *Server) startStatsLogger() {
 // startStatsReset periodically resets stats counters and logs the final snapshot.
 func (s *Server) startStatsReset() {
 	statsResetInterval := s.config.Server.StatsResetInterval()
-	if statsResetInterval <= 0 || s.handler.Stats() == nil {
+	if statsResetInterval <= 0 {
 		return
 	}
 	s.runBackgroundTicker("stats reset", time.Duration(statsResetInterval)*time.Second, func() {
-		s.handler.Stats().Reset()
-		log.Infof("STATS: counters reset")
 		s.logStatsNow("reset")
 	})
 }
@@ -163,21 +161,13 @@ func (s *Server) setupSignalHandling() {
 }
 
 func (s *Server) logStatsNow(trigger string) {
-	if s == nil || s.handler.Stats() == nil {
-		return
-	}
-
-	st := s.handler.Stats()
 	cs := s.handler.CacheStore()
 	if cs == nil {
 		return
 	}
 
-	// Persist current counters to DB, then read back for log output.
-	cs.SaveStats(st.ToRow())
 	row, ok := cs.LoadStats()
 	if !ok {
-		log.Warnf("STATS: failed to load stats from DB")
 		return
 	}
 
@@ -202,9 +192,7 @@ func (s *Server) shutdownServer() {
 	s.handler.MarkClosed()
 
 	log.Infof("SERVER: Starting DNS server shutdown")
-	if s.handler.Stats() != nil {
-		s.logStatsNow("shutdown")
-	}
+	s.logStatsNow("shutdown")
 
 	if s.cancel != nil {
 		s.cancel(errors.New("server shutdown"))
