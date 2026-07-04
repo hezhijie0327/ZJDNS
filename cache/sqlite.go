@@ -110,6 +110,11 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 		return nil, fmt.Errorf("sqlite migrate: %w", err)
 	}
 
+	// Initialize entryCount from existing rows before cleanup.
+	var count int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
+		s.entryCount.Store(count)
+	}
 	s.deleteExpiredEntries()
 	s.flushStats()
 	s.startPeriodicCleanup()
