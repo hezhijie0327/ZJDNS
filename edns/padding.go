@@ -29,8 +29,12 @@ func addPaddingV2(msg *dns.Msg, isSecureConnection bool, blockSize int, clientWa
 		return 0
 	}
 
-	// Use Len() to compute current wire size.
-	currentSize := msg.Len()
+	// Pack first to get the real compressed wire size — msg.Len()
+	// returns uncompressed size which overestimates by 100+ bytes
+	// when name compression is active, causing padding to fall short
+	// of the target block size.
+	_ = msg.Pack()
+	currentSize := len(msg.Data)
 	targetSize := ((currentSize + blockSize - 1) / blockSize) * blockSize
 	paddingDataSize := targetSize - currentSize - paddingHeaderSize
 	if paddingDataSize > 0 {
