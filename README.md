@@ -125,13 +125,13 @@ zjdns/
 ├── edns/                             # EDNS(0) 扩展（ECS、Cookie、EDE、Padding）
 │                                     #   ECSOption 为 config.ECSOption 的类型别名
 ├── cache/                            # LRU 内存缓存 + SQLite 持久化 + PTR 反向索引
-│                                     #   不依赖 edns，直接使用 config.ECSOption
+│                                     #   memory.go（LRU）+ sqlite.go（write-through）
 ├── cidr/                             # CIDR IP 过滤（基于标签的匹配、IPv4 位运算优化）
 ├── rewrite/                          # 域名重写规则
 ├── stats/                            # 锁无关统计（PersistStore 接口，不依赖 cache）
 ├── internal/
 │   ├── cli/                          # CLI 辅助（参数解析、示例配置）
-│   ├── log/                          # 分级日志 + TimeCache + 组件过滤
+│   ├── log/                          # 分级日志 + TimeCache + 组件过滤 + IsDebug
 │   ├── pool/                         # sync.Pool + QUIC 应用层错误码
 │   ├── ttl/                          # 全局 TTL 管理器（周期性 stale 倒数、预取判断）
 │   ├── dnsutil/                      # DNS 工具函数（含 JoinDNSPort）
@@ -139,10 +139,10 @@ zjdns/
 │   └── latency/                      # 统一延迟探测引擎
 └── server/
     ├── server.go                     # 生命周期、构造、监听器编排
-    ├── listen.go                     # 协议桥接（UDP/TCP dispatch）
+    ├── listen.go                     # 协议桥接（UDP/TCP dispatch → io.Copy）
     ├── server_tasks.go               # 后台任务 + 优雅关闭
     ├── handler/                      # DNS 查询处理管线
-    │   ├── handler.go                #   主流程（管线入口、类型、构造器、指标）
+    │   ├── handler.go                #   主流程（validateDNSQuery + processRewrite）
     │   ├── handler_cache.go          #   缓存处理（命中/过期/缺失、后台刷新、预取）
     │   └── message.go                #   EDNS 构建、Cookie 生成、域名恢复
     ├── client/                       # 出站查询客户端（UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5）
@@ -151,6 +151,14 @@ zjdns/
     │   ├── socks5_udp.go             #   SOCKS5 UDP ASSOCIATE 路径 + PacketConn
     │   └── pool/                     # TCP/DoT RFC 7766 流水线 + QUIC 连接池
     ├── resolver/                     # 递归解析 + 上游转发 + DNSSEC 信任链
+    │   ├── recursive.go              #   核心递归循环（depth → root → TLD → authoritative）
+    │   ├── recursive_helpers.go      #   提取的助手：QNAME最小化、NS收集、DNSSEC验证
+    │   ├── qname_minimise.go         #   RFC 9156 QNAME 最小化算法
+    │   ├── recursive_cache.go        #   NS 地址延迟排序缓存
+    │   ├── dnssec_chain.go           #   DNSSEC 信任链 + 区域切割处理
+    │   ├── nameserver.go             #   并发 NS 查询 + 劫持拒绝
+    │   ├── upstream.go               #   上游转发（processUpstreamResponse）
+    │   └── resolver.go               #   Resolver 类型 + ShuffleSlice
     ├── security/                     # DNSSEC 密码学 + NSEC/NSEC3 否定 + 劫持检测
     ├── tls/                          # TLS 安全传输监听器（DoT/DoQ/DoH/DoH3）
     └── probe/                        # A/AAAA 延迟探测与记录重排

@@ -167,12 +167,13 @@ zjdns/
 ├── config/                        ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
 ├── cache/                         ← Store interface, memory/SQLite persistence, negative TTL capping (RFC 9077)
+│                                  ←   memory.go (LRU) + sqlite.go (write-through, modernc.org/sqlite)
 ├── cidr/                          ← IP filtering with tag matching
 ├── rewrite/                       ← Query rewrite rules
 ├── stats/                         ← Lock-free atomic collector (PersistStore interface)
 ├── internal/
 │   ├── cli/                       ← Flag parsing, example config generation
-│   ├── log/                       ← Structured logging (zero internal deps)
+│   ├── log/                       ← Structured logging + IsDebug guard (zero internal deps)
 │   ├── pool/                      ← sync.Pool allocators + QUIC error codes
 │   ├── ttl/                       ← Stateless TTL functions (cache + rewrite)
 │   ├── dnsutil/                   ← DNS utilities: validation, PTR, panic recovery
@@ -180,12 +181,14 @@ zjdns/
 │   └── latency/                   ← Unified probe engine (generic sorter)
 └── server/
     ├── server.go                  ← Lifecycle, wiring, listeners
-    ├── listen.go                  ← Protocol bridge (UDP/TCP dispatch)
+    ├── listen.go                  ← Protocol bridge (UDP/TCP dispatch → io.Copy)
     ├── server_tasks.go            ← Background tasks, shutdown
     ├── handler/                   ← Query pipeline (handler + handler_cache + message)
     ├── client/                    ← Outbound transports (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5)
     ├── client/pool/               ← RFC 7766 pipelined TCP + QUIC connection pools
     ├── resolver/                  ← Upstream + recursive + qname_minimise (RFC 9156)
+    │                              ←   recursive.go (core loop) + recursive_helpers.go (7 helpers)
+    │                              ←   dnssec_chain.go + nameserver.go + upstream.go + resolver.go
     ├── security/                  ← DNSSEC validation (crypto + nsec) + hijack detection
     ├── tls/                       ← TLS listeners (DoT, DoQ, DoH, DoH3)
     └── probe/                     ← A/AAAA latency probing and record reordering
