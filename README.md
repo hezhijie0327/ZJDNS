@@ -109,6 +109,25 @@ stats     — 统计计数器（每请求原子累加，SQL 直接查询）
 
 `log_level` 支持组件过滤：`debug:UPSTREAM,RECURSION` 仅输出指定组件 Debug 日志。
 
+### 缓存容量调优
+
+| 参数 | 占用 | 说明 |
+|------|------|------|
+| `max_entries` | **磁盘** | 条目数上限。1 万条 ≈ 20MB，单条目约 2KB（entry 行 + 若干 records 行） |
+| `mmap_size_mb` | **虚拟内存** | 数据库文件映射到进程地址空间，OS 自动管理物理页换入换出，不实际占用物理 RAM |
+| `cache_size_mb` | **物理内存** | SQLite 内部 page cache，真实占用 RAM。缓存 B-tree 索引热点页 |
+| `db_path` | **磁盘路径** | 数据库文件位置。空串 = 内存模式（不落盘，重启后缓存丢失） |
+
+**调大策略**：更多条目 → 调 `max_entries`；更快命中 → 调 `cache_size_mb`；大文件映射 → 调 `mmap_size_mb`。
+
+```json
+// 家庭场景（默认）：1 万条，约 20MB 磁盘，4MB 物理内存
+"cache": { "max_entries": 10000, "mmap_size_mb": 16, "cache_size_mb": 4 }
+
+// 高负载场景：5 万条，约 100MB 磁盘，16MB 物理内存
+"cache": { "max_entries": 50000, "mmap_size_mb": 128, "cache_size_mb": 16 }
+```
+
 ## 数据库查询示例
 
 ```bash
