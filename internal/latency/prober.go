@@ -75,7 +75,7 @@ func (p *Prober) ProbeIPs(ctx context.Context, ips []net.IP) []net.IP {
 	}
 
 	sorted, _ := probeSlice(ctx, p.sem, p.ctx, candidates, func(c *candidate) net.IP { return c.ip },
-		p.steps, p.httpPool)
+		func(c *candidate, lat time.Duration) { c.latency = lat }, p.steps, p.httpPool)
 
 	result := make([]net.IP, len(sorted))
 	for i, c := range sorted {
@@ -102,7 +102,7 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, m
 	}
 
 	sorted, changed := probeSlice(ctx, p.sem, p.ctx, candidates, func(c *candidate) net.IP { return c.ip },
-		p.steps, p.httpPool)
+		func(c *candidate, lat time.Duration) { c.latency = lat }, p.steps, p.httpPool)
 	if !changed {
 		return ips, nil
 	}
@@ -127,6 +127,7 @@ func probeSlice[T any](
 	bgCtx context.Context,
 	items []T,
 	extractIP func(*T) net.IP,
+	setLatency func(*T, time.Duration),
 	steps []config.LatencyProbeStep,
 	httpPool *httpClientPool,
 ) ([]T, bool) {
@@ -162,6 +163,7 @@ func probeSlice[T any](
 
 			latency := measureIPLatency(ctx, bgCtx, extractIP(&items[idx]), steps, httpPool)
 			results[idx].latency = latency
+			setLatency(&items[idx], latency)
 		}()
 	}
 	wg.Wait()

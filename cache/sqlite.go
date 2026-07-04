@@ -717,7 +717,7 @@ func (s *SQLiteCache) UpdateLatency(qname string, qtype, qclass uint16, ecs *con
 
 func (s *SQLiteCache) loadRecords(entryID int64) (*Entry, error) {
 	rows, err := s.db.Query(
-		`SELECT section, name, rtype, ttl, rr_text FROM records WHERE entry_id = ? ORDER BY latency_ms ASC, section, seq`, entryID,
+		`SELECT section, name, rtype, ttl, rr_text FROM records WHERE entry_id = ? ORDER BY CASE WHEN rtype IN (1, 28) THEN 1 ELSE 0 END, latency_ms IS NULL, latency_ms ASC, section, seq`, entryID,
 	)
 	if err != nil {
 		return nil, err
