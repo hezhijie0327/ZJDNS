@@ -3,11 +3,9 @@
 package cache
 
 import (
-	"encoding/gob"
 	"fmt"
 	"hash/fnv"
 	"net"
-	"strconv"
 	"strings"
 
 	"codeberg.org/miekg/dns"
@@ -21,11 +19,8 @@ const (
 	resultBufferCapacity = config.DefaultCacheKeyBufferSize
 	maxResultLength      = config.DefaultCacheKeyMaxLength
 
-	cacheKeyDNSPrefix    = "dns:"
-	cacheSnapshotVersion = 3
+	cacheKeyDNSPrefix = "dns:"
 )
-
-var cacheSnapshotMagic = "ZJDNS-CACHE-V" + strconv.Itoa(cacheSnapshotVersion)
 
 // Store defines the cache storage interface.
 type Store interface {
@@ -232,11 +227,4 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC boo
 		}
 	}
 	return result
-}
-
-func init() {
-	gob.Register(&persistedCacheSnapshot{})
-	gob.Register(&persistedCacheItem{})
-	gob.Register(&Entry{})
-	gob.Register(&CompactRecord{})
 }

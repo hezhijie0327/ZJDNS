@@ -14,6 +14,7 @@ RUN \
     && go get -u codeberg.org/miekg/dns@main \
     && go get -u github.com/quic-go/quic-go@master \
     && go get -u gitlab.com/go-extension/tls@master \
+    && go get -u modernc.org/sqlite@master \
     && go mod tidy \
     && BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC') \
     && COMMIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") \

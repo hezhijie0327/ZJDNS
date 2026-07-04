@@ -1,0 +1,21 @@
+package main
+
+import "fmt"
+
+func banner(version string) string {
+	const b = `
+███████╗     ██╗██████╗ ███╗   ██╗███████╗
+╚══███╔╝     ██║██╔══██╗████╗  ██║██╔════╝
+  ███╔╝      ██║██║  ██║██╔██╗ ██║███████╗
+ ███╔╝  ██   ██║██║  ██║██║╚██╗██║╚════██║
+███████╗╚█████╔╝██████╔╝██║ ╚████║███████║
+╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
+  %s
+
+  High performance recursive DNS server
+  https://github.com/hezhijie0327/ZJDNS
+__________________________________\o/_______
+`
+
+	return fmt.Sprintf(b[1:], version)
+}

@@ -22,7 +22,7 @@ func GenerateExampleConfig() string {
 
 	cfg.Server.Features.Cache.Size = config.DefaultCacheSize
 	cfg.Server.Features.Cache.Persist = config.CachePersistenceSettings{
-		File:     "cache.snapshot",
+		File:     "cache.db",
 		Interval: int(config.DefaultCachePersistInterval / time.Second),
 	}
 	cfg.Server.Features.Cache.PreferStale = true

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"zjdns/config"
@@ -16,6 +17,8 @@ func main() {
 		return
 	}
 
+	fmt.Print(banner(versionStr))
+
 	config.ProjectName = ProjectName
 	config.Version = versionStr
 
@@ -30,8 +33,6 @@ func main() {
 		log.Errorf("SERVER: Server creation failed: %v", err)
 		os.Exit(1)
 	}
-
-	log.Debugf("SERVER: ZJDNS Server started successfully!")
 
 	if err := srv.Start(); err != nil {
 		log.Errorf("SERVER: Server startup failed: %v", err)

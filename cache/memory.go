@@ -34,7 +34,7 @@ const (
 	entryPTROverhead    = 56
 )
 
-// MemoryCache is an in-memory DNS response cache with optional disk persistence.
+// MemoryCache is an in-memory DNS response cache with optional SQLite persistence.
 type MemoryCache struct {
 	mu          sync.RWMutex
 	entries     map[string]*cacheItem
@@ -44,12 +44,9 @@ type MemoryCache struct {
 	closed      int32
 	ptrIndex    map[string]map[string]uint32
 
-	persistPath     string
-	persistInterval time.Duration
-	persistStop     chan struct{}
-	persistDone     chan struct{}
-	ptrSweepStop    chan struct{}
-	persistGen      atomic.Int64
+	sqlite       *sqliteStore
+	persistPath  string
+	ptrSweepStop chan struct{}
 }
 
 type cacheItem struct {
@@ -65,7 +62,7 @@ type ptrRecord struct {
 }
 
 // New creates a MemoryCache configured with the given settings, restoring any
-// persisted snapshot and starting the persistence worker if configured.
+// persisted SQLite database and writing entries on each Set.
 func New(settings config.CacheSettings) *MemoryCache {
 	limit := settings.Size
 	if limit <= 0 {
@@ -74,26 +71,52 @@ func New(settings config.CacheSettings) *MemoryCache {
 	log.Debugf("CACHE: %d MB cache budget", limit/(1024*1024))
 
 	m := &MemoryCache{
-		entries:         make(map[string]*cacheItem),
-		entryPTRs:       make(map[string][]ptrRecord),
-		limitBytes:      limit,
-		ptrIndex:        make(map[string]map[string]uint32),
-		persistPath:     settings.Persist.File,
-		persistInterval: time.Duration(settings.Persist.Interval) * time.Second,
-	}
-
-	if m.persistInterval <= 0 {
-		m.persistInterval = config.DefaultCachePersistInterval
+		entries:     make(map[string]*cacheItem),
+		entryPTRs:   make(map[string][]ptrRecord),
+		limitBytes:  limit,
+		ptrIndex:    make(map[string]map[string]uint32),
+		persistPath: settings.Persist.File,
 	}
 
 	if m.persistPath != "" {
-		if loaded, err := m.loadSnapshotFromDisk(); err != nil {
-			log.Warnf("CACHE: failed to load snapshot file %s: %v", m.persistPath, err)
-		} else if loaded > 0 {
-			log.Infof("CACHE: restored %d entries (%d MB) from snapshot %s", loaded, m.currentSize/(1024*1024), m.persistPath)
+		store, err := openSQLite(m.persistPath)
+		if err != nil {
+			log.Warnf("CACHE: failed to open sqlite db %s: %v", m.persistPath, err)
+		} else {
+			m.sqlite = store
+			items, err := store.LoadAll()
+			if err != nil {
+				log.Warnf("CACHE: failed to load entries from sqlite: %v", err)
+			} else if len(items) > 0 {
+				now := time.Now().Unix()
+				loaded := 0
+				m.mu.Lock()
+				for _, item := range items {
+					if item.Key == "" || item.Entry == nil || item.Entry.TTL <= 0 {
+						continue
+					}
+					if now-item.Entry.Timestamp > int64(item.Entry.TTL+config.DefaultStaleMaxAge) {
+						continue
+					}
+					if _, exists := m.entries[item.Key]; exists {
+						continue
+					}
+					entryCopy := cloneEntry(item.Entry)
+					ptrs := extractPTRRecords(entryCopy)
+					ci := &cacheItem{entry: entryCopy}
+					ci.lastAccess.Store(time.Now().UnixNano())
+					m.entries[item.Key] = ci
+					m.storePTRLocked(item.Key, ptrs)
+					ci.size = estimateEntrySize(item.Key, entryCopy, ptrs)
+					m.currentSize += ci.size
+					loaded++
+				}
+				m.evictToBudget()
+				m.mu.Unlock()
+				log.Infof("CACHE: restored %d entries (%d MB) from sqlite %s", loaded, m.currentSize/(1024*1024), m.persistPath)
+			}
+			log.Infof("CACHE: persistence enabled (sqlite=%s)", m.persistPath)
 		}
-		m.startPersistWorker()
-		log.Infof("CACHE: persistence enabled (file=%s interval=%s)", m.persistPath, m.persistInterval)
 	} else {
 		log.Debugf("CACHE: persistence disabled")
 	}
@@ -195,8 +218,10 @@ func (m *MemoryCache) setEntryInternal(key string, entry *Entry) {
 		m.storePTRLocked(key, ptrRecords)
 		existing.size = estSize
 		m.currentSize += estSize - oldSize
-		m.persistGen.Add(1)
 		m.evictToBudget()
+		if m.sqlite != nil {
+			_ = m.sqlite.SaveEntry(key, entry, ptrRecords)
+		}
 		return
 	}
 
@@ -207,8 +232,10 @@ func (m *MemoryCache) setEntryInternal(key string, entry *Entry) {
 	item.size = estSize
 	m.currentSize += estSize
 
-	m.persistGen.Add(1)
 	m.evictToBudget()
+	if m.sqlite != nil {
+		_ = m.sqlite.SaveEntry(key, entry, ptrRecords)
+	}
 }
 
 // Close shuts down the cache, finalizing any pending persistence write.
@@ -254,23 +281,14 @@ func (m *MemoryCache) Close() error {
 	if m.ptrSweepStop != nil {
 		close(m.ptrSweepStop)
 	}
-	if m.persistStop != nil {
-		close(m.persistStop)
-		if m.persistDone != nil {
-			timer := time.NewTimer(config.DefaultBackgroundTimeout)
-			select {
-			case <-m.persistDone:
-				timer.Stop()
-			case <-timer.C:
-				log.Errorf("CACHE: persist worker shutdown timeout")
-			}
+	if m.sqlite != nil {
+		if n, err := m.sqlite.DeleteStale(int64(config.DefaultStaleMaxAge)); err != nil {
+			log.Errorf("CACHE: sqlite stale cleanup failed: %v", err)
+		} else if n > 0 {
+			log.Infof("CACHE: sqlite cleaned %d stale entries", n)
 		}
-	}
-	if m.persistPath != "" {
-		if err := m.persistSnapshot(); err != nil {
-			log.Errorf("CACHE: final snapshot failed: %v", err)
-		} else {
-			log.Infof("CACHE: snapshot flushed to %s", m.persistPath)
+		if err := m.sqlite.Close(); err != nil {
+			log.Errorf("CACHE: sqlite close failed: %v", err)
 		}
 	}
 	m.mu.Lock()
@@ -460,27 +478,6 @@ func cloneEntry(entry *Entry) *Entry {
 	return &cloned
 }
 
-// cloneEntryForPersist deep-copies a Entry and clears cached RR fields
-// (which are interface types) so gob can encode without type registration.
-func cloneEntryForPersist(entry *Entry) *Entry {
-	cloned := cloneEntry(entry)
-	if cloned == nil {
-		return nil
-	}
-	clearRRFields(cloned.Answer)
-	clearRRFields(cloned.Authority)
-	clearRRFields(cloned.Additional)
-	return cloned
-}
-
-func clearRRFields(records []*CompactRecord) {
-	for _, r := range records {
-		if r != nil {
-			r.RR = nil
-		}
-	}
-}
-
 func cloneRecords(records []*CompactRecord) []*CompactRecord {
 	if len(records) == 0 {
 		return nil
@@ -493,15 +490,6 @@ func cloneRecords(records []*CompactRecord) []*CompactRecord {
 		rr := *r
 		cloned[i] = &rr
 	}
-	return cloned
-}
-
-func clonePTRs(records []ptrRecord) []ptrRecord {
-	if len(records) == 0 {
-		return nil
-	}
-	cloned := make([]ptrRecord, len(records))
-	copy(cloned, records)
 	return cloned
 }
 

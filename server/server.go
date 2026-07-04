@@ -240,8 +240,6 @@ func (s *Server) Start() error {
 	serverCtx, serverCancel := context.WithCancelCause(context.Background())
 	defer serverCancel(errors.New("server startup completed"))
 
-	log.Infof("SERVER: Starting ZJDNS Server %s", config.Version)
-
 	s.displayInfo()
 	if s.config.Server.StatsInterval() > 0 {
 		s.logStatsNow("startup")
