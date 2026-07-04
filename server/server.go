@@ -57,6 +57,17 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 	cacheRefreshGroup, cacheRefreshCtx := errgroup.WithContext(ctx)
 
+	cacheStore, err := cache.NewSQLiteCache(
+		cfg.Server.Features.Cache.DBPath,
+		cfg.Server.Features.Cache.MaxEntries,
+		cfg.Server.Features.Cache.MMapSizeMB,
+		cfg.Server.Features.Cache.CacheSizeMB,
+	)
+	if err != nil {
+		cancel(fmt.Errorf("cache init: %w", err))
+		return nil, fmt.Errorf("cache init: %w", err)
+	}
+
 	ednsHandler, err := edns.NewHandler(cfg.Server.Features.ECS)
 	if err != nil {
 		cancel(fmt.Errorf("EDNS handler init: %w", err))
@@ -78,17 +89,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			cancel(fmt.Errorf("CIDR filter init: %w", err))
 			return nil, fmt.Errorf("CIDR filter init: %w", err)
 		}
-	}
-
-	cacheStore, err := cache.NewSQLiteCache(
-		cfg.Server.Features.Cache.DBPath,
-		cfg.Server.Features.Cache.MaxEntries,
-		cfg.Server.Features.Cache.MMapSizeMB,
-		cfg.Server.Features.Cache.CacheSizeMB,
-	)
-	if err != nil {
-		cancel(fmt.Errorf("cache init: %w", err))
-		return nil, fmt.Errorf("cache init: %w", err)
 	}
 
 	h := handler.New(
