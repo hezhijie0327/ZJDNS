@@ -30,6 +30,7 @@ type SQLiteCache struct {
 	staleMaxAge int64
 	closed      int32
 	stopCh      chan struct{}
+	entryCount  atomic.Int64
 }
 
 // NewSQLiteCache opens or creates a SQLite database and returns a ready-to-use
@@ -56,7 +57,7 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(2)
 
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
@@ -264,6 +265,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return
 	}
 
+	s.entryCount.Add(1)
 	s.evictIfNeeded()
 }
 
@@ -521,10 +523,7 @@ func (s *SQLiteCache) evictIfNeeded() {
 		return
 	}
 
-	var count int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err != nil {
-		return
-	}
+	count := s.entryCount.Load()
 	if count <= int64(s.maxEntries) {
 		return
 	}
@@ -557,6 +556,7 @@ func (s *SQLiteCache) evictOldest(n int64) {
 	}
 	_ = tx.Commit()
 
+	s.entryCount.Add(-n)
 	log.Debugf("CACHE: evicted %d oldest entries (max=%d)", n, s.maxEntries)
 }
 
@@ -588,6 +588,7 @@ func (s *SQLiteCache) deleteExpiredEntries() {
 		return
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
+		s.entryCount.Add(-n)
 		log.Debugf("CACHE: cleaned %d expired entries", n)
 	}
 }
