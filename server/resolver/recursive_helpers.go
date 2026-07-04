@@ -135,3 +135,65 @@ func (r *Recursive) validateNODATAWithNSEC(response *dns.Msg, ctx context.Contex
 	}
 	return validated
 }
+
+// shouldRetryMinimisedQname checks RFC 9156 §2.3: if a minimised QNAME query
+// returns answer records for a different owner name, expose the full QNAME
+// and retry with the same nameservers.
+func (r *Recursive) shouldRetryMinimisedQname(queryName, qname string, qnameMinimise bool, response *dns.Msg, normalizedQname string) bool {
+	if !qnameMinimise || strings.EqualFold(queryName, qname) || len(response.Answer) == 0 {
+		return false
+	}
+	for _, rr := range response.Answer {
+		if rr != nil && strings.EqualFold(dnsutil.NormalizeDomain(rr.Header().Name), normalizedQname) {
+			return false
+		}
+	}
+	return true
+}
+
+// processAnswerWithDNSSEC validates the answer section with DNSSEC, handles
+// zone cut detection, and enforces bogus delegation policies. Returns a
+// terminal result when the answer is ready, or nil to continue the
+// delegation loop for NODATA/NXDOMAIN responses.
+func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain, validated *bool, ecsResponse *edns.ECSOption) *terminalResult {
+	if len(response.Answer) == 0 {
+		return nil
+	}
+
+	*validated = r.isDNSSECValid(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain)
+
+	if !*validated && chain.zoneCutDetected {
+		chain.zoneCutDetected = false
+		if cutValidated, cutErr := r.resolveZoneCut(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain); cutErr == nil {
+			*validated = cutValidated
+			if err := r.recordDNSSECFailure(chain, *validated,
+				fmt.Sprintf("bogus zone cut delegation for %s", question.Name)); err != nil {
+				log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
+				return &terminalResult{server: config.RecursiveIndicator, ecs: ecsResponse, err: err}
+			}
+		} else {
+			if len(chain.childDS) > 0 || chain.dsPresentButUnverified {
+				r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
+				if r.resolver.DNSSECEnforce {
+					return &terminalResult{server: config.RecursiveIndicator, ecs: ecsResponse,
+						err: fmt.Errorf("DNSSEC validation failed: zone cut resolution error for %s: %w", question.Name, cutErr)}
+				}
+			}
+			*validated = false
+		}
+		return &terminalResult{answer: stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
+			authority: response.Ns, additional: response.Extra,
+			validated: *validated, ecs: ecsResponse, server: config.RecursiveIndicator}
+	}
+
+	if (len(chain.childDS) > 0 || chain.dsPresentButUnverified) && !*validated {
+		r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
+		if r.resolver.DNSSECEnforce {
+			return &terminalResult{server: config.RecursiveIndicator, ecs: ecsResponse,
+				err: fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name)}
+		}
+	}
+	return &terminalResult{answer: stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
+		authority: response.Ns, additional: response.Extra,
+		validated: *validated, ecs: ecsResponse, server: config.RecursiveIndicator}
+}

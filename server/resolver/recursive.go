@@ -173,95 +173,14 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 		validated := cryptoValidated
 
-		// RFC 9156 §2.3: if a minimised QNAME query returns answer
-		// records whose owner names don't match the original QNAME,
-		// the minimised name is not a zone cut — it has its own
-		// records (e.g. a CNAME). Expose the full QNAME and retry
-		// with the same nameservers.
-		if qnameMinimise && !strings.EqualFold(queryQuestion.Name, qname) && len(response.Answer) > 0 {
-			matchesQname := false
-			for _, rr := range response.Answer {
-				if rr != nil && strings.EqualFold(dnsutil.NormalizeDomain(rr.Header().Name), normalizedQname) {
-					matchesQname = true
-					break
-				}
-			}
-			if !matchesQname {
-				log.Debugf("RECURSION: qname minimisation step=%d — answer for %s doesn't match %s, retrying with full QNAME",
-					minimiseSteps, queryQuestion.Name, qname)
-				pool.DefaultMessagePool.Put(response)
-				minimiseSteps = config.DefaultQnameMinimiseCount
-				continue
-			}
+		if r.shouldRetryMinimisedQname(queryQuestion.Name, qname, qnameMinimise, response, normalizedQname) {
+			pool.DefaultMessagePool.Put(response)
+			minimiseSteps = config.DefaultQnameMinimiseCount
+			continue
 		}
 
-		if len(response.Answer) > 0 {
-			validated = r.isDNSSECValid(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain)
-
-			// If the answer RRSIGs are signed by a child zone's keys
-			// (zone cut), process the response as a referral instead of
-			// returning it as the final answer. This handles cases where
-			// an authoritative server returns an answer directly from a
-			// delegated subdomain instead of issuing a referral.
-			if !validated && chain.zoneCutDetected {
-				log.Debugf("SECURITY: zone cut — resolving DNSSEC chain for child zone of %s", question.Name)
-				chain.zoneCutDetected = false
-				// Build the DNSSEC chain for the child zone directly by querying
-				// for DS and DNSKEY records, then validate the original answer
-				// against the child zone's verified keys. This avoids relying on
-				// the delegation-following path which requires NS+DS records in
-				// specific response sections that may not be present.
-				if cutValidated, cutErr := r.resolveZoneCut(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain); cutErr == nil {
-					validated = cutValidated
-					// Always record the DNSSEC EDE code for stats and client EDE hints,
-					// even when enforcement is off.
-					if err := r.recordDNSSECFailure(chain, validated,
-						fmt.Sprintf("bogus zone cut delegation for %s", question.Name)); err != nil {
-						log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
-						pool.DefaultMessagePool.Put(response)
-						return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false, err
-					}
-				} else {
-					log.Debugf("SECURITY: zone cut resolution failed for %s: %v", question.Name, cutErr)
-					// Zone cut resolution failed (e.g. no DS, DS verification
-					// failure). Always record the EDE code; return SERVFAIL only
-					// when enforcement is on.
-					if len(chain.childDS) > 0 || chain.dsPresentButUnverified {
-						r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
-						if r.resolver.DNSSECEnforce {
-							log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut resolution failed with DS present", question.Name)
-							pool.DefaultMessagePool.Put(response)
-							return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
-								fmt.Errorf("DNSSEC validation failed: zone cut resolution error for %s: %w", question.Name, cutErr)
-						}
-					}
-					validated = false
-				}
-				// Strip cross-zone answer records so the CNAME resolver follows the
-				// chain independently. Records signed by unrelated zone keys (e.g.
-				// A records for CDN CNAME targets) are validated via separate
-				// recursive resolution against their own zone's DNSKEYs.
-				return r.finalizeResponse(response, currentDomain, validated, ecsResponse)
-			} else {
-				// When DNSSEC crypto is enabled and the zone has DS records in the
-				// parent, a crypto verification failure means the answer is bogus.
-				// Always record the EDE code for client hints and stats; return
-				// SERVFAIL only when enforcement is on (RFC 4035).
-				if (len(chain.childDS) > 0 || chain.dsPresentButUnverified) && !validated {
-					r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
-					if r.resolver.DNSSECEnforce {
-						log.Debugf("SECURITY: DNSSEC validation failed for %s — zone has DS but DNSKEY/RRSIG verification failed", question.Name)
-						pool.DefaultMessagePool.Put(response)
-						return nil, nil, nil, false, ecsResponse, config.RecursiveIndicator, false,
-							fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name)
-					}
-				}
-				// Strip cross-zone answer records so the CNAME resolver follows the
-				// chain independently. Records signed by unrelated zone keys (e.g.
-				// A records for CDN CNAME targets) are validated via separate
-				// recursive resolution against their own zone's DNSKEYs.
-				return r.finalizeResponse(response, currentDomain, validated, ecsResponse)
-			}
+		if termRes := r.processAnswerWithDNSSEC(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, &validated, ecsResponse); termRes != nil {
+			return termRes.answer, termRes.authority, termRes.additional, termRes.validated, termRes.ecs, termRes.server, termRes.hijack, termRes.err
 		}
 
 		validated = r.validateNODATAWithNSEC(response, ctx, nameservers, currentDomain, chain, validated)
