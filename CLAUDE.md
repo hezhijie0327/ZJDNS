@@ -375,10 +375,10 @@ CREATE TABLE stats (
 
 **Key patterns**:
 - **DNS response cache**: `qtype` = original query type, records in original order
-- **NS latency cache**: `qtype` = `dns.TypeNone` (0), A/AAAA records with `latency_ms` populated by probe engine. `loadRecords` orders by `latency_ms IS NULL, latency_ms ASC` so probed records sort fastest-first.
+- **NS latency cache**: `qtype` = `dns.TypeNone` (0), A/AAAA records with `latency_ms` populated by probe engine. `loadRecords` puts non-A/AAAA records first, then sorts probed A/AAAA fastest-first.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT name FROM records r JOIN entries e ON r.entry_id = e.id WHERE r.rdata_ip = ? AND e.timestamp + e.ttl > unixepoch()`
-- **Eviction**: size-based (oldest `timestamp` first) on Set; TTL-based periodic cleanup (5 min sweep)
+- **Eviction: on Set when count > maxEntries. Prefers entries past serve-stale age (expires_at + staleMaxAge < now), then oldest by timestamp. No periodic cleanup — stale data is valuable for serve-stale.
 - **Probe updates**: `UPDATE records SET latency_ms = ? WHERE entry_id = ? AND rdata_ip = ?` — no entry overwrite needed
 - **Stats**: Per-request `UPDATE stats SET col = col + 1` (atomic, single row). Query via `SELECT * FROM stats`. No periodic save, no JSON.
 

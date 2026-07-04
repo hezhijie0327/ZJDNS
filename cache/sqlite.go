@@ -17,9 +17,8 @@ import (
 )
 
 const (
-	defaultCleanupInterval = 5 * time.Minute
-	defaultStaleMaxAge     = int64(config.DefaultStaleMaxAge)
-	defaultCacheLowWater   = 0.9
+	defaultStaleMaxAge        = int64(config.DefaultStaleMaxAge)
+	defaultStatsFlushInterval = 5 * time.Minute
 )
 
 // SQLiteCache is a DNS response cache backed entirely by SQLite.
@@ -28,7 +27,6 @@ type SQLiteCache struct {
 	maxEntries  int
 	mmapSizeMB  int
 	cacheSizeMB int
-	staleMaxAge int64
 	closed      int32
 	stopCh      chan struct{}
 	entryCount  atomic.Int64
@@ -101,7 +99,6 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 		maxEntries:  maxEntries,
 		mmapSizeMB:  mmapSizeMB,
 		cacheSizeMB: cacheSizeMB,
-		staleMaxAge: defaultStaleMaxAge,
 		stopCh:      make(chan struct{}),
 	}
 
@@ -115,9 +112,8 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
 		s.entryCount.Store(count)
 	}
-	s.deleteExpiredEntries()
 	s.flushStats()
-	s.startPeriodicCleanup()
+	s.startPeriodicStatsFlush()
 
 	persistLabel := path
 	if persistLabel == "" {
@@ -318,7 +314,7 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 		 JOIN entries e ON r.entry_id = e.id
 		 WHERE r.rdata_ip = ? AND e.expires_at + ? >= ?
 		 ORDER BY r.name`,
-		ip, s.staleMaxAge, log.NowUnix(),
+		ip, defaultStaleMaxAge, log.NowUnix(),
 	)
 	if err != nil {
 		log.Warnf("CACHE: PTR lookup failed for %s: %v", ip, err)
@@ -350,7 +346,6 @@ func (s *SQLiteCache) Close() error {
 	}
 	close(s.stopCh)
 	s.flushStats()
-	s.deleteExpiredEntries()
 	s.flushStats()
 	if err := s.db.Close(); err != nil {
 		log.Errorf("CACHE: sqlite close failed: %v", err)
@@ -620,14 +615,11 @@ func (s *SQLiteCache) evictIfNeeded() {
 	}
 
 	count := s.entryCount.Load()
-	if count <= int64(s.maxEntries) {
+	excess := count - int64(s.maxEntries)
+	if excess <= 0 {
 		return
 	}
 
-	excess := count - int64(float64(s.maxEntries)*defaultCacheLowWater)
-	if excess <= 0 {
-		excess = 1
-	}
 	s.evictOldest(excess)
 }
 
@@ -638,31 +630,33 @@ func (s *SQLiteCache) evictOldest(n int64) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.Query(`SELECT id FROM entries ORDER BY timestamp ASC LIMIT ?`, n)
-	if err != nil {
-		return
-	}
-
-	_ = rows.Close()
-
+	// Prefer evicting entries that can no longer serve-stale (expires_at +
+	// staleMaxAge < now), then fall back to the oldest-by-insertion entries.
 	if _, err := tx.Exec(
-		`DELETE FROM entries WHERE id IN (SELECT id FROM entries ORDER BY timestamp ASC LIMIT ?)`, n,
+		`DELETE FROM entries WHERE id IN (
+			SELECT id FROM entries
+			ORDER BY
+				CASE WHEN expires_at + ? < unixepoch() THEN 0 ELSE 1 END,
+				timestamp ASC
+			LIMIT ?
+		)`, defaultStaleMaxAge, n,
 	); err != nil {
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		log.Warnf("CACHE: commit tx failed: %v", err)
+		return
 	}
 
 	s.entryCount.Add(-n)
-	log.Debugf("CACHE: evicted %d oldest entries (max=%d)", n, s.maxEntries)
+	log.Debugf("CACHE: evicted %d entries (max=%d)", n, s.maxEntries)
 }
 
-// ── Periodic cleanup ─────────────────────────────────────────────────────────
+// ── Periodic stats flush ────────────────────────────────────────────────────
 
-func (s *SQLiteCache) startPeriodicCleanup() {
+func (s *SQLiteCache) startPeriodicStatsFlush() {
 	go func() {
-		ticker := time.NewTicker(defaultCleanupInterval)
+		ticker := time.NewTicker(defaultStatsFlushInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -673,23 +667,9 @@ func (s *SQLiteCache) startPeriodicCleanup() {
 			if atomic.LoadInt32(&s.closed) != 0 {
 				return
 			}
-			s.deleteExpiredEntries()
 			s.flushStats()
 		}
 	}()
-}
-
-func (s *SQLiteCache) deleteExpiredEntries() {
-	cutoff := log.NowUnix() - s.staleMaxAge
-	res, err := s.db.Exec(`DELETE FROM entries WHERE expires_at < ?`, cutoff)
-	if err != nil {
-		log.Warnf("CACHE: expired entry cleanup failed: %v", err)
-		return
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		s.entryCount.Add(-n)
-		log.Debugf("CACHE: cleaned %d expired entries", n)
-	}
 }
 
 // UpdateLatency sets the latency for a specific record identified by entry lookup
