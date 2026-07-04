@@ -57,12 +57,11 @@ func BenchmarkCacheSetGet(b *testing.B) {
 		Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300},
 		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
 	}
-	cacheKey := "bench:www.example.com:1:1:nodnssec"
 
 	b.ResetTimer()
 	for b.Loop() {
-		c.Set(cacheKey, []dns.RR{a}, nil, nil, false, nil)
-		c.Get(cacheKey)
+		c.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a}, nil, nil, false)
+		c.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	}
 }
 
@@ -75,13 +74,13 @@ func BenchmarkCacheParallel(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			key := fmt.Sprintf("bench:host%d.example.com:1:1:nodnssec", i%1000)
+			name := fmt.Sprintf("host%d.example.com.", i%1000)
 			a := &dns.A{
 				Hdr: dns.Header{Name: fmt.Sprintf("host%d.example.com.", i), Class: dns.ClassINET, TTL: 300},
 				A:   rdata.A{Addr: netip.AddrFrom4([4]byte{192, 0, 2, byte(i % 256)})},
 			}
-			c.Set(key, []dns.RR{a}, nil, nil, false, nil)
-			c.Get(key)
+			c.Set(name, dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a}, nil, nil, false)
+			c.Get(name, dns.TypeA, dns.ClassINET, nil, false)
 			i++
 		}
 	})

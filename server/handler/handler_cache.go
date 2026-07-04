@@ -18,7 +18,7 @@ import (
 	"zjdns/server/resolver"
 )
 
-func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bool, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
+func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bool, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, prefetchTriggered *bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	if entry.Validated {
 		*dnssecStatus = config.DNSSECStatusSecure
 	} else {
@@ -32,11 +32,11 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 			defer dnsutil.HandlePanic("cache refresh")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
-			return h.refreshCacheEntry(ctx, question, ecsOpt, cacheKey)
+			return h.refreshCacheEntry(ctx, question, ecsOpt)
 		})
 	}
 
-	if !isExpired && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) && h.shouldStartPrefetch(cacheKey) {
+	if !isExpired && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) && h.shouldStartPrefetch(question.Name) {
 		if prefetchTriggered != nil {
 			*prefetchTriggered = true
 		}
@@ -45,7 +45,7 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
 			log.Debugf("CACHE: prefetch triggered for %s (threshold=%d%%)", question.Name, config.DefaultPrefetchThresholdPercent)
-			return h.refreshCacheEntry(ctx, question, ecsOpt, cacheKey)
+			return h.refreshCacheEntry(ctx, question, ecsOpt)
 		})
 	}
 
@@ -76,15 +76,15 @@ func (h *Handler) buildCacheResponse(req *dns.Msg, entry *cache.Entry, isExpired
 
 	if isExpired {
 		// Stale: set all RR TTLs directly to the cyclical stale countdown.
-		msg.Answer = cache.ExpandAndProcessRecords(entry.Answer, int64(responseTTL), false, clientRequestedDNSSEC)
-		msg.Ns = cache.ExpandAndProcessRecords(entry.Authority, int64(responseTTL), false, clientRequestedDNSSEC)
-		msg.Extra = cache.ExpandAndProcessRecords(entry.Additional, int64(responseTTL), false, clientRequestedDNSSEC)
+		msg.Answer = cache.ProcessRecords(entry.Answer, int64(responseTTL), false, clientRequestedDNSSEC)
+		msg.Ns = cache.ProcessRecords(entry.Authority, int64(responseTTL), false, clientRequestedDNSSEC)
+		msg.Extra = cache.ProcessRecords(entry.Additional, int64(responseTTL), false, clientRequestedDNSSEC)
 	} else {
 		// Fresh: subtract actual elapsed time from each RR's original TTL.
 		elapsed := ttl.Elapsed(entry.Timestamp)
-		msg.Answer = cache.ExpandAndProcessRecords(entry.Answer, elapsed, true, clientRequestedDNSSEC)
-		msg.Ns = cache.ExpandAndProcessRecords(entry.Authority, elapsed, true, clientRequestedDNSSEC)
-		msg.Extra = cache.ExpandAndProcessRecords(entry.Additional, elapsed, true, clientRequestedDNSSEC)
+		msg.Answer = cache.ProcessRecords(entry.Answer, elapsed, true, clientRequestedDNSSEC)
+		msg.Ns = cache.ProcessRecords(entry.Authority, elapsed, true, clientRequestedDNSSEC)
+		msg.Extra = cache.ProcessRecords(entry.Additional, elapsed, true, clientRequestedDNSSEC)
 	}
 
 	if entry.Validated {
@@ -102,7 +102,7 @@ func (h *Handler) buildCacheResponse(req *dns.Msg, entry *cache.Entry, isExpired
 	return msg
 }
 
-func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, cacheKey string, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
+func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, staleServed *bool, fallbackUsed *bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	if h.config.Server.Features.Cache.PreferStale {
 		if staleServed != nil {
 			*staleServed = true
@@ -116,7 +116,7 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 			defer dnsutil.HandlePanic("expired cache refresh")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
-			return h.refreshCacheEntry(ctx, question, ecsOpt, cacheKey)
+			return h.refreshCacheEntry(ctx, question, ecsOpt)
 		})
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
@@ -147,12 +147,12 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 			if fallbackUsed != nil && res.fallback {
 				*fallbackUsed = true
 			}
-			return h.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs, clientIP, isSecureConnection, dnssecStatus, tcpKeepaliveTimeout)
+			return h.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, res.answer, res.authority, res.additional, res.validated, res.ecs, clientIP, isSecureConnection, dnssecStatus, tcpKeepaliveTimeout)
 		}
 		if staleServed != nil {
 			*staleServed = true
 		}
-		return h.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, nil, dnssecStatus, tcpKeepaliveTimeout)
+		return h.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, nil, dnssecStatus, tcpKeepaliveTimeout)
 	case <-timer.C:
 		if staleServed != nil {
 			*staleServed = true
@@ -169,9 +169,9 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 					return
 				}
 				log.Debugf("CACHE: background refresh completed for slow expired query %s", question.Name)
-				h.cache.Set(cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
+				h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, res.answer, res.authority, res.additional, res.validated)
 				if h.prober != nil {
-					h.prober.Start(question.Name, question.Qtype, cacheKey, res.answer, res.authority, res.additional, res.validated, res.ecs)
+					h.prober.Start(question.Name, question.Qtype, res.answer, res.authority, res.additional, res.validated, res.ecs)
 				}
 			case <-h.ctx.Done():
 			}
@@ -180,8 +180,8 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 	}
 }
 
-func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
-	log.Debugf("CACHE: miss key=%s for %s, querying upstream/recursive", cacheKey, question.Name)
+func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, clientIP net.IP, isSecureConnection bool, hadError *bool, fallbackUsed *bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
+	log.Debugf("CACHE: miss for %s, querying upstream/recursive", question.Name)
 	qr := h.resolver.Query(h.ctx, resolver.Question{Name: question.Name, Qtype: question.Qtype, Qclass: question.Qclass}, ecsOpt)
 	if fallbackUsed != nil && qr.Fallback {
 		*fallbackUsed = true
@@ -195,14 +195,14 @@ func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns
 		if hadError != nil {
 			*hadError = true
 		}
-		return h.processQueryError(req, cacheKey, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, qr.Err, dnssecStatus, tcpKeepaliveTimeout)
+		return h.processQueryError(req, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, qr.Err, dnssecStatus, tcpKeepaliveTimeout)
 	}
 
-	return h.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS, clientIP, isSecureConnection, dnssecStatus, tcpKeepaliveTimeout)
+	return h.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS, clientIP, isSecureConnection, dnssecStatus, tcpKeepaliveTimeout)
 }
 
-func (h *Handler) processQueryError(req *dns.Msg, cacheKey string, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
-	if entry, found, _ := h.cache.Get(cacheKey); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
+func (h *Handler) processQueryError(req *dns.Msg, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
+	if entry, found, _ := h.cache.Get(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		if entry.Validated {
 			*dnssecStatus = config.DNSSECStatusSecure
 		} else {
@@ -245,7 +245,7 @@ func (h *Handler) processCIDRRefused(req *dns.Msg, question Question, ecsOpt *ed
 	return msg
 }
 
-func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, clientIP net.IP, isSecureConnection bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
+func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption, clientIP net.IP, isSecureConnection bool, dnssecStatus *string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	msg := h.buildResponse(req)
 
 	if validated {
@@ -272,10 +272,10 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 		}
 	}
 
-	log.Debugf("CACHE: populating cache key=%s for %s", cacheKey, question.Name)
-	h.cache.Set(cacheKey, answer, authority, additional, validated, responseECS)
+	log.Debugf("CACHE: populating cache for %s", question.Name)
+	h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, answer, authority, additional, validated)
 	if h.prober != nil {
-		h.prober.Start(question.Name, question.Qtype, cacheKey, answer, authority, additional, validated, responseECS)
+		h.prober.Start(question.Name, question.Qtype, answer, authority, additional, validated, responseECS)
 	}
 
 	msg.Answer = cache.ProcessRecords(answer, 0, false, clientRequestedDNSSEC)
@@ -301,7 +301,7 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	return msg
 }
 
-func (h *Handler) refreshCacheEntry(ctx context.Context, question Question, ecs *edns.ECSOption, cacheKey string) error {
+func (h *Handler) refreshCacheEntry(ctx context.Context, question Question, ecs *edns.ECSOption) error {
 	defer dnsutil.HandlePanic("cache refresh")
 
 	if atomic.LoadInt32(&h.closed) != 0 {
@@ -319,9 +319,9 @@ func (h *Handler) refreshCacheEntry(ctx context.Context, question Question, ecs 
 		return qr.Err
 	}
 
-	h.cache.Set(cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
+	h.cache.Set(question.Name, question.Qtype, question.Qclass, ecs, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated)
 	if h.prober != nil {
-		h.prober.Start(question.Name, question.Qtype, cacheKey, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
+		h.prober.Start(question.Name, question.Qtype, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
 	}
 
 	return nil

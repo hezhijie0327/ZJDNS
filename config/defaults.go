@@ -109,13 +109,6 @@ const (
 	DefaultMaxIdleConnsPerHost  = 8
 	DefaultDOTWriteChannelSize  = 64
 	DefaultDOHMaxRequestSize    = 8192 // Max DoH request body size
-	DefaultCacheKeyBufferSize   = 128
-	DefaultCacheKeyMaxLength    = 512
-	DefaultCacheKeyECSPrefix    = ":ecs:"
-	DefaultCacheKeyDNSSECSuffix = ":dnssec"
-	DefaultCacheKeySeparator    = ':'
-	DefaultCacheKeyECSDelim     = '/'
-	DefaultCacheKeyHashFormat   = "h:%x"
 	DefaultRewriteRulesCapacity = 16
 
 	DefaultTokenStoreCapacity     = 32  // QUIC LRU token store capacity per key

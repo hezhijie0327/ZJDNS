@@ -36,10 +36,7 @@ var DefaultRootServers = []string{
 	"202.12.27.33:53", "[2001:dc3::35]:53",
 }
 
-const (
-	nsAddrKeyPrefix = "dns:_addrs:"
-	nsAddrKeySuffix = ":0:1"
-)
+const ()
 
 // Recursive performs iterative DNS resolution by walking the root, TLD, and
 // authoritative nameserver hierarchy. When DNSSEC validation is enabled, it
@@ -306,8 +303,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			for nsName, records := range nsGlue {
 				if len(records) > 0 {
 					qtype := dns.RRToType(records[0])
-					cacheKey := cache.BuildCacheKey(nsName, qtype, dns.ClassINET, nil, false)
-					r.cache.Set(cacheKey, records, nil, nil, false, nil)
+					r.cache.Set(nsName, qtype, dns.ClassINET, nil, false, records, nil, nil, false)
 				}
 			}
 			// Fire async latency probe to update cache with sorted records.

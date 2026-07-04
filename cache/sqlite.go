@@ -1,20 +1,17 @@
 package cache
 
 import (
-	"bytes"
 	"database/sql"
-	"encoding/gob"
 	"fmt"
-	"net"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 	_ "modernc.org/sqlite"
 
 	"zjdns/config"
+	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
 )
@@ -22,18 +19,10 @@ import (
 const (
 	defaultCleanupInterval = 5 * time.Minute
 	defaultStaleMaxAge     = int64(config.DefaultStaleMaxAge)
-	defaultCacheLowWater   = 0.9 // evict down to 90% of max when over limit
+	defaultCacheLowWater   = 0.9
 )
 
-// ptrRecord holds an extracted PTR mapping for reverse lookup indexing.
-type ptrRecord struct {
-	IP   string
-	Name string
-	TTL  uint32
-}
-
 // SQLiteCache is a DNS response cache backed entirely by SQLite.
-// WAL mode enables concurrent reads alongside a single serialized writer.
 type SQLiteCache struct {
 	db          *sql.DB
 	maxEntries  int
@@ -46,8 +35,7 @@ type SQLiteCache struct {
 
 // NewSQLiteCache opens or creates a SQLite database and returns a ready-to-use
 // cache. path is the database file path; an empty string uses an in-memory
-// database. maxEntries controls the size-based eviction ceiling.
-// mmapSizeMB and cacheSizeMB are SQLite PRAGMA tunables; zero means use defaults.
+// database. mmapSizeMB and cacheSizeMB are SQLite PRAGMA tunables; zero means use defaults.
 func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLiteCache, error) {
 	if maxEntries <= 0 {
 		maxEntries = config.DefaultMaxCacheEntries
@@ -63,7 +51,7 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 	if dsn == "" {
 		dsn = ":memory:"
 	}
-	dsn += "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000"
+	dsn += "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=ON"
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -90,23 +78,19 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 		return nil, fmt.Errorf("sqlite migrate: %w", err)
 	}
 
-	// One-time cleanup of entries that expired beyond the serve-stale window
-	// (possible after unclean shutdown).
 	s.deleteExpiredEntries()
-
 	s.startPeriodicCleanup()
 
 	persistLabel := path
 	if persistLabel == "" {
 		persistLabel = "memory"
 	}
-	log.Infof("CACHE: SQLite cache enabled (db=%s, max_entries=%d, mmap_size=%dMB, cache_size=%dMB)", persistLabel, maxEntries, mmapSizeMB, cacheSizeMB)
+	log.Infof("CACHE: SQLite cache enabled (db=%s, max_entries=%d, mmap_size=%dMB, cache_size=%dMB)",
+		persistLabel, maxEntries, mmapSizeMB, cacheSizeMB)
 	return s, nil
 }
 
-// migrate creates the schema and sets performance PRAGMAs. It is idempotent.
 func (s *SQLiteCache) migrate() error {
-	// Performance PRAGMAs — applied once at connection open.
 	pragmas := []string{
 		fmt.Sprintf("PRAGMA mmap_size = %d", s.mmapSizeMB*1024*1024),
 		fmt.Sprintf("PRAGMA cache_size = %d", -s.cacheSizeMB*1024),
@@ -121,125 +105,106 @@ func (s *SQLiteCache) migrate() error {
 
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS entries (
-			key       TEXT PRIMARY KEY,
-			data      BLOB NOT NULL,
-			timestamp INTEGER NOT NULL DEFAULT 0,
-			ttl       INTEGER NOT NULL DEFAULT 0
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			qname      TEXT NOT NULL,
+			qtype      INTEGER NOT NULL,
+			qclass     INTEGER NOT NULL DEFAULT 1,
+			ecs_addr   TEXT NOT NULL DEFAULT '',
+			ecs_prefix INTEGER NOT NULL DEFAULT 0,
+			dnssec_ok  INTEGER NOT NULL DEFAULT 0,
+			timestamp  INTEGER NOT NULL,
+			ttl        INTEGER NOT NULL,
+			validated  INTEGER NOT NULL DEFAULT 0,
+			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 		);
 
-		CREATE TABLE IF NOT EXISTS ptr_index (
-			ip        TEXT NOT NULL,
+		CREATE TABLE IF NOT EXISTS records (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			section   TEXT NOT NULL,
+			seq       INTEGER NOT NULL DEFAULT 0,
 			name      TEXT NOT NULL,
-			ttl       INTEGER NOT NULL DEFAULT 0,
-			timestamp INTEGER NOT NULL DEFAULT 0,
-			cache_key TEXT NOT NULL DEFAULT '',
-			PRIMARY KEY (ip, name)
+			rtype     INTEGER NOT NULL,
+			ttl       INTEGER NOT NULL,
+			rr_text   TEXT NOT NULL,
+			rdata_ip  TEXT
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
+		CREATE INDEX IF NOT EXISTS idx_entries_lookup ON entries(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok);
+		CREATE INDEX IF NOT EXISTS idx_records_entry ON records(entry_id);
+		CREATE INDEX IF NOT EXISTS idx_records_ip ON records(rdata_ip) WHERE rdata_ip IS NOT NULL;
+
+		CREATE TABLE IF NOT EXISTS stats (
+			key       TEXT PRIMARY KEY,
+			data      BLOB NOT NULL,
+			ttl       INTEGER NOT NULL,
+			timestamp INTEGER NOT NULL
+		);
 	`)
 	return err
 }
 
 // ── Store interface ──────────────────────────────────────────────────────────
 
-// Get retrieves a cache entry by key, returning the entry, whether found,
-// and whether the entry is expired.
-func (s *SQLiteCache) Get(key string) (*Entry, bool, bool) {
+// Get retrieves a cached DNS response by query parameters.
+func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return nil, false, false
 	}
 
-	var data []byte
+	qname = dnsutil.NormalizeDomain(qname)
+	ecsAddr, ecsPrefix := ecsParams(ecs)
+
+	var id int64
 	var ts int64
-	var ttlSeconds int
+	var entryTTL int
+	var validated int
 	err := s.db.QueryRow(
-		`SELECT data, timestamp, ttl FROM entries WHERE key = ?`, key,
-	).Scan(&data, &ts, &ttlSeconds)
+		`SELECT id, timestamp, ttl, validated FROM entries
+		 WHERE qname = ? AND qtype = ? AND qclass = ?
+		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
+	).Scan(&id, &ts, &entryTTL, &validated)
 	if err == sql.ErrNoRows {
 		return nil, false, false
 	}
 	if err != nil {
-		log.Warnf("CACHE: sqlite get failed: %v", err)
+		log.Warnf("CACHE: get query failed: %v", err)
 		return nil, false, false
 	}
 
-	var entry Entry
-	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&entry); err != nil {
-		log.Warnf("CACHE: gob decode failed for %s: %v", key, err)
+	entry, err := s.loadRecords(id)
+	if err != nil {
+		log.Warnf("CACHE: load records failed for entry %d: %v", id, err)
 		return nil, false, false
 	}
-
-	// Use denormalised timestamp/ttl from the row — they are canonical.
 	entry.Timestamp = ts
-	entry.TTL = ttlSeconds
+	entry.TTL = entryTTL
+	entry.Validated = validated != 0
 
-	isExpired := ttl.IsExpired(ts, ttlSeconds)
-	return &entry, true, isExpired
+	isExpired := ttl.IsExpired(ts, entryTTL)
+	return entry, true, isExpired
 }
 
 // Set stores a DNS response in the cache.
-func (s *SQLiteCache) Set(key string, answer, authority, additional []dns.RR, validated bool, ecs *config.ECSOption) {
-	s.SetWithDNSSEC(key, answer, authority, additional, validated, false, ecs)
-}
+func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
+	answer, authority, additional []dns.RR, validated bool) {
 
-// SetWithDNSSEC stores a DNS response with explicit DNSSEC cryptographic
-// validation status.
-func (s *SQLiteCache) SetWithDNSSEC(key string, answer, authority, additional []dns.RR, validated bool, dnssecValidated bool, ecs *config.ECSOption) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
 	}
 	now := log.NowUnix()
 	entryTTL := minTTL(answer, authority, additional)
-
 	if hasNSECOrNSEC3(authority) {
 		if capTTL := negativeTTLCap(authority); capTTL < entryTTL {
 			entryTTL = capTTL
 		}
 	}
 
-	entry := &Entry{
-		Answer:          compact(answer),
-		Authority:       compact(authority),
-		Additional:      compact(additional),
-		TTL:             entryTTL,
-		Timestamp:       now,
-		Validated:       validated,
-		DNSSECValidated: dnssecValidated,
-	}
-	if ecs != nil {
-		entry.ECSFamily = ecs.Family
-		entry.ECSSourcePrefix = ecs.SourcePrefix
-		entry.ECSScopePrefix = ecs.ScopePrefix
-		entry.ECSAddress = ecs.Address.String()
-	}
-
-	s.setEntryInternal(key, entry)
-}
-
-// SetEntry stores a pre-built Entry in the cache under the given key.
-// The entry is deep-cloned so the caller retains ownership of the original.
-func (s *SQLiteCache) SetEntry(key string, entry *Entry) {
-	if atomic.LoadInt32(&s.closed) != 0 || entry == nil {
-		return
-	}
-	s.setEntryInternal(key, cloneEntry(entry))
-}
-
-// setEntryInternal gob-encodes the entry and writes it to SQLite along with
-// denormalised timestamp/ttl columns and PTR index rows. Ownership of the
-// entry is transferred — the caller must not retain a reference.
-func (s *SQLiteCache) setEntryInternal(key string, entry *Entry) {
-	cloned := cloneEntryForPersist(entry)
-
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(cloned); err != nil {
-		log.Warnf("CACHE: gob encode failed for %s: %v", key, err)
-		return
-	}
-	data := buf.Bytes()
-
-	ptrs := extractPTRRecords(entry)
+	ecsAddr, ecsPrefix := ecsParams(ecs)
+	qname = dnsutil.NormalizeDomain(qname)
+	dnssecInt := boolToInt(dnssecOK)
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -249,30 +214,30 @@ func (s *SQLiteCache) setEntryInternal(key string, entry *Entry) {
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO entries (key, data, timestamp, ttl) VALUES (?, ?, ?, ?)`,
-		key, data, entry.Timestamp, entry.TTL,
+		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok, timestamp, ttl, validated)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt, now, entryTTL, boolToInt(validated),
 	); err != nil {
-		log.Warnf("CACHE: insert entry failed for %s: %v", key, err)
+		log.Warnf("CACHE: insert entry failed: %v", err)
 		return
 	}
 
-	// Delete old PTR rows for this key, then insert current ones.
-	if _, err := tx.Exec(`DELETE FROM ptr_index WHERE cache_key = ?`, key); err != nil {
-		log.Warnf("CACHE: delete ptrs failed for %s: %v", key, err)
+	var entryID int64
+	if err := tx.QueryRow(
+		`SELECT id FROM entries WHERE qname=? AND qtype=? AND qclass=? AND ecs_addr=? AND ecs_prefix=? AND dnssec_ok=?`,
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
+	).Scan(&entryID); err != nil {
+		log.Warnf("CACHE: select entry id failed: %v", err)
 		return
 	}
-	for _, pr := range ptrs {
-		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO ptr_index (ip, name, ttl, timestamp, cache_key) VALUES (?, ?, ?, ?, ?)`,
-			pr.IP, pr.Name, pr.TTL, entry.Timestamp, key,
-		); err != nil {
-			log.Warnf("CACHE: insert ptr failed for %s/%s: %v", pr.IP, pr.Name, err)
-			return
-		}
-	}
+
+	// Old records were cascade-deleted by INSERT OR REPLACE. Insert new ones.
+	insertRecords(tx, entryID, "answer", answer)
+	insertRecords(tx, entryID, "authority", authority)
+	insertRecords(tx, entryID, "additional", additional)
 
 	if err := tx.Commit(); err != nil {
-		log.Warnf("CACHE: commit tx failed for %s: %v", key, err)
+		log.Warnf("CACHE: commit tx failed: %v", err)
 		return
 	}
 
@@ -280,16 +245,20 @@ func (s *SQLiteCache) setEntryInternal(key string, entry *Entry) {
 }
 
 // ReverseLookup returns all cached domain names mapped to the given IP address.
-func (s *SQLiteCache) ReverseLookup(ip net.IP) []LookupResult {
-	if ip == nil {
+func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
+	if ip == "" {
 		return nil
 	}
 
 	rows, err := s.db.Query(
-		`SELECT name, ttl, timestamp FROM ptr_index WHERE ip = ? ORDER BY name`, ip.String(),
+		`SELECT DISTINCT r.name, r.ttl, e.timestamp FROM records r
+		 JOIN entries e ON r.entry_id = e.id
+		 WHERE r.rdata_ip = ? AND e.timestamp + e.ttl > ? AND e.timestamp + e.ttl + ? >= ?
+		 ORDER BY r.name`,
+		ip, log.NowUnix(), s.staleMaxAge, log.NowUnix(),
 	)
 	if err != nil {
-		log.Warnf("CACHE: PTR lookup failed for %s: %v", ip.String(), err)
+		log.Warnf("CACHE: PTR lookup failed for %s: %v", ip, err)
 		return nil
 	}
 	defer func() { _ = rows.Close() }()
@@ -310,8 +279,8 @@ func (s *SQLiteCache) ReverseLookup(ip net.IP) []LookupResult {
 	return results
 }
 
-// Close stops the periodic cleanup goroutine, performs final expiry cleanup,
-// and closes the database.
+// Close stops the periodic cleanup goroutine, performs final cleanup, and
+// closes the database.
 func (s *SQLiteCache) Close() error {
 	if !atomic.CompareAndSwapInt32(&s.closed, 0, 1) {
 		return nil
@@ -326,10 +295,45 @@ func (s *SQLiteCache) Close() error {
 	return nil
 }
 
+// ── Stats persistence ────────────────────────────────────────────────────────
+
+// SaveStats stores a JSON stats snapshot in the stats table.
+func (s *SQLiteCache) SaveStats(data []byte, ttlSeconds int) {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return
+	}
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO stats (key, data, ttl, timestamp) VALUES (?, ?, ?, ?)`,
+		config.StatsPersistKey, data, ttlSeconds, log.NowUnix(),
+	)
+	if err != nil {
+		log.Warnf("CACHE: save stats failed: %v", err)
+	}
+}
+
+// LoadStats retrieves a non-expired stats snapshot from the stats table.
+func (s *SQLiteCache) LoadStats() ([]byte, bool) {
+	var data []byte
+	var ts int64
+	var ttlSeconds int
+	err := s.db.QueryRow(
+		`SELECT data, timestamp, ttl FROM stats WHERE key = ?`, config.StatsPersistKey,
+	).Scan(&data, &ts, &ttlSeconds)
+	if err == sql.ErrNoRows {
+		return nil, false
+	}
+	if err != nil {
+		log.Warnf("CACHE: load stats failed: %v", err)
+		return nil, false
+	}
+	if ttl.IsExpired(ts, ttlSeconds) {
+		return nil, false
+	}
+	return data, true
+}
+
 // ── Eviction ─────────────────────────────────────────────────────────────────
 
-// evictIfNeeded checks whether the entry count exceeds the configured limit and
-// evicts the oldest entries (by timestamp) down to the low-water mark.
 func (s *SQLiteCache) evictIfNeeded() {
 	if s.maxEntries <= 0 {
 		return
@@ -337,10 +341,8 @@ func (s *SQLiteCache) evictIfNeeded() {
 
 	var count int64
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err != nil {
-		log.Warnf("CACHE: count query failed during eviction: %v", err)
 		return
 	}
-
 	if count <= int64(s.maxEntries) {
 		return
 	}
@@ -349,71 +351,47 @@ func (s *SQLiteCache) evictIfNeeded() {
 	if excess <= 0 {
 		excess = 1
 	}
-
-	s.evictOldestEntries(excess)
+	s.evictOldest(excess)
 }
 
-// evictOldestEntries removes the N oldest entries (by timestamp) along with
-// their PTR index rows, in a single transaction.
-func (s *SQLiteCache) evictOldestEntries(n int64) {
+func (s *SQLiteCache) evictOldest(n int64) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.Query(`SELECT key FROM entries ORDER BY timestamp ASC LIMIT ?`, n)
+	rows, err := tx.Query(`SELECT id FROM entries ORDER BY timestamp ASC LIMIT ?`, n)
 	if err != nil {
-		log.Warnf("CACHE: select for eviction failed: %v", err)
 		return
 	}
 
-	var keys []string
+	var ids []int64
 	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err != nil {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
 			continue
 		}
-		keys = append(keys, k)
+		ids = append(ids, id)
 	}
 	_ = rows.Close()
 
-	if len(keys) == 0 {
+	if len(ids) == 0 {
 		return
 	}
 
-	// Delete PTR rows first (no foreign key cascade — manual cleanup).
-	for _, k := range keys {
-		if _, err := tx.Exec(`DELETE FROM ptr_index WHERE cache_key = ?`, k); err != nil {
-			log.Warnf("CACHE: evict ptr cleanup failed for %s: %v", k, err)
-		}
-	}
-
-	// Delete entries in a single statement using IN clause.
-	// SQLite supports up to ~999 parameters; eviction batches are small.
-	stmt := `DELETE FROM entries WHERE key IN (?` + strings.Repeat(`,?`, len(keys)-1) + `)`
-	args := make([]any, len(keys))
-	for i, k := range keys {
-		args[i] = k
+	// Build IN clause. Records cascade-delete automatically.
+	stmt := `DELETE FROM entries WHERE id IN (?` + strings.Repeat(`,?`, len(ids)-1) + `)`
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
 	}
 	if _, err := tx.Exec(stmt, args...); err != nil {
-		log.Warnf("CACHE: evict delete failed: %v", err)
 		return
 	}
+	_ = tx.Commit()
 
-	if err := tx.Commit(); err != nil {
-		log.Warnf("CACHE: evict commit failed: %v", err)
-		return
-	}
-
-	log.Debugf("CACHE: evicted %d oldest entries (count=%d, max=%d)", len(keys), s.entryCount(), s.maxEntries)
-}
-
-// entryCount returns the current number of entries (for logging).
-func (s *SQLiteCache) entryCount() int64 {
-	var n int64
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&n)
-	return n
+	log.Debugf("CACHE: evicted %d oldest entries (max=%d)", len(ids), s.maxEntries)
 }
 
 // ── Periodic cleanup ─────────────────────────────────────────────────────────
@@ -432,18 +410,13 @@ func (s *SQLiteCache) startPeriodicCleanup() {
 				return
 			}
 			s.deleteExpiredEntries()
-			s.cleanOrphanedPTRs()
 		}
 	}()
 }
 
-// deleteExpiredEntries removes entries whose TTL has elapsed beyond the
-// serve-stale window.
 func (s *SQLiteCache) deleteExpiredEntries() {
 	cutoff := log.NowUnix() - s.staleMaxAge
-	res, err := s.db.Exec(
-		`DELETE FROM entries WHERE timestamp + ttl < ?`, cutoff,
-	)
+	res, err := s.db.Exec(`DELETE FROM entries WHERE timestamp + ttl < ?`, cutoff)
 	if err != nil {
 		log.Warnf("CACHE: expired entry cleanup failed: %v", err)
 		return
@@ -453,106 +426,68 @@ func (s *SQLiteCache) deleteExpiredEntries() {
 	}
 }
 
-// cleanOrphanedPTRs removes ptr_index rows whose parent cache entry no longer
-// exists (e.g. after eviction or expiry if the delete missed them).
-func (s *SQLiteCache) cleanOrphanedPTRs() {
-	res, err := s.db.Exec(
-		`DELETE FROM ptr_index WHERE cache_key NOT IN (SELECT key FROM entries)`,
-	)
-	if err != nil {
-		log.Warnf("CACHE: orphan PTR cleanup failed: %v", err)
-		return
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		log.Debugf("CACHE: cleaned %d orphaned PTR entries", n)
-	}
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// compact converts DNS resource records to space-efficient CompactRecords.
-func compact(rrs []dns.RR) []*CompactRecord {
-	if len(rrs) == 0 {
-		return nil
+func (s *SQLiteCache) loadRecords(entryID int64) (*Entry, error) {
+	rows, err := s.db.Query(
+		`SELECT section, name, rtype, ttl, rr_text FROM records WHERE entry_id = ? ORDER BY section, seq`, entryID,
+	)
+	if err != nil {
+		return nil, err
 	}
-	result := make([]*CompactRecord, 0, len(rrs))
-	seen := make(map[string]struct{}, len(rrs))
-	for _, rr := range rrs {
+	defer func() { _ = rows.Close() }()
+
+	entry := &Entry{}
+	for rows.Next() {
+		var section, name, rrText string
+		var rtype int
+		var recTTL int
+		if err := rows.Scan(&section, &name, &rtype, &recTTL, &rrText); err != nil {
+			continue
+		}
+		rr, err := dns.New(rrText)
+		if err != nil {
+			continue
+		}
+		switch section {
+		case "answer":
+			entry.Answer = append(entry.Answer, rr)
+		case "authority":
+			entry.Authority = append(entry.Authority, rr)
+		case "additional":
+			entry.Additional = append(entry.Additional, rr)
+		}
+	}
+	return entry, rows.Err()
+}
+
+func insertRecords(tx *sql.Tx, entryID int64, section string, rrs []dns.RR) {
+	for i, rr := range rrs {
 		if rr == nil || dns.RRToType(rr) == dns.TypeOPT {
 			continue
 		}
 		rrText := rr.String()
-		if _, dup := seen[rrText]; dup {
-			continue
-		}
-		seen[rrText] = struct{}{}
-		if cr := newCompactRecord(rr); cr != nil {
-			result = append(result, cr)
-		}
-	}
-	return result
-}
-
-// expand converts a CompactRecord back to a DNS resource record.
-func expand(cr *CompactRecord) dns.RR {
-	if cr == nil || cr.Text == "" {
-		return nil
-	}
-	rr, _ := dns.New(cr.Text)
-	return rr
-}
-
-// cloneEntry deep-copies an Entry so the caller can safely retain the original.
-func cloneEntry(entry *Entry) *Entry {
-	if entry == nil {
-		return nil
-	}
-	cloned := *entry
-	cloned.Answer = cloneRecords(entry.Answer)
-	cloned.Authority = cloneRecords(entry.Authority)
-	cloned.Additional = cloneRecords(entry.Additional)
-	return &cloned
-}
-
-// cloneRecords deep-copies a slice of CompactRecords.
-func cloneRecords(records []*CompactRecord) []*CompactRecord {
-	if len(records) == 0 {
-		return nil
-	}
-	cloned := make([]*CompactRecord, len(records))
-	for i, r := range records {
-		if r == nil {
-			continue
-		}
-		rr := *r
-		cloned[i] = &rr
-	}
-	return cloned
-}
-
-// cloneEntryForPersist deep-copies an Entry and clears cached RR fields for
-// gob encoding without type registration.
-func cloneEntryForPersist(entry *Entry) *Entry {
-	cloned := cloneEntry(entry)
-	if cloned == nil {
-		return nil
-	}
-	clearRRFields(cloned.Answer)
-	clearRRFields(cloned.Authority)
-	clearRRFields(cloned.Additional)
-	return cloned
-}
-
-// clearRRFields nils the cached RR field in CompactRecords so gob can encode.
-func clearRRFields(records []*CompactRecord) {
-	for _, r := range records {
-		if r != nil {
-			r.RR = nil
+		_, err := tx.Exec(
+			`INSERT INTO records (entry_id, section, seq, name, rtype, ttl, rr_text, rdata_ip)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			entryID, section, i, rr.Header().Name, int(dns.RRToType(rr)), int(rr.Header().TTL), rrText, extractIP(rr),
+		)
+		if err != nil {
+			log.Warnf("CACHE: insert record failed: %v", err)
 		}
 	}
 }
 
-// minTTL returns the minimum positive TTL across all record sections.
+func extractIP(rr dns.RR) string {
+	switch r := rr.(type) {
+	case *dns.A:
+		return r.A.String()
+	case *dns.AAAA:
+		return r.AAAA.String()
+	}
+	return ""
+}
+
 func minTTL(answer, authority, additional []dns.RR) int {
 	minT := -1
 	for _, rrs := range [][]dns.RR{answer, authority, additional} {
@@ -571,8 +506,6 @@ func minTTL(answer, authority, additional []dns.RR) int {
 	return minT
 }
 
-// hasNSECOrNSEC3 reports whether any record in the authority section is an
-// NSEC or NSEC3 record, indicating a negative (NXDOMAIN/NODATA) response.
 func hasNSECOrNSEC3(authority []dns.RR) bool {
 	for _, rr := range authority {
 		if rr == nil {
@@ -586,8 +519,6 @@ func hasNSECOrNSEC3(authority []dns.RR) bool {
 	return false
 }
 
-// negativeTTLCap returns the maximum TTL for a negative cache entry per
-// RFC 9077: min(SOA.MINIMUM, SOA.TTL), capped at DefaultMaxNegativeTTL.
 func negativeTTLCap(authority []dns.RR) int {
 	capTTL := config.DefaultMaxNegativeTTL
 	for _, rr := range authority {
@@ -612,36 +543,19 @@ func negativeTTLCap(authority []dns.RR) int {
 	return capTTL
 }
 
-// extractPTRRecords extracts A and AAAA records from an entry's answer section
-// for building the reverse-lookup (PTR) index.
-func extractPTRRecords(entry *Entry) []ptrRecord {
-	if entry == nil {
-		return nil
+func ecsParams(ecs *config.ECSOption) (addr string, prefix int) {
+	if ecs == nil {
+		return "", 0
 	}
-	records := make([]ptrRecord, 0, len(entry.Answer))
-	for _, cr := range entry.Answer {
-		if cr == nil {
-			continue
-		}
-		rr := expand(cr)
-		if rr == nil {
-			continue
-		}
-		var ip net.IP
-		var name string
-		var ttlVal uint32
-		switch r := rr.(type) {
-		case *dns.A:
-			ip, name, ttlVal = net.IP(r.Addr.AsSlice()), r.Hdr.Name, r.Hdr.TTL
-		case *dns.AAAA:
-			ip, name, ttlVal = net.IP(r.Addr.AsSlice()), r.Hdr.Name, r.Hdr.TTL
-		default:
-			continue
-		}
-		if ip == nil || name == "" {
-			continue
-		}
-		records = append(records, ptrRecord{IP: ip.String(), Name: dnsutilv2.Fqdn(name), TTL: ttlVal})
-	}
-	return records
+	return ecs.Address.String(), int(ecs.SourcePrefix)
 }
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// deduplicateRRs removes duplicate records from a slice by their presentation
+// format, preserving order. OPT records are always excluded.

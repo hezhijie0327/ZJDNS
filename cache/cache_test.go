@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"net"
 	"testing"
 	"time"
 
@@ -12,12 +11,6 @@ import (
 	"zjdns/config"
 )
 
-type testQ struct {
-	Name   string
-	Qtype  uint16
-	Qclass uint16
-}
-
 func testStore() *SQLiteCache {
 	c, err := NewSQLiteCache("", config.DefaultMaxCacheEntries, 0, 0)
 	if err != nil {
@@ -26,64 +19,16 @@ func testStore() *SQLiteCache {
 	return c
 }
 
-// ── BuildCacheKey ────────────────────────────────────────────────────────────────
-
-func TestBuildCacheKey_Basic(t *testing.T) {
-	q := testQ{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	key := BuildCacheKey(q.Name, q.Qtype, q.Qclass, nil, false)
-	if key == "" {
-		t.Fatal("empty key")
-	}
-	if key[:4] != "dns:" {
-		t.Errorf("key prefix = %q, want dns:", key[:4])
-	}
-}
-
-func TestBuildCacheKey_DNSSEC(t *testing.T) {
-	q := testQ{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	keyNo := BuildCacheKey(q.Name, q.Qtype, q.Qclass, nil, false)
-	keyYes := BuildCacheKey(q.Name, q.Qtype, q.Qclass, nil, true)
-	if keyNo == keyYes {
-		t.Error("DNSSEC flag should affect cache key")
-	}
-}
-
-func TestBuildCacheKey_ECS(t *testing.T) {
-	q := testQ{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	keyNo := BuildCacheKey(q.Name, q.Qtype, q.Qclass, nil, false)
-	keyECS := BuildCacheKey(q.Name, q.Qtype, q.Qclass, &config.ECSOption{
-		Family:       1,
-		SourcePrefix: 24,
-		ScopePrefix:  0,
-		Address:      net.IP(netParseIP("192.0.2.0").AsSlice()),
-	}, false)
-	if keyNo == keyECS {
-		t.Error("ECS should affect cache key")
-	}
-	if keyECS != "dns:example.com:1:1:ecs:192.0.2.0/24" {
-		t.Errorf("ECS key = %q", keyECS)
-	}
-}
-
-func TestBuildCacheKey_DifferentTypes(t *testing.T) {
-	a := testQ{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	aaaa := testQ{Name: "example.com.", Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-	if BuildCacheKey(a.Name, a.Qtype, a.Qclass, nil, false) == BuildCacheKey(aaaa.Name, aaaa.Qtype, aaaa.Qclass, nil, false) {
-		t.Error("A and AAAA should have different keys")
-	}
-}
-
-// ── Get / Set / SetEntry ──────────────────────────────────────────────────────────
+// ── Get / Set ─────────────────────────────────────────────────────────────────
 
 func TestSet_Get_RoundTrip(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	key := BuildCacheKey("example.com.", dns.TypeA, dns.ClassINET, nil, false)
-	mc.Set(key, []dns.RR{rr}, nil, nil, false, nil)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
-	entry, found, expired := mc.Get(key)
+	entry, found, expired := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
 		t.Fatal("Get returned not found after Set")
 	}
@@ -93,8 +38,8 @@ func TestSet_Get_RoundTrip(t *testing.T) {
 	if len(entry.Answer) != 1 {
 		t.Fatalf("answer count = %d, want 1", len(entry.Answer))
 	}
-	if entry.Answer[0].Type != dns.TypeA {
-		t.Errorf("record type = %d, want %d", entry.Answer[0].Type, dns.TypeA)
+	if dns.RRToType(entry.Answer[0]) != dns.TypeA {
+		t.Errorf("record type = %d, want %d", dns.RRToType(entry.Answer[0]), dns.TypeA)
 	}
 }
 
@@ -102,38 +47,79 @@ func TestGet_Miss(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	_, found, _ := mc.Get("nonexistent")
+	_, found, _ := mc.Get("nonexistent.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if found {
 		t.Error("Get should return not found for missing key")
 	}
 }
 
-func TestSetEntry_CustomEntry(t *testing.T) {
+func TestSet_ValidatedFlag(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	now := time.Now().Unix()
-	entry := &Entry{
-		Timestamp: now,
-		TTL:       60,
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true)
 
-		Validated: true,
-		Answer: []*CompactRecord{
-			{Text: "example.com.\t300\tIN\tA\t192.0.2.1", OrigTTL: 300, Type: dns.TypeA},
-		},
-	}
-	mc.SetEntry("custom-key", entry)
-
-	retrieved, found, _ := mc.Get("custom-key")
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
-		t.Fatal("SetEntry entry not found")
+		t.Fatal("entry not found")
 	}
-	if !retrieved.Validated {
+	if !entry.Validated {
 		t.Error("Validated flag not preserved")
 	}
 }
 
-// ── TTL / Expiry ──────────────────────────────────────────────────────────────────
+// ── ECS scoping ──────────────────────────────────────────────────────────────
+
+func TestSet_Get_ECSScoping(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	ecs := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("192.0.2.0").AsSlice()}
+
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs, false, []dns.RR{rr}, nil, nil, false)
+
+	// Hit with same ECS
+	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs, false)
+	if !found {
+		t.Error("should find entry with matching ECS")
+	}
+
+	// Miss with different ECS
+	ecs2 := &config.ECSOption{Family: 1, SourcePrefix: 16, ScopePrefix: 0, Address: netParseIP("10.0.0.0").AsSlice()}
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs2, false)
+	if found {
+		t.Error("should miss with different ECS")
+	}
+
+	// Miss without ECS
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if found {
+		t.Error("should miss without ECS when stored with ECS")
+	}
+}
+
+func TestSet_Get_DNSSECScoping(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, true, []dns.RR{rr}, nil, nil, false)
+
+	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, true)
+	if !found {
+		t.Error("should find DNSSEC-scoped entry")
+	}
+
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if found {
+		t.Error("should miss non-DNSSEC entry when stored with DNSSEC")
+	}
+}
+
+// ── TTL / Expiry ─────────────────────────────────────────────────────────────
 
 func TestEntry_IsExpired(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour).Unix()
@@ -171,22 +157,20 @@ func TestEntry_RemainingTTL(t *testing.T) {
 	}
 }
 
-// ── Expand / Process Records ──────────────────────────────────────────────────────
+// ── ProcessRecords ───────────────────────────────────────────────────────────
 
-func TestExpandAndProcessRecords_PreservesTTL(t *testing.T) {
-	crs := []*CompactRecord{
-		{Text: "example.com.\t300\tIN\tA\t192.0.2.1", OrigTTL: 300, Type: dns.TypeA},
-	}
-	result := ExpandAndProcessRecords(crs, 0, false, false)
+func TestProcessRecords_PreservesTTL(t *testing.T) {
+	a := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	result := ProcessRecords([]dns.RR{a}, 0, false, false)
 	if len(result) != 1 {
 		t.Fatalf("got %d records, want 1", len(result))
 	}
-	a, ok := result[0].(*dns.A)
+	rec, ok := result[0].(*dns.A)
 	if !ok {
 		t.Fatal("not an A record")
 	}
-	if a.A.String() != "192.0.2.1" {
-		t.Errorf("IP = %s, want 192.0.2.1", a.A.String())
+	if rec.A.String() != "192.0.2.1" {
+		t.Errorf("IP = %s, want 192.0.2.1", rec.A.String())
 	}
 }
 
@@ -210,11 +194,9 @@ func TestProcessRecords_DNSSECFiltering(t *testing.T) {
 	}
 }
 
-func TestExpandAndProcessRecords_ElapsedTTL(t *testing.T) {
-	crs := []*CompactRecord{
-		{Text: "example.com.\t300\tIN\tA\t192.0.2.1", OrigTTL: 300, Type: dns.TypeA},
-	}
-	result := ExpandAndProcessRecords(crs, 100, true, false)
+func TestProcessRecords_ElapsedTTL(t *testing.T) {
+	a := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	result := ProcessRecords([]dns.RR{a}, 100, true, false)
 	if len(result) != 1 {
 		t.Fatal("expected 1 record")
 	}
@@ -223,18 +205,16 @@ func TestExpandAndProcessRecords_ElapsedTTL(t *testing.T) {
 	}
 }
 
-// ── Cache TTL floor ───────────────────────────────────────────────────────────────
+// ── Cache TTL floor ──────────────────────────────────────────────────────────
 
 func TestSet_ZeroTTLFloored(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	// Record with TTL=0 should be floored to config.DefaultTTL
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	key := BuildCacheKey("example.com.", dns.TypeA, dns.ClassINET, nil, false)
-	mc.Set(key, []dns.RR{rr}, nil, nil, false, nil)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
-	entry, found, _ := mc.Get(key)
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
 		t.Fatal("entry not found")
 	}
@@ -243,81 +223,63 @@ func TestSet_ZeroTTLFloored(t *testing.T) {
 	}
 }
 
-// ── RFC 9077: NSEC/NSEC3 TTL capping ────────────────────────────────────────────────
+// ── NSEC/NSEC3 negative caching ──────────────────────────────────────────────
 
 func TestHasNSECOrNSEC3(t *testing.T) {
-	if hasNSECOrNSEC3(nil) {
-		t.Error("nil authority should return false")
+	soa := &dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900}}
+	if hasNSECOrNSEC3([]dns.RR{soa}) {
+		t.Error("SOA alone should not trigger negative cache")
 	}
-	if hasNSECOrNSEC3([]dns.RR{}) {
-		t.Error("empty authority should return false")
-	}
-
-	aRec := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	if hasNSECOrNSEC3([]dns.RR{aRec}) {
-		t.Error("A record should not trigger NSEC detection")
-	}
-
-	nsec := &dns.NSEC{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}}
-	if !hasNSECOrNSEC3([]dns.RR{nsec}) {
-		t.Error("NSEC record should be detected")
-	}
-
-	nsec3 := &dns.NSEC3{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}}
-	if !hasNSECOrNSEC3([]dns.RR{nsec3}) {
-		t.Error("NSEC3 record should be detected")
+	nsec := &dns.NSEC{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 600}}
+	if !hasNSECOrNSEC3([]dns.RR{soa, nsec}) {
+		t.Error("NSEC+SOA should trigger negative cache")
 	}
 }
 
 func TestNegativeTTLCap_NoSOA(t *testing.T) {
 	capTTL := negativeTTLCap(nil)
 	if capTTL != config.DefaultMaxNegativeTTL {
-		t.Errorf("no SOA: cap = %d, want %d (DefaultMaxNegativeTTL)", capTTL, config.DefaultMaxNegativeTTL)
+		t.Errorf("no SOA: cap = %d, want %d", capTTL, config.DefaultMaxNegativeTTL)
 	}
 }
 
 func TestNegativeTTLCap_SOAMinLower(t *testing.T) {
-	// SOA TTL=900, MINIMUM=86400 → SOA-based cap = 900
 	soa := &dns.SOA{
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
 		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
-			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 86400},
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
 	}
 	capTTL := negativeTTLCap([]dns.RR{soa})
-	if capTTL != 900 {
-		t.Errorf("SOA TTL=900 MINIMUM=86400: cap = %d, want 900", capTTL)
+	if capTTL != 600 {
+		t.Errorf("SOA TTL=900, Minttl=600: cap = %d, want 600", capTTL)
 	}
 }
 
 func TestNegativeTTLCap_MinimumLower(t *testing.T) {
-	// SOA TTL=86400, MINIMUM=900 → SOA-based cap = 900
 	soa := &dns.SOA{
-		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 86400},
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
 		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
-			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 900},
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
 	}
 	capTTL := negativeTTLCap([]dns.RR{soa})
-	if capTTL != 900 {
-		t.Errorf("SOA TTL=86400 MINIMUM=900: cap = %d, want 900", capTTL)
+	if capTTL != 300 {
+		t.Errorf("SOA TTL=300, Minttl=600: cap = %d, want 300", capTTL)
 	}
 }
 
 func TestNegativeTTLCap_ExceedsDefaultMax(t *testing.T) {
-	// SOA TTL=86400, MINIMUM=172800 → SOA-based cap = 86400,
-	// but DefaultMaxNegativeTTL = 10800 should win.
 	soa := &dns.SOA{
-		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 86400},
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 99999},
 		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
-			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 172800},
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 99999},
 	}
 	capTTL := negativeTTLCap([]dns.RR{soa})
 	if capTTL != config.DefaultMaxNegativeTTL {
-		t.Errorf("SOA TTL=86400 MINIMUM=172800: cap = %d, want %d (DefaultMaxNegativeTTL)", capTTL, config.DefaultMaxNegativeTTL)
+		t.Errorf("should cap at DefaultMaxNegativeTTL=%d, got %d", config.DefaultMaxNegativeTTL, capTTL)
 	}
 }
 
 func TestNegativeTTLCap_SOAWithNSEC(t *testing.T) {
-	// Realistic negative response: NSEC + SOA in authority.
 	soa := &dns.SOA{
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
 		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
@@ -325,7 +287,6 @@ func TestNegativeTTLCap_SOAWithNSEC(t *testing.T) {
 	}
 	nsec := &dns.NSEC{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 600}}
 	capTTL := negativeTTLCap([]dns.RR{soa, nsec})
-	// min(SOA TTL=900, Minttl=600) = 600
 	if capTTL != 600 {
 		t.Errorf("SOA+NSEC: cap = %d, want 600", capTTL)
 	}
@@ -335,8 +296,6 @@ func TestSet_NegativeTTLCapped(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	// Negative response with NSEC (TTL=86400) and SOA (TTL=900, Minttl=600).
-	// The cache entry TTL should be capped at 600, not 86400.
 	soa := &dns.SOA{
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
 		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
@@ -346,17 +305,14 @@ func TestSet_NegativeTTLCapped(t *testing.T) {
 		Hdr:  dns.Header{Name: "alpha.example.com.", Class: dns.ClassINET, TTL: 86400},
 		NSEC: rdata.NSEC{NextDomain: "zulu.example.com."},
 	}
-	key := BuildCacheKey("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false)
-	mc.Set(key, nil, []dns.RR{soa, nsec}, nil, false, nil)
+	mc.Set("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false, nil, []dns.RR{soa, nsec}, nil, false)
 
-	entry, found, _ := mc.Get(key)
+	entry, found, _ := mc.Get("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
 		t.Fatal("entry not found")
 	}
-	// The TTL should be capped at the SOA-based value (600), not the NSEC TTL (86400)
-	// and not the SOA TTL (900).
 	if entry.TTL > 600 {
-		t.Errorf("negative cache TTL = %d, want ≤ 600 (capped by min(SOA TTL=900, Minttl=600))", entry.TTL)
+		t.Errorf("negative cache TTL = %d, want <= 600", entry.TTL)
 	}
 }
 
@@ -364,12 +320,10 @@ func TestSet_NegativeTTLUncapped_NoNSEC(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	// Positive response (no NSEC/NSEC3) — should NOT be capped.
 	aRec := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	key := BuildCacheKey("example.com.", dns.TypeA, dns.ClassINET, nil, false)
-	mc.Set(key, []dns.RR{aRec}, nil, nil, false, nil)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRec}, nil, nil, false)
 
-	entry, found, _ := mc.Get(key)
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
 		t.Fatal("entry not found")
 	}
@@ -378,7 +332,41 @@ func TestSet_NegativeTTLUncapped_NoNSEC(t *testing.T) {
 	}
 }
 
-// ── Helper ─────────────────────────────────────────────────────────────────────────
+// ── DNSKEY/NSAddr cache patterns ──────────────────────────────────────────────
+
+func TestSet_Get_DNSKEY(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	dnskey := &dns.DNSKEY{Hdr: dns.Header{Name: "com.", Class: dns.ClassINET, TTL: 86400}}
+	mc.Set("com.", dns.TypeDNSKEY, dns.ClassINET, nil, false, []dns.RR{dnskey}, nil, nil, true)
+
+	entry, found, _ := mc.Get("com.", dns.TypeDNSKEY, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("DNSKEY entry not found")
+	}
+	if !entry.Validated {
+		t.Error("DNSKEY entry should be marked validated")
+	}
+}
+
+func TestSet_Get_NSAddrTXT(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	txt := &dns.TXT{Hdr: dns.Header{Name: ".", Class: dns.ClassINET, TTL: 900}, TXT: rdata.TXT{Txt: []string{"198.41.0.4:53"}}}
+	mc.Set(".", dns.TypeNone, dns.ClassINET, nil, false, []dns.RR{txt}, nil, nil, false)
+
+	entry, found, _ := mc.Get(".", dns.TypeNone, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("NS addr entry not found")
+	}
+	if len(entry.Answer) != 1 {
+		t.Fatalf("answer count = %d, want 1", len(entry.Answer))
+	}
+}
+
+// ── Helper ────────────────────────────────────────────────────────────────────
 
 func netParseIP(s string) netip.Addr {
 	addr, err := netip.ParseAddr(s)

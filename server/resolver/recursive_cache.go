@@ -25,9 +25,6 @@ import (
 // the NS lookup path always gets the true latency ranking without heuristics.
 
 // nsAddrKey returns the unified cache key for latency-sorted server addresses.
-func nsAddrKey(zone string) string {
-	return nsAddrKeyPrefix + dnsutil.NormalizeDomain(zone) + nsAddrKeySuffix
-}
 
 // addrsToTXTRecords converts "ip:port" strings to TXT DNS records with the
 // given TTL (in seconds).  The TTL controls how frequently the latency order
@@ -49,7 +46,7 @@ func readTXTAddrs(entry *cache.Entry) []string {
 	if entry == nil || len(entry.Answer) == 0 {
 		return nil
 	}
-	records := cache.ExpandRecords(entry.Answer)
+	records := entry.Answer
 	addrs := make([]string, 0, len(records))
 	for _, r := range records {
 		if txt, ok := r.(*dns.TXT); ok && len(txt.Txt) > 0 {
@@ -86,7 +83,7 @@ func (r *Recursive) probeAndCacheAddrs(zone string, addrs []string) {
 	sorted := sortAddrsByLatency(ctx, addrs, config.DefaultInfraProbeTimeout)
 	if len(sorted) > 0 {
 		txtRecords := addrsToTXTRecords(zone, sorted, config.DefaultNSLatencyTTL)
-		r.cache.Set(nsAddrKey(zone), txtRecords, nil, nil, false, nil)
+		r.cache.Set(zone, dns.TypeNone, dns.ClassINET, nil, false, txtRecords, nil, nil, false)
 	}
 }
 
@@ -102,7 +99,7 @@ func (r *Recursive) getRootServers() []string {
 
 	// Serve from unified cache (hit, expired, or miss).
 	if r.cache != nil {
-		if entry, found, expired := r.cache.Get(nsAddrKey(".")); found && entry != nil {
+		if entry, found, expired := r.cache.Get(".", dns.TypeNone, dns.ClassINET, nil, false); found && entry != nil {
 			if addrs := readTXTAddrs(entry); len(addrs) > 0 {
 				if expired {
 					go r.probeRootAddrs()
@@ -189,7 +186,7 @@ func (r *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 
 		// Unified latency-sorted key (shared format with root servers).
 		txtRecords := addrsToTXTRecords(nsName, sortedAddrs, config.DefaultNSLatencyTTL)
-		r.cache.Set(nsAddrKey(nsName), txtRecords, nil, nil, false, nil)
+		r.cache.Set(nsName, dns.TypeNone, dns.ClassINET, nil, false, txtRecords, nil, nil, false)
 		log.Debugf("RECURSION: async-cached %d latency-sorted NS addresses for %s", len(txtRecords), nsName)
 
 		// Also update per-type cache entries (A/AAAA) with intra-type
@@ -200,8 +197,7 @@ func (r *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 			typeGroups[qtype] = append(typeGroups[qtype], r)
 		}
 		for qtype, typeRecords := range typeGroups {
-			cacheKey := cache.BuildCacheKey(nsName, qtype, dns.ClassINET, nil, false)
-			r.cache.Set(cacheKey, typeRecords, nil, nil, false, nil)
+			r.cache.Set(nsName, qtype, dns.ClassINET, nil, false, typeRecords, nil, nil, false)
 		}
 	}
 }
@@ -278,7 +274,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string) []string {
 	}
 
 	// Fast path: unified latency-sorted key (TXT records in probe order).
-	if entry, found, expired := r.cache.Get(nsAddrKey(nsName)); found && entry != nil {
+	if entry, found, expired := r.cache.Get(nsName, dns.TypeNone, dns.ClassINET, nil, false); found && entry != nil {
 		if addrs := readTXTAddrs(entry); len(addrs) > 0 {
 			if expired {
 				go r.refreshNSAddrOrder(nsName, addrs)
@@ -306,8 +302,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string) []string {
 // addresses whose TTL just expired — NS IPs change very rarely.
 func lookupCachedRRs(store cache.Store, name string, qtype uint16) []string {
 	q := Question{Name: name, Qtype: qtype, Qclass: dns.ClassINET}
-	key := cache.BuildCacheKey(q.Name, q.Qtype, q.Qclass, nil, false)
-	entry, found, expired := store.Get(key)
+	entry, found, expired := store.Get(q.Name, q.Qtype, q.Qclass, nil, false)
 	if !found || entry == nil || len(entry.Answer) == 0 {
 		return nil
 	}
@@ -315,7 +310,7 @@ func lookupCachedRRs(store cache.Store, name string, qtype uint16) []string {
 		return nil
 	}
 
-	records := cache.ExpandRecords(entry.Answer)
+	records := entry.Answer
 	addrs := make([]string, 0, len(records))
 	for _, r := range records {
 		if addr := rrToAddr(r); addr != "" {

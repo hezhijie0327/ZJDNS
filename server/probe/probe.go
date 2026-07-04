@@ -19,7 +19,7 @@ import (
 // CacheSetter is the interface for updating the DNS cache with reordered
 // records after latency probing.
 type CacheSetter interface {
-	Set(cacheKey string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
+	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, dnssecOK bool, answer, authority, additional []dns.RR, validated bool)
 }
 
 // Prober measures network latency to resolved IP addresses and reorders A/AAAA
@@ -44,7 +44,7 @@ func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, s
 
 // Start initiates a background latency probe for A/AAAA records when multiple
 // addresses exist. If probing finds a faster ordering, the cache is updated.
-func (p *Prober) Start(qname string, qtype uint16, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) {
+func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) {
 	if p == nil || p.engine == nil {
 		log.Debugf("LATENCY: probe skipped for %s because latency_probe is not configured", qname)
 		return
@@ -76,19 +76,19 @@ func (p *Prober) Start(qname string, qtype uint16, cacheKey string, answer, auth
 
 	p.bgGroup(func() error {
 		defer dnsutil.HandlePanic("latency probe")
-		if err := p.probeAndReorder(p.bgCtx, cacheKey, answer, authority, additional, validated, ecsResponse); err != nil {
+		if err := p.probeAndReorder(p.bgCtx, qname, qtype, answer, authority, additional, validated, ecsResponse); err != nil {
 			log.Debugf("LATENCY: background probe failed for %s: %v", qname, err)
 		}
 		return nil
 	})
 }
 
-func (p *Prober) probeAndReorder(ctx context.Context, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) error {
+func (p *Prober) probeAndReorder(ctx context.Context, qname string, qtype uint16, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	log.Debugf("LATENCY: performing latency probe for cache key %s", cacheKey)
+	log.Debugf("LATENCY: performing latency probe for %s", qname)
 
 	// Extract IPs from A/AAAA records.
 	type indexedRecord struct {
@@ -103,7 +103,7 @@ func (p *Prober) probeAndReorder(ctx context.Context, cacheKey string, answer, a
 		}
 	}
 	if len(records) <= 1 {
-		log.Debugf("LATENCY: no multiple probeable IPs for %s", cacheKey)
+		log.Debugf("LATENCY: no multiple probeable IPs for %s", qname)
 		return nil
 	}
 
@@ -137,12 +137,12 @@ func (p *Prober) probeAndReorder(ctx context.Context, cacheKey string, answer, a
 	}
 
 	if !changed {
-		log.Debugf("LATENCY: no faster A/AAAA order found for %s", cacheKey)
+		log.Debugf("LATENCY: no faster A/AAAA order found for %s", qname)
 		return nil
 	}
 
-	p.cache.Set(cacheKey, sortedAnswer, authority, additional, validated, ecsResponse)
-	log.Debugf("LATENCY: reordered A/AAAA records for %s", cacheKey)
+	p.cache.Set(qname, qtype, dns.ClassINET, ecsResponse, false, sortedAnswer, authority, additional, validated)
+	log.Debugf("LATENCY: reordered A/AAAA records for %s", qname)
 	return nil
 }
 

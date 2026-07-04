@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -34,27 +33,23 @@ import (
 	"zjdns/stats"
 )
 
-// statsPersistAdapter bridges cache.Store to stats.PersistStore for stats
-// persistence without importing cache from the stats package.
+// statsPersistAdapter bridges SQLiteCache to stats.PersistStore.
 type statsPersistAdapter struct {
-	store cache.Store
+	cache statsCache
+}
+
+// statsCache is the subset of SQLiteCache used for stats persistence.
+type statsCache interface {
+	SaveStats(data []byte, ttl int)
+	LoadStats() ([]byte, bool)
 }
 
 func (a *statsPersistAdapter) SaveStats(key string, data []byte, ttl int) {
-	now := time.Now().Unix()
-	a.store.SetEntry(key, &cache.Entry{
-		Timestamp: now,
-		TTL:       ttl,
-		Payload:   data,
-	})
+	a.cache.SaveStats(data, ttl)
 }
 
 func (a *statsPersistAdapter) LoadStats(key string) ([]byte, bool) {
-	entry, found, expired := a.store.Get(key)
-	if !found || entry == nil || expired {
-		return nil, false
-	}
-	return entry.Payload, true
+	return a.cache.LoadStats()
 }
 
 // Server is the core DNS server handling lifecycle, protocol listeners, and background tasks.
@@ -120,17 +115,15 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	statsCollector := stats.New(cfg)
 
 	// Restore stats from cache if a snapshot was persisted.
-	if entry, found, expired := cacheStore.Get(config.StatsPersistKey); found && entry != nil {
-		if expired {
-			log.Debugf("STATS: cached stats snapshot is expired, starting fresh")
-		} else if err := statsCollector.Deserialize(entry.Payload); err != nil {
-			log.Warnf("STATS: failed to restore stats from cache: %v", err)
+	if data, ok := cacheStore.LoadStats(); ok {
+		if err := statsCollector.Deserialize(data); err != nil {
+			log.Warnf("STATS: failed to restore stats: %v", err)
 		} else {
 			log.Infof("STATS: restored stats from cache snapshot")
 		}
 	}
 
-	statsAdapter := &statsPersistAdapter{store: cacheStore}
+	statsAdapter := &statsPersistAdapter{cache: cacheStore}
 
 	h := handler.New(
 		cfg, cacheStore, ednsHandler, rewriteEvaluator,

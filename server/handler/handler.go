@@ -62,7 +62,7 @@ type queryResult struct {
 // LatencyProber is the interface for latency-probing cache entries after
 // successful resolution.
 type LatencyProber interface {
-	Start(qname string, qtype uint16, cacheKey string, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
+	Start(qname string, qtype uint16, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
 }
 
 // Handler processes DNS queries through the caching and resolution pipeline.
@@ -72,7 +72,7 @@ type Handler struct {
 	config       *config.ServerConfig
 	cache        cache.Store
 	reverseCache interface {
-		ReverseLookup(net.IP) []cache.LookupResult
+		ReverseLookup(string) []cache.LookupResult
 	}
 	edns              *edns.Handler
 	rewrite           *rewrite.Evaluator
@@ -114,7 +114,7 @@ func New(
 		ctx:               bg.Ctx,
 	}
 	h.reverseCache, _ = cacheStore.(interface {
-		ReverseLookup(net.IP) []cache.LookupResult
+		ReverseLookup(string) []cache.LookupResult
 	})
 	return h
 }
@@ -278,22 +278,20 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		ecsOpt = h.edns.ECSForQType(question.Qtype)
 	}
 
-	cacheKey := cache.BuildCacheKey(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC)
-
-	if entry, found, isExpired := h.cache.Get(cacheKey); found {
-		log.Debugf("CACHE: hit key=%s expired=%t for %s, ttl=%d, validated=%t, answer=%d", cacheKey, isExpired, question.Name, entry.RemainingTTL(), entry.Validated, len(entry.Answer))
+	if entry, found, isExpired := h.cache.Get(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC); found {
+		log.Debugf("CACHE: hit expired=%t for %s, ttl=%d, validated=%t, answer=%d", isExpired, question.Name, entry.RemainingTTL(), entry.Validated, len(entry.Answer))
 		m.cacheHit = true
 		if !isExpired {
-			responseMsg = h.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &m.prefetchTriggered, &m.dnssecStatus, tcpKeepaliveTimeout)
+			responseMsg = h.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, &m.prefetchTriggered, &m.dnssecStatus, tcpKeepaliveTimeout)
 			return responseMsg
 		}
 
 		if entry.CanServeExpired(config.DefaultStaleMaxAge) {
-			responseMsg = h.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, cacheKey, clientIP, isSecureConnection, &m.staleServed, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
+			responseMsg = h.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, &m.staleServed, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
 			return responseMsg
 		}
 
-		responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &m.hadError, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
+		responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, clientIP, isSecureConnection, &m.hadError, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
 		return responseMsg
 	}
 
@@ -309,7 +307,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		}
 	}
 
-	responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, cacheKey, clientIP, isSecureConnection, &m.hadError, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
+	responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, clientIP, isSecureConnection, &m.hadError, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
 	return responseMsg
 }
 
@@ -323,7 +321,7 @@ func (h *Handler) lookupReversePTR(question Question, ecsOpt *edns.ECSOption) []
 		return nil
 	}
 
-	results := h.reverseCache.ReverseLookup(ip)
+	results := h.reverseCache.ReverseLookup(ip.String())
 	if len(results) == 0 {
 		return nil
 	}

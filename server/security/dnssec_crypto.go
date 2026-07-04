@@ -45,12 +45,6 @@ type rrsetKey struct {
 	rrtype uint16
 }
 
-const dnsKeyCachePrefix = "dnskey:"
-
-func dnsKeyCacheKey(zone string) string {
-	return dnsKeyCachePrefix + zone
-}
-
 // NewCryptoValidator creates a CryptoValidator with the IANA root trust
 // anchors embedded. DNSSEC validation is always active. The cache store is
 // used to persist verified zone DNSKEYs, sharing the same memory budget and
@@ -489,26 +483,16 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 		}
 	}
 	if ttl < config.DefaultDNSKeyCacheMinTTL {
-		ttl = config.DefaultDNSKeyCacheMinTTL
+		_ = config.DefaultDNSKeyCacheMinTTL
 	}
-
-	now := log.NowUnix()
-	entry := &cache.Entry{
-		Timestamp: now,
-		TTL:       ttl,
-		Validated: true,
-		Answer:    make([]*cache.CompactRecord, 0, len(keys)),
-	}
+	rrKeys := make([]dns.RR, 0, len(keys))
 	for _, k := range keys {
 		if k != nil {
-			entry.Answer = append(entry.Answer, &cache.CompactRecord{
-				Text:    k.String(),
-				OrigTTL: k.Header().TTL,
-				Type:    dns.TypeDNSKEY,
-			})
+			rrKeys = append(rrKeys, k)
 		}
 	}
-	c.cache.SetEntry(dnsKeyCacheKey(zone), entry)
+	c.cache.Set(zone, dns.TypeDNSKEY, dns.ClassINET, nil, false, rrKeys, nil, nil, true)
+
 }
 
 // ZoneKeys retrieves cached verified DNSKEYs for a zone from the unified
@@ -519,14 +503,14 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	}
 	zone = strings.ToLower(strings.TrimSuffix(zone, "."))
 
-	cachedEntry, found, expired := c.cache.Get(dnsKeyCacheKey(zone))
+	cachedEntry, found, expired := c.cache.Get(zone, dns.TypeDNSKEY, dns.ClassINET, nil, false)
 	if !found || cachedEntry == nil || expired {
 		return nil
 	}
 
 	// Expand CompactRecords back to dns.RR, then filter for DNSKEYs.
 	// includeDNSSEC must be true — otherwise processRR strips RRSIG/NSEC/NSEC3/DNSKEY/DS.
-	records := cache.ExpandAndProcessRecords(cachedEntry.Answer, 0, false, true)
+	records := cache.ProcessRecords(cachedEntry.Answer, 0, false, true)
 	return FindDNSKEYs(records)
 }
 
