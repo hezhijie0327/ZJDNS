@@ -292,47 +292,12 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			}
 		}
 
-		// Collect NS records from both Authority and Answer sections.
-		// NS records appear in the Answer section when the queried
-		// server is authoritative for the delegated zone (common when
-		// the same server hosts both parent and child zones).
-		var allRRSections []dns.RR
-		allRRSections = append(allRRSections, response.Ns...)
-		allRRSections = append(allRRSections, response.Answer...)
-
-		bestMatch := ""
-		var bestNSRecords []*dns.NS
-		for _, rrec := range allRRSections {
-			if ns, ok := rrec.(*dns.NS); ok {
-				nsName := dnsutil.NormalizeDomain(rrec.Header().Name)
-				isMatch := normalizedQname == nsName ||
-					(nsName != "" && strings.HasSuffix(normalizedQname, "."+nsName))
-				if isMatch && len(nsName) >= len(bestMatch) {
-					if len(nsName) > len(bestMatch) {
-						bestMatch = nsName
-						bestNSRecords = []*dns.NS{ns}
-					} else {
-						bestNSRecords = append(bestNSRecords, ns)
-					}
-				}
-			}
+		bestMatch, bestNSRecords, cont, termRes := r.collectBestNSMatch(response, normalizedQname, queryQuestion.Name, qname, qnameMinimise, validated, ecsResponse)
+		if termRes != nil {
+			return termRes.answer, termRes.authority, termRes.additional, termRes.validated, termRes.ecs, termRes.server, termRes.hijack, termRes.err
 		}
-
-		if len(bestNSRecords) == 0 {
-			// RFC 9156 §2.3: a NXDOMAIN/NODATA response
-			// for a minimised QNAME with no delegation
-			// means the intermediate name is not a zone
-			// cut. Expose all remaining labels and
-			// retry with the same nameservers instead
-			// of returning empty-handed.
-			if qnameMinimise && !strings.EqualFold(queryQuestion.Name, qname) {
-				pool.DefaultMessagePool.Put(response)
-				minimiseSteps = config.DefaultQnameMinimiseCount
-				continue
-			}
-			nsSlice, extraSlice := response.Ns, response.Extra
-			pool.DefaultMessagePool.Put(response)
-			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
+		if cont {
+			continue
 		}
 
 		currentDomainNormalized := dnsutil.NormalizeDomain(currentDomain)
@@ -626,4 +591,56 @@ func (r *Recursive) finalizeResponse(response *dns.Msg, currentDomain string, va
 	nsSlice, extraSlice := response.Ns, response.Extra
 	pool.DefaultMessagePool.Put(response)
 	return answer, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
+}
+
+// terminalResult holds the return values from collectBestNSMatch when no
+// NS delegation records are found and the resolution should end.
+type terminalResult struct {
+	answer, authority, additional []dns.RR
+	validated                     bool
+	ecs                           *edns.ECSOption
+	server                        string
+	hijack                        bool
+	err                           error
+}
+
+// collectBestNSMatch collects NS records from a DNS response's Authority and
+// Answer sections and finds the best zone cut match for the query name.
+// When no match is found, it either triggers a QNAME minimisation retry
+// (continue=true) or returns a terminal result.
+func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, queryName, qname string, qnameMinimise bool, validated bool, ecsResponse *edns.ECSOption) (bestMatch string, bestNSRecords []*dns.NS, shouldContinue bool, termRes *terminalResult) {
+	var allRRSections []dns.RR
+	allRRSections = append(allRRSections, response.Ns...)
+	allRRSections = append(allRRSections, response.Answer...)
+
+	for _, rrec := range allRRSections {
+		if ns, ok := rrec.(*dns.NS); ok {
+			nsName := dnsutil.NormalizeDomain(rrec.Header().Name)
+			isMatch := normalizedQname == nsName ||
+				(nsName != "" && strings.HasSuffix(normalizedQname, "."+nsName))
+			if isMatch && len(nsName) >= len(bestMatch) {
+				if len(nsName) > len(bestMatch) {
+					bestMatch = nsName
+					bestNSRecords = []*dns.NS{ns}
+				} else {
+					bestNSRecords = append(bestNSRecords, ns)
+				}
+			}
+		}
+	}
+
+	if len(bestNSRecords) == 0 {
+		if qnameMinimise && !strings.EqualFold(queryName, qname) {
+			pool.DefaultMessagePool.Put(response)
+			return "", nil, true, nil
+		}
+		nsSlice, extraSlice := response.Ns, response.Extra
+		pool.DefaultMessagePool.Put(response)
+		return "", nil, false, &terminalResult{
+			answer: nil, authority: nsSlice, additional: extraSlice,
+			validated: validated, ecs: ecsResponse,
+			server: config.RecursiveIndicator, hijack: false, err: nil,
+		}
+	}
+	return bestMatch, bestNSRecords, false, nil
 }
