@@ -572,10 +572,12 @@ func (s *SQLiteCache) SaveStats(row config.StatsRow) {
 	}
 }
 
-// restoreStats reads the persisted stats row and seeds the in-memory
-// accumulators so counters survive restarts.
+// restoreStats reads the persisted stats row directly from DB and seeds
+// the in-memory accumulators so counters survive restarts.
+// Does NOT call flushStats() first — at startup the in-memory accumulators
+// are zero, so flushing would overwrite previously persisted stats with zeros.
 func (s *SQLiteCache) restoreStats() {
-	row, ok := s.LoadStats()
+	row, ok := s.loadStatsFromDB()
 	if !ok {
 		return
 	}
@@ -612,6 +614,11 @@ func (s *SQLiteCache) restoreStats() {
 // LoadStats flushes in-memory counters and returns the persisted stats row.
 func (s *SQLiteCache) LoadStats() (config.StatsRow, bool) {
 	s.flushStats()
+	return s.loadStatsFromDB()
+}
+
+// loadStatsFromDB reads the stats row directly from SQLite without flushing.
+func (s *SQLiteCache) loadStatsFromDB() (config.StatsRow, bool) {
 	var row config.StatsRow
 	err := s.db.QueryRow(
 		`SELECT total_requests, cache_hits, cache_misses, prefetch_requests,
