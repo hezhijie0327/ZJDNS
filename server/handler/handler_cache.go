@@ -110,7 +110,7 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 	go func() {
 		defer close(done)
 		defer dnsutil.HandlePanic("expired cache fallback query")
-		qr := h.resolver.Query(h.ctx, resolver.Question{Name: question.Name, Qtype: question.Qtype, Qclass: question.Qclass}, ecsOpt)
+		qr := h.resolver.Query(h.ctx, question, ecsOpt)
 		res = queryResult{
 			answer:     qr.Answer,
 			authority:  qr.Authority,
@@ -154,7 +154,7 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 
 func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, clientIP net.IP, isSecureConnection bool, startTime time.Time, requestProtocol string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	log.Debugf("CACHE: miss for %s, querying upstream/recursive", question.Name)
-	qr := h.resolver.Query(h.ctx, resolver.Question{Name: question.Name, Qtype: question.Qtype, Qclass: question.Qclass}, ecsOpt)
+	qr := h.resolver.Query(h.ctx, question, ecsOpt)
 
 	if qr.Err != nil {
 
@@ -279,7 +279,7 @@ func (h *Handler) refreshCacheEntry(ctx context.Context, question Question, ecs 
 	default:
 	}
 
-	qr := h.resolver.Query(ctx, resolver.Question{Name: question.Name, Qtype: question.Qtype, Qclass: question.Qclass}, ecs)
+	qr := h.resolver.Query(ctx, question, ecs)
 	if qr.Err != nil {
 		return qr.Err
 	}

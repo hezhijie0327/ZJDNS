@@ -133,7 +133,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	resolver := resolver.New(
 		queryClient, guard, ednsHandler, cidrFilter,
 		func(q resolver.Question, ecs *edns.ECSOption, rd bool, secure bool) *dns.Msg {
-			return h.BuildQueryMessage(handler.Question{Name: q.Name, Qtype: q.Qtype, Qclass: q.Qclass}, ecs, rd, secure)
+			return h.BuildQueryMessage(q, ecs, rd, secure)
 		},
 		cacheStore,
 	)

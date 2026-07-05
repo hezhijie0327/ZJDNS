@@ -49,6 +49,24 @@ func New() *Evaluator {
 	return rm
 }
 
+// preParseRecordTypes pre-parses Type and Class strings to uint16 values
+// to avoid allocation-heavy map lookups on the query hot path.
+func preParseRecordTypes(records []config.DNSRecordConfig) {
+	for j := range records {
+		if t, _ := dnsutilv2.StringToType(records[j].Type); t != 0 {
+			records[j].ParsedType = t
+		}
+		if records[j].Class != "" {
+			if parsed, err := dnsutilv2.StringToClass(strings.ToUpper(strings.TrimSpace(records[j].Class))); err == nil {
+				records[j].ParsedClass = parsed
+			}
+		}
+		if records[j].ParsedClass == 0 {
+			records[j].ParsedClass = dns.ClassINET
+		}
+	}
+}
+
 // LoadRules validates and loads rewrite rules into the Evaluator.
 func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 	validRules := make([]config.RewriteRule, 0, len(rules))
@@ -103,32 +121,8 @@ func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 
 		// Pre-parse Type/Class strings to uint16 to avoid allocation-heavy
 		// map lookups and string normalizations on every query (hot path).
-		for j := range rule.Records {
-			if t, _ := dnsutilv2.StringToType(rule.Records[j].Type); t != 0 {
-				rule.Records[j].ParsedType = t
-			}
-			if rule.Records[j].Class != "" {
-				if parsed, err := dnsutilv2.StringToClass(strings.ToUpper(strings.TrimSpace(rule.Records[j].Class))); err == nil {
-					rule.Records[j].ParsedClass = parsed
-				}
-			}
-			if rule.Records[j].ParsedClass == 0 {
-				rule.Records[j].ParsedClass = dns.ClassINET
-			}
-		}
-		for j := range rule.Additional {
-			if t, _ := dnsutilv2.StringToType(rule.Additional[j].Type); t != 0 {
-				rule.Additional[j].ParsedType = t
-			}
-			if rule.Additional[j].Class != "" {
-				if parsed, err := dnsutilv2.StringToClass(strings.ToUpper(strings.TrimSpace(rule.Additional[j].Class))); err == nil {
-					rule.Additional[j].ParsedClass = parsed
-				}
-			}
-			if rule.Additional[j].ParsedClass == 0 {
-				rule.Additional[j].ParsedClass = dns.ClassINET
-			}
-		}
+		preParseRecordTypes(rule.Records)
+		preParseRecordTypes(rule.Additional)
 
 		// Pre-build DNS records from config so they are not e-parsed
 		// from zone file strings on every query.

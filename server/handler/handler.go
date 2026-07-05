@@ -24,12 +24,8 @@ import (
 	"zjdns/server/resolver"
 )
 
-// Question is a DNS question compatible with both v1 and v2 dns packages.
-type Question struct {
-	Name   string
-	Qtype  uint16
-	Qclass uint16
-}
+// Question is a type alias for resolver.Question to avoid duplicate definitions.
+type Question = resolver.Question
 
 // queryResult holds the result of a resolver query for stale-cache fallback.
 type queryResult struct {
