@@ -37,9 +37,9 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 基于 SQLite WAL 模式的关系型缓存，三表设计：
 
 ```
-entries   — 缓存条目（qname/qtype/qclass/ecs/dnssec 唯一）
+entries   — 缓存条目（qname/qtype/qclass/ecs/dnssec 唯一，13 列核心字段）
 records   — DNS 记录行（rdata_ip 用于 PTR 反查，latency_ms 用于延迟排序）
-stats     — 统计计数器（每请求原子累加，SQL 直接查询）
+metadata  — 解析元数据 + 协议命中计数器（1:1，ON DELETE CASCADE）
 ```
 
 - **无内存缓存层**：SQLite B-tree + mmap 直接作为存储引擎，热页由 OS page cache 零拷贝服务
@@ -47,8 +47,8 @@ stats     — 统计计数器（每请求原子累加，SQL 直接查询）
 - **PTR 反查**：`SELECT ... FROM records WHERE rdata_ip = ? JOIN entries`，无需单独反向索引
 - **DNSKEY 缓存**：与普通 DNS 缓存共享同一套 `entries + records` 表
 - **NS 地址缓存**：A/AAAA 记录 + latency_ms，根服务器和每 NS 地址统一存储
-- **统计即查即得**：`SELECT * FROM stats` 直接输出，无 JSON 序列化
-- **持久化**：`db_path` 指定数据库文件路径，跨重启保留全量缓存和统计
+- **SQL 数据分析**：JOIN metadata 直接查询 — 例如 `SELECT m.server, SUM(m.hit_dot) FROM entries e JOIN metadata m ON e.id = m.entry_id GROUP BY m.server`
+- **持久化**：`db_path` 指定数据库文件路径，跨重启保留全量缓存和 metadata
 - **驱逐策略**：TTL 惰性过期 + 条数上限最旧淘汰 + 5 分钟定期清理
 
 ### DNS 解析
@@ -73,7 +73,7 @@ stats     — 统计计数器（每请求原子累加，SQL 直接查询）
 
 ### 可观测性
 
-- **SQL 查询统计**：`SELECT * FROM stats` 直接输出 28 列计数器（请求量、缓存命中率、协议分布、DNSSEC 状态、RCODE 分布）
+- **SQL 数据分析**：JOIN metadata 表查询协议分布、上游服务器、响应时间等 — 例如 `SELECT m.server, SUM(m.hit_doh) FROM entries e JOIN metadata m ON e.id = m.entry_id GROUP BY m.server`
 - **组件级日志过滤**：`debug:UPSTREAM,SECURITY` 仅输出指定组件 Debug 日志
 - **pprof**：标准 Go 性能分析端点
 
