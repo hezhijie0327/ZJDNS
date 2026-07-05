@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 
 	"codeberg.org/miekg/dns"
-	_ "modernc.org/sqlite"
+	_ "github.com/ncruces/go-sqlite3/driver"
 
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
@@ -41,13 +41,15 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 		cacheSizeMB = config.DefaultCacheCacheSizeMB
 	}
 
-	dsn := path
-	if dsn == "" {
-		dsn = ":memory:"
+	params := "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=ON"
+	var dsn string
+	if path == "" {
+		dsn = "file::memory:?cache=shared&" + params
+	} else {
+		dsn = "file:" + path + "?" + params
 	}
-	dsn += "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=ON"
 
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}

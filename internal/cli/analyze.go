@@ -6,13 +6,17 @@ import (
 	"os"
 	"strings"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/ncruces/go-sqlite3/driver"
 )
 
 // RunAnalyze opens a SQLite cache database and runs a SQL query, printing
 // results as an aligned columnar table (like sqlite3 -column -header).
 func RunAnalyze(dbPath, query string) {
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	dsn := "file:" + dbPath + "?_journal_mode=WAL&_busy_timeout=5000"
+	if dbPath == ":memory:" {
+		dsn = "file::memory:?cache=shared&_journal_mode=WAL&_busy_timeout=5000"
+	}
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open database: %v\n", err)
 		os.Exit(1)
