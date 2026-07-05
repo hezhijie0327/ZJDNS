@@ -339,50 +339,66 @@ The cache uses three SQLite tables (`modernc.org/sqlite`, WAL mode, mmap):
 -- One row per cached DNS query (including errors like SERVFAIL/FORMERR).
 -- Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
 CREATE TABLE entries (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- Lookup key (UNIQUE)
     qname      TEXT NOT NULL,       -- normalized FQDN (dnsutil.NormalizeDomain)
     qtype      INTEGER NOT NULL,    -- dns.TypeA=1, DNSKEY=48, TypeNone=0 (NS latency sentinel)
     qclass     INTEGER NOT NULL DEFAULT 1,
     ecs_addr   TEXT NOT NULL DEFAULT '',
     ecs_prefix INTEGER NOT NULL DEFAULT 0,
     dnssec_ok  INTEGER NOT NULL DEFAULT 0,
+    -- Lifecycle
     timestamp  INTEGER NOT NULL,    -- insertion time (unix seconds)
     ttl        INTEGER NOT NULL,    -- entry TTL (min of all RR TTLs, floor 10s)
     expires_at INTEGER NOT NULL DEFAULT 0,
+    -- Flags
     validated  INTEGER NOT NULL DEFAULT 0,
-    cacheable  INTEGER NOT NULL DEFAULT 1  -- 0 = error entry, never returned by Get()
+    cacheable  INTEGER NOT NULL DEFAULT 1,  -- 0 = error entry, never returned by Get()
+    -- PK + constraint
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 );
 
 -- One row per DNS RR within an entry. DELETE CASCADE when entry is evicted/expired.
 CREATE TABLE records (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- Reference
     entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    -- Record identity
     section    TEXT NOT NULL,       -- 'answer', 'authority', 'additional'
     seq        INTEGER NOT NULL DEFAULT 0,
     name       TEXT NOT NULL,
     rtype      INTEGER NOT NULL,
     ttl        INTEGER NOT NULL,    -- original RR TTL
+    -- Data
     rr_text    TEXT NOT NULL,       -- full presentation format (dns.New(rr_text) reconstructs RR)
     rdata_ip   TEXT,                -- A/AAAA IP for PTR reverse lookup
-    latency_ms INTEGER              -- NULL = not probed; non-NULL = measured latency
+    -- Probe latency
+    latency_ms INTEGER,             -- NULL = not probed; non-NULL = measured latency
+    -- PK
+    id         INTEGER PRIMARY KEY AUTOINCREMENT
 );
 
--- Per-entry resolution metadata and per-protocol hit counters.
+-- Per-entry resolution metadata and per-protocol serving counters.
 -- 1:1 with entries via entry_id PK. DELETE CASCADE on entry eviction.
 CREATE TABLE metadata (
     entry_id         INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
+    -- Resolution metadata (written once by Set)
     rcode            INTEGER NOT NULL DEFAULT 0,   -- response code (NOERROR=0, FORMERR=1, …)
     response_time_ms INTEGER NOT NULL DEFAULT 0,   -- resolution time in milliseconds
     server           TEXT NOT NULL DEFAULT '',     -- upstream server ("8.8.8.8:53 (UDP)" / "builtin_recursive")
+    dnssec           TEXT NOT NULL DEFAULT "",     -- "secure", "insecure", "bogus", or ""
     fallback         INTEGER NOT NULL DEFAULT 0,   -- resolved via fallback upstream
     prefetch         INTEGER NOT NULL DEFAULT 0,   -- background prefetch refresh
+    hijack           INTEGER NOT NULL DEFAULT 0,   -- hijack detected during resolution
+    -- Serving counters (updated by Get / RecordHit / RecordStale / RecordRewrite)
     last_hit_time    INTEGER NOT NULL DEFAULT 0,   -- last cache-hit timestamp
     hit_udp          INTEGER NOT NULL DEFAULT 0,   -- UDP hits
     hit_tcp          INTEGER NOT NULL DEFAULT 0,   -- TCP hits
     hit_dot          INTEGER NOT NULL DEFAULT 0,   -- DoT hits
     hit_doq          INTEGER NOT NULL DEFAULT 0,   -- DoQ hits
     hit_doh          INTEGER NOT NULL DEFAULT 0,   -- DoH hits
-    hit_doh3         INTEGER NOT NULL DEFAULT 0    -- DoH3 hits
+    hit_doh3         INTEGER NOT NULL DEFAULT 0,   -- DoH3 hits
+    stale_count      INTEGER NOT NULL DEFAULT 0,   -- stale-serve count
+    rewrite_count    INTEGER NOT NULL DEFAULT 0    -- rewrite count
 );
 ```
 
@@ -390,11 +406,13 @@ CREATE TABLE metadata (
 - **DNS response cache**: `qtype` = original query type, records in original order. `Get()` filters `cacheable = 1` entries only.
 - **Error entries**: FORMERR/SERVFAIL/etc. stored with `cacheable = 0` and no records — never returned by `Get()`, queryable via SQL for diagnostics.
 - **Cache-hit tracking**: `Get()` updates `metadata.last_hit_time`; handler calls `RecordHit(protocol)` → `UPDATE metadata SET hit_udp = hit_udp + 1` etc. Total hits = `SUM(hit_udp + hit_tcp + …)`.
+- **Stale/rewrite tracking**: handler calls `RecordStale()` / `RecordRewrite()` → increments `stale_count` / `rewrite_count` on metadata.
 - **NS latency cache**: `qtype` = `dns.TypeNone` (0), A/AAAA records with `latency_ms` populated by probe engine. `loadRecords` puts non-A/AAAA records first, then sorts probed A/AAAA fastest-first.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT name FROM records r JOIN entries e ON r.entry_id = e.id WHERE r.rdata_ip = ? AND e.timestamp + e.ttl > unixepoch()`
 - **Eviction: on Set when count > maxEntries. Prefers entries past serve-stale age (expires_at + staleMaxAge < now), then oldest by timestamp. No periodic cleanup — stale data is valuable for serve-stale.
 - **Probe updates**: `UPDATE records SET latency_ms = ? WHERE entry_id = ? AND rdata_ip = ?` — no entry overwrite needed
+- **Summary stats**: `Store.Summary()` returns a one-line snapshot: entries, hits, avg response time, per-protocol hits, rcode distribution, hijack/fallback/prefetch/stale/rewrite counts. Logged at startup and shutdown.
 - **Analytics**: query via JOIN — e.g. `SELECT m.server, SUM(m.hit_dot) FROM entries e JOIN metadata m ON e.id = m.entry_id GROUP BY m.server` for DoT requests per upstream.
 
 ## CI/CD

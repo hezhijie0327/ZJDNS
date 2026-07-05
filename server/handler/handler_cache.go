@@ -170,6 +170,8 @@ func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns
 func (h *Handler) processQueryError(req *dns.Msg, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, startTime time.Time, requestProtocol string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	if entry, found, _ := h.cache.Get(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.RemainingTTL(), entry.Validated)
+		h.cache.RecordHit(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, requestProtocol)
+		h.cache.RecordStale(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC)
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
 

@@ -97,50 +97,65 @@ func (s *SQLiteCache) migrate() error {
 
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS entries (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			-- Lookup key (UNIQUE)
 			qname      TEXT NOT NULL,
 			qtype      INTEGER NOT NULL,
 			qclass     INTEGER NOT NULL DEFAULT 1,
 			ecs_addr   TEXT NOT NULL DEFAULT '',
 			ecs_prefix INTEGER NOT NULL DEFAULT 0,
 			dnssec_ok  INTEGER NOT NULL DEFAULT 0,
+			-- Lifecycle
 			timestamp  INTEGER NOT NULL,
 			ttl        INTEGER NOT NULL,
 			expires_at INTEGER NOT NULL DEFAULT 0,
+			-- Flags
 			validated  INTEGER NOT NULL DEFAULT 0,
 			cacheable  INTEGER NOT NULL DEFAULT 1,
+			-- PK + constraint
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 		);
 
 		CREATE TABLE IF NOT EXISTS metadata (
 			entry_id         INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
+			-- Resolution metadata (written once by Set)
 			rcode            INTEGER NOT NULL DEFAULT 0,
 			response_time_ms INTEGER NOT NULL DEFAULT 0,
 			server           TEXT NOT NULL DEFAULT '',
+			dnssec           TEXT NOT NULL DEFAULT "",
 			fallback         INTEGER NOT NULL DEFAULT 0,
 			prefetch         INTEGER NOT NULL DEFAULT 0,
 			hijack           INTEGER NOT NULL DEFAULT 0,
-			dnssec           TEXT NOT NULL DEFAULT "",
+			-- Serving counters (updated by Get / RecordHit / RecordStale / RecordRewrite)
 			last_hit_time    INTEGER NOT NULL DEFAULT 0,
 			hit_udp          INTEGER NOT NULL DEFAULT 0,
 			hit_tcp          INTEGER NOT NULL DEFAULT 0,
 			hit_dot          INTEGER NOT NULL DEFAULT 0,
 			hit_doq          INTEGER NOT NULL DEFAULT 0,
 			hit_doh          INTEGER NOT NULL DEFAULT 0,
-			hit_doh3         INTEGER NOT NULL DEFAULT 0
+			hit_doh3         INTEGER NOT NULL DEFAULT 0,
+			stale_count      INTEGER NOT NULL DEFAULT 0,
+			rewrite_count    INTEGER NOT NULL DEFAULT 0
 		);
 
 		CREATE TABLE IF NOT EXISTS records (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			-- Reference
 			entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			-- Record identity
 			section    TEXT NOT NULL,
 			seq        INTEGER NOT NULL DEFAULT 0,
 			name       TEXT NOT NULL,
 			rtype      INTEGER NOT NULL,
 			ttl        INTEGER NOT NULL,
+			-- Data
 			rr_text    TEXT NOT NULL,
 			rdata_ip   TEXT,
-			latency_ms INTEGER
+			-- Probe latency
+			latency_ms INTEGER,
+			-- PK
+			id         INTEGER PRIMARY KEY AUTOINCREMENT
+		);
+
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
@@ -191,7 +206,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	entry.Validated = validated != 0
 
 	// Track cache hit for analytics.
-	_, _ = s.db.Exec(`UPDATE entries SET hit_count = hit_count + 1, last_hit_time = ? WHERE id = ?`,
+	_, _ = s.db.Exec(`UPDATE metadata SET last_hit_time = ? WHERE entry_id = ?`,
 		log.NowUnix(), id)
 
 	isExpired := ttl.IsExpired(ts, entryTTL)
@@ -247,9 +262,9 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	// Upsert metadata for analytics.
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO metadata (entry_id, rcode, response_time_ms, server, fallback, prefetch, hijack, dnssec)
+		`INSERT OR REPLACE INTO metadata (entry_id, rcode, response_time_ms, server, dnssec, fallback, prefetch, hijack)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		entryID, opts.Rcode, opts.ResponseTime, opts.Server, boolToInt(opts.Fallback), boolToInt(opts.Prefetch), boolToInt(opts.Hijack), opts.Dnssec,
+		entryID, opts.Rcode, opts.ResponseTime, opts.Server, opts.Dnssec, boolToInt(opts.Fallback), boolToInt(opts.Prefetch), boolToInt(opts.Hijack),
 	); err != nil {
 		log.Warnf("CACHE: insert metadata failed: %v", err)
 	}
@@ -350,21 +365,60 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	return results
 }
 
+// RecordStale increments the stale-serve counter on an existing cache entry.
+func (s *SQLiteCache) RecordStale(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return
+	}
+	qname = dnsutil.NormalizeDomain(qname)
+	ecsAddr, ecsPrefix := ecsParams(ecs)
+	_, _ = s.db.Exec(
+		"UPDATE metadata SET stale_count = stale_count + 1 WHERE entry_id = (SELECT id FROM entries WHERE qname=? AND qtype=? AND qclass=? AND ecs_addr=? AND ecs_prefix=? AND dnssec_ok=?)",
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
+	)
+}
+
+// RecordRewrite increments the rewrite counter. Since rewrite responses bypass
+// the cache, this creates a lightweight entry if one doesn't already exist.
+func (s *SQLiteCache) RecordRewrite(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return
+	}
+	qname = dnsutil.NormalizeDomain(qname)
+	ecsAddr, ecsPrefix := ecsParams(ecs)
+	// Upsert a stub entry so rewrite counts survive eviction cycles.
+	now := log.NowUnix()
+	dnssecInt := boolToInt(dnssecOK)
+	_, _ = s.db.Exec(
+		"INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok, timestamp, ttl, expires_at, validated, cacheable) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt, now, config.DefaultStaleTTL, now+int64(config.DefaultStaleTTL), 0, 1,
+	)
+	var entryID int64
+	if err := s.db.QueryRow("SELECT id FROM entries WHERE qname=? AND qtype=? AND qclass=? AND ecs_addr=? AND ecs_prefix=? AND dnssec_ok=?", qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt).Scan(&entryID); err == nil {
+		_, _ = s.db.Exec("INSERT OR REPLACE INTO metadata (entry_id, rcode, response_time_ms, server, dnssec, fallback, prefetch, hijack) VALUES (?,?,?,?,?,?,?,?)", entryID, 0, 0, "rewrite", "", 0, 0, 0)
+		_, _ = s.db.Exec("UPDATE metadata SET rewrite_count = rewrite_count + 1 WHERE entry_id = ?", entryID)
+	}
+}
+
 // Summary returns a one-line stats summary from the metadata table.
 func (s *SQLiteCache) Summary() string {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return ""
 	}
-	var entries, hits, udp, tcp, dot, doq, doh, doh3, hijack, fallback, prefetch int64
+	var entries, hits, udp, tcp, dot, doq, doh, doh3 int64
 	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
+	var hijack, fallback, prefetch, stale, rewrite int64
 	var avgMs float64
+
+	// Entries
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE cacheable = 1").Scan(&entries)
+	// Hits
 	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp+hit_tcp+hit_dot+hit_doq+hit_doh+hit_doh3),0) FROM metadata").Scan(&hits)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp),0), COALESCE(SUM(hit_tcp),0), COALESCE(SUM(hit_dot),0), COALESCE(SUM(hit_doq),0), COALESCE(SUM(hit_doh),0), COALESCE(SUM(hit_doh3),0) FROM metadata").Scan(&udp, &tcp, &dot, &doq, &doh, &doh3)
+	// Avg response time
 	_ = s.db.QueryRow("SELECT COALESCE(AVG(response_time_ms),0) FROM metadata WHERE response_time_ms > 0").Scan(&avgMs)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE hijack = 1").Scan(&hijack)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE fallback = 1").Scan(&fallback)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE prefetch = 1").Scan(&prefetch)
+	// Protocol breakdown
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp),0), COALESCE(SUM(hit_tcp),0), COALESCE(SUM(hit_dot),0), COALESCE(SUM(hit_doq),0), COALESCE(SUM(hit_doh),0), COALESCE(SUM(hit_doh3),0) FROM metadata").Scan(&udp, &tcp, &dot, &doq, &doh, &doh3)
+	// Rcode distribution
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 0").Scan(&noerr)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 1").Scan(&formerr)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 2").Scan(&servfail)
@@ -372,7 +426,17 @@ func (s *SQLiteCache) Summary() string {
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 4").Scan(&notimp)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 5").Scan(&refused)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode NOT IN (0,1,2,3,4,5)").Scan(&other)
-	return fmt.Sprintf("entries=%d hits=%d avg=%.1fms udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d hijack=%d fallback=%d prefetch=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d", entries, hits, avgMs, udp, tcp, dot, doq, doh, doh3, hijack, fallback, prefetch, noerr, formerr, servfail, nxdomain, notimp, refused, other)
+	// Flags & counters
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE hijack = 1").Scan(&hijack)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE fallback = 1").Scan(&fallback)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE prefetch = 1").Scan(&prefetch)
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(stale_count),0) FROM metadata").Scan(&stale)
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(rewrite_count),0) FROM metadata").Scan(&rewrite)
+
+	return fmt.Sprintf("entries=%d hits=%d avg=%.1fms udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d hijack=%d fallback=%d prefetch=%d stale=%d rewrite=%d",
+		entries, hits, avgMs, udp, tcp, dot, doq, doh, doh3,
+		noerr, formerr, servfail, nxdomain, notimp, refused, other,
+		hijack, fallback, prefetch, stale, rewrite)
 }
 
 // Close closes the database.

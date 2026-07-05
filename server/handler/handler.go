@@ -274,6 +274,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		if entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			responseMsg = h.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 			h.cache.RecordHit(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, requestProtocol)
+			h.cache.RecordStale(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC)
 			return responseMsg
 		}
 
@@ -355,6 +356,8 @@ func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.
 	}
 
 	log.Debugf("REWRITE: matched rule for %s -> domain=%s responseCode=%d records=%d additional=%d", question.Name, rewriteResult.Domain, uint16(rewriteResult.ResponseCode), len(rewriteResult.Records), len(rewriteResult.Additional))
+
+	h.cache.RecordRewrite(question.Name, question.Qtype, question.Qclass, nil, false)
 
 	if uint16(rewriteResult.ResponseCode) != dns.RcodeSuccess {
 		log.Debugf("RESULT: %s %s | rcode=%s, blocked by rewrite rule", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[uint16(rewriteResult.ResponseCode)])

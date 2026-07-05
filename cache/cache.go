@@ -27,6 +27,8 @@ type Store interface {
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 		answer, authority, additional []dns.RR, validated bool, opts SetOptions)
 	RecordHit(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, protocol string)
+	RecordStale(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool)
+	RecordRewrite(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool)
 	UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int)
 	ReverseLookup(ip string) []LookupResult
 	Summary() string
