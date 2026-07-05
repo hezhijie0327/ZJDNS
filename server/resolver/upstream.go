@@ -26,12 +26,13 @@ type result struct {
 	Validated  bool
 	ECS        *edns.ECSOption
 	Server     string
+	Hijack     bool
 	Err        error // set when errgroup detects a sentinel error (e.g. CIDR refusal)
 }
 
-func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, bool, error) {
 	if len(servers) == 0 {
-		return nil, nil, nil, false, nil, "", false, errors.New("no upstream servers")
+		return nil, nil, nil, false, nil, "", false, false, errors.New("no upstream servers")
 	}
 
 	// Clear any stale EDE from a previous query so it does not leak into
@@ -111,31 +112,31 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	case res, ok := <-resultChan:
 		if ok {
 			if errors.Is(res.Err, ErrCIDRFilterRefused) {
-				return nil, nil, nil, false, nil, "", false, ErrCIDRFilterRefused
+				return nil, nil, nil, false, nil, "", false, false, ErrCIDRFilterRefused
 			}
 			if res.Server != "" {
-				return res.Answer, res.Authority, res.Additional, res.Validated, res.ECS, res.Server, false, nil
+				return res.Answer, res.Authority, res.Additional, res.Validated, res.ECS, res.Server, false, res.Hijack, nil
 			}
 		}
 		if nxRes := nxdomainResult.Load(); nxRes != nil && nxRes.Server != "" {
-			return nxRes.Answer, nxRes.Authority, nxRes.Additional, nxRes.Validated, nxRes.ECS, nxRes.Server, false, nil
+			return nxRes.Answer, nxRes.Authority, nxRes.Additional, nxRes.Validated, nxRes.ECS, nxRes.Server, false, false, nil
 		}
 		// Propagate any EDE code captured from upstream SERVFAIL.
 		if opt := r.lastUpstreamEDE.Load(); opt != nil {
 			log.Debugf("UPSTREAM: all %d servers failed for %s, propagating EDE %d", len(servers), question.Name, opt.InfoCode)
-			return nil, nil, nil, false, nil, "", false, dnssecEDEError(uint64(opt.InfoCode))
+			return nil, nil, nil, false, nil, "", false, false, dnssecEDEError(uint64(opt.InfoCode))
 		}
 		log.Debugf("UPSTREAM: all %d servers failed for %s", len(servers), question.Name)
-		return nil, nil, nil, false, nil, "", false, errors.New("all upstream queries failed")
+		return nil, nil, nil, false, nil, "", false, false, errors.New("all upstream queries failed")
 	case <-queryCtx.Done():
 		// When all goroutines finish, errgroup cancels the derived
 		// context, which can race with the channel-close goroutine.
 		// Check for captured EDE codes here too so they are
 		// not lost to a "context canceled" error.
 		if opt := r.lastUpstreamEDE.Load(); opt != nil {
-			return nil, nil, nil, false, nil, "", false, dnssecEDEError(uint64(opt.InfoCode))
+			return nil, nil, nil, false, nil, "", false, false, dnssecEDEError(uint64(opt.InfoCode))
 		}
-		return nil, nil, nil, false, nil, "", false, queryCtx.Err()
+		return nil, nil, nil, false, nil, "", false, false, queryCtx.Err()
 	}
 }
 
@@ -254,7 +255,7 @@ func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config
 	recursiveCtx, recursiveCancel := context.WithTimeout(groupCtx, config.DefaultRecursiveResolveTimeout)
 	defer recursiveCancel()
 
-	answer, authority, additional, validated, ecsResponse, usedServer, _, err := r.cname.resolve(recursiveCtx, question, ecs)
+	answer, authority, additional, validated, ecsResponse, usedServer, hijackSeen, err := r.cname.resolve(recursiveCtx, question, ecs)
 	if err != nil || len(answer) == 0 {
 		return false
 	}
@@ -268,7 +269,7 @@ func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config
 	}
 
 	select {
-	case resultChan <- result{Answer: answer, Authority: authority, Additional: additional, Validated: validated, ECS: ecsResponse, Server: usedServer}:
+	case resultChan <- result{Answer: answer, Authority: authority, Additional: additional, Validated: validated, ECS: ecsResponse, Server: usedServer, Hijack: hijackSeen}:
 		cancel(errors.New("successful result"))
 		return true
 	case <-groupCtx.Done():

@@ -250,13 +250,13 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	// configured; return the upstream error so the client receives a clear
 	// failure signal instead of silently switching to recursive mode.
 	if len(fallbackServers) == 0 {
-		a, au, ad, v, e, s, f, err := r.queryUpstream(ctx, question, ecs, servers)
-		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f, Err: err}
+		a, au, ad, v, e, s, f, h, err := r.queryUpstream(ctx, question, ecs, servers)
+		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f, Hijack: h, Err: err}
 	}
 
 	if len(servers) == 0 {
-		a, au, ad, v, e, s, _, err := r.queryUpstream(ctx, question, ecs, fallbackServers)
-		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: true, Err: err}
+		a, au, ad, v, e, s, _, h, err := r.queryUpstream(ctx, question, ecs, fallbackServers)
+		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: true, Hijack: h, Err: err}
 	}
 
 	// Both upstream and fallback configured — query concurrently so the
@@ -268,17 +268,17 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	defer cancel(errors.New("query completed"))
 
 	go func() {
-		a, au, ad, v, e, s, _, err := r.queryUpstream(queryCtx, question, ecs, servers)
+		a, au, ad, v, e, s, _, h, err := r.queryUpstream(queryCtx, question, ecs, servers)
 		select {
-		case upstreamCh <- result{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Err: err}:
+		case upstreamCh <- result{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Hijack: h, Err: err}:
 		case <-queryCtx.Done():
 		}
 	}()
 
 	go func() {
-		a, au, ad, v, e, s, _, err := r.queryUpstream(queryCtx, question, ecs, fallbackServers)
+		a, au, ad, v, e, s, _, h, err := r.queryUpstream(queryCtx, question, ecs, fallbackServers)
 		select {
-		case fallbackCh <- result{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Err: err}:
+		case fallbackCh <- result{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Hijack: h, Err: err}:
 		case <-queryCtx.Done():
 		}
 	}()
@@ -288,13 +288,13 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	select {
 	case up := <-upstreamCh:
 		if up.Err == nil {
-			return &QueryResult{Answer: up.Answer, Authority: up.Authority, Additional: up.Additional, Validated: up.Validated, ECS: up.ECS, Server: up.Server, Fallback: false}
+			return &QueryResult{Answer: up.Answer, Authority: up.Authority, Additional: up.Additional, Validated: up.Validated, ECS: up.ECS, Server: up.Server, Fallback: false, Hijack: up.Hijack}
 		}
 		log.Debugf("UPSTREAM: primary upstream failed for %s, waiting for concurrent fallback", question.Name)
 		select {
 		case fb := <-fallbackCh:
 			if fb.Err == nil {
-				return &QueryResult{Answer: fb.Answer, Authority: fb.Authority, Additional: fb.Additional, Validated: fb.Validated, ECS: fb.ECS, Server: fb.Server, Fallback: true}
+				return &QueryResult{Answer: fb.Answer, Authority: fb.Authority, Additional: fb.Additional, Validated: fb.Validated, ECS: fb.ECS, Server: fb.Server, Fallback: true, Hijack: fb.Hijack}
 			}
 			return &QueryResult{Err: fb.Err}
 		case <-ctx.Done():

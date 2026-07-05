@@ -158,7 +158,8 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				if response != nil {
 					pool.DefaultMessagePool.Put(response)
 				}
-				return r.resolve(ctx, question, ecs, depth, true)
+				answer, authority, additional, validated, ecsResponse, server, _, err := r.resolve(ctx, question, ecs, depth, true)
+				return answer, authority, additional, validated, ecsResponse, server, true, err
 			}
 		}
 
