@@ -5,6 +5,7 @@ package probe
 import (
 	"context"
 	"net"
+	"strings"
 
 	"codeberg.org/miekg/dns"
 
@@ -114,6 +115,75 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, qtype uint16
 	}
 	log.Debugf("LATENCY: updated %d latency values for %s", len(latencies), qname)
 	return nil
+}
+
+// --- Shared probe function (used by handler prober + resolver NS/Root) ---
+
+// defaultNSProbeSteps returns the default probe steps for NS/Root latency
+// probing (ping → UDP:53 → TCP:53).
+func defaultNSProbeSteps() []config.LatencyProbeStep {
+	return []config.LatencyProbeStep{
+		{Protocol: config.ProtoPing, Timeout: 100},
+		{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: 100},
+		{Protocol: config.ProtoTCP, Port: config.DefaultProbePortDNS, Timeout: 100},
+	}
+}
+
+// ProbeNSAddrs probes the given "ip:port" addresses and stores latency values
+// in ip_latency. Does NOT write cache entries — the caller is responsible for
+// that. Used by the resolver for NS/Root addresses and by the handler prober
+// for regular A/AAAA responses.
+func ProbeNSAddrs(cache CacheSetter, zone string, addrs []string) {
+	if cache == nil || len(addrs) <= 1 {
+		return
+	}
+
+	// Extract public IPs.
+	ips := make([]net.IP, 0, len(addrs))
+	ipToAddr := make(map[string]string, len(addrs))
+	for _, addr := range addrs {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if ip == nil || ip.IsLoopback() || ip.IsPrivate() {
+			continue
+		}
+		ips = append(ips, ip)
+		ipToAddr[ip.String()] = addr
+	}
+	if len(ips) <= 1 {
+		return
+	}
+
+	prober := ilatency.New(defaultNSProbeSteps(), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultNSProbeTimeout)
+	defer cancel()
+	_, latencies := prober.ProbeIPsLatency(ctx, ips)
+	if len(latencies) == 0 {
+		return
+	}
+
+	for ipStr, lat := range latencies {
+		addr, ok := ipToAddr[ipStr]
+		if !ok {
+			continue
+		}
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
+		}
+		cleanIP := net.ParseIP(strings.Trim(host, "[]"))
+		if cleanIP == nil {
+			continue
+		}
+		qtype := uint16(dns.TypeAAAA)
+		if cleanIP.To4() != nil {
+			qtype = dns.TypeA
+		}
+		cache.UpdateLatency(zone, qtype, dns.ClassINET, nil, false, cleanIP.String(), lat)
+	}
 }
 
 // --- Shared helpers ---

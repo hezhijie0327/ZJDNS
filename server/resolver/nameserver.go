@@ -18,6 +18,7 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/server/probe"
 	"zjdns/server/security"
 )
 
@@ -339,7 +340,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			combined[nsName] = append(combined[nsName], addrsFromRRs(records)...)
 		}
 		for nsName, addrs := range combined {
-			go r.probeNSAddrs(nsName, addrs)
+			go probe.ProbeNSAddrs(r.cache, nsName, addrs)
 		}
 	}
 

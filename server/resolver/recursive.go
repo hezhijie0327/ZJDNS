@@ -16,6 +16,7 @@ import (
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/server/probe"
 	"zjdns/server/security"
 )
 
@@ -307,7 +308,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			// Fire background latency probe for each NS name in the glue.
 			for nsName, records := range nsGlue {
 				addrs := addrsFromRRs(records)
-				go r.probeNSAddrs(nsName, addrs)
+				go probe.ProbeNSAddrs(r.cache, nsName, addrs)
 			}
 		}
 
