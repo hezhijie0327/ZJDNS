@@ -45,8 +45,8 @@ const ()
 // builds a cryptographic chain of trust at each delegation step.
 //
 // Both root servers and per-nameserver addresses share the same latency-sorted
-// cache mechanism: nsAddrKey(zone) stores TXT records, getRootServers /
-// lookupNSAddrsFromCache serve-stale on expiry and trigger background re-probes.
+// cache mechanism: per-type TypeA/TypeAAAA entries + ip_latency table.
+// sortAnswerByLatency reorders records by latency at Get() time.
 type Recursive struct {
 	resolver          *Resolver
 	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure

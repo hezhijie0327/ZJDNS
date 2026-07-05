@@ -18,10 +18,11 @@ import (
 
 // ── Latency-sorted NS address cache ──────────────────────────────────────────
 //
-// Root servers and per-nameserver addresses are stored as normal cache entries
-// (qname + TypeNone sentinel). Records are stored in probe-sorted order at
-// Set() time so wire format preserves the latency ordering. Latency values
-// are also stored in the ip_latency table for analytics.
+// Root servers and per-nameserver addresses are stored as regular TypeA/TypeAAAA
+// cache entries. Latency values are stored in the ECS-agnostic ip_latency table;
+// sortAnswerByLatency in cache.Get() reorders records by latency at read time.
+// Probing is triggered on every discovery of new NS addresses during recursive
+// resolution — no separate TTL-based refresh mechanism is needed.
 
 // addrToRR converts an "ip:port" string to an A or AAAA DNS record.
 func addrToRR(name, addr string, ttl uint32) dns.RR {
@@ -49,34 +50,6 @@ func addrToRR(name, addr string, ttl uint32) dns.RR {
 	return rr
 }
 
-// addrsToRRs converts "ip:port" strings to A/AAAA DNS records.
-func addrsToRRs(name string, addrs []string, ttl uint32) []dns.RR {
-	records := make([]dns.RR, 0, len(addrs))
-	for _, addr := range addrs {
-		if rr := addrToRR(name, addr, ttl); rr != nil {
-			records = append(records, rr)
-		}
-	}
-	return records
-}
-
-// readAddrsFromEntry extracts "ip:port" strings from the Answer records
-// of a cache entry. Records are already sorted by latency at Set() time
-// and the ordering is preserved in wire format; sortAnswerByLatency in
-// Get() handles the normal DNS query path.
-func readAddrsFromEntry(entry *cache.Entry) []string {
-	if entry == nil || len(entry.Answer) == 0 {
-		return nil
-	}
-	addrs := make([]string, 0, len(entry.Answer))
-	for _, r := range entry.Answer {
-		if addr := rrToAddr(r); addr != "" {
-			addrs = append(addrs, addr)
-		}
-	}
-	return addrs
-}
-
 // rrToAddr extracts the "ip:port" string from an A or AAAA record.
 func rrToAddr(r dns.RR) string {
 	switch r := r.(type) {
@@ -97,9 +70,9 @@ func ipFromAddr(addr string) net.IP {
 	return net.ParseIP(strings.Trim(host, "[]"))
 }
 
-// probeAndCacheAddrs probes the given addresses, stores latency-sorted A/AAAA
-// records under the zone name with TypeNone sentinel, and persists latency
-// values to ip_latency for analytics.
+// probeAndCacheAddrs probes the given addresses, caches latency-sorted A/AAAA
+// records as regular per-type entries, and persists latency values to ip_latency
+// with the actual qtype so sortAnswerByLatency can reorder them at Get() time.
 func (r *Recursive) probeAndCacheAddrs(zone string, addrs []string) {
 	defer dnsutil.HandlePanic("probeAndCacheAddrs")
 	if len(addrs) <= 1 || r.cache == nil {
@@ -147,11 +120,21 @@ func (r *Recursive) probeAndCacheAddrs(zone string, addrs []string) {
 		}
 	}
 
-	// Store as normal A/AAAA records under TypeNone sentinel.
-	rrRecords := addrsToRRs(zone, sortedAddrs, uint32(config.DefaultNSLatencyTTL))
-	r.cache.Set(zone, dns.TypeNone, dns.ClassINET, nil, false, rrRecords, nil, nil, false, cache.SetOptions{})
+	// Store as regular TypeA/TypeAAAA entries with 3600s TTL (for serve-stale).
+	// sortAnswerByLatency reorders them via ip_latency at Get() time.
+	typeGroups := make(map[uint16][]dns.RR)
+	for _, addr := range sortedAddrs {
+		if rr := addrToRR(zone, addr, 3600); rr != nil {
+			qtype := dns.RRToType(rr)
+			typeGroups[qtype] = append(typeGroups[qtype], rr)
+		}
+	}
+	for qtype, records := range typeGroups {
+		r.cache.Set(zone, qtype, dns.ClassINET, nil, false, records, nil, nil, false, cache.SetOptions{})
+	}
 
-	// Update latency_ms for probed IPs.
+	// Update ip_latency with the actual qtype so sortAnswerByLatency
+	// can reorder records at Get() time (queries by actual qtype).
 	for ipStr, lat := range latencies {
 		if addr, ok := ipToAddr[ipStr]; ok {
 			host, _, err := net.SplitHostPort(addr)
@@ -160,41 +143,42 @@ func (r *Recursive) probeAndCacheAddrs(zone string, addrs []string) {
 			}
 			cleanIP := net.ParseIP(strings.Trim(host, "[]"))
 			if cleanIP != nil {
-				r.cache.UpdateLatency(zone, dns.TypeNone, dns.ClassINET, nil, false, cleanIP.String(), lat)
+				qtype := uint16(dns.TypeAAAA)
+				if cleanIP.To4() != nil {
+					qtype = dns.TypeA
+				}
+				r.cache.UpdateLatency(zone, qtype, dns.ClassINET, nil, false, cleanIP.String(), lat)
 			}
 		}
 	}
 }
 
 // getRootServers returns root servers ordered by probe latency.
+// Uses per-type TypeA/TypeAAAA entries; sortAnswerByLatency reorders
+// records via ip_latency at Get() time. On cold start, fires a background
+// probe and returns shuffled static addresses.
 func (r *Recursive) getRootServers() []string {
 	if r == nil {
 		return DefaultRootServers
 	}
 
-	if r.cache != nil {
-		if entry, found, expired := r.cache.Get(".", dns.TypeNone, dns.ClassINET, nil, false); found && entry != nil {
-			if addrs := readAddrsFromEntry(entry); len(addrs) > 0 {
-				if expired {
-					r.bgGroup.Go(func() error { r.probeRootAddrs(); return nil })
-				}
-				return addrs
-			}
-		}
+	// Look up per-type entries. sortAnswerByLatency reorders by ip_latency.
+	aAddrs := lookupCachedRRs(r.cache, ".", dns.TypeA)
+	aaaaAddrs := lookupCachedRRs(r.cache, ".", dns.TypeAAAA)
+	addrs := make([]string, 0, len(aAddrs)+len(aaaaAddrs))
+	addrs = append(addrs, aAddrs...)
+	addrs = append(addrs, aaaaAddrs...)
+	if len(addrs) > 0 {
+		return addrs
 	}
 
-	r.bgGroup.Go(func() error { r.probeRootAddrs(); return nil })
+	// Cold start: probe in background, return shuffled defaults.
+	r.bgGroup.Go(func() error {
+		log.Debugf("RECURSION: probing root server latency (%d addresses)", len(DefaultRootServers))
+		r.probeAndCacheAddrs(".", DefaultRootServers)
+		return nil
+	})
 	return ShuffleSlice(DefaultRootServers)
-}
-
-func (r *Recursive) probeRootAddrs() {
-	log.Debugf("RECURSION: probing root server latency (%d addresses)", len(DefaultRootServers))
-	r.probeAndCacheAddrs(".", DefaultRootServers)
-}
-
-func (r *Recursive) refreshNSAddrOrder(nsName string, addrs []string) {
-	log.Debugf("RECURSION: refreshing latency order for NS %s (%d addresses)", nsName, len(addrs))
-	r.probeAndCacheAddrs(nsName, addrs)
 }
 
 // probeAndCacheNSGlue runs latency probes against all IPs in the nsGlue map
@@ -256,20 +240,21 @@ func (r *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 			continue
 		}
 
-		// Store under TypeNone unified key.
-		r.cache.Set(nsName, dns.TypeNone, dns.ClassINET, nil, false, sortedRecords, nil, nil, false, cache.SetOptions{})
 		log.Debugf("RECURSION: async-cached %d latency-sorted NS addresses for %s", len(sortedRecords), nsName)
 
-		// Update latency_ms for probed IPs.
+		// Update ip_latency with the actual qtype so sortAnswerByLatency
+		// can reorder per-type entries at Get() time.
 		for _, rrec := range sortedRecords {
 			if ip, ok := dnsutil.ExtractIPString(rrec); ok {
 				if lat, ok := latencies[ip]; ok {
-					r.cache.UpdateLatency(nsName, dns.TypeNone, dns.ClassINET, nil, false, ip, lat)
+					qtype := dns.RRToType(rrec)
+					r.cache.UpdateLatency(nsName, qtype, dns.ClassINET, nil, false, ip, lat)
 				}
 			}
 		}
 
-		// Per-type cache entries with intra-type ordering.
+		// Per-type cache entries (TypeA/TypeAAAA). sortAnswerByLatency
+		// reorders them via ip_latency at Get() time.
 		typeGroups := make(map[uint16][]dns.RR)
 		for _, r := range sortedRecords {
 			qtype := dns.RRToType(r)
@@ -315,24 +300,14 @@ func reorderRecordsByAddrRank(records []dns.RR, addrRank map[string]int) []dns.R
 	return result
 }
 
-// lookupNSAddrsFromCache looks up latency-sorted NS addresses via the TypeNone
-// unified key. Falls back to per-type A/AAAA cache entries on cold start.
+// lookupNSAddrsFromCache looks up latency-sorted NS addresses via per-type
+// TypeA/TypeAAAA entries. sortAnswerByLatency reorders records via ip_latency
+// at Get() time, so the returned addresses are already latency-sorted.
 func (r *Recursive) lookupNSAddrsFromCache(nsName string) []string {
 	if r == nil || r.cache == nil {
 		return nil
 	}
 
-	// Fast path: TypeNone entry with latency-sorted records.
-	if entry, found, expired := r.cache.Get(nsName, dns.TypeNone, dns.ClassINET, nil, false); found && entry != nil {
-		if addrs := readAddrsFromEntry(entry); len(addrs) > 0 {
-			if expired {
-				r.bgGroup.Go(func() error { r.refreshNSAddrOrder(nsName, addrs); return nil })
-			}
-			return addrs
-		}
-	}
-
-	// Fallback: per-type cache entries.
 	aAddrs := lookupCachedRRs(r.cache, nsName, dns.TypeA)
 	aaaaAddrs := lookupCachedRRs(r.cache, nsName, dns.TypeAAAA)
 	addrs := make([]string, 0, len(aAddrs)+len(aaaaAddrs))

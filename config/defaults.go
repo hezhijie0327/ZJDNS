@@ -115,8 +115,6 @@ const (
 	DefaultTokenStoreMaxEntries   = 100 // QUIC LRU token store max total entries
 	DefaultSecureTransportRetries = 2   // DoH/DoH3 recreate-and-retry attempts
 
-	DefaultNSLatencyTTL = 900 // NS address sort cache TTL (seconds)
-
 	DefaultDNSClass  = "IN"      // Default DNS resource record class
 	FallbackClientIP = "0.0.0.0" // Fallback IP when client address is nil
 	DNSRootZone      = "."       // DNS root zone label
