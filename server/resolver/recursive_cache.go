@@ -90,7 +90,7 @@ func (r *Recursive) getRootServers() []string {
 		if len(cached) == 0 {
 			// Cold start for this name: write + probe + read back.
 			cacheRootHint(r.cache, name, addrs)
-			go probe.ProbeNSAddrs(r.cache, name, addrs)
+			go probe.ProbeNSAddrs(r.cache, addrs)
 			cached = r.lookupNSAddrsFromCache(name, nil)
 		}
 		all = append(all, cached...)
@@ -131,7 +131,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 		if refreshEntry != nil {
 			refreshEntry()
 		}
-		go probe.ProbeNSAddrs(r.cache, nsName, addrs)
+		go probe.ProbeNSAddrs(r.cache, addrs)
 	}
 
 	return addrs

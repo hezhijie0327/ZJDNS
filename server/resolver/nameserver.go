@@ -339,8 +339,8 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 		for nsName, records := range aaaaRecordsMap {
 			combined[nsName] = append(combined[nsName], addrsFromRRs(records)...)
 		}
-		for nsName, addrs := range combined {
-			go probe.ProbeNSAddrs(r.cache, nsName, addrs)
+		for _, addrs := range combined {
+			go probe.ProbeNSAddrs(r.cache, addrs)
 		}
 	}
 

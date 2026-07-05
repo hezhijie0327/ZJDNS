@@ -507,7 +507,7 @@ func TestUpdateLatency(t *testing.T) {
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("8.8.8.8")}}
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
 
-	mc.UpdateLatency("example.com.", dns.TypeA, dns.ClassINET, nil, false, "8.8.8.8", 42)
+	mc.UpdateLatency("8.8.8.8", 42)
 
 	var lat int
 	err := mc.db.QueryRow("SELECT latency_ms FROM ip_latency WHERE rdata_ip='8.8.8.8'").Scan(&lat)
@@ -806,9 +806,9 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// ── Phase 7: UpdateLatency (ip_latency) ─────────────────────────────
-	mc.UpdateLatency("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "93.184.216.34", 15)
-	mc.UpdateLatency("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "93.184.216.35", 42)
-	mc.UpdateLatency(".", dns.TypeNone, dns.ClassINET, nil, false, "198.41.0.4", 8)
+	mc.UpdateLatency("93.184.216.34", 15)
+	mc.UpdateLatency("93.184.216.35", 42)
+	mc.UpdateLatency("198.41.0.4", 8)
 
 	var latA, latB int
 	_ = mc.db.QueryRow(`SELECT latency_ms FROM ip_latency WHERE rdata_ip='93.184.216.34'`).Scan(&latA)
@@ -914,9 +914,9 @@ func TestE2E_LatencyOrdering(t *testing.T) {
 	}
 
 	// Store latency: 10.0.0.30 is fastest, 10.0.0.10 is slowest.
-	mc.UpdateLatency("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "10.0.0.10", 100)
-	mc.UpdateLatency("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "10.0.0.20", 50)
-	mc.UpdateLatency("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "10.0.0.30", 5)
+	mc.UpdateLatency("10.0.0.10", 100)
+	mc.UpdateLatency("10.0.0.20", 50)
+	mc.UpdateLatency("10.0.0.30", 5)
 
 	// After latency data: Get() should return A records sorted fastest-first.
 	entry, found, _ = mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)

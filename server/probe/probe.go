@@ -6,6 +6,7 @@ import (
 	"context"
 	"net"
 	"strings"
+	"time"
 
 	"codeberg.org/miekg/dns"
 
@@ -21,7 +22,8 @@ import (
 // cache after probing.
 type CacheSetter interface {
 	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, dnssecOK bool, answer, authority, additional []dns.RR, validated bool, opts cache.SetOptions)
-	UpdateLatency(qname string, qtype, qclass uint16, ecs *edns.ECSOption, dnssecOK bool, ip string, latencyMS int)
+	UpdateLatency(ip string, latencyMS int)
+	GetLatencyLastProbe(ip string) (int64, bool)
 }
 
 // Prober measures network latency to resolved IP addresses and reorders A/AAAA
@@ -74,6 +76,26 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 		return
 	}
 
+	// Skip if all IPs in the answer were recently probed. Each IP is checked
+	// individually — CDN IPs shared across domains are deduped globally.
+	now := time.Now().Unix()
+	allRecent := true
+	for _, rr := range answer {
+		ip, ok := dnsutil.ExtractIPString(rr)
+		if !ok {
+			continue
+		}
+		lastProbe, ok := p.cache.GetLatencyLastProbe(ip)
+		if !ok || now-lastProbe >= int64(config.DefaultLatencyProbeMinInterval) {
+			allRecent = false
+			break
+		}
+	}
+	if allRecent {
+		log.Debugf("LATENCY: probe skipped for %s (all IPs recently probed)", qname)
+		return
+	}
+
 	log.Debugf("LATENCY: starting background latency probe for %s", qname)
 
 	p.bgGroup(func() error {
@@ -111,7 +133,7 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, qtype uint16
 	}
 
 	for ipStr, lat := range latencies {
-		p.cache.UpdateLatency(qname, qtype, dns.ClassINET, ecsResponse, false, ipStr, lat)
+		p.cache.UpdateLatency(ipStr, lat)
 	}
 	log.Debugf("LATENCY: updated %d latency values for %s", len(latencies), qname)
 	return nil
@@ -131,17 +153,15 @@ func defaultNSProbeSteps() []config.LatencyProbeStep {
 
 // ProbeNSAddrs probes the given "ip:port" addresses and stores latency values
 // in ip_latency. Does NOT write cache entries — the caller is responsible for
-// that. Used by the resolver for NS/Root addresses and by the handler prober
-// for regular A/AAAA responses.
-func ProbeNSAddrs(cache CacheSetter, zone string, addrs []string) {
+// that. Used by the resolver for NS/Root addresses.
+func ProbeNSAddrs(cache CacheSetter, addrs []string) {
 	if cache == nil || len(addrs) <= 1 {
 		return
 	}
 
-	// Extract public IPs and determine qtype in one pass.
-	type ipInfo struct{ qtype uint16 }
+	// Extract public IPs. Latency is per-IP, not per-domain, so we only
+	// need the IP list — no qtype tracking required.
 	ips := make([]net.IP, 0, len(addrs))
-	ipMap := make(map[string]ipInfo, len(addrs))
 	for _, addr := range addrs {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
@@ -151,31 +171,35 @@ func ProbeNSAddrs(cache CacheSetter, zone string, addrs []string) {
 		if ip == nil || ip.IsLoopback() || ip.IsPrivate() {
 			continue
 		}
-		qtype := uint16(dns.TypeAAAA)
-		if ip.To4() != nil {
-			qtype = dns.TypeA
-		}
 		ips = append(ips, ip)
-		ipMap[ip.String()] = ipInfo{qtype}
 	}
 	if len(ips) <= 1 {
+		return
+	}
+
+	// Skip IPs that were recently probed.
+	now := time.Now().Unix()
+	needProbe := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		lastProbe, ok := cache.GetLatencyLastProbe(ip.String())
+		if !ok || now-lastProbe >= int64(config.DefaultLatencyProbeMinInterval) {
+			needProbe = append(needProbe, ip)
+		}
+	}
+	if len(needProbe) <= 1 {
 		return
 	}
 
 	prober := ilatency.New(defaultNSProbeSteps(), nil)
 	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultNSProbeTimeout)
 	defer cancel()
-	_, latencies := prober.ProbeIPsLatency(ctx, ips)
+	_, latencies := prober.ProbeIPsLatency(ctx, needProbe)
 	if len(latencies) == 0 {
 		return
 	}
 
 	for ipStr, lat := range latencies {
-		info, ok := ipMap[ipStr]
-		if !ok {
-			continue
-		}
-		cache.UpdateLatency(zone, info.qtype, dns.ClassINET, nil, false, ipStr, lat)
+		cache.UpdateLatency(ipStr, lat)
 	}
 }
 

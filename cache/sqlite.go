@@ -3,7 +3,9 @@ package cache
 import (
 	"database/sql"
 	"fmt"
+	"net"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -59,8 +61,8 @@ type SQLiteCache struct {
 
 	// Hot-path prepared statements — compiled once, reused forever.
 	stmtGetEntry      *sql.Stmt
-	stmtGetLatency    *sql.Stmt
 	stmtInsertLatency *sql.Stmt
+	stmtGetLastProbe  *sql.Stmt
 	stmtHits          [6]*sql.Stmt // indexed by protocol index (0=udp,1=tcp,2=dot,3=doq,4=doh,5=doh3)
 }
 
@@ -190,16 +192,16 @@ func (s *SQLiteCache) migrate() error {
 			rewrite_count INTEGER NOT NULL DEFAULT 0
 		) WITHOUT ROWID;
 
-		-- ECS-agnostic per-IP latency measurements. Keyed by (qname, qtype,
-		-- qclass, rdata_ip) — latency is a property of the IP, not the ECS
-		-- subnet or DNSSEC state. Survives cache refreshes (not tied to entry_id).
+		-- Per-IP latency measurements. Latency is a property of the IP,
+		-- not the domain name — all domains sharing the same IP reuse
+		-- the same row. qtype is inferred from IP format (A=1, AAAA=28)
+		-- for address-family analytics.
 		CREATE TABLE IF NOT EXISTS ip_latency (
-			qname      TEXT NOT NULL,
-			qtype      INTEGER NOT NULL,
-			qclass     INTEGER NOT NULL DEFAULT 1,
-			rdata_ip   TEXT NOT NULL,
-			latency_ms INTEGER NOT NULL,
-			PRIMARY KEY (qname, qtype, qclass, rdata_ip)
+			rdata_ip        TEXT NOT NULL,
+			qtype           INTEGER NOT NULL DEFAULT 0,
+			latency_ms      INTEGER NOT NULL,
+			last_probe_time INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (rdata_ip)
 		) WITHOUT ROWID;
 
 		-- Lightweight PTR reverse-lookup table (IP → domain name).
@@ -250,14 +252,14 @@ func (s *SQLiteCache) prepareStatements() error {
 	if err != nil {
 		return err
 	}
-	s.stmtGetLatency, err = s.db.Prepare(
-		`SELECT rdata_ip, latency_ms FROM ip_latency WHERE qname = ? AND qtype = ? AND qclass = ?`)
+	s.stmtInsertLatency, err = s.db.Prepare(
+		`INSERT OR REPLACE INTO ip_latency (rdata_ip, qtype, latency_ms, last_probe_time)
+		 VALUES (?, ?, ?, unixepoch())`)
 	if err != nil {
 		return err
 	}
-	s.stmtInsertLatency, err = s.db.Prepare(
-		`INSERT OR REPLACE INTO ip_latency (qname, qtype, qclass, rdata_ip, latency_ms)
-		 VALUES (?, ?, ?, ?, ?)`)
+	s.stmtGetLastProbe, err = s.db.Prepare(
+		`SELECT last_probe_time FROM ip_latency WHERE rdata_ip = ?`)
 	if err != nil {
 		return err
 	}
@@ -334,9 +336,9 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 
 	// Sort A/AAAA answer records by latency from ip_latency so the
-	// fastest IP is returned first. Latency is ECS-agnostic — we query
-	// by (qname, qtype, qclass) without ecs/dnssec filters.
-	s.sortAnswerByLatency(qname, qtype, qclass, entry)
+	// fastest IP is returned first. Latency is per-IP — all domains
+	// sharing the same IP reuse the same row.
+	s.sortAnswerByLatency(entry)
 
 	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
@@ -344,41 +346,32 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 // sortAnswerByLatency reorders A/AAAA records in entry.Answer by probe
 // latency (fastest first), keeping non-A/AAAA records (CNAME, etc.) at the
-// front in their original wire-format order. Latency data is looked up by
-// (qname, qtype, qclass) — ECS-agnostic and dnssec-agnostic. Idempotent
-// when ≤1 A/AAAA.
-func (s *SQLiteCache) sortAnswerByLatency(qname string, qtype, qclass uint16, entry *Entry) {
+// front in their original wire-format order. Latency is per-IP — all domains
+// sharing the same IP reuse the same row. Idempotent when ≤1 A/AAAA.
+func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 	if len(entry.Answer) <= 1 {
 		return
 	}
 
-	// Fast check: count A/AAAA records.
+	// Fast check: count A/AAAA records and collect their IPs in one pass.
 	aCount := 0
+	ips := make([]string, 0, len(entry.Answer))
 	for _, rr := range entry.Answer {
 		switch rr.(type) {
 		case *dns.A, *dns.AAAA:
 			aCount++
+			if ip, ok := dnsutil.ExtractIPString(rr); ok {
+				ips = append(ips, ip)
+			}
 		}
 	}
 	if aCount <= 1 {
 		return
 	}
 
-	// Fetch latency data — ECS-agnostic, shared across all ECS/dnssec variants.
-	rows, err := s.stmtGetLatency.Query(qname, int(qtype), int(qclass))
-	if err != nil {
-		return
-	}
-	defer func() { _ = rows.Close() }()
-
-	latencies := make(map[string]int)
-	for rows.Next() {
-		var ip string
-		var lat int
-		if err := rows.Scan(&ip, &lat); err == nil {
-			latencies[ip] = lat
-		}
-	}
+	// Batch lookup: WHERE rdata_ip IN (?,?,...). Single query replaces N
+	// per-IP round-trips on the cache Get() hot path.
+	latencies := s.lookupIPLatencies(ips)
 	if len(latencies) == 0 {
 		return
 	}
@@ -417,6 +410,41 @@ func (s *SQLiteCache) sortAnswerByLatency(qname string, qtype, qclass uint16, en
 	result = append(result, other...)
 	result = append(result, aRecs...)
 	entry.Answer = result
+}
+
+// lookupIPLatencies fetches latencies for a batch of IPs in a single query.
+func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
+	// Build WHERE rdata_ip IN (?,?,...)
+	var buf strings.Builder
+	buf.WriteString("SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (")
+	for i := range ips {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteByte('?')
+	}
+	buf.WriteByte(')')
+
+	args := make([]any, len(ips))
+	for i, ip := range ips {
+		args[i] = ip
+	}
+
+	rows, err := s.db.Query(buf.String(), args...)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	latencies := make(map[string]int, len(ips))
+	for rows.Next() {
+		var ip string
+		var lat int
+		if err := rows.Scan(&ip, &lat); err == nil {
+			latencies[ip] = lat
+		}
+	}
+	return latencies
 }
 
 // Set stores a DNS response in the cache. Wire format is zstd-compressed.
@@ -706,7 +734,7 @@ func (s *SQLiteCache) Close() error {
 		return nil
 	}
 	// Close prepared statements before the database.
-	for _, stmt := range []*sql.Stmt{s.stmtGetEntry, s.stmtGetLatency, s.stmtInsertLatency} {
+	for _, stmt := range []*sql.Stmt{s.stmtGetEntry, s.stmtInsertLatency, s.stmtGetLastProbe} {
 		if stmt != nil {
 			_ = stmt.Close()
 		}
@@ -754,15 +782,6 @@ func (s *SQLiteCache) evictOldest(n int64) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Clean up ip_latency entries whose cache entries no longer exist.
-	if _, err := tx.Exec(
-		`DELETE FROM ip_latency WHERE (qname, qtype, qclass, rdata_ip) NOT IN (
-			SELECT DISTINCT qname, qtype, qclass, '' FROM entries
-		 )`,
-	); err != nil {
-		log.Debugf("CACHE: ip_latency cleanup failed (non-fatal): %v", err)
-	}
-
 	// Prefer evicting entries that can no longer serve-stale (expires_at +
 	// staleMaxAge < now), then fall back to the oldest-by-insertion entries.
 	if _, err := tx.Exec(
@@ -785,13 +804,29 @@ func (s *SQLiteCache) evictOldest(n int64) {
 	log.Debugf("CACHE: evicted %d entries (max=%d)", n, s.maxEntries)
 }
 
-// UpdateLatency stores a latency measurement in the ECS-agnostic ip_latency
-// table. Latency is a property of the IP, not the ECS subnet or DNSSEC state,
-// so we key by (qname, qtype, qclass, rdata_ip) only. A single INSERT OR
-// REPLACE replaces the old per-entry_id iteration over all ECS variants.
-func (s *SQLiteCache) UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int) {
-	qname = dnsutil.NormalizeDomain(qname)
-	_, _ = s.stmtInsertLatency.Exec(qname, int(qtype), int(qclass), ip, latencyMS)
+// UpdateLatency stores a latency measurement keyed by IP only. All domains
+// sharing the same IP reuse the same row — latency is measured once, not
+// once per domain. qtype is inferred from the IP address format.
+func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return
+	}
+	qtype := dns.TypeAAAA
+	if parsedIP.To4() != nil {
+		qtype = dns.TypeA
+	}
+	_, _ = s.stmtInsertLatency.Exec(ip, qtype, latencyMS)
+}
+
+// GetLatencyLastProbe returns the last probe time for an IP. Returns (0, false)
+// if the IP has never been probed.
+func (s *SQLiteCache) GetLatencyLastProbe(ip string) (int64, bool) {
+	var ts int64
+	if err := s.stmtGetLastProbe.QueryRow(ip).Scan(&ts); err != nil || ts == 0 {
+		return 0, false
+	}
+	return ts, true
 }
 
 // ── Wire format compression ──────────────────────────────────────────────────

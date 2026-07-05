@@ -41,11 +41,11 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 |----|------|
 | `entries` | DNS 响应缓存（16 列，UNIQUE 约束，zstd 压缩 BLOB） |
 | `hit_counters` | 热命中计数器（WITHOUT ROWID，entry_id 即行，六协议分布） |
-| `ip_latency` | 延迟探测结果（ECS 无关，WITHOUT ROWID，跨刷新持久化） |
+| `ip_latency` | 延迟探测结果（IP 为键，所有域名共享同 IP 行，qtype 自动推断） |
 | `ptr_map` | PTR 反向映射（IP→域名，WITHOUT ROWID，ON DELETE CASCADE） |
 
 - **Wire format 加速**：`msg_wire` BLOB 存储 zstd 压缩的 DNS 响应，`Get()` 解压缩 + `Msg.Unpack()` 一步还原，缓存命中 ~0.5ms
-- **延迟驱动排序**：A/AAAA 记录按 `ip_latency` 探测结果排序（最快优先），在 `Get()` 时通过 `sortAnswerByLatency` 实时重排
+- **延迟驱动排序**：A/AAAA 记录按 `ip_latency` 探测结果排序（最快优先），同一 CDN IP 多域名共享延迟数据，在 `Get()` 时批量查询重排
 - **热路径预编译语句**：`Get`、`RecordServe`、`UpdateLatency` 查询在初始化时 `Prepare()`，避免每次调用重复编译 SQL
 - **CHECK 约束**：布尔列（`cacheable`、`validated`、`fallback`、`prefetch`、`hijack`、`dnssec_ok`）均带 `CHECK (col IN (0,1))` 数据完整性保护
 - **PTR 反查**：轻量 `ptr_map` 表，`SELECT ... WHERE rdata_ip = ? JOIN entries` 查询
@@ -163,9 +163,9 @@ FROM entries WHERE hijack = 1 ORDER BY response_time_ms DESC;
 SELECT qname, qtype, server, rcode, response_time_ms
 FROM entries WHERE response_time_ms > 1000 ORDER BY response_time_ms DESC;
 
--- 延迟最低的根服务器
-SELECT rdata_ip, latency_ms FROM ip_latency
-WHERE qname = '.' ORDER BY latency_ms ASC;
+-- 延迟最低的 IP（按地址族分组统计）
+SELECT qtype, rdata_ip, latency_ms FROM ip_latency
+ORDER BY latency_ms ASC;
 
 -- PTR 反查（某 IP 对应的所有域名）
 SELECT DISTINCT pm.name FROM ptr_map pm

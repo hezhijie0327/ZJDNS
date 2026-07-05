@@ -284,7 +284,7 @@ Top layer (wiring):
 | `ECSConfig` | `config` | User-facing ECS subnet configuration (moved from edns) |
 | `ECSOption` | `config` | Parsed EDNS Client Subnet (edns has type alias: `type ECSOption = config.ECSOption`) |
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
-| `Store` | `cache` | Interface: Get/Set/RecordHit/UpdateLatency/ReverseLookup/Close | `SetOptions` carries per-entry metadata |
+| `Store` | `cache` | Interface: Get/Set/RecordHit/UpdateLatency/GetLatencyLastProbe/ReverseLookup/Close | `SetOptions` carries per-entry metadata |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `Handler` | `server/handler` | DNS query processing pipeline; owns `BackgroundConfig`, `LatencyProber` |
@@ -342,7 +342,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Protocol hit index**: `protocolIndex(protocol)` maps a protocol string to a compact index (0–5) for use with `stmtHits[]` prepared statements. Replaces the old `hitColumn()` string-returning function.
 - **Handler Question alias**: `handler.Question` is a type alias (`type Question = resolver.Question`), eliminating redundant struct conversions between handler and resolver layers.
 - **RecordRewrite transactional**: All three SQL writes in `RecordRewrite()` run inside a single `BEGIN`/`COMMIT` transaction to prevent orphaned entries from partial failures.
-- **ip_latency cleanup**: Orphaned latency rows (whose cache entries no longer exist) are cleaned up during eviction via `DELETE FROM ip_latency WHERE (qname, qtype, qclass) NOT IN (SELECT DISTINCT ... FROM entries)`.
+- **ip_latency independence**: Latency data is not tied to cache entries — all domains sharing the same IP reuse the same row. No orphan cleanup needed since ip_latency rows survive cache refreshes and evictions indefinitely.
 - **Zero-allocation label validation**: `IsValidDomainLabels` uses `strings.IndexByte` scanning instead of `strings.Split` to avoid per-query allocation on the hot path.
 - **processRR fast path**: When `value == 0 && !isElapsed && includeDNSSEC`, `processRR` returns the original RR without cloning — common on cache-miss serve paths (50+ allocs saved per response).
 
@@ -400,16 +400,16 @@ CREATE TABLE hit_counters (
     rewrite_count INTEGER NOT NULL DEFAULT 0
 ) WITHOUT ROWID;
 
--- ECS-agnostic per-IP latency measurements. Keyed by (qname, qtype, qclass,
--- rdata_ip) — latency is a property of the IP, not the ECS subnet or DNSSEC
--- state. Survives cache refreshes (not tied to entry_id).
+-- Per-IP latency measurements. Keyed by rdata_ip only — latency is a
+-- property of the IP, not the domain name. All domains sharing the same
+-- IP (CDN) reuse the same row. qtype is inferred from IP format (A=1,
+-- AAAA=28) for address-family analytics.
 CREATE TABLE ip_latency (
-    qname      TEXT NOT NULL,
-    qtype      INTEGER NOT NULL,
-    qclass     INTEGER NOT NULL DEFAULT 1,
-    rdata_ip   TEXT NOT NULL,
-    latency_ms INTEGER NOT NULL,
-    PRIMARY KEY (qname, qtype, qclass, rdata_ip)
+    rdata_ip        TEXT NOT NULL,
+    qtype           INTEGER NOT NULL DEFAULT 0,
+    latency_ms      INTEGER NOT NULL,
+    last_probe_time INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (rdata_ip)
 ) WITHOUT ROWID;
 
 -- Lightweight PTR reverse-lookup table (IP → domain name). WITHOUT ROWID for
@@ -434,12 +434,12 @@ CREATE INDEX idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
 - **Wire format cache**: `Set()` packs Answer+Authority+Additional via `dns.Msg.Pack()`, compresses with zstd (SpeedDefault), stores in `msg_wire` BLOB. `Get()` decompresses + `Msg.Unpack()` — single binary decode replaces N× text parsing, cache hit ~0.5ms.
 - **Cache-hit tracking**: `RecordServe(protocol, stale)` uses pre-compiled per-protocol statements (`stmtHits[protocolIndex(protocol)]`) to update `hit_counters` without dynamic SQL. Writes only touch the narrow hit_counters table, not the entries table with large BLOBs.
 - **Stale/rewrite tracking**: `RecordRewrite()` wrapped in a transaction for atomicity (all 3 SQL statements commit or rollback together). `RecordServe(_, true)` increments `stale_count` in a separate query.
-- **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `probeNSAddrs` and stored in ip_latency; `sortAnswerByLatency` reorders records at `Get()` time.
+- **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `ProbeNSAddrs` and stored in ip_latency (keyed by IP only); `sortAnswerByLatency` reorders records at `Get()` time.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
-- **IP latency**: ECS-agnostic — a single `INSERT OR REPLACE INTO ip_latency` replaces the old per-entry_id iteration over all ECS variants. `sortAnswerByLatency` queries by `(qname, qtype, qclass)` without ecs/dnssec filters, so all ECS variants share the same latency data.
+- **IP latency**: Per-IP keyed (`rdata_ip`). A single `INSERT OR REPLACE` writes `latency_ms`, `qtype` (inferred from IP format), and `last_probe_time` (via `unixepoch()`). `Prober.Start()` and `ProbeNSAddrs()` check `GetLatencyLastProbe` per-IP — if every IP in the answer was probed within `DefaultLatencyProbeMinInterval` (60s), the probe is skipped. All domains sharing the same CDN IP reuse the same latency row.
 - **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map` + `hit_counters`. Entry count is synced from `SELECT COUNT(*)` before eviction to correct drift from INSERT OR REPLACE. No periodic cleanup — stale data is valuable for serve-stale.
-- **Probe latency**: `INSERT OR REPLACE INTO ip_latency (qname, qtype, qclass, rdata_ip, latency_ms) VALUES (?, ?, ?, ?, ?)` — ECS-agnostic, one INSERT replaces the old per-entry_id iteration over all ECS variants. Latency ordering is baked into wire format at `Set()` time; `ip_latency` enables SQL analytics and survives cache refreshes.
+- **Probe latency**: `INSERT OR REPLACE INTO ip_latency (rdata_ip, qtype, latency_ms, last_probe_time) VALUES (?, ?, ?, unixepoch())` — per-IP, qtype auto-inferred. `GetLatencyLastProbe` deduplicates probes within `DefaultLatencyProbeMinInterval` (60s). Latency ordering is baked into wire format at `Set()` time; `ip_latency` enables SQL analytics (e.g. `SELECT qtype, AVG(latency_ms) FROM ip_latency GROUP BY qtype`) and survives cache refreshes.
 - **Summary stats**: `Store.Summary()` queries entries + hit_counters via JOINs. Returns entries, hits, avg response time, per-protocol hits, rcode distribution, hijack/fallback/prefetch/stale/rewrite counts. Logged at startup and shutdown.
 - **Analytics**: single-table queries — e.g. `SELECT server, SUM(hit_dot) FROM entries GROUP BY server` for DoT requests per upstream. No JOIN needed.
 

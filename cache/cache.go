@@ -28,7 +28,8 @@ type Store interface {
 		answer, authority, additional []dns.RR, validated bool, opts SetOptions)
 	RecordServe(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, protocol string, stale bool)
 	RecordRewrite(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool)
-	UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int)
+	UpdateLatency(ip string, latencyMS int)
+	GetLatencyLastProbe(ip string) (int64, bool)
 	ReverseLookup(ip string) []LookupResult
 	Summary() string
 	Close() error

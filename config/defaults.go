@@ -122,12 +122,13 @@ const (
 
 // Latency probe defaults.
 const (
-	DefaultLatencyProbeTimeout = 100 * time.Millisecond
-	DefaultNSProbeTimeout      = 5 * time.Second // Timeout for NS/Root latency probing
-	DefaultRootCacheTTL        = 3600            // Root server cache entry TTL (seconds)
-	DefaultProbePortDNS        = 53
-	DefaultProbePortHTTP       = 80
-	DefaultProbePortHTTPS      = 443
+	DefaultLatencyProbeTimeout     = 100 * time.Millisecond
+	DefaultNSProbeTimeout          = 5 * time.Second // Timeout for NS/Root latency probing
+	DefaultLatencyProbeMinInterval = 60              // Min interval between probes for the same query key (seconds)
+	DefaultRootCacheTTL            = 3600            // Root server cache entry TTL (seconds)
+	DefaultProbePortDNS            = 53
+	DefaultProbePortHTTP           = 80
+	DefaultProbePortHTTPS          = 443
 )
 
 // Proxy defaults.

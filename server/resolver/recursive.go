@@ -308,9 +308,9 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				}
 			}
 			// Fire background latency probe for each NS name in the glue.
-			for nsName, records := range nsGlue {
+			for _, records := range nsGlue {
 				addrs := addrsFromRRs(records)
-				go probe.ProbeNSAddrs(r.cache, nsName, addrs)
+				go probe.ProbeNSAddrs(r.cache, addrs)
 			}
 		}
 
