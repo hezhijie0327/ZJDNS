@@ -40,6 +40,7 @@ type queryResult struct {
 	ecs        *edns.ECSOption
 	server     string
 	fallback   bool
+	hijack     bool
 	err        error
 }
 

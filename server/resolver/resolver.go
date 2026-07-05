@@ -80,6 +80,7 @@ type QueryResult struct {
 	ECS        *edns.ECSOption
 	Server     string
 	Fallback   bool
+	Hijack     bool
 	Err        error
 }
 

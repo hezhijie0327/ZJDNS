@@ -119,6 +119,8 @@ func (s *SQLiteCache) migrate() error {
 			server           TEXT NOT NULL DEFAULT '',
 			fallback         INTEGER NOT NULL DEFAULT 0,
 			prefetch         INTEGER NOT NULL DEFAULT 0,
+			hijack           INTEGER NOT NULL DEFAULT 0,
+			dnssec           TEXT NOT NULL DEFAULT "",
 			last_hit_time    INTEGER NOT NULL DEFAULT 0,
 			hit_udp          INTEGER NOT NULL DEFAULT 0,
 			hit_tcp          INTEGER NOT NULL DEFAULT 0,
@@ -245,9 +247,9 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	// Upsert metadata for analytics.
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO metadata (entry_id, rcode, response_time_ms, server, fallback, prefetch)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		entryID, opts.Rcode, opts.ResponseTime, opts.Server, boolToInt(opts.Fallback), boolToInt(opts.Prefetch),
+		`INSERT OR REPLACE INTO metadata (entry_id, rcode, response_time_ms, server, fallback, prefetch, hijack, dnssec)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		entryID, opts.Rcode, opts.ResponseTime, opts.Server, boolToInt(opts.Fallback), boolToInt(opts.Prefetch), boolToInt(opts.Hijack), opts.Dnssec,
 	); err != nil {
 		log.Warnf("CACHE: insert metadata failed: %v", err)
 	}

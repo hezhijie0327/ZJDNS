@@ -16,6 +16,8 @@ type SetOptions struct {
 	Server       string // upstream server that resolved this query (e.g. "8.8.8.8:53 (UDP)")
 	Fallback     bool   // true if resolved via fallback upstream
 	Prefetch     bool   // true if this was a background prefetch refresh
+	Hijack       bool   // true if hijack was detected in the response
+	Dnssec       string // secure, insecure, bogus, or empty
 	Uncacheable  bool   // true for error entries that should not be served from cache
 }
 
