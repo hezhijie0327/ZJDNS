@@ -266,13 +266,23 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		entryID, opts.Rcode, opts.ResponseTime, opts.Server, opts.Dnssec, boolToInt(opts.Fallback), boolToInt(opts.Prefetch), boolToInt(opts.Hijack),
 	); err != nil {
 		log.Warnf("CACHE: insert metadata failed: %v", err)
+		return
 	}
 
 	// Only insert records for cacheable entries; error entries have no RRs.
 	if !opts.Uncacheable {
-		insertRecords(tx, entryID, "answer", answer)
-		insertRecords(tx, entryID, "authority", authority)
-		insertRecords(tx, entryID, "additional", additional)
+		if err := insertRecords(tx, entryID, "answer", answer); err != nil {
+			log.Warnf("CACHE: insert records failed: %v", err)
+			return
+		}
+		if err := insertRecords(tx, entryID, "authority", authority); err != nil {
+			log.Warnf("CACHE: insert records failed: %v", err)
+			return
+		}
+		if err := insertRecords(tx, entryID, "additional", additional); err != nil {
+			log.Warnf("CACHE: insert records failed: %v", err)
+			return
+		}
 		// Store packed wire format for fast Get().
 		msg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
 		if err := msg.Pack(); err == nil {
@@ -545,7 +555,7 @@ func (s *SQLiteCache) loadRecords(entryID int64) (*Entry, error) {
 	return entry, rows.Err()
 }
 
-func insertRecords(tx *sql.Tx, entryID int64, section string, rrs []dns.RR) {
+func insertRecords(tx *sql.Tx, entryID int64, section string, rrs []dns.RR) error {
 	// Filter and collect valid records.
 	type rec struct {
 		seq     int
@@ -566,7 +576,7 @@ func insertRecords(tx *sql.Tx, entryID int64, section string, rrs []dns.RR) {
 		})
 	}
 	if len(recs) == 0 {
-		return
+		return nil
 	}
 
 	// Build multi-row INSERT.
@@ -579,8 +589,9 @@ func insertRecords(tx *sql.Tx, entryID int64, section string, rrs []dns.RR) {
 	stmt := `INSERT INTO records (entry_id, section, seq, name, rtype, ttl, rr_text, rdata_ip) VALUES ` +
 		join(placeholders, ",")
 	if _, err := tx.Exec(stmt, args...); err != nil {
-		log.Warnf("CACHE: insert records failed: %v", err)
+		return fmt.Errorf("insert records: %w", err)
 	}
+	return nil
 }
 
 func extractIP(rr dns.RR) string {
