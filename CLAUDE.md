@@ -223,7 +223,7 @@ Layer 4 (server sub-packages — import domain + internal, never server/ parent)
   server/probe → config, edns, dnsutil, internal/latency, log
   server/resolver → cache, config, edns, dnsutil, log, pool, server/client, server/security
   server/tls → config, dnsutil, log, pool
-  server/handler → cache, config, edns, dnsutil, log, pool, rewrite, server/resolver, stats
+  server/handler → cache, config, edns, dnsutil, log, pool, rewrite, server/resolver
 
 Top layer (wiring):
   server → all domain + all server sub-packages
@@ -277,7 +277,7 @@ Top layer (wiring):
 | `ECSConfig` | `config` | User-facing ECS subnet configuration (moved from edns) |
 | `ECSOption` | `config` | Parsed EDNS Client Subnet (edns has type alias: `type ECSOption = config.ECSOption`) |
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
-| `Store` | `cache` | Interface: Get/Set/UpdateLatency/IncrementStats/ReverseLookup/LoadStats/Close |
+| `Store` | `cache` | Interface: Get/Set/UpdateLatency/ReverseLookup/Close | `SetOptions` carries per-entry metadata |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `Handler` | `server/handler` | DNS query processing pipeline; owns `BackgroundConfig`, `LatencyProber` |
@@ -304,7 +304,7 @@ All logs use `zjdns/internal/log`. Default level: `info`.
 
 **Component filtering**: `log_level` supports `level:comp1,comp2` syntax (e.g. `"debug:UPSTREAM,RECURSION"`). Messages without a `PREFIX: ` pattern always pass through.
 
-**18 canonical prefixes**: `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `STATS`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`.
+**17 canonical prefixes**: `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`.
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:` merged → `TLS:`. Hot-path logs are `Debug` only.
 
@@ -325,7 +325,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
 - **Rewite TTL**: Rewrite rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently (`origTTL - (elapsed % origTTL)`) rather than staying static. Rewrite responses bypass cache (client-IP filtering), but TTL now decrements correctly.
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns).
-- **Stats persistence**: Each DNS request increments counters directly in the `stats` SQLite table via `IncrementStats()` (single `UPDATE stats SET col = col + 1`). No in-memory collector, no periodic snapshots, no JSON. Counters survive restarts naturally and are queryable via `SELECT * FROM stats`.
+- **Per-entry metadata**: Response code, response time, and cacheability are stored as columns on the `entries` table via `SetOptions`. Error responses (SERVFAIL/FORMERR) are written with `cacheable=0` and no records — never returned by `Get()`, but queryable via SQL. Cache hits increment `hit_count` on the existing entry.
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
 - **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
 - **eTLS alias**: Always use `eTLS` (not `cryptotls`) for `gitlab.com/go-extension/tls`. Used in `server/tls`, `server/client`, `config`.
@@ -333,21 +333,28 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## DB Schema
 
-The cache uses three SQLite tables (`modernc.org/sqlite`, WAL mode, mmap):
+The cache uses two SQLite tables (`modernc.org/sqlite`, WAL mode, mmap):
 
 ```sql
--- One row per cached DNS query. Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
+-- One row per cached DNS query (including errors like SERVFAIL/FORMERR).
+-- Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
 CREATE TABLE entries (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    qname      TEXT NOT NULL,       -- normalized FQDN (dnsutil.NormalizeDomain)
-    qtype      INTEGER NOT NULL,    -- dns.TypeA=1, DNSKEY=48, TypeNone=0 (NS latency sentinel)
-    qclass     INTEGER NOT NULL DEFAULT 1,
-    ecs_addr   TEXT NOT NULL DEFAULT '',
-    ecs_prefix INTEGER NOT NULL DEFAULT 0,
-    dnssec_ok  INTEGER NOT NULL DEFAULT 0,
-    timestamp  INTEGER NOT NULL,    -- insertion time (unix seconds)
-    ttl        INTEGER NOT NULL,    -- entry TTL (min of all RR TTLs, floor 10s)
-    validated  INTEGER NOT NULL DEFAULT 0
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    qname            TEXT NOT NULL,       -- normalized FQDN (dnsutil.NormalizeDomain)
+    qtype            INTEGER NOT NULL,    -- dns.TypeA=1, DNSKEY=48, TypeNone=0 (NS latency sentinel)
+    qclass           INTEGER NOT NULL DEFAULT 1,
+    ecs_addr         TEXT NOT NULL DEFAULT '',
+    ecs_prefix       INTEGER NOT NULL DEFAULT 0,
+    dnssec_ok        INTEGER NOT NULL DEFAULT 0,
+    timestamp        INTEGER NOT NULL,    -- insertion time (unix seconds)
+    ttl              INTEGER NOT NULL,    -- entry TTL (min of all RR TTLs, floor 10s)
+    expires_at       INTEGER NOT NULL DEFAULT 0,
+    validated        INTEGER NOT NULL DEFAULT 0,
+    rcode            INTEGER NOT NULL DEFAULT 0,   -- response code (NOERROR=0, FORMERR=1, SERVFAIL=2, NXDOMAIN=3, REFUSED=5)
+    response_time_ms INTEGER NOT NULL DEFAULT 0,   -- resolution time in milliseconds
+    cacheable        INTEGER NOT NULL DEFAULT 1,   -- 0 = error entry, never returned by Get()
+    hit_count        INTEGER NOT NULL DEFAULT 0,   -- times served from cache
+    last_hit_time    INTEGER NOT NULL DEFAULT 0    -- last cache-hit timestamp
 );
 
 -- One row per DNS RR within an entry. DELETE CASCADE when entry is evicted/expired.
@@ -364,23 +371,18 @@ CREATE TABLE records (
     latency_ms INTEGER              -- NULL = not probed; non-NULL = measured latency
 );
 
--- Stats counters (one row, updated atomically per request).
-CREATE TABLE stats (
-    total_requests        INTEGER NOT NULL DEFAULT 0,
-    cache_hits            INTEGER NOT NULL DEFAULT 0,
-    ...
-    updated_at            INTEGER NOT NULL DEFAULT 0
-);
 ```
 
 **Key patterns**:
-- **DNS response cache**: `qtype` = original query type, records in original order
+- **DNS response cache**: `qtype` = original query type, records in original order. `Get()` filters `cacheable = 1` entries only.
+- **Error entries**: FORMERR/SERVFAIL/etc. stored with `cacheable = 0` and no records — never returned by `Get()`, queryable via SQL for diagnostics.
+- **Cache-hit tracking**: `Get()` does `UPDATE entries SET hit_count = hit_count + 1, last_hit_time = ?` on every hit; hit counts survive eviction.
 - **NS latency cache**: `qtype` = `dns.TypeNone` (0), A/AAAA records with `latency_ms` populated by probe engine. `loadRecords` puts non-A/AAAA records first, then sorts probed A/AAAA fastest-first.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT name FROM records r JOIN entries e ON r.entry_id = e.id WHERE r.rdata_ip = ? AND e.timestamp + e.ttl > unixepoch()`
 - **Eviction: on Set when count > maxEntries. Prefers entries past serve-stale age (expires_at + staleMaxAge < now), then oldest by timestamp. No periodic cleanup — stale data is valuable for serve-stale.
 - **Probe updates**: `UPDATE records SET latency_ms = ? WHERE entry_id = ? AND rdata_ip = ?` — no entry overwrite needed
-- **Stats**: Per-request `UPDATE stats SET col = col + 1` (atomic, single row). Query via `SELECT * FROM stats`. No periodic save, no JSON.
+- **Analytics**: query entries table directly — e.g. `SELECT qname, COUNT(*) FROM entries WHERE rcode = 1 GROUP BY qname` to find FORMERR-heavy domains. No separate stats table.
 
 ## CI/CD
 
