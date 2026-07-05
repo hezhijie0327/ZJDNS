@@ -87,9 +87,12 @@ func (r *Recursive) getRootServers() []string {
 	}
 
 	// Normal path: look up each root name via the NS cache.
+	// Pass cacheRootHint as the refresh callback so root entries are
+	// re-written from hints alongside latency re-probing on prefetch.
 	var all []string
-	for name := range rootHints {
-		all = append(all, r.lookupNSAddrsFromCache(name)...)
+	for name, addrs := range rootHints {
+		refreshEntry := func() { cacheRootHint(r.cache, name, addrs) }
+		all = append(all, r.lookupNSAddrsFromCache(name, refreshEntry)...)
 	}
 	if len(all) > 0 {
 		return all
@@ -103,7 +106,7 @@ func (r *Recursive) getRootServers() []string {
 	}
 	// Read back from the just-written cache entries.
 	for name := range rootHints {
-		all = append(all, r.lookupNSAddrsFromCache(name)...)
+		all = append(all, r.lookupNSAddrsFromCache(name, nil)...)
 	}
 	if len(all) == 0 {
 		return allRootAddrs()
@@ -121,10 +124,12 @@ func allRootAddrs() []string {
 }
 
 // lookupNSAddrsFromCache looks up latency-sorted NS addresses via per-type
-// TypeA/TypeAAAA entries. Triggers a background latency re-probe when the
-// cached entry is expired or within the prefetch window (matching the
-// regular A/AAAA prefetch behaviour).
-func (r *Recursive) lookupNSAddrsFromCache(nsName string) []string {
+// TypeA/TypeAAAA entries. Triggers background refresh when the cached entry
+// is expired or within the prefetch window (matching regular A/AAAA).
+//
+// If refreshEntry is non-nil, it is called before the latency probe to
+// refresh the cache entries themselves (e.g. root hints re-write).
+func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) []string {
 	if r == nil || r.cache == nil {
 		return nil
 	}
@@ -136,6 +141,9 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string) []string {
 	addrs = append(addrs, aaaaAddrs...)
 
 	if (aRefresh || aaaaRefresh) && len(addrs) > 0 {
+		if refreshEntry != nil {
+			refreshEntry()
+		}
 		go probe.ProbeNSAddrs(r.cache, nsName, addrs)
 	}
 

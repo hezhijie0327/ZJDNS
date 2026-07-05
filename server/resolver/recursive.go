@@ -217,7 +217,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if r.cache != nil {
 			for _, ns := range bestNSRecords {
 				nsName := dnsutilv2.Fqdn(ns.Ns)
-				cached := r.lookupNSAddrsFromCache(nsName)
+				cached := r.lookupNSAddrsFromCache(nsName, nil)
 				if len(cached) > 0 {
 					nextNS = append(nextNS, cached...)
 					// Log per-NS latency ranking (fastest first) so

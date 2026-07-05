@@ -230,7 +230,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			nsName := dnsutilv2.Fqdn(nsRecord.Ns)
 
 			// Try cache first — records may already be latency-probed.
-			cachedAddrs := r.lookupNSAddrsFromCache(nsName)
+			cachedAddrs := r.lookupNSAddrsFromCache(nsName, nil)
 			if len(cachedAddrs) > 0 {
 				allMu.Lock()
 				allAddresses = append(allAddresses, cachedAddrs...)
