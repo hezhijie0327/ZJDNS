@@ -170,8 +170,7 @@ func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns
 func (h *Handler) processQueryError(req *dns.Msg, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, startTime time.Time, requestProtocol string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	if entry, found, _ := h.cache.Get(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.RemainingTTL(), entry.Validated)
-		h.cache.RecordHit(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, requestProtocol)
-		h.cache.RecordStale(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC)
+		h.cache.RecordServe(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, requestProtocol, true)
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
 
@@ -238,7 +237,7 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 
 	log.Debugf("CACHE: populating cache for %s", question.Name)
 	h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, answer, authority, additional, validated, cache.SetOptions{Rcode: dns.RcodeSuccess, ResponseTime: int64(time.Since(startTime).Milliseconds()), Server: server, Fallback: fallback, Hijack: hijack, Dnssec: dnssecStatus})
-	h.cache.RecordHit(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, requestProtocol)
+	h.cache.RecordServe(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, requestProtocol, true)
 	if h.prober != nil {
 		h.prober.Start(question.Name, question.Qtype, answer, authority, additional, validated, responseECS)
 	}

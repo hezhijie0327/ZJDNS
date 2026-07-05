@@ -129,7 +129,7 @@ func (s *SQLiteCache) migrate() error {
 			fallback         INTEGER NOT NULL DEFAULT 0,
 			prefetch         INTEGER NOT NULL DEFAULT 0,
 			hijack           INTEGER NOT NULL DEFAULT 0,
-			-- Serving counters (updated by Get / RecordHit / RecordStale / RecordRewrite)
+			-- Serving counters (updated by RecordServe / RecordRewrite)
 			last_hit_time    INTEGER NOT NULL DEFAULT 0,
 			hit_udp          INTEGER NOT NULL DEFAULT 0,
 			hit_tcp          INTEGER NOT NULL DEFAULT 0,
@@ -205,10 +205,6 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	entry.Timestamp = ts
 	entry.TTL = entryTTL
 	entry.Validated = validated != 0
-
-	// Track cache hit for analytics.
-	_, _ = s.db.Exec(`UPDATE metadata SET last_hit_time = ? WHERE entry_id = ?`,
-		log.NowUnix(), id)
 
 	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
@@ -286,9 +282,9 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	s.evictIfNeeded()
 }
 
-// RecordHit increments the protocol-specific hit counter on an existing cache
-// entry. Used for analytics so per-protocol request counts are queryable.
-func (s *SQLiteCache) RecordHit(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, protocol string) {
+// RecordServe updates metadata hit counters and last_hit_time in a single
+// UPDATE.  Called once per cache hit to minimize SQL round-trips.
+func (s *SQLiteCache) RecordServe(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, protocol string, stale bool) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
 	}
@@ -297,38 +293,17 @@ func (s *SQLiteCache) RecordHit(qname string, qtype, qclass uint16, ecs *config.
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 
 	col := hitColumn(protocol)
-	if col == "" {
-		return
+	staleSQL := ""
+	if stale {
+		staleSQL = ", stale_count = stale_count + 1"
 	}
 
 	_, _ = s.db.Exec(
-		`UPDATE metadata SET `+col+` = `+col+` + 1 WHERE entry_id = (
+		`UPDATE metadata SET `+col+` = `+col+` + 1, last_hit_time = ?`+staleSQL+` WHERE entry_id = (
 			SELECT id FROM entries WHERE qname = ? AND qtype = ? AND qclass = ?
 			 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
+		log.NowUnix(), qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
 	)
-}
-
-func hitColumn(protocol string) string {
-	switch {
-	case len(protocol) >= 3 && (protocol[0] == 'u' || protocol[0] == 'U'):
-		return "hit_udp"
-	case len(protocol) >= 3 && (protocol[0] == 't' || protocol[0] == 'T'):
-		return "hit_tcp"
-	case len(protocol) >= 3 && (protocol[1] == 'o' || protocol[1] == 'O'):
-		switch protocol[2] {
-		case 't', 'T':
-			return "hit_dot"
-		case 'q', 'Q':
-			return "hit_doq"
-		case 'h', 'H':
-			if len(protocol) >= 4 && protocol[3] == '3' {
-				return "hit_doh3"
-			}
-			return "hit_doh"
-		}
-	}
-	return ""
 }
 
 // ReverseLookup returns all cached domain names mapped to the given IP address.
@@ -366,17 +341,26 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	return results
 }
 
-// RecordStale increments the stale-serve counter on an existing cache entry.
-func (s *SQLiteCache) RecordStale(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) {
-	if atomic.LoadInt32(&s.closed) != 0 {
-		return
+func hitColumn(protocol string) string {
+	switch {
+	case len(protocol) >= 3 && (protocol[0] == 'u' || protocol[0] == 'U'):
+		return "hit_udp"
+	case len(protocol) >= 3 && (protocol[0] == 't' || protocol[0] == 'T'):
+		return "hit_tcp"
+	case len(protocol) >= 3 && (protocol[1] == 'o' || protocol[1] == 'O'):
+		switch protocol[2] {
+		case 't', 'T':
+			return "hit_dot"
+		case 'q', 'Q':
+			return "hit_doq"
+		case 'h', 'H':
+			if len(protocol) >= 4 && protocol[3] == '3' {
+				return "hit_doh3"
+			}
+			return "hit_doh"
+		}
 	}
-	qname = dnsutil.NormalizeDomain(qname)
-	ecsAddr, ecsPrefix := ecsParams(ecs)
-	_, _ = s.db.Exec(
-		"UPDATE metadata SET stale_count = stale_count + 1 WHERE entry_id = (SELECT id FROM entries WHERE qname=? AND qtype=? AND qclass=? AND ecs_addr=? AND ecs_prefix=? AND dnssec_ok=?)",
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
-	)
+	return ""
 }
 
 // RecordRewrite increments the rewrite counter. Since rewrite responses bypass

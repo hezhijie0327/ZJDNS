@@ -366,6 +366,80 @@ func TestSet_Get_NSAddrTXT(t *testing.T) {
 	}
 }
 
+func TestRecordServe_Fresh(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
+
+	// Fresh serve via UDP
+	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
+
+	// Verify hit_udp and last_hit_time were updated
+	var hitUDP, lastHit int64
+	err := mc.db.QueryRow("SELECT hit_udp, last_hit_time FROM metadata WHERE entry_id = (SELECT id FROM entries WHERE qname='example.com' AND qtype=1)").Scan(&hitUDP, &lastHit)
+	if err != nil {
+		t.Fatalf("metadata query: %v", err)
+	}
+	if hitUDP != 1 {
+		t.Errorf("hit_udp = %d, want 1", hitUDP)
+	}
+	if lastHit == 0 {
+		t.Error("last_hit_time should be non-zero")
+	}
+}
+
+func TestRecordServe_Stale(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
+
+	// Stale serve via TCP
+	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "TCP", true)
+
+	var hitTCP, staleCount, lastHit int64
+	err := mc.db.QueryRow("SELECT hit_tcp, stale_count, last_hit_time FROM metadata WHERE entry_id = (SELECT id FROM entries WHERE qname='example.com' AND qtype=1)").Scan(&hitTCP, &staleCount, &lastHit)
+	if err != nil {
+		t.Fatalf("metadata query: %v", err)
+	}
+	if hitTCP != 1 {
+		t.Errorf("hit_tcp = %d, want 1", hitTCP)
+	}
+	if staleCount != 1 {
+		t.Errorf("stale_count = %d, want 1", staleCount)
+	}
+	if lastHit == 0 {
+		t.Error("last_hit_time should be non-zero")
+	}
+}
+
+func TestRecordServe_MultipleProtocols(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
+
+	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
+	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
+	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "DoH", false)
+
+	var hitUDP, hitDOH int64
+	err := mc.db.QueryRow("SELECT hit_udp, hit_doh FROM metadata WHERE entry_id = (SELECT id FROM entries WHERE qname='example.com' AND qtype=1)").Scan(&hitUDP, &hitDOH)
+	if err != nil {
+		t.Fatalf("metadata query: %v", err)
+	}
+	if hitUDP != 2 {
+		t.Errorf("hit_udp = %d, want 2", hitUDP)
+	}
+	if hitDOH != 1 {
+		t.Errorf("hit_doh = %d, want 1", hitDOH)
+	}
+}
+
 // ── Helper ────────────────────────────────────────────────────────────────────
 
 func netParseIP(s string) netip.Addr {
