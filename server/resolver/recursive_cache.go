@@ -170,8 +170,8 @@ func (r *Recursive) getRootServers() []string {
 		return DefaultRootServers
 	}
 
-	aAddrs := lookupCachedRRs(r.cache, ".", dns.TypeA)
-	aaaaAddrs := lookupCachedRRs(r.cache, ".", dns.TypeAAAA)
+	aAddrs, aRefresh := lookupCachedRRs(r.cache, ".", dns.TypeA)
+	aaaaAddrs, aaaaRefresh := lookupCachedRRs(r.cache, ".", dns.TypeAAAA)
 	addrs := append(aAddrs, aaaaAddrs...)
 
 	if len(addrs) == 0 {
@@ -179,9 +179,11 @@ func (r *Recursive) getRootServers() []string {
 		log.Debugf("RECURSION: root cache cold start, writing static root list")
 		r.cacheRootServers()
 		go r.probeNSAddrs(".", DefaultRootServers)
-		aAddrs = lookupCachedRRs(r.cache, ".", dns.TypeA)
-		aaaaAddrs = lookupCachedRRs(r.cache, ".", dns.TypeAAAA)
+		aAddrs, _ = lookupCachedRRs(r.cache, ".", dns.TypeA)
+		aaaaAddrs, _ = lookupCachedRRs(r.cache, ".", dns.TypeAAAA)
 		addrs = append(aAddrs, aaaaAddrs...)
+	} else if aRefresh || aaaaRefresh {
+		go r.probeNSAddrs(".", append(aAddrs, aaaaAddrs...))
 	}
 
 	if len(addrs) == 0 {
@@ -191,37 +193,45 @@ func (r *Recursive) getRootServers() []string {
 }
 
 // lookupNSAddrsFromCache looks up latency-sorted NS addresses via per-type
-// TypeA/TypeAAAA entries. sortAnswerByLatency reorders records via ip_latency
-// at Get() time, so the returned addresses are already latency-sorted.
+// TypeA/TypeAAAA entries. Triggers a background latency re-probe when the
+// cached entry is expired or within the prefetch window (matching the
+// regular A/AAAA prefetch behaviour).
 func (r *Recursive) lookupNSAddrsFromCache(nsName string) []string {
 	if r == nil || r.cache == nil {
 		return nil
 	}
 
-	aAddrs := lookupCachedRRs(r.cache, nsName, dns.TypeA)
-	aaaaAddrs := lookupCachedRRs(r.cache, nsName, dns.TypeAAAA)
+	aAddrs, aRefresh := lookupCachedRRs(r.cache, nsName, dns.TypeA)
+	aaaaAddrs, aaaaRefresh := lookupCachedRRs(r.cache, nsName, dns.TypeAAAA)
 	addrs := make([]string, 0, len(aAddrs)+len(aaaaAddrs))
 	addrs = append(addrs, aAddrs...)
 	addrs = append(addrs, aaaaAddrs...)
+
+	if (aRefresh || aaaaRefresh) && len(addrs) > 0 {
+		go r.probeNSAddrs(nsName, addrs)
+	}
+
 	return addrs
 }
 
 // lookupCachedRRs fetches cached A or AAAA records for a name and converts
-// them to "ip:port" strings.
-func lookupCachedRRs(store cache.Store, name string, qtype uint16) []string {
+// them to "ip:port" strings. The needsRefresh return value is true when the
+// entry is expired or within the prefetch window.
+func lookupCachedRRs(store cache.Store, name string, qtype uint16) (addrs []string, needsRefresh bool) {
 	entry, found, expired := store.Get(name, qtype, dns.ClassINET, nil, false)
 	if !found || entry == nil || len(entry.Answer) == 0 {
-		return nil
+		return nil, false
 	}
 	if expired && !entry.CanServeExpired(config.DefaultStaleMaxAge) {
-		return nil
+		return nil, false
 	}
 
-	addrs := make([]string, 0, len(entry.Answer))
+	addrs = make([]string, 0, len(entry.Answer))
 	for _, r := range entry.Answer {
 		if addr := rrToAddr(r); addr != "" {
 			addrs = append(addrs, addr)
 		}
 	}
-	return addrs
+	needsRefresh = expired || entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent)
+	return addrs, needsRefresh
 }
