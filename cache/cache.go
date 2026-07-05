@@ -29,6 +29,7 @@ type Store interface {
 	RecordHit(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, protocol string)
 	UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int)
 	ReverseLookup(ip string) []LookupResult
+	Summary() string
 	Close() error
 }
 

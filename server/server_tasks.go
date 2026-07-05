@@ -135,10 +135,19 @@ func (s *Server) setupSignalHandling() {
 	}()
 }
 
+func (s *Server) logSummary(trigger string) {
+	if cs := s.handler.CacheStore(); cs != nil {
+		if sum := cs.Summary(); sum != "" {
+			log.Infof("STATS: trigger=%s %s", trigger, sum)
+		}
+	}
+}
+
 func (s *Server) shutdownServer() {
 	s.handler.MarkClosed()
 
 	log.Infof("SERVER: Starting DNS server shutdown")
+	s.logSummary("shutdown")
 
 	if s.cancel != nil {
 		s.cancel(errors.New("server shutdown"))

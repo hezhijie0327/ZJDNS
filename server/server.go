@@ -216,6 +216,7 @@ func (s *Server) Start() error {
 	defer serverCancel(errors.New("server startup completed"))
 
 	s.displayInfo()
+	s.logSummary("startup")
 
 	g, ctx := errgroup.WithContext(serverCtx)
 
