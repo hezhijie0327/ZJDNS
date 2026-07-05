@@ -123,11 +123,9 @@ const (
 // Latency probe defaults.
 const (
 	DefaultLatencyProbeTimeout = 100 * time.Millisecond
-	DefaultInfraProbeTimeout   = 5 * time.Second
-
-	DefaultProbePortDNS   = 53
-	DefaultProbePortHTTP  = 80
-	DefaultProbePortHTTPS = 443
+	DefaultProbePortDNS        = 53
+	DefaultProbePortHTTP       = 80
+	DefaultProbePortHTTPS      = 443
 )
 
 // Proxy defaults.

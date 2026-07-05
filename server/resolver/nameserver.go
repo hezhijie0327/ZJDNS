@@ -328,19 +328,16 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 
 	_ = g.Wait()
 
-	// Merge A and AAAA records per NS name so probeAndCacheNSGlue
-	// ranks all addresses together and stores them under the unified
-	// latency-sorted key (nsAddrKey).
+	// Fire background latency probes for each resolved NS name.
+	// Per-type entries already cached above (lines 299-304).
 	if r.cache != nil && (len(aRecordsMap) > 0 || len(aaaaRecordsMap) > 0) {
-		combinedMap := make(map[string][]dns.RR)
 		for nsName, records := range aRecordsMap {
-			combinedMap[nsName] = append(combinedMap[nsName], records...)
+			addrs := addrsFromRRs(records)
+			go r.probeNSAddrs(nsName, addrs)
 		}
 		for nsName, records := range aaaaRecordsMap {
-			combinedMap[nsName] = append(combinedMap[nsName], records...)
-		}
-		if len(combinedMap) > 0 {
-			r.bgGroup.Go(func() error { r.probeAndCacheNSGlue(combinedMap); return nil })
+			addrs := addrsFromRRs(records)
+			go r.probeNSAddrs(nsName, addrs)
 		}
 	}
 

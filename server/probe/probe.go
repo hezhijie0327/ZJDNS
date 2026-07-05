@@ -5,7 +5,6 @@ package probe
 import (
 	"context"
 	"net"
-	"sync"
 
 	"codeberg.org/miekg/dns"
 
@@ -115,36 +114,6 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, qtype uint16
 	}
 	log.Debugf("LATENCY: updated %d latency values for %s", len(latencies), qname)
 	return nil
-}
-
-// --- Infrastructure-level API (used by resolver for root/NS server ordering) ---
-
-// infraProber holds the package-level prober for infrastructure (root/NS)
-// latency probes. Protected by infraProberOnce for safe concurrent initialization.
-var (
-	infraProber     *ilatency.Prober
-	infraProberOnce sync.Once
-)
-
-// NewInfraProber initializes the package-level infrastructure prober.
-// Safe to call multiple times; only the first call takes effect.
-func NewInfraProber(bgCtx context.Context) {
-	infraProberOnce.Do(func() {
-		infraProber = ilatency.New([]config.LatencyProbeStep{
-			{Protocol: config.ProtoPing, Timeout: 100},
-			{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: 100},
-			{Protocol: config.ProtoTCP, Port: config.DefaultProbePortDNS, Timeout: 100},
-		}, bgCtx)
-	})
-}
-
-// SortIPsByLatencyMap probes IP addresses and returns them sorted by latency
-// along with a map of IP string → latency in milliseconds.
-func SortIPsByLatencyMap(ctx context.Context, ips []net.IP) ([]net.IP, map[string]int) {
-	if infraProber == nil {
-		return ips, nil
-	}
-	return infraProber.ProbeIPsLatency(ctx, ips)
 }
 
 // --- Shared helpers ---

@@ -139,8 +139,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	)
 	resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
 	resolver.ConfigureServers(cfg.Upstream, cfg.Fallback)
-	resolver.SetBackgroundContext(backgroundCtx)
-	resolver.SetBackgroundGroup(backgroundGroup)
 	h.SetResolver(resolver)
 
 	if len(cfg.Upstream) > 0 || len(cfg.Fallback) > 0 {
@@ -166,8 +164,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	// ── Observability: probes + pprof ─────────────────────────────────────
-
-	probe.NewInfraProber(backgroundCtx)
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
 		prober := probe.New(

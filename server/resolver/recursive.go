@@ -3,8 +3,6 @@ package resolver
 import (
 	"context"
 	"fmt"
-	"golang.org/x/sync/errgroup"
-
 	"net"
 	"strings"
 	"sync/atomic"
@@ -38,8 +36,6 @@ var DefaultRootServers = []string{
 	"202.12.27.33:53", "[2001:dc3::35]:53",
 }
 
-const ()
-
 // Recursive performs iterative DNS resolution by walking the root, TLD, and
 // authoritative nameserver hierarchy. When DNSSEC validation is enabled, it
 // builds a cryptographic chain of trust at each delegation step.
@@ -51,8 +47,6 @@ type Recursive struct {
 	resolver          *Resolver
 	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
 	cache             cache.Store
-	bgCtx             context.Context // background context for async probes; cancelled on shutdown
-	bgGroup           *errgroup.Group // tracks background probe goroutines for clean shutdown
 }
 
 // DNSSECEDECode returns the last DNSSEC EDE code atomically.
@@ -310,13 +304,11 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 					r.cache.Set(nsName, qtype, dns.ClassINET, nil, false, records, nil, nil, false, cache.SetOptions{})
 				}
 			}
-			// Fire async latency probe to update cache with sorted records.
-			// Copy the map so the goroutine owns the data.
-			glueCopy := make(map[string][]dns.RR, len(nsGlue))
+			// Fire background latency probe for each NS name in the glue.
 			for nsName, records := range nsGlue {
-				glueCopy[nsName] = records
+				addrs := addrsFromRRs(records)
+				go r.probeNSAddrs(nsName, addrs)
 			}
-			r.bgGroup.Go(func() error { r.probeAndCacheNSGlue(glueCopy); return nil })
 		}
 
 		pool.DefaultMessagePool.Put(response)
