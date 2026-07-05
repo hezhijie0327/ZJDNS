@@ -9,7 +9,6 @@ import (
 
 	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/internal/log"
 	"zjdns/server/probe"
 )
 
@@ -77,36 +76,24 @@ func cacheRootHint(s cache.Store, name string, addrs []string) {
 }
 
 // getRootServers returns root server addresses ordered by probe latency.
-// Each root name (a.root-servers.net, ...) is looked up via the normal NS
-// cache path. On cold start, bootstraps from rootHints — the static list
-// is only a fallback; once cached, root servers behave identically to any
-// other NS.
+// Each root name is looked up via the normal NS cache path; on cold start
+// the name is bootstrapped from rootHints inline. Once cached, root servers
+// behave identically to any other NS.
 func (r *Recursive) getRootServers() []string {
 	if r == nil || r.cache == nil {
 		return allRootAddrs()
 	}
 
-	// Normal path: look up each root name via the NS cache.
-	// Pass cacheRootHint as the refresh callback so root entries are
-	// re-written from hints alongside latency re-probing on prefetch.
 	var all []string
 	for name, addrs := range rootHints {
-		refreshEntry := func() { cacheRootHint(r.cache, name, addrs) }
-		all = append(all, r.lookupNSAddrsFromCache(name, refreshEntry)...)
-	}
-	if len(all) > 0 {
-		return all
-	}
-
-	// Bootstrap: write entries from hints, probe latency in background.
-	log.Debugf("RECURSION: root cache cold start, bootstrapping %d hints", len(rootHints))
-	for name, addrs := range rootHints {
-		cacheRootHint(r.cache, name, addrs)
-		go probe.ProbeNSAddrs(r.cache, name, addrs)
-	}
-	// Read back from the just-written cache entries.
-	for name := range rootHints {
-		all = append(all, r.lookupNSAddrsFromCache(name, nil)...)
+		cached := r.lookupNSAddrsFromCache(name, func() { cacheRootHint(r.cache, name, addrs) })
+		if len(cached) == 0 {
+			// Cold start for this name: write + probe + read back.
+			cacheRootHint(r.cache, name, addrs)
+			go probe.ProbeNSAddrs(r.cache, name, addrs)
+			cached = r.lookupNSAddrsFromCache(name, nil)
+		}
+		all = append(all, cached...)
 	}
 	if len(all) == 0 {
 		return allRootAddrs()

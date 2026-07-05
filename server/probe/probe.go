@@ -78,14 +78,14 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 
 	p.bgGroup(func() error {
 		defer dnsutil.HandlePanic("latency probe")
-		if err := p.probeAndReorder(p.bgCtx, qname, qtype, answer, authority, additional, validated, ecsResponse); err != nil {
+		if err := p.probeAndReorder(p.bgCtx, qname, qtype, answer, ecsResponse); err != nil {
 			log.Debugf("LATENCY: background probe failed for %s: %v", qname, err)
 		}
 		return nil
 	})
 }
 
-func (p *Prober) probeAndReorder(ctx context.Context, qname string, qtype uint16, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) error {
+func (p *Prober) probeAndReorder(ctx context.Context, qname string, qtype uint16, answer []dns.RR, ecsResponse *edns.ECSOption) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -138,9 +138,10 @@ func ProbeNSAddrs(cache CacheSetter, zone string, addrs []string) {
 		return
 	}
 
-	// Extract public IPs.
+	// Extract public IPs and determine qtype in one pass.
+	type ipInfo struct{ qtype uint16 }
 	ips := make([]net.IP, 0, len(addrs))
-	ipToAddr := make(map[string]string, len(addrs))
+	ipMap := make(map[string]ipInfo, len(addrs))
 	for _, addr := range addrs {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
@@ -150,8 +151,12 @@ func ProbeNSAddrs(cache CacheSetter, zone string, addrs []string) {
 		if ip == nil || ip.IsLoopback() || ip.IsPrivate() {
 			continue
 		}
+		qtype := uint16(dns.TypeAAAA)
+		if ip.To4() != nil {
+			qtype = dns.TypeA
+		}
 		ips = append(ips, ip)
-		ipToAddr[ip.String()] = addr
+		ipMap[ip.String()] = ipInfo{qtype}
 	}
 	if len(ips) <= 1 {
 		return
@@ -166,23 +171,11 @@ func ProbeNSAddrs(cache CacheSetter, zone string, addrs []string) {
 	}
 
 	for ipStr, lat := range latencies {
-		addr, ok := ipToAddr[ipStr]
+		info, ok := ipMap[ipStr]
 		if !ok {
 			continue
 		}
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			continue
-		}
-		cleanIP := net.ParseIP(strings.Trim(host, "[]"))
-		if cleanIP == nil {
-			continue
-		}
-		qtype := uint16(dns.TypeAAAA)
-		if cleanIP.To4() != nil {
-			qtype = dns.TypeA
-		}
-		cache.UpdateLatency(zone, qtype, dns.ClassINET, nil, false, cleanIP.String(), lat)
+		cache.UpdateLatency(zone, info.qtype, dns.ClassINET, nil, false, ipStr, lat)
 	}
 }
 
