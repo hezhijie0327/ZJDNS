@@ -201,7 +201,6 @@ func (s *SQLiteCache) migrate() error {
 
 		-- Eviction index: only covers cacheable entries (partial index).
 		CREATE INDEX IF NOT EXISTS idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
-		CREATE INDEX IF NOT EXISTS idx_ptr_ip ON ptr_map(rdata_ip);
 	`)
 	return err
 }

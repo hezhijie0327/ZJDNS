@@ -132,8 +132,7 @@ const (
 
 // Proxy defaults.
 const (
-	DefaultProxyScheme = "socks5"
-	DefaultProxyPort   = "1080"
+	DefaultProxyPort = "1080"
 )
 
 // SOCKS5 protocol constants (RFC 1928).

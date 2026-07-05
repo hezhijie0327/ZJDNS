@@ -2,7 +2,6 @@
 package dnsutil
 
 import (
-	"encoding/binary"
 	"io"
 	"net"
 	"os"
@@ -232,36 +231,6 @@ func ExtractIPString(rr dns.RR) (string, bool) {
 func IsAOrAAAA(rr dns.RR) bool {
 	t := dns.RRToType(rr)
 	return t == dns.TypeA || t == dns.TypeAAAA
-}
-
-// WriteDNSFrame writes a 2-byte big-endian length prefix followed by data to w.
-// Used by TCP, DoT, and DoQ transports for DNS message framing (RFC 1035 §4.2.2).
-func WriteDNSFrame(w io.Writer, data []byte) error {
-	var prefix [DNSFramePrefixLen]byte
-	binary.BigEndian.PutUint16(prefix[:], uint16(len(data)))
-	if _, err := w.Write(prefix[:]); err != nil {
-		return err
-	}
-	_, err := w.Write(data)
-	return err
-}
-
-// ReadDNSFrame reads a 2-byte big-endian length prefix from r and returns the
-// following data of that length. Used by TCP, DoT, and DoQ transports.
-func ReadDNSFrame(r io.Reader) ([]byte, error) {
-	var prefix [DNSFramePrefixLen]byte
-	if _, err := io.ReadFull(r, prefix[:]); err != nil {
-		return nil, err
-	}
-	length := binary.BigEndian.Uint16(prefix[:])
-	if length == 0 {
-		return nil, io.ErrUnexpectedEOF
-	}
-	data := make([]byte, length)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return nil, err
-	}
-	return data, nil
 }
 
 // LogTLSConnectionState emits a debug-level log of the negotiated TLS version,
