@@ -43,6 +43,7 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 | `metadata` | 解析元数据 + 协议命中计数 + 事件计数（1:1，DELETE CASCADE） |
 
 - **无内存缓存层**：SQLite B-tree + mmap 直接作为存储引擎，热页由 OS page cache 零拷贝服务
+- **Wire format 加速**：`msg_wire` BLOB 存储打包的 DNS 消息，`Msg.Unpack()` 一次还原，缓存命中 ~1ms
 - **延迟驱动排序**：`records.latency_ms` 列存储探测延迟，`ORDER BY latency_ms ASC` 自然最快优先
 - **PTR 反查**：`SELECT ... FROM records WHERE rdata_ip = ? JOIN entries`，无需单独反向索引
 - **DNSKEY 缓存**：与普通 DNS 缓存共享同一套 `entries + records` 表

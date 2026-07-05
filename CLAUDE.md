@@ -15,6 +15,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 9. Commit incrementally — every batch of related changes should be committed
    with a descriptive message. Present changes for review before committing.
 10. Run `golangci-lint run && golangci-lint fmt` before committing.
+11. Don't waste time wrestling with indentation or formatting issues when editing
+    files (e.g. tab vs space mismatches in the Edit tool). Focus on the code
+    logic — `golangci-lint fmt` will fix formatting. Use `sed` or `python3`
+    freely when the Edit tool struggles with whitespace.
 
 ## Build & Test
 
@@ -313,7 +317,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## Notable Design Decisions
 
-- **Cache (SQLite relational store)**: All DNS responses, NS latency data, DNSKEYs, and PTR mappings share three SQLite tables — no in-memory Go map, no gob encoding. WAL mode + mmap for hot-data-in-memory performance. TTL floor 10s. Negative response TTL capped per RFC 9077. `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based). See [DB Schema](#db-schema) below.
+- **Cache (SQLite relational store)**: All DNS responses, NS latency data, DNSKEYs, and PTR mappings share three SQLite tables — no in-memory Go map, no gob encoding. WAL mode + mmap for hot-data-in-memory performance. `msg_wire` BLOB stores packed `dns.Msg` wire format for ~1ms cache hits (30x faster than text parsing). TTL floor 10s. Negative response TTL capped per RFC 9077. `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based) with `_txlock=immediate` and 4-connection pool. See [DB Schema](#db-schema) below.
 - **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and rewrite (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
 - **EDNS buffer sizing**: Dual-size strategy — standard upstream queries use 1232 bytes (DNS Flag Day 2020) while recursive (root/TLD) queries use 4096 bytes (`RecursiveUDPBufferSize`) to avoid UDP truncation on DNSSEC-signed root zone referrals (~1400 bytes). Applied in `queryNameserversConcurrent` after `buildMsg` and in `probeTLDForHijack`.
 - **Per-interface binding** (`internal/dnsutil/bind.go`): All listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, pprof) bind per-interface IP instead of wildcard. `TryBind` pre-checks each address; unavailable ones are skipped with a WARN log. When another process occupies a port on a specific interface (e.g. warp-svc on 100.96.0.21:53), ZJDNS binds to remaining free IPs without conflict.
@@ -356,6 +360,8 @@ CREATE TABLE entries (
     -- Flags
     validated  INTEGER NOT NULL DEFAULT 0,
     cacheable  INTEGER NOT NULL DEFAULT 1,  -- 0 = error entry, never returned by Get()
+    -- Wire format (packed dns.Msg for fast Get)
+    msg_wire   BLOB,                        -- Pack() at Set time, Unpack() at Get time
     -- PK + constraint
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
@@ -392,7 +398,7 @@ CREATE TABLE metadata (
     fallback         INTEGER NOT NULL DEFAULT 0,   -- resolved via fallback upstream
     prefetch         INTEGER NOT NULL DEFAULT 0,   -- background prefetch refresh
     hijack           INTEGER NOT NULL DEFAULT 0,   -- hijack detected during resolution
-    -- Serving counters (updated by Get / RecordHit / RecordStale / RecordRewrite)
+    -- Serving counters (updated by RecordServe / RecordRewrite)
     last_hit_time    INTEGER NOT NULL DEFAULT 0,   -- last cache-hit timestamp
     hit_udp          INTEGER NOT NULL DEFAULT 0,   -- UDP hits
     hit_tcp          INTEGER NOT NULL DEFAULT 0,   -- TCP hits
@@ -408,8 +414,9 @@ CREATE TABLE metadata (
 **Key patterns**:
 - **DNS response cache**: `qtype` = original query type, records in original order. `Get()` filters `cacheable = 1` entries only.
 - **Error entries**: FORMERR/SERVFAIL/etc. stored with `cacheable = 0` and no records — never returned by `Get()`, queryable via SQL for diagnostics.
-- **Cache-hit tracking**: `Get()` updates `metadata.last_hit_time`; handler calls `RecordHit(protocol)` → `UPDATE metadata SET hit_udp = hit_udp + 1` etc. Total hits = `SUM(hit_udp + hit_tcp + …)`.
-- **Stale/rewrite tracking**: handler calls `RecordStale()` / `RecordRewrite()` → increments `stale_count` / `rewrite_count` on metadata.
+- **Wire format cache**: `Set()` packs Answer+Authority+Additional via `dns.Msg.Pack()` → `msg_wire` BLOB. `Get()` unpacks via `Msg.Unpack()` — single binary decode replaces N× `dns.New(rr_text)`, cache hit ~1ms.
+- **Cache-hit tracking**: `RecordServe(protocol, stale)` does one SQL UPDATE for `last_hit_time` + protocol counter + optional stale count. Total hits = `SUM(hit_udp + hit_tcp + …)`.
+- **Stale/rewrite tracking**: `RecordServe(_, true)` increments `stale_count`; `RecordRewrite()` increments `rewrite_count`.
 - **NS latency cache**: `qtype` = `dns.TypeNone` (0), A/AAAA records with `latency_ms` populated by probe engine. `loadRecords` puts non-A/AAAA records first, then sorts probed A/AAAA fastest-first.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT name FROM records r JOIN entries e ON r.entry_id = e.id WHERE r.rdata_ip = ? AND e.timestamp + e.ttl > unixepoch()`
