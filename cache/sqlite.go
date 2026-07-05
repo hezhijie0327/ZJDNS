@@ -55,6 +55,12 @@ type SQLiteCache struct {
 	// multiple BEGIN IMMEDIATE transactions queue up in the busy handler
 	// and can exceed busy_timeout, producing SQLITE_IOERR.
 	writeMu sync.Mutex
+
+	// Hot-path prepared statements — compiled once, reused forever.
+	stmtGetEntry      *sql.Stmt
+	stmtGetLatency    *sql.Stmt
+	stmtInsertLatency *sql.Stmt
+	stmtHits          [6]*sql.Stmt // indexed by protocol index (0=udp,1=tcp,2=dot,3=doq,4=doh,5=doh3)
 }
 
 // NewSQLiteCache opens or creates a SQLite database and returns a ready-to-use
@@ -109,6 +115,11 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 		s.entryCount.Store(count)
 	}
 
+	if err := s.prepareStatements(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("sqlite prepare: %w", err)
+	}
+
 	persistLabel := path
 	if persistLabel == "" {
 		persistLabel = "memory"
@@ -139,22 +150,22 @@ func (s *SQLiteCache) migrate() error {
 			qclass     INTEGER NOT NULL DEFAULT 1,
 			ecs_addr   TEXT NOT NULL DEFAULT '',
 			ecs_prefix INTEGER NOT NULL DEFAULT 0,
-			dnssec_ok  INTEGER NOT NULL DEFAULT 0,
+			dnssec_ok  INTEGER NOT NULL DEFAULT 0 CHECK (dnssec_ok IN (0, 1)),
 			-- Lifecycle
 			timestamp  INTEGER NOT NULL,
 			ttl        INTEGER NOT NULL,
 			expires_at INTEGER NOT NULL DEFAULT 0,
 			-- Flags
-			validated  INTEGER NOT NULL DEFAULT 0,
-			cacheable  INTEGER NOT NULL DEFAULT 1,
+			validated  INTEGER NOT NULL DEFAULT 0 CHECK (validated IN (0, 1)),
+			cacheable  INTEGER NOT NULL DEFAULT 1 CHECK (cacheable IN (0, 1)),
 			-- Resolution metadata (written once by Set)
 			rcode            INTEGER NOT NULL DEFAULT 0,
 			response_time_ms INTEGER NOT NULL DEFAULT 0,
 			server           TEXT NOT NULL DEFAULT '',
 			dnssec           TEXT NOT NULL DEFAULT '',
-			fallback         INTEGER NOT NULL DEFAULT 0,
-			prefetch         INTEGER NOT NULL DEFAULT 0,
-			hijack           INTEGER NOT NULL DEFAULT 0,
+			fallback         INTEGER NOT NULL DEFAULT 0 CHECK (fallback IN (0, 1)),
+			prefetch         INTEGER NOT NULL DEFAULT 0 CHECK (prefetch IN (0, 1)),
+			hijack           INTEGER NOT NULL DEFAULT 0 CHECK (hijack IN (0, 1)),
 			-- zstd-compressed wire format (Answer+Authority+Additional)
 			msg_wire BLOB,
 			-- PK + constraint
@@ -205,6 +216,65 @@ func (s *SQLiteCache) migrate() error {
 	return err
 }
 
+// protocolIndex maps a protocol prefix to an index into stmtHits [0..5].
+func protocolIndex(protocol string) int {
+	switch {
+	case len(protocol) >= 3 && (protocol[0] == 'u' || protocol[0] == 'U'):
+		return 0
+	case len(protocol) >= 3 && (protocol[0] == 't' || protocol[0] == 'T'):
+		return 1
+	case len(protocol) >= 3 && (protocol[1] == 'o' || protocol[1] == 'O'):
+		switch protocol[2] {
+		case 't', 'T':
+			return 2
+		case 'q', 'Q':
+			return 3
+		case 'h', 'H':
+			if len(protocol) >= 4 && protocol[3] == '3' {
+				return 5
+			}
+			return 4
+		}
+	}
+	return -1
+}
+
+func (s *SQLiteCache) prepareStatements() error {
+	var err error
+	s.stmtGetEntry, err = s.db.Prepare(
+		`SELECT id, timestamp, ttl, validated, msg_wire FROM entries
+		 WHERE qname = ? AND qtype = ? AND qclass = ?
+		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?
+		 AND cacheable = 1`)
+	if err != nil {
+		return err
+	}
+	s.stmtGetLatency, err = s.db.Prepare(
+		`SELECT rdata_ip, latency_ms FROM ip_latency WHERE qname = ? AND qtype = ? AND qclass = ?`)
+	if err != nil {
+		return err
+	}
+	s.stmtInsertLatency, err = s.db.Prepare(
+		`INSERT OR REPLACE INTO ip_latency (qname, qtype, qclass, rdata_ip, latency_ms)
+		 VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	// Per-protocol hit update statements (precompiled to avoid dynamic SQL on the hot path).
+	hitColumns := [6]string{"hit_udp", "hit_tcp", "hit_dot", "hit_doq", "hit_doh", "hit_doh3"}
+	for i, col := range hitColumns {
+		s.stmtHits[i], err = s.db.Prepare(
+			`UPDATE hit_counters SET ` + col + ` = ` + col + ` + 1, last_hit_time = ?
+			 WHERE entry_id = (SELECT id FROM entries
+			   WHERE qname = ? AND qtype = ? AND qclass = ?
+			   AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ── Store interface ──────────────────────────────────────────────────────────
 
 // Get retrieves a cached DNS response by decompressing and unpacking the stored
@@ -222,11 +292,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	var entryTTL int
 	var validated int
 	var msgWire []byte
-	err := s.db.QueryRow(
-		`SELECT id, timestamp, ttl, validated, msg_wire FROM entries
-		 WHERE qname = ? AND qtype = ? AND qclass = ?
-		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?
-		 AND cacheable = 1`,
+	err := s.stmtGetEntry.QueryRow(
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
 	).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
 	if err == sql.ErrNoRows {
@@ -296,10 +362,7 @@ func (s *SQLiteCache) sortAnswerByLatency(qname string, qtype, qclass uint16, en
 	}
 
 	// Fetch latency data — ECS-agnostic, shared across all ECS/dnssec variants.
-	rows, err := s.db.Query(
-		`SELECT rdata_ip, latency_ms FROM ip_latency WHERE qname = ? AND qtype = ? AND qclass = ?`,
-		qname, int(qtype), int(qclass),
-	)
+	rows, err := s.stmtGetLatency.Query(qname, int(qtype), int(qclass))
 	if err != nil {
 		return
 	}
@@ -378,11 +441,16 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	qname = dnsutil.NormalizeDomain(qname)
 	dnssecInt := boolToInt(dnssecOK)
 
-	// Pack wire format and compress.
+	// Pack wire format and compress. Skip compression when it doesn't help
+	// (small responses may produce larger zstd output due to framing overhead).
 	msg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
 	var msgWire []byte
 	if err := msg.Pack(); err == nil {
-		msgWire = compress(msg.Data)
+		if compressed := compress(msg.Data); len(compressed) < len(msg.Data) {
+			msgWire = compressed
+		} else {
+			msgWire = msg.Data
+		}
 	}
 
 	// ── Transaction (serialized via writeMu) ──────────────────────────────
@@ -450,23 +518,30 @@ func (s *SQLiteCache) RecordServe(qname string, qtype, qclass uint16, ecs *confi
 	qname = dnsutil.NormalizeDomain(qname)
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 
-	col := hitColumn(protocol)
-	if col == "" {
+	pi := protocolIndex(protocol)
+	if pi < 0 {
 		return
 	}
 
-	staleSQL := ""
-	if stale {
-		staleSQL = ", stale_count = stale_count + 1"
-	}
+	now := log.NowUnix()
+	qType := int(qtype)
+	qClass := int(qclass)
+	dnssecInt := boolToInt(dnssecOK)
 
-	_, _ = s.db.Exec(
-		`UPDATE hit_counters SET `+col+` = `+col+` + 1, last_hit_time = ?`+staleSQL+
-			` WHERE entry_id = (SELECT id FROM entries
+	if stale {
+		// When stale: use the base statement and increment stale_count manually.
+		// This is a rare path (serve-stale), so two execs is acceptable.
+		_, _ = s.stmtHits[pi].Exec(now, qname, qType, qClass, ecsAddr, ecsPrefix, dnssecInt)
+		_, _ = s.db.Exec(
+			`UPDATE hit_counters SET stale_count = stale_count + 1
+			 WHERE entry_id = (SELECT id FROM entries
 			   WHERE qname = ? AND qtype = ? AND qclass = ?
 			   AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,
-		log.NowUnix(), qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
-	)
+			qname, qType, qClass, ecsAddr, ecsPrefix, dnssecInt,
+		)
+	} else {
+		_, _ = s.stmtHits[pi].Exec(now, qname, qType, qClass, ecsAddr, ecsPrefix, dnssecInt)
+	}
 }
 
 // ReverseLookup returns all cached domain names mapped to the given IP address.
@@ -517,31 +592,52 @@ func (s *SQLiteCache) RecordRewrite(qname string, qtype, qclass uint16, ecs *con
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	now := log.NowUnix()
 	dnssecInt := boolToInt(dnssecOK)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		log.Warnf("CACHE: RecordRewrite begin tx failed: %v", err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	// INSERT OR IGNORE: stub entry must not overwrite an existing real entry
 	// (which would reset hit counters and resolution metadata to zero).
-	_, _ = s.db.Exec(
+	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
 			timestamp, ttl, expires_at, validated, cacheable, server)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
 		now, config.DefaultStaleTTL, now+int64(config.DefaultStaleTTL), 0, 1, "rewrite",
-	)
+	); err != nil {
+		log.Warnf("CACHE: RecordRewrite insert entry failed: %v", err)
+		return
+	}
 	// Ensure a hit_counters row exists for the stub entry, then increment
 	// rewrite_count in the counters table.
-	_, _ = s.db.Exec(
+	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO hit_counters (entry_id)
 		 SELECT id FROM entries
 		 WHERE qname = ? AND qtype = ? AND qclass = ?
 		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
-	)
-	_, _ = s.db.Exec(
+	); err != nil {
+		log.Warnf("CACHE: RecordRewrite insert hit_counters failed: %v", err)
+		return
+	}
+	if _, err := tx.Exec(
 		`UPDATE hit_counters SET rewrite_count = rewrite_count + 1
 		 WHERE entry_id = (SELECT id FROM entries
 		   WHERE qname = ? AND qtype = ? AND qclass = ?
 		   AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
-	)
+	); err != nil {
+		log.Warnf("CACHE: RecordRewrite update counter failed: %v", err)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Warnf("CACHE: RecordRewrite commit failed: %v", err)
+	}
 }
 
 // Summary returns a one-line stats summary from the entries and hit_counters tables.
@@ -554,22 +650,51 @@ func (s *SQLiteCache) Summary() string {
 	var hijack, fallback, prefetch, stale, rewrite int64
 	var avgMs float64
 
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE cacheable = 1").Scan(&entries)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(hc.hit_udp+hc.hit_tcp+hc.hit_dot+hc.hit_doq+hc.hit_doh+hc.hit_doh3),0) FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.cacheable = 1").Scan(&hits)
-	_ = s.db.QueryRow("SELECT COALESCE(AVG(response_time_ms),0) FROM entries WHERE response_time_ms > 0").Scan(&avgMs)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(hc.hit_udp),0), COALESCE(SUM(hc.hit_tcp),0), COALESCE(SUM(hc.hit_dot),0), COALESCE(SUM(hc.hit_doq),0), COALESCE(SUM(hc.hit_doh),0), COALESCE(SUM(hc.hit_doh3),0) FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.cacheable = 1").Scan(&udp, &tcp, &dot, &doq, &doh, &doh3)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 0").Scan(&noerr)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 1").Scan(&formerr)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 2").Scan(&servfail)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 3").Scan(&nxdomain)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 4").Scan(&notimp)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 5").Scan(&refused)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode NOT IN (0,1,2,3,4,5)").Scan(&other)
+	// Core stats: entries, hits, avg response time, per-protocol hits, stale, rewrite.
+	_ = s.db.QueryRow(
+		`SELECT
+			(SELECT COUNT(*) FROM entries WHERE cacheable = 1),
+			COALESCE((SELECT AVG(response_time_ms) FROM entries WHERE response_time_ms > 0), 0),
+			COALESCE(SUM(hc.hit_udp),0), COALESCE(SUM(hc.hit_tcp),0),
+			COALESCE(SUM(hc.hit_dot),0), COALESCE(SUM(hc.hit_doq),0),
+			COALESCE(SUM(hc.hit_doh),0), COALESCE(SUM(hc.hit_doh3),0),
+			COALESCE(SUM(hc.stale_count),0), COALESCE(SUM(hc.rewrite_count),0)
+		 FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id
+		 WHERE e.cacheable = 1`,
+	).Scan(&entries, &avgMs, &udp, &tcp, &dot, &doq, &doh, &doh3, &stale, &rewrite)
+	hits = udp + tcp + dot + doq + doh + doh3
+
+	// Rcode distribution in one query.
+	rows, err := s.db.Query(`SELECT rcode, COUNT(*) FROM entries GROUP BY rcode`)
+	if err == nil {
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var rc, cnt int64
+			if err := rows.Scan(&rc, &cnt); err == nil {
+				switch rc {
+				case 0:
+					noerr = cnt
+				case 1:
+					formerr = cnt
+				case 2:
+					servfail = cnt
+				case 3:
+					nxdomain = cnt
+				case 4:
+					notimp = cnt
+				case 5:
+					refused = cnt
+				default:
+					other += cnt
+				}
+			}
+		}
+	}
+
+	// Flag counts.
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE hijack = 1").Scan(&hijack)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE fallback = 1").Scan(&fallback)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE prefetch = 1").Scan(&prefetch)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(hc.stale_count),0) FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.cacheable = 1").Scan(&stale)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(hc.rewrite_count),0) FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.cacheable = 1").Scan(&rewrite)
 
 	return fmt.Sprintf("entries=%d hits=%d avg=%.1fms udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d hijack=%d fallback=%d prefetch=%d stale=%d rewrite=%d",
 		entries, hits, avgMs, udp, tcp, dot, doq, doh, doh3,
@@ -581,6 +706,17 @@ func (s *SQLiteCache) Summary() string {
 func (s *SQLiteCache) Close() error {
 	if !atomic.CompareAndSwapInt32(&s.closed, 0, 1) {
 		return nil
+	}
+	// Close prepared statements before the database.
+	for _, stmt := range []*sql.Stmt{s.stmtGetEntry, s.stmtGetLatency, s.stmtInsertLatency} {
+		if stmt != nil {
+			_ = stmt.Close()
+		}
+	}
+	for _, stmt := range s.stmtHits {
+		if stmt != nil {
+			_ = stmt.Close()
+		}
 	}
 	if err := s.db.Close(); err != nil {
 		log.Errorf("CACHE: sqlite close failed: %v", err)
@@ -620,6 +756,15 @@ func (s *SQLiteCache) evictOldest(n int64) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Clean up ip_latency entries whose cache entries no longer exist.
+	if _, err := tx.Exec(
+		`DELETE FROM ip_latency WHERE (qname, qtype, qclass, rdata_ip) NOT IN (
+			SELECT DISTINCT qname, qtype, qclass, '' FROM entries
+		 )`,
+	); err != nil {
+		log.Debugf("CACHE: ip_latency cleanup failed (non-fatal): %v", err)
+	}
+
 	// Prefer evicting entries that can no longer serve-stale (expires_at +
 	// staleMaxAge < now), then fall back to the oldest-by-insertion entries.
 	if _, err := tx.Exec(
@@ -648,11 +793,7 @@ func (s *SQLiteCache) evictOldest(n int64) {
 // REPLACE replaces the old per-entry_id iteration over all ECS variants.
 func (s *SQLiteCache) UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int) {
 	qname = dnsutil.NormalizeDomain(qname)
-	_, _ = s.db.Exec(
-		`INSERT OR REPLACE INTO ip_latency (qname, qtype, qclass, rdata_ip, latency_ms)
-		 VALUES (?, ?, ?, ?, ?)`,
-		qname, int(qtype), int(qclass), ip, latencyMS,
-	)
+	_, _ = s.stmtInsertLatency.Exec(qname, int(qtype), int(qclass), ip, latencyMS)
 }
 
 // ── Wire format compression ──────────────────────────────────────────────────
@@ -718,28 +859,6 @@ func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
 	if _, err := tx.Exec(stmt, args...); err != nil {
 		log.Warnf("CACHE: insert ptr_map failed: %v", err)
 	}
-}
-
-func hitColumn(protocol string) string {
-	switch {
-	case len(protocol) >= 3 && (protocol[0] == 'u' || protocol[0] == 'U'):
-		return "hit_udp"
-	case len(protocol) >= 3 && (protocol[0] == 't' || protocol[0] == 'T'):
-		return "hit_tcp"
-	case len(protocol) >= 3 && (protocol[1] == 'o' || protocol[1] == 'O'):
-		switch protocol[2] {
-		case 't', 'T':
-			return "hit_dot"
-		case 'q', 'Q':
-			return "hit_doq"
-		case 'h', 'H':
-			if len(protocol) >= 4 && protocol[3] == '3' {
-				return "hit_doh3"
-			}
-			return "hit_doh"
-		}
-	}
-	return ""
 }
 
 func joinPlaceholders(parts []string, sep string) string {
