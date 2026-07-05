@@ -21,35 +21,6 @@ import (
 // ip_latency; sortAnswerByLatency in cache.Get() reorders records at read time.
 // The pattern mirrors regular A/AAAA queries: write entry → probe → sort.
 
-// addrToRR converts an "ip:port" string to an A or AAAA DNS record.
-func addrToRR(name, addr string, ttl uint32) dns.RR {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil
-	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil {
-		return nil
-	}
-	// Check IPv4 first with To4() because net.ParseIP returns a 16-byte
-	// representation for all addresses; netip.AddrFromSlice would see an
-	// IPv4-mapped-IPv6 and treat it as IPv6, making all A records AAAA.
-	if ip4 := ip.To4(); ip4 != nil {
-		rr := new(dns.A)
-		rr.Hdr = dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl}
-		rr.Addr = netip.AddrFrom4([4]byte(ip4))
-		return rr
-	}
-	addrObj, ok := netip.AddrFromSlice(ip)
-	if !ok {
-		return nil
-	}
-	rr := new(dns.AAAA)
-	rr.Hdr = dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl}
-	rr.Addr = addrObj
-	return rr
-}
-
 // addrsFromRRs extracts "ip:port" strings from A/AAAA records.
 func addrsFromRRs(records []dns.RR) []string {
 	addrs := make([]string, 0, len(records))
@@ -72,49 +43,81 @@ func rrToAddr(r dns.RR) string {
 	return ""
 }
 
-// cacheRootServers writes the static root server list as TypeA/TypeAAAA
-// entries so getRootServers() can use the normal cache.Get() path.
-func (r *Recursive) cacheRootServers() {
+// cacheRootHint writes one root server's addresses as TypeA/TypeAAAA entries.
+func cacheRootHint(s cache.Store, name string, addrs []string) {
 	typeGroups := make(map[uint16][]dns.RR)
-	for _, addr := range DefaultRootServers {
-		if rr := addrToRR(".", addr, uint32(config.DefaultRootCacheTTL)); rr != nil {
-			qtype := dns.RRToType(rr)
-			typeGroups[qtype] = append(typeGroups[qtype], rr)
+	for _, addr := range addrs {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if ip == nil {
+			continue
+		}
+		if ip4 := ip.To4(); ip4 != nil {
+			rr := new(dns.A)
+			rr.Hdr = dns.Header{Name: name, Class: dns.ClassINET, TTL: uint32(config.DefaultRootCacheTTL)}
+			rr.Addr = netip.AddrFrom4([4]byte(ip4))
+			typeGroups[dns.TypeA] = append(typeGroups[dns.TypeA], rr)
+		} else {
+			addrObj, ok := netip.AddrFromSlice(ip)
+			if !ok {
+				continue
+			}
+			rr := new(dns.AAAA)
+			rr.Hdr = dns.Header{Name: name, Class: dns.ClassINET, TTL: uint32(config.DefaultRootCacheTTL)}
+			rr.Addr = addrObj
+			typeGroups[dns.TypeAAAA] = append(typeGroups[dns.TypeAAAA], rr)
 		}
 	}
 	for qtype, records := range typeGroups {
-		r.cache.Set(".", qtype, dns.ClassINET, nil, false, records, nil, nil, false, cache.SetOptions{})
+		s.Set(name, qtype, dns.ClassINET, nil, false, records, nil, nil, false, cache.SetOptions{})
 	}
-	log.Debugf("RECURSION: cached %d root servers (%d A + %d AAAA)",
-		len(DefaultRootServers), len(typeGroups[dns.TypeA]), len(typeGroups[dns.TypeAAAA]))
 }
 
-// getRootServers returns root servers ordered by probe latency.
+// getRootServers returns root server addresses ordered by probe latency.
+// Each root name (a.root-servers.net, ...) is looked up via the normal NS
+// cache path. On cold start, bootstraps from rootHints — the static list
+// is only a fallback; once cached, root servers behave identically to any
+// other NS.
 func (r *Recursive) getRootServers() []string {
-	if r == nil {
-		return DefaultRootServers
+	if r == nil || r.cache == nil {
+		return allRootAddrs()
 	}
 
-	aAddrs, aRefresh := lookupCachedRRs(r.cache, ".", dns.TypeA)
-	aaaaAddrs, aaaaRefresh := lookupCachedRRs(r.cache, ".", dns.TypeAAAA)
-	addrs := append(aAddrs, aaaaAddrs...)
-
-	if len(addrs) == 0 {
-		// Cold start: write entries, probe latency, read back.
-		log.Debugf("RECURSION: root cache cold start, writing static root list")
-		r.cacheRootServers()
-		go probe.ProbeNSAddrs(r.cache, ".", DefaultRootServers)
-		aAddrs, _ = lookupCachedRRs(r.cache, ".", dns.TypeA)
-		aaaaAddrs, _ = lookupCachedRRs(r.cache, ".", dns.TypeAAAA)
-		addrs = append(aAddrs, aaaaAddrs...)
-	} else if aRefresh || aaaaRefresh {
-		go probe.ProbeNSAddrs(r.cache, ".", append(aAddrs, aaaaAddrs...))
+	// Normal path: look up each root name via the NS cache.
+	var all []string
+	for name := range rootHints {
+		all = append(all, r.lookupNSAddrsFromCache(name)...)
+	}
+	if len(all) > 0 {
+		return all
 	}
 
-	if len(addrs) == 0 {
-		return DefaultRootServers
+	// Bootstrap: write entries from hints, probe latency in background.
+	log.Debugf("RECURSION: root cache cold start, bootstrapping %d hints", len(rootHints))
+	for name, addrs := range rootHints {
+		cacheRootHint(r.cache, name, addrs)
+		go probe.ProbeNSAddrs(r.cache, name, addrs)
 	}
-	return addrs
+	// Read back from the just-written cache entries.
+	for name := range rootHints {
+		all = append(all, r.lookupNSAddrsFromCache(name)...)
+	}
+	if len(all) == 0 {
+		return allRootAddrs()
+	}
+	return all
+}
+
+// allRootAddrs returns every address from rootHints as a flat slice.
+func allRootAddrs() []string {
+	var all []string
+	for _, addrs := range rootHints {
+		all = append(all, addrs...)
+	}
+	return all
 }
 
 // lookupNSAddrsFromCache looks up latency-sorted NS addresses via per-type
