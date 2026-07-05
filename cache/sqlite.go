@@ -121,7 +121,9 @@ func (s *SQLiteCache) migrate() error {
 	}
 
 	_, err := s.db.Exec(`
-		-- Single table: entries + metadata merged, wire format for RR storage.
+		-- Core cache entries: read-heavy, large msg_wire BLOBs. Lookup-key
+		-- columns and resolution metadata live here; hot counters are split
+		-- into hit_counters to avoid write amplification on cache hits.
 		CREATE TABLE IF NOT EXISTS entries (
 			-- Lookup key (UNIQUE)
 			qname      TEXT NOT NULL,
@@ -145,7 +147,18 @@ func (s *SQLiteCache) migrate() error {
 			fallback         INTEGER NOT NULL DEFAULT 0,
 			prefetch         INTEGER NOT NULL DEFAULT 0,
 			hijack           INTEGER NOT NULL DEFAULT 0,
-			-- Serving counters (updated by RecordServe / RecordRewrite)
+			-- zstd-compressed wire format (Answer+Authority+Additional)
+			msg_wire BLOB,
+			-- PK + constraint
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
+		);
+
+		-- Hot serving counters: updated on every cache hit. Split from entries
+		-- to avoid rewriting pages that contain large msg_wire BLOBs.
+		-- WITHOUT ROWID: the entry_id IS the row; no separate B-tree lookup.
+		CREATE TABLE IF NOT EXISTS hit_counters (
+			entry_id      INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
 			last_hit_time INTEGER NOT NULL DEFAULT 0,
 			hit_udp       INTEGER NOT NULL DEFAULT 0,
 			hit_tcp       INTEGER NOT NULL DEFAULT 0,
@@ -154,13 +167,20 @@ func (s *SQLiteCache) migrate() error {
 			hit_doh       INTEGER NOT NULL DEFAULT 0,
 			hit_doh3      INTEGER NOT NULL DEFAULT 0,
 			stale_count   INTEGER NOT NULL DEFAULT 0,
-			rewrite_count INTEGER NOT NULL DEFAULT 0,
-			-- zstd-compressed wire format (Answer+Authority+Additional)
-			msg_wire BLOB,
-			-- PK + constraint
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
-		);
+			rewrite_count INTEGER NOT NULL DEFAULT 0
+		) WITHOUT ROWID;
+
+		-- ECS-agnostic per-IP latency measurements. Keyed by (qname, qtype,
+		-- qclass, rdata_ip) — latency is a property of the IP, not the ECS
+		-- subnet or DNSSEC state. Survives cache refreshes (not tied to entry_id).
+		CREATE TABLE IF NOT EXISTS ip_latency (
+			qname      TEXT NOT NULL,
+			qtype      INTEGER NOT NULL,
+			qclass     INTEGER NOT NULL DEFAULT 1,
+			rdata_ip   TEXT NOT NULL,
+			latency_ms INTEGER NOT NULL,
+			PRIMARY KEY (qname, qtype, qclass, rdata_ip)
+		) WITHOUT ROWID;
 
 		-- Lightweight PTR reverse-lookup table (IP → domain name).
 		CREATE TABLE IF NOT EXISTS ptr_map (
@@ -169,14 +189,6 @@ func (s *SQLiteCache) migrate() error {
 			name     TEXT NOT NULL,
 			ttl      INTEGER NOT NULL,
 			PRIMARY KEY (rdata_ip, entry_id, name)
-		) WITHOUT ROWID;
-
-		-- Per-record latency measurements from probe engine (analytics + sorting).
-		CREATE TABLE IF NOT EXISTS record_latency (
-			entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-			rdata_ip   TEXT NOT NULL,
-			latency_ms INTEGER NOT NULL,
-			PRIMARY KEY (entry_id, rdata_ip)
 		) WITHOUT ROWID;
 
 		-- Eviction index: only covers cacheable entries (partial index).
@@ -245,9 +257,10 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		Validated:  validated != 0,
 	}
 
-	// Sort A/AAAA answer records by latency from record_latency so the
-	// fastest IP is returned first (replaces the old records ORDER BY).
-	s.sortAnswerByLatency(id, entry)
+	// Sort A/AAAA answer records by latency from ip_latency so the
+	// fastest IP is returned first. Latency is ECS-agnostic — we query
+	// by (qname, qtype, qclass) without ecs/dnssec filters.
+	s.sortAnswerByLatency(qname, qtype, qclass, entry)
 
 	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
@@ -255,8 +268,10 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 // sortAnswerByLatency reorders A/AAAA records in entry.Answer by probe
 // latency (fastest first), keeping non-A/AAAA records (CNAME, etc.) at the
-// front in their original wire-format order. Idempotent when ≤1 A/AAAA.
-func (s *SQLiteCache) sortAnswerByLatency(entryID int64, entry *Entry) {
+// front in their original wire-format order. Latency data is looked up by
+// (qname, qtype, qclass) — ECS-agnostic and dnssec-agnostic. Idempotent
+// when ≤1 A/AAAA.
+func (s *SQLiteCache) sortAnswerByLatency(qname string, qtype, qclass uint16, entry *Entry) {
 	if len(entry.Answer) <= 1 {
 		return
 	}
@@ -273,9 +288,10 @@ func (s *SQLiteCache) sortAnswerByLatency(entryID int64, entry *Entry) {
 		return
 	}
 
-	// Fetch latency data for this entry.
+	// Fetch latency data — ECS-agnostic, shared across all ECS/dnssec variants.
 	rows, err := s.db.Query(
-		`SELECT rdata_ip, latency_ms FROM record_latency WHERE entry_id = ?`, entryID,
+		`SELECT rdata_ip, latency_ms FROM ip_latency WHERE qname = ? AND qtype = ? AND qclass = ?`,
+		qname, int(qtype), int(qclass),
 	)
 	if err != nil {
 		return
@@ -381,6 +397,15 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return
 	}
 
+	// Create hit_counters row for the new entry. INSERT OR REPLACE does
+	// DELETE + INSERT internally, so the old counters row (if any) was
+	// CASCADE-deleted and we always need a fresh row.
+	if _, err := tx.Exec(
+		`INSERT OR IGNORE INTO hit_counters (entry_id) VALUES (?)`, entryID,
+	); err != nil {
+		log.Warnf("CACHE: insert hit_counters failed: %v", err)
+	}
+
 	// Populate ptr_map for reverse (PTR) lookups on cacheable entries.
 	if !opts.Uncacheable {
 		insertPtrMap(tx, entryID, answer)
@@ -397,7 +422,9 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	s.evictIfNeeded()
 }
 
-// RecordServe updates hit counters and last_hit_time directly in the entries table.
+// RecordServe updates hit counters and last_hit_time in the hit_counters
+// table, avoiding write amplification on the entries table which contains
+// large msg_wire BLOBs.
 func (s *SQLiteCache) RecordServe(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, protocol string, stale bool) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
@@ -417,9 +444,10 @@ func (s *SQLiteCache) RecordServe(qname string, qtype, qclass uint16, ecs *confi
 	}
 
 	_, _ = s.db.Exec(
-		`UPDATE entries SET `+col+` = `+col+` + 1, last_hit_time = ?`+staleSQL+
-			` WHERE qname = ? AND qtype = ? AND qclass = ?
-		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+		`UPDATE hit_counters SET `+col+` = `+col+` + 1, last_hit_time = ?`+staleSQL+
+			` WHERE entry_id = (SELECT id FROM entries
+			   WHERE qname = ? AND qtype = ? AND qclass = ?
+			   AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,
 		log.NowUnix(), qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
 	)
 }
@@ -478,15 +506,25 @@ func (s *SQLiteCache) RecordRewrite(qname string, qtype, qclass uint16, ecs *con
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
 		now, config.DefaultStaleTTL, now+int64(config.DefaultStaleTTL), 0, 1, "rewrite",
 	)
+	// Ensure a hit_counters row exists for the stub entry, then increment
+	// rewrite_count in the counters table.
 	_, _ = s.db.Exec(
-		`UPDATE entries SET rewrite_count = rewrite_count + 1
+		`INSERT OR IGNORE INTO hit_counters (entry_id)
+		 SELECT id FROM entries
 		 WHERE qname = ? AND qtype = ? AND qclass = ?
 		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
 	)
+	_, _ = s.db.Exec(
+		`UPDATE hit_counters SET rewrite_count = rewrite_count + 1
+		 WHERE entry_id = (SELECT id FROM entries
+		   WHERE qname = ? AND qtype = ? AND qclass = ?
+		   AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
+	)
 }
 
-// Summary returns a one-line stats summary from the entries table.
+// Summary returns a one-line stats summary from the entries and hit_counters tables.
 func (s *SQLiteCache) Summary() string {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return ""
@@ -497,9 +535,9 @@ func (s *SQLiteCache) Summary() string {
 	var avgMs float64
 
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE cacheable = 1").Scan(&entries)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp+hit_tcp+hit_dot+hit_doq+hit_doh+hit_doh3),0) FROM entries").Scan(&hits)
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(hc.hit_udp+hc.hit_tcp+hc.hit_dot+hc.hit_doq+hc.hit_doh+hc.hit_doh3),0) FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.cacheable = 1").Scan(&hits)
 	_ = s.db.QueryRow("SELECT COALESCE(AVG(response_time_ms),0) FROM entries WHERE response_time_ms > 0").Scan(&avgMs)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp),0), COALESCE(SUM(hit_tcp),0), COALESCE(SUM(hit_dot),0), COALESCE(SUM(hit_doq),0), COALESCE(SUM(hit_doh),0), COALESCE(SUM(hit_doh3),0) FROM entries").Scan(&udp, &tcp, &dot, &doq, &doh, &doh3)
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(hc.hit_udp),0), COALESCE(SUM(hc.hit_tcp),0), COALESCE(SUM(hc.hit_dot),0), COALESCE(SUM(hc.hit_doq),0), COALESCE(SUM(hc.hit_doh),0), COALESCE(SUM(hc.hit_doh3),0) FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.cacheable = 1").Scan(&udp, &tcp, &dot, &doq, &doh, &doh3)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 0").Scan(&noerr)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 1").Scan(&formerr)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 2").Scan(&servfail)
@@ -510,8 +548,8 @@ func (s *SQLiteCache) Summary() string {
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE hijack = 1").Scan(&hijack)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE fallback = 1").Scan(&fallback)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE prefetch = 1").Scan(&prefetch)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(stale_count),0) FROM entries").Scan(&stale)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(rewrite_count),0) FROM entries").Scan(&rewrite)
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(hc.stale_count),0) FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.cacheable = 1").Scan(&stale)
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(hc.rewrite_count),0) FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.cacheable = 1").Scan(&rewrite)
 
 	return fmt.Sprintf("entries=%d hits=%d avg=%.1fms udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d hijack=%d fallback=%d prefetch=%d stale=%d rewrite=%d",
 		entries, hits, avgMs, udp, tcp, dot, doq, doh, doh3,
@@ -539,7 +577,15 @@ func (s *SQLiteCache) evictIfNeeded() {
 		return
 	}
 
-	count := s.entryCount.Load()
+	// Re-sync the entry count from the database to correct any drift from
+	// INSERT OR REPLACE (which increments entryCount even on replacements).
+	// COUNT(*) on the PK is a fast B-tree leaf walk; only runs when the
+	// atomic counter suggests we may be near or over the limit.
+	var count int64
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
+		s.entryCount.Store(count)
+	}
+
 	excess := count - int64(s.maxEntries)
 	if excess <= 0 {
 		return
@@ -547,7 +593,6 @@ func (s *SQLiteCache) evictIfNeeded() {
 
 	s.evictOldest(excess)
 }
-
 func (s *SQLiteCache) evictOldest(n int64) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -577,42 +622,17 @@ func (s *SQLiteCache) evictOldest(n int64) {
 	log.Debugf("CACHE: evicted %d entries (max=%d)", n, s.maxEntries)
 }
 
-// UpdateLatency stores a latency measurement for a specific record, keyed by
-// entry lookup key + IP address.
+// UpdateLatency stores a latency measurement in the ECS-agnostic ip_latency
+// table. Latency is a property of the IP, not the ECS subnet or DNSSEC state,
+// so we key by (qname, qtype, qclass, rdata_ip) only. A single INSERT OR
+// REPLACE replaces the old per-entry_id iteration over all ECS variants.
 func (s *SQLiteCache) UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int) {
 	qname = dnsutil.NormalizeDomain(qname)
-
-	// Latency is a property of the IP, not of the ECS subnet. Update all
-	// entries matching (qname, qtype, qclass, dnssec_ok) regardless of ECS
-	// so sortAnswerByLatency can find the data for whichever ECS variant
-	// is served from Get().
-	//
-	// Collect entry IDs first, then INSERT outside the rows loop: in-memory
-	// SQLite databases are per-connection, and db.Exec may use a different
-	// connection than the one holding rows open.
-	rows, err := s.db.Query(
-		`SELECT id FROM entries WHERE qname=? AND qtype=? AND qclass=? AND dnssec_ok=?`,
-		qname, int(qtype), int(qclass), boolToInt(dnssecOK),
+	_, _ = s.db.Exec(
+		`INSERT OR REPLACE INTO ip_latency (qname, qtype, qclass, rdata_ip, latency_ms)
+		 VALUES (?, ?, ?, ?, ?)`,
+		qname, int(qtype), int(qclass), ip, latencyMS,
 	)
-	if err != nil {
-		return
-	}
-
-	var entryIDs []int64
-	for rows.Next() {
-		var entryID int64
-		if err := rows.Scan(&entryID); err == nil {
-			entryIDs = append(entryIDs, entryID)
-		}
-	}
-	_ = rows.Close()
-
-	for _, entryID := range entryIDs {
-		_, _ = s.db.Exec(
-			`INSERT OR REPLACE INTO record_latency (entry_id, rdata_ip, latency_ms) VALUES (?, ?, ?)`,
-			entryID, ip, latencyMS,
-		)
-	}
 }
 
 // ── Wire format compression ──────────────────────────────────────────────────

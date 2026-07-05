@@ -178,7 +178,7 @@ zjdns/
 ├── cmd/zjdns/                     ← main.go, banner.go, version.go, bench_test.go (binary)
 ├── config/                        ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── cache/                         ← Store interface, SQLite relational cache (entries + ptr_map + record_latency tables)
+├── cache/                         ← Store interface, SQLite relational cache (entries + hit_counters + ip_latency + ptr_map tables)
 ├── cidr/                          ← IP filtering with tag matching
 ├── rewrite/                       ← Query rewrite rules
 ├── internal/
@@ -340,10 +340,11 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## DB Schema
 
-The cache uses three SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The cache uses four SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
--- Single table: entries + metadata merged, wire format for RR storage.
+-- Core cache entries: read-heavy, large msg_wire BLOBs. Hot serving counters
+-- are split into hit_counters to avoid write amplification on cache hits.
 -- Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
 CREATE TABLE entries (
     -- Lookup key (UNIQUE)
@@ -368,7 +369,18 @@ CREATE TABLE entries (
     fallback         INTEGER NOT NULL DEFAULT 0,
     prefetch         INTEGER NOT NULL DEFAULT 0,
     hijack           INTEGER NOT NULL DEFAULT 0,
-    -- Serving counters (updated by RecordServe / RecordRewrite)
+    -- zstd-compressed wire format (Answer+Authority+Additional)
+    msg_wire   BLOB,
+    -- PK + constraint
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
+);
+
+-- Hot serving counters: updated on every cache hit. Split from entries to
+-- avoid rewriting pages that contain large msg_wire BLOBs. WITHOUT ROWID so
+-- the entry_id IS the row — no separate B-tree lookup.
+CREATE TABLE hit_counters (
+    entry_id      INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
     last_hit_time INTEGER NOT NULL DEFAULT 0,
     hit_udp       INTEGER NOT NULL DEFAULT 0,
     hit_tcp       INTEGER NOT NULL DEFAULT 0,
@@ -377,13 +389,20 @@ CREATE TABLE entries (
     hit_doh       INTEGER NOT NULL DEFAULT 0,
     hit_doh3      INTEGER NOT NULL DEFAULT 0,
     stale_count   INTEGER NOT NULL DEFAULT 0,
-    rewrite_count INTEGER NOT NULL DEFAULT 0,
-    -- zstd-compressed wire format (Answer+Authority+Additional)
-    msg_wire   BLOB,
-    -- PK + constraint
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
-);
+    rewrite_count INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+
+-- ECS-agnostic per-IP latency measurements. Keyed by (qname, qtype, qclass,
+-- rdata_ip) — latency is a property of the IP, not the ECS subnet or DNSSEC
+-- state. Survives cache refreshes (not tied to entry_id).
+CREATE TABLE ip_latency (
+    qname      TEXT NOT NULL,
+    qtype      INTEGER NOT NULL,
+    qclass     INTEGER NOT NULL DEFAULT 1,
+    rdata_ip   TEXT NOT NULL,
+    latency_ms INTEGER NOT NULL,
+    PRIMARY KEY (qname, qtype, qclass, rdata_ip)
+) WITHOUT ROWID;
 
 -- Lightweight PTR reverse-lookup table (IP → domain name). WITHOUT ROWID for
 -- faster IP lookups without a separate index B-tree.
@@ -395,15 +414,6 @@ CREATE TABLE ptr_map (
     PRIMARY KEY (rdata_ip, entry_id, name)
 ) WITHOUT ROWID;
 
--- Per-record latency measurements from probe engine. WITHOUT ROWID so
--- (entry_id, rdata_ip) lookups go directly to the PK B-tree.
-CREATE TABLE record_latency (
-    entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-    rdata_ip   TEXT NOT NULL,
-    latency_ms INTEGER NOT NULL,
-    PRIMARY KEY (entry_id, rdata_ip)
-) WITHOUT ROWID;
-
 -- Partial index: only covers cacheable entries for eviction queries.
 CREATE INDEX idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
 CREATE INDEX idx_ptr_ip ON ptr_map(rdata_ip);
@@ -413,14 +423,15 @@ CREATE INDEX idx_ptr_ip ON ptr_map(rdata_ip);
 - **DNS response cache**: `qtype` = original query type, records in original wire order. `Get()` filters `cacheable = 1` entries only.
 - **Error entries**: FORMERR/SERVFAIL/etc. stored with `cacheable = 0` and `msg_wire = NULL` — never returned by `Get()`, queryable via SQL for diagnostics.
 - **Wire format cache**: `Set()` packs Answer+Authority+Additional via `dns.Msg.Pack()`, compresses with zstd (SpeedDefault), stores in `msg_wire` BLOB. `Get()` decompresses + `Msg.Unpack()` — single binary decode replaces N× text parsing, cache hit ~0.5ms.
-- **Cache-hit tracking**: `RecordServe(protocol, stale)` does one `UPDATE entries SET hit_udp = hit_udp + 1 WHERE ...` (no subquery). Total hits = `SUM(hit_udp + hit_tcp + …)`.
-- **Stale/rewrite tracking**: `RecordServe(_, true)` increments `stale_count`; `RecordRewrite()` uses `INSERT OR IGNORE` (preserves existing counters) + `UPDATE`.
+- **Cache-hit tracking**: `RecordServe(protocol, stale)` does one `UPDATE hit_counters SET hit_udp = hit_udp + 1 WHERE entry_id = (SELECT id FROM entries WHERE ...)` — writes only touch the narrow hit_counters table, not the entries table with large BLOBs. Total hits = `SUM(hit_udp + hit_tcp + …)`.
+- **Stale/rewrite tracking**: `RecordServe(_, true)` increments `stale_count` in hit_counters; `RecordRewrite()` uses `INSERT OR IGNORE` (preserves existing entries) + `UPDATE hit_counters`.
 - **NS latency cache**: `qtype` = `dns.TypeNone` (0), records stored in probe-sorted order at `Set()` time. Wire format preserves the latency ordering so `Get()` returns fastest-first.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
-- **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map` + `record_latency`. No periodic cleanup — stale data is valuable for serve-stale.
-- **Probe latency**: `INSERT OR REPLACE INTO record_latency (entry_id, rdata_ip, latency_ms) VALUES (?, ?, ?)` — no entry overwrite needed. Latency ordering is baked into wire format at `Set()` time; `record_latency` enables SQL analytics.
-- **Summary stats**: `Store.Summary()` queries the entries table directly (no JOINs). Returns entries, hits, avg response time, per-protocol hits, rcode distribution, hijack/fallback/prefetch/stale/rewrite counts. Logged at startup and shutdown.
+- **IP latency**: ECS-agnostic — a single `INSERT OR REPLACE INTO ip_latency` replaces the old per-entry_id iteration over all ECS variants. `sortAnswerByLatency` queries by `(qname, qtype, qclass)` without ecs/dnssec filters, so all ECS variants share the same latency data.
+- **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map` + `hit_counters`. Entry count is synced from `SELECT COUNT(*)` before eviction to correct drift from INSERT OR REPLACE. No periodic cleanup — stale data is valuable for serve-stale.
+- **Probe latency**: `INSERT OR REPLACE INTO ip_latency (qname, qtype, qclass, rdata_ip, latency_ms) VALUES (?, ?, ?, ?, ?)` — ECS-agnostic, one INSERT replaces the old per-entry_id iteration over all ECS variants. Latency ordering is baked into wire format at `Set()` time; `ip_latency` enables SQL analytics and survives cache refreshes.
+- **Summary stats**: `Store.Summary()` queries entries + hit_counters via JOINs. Returns entries, hits, avg response time, per-protocol hits, rcode distribution, hijack/fallback/prefetch/stale/rewrite counts. Logged at startup and shutdown.
 - **Analytics**: single-table queries — e.g. `SELECT server, SUM(hit_dot) FROM entries GROUP BY server` for DoT requests per upstream. No JOIN needed.
 
 ## CI/CD

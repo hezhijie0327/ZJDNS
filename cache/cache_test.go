@@ -382,7 +382,7 @@ func TestRecordServe_Fresh(t *testing.T) {
 	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
 
 	var hitUDP, lastHit int64
-	err := mc.db.QueryRow("SELECT hit_udp, last_hit_time FROM entries WHERE qname='example.com' AND qtype=1").Scan(&hitUDP, &lastHit)
+	err := mc.db.QueryRow("SELECT hc.hit_udp, hc.last_hit_time FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='example.com' AND e.qtype=1").Scan(&hitUDP, &lastHit)
 	if err != nil {
 		t.Fatalf("entries query: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestRecordServe_Stale(t *testing.T) {
 	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "TCP", true)
 
 	var hitTCP, staleCount, lastHit int64
-	err := mc.db.QueryRow("SELECT hit_tcp, stale_count, last_hit_time FROM entries WHERE qname='example.com' AND qtype=1").Scan(&hitTCP, &staleCount, &lastHit)
+	err := mc.db.QueryRow("SELECT hc.hit_tcp, hc.stale_count, hc.last_hit_time FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='example.com' AND e.qtype=1").Scan(&hitTCP, &staleCount, &lastHit)
 	if err != nil {
 		t.Fatalf("entries query: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestRecordServe_MultipleProtocols(t *testing.T) {
 	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "DoH", false)
 
 	var hitUDP, hitDOH int64
-	err := mc.db.QueryRow("SELECT hit_udp, hit_doh FROM entries WHERE qname='example.com' AND qtype=1").Scan(&hitUDP, &hitDOH)
+	err := mc.db.QueryRow("SELECT hc.hit_udp, hc.hit_doh FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='example.com' AND e.qtype=1").Scan(&hitUDP, &hitDOH)
 	if err != nil {
 		t.Fatalf("entries query: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestRecordRewrite(t *testing.T) {
 	mc.RecordRewrite("blocked.com.", dns.TypeA, dns.ClassINET, nil, false)
 
 	var rewriteCount int64
-	err := mc.db.QueryRow("SELECT rewrite_count FROM entries WHERE qname='blocked.com' AND qtype=1").Scan(&rewriteCount)
+	err := mc.db.QueryRow("SELECT hc.rewrite_count FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='blocked.com' AND e.qtype=1").Scan(&rewriteCount)
 	if err != nil {
 		t.Fatalf("entries query: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestReverseLookup_EmptyIP(t *testing.T) {
 	}
 }
 
-// ── UpdateLatency (record_latency table) ─────────────────────────────────────
+// ── UpdateLatency (ip_latency table) ─────────────────────────────────────
 
 func TestUpdateLatency(t *testing.T) {
 	mc := testStore()
@@ -510,9 +510,9 @@ func TestUpdateLatency(t *testing.T) {
 	mc.UpdateLatency("example.com.", dns.TypeA, dns.ClassINET, nil, false, "8.8.8.8", 42)
 
 	var lat int
-	err := mc.db.QueryRow("SELECT latency_ms FROM record_latency WHERE rdata_ip='8.8.8.8'").Scan(&lat)
+	err := mc.db.QueryRow("SELECT latency_ms FROM ip_latency WHERE rdata_ip='8.8.8.8'").Scan(&lat)
 	if err != nil {
-		t.Fatalf("record_latency query: %v", err)
+		t.Fatalf("ip_latency query: %v", err)
 	}
 	if lat != 42 {
 		t.Errorf("latency_ms = %d, want 42", lat)
@@ -561,7 +561,7 @@ func TestSet_MetadataRoundTrip(t *testing.T) {
 	var rcode, respTime, fallback, hijack int64
 	var server, dnssec string
 	err := mc.db.QueryRow(
-		"SELECT rcode, response_time_ms, server, dnssec, fallback, hijack FROM entries WHERE qname='meta.example.com' AND qtype=1",
+		"SELECT e.rcode, e.response_time_ms, e.server, e.dnssec, e.fallback, e.hijack FROM entries e WHERE e.qname='meta.example.com' AND e.qtype=1",
 	).Scan(&rcode, &respTime, &server, &dnssec, &fallback, &hijack)
 	if err != nil {
 		t.Fatalf("entries query: %v", err)
@@ -642,7 +642,7 @@ func TestSet_Uncacheable(t *testing.T) {
 
 	// Verify it's stored in the DB for analytics.
 	var rcode int
-	err := mc.db.QueryRow("SELECT rcode FROM entries WHERE qname='error.example.com' AND qtype=1 AND cacheable=0").Scan(&rcode)
+	err := mc.db.QueryRow("SELECT e.rcode FROM entries e WHERE e.qname='error.example.com' AND e.qtype=1 AND e.cacheable=0").Scan(&rcode)
 	if err != nil {
 		t.Fatalf("uncacheable entry query: %v", err)
 	}
@@ -763,7 +763,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 
 	var hitUDP, hitDOH, hitDOQ, staleTotal int64
 	err = mc.db.QueryRow(
-		`SELECT hit_udp, hit_doh, hit_doq, stale_count FROM entries WHERE qname='www.example.com' AND qtype=1`,
+		`SELECT hc.hit_udp, hc.hit_doh, hc.hit_doq, hc.stale_count FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='www.example.com' AND e.qtype=1`,
 	).Scan(&hitUDP, &hitDOH, &hitDOQ, &staleTotal)
 	if err != nil {
 		t.Fatalf("counter query: %v", err)
@@ -783,7 +783,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 
 	var gitTCP, gitStale int64
 	_ = mc.db.QueryRow(
-		`SELECT hit_tcp, stale_count FROM entries WHERE qname='github.com' AND qtype=1`,
+		`SELECT hc.hit_tcp, hc.stale_count FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='github.com' AND e.qtype=1`,
 	).Scan(&gitTCP, &gitStale)
 	if gitTCP != 2 {
 		t.Errorf("github.com hit_tcp = %d, want 2", gitTCP)
@@ -805,14 +805,14 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		t.Error("ReverseLookup should find www.example.com for 93.184.216.34")
 	}
 
-	// ── Phase 7: UpdateLatency (record_latency) ─────────────────────────────
+	// ── Phase 7: UpdateLatency (ip_latency) ─────────────────────────────
 	mc.UpdateLatency("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "93.184.216.34", 15)
 	mc.UpdateLatency("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "93.184.216.35", 42)
 	mc.UpdateLatency(".", dns.TypeNone, dns.ClassINET, nil, false, "198.41.0.4", 8)
 
 	var latA, latB int
-	_ = mc.db.QueryRow(`SELECT latency_ms FROM record_latency WHERE rdata_ip='93.184.216.34'`).Scan(&latA)
-	_ = mc.db.QueryRow(`SELECT latency_ms FROM record_latency WHERE rdata_ip='93.184.216.35'`).Scan(&latB)
+	_ = mc.db.QueryRow(`SELECT latency_ms FROM ip_latency WHERE rdata_ip='93.184.216.34'`).Scan(&latA)
+	_ = mc.db.QueryRow(`SELECT latency_ms FROM ip_latency WHERE rdata_ip='93.184.216.35'`).Scan(&latB)
 	if latA != 15 {
 		t.Errorf("latency 93.184.216.34 = %d, want 15", latA)
 	}
@@ -854,7 +854,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	mc.RecordRewrite("rewrite.test.", dns.TypeA, dns.ClassINET, nil, false)
 	mc.RecordRewrite("rewrite.test.", dns.TypeA, dns.ClassINET, nil, false)
 	var rwCount int64
-	_ = mc.db.QueryRow(`SELECT rewrite_count FROM entries WHERE qname='rewrite.test' AND qtype=1`).Scan(&rwCount)
+	_ = mc.db.QueryRow(`SELECT hc.rewrite_count FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='rewrite.test' AND e.qtype=1`).Scan(&rwCount)
 	if rwCount != 3 {
 		t.Errorf("rewrite_count = %d, want 3", rwCount)
 	}
@@ -993,7 +993,7 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 	var total, udp, tcp int64
 	mc.RecordServe("host-00.example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
 	mc.RecordServe("host-01.example.com.", dns.TypeA, dns.ClassINET, nil, false, "TCP", false)
-	_ = mc.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(hit_udp),0), COALESCE(SUM(hit_tcp),0) FROM entries`).Scan(&total, &udp, &tcp)
+	_ = mc.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(hc.hit_udp),0), COALESCE(SUM(hc.hit_tcp),0) FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id`).Scan(&total, &udp, &tcp)
 	if total != 50 {
 		t.Errorf("total entries = %d, want 50", total)
 	}
