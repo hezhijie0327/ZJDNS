@@ -119,7 +119,6 @@ func (s *SQLiteCache) migrate() error {
 			server           TEXT NOT NULL DEFAULT '',
 			fallback         INTEGER NOT NULL DEFAULT 0,
 			prefetch         INTEGER NOT NULL DEFAULT 0,
-			hit_count        INTEGER NOT NULL DEFAULT 0,
 			last_hit_time    INTEGER NOT NULL DEFAULT 0,
 			hit_udp          INTEGER NOT NULL DEFAULT 0,
 			hit_tcp          INTEGER NOT NULL DEFAULT 0,
