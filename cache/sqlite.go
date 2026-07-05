@@ -97,23 +97,28 @@ func (s *SQLiteCache) migrate() error {
 
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS entries (
-			id               INTEGER PRIMARY KEY AUTOINCREMENT,
-			qname            TEXT NOT NULL,
-			qtype            INTEGER NOT NULL,
-			qclass           INTEGER NOT NULL DEFAULT 1,
-			ecs_addr         TEXT NOT NULL DEFAULT '',
-			ecs_prefix       INTEGER NOT NULL DEFAULT 0,
-			dnssec_ok        INTEGER NOT NULL DEFAULT 0,
-			timestamp        INTEGER NOT NULL,
-			ttl              INTEGER NOT NULL,
-			expires_at       INTEGER NOT NULL DEFAULT 0,
-			validated        INTEGER NOT NULL DEFAULT 0,
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			qname      TEXT NOT NULL,
+			qtype      INTEGER NOT NULL,
+			qclass     INTEGER NOT NULL DEFAULT 1,
+			ecs_addr   TEXT NOT NULL DEFAULT '',
+			ecs_prefix INTEGER NOT NULL DEFAULT 0,
+			dnssec_ok  INTEGER NOT NULL DEFAULT 0,
+			timestamp  INTEGER NOT NULL,
+			ttl        INTEGER NOT NULL,
+			expires_at INTEGER NOT NULL DEFAULT 0,
+			validated  INTEGER NOT NULL DEFAULT 0,
+			cacheable  INTEGER NOT NULL DEFAULT 1,
+			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
+		);
+
+		CREATE TABLE IF NOT EXISTS metadata (
+			entry_id         INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
 			rcode            INTEGER NOT NULL DEFAULT 0,
 			response_time_ms INTEGER NOT NULL DEFAULT 0,
 			server           TEXT NOT NULL DEFAULT '',
 			fallback         INTEGER NOT NULL DEFAULT 0,
 			prefetch         INTEGER NOT NULL DEFAULT 0,
-			cacheable        INTEGER NOT NULL DEFAULT 1,
 			hit_count        INTEGER NOT NULL DEFAULT 0,
 			last_hit_time    INTEGER NOT NULL DEFAULT 0,
 			hit_udp          INTEGER NOT NULL DEFAULT 0,
@@ -121,8 +126,7 @@ func (s *SQLiteCache) migrate() error {
 			hit_dot          INTEGER NOT NULL DEFAULT 0,
 			hit_doq          INTEGER NOT NULL DEFAULT 0,
 			hit_doh          INTEGER NOT NULL DEFAULT 0,
-			hit_doh3         INTEGER NOT NULL DEFAULT 0,
-			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
+			hit_doh3         INTEGER NOT NULL DEFAULT 0
 		);
 
 		CREATE TABLE IF NOT EXISTS records (
@@ -222,11 +226,10 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	if _, err := tx.Exec(
 		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
 			timestamp, ttl, expires_at, validated,
-			rcode, response_time_ms, server, fallback, prefetch, cacheable)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			cacheable)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
-		now, entryTTL, now+int64(entryTTL), boolToInt(validated),
-		opts.Rcode, opts.ResponseTime, opts.Server, boolToInt(opts.Fallback), boolToInt(opts.Prefetch), boolToInt(!opts.Uncacheable),
+		now, entryTTL, now+int64(entryTTL), boolToInt(validated), boolToInt(!opts.Uncacheable),
 	); err != nil {
 		log.Warnf("CACHE: insert entry failed: %v", err)
 		return
@@ -239,6 +242,15 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	).Scan(&entryID); err != nil {
 		log.Warnf("CACHE: select entry id failed: %v", err)
 		return
+	}
+
+	// Upsert metadata for analytics.
+	if _, err := tx.Exec(
+		`INSERT OR REPLACE INTO metadata (entry_id, rcode, response_time_ms, server, fallback, prefetch)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		entryID, opts.Rcode, opts.ResponseTime, opts.Server, boolToInt(opts.Fallback), boolToInt(opts.Prefetch),
+	); err != nil {
+		log.Warnf("CACHE: insert metadata failed: %v", err)
 	}
 
 	// Only insert records for cacheable entries; error entries have no RRs.
@@ -273,8 +285,9 @@ func (s *SQLiteCache) RecordHit(qname string, qtype, qclass uint16, ecs *config.
 	}
 
 	_, _ = s.db.Exec(
-		`UPDATE entries SET `+col+` = `+col+` + 1 WHERE qname = ? AND qtype = ? AND qclass = ?
-		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+		`UPDATE metadata SET `+col+` = `+col+` + 1 WHERE entry_id = (
+			SELECT id FROM entries WHERE qname = ? AND qtype = ? AND qclass = ?
+			 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
 	)
 }
