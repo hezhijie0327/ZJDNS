@@ -192,17 +192,8 @@ func (s *SQLiteCache) migrate() error {
 			rewrite_count INTEGER NOT NULL DEFAULT 0
 		) WITHOUT ROWID;
 
-		-- Per-IP latency measurements. Latency is a property of the IP,
-		-- not the domain name — all domains sharing the same IP reuse
-		-- the same row. qtype is inferred from IP format (A=1, AAAA=28)
-		-- for address-family analytics.
-		CREATE TABLE IF NOT EXISTS ip_latency (
-			rdata_ip        TEXT NOT NULL,
-			qtype           INTEGER NOT NULL DEFAULT 0,
-			latency_ms      INTEGER NOT NULL,
-			last_probe_time INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (rdata_ip)
-		) WITHOUT ROWID;
+		-- Eviction index: only covers cacheable entries (partial index).
+		CREATE INDEX IF NOT EXISTS idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
 
 		-- Lightweight PTR reverse-lookup table (IP → domain name).
 		CREATE TABLE IF NOT EXISTS ptr_map (
@@ -213,8 +204,17 @@ func (s *SQLiteCache) migrate() error {
 			PRIMARY KEY (rdata_ip, entry_id, name)
 		) WITHOUT ROWID;
 
-		-- Eviction index: only covers cacheable entries (partial index).
-		CREATE INDEX IF NOT EXISTS idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
+		-- Per-IP latency measurements. Latency is a property of the IP,
+		-- not the domain name — all domains sharing the same IP reuse
+		-- the same row. qtype is inferred from IP format (A=1, AAAA=28)
+		-- for address-family analytics. Independent of entries (no FK).
+		CREATE TABLE IF NOT EXISTS ip_latency (
+			rdata_ip        TEXT NOT NULL,
+			qtype           INTEGER NOT NULL DEFAULT 0,
+			latency_ms      INTEGER NOT NULL,
+			last_probe_time INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (rdata_ip)
+		) WITHOUT ROWID;
 	`)
 	return err
 }
@@ -781,6 +781,14 @@ func (s *SQLiteCache) evictOldest(n int64) {
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// Clean up latency rows not probed within staleMaxAge.
+	if _, err := tx.Exec(
+		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < unixepoch() - ?`,
+		defaultStaleMaxAge,
+	); err != nil {
+		log.Debugf("CACHE: ip_latency cleanup failed (non-fatal): %v", err)
+	}
 
 	// Prefer evicting entries that can no longer serve-stale (expires_at +
 	// staleMaxAge < now), then fall back to the oldest-by-insertion entries.
