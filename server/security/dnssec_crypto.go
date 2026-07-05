@@ -488,7 +488,7 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 			rrKeys = append(rrKeys, k)
 		}
 	}
-	c.cache.Set(zone, dns.TypeDNSKEY, dns.ClassINET, nil, false, rrKeys, nil, nil, true)
+	c.cache.Set(zone, dns.TypeDNSKEY, dns.ClassINET, nil, false, rrKeys, nil, nil, true, cache.SetOptions{})
 
 }
 

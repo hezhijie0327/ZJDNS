@@ -26,7 +26,7 @@ func TestSet_Get_RoundTrip(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
 
 	entry, found, expired := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -58,7 +58,7 @@ func TestSet_ValidatedFlag(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true, SetOptions{})
 
 	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -78,7 +78,7 @@ func TestSet_Get_ECSScoping(t *testing.T) {
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 	ecs := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("192.0.2.0").AsSlice()}
 
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs, false, []dns.RR{rr}, nil, nil, false)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
 
 	// Hit with same ECS
 	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs, false)
@@ -106,7 +106,7 @@ func TestSet_Get_DNSSECScoping(t *testing.T) {
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, true, []dns.RR{rr}, nil, nil, false)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, true, []dns.RR{rr}, nil, nil, false, SetOptions{})
 
 	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, true)
 	if !found {
@@ -212,7 +212,7 @@ func TestSet_ZeroTTLFloored(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
 
 	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -305,7 +305,7 @@ func TestSet_NegativeTTLCapped(t *testing.T) {
 		Hdr:  dns.Header{Name: "alpha.example.com.", Class: dns.ClassINET, TTL: 86400},
 		NSEC: rdata.NSEC{NextDomain: "zulu.example.com."},
 	}
-	mc.Set("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false, nil, []dns.RR{soa, nsec}, nil, false)
+	mc.Set("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false, nil, []dns.RR{soa, nsec}, nil, false, SetOptions{})
 
 	entry, found, _ := mc.Get("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -321,7 +321,7 @@ func TestSet_NegativeTTLUncapped_NoNSEC(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	aRec := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRec}, nil, nil, false)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRec}, nil, nil, false, SetOptions{})
 
 	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -339,7 +339,7 @@ func TestSet_Get_DNSKEY(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	dnskey := &dns.DNSKEY{Hdr: dns.Header{Name: "com.", Class: dns.ClassINET, TTL: 86400}}
-	mc.Set("com.", dns.TypeDNSKEY, dns.ClassINET, nil, false, []dns.RR{dnskey}, nil, nil, true)
+	mc.Set("com.", dns.TypeDNSKEY, dns.ClassINET, nil, false, []dns.RR{dnskey}, nil, nil, true, SetOptions{})
 
 	entry, found, _ := mc.Get("com.", dns.TypeDNSKEY, dns.ClassINET, nil, false)
 	if !found {
@@ -355,7 +355,7 @@ func TestSet_Get_NSAddrTXT(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	txt := &dns.TXT{Hdr: dns.Header{Name: ".", Class: dns.ClassINET, TTL: 900}, TXT: rdata.TXT{Txt: []string{"198.41.0.4:53"}}}
-	mc.Set(".", dns.TypeNone, dns.ClassINET, nil, false, []dns.RR{txt}, nil, nil, false)
+	mc.Set(".", dns.TypeNone, dns.ClassINET, nil, false, []dns.RR{txt}, nil, nil, false, SetOptions{})
 
 	entry, found, _ := mc.Get(".", dns.TypeNone, dns.ClassINET, nil, false)
 	if !found {

@@ -58,13 +58,6 @@ func TestLoadConfig_MissingServer(t *testing.T) {
 	}
 }
 
-func TestServerSettings_StatsInterval_Default(t *testing.T) {
-	s := &ServerSettings{}
-	if got := s.StatsInterval(); got != 0 {
-		t.Errorf("StatsInterval = %d, want 0 (disabled by default)", got)
-	}
-}
-
 func TestUpstreamServer_IsRecursive(t *testing.T) {
 	s := &UpstreamServer{Address: "builtin_recursive"}
 	if !s.IsRecursive() {

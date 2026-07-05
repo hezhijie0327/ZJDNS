@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -19,8 +18,6 @@ func (s *Server) startBackgroundTasks() {
 	s.startCookieRotation()
 	s.startECSRefresh()
 	s.startPrefetchCooldownCleanup()
-	s.startStatsLogger()
-	s.startStatsReset()
 	s.startTCPWriteMuSweep()
 	s.setupSignalHandling()
 }
@@ -108,28 +105,6 @@ func (s *Server) startPrefetchCooldownCleanup() {
 	})
 }
 
-// startStatsLogger logs stats snapshots at a periodic interval.
-func (s *Server) startStatsLogger() {
-	statsInterval := s.config.Server.StatsInterval()
-	if statsInterval <= 0 {
-		return
-	}
-	s.runBackgroundTicker("stats logger", time.Duration(statsInterval)*time.Second, func() {
-		s.logStatsNow("interval")
-	})
-}
-
-// startStatsReset periodically resets stats counters and logs the final snapshot.
-func (s *Server) startStatsReset() {
-	statsResetInterval := s.config.Server.StatsResetInterval()
-	if statsResetInterval <= 0 {
-		return
-	}
-	s.runBackgroundTicker("stats reset", time.Duration(statsResetInterval)*time.Second, func() {
-		s.logStatsNow("reset")
-	})
-}
-
 // startTCPWriteMuSweep periodically removes stale tcpWriteMu entries.
 func (s *Server) startTCPWriteMuSweep() {
 	s.runBackgroundTicker("tcpWriteMu sweep", config.DefaultSweepInterval, func() {
@@ -160,37 +135,10 @@ func (s *Server) setupSignalHandling() {
 	}()
 }
 
-func (s *Server) logStatsNow(trigger string) {
-	cs := s.handler.CacheStore()
-	if cs == nil {
-		return
-	}
-
-	cs.FlushStats()
-	row := cs.Stats()
-
-	if strings.TrimSpace(trigger) == "" {
-		trigger = "unknown"
-	}
-
-	log.Infof("STATS: trigger=%s total=%d hits=%d miss=%d stale=%d err=%d prefetch=%d fallback=%d avg=%.1fms last=%dms udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d rewrite=%d hijack=%d sec=%d bogus=%d ins=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d",
-		trigger,
-		row.TotalRequests, row.CacheHits, row.CacheMisses, row.StaleResponses,
-		row.ErrorResponses, row.PrefetchRequests, row.FallbackRequests,
-		float64(row.TotalResponseTimeMs)/float64(max(row.TotalRequests, 1)), row.LastResponseTimeMs,
-		row.UDPRequests, row.TCPRequests, row.DOTRequests, row.DOQRequests, row.DOHRequests, row.DOH3Requests,
-		row.RewriteRequests, row.HijackDetections,
-		row.DNSSECSecure, row.DNSSECBogus, row.DNSSECInsecure,
-		row.RCODENOERROR, row.RCODEFORMERR, row.RCODESERVFAIL, row.RCODENXDOMAIN,
-		row.RCODENotImp, row.RCODEREFUSED, row.RCODEOther,
-	)
-}
-
 func (s *Server) shutdownServer() {
 	s.handler.MarkClosed()
 
 	log.Infof("SERVER: Starting DNS server shutdown")
-	s.logStatsNow("shutdown")
 
 	if s.cancel != nil {
 		s.cancel(errors.New("server shutdown"))

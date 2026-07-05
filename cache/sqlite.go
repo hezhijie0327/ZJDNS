@@ -25,37 +25,6 @@ type SQLiteCache struct {
 	cacheSizeMB int
 	closed      int32
 	entryCount  atomic.Int64
-	stats       statsAccumulator
-}
-
-type statsAccumulator struct {
-	totalRequests       atomic.Int64
-	cacheHits           atomic.Int64
-	cacheMisses         atomic.Int64
-	prefetchRequests    atomic.Int64
-	errorResponses      atomic.Int64
-	staleResponses      atomic.Int64
-	fallbackRequests    atomic.Int64
-	totalResponseTimeMs atomic.Int64
-	lastResponseTimeMs  atomic.Int64
-	udpRequests         atomic.Int64
-	tcpRequests         atomic.Int64
-	dotRequests         atomic.Int64
-	doqRequests         atomic.Int64
-	dohRequests         atomic.Int64
-	doh3Requests        atomic.Int64
-	rewriteRequests     atomic.Int64
-	hijackDetections    atomic.Int64
-	dnssecSecure        atomic.Int64
-	dnssecBogus         atomic.Int64
-	dnssecInsecure      atomic.Int64
-	rcodeNOERROR        atomic.Int64
-	rcodeFORMERR        atomic.Int64
-	rcodeSERVFAIL       atomic.Int64
-	rcodeNXDOMAIN       atomic.Int64
-	rcodeNotImp         atomic.Int64
-	rcodeREFUSED        atomic.Int64
-	rcodeOther          atomic.Int64
 }
 
 // NewSQLiteCache opens or creates a SQLite database and returns a ready-to-use
@@ -106,7 +75,6 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
 		s.entryCount.Store(count)
 	}
-	s.restoreStats()
 
 	persistLabel := path
 	if persistLabel == "" {
@@ -127,19 +95,27 @@ func (s *SQLiteCache) migrate() error {
 		log.Warnf("CACHE: pragma failed (non-fatal): %v", err)
 	}
 
+	// Drop legacy stats table if it exists (no longer needed).
+	_, _ = s.db.Exec("DROP TABLE IF EXISTS stats")
+
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS entries (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			qname      TEXT NOT NULL,
-			qtype      INTEGER NOT NULL,
-			qclass     INTEGER NOT NULL DEFAULT 1,
-			ecs_addr   TEXT NOT NULL DEFAULT '',
-			ecs_prefix INTEGER NOT NULL DEFAULT 0,
-			dnssec_ok  INTEGER NOT NULL DEFAULT 0,
-			timestamp  INTEGER NOT NULL,
-			ttl        INTEGER NOT NULL,
-			expires_at INTEGER NOT NULL DEFAULT 0,
-			validated  INTEGER NOT NULL DEFAULT 0,
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			qname            TEXT NOT NULL,
+			qtype            INTEGER NOT NULL,
+			qclass           INTEGER NOT NULL DEFAULT 1,
+			ecs_addr         TEXT NOT NULL DEFAULT '',
+			ecs_prefix       INTEGER NOT NULL DEFAULT 0,
+			dnssec_ok        INTEGER NOT NULL DEFAULT 0,
+			timestamp        INTEGER NOT NULL,
+			ttl              INTEGER NOT NULL,
+			expires_at       INTEGER NOT NULL DEFAULT 0,
+			validated        INTEGER NOT NULL DEFAULT 0,
+			rcode            INTEGER NOT NULL DEFAULT 0,
+			response_time_ms INTEGER NOT NULL DEFAULT 0,
+			cacheable        INTEGER NOT NULL DEFAULT 1,
+			hit_count        INTEGER NOT NULL DEFAULT 0,
+			last_hit_time    INTEGER NOT NULL DEFAULT 0,
 			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 		);
 
@@ -160,38 +136,6 @@ func (s *SQLiteCache) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_entries_expires_at ON entries(expires_at);
 		CREATE INDEX IF NOT EXISTS idx_records_entry_section_seq ON records(entry_id, section, seq);
 		CREATE INDEX IF NOT EXISTS idx_records_ip_entry ON records(rdata_ip, entry_id) WHERE rdata_ip IS NOT NULL;
-
-		CREATE TABLE IF NOT EXISTS stats (
-			id                    INTEGER PRIMARY KEY CHECK (id = 1),
-			total_requests        INTEGER NOT NULL DEFAULT 0,
-			cache_hits            INTEGER NOT NULL DEFAULT 0,
-			cache_misses          INTEGER NOT NULL DEFAULT 0,
-			prefetch_requests     INTEGER NOT NULL DEFAULT 0,
-			error_responses       INTEGER NOT NULL DEFAULT 0,
-			stale_responses       INTEGER NOT NULL DEFAULT 0,
-			fallback_requests     INTEGER NOT NULL DEFAULT 0,
-			total_response_time_ms INTEGER NOT NULL DEFAULT 0,
-			last_response_time_ms  INTEGER NOT NULL DEFAULT 0,
-			udp_requests          INTEGER NOT NULL DEFAULT 0,
-			tcp_requests          INTEGER NOT NULL DEFAULT 0,
-			dot_requests          INTEGER NOT NULL DEFAULT 0,
-			doq_requests          INTEGER NOT NULL DEFAULT 0,
-			doh_requests          INTEGER NOT NULL DEFAULT 0,
-			doh3_requests         INTEGER NOT NULL DEFAULT 0,
-			rewrite_requests      INTEGER NOT NULL DEFAULT 0,
-			hijack_detections     INTEGER NOT NULL DEFAULT 0,
-			dnssec_secure         INTEGER NOT NULL DEFAULT 0,
-			dnssec_bogus          INTEGER NOT NULL DEFAULT 0,
-			dnssec_insecure       INTEGER NOT NULL DEFAULT 0,
-			rcode_noerror         INTEGER NOT NULL DEFAULT 0,
-			rcode_formerr         INTEGER NOT NULL DEFAULT 0,
-			rcode_servfail        INTEGER NOT NULL DEFAULT 0,
-			rcode_nxdomain        INTEGER NOT NULL DEFAULT 0,
-			rcode_notimp          INTEGER NOT NULL DEFAULT 0,
-			rcode_refused         INTEGER NOT NULL DEFAULT 0,
-			rcode_other           INTEGER NOT NULL DEFAULT 0,
-			updated_at            INTEGER NOT NULL DEFAULT 0
-		);
 	`)
 	return err
 }
@@ -214,7 +158,8 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	err := s.db.QueryRow(
 		`SELECT id, timestamp, ttl, validated FROM entries
 		 WHERE qname = ? AND qtype = ? AND qclass = ?
-		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?
+		 AND cacheable = 1`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
 	).Scan(&id, &ts, &entryTTL, &validated)
 	if err == sql.ErrNoRows {
@@ -234,13 +179,17 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	entry.TTL = entryTTL
 	entry.Validated = validated != 0
 
+	// Track cache hit for analytics.
+	_, _ = s.db.Exec(`UPDATE entries SET hit_count = hit_count + 1, last_hit_time = ? WHERE id = ?`,
+		log.NowUnix(), id)
+
 	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
 }
 
 // Set stores a DNS response in the cache.
 func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
-	answer, authority, additional []dns.RR, validated bool) {
+	answer, authority, additional []dns.RR, validated bool, opts SetOptions) {
 
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
@@ -265,9 +214,13 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok, timestamp, ttl, expires_at, validated)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt, now, entryTTL, now+int64(entryTTL), boolToInt(validated),
+		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
+			timestamp, ttl, expires_at, validated,
+			rcode, response_time_ms, cacheable)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
+		now, entryTTL, now+int64(entryTTL), boolToInt(validated),
+		opts.Rcode, opts.ResponseTime, boolToInt(!opts.Uncacheable),
 	); err != nil {
 		log.Warnf("CACHE: insert entry failed: %v", err)
 		return
@@ -282,10 +235,12 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return
 	}
 
-	// Old records were cascade-deleted by INSERT OR REPLACE. Insert new ones.
-	insertRecords(tx, entryID, "answer", answer)
-	insertRecords(tx, entryID, "authority", authority)
-	insertRecords(tx, entryID, "additional", additional)
+	// Only insert records for cacheable entries; error entries have no RRs.
+	if !opts.Uncacheable {
+		insertRecords(tx, entryID, "answer", answer)
+		insertRecords(tx, entryID, "authority", authority)
+		insertRecords(tx, entryID, "additional", additional)
+	}
 
 	if err := tx.Commit(); err != nil {
 		log.Warnf("CACHE: commit tx failed: %v", err)
@@ -331,320 +286,17 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	return results
 }
 
-// Close stops the periodic cleanup goroutine, performs final cleanup, and
-// closes the database.
+// Close closes the database.
 func (s *SQLiteCache) Close() error {
 	if !atomic.CompareAndSwapInt32(&s.closed, 0, 1) {
 		return nil
 	}
-	s.flushStats()
-	s.flushStats()
 	if err := s.db.Close(); err != nil {
 		log.Errorf("CACHE: sqlite close failed: %v", err)
 		return err
 	}
 	log.Infof("CACHE: SQLite cache shut down")
 	return nil
-}
-
-// ── Stats ──────────────────────────────────────────────────────────────────
-
-// IncrementStats atomically increments the stats counters for a single DNS
-// request. All counters are updated in a single UPDATE for efficiency.
-func (s *SQLiteCache) IncrementStats(durationMs int64, cacheHit, hadError bool, protocol string,
-	rewrote, hijackDetected, staleServed, fallbackUsed, prefetchTriggered bool,
-	dnssecStatus string, rcode int) {
-
-	if atomic.LoadInt32(&s.closed) != 0 {
-		return
-	}
-
-	a := &s.stats
-	a.totalRequests.Add(1)
-	a.totalResponseTimeMs.Add(durationMs)
-	for {
-		old := a.lastResponseTimeMs.Load()
-		if durationMs <= old || a.lastResponseTimeMs.CompareAndSwap(old, durationMs) {
-			break
-		}
-	}
-
-	if cacheHit {
-		a.cacheHits.Add(1)
-	} else {
-		a.cacheMisses.Add(1)
-	}
-	if hadError {
-		a.errorResponses.Add(1)
-	}
-	if staleServed {
-		a.staleResponses.Add(1)
-	}
-	if fallbackUsed {
-		a.fallbackRequests.Add(1)
-	}
-	if prefetchTriggered {
-		a.prefetchRequests.Add(1)
-	}
-	if rewrote {
-		a.rewriteRequests.Add(1)
-	}
-	if hijackDetected {
-		a.hijackDetections.Add(1)
-	}
-
-	switch dnssecStatus {
-	case config.DNSSECStatusSecure:
-		a.dnssecSecure.Add(1)
-	case config.DNSSECStatusBogus:
-		a.dnssecBogus.Add(1)
-	case config.DNSSECStatusInsecure:
-		a.dnssecInsecure.Add(1)
-	}
-
-	switch rcode {
-	case dns.RcodeSuccess:
-		a.rcodeNOERROR.Add(1)
-	case dns.RcodeFormatError:
-		a.rcodeFORMERR.Add(1)
-	case dns.RcodeServerFailure:
-		a.rcodeSERVFAIL.Add(1)
-	case dns.RcodeNameError:
-		a.rcodeNXDOMAIN.Add(1)
-	case dns.RcodeNotImplemented:
-		a.rcodeNotImp.Add(1)
-	case dns.RcodeRefused:
-		a.rcodeREFUSED.Add(1)
-	default:
-		a.rcodeOther.Add(1)
-	}
-
-	pb := protoBits(protocol)
-	if pb.udp != 0 {
-		a.udpRequests.Add(1)
-	}
-	if pb.tcp != 0 {
-		a.tcpRequests.Add(1)
-	}
-	if pb.dot != 0 {
-		a.dotRequests.Add(1)
-	}
-	if pb.doq != 0 {
-		a.doqRequests.Add(1)
-	}
-	if pb.doh != 0 {
-		a.dohRequests.Add(1)
-	}
-	if pb.doh3 != 0 {
-		a.doh3Requests.Add(1)
-	}
-}
-
-type protoBitsStruct struct {
-	udp, tcp, dot, doq, doh, doh3 int
-}
-
-func protoBits(protocol string) protoBitsStruct {
-	var p protoBitsStruct
-	switch {
-	case len(protocol) >= 3 && (protocol[0] == 'u' || protocol[0] == 'U'):
-		p.udp = 1
-	case len(protocol) >= 3 && (protocol[0] == 't' || protocol[0] == 'T'):
-		p.tcp = 1
-	case len(protocol) >= 3 && (protocol[1] == 'o' || protocol[1] == 'O'):
-		switch protocol[2] {
-		case 't', 'T':
-			p.dot = 1
-		case 'q', 'Q':
-			p.doq = 1
-		case 'h', 'H':
-			if len(protocol) >= 4 && (protocol[3] == '3') {
-				p.doh3 = 1
-			} else {
-				p.doh = 1
-			}
-		}
-	}
-	return p
-}
-
-// ── Stats persistence ────────────────────────────────────────────────────────
-
-// SaveStats writes a StatsRow to the stats table.
-
-// flushStats writes the in-memory stats accumulator to the SQLite stats table
-// in a single atomic operation.
-func (s *SQLiteCache) flushStats() {
-	row := s.stats.toRow()
-	if _, err := s.db.Exec(
-		`INSERT OR REPLACE INTO stats (id,
-			total_requests, cache_hits, cache_misses, prefetch_requests,
-			error_responses, stale_responses, fallback_requests,
-			total_response_time_ms, last_response_time_ms,
-			udp_requests, tcp_requests, dot_requests, doq_requests, doh_requests, doh3_requests,
-			rewrite_requests, hijack_detections,
-			dnssec_secure, dnssec_bogus, dnssec_insecure,
-			rcode_noerror, rcode_formerr, rcode_servfail, rcode_nxdomain,
-			rcode_notimp, rcode_refused, rcode_other, updated_at
-		) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		1,
-		row.TotalRequests, row.CacheHits, row.CacheMisses, row.PrefetchRequests,
-		row.ErrorResponses, row.StaleResponses, row.FallbackRequests,
-		row.TotalResponseTimeMs, row.LastResponseTimeMs,
-		row.UDPRequests, row.TCPRequests, row.DOTRequests, row.DOQRequests, row.DOHRequests, row.DOH3Requests,
-		row.RewriteRequests, row.HijackDetections,
-		row.DNSSECSecure, row.DNSSECBogus, row.DNSSECInsecure,
-		row.RCODENOERROR, row.RCODEFORMERR, row.RCODESERVFAIL, row.RCODENXDOMAIN,
-		row.RCODENotImp, row.RCODEREFUSED, row.RCODEOther, row.UpdatedAt,
-	); err != nil {
-		log.Warnf("CACHE: flush stats failed: %v", err)
-	}
-}
-
-func (a *statsAccumulator) toRow() config.StatsRow {
-	return config.StatsRow{
-		TotalRequests:       a.totalRequests.Load(),
-		CacheHits:           a.cacheHits.Load(),
-		CacheMisses:         a.cacheMisses.Load(),
-		PrefetchRequests:    a.prefetchRequests.Load(),
-		ErrorResponses:      a.errorResponses.Load(),
-		StaleResponses:      a.staleResponses.Load(),
-		FallbackRequests:    a.fallbackRequests.Load(),
-		TotalResponseTimeMs: a.totalResponseTimeMs.Load(),
-		LastResponseTimeMs:  a.lastResponseTimeMs.Load(),
-		UDPRequests:         a.udpRequests.Load(),
-		TCPRequests:         a.tcpRequests.Load(),
-		DOTRequests:         a.dotRequests.Load(),
-		DOQRequests:         a.doqRequests.Load(),
-		DOHRequests:         a.dohRequests.Load(),
-		DOH3Requests:        a.doh3Requests.Load(),
-		RewriteRequests:     a.rewriteRequests.Load(),
-		HijackDetections:    a.hijackDetections.Load(),
-		DNSSECSecure:        a.dnssecSecure.Load(),
-		DNSSECBogus:         a.dnssecBogus.Load(),
-		DNSSECInsecure:      a.dnssecInsecure.Load(),
-		RCODENOERROR:        a.rcodeNOERROR.Load(),
-		RCODEFORMERR:        a.rcodeFORMERR.Load(),
-		RCODESERVFAIL:       a.rcodeSERVFAIL.Load(),
-		RCODENXDOMAIN:       a.rcodeNXDOMAIN.Load(),
-		RCODENotImp:         a.rcodeNotImp.Load(),
-		RCODEREFUSED:        a.rcodeREFUSED.Load(),
-		RCODEOther:          a.rcodeOther.Load(),
-		UpdatedAt:           log.NowUnix(),
-	}
-}
-
-func (s *SQLiteCache) SaveStats(row config.StatsRow) {
-	if atomic.LoadInt32(&s.closed) != 0 {
-		return
-	}
-	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO stats (id,
-			total_requests, cache_hits, cache_misses, prefetch_requests,
-			error_responses, stale_responses, fallback_requests,
-			total_response_time_ms, last_response_time_ms,
-			udp_requests, tcp_requests, dot_requests, doq_requests, doh_requests, doh3_requests,
-			rewrite_requests, hijack_detections,
-			dnssec_secure, dnssec_bogus, dnssec_insecure,
-			rcode_noerror, rcode_formerr, rcode_servfail, rcode_nxdomain,
-			rcode_notimp, rcode_refused, rcode_other, updated_at
-		) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		1,
-		row.TotalRequests, row.CacheHits, row.CacheMisses, row.PrefetchRequests,
-		row.ErrorResponses, row.StaleResponses, row.FallbackRequests,
-		row.TotalResponseTimeMs, row.LastResponseTimeMs,
-		row.UDPRequests, row.TCPRequests, row.DOTRequests, row.DOQRequests, row.DOHRequests, row.DOH3Requests,
-		row.RewriteRequests, row.HijackDetections,
-		row.DNSSECSecure, row.DNSSECBogus, row.DNSSECInsecure,
-		row.RCODENOERROR, row.RCODEFORMERR, row.RCODESERVFAIL, row.RCODENXDOMAIN,
-		row.RCODENotImp, row.RCODEREFUSED, row.RCODEOther, row.UpdatedAt,
-	)
-	if err != nil {
-		log.Warnf("CACHE: save stats failed: %v", err)
-	}
-}
-
-// restoreStats reads the persisted stats row directly from DB and seeds
-// the in-memory accumulators so counters survive restarts.
-// Does NOT call flushStats() first — at startup the in-memory accumulators
-// are zero, so flushing would overwrite previously persisted stats with zeros.
-func (s *SQLiteCache) restoreStats() {
-	row, ok := s.loadStatsFromDB()
-	if !ok {
-		return
-	}
-	a := &s.stats
-	a.totalRequests.Store(row.TotalRequests)
-	a.cacheHits.Store(row.CacheHits)
-	a.cacheMisses.Store(row.CacheMisses)
-	a.prefetchRequests.Store(row.PrefetchRequests)
-	a.errorResponses.Store(row.ErrorResponses)
-	a.staleResponses.Store(row.StaleResponses)
-	a.fallbackRequests.Store(row.FallbackRequests)
-	a.totalResponseTimeMs.Store(row.TotalResponseTimeMs)
-	a.lastResponseTimeMs.Store(row.LastResponseTimeMs)
-	a.udpRequests.Store(row.UDPRequests)
-	a.tcpRequests.Store(row.TCPRequests)
-	a.dotRequests.Store(row.DOTRequests)
-	a.doqRequests.Store(row.DOQRequests)
-	a.dohRequests.Store(row.DOHRequests)
-	a.doh3Requests.Store(row.DOH3Requests)
-	a.rewriteRequests.Store(row.RewriteRequests)
-	a.hijackDetections.Store(row.HijackDetections)
-	a.dnssecSecure.Store(row.DNSSECSecure)
-	a.dnssecBogus.Store(row.DNSSECBogus)
-	a.dnssecInsecure.Store(row.DNSSECInsecure)
-	a.rcodeNOERROR.Store(row.RCODENOERROR)
-	a.rcodeFORMERR.Store(row.RCODEFORMERR)
-	a.rcodeSERVFAIL.Store(row.RCODESERVFAIL)
-	a.rcodeNXDOMAIN.Store(row.RCODENXDOMAIN)
-	a.rcodeNotImp.Store(row.RCODENotImp)
-	a.rcodeREFUSED.Store(row.RCODEREFUSED)
-	a.rcodeOther.Store(row.RCODEOther)
-}
-
-// Stats returns a snapshot of the in-memory stats accumulators.
-// No DB read — reads directly from atomic counters.
-func (s *SQLiteCache) Stats() config.StatsRow {
-	return s.stats.toRow()
-}
-
-// FlushStats persists the in-memory stats accumulators to the SQLite stats table.
-func (s *SQLiteCache) FlushStats() {
-	s.flushStats()
-}
-
-// loadStatsFromDB reads the stats row directly from SQLite without flushing.
-func (s *SQLiteCache) loadStatsFromDB() (config.StatsRow, bool) {
-	var row config.StatsRow
-	err := s.db.QueryRow(
-		`SELECT total_requests, cache_hits, cache_misses, prefetch_requests,
-			error_responses, stale_responses, fallback_requests,
-			total_response_time_ms, last_response_time_ms,
-			udp_requests, tcp_requests, dot_requests, doq_requests, doh_requests, doh3_requests,
-			rewrite_requests, hijack_detections,
-			dnssec_secure, dnssec_bogus, dnssec_insecure,
-			rcode_noerror, rcode_formerr, rcode_servfail, rcode_nxdomain,
-			rcode_notimp, rcode_refused, rcode_other, updated_at
-		FROM stats`,
-	).Scan(
-		&row.TotalRequests, &row.CacheHits, &row.CacheMisses, &row.PrefetchRequests,
-		&row.ErrorResponses, &row.StaleResponses, &row.FallbackRequests,
-		&row.TotalResponseTimeMs, &row.LastResponseTimeMs,
-		&row.UDPRequests, &row.TCPRequests, &row.DOTRequests, &row.DOQRequests, &row.DOHRequests, &row.DOH3Requests,
-		&row.RewriteRequests, &row.HijackDetections,
-		&row.DNSSECSecure, &row.DNSSECBogus, &row.DNSSECInsecure,
-		&row.RCODENOERROR, &row.RCODEFORMERR, &row.RCODESERVFAIL, &row.RCODENXDOMAIN,
-		&row.RCODENotImp, &row.RCODEREFUSED, &row.RCODEOther, &row.UpdatedAt,
-	)
-	if err == sql.ErrNoRows {
-		return row, false
-	}
-	if err != nil {
-		log.Warnf("CACHE: load stats failed: %v", err)
-		return row, false
-	}
-	return row, true
 }
 
 // ── Eviction ─────────────────────────────────────────────────────────────────

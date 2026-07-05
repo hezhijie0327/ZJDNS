@@ -63,7 +63,6 @@ type FeatureFlags struct {
 	ECS              ECSConfig          `json:"ecs_subnet,omitempty"`
 	Cache            CacheSettings      `json:"cache,omitempty"`
 	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitempty"`
-	Stats            *StatsSettings     `json:"stats,omitempty"`
 }
 
 // DDRSettings configures Discovery of Designated Resolvers (DDR) advertisement.
@@ -80,44 +79,6 @@ type CacheSettings struct {
 	CacheSizeMB int    `json:"cache_size_mb,omitempty"`
 	DBPath      string `json:"db_path,omitempty"`
 	PreferStale bool   `json:"prefer_stale,omitempty"`
-}
-
-// StatsRow mirrors the stats table columns for persistence without JSON.
-type StatsRow struct {
-	TotalRequests       int64
-	CacheHits           int64
-	CacheMisses         int64
-	PrefetchRequests    int64
-	ErrorResponses      int64
-	StaleResponses      int64
-	FallbackRequests    int64
-	TotalResponseTimeMs int64
-	LastResponseTimeMs  int64
-	UDPRequests         int64
-	TCPRequests         int64
-	DOTRequests         int64
-	DOQRequests         int64
-	DOHRequests         int64
-	DOH3Requests        int64
-	RewriteRequests     int64
-	HijackDetections    int64
-	DNSSECSecure        int64
-	DNSSECBogus         int64
-	DNSSECInsecure      int64
-	RCODENOERROR        int64
-	RCODEFORMERR        int64
-	RCODESERVFAIL       int64
-	RCODENXDOMAIN       int64
-	RCODENotImp         int64
-	RCODEREFUSED        int64
-	RCODEOther          int64
-	UpdatedAt           int64
-}
-
-// StatsSettings configures periodic statistics collection and reset intervals.
-type StatsSettings struct {
-	Interval      int `json:"interval,omitempty"`
-	ResetInterval int `json:"reset_interval,omitempty"`
 }
 
 // UpstreamServer defines a single upstream DNS server with address, protocol,
@@ -176,24 +137,6 @@ type LatencyProbeStep struct {
 	Protocol string `json:"protocol"`
 	Port     int    `json:"port,omitempty"`
 	Timeout  int    `json:"timeout,omitempty"`
-}
-
-// StatsInterval returns the stats collection interval in seconds, or 0 if
-// not configured.
-func (s *ServerSettings) StatsInterval() int {
-	if s == nil || s.Features.Stats == nil || s.Features.Stats.Interval <= 0 {
-		return 0
-	}
-	return s.Features.Stats.Interval
-}
-
-// StatsResetInterval returns the stats reset interval in seconds, or 0 if
-// not configured.
-func (s *ServerSettings) StatsResetInterval() int {
-	if s == nil || s.Features.Stats == nil {
-		return 0
-	}
-	return s.Features.Stats.ResetInterval
 }
 
 // IsRecursive reports whether the upstream server is the built-in recursive

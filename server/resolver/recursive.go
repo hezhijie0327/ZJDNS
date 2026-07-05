@@ -306,7 +306,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			for nsName, records := range nsGlue {
 				if len(records) > 0 {
 					qtype := dns.RRToType(records[0])
-					r.cache.Set(nsName, qtype, dns.ClassINET, nil, false, records, nil, nil, false)
+					r.cache.Set(nsName, qtype, dns.ClassINET, nil, false, records, nil, nil, false, cache.SetOptions{})
 				}
 			}
 			// Fire async latency probe to update cache with sorted records.

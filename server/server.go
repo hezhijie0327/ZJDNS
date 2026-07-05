@@ -216,9 +216,6 @@ func (s *Server) Start() error {
 	defer serverCancel(errors.New("server startup completed"))
 
 	s.displayInfo()
-	if s.config.Server.StatsInterval() > 0 {
-		s.logStatsNow("startup")
-	}
 
 	g, ctx := errgroup.WithContext(serverCtx)
 

@@ -179,14 +179,6 @@ func validateCacheAndStats(cfg *ServerConfig) error {
 	if strings.Contains(cfg.Server.Features.Cache.DBPath, "..") {
 		return fmt.Errorf("server.features.cache.db_path must not contain '..'")
 	}
-	if cfg.Server.Features.Stats != nil {
-		if cfg.Server.Features.Stats.Interval < 0 {
-			return fmt.Errorf("server.features.stats.interval must be zero or positive")
-		}
-		if cfg.Server.Features.Stats.ResetInterval < 0 {
-			return fmt.Errorf("server.features.stats.reset_interval must be zero or positive")
-		}
-	}
 	return nil
 }
 

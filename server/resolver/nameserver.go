@@ -12,6 +12,7 @@ import (
 	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 	"golang.org/x/sync/errgroup"
 
+	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
@@ -296,10 +297,10 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			// The async latency probe below reorders them later for
 			// latency-optimized cache hits.
 			if r.cache != nil && len(ansARecords) > 0 {
-				r.cache.Set(nsName, dns.TypeA, dns.ClassINET, nil, false, ansARecords, nil, nil, false)
+				r.cache.Set(nsName, dns.TypeA, dns.ClassINET, nil, false, ansARecords, nil, nil, false, cache.SetOptions{})
 			}
 			if r.cache != nil && len(ansAAAARecords) > 0 {
-				r.cache.Set(nsName, dns.TypeAAAA, dns.ClassINET, nil, false, ansAAAARecords, nil, nil, false)
+				r.cache.Set(nsName, dns.TypeAAAA, dns.ClassINET, nil, false, ansAAAARecords, nil, nil, false, cache.SetOptions{})
 			}
 
 			// Accumulate records for async latency probe.

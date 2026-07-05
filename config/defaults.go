@@ -113,9 +113,6 @@ const (
 	DefaultTokenStoreMaxEntries   = 100 // QUIC LRU token store max total entries
 	DefaultSecureTransportRetries = 2   // DoH/DoH3 recreate-and-retry attempts
 
-	DefaultStatsInterval      = 3600  // Stats collection interval (seconds)
-	DefaultStatsResetInterval = 86400 // Stats reset interval (seconds)
-
 	DefaultNSLatencyTTL = 900 // NS address sort cache TTL (seconds)
 
 	DefaultDNSClass  = "IN"      // Default DNS resource record class

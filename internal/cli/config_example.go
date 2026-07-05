@@ -34,8 +34,6 @@ func GenerateExampleConfig() string {
 		{Protocol: "https", Port: config.DefaultProbePortHTTPS, Timeout: 100},
 		{Protocol: "http3", Port: config.DefaultProbePortHTTPS, Timeout: 100},
 	}
-	cfg.Server.Features.Stats = &config.StatsSettings{Interval: 3600, ResetInterval: 86400}
-
 	cfg.Upstream = []config.UpstreamServer{
 		{Address: "223.5.5.5:53", Protocol: "tcp", Proxy: "socks5://127.0.0.1:1080"},
 		{Address: "223.6.6.6:53", Protocol: "udp"},

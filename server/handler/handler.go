@@ -31,22 +31,6 @@ type Question struct {
 	Qclass uint16
 }
 
-// queryMetrics bundles the per-query state needed for deferred metric
-// recording. Using a struct avoids a 13-variable closure heap escape on every
-// query (saves ~200-300 bytes per query).
-type queryMetrics struct {
-	cacheHit          bool
-	hadError          bool
-	rewrote           bool
-	hijackDetected    bool
-	staleServed       bool
-	prefetchTriggered bool
-	fallbackUsed      bool
-	dnssecStatus      string
-	startTime         time.Time
-	requestProtocol   string
-}
-
 // queryResult holds the result of a resolver query for stale-cache fallback.
 type queryResult struct {
 	answer     []dns.RR
@@ -224,14 +208,18 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	}
 
 	startTime := time.Now()
-	m := &queryMetrics{
-		startTime:       startTime,
-		requestProtocol: requestProtocol,
-	}
 	var responseMsg *dns.Msg
-	defer h.recordQueryMetrics(m, &responseMsg, question)
+	defer func() {
+		if responseMsg != nil && log.Default.Level() >= log.Debug {
+			log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t%s",
+				question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[responseMsg.Rcode],
+				time.Since(startTime).Truncate(time.Microsecond), len(responseMsg.Answer), len(responseMsg.Ns),
+				len(responseMsg.Extra), responseMsg.AuthenticatedData,
+				dnsutil.FormatRecords(responseMsg.Answer, responseMsg.Ns, responseMsg.Extra))
+		}
+	}()
 
-	if resp, done := h.processRewrite(req, &question, clientIP, isSecureConnection, tcpKeepaliveTimeout, m); done {
+	if resp, done := h.processRewrite(req, &question, clientIP, isSecureConnection, tcpKeepaliveTimeout); done {
 		responseMsg = resp
 		return responseMsg
 	}
@@ -275,18 +263,17 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 
 	if entry, found, isExpired := h.cache.Get(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC); found {
 		log.Debugf("CACHE: hit expired=%t for %s, ttl=%d, validated=%t, answer=%d", isExpired, question.Name, entry.RemainingTTL(), entry.Validated, len(entry.Answer))
-		m.cacheHit = true
 		if !isExpired {
-			responseMsg = h.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, &m.prefetchTriggered, &m.dnssecStatus, tcpKeepaliveTimeout)
+			responseMsg = h.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 			return responseMsg
 		}
 
 		if entry.CanServeExpired(config.DefaultStaleMaxAge) {
-			responseMsg = h.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, &m.staleServed, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
+			responseMsg = h.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 			return responseMsg
 		}
 
-		responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, clientIP, isSecureConnection, &m.hadError, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
+		responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, clientIP, isSecureConnection, startTime, requestProtocol, tcpKeepaliveTimeout)
 		return responseMsg
 	}
 
@@ -302,7 +289,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		}
 	}
 
-	responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, clientIP, isSecureConnection, &m.hadError, &m.fallbackUsed, &m.dnssecStatus, tcpKeepaliveTimeout)
+	responseMsg = h.processCacheMiss(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, clientIP, isSecureConnection, startTime, requestProtocol, tcpKeepaliveTimeout)
 	return responseMsg
 }
 
@@ -329,24 +316,6 @@ func (h *Handler) lookupReversePTR(question Question, ecsOpt *edns.ECSOption) []
 	return records
 }
 
-func (h *Handler) recordQueryMetrics(m *queryMetrics, responseMsg **dns.Msg, question Question) {
-	responseTime := time.Since(m.startTime)
-	rcode := dns.RcodeServerFailure
-	if *responseMsg != nil {
-		rcode = int((*responseMsg).Rcode)
-		if log.Default.Level() >= log.Debug {
-			log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t%s",
-				question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[(*responseMsg).Rcode],
-				responseTime.Truncate(time.Microsecond), len((*responseMsg).Answer), len((*responseMsg).Ns),
-				len((*responseMsg).Extra), (*responseMsg).AuthenticatedData,
-				dnsutil.FormatRecords((*responseMsg).Answer, (*responseMsg).Ns, (*responseMsg).Extra))
-		}
-	}
-	h.cache.IncrementStats(responseTime.Milliseconds(), m.cacheHit, m.hadError, m.requestProtocol,
-		m.rewrote, m.hijackDetected, m.staleServed, m.fallbackUsed, m.prefetchTriggered,
-		m.dnssecStatus, rcode)
-}
-
 // validateDNSQuery rejects queries with invalid domain names, label lengths,
 // or unsupported query types (ANY, AXFR, IXFR). Returns nil if the query is valid.
 func (h *Handler) validateDNSQuery(req *dns.Msg, question *Question, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16) *dns.Msg {
@@ -371,7 +340,7 @@ func (h *Handler) validateDNSQuery(req *dns.Msg, question *Question, clientIP ne
 
 // processRewrite evaluates rewrite rules and returns a synthetic response if
 // a rule matches. The caller must return the response immediately when done=true.
-func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16, m *queryMetrics) (*dns.Msg, bool) {
+func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16) (*dns.Msg, bool) {
 	if !h.rewrite.HasRules() {
 		return nil, false
 	}
@@ -381,7 +350,6 @@ func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.
 		return nil, false
 	}
 
-	m.rewrote = true
 	log.Debugf("REWRITE: matched rule for %s -> domain=%s responseCode=%d records=%d additional=%d", question.Name, rewriteResult.Domain, uint16(rewriteResult.ResponseCode), len(rewriteResult.Records), len(rewriteResult.Additional))
 
 	if uint16(rewriteResult.ResponseCode) != dns.RcodeSuccess {

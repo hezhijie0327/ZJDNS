@@ -8,18 +8,21 @@ import (
 	"zjdns/internal/ttl"
 )
 
+// SetOptions carries per-response metadata stored alongside cache entries for
+// analytics via SQL queries against the entries table.
+type SetOptions struct {
+	Rcode        int   // DNS response code (dns.RcodeSuccess, etc.)
+	ResponseTime int64 // Response time in milliseconds
+	Uncacheable  bool  // true for error entries that should not be served from cache
+}
+
 // Store defines the cache storage interface.
 type Store interface {
 	Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool)
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
-		answer, authority, additional []dns.RR, validated bool)
+		answer, authority, additional []dns.RR, validated bool, opts SetOptions)
 	UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int)
-	IncrementStats(durationMs int64, cacheHit, hadError bool, protocol string,
-		rewrote, hijackDetected, staleServed, fallbackUsed, prefetchTriggered bool,
-		dnssecStatus string, rcode int)
 	ReverseLookup(ip string) []LookupResult
-	Stats() config.StatsRow
-	FlushStats()
 	Close() error
 }
 

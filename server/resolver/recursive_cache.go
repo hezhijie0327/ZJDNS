@@ -146,7 +146,7 @@ func (r *Recursive) probeAndCacheAddrs(zone string, addrs []string) {
 
 	// Store as normal A/AAAA records under TypeNone sentinel.
 	rrRecords := addrsToRRs(zone, sortedAddrs, uint32(config.DefaultNSLatencyTTL))
-	r.cache.Set(zone, dns.TypeNone, dns.ClassINET, nil, false, rrRecords, nil, nil, false)
+	r.cache.Set(zone, dns.TypeNone, dns.ClassINET, nil, false, rrRecords, nil, nil, false, cache.SetOptions{})
 
 	// Update latency_ms for probed IPs.
 	for ipStr, lat := range latencies {
@@ -253,7 +253,7 @@ func (r *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 		}
 
 		// Store under TypeNone unified key.
-		r.cache.Set(nsName, dns.TypeNone, dns.ClassINET, nil, false, sortedRecords, nil, nil, false)
+		r.cache.Set(nsName, dns.TypeNone, dns.ClassINET, nil, false, sortedRecords, nil, nil, false, cache.SetOptions{})
 		log.Debugf("RECURSION: async-cached %d latency-sorted NS addresses for %s", len(sortedRecords), nsName)
 
 		// Update latency_ms for probed IPs.
@@ -272,7 +272,7 @@ func (r *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 			typeGroups[qtype] = append(typeGroups[qtype], r)
 		}
 		for qtype, typeRecords := range typeGroups {
-			r.cache.Set(nsName, qtype, dns.ClassINET, nil, false, typeRecords, nil, nil, false)
+			r.cache.Set(nsName, qtype, dns.ClassINET, nil, false, typeRecords, nil, nil, false, cache.SetOptions{})
 		}
 	}
 }
