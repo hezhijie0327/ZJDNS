@@ -19,9 +19,9 @@ import (
 // ── Latency-sorted NS address cache ──────────────────────────────────────────
 //
 // Root servers and per-nameserver addresses are stored as normal cache entries
-// (qname + TypeNone sentinel) with real A/AAAA records in the records table.
-// The records.latency_ms column stores measured probe latency; records are
-// loaded sorted by latency_ms ASC so Get returns the fastest-first order.
+// (qname + TypeNone sentinel). Records are stored in probe-sorted order at
+// Set() time so wire format preserves the latency ordering. Latency values
+// are also stored in the record_latency table for analytics.
 
 // addrToRR converts an "ip:port" string to an A or AAAA DNS record.
 func addrToRR(name, addr string, ttl uint32) dns.RR {
@@ -61,7 +61,9 @@ func addrsToRRs(name string, addrs []string, ttl uint32) []dns.RR {
 }
 
 // readAddrsFromEntry extracts "ip:port" strings from the Answer records
-// of a cache entry. Records are already sorted by latency_ms ASC by loadRecords.
+// of a cache entry. Records are already sorted by latency at Set() time
+// and the ordering is preserved in wire format; sortAnswerByLatency in
+// Get() handles the normal DNS query path.
 func readAddrsFromEntry(entry *cache.Entry) []string {
 	if entry == nil || len(entry.Answer) == 0 {
 		return nil
@@ -95,8 +97,9 @@ func ipFromAddr(addr string) net.IP {
 	return net.ParseIP(strings.Trim(host, "[]"))
 }
 
-// probeAndCacheAddrs probes the given addresses, stores A/AAAA records with
-// latency_ms values, and caches them under the zone name with TypeNone sentinel.
+// probeAndCacheAddrs probes the given addresses, stores latency-sorted A/AAAA
+// records under the zone name with TypeNone sentinel, and persists latency
+// values to record_latency for analytics.
 func (r *Recursive) probeAndCacheAddrs(zone string, addrs []string) {
 	defer dnsutil.HandlePanic("probeAndCacheAddrs")
 	if len(addrs) <= 1 || r.cache == nil {
@@ -195,7 +198,8 @@ func (r *Recursive) refreshNSAddrOrder(nsName string, addrs []string) {
 }
 
 // probeAndCacheNSGlue runs latency probes against all IPs in the nsGlue map
-// and caches latency-sorted A/AAAA records with latency_ms values.
+// and caches latency-sorted A/AAAA records, with latency values stored in
+// record_latency for analytics.
 func (r *Recursive) probeAndCacheNSGlue(nsGlue map[string][]dns.RR) {
 	defer dnsutil.HandlePanic("probeAndCacheNSGlue")
 	if r.cache == nil || len(nsGlue) == 0 {

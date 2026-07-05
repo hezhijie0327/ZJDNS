@@ -178,7 +178,7 @@ zjdns/
 ├── cmd/zjdns/                     ← main.go, banner.go, version.go, bench_test.go (binary)
 ├── config/                        ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── cache/                         ← Store interface, SQLite relational cache (entries + records tables)
+├── cache/                         ← Store interface, SQLite relational cache (entries + ptr_map + record_latency tables)
 ├── cidr/                          ← IP filtering with tag matching
 ├── rewrite/                       ← Query rewrite rules
 ├── internal/

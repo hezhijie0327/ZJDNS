@@ -78,7 +78,7 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 
 - **Summary 快照**：启动/关闭时自动输出聚合统计行，包含缓存条目数、命中率、平均响应时间、六协议分布、rcode 分布、hijack/fallback/prefetch/stale/rewrite 计数
 - **CLI 分析工具**：`zjdns -analyze <db> <query>` 直接查询缓存数据库，对齐表格输出
-- **SQL 数据分析**：`SELECT m.server, AVG(m.response_time_ms) FROM entries e JOIN metadata m ON e.id = m.entry_id WHERE m.rcode = 0 GROUP BY m.server`
+- **SQL 数据分析**：`SELECT server, AVG(response_time_ms) FROM entries WHERE rcode = 0 GROUP BY server`
 - **问题诊断**：`WHERE m.hijack = 1` 查找被劫持的查询，`WHERE m.rcode = 1` 查找 FORMERR，`WHERE m.response_time_ms > 1000` 查找慢查询
 - **组件级日志过滤**：`debug:UPSTREAM,SECURITY` 仅输出指定组件 Debug 日志
 - **pprof**：标准 Go 性能分析端点
@@ -119,7 +119,7 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 
 | 参数 | 占用 | 说明 |
 |------|------|------|
-| `max_entries` | **磁盘** | 条目数上限。1 万条 ≈ 20MB，单条目约 2KB（entry 行 + 若干 records 行） |
+| `max_entries` | **磁盘** | 条目数上限。1 万条 ≈ 15MB，单条目约 1.5KB（entry 行 + 少量 ptr_map 行，msg_wire 已 zstd 压缩） |
 | `mmap_size_mb` | **虚拟内存** | 数据库文件映射到进程地址空间，OS 自动管理物理页换入换出，不实际占用物理 RAM |
 | `cache_size_mb` | **物理内存** | SQLite 内部 page cache，真实占用 RAM。缓存 B-tree 索引热点页 |
 | `db_path` | **磁盘路径** | 数据库文件位置。空串 = 内存模式（不落盘，重启后缓存丢失） |
