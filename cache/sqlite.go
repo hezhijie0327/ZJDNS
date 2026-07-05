@@ -3,6 +3,7 @@ package cache
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"sync/atomic"
 
 	"codeberg.org/miekg/dns"
@@ -244,8 +245,89 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		Validated:  validated != 0,
 	}
 
+	// Sort A/AAAA answer records by latency from record_latency so the
+	// fastest IP is returned first (replaces the old records ORDER BY).
+	s.sortAnswerByLatency(id, entry)
+
 	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
+}
+
+// sortAnswerByLatency reorders A/AAAA records in entry.Answer by probe
+// latency (fastest first), keeping non-A/AAAA records (CNAME, etc.) at the
+// front in their original wire-format order. Idempotent when ≤1 A/AAAA.
+func (s *SQLiteCache) sortAnswerByLatency(entryID int64, entry *Entry) {
+	if len(entry.Answer) <= 1 {
+		return
+	}
+
+	// Fast check: count A/AAAA records.
+	aCount := 0
+	for _, rr := range entry.Answer {
+		switch rr.(type) {
+		case *dns.A, *dns.AAAA:
+			aCount++
+		}
+	}
+	if aCount <= 1 {
+		return
+	}
+
+	// Fetch latency data for this entry.
+	rows, err := s.db.Query(
+		`SELECT rdata_ip, latency_ms FROM record_latency WHERE entry_id = ?`, entryID,
+	)
+	if err != nil {
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	latencies := make(map[string]int)
+	for rows.Next() {
+		var ip string
+		var lat int
+		if err := rows.Scan(&ip, &lat); err == nil {
+			latencies[ip] = lat
+		}
+	}
+	if len(latencies) == 0 {
+		return
+	}
+
+	// Separate A/AAAA from non-A/AAAA (CNAME, etc.).
+	var aRecs []dns.RR
+	var other []dns.RR
+	for _, rr := range entry.Answer {
+		switch rr.(type) {
+		case *dns.A, *dns.AAAA:
+			aRecs = append(aRecs, rr)
+		default:
+			other = append(other, rr)
+		}
+	}
+
+	// Sort A/AAAA: probed first (fastest → slowest), unprobed last.
+	slices.SortStableFunc(aRecs, func(a, b dns.RR) int {
+		aIP, _ := dnsutil.ExtractIPString(a)
+		bIP, _ := dnsutil.ExtractIPString(b)
+		aLat, aOK := latencies[aIP]
+		bLat, bOK := latencies[bIP]
+		switch {
+		case aOK && !bOK:
+			return -1
+		case !aOK && bOK:
+			return 1
+		case aOK && bOK:
+			return aLat - bLat
+		default:
+			return 0
+		}
+	})
+
+	result := make([]dns.RR, 0, len(entry.Answer))
+	result = append(result, other...)
+	result = append(result, aRecs...)
+	entry.Answer = result
 }
 
 // Set stores a DNS response in the cache. Wire format is zstd-compressed.
@@ -499,21 +581,38 @@ func (s *SQLiteCache) evictOldest(n int64) {
 // entry lookup key + IP address.
 func (s *SQLiteCache) UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int) {
 	qname = dnsutil.NormalizeDomain(qname)
-	ecsAddr, ecsPrefix := ecsParams(ecs)
 
-	var entryID int64
-	err := s.db.QueryRow(
-		`SELECT id FROM entries WHERE qname=? AND qtype=? AND qclass=? AND ecs_addr=? AND ecs_prefix=? AND dnssec_ok=?`,
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
-	).Scan(&entryID)
+	// Latency is a property of the IP, not of the ECS subnet. Update all
+	// entries matching (qname, qtype, qclass, dnssec_ok) regardless of ECS
+	// so sortAnswerByLatency can find the data for whichever ECS variant
+	// is served from Get().
+	//
+	// Collect entry IDs first, then INSERT outside the rows loop: in-memory
+	// SQLite databases are per-connection, and db.Exec may use a different
+	// connection than the one holding rows open.
+	rows, err := s.db.Query(
+		`SELECT id FROM entries WHERE qname=? AND qtype=? AND qclass=? AND dnssec_ok=?`,
+		qname, int(qtype), int(qclass), boolToInt(dnssecOK),
+	)
 	if err != nil {
 		return
 	}
 
-	_, _ = s.db.Exec(
-		`INSERT OR REPLACE INTO record_latency (entry_id, rdata_ip, latency_ms) VALUES (?, ?, ?)`,
-		entryID, ip, latencyMS,
-	)
+	var entryIDs []int64
+	for rows.Next() {
+		var entryID int64
+		if err := rows.Scan(&entryID); err == nil {
+			entryIDs = append(entryIDs, entryID)
+		}
+	}
+	_ = rows.Close()
+
+	for _, entryID := range entryIDs {
+		_, _ = s.db.Exec(
+			`INSERT OR REPLACE INTO record_latency (entry_id, rdata_ip, latency_ms) VALUES (?, ?, ?)`,
+			entryID, ip, latencyMS,
+		)
+	}
 }
 
 // ── Wire format compression ──────────────────────────────────────────────────

@@ -886,6 +886,68 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 }
 
+// ── E2E: Latency-ordered Get() ────────────────────────────────────────────────
+
+func TestE2E_LatencyOrdering(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	// Simulate a response with CNAME + 3 A records (like www.baidu.com).
+	cname := &dns.CNAME{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 600}, CNAME: rdata.CNAME{Target: "real.example.com."}}
+	a1 := &dns.A{Hdr: dns.Header{Name: "real.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.10")}}
+	a2 := &dns.A{Hdr: dns.Header{Name: "real.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.20")}}
+	a3 := &dns.A{Hdr: dns.Header{Name: "real.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.30")}}
+	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+		[]dns.RR{cname, a1, a2, a3}, nil, nil, false, SetOptions{})
+
+	// Before latency data: Get() returns original order.
+	entry, found, _ := mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	if len(entry.Answer) != 4 {
+		t.Fatalf("answer count = %d, want 4", len(entry.Answer))
+	}
+	// CNAME must be first.
+	if _, ok := entry.Answer[0].(*dns.CNAME); !ok {
+		t.Error("CNAME should be first in answer")
+	}
+
+	// Store latency: 10.0.0.30 is fastest, 10.0.0.10 is slowest.
+	mc.UpdateLatency("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "10.0.0.10", 100)
+	mc.UpdateLatency("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "10.0.0.20", 50)
+	mc.UpdateLatency("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "10.0.0.30", 5)
+
+	// After latency data: Get() should return A records sorted fastest-first.
+	entry, found, _ = mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	if len(entry.Answer) != 4 {
+		t.Fatalf("answer count = %d, want 4", len(entry.Answer))
+	}
+	// CNAME must still be first.
+	if _, ok := entry.Answer[0].(*dns.CNAME); !ok {
+		t.Error("CNAME should still be first after latency sort")
+	}
+	// A records should be sorted by latency: 30 (5ms), 20 (50ms), 10 (100ms).
+	ips := make([]string, 0, 3)
+	for _, rr := range entry.Answer[1:] {
+		a, ok := rr.(*dns.A)
+		if !ok {
+			t.Errorf("expected A record, got %T", rr)
+			continue
+		}
+		ips = append(ips, a.A.String())
+	}
+	if len(ips) != 3 {
+		t.Fatalf("got %d A records, want 3", len(ips))
+	}
+	if ips[0] != "10.0.0.30" || ips[1] != "10.0.0.20" || ips[2] != "10.0.0.10" {
+		t.Errorf("wrong latency order: %v, want [10.0.0.30 10.0.0.20 10.0.0.10]", ips)
+	}
+}
+
 // ── E2E: Compression efficacy ────────────────────────────────────────────────
 
 func TestE2E_CompressionEfficacy(t *testing.T) {
