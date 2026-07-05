@@ -11,9 +11,12 @@ import (
 // SetOptions carries per-response metadata stored alongside cache entries for
 // analytics via SQL queries against the entries table.
 type SetOptions struct {
-	Rcode        int   // DNS response code (dns.RcodeSuccess, etc.)
-	ResponseTime int64 // Response time in milliseconds
-	Uncacheable  bool  // true for error entries that should not be served from cache
+	Rcode        int    // DNS response code (dns.RcodeSuccess, etc.)
+	ResponseTime int64  // Response time in milliseconds
+	Server       string // upstream server that resolved this query (e.g. "8.8.8.8:53 (UDP)")
+	Fallback     bool   // true if resolved via fallback upstream
+	Prefetch     bool   // true if this was a background prefetch refresh
+	Uncacheable  bool   // true for error entries that should not be served from cache
 }
 
 // Store defines the cache storage interface.
@@ -21,6 +24,7 @@ type Store interface {
 	Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool)
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 		answer, authority, additional []dns.RR, validated bool, opts SetOptions)
+	RecordHit(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, protocol string)
 	UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int)
 	ReverseLookup(ip string) []LookupResult
 	Close() error

@@ -95,9 +95,6 @@ func (s *SQLiteCache) migrate() error {
 		log.Warnf("CACHE: pragma failed (non-fatal): %v", err)
 	}
 
-	// Drop legacy stats table if it exists (no longer needed).
-	_, _ = s.db.Exec("DROP TABLE IF EXISTS stats")
-
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS entries (
 			id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,9 +110,18 @@ func (s *SQLiteCache) migrate() error {
 			validated        INTEGER NOT NULL DEFAULT 0,
 			rcode            INTEGER NOT NULL DEFAULT 0,
 			response_time_ms INTEGER NOT NULL DEFAULT 0,
+			server           TEXT NOT NULL DEFAULT '',
+			fallback         INTEGER NOT NULL DEFAULT 0,
+			prefetch         INTEGER NOT NULL DEFAULT 0,
 			cacheable        INTEGER NOT NULL DEFAULT 1,
 			hit_count        INTEGER NOT NULL DEFAULT 0,
 			last_hit_time    INTEGER NOT NULL DEFAULT 0,
+			hit_udp          INTEGER NOT NULL DEFAULT 0,
+			hit_tcp          INTEGER NOT NULL DEFAULT 0,
+			hit_dot          INTEGER NOT NULL DEFAULT 0,
+			hit_doq          INTEGER NOT NULL DEFAULT 0,
+			hit_doh          INTEGER NOT NULL DEFAULT 0,
+			hit_doh3         INTEGER NOT NULL DEFAULT 0,
 			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 		);
 
@@ -216,11 +222,11 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	if _, err := tx.Exec(
 		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
 			timestamp, ttl, expires_at, validated,
-			rcode, response_time_ms, cacheable)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			rcode, response_time_ms, server, fallback, prefetch, cacheable)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
 		now, entryTTL, now+int64(entryTTL), boolToInt(validated),
-		opts.Rcode, opts.ResponseTime, boolToInt(!opts.Uncacheable),
+		opts.Rcode, opts.ResponseTime, opts.Server, boolToInt(opts.Fallback), boolToInt(opts.Prefetch), boolToInt(!opts.Uncacheable),
 	); err != nil {
 		log.Warnf("CACHE: insert entry failed: %v", err)
 		return
@@ -249,6 +255,50 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	s.entryCount.Add(1)
 	s.evictIfNeeded()
+}
+
+// RecordHit increments the protocol-specific hit counter on an existing cache
+// entry. Used for analytics so per-protocol request counts are queryable.
+func (s *SQLiteCache) RecordHit(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, protocol string) {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return
+	}
+
+	qname = dnsutil.NormalizeDomain(qname)
+	ecsAddr, ecsPrefix := ecsParams(ecs)
+
+	col := hitColumn(protocol)
+	if col == "" {
+		return
+	}
+
+	_, _ = s.db.Exec(
+		`UPDATE entries SET `+col+` = `+col+` + 1 WHERE qname = ? AND qtype = ? AND qclass = ?
+		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
+	)
+}
+
+func hitColumn(protocol string) string {
+	switch {
+	case len(protocol) >= 3 && (protocol[0] == 'u' || protocol[0] == 'U'):
+		return "hit_udp"
+	case len(protocol) >= 3 && (protocol[0] == 't' || protocol[0] == 'T'):
+		return "hit_tcp"
+	case len(protocol) >= 3 && (protocol[1] == 'o' || protocol[1] == 'O'):
+		switch protocol[2] {
+		case 't', 'T':
+			return "hit_dot"
+		case 'q', 'Q':
+			return "hit_doq"
+		case 'h', 'H':
+			if len(protocol) >= 4 && protocol[3] == '3' {
+				return "hit_doh3"
+			}
+			return "hit_doh"
+		}
+	}
+	return ""
 }
 
 // ReverseLookup returns all cached domain names mapped to the given IP address.

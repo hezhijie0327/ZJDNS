@@ -38,6 +38,7 @@ type queryResult struct {
 	additional []dns.RR
 	validated  bool
 	ecs        *edns.ECSOption
+	server     string
 	fallback   bool
 	err        error
 }
@@ -265,11 +266,13 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		log.Debugf("CACHE: hit expired=%t for %s, ttl=%d, validated=%t, answer=%d", isExpired, question.Name, entry.RemainingTTL(), entry.Validated, len(entry.Answer))
 		if !isExpired {
 			responseMsg = h.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
+			h.cache.RecordHit(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, requestProtocol)
 			return responseMsg
 		}
 
 		if entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			responseMsg = h.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
+			h.cache.RecordHit(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, requestProtocol)
 			return responseMsg
 		}
 
