@@ -12,11 +12,7 @@ import (
 // RunAnalyze opens a SQLite cache database and runs a SQL query, printing
 // results as an aligned columnar table (like sqlite3 -column -header).
 func RunAnalyze(dbPath, query string) {
-	dsn := "file:" + dbPath + "?_journal_mode=WAL&_busy_timeout=5000"
-	if dbPath == ":memory:" {
-		dsn = "file::memory:?cache=shared&_journal_mode=WAL&_busy_timeout=5000"
-	}
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open database: %v\n", err)
 		os.Exit(1)

@@ -41,10 +41,10 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 		cacheSizeMB = config.DefaultCacheCacheSizeMB
 	}
 
-	params := "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=ON"
+	params := "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=ON&_txlock=immediate"
 	var dsn string
 	if path == "" {
-		dsn = "file::memory:?cache=shared&" + params
+		dsn = "file::memory:?" + params
 	} else {
 		dsn = "file:" + path + "?" + params
 	}
