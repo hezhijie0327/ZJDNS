@@ -34,15 +34,18 @@ func addrToRR(name, addr string, ttl uint32) dns.RR {
 	if ip == nil {
 		return nil
 	}
+	// Check IPv4 first with To4() because net.ParseIP returns a 16-byte
+	// representation for all addresses; netip.AddrFromSlice would see an
+	// IPv4-mapped-IPv6 and treat it as IPv6, making all A records AAAA.
+	if ip4 := ip.To4(); ip4 != nil {
+		rr := new(dns.A)
+		rr.Hdr = dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl}
+		rr.Addr = netip.AddrFrom4([4]byte(ip4))
+		return rr
+	}
 	addrObj, ok := netip.AddrFromSlice(ip)
 	if !ok {
 		return nil
-	}
-	if addrObj.Is4() {
-		rr := new(dns.A)
-		rr.Hdr = dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl}
-		rr.Addr = addrObj
-		return rr
 	}
 	rr := new(dns.AAAA)
 	rr.Hdr = dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl}
