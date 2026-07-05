@@ -134,32 +134,94 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 "cache": { "max_entries": 50000, "mmap_size_mb": 128, "cache_size_mb": 16 }
 ```
 
-## 数据库查询示例
+## 数据库查询
+
+可直接用 `sqlite3` 打开数据库，也可用 `zjdns -analyze` 省去安装 SQLite 客户端：
 
 ```bash
-sqlite3 /var/lib/zjdns/cache.db
+# 方式一：sqlite3
+sqlite3 /var/lib/zjdns/cache.db "SELECT ..."
+
+# 方式二：内置 analyze（对齐表格输出）
+./zjdns -analyze /var/lib/zjdns/cache.db "SELECT ..."
 ```
 
+### 常用查询
+
 ```sql
--- 缓存命中率
-SELECT cache_hits * 100.0 / NULLIF(total_requests, 0) AS hit_rate FROM stats;
+-- 总条目数
+SELECT COUNT(*) FROM entries;
 
--- 协议分布
-SELECT udp_requests, tcp_requests, dot_requests, doq_requests FROM stats;
+-- 缓存命中率（总命中 / 条目数）
+SELECT SUM(m.hit_udp + m.hit_tcp + m.hit_dot + m.hit_doq + m.hit_doh + m.hit_doh3) AS total_hits,
+       COUNT(*) AS total_entries
+FROM entries e JOIN metadata m ON e.id = m.entry_id;
 
--- DNSSEC 验证概览
-SELECT dnssec_secure, dnssec_bogus, dnssec_insecure FROM stats;
+-- 各协议命中分布
+SELECT SUM(m.hit_udp) AS udp, SUM(m.hit_tcp) AS tcp, SUM(m.hit_dot) AS dot,
+       SUM(m.hit_doq) AS doq, SUM(m.hit_doh) AS doh, SUM(m.hit_doh3) AS doh3
+FROM entries e JOIN metadata m ON e.id = m.entry_id;
 
--- 延迟最低的根服务器
-SELECT rr_text, latency_ms FROM records r
+-- 各上游服务器的请求量与平均响应时间
+SELECT m.server, COUNT(*) AS requests,
+       ROUND(AVG(m.response_time_ms), 1) AS avg_ms
+FROM entries e JOIN metadata m ON e.id = m.entry_id
+GROUP BY m.server ORDER BY requests DESC;
+
+-- rcode 分布
+SELECT m.rcode, COUNT(*) AS cnt
+FROM entries e JOIN metadata m ON e.id = m.entry_id
+GROUP BY m.rcode ORDER BY cnt DESC;
+
+-- DNSSEC 状态分布
+SELECT m.dnssec, COUNT(*) AS cnt
+FROM entries e JOIN metadata m ON e.id = m.entry_id
+GROUP BY m.dnssec ORDER BY cnt DESC;
+
+-- 被劫持的查询
+SELECT e.qname, e.qtype, m.server, m.response_time_ms
+FROM entries e JOIN metadata m ON e.id = m.entry_id
+WHERE m.hijack = 1 ORDER BY m.response_time_ms DESC;
+
+-- 慢查询（>1s），按响应时间降序
+SELECT e.qname, e.qtype, m.server, m.rcode, m.response_time_ms
+FROM entries e JOIN metadata m ON e.id = m.entry_id
+WHERE m.response_time_ms > 1000
+ORDER BY m.response_time_ms DESC;
+
+-- 通过 fallback 上游解析的查询
+SELECT e.qname, e.qtype, m.server
+FROM entries e JOIN metadata m ON e.id = m.entry_id
+WHERE m.fallback = 1;
+
+-- 延迟最低的根服务器（NS 地址探测结果）
+SELECT r.rr_text, r.latency_ms FROM records r
 JOIN entries e ON r.entry_id = e.id
 WHERE e.qname = '.' AND e.qtype = 0
 ORDER BY r.latency_ms ASC;
 
--- 某 IP 对应的所有域名（PTR）
+-- 某 IP 对应的所有域名（PTR 反查）
 SELECT DISTINCT r.name FROM records r
 JOIN entries e ON r.entry_id = e.id
 WHERE r.rdata_ip = '104.20.23.154' AND e.expires_at + 2592000 >= unixepoch();
+
+-- Top 10 命中最多的域名
+SELECT e.qname, e.qtype,
+       SUM(m.hit_udp + m.hit_tcp + m.hit_dot + m.hit_doq + m.hit_doh + m.hit_doh3) AS hits
+FROM entries e JOIN metadata m ON e.id = m.entry_id
+GROUP BY e.qname, e.qtype
+ORDER BY hits DESC LIMIT 10;
+
+-- 最近 1 小时内解析的查询
+SELECT e.qname, e.qtype, m.server, m.rcode, m.response_time_ms
+FROM entries e JOIN metadata m ON e.id = m.entry_id
+WHERE e.timestamp > unixepoch() - 3600
+ORDER BY e.timestamp DESC;
+
+-- 缓存条目数变化趋势（按小时聚合）
+SELECT DATETIME(e.timestamp, 'unixepoch', 'localtime') AS hour, COUNT(*)
+FROM entries
+GROUP BY hour ORDER BY hour DESC LIMIT 24;
 ```
 
 ## 支持的标准
