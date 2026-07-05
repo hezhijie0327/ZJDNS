@@ -282,7 +282,7 @@ func (p *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFun
 	var leastLoaded *Conn
 	leastCount := math.MaxInt
 	conns := p.conns[key]
-	liveConns := conns[:0]
+	liveConns := make([]*Conn, 0, len(conns))
 	for i, c := range conns {
 		if c.IsDead() {
 			continue

@@ -69,6 +69,8 @@ type Client struct {
 	proxyDialers map[string]*SOCKS5Dialer
 	proxyMu      sync.Mutex
 
+	warmWg sync.WaitGroup // tracks in-flight WarmUpConnections goroutines
+
 	// KTLS offload settings — defaults to false (off). Set via SetKTLS() from
 	// the server config before use.
 	ktlsTX bool
@@ -332,7 +334,9 @@ func (c *Client) WarmUpConnections(servers []config.UpstreamServer) {
 		}
 		// Capture loop variable for the goroutine.
 		s := server
+		c.warmWg.Add(1)
 		go func() {
+			defer c.warmWg.Done()
 			defer dnsutil.HandlePanic("connection pre-warm")
 			warmCtx, cancel := context.WithTimeout(context.Background(), c.timeout)
 			defer cancel()
@@ -427,6 +431,10 @@ func (c *Client) Close() {
 	if c == nil {
 		return
 	}
+
+	// Wait for in-flight pre-warm goroutines to finish before closing
+	// their pooled connections and transports.
+	c.warmWg.Wait()
 
 	// Close DoH transports (HTTP/2 connections)
 	c.dohTransportMu.Lock()

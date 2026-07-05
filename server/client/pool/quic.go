@@ -70,7 +70,7 @@ func (p *QUICPool) Acquire(ctx context.Context, key string, dialFunc func(contex
 	p.mu.Lock()
 
 	conns := p.conns[key]
-	live := conns[:0]
+	live := make([]*QUICConn, 0, len(conns))
 	for _, pc := range conns {
 		if pc.isDead() {
 			continue

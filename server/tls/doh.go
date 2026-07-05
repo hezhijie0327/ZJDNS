@@ -82,14 +82,15 @@ func (s *Server) startDOHServer(port string) error {
 
 				log.Debugf("TLS: DoH TCP accepted from %s, TLS handshake pending", conn.RemoteAddr())
 
-				go func(c net.Conn) {
+				s.serverGroup.Go(func() error {
 					defer dnsutil.HandlePanic("DoH connection handler")
-					log.Debugf("TLS: DoH starting HTTP/2 ServeConn for %s", c.RemoteAddr())
-					s.dohServer.ServeConn(c, &http2.ServeConnOpts{
+					log.Debugf("TLS: DoH starting HTTP/2 ServeConn for %s", conn.RemoteAddr())
+					s.dohServer.ServeConn(conn, &http2.ServeConnOpts{
 						Handler:    s,
 						BaseConfig: baseCfg,
 					})
-				}(conn)
+					return nil
+				})
 			}
 		})
 
