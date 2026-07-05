@@ -51,7 +51,8 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(config.DefaultCacheMaxOpenConns)
+	db.SetMaxIdleConns(config.DefaultCacheMaxIdleConns)
 
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
