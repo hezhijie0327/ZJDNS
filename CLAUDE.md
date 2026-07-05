@@ -52,7 +52,7 @@ golangci-lint run && golangci-lint fmt
 docker build -t zjdns .
 
 # Analyze cache database (aligned columnar output like sqlite3)
-./zjdns -analyze cache.db "SELECT e.qname, m.rcode, m.hit_udp FROM entries e JOIN metadata m ON e.id = m.entry_id"
+./zjdns -analyze cache.db "SELECT e.qname, e.rcode, e.hit_udp FROM entries e"
 
 # Install pre-commit hook (auto fmt + lint on commit)
 sh scripts/install-hook.sh                 # Linux / macOS
@@ -317,7 +317,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## Notable Design Decisions
 
-- **Cache (SQLite relational store)**: All DNS responses, NS latency data, DNSKEYs, and PTR mappings share three SQLite tables — no in-memory Go map, no gob encoding. WAL mode + mmap for hot-data-in-memory performance. `msg_wire` BLOB stores packed `dns.Msg` wire format for ~1ms cache hits (30x faster than text parsing). TTL floor 10s. Negative response TTL capped per RFC 9077. `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based) with `_txlock=immediate` and 4-connection pool. See [DB Schema](#db-schema) below.
+- **Cache (SQLite relational store)**: All DNS responses, NS latency data, DNSKEYs, and PTR mappings share three SQLite tables — no in-memory Go map, no gob encoding. WAL mode + mmap for hot-data-in-memory performance. `msg_wire` BLOB stores zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in a single step (~0.5ms cache hits). TTL floor 10s. Negative response TTL capped per RFC 9077. `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based) with `_txlock=immediate` and 4-connection pool. See [DB Schema](#db-schema) below.
 - **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and rewrite (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
 - **EDNS buffer sizing**: Dual-size strategy — standard upstream queries use 1232 bytes (DNS Flag Day 2020) while recursive (root/TLD) queries use 4096 bytes (`RecursiveUDPBufferSize`) to avoid UDP truncation on DNSSEC-signed root zone referrals (~1400 bytes). Applied in `queryNameserversConcurrent` after `buildMsg` and in `probeTLDForHijack`.
 - **Per-interface binding** (`internal/dnsutil/bind.go`): All listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, pprof) bind per-interface IP instead of wildcard. `TryBind` pre-checks each address; unavailable ones are skipped with a WARN log. When another process occupies a port on a specific interface (e.g. warp-svc on 100.96.0.21:53), ZJDNS binds to remaining free IPs without conflict.
@@ -332,7 +332,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
 - **Rewite TTL**: Rewrite rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently (`origTTL - (elapsed % origTTL)`) rather than staying static. Rewrite responses bypass cache (client-IP filtering), but TTL now decrements correctly.
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns).
-- **Per-entry metadata**: Resolution metadata (rcode, response_time_ms, server, fallback, prefetch) and per-protocol hit counters are stored in a separate `metadata` table (1:1 with entries via `entry_id` PK, ON DELETE CASCADE). Error responses written with `cacheable=0` on entries. `RecordHit(protocol)` increments the matching `hit_udp`/`hit_tcp`/`hit_dot`/`hit_doq`/`hit_doh`/`hit_doh3` counter.
+- **Merged entries+metadata**: Resolution metadata and hit counters live directly in the `entries` table — the old 1:1 `metadata` table was eliminated. `RecordServe()` updates counters via a single `UPDATE entries SET hit_udp = hit_udp + 1 WHERE ...` with no subquery. Error responses written with `cacheable=0`.
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
 - **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
 - **eTLS alias**: Always use `eTLS` (not `cryptotls`) for `gitlab.com/go-extension/tls`. Used in `server/tls`, `server/client`, `config`.
@@ -340,10 +340,10 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## DB Schema
 
-The cache uses three SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap):
+The cache uses three SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
--- One row per cached DNS query (including errors like SERVFAIL/FORMERR).
+-- Single table: entries + metadata merged, wire format for RR storage.
 -- Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
 CREATE TABLE entries (
     -- Lookup key (UNIQUE)
@@ -360,70 +360,68 @@ CREATE TABLE entries (
     -- Flags
     validated  INTEGER NOT NULL DEFAULT 0,
     cacheable  INTEGER NOT NULL DEFAULT 1,  -- 0 = error entry, never returned by Get()
-    -- Wire format (packed dns.Msg for fast Get)
-    msg_wire   BLOB,                        -- Pack() at Set time, Unpack() at Get time
+    -- Resolution metadata (written once by Set)
+    rcode            INTEGER NOT NULL DEFAULT 0,
+    response_time_ms INTEGER NOT NULL DEFAULT 0,
+    server           TEXT NOT NULL DEFAULT '',
+    dnssec           TEXT NOT NULL DEFAULT '',
+    fallback         INTEGER NOT NULL DEFAULT 0,
+    prefetch         INTEGER NOT NULL DEFAULT 0,
+    hijack           INTEGER NOT NULL DEFAULT 0,
+    -- Serving counters (updated by RecordServe / RecordRewrite)
+    last_hit_time INTEGER NOT NULL DEFAULT 0,
+    hit_udp       INTEGER NOT NULL DEFAULT 0,
+    hit_tcp       INTEGER NOT NULL DEFAULT 0,
+    hit_dot       INTEGER NOT NULL DEFAULT 0,
+    hit_doq       INTEGER NOT NULL DEFAULT 0,
+    hit_doh       INTEGER NOT NULL DEFAULT 0,
+    hit_doh3      INTEGER NOT NULL DEFAULT 0,
+    stale_count   INTEGER NOT NULL DEFAULT 0,
+    rewrite_count INTEGER NOT NULL DEFAULT 0,
+    -- zstd-compressed wire format (Answer+Authority+Additional)
+    msg_wire   BLOB,
     -- PK + constraint
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 );
 
--- One row per DNS RR within an entry. DELETE CASCADE when entry is evicted/expired.
-CREATE TABLE records (
-    -- Reference
-    entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-    -- Record identity
-    section    TEXT NOT NULL,       -- 'answer', 'authority', 'additional'
-    seq        INTEGER NOT NULL DEFAULT 0,
-    name       TEXT NOT NULL,
-    rtype      INTEGER NOT NULL,
-    ttl        INTEGER NOT NULL,    -- original RR TTL
-    -- Data
-    rr_text    TEXT NOT NULL,       -- full presentation format (dns.New(rr_text) reconstructs RR)
-    rdata_ip   TEXT,                -- A/AAAA IP for PTR reverse lookup
-    -- Probe latency
-    latency_ms INTEGER,             -- NULL = not probed; non-NULL = measured latency
-    -- PK
-    id         INTEGER PRIMARY KEY AUTOINCREMENT
-);
+-- Lightweight PTR reverse-lookup table (IP → domain name). WITHOUT ROWID for
+-- faster IP lookups without a separate index B-tree.
+CREATE TABLE ptr_map (
+    rdata_ip TEXT NOT NULL,
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    name     TEXT NOT NULL,
+    ttl      INTEGER NOT NULL,
+    PRIMARY KEY (rdata_ip, entry_id, name)
+) WITHOUT ROWID;
 
--- Per-entry resolution metadata and per-protocol serving counters.
--- 1:1 with entries via entry_id PK. DELETE CASCADE on entry eviction.
-CREATE TABLE metadata (
-    entry_id         INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
-    -- Resolution metadata (written once by Set)
-    rcode            INTEGER NOT NULL DEFAULT 0,   -- response code (NOERROR=0, FORMERR=1, …)
-    response_time_ms INTEGER NOT NULL DEFAULT 0,   -- resolution time in milliseconds
-    server           TEXT NOT NULL DEFAULT '',     -- upstream server ("8.8.8.8:53 (UDP)" / "builtin_recursive")
-    dnssec           TEXT NOT NULL DEFAULT "",     -- "secure", "insecure", "bogus", or ""
-    fallback         INTEGER NOT NULL DEFAULT 0,   -- resolved via fallback upstream
-    prefetch         INTEGER NOT NULL DEFAULT 0,   -- background prefetch refresh
-    hijack           INTEGER NOT NULL DEFAULT 0,   -- hijack detected during resolution
-    -- Serving counters (updated by RecordServe / RecordRewrite)
-    last_hit_time    INTEGER NOT NULL DEFAULT 0,   -- last cache-hit timestamp
-    hit_udp          INTEGER NOT NULL DEFAULT 0,   -- UDP hits
-    hit_tcp          INTEGER NOT NULL DEFAULT 0,   -- TCP hits
-    hit_dot          INTEGER NOT NULL DEFAULT 0,   -- DoT hits
-    hit_doq          INTEGER NOT NULL DEFAULT 0,   -- DoQ hits
-    hit_doh          INTEGER NOT NULL DEFAULT 0,   -- DoH hits
-    hit_doh3         INTEGER NOT NULL DEFAULT 0,   -- DoH3 hits
-    stale_count      INTEGER NOT NULL DEFAULT 0,   -- stale-serve count
-    rewrite_count    INTEGER NOT NULL DEFAULT 0    -- rewrite count
-);
+-- Per-record latency measurements from probe engine. WITHOUT ROWID so
+-- (entry_id, rdata_ip) lookups go directly to the PK B-tree.
+CREATE TABLE record_latency (
+    entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    rdata_ip   TEXT NOT NULL,
+    latency_ms INTEGER NOT NULL,
+    PRIMARY KEY (entry_id, rdata_ip)
+) WITHOUT ROWID;
+
+-- Partial index: only covers cacheable entries for eviction queries.
+CREATE INDEX idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
+CREATE INDEX idx_ptr_ip ON ptr_map(rdata_ip);
 ```
 
 **Key patterns**:
-- **DNS response cache**: `qtype` = original query type, records in original order. `Get()` filters `cacheable = 1` entries only.
-- **Error entries**: FORMERR/SERVFAIL/etc. stored with `cacheable = 0` and no records — never returned by `Get()`, queryable via SQL for diagnostics.
-- **Wire format cache**: `Set()` packs Answer+Authority+Additional via `dns.Msg.Pack()` → `msg_wire` BLOB. `Get()` unpacks via `Msg.Unpack()` — single binary decode replaces N× `dns.New(rr_text)`, cache hit ~1ms.
-- **Cache-hit tracking**: `RecordServe(protocol, stale)` does one SQL UPDATE for `last_hit_time` + protocol counter + optional stale count. Total hits = `SUM(hit_udp + hit_tcp + …)`.
-- **Stale/rewrite tracking**: `RecordServe(_, true)` increments `stale_count`; `RecordRewrite()` increments `rewrite_count`.
-- **NS latency cache**: `qtype` = `dns.TypeNone` (0), A/AAAA records with `latency_ms` populated by probe engine. `loadRecords` puts non-A/AAAA records first, then sorts probed A/AAAA fastest-first.
+- **DNS response cache**: `qtype` = original query type, records in original wire order. `Get()` filters `cacheable = 1` entries only.
+- **Error entries**: FORMERR/SERVFAIL/etc. stored with `cacheable = 0` and `msg_wire = NULL` — never returned by `Get()`, queryable via SQL for diagnostics.
+- **Wire format cache**: `Set()` packs Answer+Authority+Additional via `dns.Msg.Pack()`, compresses with zstd (SpeedDefault), stores in `msg_wire` BLOB. `Get()` decompresses + `Msg.Unpack()` — single binary decode replaces N× text parsing, cache hit ~0.5ms.
+- **Cache-hit tracking**: `RecordServe(protocol, stale)` does one `UPDATE entries SET hit_udp = hit_udp + 1 WHERE ...` (no subquery). Total hits = `SUM(hit_udp + hit_tcp + …)`.
+- **Stale/rewrite tracking**: `RecordServe(_, true)` increments `stale_count`; `RecordRewrite()` uses `INSERT OR IGNORE` (preserves existing counters) + `UPDATE`.
+- **NS latency cache**: `qtype` = `dns.TypeNone` (0), records stored in probe-sorted order at `Set()` time. Wire format preserves the latency ordering so `Get()` returns fastest-first.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
-- **PTR reverse lookup**: `SELECT DISTINCT name FROM records r JOIN entries e ON r.entry_id = e.id WHERE r.rdata_ip = ? AND e.timestamp + e.ttl > unixepoch()`
-- **Eviction: on Set when count > maxEntries. Prefers entries past serve-stale age (expires_at + staleMaxAge < now), then oldest by timestamp. No periodic cleanup — stale data is valuable for serve-stale.
-- **Probe updates**: `UPDATE records SET latency_ms = ? WHERE entry_id = ? AND rdata_ip = ?` — no entry overwrite needed
-- **Summary stats**: `Store.Summary()` returns a one-line snapshot: entries, hits, avg response time, per-protocol hits, rcode distribution, hijack/fallback/prefetch/stale/rewrite counts. Logged at startup and shutdown.
-- **Analytics**: query via JOIN — e.g. `SELECT m.server, SUM(m.hit_dot) FROM entries e JOIN metadata m ON e.id = m.entry_id GROUP BY m.server` for DoT requests per upstream.
+- **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
+- **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map` + `record_latency`. No periodic cleanup — stale data is valuable for serve-stale.
+- **Probe latency**: `INSERT OR REPLACE INTO record_latency (entry_id, rdata_ip, latency_ms) VALUES (?, ?, ?)` — no entry overwrite needed. Latency ordering is baked into wire format at `Set()` time; `record_latency` enables SQL analytics.
+- **Summary stats**: `Store.Summary()` queries the entries table directly (no JOINs). Returns entries, hits, avg response time, per-protocol hits, rcode distribution, hijack/fallback/prefetch/stale/rewrite counts. Logged at startup and shutdown.
+- **Analytics**: single-table queries — e.g. `SELECT server, SUM(hit_dot) FROM entries GROUP BY server` for DoT requests per upstream. No JOIN needed.
 
 ## CI/CD
 

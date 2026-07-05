@@ -38,21 +38,21 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 
 | 表 | 说明 |
 |----|------|
-| `entries` | 缓存条目（查-命-标 11 列，UNIQUE 约束） |
-| `records` | DNS 记录行（引-标-数-探，DELETE CASCADE） |
-| `metadata` | 解析元数据 + 协议命中计数 + 事件计数（1:1，DELETE CASCADE） |
+| `entries` | 缓存条目（查-生-标-元-数 26 列，UNIQUE 约束） |
+| `ptr_map` | PTR 反向映射（IP→域名，WITHOUT ROWID，DELETE CASCADE） |
+| `record_latency` | 探测延迟（entry+IP 粒度，WITHOUT ROWID，DELETE CASCADE） |
 
 - **无内存缓存层**：SQLite B-tree + mmap 直接作为存储引擎，热页由 OS page cache 零拷贝服务
-- **Wire format 加速**：`msg_wire` BLOB 存储打包的 DNS 消息，`Msg.Unpack()` 一次还原，缓存命中 ~1ms
-- **延迟驱动排序**：`records.latency_ms` 列存储探测延迟，`ORDER BY latency_ms ASC` 自然最快优先
-- **PTR 反查**：`SELECT ... FROM records WHERE rdata_ip = ? JOIN entries`，无需单独反向索引
-- **DNSKEY 缓存**：与普通 DNS 缓存共享同一套 `entries + records` 表
-- **NS 地址缓存**：A/AAAA 记录 + latency_ms，根服务器和每 NS 地址统一存储
-- **全维度分析**：metadata 记录 rcode、响应时间、来源服务器、DNSSEC 状态、hijack/fallback/prefetch 标记、六协议命中、stale/rewrite 计数
-- **SQL 数据分析**：`SELECT m.server, SUM(m.hit_doh) FROM entries e JOIN metadata m ON e.id = m.entry_id GROUP BY m.server`
+- **Wire format 加速**：`msg_wire` BLOB 存储 zstd 压缩的 DNS 消息，`Msg.Unpack()` 一次还原，缓存命中 ~0.5ms
+- **延迟驱动排序**：探测结果在 `Set()` 时已排序写入 wire format，`Get()` 解包自然最快优先；`record_latency` 表供 SQL 分析
+- **PTR 反查**：`SELECT ... FROM ptr_map WHERE rdata_ip = ? JOIN entries`，轻量 WITHOUT ROWID 表
+- **DNSKEY 缓存**：与普通 DNS 缓存共享同一套 `entries` 表
+- **NS 地址缓存**：A/AAAA 记录统一存储，根服务器和每 NS 地址共享 TypeNone 模式
+- **全维度分析**：entries 表内置 rcode、响应时间、来源服务器、DNSSEC 状态、hijack/fallback/prefetch 标记、六协议命中、stale/rewrite 计数
+- **SQL 数据分析**：单表查询 `SELECT server, SUM(hit_doh) FROM entries GROUP BY server`，无需 JOIN
 - **Summary 快照**：启动/关闭时输出一行聚合统计（条目数、命中率、平均响应时间、协议分布、rcode 分布等）
-- **持久化**：`db_path` 指定数据库文件路径，跨重启保留全量缓存和 metadata
-- **驱逐策略**：TTL 惰性过期 + 条数上限最旧淘汰 + 5 分钟定期清理
+- **持久化**：`db_path` 指定数据库文件路径，跨重启保留全量缓存
+- **驱逐策略**：TTL 惰性过期 + 条数上限最旧淘汰（优先淘汰 staleMaxAge 以外的条目）
 
 ### DNS 解析
 
@@ -153,70 +153,70 @@ sqlite3 /var/lib/zjdns/cache.db "SELECT ..."
 SELECT COUNT(*) FROM entries;
 
 -- 缓存命中率（总命中 / 条目数）
-SELECT SUM(m.hit_udp + m.hit_tcp + m.hit_dot + m.hit_doq + m.hit_doh + m.hit_doh3) AS total_hits,
+SELECT SUM(hit_udp + hit_tcp + hit_dot + hit_doq + hit_doh + hit_doh3) AS total_hits,
        COUNT(*) AS total_entries
-FROM entries e JOIN metadata m ON e.id = m.entry_id;
+FROM entries;
 
 -- 各协议命中分布
-SELECT SUM(m.hit_udp) AS udp, SUM(m.hit_tcp) AS tcp, SUM(m.hit_dot) AS dot,
-       SUM(m.hit_doq) AS doq, SUM(m.hit_doh) AS doh, SUM(m.hit_doh3) AS doh3
-FROM entries e JOIN metadata m ON e.id = m.entry_id;
+SELECT SUM(hit_udp) AS udp, SUM(hit_tcp) AS tcp, SUM(hit_dot) AS dot,
+       SUM(hit_doq) AS doq, SUM(hit_doh) AS doh, SUM(hit_doh3) AS doh3
+FROM entries;
 
 -- 各上游服务器的请求量与平均响应时间
-SELECT m.server, COUNT(*) AS requests,
-       ROUND(AVG(m.response_time_ms), 1) AS avg_ms
-FROM entries e JOIN metadata m ON e.id = m.entry_id
-GROUP BY m.server ORDER BY requests DESC;
+SELECT server, COUNT(*) AS requests,
+       ROUND(AVG(response_time_ms), 1) AS avg_ms
+FROM entries
+GROUP BY server ORDER BY requests DESC;
 
 -- rcode 分布
-SELECT m.rcode, COUNT(*) AS cnt
-FROM entries e JOIN metadata m ON e.id = m.entry_id
-GROUP BY m.rcode ORDER BY cnt DESC;
+SELECT rcode, COUNT(*) AS cnt
+FROM entries
+GROUP BY rcode ORDER BY cnt DESC;
 
 -- DNSSEC 状态分布
-SELECT m.dnssec, COUNT(*) AS cnt
-FROM entries e JOIN metadata m ON e.id = m.entry_id
-GROUP BY m.dnssec ORDER BY cnt DESC;
+SELECT dnssec, COUNT(*) AS cnt
+FROM entries
+GROUP BY dnssec ORDER BY cnt DESC;
 
 -- 被劫持的查询
-SELECT e.qname, e.qtype, m.server, m.response_time_ms
-FROM entries e JOIN metadata m ON e.id = m.entry_id
-WHERE m.hijack = 1 ORDER BY m.response_time_ms DESC;
+SELECT qname, qtype, server, response_time_ms
+FROM entries
+WHERE hijack = 1 ORDER BY response_time_ms DESC;
 
 -- 慢查询（>1s），按响应时间降序
-SELECT e.qname, e.qtype, m.server, m.rcode, m.response_time_ms
-FROM entries e JOIN metadata m ON e.id = m.entry_id
-WHERE m.response_time_ms > 1000
-ORDER BY m.response_time_ms DESC;
+SELECT qname, qtype, server, rcode, response_time_ms
+FROM entries
+WHERE response_time_ms > 1000
+ORDER BY response_time_ms DESC;
 
 -- 通过 fallback 上游解析的查询
-SELECT e.qname, e.qtype, m.server
-FROM entries e JOIN metadata m ON e.id = m.entry_id
-WHERE m.fallback = 1;
+SELECT qname, qtype, server
+FROM entries
+WHERE fallback = 1;
 
 -- 延迟最低的根服务器（NS 地址探测结果）
-SELECT r.rr_text, r.latency_ms FROM records r
-JOIN entries e ON r.entry_id = e.id
+SELECT rl.rdata_ip, rl.latency_ms FROM record_latency rl
+JOIN entries e ON rl.entry_id = e.id
 WHERE e.qname = '.' AND e.qtype = 0
-ORDER BY r.latency_ms ASC;
+ORDER BY rl.latency_ms ASC;
 
 -- 某 IP 对应的所有域名（PTR 反查）
-SELECT DISTINCT r.name FROM records r
-JOIN entries e ON r.entry_id = e.id
-WHERE r.rdata_ip = '104.20.23.154' AND e.expires_at + 2592000 >= unixepoch();
+SELECT DISTINCT pm.name FROM ptr_map pm
+JOIN entries e ON pm.entry_id = e.id
+WHERE pm.rdata_ip = '104.20.23.154' AND e.expires_at + 2592000 >= unixepoch();
 
 -- Top 10 命中最多的域名
-SELECT e.qname, e.qtype,
-       SUM(m.hit_udp + m.hit_tcp + m.hit_dot + m.hit_doq + m.hit_doh + m.hit_doh3) AS hits
-FROM entries e JOIN metadata m ON e.id = m.entry_id
-GROUP BY e.qname, e.qtype
+SELECT qname, qtype,
+       SUM(hit_udp + hit_tcp + hit_dot + hit_doq + hit_doh + hit_doh3) AS hits
+FROM entries
+GROUP BY qname, qtype
 ORDER BY hits DESC LIMIT 10;
 
 -- 最近 1 小时内解析的查询
-SELECT e.qname, e.qtype, m.server, m.rcode, m.response_time_ms
-FROM entries e JOIN metadata m ON e.id = m.entry_id
-WHERE e.timestamp > unixepoch() - 3600
-ORDER BY e.timestamp DESC;
+SELECT qname, qtype, server, rcode, response_time_ms
+FROM entries
+WHERE timestamp > unixepoch() - 3600
+ORDER BY timestamp DESC;
 
 -- 缓存条目数变化趋势（按小时聚合）
 SELECT DATETIME(e.timestamp, 'unixepoch', 'localtime') AS hour, COUNT(*)

@@ -3,10 +3,10 @@ package cache
 import (
 	"database/sql"
 	"fmt"
-	"strings"
 	"sync/atomic"
 
 	"codeberg.org/miekg/dns"
+	"github.com/klauspost/compress/zstd"
 	_ "github.com/ncruces/go-sqlite3/driver"
 
 	"zjdns/config"
@@ -15,7 +15,28 @@ import (
 	"zjdns/internal/ttl"
 )
 
-const defaultStaleMaxAge = int64(config.DefaultStaleMaxAge)
+const (
+	defaultStaleMaxAge = int64(config.DefaultStaleMaxAge)
+	zstdCompressLevel  = zstd.SpeedDefault
+)
+
+// zstd encoder/decoder for wire format compression. Created once, reused forever.
+var (
+	zstdEncoder *zstd.Encoder
+	zstdDecoder *zstd.Decoder
+)
+
+func init() {
+	var err error
+	zstdEncoder, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstdCompressLevel))
+	if err != nil {
+		panic(fmt.Sprintf("zstd encoder init: %v", err))
+	}
+	zstdDecoder, err = zstd.NewReader(nil)
+	if err != nil {
+		panic(fmt.Sprintf("zstd decoder init: %v", err))
+	}
+}
 
 // SQLiteCache is a DNS response cache backed entirely by SQLite.
 type SQLiteCache struct {
@@ -89,9 +110,9 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 }
 
 func (s *SQLiteCache) migrate() error {
-	// 2.8: WAL autocheckpoint tuning
+	// WAL autocheckpoint tuning + page size.
 	pragmaSQL := fmt.Sprintf(
-		"PRAGMA mmap_size = %d; PRAGMA cache_size = %d; PRAGMA page_size = 4096; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 500;",
+		"PRAGMA mmap_size = %d; PRAGMA cache_size = %d; PRAGMA page_size = 4096; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 500; PRAGMA optimize;",
 		s.mmapSizeMB*1024*1024, -s.cacheSizeMB*1024,
 	)
 	if _, err := s.db.Exec(pragmaSQL); err != nil {
@@ -99,7 +120,8 @@ func (s *SQLiteCache) migrate() error {
 	}
 
 	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS entries (
+		-- Single table: entries + metadata merged, wire format for RR storage.
+		CREATE TABLE entries (
 			-- Lookup key (UNIQUE)
 			qname      TEXT NOT NULL,
 			qtype      INTEGER NOT NULL,
@@ -114,63 +136,59 @@ func (s *SQLiteCache) migrate() error {
 			-- Flags
 			validated  INTEGER NOT NULL DEFAULT 0,
 			cacheable  INTEGER NOT NULL DEFAULT 1,
-			msg_wire   BLOB,
-			-- PK + constraint
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
-		);
-
-		CREATE TABLE IF NOT EXISTS metadata (
-			entry_id         INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
 			-- Resolution metadata (written once by Set)
 			rcode            INTEGER NOT NULL DEFAULT 0,
 			response_time_ms INTEGER NOT NULL DEFAULT 0,
 			server           TEXT NOT NULL DEFAULT '',
-			dnssec           TEXT NOT NULL DEFAULT "",
+			dnssec           TEXT NOT NULL DEFAULT '',
 			fallback         INTEGER NOT NULL DEFAULT 0,
 			prefetch         INTEGER NOT NULL DEFAULT 0,
 			hijack           INTEGER NOT NULL DEFAULT 0,
 			-- Serving counters (updated by RecordServe / RecordRewrite)
-			last_hit_time    INTEGER NOT NULL DEFAULT 0,
-			hit_udp          INTEGER NOT NULL DEFAULT 0,
-			hit_tcp          INTEGER NOT NULL DEFAULT 0,
-			hit_dot          INTEGER NOT NULL DEFAULT 0,
-			hit_doq          INTEGER NOT NULL DEFAULT 0,
-			hit_doh          INTEGER NOT NULL DEFAULT 0,
-			hit_doh3         INTEGER NOT NULL DEFAULT 0,
-			stale_count      INTEGER NOT NULL DEFAULT 0,
-			rewrite_count    INTEGER NOT NULL DEFAULT 0
+			last_hit_time INTEGER NOT NULL DEFAULT 0,
+			hit_udp       INTEGER NOT NULL DEFAULT 0,
+			hit_tcp       INTEGER NOT NULL DEFAULT 0,
+			hit_dot       INTEGER NOT NULL DEFAULT 0,
+			hit_doq       INTEGER NOT NULL DEFAULT 0,
+			hit_doh       INTEGER NOT NULL DEFAULT 0,
+			hit_doh3      INTEGER NOT NULL DEFAULT 0,
+			stale_count   INTEGER NOT NULL DEFAULT 0,
+			rewrite_count INTEGER NOT NULL DEFAULT 0,
+			-- zstd-compressed wire format (Answer+Authority+Additional)
+			msg_wire BLOB,
+			-- PK + constraint
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 		);
 
-		CREATE TABLE IF NOT EXISTS records (
-			-- Reference
+		-- Lightweight PTR reverse-lookup table (IP → domain name).
+		CREATE TABLE ptr_map (
+			rdata_ip TEXT NOT NULL,
+			entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			name     TEXT NOT NULL,
+			ttl      INTEGER NOT NULL,
+			PRIMARY KEY (rdata_ip, entry_id, name)
+		) WITHOUT ROWID;
+
+		-- Per-record latency measurements from probe engine (analytics + sorting).
+		CREATE TABLE record_latency (
 			entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-			-- Record identity
-			section    TEXT NOT NULL,
-			seq        INTEGER NOT NULL DEFAULT 0,
-			name       TEXT NOT NULL,
-			rtype      INTEGER NOT NULL,
-			ttl        INTEGER NOT NULL,
-			-- Data
-			rr_text    TEXT NOT NULL,
-			rdata_ip   TEXT,
-			-- Probe latency
-			latency_ms INTEGER,
-			-- PK
-			id         INTEGER PRIMARY KEY AUTOINCREMENT
-		);
+			rdata_ip   TEXT NOT NULL,
+			latency_ms INTEGER NOT NULL,
+			PRIMARY KEY (entry_id, rdata_ip)
+		) WITHOUT ROWID;
 
-		CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
-		CREATE INDEX IF NOT EXISTS idx_entries_expires_at ON entries(expires_at);
-		CREATE INDEX IF NOT EXISTS idx_records_entry_section_seq ON records(entry_id, section, seq);
-		CREATE INDEX IF NOT EXISTS idx_records_ip_entry ON records(rdata_ip, entry_id) WHERE rdata_ip IS NOT NULL;
+		-- Eviction index: only covers cacheable entries (partial index).
+		CREATE INDEX idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
+		CREATE INDEX idx_ptr_ip ON ptr_map(rdata_ip);
 	`)
 	return err
 }
 
 // ── Store interface ──────────────────────────────────────────────────────────
 
-// Get retrieves a cached DNS response by query parameters.
+// Get retrieves a cached DNS response by decompressing and unpacking the stored
+// wire format. Returns the entry, whether it was found, and whether it's expired.
 func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return nil, false, false
@@ -199,23 +217,41 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return nil, false, false
 	}
 
-	entry, err := s.loadRecords(id)
-	if err != nil {
-		log.Warnf("CACHE: load records failed for entry %d: %v", id, err)
+	if len(msgWire) == 0 {
 		return nil, false, false
 	}
-	entry.Timestamp = ts
-	entry.TTL = entryTTL
-	entry.Validated = validated != 0
+
+	// Decompress and unpack the wire format into a dns.Msg.
+	wire, err := decompress(msgWire)
+	if err != nil {
+		log.Warnf("CACHE: decompress wire for entry %d: %v", id, err)
+		return nil, false, false
+	}
+
+	msg := new(dns.Msg)
+	msg.Data = wire
+	if err := msg.Unpack(); err != nil {
+		log.Warnf("CACHE: unpack wire for entry %d: %v", id, err)
+		return nil, false, false
+	}
+
+	entry := &Entry{
+		Answer:     msg.Answer,
+		Authority:  msg.Ns,
+		Additional: msg.Extra,
+		Timestamp:  ts,
+		TTL:        entryTTL,
+		Validated:  validated != 0,
+	}
 
 	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
 }
 
-// Set stores a DNS response in the cache.
+// Set stores a DNS response in the cache. Wire format is zstd-compressed.
 func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
-	answer, authority, additional []dns.RR, validated bool, opts SetOptions) {
-
+	answer, authority, additional []dns.RR, validated bool, opts SetOptions,
+) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
 	}
@@ -231,6 +267,13 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	qname = dnsutil.NormalizeDomain(qname)
 	dnssecInt := boolToInt(dnssecOK)
 
+	// Pack wire format and compress.
+	msg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
+	var msgWire []byte
+	if err := msg.Pack(); err == nil {
+		msgWire = compress(msg.Data)
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		log.Warnf("CACHE: begin tx failed: %v", err)
@@ -238,56 +281,29 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(
+	var entryID int64
+	if err := tx.QueryRow(
 		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
-			timestamp, ttl, expires_at, validated,
-			cacheable)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			timestamp, ttl, expires_at, validated, cacheable,
+			rcode, response_time_ms, server, dnssec, fallback, prefetch, hijack,
+			msg_wire)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 RETURNING id`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
 		now, entryTTL, now+int64(entryTTL), boolToInt(validated), boolToInt(!opts.Uncacheable),
-	); err != nil {
+		opts.Rcode, opts.ResponseTime, opts.Server, opts.Dnssec,
+		boolToInt(opts.Fallback), boolToInt(opts.Prefetch), boolToInt(opts.Hijack),
+		msgWire,
+	).Scan(&entryID); err != nil {
 		log.Warnf("CACHE: insert entry failed: %v", err)
 		return
 	}
 
-	var entryID int64
-	if err := tx.QueryRow(
-		`SELECT id FROM entries WHERE qname=? AND qtype=? AND qclass=? AND ecs_addr=? AND ecs_prefix=? AND dnssec_ok=?`,
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
-	).Scan(&entryID); err != nil {
-		log.Warnf("CACHE: select entry id failed: %v", err)
-		return
-	}
-
-	// Upsert metadata for analytics.
-	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO metadata (entry_id, rcode, response_time_ms, server, dnssec, fallback, prefetch, hijack)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		entryID, opts.Rcode, opts.ResponseTime, opts.Server, opts.Dnssec, boolToInt(opts.Fallback), boolToInt(opts.Prefetch), boolToInt(opts.Hijack),
-	); err != nil {
-		log.Warnf("CACHE: insert metadata failed: %v", err)
-		return
-	}
-
-	// Only insert records for cacheable entries; error entries have no RRs.
+	// Populate ptr_map for reverse (PTR) lookups on cacheable entries.
 	if !opts.Uncacheable {
-		if err := insertRecords(tx, entryID, "answer", answer); err != nil {
-			log.Warnf("CACHE: insert records failed: %v", err)
-			return
-		}
-		if err := insertRecords(tx, entryID, "authority", authority); err != nil {
-			log.Warnf("CACHE: insert records failed: %v", err)
-			return
-		}
-		if err := insertRecords(tx, entryID, "additional", additional); err != nil {
-			log.Warnf("CACHE: insert records failed: %v", err)
-			return
-		}
-		// Store packed wire format for fast Get().
-		msg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
-		if err := msg.Pack(); err == nil {
-			_, _ = tx.Exec(`UPDATE entries SET msg_wire = ? WHERE id = ?`, msg.Data, entryID)
-		}
+		insertPtrMap(tx, entryID, answer)
+		insertPtrMap(tx, entryID, authority)
+		insertPtrMap(tx, entryID, additional)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -299,8 +315,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	s.evictIfNeeded()
 }
 
-// RecordServe updates metadata hit counters and last_hit_time in a single
-// UPDATE.  Called once per cache hit to minimize SQL round-trips.
+// RecordServe updates hit counters and last_hit_time directly in the entries table.
 func (s *SQLiteCache) RecordServe(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, protocol string, stale bool) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
@@ -310,15 +325,19 @@ func (s *SQLiteCache) RecordServe(qname string, qtype, qclass uint16, ecs *confi
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 
 	col := hitColumn(protocol)
+	if col == "" {
+		return
+	}
+
 	staleSQL := ""
 	if stale {
 		staleSQL = ", stale_count = stale_count + 1"
 	}
 
 	_, _ = s.db.Exec(
-		`UPDATE metadata SET `+col+` = `+col+` + 1, last_hit_time = ?`+staleSQL+` WHERE entry_id = (
-			SELECT id FROM entries WHERE qname = ? AND qtype = ? AND qclass = ?
-			 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,
+		`UPDATE entries SET `+col+` = `+col+` + 1, last_hit_time = ?`+staleSQL+
+			` WHERE qname = ? AND qtype = ? AND qclass = ?
+		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
 		log.NowUnix(), qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
 	)
 }
@@ -330,10 +349,10 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	}
 
 	rows, err := s.db.Query(
-		`SELECT DISTINCT r.name, r.ttl, e.timestamp FROM records r
-		 JOIN entries e ON r.entry_id = e.id
-		 WHERE r.rdata_ip = ? AND e.expires_at + ? >= ?
-		 ORDER BY r.name`,
+		`SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm
+		 JOIN entries e ON pm.entry_id = e.id
+		 WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?
+		 ORDER BY pm.name`,
 		ip, defaultStaleMaxAge, log.NowUnix(),
 	)
 	if err != nil {
@@ -358,28 +377,6 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	return results
 }
 
-func hitColumn(protocol string) string {
-	switch {
-	case len(protocol) >= 3 && (protocol[0] == 'u' || protocol[0] == 'U'):
-		return "hit_udp"
-	case len(protocol) >= 3 && (protocol[0] == 't' || protocol[0] == 'T'):
-		return "hit_tcp"
-	case len(protocol) >= 3 && (protocol[1] == 'o' || protocol[1] == 'O'):
-		switch protocol[2] {
-		case 't', 'T':
-			return "hit_dot"
-		case 'q', 'Q':
-			return "hit_doq"
-		case 'h', 'H':
-			if len(protocol) >= 4 && protocol[3] == '3' {
-				return "hit_doh3"
-			}
-			return "hit_doh"
-		}
-	}
-	return ""
-}
-
 // RecordRewrite increments the rewrite counter. Since rewrite responses bypass
 // the cache, this creates a lightweight entry if one doesn't already exist.
 func (s *SQLiteCache) RecordRewrite(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) {
@@ -388,21 +385,26 @@ func (s *SQLiteCache) RecordRewrite(qname string, qtype, qclass uint16, ecs *con
 	}
 	qname = dnsutil.NormalizeDomain(qname)
 	ecsAddr, ecsPrefix := ecsParams(ecs)
-	// Upsert a stub entry so rewrite counts survive eviction cycles.
 	now := log.NowUnix()
 	dnssecInt := boolToInt(dnssecOK)
+	// INSERT OR IGNORE: stub entry must not overwrite an existing real entry
+	// (which would reset hit counters and resolution metadata to zero).
 	_, _ = s.db.Exec(
-		"INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok, timestamp, ttl, expires_at, validated, cacheable) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt, now, config.DefaultStaleTTL, now+int64(config.DefaultStaleTTL), 0, 1,
+		`INSERT OR IGNORE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
+			timestamp, ttl, expires_at, validated, cacheable, server)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
+		now, config.DefaultStaleTTL, now+int64(config.DefaultStaleTTL), 0, 1, "rewrite",
 	)
-	var entryID int64
-	if err := s.db.QueryRow("SELECT id FROM entries WHERE qname=? AND qtype=? AND qclass=? AND ecs_addr=? AND ecs_prefix=? AND dnssec_ok=?", qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt).Scan(&entryID); err == nil {
-		_, _ = s.db.Exec("INSERT OR REPLACE INTO metadata (entry_id, rcode, response_time_ms, server, dnssec, fallback, prefetch, hijack) VALUES (?,?,?,?,?,?,?,?)", entryID, 0, 0, "rewrite", "", 0, 0, 0)
-		_, _ = s.db.Exec("UPDATE metadata SET rewrite_count = rewrite_count + 1 WHERE entry_id = ?", entryID)
-	}
+	_, _ = s.db.Exec(
+		`UPDATE entries SET rewrite_count = rewrite_count + 1
+		 WHERE qname = ? AND qtype = ? AND qclass = ?
+		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
+	)
 }
 
-// Summary returns a one-line stats summary from the metadata table.
+// Summary returns a one-line stats summary from the entries table.
 func (s *SQLiteCache) Summary() string {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return ""
@@ -412,28 +414,22 @@ func (s *SQLiteCache) Summary() string {
 	var hijack, fallback, prefetch, stale, rewrite int64
 	var avgMs float64
 
-	// Entries
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE cacheable = 1").Scan(&entries)
-	// Hits
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp+hit_tcp+hit_dot+hit_doq+hit_doh+hit_doh3),0) FROM metadata").Scan(&hits)
-	// Avg response time
-	_ = s.db.QueryRow("SELECT COALESCE(AVG(response_time_ms),0) FROM metadata WHERE response_time_ms > 0").Scan(&avgMs)
-	// Protocol breakdown
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp),0), COALESCE(SUM(hit_tcp),0), COALESCE(SUM(hit_dot),0), COALESCE(SUM(hit_doq),0), COALESCE(SUM(hit_doh),0), COALESCE(SUM(hit_doh3),0) FROM metadata").Scan(&udp, &tcp, &dot, &doq, &doh, &doh3)
-	// Rcode distribution
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 0").Scan(&noerr)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 1").Scan(&formerr)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 2").Scan(&servfail)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 3").Scan(&nxdomain)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 4").Scan(&notimp)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 5").Scan(&refused)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode NOT IN (0,1,2,3,4,5)").Scan(&other)
-	// Flags & counters
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE hijack = 1").Scan(&hijack)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE fallback = 1").Scan(&fallback)
-	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE prefetch = 1").Scan(&prefetch)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(stale_count),0) FROM metadata").Scan(&stale)
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(rewrite_count),0) FROM metadata").Scan(&rewrite)
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp+hit_tcp+hit_dot+hit_doq+hit_doh+hit_doh3),0) FROM entries").Scan(&hits)
+	_ = s.db.QueryRow("SELECT COALESCE(AVG(response_time_ms),0) FROM entries WHERE response_time_ms > 0").Scan(&avgMs)
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp),0), COALESCE(SUM(hit_tcp),0), COALESCE(SUM(hit_dot),0), COALESCE(SUM(hit_doq),0), COALESCE(SUM(hit_doh),0), COALESCE(SUM(hit_doh3),0) FROM entries").Scan(&udp, &tcp, &dot, &doq, &doh, &doh3)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 0").Scan(&noerr)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 1").Scan(&formerr)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 2").Scan(&servfail)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 3").Scan(&nxdomain)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 4").Scan(&notimp)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode = 5").Scan(&refused)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE rcode NOT IN (0,1,2,3,4,5)").Scan(&other)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE hijack = 1").Scan(&hijack)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE fallback = 1").Scan(&fallback)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE prefetch = 1").Scan(&prefetch)
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(stale_count),0) FROM entries").Scan(&stale)
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(rewrite_count),0) FROM entries").Scan(&rewrite)
 
 	return fmt.Sprintf("entries=%d hits=%d avg=%.1fms udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d hijack=%d fallback=%d prefetch=%d stale=%d rewrite=%d",
 		entries, hits, avgMs, udp, tcp, dot, doq, doh, doh3,
@@ -448,7 +444,7 @@ func (s *SQLiteCache) Close() error {
 	}
 	if err := s.db.Close(); err != nil {
 		log.Errorf("CACHE: sqlite close failed: %v", err)
-		return err
+		return fmt.Errorf("sqlite close: %w", err)
 	}
 	log.Infof("CACHE: SQLite cache shut down")
 	return nil
@@ -499,8 +495,8 @@ func (s *SQLiteCache) evictOldest(n int64) {
 	log.Debugf("CACHE: evicted %d entries (max=%d)", n, s.maxEntries)
 }
 
-// UpdateLatency sets the latency for a specific record identified by entry lookup
-// key + IP address. Used by the probe engine after measuring A/AAAA response times.
+// UpdateLatency stores a latency measurement for a specific record, keyed by
+// entry lookup key + IP address.
 func (s *SQLiteCache) UpdateLatency(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, ip string, latencyMS int) {
 	qname = dnsutil.NormalizeDomain(qname)
 	ecsAddr, ecsPrefix := ecsParams(ecs)
@@ -515,101 +511,113 @@ func (s *SQLiteCache) UpdateLatency(qname string, qtype, qclass uint16, ecs *con
 	}
 
 	_, _ = s.db.Exec(
-		`UPDATE records SET latency_ms = ? WHERE entry_id = ? AND rdata_ip = ?`,
-		latencyMS, entryID, ip,
+		`INSERT OR REPLACE INTO record_latency (entry_id, rdata_ip, latency_ms) VALUES (?, ?, ?)`,
+		entryID, ip, latencyMS,
 	)
+}
+
+// ── Wire format compression ──────────────────────────────────────────────────
+
+func compress(data []byte) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	return zstdEncoder.EncodeAll(data, nil)
+}
+
+func decompress(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	return zstdDecoder.DecodeAll(data, nil)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-func (s *SQLiteCache) loadRecords(entryID int64) (*Entry, error) {
-	rows, err := s.db.Query(
-		`SELECT section, name, rtype, ttl, rr_text FROM records WHERE entry_id = ? ORDER BY CASE WHEN rtype IN (1, 28) THEN 1 ELSE 0 END, latency_ms IS NULL, latency_ms ASC, section, seq`, entryID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	entry := &Entry{}
-	for rows.Next() {
-		var section, name, rrText string
-		var rtype int
-		var recTTL int
-		if err := rows.Scan(&section, &name, &rtype, &recTTL, &rrText); err != nil {
-			continue
-		}
-		rr, err := dns.New(rrText)
-		if err != nil {
-			continue
-		}
-		switch section {
-		case "answer":
-			entry.Answer = append(entry.Answer, rr)
-		case "authority":
-			entry.Authority = append(entry.Authority, rr)
-		case "additional":
-			entry.Additional = append(entry.Additional, rr)
-		}
-	}
-	return entry, rows.Err()
-}
-
-func insertRecords(tx *sql.Tx, entryID int64, section string, rrs []dns.RR) error {
-	// Filter and collect valid records.
+func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
 	type rec struct {
-		seq     int
 		name    string
-		rtype   int
 		ttl     int
-		rrText  string
 		rdataIP string
 	}
 	var recs []rec
-	for i, rr := range rrs {
+	for _, rr := range rrs {
 		if rr == nil || dns.RRToType(rr) == dns.TypeOPT {
 			continue
 		}
+		ip, ok := dnsutil.ExtractIPString(rr)
+		if !ok {
+			continue
+		}
 		recs = append(recs, rec{
-			seq: i, name: rr.Header().Name, rtype: int(dns.RRToType(rr)),
-			ttl: int(rr.Header().TTL), rrText: rr.String(), rdataIP: extractIP(rr),
+			name: rr.Header().Name, ttl: int(rr.Header().TTL), rdataIP: ip,
 		})
 	}
 	if len(recs) == 0 {
-		return nil
+		return
 	}
 
-	// Build multi-row INSERT.
-	placeholders := make([]string, len(recs))
-	args := make([]any, 0, len(recs)*8)
-	for i, r := range recs {
-		placeholders[i] = "(?, ?, ?, ?, ?, ?, ?, ?)"
-		args = append(args, entryID, section, r.seq, r.name, r.rtype, r.ttl, r.rrText, r.rdataIP)
+	// Deduplicate by (rdata_ip, name) — same IP can appear in the same section.
+	seen := make(map[string]bool, len(recs))
+	var unique []rec
+	for _, r := range recs {
+		key := r.rdataIP + "\x00" + r.name
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, r)
+		}
 	}
-	stmt := `INSERT INTO records (entry_id, section, seq, name, rtype, ttl, rr_text, rdata_ip) VALUES ` +
-		join(placeholders, ",")
+
+	placeholders := make([]string, len(unique))
+	args := make([]any, 0, len(unique)*4)
+	for i, r := range unique {
+		placeholders[i] = "(?, ?, ?, ?)"
+		args = append(args, r.rdataIP, entryID, r.name, r.ttl)
+	}
+	stmt := `INSERT OR REPLACE INTO ptr_map (rdata_ip, entry_id, name, ttl) VALUES ` +
+		joinPlaceholders(placeholders, ",")
 	if _, err := tx.Exec(stmt, args...); err != nil {
-		return fmt.Errorf("insert records: %w", err)
+		log.Warnf("CACHE: insert ptr_map failed: %v", err)
 	}
-	return nil
 }
 
-func extractIP(rr dns.RR) string {
-	ip, _ := dnsutil.ExtractIPString(rr)
-	return ip
+func hitColumn(protocol string) string {
+	switch {
+	case len(protocol) >= 3 && (protocol[0] == 'u' || protocol[0] == 'U'):
+		return "hit_udp"
+	case len(protocol) >= 3 && (protocol[0] == 't' || protocol[0] == 'T'):
+		return "hit_tcp"
+	case len(protocol) >= 3 && (protocol[1] == 'o' || protocol[1] == 'O'):
+		switch protocol[2] {
+		case 't', 'T':
+			return "hit_dot"
+		case 'q', 'Q':
+			return "hit_doq"
+		case 'h', 'H':
+			if len(protocol) >= 4 && protocol[3] == '3' {
+				return "hit_doh3"
+			}
+			return "hit_doh"
+		}
+	}
+	return ""
 }
 
-func join(parts []string, sep string) string {
+func joinPlaceholders(parts []string, sep string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(parts[0])
-	for _, p := range parts[1:] {
-		b.WriteString(sep)
-		b.WriteString(p)
+	total := 0
+	for _, p := range parts {
+		total += len(p) + len(sep)
 	}
-	return b.String()
+	b := make([]byte, 0, total-len(sep))
+	b = append(b, parts[0]...)
+	for _, p := range parts[1:] {
+		b = append(b, sep...)
+		b = append(b, p...)
+	}
+	return string(b)
 }
 
 func minTTL(answer, authority, additional []dns.RR) int {
@@ -680,6 +688,3 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
-
-// deduplicateRRs removes duplicate records from a slice by their presentation
-// format, preserving order. OPT records are always excluded.

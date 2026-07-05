@@ -18,6 +18,7 @@ jobs:
       - name: Update dependencies to latest commits
         run: |
           go get -u codeberg.org/miekg/dns@main
+          go get -u github.com/klauspost/compress@master
           go get -u github.com/ncruces/go-sqlite3@main
           go get -u github.com/quic-go/quic-go@master
           go get -u gitlab.com/go-extension/tls@master

@@ -4,8 +4,9 @@ go 1.26.4
 
 require (
 	codeberg.org/miekg/dns v0.6.84-0.20260703045444-a041bf0cea90
+	github.com/klauspost/compress v1.19.1-0.20260702093504-efdb6ed96c4b
 	github.com/ncruces/go-sqlite3 v0.35.2-0.20260704091103-eea4bee3c1b6
-	github.com/quic-go/quic-go v0.60.1-0.20260629040301-af4bd46e551d
+	github.com/quic-go/quic-go v0.60.1-0.20260705041356-722448b9c775
 	gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246
 	golang.org/x/net v0.56.0
 	golang.org/x/sync v0.21.0
@@ -18,7 +19,6 @@ require (
 	github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
 	github.com/emmansun/gmsm v0.44.0 // indirect
-	github.com/klauspost/compress v1.19.0 // indirect
 	github.com/ncruces/go-sqlite3-wasm/v3 v3.1.35302 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/pmorjan/kmod v1.1.1 // indirect
