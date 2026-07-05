@@ -125,7 +125,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 - **Return concrete types, accept interfaces**: `func NewSQLiteCache() *SQLiteCache` (concrete), but parameters accept interfaces: `func Persist(store cache.Store)`.
 - **Group related params into config structs** when a constructor exceeds ~5 parameters. Use a `BackgroundConfig` or `Dependencies` struct rather than functional options unless options are truly optional.
 - **Two-phase initialization** is acceptable for circular dependencies: `New()` creates the object, `SetResolver()` / `SetProber()` inject dependencies that could not exist at construction time. Document the required call order.
-- **Package-level constructors with `sync.Once`**: infrastructure objects that must be a singleton (like `infraProber`) use `sync.Once` inside the constructor so it is safe to call multiple times.
+- **Package-level constructors with `sync.Once`**: infrastructure objects that must be a singleton use `sync.Once` inside the constructor so it is safe to call multiple times.
 
 ### Interfaces
 
@@ -145,7 +145,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 
 - **Pointer receivers** for any struct containing `sync.Mutex`, `sync.RWMutex`, or `atomic.*` fields.
 - **`sync.Pool.Put()` zeroes state**: never read fields from an object after `Put()` — the next `Get()` caller owns it. No linter catches this.
-- **Package-level mutable state** must use `sync.Once` or `atomic.Pointer` if read concurrently. Example: `var infraProber *ilatency.Prober` + `var infraProberOnce sync.Once`.
+- **Package-level mutable state** must use `sync.Once` or `atomic.Pointer` if read concurrently.
 - **`context.Context` propagation**: every goroutine must receive a context for cancellation. Use `errgroup` for managing groups of goroutines with shared lifecycle.
 
 ### Anti-patterns (DO NOT introduce)
@@ -301,7 +301,7 @@ Top layer (wiring):
 | `Guard` | `server/security` | Bundles CryptoValidator + Detector |
 | `Filter` | `cidr` | CIDR-based IP matching; `MatchInfo` + unexported `rule` types |
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |
-| `Prober` | `server/probe` | A/AAAA latency probe + record reordering; `infraProber` (sync.Once) |
+| `Prober` | `server/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
 | `MessagePool` / `BufferPool` | `internal/pool` | sync.Pool allocators; also holds `QUICCode*` constants |
 | `JoinDNSPort` | `internal/dnsutil` | Utility: `ip` → `ip:53` (moved from config) |
 
