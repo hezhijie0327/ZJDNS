@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-	"time"
 
 	"codeberg.org/miekg/dns"
 
@@ -13,6 +12,7 @@ import (
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	ilatency "zjdns/internal/latency"
+	"zjdns/internal/log"
 )
 
 // ── Latency-sorted NS address cache ──────────────────────────────────────────
@@ -117,12 +117,14 @@ func (r *Recursive) probeNSAddrs(zone string, addrs []string) {
 	}
 
 	prober := ilatency.New(defaultNSProbeSteps(), nil)
-	probeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	probeCtx, cancel := context.WithTimeout(context.Background(), config.DefaultNSProbeTimeout)
 	defer cancel()
 	_, latencies := prober.ProbeIPsLatency(probeCtx, ips)
 	if len(latencies) == 0 {
 		return
 	}
+
+	log.Debugf("RECURSION: probed %s (%d addresses, %d results)", zone, len(ips), len(latencies))
 
 	for ipStr, lat := range latencies {
 		addr, ok := ipToAddr[ipStr]
@@ -150,7 +152,7 @@ func (r *Recursive) probeNSAddrs(zone string, addrs []string) {
 func (r *Recursive) cacheRootServers() {
 	typeGroups := make(map[uint16][]dns.RR)
 	for _, addr := range DefaultRootServers {
-		if rr := addrToRR(".", addr, 3600); rr != nil {
+		if rr := addrToRR(".", addr, uint32(config.DefaultRootCacheTTL)); rr != nil {
 			qtype := dns.RRToType(rr)
 			typeGroups[qtype] = append(typeGroups[qtype], rr)
 		}
@@ -158,6 +160,8 @@ func (r *Recursive) cacheRootServers() {
 	for qtype, records := range typeGroups {
 		r.cache.Set(".", qtype, dns.ClassINET, nil, false, records, nil, nil, false, cache.SetOptions{})
 	}
+	log.Debugf("RECURSION: cached %d root servers (%d A + %d AAAA)",
+		len(DefaultRootServers), len(typeGroups[dns.TypeA]), len(typeGroups[dns.TypeAAAA]))
 }
 
 // getRootServers returns root servers ordered by probe latency.
@@ -172,6 +176,7 @@ func (r *Recursive) getRootServers() []string {
 
 	if len(addrs) == 0 {
 		// Cold start: write entries, probe latency, read back.
+		log.Debugf("RECURSION: root cache cold start, writing static root list")
 		r.cacheRootServers()
 		go r.probeNSAddrs(".", DefaultRootServers)
 		aAddrs = lookupCachedRRs(r.cache, ".", dns.TypeA)
