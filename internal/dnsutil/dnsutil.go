@@ -41,14 +41,23 @@ func NormalizeDomain(domain string) string {
 // IsValidDomainLabels checks that each label in the domain name does not exceed
 // the RFC 1035 maximum of 63 bytes. Returns true if all labels are valid.
 func IsValidDomainLabels(domain string) bool {
-	name := strings.TrimSuffix(strings.TrimSuffix(domain, "."), ".")
-	if name == "" {
+	// Strip trailing dot(s) without allocation (sub-slicing).
+	if len(domain) > 0 && domain[len(domain)-1] == '.' {
+		domain = domain[:len(domain)-1]
+	}
+	if domain == "" {
 		return true // root zone
 	}
-	for _, label := range strings.Split(name, ".") {
-		if len(label) > MaxLabelLength {
+	// Scan labels without allocating a string slice.
+	for len(domain) > 0 {
+		dot := strings.IndexByte(domain, '.')
+		if dot < 0 {
+			return len(domain) <= MaxLabelLength
+		}
+		if dot > MaxLabelLength {
 			return false
 		}
+		domain = domain[dot+1:]
 	}
 	return true
 }

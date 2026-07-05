@@ -79,7 +79,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				if err := response.Pack(); err != nil {
 					log.Debugf("SERVER: TCP pack error for %s: %v", addr, err)
 				}
-				if _, err := io.Copy(w, response); err != nil {
+				if _, err := w.Write(response.Data); err != nil {
 					log.Debugf("SERVER: TCP write error for %s: %v", addr, err)
 				}
 				pool.DefaultMessagePool.Put(response)
@@ -95,7 +95,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		if err := response.Pack(); err != nil {
 			log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
 		}
-		if _, err := io.Copy(w, response); err != nil {
+		if _, err := w.Write(response.Data); err != nil {
 			log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
 		}
 		pool.DefaultMessagePool.Put(response)

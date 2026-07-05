@@ -89,6 +89,11 @@ func processRR(rr dns.RR, value int64, isElapsed bool, includeDNSSEC bool) dns.R
 			return nil
 		}
 	}
+	// Fast path: no TTL adjustment and no DNSSEC filtering — return as-is
+	// to avoid heap-allocating a clone (common on cache-miss → serve path).
+	if value == 0 && !isElapsed && includeDNSSEC {
+		return rr
+	}
 	newRR := rr.Clone()
 	if newRR == nil {
 		return nil

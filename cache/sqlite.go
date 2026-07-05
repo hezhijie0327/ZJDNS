@@ -14,6 +14,7 @@ import (
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
 )
 
@@ -314,12 +315,14 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return nil, false, false
 	}
 
-	msg := new(dns.Msg)
+	msg := pool.DefaultMessagePool.Get()
 	msg.Data = wire
 	if err := msg.Unpack(); err != nil {
+		pool.DefaultMessagePool.Put(msg)
 		log.Warnf("CACHE: unpack wire for entry %d: %v", id, err)
 		return nil, false, false
 	}
+	defer pool.DefaultMessagePool.Put(msg)
 
 	entry := &Entry{
 		Answer:     msg.Answer,
