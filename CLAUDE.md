@@ -47,6 +47,9 @@ golangci-lint run && golangci-lint fmt
 # Docker
 docker build -t zjdns .
 
+# Analyze cache database (aligned columnar output like sqlite3)
+./zjdns -analyze cache.db "SELECT e.qname, m.rcode, m.hit_udp FROM entries e JOIN metadata m ON e.id = m.entry_id"
+
 # Install pre-commit hook (auto fmt + lint on commit)
 sh scripts/install-hook.sh                 # Linux / macOS
 pwsh scripts/install-hook.ps1              # Windows PowerShell

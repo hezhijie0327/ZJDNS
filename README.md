@@ -76,8 +76,9 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 ### 可观测性
 
 - **Summary 快照**：启动/关闭时自动输出聚合统计行，包含缓存条目数、命中率、平均响应时间、六协议分布、rcode 分布、hijack/fallback/prefetch/stale/rewrite 计数
-- **SQL 数据分析**：直接查询 SQLite 数据库 — `SELECT m.server, AVG(m.response_time_ms) FROM entries e JOIN metadata m ON e.id = m.entry_id WHERE m.rcode = 0 GROUP BY m.server`
-- **问题诊断**：`SELECT * FROM entries e JOIN metadata m ON e.id = m.entry_id WHERE m.hijack = 1` 查找被劫持的查询，`WHERE m.rcode = 1` 查找 FORMERR 响应
+- **CLI 分析工具**：`zjdns -analyze <db> <query>` 直接查询缓存数据库，对齐表格输出
+- **SQL 数据分析**：`SELECT m.server, AVG(m.response_time_ms) FROM entries e JOIN metadata m ON e.id = m.entry_id WHERE m.rcode = 0 GROUP BY m.server`
+- **问题诊断**：`WHERE m.hijack = 1` 查找被劫持的查询，`WHERE m.rcode = 1` 查找 FORMERR，`WHERE m.response_time_ms > 1000` 查找慢查询
 - **组件级日志过滤**：`debug:UPSTREAM,SECURITY` 仅输出指定组件 Debug 日志
 - **pprof**：标准 Go 性能分析端点
 
