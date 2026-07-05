@@ -114,6 +114,7 @@ func (s *SQLiteCache) migrate() error {
 			-- Flags
 			validated  INTEGER NOT NULL DEFAULT 0,
 			cacheable  INTEGER NOT NULL DEFAULT 1,
+			msg_wire   BLOB,
 			-- PK + constraint
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
@@ -182,13 +183,14 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	var ts int64
 	var entryTTL int
 	var validated int
+	var msgWire []byte
 	err := s.db.QueryRow(
-		`SELECT id, timestamp, ttl, validated FROM entries
+		`SELECT id, timestamp, ttl, validated, msg_wire FROM entries
 		 WHERE qname = ? AND qtype = ? AND qclass = ?
 		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?
 		 AND cacheable = 1`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
-	).Scan(&id, &ts, &entryTTL, &validated)
+	).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
 	if err == sql.ErrNoRows {
 		return nil, false, false
 	}
@@ -271,6 +273,11 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		insertRecords(tx, entryID, "answer", answer)
 		insertRecords(tx, entryID, "authority", authority)
 		insertRecords(tx, entryID, "additional", additional)
+		// Store packed wire format for fast Get().
+		msg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
+		if err := msg.Pack(); err == nil {
+			_, _ = tx.Exec(`UPDATE entries SET msg_wire = ? WHERE id = ?`, msg.Data, entryID)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
