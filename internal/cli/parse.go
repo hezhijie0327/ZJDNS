@@ -14,20 +14,23 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		configFileFlag string
 		generateConfig bool
 		showVersion    bool
+		analyzeDB      bool
 	)
 
 	fs := flag.NewFlagSet(osArgs[0], flag.ContinueOnError)
 	fs.StringVar(&configFileFlag, "config", "", "Configuration file path (JSON format)")
 	fs.BoolVar(&generateConfig, "generate-config", false, "Generate example configuration file")
 	fs.BoolVar(&showVersion, "version", false, "Show version information and exit")
+	fs.BoolVar(&analyzeDB, "analyze", false, "Run SQL query against cache database")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "ZJDNS Server - High Performance DNS Server\n\n")
 		fmt.Fprintf(os.Stderr, "Version: %s\n\n", versionStr)
 		fmt.Fprintf(os.Stderr, "Usage:\n")
-		fmt.Fprintf(os.Stderr, "  %s -config <config file>     # Start with config file\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s -config <file>            # Start with config file\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s -generate-config          # Generate example config\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s -version                  # Show version information\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s -analyze <db> <query>     # Run SQL query on cache database\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s                            # Start with default config\n\n", fs.Name())
 	}
 
@@ -52,6 +55,16 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 
 	if generateConfig {
 		fmt.Println(GenerateExampleConfig())
+		return "", true
+	}
+
+	if analyzeDB {
+		args := fs.Args()
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "Usage: %s -analyze <db> <query>\n", fs.Name())
+			return "", true
+		}
+		RunAnalyze(args[0], args[1])
 		return "", true
 	}
 

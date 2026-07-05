@@ -156,8 +156,6 @@ func (s *SQLiteCache) migrate() error {
 			id         INTEGER PRIMARY KEY AUTOINCREMENT
 		);
 
-		);
-
 		CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
 		CREATE INDEX IF NOT EXISTS idx_entries_expires_at ON entries(expires_at);
 		CREATE INDEX IF NOT EXISTS idx_records_entry_section_seq ON records(entry_id, section, seq);
