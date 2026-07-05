@@ -328,15 +328,17 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 
 	_ = g.Wait()
 
-	// Fire background latency probes for each resolved NS name.
-	// Per-type entries already cached above (lines 299-304).
+	// Fire background latency probes. Merge A+AAAA per NS name
+	// so each probe call gets both address families.
 	if r.cache != nil && (len(aRecordsMap) > 0 || len(aaaaRecordsMap) > 0) {
+		combined := make(map[string][]string)
 		for nsName, records := range aRecordsMap {
-			addrs := addrsFromRRs(records)
-			go r.probeNSAddrs(nsName, addrs)
+			combined[nsName] = addrsFromRRs(records)
 		}
 		for nsName, records := range aaaaRecordsMap {
-			addrs := addrsFromRRs(records)
+			combined[nsName] = append(combined[nsName], addrsFromRRs(records)...)
+		}
+		for nsName, addrs := range combined {
 			go r.probeNSAddrs(nsName, addrs)
 		}
 	}
