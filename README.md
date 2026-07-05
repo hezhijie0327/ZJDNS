@@ -48,7 +48,7 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 - **延迟驱动排序**：探测结果在 `Set()` 时已排序写入 wire format，`Get()` 解包自然最快优先；`ip_latency` 表 ECS 无关，跨刷新持久化
 - **PTR 反查**：`SELECT ... FROM ptr_map WHERE rdata_ip = ? JOIN entries`，轻量 WITHOUT ROWID 表
 - **DNSKEY 缓存**：与普通 DNS 缓存共享同一套 `entries` 表
-- **NS 地址缓存**：A/AAAA 记录统一存储，根服务器和每 NS 地址共享 TypeNone 模式
+- **NS 地址缓存**：A/AAAA 记录统一存储，根服务器静态列表 + NS 地址动态解析，ip_latency + sortAnswerByLatency 延迟排序
 - **全维度分析**：entries 表内置 rcode、响应时间、来源服务器、DNSSEC 状态、hijack/fallback/prefetch 标记；hit_counters 表记录六协议命中、stale/rewrite 计数
 - **SQL 数据分析**：支持 JOIN 查询 `SELECT e.server, SUM(hc.hit_doh) FROM entries e JOIN hit_counters hc ON e.id = hc.entry_id GROUP BY e.server`
 - **Summary 快照**：启动/关闭时输出一行聚合统计（条目数、命中率、平均响应时间、协议分布、rcode 分布等）

@@ -349,7 +349,7 @@ The cache uses four SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mm
 CREATE TABLE entries (
     -- Lookup key (UNIQUE)
     qname      TEXT NOT NULL,       -- normalized FQDN (dnsutil.NormalizeDomain)
-    qtype      INTEGER NOT NULL,    -- dns.TypeA=1, DNSKEY=48, TypeNone=0 (NS latency sentinel)
+    qtype      INTEGER NOT NULL,    -- dns.TypeA=1, DNSKEY=48
     qclass     INTEGER NOT NULL DEFAULT 1,
     ecs_addr   TEXT NOT NULL DEFAULT '',
     ecs_prefix INTEGER NOT NULL DEFAULT 0,
@@ -425,7 +425,7 @@ CREATE INDEX idx_ptr_ip ON ptr_map(rdata_ip);
 - **Wire format cache**: `Set()` packs Answer+Authority+Additional via `dns.Msg.Pack()`, compresses with zstd (SpeedDefault), stores in `msg_wire` BLOB. `Get()` decompresses + `Msg.Unpack()` — single binary decode replaces N× text parsing, cache hit ~0.5ms.
 - **Cache-hit tracking**: `RecordServe(protocol, stale)` does one `UPDATE hit_counters SET hit_udp = hit_udp + 1 WHERE entry_id = (SELECT id FROM entries WHERE ...)` — writes only touch the narrow hit_counters table, not the entries table with large BLOBs. Total hits = `SUM(hit_udp + hit_tcp + …)`.
 - **Stale/rewrite tracking**: `RecordServe(_, true)` increments `stale_count` in hit_counters; `RecordRewrite()` uses `INSERT OR IGNORE` (preserves existing entries) + `UPDATE hit_counters`.
-- **NS latency cache**: `qtype` = `dns.TypeNone` (0), records stored in probe-sorted order at `Set()` time. Wire format preserves the latency ordering so `Get()` returns fastest-first.
+- **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `probeNSAddrs` and stored in ip_latency; `sortAnswerByLatency` reorders records at `Get()` time.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
 - **IP latency**: ECS-agnostic — a single `INSERT OR REPLACE INTO ip_latency` replaces the old per-entry_id iteration over all ECS variants. `sortAnswerByLatency` queries by `(qname, qtype, qclass)` without ecs/dnssec filters, so all ECS variants share the same latency data.
