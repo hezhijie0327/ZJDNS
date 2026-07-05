@@ -122,7 +122,7 @@ func (s *SQLiteCache) migrate() error {
 
 	_, err := s.db.Exec(`
 		-- Single table: entries + metadata merged, wire format for RR storage.
-		CREATE TABLE entries (
+		CREATE TABLE IF NOT EXISTS entries (
 			-- Lookup key (UNIQUE)
 			qname      TEXT NOT NULL,
 			qtype      INTEGER NOT NULL,
@@ -163,7 +163,7 @@ func (s *SQLiteCache) migrate() error {
 		);
 
 		-- Lightweight PTR reverse-lookup table (IP → domain name).
-		CREATE TABLE ptr_map (
+		CREATE TABLE IF NOT EXISTS ptr_map (
 			rdata_ip TEXT NOT NULL,
 			entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
 			name     TEXT NOT NULL,
@@ -172,7 +172,7 @@ func (s *SQLiteCache) migrate() error {
 		) WITHOUT ROWID;
 
 		-- Per-record latency measurements from probe engine (analytics + sorting).
-		CREATE TABLE record_latency (
+		CREATE TABLE IF NOT EXISTS record_latency (
 			entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
 			rdata_ip   TEXT NOT NULL,
 			latency_ms INTEGER NOT NULL,
@@ -180,8 +180,8 @@ func (s *SQLiteCache) migrate() error {
 		) WITHOUT ROWID;
 
 		-- Eviction index: only covers cacheable entries (partial index).
-		CREATE INDEX idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
-		CREATE INDEX idx_ptr_ip ON ptr_map(rdata_ip);
+		CREATE INDEX IF NOT EXISTS idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
+		CREATE INDEX IF NOT EXISTS idx_ptr_ip ON ptr_map(rdata_ip);
 	`)
 	return err
 }
