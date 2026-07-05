@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 
 	"codeberg.org/miekg/dns"
@@ -47,6 +48,13 @@ type SQLiteCache struct {
 	cacheSizeMB int
 	closed      int32
 	entryCount  atomic.Int64
+
+	// writeMu serializes Set() and RecordRewrite() calls to prevent SQLite
+	// write-lock contention under concurrent cache-miss resolution.
+	// WAL mode allows only one writer at a time; without this mutex,
+	// multiple BEGIN IMMEDIATE transactions queue up in the busy handler
+	// and can exceed busy_timeout, producing SQLITE_IOERR.
+	writeMu sync.Mutex
 }
 
 // NewSQLiteCache opens or creates a SQLite database and returns a ready-to-use
@@ -63,7 +71,7 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 		cacheSizeMB = config.DefaultCacheCacheSizeMB
 	}
 
-	params := "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=ON&_txlock=immediate"
+	params := "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
 	var dsn string
 	if path == "" {
 		dsn = "file::memory:?" + params
@@ -113,7 +121,7 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 func (s *SQLiteCache) migrate() error {
 	// WAL autocheckpoint tuning + page size.
 	pragmaSQL := fmt.Sprintf(
-		"PRAGMA mmap_size = %d; PRAGMA cache_size = %d; PRAGMA page_size = 4096; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 500; PRAGMA optimize;",
+		"PRAGMA mmap_size = %d; PRAGMA cache_size = %d; PRAGMA page_size = 4096; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 5000; PRAGMA wal_size_limit = 10000; PRAGMA optimize;",
 		s.mmapSizeMB*1024*1024, -s.cacheSizeMB*1024,
 	)
 	if _, err := s.db.Exec(pragmaSQL); err != nil {
@@ -347,12 +355,18 @@ func (s *SQLiteCache) sortAnswerByLatency(qname string, qtype, qclass uint16, en
 }
 
 // Set stores a DNS response in the cache. Wire format is zstd-compressed.
+// The transaction itself is serialized via writeMu to prevent SQLite
+// write-lock contention (WAL mode permits only one writer at a time);
+// prep work (TTL calculation, wire packing, zstd compression) runs outside
+// the lock so CPU-heavy steps can overlap across goroutines.
 func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 	answer, authority, additional []dns.RR, validated bool, opts SetOptions,
 ) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
 	}
+
+	// ── Prep work (parallel-safe, outside writeMu) ──────────────────────────
 	now := log.NowUnix()
 	entryTTL := minTTL(answer, authority, additional)
 	if hasNSECOrNSEC3(authority) {
@@ -371,6 +385,10 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	if err := msg.Pack(); err == nil {
 		msgWire = compress(msg.Data)
 	}
+
+	// ── Transaction (serialized via writeMu) ──────────────────────────────
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -489,10 +507,13 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 
 // RecordRewrite increments the rewrite counter. Since rewrite responses bypass
 // the cache, this creates a lightweight entry if one doesn't already exist.
+// Serialized via writeMu to avoid contention with concurrent Set() calls.
 func (s *SQLiteCache) RecordRewrite(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	qname = dnsutil.NormalizeDomain(qname)
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	now := log.NowUnix()
