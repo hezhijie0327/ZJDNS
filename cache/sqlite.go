@@ -121,7 +121,7 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 func (s *SQLiteCache) migrate() error {
 	// WAL autocheckpoint tuning + page size.
 	pragmaSQL := fmt.Sprintf(
-		"PRAGMA mmap_size = %d; PRAGMA cache_size = %d; PRAGMA page_size = 4096; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 5000; PRAGMA wal_size_limit = 10000; PRAGMA optimize;",
+		"PRAGMA mmap_size = %d; PRAGMA cache_size = %d; PRAGMA page_size = 4096; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 5000; PRAGMA optimize;",
 		s.mmapSizeMB*1024*1024, -s.cacheSizeMB*1024,
 	)
 	if _, err := s.db.Exec(pragmaSQL); err != nil {
