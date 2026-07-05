@@ -357,9 +357,11 @@ func (s *SQLiteCache) Summary() string {
 	}
 	var entries, hits, udp, tcp, dot, doq, doh, doh3, hijack, fallback, prefetch int64
 	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
+	var avgMs float64
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM entries WHERE cacheable = 1").Scan(&entries)
 	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp+hit_tcp+hit_dot+hit_doq+hit_doh+hit_doh3),0) FROM metadata").Scan(&hits)
 	_ = s.db.QueryRow("SELECT COALESCE(SUM(hit_udp),0), COALESCE(SUM(hit_tcp),0), COALESCE(SUM(hit_dot),0), COALESCE(SUM(hit_doq),0), COALESCE(SUM(hit_doh),0), COALESCE(SUM(hit_doh3),0) FROM metadata").Scan(&udp, &tcp, &dot, &doq, &doh, &doh3)
+	_ = s.db.QueryRow("SELECT COALESCE(AVG(response_time_ms),0) FROM metadata WHERE response_time_ms > 0").Scan(&avgMs)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE hijack = 1").Scan(&hijack)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE fallback = 1").Scan(&fallback)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE prefetch = 1").Scan(&prefetch)
@@ -370,7 +372,7 @@ func (s *SQLiteCache) Summary() string {
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 4").Scan(&notimp)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode = 5").Scan(&refused)
 	_ = s.db.QueryRow("SELECT COUNT(*) FROM metadata WHERE rcode NOT IN (0,1,2,3,4,5)").Scan(&other)
-	return fmt.Sprintf("entries=%d hits=%d udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d hijack=%d fallback=%d prefetch=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d", entries, hits, udp, tcp, dot, doq, doh, doh3, hijack, fallback, prefetch, noerr, formerr, servfail, nxdomain, notimp, refused, other)
+	return fmt.Sprintf("entries=%d hits=%d avg=%.1fms udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d hijack=%d fallback=%d prefetch=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d", entries, hits, avgMs, udp, tcp, dot, doq, doh, doh3, hijack, fallback, prefetch, noerr, formerr, servfail, nxdomain, notimp, refused, other)
 }
 
 // Close closes the database.
