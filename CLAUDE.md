@@ -182,7 +182,7 @@ zjdns/
 ├── cidr/                          ← IP filtering with tag matching
 ├── rewrite/                       ← Query rewrite rules
 ├── internal/
-│   ├── cli/                       ← Flag parsing, example config generation
+│   ├── cli/                       ← Flag parsing (example config moved to config.GenerateExampleConfig)
 │   ├── log/                       ← Structured logging + IsDebug guard (zero internal deps)
 │   ├── pool/                      ← sync.Pool allocators + QUIC error codes
 │   ├── ttl/                       ← Stateless TTL functions (cache + rewrite)
@@ -219,7 +219,7 @@ Layer 2 (import domain foundation):
 
 Layer 3 (domain packages — import config + internal/*, never each other):
   edns → config, ipdetect, log, pool        (only domain→domain edge allowed)
-  cache → config, dnsutil, log              (no longer imports edns — uses config.ECSOption)
+  cache → config, dnsutil, log, pool
   cidr → config, dnsutil, log
   rewrite → config, dnsutil, log
 
@@ -311,7 +311,7 @@ All logs use `zjdns/internal/log`. Default level: `info`.
 
 **Component filtering**: `log_level` supports `level:comp1,comp2` syntax (e.g. `"debug:UPSTREAM,RECURSION"`). Messages without a `PREFIX: ` pattern always pass through.
 
-**17 canonical prefixes**: `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`.
+**18 canonical prefixes**: `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`.
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:` merged → `TLS:`. Hot-path logs are `Debug` only.
 
@@ -331,12 +331,20 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
 - **Rewite TTL**: Rewrite rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently (`origTTL - (elapsed % origTTL)`) rather than staying static. Rewrite responses bypass cache (client-IP filtering), but TTL now decrements correctly.
-- **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns).
-- **Merged entries+metadata**: Resolution metadata and hit counters live directly in the `entries` table — the old 1:1 `metadata` table was eliminated. `RecordServe()` updates counters via a single `UPDATE entries SET hit_udp = hit_udp + 1 WHERE ...` with no subquery. Error responses written with `cacheable=0`.
+- **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns). Similarly, `handler.Question` is a type alias of `resolver.Question` to avoid duplicate struct definitions.
+- **Merged entries+metadata**: Resolution metadata and hit counters live directly in the `entries` table — the old 1:1 `metadata` table was eliminated.
+- **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtGetLatency`, `stmtInsertLatency`, `stmtHits[6]`) at initialization time to avoid per-call SQL compilation overhead.
+- **Example config in config package**: `GenerateExampleConfig()` lives in `config` package (not `internal/cli`) to keep `internal/` layer free of domain imports.
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
 - **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
 - **eTLS alias**: Always use `eTLS` (not `cryptotls`) for `gitlab.com/go-extension/tls`. Used in `server/tls`, `server/client`, `config`.
 - **Error wrapping**: Always use `%w` in `fmt.Errorf` when wrapping errors that callers may check with `errors.Is`/`errors.As`. Use `%v` only for informational logging.
+- **Protocol hit index**: `protocolIndex(protocol)` maps a protocol string to a compact index (0–5) for use with `stmtHits[]` prepared statements. Replaces the old `hitColumn()` string-returning function.
+- **Handler Question alias**: `handler.Question` is a type alias (`type Question = resolver.Question`), eliminating redundant struct conversions between handler and resolver layers.
+- **RecordRewrite transactional**: All three SQL writes in `RecordRewrite()` run inside a single `BEGIN`/`COMMIT` transaction to prevent orphaned entries from partial failures.
+- **ip_latency cleanup**: Orphaned latency rows (whose cache entries no longer exist) are cleaned up during eviction via `DELETE FROM ip_latency WHERE (qname, qtype, qclass) NOT IN (SELECT DISTINCT ... FROM entries)`.
+- **Zero-allocation label validation**: `IsValidDomainLabels` uses `strings.IndexByte` scanning instead of `strings.Split` to avoid per-query allocation on the hot path.
+- **processRR fast path**: When `value == 0 && !isElapsed && includeDNSSEC`, `processRR` returns the original RR without cloning — common on cache-miss serve paths (50+ allocs saved per response).
 
 ## DB Schema
 
@@ -353,22 +361,22 @@ CREATE TABLE entries (
     qclass     INTEGER NOT NULL DEFAULT 1,
     ecs_addr   TEXT NOT NULL DEFAULT '',
     ecs_prefix INTEGER NOT NULL DEFAULT 0,
-    dnssec_ok  INTEGER NOT NULL DEFAULT 0,
+    dnssec_ok  INTEGER NOT NULL DEFAULT 0 CHECK (dnssec_ok IN (0, 1)),
     -- Lifecycle
     timestamp  INTEGER NOT NULL,    -- insertion time (unix seconds)
     ttl        INTEGER NOT NULL,    -- entry TTL (min of all RR TTLs, floor 10s)
     expires_at INTEGER NOT NULL DEFAULT 0,
     -- Flags
-    validated  INTEGER NOT NULL DEFAULT 0,
-    cacheable  INTEGER NOT NULL DEFAULT 1,  -- 0 = error entry, never returned by Get()
+    validated  INTEGER NOT NULL DEFAULT 0 CHECK (validated IN (0, 1)),
+    cacheable  INTEGER NOT NULL DEFAULT 1 CHECK (cacheable IN (0, 1)),  -- 0 = error entry, never returned by Get()
     -- Resolution metadata (written once by Set)
     rcode            INTEGER NOT NULL DEFAULT 0,
     response_time_ms INTEGER NOT NULL DEFAULT 0,
     server           TEXT NOT NULL DEFAULT '',
     dnssec           TEXT NOT NULL DEFAULT '',
-    fallback         INTEGER NOT NULL DEFAULT 0,
-    prefetch         INTEGER NOT NULL DEFAULT 0,
-    hijack           INTEGER NOT NULL DEFAULT 0,
+    fallback         INTEGER NOT NULL DEFAULT 0 CHECK (fallback IN (0, 1)),
+    prefetch         INTEGER NOT NULL DEFAULT 0 CHECK (prefetch IN (0, 1)),
+    hijack           INTEGER NOT NULL DEFAULT 0 CHECK (hijack IN (0, 1)),
     -- zstd-compressed wire format (Answer+Authority+Additional)
     msg_wire   BLOB,
     -- PK + constraint
@@ -415,16 +423,17 @@ CREATE TABLE ptr_map (
 ) WITHOUT ROWID;
 
 -- Partial index: only covers cacheable entries for eviction queries.
+-- ptr_map uses WITHOUT ROWID with PK (rdata_ip, entry_id, name) —
+-- the clustered PK already covers rdata_ip prefix lookups.
 CREATE INDEX idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
-CREATE INDEX idx_ptr_ip ON ptr_map(rdata_ip);
 ```
 
 **Key patterns**:
 - **DNS response cache**: `qtype` = original query type, records in original wire order. `Get()` filters `cacheable = 1` entries only.
 - **Error entries**: FORMERR/SERVFAIL/etc. stored with `cacheable = 0` and `msg_wire = NULL` — never returned by `Get()`, queryable via SQL for diagnostics.
 - **Wire format cache**: `Set()` packs Answer+Authority+Additional via `dns.Msg.Pack()`, compresses with zstd (SpeedDefault), stores in `msg_wire` BLOB. `Get()` decompresses + `Msg.Unpack()` — single binary decode replaces N× text parsing, cache hit ~0.5ms.
-- **Cache-hit tracking**: `RecordServe(protocol, stale)` does one `UPDATE hit_counters SET hit_udp = hit_udp + 1 WHERE entry_id = (SELECT id FROM entries WHERE ...)` — writes only touch the narrow hit_counters table, not the entries table with large BLOBs. Total hits = `SUM(hit_udp + hit_tcp + …)`.
-- **Stale/rewrite tracking**: `RecordServe(_, true)` increments `stale_count` in hit_counters; `RecordRewrite()` uses `INSERT OR IGNORE` (preserves existing entries) + `UPDATE hit_counters`.
+- **Cache-hit tracking**: `RecordServe(protocol, stale)` uses pre-compiled per-protocol statements (`stmtHits[protocolIndex(protocol)]`) to update `hit_counters` without dynamic SQL. Writes only touch the narrow hit_counters table, not the entries table with large BLOBs.
+- **Stale/rewrite tracking**: `RecordRewrite()` wrapped in a transaction for atomicity (all 3 SQL statements commit or rollback together). `RecordServe(_, true)` increments `stale_count` in a separate query.
 - **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `probeNSAddrs` and stored in ip_latency; `sortAnswerByLatency` reorders records at `Get()` time.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
@@ -450,7 +459,14 @@ GitHub Actions (`.github/workflows/main.yml`) builds multi-arch Docker images (l
     "features": {
       "hijack_protection": true,
       "dnssec_enforce": true,
-      "cache": { "max_entries": 0 }
+      "cache": {
+        "max_entries": 10000,
+        "db_path": "cache.db"
+      },
+      "latency_probe": [
+        { "protocol": "ping", "timeout": 200 },
+        { "protocol": "tcp", "port": 443, "timeout": 200 }
+      ]
     }
   },
   "upstream": [
@@ -459,7 +475,7 @@ GitHub Actions (`.github/workflows/main.yml`) builds multi-arch Docker images (l
 }
 ```
 
-Port 15353 (non-privileged), pure recursive, cache disabled, Debug log level. Start: `./zjdns -config config.debug.json`.
+Port 15353 (non-privileged), pure recursive, cache enabled with latency probing, Debug log level. Start: `./zjdns -config config.debug.json`.
 
 ### Test Domains
 
