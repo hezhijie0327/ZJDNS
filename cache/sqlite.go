@@ -444,16 +444,11 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	qname = dnsutil.NormalizeDomain(qname)
 	dnssecInt := boolToInt(dnssecOK)
 
-	// Pack wire format and compress. Skip compression when it doesn't help
-	// (small responses may produce larger zstd output due to framing overhead).
+	// Pack wire format and compress.
 	msg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
 	var msgWire []byte
 	if err := msg.Pack(); err == nil {
-		if compressed := compress(msg.Data); len(compressed) < len(msg.Data) {
-			msgWire = compressed
-		} else {
-			msgWire = msg.Data
-		}
+		msgWire = compress(msg.Data)
 	}
 
 	// ── Transaction (serialized via writeMu) ──────────────────────────────

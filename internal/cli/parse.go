@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"zjdns/config"
 )
 
 // ParseFlags parses command-line arguments and handles special commands
@@ -54,7 +56,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	}
 
 	if generateConfig {
-		fmt.Println(GenerateExampleConfig())
+		fmt.Println(config.GenerateExampleConfig())
 		return "", true
 	}
 
