@@ -299,11 +299,14 @@ func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP 
 	ecsOpt = h.edns.ParseFromDNS(req)
 	cookieOpt = h.edns.ParseCookie(req)
 
-	// Early DNS Cookie validation (RFC 7873).  When a cookie option is present
-	// but the server cookie is absent or too short, treat it as invalid — clients
-	// must include a valid-length server cookie after the initial exchange.
-	if cookieOpt != nil && len(cookieOpt.ServerCookie) < edns.DefaultCookieServerLen {
-		log.Debugf("EDNS: missing or short server cookie from %s, returning BADCOOKIE", clientIP)
+	// Early DNS Cookie validation (RFC 7873).
+	//
+	// Three cases for the ServerCookie length:
+	//   0 bytes  — initial handshake, no cookie to validate (allow through)
+	//   1-15     — truncated/tampered, reject with BADCOOKIE
+	//   16 bytes — normal, validate cryptographically
+	if cookieOpt != nil && len(cookieOpt.ServerCookie) > 0 && len(cookieOpt.ServerCookie) < edns.DefaultCookieServerLen {
+		log.Debugf("EDNS: short server cookie (%d bytes) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), clientIP)
 		msg := h.buildResponse(req)
 		msg.Rcode = dns.RcodeFormatError
 		serverCookie := h.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
@@ -311,7 +314,7 @@ func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP 
 		h.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
 		return false, nil, nil, msg
 	}
-	if cookieOpt != nil && !h.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
+	if cookieOpt != nil && len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen && !h.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
 		log.Debugf("EDNS: bad server cookie from %s, returning BADCOOKIE", clientIP)
 		msg := h.buildResponse(req)
 		msg.Rcode = dns.RcodeFormatError
