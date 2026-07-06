@@ -60,7 +60,7 @@ func BenchmarkCacheSetGet(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		c.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a}, nil, nil, false, cache.SetOptions{})
+		c.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a}, nil, nil, false)
 		c.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	}
 }
@@ -79,7 +79,7 @@ func BenchmarkCacheParallel(b *testing.B) {
 				Hdr: dns.Header{Name: fmt.Sprintf("host%d.example.com.", i), Class: dns.ClassINET, TTL: 300},
 				A:   rdata.A{Addr: netip.AddrFrom4([4]byte{192, 0, 2, byte(i % 256)})},
 			}
-			c.Set(name, dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a}, nil, nil, false, cache.SetOptions{})
+			c.Set(name, dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a}, nil, nil, false)
 			c.Get(name, dns.TypeA, dns.ClassINET, nil, false)
 			i++
 		}

@@ -71,7 +71,7 @@ func cacheRootHint(s cache.Store, name string, addrs []string) {
 		}
 	}
 	for qtype, records := range typeGroups {
-		s.Set(name, qtype, dns.ClassINET, nil, false, records, nil, nil, false, cache.SetOptions{})
+		s.Set(name, qtype, dns.ClassINET, nil, false, records, nil, nil, false)
 	}
 }
 

@@ -8,26 +8,31 @@ import (
 	"zjdns/internal/ttl"
 )
 
-// SetOptions carries per-response metadata stored alongside cache entries for
-// analytics via SQL queries against the entries table.
-type SetOptions struct {
-	Rcode        int    // DNS response code (dns.RcodeSuccess, etc.)
-	ResponseTime int64  // Response time in milliseconds
-	Server       string // upstream server that resolved this query (e.g. "8.8.8.8:53 (UDP)")
-	Fallback     bool   // true if resolved via fallback upstream
-	Prefetch     bool   // true if this was a background prefetch refresh
-	Hijack       bool   // true if hijack was detected in the response
-	Dnssec       string // secure, insecure, bogus, or empty
-	Uncacheable  bool   // true for error entries that should not be served from cache
+// RequestRecord captures per-request metadata for the request_log table.
+// One row is inserted for every query served, providing an audit trail for
+// debugging and the data source for Stats() aggregation.
+type RequestRecord struct {
+	Qname        string // normalized FQDN
+	Qtype        uint16
+	Qclass       uint16
+	ECS          *config.ECSOption // for resolving entry_id FK; nil if none
+	DNSSECOK     bool              // for resolving entry_id FK
+	Protocol     string            // 'udp','tcp','dot','doq','doh','doh3'
+	Result       string            // 'hit','miss','stale','rewrite','error'
+	ResponseTime int64             // milliseconds
+	Rcode        int               // DNS response code
+	Server       string            // upstream server identifier
+	Hijack       bool              // true if hijack was detected
+	Fallback     bool              // true if resolved via fallback upstream
+	DNSSECStatus string            // 'secure','insecure','bogus', or ''
 }
 
 // Store defines the cache storage interface.
 type Store interface {
 	Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool)
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
-		answer, authority, additional []dns.RR, validated bool, opts SetOptions)
-	RecordServe(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, protocol string, stale bool)
-	RecordRewrite(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool)
+		answer, authority, additional []dns.RR, validated bool)
+	RecordRequest(r RequestRecord)
 	UpdateLatency(ip string, latencyMS int)
 	GetLatencyLastProbe(ip string) (int64, bool)
 	ReverseLookup(ip string) []LookupResult

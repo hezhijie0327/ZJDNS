@@ -10,7 +10,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 
-	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
@@ -21,7 +20,7 @@ import (
 // CacheSetter is the interface for updating latency measurements in the
 // cache after probing.
 type CacheSetter interface {
-	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, dnssecOK bool, answer, authority, additional []dns.RR, validated bool, opts cache.SetOptions)
+	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, dnssecOK bool, answer, authority, additional []dns.RR, validated bool)
 	UpdateLatency(ip string, latencyMS int)
 	GetLatencyLastProbe(ip string) (int64, bool)
 }

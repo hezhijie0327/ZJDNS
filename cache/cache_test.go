@@ -29,7 +29,7 @@ func TestSet_Get_RoundTrip(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
 	entry, found, expired := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -61,7 +61,7 @@ func TestSet_ValidatedFlag(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true, SetOptions{})
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true)
 
 	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -81,7 +81,7 @@ func TestSet_Get_ECSScoping(t *testing.T) {
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 	ecs := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("192.0.2.0").AsSlice()}
 
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs, false, []dns.RR{rr}, nil, nil, false)
 
 	// Hit with same ECS
 	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs, false)
@@ -109,7 +109,7 @@ func TestSet_Get_DNSSECScoping(t *testing.T) {
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, true, []dns.RR{rr}, nil, nil, false, SetOptions{})
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, true, []dns.RR{rr}, nil, nil, false)
 
 	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, true)
 	if !found {
@@ -215,7 +215,7 @@ func TestSet_ZeroTTLFloored(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
 	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -308,7 +308,7 @@ func TestSet_NegativeTTLCapped(t *testing.T) {
 		Hdr:  dns.Header{Name: "alpha.example.com.", Class: dns.ClassINET, TTL: 86400},
 		NSEC: rdata.NSEC{NextDomain: "zulu.example.com."},
 	}
-	mc.Set("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false, nil, []dns.RR{soa, nsec}, nil, false, SetOptions{})
+	mc.Set("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false, nil, []dns.RR{soa, nsec}, nil, false)
 
 	entry, found, _ := mc.Get("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -324,7 +324,7 @@ func TestSet_NegativeTTLUncapped_NoNSEC(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	aRec := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRec}, nil, nil, false, SetOptions{})
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRec}, nil, nil, false)
 
 	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -342,7 +342,7 @@ func TestSet_Get_DNSKEY(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	dnskey := &dns.DNSKEY{Hdr: dns.Header{Name: "com.", Class: dns.ClassINET, TTL: 86400}}
-	mc.Set("com.", dns.TypeDNSKEY, dns.ClassINET, nil, false, []dns.RR{dnskey}, nil, nil, true, SetOptions{})
+	mc.Set("com.", dns.TypeDNSKEY, dns.ClassINET, nil, false, []dns.RR{dnskey}, nil, nil, true)
 
 	entry, found, _ := mc.Get("com.", dns.TypeDNSKEY, dns.ClassINET, nil, false)
 	if !found {
@@ -358,7 +358,7 @@ func TestSet_Get_NSAddrTXT(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	txt := &dns.TXT{Hdr: dns.Header{Name: ".", Class: dns.ClassINET, TTL: 900}, TXT: rdata.TXT{Txt: []string{"198.41.0.4:53"}}}
-	mc.Set(".", dns.TypeNone, dns.ClassINET, nil, false, []dns.RR{txt}, nil, nil, false, SetOptions{})
+	mc.Set(".", dns.TypeNone, dns.ClassINET, nil, false, []dns.RR{txt}, nil, nil, false)
 
 	entry, found, _ := mc.Get(".", dns.TypeNone, dns.ClassINET, nil, false)
 	if !found {
@@ -369,97 +369,114 @@ func TestSet_Get_NSAddrTXT(t *testing.T) {
 	}
 }
 
-// ── RecordServe (entries table — no more metadata subquery) ──────────────────
+// ── RecordRequest (request_log table) ──────────────────────────────────────
 
-func TestRecordServe_Fresh(t *testing.T) {
+func TestRecordRequest_Hit(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
-	// Fresh serve via UDP
-	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
+	// Cache hit via UDP
+	mc.RecordRequest(RequestRecord{
+		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
+		ECS: nil, DNSSECOK: false,
+		Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
+	})
 
-	var hitUDP, lastHit int64
-	err := mc.db.QueryRow("SELECT hc.hit_udp, hc.last_hit_time FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='example.com' AND e.qtype=1").Scan(&hitUDP, &lastHit)
+	var protocol, result string
+	var rcode int
+	err := mc.db.QueryRow(
+		"SELECT protocol, result, rcode FROM request_log WHERE qname='example.com' AND qtype=1",
+	).Scan(&protocol, &result, &rcode)
 	if err != nil {
-		t.Fatalf("entries query: %v", err)
+		t.Fatalf("request_log query: %v", err)
 	}
-	if hitUDP != 1 {
-		t.Errorf("hit_udp = %d, want 1", hitUDP)
+	if protocol != "udp" {
+		t.Errorf("protocol = %s, want udp", protocol)
 	}
-	if lastHit == 0 {
-		t.Error("last_hit_time should be non-zero")
+	if result != "hit" {
+		t.Errorf("result = %s, want hit", result)
+	}
+	if rcode != dns.RcodeSuccess {
+		t.Errorf("rcode = %d, want %d", rcode, dns.RcodeSuccess)
 	}
 }
 
-func TestRecordServe_Stale(t *testing.T) {
+func TestRecordRequest_Stale(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
 	// Stale serve via TCP
-	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "TCP", true)
+	mc.RecordRequest(RequestRecord{
+		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
+		ECS: nil, DNSSECOK: false,
+		Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess,
+	})
 
-	var hitTCP, staleCount, lastHit int64
-	err := mc.db.QueryRow("SELECT hc.hit_tcp, hc.stale_count, hc.last_hit_time FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='example.com' AND e.qtype=1").Scan(&hitTCP, &staleCount, &lastHit)
+	var protocol, result string
+	err := mc.db.QueryRow(
+		"SELECT protocol, result FROM request_log WHERE qname='example.com' AND qtype=1",
+	).Scan(&protocol, &result)
 	if err != nil {
-		t.Fatalf("entries query: %v", err)
+		t.Fatalf("request_log query: %v", err)
 	}
-	if hitTCP != 1 {
-		t.Errorf("hit_tcp = %d, want 1", hitTCP)
+	if protocol != "tcp" {
+		t.Errorf("protocol = %s, want tcp", protocol)
 	}
-	if staleCount != 1 {
-		t.Errorf("stale_count = %d, want 1", staleCount)
-	}
-	if lastHit == 0 {
-		t.Error("last_hit_time should be non-zero")
+	if result != "stale" {
+		t.Errorf("result = %s, want stale", result)
 	}
 }
 
-func TestRecordServe_MultipleProtocols(t *testing.T) {
+func TestRecordRequest_MultipleResults(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
-	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
-	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
-	mc.RecordServe("example.com.", dns.TypeA, dns.ClassINET, nil, false, "DoH", false)
+	mc.RecordRequest(RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doh", Result: "hit", Rcode: dns.RcodeSuccess})
 
-	var hitUDP, hitDOH int64
-	err := mc.db.QueryRow("SELECT hc.hit_udp, hc.hit_doh FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='example.com' AND e.qtype=1").Scan(&hitUDP, &hitDOH)
+	var udpCount, dohCount int64
+	err := mc.db.QueryRow(
+		"SELECT SUM(CASE WHEN protocol='udp' THEN 1 ELSE 0 END), SUM(CASE WHEN protocol='doh' THEN 1 ELSE 0 END) FROM request_log WHERE qname='example.com'",
+	).Scan(&udpCount, &dohCount)
 	if err != nil {
-		t.Fatalf("entries query: %v", err)
+		t.Fatalf("request_log query: %v", err)
 	}
-	if hitUDP != 2 {
-		t.Errorf("hit_udp = %d, want 2", hitUDP)
+	if udpCount != 2 {
+		t.Errorf("udp count = %d, want 2", udpCount)
 	}
-	if hitDOH != 1 {
-		t.Errorf("hit_doh = %d, want 1", hitDOH)
+	if dohCount != 1 {
+		t.Errorf("doh count = %d, want 1", dohCount)
 	}
 }
 
-// ── RecordRewrite ────────────────────────────────────────────────────────────
+// ── RecordRequest Rewrite ─────────────────────────────────────────────────────
 
-func TestRecordRewrite(t *testing.T) {
+func TestRecordRequest_Rewrite(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	mc.RecordRewrite("blocked.com.", dns.TypeA, dns.ClassINET, nil, false)
-	mc.RecordRewrite("blocked.com.", dns.TypeA, dns.ClassINET, nil, false)
+	mc.RecordRequest(RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
 
-	var rewriteCount int64
-	err := mc.db.QueryRow("SELECT hc.rewrite_count FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='blocked.com' AND e.qtype=1").Scan(&rewriteCount)
+	var count int64
+	err := mc.db.QueryRow(
+		"SELECT COUNT(*) FROM request_log WHERE qname='blocked.com' AND result='rewrite'",
+	).Scan(&count)
 	if err != nil {
-		t.Fatalf("entries query: %v", err)
+		t.Fatalf("request_log query: %v", err)
 	}
-	if rewriteCount != 2 {
-		t.Errorf("rewrite_count = %d, want 2", rewriteCount)
+	if count != 2 {
+		t.Errorf("rewrite count = %d, want 2", count)
 	}
 }
 
@@ -470,7 +487,7 @@ func TestReverseLookup(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	aRec := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}
-	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRec}, nil, nil, false, SetOptions{})
+	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRec}, nil, nil, false)
 
 	results := mc.ReverseLookup("192.0.2.1")
 	if len(results) == 0 {
@@ -505,7 +522,7 @@ func TestUpdateLatency(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("8.8.8.8")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{})
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
 	mc.UpdateLatency("8.8.8.8", 42)
 
@@ -531,7 +548,7 @@ func TestSet_Get_MultipleRecords(t *testing.T) {
 		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.", Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600}}
 
 	mc.Set("multi.example.com.", dns.TypeA, dns.ClassINET, nil, false,
-		[]dns.RR{a1, a2}, []dns.RR{soa}, nil, true, SetOptions{})
+		[]dns.RR{a1, a2}, []dns.RR{soa}, nil, true)
 
 	entry, found, _ := mc.Get("multi.example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -548,38 +565,28 @@ func TestSet_Get_MultipleRecords(t *testing.T) {
 	}
 }
 
-// ── SetOptions metadata round-trip ───────────────────────────────────────────
+// ── Set/Get round-trip ────────────────────────────────────────────────────
 
-func TestSet_MetadataRoundTrip(t *testing.T) {
+func TestSet_RoundTrip(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "meta.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.1.1.1")}}
-	mc.Set("meta.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true,
-		SetOptions{Rcode: 0, ResponseTime: 150, Server: "1.2.3.4:53 (UDP)", Dnssec: "secure", Fallback: false, Hijack: true})
+	mc.Set("meta.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true)
 
-	var rcode, respTime, fallback, hijack int64
-	var server, dnssec string
+	var validated int
+	var msgWire []byte
 	err := mc.db.QueryRow(
-		"SELECT e.rcode, e.response_time_ms, e.server, e.dnssec, e.fallback, e.hijack FROM entries e WHERE e.qname='meta.example.com' AND e.qtype=1",
-	).Scan(&rcode, &respTime, &server, &dnssec, &fallback, &hijack)
+		"SELECT e.validated, e.msg_wire FROM entries e WHERE e.qname='meta.example.com' AND e.qtype=1",
+	).Scan(&validated, &msgWire)
 	if err != nil {
 		t.Fatalf("entries query: %v", err)
 	}
-	if rcode != 0 {
-		t.Errorf("rcode = %d, want 0", rcode)
+	if validated != 1 {
+		t.Errorf("validated = %d, want 1", validated)
 	}
-	if respTime != 150 {
-		t.Errorf("response_time_ms = %d, want 150", respTime)
-	}
-	if server != "1.2.3.4:53 (UDP)" {
-		t.Errorf("server = %s", server)
-	}
-	if dnssec != "secure" {
-		t.Errorf("dnssec = %s, want 'secure'", dnssec)
-	}
-	if hijack != 1 {
-		t.Errorf("hijack = %d, want 1", hijack)
+	if len(msgWire) == 0 {
+		t.Error("msg_wire should not be empty")
 	}
 }
 
@@ -626,28 +633,36 @@ func TestDecompressEmpty(t *testing.T) {
 	}
 }
 
-// ── Uncacheable entries (error responses) ─────────────────────────────────────
+// ── RecordRequest Error ───────────────────────────────────────────────────
 
-func TestSet_Uncacheable(t *testing.T) {
+func TestRecordRequest_Error(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	mc.Set("error.example.com.", dns.TypeA, dns.ClassINET, nil, false, nil, nil, nil, false,
-		SetOptions{Uncacheable: true, Rcode: dns.RcodeServerFailure})
+	mc.RecordRequest(RequestRecord{
+		Qname: "error.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
+		ECS: nil, DNSSECOK: false,
+		Protocol: "udp", Result: "error", Rcode: dns.RcodeServerFailure,
+		Server: "1.2.3.4:53 (UDP)", ResponseTime: 500,
+	})
 
-	_, found, _ := mc.Get("error.example.com.", dns.TypeA, dns.ClassINET, nil, false)
-	if found {
-		t.Error("uncacheable entries should not be returned by Get")
-	}
-
-	// Verify it's stored in the DB for analytics.
-	var rcode int
-	err := mc.db.QueryRow("SELECT e.rcode FROM entries e WHERE e.qname='error.example.com' AND e.qtype=1 AND e.cacheable=0").Scan(&rcode)
+	var protocol, result string
+	var rcode, respTime int
+	var server string
+	err := mc.db.QueryRow(
+		"SELECT protocol, result, rcode, response_time_ms, server FROM request_log WHERE qname='error.example.com' AND qtype=1",
+	).Scan(&protocol, &result, &rcode, &respTime, &server)
 	if err != nil {
-		t.Fatalf("uncacheable entry query: %v", err)
+		t.Fatalf("request_log query: %v", err)
+	}
+	if result != "error" {
+		t.Errorf("result = %s, want error", result)
 	}
 	if rcode != dns.RcodeServerFailure {
 		t.Errorf("rcode = %d, want %d", rcode, dns.RcodeServerFailure)
+	}
+	if server != "1.2.3.4:53 (UDP)" {
+		t.Errorf("server = %s", server)
 	}
 }
 
@@ -658,8 +673,8 @@ func TestStats(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "sum.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("4.5.6.7")}}
-	mc.Set("sum.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{Rcode: 0, ResponseTime: 42})
-	mc.RecordServe("sum.example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
+	mc.Set("sum.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	mc.RecordRequest(RequestRecord{Qname: "sum.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 
 	s := mc.Stats()
 	if s == "" {
@@ -684,29 +699,30 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	a2 := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.35")}}
 	aaaa := &dns.AAAA{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netip.MustParseAddr("2606:2800:220:1:248:1893:25c8:1946")}}
 	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
-		[]dns.RR{a1, a2}, nil, []dns.RR{aaaa}, true,
-		SetOptions{Rcode: dns.RcodeSuccess, ResponseTime: 23, Server: "1.1.1.1:53 (UDP)", Dnssec: "secure"})
+		[]dns.RR{a1, a2}, nil, []dns.RR{aaaa}, true)
 
 	a3 := &dns.A{Hdr: dns.Header{Name: "github.com.", Class: dns.ClassINET, TTL: 60}, A: rdata.A{Addr: netip.MustParseAddr("140.82.121.3")}}
 	mc.Set("github.com.", dns.TypeA, dns.ClassINET, nil, false,
-		[]dns.RR{a3}, nil, nil, false,
-		SetOptions{Rcode: dns.RcodeSuccess, ResponseTime: 87, Server: "8.8.8.8:53 (UDP)", Dnssec: "insecure"})
+		[]dns.RR{a3}, nil, nil, false)
 
 	soa := &dns.SOA{Hdr: dns.Header{Name: "nonexist.example.com.", Class: dns.ClassINET, TTL: 900},
 		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.", Serial: 2025010101, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600}}
 	nsec := &dns.NSEC{Hdr: dns.Header{Name: "alpha.example.com.", Class: dns.ClassINET, TTL: 600}, NSEC: rdata.NSEC{NextDomain: "zulu.example.com."}}
 	mc.Set("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false,
-		nil, []dns.RR{soa, nsec}, nil, false,
-		SetOptions{Rcode: dns.RcodeNameError, ResponseTime: 12, Server: "builtin_recursive", Dnssec: "secure", Hijack: false})
+		nil, []dns.RR{soa, nsec}, nil, false)
 
 	mc.Set("error.example.com.", dns.TypeA, dns.ClassINET, nil, false,
-		nil, nil, nil, false,
-		SetOptions{Uncacheable: true, Rcode: dns.RcodeServerFailure, ResponseTime: 5000, Server: "192.0.2.1:53 (TCP)", Dnssec: "bogus", Hijack: true})
+		nil, nil, nil, false)
+	mc.RecordRequest(RequestRecord{
+		Qname: "error.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
+		ECS: nil, DNSSECOK: false,
+		Protocol: "tcp", Result: "error", Rcode: dns.RcodeServerFailure,
+		Server: "192.0.2.1:53 (TCP)", Hijack: true, DNSSECStatus: "bogus",
+	})
 
 	txt := &dns.TXT{Hdr: dns.Header{Name: ".", Class: dns.ClassINET, TTL: 3600}, TXT: rdata.TXT{Txt: []string{"198.41.0.4:53"}}}
 	mc.Set(".", dns.TypeNone, dns.ClassINET, nil, false,
-		[]dns.RR{txt}, nil, nil, false,
-		SetOptions{Rcode: dns.RcodeSuccess, ResponseTime: 5, Server: "builtin_recursive"})
+		[]dns.RR{txt}, nil, nil, false)
 
 	// ── Phase 2: Get + verify wire-format round-trip ────────────────────────
 	entry, found, expired := mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
@@ -747,49 +763,52 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		t.Errorf("authority count = %d, want 2 (SOA+NSEC)", len(entry.Authority))
 	}
 
-	// ── Phase 4: Uncacheable entry must not be served ───────────────────────
-	_, found, _ = mc.Get("error.example.com.", dns.TypeA, dns.ClassINET, nil, false)
-	if found {
-		t.Error("uncacheable entry should not be returned")
+	// ── Phase 4: Verify request_log has error record ────────────────────────
+	var errCount int64
+	_ = mc.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE qname='error.example.com' AND result='error'").Scan(&errCount)
+	if errCount != 1 {
+		t.Errorf("error log count = %d, want 1", errCount)
 	}
 
-	// ── Phase 5: RecordServe updates counters ───────────────────────────────
-	mc.RecordServe("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
-	mc.RecordServe("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
-	mc.RecordServe("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "DoH", false)
-	mc.RecordServe("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, "DoQ", true)
-	mc.RecordServe("github.com.", dns.TypeA, dns.ClassINET, nil, false, "TCP", false)
-	mc.RecordServe("github.com.", dns.TypeA, dns.ClassINET, nil, false, "TCP", true)
+	// ── Phase 5: RecordRequest logs queries ────────────────────────────────
+	mc.RecordRequest(RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doh", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doq", Result: "stale", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess})
 
-	var hitUDP, hitDOH, hitDOQ, staleTotal int64
+	var udpHits, dohHits, doqStale int64
 	err = mc.db.QueryRow(
-		`SELECT hc.hit_udp, hc.hit_doh, hc.hit_doq, hc.stale_count FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='www.example.com' AND e.qtype=1`,
-	).Scan(&hitUDP, &hitDOH, &hitDOQ, &staleTotal)
+		`SELECT SUM(CASE WHEN protocol='udp' AND result='hit' THEN 1 ELSE 0 END),
+		        SUM(CASE WHEN protocol='doh' THEN 1 ELSE 0 END),
+		        SUM(CASE WHEN protocol='doq' AND result='stale' THEN 1 ELSE 0 END)
+		 FROM request_log WHERE qname='www.example.com'`,
+	).Scan(&udpHits, &dohHits, &doqStale)
 	if err != nil {
-		t.Fatalf("counter query: %v", err)
+		t.Fatalf("request_log query: %v", err)
 	}
-	if hitUDP != 2 {
-		t.Errorf("hit_udp = %d, want 2", hitUDP)
+	if udpHits != 2 {
+		t.Errorf("udp hits = %d, want 2", udpHits)
 	}
-	if hitDOH != 1 {
-		t.Errorf("hit_doh = %d, want 1", hitDOH)
+	if dohHits != 1 {
+		t.Errorf("doh hits = %d, want 1", dohHits)
 	}
-	if hitDOQ != 1 {
-		t.Errorf("hit_doq = %d, want 1", hitDOQ)
-	}
-	if staleTotal != 1 {
-		t.Errorf("stale_count = %d, want 1", staleTotal)
+	if doqStale != 1 {
+		t.Errorf("doq stale = %d, want 1", doqStale)
 	}
 
 	var gitTCP, gitStale int64
 	_ = mc.db.QueryRow(
-		`SELECT hc.hit_tcp, hc.stale_count FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='github.com' AND e.qtype=1`,
+		`SELECT SUM(CASE WHEN protocol='tcp' AND result='hit' THEN 1 ELSE 0 END),
+		        SUM(CASE WHEN protocol='tcp' AND result='stale' THEN 1 ELSE 0 END)
+		 FROM request_log WHERE qname='github.com'`,
 	).Scan(&gitTCP, &gitStale)
-	if gitTCP != 2 {
-		t.Errorf("github.com hit_tcp = %d, want 2", gitTCP)
+	if gitTCP != 1 {
+		t.Errorf("github.com tcp hit = %d, want 1", gitTCP)
 	}
 	if gitStale != 1 {
-		t.Errorf("github.com stale_count = %d, want 1", gitStale)
+		t.Errorf("github.com tcp stale = %d, want 1", gitStale)
 	}
 
 	// ── Phase 6: ReverseLookup (ptr_map) ────────────────────────────────────
@@ -821,11 +840,10 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// ── Phase 8: Entry overwrite (INSERT OR REPLACE) ────────────────────────
-	// Re-insert with new metadata; wire format + ptr_map should update atomically.
+	// Re-insert; wire format + ptr_map should update atomically.
 	aNew := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 600}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.99")}}
 	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
-		[]dns.RR{aNew}, nil, nil, false,
-		SetOptions{Rcode: dns.RcodeSuccess, ResponseTime: 99, Server: "9.9.9.9:53 (DoT)", Dnssec: "secure"})
+		[]dns.RR{aNew}, nil, nil, false)
 
 	entry, found, _ = mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -849,12 +867,12 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		t.Error("new ptr_map entry for 93.184.216.99 not found")
 	}
 
-	// ── Phase 9: RecordRewrite ──────────────────────────────────────────────
-	mc.RecordRewrite("rewrite.test.", dns.TypeA, dns.ClassINET, nil, false)
-	mc.RecordRewrite("rewrite.test.", dns.TypeA, dns.ClassINET, nil, false)
-	mc.RecordRewrite("rewrite.test.", dns.TypeA, dns.ClassINET, nil, false)
+	// ── Phase 9: RecordRequest Rewrite ──────────────────────────────────────
+	mc.RecordRequest(RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
 	var rwCount int64
-	_ = mc.db.QueryRow(`SELECT hc.rewrite_count FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='rewrite.test' AND e.qtype=1`).Scan(&rwCount)
+	_ = mc.db.QueryRow(`SELECT COUNT(*) FROM request_log WHERE qname='rewrite.test' AND result='rewrite'`).Scan(&rwCount)
 	if rwCount != 3 {
 		t.Errorf("rewrite_count = %d, want 3", rwCount)
 	}
@@ -898,7 +916,7 @@ func TestE2E_LatencyOrdering(t *testing.T) {
 	a2 := &dns.A{Hdr: dns.Header{Name: "real.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.20")}}
 	a3 := &dns.A{Hdr: dns.Header{Name: "real.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.30")}}
 	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
-		[]dns.RR{cname, a1, a2, a3}, nil, nil, false, SetOptions{})
+		[]dns.RR{cname, a1, a2, a3}, nil, nil, false)
 
 	// Before latency data: Get() returns original order.
 	entry, found, _ := mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
@@ -969,8 +987,7 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 				A:   rdata.A{Addr: netip.MustParseAddr(fmt.Sprintf("10.%d.%d.%d", i/256, i%256, j+1))},
 			})
 		}
-		mc.Set(name, dns.TypeA, dns.ClassINET, nil, false, answers, nil, nil, i%2 == 0,
-			SetOptions{Rcode: dns.RcodeSuccess, ResponseTime: int64(10 + i), Server: "1.1.1.1:53 (UDP)"})
+		mc.Set(name, dns.TypeA, dns.ClassINET, nil, false, answers, nil, nil, i%2 == 0)
 	}
 
 	// Verify all 50 entries round-trip correctly.
@@ -989,13 +1006,13 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 	info, _ := os.Stat(dbPath)
 	t.Logf("50 entries (3 A records each), DB size: %d bytes (%.1f KB)", info.Size(), float64(info.Size())/1024)
 
-	// Verify all counters via SQL (single-table — no JOIN).
+	// Verify request_log counts
 	var total, udp, tcp int64
-	mc.RecordServe("host-00.example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
-	mc.RecordServe("host-01.example.com.", dns.TypeA, dns.ClassINET, nil, false, "TCP", false)
-	_ = mc.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(hc.hit_udp),0), COALESCE(SUM(hc.hit_tcp),0) FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id`).Scan(&total, &udp, &tcp)
-	if total != 50 {
-		t.Errorf("total entries = %d, want 50", total)
+	mc.RecordRequest(RequestRecord{Qname: "host-00.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(RequestRecord{Qname: "host-01.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
+	_ = mc.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN protocol='udp' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN protocol='tcp' THEN 1 ELSE 0 END),0) FROM request_log`).Scan(&total, &udp, &tcp)
+	if total != 2 {
+		t.Errorf("total log entries = %d, want 2", total)
 	}
 	if udp != 1 || tcp != 1 {
 		t.Errorf("udp=%d tcp=%d, want udp=1 tcp=1", udp, tcp)

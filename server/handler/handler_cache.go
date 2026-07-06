@@ -141,7 +141,7 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 					return
 				}
 				log.Debugf("CACHE: background refresh completed for slow expired query %s", question.Name)
-				h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, res.answer, res.authority, res.additional, res.validated, cache.SetOptions{Server: res.server, Fallback: res.fallback, Hijack: res.hijack})
+				h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, res.answer, res.authority, res.additional, res.validated)
 				if h.prober != nil {
 					h.prober.Start(question.Name, question.Qtype, res.answer, res.authority, res.additional, res.validated, res.ecs)
 				}
@@ -170,7 +170,10 @@ func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns
 func (h *Handler) processQueryError(req *dns.Msg, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, queryErr error, startTime time.Time, requestProtocol string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	if entry, found, _ := h.cache.Get(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
 		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.RemainingTTL(), entry.Validated)
-		h.cache.RecordServe(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, requestProtocol, true)
+		h.cache.RecordRequest(cache.RequestRecord{
+			Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
+			Protocol: requestProtocol, Result: "error", Rcode: dns.RcodeServerFailure,
+		})
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
 
@@ -236,8 +239,14 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	}
 
 	log.Debugf("CACHE: populating cache for %s", question.Name)
-	h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, answer, authority, additional, validated, cache.SetOptions{Rcode: dns.RcodeSuccess, ResponseTime: int64(time.Since(startTime).Milliseconds()), Server: server, Fallback: fallback, Hijack: hijack, Dnssec: dnssecStatus})
-	h.cache.RecordServe(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, requestProtocol, true)
+	h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, answer, authority, additional, validated)
+	h.cache.RecordRequest(cache.RequestRecord{
+		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
+		ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
+		Protocol: requestProtocol, Result: "miss", ResponseTime: int64(time.Since(startTime).Milliseconds()),
+		Rcode: dns.RcodeSuccess, Server: server, Hijack: hijack, Fallback: fallback,
+		DNSSECStatus: dnssecStatus,
+	})
 	if h.prober != nil {
 		h.prober.Start(question.Name, question.Qtype, answer, authority, additional, validated, responseECS)
 	}
@@ -284,7 +293,7 @@ func (h *Handler) refreshCacheEntry(ctx context.Context, question Question, ecs 
 		return qr.Err
 	}
 
-	h.cache.Set(question.Name, question.Qtype, question.Qclass, ecs, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated, cache.SetOptions{Prefetch: true, Server: qr.Server, Fallback: qr.Fallback, Hijack: qr.Hijack})
+	h.cache.Set(question.Name, question.Qtype, question.Qclass, ecs, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated)
 	if h.prober != nil {
 		h.prober.Start(question.Name, question.Qtype, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
 	}

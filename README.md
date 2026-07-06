@@ -44,21 +44,22 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 
 ### 缓存引擎
 
-基于 SQLite WAL 模式的关系型缓存，四表设计：
+基于 SQLite WAL 模式的关系型缓存，五表设计：
 
 | 表 | 说明 |
 |----|------|
-| `entries` | DNS 响应缓存（16 列，UNIQUE 约束，zstd 压缩 BLOB） |
-| `hit_counters` | 热命中计数器（WITHOUT ROWID，entry_id 即行，六协议分布） |
+| `entries` | DNS 响应缓存（8 列，UNIQUE 约束，zstd 压缩 BLOB） |
+| `request_log` | 请求日志（entry_id FK 关联缓存条目，ON DELETE CASCADE，无独立上限） |
+| `stats_meta` | 统计元信息（单行，记录上次清除的 request_log.id 阈值） |
 | `ip_latency` | 延迟探测结果（IP 为键，所有域名共享同 IP 行，qtype 自动推断） |
 | `ptr_map` | PTR 反向映射（IP→域名，WITHOUT ROWID，ON DELETE CASCADE） |
 
 - **Wire format 加速**：`msg_wire` BLOB 存储 zstd 压缩的 DNS 响应，`Get()` 解压缩 + `Msg.Unpack()` 一步还原，缓存命中 ~0.5ms
 - **延迟驱动排序**：A/AAAA 记录按 `ip_latency` 探测结果排序（最快优先），同一 CDN IP 多域名共享延迟数据，在 `Get()` 时批量查询重排
-- **热路径预编译语句**：`Get`、`RecordServe`、`UpdateLatency` 查询在初始化时 `Prepare()`，避免每次调用重复编译 SQL
-- **CHECK 约束**：布尔列（`cacheable`、`validated`、`fallback`、`prefetch`、`hijack`、`dnssec_ok`）均带 `CHECK (col IN (0,1))` 数据完整性保护
+- **请求日志**：每查询 1 次纯追加 INSERT，`entry_id` FK 关联缓存条目。所有行统一通过 `ensureEntry` 保证 FK 完整——rewrite/error 路径自动建轻量 stub，条目淘汰时 ON DELETE CASCADE 统一清理
+- **统计独立**：`FlushDB("stats")` 只更新 `stats_meta.cleared_before`（O(1)），不碰 `request_log`，统计清零但请求日志保留可查
 - **PTR 反查**：轻量 `ptr_map` 表，`SELECT ... WHERE rdata_ip = ? JOIN entries` 查询
-- **驱逐策略**：TTL 惰性过期 + 条数上限最旧淘汰（优先淘汰 `expires_at + staleMaxAge < now` 的条目），`ON DELETE CASCADE` 自动清理关联表
+- **驱逐策略**：TTL 惰性过期 + 条数上限最旧淘汰（优先淘汰 `expires_at + staleMaxAge < now` 的条目），`ON DELETE CASCADE` 自动清理 `ptr_map`
 - **持久化**：`db_path` 指定 SQLite 文件路径，跨重启保留全量缓存
 
 ### DNS 解析
@@ -145,32 +146,31 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 sqlite3 /var/lib/zjdns/cache.db "SELECT COUNT(*) FROM entries"
 
 # 方式二：内置 analyze（对齐表格输出）
-./zjdns -analyze /var/lib/zjdns/cache.db "SELECT e.qname, e.hit_udp FROM entries e"
+./zjdns -analyze /var/lib/zjdns/cache.db "SELECT timestamp, qname, result, response_time_ms FROM request_log ORDER BY timestamp DESC LIMIT 10"
 ```
 
 ### 常用查询
 
 ```sql
--- 缓存命中率
-SELECT
-  COALESCE(SUM(hc.hit_udp + hc.hit_tcp + hc.hit_dot + hc.hit_doq + hc.hit_doh + hc.hit_doh3), 0) AS total_hits,
-  COUNT(*) AS total_entries
-FROM hit_counters hc JOIN entries e ON hc.entry_id = e.id;
+-- 缓存命中率（来自请求日志）
+SELECT result, COUNT(*) AS cnt,
+       ROUND(100.0 * COUNT(*) / (SELECT COUNT(*) FROM request_log), 1) AS pct
+FROM request_log GROUP BY result ORDER BY cnt DESC;
 
 -- 各上游服务器的请求量与平均响应时间
-SELECT e.server, COUNT(*) AS requests, ROUND(AVG(e.response_time_ms), 1) AS avg_ms
-FROM entries e GROUP BY e.server ORDER BY requests DESC;
+SELECT server, COUNT(*) AS requests, ROUND(AVG(response_time_ms), 1) AS avg_ms
+FROM request_log WHERE server != '' GROUP BY server ORDER BY requests DESC;
 
 -- rcode 分布
-SELECT rcode, COUNT(*) AS cnt FROM entries GROUP BY rcode ORDER BY cnt DESC;
+SELECT rcode, COUNT(*) AS cnt FROM request_log GROUP BY rcode ORDER BY cnt DESC;
 
 -- 被劫持的查询
 SELECT qname, qtype, server, response_time_ms
-FROM entries WHERE hijack = 1 ORDER BY response_time_ms DESC;
+FROM request_log WHERE hijack = 1 ORDER BY timestamp DESC;
 
 -- 慢查询（>1s）
 SELECT qname, qtype, server, rcode, response_time_ms
-FROM entries WHERE response_time_ms > 1000 ORDER BY response_time_ms DESC;
+FROM request_log WHERE response_time_ms > 1000 ORDER BY response_time_ms DESC;
 
 -- 延迟最低的 IP（按地址族分组统计）
 SELECT qtype, rdata_ip, latency_ms FROM ip_latency
@@ -181,20 +181,22 @@ SELECT DISTINCT pm.name FROM ptr_map pm
 JOIN entries e ON pm.entry_id = e.id
 WHERE pm.rdata_ip = '104.20.23.154' AND e.expires_at + 2592000 >= unixepoch();
 
--- Top 10 命中域名
-SELECT e.qname, e.qtype,
-  SUM(hc.hit_udp + hc.hit_tcp + hc.hit_dot + hc.hit_doq + hc.hit_doh + hc.hit_doh3) AS hits
-FROM entries e JOIN hit_counters hc ON e.id = hc.entry_id
-GROUP BY e.qname, e.qtype ORDER BY hits DESC LIMIT 10;
+-- Top 10 命中域名（缓存命中的最热查询）
+SELECT qname, qtype, COUNT(*) AS requests
+FROM request_log WHERE result = 'hit' GROUP BY qname, qtype
+ORDER BY requests DESC LIMIT 10;
 
--- 协议命中分布
-SELECT SUM(hc.hit_udp) AS udp, SUM(hc.hit_tcp) AS tcp,
-       SUM(hc.hit_dot) AS dot, SUM(hc.hit_doq) AS doq,
-       SUM(hc.hit_doh) AS doh, SUM(hc.hit_doh3) AS doh3
-FROM hit_counters hc;
+-- 协议分布
+SELECT protocol, COUNT(*) AS cnt
+FROM request_log GROUP BY protocol ORDER BY cnt DESC;
 
 -- DNSSEC 状态分布
-SELECT dnssec, COUNT(*) AS cnt FROM entries GROUP BY dnssec ORDER BY cnt DESC;
+SELECT dnssec_status, COUNT(*) AS cnt FROM request_log
+GROUP BY dnssec_status ORDER BY cnt DESC;
+
+-- 某域名的完整请求历史（调试用）
+SELECT timestamp, protocol, result, rcode, response_time_ms, server, hijack
+FROM request_log WHERE qname = 'www.google.com' ORDER BY timestamp DESC LIMIT 20;
 ```
 
 ## 支持的标准

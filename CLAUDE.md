@@ -178,7 +178,7 @@ zjdns/
 ├── cmd/zjdns/                     ← main.go, banner.go, version.go, bench_test.go (binary)
 ├── config/                        ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── cache/                         ← Store interface, SQLite relational cache (entries + hit_counters + ip_latency + ptr_map tables)
+├── cache/                         ← Store interface, SQLite relational cache (entries + request_log + stats_meta + ip_latency + ptr_map tables)
 ├── cidr/                          ← IP filtering with tag matching
 ├── rewrite/                       ← Query rewrite rules
 ├── internal/
@@ -332,27 +332,27 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
 - **Rewrite TTL + DynamicContent**: Rewrite rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently (`origTTL - (elapsed % origTTL)`) rather than staying static. `DynamicContent func() string` field (json:"-") on `RewriteRule` bypasses pre-building — the function is called at query time for dynamic responses (`zjdns.stats` and `zjdns.db.{clear,clear.cache,clear.stats,clear.latency}` CH TXT). Destructive rules (`db.clear*`) are loopback-only via `IncludeClients`. Rewrite responses bypass cache (client-IP filtering).
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns). Similarly, `handler.Question` is a type alias of `resolver.Question` to avoid duplicate struct definitions.
-- **Merged entries+metadata**: Resolution metadata and hit counters live directly in the `entries` table — the old 1:1 `metadata` table was eliminated.
-- **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtGetLatency`, `stmtInsertLatency`, `stmtHits[6]`) at initialization time to avoid per-call SQL compilation overhead.
+- **request_log ring buffer**: Append-only request journal replaces the old `hit_counters` table. `RecordRequest()` does a single INSERT — no conflict detection, no read-before-write. Stats are aggregated via SQL over rows with `id > cleared_before`; FlushDB("stats") resets the threshold without touching log rows.
+- **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtInsertLog`, `stmtInsertLatency`, `stmtGetLastProbe`) at initialization time to avoid per-call SQL compilation overhead.
 - **Example config in config package**: `GenerateExampleConfig()` lives in `config` package (not `internal/cli`) to keep `internal/` layer free of domain imports.
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
 - **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
 - **eTLS alias**: Always use `eTLS` (not `cryptotls`) for `gitlab.com/go-extension/tls`. Used in `server/tls`, `server/client`, `config`.
 - **Error wrapping**: Always use `%w` in `fmt.Errorf` when wrapping errors that callers may check with `errors.Is`/`errors.As`. Use `%v` only for informational logging.
-- **Protocol hit index**: `protocolIndex(protocol)` maps a protocol string to a compact index (0–5) for use with `stmtHits[]` prepared statements. Replaces the old `hitColumn()` string-returning function.
+- **Protocol logging**: The `protocol` column in request_log stores the transport identifier as a string (`udp`/`tcp`/`dot`/`doq`/`doh`/`doh3`), enabling simple GROUP BY queries for protocol-level analytics.
 - **Handler Question alias**: `handler.Question` is a type alias (`type Question = resolver.Question`), eliminating redundant struct conversions between handler and resolver layers.
-- **RecordRewrite transactional**: All three SQL writes in `RecordRewrite()` run inside a single `BEGIN`/`COMMIT` transaction to prevent orphaned entries from partial failures.
+- **RecordRequest hot-path**: `RecordRequest()` does a single append-only INSERT — no transaction, no writeMu, no conflict resolution.
 - **ip_latency independence**: Latency data is not tied to cache entries — all domains sharing the same IP reuse the same row. Rows with `last_probe_time` older than `DefaultStaleMaxAge` (30 days) are cleaned up during eviction alongside stale cache entries.
 - **Zero-allocation label validation**: `IsValidDomainLabels` uses `strings.IndexByte` scanning instead of `strings.Split` to avoid per-query allocation on the hot path.
 - **processRR fast path**: When `value == 0 && !isElapsed && includeDNSSEC`, `processRR` returns the original RR without cloning — common on cache-miss serve paths (50+ allocs saved per response).
 
 ## DB Schema
 
-The cache uses four SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The cache uses five SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
--- Core cache entries: read-heavy, large msg_wire BLOBs. Hot serving counters
--- are split into hit_counters to avoid write amplification on cache hits.
+-- Pure DNS response cache. Every row is cacheable. Stats columns removed —
+-- per-request metadata is recorded in request_log instead.
 -- Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
 CREATE TABLE entries (
     -- Lookup key (UNIQUE)
@@ -368,15 +368,6 @@ CREATE TABLE entries (
     expires_at INTEGER NOT NULL DEFAULT 0,
     -- Flags
     validated  INTEGER NOT NULL DEFAULT 0 CHECK (validated IN (0, 1)),
-    cacheable  INTEGER NOT NULL DEFAULT 1 CHECK (cacheable IN (0, 1)),  -- 0 = error entry, never returned by Get()
-    -- Resolution metadata (written once by Set)
-    rcode            INTEGER NOT NULL DEFAULT 0,
-    response_time_ms INTEGER NOT NULL DEFAULT 0,
-    server           TEXT NOT NULL DEFAULT '',
-    dnssec           TEXT NOT NULL DEFAULT '',
-    fallback         INTEGER NOT NULL DEFAULT 0 CHECK (fallback IN (0, 1)),
-    prefetch         INTEGER NOT NULL DEFAULT 0 CHECK (prefetch IN (0, 1)),
-    hijack           INTEGER NOT NULL DEFAULT 0 CHECK (hijack IN (0, 1)),
     -- zstd-compressed wire format (Answer+Authority+Additional)
     msg_wire   BLOB,
     -- PK + constraint
@@ -384,36 +375,40 @@ CREATE TABLE entries (
     UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 );
 
--- Hot serving counters: updated on every cache hit. Split from entries to
--- avoid rewriting pages that contain large msg_wire BLOBs. WITHOUT ROWID so
--- the entry_id IS the row — no separate B-tree lookup.
-CREATE TABLE hit_counters (
-    entry_id      INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
-    last_hit_time INTEGER NOT NULL DEFAULT 0,
-    hit_udp       INTEGER NOT NULL DEFAULT 0,
-    hit_tcp       INTEGER NOT NULL DEFAULT 0,
-    hit_dot       INTEGER NOT NULL DEFAULT 0,
-    hit_doq       INTEGER NOT NULL DEFAULT 0,
-    hit_doh       INTEGER NOT NULL DEFAULT 0,
-    hit_doh3      INTEGER NOT NULL DEFAULT 0,
-    stale_count   INTEGER NOT NULL DEFAULT 0,
-    rewrite_count INTEGER NOT NULL DEFAULT 0
-) WITHOUT ROWID;
+-- Eviction index: sorted by expires_at for efficient range scans.
+CREATE INDEX idx_entries_expires ON entries(expires_at);
 
--- Per-IP latency measurements. Keyed by rdata_ip only — latency is a
--- property of the IP, not the domain name. All domains sharing the same
--- IP (CDN) reuse the same row. qtype is inferred from IP format (A=1,
--- AAAA=28) for address-family analytics.
-CREATE TABLE ip_latency (
-    rdata_ip        TEXT NOT NULL,
-    qtype           INTEGER NOT NULL DEFAULT 0,
-    latency_ms      INTEGER NOT NULL,
-    last_probe_time INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (rdata_ip)
-) WITHOUT ROWID;
+-- Append-only request journal (ring buffer). One row per served query.
+-- Stats() aggregates from this table; per-request debugging queries
+-- against qname/qtype/rcode/protocol. Survives FlushDB("stats") —
+-- only cleared by full Clear(). Self-trims when row count > maxRequestLog.
+CREATE TABLE request_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp       INTEGER NOT NULL,       -- unix seconds
+    qname           TEXT NOT NULL,
+    qtype           INTEGER NOT NULL,
+    qclass          INTEGER NOT NULL DEFAULT 1,
+    protocol        TEXT NOT NULL,           -- 'udp','tcp','dot','doq','doh','doh3'
+    result          TEXT NOT NULL,           -- 'hit','miss','stale','rewrite','error'
+    response_time_ms INTEGER NOT NULL DEFAULT 0,
+    rcode           INTEGER NOT NULL DEFAULT 0,
+    server          TEXT NOT NULL DEFAULT '',
+    hijack          INTEGER NOT NULL DEFAULT 0,
+    fallback        INTEGER NOT NULL DEFAULT 0,
+    dnssec_status   TEXT NOT NULL DEFAULT '' -- 'secure','insecure','bogus',''
+);
+CREATE INDEX idx_request_log_ts ON request_log(timestamp);
+CREATE INDEX idx_request_log_qname ON request_log(qname, qtype);
 
--- Lightweight PTR reverse-lookup table (IP → domain name). WITHOUT ROWID for
--- faster IP lookups without a separate index B-tree.
+-- Stats metadata: single row tracking the last request_log.id that was
+-- "cleared" by FlushDB("stats"). Resetting stats is O(1): just UPDATE.
+CREATE TABLE stats_meta (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    cleared_before INTEGER NOT NULL DEFAULT 0  -- request_log.id threshold
+);
+
+-- Lightweight PTR reverse-lookup (IP → domain). WITHOUT ROWID so the
+-- clustered PK covers rdata_ip prefix lookups.
 CREATE TABLE ptr_map (
     rdata_ip TEXT NOT NULL,
     entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
@@ -422,26 +417,31 @@ CREATE TABLE ptr_map (
     PRIMARY KEY (rdata_ip, entry_id, name)
 ) WITHOUT ROWID;
 
--- Partial index: only covers cacheable entries for eviction queries.
--- ptr_map uses WITHOUT ROWID with PK (rdata_ip, entry_id, name) —
--- the clustered PK already covers rdata_ip prefix lookups.
-CREATE INDEX idx_entries_expires ON entries(expires_at) WHERE cacheable = 1;
+-- Per-IP latency measurements. Keyed by rdata_ip only — all domains
+-- sharing the same IP (CDN) reuse the same row. qtype is inferred from
+-- IP format (A=1, AAAA=28) for address-family analytics.
+CREATE TABLE ip_latency (
+    rdata_ip        TEXT NOT NULL,
+    qtype           INTEGER NOT NULL DEFAULT 0,
+    latency_ms      INTEGER NOT NULL,
+    last_probe_time INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (rdata_ip)
+) WITHOUT ROWID;
 ```
 
 **Key patterns**:
-- **DNS response cache**: `qtype` = original query type, records in original wire order. `Get()` filters `cacheable = 1` entries only.
-- **Error entries**: FORMERR/SERVFAIL/etc. stored with `cacheable = 0` and `msg_wire = NULL` — never returned by `Get()`, queryable via SQL for diagnostics.
+- **DNS response cache**: `qtype` = original query type, records in original wire order. All entries are cacheable (the `cacheable` column has been removed — error logging moved to request_log).
 - **Wire format cache**: `Set()` packs Answer+Authority+Additional via `dns.Msg.Pack()`, compresses with zstd (SpeedDefault), stores in `msg_wire` BLOB. `Get()` decompresses + `Msg.Unpack()` — single binary decode replaces N× text parsing, cache hit ~0.5ms.
-- **Cache-hit tracking**: `RecordServe(protocol, stale)` uses pre-compiled per-protocol statements (`stmtHits[protocolIndex(protocol)]`) to update `hit_counters` without dynamic SQL. Writes only touch the narrow hit_counters table, not the entries table with large BLOBs.
-- **Stale/rewrite tracking**: `RecordRewrite()` wrapped in a transaction for atomicity (all 3 SQL statements commit or rollback together). `RecordServe(_, true)` increments `stale_count` in a separate query.
+- **Request logging**: `RecordRequest()` resolves or creates a cache entry via `ensureEntry()`, then does a single append-only INSERT into request_log with the entry_id FK. Every log row has a valid FK — rewrite/error paths get a lightweight stub entry automatically. The `result` column distinguishes cache hits (`hit`), fresh resolutions (`miss`), stale serves (`stale`), rewrite responses (`rewrite`), and errors (`error`).
+- **Stats aggregation**: `Stats()` queries request_log for rows with `id > (SELECT cleared_before FROM stats_meta)`. `FlushDB("stats")` sets `cleared_before` to the current max request_log.id — O(1) reset that leaves per-request detail intact.
+- **Log bounded by cache**: `request_log.entry_id REFERENCES entries(id) ON DELETE CASCADE` keeps the log size naturally bounded — when entries are evicted, their log rows go with them. No separate ring-buffer config needed.
 - **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `ProbeNSAddrs` and stored in ip_latency (keyed by IP only); `sortAnswerByLatency` reorders records at `Get()` time.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
 - **IP latency**: Per-IP keyed (`rdata_ip`). A single `INSERT OR REPLACE` writes `latency_ms`, `qtype` (inferred from IP format), and `last_probe_time` (via `unixepoch()`). `Prober.Start()` and `ProbeNSAddrs()` check `GetLatencyLastProbe` per-IP — if every IP in the answer was probed within `DefaultLatencyProbeMinInterval` (60s), the probe is skipped. All domains sharing the same CDN IP reuse the same latency row.
-- **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map` + `hit_counters`. Also prunes `ip_latency` rows with `last_probe_time` older than `defaultStaleMaxAge` (30 days). Entry count is synced from `SELECT COUNT(*)` before eviction to correct drift from INSERT OR REPLACE. No periodic cleanup — stale data is valuable for serve-stale.
-- **Probe latency**: `INSERT OR REPLACE INTO ip_latency (rdata_ip, qtype, latency_ms, last_probe_time) VALUES (?, ?, ?, unixepoch())` — per-IP, qtype auto-inferred. `GetLatencyLastProbe` deduplicates probes within `DefaultLatencyProbeMinInterval` (60s). Latency ordering is baked into wire format at `Set()` time; `ip_latency` enables SQL analytics (e.g. `SELECT qtype, AVG(latency_ms) FROM ip_latency GROUP BY qtype`) and survives cache refreshes.
-- **Dynamic queries + FlushDB**: `Store.Stats()` returns one-line cache summary, queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency` (`FlushDB(target)`, per-table). All restricted to loopback via `IncludeClients`. Wired via rewrite `DynamicContent` in `server.New()` before `LoadRules()`. `RecordServe` uses `INSERT ON CONFLICT` so counter rows recreate after `FlushDB("stats")`.
-- **Analytics**: single-table queries — e.g. `SELECT server, SUM(hit_dot) FROM entries GROUP BY server` for DoT requests per upstream. No JOIN needed.
+- **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map`. Also prunes `ip_latency` rows with `last_probe_time` older than `defaultStaleMaxAge` (30 days). Entry count is synced from `SELECT COUNT(*)` before eviction to correct drift from INSERT OR REPLACE.
+- **Dynamic queries + FlushDB**: `Store.Stats()` returns one-line cache summary aggregated from request_log, queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency` (`FlushDB(target)`, per-table). `FlushDB("stats")` only resets the stats_meta threshold — request_log rows survive. All restricted to loopback via `IncludeClients`. Wired via rewrite `DynamicContent` in `server.New()` before `LoadRules()`.
+- **Analytics**: request_log single-table queries — e.g. `SELECT server, COUNT(*) FROM request_log GROUP BY server` for requests per upstream, `SELECT qname, COUNT(*) FROM request_log WHERE result='error' GROUP BY qname` for failure analysis. No JOIN needed.
 
 ## CI/CD
 
