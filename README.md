@@ -60,6 +60,7 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 - **请求日志去冗余**：`request_log` 通过 `entry_id` JOIN `entries` 获取 qname/qtype，省去冗余存储。`entry_hit_counters` 聚合缓存命中计数，避免重复 hit 行膨胀
 - **统计独立**：`FlushDB("stats")` 清空 `entry_hit_counters` + 重置 `stats_meta` 阈值，`request_log` 保留可查
 - **驱逐策略**：TTL 惰性过期 + 条数上限最旧淘汰，`ON DELETE CASCADE` 统一清理关联表
+- **写入优化**：`Set()` 提交 INSERT 后立即释放 `writeMu`，eviction 独立事务不阻塞并发写入
 
 ### DNS 解析
 
@@ -77,15 +78,17 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 - **DNSSEC**：完整密码学信任链（根 KSK→TLD DS→权威 DNSKEY→RRSIG），NSEC/NSEC3 已验证否定（RFC 5155）
 - **QNAME 最小化**：RFC 9156，默认启用，计数器推进 + 按比例暴露标签
 - **劫持防护**：根/TLD 越权响应检测（`Detector.Validate`）→ UDP→TCP 自动回退绕过 GFW 中间盒注入
-- **DNS Cookie**：HMAC-SHA256（RFC 7873），服务器密钥每 30 分钟轮换，无效 Cookie 返回 BADCOOKIE
+- **DNS Cookie**：HMAC-SHA256（RFC 7873），服务器密钥每 30 分钟轮换，保留 2 个历史密钥避免慢客户端 BADCOOKIE
+- **并发查询去重**（singleflight）：同 key 的并发缓存 miss 合并为一次上游查询，leader 完成广播给所有 follower，消除缓存投毒竞争窗口
 - **CIDR 过滤**：基于标签的 IP 匹配，支持取反（`!tag`），IPv4 预转换为 `uint32` 位运算
+- **EDNS Padding**：随机填充字节（`crypto/rand`）替代确定性零填充，增强流量分析抵抗
 - **安全传输**：DoT (RFC 7858)、DoQ (RFC 9250)、DoH (RFC 8484)、DoH3，TLS 1.3 + KTLS 可选卸载
 
 ### 可观测性
 
 - **运行时查询**：`dig zjdns.stats CH TXT` 缓存统计（6 条 TXT 记录：概览、来源、响应码、异常、传输协议、DNSSEC）
 - **缓存管理**：`dig zjdns.db.clear CH TXT` 全清 / `.db.clear.cache` 清缓存 / `.db.clear.stats` 清零统计 / `.db.clear.latency` 清延迟数据，仅限本地回环
-- **组件级日志**：`log_level` 支持 `level:COMP1,COMP2` 语法（如 `debug:UPSTREAM,SECURITY`），17 个日志前缀
+- **组件级日志**：`log_level` 支持 `level:COMP1,COMP2` 语法（如 `debug:UPSTREAM,SECURITY`），18 个日志前缀
 - **CLI 分析工具**：`zjdns -analyze <db> <query>` 直接 SQL 查询缓存数据库
 - **pprof**：标准 Go 性能分析端点
 

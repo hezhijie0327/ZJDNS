@@ -193,7 +193,7 @@ zjdns/
     ├── server.go                  ← Lifecycle, wiring, listeners
     ├── listen.go                  ← Protocol bridge (UDP/TCP dispatch → io.Copy)
     ├── server_tasks.go            ← Background tasks, shutdown
-    ├── handler/                   ← Query pipeline (handler + handler_cache + message)
+    ├── handler/                   ← Query pipeline (handler + handler_cache + message + pending)
     ├── client/                    ← Outbound transports (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5)
     ├── client/pool/               ← RFC 7766 pipelined TCP + QUIC connection pools
     ├── resolver/                  ← Upstream + recursive + qname_minimise (RFC 9156)
@@ -247,12 +247,13 @@ Top layer (wiring):
 1. Request validation (domain/label length, ANY/AXFR/IXFR rejection)
 2. `rewrite.Evaluator.Evaluate()` — synthetic response if rule matches
 3. `edns.Handler` — extract ECS, DNS Cookie
-4. Early DNS Cookie validation (RFC 7873) — invalid cookie → BADCOOKIE
+4. Early DNS Cookie validation (RFC 7873) — initial handshake (empty ServerCookie) allowed; short (1–15 bytes) → BADCOOKIE; 16 bytes → cryptographic validation
 5. `cache.Store.Get()` — hit → serve (with CIDR filtering); miss → resolve
-6. `Resolver.Query()` — upstream (first-win) or recursive
-7. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
-8. `cidr.Filter.MatchIP()` — filter A/AAAA; all filtered → REFUSED + EDE
-9. Cache population, latency probes, response with server cookie
+6. **Pending request dedup** (`pending.go`): Same-key concurrent queries coalesce — only the first reaches the resolver; followers block and receive the identical result. Closes the cache-poisoning race window.
+7. `Resolver.Query()` — upstream (first-win) or recursive
+8. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
+9. `cidr.Filter.MatchIP()` — filter A/AAAA; all filtered → REFUSED + EDE
+10. Cache population, latency probes, response with server cookie
 
 ### Query Routing (`server/resolver`)
 - Upstream + fallback queried concurrently via `errgroup`; first NOERROR wins
@@ -302,6 +303,7 @@ Top layer (wiring):
 | `Filter` | `cidr` | CIDR-based IP matching; `MatchInfo` + unexported `rule` types |
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |
 | `Prober` | `server/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
+| `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |
 | `MessagePool` / `BufferPool` | `internal/pool` | sync.Pool allocators; also holds `QUICCode*` constants |
 | `JoinDNSPort` | `internal/dnsutil` | Utility: `ip` → `ip:53` (moved from config) |
 
@@ -345,6 +347,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **ip_latency independence**: Latency data is not tied to cache entries — all domains sharing the same IP reuse the same row. Rows with `last_probe_time` older than `DefaultStaleMaxAge` (30 days) are cleaned up during eviction alongside stale cache entries.
 - **Zero-allocation label validation**: `IsValidDomainLabels` uses `strings.IndexByte` scanning instead of `strings.Split` to avoid per-query allocation on the hot path.
 - **processRR fast path**: When `value == 0 && !isElapsed && includeDNSSEC`, `processRR` returns the original RR without cloning — common on cache-miss serve paths (50+ allocs saved per response).
+- **Pending request deduplication** (`server/handler/pending.go`): `singleflight`-style coalescing of concurrent identical cache misses. Key mirrors the cache lookup key (qname + qtype + qclass + ECS + DNSSEC). Leaders send the upstream query; followers block on a channel until the leader completes, then receive the same `*QueryResult`. Always enabled — zero overhead on cache hits. Reduces upstream load under high concurrent miss rates and closes the concurrent-query cache-poisoning window.
 
 ## DB Schema
 
