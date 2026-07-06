@@ -25,7 +25,7 @@ import (
 const (
 	defaultStaleMaxAge = int64(config.DefaultStaleMaxAge)
 	zstdCompressLevel  = zstd.SpeedDefault
-	schemaVersion      = 3 // increment to drop and recreate all tables on schema change
+	schemaVersion      = 5 // increment to drop and recreate all tables on schema change
 	dsnParams          = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
 )
 
@@ -267,8 +267,9 @@ func (s *SQLiteCache) migrate() error {
 		CREATE TABLE IF NOT EXISTS entry_hit_counters (
 			entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
 			protocol  TEXT NOT NULL,
+			rcode     INTEGER NOT NULL DEFAULT 0,
 			hit_count INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (entry_id, protocol)
+			PRIMARY KEY (entry_id, protocol, rcode)
 		) WITHOUT ROWID;
 
 		-- ── Stats metadata (depends on request_log semantically) ───────────
@@ -317,9 +318,9 @@ func (s *SQLiteCache) prepareStatements() error {
 		return err
 	}
 	s.stmtHitCounter, err = s.db.Prepare(
-		`INSERT INTO entry_hit_counters (entry_id, protocol, hit_count)
-		 VALUES (?1, ?2, 1)
-		 ON CONFLICT(entry_id, protocol) DO UPDATE
+		`INSERT INTO entry_hit_counters (entry_id, protocol, rcode, hit_count)
+		 VALUES (?1, ?2, ?3, 1)
+		 ON CONFLICT(entry_id, protocol, rcode) DO UPDATE
 		 SET hit_count = entry_hit_counters.hit_count + 1`)
 	if err != nil {
 		return err
@@ -593,7 +594,7 @@ func (s *SQLiteCache) RecordRequest(r RequestRecord) {
 	entryID := s.ensureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
 
 	if r.Result == "hit" {
-		_, _ = s.stmtHitCounter.Exec(entryID, r.Protocol)
+		_, _ = s.stmtHitCounter.Exec(entryID, r.Protocol, r.Rcode)
 		return
 	}
 
@@ -818,11 +819,14 @@ func (s *SQLiteCache) Stats() string {
 		avgMs = float64(totalMS) / float64(misses+errors)
 	}
 
-	// Rcode distribution.
+	// Rcode distribution: request_log + entry_hit_counters.
 	rows, err := s.db.Query(
-		`SELECT rcode, COUNT(*) FROM request_log
-		 WHERE id > (SELECT cleared_before FROM stats_meta)
-		 GROUP BY rcode`)
+		`SELECT rcode, SUM(cnt) FROM (
+			SELECT rcode, COUNT(*) AS cnt FROM request_log
+			 WHERE id > (SELECT cleared_before FROM stats_meta) GROUP BY rcode
+			UNION ALL
+			SELECT rcode, SUM(hit_count) AS cnt FROM entry_hit_counters GROUP BY rcode
+		) GROUP BY rcode`)
 	if err == nil {
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
