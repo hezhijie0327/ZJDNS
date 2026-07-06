@@ -585,9 +585,11 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	}
 
 	rows, err := s.db.Query(
-		`SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm
+		`SELECT pm.name, pm.ttl, e.timestamp, MAX(e.timestamp + pm.ttl)
+		 FROM ptr_map pm
 		 JOIN entries e ON pm.entry_id = e.id
 		 WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?
+		 GROUP BY pm.name
 		 ORDER BY pm.name`,
 		ip, defaultStaleMaxAge, log.NowUnix(),
 	)
@@ -602,7 +604,8 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 		var name string
 		var rawTTL int
 		var ts int64
-		if err := rows.Scan(&name, &rawTTL, &ts); err != nil {
+		var dummy int64
+		if err := rows.Scan(&name, &rawTTL, &ts, &dummy); err != nil {
 			continue
 		}
 		results = append(results, LookupResult{
