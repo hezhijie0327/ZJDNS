@@ -165,11 +165,28 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 }
 
 func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, clientIP net.IP, isSecureConnection bool, startTime time.Time, requestProtocol string, tcpKeepaliveTimeout uint16) *dns.Msg {
+	// Deduplicate concurrent identical queries.  If another goroutine is
+	// already resolving the same (qname, qtype, qclass, ECS, DNSSEC), wait
+	// for its result instead of sending a duplicate upstream query.
+	if h.pending != nil {
+		if qr, follower := h.pending.Join(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC); follower {
+			return h.processCacheMissResult(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, clientIP, isSecureConnection, startTime, requestProtocol, tcpKeepaliveTimeout, qr)
+		}
+	}
+
 	log.Debugf("CACHE: miss for %s, querying upstream/recursive", question.Name)
 	qr := h.resolver.Query(h.ctx, question, ecsOpt)
 
-	if qr.Err != nil {
+	// Notify any followers that joined during this query.
+	if h.pending != nil {
+		h.pending.Done(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, qr)
+	}
 
+	return h.processCacheMissResult(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, clientIP, isSecureConnection, startTime, requestProtocol, tcpKeepaliveTimeout, qr)
+}
+
+func (h *Handler) processCacheMissResult(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, clientIP net.IP, isSecureConnection bool, startTime time.Time, requestProtocol string, tcpKeepaliveTimeout uint16, qr *resolver.QueryResult) *dns.Msg {
+	if qr.Err != nil {
 		if errors.Is(qr.Err, resolver.ErrCIDRFilterRefused) {
 			return h.processCIDRRefused(req, question, ecsOpt, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection, requestProtocol, tcpKeepaliveTimeout)
 		}

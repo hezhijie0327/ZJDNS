@@ -65,6 +65,7 @@ type Handler struct {
 	cacheRefreshGroup  *errgroup.Group
 	cacheRefreshCtx    context.Context
 	ctx                context.Context
+	pending            *PendingRequests
 }
 
 // BackgroundConfig groups lifecycle-related dependencies that the Handler
@@ -90,6 +91,7 @@ func New(
 		edns:              ednsHandler,
 		rewrite:           rewriteEvaluator,
 		prefetchCooldown:  make(map[string]int64),
+		pending:           NewPendingRequests(),
 		cacheRefreshGroup: bg.RefreshGroup,
 		cacheRefreshCtx:   bg.RefreshCtx,
 		ctx:               bg.Ctx,
