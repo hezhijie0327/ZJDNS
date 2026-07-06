@@ -299,7 +299,7 @@ func (c *Client) stdTLSConfig(server *config.UpstreamServer) *tls.Config {
 
 func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, protocol string) (*dns.Msg, error) {
 	if server.SkipTLSVerify {
-		log.Debugf("UPSTREAM: TLS verification disabled for %s - security risk!", server.ServerName)
+		log.Warnf("UPSTREAM: TLS verification disabled for %s — connection is vulnerable to MITM attacks!", server.ServerName)
 	}
 
 	switch protocol {

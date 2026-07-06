@@ -33,6 +33,7 @@ type CookieOption struct {
 type secretPair struct {
 	current  []byte
 	previous []byte
+	older    []byte // retained for one extra rotation cycle to avoid BADCOOKIE on slow clients
 }
 
 // CookieGenerator creates and validates DNS Cookies using HMAC-SHA256.
@@ -68,7 +69,7 @@ func (c *CookieGenerator) RotateSecret() {
 		c.secrets.Store(&secretPair{current: newSecret})
 		return
 	}
-	c.secrets.Store(&secretPair{current: newSecret, previous: old.current})
+	c.secrets.Store(&secretPair{current: newSecret, previous: old.current, older: old.previous})
 }
 
 // loadSecrets atomically loads the current secret pair.
@@ -128,7 +129,14 @@ func (c *CookieGenerator) IsServerCookieValid(clientIP net.IP, clientCookie, ser
 	if len(sp.previous) > 0 {
 		hPrev := hmac.New(sha256.New, sp.previous)
 		hPrev.Write(data)
-		return hmac.Equal(serverCookie, hPrev.Sum(nil)[:DefaultCookieServerLen])
+		if hmac.Equal(serverCookie, hPrev.Sum(nil)[:DefaultCookieServerLen]) {
+			return true
+		}
+	}
+	if len(sp.older) > 0 {
+		hOld := hmac.New(sha256.New, sp.older)
+		hOld.Write(data)
+		return hmac.Equal(serverCookie, hOld.Sum(nil)[:DefaultCookieServerLen])
 	}
 	return false
 }

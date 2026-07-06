@@ -1,6 +1,7 @@
 package edns
 
 import (
+	"crypto/rand"
 	"encoding/hex"
 
 	"codeberg.org/miekg/dns"
@@ -39,6 +40,7 @@ func addPaddingV2(msg *dns.Msg, isSecureConnection bool, blockSize int, clientWa
 	paddingDataSize := targetSize - currentSize - paddingHeaderSize
 	if paddingDataSize > 0 {
 		paddingBytes := make([]byte, paddingDataSize)
+		_, _ = rand.Read(paddingBytes)
 		msg.Pseudo = append(msg.Pseudo, &dns.PADDING{
 			Padding: hex.EncodeToString(paddingBytes),
 		})
