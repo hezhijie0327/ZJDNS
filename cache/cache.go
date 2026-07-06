@@ -38,7 +38,7 @@ type Store interface {
 	ReverseLookup(ip string) []LookupResult
 	FlushDB(target string) (int64, error)
 	Clear() (int64, error)
-	Stats() string
+	Stats() []string
 	Close() error
 }
 

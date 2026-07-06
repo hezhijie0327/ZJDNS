@@ -248,17 +248,22 @@ ruleLoop:
 			return result
 		}
 		if rule.DynamicContent != nil {
+			var contents []string
 			for _, record := range rule.Records {
 				if record.ParsedType == qtype && record.ParsedClass == qclass {
-					content := rule.DynamicContent()
-					rr := e.buildRecord(rule.Name, config.DNSRecordConfig{
-						Type:    record.Type,
-						Class:   record.Class,
-						TTL:     record.TTL,
-						Content: strconv.Quote(content),
-					})
-					if rr != nil {
-						result.Records = append(result.Records, rr)
+					if contents == nil {
+						contents = rule.DynamicContent()
+					}
+					for _, content := range contents {
+						rr := e.buildRecord(rule.Name, config.DNSRecordConfig{
+							Type:    record.Type,
+							Class:   record.Class,
+							TTL:     record.TTL,
+							Content: strconv.Quote(content),
+						})
+						if rr != nil {
+							result.Records = append(result.Records, rr)
+						}
 					}
 				}
 			}

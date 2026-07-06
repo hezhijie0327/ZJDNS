@@ -330,7 +330,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
 - **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
-- **Rewrite TTL + DynamicContent**: Rewrite rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently (`origTTL - (elapsed % origTTL)`) rather than staying static. `DynamicContent func() string` field (json:"-") on `RewriteRule` bypasses pre-building — the function is called at query time for dynamic responses (`zjdns.stats` and `zjdns.db.{clear,clear.cache,clear.stats,clear.latency}` CH TXT). Destructive rules (`db.clear*`) are loopback-only via `IncludeClients`. Rewrite responses bypass cache (client-IP filtering).
+- **Rewrite TTL + DynamicContent**: Rewrite rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently (`origTTL - (elapsed % origTTL)`) rather than staying static. `DynamicContent func() []string` field (json:"-") on `RewriteRule` bypasses pre-building — each returned string becomes a separate TXT RR, called at query time for dynamic responses (`zjdns.stats` and `zjdns.db.{clear,clear.cache,clear.stats,clear.latency}` CH TXT). Destructive rules (`db.clear*`) are loopback-only via `IncludeClients`. Rewrite responses bypass cache (client-IP filtering).
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns). Similarly, `handler.Question` is a type alias of `resolver.Question` to avoid duplicate struct definitions.
 - **request_log ring buffer**: Append-only request journal replaces the old `hit_counters` table. `RecordRequest()` does a single INSERT — no conflict detection, no read-before-write. Stats are aggregated via SQL over rows with `id > cleared_before`; FlushDB("stats") resets the threshold without touching log rows.
 - **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtInsertLog`, `stmtInsertLatency`, `stmtGetLastProbe`) at initialization time to avoid per-call SQL compilation overhead.
@@ -436,7 +436,7 @@ CREATE TABLE ip_latency (
 - **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
 - **IP latency**: Per-IP keyed (`rdata_ip`). A single `INSERT OR REPLACE` writes `latency_ms`, `qtype` (inferred from IP format), and `last_probe_time` (via `unixepoch()`). `Prober.Start()` and `ProbeNSAddrs()` check `GetLatencyLastProbe` per-IP — if every IP in the answer was probed within `DefaultLatencyProbeMinInterval` (60s), the probe is skipped. All domains sharing the same CDN IP reuse the same latency row.
 - **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map`. Also prunes `ip_latency` rows with `last_probe_time` older than `defaultStaleMaxAge` (30 days). Entry count is synced from `SELECT COUNT(*)` before eviction to correct drift from INSERT OR REPLACE.
-- **Dynamic queries + FlushDB**: `Store.Stats()` returns one-line cache summary aggregated from request_log, queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency` (`FlushDB(target)`, per-table). `FlushDB("stats")` only resets the stats_meta threshold — request_log rows survive. All restricted to loopback via `IncludeClients`. Wired via rewrite `DynamicContent` in `server.New()` before `LoadRules()`.
+- **Dynamic queries + FlushDB**: `Store.Stats()` returns `[]string` with 6 TXT records grouped by theme (overview, sources, rcodes, anomalies, protocols, DNSSEC), queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency` (`FlushDB(target)`, per-table). `FlushDB("stats")` only resets the stats_meta threshold — request_log rows survive. All restricted to loopback via `IncludeClients`. Wired via rewrite `DynamicContent` in `server.New()` before `LoadRules()`.
 - **Analytics**: request_log single-table queries — e.g. `SELECT server, COUNT(*) FROM request_log GROUP BY server` for requests per upstream, `SELECT qname, COUNT(*) FROM request_log WHERE result='error' GROUP BY qname` for failure analysis. No JOIN needed.
 
 ## CI/CD
@@ -533,12 +533,12 @@ dig @127.0.0.1 -p 15353 -x 180.101.49.44 +short
 # Verify DNSSEC distribution
 ./zjdns -analyze cache.db "SELECT dnssec_status, COUNT(*) FROM request_log GROUP BY dnssec_status"
 
-# Full stats (should include secure=X insecure=X bogus=X)
+# Full stats (6 TXT records: overview, sources, rcodes, anomalies, protocols, DNSSEC)
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 
 # Verify stats reset keeps request_log intact
 dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
-dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short          # all zeros except entries count
+dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short          # entries remains, all counters zero
 ./zjdns -analyze cache.db "SELECT COUNT(*) FROM request_log" # log rows survive
 ```
 

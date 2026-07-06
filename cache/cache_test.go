@@ -674,10 +674,15 @@ func TestStats(t *testing.T) {
 	mc.RecordRequest(RequestRecord{Qname: "sum.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 
 	s := mc.Stats()
-	if s == "" {
-		t.Error("Summary should not be empty")
+	if len(s) == 0 {
+		t.Error("Stats should not be empty")
 	}
-	// Just verify it doesn't panic and returns non-empty.
+	for i, line := range s {
+		if line == "" {
+			t.Errorf("Stats[%d] should not be empty", i)
+		}
+		t.Logf("Stats[%d]: %s", i, line)
+	}
 }
 
 // ── E2E: full lifecycle with disk-backed DB and real DNS records ─────────────
@@ -880,10 +885,12 @@ func TestE2E_FullLifecycle(t *testing.T) {
 
 	// ── Phase 10: Summary ───────────────────────────────────────────────────
 	s := mc.Stats()
-	if s == "" {
-		t.Error("Summary should not be empty")
+	if len(s) == 0 {
+		t.Error("Stats should not be empty")
 	}
-	t.Logf("Stats: %s", s)
+	for i, line := range s {
+		t.Logf("Stats[%d]: %s", i, line)
+	}
 
 	// ── Phase 11: Verify DB file exists and has content ─────────────────────
 	info, err := os.Stat(dbPath)

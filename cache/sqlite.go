@@ -753,11 +753,12 @@ func (s *SQLiteCache) Clear() (int64, error) {
 	return n1 + n2 + n3 + n4, nil
 }
 
-// Stats returns a one-line stats summary aggregated from request_log since
-// the last FlushDB("stats").
-func (s *SQLiteCache) Stats() string {
+// Stats returns 6 TXT records grouped by theme (overview, sources, rcodes,
+// anomalies, protocols, DNSSEC), aggregated from request_log since the last
+// FlushDB("stats").
+func (s *SQLiteCache) Stats() []string {
 	if atomic.LoadInt32(&s.closed) != 0 {
-		return ""
+		return nil
 	}
 
 	var entries int64
@@ -875,14 +876,20 @@ func (s *SQLiteCache) Stats() string {
 		}
 	}
 
-	// protocols is the convenience total of all protocol-specific hit counters.
-	protocols := udp + tcp + dot + doq + doh + doh3
-
-	return fmt.Sprintf("entries=%d total=%d avg=%.1fms hits=%d misses=%d stales=%d rewrites=%d errors=%d udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d protocols=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d hijack=%d fallback=%d secure=%d insecure=%d bogus=%d",
-		entries, total, avgMs, hits, misses, stales, rewrites, errors,
-		udp, tcp, dot, doq, doh, doh3, protocols,
-		noerr, formerr, servfail, nxdomain, notimp, refused, other,
-		hijack, fallback, secureCount, insecureCount, bogusCount)
+	return []string{
+		fmt.Sprintf("entries=%d total=%d avg=%.1fms",
+			entries, total, avgMs),
+		fmt.Sprintf("hits=%d misses=%d stales=%d rewrites=%d errors=%d",
+			hits, misses, stales, rewrites, errors),
+		fmt.Sprintf("noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d",
+			noerr, formerr, servfail, nxdomain, notimp, refused, other),
+		fmt.Sprintf("hijack=%d fallback=%d",
+			hijack, fallback),
+		fmt.Sprintf("udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d",
+			udp, tcp, dot, doq, doh, doh3),
+		fmt.Sprintf("secure=%d insecure=%d bogus=%d",
+			secureCount, insecureCount, bogusCount),
+	}
 }
 
 // Close closes the database.

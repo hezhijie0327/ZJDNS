@@ -106,7 +106,7 @@ type RewriteRule struct {
 	IncludeClientCIDRs []*net.IPNet      `json:"-"`
 	CachedRecords      []dns.RR          `json:"-"`
 	CachedAdditional   []dns.RR          `json:"-"`
-	DynamicContent     func() string     `json:"-"`
+	DynamicContent     func() []string   `json:"-"`
 }
 
 // DNSRecordConfig defines a single DNS resource record for rewrite responses.

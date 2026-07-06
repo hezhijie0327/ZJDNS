@@ -83,7 +83,7 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 
 ### 可观测性
 
-- **运行时查询**：`dig zjdns.stats CH TXT` 缓存统计
+- **运行时查询**：`dig zjdns.stats CH TXT` 缓存统计（6 条 TXT 记录：概览、来源、响应码、异常、传输协议、DNSSEC）
 - **缓存管理**：`dig zjdns.db.clear CH TXT` 全清 / `.db.clear.cache` 清缓存 / `.db.clear.stats` 清零统计 / `.db.clear.latency` 清延迟数据，仅限本地回环
 - **组件级日志**：`log_level` 支持 `level:COMP1,COMP2` 语法（如 `debug:UPSTREAM,SECURITY`），17 个日志前缀
 - **CLI 分析工具**：`zjdns -analyze <db> <query>` 直接 SQL 查询缓存数据库

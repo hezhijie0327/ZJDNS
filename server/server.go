@@ -93,36 +93,36 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		case config.ProjectName + ".stats":
 			cfg.Rewrite[i].DynamicContent = cacheStore.Stats
 		case config.ProjectName + ".db.clear":
-			cfg.Rewrite[i].DynamicContent = func() string {
+			cfg.Rewrite[i].DynamicContent = func() []string {
 				n, err := cacheStore.Clear()
 				if err != nil {
-					return fmt.Sprintf("error=%v", err)
+					return []string{fmt.Sprintf("error=%v", err)}
 				}
-				return fmt.Sprintf("flushed=%d", n)
+				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
 		case config.ProjectName + ".db.clear.cache":
-			cfg.Rewrite[i].DynamicContent = func() string {
+			cfg.Rewrite[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("cache")
 				if err != nil {
-					return fmt.Sprintf("error=%v", err)
+					return []string{fmt.Sprintf("error=%v", err)}
 				}
-				return fmt.Sprintf("flushed=%d", n)
+				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
 		case config.ProjectName + ".db.clear.stats":
-			cfg.Rewrite[i].DynamicContent = func() string {
+			cfg.Rewrite[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("stats")
 				if err != nil {
-					return fmt.Sprintf("error=%v", err)
+					return []string{fmt.Sprintf("error=%v", err)}
 				}
-				return fmt.Sprintf("reset=%d", n)
+				return []string{fmt.Sprintf("reset=%d", n)}
 			}
 		case config.ProjectName + ".db.clear.latency":
-			cfg.Rewrite[i].DynamicContent = func() string {
+			cfg.Rewrite[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("latency")
 				if err != nil {
-					return fmt.Sprintf("error=%v", err)
+					return []string{fmt.Sprintf("error=%v", err)}
 				}
-				return fmt.Sprintf("flushed=%d", n)
+				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
 		}
 	}
