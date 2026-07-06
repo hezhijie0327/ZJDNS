@@ -259,6 +259,11 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 			response.Answer = ptrAnswer
 			ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
 			h.applyEDNS(response, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
+			h.cache.RecordRequest(cache.RequestRecord{
+				Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
+				ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
+				Protocol: requestProtocol, Result: "hit", Rcode: dns.RcodeSuccess,
+			})
 			responseMsg = response
 			return responseMsg
 		}

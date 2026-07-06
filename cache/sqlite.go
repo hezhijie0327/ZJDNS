@@ -752,6 +752,7 @@ func (s *SQLiteCache) Stats() string {
 	var udp, tcp, dot, doq, doh, doh3 int64
 	var hijack, fallback int64
 	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
+	var secureCount, insecureCount, bogusCount int64
 
 	// Aggregate from request_log since the last stats clear.
 	_ = s.db.QueryRow(
@@ -807,14 +808,37 @@ func (s *SQLiteCache) Stats() string {
 		}
 	}
 
+	// DNSSEC status distribution.
+	dnssecRows, err := s.db.Query(
+		`SELECT dnssec_status, COUNT(*) FROM request_log
+		 WHERE id > (SELECT cleared_before FROM stats_meta)
+		 GROUP BY dnssec_status`)
+	if err == nil {
+		defer func() { _ = dnssecRows.Close() }()
+		for dnssecRows.Next() {
+			var status string
+			var cnt int64
+			if err := dnssecRows.Scan(&status, &cnt); err == nil {
+				switch status {
+				case config.DNSSECStatusSecure:
+					secureCount = cnt
+				case config.DNSSECStatusInsecure:
+					insecureCount = cnt
+				case config.DNSSECStatusBogus:
+					bogusCount = cnt
+				}
+			}
+		}
+	}
+
 	// protocols is the convenience total of all protocol-specific hit counters.
 	protocols := udp + tcp + dot + doq + doh + doh3
 
-	return fmt.Sprintf("entries=%d total=%d avg=%.1fms hits=%d misses=%d stales=%d rewrites=%d errors=%d udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d protocols=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d hijack=%d fallback=%d",
+	return fmt.Sprintf("entries=%d total=%d avg=%.1fms hits=%d misses=%d stales=%d rewrites=%d errors=%d udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d protocols=%d noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d hijack=%d fallback=%d secure=%d insecure=%d bogus=%d",
 		entries, total, avgMs, hits, misses, stales, rewrites, errors,
 		udp, tcp, dot, doq, doh, doh3, protocols,
 		noerr, formerr, servfail, nxdomain, notimp, refused, other,
-		hijack, fallback)
+		hijack, fallback, secureCount, insecureCount, bogusCount)
 }
 
 // Close closes the database.

@@ -159,7 +159,7 @@ func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns
 	if qr.Err != nil {
 
 		if errors.Is(qr.Err, resolver.ErrCIDRFilterRefused) {
-			return h.processCIDRRefused(req, question, ecsOpt, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
+			return h.processCIDRRefused(req, question, ecsOpt, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection, requestProtocol, tcpKeepaliveTimeout)
 		}
 		return h.processQueryError(req, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, qr.Err, startTime, requestProtocol, tcpKeepaliveTimeout)
 	}
@@ -172,7 +172,9 @@ func (h *Handler) processQueryError(req *dns.Msg, question Question, clientReque
 		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d, validated=%t", question.Name, entry.RemainingTTL(), entry.Validated)
 		h.cache.RecordRequest(cache.RequestRecord{
 			Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
+			ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
 			Protocol: requestProtocol, Result: "error", Rcode: dns.RcodeServerFailure,
+			ResponseTime: int64(time.Since(startTime).Milliseconds()),
 		})
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
@@ -182,31 +184,47 @@ func (h *Handler) processQueryError(req *dns.Msg, question Question, clientReque
 	msg.Rcode = dns.RcodeServerFailure
 
 	edeCode := edns.EDECodeNetworkError
+	dnssecStatus := ""
 	if h.resolver != nil && h.resolver.Recursive() != nil && h.resolver.Recursive().DNSSECEDECode() != 0 {
 		edeCode = h.resolver.Recursive().DNSSECEDECode()
+		dnssecStatus = config.DNSSECStatusBogus
 
 		log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
 	} else {
 		var dnsErr *resolver.DNSSECError
 		if errors.As(queryErr, &dnsErr) {
 			edeCode = dnsErr.EDECode
+			dnssecStatus = config.DNSSECStatusBogus
 
 			log.Debugf("SECURITY: DNSSEC error mapped to EDE %d: %s", edeCode, dnsErr.Message)
 		} else if queryErr != nil {
 			log.Debugf("RESULT: non-DNSSEC error, using EDE %d: %v", edeCode, queryErr)
 		}
 	}
+
+	h.cache.RecordRequest(cache.RequestRecord{
+		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
+		ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
+		Protocol: requestProtocol, Result: "error", Rcode: dns.RcodeServerFailure,
+		ResponseTime: int64(time.Since(startTime).Milliseconds()),
+		DNSSECStatus: dnssecStatus,
+	})
 	ede := edns.NewEDEOption(edeCode, "")
 	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
 	return msg
 }
 
-func (h *Handler) processCIDRRefused(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16) *dns.Msg {
+func (h *Handler) processCIDRRefused(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, requestProtocol string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	msg := h.buildResponse(req)
 	log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", question.Name, dns.TypeToString[question.Qtype])
 	msg.Rcode = dns.RcodeRefused
 	ede := edns.NewEDEOption(edns.EDECodeBlocked, "")
 	h.applyEDNS(msg, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
+	h.cache.RecordRequest(cache.RequestRecord{
+		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
+		ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
+		Protocol: requestProtocol, Result: "error", Rcode: dns.RcodeRefused,
+	})
 	return msg
 }
 

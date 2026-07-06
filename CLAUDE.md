@@ -522,6 +522,30 @@ dig @127.0.0.1 -p 15353 zhijie-online.mail.protection.outlook.com A +short
 dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 ```
 
+**Stats coverage verification (all result types):**
+```bash
+# Rewrite: stats query itself triggers a rewrite rule
+dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
+
+# PTR reverse lookup: warm a cached entry first, then query its IP in reverse
+dig @127.0.0.1 -p 15353 www.baidu.com A +short > /dev/null
+dig @127.0.0.1 -p 15353 -x 180.101.49.44 +short
+
+# Verify all result types are logged (should show hit, miss, error, rewrite)
+./zjdns -analyze cache.db "SELECT result, rcode, COUNT(*) FROM request_log GROUP BY result, rcode"
+
+# Verify DNSSEC distribution
+./zjdns -analyze cache.db "SELECT dnssec_status, COUNT(*) FROM request_log GROUP BY dnssec_status"
+
+# Full stats (should include secure=X insecure=X bogus=X)
+dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
+
+# Verify stats reset keeps request_log intact
+dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
+dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short          # all zeros except entries count
+./zjdns -analyze cache.db "SELECT COUNT(*) FROM request_log" # log rows survive
+```
+
 Verify hijack detection from logs: `grep -E "hijack probe detected|hijack detected|rejecting hijacked|tcp=true" /tmp/zjdns.log`
 Normal domains should show `tcp=false` throughout; blocked domains should show hijack detection + `tcp=true` restart.
 
