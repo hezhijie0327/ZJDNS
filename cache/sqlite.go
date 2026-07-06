@@ -25,7 +25,7 @@ import (
 const (
 	defaultStaleMaxAge = int64(config.DefaultStaleMaxAge)
 	zstdCompressLevel  = zstd.SpeedDefault
-	schemaVersion      = 2 // increment to drop and recreate all tables on schema change
+	schemaVersion      = 3 // increment to drop and recreate all tables on schema change
 	dsnParams          = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
 )
 
@@ -68,6 +68,7 @@ type SQLiteCache struct {
 	// Hot-path prepared statements — compiled once, reused forever.
 	stmtGetEntry      *sql.Stmt
 	stmtInsertLog     *sql.Stmt
+	stmtHitCounter    *sql.Stmt
 	stmtInsertLatency *sql.Stmt
 	stmtGetLastProbe  *sql.Stmt
 }
@@ -240,35 +241,35 @@ func (s *SQLiteCache) migrate() error {
 
 		CREATE TABLE IF NOT EXISTS request_log (
 			id              INTEGER PRIMARY KEY AUTOINCREMENT,
-			timestamp       INTEGER NOT NULL,       -- unix seconds (log.NowUnix())
-			qname           TEXT NOT NULL,           -- normalized FQDN
-			qtype           INTEGER NOT NULL,        -- dns.TypeA, TypeAAAA, ...
-			qclass          INTEGER NOT NULL DEFAULT 1,
-			protocol        TEXT NOT NULL,           -- 'udp','tcp','dot','doq','doh','doh3'
-			result          TEXT NOT NULL,           -- 'hit','miss','stale','rewrite','error'
+			timestamp       INTEGER NOT NULL,
+			entry_id        INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			protocol        TEXT NOT NULL,
+			result          TEXT NOT NULL,
 			response_time_ms INTEGER NOT NULL DEFAULT 0,
 			rcode           INTEGER NOT NULL DEFAULT 0,
-			server          TEXT NOT NULL DEFAULT '', -- upstream server identifier
+			server          TEXT NOT NULL DEFAULT '',
 			hijack          INTEGER NOT NULL DEFAULT 0,
 			fallback        INTEGER NOT NULL DEFAULT 0,
-			dnssec_status   TEXT NOT NULL DEFAULT '', -- 'secure','insecure','bogus',''
-			entry_id        INTEGER REFERENCES entries(id) ON DELETE CASCADE
+			dnssec_status   TEXT NOT NULL DEFAULT ''
 		);
 
 		-- Time-range scans: Stats() filtering and time-windowed debugging
 		-- queries (e.g. "last hour").
 
 		CREATE INDEX IF NOT EXISTS idx_request_log_ts ON request_log(timestamp);
-
-		-- Per-domain lookups: debugging specific QNAMEs and their QTYPEs
-		-- (e.g. "show me all requests for example.com/A").
-
-		CREATE INDEX IF NOT EXISTS idx_request_log_qname ON request_log(qname, qtype);
-
-		-- FK index: speeds up ON DELETE CASCADE when entries are evicted,
-		-- so SQLite can find matching request_log rows without a full scan.
-
 		CREATE INDEX IF NOT EXISTS idx_request_log_entry ON request_log(entry_id);
+
+		-- ── Hit counters (depends on entries via FK) ─────────────────────
+		-- Aggregated hit counts per entry+protocol. Each cache hit upserts
+		-- here instead of inserting into request_log. ON DELETE CASCADE
+		-- keeps counters bounded by cache eviction.
+
+		CREATE TABLE IF NOT EXISTS entry_hit_counters (
+			entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			protocol  TEXT NOT NULL,
+			hit_count INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (entry_id, protocol)
+		) WITHOUT ROWID;
 
 		-- ── Stats metadata (depends on request_log semantically) ───────────
 		-- Single row tracking the last request_log.id that was "cleared" by
@@ -309,9 +310,17 @@ func (s *SQLiteCache) prepareStatements() error {
 		return err
 	}
 	s.stmtInsertLog, err = s.db.Prepare(
-		`INSERT INTO request_log (timestamp, qname, qtype, qclass, protocol, result,
-			response_time_ms, rcode, server, hijack, fallback, dnssec_status, entry_id)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`)
+		`INSERT INTO request_log (timestamp, entry_id, protocol, result,
+			response_time_ms, rcode, server, hijack, fallback, dnssec_status)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`)
+	if err != nil {
+		return err
+	}
+	s.stmtHitCounter, err = s.db.Prepare(
+		`INSERT INTO entry_hit_counters (entry_id, protocol, hit_count)
+		 VALUES (?1, ?2, 1)
+		 ON CONFLICT(entry_id, protocol) DO UPDATE
+		 SET hit_count = entry_hit_counters.hit_count + 1`)
 	if err != nil {
 		return err
 	}
@@ -583,11 +592,15 @@ func (s *SQLiteCache) RecordRequest(r RequestRecord) {
 
 	entryID := s.ensureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
 
+	if r.Result == "hit" {
+		_, _ = s.stmtHitCounter.Exec(entryID, r.Protocol)
+		return
+	}
+
 	_, _ = s.stmtInsertLog.Exec(
-		log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
+		log.NowUnix(), entryID,
 		r.Protocol, r.Result, r.ResponseTime, r.Rcode, r.Server,
 		boolToInt(r.Hijack), boolToInt(r.Fallback), r.DNSSECStatus,
-		entryID,
 	)
 }
 
@@ -693,6 +706,7 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	var err error
 	switch target {
 	case "stats":
+		_, _ = s.db.Exec(`DELETE FROM entry_hit_counters`)
 		result, err = s.db.Exec(
 			`UPDATE stats_meta SET cleared_before = (SELECT COALESCE(MAX(id), 0) FROM request_log) WHERE id = 1`)
 	case "cache":
@@ -727,7 +741,8 @@ func (s *SQLiteCache) Clear() (int64, error) {
 	if err != nil {
 		return n1 + n2, err
 	}
-	// Clear request_log and reset stats_meta.
+	// Clear request_log, entry_hit_counters, and reset stats_meta.
+	_, _ = s.db.Exec(`DELETE FROM entry_hit_counters`)
 	result, err := s.db.Exec(`DELETE FROM request_log`)
 	if err != nil {
 		return n1 + n2 + n3, fmt.Errorf("clear request_log: %w", err)
@@ -749,34 +764,59 @@ func (s *SQLiteCache) Stats() string {
 
 	var avgMs float64
 	var total, hits, misses, stales, rewrites, errors int64
-	var udp, tcp, dot, doq, doh, doh3 int64
-	var hijack, fallback int64
+	var hcUDP, hcTCP, hcDOT, hcDOQ, hcDOH, hcDOH3 int64
+	var rlUDP, rlTCP, rlDOT, rlDOQ, rlDOH, rlDOH3 int64
+	var hijack, fallback, totalMS int64
 	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
 	var secureCount, insecureCount, bogusCount int64
 
-	// Aggregate from request_log since the last stats clear.
+	// Hits come from entry_hit_counters (aggregated, no cleared_before filter).
 	_ = s.db.QueryRow(
-		`SELECT COUNT(*),
-			COALESCE(AVG(response_time_ms), 0),
-			COALESCE(SUM(CASE WHEN result='hit' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN result='miss' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN result='stale' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN result='rewrite' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN result='error' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN protocol='udp' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN protocol='tcp' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN protocol='dot' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN protocol='doq' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN protocol='doh' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN protocol='doh3' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN hijack THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN fallback THEN 1 ELSE 0 END), 0)
-		 FROM request_log WHERE id > (SELECT cleared_before FROM stats_meta)`,
+		"SELECT COALESCE(SUM(hit_count), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='udp' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='tcp' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dot' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='doq' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='doh' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='doh3' THEN hit_count ELSE 0 END), 0)"+
+			" FROM entry_hit_counters",
+	).Scan(&hits, &hcUDP, &hcTCP, &hcDOT, &hcDOQ, &hcDOH, &hcDOH3)
+
+	// Detail rows from request_log since last stats clear.
+	_ = s.db.QueryRow(
+		"SELECT COUNT(*),"+
+			" COALESCE(AVG(response_time_ms), 0),"+
+			" COALESCE(SUM(CASE WHEN result='miss' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='stale' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='rewrite' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='error' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='udp' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='tcp' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dot' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='doq' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='doh' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='doh3' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN hijack THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN fallback THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(response_time_ms), 0)"+
+			" FROM request_log WHERE id > (SELECT cleared_before FROM stats_meta)",
 	).Scan(&total, &avgMs,
-		&hits, &misses, &stales, &rewrites, &errors,
-		&udp, &tcp, &dot, &doq, &doh, &doh3,
-		&hijack, &fallback,
+		&misses, &stales, &rewrites, &errors,
+		&rlUDP, &rlTCP, &rlDOT, &rlDOQ, &rlDOH, &rlDOH3,
+		&hijack, &fallback, &totalMS,
 	)
+
+	total += hits
+	udp := hcUDP + rlUDP
+	tcp := hcTCP + rlTCP
+	dot := hcDOT + rlDOT
+	doq := hcDOQ + rlDOQ
+	doh := hcDOH + rlDOH
+	doh3 := hcDOH3 + rlDOH3
+	// avg := totalMS / (misses + errors), but use per-row avg for now
+	if misses+errors > 0 && avgMs == 0 {
+		avgMs = float64(totalMS) / float64(misses+errors)
+	}
 
 	// Rcode distribution.
 	rows, err := s.db.Query(
@@ -847,7 +887,7 @@ func (s *SQLiteCache) Close() error {
 		return nil
 	}
 	// Close prepared statements before the database.
-	for _, stmt := range []*sql.Stmt{s.stmtGetEntry, s.stmtInsertLog, s.stmtInsertLatency, s.stmtGetLastProbe} {
+	for _, stmt := range []*sql.Stmt{s.stmtGetEntry, s.stmtInsertLog, s.stmtHitCounter, s.stmtInsertLatency, s.stmtGetLastProbe} {
 		if stmt != nil {
 			_ = stmt.Close()
 		}

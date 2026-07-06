@@ -348,67 +348,64 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## DB Schema
 
-The cache uses five SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The cache uses six SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
--- Pure DNS response cache. Every row is cacheable. Stats columns removed —
--- per-request metadata is recorded in request_log instead.
--- Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
+-- Pure DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr,
+-- ecs_prefix, dnssec_ok). Wire format is zstd-compressed in msg_wire.
 CREATE TABLE entries (
-    -- Lookup key (UNIQUE)
-    qname      TEXT NOT NULL,       -- normalized FQDN (dnsutil.NormalizeDomain)
-    qtype      INTEGER NOT NULL,    -- dns.TypeA=1, DNSKEY=48
+    qname      TEXT NOT NULL,
+    qtype      INTEGER NOT NULL,
     qclass     INTEGER NOT NULL DEFAULT 1,
     ecs_addr   TEXT NOT NULL DEFAULT '',
     ecs_prefix INTEGER NOT NULL DEFAULT 0,
     dnssec_ok  INTEGER NOT NULL DEFAULT 0 CHECK (dnssec_ok IN (0, 1)),
-    -- Lifecycle
-    timestamp  INTEGER NOT NULL,    -- insertion time (unix seconds)
-    ttl        INTEGER NOT NULL,    -- entry TTL (min of all RR TTLs, floor 10s)
+    timestamp  INTEGER NOT NULL,
+    ttl        INTEGER NOT NULL,
     expires_at INTEGER NOT NULL DEFAULT 0,
-    -- Flags
     validated  INTEGER NOT NULL DEFAULT 0 CHECK (validated IN (0, 1)),
-    -- zstd-compressed wire format (Answer+Authority+Additional)
     msg_wire   BLOB,
-    -- PK + constraint
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 );
-
--- Eviction index: sorted by expires_at for efficient range scans.
 CREATE INDEX idx_entries_expires ON entries(expires_at);
 
--- Append-only request journal (ring buffer). One row per served query.
--- Stats() aggregates from this table; per-request debugging queries
--- against qname/qtype/rcode/protocol. Survives FlushDB("stats") —
--- only cleared by full Clear(). Self-trims when row count > maxRequestLog.
+-- Request journal: one row per miss/stale/rewrite/error query. qname/qtype
+-- are retrieved by JOINing entries via entry_id. Hits are aggregated into
+-- entry_hit_counters instead. Survives FlushDB("stats").
 CREATE TABLE request_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp       INTEGER NOT NULL,       -- unix seconds
-    qname           TEXT NOT NULL,
-    qtype           INTEGER NOT NULL,
-    qclass          INTEGER NOT NULL DEFAULT 1,
-    protocol        TEXT NOT NULL,           -- 'udp','tcp','dot','doq','doh','doh3'
-    result          TEXT NOT NULL,           -- 'hit','miss','stale','rewrite','error'
+    timestamp       INTEGER NOT NULL,
+    entry_id        INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    protocol        TEXT NOT NULL,
+    result          TEXT NOT NULL,
     response_time_ms INTEGER NOT NULL DEFAULT 0,
     rcode           INTEGER NOT NULL DEFAULT 0,
     server          TEXT NOT NULL DEFAULT '',
     hijack          INTEGER NOT NULL DEFAULT 0,
     fallback        INTEGER NOT NULL DEFAULT 0,
-    dnssec_status   TEXT NOT NULL DEFAULT '' -- 'secure','insecure','bogus',''
+    dnssec_status   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_request_log_ts ON request_log(timestamp);
-CREATE INDEX idx_request_log_qname ON request_log(qname, qtype);
+CREATE INDEX idx_request_log_entry ON request_log(entry_id);
+
+-- Hit counters: aggregated per-entry+protocol. Each cache hit upserts here
+-- instead of inserting into request_log, avoiding per-hit row bloat.
+CREATE TABLE entry_hit_counters (
+    entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    protocol  TEXT NOT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (entry_id, protocol)
+) WITHOUT ROWID;
 
 -- Stats metadata: single row tracking the last request_log.id that was
 -- "cleared" by FlushDB("stats"). Resetting stats is O(1): just UPDATE.
 CREATE TABLE stats_meta (
     id             INTEGER PRIMARY KEY CHECK (id = 1),
-    cleared_before INTEGER NOT NULL DEFAULT 0  -- request_log.id threshold
+    cleared_before INTEGER NOT NULL DEFAULT 0
 );
 
--- Lightweight PTR reverse-lookup (IP → domain). WITHOUT ROWID so the
--- clustered PK covers rdata_ip prefix lookups.
+-- Lightweight PTR reverse-lookup (IP → domain).
 CREATE TABLE ptr_map (
     rdata_ip TEXT NOT NULL,
     entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
@@ -418,8 +415,7 @@ CREATE TABLE ptr_map (
 ) WITHOUT ROWID;
 
 -- Per-IP latency measurements. Keyed by rdata_ip only — all domains
--- sharing the same IP (CDN) reuse the same row. qtype is inferred from
--- IP format (A=1, AAAA=28) for address-family analytics.
+-- sharing the same IP (CDN) reuse the same row.
 CREATE TABLE ip_latency (
     rdata_ip        TEXT NOT NULL,
     qtype           INTEGER NOT NULL DEFAULT 0,
@@ -430,11 +426,10 @@ CREATE TABLE ip_latency (
 ```
 
 **Key patterns**:
-- **DNS response cache**: `qtype` = original query type, records in original wire order. All entries are cacheable (the `cacheable` column has been removed — error logging moved to request_log).
-- **Wire format cache**: `Set()` packs Answer+Authority+Additional via `dns.Msg.Pack()`, compresses with zstd (SpeedDefault), stores in `msg_wire` BLOB. `Get()` decompresses + `Msg.Unpack()` — single binary decode replaces N× text parsing, cache hit ~0.5ms.
-- **Request logging**: `RecordRequest()` resolves or creates a cache entry via `ensureEntry()`, then does a single append-only INSERT into request_log with the entry_id FK. Every log row has a valid FK — rewrite/error paths get a lightweight stub entry automatically. The `result` column distinguishes cache hits (`hit`), fresh resolutions (`miss`), stale serves (`stale`), rewrite responses (`rewrite`), and errors (`error`).
-- **Stats aggregation**: `Stats()` queries request_log for rows with `id > (SELECT cleared_before FROM stats_meta)`. `FlushDB("stats")` sets `cleared_before` to the current max request_log.id — O(1) reset that leaves per-request detail intact.
-- **Log bounded by cache**: `request_log.entry_id REFERENCES entries(id) ON DELETE CASCADE` keeps the log size naturally bounded — when entries are evicted, their log rows go with them. No separate ring-buffer config needed.
+- **DNS response cache**: `qtype` = original query type, records in original wire order. All entries are cacheable. `Get()` decompresses + `Msg.Unpack()` — cache hit ~0.5ms.
+- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol, no row bloat). Miss/stale/rewrite/error insert into `request_log` with entry_id FK — qname retrieved by JOINing entries for debugging. `ensureEntry()` creates lightweight stubs for rewrite/error paths so every row has a valid FK.
+- **Stats aggregation**: `Stats()` combines `entry_hit_counters` (hit counts + protocol breakdown) with `request_log` (miss/stale/rewrite/error detail + rcode + dnssec). `FlushDB("stats")` truncates `entry_hit_counters` and resets the `stats_meta` threshold — request_log rows survive.
+- **Log bounded by cache**: `request_log.entry_id` and `entry_hit_counters.entry_id` both use `ON DELETE CASCADE` — when entries are evicted, all associated rows go with them. No separate ring-buffer needed.
 - **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `ProbeNSAddrs` and stored in ip_latency (keyed by IP only); `sortAnswerByLatency` reorders records at `Get()` time.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
