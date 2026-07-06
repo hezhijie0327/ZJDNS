@@ -542,10 +542,10 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	// ── Transaction (serialized via writeMu) ──────────────────────────────
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 
 	tx, err := s.db.Begin()
 	if err != nil {
+		s.writeMu.Unlock()
 		log.Warnf("CACHE: begin tx failed: %v", err)
 		return
 	}
@@ -561,6 +561,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		now, entryTTL, now+int64(entryTTL), boolToInt(validated),
 		msgWire,
 	).Scan(&entryID); err != nil {
+		s.writeMu.Unlock()
 		log.Warnf("CACHE: insert entry failed: %v", err)
 		return
 	}
@@ -571,11 +572,18 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	insertPtrMap(tx, entryID, additional)
 
 	if err := tx.Commit(); err != nil {
+		s.writeMu.Unlock()
 		log.Warnf("CACHE: commit tx failed: %v", err)
 		return
 	}
 
 	s.entryCount.Add(1)
+
+	// Release writeMu BEFORE eviction — eviction is a separate transaction
+	// that only deletes old rows and does not conflict with concurrent
+	// inserts. Holding writeMu across eviction serializes all cache writes
+	// behind potentially slow DELETE + CASCADE operations.
+	s.writeMu.Unlock()
 	s.evictIfNeeded()
 }
 
