@@ -293,7 +293,12 @@ func (p *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFun
 		liveConns = append(liveConns, c)
 		inFlight := int(c.inFlight.Load())
 		if !c.IsFull() {
-			liveConns = append(liveConns, conns[i+1:]...)
+			// Filter dead connections from the suffix before storing.
+			for _, rem := range conns[i+1:] {
+				if !rem.IsDead() {
+					liveConns = append(liveConns, rem)
+				}
+			}
 			p.conns[key] = liveConns
 			p.mu.Unlock()
 			return c, nil

@@ -287,19 +287,18 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	}
 }
 
-// ShuffleSlice returns a shuffled copy of the input slice using a modern
-// Fisher-Yates algorithm.
+// ShuffleSlice shuffles the input slice in-place using the Fisher-Yates
+// algorithm. The caller must own the slice exclusively — the backing array is
+// mutated.
 func ShuffleSlice[T any](slice []T) []T {
 	if len(slice) <= 1 {
 		return slice
 	}
-	shuffled := make([]T, len(slice))
-	copy(shuffled, slice)
-	for i := len(shuffled) - 1; i > 0; i-- {
+	for i := len(slice) - 1; i > 0; i-- {
 		j := rand.IntN(i + 1)
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+		slice[i], slice[j] = slice[j], slice[i]
 	}
-	return shuffled
+	return slice
 }
 
 // concurrencyLimit returns an adaptive concurrency limit based on the number of

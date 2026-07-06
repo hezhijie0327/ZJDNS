@@ -55,14 +55,15 @@ type Handler struct {
 	reverseCache interface {
 		ReverseLookup(string) []cache.LookupResult
 	}
-	edns              *edns.Handler
-	rewrite           *rewrite.Evaluator
-	resolver          *resolver.Resolver
-	prober            LatencyProber
-	prefetchCooldown  sync.Map
-	cacheRefreshGroup *errgroup.Group
-	cacheRefreshCtx   context.Context
-	ctx               context.Context
+	edns               *edns.Handler
+	rewrite            *rewrite.Evaluator
+	resolver           *resolver.Resolver
+	prober             LatencyProber
+	prefetchCooldown   map[string]int64
+	prefetchCooldownMu sync.RWMutex
+	cacheRefreshGroup  *errgroup.Group
+	cacheRefreshCtx    context.Context
+	ctx                context.Context
 }
 
 // BackgroundConfig groups lifecycle-related dependencies that the Handler
@@ -87,6 +88,7 @@ func New(
 		cache:             cacheStore,
 		edns:              ednsHandler,
 		rewrite:           rewriteEvaluator,
+		prefetchCooldown:  make(map[string]int64),
 		cacheRefreshGroup: bg.RefreshGroup,
 		cacheRefreshCtx:   bg.RefreshCtx,
 		ctx:               bg.Ctx,
@@ -121,8 +123,11 @@ func (h *Handler) Resolver() *resolver.Resolver { return h.resolver }
 // HasRewriteRules reports whether rewrite rules are configured.
 func (h *Handler) HasRewriteRules() bool { return h.rewrite != nil && h.rewrite.HasRules() }
 
-// PrefetchCooldown returns the prefetch throttle map (used by background cleanup).
-func (h *Handler) PrefetchCooldown() *sync.Map { return &h.prefetchCooldown }
+// PrefetchCooldown returns the prefetch throttle map and its mutex
+// (used by background cleanup).
+func (h *Handler) PrefetchCooldown() (*map[string]int64, *sync.RWMutex) {
+	return &h.prefetchCooldown, &h.prefetchCooldownMu
+}
 
 // UpstreamServers returns the configured upstream servers.
 func (h *Handler) UpstreamServers() []*config.UpstreamServer { return h.resolver.UpstreamServers() }
@@ -205,7 +210,10 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		return resp
 	}
 
-	startTime := time.Now()
+	var startTime time.Time
+	if log.Default.Level() >= log.Debug {
+		startTime = time.Now()
+	}
 	var responseMsg *dns.Msg
 	defer func() {
 		if responseMsg != nil && log.Default.Level() >= log.Debug {

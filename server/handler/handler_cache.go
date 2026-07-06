@@ -50,14 +50,23 @@ func (h *Handler) shouldStartPrefetch(cacheKey string) bool {
 	}
 
 	now := log.NowUnixNano()
-	nextAllowed, ok := h.prefetchCooldown.Load(cacheKey)
-	if ok {
-		if nextTs, typeOK := nextAllowed.(int64); typeOK && now < nextTs {
-			return false
-		}
+	expireAt := now + config.DefaultPrefetchThrottleInterval.Nanoseconds()
+
+	h.prefetchCooldownMu.RLock()
+	nextAllowed, ok := h.prefetchCooldown[cacheKey]
+	h.prefetchCooldownMu.RUnlock()
+	if ok && now < nextAllowed {
+		return false
 	}
 
-	h.prefetchCooldown.Store(cacheKey, now+config.DefaultPrefetchThrottleInterval.Nanoseconds())
+	h.prefetchCooldownMu.Lock()
+	// Double-check after acquiring write lock.
+	if nextAllowed2, ok2 := h.prefetchCooldown[cacheKey]; ok2 && now < nextAllowed2 {
+		h.prefetchCooldownMu.Unlock()
+		return false
+	}
+	h.prefetchCooldown[cacheKey] = expireAt
+	h.prefetchCooldownMu.Unlock()
 	return true
 }
 
@@ -237,12 +246,10 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	var dnssecStatus string
 	if validated {
 		dnssecStatus = config.DNSSECStatusSecure
+	} else if h.resolver != nil && h.resolver.Recursive() != nil && h.resolver.Recursive().DNSSECEDECode() != 0 {
+		dnssecStatus = config.DNSSECStatusBogus
 	} else {
-		if h.resolver != nil && h.resolver.Recursive() != nil && h.resolver.Recursive().DNSSECEDECode() != 0 {
-
-		} else {
-			dnssecStatus = config.DNSSECStatusInsecure
-		}
+		dnssecStatus = config.DNSSECStatusInsecure
 	}
 
 	if validated {

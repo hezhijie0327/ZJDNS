@@ -291,19 +291,17 @@ ruleLoop:
 			// Use pre-built RRs (built once at LoadRules time) —
 			// filter by query type and class.
 			for _, rr := range rule.CachedRecords {
-				// hdr removed
+				// TTL is applied by ttl.DeductElapsedCyclical in the handler;
+				// skip Clone() here to avoid double allocation.
 				if rr.Header().Class == qclass && dns.RRToType(rr) == qtype {
-					if r := rr.Clone(); r != nil {
-						result.Records = append(result.Records, r)
-					}
+					result.Records = append(result.Records, rr)
 				}
 			}
 			for _, rr := range rule.CachedAdditional {
-				// hdr removed
+				// TTL is applied by ttl.DeductElapsedCyclical in the handler;
+				// skip Clone() here to avoid double allocation.
 				if rr.Header().Class == qclass && dns.RRToType(rr) == qtype {
-					if r := rr.Clone(); r != nil {
-						result.Additional = append(result.Additional, r)
-					}
+					result.Additional = append(result.Additional, rr)
 				}
 			}
 			result.ShouldRewrite = true
