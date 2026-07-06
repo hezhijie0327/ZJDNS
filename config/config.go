@@ -106,6 +106,7 @@ type RewriteRule struct {
 	IncludeClientCIDRs []*net.IPNet      `json:"-"`
 	CachedRecords      []dns.RR          `json:"-"`
 	CachedAdditional   []dns.RR          `json:"-"`
+	DynamicContent     func() string     `json:"-"`
 }
 
 // DNSRecordConfig defines a single DNS resource record for rewrite responses.
@@ -328,6 +329,27 @@ func addChaosRecord(cfg *ServerConfig) {
 				Class:   "CH",
 				TTL:     DefaultTTL,
 				Content: strconv.Quote(value),
+			}},
+		})
+	}
+
+	// {ProjectName}.stats / {ProjectName}.uptime / {ProjectName}.goroutines /
+	// {ProjectName}.memstats — dynamic content populated at query time via
+	// DynamicContent. The DynamicContent functions are set by server.New()
+	// before LoadRules().
+	for _, name := range []string{
+		ProjectName + ".stats",
+		ProjectName + ".uptime",
+		ProjectName + ".goroutines",
+		ProjectName + ".memstats",
+	} {
+		cfg.Rewrite = append(cfg.Rewrite, RewriteRule{
+			Name: name,
+			Records: []DNSRecordConfig{{
+				Type:    "TXT",
+				Class:   "CH",
+				TTL:     0,
+				Content: "",
 			}},
 		})
 	}

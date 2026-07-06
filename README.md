@@ -1,5 +1,14 @@
 # ZJDNS
 
+```
+███████╗     ██╗██████╗ ███╗   ██╗███████╗
+╚══███╔╝     ██║██╔══██╗████╗  ██║██╔════╝
+  ███╔╝      ██║██║  ██║██╔██╗ ██║███████╗
+ ███╔╝  ██   ██║██║  ██║██║╚██╗██║╚════██║
+███████╗╚█████╔╝██████╔╝██║ ╚████║███████║
+╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
+```
+
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -50,7 +59,7 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 - **CHECK 约束**：布尔列（`cacheable`、`validated`、`fallback`、`prefetch`、`hijack`、`dnssec_ok`）均带 `CHECK (col IN (0,1))` 数据完整性保护
 - **PTR 反查**：轻量 `ptr_map` 表，`SELECT ... WHERE rdata_ip = ? JOIN entries` 查询
 - **驱逐策略**：TTL 惰性过期 + 条数上限最旧淘汰（优先淘汰 `expires_at + staleMaxAge < now` 的条目），`ON DELETE CASCADE` 自动清理关联表
-- **Summary 快照**：启动/关闭时输出一行聚合统计（条目数、命中率、六协议分布、rcode 分布、hijack/prefetch/stale 计数）
+- **实时统计**：`dig zjdns.stats CH TXT` 随时查询缓存统计（条目数、命中率、六协议分布、rcode 分布、hijack/prefetch/stale 计数），基于 rewrite DynamicContent 动态生成
 - **持久化**：`db_path` 指定 SQLite 文件路径，跨重启保留全量缓存
 
 ### DNS 解析
@@ -75,7 +84,7 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 
 ### 可观测性
 
-- **Summary 快照**：启动/关闭时自动输出聚合统计行
+- **运行时查询**：`dig zjdns.stats CH TXT` 缓存统计 / `zjdns.uptime` 运行时间 / `zjdns.goroutines` 协程数 / `zjdns.memstats` 内存指标，基于 rewrite DynamicContent 动态生成
 - **组件级日志**：`log_level` 支持 `level:COMP1,COMP2` 语法（如 `debug:UPSTREAM,SECURITY`），17 个日志前缀
 - **CLI 分析工具**：`zjdns -analyze <db> <query>` 直接 SQL 查询缓存数据库
 - **pprof**：标准 Go 性能分析端点
@@ -211,10 +220,10 @@ SELECT dnssec, COUNT(*) AS cnt FROM entries GROUP BY dnssec ORDER BY cnt DESC;
 ## 开发
 
 ```bash
-go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns ./cmd/zjdns
+golangci-lint run && golangci-lint fmt
 go test ./... -short
 go test -bench=. -short ./...
-golangci-lint run && golangci-lint fmt
+go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns ./cmd/zjdns
 ```
 
 ## 许可证

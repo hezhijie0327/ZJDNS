@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -49,6 +51,7 @@ type Server struct {
 	udpServers      []*dns.Server // per-address listeners
 	tcpServers      []*dns.Server // per-address listeners
 	tcpWriteMu      sync.Map
+	startTime       atomic.Int64 // set in Start(), read by uptime DynamicContent
 }
 
 // New creates and initializes a Server from the given configuration.
@@ -85,6 +88,34 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	if err != nil {
 		cancel(fmt.Errorf("EDNS handler init: %w", err))
 		return nil, fmt.Errorf("EDNS handler init: %w", err)
+	}
+
+	// Wire up DynamicContent for {ProjectName}.stats / .uptime / .goroutines / .memstats.
+	// startTime is read atomically -- set by Start() later.
+	for i := range cfg.Rewrite {
+		switch cfg.Rewrite[i].Name {
+		case config.ProjectName + ".stats":
+			cfg.Rewrite[i].DynamicContent = cacheStore.Summary
+		case config.ProjectName + ".uptime":
+			cfg.Rewrite[i].DynamicContent = func() string {
+				start := server.startTime.Load()
+				if start == 0 {
+					return "uptime=unknown"
+				}
+				return fmt.Sprintf("uptime=%s", time.Duration(log.NowUnix()-start)*time.Second)
+			}
+		case config.ProjectName + ".goroutines":
+			cfg.Rewrite[i].DynamicContent = func() string {
+				return fmt.Sprintf("goroutines=%d", runtime.NumGoroutine())
+			}
+		case config.ProjectName + ".memstats":
+			cfg.Rewrite[i].DynamicContent = func() string {
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				return fmt.Sprintf("heap_alloc=%d heap_objects=%d total_alloc=%d num_gc=%d goroutines=%d",
+					m.HeapAlloc, m.HeapObjects, m.TotalAlloc, m.NumGC, runtime.NumGoroutine())
+			}
+		}
 	}
 
 	rewriteEvaluator := rewrite.New()
@@ -206,13 +237,13 @@ func (s *Server) Start() error {
 	if s.handler.IsClosed() {
 		return errors.New("server is closed")
 	}
+	s.startTime.Store(log.NowUnix())
 
 	errChan := make(chan error, 1)
 	serverCtx, serverCancel := context.WithCancelCause(context.Background())
 	defer serverCancel(errors.New("server startup completed"))
 
 	s.displayInfo()
-	s.logSummary("startup")
 
 	g, ctx := errgroup.WithContext(serverCtx)
 
