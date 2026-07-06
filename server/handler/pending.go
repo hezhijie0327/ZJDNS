@@ -54,7 +54,7 @@ func NewPendingRequests() *PendingRequests {
 // follower=false.
 func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) (*resolver.QueryResult, bool) {
 	ecsAddr, ecsPrefix := "", uint8(0)
-	if ecsOpt != nil {
+	if ecsOpt != nil && ecsOpt.Address != nil {
 		ecsAddr = ecsOpt.Address.String()
 		ecsPrefix = ecsOpt.SourcePrefix
 	}
@@ -88,7 +88,7 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 // called by the leader (i.e. after Join returned follower=false).
 func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool, result *resolver.QueryResult) {
 	ecsAddr, ecsPrefix := "", uint8(0)
-	if ecsOpt != nil {
+	if ecsOpt != nil && ecsOpt.Address != nil {
 		ecsAddr = ecsOpt.Address.String()
 		ecsPrefix = ecsOpt.SourcePrefix
 	}
