@@ -653,7 +653,7 @@ func TestSet_Uncacheable(t *testing.T) {
 
 // ── Summary ──────────────────────────────────────────────────────────────────
 
-func TestSummary(t *testing.T) {
+func TestStats(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
@@ -661,7 +661,7 @@ func TestSummary(t *testing.T) {
 	mc.Set("sum.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, SetOptions{Rcode: 0, ResponseTime: 42})
 	mc.RecordServe("sum.example.com.", dns.TypeA, dns.ClassINET, nil, false, "UDP", false)
 
-	s := mc.Summary()
+	s := mc.Stats()
 	if s == "" {
 		t.Error("Summary should not be empty")
 	}
@@ -860,11 +860,11 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// ── Phase 10: Summary ───────────────────────────────────────────────────
-	s := mc.Summary()
+	s := mc.Stats()
 	if s == "" {
 		t.Error("Summary should not be empty")
 	}
-	t.Logf("Summary: %s", s)
+	t.Logf("Stats: %s", s)
 
 	// ── Phase 11: Verify DB file exists and has content ─────────────────────
 	info, err := os.Stat(dbPath)

@@ -12,8 +12,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -51,7 +49,6 @@ type Server struct {
 	udpServers      []*dns.Server // per-address listeners
 	tcpServers      []*dns.Server // per-address listeners
 	tcpWriteMu      sync.Map
-	startTime       atomic.Int64 // set in Start(), read by uptime DynamicContent
 }
 
 // New creates and initializes a Server from the given configuration.
@@ -90,30 +87,42 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("EDNS handler init: %w", err)
 	}
 
-	// Wire up DynamicContent for {ProjectName}.stats / .uptime / .goroutines / .memstats.
-	// startTime is read atomically -- set by Start() later.
+	// Wire up DynamicContent for {ProjectName}.stats and db.clear*.
 	for i := range cfg.Rewrite {
 		switch cfg.Rewrite[i].Name {
 		case config.ProjectName + ".stats":
-			cfg.Rewrite[i].DynamicContent = cacheStore.Summary
-		case config.ProjectName + ".uptime":
+			cfg.Rewrite[i].DynamicContent = cacheStore.Stats
+		case config.ProjectName + ".db.clear":
 			cfg.Rewrite[i].DynamicContent = func() string {
-				start := server.startTime.Load()
-				if start == 0 {
-					return "uptime=unknown"
+				n, err := cacheStore.Clear()
+				if err != nil {
+					return fmt.Sprintf("error=%v", err)
 				}
-				return fmt.Sprintf("uptime=%s", time.Duration(log.NowUnix()-start)*time.Second)
+				return fmt.Sprintf("flushed=%d", n)
 			}
-		case config.ProjectName + ".goroutines":
+		case config.ProjectName + ".db.clear.cache":
 			cfg.Rewrite[i].DynamicContent = func() string {
-				return fmt.Sprintf("goroutines=%d", runtime.NumGoroutine())
+				n, err := cacheStore.FlushDB("cache")
+				if err != nil {
+					return fmt.Sprintf("error=%v", err)
+				}
+				return fmt.Sprintf("flushed=%d", n)
 			}
-		case config.ProjectName + ".memstats":
+		case config.ProjectName + ".db.clear.stats":
 			cfg.Rewrite[i].DynamicContent = func() string {
-				var m runtime.MemStats
-				runtime.ReadMemStats(&m)
-				return fmt.Sprintf("heap_alloc=%d heap_objects=%d total_alloc=%d num_gc=%d goroutines=%d",
-					m.HeapAlloc, m.HeapObjects, m.TotalAlloc, m.NumGC, runtime.NumGoroutine())
+				n, err := cacheStore.FlushDB("stats")
+				if err != nil {
+					return fmt.Sprintf("error=%v", err)
+				}
+				return fmt.Sprintf("reset=%d", n)
+			}
+		case config.ProjectName + ".db.clear.latency":
+			cfg.Rewrite[i].DynamicContent = func() string {
+				n, err := cacheStore.FlushDB("latency")
+				if err != nil {
+					return fmt.Sprintf("error=%v", err)
+				}
+				return fmt.Sprintf("flushed=%d", n)
 			}
 		}
 	}
@@ -237,7 +246,6 @@ func (s *Server) Start() error {
 	if s.handler.IsClosed() {
 		return errors.New("server is closed")
 	}
-	s.startTime.Store(log.NowUnix())
 
 	errChan := make(chan error, 1)
 	serverCtx, serverCancel := context.WithCancelCause(context.Background())

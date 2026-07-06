@@ -31,7 +31,9 @@ type Store interface {
 	UpdateLatency(ip string, latencyMS int)
 	GetLatencyLastProbe(ip string) (int64, bool)
 	ReverseLookup(ip string) []LookupResult
-	Summary() string
+	FlushDB(target string) (int64, error)
+	Clear() (int64, error)
+	Stats() string
 	Close() error
 }
 

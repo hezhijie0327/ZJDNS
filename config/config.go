@@ -333,18 +333,22 @@ func addChaosRecord(cfg *ServerConfig) {
 		})
 	}
 
-	// {ProjectName}.stats / {ProjectName}.uptime / {ProjectName}.goroutines /
-	// {ProjectName}.memstats — dynamic content populated at query time via
-	// DynamicContent. The DynamicContent functions are set by server.New()
-	// before LoadRules().
+	// DynamicContent rules — populated at query time by server.New().
+	// Destructive (db.clear*) rules are loopback-only.
 	for _, name := range []string{
 		ProjectName + ".stats",
-		ProjectName + ".uptime",
-		ProjectName + ".goroutines",
-		ProjectName + ".memstats",
+		ProjectName + ".db.clear",
+		ProjectName + ".db.clear.cache",
+		ProjectName + ".db.clear.stats",
+		ProjectName + ".db.clear.latency",
 	} {
+		var includeClients []string
+		if strings.HasPrefix(name, ProjectName+".db.") {
+			includeClients = []string{"127.0.0.1", "::1"}
+		}
 		cfg.Rewrite = append(cfg.Rewrite, RewriteRule{
-			Name: name,
+			Name:           name,
+			IncludeClients: includeClients,
 			Records: []DNSRecordConfig{{
 				Type:    "TXT",
 				Class:   "CH",

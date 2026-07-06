@@ -2,6 +2,7 @@ package cache
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -267,10 +268,14 @@ func (s *SQLiteCache) prepareStatements() error {
 	hitColumns := [6]string{"hit_udp", "hit_tcp", "hit_dot", "hit_doq", "hit_doh", "hit_doh3"}
 	for i, col := range hitColumns {
 		s.stmtHits[i], err = s.db.Prepare(
-			`UPDATE hit_counters SET ` + col + ` = ` + col + ` + 1, last_hit_time = ?
-			 WHERE entry_id = (SELECT id FROM entries
-			   WHERE qname = ? AND qtype = ? AND qclass = ?
-			   AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`)
+			`INSERT INTO hit_counters (entry_id, last_hit_time, ` + col + `)
+				 VALUES ((SELECT id FROM entries
+				   WHERE qname = ?2 AND qtype = ?3 AND qclass = ?4
+				   AND ecs_addr = ?5 AND ecs_prefix = ?6 AND dnssec_ok = ?7),
+				   ?1, 1)
+				 ON CONFLICT(entry_id) DO UPDATE
+				 SET ` + col + ` = hit_counters.` + col + ` + 1,
+				     last_hit_time = excluded.last_hit_time`)
 		if err != nil {
 			return err
 		}
@@ -559,10 +564,13 @@ func (s *SQLiteCache) RecordServe(qname string, qtype, qclass uint16, ecs *confi
 		// This is a rare path (serve-stale), so two execs is acceptable.
 		_, _ = s.stmtHits[pi].Exec(now, qname, qType, qClass, ecsAddr, ecsPrefix, dnssecInt)
 		_, _ = s.db.Exec(
-			`UPDATE hit_counters SET stale_count = stale_count + 1
-			 WHERE entry_id = (SELECT id FROM entries
+			`INSERT INTO hit_counters (entry_id, stale_count)
+			 VALUES ((SELECT id FROM entries
 			   WHERE qname = ? AND qtype = ? AND qclass = ?
-			   AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,
+			   AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?),
+			   1)
+			 ON CONFLICT(entry_id) DO UPDATE
+			 SET stale_count = hit_counters.stale_count + 1`,
 			qname, qType, qClass, ecsAddr, ecsPrefix, dnssecInt,
 		)
 	} else {
@@ -666,8 +674,52 @@ func (s *SQLiteCache) RecordRewrite(qname string, qtype, qclass uint16, ecs *con
 	}
 }
 
-// Summary returns a one-line stats summary from the entries and hit_counters tables.
-func (s *SQLiteCache) Summary() string {
+// FlushDB truncates a single table: "stats" (hit_counters), "cache" (entries),
+// or "latency" (ip_latency).
+func (s *SQLiteCache) FlushDB(target string) (int64, error) {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return 0, errors.New("cache closed")
+	}
+	var result sql.Result
+	var err error
+	switch target {
+	case "stats":
+		result, err = s.db.Exec(`DELETE FROM hit_counters`)
+	case "cache":
+		result, err = s.db.Exec(`DELETE FROM entries`)
+		s.entryCount.Store(0)
+	case "latency":
+		result, err = s.db.Exec(`DELETE FROM ip_latency`)
+	default:
+		return 0, fmt.Errorf("flushDB: unknown target %q", target)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("flushDB %s: %w", target, err)
+	}
+	n, _ := result.RowsAffected()
+	log.Infof("CACHE: flushDB %s: %d rows", target, n)
+	return n, nil
+}
+
+// Clear truncates all tables: entries, hit_counters, and ip_latency.
+func (s *SQLiteCache) Clear() (int64, error) {
+	n1, err := s.FlushDB("cache")
+	if err != nil {
+		return 0, err
+	}
+	n2, err := s.FlushDB("stats")
+	if err != nil {
+		return n1, err
+	}
+	n3, err := s.FlushDB("latency")
+	if err != nil {
+		return n1 + n2, err
+	}
+	return n1 + n2 + n3, nil
+}
+
+// Stats returns a one-line stats summary from the entries and hit_counters tables.
+func (s *SQLiteCache) Stats() string {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return ""
 	}
