@@ -65,3 +65,21 @@ func (p *httpClientPool) get(port int, useTLS, useHTTP3 bool) *http.Client {
 	p.clients[key] = client
 	return client
 }
+
+// Close closes all pooled HTTP clients, releasing underlying QUIC connections
+// and file descriptors. Safe to call multiple times.
+func (p *httpClientPool) Close() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, client := range p.clients {
+		if key.http3 {
+			if t, ok := client.Transport.(*http3.Transport); ok {
+				_ = t.Close()
+			}
+		}
+	}
+	p.clients = nil
+}

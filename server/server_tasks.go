@@ -224,6 +224,12 @@ func (s *Server) shutdownServer() {
 		log.Errorf("SERVER: Cache refresh tasks shutdown timeout")
 	}
 
+	// Close latency prober before the query client — it owns HTTP/3
+	// QUIC connections that must be released explicitly.
+	if p := s.handler.Prober(); p != nil {
+		p.Close()
+	}
+
 	// Close pooled connections and transports now that all background
 	// goroutines (including cache refresh) have finished.
 	if s.queryClient != nil {

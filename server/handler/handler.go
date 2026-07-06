@@ -44,6 +44,7 @@ type queryResult struct {
 // successful resolution.
 type LatencyProber interface {
 	Start(qname string, qtype uint16, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
+	Close()
 }
 
 // Handler processes DNS queries through the caching and resolution pipeline.
@@ -104,6 +105,9 @@ func (h *Handler) SetResolver(r *resolver.Resolver) { h.resolver = r }
 
 // SetProber sets the latency prober after construction.
 func (h *Handler) SetProber(p LatencyProber) { h.prober = p }
+
+// Prober returns the latency prober (for lifecycle cleanup).
+func (h *Handler) Prober() LatencyProber { return h.prober }
 
 // IsClosed reports whether the handler has been shut down.
 func (h *Handler) IsClosed() bool { return atomic.LoadInt32(&h.closed) != 0 }

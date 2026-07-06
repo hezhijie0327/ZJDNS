@@ -45,6 +45,13 @@ func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, s
 	}
 }
 
+// Close releases resources held by the prober (HTTP/3 QUIC connections).
+func (p *Prober) Close() {
+	if p != nil && p.engine != nil {
+		p.engine.Close()
+	}
+}
+
 // Start initiates a background latency probe for A/AAAA records when multiple
 // addresses exist. If probing finds a faster ordering, the cache is updated.
 func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional []dns.RR, validated bool, ecsResponse *edns.ECSOption) {
@@ -190,6 +197,7 @@ func ProbeNSAddrs(cache CacheSetter, addrs []string) {
 	}
 
 	prober := ilatency.New(defaultNSProbeSteps(), nil)
+	defer prober.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultNSProbeTimeout)
 	defer cancel()
 	_, latencies := prober.ProbeIPsLatency(ctx, needProbe)

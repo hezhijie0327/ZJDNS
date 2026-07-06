@@ -41,6 +41,14 @@ func New(steps []config.LatencyProbeStep, bgCtx context.Context) *Prober {
 	return p
 }
 
+// Close releases resources held by the prober (HTTP/3 QUIC connections).
+// The prober must not be used after Close is called.
+func (p *Prober) Close() {
+	if p != nil && p.httpPool != nil {
+		p.httpPool.Close()
+	}
+}
+
 // normalizeSteps pre-processes probe steps to avoid repeated string operations
 // on the hot path.
 func normalizeSteps(steps []config.LatencyProbeStep) []config.LatencyProbeStep {
