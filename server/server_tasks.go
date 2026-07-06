@@ -173,12 +173,6 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
-	// Close pooled connections and transports to release file descriptors
-	// and goroutines before waiting for background tasks.
-	if s.queryClient != nil {
-		s.queryClient.Close()
-	}
-
 	if s.pprofServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
@@ -189,6 +183,9 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
+	// Wait for background and cache-refresh goroutines BEFORE closing the
+	// query client — inflight refresh/resolve goroutines need outbound
+	// connections to complete.
 	bgDone := make(chan error, 1)
 	go func() {
 		defer dnsutil.HandlePanic("Background group wait")
@@ -223,6 +220,12 @@ func (s *Server) shutdownServer() {
 		log.Infof("SERVER: All cache refresh tasks shut down")
 	case <-refreshTimer.C:
 		log.Errorf("SERVER: Cache refresh tasks shutdown timeout")
+	}
+
+	// Close pooled connections and transports now that all background
+	// goroutines (including cache refresh) have finished.
+	if s.queryClient != nil {
+		s.queryClient.Close()
 	}
 
 	if cacheStore := s.handler.CacheStore(); cacheStore != nil {

@@ -132,6 +132,11 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 	c.doh3TransportMu.Lock()
 	defer c.doh3TransportMu.Unlock()
 
+	// Guard against concurrent Close() which sets doh3Transports to nil.
+	if c.doh3Transports == nil {
+		return c.doh3Client
+	}
+
 	if client, ok := c.doh3Transports[key]; ok {
 		return client
 	}

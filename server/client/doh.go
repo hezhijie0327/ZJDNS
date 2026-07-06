@@ -120,6 +120,11 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 	c.dohTransportMu.Lock()
 	defer c.dohTransportMu.Unlock()
 
+	// Guard against concurrent Close() which sets dohTransports to nil.
+	if c.dohTransports == nil {
+		return c.dohClient
+	}
+
 	key := transportKey(host, serverName, skipVerify, proxyURL)
 	if client, ok := c.dohTransports[key]; ok {
 		return client

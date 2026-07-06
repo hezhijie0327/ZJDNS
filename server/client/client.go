@@ -180,6 +180,11 @@ func (c *Client) getProxyDialer(server *config.UpstreamServer) *SOCKS5Dialer {
 	c.proxyMu.Lock()
 	defer c.proxyMu.Unlock()
 
+	// Guard against concurrent Close() which sets proxyDialers to nil.
+	if c.proxyDialers == nil {
+		return nil
+	}
+
 	if d, ok := c.proxyDialers[server.Proxy]; ok {
 		return d
 	}

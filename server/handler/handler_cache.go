@@ -22,7 +22,7 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 
 	msg := h.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 
-	if isExpired {
+	if isExpired && !h.IsClosed() {
 		h.cacheRefreshGroup.Go(func() error {
 			defer dnsutil.HandlePanic("cache refresh")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
@@ -31,7 +31,7 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 		})
 	}
 
-	if !isExpired && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) && h.shouldStartPrefetch(question.Name) {
+	if !isExpired && !h.IsClosed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) && h.shouldStartPrefetch(question.Name) {
 		h.cacheRefreshGroup.Go(func() error {
 			defer dnsutil.HandlePanic("cache prefetch")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
@@ -95,7 +95,7 @@ func (h *Handler) buildCacheResponse(req *dns.Msg, entry *cache.Entry, isExpired
 }
 
 func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16) *dns.Msg {
-	if h.config.Server.Features.Cache.PreferStale {
+	if h.config.Server.Features.Cache.PreferStale && !h.IsClosed() {
 		h.cacheRefreshGroup.Go(func() error {
 			defer dnsutil.HandlePanic("expired cache refresh")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
@@ -107,6 +107,9 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 
 	var res queryResult
 	done := make(chan struct{})
+	if h.IsClosed() {
+		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
+	}
 	go func() {
 		defer close(done)
 		defer dnsutil.HandlePanic("expired cache fallback query")

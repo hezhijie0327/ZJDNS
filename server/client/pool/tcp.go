@@ -211,6 +211,9 @@ func (c *Conn) readLoop() {
 			bufpool.DefaultMessagePool.Put(resp)
 			continue
 		}
+		// Detach resp.Data from the pooled buffer before returning it,
+		// otherwise the message carries a dangling pointer to zeroed memory.
+		resp.Data = nil
 		if pooled {
 			bufpool.DefaultBufferPool.Put(bodyBuf)
 		}
