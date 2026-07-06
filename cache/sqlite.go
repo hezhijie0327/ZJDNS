@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ const (
 	defaultStaleMaxAge = int64(config.DefaultStaleMaxAge)
 	zstdCompressLevel  = zstd.SpeedDefault
 	schemaVersion      = 2 // increment to drop and recreate all tables on schema change
+	dsnParams          = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
 )
 
 // zstd encoder/decoder for wire format compression. Created once, reused forever.
@@ -48,6 +50,7 @@ func init() {
 // SQLiteCache is a DNS response cache backed entirely by SQLite.
 type SQLiteCache struct {
 	db          *sql.DB
+	dbPath      string // database file path; empty = in-memory
 	maxEntries  int
 	mmapSizeMB  int
 	cacheSizeMB int
@@ -84,12 +87,11 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 		cacheSizeMB = config.DefaultCacheCacheSizeMB
 	}
 
-	params := "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
 	var dsn string
 	if path == "" {
-		dsn = "file::memory:?" + params
+		dsn = "file::memory:?" + dsnParams
 	} else {
-		dsn = "file:" + path + "?" + params
+		dsn = "file:" + path + "?" + dsnParams
 	}
 
 	db, err := sql.Open("sqlite3", dsn)
@@ -106,6 +108,7 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 
 	s := &SQLiteCache{
 		db:          db,
+		dbPath:      path,
 		maxEntries:  maxEntries,
 		mmapSizeMB:  mmapSizeMB,
 		cacheSizeMB: cacheSizeMB,
@@ -153,23 +156,23 @@ func (s *SQLiteCache) migrate() error {
 	_ = s.db.QueryRow("SELECT version FROM schema_version").Scan(&version)
 	if version != schemaVersion {
 		log.Infof("CACHE: schema v%d → v%d, rebuilding all tables", version, schemaVersion)
-		// Drop every user table so we can recreate from scratch. We query
-		// sqlite_master instead of hardcoding a list — new tables added in
-		// future schema versions are dropped automatically.
-		rows, err := s.db.Query("SELECT name FROM sqlite_master WHERE type='table'")
-		if err == nil {
-			var tables []string
-			for rows.Next() {
-				var name string
-				if err := rows.Scan(&name); err == nil {
-					tables = append(tables, name)
-				}
+		if s.dbPath != "" {
+			// Disk-backed: close, delete the file, reopen. O(1).
+			_ = s.db.Close()
+			_ = os.Remove(s.dbPath)
+			db, err := sql.Open("sqlite3", "file:"+s.dbPath+"?"+dsnParams)
+			if err != nil {
+				return fmt.Errorf("sqlite reopen: %w", err)
 			}
-			_ = rows.Close()
-			for _, name := range tables {
-				_, _ = s.db.Exec("DROP TABLE IF EXISTS " + name)
+			db.SetMaxOpenConns(config.DefaultCacheMaxOpenConns)
+			db.SetMaxIdleConns(config.DefaultCacheMaxIdleConns)
+			s.db = db
+			// Reapply pragmas on the fresh database.
+			if _, err := s.db.Exec(pragmaSQL); err != nil {
+				log.Warnf("CACHE: pragma failed on reopen (non-fatal): %v", err)
 			}
 		}
+		// In-memory: nothing to drop — the DB is fresh on every process start.
 	}
 
 	_, err := s.db.Exec(`
