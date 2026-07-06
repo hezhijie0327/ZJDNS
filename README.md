@@ -50,7 +50,7 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 |----|------|
 | `entries` | DNS 响应缓存（8 列，UNIQUE 约束，zstd 压缩 BLOB） |
 | `request_log` | 请求日志（entry_id FK，miss/stale/rewrite/error，qname 通过 JOIN 查） |
-| `entry_hit_counters` | 命中计数器（entry+protocol 聚合，避免重复 hit 行膨胀） |
+| `entry_hit_counters` | 命中计数器（entry+protocol+rcode 聚合，hit 不占 request_log） |
 | `stats_meta` | 统计元信息（单行，记录上次清除阈值） |
 | `ip_latency` | 延迟探测结果（IP 为键，所有域名共享同 IP 行） |
 | `ptr_map` | PTR 反向映射（IP→域名，WITHOUT ROWID，ON DELETE CASCADE） |

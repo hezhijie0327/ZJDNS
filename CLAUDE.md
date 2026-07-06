@@ -389,13 +389,14 @@ CREATE TABLE request_log (
 CREATE INDEX idx_request_log_ts ON request_log(timestamp);
 CREATE INDEX idx_request_log_entry ON request_log(entry_id);
 
--- Hit counters: aggregated per-entry+protocol. Each cache hit upserts here
--- instead of inserting into request_log, avoiding per-hit row bloat.
+-- Hit counters: aggregated per-entry+protocol+rcode. Each cache hit upserts
+-- here instead of inserting into request_log, avoiding per-hit row bloat.
 CREATE TABLE entry_hit_counters (
     entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
     protocol  TEXT NOT NULL,
+    rcode     INTEGER NOT NULL DEFAULT 0,
     hit_count INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (entry_id, protocol)
+    PRIMARY KEY (entry_id, protocol, rcode)
 ) WITHOUT ROWID;
 
 -- Stats metadata: single row tracking the last request_log.id that was
@@ -427,8 +428,8 @@ CREATE TABLE ip_latency (
 
 **Key patterns**:
 - **DNS response cache**: `qtype` = original query type, records in original wire order. All entries are cacheable. `Get()` decompresses + `Msg.Unpack()` — cache hit ~0.5ms.
-- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol, no row bloat). Miss/stale/rewrite/error insert into `request_log` with entry_id FK — qname retrieved by JOINing entries for debugging. `ensureEntry()` creates lightweight stubs for rewrite/error paths so every row has a valid FK.
-- **Stats aggregation**: `Stats()` combines `entry_hit_counters` (hit counts + protocol breakdown) with `request_log` (miss/stale/rewrite/error detail + rcode + dnssec). `FlushDB("stats")` truncates `entry_hit_counters` and resets the `stats_meta` threshold — request_log rows survive.
+- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol+rcode, no row bloat). Miss/stale/rewrite/error insert into `request_log` with entry_id FK — qname retrieved by JOINing entries for debugging. `ensureEntry()` creates lightweight stubs for rewrite/error paths so every row has a valid FK.
+- **Stats aggregation**: `Stats()` UNION ALLs `entry_hit_counters` + `request_log` for rcode distribution, and combines both tables for protocol counts. `FlushDB("stats")` truncates `entry_hit_counters` and resets the `stats_meta` threshold — request_log rows survive.
 - **Log bounded by cache**: `request_log.entry_id` and `entry_hit_counters.entry_id` both use `ON DELETE CASCADE` — when entries are evicted, all associated rows go with them. No separate ring-buffer needed.
 - **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `ProbeNSAddrs` and stored in ip_latency (keyed by IP only); `sortAnswerByLatency` reorders records at `Get()` time.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
