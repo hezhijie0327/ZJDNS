@@ -9,10 +9,11 @@ import (
 	"codeberg.org/miekg/dns"
 
 	"zjdns/edns"
+	"zjdns/internal/pending"
 )
 
 func TestPendingRefreshes_LeaderAndFollower(t *testing.T) {
-	pr := NewPendingRefreshes()
+	pr := pending.NewGroup[pendingKey]()
 
 	qname := "example.com."
 	qtype := dns.TypeA
@@ -41,7 +42,7 @@ func TestPendingRefreshes_LeaderAndFollower(t *testing.T) {
 }
 
 func TestPendingRefreshes_DifferentKeys(t *testing.T) {
-	pr := NewPendingRefreshes()
+	pr := pending.NewGroup[pendingKey]()
 
 	keyA := buildPendingKey("example.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
 	keyAAAA := buildPendingKey("example.com.", dns.TypeAAAA, uint16(dns.ClassINET), nil, false)
@@ -63,7 +64,7 @@ func TestPendingRefreshes_DifferentKeys(t *testing.T) {
 }
 
 func TestPendingRefreshes_ECSVariation(t *testing.T) {
-	pr := NewPendingRefreshes()
+	pr := pending.NewGroup[pendingKey]()
 	qclass := uint16(dns.ClassINET)
 
 	ecsKey := buildPendingKey("example.com.", dns.TypeA, qclass, &edns.ECSOption{Address: nil, SourcePrefix: 24}, false)
@@ -81,7 +82,7 @@ func TestPendingRefreshes_ECSVariation(t *testing.T) {
 }
 
 func TestPendingRefreshes_ConcurrentSameKey(t *testing.T) {
-	pr := NewPendingRefreshes()
+	pr := pending.NewGroup[pendingKey]()
 	key := buildPendingKey("concurrent.example.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
 
 	const goroutines = 50
@@ -125,7 +126,7 @@ func TestPendingRefreshes_ConcurrentSameKey(t *testing.T) {
 }
 
 func TestPendingRefreshes_MultipleFollowers(t *testing.T) {
-	pr := NewPendingRefreshes()
+	pr := pending.NewGroup[pendingKey]()
 	key := buildPendingKey("example.com.", dns.TypeAAAA, uint16(dns.ClassINET), nil, false)
 
 	if !pr.Start(key) {
@@ -161,12 +162,12 @@ func TestPendingRefreshes_MultipleFollowers(t *testing.T) {
 }
 
 func TestPendingRefreshes_DoneWithoutStart(t *testing.T) {
-	pr := NewPendingRefreshes()
+	pr := pending.NewGroup[pendingKey]()
 	pr.Done(buildPendingKey("no-such-key.", dns.TypeA, uint16(dns.ClassINET), nil, false))
 }
 
 func TestPendingRefreshes_DNSSECKeyIsolation(t *testing.T) {
-	pr := NewPendingRefreshes()
+	pr := pending.NewGroup[pendingKey]()
 	qclass := uint16(dns.ClassINET)
 
 	keyWithDNSSEC := buildPendingKey("example.com.", dns.TypeA, qclass, nil, true)
@@ -185,7 +186,7 @@ func TestPendingRefreshes_DNSSECKeyIsolation(t *testing.T) {
 }
 
 func TestPendingRefreshes_LeaderDoneFollowerCanProceed(t *testing.T) {
-	pr := NewPendingRefreshes()
+	pr := pending.NewGroup[pendingKey]()
 	key := buildPendingKey("test.example.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
 
 	if !pr.Start(key) {

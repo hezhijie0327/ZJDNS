@@ -18,6 +18,7 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/pending"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
 	"zjdns/rewrite"
@@ -66,7 +67,7 @@ type Handler struct {
 	cacheRefreshCtx    context.Context
 	ctx                context.Context
 	pending         *PendingRequests
-	pendingRefreshes *PendingRefreshes
+	pendingRefreshes *pending.Group[pendingKey]
 }
 
 // BackgroundConfig groups lifecycle-related dependencies that the Handler
@@ -93,7 +94,7 @@ func New(
 		rewrite:           rewriteEvaluator,
 		prefetchCooldown:  make(map[string]int64),
 		pending:           NewPendingRequests(),
-			pendingRefreshes:  NewPendingRefreshes(),
+			pendingRefreshes:  pending.NewGroup[pendingKey](),
 		cacheRefreshGroup: bg.RefreshGroup,
 		cacheRefreshCtx:   bg.RefreshCtx,
 		ctx:               bg.Ctx,

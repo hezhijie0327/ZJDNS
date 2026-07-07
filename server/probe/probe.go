@@ -15,6 +15,7 @@ import (
 	"zjdns/internal/dnsutil"
 	ilatency "zjdns/internal/latency"
 	"zjdns/internal/log"
+	"zjdns/internal/pending"
 )
 
 // CacheSetter is the interface for updating latency measurements in the
@@ -32,7 +33,7 @@ type Prober struct {
 	bgGroup func(func() error)
 	bgCtx   context.Context
 	engine  *ilatency.Prober
-	pending *PendingProbes
+	pending *pending.Group[probeKey]
 }
 
 // New creates a new Prober with the given cache setter, background group
@@ -43,7 +44,7 @@ func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, s
 		bgGroup: bgGroup,
 		bgCtx:   bgCtx,
 		engine:  ilatency.New(steps, bgCtx),
-		pending: NewPendingProbes(),
+		pending: pending.NewGroup[probeKey](),
 	}
 }
 
@@ -104,14 +105,16 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 		return
 	}
 
-	if !p.pending.Start(qname, qtype) {
+	key := probeKey{qname: qname, qtype: qtype}
+	if !p.pending.Start(key) {
+		log.Debugf("LATENCY: probe skipped for %s — already in flight", qname)
 		return
 	}
 
 	log.Debugf("LATENCY: starting background latency probe for %s", qname)
 
 	p.bgGroup(func() error {
-		defer p.pending.Done(qname, qtype)
+		defer p.pending.Done(key)
 		defer dnsutil.HandlePanic("latency probe")
 		if err := p.probeAndReorder(p.bgCtx, qname, qtype, answer, ecsResponse); err != nil {
 			log.Debugf("LATENCY: background probe failed for %s: %v", qname, err)
@@ -205,10 +208,10 @@ func ProbeNSAddrs(cache CacheSetter, addrs []string) {
 
 	// Deduplicate concurrent probes of the same IP set (e.g. root/TLD NS).
 	key := buildNSProbeKey(needProbe)
-	if !tryStartNSProbe(key) {
+	if !nsPending.Start(key) {
 		return
 	}
-	defer finishNSProbe(key)
+	defer nsPending.Done(key)
 
 	prober := ilatency.New(defaultNSProbeSteps(), nil)
 	defer prober.Close()
