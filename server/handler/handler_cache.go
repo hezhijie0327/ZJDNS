@@ -259,7 +259,7 @@ func (h *Handler) processCIDRRefused(req *dns.Msg, question Question, ecsOpt *ed
 	h.cache.RecordRequest(&cache.RequestRecord{
 		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 		ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
-		Protocol: requestProtocol, Result: "error", Rcode: dns.RcodeRefused,
+		Protocol: requestProtocol, Result: "blocked", Rcode: dns.RcodeRefused,
 		ResponseTime: time.Since(startTime).Milliseconds(),
 	})
 	return msg

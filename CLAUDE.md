@@ -464,7 +464,7 @@ CREATE TABLE ip_latency (
 - **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
 - **IP latency**: Per-IP keyed (`rdata_ip`). A single `INSERT OR REPLACE` writes `latency_ms`, `qtype` (inferred from IP format), and `last_probe_time` (via `unixepoch()`). `Prober.Start()` and `ProbeNSAddrs()` check `GetLatencyLastProbe` per-IP — if every IP in the answer was probed within `DefaultLatencyProbeMinInterval` (60s), the probe is skipped. All domains sharing the same CDN IP reuse the same latency row.
 - **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map`. Also prunes `ip_latency` rows with `last_probe_time` older than `defaultStaleMaxAge` (30 days). Entry count is synced from `SELECT COUNT(*)` before eviction to correct drift from INSERT OR REPLACE.
-- **Dynamic queries + FlushDB**: `Store.Stats()` returns `[]string` with 6 TXT records grouped by theme (overview, sources, rcodes, anomalies, protocols, DNSSEC), queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency` (`FlushDB(target)`, per-table). `FlushDB("stats")` only resets the stats_meta threshold — request_log rows survive. All restricted to loopback via `IncludeClients`. Wired via rewrite `DynamicContent` in `server.New()` before `LoadRules()`.
+- **Dynamic queries + FlushDB**: `Store.Stats()` returns `[]string` with 8 TXT records grouped by theme (overview, success, errors, rcodes, anomalies, plain, encrypted, DNSSEC), queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency` (`FlushDB(target)`, per-table). `FlushDB("stats")` only resets the stats_meta threshold — request_log rows survive. All restricted to loopback via `IncludeClients`. Wired via rewrite `DynamicContent` in `server.New()` before `LoadRules()`.
 - **Analytics**: request_log single-table queries — e.g. `SELECT server, COUNT(*) FROM request_log GROUP BY server` for requests per upstream, `SELECT qname, COUNT(*) FROM request_log WHERE result='error' GROUP BY qname` for failure analysis. No JOIN needed.
 
 ## CI/CD
@@ -561,7 +561,7 @@ dig @127.0.0.1 -p 15353 -x 180.101.49.44 +short
 # Verify DNSSEC distribution
 ./zjdns -analyze cache.db "SELECT dnssec_status, COUNT(*) FROM request_log GROUP BY dnssec_status"
 
-# Full stats (6 TXT records: overview, sources, rcodes, anomalies, protocols, DNSSEC)
+# Full stats (8 TXT records: overview, success, errors, rcodes, anomalies, plain, encrypted, DNSSEC)
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 
 # Verify stats reset keeps request_log intact

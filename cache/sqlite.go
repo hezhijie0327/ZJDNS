@@ -816,7 +816,7 @@ func (s *SQLiteCache) Stats() []string {
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&entries)
 
 	var avgMs float64
-	var total, hits, misses, stales, rewrites, errCount int64
+	var total, hits, misses, stales, rewrites, errCount, blockedCount, badcookieCount int64
 	var hcUDP, hcTCP, hcDOT, hcDOQ, hcDOH, hcDOH3 int64
 	var rlUDP, rlTCP, rlDOT, rlDOQ, rlDOH, rlDOH3 int64
 	var hijack, fallback, totalMS, hitTotalMS int64
@@ -844,6 +844,8 @@ func (s *SQLiteCache) Stats() []string {
 			" COALESCE(SUM(CASE WHEN result='stale' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN result='rewrite' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN result='error' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='blocked' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='badcookie' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='udp' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='tcp' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dot' THEN 1 ELSE 0 END), 0),"+
@@ -856,7 +858,7 @@ func (s *SQLiteCache) Stats() []string {
 			" FROM request_log WHERE id > (SELECT cleared_before FROM stats_meta)",
 	).Scan(
 		&total,
-		&misses, &stales, &rewrites, &errCount,
+		&misses, &stales, &rewrites, &errCount, &blockedCount, &badcookieCount,
 		&rlUDP, &rlTCP, &rlDOT, &rlDOQ, &rlDOH, &rlDOH3,
 		&hijack, &fallback, &totalMS,
 	)
@@ -935,14 +937,18 @@ func (s *SQLiteCache) Stats() []string {
 	return []string{
 		fmt.Sprintf("entries=%d total=%d avg=%.1fms",
 			entries, total, avgMs),
-		fmt.Sprintf("hits=%d misses=%d stales=%d rewrites=%d errCount=%d",
-			hits, misses, stales, rewrites, errCount),
+		fmt.Sprintf("hits=%d misses=%d stales=%d rewrites=%d",
+			hits, misses, stales, rewrites),
+		fmt.Sprintf("errors=%d blocked=%d badcookie=%d",
+			errCount, blockedCount, badcookieCount),
 		fmt.Sprintf("noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d",
 			noerr, formerr, servfail, nxdomain, notimp, refused, other),
 		fmt.Sprintf("hijack=%d fallback=%d",
 			hijack, fallback),
-		fmt.Sprintf("udp=%d tcp=%d dot=%d doq=%d doh=%d doh3=%d",
-			udp, tcp, dot, doq, doh, doh3),
+		fmt.Sprintf("udp=%d tcp=%d",
+			udp, tcp),
+		fmt.Sprintf("dot=%d doq=%d doh=%d doh3=%d",
+			dot, doq, doh, doh3),
 		fmt.Sprintf("secure=%d insecure=%d bogus=%d",
 			secureCount, insecureCount, bogusCount),
 	}
