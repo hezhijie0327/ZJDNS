@@ -3,12 +3,11 @@ package client
 import (
 	"context"
 	"net"
+	"zjdns/config"
+	"zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	eTLS "gitlab.com/go-extension/tls"
-
-	"zjdns/config"
-	"zjdns/internal/dnsutil"
 )
 
 // eTLSClientConfig builds a go-extension/tls Config with kernel TLS offload

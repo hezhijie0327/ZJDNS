@@ -83,7 +83,7 @@ const (
 	DefaultPaddingRequestBlockSize  = 128   // RFC 8467: EDNS request padding block size
 	DefaultPaddingResponseBlockSize = 468   // RFC 8467: EDNS response padding block size
 
-	GroupOtherPermMask = 0077 // TLS cert/key files must be owner-only
+	GroupOtherPermMask = 0o077 // TLS cert/key files must be owner-only
 )
 
 // Operational limits: concurrency, pool sizes, rate limits, capacities.

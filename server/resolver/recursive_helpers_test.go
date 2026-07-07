@@ -3,12 +3,11 @@ package resolver
 import (
 	"net"
 	"testing"
+	"zjdns/edns"
 
 	"codeberg.org/miekg/dns"
 	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
-
-	"zjdns/edns"
 )
 
 // newTestRecursiveWithHelpers creates a minimal Recursive for testing helpers.
@@ -181,7 +180,7 @@ func TestCheckLameDelegation_LameDetected(t *testing.T) {
 	if termRes == nil {
 		t.Fatal("should detect lame delegation")
 	}
-	if termRes.err == nil {
+	if termRes.Err == nil {
 		t.Error("lame delegation should have an error")
 	}
 }
@@ -198,7 +197,7 @@ func TestCheckLameDelegation_AuthoritativeNODATA(t *testing.T) {
 	if termRes == nil {
 		t.Fatal("should return terminal result for authoritative self-referral")
 	}
-	if termRes.err != nil {
-		t.Errorf("authoritative NODATA should not be an error: %v", termRes.err)
+	if termRes.Err != nil {
+		t.Errorf("authoritative NODATA should not be an error: %v", termRes.Err)
 	}
 }

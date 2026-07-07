@@ -11,7 +11,7 @@ func TestLoadConfig_DefaultPortsApplied(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	content := `{"server": {"port": "53", "tls": {"port": "853"}}, "upstream": [{"address": "8.8.8.8:53", "protocol": "udp"}]}`
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -35,7 +35,7 @@ func TestLoadConfig_FileNotFound(t *testing.T) {
 func TestLoadConfig_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(path, []byte("not json"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -48,7 +48,7 @@ func TestLoadConfig_InvalidJSON(t *testing.T) {
 func TestLoadConfig_MissingServer(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(path, []byte(`{}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

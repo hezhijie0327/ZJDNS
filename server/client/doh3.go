@@ -10,12 +10,11 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
-
-	"zjdns/config"
 )
 
 // http3Transport wraps [*http3.Transport] to force reuse of a single connection

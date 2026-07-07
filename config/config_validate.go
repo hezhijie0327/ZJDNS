@@ -3,16 +3,16 @@ package config
 import (
 	"errors"
 	"fmt"
-	eTLS "gitlab.com/go-extension/tls"
 	"net"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+
+	eTLS "gitlab.com/go-extension/tls"
 )
 
 // validatePort checks that a port string is a valid numeric port in [1, 65535].
@@ -115,11 +115,11 @@ func validateCIDRConfigs(cfg *ServerConfig) (map[string]bool, error) {
 
 func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error {
 	validProtocols := map[string]bool{
-		"udp": true, "tcp": true, "tls": true, "dot": true,
-		"quic": true, "doq": true,
-		"https": true, "doh": true,
-		"http3": true, "doh3": true,
-		"tcp-tls": true,
+		ProtoUDP: true, ProtoTCP: true, ProtoTLS: true, ProtoDOT: true,
+		ProtoQUIC: true, ProtoDOQ: true,
+		ProtoHTTP: true, ProtoDOH: true,
+		ProtoHTTP3: true, ProtoDOH3: true,
+		ProtoTLSTCP: true,
 	}
 
 	for i, server := range cfg.Upstream {
@@ -174,10 +174,10 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 
 func validateCacheAndStats(cfg *ServerConfig) error {
 	if cfg.Server.Features.Cache.MaxEntries < 0 {
-		return fmt.Errorf("server.features.cache.max_entries must be zero or positive")
+		return errors.New("server.features.cache.max_entries must be zero or positive")
 	}
 	if strings.Contains(cfg.Server.Features.Cache.DBPath, "..") {
-		return fmt.Errorf("server.features.cache.db_path must not contain '..'")
+		return errors.New("server.features.cache.db_path must not contain '..'")
 	}
 	return nil
 }

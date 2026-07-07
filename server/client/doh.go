@@ -8,12 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
-	eTLS "gitlab.com/go-extension/tls"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
-
-	"zjdns/config"
+	eTLS "gitlab.com/go-extension/tls"
 )
 
 func (c *Client) executeDOH(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *eTLS.Config) (*dns.Msg, error) {

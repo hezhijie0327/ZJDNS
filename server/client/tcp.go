@@ -3,11 +3,10 @@ package client
 import (
 	"context"
 	"net"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/config"
 	"zjdns/internal/log"
+
+	"codeberg.org/miekg/dns"
 )
 
 func (c *Client) executeTraditionalQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"sync/atomic"
-
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -173,24 +172,26 @@ func (m *Handler) ParseCookie(msg *dns.Msg) *CookieOption {
 		return nil
 	}
 	for _, rr := range msg.Pseudo {
-		if cookie, ok := rr.(*dns.COOKIE); ok {
-			cookieBytes, err := hex.DecodeString(cookie.Cookie)
-			if err != nil {
-				log.Debugf("EDNS: invalid cookie hex: %v", err)
-				return nil
-			}
-			if len(cookieBytes) < DefaultCookieClientLen {
-				return nil
-			}
-			clientCookie := cookieBytes[:DefaultCookieClientLen]
-			var serverCookie []byte
-			if len(cookieBytes) > DefaultCookieClientLen {
-				serverCookie = cookieBytes[DefaultCookieClientLen:]
-			}
-			return &CookieOption{
-				ClientCookie: clientCookie,
-				ServerCookie: serverCookie,
-			}
+		cookie, ok := rr.(*dns.COOKIE)
+		if !ok {
+			continue
+		}
+		cookieBytes, err := hex.DecodeString(cookie.Cookie)
+		if err != nil {
+			log.Debugf("EDNS: invalid cookie hex: %v", err)
+			return nil
+		}
+		if len(cookieBytes) < DefaultCookieClientLen {
+			return nil
+		}
+		clientCookie := cookieBytes[:DefaultCookieClientLen]
+		var serverCookie []byte
+		if len(cookieBytes) > DefaultCookieClientLen {
+			serverCookie = cookieBytes[DefaultCookieClientLen:]
+		}
+		return &CookieOption{
+			ClientCookie: clientCookie,
+			ServerCookie: serverCookie,
 		}
 	}
 	return nil

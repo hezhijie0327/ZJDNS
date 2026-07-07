@@ -6,21 +6,20 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	eTLS "gitlab.com/go-extension/tls"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
-
-	"codeberg.org/miekg/dns"
-	"github.com/quic-go/quic-go"
-
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+
+	"codeberg.org/miekg/dns"
+	"github.com/quic-go/quic-go"
+	eTLS "gitlab.com/go-extension/tls"
 
 	connpool "zjdns/server/client/pool"
 )
@@ -287,7 +286,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 func (c *Client) stdTLSConfig(server *config.UpstreamServer) *tls.Config {
 	return &tls.Config{
 		CurvePreferences:   []tls.CurveID{},
-		InsecureSkipVerify: server.SkipTLSVerify,
+		InsecureSkipVerify: server.SkipTLSVerify, //nolint:gosec // G402: user-configured TLS verification
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         server.ServerName,
 		VerifyConnection: func(cs tls.ConnectionState) error {

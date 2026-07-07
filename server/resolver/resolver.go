@@ -6,19 +6,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
 	"math/rand/v2"
 	"net"
 	"sync/atomic"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/server/client"
 	"zjdns/server/security"
+
+	"codeberg.org/miekg/dns"
 )
 
 // Question is a DNS question compatible with both v1 and v2 dns packages.
@@ -28,11 +26,9 @@ type Question struct {
 	Qclass uint16
 }
 
-var (
-	// ErrCIDRFilterRefused is returned when all A/AAAA records are filtered by
-	// CIDR rules.
-	ErrCIDRFilterRefused = errors.New("cidr_filter_refused")
-)
+// ErrCIDRFilterRefused is returned when all A/AAAA records are filtered by
+// CIDR rules.
+var ErrCIDRFilterRefused = errors.New("cidr_filter_refused")
 
 // concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
 // limits. concurrencyDiv2/3 are divisor constants used in the tier formulas:
@@ -64,8 +60,8 @@ func (e *DNSSECError) Error() string {
 // handlers to keep EDE construction in one place.
 func dnssecEDEError(edeCode uint64) *DNSSECError {
 	return &DNSSECError{
-		EDECode: uint16(edeCode),
-		Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), edns.EDECodeString(uint16(edeCode))),
+		EDECode: uint16(edeCode),                                                                                              //nolint:gosec // G115: EDE code — protocol-bounded uint16
+		Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), edns.EDECodeString(uint16(edeCode))), //nolint:gosec // G115: EDE code — protocol-bounded uint16
 	}
 }
 
@@ -85,7 +81,7 @@ type QueryResult struct {
 
 // BuildQueryFunc is a function type that constructs a DNS query message from a
 // question, ECS option, and connection parameters.
-type BuildQueryFunc func(question Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg
+type BuildQueryFunc func(question Question, ecs *edns.ECSOption, recursionDesired, isSecureConnection bool) *dns.Msg
 
 // CIDRMatcher is the interface for matching IP addresses against CIDR rules
 // with optional tags.
@@ -223,8 +219,8 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	if len(servers) == 0 && len(fallbackServers) == 0 {
 		resolveCtx, cancel := context.WithTimeout(ctx, config.DefaultRecursiveResolveTimeout)
 		defer cancel()
-		a, au, ad, v, e, s, _, err := r.cname.resolve(resolveCtx, question, ecs)
-		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: false, Err: err}
+		qr := r.cname.resolve(resolveCtx, question, ecs)
+		return &qr
 	}
 
 	// Only one set of servers — query directly without coordination overhead.
@@ -232,35 +228,36 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	// configured; return the upstream error so the client receives a clear
 	// failure signal instead of silently switching to recursive mode.
 	if len(fallbackServers) == 0 {
-		a, au, ad, v, e, s, f, h, err := r.queryUpstream(ctx, question, ecs, servers)
-		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: f, Hijack: h, Err: err}
+		qr := r.queryUpstream(ctx, question, ecs, servers)
+		return &qr
 	}
 
 	if len(servers) == 0 {
-		a, au, ad, v, e, s, _, h, err := r.queryUpstream(ctx, question, ecs, fallbackServers)
-		return &QueryResult{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Fallback: true, Hijack: h, Err: err}
+		qr := r.queryUpstream(ctx, question, ecs, fallbackServers)
+		qr.Fallback = true
+		return &qr
 	}
 
 	// Both upstream and fallback configured — query concurrently so the
 	// fallback answer is already ready if upstream fails.
 
-	upstreamCh := make(chan result, 1)
-	fallbackCh := make(chan result, 1)
+	upstreamCh := make(chan QueryResult, 1)
+	fallbackCh := make(chan QueryResult, 1)
 	queryCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errors.New("query completed"))
 
 	go func() {
-		a, au, ad, v, e, s, _, h, err := r.queryUpstream(queryCtx, question, ecs, servers)
+		qr := r.queryUpstream(queryCtx, question, ecs, servers)
 		select {
-		case upstreamCh <- result{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Hijack: h, Err: err}:
+		case upstreamCh <- qr:
 		case <-queryCtx.Done():
 		}
 	}()
 
 	go func() {
-		a, au, ad, v, e, s, _, h, err := r.queryUpstream(queryCtx, question, ecs, fallbackServers)
+		qr := r.queryUpstream(queryCtx, question, ecs, fallbackServers)
 		select {
-		case fallbackCh <- result{Answer: a, Authority: au, Additional: ad, Validated: v, ECS: e, Server: s, Hijack: h, Err: err}:
+		case fallbackCh <- qr:
 		case <-queryCtx.Done():
 		}
 	}()
@@ -270,13 +267,14 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	select {
 	case up := <-upstreamCh:
 		if up.Err == nil {
-			return &QueryResult{Answer: up.Answer, Authority: up.Authority, Additional: up.Additional, Validated: up.Validated, ECS: up.ECS, Server: up.Server, Fallback: false, Hijack: up.Hijack}
+			return &up
 		}
 		log.Debugf("UPSTREAM: primary upstream failed for %s, waiting for concurrent fallback", question.Name)
 		select {
 		case fb := <-fallbackCh:
 			if fb.Err == nil {
-				return &QueryResult{Answer: fb.Answer, Authority: fb.Authority, Additional: fb.Additional, Validated: fb.Validated, ECS: fb.ECS, Server: fb.Server, Fallback: true, Hijack: fb.Hijack}
+				fb.Fallback = true
+				return &fb
 			}
 			return &QueryResult{Err: fb.Err}
 		case <-ctx.Done():
@@ -295,7 +293,7 @@ func ShuffleSlice[T any](slice []T) []T {
 		return slice
 	}
 	for i := len(slice) - 1; i > 0; i-- {
-		j := rand.IntN(i + 1)
+		j := rand.IntN(i + 1) //nolint:gosec // G404: Fisher-Yates shuffle — not cryptographic
 		slice[i], slice[j] = slice[j], slice[i]
 	}
 	return slice

@@ -5,18 +5,17 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	eTLS "gitlab.com/go-extension/tls"
 	"io"
 	"net"
 	"sync"
 	"time"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+
+	"codeberg.org/miekg/dns"
+	eTLS "gitlab.com/go-extension/tls"
 )
 
 func (s *Server) startDOTServer() error {
@@ -233,9 +232,8 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			} else {
 				writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(respBuf))
 				pool.DefaultBufferPool.Put(poolBuf)
-				poolBuf = nil // prevent accidental reuse below
 			}
-			binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(respBuf)))
+			binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
 			copy(writeBuf[dnsutil.DNSFramePrefixLen:], respBuf)
 
 			select {

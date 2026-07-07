@@ -62,7 +62,7 @@ func TestBufferPool_Get(t *testing.T) {
 func TestBufferPool_PutAndReuse(t *testing.T) {
 	bp := NewBufferPool(256, 4)
 	buf1 := bp.Get()
-	copy(buf1, []byte("hello"))
+	_ = copy(buf1, "hello")
 
 	bp.Put(buf1) // should zero buffer
 	buf2 := bp.Get()

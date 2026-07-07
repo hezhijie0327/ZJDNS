@@ -6,11 +6,11 @@ import (
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
+	"zjdns/config"
+	"zjdns/internal/log"
 
 	"github.com/quic-go/quic-go"
 
-	"zjdns/config"
-	"zjdns/internal/log"
 	bufpool "zjdns/internal/pool"
 )
 
@@ -82,7 +82,7 @@ func (p *QUICPool) Acquire(ctx context.Context, key string, dialFunc func(contex
 	if len(live) > 0 {
 		// Round-robin across live connections rather than always returning
 		// live[0], which would leave connections[1..N] unused.
-		idx := rand.IntN(len(live))
+		idx := rand.IntN(len(live)) //nolint:gosec // G404: QUIC connection selection — not cryptographic
 		pc := live[idx]
 		p.mu.Unlock()
 		return pc, nil

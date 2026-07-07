@@ -4,14 +4,14 @@
 package ttl
 
 import (
-	"codeberg.org/miekg/dns"
-
 	"zjdns/internal/log"
+
+	"codeberg.org/miekg/dns"
 )
 
 // NowUnix returns the current Unix timestamp via the cached time source.
 // Override in tests for deterministic results.
-var NowUnix = func() int64 { return log.NowUnix() }
+var NowUnix = log.NowUnix
 
 // IsExpired reports whether the TTL has elapsed relative to timestamp.
 func IsExpired(timestamp int64, ttlSeconds int) bool {
@@ -24,7 +24,7 @@ func IsExpired(timestamp int64, ttlSeconds int) bool {
 func RemainingTTL(timestamp int64, ttlSeconds int, staleTTL uint32) uint32 {
 	remaining := int64(ttlSeconds) - (NowUnix() - timestamp)
 	if remaining > 0 {
-		return uint32(remaining)
+		return uint32(remaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 	}
 	// Cyclical stale countdown: staleTTL - (timeSinceExpiry % staleTTL).
 	timeSinceExpiry := -remaining
@@ -37,13 +37,13 @@ func RemainingTTL(timestamp int64, ttlSeconds int, staleTTL uint32) uint32 {
 
 // CanServeExpired reports whether the expired entry is within the maxAge
 // window past its TTL.
-func CanServeExpired(timestamp int64, ttlSeconds int, maxAge int) bool {
+func CanServeExpired(timestamp int64, ttlSeconds, maxAge int) bool {
 	return NowUnix()-timestamp-int64(ttlSeconds) <= int64(maxAge)
 }
 
 // ShouldPrefetch reports whether the entry is due for a background refresh
 // based on the percentage threshold of its TTL remaining.
-func ShouldPrefetch(timestamp int64, ttlSeconds int, thresholdPercent int) bool {
+func ShouldPrefetch(timestamp int64, ttlSeconds, thresholdPercent int) bool {
 	if thresholdPercent <= 0 || IsExpired(timestamp, ttlSeconds) {
 		return false
 	}
@@ -87,7 +87,7 @@ func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {
 			result = append(result, copied)
 			continue
 		}
-		copied.Header().TTL = uint32(origTTL - (elapsed % origTTL))
+		copied.Header().TTL = uint32(origTTL - (elapsed % origTTL)) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 		result = append(result, copied)
 	}
 	return result

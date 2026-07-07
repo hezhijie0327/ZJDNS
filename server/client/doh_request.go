@@ -7,12 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"zjdns/config"
+	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go/http3"
-
-	"zjdns/config"
-	"zjdns/internal/pool"
 )
 
 // executeDOHHTTPRequest is the shared DoH/DoH3 request logic.
@@ -44,7 +43,7 @@ func executeDOHHTTPRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpCl
 	if _, ok := httpClient.Transport.(*http3Transport); ok {
 		method = http3.MethodGet0RTT
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, method, requestURL.String(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, method, requestURL.String(), http.NoBody)
 	if err != nil {
 		msg.ID = originalID
 		return nil, fmt.Errorf("create request: %w", err)

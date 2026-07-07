@@ -3,11 +3,10 @@ package security
 import (
 	"strings"
 	"sync/atomic"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+
+	"codeberg.org/miekg/dns"
 )
 
 const (

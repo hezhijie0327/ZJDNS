@@ -2,10 +2,9 @@ package resolver
 
 import (
 	"testing"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
-
-	"zjdns/config"
 )
 
 // ── labelCount ──────────────────────────────────────────────────────────────

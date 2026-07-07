@@ -19,7 +19,7 @@ const (
 	ipDetectTimeout     = 3 * time.Second
 )
 
-var ipPattern = regexp.MustCompile(`ip=([^\s\n]+)`)
+var ipPattern = regexp.MustCompile(`ip=(\S+)`)
 
 // Detector detects public IP addresses via an HTTP trace endpoint.
 type Detector struct {

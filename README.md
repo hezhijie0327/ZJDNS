@@ -28,7 +28,7 @@ go build -o zjdns ./cmd/zjdns
 ./zjdns -config config.json
 
 # 生成示例配置
-./zjdns -example
+./zjdns -generate-config
 ```
 
 ```bash
@@ -224,7 +224,7 @@ FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname = 'www.go
 ## 开发
 
 ```bash
-golangci-lint run && golangci-lint fmt
+golangci-lint run && golangci-lint fmt   # 零警告，gofumpt 格式化
 go test ./... -short
 go test -bench=. -short ./...
 go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns ./cmd/zjdns

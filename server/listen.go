@@ -6,14 +6,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 )
 
 // tcpWriteEntry manages per-client TCP write serialization for pipelined queries.
@@ -108,7 +107,7 @@ func detectRequestProtocol(w dns.ResponseWriter) string {
 		return config.ProtoUDP
 	}
 	network := addr.Network()
-	if len(network) > 0 {
+	if network != "" {
 		switch network[0] {
 		case 't', 'T':
 			return config.ProtoTCP

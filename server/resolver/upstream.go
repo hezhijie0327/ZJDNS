@@ -7,32 +7,20 @@ import (
 	"net"
 	"strings"
 	"sync/atomic"
-
-	"codeberg.org/miekg/dns"
-	"golang.org/x/sync/errgroup"
-
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/client"
 	"zjdns/server/security"
+
+	"codeberg.org/miekg/dns"
+	"golang.org/x/sync/errgroup"
 )
 
-type result struct {
-	Answer     []dns.RR
-	Authority  []dns.RR
-	Additional []dns.RR
-	Validated  bool
-	ECS        *edns.ECSOption
-	Server     string
-	Hijack     bool
-	Err        error // set when errgroup detects a sentinel error (e.g. CIDR refusal)
-}
-
-func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, bool, error) {
+func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) QueryResult {
 	if len(servers) == 0 {
-		return nil, nil, nil, false, nil, "", false, false, errors.New("no upstream servers")
+		return QueryResult{Err: errors.New("no upstream servers")}
 	}
 
 	// Clear any stale EDE from a previous query so it does not leak into
@@ -53,8 +41,8 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 		log.Debugf("UPSTREAM: querying %d servers for %s: %v", len(servers), question.Name, serverAddrs)
 	}
 
-	resultChan := make(chan result, 1)
-	var nxdomainResult atomic.Pointer[result]
+	resultChan := make(chan QueryResult, 1)
+	var nxdomainResult atomic.Pointer[QueryResult]
 	queryCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errors.New("query completed"))
 
@@ -101,7 +89,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 			// All successful answers were filtered by CIDR rules —
 			// propagate the specific error so callers can return REFUSED.
 			select {
-			case resultChan <- result{Err: ErrCIDRFilterRefused}:
+			case resultChan <- QueryResult{Err: ErrCIDRFilterRefused}:
 			default:
 			}
 		}
@@ -112,31 +100,32 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	case res, ok := <-resultChan:
 		if ok {
 			if errors.Is(res.Err, ErrCIDRFilterRefused) {
-				return nil, nil, nil, false, nil, "", false, false, ErrCIDRFilterRefused
+				return QueryResult{Err: ErrCIDRFilterRefused}
 			}
 			if res.Server != "" {
-				return res.Answer, res.Authority, res.Additional, res.Validated, res.ECS, res.Server, false, res.Hijack, nil
+				res.Fallback = false
+				return res
 			}
 		}
 		if nxRes := nxdomainResult.Load(); nxRes != nil && nxRes.Server != "" {
-			return nxRes.Answer, nxRes.Authority, nxRes.Additional, nxRes.Validated, nxRes.ECS, nxRes.Server, false, false, nil
+			return *nxRes
 		}
 		// Propagate any EDE code captured from upstream SERVFAIL.
 		if opt := r.lastUpstreamEDE.Load(); opt != nil {
 			log.Debugf("UPSTREAM: all %d servers failed for %s, propagating EDE %d", len(servers), question.Name, opt.InfoCode)
-			return nil, nil, nil, false, nil, "", false, false, dnssecEDEError(uint64(opt.InfoCode))
+			return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode))}
 		}
 		log.Debugf("UPSTREAM: all %d servers failed for %s", len(servers), question.Name)
-		return nil, nil, nil, false, nil, "", false, false, errors.New("all upstream queries failed")
+		return QueryResult{Err: errors.New("all upstream queries failed")}
 	case <-queryCtx.Done():
 		// When all goroutines finish, errgroup cancels the derived
 		// context, which can race with the channel-close goroutine.
 		// Check for captured EDE codes here too so they are
 		// not lost to a "context canceled" error.
 		if opt := r.lastUpstreamEDE.Load(); opt != nil {
-			return nil, nil, nil, false, nil, "", false, false, dnssecEDEError(uint64(opt.InfoCode))
+			return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode))}
 		}
-		return nil, nil, nil, false, nil, "", false, false, queryCtx.Err()
+		return QueryResult{Err: queryCtx.Err()}
 	}
 }
 
@@ -148,7 +137,7 @@ func captureUpstreamEDE(r *Resolver, resp *dns.Msg, serverAddr string) {
 	if resp == nil {
 		return
 	}
-	if ede := r.edns.ParseEDE((resp)); ede != nil {
+	if ede := r.edns.ParseEDE(resp); ede != nil {
 		r.lastUpstreamEDE.Store(ede)
 		log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
 			ede.InfoCode, edns.EDECodeString(ede.InfoCode), serverAddr, dns.RcodeToString[resp.Rcode])
@@ -196,7 +185,7 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 
 // processUpstreamResponse handles the response from a forwarding upstream server.
 // Returns true if the goroutine should return (result sent or handled).
-func (r *Resolver) processUpstreamResponse(queryResult *client.Result, server *config.UpstreamServer, question Question, resultChan chan<- result, nxdomainResult *atomic.Pointer[result], activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context) bool {
+func (r *Resolver) processUpstreamResponse(queryResult *client.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context) bool {
 	rcode := queryResult.Response.Rcode
 	serverDesc := server.Address
 	if server.Protocol != "" && server.Protocol != config.ProtoUDP {
@@ -218,10 +207,10 @@ func (r *Resolver) processUpstreamResponse(queryResult *client.Result, server *c
 
 		queryResult.Validated = security.IsResponseValid(queryResult.Response, true)
 		log.Debugf("UPSTREAM: DNSSEC validation result=%t for %s via %s", queryResult.Validated, question.Name, server.Address)
-		ecsResponse := r.edns.ParseFromDNS((queryResult.Response))
+		ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 
 		select {
-		case resultChan <- result{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, ECS: ecsResponse, Server: serverDesc}:
+		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, ECS: ecsResponse, Server: serverDesc}:
 			remaining := activeConnections.Load() - 1
 			if remaining > 0 {
 				log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
@@ -234,12 +223,12 @@ func (r *Resolver) processUpstreamResponse(queryResult *client.Result, server *c
 			return true
 		}
 	case dns.RcodeNameError:
-		nxdomainResult.CompareAndSwap(nil, &result{
+		nxdomainResult.CompareAndSwap(nil, &QueryResult{
 			Answer:     queryResult.Response.Answer,
 			Authority:  queryResult.Response.Ns,
 			Additional: queryResult.Response.Extra,
 			Validated:  false,
-			ECS:        r.edns.ParseFromDNS((queryResult.Response)),
+			ECS:        r.edns.ParseFromDNS(queryResult.Response),
 			Server:     serverDesc,
 		})
 		pool.DefaultMessagePool.Put(queryResult.Response)
@@ -251,25 +240,25 @@ func (r *Resolver) processUpstreamResponse(queryResult *client.Result, server *c
 
 // handleRecursiveQuery dispatches a single query to the built-in recursive
 // resolver with CIDR filtering. Returns true if a successful result was sent.
-func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config.UpstreamServer, question Question, ecs *edns.ECSOption, resultChan chan<- result, cancel context.CancelCauseFunc) bool {
+func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config.UpstreamServer, question Question, ecs *edns.ECSOption, resultChan chan<- QueryResult, cancel context.CancelCauseFunc) bool {
 	recursiveCtx, recursiveCancel := context.WithTimeout(groupCtx, config.DefaultRecursiveResolveTimeout)
 	defer recursiveCancel()
 
-	answer, authority, additional, validated, ecsResponse, usedServer, hijackSeen, err := r.cname.resolve(recursiveCtx, question, ecs)
-	if err != nil || len(answer) == 0 {
+	qr := r.cname.resolve(recursiveCtx, question, ecs)
+	if qr.Err != nil || len(qr.Answer) == 0 {
 		return false
 	}
 
 	if len(server.Match) > 0 {
-		filteredAnswer, shouldRefuse := r.filterRecordsByCIDR(answer, server.Match)
+		filteredAnswer, shouldRefuse := r.filterRecordsByCIDR(qr.Answer, server.Match)
 		if shouldRefuse {
 			return false // errgroup will detect ErrCIDRFilterRefused
 		}
-		answer = filteredAnswer
+		qr.Answer = filteredAnswer
 	}
 
 	select {
-	case resultChan <- result{Answer: answer, Authority: authority, Additional: additional, Validated: validated, ECS: ecsResponse, Server: usedServer, Hijack: hijackSeen}:
+	case resultChan <- qr:
 		cancel(errors.New("successful result"))
 		return true
 	case <-groupCtx.Done():

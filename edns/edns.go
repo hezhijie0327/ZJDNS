@@ -7,13 +7,12 @@ import (
 	"net"
 	"net/netip"
 	"sync/atomic"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/config"
 	"zjdns/internal/ipdetect"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+
+	"codeberg.org/miekg/dns"
 )
 
 // addrToNetip converts a net.IP to netip.Addr for v2 dns.SUBNET.Address.
@@ -97,7 +96,7 @@ func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 // clientWantsPadding, parsed via HasPaddingOption, lets the client opt out
 // via +nopadding / +noalignment. tcpKeepaliveTimeout, in 100ms units
 // (RFC 7828), is only included in TCP-server responses (not requests).
-func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption, isRequest bool, clientWantsPadding bool, tcpKeepaliveTimeout uint16) {
+func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption, isRequest, clientWantsPadding bool, tcpKeepaliveTimeout uint16) {
 	if h == nil || msg == nil {
 		return
 	}

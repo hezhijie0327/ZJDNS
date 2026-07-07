@@ -8,15 +8,15 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
-	ilatency "zjdns/internal/latency"
 	"zjdns/internal/log"
 	"zjdns/internal/pending"
+
+	"codeberg.org/miekg/dns"
+
+	ilatency "zjdns/internal/latency"
 )
 
 // nsPending deduplicates concurrent ProbeNSAddrs calls by sorted IP set.

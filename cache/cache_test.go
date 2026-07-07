@@ -1,17 +1,17 @@
 package cache
 
 import (
+	"bytes"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
-	"net/netip"
-
-	"zjdns/config"
 )
 
 func testStore() *SQLiteCache {
@@ -179,11 +179,15 @@ func TestProcessRecords_PreservesTTL(t *testing.T) {
 
 func TestProcessRecords_DNSSECFiltering(t *testing.T) {
 	aRec := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	rrsig := &dns.RRSIG{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
-		RRSIG: rdata.RRSIG{TypeCovered: dns.TypeA, Algorithm: 8, Labels: 2, OrigTTL: 300,
-			Expiration: uint32(time.Now().Add(1 * time.Hour).Unix()),
-			Inception:  uint32(time.Now().Add(-1 * time.Hour).Unix()),
-			KeyTag:     1234, SignerName: "example.com."}}
+	rrsig := &dns.RRSIG{
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		RRSIG: rdata.RRSIG{
+			TypeCovered: dns.TypeA, Algorithm: 8, Labels: 2, OrigTTL: 300,
+			Expiration: uint32(time.Now().Add(1 * time.Hour).Unix()),  //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+			Inception:  uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+			KeyTag:     1234, SignerName: "example.com.",
+		},
+	}
 	rrs := []dns.RR{aRec, rrsig}
 
 	withDNSSEC := ProcessRecords(rrs, 0, false, true)
@@ -249,8 +253,10 @@ func TestNegativeTTLCap_NoSOA(t *testing.T) {
 func TestNegativeTTLCap_SOAMinLower(t *testing.T) {
 	soa := &dns.SOA{
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
-		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
-			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
+		SOA: rdata.SOA{
+			Ns: "ns1.example.com.", Mbox: "admin.example.com.",
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600,
+		},
 	}
 	capTTL := negativeTTLCap([]dns.RR{soa})
 	if capTTL != 600 {
@@ -261,8 +267,10 @@ func TestNegativeTTLCap_SOAMinLower(t *testing.T) {
 func TestNegativeTTLCap_MinimumLower(t *testing.T) {
 	soa := &dns.SOA{
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
-		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
-			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
+		SOA: rdata.SOA{
+			Ns: "ns1.example.com.", Mbox: "admin.example.com.",
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600,
+		},
 	}
 	capTTL := negativeTTLCap([]dns.RR{soa})
 	if capTTL != 300 {
@@ -273,8 +281,10 @@ func TestNegativeTTLCap_MinimumLower(t *testing.T) {
 func TestNegativeTTLCap_ExceedsDefaultMax(t *testing.T) {
 	soa := &dns.SOA{
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 99999},
-		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
-			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 99999},
+		SOA: rdata.SOA{
+			Ns: "ns1.example.com.", Mbox: "admin.example.com.",
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 99999,
+		},
 	}
 	capTTL := negativeTTLCap([]dns.RR{soa})
 	if capTTL != config.DefaultMaxNegativeTTL {
@@ -285,8 +295,10 @@ func TestNegativeTTLCap_ExceedsDefaultMax(t *testing.T) {
 func TestNegativeTTLCap_SOAWithNSEC(t *testing.T) {
 	soa := &dns.SOA{
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
-		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
-			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
+		SOA: rdata.SOA{
+			Ns: "ns1.example.com.", Mbox: "admin.example.com.",
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600,
+		},
 	}
 	nsec := &dns.NSEC{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 600}}
 	capTTL := negativeTTLCap([]dns.RR{soa, nsec})
@@ -301,8 +313,10 @@ func TestSet_NegativeTTLCapped(t *testing.T) {
 
 	soa := &dns.SOA{
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
-		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.",
-			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
+		SOA: rdata.SOA{
+			Ns: "ns1.example.com.", Mbox: "admin.example.com.",
+			Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600,
+		},
 	}
 	nsec := &dns.NSEC{
 		Hdr:  dns.Header{Name: "alpha.example.com.", Class: dns.ClassINET, TTL: 86400},
@@ -379,7 +393,7 @@ func TestRecordRequest_Hit(t *testing.T) {
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
 	// Cache hit via UDP
-	mc.RecordRequest(RequestRecord{
+	mc.RecordRequest(&RequestRecord{
 		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		ECS: nil, DNSSECOK: false,
 		Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
@@ -409,7 +423,7 @@ func TestRecordRequest_Stale(t *testing.T) {
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
 	// Stale serve via TCP
-	mc.RecordRequest(RequestRecord{
+	mc.RecordRequest(&RequestRecord{
 		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		ECS: nil, DNSSECOK: false,
 		Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess,
@@ -437,9 +451,9 @@ func TestRecordRequest_MultipleResults(t *testing.T) {
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
-	mc.RecordRequest(RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doh", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doh", Result: "hit", Rcode: dns.RcodeSuccess})
 
 	var udpHits, dohHits int64
 	err := mc.db.QueryRow(
@@ -462,8 +476,8 @@ func TestRecordRequest_Rewrite(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	mc.RecordRequest(RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
-	mc.RecordRequest(RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
 
 	var count int64
 	err := mc.db.QueryRow(
@@ -541,8 +555,10 @@ func TestSet_Get_MultipleRecords(t *testing.T) {
 
 	a1 := &dns.A{Hdr: dns.Header{Name: "multi.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.1")}}
 	a2 := &dns.A{Hdr: dns.Header{Name: "multi.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.2")}}
-	soa := &dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
-		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.", Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600}}
+	soa := &dns.SOA{
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
+		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.", Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
+	}
 
 	mc.Set("multi.example.com.", dns.TypeA, dns.ClassINET, nil, false,
 		[]dns.RR{a1, a2}, []dns.RR{soa}, nil, true)
@@ -599,7 +615,7 @@ func TestCompressionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decompress: %v", err)
 	}
-	if string(decompressed) != string(original) {
+	if !bytes.Equal(decompressed, original) {
 		t.Errorf("round-trip mismatch: got %q, want %q", decompressed, original)
 	}
 }
@@ -636,7 +652,7 @@ func TestRecordRequest_Error(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	mc.RecordRequest(RequestRecord{
+	mc.RecordRequest(&RequestRecord{
 		Qname: "error.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		ECS: nil, DNSSECOK: false,
 		Protocol: "udp", Result: "error", Rcode: dns.RcodeServerFailure,
@@ -671,7 +687,7 @@ func TestStats(t *testing.T) {
 
 	rr := &dns.A{Hdr: dns.Header{Name: "sum.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("4.5.6.7")}}
 	mc.Set("sum.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
-	mc.RecordRequest(RequestRecord{Qname: "sum.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "sum.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 
 	s := mc.Stats()
 	if len(s) == 0 {
@@ -707,15 +723,17 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	mc.Set("github.com.", dns.TypeA, dns.ClassINET, nil, false,
 		[]dns.RR{a3}, nil, nil, false)
 
-	soa := &dns.SOA{Hdr: dns.Header{Name: "nonexist.example.com.", Class: dns.ClassINET, TTL: 900},
-		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.", Serial: 2025010101, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600}}
+	soa := &dns.SOA{
+		Hdr: dns.Header{Name: "nonexist.example.com.", Class: dns.ClassINET, TTL: 900},
+		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.", Serial: 2025010101, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
+	}
 	nsec := &dns.NSEC{Hdr: dns.Header{Name: "alpha.example.com.", Class: dns.ClassINET, TTL: 600}, NSEC: rdata.NSEC{NextDomain: "zulu.example.com."}}
 	mc.Set("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false,
 		nil, []dns.RR{soa, nsec}, nil, false)
 
 	mc.Set("error.example.com.", dns.TypeA, dns.ClassINET, nil, false,
 		nil, nil, nil, false)
-	mc.RecordRequest(RequestRecord{
+	mc.RecordRequest(&RequestRecord{
 		Qname: "error.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		ECS: nil, DNSSECOK: false,
 		Protocol: "tcp", Result: "error", Rcode: dns.RcodeServerFailure,
@@ -773,12 +791,12 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// ── Phase 5: RecordRequest logs queries ────────────────────────────────
-	mc.RecordRequest(RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doh", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doq", Result: "stale", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doh", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doq", Result: "stale", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess})
 
 	var udpHits, dohHits, doqStale int64
 	err = mc.db.QueryRow(
@@ -874,9 +892,9 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// ── Phase 9: RecordRequest Rewrite ──────────────────────────────────────
-	mc.RecordRequest(RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
-	mc.RecordRequest(RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
-	mc.RecordRequest(RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
 	var rwCount int64
 	_ = mc.db.QueryRow(`SELECT COUNT(*) FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='rewrite.test' AND rl.result='rewrite'`).Scan(&rwCount)
 	if rwCount != 3 {
@@ -1016,8 +1034,8 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 
 	// Verify hit counters
 	var total, udp, tcp int64
-	mc.RecordRequest(RequestRecord{Qname: "host-00.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, ECS: nil, DNSSECOK: false, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(RequestRecord{Qname: "host-01.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, ECS: nil, DNSSECOK: false, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "host-00.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, ECS: nil, DNSSECOK: false, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "host-01.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, ECS: nil, DNSSECOK: false, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
 	_ = mc.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN protocol='udp' THEN hit_count ELSE 0 END),0), COALESCE(SUM(CASE WHEN protocol='tcp' THEN hit_count ELSE 0 END),0) FROM entry_hit_counters`).Scan(&total, &udp, &tcp)
 	if total != 2 {
 		t.Errorf("total hit counter rows = %d, want 2", total)

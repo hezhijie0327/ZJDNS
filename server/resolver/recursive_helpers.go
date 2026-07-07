@@ -4,32 +4,20 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-)
 
-// terminalResult holds the return values from collectBestNSMatch when no
-// NS delegation records are found and the resolution should end.
-type terminalResult struct {
-	answer, authority, additional []dns.RR
-	validated                     bool
-	ecs                           *edns.ECSOption
-	server                        string
-	hijack                        bool
-	err                           error
-}
+	"codeberg.org/miekg/dns"
+)
 
 // collectBestNSMatch collects NS records from a DNS response's Authority and
 // Answer sections and finds the best zone cut match for the query name.
 // When no match is found, it either triggers a QNAME minimisation retry
 // (continue=true) or returns a terminal result.
-func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, queryName, qname string, qnameMinimise bool, validated bool, ecsResponse *edns.ECSOption) (bestMatch string, bestNSRecords []*dns.NS, shouldContinue bool, termRes *terminalResult) {
+func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, queryName, qname string, qnameMinimise, validated bool, ecsResponse *edns.ECSOption) (bestMatch string, bestNSRecords []*dns.NS, shouldContinue bool, termRes *QueryResult) {
 	var allRRSections []dns.RR
 	allRRSections = append(allRRSections, response.Ns...)
 	allRRSections = append(allRRSections, response.Answer...)
@@ -57,10 +45,10 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 		}
 		nsSlice, extraSlice := response.Ns, response.Extra
 		pool.DefaultMessagePool.Put(response)
-		return "", nil, false, &terminalResult{
-			answer: nil, authority: nsSlice, additional: extraSlice,
-			validated: validated, ecs: ecsResponse,
-			server: config.RecursiveIndicator, hijack: false, err: nil,
+		return "", nil, false, &QueryResult{
+			Answer: nil, Authority: nsSlice, Additional: extraSlice,
+			Validated: validated, ECS: ecsResponse,
+			Server: config.RecursiveIndicator, Hijack: false, Err: nil,
 		}
 	}
 	return bestMatch, bestNSRecords, false, nil
@@ -68,7 +56,7 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 
 // applyQnameMinimisation applies RFC 9156 QNAME minimisation to the query
 // question. Returns the (possibly minimised) question and the updated step count.
-func (r *Recursive) applyQnameMinimisation(question Question, qname, currentDomain string, qnameMinimise bool, minimiseSteps int) (Question, int) {
+func (r *Recursive) applyQnameMinimisation(question Question, qname, currentDomain string, qnameMinimise bool, minimiseSteps int) (q Question, steps int) {
 	if !qnameMinimise {
 		return question, minimiseSteps
 	}
@@ -87,7 +75,7 @@ func (r *Recursive) applyQnameMinimisation(question Question, qname, currentDoma
 // checkLameDelegation detects lame delegations where NS records point back
 // to the same zone but the response is not authoritative (AA flag not set).
 // Returns a terminal result for the caller to return, or nil if not lame.
-func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMatch string, validated bool, ecsResponse *edns.ECSOption) *terminalResult {
+func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMatch string, validated bool, ecsResponse *edns.ECSOption) *QueryResult {
 	currentDomainNormalized := dnsutil.NormalizeDomain(currentDomain)
 	if bestMatch != currentDomainNormalized || currentDomainNormalized == "" {
 		return nil
@@ -96,17 +84,17 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 		log.Debugf("RECURSION: lame delegation detected for %s — NS records point to same zone but response is not authoritative", currentDomain)
 		pool.DefaultMessagePool.Put(response)
 		r.lastDNSSECEDECode.Store(uint64(edns.EDECodeNoReachableAuthority))
-		return &terminalResult{
-			server: config.RecursiveIndicator, ecs: ecsResponse,
-			err: fmt.Errorf("lame delegation: no reachable authority for %s", currentDomain),
+		return &QueryResult{
+			Server: config.RecursiveIndicator, ECS: ecsResponse,
+			Err: fmt.Errorf("lame delegation: no reachable authority for %s", currentDomain),
 		}
 	}
 	nsSlice, extraSlice := response.Ns, response.Extra
 	pool.DefaultMessagePool.Put(response)
-	return &terminalResult{
-		authority: nsSlice, additional: extraSlice,
-		validated: validated, ecs: ecsResponse,
-		server: config.RecursiveIndicator,
+	return &QueryResult{
+		Authority: nsSlice, Additional: extraSlice,
+		Validated: validated, ECS: ecsResponse,
+		Server: config.RecursiveIndicator,
 	}
 }
 
@@ -146,7 +134,7 @@ func (r *Recursive) shouldRetryMinimisedQname(queryName, qname string, qnameMini
 // zone cut detection, and enforces bogus delegation policies. Returns a
 // terminal result when the answer is ready, or nil to continue the
 // delegation loop for NODATA/NXDOMAIN responses.
-func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain, validated *bool, ecsResponse *edns.ECSOption) *terminalResult {
+func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain, validated *bool, ecsResponse *edns.ECSOption) *QueryResult {
 	if len(response.Answer) == 0 {
 		return nil
 	}
@@ -165,27 +153,33 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 		if cutValidated, cutErr := r.resolveZoneCut(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain); cutErr == nil {
 			*validated = cutValidated
 			if err := r.recordDNSSECFailure(chain, *validated,
-				fmt.Sprintf("bogus zone cut delegation for %s", question.Name)); err != nil {
+				"bogus zone cut delegation for "+question.Name); err != nil {
 				log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
-				return &terminalResult{server: config.RecursiveIndicator, ecs: ecsResponse, err: err}
+				return &QueryResult{Server: config.RecursiveIndicator, ECS: ecsResponse, Err: err}
 			}
 		} else {
 			log.Debugf("SECURITY: zone cut resolution failed for %s: %v (treating as insecure)", question.Name, cutErr)
 			*validated = false
 		}
-		return &terminalResult{answer: stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
-			authority: response.Ns, additional: response.Extra,
-			validated: *validated, ecs: ecsResponse, server: config.RecursiveIndicator}
+		return &QueryResult{
+			Answer:    stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
+			Authority: response.Ns, Additional: response.Extra,
+			Validated: *validated, ECS: ecsResponse, Server: config.RecursiveIndicator,
+		}
 	}
 
 	if (len(chain.childDS) > 0 || chain.dsPresentButUnverified) && !*validated {
 		r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
 		if r.resolver.DNSSECEnforce {
-			return &terminalResult{server: config.RecursiveIndicator, ecs: ecsResponse,
-				err: fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name)}
+			return &QueryResult{
+				Server: config.RecursiveIndicator, ECS: ecsResponse,
+				Err: fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name),
+			}
 		}
 	}
-	return &terminalResult{answer: stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
-		authority: response.Ns, additional: response.Extra,
-		validated: *validated, ecs: ecsResponse, server: config.RecursiveIndicator}
+	return &QueryResult{
+		Answer:    stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
+		Authority: response.Ns, Additional: response.Extra,
+		Validated: *validated, ECS: ecsResponse, Server: config.RecursiveIndicator,
+	}
 }

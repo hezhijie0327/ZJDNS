@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -71,7 +70,8 @@ func preParseRecordTypes(records []config.DNSRecordConfig) {
 func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 	validRules := make([]config.RewriteRule, 0, len(rules))
 	globalExcludes := make([]*net.IPNet, 0)
-	for i, rule := range rules {
+	for i := range rules {
+		rule := &rules[i]
 		if len(rule.Name) > config.MaxDomainLength {
 			log.Warnf("REWRITE: rule name too long (%d chars, max %d), skipping", len(rule.Name), config.MaxDomainLength)
 			continue
@@ -132,7 +132,7 @@ func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 				if rec.ResponseCode != nil {
 					continue // handled in Evaluate, not a real RR
 				}
-				if rr := e.buildRecord(rule.Name, rec); rr != nil {
+				if rr := e.buildRecord(rule.Name, &rec); rr != nil {
 					rule.CachedRecords = append(rule.CachedRecords, rr)
 				}
 			}
@@ -141,13 +141,13 @@ func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 				if rec.ResponseCode != nil {
 					continue
 				}
-				if rr := e.buildRecord(rule.Name, rec); rr != nil {
+				if rr := e.buildRecord(rule.Name, &rec); rr != nil {
 					rule.CachedAdditional = append(rule.CachedAdditional, rr)
 				}
 			}
 		}
 
-		validRules = append(validRules, rule)
+		validRules = append(validRules, *rule)
 	}
 
 	e.rules.Store(&validRules)
@@ -182,7 +182,7 @@ func (e *Evaluator) HasRules() bool {
 }
 
 // Evaluate checks a query against loaded rules and returns a rewrite Result.
-func (e *Evaluator) Evaluate(domain string, qtype uint16, qclass uint16, clientIP net.IP) Result {
+func (e *Evaluator) Evaluate(domain string, qtype, qclass uint16, clientIP net.IP) Result {
 	result := Result{
 		Domain:        domain,
 		ResponseCode:  dns.RcodeSuccess,
@@ -255,7 +255,7 @@ ruleLoop:
 						contents = rule.DynamicContent()
 					}
 					for _, content := range contents {
-						rr := e.buildRecord(rule.Name, config.DNSRecordConfig{
+						rr := e.buildRecord(rule.Name, &config.DNSRecordConfig{
 							Type:    record.Type,
 							Class:   record.Class,
 							TTL:     record.TTL,
@@ -312,7 +312,7 @@ ruleLoop:
 	return result
 }
 
-func (e *Evaluator) buildRecord(domain string, record config.DNSRecordConfig) dns.RR {
+func (e *Evaluator) buildRecord(domain string, record *config.DNSRecordConfig) dns.RR {
 	ttl := record.TTL
 	if ttl == 0 {
 		ttl = config.DefaultTTL

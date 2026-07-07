@@ -7,17 +7,16 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
-
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/client"
 	"zjdns/server/security"
+
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 )
 
 func init() {
@@ -47,10 +46,10 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 		RRSIG: rdata.RRSIG{
 			TypeCovered: dns.RRToType(rrset[0]),
 			Algorithm:   dns.ECDSAP256SHA256,
-			Labels:      uint8(dnsutilv2.Labels(rrset[0].Header().Name)),
+			Labels:      uint8(dnsutilv2.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — max 127 fits uint8
 			OrigTTL:     rrset[0].Header().TTL,
-			Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()),
-			Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()),
+			Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+			Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 			KeyTag:      keyTag,
 			SignerName:  dnsutilv2.Fqdn(signer),
 		},
@@ -60,7 +59,7 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 }
 
 // aRec creates an A record test helper.
-func aRec(name string, ip string) *dns.A {
+func aRec(name, ip string) *dns.A {
 	return &dns.A{
 		Hdr: dns.Header{Name: dnsutilv2.Fqdn(name), Class: dns.ClassINET, TTL: 300},
 		A:   rdata.A{Addr: netip.MustParseAddr(ip)},
@@ -76,7 +75,7 @@ func newTestRecursive() *Recursive {
 	r := &Resolver{
 		client:   queryClient,
 		edns:     ednsHandler,
-		buildMsg: func(q Question, ecs *edns.ECSOption, rd bool, secure bool) *dns.Msg { return new(dns.Msg) },
+		buildMsg: func(q Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg { return new(dns.Msg) },
 		validator: &Validator{
 			Crypto: guard.Crypto,
 			Hijack: guard.Detector,

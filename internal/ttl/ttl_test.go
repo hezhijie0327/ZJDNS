@@ -1,11 +1,11 @@
 package ttl
 
 import (
+	"net/netip"
 	"testing"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
-	"net/netip"
 )
 
 // setNow sets NowUnix to a fixed value for deterministic tests.

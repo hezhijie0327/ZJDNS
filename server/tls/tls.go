@@ -12,21 +12,20 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
-	eTLS "gitlab.com/go-extension/tls"
 	"math/big"
 	"net"
 	"strings"
 	"time"
+	"zjdns/config"
+	"zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	eTLS "gitlab.com/go-extension/tls"
 	"golang.org/x/net/http2"
 	"golang.org/x/sync/errgroup"
-
-	"zjdns/config"
-	"zjdns/internal/dnsutil"
-	"zjdns/internal/log"
 )
 
 const (
@@ -98,7 +97,7 @@ type DNSHandler interface {
 
 // Server manages TLS-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
-	cfg            Config
+	cfg            *Config
 	handler        DNSHandler
 	tlsConfig      *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
 	baseTLSConfig  *eTLS.Config   // base config for per-listener GetConfigForClient clones
@@ -203,7 +202,8 @@ func isTemporaryError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+	var ne net.Error
+	if errors.As(err, &ne) {
 		return true
 	}
 	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
@@ -212,8 +212,8 @@ func isTemporaryError(err error) bool {
 // secureClientIP extracts the client IP address from a connection, supporting
 // both TCP and UDP remote addresses.
 func secureClientIP(conn any) net.IP {
-	switch c := conn.(type) {
-	case interface{ RemoteAddr() net.Addr }:
+	c, ok := conn.(interface{ RemoteAddr() net.Addr })
+	if ok {
 		if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
 			return addr.IP
 		}
@@ -226,7 +226,7 @@ func secureClientIP(conn any) net.IP {
 
 // New creates a new TLS Server with the given DNS handler and configuration,
 // loading or generating the TLS certificate as specified.
-func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Server, error) {
+func New(handler DNSHandler, cfg *Config, operationTimeout time.Duration) (*Server, error) {
 	var eCert eTLS.Certificate
 	var sCert stdtls.Certificate
 	var err error
@@ -291,7 +291,7 @@ func New(handler DNSHandler, cfg Config, operationTimeout time.Duration) (*Serve
 		serverCtx:     serverCtx,
 	}
 
-	s.displayCertificateInfo(eCert)
+	s.displayCertificateInfo(&eCert)
 
 	return s, nil
 }
@@ -323,7 +323,7 @@ func (s *Server) getConfigForClient(nextProtos []string) func(*eTLS.ClientHelloI
 	}
 }
 
-func (s *Server) displayCertificateInfo(cert eTLS.Certificate) {
+func (s *Server) displayCertificateInfo(cert *eTLS.Certificate) {
 	if len(cert.Certificate) == 0 {
 		log.Errorf("TLS: No certificate found")
 		return
@@ -338,8 +338,8 @@ func (s *Server) displayCertificateInfo(cert eTLS.Certificate) {
 	log.Infof("TLS: Certificate: Subject: %s | Issuer: %s | Valid: %s -> %s | Algorithm: %s",
 		x509Cert.Subject.CommonName,
 		x509Cert.Issuer.String(),
-		x509Cert.NotBefore.Format("2006-01-02"),
-		x509Cert.NotAfter.Format("2006-01-02"),
+		x509Cert.NotBefore.Format(time.DateOnly),
+		x509Cert.NotAfter.Format(time.DateOnly),
 		x509Cert.SignatureAlgorithm.String())
 
 	daysUntilExpiry := int(time.Until(x509Cert.NotAfter).Hours() / 24)
@@ -413,7 +413,6 @@ func (s *Server) Start(httpsPort string) error {
 			s.cancel(fmt.Errorf("tls startup failed: %w", err))
 			return err
 		}
-
 	}
 
 	return nil

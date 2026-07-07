@@ -4,12 +4,11 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/server/probe"
+
+	"codeberg.org/miekg/dns"
 )
 
 // ── Latency-sorted NS address cache ──────────────────────────────────────────

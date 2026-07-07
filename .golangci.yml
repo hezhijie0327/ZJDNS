@@ -1,0 +1,91 @@
+# ZJDNS golangci-lint configuration.
+# Run: golangci-lint run && golangci-lint fmt
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    # ── Correctness ──
+    - bidichk
+    - durationcheck
+    - errname
+    - errorlint
+    - exhaustive
+    - gosec
+    - makezero
+    - nilerr
+    - nilnil
+    - reassign
+    - unconvert
+
+    # ── Style / consistency ──
+    - copyloopvar
+    - decorder
+    - dupword
+    - gocritic
+    - importas
+    - mirror
+    - misspell
+    - perfsprint
+    - predeclared
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+
+  disable:
+    - gomodguard
+
+  settings:
+    decorder:
+      dec-order:
+        - type
+        - const
+        - var
+        - func
+
+    gocritic:
+      enable-all: true
+
+    gosec:
+
+    importas:
+      alias:
+        - pkg: gitlab.com/go-extension/tls
+          alias: eTLS
+
+    exhaustive:
+      default-signifies-exhaustive: true
+
+    nilnil:
+      checked-types: [ptr, map, chan]
+
+    errname:
+      error-prefix: Err
+      error-type-suffix: Error
+
+    usestdlibvars:
+      time-month: true
+      time-layout: true
+      crypto-hash: true
+      constant-kind: true
+
+    errorlint:
+      errorf: true
+      errorf-multi: true
+      asserts: true
+      comparison: true
+
+    makezero:
+
+    perfsprint:
+      int-conversion: true
+      err-error: true
+      errorf: true
+      sprintf1: true
+
+formatters:
+  enable:
+    - gofumpt
+  settings:
+    gofumpt:
+      extra-rules: true

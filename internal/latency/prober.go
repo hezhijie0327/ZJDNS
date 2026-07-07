@@ -10,7 +10,6 @@ import (
 	"slices"
 	"sync"
 	"time"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -51,7 +50,7 @@ func (p *Prober) Close() {
 
 // ProbeIPsLatency probes the given IP addresses and returns them sorted by
 // measured latency along with a map of IP → latency in milliseconds.
-func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, map[string]int) {
+func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) (sorted []net.IP, latencyMS map[string]int) {
 	if p == nil || len(ips) <= 1 || len(p.steps) == 0 {
 		return ips, nil
 	}
@@ -91,7 +90,7 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, m
 	wg.Wait()
 
 	changed := false
-	latencyMS := make(map[string]int, n)
+	latencyMS = make(map[string]int, n)
 	for _, r := range results {
 		if r.latency != time.Duration(math.MaxInt64) {
 			changed = true
@@ -112,7 +111,7 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, m
 		return 0
 	})
 
-	sorted := make([]net.IP, n)
+	sorted = make([]net.IP, n)
 	for i, r := range results {
 		sorted[i] = ips[r.idx]
 		log.Debugf("LATENCY: probe result %s latency=%s", sorted[i].String(), r.latency)

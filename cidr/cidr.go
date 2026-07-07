@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -74,12 +73,13 @@ func New(configs []config.CIDRConfig) (*Filter, error) {
 		}
 		f.rules[cfg.Tag] = rule
 
-		sourceInfo := ""
-		if cfg.File != "" && len(cfg.Rules) > 0 {
+		var sourceInfo string
+		switch {
+		case cfg.File != "" && len(cfg.Rules) > 0:
 			sourceInfo = fmt.Sprintf("%s + %d inline rules", cfg.File, len(cfg.Rules))
-		} else if cfg.File != "" {
+		case cfg.File != "":
 			sourceInfo = cfg.File
-		} else {
+		default:
 			sourceInfo = fmt.Sprintf("%d inline rules", len(cfg.Rules))
 		}
 		log.Infof("CIDR: Loaded tag=%s, source=%s, total=%d", cfg.Tag, sourceInfo, len(rule.nets))
@@ -146,7 +146,7 @@ func (f *Filter) loadConfig(cfg config.CIDRConfig) (*rule, error) {
 }
 
 // MatchIP checks if an IP matches the CIDR rule identified by matchTag.
-func (f *Filter) MatchIP(ip net.IP, matchTag string) (matched bool, exists bool) {
+func (f *Filter) MatchIP(ip net.IP, matchTag string) (matched, exists bool) {
 	if f == nil || matchTag == "" {
 		return true, true
 	}
@@ -247,7 +247,7 @@ func asIPv4Net(ipNet *net.IPNet) *ipv4Net {
 	return &ipv4Net{
 		ip:     ipUint & maskUint,
 		mask:   maskUint,
-		prefix: uint8(maskSize),
+		prefix: uint8(maskSize), //nolint:gosec // G115: CIDR mask size — 0-128 fits uint8
 	}
 }
 

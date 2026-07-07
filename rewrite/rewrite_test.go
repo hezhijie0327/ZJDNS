@@ -3,7 +3,6 @@ package rewrite
 import (
 	"net"
 	"testing"
-
 	"zjdns/config"
 	"zjdns/internal/ttl"
 
@@ -269,7 +268,7 @@ func TestEvaluator_RewriteTTLCyclical(t *testing.T) {
 		{"mid cycle", 40, 80},
 		{"near expiry", 119, 1},
 		{"reset at boundary", 120, 120},
-		{"second cycle", 140, 100},        // 120 - (140 % 120) = 100
+		{"second cycle", 140, 100},        // 140ms elapsed, 100ms remaining (cyclical)
 		{"third cycle near end", 350, 10}, // 120 - (350 % 120) = 120 - 110 = 10
 		{"many cycles", 1200, 120},        // 1200 % 120 = 0 → 120
 	}

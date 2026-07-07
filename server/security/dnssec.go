@@ -1,9 +1,9 @@
 package security
 
 import (
-	"codeberg.org/miekg/dns"
-
 	"zjdns/internal/log"
+
+	"codeberg.org/miekg/dns"
 )
 
 // IsResponseValid checks whether a DNS response appears DNSSEC-validated.

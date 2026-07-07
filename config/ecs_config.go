@@ -109,7 +109,7 @@ func (c *ECSConfig) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	if data[0] != '{' {
-		return fmt.Errorf("default_ecs_subnet must be an object")
+		return errors.New("default_ecs_subnet must be an object")
 	}
 	var aux struct {
 		IPv4          string `json:"ipv4"`

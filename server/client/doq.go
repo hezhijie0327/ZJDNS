@@ -9,14 +9,13 @@ import (
 	"io"
 	"net"
 	"time"
-
-	"codeberg.org/miekg/dns"
-	"github.com/quic-go/quic-go"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+
+	"codeberg.org/miekg/dns"
+	"github.com/quic-go/quic-go"
 )
 
 func (c *Client) executeQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *tls.Config) (*dns.Msg, error) {
@@ -131,7 +130,7 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 		writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(msgData))
 	}
 
-	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(msgData)))
+	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(msgData))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
 	copy(writeBuf[dnsutil.DNSFramePrefixLen:], msgData)
 
 	if _, err := stream.Write(writeBuf[:dnsutil.DNSFramePrefixLen+len(msgData)]); err != nil {
@@ -149,7 +148,7 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	msgLen := binary.BigEndian.Uint16(respBuf[:dnsutil.DNSFramePrefixLen])
 	if msgLen == 0 {
 		msg.ID = originalID
-		return nil, fmt.Errorf("invalid response length: 0")
+		return nil, errors.New("invalid response length: 0")
 	}
 
 	var body []byte

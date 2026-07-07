@@ -7,19 +7,19 @@ import (
 	"net"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-
-	"codeberg.org/miekg/dns"
-	"github.com/klauspost/compress/zstd"
-	_ "github.com/ncruces/go-sqlite3/driver"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
+
+	"codeberg.org/miekg/dns"
+	"github.com/klauspost/compress/zstd"
+	_ "github.com/ncruces/go-sqlite3/driver"
 )
 
 const (
@@ -176,13 +176,14 @@ func (s *SQLiteCache) migrate() error {
 		// In-memory: nothing to drop — the DB is fresh on every process start.
 	}
 
+	//nolint:gosec // G202: DDL migration with constant schema version
 	_, err := s.db.Exec(`
 		-- ── Schema versioning ───────────────────────────────────────────────
 		-- Single-row table that tracks the current schema version. When the
 		-- version changes, old tables are dropped and recreated cleanly.
 
 		CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-		INSERT OR REPLACE INTO schema_version (rowid, version) VALUES (1, ` + fmt.Sprint(schemaVersion) + `);
+		INSERT OR REPLACE INTO schema_version (rowid, version) VALUES (1, ` + strconv.Itoa(schemaVersion) + `);
 
 		-- ── Core DNS response cache ─────────────────────────────────────────
 		-- Every row is a cacheable DNS response. The unique lookup key is
@@ -306,14 +307,16 @@ func (s *SQLiteCache) prepareStatements() error {
 	s.stmtGetEntry, err = s.db.Prepare(
 		`SELECT id, timestamp, ttl, validated, msg_wire FROM entries
 		 WHERE qname = ? AND qtype = ? AND qclass = ?
-		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`)
+		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+	)
 	if err != nil {
 		return err
 	}
 	s.stmtInsertLog, err = s.db.Prepare(
 		`INSERT INTO request_log (timestamp, entry_id, protocol, result,
 			response_time_ms, rcode, server, hijack, fallback, dnssec_status)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+	)
 	if err != nil {
 		return err
 	}
@@ -321,18 +324,21 @@ func (s *SQLiteCache) prepareStatements() error {
 		`INSERT INTO entry_hit_counters (entry_id, protocol, rcode, hit_count)
 		 VALUES (?1, ?2, ?3, 1)
 		 ON CONFLICT(entry_id, protocol, rcode) DO UPDATE
-		 SET hit_count = entry_hit_counters.hit_count + 1`)
+		 SET hit_count = entry_hit_counters.hit_count + 1`,
+	)
 	if err != nil {
 		return err
 	}
 	s.stmtInsertLatency, err = s.db.Prepare(
 		`INSERT OR REPLACE INTO ip_latency (rdata_ip, qtype, latency_ms, last_probe_time)
-		 VALUES (?, ?, ?, unixepoch())`)
+		 VALUES (?, ?, ?, unixepoch())`,
+	)
 	if err != nil {
 		return err
 	}
 	s.stmtGetLastProbe, err = s.db.Prepare(
-		`SELECT last_probe_time FROM ip_latency WHERE rdata_ip = ?`)
+		`SELECT last_probe_time FROM ip_latency WHERE rdata_ip = ?`,
+	)
 	if err != nil {
 		return err
 	}
@@ -359,7 +365,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	err := s.stmtGetEntry.QueryRow(
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
 	).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, false
 	}
 	if err != nil {
@@ -590,7 +596,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 // per-request debugging. Every log row has an entry_id FK — ensureEntry
 // creates a lightweight stub for rewrite/error paths so the FK is always
 // satisfied and ON DELETE CASCADE applies uniformly.
-func (s *SQLiteCache) RecordRequest(r RequestRecord) {
+func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
 	}
@@ -717,7 +723,8 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	case "stats":
 		_, _ = s.db.Exec(`DELETE FROM entry_hit_counters`)
 		result, err = s.db.Exec(
-			`UPDATE stats_meta SET cleared_before = (SELECT COALESCE(MAX(id), 0) FROM request_log) WHERE id = 1`)
+			`UPDATE stats_meta SET cleared_before = (SELECT COALESCE(MAX(id), 0) FROM request_log) WHERE id = 1`,
+		)
 	case "cache":
 		result, err = s.db.Exec(`DELETE FROM entries`)
 		if err == nil {
@@ -773,7 +780,7 @@ func (s *SQLiteCache) Stats() []string {
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&entries)
 
 	var avgMs float64
-	var total, hits, misses, stales, rewrites, errors int64
+	var total, hits, misses, stales, rewrites, errCount int64
 	var hcUDP, hcTCP, hcDOT, hcDOQ, hcDOH, hcDOH3 int64
 	var rlUDP, rlTCP, rlDOT, rlDOQ, rlDOH, rlDOH3 int64
 	var hijack, fallback, totalMS int64
@@ -810,8 +817,9 @@ func (s *SQLiteCache) Stats() []string {
 			" COALESCE(SUM(CASE WHEN fallback THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(response_time_ms), 0)"+
 			" FROM request_log WHERE id > (SELECT cleared_before FROM stats_meta)",
-	).Scan(&total, &avgMs,
-		&misses, &stales, &rewrites, &errors,
+	).Scan(
+		&total, &avgMs,
+		&misses, &stales, &rewrites, &errCount,
 		&rlUDP, &rlTCP, &rlDOT, &rlDOQ, &rlDOH, &rlDOH3,
 		&hijack, &fallback, &totalMS,
 	)
@@ -824,8 +832,8 @@ func (s *SQLiteCache) Stats() []string {
 	doh := hcDOH + rlDOH
 	doh3 := hcDOH3 + rlDOH3
 	// avg := totalMS / (misses + errors), but use per-row avg for now
-	if misses+errors > 0 && avgMs == 0 {
-		avgMs = float64(totalMS) / float64(misses+errors)
+	if misses+errCount > 0 && avgMs == 0 {
+		avgMs = float64(totalMS) / float64(misses+errCount)
 	}
 
 	// Rcode distribution: request_log + entry_hit_counters.
@@ -835,7 +843,8 @@ func (s *SQLiteCache) Stats() []string {
 			 WHERE id > (SELECT cleared_before FROM stats_meta) GROUP BY rcode
 			UNION ALL
 			SELECT rcode, SUM(hit_count) AS cnt FROM entry_hit_counters GROUP BY rcode
-		) GROUP BY rcode`)
+		) GROUP BY rcode`,
+	)
 	if err == nil {
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
@@ -865,7 +874,8 @@ func (s *SQLiteCache) Stats() []string {
 	dnssecRows, err := s.db.Query(
 		`SELECT dnssec_status, COUNT(*) FROM request_log
 		 WHERE id > (SELECT cleared_before FROM stats_meta)
-		 GROUP BY dnssec_status`)
+		 GROUP BY dnssec_status`,
+	)
 	if err == nil {
 		defer func() { _ = dnssecRows.Close() }()
 		for dnssecRows.Next() {
@@ -887,8 +897,8 @@ func (s *SQLiteCache) Stats() []string {
 	return []string{
 		fmt.Sprintf("entries=%d total=%d avg=%.1fms",
 			entries, total, avgMs),
-		fmt.Sprintf("hits=%d misses=%d stales=%d rewrites=%d errors=%d",
-			hits, misses, stales, rewrites, errors),
+		fmt.Sprintf("hits=%d misses=%d stales=%d rewrites=%d errCount=%d",
+			hits, misses, stales, rewrites, errCount),
 		fmt.Sprintf("noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d",
 			noerr, formerr, servfail, nxdomain, notimp, refused, other),
 		fmt.Sprintf("hijack=%d fallback=%d",
@@ -1063,7 +1073,7 @@ func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
 		placeholders[i] = "(?, ?, ?, ?)"
 		args = append(args, r.rdataIP, entryID, r.name, r.ttl)
 	}
-	stmt := `INSERT OR REPLACE INTO ptr_map (rdata_ip, entry_id, name, ttl) VALUES ` +
+	stmt := `INSERT OR REPLACE INTO ptr_map (rdata_ip, entry_id, name, ttl) VALUES ` + //nolint:gosec // G202: parameterized placeholders, no user input
 		joinPlaceholders(placeholders, ",")
 	if _, err := tx.Exec(stmt, args...); err != nil {
 		log.Warnf("CACHE: insert ptr_map failed: %v", err)

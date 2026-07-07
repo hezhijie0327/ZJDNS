@@ -3,12 +3,11 @@ package security
 import (
 	"strings"
 	"testing"
+	"zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
-
-	"zjdns/internal/dnsutil"
 )
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -39,7 +38,8 @@ func classifyRecord(d *Detector, rr dns.RR, zone, queryName string) Verdict {
 
 func TestClassify_WithinAuthority(t *testing.T) {
 	d := newDetector()
-	v := classifyRecord(d,
+	v := classifyRecord(
+		d,
 		aRec("www.example.com.", "10.0.0.1"),
 		"example.com", "www.example.com",
 	)
@@ -50,7 +50,8 @@ func TestClassify_WithinAuthority(t *testing.T) {
 
 func TestClassify_NSInAnswer(t *testing.T) {
 	d := newDetector()
-	v := classifyRecord(d,
+	v := classifyRecord(
+		d,
 		nsRec("sub.example.com.", "ns1.example.com."),
 		"example.com", "sub.example.com",
 	)
@@ -72,7 +73,8 @@ func TestClassify_DSInAnswer(t *testing.T) {
 
 func TestClassify_DifferentName(t *testing.T) {
 	d := newDetector()
-	v := classifyRecord(d,
+	v := classifyRecord(
+		d,
 		aRec("other.example.com.", "10.0.0.1"),
 		"example.com", "www.example.com",
 	)
@@ -83,7 +85,8 @@ func TestClassify_DifferentName(t *testing.T) {
 
 func TestClassify_OutOfAuthority(t *testing.T) {
 	d := newDetector()
-	v := classifyRecord(d,
+	v := classifyRecord(
+		d,
 		aRec("www.example.com.", "10.0.0.1"),
 		"com", "www.example.com",
 	)
@@ -94,7 +97,8 @@ func TestClassify_OutOfAuthority(t *testing.T) {
 
 func TestClassify_RootServerGlue(t *testing.T) {
 	d := newDetector()
-	v := classifyRecord(d,
+	v := classifyRecord(
+		d,
 		aRec("a.root-servers.net.", "198.41.0.4"),
 		"", "a.root-servers.net",
 	)
@@ -105,7 +109,8 @@ func TestClassify_RootServerGlue(t *testing.T) {
 
 func TestClassify_RootServerUnauthorized(t *testing.T) {
 	d := newDetector()
-	v := classifyRecord(d,
+	v := classifyRecord(
+		d,
 		aRec("www.google.com.", "185.45.5.35"),
 		"", "www.google.com",
 	)
@@ -369,7 +374,8 @@ func TestClassifyTLD_SubdomainAnswer(t *testing.T) {
 func TestClassify_NSatRootForNonTLD(t *testing.T) {
 	// GFW-injected NS record for www.youtube.com at root level.
 	d := newDetector()
-	v := classifyRecord(d,
+	v := classifyRecord(
+		d,
 		nsRec("www.youtube.com.", "fake.gfw.cn."),
 		"", "www.youtube.com",
 	)
@@ -381,7 +387,8 @@ func TestClassify_NSatRootForNonTLD(t *testing.T) {
 func TestClassify_NSatRootForTLD(t *testing.T) {
 	// Legitimate NS delegation for .com at root level.
 	d := newDetector()
-	v := classifyRecord(d,
+	v := classifyRecord(
+		d,
 		nsRec("com.", "a.gtld-servers.net."),
 		"", "com",
 	)

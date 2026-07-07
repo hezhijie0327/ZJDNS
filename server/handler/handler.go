@@ -8,11 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
-	"golang.org/x/sync/errgroup"
-
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -23,6 +18,10 @@ import (
 	"zjdns/internal/ttl"
 	"zjdns/rewrite"
 	"zjdns/server/resolver"
+
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"golang.org/x/sync/errgroup"
 )
 
 // Question is a type alias for resolver.Question to avoid duplicate definitions.
@@ -134,8 +133,8 @@ func (h *Handler) HasRewriteRules() bool { return h.rewrite != nil && h.rewrite.
 
 // PrefetchCooldown returns the prefetch throttle map and its mutex
 // (used by background cleanup).
-func (h *Handler) PrefetchCooldown() (*map[string]int64, *sync.RWMutex) {
-	return &h.prefetchCooldown, &h.prefetchCooldownMu
+func (h *Handler) PrefetchCooldown() (map[string]int64, *sync.RWMutex) {
+	return h.prefetchCooldown, &h.prefetchCooldownMu
 }
 
 // UpstreamServers returns the configured upstream servers.
@@ -156,7 +155,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 }
 
 // BuildQueryMessage constructs an outbound DNS query message for the resolver.
-func (h *Handler) BuildQueryMessage(question Question, ecs *edns.ECSOption, recursionDesired bool, isSecureConnection bool) *dns.Msg {
+func (h *Handler) BuildQueryMessage(question Question, ecs *edns.ECSOption, recursionDesired, isSecureConnection bool) *dns.Msg {
 	msg := pool.DefaultMessagePool.Get()
 
 	dnsutilv2.SetQuestion(msg, dnsutilv2.Fqdn(question.Name), question.Qtype)
@@ -237,7 +236,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		log.Debugf("CACHE: hit expired=%t for %s, ttl=%d, validated=%t, answer=%d", isExpired, question.Name, entry.RemainingTTL(), entry.Validated, len(entry.Answer))
 		if !isExpired {
 			responseMsg = h.processCacheHit(req, entry, false, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
-			h.cache.RecordRequest(cache.RequestRecord{
+			h.cache.RecordRequest(&cache.RequestRecord{
 				Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 				Protocol: requestProtocol, Result: "hit", Rcode: dns.RcodeSuccess,
 			})
@@ -246,7 +245,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 
 		if entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			responseMsg = h.processExpiredCacheHit(req, entry, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
-			h.cache.RecordRequest(cache.RequestRecord{
+			h.cache.RecordRequest(&cache.RequestRecord{
 				Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 				Protocol: requestProtocol, Result: "stale", Rcode: dns.RcodeSuccess,
 			})
@@ -264,7 +263,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 			response.Answer = ptrAnswer
 			ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
 			h.applyEDNS(response, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
-			h.cache.RecordRequest(cache.RequestRecord{
+			h.cache.RecordRequest(&cache.RequestRecord{
 				Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 				ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
 				Protocol: requestProtocol, Result: "hit", Rcode: dns.RcodeSuccess,
@@ -380,17 +379,17 @@ func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.
 		return nil, false
 	}
 
-	log.Debugf("REWRITE: matched rule for %s -> domain=%s responseCode=%d records=%d additional=%d", question.Name, rewriteResult.Domain, uint16(rewriteResult.ResponseCode), len(rewriteResult.Records), len(rewriteResult.Additional))
+	log.Debugf("REWRITE: matched rule for %s -> domain=%s responseCode=%d records=%d additional=%d", question.Name, rewriteResult.Domain, uint16(rewriteResult.ResponseCode), len(rewriteResult.Records), len(rewriteResult.Additional)) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 
-	h.cache.RecordRequest(cache.RequestRecord{
+	h.cache.RecordRequest(&cache.RequestRecord{
 		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
-		Protocol: "", Result: "rewrite", Rcode: int(rewriteResult.ResponseCode),
+		Protocol: "", Result: "rewrite", Rcode: rewriteResult.ResponseCode,
 	})
 
-	if uint16(rewriteResult.ResponseCode) != dns.RcodeSuccess {
-		log.Debugf("RESULT: %s %s | rcode=%s, blocked by rewrite rule", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[uint16(rewriteResult.ResponseCode)])
+	if uint16(rewriteResult.ResponseCode) != dns.RcodeSuccess { //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
+		log.Debugf("RESULT: %s %s | rcode=%s, blocked by rewrite rule", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[uint16(rewriteResult.ResponseCode)]) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 		response := h.buildResponse(req)
-		response.Rcode = uint16(rewriteResult.ResponseCode)
+		response.Rcode = uint16(rewriteResult.ResponseCode) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 		ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
 		h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
 		return response, true

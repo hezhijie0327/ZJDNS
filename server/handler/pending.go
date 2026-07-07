@@ -2,12 +2,11 @@ package handler
 
 import (
 	"sync"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/server/resolver"
+
+	"codeberg.org/miekg/dns"
 )
 
 // --- Exported type ---

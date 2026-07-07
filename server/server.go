@@ -7,15 +7,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof" // register pprof handlers on http.DefaultServeMux
+	_ "net/http/pprof" //nolint:gosec // G108: profiling endpoint is opt-in // register pprof handlers on http.DefaultServeMux
 	"os"
 	"runtime"
 	"strings"
 	"sync"
-
-	"codeberg.org/miekg/dns"
-	"golang.org/x/sync/errgroup"
-
 	"zjdns/cache"
 	"zjdns/cidr"
 	"zjdns/config"
@@ -29,6 +25,10 @@ import (
 	"zjdns/server/probe"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
+
+	"codeberg.org/miekg/dns"
+	"golang.org/x/sync/errgroup"
+
 	servertls "zjdns/server/tls"
 )
 
@@ -170,16 +170,16 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	// ── Resolution: resolver + upstream config ────────────────────────────
 
-	resolver := resolver.New(
+	dnsResolver := resolver.New(
 		queryClient, guard, ednsHandler, cidrFilter,
-		func(q resolver.Question, ecs *edns.ECSOption, rd bool, secure bool) *dns.Msg {
+		func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
 			return h.BuildQueryMessage(q, ecs, rd, secure)
 		},
 		cacheStore,
 	)
-	resolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
-	resolver.ConfigureServers(cfg.Upstream, cfg.Fallback)
-	h.SetResolver(resolver)
+	dnsResolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
+	dnsResolver.ConfigureServers(cfg.Upstream, cfg.Fallback)
+	h.SetResolver(dnsResolver)
 
 	if len(cfg.Upstream) > 0 || len(cfg.Fallback) > 0 {
 		allServers := make([]config.UpstreamServer, 0, len(cfg.Upstream)+len(cfg.Fallback))
@@ -195,7 +195,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		if cfg.Server.TLS.KTLS != nil {
 			tlsCfg.KTLS = &servertls.KTLSSettings{KernelTX: cfg.Server.TLS.KTLS.KernelTX, KernelRX: cfg.Server.TLS.KTLS.KernelRX}
 		}
-		tlsSrv, err := servertls.New(h, tlsCfg, config.DefaultBackgroundTimeout)
+		tlsSrv, err := servertls.New(h, &tlsCfg, config.DefaultBackgroundTimeout)
 		if err != nil {
 			cancel(fmt.Errorf("TLS server init: %w", err))
 			return nil, fmt.Errorf("TLS server init: %w", err)
@@ -260,7 +260,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("UDP address resolution: %w", err)
 	}
 	for _, addr := range udpAddrs {
-		addr := addr
+
 		srv := &dns.Server{
 			Addr:    addr,
 			Net:     config.ProtoUDP,
@@ -308,7 +308,7 @@ func (s *Server) Start() error {
 		if err != nil {
 			return fmt.Errorf("TCP listen on %s: %w", addr, err)
 		}
-		addr := addr
+
 		srv := &dns.Server{
 			Listener: &servertls.TCPKeepAliveListener{Listener: listener},
 			Handler:  dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
@@ -370,7 +370,7 @@ func (s *Server) displayInfo() {
 	if len(servers) > 0 {
 		for _, server := range servers {
 			if server.IsRecursive() {
-				info := fmt.Sprintf("Upstream server: %s", server.Address)
+				info := "Upstream server: " + server.Address
 				if len(server.Match) > 0 {
 					info += fmt.Sprintf(" [CIDR match: %v]", server.Match)
 				}

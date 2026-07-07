@@ -8,12 +8,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
-
-	"zjdns/internal/log"
 )
 
 // DNSFramePrefixLen is the number of bytes used for the 2-byte DNS message
@@ -32,7 +31,7 @@ const MaxLabelLength = 63
 // dot. Uses sub-slicing (zero-alloc) instead of strings.TrimSuffix to avoid
 // allocation on the hot path.
 func NormalizeDomain(domain string) string {
-	if len(domain) > 0 && domain[len(domain)-1] == '.' {
+	if domain != "" && domain[len(domain)-1] == '.' {
 		domain = domain[:len(domain)-1]
 	}
 	return strings.ToLower(domain)
@@ -42,14 +41,14 @@ func NormalizeDomain(domain string) string {
 // the RFC 1035 maximum of 63 bytes. Returns true if all labels are valid.
 func IsValidDomainLabels(domain string) bool {
 	// Strip trailing dot(s) without allocation (sub-slicing).
-	if len(domain) > 0 && domain[len(domain)-1] == '.' {
+	if domain != "" && domain[len(domain)-1] == '.' {
 		domain = domain[:len(domain)-1]
 	}
 	if domain == "" {
 		return true // root zone
 	}
 	// Scan labels without allocating a string slice.
-	for len(domain) > 0 {
+	for domain != "" {
 		dot := strings.IndexByte(domain, '.')
 		if dot < 0 {
 			return len(domain) <= MaxLabelLength
@@ -97,7 +96,7 @@ func HandlePanic(operation string) {
 // ParseReverseDNSName parses a reverse DNS name (in-addr.arpa or ip6.arpa)
 // into a net.IP.
 func ParseReverseDNSName(name string) net.IP {
-	fqdn := strings.TrimSuffix(dnsutilv2.Fqdn(name), ".")
+	fqdn := strings.TrimSuffix(dnsutil.Fqdn(name), ".")
 	lower := strings.ToLower(fqdn)
 
 	if strings.HasSuffix(lower, ".in-addr.arpa") {
@@ -136,11 +135,11 @@ func ParseReverseDNSName(name string) net.IP {
 func NewPTRRecord(name, target string, ttl uint32, qclass uint16) dns.RR {
 	return &dns.PTR{
 		Hdr: dns.Header{
-			Name:  dnsutilv2.Fqdn(name),
+			Name:  dnsutil.Fqdn(name),
 			Class: qclass,
 			TTL:   ttl,
 		},
-		PTR: rdata.PTR{Ptr: dnsutilv2.Fqdn(target)},
+		PTR: rdata.PTR{Ptr: dnsutil.Fqdn(target)},
 	}
 }
 
@@ -187,7 +186,6 @@ func FormatRecords(answers, authority, additional []dns.RR) string {
 
 // IsValidFilePath validates a file path for security and existence.
 func IsValidFilePath(path string) bool {
-
 	abs, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return false
@@ -249,7 +247,7 @@ func IsAOrAAAA(rr dns.RR) bool {
 //
 // It accepts the individual fields to work with both crypto/tls.ConnectionState
 // and go-extension/tls.ConnectionState without type coupling.
-func LogTLSConnectionState(role, dir, addr string, version uint16, cipherSuite uint16, curveID interface{ String() string }) {
+func LogTLSConnectionState(role, dir, addr string, version, cipherSuite uint16, curveID interface{ String() string }) {
 	log.Debugf("%s: TLS %s %s — version(codepoint)=0x%04X, group(name)=%s, cipher(codepoint)=0x%04X",
 		role, dir, addr, version, curveID, cipherSuite)
 }

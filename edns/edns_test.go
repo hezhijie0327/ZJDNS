@@ -1,13 +1,13 @@
 package edns
 
 import (
+	"bytes"
 	"net"
 	"testing"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-
-	"zjdns/config"
 )
 
 func TestECSConfig_ValueForQType(t *testing.T) {
@@ -141,7 +141,7 @@ func TestCookieGenerator_Rotation(t *testing.T) {
 	newCookie := cg.GenerateServerCookie(clientIP, clientCookie)
 
 	// New cookie should be different
-	if string(oldCookie) == string(newCookie) {
+	if bytes.Equal(oldCookie, newCookie) {
 		t.Error("cookies should differ after rotation")
 	}
 
@@ -254,6 +254,7 @@ func TestApplyToMessage_Keepalive(t *testing.T) {
 		}
 	}
 }
+
 func TestBuildCookieResponse(t *testing.T) {
 	client := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
 	server := []byte{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20}

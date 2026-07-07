@@ -11,12 +11,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+
+	"codeberg.org/miekg/dns"
+
 	bufpool "zjdns/internal/pool"
 )
 
@@ -71,7 +71,7 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 		maxPipe:  int32(maxPipe),
 		done:     make(chan struct{}),
 	}
-	c.nextID.Store(rand.Uint32())
+	c.nextID.Store(rand.Uint32()) //nolint:gosec // G404: DNS message ID — not cryptographic
 	go c.readLoop()
 	return c
 }
@@ -112,7 +112,7 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(msgData))
 	}
 	writeBuf = writeBuf[:dnsutil.DNSFramePrefixLen+len(msgData)]
-	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(msgData)))
+	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(msgData))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
 	copy(writeBuf[dnsutil.DNSFramePrefixLen:], msgData)
 
 	resultCh := make(chan *dns.Msg, 1)
@@ -138,7 +138,6 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 			}
 		default:
 		}
-
 	}()
 
 	c.writeMu.Lock()
@@ -279,7 +278,7 @@ func NewPool(maxConns, maxPipe int) *Pool {
 }
 
 // Acquire gets a reusable pipelined connection, dialing a new one if needed.
-func (p *Pool) Acquire(ctx context.Context, key string, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*Conn, error) {
+func (p *Pool) Acquire(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*Conn, error) {
 	p.mu.Lock()
 
 	var leastLoaded *Conn

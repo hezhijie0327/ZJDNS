@@ -3,12 +3,11 @@ package client
 import (
 	"context"
 	"net"
+	"zjdns/config"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 	eTLS "gitlab.com/go-extension/tls"
-
-	"zjdns/config"
-	"zjdns/internal/log"
 )
 
 func (c *Client) executeTLS(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, tlsConfig *eTLS.Config) (*dns.Msg, error) {

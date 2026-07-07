@@ -5,10 +5,9 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"zjdns/config"
 
 	"github.com/quic-go/quic-go/http3"
-
-	"zjdns/config"
 )
 
 // httpClientPool caches HTTP clients keyed by (port, TLS, HTTP3) to avoid
@@ -43,14 +42,14 @@ func (p *httpClientPool) get(port int, useTLS, useHTTP3 bool) *http.Client {
 	var client *http.Client
 	if useHTTP3 {
 		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: true, //nolint:gosec // G402: latency probe pool — not security-critical
 			NextProtos:         config.NextProtoDOH3,
 		}
 		client = &http.Client{
 			Transport: &http3.Transport{TLSClientConfig: tlsConfig},
 		}
 	} else {
-		tlsConfig := &tls.Config{InsecureSkipVerify: true}
+		tlsConfig := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // G402: latency probe pool — not security-critical
 		transport := &http.Transport{
 			Proxy:             nil,
 			DisableKeepAlives: true,

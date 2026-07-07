@@ -6,10 +6,6 @@ import (
 	"net"
 	"strings"
 	"sync/atomic"
-
-	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
-
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -18,6 +14,9 @@ import (
 	"zjdns/internal/pool"
 	"zjdns/server/probe"
 	"zjdns/server/security"
+
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 )
 
 // rootHints maps root server names to their addresses. Used as bootstrap
@@ -54,16 +53,16 @@ type Recursive struct {
 
 // DNSSECEDECode returns the last DNSSEC EDE code atomically.
 func (r *Recursive) DNSSECEDECode() uint16 {
-	return uint16(r.lastDNSSECEDECode.Load())
+	return uint16(r.lastDNSSECEDECode.Load()) //nolint:gosec // G115: EDE code — protocol-bounded uint16
 }
 
 // dnssecChain tracks the cryptographic trust chain state during recursive
 // resolution. At each delegation level, verified parent DNSKEYs and child DS
 // records are used to authenticate the child zone's DNSKEYs.
-func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.ECSOption, depth int, forceTCP bool) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.ECSOption, depth int, forceTCP bool) QueryResult {
 	if depth > config.DefaultMaxRecursionDepth {
 		log.Warnf("RECURSION: depth exceeded (depth=%d, max=%d) for %s", depth, config.DefaultMaxRecursionDepth, question.Name)
-		return nil, nil, nil, false, nil, "", false, fmt.Errorf("recursion depth exceeded: %d", depth)
+		return QueryResult{Err: fmt.Errorf("recursion depth exceeded: %d", depth)}
 	}
 
 	// Clear any stale DNSSEC EDE code from a previous CNAME hop or recursive
@@ -107,22 +106,23 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 		if err != nil {
 			if verdict == security.VerdictHijack && !forceTCP {
-				_, _, _, _, _, _, _, err := r.resolve(ctx, question, ecs, depth, true)
-				return nil, nil, nil, false, nil, "", true, err
+				qr := r.resolve(ctx, question, ecs, depth, true)
+				qr.Hijack = true
+				return qr
 			}
-			return nil, nil, nil, false, nil, "", hijackSeen, fmt.Errorf("root domain query: %w", err)
+			return QueryResult{Hijack: hijackSeen, Err: fmt.Errorf("root domain query: %w", err)}
 		}
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
-		ecsResponse := r.resolver.edns.ParseFromDNS((response))
+		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessagePool.Put(response)
-		return answer, authority, additional, cryptoValidated, ecsResponse, config.RecursiveIndicator, hijackSeen, nil
+		return QueryResult{Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.RecursiveIndicator, Hijack: hijackSeen}
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, nil, nil, false, nil, "", hijackSeen, ctx.Err()
+			return QueryResult{Hijack: hijackSeen, Err: ctx.Err()}
 		default:
 		}
 
@@ -155,19 +155,20 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				if response != nil {
 					pool.DefaultMessagePool.Put(response)
 				}
-				answer, authority, additional, validated, ecsResponse, server, _, err := r.resolve(ctx, question, ecs, depth, true)
-				return answer, authority, additional, validated, ecsResponse, server, true, err
+				qr := r.resolve(ctx, question, ecs, depth, true)
+				qr.Hijack = true
+				return qr
 			}
 		}
 
 		if err != nil {
-			return nil, nil, nil, false, nil, "", hijackSeen, fmt.Errorf("query %s: %w", currentDomain, err)
+			return QueryResult{Hijack: hijackSeen, Err: fmt.Errorf("query %s: %w", currentDomain, err)}
 		}
 		// ── End TCP fallback ────────────────────────────────────────
 
 		// Cryptographic DNSSEC validation at this delegation level
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
-		ecsResponse := r.resolver.edns.ParseFromDNS((response))
+		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 
 		validated := cryptoValidated
 
@@ -178,20 +179,20 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 
 		if termRes := r.processAnswerWithDNSSEC(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, &validated, ecsResponse); termRes != nil {
-			return termRes.answer, termRes.authority, termRes.additional, termRes.validated, termRes.ecs, termRes.server, termRes.hijack, termRes.err
+			return *termRes
 		}
 
 		validated = r.validateNODATAWithNSEC(response, ctx, nameservers, currentDomain, chain, validated)
 
 		bestMatch, bestNSRecords, cont, termRes := r.collectBestNSMatch(response, normalizedQname, queryQuestion.Name, qname, qnameMinimise, validated, ecsResponse)
 		if termRes != nil {
-			return termRes.answer, termRes.authority, termRes.additional, termRes.validated, termRes.ecs, termRes.server, termRes.hijack, termRes.err
+			return *termRes
 		}
 		if cont {
 			continue
 		}
 		if termRes := r.checkLameDelegation(response, currentDomain, bestMatch, validated, ecsResponse); termRes != nil {
-			return termRes.answer, termRes.authority, termRes.additional, termRes.validated, termRes.ecs, termRes.server, termRes.hijack, termRes.err
+			return *termRes
 		}
 
 		// Update DNSSEC chain: extract DS from current delegation, prepare
@@ -293,7 +294,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if len(nextNS) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessagePool.Put(response)
-			return nil, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
+			return QueryResult{Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.RecursiveIndicator}
 		}
 
 		// Cache A/AAAA glue records per NS name immediately so
@@ -369,7 +370,7 @@ type CNAME struct {
 	resolver *Resolver
 }
 
-func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
+func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOption) QueryResult {
 	var allAnswers []dns.RR
 	var finalAuthority, finalAdditional []dns.RR
 	var finalECSResponse *edns.ECSOption
@@ -384,14 +385,14 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	for cnameDepth = range config.DefaultMaxCNAMEChain {
 		select {
 		case <-ctx.Done():
-			return nil, nil, nil, false, nil, "", false, ctx.Err()
+			return QueryResult{Err: ctx.Err()}
 		default:
 		}
 
 		currentName := dnsutil.NormalizeDomain(currentQuestion.Name)
 		if visitedCNAMEs[currentName] {
 			log.Warnf("RECURSION: CNAME loop detected for %s", currentName)
-			return nil, nil, nil, false, nil, "", false, fmt.Errorf("CNAME loop detected: %s", currentName)
+			return QueryResult{Err: fmt.Errorf("CNAME loop detected: %s", currentName)}
 		}
 		visitedCNAMEs[currentName] = true
 		log.Debugf("RECURSION: CNAME step %d/%d: resolving %s %s", cnameDepth+1, config.DefaultMaxCNAMEChain, currentQuestion.Name, dns.TypeToString[currentQuestion.Qtype])
@@ -402,31 +403,31 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		// detection can't distinguish real from spoofed answers).
 		forceTCP := hijackOccurred
 
-		answer, authority, additional, validated, ecsResponse, server, hijackDetectedNow, err := c.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP)
-		if err != nil {
-			return nil, nil, nil, false, nil, "", false, err
+		qr := c.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP)
+		if qr.Err != nil {
+			return QueryResult{Err: qr.Err}
 		}
 
 		if usedServer == "" {
-			usedServer = server
+			usedServer = qr.Server
 		}
-		if hijackDetectedNow {
+		if qr.Hijack {
 			hijackOccurred = true
 		}
-		if !validated {
+		if !qr.Validated {
 			allValidated = false
 		}
-		if ecsResponse != nil {
-			finalECSResponse = ecsResponse
+		if qr.ECS != nil {
+			finalECSResponse = qr.ECS
 		}
 
-		allAnswers = append(allAnswers, answer...)
-		finalAuthority = authority
-		finalAdditional = additional
+		allAnswers = append(allAnswers, qr.Answer...)
+		finalAuthority = qr.Authority
+		finalAdditional = qr.Additional
 
 		var nextCNAME *dns.CNAME
 		hasTargetType := false
-		for _, r := range answer {
+		for _, r := range qr.Answer {
 			if cname, ok := r.(*dns.CNAME); ok {
 				if strings.EqualFold(r.Header().Name, currentQuestion.Name) {
 					nextCNAME = cname
@@ -451,5 +452,5 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	if cnameDepth >= config.DefaultMaxCNAMEChain-1 {
 		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.NormalizeDomain(question.Name))
 	}
-	return allAnswers, finalAuthority, finalAdditional, allValidated, finalECSResponse, usedServer, hijackOccurred, nil
+	return QueryResult{Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Hijack: hijackOccurred}
 }

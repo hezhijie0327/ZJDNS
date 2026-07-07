@@ -88,7 +88,7 @@ func (b *BufferPool) Get() []byte {
 		b := make([]byte, b.size)
 		return b
 	}
-	return *(bufPtr.(*[]byte))
+	return *bufPtr.(*[]byte)
 }
 
 // Put returns a byte slice to the pool. The slice is normalized to full

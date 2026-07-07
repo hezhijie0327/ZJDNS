@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-
 	"zjdns/config"
 )
 
@@ -76,7 +75,7 @@ func NewSOCKS5Dialer(proxyURL string, timeout time.Duration) (*SOCKS5Dialer, err
 
 	host := u.Hostname()
 	if host == "" {
-		return nil, fmt.Errorf("socks5: proxy host required")
+		return nil, errors.New("socks5: proxy host required")
 	}
 	port := u.Port()
 	if port == "" {
@@ -130,7 +129,7 @@ func (d *SOCKS5Dialer) handshake(conn net.Conn) error {
 
 	msg := make([]byte, 2+len(methods))
 	msg[0] = socks5Version
-	msg[1] = byte(len(methods))
+	msg[1] = byte(len(methods)) //nolint:gosec // G115: SOCKS5 methods count — max 255 fits byte
 	copy(msg[2:], methods)
 	if _, err := conn.Write(msg); err != nil {
 		return fmt.Errorf("socks5: send greeting: %w", err)
@@ -161,10 +160,10 @@ func (d *SOCKS5Dialer) authUserPass(conn net.Conn) error {
 
 	// RFC 1929: VER(1) | ULEN(1) | UNAME | PLEN(1) | PASSWD
 	msg := make([]byte, 3+len(d.username)+len(d.password))
-	msg[0] = 0x01 // auth sub-negotiation version
-	msg[1] = byte(len(d.username))
+	msg[0] = 0x01                  // auth sub-negotiation version
+	msg[1] = byte(len(d.username)) //nolint:gosec // G115: SOCKS5 username length — max 255 fits byte
 	copy(msg[2:], d.username)
-	msg[2+len(d.username)] = byte(len(d.password))
+	msg[2+len(d.username)] = byte(len(d.password)) //nolint:gosec // G115: SOCKS5 password length — max 255 fits byte
 	copy(msg[3+len(d.username):], d.password)
 
 	if _, err := conn.Write(msg); err != nil {
@@ -230,7 +229,7 @@ func buildSOCKS5Request(cmd byte, host string, port int) []byte {
 	buf := make([]byte, 7+len(host)) // 4 + 1 + len(host) + 2
 	buf[0], buf[1], buf[2] = socks5Version, cmd, 0x00
 	buf[3] = socks5ATYPDomain
-	buf[4] = byte(len(host))
+	buf[4] = byte(len(host)) //nolint:gosec // G115: SOCKS5 address length — max 255 fits byte
 	copy(buf[5:], host)
 	binary.BigEndian.PutUint16(buf[5+len(host):], uport)
 	return buf
@@ -312,7 +311,7 @@ func parseAddressFromBytes(data []byte, atyp byte) (*net.UDPAddr, int, error) {
 	switch atyp {
 	case socks5ATYPIPv4:
 		if len(data) < 6 {
-			return nil, 0, fmt.Errorf("truncated IPv4 address")
+			return nil, 0, errors.New("truncated IPv4 address")
 		}
 		ip := net.IP(data[:4])
 		port := int(binary.BigEndian.Uint16(data[4:6]))
@@ -320,7 +319,7 @@ func parseAddressFromBytes(data []byte, atyp byte) (*net.UDPAddr, int, error) {
 
 	case socks5ATYPIPv6:
 		if len(data) < 18 {
-			return nil, 0, fmt.Errorf("truncated IPv6 address")
+			return nil, 0, errors.New("truncated IPv6 address")
 		}
 		ip := net.IP(data[:16])
 		port := int(binary.BigEndian.Uint16(data[16:18]))
@@ -328,11 +327,11 @@ func parseAddressFromBytes(data []byte, atyp byte) (*net.UDPAddr, int, error) {
 
 	case socks5ATYPDomain:
 		if len(data) < 1 {
-			return nil, 0, fmt.Errorf("truncated domain length")
+			return nil, 0, errors.New("truncated domain length")
 		}
 		domainLen := int(data[0])
 		if len(data) < 1+domainLen+2 {
-			return nil, 0, fmt.Errorf("truncated domain address")
+			return nil, 0, errors.New("truncated domain address")
 		}
 		host := string(data[1 : 1+domainLen])
 		port := int(binary.BigEndian.Uint16(data[1+domainLen:]))

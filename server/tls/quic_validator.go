@@ -4,7 +4,6 @@ import (
 	"net"
 	"sync"
 	"time"
-
 	"zjdns/config"
 )
 

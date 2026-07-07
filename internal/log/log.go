@@ -48,7 +48,7 @@ const (
 	colorBold   = "\033[1m"
 )
 
-const logTimeFormat = "2006-01-02 15:04:05"
+const logTimeFormat = time.DateTime
 
 var levelNames = [...]string{"ERROR", "WARN", "INFO", "DEBUG"}
 
@@ -154,7 +154,7 @@ func (m *Manager) SetComponentFilter(components []string) {
 // filters in the format "level:comp1,comp2,...". Returns the level and a
 // component list (nil components means no filtering). The defaultLevel is
 // used when parsing fails.
-func ParseLevelFilter(s string, defaultLevel Level) (Level, []string) {
+func ParseLevelFilter(s string, defaultLevel Level) (lvl Level, components []string) {
 	if s == "" {
 		return defaultLevel, nil
 	}
@@ -163,7 +163,6 @@ func ParseLevelFilter(s string, defaultLevel Level) (Level, []string) {
 	parts := strings.SplitN(s, ":", 2)
 	levelStr := strings.TrimSpace(strings.ToLower(parts[0]))
 
-	var lvl Level
 	switch levelStr {
 	case "error":
 		lvl = Error
@@ -285,7 +284,7 @@ func SetLevelFilter(logLevelStr string) {
 }
 
 func sanitizeLogMessage(msg string) string {
-	if len(msg) == 0 {
+	if msg == "" {
 		return msg
 	}
 	// Fast path: scan for any byte that needs replacement.

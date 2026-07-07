@@ -2,11 +2,10 @@ package resolver
 
 import (
 	"strings"
+	"zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
-
-	"zjdns/internal/dnsutil"
 )
 
 // minimiseQNAME strips the original QNAME to the given number of labels beyond

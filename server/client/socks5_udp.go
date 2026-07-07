@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -121,7 +122,7 @@ func (d *SOCKS5Dialer) establishUDPRelay(ctx context.Context) error {
 	if !ok {
 		_ = rawConn.Close()
 		_ = ctrlConn.Close()
-		return fmt.Errorf("socks5: UDP dial did not return *net.UDPConn")
+		return errors.New("socks5: UDP dial did not return *net.UDPConn")
 	}
 
 	// Clear deadline on the control connection — it must stay alive but idle.
@@ -191,7 +192,7 @@ func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 	buf := socks5ReadBufPool.Get().(*[]byte)
 	defer socks5ReadBufPool.Put(buf)
 
-	nr, err := c.conn.Read((*buf)[:])
+	nr, err := c.conn.Read((*buf))
 	if err != nil {
 		return 0, nil, fmt.Errorf("socks5: read: %w", err)
 	}
@@ -203,10 +204,10 @@ func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 		return 0, nil, fmt.Errorf("socks5: UDP datagram too short: %d bytes", nr)
 	}
 	if data[0] != 0x00 || data[1] != 0x00 {
-		return 0, nil, fmt.Errorf("socks5: invalid reserved bytes in UDP reply")
+		return 0, nil, errors.New("socks5: invalid reserved bytes in UDP reply")
 	}
 	if data[2] != 0x00 {
-		return 0, nil, fmt.Errorf("socks5: fragmented UDP datagram not supported")
+		return 0, nil, errors.New("socks5: fragmented UDP datagram not supported")
 	}
 
 	atyp := data[3]
@@ -257,11 +258,11 @@ func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	if ip4 := udpAddr.IP.To4(); ip4 != nil {
 		buf[3] = socks5ATYPIPv4
 		copy(buf[4:8], ip4)
-		binary.BigEndian.PutUint16(buf[8:10], uint16(udpAddr.Port))
+		binary.BigEndian.PutUint16(buf[8:10], uint16(udpAddr.Port)) //nolint:gosec // G115: SOCKS5 UDP payload length — protocol-bounded uint16
 	} else {
 		buf[3] = socks5ATYPIPv6
 		copy(buf[4:20], udpAddr.IP.To16())
-		binary.BigEndian.PutUint16(buf[20:22], uint16(udpAddr.Port))
+		binary.BigEndian.PutUint16(buf[20:22], uint16(udpAddr.Port)) //nolint:gosec // G115: UDP port — protocol-bounded uint16
 	}
 	copy(buf[headerLen:], p)
 

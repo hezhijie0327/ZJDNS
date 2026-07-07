@@ -2,18 +2,18 @@ package resolver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
-
-	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
-
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/security"
+
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 )
 
 // Use config.DNSRootZone (".") instead of a local constant.
@@ -300,7 +300,8 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	// Verify DNSKEY: try parent DS first (secure delegation), then
 	// self-signature only when no DS exists (root zone or insecure delegation).
 	var keysVerified bool
-	if len(chain.childDS) > 0 {
+	switch {
+	case len(chain.childDS) > 0:
 		if _, err := crypto.VerifyDelegationDS(chain.childDS, dnskeyRecords); err == nil {
 			keysVerified = true
 			log.Debugf("SECURITY: verified %s DNSKEY via DS from parent", currentDomain)
@@ -310,23 +311,22 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 			chain.lastEDECode = edns.EDECodeDNSSECBogus
 			return false
 		}
-	} else if chain.dsPresentButUnverified {
+	case chain.dsPresentButUnverified:
 		// DS records were found but RRSIG verification failed — bogus delegation
 		// (not insecure). An attacker could inject unverifiable DS records to
 		// bypass DNSSEC; treat as bogus.
 		chain.lastEDECode = edns.EDECodeDNSSECBogus
 		return false
-	} else {
+	case currentDomain == config.DNSRootZone:
 		// No DS in parent — insecure delegation. Self-verify for root zone.
-		if currentDomain == config.DNSRootZone {
-			if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
-				keysVerified = true
-				log.Debugf("SECURITY: self-verified root DNSKEY")
-			} else {
-				log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
-				chain.lastEDECode = edns.EDECodeDNSKEYMissing
-				return false
-			}
+		// Root zone: verify self-signed DNSKEYs against embedded trust anchors
+		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
+			keysVerified = true
+			log.Debugf("SECURITY: self-verified root DNSKEY")
+		} else {
+			log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
+			chain.lastEDECode = edns.EDECodeDNSKEYMissing
+			return false
 		}
 	}
 
@@ -444,7 +444,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	// Extract the child zone name from the RRSIG signer
 	childZone := r.getZoneCutSigner(response, currentDomain)
 	if childZone == "" {
-		return false, fmt.Errorf("could not determine child zone name from RRSIG signer")
+		return false, errors.New("could not determine child zone name from RRSIG signer")
 	}
 
 	// Ensure we have verified DNSKEYs for the parent zone

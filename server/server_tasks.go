@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -98,9 +97,9 @@ func (s *Server) startPrefetchCooldownCleanup() {
 		now := log.NowUnixNano()
 		cooldown, mu := s.handler.PrefetchCooldown()
 		mu.Lock()
-		for key, ts := range *cooldown {
+		for key, ts := range cooldown {
 			if now > ts {
-				delete(*cooldown, key)
+				delete(cooldown, key)
 			}
 		}
 		mu.Unlock()

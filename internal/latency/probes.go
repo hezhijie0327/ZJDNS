@@ -10,12 +10,11 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"zjdns/config"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
-
-	"zjdns/config"
 )
 
 // icmpBufPool reuses ICMP read buffers to avoid per-probe 1500-byte allocations.
@@ -165,8 +164,8 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 
 	// Use a random ID + seq per probe to prevent concurrent probes
 	// to the same IP from stealing each other's echo replies.
-	echoID := uint16(rand.Uint32())
-	echoSeq := uint16(rand.Uint32())
+	echoID := uint16(rand.Uint32())  //nolint:gosec // G404: ICMP echo ID — not cryptographic
+	echoSeq := uint16(rand.Uint32()) //nolint:gosec // G404: ICMP echo seq — not cryptographic
 
 	message := icmp.Message{
 		Type: echoType,
@@ -207,7 +206,7 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 		// Verify the echo reply matches our request to prevent
 		// concurrent probes from stealing each other's responses.
 		if echo, ok := rm.Body.(*icmp.Echo); ok {
-			if uint16(echo.ID) != echoID || uint16(echo.Seq) != echoSeq {
+			if uint16(echo.ID) != echoID || uint16(echo.Seq) != echoSeq { //nolint:gosec // G115: ICMP ID — protocol-bounded uint16
 				continue
 			}
 		}
@@ -242,7 +241,7 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool, 
 		scheme = "https"
 	}
 	url := fmt.Sprintf("%s://%s/", scheme, net.JoinHostPort(ip.String(), strconv.Itoa(port)))
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, http.NoBody)
 	if err != nil {
 		return err
 	}

@@ -5,7 +5,6 @@ import (
 	"net/netip"
 	"testing"
 	"time"
-
 	"zjdns/cache"
 	"zjdns/config"
 
@@ -37,10 +36,10 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 		RRSIG: rdata.RRSIG{
 			TypeCovered: dns.RRToType(rrset[0]),
 			Algorithm:   dns.ECDSAP256SHA256,
-			Labels:      uint8(dnsutilv2.Labels(rrset[0].Header().Name)),
+			Labels:      uint8(dnsutilv2.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — protocol-bounded byte
 			OrigTTL:     rrset[0].Header().TTL,
-			Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()),
-			Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()),
+			Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+			Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 			KeyTag:      keyTag,
 			SignerName:  dnsutilv2.Fqdn(signer),
 		},
@@ -50,7 +49,7 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 }
 
 // aRec is a helper to create an A record with an IP address.
-func aRec(name string, ip string) *dns.A {
+func aRec(name, ip string) *dns.A {
 	return &dns.A{
 		Hdr: dns.Header{Name: dnsutilv2.Fqdn(name), Class: dns.ClassINET, TTL: 300},
 		A:   rdata.A{Addr: netip.MustParseAddr(ip)},
@@ -99,8 +98,8 @@ func TestVerifyRRset_ExpiredSignature(t *testing.T) {
 			Algorithm:   dns.ECDSAP256SHA256,
 			Labels:      3,
 			OrigTTL:     300,
-			Expiration:  uint32(time.Now().Add(-48 * time.Hour).Unix()),
-			Inception:   uint32(time.Now().Add(-72 * time.Hour).Unix()),
+			Expiration:  uint32(time.Now().Add(-48 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+			Inception:   uint32(time.Now().Add(-72 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 			KeyTag:      ksk.KeyTag(),
 			SignerName:  dnsutilv2.Fqdn(zone),
 		},

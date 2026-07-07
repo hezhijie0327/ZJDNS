@@ -3,7 +3,6 @@ package cidr
 import (
 	"net"
 	"testing"
-
 	"zjdns/config"
 )
 

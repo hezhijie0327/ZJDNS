@@ -8,11 +8,6 @@ import (
 	"net/netip"
 	"testing"
 	"time"
-
-	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
-
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -21,6 +16,10 @@ import (
 	"zjdns/server"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
+
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 )
 
 // disableLogging suppresses log output during benchmarks.
@@ -109,8 +108,8 @@ func BenchmarkCryptoValidator_VerifyRRset(b *testing.B) {
 		Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 		RRSIG: rdata.RRSIG{
 			TypeCovered: dns.TypeA, Algorithm: dns.ECDSAP256SHA256, Labels: 3, OrigTTL: 300,
-			Expiration: uint32(time.Now().Add(24 * time.Hour).Unix()),
-			Inception:  uint32(time.Now().Add(-1 * time.Hour).Unix()),
+			Expiration: uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+			Inception:  uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 			KeyTag:     ksk.KeyTag(), SignerName: dnsutilv2.Fqdn(zone),
 		},
 	}

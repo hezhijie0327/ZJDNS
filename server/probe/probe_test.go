@@ -6,10 +6,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"zjdns/internal/pending"
 
 	"codeberg.org/miekg/dns"
-
-	"zjdns/internal/pending"
 )
 
 func TestPendingProbes_LeaderAndFollower(t *testing.T) {

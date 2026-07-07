@@ -38,11 +38,22 @@ func TestIsSecureProtocol(t *testing.T) {
 		proto string
 		want  bool
 	}{
-		{"tls", true}, {"TLS", false}, {"quic", true},
-		{"https", true}, {"http3", true},
-		{"udp", false}, {"tcp", false}, {"", false},
-		{"tls", true}, {"quic", true}, {"https", true}, {"http3", true},
-		{"dot", true}, {"doq", true}, {"doh", true}, {"doh3", true},
+		{"tls", true},
+		{"TLS", false},
+		{"quic", true},
+		{"https", true},
+		{"http3", true},
+		{"udp", false},
+		{"tcp", false},
+		{"", false},
+		{"tls", true},
+		{"quic", true},
+		{"https", true},
+		{"http3", true},
+		{"dot", true},
+		{"doq", true},
+		{"doh", true},
+		{"doh3", true},
 		{"DoT", false}, // case-sensitive — callers normalize to lowercase first
 	}
 	for _, tc := range tests {

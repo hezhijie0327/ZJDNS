@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -105,7 +106,8 @@ func TestSOCKS5UDPAssociate(t *testing.T) {
 	rn, srcAddr, err := pconn.ReadFrom(buf)
 	if err != nil {
 		// Timeout is expected for a DNS query with an arbitrary ID
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
 			t.Logf("ReadFrom timed out (expected for arbitrary DNS query): %v", err)
 		} else {
 			t.Logf("ReadFrom error (non-fatal): %v", err)

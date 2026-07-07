@@ -8,10 +8,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
-
-	"zjdns/internal/log"
 )
 
 // ServerConfig is the top-level configuration structure for the DNS server.
@@ -156,7 +155,7 @@ func LoadConfig(configFile string) (*ServerConfig, error) {
 		return NewDefaultServerConfig(), nil
 	}
 
-	data, err := os.ReadFile(configFile)
+	data, err := os.ReadFile(configFile) //nolint:gosec // G304: config file path from user
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
@@ -379,21 +378,21 @@ func GenerateExampleConfig() string {
 	cfg.Server.Features.Cache.DBPath = "cache.db"
 	cfg.Server.Features.ECS = ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []LatencyProbeStep{
-		{Protocol: "ping", Timeout: 100},
-		{Protocol: "tcp", Port: DefaultProbePortHTTPS, Timeout: 100},
-		{Protocol: "tcp", Port: DefaultProbePortHTTP, Timeout: 100},
-		{Protocol: "udp", Port: DefaultProbePortDNS, Timeout: 100},
-		{Protocol: "http", Port: DefaultProbePortHTTP, Timeout: 100},
-		{Protocol: "https", Port: DefaultProbePortHTTPS, Timeout: 100},
-		{Protocol: "http3", Port: DefaultProbePortHTTPS, Timeout: 100},
+		{Protocol: ProtoPing, Timeout: 100},
+		{Protocol: ProtoTCP, Port: DefaultProbePortHTTPS, Timeout: 100},
+		{Protocol: ProtoTCP, Port: DefaultProbePortHTTP, Timeout: 100},
+		{Protocol: ProtoUDP, Port: DefaultProbePortDNS, Timeout: 100},
+		{Protocol: ProtoHTTPPlain, Port: DefaultProbePortHTTP, Timeout: 100},
+		{Protocol: ProtoHTTP, Port: DefaultProbePortHTTPS, Timeout: 100},
+		{Protocol: ProtoHTTP3, Port: DefaultProbePortHTTPS, Timeout: 100},
 	}
 	cfg.Upstream = []UpstreamServer{
-		{Address: "223.5.5.5:53", Protocol: "tcp", Proxy: "socks5://127.0.0.1:1080"},
-		{Address: "223.6.6.6:53", Protocol: "udp"},
-		{Address: "223.5.5.5:853", Protocol: "tls", ServerName: "dns.alidns.com"},
-		{Address: "223.6.6.6:853", Protocol: "quic", ServerName: "dns.alidns.com", SkipTLSVerify: true},
-		{Address: "https://223.5.5.5:443/dns-query", Protocol: "https", ServerName: "dns.alidns.com", Match: []string{"mixed"}},
-		{Address: "https://223.6.6.6:443/dns-query", Protocol: "http3", ServerName: "dns.alidns.com", Match: []string{"!mixed"}},
+		{Address: "223.5.5.5:53", Protocol: ProtoTCP, Proxy: "socks5://127.0.0.1:1080"},
+		{Address: "223.6.6.6:53", Protocol: ProtoUDP},
+		{Address: "223.5.5.5:853", Protocol: ProtoTLS, ServerName: "dns.alidns.com"},
+		{Address: "223.6.6.6:853", Protocol: ProtoQUIC, ServerName: "dns.alidns.com", SkipTLSVerify: true},
+		{Address: "https://223.5.5.5:443/dns-query", Protocol: ProtoHTTP, ServerName: "dns.alidns.com", Match: []string{"mixed"}},
+		{Address: "https://223.6.6.6:443/dns-query", Protocol: ProtoHTTP3, ServerName: "dns.alidns.com", Match: []string{"!mixed"}},
 	}
 
 	cfg.Fallback = []UpstreamServer{

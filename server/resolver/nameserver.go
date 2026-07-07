@@ -7,11 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
-	"golang.org/x/sync/errgroup"
-
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/dnsutil"
@@ -19,6 +14,10 @@ import (
 	"zjdns/internal/pool"
 	"zjdns/server/probe"
 	"zjdns/server/security"
+
+	"codeberg.org/miekg/dns"
+	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"golang.org/x/sync/errgroup"
 )
 
 func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *security.Detector) (*dns.Msg, security.Verdict, error) {
@@ -249,19 +248,19 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				defer dnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
 				aQuestion := Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}
-				ans, _, extra, _, _, _, _, err := r.resolve(queryCtx, aQuestion, nil, depth+1, forceTCP)
-				if err != nil {
+				qr := r.resolve(queryCtx, aQuestion, nil, depth+1, forceTCP)
+				if qr.Err != nil {
 					return
 				}
 				addrMu.Lock()
-				ansARecords = ans
-				for _, rrec := range ans {
+				ansARecords = qr.Answer
+				for _, rrec := range qr.Answer {
 					if a, ok := rrec.(*dns.A); ok {
 						nsAddrs = append(nsAddrs, dnsutil.JoinDNSPort(a.A.String()))
 					}
 				}
 				// Also collect AAAA glue from the Additional section
-				for _, rrec := range extra {
+				for _, rrec := range qr.Additional {
 					if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsName) {
 						nsAddrs = append(nsAddrs, dnsutil.JoinDNSPort(aaaa.AAAA.String()))
 					}
@@ -273,13 +272,13 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				defer dnsutil.HandlePanic("Resolve NS AAAA")
 				defer wg.Done()
 				aaaaQuestion := Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-				ans, _, _, _, _, _, _, err := r.resolve(queryCtx, aaaaQuestion, nil, depth+1, forceTCP)
-				if err != nil {
+				qr := r.resolve(queryCtx, aaaaQuestion, nil, depth+1, forceTCP)
+				if qr.Err != nil {
 					return
 				}
 				addrMu.Lock()
-				ansAAAARecords = ans
-				for _, rrec := range ans {
+				ansAAAARecords = qr.Answer
+				for _, rrec := range qr.Answer {
 					if aaaa, ok := rrec.(*dns.AAAA); ok {
 						nsAddrs = append(nsAddrs, dnsutil.JoinDNSPort(aaaa.AAAA.String()))
 					}
@@ -360,10 +359,10 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 // trailing dot on either string. Uses sub-slicing (no allocation) instead of
 // strings.TrimSuffix (which allocates when the suffix is present).
 func isEqualFoldTrimDot(a, b string) bool {
-	if len(a) > 0 && a[len(a)-1] == '.' {
+	if a != "" && a[len(a)-1] == '.' {
 		a = a[:len(a)-1]
 	}
-	if len(b) > 0 && b[len(b)-1] == '.' {
+	if b != "" && b[len(b)-1] == '.' {
 		b = b[:len(b)-1]
 	}
 	return strings.EqualFold(a, b)

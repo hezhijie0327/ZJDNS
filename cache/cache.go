@@ -2,10 +2,10 @@
 package cache
 
 import (
-	"codeberg.org/miekg/dns"
-
 	"zjdns/config"
 	"zjdns/internal/ttl"
+
+	"codeberg.org/miekg/dns"
 )
 
 // RequestRecord captures per-request metadata for the request_log table.
@@ -32,7 +32,7 @@ type Store interface {
 	Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool)
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 		answer, authority, additional []dns.RR, validated bool)
-	RecordRequest(r RequestRecord)
+	RecordRequest(r *RequestRecord)
 	UpdateLatency(ip string, latencyMS int)
 	GetLatencyLastProbe(ip string) (int64, bool)
 	ReverseLookup(ip string) []LookupResult
@@ -87,7 +87,7 @@ func (e *Entry) ShouldPrefetch(thresholdPercent int) bool {
 
 // processRR applies DNSSEC filtering, copies, and adjusts TTL on a single
 // resource record. Returns nil if the record should be excluded.
-func processRR(rr dns.RR, value int64, isElapsed bool, includeDNSSEC bool) dns.RR {
+func processRR(rr dns.RR, value int64, isElapsed, includeDNSSEC bool) dns.RR {
 	if rr == nil {
 		return nil
 	}
@@ -113,14 +113,14 @@ func processRR(rr dns.RR, value int64, isElapsed bool, includeDNSSEC bool) dns.R
 		}
 		newRR.Header().TTL = uint32(remaining)
 	} else if value > 0 {
-		newRR.Header().TTL = uint32(value)
+		newRR.Header().TTL = uint32(value) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 	}
 	return newRR
 }
 
 // ProcessRecords adjusts TTLs on resource records and optionally filters
 // DNSSEC record types.
-func ProcessRecords(rrs []dns.RR, value int64, isElapsed bool, includeDNSSEC bool) []dns.RR {
+func ProcessRecords(rrs []dns.RR, value int64, isElapsed, includeDNSSEC bool) []dns.RR {
 	if len(rrs) == 0 {
 		return nil
 	}

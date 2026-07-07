@@ -6,13 +6,12 @@ import (
 	"io"
 	"net"
 	"time"
-
 	"zjdns/internal/log"
 )
 
 // DialContext connects to targetAddr through the SOCKS5 proxy via TCP CONNECT.
 // The returned net.Conn is a raw TCP connection forwarded through the proxy.
-func (d *SOCKS5Dialer) DialContext(ctx context.Context, network string, targetAddr string) (net.Conn, error) {
+func (d *SOCKS5Dialer) DialContext(ctx context.Context, network, targetAddr string) (net.Conn, error) {
 	if network != "tcp" {
 		return nil, fmt.Errorf("socks5: unsupported network %q (only tcp)", network)
 	}

@@ -2,6 +2,7 @@ package tls
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	stdlog "log"
@@ -9,17 +10,16 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"codeberg.org/miekg/dns"
-	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/http3"
-	cryptotls "gitlab.com/go-extension/tls"
-	"golang.org/x/net/http2"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+
+	"codeberg.org/miekg/dns"
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
+	eTLS "gitlab.com/go-extension/tls"
+	"golang.org/x/net/http2"
 )
 
 // http2LogWriter routes http2.Server errors to ZJDNS's internal/log,
@@ -62,7 +62,7 @@ func (s *Server) startDOHServer(port string) error {
 		tlsConfig.NextProtos = config.NextProtoDOH
 		tlsConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOH)
 
-		httpsListener := cryptotls.NewListener(rawListener, tlsConfig)
+		httpsListener := eTLS.NewListener(rawListener, tlsConfig)
 		s.httpsListeners = append(s.httpsListeners, httpsListener)
 		log.Infof("TLS: DoH server started on %s", addr)
 
@@ -163,7 +163,7 @@ func (s *Server) startDOH3Server(port string) error {
 
 				s.serverGroup.Go(func() error {
 					defer dnsutil.HandlePanic("DoH3 connection handler")
-					if err := s.h3Server.ServeQUICConn(conn); err != nil && err != http.ErrServerClosed {
+					if err := s.h3Server.ServeQUICConn(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 						log.Debugf("TLS: DoH3 connection error: %v", err)
 					}
 					return nil
@@ -222,7 +222,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (*dns.Msg, int) {
+func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (msg *dns.Msg, statusCode int) {
 	var buf []byte
 	var err error
 
@@ -281,6 +281,9 @@ func (s *Server) respondDOH(w http.ResponseWriter, response *dns.Msg) error {
 
 	w.Header().Set("Content-Type", config.DOHContentType)
 	w.Header().Set("Cache-Control", "max-age=0")
-	_, err = w.Write(bytes)
+	n, err := w.Write(bytes) //nolint:gosec // G705: DNS wire format, not user-facing HTML
+	if n != len(bytes) {
+		return fmt.Errorf("short write: %d/%d bytes", n, len(bytes))
+	}
 	return err
 }

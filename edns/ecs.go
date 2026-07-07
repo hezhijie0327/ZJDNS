@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
-
-	"zjdns/config"
 )
 
 // ECS prefix length constants.
@@ -99,7 +98,7 @@ func (h *Handler) ShouldRefreshDefaultECS() bool {
 
 // RefreshDefaultECS re-evaluates auto-detected ECS values and updates them if
 // they changed.
-func (h *Handler) RefreshDefaultECS() ([]*ECSOption, bool, error) {
+func (h *Handler) RefreshDefaultECS() (options []*ECSOption, updated bool, err error) {
 	if h == nil {
 		return nil, false, errors.New("EDNS handler is not initialized")
 	}
@@ -130,7 +129,7 @@ func (h *Handler) RefreshDefaultECS() ([]*ECSOption, bool, error) {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("refresh IPv6 ECS: %w", err)
 			} else {
-				firstErr = fmt.Errorf("%v; refresh IPv6 ECS: %w", firstErr, err)
+				firstErr = fmt.Errorf("%w; refresh IPv6 ECS: %w", firstErr, err)
 			}
 		} else if ecs != nil {
 			old := h.defaultECSIPv6.Load()
@@ -156,7 +155,7 @@ func isECSOptionEqual(a, b *ECSOption) bool {
 func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, error) {
 	subnet = strings.ToLower(strings.TrimSpace(subnet))
 	if subnet == config.ECSModeAuto {
-		return h.detectVia(forceIPv6, false)
+		return h.detectVia(forceIPv6, false), nil
 	}
 	if _, ipNet, err := net.ParseCIDR(subnet); err == nil {
 		prefix, _ := ipNet.Mask.Size()
@@ -170,7 +169,7 @@ func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 		if !forceIPv6 && family == ianaAFINET6 {
 			return nil, fmt.Errorf("expected IPv4 ECS value, got IPv6: %s", subnet)
 		}
-		ecs := &ECSOption{Family: family, SourcePrefix: uint8(prefix), ScopePrefix: DefaultECSScope, Address: ipNet.IP}
+		ecs := &ECSOption{Family: family, SourcePrefix: uint8(prefix), ScopePrefix: DefaultECSScope, Address: ipNet.IP} //nolint:gosec // G115: CIDR prefix — 0-128 fits uint8
 		ecs.Normalize()
 		return ecs, nil
 	}
@@ -195,7 +194,7 @@ func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 	return ecs, nil
 }
 
-func (h *Handler) detectVia(forceIPv6, allowFallback bool) (*ECSOption, error) {
+func (h *Handler) detectVia(forceIPv6, allowFallback bool) *ECSOption {
 	var ip net.IP
 	if forceIPv6 {
 		ip = h.detector.IPv6()
@@ -206,7 +205,7 @@ func (h *Handler) detectVia(forceIPv6, allowFallback bool) (*ECSOption, error) {
 		ip = h.detector.IPv6()
 	}
 	if ip == nil {
-		return nil, nil
+		return nil
 	}
 	family := ianaAFINET
 	prefix := uint8(DefaultECSv4Len)
@@ -216,5 +215,5 @@ func (h *Handler) detectVia(forceIPv6, allowFallback bool) (*ECSOption, error) {
 	}
 	ecs := &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}
 	ecs.Normalize()
-	return ecs, nil
+	return ecs
 }

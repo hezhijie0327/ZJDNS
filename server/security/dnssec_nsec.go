@@ -1,16 +1,15 @@
 package security
 
 import (
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // G505: SHA1 for NSEC3 per RFC 5155
 	"encoding/base32"
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
-
-	"zjdns/config"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // verifyNSEC checks whether any NSEC record in the slice cryptographically
@@ -154,17 +153,17 @@ func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) s
 		}
 	}
 	// Normalize: lowercase, fully qualified, wire-format label encoding.
-	name = strings.ToLower(dnsutilv2.Fqdn(name))
+	name = strings.ToLower(dnsutil.Fqdn(name))
 	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
 	var wire []byte
 	for _, label := range labels {
-		wire = append(wire, byte(len(label)))
+		wire = append(wire, byte(len(label))) //nolint:gosec // G115: NSEC3 hash iteration — protocol-bounded byte
 		wire = append(wire, label...)
 	}
 	wire = append(wire, 0) // root label
 
 	// Build initial input: salt || wire_format_name.
-	h := sha1.New()
+	h := sha1.New() //nolint:gosec // G401: SHA1 for NSEC3 per RFC 5155
 	h.Write(saltBytes)
 	h.Write(wire)
 	hash := h.Sum(nil)

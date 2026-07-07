@@ -1,6 +1,7 @@
 package dnsutil
 
 import (
+	"errors"
 	"net"
 	"os"
 	"syscall"
@@ -19,7 +20,7 @@ func TestTryBind_Success(t *testing.T) {
 }
 
 func TestTryBind_AddrInUse(t *testing.T) {
-	l, err := net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", ":0") //nolint:gosec // G102: test binds all interfaces
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +144,7 @@ func TestTryBind_RandomPort(t *testing.T) {
 
 func findFreePort(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", ":0") //nolint:gosec // G102: test binds all interfaces
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,12 +157,11 @@ func findFreePort(t *testing.T) string {
 }
 
 func isAddrInUse(err error) bool {
-	if err == nil {
-		return false
-	}
-	if oe, ok := err.(*net.OpError); ok {
-		if se, ok := oe.Err.(*os.SyscallError); ok {
-			return se.Err == syscall.EADDRINUSE
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		var syscallErr *os.SyscallError
+		if errors.As(opErr.Err, &syscallErr) {
+			return errors.Is(syscallErr.Err, syscall.EADDRINUSE)
 		}
 	}
 	return false

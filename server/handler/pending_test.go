@@ -6,12 +6,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"codeberg.org/miekg/dns"
-
 	"zjdns/edns"
 	"zjdns/internal/pending"
 	"zjdns/server/resolver"
+
+	"codeberg.org/miekg/dns"
 )
 
 func TestPendingRequests_LeaderAndFollower(t *testing.T) {
@@ -246,6 +245,7 @@ func TestPendingRequests_NilECSAndZeroECSAreSameKey(t *testing.T) {
 	pr.Done("example.com.", dns.TypeA, qclass, nilECS, false, &resolver.QueryResult{Server: "done"})
 	wg.Wait()
 }
+
 func TestPendingRefreshes_LeaderAndFollower(t *testing.T) {
 	pr := pending.NewGroup[pendingKey]()
 

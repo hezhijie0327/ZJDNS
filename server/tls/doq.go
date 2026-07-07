@@ -8,15 +8,14 @@ import (
 	"io"
 	"net"
 	"time"
-
-	"codeberg.org/miekg/dns"
-	"github.com/quic-go/quic-go"
-	"golang.org/x/sync/errgroup"
-
 	"zjdns/config"
 	"zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+
+	"codeberg.org/miekg/dns"
+	"github.com/quic-go/quic-go"
+	"golang.org/x/sync/errgroup"
 )
 
 func (s *Server) startDOQServer() error {
@@ -227,7 +226,7 @@ func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 		writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(respBuf))
 	}
 
-	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(respBuf)))
+	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
 	copy(writeBuf[dnsutil.DNSFramePrefixLen:], respBuf)
 
 	n, err := stream.Write(writeBuf[:dnsutil.DNSFramePrefixLen+len(respBuf)])

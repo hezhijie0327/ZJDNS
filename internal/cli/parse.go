@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-
 	"zjdns/config"
 )
 
@@ -66,7 +65,9 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 			fmt.Fprintf(os.Stderr, "Usage: %s -analyze <db> <query>\n", fs.Name())
 			return "", true
 		}
-		RunAnalyze(args[0], args[1])
+		if err := RunAnalyze(args[0], args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "analyze: %v\n", err)
+		}
 		return "", true
 	}
 

@@ -4,7 +4,6 @@ package dnsutil
 import (
 	"fmt"
 	"net"
-
 	"zjdns/internal/log"
 )
 

@@ -11,25 +11,22 @@ import (
 
 // RunAnalyze opens a SQLite cache database and runs a SQL query, printing
 // results as an aligned columnar table (like sqlite3 -column -header).
-func RunAnalyze(dbPath, query string) {
+func RunAnalyze(dbPath, query string) error {
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "open database: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer func() { _ = db.Close() }()
 
 	rows, err := db.Query(query)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "query error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("query error: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	cols, err := rows.Columns()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "columns error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("columns error: %w", err)
 	}
 
 	// Collect all rows as strings, tracking max width per column.
@@ -59,8 +56,7 @@ func RunAnalyze(dbPath, query string) {
 		allRows = append(allRows, strs)
 	}
 	if err := rows.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "rows error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("rows error: %w", err)
 	}
 
 	// Print header
@@ -77,6 +73,7 @@ func RunAnalyze(dbPath, query string) {
 	}
 
 	fmt.Fprintf(os.Stderr, "%d row(s)\n", len(allRows))
+	return nil
 }
 
 func valStr(v any) string {

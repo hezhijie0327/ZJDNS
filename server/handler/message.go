@@ -3,17 +3,16 @@ package handler
 import (
 	"net"
 	"strings"
-
-	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
-
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
-func (h *Handler) addEDNS(msg *dns.Msg, req *dns.Msg, isSecureConnection bool, clientIP net.IP, cookieOpt *edns.CookieOption, ede *edns.EDEOption, tcpKeepaliveTimeout uint16) {
+func (h *Handler) addEDNS(msg, req *dns.Msg, isSecureConnection bool, clientIP net.IP, cookieOpt *edns.CookieOption, ede *edns.EDEOption, tcpKeepaliveTimeout uint16) {
 	if msg == nil || req == nil {
 		return
 	}
@@ -73,7 +72,7 @@ func (h *Handler) buildResponse(req *dns.Msg) *dns.Msg {
 	msg := pool.DefaultMessagePool.Get()
 
 	if req != nil && len(req.Question) > 0 {
-		dnsutilv2.SetReply(msg, req)
+		dnsutil.SetReply(msg, req)
 	} else if req != nil {
 		msg.Response = true
 		msg.Rcode = dns.RcodeFormatError
