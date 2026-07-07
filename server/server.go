@@ -48,6 +48,7 @@ type Server struct {
 	udpServers      []*dns.Server // per-address listeners
 	tcpServers      []*dns.Server // per-address listeners
 	tcpWriteMu      sync.Map
+	tcpSem          chan struct{} // bounds concurrent TCP query goroutines
 }
 
 // New creates and initializes a Server from the given configuration.
@@ -63,6 +64,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		shutdown:        make(chan struct{}),
 		backgroundGroup: backgroundGroup,
 		backgroundCtx:   backgroundCtx,
+		tcpSem:          make(chan struct{}, config.DefaultServerGoroutineLimit),
 	}
 
 	// ── Foundation: database ──────────────────────────────────────────────

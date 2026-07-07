@@ -5,6 +5,7 @@ import (
 	"net"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 	eTLS "gitlab.com/go-extension/tls"
@@ -71,11 +72,13 @@ func (c *Client) exchangeOverTLS(ctx context.Context, msg *dns.Msg, addr string,
 	if _, err := msg.WriteTo(tlsConn); err != nil {
 		return nil, err
 	}
-	response := new(dns.Msg)
+	response := pool.DefaultMessagePool.Get()
 	if _, err := response.ReadFrom(tlsConn); err != nil {
+		pool.DefaultMessagePool.Put(response)
 		return nil, err
 	}
 	if err := response.Unpack(); err != nil {
+		pool.DefaultMessagePool.Put(response)
 		return nil, err
 	}
 	return response, nil

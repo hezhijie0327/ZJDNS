@@ -5,6 +5,7 @@ import (
 	"net"
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 )
@@ -65,11 +66,13 @@ func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string
 	if _, err := msg.WriteTo(conn); err != nil {
 		return nil, err
 	}
-	response := new(dns.Msg)
+	response := pool.DefaultMessagePool.Get()
 	if _, err := response.ReadFrom(conn); err != nil {
+		pool.DefaultMessagePool.Put(response)
 		return nil, err
 	}
 	if err := response.Unpack(); err != nil {
+		pool.DefaultMessagePool.Put(response)
 		return nil, err
 	}
 	response.ID = msg.ID
@@ -115,10 +118,11 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 		return nil, readErr
 	}
 
-	response := new(dns.Msg)
+	response := pool.DefaultMessagePool.Get()
 	response.Data = (*respBuf)[:n]
 	if err := response.Unpack(); err != nil {
 		socks5ReadPool.Put(respBuf)
+		pool.DefaultMessagePool.Put(response)
 		return nil, err
 	}
 	socks5ReadPool.Put(respBuf)

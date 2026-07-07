@@ -62,6 +62,15 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		go func() {
 			defer func() { <-entry.capacity }()
 			defer zdnsutil.HandlePanic("TCP query handler")
+
+			// Global TCP goroutine bound — matches TLS errgroup.SetLimit.
+			select {
+			case s.tcpSem <- struct{}{}:
+				defer func() { <-s.tcpSem }()
+			case <-s.ctx.Done():
+				return
+			}
+
 			response := s.handler.ServeDNS(req, zdnsutil.ClientIP(w), false, "TCP")
 			if response != nil {
 				entry.lastAccess.Store(log.NowUnixNano())

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"zjdns/config"
 	"zjdns/internal/pool"
 
@@ -29,13 +30,19 @@ func executeDOHHTTPRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpCl
 		return nil, fmt.Errorf("pack: %w", err)
 	}
 
-	q := url.Values{"dns": []string{base64.RawURLEncoding.EncodeToString(buf)}}
-	requestURL := url.URL{
-		Scheme:   u.Scheme,
-		Host:     u.Host,
-		Path:     u.Path,
-		RawQuery: q.Encode(),
-	}
+	// Build the DoH GET URL manually with strings.Builder to avoid the
+	// url.Values map, url.URL struct, and Encode() allocations per query.
+	// Typical URL: https://host/path?dns=<base64>.  Pre-size for
+	// scheme://host/path?dns= plus 4/3 expansion of the wire format.
+	encLen := base64.RawURLEncoding.EncodedLen(len(buf))
+	var urlBuf strings.Builder
+	urlBuf.Grow(len(u.Scheme) + 3 + len(u.Host) + len(u.Path) + 5 + encLen)
+	urlBuf.WriteString(u.Scheme)
+	urlBuf.WriteString("://")
+	urlBuf.WriteString(u.Host)
+	urlBuf.WriteString(u.Path)
+	urlBuf.WriteString("?dns=")
+	urlBuf.WriteString(base64.RawURLEncoding.EncodeToString(buf))
 
 	// Use http3.MethodGet0RTT for HTTP/3 transports so the request is sent as
 	// 0-RTT early data, skipping a round-trip on reconnections.
@@ -43,7 +50,7 @@ func executeDOHHTTPRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpCl
 	if _, ok := httpClient.Transport.(*http3Transport); ok {
 		method = http3.MethodGet0RTT
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, method, requestURL.String(), http.NoBody)
+	httpReq, err := http.NewRequestWithContext(ctx, method, urlBuf.String(), http.NoBody)
 	if err != nil {
 		msg.ID = originalID
 		return nil, fmt.Errorf("create request: %w", err)
