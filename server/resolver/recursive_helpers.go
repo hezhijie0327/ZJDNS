@@ -6,7 +6,7 @@ import (
 	"strings"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
@@ -24,7 +24,7 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 
 	for _, rrec := range allRRSections {
 		if ns, ok := rrec.(*dns.NS); ok {
-			nsName := dnsutil.NormalizeDomain(rrec.Header().Name)
+			nsName := zdnsutil.NormalizeDomain(rrec.Header().Name)
 			isMatch := normalizedQname == nsName ||
 				(nsName != "" && strings.HasSuffix(normalizedQname, "."+nsName))
 			if isMatch && len(nsName) >= len(bestMatch) {
@@ -76,7 +76,7 @@ func (r *Recursive) applyQnameMinimisation(question Question, qname, currentDoma
 // to the same zone but the response is not authoritative (AA flag not set).
 // Returns a terminal result for the caller to return, or nil if not lame.
 func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMatch string, validated bool, ecsResponse *edns.ECSOption) *QueryResult {
-	currentDomainNormalized := dnsutil.NormalizeDomain(currentDomain)
+	currentDomainNormalized := zdnsutil.NormalizeDomain(currentDomain)
 	if bestMatch != currentDomainNormalized || currentDomainNormalized == "" {
 		return nil
 	}
@@ -123,7 +123,7 @@ func (r *Recursive) shouldRetryMinimisedQname(queryName, qname string, qnameMini
 		return false
 	}
 	for _, rr := range response.Answer {
-		if rr != nil && strings.EqualFold(dnsutil.NormalizeDomain(rr.Header().Name), normalizedQname) {
+		if rr != nil && strings.EqualFold(zdnsutil.NormalizeDomain(rr.Header().Name), normalizedQname) {
 			return false
 		}
 	}

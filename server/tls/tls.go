@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -316,7 +316,7 @@ func (s *Server) getConfigForClient(nextProtos []string) func(*eTLS.ClientHelloI
 		cfg := s.baseTLSConfig.Clone()
 		cfg.NextProtos = nextProtos
 		cfg.VerifyConnection = func(cs eTLS.ConnectionState) error {
-			dnsutil.LogTLSConnectionState("TLS", "handshake from", remoteAddr, cs.Version, cs.CipherSuite, cs.CurveID)
+			zdnsutil.LogTLSConnectionState("TLS", "handshake from", remoteAddr, cs.Version, cs.CipherSuite, cs.CurveID)
 			return nil
 		}
 		return cfg, nil
@@ -359,7 +359,7 @@ func (s *Server) Start(httpsPort string) error {
 
 	if httpsPort != "" {
 		g.Go(func() error {
-			defer dnsutil.HandlePanic("DoH server")
+			defer zdnsutil.HandlePanic("DoH server")
 			if err := s.startDOHServer(httpsPort); err != nil {
 				return fmt.Errorf("DoH startup: %w", err)
 			}
@@ -368,7 +368,7 @@ func (s *Server) Start(httpsPort string) error {
 		})
 
 		g.Go(func() error {
-			defer dnsutil.HandlePanic("DoH3 server")
+			defer zdnsutil.HandlePanic("DoH3 server")
 			if err := s.startDOH3Server(httpsPort); err != nil {
 				return fmt.Errorf("DoH3 startup: %w", err)
 			}
@@ -378,7 +378,7 @@ func (s *Server) Start(httpsPort string) error {
 	}
 
 	g.Go(func() error {
-		defer dnsutil.HandlePanic("DoT server")
+		defer zdnsutil.HandlePanic("DoT server")
 		if err := s.startDOTServer(); err != nil {
 			return fmt.Errorf("DoT startup: %w", err)
 		}
@@ -387,7 +387,7 @@ func (s *Server) Start(httpsPort string) error {
 	})
 
 	g.Go(func() error {
-		defer dnsutil.HandlePanic("DoQ server")
+		defer zdnsutil.HandlePanic("DoQ server")
 		if err := s.startDOQServer(); err != nil {
 			return fmt.Errorf("DoQ startup: %w", err)
 		}
@@ -396,7 +396,7 @@ func (s *Server) Start(httpsPort string) error {
 	})
 
 	go func() {
-		defer dnsutil.HandlePanic("TLS server coordinator")
+		defer zdnsutil.HandlePanic("TLS server coordinator")
 		if err := g.Wait(); err != nil {
 			select {
 			case errChan <- err:
@@ -427,17 +427,17 @@ func (s *Server) Shutdown() error {
 
 	for _, l := range s.dotListeners {
 		if l != nil {
-			dnsutil.CloseWithLog(l, "DoT listener", "TLS")
+			zdnsutil.CloseWithLog(l, "DoT listener", "TLS")
 		}
 	}
 	for _, l := range s.doqListeners {
 		if l != nil {
-			dnsutil.CloseWithLog(l, "DoQ listener", "TLS")
+			zdnsutil.CloseWithLog(l, "DoQ listener", "TLS")
 		}
 	}
 	for _, c := range s.doqConns {
 		if c != nil {
-			dnsutil.CloseWithLog(c, "DoQ socket", "TLS")
+			zdnsutil.CloseWithLog(c, "DoQ socket", "TLS")
 		}
 	}
 	if s.doqValidator != nil {
@@ -450,12 +450,12 @@ func (s *Server) Shutdown() error {
 	}
 	for _, l := range s.httpsListeners {
 		if l != nil {
-			dnsutil.CloseWithLog(l, "HTTPS listener", "TLS")
+			zdnsutil.CloseWithLog(l, "HTTPS listener", "TLS")
 		}
 	}
 	for _, l := range s.h3Listeners {
 		if l != nil {
-			dnsutil.CloseWithLog(l, "HTTP/3 listener", "TLS")
+			zdnsutil.CloseWithLog(l, "HTTP/3 listener", "TLS")
 		}
 	}
 	for _, t := range s.h3Transports {
@@ -465,7 +465,7 @@ func (s *Server) Shutdown() error {
 	}
 	for _, c := range s.h3Conns {
 		if c != nil {
-			dnsutil.CloseWithLog(c, "DoH3 socket", "TLS")
+			zdnsutil.CloseWithLog(c, "DoH3 socket", "TLS")
 		}
 	}
 	if s.h3Validator != nil {

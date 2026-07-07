@@ -9,14 +9,14 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/probe"
 	"zjdns/server/security"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // rootHints maps root server names to their addresses. Used as bootstrap
@@ -70,11 +70,11 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	// successful validation in the next hop, causing false "bogus" verdicts.
 	r.lastDNSSECEDECode.Store(0)
 
-	qname := dnsutilv2.Fqdn(question.Name)
+	qname := dnsutil.Fqdn(question.Name)
 	question.Name = qname
 	nameservers := r.getRootServers()
 	currentDomain := "."
-	normalizedQname := dnsutil.NormalizeDomain(qname)
+	normalizedQname := zdnsutil.NormalizeDomain(qname)
 
 	// hijackSeen is set to true when any VerdictHijack is observed at any
 	// delegation level, including through internal TCP restarts.  The CNAME
@@ -217,7 +217,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		var nextNSSource string // "cache" or "glue" or "resolution"
 		if r.cache != nil {
 			for _, ns := range bestNSRecords {
-				nsName := dnsutilv2.Fqdn(ns.Ns)
+				nsName := dnsutil.Fqdn(ns.Ns)
 				cached := r.lookupNSAddrsFromCache(nsName, nil)
 				if len(cached) > 0 {
 					nextNS = append(nextNS, cached...)
@@ -246,23 +246,23 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 					case *dns.A:
 						if strings.EqualFold(a.Header().Name, ns.Ns) {
 							// Validate glue name is within the parent zone
-							glueName := dnsutil.NormalizeDomain(a.Header().Name)
-							parDom := dnsutil.NormalizeDomain(parentDomain)
+							glueName := zdnsutil.NormalizeDomain(a.Header().Name)
+							parDom := zdnsutil.NormalizeDomain(parentDomain)
 							if glueName != parDom && !strings.HasSuffix(glueName, "."+parDom) && parDom != "" {
 								continue
 							}
-							nsKey := dnsutilv2.Fqdn(a.Header().Name)
+							nsKey := dnsutil.Fqdn(a.Header().Name)
 							nsGlue[nsKey] = append(nsGlue[nsKey], a)
 							nextNS = append(nextNS, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
 						}
 					case *dns.AAAA:
 						if strings.EqualFold(a.Header().Name, ns.Ns) {
-							glueName := dnsutil.NormalizeDomain(a.Header().Name)
-							parDom := dnsutil.NormalizeDomain(parentDomain)
+							glueName := zdnsutil.NormalizeDomain(a.Header().Name)
+							parDom := zdnsutil.NormalizeDomain(parentDomain)
 							if glueName != parDom && !strings.HasSuffix(glueName, "."+parDom) && parDom != "" {
 								continue
 							}
-							nsKey := dnsutilv2.Fqdn(a.Header().Name)
+							nsKey := dnsutil.Fqdn(a.Header().Name)
 							nsGlue[nsKey] = append(nsGlue[nsKey], a)
 							nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), config.DefaultDNSPort))
 						}
@@ -335,7 +335,7 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 
 	msg := pool.DefaultMessagePool.Get()
 	defer pool.DefaultMessagePool.Put(msg)
-	dnsutilv2.SetQuestion(msg, dnsutilv2.Fqdn(qname), dns.TypeA)
+	dnsutil.SetQuestion(msg, dnsutil.Fqdn(qname), dns.TypeA)
 	msg.RecursionDesired = false
 	msg.UDPSize = pool.RecursiveUDPBufferSize
 
@@ -389,7 +389,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		default:
 		}
 
-		currentName := dnsutil.NormalizeDomain(currentQuestion.Name)
+		currentName := zdnsutil.NormalizeDomain(currentQuestion.Name)
 		if visitedCNAMEs[currentName] {
 			log.Warnf("RECURSION: CNAME loop detected for %s", currentName)
 			return QueryResult{Err: fmt.Errorf("CNAME loop detected: %s", currentName)}
@@ -450,7 +450,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	}
 
 	if cnameDepth >= config.DefaultMaxCNAMEChain-1 {
-		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.NormalizeDomain(question.Name))
+		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, zdnsutil.NormalizeDomain(question.Name))
 	}
 	return QueryResult{Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Hijack: hijackOccurred}
 }

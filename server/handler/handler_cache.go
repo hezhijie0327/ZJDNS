@@ -9,7 +9,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
 	"zjdns/server/resolver"
@@ -23,7 +23,7 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 	if isExpired && !h.IsClosed() && h.tryStartRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt) {
 		h.cacheRefreshGroup.Go(func() error {
 			defer h.finishRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
-			defer dnsutil.HandlePanic("cache refresh")
+			defer zdnsutil.HandlePanic("cache refresh")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
 			return h.refreshCacheEntry(ctx, question, ecsOpt)
@@ -33,7 +33,7 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 	if !isExpired && !h.IsClosed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) && h.shouldStartPrefetch(question.Name) && h.tryStartRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt) {
 		h.cacheRefreshGroup.Go(func() error {
 			defer h.finishRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
-			defer dnsutil.HandlePanic("cache prefetch")
+			defer zdnsutil.HandlePanic("cache prefetch")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
 			log.Debugf("CACHE: prefetch triggered for %s (threshold=%d%%)", question.Name, config.DefaultPrefetchThresholdPercent)
@@ -108,7 +108,7 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 		if h.tryStartRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt) {
 			h.cacheRefreshGroup.Go(func() error {
 				defer h.finishRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
-				defer dnsutil.HandlePanic("expired cache refresh")
+				defer zdnsutil.HandlePanic("expired cache refresh")
 				ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 				defer cancel()
 				return h.refreshCacheEntry(ctx, question, ecsOpt)
@@ -128,7 +128,7 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 	go func() {
 		defer close(done)
 		defer h.finishRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
-		defer dnsutil.HandlePanic("expired cache fallback query")
+		defer zdnsutil.HandlePanic("expired cache fallback query")
 		qr := h.resolver.Query(h.ctx, question, ecsOpt)
 		res = queryResult{
 			answer:     qr.Answer,
@@ -329,7 +329,7 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 }
 
 func (h *Handler) refreshCacheEntry(ctx context.Context, question Question, ecs *edns.ECSOption) error {
-	defer dnsutil.HandlePanic("cache refresh")
+	defer zdnsutil.HandlePanic("cache refresh")
 
 	if atomic.LoadInt32(&h.closed) != 0 {
 		return errors.New("server closed")

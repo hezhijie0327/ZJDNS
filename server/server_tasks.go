@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
 
@@ -26,7 +26,7 @@ func (s *Server) startBackgroundTasks() {
 // recovered and logged with the given name. Returns via backgroundCtx cancellation.
 func (s *Server) runBackgroundTicker(name string, interval time.Duration, fn func()) {
 	s.backgroundGroup.Go(func() error {
-		defer dnsutil.HandlePanic(name)
+		defer zdnsutil.HandlePanic(name)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -76,7 +76,7 @@ func (s *Server) startECSRefresh() {
 		return
 	}
 	s.backgroundGroup.Go(func() error {
-		defer dnsutil.HandlePanic("EDNS default ECS refresh")
+		defer zdnsutil.HandlePanic("EDNS default ECS refresh")
 		s.refreshECSOnce()
 		ticker := time.NewTicker(config.DefaultECSRefreshInterval)
 		defer ticker.Stop()
@@ -125,7 +125,7 @@ func (s *Server) setupSignalHandling() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		defer dnsutil.HandlePanic("Signal handler")
+		defer zdnsutil.HandlePanic("Signal handler")
 		defer signal.Stop(sigChan)
 		select {
 		case sig := <-sigChan:
@@ -189,7 +189,7 @@ func (s *Server) shutdownServer() {
 	// connections to complete.
 	bgDone := make(chan error, 1)
 	go func() {
-		defer dnsutil.HandlePanic("Background group wait")
+		defer zdnsutil.HandlePanic("Background group wait")
 		bgDone <- s.backgroundGroup.Wait()
 	}()
 
@@ -207,7 +207,7 @@ func (s *Server) shutdownServer() {
 
 	refreshDone := make(chan error, 1)
 	go func() {
-		defer dnsutil.HandlePanic("Cache refresh group wait")
+		defer zdnsutil.HandlePanic("Cache refresh group wait")
 		refreshDone <- s.handler.CacheRefreshGroup().Wait()
 	}()
 
@@ -236,7 +236,7 @@ func (s *Server) shutdownServer() {
 	}
 
 	if cacheStore := s.handler.CacheStore(); cacheStore != nil {
-		dnsutil.CloseWithLog(cacheStore, "Cache store", "SERVER")
+		zdnsutil.CloseWithLog(cacheStore, "Cache store", "SERVER")
 	}
 
 	log.DefaultTimeCache.Stop()

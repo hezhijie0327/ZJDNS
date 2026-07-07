@@ -9,7 +9,7 @@ import (
 	"net"
 	"time"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
@@ -19,7 +19,7 @@ import (
 )
 
 func (s *Server) startDOQServer() error {
-	addrs, err := dnsutil.ResolveBindAddrs("udp", s.cfg.Port)
+	addrs, err := zdnsutil.ResolveBindAddrs("udp", s.cfg.Port)
 	if err != nil {
 		return fmt.Errorf("DoQ address resolution: %w", err)
 	}
@@ -67,7 +67,7 @@ func (s *Server) startDOQServer() error {
 
 		capturedDoQ := listener
 		s.serverGroup.Go(func() error {
-			defer dnsutil.HandlePanic("DoQ server")
+			defer zdnsutil.HandlePanic("DoQ server")
 			s.handleDOQConnections(capturedDoQ)
 			return nil
 		})
@@ -99,7 +99,7 @@ func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
 		}
 
 		s.serverGroup.Go(func() error {
-			defer dnsutil.HandlePanic("DoQ connection handler")
+			defer zdnsutil.HandlePanic("DoQ connection handler")
 			s.handleDOQConnection(conn)
 			return nil
 		})
@@ -151,7 +151,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 		}
 
 		streamGroup.Go(func() error {
-			defer dnsutil.HandlePanic("DoQ stream handler")
+			defer zdnsutil.HandlePanic("DoQ stream handler")
 			defer func() { _ = stream.Close() }()
 			s.handleDOQStream(stream, conn)
 			return nil
@@ -160,24 +160,24 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 }
 
 func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
-	defer dnsutil.HandlePanic("DoQ stream handler")
+	defer zdnsutil.HandlePanic("DoQ stream handler")
 	buf := pool.DefaultBufferPool.Get()
 	defer pool.DefaultBufferPool.Put(buf)
 
-	_, err := io.ReadFull(stream, buf[:dnsutil.DNSFramePrefixLen])
+	_, err := io.ReadFull(stream, buf[:zdnsutil.DNSFramePrefixLen])
 	if err != nil {
 		return
 	}
 
-	msgLen := binary.BigEndian.Uint16(buf[:dnsutil.DNSFramePrefixLen])
-	if msgLen == 0 || msgLen > pool.SecureBufferSize-dnsutil.DNSFramePrefixLen {
+	msgLen := binary.BigEndian.Uint16(buf[:zdnsutil.DNSFramePrefixLen])
+	if msgLen == 0 || msgLen > pool.SecureBufferSize-zdnsutil.DNSFramePrefixLen {
 		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "invalid length")
 		return
 	}
 
 	var body []byte
-	if int(msgLen) <= len(buf)-dnsutil.DNSFramePrefixLen {
-		body = buf[dnsutil.DNSFramePrefixLen : dnsutil.DNSFramePrefixLen+msgLen]
+	if int(msgLen) <= len(buf)-zdnsutil.DNSFramePrefixLen {
+		body = buf[zdnsutil.DNSFramePrefixLen : zdnsutil.DNSFramePrefixLen+msgLen]
 	} else {
 		body = make([]byte, msgLen)
 	}
@@ -222,19 +222,19 @@ func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 	defer pool.DefaultBufferPool.Put(buf)
 
 	writeBuf := buf
-	if len(buf) < dnsutil.DNSFramePrefixLen+len(respBuf) {
-		writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(respBuf))
+	if len(buf) < zdnsutil.DNSFramePrefixLen+len(respBuf) {
+		writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+len(respBuf))
 	}
 
-	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
-	copy(writeBuf[dnsutil.DNSFramePrefixLen:], respBuf)
+	binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
+	copy(writeBuf[zdnsutil.DNSFramePrefixLen:], respBuf)
 
-	n, err := stream.Write(writeBuf[:dnsutil.DNSFramePrefixLen+len(respBuf)])
+	n, err := stream.Write(writeBuf[:zdnsutil.DNSFramePrefixLen+len(respBuf)])
 	if err != nil {
 		return fmt.Errorf("stream write: %w", err)
 	}
-	if n != len(writeBuf[:dnsutil.DNSFramePrefixLen+len(respBuf)]) {
-		return fmt.Errorf("write length mismatch: %d != %d", n, len(writeBuf[:dnsutil.DNSFramePrefixLen+len(respBuf)]))
+	if n != len(writeBuf[:zdnsutil.DNSFramePrefixLen+len(respBuf)]) {
+		return fmt.Errorf("write length mismatch: %d != %d", n, len(writeBuf[:zdnsutil.DNSFramePrefixLen+len(respBuf)]))
 	}
 
 	return nil

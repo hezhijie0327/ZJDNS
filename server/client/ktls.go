@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	eTLS "gitlab.com/go-extension/tls"
@@ -25,7 +25,7 @@ func (c *Client) eTLSClientConfig(server *config.UpstreamServer) *eTLS.Config {
 		ServerName:         server.ServerName,
 		ClientSessionCache: c.SessionCache,
 		VerifyConnection: func(cs eTLS.ConnectionState) error {
-			dnsutil.LogTLSConnectionState("UPSTREAM", "negotiated for", server.Address, cs.Version, cs.CipherSuite, cs.CurveID)
+			zdnsutil.LogTLSConnectionState("UPSTREAM", "negotiated for", server.Address, cs.Version, cs.CipherSuite, cs.CurveID)
 			return nil
 		},
 	}

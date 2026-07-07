@@ -12,7 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
@@ -193,7 +193,7 @@ func (s *SQLiteCache) migrate() error {
 
 		CREATE TABLE IF NOT EXISTS entries (
 			-- Lookup key (UNIQUE constraint below)
-			qname      TEXT NOT NULL,       -- normalized FQDN (dnsutil.NormalizeDomain)
+			qname      TEXT NOT NULL,       -- normalized FQDN (zdnsutil.NormalizeDomain)
 			qtype      INTEGER NOT NULL,    -- dns.TypeA=1, AAAA=28, DNSKEY=48, ...
 			qclass     INTEGER NOT NULL DEFAULT 1,
 			ecs_addr   TEXT NOT NULL DEFAULT '',
@@ -354,7 +354,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return nil, false, false
 	}
 
-	qname = dnsutil.NormalizeDomain(qname)
+	qname = zdnsutil.NormalizeDomain(qname)
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 
 	var id int64
@@ -427,7 +427,7 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 		switch rr.(type) {
 		case *dns.A, *dns.AAAA:
 			aCount++
-			if ip, ok := dnsutil.ExtractIPString(rr); ok {
+			if ip, ok := zdnsutil.ExtractIPString(rr); ok {
 				ips = append(ips, ip)
 			}
 		}
@@ -457,8 +457,8 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 
 	// Sort A/AAAA: probed first (fastest → slowest), unprobed last.
 	slices.SortStableFunc(aRecs, func(a, b dns.RR) int {
-		aIP, _ := dnsutil.ExtractIPString(a)
-		bIP, _ := dnsutil.ExtractIPString(b)
+		aIP, _ := zdnsutil.ExtractIPString(a)
+		bIP, _ := zdnsutil.ExtractIPString(b)
 		aLat, aOK := latencies[aIP]
 		bLat, bOK := latencies[bIP]
 		switch {
@@ -536,7 +536,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
-	qname = dnsutil.NormalizeDomain(qname)
+	qname = zdnsutil.NormalizeDomain(qname)
 	dnssecInt := boolToInt(dnssecOK)
 
 	// Pack wire format and compress.
@@ -601,7 +601,7 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 		return
 	}
 
-	r.Qname = dnsutil.NormalizeDomain(r.Qname)
+	r.Qname = zdnsutil.NormalizeDomain(r.Qname)
 	ecsAddr, ecsPrefix := ecsParams(r.ECS)
 	dnssecInt := boolToInt(r.DNSSECOK)
 
@@ -1044,7 +1044,7 @@ func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
 		if rr == nil || dns.RRToType(rr) == dns.TypeOPT {
 			continue
 		}
-		ip, ok := dnsutil.ExtractIPString(rr)
+		ip, ok := zdnsutil.ExtractIPString(rr)
 		if !ok {
 			continue
 		}

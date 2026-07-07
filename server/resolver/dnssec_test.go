@@ -9,13 +9,13 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/client"
 	"zjdns/server/security"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
 )
 
@@ -28,7 +28,7 @@ func init() {
 // genTestKey generates an ECDSA P-256 key pair + DNSKEY + private key for signing.
 func genTestKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 	dnskey := &dns.DNSKEY{
-		Hdr:    dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		Hdr:    dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
 		DNSKEY: rdata.DNSKEY{Flags: flags, Protocol: 3, Algorithm: dns.ECDSAP256SHA256},
 	}
 	priv, _ := dnskey.Generate(256)
@@ -39,19 +39,19 @@ func genTestKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uint16) *dns.RRSIG {
 	rrsig := &dns.RRSIG{
 		Hdr: dns.Header{
-			Name:  dnsutilv2.Fqdn(signer),
+			Name:  dnsutil.Fqdn(signer),
 			Class: dns.ClassINET,
 			TTL:   3600,
 		},
 		RRSIG: rdata.RRSIG{
 			TypeCovered: dns.RRToType(rrset[0]),
 			Algorithm:   dns.ECDSAP256SHA256,
-			Labels:      uint8(dnsutilv2.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — max 127 fits uint8
+			Labels:      uint8(dnsutil.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — max 127 fits uint8
 			OrigTTL:     rrset[0].Header().TTL,
 			Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 			Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 			KeyTag:      keyTag,
-			SignerName:  dnsutilv2.Fqdn(signer),
+			SignerName:  dnsutil.Fqdn(signer),
 		},
 	}
 	_ = rrsig.Sign(priv, rrset, &dns.SignOption{})
@@ -61,7 +61,7 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 // aRec creates an A record test helper.
 func aRec(name, ip string) *dns.A {
 	return &dns.A{
-		Hdr: dns.Header{Name: dnsutilv2.Fqdn(name), Class: dns.ClassINET, TTL: 300},
+		Hdr: dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
 		A:   rdata.A{Addr: netip.MustParseAddr(ip)},
 	}
 }
@@ -226,22 +226,22 @@ func TestLameDelegation_NonAuthoritativeSameZone(t *testing.T) {
 		Answer: nil,
 		Ns: []dns.RR{
 			&dns.NS{
-				Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+				Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 				NS:  rdata.NS{Ns: "dns1." + zone + "."},
 			},
 			&dns.NS{
-				Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+				Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 				NS:  rdata.NS{Ns: "dns2." + zone + "."},
 			},
 		},
 	}
 
 	if len(msg.Answer) == 0 && !msg.Authoritative {
-		currentDomain := dnsutilv2.Fqdn(zone)
-		normalizedCurrent := dnsutil.NormalizeDomain(currentDomain)
+		currentDomain := dnsutil.Fqdn(zone)
+		normalizedCurrent := zdnsutil.NormalizeDomain(currentDomain)
 		for _, rr := range msg.Ns {
 			if ns, ok := rr.(*dns.NS); ok {
-				nsName := dnsutil.NormalizeDomain(ns.Hdr.Name)
+				nsName := zdnsutil.NormalizeDomain(ns.Hdr.Name)
 				if nsName == normalizedCurrent {
 					t.Log("Correctly identified lame delegation pattern")
 					return
@@ -257,23 +257,23 @@ func TestLameDelegation_AuthoritativeNODATA(t *testing.T) {
 		Answer: nil,
 		Ns: []dns.RR{
 			&dns.NS{
-				Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+				Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 				NS:  rdata.NS{Ns: "ns1." + zone + "."},
 			},
 			&dns.NSEC{
-				Hdr:  dns.Header{Name: dnsutilv2.Fqdn("www." + zone), Class: dns.ClassINET, TTL: 300},
-				NSEC: rdata.NSEC{NextDomain: dnsutilv2.Fqdn("mail." + zone), TypeBitMap: []uint16{dns.TypeA, dns.TypeAAAA}},
+				Hdr:  dns.Header{Name: dnsutil.Fqdn("www." + zone), Class: dns.ClassINET, TTL: 300},
+				NSEC: rdata.NSEC{NextDomain: dnsutil.Fqdn("mail." + zone), TypeBitMap: []uint16{dns.TypeA, dns.TypeAAAA}},
 			},
 		},
 	}
 	msg.Authoritative = true
 
 	if len(msg.Answer) == 0 && msg.Authoritative {
-		currentDomain := dnsutilv2.Fqdn(zone)
-		normalizedCurrent := dnsutil.NormalizeDomain(currentDomain)
+		currentDomain := dnsutil.Fqdn(zone)
+		normalizedCurrent := zdnsutil.NormalizeDomain(currentDomain)
 		for _, rr := range msg.Ns {
 			if ns, ok := rr.(*dns.NS); ok {
-				nsName := dnsutil.NormalizeDomain(ns.Hdr.Name)
+				nsName := zdnsutil.NormalizeDomain(ns.Hdr.Name)
 				if nsName == normalizedCurrent {
 					t.Log("Correctly identified authoritative NODATA (not lame)")
 					return
@@ -350,7 +350,7 @@ func TestUpdateDNSSECChain_NoDSRecords(t *testing.T) {
 	msg := &dns.Msg{
 		Ns: []dns.RR{
 			&dns.NS{
-				Hdr: dns.Header{Name: dnsutilv2.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
+				Hdr: dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
 				NS:  rdata.NS{Ns: "ns1." + childZone + "."},
 			},
 		},
@@ -379,7 +379,7 @@ func TestResolveZoneCut_InvalidSigner(t *testing.T) {
 	chain := &dnssecChain{}
 
 	_, err := rr.resolveZoneCut(context.Background(), msg, nil,
-		Question{Name: dnsutilv2.Fqdn("www." + zone), Qtype: dns.TypeA},
+		Question{Name: dnsutil.Fqdn("www." + zone), Qtype: dns.TypeA},
 		zone+".", nil, false, chain)
 
 	if err == nil {
@@ -397,13 +397,13 @@ func TestNSMatching_AnswerSectionIncluded(t *testing.T) {
 	msg := &dns.Msg{
 		Answer: []dns.RR{
 			&dns.NS{
-				Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+				Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 				NS:  rdata.NS{Ns: "ns1." + zone + "."},
 			},
 		},
 		Ns: []dns.RR{
 			&dns.NS{
-				Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+				Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 				NS:  rdata.NS{Ns: "ns2." + zone + "."},
 			},
 		},
@@ -431,7 +431,7 @@ func TestDSMatching_AnswerSectionIncluded(t *testing.T) {
 	msg := &dns.Msg{
 		Answer: []dns.RR{
 			&dns.DS{
-				Hdr: dns.Header{Name: dnsutilv2.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
+				Hdr: dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
 				DS: rdata.DS{
 					KeyTag:     12345,
 					Algorithm:  dns.ECDSAP256SHA256,
@@ -489,7 +489,7 @@ func TestResolveZoneCut_NoParentKeys(t *testing.T) {
 	}
 
 	_, err := rr.resolveZoneCut(context.Background(), msg, nil,
-		Question{Name: dnsutilv2.Fqdn("www." + childZone), Qtype: dns.TypeA},
+		Question{Name: dnsutil.Fqdn("www." + childZone), Qtype: dns.TypeA},
 		parentZone+".", nil, false, chain)
 
 	if err == nil {

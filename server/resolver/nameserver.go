@@ -9,14 +9,14 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/probe"
 	"zjdns/server/security"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -43,7 +43,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	var activeConnections atomic.Int32
 	var hijackRejected atomic.Bool
-	normalizedQname := dnsutil.NormalizeDomain(question.Name)
+	normalizedQname := zdnsutil.NormalizeDomain(question.Name)
 
 	for _, ns := range nameservers {
 		nsAddr := ns
@@ -54,7 +54,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		server := &config.UpstreamServer{Address: nsAddr, Protocol: protocol, Proxy: r.resolver.recursiveProxyURL}
 
 		g.Go(func() error {
-			defer dnsutil.HandlePanic("Query nameserver")
+			defer zdnsutil.HandlePanic("Query nameserver")
 			activeConnections.Add(1)
 			defer activeConnections.Add(-1)
 
@@ -214,7 +214,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	for _, ns := range nsRecords {
 		nsRecord := ns
 		g.Go(func() error {
-			defer dnsutil.HandlePanic("Resolve NS addresses")
+			defer zdnsutil.HandlePanic("Resolve NS addresses")
 			select {
 			case <-queryCtx.Done():
 				return nil
@@ -225,7 +225,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				return nil
 			}
 
-			nsName := dnsutilv2.Fqdn(nsRecord.Ns)
+			nsName := dnsutil.Fqdn(nsRecord.Ns)
 
 			// Try cache first — records may already be latency-probed.
 			cachedAddrs := r.lookupNSAddrsFromCache(nsName, nil)
@@ -245,7 +245,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			wg.Add(2)
 
 			go func() {
-				defer dnsutil.HandlePanic("Resolve NS A")
+				defer zdnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
 				aQuestion := Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}
 				qr := r.resolve(queryCtx, aQuestion, nil, depth+1, forceTCP)
@@ -256,20 +256,20 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				ansARecords = qr.Answer
 				for _, rrec := range qr.Answer {
 					if a, ok := rrec.(*dns.A); ok {
-						nsAddrs = append(nsAddrs, dnsutil.JoinDNSPort(a.A.String()))
+						nsAddrs = append(nsAddrs, zdnsutil.JoinDNSPort(a.A.String()))
 					}
 				}
 				// Also collect AAAA glue from the Additional section
 				for _, rrec := range qr.Additional {
 					if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsName) {
-						nsAddrs = append(nsAddrs, dnsutil.JoinDNSPort(aaaa.AAAA.String()))
+						nsAddrs = append(nsAddrs, zdnsutil.JoinDNSPort(aaaa.AAAA.String()))
 					}
 				}
 				addrMu.Unlock()
 			}()
 
 			go func() {
-				defer dnsutil.HandlePanic("Resolve NS AAAA")
+				defer zdnsutil.HandlePanic("Resolve NS AAAA")
 				defer wg.Done()
 				aaaaQuestion := Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
 				qr := r.resolve(queryCtx, aaaaQuestion, nil, depth+1, forceTCP)
@@ -280,7 +280,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				ansAAAARecords = qr.Answer
 				for _, rrec := range qr.Answer {
 					if aaaa, ok := rrec.(*dns.AAAA); ok {
-						nsAddrs = append(nsAddrs, dnsutil.JoinDNSPort(aaaa.AAAA.String()))
+						nsAddrs = append(nsAddrs, zdnsutil.JoinDNSPort(aaaa.AAAA.String()))
 					}
 				}
 				addrMu.Unlock()
@@ -375,7 +375,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 
 	bareMsg := pool.DefaultMessagePool.Get()
 	defer pool.DefaultMessagePool.Put(bareMsg)
-	dnsutilv2.SetQuestion(bareMsg, dnsutilv2.Fqdn(question.Name), question.Qtype)
+	dnsutil.SetQuestion(bareMsg, dnsutil.Fqdn(question.Name), question.Qtype)
 	bareMsg.RecursionDesired = true
 
 	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)

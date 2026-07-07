@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	eTLS "gitlab.com/go-extension/tls"
@@ -106,7 +106,7 @@ func validateCIDRConfigs(cfg *ServerConfig) (map[string]bool, error) {
 		if cidrConfig.File == "" && len(cidrConfig.Rules) == 0 {
 			return nil, fmt.Errorf("CIDR config %d: either 'file' or 'rules' must be specified", i)
 		}
-		if cidrConfig.File != "" && !dnsutil.IsValidFilePath(cidrConfig.File) {
+		if cidrConfig.File != "" && !zdnsutil.IsValidFilePath(cidrConfig.File) {
 			return nil, fmt.Errorf("CIDR config %d: file not found: %s", i, cidrConfig.File)
 		}
 	}
@@ -140,7 +140,7 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 				}
 			}
 		}
-		if dnsutil.IsSecureProtocol(protocol) && server.ServerName == "" {
+		if zdnsutil.IsSecureProtocol(protocol) && server.ServerName == "" {
 			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
 		}
 
@@ -239,10 +239,10 @@ func validateTLSCertConfig(cfg *ServerConfig) error {
 	if cfg.Server.TLS.CertFile == "" || cfg.Server.TLS.KeyFile == "" {
 		return errors.New("config: cert and key files must be configured together")
 	}
-	if !dnsutil.IsValidFilePath(cfg.Server.TLS.CertFile) {
+	if !zdnsutil.IsValidFilePath(cfg.Server.TLS.CertFile) {
 		return fmt.Errorf("config: cert file not found: %s", cfg.Server.TLS.CertFile)
 	}
-	if !dnsutil.IsValidFilePath(cfg.Server.TLS.KeyFile) {
+	if !zdnsutil.IsValidFilePath(cfg.Server.TLS.KeyFile) {
 		return fmt.Errorf("config: key file not found: %s", cfg.Server.TLS.KeyFile)
 	}
 	if info, err := os.Stat(cfg.Server.TLS.KeyFile); err == nil {

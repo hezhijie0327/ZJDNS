@@ -2,10 +2,10 @@ package resolver
 
 import (
 	"strings"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // minimiseQNAME strips the original QNAME to the given number of labels beyond
@@ -15,47 +15,47 @@ import (
 // When labelsToAdd exceeds the remaining labels, the full original QNAME is
 // returned (resolution has reached the target).
 func minimiseQNAME(originalQname, currentZone string, labelsToAdd int) string {
-	orig := dnsutil.NormalizeDomain(originalQname)
-	zone := dnsutil.NormalizeDomain(currentZone)
+	orig := zdnsutil.NormalizeDomain(originalQname)
+	zone := zdnsutil.NormalizeDomain(currentZone)
 
 	// Root zone
 	if zone == "" {
 		labels := strings.Split(strings.TrimSuffix(orig, "."), ".")
 		if labelsToAdd >= len(labels) {
-			return dnsutilv2.Fqdn(orig)
+			return dnsutil.Fqdn(orig)
 		}
-		return dnsutilv2.Fqdn(strings.Join(labels[len(labels)-labelsToAdd:], "."))
+		return dnsutil.Fqdn(strings.Join(labels[len(labels)-labelsToAdd:], "."))
 	}
 
 	// QNAME equals the zone — reached the target
 	if orig == zone {
-		return dnsutilv2.Fqdn(orig)
+		return dnsutil.Fqdn(orig)
 	}
 
 	// QNAME is not a subdomain of the current zone — return original
 	if !strings.HasSuffix(orig, "."+zone) {
-		return dnsutilv2.Fqdn(orig)
+		return dnsutil.Fqdn(orig)
 	}
 
 	remaining := orig[:len(orig)-len(zone)-1] // strip "." + zone
 	if remaining == "" {
-		return dnsutilv2.Fqdn(orig)
+		return dnsutil.Fqdn(orig)
 	}
 
 	remainingLabels := strings.Split(remaining, ".")
 	if labelsToAdd >= len(remainingLabels) {
-		return dnsutilv2.Fqdn(orig) // reached the target
+		return dnsutil.Fqdn(orig) // reached the target
 	}
 
 	// Take the rightmost 'labelsToAdd' labels from the remaining prefix
 	suffix := strings.Join(remainingLabels[len(remainingLabels)-labelsToAdd:], ".")
-	return dnsutilv2.Fqdn(suffix + "." + zone)
+	return dnsutil.Fqdn(suffix + "." + zone)
 }
 
 // labelCount returns the number of labels in a domain name. The root zone (".")
 // returns 0.
 func labelCount(name string) int {
-	norm := dnsutil.NormalizeDomain(name)
+	norm := zdnsutil.NormalizeDomain(name)
 	if norm == "" {
 		return 0
 	}

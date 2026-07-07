@@ -16,7 +16,7 @@ import (
 	"zjdns/cidr"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/rewrite"
@@ -25,11 +25,10 @@ import (
 	"zjdns/server/probe"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
+	"zjdns/server/tls"
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
-
-	servertls "zjdns/server/tls"
 )
 
 // Server is the core DNS server handling lifecycle, protocol listeners, and background tasks.
@@ -38,7 +37,7 @@ type Server struct {
 	handler         *handler.Handler
 	queryClient     *client.Client
 	guard           *security.Guard
-	tls             *servertls.Server
+	tls             *tls.Server
 	cidrFilter      *cidr.Filter
 	pprofServer     *http.Server
 	ctx             context.Context
@@ -191,11 +190,11 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	// ── Transport listeners ───────────────────────────────────────────────
 
 	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
-		tlsCfg := servertls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
+		tlsCfg := tls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
 		if cfg.Server.TLS.KTLS != nil {
-			tlsCfg.KTLS = &servertls.KTLSSettings{KernelTX: cfg.Server.TLS.KTLS.KernelTX, KernelRX: cfg.Server.TLS.KTLS.KernelRX}
+			tlsCfg.KTLS = &tls.KTLSSettings{KernelTX: cfg.Server.TLS.KTLS.KernelTX, KernelRX: cfg.Server.TLS.KTLS.KernelRX}
 		}
-		tlsSrv, err := servertls.New(h, &tlsCfg, config.DefaultBackgroundTimeout)
+		tlsSrv, err := tls.New(h, &tlsCfg, config.DefaultBackgroundTimeout)
 		if err != nil {
 			cancel(fmt.Errorf("TLS server init: %w", err))
 			return nil, fmt.Errorf("TLS server init: %w", err)
@@ -216,7 +215,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	if cfg.Server.Pprof != "" {
-		if err := dnsutil.TryBind("tcp", "127.0.0.1:"+cfg.Server.Pprof); err != nil {
+		if err := zdnsutil.TryBind("tcp", "127.0.0.1:"+cfg.Server.Pprof); err != nil {
 			log.Warnf("PPROF: skipping — address 127.0.0.1:%s is unavailable: %v", cfg.Server.Pprof, err)
 		} else {
 			server.pprofServer = &http.Server{
@@ -255,7 +254,7 @@ func (s *Server) Start() error {
 
 	g, ctx := errgroup.WithContext(serverCtx)
 
-	udpAddrs, err := dnsutil.ResolveBindAddrs(config.ProtoUDP, s.config.Server.Port)
+	udpAddrs, err := zdnsutil.ResolveBindAddrs(config.ProtoUDP, s.config.Server.Port)
 	if err != nil {
 		return fmt.Errorf("UDP address resolution: %w", err)
 	}
@@ -269,7 +268,7 @@ func (s *Server) Start() error {
 		}
 		s.udpServers = append(s.udpServers, srv)
 		g.Go(func() error {
-			defer dnsutil.HandlePanic("UDP server")
+			defer zdnsutil.HandlePanic("UDP server")
 			log.Infof("SERVER: UDP server started on %s", addr)
 			err := srv.ListenAndServe()
 			if err != nil {
@@ -287,7 +286,7 @@ func (s *Server) Start() error {
 
 	if s.pprofServer != nil {
 		g.Go(func() error {
-			defer dnsutil.HandlePanic("pprof server")
+			defer zdnsutil.HandlePanic("pprof server")
 			log.Infof("PPROF: pprof server started on port %s", s.config.Server.Pprof)
 			err := s.pprofServer.ListenAndServe()
 
@@ -299,7 +298,7 @@ func (s *Server) Start() error {
 		})
 	}
 
-	tcpAddrs, err := dnsutil.ResolveBindAddrs("tcp", s.config.Server.Port)
+	tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.config.Server.Port)
 	if err != nil {
 		return fmt.Errorf("TCP address resolution: %w", err)
 	}
@@ -310,12 +309,12 @@ func (s *Server) Start() error {
 		}
 
 		srv := &dns.Server{
-			Listener: &servertls.TCPKeepAliveListener{Listener: listener},
+			Listener: &tls.TCPKeepAliveListener{Listener: listener},
 			Handler:  dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
 		}
 		s.tcpServers = append(s.tcpServers, srv)
 		g.Go(func() error {
-			defer dnsutil.HandlePanic("TCP server")
+			defer zdnsutil.HandlePanic("TCP server")
 			log.Infof("SERVER: TCP server started on %s", addr)
 			err := srv.ListenAndServe()
 			if err != nil {
@@ -333,7 +332,7 @@ func (s *Server) Start() error {
 
 	if s.tls != nil {
 		g.Go(func() error {
-			defer dnsutil.HandlePanic("Secure DNS server")
+			defer zdnsutil.HandlePanic("Secure DNS server")
 			httpsPort := s.config.Server.TLS.HTTPS.Port
 			err := s.tls.Start(httpsPort)
 			if err != nil {
@@ -345,7 +344,7 @@ func (s *Server) Start() error {
 	}
 
 	go func() {
-		defer dnsutil.HandlePanic("Server coordinator")
+		defer zdnsutil.HandlePanic("Server coordinator")
 		if err := g.Wait(); err != nil {
 			select {
 			case errChan <- err:
@@ -381,7 +380,7 @@ func (s *Server) displayInfo() {
 					protocol = "UDP"
 				}
 				serverInfo := fmt.Sprintf("%s (%s)", server.Address, protocol)
-				if server.SkipTLSVerify && dnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) {
+				if server.SkipTLSVerify && zdnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) {
 					serverInfo += " [Skip TLS verification]"
 				}
 				if len(server.Match) > 0 {

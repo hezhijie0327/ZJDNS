@@ -14,14 +14,13 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/server/client/pool"
 
 	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	eTLS "gitlab.com/go-extension/tls"
-
-	connpool "zjdns/server/client/pool"
 )
 
 // Result holds the outcome of a single DNS query including response, timing,
@@ -58,12 +57,12 @@ type Client struct {
 	quicConfigs   map[string]*quic.Config
 	quicConfigsMu sync.Mutex
 
-	quicPool *connpool.QUICPool
+	quicPool *pool.QUICPool
 
 	SessionCache eTLS.ClientSessionCache
 
-	tcpPool *connpool.Pool
-	dotPool *connpool.Pool
+	tcpPool *pool.Pool
+	dotPool *pool.Pool
 
 	proxyDialers map[string]*SOCKS5Dialer
 	proxyMu      sync.Mutex
@@ -115,10 +114,10 @@ func New() *Client {
 		dohTransports:  make(map[string]*http.Client),
 		doh3Transports: make(map[string]*http.Client),
 		quicConfigs:    make(map[string]*quic.Config),
-		quicPool:       connpool.NewQUICPool(config.DefaultMaxConns),
+		quicPool:       pool.NewQUICPool(config.DefaultMaxConns),
 		SessionCache:   eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
-		tcpPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		dotPool:        connpool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		tcpPool:        pool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		dotPool:        pool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		proxyDialers:   make(map[string]*SOCKS5Dialer),
 	}
 	return c
@@ -235,7 +234,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 
 	protocol := strings.ToLower(server.Protocol)
 
-	if dnsutil.IsSecureProtocol(protocol) {
+	if zdnsutil.IsSecureProtocol(protocol) {
 		result.Response, result.Error = c.executeSecureQuery(queryCtx, msg, server, protocol)
 	} else {
 		result.Response, result.Error = c.executeTraditionalQuery(queryCtx, msg, server)
@@ -290,7 +289,7 @@ func (c *Client) stdTLSConfig(server *config.UpstreamServer) *tls.Config {
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         server.ServerName,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			dnsutil.LogTLSConnectionState("UPSTREAM", "negotiated for", server.Address, cs.Version, cs.CipherSuite, cs.CurveID)
+			zdnsutil.LogTLSConnectionState("UPSTREAM", "negotiated for", server.Address, cs.Version, cs.CipherSuite, cs.CurveID)
 			return nil
 		},
 	}
@@ -333,7 +332,7 @@ func (c *Client) WarmUpConnections(servers []config.UpstreamServer) {
 			continue
 		}
 		protocol := strings.ToLower(server.Protocol)
-		if !dnsutil.IsSecureProtocol(protocol) {
+		if !zdnsutil.IsSecureProtocol(protocol) {
 			continue
 		}
 		// Capture loop variable for the goroutine.
@@ -341,7 +340,7 @@ func (c *Client) WarmUpConnections(servers []config.UpstreamServer) {
 		c.warmWg.Add(1)
 		go func() {
 			defer c.warmWg.Done()
-			defer dnsutil.HandlePanic("connection pre-warm")
+			defer zdnsutil.HandlePanic("connection pre-warm")
 			warmCtx, cancel := context.WithTimeout(context.Background(), c.timeout)
 			defer cancel()
 			c.warmUpConnection(warmCtx, &s, protocol)

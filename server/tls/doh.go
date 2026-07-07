@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
@@ -37,7 +37,7 @@ func (w http2LogWriter) Write(p []byte) (n int, err error) {
 }
 
 func (s *Server) startDOHServer(port string) error {
-	addrs, err := dnsutil.ResolveBindAddrs("tcp", port)
+	addrs, err := zdnsutil.ResolveBindAddrs("tcp", port)
 	if err != nil {
 		return fmt.Errorf("DoH address resolution: %w", err)
 	}
@@ -68,7 +68,7 @@ func (s *Server) startDOHServer(port string) error {
 
 		capturedDoH := httpsListener
 		s.serverGroup.Go(func() error {
-			defer dnsutil.HandlePanic("DoH server")
+			defer zdnsutil.HandlePanic("DoH server")
 			for {
 				conn, err := capturedDoH.Accept()
 				if err != nil {
@@ -83,7 +83,7 @@ func (s *Server) startDOHServer(port string) error {
 				log.Debugf("TLS: DoH TCP accepted from %s, TLS handshake pending", conn.RemoteAddr())
 
 				s.serverGroup.Go(func() error {
-					defer dnsutil.HandlePanic("DoH connection handler")
+					defer zdnsutil.HandlePanic("DoH connection handler")
 					log.Debugf("TLS: DoH starting HTTP/2 ServeConn for %s", conn.RemoteAddr())
 					s.dohServer.ServeConn(conn, &http2.ServeConnOpts{
 						Handler:    s,
@@ -99,7 +99,7 @@ func (s *Server) startDOHServer(port string) error {
 }
 
 func (s *Server) startDOH3Server(port string) error {
-	addrs, err := dnsutil.ResolveBindAddrs("udp", port)
+	addrs, err := zdnsutil.ResolveBindAddrs("udp", port)
 	if err != nil {
 		return fmt.Errorf("DoH3 address resolution: %w", err)
 	}
@@ -149,7 +149,7 @@ func (s *Server) startDOH3Server(port string) error {
 
 		capturedH3 := listener
 		s.serverGroup.Go(func() error {
-			defer dnsutil.HandlePanic("DoH3 server")
+			defer zdnsutil.HandlePanic("DoH3 server")
 			for {
 				conn, err := capturedH3.Accept(s.ctx)
 				if err != nil {
@@ -162,7 +162,7 @@ func (s *Server) startDOH3Server(port string) error {
 				}
 
 				s.serverGroup.Go(func() error {
-					defer dnsutil.HandlePanic("DoH3 connection handler")
+					defer zdnsutil.HandlePanic("DoH3 connection handler")
 					if err := s.h3Server.ServeQUICConn(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 						log.Debugf("TLS: DoH3 connection error: %v", err)
 					}

@@ -3,7 +3,7 @@ package security
 import (
 	"strings"
 	"sync/atomic"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -83,11 +83,11 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 		return VerdictClean
 	}
 
-	z := dnsutil.NormalizeDomain(zone)
-	n := dnsutil.NormalizeDomain(queryName)
+	z := zdnsutil.NormalizeDomain(zone)
+	n := zdnsutil.NormalizeDomain(queryName)
 
 	for _, rr := range response.Answer {
-		if dnsutil.NormalizeDomain(rr.Header().Name) != n {
+		if zdnsutil.NormalizeDomain(rr.Header().Name) != n {
 			continue
 		}
 		if v := d.classify(z, n, dns.RRToType(rr)); v != VerdictClean {
@@ -109,9 +109,9 @@ func (d *Detector) IsHijackedByTLD(response *dns.Msg, queryName string) bool {
 	if !d.enabled.Load() || response == nil {
 		return false
 	}
-	n := dnsutil.NormalizeDomain(queryName)
+	n := zdnsutil.NormalizeDomain(queryName)
 	for _, rr := range response.Answer {
-		if dnsutil.NormalizeDomain(rr.Header().Name) != n {
+		if zdnsutil.NormalizeDomain(rr.Header().Name) != n {
 			continue
 		}
 		switch dns.RRToType(rr) {

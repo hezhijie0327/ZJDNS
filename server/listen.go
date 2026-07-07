@@ -7,12 +7,12 @@ import (
 	"sync/atomic"
 	"time"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // tcpWriteEntry manages per-client TCP write serialization for pipelined queries.
@@ -26,7 +26,7 @@ type tcpWriteEntry struct {
 // handleDNSRequest is the protocol bridge: it extracts client IP, determines
 // protocol (UDP/TCP), serializes TCP writes, and delegates to the handler.
 func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
-	defer dnsutil.HandlePanic("DNS request processing")
+	defer zdnsutil.HandlePanic("DNS request processing")
 
 	select {
 	case <-s.ctx.Done():
@@ -47,7 +47,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		case entry.capacity <- struct{}{}:
 		default:
 			msg := pool.DefaultMessagePool.Get()
-			dnsutilv2.SetReply(msg, req)
+			dnsutil.SetReply(msg, req)
 			msg.Rcode = dns.RcodeServerFailure
 			if err := msg.Pack(); err != nil {
 				log.Debugf("SERVER: TCP SERVFAIL pack error for %s: %v", addr, err)
@@ -61,8 +61,8 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 		go func() {
 			defer func() { <-entry.capacity }()
-			defer dnsutil.HandlePanic("TCP query handler")
-			response := s.handler.ServeDNS(req, dnsutil.ClientIP(w), false, "TCP")
+			defer zdnsutil.HandlePanic("TCP query handler")
+			response := s.handler.ServeDNS(req, zdnsutil.ClientIP(w), false, "TCP")
 			if response != nil {
 				entry.lastAccess.Store(log.NowUnixNano())
 				writeTimer := time.NewTimer(config.DefaultDNSQueryTimeout)
@@ -87,7 +87,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	clientIP := dnsutil.ClientIP(w)
+	clientIP := zdnsutil.ClientIP(w)
 
 	response := s.handler.ServeDNS(req, clientIP, false, detectRequestProtocol(w))
 	if response != nil {

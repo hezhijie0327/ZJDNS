@@ -6,7 +6,7 @@ import (
 	"zjdns/edns"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
 )
 
@@ -157,7 +157,7 @@ func TestCheckLameDelegation_NotLame(t *testing.T) {
 	r := newTestRecursiveWithHelpers()
 	resp := &dns.Msg{
 		Answer: []dns.RR{
-			&dns.A{Hdr: dns.Header{Name: dnsutilv2.Fqdn("www.example.com"), Class: dns.ClassINET, TTL: 300}, A: rdata.A{}},
+			&dns.A{Hdr: dns.Header{Name: dnsutil.Fqdn("www.example.com"), Class: dns.ClassINET, TTL: 300}, A: rdata.A{}},
 		},
 		Ns: []dns.RR{
 			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},

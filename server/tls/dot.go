@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
@@ -19,7 +19,7 @@ import (
 )
 
 func (s *Server) startDOTServer() error {
-	addrs, err := dnsutil.ResolveBindAddrs("tcp", s.cfg.Port)
+	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.cfg.Port)
 	if err != nil {
 		return fmt.Errorf("DoT address resolution: %w", err)
 	}
@@ -42,7 +42,7 @@ func (s *Server) startDOTServer() error {
 
 		capturedDot := dotListener
 		s.serverGroup.Go(func() error {
-			defer dnsutil.HandlePanic("DoT server")
+			defer zdnsutil.HandlePanic("DoT server")
 			s.handleDOTConnections(capturedDot)
 			return nil
 		})
@@ -72,7 +72,7 @@ func (s *Server) handleDOTConnections(dotListener net.Listener) {
 		log.Debugf("TLS: DoT TCP accepted from %s, TLS handshake pending", conn.RemoteAddr())
 
 		s.serverGroup.Go(func() error {
-			defer dnsutil.HandlePanic("DoT connection handler")
+			defer zdnsutil.HandlePanic("DoT connection handler")
 			defer func() { _ = conn.Close() }()
 			log.Debugf("TLS: DoT starting connection handler for %s", conn.RemoteAddr())
 			s.handleDOTConnection(conn)
@@ -104,7 +104,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 	writerDone := make(chan struct{})
 	go func() {
-		defer dnsutil.HandlePanic("DoT writer")
+		defer zdnsutil.HandlePanic("DoT writer")
 		defer close(writerDone)
 		for task := range writeCh {
 			_ = tlsConn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
@@ -128,7 +128,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 	workerCap := make(chan struct{}, config.DefaultMaxPipe)
 
-	lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
+	lengthBuf := make([]byte, zdnsutil.DNSFramePrefixLen)
 	for {
 		if connCtx.Err() != nil {
 			return
@@ -151,7 +151,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
-		if msgLength == 0 || msgLength > pool.SecureBufferSize-dnsutil.DNSFramePrefixLen {
+		if msgLength == 0 || msgLength > pool.SecureBufferSize-zdnsutil.DNSFramePrefixLen {
 			return
 		}
 
@@ -199,7 +199,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		wg.Add(1)
 		go func(query *dns.Msg, ip net.IP, pooledBuf []byte, isPooled bool) {
 			defer func() { <-workerCap }()
-			defer dnsutil.HandlePanic("DoT query worker")
+			defer zdnsutil.HandlePanic("DoT query worker")
 			defer wg.Done()
 			defer pool.DefaultMessagePool.Put(query)
 			defer func() {
@@ -225,16 +225,16 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			// Record whether poolBuf was large enough BEFORE any Put call,
 			// so the error path does not read metadata of a buffer that
 			// may already be reused by another goroutine.
-			poolBufOK := len(poolBuf) >= dnsutil.DNSFramePrefixLen+len(respBuf)
+			poolBufOK := len(poolBuf) >= zdnsutil.DNSFramePrefixLen+len(respBuf)
 			var writeBuf []byte
 			if poolBufOK {
-				writeBuf = poolBuf[:dnsutil.DNSFramePrefixLen+len(respBuf)]
+				writeBuf = poolBuf[:zdnsutil.DNSFramePrefixLen+len(respBuf)]
 			} else {
-				writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(respBuf))
+				writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+len(respBuf))
 				pool.DefaultBufferPool.Put(poolBuf)
 			}
-			binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
-			copy(writeBuf[dnsutil.DNSFramePrefixLen:], respBuf)
+			binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
+			copy(writeBuf[zdnsutil.DNSFramePrefixLen:], respBuf)
 
 			select {
 			case writeCh <- writeTask{data: writeBuf}:

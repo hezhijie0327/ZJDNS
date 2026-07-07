@@ -18,7 +18,7 @@ import (
 	"zjdns/server/security"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
 )
 
@@ -88,7 +88,7 @@ func BenchmarkCacheParallel(b *testing.B) {
 // benchGenKey is an inline key generator for benchmarks.
 func benchGenKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 	dnskey := &dns.DNSKEY{
-		Hdr:    dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		Hdr:    dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
 		DNSKEY: rdata.DNSKEY{Flags: flags, Protocol: 3, Algorithm: dns.ECDSAP256SHA256},
 	}
 	priv, _ := dnskey.Generate(256)
@@ -101,16 +101,16 @@ func BenchmarkCryptoValidator_VerifyRRset(b *testing.B) {
 	zone := "bench.example.com"
 	ksk, priv := benchGenKey(zone, dns.FlagSEP|dns.FlagZONE)
 	a := &dns.A{
-		Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
 	}
 	rrsig := &dns.RRSIG{
-		Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 		RRSIG: rdata.RRSIG{
 			TypeCovered: dns.TypeA, Algorithm: dns.ECDSAP256SHA256, Labels: 3, OrigTTL: 300,
 			Expiration: uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 			Inception:  uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
-			KeyTag:     ksk.KeyTag(), SignerName: dnsutilv2.Fqdn(zone),
+			KeyTag:     ksk.KeyTag(), SignerName: dnsutil.Fqdn(zone),
 		},
 	}
 	_ = rrsig.Sign(priv, []dns.RR{a}, &dns.SignOption{})
@@ -138,7 +138,7 @@ func BenchmarkEDNSApplyToMessage(b *testing.B) {
 	disableLogging()
 	h, _ := edns.NewHandler(config.ECSConfig{})
 	msg := new(dns.Msg)
-	dnsutilv2.SetQuestion(msg, "bench.example.com.", dns.TypeA)
+	dnsutil.SetQuestion(msg, "bench.example.com.", dns.TypeA)
 	ecs := &edns.ECSOption{Family: 1, SourcePrefix: 24, Address: net.IPv4(192, 0, 2, 1)}
 
 	b.ResetTimer()
@@ -177,7 +177,7 @@ func BenchmarkBuildQueryMessage(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		msg := new(dns.Msg)
-		dnsutilv2.SetQuestion(msg, q.Header().Name, dns.RRToType(q))
+		dnsutil.SetQuestion(msg, q.Header().Name, dns.RRToType(q))
 		msg.RecursionDesired = true
 		h.ApplyToMessage(msg, ecs, false, "", nil, true, true, 0)
 	}
@@ -202,7 +202,7 @@ func BenchmarkResolveRootServers(b *testing.B) {
 	}
 	q := &dns.NS{Hdr: dns.Header{Name: ".", Class: dns.ClassINET}}
 	msg := new(dns.Msg)
-	dnsutilv2.SetQuestion(msg, q.Header().Name, dns.RRToType(q))
+	dnsutil.SetQuestion(msg, q.Header().Name, dns.RRToType(q))
 	msg.RecursionDesired = false
 
 	rootServers := []string{
@@ -264,7 +264,7 @@ func BenchmarkServerProcessQuery(b *testing.B) {
 	srv := buildBenchServer(b)
 
 	req := new(dns.Msg)
-	dnsutilv2.SetQuestion(req, "bench.local.", dns.TypeA)
+	dnsutil.SetQuestion(req, "bench.local.", dns.TypeA)
 	req.RecursionDesired = true
 
 	// Warm up cache
@@ -293,7 +293,7 @@ func BenchmarkServerProcessQuery_Cold(b *testing.B) {
 	srv := buildBenchServer(b)
 
 	req := new(dns.Msg)
-	dnsutilv2.SetQuestion(req, "bench.local.", dns.TypeA)
+	dnsutil.SetQuestion(req, "bench.local.", dns.TypeA)
 	req.RecursionDesired = true
 
 	b.ResetTimer()

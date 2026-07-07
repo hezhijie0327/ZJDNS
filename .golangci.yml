@@ -52,6 +52,8 @@ linters:
       alias:
         - pkg: gitlab.com/go-extension/tls
           alias: eTLS
+        - pkg: zjdns/internal/dnsutil
+          alias: zdnsutil
 
     exhaustive:
       default-signifies-exhaustive: true

@@ -7,13 +7,13 @@ import (
 	"strings"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/security"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // Use config.DNSRootZone (".") instead of a local constant.
@@ -47,7 +47,7 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 	// Verify newly discovered DNSKEY records using parent DS or self-signature
 	if len(dnskeyRecords) > 0 {
 		allSigs := security.CollectRRSIGs(response.Answer, response.Ns, response.Extra)
-		dnskeyRRSIGs := security.FindRRSIGs(allSigs, dnsutilv2.Fqdn(currentDomain), dns.TypeDNSKEY)
+		dnskeyRRSIGs := security.FindRRSIGs(allSigs, dnsutil.Fqdn(currentDomain), dns.TypeDNSKEY)
 
 		// Verify using parent DS if available (delegation point)
 		if len(chain.childDS) > 0 {
@@ -149,7 +149,7 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 	}
 
 	// Query the zone's authoritative nameservers for DNSKEY records
-	dnskeyQuestion := Question{Name: dnsutilv2.Fqdn(zone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
+	dnskeyQuestion := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
 	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, nil, false, zone, r.resolver.validator.Hijack)
 	if err != nil {
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", zone, err)
@@ -164,7 +164,7 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 	}
 
 	allSigs := security.CollectRRSIGs(dnskeyResp.Answer, dnskeyResp.Ns, dnskeyResp.Extra)
-	dnskeyRRSIGs := security.FindRRSIGs(allSigs, dnsutilv2.Fqdn(zone), dns.TypeDNSKEY)
+	dnskeyRRSIGs := security.FindRRSIGs(allSigs, dnsutil.Fqdn(zone), dns.TypeDNSKEY)
 
 	// Verify using parent DS if available (secure delegation)
 	if len(chain.childDS) > 0 {
@@ -219,7 +219,7 @@ func (r *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string,
 	// Collect RRSIGs from all sections — DS RRSIGs may appear in
 	// Answer section when the server is authoritative for the child zone.
 	allSigs := security.CollectRRSIGs(response.Ns, response.Extra, response.Answer)
-	dsRRSIGs := security.FindRRSIGs(allSigs, dnsutilv2.Fqdn(childZone), dns.TypeDS)
+	dsRRSIGs := security.FindRRSIGs(allSigs, dnsutil.Fqdn(childZone), dns.TypeDS)
 	if len(dsRRSIGs) == 0 {
 		log.Debugf("SECURITY: no RRSIG found for DS records of %s", childZone)
 		return nil
@@ -276,7 +276,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	}
 
 	// Query the authoritative nameservers explicitly for DNSKEY + RRSIG
-	dnskeyQuestion := Question{Name: dnsutilv2.Fqdn(currentDomain), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
+	dnskeyQuestion := Question{Name: dnsutil.Fqdn(currentDomain), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
 	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
 	if err != nil {
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", currentDomain, err)
@@ -295,7 +295,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	}
 
 	allSigs := security.CollectRRSIGs(dnskeyResp.Answer, dnskeyResp.Ns, dnskeyResp.Extra)
-	dnskeyRRSIGs := security.FindRRSIGs(allSigs, dnsutilv2.Fqdn(currentDomain), dns.TypeDNSKEY)
+	dnskeyRRSIGs := security.FindRRSIGs(allSigs, dnsutil.Fqdn(currentDomain), dns.TypeDNSKEY)
 
 	// Verify DNSKEY: try parent DS first (secure delegation), then
 	// self-signature only when no DS exists (root zone or insecure delegation).
@@ -378,7 +378,7 @@ func (r *Recursive) recordDNSSECFailure(chain *dnssecChain, validated bool, msg 
 // bogus verdict (e.g. CDN A records for CNAME targets like aaplimg.com
 // returned alongside CNAME records in the cdn-apple.com zone).
 func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
-	normalized := dnsutil.NormalizeDomain(zone)
+	normalized := zdnsutil.NormalizeDomain(zone)
 	if normalized == "" {
 		return answer
 	}
@@ -398,7 +398,7 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 		}
 		inZone := false
 		for _, sig := range sigs {
-			signer := dnsutil.NormalizeDomain(sig.SignerName)
+			signer := zdnsutil.NormalizeDomain(sig.SignerName)
 			if signer == normalized || strings.HasSuffix(signer, "."+normalized) {
 				inZone = true
 				break
@@ -418,7 +418,7 @@ func (r *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) st
 		return ""
 	}
 
-	normalizedCurrent := dnsutil.NormalizeDomain(currentDomain)
+	normalizedCurrent := zdnsutil.NormalizeDomain(currentDomain)
 	if normalizedCurrent == "" {
 		return ""
 	}
@@ -428,7 +428,7 @@ func (r *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) st
 		if rrsig == nil {
 			continue
 		}
-		signerName := dnsutil.NormalizeDomain(rrsig.SignerName)
+		signerName := zdnsutil.NormalizeDomain(rrsig.SignerName)
 		if signerName != normalizedCurrent &&
 			strings.HasSuffix(signerName, "."+normalizedCurrent) {
 			return signerName
@@ -461,7 +461,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 
 	// Query for the child zone's DS records from the parent zone.
 	// These are used to verify the child zone's DNSKEYs.
-	dsQuestion := Question{Name: dnsutilv2.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
+	dsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
 	dsResp, _, dsErr := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
 	if dsErr != nil {
 		return false, fmt.Errorf("DS query for %s failed: %w", childZone, dsErr)
@@ -481,7 +481,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 
 	// Verify DS RRSIGs against the parent zone's DNSKEYs
 	allSigs := security.CollectRRSIGs(dsResp.Answer, dsResp.Ns, dsResp.Extra)
-	dsRRSIGs := security.FindRRSIGs(allSigs, dnsutilv2.Fqdn(childZone), dns.TypeDS)
+	dsRRSIGs := security.FindRRSIGs(allSigs, dnsutil.Fqdn(childZone), dns.TypeDS)
 	if len(dsRRSIGs) == 0 {
 		return false, fmt.Errorf("no RRSIG for DS records of %s", childZone)
 	}
@@ -517,7 +517,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	chain.childDS = verifiedDS
 
 	// Query for the child zone's DNSKEY records
-	dnskeyQuestion := Question{Name: dnsutilv2.Fqdn(childZone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
+	dnskeyQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
 	dnskeyResp, _, dnskeyErr := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
 	if dnskeyErr != nil {
 		return false, fmt.Errorf("DNSKEY query for %s failed: %w", childZone, dnskeyErr)

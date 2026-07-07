@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -108,12 +108,12 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	poolBuf := bufpool.DefaultBufferPool.Get()
 	defer bufpool.DefaultBufferPool.Put(poolBuf)
 	writeBuf := poolBuf
-	if len(poolBuf) < dnsutil.DNSFramePrefixLen+len(msgData) {
-		writeBuf = make([]byte, dnsutil.DNSFramePrefixLen+len(msgData))
+	if len(poolBuf) < zdnsutil.DNSFramePrefixLen+len(msgData) {
+		writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+len(msgData))
 	}
-	writeBuf = writeBuf[:dnsutil.DNSFramePrefixLen+len(msgData)]
-	binary.BigEndian.PutUint16(writeBuf[:dnsutil.DNSFramePrefixLen], uint16(len(msgData))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
-	copy(writeBuf[dnsutil.DNSFramePrefixLen:], msgData)
+	writeBuf = writeBuf[:zdnsutil.DNSFramePrefixLen+len(msgData)]
+	binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(msgData))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
+	copy(writeBuf[zdnsutil.DNSFramePrefixLen:], msgData)
 
 	resultCh := make(chan *dns.Msg, 1)
 	c.mu.Lock()
@@ -164,10 +164,10 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 }
 
 func (c *Conn) readLoop() {
-	defer dnsutil.HandlePanic("client reader")
+	defer zdnsutil.HandlePanic("client reader")
 	defer c.close()
 
-	lengthBuf := make([]byte, dnsutil.DNSFramePrefixLen)
+	lengthBuf := make([]byte, zdnsutil.DNSFramePrefixLen)
 
 	for {
 		_ = c.conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))

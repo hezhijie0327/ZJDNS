@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
 
@@ -107,7 +107,7 @@ func (f *Filter) loadConfig(cfg config.CIDRConfig) (*rule, error) {
 	}
 
 	if cfg.File != "" {
-		if !dnsutil.IsValidFilePath(cfg.File) {
+		if !zdnsutil.IsValidFilePath(cfg.File) {
 			return nil, fmt.Errorf("invalid file path: %s", cfg.File)
 		}
 		f, err := os.Open(cfg.File)

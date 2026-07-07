@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
 
@@ -72,7 +72,7 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) (sorted []ne
 		idx := i
 		wg.Add(1)
 		go func() {
-			defer dnsutil.HandlePanic("latency probe worker")
+			defer zdnsutil.HandlePanic("latency probe worker")
 			defer wg.Done()
 
 			select {

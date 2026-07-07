@@ -10,13 +10,12 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/latency"
 	"zjdns/internal/log"
 	"zjdns/internal/pending"
 
 	"codeberg.org/miekg/dns"
-
-	ilatency "zjdns/internal/latency"
 )
 
 // nsPending deduplicates concurrent ProbeNSAddrs calls by sorted IP set.
@@ -36,7 +35,7 @@ type Prober struct {
 	cache   CacheSetter
 	bgGroup func(func() error)
 	bgCtx   context.Context
-	engine  *ilatency.Prober
+	engine  *latency.Prober
 	pending *pending.Group[probeKey]
 }
 
@@ -53,7 +52,7 @@ func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, s
 		cache:   cache,
 		bgGroup: bgGroup,
 		bgCtx:   bgCtx,
-		engine:  ilatency.New(steps, bgCtx),
+		engine:  latency.New(steps, bgCtx),
 		pending: pending.NewGroup[probeKey](),
 	}
 }
@@ -85,7 +84,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 
 	var ipRRCount int
 	for _, rr := range answer {
-		if dnsutil.IsAOrAAAA(rr) {
+		if zdnsutil.IsAOrAAAA(rr) {
 			ipRRCount++
 			if ipRRCount > 1 {
 				break
@@ -102,7 +101,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 	now := time.Now().Unix()
 	allRecent := true
 	for _, rr := range answer {
-		ip, ok := dnsutil.ExtractIPString(rr)
+		ip, ok := zdnsutil.ExtractIPString(rr)
 		if !ok {
 			continue
 		}
@@ -127,7 +126,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 
 	p.bgGroup(func() error {
 		defer p.pending.Done(key)
-		defer dnsutil.HandlePanic("latency probe")
+		defer zdnsutil.HandlePanic("latency probe")
 		if err := p.probeAndReorder(p.bgCtx, qname, answer, ecsResponse); err != nil {
 			log.Debugf("LATENCY: background probe failed for %s: %v", qname, err)
 		}
@@ -147,7 +146,7 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, answer []dns
 	// Extract IPs from A/AAAA records.
 	ips := make([]net.IP, 0, len(answer))
 	for _, rr := range answer {
-		if ip := dnsutil.ExtractIP(rr); ip != nil {
+		if ip := zdnsutil.ExtractIP(rr); ip != nil {
 			ips = append(ips, ip)
 		}
 	}
@@ -217,7 +216,7 @@ func ProbeNSAddrs(cache CacheSetter, addrs []string) {
 	}
 	defer nsPending.Done(key)
 
-	prober := ilatency.New(defaultNSProbeSteps(), nil)
+	prober := latency.New(defaultNSProbeSteps(), nil)
 	defer prober.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultNSProbeTimeout)
 	defer cancel()

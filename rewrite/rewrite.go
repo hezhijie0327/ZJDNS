@@ -9,11 +9,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"zjdns/config"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
 )
 
@@ -52,11 +52,11 @@ func New() *Evaluator {
 // to avoid allocation-heavy map lookups on the query hot path.
 func preParseRecordTypes(records []config.DNSRecordConfig) {
 	for j := range records {
-		if t, _ := dnsutilv2.StringToType(records[j].Type); t != 0 {
+		if t, _ := dnsutil.StringToType(records[j].Type); t != 0 {
 			records[j].ParsedType = t
 		}
 		if records[j].Class != "" {
-			if parsed, err := dnsutilv2.StringToClass(strings.ToUpper(strings.TrimSpace(records[j].Class))); err == nil {
+			if parsed, err := dnsutil.StringToClass(strings.ToUpper(strings.TrimSpace(records[j].Class))); err == nil {
 				records[j].ParsedClass = parsed
 			}
 		}
@@ -117,7 +117,7 @@ func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 			continue
 		}
 
-		rule.NormalizedName = dnsutil.NormalizeDomain(rule.Name)
+		rule.NormalizedName = zdnsutil.NormalizeDomain(rule.Name)
 
 		// Pre-parse Type/Class strings to uint16 to avoid allocation-heavy
 		// map lookups and string normalizations on every query (hot path).
@@ -212,7 +212,7 @@ func (e *Evaluator) Evaluate(domain string, qtype, qclass uint16, clientIP net.I
 		return result
 	}
 	rules := *rulesPtr
-	domain = dnsutil.NormalizeDomain(domain)
+	domain = zdnsutil.NormalizeDomain(domain)
 
 ruleLoop:
 	for i := range rules {
@@ -321,9 +321,9 @@ func (e *Evaluator) buildRecord(domain string, record *config.DNSRecordConfig) d
 	if class == "" {
 		class = config.DefaultDNSClass
 	}
-	name := dnsutilv2.Fqdn(domain)
+	name := dnsutil.Fqdn(domain)
 	if record.Name != "" {
-		name = dnsutilv2.Fqdn(record.Name)
+		name = dnsutil.Fqdn(record.Name)
 	}
 	var sb strings.Builder
 	sb.Grow(len(name) + len(class) + len(record.Type) + len(record.Content) + 20)
@@ -339,9 +339,9 @@ func (e *Evaluator) buildRecord(domain string, record *config.DNSRecordConfig) d
 	if rr, err := dns.New(sb.String()); err == nil {
 		return rr
 	}
-	rrType, _ := dnsutilv2.StringToType(record.Type)
+	rrType, _ := dnsutil.StringToType(record.Type)
 	classValue := uint16(dns.ClassINET)
-	if parsedClass, err := dnsutilv2.StringToClass(class); err == nil {
+	if parsedClass, err := dnsutil.StringToClass(class); err == nil {
 		classValue = parsedClass
 	}
 	return &dns.RFC3597{

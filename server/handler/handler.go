@@ -11,7 +11,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/dnsutil"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pending"
 	"zjdns/internal/pool"
@@ -20,7 +20,7 @@ import (
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -158,7 +158,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 func (h *Handler) BuildQueryMessage(question Question, ecs *edns.ECSOption, recursionDesired, isSecureConnection bool) *dns.Msg {
 	msg := pool.DefaultMessagePool.Get()
 
-	dnsutilv2.SetQuestion(msg, dnsutilv2.Fqdn(question.Name), question.Qtype)
+	dnsutil.SetQuestion(msg, dnsutil.Fqdn(question.Name), question.Qtype)
 	msg.RecursionDesired = recursionDesired
 
 	if h.edns != nil {
@@ -178,7 +178,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	if req == nil || len(req.Question) == 0 {
 		msg := pool.DefaultMessagePool.Get()
 		if req != nil {
-			dnsutilv2.SetReply(msg, req)
+			dnsutil.SetReply(msg, req)
 		} else {
 			msg.Response = true
 		}
@@ -217,7 +217,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 				question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[responseMsg.Rcode],
 				time.Since(startTime).Truncate(time.Microsecond), len(responseMsg.Answer), len(responseMsg.Ns),
 				len(responseMsg.Extra), responseMsg.AuthenticatedData,
-				dnsutil.FormatRecords(responseMsg.Answer, responseMsg.Ns, responseMsg.Extra))
+				zdnsutil.FormatRecords(responseMsg.Answer, responseMsg.Ns, responseMsg.Extra))
 		}
 	}()
 
@@ -323,7 +323,7 @@ func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP 
 }
 
 func (h *Handler) lookupReversePTR(question Question) []dns.RR {
-	ip := dnsutil.ParseReverseDNSName(question.Name)
+	ip := zdnsutil.ParseReverseDNSName(question.Name)
 	if ip == nil {
 		return nil
 	}
@@ -339,7 +339,7 @@ func (h *Handler) lookupReversePTR(question Question) []dns.RR {
 
 	records := make([]dns.RR, 0, len(results))
 	for _, result := range results {
-		records = append(records, dnsutil.NewPTRRecord(question.Name, result.Name, result.TTL, question.Qclass))
+		records = append(records, zdnsutil.NewPTRRecord(question.Name, result.Name, result.TTL, question.Qclass))
 	}
 
 	return records
@@ -350,15 +350,15 @@ func (h *Handler) lookupReversePTR(question Question) []dns.RR {
 func (h *Handler) validateDNSQuery(req *dns.Msg, question *Question, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16) *dns.Msg {
 	if len(question.Name) <= config.MaxDomainLength && question.Qtype != dns.TypeANY &&
 		question.Qtype != dns.TypeAXFR && question.Qtype != dns.TypeIXFR &&
-		dnsutil.IsValidDomainLabels(question.Name) {
+		zdnsutil.IsValidDomainLabels(question.Name) {
 		return nil
 	}
 	msg := pool.DefaultMessagePool.Get()
-	dnsutilv2.SetReply(msg, req)
+	dnsutil.SetReply(msg, req)
 	msg.Rcode = dns.RcodeRefused
 
 	var ede *edns.EDEOption
-	if len(question.Name) > config.MaxDomainLength || !dnsutil.IsValidDomainLabels(question.Name) {
+	if len(question.Name) > config.MaxDomainLength || !zdnsutil.IsValidDomainLabels(question.Name) {
 		ede = edns.NewEDEOption(edns.EDECodeInvalidData, "")
 	} else {
 		ede = edns.NewEDEOption(edns.EDECodeNotSupported, "")

@@ -9,7 +9,7 @@ import (
 	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
-	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
 )
 
@@ -18,7 +18,7 @@ import (
 // genTestKey generates an ECDSA P-256 key pair + DNSKEY + private key for signing.
 func genTestKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 	dnskey := &dns.DNSKEY{
-		Hdr:    dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		Hdr:    dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
 		DNSKEY: rdata.DNSKEY{Flags: flags, Protocol: 3, Algorithm: dns.ECDSAP256SHA256},
 	}
 	priv, _ := dnskey.Generate(256)
@@ -29,19 +29,19 @@ func genTestKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uint16) *dns.RRSIG {
 	rrsig := &dns.RRSIG{
 		Hdr: dns.Header{
-			Name:  dnsutilv2.Fqdn(signer),
+			Name:  dnsutil.Fqdn(signer),
 			Class: dns.ClassINET,
 			TTL:   3600,
 		},
 		RRSIG: rdata.RRSIG{
 			TypeCovered: dns.RRToType(rrset[0]),
 			Algorithm:   dns.ECDSAP256SHA256,
-			Labels:      uint8(dnsutilv2.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — protocol-bounded byte
+			Labels:      uint8(dnsutil.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — protocol-bounded byte
 			OrigTTL:     rrset[0].Header().TTL,
 			Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 			Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 			KeyTag:      keyTag,
-			SignerName:  dnsutilv2.Fqdn(signer),
+			SignerName:  dnsutil.Fqdn(signer),
 		},
 	}
 	_ = rrsig.Sign(priv, rrset, &dns.SignOption{})
@@ -51,7 +51,7 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 // aRec is a helper to create an A record with an IP address.
 func aRec(name, ip string) *dns.A {
 	return &dns.A{
-		Hdr: dns.Header{Name: dnsutilv2.Fqdn(name), Class: dns.ClassINET, TTL: 300},
+		Hdr: dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
 		A:   rdata.A{Addr: netip.MustParseAddr(ip)},
 	}
 }
@@ -92,7 +92,7 @@ func TestVerifyRRset_ExpiredSignature(t *testing.T) {
 
 	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
 	rrsig := &dns.RRSIG{
-		Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 		RRSIG: rdata.RRSIG{
 			TypeCovered: dns.TypeA,
 			Algorithm:   dns.ECDSAP256SHA256,
@@ -101,7 +101,7 @@ func TestVerifyRRset_ExpiredSignature(t *testing.T) {
 			Expiration:  uint32(time.Now().Add(-48 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 			Inception:   uint32(time.Now().Add(-72 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 			KeyTag:      ksk.KeyTag(),
-			SignerName:  dnsutilv2.Fqdn(zone),
+			SignerName:  dnsutil.Fqdn(zone),
 		},
 	}
 	_ = rrsig.Sign(priv, rrset, &dns.SignOption{})
@@ -228,7 +228,7 @@ func TestIsResponseValid_SignedAnswer(t *testing.T) {
 	zsk, zskPriv := genTestKey(zone, dns.FlagZONE)
 
 	aRec := &dns.A{
-		Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 		A:   rdata.A{Addr: netip.MustParseAddr("203.0.113.1")},
 	}
 	rrsig := signRRset([]dns.RR{aRec}, zone, zskPriv, zsk.KeyTag())
@@ -253,7 +253,7 @@ func TestIsResponseValid_UnsignedAnswer(t *testing.T) {
 	zsk, _ := genTestKey(zone, dns.FlagZONE)
 
 	aRec := &dns.A{
-		Hdr: dns.Header{Name: dnsutilv2.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 		A:   rdata.A{Addr: netip.MustParseAddr("203.0.113.1")},
 	}
 	response := &dns.Msg{
@@ -318,7 +318,7 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeNameError},
 		Ns:        []dns.RR{nsec, rrsig},
 	}
-	dnsutilv2.SetQuestion(response, dnsutilv2.Fqdn(qname), qtype)
+	dnsutil.SetQuestion(response, dnsutil.Fqdn(qname), qtype)
 	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if err != nil {
 		t.Errorf("NXDOMAIN with signed NSEC should pass: %v", err)
@@ -360,7 +360,7 @@ func TestFullDNSSECChain(t *testing.T) {
 
 	// Step 2: verify a signed A record against child's verified DNSKEYs
 	aRec := &dns.A{
-		Hdr: dns.Header{Name: dnsutilv2.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
+		Hdr: dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
 		A:   rdata.A{Addr: netip.MustParseAddr("198.51.100.1")},
 	}
 	rrsig := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag())
@@ -417,13 +417,13 @@ func TestIsResponseValid_MixedRRsetWithForeignRRSIG(t *testing.T) {
 	// CNAME record signed by parent zone (valid) +
 	// A record signed by child zone (parent can't verify this RRSIG)
 	cnameRec := &dns.CNAME{
-		Hdr:   dns.Header{Name: dnsutilv2.Fqdn("query.parent.example.com"), Class: dns.ClassINET, TTL: 300},
-		CNAME: rdata.CNAME{Target: dnsutilv2.Fqdn("target.child.parent.example.com")},
+		Hdr:   dns.Header{Name: dnsutil.Fqdn("query.parent.example.com"), Class: dns.ClassINET, TTL: 300},
+		CNAME: rdata.CNAME{Target: dnsutil.Fqdn("target.child.parent.example.com")},
 	}
 	cnameRRSIG := signRRset([]dns.RR{cnameRec}, parentZone, parentZSKPriv, parentZSK.KeyTag())
 
 	aRec := &dns.A{
-		Hdr: dns.Header{Name: dnsutilv2.Fqdn("target.child.parent.example.com"), Class: dns.ClassINET, TTL: 300},
+		Hdr: dns.Header{Name: dnsutil.Fqdn("target.child.parent.example.com"), Class: dns.ClassINET, TTL: 300},
 		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
 	}
 	aRRSIG := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag())
