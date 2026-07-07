@@ -195,7 +195,7 @@ func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns
 func (h *Handler) processCacheMissResult(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, clientIP net.IP, isSecureConnection bool, startTime time.Time, requestProtocol string, tcpKeepaliveTimeout uint16, qr *resolver.QueryResult) *dns.Msg {
 	if qr.Err != nil {
 		if errors.Is(qr.Err, resolver.ErrCIDRFilterRefused) {
-			return h.processCIDRRefused(req, question, ecsOpt, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection, requestProtocol, tcpKeepaliveTimeout)
+			return h.processCIDRRefused(req, question, ecsOpt, clientRequestedDNSSEC, cookieOpt, clientIP, isSecureConnection, startTime, requestProtocol, tcpKeepaliveTimeout)
 		}
 		return h.processQueryError(req, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, qr.Err, startTime, requestProtocol, tcpKeepaliveTimeout)
 	}
@@ -250,7 +250,7 @@ func (h *Handler) processQueryError(req *dns.Msg, question Question, clientReque
 	return msg
 }
 
-func (h *Handler) processCIDRRefused(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, requestProtocol string, tcpKeepaliveTimeout uint16) *dns.Msg {
+func (h *Handler) processCIDRRefused(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, clientRequestedDNSSEC bool, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, startTime time.Time, requestProtocol string, tcpKeepaliveTimeout uint16) *dns.Msg {
 	msg := h.buildResponse(req)
 	log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", question.Name, dns.TypeToString[question.Qtype])
 	msg.Rcode = dns.RcodeRefused
@@ -260,6 +260,7 @@ func (h *Handler) processCIDRRefused(req *dns.Msg, question Question, ecsOpt *ed
 		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 		ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
 		Protocol: requestProtocol, Result: "error", Rcode: dns.RcodeRefused,
+		ResponseTime: time.Since(startTime).Milliseconds(),
 	})
 	return msg
 }

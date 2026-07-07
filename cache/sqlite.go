@@ -25,7 +25,7 @@ import (
 const (
 	defaultStaleMaxAge = int64(config.DefaultStaleMaxAge)
 	zstdCompressLevel  = zstd.SpeedDefault
-	schemaVersion      = 5 // increment to drop and recreate all tables on schema change
+	schemaVersion      = 6 // increment to drop and recreate all tables on schema change
 	dsnParams          = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
 )
 
@@ -266,10 +266,11 @@ func (s *SQLiteCache) migrate() error {
 		-- keeps counters bounded by cache eviction.
 
 		CREATE TABLE IF NOT EXISTS entry_hit_counters (
-			entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-			protocol  TEXT NOT NULL,
-			rcode     INTEGER NOT NULL DEFAULT 0,
-			hit_count INTEGER NOT NULL DEFAULT 0,
+			entry_id          INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			protocol          TEXT NOT NULL,
+			rcode             INTEGER NOT NULL DEFAULT 0,
+			hit_count         INTEGER NOT NULL DEFAULT 0,
+			total_response_ms INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (entry_id, protocol, rcode)
 		) WITHOUT ROWID;
 
@@ -321,10 +322,11 @@ func (s *SQLiteCache) prepareStatements() error {
 		return err
 	}
 	s.stmtHitCounter, err = s.db.Prepare(
-		`INSERT INTO entry_hit_counters (entry_id, protocol, rcode, hit_count)
-		 VALUES (?1, ?2, ?3, 1)
+		`INSERT INTO entry_hit_counters (entry_id, protocol, rcode, hit_count, total_response_ms)
+		 VALUES (?1, ?2, ?3, 1, ?4)
 		 ON CONFLICT(entry_id, protocol, rcode) DO UPDATE
-		 SET hit_count = entry_hit_counters.hit_count + 1`,
+		 SET hit_count = entry_hit_counters.hit_count + 1,
+		     total_response_ms = entry_hit_counters.total_response_ms + ?4`,
 	)
 	if err != nil {
 		return err
@@ -608,7 +610,7 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	entryID := s.ensureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
 
 	if r.Result == "hit" {
-		_, _ = s.stmtHitCounter.Exec(entryID, r.Protocol, r.Rcode)
+		_, _ = s.stmtHitCounter.Exec(entryID, r.Protocol, r.Rcode, r.ResponseTime)
 		return
 	}
 
@@ -783,7 +785,7 @@ func (s *SQLiteCache) Stats() []string {
 	var total, hits, misses, stales, rewrites, errCount int64
 	var hcUDP, hcTCP, hcDOT, hcDOQ, hcDOH, hcDOH3 int64
 	var rlUDP, rlTCP, rlDOT, rlDOQ, rlDOH, rlDOH3 int64
-	var hijack, fallback, totalMS int64
+	var hijack, fallback, totalMS, hitTotalMS int64
 	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
 	var secureCount, insecureCount, bogusCount int64
 
@@ -802,7 +804,6 @@ func (s *SQLiteCache) Stats() []string {
 	// Detail rows from request_log since last stats clear.
 	_ = s.db.QueryRow(
 		"SELECT COUNT(*),"+
-			" COALESCE(AVG(response_time_ms), 0),"+
 			" COALESCE(SUM(CASE WHEN result='miss' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN result='stale' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN result='rewrite' THEN 1 ELSE 0 END), 0),"+
@@ -818,7 +819,7 @@ func (s *SQLiteCache) Stats() []string {
 			" COALESCE(SUM(response_time_ms), 0)"+
 			" FROM request_log WHERE id > (SELECT cleared_before FROM stats_meta)",
 	).Scan(
-		&total, &avgMs,
+		&total,
 		&misses, &stales, &rewrites, &errCount,
 		&rlUDP, &rlTCP, &rlDOT, &rlDOQ, &rlDOH, &rlDOH3,
 		&hijack, &fallback, &totalMS,
@@ -831,9 +832,13 @@ func (s *SQLiteCache) Stats() []string {
 	doq := hcDOQ + rlDOQ
 	doh := hcDOH + rlDOH
 	doh3 := hcDOH3 + rlDOH3
-	// avg := totalMS / (misses + errors), but use per-row avg for now
-	if misses+errCount > 0 && avgMs == 0 {
-		avgMs = float64(totalMS) / float64(misses+errCount)
+
+	// Hit response time total from entry_hit_counters.
+	_ = s.db.QueryRow("SELECT COALESCE(SUM(total_response_ms), 0) FROM entry_hit_counters").Scan(&hitTotalMS)
+
+	// Average across all request types (hit + miss + stale + rewrite + error).
+	if total > 0 {
+		avgMs = float64(totalMS+hitTotalMS) / float64(total)
 	}
 
 	// Rcode distribution: request_log + entry_hit_counters.

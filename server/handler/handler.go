@@ -236,6 +236,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 			h.cache.RecordRequest(&cache.RequestRecord{
 				Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 				Protocol: requestProtocol, Result: "hit", Rcode: dns.RcodeSuccess,
+				ResponseTime: time.Since(startTime).Milliseconds(),
 			})
 			return responseMsg
 		}
@@ -245,6 +246,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 			h.cache.RecordRequest(&cache.RequestRecord{
 				Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 				Protocol: requestProtocol, Result: "stale", Rcode: dns.RcodeSuccess,
+				ResponseTime: time.Since(startTime).Milliseconds(),
 			})
 			return responseMsg
 		}
@@ -264,6 +266,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 				Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 				ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
 				Protocol: requestProtocol, Result: "hit", Rcode: dns.RcodeSuccess,
+				ResponseTime: time.Since(startTime).Milliseconds(),
 			})
 			responseMsg = response
 			return responseMsg
