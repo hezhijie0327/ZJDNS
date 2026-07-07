@@ -32,6 +32,7 @@ type Prober struct {
 	bgGroup func(func() error)
 	bgCtx   context.Context
 	engine  *ilatency.Prober
+	pending *PendingProbes
 }
 
 // New creates a new Prober with the given cache setter, background group
@@ -42,6 +43,7 @@ func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, s
 		bgGroup: bgGroup,
 		bgCtx:   bgCtx,
 		engine:  ilatency.New(steps, bgCtx),
+		pending: NewPendingProbes(),
 	}
 }
 
@@ -102,9 +104,14 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 		return
 	}
 
+	if !p.pending.Start(qname, qtype) {
+		return
+	}
+
 	log.Debugf("LATENCY: starting background latency probe for %s", qname)
 
 	p.bgGroup(func() error {
+		defer p.pending.Done(qname, qtype)
 		defer dnsutil.HandlePanic("latency probe")
 		if err := p.probeAndReorder(p.bgCtx, qname, qtype, answer, ecsResponse); err != nil {
 			log.Debugf("LATENCY: background probe failed for %s: %v", qname, err)
