@@ -19,24 +19,8 @@ import (
 	"zjdns/internal/pending"
 )
 
-// probeKey identifies a unique in-flight latency probe.
-type probeKey struct {
-	qname string
-	qtype uint16
-}
-
 // nsPending deduplicates concurrent ProbeNSAddrs calls by sorted IP set.
 var nsPending = pending.NewGroup[string]()
-
-// buildNSProbeKey returns a deterministic string key from a sorted IP list.
-func buildNSProbeKey(ips []net.IP) string {
-	strs := make([]string, len(ips))
-	for i, ip := range ips {
-		strs[i] = ip.String()
-	}
-	slices.Sort(strs)
-	return strings.Join(strs, ",")
-}
 
 // CacheSetter is the interface for updating latency measurements in the
 // cache after probing.
@@ -56,6 +40,12 @@ type Prober struct {
 	pending *pending.Group[probeKey]
 }
 
+// probeKey identifies a unique in-flight latency probe.
+type probeKey struct {
+	qname string
+	qtype uint16
+}
+
 // New creates a new Prober with the given cache setter, background group
 // executor, context, and probe configuration steps.
 func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, steps []config.LatencyProbeStep) *Prober {
@@ -67,6 +57,8 @@ func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, s
 		pending: pending.NewGroup[probeKey](),
 	}
 }
+
+// --- Prober exported methods ---
 
 // Close releases resources held by the prober (HTTP/3 QUIC connections).
 func (p *Prober) Close() {
@@ -136,14 +128,16 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 	p.bgGroup(func() error {
 		defer p.pending.Done(key)
 		defer dnsutil.HandlePanic("latency probe")
-		if err := p.probeAndReorder(p.bgCtx, qname, qtype, answer, ecsResponse); err != nil {
+		if err := p.probeAndReorder(p.bgCtx, qname, answer, ecsResponse); err != nil {
 			log.Debugf("LATENCY: background probe failed for %s: %v", qname, err)
 		}
 		return nil
 	})
 }
 
-func (p *Prober) probeAndReorder(ctx context.Context, qname string, qtype uint16, answer []dns.RR, ecsResponse *edns.ECSOption) error {
+// --- Prober unexported methods ---
+
+func (p *Prober) probeAndReorder(ctx context.Context, qname string, answer []dns.RR, ecsResponse *edns.ECSOption) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -175,17 +169,7 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, qtype uint16
 	return nil
 }
 
-// --- Shared probe function (used by handler prober + resolver NS/Root) ---
-
-// defaultNSProbeSteps returns the default probe steps for NS/Root latency
-// probing (ping → UDP:53 → TCP:53).
-func defaultNSProbeSteps() []config.LatencyProbeStep {
-	return []config.LatencyProbeStep{
-		{Protocol: config.ProtoPing, Timeout: 100},
-		{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: 100},
-		{Protocol: config.ProtoTCP, Port: config.DefaultProbePortDNS, Timeout: 100},
-	}
-}
+// --- NS probe helpers ---
 
 // ProbeNSAddrs probes the given "ip:port" addresses and stores latency values
 // in ip_latency. Does NOT write cache entries — the caller is responsible for
@@ -247,4 +231,22 @@ func ProbeNSAddrs(cache CacheSetter, addrs []string) {
 	}
 }
 
-// --- Shared helpers ---
+// defaultNSProbeSteps returns the default probe steps for NS/Root latency
+// probing (ping → UDP:53 → TCP:53).
+func defaultNSProbeSteps() []config.LatencyProbeStep {
+	return []config.LatencyProbeStep{
+		{Protocol: config.ProtoPing, Timeout: 100},
+		{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: 100},
+		{Protocol: config.ProtoTCP, Port: config.DefaultProbePortDNS, Timeout: 100},
+	}
+}
+
+// buildNSProbeKey returns a deterministic string key from a sorted IP list.
+func buildNSProbeKey(ips []net.IP) string {
+	strs := make([]string, len(ips))
+	for i, ip := range ips {
+		strs[i] = ip.String()
+	}
+	slices.Sort(strs)
+	return strings.Join(strs, ",")
+}

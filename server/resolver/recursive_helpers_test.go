@@ -8,7 +8,6 @@ import (
 	dnsutilv2 "codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
 
-	"zjdns/config"
 	"zjdns/edns"
 )
 
@@ -201,40 +200,5 @@ func TestCheckLameDelegation_AuthoritativeNODATA(t *testing.T) {
 	}
 	if termRes.err != nil {
 		t.Errorf("authoritative NODATA should not be an error: %v", termRes.err)
-	}
-}
-
-// ── finalizeResponse ────────────────────────────────────────────────────────
-
-func TestFinalizeResponse_PassesThrough(t *testing.T) {
-	r := newTestRecursiveWithHelpers()
-	resp := &dns.Msg{
-		Answer: []dns.RR{
-			&dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{}},
-		},
-		Ns:    []dns.RR{&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}}},
-		Extra: []dns.RR{},
-	}
-	answer, authority, _, validated, ecs, server, hijack, err := r.finalizeResponse(resp, "example.com.", true, &edns.ECSOption{Family: 1})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !validated {
-		t.Error("validated should be passed through")
-	}
-	if len(answer) == 0 {
-		t.Error("answer should not be empty")
-	}
-	if len(authority) == 0 {
-		t.Error("authority should not be empty")
-	}
-	if ecs == nil || ecs.Family != 1 {
-		t.Error("ECS should be passed through")
-	}
-	if server != config.RecursiveIndicator {
-		t.Errorf("expected server=%s, got %s", config.RecursiveIndicator, server)
-	}
-	if hijack {
-		t.Error("hijack should be false")
 	}
 }

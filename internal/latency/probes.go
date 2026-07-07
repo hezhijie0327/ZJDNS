@@ -36,7 +36,7 @@ const (
 // measureIPLatency probes a single IP using the configured steps and returns
 // the total elapsed time for the first successful probe. The bgCtx is the
 // Prober's background context checked during long-running operations.
-func measureIPLatency(ctx context.Context, bgCtx context.Context, ip net.IP, steps []config.LatencyProbeStep, httpPool *httpClientPool) time.Duration {
+func measureIPLatency(ctx context.Context, ip net.IP, steps []config.LatencyProbeStep, httpPool *httpClientPool) time.Duration {
 	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
 		return time.Duration(math.MaxInt64)
 	}
@@ -49,7 +49,7 @@ func measureIPLatency(ctx context.Context, bgCtx context.Context, ip net.IP, ste
 		}
 
 		stepCtx, cancel := context.WithTimeout(ctx, stepTimeout)
-		err := probeAddress(stepCtx, bgCtx, ip, step, httpPool)
+		err := probeAddress(stepCtx, ip, step, httpPool)
 		cancel()
 		if err == nil {
 			return time.Since(start)
@@ -59,7 +59,7 @@ func measureIPLatency(ctx context.Context, bgCtx context.Context, ip net.IP, ste
 	return time.Duration(math.MaxInt64)
 }
 
-func probeAddress(ctx context.Context, bgCtx context.Context, ip net.IP, step config.LatencyProbeStep, httpPool *httpClientPool) error {
+func probeAddress(ctx context.Context, ip net.IP, step config.LatencyProbeStep, httpPool *httpClientPool) error {
 	switch step.Protocol {
 	case config.ProtoPing, config.ProtoICMP:
 		return probeICMP(ctx, ip)

@@ -10,12 +10,6 @@ import (
 	"zjdns/internal/log"
 )
 
-const rootServersDomain = "root-servers.net"
-
-// Verdict classifies a DNS response from a server that claims authority for
-// a given zone.  It answers: "is this response suspicious for this zone?"
-type Verdict int
-
 const (
 	// VerdictClean means the response is consistent with the zone's
 	// authority — no hijacking detected.
@@ -33,18 +27,11 @@ const (
 	VerdictUncertain
 )
 
-func (v Verdict) String() string {
-	switch v {
-	case VerdictClean:
-		return "clean"
-	case VerdictHijack:
-		return "hijack"
-	case VerdictUncertain:
-		return "uncertain"
-	default:
-		return "unknown"
-	}
-}
+const rootServersDomain = "root-servers.net"
+
+// Verdict classifies a DNS response from a server that claims authority for
+// a given zone.  It answers: "is this response suspicious for this zone?"
+type Verdict int
 
 // Detector detects DNS hijacking by validating that a server does not return
 // answer records outside its delegated zone authority. Only the Answer section
@@ -59,6 +46,23 @@ type Detector struct {
 	enabled atomic.Bool
 }
 
+// --- Verdict methods ---
+
+func (v Verdict) String() string {
+	switch v {
+	case VerdictClean:
+		return "clean"
+	case VerdictHijack:
+		return "hijack"
+	case VerdictUncertain:
+		return "uncertain"
+	default:
+		return "unknown"
+	}
+}
+
+// --- Detector methods ---
+
 // IsEnabled returns whether hijack detection is currently active.
 func (d *Detector) IsEnabled() bool {
 	return d.enabled.Load()
@@ -68,8 +72,6 @@ func (d *Detector) IsEnabled() bool {
 func (d *Detector) Enable(enabled bool) {
 	d.enabled.Store(enabled)
 }
-
-// ── Public API ──────────────────────────────────────────────────────────────
 
 // Validate checks whether a DNS response from a server authoritative for zone
 // is legitimate for the given queryName.  Only the Answer section is inspected.
@@ -100,7 +102,26 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 	return VerdictClean
 }
 
-// ── Classification ──────────────────────────────────────────────────────────
+// IsHijackedByTLD checks whether a TLD or root server returned
+// direct A/AAAA answers for a query name.  Those servers never
+// put A/AAAA in the Answer section for a subdomain — if they
+// do, the response was injected by a middlebox.
+func (d *Detector) IsHijackedByTLD(response *dns.Msg, queryName string) bool {
+	if !d.enabled.Load() || response == nil {
+		return false
+	}
+	n := dnsutil.NormalizeDomain(queryName)
+	for _, rr := range response.Answer {
+		if dnsutil.NormalizeDomain(rr.Header().Name) != n {
+			continue
+		}
+		switch dns.RRToType(rr) {
+		case dns.TypeA, dns.TypeAAAA:
+			return true
+		}
+	}
+	return false
+}
 
 // classify returns the Verdict for a single RR that matches the query name.
 func (d *Detector) classify(zone, name string, rrtype uint16) Verdict {
@@ -108,7 +129,7 @@ func (d *Detector) classify(zone, name string, rrtype uint16) Verdict {
 	case zone == "":
 		return d.classifyRoot(name, rrtype)
 	case d.isTLD(zone):
-		return d.classifyTLD(zone, name, rrtype)
+		return d.classifyTLD(zone, name)
 	default:
 		// Authoritative level: the zone can legitimately return
 		// these records, but we can't distinguish real answers from
@@ -143,34 +164,11 @@ func (d *Detector) classifyRoot(name string, rrtype uint16) Verdict {
 // classifyTLD validates responses from TLD servers.  TLD servers should only
 // return records for the TLD itself (e.g. SOA for "com"), never A/AAAA for
 // subdomains.
-func (d *Detector) classifyTLD(zone, name string, rrtype uint16) Verdict {
+func (d *Detector) classifyTLD(zone, name string) Verdict {
 	if name != zone {
 		return VerdictHijack
 	}
 	return VerdictClean
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-// IsHijackedByTLD checks whether a TLD or root server returned
-// direct A/AAAA answers for a query name.  Those servers never
-// put A/AAAA in the Answer section for a subdomain — if they
-// do, the response was injected by a middlebox.
-func (d *Detector) IsHijackedByTLD(response *dns.Msg, queryName string) bool {
-	if !d.enabled.Load() || response == nil {
-		return false
-	}
-	n := dnsutil.NormalizeDomain(queryName)
-	for _, rr := range response.Answer {
-		if dnsutil.NormalizeDomain(rr.Header().Name) != n {
-			continue
-		}
-		switch dns.RRToType(rr) {
-		case dns.TypeA, dns.TypeAAAA:
-			return true
-		}
-	}
-	return false
 }
 
 func (d *Detector) isRootServerGlue(domain string, rrType uint16) bool {

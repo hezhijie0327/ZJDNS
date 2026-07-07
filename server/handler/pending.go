@@ -10,6 +10,21 @@ import (
 	"zjdns/server/resolver"
 )
 
+// --- Exported type ---
+
+// PendingRequests deduplicates concurrent identical queries.  When multiple
+// clients query the same name+type+ECS before the result is cached, only the
+// first query (leader) is sent upstream.  Followers block until the leader
+// completes, then receive the same result.  This reduces upstream load and
+// closes the window for cache-poisoning attacks that exploit concurrent
+// identical queries.
+type PendingRequests struct {
+	mu   sync.Mutex
+	sets map[pendingKey]*pendingCall
+}
+
+// --- Unexported types ---
+
 // pendingKey is a pre-computed cache key for deduplicating concurrent identical
 // queries.  It mirrors the cache lookup key (qname, qtype, qclass, ecs_addr,
 // ecs_prefix, dnssec_ok).
@@ -29,23 +44,14 @@ type pendingCall struct {
 	result *resolver.QueryResult
 }
 
-// PendingRequests deduplicates concurrent identical queries.  When multiple
-// clients query the same name+type+ECS before the result is cached, only the
-// first query (leader) is sent upstream.  Followers block until the leader
-// completes, then receive the same result.  This reduces upstream load and
-// closes the window for cache-poisoning attacks that exploit concurrent
-// identical queries.
-type PendingRequests struct {
-	mu   sync.Mutex
-	sets map[pendingKey]*pendingCall
-}
-
 // NewPendingRequests creates a PendingRequests ready for use.
 func NewPendingRequests() *PendingRequests {
 	return &PendingRequests{
 		sets: make(map[pendingKey]*pendingCall),
 	}
 }
+
+// --- Exported methods ---
 
 // Join checks whether an identical query is already in flight.  If so, it
 // blocks until the leader finishes and returns the shared result with
@@ -88,6 +94,8 @@ func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.
 	call.result = result
 	close(call.done)
 }
+
+// --- Unexported helpers ---
 
 // buildPendingKey constructs a pendingKey from the given parameters.
 func buildPendingKey(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) pendingKey {

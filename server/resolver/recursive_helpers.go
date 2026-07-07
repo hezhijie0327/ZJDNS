@@ -14,15 +14,6 @@ import (
 	"zjdns/internal/pool"
 )
 
-// finalizeResponse strips cross-zone records, pools the response, and returns
-// the extracted sections for the CNAME resolver to follow independently.
-func (r *Recursive) finalizeResponse(response *dns.Msg, currentDomain string, validated bool, ecsResponse *edns.ECSOption) ([]dns.RR, []dns.RR, []dns.RR, bool, *edns.ECSOption, string, bool, error) {
-	answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
-	nsSlice, extraSlice := response.Ns, response.Extra
-	pool.DefaultMessagePool.Put(response)
-	return answer, nsSlice, extraSlice, validated, ecsResponse, config.RecursiveIndicator, false, nil
-}
-
 // terminalResult holds the return values from collectBestNSMatch when no
 // NS delegation records are found and the resolution should end.
 type terminalResult struct {

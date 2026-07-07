@@ -141,6 +141,25 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 - **Config split**: `config.go` (types, loading, defaults, DDR/Chaos) + `config_validate.go` (all validation functions).
 - **Do NOT split** when the split would require exporting internal helpers or when the split crosses 2–3 tightly coupled concerns (a 400-line file is fine).
 
+### File-Level Declaration Order
+
+All Go source files follow a fixed declaration order. Since Go allows forward
+references within a package, declarations are ordered by category, not by
+dependency:
+
+```
+const   (exported first, then unexported)
+var     (exported first, then unexported)
+type    (exported first, then unexported)
+func    (exported first, then unexported, methods grouped by receiver)
+```
+
+Within `func`: constructors (`New*`) immediately follow their type, exported
+methods before unexported, methods grouped by receiver type.  Package-level
+functions come after all methods.
+
+`init()` is placed right after the `var` block it initializes.
+
 ### Concurrency
 
 - **Pointer receivers** for any struct containing `sync.Mutex`, `sync.RWMutex`, or `atomic.*` fields.

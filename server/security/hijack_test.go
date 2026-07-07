@@ -350,7 +350,7 @@ func TestClassifyRoot_NonGlueAnswer(t *testing.T) {
 
 func TestClassifyTLD_SelfQuery(t *testing.T) {
 	d := newDetector()
-	v := d.classifyTLD("com", "com", dns.TypeSOA)
+	v := d.classifyTLD("com", "com")
 	if v != VerdictClean {
 		t.Fatalf("TLD querying itself should be clean, got %s", v)
 	}
@@ -358,7 +358,7 @@ func TestClassifyTLD_SelfQuery(t *testing.T) {
 
 func TestClassifyTLD_SubdomainAnswer(t *testing.T) {
 	d := newDetector()
-	v := d.classifyTLD("com", "www.example.com", dns.TypeA)
+	v := d.classifyTLD("com", "www.example.com")
 	if v != VerdictHijack {
 		t.Fatalf("TLD returning A for subdomain should be VerdictHijack, got %s", v)
 	}

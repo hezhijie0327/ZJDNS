@@ -49,20 +49,6 @@ func (p *Prober) Close() {
 	}
 }
 
-// normalizeSteps pre-processes probe steps to avoid repeated string operations
-// on the hot path.
-func normalizeSteps(steps []config.LatencyProbeStep) []config.LatencyProbeStep {
-	if len(steps) == 0 {
-		return nil
-	}
-	normalized := make([]config.LatencyProbeStep, len(steps))
-	for i, s := range steps {
-		s.Protocol = normalizeProbeProtocol(s.Protocol)
-		normalized[i] = s
-	}
-	return normalized
-}
-
 // ProbeIPsLatency probes the given IP addresses and returns them sorted by
 // measured latency along with a map of IP → latency in milliseconds.
 func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, map[string]int) {
@@ -99,7 +85,7 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, m
 			}
 			defer func() { <-p.sem }()
 
-			results[idx].latency = measureIPLatency(ctx, p.ctx, ips[idx], p.steps, p.httpPool)
+			results[idx].latency = measureIPLatency(ctx, ips[idx], p.steps, p.httpPool)
 		}()
 	}
 	wg.Wait()
@@ -133,6 +119,20 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) ([]net.IP, m
 	}
 
 	return sorted, latencyMS
+}
+
+// normalizeSteps pre-processes probe steps to avoid repeated string operations
+// on the hot path.
+func normalizeSteps(steps []config.LatencyProbeStep) []config.LatencyProbeStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	normalized := make([]config.LatencyProbeStep, len(steps))
+	for i, s := range steps {
+		s.Protocol = normalizeProbeProtocol(s.Protocol)
+		normalized[i] = s
+	}
+	return normalized
 }
 
 // normalizeProbeProtocol canonicalizes protocol names (e.g. "ICMP" → "ping").

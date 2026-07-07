@@ -28,19 +28,6 @@ import (
 // Question is a type alias for resolver.Question to avoid duplicate definitions.
 type Question = resolver.Question
 
-// queryResult holds the result of a resolver query for stale-cache fallback.
-type queryResult struct {
-	answer     []dns.RR
-	authority  []dns.RR
-	additional []dns.RR
-	validated  bool
-	ecs        *edns.ECSOption
-	server     string
-	fallback   bool
-	hijack     bool
-	err        error
-}
-
 // LatencyProber is the interface for latency-probing cache entries after
 // successful resolution.
 type LatencyProber interface {
@@ -76,6 +63,19 @@ type BackgroundConfig struct {
 	RefreshGroup *errgroup.Group
 	RefreshCtx   context.Context
 	Ctx          context.Context
+}
+
+// queryResult holds the result of a resolver query for stale-cache fallback.
+type queryResult struct {
+	answer     []dns.RR
+	authority  []dns.RR
+	additional []dns.RR
+	validated  bool
+	ecs        *edns.ECSOption
+	server     string
+	fallback   bool
+	hijack     bool
+	err        error
 }
 
 // New creates a Handler with the given dependencies. The resolver and prober
@@ -169,18 +169,6 @@ func (h *Handler) BuildQueryMessage(question Question, ecs *edns.ECSOption, recu
 	return msg
 }
 
-// tcpKeepaliveTimeoutForProtocol returns the EDNS TCP Keepalive timeout value
-// (in 100ms units, RFC 7828) for responses sent over the given protocol.
-// Returns 0 for protocols where TCP keepalive is not applicable (UDP, DoH, DoQ).
-func tcpKeepaliveTimeoutForProtocol(protocol string) uint16 {
-	switch protocol {
-	case "TCP", "tcp", "DoT":
-		return uint16(config.DefaultEDNSTCPKeepaliveTimeout)
-	default:
-		return 0
-	}
-}
-
 func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnection bool, requestProtocol string) *dns.Msg {
 	if atomic.LoadInt32(&h.closed) != 0 {
 		msg := h.buildResponse(req)
@@ -270,7 +258,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	}
 
 	if question.Qtype == dns.TypePTR {
-		if ptrAnswer := h.lookupReversePTR(question, ecsOpt); len(ptrAnswer) > 0 {
+		if ptrAnswer := h.lookupReversePTR(question); len(ptrAnswer) > 0 {
 			log.Debugf("PTR: cache hit for reverse lookup %s, found %d records", question.Name, len(ptrAnswer))
 			response := h.buildResponse(req)
 			response.Answer = ptrAnswer
@@ -335,7 +323,7 @@ func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP 
 	return clientRequestedDNSSEC, ecsOpt, cookieOpt, nil
 }
 
-func (h *Handler) lookupReversePTR(question Question, ecsOpt *edns.ECSOption) []dns.RR {
+func (h *Handler) lookupReversePTR(question Question) []dns.RR {
 	ip := dnsutil.ParseReverseDNSName(question.Name)
 	if ip == nil {
 		return nil
@@ -426,4 +414,16 @@ func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.
 		question.Name = rewriteResult.Domain
 	}
 	return nil, false
+}
+
+// tcpKeepaliveTimeoutForProtocol returns the EDNS TCP Keepalive timeout value
+// (in 100ms units, RFC 7828) for responses sent over the given protocol.
+// Returns 0 for protocols where TCP keepalive is not applicable (UDP, DoH, DoQ).
+func tcpKeepaliveTimeoutForProtocol(protocol string) uint16 {
+	switch protocol {
+	case "TCP", "tcp", "DoT":
+		return uint16(config.DefaultEDNSTCPKeepaliveTimeout)
+	default:
+		return 0
+	}
 }

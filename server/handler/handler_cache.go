@@ -212,7 +212,7 @@ func (h *Handler) processQueryError(req *dns.Msg, question Question, clientReque
 			Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 			ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
 			Protocol: requestProtocol, Result: "error", Rcode: dns.RcodeServerFailure,
-			ResponseTime: int64(time.Since(startTime).Milliseconds()),
+			ResponseTime: time.Since(startTime).Milliseconds(),
 		})
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
@@ -244,7 +244,7 @@ func (h *Handler) processQueryError(req *dns.Msg, question Question, clientReque
 		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 		ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
 		Protocol: requestProtocol, Result: "error", Rcode: dns.RcodeServerFailure,
-		ResponseTime: int64(time.Since(startTime).Milliseconds()),
+		ResponseTime: time.Since(startTime).Milliseconds(),
 		DNSSECStatus: dnssecStatus,
 	})
 	ede := edns.NewEDEOption(edeCode, "")
@@ -297,7 +297,7 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	h.cache.RecordRequest(cache.RequestRecord{
 		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 		ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
-		Protocol: requestProtocol, Result: "miss", ResponseTime: int64(time.Since(startTime).Milliseconds()),
+		Protocol: requestProtocol, Result: "miss", ResponseTime: time.Since(startTime).Milliseconds(),
 		Rcode: dns.RcodeSuccess, Server: server, Hijack: hijack, Fallback: fallback,
 		DNSSECStatus: dnssecStatus,
 	})
