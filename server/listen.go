@@ -71,7 +71,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				return
 			}
 
-			response := s.handler.ServeDNS(req, zdnsutil.ClientIP(w), false, "TCP")
+			response := s.handler.ServeDNS(req, zdnsutil.ClientIP(w), false, config.ProtoTCP)
 			if response != nil {
 				entry.lastAccess.Store(log.NowUnixNano())
 				writeTimer := time.NewTimer(config.DefaultDNSQueryTimeout)
