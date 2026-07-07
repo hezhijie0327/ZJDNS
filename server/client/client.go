@@ -259,7 +259,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 			if tcpResp, tcpErr := c.executeTraditionalQuery(queryCtx, msg, &tcpServer); tcpErr == nil {
 				result.Response = tcpResp
 				result.Error = nil
-				result.Protocol = "TCP"
+				result.Protocol = config.ProtoTCP
 				log.Debugf("UPSTREAM: TCP fallback succeeded for %s via %s", qname, server.Address)
 			} else {
 				log.Debugf("UPSTREAM: TCP fallback failed for %s via %s: %v", qname, server.Address, tcpErr)

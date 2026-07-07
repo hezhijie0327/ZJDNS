@@ -420,7 +420,7 @@ func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.
 // Returns 0 for protocols where TCP keepalive is not applicable (UDP, DoH, DoQ).
 func tcpKeepaliveTimeoutForProtocol(protocol string) uint16 {
 	switch protocol {
-	case "TCP", "tcp", "DoT":
+	case config.ProtoTCP, config.ProtoDOT:
 		return uint16(config.DefaultEDNSTCPKeepaliveTimeout)
 	default:
 		return 0

@@ -273,17 +273,17 @@ func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 		return fmt.Errorf("latency_probe step %d: protocol cannot be empty", index)
 	}
 	switch protocol {
-	case "ping", "icmp":
-	case "tcp":
-		return validateProbePort(index, "tcp", &step.Port, DefaultProbePortHTTP)
-	case "udp":
-		return validateProbePort(index, "udp", &step.Port, DefaultProbePortDNS)
-	case "http":
-		return validateProbePort(index, "http", &step.Port, DefaultProbePortHTTP)
-	case "https":
-		return validateProbePort(index, "https", &step.Port, DefaultProbePortHTTPS)
-	case "http3":
-		return validateProbePort(index, "http3", &step.Port, DefaultProbePortHTTPS)
+	case ProtoPing, ProtoICMP:
+	case ProtoTCP:
+		return validateProbePort(index, ProtoTCP, &step.Port, DefaultProbePortHTTP)
+	case ProtoUDP:
+		return validateProbePort(index, ProtoUDP, &step.Port, DefaultProbePortDNS)
+	case ProtoHTTPPlain:
+		return validateProbePort(index, ProtoHTTPPlain, &step.Port, DefaultProbePortHTTP)
+	case ProtoHTTP:
+		return validateProbePort(index, ProtoHTTP, &step.Port, DefaultProbePortHTTPS)
+	case ProtoHTTP3:
+		return validateProbePort(index, ProtoHTTP3, &step.Port, DefaultProbePortHTTPS)
 	default:
 		return fmt.Errorf("latency_probe step %d: unsupported protocol %s", index, step.Protocol)
 	}
