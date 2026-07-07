@@ -206,10 +206,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		return resp
 	}
 
-	var startTime time.Time
-	if log.Default.Level() >= log.Debug {
-		startTime = time.Now()
-	}
+	startTime := time.Now()
 	var responseMsg *dns.Msg
 	defer func() {
 		if responseMsg != nil && log.Default.Level() >= log.Debug {
