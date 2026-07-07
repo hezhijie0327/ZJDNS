@@ -280,24 +280,19 @@ func NewPool(maxConns, maxPipe int) *Pool {
 // Acquire gets a reusable pipelined connection, dialing a new one if needed.
 func (p *Pool) Acquire(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*Conn, error) {
 	p.mu.Lock()
+	conns := p.conns[key]
 
+	// Single pass: filter dead connections and find a non-full candidate.
+	liveConns := make([]*Conn, 0, len(conns))
 	var leastLoaded *Conn
 	leastCount := math.MaxInt
-	conns := p.conns[key]
-	liveConns := make([]*Conn, 0, len(conns))
-	for i, c := range conns {
+	for _, c := range conns {
 		if c.IsDead() {
 			continue
 		}
 		liveConns = append(liveConns, c)
 		inFlight := int(c.inFlight.Load())
 		if !c.IsFull() {
-			// Filter dead connections from the suffix before storing.
-			for _, rem := range conns[i+1:] {
-				if !rem.IsDead() {
-					liveConns = append(liveConns, rem)
-				}
-			}
 			p.conns[key] = liveConns
 			p.mu.Unlock()
 			return c, nil

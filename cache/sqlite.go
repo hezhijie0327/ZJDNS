@@ -1062,6 +1062,9 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 // sharing the same IP reuse the same row — latency is measured once, not
 // once per domain. qtype is inferred from the IP address format.
 func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return
+	}
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {
 		return
@@ -1076,6 +1079,9 @@ func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
 // GetLatencyLastProbe returns the last probe time for an IP. Returns (0, false)
 // if the IP has never been probed.
 func (s *SQLiteCache) GetLatencyLastProbe(ip string) (int64, bool) {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return 0, false
+	}
 	var ts int64
 	if err := s.stmtGetLastProbe.QueryRow(ip).Scan(&ts); err != nil || ts == 0 {
 		return 0, false
