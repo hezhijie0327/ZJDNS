@@ -23,10 +23,19 @@ import (
 )
 
 const (
-	defaultStaleMaxAge = int64(config.DefaultStaleMaxAge)
-	zstdCompressLevel  = zstd.SpeedDefault
-	schemaVersion      = 6 // increment to drop and recreate all tables on schema change
-	dsnParams          = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
+	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
+	maxLatencyLookupIPs = 64 // cap IN-clause IPs to bound SQL compilation overhead
+)
+
+const (
+	dsnParams         = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
+	schemaVersion     = 6 // increment to drop and recreate all tables on schema change
+	zstdCompressLevel = zstd.SpeedDefault
+)
+
+const (
+	pageSize               = 4096 // SQLite page size in bytes (matches OS page)
+	walAutoCheckpointPages = 4096 // trigger checkpoint at 16MB WAL (pageSize * walAutoCheckpointPages)
 )
 
 // zstd encoder/decoder for wire format compression. Created once, reused forever.
@@ -71,6 +80,7 @@ type SQLiteCache struct {
 	stmtHitCounter    *sql.Stmt
 	stmtInsertLatency *sql.Stmt
 	stmtGetLastProbe  *sql.Stmt
+	stmtEnsureEntry   *sql.Stmt
 }
 
 // NewSQLiteCache opens or creates a SQLite database and returns a ready-to-use
@@ -141,10 +151,17 @@ func NewSQLiteCache(path string, maxEntries, mmapSizeMB, cacheSizeMB int) (*SQLi
 }
 
 func (s *SQLiteCache) migrate() error {
-	// WAL autocheckpoint tuning + page size.
+	// PRAGMAs ordered by category: storage → memory → WAL.
+	mmapSize := s.mmapSizeMB * 1024 * 1024
+	cacheSize := -s.cacheSizeMB * 1024
 	pragmaSQL := fmt.Sprintf(
-		"PRAGMA mmap_size = %d; PRAGMA cache_size = %d; PRAGMA page_size = 4096; PRAGMA temp_store = MEMORY; PRAGMA wal_autocheckpoint = 5000; PRAGMA optimize;",
-		s.mmapSizeMB*1024*1024, -s.cacheSizeMB*1024,
+		"PRAGMA page_size = %d;"+
+			" PRAGMA cache_size = %d;"+
+			" PRAGMA mmap_size = %d;"+
+			" PRAGMA temp_store = MEMORY;"+
+			" PRAGMA wal_autocheckpoint = %d;"+
+			" PRAGMA journal_size_limit = %d;",
+		pageSize, cacheSize, mmapSize, walAutoCheckpointPages, mmapSize,
 	)
 	if _, err := s.db.Exec(pragmaSQL); err != nil {
 		log.Warnf("CACHE: pragma failed (non-fatal): %v", err)
@@ -300,7 +317,16 @@ func (s *SQLiteCache) migrate() error {
 			PRIMARY KEY (rdata_ip)
 		) WITHOUT ROWID;
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Populate query planner statistics so SQLite can make informed
+	// index selection decisions (sqlite_stat1 table).
+	if _, err := s.db.Exec("ANALYZE"); err != nil {
+		log.Warnf("CACHE: ANALYZE failed (non-fatal): %v", err)
+	}
+	return nil
 }
 
 func (s *SQLiteCache) prepareStatements() error {
@@ -340,6 +366,14 @@ func (s *SQLiteCache) prepareStatements() error {
 	}
 	s.stmtGetLastProbe, err = s.db.Prepare(
 		`SELECT last_probe_time FROM ip_latency WHERE rdata_ip = ?`,
+	)
+	if err != nil {
+		return err
+	}
+	s.stmtEnsureEntry, err = s.db.Prepare(
+		`SELECT id FROM entries
+		 WHERE qname = ? AND qtype = ? AND qclass = ?
+		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
 	)
 	if err != nil {
 		return err
@@ -482,7 +516,13 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 }
 
 // lookupIPLatencies fetches latencies for a batch of IPs in a single query.
+// Caps at maxLatencyLookupIPs to bound SQL compilation overhead on unusually
+// large answer sets (100+ A/AAAA records).
 func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
+	if len(ips) > maxLatencyLookupIPs {
+		ips = ips[:maxLatencyLookupIPs]
+	}
+
 	// Build WHERE rdata_ip IN (?,?,...)
 	var buf strings.Builder
 	buf.WriteString("SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (")
@@ -628,10 +668,7 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 func (s *SQLiteCache) ensureEntry(qname string, qtype, qclass int, ecsAddr string, ecsPrefix, dnssecInt int) int64 {
 	// Fast path: entry already exists.
 	var id int64
-	err := s.db.QueryRow(
-		`SELECT id FROM entries
-		 WHERE qname = ? AND qtype = ? AND qclass = ?
-		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+	err := s.stmtEnsureEntry.QueryRow(
 		qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt,
 	).Scan(&id)
 	if err == nil {
@@ -644,10 +681,7 @@ func (s *SQLiteCache) ensureEntry(qname string, qtype, qclass int, ecsAddr strin
 	defer s.writeMu.Unlock()
 
 	// Double-check after acquiring the lock.
-	err = s.db.QueryRow(
-		`SELECT id FROM entries
-		 WHERE qname = ? AND qtype = ? AND qclass = ?
-		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+	err = s.stmtEnsureEntry.QueryRow(
 		qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt,
 	).Scan(&id)
 	if err == nil {
@@ -665,10 +699,7 @@ func (s *SQLiteCache) ensureEntry(qname string, qtype, qclass int, ecsAddr strin
 	).Scan(&id)
 	if err != nil {
 		// INSERT OR IGNORE silently skipped — a concurrent Set() won.
-		_ = s.db.QueryRow(
-			`SELECT id FROM entries
-			 WHERE qname = ? AND qtype = ? AND qclass = ?
-			 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+		_ = s.stmtEnsureEntry.QueryRow(
 			qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt,
 		).Scan(&id)
 	}
@@ -681,14 +712,17 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 		return nil
 	}
 
+	// Precompute the serve-stale cutoff so the comparison e.expires_at >= ?
+	// avoids a per-row arithmetic expression and can use idx_entries_expires.
+	staleCutoff := log.NowUnix() - defaultStaleMaxAge
 	rows, err := s.db.Query(
 		`SELECT pm.name, pm.ttl, e.timestamp, MAX(e.timestamp + pm.ttl)
 		 FROM ptr_map pm
 		 JOIN entries e ON pm.entry_id = e.id
-		 WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?
+		 WHERE pm.rdata_ip = ? AND e.expires_at >= ?
 		 GROUP BY pm.name
 		 ORDER BY pm.name`,
-		ip, defaultStaleMaxAge, log.NowUnix(),
+		ip, staleCutoff,
 	)
 	if err != nil {
 		log.Warnf("CACHE: PTR lookup failed for %s: %v", ip, err)
@@ -790,6 +824,7 @@ func (s *SQLiteCache) Stats() []string {
 	var secureCount, insecureCount, bogusCount int64
 
 	// Hits come from entry_hit_counters (aggregated, no cleared_before filter).
+	// Single scan: hit counts by protocol + total response time for avg calculation.
 	_ = s.db.QueryRow(
 		"SELECT COALESCE(SUM(hit_count), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='udp' THEN hit_count ELSE 0 END), 0),"+
@@ -797,9 +832,10 @@ func (s *SQLiteCache) Stats() []string {
 			" COALESCE(SUM(CASE WHEN protocol='dot' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='doq' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='doh' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='doh3' THEN hit_count ELSE 0 END), 0)"+
+			" COALESCE(SUM(CASE WHEN protocol='doh3' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(total_response_ms), 0)"+
 			" FROM entry_hit_counters",
-	).Scan(&hits, &hcUDP, &hcTCP, &hcDOT, &hcDOQ, &hcDOH, &hcDOH3)
+	).Scan(&hits, &hcUDP, &hcTCP, &hcDOT, &hcDOQ, &hcDOH, &hcDOH3, &hitTotalMS)
 
 	// Detail rows from request_log since last stats clear.
 	_ = s.db.QueryRow(
@@ -832,9 +868,6 @@ func (s *SQLiteCache) Stats() []string {
 	doq := hcDOQ + rlDOQ
 	doh := hcDOH + rlDOH
 	doh3 := hcDOH3 + rlDOH3
-
-	// Hit response time total from entry_hit_counters.
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(total_response_ms), 0) FROM entry_hit_counters").Scan(&hitTotalMS)
 
 	// Average across all request types (hit + miss + stale + rewrite + error).
 	if total > 0 {
@@ -921,11 +954,14 @@ func (s *SQLiteCache) Close() error {
 		return nil
 	}
 	// Close prepared statements before the database.
-	for _, stmt := range []*sql.Stmt{s.stmtGetEntry, s.stmtInsertLog, s.stmtHitCounter, s.stmtInsertLatency, s.stmtGetLastProbe} {
+	for _, stmt := range []*sql.Stmt{s.stmtGetEntry, s.stmtInsertLog, s.stmtHitCounter, s.stmtInsertLatency, s.stmtGetLastProbe, s.stmtEnsureEntry} {
 		if stmt != nil {
 			_ = stmt.Close()
 		}
 	}
+	// Run optimize at shutdown — SQLite uses accumulated query patterns
+	// to decide whether ANALYZE would be beneficial.
+	_, _ = s.db.Exec("PRAGMA optimize")
 	if err := s.db.Close(); err != nil {
 		log.Errorf("CACHE: sqlite close failed: %v", err)
 		return fmt.Errorf("sqlite close: %w", err)
@@ -956,9 +992,12 @@ func (s *SQLiteCache) evictIfNeeded() {
 	}
 
 	s.evictOldest(excess)
+
+	// Periodically refresh query planner statistics.
+	_, _ = s.db.Exec("PRAGMA optimize")
 }
 
-func (s *SQLiteCache) evictOldest(n int64) {
+func (s *SQLiteCache) evictOldest(toEvict int64) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return
@@ -973,26 +1012,50 @@ func (s *SQLiteCache) evictOldest(n int64) {
 		log.Debugf("CACHE: ip_latency cleanup failed (non-fatal): %v", err)
 	}
 
-	// Prefer evicting entries that can no longer serve-stale (expires_at +
-	// staleMaxAge < now), then fall back to the oldest-by-insertion entries.
-	if _, err := tx.Exec(
+	// Two-phase eviction:
+	// Phase 1 — entries past serve-stale (expires_at < staleCutoff). These
+	// can no longer serve stale and are worthless. idx_entries_expires
+	// enables an index-assisted range scan for the WHERE filter.
+	// Phase 2 — if still over limit, evict the oldest entries regardless.
+	staleCutoff := log.NowUnix() - defaultStaleMaxAge
+	result, err := tx.Exec(
 		`DELETE FROM entries WHERE id IN (
-			SELECT id FROM entries
-			ORDER BY
-				CASE WHEN expires_at + ? < unixepoch() THEN 0 ELSE 1 END,
-				timestamp ASC
-			LIMIT ?
-		)`, defaultStaleMaxAge, n,
-	); err != nil {
+			SELECT id FROM entries WHERE expires_at < ?
+			ORDER BY timestamp ASC LIMIT ?
+		)`, staleCutoff, toEvict,
+	)
+	if err != nil {
 		return
 	}
+	phase1, _ := result.RowsAffected()
+	remaining := toEvict - phase1
+
+	if remaining > 0 {
+		result2, err2 := tx.Exec(
+			`DELETE FROM entries WHERE id IN (
+				SELECT id FROM entries ORDER BY timestamp ASC LIMIT ?
+			)`, remaining,
+		)
+		if err2 != nil {
+			return
+		}
+		phase2, _ := result2.RowsAffected()
+		totalEvicted := phase1 + phase2
+		if err := tx.Commit(); err != nil {
+			log.Warnf("CACHE: commit tx failed: %v", err)
+			return
+		}
+		s.entryCount.Add(-totalEvicted)
+		log.Debugf("CACHE: evicted %d entries (serve-stale=%d, oldest=%d, max=%d)", totalEvicted, phase1, phase2, s.maxEntries)
+		return
+	}
+
 	if err := tx.Commit(); err != nil {
 		log.Warnf("CACHE: commit tx failed: %v", err)
 		return
 	}
-
-	s.entryCount.Add(-n)
-	log.Debugf("CACHE: evicted %d entries (max=%d)", n, s.maxEntries)
+	s.entryCount.Add(-phase1)
+	log.Debugf("CACHE: evicted %d entries (all serve-stale, max=%d)", phase1, s.maxEntries)
 }
 
 // UpdateLatency stores a latency measurement keyed by IP only. All domains

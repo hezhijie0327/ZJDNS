@@ -106,7 +106,7 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
       "cache": {
         "max_entries": 10000,
         "mmap_size_mb": 16,
-        "cache_size_mb": 4,
+        "cache_size_mb": 16,
         "db_path": "/var/lib/zjdns/cache.db",
         "prefer_stale": true
       },
@@ -126,19 +126,38 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 
 ### 缓存调优
 
+SQLite 缓存通过两层内存协同工作：
+
 | 参数 | 占用 | 说明 |
 |------|------|------|
-| `max_entries` | 磁盘 | 条目数上限，1 万条 ≈ 15MB |
-| `mmap_size_mb` | 虚拟内存 | 数据库文件 mmap，OS page cache 管理 |
-| `cache_size_mb` | 物理内存 | SQLite 内部 page cache，真实占用 RAM |
-| `db_path` | 磁盘路径 | 数据库文件位置；空串 = 内存模式 |
+| `max_entries` | 磁盘 | 缓存条目数上限。1 万条 ≈ 20MB，5 万条 ≈ 100MB |
+| `mmap_size_mb` | 虚拟内存 | 将数据库文件映射到进程地址空间，OS 按需换页。建议 ≥ 数据库文件大小 |
+| `cache_size_mb` | 物理内存 | SQLite 内部 page cache，缓存 b-tree 节点和热门数据 |
+| `db_path` | 磁盘路径 | 数据库文件位置；空串 = 纯内存模式（进程重启数据丢失） |
+
+**总物理内存 ≈ cache_size_mb + OS buffer cache 热点部分**（通常 10-50MB）。
+
+**调优建议：**
+
+| 场景 | 条目数 | 磁盘 | 虚拟内存 | 物理内存 | 配置 |
+|------|--------|------|---------|---------|------|
+| 家庭 | 1 万 | ~20MB | 16MB | ~20MB | `mmap_size_mb: 16, cache_size_mb: 16` |
+| 高负载 | 5 万 | ~100MB | 128MB | ~50MB | `mmap_size_mb: 128, cache_size_mb: 32` |
+| 保守 | 5 万 | ~100MB | 64MB | ~30MB | `mmap_size_mb: 64, cache_size_mb: 8` |
+
+- **`mmap_size_mb`**：设太小会退化到 `read()` I/O。设太大浪费虚拟地址空间（64 位系统无所谓）。建议 ≥ 数据库文件大小。
+- **`cache_size_mb`**：DNS 查询符合 Zipf 分布（少数热门域名占大部分请求），不需要覆盖全库。8MB 足够缓存 b-tree 内部节点 + 热门叶子页。
+- **`db_path`**：空串 = 纯内存模式（进程重启数据丢失）。
 
 ```json
-// 家庭场景：1 万条，~20MB 磁盘，4MB RAM
-"cache": { "max_entries": 10000, "mmap_size_mb": 16, "cache_size_mb": 4 }
+// 默认值（家庭场景）
+"cache": { "max_entries": 10000, "mmap_size_mb": 16, "cache_size_mb": 16 }
 
-// 高负载场景：5 万条，~100MB 磁盘，16MB RAM
-"cache": { "max_entries": 50000, "mmap_size_mb": 128, "cache_size_mb": 16 }
+// 高负载场景
+"cache": { "max_entries": 50000, "mmap_size_mb": 128, "cache_size_mb": 32 }
+
+// 保守场景（低内存设备）
+"cache": { "max_entries": 50000, "mmap_size_mb": 64, "cache_size_mb": 8 }
 ```
 
 ## 数据库查询

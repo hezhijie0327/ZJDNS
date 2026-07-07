@@ -16,7 +16,7 @@ const (
 const (
 	DefaultMaxCacheEntries   = 10000
 	DefaultCacheMMapSizeMB   = 16
-	DefaultCacheCacheSizeMB  = 4
+	DefaultCacheCacheSizeMB  = 16
 	DefaultCacheMaxOpenConns = 4
 	DefaultCacheMaxIdleConns = 2
 	DefaultTTL               = 10

@@ -364,7 +364,7 @@ func GenerateExampleConfig() string {
 	cfg := NewDefaultServerConfig()
 
 	cfg.Server.Pprof = DefaultPprofPort
-	cfg.Server.LogLevel = "info"
+	cfg.Server.LogLevel = log.DefaultLevel
 
 	cfg.Server.TLS.CertFile = "/path/to/cert.pem"
 	cfg.Server.TLS.KeyFile = "/path/to/key.pem"
@@ -372,19 +372,19 @@ func GenerateExampleConfig() string {
 	cfg.Server.TLS.KTLS = &KTLSSettings{KernelTX: true}
 
 	cfg.Server.Features.Cache.MaxEntries = DefaultMaxCacheEntries
-	cfg.Server.Features.Cache.MMapSizeMB = 16
-	cfg.Server.Features.Cache.CacheSizeMB = 4
+	cfg.Server.Features.Cache.MMapSizeMB = DefaultCacheMMapSizeMB
+	cfg.Server.Features.Cache.CacheSizeMB = DefaultCacheCacheSizeMB
 	cfg.Server.Features.Cache.PreferStale = true
 	cfg.Server.Features.Cache.DBPath = "cache.db"
 	cfg.Server.Features.ECS = ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []LatencyProbeStep{
-		{Protocol: ProtoPing, Timeout: 100},
-		{Protocol: ProtoTCP, Port: DefaultProbePortHTTPS, Timeout: 100},
-		{Protocol: ProtoTCP, Port: DefaultProbePortHTTP, Timeout: 100},
-		{Protocol: ProtoUDP, Port: DefaultProbePortDNS, Timeout: 100},
-		{Protocol: ProtoHTTPPlain, Port: DefaultProbePortHTTP, Timeout: 100},
-		{Protocol: ProtoHTTP, Port: DefaultProbePortHTTPS, Timeout: 100},
-		{Protocol: ProtoHTTP3, Port: DefaultProbePortHTTPS, Timeout: 100},
+		{Protocol: ProtoPing, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
+		{Protocol: ProtoTCP, Port: DefaultProbePortHTTPS, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
+		{Protocol: ProtoTCP, Port: DefaultProbePortHTTP, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
+		{Protocol: ProtoUDP, Port: DefaultProbePortDNS, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
+		{Protocol: ProtoHTTPPlain, Port: DefaultProbePortHTTP, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
+		{Protocol: ProtoHTTP, Port: DefaultProbePortHTTPS, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
+		{Protocol: ProtoHTTP3, Port: DefaultProbePortHTTPS, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
 	}
 	cfg.Upstream = []UpstreamServer{
 		{Address: "223.5.5.5:53", Protocol: ProtoTCP, Proxy: "socks5://127.0.0.1:1080"},
