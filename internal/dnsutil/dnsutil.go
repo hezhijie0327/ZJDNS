@@ -254,11 +254,6 @@ func LogTLSConnectionState(role, dir, addr string, version, cipherSuite uint16, 
 
 // JoinDNSPort appends the default DNS port (53) to an IP address string,
 // producing an "ip:53" pair suitable for use as a nameserver address.
-// Avoids net.JoinHostPort's bracket-detection overhead for the common
-// IPv4 case where no brackets are needed.
 func JoinDNSPort(ip string) string {
-	if strings.IndexByte(ip, ':') >= 0 {
-		return "[" + ip + "]:53"
-	}
-	return ip + ":53"
+	return net.JoinHostPort(ip, "53")
 }
