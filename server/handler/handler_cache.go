@@ -22,8 +22,9 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 
 	msg := h.buildCacheResponse(req, entry, isExpired, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 
-	if isExpired && !h.IsClosed() {
+	if isExpired && !h.IsClosed() && h.tryStartRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt) {
 		h.cacheRefreshGroup.Go(func() error {
+			defer h.finishRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
 			defer dnsutil.HandlePanic("cache refresh")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
@@ -31,8 +32,9 @@ func (h *Handler) processCacheHit(req *dns.Msg, entry *cache.Entry, isExpired bo
 		})
 	}
 
-	if !isExpired && !h.IsClosed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) && h.shouldStartPrefetch(question.Name) {
+	if !isExpired && !h.IsClosed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) && h.shouldStartPrefetch(question.Name) && h.tryStartRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt) {
 		h.cacheRefreshGroup.Go(func() error {
+			defer h.finishRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
 			defer dnsutil.HandlePanic("cache prefetch")
 			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
@@ -105,12 +107,15 @@ func (h *Handler) buildCacheResponse(req *dns.Msg, entry *cache.Entry, isExpired
 
 func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, question Question, clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16) *dns.Msg {
 	if h.config.Server.Features.Cache.PreferStale && !h.IsClosed() {
-		h.cacheRefreshGroup.Go(func() error {
-			defer dnsutil.HandlePanic("expired cache refresh")
-			ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
-			defer cancel()
-			return h.refreshCacheEntry(ctx, question, ecsOpt)
-		})
+		if h.tryStartRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt) {
+			h.cacheRefreshGroup.Go(func() error {
+				defer h.finishRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
+				defer dnsutil.HandlePanic("expired cache refresh")
+				ctx, cancel := context.WithTimeout(h.cacheRefreshCtx, config.DefaultDNSQueryTimeout)
+				defer cancel()
+				return h.refreshCacheEntry(ctx, question, ecsOpt)
+			})
+		}
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
 
@@ -119,8 +124,12 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 	if h.IsClosed() {
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
+	if !h.tryStartRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt) {
+		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
+	}
 	go func() {
 		defer close(done)
+		defer h.finishRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
 		defer dnsutil.HandlePanic("expired cache fallback query")
 		qr := h.resolver.Query(h.ctx, question, ecsOpt)
 		res = queryResult{

@@ -203,6 +203,13 @@ func ProbeNSAddrs(cache CacheSetter, addrs []string) {
 		return
 	}
 
+	// Deduplicate concurrent probes of the same IP set (e.g. root/TLD NS).
+	key := buildNSProbeKey(needProbe)
+	if !tryStartNSProbe(key) {
+		return
+	}
+	defer finishNSProbe(key)
+
 	prober := ilatency.New(defaultNSProbeSteps(), nil)
 	defer prober.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultNSProbeTimeout)

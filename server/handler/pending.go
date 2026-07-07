@@ -53,20 +53,7 @@ func NewPendingRequests() *PendingRequests {
 // with the result after the upstream query completes, and Join returns
 // follower=false.
 func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) (*resolver.QueryResult, bool) {
-	ecsAddr, ecsPrefix := "", uint8(0)
-	if ecsOpt != nil && ecsOpt.Address != nil {
-		ecsAddr = ecsOpt.Address.String()
-		ecsPrefix = ecsOpt.SourcePrefix
-	}
-
-	key := pendingKey{
-		qname:     qname,
-		qtype:     qtype,
-		qclass:    qclass,
-		ecsAddr:   ecsAddr,
-		ecsPrefix: ecsPrefix,
-		dnssecOK:  dnssecOK,
-	}
+	key := buildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
 
 	p.mu.Lock()
 	call, loaded := p.sets[key]
@@ -87,20 +74,7 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 // Done stores the result and wakes all waiting followers.  Must only be
 // called by the leader (i.e. after Join returned follower=false).
 func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool, result *resolver.QueryResult) {
-	ecsAddr, ecsPrefix := "", uint8(0)
-	if ecsOpt != nil && ecsOpt.Address != nil {
-		ecsAddr = ecsOpt.Address.String()
-		ecsPrefix = ecsOpt.SourcePrefix
-	}
-
-	key := pendingKey{
-		qname:     qname,
-		qtype:     qtype,
-		qclass:    qclass,
-		ecsAddr:   ecsAddr,
-		ecsPrefix: ecsPrefix,
-		dnssecOK:  dnssecOK,
-	}
+	key := buildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
 
 	p.mu.Lock()
 	call, ok := p.sets[key]
@@ -113,4 +87,21 @@ func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.
 
 	call.result = result
 	close(call.done)
+}
+
+// buildPendingKey constructs a pendingKey from the given parameters.
+func buildPendingKey(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) pendingKey {
+	ecsAddr, ecsPrefix := "", uint8(0)
+	if ecsOpt != nil && ecsOpt.Address != nil {
+		ecsAddr = ecsOpt.Address.String()
+		ecsPrefix = ecsOpt.SourcePrefix
+	}
+	return pendingKey{
+		qname:     qname,
+		qtype:     qtype,
+		qclass:    qclass,
+		ecsAddr:   ecsAddr,
+		ecsPrefix: ecsPrefix,
+		dnssecOK:  dnssecOK,
+	}
 }

@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,5 +177,100 @@ func TestPendingProbes_LeaderDoneFollowerCanProceed(t *testing.T) {
 		// OK — follower became new leader after original leader finished.
 	case <-time.After(time.Second):
 		t.Fatal("follower never became leader after Done")
+	}
+}
+
+// --- NS probe dedup tests ---
+
+func TestTryStartNSProbe_LeaderAndFollower(t *testing.T) {
+	key := "10.0.0.1,10.0.0.2"
+
+	if !tryStartNSProbe(key) {
+		t.Fatal("expected leader")
+	}
+	if tryStartNSProbe(key) {
+		t.Fatal("expected follower rejection")
+	}
+
+	finishNSProbe(key)
+
+	if !tryStartNSProbe(key) {
+		t.Fatal("expected leader after finish")
+	}
+	finishNSProbe(key)
+}
+
+func TestTryStartNSProbe_DifferentKeys(t *testing.T) {
+	if !tryStartNSProbe("1.1.1.1,2.2.2.2") {
+		t.Fatal("expected leader for key A")
+	}
+	if !tryStartNSProbe("3.3.3.3,4.4.4.4") {
+		t.Fatal("expected leader for key B")
+	}
+
+	finishNSProbe("1.1.1.1,2.2.2.2")
+	finishNSProbe("3.3.3.3,4.4.4.4")
+}
+
+func TestBuildNSProbeKey_SortsDeterministically(t *testing.T) {
+	ips := []net.IP{
+		net.ParseIP("10.0.0.3"),
+		net.ParseIP("10.0.0.1"),
+		net.ParseIP("10.0.0.2"),
+	}
+	key1 := buildNSProbeKey(ips)
+	key2 := buildNSProbeKey(ips)
+
+	if key1 != key2 {
+		t.Errorf("expected identical keys, got %q and %q", key1, key2)
+	}
+	if key1 != "10.0.0.1,10.0.0.2,10.0.0.3" {
+		t.Errorf("expected sorted key, got %q", key1)
+	}
+}
+
+func TestTryStartNSProbe_DoneWithoutStart(t *testing.T) {
+	finishNSProbe("no-such-key")
+}
+
+func TestTryStartNSProbe_ConcurrentSameKey(t *testing.T) {
+	key := "192.168.0.1,192.168.0.2"
+	const goroutines = 20
+
+	var entered atomic.Int32
+	var leaders atomic.Int32
+	var followers atomic.Int32
+	allSpawned := make(chan struct{})
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			<-allSpawned
+			entered.Add(1)
+			if tryStartNSProbe(key) {
+				leaders.Add(1)
+			} else {
+				followers.Add(1)
+			}
+		}()
+	}
+
+	close(allSpawned)
+
+	for entered.Load() < int32(goroutines) || leaders.Load() < 1 {
+	}
+	time.Sleep(time.Millisecond)
+
+	if n := leaders.Load(); n != 1 {
+		t.Errorf("expected exactly 1 leader, got %d", n)
+	}
+
+	finishNSProbe(key)
+	wg.Wait()
+
+	if n := followers.Load(); n != int32(goroutines-1) {
+		t.Errorf("expected %d followers, got %d", goroutines-1, n)
 	}
 }
