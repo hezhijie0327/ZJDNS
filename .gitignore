@@ -1,6 +1,6 @@
 # Binary
 /zjdns
-/zjdns.exe
+*.exe
 
 # OS
 .DS_Store
