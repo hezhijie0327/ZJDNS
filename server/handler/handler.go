@@ -172,6 +172,9 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	if atomic.LoadInt32(&h.closed) != 0 {
 		msg := h.buildResponse(req)
 		msg.Rcode = dns.RcodeServerFailure
+		h.cache.RecordRequest(&cache.RequestRecord{
+			Result: "error", Protocol: requestProtocol, Rcode: dns.RcodeServerFailure,
+		})
 		return msg
 	}
 
@@ -183,6 +186,9 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 			msg.Response = true
 		}
 		msg.Rcode = dns.RcodeFormatError
+		h.cache.RecordRequest(&cache.RequestRecord{
+			Result: "error", Protocol: requestProtocol, Rcode: dns.RcodeFormatError,
+		})
 		return msg
 	}
 
@@ -203,6 +209,9 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	tcpKeepaliveTimeout := tcpKeepaliveTimeoutForProtocol(requestProtocol)
 
 	if resp := h.validateDNSQuery(req, &question, clientIP, isSecureConnection, tcpKeepaliveTimeout); resp != nil {
+		h.cache.RecordRequest(&cache.RequestRecord{
+			Result: "error", Protocol: requestProtocol, Rcode: int(resp.Rcode),
+		})
 		return resp
 	}
 
@@ -218,13 +227,16 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		}
 	}()
 
-	if resp, done := h.processRewrite(req, &question, clientIP, isSecureConnection, tcpKeepaliveTimeout); done {
+	if resp, done := h.processRewrite(req, &question, clientIP, isSecureConnection, requestProtocol, tcpKeepaliveTimeout); done {
 		responseMsg = resp
 		return responseMsg
 	}
 
 	clientRequestedDNSSEC, ecsOpt, cookieOpt, resp := h.parseEDNSAndCookie(req, &question, clientIP, tcpKeepaliveTimeout)
 	if resp != nil {
+		h.cache.RecordRequest(&cache.RequestRecord{
+			Result: "error", Protocol: requestProtocol, Rcode: int(resp.Rcode),
+		})
 		responseMsg = resp
 		return responseMsg
 	}
@@ -369,7 +381,7 @@ func (h *Handler) validateDNSQuery(req *dns.Msg, question *Question, clientIP ne
 
 // processRewrite evaluates rewrite rules and returns a synthetic response if
 // a rule matches. The caller must return the response immediately when done=true.
-func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.IP, isSecureConnection bool, tcpKeepaliveTimeout uint16) (*dns.Msg, bool) {
+func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.IP, isSecureConnection bool, requestProtocol string, tcpKeepaliveTimeout uint16) (*dns.Msg, bool) {
 	if !h.rewrite.HasRules() {
 		return nil, false
 	}
@@ -383,7 +395,7 @@ func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.
 
 	h.cache.RecordRequest(&cache.RequestRecord{
 		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
-		Protocol: "", Result: "rewrite", Rcode: rewriteResult.ResponseCode,
+		Protocol: requestProtocol, Result: "rewrite", Rcode: rewriteResult.ResponseCode,
 	})
 
 	if uint16(rewriteResult.ResponseCode) != dns.RcodeSuccess { //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
