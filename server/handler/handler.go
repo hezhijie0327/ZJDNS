@@ -232,11 +232,8 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		return responseMsg
 	}
 
-	clientRequestedDNSSEC, ecsOpt, cookieOpt, resp := h.parseEDNSAndCookie(req, &question, clientIP, tcpKeepaliveTimeout)
+	clientRequestedDNSSEC, ecsOpt, cookieOpt, resp := h.parseEDNSAndCookie(req, &question, clientIP, requestProtocol, tcpKeepaliveTimeout)
 	if resp != nil {
-		h.cache.RecordRequest(&cache.RequestRecord{
-			Result: "error", Protocol: requestProtocol, Rcode: int(resp.Rcode),
-		})
 		responseMsg = resp
 		return responseMsg
 	}
@@ -292,7 +289,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 // parseEDNSAndCookie unpacks EDNS options, extracts ECS and Cookie, and validates
 // the server cookie early (RFC 7873). Returns a non-nil *dns.Msg when the request
 // should be rejected with BADCOOKIE.
-func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP net.IP, tcpKeepaliveTimeout uint16) (clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, reject *dns.Msg) {
+func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP net.IP, requestProtocol string, tcpKeepaliveTimeout uint16) (clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, reject *dns.Msg) {
 	// Force a full unpack so EDNS flags (DO bit, ECS) are available.
 	req.Options = 0
 	if h.edns != nil {
@@ -316,6 +313,9 @@ func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP 
 		serverCookie := h.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 		cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 		h.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
+		h.cache.RecordRequest(&cache.RequestRecord{
+			Result: "badcookie", Protocol: requestProtocol, Rcode: dns.RcodeFormatError,
+		})
 		return false, nil, nil, msg
 	}
 	if cookieOpt != nil && len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen && !h.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
@@ -325,6 +325,9 @@ func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP 
 		serverCookie := h.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 		cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 		h.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
+		h.cache.RecordRequest(&cache.RequestRecord{
+			Result: "badcookie", Protocol: requestProtocol, Rcode: dns.RcodeFormatError,
+		})
 		return false, nil, nil, msg
 	}
 
