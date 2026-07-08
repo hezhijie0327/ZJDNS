@@ -21,6 +21,7 @@ import (
 	"zjdns/internal/pool"
 	"zjdns/rewrite"
 	"zjdns/server/client"
+	serverdnscrypt "zjdns/server/dnscrypt"
 	"zjdns/server/handler"
 	"zjdns/server/probe"
 	"zjdns/server/resolver"
@@ -38,6 +39,7 @@ type Server struct {
 	queryClient     *client.Client
 	guard           *security.Guard
 	tls             *tls.Server
+	dnscryptServer  *serverdnscrypt.Server
 	cidrFilter      *cidr.Filter
 	pprofServer     *http.Server
 	ctx             context.Context
@@ -204,6 +206,19 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.tls = tlsSrv
 	}
 
+	if cfg.Server.DNSCrypt.IsEnabled() {
+		dnscryptCfg := &cfg.Server.DNSCrypt
+		if dnscryptCfg.Port == "" {
+			dnscryptCfg.Port = config.DefaultDNSCryptPort
+		}
+		dnscryptSrv, err := serverdnscrypt.New(dnscryptCfg)
+		if err != nil {
+			cancel(fmt.Errorf("DNSCrypt server init: %w", err))
+			return nil, fmt.Errorf("DNSCrypt server init: %w", err)
+		}
+		server.dnscryptServer = dnscryptSrv
+	}
+
 	// ── Observability: probes + pprof ─────────────────────────────────────
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
@@ -339,6 +354,17 @@ func (s *Server) Start() error {
 			err := s.tls.Start(httpsPort)
 			if err != nil {
 				return fmt.Errorf("secure DNS startup: %w", err)
+			}
+			<-ctx.Done()
+			return nil
+		})
+	}
+
+	if s.dnscryptServer != nil {
+		g.Go(func() error {
+			defer zdnsutil.HandlePanic("DNSCrypt server")
+			if err := s.dnscryptServer.Start(s); err != nil {
+				return fmt.Errorf("DNSCrypt startup: %w", err)
 			}
 			<-ctx.Done()
 			return nil

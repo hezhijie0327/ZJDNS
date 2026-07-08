@@ -67,6 +67,9 @@ type Client struct {
 	proxyDialers map[string]*SOCKS5Dialer
 	proxyMu      sync.Mutex
 
+	dnscryptCache   map[string]*dnscryptState
+	dnscryptCacheMu sync.RWMutex
+
 	warmWg sync.WaitGroup // tracks in-flight WarmUpConnections goroutines
 
 	// KTLS offload settings — defaults to false (off). Set via SetKTLS() from
@@ -116,6 +119,7 @@ func New() *Client {
 		quicConfigs:    make(map[string]*quic.Config),
 		quicPool:       pool.NewQUICPool(config.DefaultMaxConns),
 		SessionCache:   eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize),
+		dnscryptCache:  make(map[string]*dnscryptState),
 		tcpPool:        pool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		dotPool:        pool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		proxyDialers:   make(map[string]*SOCKS5Dialer),
@@ -234,6 +238,16 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 
 	protocol := strings.ToLower(server.Protocol)
 
+	if protocol == config.ProtoDNSCrypt {
+		result.Response, result.Error = c.executeDNSCrypt(queryCtx, msg, server)
+		if result.Error != nil {
+			log.Debugf("UPSTREAM: DNSCrypt query failed for %s via %s: %v", qname, server.Address, result.Error)
+		}
+		result.Duration = time.Since(start)
+		result.Protocol = strings.ToUpper(protocol)
+		return result
+	}
+
 	if zdnsutil.IsSecureProtocol(protocol) {
 		result.Response, result.Error = c.executeSecureQuery(queryCtx, msg, server, protocol)
 	} else {
@@ -332,7 +346,7 @@ func (c *Client) WarmUpConnections(servers []config.UpstreamServer) {
 			continue
 		}
 		protocol := strings.ToLower(server.Protocol)
-		if !zdnsutil.IsSecureProtocol(protocol) {
+		if !zdnsutil.IsSecureProtocol(protocol) && protocol != config.ProtoDNSCrypt {
 			continue
 		}
 		// Capture loop variable for the goroutine.
@@ -425,6 +439,11 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 		tlsConfig := c.stdTLSConfig(server)
 		c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 		log.Debugf("UPSTREAM: pre-warmed DoH3 transport for %s (key=%s)", server.Address, key)
+
+	case config.ProtoDNSCrypt:
+		warmCtx, cancel := context.WithTimeout(context.Background(), c.timeout)
+		defer cancel()
+		c.warmUpDNSCrypt(warmCtx, server)
 	}
 }
 
@@ -481,4 +500,9 @@ func (c *Client) Close() {
 	}
 	c.proxyDialers = nil
 	c.proxyMu.Unlock()
+
+	// Clear DNSCrypt state cache.
+	c.dnscryptCacheMu.Lock()
+	c.dnscryptCache = nil
+	c.dnscryptCacheMu.Unlock()
 }

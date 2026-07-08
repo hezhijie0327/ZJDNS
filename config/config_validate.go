@@ -119,7 +119,7 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 		ProtoQUIC: true, ProtoDOQ: true,
 		ProtoHTTP: true, ProtoDOH: true,
 		ProtoHTTP3: true, ProtoDOH3: true,
-		ProtoTLSTCP: true,
+		ProtoTLSTCP: true, ProtoDNSCrypt: true,
 	}
 
 	for i, server := range cfg.Upstream {
@@ -142,6 +142,14 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 		}
 		if zdnsutil.IsSecureProtocol(protocol) && server.ServerName == "" {
 			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
+		}
+		if protocol == ProtoDNSCrypt && !strings.HasPrefix(server.Address, "sdns://") {
+			if server.ServerName == "" {
+				return fmt.Errorf("upstream server %d using dnscrypt requires server_name (provider name)", i)
+			}
+			if server.PublicKey == "" {
+				return fmt.Errorf("upstream server %d using dnscrypt requires public_key", i)
+			}
 		}
 
 		if server.Proxy != "" {
@@ -201,7 +209,7 @@ func validatePorts(cfg *ServerConfig) error {
 			}
 		}
 	}
-	// Detect port conflicts: DNS port must not overlap with TLS/HTTPS/pprof.
+	// Detect port conflicts: DNS port must not overlap with TLS/HTTPS/pprof/DNSCrypt.
 	seen := map[string]string{cfg.Server.Port: "server.port"}
 	if cfg.Server.Pprof != "" {
 		if first, ok := seen[cfg.Server.Pprof]; ok {
@@ -223,6 +231,17 @@ func validatePorts(cfg *ServerConfig) error {
 				cfg.Server.TLS.HTTPS.Port, first, cfg.Server.TLS.HTTPS.Port, cfg.Server.TLS.HTTPS.Port)
 		}
 		seen[cfg.Server.TLS.HTTPS.Port] = "server.tls.https.port"
+	}
+	if cfg.Server.DNSCrypt.IsEnabled() {
+		port := cfg.Server.DNSCrypt.Port
+		if port == "" {
+			port = DefaultDNSCryptPort
+		}
+		if first, ok := seen[port]; ok {
+			return fmt.Errorf("port conflict: server.dnscrypt.port=%s and %s=%s both use port %s",
+				port, first, port, port)
+		}
+		seen[port] = "server.dnscrypt.port"
 	}
 	return nil
 }

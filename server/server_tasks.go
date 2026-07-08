@@ -174,6 +174,16 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
+	if s.dnscryptServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
+		defer cancel()
+		if err := s.dnscryptServer.Shutdown(ctx); err != nil {
+			log.Errorf("DNSCRYPT: shutdown failed: %v", err)
+		} else {
+			log.Infof("DNSCRYPT: server shut down successfully")
+		}
+	}
+
 	if s.pprofServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()

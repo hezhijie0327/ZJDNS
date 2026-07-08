@@ -24,11 +24,29 @@ type ServerConfig struct {
 
 // ServerSettings contains the server runtime settings and feature flags.
 type ServerSettings struct {
-	Port     string       `json:"port"`
-	Pprof    string       `json:"pprof"`
-	LogLevel string       `json:"log_level"`
-	TLS      TLSSettings  `json:"tls"`
-	Features FeatureFlags `json:"features"`
+	Port     string           `json:"port"`
+	Pprof    string           `json:"pprof"`
+	LogLevel string           `json:"log_level"`
+	TLS      TLSSettings      `json:"tls"`
+	DNSCrypt DNSCryptSettings `json:"dnscrypt,omitempty"`
+	Features FeatureFlags     `json:"features"`
+}
+
+// DNSCryptSettings configures the DNSCrypt v2 encrypted DNS listener.
+type DNSCryptSettings struct {
+	Port         string `json:"port"`          // default "8443"
+	ProviderName string `json:"provider_name"` // e.g. "2.dnscrypt-cert.example.com"
+	PrivateKey   string `json:"private_key"`   // Ed25519 private key (hex, optional)
+	PublicKey    string `json:"public_key"`    // Ed25519 public key (hex, optional)
+	ResolverSk   string `json:"resolver_sk"`   // X25519 short-term secret (hex, optional)
+	ResolverPk   string `json:"resolver_pk"`   // X25519 short-term public (hex, optional)
+	ESVersion    string `json:"es_version"`    // "xsalsa20poly1305" or "xchacha20poly1305"
+}
+
+// IsEnabled reports whether DNSCrypt is configured.  An empty DNSCryptSettings
+// block means DNSCrypt is disabled.
+func (d *DNSCryptSettings) IsEnabled() bool {
+	return d.ProviderName != "" || d.PublicKey != "" || d.PrivateKey != ""
 }
 
 // TLSSettings configures TLS listener ports, certificates, and HTTPS settings.
@@ -89,7 +107,8 @@ type UpstreamServer struct {
 	SkipTLSVerify bool     `json:"skip_tls_verify,omitempty"`
 	NoCache       bool     `json:"no_cache,omitempty"`
 	Match         []string `json:"match,omitempty"`
-	Proxy         string   `json:"proxy,omitempty"` // socks5://[user:pass@]host:port
+	Proxy         string   `json:"proxy,omitempty"`      // socks5://[user:pass@]host:port
+	PublicKey     string   `json:"public_key,omitempty"` // DNSCrypt resolver public key (hex); provider name uses server_name
 }
 
 // RewriteRule defines a DNS rewrite rule with synthetic response, client
@@ -372,6 +391,16 @@ func GenerateExampleConfig() string {
 
 	cfg.Server.TLS.KTLS = &KTLSSettings{KernelTX: true}
 
+	cfg.Server.DNSCrypt = DNSCryptSettings{
+		Port:         DefaultDNSCryptPort,
+		ProviderName: "2.dnscrypt-cert.example.com",
+		PublicKey:    "26B75000A825A6F6965C530024499E3FA119AF32CD7F9395C33A0AF8373DD142",
+		PrivateKey:   "2BB45162041FBCAEE142CA5C100B050491A37DF6600DD13DBAA149FAB566387E26B75000A825A6F6965C530024499E3FA119AF32CD7F9395C33A0AF8373DD142",
+		ResolverSk:   "93D6E7A4D65D62CD1F484D228EE4B6CEB0510A2D20C2FC0F5105CFEA9717C2CE",
+		ResolverPk:   "4153FB871A95823475F06DA35BCA1F4FB62D60348DF061382A346730F45C334A",
+		ESVersion:    "xsalsa20poly1305",
+	}
+
 	cfg.Server.Features.Cache.MaxEntries = DefaultMaxCacheEntries
 	cfg.Server.Features.Cache.MMapSizeMB = DefaultCacheMMapSizeMB
 	cfg.Server.Features.Cache.CacheSizeMB = DefaultCacheCacheSizeMB
@@ -398,7 +427,8 @@ func GenerateExampleConfig() string {
 
 	cfg.Fallback = []UpstreamServer{
 		{Address: RecursiveIndicator},
-		{Address: "8.8.4.4:53", Protocol: ProtoUDP, NoCache: true},
+		{Address: "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0", Protocol: ProtoDNSCrypt},
+		{Address: "149.112.112.9:53", Protocol: ProtoUDP, NoCache: true},
 	}
 
 	cfg.Rewrite = []RewriteRule{

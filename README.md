@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
-高性能递归 DNS 解析服务器，内置 SQLite 关系型缓存引擎、DNSSEC 密码学验证链、DoT/DoQ/DoH/DoH3 全协议支持。
+高性能递归 DNS 解析服务器，内置 SQLite 关系型缓存引擎、DNSSEC 密码学验证链、DNSCrypt/DoT/DoQ/DoH/DoH3 全协议支持。
 
 ## 快速开始
 
@@ -29,6 +29,9 @@ go build -o zjdns ./cmd/zjdns
 
 # 生成示例配置
 ./zjdns -generate-config
+
+# 生成 DNSCrypt 密钥及配置
+./zjdns -generate-dnscrypt-config -provider "2.dnscrypt-cert.example.com"
 ```
 
 ```bash
@@ -38,6 +41,9 @@ dig @127.0.0.1 -p 53 example.com +tcp             # TCP
 kdig @127.0.0.1 -p 853 example.com +tls           # DoT
 kdig @127.0.0.1 -p 853 example.com +quic          # DoQ
 kdig @127.0.0.1 -p 443 example.com +https         # DoH
+
+# DNSCrypt（需先配置 dnscrypt 服务端）
+dig @127.0.0.1 -p 53 example.com                        # 通过 DNSCrypt 客户端
 ```
 
 ## 核心特性
@@ -80,13 +86,14 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `address` | string | ✓ | 服务器地址。`host:port`、`https://host:port/path` 或 `builtin_recursive` |
-| `protocol` | string | | 传输协议：`udp`(默认)/`tcp`/`tls`(DoT)/`quic`(DoQ)/`https`(DoH)/`http3`(DoH3) |
-| `server_name` | string | TLS 必填 | TLS SNI 主机名 |
+| `address` | string | ✓ | 服务器地址。`host:port`、`https://host:port/path`、`builtin_recursive` 或 `sdns://` DNSCrypt 戳记 |
+| `protocol` | string | | 传输协议：`udp`(默认)/`tcp`/`tls`(DoT)/`quic`(DoQ)/`https`(DoH)/`http3`(DoH3)/`dnscrypt` |
+| `server_name` | string | TLS/DNSCrypt | TLS SNI 主机名；非戳记 DNSCrypt 时用作 provider name |
 | `skip_tls_verify` | bool | | 跳过 TLS 证书验证 |
 | `no_cache` | bool | | 禁止缓存该上游的响应（默认 `false`=正常缓存） |
 | `match` | []string | | CIDR 标签过滤（`!tag` 排除） |
 | `proxy` | string | | SOCKS5 代理：`socks5://[user:pass@]host:port` |
+| `public_key` | string | DNSCrypt | 解析器 Ed25519 公钥（hex），非戳记 DNSCrypt 必填 |
 
 ### 安全
 
@@ -97,13 +104,13 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
 - **并发查询去重**（singleflight）：同 key 的并发缓存 miss 合并为一次上游查询，leader 完成广播给所有 follower，消除缓存投毒竞争窗口
 - **CIDR 过滤**：基于标签的 IP 匹配，支持取反（`!tag`），IPv4 预转换为 `uint32` 位运算
 - **EDNS Padding**：随机填充字节（`crypto/rand`）替代确定性零填充，增强流量分析抵抗
-- **安全传输**：DoT (RFC 7858)、DoQ (RFC 9250)、DoH (RFC 8484)、DoH3，TLS 1.3 + KTLS 可选卸载
+- **安全传输**：DNSCrypt v2（X25519 密钥交换 + XSalsa20/XChacha20-Poly1305 AEAD）、DoT (RFC 7858)、DoQ (RFC 9250)、DoH (RFC 8484)、DoH3，TLS 1.3 + KTLS 可选卸载
 
 ### 可观测性
 
 - **运行时查询**：`dig zjdns.stats CH TXT` 缓存统计（8 条 TXT 记录：概览、成功、错误、响应码、异常、明文协议、加密协议、DNSSEC）
 - **缓存管理**：`dig zjdns.db.clear CH TXT` 全清 / `.db.clear.cache` 清缓存 / `.db.clear.stats` 清零统计 / `.db.clear.latency` 清延迟数据，仅限本地回环
-- **组件级日志**：`log_level` 支持 `level:COMP1,COMP2` 语法（如 `debug:UPSTREAM,SECURITY`），18 个日志前缀
+- **组件级日志**：`log_level` 支持 `level:COMP1,COMP2` 语法（如 `debug:UPSTREAM,SECURITY`），19 个日志前缀
 - **CLI 分析工具**：`zjdns -analyze <db> <query>` 直接 SQL 查询缓存数据库
 - **pprof**：标准 Go 性能分析端点
 
@@ -115,6 +122,10 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
     "port": "53",
     "log_level": "info",
     "tls": { "port": "853", "self_signed": true },
+    "dnscrypt": {
+      "port": "8443",
+      "provider_name": "2.dnscrypt-cert.example.com"
+    },
     "features": {
       "hijack_protection": true,
       "dnssec_enforce": true,
@@ -132,7 +143,8 @@ kdig @127.0.0.1 -p 443 example.com +https         # DoH
     }
   },
   "upstream": [
-    { "address": "builtin_recursive" }
+    { "address": "builtin_recursive" },
+    { "address": "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0", "protocol": "dnscrypt" }
   ]
 }
 ```

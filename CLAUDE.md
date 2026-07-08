@@ -173,7 +173,6 @@ functions come after all methods.
 ### Anti-patterns (DO NOT introduce)
 - **No rate limiting** — accept all queries unconditionally.
 - **No per-IP connection limiting** — all listeners accept unlimited connections.
-- **No DNSCrypt** — removed; do not reintroduce.
 - **No domain↔domain imports** (except `edns→config`) — domain packages must be independent.
 - **No `internal/`→domain imports** (except `internal/latency→config`) — internal layer stays below domain layer.
 - **No `server/` sub-package importing `server/` parent** — sub-packages are leaves below the wiring layer.
@@ -216,13 +215,14 @@ zjdns/
     ├── listen.go                  ← Protocol bridge (UDP/TCP dispatch → io.Copy)
     ├── server_tasks.go            ← Background tasks, shutdown
     ├── handler/                   ← Query pipeline (handler + handler_cache + message + pending)
-    ├── client/                    ← Outbound transports (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5)
+    ├── client/                    ← Outbound transports (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5/DNSCrypt)
     ├── client/pool/               ← RFC 7766 pipelined TCP + QUIC connection pools
     ├── resolver/                  ← Upstream + recursive + qname_minimise (RFC 9156)
     │                              ←   recursive.go (core loop) + recursive_helpers.go (7 helpers)
     │                              ←   dnssec_chain.go + nameserver.go + upstream.go + resolver.go
     ├── security/                  ← DNSSEC validation (crypto + nsec) + hijack detection
     ├── tls/                       ← TLS listeners (DoT, DoQ, DoH, DoH3)
+    ├── dnscrypt/                  ← DNSCrypt v2 (X25519 + XSalsa20/XChacha20-Poly1305 AEAD)
     └── probe/                     ← A/AAAA latency probing and record reordering
 ```
 
@@ -252,6 +252,7 @@ Layer 4 (server sub-packages — import domain + internal, never server/ parent)
   server/probe → config, edns, dnsutil, internal/latency, log
   server/resolver → cache, config, edns, dnsutil, log, pool, server/client, server/security
   server/tls → config, dnsutil, log, pool
+  server/dnscrypt → config, dnsutil, log, pool
   server/handler → cache, config, edns, dnsutil, log, pool, rewrite, server/resolver
 
 Top layer (wiring):
@@ -314,7 +315,10 @@ Top layer (wiring):
 | `BackgroundConfig` | `server/handler` | Groups RefreshGroup/RefreshCtx/Ctx lifecycle params |
 | `LatencyProber` | `server/handler` | Interface: Start(qname, qtype, answer, ...) — latency-probes A/AAAA records and updates latency_ms |
 | `Server` | `server/tls` | TLS listeners (DoT, DoQ, DoH, DoH3) |
-| `Client` | `server/client` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5) |
+| `Server` | `server/dnscrypt` | DNSCrypt v2 listener (UDP+TCP), cert handshake, query encrypt/decrypt |
+| `Certificate` | `server/dnscrypt` | DNSCrypt server certificate (Ed25519 signature, X25519 short-term key) |
+| `DNSCryptSettings` | `config` | DNSCrypt server config (keys, provider name, ES version, port) |
+| `Client` | `server/client` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5/DNSCrypt) |
 | `SOCKS5Dialer` | `server/client` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
 | `Conn` / `Pool` | `server/client/pool` | RFC 7766 pipelined TCP/DoT |
 | `QUICPool` / `QUICConn` | `server/client/pool` | QUIC connection pool |
@@ -336,7 +340,7 @@ All logs use `zjdns/internal/log`. Default level: `info`.
 
 **Component filtering**: `log_level` supports `level:comp1,comp2` syntax (e.g. `"debug:UPSTREAM,RECURSION"`). Messages without a `PREFIX: ` pattern always pass through.
 
-**18 canonical prefixes**: `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`.
+**19 canonical prefixes**: `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`.
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:` merged → `TLS:`. Hot-path logs are `Debug` only.
 
@@ -351,6 +355,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read fields after `Put()`. Double-zeroing removed: `Put` zeroes, `Get` trusts.
 - **KTLS**: `gitlab.com/go-extension/tls` with `KernelTX`/`KernelRX` (both default `false`, opt-in). Dual configs: eTLS for TCP, crypto/tls for QUIC. Silent fallback on non-Linux.
 - **SOCKS5**: Per-upstream optional proxy. TCP CONNECT (`socks5_tcp.go`) + UDP ASSOCIATE (`socks5_udp.go`). `SafeURL()` redacts passwords. Shared handshake/auth/helpers in `socks5.go`.
+- **DNSCrypt v2** (`server/dnscrypt/`): Self-contained implementation — zero new dependencies, uses only `golang.org/x/crypto` (already present). Server: UDP+TCP listeners on independent port (default 8443), auto-generated Ed25519/X25519 keys, cert TXT handshake. Client: parses `sdns://` stamps or explicit `ServerName`+`PublicKey` from config, fetches cert via unencrypted UDP DNS query on the DNSCrypt port, caches shared key for 1 hour. XSalsa20-Poly1305 (default) and XChacha20-Poly1305 AEAD. Cert query uses plain UDP (no length prefixing) — TCP cert queries are not universally supported (e.g. Quad9). Server UDP receive buffer uses `dns.MaxMsgSize` to handle large encrypted queries from clients like dnscrypt-proxy. Edns buffer size detected from `Msg.UDPSize` (codeberg.org/miekg/dns fork stores EDNS fields in the Msg header, not Extra).
 - **DNSSEC**: IANA root KSK trust anchors (key tags 20326 + 38696). `dnssec_enforce: true` → SERVFAIL on bogus; `false` → pass through without AD.
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
 - **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.

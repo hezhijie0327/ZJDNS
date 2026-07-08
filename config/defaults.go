@@ -164,11 +164,27 @@ const (
 	ProtoHTTPPlain = "http"
 
 	// User-facing protocol aliases (map to config file values).
-	ProtoDOT    = "dot"     // DoT user config alias
-	ProtoDOQ    = "doq"     // DoQ user config alias
-	ProtoDOH    = "doh"     // DoH user config alias
-	ProtoDOH3   = "doh3"    // DoH3 user config alias
-	ProtoTLSTCP = "tcp-tls" // dns.Client.Net for TLS-wrapped TCP
+	ProtoDOT      = "dot"      // DoT user config alias
+	ProtoDOQ      = "doq"      // DoQ user config alias
+	ProtoDOH      = "doh"      // DoH user config alias
+	ProtoDOH3     = "doh3"     // DoH3 user config alias
+	ProtoTLSTCP   = "tcp-tls"  // dns.Client.Net for TLS-wrapped TCP
+	ProtoDNSCrypt = "dnscrypt" // DNSCrypt v2 encrypted DNS
+)
+
+// DNSCrypt v2 protocol defaults.
+const (
+	DefaultDNSCryptPort           = "8443"
+	DefaultDNSCryptCertTTL        = 365 * 24 * time.Hour // certificate validity period
+	DefaultDNSCryptUDPSize        = 1252                 // bytes
+	DefaultDNSCryptCertCacheTTL   = 1 * time.Hour        // client shared-key cache duration
+	DefaultDNSCryptReadTimeout    = 2 * time.Second      // UDP/TCP initial read deadline
+	DefaultDNSCryptTCPIdleTimeout = 8 * time.Second      // TCP idle timeout after first read
+	DefaultDNSCryptResponseBuffer = 4096                 // bytes — receive buffer for cert/query responses
+
+	// DNSCrypt ESVersion string constants.
+	DNSCryptESVersionXSalsa20  = "xsalsa20poly1305"
+	DNSCryptESVersionXChacha20 = "xchacha20poly1305"
 )
 
 // ALPN protocol identifiers for secure DNS transports.
