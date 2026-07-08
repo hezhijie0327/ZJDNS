@@ -87,6 +87,7 @@ type UpstreamServer struct {
 	Protocol      string   `json:"protocol"`
 	ServerName    string   `json:"server_name,omitempty"`
 	SkipTLSVerify bool     `json:"skip_tls_verify,omitempty"`
+	NoCache       bool     `json:"no_cache,omitempty"`
 	Match         []string `json:"match,omitempty"`
 	Proxy         string   `json:"proxy,omitempty"` // socks5://[user:pass@]host:port
 }
@@ -397,6 +398,7 @@ func GenerateExampleConfig() string {
 
 	cfg.Fallback = []UpstreamServer{
 		{Address: RecursiveIndicator},
+		{Address: "8.8.4.4:53", Protocol: ProtoUDP, NoCache: true},
 	}
 
 	cfg.Rewrite = []RewriteRule{

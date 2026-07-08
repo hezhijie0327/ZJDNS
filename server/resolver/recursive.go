@@ -62,7 +62,7 @@ func (r *Recursive) DNSSECEDECode() uint16 {
 func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.ECSOption, depth int, forceTCP bool) QueryResult {
 	if depth > config.DefaultMaxRecursionDepth {
 		log.Warnf("RECURSION: depth exceeded (depth=%d, max=%d) for %s", depth, config.DefaultMaxRecursionDepth, question.Name)
-		return QueryResult{Err: fmt.Errorf("recursion depth exceeded: %d", depth)}
+		return QueryResult{Cacheable: true, Err: fmt.Errorf("recursion depth exceeded: %d", depth)}
 	}
 
 	// Clear any stale DNSSEC EDE code from a previous CNAME hop or recursive
@@ -110,19 +110,19 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				qr.Hijack = true
 				return qr
 			}
-			return QueryResult{Hijack: hijackSeen, Err: fmt.Errorf("root domain query: %w", err)}
+			return QueryResult{Cacheable: true, Hijack: hijackSeen, Err: fmt.Errorf("root domain query: %w", err)}
 		}
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessagePool.Put(response)
-		return QueryResult{Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.RecursiveIndicator, Hijack: hijackSeen}
+		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.RecursiveIndicator, Hijack: hijackSeen}
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return QueryResult{Hijack: hijackSeen, Err: ctx.Err()}
+			return QueryResult{Cacheable: true, Hijack: hijackSeen, Err: ctx.Err()}
 		default:
 		}
 
@@ -162,7 +162,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 
 		if err != nil {
-			return QueryResult{Hijack: hijackSeen, Err: fmt.Errorf("query %s: %w", currentDomain, err)}
+			return QueryResult{Cacheable: true, Hijack: hijackSeen, Err: fmt.Errorf("query %s: %w", currentDomain, err)}
 		}
 		// ── End TCP fallback ────────────────────────────────────────
 
@@ -294,7 +294,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if len(nextNS) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessagePool.Put(response)
-			return QueryResult{Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.RecursiveIndicator}
+			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.RecursiveIndicator}
 		}
 
 		// Cache A/AAAA glue records per NS name immediately so
@@ -385,14 +385,14 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	for cnameDepth = range config.DefaultMaxCNAMEChain {
 		select {
 		case <-ctx.Done():
-			return QueryResult{Err: ctx.Err()}
+			return QueryResult{Cacheable: true, Err: ctx.Err()}
 		default:
 		}
 
 		currentName := zdnsutil.NormalizeDomain(currentQuestion.Name)
 		if visitedCNAMEs[currentName] {
 			log.Warnf("RECURSION: CNAME loop detected for %s", currentName)
-			return QueryResult{Err: fmt.Errorf("CNAME loop detected: %s", currentName)}
+			return QueryResult{Cacheable: true, Err: fmt.Errorf("CNAME loop detected: %s", currentName)}
 		}
 		visitedCNAMEs[currentName] = true
 		log.Debugf("RECURSION: CNAME step %d/%d: resolving %s %s", cnameDepth+1, config.DefaultMaxCNAMEChain, currentQuestion.Name, dns.TypeToString[currentQuestion.Qtype])
@@ -405,7 +405,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 
 		qr := c.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP)
 		if qr.Err != nil {
-			return QueryResult{Err: qr.Err}
+			return QueryResult{Cacheable: true, Err: qr.Err}
 		}
 
 		if usedServer == "" {
@@ -452,5 +452,5 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	if cnameDepth >= config.DefaultMaxCNAMEChain-1 {
 		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, zdnsutil.NormalizeDomain(question.Name))
 	}
-	return QueryResult{Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Hijack: hijackOccurred}
+	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Hijack: hijackOccurred}
 }

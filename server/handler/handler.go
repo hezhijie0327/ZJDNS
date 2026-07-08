@@ -70,6 +70,7 @@ type queryResult struct {
 	authority  []dns.RR
 	additional []dns.RR
 	validated  bool
+	cacheable  bool
 	ecs        *edns.ECSOption
 	server     string
 	fallback   bool

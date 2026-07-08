@@ -210,7 +210,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *client.Result, server *c
 		ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 
 		select {
-		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, ECS: ecsResponse, Server: serverDesc}:
+		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Cacheable: !server.NoCache, ECS: ecsResponse, Server: serverDesc}:
 			remaining := activeConnections.Load() - 1
 			if remaining > 0 {
 				log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
@@ -228,6 +228,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *client.Result, server *c
 			Authority:  queryResult.Response.Ns,
 			Additional: queryResult.Response.Extra,
 			Validated:  false,
+			Cacheable:  !server.NoCache,
 			ECS:        r.edns.ParseFromDNS(queryResult.Response),
 			Server:     serverDesc,
 		})
@@ -245,6 +246,7 @@ func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config
 	defer recursiveCancel()
 
 	qr := r.cname.resolve(recursiveCtx, question, ecs)
+	qr.Cacheable = !server.NoCache
 	if qr.Err != nil || len(qr.Answer) == 0 {
 		return false
 	}

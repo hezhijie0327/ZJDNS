@@ -46,7 +46,8 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 		nsSlice, extraSlice := response.Ns, response.Extra
 		pool.DefaultMessagePool.Put(response)
 		return "", nil, false, &QueryResult{
-			Answer: nil, Authority: nsSlice, Additional: extraSlice,
+			Cacheable: true,
+			Answer:    nil, Authority: nsSlice, Additional: extraSlice,
 			Validated: validated, ECS: ecsResponse,
 			Server: config.RecursiveIndicator, Hijack: false, Err: nil,
 		}
@@ -85,13 +86,15 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 		pool.DefaultMessagePool.Put(response)
 		r.lastDNSSECEDECode.Store(uint64(edns.EDECodeNoReachableAuthority))
 		return &QueryResult{
-			Server: config.RecursiveIndicator, ECS: ecsResponse,
+			Cacheable: true,
+			Server:    config.RecursiveIndicator, ECS: ecsResponse,
 			Err: fmt.Errorf("lame delegation: no reachable authority for %s", currentDomain),
 		}
 	}
 	nsSlice, extraSlice := response.Ns, response.Extra
 	pool.DefaultMessagePool.Put(response)
 	return &QueryResult{
+		Cacheable: true,
 		Authority: nsSlice, Additional: extraSlice,
 		Validated: validated, ECS: ecsResponse,
 		Server: config.RecursiveIndicator,
@@ -155,13 +158,14 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 			if err := r.recordDNSSECFailure(chain, *validated,
 				"bogus zone cut delegation for "+question.Name); err != nil {
 				log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
-				return &QueryResult{Server: config.RecursiveIndicator, ECS: ecsResponse, Err: err}
+				return &QueryResult{Cacheable: true, Server: config.RecursiveIndicator, ECS: ecsResponse, Err: err}
 			}
 		} else {
 			log.Debugf("SECURITY: zone cut resolution failed for %s: %v (treating as insecure)", question.Name, cutErr)
 			*validated = false
 		}
 		return &QueryResult{
+			Cacheable: true,
 			Answer:    stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
 			Authority: response.Ns, Additional: response.Extra,
 			Validated: *validated, ECS: ecsResponse, Server: config.RecursiveIndicator,
@@ -172,12 +176,14 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 		r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
 		if r.resolver.DNSSECEnforce {
 			return &QueryResult{
-				Server: config.RecursiveIndicator, ECS: ecsResponse,
+				Cacheable: true,
+				Server:    config.RecursiveIndicator, ECS: ecsResponse,
 				Err: fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name),
 			}
 		}
 	}
 	return &QueryResult{
+		Cacheable: true,
 		Answer:    stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
 		Authority: response.Ns, Additional: response.Extra,
 		Validated: *validated, ECS: ecsResponse, Server: config.RecursiveIndicator,

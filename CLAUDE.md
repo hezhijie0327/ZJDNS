@@ -319,7 +319,7 @@ Top layer (wiring):
 | `Conn` / `Pool` | `server/client/pool` | RFC 7766 pipelined TCP/DoT |
 | `QUICPool` / `QUICConn` | `server/client/pool` | QUIC connection pool |
 | `Resolver` | `server/resolver` | Upstream + recursive resolution |
-| `QueryResult` | `server/resolver` | Unified result struct (Answer, Authority, Additional, Validated, ECS, Server, Fallback, Hijack, Err) — used throughout the resolver layer; `queryUpstream`, `Recursive.resolve`, and `CNAME.resolve` all return it by value |
+| `QueryResult` | `server/resolver` | Unified result struct (Answer, Authority, Additional, Validated, Cacheable, ECS, Server, Fallback, Hijack, Err) — used throughout the resolver layer; `queryUpstream`, `Recursive.resolve`, and `CNAME.resolve` all return it by value |
 | `Recursive` | `server/resolver` | Built-in recursive walk |
 | `CryptoValidator` | `server/security` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in `dnssec_nsec.go` |
 | `Guard` | `server/security` | Bundles CryptoValidator + Detector |
@@ -372,6 +372,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **processRR fast path**: When `value == 0 && !isElapsed && includeDNSSEC`, `processRR` returns the original RR without cloning — common on cache-miss serve paths (50+ allocs saved per response).
 - **Pending request deduplication** (`server/handler/pending.go`): `singleflight`-style coalescing of concurrent identical cache misses. Key mirrors the cache lookup key (qname + qtype + qclass + ECS + DNSSEC). Leaders send the upstream query; followers block on a channel until the leader completes, then receive the same `*QueryResult`. Always enabled — zero overhead on cache hits. Reduces upstream load under high concurrent miss rates and closes the concurrent-query cache-poisoning window.
 - **QueryResult unification**: The internal `result` and `terminalResult` structs (upstream + recursive helpers) are replaced by `QueryResult`, the same struct used at the public API boundary. `queryUpstream`, `Recursive.resolve`, and `CNAME.resolve` return `QueryResult` by value instead of 9–10 individual return values. This eliminates the `tooManyResultsChecker` lint and removes duplicate struct definitions.
+- **Upstream `no_cache` flag**: `UpstreamServer.NoCache` (JSON: `no_cache`, default `false`) controls whether responses from that upstream/fallback are written to cache. `QueryResult.Cacheable` carries this through the resolver→handler pipeline. `processUpstreamResponse` sets `Cacheable: !server.NoCache`; `handleRecursiveQuery` overrides after recursive resolution; recursive-internal paths default to `true`. Three `cache.Set()` sites in `handler_cache.go` are guarded by `if cacheable`. Useful for untrusted upstreams whose responses should not pollute the local cache.
 - **Gosec inline suppression**: No global gosec excludes in `.golangci.yml`. All suppressions are inline `//nolint:gosec // Gxxx: reason` at each call site. G115 (integer overflow) covers DNS wire format conversions (TTL uint32, port uint16, label byte) — all protocol-bounded. G404 (weak random) covers DNS message IDs and ICMP echo identifiers — not cryptographic. G505 covers SHA1 for NSEC3 (RFC 5155).
 
 ## DB Schema

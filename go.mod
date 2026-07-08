@@ -3,10 +3,10 @@ module zjdns
 go 1.26.4
 
 require (
-	codeberg.org/miekg/dns v0.6.84-0.20260703045444-a041bf0cea90
+	codeberg.org/miekg/dns v0.6.84-0.20260707082657-ca97d3392f5f
 	github.com/klauspost/compress v1.19.1-0.20260702093504-efdb6ed96c4b
-	github.com/ncruces/go-sqlite3 v0.35.2-0.20260705193247-d081bc7e335c
-	github.com/quic-go/quic-go v0.60.1-0.20260706010431-adacb6565e15
+	github.com/ncruces/go-sqlite3 v0.35.2
+	github.com/quic-go/quic-go v0.60.1-0.20260706072328-d6ea3502b6c5
 	gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246
 	golang.org/x/net v0.56.0
 	golang.org/x/sync v0.21.0
@@ -32,5 +32,5 @@ require (
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 )
