@@ -239,10 +239,34 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	protocol := strings.ToLower(server.Protocol)
 
 	if protocol == config.ProtoDNSCrypt || protocol == config.ProtoDNSCryptTCP {
-		result.Response, result.Error = c.executeDNSCrypt(queryCtx, msg, server, protocol == config.ProtoDNSCryptTCP)
-		if result.Error != nil {
+		useTCP := protocol == config.ProtoDNSCryptTCP
+		result.Response, result.Error = c.executeDNSCrypt(queryCtx, msg, server, useTCP)
+
+		// UDP→TCP fallback: retry over TCP on truncation, timeout, or
+		// general error (e.g. query too large to pad for UDP), matching
+		// dnscrypt-proxy's behaviour.
+		if !useTCP && result.Error == nil && result.Response != nil && result.Response.Truncated {
+			log.Debugf("UPSTREAM: DNSCrypt UDP response truncated for %s, falling back to TCP", qname)
+			useTCP = true
+		} else if !useTCP && result.Error != nil {
+			log.Debugf("UPSTREAM: DNSCrypt UDP query failed for %s, falling back to TCP: %v", qname, result.Error)
+			useTCP = true
+		}
+
+		if useTCP && protocol == config.ProtoDNSCrypt {
+			if queryCtx.Err() == nil {
+				result.Response, result.Error = c.executeDNSCrypt(queryCtx, msg, server, true)
+				if result.Error == nil {
+					protocol = config.ProtoDNSCryptTCP
+					log.Debugf("UPSTREAM: DNSCrypt TCP fallback succeeded for %s", qname)
+				} else {
+					log.Debugf("UPSTREAM: DNSCrypt TCP fallback failed for %s: %v", qname, result.Error)
+				}
+			}
+		} else if result.Error != nil {
 			log.Debugf("UPSTREAM: DNSCrypt query failed for %s via %s: %v", qname, server.Address, result.Error)
 		}
+
 		result.Duration = time.Since(start)
 		result.Protocol = strings.ToUpper(protocol)
 		return result

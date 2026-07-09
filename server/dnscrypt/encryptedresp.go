@@ -48,9 +48,11 @@ func (r *encryptedResponse) encrypt(
 	response = append(response, ResolverMagic...)
 	response = append(response, r.nonce[:]...)
 
-	// For PQ responses, prepend the control block to the DNS payload before
-	// encryption.
-	if r.esVersion.IsPQ() && len(r.pqControl) > 0 {
+	// For PQ responses, always prepend a 2-byte control-length prefix before the
+	// DNS payload (even when there is no control block).  The client always
+	// reads these two bytes to locate the control block; without them DNS header
+	// bytes would be misinterpreted as the control length.
+	if r.esVersion.IsPQ() {
 		controlLen := make([]byte, 2)
 		binary.BigEndian.PutUint16(controlLen, uint16(len(r.pqControl))) //nolint:gosec // G115: bounded
 		paddedPayload := make([]byte, 0, 2+len(r.pqControl)+len(packet))
@@ -114,17 +116,23 @@ func (r *encryptedResponse) decrypt(
 		return nil, ErrESVersion
 	}
 
-	// Strip PQ control block if present.  Validate the control block magic
-	// to avoid misinterpreting non-PQ payload bytes as a control block.
-	if r.esVersion.IsPQ() && len(packet) >= 2+pqMinControlBlockLen {
+	// Strip PQ control block if present.  For resumed responses the server
+	// emits \x00\x00 as a zero-length control prefix; initial responses
+	// carry a full PQDR control block.  We only strip when controlLen is
+	// zero or the magic validates — otherwise the packet lacks the prefix
+	// (old-format server or legacy response) and must be used as-is.
+	if r.esVersion.IsPQ() && len(packet) >= 2 {
 		controlLen := int(binary.BigEndian.Uint16(packet[0:2]))
-		if controlLen >= pqMinControlBlockLen && 2+controlLen <= len(packet) &&
-			bytes.Equal(packet[2:2+len(PQControlMagic)], PQControlMagic[:]) {
-			if controlLen > 0 {
-				r.pqControl = make([]byte, controlLen)
-				copy(r.pqControl, packet[2:2+controlLen])
+		if 2+controlLen <= len(packet) {
+			hasMagic := controlLen >= pqMinControlBlockLen &&
+				bytes.Equal(packet[2:2+len(PQControlMagic)], PQControlMagic[:])
+			if controlLen == 0 || hasMagic {
+				if controlLen > 0 {
+					r.pqControl = make([]byte, controlLen)
+					copy(r.pqControl, packet[2:2+controlLen])
+				}
+				packet = packet[2+controlLen:]
 			}
-			packet = packet[2+controlLen:]
 		}
 	}
 

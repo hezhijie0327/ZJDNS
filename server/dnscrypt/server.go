@@ -515,7 +515,7 @@ func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, pr
 	log.Debugf("DNSCRYPT: handling query for %s from %s", m.Question[0].Header().Name, rw.RemoteAddr())
 
 	clientIP := clientIPFromAddr(rw.RemoteAddr())
-	resp := s.handler.ServeDNS(m, clientIP, true, protocol)
+	resp := s.handler.ServeDNS(m, clientIP, false, protocol)
 	if resp == nil {
 		return nil
 	}
