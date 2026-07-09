@@ -139,8 +139,9 @@ func buildResolverConfig(cfg *config.DNSCryptSettings, esVersion CryptoConstruct
 }
 
 // parseCertTTL parses a TTL duration string into a time.Duration.  An empty
-// string returns the default (365 days).  Supported units: h (hour), d (day),
-// standard Go duration suffixes (s, m, h).
+// string returns the default (365 days).  Supported formats: "30d"/"365d"
+// (days), "720h" (hours), "86400s" (seconds), or bare integer for seconds
+// (e.g. "86400").
 func parseCertTTL(s string) time.Duration {
 	if s == "" {
 		return config.DefaultDNSCryptCertTTL
@@ -149,13 +150,17 @@ func parseCertTTL(s string) time.Duration {
 	if d, err := parseDays(s); err == nil {
 		return d
 	}
-	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		log.Warnf("DNSCRYPT: invalid cert_ttl %q, using default %s", s, config.DefaultDNSCryptCertTTL)
-		return config.DefaultDNSCryptCertTTL
+	// Try Go duration parsing (e.g. "720h", "86400s").
+	if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return d
+	}
+	// Try bare integer as seconds (e.g. "86400").
+	if n, err := strconv.Atoi(s); err == nil && n > 0 {
+		return time.Duration(n) * time.Second
 	}
 
-	return d
+	log.Warnf("DNSCRYPT: invalid cert_ttl %q, using default %s", s, config.DefaultDNSCryptCertTTL)
+	return config.DefaultDNSCryptCertTTL
 }
 
 // parseDays parses a duration string ending with "d" (e.g. "30d", "365d").
