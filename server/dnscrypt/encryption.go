@@ -15,12 +15,14 @@ import (
 // (including the leading 0x80), and the total length must be a multiple of
 // 64 bytes.
 
-// pad applies ISO/IEC 7816-4 padding to the packet.
-func pad(packet []byte) (padded []byte) {
+// pad applies ISO/IEC 7816-4 padding to the packet.  When isUDP is true the
+// padded length is at least minUDPQuestionSize (256 bytes) as required by the
+// DNSCrypt UDP profile; for TCP only the 64-byte alignment is enforced.
+func pad(packet []byte, isUDP bool) (padded []byte) {
 	// Closest multiple of 64 >= (len(packet) + 1).
 	minSize := len(packet) + 1 + (64-(len(packet)+1)%64)%64
 
-	if minUDPQuestionSize > minSize {
+	if isUDP && minUDPQuestionSize > minSize {
 		minSize = minUDPQuestionSize
 	}
 

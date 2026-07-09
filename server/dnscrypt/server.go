@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
-	"net/netip"
 	"sync"
 	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
+
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -24,21 +24,19 @@ type DNSHandler interface {
 
 // Server is a DNSCrypt v2 server that listens on UDP and TCP.
 type Server struct {
-	cert        *Certificate
-	certTXT     string
-	handler     DNSHandler
-	logger      *slog.Logger
-	cfg         *config.DNSCryptSettings
-	udpConn     *net.UDPConn
-	tcpListener net.Listener
-	esVersion   CryptoConstruction
-	wg          sync.WaitGroup
-	tcpConns    map[net.Conn]struct{}
-	addr        netip.AddrPort
-	mu          sync.RWMutex
-	started     bool
-	ctx         context.Context
-	cancel      context.CancelCauseFunc
+	cert         *Certificate
+	certTXT      string
+	handler      DNSHandler
+	cfg          *config.DNSCryptSettings
+	udpConns     []*net.UDPConn
+	tcpListeners []net.Listener
+	esVersion    CryptoConstruction
+	wg           sync.WaitGroup
+	tcpConns     map[net.Conn]struct{}
+	mu           sync.RWMutex
+	started      bool
+	ctx          context.Context
+	cancel       context.CancelCauseFunc
 }
 
 // New creates a new DNSCrypt Server from the given configuration.
@@ -58,22 +56,14 @@ func New(cfg *config.DNSCryptSettings) (*Server, error) {
 		return nil, fmt.Errorf("creating certificate: %w", err)
 	}
 
-	port := cfg.Port
-	if port == "" {
-		port = config.DefaultDNSCryptPort
+	if cfg.Port == "" {
+		cfg.Port = config.DefaultDNSCryptPort
 	}
-	addr, err := netip.ParseAddrPort("0.0.0.0:" + port)
-	if err != nil {
-		return nil, fmt.Errorf("parsing server address: %w", err)
-	}
-
 	ctx, cancel := context.WithCancelCause(context.Background())
 
 	s := &Server{
 		cert:     cert,
-		logger:   slog.Default(),
 		cfg:      cfg,
-		addr:     addr,
 		tcpConns: make(map[net.Conn]struct{}),
 		ctx:      ctx,
 		cancel:   cancel,
@@ -116,6 +106,7 @@ func buildResolverConfig(cfg *config.DNSCryptSettings, esVersion CryptoConstruct
 }
 
 // Start begins listening for DNSCrypt queries on UDP and TCP.
+// Start begins listening for DNSCrypt queries on UDP and TCP.
 func (s *Server) Start(handler DNSHandler) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -127,39 +118,58 @@ func (s *Server) Start(handler DNSHandler) error {
 	s.handler = handler
 	s.started = true
 
-	port := s.cfg.Port
-	if port == "" {
-		port = config.DefaultDNSCryptPort
-	}
-
-	udpAddrs, err := resolveBindAddrs("udp", port)
+	udpAddrs, err := zdnsutil.ResolveBindAddrs("udp", s.cfg.Port)
 	if err != nil {
 		return fmt.Errorf("resolving UDP bind addresses: %w", err)
 	}
-	udpAddr := net.UDPAddrFromAddrPort(udpAddrs[0])
-	s.udpConn, err = net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		return fmt.Errorf("listening UDP on %s: %w", udpAddr, err)
+	for _, addr := range udpAddrs {
+		uaddr, err := net.ResolveUDPAddr("udp", addr)
+		if err != nil {
+			return fmt.Errorf("resolving UDP address %s: %w", addr, err)
+		}
+		conn, err := net.ListenUDP("udp", uaddr)
+		if err != nil {
+			return fmt.Errorf("listening UDP on %s: %w", addr, err)
+		}
+		s.udpConns = append(s.udpConns, conn)
+		go s.serveUDP(s.ctx, conn)
+		log.Infof("DNSCRYPT: Listening on UDP %s", conn.LocalAddr())
 	}
 
-	tcpAddrs, err := resolveBindAddrs("tcp", port)
+	tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.cfg.Port)
 	if err != nil {
-		_ = s.udpConn.Close()
+		for _, c := range s.udpConns {
+			_ = c.Close()
+		}
 		return fmt.Errorf("resolving TCP bind addresses: %w", err)
 	}
-	tcpAddr := net.TCPAddrFromAddrPort(tcpAddrs[0])
-	s.tcpListener, err = net.ListenTCP("tcp", tcpAddr)
-	if err != nil {
-		_ = s.udpConn.Close()
-		return fmt.Errorf("listening TCP on %s: %w", tcpAddr, err)
+	for _, addr := range tcpAddrs {
+		tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+		if err != nil {
+			for _, c := range s.udpConns {
+				_ = c.Close()
+			}
+			for _, l := range s.tcpListeners {
+				_ = l.Close()
+			}
+			return fmt.Errorf("resolving TCP address %s: %w", addr, err)
+		}
+		listener, err := net.ListenTCP("tcp", tcpAddr)
+		if err != nil {
+			for _, c := range s.udpConns {
+				_ = c.Close()
+			}
+			for _, l := range s.tcpListeners {
+				_ = l.Close()
+			}
+			return fmt.Errorf("listening TCP on %s: %w", addr, err)
+		}
+		s.tcpListeners = append(s.tcpListeners, listener)
+		go s.serveTCP(s.ctx, listener)
+		log.Infof("DNSCRYPT: Listening on TCP %s", listener.Addr())
 	}
 
-	log.Infof("DNSCRYPT: Listening on UDP %s", s.udpConn.LocalAddr())
-	log.Infof("DNSCRYPT: Listening on TCP %s", s.tcpListener.Addr())
 	log.Infof("DNSCRYPT: Provider: %s", s.cfg.ProviderName)
-
-	go s.serveUDP(s.ctx)
-	go s.serveTCP(s.ctx)
 
 	return nil
 }
@@ -173,15 +183,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	s.started = false
 
-	if s.udpConn != nil {
-		_ = s.udpConn.Close()
+	for _, c := range s.udpConns {
+		_ = c.Close()
 	}
-	if s.tcpListener != nil {
-		_ = s.tcpListener.Close()
+	for _, l := range s.tcpListeners {
+		_ = l.Close()
 	}
 	for conn := range s.tcpConns {
 		_ = conn.SetReadDeadline(time.Unix(1, 0))
 	}
+	// Snapshot the WaitGroup for in-flight handlers and install a
+	// fresh one for a potential future Start() call. Per-packet
+	// and per-connection goroutines Add/Done on the WaitGroup that
+	// was current when serveUDP/serveTCP spawned them.
 	prevWg := &s.wg
 	s.wg = sync.WaitGroup{}
 	s.mu.Unlock()
@@ -214,7 +228,7 @@ func (s *Server) buildCertTXT() string {
 	return packTxtString(certBytes)
 }
 
-func (s *Server) encrypt(m *dns.Msg, q *encryptedQuery) (encrypted []byte, err error) {
+func (s *Server) encrypt(m *dns.Msg, q *encryptedQuery, isUDP bool) (encrypted []byte, err error) {
 	r := &encryptedResponse{
 		esVersion: q.esVersion,
 		nonce:     q.nonce,
@@ -228,7 +242,7 @@ func (s *Server) encrypt(m *dns.Msg, q *encryptedQuery) (encrypted []byte, err e
 	if err != nil {
 		return nil, fmt.Errorf("computing shared key: %w", err)
 	}
-	return r.encrypt(packet, sharedKey)
+	return r.encrypt(packet, sharedKey, isUDP)
 }
 
 func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err error) {
@@ -313,12 +327,4 @@ func clientIPFromAddr(addr net.Addr) net.IP {
 		return a.IP
 	}
 	return nil
-}
-
-func resolveBindAddrs(network, port string) ([]netip.AddrPort, error) {
-	addr, err := netip.ParseAddrPort("0.0.0.0:" + port)
-	if err != nil {
-		return nil, err
-	}
-	return []netip.AddrPort{addr}, nil
 }

@@ -331,11 +331,6 @@ func EncodeStampFromConfig(addr, providerName, pkHex string) (stamp string, err 
 	return StampEncodeBase64(buf), nil
 }
 
-// DecodeStamp decodes an sdns:// stamp and returns its components.
-func DecodeStamp(stamp string) (addr, providerName string, publicKey []byte, err error) {
-	return ParseStamp(stamp)
-}
-
 // ResolverConfigFromStamp creates a bare ResolverConfig from stamp components.
 func ResolverConfigFromStamp(addr, pkHex, providerName string) (ResolverConfig, error) {
 	rc := ResolverConfig{
@@ -350,68 +345,9 @@ func ResolverConfigFromStamp(addr, pkHex, providerName string) (ResolverConfig, 
 	return rc, nil
 }
 
-// StampEncode wraps the binary stamp encoding + base64.
-func StampEncode(addr, providerName string, publicKey []byte) string {
-	b := StampBinaryEncode(addr, providerName, publicKey)
-	return StampEncodeBase64(b)
-}
-
 // StampBinaryEncode encodes the stamp fields as raw binary.
 func StampBinaryEncode(addr, providerName string, publicKey []byte) []byte {
 	return AppendStampBinary(nil, addr, providerName, publicKey)
-}
-
-// StampDecode splits a base64-encoded stamp body into its components.
-func StampDecode(stampBase64 string) (addr, providerName string, publicKey []byte, err error) {
-	b, err := base64.RawURLEncoding.DecodeString(stampBase64)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("decoding stamp: %w", err)
-	}
-	return parseStampBinary(b)
-}
-
-// parseStampBinary parses binary stamp data into its components.
-func parseStampBinary(b []byte) (addr, providerName string, publicKey []byte, err error) {
-	if len(b) < 1 || b[0] != StampProtoDNSCrypt {
-		return "", "", nil, errors.New("not a DNSCrypt stamp")
-	}
-	if len(b) < 9 {
-		return "", "", nil, errors.New("stamp too short: missing header")
-	}
-	b = b[9:] // skip protocol (1) + properties (8)
-	if len(b) < 1 {
-		return "", "", nil, errors.New("stamp too short: missing address")
-	}
-	addrLen := int(b[0])
-	b = b[1:]
-	if len(b) < addrLen {
-		return "", "", nil, errors.New("stamp too short: truncated address")
-	}
-	addr = string(b[:addrLen])
-	b = b[addrLen:]
-	// Server public key (length-prefixed, before provider name).
-	if len(b) < 1 {
-		return "", "", nil, errors.New("stamp too short: missing public key length")
-	}
-	pkLen := int(b[0])
-	b = b[1:]
-	if pkLen < 1 || len(b) < pkLen {
-		return "", "", nil, errors.New("stamp too short: truncated public key")
-	}
-	publicKey = make([]byte, pkLen)
-	copy(publicKey, b[:pkLen])
-	b = b[pkLen:]
-	// Read provider name.
-	if len(b) < 1 {
-		return "", "", nil, errors.New("stamp: missing provider name")
-	}
-	provLen := int(b[0])
-	b = b[1:]
-	if len(b) < provLen {
-		return "", "", nil, errors.New("stamp: truncated provider name")
-	}
-	providerName = string(b[:provLen])
-	return addr, providerName, publicKey, nil
 }
 
 // HexDecodeKey exported wrapper.
@@ -460,11 +396,6 @@ func GenerateKeyPair() (secretHex, publicHex string) {
 	return hexEncodeKey(sk[:]), hexEncodeKey(pk[:])
 }
 
-// GenerateResolverKeys generates a complete set of DNSCrypt resolver keys.
-func GenerateResolverKeys() (secretHex, publicHex string) {
-	return GenerateKeyPair()
-}
-
 // StampFromConfig returns the SDNS stamp for a given DNSCrypt configuration.
 func StampFromConfig(addr, pkHex, providerName string) string {
 	stamp, _ := EncodeStampFromConfig(addr, providerName, pkHex)
@@ -481,21 +412,6 @@ func ClientMagicFromKey(pk []byte) [ClientMagicSize]byte {
 	var magic [ClientMagicSize]byte
 	copy(magic[:], pk[:ClientMagicSize])
 	return magic
-}
-
-// SerializeStampBinary serializes stamp fields and returns the raw binary.
-func SerializeStampBinary(addr, providerName string, pk []byte) []byte {
-	return StampBinaryEncode(addr, providerName, pk)
-}
-
-// DeserializeStampBinary deserializes binary stamp data.
-func DeserializeStampBinary(b []byte) (addr, providerName string, pk []byte, err error) {
-	return parseStampBinary(b)
-}
-
-// StampFromRaw creates an sdns:// stamp from raw components.
-func StampFromRaw(addr, providerName, pkHex string) (string, error) {
-	return EncodeStampFromConfig(addr, providerName, pkHex)
 }
 
 // StampAddr extracts the server address from a DNSCrypt stamp.
@@ -519,27 +435,18 @@ func StampProviderName(stamp string) (string, error) {
 	return pn, err
 }
 
-// StampToConfig converts a stamp to individual config values.
-func StampToConfig(stamp string) (addr, providerName, pkHex string, err error) {
-	return StampToClientConfig(stamp)
-}
-
 // CertFromConfig generates a certificate from the resolver configuration.
-func CertFromConfig(providerName, pkHex, skHex, resolverPkHex, resolverSkHex, esVersionStr string) (*Certificate, error) {
+func CertFromConfig(providerName, privateKeyHex, resolverPkHex, resolverSkHex, esVersionStr string, certTTL time.Duration) (*Certificate, error) {
 	esVersion, err := ParseESVersion(esVersionStr)
 	if err != nil {
 		return nil, err
 	}
-	privateKey, err := hexDecodeKey(pkHex)
+	privateKey, err := hexDecodeKey(privateKeyHex)
 	if err != nil {
-		return nil, fmt.Errorf("decoding public key as private key: %w", err)
+		return nil, fmt.Errorf("decoding signing key: %w", err)
 	}
 	if len(privateKey) != ed25519.PrivateKeySize {
-		// Try loading from privateKey field instead
-		privateKey, err = hexDecodeKey(skHex)
-		if err != nil {
-			return nil, fmt.Errorf("decoding private key: %w", err)
-		}
+		return nil, fmt.Errorf("signing key must be %d bytes (got %d)", ed25519.PrivateKeySize, len(privateKey))
 	}
 	resolverPk, err := hexDecodeKey(resolverPkHex)
 	if err != nil {
@@ -550,9 +457,9 @@ func CertFromConfig(providerName, pkHex, skHex, resolverPkHex, resolverSkHex, es
 		return nil, fmt.Errorf("decoding resolver sk: %w", err)
 	}
 	cert := &Certificate{
-		Serial:    uint32(time.Now().Unix()),                                    //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
-		NotBefore: uint32(time.Now().Unix()),                                    //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
-		NotAfter:  uint32(time.Now().Add(config.DefaultDNSCryptCertTTL).Unix()), //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
+		Serial:    uint32(time.Now().Unix()),              //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
+		NotBefore: uint32(time.Now().Unix()),              //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
+		NotAfter:  uint32(time.Now().Add(certTTL).Unix()), //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
 		ESVersion: esVersion,
 	}
 	copy(cert.ResolverPk[:], resolverPk)
@@ -599,20 +506,6 @@ func NewTestCert(providerName string) (*Certificate, *ResolverConfig, error) {
 		return nil, nil, err
 	}
 	return cert, &rc, nil
-}
-
-// GenerateStamp creates a DNS stamp for the given configuration.
-func GenerateStamp(addr, providerName, pkHex string) (string, error) {
-	return BuildStamp(pkHex, addr, providerName)
-}
-
-// StampDecodeBase64 decodes a base64-encoded stamp body.
-func StampDecodeBase64(b64 string) (addr, providerName string, publicKey []byte, err error) {
-	b, err := base64.RawURLEncoding.DecodeString(b64)
-	if err != nil {
-		return "", "", nil, err
-	}
-	return parseStampBinary(b)
 }
 
 // ParseStampAddr extracts and returns just the server address from a stamp.

@@ -18,7 +18,6 @@ import (
 const (
 	defaultReadTimeout    = config.DefaultDNSCryptReadTimeout
 	defaultTCPIdleTimeout = config.DefaultDNSCryptTCPIdleTimeout
-	defaultUDPSize        = config.DefaultDNSCryptUDPSize
 )
 
 // tcpResponseWriter writes DNSCrypt-encrypted responses over TCP.
@@ -26,7 +25,7 @@ type tcpResponseWriter struct {
 	conn    net.Conn
 	req     *dns.Msg
 	query   *encryptedQuery
-	encrypt func(m *dns.Msg, q *encryptedQuery) ([]byte, error)
+	encrypt func(m *dns.Msg, q *encryptedQuery, isUDP bool) ([]byte, error)
 }
 
 func (w *tcpResponseWriter) LocalAddr() net.Addr  { return w.conn.LocalAddr() }
@@ -34,7 +33,7 @@ func (w *tcpResponseWriter) RemoteAddr() net.Addr { return w.conn.RemoteAddr() }
 
 func (w *tcpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
 	normalize("tcp", w.req, m)
-	res, err := w.encrypt(m, w.query)
+	res, err := w.encrypt(m, w.query, false)
 	if err != nil {
 		return fmt.Errorf("encrypting response: %w", err)
 	}
@@ -43,16 +42,16 @@ func (w *tcpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
 
 // serveTCP listens for and handles DNSCrypt TCP connections.  It blocks until
 // the server context is cancelled or the listener is closed.
-func (s *Server) serveTCP(ctx context.Context) {
+func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 	defer zdnsutil.HandlePanic("DNSCrypt TCP server")
 
 	s.wg.Add(1)
 	defer s.wg.Done()
 
-	log.Infof("DNSCRYPT: entering TCP listening loop on %s", s.tcpListener.Addr())
+	log.Infof("DNSCRYPT: entering TCP listening loop on %s", listener.Addr())
 
 	for s.isStarted() {
-		conn, err := s.tcpListener.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
 			if !s.isStarted() {
 				return
@@ -69,7 +68,9 @@ func (s *Server) serveTCP(ctx context.Context) {
 		s.tcpConns[conn] = struct{}{}
 		s.mu.Unlock()
 
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			defer zdnsutil.HandlePanic("DNSCrypt TCP handler")
 			defer func() {
 				_ = conn.Close()
@@ -123,6 +124,7 @@ func (s *Server) handleTCPMsg(ctx context.Context, b []byte, conn net.Conn) erro
 		if err != nil {
 			return fmt.Errorf("handshake: %w", err)
 		}
+		log.Debugf("DNSCRYPT: TCP handshake response sent to %s", conn.RemoteAddr())
 		return writePrefixed(reply, conn)
 	}
 
@@ -131,6 +133,7 @@ func (s *Server) handleTCPMsg(ctx context.Context, b []byte, conn net.Conn) erro
 	if err != nil {
 		return fmt.Errorf("decrypting TCP query: %w", err)
 	}
+	log.Debugf("DNSCRYPT: decrypted TCP query from %s", conn.RemoteAddr())
 
 	rw := &tcpResponseWriter{
 		conn:    conn,
@@ -138,7 +141,6 @@ func (s *Server) handleTCPMsg(ctx context.Context, b []byte, conn net.Conn) erro
 		query:   q,
 		encrypt: s.encrypt,
 	}
-	//nolint:gosec // G404: Non-cryptographic random acceptable for TCP idle jitter
 	return s.serveDNS(ctx, rw, m)
 }
 

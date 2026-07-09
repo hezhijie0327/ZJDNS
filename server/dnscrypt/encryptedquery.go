@@ -46,7 +46,7 @@ func (q *encryptedQuery) encrypt(
 	query = append(query, q.clientPk[:]...)
 	query = append(query, q.nonce[:NonceSize/2]...)
 
-	padded := pad(packet)
+	padded := pad(packet, true) // client queries are always UDP
 	clientNonce = q.nonce
 
 	switch q.esVersion {

@@ -32,6 +32,7 @@ type encryptedResponse struct {
 func (r *encryptedResponse) encrypt(
 	packet []byte,
 	sharedKey [SharedKeySize]byte,
+	isUDP bool,
 ) (response []byte, err error) {
 	_, _ = rand.Read(r.nonce[12:16])
 	binary.BigEndian.PutUint64(r.nonce[16:NonceSize], uint64(time.Now().UnixNano()))
@@ -39,7 +40,7 @@ func (r *encryptedResponse) encrypt(
 	response = append(response, ResolverMagic...)
 	response = append(response, r.nonce[:]...)
 
-	padded := pad(packet)
+	padded := pad(packet, isUDP)
 	serverNonce := r.nonce
 
 	switch r.esVersion {

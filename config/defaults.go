@@ -182,9 +182,6 @@ const (
 	DefaultDNSCryptTCPIdleTimeout = 8 * time.Second      // TCP idle timeout after first read
 	DefaultDNSCryptResponseBuffer = 4096                 // bytes — receive buffer for cert/query responses
 
-	// DNSCrypt ESVersion string constants.
-	DNSCryptESVersionXSalsa20  = "xsalsa20poly1305"
-	DNSCryptESVersionXChacha20 = "xchacha20poly1305"
 )
 
 // ALPN protocol identifiers for secure DNS transports.

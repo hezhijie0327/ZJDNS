@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	"zjdns/config"
+	"zjdns/internal/log"
 
 	serverdnscrypt "zjdns/server/dnscrypt"
 
@@ -43,16 +44,15 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 	if err != nil {
 		return nil, fmt.Errorf("packing dns query: %w", err)
 	}
-	queryBytes := make([]byte, len(msg.Data))
-	copy(queryBytes, msg.Data)
-
-	// Encrypt the query.
+	// Encrypt the query.  msg.Data is packed by Pack() above; EncryptQuery
+	// pads via append which allocates a fresh backing array, so no defensive
+	// copy is needed.
 	q := &serverdnscrypt.EncryptedQuery{
 		ClientMagic: state.clientMagic,
 		ClientPk:    state.publicKey,
 		ESVersion:   state.esVersion,
 	}
-	encrypted, clientNonce, err := serverdnscrypt.EncryptQuery(q, queryBytes, state.sharedKey)
+	encrypted, clientNonce, err := serverdnscrypt.EncryptQuery(q, msg.Data, state.sharedKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting dnscrypt query: %w", err)
 	}
@@ -92,6 +92,7 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		return nil, fmt.Errorf("decrypting dnscrypt response: %w", err)
 	}
 
+	log.Debugf("UPSTREAM: DNSCrypt decrypted response from %s (%d bytes)", state.serverAddress, len(decrypted))
 	// Unpack DNS response.
 	response := &dns.Msg{}
 	response.Data = decrypted
