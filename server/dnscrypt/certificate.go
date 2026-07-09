@@ -9,6 +9,64 @@ import (
 	"time"
 )
 
+// Certificate wire format offsets.  The certificate has a fixed-size header
+// followed by a signed portion whose layout differs between classical and PQ
+// certificates.
+//
+//	Header (shared):  certMagic(4) + esVersion(2) + minor(2) + sig(64) = 72 bytes
+//	Signed (classical): resolverPk(32) + clientMagic(8) + serial(4) +
+//	                     tsStart(4) + tsEnd(4) = 52 bytes → 124 total
+//	Signed (PQ):       pqPublicKey(1216) + clientMagic(8) + serial(4) +
+//	                     tsStart(4) + tsEnd(4) + ext(12) = 1248 bytes → 1320 total
+const (
+	certMagicOff     = 0
+	certMagicLen     = 4
+	certESVersionOff = 4
+	certMinorOff     = 6
+	certSigOff       = 8
+	certSigLen       = 64
+	certSignedOff    = 72
+
+	// Classical certificate signed portion (52 bytes).
+	certClassicalPkOff     = certSignedOff                           // 72
+	certClassicalPkLen     = KeySize                                 // 32
+	certClassicalMagicOff  = certSignedOff + KeySize                 // 104
+	certClassicalSerialOff = certClassicalMagicOff + ClientMagicSize // 112
+	certClassicalTSOff     = certClassicalSerialOff + 4              // 116
+	certClassicalTEEnd     = CertByteLength                          // 124
+
+	// PQ certificate signed portion (1248 bytes).
+	certPQPkOff     = certSignedOff                    // 72
+	certPQPkLen     = PQPublicKeySize                  // 1216
+	certPQMagicOff  = certSignedOff + PQPublicKeySize  // 1288
+	certPQSerialOff = certPQMagicOff + ClientMagicSize // 1296
+	certPQTSOff     = certPQSerialOff + 4              // 1300
+	certPQTEEnd     = certPQTSOff + 4                  // 1304
+	certPQExtOff    = certPQTEEnd + 4                  // 1308
+	certPQExtLen    = PQProfileExtSize                 // 12
+)
+
+// Ticket plaintext encoding sizes.
+const (
+	ticketPlaintextESOff     = 0
+	ticketPlaintextESLen     = 2
+	ticketPlaintextMagicOff  = ticketPlaintextESLen                                // 2
+	ticketPlaintextMagicLen  = ClientMagicSize                                     // 8
+	ticketPlaintextSecretOff = ticketPlaintextMagicOff + ClientMagicSize           // 10
+	ticketPlaintextSecretLen = SharedKeySize                                       // 32
+	ticketPlaintextExpiryOff = ticketPlaintextSecretOff + SharedKeySize            // 42
+	ticketPlaintextExpiryLen = 8                                                   // uint64
+	ticketPlaintextSize      = ticketPlaintextExpiryOff + ticketPlaintextExpiryLen // 50
+)
+
+// PQ padding floor constants — minimum padded sizes for initial and resumed
+// PQ queries.  Both are multiples of 64.
+const (
+	pqMinPaddingInitial  = 64
+	pqMinPaddingResumed  = 256
+	pqMinControlBlockLen = 4 + 1 + 4 + 2 // magic + version + lifetime + ticketLen
+)
+
 // Certificate is a DNSCrypt server certificate containing the resolver's
 // short-term public key and metadata needed for encrypted communication.
 type Certificate struct {
@@ -84,24 +142,22 @@ func (c *Certificate) MarshalBinary() (serialized []byte, err error) {
 		return c.marshalPQ()
 	}
 	serialized = make([]byte, CertByteLength)
-	copy(serialized[:4], CertMagic[:])
-	binary.BigEndian.PutUint16(serialized[4:6], uint16(c.ESVersion))
-	copy(serialized[6:8], []byte{0, 0})
-	copy(serialized[8:72], c.Signature[:ed25519.SignatureSize])
-	c.writeSigned(serialized[72:])
+	copy(serialized[certMagicOff:certMagicOff+certMagicLen], CertMagic[:])
+	binary.BigEndian.PutUint16(serialized[certESVersionOff:certESVersionOff+2], uint16(c.ESVersion))
+	copy(serialized[certMinorOff:certMinorOff+2], []byte{0, 0})
+	copy(serialized[certSigOff:certSigOff+certSigLen], c.Signature[:ed25519.SignatureSize])
+	c.writeSigned(serialized[certSignedOff:])
 	return serialized, nil
 }
 
 // marshalPQ serializes a post-quantum certificate (1320 bytes).
 func (c *Certificate) marshalPQ() ([]byte, error) {
 	serialized := make([]byte, PQCertByteLength)
-	copy(serialized[:4], CertMagic[:])
-	binary.BigEndian.PutUint16(serialized[4:6], uint16(c.ESVersion))
-	copy(serialized[6:8], []byte{0, 0})
-	copy(serialized[8:72], c.Signature[:ed25519.SignatureSize])
-	// writeSigned fills serialized[72:] with the full signed portion:
-	// pq-public-key || client-magic || serial || ts-start || ts-end || extensions
-	c.writeSigned(serialized[72:])
+	copy(serialized[certMagicOff:certMagicOff+certMagicLen], CertMagic[:])
+	binary.BigEndian.PutUint16(serialized[certESVersionOff:certESVersionOff+2], uint16(c.ESVersion))
+	copy(serialized[certMinorOff:certMinorOff+2], []byte{0, 0})
+	copy(serialized[certSigOff:certSigOff+certSigLen], c.Signature[:ed25519.SignatureSize])
+	c.writeSigned(serialized[certSignedOff:])
 	return serialized, nil
 }
 
@@ -118,8 +174,6 @@ func (c *Certificate) UnmarshalBinary(b []byte) (err error) {
 	}
 
 	switch esVersion := binary.BigEndian.Uint16(b[4:6]); esVersion {
-	case uint16(XSalsa20Poly1305):
-		c.ESVersion = XSalsa20Poly1305
 	case uint16(XChacha20Poly1305):
 		c.ESVersion = XChacha20Poly1305
 	case uint16(XWingPQ):
@@ -133,13 +187,13 @@ func (c *Certificate) UnmarshalBinary(b []byte) (err error) {
 		return c.unmarshalPQ(b)
 	}
 
-	copy(c.Signature[:], b[8:72])
-	copy(c.ResolverPk[:], b[72:104])
-	copy(c.ClientMagic[:], b[104:112])
+	copy(c.Signature[:], b[certSigOff:certSigOff+certSigLen])
+	copy(c.ResolverPk[:], b[certClassicalPkOff:certClassicalPkOff+certClassicalPkLen])
+	copy(c.ClientMagic[:], b[certClassicalMagicOff:certClassicalMagicOff+ClientMagicSize])
 
-	c.Serial = binary.BigEndian.Uint32(b[112:116])
-	c.NotBefore = binary.BigEndian.Uint32(b[116:120])
-	c.NotAfter = binary.BigEndian.Uint32(b[120:CertByteLength])
+	c.Serial = binary.BigEndian.Uint32(b[certClassicalSerialOff : certClassicalSerialOff+4])
+	c.NotBefore = binary.BigEndian.Uint32(b[certClassicalTSOff : certClassicalTSOff+4])
+	c.NotAfter = binary.BigEndian.Uint32(b[certClassicalTSOff+4 : certClassicalTEEnd])
 
 	return nil
 }
@@ -151,24 +205,24 @@ func (c *Certificate) unmarshalPQ(b []byte) error {
 	}
 
 	// Validate profile extension.
-	ext := b[1308:1320]
+	ext := b[certPQExtOff : certPQExtOff+certPQExtLen]
 	expectedExt := pqProfileExtension()
 	if !bytes.Equal(ext, expectedExt) {
 		return ErrPQInvalidProfileExt
 	}
 	// The es-version in the extension must match the cert header.
-	if !bytes.Equal(b[4:6], ext[4:6]) {
+	if !bytes.Equal(b[certESVersionOff:certESVersionOff+2], ext[4:6]) {
 		return ErrPQInvalidProfileExt
 	}
 
-	copy(c.Signature[:], b[8:72])
-	c.PqPublicKey = make([]byte, PQPublicKeySize)
-	copy(c.PqPublicKey, b[72:1288])
-	copy(c.ClientMagic[:], b[1288:1296])
+	copy(c.Signature[:], b[certSigOff:certSigOff+certSigLen])
+	c.PqPublicKey = make([]byte, certPQPkLen)
+	copy(c.PqPublicKey, b[certPQPkOff:certPQPkOff+certPQPkLen])
+	copy(c.ClientMagic[:], b[certPQMagicOff:certPQMagicOff+ClientMagicSize])
 
-	c.Serial = binary.BigEndian.Uint32(b[1296:1300])
-	c.NotBefore = binary.BigEndian.Uint32(b[1300:1304])
-	c.NotAfter = binary.BigEndian.Uint32(b[1304:1308])
+	c.Serial = binary.BigEndian.Uint32(b[certPQSerialOff : certPQSerialOff+4])
+	c.NotBefore = binary.BigEndian.Uint32(b[certPQTSOff : certPQTSOff+4])
+	c.NotAfter = binary.BigEndian.Uint32(b[certPQTEEnd : certPQTEEnd+4])
 
 	// Pre-compute the cert context for HKDF binding.
 	c.PqCertContext = pqCertContext(b)
@@ -179,8 +233,6 @@ func (c *Certificate) unmarshalPQ(b []byte) error {
 // Validate implements the validate.Interface for Certificate.
 func (c *Certificate) Validate() (err error) {
 	switch c.ESVersion {
-	case XSalsa20Poly1305, XChacha20Poly1305:
-		// OK
 	case XWingPQ:
 		if len(c.PqPublicKey) != PQPublicKeySize {
 			return ErrESVersion
@@ -242,23 +294,26 @@ func (c *Certificate) String() (s string) {
 //	             <ts-end> <extensions>
 func (c *Certificate) writeSigned(dst []byte) { //nolint:gosec // G602: slice bounds guaranteed by signedSize()
 	if c.ESVersion.IsPQ() {
-		copy(dst[:PQPublicKeySize], c.PqPublicKey)                                                  //nolint:gosec // G602: bounds guaranteed by signedSize()
-		copy(dst[PQPublicKeySize:PQPublicKeySize+ClientMagicSize], c.ClientMagic[:ClientMagicSize]) //nolint:gosec // G602: bounds guaranteed
-		off := PQPublicKeySize + ClientMagicSize
+		copy(dst[:certPQPkLen], c.PqPublicKey)                                              //nolint:gosec // G602
+		copy(dst[certPQPkLen:certPQPkLen+ClientMagicSize], c.ClientMagic[:ClientMagicSize]) //nolint:gosec // G602
+		off := certPQPkLen + ClientMagicSize
 		binary.BigEndian.PutUint32(dst[off:off+4], c.Serial) //nolint:gosec // G602
 		off += 4
 		binary.BigEndian.PutUint32(dst[off:off+4], c.NotBefore) //nolint:gosec // G602
 		off += 4
 		binary.BigEndian.PutUint32(dst[off:off+4], c.NotAfter) //nolint:gosec // G602
 		off += 4
-		copy(dst[off:off+PQProfileExtSize], pqProfileExtension())
+		copy(dst[off:off+certPQExtLen], pqProfileExtension())
 		return
 	}
-	copy(dst[:32], c.ResolverPk[:KeySize])              //nolint:gosec // G602: bounds guaranteed
-	copy(dst[32:40], c.ClientMagic[:ClientMagicSize])   //nolint:gosec // G602: bounds guaranteed
-	binary.BigEndian.PutUint32(dst[40:44], c.Serial)    //nolint:gosec // G602: bounds guaranteed
-	binary.BigEndian.PutUint32(dst[44:48], c.NotBefore) //nolint:gosec // G602: bounds guaranteed
-	binary.BigEndian.PutUint32(dst[48:52], c.NotAfter)  //nolint:gosec // G602: bounds guaranteed
+	copy(dst[:certClassicalPkLen], c.ResolverPk[:KeySize])                                            //nolint:gosec // G602
+	copy(dst[certClassicalPkLen:certClassicalPkLen+ClientMagicSize], c.ClientMagic[:ClientMagicSize]) //nolint:gosec // G602
+	off := certClassicalPkLen + ClientMagicSize
+	binary.BigEndian.PutUint32(dst[off:off+4], c.Serial) //nolint:gosec // G602
+	off += 4
+	binary.BigEndian.PutUint32(dst[off:off+4], c.NotBefore) //nolint:gosec // G602
+	off += 4
+	binary.BigEndian.PutUint32(dst[off:off+4], c.NotAfter) //nolint:gosec // G602
 }
 
 // signedSize returns the size of the signed portion for this certificate.

@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"strings"
@@ -59,10 +61,9 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		ClientPk:    state.publicKey,
 	}
 	if state.esVersion.IsPQ() {
-		q.PQCiphertext = state.pqPublicKey // Will be overwritten after encapsulation
 		q.PQCertContext = state.pqCertContext
 	}
-	encrypted, clientNonce, err := c.prepareAndEncryptQuery(state, q, msg.Data)
+	encrypted, clientNonce, err := prepareAndEncryptQuery(state, q, msg.Data)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting dnscrypt query: %w", err)
 	}
@@ -117,6 +118,17 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		return nil, fmt.Errorf("decrypting dnscrypt response: %w", err)
 	}
 
+	// Store PQ resumption ticket from the response control block.
+	if len(resp.PQControl) > 0 {
+		ticket, lifetime, parseErr := serverdnscrypt.PQParseControlBlock(resp.PQControl)
+		if parseErr == nil && len(ticket) > 0 {
+			state.pqTicket = ticket
+			state.pqTicketExpiry = time.Now().Add(time.Duration(lifetime) * time.Second)
+			state.pqResumeSecret = serverdnscrypt.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:serverdnscrypt.NonceSize/2])
+			log.Debugf("UPSTREAM: DNSCrypt PQ resumption ticket stored (expires in %ds)", lifetime)
+		}
+	}
+
 	log.Debugf("UPSTREAM: DNSCrypt decrypted response from %s (%d bytes)", state.serverAddress, len(decrypted))
 	// Unpack DNS response.
 	response := &dns.Msg{}
@@ -130,14 +142,18 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 }
 
 // prepareAndEncryptQuery handles both classical and PQ query encryption.
-func (c *Client) prepareAndEncryptQuery(state *dnscryptState, q *serverdnscrypt.EncryptedQuery, packet []byte) (encrypted []byte, clientNonce serverdnscrypt.Nonce, err error) {
+func prepareAndEncryptQuery(state *dnscryptState, q *serverdnscrypt.EncryptedQuery, packet []byte) (encrypted []byte, clientNonce serverdnscrypt.Nonce, err error) {
 	if !state.esVersion.IsPQ() {
 		return serverdnscrypt.EncryptQuery(q, packet, state.sharedKey)
 	}
 
 	// PQ: try resumed query first, fall back to fresh encapsulation.
 	if len(state.pqTicket) > 0 && time.Now().Before(state.pqTicketExpiry) {
-		sharedKey := serverdnscrypt.PQResumedSharedKey(state.pqResumeSecret, state.clientMagic, clientNonce[:serverdnscrypt.NonceSize/2], state.pqTicket)
+		// Generate nonce first — PQResumedSharedKey needs the client
+		// nonce half for key derivation, and EncryptQuery must use the
+		// same nonce for encryption.
+		q.ClientNonce = newClientNonce()
+		sharedKey := serverdnscrypt.PQResumedSharedKey(state.pqResumeSecret, state.clientMagic, q.ClientNonce[:serverdnscrypt.NonceSize/2], state.pqTicket)
 		state.sharedKey = sharedKey
 		q.PQTicket = state.pqTicket
 		return serverdnscrypt.EncryptQuery(q, packet, sharedKey)
@@ -152,6 +168,15 @@ func (c *Client) prepareAndEncryptQuery(state *dnscryptState, q *serverdnscrypt.
 	state.sharedKey = sharedKey
 	q.PQCiphertext = ct
 	return serverdnscrypt.EncryptQuery(q, packet, sharedKey)
+}
+
+// newClientNonce generates a fresh 24-byte client nonce with a timestamp
+// prefix and random suffix, matching the generation in encryptedQuery.encrypt.
+func newClientNonce() serverdnscrypt.Nonce {
+	var n serverdnscrypt.Nonce
+	binary.BigEndian.PutUint64(n[:8], uint64(time.Now().UnixNano()))
+	_, _ = rand.Read(n[8:12])
+	return n
 }
 
 // resolveDNSCryptStamp extracts the server address, provider name, and public
@@ -209,9 +234,6 @@ func (c *Client) getDNSCryptState(
 		return state, nil
 	}
 	c.dnscryptCacheMu.RUnlock()
-
-	// Generate client X25519 keypair.
-	secretKey, clientPK := serverdnscrypt.GenerateKeyPairRaw()
 
 	// Ensure provider name is fully qualified.
 	if !strings.HasSuffix(providerName, ".") {
@@ -272,13 +294,13 @@ func (c *Client) getDNSCryptState(
 		return nil, fmt.Errorf("parsing dnscrypt cert: %w", err)
 	}
 
-	// Compute shared key.
+	// Compute shared key.  For PQ, the shared key is derived per-query via
+	// X-Wing encapsulate — no X25519 keypair is needed.
 	esVersion := cert.ESVersion
 	var sharedKey [serverdnscrypt.SharedKeySize]byte
-	if esVersion.IsPQ() {
-		// For PQ, the shared key is derived per-query via X-Wing encapsulate.
-		// Store the certificate's public key for later use.
-	} else {
+	var secretKey, clientPK [serverdnscrypt.KeySize]byte
+	if !esVersion.IsPQ() {
+		secretKey, clientPK = serverdnscrypt.GenerateKeyPairRaw()
 		sharedKey, err = serverdnscrypt.ComputeSharedKey(esVersion, &secretKey, &cert.ResolverPk)
 		if err != nil {
 			return nil, fmt.Errorf("computing shared key: %w", err)

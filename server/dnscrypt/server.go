@@ -36,7 +36,7 @@ type Server struct {
 	udpConns     []*net.UDPConn
 	tcpListeners []net.Listener
 	esVersion    CryptoConstruction
-	wg           sync.WaitGroup
+	wg           *sync.WaitGroup
 	tcpConns     map[net.Conn]struct{}
 	mu           sync.RWMutex
 	started      bool
@@ -79,6 +79,7 @@ func New(cfg *config.DNSCryptSettings) (*Server, error) {
 		cert:     cert,
 		cfg:      cfg,
 		tcpConns: make(map[net.Conn]struct{}),
+		wg:       &sync.WaitGroup{},
 		ctx:      ctx,
 		cancel:   cancel,
 	}
@@ -259,8 +260,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// fresh one for a potential future Start() call. Per-packet
 	// and per-connection goroutines Add/Done on the WaitGroup that
 	// was current when serveUDP/serveTCP spawned them.
-	prevWg := &s.wg
-	s.wg = sync.WaitGroup{}
+	prevWg := s.wg
+	s.wg = &sync.WaitGroup{}
 	s.mu.Unlock()
 
 	s.cancel(errors.New("dnscrypt server shutdown"))
@@ -364,12 +365,15 @@ func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedRespons
 		resumeSecret := pqResumeSecret(sharedKey, q.clientMagic, q.nonce[:NonceSize/2])
 		expiry := time.Now().Add(config.DefaultDNSCryptPQTicketLifetime * time.Second)
 		plaintext := encodeTicketPlaintext(q.clientMagic, resumeSecret, expiry)
-		var nonce [24]byte
+		var nonce [xchachaNonceSize]byte
 		if _, randErr := rand.Read(nonce[:]); randErr != nil {
 			return nil, fmt.Errorf("generating ticket nonce: %w", randErr)
 		}
-		sealed := pqSealTicket(&s.ticketKey, (*[24]byte)(nonce[:]), plaintext)
+		sealed := pqSealTicket(&s.ticketKey, &nonce, plaintext)
 		r.pqControl = pqBuildControlBlock(sealed, config.DefaultDNSCryptPQTicketLifetime)
+	} else {
+		// Resumed query: use the shared key derived during decrypt.
+		sharedKey = q.sharedKey
 	}
 
 	return r.encrypt(packet, sharedKey, isUDP)
@@ -416,7 +420,7 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *encryptedQuery
 	}
 
 	// Open the sealed ticket to recover the resume secret.
-	ticketPlain, err := pqOpenTicket(&s.ticketKey, &[24]byte{}, ticket)
+	ticketPlain, err := pqOpenTicket(&s.ticketKey, ticket)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening PQ ticket: %w", err)
 	}
@@ -438,6 +442,7 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *encryptedQuery
 	query = &encryptedQuery{
 		esVersion:   s.esVersion,
 		clientMagic: s.cert.ClientMagic,
+		sharedKey:   sharedKey,
 	}
 	copy(query.nonce[:NonceSize/2], nonceHalf)
 	query.pqTicket = ticket

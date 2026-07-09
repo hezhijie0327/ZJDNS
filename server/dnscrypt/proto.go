@@ -1,7 +1,7 @@
 // Package dnscrypt implements the DNSCrypt v2 protocol for encrypting DNS
 // queries and responses.  It provides both client-side and server-side
-// functionality using X25519 key exchange and XSalsa20-Poly1305 or
-// XChacha20-Poly1305 authenticated encryption.
+// functionality using X25519 key exchange and XChacha20-Poly1305 or
+// X-Wing PQ/T hybrid KEM authenticated encryption.
 //
 // See https://dnscrypt.info/protocol for the protocol specification.
 package dnscrypt
@@ -30,9 +30,8 @@ const (
 	// cannot share the same client magic value.
 	ClientMagicSize = 8
 
-	// NonceSize is the size of the nonce in bytes.  For X25519-XSalsa20Poly1305
-	// and X25519-XChacha20Poly1305, a 24-byte nonce must not be reused for a
-	// given shared secret.
+	// NonceSize is the size of the nonce in bytes.  For X25519-XChacha20Poly1305,
+	// a 24-byte nonce must not be reused for a given shared secret.
 	NonceSize = 24
 
 	// ResolverMagicSize is the size of the resolver magic in bytes.  It is the
@@ -41,10 +40,6 @@ const (
 
 	// CertByteLength is the standard length of a serialized certificate.
 	CertByteLength = 124
-
-	// MinQueryLength is the minimum encrypted query length (header + tag +
-	// minimum DNS packet).
-	MinQueryLength = ClientMagicSize + KeySize + NonceSize/2 + TagSize + minDNSPacketSize
 
 	// TagSize is the Poly1305 authentication tag size in bytes.
 	TagSize = 16
@@ -61,11 +56,6 @@ const (
 	// PQ query header sizes.
 	PQResumeMagicLen = 8
 	PQTicketLenSize  = 2
-
-	// PQControlBlockMaxSize is the maximum size of a PQ response control block
-	// (2 byte total len + 4 magic + 1 version + 4 lifetime + 2 ticket len + max
-	// ticket).
-	PQControlBlockMaxSize = 2 + 4 + 1 + 4 + 2 + 256
 )
 
 // CertMagic is the byte sequence that must appear at the beginning of every
@@ -94,9 +84,6 @@ type Nonce = [NonceSize]byte
 type CryptoConstruction uint16
 
 const (
-	// XSalsa20Poly1305 uses X25519 key exchange with XSalsa20-Poly1305 AEAD.
-	XSalsa20Poly1305 CryptoConstruction = 0x0001
-
 	// XChacha20Poly1305 uses X25519 key exchange with XChacha20-Poly1305 AEAD.
 	XChacha20Poly1305 CryptoConstruction = 0x0002
 
@@ -112,10 +99,8 @@ func ParseESVersion(s string) (CryptoConstruction, error) {
 		return XWingPQ, nil
 	case "xchacha20poly1305":
 		return XChacha20Poly1305, nil
-	case "xsalsa20poly1305":
-		return XSalsa20Poly1305, nil
 	default:
-		return 0, fmt.Errorf("unsupported es_version: %q (supported: xwingpq, xchacha20poly1305, xsalsa20poly1305)", s)
+		return 0, fmt.Errorf("unsupported es_version: %q (supported: xwingpq, xchacha20poly1305)", s)
 	}
 }
 
@@ -132,8 +117,6 @@ func (c CryptoConstruction) String() (s string) {
 	switch c {
 	case XChacha20Poly1305:
 		return "XChacha20Poly1305"
-	case XSalsa20Poly1305:
-		return "XSalsa20Poly1305"
 	case XWingPQ:
 		return "XWingPQ"
 	default:

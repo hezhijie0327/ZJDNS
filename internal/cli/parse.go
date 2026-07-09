@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"zjdns/config"
-	serverdnscrypt "zjdns/server/dnscrypt"
 )
 
 // ParseFlags parses command-line arguments and handles special commands
@@ -32,7 +31,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.BoolVar(&generateDNSCryptCfg, "generate-dnscrypt-config", false, "Generate DNSCrypt server configuration")
 	fs.StringVar(&dnscryptProvider, "provider", "", "Provider name for DNSCrypt config generation")
 	fs.StringVar(&dnscryptAddr, "addr", "127.0.0.1:8443", "Server address for DNSCrypt stamp")
-	fs.StringVar(&dnscryptESVersion, "es-version", "xwingpq", "Encryption algorithm (xwingpq, xchacha20poly1305, or xsalsa20poly1305)")
+	fs.StringVar(&dnscryptESVersion, "es-version", "xwingpq", "Encryption algorithm (xwingpq or xchacha20poly1305)")
 	fs.StringVar(&dnscryptCertTTL, "cert-ttl", "", "Certificate validity duration (e.g. 720h, 30d; default 8760h/365d)")
 
 	fs.Usage = func() {
@@ -70,7 +69,11 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	}
 
 	if generateDNSCryptCfg {
-		output, err := serverdnscrypt.GenerateDNSCryptConfig(dnscryptProvider, dnscryptAddr, dnscryptESVersion, dnscryptCertTTL)
+		if config.DNSCryptConfigGenerator == nil {
+			fmt.Fprintf(os.Stderr, "generate-dnscrypt-config: DNSCrypt not available\n")
+			return "", true
+		}
+		output, err := config.DNSCryptConfigGenerator(dnscryptProvider, dnscryptAddr, dnscryptESVersion, dnscryptCertTTL)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "generate-dnscrypt-config: %v\n", err)
 		} else {

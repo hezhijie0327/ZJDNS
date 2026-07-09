@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
-高性能递归 DNS 解析服务器，内置 SQLite 关系型缓存引擎、DNSSEC 密码学验证链、DNSCrypt/DoT/DoQ/DoH/DoH3 全协议支持，DNSCrypt 支持后量子密码学 (PQC) X-Wing 密钥交换。
+高性能递归 DNS 解析服务器，内置 SQLite 关系型缓存引擎、DNSSEC 密码学验证链、DNSCrypt/DoT/DoQ/DoH/DoH3 全协议支持，DNSCrypt 支持后量子密码学 (PQC) X-Wing KEM 及 XChacha20-Poly1305 AEAD。
 
 ## 快速开始
 
@@ -30,8 +30,10 @@ go build -o zjdns ./cmd/zjdns
 # 生成示例配置
 ./zjdns -generate-config
 
-# 生成 DNSCrypt 密钥及配置（支持 PQC: -es-version xwingpq）
-./zjdns -generate-dnscrypt-config -provider "2.dnscrypt-cert.example.com" [-addr <host:port>] [-es-version <ver>] [-cert-ttl <dur>]
+# 生成 DNSCrypt 密钥及配置（输出完整 JSON，可直接用作配置文件）
+./zjdns -generate-dnscrypt-config -provider example.com [-addr <host:port>] [-es-version xwingpq|xchacha20poly1305] [-cert-ttl 30d]
+
+# 生成的配置包含 server.dnscrypt 块 + 两个 upstream 示例（sdns:// 戳记和显式字段）
 ```
 
 ```bash
@@ -42,8 +44,8 @@ kdig @127.0.0.1 -p 853 example.com +tls           # DoT
 kdig @127.0.0.1 -p 853 example.com +quic          # DoQ
 kdig @127.0.0.1 -p 443 example.com +https         # DoH
 
-# DNSCrypt（需先配置 dnscrypt 服务端）
-dig @127.0.0.1 -p 53 example.com                        # 通过 DNSCrypt 客户端
+# 验证 DNSCrypt 证书握手
+dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT   # 获取 DNSCrypt 证书
 ```
 
 ## 核心特性
@@ -87,7 +89,7 @@ dig @127.0.0.1 -p 53 example.com                        # 通过 DNSCrypt 客户
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `address` | string | ✓ | 服务器地址。`host:port`、`https://host:port/path`、`builtin_recursive` 或 `sdns://` DNSCrypt 戳记 |
-| `protocol` | string | | 传输协议：`udp`(默认)/`tcp`/`tls`(DoT)/`quic`(DoQ)/`https`(DoH)/`http3`(DoH3)/`dnscrypt`(UDP)/`dnscrypt-tcp`(TCP) |
+| `protocol` | string | | 传输协议：`udp`(默认)/`tcp`/`tls`(DoT)/`quic`(DoQ)/`https`(DoH)/`http3`(DoH3)/`dnscrypt`(DNSCrypt UDP)/`dnscrypt-tcp`(DNSCrypt TCP) |
 | `server_name` | string | TLS/DNSCrypt | TLS SNI 主机名；非戳记 DNSCrypt 时用作 provider name |
 | `skip_tls_verify` | bool | | 跳过 TLS 证书验证 |
 | `no_cache` | bool | | 禁止缓存该上游的响应（默认 `false`=正常缓存） |
@@ -104,7 +106,7 @@ dig @127.0.0.1 -p 53 example.com                        # 通过 DNSCrypt 客户
 - **并发查询去重**（singleflight）：同 key 的并发缓存 miss 合并为一次上游查询，leader 完成广播给所有 follower，消除缓存投毒竞争窗口
 - **CIDR 过滤**：基于标签的 IP 匹配，支持取反（`!tag`），IPv4 预转换为 `uint32` 位运算
 - **EDNS Padding**：随机填充字节（`crypto/rand`）替代确定性零填充，增强流量分析抵抗
-- **安全传输**：DNSCrypt v2（X25519 密钥交换 + XSalsa20/XChacha20-Poly1305 AEAD，支持后量子密码学 X-Wing KEM）、DoT (RFC 7858)、DoQ (RFC 9250)、DoH (RFC 8484)、DoH3，TLS 1.3 + KTLS 可选卸载
+- **安全传输**：DNSCrypt v2（XChacha20-Poly1305 AEAD + 后量子 X-Wing KEM，UDP/TCP 双协议，票据续期减少重复 KEM 开销）、DoT (RFC 7858)、DoQ (RFC 9250)、DoH (RFC 8484)、DoH3，TLS 1.3 + KTLS 可选卸载
 
 ### 可观测性
 
@@ -146,7 +148,10 @@ dig @127.0.0.1 -p 53 example.com                        # 通过 DNSCrypt 客户
   },
   "upstream": [
     { "address": "builtin_recursive" },
-    { "address": "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0", "protocol": "dnscrypt" }
+    { "address": "sdns://...", "protocol": "dnscrypt" },
+    { "address": "9.9.9.9:8443", "protocol": "dnscrypt",
+      "server_name": "2.dnscrypt-cert.quad9.net",
+      "public_key": "67C847B8C8758CD120245543BE756746DF34DF1D84C00B8C470368DF821D863E" }
   ]
 }
 ```

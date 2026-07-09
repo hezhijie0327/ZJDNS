@@ -177,7 +177,7 @@ const (
 const (
 	DefaultDNSCryptPort             = "8443"
 	DefaultDNSCryptCertTTL          = 365 * 24 * time.Hour // certificate validity period
-	DefaultDNSCryptUDPSize          = 1252                 // bytes
+	DefaultDNSCryptUDPSize          = 4096                 // bytes — matches dnscrypt-proxy MaxDNSPacketSize; needed for PQ response overhead
 	DefaultDNSCryptCertCacheTTL     = 1 * time.Hour        // client shared-key cache duration
 	DefaultDNSCryptReadTimeout      = 2 * time.Second      // UDP/TCP initial read deadline
 	DefaultDNSCryptTCPIdleTimeout   = 8 * time.Second      // TCP idle timeout after first read

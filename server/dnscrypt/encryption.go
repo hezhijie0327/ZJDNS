@@ -1,9 +1,5 @@
 package dnscrypt
 
-import (
-	"golang.org/x/crypto/nacl/box"
-)
-
 // Prior to encryption, queries are padded using the ISO/IEC 7816-4 format.
 // The padding starts with a byte valued 0x80 followed by a variable number
 // of NUL bytes.
@@ -66,9 +62,6 @@ func computeSharedKey(
 			return sharedKey, err
 		}
 		return sk, nil
-	case XSalsa20Poly1305:
-		box.Precompute(&sharedKey, publicKey, secretKey)
-		return sharedKey, nil
 	case XWingPQ:
 		// PQ uses separate KEM (X-Wing) — shared key is derived from
 		// decapsulation, not from X25519.  Callers must use pqDecapsulate

@@ -51,6 +51,12 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 	log.Infof("DNSCRYPT: entering TCP listening loop on %s", listener.Addr())
 
 	for s.isStarted() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		conn, err := listener.Accept()
 		if err != nil {
 			if !s.isStarted() {
@@ -119,7 +125,7 @@ func (s *Server) handleTCPMsg(ctx context.Context, b []byte, conn net.Conn) erro
 	}
 
 	// Certificate handshake or encrypted query?
-	if !bytes.Equal(b[:ClientMagicSize], s.cert.ClientMagic[:]) && (s.esVersion.IsPQ() && len(b) >= PQResumeMagicLen && !bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:])) {
+	if !bytes.Equal(b[:ClientMagicSize], s.cert.ClientMagic[:]) && (!s.esVersion.IsPQ() || len(b) < PQResumeMagicLen || !bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:])) {
 		reply, err := s.handleHandshake(b)
 		if err != nil {
 			return fmt.Errorf("handshake: %w", err)

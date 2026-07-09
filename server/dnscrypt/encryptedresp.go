@@ -6,8 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"time"
-
-	"golang.org/x/crypto/nacl/secretbox"
 )
 
 // encryptedResponse handles encryption and decryption of DNSCrypt server
@@ -68,10 +66,6 @@ func (r *encryptedResponse) encrypt(
 	switch r.esVersion {
 	case XChacha20Poly1305, XWingPQ:
 		response = xchachaSeal(response, serverNonce[:], padded, sharedKey[:])
-	case XSalsa20Poly1305:
-		var xsalsaNonce Nonce
-		copy(xsalsaNonce[:], serverNonce[:])
-		response = secretbox.Seal(response, padded, &xsalsaNonce, &sharedKey)
 	default:
 		return nil, ErrESVersion
 	}
@@ -116,22 +110,16 @@ func (r *encryptedResponse) decrypt(
 		if err != nil {
 			return nil, fmt.Errorf("decrypting response: %s: %w", r.esVersion, err)
 		}
-	case XSalsa20Poly1305:
-		var xsalsaNonce Nonce
-		copy(xsalsaNonce[:], r.nonce[:])
-		var ok bool
-		packet, ok = secretbox.Open(nil, encrypted, &xsalsaNonce, &sharedKey)
-		if !ok {
-			return nil, fmt.Errorf("decrypting response: %s: %w", r.esVersion, ErrInvalidResponse)
-		}
 	default:
 		return nil, ErrESVersion
 	}
 
-	// Strip PQ control block if present.
-	if r.esVersion.IsPQ() && len(packet) >= 2 {
+	// Strip PQ control block if present.  Validate the control block magic
+	// to avoid misinterpreting non-PQ payload bytes as a control block.
+	if r.esVersion.IsPQ() && len(packet) >= 2+pqMinControlBlockLen {
 		controlLen := int(binary.BigEndian.Uint16(packet[0:2]))
-		if 2+controlLen <= len(packet) {
+		if controlLen >= pqMinControlBlockLen && 2+controlLen <= len(packet) &&
+			bytes.Equal(packet[2:2+len(PQControlMagic)], PQControlMagic[:]) {
 			if controlLen > 0 {
 				r.pqControl = make([]byte, controlLen)
 				copy(r.pqControl, packet[2:2+controlLen])

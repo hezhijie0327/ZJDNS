@@ -6,20 +6,19 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"io"
-	"sync"
 	"time"
 
 	"github.com/cloudflare/circl/kem/xwing"
 	"golang.org/x/crypto/hkdf"
 )
 
-func hkdfSha256(salt, ikm, info []byte, outLen int) []byte {
+func hkdfSha256(salt, ikm, info []byte, outLen int) ([]byte, error) {
 	r := hkdf.New(sha256.New, ikm, salt, info)
 	out := make([]byte, outLen)
 	if _, err := io.ReadFull(r, out); err != nil {
-		panic(err)
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
 func pqProfileExtension() []byte {
@@ -36,16 +35,20 @@ func pqProfileExtension() []byte {
 }
 
 func pqCertContext(binCert []byte) []byte {
-	ctx := make([]byte, 0, 14+2+2+PQPublicKeySize+8+4+4+4+PQProfileExtSize)
+	ctx := make([]byte, 0, 14+
+		2+2+ // es-version + minor
+		certPQPkLen+ClientMagicSize+
+		4+4+4+ // serial + ts-start + ts-end
+		certPQExtLen)
 	ctx = append(ctx, "DNSCrypt-PQ-v1"...)
-	ctx = append(ctx, binCert[4:6]...)
-	ctx = append(ctx, binCert[6:8]...)
-	ctx = append(ctx, binCert[72:1288]...)
-	ctx = append(ctx, binCert[1288:1296]...)
-	ctx = append(ctx, binCert[1296:1300]...)
-	ctx = append(ctx, binCert[1300:1304]...)
-	ctx = append(ctx, binCert[1304:1308]...)
-	ctx = append(ctx, binCert[1308:1320]...)
+	ctx = append(ctx, binCert[certESVersionOff:certESVersionOff+2]...)           // es-version
+	ctx = append(ctx, binCert[certMinorOff:certMinorOff+2]...)                   // protocol-minor-version
+	ctx = append(ctx, binCert[certPQPkOff:certPQPkOff+certPQPkLen]...)           // resolver-pk
+	ctx = append(ctx, binCert[certPQMagicOff:certPQMagicOff+ClientMagicSize]...) // client-magic
+	ctx = append(ctx, binCert[certPQSerialOff:certPQSerialOff+4]...)             // serial
+	ctx = append(ctx, binCert[certPQTSOff:certPQTSOff+4]...)                     // ts-start
+	ctx = append(ctx, binCert[certPQTEEnd:certPQTEEnd+4]...)                     // ts-end
+	ctx = append(ctx, binCert[certPQExtOff:certPQExtOff+certPQExtLen]...)        // extensions
 	return ctx
 }
 
@@ -57,7 +60,9 @@ func pqDeriveSharedKey(kemSS []byte, clientMagic [8]byte, certContext, ct []byte
 	info = append(info, certContext...)
 	info = append(info, ct...)
 	var key [SharedKeySize]byte
-	copy(key[:], hkdfSha256(salt, kemSS, info, SharedKeySize))
+	// hkdfSha256 on SHA-256 cannot fail in practice.
+	hkdfOut, _ := hkdfSha256(salt, kemSS, info, SharedKeySize)
+	copy(key[:], hkdfOut)
 	return key
 }
 
@@ -66,7 +71,9 @@ func pqResumeSecret(sharedKey [SharedKeySize]byte, clientMagic [8]byte, clientNo
 	salt = append(salt, clientMagic[:]...)
 	salt = append(salt, clientNonce...)
 	var out [SharedKeySize]byte
-	copy(out[:], hkdfSha256(salt, sharedKey[:], []byte("DNSCrypt-PQ-resume-secret-v1"), SharedKeySize))
+	// hkdfSha256 on SHA-256 cannot fail in practice.
+	hkdfOut, _ := hkdfSha256(salt, sharedKey[:], []byte("DNSCrypt-PQ-resume-secret-v1"), SharedKeySize)
+	copy(out[:], hkdfOut)
 	return out
 }
 
@@ -79,7 +86,9 @@ func pqResumedSharedKey(resumeSecret [SharedKeySize]byte, clientMagic [8]byte, c
 	info = append(info, "DNSCrypt-PQ-resumed-query-v1"...)
 	info = append(info, th[:]...)
 	var key [SharedKeySize]byte
-	copy(key[:], hkdfSha256(salt, resumeSecret[:], info, SharedKeySize))
+	// hkdfSha256 on SHA-256 cannot fail in practice.
+	hkdfOut, _ := hkdfSha256(salt, resumeSecret[:], info, SharedKeySize)
+	copy(key[:], hkdfOut)
 	return key
 }
 
@@ -100,61 +109,24 @@ func pqGenKeyPair() (publicKey, privateKey []byte, err error) {
 }
 
 // ---------------------------------------------------------------------------
-// Resumption state
-// ---------------------------------------------------------------------------
-
-type pqResumptionState struct {
-	mu           sync.Mutex
-	ticket       []byte
-	resumeSecret [SharedKeySize]byte
-	expiry       time.Time
-	epoch        uint64
-}
-
-func newPqResumptionState() *pqResumptionState {
-	return &pqResumptionState{}
-}
-
-func (s *pqResumptionState) store(ticket []byte, resumeSecret [SharedKeySize]byte, expiry time.Time, epoch uint64) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ticket = append([]byte(nil), ticket...)
-	s.resumeSecret = resumeSecret
-	s.expiry = expiry
-	s.epoch = epoch
-}
-
-func (s *pqResumptionState) get(currentEpoch uint64) (ticket []byte, resumeSecret [SharedKeySize]byte, ok bool) {
-	if s == nil {
-		return nil, [SharedKeySize]byte{}, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ticket == nil || !time.Now().Before(s.expiry) {
-		return nil, [SharedKeySize]byte{}, false
-	}
-	if s.epoch != currentEpoch {
-		s.ticket = nil
-		s.resumeSecret = [SharedKeySize]byte{}
-		s.expiry = time.Time{}
-		return nil, [SharedKeySize]byte{}, false
-	}
-	return append([]byte(nil), s.ticket...), s.resumeSecret, true
-}
-
-// ---------------------------------------------------------------------------
 // Ticket encryption (server-side)
 // ---------------------------------------------------------------------------
 
-func pqSealTicket(key *[xchachaKeySize]byte, nonce *[24]byte, plaintext []byte) []byte {
-	return xchachaSeal(nil, nonce[:], plaintext, key[:])
+func pqSealTicket(key *[xchachaKeySize]byte, nonce *[xchachaNonceSize]byte, plaintext []byte) []byte {
+	ct := xchachaSeal(nil, nonce[:], plaintext, key[:])
+	out := make([]byte, xchachaNonceSize+len(ct))
+	copy(out[:xchachaNonceSize], nonce[:])
+	copy(out[xchachaNonceSize:], ct)
+	return out
 }
 
-func pqOpenTicket(key *[xchachaKeySize]byte, nonce *[24]byte, ciphertext []byte) ([]byte, error) {
-	return xchachaOpen(nil, nonce[:], ciphertext, key[:])
+func pqOpenTicket(key *[xchachaKeySize]byte, ciphertext []byte) ([]byte, error) {
+	if len(ciphertext) < xchachaNonceSize {
+		return nil, ErrPQInvalidTicket
+	}
+	var nonce [xchachaNonceSize]byte
+	copy(nonce[:], ciphertext[:xchachaNonceSize])
+	return xchachaOpen(nil, nonce[:], ciphertext[xchachaNonceSize:], key[:])
 }
 
 // ---------------------------------------------------------------------------
@@ -162,19 +134,18 @@ func pqOpenTicket(key *[xchachaKeySize]byte, nonce *[24]byte, ciphertext []byte)
 // ---------------------------------------------------------------------------
 
 func pqBuildControlBlock(ticket []byte, lifetime uint32) []byte {
-	blockLen := 2 + 4 + 1 + 4 + 2 + len(ticket)
+	blockLen := 4 + 1 + 4 + 2 + len(ticket)
 	buf := make([]byte, blockLen)
-	binary.BigEndian.PutUint16(buf[0:2], uint16(blockLen-2)) //nolint:gosec // G115: control block length bounded
-	copy(buf[2:6], PQControlMagic[:])
-	buf[6] = 0x01
-	binary.BigEndian.PutUint32(buf[7:11], lifetime)
-	binary.BigEndian.PutUint16(buf[11:13], uint16(len(ticket))) //nolint:gosec // G115: ticket length bounded
-	copy(buf[13:], ticket)
+	copy(buf[0:4], PQControlMagic[:])
+	buf[4] = 0x01
+	binary.BigEndian.PutUint32(buf[5:9], lifetime)
+	binary.BigEndian.PutUint16(buf[9:11], uint16(len(ticket))) //nolint:gosec // G115: ticket length bounded
+	copy(buf[11:], ticket)
 	return buf
 }
 
 func pqParseControlBlock(control []byte) (ticket []byte, lifetime uint32, err error) {
-	if len(control) < 13 {
+	if len(control) < 11 {
 		return nil, 0, ErrPQInvalidTicket
 	}
 	if !bytes.Equal(control[0:4], PQControlMagic[:]) || control[4] != 0x01 {
@@ -213,20 +184,20 @@ func pqPad(packet []byte, floor int) []byte {
 // ---------------------------------------------------------------------------
 
 func encodeTicketPlaintext(clientMagic [ClientMagicSize]byte, resumeSecret [SharedKeySize]byte, expiry time.Time) []byte {
-	buf := make([]byte, 2+8+32+8)
-	copy(buf[0:2], PQESVersion[:])
-	copy(buf[2:10], clientMagic[:])
-	copy(buf[10:42], resumeSecret[:])
-	binary.BigEndian.PutUint64(buf[42:50], uint64(expiry.Unix())) //nolint:gosec // G115: expiry is a valid timestamp
+	buf := make([]byte, ticketPlaintextSize)
+	copy(buf[ticketPlaintextESOff:ticketPlaintextESOff+ticketPlaintextESLen], PQESVersion[:])
+	copy(buf[ticketPlaintextMagicOff:ticketPlaintextMagicOff+ticketPlaintextMagicLen], clientMagic[:])
+	copy(buf[ticketPlaintextSecretOff:ticketPlaintextSecretOff+ticketPlaintextSecretLen], resumeSecret[:])
+	binary.BigEndian.PutUint64(buf[ticketPlaintextExpiryOff:ticketPlaintextExpiryOff+ticketPlaintextExpiryLen], uint64(expiry.Unix())) //nolint:gosec // G115: expiry is a valid timestamp
 	return buf
 }
 
 func decodeTicketPlaintext(plaintext []byte) (clientMagic [ClientMagicSize]byte, resumeSecret [SharedKeySize]byte, expiry time.Time, err error) {
-	if len(plaintext) < 50 {
+	if len(plaintext) < ticketPlaintextSize {
 		return [ClientMagicSize]byte{}, [SharedKeySize]byte{}, time.Time{}, ErrPQInvalidTicket
 	}
-	copy(clientMagic[:], plaintext[2:10])
-	copy(resumeSecret[:], plaintext[10:42])
-	exp := binary.BigEndian.Uint64(plaintext[42:50])
+	copy(clientMagic[:], plaintext[ticketPlaintextMagicOff:ticketPlaintextMagicOff+ticketPlaintextMagicLen])
+	copy(resumeSecret[:], plaintext[ticketPlaintextSecretOff:ticketPlaintextSecretOff+ticketPlaintextSecretLen])
+	exp := binary.BigEndian.Uint64(plaintext[ticketPlaintextExpiryOff : ticketPlaintextExpiryOff+ticketPlaintextExpiryLen])
 	return clientMagic, resumeSecret, time.Unix(int64(exp), 0), nil //nolint:gosec // G115: expiry is a valid Unix timestamp
 }

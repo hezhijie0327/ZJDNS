@@ -40,7 +40,7 @@ type DNSCryptSettings struct {
 	PublicKey    string `json:"public_key"`         // Ed25519 public key (hex, optional)
 	ResolverSk   string `json:"resolver_sk"`        // X25519 secret or X-Wing seed (hex, optional; key type determined by es_version)
 	ResolverPk   string `json:"resolver_pk"`        // X25519 public or X-Wing public (hex, optional; key type determined by es_version)
-	ESVersion    string `json:"es_version"`         // "xwingpq" (default), "xchacha20poly1305", or "xsalsa20poly1305"
+	ESVersion    string `json:"es_version"`         // "xwingpq" (default) or "xchacha20poly1305"
 	CertTTL      string `json:"cert_ttl,omitempty"` // e.g. "720h", "30d"; empty defaults to 365 days
 }
 
@@ -49,6 +49,11 @@ type DNSCryptSettings struct {
 func (d *DNSCryptSettings) IsEnabled() bool {
 	return d.ProviderName != "" || d.PublicKey != "" || d.PrivateKey != ""
 }
+
+// DNSCryptConfigGenerator is a hook for generating DNSCrypt server + client
+// JSON configuration.  Set by server/dnscrypt's init() to avoid a layering
+// violation (internal/cli must not import server/dnscrypt).
+var DNSCryptConfigGenerator func(provider, addr, esVersion, certTTL string) (string, error)
 
 // TLSSettings configures TLS listener ports, certificates, and HTTPS settings.
 type TLSSettings struct {

@@ -6,8 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"time"
-
-	"golang.org/x/crypto/nacl/secretbox"
 )
 
 // encryptedQuery handles encryption and decryption of DNSCrypt client queries.
@@ -53,6 +51,12 @@ type encryptedQuery struct {
 	// pqCertContext is the HKDF context from the server certificate.  Set
 	// by the server before decrypt/encrypt for PQ queries.
 	pqCertContext []byte
+
+	// sharedKey is the derived shared key for this query.  For resumed PQ
+	// queries it is set during decrypt and consumed during encrypt so the
+	// response uses the correct key.  For classical queries it is left
+	// zero — the encrypt path re-derives it from clientPk.
+	sharedKey [SharedKeySize]byte
 }
 
 // encrypt encrypts the DNS query packet and returns the wire-format query
@@ -61,8 +65,11 @@ func (q *encryptedQuery) encrypt(
 	packet []byte,
 	sharedKey [SharedKeySize]byte,
 ) (query []byte, clientNonce Nonce, err error) {
-	binary.BigEndian.PutUint64(q.nonce[:8], uint64(time.Now().UnixNano()))
-	_, _ = rand.Read(q.nonce[8:12])
+	// Only generate a fresh nonce if the caller didn't pre-set one.
+	if q.nonce == ([24]byte{}) {
+		binary.BigEndian.PutUint64(q.nonce[:8], uint64(time.Now().UnixNano()))
+		_, _ = rand.Read(q.nonce[8:12])
+	}
 
 	if q.esVersion.IsPQ() {
 		return q.encryptPQ(packet, sharedKey)
@@ -78,10 +85,6 @@ func (q *encryptedQuery) encrypt(
 	switch q.esVersion {
 	case XChacha20Poly1305:
 		query = xchachaSeal(query, clientNonce[:], padded, sharedKey[:])
-	case XSalsa20Poly1305:
-		var xsalsaNonce Nonce
-		copy(xsalsaNonce[:], clientNonce[:])
-		query = secretbox.Seal(query, padded, &xsalsaNonce, &sharedKey)
 	default:
 		return nil, Nonce{}, ErrESVersion
 	}
@@ -100,7 +103,7 @@ func (q *encryptedQuery) encryptPQ(
 
 	// Resumed query: carry the ticket, derive the per-query key.
 	if len(q.pqTicket) > 0 {
-		padded := pqPad(packet, 256)
+		padded := pqPad(packet, pqMinPaddingResumed)
 		ct := xchachaSeal(nil, clientNonce[:], padded, sharedKey[:])
 		query = append(query, PQResumeMagic[:]...)
 		var tl [2]byte
@@ -116,7 +119,7 @@ func (q *encryptedQuery) encryptPQ(
 	if len(q.pqCiphertext) == 0 {
 		return nil, Nonce{}, ErrInvalidQuery
 	}
-	padded := pqPad(packet, 64)
+	padded := pqPad(packet, pqMinPaddingInitial)
 	ct := xchachaSeal(nil, clientNonce[:], padded, sharedKey[:])
 	query = append(query, q.clientMagic[:]...)
 	query = append(query, q.pqCiphertext...)
@@ -270,14 +273,6 @@ func (q *encryptedQuery) decryptPayload(
 		packet, err = xchachaOpen(nil, q.nonce[:], encrypted, sharedKey[:])
 		if err != nil {
 			return nil, fmt.Errorf("decrypting query: %s: %w", q.esVersion, err)
-		}
-	case XSalsa20Poly1305:
-		var xsalsaNonce Nonce
-		copy(xsalsaNonce[:], q.nonce[:])
-		var ok bool
-		packet, ok = secretbox.Open(nil, encrypted, &xsalsaNonce, &sharedKey)
-		if !ok {
-			return nil, fmt.Errorf("decrypting query: %s: %w", q.esVersion, ErrInvalidQuery)
 		}
 	default:
 		return nil, ErrESVersion
