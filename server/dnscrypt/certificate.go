@@ -46,17 +46,38 @@ const (
 	certPQExtLen    = PQProfileExtSize                 // 12
 )
 
-// Ticket plaintext encoding sizes.
+// Ticket plaintext encoding sizes.  Matches the reference implementation
+// (encrypted-dns-server) and draft-denis-dprive-dnscrypt-10 \xa710.7.1:
+//
+//	ticket-plain ::= resume-secret(32) <es-version>(2) <client-magic>(8)
+//	                 <serial>(4) <ts-end>(4) <ticket-expiry>(4)
+//	                 <profile-extension-hash>(32)   = 86 bytes
 const (
-	ticketPlaintextESOff     = 0
-	ticketPlaintextESLen     = 2
-	ticketPlaintextMagicOff  = ticketPlaintextESLen                                // 2
-	ticketPlaintextMagicLen  = ClientMagicSize                                     // 8
-	ticketPlaintextSecretOff = ticketPlaintextMagicOff + ClientMagicSize           // 10
-	ticketPlaintextSecretLen = SharedKeySize                                       // 32
-	ticketPlaintextExpiryOff = ticketPlaintextSecretOff + SharedKeySize            // 42
-	ticketPlaintextExpiryLen = 8                                                   // uint64
-	ticketPlaintextSize      = ticketPlaintextExpiryOff + ticketPlaintextExpiryLen // 50
+	ticketPlaintextSecretOff = 0
+	ticketPlaintextSecretLen = SharedKeySize // 32
+
+	ticketPlaintextESOff = ticketPlaintextSecretOff + SharedKeySize // 32
+	ticketPlaintextESLen = 2
+
+	ticketPlaintextMagicOff = ticketPlaintextESOff + ticketPlaintextESLen // 34
+	ticketPlaintextMagicLen = ClientMagicSize                             // 8
+
+	ticketPlaintextSerialOff = ticketPlaintextMagicOff + ClientMagicSize // 42
+	ticketPlaintextSerialLen = 4
+
+	ticketPlaintextTSEndOff = ticketPlaintextSerialOff + ticketPlaintextSerialLen // 46
+	ticketPlaintextTSEndLen = 4
+
+	ticketPlaintextExpiryOff = ticketPlaintextTSEndOff + ticketPlaintextTSEndLen // 50
+	ticketPlaintextExpiryLen = 4                                                 // uint32
+
+	ticketPlaintextPEHashOff = ticketPlaintextExpiryOff + ticketPlaintextExpiryLen // 54
+	ticketPlaintextPEHashLen = 32
+
+	ticketPlaintextSize = ticketPlaintextPEHashOff + ticketPlaintextPEHashLen // 86
+
+	// ticketKeyIDSize is the length of the ticket-key identifier prefix.
+	ticketKeyIDSize = 4
 )
 
 // PQ padding floor constants — minimum padded sizes for initial and resumed
@@ -190,6 +211,9 @@ func (c *Certificate) UnmarshalBinary(b []byte) (err error) {
 	copy(c.Signature[:], b[certSigOff:certSigOff+certSigLen])
 	copy(c.ResolverPk[:], b[certClassicalPkOff:certClassicalPkOff+certClassicalPkLen])
 	copy(c.ClientMagic[:], b[certClassicalMagicOff:certClassicalMagicOff+ClientMagicSize])
+	if !isClientMagicValid(c.ClientMagic) {
+		return ErrClientMagicQUIC
+	}
 
 	c.Serial = binary.BigEndian.Uint32(b[certClassicalSerialOff : certClassicalSerialOff+4])
 	c.NotBefore = binary.BigEndian.Uint32(b[certClassicalTSOff : certClassicalTSOff+4])
@@ -219,6 +243,9 @@ func (c *Certificate) unmarshalPQ(b []byte) error {
 	c.PqPublicKey = make([]byte, certPQPkLen)
 	copy(c.PqPublicKey, b[certPQPkOff:certPQPkOff+certPQPkLen])
 	copy(c.ClientMagic[:], b[certPQMagicOff:certPQMagicOff+ClientMagicSize])
+	if !isClientMagicValid(c.ClientMagic) {
+		return ErrClientMagicQUIC
+	}
 
 	c.Serial = binary.BigEndian.Uint32(b[certPQSerialOff : certPQSerialOff+4])
 	c.NotBefore = binary.BigEndian.Uint32(b[certPQTSOff : certPQTSOff+4])
@@ -246,13 +273,22 @@ func (c *Certificate) Validate() (err error) {
 	return nil
 }
 
+// nowUnix32 returns the current Unix time as uint32.  The DNSCrypt protocol
+// uses 32-bit timestamps throughout (certificates, tickets), and Unix epoch
+// values fit in uint32 until year 2106.  All timestamp-to-uint32 conversions
+// in this package route through this function so the bounds reasoning lives
+// in one place.
+func nowUnix32() uint32 {
+	return uint32(time.Now().Unix()) //nolint:gosec // G115: see doc comment
+}
+
 // IsDateValid checks that the certificate is currently within its validity
 // window.
 func (c *Certificate) IsDateValid() (ok bool) {
 	if c.NotBefore >= c.NotAfter {
 		return false
 	}
-	now := uint32(time.Now().Unix()) //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
+	now := nowUnix32()
 	if now > c.NotAfter || now < c.NotBefore {
 		return false
 	}
@@ -268,11 +304,22 @@ func (c *Certificate) VerifySignature(publicKey ed25519.PublicKey) (ok bool) {
 }
 
 // Sign creates the certificate's Ed25519 signature using the given private key.
+// It panics if ClientMagic breaks the spec §5.5 constraint (seven leading zeros).
 func (c *Certificate) Sign(privateKey ed25519.PrivateKey) {
+	if !isClientMagicValid(c.ClientMagic) {
+		panic("dnscrypt: ClientMagic starts with seven zero bytes — collides with QUIC")
+	}
 	b := make([]byte, c.signedSize())
 	c.writeSigned(b)
 	signature := ed25519.Sign(privateKey, b)
 	copy(c.Signature[:64], signature[:64])
+}
+
+// isClientMagicValid checks that the ClientMagic does not start with seven
+// zero bytes, which would collide with QUIC per the specification.
+func isClientMagicValid(magic [ClientMagicSize]byte) bool {
+	zeroes := [7]byte{}
+	return !bytes.Equal(magic[:7], zeroes[:])
 }
 
 // String implements the fmt.Stringer interface.

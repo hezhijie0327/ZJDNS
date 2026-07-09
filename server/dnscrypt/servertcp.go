@@ -16,8 +16,7 @@ import (
 )
 
 const (
-	defaultReadTimeout    = config.DefaultDNSCryptReadTimeout
-	defaultTCPIdleTimeout = config.DefaultDNSCryptTCPIdleTimeout
+	defaultReadTimeout = config.DefaultDNSCryptReadTimeout
 )
 
 // tcpResponseWriter writes DNSCrypt-encrypted responses over TCP.
@@ -89,32 +88,24 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 	}
 }
 
-// handleTCPConnection processes all queries arriving on a single TCP connection.
+// handleTCPConnection processes a single query on a TCP connection and then
+// returns, causing the connection to be closed.  This matches the reference
+// implementation (encrypted-dns-server) and draft-denis-dprive-dnscrypt-10
+// §5.4.4, which prohibits multiple transactions over the same connection.
 func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
-	timeout := defaultReadTimeout
+	_ = conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 
-	for s.isStarted() {
-		_ = conn.SetReadDeadline(time.Now().Add(timeout))
-
-		b, err := readPrefixed(conn)
-		if err != nil {
-			if !s.isStarted() {
-				return
-			}
-			if isTemporaryNetError(err) {
-				continue
-			}
-			log.Debugf("DNSCRYPT: TCP read error from %s: %v", conn.RemoteAddr(), err)
+	b, err := readPrefixed(conn)
+	if err != nil {
+		if !s.isStarted() {
 			return
 		}
+		log.Debugf("DNSCRYPT: TCP read error from %s: %v", conn.RemoteAddr(), err)
+		return
+	}
 
-		if err := s.handleTCPMsg(ctx, b, conn); err != nil {
-			log.Debugf("DNSCRYPT: TCP message handling error: %v", err)
-			return
-		}
-
-		// After the first successful read, use the longer idle timeout.
-		timeout = defaultTCPIdleTimeout
+	if err := s.handleTCPMsg(ctx, b, conn); err != nil {
+		log.Debugf("DNSCRYPT: TCP message handling error: %v", err)
 	}
 }
 

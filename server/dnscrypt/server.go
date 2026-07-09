@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -44,8 +45,11 @@ type Server struct {
 	cancel       context.CancelCauseFunc
 
 	// ticketKey is the server-wide key for sealing/opening PQ resumption
-	// tickets.  Derived from the Ed25519 signing key via SHA-256.
-	ticketKey [xchachaKeySize]byte
+	// tickets.  Derived from the Ed25519 signing key as SHA-256 of
+	// ("DNSCrypt-PQ-ticket-key-v1" || provider-sk), matching the reference
+	// implementation (encrypted-dns-server).
+	ticketKey   [xchachaKeySize]byte
+	ticketKeyID [ticketKeyIDSize]byte
 }
 
 var (
@@ -87,12 +91,17 @@ func New(cfg *config.DNSCryptSettings) (*Server, error) {
 	s.certTXT = s.buildCertTXT()
 	s.esVersion = esVersion
 
-	// Derive ticket key from the Ed25519 signing key for PQ resumption.
+	// Derive ticket key from the Ed25519 signing key for PQ resumption,
+	// matching the reference implementation (encrypted-dns-server).
 	if esVersion.IsPQ() {
 		privateKeyBytes, _ := hexDecodeKey(cfg.PrivateKey)
 		if len(privateKeyBytes) > 0 {
-			h := sha256.Sum256(privateKeyBytes)
+			input := make([]byte, 0, 25+len(privateKeyBytes))
+			input = append(input, "DNSCrypt-PQ-ticket-key-v1"...)
+			input = append(input, privateKeyBytes...)
+			h := sha256.Sum256(input)
 			copy(s.ticketKey[:], h[:])
+			s.ticketKeyID = [ticketKeyIDSize]byte{0x00, 0x00, 0x00, 0x01}
 		}
 	}
 
@@ -368,13 +377,17 @@ func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedRespons
 
 		// Issue a resumption ticket.
 		resumeSecret := pqResumeSecret(sharedKey, q.clientMagic, q.nonce[:NonceSize/2])
-		expiry := time.Now().Add(config.DefaultDNSCryptPQTicketLifetime * time.Second)
-		plaintext := encodeTicketPlaintext(q.clientMagic, resumeSecret, expiry)
+		ticketExpiry := nowUnix32() + uint32(config.DefaultDNSCryptPQTicketLifetime)
+		peHash := profileExtensionHash()
+		plaintext := encodeTicketPlaintext(
+			resumeSecret, q.clientMagic, s.cert.Serial,
+			s.cert.NotAfter, ticketExpiry, peHash,
+		)
 		var nonce [xchachaNonceSize]byte
 		if _, randErr := rand.Read(nonce[:]); randErr != nil {
 			return nil, fmt.Errorf("generating ticket nonce: %w", randErr)
 		}
-		sealed := pqSealTicket(&s.ticketKey, &nonce, plaintext)
+		sealed := pqSealTicket(&s.ticketKey, &s.ticketKeyID, &nonce, plaintext)
 		r.pqControl = pqBuildControlBlock(sealed, config.DefaultDNSCryptPQTicketLifetime)
 	} else {
 		// Resumed query: use the shared key derived during decrypt.
@@ -417,27 +430,33 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err err
 }
 
 // decryptPQResumed handles a resumed PQ query: opens the ticket, derives the
-// per-query shared key, and decrypts the DNS payload.
+// per-query shared key, and decrypts the DNS payload.  Validates all sealed
+// certificate-context fields per draft-denis-dprive-dnscrypt-10 \xa710.7.2.
 func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *encryptedQuery, err error) {
 	ticket, nonceHalf, payloadOff, err := parsePQResumedHeader(b)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parsing PQ resumed query: %w", err)
 	}
 
-	// Open the sealed ticket to recover the resume secret.
-	ticketPlain, err := pqOpenTicket(&s.ticketKey, ticket)
+	// Open the sealed ticket and validate all certificate-context fields.
+	ticketPlain, err := pqOpenTicket(&s.ticketKey, &s.ticketKeyID, ticket)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening PQ ticket: %w", err)
 	}
-	clientMagic, resumeSecret, expiry, err := decodeTicketPlaintext(ticketPlain)
+	clientMagic, resumeSecret, ticketExpiry, err := decodeTicketPlaintext(ticketPlain)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decoding PQ ticket: %w", err)
 	}
-	if !time.Now().Before(expiry) {
+	if ticketExpiry < nowUnix32() {
 		return nil, nil, ErrPQTicketExpired
 	}
-	// Validate that the ticket was issued for this certificate.
-	if clientMagic != s.cert.ClientMagic {
+	// Validate sealed certificate-context fields.
+	peHash := profileExtensionHash()
+	if clientMagic != s.cert.ClientMagic ||
+		!bytes.Equal(ticketPlain[ticketPlaintextESOff:ticketPlaintextESOff+ticketPlaintextESLen], PQESVersion[:]) ||
+		binary.BigEndian.Uint32(ticketPlain[ticketPlaintextSerialOff:ticketPlaintextSerialOff+ticketPlaintextSerialLen]) != s.cert.Serial ||
+		binary.BigEndian.Uint32(ticketPlain[ticketPlaintextTSEndOff:ticketPlaintextTSEndOff+ticketPlaintextTSEndLen]) != s.cert.NotAfter ||
+		!bytes.Equal(ticketPlain[ticketPlaintextPEHashOff:ticketPlaintextPEHashOff+ticketPlaintextPEHashLen], peHash[:]) {
 		return nil, nil, ErrPQInvalidTicket
 	}
 

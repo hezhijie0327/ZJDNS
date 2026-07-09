@@ -89,9 +89,9 @@ func (rc *ResolverConfig) NewCert() (cert *Certificate, err error) {
 		ttl = config.DefaultDNSCryptCertTTL
 	}
 	cert = &Certificate{
-		Serial:    uint32(time.Now().Unix()),          //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
-		NotAfter:  uint32(time.Now().Add(ttl).Unix()), //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
-		NotBefore: uint32(time.Now().Unix()),          //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
+		Serial:    nowUnix32(),
+		NotAfter:  nowUnix32() + uint32(ttl/time.Second),
+		NotBefore: nowUnix32(),
 		ESVersion: rc.ESVersion,
 	}
 
@@ -138,6 +138,9 @@ func (rc *ResolverConfig) NewCert() (cert *Certificate, err error) {
 		}
 		copy(cert.ResolverPk[:], resolverPk)
 		copy(cert.ResolverSk[:], resolverSk)
+		// ClientMagic for classical certs is the first 8 bytes of the
+		// resolver public key (spec §5.5).
+		copy(cert.ClientMagic[:], resolverPk[:ClientMagicSize])
 	}
 
 	privateKey, err := hexDecodeKey(rc.PrivateKey)

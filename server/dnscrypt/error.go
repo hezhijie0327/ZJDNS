@@ -15,6 +15,7 @@ var (
 	ErrInvalidPadding       = errors.New("dnscrypt: invalid padding")
 	ErrCertTooShort         = errors.New("dnscrypt: certificate is too short")
 	ErrCertMagic            = errors.New("dnscrypt: invalid certificate magic")
+	ErrClientMagicQUIC      = errors.New("dnscrypt: client magic starts with seven zero bytes — collides with QUIC")
 	ErrUnexpectedNonce      = errors.New("dnscrypt: unexpected nonce")
 	ErrServerNotStarted     = errors.New("dnscrypt: server is not started")
 	ErrServerAlreadyStarted = errors.New("dnscrypt: server is already started")

@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"io"
-	"time"
 
 	"github.com/cloudflare/circl/kem/xwing"
 	"golang.org/x/crypto/hkdf"
@@ -112,21 +111,25 @@ func pqGenKeyPair() (publicKey, privateKey []byte, err error) {
 // Ticket encryption (server-side)
 // ---------------------------------------------------------------------------
 
-func pqSealTicket(key *[xchachaKeySize]byte, nonce *[xchachaNonceSize]byte, plaintext []byte) []byte {
+func pqSealTicket(key *[xchachaKeySize]byte, keyID *[ticketKeyIDSize]byte, nonce *[xchachaNonceSize]byte, plaintext []byte) []byte {
 	ct := xchachaSeal(nil, nonce[:], plaintext, key[:])
-	out := make([]byte, xchachaNonceSize+len(ct))
-	copy(out[:xchachaNonceSize], nonce[:])
-	copy(out[xchachaNonceSize:], ct)
+	out := make([]byte, ticketKeyIDSize+xchachaNonceSize+len(ct))
+	copy(out[:ticketKeyIDSize], keyID[:])
+	copy(out[ticketKeyIDSize:ticketKeyIDSize+xchachaNonceSize], nonce[:])
+	copy(out[ticketKeyIDSize+xchachaNonceSize:], ct)
 	return out
 }
 
-func pqOpenTicket(key *[xchachaKeySize]byte, ciphertext []byte) ([]byte, error) {
-	if len(ciphertext) < xchachaNonceSize {
+func pqOpenTicket(key *[xchachaKeySize]byte, keyID *[ticketKeyIDSize]byte, ciphertext []byte) ([]byte, error) {
+	if len(ciphertext) < ticketKeyIDSize+xchachaNonceSize+TagSize {
+		return nil, ErrPQInvalidTicket
+	}
+	if !bytes.Equal(ciphertext[:ticketKeyIDSize], keyID[:]) {
 		return nil, ErrPQInvalidTicket
 	}
 	var nonce [xchachaNonceSize]byte
-	copy(nonce[:], ciphertext[:xchachaNonceSize])
-	return xchachaOpen(nil, nonce[:], ciphertext[xchachaNonceSize:], key[:])
+	copy(nonce[:], ciphertext[ticketKeyIDSize:ticketKeyIDSize+xchachaNonceSize])
+	return xchachaOpen(nil, nonce[:], ciphertext[ticketKeyIDSize+xchachaNonceSize:], key[:])
 }
 
 // ---------------------------------------------------------------------------
@@ -183,21 +186,28 @@ func pqPad(packet []byte, floor int) []byte {
 // Ticket plaintext encoding (server-side)
 // ---------------------------------------------------------------------------
 
-func encodeTicketPlaintext(clientMagic [ClientMagicSize]byte, resumeSecret [SharedKeySize]byte, expiry time.Time) []byte {
+func profileExtensionHash() [32]byte {
+	return sha256.Sum256(pqProfileExtension())
+}
+
+func encodeTicketPlaintext(resumeSecret [SharedKeySize]byte, clientMagic [ClientMagicSize]byte, serial, tsEnd, expiry uint32, peHash [32]byte) []byte {
 	buf := make([]byte, ticketPlaintextSize)
+	copy(buf[ticketPlaintextSecretOff:ticketPlaintextSecretOff+ticketPlaintextSecretLen], resumeSecret[:])
 	copy(buf[ticketPlaintextESOff:ticketPlaintextESOff+ticketPlaintextESLen], PQESVersion[:])
 	copy(buf[ticketPlaintextMagicOff:ticketPlaintextMagicOff+ticketPlaintextMagicLen], clientMagic[:])
-	copy(buf[ticketPlaintextSecretOff:ticketPlaintextSecretOff+ticketPlaintextSecretLen], resumeSecret[:])
-	binary.BigEndian.PutUint64(buf[ticketPlaintextExpiryOff:ticketPlaintextExpiryOff+ticketPlaintextExpiryLen], uint64(expiry.Unix())) //nolint:gosec // G115: expiry is a valid timestamp
+	binary.BigEndian.PutUint32(buf[ticketPlaintextSerialOff:ticketPlaintextSerialOff+ticketPlaintextSerialLen], serial)
+	binary.BigEndian.PutUint32(buf[ticketPlaintextTSEndOff:ticketPlaintextTSEndOff+ticketPlaintextTSEndLen], tsEnd)
+	binary.BigEndian.PutUint32(buf[ticketPlaintextExpiryOff:ticketPlaintextExpiryOff+ticketPlaintextExpiryLen], expiry)
+	copy(buf[ticketPlaintextPEHashOff:ticketPlaintextPEHashOff+ticketPlaintextPEHashLen], peHash[:])
 	return buf
 }
 
-func decodeTicketPlaintext(plaintext []byte) (clientMagic [ClientMagicSize]byte, resumeSecret [SharedKeySize]byte, expiry time.Time, err error) {
+func decodeTicketPlaintext(plaintext []byte) (clientMagic [ClientMagicSize]byte, resumeSecret [SharedKeySize]byte, ticketExpiry uint32, err error) {
 	if len(plaintext) < ticketPlaintextSize {
-		return [ClientMagicSize]byte{}, [SharedKeySize]byte{}, time.Time{}, ErrPQInvalidTicket
+		return [ClientMagicSize]byte{}, [SharedKeySize]byte{}, 0, ErrPQInvalidTicket
 	}
-	copy(clientMagic[:], plaintext[ticketPlaintextMagicOff:ticketPlaintextMagicOff+ticketPlaintextMagicLen])
 	copy(resumeSecret[:], plaintext[ticketPlaintextSecretOff:ticketPlaintextSecretOff+ticketPlaintextSecretLen])
-	exp := binary.BigEndian.Uint64(plaintext[ticketPlaintextExpiryOff : ticketPlaintextExpiryOff+ticketPlaintextExpiryLen])
-	return clientMagic, resumeSecret, time.Unix(int64(exp), 0), nil //nolint:gosec // G115: expiry is a valid Unix timestamp
+	copy(clientMagic[:], plaintext[ticketPlaintextMagicOff:ticketPlaintextMagicOff+ticketPlaintextMagicLen])
+	ticketExpiry = binary.BigEndian.Uint32(plaintext[ticketPlaintextExpiryOff : ticketPlaintextExpiryOff+ticketPlaintextExpiryLen])
+	return clientMagic, resumeSecret, ticketExpiry, nil
 }
