@@ -31,7 +31,7 @@ go build -o zjdns ./cmd/zjdns
 ./zjdns -generate-config
 
 # 生成 DNSCrypt 密钥及配置
-./zjdns -generate-dnscrypt-config -provider "2.dnscrypt-cert.example.com"
+./zjdns -generate-dnscrypt-config -provider "2.dnscrypt-cert.example.com" [-addr <host:port>] [-es-version <ver>] [-cert-ttl <dur>]
 ```
 
 ```bash
@@ -87,7 +87,7 @@ dig @127.0.0.1 -p 53 example.com                        # 通过 DNSCrypt 客户
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `address` | string | ✓ | 服务器地址。`host:port`、`https://host:port/path`、`builtin_recursive` 或 `sdns://` DNSCrypt 戳记 |
-| `protocol` | string | | 传输协议：`udp`(默认)/`tcp`/`tls`(DoT)/`quic`(DoQ)/`https`(DoH)/`http3`(DoH3)/`dnscrypt` |
+| `protocol` | string | | 传输协议：`udp`(默认)/`tcp`/`tls`(DoT)/`quic`(DoQ)/`https`(DoH)/`http3`(DoH3)/`dnscrypt`(UDP)/`dnscrypt-tcp`(TCP) |
 | `server_name` | string | TLS/DNSCrypt | TLS SNI 主机名；非戳记 DNSCrypt 时用作 provider name |
 | `skip_tls_verify` | bool | | 跳过 TLS 证书验证 |
 | `no_cache` | bool | | 禁止缓存该上游的响应（默认 `false`=正常缓存） |
@@ -124,7 +124,8 @@ dig @127.0.0.1 -p 53 example.com                        # 通过 DNSCrypt 客户
     "tls": { "port": "853", "self_signed": true },
     "dnscrypt": {
       "port": "8443",
-      "provider_name": "2.dnscrypt-cert.example.com"
+      "provider_name": "2.dnscrypt-cert.example.com",
+      "cert_ttl": "30d"
     },
     "features": {
       "hijack_protection": true,

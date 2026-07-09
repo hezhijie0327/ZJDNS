@@ -27,7 +27,7 @@ type dnscryptState struct {
 }
 
 // executeDNSCrypt sends an encrypted DNS query to a DNSCrypt resolver.
-func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, useTCP bool) (*dns.Msg, error) {
 	// Resolve stamp: parse sdns:// from Address, or build from ProviderName+PublicKey.
 	stampAddr, providerName, publicKey, err := c.resolveDNSCryptStamp(server)
 	if err != nil {
@@ -57,9 +57,13 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		return nil, fmt.Errorf("encrypting dnscrypt query: %w", err)
 	}
 
-	// Dial UDP to the server.
+	// Dial to the server -- UDP (raw packets) or TCP (length-prefixed).
+	network := "udp"
+	if useTCP {
+		network = "tcp"
+	}
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "udp", state.serverAddress)
+	conn, err := dialer.DialContext(ctx, network, state.serverAddress)
 	if err != nil {
 		return nil, fmt.Errorf("dialing dnscrypt server %s: %w", state.serverAddress, err)
 	}
@@ -70,24 +74,35 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		_ = conn.SetDeadline(deadline)
 	}
 
-	// Write encrypted query.
-	_, err = conn.Write(encrypted)
-	if err != nil {
-		return nil, fmt.Errorf("writing dnscrypt query: %w", err)
-	}
-
-	// Read encrypted response.
-	respBuf := make([]byte, config.DefaultDNSCryptUDPSize)
-	n, err := conn.Read(respBuf)
-	if err != nil {
-		return nil, fmt.Errorf("reading dnscrypt response: %w", err)
+	var respPayload []byte
+	if useTCP {
+		// TCP: length-prefixed frames (2-byte big-endian length).
+		if err := serverdnscrypt.WritePrefixed(encrypted, conn); err != nil {
+			return nil, fmt.Errorf("writing dnscrypt TCP query: %w", err)
+		}
+		respPayload, err = serverdnscrypt.ReadPrefixed(conn)
+		if err != nil {
+			return nil, fmt.Errorf("reading dnscrypt TCP response: %w", err)
+		}
+	} else {
+		// UDP: raw datagrams.
+		_, err = conn.Write(encrypted)
+		if err != nil {
+			return nil, fmt.Errorf("writing dnscrypt query: %w", err)
+		}
+		respBuf := make([]byte, config.DefaultDNSCryptUDPSize)
+		n, udpErr := conn.Read(respBuf)
+		if udpErr != nil {
+			return nil, fmt.Errorf("reading dnscrypt response: %w", udpErr)
+		}
+		respPayload = respBuf[:n]
 	}
 
 	// Decrypt response.
 	resp := &serverdnscrypt.EncryptedResponse{
 		ESVersion: state.esVersion,
 	}
-	decrypted, err := serverdnscrypt.DecryptResponse(resp, respBuf[:n], state.sharedKey, clientNonce)
+	decrypted, err := serverdnscrypt.DecryptResponse(resp, respPayload, state.sharedKey, clientNonce)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting dnscrypt response: %w", err)
 	}

@@ -637,6 +637,7 @@ type ConfigBlock struct {
 	ResolverSk   string `json:"resolver_sk"`
 	ResolverPk   string `json:"resolver_pk"`
 	ESVersion    string `json:"es_version"`
+	CertTTL      string `json:"cert_ttl,omitempty"`
 }
 
 // ClientConfig is a typed representation of a DNSCrypt upstream entry.
@@ -653,13 +654,13 @@ type UpstreamEntry struct {
 // GenerateConfigs generates server and client config structs from the given
 // parameters.  Keys are auto-generated if empty.  The returned structs can be
 // marshaled to JSON directly.
-func GenerateConfigs(provider, addr, esVersion string) (*ServerConfig, *ClientConfig, error) {
+func GenerateConfigs(provider, addr, esVersion, certTTL string) (*ServerConfig, *ClientConfig, error) {
 	esVersionVal, err := ParseESVersion(esVersion)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	rc, err := GenerateResolverConfig(provider, nil, 0)
+	rc, err := GenerateResolverConfig(provider, nil, parseCertTTL(certTTL))
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating resolver config: %w", err)
 	}
@@ -681,6 +682,7 @@ func GenerateConfigs(provider, addr, esVersion string) (*ServerConfig, *ClientCo
 		ResolverSk:   rc.ResolverSk,
 		ResolverPk:   rc.ResolverPk,
 		ESVersion:    esVersion,
+		CertTTL:      certTTL,
 	}
 
 	clientCfg := &ClientConfig{
@@ -696,7 +698,7 @@ func GenerateConfigs(provider, addr, esVersion string) (*ServerConfig, *ClientCo
 // configuration pair for the given provider name and address.  It handles
 // validation, key generation, stamp creation, and JSON marshaling — the
 // caller only needs to print the result.
-func GenerateDNSCryptConfig(provider, addr, esVersion string) (string, error) {
+func GenerateDNSCryptConfig(provider, addr, esVersion, certTTL string) (string, error) {
 	if provider == "" {
 		return "", errors.New("provider name is required (-provider <name>)")
 	}
@@ -704,7 +706,7 @@ func GenerateDNSCryptConfig(provider, addr, esVersion string) (string, error) {
 		return "", fmt.Errorf("address must be host:port format (got %q)", addr)
 	}
 
-	serverCfg, clientCfg, err := GenerateConfigs(provider, addr, esVersion)
+	serverCfg, clientCfg, err := GenerateConfigs(provider, addr, esVersion, certTTL)
 	if err != nil {
 		return "", err
 	}

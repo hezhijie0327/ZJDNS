@@ -238,8 +238,8 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 
 	protocol := strings.ToLower(server.Protocol)
 
-	if protocol == config.ProtoDNSCrypt {
-		result.Response, result.Error = c.executeDNSCrypt(queryCtx, msg, server)
+	if protocol == config.ProtoDNSCrypt || protocol == config.ProtoDNSCryptTCP {
+		result.Response, result.Error = c.executeDNSCrypt(queryCtx, msg, server, protocol == config.ProtoDNSCryptTCP)
 		if result.Error != nil {
 			log.Debugf("UPSTREAM: DNSCrypt query failed for %s via %s: %v", qname, server.Address, result.Error)
 		}
@@ -346,7 +346,7 @@ func (c *Client) WarmUpConnections(servers []config.UpstreamServer) {
 			continue
 		}
 		protocol := strings.ToLower(server.Protocol)
-		if !zdnsutil.IsSecureProtocol(protocol) && protocol != config.ProtoDNSCrypt {
+		if !zdnsutil.IsSecureProtocol(protocol) && protocol != config.ProtoDNSCrypt && protocol != config.ProtoDNSCryptTCP {
 			continue
 		}
 		// Capture loop variable for the goroutine.
@@ -440,7 +440,7 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 		c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 		log.Debugf("UPSTREAM: pre-warmed DoH3 transport for %s (key=%s)", server.Address, key)
 
-	case config.ProtoDNSCrypt:
+	case config.ProtoDNSCrypt, config.ProtoDNSCryptTCP:
 		warmCtx, cancel := context.WithTimeout(context.Background(), c.timeout)
 		defer cancel()
 		c.warmUpDNSCrypt(warmCtx, server)

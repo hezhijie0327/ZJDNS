@@ -119,7 +119,7 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 		ProtoQUIC: true, ProtoDOQ: true,
 		ProtoHTTP: true, ProtoDOH: true,
 		ProtoHTTP3: true, ProtoDOH3: true,
-		ProtoTLSTCP: true, ProtoDNSCrypt: true,
+		ProtoTLSTCP: true, ProtoDNSCrypt: true, ProtoDNSCryptTCP: true,
 	}
 
 	for i, server := range cfg.Upstream {
@@ -143,7 +143,7 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 		if zdnsutil.IsSecureProtocol(protocol) && server.ServerName == "" {
 			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
 		}
-		if protocol == ProtoDNSCrypt && !strings.HasPrefix(server.Address, "sdns://") {
+		if (protocol == ProtoDNSCrypt || protocol == ProtoDNSCryptTCP) && !strings.HasPrefix(server.Address, "sdns://") {
 			if server.ServerName == "" {
 				return fmt.Errorf("upstream server %d using dnscrypt requires server_name (provider name)", i)
 			}

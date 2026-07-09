@@ -34,13 +34,14 @@ type ServerSettings struct {
 
 // DNSCryptSettings configures the DNSCrypt v2 encrypted DNS listener.
 type DNSCryptSettings struct {
-	Port         string `json:"port"`          // default "8443"
-	ProviderName string `json:"provider_name"` // e.g. "2.dnscrypt-cert.example.com"
-	PrivateKey   string `json:"private_key"`   // Ed25519 private key (hex, optional)
-	PublicKey    string `json:"public_key"`    // Ed25519 public key (hex, optional)
-	ResolverSk   string `json:"resolver_sk"`   // X25519 short-term secret (hex, optional)
-	ResolverPk   string `json:"resolver_pk"`   // X25519 short-term public (hex, optional)
-	ESVersion    string `json:"es_version"`    // "xsalsa20poly1305" or "xchacha20poly1305"
+	Port         string `json:"port"`               // default "8443"
+	ProviderName string `json:"provider_name"`      // e.g. "2.dnscrypt-cert.example.com"
+	PrivateKey   string `json:"private_key"`        // Ed25519 private key (hex, optional)
+	PublicKey    string `json:"public_key"`         // Ed25519 public key (hex, optional)
+	ResolverSk   string `json:"resolver_sk"`        // X25519 short-term secret (hex, optional)
+	ResolverPk   string `json:"resolver_pk"`        // X25519 short-term public (hex, optional)
+	ESVersion    string `json:"es_version"`         // "xsalsa20poly1305" or "xchacha20poly1305"
+	CertTTL      string `json:"cert_ttl,omitempty"` // e.g. "720h", "30d"; empty defaults to 365 days
 }
 
 // IsEnabled reports whether DNSCrypt is configured.  An empty DNSCryptSettings

@@ -141,7 +141,7 @@ func (s *Server) handleTCPMsg(ctx context.Context, b []byte, conn net.Conn) erro
 		query:   q,
 		encrypt: s.encrypt,
 	}
-	return s.serveDNS(ctx, rw, m)
+	return s.serveDNS(ctx, rw, m, config.ProtoDNSCryptTCP)
 }
 
 // isTemporaryNetError reports whether the error is a temporary network error

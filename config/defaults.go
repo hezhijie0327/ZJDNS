@@ -164,12 +164,13 @@ const (
 	ProtoHTTPPlain = "http"
 
 	// User-facing protocol aliases (map to config file values).
-	ProtoDOT      = "dot"      // DoT user config alias
-	ProtoDOQ      = "doq"      // DoQ user config alias
-	ProtoDOH      = "doh"      // DoH user config alias
-	ProtoDOH3     = "doh3"     // DoH3 user config alias
-	ProtoTLSTCP   = "tcp-tls"  // dns.Client.Net for TLS-wrapped TCP
-	ProtoDNSCrypt = "dnscrypt" // DNSCrypt v2 encrypted DNS
+	ProtoDOT         = "dot"          // DoT user config alias
+	ProtoDOQ         = "doq"          // DoQ user config alias
+	ProtoDOH         = "doh"          // DoH user config alias
+	ProtoDOH3        = "doh3"         // DoH3 user config alias
+	ProtoTLSTCP      = "tcp-tls"      // dns.Client.Net for TLS-wrapped TCP
+	ProtoDNSCrypt    = "dnscrypt"     // DNSCrypt v2 encrypted DNS (UDP)
+	ProtoDNSCryptTCP = "dnscrypt-tcp" // DNSCrypt v2 encrypted DNS (TCP)
 )
 
 // DNSCrypt v2 protocol defaults.

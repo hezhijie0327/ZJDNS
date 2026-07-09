@@ -817,8 +817,8 @@ func (s *SQLiteCache) Stats() []string {
 
 	var avgMs float64
 	var total, hits, misses, stales, rewrites, errCount, blockedCount, badcookieCount int64
-	var hcUDP, hcTCP, hcDOT, hcDOQ, hcDOH, hcDOH3, hcDNSCrypt int64
-	var rlUDP, rlTCP, rlDOT, rlDOQ, rlDOH, rlDOH3, rlDNSCrypt int64
+	var hcUDP, hcTCP, hcDOT, hcDOQ, hcDOH, hcDOH3, hcDNSCrypt, hcDNSCryptTCP int64
+	var rlUDP, rlTCP, rlDOT, rlDOQ, rlDOH, rlDOH3, rlDNSCrypt, rlDNSCryptTCP int64
 	var hijack, fallback, totalMS, hitTotalMS int64
 	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
 	var secureCount, insecureCount, bogusCount int64
@@ -834,9 +834,10 @@ func (s *SQLiteCache) Stats() []string {
 			" COALESCE(SUM(CASE WHEN protocol='doh' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='doh3' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dnscrypt' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dnscrypt-tcp' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(total_response_ms), 0)"+
 			" FROM entry_hit_counters",
-	).Scan(&hits, &hcUDP, &hcTCP, &hcDOT, &hcDOQ, &hcDOH, &hcDOH3, &hcDNSCrypt, &hitTotalMS)
+	).Scan(&hits, &hcUDP, &hcTCP, &hcDOT, &hcDOQ, &hcDOH, &hcDOH3, &hcDNSCrypt, &hcDNSCryptTCP, &hitTotalMS)
 
 	// Detail rows from request_log since last stats clear.
 	_ = s.db.QueryRow(
@@ -854,6 +855,7 @@ func (s *SQLiteCache) Stats() []string {
 			" COALESCE(SUM(CASE WHEN protocol='doh' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='doh3' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dnscrypt' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dnscrypt-tcp' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN hijack THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN fallback THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(response_time_ms), 0)"+
@@ -861,7 +863,7 @@ func (s *SQLiteCache) Stats() []string {
 	).Scan(
 		&total,
 		&misses, &stales, &rewrites, &errCount, &blockedCount, &badcookieCount,
-		&rlUDP, &rlTCP, &rlDOT, &rlDOQ, &rlDOH, &rlDOH3, &rlDNSCrypt,
+		&rlUDP, &rlTCP, &rlDOT, &rlDOQ, &rlDOH, &rlDOH3, &rlDNSCrypt, &rlDNSCryptTCP,
 		&hijack, &fallback, &totalMS,
 	)
 
@@ -873,6 +875,7 @@ func (s *SQLiteCache) Stats() []string {
 	doh := hcDOH + rlDOH
 	doh3 := hcDOH3 + rlDOH3
 	dnscrypt := hcDNSCrypt + rlDNSCrypt
+	dnscryptTCP := hcDNSCryptTCP + rlDNSCryptTCP
 
 	// Average across all request types (hit + miss + stale + rewrite + error).
 	if total > 0 {
@@ -950,8 +953,8 @@ func (s *SQLiteCache) Stats() []string {
 			hijack, fallback),
 		fmt.Sprintf("udp=%d tcp=%d",
 			udp, tcp),
-		fmt.Sprintf("dot=%d doq=%d doh=%d doh3=%d dnscrypt=%d",
-			dot, doq, doh, doh3, dnscrypt),
+		fmt.Sprintf("dot=%d doq=%d doh=%d doh3=%d dnscrypt=%d dnscrypt-tcp=%d",
+			dot, doq, doh, doh3, dnscrypt, dnscryptTCP),
 		fmt.Sprintf("secure=%d insecure=%d bogus=%d",
 			secureCount, insecureCount, bogusCount),
 	}

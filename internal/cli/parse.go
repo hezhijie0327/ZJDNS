@@ -21,6 +21,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		dnscryptProvider    string
 		dnscryptAddr        string
 		dnscryptESVersion   string
+		dnscryptCertTTL     string
 	)
 
 	fs := flag.NewFlagSet(osArgs[0], flag.ContinueOnError)
@@ -32,6 +33,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.StringVar(&dnscryptProvider, "provider", "", "Provider name for DNSCrypt config generation")
 	fs.StringVar(&dnscryptAddr, "addr", "127.0.0.1:8443", "Server address for DNSCrypt stamp")
 	fs.StringVar(&dnscryptESVersion, "es-version", "xsalsa20poly1305", "Encryption algorithm (xsalsa20poly1305 or xchacha20poly1305)")
+	fs.StringVar(&dnscryptCertTTL, "cert-ttl", "", "Certificate validity duration (e.g. 720h, 30d; default 8760h/365d)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "ZJDNS Server - High Performance DNS Server\n\n")
@@ -68,7 +70,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	}
 
 	if generateDNSCryptCfg {
-		output, err := serverdnscrypt.GenerateDNSCryptConfig(dnscryptProvider, dnscryptAddr, dnscryptESVersion)
+		output, err := serverdnscrypt.GenerateDNSCryptConfig(dnscryptProvider, dnscryptAddr, dnscryptESVersion, dnscryptCertTTL)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "generate-dnscrypt-config: %v\n", err)
 		} else {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"runtime"
 	"time"
+	"zjdns/config"
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -117,7 +118,7 @@ func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAdd
 		query:   q,
 		encrypt: s.encrypt,
 	}
-	if err := s.serveDNS(ctx, rw, m); err != nil {
+	if err := s.serveDNS(ctx, rw, m, config.ProtoDNSCrypt); err != nil {
 		log.Debugf("DNSCRYPT: serveDNS UDP error: %v", err)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"zjdns/config"
@@ -38,6 +40,11 @@ type Server struct {
 	ctx          context.Context
 	cancel       context.CancelCauseFunc
 }
+
+var (
+	errNotADayDuration = errors.New("not a day duration")
+	errInvalidDayCount = errors.New("invalid day count")
+)
 
 // New creates a new DNSCrypt Server from the given configuration.
 func New(cfg *config.DNSCryptSettings) (*Server, error) {
@@ -83,7 +90,7 @@ func buildResolverConfig(cfg *config.DNSCryptSettings, esVersion CryptoConstruct
 		ResolverSk:   cfg.ResolverSk,
 		ResolverPk:   cfg.ResolverPk,
 		ESVersion:    esVersion,
-		CertTTL:      config.DefaultDNSCryptCertTTL,
+		CertTTL:      parseCertTTL(cfg.CertTTL),
 	}
 
 	if rc.PublicKey == "" || rc.PrivateKey == "" {
@@ -105,7 +112,38 @@ func buildResolverConfig(cfg *config.DNSCryptSettings, esVersion CryptoConstruct
 	return rc, nil
 }
 
-// Start begins listening for DNSCrypt queries on UDP and TCP.
+// parseCertTTL parses a TTL duration string into a time.Duration.  An empty
+// string returns the default (365 days).  Supported units: h (hour), d (day),
+// standard Go duration suffixes (s, m, h).
+func parseCertTTL(s string) time.Duration {
+	if s == "" {
+		return config.DefaultDNSCryptCertTTL
+	}
+	// Accept "d" (day) suffix which Go's time.ParseDuration doesn't support.
+	if d, err := parseDays(s); err == nil {
+		return d
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		log.Warnf("DNSCRYPT: invalid cert_ttl %q, using default %s", s, config.DefaultDNSCryptCertTTL)
+		return config.DefaultDNSCryptCertTTL
+	}
+
+	return d
+}
+
+// parseDays parses a duration string ending with "d" (e.g. "30d", "365d").
+func parseDays(s string) (time.Duration, error) {
+	if !strings.HasSuffix(s, "d") {
+		return 0, errNotADayDuration
+	}
+	n, err := strconv.Atoi(s[:len(s)-1])
+	if err != nil || n <= 0 {
+		return 0, errInvalidDayCount
+	}
+	return time.Duration(n) * 24 * time.Hour, nil
+}
+
 // Start begins listening for DNSCrypt queries on UDP and TCP.
 func (s *Server) Start(handler DNSHandler) error {
 	s.mu.Lock()
@@ -305,14 +343,14 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 	return reply.Data, nil
 }
 
-func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg) error {
+func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, protocol string) error {
 	if m == nil || len(m.Question) != 1 || m.Response {
 		return ErrInvalidQuery
 	}
 	log.Debugf("DNSCRYPT: handling query for %s from %s", m.Question[0].Header().Name, rw.RemoteAddr())
 
 	clientIP := clientIPFromAddr(rw.RemoteAddr())
-	resp := s.handler.ServeDNS(m, clientIP, true, config.ProtoDNSCrypt)
+	resp := s.handler.ServeDNS(m, clientIP, true, protocol)
 	if resp == nil {
 		return nil
 	}
