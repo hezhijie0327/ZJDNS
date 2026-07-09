@@ -3,6 +3,7 @@ package dnscrypt
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -26,8 +27,8 @@ type ResolverConfig struct {
 	ProviderName string
 	PublicKey    string // Ed25519 public key (hex)
 	PrivateKey   string // Ed25519 private key (hex)
-	ResolverSk   string // X25519 short-term secret key (hex)
-	ResolverPk   string // X25519 short-term public key (hex)
+	ResolverSk   string // X25519 secret or X-Wing seed (hex; determined by ESVersion)
+	ResolverPk   string // X25519 public or X-Wing public (hex; determined by ESVersion)
 	ESVersion    CryptoConstruction
 	CertTTL      time.Duration
 }
@@ -37,10 +38,11 @@ const StampProtoDNSCrypt = 0x01
 
 // GenerateResolverConfig generates a new resolver configuration for the given
 // provider name.  If privateKey is nil, a new Ed25519 keypair is generated.
-// The X25519 short-term keypair is always generated fresh.
-func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey, ttl time.Duration) (ResolverConfig, error) {
+// For classical constructions an X25519 short-term keypair is generated; for
+// PQ (esVersion == XWingPQ) an X-Wing keypair is generated instead.
+func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey, esVersion CryptoConstruction, ttl time.Duration) (ResolverConfig, error) {
 	cfg := ResolverConfig{
-		ESVersion: XSalsa20Poly1305,
+		ESVersion: esVersion,
 		CertTTL:   ttl,
 	}
 	if !strings.HasPrefix(providerName, DNSCryptV2Prefix) {
@@ -56,9 +58,19 @@ func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey, 
 	}
 	cfg.PrivateKey = hexEncodeKey(privateKey)
 	cfg.PublicKey = hexEncodeKey(privateKey.Public().(ed25519.PublicKey))
-	sk, pk := generateRandomKeyPair()
-	cfg.ResolverSk = hexEncodeKey(sk[:])
-	cfg.ResolverPk = hexEncodeKey(pk[:])
+
+	if esVersion.IsPQ() {
+		pk, sk, err := pqGenKeyPair()
+		if err != nil {
+			return cfg, fmt.Errorf("generating X-Wing keypair: %w", err)
+		}
+		cfg.ResolverPk = hexEncodeKey(pk)
+		cfg.ResolverSk = hexEncodeKey(sk)
+	} else {
+		sk, pk := generateRandomKeyPair()
+		cfg.ResolverSk = hexEncodeKey(sk[:])
+		cfg.ResolverPk = hexEncodeKey(pk[:])
+	}
 	return cfg, nil
 }
 
@@ -75,21 +87,54 @@ func (rc *ResolverConfig) NewCert() (cert *Certificate, err error) {
 		NotBefore: uint32(time.Now().Unix()),          //nolint:gosec // G115: Unix timestamp fits in uint32 until 2106
 		ESVersion: rc.ESVersion,
 	}
-	resolverPk, err := hexDecodeKey(rc.ResolverPk)
-	if err != nil {
-		return nil, fmt.Errorf("decoding resolver public key: %w", err)
+
+	if rc.ESVersion.IsPQ() {
+		if rc.ResolverPk != "" {
+			cert.PqPublicKey, err = hexDecodeKey(rc.ResolverPk)
+			if err != nil {
+				return nil, fmt.Errorf("decoding PQ public key: %w", err)
+			}
+		}
+		if rc.ResolverSk != "" {
+			cert.PqPrivateKey, err = hexDecodeKey(rc.ResolverSk)
+			if err != nil {
+				return nil, fmt.Errorf("decoding PQ private key: %w", err)
+			}
+		}
+		if len(cert.PqPublicKey) != PQPublicKeySize || len(cert.PqPrivateKey) != 32 {
+			pk, sk, genErr := pqGenKeyPair()
+			if genErr != nil {
+				return nil, fmt.Errorf("generating X-Wing keypair: %w", genErr)
+			}
+			cert.PqPublicKey = pk
+			cert.PqPrivateKey = sk
+			rc.ResolverPk = hexEncodeKey(pk)
+			rc.ResolverSk = hexEncodeKey(sk)
+		}
+		// Client magic is the first 8 bytes of the SHA-256 hash of the public key.
+		h := sha256.Sum256(cert.PqPublicKey)
+		copy(cert.ClientMagic[:], h[:ClientMagicSize])
+		// Pre-compute HKDF cert context.
+		binCert, _ := cert.MarshalBinary()
+		cert.PqCertContext = pqCertContext(binCert)
+	} else {
+		resolverPk, err := hexDecodeKey(rc.ResolverPk)
+		if err != nil {
+			return nil, fmt.Errorf("decoding resolver public key: %w", err)
+		}
+		resolverSk, err := hexDecodeKey(rc.ResolverSk)
+		if err != nil {
+			return nil, fmt.Errorf("decoding resolver secret key: %w", err)
+		}
+		if len(resolverPk) != KeySize || len(resolverSk) != KeySize {
+			sk, pk := generateRandomKeyPair()
+			resolverSk = sk[:]
+			resolverPk = pk[:]
+		}
+		copy(cert.ResolverPk[:], resolverPk)
+		copy(cert.ResolverSk[:], resolverSk)
 	}
-	resolverSk, err := hexDecodeKey(rc.ResolverSk)
-	if err != nil {
-		return nil, fmt.Errorf("decoding resolver secret key: %w", err)
-	}
-	if len(resolverPk) != KeySize || len(resolverSk) != KeySize {
-		sk, pk := generateRandomKeyPair()
-		resolverSk = sk[:]
-		resolverPk = pk[:]
-	}
-	copy(cert.ResolverPk[:], resolverPk)
-	copy(cert.ResolverSk[:], resolverSk)
+
 	privateKey, err := hexDecodeKey(rc.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("decoding private key: %w", err)
@@ -335,13 +380,13 @@ func EncodeStampFromConfig(addr, providerName, pkHex string) (stamp string, err 
 func ResolverConfigFromStamp(addr, pkHex, providerName string) (ResolverConfig, error) {
 	rc := ResolverConfig{
 		ProviderName: providerName,
-		ESVersion:    XSalsa20Poly1305,
+		ESVersion:    XWingPQ,
 	}
 	if !strings.HasPrefix(providerName, DNSCryptV2Prefix) {
 		rc.ProviderName = DNSCryptV2Prefix + providerName
 	}
 	rc.PublicKey = pkHex
-	rc.ESVersion = XSalsa20Poly1305
+	rc.ESVersion = XWingPQ
 	return rc, nil
 }
 
@@ -474,7 +519,7 @@ func CertSelfSigned(providerName, esVersionStr string) (*Certificate, string, st
 	if err != nil {
 		return nil, "", "", err
 	}
-	rc, err := GenerateResolverConfig(providerName, nil, 0)
+	rc, err := GenerateResolverConfig(providerName, nil, esVersion, 0)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("generating config: %w", err)
 	}
@@ -488,7 +533,7 @@ func CertSelfSigned(providerName, esVersionStr string) (*Certificate, string, st
 
 // GenerateTestCert creates a test certificate for use in tests.
 func GenerateTestCert(providerName string) (*Certificate, error) {
-	rc, err := GenerateResolverConfig(providerName, nil, 0)
+	rc, err := GenerateResolverConfig(providerName, nil, XWingPQ, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +542,7 @@ func GenerateTestCert(providerName string) (*Certificate, error) {
 
 // NewTestCert generates a test certificate from a ResolverConfig.
 func NewTestCert(providerName string) (*Certificate, *ResolverConfig, error) {
-	rc, err := GenerateResolverConfig(providerName, nil, 0)
+	rc, err := GenerateResolverConfig(providerName, nil, XWingPQ, 0)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -634,8 +679,8 @@ type ConfigBlock struct {
 	ProviderName string `json:"provider_name"`
 	PublicKey    string `json:"public_key"`
 	PrivateKey   string `json:"private_key"`
-	ResolverSk   string `json:"resolver_sk"`
-	ResolverPk   string `json:"resolver_pk"`
+	ResolverSk   string `json:"resolver_sk,omitempty"`
+	ResolverPk   string `json:"resolver_pk,omitempty"`
 	ESVersion    string `json:"es_version"`
 	CertTTL      string `json:"cert_ttl,omitempty"`
 }
@@ -660,11 +705,10 @@ func GenerateConfigs(provider, addr, esVersion, certTTL string) (*ServerConfig, 
 		return nil, nil, err
 	}
 
-	rc, err := GenerateResolverConfig(provider, nil, parseCertTTL(certTTL))
+	rc, err := GenerateResolverConfig(provider, nil, esVersionVal, parseCertTTL(certTTL))
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating resolver config: %w", err)
 	}
-	rc.ESVersion = esVersionVal
 
 	stamp, err := rc.CreateStamp(addr)
 	if err != nil {

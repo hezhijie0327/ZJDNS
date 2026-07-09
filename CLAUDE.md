@@ -64,7 +64,7 @@ pwsh scripts/install-hook.ps1              # Windows PowerShell
 
 Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible). Zero `golangci-lint` warnings required.
 
-Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/ncruces/go-sqlite3` (pure-Go SQLite, WASM-based).
+Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/ncruces/go-sqlite3` (pure-Go SQLite, WASM-based), `github.com/cloudflare/circl` (X-Wing PQ/T hybrid KEM for DNSCrypt PQC).
 
 ## Coding Standards
 
@@ -222,7 +222,7 @@ zjdns/
     │                              ←   dnssec_chain.go + nameserver.go + upstream.go + resolver.go
     ├── security/                  ← DNSSEC validation (crypto + nsec) + hijack detection
     ├── tls/                       ← TLS listeners (DoT, DoQ, DoH, DoH3)
-    ├── dnscrypt/                  ← DNSCrypt v2 (X25519 + XSalsa20/XChacha20-Poly1305 AEAD)
+    ├── dnscrypt/                  ← DNSCrypt v2 (X25519 + XSalsa20/XChacha20-Poly1305 AEAD) + PQC (X-Wing KEM)
     └── probe/                     ← A/AAAA latency probing and record reordering
 ```
 
@@ -315,9 +315,9 @@ Top layer (wiring):
 | `BackgroundConfig` | `server/handler` | Groups RefreshGroup/RefreshCtx/Ctx lifecycle params |
 | `LatencyProber` | `server/handler` | Interface: Start(qname, qtype, answer, ...) — latency-probes A/AAAA records and updates latency_ms |
 | `Server` | `server/tls` | TLS listeners (DoT, DoQ, DoH, DoH3) |
-| `Server` | `server/dnscrypt` | DNSCrypt v2 listener (UDP+TCP), cert handshake, query encrypt/decrypt |
-| `Certificate` | `server/dnscrypt` | DNSCrypt server certificate (Ed25519 signature, X25519 short-term key) |
-| `DNSCryptSettings` | `config` | DNSCrypt server config (keys, provider name, ES version, port, cert_ttl) |
+| `Server` | `server/dnscrypt` | DNSCrypt v2 listener (UDP+TCP), cert handshake, query encrypt/decrypt, PQC (X-Wing KEM) |
+| `Certificate` | `server/dnscrypt` | DNSCrypt server certificate (Ed25519 signature, X25519 short-term key, or X-Wing PQ public key) |
+| `DNSCryptSettings` | `config` | DNSCrypt server config (keys, provider name, ES version [xwingpq support], port, cert_ttl) |
 | `Client` | `server/client` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5/DNSCrypt-UDP+TCP) |
 | `SOCKS5Dialer` | `server/client` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
 | `Conn` / `Pool` | `server/client/pool` | RFC 7766 pipelined TCP/DoT |
@@ -355,7 +355,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read fields after `Put()`. Double-zeroing removed: `Put` zeroes, `Get` trusts.
 - **KTLS**: `gitlab.com/go-extension/tls` with `KernelTX`/`KernelRX` (both default `false`, opt-in). Dual configs: eTLS for TCP, crypto/tls for QUIC. Silent fallback on non-Linux.
 - **SOCKS5**: Per-upstream optional proxy. TCP CONNECT (`socks5_tcp.go`) + UDP ASSOCIATE (`socks5_udp.go`). `SafeURL()` redacts passwords. Shared handshake/auth/helpers in `socks5.go`.
-- **DNSCrypt v2** (`server/dnscrypt/`): Self-contained implementation — zero new dependencies, uses only `golang.org/x/crypto` (already present). Server: UDP+TCP listeners on independent port (default 8443), auto-generated Ed25519/X25519 keys, cert TXT handshake, configurable `cert_ttl` (e.g. `"30d"`, `"720h"`; empty defaults to 365 days). Client: `dnscrypt` (UDP) and `dnscrypt-tcp` (TCP, length-prefixed frames) protocols; parses `sdns://` stamps or explicit `ServerName`+`PublicKey` from config, fetches cert via unencrypted UDP DNS query on the DNSCrypt port, caches shared key for 1 hour. XSalsa20-Poly1305 (default) and XChacha20-Poly1305 AEAD. Cert query uses plain UDP (no length prefixing) — TCP cert queries are not universally supported (e.g. Quad9). Server UDP receive buffer uses `dns.MaxMsgSize` to handle large encrypted queries from clients like dnscrypt-proxy. Edns buffer size detected from `Msg.UDPSize` (codeberg.org/miekg/dns fork stores EDNS fields in the Msg header, not Extra).
+- **DNSCrypt v2** (`server/dnscrypt/`): Self-contained implementation with PQC support. Server: UDP+TCP listeners on independent port (default 8443), auto-generated Ed25519/X25519 keys (or X-Wing PQ keys for `es_version: "xwingpq"`), cert TXT handshake with raw binary chunking for large PQ certificates (1320 bytes), configurable `cert_ttl`. Client: `dnscrypt` (UDP) and `dnscrypt-tcp` (TCP) protocols; parses `sdns://` stamps, auto-detects PQ certificates, performs X-Wing key exchange with resumption ticket support. XWingPQ (default), XChacha20-Poly1305, and XSalsa20-Poly1305 AEAD.
 - **DNSSEC**: IANA root KSK trust anchors (key tags 20326 + 38696). `dnssec_enforce: true` → SERVFAIL on bogus; `false` → pass through without AD.
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
 - **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.

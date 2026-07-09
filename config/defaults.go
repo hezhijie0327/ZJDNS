@@ -175,14 +175,14 @@ const (
 
 // DNSCrypt v2 protocol defaults.
 const (
-	DefaultDNSCryptPort           = "8443"
-	DefaultDNSCryptCertTTL        = 365 * 24 * time.Hour // certificate validity period
-	DefaultDNSCryptUDPSize        = 1252                 // bytes
-	DefaultDNSCryptCertCacheTTL   = 1 * time.Hour        // client shared-key cache duration
-	DefaultDNSCryptReadTimeout    = 2 * time.Second      // UDP/TCP initial read deadline
-	DefaultDNSCryptTCPIdleTimeout = 8 * time.Second      // TCP idle timeout after first read
-	DefaultDNSCryptResponseBuffer = 4096                 // bytes — receive buffer for cert/query responses
-
+	DefaultDNSCryptPort             = "8443"
+	DefaultDNSCryptCertTTL          = 365 * 24 * time.Hour // certificate validity period
+	DefaultDNSCryptUDPSize          = 1252                 // bytes
+	DefaultDNSCryptCertCacheTTL     = 1 * time.Hour        // client shared-key cache duration
+	DefaultDNSCryptReadTimeout      = 2 * time.Second      // UDP/TCP initial read deadline
+	DefaultDNSCryptTCPIdleTimeout   = 8 * time.Second      // TCP idle timeout after first read
+	DefaultDNSCryptResponseBuffer   = 4096                 // bytes — receive buffer for cert/query responses
+	DefaultDNSCryptPQTicketLifetime = 600                  // seconds — resumption ticket validity
 )
 
 // ALPN protocol identifiers for secure DNS transports.

@@ -51,6 +51,21 @@ const (
 
 	// EDNSSize is the overhead for DNSCrypt headers when calculating truncation.
 	EDNSSize = 64
+
+	// PQC public key, ciphertext, and certificate sizes for X-Wing PQ/T hybrid KEM.
+	PQPublicKeySize  = 1216
+	PQCiphertextSize = 1120
+	PQCertByteLength = 1320
+	PQProfileExtSize = 12
+
+	// PQ query header sizes.
+	PQResumeMagicLen = 8
+	PQTicketLenSize  = 2
+
+	// PQControlBlockMaxSize is the maximum size of a PQ response control block
+	// (2 byte total len + 4 magic + 1 version + 4 lifetime + 2 ticket len + max
+	// ticket).
+	PQControlBlockMaxSize = 2 + 4 + 1 + 4 + 2 + 256
 )
 
 // CertMagic is the byte sequence that must appear at the beginning of every
@@ -60,6 +75,17 @@ var CertMagic = [4]byte{0x44, 0x4e, 0x53, 0x43}
 // ResolverMagic is the byte sequence that must appear at the beginning of every
 // DNSCrypt response.
 var ResolverMagic = []byte{0x72, 0x36, 0x66, 0x6e, 0x76, 0x57, 0x6a, 0x38}
+
+// PQResumeMagic is the byte sequence identifying a resumed PQ query (carries
+// a resumption ticket instead of a full X-Wing ciphertext).
+var PQResumeMagic = [8]byte{'P', 'Q', 'R', 'e', 's', 'u', 'm', 'e'}
+
+// PQControlMagic is the byte sequence identifying a PQ response control block
+// carrying a resumption ticket.
+var PQControlMagic = [4]byte{'P', 'Q', 'D', 'R'}
+
+// PQESVersion is the wire-format es-version for X-Wing PQ.
+var PQESVersion = [2]byte{0x00, 0x03}
 
 // Nonce is a convenient alias for nonce values.
 type Nonce = [NonceSize]byte
@@ -73,18 +99,29 @@ const (
 
 	// XChacha20Poly1305 uses X25519 key exchange with XChacha20-Poly1305 AEAD.
 	XChacha20Poly1305 CryptoConstruction = 0x0002
+
+	// XWingPQ uses X-Wing PQ/T hybrid KEM (ML-KEM-768 + X25519) with
+	// XChacha20-Poly1305 AEAD.
+	XWingPQ CryptoConstruction = 0x0003
 )
 
 // ParseESVersion parses an ESVersion string into a CryptoConstruction value.
 func ParseESVersion(s string) (CryptoConstruction, error) {
 	switch s {
-	case "xsalsa20poly1305", "":
-		return XSalsa20Poly1305, nil
+	case "xwingpq", "":
+		return XWingPQ, nil
 	case "xchacha20poly1305":
 		return XChacha20Poly1305, nil
+	case "xsalsa20poly1305":
+		return XSalsa20Poly1305, nil
 	default:
-		return 0, fmt.Errorf("unsupported es_version: %q (supported: xsalsa20poly1305, xchacha20poly1305)", s)
+		return 0, fmt.Errorf("unsupported es_version: %q (supported: xwingpq, xchacha20poly1305, xsalsa20poly1305)", s)
 	}
+}
+
+// IsPQ reports whether the CryptoConstruction uses post-quantum key exchange.
+func (c CryptoConstruction) IsPQ() bool {
+	return c == XWingPQ
 }
 
 // type check
@@ -97,6 +134,8 @@ func (c CryptoConstruction) String() (s string) {
 		return "XChacha20Poly1305"
 	case XSalsa20Poly1305:
 		return "XSalsa20Poly1305"
+	case XWingPQ:
+		return "XWingPQ"
 	default:
 		return "Unknown"
 	}

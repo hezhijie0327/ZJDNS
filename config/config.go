@@ -38,9 +38,9 @@ type DNSCryptSettings struct {
 	ProviderName string `json:"provider_name"`      // e.g. "2.dnscrypt-cert.example.com"
 	PrivateKey   string `json:"private_key"`        // Ed25519 private key (hex, optional)
 	PublicKey    string `json:"public_key"`         // Ed25519 public key (hex, optional)
-	ResolverSk   string `json:"resolver_sk"`        // X25519 short-term secret (hex, optional)
-	ResolverPk   string `json:"resolver_pk"`        // X25519 short-term public (hex, optional)
-	ESVersion    string `json:"es_version"`         // "xsalsa20poly1305" or "xchacha20poly1305"
+	ResolverSk   string `json:"resolver_sk"`        // X25519 secret or X-Wing seed (hex, optional; key type determined by es_version)
+	ResolverPk   string `json:"resolver_pk"`        // X25519 public or X-Wing public (hex, optional; key type determined by es_version)
+	ESVersion    string `json:"es_version"`         // "xwingpq" (default), "xchacha20poly1305", or "xsalsa20poly1305"
 	CertTTL      string `json:"cert_ttl,omitempty"` // e.g. "720h", "30d"; empty defaults to 365 days
 }
 
@@ -399,7 +399,7 @@ func GenerateExampleConfig() string {
 		PrivateKey:   "2BB45162041FBCAEE142CA5C100B050491A37DF6600DD13DBAA149FAB566387E26B75000A825A6F6965C530024499E3FA119AF32CD7F9395C33A0AF8373DD142",
 		ResolverSk:   "93D6E7A4D65D62CD1F484D228EE4B6CEB0510A2D20C2FC0F5105CFEA9717C2CE",
 		ResolverPk:   "4153FB871A95823475F06DA35BCA1F4FB62D60348DF061382A346730F45C334A",
-		ESVersion:    "xsalsa20poly1305",
+		ESVersion:    "xwingpq",
 	}
 
 	cfg.Server.Features.Cache.MaxEntries = DefaultMaxCacheEntries

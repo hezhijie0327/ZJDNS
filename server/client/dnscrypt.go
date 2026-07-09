@@ -24,6 +24,14 @@ type dnscryptState struct {
 	clientMagic   [serverdnscrypt.ClientMagicSize]byte
 	esVersion     serverdnscrypt.CryptoConstruction
 	expires       time.Time
+
+	// PQ fields — only set when the server offers a PQ certificate.
+	pqPublicKey    []byte
+	pqCertContext  []byte
+	pqPrivateKey   []byte // X-Wing seed (32 bytes)
+	pqTicket       []byte
+	pqResumeSecret [serverdnscrypt.SharedKeySize]byte
+	pqTicketExpiry time.Time
 }
 
 // executeDNSCrypt sends an encrypted DNS query to a DNSCrypt resolver.
@@ -44,15 +52,17 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 	if err != nil {
 		return nil, fmt.Errorf("packing dns query: %w", err)
 	}
-	// Encrypt the query.  msg.Data is packed by Pack() above; EncryptQuery
-	// pads via append which allocates a fresh backing array, so no defensive
-	// copy is needed.
+	// Encrypt the query.
 	q := &serverdnscrypt.EncryptedQuery{
+		ESVersion:   state.esVersion,
 		ClientMagic: state.clientMagic,
 		ClientPk:    state.publicKey,
-		ESVersion:   state.esVersion,
 	}
-	encrypted, clientNonce, err := serverdnscrypt.EncryptQuery(q, msg.Data, state.sharedKey)
+	if state.esVersion.IsPQ() {
+		q.PQCiphertext = state.pqPublicKey // Will be overwritten after encapsulation
+		q.PQCertContext = state.pqCertContext
+	}
+	encrypted, clientNonce, err := c.prepareAndEncryptQuery(state, q, msg.Data)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting dnscrypt query: %w", err)
 	}
@@ -117,6 +127,31 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 	}
 
 	return response, nil
+}
+
+// prepareAndEncryptQuery handles both classical and PQ query encryption.
+func (c *Client) prepareAndEncryptQuery(state *dnscryptState, q *serverdnscrypt.EncryptedQuery, packet []byte) (encrypted []byte, clientNonce serverdnscrypt.Nonce, err error) {
+	if !state.esVersion.IsPQ() {
+		return serverdnscrypt.EncryptQuery(q, packet, state.sharedKey)
+	}
+
+	// PQ: try resumed query first, fall back to fresh encapsulation.
+	if len(state.pqTicket) > 0 && time.Now().Before(state.pqTicketExpiry) {
+		sharedKey := serverdnscrypt.PQResumedSharedKey(state.pqResumeSecret, state.clientMagic, clientNonce[:serverdnscrypt.NonceSize/2], state.pqTicket)
+		state.sharedKey = sharedKey
+		q.PQTicket = state.pqTicket
+		return serverdnscrypt.EncryptQuery(q, packet, sharedKey)
+	}
+
+	// Fresh PQ query: encapsulate X-Wing.
+	kemSS, ct, encapErr := serverdnscrypt.PQEncapsulate(state.pqPublicKey)
+	if encapErr != nil {
+		return nil, serverdnscrypt.Nonce{}, fmt.Errorf("X-Wing encapsulate: %w", encapErr)
+	}
+	sharedKey := serverdnscrypt.PQDeriveSharedKey(kemSS, state.clientMagic, state.pqCertContext, ct)
+	state.sharedKey = sharedKey
+	q.PQCiphertext = ct
+	return serverdnscrypt.EncryptQuery(q, packet, sharedKey)
 }
 
 // resolveDNSCryptStamp extracts the server address, provider name, and public
@@ -239,9 +274,15 @@ func (c *Client) getDNSCryptState(
 
 	// Compute shared key.
 	esVersion := cert.ESVersion
-	sharedKey, err := serverdnscrypt.ComputeSharedKey(esVersion, &secretKey, &cert.ResolverPk)
-	if err != nil {
-		return nil, fmt.Errorf("computing shared key: %w", err)
+	var sharedKey [serverdnscrypt.SharedKeySize]byte
+	if esVersion.IsPQ() {
+		// For PQ, the shared key is derived per-query via X-Wing encapsulate.
+		// Store the certificate's public key for later use.
+	} else {
+		sharedKey, err = serverdnscrypt.ComputeSharedKey(esVersion, &secretKey, &cert.ResolverPk)
+		if err != nil {
+			return nil, fmt.Errorf("computing shared key: %w", err)
+		}
 	}
 
 	state := &dnscryptState{
@@ -253,6 +294,18 @@ func (c *Client) getDNSCryptState(
 		clientMagic:   cert.ClientMagic,
 		esVersion:     esVersion,
 		expires:       time.Now().Add(config.DefaultDNSCryptCertCacheTTL),
+	}
+
+	if esVersion.IsPQ() && len(cert.PqPublicKey) > 0 {
+		state.pqPublicKey = cert.PqPublicKey
+		state.pqCertContext = cert.PqCertContext
+		// Generate X-Wing keypair for this client.
+		pqPK, pqSK, pqErr := serverdnscrypt.PQGenKeyPair()
+		if pqErr != nil {
+			return nil, fmt.Errorf("generating X-Wing keypair: %w", pqErr)
+		}
+		state.pqPrivateKey = pqSK
+		_ = pqPK // The public key is never sent directly; ciphertext embeds it
 	}
 
 	c.dnscryptCacheMu.Lock()
@@ -269,12 +322,16 @@ func (c *Client) getDNSCryptState(
 }
 
 // parseDNSCryptCert parses the certificate from DNS TXT answer records and
-// verifies its signature.
+// verifies its signature.  It prefers PQ certificates (es-version 0x0003) over
+// classical ones when both are available (matching the dnscrypt-proxy
+// behaviour).
 func parseDNSCryptCert(
 	answer []dns.RR,
 	serverPK []byte,
 	providerName string,
 ) (*serverdnscrypt.Certificate, error) {
+	var bestCert *serverdnscrypt.Certificate
+	var bestSerial uint32
 	for _, rr := range answer {
 		txt, ok := rr.(*dns.TXT)
 		if !ok {
@@ -291,9 +348,17 @@ func parseDNSCryptCert(
 		if !cert.VerifySignature(serverPK) {
 			continue
 		}
-		return cert, nil
+		// Prefer PQ over classical at same serial.
+		if cert.Serial > bestSerial ||
+			(cert.Serial == bestSerial && cert.ESVersion.IsPQ() && (bestCert == nil || !bestCert.ESVersion.IsPQ())) {
+			bestCert = cert
+			bestSerial = cert.Serial
+		}
 	}
-	return nil, fmt.Errorf("no valid dnscrypt certificate for provider %q", providerName)
+	if bestCert == nil {
+		return nil, fmt.Errorf("no valid dnscrypt certificate for provider %q", providerName)
+	}
+	return bestCert, nil
 }
 
 // warmUpDNSCrypt pre-fetches the DNSCrypt certificate for the given server.

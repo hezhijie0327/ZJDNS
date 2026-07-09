@@ -32,7 +32,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.BoolVar(&generateDNSCryptCfg, "generate-dnscrypt-config", false, "Generate DNSCrypt server configuration")
 	fs.StringVar(&dnscryptProvider, "provider", "", "Provider name for DNSCrypt config generation")
 	fs.StringVar(&dnscryptAddr, "addr", "127.0.0.1:8443", "Server address for DNSCrypt stamp")
-	fs.StringVar(&dnscryptESVersion, "es-version", "xsalsa20poly1305", "Encryption algorithm (xsalsa20poly1305 or xchacha20poly1305)")
+	fs.StringVar(&dnscryptESVersion, "es-version", "xwingpq", "Encryption algorithm (xwingpq, xchacha20poly1305, or xsalsa20poly1305)")
 	fs.StringVar(&dnscryptCertTTL, "cert-ttl", "", "Certificate validity duration (e.g. 720h, 30d; default 8760h/365d)")
 
 	fs.Usage = func() {

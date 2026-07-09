@@ -1,7 +1,10 @@
 package dnscrypt
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -27,7 +30,7 @@ type DNSHandler interface {
 // Server is a DNSCrypt v2 server that listens on UDP and TCP.
 type Server struct {
 	cert         *Certificate
-	certTXT      string
+	certTXT      []string
 	handler      DNSHandler
 	cfg          *config.DNSCryptSettings
 	udpConns     []*net.UDPConn
@@ -39,6 +42,10 @@ type Server struct {
 	started      bool
 	ctx          context.Context
 	cancel       context.CancelCauseFunc
+
+	// ticketKey is the server-wide key for sealing/opening PQ resumption
+	// tickets.  Derived from the Ed25519 signing key via SHA-256.
+	ticketKey [xchachaKeySize]byte
 }
 
 var (
@@ -79,6 +86,15 @@ func New(cfg *config.DNSCryptSettings) (*Server, error) {
 	s.certTXT = s.buildCertTXT()
 	s.esVersion = esVersion
 
+	// Derive ticket key from the Ed25519 signing key for PQ resumption.
+	if esVersion.IsPQ() {
+		privateKeyBytes, _ := hexDecodeKey(cfg.PrivateKey)
+		if len(privateKeyBytes) > 0 {
+			h := sha256.Sum256(privateKeyBytes)
+			copy(s.ticketKey[:], h[:])
+		}
+	}
+
 	return s, nil
 }
 
@@ -103,7 +119,16 @@ func buildResolverConfig(cfg *config.DNSCryptSettings, esVersion CryptoConstruct
 		log.Warnf("DNSCRYPT: Ed25519 keypair auto-generated — save these keys for persistence")
 	}
 
-	if rc.ResolverSk == "" || rc.ResolverPk == "" {
+	if esVersion.IsPQ() {
+		if rc.ResolverPk == "" || rc.ResolverSk == "" {
+			pk, sk, err := pqGenKeyPair()
+			if err != nil {
+				return rc, fmt.Errorf("generating X-Wing keypair: %w", err)
+			}
+			rc.ResolverPk = hexEncodeKey(pk)
+			rc.ResolverSk = hexEncodeKey(sk)
+		}
+	} else if rc.ResolverSk == "" || rc.ResolverPk == "" {
 		sk, pk := generateRandomKeyPair()
 		rc.ResolverSk = hexEncodeKey(sk[:])
 		rc.ResolverPk = hexEncodeKey(pk[:])
@@ -261,9 +286,46 @@ func (s *Server) isStarted() bool {
 	return s.started
 }
 
-func (s *Server) buildCertTXT() string {
+func (s *Server) buildCertTXT() []string {
 	certBytes, _ := s.cert.MarshalBinary()
-	return packTxtString(certBytes)
+	// Escape only backslash bytes (0x5C → "\\") to prevent miekg/dns's
+	// pack.String from interpreting raw cert bytes as \DDD escape sequences.
+	// The library's unpack.String reverses this: non-printable bytes (including
+	// 0x5C) become \DDD/\\ escapes, and the client's PackTXTRT reverses again.
+	escaped := escapeBackslash(certBytes)
+	const maxChunk = 255
+	var chunks []string
+	for i := 0; i < len(escaped); i += maxChunk {
+		end := i + maxChunk
+		if end > len(escaped) {
+			end = len(escaped)
+		}
+		chunks = append(chunks, string(escaped[i:end]))
+	}
+	return chunks
+}
+
+// escapeBackslash replaces each 0x5C byte with "\\" so that miekg/dns
+// pack.String's escape handling won't misinterpret raw cert bytes.
+func escapeBackslash(b []byte) []byte {
+	n := 0
+	for _, c := range b {
+		if c == '\\' {
+			n++
+		}
+	}
+	if n == 0 {
+		return b
+	}
+	out := make([]byte, 0, len(b)+n)
+	for _, c := range b {
+		if c == '\\' {
+			out = append(out, '\\', '\\')
+		} else {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (s *Server) encrypt(m *dns.Msg, q *encryptedQuery, isUDP bool) (encrypted []byte, err error) {
@@ -276,10 +338,40 @@ func (s *Server) encrypt(m *dns.Msg, q *encryptedQuery, isUDP bool) (encrypted [
 		return nil, fmt.Errorf("packing dns message: %w", err)
 	}
 	packet := m.Data
+
+	if q.esVersion.IsPQ() {
+		return s.encryptPQ(packet, q, r, isUDP)
+	}
+
 	sharedKey, err := computeSharedKey(q.esVersion, &s.cert.ResolverSk, &q.clientPk)
 	if err != nil {
 		return nil, fmt.Errorf("computing shared key: %w", err)
 	}
+	return r.encrypt(packet, sharedKey, isUDP)
+}
+
+// encryptPQ encrypts a DNS response for a PQ query.  For initial queries it
+// issues a resumption ticket in the response control block.
+func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedResponse, isUDP bool) ([]byte, error) {
+	var sharedKey [SharedKeySize]byte
+
+	if len(q.pqCiphertext) > 0 {
+		// Initial query: decapsulate X-Wing to get shared secret, derive key.
+		kemSS := pqDecapsulate(q.pqCiphertext, s.cert.PqPrivateKey)
+		sharedKey = pqDeriveSharedKey(kemSS, q.clientMagic, s.cert.PqCertContext, q.pqCiphertext)
+
+		// Issue a resumption ticket.
+		resumeSecret := pqResumeSecret(sharedKey, q.clientMagic, q.nonce[:NonceSize/2])
+		expiry := time.Now().Add(config.DefaultDNSCryptPQTicketLifetime * time.Second)
+		plaintext := encodeTicketPlaintext(q.clientMagic, resumeSecret, expiry)
+		var nonce [24]byte
+		if _, randErr := rand.Read(nonce[:]); randErr != nil {
+			return nil, fmt.Errorf("generating ticket nonce: %w", randErr)
+		}
+		sealed := pqSealTicket(&s.ticketKey, (*[24]byte)(nonce[:]), plaintext)
+		r.pqControl = pqBuildControlBlock(sealed, config.DefaultDNSCryptPQTicketLifetime)
+	}
+
 	return r.encrypt(packet, sharedKey, isUDP)
 }
 
@@ -288,9 +380,72 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err err
 		esVersion:   s.esVersion,
 		clientMagic: s.cert.ClientMagic,
 	}
-	decrypted, err := query.decrypt(b, s.cert.ResolverSk)
+
+	// PQ resumed query: PQResumeMagic, ticket, nonce/2, encrypted.
+	if s.esVersion.IsPQ() && len(b) >= PQResumeMagicLen && bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:]) {
+		return s.decryptPQResumed(b)
+	}
+
+	var decrypted []byte
+	if s.esVersion.IsPQ() {
+		query.pqCertContext = s.cert.PqCertContext
+		var resolverSk [KeySize]byte
+		copy(resolverSk[:], s.cert.PqPrivateKey)
+		decrypted, err = query.decrypt(b, resolverSk)
+	} else {
+		decrypted, err = query.decrypt(b, s.cert.ResolverSk)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("decrypting query: %w", err)
+	}
+	msg = &dns.Msg{}
+	msg.Data = decrypted
+	err = msg.Unpack()
+	if err != nil {
+		return nil, nil, fmt.Errorf("unpacking dns message: %w", err)
+	}
+	return msg, query, nil
+}
+
+// decryptPQResumed handles a resumed PQ query: opens the ticket, derives the
+// per-query shared key, and decrypts the DNS payload.
+func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *encryptedQuery, err error) {
+	ticket, nonceHalf, payloadOff, err := parsePQResumedHeader(b)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing PQ resumed query: %w", err)
+	}
+
+	// Open the sealed ticket to recover the resume secret.
+	ticketPlain, err := pqOpenTicket(&s.ticketKey, &[24]byte{}, ticket)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opening PQ ticket: %w", err)
+	}
+	clientMagic, resumeSecret, expiry, err := decodeTicketPlaintext(ticketPlain)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decoding PQ ticket: %w", err)
+	}
+	if !time.Now().Before(expiry) {
+		return nil, nil, ErrPQTicketExpired
+	}
+	// Validate that the ticket was issued for this certificate.
+	if clientMagic != s.cert.ClientMagic {
+		return nil, nil, ErrPQInvalidTicket
+	}
+
+	// Derive the per-query shared key.
+	sharedKey := pqResumedSharedKey(resumeSecret, s.cert.ClientMagic, nonceHalf, ticket)
+
+	query = &encryptedQuery{
+		esVersion:   s.esVersion,
+		clientMagic: s.cert.ClientMagic,
+	}
+	copy(query.nonce[:NonceSize/2], nonceHalf)
+	query.pqTicket = ticket
+
+	encrypted := b[payloadOff:]
+	decrypted, err := query.decryptPQResumedPayload(encrypted, sharedKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decrypting resumed payload: %w", err)
 	}
 	msg = &dns.Msg{}
 	msg.Data = decrypted
@@ -329,7 +484,7 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 			Class: dns.ClassINET,
 		},
 		TXT: rdata.TXT{
-			Txt: []string{s.certTXT},
+			Txt: s.certTXT,
 		},
 	}
 	reply.Answer = append(reply.Answer, txt)

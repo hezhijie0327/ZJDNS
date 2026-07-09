@@ -69,6 +69,11 @@ func computeSharedKey(
 	case XSalsa20Poly1305:
 		box.Precompute(&sharedKey, publicKey, secretKey)
 		return sharedKey, nil
+	case XWingPQ:
+		// PQ uses separate KEM (X-Wing) — shared key is derived from
+		// decapsulation, not from X25519.  Callers must use pqDecapsulate
+		// and pqDeriveSharedKey instead.
+		return [SharedKeySize]byte{}, ErrESVersion
 	default:
 		return [SharedKeySize]byte{}, ErrESVersion
 	}

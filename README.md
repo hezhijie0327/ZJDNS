@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
-高性能递归 DNS 解析服务器，内置 SQLite 关系型缓存引擎、DNSSEC 密码学验证链、DNSCrypt/DoT/DoQ/DoH/DoH3 全协议支持。
+高性能递归 DNS 解析服务器，内置 SQLite 关系型缓存引擎、DNSSEC 密码学验证链、DNSCrypt/DoT/DoQ/DoH/DoH3 全协议支持，DNSCrypt 支持后量子密码学 (PQC) X-Wing 密钥交换。
 
 ## 快速开始
 
@@ -30,7 +30,7 @@ go build -o zjdns ./cmd/zjdns
 # 生成示例配置
 ./zjdns -generate-config
 
-# 生成 DNSCrypt 密钥及配置
+# 生成 DNSCrypt 密钥及配置（支持 PQC: -es-version xwingpq）
 ./zjdns -generate-dnscrypt-config -provider "2.dnscrypt-cert.example.com" [-addr <host:port>] [-es-version <ver>] [-cert-ttl <dur>]
 ```
 
@@ -104,7 +104,7 @@ dig @127.0.0.1 -p 53 example.com                        # 通过 DNSCrypt 客户
 - **并发查询去重**（singleflight）：同 key 的并发缓存 miss 合并为一次上游查询，leader 完成广播给所有 follower，消除缓存投毒竞争窗口
 - **CIDR 过滤**：基于标签的 IP 匹配，支持取反（`!tag`），IPv4 预转换为 `uint32` 位运算
 - **EDNS Padding**：随机填充字节（`crypto/rand`）替代确定性零填充，增强流量分析抵抗
-- **安全传输**：DNSCrypt v2（X25519 密钥交换 + XSalsa20/XChacha20-Poly1305 AEAD）、DoT (RFC 7858)、DoQ (RFC 9250)、DoH (RFC 8484)、DoH3，TLS 1.3 + KTLS 可选卸载
+- **安全传输**：DNSCrypt v2（X25519 密钥交换 + XSalsa20/XChacha20-Poly1305 AEAD，支持后量子密码学 X-Wing KEM）、DoT (RFC 7858)、DoQ (RFC 9250)、DoH (RFC 8484)、DoH3，TLS 1.3 + KTLS 可选卸载
 
 ### 可观测性
 
@@ -125,6 +125,7 @@ dig @127.0.0.1 -p 53 example.com                        # 通过 DNSCrypt 客户
     "dnscrypt": {
       "port": "8443",
       "provider_name": "2.dnscrypt-cert.example.com",
+      "es_version": "xwingpq",
       "cert_ttl": "30d"
     },
     "features": {
