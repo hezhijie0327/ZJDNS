@@ -8,8 +8,8 @@ import (
 
 func TestMatchIP(t *testing.T) {
 	filter, err := New([]config.CIDRConfig{
-		{Rules: []string{"192.168.0.0/16", "10.0.0.0/8"}, Tag: "internal"},
-		{Rules: []string{"2001:db8::/32"}, Tag: "ipv6"},
+		{IPs: []string{"192.168.0.0/16", "10.0.0.0/8"}, Tag: "internal"},
+		{IPs: []string{"2001:db8::/32"}, Tag: "ipv6"},
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -66,7 +66,7 @@ func TestMatchIP(t *testing.T) {
 
 func TestMatchIP_IPv4MappedIPv6(t *testing.T) {
 	filter, _ := New([]config.CIDRConfig{
-		{Rules: []string{"192.168.0.0/16"}, Tag: "test"},
+		{IPs: []string{"192.168.0.0/16"}, Tag: "test"},
 	})
 
 	// IPv4-mapped IPv6 should be treated as IPv4
@@ -79,7 +79,7 @@ func TestMatchIP_IPv4MappedIPv6(t *testing.T) {
 
 func TestMatchIP_CacheHit(t *testing.T) {
 	filter, _ := New([]config.CIDRConfig{
-		{Rules: []string{"10.0.0.0/8"}, Tag: "ten"},
+		{IPs: []string{"10.0.0.0/8"}, Tag: "ten"},
 	})
 
 	ip := net.ParseIP("10.0.0.1")
@@ -98,13 +98,13 @@ func TestNew_Errors(t *testing.T) {
 		configs []config.CIDRConfig
 		wantErr bool
 	}{
-		{"empty tag", []config.CIDRConfig{{Rules: []string{"10.0.0.0/8"}}}, true},
+		{"empty tag", []config.CIDRConfig{{IPs: []string{"10.0.0.0/8"}}}, true},
 		{"duplicate tag", []config.CIDRConfig{
-			{Rules: []string{"10.0.0.0/8"}, Tag: "dup"},
-			{Rules: []string{"192.168.0.0/16"}, Tag: "dup"},
+			{IPs: []string{"10.0.0.0/8"}, Tag: "dup"},
+			{IPs: []string{"192.168.0.0/16"}, Tag: "dup"},
 		}, true},
 		{"no valid entries", []config.CIDRConfig{
-			{Rules: []string{}, Tag: "empty", File: ""},
+			{IPs: []string{}, Tag: "empty", File: ""},
 		}, true},
 	}
 

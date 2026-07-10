@@ -40,11 +40,13 @@
         "ipv6": "auto",
         "prefer_ipv4": true
       },
+      "database": {
+        "db_path": "cache.db",
+        "mmap_size_mb": 16,
+        "cache_size_mb": 16
+      },
       "cache": {
         "max_entries": 10000,
-        "mmap_size_mb": 16,
-        "cache_size_mb": 16,
-        "db_path": "cache.db",
         "prefer_stale": true
       },
       "latency_probe": [
@@ -134,71 +136,78 @@
       "no_cache": true
     }
   ],
-  "zone": [
-    {
-      "name": "blocked.com",
-      "rcode": 3
-    },
-    {
-      "name": "static.example.com",
-      "answer": [
-        {
-          "type": 1,
-          "ttl": 300,
-          "content": "10.0.0.1"
-        },
-        {
-          "type": 28,
-          "ttl": 3600,
-          "content": "::1"
-        }
-      ]
-    },
-    {
-      "name": "*.cdn.example.com",
-      "match": ["corp-net", "!guest"],
-      "answer": [
-        {
-          "type": 1,
-          "ttl": 300,
-          "content": "10.0.0.1"
-        }
-      ]
-    },
-    {
-      "name": "example.com",
-      "answer": [
-        {
-          "type": 1,
-          "ttl": 300,
-          "content": "10.0.0.1"
-        }
-      ],
-      "authority": [
-        {
-          "type": 6,
-          "ttl": 3600,
-          "content": "ns1.example.com. admin.example.com. 1 3600 900 86400 3600"
-        }
-      ],
-      "additional": [
-        {
-          "name": "ns1.example.com",
-          "type": 1,
-          "ttl": 3600,
-          "content": "10.0.0.2"
-        }
-      ]
-    }
-  ],
+  "zone": {
+    "rules": [
+      {
+        "name": "blocked.com",
+        "rcode": 3
+      },
+      {
+        "name": "static.example.com",
+        "answer": [
+          {
+            "type": 1,
+            "ttl": 300,
+            "content": "10.0.0.1"
+          },
+          {
+            "type": 28,
+            "ttl": 3600,
+            "content": "::1"
+          }
+        ]
+      },
+      {
+        "name": "*.cdn.example.com",
+        "match": ["corp-net", "!guest"],
+        "answer": [
+          {
+            "type": 1,
+            "ttl": 300,
+            "content": "10.0.0.1"
+          }
+        ]
+      },
+      {
+        "name": "example.com",
+        "answer": [
+          {
+            "type": 1,
+            "ttl": 300,
+            "content": "10.0.0.1"
+          }
+        ],
+        "authority": [
+          {
+            "type": 6,
+            "ttl": 3600,
+            "content": "ns1.example.com. admin.example.com. 1 3600 900 86400 3600"
+          }
+        ],
+        "additional": [
+          {
+            "name": "ns1.example.com",
+            "type": 1,
+            "ttl": 3600,
+            "content": "10.0.0.2"
+          }
+        ]
+      }
+    ],
+    "bypass_tags": ["gateway"]
+  },
   "cidr": [
     {
-      "rules": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+      "ips": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
       "tag": "corp-net"
     },
     {
-      "rules": ["0.0.0.0/0"],
+      "ips": ["0.0.0.0/0"],
       "tag": "guest"
+    },
+    {
+      "ips": ["10.0.0.1/32"],
+      "tag": "gateway"
     }
   ]
 }

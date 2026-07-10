@@ -56,10 +56,11 @@ type dynamicEntry struct {
 
 // Evaluator manages zone rules backed by a SQLite database.
 type Evaluator struct {
-	db        *database.DB
-	loadedAt  atomic.Int64
-	ruleCount atomic.Int64
-	dynamics  map[string]*dynamicEntry // qname → dynamic content
+	db         *database.DB
+	loadedAt   atomic.Int64
+	ruleCount  atomic.Int64
+	dynamics   map[string]*dynamicEntry // qname → dynamic content
+	bypassTags map[string]struct{}      // tags that bypass all zone rules
 }
 
 // New creates an Evaluator backed by the given database.
@@ -79,6 +80,28 @@ func (e *Evaluator) Close() error {
 
 // HasRules reports whether any zone rules are currently loaded.
 func (e *Evaluator) HasRules() bool { return e.ruleCount.Load() > 0 }
+
+// SetBypassTags sets tags that cause zone evaluation to be skipped entirely.
+// Clients matching any of these tags will never match zone rules.
+func (e *Evaluator) SetBypassTags(tags []string) {
+	e.bypassTags = make(map[string]struct{}, len(tags))
+	for _, t := range tags {
+		e.bypassTags[t] = struct{}{}
+	}
+}
+
+// Bypass reports whether zone evaluation should be skipped for the given tags.
+func (e *Evaluator) Bypass(matchedTags map[string]bool) bool {
+	if len(e.bypassTags) == 0 || len(matchedTags) == 0 {
+		return false
+	}
+	for tag := range e.bypassTags {
+		if matchedTags[tag] {
+			return true
+		}
+	}
+	return false
+}
 
 // ---------------------------------------------------------------------------
 // LoadRules

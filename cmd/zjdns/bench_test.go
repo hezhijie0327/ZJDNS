@@ -243,14 +243,14 @@ func buildBenchServer(b *testing.B) *server.Server {
 				Cache:            config.CacheSettings{MaxEntries: config.DefaultMaxCacheEntries},
 			},
 		},
-		Zone: []config.ZoneRule{
+		Zone: config.ZoneConfig{Rules: []config.ZoneRule{
 			{
 				Name: "bench.local",
 				Answer: []config.ZoneRecord{
 					{Type: dns.TypeA, TTL: 10, Content: "192.0.2.1"},
 				},
 			},
-		},
+		}},
 	}
 
 	srv, err := server.New(cfg)

@@ -17,7 +17,7 @@ type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
 	Upstream []UpstreamServer `json:"upstream"`
 	Fallback []UpstreamServer `json:"fallback,omitempty"`
-	Zone     []ZoneRule       `json:"zone"`
+	Zone     ZoneConfig       `json:"zone"`
 	CIDR     []CIDRConfig     `json:"cidr"`
 }
 
@@ -121,6 +121,12 @@ type UpstreamServer struct {
 	PublicKey     string   `json:"public_key,omitempty"` // DNSCrypt resolver public key (hex); provider name uses server_name
 }
 
+// ZoneConfig wraps zone rules and global zone settings.
+type ZoneConfig struct {
+	Rules      []ZoneRule `json:"rules"`
+	BypassTags []string   `json:"bypass_tags,omitempty"` // tags that skip all zone rules
+}
+
 // ZoneRule defines a DNS zone rule for constructing synthetic responses.
 // Matches on (QNAME, QTYPE, QCLASS) and returns ANSWER + AUTHORITY +
 // ADDITIONAL + RCODE.  Client filtering uses CIDR match tags.
@@ -154,9 +160,9 @@ type ZoneRecord struct {
 // CIDRConfig defines a CIDR rule set loaded from a file or inline rules,
 // associated with a tag.
 type CIDRConfig struct {
-	File  string   `json:"file,omitempty"`
-	Rules []string `json:"rules,omitempty"`
-	Tag   string   `json:"tag"`
+	File string   `json:"file,omitempty"`
+	IPs  []string `json:"ips,omitempty"`
+	Tag  string   `json:"tag"`
 }
 
 // LatencyProbeStep defines a single latency probe step with protocol, port,
@@ -270,7 +276,7 @@ func addDDRRecords(cfg *ServerConfig) {
 		zoneDirectRecords = append(zoneDirectRecords, ZoneRecord{Type: dns.TypeAAAA, Content: ddr.IPv6})
 	}
 	if len(zoneDirectRecords) > 0 {
-		cfg.Zone = append(cfg.Zone, ZoneRule{Name: domain, Answer: zoneDirectRecords})
+		cfg.Zone.Rules = append(cfg.Zone.Rules, ZoneRule{Name: domain, Answer: zoneDirectRecords})
 	}
 
 	ddrNames := []string{"_dns.resolver.arpa", "_dns." + domain}
@@ -297,7 +303,7 @@ func addDDRRecords(cfg *ServerConfig) {
 	}
 
 	for _, name := range ddrNames {
-		cfg.Zone = append(cfg.Zone, ZoneRule{Name: name, Answer: zoneServiceRecords, Additional: zoneAdditional})
+		cfg.Zone.Rules = append(cfg.Zone.Rules, ZoneRule{Name: name, Answer: zoneServiceRecords, Additional: zoneAdditional})
 	}
 
 	log.Infof("CONFIG: DDR enabled for domain %s (IPv4: %s, IPv6: %s)",
@@ -320,7 +326,7 @@ func addChaosRecord(cfg *ServerConfig) {
 		"version.bind":   version,
 	}
 	for name, value := range chaosRecords {
-		cfg.Zone = append(cfg.Zone, ZoneRule{
+		cfg.Zone.Rules = append(cfg.Zone.Rules, ZoneRule{
 			Name: name,
 			Answer: []ZoneRecord{{
 				Type:    dns.TypeTXT,
@@ -337,7 +343,7 @@ func addChaosRecord(cfg *ServerConfig) {
 		DefaultProjectName + ".db.clear.stats",
 		DefaultProjectName + ".db.clear.latency",
 	} {
-		cfg.Zone = append(cfg.Zone, ZoneRule{
+		cfg.Zone.Rules = append(cfg.Zone.Rules, ZoneRule{
 			Name:   name,
 			Answer: []ZoneRecord{{Type: dns.TypeTXT, Class: dns.ClassCHAOS, TTL: 0, Content: ""}},
 		})
@@ -399,7 +405,9 @@ func GenerateExampleConfig() string {
 		{Address: "149.112.112.9:53", Protocol: ProtoUDP, NoCache: true},
 	}
 
-	cfg.Zone = []ZoneRule{
+	cfg.Zone.BypassTags = []string{"gateway"}
+
+	cfg.Zone.Rules = []ZoneRule{
 		{Name: "blocked.com", Rcode: dns.RcodeNameError},
 		{Name: "static.example.com", Answer: []ZoneRecord{
 			{Type: dns.TypeA, TTL: 300, Content: "10.0.0.1"},
@@ -418,8 +426,9 @@ func GenerateExampleConfig() string {
 	}
 
 	cfg.CIDR = []CIDRConfig{
-		{Rules: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}, Tag: "corp-net"},
-		{Rules: []string{"0.0.0.0/0"}, Tag: "guest"},
+		{IPs: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}, Tag: "corp-net"},
+		{IPs: []string{"0.0.0.0/0"}, Tag: "guest"},
+		{IPs: []string{"10.0.0.1/32"}, Tag: "gateway"},
 	}
 
 	data, _ := json.MarshalIndent(cfg, "", "  ")

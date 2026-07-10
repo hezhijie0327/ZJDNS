@@ -93,12 +93,12 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	// Wire up DynamicContent for zone rules.
-	for i := range cfg.Zone {
-		switch cfg.Zone[i].Name {
+	for i := range cfg.Zone.Rules {
+		switch cfg.Zone.Rules[i].Name {
 		case config.DefaultProjectName + ".stats":
-			cfg.Zone[i].DynamicContent = cacheStore.Stats
+			cfg.Zone.Rules[i].DynamicContent = cacheStore.Stats
 		case config.DefaultProjectName + ".db.clear":
-			cfg.Zone[i].DynamicContent = func() []string {
+			cfg.Zone.Rules[i].DynamicContent = func() []string {
 				n, err := cacheStore.Clear()
 				if err != nil {
 					return []string{fmt.Sprintf("error=%v", err)}
@@ -106,7 +106,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
 		case config.DefaultProjectName + ".db.clear.cache":
-			cfg.Zone[i].DynamicContent = func() []string {
+			cfg.Zone.Rules[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("cache")
 				if err != nil {
 					return []string{fmt.Sprintf("error=%v", err)}
@@ -114,7 +114,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
 		case config.DefaultProjectName + ".db.clear.stats":
-			cfg.Zone[i].DynamicContent = func() []string {
+			cfg.Zone.Rules[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("stats")
 				if err != nil {
 					return []string{fmt.Sprintf("error=%v", err)}
@@ -122,7 +122,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				return []string{fmt.Sprintf("reset=%d", n)}
 			}
 		case config.DefaultProjectName + ".db.clear.latency":
-			cfg.Zone[i].DynamicContent = func() []string {
+			cfg.Zone.Rules[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("latency")
 				if err != nil {
 					return []string{fmt.Sprintf("error=%v", err)}
@@ -132,8 +132,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}
 
-	if len(cfg.Zone) > 0 {
-		if err := zoneEvaluator.LoadRules(cfg.Zone); err != nil {
+	if len(cfg.Zone.Rules) > 0 {
+		if err := zoneEvaluator.LoadRules(cfg.Zone.Rules); err != nil {
 			cancel(fmt.Errorf("load zone rules: %w", err))
 			return nil, fmt.Errorf("load zone rules: %w", err)
 		}

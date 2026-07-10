@@ -135,12 +135,12 @@ func New(configs []config.CIDRConfig) (*Filter, error) {
 
 		var sourceInfo string
 		switch {
-		case cfg.File != "" && len(cfg.Rules) > 0:
-			sourceInfo = fmt.Sprintf("%s + %d inline rules", cfg.File, len(cfg.Rules))
+		case cfg.File != "" && len(cfg.IPs) > 0:
+			sourceInfo = fmt.Sprintf("%s + %d inline rules", cfg.File, len(cfg.IPs))
 		case cfg.File != "":
 			sourceInfo = cfg.File
 		default:
-			sourceInfo = fmt.Sprintf("%d inline rules", len(cfg.Rules))
+			sourceInfo = fmt.Sprintf("%d inline rules", len(cfg.IPs))
 		}
 		log.Infof("CIDR: Loaded tag=%s, source=%s, total=%d", cfg.Tag, sourceInfo, len(rule.nets))
 	}
@@ -152,7 +152,7 @@ func (f *Filter) loadConfig(cfg config.CIDRConfig) (*rule, error) {
 	rule := &rule{tag: cfg.Tag, nets: make([]*net.IPNet, 0)}
 	validCount := 0
 
-	for i, cidr := range cfg.Rules {
+	for i, cidr := range cfg.IPs {
 		cidr = strings.TrimSpace(cidr)
 		if cidr == "" || strings.HasPrefix(cidr, cidrCommentPrefix) {
 			continue
@@ -203,6 +203,22 @@ func (f *Filter) loadConfig(cfg config.CIDRConfig) (*rule, error) {
 
 	rule.preprocessNetworks()
 	return rule, nil
+}
+
+// MatchTags returns all tags whose CIDR ranges contain the given IP.
+func (f *Filter) MatchTags(ip net.IP) map[string]bool {
+	if f == nil {
+		return nil
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	tags := make(map[string]bool, len(f.rules))
+	for tag, rule := range f.rules {
+		if rule.contains(ip) {
+			tags[tag] = true
+		}
+	}
+	return tags
 }
 
 // MatchIP checks if an IP matches the CIDR rule identified by matchTag.

@@ -45,6 +45,7 @@ type Handler struct {
 	}
 	edns               *edns.Handler
 	zoneEvaluator      *zone.Evaluator
+	tagMatcher         func(ip net.IP) map[string]bool // CIDR tag lookup for zone bypass
 	resolver           *resolver.Resolver
 	prober             LatencyProber
 	prefetchCooldown   map[string]int64
@@ -110,6 +111,9 @@ func (h *Handler) SetResolver(r *resolver.Resolver) { h.resolver = r }
 
 // SetProber sets the latency prober after construction.
 func (h *Handler) SetProber(p LatencyProber) { h.prober = p }
+
+// SetTagMatcher sets the CIDR tag matching function for zone bypass checks.
+func (h *Handler) SetTagMatcher(fn func(ip net.IP) map[string]bool) { h.tagMatcher = fn }
 
 // Prober returns the latency prober (for lifecycle cleanup).
 func (h *Handler) Prober() LatencyProber { return h.prober }
@@ -390,7 +394,15 @@ func (h *Handler) processZone(req *dns.Msg, question *Question, clientIP net.IP,
 		return nil, false
 	}
 	log.Debugf("ZONE: evaluating rules for %s qtype=%s client=%s", question.Name, dns.TypeToString[question.Qtype], clientIP)
-	zoneResult := h.zoneEvaluator.Evaluate(question.Name, question.Qtype, question.Qclass, nil)
+
+	var matchedTags map[string]bool
+	if h.tagMatcher != nil {
+		matchedTags = h.tagMatcher(clientIP)
+	}
+	if h.zoneEvaluator.Bypass(matchedTags) {
+		return nil, false
+	}
+	zoneResult := h.zoneEvaluator.Evaluate(question.Name, question.Qtype, question.Qclass, matchedTags)
 	if !zoneResult.Matched {
 		return nil, false
 	}

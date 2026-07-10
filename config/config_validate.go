@@ -106,8 +106,8 @@ func validateCIDRConfigs(cfg *ServerConfig) (map[string]bool, error) {
 		}
 		cidrTags[cidrConfig.Tag] = true
 
-		if cidrConfig.File == "" && len(cidrConfig.Rules) == 0 {
-			return nil, fmt.Errorf("CIDR config %d: either 'file' or 'rules' must be specified", i)
+		if cidrConfig.File == "" && len(cidrConfig.IPs) == 0 {
+			return nil, fmt.Errorf("CIDR config %d: either 'file' or 'ips' must be specified", i)
 		}
 		if cidrConfig.File != "" && !zdnsutil.IsValidFilePath(cidrConfig.File) {
 			return nil, fmt.Errorf("CIDR config %d: file not found: %s", i, cidrConfig.File)
