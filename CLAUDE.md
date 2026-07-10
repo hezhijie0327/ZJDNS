@@ -196,34 +196,66 @@ ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
 
 ```
 zjdns/
-├── cmd/zjdns/                     ← main.go, banner.go, version.go, bench_test.go (binary)
-├── config/                        ← ECSConfig, ECSOption, defaults, validation
-├── edns/                          ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── cache/                         ← Store interface, SQLite relational cache (entries + request_log + stats_meta + ip_latency + ptr_map tables)
-├── cidr/                          ← IP filtering with tag matching
-├── rewrite/                       ← Query rewrite rules
+├── cmd/zjdns/
+│   ├── main.go, banner.go, version.go, bench_test.go   ← binary entry point
+│   └── cli/                                  ← Flag parsing, config generation, DB analysis
+├── config/                                    ← ECSConfig, ECSOption, defaults, validation
+├── edns/                                      ← Handler, Cookie, EDE, padding (ECSOption alias → config)
+├── cache/                                     ← Store interface, SQLite relational cache
+│   ├── sqlite.go                              ←   SQLiteCache struct, NewSQLiteCache, Close
+│   ├── sqlite_schema.go                       ←   migrate, ensureEntry, schema consts
+│   ├── sqlite_store.go                        ←   Get, Set, eviction, latency-driven sorting
+│   ├── sqlite_stats.go                        ←   RecordRequest, Stats, FlushDB, ReverseLookup
+│   ├── sqlite_stmts.go                        ←   prepared statement compilation
+│   ├── sqlite_wire.go                         ←   zstd compress/decompress, init
+│   └── sqlite_helpers.go                      ←   insertPtrMap, TTL helpers, ecsParams, boolToInt
+├── cidr/                                      ← IP filtering with tag matching
+├── rewrite/                                   ← Query rewrite rules
 ├── internal/
-│   ├── cli/                       ← Flag parsing (example config moved to config.GenerateExampleConfig)
-│   ├── log/                       ← Structured logging + IsDebug guard (zero internal deps)
-│   ├── pool/                      ← sync.Pool allocators + QUIC error codes
-│   ├── ttl/                       ← Stateless TTL functions (cache + rewrite)
-│   ├── dnsutil/                   ← DNS utilities: validation, PTR, panic recovery
-│   ├── ipdetect/                  ← Public IP auto-detection
-│   └── latency/                   ← Unified probe engine (generic sorter)
+│   ├── log/                                   ← Structured logging + IsDebug guard (zero internal deps)
+│   ├── pool/                                  ← sync.Pool allocators + QUIC error codes
+│   ├── ttl/                                   ← Stateless TTL functions (cache + rewrite)
+│   ├── dnsutil/                               ← DNS utilities: validation, PTR, panic recovery
+│   ├── ipdetect/                              ← Public IP auto-detection
+│   ├── latency/                               ← Unified probe engine (generic sorter)
+│   └── pending/                               ← Generic singleflight dedup group
 └── server/
-    ├── server.go                  ← Lifecycle, wiring, listeners
-    ├── listen.go                  ← Protocol bridge (UDP/TCP dispatch → io.Copy)
-    ├── server_tasks.go            ← Background tasks, shutdown
-    ├── handler/                   ← Query pipeline (handler + handler_cache + message + pending)
-    ├── client/                    ← Outbound transports (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5/DNSCrypt)
-    ├── client/pool/               ← RFC 7766 pipelined TCP + QUIC connection pools
-    ├── resolver/                  ← Upstream + recursive + qname_minimise (RFC 9156)
-    │                              ←   recursive.go (core loop) + recursive_helpers.go (7 helpers)
-    │                              ←   dnssec_chain.go + nameserver.go + upstream.go + resolver.go
-    ├── security/                  ← DNSSEC validation (crypto + nsec) + hijack detection
-    ├── tls/                       ← TLS listeners (DoT, DoQ, DoH, DoH3)
-    ├── dnscrypt/                  ← DNSCrypt v2 server + client: XWingPQ (default) / XChacha20-Poly1305, cert TXT handshake, PQ ticket resumption, sdns:// stamp parsing
-    └── probe/                     ← A/AAAA latency probing and record reordering
+    ├── server.go                              ← Lifecycle, wiring, listeners
+    ├── listen.go                              ← Protocol bridge (UDP/TCP dispatch → io.Copy)
+    ├── server_tasks.go                        ← Background tasks, shutdown
+    ├── handler/                               ← Query pipeline (handler + handler_cache + message + pending)
+    ├── client/
+    │   ├── client.go                          ←   Client struct, New, ExecuteQuery, Close
+    │   ├── client_warmup.go                   ←   WarmUpConnections, QUIC/proxy config caching
+    │   ├── dnscrypt.go, tcp.go, dot.go        ←   Protocol-specific exchanges
+    │   ├── doq.go, doh.go, doh3.go            ←   QUIC/HTTP-based protocols
+    │   ├── ktls.go, socks5.go, socks5_*.go    ←   KTLS offload, SOCKS5 proxy
+    │   └── pool/                              ←   RFC 7766 pipelined TCP + QUIC connection pools
+    ├── resolver/
+    │   ├── resolver.go, upstream.go           ←   Resolution entry points
+    │   ├── recursive.go                       ←   Core recursive walk (RFC 9156 QNAME minimisation)
+    │   ├── recursive_helpers.go               ←   7 recursive helper functions
+    │   ├── recursive_cache.go                 ←   Recursive DNS cache population
+    │   ├── dnssec_chain.go                    ←   DNSSEC trust chain state machine
+    │   ├── dnssec_chain_cut.go                ←   Zone cut detection and resolution
+    │   ├── nameserver.go                      ←   NS address resolution and sorting
+    │   └── qname_minimise.go                  ←   QNAME minimisation (RFC 9156)
+    ├── security/
+    │   ├── security.go                        ←   Guard: bundles CryptoValidator + Detector
+    │   ├── dnssec_crypto.go                   ←   CryptoValidator, RRSIG/DS/DNSKEY verification
+    │   ├── dnssec_extract.go                  ←   Record extraction, canonical ordering, key caching
+    │   ├── dnssec_nsec.go                     ←   NSEC/NSEC3 denial-of-existence validation
+    │   └── hijack.go                          ←   DNS hijack detection
+    ├── tls/                                   ← TLS listeners (DoT, DoQ, DoH, DoH3)
+    ├── dnscrypt/
+    │   ├── server.go                          ←   Server lifecycle, certificate TXT, handshake
+    │   ├── server_crypto.go                   ←   encrypt/decrypt/encryptPQ/decryptPQResumed
+    │   ├── certificate.go                     ←   Certificate wire format and signing
+    │   ├── proto.go                           ←   Protocol constants, CryptoConstruction enum
+    │   ├── pq.go, encryption.go               ←   PQ KEM helpers, ISO 7816-4 padding
+    │   ├── generate.go                        ←   Key generation, sdns:// stamp, config output
+    │   └── ...
+    └── probe/                                 ← A/AAAA latency probing and record reordering
 ```
 
 ### Import Rules (strict layering, no cycles)
@@ -257,7 +289,7 @@ Layer 4 (server sub-packages — import domain + internal, never server/ parent)
 
 Top layer (wiring):
   server → all domain + all server sub-packages
-  cmd/zjdns → internal/cli, config, log, server
+  cmd/zjdns → cmd/zjdns/cli, config, log, server
 ```
 
 **Key rules:**
@@ -375,7 +407,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns). Similarly, `handler.Question` is a type alias of `resolver.Question` to avoid duplicate struct definitions.
 - **request_log ring buffer**: Append-only request journal replaces the old `hit_counters` table. `RecordRequest()` does a single INSERT — no conflict detection, no read-before-write. Stats are aggregated via SQL over rows with `id > cleared_before`; FlushDB("stats") resets the threshold without touching log rows.
 - **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtInsertLog`, `stmtInsertLatency`, `stmtGetLastProbe`) at initialization time to avoid per-call SQL compilation overhead.
-- **Example config in config package**: `GenerateExampleConfig()` lives in `config` package (not `internal/cli`) to keep `internal/` layer free of domain imports.
+- **CLI package in cmd/zjdns/cli**: `ParseFlags()` and `RunAnalyze()` moved from `internal/cli` to `cmd/zjdns/cli` so the CLI package can freely import `config` as a wiring-layer package.
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
 - **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
 - **eTLS alias**: Always use `eTLS` (not `cryptotls`) for `gitlab.com/go-extension/tls`. Used in `server/tls`, `server/client`, `config`.
