@@ -179,7 +179,7 @@ func (c *Conn) readLoop() {
 			return
 		}
 		msgLen := binary.BigEndian.Uint16(lengthBuf)
-		if msgLen == 0 {
+		if msgLen == 0 || int(msgLen) > bufpool.SecureBufferSize-zdnsutil.DNSFramePrefixLen {
 			log.Debugf("TCPPOOL: invalid message length %d from %s", msgLen, c.addr)
 			return
 		}
@@ -361,14 +361,19 @@ func (p *Pool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc fu
 
 // replaceDead replaces a dead connection in the pool with a new one. Returns
 // true if a replacement was made. Must be called with p.mu held.
+// NOTE: drops p.mu during c.close() to avoid ABBA deadlock with Conn.mu.
 func (p *Pool) replaceDead(key string, newConn *Conn) bool {
 	for i, c := range p.conns[key] {
-		if c.IsDead() {
-			c.close()
-			p.conns[key][i] = newConn
-			log.Debugf("TCPPOOL: replaced dead connection in pool for %s", key)
-			return true
+		if !c.IsDead() {
+			continue
 		}
+		old := c
+		p.conns[key][i] = newConn
+		p.mu.Unlock()
+		old.close()
+		p.mu.Lock()
+		log.Debugf("TCPPOOL: replaced dead connection in pool for %s", key)
+		return true
 	}
 	return false
 }

@@ -75,9 +75,11 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 	// Follower: wait for leader to finish.  Safety timeout prevents
 	// indefinite blocking if the leader panics and Done is never called.
 	log.Debugf("CACHE: pending-request dedup — waiting for in-flight query of %s (type=%s)", qname, dns.TypeToString[qtype])
+	timer := time.NewTimer(60 * time.Second)
 	select {
 	case <-call.done:
-	case <-time.After(60 * time.Second):
+		timer.Stop()
+	case <-timer.C:
 		log.Warnf("CACHE: pending-request follower timeout for %s", qname)
 		return &resolver.QueryResult{Err: errors.New("pending request timeout")}, true
 	}

@@ -284,12 +284,11 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	s.db.AddEntryCount(1)
 
-	// Release writeMu BEFORE eviction — eviction is a separate transaction
-	// that only deletes old rows and does not conflict with concurrent
-	// inserts. Holding writeMu across eviction serializes all cache writes
-	// behind potentially slow DELETE + CASCADE operations.
-	s.db.WriteUnlock()
+	// Run eviction inside writeMu to prevent TOCTOU: concurrent inserts
+	// between WriteUnlock and evictIfNeeded could push count past maxEntries.
 	s.evictIfNeeded()
+
+	s.db.WriteUnlock()
 }
 
 // ── Eviction ─────────────────────────────────────────────────────────────────
