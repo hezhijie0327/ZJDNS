@@ -1,10 +1,30 @@
 package security
 
 import (
+	"zjdns/cache"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 )
+
+// Guard aggregates DNSSEC crypto validation and hijack detection into a single
+// configuration unit.
+type Guard struct {
+	Crypto   *CryptoValidator // Full cryptographic DNSSEC validation
+	Detector *Detector        // Hijack detection
+}
+
+// New creates a new Guard. DNSSEC cryptographic validation is always enabled;
+// the CryptoValidator always loads IANA root trust anchors and performs
+// chain-of-trust verification.
+func New(c cache.Store, hijackEnabled bool) *Guard {
+	g := &Guard{
+		Crypto:   NewCryptoValidator(c),
+		Detector: &Detector{},
+	}
+	g.Detector.Enable(hijackEnabled)
+	return g
+}
 
 // IsResponseValid checks whether a DNS response appears DNSSEC-validated.
 // It trusts the AuthenticatedData (AD) flag ONLY when accompanied by DNSSEC

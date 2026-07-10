@@ -242,31 +242,19 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if len(nextNS) == 0 {
 			for _, ns := range bestNSRecords {
 				for _, rrec := range response.Extra {
-					switch a := rrec.(type) {
-					case *dns.A:
-						if strings.EqualFold(a.Header().Name, ns.Ns) {
-							// Validate glue name is within the parent zone
-							glueName := zdnsutil.NormalizeDomain(a.Header().Name)
-							parDom := zdnsutil.NormalizeDomain(parentDomain)
-							if glueName != parDom && !strings.HasSuffix(glueName, "."+parDom) && parDom != "" {
-								continue
-							}
-							nsKey := dnsutil.Fqdn(a.Header().Name)
-							nsGlue[nsKey] = append(nsGlue[nsKey], a)
-							nextNS = append(nextNS, net.JoinHostPort(a.A.String(), config.DefaultDNSPort))
-						}
-					case *dns.AAAA:
-						if strings.EqualFold(a.Header().Name, ns.Ns) {
-							glueName := zdnsutil.NormalizeDomain(a.Header().Name)
-							parDom := zdnsutil.NormalizeDomain(parentDomain)
-							if glueName != parDom && !strings.HasSuffix(glueName, "."+parDom) && parDom != "" {
-								continue
-							}
-							nsKey := dnsutil.Fqdn(a.Header().Name)
-							nsGlue[nsKey] = append(nsGlue[nsKey], a)
-							nextNS = append(nextNS, net.JoinHostPort(a.AAAA.String(), config.DefaultDNSPort))
-						}
+					ip, ok := extractGlueIP(rrec, ns.Ns)
+					if !ok {
+						continue
 					}
+					// Validate glue name is within the parent zone.
+					rrecName := zdnsutil.NormalizeDomain(rrec.Header().Name)
+					parDom := zdnsutil.NormalizeDomain(parentDomain)
+					if rrecName != parDom && !strings.HasSuffix(rrecName, "."+parDom) && parDom != "" {
+						continue
+					}
+					nsKey := dnsutil.Fqdn(rrec.Header().Name)
+					nsGlue[nsKey] = append(nsGlue[nsKey], rrec)
+					nextNS = append(nextNS, net.JoinHostPort(ip, config.DefaultDNSPort))
 				}
 			}
 		}

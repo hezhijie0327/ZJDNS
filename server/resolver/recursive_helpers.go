@@ -189,3 +189,19 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 		Validated: *validated, ECS: ecsResponse, Server: config.RecursiveIndicator,
 	}
 }
+
+// extractGlueIP extracts an IP address string from a glue record (A or AAAA)
+// when the record name matches the given NS name. Returns ("", false) on mismatch.
+func extractGlueIP(rr dns.RR, nsName string) (string, bool) {
+	if !strings.EqualFold(rr.Header().Name, nsName) {
+		return "", false
+	}
+	switch a := rr.(type) {
+	case *dns.A:
+		return a.A.String(), true
+	case *dns.AAAA:
+		return a.AAAA.String(), true
+	default:
+		return "", false
+	}
+}

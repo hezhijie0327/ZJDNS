@@ -247,43 +247,13 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			go func() {
 				defer zdnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
-				aQuestion := Question{Name: nsName, Qtype: dns.TypeA, Qclass: dns.ClassINET}
-				qr := r.resolve(queryCtx, aQuestion, nil, depth+1, forceTCP)
-				if qr.Err != nil {
-					return
-				}
-				addrMu.Lock()
-				ansARecords = qr.Answer
-				for _, rrec := range qr.Answer {
-					if a, ok := rrec.(*dns.A); ok {
-						nsAddrs = append(nsAddrs, zdnsutil.JoinDNSPort(a.A.String()))
-					}
-				}
-				// Also collect AAAA glue from the Additional section
-				for _, rrec := range qr.Additional {
-					if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsName) {
-						nsAddrs = append(nsAddrs, zdnsutil.JoinDNSPort(aaaa.AAAA.String()))
-					}
-				}
-				addrMu.Unlock()
+				ansARecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &nsAddrs, &addrMu)
 			}()
 
 			go func() {
 				defer zdnsutil.HandlePanic("Resolve NS AAAA")
 				defer wg.Done()
-				aaaaQuestion := Question{Name: nsName, Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
-				qr := r.resolve(queryCtx, aaaaQuestion, nil, depth+1, forceTCP)
-				if qr.Err != nil {
-					return
-				}
-				addrMu.Lock()
-				ansAAAARecords = qr.Answer
-				for _, rrec := range qr.Answer {
-					if aaaa, ok := rrec.(*dns.AAAA); ok {
-						nsAddrs = append(nsAddrs, zdnsutil.JoinDNSPort(aaaa.AAAA.String()))
-					}
-				}
-				addrMu.Unlock()
+				ansAAAARecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeAAAA, depth+1, forceTCP, &nsAddrs, &addrMu)
 			}()
 
 			wg.Wait()
@@ -414,4 +384,40 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	case <-ctx.Done():
 		pool.DefaultMessagePool.Put(retryResult.Response)
 	}
+}
+
+// resolveNSAddrType resolves a single NS address type (A or AAAA) and appends
+// resolved addresses to nsAddrs under addrMu. For A queries, AAAA glue from
+// the Additional section is also collected. Returns the answer records for
+// subsequent caching.
+func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype uint16, depth int, forceTCP bool, nsAddrs *[]string, addrMu *sync.Mutex) (answer []dns.RR, addrs []string) {
+	qr := r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP)
+	if qr.Err != nil {
+		return answer, addrs
+	}
+	addrMu.Lock()
+	defer addrMu.Unlock()
+	for _, rrec := range qr.Answer {
+		switch a := rrec.(type) {
+		case *dns.A:
+			if qtype == dns.TypeA {
+				*nsAddrs = append(*nsAddrs, zdnsutil.JoinDNSPort(a.A.String()))
+				addrs = append(addrs, a.A.String())
+			}
+		case *dns.AAAA:
+			if qtype == dns.TypeAAAA {
+				*nsAddrs = append(*nsAddrs, zdnsutil.JoinDNSPort(a.AAAA.String()))
+				addrs = append(addrs, a.AAAA.String())
+			}
+		}
+	}
+	// For A queries, also collect AAAA glue from Additional.
+	if qtype == dns.TypeA {
+		for _, rrec := range qr.Additional {
+			if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsName) {
+				*nsAddrs = append(*nsAddrs, zdnsutil.JoinDNSPort(aaaa.AAAA.String()))
+			}
+		}
+	}
+	return qr.Answer, addrs
 }

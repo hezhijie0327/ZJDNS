@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"codeberg.org/miekg/dns"
+	"github.com/quic-go/quic-go"
 )
 
 // UDPBufferSize is the EDNS0 UDP payload size for standard upstream queries per
@@ -100,3 +101,15 @@ func (b *BufferPool) Put(buf []byte) {
 		b.pool.Put(&buf)
 	}
 }
+
+// QUIC application error codes shared across client and server packages.
+const (
+	// QUICCodeNoError is for normal connection closure.
+	QUICCodeNoError quic.ApplicationErrorCode = 0
+
+	// QUICCodeInternalError is for internal errors.
+	QUICCodeInternalError quic.ApplicationErrorCode = 1
+
+	// QUICCodeProtocolError is for protocol violations.
+	QUICCodeProtocolError quic.ApplicationErrorCode = 2
+)
