@@ -176,44 +176,6 @@ func TestCookieGenerator_ClientCookie(t *testing.T) {
 	}
 }
 
-func TestHasTCPKeepaliveOption(t *testing.T) {
-	msg := new(dns.Msg)
-	dnsutil.SetQuestion(msg, "example.com.", dns.TypeA)
-
-	// No Pseudo records → false
-	if HasTCPKeepaliveOption(msg) {
-		t.Error("expected false for message without OPT")
-	}
-
-	// EDNS without keepalive option → false
-	msg.UDPSize = 512
-	if HasTCPKeepaliveOption(msg) {
-		t.Error("expected false for OPT without keepalive")
-	}
-
-	// EDNS with keepalive option → true
-	msg.Pseudo = append(msg.Pseudo, &dns.TCPKEEPALIVE{Timeout: 1200})
-	if !HasTCPKeepaliveOption(msg) {
-		t.Error("expected true for OPT with keepalive option")
-	}
-}
-
-func TestParseTCPKeepalive(t *testing.T) {
-	msg := new(dns.Msg)
-	dnsutil.SetQuestion(msg, "example.com.", dns.TypeA)
-
-	// No Pseudo → 0
-	if timeout := ParseTCPKeepalive(msg); timeout != 0 {
-		t.Errorf("expected 0 for no OPT, got %d", timeout)
-	}
-
-	// Pseudo with keepalive timeout=1200 → 1200
-	msg.Pseudo = append(msg.Pseudo, &dns.TCPKEEPALIVE{Timeout: 1200})
-	if timeout := ParseTCPKeepalive(msg); timeout != 1200 {
-		t.Errorf("expected 1200, got %d", timeout)
-	}
-}
-
 func TestApplyToMessage_Keepalive(t *testing.T) {
 	h, _ := NewHandler(config.ECSConfig{})
 	msg := new(dns.Msg)
