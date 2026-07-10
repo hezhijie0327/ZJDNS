@@ -130,7 +130,11 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}
 
-	zoneEvaluator := zone.New()
+	zoneEvaluator, err := zone.New()
+	if err != nil {
+		cancel(fmt.Errorf("zone init: %w", err))
+		return nil, fmt.Errorf("zone init: %w", err)
+	}
 	if len(cfg.Zone) > 0 {
 		if err := zoneEvaluator.LoadRules(cfg.Zone); err != nil {
 			cancel(fmt.Errorf("load zone rules: %w", err))

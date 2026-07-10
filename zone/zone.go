@@ -1,6 +1,7 @@
-// Package zone provides DNS zone-file-style query matching and synthetic
-// response construction.  Each zone rule is keyed by (QNAME, QTYPE, QCLASS)
-// and can return ANSWER + AUTHORITY + ADDITIONAL + RCODE.
+// Package zone provides DNS zone-file-style query matching backed by SQLite.
+// Rules are loaded into an in-memory SQLite database at startup and queried
+// via B-tree indexed prepared statements — O(log n) per lookup with near-zero
+// Go heap footprint regardless of rule count.
 package zone
 
 import (
@@ -12,39 +13,54 @@ import (
 	"strings"
 	"sync/atomic"
 	"zjdns/config"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
+	"github.com/klauspost/compress/zstd"
+	sql "github.com/ncruces/go-sqlite3"
 )
 
 // wildcardPrefix marks a domain as a wildcard rule.
 const wildcardPrefix = "*."
 
-// key is the composite lookup key: (qname, qtype, qclass).
-type key struct {
-	qname  string
-	qtype  uint16
-	qclass uint16
-}
+// ---------------------------------------------------------------------------
+// SQL schema & prepared statements
+// ---------------------------------------------------------------------------
+
+const zoneSchema = `
+CREATE TABLE zone_entries (
+	qname      TEXT NOT NULL,
+	qtype      INTEGER NOT NULL DEFAULT 0,
+	qclass     INTEGER NOT NULL DEFAULT 0,
+	rcode      INTEGER NOT NULL DEFAULT 0,
+	answer     BLOB,
+	authority  BLOB,
+	additional BLOB,
+	match_tags TEXT NOT NULL DEFAULT '',
+	is_wildcard INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (qname, qtype, qclass)
+);
+CREATE INDEX IF NOT EXISTS idx_zone_qname ON zone_entries(qname);
+`
+
+const (
+	sqlExact  = `SELECT rcode, answer, authority, additional, match_tags FROM zone_entries WHERE qname = ?1 AND qtype = ?2 AND qclass = ?3 AND is_wildcard = 0`
+	sqlWild   = `SELECT rcode, answer, authority, additional, match_tags FROM zone_entries WHERE qname = ?1 AND qtype = ?2 AND qclass = ?3 AND is_wildcard = 1`
+	sqlInsert = `INSERT OR REPLACE INTO zone_entries (qname, qtype, qclass, rcode, answer, authority, additional, match_tags, is_wildcard) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`
+)
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 // matchTag is a parsed CIDR tag condition.
 type matchTag struct {
 	tag    string // bare tag name (without !)
 	negate bool   // true if !tag
-}
-
-// entry is a pre-built zone response for one (qname, qtype, qclass) key.
-type entry struct {
-	rcode         int
-	answer        []dns.RR
-	authority     []dns.RR
-	additional    []dns.RR
-	dynamic       func() []string     // nil for static entries
-	recordConfigs []config.ZoneRecord // original config (for dynamic type/class matching)
-	matchTags     []matchTag          // parsed CIDR match conditions
 }
 
 // Result holds the outcome of a zone rule evaluation.
@@ -58,164 +74,224 @@ type Result struct {
 	CreatedAt  int64 // LoadRules timestamp for TTL cycling
 }
 
-// Evaluator manages zone rules with O(1) composite-key lookup.
+// dynamicEntry holds a dynamic content function and its record configs.
+type dynamicEntry struct {
+	fn      func() []string
+	configs []config.ZoneRecord
+}
+
+// Evaluator manages zone rules backed by a SQLite database.
 type Evaluator struct {
-	exactMap    atomic.Pointer[map[key]*entry] // (qname, qtype, qclass) → entry
-	wildcardMap atomic.Pointer[map[key]*entry] // (base, qtype, qclass) → entry
-	ruleCount   atomic.Uint64
-	loadedAt    atomic.Int64
-	usedTags    atomic.Pointer[[]string] // unique tag names referenced by rules
+	db         *sql.Conn
+	stmtExact  *sql.Stmt
+	stmtWild   *sql.Stmt
+	stmtInsert *sql.Stmt
+	loadedAt   atomic.Int64
+	ruleCount  atomic.Int64
+	dynamics   map[string]*dynamicEntry // qname → dynamic content
+
+	enc *zstd.Encoder
+	dec *zstd.Decoder
 }
 
-// New creates an Evaluator with no rules loaded.
-func New() *Evaluator {
-	z := &Evaluator{}
-	em := make(map[key]*entry)
-	wm := make(map[key]*entry)
-	ut := make([]string, 0)
-	z.exactMap.Store(&em)
-	z.wildcardMap.Store(&wm)
-	z.usedTags.Store(&ut)
-	return z
-}
-
-// UsedTags returns the set of unique CIDR tag names referenced by loaded rules.
-// The handler uses this to resolve which tags to check for each client IP.
-func (e *Evaluator) UsedTags() []string {
-	p := e.usedTags.Load()
-	if p == nil {
-		return nil
+// New creates an Evaluator with an in-memory SQLite database.
+func New() (*Evaluator, error) {
+	db, err := sql.Open(":memory:")
+	if err != nil {
+		return nil, fmt.Errorf("zone: open sqlite: %w", err)
 	}
-	return *p
+	if err := db.Exec(zoneSchema); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("zone: schema: %w", err)
+	}
+
+	stmtExact, _, err := db.Prepare(sqlExact)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("zone: prepare exact: %w", err)
+	}
+	stmtWild, _, err := db.Prepare(sqlWild)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("zone: prepare wild: %w", err)
+	}
+	stmtInsert, _, err := db.Prepare(sqlInsert)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("zone: prepare insert: %w", err)
+	}
+
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("zone: zstd encoder: %w", err)
+	}
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("zone: zstd decoder: %w", err)
+	}
+
+	return &Evaluator{
+		db:         db,
+		stmtExact:  stmtExact,
+		stmtWild:   stmtWild,
+		stmtInsert: stmtInsert,
+		dynamics:   make(map[string]*dynamicEntry),
+		enc:        enc,
+		dec:        dec,
+	}, nil
+}
+
+// Close releases SQLite resources.
+func (e *Evaluator) Close() error {
+	if e.stmtExact != nil {
+		_ = e.stmtExact.Close()
+	}
+	if e.stmtWild != nil {
+		_ = e.stmtWild.Close()
+	}
+	if e.stmtInsert != nil {
+		_ = e.stmtInsert.Close()
+	}
+	_ = e.enc.Close()
+	e.dec.Close()
+	return e.db.Close()
 }
 
 // HasRules reports whether any zone rules are currently loaded.
 func (e *Evaluator) HasRules() bool { return e.ruleCount.Load() > 0 }
 
-// LoadRules validates and loads zone rules, populating exact and wildcard
-// lookup maps keyed by (qname, qtype, qclass).
-func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
-	exactMap := make(map[key]*entry)
-	wildcardMap := make(map[key]*entry)
-	tagSet := make(map[string]struct{})
+// ---------------------------------------------------------------------------
+// LoadRules
+// ---------------------------------------------------------------------------
 
+// LoadRules validates and loads zone rules into the SQLite database.
+func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
+	if err := e.db.Exec(`DELETE FROM zone_entries`); err != nil {
+		return fmt.Errorf("zone: clear: %w", err)
+	}
+	// Clear dynamic content registrations.
+	e.dynamics = make(map[string]*dynamicEntry)
+
+	if err := e.db.Exec(`BEGIN`); err != nil {
+		return fmt.Errorf("zone: begin tx: %w", err)
+	}
+
+	total := int64(0)
 	for i := range rules {
 		rule := &rules[i]
 		if rule.File != "" {
-			n, err := parseRuleFile(rule, exactMap, wildcardMap, tagSet)
+			n, err := e.loadFile(rule)
 			if err != nil {
+				_ = e.db.Exec(`ROLLBACK`)
 				return fmt.Errorf("zone file %q: %w", rule.File, err)
 			}
+			total += int64(n)
 			log.Infof("ZONE: loaded %d entries from %s", n, rule.File)
 			continue
 		}
-		if err := loadInlineRule(rule, exactMap, wildcardMap, tagSet); err != nil {
+		n, err := e.loadInline(rule)
+		if err != nil {
+			_ = e.db.Exec(`ROLLBACK`)
 			return err
 		}
+		total += int64(n)
 	}
 
-	usedTags := make([]string, 0, len(tagSet))
-	for t := range tagSet {
-		usedTags = append(usedTags, t)
+	if err := e.db.Exec(`COMMIT`); err != nil {
+		return fmt.Errorf("zone: commit: %w", err)
 	}
 
-	e.exactMap.Store(&exactMap)
-	e.wildcardMap.Store(&wildcardMap)
-	e.ruleCount.Store(uint64(len(exactMap) + len(wildcardMap)))
-	e.usedTags.Store(&usedTags)
+	e.ruleCount.Store(total)
 	e.loadedAt.Store(log.NowUnix())
-	log.Infof("ZONE: DNS zone loaded: %d exact + %d wildcard entries", len(exactMap), len(wildcardMap))
+	log.Infof("ZONE: %d zone entries loaded", total)
 	return nil
 }
 
-func loadInlineRule(rule *config.ZoneRule, exactMap, wildcardMap map[key]*entry, tagSet map[string]struct{}) error {
+func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
 	if rule.Name == "" {
-		return errors.New("zone rule: name is required")
+		return 0, errors.New("zone rule: name is required")
 	}
 	if len(rule.Name) > config.MaxDomainLength {
 		log.Warnf("ZONE: rule name too long, skipping")
-		return nil
+		return 0, nil
 	}
 
-	tags, err := parseMatchTags(rule.Match)
-	if err != nil {
-		return fmt.Errorf("zone rule %q: %w", rule.Name, err)
-	}
-	for _, t := range tags {
-		tagSet[t.tag] = struct{}{}
+	// Dynamic content: store function in Go map.
+	if rule.DynamicContent != nil {
+		normalized := zdnsutil.NormalizeDomain(rule.Name)
+		e.dynamics[normalized] = &dynamicEntry{fn: rule.DynamicContent, configs: rule.Answer}
 	}
 
 	normalizedName := zdnsutil.NormalizeDomain(rule.Name)
-	loadedAt := log.NowUnix()
+	matchTags := serializeMatchTags(rule.Match)
+	isWildcard := strings.HasPrefix(rule.Name, wildcardPrefix)
+	if isWildcard {
+		normalizedName = normalizedName[len(wildcardPrefix):]
+	}
 
-	// Group answer records by (Type, Class).
 	groups := groupRecordsByTypeClass(rule.Answer)
+	count := 0
+
 	if len(groups) > 0 {
 		for _, g := range groups {
-			e := buildEntry(rule, g.records, rule.Authority, rule.Additional, loadedAt, tags)
-			k := key{qname: normalizedName, qtype: g.qtype, qclass: g.qclass}
-			if isWildcard := strings.HasPrefix(rule.Name, wildcardPrefix); isWildcard {
-				wildcardMap[key{qname: normalizedName[len(wildcardPrefix):], qtype: g.qtype, qclass: g.qclass}] = e
-			} else {
-				exactMap[k] = e
+			aw := packRRs(e.enc, rule.Name, g.records)
+			auth := packRRs(e.enc, rule.Name, rule.Authority)
+			addl := packRRs(e.enc, rule.Name, rule.Additional)
+			if err := e.insertRow(normalizedName, g.qtype, g.qclass, rule.Rcode, aw, auth, addl, matchTags, isWildcard); err != nil {
+				return 0, err
 			}
+			count++
 		}
 	} else if rule.Rcode != dns.RcodeSuccess || rule.DynamicContent != nil {
-		// Sentinal entry for rcode-only or dynamic rules (match all qtype/qclass).
-		e := buildEntry(rule, nil, rule.Authority, rule.Additional, loadedAt, tags)
-		k := key{qname: normalizedName, qtype: 0, qclass: 0}
-		if isWildcard := strings.HasPrefix(rule.Name, wildcardPrefix); isWildcard {
-			wildcardMap[key{qname: normalizedName[len(wildcardPrefix):], qtype: 0, qclass: 0}] = e
-		} else {
-			exactMap[k] = e
+		// Sentinal entry for rcode-only or dynamic rules.
+		auth := packRRs(e.enc, rule.Name, rule.Authority)
+		addl := packRRs(e.enc, rule.Name, rule.Additional)
+		if err := e.insertRow(normalizedName, 0, 0, rule.Rcode, nil, auth, addl, matchTags, isWildcard); err != nil {
+			return 0, err
 		}
+		count++
 	}
 
+	return count, nil
+}
+
+func (e *Evaluator) insertRow(qname string, qtype, qclass uint16, rcode int, answer, authority, additional []byte, matchTags string, isWildcard bool) error {
+	w := 0
+	if isWildcard {
+		w = 1
+	}
+	_ = e.stmtInsert.Reset()
+	if err := e.stmtInsert.BindText(1, qname); err != nil {
+		return err
+	}
+	if err := e.stmtInsert.BindInt64(2, int64(qtype)); err != nil {
+		return err
+	}
+	if err := e.stmtInsert.BindInt64(3, int64(qclass)); err != nil {
+		return err
+	}
+	if err := e.stmtInsert.BindInt64(4, int64(rcode)); err != nil {
+		return err
+	}
+	if err := e.stmtInsert.BindBlob(5, answer); err != nil {
+		return err
+	}
+	if err := e.stmtInsert.BindBlob(6, authority); err != nil {
+		return err
+	}
+	if err := e.stmtInsert.BindBlob(7, additional); err != nil {
+		return err
+	}
+	if err := e.stmtInsert.BindText(8, matchTags); err != nil {
+		return err
+	}
+	if err := e.stmtInsert.BindInt64(9, int64(w)); err != nil {
+		return err
+	}
+	e.stmtInsert.Step()
 	return nil
-}
-
-// recordGroup holds records that share the same (Type, Class).
-type recordGroup struct {
-	qtype   uint16
-	qclass  uint16
-	records []config.ZoneRecord
-}
-
-func groupRecordsByTypeClass(records []config.ZoneRecord) []recordGroup {
-	if len(records) == 0 {
-		return nil
-	}
-	groups := make([]recordGroup, 0, len(records))
-	seen := make(map[key]int) // key{qname:"", qtype, qclass} → index in groups
-	for _, rec := range records {
-		qclass := rec.Class
-		if qclass == 0 {
-			qclass = dns.ClassINET
-		}
-		idxKey := key{qtype: rec.Type, qclass: qclass}
-		if idx, ok := seen[idxKey]; ok {
-			groups[idx].records = append(groups[idx].records, rec)
-		} else {
-			seen[idxKey] = len(groups)
-			groups = append(groups, recordGroup{qtype: rec.Type, qclass: qclass, records: []config.ZoneRecord{rec}})
-		}
-	}
-	return groups
-}
-
-func buildEntry(rule *config.ZoneRule, records, authority, additional []config.ZoneRecord, loadedAt int64, tags []matchTag) *entry {
-	e := &entry{
-		rcode:      rule.Rcode,
-		matchTags:  tags,
-		dynamic:    rule.DynamicContent,
-		answer:     buildRRs(rule.Name, records),
-		authority:  buildRRs(rule.Name, authority),
-		additional: buildRRs(rule.Name, additional),
-	}
-	if e.dynamic != nil {
-		e.recordConfigs = rule.Answer
-	}
-	return e
 }
 
 // ---------------------------------------------------------------------------
@@ -226,108 +302,122 @@ func buildEntry(rule *config.ZoneRule, records, authority, additional []config.Z
 // matchedTags is the set of CIDR tags the client IP matched (from cidr.Filter).
 // nil or empty map means no CIDR matching is active.
 func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map[string]bool) Result {
-	result := Result{Rcode: dns.RcodeSuccess}
 	if qclass == 0 {
 		qclass = dns.ClassINET
 	}
 	if len(qname) > config.MaxDomainLength {
-		return result
+		return Result{Rcode: dns.RcodeSuccess}
 	}
 	if e.ruleCount.Load() == 0 {
-		return result
+		return Result{Rcode: dns.RcodeSuccess}
 	}
 
 	qname = zdnsutil.NormalizeDomain(qname)
 
-	// 1. Exact composite key lookup.
-	em := e.exactMap.Load()
-	if em != nil {
-		// Try specific key first.
-		if entry, ok := (*em)[key{qname: qname, qtype: qtype, qclass: qclass}]; ok {
-			if matchTagsOK(entry.matchTags, matchedTags) {
-				return buildResult(qname, entry, qtype, qclass, e.loadedAt.Load())
-			}
+	// 1. Check dynamic content (Go map, not SQL).
+	if de, ok := e.dynamics[qname]; ok {
+		return e.evalDynamic(qname, qtype, qclass, de)
+	}
+
+	loadedAt := e.loadedAt.Load()
+
+	// 2. Exact composite key lookup.
+	if r := e.query(e.stmtExact, qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
+		return r
+	}
+
+	// 3. Sentinel key (rcode-only rules).
+	if r := e.query(e.stmtExact, qname, 0, 0, matchedTags, loadedAt); r.Matched {
+		return r
+	}
+
+	// 4. Wildcard suffix walk.
+	rest := qname
+	for {
+		idx := strings.IndexByte(rest, '.')
+		if idx < 0 {
+			break
 		}
-		// Try sentinel key (qtype=0, qclass=0) for rcode-only / dynamic rules.
-		if entry, ok := (*em)[key{qname: qname, qtype: 0, qclass: 0}]; ok {
-			if matchTagsOK(entry.matchTags, matchedTags) {
-				return buildResult(qname, entry, qtype, qclass, e.loadedAt.Load())
-			}
+		rest = rest[idx+1:]
+		if rest == "" {
+			break
+		}
+		if r := e.query(e.stmtWild, rest, qtype, qclass, matchedTags, loadedAt); r.Matched {
+			return r
+		}
+		if r := e.query(e.stmtWild, rest, 0, 0, matchedTags, loadedAt); r.Matched {
+			return r
 		}
 	}
 
-	// 2. Wildcard suffix walk.
-	wm := e.wildcardMap.Load()
-	if wm != nil && len(*wm) > 0 {
-		rest := qname
-		for {
-			idx := strings.IndexByte(rest, '.')
-			if idx < 0 {
-				break
-			}
-			rest = rest[idx+1:]
-			if rest == "" {
-				break
-			}
-			// Try specific key.
-			if entry, ok := (*wm)[key{qname: rest, qtype: qtype, qclass: qclass}]; ok {
-				if matchTagsOK(entry.matchTags, matchedTags) {
-					return buildResult(qname, entry, qtype, qclass, e.loadedAt.Load())
-				}
-			}
-			// Try sentinel key.
-			if entry, ok := (*wm)[key{qname: rest, qtype: 0, qclass: 0}]; ok {
-				if matchTagsOK(entry.matchTags, matchedTags) {
-					return buildResult(qname, entry, qtype, qclass, e.loadedAt.Load())
-				}
-			}
-		}
-	}
-
-	return result
+	return Result{Rcode: dns.RcodeSuccess}
 }
 
-func buildResult(domain string, e *entry, qtype, qclass uint16, loadedAt int64) Result {
-	result := Result{
-		Domain:     domain,
+func (e *Evaluator) query(stmt *sql.Stmt, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
+	_ = stmt.Reset()
+	if err := stmt.BindText(1, qname); err != nil {
+		return Result{Rcode: dns.RcodeSuccess}
+	}
+	if err := stmt.BindInt64(2, int64(qtype)); err != nil {
+		return Result{Rcode: dns.RcodeSuccess}
+	}
+	if err := stmt.BindInt64(3, int64(qclass)); err != nil {
+		return Result{Rcode: dns.RcodeSuccess}
+	}
+
+	if !stmt.Step() {
+		return Result{Rcode: dns.RcodeSuccess}
+	}
+
+	// Check match tags before unpacking RRs.
+	tagsText := stmt.ColumnText(4)
+	if tagsText != "" && !matchTagsOK(parseMatchTagsText(tagsText), matchedTags) {
+		return Result{Rcode: dns.RcodeSuccess}
+	}
+
+	rcode := int(stmt.ColumnInt64(0))
+	return Result{
+		Domain:     qname,
 		Matched:    true,
-		Rcode:      e.rcode,
-		Answer:     e.answer,
-		Authority:  e.authority,
-		Additional: e.additional,
+		Rcode:      rcode,
+		Answer:     unpackRRs(e.dec, stmt.ColumnBlob(1, nil)),
+		Authority:  unpackRRs(e.dec, stmt.ColumnBlob(2, nil)),
+		Additional: unpackRRs(e.dec, stmt.ColumnBlob(3, nil)),
 		CreatedAt:  loadedAt,
 	}
+}
 
-	// Dynamic content: generate records at query time.
-	if e.dynamic != nil {
-		var contents []string
-		for _, rec := range e.recordConfigs {
-			recClass := rec.Class
-			if recClass == 0 {
-				recClass = dns.ClassINET
-			}
-			if rec.Type == qtype && recClass == qclass {
-				if contents == nil {
-					contents = e.dynamic()
-				}
-				for _, content := range contents {
-					rr := buildRecord(domain, &config.ZoneRecord{
-						Type:    rec.Type,
-						Class:   rec.Class,
-						TTL:     rec.TTL,
-						Content: strconv.Quote(content),
-					})
-					if rr != nil {
-						result.Answer = append(result.Answer, rr)
-					}
-				}
-			}
+func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicEntry) Result {
+	var contents []string
+	for _, rec := range de.configs {
+		recClass := rec.Class
+		if recClass == 0 {
+			recClass = dns.ClassINET
 		}
-		if len(result.Answer) > 0 {
-			result.Rcode = dns.RcodeSuccess
+		if rec.Type == qtype && recClass == qclass {
+			if contents == nil {
+				contents = de.fn()
+			}
+			break
 		}
 	}
 
+	result := Result{
+		Domain:    qname,
+		Matched:   len(contents) > 0,
+		Rcode:     dns.RcodeSuccess,
+		CreatedAt: e.loadedAt.Load(),
+	}
+	for _, content := range contents {
+		rr := buildRecord(qname, &config.ZoneRecord{
+			Type:    dns.TypeTXT,
+			Class:   dns.ClassCHAOS,
+			Content: strconv.Quote(content),
+		})
+		if rr != nil {
+			result.Answer = append(result.Answer, rr)
+		}
+	}
 	return result
 }
 
@@ -336,18 +426,14 @@ func matchTagsOK(entryTags []matchTag, matchedTags map[string]bool) bool {
 		return true
 	}
 	if matchedTags == nil {
-		// No CIDR filter configured — rules with match tags don't match.
 		return false
 	}
 	for _, mt := range entryTags {
 		matched, exists := matchedTags[mt.tag]
 		if !exists {
-			// Unknown tag — skip rule (tag not configured in CIDR).
 			return false
 		}
 		if mt.negate == matched {
-			// negate=true AND matched=true → exclusion tag matched → skip
-			// negate=false AND matched=false → inclusion tag not matched → skip
 			return false
 		}
 	}
@@ -355,8 +441,24 @@ func matchTagsOK(entryTags []matchTag, matchedTags map[string]bool) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Match tag parsing
+// Match tag helpers
 // ---------------------------------------------------------------------------
+
+func serializeMatchTags(raw []string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	return strings.Join(raw, ",")
+}
+
+func parseMatchTagsText(text string) []matchTag {
+	if text == "" {
+		return nil
+	}
+	parts := strings.Split(text, ",")
+	tags, _ := parseMatchTags(parts)
+	return tags
+}
 
 func parseMatchTags(raw []string) ([]matchTag, error) {
 	if len(raw) == 0 {
@@ -379,81 +481,48 @@ func parseMatchTags(raw []string) ([]matchTag, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Zone file import — zone-file-like format with domain headers and record lines.
-//
-// Format:
-//
-//	# comment / blank → skip
-//	.domain.name [rcode=N] [match=tag1,!tag2]   ← domain header (starts with .)
-//	*.wild.name [rcode=N] [match=tag1,!tag2]    ← wildcard header (starts with *.)
-//	  TYPE CONTENT [TTL] [key=value ...]         ← record line (indented, TYPE is numeric)
-//
-// Record line key=value options: class=N, name=STR, section=answer|authority|additional
+// Zone file import — domain headers + record lines
 // ---------------------------------------------------------------------------
 
-func parseRuleFile(parent *config.ZoneRule, exactMap, wildcardMap map[key]*entry, tagSet map[string]struct{}) (int, error) {
+// loadFile parses a zone file and inserts entries directly into SQL.
+func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 	f, err := os.Open(parent.File) //nolint:gosec // G304: user-configured file path
 	if err != nil {
 		return 0, fmt.Errorf("open: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
-	parentTags, err := parseMatchTags(parent.Match)
-	if err != nil {
-		return 0, err
-	}
-	for _, t := range parentTags {
-		tagSet[t.tag] = struct{}{}
-	}
-
 	sc := bufio.NewScanner(f)
 	count := 0
 
 	var (
-		curDomain    string
-		curWildcard  bool
-		curRcode     int
-		curTags      []matchTag
-		curRecords   []config.ZoneRecord
-		curAuthority []config.ZoneRecord
-		curAddl      []config.ZoneRecord
+		curDomain   string
+		curRawName  string // un-normalized, for buildRecord
+		curWildcard bool
+		curRcode    int
+		curTags     string
+		curRecords  []config.ZoneRecord
+		curAuth     []config.ZoneRecord
+		curAddl     []config.ZoneRecord
 	)
 
-	flushDomain := func() {
+	flush := func() {
 		if curDomain == "" {
 			return
 		}
 		groups := groupRecordsByTypeClass(curRecords)
 		if len(groups) > 0 {
 			for _, g := range groups {
-				e := &entry{
-					rcode:      curRcode,
-					matchTags:  curTags,
-					answer:     buildRRs("", g.records),
-					authority:  buildRRs("", curAuthority),
-					additional: buildRRs("", curAddl),
-				}
-				k := key{qname: curDomain, qtype: g.qtype, qclass: g.qclass}
-				if curWildcard {
-					wildcardMap[k] = e
-				} else {
-					exactMap[k] = e
-				}
+				aw := packRRs(e.enc, curRawName, g.records)
+				auth := packRRs(e.enc, curRawName, curAuth)
+				addl := packRRs(e.enc, curRawName, curAddl)
+				_ = e.insertRow(curDomain, g.qtype, g.qclass, curRcode, aw, auth, addl, curTags, curWildcard)
 				count++
 			}
 		} else if curRcode != dns.RcodeSuccess {
-			e := &entry{
-				rcode:      curRcode,
-				matchTags:  curTags,
-				authority:  buildRRs("", curAuthority),
-				additional: buildRRs("", curAddl),
-			}
-			k := key{qname: curDomain, qtype: 0, qclass: 0}
-			if curWildcard {
-				wildcardMap[k] = e
-			} else {
-				exactMap[k] = e
-			}
+			auth := packRRs(e.enc, curRawName, curAuth)
+			addl := packRRs(e.enc, curRawName, curAddl)
+			_ = e.insertRow(curDomain, 0, 0, curRcode, nil, auth, addl, curTags, curWildcard)
 			count++
 		}
 	}
@@ -466,25 +535,23 @@ func parseRuleFile(parent *config.ZoneRule, exactMap, wildcardMap map[key]*entry
 
 		// Domain header: starts with . or *.
 		if line[0] == '.' || (len(line) > 1 && line[0] == '*' && line[1] == '.') {
-			flushDomain()
+			flush()
 
 			isWildcard := line[0] == '*'
 			var rawName string
 			if isWildcard {
-				rawName = line[2:] // strip "*."
+				rawName = line[2:]
 			} else {
-				rawName = line[1:] // strip leading "."
+				rawName = line[1:]
 			}
 
-			// Parse optional rcode= and match= from remaining fields.
 			fields := strings.Fields(rawName)
-			domain := fields[0]
-			curDomain = zdnsutil.NormalizeDomain(domain)
+			curDomain = zdnsutil.NormalizeDomain(fields[0])
 			curWildcard = isWildcard
 			curRcode = parent.Rcode
-			curTags = append([]matchTag(nil), parentTags...)
+			curTags = serializeMatchTags(parent.Match)
 			curRecords = nil
-			curAuthority = nil
+			curAuth = nil
 			curAddl = nil
 
 			for _, f := range fields[1:] {
@@ -493,17 +560,13 @@ func parseRuleFile(parent *config.ZoneRule, exactMap, wildcardMap map[key]*entry
 						curRcode = n
 					}
 				} else if strings.HasPrefix(f, "match=") {
-					tagStrs := strings.Split(f[6:], ",")
-					curTags, _ = parseMatchTags(tagStrs)
-					for _, t := range curTags {
-						tagSet[t.tag] = struct{}{}
-					}
+					curTags = f[6:] // store raw, validated at query time
 				}
 			}
 			continue
 		}
 
-		// Record line: must start with a digit (TYPE).
+		// Record line: must start with a digit.
 		if line[0] < '0' || line[0] > '9' {
 			continue
 		}
@@ -519,14 +582,14 @@ func parseRuleFile(parent *config.ZoneRule, exactMap, wildcardMap map[key]*entry
 
 		switch section {
 		case "authority":
-			curAuthority = append(curAuthority, rec)
+			curAuth = append(curAuth, rec)
 		case "additional":
 			curAddl = append(curAddl, rec)
 		default:
 			curRecords = append(curRecords, rec)
 		}
 	}
-	flushDomain()
+	flush()
 
 	if err := sc.Err(); err != nil {
 		return 0, fmt.Errorf("read: %w", err)
@@ -535,8 +598,9 @@ func parseRuleFile(parent *config.ZoneRule, exactMap, wildcardMap map[key]*entry
 }
 
 // parseRecordLine parses a zone record line: TYPE CONTENT [TTL] [key=value ...]
+// Content may be double-quoted if it contains spaces (e.g. SOA rdata).
 func parseRecordLine(line string) (config.ZoneRecord, string, error) {
-	fields := strings.Fields(line)
+	fields := tokenize(line)
 	if len(fields) < 2 {
 		return config.ZoneRecord{}, "", errors.New("record line too short")
 	}
@@ -554,7 +618,6 @@ func parseRecordLine(line string) (config.ZoneRecord, string, error) {
 
 	for _, f := range fields[2:] {
 		if !strings.Contains(f, "=") {
-			// Bare number → TTL.
 			if ttl, err := strconv.ParseUint(f, 10, 32); err == nil {
 				rec.TTL = uint32(ttl) //nolint:gosec // G115: TTL fits uint32
 			}
@@ -575,6 +638,103 @@ func parseRecordLine(line string) (config.ZoneRecord, string, error) {
 	}
 
 	return rec, section, nil
+}
+
+// tokenize splits a line by whitespace, preserving double-quoted strings.
+func tokenize(line string) []string {
+	var tokens []string
+	i := 0
+	for i < len(line) {
+		// Skip whitespace.
+		for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+			i++
+		}
+		if i >= len(line) {
+			break
+		}
+		if line[i] == '"' {
+			// Quoted string.
+			i++ // skip opening quote
+			j := i
+			for j < len(line) && line[j] != '"' {
+				j++
+			}
+			tokens = append(tokens, line[i:j])
+			i = j + 1 // skip closing quote
+		} else {
+			j := i
+			for j < len(line) && line[j] != ' ' && line[j] != '\t' {
+				j++
+			}
+			tokens = append(tokens, line[i:j])
+			i = j
+		}
+	}
+	return tokens
+}
+
+// groupRecordsByTypeClass groups records sharing the same (Type, Class).
+func groupRecordsByTypeClass(records []config.ZoneRecord) []recordGroup {
+	if len(records) == 0 {
+		return nil
+	}
+	type kk struct{ qt, qc uint16 }
+	groups := make([]recordGroup, 0, len(records))
+	seen := make(map[kk]int)
+	for _, rec := range records {
+		qclass := rec.Class
+		if qclass == 0 {
+			qclass = dns.ClassINET
+		}
+		idxKey := kk{qt: rec.Type, qc: qclass}
+		if idx, ok := seen[idxKey]; ok {
+			groups[idx].records = append(groups[idx].records, rec)
+		} else {
+			seen[idxKey] = len(groups)
+			groups = append(groups, recordGroup{qtype: rec.Type, qclass: qclass, records: []config.ZoneRecord{rec}})
+		}
+	}
+	return groups
+}
+
+type recordGroup struct {
+	qtype   uint16
+	qclass  uint16
+	records []config.ZoneRecord
+}
+
+// ---------------------------------------------------------------------------
+// Wire encoding: zstd(dns.Msg.Pack())
+// ---------------------------------------------------------------------------
+
+// packRRs builds RRs from config, packs into a dns.Msg, and compresses.
+func packRRs(enc *zstd.Encoder, domain string, records []config.ZoneRecord) []byte {
+	rrs := buildRRs(domain, records)
+	if len(rrs) == 0 {
+		return nil
+	}
+	msg := &dns.Msg{Answer: rrs}
+	if err := msg.Pack(); err != nil {
+		return nil
+	}
+	return enc.EncodeAll(msg.Data, nil)
+}
+
+// unpackRRs decompresses a blob and unpacks the RRs from the dns.Msg.
+func unpackRRs(dec *zstd.Decoder, blob []byte) []dns.RR {
+	if len(blob) == 0 || dec == nil {
+		return nil
+	}
+	wire, err := dec.DecodeAll(blob, nil)
+	if err != nil {
+		return nil
+	}
+	msg := &dns.Msg{}
+	msg.Data = wire
+	if err := msg.Unpack(); err != nil {
+		return nil
+	}
+	return msg.Answer
 }
 
 // ---------------------------------------------------------------------------
@@ -629,7 +789,6 @@ func buildRecord(domain string, record *config.ZoneRecord) dns.RR {
 	if rr, err := dns.New(sb.String()); err == nil {
 		return rr
 	}
-	// Fallback: RFC 3597 unknown type.
 	return &dns.RFC3597{
 		Hdr:     dns.Header{Name: name, Class: class, TTL: ttl},
 		RFC3597: rdata.RFC3597{RRType: record.Type, Data: record.Content},

@@ -11,12 +11,15 @@ import (
 )
 
 func TestEvaluator_LoadRules(t *testing.T) {
-	z := New()
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if z.HasRules() {
 		t.Error("new Evaluator should have no rules")
 	}
 
-	err := z.LoadRules([]config.ZoneRule{
+	err = z.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
 	if err != nil {
@@ -28,8 +31,11 @@ func TestEvaluator_LoadRules(t *testing.T) {
 }
 
 func TestEvaluator_Evaluate_Answer(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{Name: "static.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
 	if err != nil {
@@ -56,8 +62,11 @@ func TestEvaluator_Evaluate_Answer(t *testing.T) {
 }
 
 func TestEvaluator_Evaluate_NoMatch(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
 	if err != nil {
@@ -78,8 +87,11 @@ func TestEvaluator_Evaluate_NoMatch(t *testing.T) {
 }
 
 func TestEvaluator_Evaluate_NXDOMAIN(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{Name: "blocked.com", Rcode: dns.RcodeNameError},
 	})
 	if err != nil {
@@ -102,8 +114,11 @@ func TestEvaluator_Evaluate_NXDOMAIN(t *testing.T) {
 }
 
 func TestEvaluator_Evaluate_AuthorityAndAdditional(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name: "test.example.com",
 			Answer: []config.ZoneRecord{
@@ -137,8 +152,11 @@ func TestEvaluator_Evaluate_AuthorityAndAdditional(t *testing.T) {
 }
 
 func TestEvaluator_Evaluate_MultipleTypes(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name: "multi.example.com",
 			Answer: []config.ZoneRecord{
@@ -177,8 +195,11 @@ func TestEvaluator_Evaluate_MultipleTypes(t *testing.T) {
 }
 
 func TestEvaluator_Wildcard(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{Name: "*.wild.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
 	if err != nil {
@@ -205,8 +226,11 @@ func TestEvaluator_Wildcard(t *testing.T) {
 }
 
 func TestEvaluator_Wildcard_TypeFilter(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{Name: "*.wild.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
 	if err != nil {
@@ -221,8 +245,11 @@ func TestEvaluator_Wildcard_TypeFilter(t *testing.T) {
 }
 
 func TestEvaluator_ExactWinsOverWildcard(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{Name: "*.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "1.1.1.1", TTL: 300}}},
 		{Name: "specific.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "2.2.2.2", TTL: 300}}},
 	})
@@ -241,7 +268,10 @@ func TestEvaluator_ExactWinsOverWildcard(t *testing.T) {
 }
 
 func TestEvaluator_NoRules(t *testing.T) {
-	z := New()
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
 	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if result.Matched {
 		t.Error("empty evaluator should not match")
@@ -249,8 +279,11 @@ func TestEvaluator_NoRules(t *testing.T) {
 }
 
 func TestEvaluator_CreatedAt(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
 	if err != nil {
@@ -264,8 +297,11 @@ func TestEvaluator_CreatedAt(t *testing.T) {
 }
 
 func TestEvaluator_RcodeOnlyWithRecords(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "mixed.example.com",
 			Rcode: dns.RcodeRefused,
@@ -309,8 +345,11 @@ func TestEvaluator_FileImport_Basic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{{File: path}})
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
 	}
@@ -343,8 +382,11 @@ func TestEvaluator_FileImport_Wildcard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{{File: path}})
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
 	}
@@ -366,8 +408,11 @@ func TestEvaluator_FileImport_Comments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{{File: path}})
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
 	}
@@ -383,14 +428,17 @@ func TestEvaluator_FileImport_AuthorityAndAdditional(t *testing.T) {
 	path := filepath.Join(dir, "zone.txt")
 	content := ".example.com\n" +
 		"  1  10.0.0.1  300\n" +
-		"  6  ns1.example.com. admin.example.com. 1 3600 900 86400 3600  3600  section=authority\n" +
+		"  6  \"ns1.example.com. admin.example.com. 1 3600 900 86400 3600\"  3600  section=authority\n" +
 		"  1  10.0.0.2  3600  name=ns1.example.com  section=additional\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{{File: path}})
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
 	}
@@ -411,8 +459,11 @@ func TestEvaluator_FileImport_AuthorityAndAdditional(t *testing.T) {
 }
 
 func TestEvaluator_TTLCyclical(t *testing.T) {
-	z := New()
-	err := z.LoadRules([]config.ZoneRule{
+	z, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = z.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
 	if err != nil {

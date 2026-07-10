@@ -153,7 +153,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT   # 获取 DNSCrypt 证�
 
 .example.com
   1  10.0.0.1  300
-  6  ns1.example.com. admin.example.com. 1 3600 900 86400 3600  3600  section=authority
+  6  "ns1.example.com. admin.example.com. 1 3600 900 86400 3600"  3600  section=authority
   1  10.0.0.2  3600  name=ns1.example.com  section=additional
 ```
 
