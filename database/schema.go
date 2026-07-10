@@ -1,19 +1,13 @@
 package database
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
-	"os"
-	"strconv"
-	"zjdns/config"
 	"zjdns/internal/log"
 )
 
 const (
 	pageSize               = 4096
 	walAutoCheckpointPages = 4096
-	schemaVersion          = 6
 )
 
 func (db *DB) migrate() error {
@@ -32,39 +26,15 @@ func (db *DB) migrate() error {
 		log.Warnf("CACHE: pragma failed (non-fatal): %v", err)
 	}
 
-	var version int
-	_ = db.QueryRow("SELECT version FROM schema_version").Scan(&version)
-	if version != schemaVersion {
-		log.Infof("CACHE: schema v%d → v%d, rebuilding all tables", version, schemaVersion)
-		if db.dbPath != "" {
-			_ = db.conn.Close()
-			_ = os.Remove(db.dbPath)
-			sqldb, err := openDBFile(db.dbPath)
-			if err != nil {
-				return fmt.Errorf("sqlite reopen: %w", err)
-			}
-			conn, err := sqldb.Conn(context.Background())
-			if err != nil {
-				_ = sqldb.Close()
-				return fmt.Errorf("sqlite reacquire conn: %w", err)
-			}
-			_ = sqldb.Close()
-			db.conn = conn
-			if _, err := db.Exec(pragmaSQL); err != nil {
-				log.Warnf("CACHE: pragma failed on reopen (non-fatal): %v", err)
-			}
-		}
-	}
-
 	//nolint:gosec // G202: DDL migration with constant schema version
 	_, err := db.Exec(`
 
-		-- ── Schema version ───────────────────────────────────────────────────
-		-- Single-row table tracking the current schema version. When the version
-		-- changes, the disk-backed database is dropped and recreated cleanly.
+		-- ── Project version ───────────────────────────────────────────────────
+		-- Tracks the current project version. Base DDL starts at 0.0.0.
+		-- Pending migrations run in order via migration.go/runMigrations().
 
-		CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-		INSERT OR REPLACE INTO schema_version (rowid, version) VALUES (1, ` + strconv.Itoa(schemaVersion) + `);
+		CREATE TABLE IF NOT EXISTS version (version TEXT NOT NULL);
+		INSERT OR IGNORE INTO version (rowid, version) VALUES (1, '` + minSupportedVersion + `');
 
 		-- ── DNS response cache ───────────────────────────────────────────────
 		-- Every row is a cacheable DNS response keyed by (qname, qtype, qclass,
@@ -185,20 +155,15 @@ func (db *DB) migrate() error {
 		return err
 	}
 
+	// Apply incremental migrations.
+	if err := db.runMigrations(); err != nil {
+		return err
+	}
+
 	if db.dbPath != "" {
 		if _, err := db.Exec("ANALYZE"); err != nil {
 			log.Warnf("CACHE: ANALYZE failed (non-fatal): %v", err)
 		}
 	}
 	return nil
-}
-
-func openDBFile(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", "file:"+path+"?"+dsnParams)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(config.DefaultCacheMaxOpenConns)
-	db.SetMaxIdleConns(config.DefaultCacheMaxIdleConns)
-	return db, nil
 }

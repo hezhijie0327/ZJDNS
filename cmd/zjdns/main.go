@@ -5,6 +5,7 @@ import (
 	"os"
 	"zjdns/cmd/zjdns/cli"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/server"
 )
@@ -20,6 +21,7 @@ func main() {
 
 	config.DefaultProjectName = ProjectName
 	config.DefaultVersion = versionStr
+	database.Version = Version
 
 	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
