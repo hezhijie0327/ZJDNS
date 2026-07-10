@@ -4,7 +4,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -18,7 +17,7 @@ type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
 	Upstream []UpstreamServer `json:"upstream"`
 	Fallback []UpstreamServer `json:"fallback,omitempty"`
-	Rewrite  []RewriteRule    `json:"rewrite"`
+	Zone     []ZoneRule       `json:"zone"`
 	CIDR     []CIDRConfig     `json:"cidr"`
 }
 
@@ -117,38 +116,34 @@ type UpstreamServer struct {
 	PublicKey     string   `json:"public_key,omitempty"` // DNSCrypt resolver public key (hex); provider name uses server_name
 }
 
-// RewriteRule defines a DNS rewrite rule with synthetic response, client
-// filtering, and record lists.  File imports use a simple one-domain-per-line
-// format with optional type+content for per-domain records.
-type RewriteRule struct {
-	Name               string            `json:"name"`
-	NormalizedName     string            `json:"normalized_name,omitempty"`
-	File               string            `json:"file,omitempty"`
-	ResponseCode       *int              `json:"response_code,omitempty"`
-	Records            []DNSRecordConfig `json:"records,omitempty"`
-	Additional         []DNSRecordConfig `json:"additional,omitempty"`
-	ExcludeClients     []string          `json:"exclude_clients,omitempty"`
-	IncludeClients     []string          `json:"include_clients,omitempty"`
-	ExcludeClientCIDRs []*net.IPNet      `json:"-"`
-	IncludeClientCIDRs []*net.IPNet      `json:"-"`
-	CachedRecords      []dns.RR          `json:"-"`
-	CachedAdditional   []dns.RR          `json:"-"`
-	DynamicContent     func() []string   `json:"-"`
+// ZoneRule defines a DNS zone rule for constructing synthetic responses.
+// Matches on (QNAME, QTYPE, QCLASS) and returns ANSWER + AUTHORITY +
+// ADDITIONAL + RCODE.  Client filtering uses CIDR match tags.
+type ZoneRule struct {
+	Name       string       `json:"name"`                 // domain or *.domain
+	File       string       `json:"file,omitempty"`       // CSV import path
+	Match      []string     `json:"match,omitempty"`      // CIDR tags (mirrors UpstreamServer.Match)
+	Rcode      int          `json:"rcode,omitempty"`      // response code (0 = NOERROR)
+	Answer     []ZoneRecord `json:"answer,omitempty"`     // ANSWER section RRs
+	Authority  []ZoneRecord `json:"authority,omitempty"`  // AUTHORITY section RRs
+	Additional []ZoneRecord `json:"additional,omitempty"` // ADDITIONAL section RRs
+
+	NormalizedName   string          `json:"-"`
+	CachedAnswer     []dns.RR        `json:"-"`
+	CachedAuthority  []dns.RR        `json:"-"`
+	CachedAdditional []dns.RR        `json:"-"`
+	DynamicContent   func() []string `json:"-"`
 }
 
-// DNSRecordConfig defines a single DNS resource record for rewrite responses.
-type DNSRecordConfig struct {
-	Name         string `json:"name,omitempty"`
-	Type         string `json:"type"`
-	Class        string `json:"class,omitempty"`
-	TTL          uint32 `json:"ttl,omitempty"`
-	Content      string `json:"content"`
-	ResponseCode *int   `json:"response_code,omitempty"`
-
-	// Pre-parsed during LoadRules to avoid string-to-uint16 lookups
-	// and string normalizations on the query hot path.
-	ParsedType  uint16
-	ParsedClass uint16
+// ZoneRecord defines a single DNS resource record for zone responses.
+// Type and Class are numeric (IANA-registered values), enabling zero-allocation
+// lookup and forward compatibility with new DNS types.
+type ZoneRecord struct {
+	Name    string `json:"name,omitempty"`
+	Type    uint16 `json:"type"`            // dns.TypeA=1, dns.TypeAAAA=28, ...
+	Class   uint16 `json:"class,omitempty"` // default dns.ClassINET=1
+	TTL     uint32 `json:"ttl,omitempty"`
+	Content string `json:"content"`
 }
 
 // CIDRConfig defines a CIDR rule set loaded from a file or inline rules,
@@ -252,8 +247,6 @@ func addDDRRecords(cfg *ServerConfig) {
 		return
 	}
 	domain := strings.TrimSuffix(ddr.Domain, ".")
-	nxdomainCode := dns.RcodeNameError
-
 	endpoint := cfg.Server.TLS.HTTPS.Endpoint
 	if endpoint == "" {
 		endpoint = DefaultQueryPath
@@ -263,62 +256,43 @@ func addDDRRecords(cfg *ServerConfig) {
 	}
 	dohPath := "dohpath=\"" + endpoint + "{?dns}\""
 
-	serviceRecords := []DNSRecordConfig{
-		{Type: "SVCB", Content: "1 . alpn=h3,h2 port=" + cfg.Server.TLS.HTTPS.Port + " " + dohPath},
-		{Type: "SVCB", Content: "2 . alpn=doq,dot port=" + cfg.Server.TLS.Port},
-	}
-
-	var additionalRecords []DNSRecordConfig
-	var directRecords []DNSRecordConfig
-
+	// Zone equivalents.
+	zoneDirectRecords := make([]ZoneRecord, 0, 2)
 	if ddr.IPv4 != "" {
-		for i := range serviceRecords {
-			serviceRecords[i].Content += " ipv4hint=" + ddr.IPv4
-		}
-		additionalRecords = append(additionalRecords, DNSRecordConfig{
-			Name: domain, Type: "A", Content: ddr.IPv4,
-		})
-		directRecords = append(directRecords, DNSRecordConfig{
-			Type: "A", Content: ddr.IPv4,
-		})
-	} else {
-		directRecords = append(directRecords, DNSRecordConfig{
-			Type: "A", ResponseCode: &nxdomainCode,
-		})
+		zoneDirectRecords = append(zoneDirectRecords, ZoneRecord{Type: dns.TypeA, Content: ddr.IPv4})
 	}
-
 	if ddr.IPv6 != "" {
-		for i := range serviceRecords {
-			serviceRecords[i].Content += " ipv6hint=" + ddr.IPv6
-		}
-		additionalRecords = append(additionalRecords, DNSRecordConfig{
-			Name: domain, Type: "AAAA", Content: ddr.IPv6,
-		})
-		directRecords = append(directRecords, DNSRecordConfig{
-			Type: "AAAA", Content: ddr.IPv6,
-		})
-	} else {
-		directRecords = append(directRecords, DNSRecordConfig{
-			Type: "AAAA", ResponseCode: &nxdomainCode,
-		})
+		zoneDirectRecords = append(zoneDirectRecords, ZoneRecord{Type: dns.TypeAAAA, Content: ddr.IPv6})
 	}
-
-	cfg.Rewrite = append(cfg.Rewrite, RewriteRule{
-		Name:    domain,
-		Records: directRecords,
-	})
+	if len(zoneDirectRecords) > 0 {
+		cfg.Zone = append(cfg.Zone, ZoneRule{Name: domain, Answer: zoneDirectRecords})
+	}
 
 	ddrNames := []string{"_dns.resolver.arpa", "_dns." + domain}
 	if cfg.Server.Port != "" && cfg.Server.Port != DefaultDNSPort {
 		ddrNames = append(ddrNames, "_"+cfg.Server.Port+"._dns."+domain)
 	}
 
+	// Build zone SVCB records.
+	zoneServiceRecords := make([]ZoneRecord, 2)
+	zoneServiceRecords[0] = ZoneRecord{Type: dns.TypeSVCB, Content: "1 . alpn=h3,h2 port=" + cfg.Server.TLS.HTTPS.Port + " " + dohPath}
+	zoneServiceRecords[1] = ZoneRecord{Type: dns.TypeSVCB, Content: "2 . alpn=doq,dot port=" + cfg.Server.TLS.Port}
+	var zoneAdditional []ZoneRecord
+	if ddr.IPv4 != "" {
+		for i := range zoneServiceRecords {
+			zoneServiceRecords[i].Content += " ipv4hint=" + ddr.IPv4
+		}
+		zoneAdditional = append(zoneAdditional, ZoneRecord{Name: domain, Type: dns.TypeA, Content: ddr.IPv4})
+	}
+	if ddr.IPv6 != "" {
+		for i := range zoneServiceRecords {
+			zoneServiceRecords[i].Content += " ipv6hint=" + ddr.IPv6
+		}
+		zoneAdditional = append(zoneAdditional, ZoneRecord{Name: domain, Type: dns.TypeAAAA, Content: ddr.IPv6})
+	}
+
 	for _, name := range ddrNames {
-		cfg.Rewrite = append(cfg.Rewrite, RewriteRule{
-			Name:       name,
-			Records:    serviceRecords,
-			Additional: additionalRecords,
-		})
+		cfg.Zone = append(cfg.Zone, ZoneRule{Name: name, Answer: zoneServiceRecords, Additional: zoneAdditional})
 	}
 
 	log.Infof("CONFIG: DDR enabled for domain %s (IPv4: %s, IPv6: %s)",
@@ -326,42 +300,31 @@ func addDDRRecords(cfg *ServerConfig) {
 }
 
 func addChaosRecord(cfg *ServerConfig) {
-	// version.server / version.bind expose the real server version by design —
-	// config.Version is set by main.go from getVersion() before LoadConfig runs.
-	// this helps operators identify which ZJDNS instance is serving a query.
 	version := DefaultVersion
 	if version == "" || version == "dev" {
 		version = DefaultProjectName
 	}
-
-	// id.server / hostname.bind try the system hostname first; fall back to
-	// DefaultProjectName when the hostname cannot be determined.
 	hostname, err := os.Hostname()
 	if err != nil || hostname == "" {
 		hostname = DefaultProjectName
 	}
-
 	chaosRecords := map[string]string{
 		"id.server":      hostname,
 		"hostname.bind":  hostname,
 		"version.server": version,
 		"version.bind":   version,
 	}
-
 	for name, value := range chaosRecords {
-		cfg.Rewrite = append(cfg.Rewrite, RewriteRule{
+		cfg.Zone = append(cfg.Zone, ZoneRule{
 			Name: name,
-			Records: []DNSRecordConfig{{
-				Type:    "TXT",
-				Class:   "CH",
+			Answer: []ZoneRecord{{
+				Type:    dns.TypeTXT,
+				Class:   dns.ClassCHAOS,
 				TTL:     DefaultTTL,
 				Content: strconv.Quote(value),
 			}},
 		})
 	}
-
-	// DynamicContent rules — populated at query time by server.New().
-	// Destructive (db.clear*) rules are loopback-only.
 	for _, name := range []string{
 		DefaultProjectName + ".stats",
 		DefaultProjectName + ".db.clear",
@@ -369,25 +332,14 @@ func addChaosRecord(cfg *ServerConfig) {
 		DefaultProjectName + ".db.clear.stats",
 		DefaultProjectName + ".db.clear.latency",
 	} {
-		var includeClients []string
-		if strings.HasPrefix(name, DefaultProjectName+".db.") {
-			includeClients = []string{"127.0.0.1", "::1"}
-		}
-		cfg.Rewrite = append(cfg.Rewrite, RewriteRule{
-			Name:           name,
-			IncludeClients: includeClients,
-			Records: []DNSRecordConfig{{
-				Type:    "TXT",
-				Class:   "CH",
-				TTL:     0,
-				Content: "",
-			}},
+		cfg.Zone = append(cfg.Zone, ZoneRule{
+			Name:   name,
+			Answer: []ZoneRecord{{Type: dns.TypeTXT, Class: dns.ClassCHAOS, TTL: 0, Content: ""}},
 		})
 	}
 }
 
-// GenerateExampleConfig returns a complete example configuration as indented
-// JSON.
+// GenerateExampleConfig returns a complete example configuration as indented JSON.
 func GenerateExampleConfig() string {
 	cfg := NewDefaultServerConfig()
 
@@ -430,8 +382,8 @@ func GenerateExampleConfig() string {
 		{Address: "223.6.6.6:53", Protocol: ProtoUDP},
 		{Address: "223.5.5.5:853", Protocol: ProtoTLS, ServerName: "dns.alidns.com"},
 		{Address: "223.6.6.6:853", Protocol: ProtoQUIC, ServerName: "dns.alidns.com", SkipTLSVerify: true},
-		{Address: "https://223.5.5.5:443/dns-query", Protocol: ProtoHTTP, ServerName: "dns.alidns.com", Match: []string{"mixed"}},
-		{Address: "https://223.6.6.6:443/dns-query", Protocol: ProtoHTTP3, ServerName: "dns.alidns.com", Match: []string{"!mixed"}},
+		{Address: "https://223.5.5.5:443/dns-query", Protocol: ProtoHTTP, ServerName: "dns.alidns.com", Match: []string{"corp-net"}},
+		{Address: "https://223.6.6.6:443/dns-query", Protocol: ProtoHTTP3, ServerName: "dns.alidns.com", Match: []string{"!corp-net"}},
 	}
 
 	cfg.Fallback = []UpstreamServer{
@@ -440,17 +392,27 @@ func GenerateExampleConfig() string {
 		{Address: "149.112.112.9:53", Protocol: ProtoUDP, NoCache: true},
 	}
 
-	cfg.Rewrite = []RewriteRule{
-		{ExcludeClients: []string{"10.0.0.100"}},
-		{Name: "client-specific.example.com", IncludeClients: []string{"192.168.0.0/24"}, Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultTTL}}},
-		{Name: "blocked.example.com", ExcludeClients: []string{"192.168.1.0/24"}, Records: []DNSRecordConfig{{Type: "A", Content: "127.0.0.1", TTL: DefaultTTL}}},
-		{Name: "ipv6.blocked.example.com", Records: []DNSRecordConfig{{Type: "AAAA", Content: "::1", TTL: DefaultTTL}}},
+	cfg.Zone = []ZoneRule{
+		{Name: "blocked.com", Rcode: dns.RcodeNameError},
+		{Name: "static.example.com", Answer: []ZoneRecord{
+			{Type: dns.TypeA, TTL: 300, Content: "10.0.0.1"},
+			{Type: dns.TypeAAAA, TTL: 3600, Content: "::1"},
+		}},
+		{
+			Name: "*.cdn.example.com", Match: []string{"corp-net", "!guest"},
+			Answer: []ZoneRecord{{Type: dns.TypeA, TTL: 300, Content: "10.0.0.1"}},
+		},
+		{
+			Name:       "example.com",
+			Answer:     []ZoneRecord{{Type: dns.TypeA, TTL: 300, Content: "10.0.0.1"}},
+			Authority:  []ZoneRecord{{Type: dns.TypeSOA, TTL: 3600, Content: "ns1.example.com. admin.example.com. 1 3600 900 86400 3600"}},
+			Additional: []ZoneRecord{{Type: dns.TypeA, Name: "ns1.example.com", TTL: 3600, Content: "10.0.0.2"}},
+		},
 	}
 
 	cfg.CIDR = []CIDRConfig{
-		{File: "whitelist.txt", Tag: "file"},
-		{Rules: []string{"192.168.0.0/16", "10.0.0.0/8", "2001:db8::/32"}, Tag: "rules"},
-		{File: "blacklist.txt", Rules: []string{"127.0.0.1/32"}, Tag: "mixed"},
+		{Rules: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}, Tag: "corp-net"},
+		{Rules: []string{"0.0.0.0/0"}, Tag: "guest"},
 	}
 
 	data, _ := json.MarshalIndent(cfg, "", "  ")

@@ -210,11 +210,11 @@ zjdns/
 │   ├── sqlite_wire.go                         ←   zstd compress/decompress, init
 │   └── sqlite_helpers.go                      ←   insertPtrMap, TTL helpers, ecsParams, boolToInt
 ├── cidr/                                      ← IP filtering with tag matching
-├── rewrite/                                   ← Query rewrite rules (O(1) map + wildcard + CSV file import)
+├── zone/                                      ← DNS zone rules, composite-key (QNAME+QTYPE+QCLASS) matching
 ├── internal/
 │   ├── log/                                   ← Structured logging + IsDebug guard (zero internal deps)
 │   ├── pool/                                  ← sync.Pool allocators + QUIC error codes
-│   ├── ttl/                                   ← Stateless TTL functions (cache + rewrite)
+│   ├── ttl/                                   ← Stateless TTL functions (cache + zone)
 │   ├── dnsutil/                               ← DNS utilities: validation, PTR, panic recovery
 │   ├── ipdetect/                              ← Public IP auto-detection
 │   ├── latency/                               ← Unified probe engine (generic sorter)
@@ -275,7 +275,7 @@ Layer 3 (domain packages — import config + internal/*, never each other):
   edns → config, ipdetect, log, pool        (only domain→domain edge allowed)
   cache → config, dnsutil, log, pool
   cidr → config, dnsutil, log
-  rewrite → config, dnsutil, log
+  zone → config, dnsutil, log
 
 Layer 4 (server sub-packages — import domain + internal, never server/ parent):
   server/security → cache, config, dnsutil, log
@@ -285,7 +285,7 @@ Layer 4 (server sub-packages — import domain + internal, never server/ parent)
   server/resolver → cache, config, edns, dnsutil, log, pool, server/client, server/security
   server/tls → config, dnsutil, log, pool
   server/dnscrypt → config, dnsutil, log, pool
-  server/handler → cache, config, edns, dnsutil, log, pool, rewrite, server/resolver
+  server/handler → cache, config, edns, dnsutil, log, pool, zone, server/resolver
 
 Top layer (wiring):
   server → all domain + all server sub-packages
@@ -300,7 +300,7 @@ Top layer (wiring):
 
 ### Query Pipeline (`server/handler/handler.go:processDNSQuery`)
 1. Request validation (domain/label length, ANY/AXFR/IXFR rejection)
-2. `rewrite.Evaluator.Evaluate()` — synthetic response if rule matches
+2. `zone.Evaluator.Evaluate()` — synthetic response if zone rule matches
 3. `edns.Handler` — extract ECS, DNS Cookie
 4. Early DNS Cookie validation (RFC 7873) — initial handshake (empty ServerCookie) allowed; short (1–15 bytes) → BADCOOKIE; 16 bytes → cryptographic validation
 5. `cache.Store.Get()` — hit → serve (with CIDR filtering); miss → resolve
@@ -375,14 +375,14 @@ All logs use `zjdns/internal/log`. Default level: `info`.
 
 **Component filtering**: `log_level` supports `level:comp1,comp2` syntax (e.g. `"debug:UPSTREAM,RECURSION"`). Messages without a `PREFIX: ` pattern always pass through.
 
-**19 canonical prefixes**: `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `REWRITE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`.
+**20 canonical prefixes**: `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`.
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:` merged → `TLS:`. Hot-path logs are `Debug` only.
 
 ## Notable Design Decisions
 
 - **Cache (SQLite relational store)**: All DNS responses, NS latency data, DNSKEYs, and PTR mappings share six SQLite tables — no in-memory Go map, no gob encoding. WAL mode + mmap (16MB default) for hot-data-in-memory performance; `page_size=4096` matches OS page size. `journal_size_limit=mmap_size` caps WAL growth; `wal_autocheckpoint=4096` triggers passive checkpoint at 16MB. `synchronous=NORMAL` avoids fsync on every write. `ANALYZE` at migration populates `sqlite_stat1` for query planner; `PRAGMA optimize` runs on eviction + `Close()` to refresh statistics periodically (mostly a no-op, only runs `ANALYZE` when stats are stale). `msg_wire` BLOB stores zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in a single step (~0.5ms cache hits). TTL floor 10s. Negative response TTL capped per RFC 9077. `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based) with `_txlock=immediate` and 4-connection pool. See [DB Schema](#db-schema) below.
-- **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and rewrite (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
+- **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and zone (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
 - **EDNS buffer sizing**: Dual-size strategy — standard upstream queries use 1232 bytes (DNS Flag Day 2020) while recursive (root/TLD) queries use 4096 bytes (`RecursiveUDPBufferSize`) to avoid UDP truncation on DNSSEC-signed root zone referrals (~1400 bytes). Applied in `queryNameserversConcurrent` after `buildMsg` and in `probeTLDForHijack`.
 - **EDNS padding and DNSCrypt**: EDNS padding (128B request / 468B response blocks) is applied only when `isSecureConnection` is true — that means DoT, DoQ, DoH, and DoH3. Plain UDP/TCP and DNSCrypt responses never get EDNS padding. DNSCrypt already encrypts at the transport layer and has its own ISO 7816-4 padding (to 64-byte boundaries), making TLS-record-length-based traffic analysis mitigation unnecessary. The outbound side (`upstream.go:72`) also excludes `ProtoDNSCrypt`/`ProtoDNSCryptTCP` from the `isSecure` set so EDNS padding is never added to outbound DNSCrypt queries either.
 - **Per-interface binding** (`internal/dnsutil/bind.go`): All listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, DNSCrypt, pprof) bind per-interface IP instead of wildcard. `TryBind` pre-checks each address; unavailable ones are skipped with a WARN log. When another process occupies a port on a specific interface (e.g. warp-svc on 100.96.0.21:53), ZJDNS binds to remaining free IPs without conflict.
@@ -403,7 +403,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
 - **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
-- **Rewrite rules**: O(1) `domainMap` lookup for all rule types (static, client-filtered, DynamicContent). Inline rules via JSON `name`, `response_code`, `records`, `include_clients`/`exclude_clients`. CSV file import via `file` field: columns `domain, type, content, ttl, rcode`, empty cells inherit from parent rule. Wildcard `*.domain.com` supported in both inline `name` and CSV — matches all subdomains via separate `wildcardMap` with O(labels) suffix walk. Multi-row CSV domains merge records (A + AAAA on separate rows). Header row auto-detected. Comments: `#` and blank lines. Rewrite rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently. `DynamicContent` rules (`zjdns.stats`, `zjdns.db.clear*`) are called at query time. Destructive rules (`db.clear*`) are loopback-only via `IncludeClients`. Rewrite responses bypass cache.
+- **Zone rules**: O(1) composite-key `exactMap` lookup keyed by `(QNAME, QTYPE, QCLASS)` — matching DNS zone-file semantics. Each zone entry returns ANSWER + AUTHORITY + ADDITIONAL + RCODE. Inline rules via JSON `name`, `rcode`, `answer`, `authority`, `additional`, `match` (CIDR tags). Type/Class use IANA uint16 numbers (1=A, 28=AAAA, 16=TXT). Zone-file import via `file` field: domain headers (`.domain` / `*.wild`) with optional `rcode=N` and `match=tag`, record lines in `TYPE CONTENT [TTL] [key=value ...]` format, where key=value options include `class=N`, `name=STR`, `section=answer|authority|additional`. Wildcard `*.domain.com` supported in both inline `name` and file — matches all subdomains via separate `wildcardMap` with O(labels) suffix walk. Multi-row same-type records merge. Zone rules pre-build RRs at `LoadRules()` time. The evaluator tracks `loadedAt`; the handler applies `ttl.DeductElapsedCyclical()` so each RR's TTL cycles independently. `DynamicContent` rules (`zjdns.stats`, `zjdns.db.clear*`) are called at query time. Zone responses bypass cache.
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns). Similarly, `handler.Question` is a type alias of `resolver.Question` to avoid duplicate struct definitions.
 - **request_log ring buffer**: Append-only request journal replaces the old `hit_counters` table. `RecordRequest()` does a single INSERT — no conflict detection, no read-before-write. Stats are aggregated via SQL over rows with `id > cleared_before`; FlushDB("stats") resets the threshold without touching log rows.
 - **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtInsertLog`, `stmtInsertLatency`, `stmtGetLastProbe`) at initialization time to avoid per-call SQL compilation overhead.
@@ -447,7 +447,7 @@ CREATE TABLE entries (
 );
 CREATE INDEX idx_entries_expires ON entries(expires_at);
 
--- Request journal: one row per miss/stale/rewrite/error query. qname/qtype
+-- Request journal: one row per miss/stale/zone/error query. qname/qtype
 -- are retrieved by JOINing entries via entry_id. Hits are aggregated into
 -- entry_hit_counters instead. Survives FlushDB("stats").
 CREATE TABLE request_log (
@@ -505,7 +505,7 @@ CREATE TABLE ip_latency (
 
 **Key patterns**:
 - **DNS response cache**: `qtype` = original query type, records in original wire order. All entries are cacheable. `Get()` decompresses + `Msg.Unpack()` — cache hit ~0.5ms.
-- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol+rcode, no row bloat). Miss/stale/rewrite/error insert into `request_log` with entry_id FK — qname retrieved by JOINing entries for debugging. `ensureEntry()` creates lightweight stubs for rewrite/error paths so every row has a valid FK.
+- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol+rcode, no row bloat). Miss/stale/zone/error insert into `request_log` with entry_id FK — qname retrieved by JOINing entries for debugging. `ensureEntry()` creates lightweight stubs for zone/error paths so every row has a valid FK.
 - **Stats aggregation**: `Stats()` UNION ALLs `entry_hit_counters` + `request_log` for rcode distribution, and combines both tables for protocol counts. `FlushDB("stats")` truncates `entry_hit_counters` and resets the `stats_meta` threshold — request_log rows survive.
 - **Log bounded by cache**: `request_log.entry_id` and `entry_hit_counters.entry_id` both use `ON DELETE CASCADE` — when entries are evicted, all associated rows go with them. No separate ring-buffer needed.
 - **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `ProbeNSAddrs` and stored in ip_latency (keyed by IP only); `sortAnswerByLatency` reorders records at `Get()` time.
@@ -513,7 +513,7 @@ CREATE TABLE ip_latency (
 - **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
 - **IP latency**: Per-IP keyed (`rdata_ip`). A single `INSERT OR REPLACE` writes `latency_ms`, `qtype` (inferred from IP format), and `last_probe_time` (via `unixepoch()`). `Prober.Start()` and `ProbeNSAddrs()` check `GetLatencyLastProbe` per-IP — if every IP in the answer was probed within `DefaultLatencyProbeMinInterval` (60s), the probe is skipped. All domains sharing the same CDN IP reuse the same latency row.
 - **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map`. Also prunes `ip_latency` rows with `last_probe_time` older than `defaultStaleMaxAge` (30 days). Entry count is synced from `SELECT COUNT(*)` before eviction to correct drift from INSERT OR REPLACE.
-- **Dynamic queries + FlushDB**: `Store.Stats()` returns `[]string` with 8 TXT records grouped by theme (overview, success, errors, rcodes, anomalies, plain, encrypted, DNSSEC), queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency` (`FlushDB(target)`, per-table). `FlushDB("stats")` only resets the stats_meta threshold — request_log rows survive. All restricted to loopback via `IncludeClients`. Wired via rewrite `DynamicContent` in `server.New()` before `LoadRules()`.
+- **Dynamic queries + FlushDB**: `Store.Stats()` returns `[]string` with 8 TXT records grouped by theme (overview, success, errors, rcodes, anomalies, plain, encrypted, DNSSEC), queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency` (`FlushDB(target)`, per-table). `FlushDB("stats")` only resets the stats_meta threshold — request_log rows survive. Wired via zone `DynamicContent` in `server.New()` before `LoadRules()`.
 - **Analytics**: request_log single-table queries — e.g. `SELECT server, COUNT(*) FROM request_log GROUP BY server` for requests per upstream, `SELECT qname, COUNT(*) FROM request_log WHERE result='error' GROUP BY qname` for failure analysis. No JOIN needed.
 
 ## CI/CD
@@ -597,14 +597,14 @@ dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 
 **Stats coverage verification (all result types):**
 ```bash
-# Rewrite: stats query itself triggers a rewrite rule
+# Zone: stats query itself triggers a zone rule
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 
 # PTR reverse lookup: warm a cached entry first, then query its IP in reverse
 dig @127.0.0.1 -p 15353 www.baidu.com A +short > /dev/null
 dig @127.0.0.1 -p 15353 -x 180.101.49.44 +short
 
-# Verify all result types are logged (should show hit, miss, error, rewrite)
+# Verify all result types are logged (should show hit, miss, zone, error)
 ./zjdns -analyze cache.db "SELECT result, rcode, COUNT(*) FROM request_log GROUP BY result, rcode"
 
 # Verify DNSSEC distribution

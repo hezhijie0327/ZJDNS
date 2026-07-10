@@ -240,11 +240,11 @@ func buildBenchServer(b *testing.B) *server.Server {
 				Cache:            config.CacheSettings{MaxEntries: config.DefaultMaxCacheEntries},
 			},
 		},
-		Rewrite: []config.RewriteRule{
+		Zone: []config.ZoneRule{
 			{
 				Name: "bench.local",
-				Records: []config.DNSRecordConfig{
-					{Type: "A", TTL: 10, Content: "192.0.2.1"},
+				Answer: []config.ZoneRecord{
+					{Type: dns.TypeA, TTL: 10, Content: "192.0.2.1"},
 				},
 			},
 		},
@@ -288,7 +288,7 @@ func BenchmarkServerProcessQuery(b *testing.B) {
 }
 
 // BenchmarkServerProcessQuery_Cold measures cold-query throughput (no
-// pre-warmed cache, rewrite rule responses only).
+// pre-warmed cache, zone rule responses only).
 func BenchmarkServerProcessQuery_Cold(b *testing.B) {
 	srv := buildBenchServer(b)
 

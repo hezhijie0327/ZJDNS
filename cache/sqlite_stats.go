@@ -16,7 +16,7 @@ import (
 )
 
 // RecordRequest logs a request outcome. Hit path upserts hit counters; miss/
-// stale/error/rewrite/blocked paths insert a log row with entry_id FK.
+// stale/zone/error/blocked paths insert a log row with entry_id FK.
 func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return
@@ -148,7 +148,7 @@ func (s *SQLiteCache) Stats() []string {
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&entries)
 
 	var avgMs float64
-	var total, hits, misses, stales, rewrites, errCount, blockedCount, badcookieCount int64
+	var total, hits, misses, stales, zones, errCount, blockedCount, badcookieCount int64
 	var hcUDP, hcTCP, hcDOT, hcDOQ, hcDOH, hcDOH3, hcDNSCrypt, hcDNSCryptTCP int64
 	var rlUDP, rlTCP, rlDOT, rlDOQ, rlDOH, rlDOH3, rlDNSCrypt, rlDNSCryptTCP int64
 	var hijack, fallback, totalMS, hitTotalMS int64
@@ -176,7 +176,7 @@ func (s *SQLiteCache) Stats() []string {
 		"SELECT COUNT(*),"+
 			" COALESCE(SUM(CASE WHEN result='miss' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN result='stale' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='rewrite' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='zone' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN result='error' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN result='blocked' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN result='badcookie' THEN 1 ELSE 0 END), 0),"+
@@ -194,7 +194,7 @@ func (s *SQLiteCache) Stats() []string {
 			" FROM request_log WHERE id > (SELECT cleared_before FROM stats_meta)",
 	).Scan(
 		&total,
-		&misses, &stales, &rewrites, &errCount, &blockedCount, &badcookieCount,
+		&misses, &stales, &zones, &errCount, &blockedCount, &badcookieCount,
 		&rlUDP, &rlTCP, &rlDOT, &rlDOQ, &rlDOH, &rlDOH3, &rlDNSCrypt, &rlDNSCryptTCP,
 		&hijack, &fallback, &totalMS,
 	)
@@ -209,7 +209,7 @@ func (s *SQLiteCache) Stats() []string {
 	dnscrypt := hcDNSCrypt + rlDNSCrypt
 	dnscryptTCP := hcDNSCryptTCP + rlDNSCryptTCP
 
-	// Average across all request types (hit + miss + stale + rewrite + error).
+	// Average across all request types (hit + miss + stale + zone + error).
 	if total > 0 {
 		avgMs = float64(totalMS+hitTotalMS) / float64(total)
 	}
@@ -275,8 +275,8 @@ func (s *SQLiteCache) Stats() []string {
 	return []string{
 		fmt.Sprintf("entries=%d total=%d avg=%.1fms",
 			entries, total, avgMs),
-		fmt.Sprintf("hits=%d misses=%d stales=%d rewrites=%d",
-			hits, misses, stales, rewrites),
+		fmt.Sprintf("hits=%d misses=%d stales=%d zones=%d",
+			hits, misses, stales, zones),
 		fmt.Sprintf("errors=%d blocked=%d badcookie=%d",
 			errCount, blockedCount, badcookieCount),
 		fmt.Sprintf("noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d",

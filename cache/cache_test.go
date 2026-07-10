@@ -470,24 +470,24 @@ func TestRecordRequest_MultipleResults(t *testing.T) {
 	}
 }
 
-// ── RecordRequest Rewrite ─────────────────────────────────────────────────────
+// ── RecordRequest Zone ─────────────────────────────────────────────────────
 
-func TestRecordRequest_Rewrite(t *testing.T) {
+func TestRecordRequest_Zone(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	mc.RecordRequest(&RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
-	mc.RecordRequest(&RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 
 	var count int64
 	err := mc.db.QueryRow(
-		"SELECT COUNT(*) FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='blocked.com' AND rl.result='rewrite'",
+		"SELECT COUNT(*) FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='blocked.com' AND rl.result='zone'",
 	).Scan(&count)
 	if err != nil {
 		t.Fatalf("request_log query: %v", err)
 	}
 	if count != 2 {
-		t.Errorf("rewrite count = %d, want 2", count)
+		t.Errorf("zone count = %d, want 2", count)
 	}
 }
 
@@ -891,14 +891,14 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		t.Error("new ptr_map entry for 93.184.216.99 not found")
 	}
 
-	// ── Phase 9: RecordRequest Rewrite ──────────────────────────────────────
-	mc.RecordRequest(&RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
-	mc.RecordRequest(&RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
-	mc.RecordRequest(&RequestRecord{Qname: "rewrite.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "rewrite", Rcode: dns.RcodeRefused})
+	// ── Phase 9: RecordRequest Zone ──────────────────────────────────────
+	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	var rwCount int64
-	_ = mc.db.QueryRow(`SELECT COUNT(*) FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='rewrite.test' AND rl.result='rewrite'`).Scan(&rwCount)
+	_ = mc.db.QueryRow(`SELECT COUNT(*) FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='zone.test' AND rl.result='zone'`).Scan(&rwCount)
 	if rwCount != 3 {
-		t.Errorf("rewrite_count = %d, want 3", rwCount)
+		t.Errorf("zone_count = %d, want 3", rwCount)
 	}
 
 	// ── Phase 10: Summary ───────────────────────────────────────────────────

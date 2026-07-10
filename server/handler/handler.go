@@ -1,5 +1,5 @@
 // Package handler provides the DNS query processing pipeline: cache lookup,
-// rewrite evaluation, upstream/recursive resolution, and DNSSEC validation.
+// zone evaluation, upstream/recursive resolution, and DNSSEC validation.
 package handler
 
 import (
@@ -16,8 +16,8 @@ import (
 	"zjdns/internal/pending"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
-	"zjdns/rewrite"
 	"zjdns/server/resolver"
+	"zjdns/zone"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -44,7 +44,7 @@ type Handler struct {
 		ReverseLookup(string) []cache.LookupResult
 	}
 	edns               *edns.Handler
-	rewrite            *rewrite.Evaluator
+	zoneEvaluator      *zone.Evaluator
 	resolver           *resolver.Resolver
 	prober             LatencyProber
 	prefetchCooldown   map[string]int64
@@ -84,14 +84,14 @@ func New(
 	cfg *config.ServerConfig,
 	cacheStore cache.Store,
 	ednsHandler *edns.Handler,
-	rewriteEvaluator *rewrite.Evaluator,
+	zoneEval *zone.Evaluator,
 	bg BackgroundConfig,
 ) *Handler {
 	h := &Handler{
 		config:            cfg,
 		cache:             cacheStore,
 		edns:              ednsHandler,
-		rewrite:           rewriteEvaluator,
+		zoneEvaluator:     zoneEval,
 		prefetchCooldown:  make(map[string]int64),
 		pending:           NewPendingRequests(),
 		pendingRefreshes:  pending.NewGroup[pendingKey](),
@@ -129,8 +129,8 @@ func (h *Handler) CacheStore() cache.Store { return h.cache }
 // Resolver returns the DNS resolver.
 func (h *Handler) Resolver() *resolver.Resolver { return h.resolver }
 
-// HasRewriteRules reports whether rewrite rules are configured.
-func (h *Handler) HasRewriteRules() bool { return h.rewrite != nil && h.rewrite.HasRules() }
+// HasZoneRules reports whether zone rules are configured.
+func (h *Handler) HasZoneRules() bool { return h.zoneEvaluator != nil && h.zoneEvaluator.HasRules() }
 
 // PrefetchCooldown returns the prefetch throttle map and its mutex
 // (used by background cleanup).
@@ -228,7 +228,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		}
 	}()
 
-	if resp, done := h.processRewrite(req, &question, clientIP, isSecureConnection, requestProtocol, tcpKeepaliveTimeout); done {
+	if resp, done := h.processZone(req, &question, clientIP, isSecureConnection, requestProtocol, tcpKeepaliveTimeout); done {
 		responseMsg = resp
 		return responseMsg
 	}
@@ -383,50 +383,57 @@ func (h *Handler) validateDNSQuery(req *dns.Msg, question *Question, clientIP ne
 	return msg
 }
 
-// processRewrite evaluates rewrite rules and returns a synthetic response if
-// a rule matches. The caller must return the response immediately when done=true.
-func (h *Handler) processRewrite(req *dns.Msg, question *Question, clientIP net.IP, isSecureConnection bool, requestProtocol string, tcpKeepaliveTimeout uint16) (*dns.Msg, bool) {
-	if !h.rewrite.HasRules() {
+// processZone evaluates zone rules and returns a synthetic response if a rule
+// matches. The caller must return the response immediately when done=true.
+func (h *Handler) processZone(req *dns.Msg, question *Question, clientIP net.IP, isSecureConnection bool, requestProtocol string, tcpKeepaliveTimeout uint16) (*dns.Msg, bool) {
+	if !h.zoneEvaluator.HasRules() {
 		return nil, false
 	}
-	log.Debugf("REWRITE: evaluating rules for %s qtype=%s client=%s", question.Name, dns.TypeToString[question.Qtype], clientIP)
-	rewriteResult := h.rewrite.Evaluate(question.Name, question.Qtype, question.Qclass, clientIP)
-	if !rewriteResult.ShouldRewrite {
+	log.Debugf("ZONE: evaluating rules for %s qtype=%s client=%s", question.Name, dns.TypeToString[question.Qtype], clientIP)
+	zoneResult := h.zoneEvaluator.Evaluate(question.Name, question.Qtype, question.Qclass, nil)
+	if !zoneResult.Matched {
 		return nil, false
 	}
 
-	log.Debugf("REWRITE: matched rule for %s -> domain=%s responseCode=%d records=%d additional=%d", question.Name, rewriteResult.Domain, uint16(rewriteResult.ResponseCode), len(rewriteResult.Records), len(rewriteResult.Additional)) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
+	log.Debugf("ZONE: matched rule for %s -> domain=%s rcode=%d answer=%d authority=%d additional=%d",
+		question.Name, zoneResult.Domain, zoneResult.Rcode, len(zoneResult.Answer), len(zoneResult.Authority), len(zoneResult.Additional))
 
 	h.cache.RecordRequest(&cache.RequestRecord{
 		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
-		Protocol: requestProtocol, Result: "rewrite", Rcode: rewriteResult.ResponseCode,
+		Protocol: requestProtocol, Result: "zone", Rcode: zoneResult.Rcode,
 	})
 
-	if uint16(rewriteResult.ResponseCode) != dns.RcodeSuccess { //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
-		log.Debugf("RESULT: %s %s | rcode=%s, blocked by rewrite rule", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[uint16(rewriteResult.ResponseCode)]) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
+	if zoneResult.Rcode != dns.RcodeSuccess {
+		log.Debugf("RESULT: %s %s | rcode=%s, blocked by zone rule", question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[uint16(zoneResult.Rcode)]) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 		response := h.buildResponse(req)
-		response.Rcode = uint16(rewriteResult.ResponseCode) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
-		ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
-		h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
-		return response, true
-	}
-
-	if len(rewriteResult.Records) > 0 {
-		elapsed := ttl.Elapsed(rewriteResult.CreatedAt)
-		response := h.buildResponse(req)
-		response.Answer = ttl.DeductElapsedCyclical(rewriteResult.Records, elapsed)
-		response.Rcode = dns.RcodeSuccess
-		if len(rewriteResult.Additional) > 0 {
-			response.Extra = ttl.DeductElapsedCyclical(rewriteResult.Additional, elapsed)
+		response.Rcode = uint16(zoneResult.Rcode) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
+		if len(zoneResult.Authority) > 0 || len(zoneResult.Additional) > 0 {
+			elapsed := ttl.Elapsed(zoneResult.CreatedAt)
+			response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
+			response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)
 		}
 		ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
 		h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
-		log.Debugf("RESULT: %s %s | rcode=NOERROR (rewrite), answer=%d, additional=%d", question.Name, dns.TypeToString[question.Qtype], len(rewriteResult.Records), len(rewriteResult.Additional))
 		return response, true
 	}
 
-	if rewriteResult.Domain != question.Name {
-		question.Name = rewriteResult.Domain
+	hasRecords := len(zoneResult.Answer) > 0 || len(zoneResult.Authority) > 0 || len(zoneResult.Additional) > 0
+	if hasRecords {
+		elapsed := ttl.Elapsed(zoneResult.CreatedAt)
+		response := h.buildResponse(req)
+		response.Answer = ttl.DeductElapsedCyclical(zoneResult.Answer, elapsed)
+		response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
+		response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)
+		response.Rcode = dns.RcodeSuccess
+		ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
+		h.addEDNS(response, req, isSecureConnection, clientIP, nil, ede, tcpKeepaliveTimeout)
+		log.Debugf("RESULT: %s %s | rcode=NOERROR (zone), answer=%d authority=%d additional=%d",
+			question.Name, dns.TypeToString[question.Qtype], len(zoneResult.Answer), len(zoneResult.Authority), len(zoneResult.Additional))
+		return response, true
+	}
+
+	if zoneResult.Domain != question.Name {
+		question.Name = zoneResult.Domain
 	}
 	return nil, false
 }

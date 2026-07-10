@@ -19,7 +19,6 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	"zjdns/rewrite"
 	"zjdns/server/client"
 	serverdnscrypt "zjdns/server/dnscrypt"
 	"zjdns/server/handler"
@@ -27,6 +26,7 @@ import (
 	"zjdns/server/resolver"
 	"zjdns/server/security"
 	"zjdns/server/tls"
+	"zjdns/zone"
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -82,7 +82,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("cache init: %w", err)
 	}
 
-	// ── Domain services: EDNS, rewrite, CIDR ──────────────────────────────
+	// ── Domain services: EDNS, zone, CIDR ──────────────────────────────
 
 	ednsHandler, err := edns.NewHandler(cfg.Server.Features.ECS)
 	if err != nil {
@@ -90,13 +90,13 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("EDNS handler init: %w", err)
 	}
 
-	// Wire up DynamicContent for {DefaultProjectName}.stats and db.clear*.
-	for i := range cfg.Rewrite {
-		switch cfg.Rewrite[i].Name {
+	// Wire up DynamicContent for zone rules.
+	for i := range cfg.Zone {
+		switch cfg.Zone[i].Name {
 		case config.DefaultProjectName + ".stats":
-			cfg.Rewrite[i].DynamicContent = cacheStore.Stats
+			cfg.Zone[i].DynamicContent = cacheStore.Stats
 		case config.DefaultProjectName + ".db.clear":
-			cfg.Rewrite[i].DynamicContent = func() []string {
+			cfg.Zone[i].DynamicContent = func() []string {
 				n, err := cacheStore.Clear()
 				if err != nil {
 					return []string{fmt.Sprintf("error=%v", err)}
@@ -104,7 +104,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
 		case config.DefaultProjectName + ".db.clear.cache":
-			cfg.Rewrite[i].DynamicContent = func() []string {
+			cfg.Zone[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("cache")
 				if err != nil {
 					return []string{fmt.Sprintf("error=%v", err)}
@@ -112,7 +112,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
 		case config.DefaultProjectName + ".db.clear.stats":
-			cfg.Rewrite[i].DynamicContent = func() []string {
+			cfg.Zone[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("stats")
 				if err != nil {
 					return []string{fmt.Sprintf("error=%v", err)}
@@ -120,7 +120,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				return []string{fmt.Sprintf("reset=%d", n)}
 			}
 		case config.DefaultProjectName + ".db.clear.latency":
-			cfg.Rewrite[i].DynamicContent = func() []string {
+			cfg.Zone[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("latency")
 				if err != nil {
 					return []string{fmt.Sprintf("error=%v", err)}
@@ -130,11 +130,11 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}
 
-	rewriteEvaluator := rewrite.New()
-	if len(cfg.Rewrite) > 0 {
-		if err := rewriteEvaluator.LoadRules(cfg.Rewrite); err != nil {
-			cancel(fmt.Errorf("load rewrite rules: %w", err))
-			return nil, fmt.Errorf("load rewrite rules: %w", err)
+	zoneEvaluator := zone.New()
+	if len(cfg.Zone) > 0 {
+		if err := zoneEvaluator.LoadRules(cfg.Zone); err != nil {
+			cancel(fmt.Errorf("load zone rules: %w", err))
+			return nil, fmt.Errorf("load zone rules: %w", err)
 		}
 	}
 
@@ -151,7 +151,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	// ── Core: handler + security ──────────────────────────────────────────
 
 	h := handler.New(
-		cfg, cacheStore, ednsHandler, rewriteEvaluator,
+		cfg, cacheStore, ednsHandler, zoneEvaluator,
 		handler.BackgroundConfig{
 			RefreshGroup: cacheRefreshGroup,
 			RefreshCtx:   cacheRefreshCtx,

@@ -108,13 +108,13 @@ const (
 	DefaultServerGoroutineLimit = 1024
 	DefaultMinConcurrencyLimit  = 8
 
-	DefaultTransportMax         = 64
-	DefaultTLSSessionCacheSize  = 256
-	DefaultMaxIdleConns         = 100
-	DefaultMaxIdleConnsPerHost  = 8
-	DefaultDOTWriteChannelSize  = 64
-	DefaultDOHMaxRequestSize    = 8192 // Max DoH request body size
-	DefaultRewriteRulesCapacity = 16
+	DefaultTransportMax        = 64
+	DefaultTLSSessionCacheSize = 256
+	DefaultMaxIdleConns        = 100
+	DefaultMaxIdleConnsPerHost = 8
+	DefaultDOTWriteChannelSize = 64
+	DefaultDOHMaxRequestSize   = 8192 // Max DoH request body size
+	DefaultZoneRulesCapacity   = 16
 
 	DefaultTokenStoreCapacity     = 32  // QUIC LRU token store capacity per key
 	DefaultTokenStoreMaxEntries   = 100 // QUIC LRU token store max total entries
@@ -199,7 +199,7 @@ var (
 )
 
 // DefaultProjectName is the default application name, used in CHAOS records
-// and rewrite rule names before the build-time value takes effect.
+// and zone rule names before the build-time value takes effect.
 var DefaultProjectName = "ZJDNS"
 
 // DefaultVersion is the default build version, used in CHAOS records before the

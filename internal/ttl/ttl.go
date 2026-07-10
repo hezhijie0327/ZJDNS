@@ -1,5 +1,5 @@
 // Package ttl provides stateless TTL calculation functions for DNS cache
-// entries and rewrite responses. All functions are zero-allocation and
+// entries and zone responses. All functions are zero-allocation and
 // operate on scalar values.
 package ttl
 

@@ -18,7 +18,7 @@ type RequestRecord struct {
 	ECS          *config.ECSOption // for resolving entry_id FK; nil if none
 	DNSSECOK     bool              // for resolving entry_id FK
 	Protocol     string            // 'udp','tcp','dot','doq','doh','doh3'
-	Result       string            // 'hit','miss','stale','rewrite','error'
+	Result       string            // 'hit','miss','stale','zone','error'
 	ResponseTime int64             // milliseconds
 	Rcode        int               // DNS response code
 	Server       string            // upstream server identifier

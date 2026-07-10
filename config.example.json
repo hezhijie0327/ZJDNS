@@ -110,13 +110,13 @@
       "address": "https://223.5.5.5:443/dns-query",
       "protocol": "https",
       "server_name": "dns.alidns.com",
-      "match": ["mixed"]
+      "match": ["corp-net"]
     },
     {
       "address": "https://223.6.6.6:443/dns-query",
       "protocol": "http3",
       "server_name": "dns.alidns.com",
-      "match": ["!mixed"]
+      "match": ["!corp-net"]
     }
   ],
   "fallback": [
@@ -134,63 +134,71 @@
       "no_cache": true
     }
   ],
-  "rewrite": [
+  "zone": [
     {
-      "name": "",
-      "exclude_clients": ["10.0.0.100"]
+      "name": "blocked.com",
+      "rcode": 3
     },
     {
-      "name": "client-specific.example.com",
-      "records": [
+      "name": "static.example.com",
+      "answer": [
         {
-          "type": "A",
-          "ttl": 10,
-          "content": "127.0.0.1",
-          "ParsedType": 0,
-          "ParsedClass": 0
+          "type": 1,
+          "ttl": 300,
+          "content": "10.0.0.1"
+        },
+        {
+          "type": 28,
+          "ttl": 3600,
+          "content": "::1"
+        }
+      ]
+    },
+    {
+      "name": "*.cdn.example.com",
+      "match": ["corp-net", "!guest"],
+      "answer": [
+        {
+          "type": 1,
+          "ttl": 300,
+          "content": "10.0.0.1"
+        }
+      ]
+    },
+    {
+      "name": "example.com",
+      "answer": [
+        {
+          "type": 1,
+          "ttl": 300,
+          "content": "10.0.0.1"
         }
       ],
-      "include_clients": ["192.168.0.0/24"]
-    },
-    {
-      "name": "blocked.example.com",
-      "records": [
+      "authority": [
         {
-          "type": "A",
-          "ttl": 10,
-          "content": "127.0.0.1",
-          "ParsedType": 0,
-          "ParsedClass": 0
+          "type": 6,
+          "ttl": 3600,
+          "content": "ns1.example.com. admin.example.com. 1 3600 900 86400 3600"
         }
       ],
-      "exclude_clients": ["192.168.1.0/24"]
-    },
-    {
-      "name": "ipv6.blocked.example.com",
-      "records": [
+      "additional": [
         {
-          "type": "AAAA",
-          "ttl": 10,
-          "content": "::1",
-          "ParsedType": 0,
-          "ParsedClass": 0
+          "name": "ns1.example.com",
+          "type": 1,
+          "ttl": 3600,
+          "content": "10.0.0.2"
         }
       ]
     }
   ],
   "cidr": [
     {
-      "file": "whitelist.txt",
-      "tag": "file"
+      "rules": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+      "tag": "corp-net"
     },
     {
-      "rules": ["192.168.0.0/16", "10.0.0.0/8", "2001:db8::/32"],
-      "tag": "rules"
-    },
-    {
-      "file": "blacklist.txt",
-      "rules": ["127.0.0.1/32"],
-      "tag": "mixed"
+      "rules": ["0.0.0.0/0"],
+      "tag": "guest"
     }
   ]
 }
