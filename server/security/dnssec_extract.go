@@ -38,7 +38,7 @@ func FindRRSIGs(sigs []*dns.RRSIG, ownerName string, typeCovered uint16) []*dns.
 		if rrsig == nil {
 			continue
 		}
-		if rrsig.TypeCovered == typeCovered && strings.ToLower(rrsig.Header().Name) == normalized {
+		if rrsig.TypeCovered == typeCovered && strings.EqualFold(rrsig.Header().Name, normalized) {
 			result = append(result, rrsig)
 		}
 	}

@@ -136,10 +136,16 @@ func (h *Handler) Resolver() *resolver.Resolver { return h.resolver }
 // HasZoneRules reports whether zone rules are configured.
 func (h *Handler) HasZoneRules() bool { return h.zoneEvaluator != nil && h.zoneEvaluator.HasRules() }
 
-// PrefetchCooldown returns the prefetch throttle map and its mutex
-// (used by background cleanup).
-func (h *Handler) PrefetchCooldown() (map[string]int64, *sync.RWMutex) {
-	return h.prefetchCooldown, &h.prefetchCooldownMu
+// CleanupPrefetchCooldown removes stale entries from the prefetch cooldown map.
+// Entries with timestamp < now are evicted.
+func (h *Handler) CleanupPrefetchCooldown(now int64) {
+	h.prefetchCooldownMu.Lock()
+	for key, ts := range h.prefetchCooldown {
+		if now > ts {
+			delete(h.prefetchCooldown, key)
+		}
+	}
+	h.prefetchCooldownMu.Unlock()
 }
 
 // UpstreamServers returns the configured upstream servers.

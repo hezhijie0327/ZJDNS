@@ -119,10 +119,8 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 
 	var res queryResult
 	done := make(chan struct{})
-	if h.IsClosed() {
-		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
-	}
-	if !h.tryStartRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt) {
+	refreshed := !h.IsClosed() && h.tryStartRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
+	if !refreshed {
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
 	go func() {

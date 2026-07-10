@@ -2,7 +2,6 @@ package database
 
 import (
 	"fmt"
-	"sort"
 	"zjdns/internal/log"
 )
 
@@ -22,7 +21,8 @@ type migration struct {
 
 // migrations is the ordered list of schema migrations. Each entry must be
 // idempotent so it is safe to re-run on already-migrated databases.
-// Add new entries here and bump Version.
+// Add new entries at the end in version order; runMigrations iterates
+// in slice order.
 var migrations = []migration{
 	{"3.1.0", "drop legacy schema_version table", migrateV3_1_0},
 	{"3.2.0", "rebuild zone_entries with match_tags in PK", migrateV3_2_0},
@@ -63,13 +63,6 @@ func migrateV3_1_0(db *DB) error {
 		}
 	}
 	return nil
-}
-
-// sort migrations by version on init. Uses simple string compare; for
-// semver this works as long as major.minor.patch components are zero-padded
-// equivalently (e.g. "3.1.0" < "3.10.0").
-func init() {
-	sort.Slice(migrations, func(i, j int) bool { return migrations[i].version < migrations[j].version })
 }
 
 // runMigrations applies any pending incremental migrations.
