@@ -49,7 +49,7 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	// Precompute the serve-stale cutoff so the comparison e.expires_at >= ?
 	// avoids a per-row arithmetic expression and can use idx_entries_expires.
 	staleCutoff := log.NowUnix() - defaultStaleMaxAge
-	rows, err := s.db.Query(
+	rows, err := s.db.SQ.Query(
 		`SELECT pm.name, pm.ttl, e.timestamp, MAX(e.timestamp + pm.ttl)
 		 FROM ptr_map pm
 		 JOIN entries e ON pm.entry_id = e.id
@@ -91,17 +91,17 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	var err error
 	switch target {
 	case "stats":
-		_, _ = s.db.Exec(`DELETE FROM entry_hit_counters`)
-		result, err = s.db.Exec(
+		_, _ = s.db.SQ.Exec(`DELETE FROM entry_hit_counters`)
+		result, err = s.db.SQ.Exec(
 			`UPDATE stats_meta SET cleared_before = (SELECT COALESCE(MAX(id), 0) FROM request_log) WHERE id = 1`,
 		)
 	case "cache":
-		result, err = s.db.Exec(`DELETE FROM entries`)
+		result, err = s.db.SQ.Exec(`DELETE FROM entries`)
 		if err == nil {
 			s.db.SetEntryCount(0)
 		}
 	case "latency":
-		result, err = s.db.Exec(`DELETE FROM ip_latency`)
+		result, err = s.db.SQ.Exec(`DELETE FROM ip_latency`)
 	default:
 		return 0, fmt.Errorf("flushDB: unknown target %q", target)
 	}
@@ -128,13 +128,13 @@ func (s *SQLiteCache) Clear() (int64, error) {
 		return n1 + n2, err
 	}
 	// Clear request_log, entry_hit_counters, and reset stats_meta.
-	_, _ = s.db.Exec(`DELETE FROM entry_hit_counters`)
-	result, err := s.db.Exec(`DELETE FROM request_log`)
+	_, _ = s.db.SQ.Exec(`DELETE FROM entry_hit_counters`)
+	result, err := s.db.SQ.Exec(`DELETE FROM request_log`)
 	if err != nil {
 		return n1 + n2 + n3, fmt.Errorf("clear request_log: %w", err)
 	}
 	n4, _ := result.RowsAffected()
-	_, _ = s.db.Exec(`UPDATE stats_meta SET cleared_before = 0 WHERE id = 1`)
+	_, _ = s.db.SQ.Exec(`UPDATE stats_meta SET cleared_before = 0 WHERE id = 1`)
 	return n1 + n2 + n3 + n4, nil
 }
 
@@ -145,7 +145,7 @@ func (s *SQLiteCache) Stats() []string {
 	}
 
 	var entries int64
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&entries)
+	_ = s.db.SQ.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&entries)
 
 	var avgMs float64
 	var total, hits, misses, stales, zones, errCount, blockedCount, badcookieCount int64
@@ -157,7 +157,7 @@ func (s *SQLiteCache) Stats() []string {
 
 	// Hits come from entry_hit_counters (aggregated, no cleared_before filter).
 	// Single scan: hit counts by protocol + total response time for avg calculation.
-	_ = s.db.QueryRow(
+	_ = s.db.SQ.QueryRow(
 		"SELECT COALESCE(SUM(hit_count), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='udp' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='tcp' THEN hit_count ELSE 0 END), 0),"+
@@ -172,7 +172,7 @@ func (s *SQLiteCache) Stats() []string {
 	).Scan(&hits, &hcUDP, &hcTCP, &hcDOT, &hcDOQ, &hcDOH, &hcDOH3, &hcDNSCrypt, &hcDNSCryptTCP, &hitTotalMS)
 
 	// Detail rows from request_log since last stats clear.
-	_ = s.db.QueryRow(
+	_ = s.db.SQ.QueryRow(
 		"SELECT COUNT(*),"+
 			" COALESCE(SUM(CASE WHEN result='miss' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN result='stale' THEN 1 ELSE 0 END), 0),"+
@@ -215,7 +215,7 @@ func (s *SQLiteCache) Stats() []string {
 	}
 
 	// Rcode distribution: request_log + entry_hit_counters.
-	rows, err := s.db.Query(
+	rows, err := s.db.SQ.Query(
 		`SELECT rcode, SUM(cnt) FROM (
 			SELECT rcode, COUNT(*) AS cnt FROM request_log
 			 WHERE id > (SELECT cleared_before FROM stats_meta) GROUP BY rcode
@@ -249,7 +249,7 @@ func (s *SQLiteCache) Stats() []string {
 	}
 
 	// DNSSEC status distribution.
-	dnssecRows, err := s.db.Query(
+	dnssecRows, err := s.db.SQ.Query(
 		`SELECT dnssec_status, COUNT(*) FROM request_log
 		 WHERE id > (SELECT cleared_before FROM stats_meta)
 		 GROUP BY dnssec_status`,

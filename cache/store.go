@@ -196,7 +196,7 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 		args[i] = ip
 	}
 
-	rows, err := s.db.Query(buf.String(), args...)
+	rows, err := s.db.SQ.Query(buf.String(), args...)
 	if err != nil {
 		return nil
 	}
@@ -248,7 +248,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// ── Transaction (serialized via writeMu) ──────────────────────────────
 	s.db.WriteLock()
 
-	tx, err := s.db.Begin()
+	tx, err := s.db.SQ.Begin()
 	if err != nil {
 		s.db.WriteUnlock()
 		log.Warnf("CACHE: begin tx failed: %v", err)
@@ -304,7 +304,7 @@ func (s *SQLiteCache) evictIfNeeded() {
 	// COUNT(*) on the PK is a fast B-tree leaf walk; only runs when the
 	// atomic counter suggests we may be near or over the limit.
 	var count int64
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
+	if err := s.db.SQ.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
 		s.db.AddEntryCount(count)
 	}
 
@@ -316,11 +316,11 @@ func (s *SQLiteCache) evictIfNeeded() {
 	s.evictOldest(excess)
 
 	// Periodically refresh query planner statistics.
-	_, _ = s.db.Exec("PRAGMA optimize")
+	_, _ = s.db.SQ.Exec("PRAGMA optimize")
 }
 
 func (s *SQLiteCache) evictOldest(toEvict int64) {
-	tx, err := s.db.Begin()
+	tx, err := s.db.SQ.Begin()
 	if err != nil {
 		return
 	}

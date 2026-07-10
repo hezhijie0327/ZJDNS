@@ -16,7 +16,7 @@ func RunSQL(dbPath, query string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	rows, err := db.Query(query)
+	rows, err := db.SQ.Query(query)
 	if err != nil {
 		return fmt.Errorf("query error: %w", err)
 	}

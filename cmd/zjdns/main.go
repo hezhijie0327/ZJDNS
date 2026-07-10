@@ -12,6 +12,7 @@ import (
 
 func main() {
 	versionStr := getVersion()
+	database.Version = Version
 	configFile, exitAfter := cli.ParseFlags(os.Args, versionStr)
 	if exitAfter {
 		return
@@ -21,7 +22,6 @@ func main() {
 
 	config.DefaultProjectName = ProjectName
 	config.DefaultVersion = versionStr
-	database.Version = Version
 
 	cfg, err := config.LoadConfig(configFile)
 	if err != nil {

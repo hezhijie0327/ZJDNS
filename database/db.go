@@ -1,7 +1,6 @@
 package database
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"sync"
@@ -21,10 +20,11 @@ type Options struct {
 }
 
 // DB is a unified SQLite database backing all ZJDNS subsystems (cache, zone).
-// It uses a single pinned connection to guarantee all operations share the
-// same in-memory database when path is empty.
+// Uses *sql.DB (goroutine-safe connection pool) for both file and in-memory
+// databases. file::memory: is used for in-memory so all connections share the
+// same database.
 type DB struct {
-	conn   *sql.Conn
+	SQ     *sql.DB
 	dbPath string
 
 	mmapSizeMB  int
@@ -51,7 +51,8 @@ type DB struct {
 }
 
 // Open opens or creates the SQLite database at path. An empty path uses
-// in-memory storage. maxEntries controls cache eviction threshold.
+// file::memory: (shared in-memory). maxEntries controls the cache eviction
+// threshold.
 func Open(path string, maxEntries int, opts Options) (*DB, error) {
 	if maxEntries <= 0 {
 		maxEntries = config.DefaultMaxCacheEntries
@@ -74,23 +75,22 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
-	if path != "" {
+	if path == "" {
+		// :memory: — each connection gets its own DB, so pin to one.
+		sqldb.SetMaxOpenConns(1)
+		sqldb.SetMaxIdleConns(1)
+	} else {
 		sqldb.SetMaxOpenConns(config.DefaultCacheMaxOpenConns)
 		sqldb.SetMaxIdleConns(config.DefaultCacheMaxIdleConns)
 	}
 
-	// Pin a single connection. For :memory:, this is required because
-	// each connection gets its own independent database. For disk-backed,
-	// it simplifies connection management by avoiding pool contention.
-	conn, err := sqldb.Conn(context.Background())
-	if err != nil {
+	if err := sqldb.Ping(); err != nil {
 		_ = sqldb.Close()
-		return nil, fmt.Errorf("sqlite acquire conn: %w", err)
+		return nil, fmt.Errorf("sqlite ping: %w", err)
 	}
-	_ = sqldb.Close() // conn owns the connection now
 
 	db := &DB{
-		conn:        conn,
+		SQ:          sqldb,
 		dbPath:      path,
 		maxEntries:  maxEntries,
 		mmapSizeMB:  opts.MMapSizeMB,
@@ -98,18 +98,18 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 	}
 
 	if err := db.migrate(); err != nil {
-		_ = conn.Close()
+		_ = sqldb.Close()
 		return nil, fmt.Errorf("sqlite migrate: %w", err)
 	}
 
 	// Initialize entryCount from existing rows.
 	var count int64
-	if err := db.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
+	if err := db.SQ.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
 		db.entryCount.Store(count)
 	}
 
 	if err := db.prepareStatements(); err != nil {
-		_ = conn.Close()
+		_ = sqldb.Close()
 		return nil, fmt.Errorf("sqlite prepare: %w", err)
 	}
 
@@ -122,27 +122,7 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 	return db, nil
 }
 
-// Exec executes a query on the pinned connection.
-func (db *DB) Exec(query string, args ...any) (sql.Result, error) {
-	return db.conn.ExecContext(context.Background(), query, args...)
-}
-
-// Query executes a query that returns rows.
-func (db *DB) Query(query string, args ...any) (*sql.Rows, error) {
-	return db.conn.QueryContext(context.Background(), query, args...)
-}
-
-// QueryRow executes a query that returns at most one row.
-func (db *DB) QueryRow(query string, args ...any) *sql.Row {
-	return db.conn.QueryRowContext(context.Background(), query, args...)
-}
-
-// Begin starts a transaction on the pinned connection.
-func (db *DB) Begin() (*sql.Tx, error) {
-	return db.conn.BeginTx(context.Background(), nil)
-}
-
-// Close closes the database, running PRAGMA optimize before shutdown.
+// Close closes the database, running PRAGMA optimize for disk-backed DBs before shutdown.
 func (db *DB) Close() error {
 	if !atomic.CompareAndSwapInt32(&db.closed, 0, 1) {
 		return nil
@@ -157,9 +137,9 @@ func (db *DB) Close() error {
 		}
 	}
 	if db.dbPath != "" {
-		_, _ = db.Exec("PRAGMA optimize")
+		_, _ = db.SQ.Exec("PRAGMA optimize")
 	}
-	if err := db.conn.Close(); err != nil {
+	if err := db.SQ.Close(); err != nil {
 		log.Errorf("CACHE: sqlite close failed: %v", err)
 		return fmt.Errorf("sqlite close: %w", err)
 	}
@@ -212,7 +192,7 @@ func (db *DB) EnsureEntry(qname string, qtype, qclass int, ecsAddr string, ecsPr
 	}
 
 	now := log.NowUnix()
-	err = db.QueryRow(
+	err = db.SQ.QueryRow(
 		`INSERT OR IGNORE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
 			timestamp, ttl, expires_at, validated, msg_wire)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)

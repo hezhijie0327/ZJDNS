@@ -22,12 +22,12 @@ func (db *DB) migrate() error {
 			" PRAGMA journal_size_limit = %d;",
 		pageSize, cacheSize, mmapSize, walAutoCheckpointPages, mmapSize,
 	)
-	if _, err := db.Exec(pragmaSQL); err != nil {
+	if _, err := db.SQ.Exec(pragmaSQL); err != nil {
 		log.Warnf("CACHE: pragma failed (non-fatal): %v", err)
 	}
 
 	//nolint:gosec // G202: DDL migration with constant schema version
-	_, err := db.Exec(`
+	_, err := db.SQ.Exec(`
 
 		-- ── Project version ───────────────────────────────────────────────────
 		-- Tracks the current project version. Base DDL starts at 0.0.0.
@@ -161,7 +161,7 @@ func (db *DB) migrate() error {
 	}
 
 	if db.dbPath != "" {
-		if _, err := db.Exec("ANALYZE"); err != nil {
+		if _, err := db.SQ.Exec("ANALYZE"); err != nil {
 			log.Warnf("CACHE: ANALYZE failed (non-fatal): %v", err)
 		}
 	}

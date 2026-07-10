@@ -29,11 +29,11 @@ var migrations = []migration{
 
 func migrateV3_1_0(db *DB) error {
 	var count int
-	_ = db.QueryRow(
+	_ = db.SQ.QueryRow(
 		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
 	).Scan(&count)
 	if count > 0 {
-		if _, err := db.Exec(`DROP TABLE schema_version`); err != nil {
+		if _, err := db.SQ.Exec(`DROP TABLE schema_version`); err != nil {
 			return err
 		}
 	}
@@ -50,7 +50,7 @@ func init() {
 // runMigrations applies any pending incremental migrations.
 func (db *DB) runMigrations() error {
 	var applied string
-	_ = db.QueryRow("SELECT version FROM version").Scan(&applied)
+	_ = db.SQ.QueryRow("SELECT version FROM version").Scan(&applied)
 
 	if applied != "" && applied < minSupportedVersion {
 		return fmt.Errorf(
@@ -78,7 +78,7 @@ func (db *DB) runMigrations() error {
 
 	// Always sync version to current app version.
 	if applied != Version {
-		if _, err := db.Exec(
+		if _, err := db.SQ.Exec(
 			`INSERT OR REPLACE INTO version (rowid, version) VALUES (1, ?)`,
 			Version,
 		); err != nil {

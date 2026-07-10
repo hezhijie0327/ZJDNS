@@ -109,13 +109,13 @@ func (e *Evaluator) Bypass(matchedTags map[string]bool) bool {
 
 // LoadRules validates and loads zone rules into the SQLite database.
 func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
-	if _, err := e.db.Exec(`DELETE FROM zone_entries`); err != nil {
+	if _, err := e.db.SQ.Exec(`DELETE FROM zone_entries`); err != nil {
 		return fmt.Errorf("zone: clear: %w", err)
 	}
 	// Clear dynamic content registrations.
 	e.dynamics = make(map[string]*dynamicEntry)
 
-	tx, err := e.db.Begin()
+	tx, err := e.db.SQ.Begin()
 	if err != nil {
 		return fmt.Errorf("zone: begin tx: %w", err)
 	}
@@ -124,7 +124,7 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	for i := range rules {
 		rule := &rules[i]
 		if rule.File != "" {
-			n, err := e.loadFile(rule)
+			n, err := e.loadFile(tx, rule)
 			if err != nil {
 				_ = tx.Rollback()
 				return fmt.Errorf("zone file %q: %w", rule.File, err)
@@ -133,7 +133,7 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 			log.Infof("ZONE: loaded %d entries from %s", n, rule.File)
 			continue
 		}
-		n, err := e.loadInline(rule)
+		n, err := e.loadInline(tx, rule)
 		if err != nil {
 			_ = tx.Rollback()
 			return err
@@ -151,7 +151,7 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	return nil
 }
 
-func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
+func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 	if rule.Name == "" {
 		return 0, errors.New("zone rule: name is required")
 	}
@@ -180,7 +180,7 @@ func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
 			aw := packRRs(rule.Name, g.records)
 			auth := packRRs(rule.Name, rule.Authority)
 			addl := packRRs(rule.Name, rule.Additional)
-			if err := e.insertRow(normalizedName, g.qtype, g.qclass, rule.Rcode, aw, auth, addl, matchTags, isWildcard); err != nil {
+			if err := e.insertRow(tx, normalizedName, g.qtype, g.qclass, rule.Rcode, aw, auth, addl, matchTags, isWildcard); err != nil {
 				return 0, err
 			}
 			count++
@@ -189,7 +189,7 @@ func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
 		// Sentinel entry for rcode-only or dynamic rules.
 		auth := packRRs(rule.Name, rule.Authority)
 		addl := packRRs(rule.Name, rule.Additional)
-		if err := e.insertRow(normalizedName, 0, 0, rule.Rcode, nil, auth, addl, matchTags, isWildcard); err != nil {
+		if err := e.insertRow(tx, normalizedName, 0, 0, rule.Rcode, nil, auth, addl, matchTags, isWildcard); err != nil {
 			return 0, err
 		}
 		count++
@@ -198,12 +198,17 @@ func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
 	return count, nil
 }
 
-func (e *Evaluator) insertRow(qname string, qtype, qclass uint16, rcode int, answer, authority, additional []byte, matchTags string, isWildcard bool) error {
+func (e *Evaluator) insertRow(tx *sql.Tx, qname string, qtype, qclass uint16, rcode int, answer, authority, additional []byte, matchTags string, isWildcard bool) error {
 	w := 0
 	if isWildcard {
 		w = 1
 	}
-	_, err := e.db.StmtZoneInsert.Exec(qname, qtype, qclass, rcode, answer, authority, additional, matchTags, w)
+	_, err := tx.Exec(
+		`INSERT OR REPLACE INTO zone_entries
+		 (qname, qtype, qclass, rcode, answer, authority, additional, match_tags, is_wildcard)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		qname, qtype, qclass, rcode, answer, authority, additional, matchTags, w,
+	)
 	return err
 }
 
@@ -388,7 +393,7 @@ func parseMatchTags(raw []string) ([]matchTag, error) {
 // ---------------------------------------------------------------------------
 
 // loadFile parses a zone file and inserts entries directly into SQL.
-func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
+func (e *Evaluator) loadFile(tx *sql.Tx, parent *config.ZoneRule) (int, error) {
 	f, err := os.Open(parent.File) //nolint:gosec // G304: user-configured file path
 	if err != nil {
 		return 0, fmt.Errorf("open: %w", err)
@@ -419,13 +424,13 @@ func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 				aw := packRRs(curRawName, g.records)
 				auth := packRRs(curRawName, curAuth)
 				addl := packRRs(curRawName, curAddl)
-				_ = e.insertRow(curDomain, g.qtype, g.qclass, curRcode, aw, auth, addl, curTags, curWildcard)
+				_ = e.insertRow(tx, curDomain, g.qtype, g.qclass, curRcode, aw, auth, addl, curTags, curWildcard)
 				count++
 			}
 		} else if curRcode != dns.RcodeSuccess {
 			auth := packRRs(curRawName, curAuth)
 			addl := packRRs(curRawName, curAddl)
-			_ = e.insertRow(curDomain, 0, 0, curRcode, nil, auth, addl, curTags, curWildcard)
+			_ = e.insertRow(tx, curDomain, 0, 0, curRcode, nil, auth, addl, curTags, curWildcard)
 			count++
 		}
 	}

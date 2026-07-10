@@ -1,13 +1,10 @@
 package database
 
-import "context"
-
 func (db *DB) prepareStatements() error {
-	ctx := context.Background()
 	var err error
 
 	// Cache statements.
-	db.StmtGetEntry, err = db.conn.PrepareContext(ctx,
+	db.StmtGetEntry, err = db.SQ.Prepare(
 		`SELECT id, timestamp, ttl, validated, msg_wire FROM entries
 		 WHERE qname = ? AND qtype = ? AND qclass = ?
 		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
@@ -15,7 +12,7 @@ func (db *DB) prepareStatements() error {
 	if err != nil {
 		return err
 	}
-	db.StmtInsertLog, err = db.conn.PrepareContext(ctx,
+	db.StmtInsertLog, err = db.SQ.Prepare(
 		`INSERT INTO request_log (timestamp, entry_id, protocol, result,
 			response_time_ms, rcode, server, hijack, fallback, dnssec_status)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
@@ -23,7 +20,7 @@ func (db *DB) prepareStatements() error {
 	if err != nil {
 		return err
 	}
-	db.StmtHitCounter, err = db.conn.PrepareContext(ctx,
+	db.StmtHitCounter, err = db.SQ.Prepare(
 		`INSERT INTO entry_hit_counters (entry_id, protocol, rcode, hit_count, total_response_ms)
 		 VALUES (?1, ?2, ?3, 1, ?4)
 		 ON CONFLICT(entry_id, protocol, rcode) DO UPDATE
@@ -33,20 +30,20 @@ func (db *DB) prepareStatements() error {
 	if err != nil {
 		return err
 	}
-	db.StmtInsertLatency, err = db.conn.PrepareContext(ctx,
+	db.StmtInsertLatency, err = db.SQ.Prepare(
 		`INSERT OR REPLACE INTO ip_latency (rdata_ip, qtype, latency_ms, last_probe_time)
 		 VALUES (?, ?, ?, unixepoch())`,
 	)
 	if err != nil {
 		return err
 	}
-	db.StmtGetLastProbe, err = db.conn.PrepareContext(ctx,
+	db.StmtGetLastProbe, err = db.SQ.Prepare(
 		`SELECT last_probe_time FROM ip_latency WHERE rdata_ip = ?`,
 	)
 	if err != nil {
 		return err
 	}
-	db.StmtEnsureEntry, err = db.conn.PrepareContext(ctx,
+	db.StmtEnsureEntry, err = db.SQ.Prepare(
 		`SELECT id FROM entries
 		 WHERE qname = ? AND qtype = ? AND qclass = ?
 		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
@@ -56,26 +53,26 @@ func (db *DB) prepareStatements() error {
 	}
 
 	// Zone statements.
-	db.StmtZoneExact, err = db.conn.PrepareContext(ctx,
+	db.StmtZoneExact, err = db.SQ.Prepare(
 		`SELECT rcode, answer, authority, additional, match_tags
 		 FROM zone_entries
-		 WHERE qname = ?1 AND qtype = ?2 AND qclass = ?3 AND is_wildcard = 0`,
+		 WHERE qname = ? AND qtype = ? AND qclass = ? AND is_wildcard = 0`,
 	)
 	if err != nil {
 		return err
 	}
-	db.StmtZoneWild, err = db.conn.PrepareContext(ctx,
+	db.StmtZoneWild, err = db.SQ.Prepare(
 		`SELECT rcode, answer, authority, additional, match_tags
 		 FROM zone_entries
-		 WHERE qname = ?1 AND qtype = ?2 AND qclass = ?3 AND is_wildcard = 1`,
+		 WHERE qname = ? AND qtype = ? AND qclass = ? AND is_wildcard = 1`,
 	)
 	if err != nil {
 		return err
 	}
-	db.StmtZoneInsert, err = db.conn.PrepareContext(ctx,
+	db.StmtZoneInsert, err = db.SQ.Prepare(
 		`INSERT OR REPLACE INTO zone_entries
 		 (qname, qtype, qclass, rcode, answer, authority, additional, match_tags, is_wildcard)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
 		return err
