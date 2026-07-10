@@ -38,8 +38,54 @@ const (
 	socks5ATYPDomain = 0x03
 	socks5ATYPIPv6   = 0x04
 
-	// Response codes
-	socks5RepSuccess = 0x00
+	// RFC 1928 §6: RSV field MUST be X'00'
+	socks5RSV = 0x00
+
+	// Reply codes (RFC 1928 §6)
+	socks5RepSuccess             = 0x00
+	socks5RepServerFailure       = 0x01
+	socks5RepNotAllowed          = 0x02
+	socks5RepNetworkUnreachable  = 0x03
+	socks5RepHostUnreachable     = 0x04
+	socks5RepConnectionRefused   = 0x05
+	socks5RepTTLExpired          = 0x06
+	socks5RepCommandNotSupported = 0x07
+	socks5RepAddressNotSupported = 0x08
+)
+
+// repString returns a human-readable name for a SOCKS5 reply code.
+func repString(rep byte) string {
+	switch rep {
+	case socks5RepSuccess:
+		return "success"
+	case socks5RepServerFailure:
+		return "server failure"
+	case socks5RepNotAllowed:
+		return "not allowed by ruleset"
+	case socks5RepNetworkUnreachable:
+		return "network unreachable"
+	case socks5RepHostUnreachable:
+		return "host unreachable"
+	case socks5RepConnectionRefused:
+		return "connection refused"
+	case socks5RepTTLExpired:
+		return "TTL expired"
+	case socks5RepCommandNotSupported:
+		return "command not supported"
+	case socks5RepAddressNotSupported:
+		return "address type not supported"
+	default:
+		return fmt.Sprintf("unknown(%d)", rep)
+	}
+}
+
+// Sentinel errors for SOCKS5 operations.
+var (
+	ErrSOCKS5Version     = errors.New("socks5: protocol version mismatch")
+	ErrSOCKS5BadReply    = errors.New("socks5: malformed reply from proxy")
+	ErrSOCKS5Auth        = errors.New("socks5: authentication failed")
+	ErrSOCKS5NoAuth      = errors.New("socks5: proxy requires unsupported auth method")
+	ErrSOCKS5CmdRejected = errors.New("socks5: command rejected by proxy")
 )
 
 // SOCKS5Dialer provides TCP and UDP connections through a SOCKS5 proxy.
@@ -140,7 +186,7 @@ func (d *SOCKS5Dialer) handshake(conn net.Conn) error {
 		return fmt.Errorf("socks5: read greeting: %w", err)
 	}
 	if resp[0] != socks5Version {
-		return fmt.Errorf("socks5: bad version %d from proxy", resp[0])
+		return fmt.Errorf("%w: got version %d", ErrSOCKS5Version, resp[0])
 	}
 
 	switch resp[1] {
@@ -149,7 +195,7 @@ func (d *SOCKS5Dialer) handshake(conn net.Conn) error {
 	case socks5AuthPassword:
 		return d.authUserPass(conn)
 	default:
-		return fmt.Errorf("socks5: proxy requires unsupported auth method %#x", resp[1])
+		return fmt.Errorf("%w: %#x", ErrSOCKS5NoAuth, resp[1])
 	}
 }
 
@@ -175,7 +221,7 @@ func (d *SOCKS5Dialer) authUserPass(conn net.Conn) error {
 		return fmt.Errorf("socks5: read auth response: %w", err)
 	}
 	if resp[1] != 0x00 {
-		return errors.New("socks5: authentication failed — check username/password")
+		return ErrSOCKS5Auth
 	}
 	return nil
 }
@@ -196,6 +242,103 @@ var socks5WritePool = sync.Pool{
 // get a fresh buffer from ReadFrom's internal cache.
 var socks5ReadPool = sync.Pool{
 	New: func() any { b := make([]byte, socks5ReadBufSize); return &b },
+}
+
+// ---------------------------------------------------------------------------
+// UDP datagram (RFC 1928 §7)
+// ---------------------------------------------------------------------------
+
+// socks5Datagram wraps a SOCKS5 UDP datagram header and payload.
+// Wire format: RSV(2) | FRAG(1) | ATYP(1) | DST.ADDR(var) | DST.PORT(2) | DATA
+type socks5Datagram struct {
+	atyp    byte
+	dstAddr []byte // raw address (IP bytes or domain with length prefix)
+	dstPort uint16
+	data    []byte
+}
+
+// parseDatagram parses a SOCKS5 UDP datagram from raw bytes.  Returns the
+// source address and any validation error (RSV, FRAG, truncation).
+func parseDatagram(b []byte) (*socks5Datagram, *net.UDPAddr, error) {
+	if len(b) < 10 {
+		return nil, nil, fmt.Errorf("datagram too short: %d bytes", len(b))
+	}
+	if b[0] != 0x00 || b[1] != 0x00 {
+		return nil, nil, errors.New("invalid reserved bytes in UDP datagram")
+	}
+	if b[2] != 0x00 {
+		return nil, nil, errors.New("fragmented UDP datagram not supported")
+	}
+
+	d := &socks5Datagram{atyp: b[3]}
+
+	var headerLen int
+	switch d.atyp {
+	case socks5ATYPIPv4:
+		headerLen = 4 + 2
+		if len(b) < 4+headerLen {
+			return nil, nil, errors.New("truncated IPv4 address in UDP datagram")
+		}
+		d.dstAddr = b[4 : 4+4]
+		d.dstPort = binary.BigEndian.Uint16(b[8:10])
+	case socks5ATYPIPv6:
+		headerLen = 16 + 2
+		if len(b) < 4+headerLen {
+			return nil, nil, errors.New("truncated IPv6 address in UDP datagram")
+		}
+		d.dstAddr = b[4 : 4+16]
+		d.dstPort = binary.BigEndian.Uint16(b[20:22])
+	case socks5ATYPDomain:
+		domainLen := int(b[4])
+		headerLen = 1 + domainLen + 2
+		if len(b) < 4+headerLen {
+			return nil, nil, errors.New("truncated domain address in UDP datagram")
+		}
+		d.dstAddr = b[4 : 5+domainLen] // includes length prefix byte
+		d.dstPort = binary.BigEndian.Uint16(b[5+domainLen : 7+domainLen])
+	default:
+		return nil, nil, fmt.Errorf("unsupported address type %#x in UDP datagram", d.atyp)
+	}
+
+	totalHeader := 4 + headerLen
+	d.data = b[totalHeader:]
+
+	srcAddr := &net.UDPAddr{IP: net.IP(d.dstAddr), Port: int(d.dstPort)}
+	if d.atyp == socks5ATYPDomain {
+		host := string(d.dstAddr[1:])
+		if ip := net.ParseIP(host); ip != nil {
+			srcAddr.IP = ip
+		} else {
+			return nil, nil, fmt.Errorf("domain name in UDP reply not supported (got %q)", host)
+		}
+	}
+
+	return d, srcAddr, nil
+}
+
+// writeDatagramHeader writes the SOCKS5 UDP header for dst into buf.
+// Returns the number of header bytes written.
+func writeDatagramHeader(buf []byte, dst *net.UDPAddr) int {
+	buf[0], buf[1], buf[2] = 0x00, 0x00, 0x00 // RSV + FRAG
+
+	if ip4 := dst.IP.To4(); ip4 != nil {
+		buf[3] = socks5ATYPIPv4
+		copy(buf[4:8], ip4)
+		binary.BigEndian.PutUint16(buf[8:10], uint16(dst.Port)) //nolint:gosec // G115: protocol-bounded uint16
+		return config.SOCKS5UDPHeaderLenIPv4
+	}
+	buf[3] = socks5ATYPIPv6
+	copy(buf[4:20], dst.IP.To16())
+	binary.BigEndian.PutUint16(buf[20:22], uint16(dst.Port)) //nolint:gosec // G115: protocol-bounded uint16
+	return config.SOCKS5UDPHeaderLenIPv6
+}
+
+// datagramHeaderLen returns the SOCKS5 UDP header length for the destination.
+func datagramHeaderLen(dst *net.UDPAddr) int {
+	if dst.IP.To4() != nil {
+		return config.SOCKS5UDPHeaderLenIPv4
+	}
+	return config.SOCKS5UDPHeaderLenIPv6
 }
 
 // ---------------------------------------------------------------------------
@@ -303,60 +446,4 @@ func readAddress(conn net.Conn, atyp byte) (*net.UDPAddr, error) {
 	default:
 		return nil, fmt.Errorf("socks5: unsupported address type %#x", atyp)
 	}
-}
-
-// parseAddressFromBytes parses a SOCKS5 address from a byte slice (used for
-// UDP header parsing). Returns the parsed address and the number of bytes consumed.
-func parseAddressFromBytes(data []byte, atyp byte) (*net.UDPAddr, int, error) {
-	switch atyp {
-	case socks5ATYPIPv4:
-		if len(data) < 6 {
-			return nil, 0, errors.New("truncated IPv4 address")
-		}
-		ip := net.IP(data[:4])
-		port := int(binary.BigEndian.Uint16(data[4:6]))
-		return &net.UDPAddr{IP: ip, Port: port}, 6, nil
-
-	case socks5ATYPIPv6:
-		if len(data) < 18 {
-			return nil, 0, errors.New("truncated IPv6 address")
-		}
-		ip := net.IP(data[:16])
-		port := int(binary.BigEndian.Uint16(data[16:18]))
-		return &net.UDPAddr{IP: ip, Port: port}, 18, nil
-
-	case socks5ATYPDomain:
-		if len(data) < 1 {
-			return nil, 0, errors.New("truncated domain length")
-		}
-		domainLen := int(data[0])
-		if len(data) < 1+domainLen+2 {
-			return nil, 0, errors.New("truncated domain address")
-		}
-		host := string(data[1 : 1+domainLen])
-		port := int(binary.BigEndian.Uint16(data[1+domainLen:]))
-		// The source address in UDP replies is from the actual server,
-		// not the relay. We return the hostname:port as a UDPAddr.
-		// Only resolve if it's an IP literal.
-		if ip := net.ParseIP(host); ip != nil {
-			return &net.UDPAddr{IP: ip, Port: port}, 1 + domainLen + 2, nil
-		}
-		// For domain names in UDP replies (unusual), resolve.
-		return nil, 0, fmt.Errorf("domain name in UDP reply not supported (got %q)", host)
-
-	default:
-		return nil, 0, fmt.Errorf("unsupported address type %#x", atyp)
-	}
-}
-
-// socks5UDPHeaderLen returns the number of bytes needed for the SOCKS5 UDP
-// header for the given destination address.
-func socks5UDPHeaderLen(addr *net.UDPAddr) (int, error) {
-	if addr.IP.To4() != nil {
-		return config.SOCKS5UDPHeaderLenIPv4, nil
-	}
-	if addr.IP.To16() != nil {
-		return config.SOCKS5UDPHeaderLenIPv6, nil
-	}
-	return 0, fmt.Errorf("socks5: invalid destination IP: %v", addr.IP)
 }

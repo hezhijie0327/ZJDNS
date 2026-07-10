@@ -67,7 +67,13 @@ func (d *SOCKS5Dialer) connect(conn net.Conn, targetAddr string) error {
 		return fmt.Errorf("socks5: read CONNECT response: %w", err)
 	}
 	if resp[1] != socks5RepSuccess {
-		return fmt.Errorf("socks5: CONNECT rejected, code %d", resp[1])
+		return fmt.Errorf("%w: CONNECT %s", ErrSOCKS5CmdRejected, repString(resp[1]))
+	}
+	if resp[0] != socks5Version {
+		return fmt.Errorf("%w: CONNECT reply version %d", ErrSOCKS5Version, resp[0])
+	}
+	if resp[2] != socks5RSV {
+		return fmt.Errorf("%w: non-zero RSV byte %#x", ErrSOCKS5BadReply, resp[2])
 	}
 	return skipAddress(conn, resp[3])
 }

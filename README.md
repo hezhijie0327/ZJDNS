@@ -280,6 +280,8 @@ GROUP BY hc.protocol, hc.rcode ORDER BY hits DESC;
 
 | RFC / 草案 | 标准 | 实现 |
 |------------|------|------|
+| [1928](https://www.rfc-editor.org/info/rfc1928) / [1929](https://www.rfc-editor.org/info/rfc1929) | SOCKS5 | TCP CONNECT + UDP ASSOCIATE |
+| [2308](https://www.rfc-editor.org/info/rfc2308) | Negative Caching | SOA 负面 TTL 缓存 |
 | [4033–4035](https://www.rfc-editor.org/info/rfc4033) | DNSSEC | 信任链验证 + RRSIG |
 | [5155](https://www.rfc-editor.org/info/rfc5155) | NSEC3 | 已验证否定（DoS 防护：迭代次数上限 150） |
 | [6840](https://www.rfc-editor.org/info/rfc6840) | DNSSEC Clarifications | 特殊标签处理（Digest 类型、NXT 等） |
@@ -298,8 +300,6 @@ GROUP BY hc.protocol, hc.rcode ORDER BY hits DESC;
 | [9156](https://www.rfc-editor.org/info/rfc9156) | QNAME Minimisation | 递归查询名最小化 |
 | [9250](https://www.rfc-editor.org/info/rfc9250) | DNS over QUIC | DoQ |
 | [9461](https://www.rfc-editor.org/info/rfc9461) / [9462](https://www.rfc-editor.org/info/rfc9462) | SVCB / DDR | 加密解析器自动发现 |
-| [1928](https://www.rfc-editor.org/info/rfc1928) / [1929](https://www.rfc-editor.org/info/rfc1929) | SOCKS5 | TCP CONNECT + UDP ASSOCIATE |
-| [2308](https://www.rfc-editor.org/info/rfc2308) | Negative Caching | SOA 负面 TTL 缓存 |
 | [draft-denis-dprive-dnscrypt](https://datatracker.ietf.org/doc/draft-denis-dprive-dnscrypt/) | DNSCrypt v2 | XChacha20 AEAD + X-Wing PQ KEM |
 
 ## 开发

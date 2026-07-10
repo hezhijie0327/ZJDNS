@@ -2,11 +2,11 @@ package client
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -92,7 +92,15 @@ func (d *SOCKS5Dialer) establishUDPRelay(ctx context.Context) error {
 	}
 	if resp[1] != socks5RepSuccess {
 		_ = ctrlConn.Close()
-		return fmt.Errorf("socks5: UDP ASSOCIATE rejected, code %d", resp[1])
+		return fmt.Errorf("%w: UDP ASSOCIATE %s", ErrSOCKS5CmdRejected, repString(resp[1]))
+	}
+	if resp[0] != socks5Version {
+		_ = ctrlConn.Close()
+		return fmt.Errorf("%w: UDP ASSOCIATE reply version %d", ErrSOCKS5Version, resp[0])
+	}
+	if resp[2] != socks5RSV {
+		_ = ctrlConn.Close()
+		return fmt.Errorf("%w: non-zero RSV byte %#x", ErrSOCKS5BadReply, resp[2])
 	}
 
 	relay, err := readAddress(ctrlConn, resp[3])
@@ -101,12 +109,18 @@ func (d *SOCKS5Dialer) establishUDPRelay(ctx context.Context) error {
 		return fmt.Errorf("socks5: read relay address: %w", err)
 	}
 
-	// If the proxy returns 0.0.0.0 as the relay address, it means "send to
-	// the proxy's own IP". Substitute the proxy's IP from the control connection.
-	if relay.IP.IsUnspecified() {
-		proxyHost, _, _ := net.SplitHostPort(d.proxyAddr)
+	// Non-standard implementations (v2ray/xray) bind the UDP relay on the
+	// same port as the TCP proxy.  Handle BND.ADDR=0.0.0.0 and BND.PORT=0
+	// by falling back to the proxy's own address.
+	proxyHost, proxyPortStr, _ := net.SplitHostPort(d.proxyAddr)
+	if relay.IP == nil || relay.IP.IsUnspecified() {
 		if ip := net.ParseIP(proxyHost); ip != nil {
 			relay.IP = ip
+		}
+	}
+	if relay.Port == 0 {
+		if p, err := strconv.Atoi(proxyPortStr); err == nil {
+			relay.Port = p
 		}
 	}
 
@@ -197,30 +211,14 @@ func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 		return 0, nil, fmt.Errorf("socks5: read: %w", err)
 	}
 
-	data := (*buf)[:nr]
-
-	// SOCKS5 UDP header: RSV(2) | FRAG(1) | ATYP(1) | DST.ADDR(var) | DST.PORT(2)
-	if nr < 10 {
-		return 0, nil, fmt.Errorf("socks5: UDP datagram too short: %d bytes", nr)
-	}
-	if data[0] != 0x00 || data[1] != 0x00 {
-		return 0, nil, errors.New("socks5: invalid reserved bytes in UDP reply")
-	}
-	if data[2] != 0x00 {
-		return 0, nil, errors.New("socks5: fragmented UDP datagram not supported")
-	}
-
-	atyp := data[3]
-	srcAddr, headerLen, err := parseAddressFromBytes(data[4:nr], atyp)
+	dg, srcAddr, err := parseDatagram((*buf)[:nr])
 	if err != nil {
-		return 0, nil, fmt.Errorf("socks5: parse UDP header: %w", err)
+		return 0, nil, fmt.Errorf("socks5: parse UDP datagram: %w", err)
 	}
-
-	payload := data[4+headerLen : nr]
-	if len(p) < len(payload) {
+	if len(p) < len(dg.data) {
 		return 0, nil, io.ErrShortBuffer
 	}
-	n = copy(p, payload)
+	n = copy(p, dg.data)
 	return n, srcAddr, nil
 }
 
@@ -232,17 +230,12 @@ func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		return 0, fmt.Errorf("socks5: expected *net.UDPAddr, got %T", addr)
 	}
 
-	headerLen, err := socks5UDPHeaderLen(udpAddr)
-	if err != nil {
-		return 0, err
-	}
-
+	headerLen := datagramHeaderLen(udpAddr)
 	totalLen := headerLen + len(p)
 	if totalLen > socks5MaxReadBuf {
 		return 0, fmt.Errorf("socks5: datagram too large: %d bytes", totalLen)
 	}
 
-	// Use pool for typical MTU-sized writes; heap-allocate for larger.
 	var buf []byte
 	if totalLen <= 1500 {
 		bp := socks5WritePool.Get().(*[]byte)
@@ -252,18 +245,7 @@ func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		buf = make([]byte, totalLen)
 	}
 
-	// RSV(2) | FRAG(1) — all zero.
-	buf[0], buf[1], buf[2] = 0x00, 0x00, 0x00
-
-	if ip4 := udpAddr.IP.To4(); ip4 != nil {
-		buf[3] = socks5ATYPIPv4
-		copy(buf[4:8], ip4)
-		binary.BigEndian.PutUint16(buf[8:10], uint16(udpAddr.Port)) //nolint:gosec // G115: SOCKS5 UDP payload length — protocol-bounded uint16
-	} else {
-		buf[3] = socks5ATYPIPv6
-		copy(buf[4:20], udpAddr.IP.To16())
-		binary.BigEndian.PutUint16(buf[20:22], uint16(udpAddr.Port)) //nolint:gosec // G115: UDP port — protocol-bounded uint16
-	}
+	writeDatagramHeader(buf, udpAddr)
 	copy(buf[headerLen:], p)
 
 	nw, err := c.conn.Write(buf)
