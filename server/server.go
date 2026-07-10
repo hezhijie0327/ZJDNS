@@ -137,6 +137,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			cancel(fmt.Errorf("load zone rules: %w", err))
 			return nil, fmt.Errorf("load zone rules: %w", err)
 		}
+		if len(cfg.Zone.BypassTags) > 0 {
+			zoneEvaluator.SetBypassTags(cfg.Zone.BypassTags)
+		}
 	}
 
 	var cidrFilter *cidr.Filter
@@ -160,6 +163,10 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		},
 	)
 	server.handler = h
+
+	if cidrFilter != nil {
+		h.SetTagMatcher(func(ip net.IP) map[string]bool { return cidrFilter.MatchTags(ip) })
+	}
 
 	guard := security.New(cacheStore, cfg.Server.Features.HijackProtection)
 	server.guard = guard
