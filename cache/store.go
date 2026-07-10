@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
@@ -19,7 +20,8 @@ import (
 // SQLiteCache is a DNS response cache backed by a SQLite database managed by
 // the database package. It implements the Store interface.
 type SQLiteCache struct {
-	db *database.DB
+	db         *database.DB
+	evictCount atomic.Int64
 }
 
 const (
@@ -314,8 +316,10 @@ func (s *SQLiteCache) evictIfNeeded() {
 
 	s.evictOldest(excess)
 
-	// Periodically refresh query planner statistics.
-	_, _ = s.db.SQ.Exec("PRAGMA optimize")
+	// Throttle PRAGMA optimize to every 10th eviction to avoid per-eviction overhead.
+	if s.evictCount.Add(1)%10 == 0 {
+		_, _ = s.db.SQ.Exec("PRAGMA optimize")
+	}
 }
 
 func (s *SQLiteCache) evictOldest(toEvict int64) {
@@ -331,6 +335,16 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 		defaultStaleMaxAge,
 	); err != nil {
 		log.Debugf("CACHE: ip_latency cleanup failed (non-fatal): %v", err)
+	}
+
+	// Clean up old request_log rows to prevent unbounded growth.
+	// request_log rows for active entries are cleaned by ON DELETE CASCADE;
+	// this handles orphaned rows (e.g. from cleared cache entries).
+	if _, err := tx.Exec(
+		`DELETE FROM request_log WHERE timestamp < unixepoch() - ?`,
+		defaultStaleMaxAge,
+	); err != nil {
+		log.Debugf("CACHE: request_log cleanup failed (non-fatal): %v", err)
 	}
 
 	// Two-phase eviction:

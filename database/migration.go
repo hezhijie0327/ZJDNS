@@ -48,7 +48,6 @@ func migrateV3_2_0(db *DB) error {
 		INSERT OR REPLACE INTO zone_entries_new SELECT * FROM zone_entries;
 		DROP TABLE zone_entries;
 		ALTER TABLE zone_entries_new RENAME TO zone_entries;
-		CREATE INDEX IF NOT EXISTS idx_zone_qname ON zone_entries(qname);
 	`)
 	return err
 }

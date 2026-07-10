@@ -91,10 +91,24 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	var err error
 	switch target {
 	case "stats":
-		_, _ = s.db.SQ.Exec(`DELETE FROM entry_hit_counters`)
-		result, err = s.db.SQ.Exec(
+		var tx *sql.Tx
+		tx, err = s.db.SQ.Begin()
+		if err != nil {
+			return 0, fmt.Errorf("flushDB stats begin tx: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err = tx.Exec(`DELETE FROM entry_hit_counters`); err != nil {
+			return 0, fmt.Errorf("flushDB stats: %w", err)
+		}
+		result, err = tx.Exec(
 			`UPDATE stats_meta SET cleared_before = (SELECT COALESCE(MAX(id), 0) FROM request_log) WHERE id = 1`,
 		)
+		if err != nil {
+			return 0, fmt.Errorf("flushDB stats: %w", err)
+		}
+		if err = tx.Commit(); err != nil {
+			return 0, fmt.Errorf("flushDB stats commit: %w", err)
+		}
 	case "cache":
 		result, err = s.db.SQ.Exec(`DELETE FROM entries`)
 		if err == nil {

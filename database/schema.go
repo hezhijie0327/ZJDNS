@@ -18,6 +18,7 @@ func (db *DB) migrate() error {
 			" PRAGMA cache_size = %d;"+
 			" PRAGMA mmap_size = %d;"+
 			" PRAGMA temp_store = MEMORY;"+
+			" PRAGMA foreign_keys = ON;"+
 			" PRAGMA wal_autocheckpoint = %d;"+
 			" PRAGMA journal_size_limit = %d;",
 		pageSize, cacheSize, mmapSize, walAutoCheckpointPages, mmapSize,
@@ -58,6 +59,8 @@ func (db *DB) migrate() error {
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_entries_expires ON entries(expires_at);
+		CREATE INDEX IF NOT EXISTS idx_entries_expires_ts ON entries(expires_at, timestamp);
+		CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
 
 		-- ── PTR reverse lookup ───────────────────────────────────────────────
 		-- Lightweight IP→domain mapping populated from A/AAAA rdata. WITHOUT
@@ -131,6 +134,7 @@ func (db *DB) migrate() error {
 			last_probe_time INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (rdata_ip)
 		) WITHOUT ROWID;
+		CREATE INDEX IF NOT EXISTS idx_ip_latency_probe ON ip_latency(last_probe_time);
 
 		-- ── Zone rules ───────────────────────────────────────────────────────
 		-- Zone-file-style rule table queried via B-tree indexed composite-key
@@ -149,7 +153,6 @@ func (db *DB) migrate() error {
 			is_wildcard INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (qname, qtype, qclass, match_tags)
 		);
-		CREATE INDEX IF NOT EXISTS idx_zone_qname ON zone_entries(qname);
 	`)
 	if err != nil {
 		return err
