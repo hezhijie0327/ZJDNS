@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"zjdns/cmd/zjdns/cli"
 	"zjdns/config"
-	"zjdns/internal/cli"
 	"zjdns/internal/log"
 	"zjdns/server"
 )
