@@ -323,9 +323,9 @@ func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
 	_, _ = s.db.StmtInsertLatency.Exec(ip, qtype, latencyMS)
 }
 
-// GetLatencyLastProbe returns the last probe time for an IP. Returns (0, false)
+// LatencyLastProbe returns the last probe time for an IP. Returns (0, false)
 // if the IP has never been probed.
-func (s *SQLiteCache) GetLatencyLastProbe(ip string) (int64, bool) {
+func (s *SQLiteCache) LatencyLastProbe(ip string) (int64, bool) {
 	if s.db.IsClosed() {
 		return 0, false
 	}

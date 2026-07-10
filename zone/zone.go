@@ -24,9 +24,6 @@ import (
 	"codeberg.org/miekg/dns/rdata"
 )
 
-// wildcardPrefix marks a domain as a wildcard rule.
-const wildcardPrefix = "*."
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -62,6 +59,13 @@ type Evaluator struct {
 	dynamics   map[string]*dynamicEntry // qname → dynamic content
 	bypassTags map[string]struct{}      // tags that bypass all zone rules
 }
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+// wildcardPrefix marks a domain as a wildcard rule.
+const wildcardPrefix = "*."
 
 // New creates an Evaluator backed by the given database.
 // The caller is responsible for opening the database via database.Open()

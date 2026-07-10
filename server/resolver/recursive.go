@@ -19,6 +19,19 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
+// Recursive performs iterative DNS resolution by walking the root, TLD, and
+// authoritative nameserver hierarchy. When DNSSEC validation is enabled, it
+// builds a cryptographic chain of trust at each delegation step.
+//
+// Both root servers and per-nameserver addresses share the same latency-sorted
+// cache mechanism: per-type TypeA/TypeAAAA entries + ip_latency table.
+// sortAnswerByLatency reorders records by latency at Get() time.
+type Recursive struct {
+	resolver          *Resolver
+	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
+	cache             cache.Store
+}
+
 // rootHints maps root server names to their addresses. Used as bootstrap
 // on cold start; once cached, getRootServers uses the normal NS lookup path
 // (lookupNSAddrsFromCache -> sortAnswerByLatency via ip_latency).
@@ -36,19 +49,6 @@ var rootHints = map[string][]string{
 	"k.root-servers.net.": {"193.0.14.129:53", "[2001:7fd::1]:53"},
 	"l.root-servers.net.": {"199.7.83.42:53", "[2001:500:9f::42]:53"},
 	"m.root-servers.net.": {"202.12.27.33:53", "[2001:dc3::35]:53"},
-}
-
-// Recursive performs iterative DNS resolution by walking the root, TLD, and
-// authoritative nameserver hierarchy. When DNSSEC validation is enabled, it
-// builds a cryptographic chain of trust at each delegation step.
-//
-// Both root servers and per-nameserver addresses share the same latency-sorted
-// cache mechanism: per-type TypeA/TypeAAAA entries + ip_latency table.
-// sortAnswerByLatency reorders records by latency at Get() time.
-type Recursive struct {
-	resolver          *Resolver
-	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
-	cache             cache.Store
 }
 
 // DNSSECEDECode returns the last DNSSEC EDE code atomically.

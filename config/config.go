@@ -431,6 +431,10 @@ func GenerateExampleConfig() string {
 		{IPs: []string{"10.0.0.1/32"}, Tag: "gateway"},
 	}
 
-	data, _ := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		log.Warnf("CONFIG: example config marshal failed: %v", err)
+		return ""
+	}
 	return string(data)
 }

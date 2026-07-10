@@ -1,4 +1,4 @@
-// Package log provides a leveled logging manager with colored output and
+// Package log provides a leveled logging logger with colored output and
 // component-based filtering.
 //
 // Log Level Format:
@@ -52,8 +52,8 @@ const logTimeFormat = time.DateTime
 
 var levelNames = [...]string{"ERROR", "WARN", "INFO", "DEBUG"}
 
-// Default is the package-level default Manager instance.
-var Default = NewManager()
+// Default is the package-level default Logger instance.
+var Default = NewLogger()
 
 // DefaultTimeCache is the package-level default TimeCache.
 var DefaultTimeCache = NewTimeCache()
@@ -61,9 +61,9 @@ var DefaultTimeCache = NewTimeCache()
 // Level represents a logging severity level.
 type Level int
 
-// Manager manages leveled logging with configurable output and optional
+// Logger manages leveled logging with configurable output and optional
 // component-based filtering.
-type Manager struct {
+type Logger struct {
 	level           atomic.Int32
 	writer          io.Writer
 	colorMap        map[Level]string
@@ -79,9 +79,9 @@ type TimeCache struct {
 	closeOnce sync.Once
 }
 
-// NewManager creates a new Manager with default settings.
-func NewManager() *Manager {
-	m := &Manager{
+// NewLogger creates a new Logger with default settings.
+func NewLogger() *Logger {
+	m := &Logger{
 		writer: os.Stdout,
 		colorMap: map[Level]string{
 			Error: colorRed,
@@ -95,7 +95,7 @@ func NewManager() *Manager {
 }
 
 // SetLevel sets the logging level, clamped to the valid range.
-func (m *Manager) SetLevel(lvl Level) {
+func (m *Logger) SetLevel(lvl Level) {
 	if lvl < Error {
 		lvl = Error
 	} else if lvl > Debug {
@@ -105,7 +105,7 @@ func (m *Manager) SetLevel(lvl Level) {
 }
 
 // Level returns the current logging level.
-func (m *Manager) Level() Level {
+func (m *Logger) Level() Level {
 	return Level(m.level.Load())
 }
 
@@ -129,7 +129,7 @@ func (l Level) String() string {
 // components pass through (no filtering). Otherwise, only messages with a
 // matching "PREFIX:" prefix are emitted. Messages without a recognized prefix
 // always pass through.
-func (m *Manager) SetComponentFilter(components []string) {
+func (m *Logger) SetComponentFilter(components []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(components) == 0 {
@@ -204,7 +204,7 @@ func extractPrefix(msg string) string {
 
 // Log logs a message at the specified level, respecting both the level
 // threshold and any component filter.
-func (m *Manager) Log(lvl Level, format string, args ...any) {
+func (m *Logger) Log(lvl Level, format string, args ...any) {
 	if lvl < Error {
 		lvl = Error
 	} else if lvl > Debug {
@@ -246,30 +246,30 @@ func (m *Manager) Log(lvl Level, format string, args ...any) {
 }
 
 // Error logs an error-level message.
-func (m *Manager) Error(format string, args ...any) { m.Log(Error, format, args...) }
+func (m *Logger) Error(format string, args ...any) { m.Log(Error, format, args...) }
 
 // Warn logs a warning-level message.
-func (m *Manager) Warn(format string, args ...any) { m.Log(Warn, format, args...) }
+func (m *Logger) Warn(format string, args ...any) { m.Log(Warn, format, args...) }
 
 // Info logs an info-level message.
-func (m *Manager) Info(format string, args ...any) { m.Log(Info, format, args...) }
+func (m *Logger) Info(format string, args ...any) { m.Log(Info, format, args...) }
 
 // Debug logs a debug-level message.
-func (m *Manager) Debug(format string, args ...any) { m.Log(Debug, format, args...) }
+func (m *Logger) Debug(format string, args ...any) { m.Log(Debug, format, args...) }
 
-// Errorf logs an error-level message via the default manager.
+// Errorf logs an error-level message via the default logger.
 func Errorf(format string, args ...any) { Default.Error(format, args...) }
 
-// Warnf logs a warning-level message via the default manager.
+// Warnf logs a warning-level message via the default logger.
 func Warnf(format string, args ...any) { Default.Warn(format, args...) }
 
-// Infof logs an info-level message via the default manager.
+// Infof logs an info-level message via the default logger.
 func Infof(format string, args ...any) { Default.Info(format, args...) }
 
-// Debugf logs a debug-level message via the default manager.
+// Debugf logs a debug-level message via the default logger.
 func Debugf(format string, args ...any) { Default.Debug(format, args...) }
 
-// IsDebug reports whether the default manager is at Debug level or higher.
+// IsDebug reports whether the default logger is at Debug level or higher.
 func IsDebug() bool { return Default.Level() >= Debug }
 
 // SetLevel sets the logging level on the default manager.

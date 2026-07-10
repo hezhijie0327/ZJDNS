@@ -26,7 +26,7 @@ var nsPending = pending.NewGroup[string]()
 type CacheSetter interface {
 	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, dnssecOK bool, answer, authority, additional []dns.RR, validated bool)
 	UpdateLatency(ip string, latencyMS int)
-	GetLatencyLastProbe(ip string) (int64, bool)
+	LatencyLastProbe(ip string) (int64, bool)
 }
 
 // Prober measures network latency to resolved IP addresses and reorders A/AAAA
@@ -105,7 +105,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 		if !ok {
 			continue
 		}
-		lastProbe, ok := p.cache.GetLatencyLastProbe(ip)
+		lastProbe, ok := p.cache.LatencyLastProbe(ip)
 		if !ok || now-lastProbe >= int64(config.DefaultLatencyProbeMinInterval) {
 			allRecent = false
 			break
@@ -200,7 +200,7 @@ func ProbeNSAddrs(cache CacheSetter, addrs []string) {
 	now := time.Now().Unix()
 	needProbe := make([]net.IP, 0, len(ips))
 	for _, ip := range ips {
-		lastProbe, ok := cache.GetLatencyLastProbe(ip.String())
+		lastProbe, ok := cache.LatencyLastProbe(ip.String())
 		if !ok || now-lastProbe >= int64(config.DefaultLatencyProbeMinInterval) {
 			needProbe = append(needProbe, ip)
 		}

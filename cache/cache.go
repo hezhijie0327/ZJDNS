@@ -34,7 +34,7 @@ type Store interface {
 		answer, authority, additional []dns.RR, validated bool)
 	RecordRequest(r *RequestRecord)
 	UpdateLatency(ip string, latencyMS int)
-	GetLatencyLastProbe(ip string) (int64, bool)
+	LatencyLastProbe(ip string) (int64, bool)
 	ReverseLookup(ip string) []LookupResult
 	FlushDB(target string) (int64, error)
 	Clear() (int64, error)
