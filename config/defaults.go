@@ -28,7 +28,7 @@ const (
 	DefaultPrefetchThrottleInterval  = 3 * time.Second
 )
 
-// Timeout values for DNS queries, connections, and background tasks.
+// Query and resolution timeouts.  These bound individual DNS operations.
 const (
 	// RFC 8767 §4.2: timeout SHOULD default to less than 10 seconds.
 	DefaultDNSQueryTimeout = 10 * time.Second // single DNS query / dial / per-message I/O
@@ -42,26 +42,31 @@ const (
 
 	DefaultBackgroundTimeout         = 10 * time.Second // bounded wait for background tasks
 	DefaultBackgroundShutdownTimeout = 30 * time.Second // bounded wait for background tasks during shutdown (matches recursive timeout)
+	DefaultRecursiveResolveTimeout   = 30 * time.Second // Full recursive resolution
+	DefaultShutdownTimeout           = 15 * time.Second // Graceful shutdown deadline
+)
 
-	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
-	DefaultHijackSettleTimeout   = 5 * time.Millisecond   // Max window for GFW detection race after clean response wins
-	DefaultSweepInterval         = 5 * time.Minute        // Periodic cleanup sweep
-	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // Stale TCP write mutex cutoff
-
-	DefaultHTTPIdleConnTimeout = 5 * time.Minute  // HTTP transport idle connection
-	DefaultQUICKeepAlive       = 20 * time.Second // QUIC keep-alive period
-
+// Idle timeout and keepalive periods for long-lived connections.
+const (
+	DefaultHTTPIdleConnTimeout     = 5 * time.Minute   // HTTP transport idle connection
+	DefaultQUICKeepAlive           = 20 * time.Second  // QUIC keep-alive period
 	DefaultQUICClientIdleTimeout   = 60 * time.Second  // Client QUIC idle (must exceed KeepAlive)
 	DefaultQUICServerIdleTimeout   = 30 * time.Second  // Server QUIC idle (RFC 9000 default)
 	DefaultQUICAddrCacheTTL        = 30 * time.Minute  // QUIC address cache sweep cutoff
-	DefaultTCPPoolIdleTimeout      = 120 * time.Second // TCP/DoT pool connection idle (must exceed typical query intervals)
+	DefaultTCPPoolIdleTimeout      = 120 * time.Second // TCP/DoT pool connection idle
 	DefaultTCPKeepAlivePeriod      = 30 * time.Second  // TCP keep-alive probe interval
 	DefaultEDNSTCPKeepaliveTimeout = 1200              // EDNS TCP keepalive idle timeout (100ms units = 120s)
 	DefaultHTTPServerIdleTimeout   = 60 * time.Second  // HTTP keep-alive idle
 	DefaultHTTPServerWriteTimeout  = 10 * time.Second  // HTTP response write
 	DefaultHTTPReadHeaderTimeout   = 5 * time.Second   // HTTP header read (Slowloris protection)
-	DefaultRecursiveResolveTimeout = 30 * time.Second  // Full recursive resolution
-	DefaultShutdownTimeout         = 15 * time.Second  // Graceful shutdown deadline
+)
+
+// Intervals, delays, and retry windows for background maintenance.
+const (
+	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
+	DefaultHijackSettleTimeout   = 5 * time.Millisecond   // Max window for GFW detection race after clean response wins
+	DefaultSweepInterval         = 5 * time.Minute        // Periodic cleanup sweep
+	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // Stale TCP write mutex cutoff
 )
 
 // Security parameters: certificates, DNSSEC, keys, and access control.
