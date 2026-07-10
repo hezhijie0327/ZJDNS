@@ -69,12 +69,24 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 	}
 
 	// Dial to the server -- UDP (raw packets) or TCP (length-prefixed).
+	// When a SOCKS5 proxy is configured, route through it: TCP uses
+	// CONNECT, UDP uses UDP ASSOCIATE (matching dnscrypt-proxy).
+	proxyDialer := c.getProxyDialer(server)
 	network := "udp"
 	if useTCP {
 		network = "tcp"
 	}
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, network, state.serverAddress)
+	var conn net.Conn
+	if proxyDialer != nil {
+		if useTCP {
+			conn, err = proxyDialer.DialContext(ctx, "tcp", state.serverAddress)
+		} else {
+			conn, err = proxyDialer.DialUDP(ctx, state.serverAddress)
+		}
+	} else {
+		dialer := &net.Dialer{}
+		conn, err = dialer.DialContext(ctx, network, state.serverAddress)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dialing dnscrypt server %s: %w", state.serverAddress, err)
 	}

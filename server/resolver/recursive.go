@@ -342,6 +342,7 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 	server := &config.UpstreamServer{
 		Address:  tldServers[0],
 		Protocol: config.ProtoUDP,
+		Proxy:    r.resolver.recursiveProxyURL,
 	}
 
 	probeCtx, probeCancel := context.WithTimeout(ctx, config.DefaultHijackProbeTimeout)

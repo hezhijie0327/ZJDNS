@@ -277,3 +277,97 @@ func (c *socks5PacketConn) SetReadDeadline(t time.Time) error {
 func (c *socks5PacketConn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
+
+// ---------------------------------------------------------------------------
+// net.Conn wrapper — for protocols that expect direct Read/Write on a
+// SOCKS5 UDP relay (e.g. DNSCrypt).  Mirrors golang.org/x/net/proxy's
+// Dial("udp", addr) which returns a net.Conn.
+// ---------------------------------------------------------------------------
+
+// DialUDP establishes a new UDP connection to targetAddr through the
+// SOCKS5 proxy — each call creates a fresh UDP ASSOCIATE and returns an
+// independent net.Conn.  Matches golang.org/x/net/proxy.Dialer.Dial("udp").
+func (d *SOCKS5Dialer) DialUDP(ctx context.Context, targetAddr string) (net.Conn, error) {
+	// Create a fresh, independent dialer so the relay is not shared.
+	fresh := &SOCKS5Dialer{
+		proxyAddr: d.proxyAddr,
+		username:  d.username,
+		password:  d.password,
+		timeout:   d.timeout,
+	}
+	if err := fresh.establishUDPRelay(ctx); err != nil {
+		return nil, err
+	}
+	udpAddr, err := net.ResolveUDPAddr("udp", targetAddr)
+	if err != nil {
+		_ = fresh.Close()
+		return nil, fmt.Errorf("socks5: resolve target %s: %w", targetAddr, err)
+	}
+	return &socks5UDPConn{
+		conn: fresh.udpConn,
+		addr: udpAddr,
+		done: func() { _ = fresh.Close() },
+	}, nil
+}
+
+// socks5UDPConn wraps a dedicated SOCKS5 UDP relay as a net.Conn.
+type socks5UDPConn struct {
+	conn *net.UDPConn
+	addr *net.UDPAddr
+	done func() // called on Close to tear down the relay
+}
+
+func (c *socks5UDPConn) Read(p []byte) (n int, err error) {
+	buf := socks5ReadBufPool.Get().(*[]byte)
+	defer socks5ReadBufPool.Put(buf)
+
+	nr, err := c.conn.Read((*buf))
+	if err != nil {
+		return 0, err
+	}
+
+	dg, _, err := parseDatagram((*buf)[:nr])
+	if err != nil {
+		return 0, err
+	}
+	if len(p) < len(dg.data) {
+		return 0, io.ErrShortBuffer
+	}
+	return copy(p, dg.data), nil
+}
+
+func (c *socks5UDPConn) Write(p []byte) (n int, err error) {
+	headerLen := datagramHeaderLen(c.addr)
+	totalLen := headerLen + len(p)
+	if totalLen > socks5MaxReadBuf {
+		return 0, fmt.Errorf("socks5: datagram too large: %d bytes", totalLen)
+	}
+
+	var buf []byte
+	if totalLen <= 1500 {
+		bp := socks5WritePool.Get().(*[]byte)
+		buf = (*bp)[:totalLen]
+		defer socks5WritePool.Put(bp)
+	} else {
+		buf = make([]byte, totalLen)
+	}
+
+	writeDatagramHeader(buf, c.addr)
+	copy(buf[headerLen:], p)
+
+	nw, err := c.conn.Write(buf)
+	if err != nil {
+		return 0, err
+	}
+	if nw < headerLen {
+		return 0, fmt.Errorf("socks5: short write: %d < %d", nw, headerLen)
+	}
+	return nw - headerLen, nil
+}
+
+func (c *socks5UDPConn) Close() error                       { c.done(); return nil }
+func (c *socks5UDPConn) LocalAddr() net.Addr                { return c.conn.LocalAddr() }
+func (c *socks5UDPConn) RemoteAddr() net.Addr               { return c.addr }
+func (c *socks5UDPConn) SetDeadline(t time.Time) error      { return c.conn.SetDeadline(t) }
+func (c *socks5UDPConn) SetReadDeadline(t time.Time) error  { return c.conn.SetReadDeadline(t) }
+func (c *socks5UDPConn) SetWriteDeadline(t time.Time) error { return c.conn.SetWriteDeadline(t) }
