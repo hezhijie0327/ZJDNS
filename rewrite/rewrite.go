@@ -1,4 +1,5 @@
-// Package rewrite provides domain-level DNS response rewriting.
+// Package rewrite provides domain-level DNS response rewriting with O(1)
+// exact-domain matching via map lookup.
 package rewrite
 
 import (
@@ -17,8 +18,6 @@ import (
 	"codeberg.org/miekg/dns/rdata"
 )
 
-// No local DNS class constant; use config.DefaultDNSClass.
-
 // Result holds the outcome of a rewrite rule evaluation.
 type Result struct {
 	Domain        string
@@ -26,30 +25,39 @@ type Result struct {
 	ResponseCode  int
 	Records       []dns.RR
 	Additional    []dns.RR
-	CreatedAt     int64 // Unix timestamp when the rules were loaded (for TTL decrement)
+	CreatedAt     int64 // Unix timestamp when the rules were loaded
 }
 
-// Evaluator manages rewrite rules and evaluates them against queries.
+// ruleEntry is a pre-built rewrite result for exact-domain matching.
+type ruleEntry struct {
+	responseCode   int
+	records        []dns.RR
+	additional     []dns.RR
+	includeClients []*net.IPNet
+	excludeClients []*net.IPNet
+	dynamic        func() []string // DynamicContent callback; nil for static
+	recordConfigs  []config.DNSRecordConfig
+}
+
+// Evaluator manages rewrite rules with O(1) map lookup for all rule types.
 type Evaluator struct {
-	rules              atomic.Pointer[[]config.RewriteRule]
-	rulesLen           atomic.Uint64
+	domainMap          atomic.Pointer[map[string]*ruleEntry]
+	ruleCount          atomic.Uint64
 	globalExcludeCIDRs atomic.Pointer[[]*net.IPNet]
-	loadedAt           atomic.Int64 // Unix timestamp of last LoadRules
+	loadedAt           atomic.Int64
 }
 
 // New creates an Evaluator with no rules loaded.
 func New() *Evaluator {
 	rm := &Evaluator{}
-	initialRules := make([]config.RewriteRule, 0, config.DefaultRewriteRulesCapacity)
+	initialMap := make(map[string]*ruleEntry)
 	initialExcludes := make([]*net.IPNet, 0)
-	rm.rules.Store(&initialRules)
+	rm.domainMap.Store(&initialMap)
 	rm.globalExcludeCIDRs.Store(&initialExcludes)
-	rm.rulesLen.Store(0)
 	return rm
 }
 
-// preParseRecordTypes pre-parses Type and Class strings to uint16 values
-// to avoid allocation-heavy map lookups on the query hot path.
+// preParseRecordTypes pre-parses Type/Class strings to uint16 for hot-path use.
 func preParseRecordTypes(records []config.DNSRecordConfig) {
 	for j := range records {
 		if t, _ := dnsutil.StringToType(records[j].Type); t != 0 {
@@ -68,8 +76,9 @@ func preParseRecordTypes(records []config.DNSRecordConfig) {
 
 // LoadRules validates and loads rewrite rules into the Evaluator.
 func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
-	validRules := make([]config.RewriteRule, 0, len(rules))
 	globalExcludes := make([]*net.IPNet, 0)
+	domainMap := make(map[string]*ruleEntry)
+
 	for i := range rules {
 		rule := &rules[i]
 		if len(rule.Name) > config.MaxDomainLength {
@@ -83,79 +92,79 @@ func (e *Evaluator) LoadRules(rules []config.RewriteRule) error {
 			}
 		}
 
-		if len(rule.ExcludeClients) > 0 {
-			nets := make([]*net.IPNet, 0, len(rule.ExcludeClients))
-			for _, entry := range rule.ExcludeClients {
-				ipNet, err := parseCIDREntry(entry)
-				if err != nil {
-					return fmt.Errorf("rewrite rule '%s' invalid exclude_clients entry '%s': %w", rule.Name, entry, err)
-				}
-				nets = append(nets, ipNet)
-			}
-			rule.ExcludeClientCIDRs = nets
-		}
-
-		if len(rule.IncludeClients) > 0 {
-			nets := make([]*net.IPNet, 0, len(rule.IncludeClients))
-			for _, entry := range rule.IncludeClients {
-				ipNet, err := parseCIDREntry(entry)
-				if err != nil {
-					return fmt.Errorf("rewrite rule '%s' invalid include_clients entry '%s': %w", rule.Name, entry, err)
-				}
-				nets = append(nets, ipNet)
-			}
-			rule.IncludeClientCIDRs = nets
+		if err := parseClientCIDRs(rule); err != nil {
+			return err
 		}
 
 		if rule.Name == "" {
 			if len(rule.Records) > 0 || len(rule.Additional) > 0 || rule.ResponseCode != nil || len(rule.IncludeClientCIDRs) > 0 {
 				return fmt.Errorf("rewrite rule %d: unnamed rules may only contain exclude_clients", i)
 			}
-			if len(rule.ExcludeClientCIDRs) > 0 {
-				globalExcludes = append(globalExcludes, rule.ExcludeClientCIDRs...)
-			}
+			globalExcludes = append(globalExcludes, rule.ExcludeClientCIDRs...)
 			continue
 		}
 
 		rule.NormalizedName = zdnsutil.NormalizeDomain(rule.Name)
-
-		// Pre-parse Type/Class strings to uint16 to avoid allocation-heavy
-		// map lookups and string normalizations on every query (hot path).
 		preParseRecordTypes(rule.Records)
 		preParseRecordTypes(rule.Additional)
 
-		// Pre-build DNS records from config so they are not e-parsed
-		// from zone file strings on every query.
+		// Pre-build RRs for static rules.
 		if rule.DynamicContent == nil {
-			rule.CachedRecords = make([]dns.RR, 0, len(rule.Records))
-			for _, rec := range rule.Records {
-				if rec.ResponseCode != nil {
-					continue // handled in Evaluate, not a real RR
-				}
-				if rr := e.buildRecord(rule.Name, &rec); rr != nil {
-					rule.CachedRecords = append(rule.CachedRecords, rr)
-				}
-			}
-			rule.CachedAdditional = make([]dns.RR, 0, len(rule.Additional))
-			for _, rec := range rule.Additional {
-				if rec.ResponseCode != nil {
-					continue
-				}
-				if rr := e.buildRecord(rule.Name, &rec); rr != nil {
-					rule.CachedAdditional = append(rule.CachedAdditional, rr)
-				}
-			}
+			rule.CachedRecords = buildRRs(rule.Name, rule.Records)
+			rule.CachedAdditional = buildRRs(rule.Name, rule.Additional)
 		}
 
-		validRules = append(validRules, *rule)
+		entry := &ruleEntry{
+			responseCode:   dns.RcodeSuccess,
+			records:        rule.CachedRecords,
+			additional:     rule.CachedAdditional,
+			includeClients: rule.IncludeClientCIDRs,
+			excludeClients: rule.ExcludeClientCIDRs,
+			dynamic:        rule.DynamicContent,
+			recordConfigs:  rule.Records,
+		}
+		if rule.ResponseCode != nil {
+			entry.responseCode = *rule.ResponseCode
+		}
+		domainMap[rule.NormalizedName] = entry
 	}
 
-	e.rules.Store(&validRules)
-	e.rulesLen.Store(uint64(len(validRules)))
+	e.domainMap.Store(&domainMap)
+	e.ruleCount.Store(uint64(len(domainMap)))
 	e.globalExcludeCIDRs.Store(&globalExcludes)
 	e.loadedAt.Store(log.NowUnix())
-	log.Infof("REWRITE: DNS rewriter loaded: %d rules", len(validRules))
+	log.Infof("REWRITE: DNS rewriter loaded: %d rules", len(domainMap))
 	return nil
+}
+
+func parseClientCIDRs(rule *config.RewriteRule) error {
+	if len(rule.ExcludeClients) > 0 {
+		nets, err := parseCIDRList(rule.ExcludeClients)
+		if err != nil {
+			return fmt.Errorf("rewrite rule '%s' invalid exclude_clients: %w", rule.Name, err)
+		}
+		rule.ExcludeClientCIDRs = nets
+	}
+	if len(rule.IncludeClients) > 0 {
+		nets, err := parseCIDRList(rule.IncludeClients)
+		if err != nil {
+			return fmt.Errorf("rewrite rule '%s' invalid include_clients: %w", rule.Name, err)
+		}
+		rule.IncludeClientCIDRs = nets
+	}
+	return nil
+}
+
+func parseCIDRList(entries []string) ([]*net.IPNet, error) {
+	nets := make([]*net.IPNet, 0, len(entries))
+	for _, entry := range entries {
+		ipNet, err := parseCIDREntry(entry)
+		if err != nil {
+			return nil, err
+		}
+		nets = append(nets, ipNet)
+	}
+	return nets, nil
 }
 
 func parseCIDREntry(entry string) (*net.IPNet, error) {
@@ -178,10 +187,11 @@ func parseCIDREntry(entry string) (*net.IPNet, error) {
 
 // HasRules reports whether any rewrite rules are currently loaded.
 func (e *Evaluator) HasRules() bool {
-	return e.rulesLen.Load() > 0
+	return e.ruleCount.Load() > 0
 }
 
-// Evaluate checks a query against loaded rules and returns a rewrite Result.
+// Evaluate checks a query against loaded rules.  O(1) map lookup for all
+// rule types — static, client-filtered, and dynamic content.
 func (e *Evaluator) Evaluate(domain string, qtype, qclass uint16, clientIP net.IP) Result {
 	result := Result{
 		Domain:        domain,
@@ -207,112 +217,102 @@ func (e *Evaluator) Evaluate(domain string, qtype, qclass uint16, clientIP net.I
 		return result
 	}
 
-	rulesPtr := e.rules.Load()
-	if rulesPtr == nil {
-		return result
-	}
-	rules := *rulesPtr
 	domain = zdnsutil.NormalizeDomain(domain)
 
-ruleLoop:
-	for i := range rules {
-		rule := &rules[i]
-		if domain != rule.NormalizedName {
-			continue
-		}
-		if len(rule.IncludeClientCIDRs) > 0 {
-			if clientIP == nil {
-				continue ruleLoop
-			}
-			included := false
-			for _, ipNet := range rule.IncludeClientCIDRs {
-				if ipNet.Contains(clientIP) {
-					included = true
-					break
-				}
-			}
-			if !included {
-				continue ruleLoop
-			}
-		}
-		if len(rule.ExcludeClientCIDRs) > 0 && clientIP != nil {
-			for _, ipNet := range rule.ExcludeClientCIDRs {
-				if ipNet.Contains(clientIP) {
-					continue ruleLoop
-				}
-			}
-		}
-		if rule.ResponseCode != nil {
-			result.ResponseCode = *rule.ResponseCode
-			result.ShouldRewrite = true
+	dm := e.domainMap.Load()
+	if dm == nil {
+		return result
+	}
+	entry, ok := (*dm)[domain]
+	if !ok {
+		return result
+	}
+
+	// Client filtering.
+	if len(entry.includeClients) > 0 {
+		if clientIP == nil || !containsAny(entry.includeClients, clientIP) {
 			return result
 		}
-		if rule.DynamicContent != nil {
-			var contents []string
-			for _, record := range rule.Records {
-				if record.ParsedType == qtype && record.ParsedClass == qclass {
-					if contents == nil {
-						contents = rule.DynamicContent()
-					}
-					for _, content := range contents {
-						rr := e.buildRecord(rule.Name, &config.DNSRecordConfig{
-							Type:    record.Type,
-							Class:   record.Class,
-							TTL:     record.TTL,
-							Content: strconv.Quote(content),
-						})
-						if rr != nil {
-							result.Records = append(result.Records, rr)
-						}
+	}
+	if len(entry.excludeClients) > 0 && clientIP != nil {
+		if containsAny(entry.excludeClients, clientIP) {
+			return result
+		}
+	}
+
+	// Dynamic content — evaluate now.
+	if entry.dynamic != nil {
+		var contents []string
+		for _, record := range entry.recordConfigs {
+			if record.ParsedType == qtype && record.ParsedClass == qclass {
+				if contents == nil {
+					contents = entry.dynamic()
+				}
+				for _, content := range contents {
+					rr := buildRecord(domain, &config.DNSRecordConfig{
+						Type:    record.Type,
+						Class:   record.Class,
+						TTL:     record.TTL,
+						Content: strconv.Quote(content),
+					})
+					if rr != nil {
+						result.Records = append(result.Records, rr)
 					}
 				}
-			}
-			if len(result.Records) > 0 {
-				result.ShouldRewrite = true
-				return result
 			}
 		}
-		if len(rule.CachedRecords) > 0 || len(rule.CachedAdditional) > 0 || len(rule.Records) > 0 {
-			// Check for per-record response_code overrides first
-			// (these are not pre-built into CachedRecords).
-			for _, record := range rule.Records {
-				if record.ResponseCode == nil {
-					continue
-				}
-				if (record.Type == "" || record.ParsedType == qtype) && record.ParsedClass == qclass {
-					result.ResponseCode = *record.ResponseCode
-					result.ShouldRewrite = true
-					result.Records = nil
-					result.Additional = nil
-					return result
-				}
-			}
-
-			// Use pre-built RRs (built once at LoadRules time) —
-			// filter by query type and class.
-			for _, rr := range rule.CachedRecords {
-				// TTL is applied by ttl.DeductElapsedCyclical in the handler;
-				// skip Clone() here to avoid double allocation.
-				if rr.Header().Class == qclass && dns.RRToType(rr) == qtype {
-					result.Records = append(result.Records, rr)
-				}
-			}
-			for _, rr := range rule.CachedAdditional {
-				// TTL is applied by ttl.DeductElapsedCyclical in the handler;
-				// skip Clone() here to avoid double allocation.
-				if rr.Header().Class == qclass && dns.RRToType(rr) == qtype {
-					result.Additional = append(result.Additional, rr)
-				}
-			}
+		if len(result.Records) > 0 {
 			result.ShouldRewrite = true
 			result.CreatedAt = e.loadedAt.Load()
-			return result
 		}
+		return result
+	}
+
+	// Static content — pre-built.
+	result.ResponseCode = entry.responseCode
+	for _, rr := range entry.records {
+		if rr.Header().Class == qclass && dns.RRToType(rr) == qtype {
+			result.Records = append(result.Records, rr)
+		}
+	}
+	for _, rr := range entry.additional {
+		if rr.Header().Class == qclass && dns.RRToType(rr) == qtype {
+			result.Additional = append(result.Additional, rr)
+		}
+	}
+	if result.ResponseCode != dns.RcodeSuccess || len(result.Records) > 0 || len(result.Additional) > 0 {
+		result.ShouldRewrite = true
+		result.CreatedAt = e.loadedAt.Load()
 	}
 	return result
 }
 
-func (e *Evaluator) buildRecord(domain string, record *config.DNSRecordConfig) dns.RR {
+func containsAny(nets []*net.IPNet, ip net.IP) bool {
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildRRs(domain string, records []config.DNSRecordConfig) []dns.RR {
+	if len(records) == 0 {
+		return nil
+	}
+	rr := make([]dns.RR, 0, len(records))
+	for _, rec := range records {
+		if rec.ResponseCode != nil {
+			continue
+		}
+		if r := buildRecord(domain, &rec); r != nil {
+			rr = append(rr, r)
+		}
+	}
+	return rr
+}
+
+func buildRecord(domain string, record *config.DNSRecordConfig) dns.RR {
 	ttl := record.TTL
 	if ttl == 0 {
 		ttl = config.DefaultTTL

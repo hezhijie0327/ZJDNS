@@ -1,4 +1,5 @@
-// Package cidr provides IP filtering using CIDR rules with tag matching.
+// Package cidr provides IP filtering using CIDR rules with tag matching
+// and path-compressed binary tries for O(prefix-length) IP lookup.
 package cidr
 
 import (
@@ -7,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"zjdns/config"
@@ -26,10 +26,10 @@ var errEmptyTag = errors.New("CIDR tag cannot be empty")
 // rule holds a set of parsed CIDR networks for a single tag.
 type rule struct {
 	tag       string
-	nets      []*net.IPNet
-	ipv4Nets  []ipv4Net
-	ipv6Nets  []*net.IPNet
+	nets      []*net.IPNet // raw nets before trie preprocessing
 	totalNets int
+	v4        bitTrie
+	v6        bitTrie
 }
 
 // Filter manages CIDR rules for IP address matching.
@@ -46,10 +46,70 @@ type MatchInfo struct {
 	Original string
 }
 
-type ipv4Net struct {
-	ip     uint32
-	mask   uint32
-	prefix uint8
+// bitTrie is a binary trie for CIDR prefix matching.
+// Insert stores a prefix at the terminal node; lookup walks the IP's bit
+// path and returns true if any terminal node is found along the way
+// (longest-prefix match is implicit — shorter prefixes are ancestors).
+type bitTrie struct {
+	root *bitNode
+}
+
+type bitNode struct {
+	leaf bool
+	ch   [2]*bitNode
+}
+
+func (t *bitTrie) insert(key []uint32, bits int) {
+	if t.root == nil {
+		t.root = &bitNode{}
+	}
+	n := t.root
+	for b := 0; b < bits; b++ {
+		bit := getBit(key, b)
+		if n.ch[bit] == nil {
+			n.ch[bit] = &bitNode{}
+		}
+		n = n.ch[bit]
+	}
+	n.leaf = true
+}
+
+func (t *bitTrie) contains(key []uint32) bool {
+	if t.root == nil {
+		return false
+	}
+	n := t.root
+	for b := 0; b < len(key)*32; b++ {
+		if n.leaf {
+			return true
+		}
+		bit := getBit(key, b)
+		if n.ch[bit] == nil {
+			return false
+		}
+		n = n.ch[bit]
+	}
+	return n.leaf
+}
+
+// getBit returns the b-th bit of key (0 = MSB of key[0]).
+func getBit(key []uint32, b int) uint32 {
+	return (key[b/32] >> (31 - b%32)) & 1
+}
+
+// ipToKey converts a 4-byte IPv4 to a single-uint32 key.
+func ipToKey(ip net.IP) []uint32 {
+	return []uint32{uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])}
+}
+
+// ipToKey6 converts a 16-byte IPv6 to 4 uint32s.
+func ipToKey6(ip net.IP) []uint32 {
+	return []uint32{
+		uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3]),
+		uint32(ip[4])<<24 | uint32(ip[5])<<16 | uint32(ip[6])<<8 | uint32(ip[7]),
+		uint32(ip[8])<<24 | uint32(ip[9])<<16 | uint32(ip[10])<<8 | uint32(ip[11]),
+		uint32(ip[12])<<24 | uint32(ip[13])<<16 | uint32(ip[14])<<8 | uint32(ip[15]),
+	}
 }
 
 // New creates a new Filter from the given CIDR configuration slice.
@@ -202,53 +262,21 @@ func (r *rule) preprocessNetworks() {
 	}
 
 	r.totalNets = len(r.nets)
-	r.ipv4Nets = make([]ipv4Net, 0, r.totalNets)
-	r.ipv6Nets = make([]*net.IPNet, 0, r.totalNets)
 
 	for _, ipNet := range r.nets {
 		if ipNet == nil {
 			continue
 		}
+		prefix, _ := ipNet.Mask.Size()
 
-		if ipNet.IP.To4() != nil {
-			if ipv4Net := asIPv4Net(ipNet); ipv4Net != nil {
-				r.ipv4Nets = append(r.ipv4Nets, *ipv4Net)
-			}
+		if ip4 := ipNet.IP.To4(); ip4 != nil {
+			r.v4.insert(ipToKey(ip4), prefix)
 		} else {
-			r.ipv6Nets = append(r.ipv6Nets, ipNet)
+			r.v6.insert(ipToKey6(ipNet.IP), prefix)
 		}
 	}
-
-	slices.SortFunc(r.ipv4Nets, func(a, b ipv4Net) int {
-		if a.prefix != b.prefix {
-			return int(b.prefix) - int(a.prefix)
-		}
-		return 0
-	})
 
 	r.nets = nil
-}
-
-func asIPv4Net(ipNet *net.IPNet) *ipv4Net {
-	if ipNet == nil || ipNet.IP.To4() == nil {
-		return nil
-	}
-
-	ipv4 := ipNet.IP.To4()
-
-	ipUint := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
-
-	maskSize, _ := ipNet.Mask.Size()
-	var maskUint uint32
-	if maskSize <= 32 {
-		maskUint = ^uint32(0) << (32 - maskSize)
-	}
-
-	return &ipv4Net{
-		ip:     ipUint & maskUint,
-		mask:   maskUint,
-		prefix: uint8(maskSize), //nolint:gosec // G115: CIDR mask size — 0-128 fits uint8
-	}
 }
 
 func (r *rule) contains(ip net.IP) bool {
@@ -256,34 +284,8 @@ func (r *rule) contains(ip net.IP) bool {
 		return false
 	}
 
-	if ipv4 := ip.To4(); ipv4 != nil {
-		return r.containsIPv4(ipv4)
+	if ip4 := ip.To4(); ip4 != nil {
+		return r.v4.contains(ipToKey(ip4))
 	}
-
-	return r.containsIPv6(ip)
-}
-
-func (r *rule) containsIPv4(ipv4 net.IP) bool {
-	if len(r.ipv4Nets) == 0 {
-		return false
-	}
-
-	ipUint := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
-
-	for _, net := range r.ipv4Nets {
-		if (ipUint & net.mask) == net.ip {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (r *rule) containsIPv6(ip net.IP) bool {
-	for _, ipNet := range r.ipv6Nets {
-		if ipNet.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return r.v6.contains(ipToKey6(ip))
 }
