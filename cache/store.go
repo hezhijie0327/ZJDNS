@@ -58,7 +58,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	var validated int
 	var msgWire []byte
 	err := s.db.StmtGetEntry.QueryRow(
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, database.BoolToInt(dnssecOK),
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, zdnsutil.BoolToInt(dnssecOK),
 	).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, false
@@ -73,7 +73,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 
 	// Decompress and unpack the wire format into a dns.Msg.
-	wire, err := database.Decompress(msgWire)
+	wire, err := zdnsutil.Decompress(msgWire)
 	if err != nil {
 		log.Warnf("CACHE: decompress wire for entry %d: %v", id, err)
 		return nil, false, false
@@ -238,13 +238,13 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = zdnsutil.NormalizeDomain(qname)
-	dnssecInt := database.BoolToInt(dnssecOK)
+	dnssecInt := zdnsutil.BoolToInt(dnssecOK)
 
 	// Pack wire format and compress.
 	msg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
 	var msgWire []byte
 	if err := msg.Pack(); err == nil {
-		msgWire = database.Compress(msg.Data)
+		msgWire = zdnsutil.Compress(msg.Data)
 	}
 
 	// ── Transaction (serialized via writeMu) ──────────────────────────────
@@ -265,7 +265,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 RETURNING id`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
-		now, entryTTL, now+int64(entryTTL), database.BoolToInt(validated),
+		now, entryTTL, now+int64(entryTTL), zdnsutil.BoolToInt(validated),
 		msgWire,
 	).Scan(&entryID); err != nil {
 		s.db.WriteUnlock()

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
 
@@ -24,7 +23,7 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 
 	r.Qname = zdnsutil.NormalizeDomain(r.Qname)
 	ecsAddr, ecsPrefix := ecsParams(r.ECS)
-	dnssecInt := database.BoolToInt(r.DNSSECOK)
+	dnssecInt := zdnsutil.BoolToInt(r.DNSSECOK)
 
 	entryID := s.db.EnsureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
 
@@ -36,7 +35,7 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	_, _ = s.db.StmtInsertLog.Exec(
 		log.NowUnix(), entryID,
 		r.Protocol, r.Result, r.ResponseTime, r.Rcode, r.Server,
-		database.BoolToInt(r.Hijack), database.BoolToInt(r.Fallback), r.DNSSECStatus,
+		zdnsutil.BoolToInt(r.Hijack), zdnsutil.BoolToInt(r.Fallback), r.DNSSECStatus,
 	)
 }
 

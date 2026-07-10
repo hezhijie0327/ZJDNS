@@ -1,43 +1,9 @@
 package database
 
-import (
-	"fmt"
+import zdnsutil "zjdns/internal/dnsutil"
 
-	"github.com/klauspost/compress/zstd"
-)
+// Compress compresses data with zstd (delegates to dnsutil.Compress).
+var Compress = zdnsutil.Compress
 
-const zstdCompressLevel = zstd.SpeedDefault
-
-// zstd encoder/decoder for wire format compression. Created once, reused forever.
-var (
-	zstdEncoder *zstd.Encoder
-	zstdDecoder *zstd.Decoder
-)
-
-func init() {
-	var err error
-	zstdEncoder, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstdCompressLevel))
-	if err != nil {
-		panic(fmt.Sprintf("zstd encoder init: %v", err))
-	}
-	zstdDecoder, err = zstd.NewReader(nil)
-	if err != nil {
-		panic(fmt.Sprintf("zstd decoder init: %v", err))
-	}
-}
-
-// Compress compresses data with zstd. Returns nil for empty input.
-func Compress(data []byte) []byte {
-	if len(data) == 0 {
-		return nil
-	}
-	return zstdEncoder.EncodeAll(data, nil)
-}
-
-// Decompress decompresses data with zstd. Returns nil for empty input.
-func Decompress(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, nil
-	}
-	return zstdDecoder.DecodeAll(data, nil)
-}
+// Decompress decompresses data with zstd (delegates to dnsutil.Decompress).
+var Decompress = zdnsutil.Decompress

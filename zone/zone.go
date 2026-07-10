@@ -637,7 +637,7 @@ func packRRs(domain string, records []config.ZoneRecord) []byte {
 	if err := msg.Pack(); err != nil {
 		return nil
 	}
-	return database.Compress(msg.Data)
+	return zdnsutil.Compress(msg.Data)
 }
 
 // unpackRRs decompresses a blob and unpacks the RRs from the dns.Msg.
@@ -645,7 +645,7 @@ func unpackRRs(blob []byte) []dns.RR {
 	if len(blob) == 0 {
 		return nil
 	}
-	wire, err := database.Decompress(blob)
+	wire, err := zdnsutil.Decompress(blob)
 	if err != nil {
 		return nil
 	}
