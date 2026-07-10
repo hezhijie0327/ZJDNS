@@ -90,12 +90,12 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("EDNS handler init: %w", err)
 	}
 
-	// Wire up DynamicContent for {ProjectName}.stats and db.clear*.
+	// Wire up DynamicContent for {DefaultProjectName}.stats and db.clear*.
 	for i := range cfg.Rewrite {
 		switch cfg.Rewrite[i].Name {
-		case config.ProjectName + ".stats":
+		case config.DefaultProjectName + ".stats":
 			cfg.Rewrite[i].DynamicContent = cacheStore.Stats
-		case config.ProjectName + ".db.clear":
+		case config.DefaultProjectName + ".db.clear":
 			cfg.Rewrite[i].DynamicContent = func() []string {
 				n, err := cacheStore.Clear()
 				if err != nil {
@@ -103,7 +103,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				}
 				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
-		case config.ProjectName + ".db.clear.cache":
+		case config.DefaultProjectName + ".db.clear.cache":
 			cfg.Rewrite[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("cache")
 				if err != nil {
@@ -111,7 +111,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				}
 				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
-		case config.ProjectName + ".db.clear.stats":
+		case config.DefaultProjectName + ".db.clear.stats":
 			cfg.Rewrite[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("stats")
 				if err != nil {
@@ -119,7 +119,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				}
 				return []string{fmt.Sprintf("reset=%d", n)}
 			}
-		case config.ProjectName + ".db.clear.latency":
+		case config.DefaultProjectName + ".db.clear.latency":
 			cfg.Rewrite[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("latency")
 				if err != nil {

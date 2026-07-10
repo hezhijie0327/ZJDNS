@@ -327,16 +327,16 @@ func addChaosRecord(cfg *ServerConfig) {
 	// version.server / version.bind expose the real server version by design —
 	// config.Version is set by main.go from getVersion() before LoadConfig runs.
 	// this helps operators identify which ZJDNS instance is serving a query.
-	version := Version
+	version := DefaultVersion
 	if version == "" || version == "dev" {
-		version = ProjectName
+		version = DefaultProjectName
 	}
 
 	// id.server / hostname.bind try the system hostname first; fall back to
-	// ProjectName when the hostname cannot be determined.
+	// DefaultProjectName when the hostname cannot be determined.
 	hostname, err := os.Hostname()
 	if err != nil || hostname == "" {
-		hostname = ProjectName
+		hostname = DefaultProjectName
 	}
 
 	chaosRecords := map[string]string{
@@ -361,14 +361,14 @@ func addChaosRecord(cfg *ServerConfig) {
 	// DynamicContent rules — populated at query time by server.New().
 	// Destructive (db.clear*) rules are loopback-only.
 	for _, name := range []string{
-		ProjectName + ".stats",
-		ProjectName + ".db.clear",
-		ProjectName + ".db.clear.cache",
-		ProjectName + ".db.clear.stats",
-		ProjectName + ".db.clear.latency",
+		DefaultProjectName + ".stats",
+		DefaultProjectName + ".db.clear",
+		DefaultProjectName + ".db.clear.cache",
+		DefaultProjectName + ".db.clear.stats",
+		DefaultProjectName + ".db.clear.latency",
 	} {
 		var includeClients []string
-		if strings.HasPrefix(name, ProjectName+".db.") {
+		if strings.HasPrefix(name, DefaultProjectName+".db.") {
 			includeClients = []string{"127.0.0.1", "::1"}
 		}
 		cfg.Rewrite = append(cfg.Rewrite, RewriteRule{

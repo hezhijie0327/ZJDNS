@@ -18,8 +18,8 @@ func main() {
 
 	fmt.Print(banner(versionStr))
 
-	config.ProjectName = ProjectName
-	config.Version = versionStr
+	config.DefaultProjectName = ProjectName
+	config.DefaultVersion = versionStr
 
 	cfg, err := config.LoadConfig(configFile)
 	if err != nil {

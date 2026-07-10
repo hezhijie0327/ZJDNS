@@ -193,8 +193,10 @@ var (
 	NextProtoDOH3 = []string{"h3"}  // DNS-over-HTTP/3
 )
 
-// ProjectName is the application name, set at build time.
-var ProjectName = "ZJDNS"
+// DefaultProjectName is the default application name, used in CHAOS records
+// and rewrite rule names before the build-time value takes effect.
+var DefaultProjectName = "ZJDNS"
 
-// Version is the build version, set at build time via ldflags.
-var Version = "dev"
+// DefaultVersion is the default build version, used in CHAOS records before the
+// build-time value (set via ldflags) takes effect.
+var DefaultVersion = "dev"
