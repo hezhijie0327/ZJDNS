@@ -272,27 +272,37 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 }
 
 func (e *Evaluator) query(stmt *sql.Stmt, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
-	var rcode int
-	var answerBlob, authBlob, addlBlob []byte
-	var tagsText string
-	if err := stmt.QueryRow(qname, qtype, qclass).Scan(&rcode, &answerBlob, &authBlob, &addlBlob, &tagsText); err != nil {
+	rows, err := stmt.Query(qname, qtype, qclass)
+	if err != nil {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
+	defer func() { _ = rows.Close() }()
 
-	// Check match tags before unpacking RRs.
-	if tagsText != "" && !matchTagsOK(parseMatchTagsText(tagsText), matchedTags) {
-		return Result{Rcode: dns.RcodeSuccess}
+	for rows.Next() {
+		var rcode int
+		var answerBlob, authBlob, addlBlob []byte
+		var tagsText string
+		if err := rows.Scan(&rcode, &answerBlob, &authBlob, &addlBlob, &tagsText); err != nil {
+			continue
+		}
+
+		// Check match tags before unpacking RRs.
+		if tagsText != "" && !matchTagsOK(parseMatchTagsText(tagsText), matchedTags) {
+			continue
+		}
+
+		return Result{
+			Domain:     qname,
+			Matched:    true,
+			Rcode:      rcode,
+			Answer:     unpackRRs(answerBlob),
+			Authority:  unpackRRs(authBlob),
+			Additional: unpackRRs(addlBlob),
+			CreatedAt:  loadedAt,
+		}
 	}
 
-	return Result{
-		Domain:     qname,
-		Matched:    true,
-		Rcode:      rcode,
-		Answer:     unpackRRs(answerBlob),
-		Authority:  unpackRRs(authBlob),
-		Additional: unpackRRs(addlBlob),
-		CreatedAt:  loadedAt,
-	}
+	return Result{Rcode: dns.RcodeSuccess}
 }
 
 func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicEntry) Result {

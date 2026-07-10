@@ -475,6 +475,359 @@ func TestEvaluator_FileImport_AuthorityAndAdditional(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Match tag tests
+// ---------------------------------------------------------------------------
+
+func TestEvaluator_MatchTags_PositiveMatch(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{Name: "vpn.example.com", Match: []string{"corp"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
+		{Name: "vpn.example.com", Match: []string{"guest"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.2", TTL: 300}}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// Client with "corp" tag should match the corp rule.
+	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	if !result.Matched {
+		t.Fatal("corp-tagged client: expected match")
+	}
+	a := result.Answer[0].(*dns.A)
+	if a.A.String() != "10.0.0.1" {
+		t.Errorf("corp-tagged client: A = %s, want 10.0.0.1", a.A.String())
+	}
+
+	// Client with "guest" tag should match the guest rule.
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true})
+	if !result.Matched {
+		t.Fatal("guest-tagged client: expected match")
+	}
+	a = result.Answer[0].(*dns.A)
+	if a.A.String() != "10.0.0.2" {
+		t.Errorf("guest-tagged client: A = %s, want 10.0.0.2", a.A.String())
+	}
+
+	// Client with neither tag should not match.
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if result.Matched {
+		t.Error("untagged client: should not match any rule")
+	}
+}
+
+func TestEvaluator_MatchTags_Negate(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{
+			Name:  "vpn.example.com",
+			Match: []string{"!corp", "!guest"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "127.0.0.1", TTL: 300},
+				{Type: dns.TypeAAAA, Content: "::1", TTL: 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// Client with neither tag should match (both negations satisfied).
+	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if !result.Matched {
+		t.Fatal("untagged client: expected match (neither corp nor guest)")
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("Answer len = %d, want 1", len(result.Answer))
+	}
+	a := result.Answer[0].(*dns.A)
+	if a.A.String() != "127.0.0.1" {
+		t.Errorf("A = %s, want 127.0.0.1", a.A.String())
+	}
+
+	// Client with only "corp" should NOT match (!corp fails).
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	if result.Matched {
+		t.Error("corp-tagged client: should NOT match (!corp negates)")
+	}
+
+	// Client with only "guest" should NOT match (!guest fails).
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true})
+	if result.Matched {
+		t.Error("guest-tagged client: should NOT match (!guest negates)")
+	}
+
+	// Client with BOTH tags should NOT match.
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true, "guest": true})
+	if result.Matched {
+		t.Error("corp+guest-tagged client: should NOT match (both negations fail)")
+	}
+}
+
+// TestEvaluator_MatchTags_MixedSameQType reproduces the bug where two rows
+// share the same (qname, qtype, qclass) but have different match_tags —
+// one with a negative tag, one with a positive tag. The old QueryRow
+// approach only checked one row arbitrarily.
+func TestEvaluator_MatchTags_MixedSameQType(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{
+			Name:  "vpn.example.com",
+			Match: []string{"!net_local"}, // negative: matches clients NOT in net_local
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "127.0.0.1", TTL: 300},
+				{Type: dns.TypeAAAA, Content: "::1", TTL: 300},
+			},
+		},
+		{
+			Name:  "vpn.example.com",
+			Rcode: dns.RcodeNameError,
+			Match: []string{"net_local"}, // positive: matches clients IN net_local
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeAAAA}, // empty AAAA record
+			},
+		},
+		{
+			Name:  "vpn.example.com",
+			Match: []string{"net_local"}, // positive: matches clients IN net_local
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "10.192.7.1", TTL: 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// External client (no tags) — should match the !net_local rule → 127.0.0.1.
+	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if !result.Matched {
+		t.Fatal("untagged client A query: expected match")
+	}
+	if result.Rcode != dns.RcodeSuccess {
+		t.Errorf("untagged client A: Rcode = %d, want NOERROR", result.Rcode)
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("untagged client A: Answer len = %d, want 1", len(result.Answer))
+	}
+	a := result.Answer[0].(*dns.A)
+	if a.A.String() != "127.0.0.1" {
+		t.Errorf("untagged client A: A = %s, want 127.0.0.1", a.A.String())
+	}
+
+	// External client — AAAA query → ::1 from !net_local rule.
+	result = z.Evaluate("vpn.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{})
+	if !result.Matched {
+		t.Fatal("untagged client AAAA query: expected match")
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("untagged client AAAA: Answer len = %d, want 1", len(result.Answer))
+	}
+	aaaa := result.Answer[0].(*dns.AAAA)
+	if aaaa.AAAA.String() != "::1" {
+		t.Errorf("untagged client AAAA: AAAA = %s, want ::1", aaaa.AAAA.String())
+	}
+
+	// Local client (net_local tag) — A query → should match net_local rule → 10.192.7.1.
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"net_local": true})
+	if !result.Matched {
+		t.Fatal("local client A query: expected match (this was the bug)")
+	}
+	if result.Rcode != dns.RcodeSuccess {
+		t.Errorf("local client A: Rcode = %d, want NOERROR", result.Rcode)
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("local client A: Answer len = %d, want 1", len(result.Answer))
+	}
+	a = result.Answer[0].(*dns.A)
+	if a.A.String() != "10.192.7.1" {
+		t.Errorf("local client A: A = %s, want 10.192.7.1", a.A.String())
+	}
+
+	// Local client (net_local tag) — AAAA query → should match net_local rcode=3 rule.
+	result = z.Evaluate("vpn.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{"net_local": true})
+	if !result.Matched {
+		t.Fatal("local client AAAA query: expected match")
+	}
+	if result.Rcode != dns.RcodeNameError {
+		t.Errorf("local client AAAA: Rcode = %d, want NXDOMAIN", result.Rcode)
+	}
+}
+
+// TestEvaluator_MatchTags_MultiAnd verifies AND logic: all tags must be satisfied.
+func TestEvaluator_MatchTags_MultiAnd(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{
+			Name:  "internal.example.com",
+			Match: []string{"corp", "!guest"}, // must be corp AND NOT guest
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// Has "corp" but not "guest" → should match.
+	result := z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	if !result.Matched {
+		t.Error("corp only: expected match")
+	}
+
+	// Has "corp" AND "guest" → should NOT match (!guest fails).
+	result = z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true, "guest": true})
+	if result.Matched {
+		t.Error("corp+guest: should NOT match (!guest negates)")
+	}
+
+	// Has "guest" but not "corp" → should NOT match (positive "corp" requirement fails).
+	result = z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true})
+	if result.Matched {
+		t.Error("guest only: should NOT match (corp required)")
+	}
+
+	// Has neither → should NOT match.
+	result = z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if result.Matched {
+		t.Error("neither: should NOT match")
+	}
+}
+
+// TestEvaluator_MatchTags_Wildcard verifies that match_tags work on wildcard rules.
+func TestEvaluator_MatchTags_Wildcard(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{
+			Name:  "*.corp.example.com",
+			Match: []string{"corp"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300},
+			},
+		},
+		{
+			Name:  "*.corp.example.com",
+			Match: []string{"!corp"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "127.0.0.1", TTL: 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// Corp client matches the "corp" wildcard rule.
+	result := z.Evaluate("sub.corp.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	if !result.Matched {
+		t.Fatal("corp-tagged client: expected wildcard match")
+	}
+	a := result.Answer[0].(*dns.A)
+	if a.A.String() != "10.0.0.1" {
+		t.Errorf("corp client: A = %s, want 10.0.0.1", a.A.String())
+	}
+
+	// Non-corp client matches the "!corp" wildcard rule.
+	result = z.Evaluate("sub.corp.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if !result.Matched {
+		t.Fatal("untagged client: expected wildcard match")
+	}
+	a = result.Answer[0].(*dns.A)
+	if a.A.String() != "127.0.0.1" {
+		t.Errorf("untagged client: A = %s, want 127.0.0.1", a.A.String())
+	}
+}
+
+// TestEvaluator_MatchTags_NoTagsMatchesAll verifies that a rule without match_tags
+// matches all clients regardless of their tags.
+func TestEvaluator_MatchTags_NoTagsMatchesAll(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{Name: "public.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "1.1.1.1", TTL: 300}}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// Should match with no tags.
+	result := z.Evaluate("public.example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.Matched {
+		t.Error("nil tags: expected match")
+	}
+
+	// Should match with some tags.
+	result = z.Evaluate("public.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	if !result.Matched {
+		t.Error("corp-tagged client: expected match (no match_tags on rule)")
+	}
+}
+
+// TestEvaluator_Bypass verifies that bypass tags skip zone evaluation entirely.
+func TestEvaluator_Bypass(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	z.SetBypassTags([]string{"gateway"})
+	err = z.LoadRules([]config.ZoneRule{
+		{Name: "vpn.example.com", Match: []string{"corp"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// Bypass is checked externally by the handler before calling Evaluate.
+	// Evaluate itself does not check bypass — it's the caller's responsibility.
+	// Verify Evaluate still matches when bypass tags are present (caller's job to skip).
+	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true, "corp": true})
+	if !result.Matched {
+		t.Error("corp+gateway client: expected match (Evaluate doesn't check bypass)")
+	}
+
+	// Client without bypass tag should match normally.
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	if !result.Matched {
+		t.Error("corp-only client: expected match")
+	}
+
+	// Bypass() method test.
+	if !z.Bypass(map[string]bool{"gateway": true}) {
+		t.Error("Bypass should return true for gateway tag")
+	}
+	if z.Bypass(map[string]bool{"corp": true}) {
+		t.Error("Bypass should return false for non-bypass tag")
+	}
+	if z.Bypass(map[string]bool{}) {
+		t.Error("Bypass should return false for empty tags")
+	}
+}
+
 func TestEvaluator_TTLCyclical(t *testing.T) {
 	db, err := database.Open("", 0, database.Options{})
 	if err != nil {
