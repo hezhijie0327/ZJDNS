@@ -26,6 +26,21 @@ type migration struct {
 var migrations = []migration{
 	{"3.1.0", "drop legacy schema_version table", migrateV3_1_0},
 	{"3.2.0", "rebuild zone_entries with match_tags in PK", migrateV3_2_0},
+	{"3.2.1", "add performance indexes and drop redundant idx_zone_qname", migrateV3_2_1},
+}
+
+func migrateV3_2_1(db *DB) error {
+	for _, sql := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_entries_expires_ts ON entries(expires_at, timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_ip_latency_probe ON ip_latency(last_probe_time)`,
+		`DROP INDEX IF EXISTS idx_zone_qname`,
+	} {
+		if _, err := db.SQ.Exec(sql); err != nil {
+			return fmt.Errorf("v3.2.1: %w", err)
+		}
+	}
+	return nil
 }
 
 func migrateV3_2_0(db *DB) error {

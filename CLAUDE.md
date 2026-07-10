@@ -23,6 +23,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     logic — `golangci-lint fmt` will fix formatting. Use `sed` or `python3`
     freely when the Edit tool struggles with whitespace.
 
+## Version Bumping
+
+Use `sh scripts/bump-version.sh <patch|minor|major> <slug>` to bump the version and create a migration skeleton.
+
+**When to bump each component:**
+
+| Component | Semantics | Examples |
+|-----------|-----------|----------|
+| **Z (patch)** | Bug fixes, perf improvements, refactors, lint/format fixes, dependency bumps | `3.2.1` — add eviction indexes |
+| **Y (minor)** | New features, new config options, new protocols, new CLI commands | `3.3.0` — add DNS-over-HTTPS/3 probe |
+| **X (major)** | Breaking config/schema/API changes, removed features | `4.0.0` — drop legacy XSalsa20 DNSCrypt |
+
+**After bumping:**
+1. Edit the generated `database/migrations/<version>_<slug>.sql` with actual SQL
+2. Add the migration entry + function to `database/migration.go`
+3. Run `go test -race -short ./...` to verify
+
+**Default to Z (patch)** — most audits, refactors, and perf improvements are patch bumps. Only bump Y for user-visible new functionality.
+
 ## Build & Test
 
 ```bash
