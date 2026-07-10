@@ -25,6 +25,32 @@ type migration struct {
 // Add new entries here and bump Version.
 var migrations = []migration{
 	{"3.1.0", "drop legacy schema_version table", migrateV3_1_0},
+	{"3.2.0", "rebuild zone_entries with match_tags in PK", migrateV3_2_0},
+}
+
+func migrateV3_2_0(db *DB) error {
+	// Rebuild zone_entries with match_tags in the primary key so multiple
+	// rules for the same (qname, qtype, qclass) with different match tags
+	// can coexist.
+	_, err := db.SQ.Exec(`
+		CREATE TABLE IF NOT EXISTS zone_entries_new (
+			qname      TEXT NOT NULL,
+			qtype      INTEGER NOT NULL DEFAULT 0,
+			qclass     INTEGER NOT NULL DEFAULT 0,
+			rcode      INTEGER NOT NULL DEFAULT 0,
+			answer     BLOB,
+			authority  BLOB,
+			additional BLOB,
+			match_tags TEXT NOT NULL DEFAULT '',
+			is_wildcard INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (qname, qtype, qclass, match_tags)
+		);
+		INSERT OR REPLACE INTO zone_entries_new SELECT * FROM zone_entries;
+		DROP TABLE zone_entries;
+		ALTER TABLE zone_entries_new RENAME TO zone_entries;
+		CREATE INDEX IF NOT EXISTS idx_zone_qname ON zone_entries(qname);
+	`)
+	return err
 }
 
 func migrateV3_1_0(db *DB) error {

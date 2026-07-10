@@ -147,7 +147,7 @@ func (db *DB) migrate() error {
 			additional BLOB,               -- zstd-compressed additional RRs
 			match_tags TEXT NOT NULL DEFAULT '',
 			is_wildcard INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (qname, qtype, qclass)
+			PRIMARY KEY (qname, qtype, qclass, match_tags)
 		);
 		CREATE INDEX IF NOT EXISTS idx_zone_qname ON zone_entries(qname);
 	`)

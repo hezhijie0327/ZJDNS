@@ -339,7 +339,10 @@ func matchTagsOK(entryTags []matchTag, matchedTags map[string]bool) bool {
 	for _, mt := range entryTags {
 		matched, exists := matchedTags[mt.tag]
 		if !exists {
-			return false
+			if mt.negate {
+				continue // negated tag not on client → satisfied
+			}
+			return false // required tag not on client → rejected
 		}
 		if mt.negate == matched {
 			return false

@@ -142,7 +142,7 @@ func New(configs []config.CIDRConfig) (*Filter, error) {
 		default:
 			sourceInfo = fmt.Sprintf("%d inline rules", len(cfg.IPs))
 		}
-		log.Infof("CIDR: Loaded tag=%s, source=%s, total=%d", cfg.Tag, sourceInfo, len(rule.nets))
+		log.Infof("CIDR: Loaded tag=%s, source=%s, total=%d", cfg.Tag, sourceInfo, rule.totalNets)
 	}
 
 	return f, nil
