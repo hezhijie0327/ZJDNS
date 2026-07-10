@@ -118,10 +118,12 @@ type UpstreamServer struct {
 }
 
 // RewriteRule defines a DNS rewrite rule with synthetic response, client
-// filtering, and record lists.
+// filtering, and record lists.  File imports use a simple one-domain-per-line
+// format with optional type+content for per-domain records.
 type RewriteRule struct {
 	Name               string            `json:"name"`
 	NormalizedName     string            `json:"normalized_name,omitempty"`
+	File               string            `json:"file,omitempty"`
 	ResponseCode       *int              `json:"response_code,omitempty"`
 	Records            []DNSRecordConfig `json:"records,omitempty"`
 	Additional         []DNSRecordConfig `json:"additional,omitempty"`

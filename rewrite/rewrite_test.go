@@ -2,6 +2,7 @@ package rewrite
 
 import (
 	"net"
+	"os"
 	"testing"
 	"zjdns/config"
 	"zjdns/internal/ttl"
@@ -320,5 +321,211 @@ func TestEvaluator_RewriteTTLMultipleRRs(t *testing.T) {
 	}
 	if records[1].Header().TTL != 40 {
 		t.Errorf("rr2 TTL=%d, want 40", records[1].Header().TTL)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Wildcard tests
+// ---------------------------------------------------------------------------
+
+func TestEvaluator_Wildcard_Inline(t *testing.T) {
+	re := New()
+	nx := dns.RcodeNameError
+	err := re.LoadRules([]config.RewriteRule{
+		{Name: "*.example.com", ResponseCode: &nx},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules() error = %v", err)
+	}
+
+	// Wildcard matches subdomain.
+	result := re.Evaluate("foo.example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.ShouldRewrite || result.ResponseCode != dns.RcodeNameError {
+		t.Errorf("wildcard + NXDOMAIN: rewrite=%v rcode=%d", result.ShouldRewrite, result.ResponseCode)
+	}
+
+	// Wildcard does NOT match base domain.
+	result = re.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
+	if result.ShouldRewrite {
+		t.Error("wildcard *.example.com should NOT match example.com itself")
+	}
+}
+
+func TestEvaluator_Wildcard_NXDOMAIN(t *testing.T) {
+	re := New()
+	nx := dns.RcodeNameError
+	err := re.LoadRules([]config.RewriteRule{
+		{Name: "*.blocked.com", ResponseCode: &nx},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules() error = %v", err)
+	}
+
+	result := re.Evaluate("cdn.blocked.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.ShouldRewrite || result.ResponseCode != dns.RcodeNameError {
+		t.Errorf("wildcard + NXDOMAIN: rewrite=%v rcode=%d", result.ShouldRewrite, result.ResponseCode)
+	}
+}
+
+func TestEvaluator_Wildcard_WithRecords(t *testing.T) {
+	re := New()
+	err := re.LoadRules([]config.RewriteRule{
+		{Name: "*.cdn.example.com", Records: []config.DNSRecordConfig{
+			{Type: "A", Content: "10.0.0.1", TTL: 60},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules() error = %v", err)
+	}
+
+	result := re.Evaluate("img.cdn.example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.ShouldRewrite {
+		t.Fatal("wildcard + RR should rewrite")
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("Records len=%d, want 1", len(result.Records))
+	}
+
+	// Wrong QTYPE check — wildcard A should not match AAAA query.
+	result = re.Evaluate("img.cdn.example.com.", dns.TypeAAAA, dns.ClassINET, nil)
+	if result.ShouldRewrite {
+		t.Error("AAAA query against wildcard A rule should not match")
+	}
+}
+
+func TestEvaluator_Wildcard_DeepSubdomain(t *testing.T) {
+	re := New()
+	nx := dns.RcodeNameError
+	_ = re.LoadRules([]config.RewriteRule{
+		{Name: "*.tracker.com", ResponseCode: &nx},
+	})
+
+	result := re.Evaluate("a.b.c.tracker.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.ShouldRewrite {
+		t.Error("*.tracker.com should match a.b.c.tracker.com")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// File import tests
+// ---------------------------------------------------------------------------
+
+func TestEvaluator_FileImport_Basic(t *testing.T) {
+	tmp := t.TempDir() + "/blocklist.csv"
+	writeFile(t, tmp, "domain,type,content,ttl,rcode\nads.test.com.\nblock.test.com.\n")
+
+	re := New()
+	nx := dns.RcodeNameError
+	err := re.LoadRules([]config.RewriteRule{
+		{File: tmp, ResponseCode: &nx},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules() error = %v", err)
+	}
+
+	for _, d := range []string{"ads.test.com.", "block.test.com."} {
+		result := re.Evaluate(d, dns.TypeA, dns.ClassINET, nil)
+		if !result.ShouldRewrite || result.ResponseCode != dns.RcodeNameError {
+			t.Errorf("%s: rewrite=%v rcode=%d", d, result.ShouldRewrite, result.ResponseCode)
+		}
+	}
+
+	result := re.Evaluate("other.test.com.", dns.TypeA, dns.ClassINET, nil)
+	if result.ShouldRewrite {
+		t.Error("other.test.com should not match")
+	}
+}
+
+func TestEvaluator_FileImport_CustomRR(t *testing.T) {
+	tmp := t.TempDir() + "/hosts.csv"
+	writeFile(t, tmp, "domain,type,content,ttl,rcode\nmy.test.com.,A,10.0.0.1,60,\n")
+
+	re := New()
+	nx := dns.RcodeNameError
+	err := re.LoadRules([]config.RewriteRule{
+		{File: tmp, ResponseCode: &nx},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules() error = %v", err)
+	}
+
+	result := re.Evaluate("my.test.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.ShouldRewrite {
+		t.Fatal("custom RR should rewrite")
+	}
+	if result.ResponseCode != dns.RcodeSuccess {
+		t.Errorf("custom RR should reset rcode to NOERROR when rcode col empty, got %d", result.ResponseCode)
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("records=%d, want 1", len(result.Records))
+	}
+}
+
+func TestEvaluator_FileImport_Wildcard(t *testing.T) {
+	tmp := t.TempDir() + "/wild.csv"
+	writeFile(t, tmp, "domain,type,content,ttl,rcode\n*.evil.com.\n*.good.com.,A,10.0.0.2,,\n")
+
+	re := New()
+	nx := dns.RcodeNameError
+	err := re.LoadRules([]config.RewriteRule{
+		{File: tmp, ResponseCode: &nx},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules() error = %v", err)
+	}
+
+	result := re.Evaluate("cdn.evil.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.ShouldRewrite || result.ResponseCode != dns.RcodeNameError {
+		t.Errorf("*.evil.com NXDOMAIN: rewrite=%v rcode=%d", result.ShouldRewrite, result.ResponseCode)
+	}
+
+	result = re.Evaluate("img.good.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.ShouldRewrite || result.ResponseCode != dns.RcodeSuccess {
+		t.Errorf("*.good.com + RR: rewrite=%v rcode=%d", result.ShouldRewrite, result.ResponseCode)
+	}
+}
+
+func TestEvaluator_FileImport_Comments(t *testing.T) {
+	tmp := t.TempDir() + "/comments.csv"
+	writeFile(t, tmp, "domain,type,content,ttl,rcode\n# comment\nreal.com.\n")
+
+	re := New()
+	nx := dns.RcodeNameError
+	_ = re.LoadRules([]config.RewriteRule{{File: tmp, ResponseCode: &nx}})
+
+	result := re.Evaluate("real.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.ShouldRewrite {
+		t.Error("real.com should match despite comments")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Mixed exact + wildcard priority
+// ---------------------------------------------------------------------------
+
+func TestEvaluator_ExactWinsOverWildcard(t *testing.T) {
+	re := New()
+	nx := dns.RcodeNameError
+	refused := dns.RcodeRefused
+	_ = re.LoadRules([]config.RewriteRule{
+		{Name: "cdn.example.com", ResponseCode: &refused},
+		{Name: "*.example.com", ResponseCode: &nx},
+	})
+
+	result := re.Evaluate("cdn.example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.ShouldRewrite || result.ResponseCode != dns.RcodeRefused {
+		t.Errorf("exact should win: rewrite=%v rcode=%d", result.ShouldRewrite, result.ResponseCode)
+	}
+
+	result = re.Evaluate("img.example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.ShouldRewrite || result.ResponseCode != dns.RcodeNameError {
+		t.Errorf("wildcard should catch: rewrite=%v rcode=%d", result.ShouldRewrite, result.ResponseCode)
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("writeFile: %v", err)
 	}
 }
