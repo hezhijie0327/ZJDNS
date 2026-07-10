@@ -15,6 +15,7 @@ import (
 	"zjdns/cache"
 	"zjdns/cidr"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -71,18 +72,19 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	// ── Foundation: database ──────────────────────────────────────────────
 
-	cacheStore, err := cache.NewSQLiteCache(
-		cfg.Server.Features.Cache.DBPath,
+	db, err := database.Open(
+		cfg.Server.Features.Database.DBPath,
 		cfg.Server.Features.Cache.MaxEntries,
-		cfg.Server.Features.Cache.MMapSizeMB,
-		cfg.Server.Features.Cache.CacheSizeMB,
-	)
+		database.Options{
+			MMapSizeMB:  cfg.Server.Features.Database.MMapSizeMB,
+			CacheSizeMB: cfg.Server.Features.Database.CacheSizeMB,
+		})
 	if err != nil {
-		cancel(fmt.Errorf("cache init: %w", err))
-		return nil, fmt.Errorf("cache init: %w", err)
+		cancel(fmt.Errorf("database init: %w", err))
+		return nil, fmt.Errorf("database init: %w", err)
 	}
-
-	// ── Domain services: EDNS, zone, CIDR ──────────────────────────────
+	cacheStore := cache.New(db)
+	zoneEvaluator := zone.New(db)
 
 	ednsHandler, err := edns.NewHandler(cfg.Server.Features.ECS)
 	if err != nil {
@@ -130,11 +132,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}
 
-	zoneEvaluator, err := zone.New()
-	if err != nil {
-		cancel(fmt.Errorf("zone init: %w", err))
-		return nil, fmt.Errorf("zone init: %w", err)
-	}
 	if len(cfg.Zone) > 0 {
 		if err := zoneEvaluator.LoadRules(cfg.Zone); err != nil {
 			cancel(fmt.Errorf("load zone rules: %w", err))

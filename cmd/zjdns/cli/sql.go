@@ -1,18 +1,16 @@
 package cli
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"strings"
-
-	_ "github.com/ncruces/go-sqlite3/driver"
+	"zjdns/database"
 )
 
-// RunAnalyze opens a SQLite cache database and runs a SQL query, printing
+// RunSQL opens a SQLite cache database and runs a SQL query, printing
 // results as an aligned columnar table (like sqlite3 -column -header).
-func RunAnalyze(dbPath, query string) error {
-	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_journal_mode=WAL&_busy_timeout=5000")
+func RunSQL(dbPath, query string) error {
+	db, err := database.Open(dbPath, 0, database.Options{})
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

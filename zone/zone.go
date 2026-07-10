@@ -6,6 +6,7 @@ package zone
 
 import (
 	"bufio"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -20,38 +22,10 @@ import (
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
-	"github.com/klauspost/compress/zstd"
-	sql "github.com/ncruces/go-sqlite3"
 )
 
 // wildcardPrefix marks a domain as a wildcard rule.
 const wildcardPrefix = "*."
-
-// ---------------------------------------------------------------------------
-// SQL schema & prepared statements
-// ---------------------------------------------------------------------------
-
-const zoneSchema = `
-CREATE TABLE zone_entries (
-	qname      TEXT NOT NULL,
-	qtype      INTEGER NOT NULL DEFAULT 0,
-	qclass     INTEGER NOT NULL DEFAULT 0,
-	rcode      INTEGER NOT NULL DEFAULT 0,
-	answer     BLOB,
-	authority  BLOB,
-	additional BLOB,
-	match_tags TEXT NOT NULL DEFAULT '',
-	is_wildcard INTEGER NOT NULL DEFAULT 0,
-	PRIMARY KEY (qname, qtype, qclass)
-);
-CREATE INDEX IF NOT EXISTS idx_zone_qname ON zone_entries(qname);
-`
-
-const (
-	sqlExact  = `SELECT rcode, answer, authority, additional, match_tags FROM zone_entries WHERE qname = ?1 AND qtype = ?2 AND qclass = ?3 AND is_wildcard = 0`
-	sqlWild   = `SELECT rcode, answer, authority, additional, match_tags FROM zone_entries WHERE qname = ?1 AND qtype = ?2 AND qclass = ?3 AND is_wildcard = 1`
-	sqlInsert = `INSERT OR REPLACE INTO zone_entries (qname, qtype, qclass, rcode, answer, authority, additional, match_tags, is_wildcard) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`
-)
 
 // ---------------------------------------------------------------------------
 // Types
@@ -82,80 +56,24 @@ type dynamicEntry struct {
 
 // Evaluator manages zone rules backed by a SQLite database.
 type Evaluator struct {
-	db         *sql.Conn
-	stmtExact  *sql.Stmt
-	stmtWild   *sql.Stmt
-	stmtInsert *sql.Stmt
-	loadedAt   atomic.Int64
-	ruleCount  atomic.Int64
-	dynamics   map[string]*dynamicEntry // qname → dynamic content
-
-	enc *zstd.Encoder
-	dec *zstd.Decoder
+	db        *database.DB
+	loadedAt  atomic.Int64
+	ruleCount atomic.Int64
+	dynamics  map[string]*dynamicEntry // qname → dynamic content
 }
 
-// New creates an Evaluator with an in-memory SQLite database.
-func New() (*Evaluator, error) {
-	db, err := sql.Open(":memory:")
-	if err != nil {
-		return nil, fmt.Errorf("zone: open sqlite: %w", err)
-	}
-	if err := db.Exec(zoneSchema); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("zone: schema: %w", err)
-	}
-
-	stmtExact, _, err := db.Prepare(sqlExact)
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("zone: prepare exact: %w", err)
-	}
-	stmtWild, _, err := db.Prepare(sqlWild)
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("zone: prepare wild: %w", err)
-	}
-	stmtInsert, _, err := db.Prepare(sqlInsert)
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("zone: prepare insert: %w", err)
-	}
-
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("zone: zstd encoder: %w", err)
-	}
-	dec, err := zstd.NewReader(nil)
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("zone: zstd decoder: %w", err)
-	}
-
+// New creates an Evaluator backed by the given database.
+// The caller is responsible for opening the database via database.Open()
+// before calling New.
+func New(db *database.DB) *Evaluator {
 	return &Evaluator{
-		db:         db,
-		stmtExact:  stmtExact,
-		stmtWild:   stmtWild,
-		stmtInsert: stmtInsert,
-		dynamics:   make(map[string]*dynamicEntry),
-		enc:        enc,
-		dec:        dec,
-	}, nil
+		db:       db,
+		dynamics: make(map[string]*dynamicEntry),
+	}
 }
 
 // Close releases SQLite resources.
 func (e *Evaluator) Close() error {
-	if e.stmtExact != nil {
-		_ = e.stmtExact.Close()
-	}
-	if e.stmtWild != nil {
-		_ = e.stmtWild.Close()
-	}
-	if e.stmtInsert != nil {
-		_ = e.stmtInsert.Close()
-	}
-	_ = e.enc.Close()
-	e.dec.Close()
 	return e.db.Close()
 }
 
@@ -168,13 +86,14 @@ func (e *Evaluator) HasRules() bool { return e.ruleCount.Load() > 0 }
 
 // LoadRules validates and loads zone rules into the SQLite database.
 func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
-	if err := e.db.Exec(`DELETE FROM zone_entries`); err != nil {
+	if _, err := e.db.Exec(`DELETE FROM zone_entries`); err != nil {
 		return fmt.Errorf("zone: clear: %w", err)
 	}
 	// Clear dynamic content registrations.
 	e.dynamics = make(map[string]*dynamicEntry)
 
-	if err := e.db.Exec(`BEGIN`); err != nil {
+	tx, err := e.db.Begin()
+	if err != nil {
 		return fmt.Errorf("zone: begin tx: %w", err)
 	}
 
@@ -184,7 +103,7 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 		if rule.File != "" {
 			n, err := e.loadFile(rule)
 			if err != nil {
-				_ = e.db.Exec(`ROLLBACK`)
+				_ = tx.Rollback()
 				return fmt.Errorf("zone file %q: %w", rule.File, err)
 			}
 			total += int64(n)
@@ -193,13 +112,13 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 		}
 		n, err := e.loadInline(rule)
 		if err != nil {
-			_ = e.db.Exec(`ROLLBACK`)
+			_ = tx.Rollback()
 			return err
 		}
 		total += int64(n)
 	}
 
-	if err := e.db.Exec(`COMMIT`); err != nil {
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("zone: commit: %w", err)
 	}
 
@@ -219,12 +138,11 @@ func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
 	}
 
 	// Dynamic content: store function in Go map.
-	if rule.DynamicContent != nil {
-		normalized := zdnsutil.NormalizeDomain(rule.Name)
-		e.dynamics[normalized] = &dynamicEntry{fn: rule.DynamicContent, configs: rule.Answer}
-	}
-
 	normalizedName := zdnsutil.NormalizeDomain(rule.Name)
+
+	if rule.DynamicContent != nil {
+		e.dynamics[normalizedName] = &dynamicEntry{fn: rule.DynamicContent, configs: rule.Answer}
+	}
 	matchTags := serializeMatchTags(rule.Match)
 	isWildcard := strings.HasPrefix(rule.Name, wildcardPrefix)
 	if isWildcard {
@@ -236,18 +154,18 @@ func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
 
 	if len(groups) > 0 {
 		for _, g := range groups {
-			aw := packRRs(e.enc, rule.Name, g.records)
-			auth := packRRs(e.enc, rule.Name, rule.Authority)
-			addl := packRRs(e.enc, rule.Name, rule.Additional)
+			aw := packRRs(rule.Name, g.records)
+			auth := packRRs(rule.Name, rule.Authority)
+			addl := packRRs(rule.Name, rule.Additional)
 			if err := e.insertRow(normalizedName, g.qtype, g.qclass, rule.Rcode, aw, auth, addl, matchTags, isWildcard); err != nil {
 				return 0, err
 			}
 			count++
 		}
 	} else if rule.Rcode != dns.RcodeSuccess || rule.DynamicContent != nil {
-		// Sentinal entry for rcode-only or dynamic rules.
-		auth := packRRs(e.enc, rule.Name, rule.Authority)
-		addl := packRRs(e.enc, rule.Name, rule.Additional)
+		// Sentinel entry for rcode-only or dynamic rules.
+		auth := packRRs(rule.Name, rule.Authority)
+		addl := packRRs(rule.Name, rule.Additional)
 		if err := e.insertRow(normalizedName, 0, 0, rule.Rcode, nil, auth, addl, matchTags, isWildcard); err != nil {
 			return 0, err
 		}
@@ -262,36 +180,8 @@ func (e *Evaluator) insertRow(qname string, qtype, qclass uint16, rcode int, ans
 	if isWildcard {
 		w = 1
 	}
-	_ = e.stmtInsert.Reset()
-	if err := e.stmtInsert.BindText(1, qname); err != nil {
-		return err
-	}
-	if err := e.stmtInsert.BindInt64(2, int64(qtype)); err != nil {
-		return err
-	}
-	if err := e.stmtInsert.BindInt64(3, int64(qclass)); err != nil {
-		return err
-	}
-	if err := e.stmtInsert.BindInt64(4, int64(rcode)); err != nil {
-		return err
-	}
-	if err := e.stmtInsert.BindBlob(5, answer); err != nil {
-		return err
-	}
-	if err := e.stmtInsert.BindBlob(6, authority); err != nil {
-		return err
-	}
-	if err := e.stmtInsert.BindBlob(7, additional); err != nil {
-		return err
-	}
-	if err := e.stmtInsert.BindText(8, matchTags); err != nil {
-		return err
-	}
-	if err := e.stmtInsert.BindInt64(9, int64(w)); err != nil {
-		return err
-	}
-	e.stmtInsert.Step()
-	return nil
+	_, err := e.db.StmtZoneInsert.Exec(qname, qtype, qclass, rcode, answer, authority, additional, matchTags, w)
+	return err
 }
 
 // ---------------------------------------------------------------------------
@@ -322,12 +212,12 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	loadedAt := e.loadedAt.Load()
 
 	// 2. Exact composite key lookup.
-	if r := e.query(e.stmtExact, qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
+	if r := e.query(e.db.StmtZoneExact, qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
 		return r
 	}
 
 	// 3. Sentinel key (rcode-only rules).
-	if r := e.query(e.stmtExact, qname, 0, 0, matchedTags, loadedAt); r.Matched {
+	if r := e.query(e.db.StmtZoneExact, qname, 0, 0, matchedTags, loadedAt); r.Matched {
 		return r
 	}
 
@@ -342,10 +232,10 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 		if rest == "" {
 			break
 		}
-		if r := e.query(e.stmtWild, rest, qtype, qclass, matchedTags, loadedAt); r.Matched {
+		if r := e.query(e.db.StmtZoneWild, rest, qtype, qclass, matchedTags, loadedAt); r.Matched {
 			return r
 		}
-		if r := e.query(e.stmtWild, rest, 0, 0, matchedTags, loadedAt); r.Matched {
+		if r := e.query(e.db.StmtZoneWild, rest, 0, 0, matchedTags, loadedAt); r.Matched {
 			return r
 		}
 	}
@@ -354,35 +244,25 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 }
 
 func (e *Evaluator) query(stmt *sql.Stmt, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
-	_ = stmt.Reset()
-	if err := stmt.BindText(1, qname); err != nil {
-		return Result{Rcode: dns.RcodeSuccess}
-	}
-	if err := stmt.BindInt64(2, int64(qtype)); err != nil {
-		return Result{Rcode: dns.RcodeSuccess}
-	}
-	if err := stmt.BindInt64(3, int64(qclass)); err != nil {
-		return Result{Rcode: dns.RcodeSuccess}
-	}
-
-	if !stmt.Step() {
+	var rcode int
+	var answerBlob, authBlob, addlBlob []byte
+	var tagsText string
+	if err := stmt.QueryRow(qname, qtype, qclass).Scan(&rcode, &answerBlob, &authBlob, &addlBlob, &tagsText); err != nil {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 
 	// Check match tags before unpacking RRs.
-	tagsText := stmt.ColumnText(4)
 	if tagsText != "" && !matchTagsOK(parseMatchTagsText(tagsText), matchedTags) {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 
-	rcode := int(stmt.ColumnInt64(0))
 	return Result{
 		Domain:     qname,
 		Matched:    true,
 		Rcode:      rcode,
-		Answer:     unpackRRs(e.dec, stmt.ColumnBlob(1, nil)),
-		Authority:  unpackRRs(e.dec, stmt.ColumnBlob(2, nil)),
-		Additional: unpackRRs(e.dec, stmt.ColumnBlob(3, nil)),
+		Answer:     unpackRRs(answerBlob),
+		Authority:  unpackRRs(authBlob),
+		Additional: unpackRRs(addlBlob),
 		CreatedAt:  loadedAt,
 	}
 }
@@ -513,15 +393,15 @@ func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 		groups := groupRecordsByTypeClass(curRecords)
 		if len(groups) > 0 {
 			for _, g := range groups {
-				aw := packRRs(e.enc, curRawName, g.records)
-				auth := packRRs(e.enc, curRawName, curAuth)
-				addl := packRRs(e.enc, curRawName, curAddl)
+				aw := packRRs(curRawName, g.records)
+				auth := packRRs(curRawName, curAuth)
+				addl := packRRs(curRawName, curAddl)
 				_ = e.insertRow(curDomain, g.qtype, g.qclass, curRcode, aw, auth, addl, curTags, curWildcard)
 				count++
 			}
 		} else if curRcode != dns.RcodeSuccess {
-			auth := packRRs(e.enc, curRawName, curAuth)
-			addl := packRRs(e.enc, curRawName, curAddl)
+			auth := packRRs(curRawName, curAuth)
+			addl := packRRs(curRawName, curAddl)
 			_ = e.insertRow(curDomain, 0, 0, curRcode, nil, auth, addl, curTags, curWildcard)
 			count++
 		}
@@ -538,14 +418,13 @@ func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 			flush()
 
 			isWildcard := line[0] == '*'
-			var rawName string
 			if isWildcard {
-				rawName = line[2:]
+				curRawName = line[2:]
 			} else {
-				rawName = line[1:]
+				curRawName = line[1:]
 			}
 
-			fields := strings.Fields(rawName)
+			fields := strings.Fields(curRawName)
 			curDomain = zdnsutil.NormalizeDomain(fields[0])
 			curWildcard = isWildcard
 			curRcode = parent.Rcode
@@ -708,7 +587,7 @@ type recordGroup struct {
 // ---------------------------------------------------------------------------
 
 // packRRs builds RRs from config, packs into a dns.Msg, and compresses.
-func packRRs(enc *zstd.Encoder, domain string, records []config.ZoneRecord) []byte {
+func packRRs(domain string, records []config.ZoneRecord) []byte {
 	rrs := buildRRs(domain, records)
 	if len(rrs) == 0 {
 		return nil
@@ -717,15 +596,15 @@ func packRRs(enc *zstd.Encoder, domain string, records []config.ZoneRecord) []by
 	if err := msg.Pack(); err != nil {
 		return nil
 	}
-	return enc.EncodeAll(msg.Data, nil)
+	return database.Compress(msg.Data)
 }
 
 // unpackRRs decompresses a blob and unpacks the RRs from the dns.Msg.
-func unpackRRs(dec *zstd.Decoder, blob []byte) []dns.RR {
-	if len(blob) == 0 || dec == nil {
+func unpackRRs(blob []byte) []dns.RR {
+	if len(blob) == 0 {
 		return nil
 	}
-	wire, err := dec.DecodeAll(blob, nil)
+	wire, err := database.Decompress(blob)
 	if err != nil {
 		return nil
 	}

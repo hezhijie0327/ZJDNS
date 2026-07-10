@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/cache"
-	"zjdns/config"
+	"zjdns/database"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -331,11 +331,11 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 // ── Full chain: DS → DNSKEY → answer ────────────────────────────────────────
 
 func testCache() cache.Store {
-	c, err := cache.NewSQLiteCache("", config.DefaultMaxCacheEntries, 0, 0)
+	db, err := database.Open("", 0, database.Options{})
 	if err != nil {
 		panic(err)
 	}
-	return c
+	return cache.New(db)
 }
 
 func TestFullDNSSECChain(t *testing.T) {

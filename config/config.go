@@ -76,13 +76,14 @@ type KTLSSettings struct {
 	KernelRX bool `json:"kernel_rx"` // kernel TLS RX offload (default false)
 }
 
-// FeatureFlags enables optional features: hijack protection, DDR, ECS, cache,
-// latency probes, and stats.
+// FeatureFlags enables optional features: hijack protection, DDR, ECS,
+// database, cache, latency probes, and stats.
 type FeatureFlags struct {
 	HijackProtection bool               `json:"hijack_protection"`
 	DNSSECEnforce    bool               `json:"dnssec_enforce,omitempty"`
 	DDR              DDRSettings        `json:"ddr,omitempty"`
 	ECS              ECSConfig          `json:"ecs_subnet,omitempty"`
+	Database         DatabaseSettings   `json:"database,omitempty"`
 	Cache            CacheSettings      `json:"cache,omitempty"`
 	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitempty"`
 }
@@ -94,13 +95,17 @@ type DDRSettings struct {
 	IPv6   string `json:"ipv6"`
 }
 
-// CacheSettings configures DNS response cache size, persistence, and stale serving.
+// DatabaseSettings configures the shared SQLite database backing cache and zone.
+type DatabaseSettings struct {
+	DBPath      string `json:"db_path,omitempty"`       // database file path
+	MMapSizeMB  int    `json:"mmap_size_mb,omitempty"`  // SQLite mmap_size PRAGMA
+	CacheSizeMB int    `json:"cache_size_mb,omitempty"` // SQLite cache_size PRAGMA
+}
+
+// CacheSettings configures DNS response cache size and stale serving.
 type CacheSettings struct {
-	MaxEntries  int    `json:"max_entries,omitempty"`
-	MMapSizeMB  int    `json:"mmap_size_mb,omitempty"`
-	CacheSizeMB int    `json:"cache_size_mb,omitempty"`
-	DBPath      string `json:"db_path,omitempty"`
-	PreferStale bool   `json:"prefer_stale,omitempty"`
+	MaxEntries  int  `json:"max_entries,omitempty"`
+	PreferStale bool `json:"prefer_stale,omitempty"`
 }
 
 // UpstreamServer defines a single upstream DNS server with address, protocol,
@@ -362,11 +367,13 @@ func GenerateExampleConfig() string {
 		CertTTL:      "3650d",
 	}
 
+	cfg.Server.Features.Database.DBPath = "cache.db"
+	cfg.Server.Features.Database.MMapSizeMB = DefaultCacheMMapSizeMB
+	cfg.Server.Features.Database.CacheSizeMB = DefaultCacheCacheSizeMB
+
 	cfg.Server.Features.Cache.MaxEntries = DefaultMaxCacheEntries
-	cfg.Server.Features.Cache.MMapSizeMB = DefaultCacheMMapSizeMB
-	cfg.Server.Features.Cache.CacheSizeMB = DefaultCacheCacheSizeMB
 	cfg.Server.Features.Cache.PreferStale = true
-	cfg.Server.Features.Cache.DBPath = "cache.db"
+
 	cfg.Server.Features.ECS = ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []LatencyProbeStep{
 		{Protocol: ProtoPing, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},

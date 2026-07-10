@@ -5,8 +5,8 @@ import (
 	"errors"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
@@ -16,17 +16,34 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// SQLiteCache is a DNS response cache backed by a SQLite database managed by
+// the database package. It implements the Store interface.
+type SQLiteCache struct {
+	db *database.DB
+}
+
 const (
 	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
 	maxLatencyLookupIPs = 64 // cap IN-clause IPs to bound SQL compilation overhead
 )
+
+// New creates a cache backed by the given database. The caller is responsible
+// for opening the database via database.OpenCache() before calling New.
+func New(db *database.DB) *SQLiteCache {
+	return &SQLiteCache{db: db}
+}
+
+// Close closes the database.
+func (s *SQLiteCache) Close() error {
+	return s.db.Close()
+}
 
 // ── Store interface ──────────────────────────────────────────────────────────
 
 // Get retrieves a cached DNS response by decompressing and unpacking the stored
 // wire format. Returns the entry, whether it was found, and whether it's expired.
 func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool) {
-	if atomic.LoadInt32(&s.closed) != 0 {
+	if s.db.IsClosed() {
 		return nil, false, false
 	}
 
@@ -38,8 +55,8 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	var entryTTL int
 	var validated int
 	var msgWire []byte
-	err := s.stmtGetEntry.QueryRow(
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, boolToInt(dnssecOK),
+	err := s.db.StmtGetEntry.QueryRow(
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, database.BoolToInt(dnssecOK),
 	).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, false
@@ -54,7 +71,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 
 	// Decompress and unpack the wire format into a dns.Msg.
-	wire, err := decompress(msgWire)
+	wire, err := database.Decompress(msgWire)
 	if err != nil {
 		log.Warnf("CACHE: decompress wire for entry %d: %v", id, err)
 		return nil, false, false
@@ -204,7 +221,7 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 	answer, authority, additional []dns.RR, validated bool,
 ) {
-	if atomic.LoadInt32(&s.closed) != 0 {
+	if s.db.IsClosed() {
 		return
 	}
 
@@ -219,21 +236,21 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = zdnsutil.NormalizeDomain(qname)
-	dnssecInt := boolToInt(dnssecOK)
+	dnssecInt := database.BoolToInt(dnssecOK)
 
 	// Pack wire format and compress.
 	msg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
 	var msgWire []byte
 	if err := msg.Pack(); err == nil {
-		msgWire = compress(msg.Data)
+		msgWire = database.Compress(msg.Data)
 	}
 
 	// ── Transaction (serialized via writeMu) ──────────────────────────────
-	s.writeMu.Lock()
+	s.db.WriteLock()
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		s.writeMu.Unlock()
+		s.db.WriteUnlock()
 		log.Warnf("CACHE: begin tx failed: %v", err)
 		return
 	}
@@ -246,10 +263,10 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 RETURNING id`,
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
-		now, entryTTL, now+int64(entryTTL), boolToInt(validated),
+		now, entryTTL, now+int64(entryTTL), database.BoolToInt(validated),
 		msgWire,
 	).Scan(&entryID); err != nil {
-		s.writeMu.Unlock()
+		s.db.WriteUnlock()
 		log.Warnf("CACHE: insert entry failed: %v", err)
 		return
 	}
@@ -260,25 +277,25 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	insertPtrMap(tx, entryID, additional)
 
 	if err := tx.Commit(); err != nil {
-		s.writeMu.Unlock()
+		s.db.WriteUnlock()
 		log.Warnf("CACHE: commit tx failed: %v", err)
 		return
 	}
 
-	s.entryCount.Add(1)
+	s.db.AddEntryCount(1)
 
 	// Release writeMu BEFORE eviction — eviction is a separate transaction
 	// that only deletes old rows and does not conflict with concurrent
 	// inserts. Holding writeMu across eviction serializes all cache writes
 	// behind potentially slow DELETE + CASCADE operations.
-	s.writeMu.Unlock()
+	s.db.WriteUnlock()
 	s.evictIfNeeded()
 }
 
 // ── Eviction ─────────────────────────────────────────────────────────────────
 
 func (s *SQLiteCache) evictIfNeeded() {
-	if s.maxEntries <= 0 {
+	if s.db.MaxEntries() <= 0 {
 		return
 	}
 
@@ -288,10 +305,10 @@ func (s *SQLiteCache) evictIfNeeded() {
 	// atomic counter suggests we may be near or over the limit.
 	var count int64
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
-		s.entryCount.Store(count)
+		s.db.AddEntryCount(count)
 	}
 
-	excess := count - int64(s.maxEntries)
+	excess := count - int64(s.db.MaxEntries())
 	if excess <= 0 {
 		return
 	}
@@ -350,8 +367,8 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 			log.Warnf("CACHE: commit tx failed: %v", err)
 			return
 		}
-		s.entryCount.Add(-totalEvicted)
-		log.Debugf("CACHE: evicted %d entries (serve-stale=%d, oldest=%d, max=%d)", totalEvicted, phase1, phase2, s.maxEntries)
+		s.db.AddEntryCount(-totalEvicted)
+		log.Debugf("CACHE: evicted %d entries (serve-stale=%d, oldest=%d, max=%d)", totalEvicted, phase1, phase2, s.db.MaxEntries())
 		return
 	}
 
@@ -359,6 +376,6 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 		log.Warnf("CACHE: commit tx failed: %v", err)
 		return
 	}
-	s.entryCount.Add(-phase1)
-	log.Debugf("CACHE: evicted %d entries (all serve-stale, max=%d)", phase1, s.maxEntries)
+	s.db.AddEntryCount(-phase1)
+	log.Debugf("CACHE: evicted %d entries (all serve-stale, max=%d)", phase1, s.db.MaxEntries())
 }

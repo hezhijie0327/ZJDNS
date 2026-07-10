@@ -3,6 +3,7 @@ package cache
 import (
 	"database/sql"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -53,36 +54,30 @@ func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
 		args = append(args, r.rdataIP, entryID, r.name, r.ttl)
 	}
 	stmt := `INSERT OR REPLACE INTO ptr_map (rdata_ip, entry_id, name, ttl) VALUES ` + //nolint:gosec // G202: parameterized placeholders, no user input
-		joinPlaceholders(placeholders, ",")
+		database.JoinPlaceholders(placeholders, ",")
 	if _, err := tx.Exec(stmt, args...); err != nil {
 		log.Warnf("CACHE: insert ptr_map failed: %v", err)
 	}
 }
 
-func joinPlaceholders(parts []string, sep string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-	total := 0
-	for _, p := range parts {
-		total += len(p) + len(sep)
-	}
-	b := make([]byte, 0, total-len(sep))
-	b = append(b, parts[0]...)
-	for _, p := range parts[1:] {
-		b = append(b, sep...)
-		b = append(b, p...)
-	}
-	return string(b)
-}
-
 func minTTL(answer, authority, additional []dns.RR) int {
 	minT := -1
-	for _, rrs := range [][]dns.RR{answer, authority, additional} {
-		for _, rr := range rrs {
-			if rr == nil {
-				continue
+	for _, rr := range answer {
+		if rr != nil {
+			if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
+				minT = t
 			}
+		}
+	}
+	for _, rr := range authority {
+		if rr != nil {
+			if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
+				minT = t
+			}
+		}
+	}
+	for _, rr := range additional {
+		if rr != nil {
 			if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
 				minT = t
 			}
@@ -136,11 +131,4 @@ func ecsParams(ecs *config.ECSOption) (addr string, prefix int) {
 		return "", 0
 	}
 	return ecs.Address.String(), int(ecs.SourcePrefix)
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

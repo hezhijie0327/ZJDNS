@@ -48,7 +48,10 @@ func validateConfig(cfg *ServerConfig) error {
 		return err
 	}
 
-	if err := validateCacheAndStats(cfg); err != nil {
+	if err := validateDatabase(cfg); err != nil {
+		return err
+	}
+	if err := validateCache(cfg); err != nil {
 		return err
 	}
 
@@ -180,12 +183,16 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 	return nil
 }
 
-func validateCacheAndStats(cfg *ServerConfig) error {
+func validateDatabase(cfg *ServerConfig) error {
+	if strings.Contains(cfg.Server.Features.Database.DBPath, "..") {
+		return errors.New("server.features.database.db_path must not contain '..'")
+	}
+	return nil
+}
+
+func validateCache(cfg *ServerConfig) error {
 	if cfg.Server.Features.Cache.MaxEntries < 0 {
 		return errors.New("server.features.cache.max_entries must be zero or positive")
-	}
-	if strings.Contains(cfg.Server.Features.Cache.DBPath, "..") {
-		return errors.New("server.features.cache.db_path must not contain '..'")
 	}
 	return nil
 }

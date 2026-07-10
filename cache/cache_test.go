@@ -9,17 +9,18 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
+	"zjdns/database"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
 )
 
 func testStore() *SQLiteCache {
-	c, err := NewSQLiteCache("", config.DefaultMaxCacheEntries, 0, 0)
+	db, err := database.Open("", 0, database.Options{})
 	if err != nil {
 		panic(err)
 	}
-	return c
+	return New(db)
 }
 
 // ── Get / Set ─────────────────────────────────────────────────────────────────
@@ -607,11 +608,11 @@ func TestSet_RoundTrip(t *testing.T) {
 
 func TestCompressionRoundTrip(t *testing.T) {
 	original := []byte("test wire format data")
-	compressed := compress(original)
+	compressed := database.Compress(original)
 	if len(compressed) == 0 {
 		t.Fatal("compress returned empty")
 	}
-	decompressed, err := decompress(compressed)
+	decompressed, err := database.Decompress(compressed)
 	if err != nil {
 		t.Fatalf("decompress: %v", err)
 	}
@@ -621,28 +622,28 @@ func TestCompressionRoundTrip(t *testing.T) {
 }
 
 func TestCompressEmpty(t *testing.T) {
-	if compress(nil) != nil {
-		t.Error("compress(nil) should return nil")
+	if database.Compress(nil) != nil {
+		t.Error("database.Compress(nil) should return nil")
 	}
-	if compress([]byte{}) != nil {
-		t.Error("compress([]byte{}) should return nil")
+	if database.Compress([]byte{}) != nil {
+		t.Error("database.Compress([]byte{}) should return nil")
 	}
 }
 
 func TestDecompressEmpty(t *testing.T) {
-	result, err := decompress(nil)
+	result, err := database.Decompress(nil)
 	if err != nil {
-		t.Errorf("decompress(nil): %v", err)
+		t.Errorf("database.Decompress(nil): %v", err)
 	}
 	if result != nil {
-		t.Error("decompress(nil) should return nil")
+		t.Error("database.Decompress(nil) should return nil")
 	}
-	result, err = decompress([]byte{})
+	result, err = database.Decompress([]byte{})
 	if err != nil {
-		t.Errorf("decompress([]byte{}): %v", err)
+		t.Errorf("database.Decompress([]byte{}): %v", err)
 	}
 	if result != nil {
-		t.Error("decompress([]byte{}) should return nil")
+		t.Error("database.Decompress([]byte{}) should return nil")
 	}
 }
 
@@ -706,7 +707,11 @@ func TestStats(t *testing.T) {
 func TestE2E_FullLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "e2e.db")
-	mc, err := NewSQLiteCache(dbPath, 500, 4, 1)
+	db, err := database.Open(dbPath, 500, database.Options{MMapSizeMB: 4, CacheSizeMB: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc := New(db)
 	if err != nil {
 		t.Fatalf("NewSQLiteCache: %v", err)
 	}
@@ -997,7 +1002,11 @@ func TestE2E_LatencyOrdering(t *testing.T) {
 func TestE2E_CompressionEfficacy(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "compression.db")
-	mc, err := NewSQLiteCache(dbPath, 100, 4, 1)
+	db, err := database.Open(dbPath, 100, database.Options{MMapSizeMB: 4, CacheSizeMB: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc := New(db)
 	if err != nil {
 		t.Fatalf("NewSQLiteCache: %v", err)
 	}

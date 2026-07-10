@@ -10,6 +10,7 @@ import (
 	"time"
 	"zjdns/cache"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -49,7 +50,8 @@ func BenchmarkPoolBufferGetPut(b *testing.B) {
 
 func BenchmarkCacheSetGet(b *testing.B) {
 	disableLogging()
-	c, _ := cache.NewSQLiteCache("", config.DefaultMaxCacheEntries, 0, 0)
+	db, _ := database.Open("", 0, database.Options{})
+	c := cache.New(db)
 	defer func() { _ = c.Close() }()
 
 	a := &dns.A{
@@ -66,7 +68,8 @@ func BenchmarkCacheSetGet(b *testing.B) {
 
 func BenchmarkCacheParallel(b *testing.B) {
 	disableLogging()
-	c, _ := cache.NewSQLiteCache("", config.DefaultMaxCacheEntries, 0, 0)
+	db, _ := database.Open("", 0, database.Options{})
+	c := cache.New(db)
 	defer func() { _ = c.Close() }()
 
 	b.ResetTimer()

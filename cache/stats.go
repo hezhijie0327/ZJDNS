@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync/atomic"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
 
@@ -18,25 +18,25 @@ import (
 // RecordRequest logs a request outcome. Hit path upserts hit counters; miss/
 // stale/zone/error/blocked paths insert a log row with entry_id FK.
 func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
-	if atomic.LoadInt32(&s.closed) != 0 {
+	if s.db.IsClosed() {
 		return
 	}
 
 	r.Qname = zdnsutil.NormalizeDomain(r.Qname)
 	ecsAddr, ecsPrefix := ecsParams(r.ECS)
-	dnssecInt := boolToInt(r.DNSSECOK)
+	dnssecInt := database.BoolToInt(r.DNSSECOK)
 
-	entryID := s.ensureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
+	entryID := s.db.EnsureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
 
 	if r.Result == "hit" {
-		_, _ = s.stmtHitCounter.Exec(entryID, r.Protocol, r.Rcode, r.ResponseTime)
+		_, _ = s.db.StmtHitCounter.Exec(entryID, r.Protocol, r.Rcode, r.ResponseTime)
 		return
 	}
 
-	_, _ = s.stmtInsertLog.Exec(
+	_, _ = s.db.StmtInsertLog.Exec(
 		log.NowUnix(), entryID,
 		r.Protocol, r.Result, r.ResponseTime, r.Rcode, r.Server,
-		boolToInt(r.Hijack), boolToInt(r.Fallback), r.DNSSECStatus,
+		database.BoolToInt(r.Hijack), database.BoolToInt(r.Fallback), r.DNSSECStatus,
 	)
 }
 
@@ -84,7 +84,7 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 // FlushDB truncates a single table: "stats" (resets stats_meta.cleared_before),
 // "cache" (entries), or "latency" (ip_latency).
 func (s *SQLiteCache) FlushDB(target string) (int64, error) {
-	if atomic.LoadInt32(&s.closed) != 0 {
+	if s.db.IsClosed() {
 		return 0, errors.New("cache closed")
 	}
 	var result sql.Result
@@ -98,7 +98,7 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	case "cache":
 		result, err = s.db.Exec(`DELETE FROM entries`)
 		if err == nil {
-			s.entryCount.Store(0)
+			s.db.SetEntryCount(0)
 		}
 	case "latency":
 		result, err = s.db.Exec(`DELETE FROM ip_latency`)
@@ -140,7 +140,7 @@ func (s *SQLiteCache) Clear() (int64, error) {
 
 // Stats returns aggregated cache statistics as formatted TXT records.
 func (s *SQLiteCache) Stats() []string {
-	if atomic.LoadInt32(&s.closed) != 0 {
+	if s.db.IsClosed() {
 		return nil
 	}
 
@@ -296,7 +296,7 @@ func (s *SQLiteCache) Stats() []string {
 // sharing the same IP reuse the same row — latency is measured once, not
 // once per domain. qtype is inferred from the IP address format.
 func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
-	if atomic.LoadInt32(&s.closed) != 0 {
+	if s.db.IsClosed() {
 		return
 	}
 	parsedIP := net.ParseIP(ip)
@@ -307,17 +307,17 @@ func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
 	if parsedIP.To4() != nil {
 		qtype = dns.TypeA
 	}
-	_, _ = s.stmtInsertLatency.Exec(ip, qtype, latencyMS)
+	_, _ = s.db.StmtInsertLatency.Exec(ip, qtype, latencyMS)
 }
 
 // GetLatencyLastProbe returns the last probe time for an IP. Returns (0, false)
 // if the IP has never been probed.
 func (s *SQLiteCache) GetLatencyLastProbe(ip string) (int64, bool) {
-	if atomic.LoadInt32(&s.closed) != 0 {
+	if s.db.IsClosed() {
 		return 0, false
 	}
 	var ts int64
-	if err := s.stmtGetLastProbe.QueryRow(ip).Scan(&ts); err != nil || ts == 0 {
+	if err := s.db.StmtGetLastProbe.QueryRow(ip).Scan(&ts); err != nil || ts == 0 {
 		return 0, false
 	}
 	return ts, true

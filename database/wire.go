@@ -1,4 +1,4 @@
-package cache
+package database
 
 import (
 	"fmt"
@@ -6,9 +6,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-const (
-	zstdCompressLevel = zstd.SpeedDefault
-)
+const zstdCompressLevel = zstd.SpeedDefault
 
 // zstd encoder/decoder for wire format compression. Created once, reused forever.
 var (
@@ -28,16 +26,16 @@ func init() {
 	}
 }
 
-// ── Wire format compression ──────────────────────────────────────────────────
-
-func compress(data []byte) []byte {
+// Compress compresses data with zstd. Returns nil for empty input.
+func Compress(data []byte) []byte {
 	if len(data) == 0 {
 		return nil
 	}
 	return zstdEncoder.EncodeAll(data, nil)
 }
 
-func decompress(data []byte) ([]byte, error) {
+// Decompress decompresses data with zstd. Returns nil for empty input.
+func Decompress(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}

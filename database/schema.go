@@ -1,0 +1,204 @@
+package database
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"strconv"
+	"zjdns/config"
+	"zjdns/internal/log"
+)
+
+const (
+	pageSize               = 4096
+	walAutoCheckpointPages = 4096
+	schemaVersion          = 6
+)
+
+func (db *DB) migrate() error {
+	mmapSize := db.mmapSizeMB * 1024 * 1024
+	cacheSize := -db.cacheSizeMB * 1024
+	pragmaSQL := fmt.Sprintf(
+		"PRAGMA page_size = %d;"+
+			" PRAGMA cache_size = %d;"+
+			" PRAGMA mmap_size = %d;"+
+			" PRAGMA temp_store = MEMORY;"+
+			" PRAGMA wal_autocheckpoint = %d;"+
+			" PRAGMA journal_size_limit = %d;",
+		pageSize, cacheSize, mmapSize, walAutoCheckpointPages, mmapSize,
+	)
+	if _, err := db.Exec(pragmaSQL); err != nil {
+		log.Warnf("CACHE: pragma failed (non-fatal): %v", err)
+	}
+
+	var version int
+	_ = db.QueryRow("SELECT version FROM schema_version").Scan(&version)
+	if version != schemaVersion {
+		log.Infof("CACHE: schema v%d → v%d, rebuilding all tables", version, schemaVersion)
+		if db.dbPath != "" {
+			_ = db.conn.Close()
+			_ = os.Remove(db.dbPath)
+			sqldb, err := openDBFile(db.dbPath)
+			if err != nil {
+				return fmt.Errorf("sqlite reopen: %w", err)
+			}
+			conn, err := sqldb.Conn(context.Background())
+			if err != nil {
+				_ = sqldb.Close()
+				return fmt.Errorf("sqlite reacquire conn: %w", err)
+			}
+			_ = sqldb.Close()
+			db.conn = conn
+			if _, err := db.Exec(pragmaSQL); err != nil {
+				log.Warnf("CACHE: pragma failed on reopen (non-fatal): %v", err)
+			}
+		}
+	}
+
+	//nolint:gosec // G202: DDL migration with constant schema version
+	_, err := db.Exec(`
+
+		-- ── Schema version ───────────────────────────────────────────────────
+		-- Single-row table tracking the current schema version. When the version
+		-- changes, the disk-backed database is dropped and recreated cleanly.
+
+		CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
+		INSERT OR REPLACE INTO schema_version (rowid, version) VALUES (1, ` + strconv.Itoa(schemaVersion) + `);
+
+		-- ── DNS response cache ───────────────────────────────────────────────
+		-- Every row is a cacheable DNS response keyed by (qname, qtype, qclass,
+		-- ecs_addr, ecs_prefix, dnssec_ok). The wire format is zstd-compressed
+		-- in msg_wire; Get() decompresses and unpacks in one step.
+
+		CREATE TABLE IF NOT EXISTS entries (
+			qname      TEXT NOT NULL,       -- normalized FQDN
+			qtype      INTEGER NOT NULL,    -- dns.TypeA=1, AAAA=28, ...
+			qclass     INTEGER NOT NULL DEFAULT 1,
+			ecs_addr   TEXT NOT NULL DEFAULT '',
+			ecs_prefix INTEGER NOT NULL DEFAULT 0,
+			dnssec_ok  INTEGER NOT NULL DEFAULT 0 CHECK (dnssec_ok IN (0, 1)),
+			timestamp  INTEGER NOT NULL,    -- insertion time (unix seconds)
+			ttl        INTEGER NOT NULL,    -- min of all RR TTLs, floor 10s
+			expires_at INTEGER NOT NULL DEFAULT 0,
+			validated  INTEGER NOT NULL DEFAULT 0 CHECK (validated IN (0, 1)),
+			msg_wire   BLOB,               -- zstd-compressed dns.Msg wire format
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_entries_expires ON entries(expires_at);
+
+		-- ── PTR reverse lookup ───────────────────────────────────────────────
+		-- Lightweight IP→domain mapping populated from A/AAAA rdata. WITHOUT
+		-- ROWID uses the clustered PK directly. ON DELETE CASCADE cleans up
+		-- automatically when cache entries are evicted.
+
+		CREATE TABLE IF NOT EXISTS ptr_map (
+			rdata_ip TEXT NOT NULL,
+			entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			name     TEXT NOT NULL,
+			ttl      INTEGER NOT NULL,
+			PRIMARY KEY (rdata_ip, entry_id, name)
+		) WITHOUT ROWID;
+
+		-- ── Request journal ──────────────────────────────────────────────────
+		-- Append-only log of every non-hit query. Stats() aggregates from this
+		-- table; per-request debugging via qname/qtype/rcode/protocol. Survives
+		-- FlushDB("stats"). entry_id FK ensures rows are cleaned up when the
+		-- owning cache entry is evicted.
+
+		CREATE TABLE IF NOT EXISTS request_log (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp       INTEGER NOT NULL,
+			entry_id        INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			protocol        TEXT NOT NULL,
+			result          TEXT NOT NULL,
+			response_time_ms INTEGER NOT NULL DEFAULT 0,
+			rcode           INTEGER NOT NULL DEFAULT 0,
+			server          TEXT NOT NULL DEFAULT '',
+			hijack          INTEGER NOT NULL DEFAULT 0,
+			fallback        INTEGER NOT NULL DEFAULT 0,
+			dnssec_status   TEXT NOT NULL DEFAULT ''
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_request_log_ts ON request_log(timestamp);
+		CREATE INDEX IF NOT EXISTS idx_request_log_entry ON request_log(entry_id);
+
+		-- ── Hit counters ─────────────────────────────────────────────────────
+		-- Aggregated per-entry+protocol+rcode hit counts. Cache hits upsert
+		-- here instead of inserting into request_log to avoid row bloat.
+		-- ON DELETE CASCADE keeps counters bounded by cache eviction.
+
+		CREATE TABLE IF NOT EXISTS entry_hit_counters (
+			entry_id          INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			protocol          TEXT NOT NULL,
+			rcode             INTEGER NOT NULL DEFAULT 0,
+			hit_count         INTEGER NOT NULL DEFAULT 0,
+			total_response_ms INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (entry_id, protocol, rcode)
+		) WITHOUT ROWID;
+
+		-- ── Stats metadata ───────────────────────────────────────────────────
+		-- Single row tracking the last request_log.id that was cleared by
+		-- FlushDB("stats"). Resetting stats is O(1): just UPDATE this row.
+
+		CREATE TABLE IF NOT EXISTS stats_meta (
+			id             INTEGER PRIMARY KEY CHECK (id = 1),
+			cleared_before INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT OR IGNORE INTO stats_meta (id, cleared_before) VALUES (1, 0);
+
+		-- ── Per-IP latency ───────────────────────────────────────────────────
+		-- Keyed by rdata_ip only — latency is a property of the IP, not the
+		-- domain. All domains sharing the same CDN IP reuse the same row.
+		-- Rows with stale last_probe_time are cleaned up during eviction.
+
+		CREATE TABLE IF NOT EXISTS ip_latency (
+			rdata_ip        TEXT NOT NULL,
+			qtype           INTEGER NOT NULL DEFAULT 0,
+			latency_ms      INTEGER NOT NULL,
+			last_probe_time INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (rdata_ip)
+		) WITHOUT ROWID;
+
+		-- ── Zone rules ───────────────────────────────────────────────────────
+		-- Zone-file-style rule table queried via B-tree indexed composite-key
+		-- lookups (Evaluate). Rules are bulk-loaded at startup (LoadRules).
+		-- answer/authority/additional store zstd-compressed wire-format RR sets.
+
+		CREATE TABLE IF NOT EXISTS zone_entries (
+			qname      TEXT NOT NULL,
+			qtype      INTEGER NOT NULL DEFAULT 0,
+			qclass     INTEGER NOT NULL DEFAULT 0,
+			rcode      INTEGER NOT NULL DEFAULT 0,
+			answer     BLOB,               -- zstd-compressed answer RRs
+			authority  BLOB,               -- zstd-compressed authority RRs
+			additional BLOB,               -- zstd-compressed additional RRs
+			match_tags TEXT NOT NULL DEFAULT '',
+			is_wildcard INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (qname, qtype, qclass)
+		);
+		CREATE INDEX IF NOT EXISTS idx_zone_qname ON zone_entries(qname);
+	`)
+	if err != nil {
+		return err
+	}
+
+	if db.dbPath != "" {
+		if _, err := db.Exec("ANALYZE"); err != nil {
+			log.Warnf("CACHE: ANALYZE failed (non-fatal): %v", err)
+		}
+	}
+	return nil
+}
+
+func openDBFile(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", "file:"+path+"?"+dsnParams)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(config.DefaultCacheMaxOpenConns)
+	db.SetMaxIdleConns(config.DefaultCacheMaxIdleConns)
+	return db, nil
+}

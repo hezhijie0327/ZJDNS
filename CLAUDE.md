@@ -54,8 +54,8 @@ golangci-lint run && golangci-lint fmt
 # Docker
 docker build -t zjdns .
 
-# Analyze cache database (aligned columnar output like sqlite3)
-./zjdns -analyze cache.db "SELECT e.qname, e.rcode, e.hit_udp FROM entries e"
+# Run SQL query against database (aligned columnar output like sqlite3)
+./zjdns --sql cache.db "SELECT e.qname, e.rcode, e.hit_udp FROM entries e"
 
 # Install pre-commit hook (auto fmt + lint on commit)
 sh scripts/install-hook.sh                 # Linux / macOS
@@ -201,16 +201,19 @@ zjdns/
 │   └── cli/                                  ← Flag parsing, config generation, DB analysis
 ├── config/                                    ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                                      ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── cache/                                     ← Store interface, SQLite relational cache
-│   ├── sqlite.go                              ←   SQLiteCache struct, NewSQLiteCache, Close
-│   ├── sqlite_schema.go                       ←   migrate, ensureEntry, schema consts
-│   ├── sqlite_store.go                        ←   Get, Set, eviction, latency-driven sorting
-│   ├── sqlite_stats.go                        ←   RecordRequest, Stats, FlushDB, ReverseLookup
-│   ├── sqlite_stmts.go                        ←   prepared statement compilation
-│   ├── sqlite_wire.go                         ←   zstd compress/decompress, init
-│   └── sqlite_helpers.go                      ←   insertPtrMap, TTL helpers, ecsParams, boolToInt
+├── database/                                  ← Unified SQLite DB: connection, schema, migration, zstd
+│   ├── db.go                                  ←   DB struct, Open, Close, Exec/Query/QueryRow/Begin
+│   ├── schema.go                              ←   7 tables (cache 6 + zone 1) in one migration
+│   ├── stmts.go                               ←   9 prepared statements (cache 6 + zone 3)
+│   ├── wire.go                                ←   shared zstd Compress/Decompress
+│   └── helpers.go                             ←   BoolToInt, JoinPlaceholders
+├── cache/                                     ← Store interface, DNS response cache (wraps *database.DB)
+│   ├── cache.go                               ←   Store interface, Entry, RequestRecord, ProcessRecords
+│   ├── store.go                               ←   SQLiteCache struct, New, Get, Set, eviction, latency sort
+│   ├── stats.go                               ←   RecordRequest, Stats, FlushDB, ReverseLookup
+│   └── helpers.go                             ←   insertPtrMap, TTL helpers, ecsParams
 ├── cidr/                                      ← IP filtering with tag matching
-├── zone/                                      ← DNS zone rules, composite-key (QNAME+QTYPE+QCLASS) matching
+├── zone/                                      ← DNS zone rules (wraps *database.DB, same DB as cache)
 ├── internal/
 │   ├── log/                                   ← Structured logging + IsDebug guard (zero internal deps)
 │   ├── pool/                                  ← sync.Pool allocators + QUIC error codes
@@ -272,10 +275,11 @@ Layer 2 (import domain foundation):
   internal/latency → config, dnsutil, log
 
 Layer 3 (domain packages — import config + internal/*, never each other):
-  edns → config, ipdetect, log, pool        (only domain→domain edge allowed)
-  cache → config, dnsutil, log, pool
+  database → config, dnsutil, log        (owns SQLite infrastructure)
+  edns → config, ipdetect, log, pool      (only domain→domain edge allowed)
+  cache → config, database, dnsutil, log, pool
   cidr → config, dnsutil, log
-  zone → config, dnsutil, log
+  zone → config, database, dnsutil, log
 
 Layer 4 (server sub-packages — import domain + internal, never server/ parent):
   server/security → cache, config, dnsutil, log
@@ -340,7 +344,9 @@ Top layer (wiring):
 | `ECSConfig` | `config` | User-facing ECS subnet configuration (moved from edns) |
 | `ECSOption` | `config` | Parsed EDNS Client Subnet (edns has type alias: `type ECSOption = config.ECSOption`) |
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
-| `Store` | `cache` | Interface: Get/Set/RecordHit/UpdateLatency/GetLatencyLastProbe/ReverseLookup/Close | `SetOptions` carries per-entry metadata |
+| `DB` | `database` | Unified SQLite DB: pinned `*sql.Conn`, schema migration, 9 prepared stmts | Wraps `*sql.Conn` for shared in-memory access |
+| `Options` | `database` | SQLite PRAGMA config: `MMapSizeMB`, `CacheSizeMB` | |
+| `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/GetLatencyLastProbe/Close | Wraps `*database.DB` |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `Handler` | `server/handler` | DNS query processing pipeline; owns `BackgroundConfig`, `LatencyProber` |
@@ -381,7 +387,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## Notable Design Decisions
 
-- **Cache (SQLite relational store)**: All DNS responses, NS latency data, DNSKEYs, and PTR mappings share six SQLite tables — no in-memory Go map, no gob encoding. WAL mode + mmap (16MB default) for hot-data-in-memory performance; `page_size=4096` matches OS page size. `journal_size_limit=mmap_size` caps WAL growth; `wal_autocheckpoint=4096` triggers passive checkpoint at 16MB. `synchronous=NORMAL` avoids fsync on every write. `ANALYZE` at migration populates `sqlite_stat1` for query planner; `PRAGMA optimize` runs on eviction + `Close()` to refresh statistics periodically (mostly a no-op, only runs `ANALYZE` when stats are stale). `msg_wire` BLOB stores zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in a single step (~0.5ms cache hits). TTL floor 10s. Negative response TTL capped per RFC 9077. `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based) with `_txlock=immediate` and 4-connection pool. See [DB Schema](#db-schema) below.
+- **Unified database (`database/`)**: All DNS responses, NS latency data, DNSKEYs, and PTR mappings share six SQLite tables — no in-memory Go map, no gob encoding. WAL mode + mmap (16MB default) for hot-data-in-memory performance; `page_size=4096` matches OS page size. `journal_size_limit=mmap_size` caps WAL growth; `wal_autocheckpoint=4096` triggers passive checkpoint at 16MB. `synchronous=NORMAL` avoids fsync on every write. `ANALYZE` at migration populates `sqlite_stat1` for query planner; `PRAGMA optimize` runs on eviction + `Close()` to refresh statistics periodically (mostly a no-op, only runs `ANALYZE` when stats are stale). `msg_wire` BLOB stores zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in a single step (~0.5ms cache hits). TTL floor 10s. Negative response TTL capped per RFC 9077. `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based) with `_txlock=immediate` and 4-connection pool. See [DB Schema](#db-schema) below.
 - **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and zone (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
 - **EDNS buffer sizing**: Dual-size strategy — standard upstream queries use 1232 bytes (DNS Flag Day 2020) while recursive (root/TLD) queries use 4096 bytes (`RecursiveUDPBufferSize`) to avoid UDP truncation on DNSSEC-signed root zone referrals (~1400 bytes). Applied in `queryNameserversConcurrent` after `buildMsg` and in `probeTLDForHijack`.
 - **EDNS padding and DNSCrypt**: EDNS padding (128B request / 468B response blocks) is applied only when `isSecureConnection` is true — that means DoT, DoQ, DoH, and DoH3. Plain UDP/TCP and DNSCrypt responses never get EDNS padding. DNSCrypt already encrypts at the transport layer and has its own ISO 7816-4 padding (to 64-byte boundaries), making TLS-record-length-based traffic analysis mitigation unnecessary. The outbound side (`upstream.go:72`) also excludes `ProtoDNSCrypt`/`ProtoDNSCryptTCP` from the `isSecure` set so EDNS padding is never added to outbound DNSCrypt queries either.
@@ -425,7 +431,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## DB Schema
 
-The cache uses six SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The unified database (`database/`) contains seven SQLite tables (six cache + one zone): (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
 -- Pure DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr,
@@ -501,6 +507,24 @@ CREATE TABLE ip_latency (
     last_probe_time INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (rdata_ip)
 ) WITHOUT ROWID;
+```
+
+**Zone entries table (same DB file, shared zstd compression):**
+
+```sql
+CREATE TABLE zone_entries (
+    qname      TEXT NOT NULL,
+    qtype      INTEGER NOT NULL DEFAULT 0,
+    qclass     INTEGER NOT NULL DEFAULT 0,
+    rcode      INTEGER NOT NULL DEFAULT 0,
+    answer     BLOB,               -- zstd-compressed answer RRs
+    authority  BLOB,               -- zstd-compressed authority RRs
+    additional BLOB,               -- zstd-compressed additional RRs
+    match_tags TEXT NOT NULL DEFAULT '',
+    is_wildcard INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (qname, qtype, qclass)
+);
+CREATE INDEX idx_zone_qname ON zone_entries(qname);
 ```
 
 **Key patterns**:
@@ -605,10 +629,10 @@ dig @127.0.0.1 -p 15353 www.baidu.com A +short > /dev/null
 dig @127.0.0.1 -p 15353 -x 180.101.49.44 +short
 
 # Verify all result types are logged (should show hit, miss, zone, error)
-./zjdns -analyze cache.db "SELECT result, rcode, COUNT(*) FROM request_log GROUP BY result, rcode"
+./zjdns --sql cache.db "SELECT result, rcode, COUNT(*) FROM request_log GROUP BY result, rcode"
 
 # Verify DNSSEC distribution
-./zjdns -analyze cache.db "SELECT dnssec_status, COUNT(*) FROM request_log GROUP BY dnssec_status"
+./zjdns --sql cache.db "SELECT dnssec_status, COUNT(*) FROM request_log GROUP BY dnssec_status"
 
 # Full stats (8 TXT records: overview, success, errors, rcodes, anomalies, plain, encrypted, DNSSEC)
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
@@ -616,7 +640,7 @@ dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 # Verify stats reset keeps request_log intact
 dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short          # entries remains, all counters zero
-./zjdns -analyze cache.db "SELECT COUNT(*) FROM request_log" # log rows survive
+./zjdns --sql cache.db "SELECT COUNT(*) FROM request_log" # log rows survive
 ```
 
 Verify hijack detection from logs: `grep -E "hijack probe detected|hijack detected|rejecting hijacked|tcp=true" /tmp/zjdns.log`
