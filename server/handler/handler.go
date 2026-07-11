@@ -142,12 +142,6 @@ func (h *Handler) Edns() *edns.Handler { return h.edns }
 // CacheStore returns the cache store (used for persistence and shutdown).
 func (h *Handler) CacheStore() cache.Store { return h.cache }
 
-// Resolver returns the DNS resolver.
-func (h *Handler) Resolver() *resolver.Resolver { return h.resolver }
-
-// HasZoneRules reports whether zone rules are configured.
-func (h *Handler) HasZoneRules() bool { return h.zoneEvaluator != nil && h.zoneEvaluator.HasRules() }
-
 // CleanupPrefetchCooldown removes stale entries from the prefetch cooldown map.
 // Entries with timestamp < now are evicted.
 func (h *Handler) CleanupPrefetchCooldown(now int64) {
@@ -163,16 +157,11 @@ func (h *Handler) CleanupPrefetchCooldown(now int64) {
 // UpstreamServers returns the configured upstream servers.
 func (h *Handler) UpstreamServers() []*config.UpstreamServer { return h.resolver.UpstreamServers() }
 
-// DefaultECS returns the default ECS option.
-func (h *Handler) DefaultECS() *edns.ECSOption { return h.edns.DefaultECS() }
-
 // CacheRefreshGroup returns the errgroup for cache refresh goroutines.
 func (h *Handler) CacheRefreshGroup() *errgroup.Group { return h.cacheRefreshGroup }
 
-// CacheRefreshCtx returns the context for cache refresh operations.
-func (h *Handler) CacheRefreshCtx() context.Context { return h.cacheRefreshCtx }
-
-// ServeDNS handles an incoming DNS query from a TLS/DoH/DoQ listener.
+// ServeDNS handles an incoming DNS query from any protocol listener (plain
+// UDP/TCP or encrypted DoT/DoQ/DoH/DoH3/DNSCrypt).
 func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg {
 	return h.processDNSQuery(req, clientIP, isSecure, protocol)
 }
@@ -241,7 +230,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	startTime := time.Now()
 	var responseMsg *dns.Msg
 	defer func() {
-		if responseMsg != nil && log.Default.Level() >= log.Debug {
+		if responseMsg != nil && log.IsDebug() {
 			log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t%s",
 				question.Name, dns.TypeToString[question.Qtype], dns.RcodeToString[responseMsg.Rcode],
 				time.Since(startTime).Truncate(time.Microsecond), len(responseMsg.Answer), len(responseMsg.Ns),
@@ -287,7 +276,7 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		return responseMsg
 	}
 
-	// Aggressive NSEC negative cache lookup (RFC 9077).
+	// Aggressive NSEC negative cache lookup (RFC 8198).
 	// Before falling through to resolver, check if a cached NSEC/NSEC3
 	// record proves NXDOMAIN or NODATA for this query.
 	if nsecResult := h.cache.LookupNsecNeg(question.Name, question.Qtype); nsecResult != nil {

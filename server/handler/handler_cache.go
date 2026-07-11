@@ -302,7 +302,7 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 			Family:       ecsOpt.Family,
 			SourcePrefix: ecsOpt.SourcePrefix,
 			ScopePrefix:  ecsOpt.ScopePrefix,
-			Address:      ecsOpt.Address,
+			Address:      copyIP(ecsOpt.Address),
 		}
 	}
 
@@ -398,4 +398,13 @@ func (h *Handler) finishRefresh(qname string, qtype, qclass uint16, ecs *edns.EC
 	}
 	key := buildPendingKey(qname, qtype, qclass, ecs, false)
 	h.pendingRefreshes.Done(key)
+}
+
+// copyIP returns a deep copy of ip, allocating a new backing array for the
+// net.IP byte slice to prevent mutation of the original by downstream consumers.
+func copyIP(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
+	}
+	return append(net.IP(nil), ip...)
 }
