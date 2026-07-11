@@ -392,7 +392,10 @@ func parseMatchTags(raw []string) ([]matchTag, error) {
 			return nil, errors.New("empty match tag")
 		}
 		negate := strings.HasPrefix(s, "!")
-		tag := s[1:]
+		tag := s
+		if negate {
+			tag = s[1:]
+		}
 		if tag == "" {
 			return nil, fmt.Errorf("invalid match tag %q", s)
 		}
