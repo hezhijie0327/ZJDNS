@@ -59,26 +59,14 @@ func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
 	}
 }
 
-func minTTL(answer, authority, additional []dns.RR) int {
+func minTTL(sections ...[]dns.RR) int {
 	minT := -1
-	for _, rr := range answer {
-		if rr != nil {
-			if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
-				minT = t
-			}
-		}
-	}
-	for _, rr := range authority {
-		if rr != nil {
-			if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
-				minT = t
-			}
-		}
-	}
-	for _, rr := range additional {
-		if rr != nil {
-			if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
-				minT = t
+	for _, rrs := range sections {
+		for _, rr := range rrs {
+			if rr != nil {
+				if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
+					minT = t
+				}
 			}
 		}
 	}

@@ -13,6 +13,8 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
+
+	zdnsutil "zjdns/internal/dnsutil"
 )
 
 func testStore() *SQLiteCache {
@@ -608,11 +610,11 @@ func TestSet_RoundTrip(t *testing.T) {
 
 func TestCompressionRoundTrip(t *testing.T) {
 	original := []byte("test wire format data")
-	compressed := database.Compress(original)
+	compressed := zdnsutil.Compress(original)
 	if len(compressed) == 0 {
 		t.Fatal("compress returned empty")
 	}
-	decompressed, err := database.Decompress(compressed)
+	decompressed, err := zdnsutil.Decompress(compressed)
 	if err != nil {
 		t.Fatalf("decompress: %v", err)
 	}
@@ -622,28 +624,28 @@ func TestCompressionRoundTrip(t *testing.T) {
 }
 
 func TestCompressEmpty(t *testing.T) {
-	if database.Compress(nil) != nil {
-		t.Error("database.Compress(nil) should return nil")
+	if zdnsutil.Compress(nil) != nil {
+		t.Error("zdnsutil.Compress(nil) should return nil")
 	}
-	if database.Compress([]byte{}) != nil {
-		t.Error("database.Compress([]byte{}) should return nil")
+	if zdnsutil.Compress([]byte{}) != nil {
+		t.Error("zdnsutil.Compress([]byte{}) should return nil")
 	}
 }
 
 func TestDecompressEmpty(t *testing.T) {
-	result, err := database.Decompress(nil)
+	result, err := zdnsutil.Decompress(nil)
 	if err != nil {
-		t.Errorf("database.Decompress(nil): %v", err)
+		t.Errorf("zdnsutil.Decompress(nil): %v", err)
 	}
 	if result != nil {
-		t.Error("database.Decompress(nil) should return nil")
+		t.Error("zdnsutil.Decompress(nil) should return nil")
 	}
-	result, err = database.Decompress([]byte{})
+	result, err = zdnsutil.Decompress([]byte{})
 	if err != nil {
-		t.Errorf("database.Decompress([]byte{}): %v", err)
+		t.Errorf("zdnsutil.Decompress([]byte{}): %v", err)
 	}
 	if result != nil {
-		t.Error("database.Decompress([]byte{}) should return nil")
+		t.Error("zdnsutil.Decompress([]byte{}) should return nil")
 	}
 }
 

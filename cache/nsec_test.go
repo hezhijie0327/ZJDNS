@@ -5,6 +5,56 @@ import (
 	"testing"
 )
 
+// parentWire strips the leftmost (original-first) label from a TLD-first
+// wire-format name.
+func parentWire(wire []byte) []byte {
+	if len(wire) <= 1 {
+		return wire
+	}
+	pos := 0
+	labels := 0
+	for pos < len(wire)-1 {
+		labels++
+		l := int(wire[pos])
+		if l == 0 {
+			break
+		}
+		pos += 1 + l
+	}
+	if labels <= 1 {
+		return []byte{0}
+	}
+	pos = 0
+	for i := 0; i < labels-1; i++ {
+		l := int(wire[pos])
+		pos += 1 + l
+	}
+	b := make([]byte, pos+1)
+	copy(b, wire[:pos])
+	b[pos] = 0
+	return b
+}
+
+func bytesLT(a, b []byte) bool {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := range n {
+		if a[i] < b[i] {
+			return true
+		}
+		if a[i] > b[i] {
+			return false
+		}
+	}
+	return len(a) < len(b)
+}
+
+func bytesLE(a, b []byte) bool {
+	return bytesLT(a, b) || slices.Equal(a, b)
+}
+
 func TestToWireName_Basic(t *testing.T) {
 	w := toWireName("example.com")
 	if len(w) == 0 || w[len(w)-1] != 0 {

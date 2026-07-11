@@ -126,7 +126,8 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	return n, nil
 }
 
-// Clear truncates all tables: entries, request_log, and ip_latency.
+// Clear truncates all tables: entries, request_log, entry_hit_counters, ip_latency,
+// and resets stats_meta.
 func (s *SQLiteCache) Clear() (int64, error) {
 	n1, err := s.FlushDB("cache")
 	if err != nil {

@@ -12,8 +12,6 @@ import (
 	"zjdns/internal/log"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
-
-	zdnsutil "zjdns/internal/dnsutil"
 )
 
 // Options configures SQLite PRAGMA tunables.
@@ -24,8 +22,8 @@ type Options struct {
 
 // DB is a unified SQLite database backing all ZJDNS subsystems (cache, zone).
 // Uses *sql.DB (goroutine-safe connection pool) for both file and in-memory
-// databases. file::memory: is used for in-memory so all connections share the
-// same database.
+// databases. :memory: is used for in-memory so all connections share the
+// same database (pinned to a single connection).
 type DB struct {
 	SQ     *sql.DB
 	dbPath string
@@ -67,20 +65,8 @@ type DB struct {
 
 const dsnParams = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
 
-// Compress compresses data with zstd (delegates to dnsutil.Compress).
-var Compress = zdnsutil.Compress
-
-// Decompress decompresses data with zstd (delegates to dnsutil.Decompress).
-var Decompress = zdnsutil.Decompress
-
-// BoolToInt converts a bool to 0 or 1 (delegates to dnsutil.BoolToInt).
-var BoolToInt = zdnsutil.BoolToInt
-
-// JoinPlaceholders joins string parts with a separator (delegates to dnsutil.JoinPlaceholders).
-var JoinPlaceholders = zdnsutil.JoinPlaceholders
-
 // Open opens or creates the SQLite database at path. An empty path uses
-// file::memory: (shared in-memory). maxEntries controls the cache eviction
+// :memory: (shared in-memory). maxEntries controls the cache eviction
 // threshold.
 func Open(path string, maxEntries int, opts Options) (*DB, error) {
 	if maxEntries <= 0 {
@@ -180,9 +166,6 @@ func (db *DB) Close() error {
 }
 
 // Cache methods
-
-// EntryCount returns the approximate cache entry count.
-func (db *DB) EntryCount() int64 { return db.entryCount.Load() }
 
 // AddEntryCount atomically adds delta to the entry counter.
 func (db *DB) AddEntryCount(delta int64) { db.entryCount.Add(delta) }

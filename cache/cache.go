@@ -8,9 +8,10 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// RequestRecord captures per-request metadata for the request_log table.
-// One row is inserted for every query served, providing an audit trail for
-// debugging and the data source for Stats() aggregation.
+// RequestRecord captures per-request metadata. Cache hits are upserted into
+// entry_hit_counters; non-hit results (miss/stale/zone/error) insert a row
+// into request_log, providing an audit trail for debugging and the data
+// source for Stats() aggregation.
 type RequestRecord struct {
 	Qname        string // normalized FQDN
 	Qtype        uint16
@@ -41,7 +42,7 @@ type Store interface {
 	Stats() []string
 	Close() error
 
-	// Aggressive NSEC negative caching (RFC 9077).
+	// Aggressive NSEC negative caching (RFC 8198).
 	IndexNsecRecords(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, authority []dns.RR)
 	LookupNsecNeg(qname string, qtype uint16) *NsecResult
 }
@@ -127,6 +128,11 @@ func processRR(rr dns.RR, value int64, isElapsed, includeDNSSEC bool) dns.RR {
 func ProcessRecords(rrs []dns.RR, value int64, isElapsed, includeDNSSEC bool) []dns.RR {
 	if len(rrs) == 0 {
 		return nil
+	}
+	// Fast path: no TTL adjustment and no DNSSEC filtering — return original
+	// slice to avoid per-query heap allocation (common on cache-miss serve path).
+	if value == 0 && !isElapsed && includeDNSSEC {
+		return rrs
 	}
 	result := make([]dns.RR, 0, len(rrs))
 	for _, rr := range rrs {

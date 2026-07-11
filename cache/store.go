@@ -176,7 +176,7 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 
 // lookupIPLatencies fetches latencies for a batch of IPs in a single query.
 // Caps at maxLatencyLookupIPs to bound SQL compilation overhead on unusually
-// large answer sets (100+ A/AAAA records).
+// large answer sets (64+ A/AAAA records).
 func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 	if len(ips) > maxLatencyLookupIPs {
 		ips = ips[:maxLatencyLookupIPs]
@@ -285,12 +285,12 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 
 	s.db.AddEntryCount(1)
-
-	// Run eviction inside writeMu to prevent TOCTOU: concurrent inserts
-	// between WriteUnlock and evictIfNeeded could push count past maxEntries.
-	s.evictIfNeeded()
-
 	s.db.WriteUnlock()
+
+	// Run eviction outside writeMu — evictIfNeeded re-syncs the entry count
+	// from the DB via SELECT COUNT(*) before deciding whether to evict, so
+	// any TOCTOU drift from concurrent inserts is corrected.
+	s.evictIfNeeded()
 }
 
 // ── Eviction ─────────────────────────────────────────────────────────────────
@@ -301,12 +301,12 @@ func (s *SQLiteCache) evictIfNeeded() {
 	}
 
 	// Re-sync the entry count from the database to correct any drift from
-	// INSERT OR REPLACE (which increments entryCount even on replacements).
-	// COUNT(*) on the PK is a fast B-tree leaf walk; only runs when the
-	// atomic counter suggests we may be near or over the limit.
+	// INSERT OR REPLACE (which may replace existing entries without changing
+	// the row count). COUNT(*) on the PK is a fast B-tree leaf walk; only
+	// runs when the atomic counter suggests we may be near or over the limit.
 	var count int64
 	if err := s.db.SQ.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
-		s.db.AddEntryCount(count)
+		s.db.SetEntryCount(count)
 	}
 
 	excess := count - int64(s.db.MaxEntries())

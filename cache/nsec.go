@@ -122,9 +122,7 @@ func (s *SQLiteCache) LookupNsecNeg(qname string, qtype uint16) *NsecResult {
 	}
 
 	for zone := qname; zone != "."; zone = parentName(zone) {
-		rows, err := s.db.SQ.Query(
-			"SELECT owner_name, next_name, types FROM nsec_chain WHERE zone_name = ? ORDER BY owner_name ASC",
-			toWireName(zone))
+		rows, err := s.db.StmtNsecLookup.Query(toWireName(zone))
 		if err != nil {
 			return nil
 		}
@@ -171,8 +169,6 @@ func (s *SQLiteCache) LookupNsecNeg(qname string, qtype uint16) *NsecResult {
 	return nil
 }
 
-// parentWire strips the leftmost (original-first) label from a TLD-first
-// wire-format name.
 // wireToName converts wire-format bytes back to presentation format.
 func wireToName(wire []byte) string {
 	s := ""
@@ -205,50 +201,6 @@ func parentName(name string) string {
 	return n[dot+1:] + "."
 }
 
-func parentWire(wire []byte) []byte {
-	if len(wire) <= 1 {
-		return wire
-	}
-	pos := 0
-	labels := 0
-	for pos < len(wire)-1 {
-		labels++
-		l := int(wire[pos])
-		if l == 0 {
-			break
-		}
-		pos += 1 + l
-	}
-	if labels <= 1 {
-		return []byte{0}
-	}
-	pos = 0
-	for i := 0; i < labels-1; i++ {
-		l := int(wire[pos])
-		pos += 1 + l
-	}
-	b := make([]byte, pos+1)
-	copy(b, wire[:pos])
-	b[pos] = 0
-	return b
-}
-
-func bytesLT(a, b []byte) bool {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	for i := range n {
-		if a[i] < b[i] {
-			return true
-		}
-		if a[i] > b[i] {
-			return false
-		}
-	}
-	return len(a) < len(b)
-}
-
 // dnameCanonicalCompare compares two domain names in DNS canonical order
 // (RFC 4034 §6.1): labels compared right-to-left, case-insensitively,
 // shorter names sort before longer names with the same suffix.
@@ -279,10 +231,6 @@ func dnameCanonicalCompare(a, b string) int {
 	return 1
 }
 
-func bytesLE(a, b []byte) bool {
-	return bytesLT(a, b) || slices.Equal(a, b)
-}
-
 func marshalTypeBitmap(types []uint16) []byte {
 	buf := make([]byte, len(types)*2)
 	for i, t := range types {
@@ -300,9 +248,4 @@ func unmarshalTypeBitmap(raw []byte) []uint16 {
 		types[i] = binary.BigEndian.Uint16(raw[i*2:])
 	}
 	return types
-}
-
-func init() {
-	_ = zdnsutil.NormalizeDomain
-	_ = strings.ToLower
 }
