@@ -24,7 +24,7 @@ func (db *DB) migrate() error {
 		pageSize, cacheSize, mmapSize, walAutoCheckpointPages, mmapSize,
 	)
 	if _, err := db.SQ.Exec(pragmaSQL); err != nil {
-		log.Warnf("CACHE: pragma failed (non-fatal): %v", err)
+		log.Warnf("DB: pragma failed (non-fatal): %v", err)
 	}
 
 	//nolint:gosec // G202: DDL migration with constant schema version
@@ -35,7 +35,7 @@ func (db *DB) migrate() error {
 		-- Pending migrations run in order via migration.go/runMigrations().
 
 		CREATE TABLE IF NOT EXISTS version (version TEXT NOT NULL);
-		INSERT OR IGNORE INTO version (rowid, version) VALUES (1, '` + minSupportedVersion + `');
+		INSERT OR IGNORE INTO version (rowid, version) VALUES (1, '` + Version + `');
 
 		-- ── DNS response cache ───────────────────────────────────────────────
 		-- Every row is a cacheable DNS response keyed by (qname, qtype, qclass,
@@ -165,7 +165,7 @@ func (db *DB) migrate() error {
 
 	if db.dbPath != "" {
 		if _, err := db.SQ.Exec("ANALYZE"); err != nil {
-			log.Warnf("CACHE: ANALYZE failed (non-fatal): %v", err)
+			log.Warnf("DB: ANALYZE failed (non-fatal): %v", err)
 		}
 	}
 	return nil

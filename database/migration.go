@@ -97,12 +97,12 @@ func (db *DB) runMigrations() error {
 	}
 
 	if applied < Version {
-		log.Infof("CACHE: running migrations %s → %s", applied, Version)
+		log.Infof("DB: running migrations %s → %s", applied, Version)
 		for _, m := range migrations {
 			if m.version <= applied {
 				continue
 			}
-			log.Infof("CACHE: migration %s: %s", m.version, m.name)
+			log.Infof("DB: migration %s: %s", m.version, m.name)
 			if err := m.fn(db); err != nil {
 				return fmt.Errorf("migration %s (%s): %w", m.version, m.name, err)
 			}

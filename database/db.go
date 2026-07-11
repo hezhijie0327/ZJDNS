@@ -134,7 +134,7 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 	if label == "" {
 		label = "memory"
 	}
-	log.Infof("CACHE: SQLite database opened (db=%s, max_entries=%d, mmap_size=%dMB, cache_size=%dMB)",
+	log.Infof("DB: SQLite database opened (db=%s, max_entries=%d, mmap_size=%dMB, cache_size=%dMB)",
 		label, maxEntries, opts.MMapSizeMB, opts.CacheSizeMB)
 	return db, nil
 }
@@ -157,10 +157,10 @@ func (db *DB) Close() error {
 		_, _ = db.SQ.Exec("PRAGMA optimize")
 	}
 	if err := db.SQ.Close(); err != nil {
-		log.Errorf("CACHE: sqlite close failed: %v", err)
+		log.Errorf("DB: sqlite close failed: %v", err)
 		return fmt.Errorf("sqlite close: %w", err)
 	}
-	log.Infof("CACHE: SQLite database shut down")
+	log.Infof("DB: SQLite database shut down")
 	return nil
 }
 
