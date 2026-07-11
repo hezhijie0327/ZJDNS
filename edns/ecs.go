@@ -10,6 +10,10 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// ECSOption is an alias for config.ECSOption, kept here for compatibility
+// with packages that already depend on the edns package.
+type ECSOption = config.ECSOption
+
 // ECS prefix length constants.
 const (
 	DefaultECSv4Len = 24
@@ -21,10 +25,6 @@ const (
 	ianaAFINET  = uint16(1)
 	ianaAFINET6 = uint16(2)
 )
-
-// ECSOption is an alias for config.ECSOption, kept here for compatibility
-// with packages that already depend on the edns package.
-type ECSOption = config.ECSOption
 
 // ParseFromDNS extracts the ECS option from a DNS message's OPT record.
 func (h *Handler) ParseFromDNS(msg *dns.Msg) *ECSOption {

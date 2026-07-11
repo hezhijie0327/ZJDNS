@@ -42,6 +42,8 @@ linters:
         - const
         - var
         - func
+      disable-dec-order-check: false
+      disable-dec-num-check: true
 
     gocritic:
       enable-all: true
@@ -54,6 +56,18 @@ linters:
           alias: eTLS
         - pkg: zjdns/internal/dnsutil
           alias: zdnsutil
+        - pkg: zjdns/internal/ipdetect
+          alias: zipdetect
+        - pkg: zjdns/internal/latency
+          alias: zlatency
+        - pkg: zjdns/internal/log
+          alias: zlog
+        - pkg: zjdns/internal/pending
+          alias: zpending
+        - pkg: zjdns/internal/pool
+          alias: zpool
+        - pkg: zjdns/internal/ttl
+          alias: zttl
 
     exhaustive:
       default-signifies-exhaustive: true

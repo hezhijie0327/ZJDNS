@@ -18,9 +18,6 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// nsPending deduplicates concurrent ProbeNSAddrs calls by sorted IP set.
-var nsPending = pending.NewGroup[string]()
-
 // CacheSetter is the interface for updating latency measurements in the
 // cache after probing.
 type CacheSetter interface {
@@ -44,6 +41,9 @@ type probeKey struct {
 	qname string
 	qtype uint16
 }
+
+// nsPending deduplicates concurrent ProbeNSAddrs calls by sorted IP set.
+var nsPending = pending.NewGroup[string]()
 
 // New creates a new Prober with the given cache setter, background group
 // executor, context, and probe configuration steps.

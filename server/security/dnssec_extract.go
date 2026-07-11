@@ -89,7 +89,7 @@ func findNSEC3(rrs []dns.RR) []*dns.NSEC3 {
 	return records
 }
 
-// DNS canonical ordering (RFC 4034 \xa76.1).
+// DNS canonical ordering (RFC 4034 §6.1).
 
 // canonicalCompare compares two domain names per DNS canonical ordering.
 // Returns -1 if a < b, 0 if equal, 1 if a > b.

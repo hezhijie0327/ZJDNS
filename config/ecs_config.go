@@ -10,9 +10,6 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// ECSModeAuto is the sentinel value for auto-detection of ECS subnets.
-const ECSModeAuto = "auto"
-
 // ECSOption represents an EDNS Client Subnet option with address and prefix
 // information.
 type ECSOption struct {
@@ -21,6 +18,18 @@ type ECSOption struct {
 	SourcePrefix uint8
 	ScopePrefix  uint8
 }
+
+// ECSConfig holds the default ECS subnet configuration for IPv4 and
+// IPv6.
+type ECSConfig struct {
+	IPv4          string
+	IPv6          string
+	PreferIPv4    bool
+	AutoDetectURL string `json:"auto_detect_url,omitempty"` // optional custom URL for auto-detection
+}
+
+// ECSModeAuto is the sentinel value for auto-detection of ECS subnets.
+const ECSModeAuto = "auto"
 
 // Normalize masks the Address to the network address based on SourcePrefix,
 // ensuring that different IPs within the same subnet produce identical cache keys.
@@ -36,15 +45,6 @@ func (e *ECSOption) Normalize() {
 	if mask != nil {
 		e.Address = e.Address.Mask(mask)
 	}
-}
-
-// ECSConfig holds the default ECS subnet configuration for IPv4 and
-// IPv6.
-type ECSConfig struct {
-	IPv4          string
-	IPv6          string
-	PreferIPv4    bool
-	AutoDetectURL string `json:"auto_detect_url,omitempty"` // optional custom URL for auto-detection
 }
 
 // IsEmpty returns true if neither IPv4 nor IPv6 is configured.

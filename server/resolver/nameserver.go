@@ -318,13 +318,6 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	return addresses
 }
 
-// reorderRecordsByAddrs reorders A or AAAA DNS records so that records
-// matching the sorted address list come first, preserving the latency-based
-// ordering. Records not in the sorted list retain their relative order at
-// the end.
-
-// rrIP extracts the IP string from an A or AAAA record.
-
 // isEqualFoldTrimDot compares two strings case-insensitively, ignoring a single
 // trailing dot on either string. Uses sub-slicing (no allocation) instead of
 // strings.TrimSuffix (which allocates when the suffix is present).

@@ -10,23 +10,25 @@ import (
 	"time"
 )
 
-// DefaultTraceURL is the default endpoint used for public IP detection.
-const DefaultTraceURL = "https://api.cloudflare.com/cdn-cgi/trace"
-
-// IP detection timeouts.
-const (
-	ipDetectDialTimeout = 2 * time.Second
-	ipDetectTimeout     = 3 * time.Second
-)
-
-var ipPattern = regexp.MustCompile(`ip=(\S+)`)
-
-// Detector detects public IP addresses via an HTTP trace endpoint.
 type Detector struct {
 	// TraceURL is the HTTP(S) endpoint used for IP detection.
 	// If empty, DefaultTraceURL is used.
 	TraceURL string
 }
+
+const (
+	ipDetectDialTimeout = 2 * time.Second
+	ipDetectTimeout     = 3 * time.Second
+)
+
+// DefaultTraceURL is the default endpoint used for public IP detection.
+const DefaultTraceURL = "https://api.cloudflare.com/cdn-cgi/trace"
+
+// IP detection timeouts.
+
+var ipPattern = regexp.MustCompile(`ip=(\S+)`)
+
+// Detector detects public IP addresses via an HTTP trace endpoint.
 
 // IPv4 returns the detected public IPv4 address.
 func (d *Detector) IPv4() net.IP { return d.detect(false) }

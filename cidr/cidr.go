@@ -15,14 +15,6 @@ import (
 	"zjdns/internal/log"
 )
 
-const (
-	cidrCommentPrefix  = "#"
-	cidrNegationPrefix = "!"
-)
-
-// errEmptyTag is returned when a CIDR tag is empty.
-var errEmptyTag = errors.New("CIDR tag cannot be empty")
-
 // rule holds a set of parsed CIDR networks for a single tag.
 type rule struct {
 	tag       string
@@ -58,6 +50,14 @@ type bitNode struct {
 	leaf bool
 	ch   [2]*bitNode
 }
+
+const (
+	cidrCommentPrefix  = "#"
+	cidrNegationPrefix = "!"
+)
+
+// errEmptyTag is returned when a CIDR tag is empty.
+var errEmptyTag = errors.New("CIDR tag cannot be empty")
 
 func (t *bitTrie) insert(key []uint32, bits int) {
 	if t.root == nil {

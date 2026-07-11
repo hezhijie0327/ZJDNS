@@ -16,6 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    with a descriptive message. Present changes for review before committing.
 10. Run `golangci-lint run && golangci-lint fmt` before committing. Zero warnings required.
     - No global linter excludes — all suppressions are inline `//nolint:NAME // reason`
+    - Declaration order enforced by `decorder`: `type → const → var → func` in every file
     - Every nolint comment must include the linter name and a concrete reason
     - Formatter: `gofumpt` (stricter gofmt) — imports sorted alphabetically, no blank-line groups
 11. Don't waste time wrestling with indentation or formatting issues when editing
@@ -79,6 +80,10 @@ docker build -t zjdns .
 # Install pre-commit hook (auto fmt + lint on commit)
 sh scripts/install-hook.sh                 # Linux / macOS
 pwsh scripts/install-hook.ps1              # Windows PowerShell
+
+# Bump version (see §Version Bumping)
+sh scripts/bump-version.sh patch "short slug"             # + migration SQL
+sh scripts/bump-version.sh patch "short slug" --no-migration  # code-only bump
 ```
 
 Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible). Zero `golangci-lint` warnings required.
@@ -120,7 +125,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 - **Package-level functions over empty structs**: `type Foo struct{}` with methods → convert to functions.
 
 **Type naming:**
-- **Avoid stutter with package name**: `cache.CacheEntry` → `cache.Entry`, `cidr.CIDRMatchInfo` → `cidr.MatchInfo`.  
+- **Avoid stutter with package name**: `cache.CacheEntry` → `cache.Entry`, `cidr.CIDRMatchInfo` → `cidr.MatchInfo`.
   **Idiomatic exceptions** (allowed): `server.Server`, `http.Server`, `handler.Handler`, `resolver.Resolver` — when the package is named after the primary type it exports.
 - **Unexported types also avoid stutter**: `cidr.cidrRule` → `cidr.rule`.
 - **Conversion helpers use `as` prefix**: `asIPv4Net` (converts `*net.IPNet` → `*ipv4Net`). Not `toXxx`.
@@ -139,7 +144,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 - No duplicate constants in the same package.
 - Leaf packages that can't import `config` may use local `const` blocks with same naming convention.
 - **Code is canonical**: docs and comments must match the actual constant values. Verify, don't assume.
-- **RFC 9077/9156 defaults**: `DefaultMaxNegativeTTL = 10800`, `DefaultQnameMinimiseCount = 10`, `DefaultMinimiseOneLabel = 4`.
+- **RFC 2308/9156 defaults**: `DefaultMaxNegativeTTL = 10800`, `DefaultQnameMinimiseCount = 10`, `DefaultMinimiseOneLabel = 4`.
 
 ### Constructors
 
@@ -220,12 +225,12 @@ zjdns/
 │   └── cli/                                  ← Flag parsing, config generation, DB analysis
 ├── config/                                    ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                                      ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── database/                                  ← Unified SQLite DB: connection, schema, migration, zstd
-│   ├── db.go                                  ←   DB struct, Open, Close, Exec/Query/QueryRow/Begin
+├── database/                                  ← Unified SQLite DB: connection, schema, migration
+│   ├── db.go                                  ←   DB struct, Open, Close, re-exports (zstd, helpers)
 │   ├── schema.go                              ←   7 tables (cache 6 + zone 1) in one migration
 │   ├── stmts.go                               ←   9 prepared statements (cache 6 + zone 3)
-│   ├── wire.go                                ←   shared zstd Compress/Decompress
-│   └── helpers.go                             ←   BoolToInt, JoinPlaceholders
+│   ├── migration.go                           ←   Incremental schema migrations
+│   └── migrations/                            ←   Archived migration SQL files
 ├── cache/                                     ← Store interface, DNS response cache (wraps *database.DB)
 │   ├── cache.go                               ←   Store interface, Entry, RequestRecord, ProcessRecords
 │   ├── store.go                               ←   SQLiteCache struct, New, Get, Set, eviction, latency sort
@@ -233,11 +238,14 @@ zjdns/
 │   └── helpers.go                             ←   insertPtrMap, TTL helpers, ecsParams
 ├── cidr/                                      ← IP filtering with tag matching
 ├── zone/                                      ← DNS zone rules (wraps *database.DB, same DB as cache)
+│   ├── zone.go                                ←   Evaluator, LoadRules, Evaluate, match tags
+│   ├── zone_parse.go                          ←   Zone file import + record parsing
+│   └── zone_wire.go                           ←   Wire encoding: packRRs, unpackRRs, buildRecord
 ├── internal/
 │   ├── log/                                   ← Structured logging + IsDebug guard (zero internal deps)
 │   ├── pool/                                  ← sync.Pool allocators + QUIC error codes
 │   ├── ttl/                                   ← Stateless TTL functions (cache + zone)
-│   ├── dnsutil/                               ← DNS utilities: validation, PTR, panic recovery
+│   ├── dnsutil/                               ← DNS utilities: validation, PTR, panic recovery, zstd wire compression
 │   ├── ipdetect/                              ← Public IP auto-detection
 │   ├── latency/                               ← Unified probe engine (generic sorter)
 │   └── pending/                               ← Generic singleflight dedup group
@@ -365,7 +373,7 @@ Top layer (wiring):
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
 | `DB` | `database` | Unified SQLite DB: pinned `*sql.Conn`, schema migration, 9 prepared stmts | Wraps `*sql.Conn` for shared in-memory access |
 | `Options` | `database` | SQLite PRAGMA config: `MMapSizeMB`, `CacheSizeMB` | |
-| `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/GetLatencyLastProbe/Close | Wraps `*database.DB` |
+| `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `Handler` | `server/handler` | DNS query processing pipeline; owns `BackgroundConfig`, `LatencyProber` |
@@ -396,7 +404,7 @@ Top layer (wiring):
 
 ## Logging
 
-All logs use `zjdns/internal/log`. Default level: `info`.
+All logs use `zjdns/internal/log` (package-level `Logger` instance `Default`). Default level: `info`.
 
 **Component filtering**: `log_level` supports `level:comp1,comp2` syntax (e.g. `"debug:UPSTREAM,RECURSION"`). Messages without a `PREFIX: ` pattern always pass through.
 
@@ -438,6 +446,14 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
 - **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
 - **eTLS alias**: Always use `eTLS` (not `cryptotls`) for `gitlab.com/go-extension/tls`. Used in `server/tls`, `server/client`, `config`.
+- **Internal package aliases**: All `zjdns/internal/*` imports use standard `z`-prefixed aliases enforced by `importas` linter:
+  - `zjdns/internal/dnsutil` → `zdnsutil`
+  - `zjdns/internal/ipdetect` → `zipdetect`
+  - `zjdns/internal/latency` → `zlatency`
+  - `zjdns/internal/log` → `zlog`
+  - `zjdns/internal/pending` → `zpending`
+  - `zjdns/internal/pool` → `zpool`
+  - `zjdns/internal/ttl` → `zttl`
 - **Error wrapping**: Always use `%w` in `fmt.Errorf` when wrapping errors that callers may check with `errors.Is`/`errors.As`. Use `%v` only for informational logging.
 - **Protocol logging**: The `protocol` column in request_log stores the transport identifier as a string (`udp`/`tcp`/`dot`/`doq`/`doh`/`doh3`/`dnscrypt`/`dnscrypt-tcp`), enabling simple GROUP BY queries for protocol-level analytics.
 - **Handler Question alias**: `handler.Question` is a type alias (`type Question = resolver.Question`), eliminating redundant struct conversions between handler and resolver layers.
@@ -473,6 +489,8 @@ CREATE TABLE entries (
     UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 );
 CREATE INDEX idx_entries_expires ON entries(expires_at);
+CREATE INDEX idx_entries_expires_ts ON entries(expires_at, timestamp);
+CREATE INDEX idx_entries_timestamp ON entries(timestamp);
 
 -- Request journal: one row per miss/stale/zone/error query. qname/qtype
 -- are retrieved by JOINing entries via entry_id. Hits are aggregated into
@@ -528,6 +546,7 @@ CREATE TABLE ip_latency (
     last_probe_time INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (rdata_ip)
 ) WITHOUT ROWID;
+CREATE INDEX idx_ip_latency_probe ON ip_latency(last_probe_time);
 ```
 
 **Zone entries table (same DB file, shared zstd compression):**
@@ -543,9 +562,9 @@ CREATE TABLE zone_entries (
     additional BLOB,               -- zstd-compressed additional RRs
     match_tags TEXT NOT NULL DEFAULT '',
     is_wildcard INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (qname, qtype, qclass)
+    PRIMARY KEY (qname, qtype, qclass, match_tags)
 );
-CREATE INDEX idx_zone_qname ON zone_entries(qname);
+
 ```
 
 **Key patterns**:
@@ -676,5 +695,3 @@ If `"local error: tls: bad record MAC"` appears, disable kernel RX offload:
 ```
 
 Both `kernel_tx` and `kernel_rx` default to `false` (KTLS is opt-in).
-
-

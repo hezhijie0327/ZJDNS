@@ -8,6 +8,14 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+type testCloser struct{ err error }
+
+// ── mock types ──────────────────────────────────────────────────────────────
+
+type mockResponseWriter struct {
+	remote net.Addr
+}
+
 func TestNormalizeDomain(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"example.com.", "example.com"},
@@ -190,8 +198,6 @@ func TestCloseWithLog_Nil(t *testing.T) {
 	CloseWithLog(nil, "test-closer", "TEST")
 }
 
-type testCloser struct{ err error }
-
 func (c *testCloser) Close() error { return c.err }
 
 func TestCloseWithLog_Success(t *testing.T) {
@@ -247,12 +253,6 @@ func BenchmarkNormalizeDomain(b *testing.B) {
 	for b.Loop() {
 		NormalizeDomain("www.Example.COM.")
 	}
-}
-
-// ── mock types ──────────────────────────────────────────────────────────────
-
-type mockResponseWriter struct {
-	remote net.Addr
 }
 
 func (m *mockResponseWriter) LocalAddr() net.Addr       { return nil }

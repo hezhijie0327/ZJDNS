@@ -120,7 +120,7 @@ func (r *encryptedResponse) decrypt(
 	// emits \x00\x00 as a zero-length control prefix; initial responses
 	// carry a full PQDR control block.  We only strip when controlLen is
 	// zero or the magic validates — otherwise the packet lacks the prefix
-	// (old-format server or legacy response) and must be used as-is.
+	// the packet has no control prefix and the DNS payload starts at offset 0.
 	if r.esVersion.IsPQ() && len(packet) >= 2 {
 		controlLen := int(binary.BigEndian.Uint16(packet[0:2]))
 		if 2+controlLen <= len(packet) {

@@ -14,6 +14,38 @@ import (
 	"zjdns/config"
 )
 
+// SOCKS5Dialer provides TCP and UDP connections through a SOCKS5 proxy.
+// It implements both RFC 1928 (SOCKS5) and RFC 1929 (Username/Password auth).
+//
+// A single SOCKS5Dialer reuses its UDP relay — the TCP control connection
+// stays alive as long as the relay is needed. If the control connection dies,
+// the next ListenPacket call re-establishes it transparently.
+type SOCKS5Dialer struct {
+	proxyAddr string // host:port of the SOCKS5 proxy
+	username  string // empty means no auth
+	password  string
+	timeout   time.Duration // connection + negotiation timeout
+
+	mu         sync.RWMutex
+	udpConn    *net.UDPConn  // connected UDP socket to relay
+	relayAddr  *net.UDPAddr  // proxy's UDP relay address
+	ctrlConn   net.Conn      // TCP control connection for UDP ASSOCIATE
+	ctrlClosed chan struct{} // closed when ctrlConn dies
+}
+
+// ---------------------------------------------------------------------------
+// UDP datagram (RFC 1928 §7)
+// ---------------------------------------------------------------------------
+
+// socks5Datagram wraps a SOCKS5 UDP datagram header and payload.
+// Wire format: RSV(2) | FRAG(1) | ATYP(1) | DST.ADDR(var) | DST.PORT(2) | DATA
+type socks5Datagram struct {
+	atyp    byte
+	dstAddr []byte // raw address (IP bytes or domain with length prefix)
+	dstPort uint16
+	data    []byte
+}
+
 // SOCKS5 pool buffer sizes.
 const (
 	socks5WriteBufSize = 1500 // MTU-sized buffer
@@ -53,6 +85,33 @@ const (
 	socks5RepAddressNotSupported = 0x08
 )
 
+// Sentinel errors for SOCKS5 operations.
+var (
+	ErrSOCKS5Version     = errors.New("socks5: protocol version mismatch")
+	ErrSOCKS5BadReply    = errors.New("socks5: malformed reply from proxy")
+	ErrSOCKS5Auth        = errors.New("socks5: authentication failed")
+	ErrSOCKS5NoAuth      = errors.New("socks5: proxy requires unsupported auth method")
+	ErrSOCKS5CmdRejected = errors.New("socks5: command rejected by proxy")
+)
+
+// ---------------------------------------------------------------------------
+// Pools
+// ---------------------------------------------------------------------------
+
+// socks5WritePool reuses buffers for SOCKS5 UDP write path.
+// MTU-sized (1500) buffer covers DNS queries and typical QUIC datagrams;
+// oversized writes fall back to heap allocation.
+var socks5WritePool = sync.Pool{
+	New: func() any { b := make([]byte, socks5WriteBufSize); return &b },
+}
+
+// socks5ReadPool reuses buffers for SOCKS5 UDP read path (exchangeViaProxyUDP).
+// 8 KB covers the common DNS response size (~512–1232); larger responses
+// get a fresh buffer from ReadFrom's internal cache.
+var socks5ReadPool = sync.Pool{
+	New: func() any { b := make([]byte, socks5ReadBufSize); return &b },
+}
+
 // repString returns a human-readable name for a SOCKS5 reply code.
 func repString(rep byte) string {
 	switch rep {
@@ -77,34 +136,6 @@ func repString(rep byte) string {
 	default:
 		return fmt.Sprintf("unknown(%d)", rep)
 	}
-}
-
-// Sentinel errors for SOCKS5 operations.
-var (
-	ErrSOCKS5Version     = errors.New("socks5: protocol version mismatch")
-	ErrSOCKS5BadReply    = errors.New("socks5: malformed reply from proxy")
-	ErrSOCKS5Auth        = errors.New("socks5: authentication failed")
-	ErrSOCKS5NoAuth      = errors.New("socks5: proxy requires unsupported auth method")
-	ErrSOCKS5CmdRejected = errors.New("socks5: command rejected by proxy")
-)
-
-// SOCKS5Dialer provides TCP and UDP connections through a SOCKS5 proxy.
-// It implements both RFC 1928 (SOCKS5) and RFC 1929 (Username/Password auth).
-//
-// A single SOCKS5Dialer reuses its UDP relay — the TCP control connection
-// stays alive as long as the relay is needed. If the control connection dies,
-// the next ListenPacket call re-establishes it transparently.
-type SOCKS5Dialer struct {
-	proxyAddr string // host:port of the SOCKS5 proxy
-	username  string // empty means no auth
-	password  string
-	timeout   time.Duration // connection + negotiation timeout
-
-	mu         sync.RWMutex
-	udpConn    *net.UDPConn  // connected UDP socket to relay
-	relayAddr  *net.UDPAddr  // proxy's UDP relay address
-	ctrlConn   net.Conn      // TCP control connection for UDP ASSOCIATE
-	ctrlClosed chan struct{} // closed when ctrlConn dies
 }
 
 // NewSOCKS5Dialer parses a socks5://[user:pass@]host:port URL and returns
@@ -227,35 +258,8 @@ func (d *SOCKS5Dialer) authUserPass(conn net.Conn) error {
 }
 
 // ---------------------------------------------------------------------------
-// Pools
-// ---------------------------------------------------------------------------
-
-// socks5WritePool reuses buffers for SOCKS5 UDP write path.
-// MTU-sized (1500) buffer covers DNS queries and typical QUIC datagrams;
-// oversized writes fall back to heap allocation.
-var socks5WritePool = sync.Pool{
-	New: func() any { b := make([]byte, socks5WriteBufSize); return &b },
-}
-
-// socks5ReadPool reuses buffers for SOCKS5 UDP read path (exchangeViaProxyUDP).
-// 8 KB covers the common DNS response size (~512–1232); larger responses
-// get a fresh buffer from ReadFrom's internal cache.
-var socks5ReadPool = sync.Pool{
-	New: func() any { b := make([]byte, socks5ReadBufSize); return &b },
-}
-
-// ---------------------------------------------------------------------------
 // UDP datagram (RFC 1928 §7)
 // ---------------------------------------------------------------------------
-
-// socks5Datagram wraps a SOCKS5 UDP datagram header and payload.
-// Wire format: RSV(2) | FRAG(1) | ATYP(1) | DST.ADDR(var) | DST.PORT(2) | DATA
-type socks5Datagram struct {
-	atyp    byte
-	dstAddr []byte // raw address (IP bytes or domain with length prefix)
-	dstPort uint16
-	data    []byte
-}
 
 // parseDatagram parses a SOCKS5 UDP datagram from raw bytes.  Returns the
 // source address and any validation error (RSV, FRAG, truncation).

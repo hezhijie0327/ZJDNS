@@ -15,27 +15,6 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// addrToNetip converts a net.IP to netip.Addr for v2 dns.SUBNET.Address.
-func addrToNetip(ip net.IP) netip.Addr {
-	if ip == nil {
-		return netip.Addr{}
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		addr, _ := netip.AddrFromSlice(ip4)
-		return addr
-	}
-	addr, _ := netip.AddrFromSlice(ip)
-	return addr
-}
-
-// netipToIP converts a netip.Addr back to net.IP for ECSOption compatibility.
-func netipToIP(addr netip.Addr) net.IP {
-	if !addr.IsValid() {
-		return nil
-	}
-	return net.IP(addr.AsSlice())
-}
-
 // Handler manages EDNS(0) options for outgoing DNS queries and response
 // parsing.
 type Handler struct {
@@ -140,4 +119,25 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 
 	log.Debugf("EDNS: built OPT secure=%t ecs=%t cookie=%t ede=%t keepalive=%d padding=%d bytes block=%d req=%t wantPad=%t",
 		isSecureConnection, ecs != nil, cookieStr != "", ede != nil, tcpKeepaliveTimeout, paddingBytes, paddingBlockSize, isRequest, clientWantsPadding)
+}
+
+// addrToNetip converts a net.IP to netip.Addr for v2 dns.SUBNET.Address.
+func addrToNetip(ip net.IP) netip.Addr {
+	if ip == nil {
+		return netip.Addr{}
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		addr, _ := netip.AddrFromSlice(ip4)
+		return addr
+	}
+	addr, _ := netip.AddrFromSlice(ip)
+	return addr
+}
+
+// netipToIP converts a netip.Addr back to net.IP for ECSOption compatibility.
+func netipToIP(addr netip.Addr) net.IP {
+	if !addr.IsValid() {
+		return nil
+	}
+	return net.IP(addr.AsSlice())
 }

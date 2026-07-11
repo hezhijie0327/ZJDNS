@@ -6,6 +6,13 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// EDEOption represents an Extended DNS Error option with an info code and
+// optional text.
+type EDEOption struct {
+	InfoCode  uint16
+	ExtraText string
+}
+
 // EDE info codes as defined in RFC 8914.
 const (
 	EDECodeOtherError                 uint16 = 0
@@ -34,13 +41,6 @@ const (
 	EDECodeNetworkError               uint16 = 23
 	EDECodeInvalidData                uint16 = 24
 )
-
-// EDEOption represents an Extended DNS Error option with an info code and
-// optional text.
-type EDEOption struct {
-	InfoCode  uint16
-	ExtraText string
-}
 
 // NewEDEOption creates an EDE option with the given info code and extra text.
 func NewEDEOption(infoCode uint16, extraText string) *EDEOption {

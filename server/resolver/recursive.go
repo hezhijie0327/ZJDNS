@@ -32,6 +32,15 @@ type Recursive struct {
 	cache             cache.Store
 }
 
+// CNAME handles CNAME record chasing during DNS resolution, following the
+// redirection chain up to config.DefaultMaxCNAMEChain hops. Defined in the same
+// file as Recursive because CNAME resolution depends directly on recursive
+// resolution (c.resolve → r.resolve). Splitting into a separate file would
+// add unnecessary indirection without reducing coupling.
+type CNAME struct {
+	resolver *Resolver
+}
+
 // rootHints maps root server names to their addresses. Used as bootstrap
 // on cold start; once cached, getRootServers uses the normal NS lookup path
 // (lookupNSAddrsFromCache -> sortAnswerByLatency via ip_latency).
@@ -348,15 +357,6 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 		return true
 	}
 	return false
-}
-
-// CNAME handles CNAME record chasing during DNS resolution, following the
-// redirection chain up to config.DefaultMaxCNAMEChain hops. Defined in the same
-// file as Recursive because CNAME resolution depends directly on recursive
-// resolution (c.resolve → r.resolve). Splitting into a separate file would
-// add unnecessary indirection without reducing coupling.
-type CNAME struct {
-	resolver *Resolver
 }
 
 func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOption) QueryResult {

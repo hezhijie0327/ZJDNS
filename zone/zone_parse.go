@@ -16,6 +16,12 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+type recordGroup struct {
+	qtype   uint16
+	qclass  uint16
+	records []config.ZoneRecord
+}
+
 // ---------------------------------------------------------------------------
 // Zone file import — domain headers + record lines
 // ---------------------------------------------------------------------------
@@ -231,10 +237,4 @@ func groupRecordsByTypeClass(records []config.ZoneRecord) []recordGroup {
 		}
 	}
 	return groups
-}
-
-type recordGroup struct {
-	qtype   uint16
-	qclass  uint16
-	records []config.ZoneRecord
 }

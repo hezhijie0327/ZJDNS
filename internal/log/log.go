@@ -24,6 +24,27 @@ import (
 	"time"
 )
 
+// Level represents a logging severity level.
+type Level int
+
+// Logger manages leveled logging with configurable output and optional
+// component-based filtering.
+type Logger struct {
+	level           atomic.Int32
+	writer          io.Writer
+	colorMap        map[Level]string
+	componentFilter map[string]bool // nil = all enabled; non-nil = only listed components
+	mu              sync.RWMutex    // protects componentFilter
+}
+
+// TimeCache caches the current time with periodic one-second updates.
+type TimeCache struct {
+	unixNano  atomic.Int64
+	ticker    *time.Ticker
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
 // Error level indicates a component failure or data loss risk.
 // Warn level indicates a rare boundary condition or background task failure.
 // Info level indicates a startup/shutdown lifecycle event or configuration
@@ -57,27 +78,6 @@ var Default = NewLogger()
 
 // DefaultTimeCache is the package-level default TimeCache.
 var DefaultTimeCache = NewTimeCache()
-
-// Level represents a logging severity level.
-type Level int
-
-// Logger manages leveled logging with configurable output and optional
-// component-based filtering.
-type Logger struct {
-	level           atomic.Int32
-	writer          io.Writer
-	colorMap        map[Level]string
-	componentFilter map[string]bool // nil = all enabled; non-nil = only listed components
-	mu              sync.RWMutex    // protects componentFilter
-}
-
-// TimeCache caches the current time with periodic one-second updates.
-type TimeCache struct {
-	unixNano  atomic.Int64
-	ticker    *time.Ticker
-	done      chan struct{}
-	closeOnce sync.Once
-}
 
 // NewLogger creates a new Logger with default settings.
 func NewLogger() *Logger {

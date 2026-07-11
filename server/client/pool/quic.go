@@ -11,7 +11,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 
-	bufpool "zjdns/internal/pool"
+	zpool "zjdns/internal/pool"
 )
 
 // QUICConn wraps a QUIC connection with lifecycle tracking.
@@ -33,7 +33,7 @@ type QUICPool struct {
 func (c *QUICConn) close() {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
-		_ = c.Conn.CloseWithError(bufpool.QUICCodeNoError, "pool connection closed")
+		_ = c.Conn.CloseWithError(zpool.QUICCodeNoError, "pool connection closed")
 	})
 }
 

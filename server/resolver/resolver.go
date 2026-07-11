@@ -19,50 +19,17 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// Question is a DNS question compatible with both v1 and v2 dns packages.
+// Question is a DNS question decoupled from the underlying DNS library's representation.
 type Question struct {
 	Name   string
 	Qtype  uint16
 	Qclass uint16
 }
 
-// ErrCIDRFilterRefused is returned when all A/AAAA records are filtered by
-// CIDR rules.
-var ErrCIDRFilterRefused = errors.New("cidr_filter_refused")
-
-// concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
-// limits. concurrencyDiv2/3 are divisor constants used in the tier formulas:
-//
-//	Tier 1 (≤4 servers): 2 × serverCount
-//	Tier 2 (5–12 servers): (2×serverCount + 2) / 3
-//	Tier 3 (13–20 servers): (serverCount + 1) / 2
-//	Tier 4 (>20 servers): serverCount / 3
-const (
-	concurrencyTier1 = 4
-	concurrencyTier2 = 12
-	concurrencyTier3 = 20
-	concurrencyDiv2  = 2
-	concurrencyDiv3  = 3
-)
-
 // DNSSECError wraps a DNSSEC validation failure with the RFC 8914 EDE code.
 type DNSSECError struct {
 	EDECode uint16
 	Message string
-}
-
-func (e *DNSSECError) Error() string {
-	return fmt.Sprintf("DNSSEC validation failed [EDE %d]: %s", e.EDECode, e.Message)
-}
-
-// dnssecEDEError builds a DNSSECError from an EDE code stored as uint64
-// (matching atomic.Uint64.Load()), shared between upstream query result
-// handlers to keep EDE construction in one place.
-func dnssecEDEError(edeCode uint64) *DNSSECError {
-	return &DNSSECError{
-		EDECode: uint16(edeCode),                                                                                              //nolint:gosec // G115: EDE code — protocol-bounded uint16
-		Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), edns.EDECodeString(uint16(edeCode))), //nolint:gosec // G115: EDE code — protocol-bounded uint16
-	}
 }
 
 // QueryResult bundles the return values of a DNS resolution query, replacing
@@ -119,6 +86,39 @@ type Resolver struct {
 type Validator struct {
 	Crypto *security.CryptoValidator // Full cryptographic DNSSEC validation
 	Hijack *security.Detector        // DNS hijack detection
+}
+
+// concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
+// limits. concurrencyDiv2/3 are divisor constants used in the tier formulas:
+//
+//	Tier 1 (≤4 servers): 2 × serverCount
+//	Tier 2 (5–12 servers): (2×serverCount + 2) / 3
+//	Tier 3 (13–20 servers): (serverCount + 1) / 2
+//	Tier 4 (>20 servers): serverCount / 3
+const (
+	concurrencyTier1 = 4
+	concurrencyTier2 = 12
+	concurrencyTier3 = 20
+	concurrencyDiv2  = 2
+	concurrencyDiv3  = 3
+)
+
+// ErrCIDRFilterRefused is returned when all A/AAAA records are filtered by
+// CIDR rules.
+var ErrCIDRFilterRefused = errors.New("cidr_filter_refused")
+
+func (e *DNSSECError) Error() string {
+	return fmt.Sprintf("DNSSEC validation failed [EDE %d]: %s", e.EDECode, e.Message)
+}
+
+// dnssecEDEError builds a DNSSECError from an EDE code stored as uint64
+// (matching atomic.Uint64.Load()), shared between upstream query result
+// handlers to keep EDE construction in one place.
+func dnssecEDEError(edeCode uint64) *DNSSECError {
+	return &DNSSECError{
+		EDECode: uint16(edeCode),                                                                                              //nolint:gosec // G115: EDE code — protocol-bounded uint16
+		Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), edns.EDECodeString(uint16(edeCode))), //nolint:gosec // G115: EDE code — protocol-bounded uint16
+	}
 }
 
 func (u *upstreamSet) list() []*config.UpstreamServer {

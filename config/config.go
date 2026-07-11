@@ -43,17 +43,6 @@ type DNSCryptSettings struct {
 	CertTTL      string `json:"cert_ttl,omitempty"` // "30d", "720h", "86400s", "86400"; empty defaults to 365 days
 }
 
-// IsEnabled reports whether DNSCrypt is configured.  An empty DNSCryptSettings
-// block means DNSCrypt is disabled.
-func (d *DNSCryptSettings) IsEnabled() bool {
-	return d.ProviderName != "" || d.PublicKey != "" || d.PrivateKey != ""
-}
-
-// DNSCryptConfigGenerator is a hook for generating DNSCrypt server + client
-// JSON configuration.  Set by server/dnscrypt's init() to avoid a layering
-// violation (internal/cli must not import server/dnscrypt).
-var DNSCryptConfigGenerator func(provider, addr, esVersion, certTTL string) (string, error)
-
 // TLSSettings configures TLS listener ports, certificates, and HTTPS settings.
 type TLSSettings struct {
 	Port       string        `json:"port"`
@@ -171,6 +160,17 @@ type LatencyProbeStep struct {
 	Protocol string `json:"protocol"`
 	Port     int    `json:"port,omitempty"`
 	Timeout  int    `json:"timeout,omitempty"`
+}
+
+// DNSCryptConfigGenerator is a hook for generating DNSCrypt server + client
+// JSON configuration.  Set by server/dnscrypt's init() to avoid a layering
+// violation (internal/cli must not import server/dnscrypt).
+var DNSCryptConfigGenerator func(provider, addr, esVersion, certTTL string) (string, error)
+
+// IsEnabled reports whether DNSCrypt is configured.  An empty DNSCryptSettings
+// block means DNSCrypt is disabled.
+func (d *DNSCryptSettings) IsEnabled() bool {
+	return d.ProviderName != "" || d.PublicKey != "" || d.PrivateKey != ""
 }
 
 // IsRecursive reports whether the upstream server is the built-in recursive

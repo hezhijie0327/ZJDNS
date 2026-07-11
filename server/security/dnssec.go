@@ -1,3 +1,5 @@
+// Package security provides DNSSEC validation and DNS hijacking detection for
+// recursive resolution responses.
 package security
 
 import (

@@ -11,6 +11,12 @@ import (
 	"fmt"
 )
 
+// Nonce is a convenient alias for nonce values.
+type Nonce = [NonceSize]byte
+
+// CryptoConstruction represents the encryption algorithm used for DNSCrypt.
+type CryptoConstruction uint16
+
 const (
 	// minUDPQuestionSize is the minimum padded query size for UDP.  It must be
 	// a multiple of 64 bytes.  Some servers (e.g. Quad9) reject smaller padded
@@ -59,6 +65,13 @@ const (
 	// PQ query header sizes.
 	PQResumeMagicLen = 8
 	PQTicketLenSize  = 2
+
+	// XChacha20Poly1305 uses X25519 key exchange with XChacha20-Poly1305 AEAD.
+	XChacha20Poly1305 CryptoConstruction = 0x0002
+
+	// XWingPQ uses X-Wing PQ/T hybrid KEM (ML-KEM-768 + X25519) with
+	// XChacha20-Poly1305 AEAD.
+	XWingPQ CryptoConstruction = 0x0003
 )
 
 // CertMagic is the byte sequence that must appear at the beginning of every
@@ -80,52 +93,8 @@ var PQControlMagic = [4]byte{'P', 'Q', 'D', 'R'}
 // PQESVersion is the wire-format es-version for X-Wing PQ.
 var PQESVersion = [2]byte{0x00, 0x03}
 
-// Nonce is a convenient alias for nonce values.
-type Nonce = [NonceSize]byte
-
-// CryptoConstruction represents the encryption algorithm used for DNSCrypt.
-type CryptoConstruction uint16
-
-const (
-	// XChacha20Poly1305 uses X25519 key exchange with XChacha20-Poly1305 AEAD.
-	XChacha20Poly1305 CryptoConstruction = 0x0002
-
-	// XWingPQ uses X-Wing PQ/T hybrid KEM (ML-KEM-768 + X25519) with
-	// XChacha20-Poly1305 AEAD.
-	XWingPQ CryptoConstruction = 0x0003
-)
-
-// ParseESVersion parses an ESVersion string into a CryptoConstruction value.
-func ParseESVersion(s string) (CryptoConstruction, error) {
-	switch s {
-	case "xwingpq", "":
-		return XWingPQ, nil
-	case "xchacha20poly1305":
-		return XChacha20Poly1305, nil
-	default:
-		return 0, fmt.Errorf("unsupported es_version: %q (supported: xwingpq, xchacha20poly1305)", s)
-	}
-}
-
-// IsPQ reports whether the CryptoConstruction uses post-quantum key exchange.
-func (c CryptoConstruction) IsPQ() bool {
-	return c == XWingPQ
-}
-
-// type check
+// compile-time interface check.
 var _ fmt.Stringer = CryptoConstruction(0)
-
-// String implements the fmt.Stringer interface for CryptoConstruction.
-func (c CryptoConstruction) String() (s string) {
-	switch c {
-	case XChacha20Poly1305:
-		return "XChacha20Poly1305"
-	case XWingPQ:
-		return "XWingPQ"
-	default:
-		return "Unknown"
-	}
-}
 
 // Sentinel errors for DNSCrypt protocol operations.
 var (
@@ -149,3 +118,32 @@ var (
 	ErrPQInvalidTicket      = errors.New("dnscrypt: invalid PQ resumption ticket")
 	ErrPQTicketExpired      = errors.New("dnscrypt: PQ resumption ticket expired")
 )
+
+// ParseESVersion parses an ESVersion string into a CryptoConstruction value.
+func ParseESVersion(s string) (CryptoConstruction, error) {
+	switch s {
+	case "xwingpq", "":
+		return XWingPQ, nil
+	case "xchacha20poly1305":
+		return XChacha20Poly1305, nil
+	default:
+		return 0, fmt.Errorf("unsupported es_version: %q (supported: xwingpq, xchacha20poly1305)", s)
+	}
+}
+
+// IsPQ reports whether the CryptoConstruction uses post-quantum key exchange.
+func (c CryptoConstruction) IsPQ() bool {
+	return c == XWingPQ
+}
+
+// String implements the fmt.Stringer interface for CryptoConstruction.
+func (c CryptoConstruction) String() (s string) {
+	switch c {
+	case XChacha20Poly1305:
+		return "XChacha20Poly1305"
+	case XWingPQ:
+		return "XWingPQ"
+	default:
+		return "Unknown"
+	}
+}

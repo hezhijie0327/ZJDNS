@@ -30,7 +30,7 @@ const (
 )
 
 // New creates a cache backed by the given database. The caller is responsible
-// for opening the database via database.OpenCache() before calling New.
+// for opening the database via database.Open() before calling New.
 func New(db *database.DB) *SQLiteCache {
 	return &SQLiteCache{db: db}
 }

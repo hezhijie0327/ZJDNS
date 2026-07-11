@@ -9,85 +9,6 @@ import (
 	"time"
 )
 
-// Certificate wire format offsets.  The certificate has a fixed-size header
-// followed by a signed portion whose layout differs between classical and PQ
-// certificates.
-//
-//	Header (shared):  certMagic(4) + esVersion(2) + minor(2) + sig(64) = 72 bytes
-//	Signed (classical): resolverPk(32) + clientMagic(8) + serial(4) +
-//	                     tsStart(4) + tsEnd(4) = 52 bytes → 124 total
-//	Signed (PQ):       pqPublicKey(1216) + clientMagic(8) + serial(4) +
-//	                     tsStart(4) + tsEnd(4) + ext(12) = 1248 bytes → 1320 total
-const (
-	certMagicOff     = 0
-	certMagicLen     = 4
-	certESVersionOff = 4
-	certMinorOff     = 6
-	certSigOff       = 8
-	certSigLen       = 64
-	certSignedOff    = 72
-
-	// Classical certificate signed portion (52 bytes).
-	certClassicalPkOff     = certSignedOff                           // 72
-	certClassicalPkLen     = KeySize                                 // 32
-	certClassicalMagicOff  = certSignedOff + KeySize                 // 104
-	certClassicalSerialOff = certClassicalMagicOff + ClientMagicSize // 112
-	certClassicalTSOff     = certClassicalSerialOff + 4              // 116
-	certClassicalTEEnd     = CertByteLength                          // 124
-
-	// PQ certificate signed portion (1248 bytes).
-	certPQPkOff     = certSignedOff                    // 72
-	certPQPkLen     = PQPublicKeySize                  // 1216
-	certPQMagicOff  = certSignedOff + PQPublicKeySize  // 1288
-	certPQSerialOff = certPQMagicOff + ClientMagicSize // 1296
-	certPQTSOff     = certPQSerialOff + 4              // 1300
-	certPQTEEnd     = certPQTSOff + 4                  // 1304
-	certPQExtOff    = certPQTEEnd + 4                  // 1308
-	certPQExtLen    = PQProfileExtSize                 // 12
-)
-
-// Ticket plaintext encoding sizes.  Matches the reference implementation
-// (encrypted-dns-server) and draft-denis-dprive-dnscrypt-10 \xa710.7.1:
-//
-//	ticket-plain ::= resume-secret(32) <es-version>(2) <client-magic>(8)
-//	                 <serial>(4) <ts-end>(4) <ticket-expiry>(4)
-//	                 <profile-extension-hash>(32)   = 86 bytes
-const (
-	ticketPlaintextSecretOff = 0
-	ticketPlaintextSecretLen = SharedKeySize // 32
-
-	ticketPlaintextESOff = ticketPlaintextSecretOff + SharedKeySize // 32
-	ticketPlaintextESLen = 2
-
-	ticketPlaintextMagicOff = ticketPlaintextESOff + ticketPlaintextESLen // 34
-	ticketPlaintextMagicLen = ClientMagicSize                             // 8
-
-	ticketPlaintextSerialOff = ticketPlaintextMagicOff + ClientMagicSize // 42
-	ticketPlaintextSerialLen = 4
-
-	ticketPlaintextTSEndOff = ticketPlaintextSerialOff + ticketPlaintextSerialLen // 46
-	ticketPlaintextTSEndLen = 4
-
-	ticketPlaintextExpiryOff = ticketPlaintextTSEndOff + ticketPlaintextTSEndLen // 50
-	ticketPlaintextExpiryLen = 4                                                 // uint32
-
-	ticketPlaintextPEHashOff = ticketPlaintextExpiryOff + ticketPlaintextExpiryLen // 54
-	ticketPlaintextPEHashLen = 32
-
-	ticketPlaintextSize = ticketPlaintextPEHashOff + ticketPlaintextPEHashLen // 86
-
-	// ticketKeyIDSize is the length of the ticket-key identifier prefix.
-	ticketKeyIDSize = 4
-)
-
-// PQ padding floor constants — minimum padded sizes for initial and resumed
-// PQ queries.  Both are multiples of 64.
-const (
-	pqMinPaddingInitial  = 64
-	pqMinPaddingResumed  = 256
-	pqMinControlBlockLen = 4 + 1 + 4 + 2 // magic + version + lifetime + ticketLen
-)
-
 // Certificate is a DNSCrypt server certificate containing the resolver's
 // short-term public key and metadata needed for encrypted communication.
 type Certificate struct {
@@ -139,6 +60,86 @@ type Certificate struct {
 }
 
 // type checks
+
+// Certificate wire format offsets.  The certificate has a fixed-size header
+// followed by a signed portion whose layout differs between classical and PQ
+// certificates.
+//
+//	Header (shared):  certMagic(4) + esVersion(2) + minor(2) + sig(64) = 72 bytes
+//	Signed (classical): resolverPk(32) + clientMagic(8) + serial(4) +
+//	                     tsStart(4) + tsEnd(4) = 52 bytes → 124 total
+//	Signed (PQ):       pqPublicKey(1216) + clientMagic(8) + serial(4) +
+//	                     tsStart(4) + tsEnd(4) + ext(12) = 1248 bytes → 1320 total
+const (
+	certMagicOff     = 0
+	certMagicLen     = 4
+	certESVersionOff = 4
+	certMinorOff     = 6
+	certSigOff       = 8
+	certSigLen       = 64
+	certSignedOff    = 72
+
+	// Classical certificate signed portion (52 bytes).
+	certClassicalPkOff     = certSignedOff                           // 72
+	certClassicalPkLen     = KeySize                                 // 32
+	certClassicalMagicOff  = certSignedOff + KeySize                 // 104
+	certClassicalSerialOff = certClassicalMagicOff + ClientMagicSize // 112
+	certClassicalTSOff     = certClassicalSerialOff + 4              // 116
+	certClassicalTEEnd     = CertByteLength                          // 124
+
+	// PQ certificate signed portion (1248 bytes).
+	certPQPkOff     = certSignedOff                    // 72
+	certPQPkLen     = PQPublicKeySize                  // 1216
+	certPQMagicOff  = certSignedOff + PQPublicKeySize  // 1288
+	certPQSerialOff = certPQMagicOff + ClientMagicSize // 1296
+	certPQTSOff     = certPQSerialOff + 4              // 1300
+	certPQTEEnd     = certPQTSOff + 4                  // 1304
+	certPQExtOff    = certPQTEEnd + 4                  // 1308
+	certPQExtLen    = PQProfileExtSize                 // 12
+)
+
+// Ticket plaintext encoding sizes.  Matches the reference implementation
+// (encrypted-dns-server) and draft-denis-dprive-dnscrypt-10 §10.7.1:
+//
+//	ticket-plain ::= resume-secret(32) <es-version>(2) <client-magic>(8)
+//	                 <serial>(4) <ts-end>(4) <ticket-expiry>(4)
+//	                 <profile-extension-hash>(32)   = 86 bytes
+const (
+	ticketPlaintextSecretOff = 0
+	ticketPlaintextSecretLen = SharedKeySize // 32
+
+	ticketPlaintextESOff = ticketPlaintextSecretOff + SharedKeySize // 32
+	ticketPlaintextESLen = 2
+
+	ticketPlaintextMagicOff = ticketPlaintextESOff + ticketPlaintextESLen // 34
+	ticketPlaintextMagicLen = ClientMagicSize                             // 8
+
+	ticketPlaintextSerialOff = ticketPlaintextMagicOff + ClientMagicSize // 42
+	ticketPlaintextSerialLen = 4
+
+	ticketPlaintextTSEndOff = ticketPlaintextSerialOff + ticketPlaintextSerialLen // 46
+	ticketPlaintextTSEndLen = 4
+
+	ticketPlaintextExpiryOff = ticketPlaintextTSEndOff + ticketPlaintextTSEndLen // 50
+	ticketPlaintextExpiryLen = 4                                                 // uint32
+
+	ticketPlaintextPEHashOff = ticketPlaintextExpiryOff + ticketPlaintextExpiryLen // 54
+	ticketPlaintextPEHashLen = 32
+
+	ticketPlaintextSize = ticketPlaintextPEHashOff + ticketPlaintextPEHashLen // 86
+
+	// ticketKeyIDSize is the length of the ticket-key identifier prefix.
+	ticketKeyIDSize = 4
+)
+
+// PQ padding floor constants — minimum padded sizes for initial and resumed
+// PQ queries.  Both are multiples of 64.
+const (
+	pqMinPaddingInitial  = 64
+	pqMinPaddingResumed  = 256
+	pqMinControlBlockLen = 4 + 1 + 4 + 2 // magic + version + lifetime + ticketLen
+)
+
 var (
 	_ encoding.BinaryMarshaler   = (*Certificate)(nil)
 	_ encoding.BinaryUnmarshaler = (*Certificate)(nil)

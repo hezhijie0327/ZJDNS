@@ -70,8 +70,9 @@ func Elapsed(timestamp int64) int64 {
 }
 
 // DeductElapsedCyclical returns a new slice with each RR's TTL reduced by
-// elapsed modulo its original TTL, producing a cyclical countdown that resets
-// when the TTL reaches 0. Each RR is deep-copied and cycles independently.
+// elapsed modulo its original TTL, producing a cyclical countdown that wraps
+// back to origTTL when elapsed reaches a multiple of origTTL. Each RR is
+// deep-copied and cycles independently.
 func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {
 	if len(rrs) == 0 {
 		return nil

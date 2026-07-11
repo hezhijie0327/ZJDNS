@@ -1,3 +1,5 @@
+// Package pool provides RFC 7766 pipelined TCP/DoT and QUIC connection pools
+// for multiplexed outbound DNS queries.
 package pool
 
 import (
@@ -17,10 +19,8 @@ import (
 
 	"codeberg.org/miekg/dns"
 
-	bufpool "zjdns/internal/pool"
+	zpool "zjdns/internal/pool"
 )
-
-const dnsIDMask = 0xFFFF // 16-bit DNS message ID space
 
 type pending struct {
 	resultCh chan *dns.Msg
@@ -51,6 +51,8 @@ type Pool struct {
 	maxConns int
 	maxPipe  int
 }
+
+const dnsIDMask = 0xFFFF // 16-bit DNS message ID space
 
 func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 	if maxPipe <= 0 {
@@ -105,8 +107,8 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		return nil, fmt.Errorf("client: pack: %w", err)
 	}
 
-	poolBuf := bufpool.DefaultBufferPool.Get()
-	defer bufpool.DefaultBufferPool.Put(poolBuf)
+	poolBuf := zpool.DefaultBufferPool.Get()
+	defer zpool.DefaultBufferPool.Put(poolBuf)
 	writeBuf := poolBuf
 	if len(poolBuf) < zdnsutil.DNSFramePrefixLen+len(msgData) {
 		writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+len(msgData))
@@ -134,7 +136,7 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		select {
 		case orphan := <-resultCh:
 			if orphan != nil {
-				bufpool.DefaultMessagePool.Put(orphan)
+				zpool.DefaultMessagePool.Put(orphan)
 			}
 		default:
 		}
@@ -179,12 +181,12 @@ func (c *Conn) readLoop() {
 			return
 		}
 		msgLen := binary.BigEndian.Uint16(lengthBuf)
-		if msgLen == 0 || int(msgLen) > bufpool.SecureBufferSize-zdnsutil.DNSFramePrefixLen {
+		if msgLen == 0 || int(msgLen) > zpool.SecureBufferSize-zdnsutil.DNSFramePrefixLen {
 			log.Debugf("TCPPOOL: invalid message length %d from %s", msgLen, c.addr)
 			return
 		}
 
-		bodyBuf := bufpool.DefaultBufferPool.Get()
+		bodyBuf := zpool.DefaultBufferPool.Get()
 		var body []byte
 		pooled := int(msgLen) <= len(bodyBuf)
 		if pooled {
@@ -194,27 +196,27 @@ func (c *Conn) readLoop() {
 		}
 		if _, err := io.ReadFull(c.conn, body); err != nil {
 			if pooled {
-				bufpool.DefaultBufferPool.Put(bodyBuf)
+				zpool.DefaultBufferPool.Put(bodyBuf)
 			}
 			log.Debugf("TCPPOOL: read body error from %s: %v", c.addr, err)
 			return
 		}
 
-		resp := bufpool.DefaultMessagePool.Get()
+		resp := zpool.DefaultMessagePool.Get()
 		resp.Data = body
 		if err := resp.Unpack(); err != nil {
 			if pooled {
-				bufpool.DefaultBufferPool.Put(bodyBuf)
+				zpool.DefaultBufferPool.Put(bodyBuf)
 			}
 			log.Debugf("TCPPOOL: unpack error from %s: %v", c.addr, err)
-			bufpool.DefaultMessagePool.Put(resp)
+			zpool.DefaultMessagePool.Put(resp)
 			continue
 		}
 		// Detach resp.Data from the pooled buffer before returning it,
 		// otherwise the message carries a dangling pointer to zeroed memory.
 		resp.Data = nil
 		if pooled {
-			bufpool.DefaultBufferPool.Put(bodyBuf)
+			zpool.DefaultBufferPool.Put(bodyBuf)
 		}
 
 		c.mu.RLock()
@@ -224,10 +226,10 @@ func (c *Conn) readLoop() {
 			select {
 			case pq.resultCh <- resp:
 			default:
-				bufpool.DefaultMessagePool.Put(resp)
+				zpool.DefaultMessagePool.Put(resp)
 			}
 		} else {
-			bufpool.DefaultMessagePool.Put(resp)
+			zpool.DefaultMessagePool.Put(resp)
 		}
 	}
 }

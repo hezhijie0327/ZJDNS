@@ -8,23 +8,6 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// UDPBufferSize is the EDNS0 UDP payload size for standard upstream queries per
-// DNS Flag Day 2020: 1232 bytes avoids IP fragmentation on any path.
-// RecursiveUDPBufferSize is used for recursive (root/TLD) queries where
-// DNSSEC-signed referrals commonly exceed 1232 bytes.
-const (
-	UDPBufferSize          = 1232
-	RecursiveUDPBufferSize = 4096
-	SecureBufferSize       = 8192
-	defaultBufferPoolSize  = 256
-)
-
-// DefaultMessagePool is the package-level default MessagePool.
-var DefaultMessagePool = NewMessagePool()
-
-// DefaultBufferPool is the package-level default BufferPool.
-var DefaultBufferPool = NewBufferPool(SecureBufferSize, defaultBufferPoolSize)
-
 // MessagePool is a pooled allocator for dns.Msg values.
 type MessagePool struct {
 	pool sync.Pool
@@ -35,6 +18,36 @@ type BufferPool struct {
 	pool sync.Pool
 	size int
 }
+
+// UDPBufferSize is the EDNS0 UDP payload size for standard upstream queries per
+// DNS Flag Day 2020: 1232 bytes avoids IP fragmentation on any path.
+// RecursiveUDPBufferSize is used for recursive (root/TLD) queries where
+// DNSSEC-signed referrals commonly exceed 1232 bytes.
+// SecureBufferSize is the default buffer pool size for TCP/DoT query framing.
+const (
+	UDPBufferSize          = 1232
+	RecursiveUDPBufferSize = 4096
+	SecureBufferSize       = 8192
+	defaultBufferPoolSize  = 256
+)
+
+// QUIC application error codes shared across client and server packages.
+const (
+	// QUICCodeNoError is for normal connection closure.
+	QUICCodeNoError quic.ApplicationErrorCode = 0
+
+	// QUICCodeInternalError is for internal errors.
+	QUICCodeInternalError quic.ApplicationErrorCode = 1
+
+	// QUICCodeProtocolError is for protocol violations.
+	QUICCodeProtocolError quic.ApplicationErrorCode = 2
+)
+
+// DefaultMessagePool is the package-level default MessagePool.
+var DefaultMessagePool = NewMessagePool()
+
+// DefaultBufferPool is the package-level default BufferPool.
+var DefaultBufferPool = NewBufferPool(SecureBufferSize, defaultBufferPoolSize)
 
 // NewMessagePool creates a new MessagePool.
 func NewMessagePool() *MessagePool {
@@ -101,15 +114,3 @@ func (b *BufferPool) Put(buf []byte) {
 		b.pool.Put(&buf)
 	}
 }
-
-// QUIC application error codes shared across client and server packages.
-const (
-	// QUICCodeNoError is for normal connection closure.
-	QUICCodeNoError quic.ApplicationErrorCode = 0
-
-	// QUICCodeInternalError is for internal errors.
-	QUICCodeInternalError quic.ApplicationErrorCode = 1
-
-	// QUICCodeProtocolError is for protocol violations.
-	QUICCodeProtocolError quic.ApplicationErrorCode = 2
-)

@@ -22,10 +22,10 @@ const (
 	defaultPanicStackBufSize = 8192
 )
 
-var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
-
 // MaxLabelLength is the maximum length of a single DNS label per RFC 1035 §2.3.4.
 const MaxLabelLength = 63
+
+var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 
 // NormalizeDomain converts a domain name to lowercase and removes the trailing
 // dot. Uses sub-slicing (zero-alloc) instead of strings.TrimSuffix to avoid

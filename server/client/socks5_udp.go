@@ -11,6 +11,37 @@ import (
 	"time"
 )
 
+// ---------------------------------------------------------------------------
+// PacketConn wrapper — transparent SOCKS5 UDP header handling
+//
+// The underlying *net.UDPConn is connected to the SOCKS5 relay, so we use
+// Read/Write directly (not ReadFrom/WriteTo). Each datagram is wrapped in
+// a SOCKS5 UDP header on write and unwrapped on read.
+// ---------------------------------------------------------------------------
+
+type socks5PacketConn struct {
+	conn *net.UDPConn
+}
+
+// ---------------------------------------------------------------------------
+// net.Conn wrapper — for protocols that expect direct Read/Write on a
+// SOCKS5 UDP relay (e.g. DNSCrypt).  Mirrors golang.org/x/net/proxy's
+// Dial("udp", addr) which returns a net.Conn.
+// ---------------------------------------------------------------------------
+
+// socks5UDPConn wraps a dedicated SOCKS5 UDP relay as a net.Conn.
+type socks5UDPConn struct {
+	conn *net.UDPConn
+	addr *net.UDPAddr
+	done func() // called on Close to tear down the relay
+}
+
+// socks5ReadBufPool reuses 64 KB buffers for SOCKS5 UDP reads, avoiding a
+// per-connection 64 KB heap allocation from an embedded array.
+var socks5ReadBufPool = sync.Pool{
+	New: func() any { b := make([]byte, socks5MaxReadBuf); return &b },
+}
+
 // ListenPacket returns a net.PacketConn that sends and receives UDP datagrams
 // through the SOCKS5 proxy's UDP relay (RFC 1928 §6).
 //
@@ -182,22 +213,30 @@ func (d *SOCKS5Dialer) cleanupLocked() {
 	d.relayAddr = nil
 }
 
-// ---------------------------------------------------------------------------
-// PacketConn wrapper — transparent SOCKS5 UDP header handling
-//
-// The underlying *net.UDPConn is connected to the SOCKS5 relay, so we use
-// Read/Write directly (not ReadFrom/WriteTo). Each datagram is wrapped in
-// a SOCKS5 UDP header on write and unwrapped on read.
-// ---------------------------------------------------------------------------
-
-// socks5ReadBufPool reuses 64 KB buffers for SOCKS5 UDP reads, avoiding a
-// per-connection 64 KB heap allocation from an embedded array.
-var socks5ReadBufPool = sync.Pool{
-	New: func() any { b := make([]byte, socks5MaxReadBuf); return &b },
-}
-
-type socks5PacketConn struct {
-	conn *net.UDPConn
+// DialUDP establishes a new UDP connection to targetAddr through the
+// SOCKS5 proxy — each call creates a fresh UDP ASSOCIATE and returns an
+// independent net.Conn.  Matches golang.org/x/net/proxy.Dialer.Dial("udp").
+func (d *SOCKS5Dialer) DialUDP(ctx context.Context, targetAddr string) (net.Conn, error) {
+	// Create a fresh, independent dialer so the relay is not shared.
+	fresh := &SOCKS5Dialer{
+		proxyAddr: d.proxyAddr,
+		username:  d.username,
+		password:  d.password,
+		timeout:   d.timeout,
+	}
+	if err := fresh.establishUDPRelay(ctx); err != nil {
+		return nil, err
+	}
+	udpAddr, err := net.ResolveUDPAddr("udp", targetAddr)
+	if err != nil {
+		_ = fresh.Close()
+		return nil, fmt.Errorf("socks5: resolve target %s: %w", targetAddr, err)
+	}
+	return &socks5UDPConn{
+		conn: fresh.udpConn,
+		addr: udpAddr,
+		done: func() { _ = fresh.Close() },
+	}, nil
 }
 
 // ReadFrom reads a datagram from the relay, strips the SOCKS5 UDP header,
@@ -276,45 +315,6 @@ func (c *socks5PacketConn) SetReadDeadline(t time.Time) error {
 
 func (c *socks5PacketConn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
-}
-
-// ---------------------------------------------------------------------------
-// net.Conn wrapper — for protocols that expect direct Read/Write on a
-// SOCKS5 UDP relay (e.g. DNSCrypt).  Mirrors golang.org/x/net/proxy's
-// Dial("udp", addr) which returns a net.Conn.
-// ---------------------------------------------------------------------------
-
-// DialUDP establishes a new UDP connection to targetAddr through the
-// SOCKS5 proxy — each call creates a fresh UDP ASSOCIATE and returns an
-// independent net.Conn.  Matches golang.org/x/net/proxy.Dialer.Dial("udp").
-func (d *SOCKS5Dialer) DialUDP(ctx context.Context, targetAddr string) (net.Conn, error) {
-	// Create a fresh, independent dialer so the relay is not shared.
-	fresh := &SOCKS5Dialer{
-		proxyAddr: d.proxyAddr,
-		username:  d.username,
-		password:  d.password,
-		timeout:   d.timeout,
-	}
-	if err := fresh.establishUDPRelay(ctx); err != nil {
-		return nil, err
-	}
-	udpAddr, err := net.ResolveUDPAddr("udp", targetAddr)
-	if err != nil {
-		_ = fresh.Close()
-		return nil, fmt.Errorf("socks5: resolve target %s: %w", targetAddr, err)
-	}
-	return &socks5UDPConn{
-		conn: fresh.udpConn,
-		addr: udpAddr,
-		done: func() { _ = fresh.Close() },
-	}, nil
-}
-
-// socks5UDPConn wraps a dedicated SOCKS5 UDP relay as a net.Conn.
-type socks5UDPConn struct {
-	conn *net.UDPConn
-	addr *net.UDPAddr
-	done func() // called on Close to tear down the relay
 }
 
 func (c *socks5UDPConn) Read(p []byte) (n int, err error) {

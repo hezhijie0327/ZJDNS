@@ -16,6 +16,48 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
+// ResolverConfig holds the DNSCrypt resolver configuration including keys and
+// provider identity.
+type ResolverConfig struct {
+	ProviderName string
+	PublicKey    string // Ed25519 public key (hex)
+	PrivateKey   string // Ed25519 private key (hex)
+	ResolverSk   string // X25519 secret or X-Wing seed (hex; determined by ESVersion)
+	ResolverPk   string // X25519 public or X-Wing public (hex; determined by ESVersion)
+	ESVersion    CryptoConstruction
+	CertTTL      time.Duration
+}
+
+// ConfigBlock holds the DNSCrypt server settings.
+type ConfigBlock struct {
+	Port         string `json:"port"`
+	ProviderName string `json:"provider_name"`
+	PublicKey    string `json:"public_key"`
+	PrivateKey   string `json:"private_key"`
+	ResolverSk   string `json:"resolver_sk,omitempty"`
+	ResolverPk   string `json:"resolver_pk,omitempty"`
+	ESVersion    string `json:"es_version"`
+	CertTTL      string `json:"cert_ttl,omitempty"`
+}
+
+// UpstreamEntry is a single DNSCrypt upstream server entry.
+type UpstreamEntry struct {
+	Address      string `json:"address"`
+	Protocol     string `json:"protocol,omitempty"`
+	ServerName   string `json:"server_name,omitempty"`
+	PublicKeyHex string `json:"public_key,omitempty"`
+}
+
+// FullConfig is a complete ZJDNS configuration including both server-side
+// DNSCrypt settings and client-side upstream entries.  It marshals to a
+// single valid JSON config file.
+type FullConfig struct {
+	Server struct {
+		DNSCrypt ConfigBlock `json:"dnscrypt"`
+	} `json:"server"`
+	Upstream []UpstreamEntry `json:"upstream"`
+}
+
 const (
 	// DNSCryptV2Prefix is the provider name prefix for DNSCrypt v2.
 	DNSCryptV2Prefix = "2.dnscrypt-cert."
@@ -30,18 +72,6 @@ var stampDefaultProperties = [8]byte{}
 
 func init() {
 	config.DNSCryptConfigGenerator = GenerateDNSCryptConfig
-}
-
-// ResolverConfig holds the DNSCrypt resolver configuration including keys and
-// provider identity.
-type ResolverConfig struct {
-	ProviderName string
-	PublicKey    string // Ed25519 public key (hex)
-	PrivateKey   string // Ed25519 private key (hex)
-	ResolverSk   string // X25519 secret or X-Wing seed (hex; determined by ESVersion)
-	ResolverPk   string // X25519 public or X-Wing public (hex; determined by ESVersion)
-	ESVersion    CryptoConstruction
-	CertTTL      time.Duration
 }
 
 // GenerateResolverConfig generates a new resolver configuration.  If
@@ -259,40 +289,6 @@ func GenerateEd25519Keypair() (publicKey, privateKey []byte, err error) {
 		return nil, nil, fmt.Errorf("generating ed25519 keypair: %w", err)
 	}
 	return pub, priv, nil
-}
-
-// ---------------------------------------------------------------------------
-// CLI config generation
-// ---------------------------------------------------------------------------
-
-// ConfigBlock holds the DNSCrypt server settings.
-type ConfigBlock struct {
-	Port         string `json:"port"`
-	ProviderName string `json:"provider_name"`
-	PublicKey    string `json:"public_key"`
-	PrivateKey   string `json:"private_key"`
-	ResolverSk   string `json:"resolver_sk,omitempty"`
-	ResolverPk   string `json:"resolver_pk,omitempty"`
-	ESVersion    string `json:"es_version"`
-	CertTTL      string `json:"cert_ttl,omitempty"`
-}
-
-// UpstreamEntry is a single DNSCrypt upstream server entry.
-type UpstreamEntry struct {
-	Address      string `json:"address"`
-	Protocol     string `json:"protocol,omitempty"`
-	ServerName   string `json:"server_name,omitempty"`
-	PublicKeyHex string `json:"public_key,omitempty"`
-}
-
-// FullConfig is a complete ZJDNS configuration including both server-side
-// DNSCrypt settings and client-side upstream entries.  It marshals to a
-// single valid JSON config file.
-type FullConfig struct {
-	Server struct {
-		DNSCrypt ConfigBlock `json:"dnscrypt"`
-	} `json:"server"`
-	Upstream []UpstreamEntry `json:"upstream"`
 }
 
 // GenerateDNSCryptConfig generates a complete ZJDNS JSON configuration for

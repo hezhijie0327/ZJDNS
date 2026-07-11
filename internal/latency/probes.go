@@ -17,6 +17,13 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
+// Probe buffer and payload sizes.
+const (
+	probeUDPReadBufSize  = 512  // UDP probe read buffer
+	probeICMPDataSize    = 56   // ICMP echo data payload
+	probeICMPReadBufSize = 1500 // ICMP response read buffer
+)
+
 // icmpBufPool reuses ICMP read buffers to avoid per-probe 1500-byte allocations.
 var icmpBufPool = sync.Pool{
 	New: func() any {
@@ -25,16 +32,9 @@ var icmpBufPool = sync.Pool{
 	},
 }
 
-// Probe buffer and payload sizes.
-const (
-	probeUDPReadBufSize  = 512  // UDP probe read buffer
-	probeICMPDataSize    = 56   // ICMP echo data payload
-	probeICMPReadBufSize = 1500 // ICMP response read buffer
-)
-
 // measureIPLatency probes a single IP using the configured steps and returns
-// the total elapsed time for the first successful probe. The bgCtx is the
-// Prober's background context checked during long-running operations.
+// the total elapsed time for the first successful probe. The ctx is the
+// caller-supplied context checked during long-running operations.
 func measureIPLatency(ctx context.Context, ip net.IP, steps []config.LatencyProbeStep, httpPool *httpClientPool) time.Duration {
 	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
 		return time.Duration(math.MaxInt64)

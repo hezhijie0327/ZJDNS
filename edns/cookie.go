@@ -13,16 +13,6 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// Cookie length constants.
-const (
-	DefaultCookieClientLen = 8
-	DefaultCookieServerLen = 16
-)
-
-const cookieSecretSize = 32
-
-const hmacContextClient = "client"
-
 // CookieOption holds the parsed client and server DNS Cookie values.
 type CookieOption struct {
 	ClientCookie []byte
@@ -41,6 +31,16 @@ type secretPair struct {
 type CookieGenerator struct {
 	secrets atomic.Pointer[secretPair]
 }
+
+// Cookie length constants.
+const (
+	DefaultCookieClientLen = 8
+	DefaultCookieServerLen = 16
+)
+
+const cookieSecretSize = 32
+
+const hmacContextClient = "client"
 
 // NewCookieGenerator creates a CookieGenerator with a random secret.
 func NewCookieGenerator() *CookieGenerator {

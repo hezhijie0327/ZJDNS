@@ -15,17 +15,18 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-const (
-	defaultReadTimeout = config.DefaultDNSCryptReadTimeout
-)
-
-// tcpResponseWriter writes DNSCrypt-encrypted responses over TCP.
 type tcpResponseWriter struct {
 	conn    net.Conn
 	req     *dns.Msg
 	query   *encryptedQuery
 	encrypt func(m *dns.Msg, q *encryptedQuery, isUDP bool) ([]byte, error)
 }
+
+const (
+	defaultReadTimeout = config.DefaultDNSCryptReadTimeout
+)
+
+// tcpResponseWriter writes DNSCrypt-encrypted responses over TCP.
 
 func (w *tcpResponseWriter) LocalAddr() net.Addr  { return w.conn.LocalAddr() }
 func (w *tcpResponseWriter) RemoteAddr() net.Addr { return w.conn.RemoteAddr() }

@@ -9,6 +9,23 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// Verdict classifies a DNS response from a server that claims authority for
+// a given zone.  It answers: "is this response suspicious for this zone?"
+type Verdict int
+
+// Detector detects DNS hijacking by validating that a server does not return
+// answer records outside its delegated zone authority. Only the Answer section
+// is inspected — Authority and Additional sections carry delegation/glue data
+// that the recursive resolver validates independently.
+//
+// The primary target is firewall/middlebox interception: a root server returning
+// A records for www.google.com, or a TLD server returning A records for a
+// subdomain. Detection triggers a UDP→TCP fallback which often bypasses the
+// middlebox.
+type Detector struct {
+	enabled atomic.Bool
+}
+
 const (
 	// VerdictClean means the response is consistent with the zone's
 	// authority — no hijacking detected.
@@ -27,23 +44,6 @@ const (
 )
 
 const rootServersDomain = "root-servers.net"
-
-// Verdict classifies a DNS response from a server that claims authority for
-// a given zone.  It answers: "is this response suspicious for this zone?"
-type Verdict int
-
-// Detector detects DNS hijacking by validating that a server does not return
-// answer records outside its delegated zone authority. Only the Answer section
-// is inspected — Authority and Additional sections carry delegation/glue data
-// that the recursive resolver validates independently.
-//
-// The primary target is firewall/middlebox interception: a root server returning
-// A records for www.google.com, or a TLD server returning A records for a
-// subdomain. Detection triggers a UDP→TCP fallback which often bypasses the
-// middlebox.
-type Detector struct {
-	enabled atomic.Bool
-}
 
 // --- Verdict methods ---
 

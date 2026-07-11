@@ -11,6 +11,20 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// CryptoValidator performs cryptographic DNSSEC validation using the
+// miekg/dns RRSIG.Verify() and DNSKEY.ToDS() primitives. It is always active;
+// the dnssec_enforce config option controls error behavior, not whether
+// validation runs.
+type CryptoValidator struct {
+	rootKeys []*dns.DNSKEY
+	cache    cache.Store
+}
+
+type rrsetKey struct {
+	name   string
+	rrtype uint16
+}
+
 // IANA root zone KSK trust anchors, sourced from
 // https://data.iana.org/root-anchors/root-anchors.xml
 //
@@ -28,20 +42,6 @@ var (
 	ErrDSMismatch     = errors.New("DS digest does not match DNSKEY")
 	ErrBogusSignature = errors.New("bogus DNSSEC signature")
 )
-
-// CryptoValidator performs cryptographic DNSSEC validation using the
-// miekg/dns RRSIG.Verify() and DNSKEY.ToDS() primitives. It is always active;
-// the dnssec_enforce config option controls error behavior, not whether
-// validation runs.
-type CryptoValidator struct {
-	rootKeys []*dns.DNSKEY
-	cache    cache.Store
-}
-
-type rrsetKey struct {
-	name   string
-	rrtype uint16
-}
 
 // NewCryptoValidator creates a CryptoValidator with the IANA root trust
 // anchors embedded. DNSSEC validation is always active. The cache store is
