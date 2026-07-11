@@ -59,7 +59,7 @@ func labelCount(name string) int {
 	if norm == "" {
 		return 0
 	}
-	return len(strings.Split(norm, "."))
+	return strings.Count(norm, ".") + 1
 }
 
 // labelsToAdd computes how many labels to add in this minimisation step.

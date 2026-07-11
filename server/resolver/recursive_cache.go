@@ -14,7 +14,7 @@ import (
 // ── Latency-sorted NS address cache ──────────────────────────────────────────
 //
 // Root servers and per-nameserver addresses are stored as regular TypeA/TypeAAAA
-// cache entries by the resolution flow (or cacheRootServers for root servers).
+// cache entries by the resolution flow (or cacheRootHint for root servers).
 // probe.ProbeNSAddrs runs background latency probes and stores results in
 // ip_latency; sortAnswerByLatency in cache.Get() reorders records at read time.
 // The pattern mirrors regular A/AAAA queries: write entry → probe → sort.

@@ -91,7 +91,7 @@ type Validator struct {
 // concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
 // limits. concurrencyDiv2/3 are divisor constants used in the tier formulas:
 //
-//	Tier 1 (≤4 servers): 2 × serverCount
+//	Tier 1 (≤4 servers): serverCount
 //	Tier 2 (5–12 servers): (2×serverCount + 2) / 3
 //	Tier 3 (13–20 servers): (serverCount + 1) / 2
 //	Tier 4 (>20 servers): serverCount / 3
