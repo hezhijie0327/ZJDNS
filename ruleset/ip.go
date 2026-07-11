@@ -1,7 +1,10 @@
 package ruleset
 
 import (
+	"bufio"
 	"net"
+	"os"
+	"strings"
 )
 
 type bitTrie struct{ root *bitNode }
@@ -14,6 +17,7 @@ type bitNode struct {
 type ipRule struct {
 	tag   string
 	cidrs []string
+	file  string
 }
 
 type ipMatcher struct {
@@ -31,11 +35,36 @@ func newIPMatcher(rules []ipRule) (*ipMatcher, error) {
 				added = true
 			}
 		}
+		if r.file != "" {
+			if err := loadCIDRFile(r.file, trie); err != nil {
+				return nil, err
+			}
+			added = true
+		}
 		if added {
 			m.tags[r.tag] = trie
 		}
 	}
 	return m, nil
+}
+
+func loadCIDRFile(path string, trie *bitTrie) error {
+	f, err := os.Open(path) //nolint:gosec // G304: path from config
+	if err != nil {
+		return err
+	}
+	defer f.Close() //nolint:errcheck // best-effort close in load path
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if _, n, err := net.ParseCIDR(line); err == nil {
+			trie.insertCIDR(n)
+		}
+	}
+	return sc.Err()
 }
 
 func (m *ipMatcher) match(ipStr string) []string {
