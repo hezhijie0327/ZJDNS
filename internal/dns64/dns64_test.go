@@ -9,7 +9,7 @@ import (
 )
 
 func TestMapAddr_WellKnownPrefix(t *testing.T) {
-	s, _ := New(DefaultPrefix)
+	s, _ := New(defaultPrefix)
 	ip6 := s.MapAddr(netip.MustParseAddr("1.2.3.4"))
 	expected := netip.MustParseAddr("64:ff9b::102:304")
 	if ip6 != expected {
@@ -28,7 +28,7 @@ func TestMapAddr_CustomPrefix(t *testing.T) {
 }
 
 func TestExtractIPv4_RoundTrip(t *testing.T) {
-	s, _ := New(DefaultPrefix)
+	s, _ := New(defaultPrefix)
 	ip4 := netip.MustParseAddr("10.20.30.40")
 	got, ok := s.ExtractIPv4(s.MapAddr(ip4))
 	if !ok || got != ip4 {
@@ -37,7 +37,7 @@ func TestExtractIPv4_RoundTrip(t *testing.T) {
 }
 
 func TestExtractIPv4_NotInPrefix(t *testing.T) {
-	s, _ := New(DefaultPrefix)
+	s, _ := New(defaultPrefix)
 	_, ok := s.ExtractIPv4(netip.MustParseAddr("2001:db8::1"))
 	if ok {
 		t.Error("should not be synthesized")
@@ -45,7 +45,7 @@ func TestExtractIPv4_NotInPrefix(t *testing.T) {
 }
 
 func TestIsSynthesized(t *testing.T) {
-	s, _ := New(DefaultPrefix)
+	s, _ := New(defaultPrefix)
 	if !s.IsSynthesized(netip.MustParseAddr("64:ff9b::1")) {
 		t.Error("64:ff9b::1 should be in prefix")
 	}
@@ -55,7 +55,7 @@ func TestIsSynthesized(t *testing.T) {
 }
 
 func TestSynthesize(t *testing.T) {
-	s, _ := New(DefaultPrefix)
+	s, _ := New(defaultPrefix)
 	aAnswer := []dns.RR{
 		&dns.A{
 			Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},

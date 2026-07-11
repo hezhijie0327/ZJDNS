@@ -134,7 +134,7 @@ func repString(rep byte) string {
 	case socks5RepAddressNotSupported:
 		return "address type not supported"
 	default:
-		return fmt.Sprintf("unknown(%d)", rep)
+		return "unknown(" + strconv.Itoa(int(rep)) + ")"
 	}
 }
 

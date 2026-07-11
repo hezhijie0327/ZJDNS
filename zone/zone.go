@@ -1,5 +1,5 @@
 // Package zone provides DNS zone-file-style query matching backed by SQLite.
-// Rules are loaded into an in-memory SQLite database at startup and queried
+// Rules are loaded into a SQLite database at startup and queried
 // via B-tree indexed prepared statements — O(log n) per lookup with near-zero
 // Go heap footprint regardless of rule count.
 package zone
@@ -392,7 +392,7 @@ func parseMatchTags(raw []string) ([]matchTag, error) {
 			return nil, errors.New("empty match tag")
 		}
 		negate := strings.HasPrefix(s, "!")
-		tag := strings.TrimPrefix(s, "!")
+		tag := s[1:]
 		if tag == "" {
 			return nil, fmt.Errorf("invalid match tag %q", s)
 		}

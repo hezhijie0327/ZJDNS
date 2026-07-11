@@ -220,13 +220,13 @@ func (c *Client) resolveDNSCryptStamp(server *config.UpstreamServer) (addr, prov
 	}
 
 	if addr == "" {
-		return "", "", nil, fmt.Errorf("address is empty") //nolint
+		return "", "", nil, fmt.Errorf("address is empty") //nolint:revive // error strings are intentional and descriptive
 	}
 	if providerName == "" {
-		return "", "", nil, fmt.Errorf("provider_name is required for non-stamp DNSCrypt servers") //nolint
+		return "", "", nil, fmt.Errorf("provider_name is required for non-stamp DNSCrypt servers") //nolint:revive // error strings are intentional and descriptive
 	}
 	if len(publicKey) == 0 {
-		return "", "", nil, fmt.Errorf("public_key is required for non-stamp DNSCrypt servers") //nolint
+		return "", "", nil, fmt.Errorf("public_key is required for non-stamp DNSCrypt servers") //nolint:revive // error strings are intentional and descriptive
 	}
 
 	return addr, providerName, publicKey, nil

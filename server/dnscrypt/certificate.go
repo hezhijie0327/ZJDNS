@@ -258,7 +258,7 @@ func (c *Certificate) unmarshalPQ(b []byte) error {
 	return nil
 }
 
-// Validate implements the validate.Interface for Certificate.
+// Validate checks whether the certificate is valid (not expired, correct magic).
 func (c *Certificate) Validate() (err error) {
 	switch c.ESVersion {
 	case XWingPQ:

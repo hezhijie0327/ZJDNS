@@ -17,7 +17,7 @@ type Synthesizer struct {
 }
 
 const (
-	DefaultPrefix = "64:ff9b::/96" // RFC 6052 §2.1 well-known prefix
+	defaultPrefix = "64:ff9b::/96" // RFC 6052 §2.1 well-known prefix
 	maxPrefixLen  = 96             // RFC 6147 §5.2
 	maxSynTTL     = 600            // RFC 6147 §5.1.7 cap
 	nat64Offset   = 12             // IPv4 embedded at byte 12
