@@ -452,14 +452,15 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 	return cert, nil
 }
 
-// isTemporaryError returns true if the error is a temporary network error or
-// contains timeout or temporary in its message.
+// isTemporaryError returns true if the error is a temporary network error
+// (net.Error with Timeout() true) or contains "timeout"/"temporary" in its
+// message.
 func isTemporaryError(err error) bool {
 	if err == nil {
 		return false
 	}
 	var ne net.Error
-	if errors.As(err, &ne) {
+	if errors.As(err, &ne) && ne.Timeout() {
 		return true
 	}
 	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")

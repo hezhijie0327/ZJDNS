@@ -121,15 +121,22 @@ func (e *Engine) rebuild(db *database.DB) error {
 }
 
 // Match returns all tags that match the given query name and client IP.
+// Returns nil when no tags match, avoiding allocation on the common path.
 func (e *Engine) Match(qname, ip string) map[string]bool {
-	tags := make(map[string]bool)
+	var tags map[string]bool
 	if e.ip != nil {
 		for _, t := range e.ip.match(ip) {
+			if tags == nil {
+				tags = make(map[string]bool)
+			}
 			tags[t] = true
 		}
 	}
 	if e.domain != nil {
 		if t := e.domain.match(qname); t != "" {
+			if tags == nil {
+				tags = make(map[string]bool)
+			}
 			tags[t] = true
 		}
 	}

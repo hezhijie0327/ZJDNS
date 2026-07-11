@@ -80,7 +80,6 @@ const (
 	DefaultDNS64Prefix                  = "64:ff9b::/96" // RFC 6052 §2.1 well-known prefix
 
 	DefaultDNSKeyCacheTTL           = 86400 // DNSKEY record cache TTL (seconds)
-	DefaultDNSKeyCacheMinTTL        = 300   // DNSKEY cache minimum TTL (seconds)
 	DefaultMaxNegativeTTL           = 10800 // RFC 2308 §5: max negative cache TTL (3 hours)
 	DefaultMaxNSEC3Iterations       = 150   // NSEC3 iteration cap (RFC 5155 §10.3)
 	DefaultQnameMinimiseCount       = 10    // RFC 9156 §2.3: max QNAME minimisation iterations
@@ -114,13 +113,11 @@ const (
 	DefaultMaxIdleConnsPerHost = 8
 	DefaultDOTWriteChannelSize = 64
 	DefaultDOHMaxRequestSize   = 8192 // Max DoH request body size
-	DefaultZoneRulesCapacity   = 16
 
 	DefaultTokenStoreCapacity     = 32  // QUIC LRU token store capacity per key
 	DefaultTokenStoreMaxEntries   = 100 // QUIC LRU token store max total entries
 	DefaultSecureTransportRetries = 2   // DoH/DoH3 recreate-and-retry attempts
 
-	DefaultDNSClass  = "IN"      // Default DNS resource record class
 	FallbackClientIP = "0.0.0.0" // Fallback IP when client address is nil
 	DNSRootZone      = "."       // DNS root zone label
 )
@@ -185,7 +182,6 @@ const (
 	DefaultDNSCryptUDPSize          = 4096                 // bytes — matches dnscrypt-proxy MaxDNSPacketSize; needed for PQ response overhead
 	DefaultDNSCryptCertCacheTTL     = 1 * time.Hour        // client shared-key cache duration
 	DefaultDNSCryptReadTimeout      = 2 * time.Second      // UDP/TCP initial read deadline
-	DefaultDNSCryptTCPIdleTimeout   = 8 * time.Second      // TCP idle timeout after first read
 	DefaultDNSCryptResponseBuffer   = 4096                 // bytes — receive buffer for cert/query responses
 	DefaultDNSCryptPQTicketLifetime = 600                  // seconds — resumption ticket validity
 )
