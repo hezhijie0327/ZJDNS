@@ -136,6 +136,17 @@ func (db *DB) migrate() error {
 		) WITHOUT ROWID;
 		CREATE INDEX IF NOT EXISTS idx_ip_latency_probe ON ip_latency(last_probe_time);
 
+		-- ── Ruleset entries ───────────────────────────────────────────────
+		-- Stores rule set entries loaded from config. IP entries are CIDR
+		-- strings; domain entries are TLD+1 keys for O(1) lookup.
+
+		CREATE TABLE IF NOT EXISTS ruleset_entries (
+			tag   TEXT NOT NULL,
+			type  TEXT NOT NULL,
+			value TEXT NOT NULL,
+			PRIMARY KEY (tag, type, value)
+		);
+
 		-- ── NSEC negative cache ──────────────────────────────────────────────
 		-- Indexes NSEC/NSEC3 records from validated responses for aggressive
 		-- negative caching. Wire-format (label-prefixed) names sort in DNS

@@ -4,43 +4,10 @@ import (
 	"strings"
 )
 
-type domainRule struct {
-	tag      string
-	pattern  string
-	file     string
-	rules    []string
-	filePath string
-}
-
 // domainMatcher does O(1) domain→tag matching via TLD+1 suffix map.
 // "google.com" and "*.google.com" both key to "google.com".
 type domainMatcher struct {
 	suffix map[string]string // tld+1 → tag
-}
-
-func newDomainMatcher(rules []domainRule) *domainMatcher {
-	dm := &domainMatcher{suffix: make(map[string]string)}
-	for _, r := range rules {
-		for _, p := range r.rules {
-			key := domainKey(p)
-			if key != "" {
-				dm.suffix[key] = r.tag
-			}
-		}
-		if r.filePath != "" {
-			lines, err := readDomainFile(r.filePath)
-			if err != nil {
-				continue
-			}
-			for _, line := range lines {
-				key := domainKey(line)
-				if key != "" {
-					dm.suffix[key] = r.tag
-				}
-			}
-		}
-	}
-	return dm
 }
 
 func readDomainFile(path string) ([]string, error) {

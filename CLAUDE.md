@@ -244,8 +244,8 @@ zjdns/
 ├── edns/                                      ← Handler, Cookie, EDE, padding (ECSOption alias → config)
 ├── database/                                  ← Unified SQLite DB: connection, schema, migration
 │   ├── db.go                                  ←   DB struct, Open, Close, re-exports (zstd, helpers)
-│   ├── schema.go                              ←   9 tables (cache 8 + zone 1) in one migration
-│   ├── stmts.go                               ←   13 prepared statements (cache 10 + zone 3)
+│   ├── schema.go                              ←   10 tables (cache 9 + zone 1) in one migration
+│   ├── stmts.go                               ←   15 prepared statements (cache 12 + zone 3)
 │   ├── migration.go                           ←   Incremental schema migrations
 │   └── migrations/                            ←   Archived migration SQL files
 ├── cache/                                     ← Store interface, DNS response cache (wraps *database.DB)
@@ -253,7 +253,7 @@ zjdns/
 │   ├── store.go                               ←   SQLiteCache struct, New, Get, Set, eviction, latency sort
 │   ├── stats.go                               ←   RecordRequest, Stats, FlushDB, ReverseLookup
 │   └── helpers.go                             ←   insertPtrMap, TTL helpers, ecsParams
-├── ruleset/                                    ← IP + domain tag matching engine
+├── ruleset/                                    ← SQLite-backed IP + domain tag matching engine
 ├── zone/                                      ← DNS zone rules (wraps *database.DB, same DB as cache)
 │   ├── zone.go                                ←   Evaluator, LoadRules, Evaluate, match tags
 │   ├── zone_parse.go                          ←   Zone file import + record parsing
@@ -358,7 +358,7 @@ Top layer (wiring):
 10. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
 11. `Resolver.Query()` — upstream (first-win) or recursive
 12. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
-13. `ruleset.Engine` — upstream match filtering (pre-resolution domain routing + post-resolution IP filtering) — filter A/AAAA; all filtered → REFUSED + EDE
+13. `ruleset.Engine` — SQLite-backed tag matching (LoadRules → ruleset_entries → in-memory trie + map); upstream match filtering — filter A/AAAA; all filtered → REFUSED + EDE
 14. Cache population, latency probes, response with server cookie
 
 ### Query Routing (`server/resolver`)
@@ -435,7 +435,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## Notable Design Decisions
 
-- **Unified database (`database/`)**: Nine SQLite tables (eight cache + zone_entries) in a single DB file with WAL mode + mmap (16MB default). `page_size=4096`; `journal_size_limit=mmap_size`; `wal_autocheckpoint=4096`; `synchronous=NORMAL`. `msg_wire` BLOB is zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in one step (~0.5ms). `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based), pinned `*sql.Conn`. See [DB Schema](#db-schema) below.
+- **Unified database (`database/`)**: Ten SQLite tables (nine cache + zone_entries) in a single DB file with WAL mode + mmap (16MB default). `page_size=4096`; `journal_size_limit=mmap_size`; `wal_autocheckpoint=4096`; `synchronous=NORMAL`. `msg_wire` BLOB is zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in one step (~0.5ms). `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based), pinned `*sql.Conn`. See [DB Schema](#db-schema) below.
 
 - **Schema migration (`database/migration.go`)**: Incremental, idempotent migrations keyed by app version (e.g. `"3.1.0"`). `database.Version` is set from `main.Version` before `Open()`. The `version` table stores the last applied version as TEXT, always synced to `database.Version` after startup — the DB version always matches the running binary. Fresh installs start at `Version` (current app version) and skip all migrations (the base DDL already reflects the latest schema); already-current databases only sync the version row (no-op). `minSupportedVersion` defines a rolling window: when bumped, old migrations are removed from code and archived as `.sql` files in `database/migrations/` for manual application via `zjdns --sql <db> "$(cat migrations/X.X.X_xxx.sql)"`.
 - **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and zone (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
@@ -492,7 +492,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## DB Schema
 
-The unified database (`database/`) contains nine SQLite tables (eight cache + one zone): (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The unified database (`database/`) contains ten SQLite tables (nine cache + one zone): (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
 -- Pure DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr,

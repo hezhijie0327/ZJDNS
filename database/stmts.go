@@ -96,6 +96,20 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 
+	// RuleSet statements.
+	db.StmtRuleSetInsert, err = db.SQ.Prepare(
+		`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
+	)
+	if err != nil {
+		return err
+	}
+	db.StmtRuleSetLoad, err = db.SQ.Prepare(
+		`SELECT tag, type, value FROM ruleset_entries ORDER BY tag, type, value`,
+	)
+	if err != nil {
+		return err
+	}
+
 	// Infra cache statements.
 	db.StmtInfraGet, err = db.SQ.Prepare(
 		`SELECT rtt_ms, edns_version, timeout_count, last_timeout, last_success

@@ -6,6 +6,8 @@ package ruleset
 
 import (
 	"zjdns/config"
+	"zjdns/database"
+	"zjdns/internal/log"
 )
 
 // Engine matches queries against rule sets to produce tags.
@@ -15,36 +17,107 @@ type Engine struct {
 	tags   map[string]bool // all known tags from config
 }
 
-// New builds an Engine from RuleSet configurations.
-func New(rulesets []config.RuleSet) (*Engine, error) {
-	e := &Engine{}
-	var ipConfigs []ipRule
-	var domainConfigs []domainRule
+// New creates an empty Engine.
+func New() *Engine {
+	return &Engine{tags: make(map[string]bool)}
+}
+
+// LoadRules stores RuleSet configurations into SQLite and rebuilds the
+// in-memory engine from the database. This follows the same pattern as
+// zone.Evaluator.LoadRules.
+func (e *Engine) LoadRules(db *database.DB, rulesets []config.RuleSet) error {
+	// Clear existing entries and rebuild from config.
+	if _, err := db.SQ.Exec(`DELETE FROM ruleset_entries`); err != nil {
+		return err
+	}
 
 	for _, rs := range rulesets {
-		switch rs.Type {
-		case "ip":
-			ipConfigs = append(ipConfigs, ipRule{tag: rs.Tag, cidrs: rs.Rule, file: rs.File})
-		case "domain":
-			domainConfigs = append(domainConfigs, domainRule{tag: rs.Tag, pattern: "", file: "", rules: rs.Rule, filePath: rs.File})
+		for _, v := range rs.Rule {
+			key := v
+			if rs.Type == "domain" {
+				key = domainKey(v)
+			}
+			if _, err := db.SQ.Exec(
+				`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
+				rs.Tag, rs.Type, key,
+			); err != nil {
+				return err
+			}
 		}
-	}
-
-	var err error
-	if len(ipConfigs) > 0 {
-		e.ip, err = newIPMatcher(ipConfigs)
-		if err != nil {
-			return nil, err
+		if rs.File != "" {
+			lines, ferr := readDomainFile(rs.File)
+			if ferr != nil {
+				return ferr
+			}
+			for _, line := range lines {
+				key := line
+				if rs.Type == "domain" {
+					key = domainKey(line)
+				}
+				if _, err := db.SQ.Exec(
+					`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
+					rs.Tag, rs.Type, key,
+				); err != nil {
+					return err
+				}
+			}
 		}
-	}
-	if len(domainConfigs) > 0 {
-		e.domain = newDomainMatcher(domainConfigs)
-	}
-	e.tags = make(map[string]bool)
-	for _, rs := range rulesets {
 		e.tags[rs.Tag] = true
 	}
-	return e, nil
+
+	log.Infof("RULESET: %d rules loaded into %d tags", e.countRules(db), len(e.tags))
+	// Rebuild in-memory engine from SQLite rows.
+	return e.rebuild(db)
+}
+
+// rebuild reconstructs the in-memory matchers from ruleset_entries.
+func (e *Engine) countRules(db *database.DB) int {
+	var n int
+	if err := db.SQ.QueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n); err != nil {
+		return 0
+	}
+	return n
+}
+
+func (e *Engine) rebuild(db *database.DB) error {
+	rows, err := db.StmtRuleSetLoad.Query()
+	if err != nil {
+		return err
+	}
+	defer rows.Close() //nolint:errcheck // best-effort
+
+	ipByTag := make(map[string][]string)
+	dm := &domainMatcher{suffix: make(map[string]string)}
+
+	for rows.Next() {
+		var tag, typ, value string
+		if err := rows.Scan(&tag, &typ, &value); err != nil {
+			continue
+		}
+		switch typ {
+		case "ip":
+			ipByTag[tag] = append(ipByTag[tag], value)
+		case "domain":
+			dm.suffix[value] = tag
+		}
+	}
+
+	var ipConfigs []ipRule
+	for tag, cidrs := range ipByTag {
+		ipConfigs = append(ipConfigs, ipRule{tag: tag, cidrs: cidrs})
+	}
+
+	if len(ipConfigs) > 0 {
+		var merr error
+		e.ip, merr = newIPMatcher(ipConfigs)
+		if merr != nil {
+			return merr
+		}
+	} else {
+		e.ip = nil
+	}
+	e.domain = dm
+	return nil
 }
 
 // Match returns all tags that match the given query name and client IP.

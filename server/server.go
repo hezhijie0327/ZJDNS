@@ -143,8 +143,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	var rulesetEngine *ruleset.Engine
 	if len(cfg.RuleSet) > 0 {
-		rulesetEngine, err = ruleset.New(cfg.RuleSet)
-		if err != nil {
+		rulesetEngine = ruleset.New()
+		if err := rulesetEngine.LoadRules(db, cfg.RuleSet); err != nil {
 			cancel(fmt.Errorf("ruleset init: %w", err))
 			return nil, fmt.Errorf("ruleset init: %w", err)
 		}

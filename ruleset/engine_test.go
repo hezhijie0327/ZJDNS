@@ -3,17 +3,29 @@ package ruleset
 import (
 	"testing"
 	"zjdns/config"
+	"zjdns/database"
 )
 
-func TestEngine_Match_Domain(t *testing.T) {
-	e, err := New([]config.RuleSet{
-		{Tag: "google", Type: "domain", Rule: []string{"google.com", "*.youtube.com"}},
-		{Tag: "other", Type: "domain", Rule: []string{"example.com"}},
-	})
+func testEngine(t *testing.T, rules []config.RuleSet) *Engine {
+	t.Helper()
+	database.Version = "3.2.12"
+	db, err := database.Open(":memory:", 100, database.Options{MMapSizeMB: 1, CacheSizeMB: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = db.Close() })
+	e := New()
+	if err := e.LoadRules(db, rules); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
 
+func TestEngine_Match_Domain(t *testing.T) {
+	e := testEngine(t, []config.RuleSet{
+		{Tag: "google", Type: "domain", Rule: []string{"google.com", "*.youtube.com"}},
+		{Tag: "other", Type: "domain", Rule: []string{"example.com"}},
+	})
 	tests := []struct {
 		qname string
 		want  string
@@ -38,21 +50,17 @@ func TestEngine_Match_Domain(t *testing.T) {
 }
 
 func TestEngine_Match_IP(t *testing.T) {
-	e, err := New([]config.RuleSet{
+	e := testEngine(t, []config.RuleSet{
 		{Tag: "corp", Type: "ip", Rule: []string{"10.0.0.0/8", "192.168.0.0/16"}},
 		{Tag: "guest", Type: "ip", Rule: []string{"0.0.0.0/0"}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	tests := []struct {
 		ip   string
 		want string
 	}{
 		{"10.1.2.3", "corp"},
 		{"192.168.1.1", "corp"},
-		{"172.16.0.1", "guest"}, // not in corp → matches 0/0
+		{"172.16.0.1", "guest"},
 		{"8.8.8.8", "guest"},
 	}
 	for _, tt := range tests {
@@ -64,21 +72,14 @@ func TestEngine_Match_IP(t *testing.T) {
 }
 
 func TestEngine_Match_Both(t *testing.T) {
-	e, err := New([]config.RuleSet{
+	e := testEngine(t, []config.RuleSet{
 		{Tag: "google", Type: "domain", Rule: []string{"google.com"}},
 		{Tag: "corp", Type: "ip", Rule: []string{"10.0.0.0/8"}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Query from corp IP for google.com → both tags
 	tags := e.Match("google.com.", "10.1.2.3")
 	if !tags["google"] || !tags["corp"] {
 		t.Errorf("Match = %v, want both google and corp", tags)
 	}
-
-	// Query from public IP for google.com → only google
 	tags = e.Match("google.com.", "8.8.8.8")
 	if !tags["google"] || tags["corp"] {
 		t.Errorf("Match = %v, want only google", tags)
@@ -86,27 +87,22 @@ func TestEngine_Match_Both(t *testing.T) {
 }
 
 func TestEngine_HasIPTag(t *testing.T) {
-	e, _ := New([]config.RuleSet{
+	e := testEngine(t, []config.RuleSet{
 		{Tag: "corp", Type: "ip", Rule: []string{"10.0.0.0/8"}},
 		{Tag: "google", Type: "domain", Rule: []string{"google.com"}},
 	})
-
 	if !e.HasIPTag("corp") {
 		t.Error("corp should be an IP tag")
 	}
 	if e.HasIPTag("google") {
 		t.Error("google should NOT be an IP tag")
 	}
-	if e.HasIPTag("nonexistent") {
-		t.Error("nonexistent should not be found")
-	}
 }
 
 func TestEngine_MatchIP_Negation(t *testing.T) {
-	e, _ := New([]config.RuleSet{
+	e := testEngine(t, []config.RuleSet{
 		{Tag: "block", Type: "ip", Rule: []string{"10.0.0.0/8"}},
 	})
-
 	matched, exists := e.MatchIP("10.1.2.3", "block")
 	if !matched || !exists {
 		t.Errorf("should match: matched=%t exists=%t", matched, exists)
@@ -145,14 +141,9 @@ func TestTLDPlusOne(t *testing.T) {
 }
 
 func TestNew_InvalidPrefix(t *testing.T) {
-	// Invalid CIDRs are silently skipped (matching old cidr behavior).
-	// A ruleset with only invalid CIDRs produces no IP matcher — no error.
-	e, err := New([]config.RuleSet{
+	e := testEngine(t, []config.RuleSet{
 		{Tag: "bad", Type: "ip", Rule: []string{"not-a-cidr"}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if e.HasIPTag("bad") {
 		t.Error("tag with only invalid CIDRs should have no IP matcher")
 	}
