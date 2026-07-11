@@ -169,20 +169,26 @@ func (s *SQLiteCache) LookupNsecNeg(qname string, qtype uint16) *NsecResult {
 	return nil
 }
 
-// wireToName converts wire-format bytes back to presentation format.
+// wireToName converts TLD-first wire-format bytes back to normal (presentation)
+// order, so that wireToName(toWireName(x)) == x.
 func wireToName(wire []byte) string {
-	s := ""
+	var labels []string
 	pos := 0
 	for pos < len(wire)-1 {
 		l := int(wire[pos])
 		if l == 0 {
 			break
 		}
+		labels = append(labels, string(wire[pos+1:pos+1+l]))
+		pos += 1 + l
+	}
+	// Reverse labels: wire is TLD-first, presentation is TLD-last.
+	var s string
+	for i := len(labels) - 1; i >= 0; i-- {
 		if s != "" {
 			s += "."
 		}
-		s += string(wire[pos+1 : pos+1+l])
-		pos += 1 + l
+		s += labels[i]
 	}
 	if s != "" {
 		s += "."
