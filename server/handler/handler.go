@@ -275,6 +275,30 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 		return responseMsg
 	}
 
+	// Aggressive NSEC negative cache lookup (RFC 9077).
+	// Before falling through to resolver, check if a cached NSEC/NSEC3
+	// record proves NXDOMAIN or NODATA for this query.
+	if nsecResult := h.cache.LookupNsecNeg(question.Name, question.Qtype); nsecResult != nil {
+		rcode := nsecResult.Rcode
+		log.Debugf("NSEC: negative cache hit for %s type=%s rcode=%d",
+			question.Name, dns.TypeToString[question.Qtype], rcode)
+		msg := h.buildResponse(req)
+		if rcode == dns.RcodeNameError {
+			msg.Rcode = dns.RcodeNameError
+		}
+		msg.AuthenticatedData = true
+		h.addEDNS(msg, req, isSecureConnection, clientIP, cookieOpt, nil, tcpKeepaliveTimeout)
+		h.cache.RecordRequest(&cache.RequestRecord{
+			Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
+			ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
+			Protocol: requestProtocol, Result: "hit", Rcode: rcode,
+			ResponseTime: time.Since(startTime).Milliseconds(),
+			DNSSECStatus: config.DNSSECStatusSecure,
+		})
+		responseMsg = msg
+		return responseMsg
+	}
+
 	if question.Qtype == dns.TypePTR {
 		if ptrAnswer := h.lookupReversePTR(question); len(ptrAnswer) > 0 {
 			log.Debugf("PTR: cache hit for reverse lookup %s, found %d records", question.Name, len(ptrAnswer))

@@ -136,6 +136,21 @@ func (db *DB) migrate() error {
 		) WITHOUT ROWID;
 		CREATE INDEX IF NOT EXISTS idx_ip_latency_probe ON ip_latency(last_probe_time);
 
+		-- ── NSEC negative cache ──────────────────────────────────────────────
+		-- Indexes NSEC/NSEC3 records from validated responses for aggressive
+		-- negative caching. Wire-format (label-prefixed) names sort in DNS
+		-- canonical order as binary. ON DELETE CASCADE auto-clears when the
+		-- parent cache entry is evicted.
+
+		CREATE TABLE IF NOT EXISTS nsec_chain (
+			zone_name  BLOB NOT NULL,
+			owner_name BLOB NOT NULL,
+			next_name  BLOB NOT NULL,
+			types      BLOB NOT NULL,
+			entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			PRIMARY KEY (zone_name, owner_name)
+		);
+
 		-- ── Zone rules ───────────────────────────────────────────────────────
 		-- Zone-file-style rule table queried via B-tree indexed composite-key
 		-- lookups (Evaluate). Rules are bulk-loaded at startup (LoadRules).

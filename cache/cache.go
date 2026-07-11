@@ -40,6 +40,10 @@ type Store interface {
 	Clear() (int64, error)
 	Stats() []string
 	Close() error
+
+	// Aggressive NSEC negative caching (RFC 9077).
+	IndexNsecRecords(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, authority []dns.RR)
+	LookupNsecNeg(qname string, qtype uint16) *NsecResult
 }
 
 // Entry holds a cached DNS response with timing metadata.

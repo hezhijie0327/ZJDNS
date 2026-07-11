@@ -27,6 +27,24 @@ var migrations = []migration{
 	{"3.1.0", "drop legacy schema_version table", migrateV3_1_0},
 	{"3.2.0", "rebuild zone_entries with match_tags in PK", migrateV3_2_0},
 	{"3.2.1", "add performance indexes and drop redundant idx_zone_qname", migrateV3_2_1},
+	{"3.2.8", "add nsec_chain table for aggressive NSEC negative caching", migrateV3_2_8},
+}
+
+func migrateV3_2_8(db *DB) error {
+	_, err := db.SQ.Exec(`
+		CREATE TABLE IF NOT EXISTS nsec_chain (
+			zone_name  BLOB NOT NULL,
+			owner_name BLOB NOT NULL,
+			next_name  BLOB NOT NULL,
+			types      BLOB NOT NULL,
+			entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			PRIMARY KEY (zone_name, owner_name)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("v3.2.8: %w", err)
+	}
+	return nil
 }
 
 func migrateV3_2_1(db *DB) error {

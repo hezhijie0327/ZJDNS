@@ -272,7 +272,12 @@ func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config
 
 	qr := r.cname.resolve(recursiveCtx, question, ecs)
 	qr.Cacheable = !server.NoCache
-	if qr.Err != nil || len(qr.Answer) == 0 {
+	if qr.Err != nil {
+		return false
+	}
+	// NODATA / NXDOMAIN: authoritative returning empty Answer with
+	// NSEC/NSEC3 denial-of-existence proof in Authority.
+	if len(qr.Answer) == 0 && len(qr.Authority) == 0 {
 		return false
 	}
 
