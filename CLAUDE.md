@@ -343,7 +343,7 @@ Top layer (wiring):
 1. Request validation (domain/label length, ANY/AXFR/IXFR rejection)
 2. `zone.Evaluator.Evaluate()` — synthetic response if zone rule matches
 3. `edns.Handler` — extract ECS, DNS Cookie
-4. Early DNS Cookie validation (RFC 7873) — initial handshake (empty ServerCookie) allowed; short (1–15 bytes) → BADCOOKIE; 16 bytes → cryptographic validation
+4. Early DNS Cookie validation (RFC 9018) — initial handshake (empty ServerCookie) allowed; short (1–15 bytes) → BADCOOKIE; 16 bytes → SipHash-2-4 cryptographic validation with timestamp check (expired >1h / future >5min → BADCOOKIE; valid → echo back; >30min → reissue)
 5. `cache.Store.Get()` — hit → serve (with CIDR filtering); miss → resolve
 6. **Pending request dedup** (`pending.go`): Same-key concurrent queries coalesce — only the first reaches the resolver; followers block and receive the identical result. Closes the cache-poisoning race window.
 7. `Resolver.Query()` — upstream (first-win) or recursive

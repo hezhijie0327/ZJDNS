@@ -78,7 +78,6 @@ const (
 	DefaultCookieSecretRotationInterval = 30 * time.Minute
 	DefaultECSRefreshInterval           = 15 * time.Minute
 
-	DefaultCookieSecretSize         = 32    // DNS cookie secret size in bytes
 	DefaultDNSKeyCacheTTL           = 86400 // DNSKEY record cache TTL (seconds)
 	DefaultDNSKeyCacheMinTTL        = 300   // DNSKEY cache minimum TTL (seconds)
 	DefaultMaxNegativeTTL           = 10800 // RFC 2308 §5: max negative cache TTL (3 hours)

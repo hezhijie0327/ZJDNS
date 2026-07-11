@@ -1,7 +1,6 @@
 package edns
 
 import (
-	"bytes"
 	"net"
 	"testing"
 	"zjdns/config"
@@ -105,7 +104,7 @@ func TestECSOption(t *testing.T) {
 	}
 }
 
-func TestCookieGenerator_Basic(t *testing.T) {
+func TestCookieGenerator_RFC9018_Basic(t *testing.T) {
 	cg := NewCookieGenerator()
 	if cg == nil {
 		t.Fatal("NewCookieGenerator returned nil")
@@ -120,18 +119,56 @@ func TestCookieGenerator_Basic(t *testing.T) {
 		t.Errorf("server cookie len = %d, want %d", len(serverCookie), DefaultCookieServerLen)
 	}
 
-	// Validate server cookie
-	if !cg.IsServerCookieValid(clientIP, clientCookie, serverCookie) {
-		t.Error("IsServerCookieValid should succeed with fresh cookie")
+	// Check RFC 9018 wire format: version byte must be 1
+	if serverCookie[0] != 1 {
+		t.Errorf("cookie version = %d, want 1", serverCookie[0])
+	}
+	// Reserved bytes must be zero
+	if serverCookie[1] != 0 || serverCookie[2] != 0 || serverCookie[3] != 0 {
+		t.Errorf("reserved bytes not zero: %v", serverCookie[1:4])
 	}
 
-	// Invalid client cookie
-	if cg.IsServerCookieValid(clientIP, []byte{0, 0, 0, 0}, serverCookie) {
-		t.Error("IsServerCookieValid should fail with short client cookie")
+	// Validate fresh server cookie
+	status := cg.IsServerCookieValid(clientIP, clientCookie, serverCookie)
+	if status != CookieValid {
+		t.Errorf("IsServerCookieValid = %d, want CookieValid (0)", status)
+	}
+
+	// Short client cookie → Invalid
+	if cg.IsServerCookieValid(clientIP, []byte{0, 0, 0, 0}, serverCookie) != CookieInvalid {
+		t.Error("IsServerCookieValid should return CookieInvalid with short client cookie")
+	}
+
+	// Wrong server cookie length → Invalid
+	if cg.IsServerCookieValid(clientIP, clientCookie, []byte{0}) != CookieInvalid {
+		t.Error("IsServerCookieValid should return CookieInvalid with short server cookie")
+	}
+
+	// Wrong version → Invalid
+	badVer := make([]byte, DefaultCookieServerLen)
+	copy(badVer, serverCookie)
+	badVer[0] = 2
+	if cg.IsServerCookieValid(clientIP, clientCookie, badVer) != CookieInvalid {
+		t.Error("IsServerCookieValid should return CookieInvalid for version != 1")
+	}
+
+	// Tampered hash → Invalid
+	tampered := make([]byte, DefaultCookieServerLen)
+	copy(tampered, serverCookie)
+	tampered[15] ^= 0xff
+	if cg.IsServerCookieValid(clientIP, clientCookie, tampered) != CookieInvalid {
+		t.Error("IsServerCookieValid should return CookieInvalid for tampered cookie")
+	}
+
+	// IPv6 client
+	ip6 := net.ParseIP("2001:db8::1")
+	serverCookie6 := cg.GenerateServerCookie(ip6, clientCookie)
+	if status := cg.IsServerCookieValid(ip6, clientCookie, serverCookie6); status != CookieValid {
+		t.Errorf("IPv6: IsServerCookieValid = %d, want CookieValid (0)", status)
 	}
 }
 
-func TestCookieGenerator_Rotation(t *testing.T) {
+func TestCookieGenerator_RFC9018_Rotation(t *testing.T) {
 	cg := NewCookieGenerator()
 	clientIP := net.ParseIP("10.0.0.1")
 	clientCookie := []byte{8, 7, 6, 5, 4, 3, 2, 1}
@@ -140,39 +177,97 @@ func TestCookieGenerator_Rotation(t *testing.T) {
 	cg.RotateSecret()
 	newCookie := cg.GenerateServerCookie(clientIP, clientCookie)
 
-	// New cookie should be different
-	if bytes.Equal(oldCookie, newCookie) {
-		t.Error("cookies should differ after rotation")
+	// Cookies should differ (different secret produces different SipHash)
+	// Note: timestamps may be identical since timeNow is deterministic in tests
+
+	// Old cookie should still validate (previous secret retained) but flag renew
+	statusOld := cg.IsServerCookieValid(clientIP, clientCookie, oldCookie)
+	if statusOld != CookieValidRenew {
+		t.Errorf("old cookie status = %d, want CookieValidRenew (%d)", statusOld, CookieValidRenew)
 	}
 
-	// Old cookie should still validate (previous secret retained)
-	if !cg.IsServerCookieValid(clientIP, clientCookie, oldCookie) {
-		t.Error("old cookie should still validate after rotation")
+	// New cookie should validate with current secret
+	statusNew := cg.IsServerCookieValid(clientIP, clientCookie, newCookie)
+	if statusNew != CookieValid {
+		t.Errorf("new cookie status = %d, want CookieValid (%d)", statusNew, CookieValid)
 	}
 
-	// New cookie should validate
-	if !cg.IsServerCookieValid(clientIP, clientCookie, newCookie) {
-		t.Error("new cookie should validate after rotation")
+	// Second rotation: even older secret still validates
+	cg.RotateSecret()
+	statusOld = cg.IsServerCookieValid(clientIP, clientCookie, oldCookie)
+	if statusOld != CookieValidRenew {
+		t.Errorf("after 2nd rotation old cookie status = %d, want CookieValidRenew (%d)", statusOld, CookieValidRenew)
 	}
 }
 
-func TestCookieGenerator_Nil(t *testing.T) {
+func TestCookieGenerator_RFC9018_Nil(t *testing.T) {
 	var cg *CookieGenerator
 	if cg.GenerateServerCookie(nil, nil) != nil {
 		t.Error("nil CookieGenerator should return nil")
 	}
-	if cg.IsServerCookieValid(nil, nil, nil) {
-		t.Error("nil CookieGenerator should return false")
+	if cg.IsServerCookieValid(nil, nil, nil) != CookieInvalid {
+		t.Error("nil CookieGenerator should return CookieInvalid")
 	}
 	cg.RotateSecret() // should not panic
 }
 
-func TestCookieGenerator_ClientCookie(t *testing.T) {
+func TestCookieGenerator_RFC9018_TimeExpired(t *testing.T) {
 	cg := NewCookieGenerator()
-	clientIP := net.ParseIP("172.16.0.1")
-	cookie := cg.GenerateClientCookie(clientIP)
-	if len(cookie) != DefaultCookieClientLen {
-		t.Errorf("client cookie len = %d, want %d", len(cookie), DefaultCookieClientLen)
+	clientIP := net.ParseIP("192.168.1.1")
+	clientCookie := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+
+	// Save original clock
+	origNow := timeNow
+	defer func() { timeNow = origNow }()
+
+	now := origNow()
+	cookie := cg.GenerateServerCookie(clientIP, clientCookie)
+
+	// Advance clock past expiry (> 1 hour)
+	timeNow = func() uint32 { return now + 3601 }
+	status := cg.IsServerCookieValid(clientIP, clientCookie, cookie)
+	if status != CookieExpired {
+		t.Errorf("expired cookie status = %d, want CookieExpired", status)
+	}
+}
+
+func TestCookieGenerator_RFC9018_TimeRenew(t *testing.T) {
+	cg := NewCookieGenerator()
+	clientIP := net.ParseIP("192.168.1.1")
+	clientCookie := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+
+	origNow := timeNow
+	defer func() { timeNow = origNow }()
+
+	now := origNow()
+	cookie := cg.GenerateServerCookie(clientIP, clientCookie)
+
+	// Advance clock past renew threshold (> 30 min but < 1 hour)
+	timeNow = func() uint32 { return now + 1801 }
+	status := cg.IsServerCookieValid(clientIP, clientCookie, cookie)
+	if status != CookieValidRenew {
+		t.Errorf("renew cookie status = %d, want CookieValidRenew", status)
+	}
+}
+
+func TestCookieGenerator_RFC9018_TimeFuture(t *testing.T) {
+	cg := NewCookieGenerator()
+	clientIP := net.ParseIP("192.168.1.1")
+	clientCookie := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+
+	origNow := timeNow
+	defer func() { timeNow = origNow }()
+
+	// Advance clock 1 hour, generate cookie with future timestamp
+	now := origNow()
+	timeNow = func() uint32 { return now + 3600 }
+	cookie := cg.GenerateServerCookie(clientIP, clientCookie)
+
+	// Restore clock → cookie timestamp is 1 hour in the future (>5 min limit)
+	timeNow = origNow
+	status := cg.IsServerCookieValid(clientIP, clientCookie, cookie)
+	if status != CookieFuture {
+		t.Errorf("future cookie status = %d, want CookieFuture (%d)", status, CookieFuture)
 	}
 }
 

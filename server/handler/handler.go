@@ -329,17 +329,20 @@ func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP 
 		})
 		return false, nil, nil, msg
 	}
-	if cookieOpt != nil && len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen && !h.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
-		log.Debugf("EDNS: bad server cookie from %s, returning BADCOOKIE", clientIP)
-		msg := h.buildResponse(req)
-		msg.Rcode = dns.RcodeFormatError
-		serverCookie := h.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
-		cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
-		h.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
-		h.cache.RecordRequest(&cache.RequestRecord{
-			Result: "badcookie", Protocol: requestProtocol, Rcode: dns.RcodeFormatError,
-		})
-		return false, nil, nil, msg
+	if cookieOpt != nil && len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen {
+		status := h.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
+		if status == edns.CookieExpired || status == edns.CookieFuture || status == edns.CookieInvalid {
+			log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", status, clientIP)
+			msg := h.buildResponse(req)
+			msg.Rcode = dns.RcodeFormatError
+			serverCookie := h.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+			cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
+			h.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
+			h.cache.RecordRequest(&cache.RequestRecord{
+				Result: "badcookie", Protocol: requestProtocol, Rcode: dns.RcodeFormatError,
+			})
+			return false, nil, nil, msg
+		}
 	}
 
 	if ecsOpt == nil {

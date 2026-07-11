@@ -54,17 +54,24 @@ func (h *Handler) generateCookieResponse(cookieOpt *edns.CookieOption, clientIP 
 		return ""
 	}
 
-	if len(cookieOpt.ServerCookie) >= edns.DefaultCookieServerLen {
-		if h.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie) {
-			log.Debugf("EDNS: server cookie validated for %s", clientIP)
+	var serverCookie []byte
+	if len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen {
+		status := h.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
+		if status == edns.CookieValid {
+			log.Debugf("EDNS: server cookie valid for %s, reusing", clientIP)
+			serverCookie = cookieOpt.ServerCookie
 		} else {
-			log.Debugf("EDNS: server cookie invalid for %s, regenerating", clientIP)
+			log.Debugf("EDNS: server cookie status=%d for %s, renewing", status, clientIP)
+			serverCookie = h.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 		}
 	} else {
 		log.Debugf("EDNS: generating new server cookie for %s", clientIP)
+		serverCookie = h.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 	}
-	serverCookie := h.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 
+	if serverCookie == nil {
+		return ""
+	}
 	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 }
 
