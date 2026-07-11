@@ -198,31 +198,6 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 // processUpstreamResponse handles the response from a forwarding upstream server.
 // Returns true if the goroutine should return (result sent or handled).
 func (r *Resolver) processUpstreamResponse(queryResult *client.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context) bool {
-	// 0x20 case-preservation check (draft-0x20 / RFC 6840 bis).
-	// If the upstream server mangled the case pattern, retry without
-	// perturbation — this server does not support 0x20.
-	if queryResult.PerturbedName != "" && queryResult.Response != nil && len(queryResult.Response.Question) > 0 {
-		respQname := queryResult.Response.Question[0].Header().Name
-		if !edns.IsCasePreserved(queryResult.PerturbedName, respQname) {
-			log.Debugf("UPSTREAM: 0x20 CAPSFAIL for %s via %s, retrying without case randomization", question.Name, server.Address)
-			pool.DefaultMessagePool.Put(queryResult.Response)
-
-			// Build a fresh message without perturbation.
-			nocapsMsg := r.buildMsg(question, nil, true, false)
-			// PerturbedName is left empty → no CAPSFAIL check on the retry.
-			nocapsResult := r.client.ExecuteQuery(groupCtx, nocapsMsg, server)
-			pool.DefaultMessagePool.Put(nocapsMsg)
-
-			if nocapsResult.Error == nil && nocapsResult.Response != nil {
-				queryResult = nocapsResult
-				goto processResponse
-			}
-			// Nocaps retry failed — fall through to discard the original result.
-			return false
-		}
-	}
-
-processResponse:
 	rcode := queryResult.Response.Rcode
 	serverDesc := server.Address
 	if server.Protocol != "" && server.Protocol != config.ProtoUDP {

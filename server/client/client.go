@@ -25,17 +25,16 @@ import (
 // Result holds the outcome of a single DNS query including response, timing,
 // and metadata.
 type Result struct {
-	Response      *dns.Msg
-	Answer        []dns.RR
-	Authority     []dns.RR
-	Additional    []dns.RR
-	Server        string
-	Error         error
-	Duration      time.Duration
-	Protocol      string
-	Validated     bool
-	ECS           *edns.ECSOption
-	PerturbedName string // 0x20-perturbed qname for response validation
+	Response   *dns.Msg
+	Answer     []dns.RR
+	Authority  []dns.RR
+	Additional []dns.RR
+	Server     string
+	Error      error
+	Duration   time.Duration
+	Protocol   string
+	Validated  bool
+	ECS        *edns.ECSOption
 }
 
 // Client manages outbound DNS queries across multiple transport protocols with
@@ -135,13 +134,6 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	qname := ""
 	if len(msg.Question) > 0 {
 		qname = msg.Question[0].Header().Name
-		// 0x20 case randomization (draft-0x20 / RFC 6840 bis):
-		// Randomize the case of alphabetic characters in the qname.
-		// A legitimate server echoes the case pattern; a blind forger
-		// cannot predict it. PTR names are left unchanged.
-		perturbed := edns.PerturbQnameCase(qname)
-		msg.Question[0].Header().Name = perturbed
-		result.PerturbedName = perturbed
 	}
 	log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, strings.ToUpper(server.Protocol), qname)
 
