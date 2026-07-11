@@ -185,14 +185,17 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	if rulesetEngine != nil {
 		cidrMatcher = rulesetEngine
 	}
-	dnsResolver := resolver.New(
-		queryClient, guard, ednsHandler, cidrMatcher,
-		func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
+	dnsResolver := resolver.New(resolver.Config{
+		Client:        queryClient,
+		Guard:         guard,
+		EDNS:          ednsHandler,
+		CIDRMatcher:   cidrMatcher,
+		BuildMsg: func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
 			return h.BuildQueryMessage(q, ecs, rd, secure)
 		},
-		cacheStore,
-	)
-	dnsResolver.DNSSECEnforce = cfg.Server.Features.DNSSECEnforce
+		Cache:         cacheStore,
+		DNSSECEnforce: cfg.Server.Features.DNSSECEnforce,
+	})
 	dnsResolver.ConfigureServers(cfg.Upstream, cfg.Fallback)
 	h.SetResolver(dnsResolver)
 

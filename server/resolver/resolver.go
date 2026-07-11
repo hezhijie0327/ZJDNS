@@ -133,21 +133,32 @@ func (u *upstreamSet) store(s []*config.UpstreamServer) {
 	u.servers.Store(&s)
 }
 
-// New creates a new Resolver with the given client, security guard, EDNS
-// handler, CIDR matcher, and query builder function.
-func New(c *client.Client, g *security.Guard, e *edns.Handler, cidrMatcher CIDRMatcher, buildMsg BuildQueryFunc, cacheStore cache.Store) *Resolver {
+// Config bundles the dependencies needed to construct a Resolver.
+type Config struct {
+	Client        *client.Client
+	Guard         *security.Guard
+	EDNS          *edns.Handler
+	CIDRMatcher   CIDRMatcher
+	BuildMsg      BuildQueryFunc
+	Cache         cache.Store
+	DNSSECEnforce bool
+}
+
+// New creates a new Resolver from the given Config.
+func New(cfg Config) *Resolver {
 	r := &Resolver{
-		client:   c,
-		edns:     e,
-		crd:      cidrMatcher,
-		buildMsg: buildMsg,
-		upstream: &upstreamSet{},
-		fallback: &upstreamSet{},
-		cache:    cacheStore,
+		client:        cfg.Client,
+		edns:          cfg.EDNS,
+		crd:           cfg.CIDRMatcher,
+		buildMsg:      cfg.BuildMsg,
+		DNSSECEnforce: cfg.DNSSECEnforce,
+		upstream:      &upstreamSet{},
+		fallback:      &upstreamSet{},
+		cache:         cfg.Cache,
 	}
-	r.recursive = &Recursive{resolver: r, cache: cacheStore}
+	r.recursive = &Recursive{resolver: r, cache: cfg.Cache}
 	r.cname = &CNAME{resolver: r}
-	r.validator = &Validator{Crypto: g.Crypto, Hijack: g.Detector}
+	r.validator = &Validator{Crypto: cfg.Guard.Crypto, Hijack: cfg.Guard.Detector}
 	return r
 }
 

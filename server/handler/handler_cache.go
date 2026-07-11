@@ -117,7 +117,7 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
 
-	var res queryResult
+	var qr *resolver.QueryResult
 	done := make(chan struct{})
 	refreshed := !h.IsClosed() && h.tryStartRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
 	if !refreshed {
@@ -127,19 +127,7 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 		defer close(done)
 		defer h.finishRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
 		defer zdnsutil.HandlePanic("expired cache fallback query")
-		qr := h.resolver.Query(h.ctx, question, ecsOpt)
-		res = queryResult{
-			answer:     qr.Answer,
-			authority:  qr.Authority,
-			additional: qr.Additional,
-			validated:  qr.Validated,
-			cacheable:  qr.Cacheable,
-			ecs:        qr.ECS,
-			server:     qr.Server,
-			fallback:   qr.Fallback,
-			hijack:     qr.Hijack,
-			err:        qr.Err,
-		}
+		qr = h.resolver.Query(h.ctx, question, ecsOpt)
 	}()
 
 	timer := time.NewTimer(config.DefaultServeExpiredClientTimeout)
@@ -147,23 +135,23 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 
 	select {
 	case <-done:
-		if res.err == nil {
-			return h.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, res.answer, res.authority, res.additional, res.validated, res.ecs, clientIP, isSecureConnection, res.server, res.fallback, res.hijack, res.cacheable, time.Now(), "", tcpKeepaliveTimeout)
+		if qr.Err == nil {
+			return h.processQuerySuccess(req, question, ecsOpt, cookieOpt, clientRequestedDNSSEC, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS, clientIP, isSecureConnection, qr.Server, qr.Fallback, qr.Hijack, qr.Cacheable, time.Now(), "", tcpKeepaliveTimeout)
 		}
 		return h.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	case <-timer.C:
 		go func() {
 			select {
 			case <-done:
-				if res.err != nil {
+				if qr.Err != nil {
 					return
 				}
 				log.Debugf("CACHE: background refresh completed for slow expired query %s", question.Name)
-				if res.cacheable {
-					h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, res.answer, res.authority, res.additional, res.validated)
+				if qr.Cacheable {
+					h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, qr.Answer, qr.Authority, qr.Additional, qr.Validated)
 				}
 				if h.prober != nil {
-					h.prober.Start(question.Name, question.Qtype, res.answer, res.authority, res.additional, res.validated, res.ecs)
+					h.prober.Start(question.Name, question.Qtype, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.ECS)
 				}
 			case <-h.ctx.Done():
 			}
@@ -173,6 +161,14 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 }
 
 func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, clientRequestedDNSSEC bool, clientIP net.IP, isSecureConnection bool, startTime time.Time, requestProtocol string, tcpKeepaliveTimeout uint16) *dns.Msg {
+	// Guard against calling before SetResolver (two-phase initialization).
+	if h.resolver == nil {
+		msg := h.buildResponse(req)
+		msg.Rcode = dns.RcodeServerFailure
+		log.Warnf("CACHE: resolver not set — returning SERVFAIL for %s", question.Name)
+		return msg
+	}
+
 	// Deduplicate concurrent identical queries.  If another goroutine is
 	// already resolving the same (qname, qtype, qclass, ECS, DNSSEC), wait
 	// for its result instead of sending a duplicate upstream query.

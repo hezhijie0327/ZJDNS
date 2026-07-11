@@ -165,6 +165,23 @@ func (db *DB) Close() error {
 	return nil
 }
 
+// SQLExec delegates to db.SQ.Exec, exposing a method that satisfies the
+// sqlExecutor interface defined by consumer packages (ruleset, zone).
+func (db *DB) SQLExec(query string, args ...any) (sql.Result, error) {
+	return db.SQ.Exec(query, args...)
+}
+
+// SQLQueryRow delegates to db.SQ.QueryRow.
+func (db *DB) SQLQueryRow(query string, args ...any) *sql.Row {
+	return db.SQ.QueryRow(query, args...)
+}
+
+// LoadRuleSetEntries returns all rows from ruleset_entries for in-memory
+// engine rebuild.
+func (db *DB) LoadRuleSetEntries() (*sql.Rows, error) {
+	return db.StmtRuleSetLoad.Query()
+}
+
 // Cache methods
 
 // AddEntryCount atomically adds delta to the entry counter.

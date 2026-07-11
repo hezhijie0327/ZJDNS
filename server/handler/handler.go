@@ -67,20 +67,6 @@ type BackgroundConfig struct {
 	Ctx          context.Context
 }
 
-// queryResult holds the result of a resolver query for stale-cache fallback.
-type queryResult struct {
-	answer     []dns.RR
-	authority  []dns.RR
-	additional []dns.RR
-	validated  bool
-	cacheable  bool
-	ecs        *edns.ECSOption
-	server     string
-	fallback   bool
-	hijack     bool
-	err        error
-}
-
 // New creates a Handler with the given dependencies. The resolver and prober
 // are set later via SetResolver / SetProber after they are constructed.
 func New(

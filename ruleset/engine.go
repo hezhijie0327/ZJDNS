@@ -5,10 +5,19 @@
 package ruleset
 
 import (
+	"database/sql"
+
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
 )
+
+// RuleSetStorage provides SQL operations needed by the ruleset engine.
+// *database.DB satisfies this interface implicitly.
+type RuleSetStorage interface {
+	SQLExec(query string, args ...any) (sql.Result, error)
+	SQLQueryRow(query string, args ...any) *sql.Row
+	LoadRuleSetEntries() (*sql.Rows, error)
+}
 
 // Engine matches queries against rule sets to produce tags.
 type Engine struct {
@@ -25,9 +34,9 @@ func New() *Engine {
 // LoadRules stores RuleSet configurations into SQLite and rebuilds the
 // in-memory engine from the database. This follows the same pattern as
 // zone.Evaluator.LoadRules.
-func (e *Engine) LoadRules(db *database.DB, rulesets []config.RuleSet) error {
+func (e *Engine) LoadRules(db RuleSetStorage, rulesets []config.RuleSet) error {
 	// Clear existing entries and rebuild from config.
-	if _, err := db.SQ.Exec(`DELETE FROM ruleset_entries`); err != nil {
+	if _, err := db.SQLExec(`DELETE FROM ruleset_entries`); err != nil {
 		return err
 	}
 
@@ -37,7 +46,7 @@ func (e *Engine) LoadRules(db *database.DB, rulesets []config.RuleSet) error {
 			if rs.Type == "domain" {
 				key = domainKey(v)
 			}
-			if _, err := db.SQ.Exec(
+			if _, err := db.SQLExec(
 				`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
 				rs.Tag, rs.Type, key,
 			); err != nil {
@@ -54,7 +63,7 @@ func (e *Engine) LoadRules(db *database.DB, rulesets []config.RuleSet) error {
 				if rs.Type == "domain" {
 					key = domainKey(line)
 				}
-				if _, err := db.SQ.Exec(
+				if _, err := db.SQLExec(
 					`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
 					rs.Tag, rs.Type, key,
 				); err != nil {
@@ -71,16 +80,16 @@ func (e *Engine) LoadRules(db *database.DB, rulesets []config.RuleSet) error {
 }
 
 // rebuild reconstructs the in-memory matchers from ruleset_entries.
-func (e *Engine) countRules(db *database.DB) int {
+func (e *Engine) countRules(db RuleSetStorage) int {
 	var n int
-	if err := db.SQ.QueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n); err != nil {
+	if err := db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n); err != nil {
 		return 0
 	}
 	return n
 }
 
-func (e *Engine) rebuild(db *database.DB) error {
-	rows, err := db.StmtRuleSetLoad.Query()
+func (e *Engine) rebuild(db RuleSetStorage) error {
+	rows, err := db.LoadRuleSetEntries()
 	if err != nil {
 		return err
 	}
