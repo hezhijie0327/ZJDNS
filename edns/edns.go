@@ -71,10 +71,10 @@ func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 
 // ApplyToMessage adds EDNS(0) options (ECS, Cookie, EDE, Padding, TCP
 // Keepalive) to a DNS message. isRequest selects the padding block size:
-// 128 bytes for queries (RFC 8467), 468 bytes for responses.
-// clientWantsPadding, parsed via HasPaddingOption, lets the client opt out
-// via +nopadding / +noalignment. tcpKeepaliveTimeout, in 100ms units
-// (RFC 7828), is only included in TCP-server responses (not requests).
+// DefaultPaddingRequestBlockSize for queries, DefaultPaddingResponseBlockSize
+// for responses (RFC 8467). clientWantsPadding, parsed via HasPaddingOption,
+// lets the client opt out via +nopadding / +noalignment. tcpKeepaliveTimeout,
+// in 100ms units (RFC 7828), is only included in TCP-server responses.
 func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption, isRequest, clientWantsPadding bool, tcpKeepaliveTimeout uint16) {
 	if h == nil || msg == nil {
 		return

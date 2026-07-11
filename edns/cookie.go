@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"codeberg.org/miekg/dns"
+
+	"zjdns/internal/log"
 )
 
 // CookieOption holds the parsed client and server DNS Cookie values.
@@ -22,10 +24,8 @@ type CookieOption struct {
 // CookieValStatus encodes the RFC 9018 validation outcome.
 type CookieValStatus int
 
-// Cookie length constants (RFC 9018).
-// RFC 9018 §4.3 time boundaries.
-// timeNow returns the current Unix timestamp. Factored as a package-level
-// variable so tests can inject a deterministic clock.
+// secretPair holds the three most recent cookie signing secrets, retaining
+// previous and older secrets to validate cookies issued before the last rotation.
 type secretPair struct {
 	current  []byte // active signing secret, 16 bytes
 	previous []byte // previous secret retained for validation
@@ -46,6 +46,7 @@ const (
 	CookieInvalid                           // version/hash mismatch or malformed
 )
 
+// Cookie length constants (RFC 9018).
 const (
 	DefaultCookieClientLen       = 8
 	DefaultCookieServerLen       = 16
@@ -54,6 +55,7 @@ const (
 	cookieSecretSize             = 16
 )
 
+// RFC 9018 §4.3 time boundaries.
 const (
 	cookieServerLifetime = 1 * time.Hour
 	cookieRenewThreshold = 30 * time.Minute
@@ -62,7 +64,7 @@ const (
 
 // timeNow returns the current Unix timestamp. Factored as a package-level
 // variable so tests can inject a deterministic clock.
-var timeNow = func() uint32 { return uint32(time.Now().Unix()) }
+var timeNow = func() uint32 { return uint32(log.NowUnix()) }
 
 // NewCookieGenerator creates a CookieGenerator with a random 16-byte secret.
 func NewCookieGenerator() *CookieGenerator {
@@ -250,8 +252,8 @@ func BuildCookieResponse(clientCookie, serverCookie []byte) string {
 }
 
 // ParseCookie extracts the DNS Cookie option from a DNS message.
-func (m *Handler) ParseCookie(msg *dns.Msg) *CookieOption {
-	if m == nil || msg == nil {
+func (h *Handler) ParseCookie(msg *dns.Msg) *CookieOption {
+	if h == nil || msg == nil {
 		return nil
 	}
 	for _, rr := range msg.Pseudo {
