@@ -89,6 +89,10 @@ func (e *Evaluator) loadFile(tx *sql.Tx, parent *config.ZoneRule) (int, error) {
 
 			fields := strings.Fields(curRawName)
 			curDomain = zdnsutil.NormalizeDomain(fields[0])
+			curRawName = fields[0] // strip extra params (rcode= / match=) from domain
+			if isWildcard {
+				curRawName = "*." + curRawName
+			}
 			curWildcard = isWildcard
 			curRcode = parent.Rcode
 			curTags = serializeMatchTags(parent.Match)
