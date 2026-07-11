@@ -89,7 +89,7 @@ func (db *DB) prepareStatements() error {
 	}
 	db.StmtNsecLookup, err = db.SQ.Prepare(
 		`SELECT owner_name, next_name, types FROM nsec_chain
-		 WHERE zone_name = CAST(? AS BLOB)
+		 WHERE zone_name = ?
 		 ORDER BY owner_name ASC`,
 	)
 	if err != nil {

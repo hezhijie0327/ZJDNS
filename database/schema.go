@@ -112,7 +112,23 @@ func (db *DB) migrate() error {
 			PRIMARY KEY (entry_id, protocol, rcode)
 		) WITHOUT ROWID;
 
-		-- ── Stats metadata ───────────────────────────────────────────────────
+		-- ── NSEC negative cache ──────────────────────────────────────────────
+		-- Indexes NSEC/NSEC3 records from validated responses for aggressive
+		-- negative caching. Wire-format (label-prefixed) names sort in DNS
+		-- canonical order as binary. ON DELETE CASCADE auto-clears when the
+		-- parent cache entry is evicted.
+
+		CREATE TABLE IF NOT EXISTS nsec_chain (
+			zone_name  BLOB NOT NULL,
+			owner_name BLOB NOT NULL,
+			next_name  BLOB NOT NULL,
+			types      BLOB NOT NULL,
+			entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			PRIMARY KEY (zone_name, owner_name)
+		) WITHOUT ROWID;
+
+		
+			-- ── Stats metadata ───────────────────────────────────────────────────
 		-- Single row tracking the last request_log.id that was cleared by
 		-- FlushDB("stats"). Resetting stats is O(1): just UPDATE this row.
 
@@ -145,22 +161,7 @@ func (db *DB) migrate() error {
 			type  TEXT NOT NULL,
 			value TEXT NOT NULL,
 			PRIMARY KEY (tag, type, value)
-		);
-
-		-- ── NSEC negative cache ──────────────────────────────────────────────
-		-- Indexes NSEC/NSEC3 records from validated responses for aggressive
-		-- negative caching. Wire-format (label-prefixed) names sort in DNS
-		-- canonical order as binary. ON DELETE CASCADE auto-clears when the
-		-- parent cache entry is evicted.
-
-		CREATE TABLE IF NOT EXISTS nsec_chain (
-			zone_name  BLOB NOT NULL,
-			owner_name BLOB NOT NULL,
-			next_name  BLOB NOT NULL,
-			types      BLOB NOT NULL,
-			entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-			PRIMARY KEY (zone_name, owner_name)
-		);
+		) WITHOUT ROWID;
 
 		-- ── Infrastructure cache ─────────────────────────────────────────────
 		-- Per-nameserver state: EDNS capability and timeout backoff.
@@ -191,7 +192,7 @@ func (db *DB) migrate() error {
 			additional BLOB,               -- zstd-compressed additional RRs
 			match_tags TEXT NOT NULL DEFAULT '',
 			is_wildcard INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (qname, qtype, qclass, match_tags)
+			PRIMARY KEY (qname, qtype, qclass, is_wildcard, match_tags)
 		);
 	`)
 	if err != nil {

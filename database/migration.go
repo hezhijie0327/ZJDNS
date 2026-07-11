@@ -27,6 +27,31 @@ var migrations = []migration{
 	{"3.1.0", "drop legacy schema_version table", migrateV3_1_0},
 	{"3.2.0", "rebuild zone_entries with match_tags in PK", migrateV3_2_0},
 	{"3.2.1", "add performance indexes and drop redundant idx_zone_qname", migrateV3_2_1},
+	{"3.2.13", "rebuild zone_entries PK with is_wildcard", migrateV3_2_13},
+}
+
+func migrateV3_2_13(db *DB) error {
+	_, err := db.SQ.Exec(`
+		CREATE TABLE IF NOT EXISTS zone_entries_new (
+			qname      TEXT NOT NULL,
+			qtype      INTEGER NOT NULL DEFAULT 0,
+			qclass     INTEGER NOT NULL DEFAULT 0,
+			rcode      INTEGER NOT NULL DEFAULT 0,
+			answer     BLOB,
+			authority  BLOB,
+			additional BLOB,
+			match_tags TEXT NOT NULL DEFAULT '',
+			is_wildcard INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (qname, qtype, qclass, is_wildcard, match_tags)
+		);
+		INSERT OR IGNORE INTO zone_entries_new SELECT * FROM zone_entries;
+		DROP TABLE zone_entries;
+		ALTER TABLE zone_entries_new RENAME TO zone_entries;
+	`)
+	if err != nil {
+		return fmt.Errorf("v3.2.13: %w", err)
+	}
+	return nil
 }
 
 func migrateV3_2_1(db *DB) error {

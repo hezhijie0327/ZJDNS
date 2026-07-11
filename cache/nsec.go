@@ -2,7 +2,6 @@ package cache
 
 import (
 	"encoding/binary"
-	"fmt"
 	"slices"
 	"strings"
 	"zjdns/config"
@@ -124,8 +123,8 @@ func (s *SQLiteCache) LookupNsecNeg(qname string, qtype uint16) *NsecResult {
 
 	for zone := qname; zone != "."; zone = parentName(zone) {
 		rows, err := s.db.SQ.Query(
-			"SELECT owner_name, next_name, types FROM nsec_chain WHERE hex(zone_name) = ? ORDER BY owner_name ASC",
-			fmt.Sprintf("%X", toWireName(zone)))
+			"SELECT owner_name, next_name, types FROM nsec_chain WHERE zone_name = ? ORDER BY owner_name ASC",
+			toWireName(zone))
 		if err != nil {
 			return nil
 		}

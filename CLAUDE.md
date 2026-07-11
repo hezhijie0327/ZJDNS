@@ -142,9 +142,9 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 - **Package-level functions over empty structs**: `type Foo struct{}` with methods → convert to functions.
 
 **Type naming:**
-- **Avoid stutter with package name**: `cache.CacheEntry` → `cache.Entry`, `cidr.CIDRMatchInfo` → `cidr.MatchInfo`.
+- **Avoid stutter with package name**: `cache.CacheEntry` → `cache.Entry`, (removed) → `cidr.MatchInfo`.
   **Idiomatic exceptions** (allowed): `server.Server`, `http.Server`, `handler.Handler`, `resolver.Resolver` — when the package is named after the primary type it exports.
-- **Unexported types also avoid stutter**: `cidr.cidrRule` → `cidr.rule`.
+- **Unexported types also avoid stutter**: (removed) → `cidr.rule`.
 - **Conversion helpers use `as` prefix**: `asIPv4Net` (converts `*net.IPNet` → `*ipv4Net`). Not `toXxx`.
 
 ### Performance (Hot Path)
@@ -322,7 +322,7 @@ Layer 3 (domain packages — import config + internal/*, never each other):
   database → config, dnsutil, log        (owns SQLite infrastructure)
   edns → config, ipdetect, log, pool      (only domain→domain edge allowed)
   cache → config, database, dnsutil, log, pool
-  cidr → config, dnsutil, log
+  ruleset → config
   zone → config, database, dnsutil, log
 
 Layer 4 (server sub-packages — import domain + internal, never server/ parent):
@@ -352,7 +352,7 @@ Top layer (wiring):
 3. `edns.Handler` — extract ECS, DNS Cookie
 4. Early DNS Cookie validation (RFC 9018) — initial handshake (empty ServerCookie) allowed; short (1–15 bytes) → BADCOOKIE; 16 bytes → SipHash-2-4 cryptographic validation with timestamp check (expired >1h / future >5min → BADCOOKIE; valid → echo back; >30min → reissue)
 5. **Aggressive NSEC negative cache** (RFC 8198) — `LookupNsecNeg` checks `nsec_chain` table; NSEC/NSEC3 covering qname → synthesize NXDOMAIN/NODATA locally, skip upstream
-6. `cache.Store.Get()` — hit → serve (with CIDR filtering); miss → resolve
+6. `cache.Store.Get()` — hit → serve (with ruleset tag filtering); miss → resolve
 7. **Pending request dedup** (`pending.go`): Same-key concurrent queries coalesce — only the first reaches the resolver; followers block and receive the identical result. Closes the cache-poisoning race window.
 8. **0x20 case randomization** (draft-0x20 / RFC 6840 bis) — `Client.ExecuteQuery` randomizes qname case before dispatch; response must preserve case pattern; CAPSFAIL → nocaps retry on same server
 10. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
@@ -459,7 +459,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
 - **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
-- **Zone rules**: SQLite-backed composite-key lookup on `(QNAME, QTYPE, QCLASS)` in the unified database. Zone config wraps `rules` + `bypass_tags` in a `ZoneConfig` struct. Each zone entry returns ANSWER + AUTHORITY + ADDITIONAL + RCODE. Inline rules via JSON `name`, `rcode`, `answer`, `authority`, `additional`, `match` (CIDR tags). Type/Class use IANA uint16 numbers (1=A, 28=AAAA, 16=TXT). Zone-file import via `file` field: domain headers (`.domain` / `*.wild`) with optional `rcode=N` and `match=tag`, record lines in `TYPE CONTENT [TTL] [key=value ...]` format. Wildcard `*.domain.com` supported in both inline `name` and file — matches via O(labels) suffix walk. `bypass_tags` skips all zone rules for clients matching the given CIDR tags (e.g. gateway devices). `DynamicContent` rules (`zjdns.stats`, `zjdns.db.clear*`) are called at query time. Zone responses bypass cache.
+- **Zone rules**: SQLite-backed composite-key lookup on `(QNAME, QTYPE, QCLASS)` in the unified database. Zone config wraps `rules` + `bypass_tags` in a `ZoneConfig` struct. Each zone entry returns ANSWER + AUTHORITY + ADDITIONAL + RCODE. Inline rules via JSON `name`, `rcode`, `answer`, `authority`, `additional`, `match` (ruleset tags). Type/Class use IANA uint16 numbers (1=A, 28=AAAA, 16=TXT). Zone-file import via `file` field: domain headers (`.domain` / `*.wild`) with optional `rcode=N` and `match=tag`, record lines in `TYPE CONTENT [TTL] [key=value ...]` format. Wildcard `*.domain.com` supported in both inline `name` and file — matches via O(labels) suffix walk. `bypass_tags` skips all zone rules for clients matching the given CIDR tags (e.g. gateway devices). `DynamicContent` rules (`zjdns.stats`, `zjdns.db.clear*`) are called at query time. Zone responses bypass cache.
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns). Similarly, `handler.Question` is a type alias of `resolver.Question` to avoid duplicate struct definitions.
 - **request_log ring buffer**: Append-only request journal replaces the old `hit_counters` table. `RecordRequest()` does a single INSERT — no conflict detection, no read-before-write. Stats are aggregated via SQL over rows with `id > cleared_before`; FlushDB("stats") resets the threshold without touching log rows.
 - **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtInsertLog`, `stmtInsertLatency`, `stmtGetLastProbe`) at initialization time to avoid per-call SQL compilation overhead.
