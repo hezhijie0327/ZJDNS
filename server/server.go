@@ -13,13 +13,13 @@ import (
 	"strings"
 	"sync"
 	"zjdns/cache"
-	"zjdns/cidr"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/ruleset"
 	"zjdns/server/client"
 	serverdnscrypt "zjdns/server/dnscrypt"
 	"zjdns/server/handler"
@@ -41,7 +41,6 @@ type Server struct {
 	guard           *security.Guard
 	tls             *tls.Server
 	dnscryptServer  *serverdnscrypt.Server
-	cidrFilter      *cidr.Filter
 	pprofServer     *http.Server
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
@@ -142,15 +141,14 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}
 
-	var cidrFilter *cidr.Filter
-	if len(cfg.CIDR) > 0 {
-		cidrFilter, err = cidr.New(cfg.CIDR)
+	var rulesetEngine *ruleset.Engine
+	if len(cfg.RuleSet) > 0 {
+		rulesetEngine, err = ruleset.New(cfg.RuleSet)
 		if err != nil {
-			cancel(fmt.Errorf("CIDR filter init: %w", err))
-			return nil, fmt.Errorf("CIDR filter init: %w", err)
+			cancel(fmt.Errorf("ruleset init: %w", err))
+			return nil, fmt.Errorf("ruleset init: %w", err)
 		}
 	}
-	server.cidrFilter = cidrFilter
 
 	// ── Core: handler + security ──────────────────────────────────────────
 
@@ -164,8 +162,10 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	)
 	server.handler = h
 
-	if cidrFilter != nil {
-		h.SetTagMatcher(func(ip net.IP) map[string]bool { return cidrFilter.MatchTags(ip) })
+	if rulesetEngine != nil {
+		h.SetTagMatcher(func(qname string, ip net.IP) map[string]bool {
+			return rulesetEngine.Match(qname, ip.String())
+		})
 	}
 
 	guard := security.New(cacheStore, cfg.Server.Features.HijackProtection)
@@ -181,8 +181,12 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	// ── Resolution: resolver + upstream config ────────────────────────────
 
+	var cidrMatcher resolver.CIDRMatcher
+	if rulesetEngine != nil {
+		cidrMatcher = rulesetEngine
+	}
 	dnsResolver := resolver.New(
-		queryClient, guard, ednsHandler, cidrFilter,
+		queryClient, guard, ednsHandler, cidrMatcher,
 		func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
 			return h.BuildQueryMessage(q, ecs, rd, secure)
 		},

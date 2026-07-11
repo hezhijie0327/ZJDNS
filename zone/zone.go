@@ -217,7 +217,7 @@ func (e *Evaluator) insertRow(tx *sql.Tx, qname string, qtype, qclass uint16, rc
 // ---------------------------------------------------------------------------
 
 // Evaluate checks a query against loaded zone rules.
-// matchedTags is the set of CIDR tags the client IP matched (from cidr.Filter).
+// matchedTags is the set of ruleset tags the client IP/domain matched.
 // nil or empty map means no CIDR matching is active.
 func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map[string]bool) Result {
 	if qclass == 0 {

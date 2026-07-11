@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"net"
 	"sync/atomic"
 	"zjdns/cache"
 	"zjdns/config"
@@ -51,10 +50,11 @@ type QueryResult struct {
 // question, ECS option, and connection parameters.
 type BuildQueryFunc func(question Question, ecs *edns.ECSOption, recursionDesired, isSecureConnection bool) *dns.Msg
 
-// CIDRMatcher is the interface for matching IP addresses against CIDR rules
+// CIDRMatcher is the interface for matching IP addresses against ruleset tags
 // with optional tags.
 type CIDRMatcher interface {
-	MatchIP(ip net.IP, tag string) (matched, exists bool)
+	MatchIP(ip, tag string) (matched, exists bool)
+	HasIPTag(tag string) bool
 }
 
 type upstreamSet struct {
@@ -66,7 +66,7 @@ type upstreamSet struct {
 type Resolver struct {
 	client          *client.Client
 	edns            *edns.Handler
-	cidr            CIDRMatcher
+	crd             CIDRMatcher
 	buildMsg        BuildQueryFunc
 	upstream        *upstreamSet
 	fallback        *upstreamSet
@@ -135,11 +135,11 @@ func (u *upstreamSet) store(s []*config.UpstreamServer) {
 
 // New creates a new Resolver with the given client, security guard, EDNS
 // handler, CIDR matcher, and query builder function.
-func New(c *client.Client, g *security.Guard, e *edns.Handler, cidr CIDRMatcher, buildMsg BuildQueryFunc, cacheStore cache.Store) *Resolver {
+func New(c *client.Client, g *security.Guard, e *edns.Handler, cidrMatcher CIDRMatcher, buildMsg BuildQueryFunc, cacheStore cache.Store) *Resolver {
 	r := &Resolver{
 		client:   c,
 		edns:     e,
-		cidr:     cidr,
+		crd:      cidrMatcher,
 		buildMsg: buildMsg,
 		upstream: &upstreamSet{},
 		fallback: &upstreamSet{},

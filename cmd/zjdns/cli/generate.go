@@ -87,10 +87,10 @@ func generateExampleConfig() string {
 		},
 	}
 
-	cfg.CIDR = []config.CIDRConfig{
-		{IPs: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}, Tag: "corp-net"},
-		{IPs: []string{"0.0.0.0/0"}, Tag: "guest"},
-		{IPs: []string{"10.0.0.1/32"}, Tag: "gateway"},
+	cfg.RuleSet = []config.RuleSet{
+		{Type: "ip", Rule: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}, Tag: "corp-net"},
+		{Type: "ip", Rule: []string{"0.0.0.0/0"}, Tag: "guest"},
+		{Type: "ip", Rule: []string{"10.0.0.1/32"}, Tag: "gateway"},
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")

@@ -145,7 +145,7 @@ func captureUpstreamEDE(r *Resolver, resp *dns.Msg, serverAddr string) {
 }
 
 func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]dns.RR, bool) {
-	if r.cidr == nil || len(matchTags) == 0 {
+	if r.crd == nil || len(matchTags) == 0 {
 		return records, false
 	}
 
@@ -163,8 +163,17 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 		}
 
 		accepted := false
+		hasIPTag := false
 		for _, matchTag := range matchTags {
-			matched, exists := r.cidr.MatchIP(ip, matchTag)
+			tagName := matchTag
+			if tagName != "" && tagName[0] == '!' {
+				tagName = tagName[1:]
+			}
+			if !r.crd.HasIPTag(tagName) {
+				continue
+			}
+			hasIPTag = true
+			matched, exists := r.crd.MatchIP(ip.String(), matchTag)
 			if !exists {
 				return nil, true
 			}
@@ -172,6 +181,9 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 				accepted = true
 				break
 			}
+		}
+		if !hasIPTag {
+			accepted = true
 		}
 		if accepted {
 			filtered = append(filtered, rr)

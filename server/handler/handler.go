@@ -46,7 +46,7 @@ type Handler struct {
 	}
 	edns               *edns.Handler
 	zoneEvaluator      *zone.Evaluator
-	tagMatcher         func(ip net.IP) map[string]bool // CIDR tag lookup for zone bypass
+	tagMatcher         func(qname string, ip net.IP) map[string]bool // rule tag lookup for zone/upstream
 	resolver           *resolver.Resolver
 	prober             LatencyProber
 	dns64              *dns64.Synthesizer
@@ -106,7 +106,7 @@ func New(
 		ReverseLookup(string) []cache.LookupResult
 	})
 	// Initialize DNS64 synthesizer.
-	if cfg.Server.Features.DNS64.Prefix != "" {
+	if cfg.Server.Features.DNS64 != nil && cfg.Server.Features.DNS64.Prefix != "" {
 		synth, err := dns64.New(cfg.Server.Features.DNS64.Prefix)
 		if err != nil {
 			log.Warnf("DNS64: %v, using default prefix", err)
@@ -125,7 +125,7 @@ func (h *Handler) SetResolver(r *resolver.Resolver) { h.resolver = r }
 func (h *Handler) SetProber(p LatencyProber) { h.prober = p }
 
 // SetTagMatcher sets the CIDR tag matching function for zone bypass checks.
-func (h *Handler) SetTagMatcher(fn func(ip net.IP) map[string]bool) { h.tagMatcher = fn }
+func (h *Handler) SetTagMatcher(fn func(qname string, ip net.IP) map[string]bool) { h.tagMatcher = fn }
 
 // Prober returns the latency prober (for lifecycle cleanup).
 func (h *Handler) Prober() LatencyProber { return h.prober }
@@ -442,7 +442,7 @@ func (h *Handler) processZone(req *dns.Msg, question *Question, clientIP net.IP,
 
 	var matchedTags map[string]bool
 	if h.tagMatcher != nil {
-		matchedTags = h.tagMatcher(clientIP)
+		matchedTags = h.tagMatcher(question.Name, clientIP)
 	}
 	if h.zoneEvaluator.Bypass(matchedTags) {
 		return nil, false

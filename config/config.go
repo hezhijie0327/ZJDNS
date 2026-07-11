@@ -20,7 +20,7 @@ type ServerConfig struct {
 	Upstream []UpstreamServer `json:"upstream"`
 	Fallback []UpstreamServer `json:"fallback,omitempty"`
 	Zone     ZoneConfig       `json:"zone"`
-	CIDR     []CIDRConfig     `json:"cidr"`
+	RuleSet  []RuleSet        `json:"ruleset"`
 }
 
 // ServerSettings contains the server runtime settings and feature flags.
@@ -77,7 +77,7 @@ type FeatureFlags struct {
 	Database         DatabaseSettings   `json:"database,omitempty"`
 	Cache            CacheSettings      `json:"cache,omitempty"`
 	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitempty"`
-	DNS64            DNS64Config        `json:"dns64,omitempty"`
+	DNS64            *DNS64Config       `json:"dns64,omitempty"`
 }
 
 // DNS64Config holds settings for DNS64 (RFC 6147) AAAA synthesis.
@@ -154,12 +154,13 @@ type ZoneRecord struct {
 	Content string `json:"content"`
 }
 
-// CIDRConfig defines a CIDR rule set loaded from a file or inline rules,
-// associated with a tag.
-type CIDRConfig struct {
-	File string   `json:"file,omitempty"`
-	IPs  []string `json:"ips,omitempty"`
+// RuleSet defines a tag-bearing rule that can match by client IP (CIDR),
+// query domain (suffix), or both. Files contain one entry per line (# comments).
+type RuleSet struct {
 	Tag  string   `json:"tag"`
+	Type string   `json:"type"`           // "ip" or "domain"
+	Rule []string `json:"rule,omitempty"` // inline entries
+	File string   `json:"file,omitempty"` // file with one entry per line
 }
 
 // LatencyProbeStep defines a single latency probe step with protocol, port,

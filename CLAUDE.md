@@ -253,7 +253,7 @@ zjdns/
 │   ├── store.go                               ←   SQLiteCache struct, New, Get, Set, eviction, latency sort
 │   ├── stats.go                               ←   RecordRequest, Stats, FlushDB, ReverseLookup
 │   └── helpers.go                             ←   insertPtrMap, TTL helpers, ecsParams
-├── cidr/                                      ← IP filtering with tag matching
+├── ruleset/                                    ← IP + domain tag matching engine
 ├── zone/                                      ← DNS zone rules (wraps *database.DB, same DB as cache)
 │   ├── zone.go                                ←   Evaluator, LoadRules, Evaluate, match tags
 │   ├── zone_parse.go                          ←   Zone file import + record parsing
@@ -355,11 +355,11 @@ Top layer (wiring):
 6. `cache.Store.Get()` — hit → serve (with CIDR filtering); miss → resolve
 7. **Pending request dedup** (`pending.go`): Same-key concurrent queries coalesce — only the first reaches the resolver; followers block and receive the identical result. Closes the cache-poisoning race window.
 8. **0x20 case randomization** (draft-0x20 / RFC 6840 bis) — `Client.ExecuteQuery` randomizes qname case before dispatch; response must preserve case pattern; CAPSFAIL → nocaps retry on same server
-9. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
-10. `Resolver.Query()` — upstream (first-win) or recursive
-11. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
-12. `cidr.Filter.MatchIP()` — filter A/AAAA; all filtered → REFUSED + EDE
-13. Cache population, latency probes, response with server cookie
+10. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
+11. `Resolver.Query()` — upstream (first-win) or recursive
+12. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
+13. `ruleset.Engine` — upstream match filtering (pre-resolution domain routing + post-resolution IP filtering) — filter A/AAAA; all filtered → REFUSED + EDE
+14. Cache population, latency probes, response with server cookie
 
 ### Query Routing (`server/resolver`)
 - Upstream + fallback queried concurrently via `errgroup`; first NOERROR wins
@@ -415,7 +415,7 @@ Top layer (wiring):
 | `Recursive` | `server/resolver` | Built-in recursive walk |
 | `CryptoValidator` | `server/security` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in `dnssec_nsec.go` |
 | `Guard` | `server/security` | Bundles CryptoValidator + Detector |
-| `Filter` | `cidr` | CIDR-based IP matching; `MatchInfo` + unexported `rule` types |
+| `Engine` | `ruleset` | CIDR + domain tag matching; `Match(qname,ip)`, `MatchIP` |
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |
 | `Prober` | `server/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
 | `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |

@@ -39,12 +39,12 @@ func validateConfig(cfg *ServerConfig) error {
 		}
 	}
 
-	cidrTags, err := validateCIDRConfigs(cfg)
+	rulesetTags, err := validateRuleSets(cfg)
 	if err != nil {
 		return err
 	}
 
-	if err := validateUpstreamServers(cfg, cidrTags); err != nil {
+	if err := validateUpstreamServers(cfg, rulesetTags); err != nil {
 		return err
 	}
 
@@ -95,28 +95,30 @@ func validateLogLevel(cfg *ServerConfig) {
 	}
 }
 
-func validateCIDRConfigs(cfg *ServerConfig) (map[string]bool, error) {
-	cidrTags := make(map[string]bool)
-	for i, cidrConfig := range cfg.CIDR {
-		if cidrConfig.Tag == "" {
-			return nil, fmt.Errorf("CIDR config %d: tag cannot be empty", i)
+func validateRuleSets(cfg *ServerConfig) (map[string]bool, error) {
+	rulesetTags := make(map[string]bool)
+	for i, rs := range cfg.RuleSet {
+		if rs.Tag == "" {
+			return nil, fmt.Errorf("ruleset %d: tag cannot be empty", i)
 		}
-		if cidrTags[cidrConfig.Tag] {
-			return nil, fmt.Errorf("CIDR config %d: duplicate tag '%s'", i, cidrConfig.Tag)
+		if rulesetTags[rs.Tag] {
+			return nil, fmt.Errorf("ruleset %d: duplicate tag '%s'", i, rs.Tag)
 		}
-		cidrTags[cidrConfig.Tag] = true
-
-		if cidrConfig.File == "" && len(cidrConfig.IPs) == 0 {
-			return nil, fmt.Errorf("CIDR config %d: either 'file' or 'ips' must be specified", i)
+		rulesetTags[rs.Tag] = true
+		if rs.Type != "ip" && rs.Type != "domain" {
+			return nil, fmt.Errorf("ruleset %d: type must be 'ip' or 'domain', got '%s'", i, rs.Type)
 		}
-		if cidrConfig.File != "" && !zdnsutil.IsValidFilePath(cidrConfig.File) {
-			return nil, fmt.Errorf("CIDR config %d: file not found: %s", i, cidrConfig.File)
+		if rs.File == "" && len(rs.Rule) == 0 {
+			return nil, fmt.Errorf("ruleset %d: must specify 'rule' or 'file'", i)
+		}
+		if rs.File != "" && !zdnsutil.IsValidFilePath(rs.File) {
+			return nil, fmt.Errorf("ruleset %d: file not found: %s", i, rs.File)
 		}
 	}
-	return cidrTags, nil
+	return rulesetTags, nil
 }
 
-func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error {
+func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) error {
 	validProtocols := map[string]bool{
 		ProtoUDP: true, ProtoTCP: true, ProtoTLS: true, ProtoDOT: true,
 		ProtoQUIC: true, ProtoDOQ: true,
@@ -179,7 +181,7 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 
 		for _, matchTag := range server.Match {
 			cleanTag := strings.TrimPrefix(matchTag, "!")
-			if !cidrTags[cleanTag] {
+			if !rulesetTags[cleanTag] {
 				return fmt.Errorf("upstream server %d: match tag '%s' not found", i, cleanTag)
 			}
 		}
