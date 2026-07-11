@@ -1,8 +1,9 @@
-# bump-version.ps1 — bump ZJDNS version and create a migration skeleton.
+# bump-version.ps1 — bump ZJDNS version and optionally create a migration skeleton.
 # Usage:
-#   pwsh scripts/bump-version.ps1 patch   "add performance indexes"
-#   pwsh scripts/bump-version.ps1 minor   "new DNSCrypt feature"
-#   pwsh scripts/bump-version.ps1 major   "breaking protocol change"
+#   pwsh scripts/bump-version.ps1 patch   "add indexes"                        # + migration
+#   pwsh scripts/bump-version.ps1 patch   "merge files"   -NoMigration         # no SQL file
+#   pwsh scripts/bump-version.ps1 minor   "new feature"
+#   pwsh scripts/bump-version.ps1 major   "breaking change"
 #
 # Conventions (see CLAUDE.md §Version Bumping):
 #   Z (patch) — bug fixes, perf improvements, refactors, linter fixes
@@ -15,7 +16,10 @@ param(
     [string]$Bump,
 
     [Parameter(Mandatory)]
-    [string]$Slug
+    [string]$Slug,
+
+    [Parameter()]
+    [switch]$NoMigration
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,19 +50,22 @@ Set-Content $VersionFile $content -NoNewline
 Write-Host "Bumped $VersionFile"
 
 # ── Create migration SQL archive ─────────────────────────────────────────
-$MigrationFile = "database/migrations/${New}_${Slug}.sql"
-New-Item -ItemType Directory -Force -Path "database/migrations" | Out-Null
-Set-Content $MigrationFile @"
+if (-not $NoMigration) {
+    $MigrationFile = "database/migrations/${New}_${Slug}.sql"
+    New-Item -ItemType Directory -Force -Path "database/migrations" | Out-Null
+    Set-Content $MigrationFile @"
 -- $New : $Slug
 -- TODO: add migration SQL here
 "@
-Write-Host "Created $MigrationFile"
+    Write-Host "Created $MigrationFile"
 
-# ── Remind about migration.go ────────────────────────────────────────────
-$Var = "migrateV${Major}_${Minor}_${Patch}"
-Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  1. Edit $MigrationFile with the actual SQL"
-Write-Host "  2. Add migration entry to database/migration.go:"
-Write-Host "     {`"$New`", `"$Slug`", $Var},"
-Write-Host "  3. Implement the $Var function"
+    $Var = "migrateV${Major}_${Minor}_${Patch}"
+    Write-Host ""
+    Write-Host "Next steps:"
+    Write-Host "  1. Edit $MigrationFile with the actual SQL"
+    Write-Host "  2. Add migration entry to database/migration.go:"
+    Write-Host "     {`"$New`", `"$Slug`", $Var},"
+    Write-Host "  3. Implement the $Var function"
+} else {
+    Write-Host "(skipped migration SQL — schema unchanged)"
+}

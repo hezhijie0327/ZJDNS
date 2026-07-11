@@ -272,11 +272,11 @@ func Debugf(format string, args ...any) { Default.Debug(format, args...) }
 // IsDebug reports whether the default logger is at Debug level or higher.
 func IsDebug() bool { return Default.Level() >= Debug }
 
-// SetLevel sets the logging level on the default manager.
+// SetLevel sets the logging level on the default logger.
 func SetLevel(lvl Level) { Default.SetLevel(lvl) }
 
 // SetLevelFilter applies both a level and optional component filter to the
-// default manager. The logLevelStr is in the format "level:comp1,comp2".
+// default logger. The logLevelStr is in the format "level:comp1,comp2".
 func SetLevelFilter(logLevelStr string) {
 	lvl, components := ParseLevelFilter(logLevelStr, Info)
 	Default.SetLevel(lvl)

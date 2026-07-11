@@ -9,6 +9,8 @@ import (
 	"zjdns/internal/log"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
+
+	zdnsutil "zjdns/internal/dnsutil"
 )
 
 const dsnParams = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
@@ -207,3 +209,15 @@ func (db *DB) EnsureEntry(qname string, qtype, qclass int, ecsAddr string, ecsPr
 	}
 	return id
 }
+
+// Compress compresses data with zstd (delegates to dnsutil.Compress).
+var Compress = zdnsutil.Compress
+
+// Decompress decompresses data with zstd (delegates to dnsutil.Decompress).
+var Decompress = zdnsutil.Decompress
+
+// BoolToInt converts a bool to 0 or 1 (delegates to dnsutil.BoolToInt).
+var BoolToInt = zdnsutil.BoolToInt
+
+// JoinPlaceholders joins string parts with a separator (delegates to dnsutil.JoinPlaceholders).
+var JoinPlaceholders = zdnsutil.JoinPlaceholders

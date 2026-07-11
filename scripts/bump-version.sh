@@ -1,27 +1,32 @@
 #!/bin/sh
-# bump-version.sh — bump ZJDNS version and create a migration skeleton.
+# bump-version.sh — bump ZJDNS version and optionally create a migration skeleton.
 # Usage:
-#   sh scripts/bump-version.sh patch   "add performance indexes"   # 3.2.1 → 3.2.2
-#   sh scripts/bump-version.sh minor   "new DNSCrypt feature"      # 3.2.1 → 3.3.0
-#   sh scripts/bump-version.sh major   "breaking protocol change"  # 3.2.1 → 4.0.0
+#   sh scripts/bump-version.sh patch   "add performance indexes"          # 3.2.1 → 3.2.2 + migration
+#   sh scripts/bump-version.sh patch   "merge tiny files"   --no-migration # 3.2.1 → 3.2.2, no SQL file
+#   sh scripts/bump-version.sh minor   "new DNSCrypt feature"             # 3.2.1 → 3.3.0
+#   sh scripts/bump-version.sh major   "breaking protocol change"         # 3.2.1 → 4.0.0
 #
 # Conventions (see CLAUDE.md §Version Bumping):
 #   Z (patch) — bug fixes, perf improvements, refactors, linter fixes
 #   Y (minor) — new features, new config options, new protocols
 #   X (major) — breaking config/schema/API changes
 #
-# When bumping:
-#   - Always create a migration SQL in database/migrations/<version>_<slug>.sql
-#   - Add the migration entry to database/migration.go
-#   - Bump cmd/zjdns/version.go
+# When bumping with --no-migration:
+#   - Only bumps version.go — no SQL file created
+#   - Use for pure code refactors, naming fixes, lint fixes (no schema changes)
 
 set -eu
 
 BUMP="${1:-}"
 SLUG="${2:-}"
+GEN_MIGRATION=true
+
+if [ "${3:-}" = "--no-migration" ]; then
+    GEN_MIGRATION=false
+fi
 
 if [ -z "$BUMP" ] || [ -z "$SLUG" ]; then
-    echo "Usage: sh scripts/bump-version.sh <patch|minor|major> <slug>" >&2
+    echo "Usage: sh scripts/bump-version.sh <patch|minor|major> <slug> [--no-migration]" >&2
     exit 1
 fi
 
@@ -58,18 +63,21 @@ fi
 echo "Bumped $VERSION_FILE"
 
 # ── Create migration SQL archive ─────────────────────────────────────────
-MIGRATION_FILE="database/migrations/${NEW}_${SLUG}.sql"
-mkdir -p database/migrations
-cat > "$MIGRATION_FILE" <<EOF
+if $GEN_MIGRATION; then
+    MIGRATION_FILE="database/migrations/${NEW}_${SLUG}.sql"
+    mkdir -p database/migrations
+    cat > "$MIGRATION_FILE" <<EOF
 -- $NEW: $SLUG
 -- TODO: add migration SQL here
 EOF
-echo "Created $MIGRATION_FILE"
+    echo "Created $MIGRATION_FILE"
 
-# ── Remind about migration.go ────────────────────────────────────────────
-echo ""
-echo "Next steps:"
-echo "  1. Edit $MIGRATION_FILE with the actual SQL"
-echo "  2. Add migration entry to database/migration.go:"
-echo "     {\"$NEW\", \"$SLUG\", migrateV${MAJOR}_${MINOR}_${PATCH}},"
-echo "  3. Implement the migrateV${MAJOR}_${MINOR}_${PATCH} function"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Edit $MIGRATION_FILE with the actual SQL"
+    echo "  2. Add migration entry to database/migration.go:"
+    echo "     {\"$NEW\", \"$SLUG\", migrateV${MAJOR}_${MINOR}_${PATCH}},"
+    echo "  3. Implement the migrateV${MAJOR}_${MINOR}_${PATCH} function"
+else
+    echo "(skipped migration SQL — schema unchanged)"
+fi
