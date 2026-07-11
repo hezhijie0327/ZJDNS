@@ -185,6 +185,19 @@ func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns
 	log.Debugf("CACHE: miss for %s, querying upstream/recursive", question.Name)
 	qr := h.resolver.Query(h.ctx, question, ecsOpt)
 
+	// DNS64: if AAAA query returned no records, try synthesizing from A.
+	if h.dns64 != nil && question.Qtype == dns.TypeAAAA &&
+		qr.Err == nil && len(qr.Answer) == 0 {
+		aQuestion := Question{Name: question.Name, Qtype: dns.TypeA, Qclass: question.Qclass}
+		aqr := h.resolver.Query(h.ctx, aQuestion, ecsOpt)
+		if aqr.Err == nil && len(aqr.Answer) > 0 {
+			qr.Answer, qr.Authority, qr.Additional = h.dns64.Synthesize(
+				qr.Answer, qr.Authority, qr.Additional,
+				aqr.Answer, aqr.Authority, aqr.Additional, qr.Validated)
+			log.Debugf("DNS64: synthesized %d AAAA records for %s", len(qr.Answer), question.Name)
+		}
+	}
+
 	// Notify any followers that joined during this query.
 	if h.pending != nil {
 		h.pending.Done(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, qr)

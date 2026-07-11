@@ -77,6 +77,7 @@ const (
 
 	DefaultCookieSecretRotationInterval = 30 * time.Minute
 	DefaultECSRefreshInterval           = 15 * time.Minute
+	DefaultDNS64Prefix                  = "64:ff9b::/96" // RFC 6052 §2.1 well-known prefix
 
 	DefaultDNSKeyCacheTTL           = 86400 // DNSKEY record cache TTL (seconds)
 	DefaultDNSKeyCacheMinTTL        = 300   // DNSKEY cache minimum TTL (seconds)

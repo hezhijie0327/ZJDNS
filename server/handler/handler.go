@@ -11,6 +11,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
+	"zjdns/internal/dns64"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pending"
@@ -48,6 +49,7 @@ type Handler struct {
 	tagMatcher         func(ip net.IP) map[string]bool // CIDR tag lookup for zone bypass
 	resolver           *resolver.Resolver
 	prober             LatencyProber
+	dns64              *dns64.Synthesizer
 	prefetchCooldown   map[string]int64
 	prefetchCooldownMu sync.RWMutex
 	cacheRefreshGroup  *errgroup.Group
@@ -103,6 +105,16 @@ func New(
 	h.reverseCache, _ = cacheStore.(interface {
 		ReverseLookup(string) []cache.LookupResult
 	})
+	// Initialize DNS64 synthesizer.
+	if cfg.Server.Features.DNS64.Prefix != "" {
+		synth, err := dns64.New(cfg.Server.Features.DNS64.Prefix)
+		if err != nil {
+			log.Warnf("DNS64: %v, using default prefix", err)
+			synth, _ = dns64.New(config.DefaultDNS64Prefix)
+		}
+		h.dns64 = synth
+		log.Infof("DNS64: enabled with prefix %s", h.dns64.Prefix())
+	}
 	return h
 }
 

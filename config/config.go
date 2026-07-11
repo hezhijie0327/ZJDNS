@@ -77,6 +77,12 @@ type FeatureFlags struct {
 	Database         DatabaseSettings   `json:"database,omitempty"`
 	Cache            CacheSettings      `json:"cache,omitempty"`
 	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitempty"`
+	DNS64            DNS64Config        `json:"dns64,omitempty"`
+}
+
+// DNS64Config holds settings for DNS64 (RFC 6147) AAAA synthesis.
+type DNS64Config struct {
+	Prefix string `json:"prefix,omitempty"` // e.g. "64:ff9b::/96", defaults to RFC 6052 well-known
 }
 
 // DDRSettings configures Discovery of Designated Resolvers (DDR) advertisement.

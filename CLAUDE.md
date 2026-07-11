@@ -355,10 +355,11 @@ Top layer (wiring):
 6. `cache.Store.Get()` — hit → serve (with CIDR filtering); miss → resolve
 7. **Pending request dedup** (`pending.go`): Same-key concurrent queries coalesce — only the first reaches the resolver; followers block and receive the identical result. Closes the cache-poisoning race window.
 8. **0x20 case randomization** (draft-0x20 / RFC 6840 bis) — `Client.ExecuteQuery` randomizes qname case before dispatch; response must preserve case pattern; CAPSFAIL → nocaps retry on same server
-9. `Resolver.Query()` — upstream (first-win) or recursive
-10. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
-11. `cidr.Filter.MatchIP()` — filter A/AAAA; all filtered → REFUSED + EDE
-12. Cache population, latency probes, response with server cookie
+9. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
+10. `Resolver.Query()` — upstream (first-win) or recursive
+11. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
+12. `cidr.Filter.MatchIP()` — filter A/AAAA; all filtered → REFUSED + EDE
+13. Cache population, latency probes, response with server cookie
 
 ### Query Routing (`server/resolver`)
 - Upstream + fallback queried concurrently via `errgroup`; first NOERROR wins
