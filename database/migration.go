@@ -110,7 +110,9 @@ func (db *DB) runMigrations() error {
 	var applied string
 	_ = db.SQ.QueryRow("SELECT version FROM version").Scan(&applied)
 
-	if applied != "" && applied < minSupportedVersion {
+	// "0.0.0" is the sentinel set by base DDL for fresh databases — treat as
+	// current and let runMigrations apply any pending migrations on top.
+	if applied != "" && applied != "0.0.0" && applied < minSupportedVersion {
 		return fmt.Errorf(
 			"database too old: version %s is below minimum supported %s; upgrade through an intermediate version first",
 			applied, minSupportedVersion,
