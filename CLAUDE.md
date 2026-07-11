@@ -243,9 +243,9 @@ zjdns/
 ├── config/                                    ← ECSConfig, ECSOption, defaults, validation
 ├── edns/                                      ← Handler, Cookie, EDE, padding (ECSOption alias → config)
 ├── database/                                  ← Unified SQLite DB: connection, schema, migration
-│   ├── db.go                                  ←   DB struct, Open, Close, re-exports (zstd, helpers)
-│   ├── schema.go                              ←   10 tables (cache 9 + zone 1) in one migration
-│   ├── stmts.go                               ←   15 prepared statements (cache 12 + zone 3)
+│   ├── db.go                                  ←   DB struct, Open, Close
+│   ├── schema.go                              ←   11 tables in one migration
+│   ├── stmts.go                               ←   15 prepared statements (6 cache + 3 zone + 2 NSEC + 2 ruleset + 2 infra)
 │   ├── migration.go                           ←   Incremental schema migrations
 │   └── migrations/                            ←   Archived migration SQL files
 ├── cache/                                     ← Store interface, DNS response cache (wraps *database.DB)
@@ -350,16 +350,15 @@ Top layer (wiring):
 1. Request validation (domain/label length, ANY/AXFR/IXFR rejection)
 2. `zone.Evaluator.Evaluate()` — synthetic response if zone rule matches
 3. `edns.Handler` — extract ECS, DNS Cookie
-4. Early DNS Cookie validation (RFC 9018) — initial handshake (empty ServerCookie) allowed; short (1–15 bytes) → BADCOOKIE; 16 bytes → SipHash-2-4 cryptographic validation with timestamp check (expired >1h / future >5min → BADCOOKIE; valid → echo back; >30min → reissue)
-5. **Aggressive NSEC negative cache** (RFC 8198) — `LookupNsecNeg` checks `nsec_chain` table; NSEC/NSEC3 covering qname → synthesize NXDOMAIN/NODATA locally, skip upstream
-6. `cache.Store.Get()` — hit → serve (with ruleset tag filtering); miss → resolve
+4. Early DNS Cookie validation (RFC 7873/9018) — initial handshake (empty ServerCookie) allowed; short (1–15 bytes) → BADCOOKIE; 16 bytes → SipHash-2-4 cryptographic validation with timestamp check (expired >1h / future >5min → BADCOOKIE; valid → echo back; >30min → reissue)
+5. `cache.Store.Get()` — hit → serve (with ruleset tag filtering); miss → resolve
+6. **Aggressive NSEC negative cache** (RFC 8198) — after cache miss, `LookupNsecNeg` checks `nsec_chain` table; NSEC/NSEC3 covering qname → synthesize NXDOMAIN/NODATA locally, skip upstream
 7. **Pending request dedup** (`pending.go`): Same-key concurrent queries coalesce — only the first reaches the resolver; followers block and receive the identical result. Closes the cache-poisoning race window.
-8. **0x20 case randomization** (draft-0x20 / RFC 6840 bis) — `Client.ExecuteQuery` randomizes qname case before dispatch; response must preserve case pattern; CAPSFAIL → nocaps retry on same server
-10. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
-11. `Resolver.Query()` — upstream (first-win) or recursive
-12. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
-13. `ruleset.Engine` — SQLite-backed tag matching (LoadRules → ruleset_entries → in-memory trie + map); upstream match filtering — filter A/AAAA; all filtered → REFUSED + EDE
-14. Cache population, latency probes, response with server cookie
+8. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
+9. `Resolver.Query()` — upstream (first-win) or recursive
+10. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
+11. `ruleset.Engine` — SQLite-backed tag matching (LoadRules → ruleset_entries → in-memory trie + map); upstream match filtering — filter A/AAAA; all filtered → REFUSED + EDE
+12. Cache population, latency probes, response with server cookie
 
 ### Query Routing (`server/resolver`)
 - Upstream + fallback queried concurrently via `errgroup`; first NOERROR wins
@@ -391,7 +390,7 @@ Top layer (wiring):
 | `ECSConfig` | `config` | User-facing ECS subnet configuration (moved from edns) |
 | `ECSOption` | `config` | Parsed EDNS Client Subnet (edns has type alias: `type ECSOption = config.ECSOption`) |
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
-| `DB` | `database` | Unified SQLite DB: pinned `*sql.Conn`, schema migration, 9 prepared stmts | Wraps `*sql.Conn` for shared in-memory access |
+| `DB` | `database` | Unified SQLite DB: goroutine-safe `*sql.DB`, schema migration, 15 prepared stmts | Connection pool with WAL mode |
 | `Options` | `database` | SQLite PRAGMA config: `MMapSizeMB`, `CacheSizeMB` | |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
@@ -429,13 +428,13 @@ All logs use `zjdns/internal/log` (package-level `Logger` instance `Default`). D
 
 **Component filtering**: `log_level` supports `level:comp1,comp2` syntax (e.g. `"debug:UPSTREAM,RECURSION"`). Messages without a `PREFIX: ` pattern always pass through.
 
-**21 canonical prefixes**: `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`.
+**20 canonical prefixes**: `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`.
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:` merged → `TLS:`. Hot-path logs are `Debug` only.
 
 ## Notable Design Decisions
 
-- **Unified database (`database/`)**: Ten SQLite tables (nine cache + zone_entries) in a single DB file with WAL mode + mmap (16MB default). `page_size=4096`; `journal_size_limit=mmap_size`; `wal_autocheckpoint=4096`; `synchronous=NORMAL`. `msg_wire` BLOB is zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in one step (~0.5ms). `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based), pinned `*sql.Conn`. See [DB Schema](#db-schema) below.
+- **Unified database (`database/`)**: Ten SQLite tables (nine cache + zone_entries) in a single DB file with WAL mode + mmap (16MB default). `page_size=4096`; `journal_size_limit=mmap_size`; `wal_autocheckpoint=4096`; `synchronous=NORMAL`. `msg_wire` BLOB is zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in one step (~0.5ms). `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based), goroutine-safe `*sql.DB`. See [DB Schema](#db-schema) below.
 
 - **Schema migration (`database/migration.go`)**: Incremental, idempotent migrations keyed by app version (e.g. `"3.1.0"`). `database.Version` is set from `main.Version` before `Open()`. The `version` table stores the last applied version as TEXT, always synced to `database.Version` after startup — the DB version always matches the running binary. Fresh installs start at `Version` (current app version) and skip all migrations (the base DDL already reflects the latest schema); already-current databases only sync the version row (no-op). `minSupportedVersion` defines a rolling window: when bumped, old migrations are removed from code and archived as `.sql` files in `database/migrations/` for manual application via `zjdns --sql <db> "$(cat migrations/X.X.X_xxx.sql)"`.
 - **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and zone (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
@@ -492,7 +491,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## DB Schema
 
-The unified database (`database/`) contains ten SQLite tables (nine cache + one zone): (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The unified database (`database/`) contains eleven SQLite tables: (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
 -- Pure DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr,
@@ -586,7 +585,7 @@ CREATE TABLE zone_entries (
     additional BLOB,               -- zstd-compressed additional RRs
     match_tags TEXT NOT NULL DEFAULT '',
     is_wildcard INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (qname, qtype, qclass, match_tags)
+    PRIMARY KEY (qname, qtype, qclass, is_wildcard, match_tags)
 );
 
 ```
