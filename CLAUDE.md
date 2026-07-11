@@ -253,7 +253,7 @@ zjdns/
 │   ├── store.go                               ←   SQLiteCache struct, New, Get, Set, eviction, latency sort
 │   ├── stats.go                               ←   RecordRequest, Stats, FlushDB, ReverseLookup
 │   └── helpers.go                             ←   insertPtrMap, TTL helpers, ecsParams
-├── ruleset/                                    ← SQLite-backed IP + domain tag matching engine
+├── ruleset/                                    ← IP + domain tag matching engine (defines RuleSetStorage interface)
 ├── zone/                                      ← DNS zone rules (wraps *database.DB, same DB as cache)
 │   ├── zone.go                                ←   Evaluator, LoadRules, Evaluate, match tags
 │   ├── zone_parse.go                          ←   Zone file import + record parsing
@@ -390,7 +390,7 @@ Top layer (wiring):
 | `ECSConfig` | `config` | User-facing ECS subnet configuration (moved from edns) |
 | `ECSOption` | `config` | Parsed EDNS Client Subnet (edns has type alias: `type ECSOption = config.ECSOption`) |
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
-| `DB` | `database` | Unified SQLite DB: goroutine-safe `*sql.DB`, schema migration, 15 prepared stmts | Connection pool with WAL mode |
+| `DB` | `database` | Unified SQLite DB: goroutine-safe `*sql.DB`, schema migration, 15 prepared stmts, SQLExec/SQLQueryRow/LoadRuleSetEntries for consumer interfaces | Connection pool with WAL mode |
 | `Options` | `database` | SQLite PRAGMA config: `MMapSizeMB`, `CacheSizeMB` | |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
@@ -409,12 +409,14 @@ Top layer (wiring):
 | `SOCKS5Dialer` | `server/client` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
 | `Conn` / `Pool` | `server/client/pool` | RFC 7766 pipelined TCP/DoT |
 | `QUICPool` / `QUICConn` | `server/client/pool` | QUIC connection pool |
-| `Resolver` | `server/resolver` | Upstream + recursive resolution |
-| `QueryResult` | `server/resolver` | Unified result struct (Answer, Authority, Additional, Validated, Cacheable, ECS, Server, Fallback, Hijack, Err) — used throughout the resolver layer; `queryUpstream`, `Recursive.resolve`, and `CNAME.resolve` all return it by value |
+| `Resolver` | `server/resolver` | Upstream + recursive resolution; constructed via `New(Config)` |
+| `Config` | `server/resolver` | Bundles Client, Guard, EDNS, CIDRMatcher, BuildMsg, Cache, DNSSECEnforce for `New()` |
+| `QueryResult` | `server/resolver` | Unified result struct — used throughout resolver and handler layers; `queryUpstream`, `Recursive.resolve`, and `CNAME.resolve` return it by value; handler uses `*QueryResult` directly (no duplicate struct) |
 | `Recursive` | `server/resolver` | Built-in recursive walk |
 | `CryptoValidator` | `server/security` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in `dnssec_nsec.go` |
 | `Guard` | `server/security` | Bundles CryptoValidator + Detector |
-| `Engine` | `ruleset` | CIDR + domain tag matching; `Match(qname,ip)`, `MatchIP` |
+| `Engine` | `ruleset` | CIDR + domain tag matching; `Match(qname,ip)`, `MatchIP`. `LoadRules` accepts `RuleSetStorage` interface (satisfied by `*database.DB`) |
+| `RuleSetStorage` | `ruleset` | Interface: SQLExec, SQLQueryRow, LoadRuleSetEntries — breaks domain→domain import cycle |
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |
 | `Prober` | `server/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
 | `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |
