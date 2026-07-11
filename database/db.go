@@ -51,6 +51,10 @@ type DB struct {
 	StmtNsecInsert *sql.Stmt
 	StmtNsecLookup *sql.Stmt
 
+	// Infra cache statements
+	StmtInfraGet    *sql.Stmt
+	StmtInfraUpsert *sql.Stmt
+
 	// Zone prepared statements
 	StmtZoneExact  *sql.Stmt
 	StmtZoneWild   *sql.Stmt
@@ -153,6 +157,7 @@ func (db *DB) Close() error {
 		db.StmtInsertLatency, db.StmtGetLastProbe, db.StmtEnsureEntry,
 		db.StmtZoneExact, db.StmtZoneWild, db.StmtZoneInsert,
 		db.StmtNsecInsert, db.StmtNsecLookup,
+		db.StmtInfraGet, db.StmtInfraUpsert,
 	} {
 		if stmt != nil {
 			_ = stmt.Close()

@@ -151,6 +151,20 @@ func (db *DB) migrate() error {
 			PRIMARY KEY (zone_name, owner_name)
 		);
 
+		-- ── Infrastructure cache ─────────────────────────────────────────────
+		-- Per-nameserver state: EDNS capability and timeout backoff.
+		-- Independent of cache entries — persists across evictions.
+
+		CREATE TABLE IF NOT EXISTS infra_cache (
+			server_addr   TEXT NOT NULL,
+			rtt_ms        INTEGER NOT NULL DEFAULT 0,
+			edns_version  INTEGER NOT NULL DEFAULT 0,
+			timeout_count INTEGER NOT NULL DEFAULT 0,
+			last_timeout  INTEGER NOT NULL DEFAULT 0,
+			last_success  INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (server_addr)
+		) WITHOUT ROWID;
+
 		-- ── Zone rules ───────────────────────────────────────────────────────
 		-- Zone-file-style rule table queried via B-tree indexed composite-key
 		-- lookups (Evaluate). Rules are bulk-loaded at startup (LoadRules).

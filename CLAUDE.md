@@ -39,8 +39,15 @@ Use `sh scripts/bump-version.sh <patch|minor|major> <slug>` to bump the version.
 **Default to Z (patch)** — most changes are patch bumps. Only bump Y when the feature is substantial enough to warrant a minor release (new protocol, major new config surface, etc.).
 
 **After bumping (if schema changed):**
-1. Edit `database/migrations/<version>_<slug>.sql` with actual SQL
-2. Add migration entry + function to `database/migration.go`
+
+**New tables / columns via `CREATE TABLE IF NOT EXISTS` in `schema.go`:**
+Do NOT add a migration. The base DDL in `DB.migrate()` runs on every startup —
+`IF NOT EXISTS` handles both fresh installs and existing databases. Just use
+`--no-migration` when bumping.
+
+**ALTER TABLE / data migrations (e.g. rebuild PK, drop index):**
+1. Add a migration function to `database/migration.go` + entry in `migrations` slice
+2. Create `database/migrations/<version>_<slug>.sql` for manual application
 3. Run `go test -race -short ./...` to verify
 
 **When no schema change is needed**, use `--no-migration`:
@@ -237,8 +244,8 @@ zjdns/
 ├── edns/                                      ← Handler, Cookie, EDE, padding (ECSOption alias → config)
 ├── database/                                  ← Unified SQLite DB: connection, schema, migration
 │   ├── db.go                                  ←   DB struct, Open, Close, re-exports (zstd, helpers)
-│   ├── schema.go                              ←   7 tables (cache 6 + zone 1) in one migration
-│   ├── stmts.go                               ←   9 prepared statements (cache 6 + zone 3)
+│   ├── schema.go                              ←   9 tables (cache 8 + zone 1) in one migration
+│   ├── stmts.go                               ←   13 prepared statements (cache 10 + zone 3)
 │   ├── migration.go                           ←   Incremental schema migrations
 │   └── migrations/                            ←   Archived migration SQL files
 ├── cache/                                     ← Store interface, DNS response cache (wraps *database.DB)
@@ -427,7 +434,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## Notable Design Decisions
 
-- **Unified database (`database/`)**: Seven SQLite tables (six cache + zone_entries) in a single DB file with WAL mode + mmap (16MB default). `page_size=4096`; `journal_size_limit=mmap_size`; `wal_autocheckpoint=4096`; `synchronous=NORMAL`. `msg_wire` BLOB is zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in one step (~0.5ms). `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based), pinned `*sql.Conn`. See [DB Schema](#db-schema) below.
+- **Unified database (`database/`)**: Nine SQLite tables (eight cache + zone_entries) in a single DB file with WAL mode + mmap (16MB default). `page_size=4096`; `journal_size_limit=mmap_size`; `wal_autocheckpoint=4096`; `synchronous=NORMAL`. `msg_wire` BLOB is zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in one step (~0.5ms). `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based), pinned `*sql.Conn`. See [DB Schema](#db-schema) below.
 
 - **Schema migration (`database/migration.go`)**: Incremental, idempotent migrations keyed by app version (e.g. `"3.1.0"`). `database.Version` is set from `main.Version` before `Open()`. The `version` table stores the last applied version as TEXT, always synced to `database.Version` after startup — the DB version always matches the running binary. Fresh installs start at `Version` (current app version) and skip all migrations (the base DDL already reflects the latest schema); already-current databases only sync the version row (no-op). `minSupportedVersion` defines a rolling window: when bumped, old migrations are removed from code and archived as `.sql` files in `database/migrations/` for manual application via `zjdns --sql <db> "$(cat migrations/X.X.X_xxx.sql)"`.
 - **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and zone (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
@@ -484,7 +491,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## DB Schema
 
-The unified database (`database/`) contains seven SQLite tables (six cache + one zone): (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The unified database (`database/`) contains nine SQLite tables (eight cache + one zone): (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
 -- Pure DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr,

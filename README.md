@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.2.8-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.2.9-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -360,7 +360,7 @@ GROUP BY hc.protocol, hc.rcode ORDER BY hits DESC;
 | [9250](https://www.rfc-editor.org/info/rfc9250) | DNS over QUIC | DoQ |
 | [9461](https://www.rfc-editor.org/info/rfc9461) / [9462](https://www.rfc-editor.org/info/rfc9462) | SVCB / DDR | 加密解析器自动发现 |
 | [draft-vixie-dnsext-dns0x20](https://datatracker.ietf.org/doc/html/draft-vixie-dnsext-dns0x20-00) | DNS 0x20 | 查询名大小写随机化 + CAPSFAIL 回退 |
-| [draft-denis-dprive-dnscrypt](https://datatracker.ietf.org/doc/draft-denis-dprive-dnscrypt/) | DNSCrypt v2 | XChacha20 AEAD + X-Wing PQ KEM |
+| [draft-denis-dprive-dnscrypt](https://datatracker.ietf.org/doc/html/draft-denis-dprive-dnscrypt) | DNSCrypt v2 | XChacha20 AEAD + X-Wing PQ KEM |
 
 ## 开发
 
