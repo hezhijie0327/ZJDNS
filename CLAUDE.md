@@ -87,7 +87,9 @@ golangci-lint run && golangci-lint fmt
 docker build -t zjdns .
 
 # Run SQL query against database (aligned columnar output like sqlite3)
+# Read-only by default (PRAGMA query_only=ON); add --rw for writes with confirmation.
 ./zjdns --sql cache.db "SELECT e.qname, e.rcode, e.hit_udp FROM entries e"
+./zjdns --sql --rw cache.db "DELETE FROM ip_latency WHERE last_probe_time < 0"
 
 # DNS Stamp tools
 ./zjdns --dnsstamp --decode "sdns://..."    # Decode stamp to upstream JSON

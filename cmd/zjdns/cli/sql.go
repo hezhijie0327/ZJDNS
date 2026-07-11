@@ -1,20 +1,27 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
 	"zjdns/database"
 )
 
-// RunSQL opens a SQLite cache database and runs a SQL query, printing
-// results as an aligned columnar table (like sqlite3 -column -header).
+// RunSQL opens a SQLite cache database in read-only mode and runs a SQL
+// query, printing results as an aligned columnar table (like sqlite3 -column
+// -header).
 func RunSQL(dbPath, query string) error {
 	db, err := database.Open(dbPath, 0, database.Options{})
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer func() { _ = db.Close() }()
+
+	// PRAGMA query_only=ON prevents any write operations on this connection.
+	if _, err := db.SQ.Exec("PRAGMA query_only = ON"); err != nil {
+		return fmt.Errorf("set query_only: %w", err)
+	}
 
 	rows, err := db.SQ.Query(query)
 	if err != nil {
@@ -91,4 +98,36 @@ func printRow(cols []string, widths []int) {
 		parts[i] = fmt.Sprintf("%-*s", widths[i], s)
 	}
 	fmt.Println(strings.Join(parts, "  "))
+}
+
+// RunSQLRW opens a SQLite cache database in read-write mode and executes a
+// SQL statement (INSERT, UPDATE, DELETE, DROP, ALTER, etc.). Prompts for
+// confirmation before executing, showing the full statement.
+func RunSQLRW(dbPath, query string) error {
+	fmt.Fprintf(os.Stderr, "Statement: %s\n", query)
+	fmt.Fprintf(os.Stderr, "Execute? [y/N] ")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return fmt.Errorf("no input")
+	}
+	resp := strings.TrimSpace(scanner.Text())
+	if resp != "y" && resp != "Y" {
+		return fmt.Errorf("aborted")
+	}
+
+	db, err := database.Open(dbPath, 0, database.Options{})
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	result, err := db.SQ.Exec(query)
+	if err != nil {
+		return fmt.Errorf("exec error: %w", err)
+	}
+
+	n, _ := result.RowsAffected()
+	fmt.Fprintf(os.Stderr, "%d row(s) affected\n", n)
+	return nil
 }

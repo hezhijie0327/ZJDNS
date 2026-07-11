@@ -25,7 +25,8 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		dnscryptCertTTL   string
 
 		// SQL
-		runSQL bool
+		runSQL  bool
+		sqlRW   bool
 
 		// DNS stamp
 		runDNSStamp    bool
@@ -57,6 +58,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 
 	// SQL
 	fs.BoolVar(&runSQL, "sql", false, "Run SQL query against database")
+	fs.BoolVar(&sqlRW, "rw", false, "Enable read-write mode for --sql")
 
 	// DNS stamp
 	fs.BoolVar(&runDNSStamp, "dnsstamp", false, "Decode or encode an sdns:// DNS stamp")
@@ -81,7 +83,8 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "  %s --version                    # Show version information\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --generate-config            # Generate example config\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --generate-config --dnscrypt --provider <name> [--addr <addr>] [--es-version <ver>] [--cert-ttl <ttl>]\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s --sql <db> <query>           # Run SQL query against database\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --sql <db> <query> --rw       # Run read-write SQL (--rw before args)\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --sql <db> <query>            # Run read-only SQL query\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --decode <stamp>  # Decode an sdns:// stamp to upstream JSON\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --encode --proto <type> --stamp-addr <addr> [--provider-name <name>] [--public-key <hex>] [--path <path>] [--props <n>]\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "\n")
@@ -149,11 +152,17 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	if runSQL {
 		args := fs.Args()
 		if len(args) < 2 {
-			fmt.Fprintf(os.Stderr, "Usage: %s --sql <db> <query>\n", fs.Name())
+			fmt.Fprintf(os.Stderr, "Usage: %s --sql <db> <query> [--rw]\n", fs.Name())
 			return "", true
 		}
-		if err := RunSQL(args[0], args[1]); err != nil {
-			fmt.Fprintf(os.Stderr, "sql: %v\n", err)
+		if sqlRW {
+			if err := RunSQLRW(args[0], args[1]); err != nil {
+				fmt.Fprintf(os.Stderr, "sql: %v\n", err)
+			}
+		} else {
+			if err := RunSQL(args[0], args[1]); err != nil {
+				fmt.Fprintf(os.Stderr, "sql: %v\n", err)
+			}
 		}
 		return "", true
 	}
