@@ -346,10 +346,11 @@ Top layer (wiring):
 4. Early DNS Cookie validation (RFC 9018) — initial handshake (empty ServerCookie) allowed; short (1–15 bytes) → BADCOOKIE; 16 bytes → SipHash-2-4 cryptographic validation with timestamp check (expired >1h / future >5min → BADCOOKIE; valid → echo back; >30min → reissue)
 5. `cache.Store.Get()` — hit → serve (with CIDR filtering); miss → resolve
 6. **Pending request dedup** (`pending.go`): Same-key concurrent queries coalesce — only the first reaches the resolver; followers block and receive the identical result. Closes the cache-poisoning race window.
-7. `Resolver.Query()` — upstream (first-win) or recursive
-8. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
-9. `cidr.Filter.MatchIP()` — filter A/AAAA; all filtered → REFUSED + EDE
-10. Cache population, latency probes, response with server cookie
+7. **0x20 case randomization** (draft-0x20 / RFC 6840 bis) — `Client.ExecuteQuery` randomizes qname case before dispatch; response must preserve case pattern; CAPSFAIL → nocaps retry on same server
+8. `Resolver.Query()` — upstream (first-win) or recursive
+9. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
+10. `cidr.Filter.MatchIP()` — filter A/AAAA; all filtered → REFUSED + EDE
+11. Cache population, latency probes, response with server cookie
 
 ### Query Routing (`server/resolver`)
 - Upstream + fallback queried concurrently via `errgroup`; first NOERROR wins
