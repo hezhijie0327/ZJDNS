@@ -49,6 +49,13 @@ $content = $content -replace "Version\s+=\s+`"$Current`"", "Version     = `"$New
 Set-Content $VersionFile $content -NoNewline
 Write-Host "Bumped $VersionFile"
 
+# ── Bump README version badge ──────────────────────────────────────────────
+$Readme = "README.md"
+$readmeContent = Get-Content $Readme -Raw
+$readmeContent = $readmeContent -replace "Version-$Current-", "Version-$New-"
+Set-Content $Readme $readmeContent -NoNewline
+Write-Host "Bumped $Readme"
+
 # ── Create migration SQL archive ─────────────────────────────────────────
 if (-not $NoMigration) {
     $MigrationFile = "database/migrations/${New}_${Slug}.sql"

@@ -66,6 +66,8 @@ linters:
           alias: zpending
         - pkg: zjdns/internal/pool
           alias: zpool
+        - pkg: zjdns/internal/stamp
+          alias: zstamp
         - pkg: zjdns/internal/ttl
           alias: zttl
 

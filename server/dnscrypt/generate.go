@@ -4,7 +4,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"time"
 	"zjdns/config"
+	zstamp "zjdns/internal/stamp"
 
 	"golang.org/x/crypto/curve25519"
 )
@@ -40,14 +40,6 @@ type ConfigBlock struct {
 	CertTTL      string `json:"cert_ttl,omitempty"`
 }
 
-// UpstreamEntry is a single DNSCrypt upstream server entry.
-type UpstreamEntry struct {
-	Address      string `json:"address"`
-	Protocol     string `json:"protocol,omitempty"`
-	ServerName   string `json:"server_name,omitempty"`
-	PublicKeyHex string `json:"public_key,omitempty"`
-}
-
 // FullConfig is a complete ZJDNS configuration including both server-side
 // DNSCrypt settings and client-side upstream entries.  It marshals to a
 // single valid JSON config file.
@@ -55,24 +47,13 @@ type FullConfig struct {
 	Server struct {
 		DNSCrypt ConfigBlock `json:"dnscrypt"`
 	} `json:"server"`
-	Upstream []UpstreamEntry `json:"upstream"`
+	Upstream []config.UpstreamServer `json:"upstream"`
 }
 
 const (
 	// DNSCryptV2Prefix is the provider name prefix for DNSCrypt v2.
 	DNSCryptV2Prefix = "2.dnscrypt-cert."
 )
-
-// StampProtoDNSCrypt is the DNS stamp protocol ID for DNSCrypt.
-const StampProtoDNSCrypt = 0x01
-
-// stampDefaultProperties is the 8-byte properties field for DNSCrypt stamps
-// (currently all zeros — no DNSSEC, no no-log, no no-filter).
-var stampDefaultProperties = [8]byte{}
-
-func init() {
-	config.DNSCryptConfigGenerator = GenerateDNSCryptConfig
-}
 
 // GenerateResolverConfig generates a new resolver configuration.  If
 // privateKey is nil, a new Ed25519 keypair is generated.  For classical
@@ -182,79 +163,32 @@ func (rc *ResolverConfig) NewCert() (cert *Certificate, err error) {
 }
 
 // CreateStamp generates a DNS stamp (sdns://) string for this resolver config.
-func (rc *ResolverConfig) CreateStamp(addr string) (stamp string, err error) {
+func (rc *ResolverConfig) CreateStamp(addr string) (string, error) {
 	serverPK, err := hexDecodeKey(rc.PublicKey)
 	if err != nil {
 		return "", fmt.Errorf("decoding public key: %w", err)
 	}
-	buf := make([]byte, 0, 128)
-	buf = append(buf, StampProtoDNSCrypt)
-	buf = append(buf, stampDefaultProperties[:]...)
-	addrLen := uint8(len(addr)) //nolint:gosec // G115: Address length bounded to 255
-	buf = append(buf, addrLen)
-	buf = append(buf, []byte(addr)...)
-	pkLen := uint8(len(serverPK)) //nolint:gosec // G115: Ed25519 key is 32 bytes
-	buf = append(buf, pkLen)
-	buf = append(buf, serverPK...)
-	providerName := rc.ProviderName
-	provLen := uint8(len(providerName)) //nolint:gosec // G115: Provider name length bounded to 255
-	buf = append(buf, provLen)
-	buf = append(buf, []byte(providerName)...)
-	return "sdns://" + base64.RawURLEncoding.EncodeToString(buf), nil
+	s := &zstamp.Stamp{
+		Proto:        zstamp.ProtoDNSCrypt,
+		Address:      addr,
+		ProviderName: rc.ProviderName,
+		PublicKey:    serverPK,
+	}
+	return s.String(), nil
 }
 
 // ParseStamp parses a DNSCrypt DNS stamp string (sdns://...) and returns the
-// server address, provider name, and server public key.
+// server address, provider name, and server public key.  It delegates to the
+// general-purpose stamp parser and adds DNSCrypt-specific validation.
 func ParseStamp(stampStr string) (addr, providerName string, publicKey []byte, err error) {
-	if !strings.HasPrefix(stampStr, "sdns://") {
-		return "", "", nil, errors.New("invalid stamp: must start with sdns://")
-	}
-	b, err := base64.RawURLEncoding.DecodeString(stampStr[7:])
+	s, err := zstamp.Parse(stampStr)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("decoding stamp base64: %w", err)
+		return "", "", nil, err
 	}
-	if len(b) < 1 {
-		return "", "", nil, errors.New("stamp too short")
+	if s.Proto != zstamp.ProtoDNSCrypt {
+		return "", "", nil, fmt.Errorf("stamp is not DNSCrypt (proto=%d)", s.Proto)
 	}
-	if b[0] != StampProtoDNSCrypt {
-		return "", "", nil, fmt.Errorf("stamp is not DNSCrypt (proto=%d)", b[0])
-	}
-	b = b[1:] // skip protocol byte
-	if len(b) < 8 {
-		return "", "", nil, errors.New("stamp: properties too short")
-	}
-	b = b[8:] // skip properties (8 bytes for DNSCrypt)
-	if len(b) < 1 {
-		return "", "", nil, errors.New("stamp: missing address")
-	}
-	addrLen := int(b[0])
-	b = b[1:]
-	if len(b) < addrLen {
-		return "", "", nil, errors.New("stamp: truncated address")
-	}
-	addr = string(b[:addrLen])
-	b = b[addrLen:]
-	if len(b) < 1 {
-		return "", "", nil, errors.New("stamp: missing public key length")
-	}
-	pkLen := int(b[0])
-	b = b[1:]
-	if pkLen < 1 || len(b) < pkLen {
-		return "", "", nil, errors.New("stamp: truncated public key")
-	}
-	publicKey = make([]byte, pkLen)
-	copy(publicKey, b[:pkLen])
-	b = b[pkLen:]
-	if len(b) < 1 {
-		return "", "", nil, errors.New("stamp: missing provider name")
-	}
-	provLen := int(b[0])
-	b = b[1:]
-	if len(b) < provLen {
-		return "", "", nil, errors.New("stamp: truncated provider name")
-	}
-	providerName = string(b[:provLen])
-	return addr, providerName, publicKey, nil
+	return s.Address, s.ProviderName, s.PublicKey, nil
 }
 
 // hexEncodeKey encodes a byte slice as an uppercase hex string.
@@ -331,14 +265,8 @@ func GenerateDNSCryptConfig(provider, addr, esVersion, certTTL string) (string, 
 		ESVersion:    esVersion,
 		CertTTL:      certTTL,
 	}
-	cfg.Upstream = []UpstreamEntry{
-		{Address: stamp, Protocol: "dnscrypt"},
-		{
-			Address:      addr,
-			Protocol:     "dnscrypt",
-			ServerName:   rc.ProviderName,
-			PublicKeyHex: rc.PublicKey,
-		},
+	cfg.Upstream = []config.UpstreamServer{
+		{Address: stamp},
 	}
 
 	output, err := json.MarshalIndent(cfg, "", "  ")

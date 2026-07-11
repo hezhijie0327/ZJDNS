@@ -132,7 +132,11 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 		}
 
 		if !server.IsRecursive() {
-			if _, _, err := net.SplitHostPort(server.Address); err != nil {
+			isStamp := strings.HasPrefix(server.Address, "sdns://")
+			if isStamp {
+				// Stamp addresses are parsed during normalization — the raw
+				// sdns:// string is not a valid host:port or URL.
+			} else if _, _, err := net.SplitHostPort(server.Address); err != nil {
 				if protocol == ProtoHTTP || protocol == ProtoHTTP3 ||
 					protocol == ProtoDOH || protocol == ProtoDOH3 {
 					if _, err := url.Parse(server.Address); err != nil {
@@ -143,7 +147,7 @@ func validateUpstreamServers(cfg *ServerConfig, cidrTags map[string]bool) error 
 				}
 			}
 		}
-		if zdnsutil.IsSecureProtocol(protocol) && server.ServerName == "" {
+		if zdnsutil.IsSecureProtocol(protocol) && server.ServerName == "" && !strings.HasPrefix(server.Address, "sdns://") {
 			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
 		}
 		if (protocol == ProtoDNSCrypt || protocol == ProtoDNSCryptTCP) && !strings.HasPrefix(server.Address, "sdns://") {

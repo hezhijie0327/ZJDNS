@@ -119,6 +119,14 @@
       "protocol": "http3",
       "server_name": "dns.alidns.com",
       "match": ["!corp-net"]
+    },
+    {
+      "address": "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0",
+      "protocol": ""
+    },
+    {
+      "address": "sdns://AgMAAAAAAAAABzkuOS45LjkgKhX11qy258CQGt5Ou8dDsszUiQMrRuFkLwaTaDABJYoSZG5zOS5xdWFkOS5uZXQ6NDQzCi9kbnMtcXVlcnk",
+      "protocol": ""
     }
   ],
   "fallback": [
@@ -127,8 +135,8 @@
       "protocol": ""
     },
     {
-      "address": "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0",
-      "protocol": "dnscrypt"
+      "address": "sdns://AQcAAAAAAAAAEjk0LjE0MC4xNC4xNDA6NTQ0MyC16ETWuDo-PhJo62gfvqcN48X6aNvWiBQdvy7AZrLa-iUyLmRuc2NyeXB0LnVuZmlsdGVyZWQubnMxLmFkZ3VhcmQuY29t",
+      "protocol": ""
     },
     {
       "address": "149.112.112.9:53",

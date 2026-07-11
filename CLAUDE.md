@@ -26,22 +26,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Version Bumping
 
-Use `sh scripts/bump-version.sh <patch|minor|major> <slug>` to bump the version and create a migration skeleton.
+Use `sh scripts/bump-version.sh <patch|minor|major> <slug>` to bump the version.
 
 **When to bump each component:**
 
 | Component | Semantics | Examples |
 |-----------|-----------|----------|
-| **Z (patch)** | Bug fixes, perf improvements, refactors, lint/format fixes, dependency bumps | `3.2.1` — add eviction indexes |
-| **Y (minor)** | New features, new config options, new protocols, new CLI commands | `3.3.0` — add DNS-over-HTTPS/3 probe |
-| **X (major)** | Breaking config/schema/API changes, removed features | `4.0.0` — drop legacy XSalsa20 DNSCrypt |
+| **Z (patch)** | Bug fixes, perf improvements, refactors, lint/format fixes, dependency bumps, small feature additions | `3.2.1` — add eviction indexes; `3.2.5` — sdns:// stamp support |
+| **Y (minor)** | Large new features, new protocols, new config options, breaking config schema changes | `3.3.0` — add DNS-over-HTTPS/3 probe |
+| **X (major)** | Major breaking changes, removed features, fundamental architecture changes | `4.0.0` — drop legacy XSalsa20 DNSCrypt |
 
-**After bumping:**
-1. Edit the generated `database/migrations/<version>_<slug>.sql` with actual SQL
-2. Add the migration entry + function to `database/migration.go`
+**Default to Z (patch)** — most changes are patch bumps. Only bump Y when the feature is substantial enough to warrant a minor release (new protocol, major new config surface, etc.).
+
+**After bumping (if schema changed):**
+1. Edit `database/migrations/<version>_<slug>.sql` with actual SQL
+2. Add migration entry + function to `database/migration.go`
 3. Run `go test -race -short ./...` to verify
 
-**Default to Z (patch)** — most audits, refactors, and perf improvements are patch bumps. Only bump Y for user-visible new functionality.
+**When no schema change is needed**, use `--no-migration`:
+```bash
+sh scripts/bump-version.sh patch "short-slug" --no-migration
+```
 
 ## Build & Test
 
@@ -76,6 +81,11 @@ docker build -t zjdns .
 
 # Run SQL query against database (aligned columnar output like sqlite3)
 ./zjdns --sql cache.db "SELECT e.qname, e.rcode, e.hit_udp FROM entries e"
+
+# DNS Stamp tools
+./zjdns --dnsstamp --decode "sdns://..."    # Decode stamp to upstream JSON
+./zjdns --dnsstamp --encode --proto doh \   # Encode fields to sdns:// stamp
+    --stamp-addr 9.9.9.9 --provider-name dns.quad9.net:443 --path /dns-query
 
 # Install pre-commit hook (auto fmt + lint on commit)
 sh scripts/install-hook.sh                 # Linux / macOS
@@ -165,7 +175,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 - **Message vs processing split**: `handler.go` (query pipeline) + `handler_cache.go` (cache hit/miss/refresh) + `message.go` (EDNS/response helpers).
 - **Main vs nsec split**: `dnssec_crypto.go` (RRSIG/DNSKEY/DS validation) + `dnssec_nsec.go` (NSEC/NSEC3 denial-of-existence, including `nsec3HashName` + `isDenialOfExistenceValid`).
 - **Protocol split**: `socks5.go` (types, handshake, shared helpers, `socks5Datagram` UDP header parse/write) + `socks5_tcp.go` (TCP CONNECT) + `socks5_udp.go` (UDP ASSOCIATE + PacketConn wrapper).
-- **Config split**: `config.go` (types, loading, defaults, DDR/Chaos) + `config_validate.go` (all validation functions).
+- **Config split**: `config.go` (types, loading, defaults, DDR/Chaos, normalizeStamps) + `config_validate.go` (all validation functions).
 - **Do NOT split** when the split would require exporting internal helpers or when the split crosses 2–3 tightly coupled concerns (a 400-line file is fine).
 
 ### File-Level Declaration Order
@@ -292,7 +302,7 @@ zjdns/
 
 ```
 Foundation (zero zjdns imports):
-  internal/log, internal/pool, internal/ipdetect
+  internal/log, internal/pool, internal/ipdetect, internal/stamp
 
 Layer 1 (import only foundation):
   internal/dnsutil → log
@@ -401,6 +411,7 @@ Top layer (wiring):
 | `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |
 | `MessagePool` / `BufferPool` | `internal/pool` | sync.Pool allocators; also holds `QUICCode*` constants |
 | `JoinDNSPort` | `internal/dnsutil` | Utility: `ip` → `ip:53` (moved from config) |
+| `Stamp` / `StampProtoType` | `internal/stamp` | sdns:// stamp parser/encoder: 8 protocol types, VLP hashes, bootstrap IPs. `Parse()` + `String()` round-trip. |
 
 ## Logging
 
@@ -432,7 +443,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
   - **Wire formats** — Classical query: `<client-magic>(8) <client-pk>(32) <nonce/2>(12) <encrypted>`. PQ initial: `<client-magic>(8) <xwing-ct>(1120) <nonce/2>(12) <encrypted>`. PQ resumed: `<PQResumeMagic>(8) <ticket-len>(2) <ticket>(N) <nonce/2>(12) <encrypted>`. Response: `<resolver-magic>(8) <nonce>(24) <encrypted>`. PQ responses always carry a 2-byte control-length prefix after decryption: initial responses have `<len>(2) <PQDR magic>(4) <version>(1) <lifetime>(4) <ticket-len>(2) <ticket>(N)`; resumed responses have `<len>=0x0000` with no control block. The prefix is always present so the client can locate the DNS payload without misinterpreting header bytes as control length — format aligned with dnscrypt-proxy.
   - **Certificate layout** — Classical (124B): `CertMagic(4) + ESVersion(2) + Minor(2) + Sig(64) + ResolverPk(32) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4)`. PQ (1320B): same header, then `PqPublicKey(1216) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4) + Extensions(12)`. ClientMagic for PQ is SHA-256(PqPublicKey)[:8]. PqCertContext binds the shared key to the exact certificate bytes (HKDF info = "DNSCrypt-PQ-v1" + es-version + minor + resolver-pk + client-magic + serial + ts-start + ts-end + extensions).
   - **Ticket resumption**: After a successful initial PQ query, the server issues a resumption ticket sealed with XChacha20-Poly1305 under a server-wide `ticketKey` (SHA-256 of the Ed25519 signing key). The ticket plaintext encodes `PQESVersion(2) + ClientMagic(8) + ResumeSecret(32) + Expiry(8)`. The client stores `(ticket, resumeSecret, expiry)` in `dnscryptState` and uses them for subsequent queries, deriving per-query keys via `pqResumedSharedKey(resumeSecret, clientMagic, clientNonce/2, ticket)` — avoiding expensive X-Wing KEM operations.
-  - **Config generator** (`generate.go`): `GenerateDNSCryptConfig()` outputs a single valid JSON config file with `server.dnscrypt` block + two `upstream` entries (sdns:// stamp and explicit address+server_name+public_key). `cert_ttl` accepts "30d", "720h", "86400s", or bare "86400" (seconds). Key exports: `ParseStamp()`, `HexDecodeKey()`, `GenerateEd25519Keypair()`. Internal helpers: `hexEncodeKey/hexDecodeKey`, `generateRandomKeyPair`, `GenerateResolverConfig`.
+  - **Config generator** (`generate.go`): `GenerateDNSCryptConfig()` outputs a single valid JSON config file with `server.dnscrypt` block + one `upstream` entry (sdns:// stamp, protocol auto-detected by normalizeStamps). Called directly from `cmd/zjdns/cli/generate.go` — no hook indirection. `CreateStamp` delegates to `zstamp.Stamp.String()`. `cert_ttl` accepts "30d", "720h", "86400s", or bare "86400" (seconds). Key exports: `ParseStamp()` (wraps `zstamp.Parse`), `HexDecodeKey()`, `GenerateEd25519Keypair()`. Internal helpers: `hexEncodeKey/hexDecodeKey`, `generateRandomKeyPair`, `GenerateResolverConfig`.
   - **Tests** (`server/client/dnscrypt_test.go`): 9 e2e tests covering UDP/TCP, XWingPQ/XChacha20, A/AAAA/TXT/cert query types, multi-query state reuse (ticket resumption), unreachable error path, and UDP→TCP fallback. Each test boots an ephemeral DNSCrypt server on a random port with auto-generated PQ or classical keys via `startTestDNSCryptServer`.
 - **DNSSEC**: IANA root KSK trust anchors (key tags 20326 + 38696). `dnssec_enforce: true` → SERVFAIL on bogus; `false` → pass through without AD.
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
@@ -442,9 +453,11 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns). Similarly, `handler.Question` is a type alias of `resolver.Question` to avoid duplicate struct definitions.
 - **request_log ring buffer**: Append-only request journal replaces the old `hit_counters` table. `RecordRequest()` does a single INSERT — no conflict detection, no read-before-write. Stats are aggregated via SQL over rows with `id > cleared_before`; FlushDB("stats") resets the threshold without touching log rows.
 - **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtInsertLog`, `stmtInsertLatency`, `stmtGetLastProbe`) at initialization time to avoid per-call SQL compilation overhead.
-- **CLI package in cmd/zjdns/cli**: `ParseFlags()` and `RunAnalyze()` moved from `internal/cli` to `cmd/zjdns/cli` so the CLI package can freely import `config` as a wiring-layer package.
+- **CLI package in cmd/zjdns/cli**: `ParseFlags()` dispatches to feature files: `parse.go` (flags + dispatch), `generate.go` (example + DNSCrypt config generation), `sql.go` (SQL runner), `dnsstamp.go` (stamp decode/encode).
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
 - **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
+- **sdns:// stamp normalization**: `normalizeStamps()` in config resolves `sdns://` addresses at load time, auto-populating `protocol`, `address`, `server_name`, and `public_key` on `UpstreamServer`. Supports all 8 DNS stamp protocol types (Plain 0x00–ODoH Relay 0x85). DoH stamps are reconstructed to full `https://` URLs. Protocol can be omitted in config when using stamps.
+- **Stamp package (internal/stamp)**: Foundation-level, zero zjdns imports. `Parse()` handles all 8 protocol IDs with VLP hash encoding and uint64 LE properties. `String()` marshals back to `sdns://` for round-trip fidelity. Used by config normalization, DNSCrypt generation, and CLI dnsstamp command.
 - **eTLS alias**: Always use `eTLS` (not `cryptotls`) for `gitlab.com/go-extension/tls`. Used in `server/tls`, `server/client`, `config`.
 - **Internal package aliases**: All `zjdns/internal/*` imports use standard `z`-prefixed aliases enforced by `importas` linter:
   - `zjdns/internal/dnsutil` → `zdnsutil`
@@ -453,6 +466,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
   - `zjdns/internal/log` → `zlog`
   - `zjdns/internal/pending` → `zpending`
   - `zjdns/internal/pool` → `zpool`
+  - `zjdns/internal/stamp` → `zstamp`
   - `zjdns/internal/ttl` → `zttl`
 - **Error wrapping**: Always use `%w` in `fmt.Errorf` when wrapping errors that callers may check with `errors.Is`/`errors.As`. Use `%v` only for informational logging.
 - **Protocol logging**: The `protocol` column in request_log stores the transport identifier as a string (`udp`/`tcp`/`dot`/`doq`/`doh`/`doh3`/`dnscrypt`/`dnscrypt-tcp`), enabling simple GROUP BY queries for protocol-level analytics.

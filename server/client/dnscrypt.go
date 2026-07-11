@@ -10,6 +10,7 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
+	zstamp "zjdns/internal/stamp"
 
 	serverdnscrypt "zjdns/server/dnscrypt"
 
@@ -196,11 +197,14 @@ func newClientNonce() serverdnscrypt.Nonce {
 func (c *Client) resolveDNSCryptStamp(server *config.UpstreamServer) (addr, providerName string, publicKey []byte, err error) {
 	// If address is an sdns:// stamp, parse it.
 	if strings.HasPrefix(server.Address, "sdns://") {
-		addr, providerName, publicKey, err = serverdnscrypt.ParseStamp(server.Address)
-		if err != nil {
-			return "", "", nil, fmt.Errorf("parsing stamp: %w", err)
+		s, parseErr := zstamp.Parse(server.Address)
+		if parseErr != nil {
+			return "", "", nil, fmt.Errorf("parsing stamp: %w", parseErr)
 		}
-		return addr, providerName, publicKey, nil
+		if s.Proto != zstamp.ProtoDNSCrypt {
+			return "", "", nil, fmt.Errorf("stamp is not DNSCrypt (proto=%d)", s.Proto)
+		}
+		return s.Address, s.ProviderName, s.PublicKey, nil
 	}
 
 	// Otherwise, use explicit fields.  ServerName doubles as the DNSCrypt

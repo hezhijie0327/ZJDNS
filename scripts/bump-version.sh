@@ -62,6 +62,15 @@ else
 fi
 echo "Bumped $VERSION_FILE"
 
+# ── Bump README version badge ──────────────────────────────────────────────
+README="README.md"
+if [ "$(uname)" = "Darwin" ]; then
+    sed -i '' "s/Version-${CURRENT}-/Version-${NEW}-/" "$README"
+else
+    sed -i "s/Version-${CURRENT}-/Version-${NEW}-/" "$README"
+fi
+echo "Bumped $README"
+
 # ── Create migration SQL archive ─────────────────────────────────────────
 if $GEN_MIGRATION; then
     MIGRATION_FILE="database/migrations/${NEW}_${SLUG}.sql"

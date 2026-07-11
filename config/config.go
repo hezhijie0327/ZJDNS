@@ -4,10 +4,12 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
 	"zjdns/internal/log"
+	zstamp "zjdns/internal/stamp"
 
 	"codeberg.org/miekg/dns"
 )
@@ -162,11 +164,6 @@ type LatencyProbeStep struct {
 	Timeout  int    `json:"timeout,omitempty"`
 }
 
-// DNSCryptConfigGenerator is a hook for generating DNSCrypt server + client
-// JSON configuration.  Set by server/dnscrypt's init() to avoid a layering
-// violation (internal/cli must not import server/dnscrypt).
-var DNSCryptConfigGenerator func(provider, addr, esVersion, certTTL string) (string, error)
-
 // IsEnabled reports whether DNSCrypt is configured.  An empty DNSCryptSettings
 // block means DNSCrypt is disabled.
 func (d *DNSCryptSettings) IsEnabled() bool {
@@ -211,6 +208,10 @@ func LoadConfig(configFile string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 
+	if err := normalizeStamps(cfg); err != nil {
+		return nil, fmt.Errorf("normalize stamps: %w", err)
+	}
+
 	if shouldEnableDDR(cfg) {
 		addDDRRecords(cfg)
 	}
@@ -238,6 +239,123 @@ func NewDefaultServerConfig() *ServerConfig {
 	cfg.Server.Features.HijackProtection = true
 
 	return cfg
+}
+
+// normalizeStamps resolves sdns:// addresses in upstream and fallback server
+// configs, populating protocol, address, server_name, and public_key from the
+// stamp.  Servers without an sdns:// address are left unchanged.
+func normalizeStamps(cfg *ServerConfig) error {
+	for i := range cfg.Upstream {
+		if err := resolveStamp(&cfg.Upstream[i], i, "upstream"); err != nil {
+			return err
+		}
+	}
+	for i := range cfg.Fallback {
+		if err := resolveStamp(&cfg.Fallback[i], i, "fallback"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolveStamp parses an sdns:// stamp and populates missing fields on the
+// UpstreamServer.  Non-stamp addresses are left unchanged.
+func resolveStamp(server *UpstreamServer, index int, category string) error {
+	if !strings.HasPrefix(server.Address, "sdns://") {
+		return nil
+	}
+
+	s, err := zstamp.Parse(server.Address)
+	if err != nil {
+		return fmt.Errorf("%s server %d stamp parse failed: %w", category, index, err)
+	}
+
+	// Protocol: if not explicitly set, infer from stamp.
+	stampProto := zstamp.ProtoToConfig(s.Proto)
+	if server.Protocol == "" {
+		server.Protocol = stampProto
+	} else if !protocolMatchesStamp(server.Protocol, s.Proto) {
+		return fmt.Errorf(
+			"%s server %d: explicit protocol %q does not match stamp protocol %s",
+			category, index, server.Protocol, stampProto,
+		)
+	}
+
+	// Address: for DoH, reconstruct the full URL from stamp fields.
+	switch s.Proto {
+	case zstamp.ProtoDOH:
+		server.Address = buildDOHURL(s)
+	default:
+		server.Address = s.Address
+	}
+
+	// ServerName: use stamp's ProviderName only if not explicitly set.
+	if server.ServerName == "" && s.ProviderName != "" {
+		server.ServerName = s.ProviderName
+	}
+
+	// PublicKey: for DNSCrypt, populate from stamp if not explicitly set.
+	if s.Proto == zstamp.ProtoDNSCrypt {
+		if server.PublicKey == "" && len(s.PublicKey) > 0 {
+			server.PublicKey = hexEncodePublicKey(s.PublicKey)
+		}
+	}
+
+	return nil
+}
+
+// protocolMatchesStamp checks whether the user-specified protocol string is
+// compatible with the stamp's protocol ID.
+func protocolMatchesStamp(userProto string, stampProto zstamp.StampProtoType) bool {
+	switch stampProto {
+	case zstamp.ProtoPlain:
+		return userProto == ProtoUDP || userProto == ProtoTCP
+	case zstamp.ProtoDNSCrypt:
+		return userProto == ProtoDNSCrypt || userProto == ProtoDNSCryptTCP
+	case zstamp.ProtoDOH:
+		return userProto == ProtoDOH || userProto == ProtoHTTP
+	case zstamp.ProtoDOT:
+		return userProto == ProtoDOT || userProto == ProtoTLS
+	case zstamp.ProtoDOQ:
+		return userProto == ProtoDOQ || userProto == ProtoQUIC
+	case zstamp.ProtoODoHTarget, zstamp.ProtoDNSCryptRelay, zstamp.ProtoODoHRelay:
+		// These stamp types have no direct config protocol — always accept.
+		return true
+	default:
+		return false
+	}
+}
+
+// buildDOHURL constructs the full DoH URL from a stamp's fields.
+// Stamp address is host:port; host_name is SNI; path is the HTTP endpoint.
+func buildDOHURL(s *zstamp.Stamp) string {
+	host, port, err := net.SplitHostPort(s.Address)
+	if err != nil {
+		// Fallback: use address as-is (shouldn't happen for valid stamps).
+		return "https://" + s.Address + "/dns-query"
+	}
+	if s.ProviderName != "" {
+		host = s.ProviderName
+	}
+	path := s.Path
+	if path == "" {
+		path = "/dns-query"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return "https://" + net.JoinHostPort(host, port) + path
+}
+
+// hexEncodePublicKey encodes a DNSCrypt Ed25519 public key as an uppercase hex
+// string, matching the format used in server/dnscrypt for consistency.
+func hexEncodePublicKey(b []byte) string {
+	var sb strings.Builder
+	sb.Grow(len(b) * 2)
+	for _, v := range b {
+		fmt.Fprintf(&sb, "%02X", v)
+	}
+	return sb.String()
 }
 
 func shouldEnableDDR(cfg *ServerConfig) bool {
@@ -348,93 +466,4 @@ func addChaosRecord(cfg *ServerConfig) {
 			Answer: []ZoneRecord{{Type: dns.TypeTXT, Class: dns.ClassCHAOS, TTL: 0, Content: ""}},
 		})
 	}
-}
-
-// GenerateExampleConfig returns a complete example configuration as indented JSON.
-func GenerateExampleConfig() string {
-	cfg := NewDefaultServerConfig()
-
-	cfg.Server.Pprof = DefaultPprofPort
-	cfg.Server.LogLevel = log.DefaultLevel
-
-	cfg.Server.TLS.CertFile = "/path/to/cert.pem"
-	cfg.Server.TLS.KeyFile = "/path/to/key.pem"
-
-	cfg.Server.TLS.KTLS = &KTLSSettings{KernelTX: true}
-
-	cfg.Server.DNSCrypt = DNSCryptSettings{
-		Port:         DefaultDNSCryptPort,
-		ProviderName: "2.dnscrypt-cert.example.com",
-		PublicKey:    "1A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
-		PrivateKey:   "34E2546B6F4C1FCE695E0C62DD3D74D39CEA52C70A283E7615EF4B67F82178D51A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
-		ResolverSk:   "86E8DAED24164E868CF4D2BDB29F7177FD9C20A8E3302BB04498FFE16AC61837",
-		ResolverPk:   "999AC4B4F10E60B8A9EA694F56CB136A2C3FDA803320B6A2F3386D87E249A6ACCB7099B7BF9549BA17BC3646490B5B03FA068CCE76714598C60D5B056D47ACB7044ADC23205079B496C426069CB79B9B5868F6168B7C2F60654AD68C58AD35370EEB2C4C403E3CC415BCDA59E5483537D82131E11DB1393A03A842F311465EF152C73561CDD3476ED516810B2B1A6A3C75A397D835315FE3759D10B78AC947FE091402AB370A21B00F8647B03C7EDF3120BD03A860781522E90FA3A5595CC30EE7A657F9E10B279542F73347F3EA531F8C55FC0979EF7155FA21B8F2061209FB23BBC91E11279A51F76E596A5F5D0A95047246A0007B90A7631963680B000CB0EC392FE7747E1C8EE48B536842910EFB17E1726F133205BC2787402942AF744EFCB4CE71B9551CF850AECBB8549816F9D56A06484D39E66687DB028A8A784D869131CB8A948C3247DB151F31186A25007E0B601136A96676AD1488741021BB618A3F86B48624D28A134475B029222B565CA2C831DD346C4A158D4D00CC09A62DF582AE369A19A3D3174A9B246CFB8DBB4152CA994246AC669CD69BBF792D217694CEF4541708A61A5091E376C766456A8D8899B9F6B5902971A4EC806DE67916A9181C244413A95B0CA100B0A736F4B660DB62545C6C8959E7A5EA08BC6445837EC603135495303C461D67305B02AA77BA17BDF82832C47E3C165A14FCB536A24558A36E8969911F035E7272AD1EA0CCDEAC890E076AD82A8CF24A8F0703B523B34B4439551483893045577DE5BF62FB03FBB133688237DF7B833C837F8AA82D1477722DB09E8F90087A95A0A69179189525CCBABD09AC9837868BF84594571201AB7963FB110FF0DA77CF557E17F60BB2EBBFFB762D8318CE26E38893AA4DF1B9632B04222F251244973173A6717029A099DB513856292BC86DA0F28264F601FC52A887412E4AE47D2071B02CE1C80FF9AAFAC0A0B76C5486A4B557E18883FC24E65B5AE441B4D1BC964C193B5B50B9E2D766EEB2BA1E455E39942577725675543D3AA78B4B743ADFD2409287C7CA95CDB4008B3D1BA7E9A77BE9B80FF9458558272CEB60548D235BD7B836FEF2472383742B9125252A81D01C964597C69C22C5999500A3BB880E833F181684A442CA99AC29EEF89F6D4A9A736A3AE5CCBC3CACACE751537784609A98CDD9C01DB172C3C0D762FEB3B5460C08E9642A177010BA979A70EBB53C7790A6E679F6286A893B3C157229787B9FE802340589AD92E15519E93176A3B35DEA7DC256CD8C752E88E28F66599D85C6750C773992A09831E07738A9A35A2470AEE7BF5B128C691B62438C0B3CBB308E44881C7C26FA1262DC2092F36792F79188C288B57EC64F94C4B8F60245C79C691F8629D5E47D82D58B2A426DA911CDB0B00BF92B4DE0387A91A621FE5B8780B6155A48AC57194B9727B53DB05A7B39BEBF1C337C560062F8223A2501FCB033ADA6C458652943F07216919B1D9A7EBE04A3EF6ABEBF7AC880E201CD28456B24CE5AA070831220B992149D9797A85357E279BF305406255409CE1501C52A7A12E6A5A3D54979D746B70B87CE633CA37C5820391A1B40CED72B8428096E8C59754F544C23510ECB8C03CC8FFEA10675D454E1B9221C14CFC79EFA946ACAFB9F005B8EBB286EB15C825948A71375315F0DB1DD574B1F8BD7D3F34C11803E088AAF2AFD59A3CD654BA258",
-		ESVersion:    "xwingpq",
-		CertTTL:      "3650d",
-	}
-
-	cfg.Server.Features.Database.DBPath = "cache.db"
-	cfg.Server.Features.Database.MMapSizeMB = DefaultCacheMMapSizeMB
-	cfg.Server.Features.Database.CacheSizeMB = DefaultCacheCacheSizeMB
-
-	cfg.Server.Features.Cache.MaxEntries = DefaultMaxCacheEntries
-	cfg.Server.Features.Cache.PreferStale = true
-
-	cfg.Server.Features.ECS = ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
-	cfg.Server.Features.LatencyProbe = []LatencyProbeStep{
-		{Protocol: ProtoPing, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
-		{Protocol: ProtoTCP, Port: DefaultProbePortHTTPS, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
-		{Protocol: ProtoTCP, Port: DefaultProbePortHTTP, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
-		{Protocol: ProtoUDP, Port: DefaultProbePortDNS, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
-		{Protocol: ProtoHTTPPlain, Port: DefaultProbePortHTTP, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
-		{Protocol: ProtoHTTP, Port: DefaultProbePortHTTPS, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
-		{Protocol: ProtoHTTP3, Port: DefaultProbePortHTTPS, Timeout: int(DefaultLatencyProbeTimeout.Milliseconds())},
-	}
-	cfg.Upstream = []UpstreamServer{
-		{Address: "223.5.5.5:53", Protocol: ProtoTCP, Proxy: "socks5://127.0.0.1:1080"},
-		{Address: "223.6.6.6:53", Protocol: ProtoUDP},
-		{Address: "223.5.5.5:853", Protocol: ProtoTLS, ServerName: "dns.alidns.com"},
-		{Address: "223.6.6.6:853", Protocol: ProtoQUIC, ServerName: "dns.alidns.com", SkipTLSVerify: true},
-		{Address: "https://223.5.5.5:443/dns-query", Protocol: ProtoHTTP, ServerName: "dns.alidns.com", Match: []string{"corp-net"}},
-		{Address: "https://223.6.6.6:443/dns-query", Protocol: ProtoHTTP3, ServerName: "dns.alidns.com", Match: []string{"!corp-net"}},
-	}
-
-	cfg.Fallback = []UpstreamServer{
-		{Address: RecursiveIndicator},
-		{Address: "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0", Protocol: ProtoDNSCrypt},
-		{Address: "149.112.112.9:53", Protocol: ProtoUDP, NoCache: true},
-	}
-
-	cfg.Zone.BypassTags = []string{"gateway"}
-
-	cfg.Zone.Rules = []ZoneRule{
-		{Name: "blocked.com", Rcode: dns.RcodeNameError},
-		{Name: "static.example.com", Answer: []ZoneRecord{
-			{Type: dns.TypeA, TTL: 300, Content: "10.0.0.1"},
-			{Type: dns.TypeAAAA, TTL: 3600, Content: "::1"},
-		}},
-		{
-			Name: "*.cdn.example.com", Match: []string{"corp-net", "!guest"},
-			Answer: []ZoneRecord{{Type: dns.TypeA, TTL: 300, Content: "10.0.0.1"}},
-		},
-		{
-			Name:       "example.com",
-			Answer:     []ZoneRecord{{Type: dns.TypeA, TTL: 300, Content: "10.0.0.1"}},
-			Authority:  []ZoneRecord{{Type: dns.TypeSOA, TTL: 3600, Content: "ns1.example.com. admin.example.com. 1 3600 900 86400 3600"}},
-			Additional: []ZoneRecord{{Type: dns.TypeA, Name: "ns1.example.com", TTL: 3600, Content: "10.0.0.2"}},
-		},
-	}
-
-	cfg.CIDR = []CIDRConfig{
-		{IPs: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}, Tag: "corp-net"},
-		{IPs: []string{"0.0.0.0/0"}, Tag: "guest"},
-		{IPs: []string{"10.0.0.1/32"}, Tag: "gateway"},
-	}
-
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		log.Warnf("CONFIG: example config marshal failed: %v", err)
-		return ""
-	}
-	return string(data)
 }
