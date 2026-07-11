@@ -117,6 +117,39 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 						}
 					}
 
+					// 0x20 case-preservation check (draft-0x20).
+					// If the authoritative server mangled the case
+					// pattern, retry without perturbation.
+					if result.PerturbedName != "" && len(result.Response.Question) > 0 {
+						respQname := result.Response.Question[0].Header().Name
+						if !edns.IsCasePreserved(result.PerturbedName, respQname) {
+							log.Debugf("RECURSION: 0x20 CAPSFAIL for %s via %s, retrying without case randomization", question.Name, nsAddr)
+							pool.DefaultMessagePool.Put(result.Response)
+
+							// Build bare query without perturbation.
+							nocapsMsg := pool.DefaultMessagePool.Get()
+							dnsutil.SetQuestion(nocapsMsg, dnsutil.Fqdn(question.Name), question.Qtype)
+							nocapsMsg.RecursionDesired = true
+							defer pool.DefaultMessagePool.Put(nocapsMsg)
+
+							nocapsResult := r.resolver.client.ExecuteQuery(subCtx, nocapsMsg, server)
+							if nocapsResult.Error == nil && nocapsResult.Response != nil {
+								select {
+								case resultChan <- nocapsResult.Response:
+									cancel()
+									return nil
+								case <-queryCtx.Done():
+									pool.DefaultMessagePool.Put(nocapsResult.Response)
+									return queryCtx.Err()
+								}
+							}
+							if nocapsResult.Response != nil {
+								pool.DefaultMessagePool.Put(nocapsResult.Response)
+							}
+							return nil
+						}
+					}
+
 					// Send to resultChan and cancel the
 					// parent context so queued goroutines
 					// exit before starting work.  Running
