@@ -15,10 +15,10 @@ const (
 // Cache sizing, TTL, and serve-stale parameters.
 const (
 	DefaultMaxCacheEntries   = 10000
-	DefaultCacheMMapSizeMB   = 16
-	DefaultCacheCacheSizeMB  = 16
-	DefaultCacheMaxOpenConns = 4
-	DefaultCacheMaxIdleConns = 2
+	DefaultCacheMMapSizeMB   = 64
+	DefaultCacheCacheSizeMB  = 32
+	DefaultCacheMaxOpenConns = 8
+	DefaultCacheMaxIdleConns = 4
 	DefaultTTL               = 10
 	DefaultStaleTTL          = 30
 	DefaultStaleMaxAge       = 30 * 86400 // RFC 8767 §6 recommends ≤ 30 days
