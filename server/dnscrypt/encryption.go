@@ -1,25 +1,26 @@
 package dnscrypt
 
+import (
+	"crypto/rand"
+)
+
 // Prior to encryption, queries are padded using the ISO/IEC 7816-4 format.
 // The padding starts with a byte valued 0x80 followed by a variable number
 // of NUL bytes.
 //
-// For UDP: the padded length must be at least minUDPQuestionSize (256 bytes)
-// and must be a multiple of 64 bytes.
-//
-// For TCP: the padding length is randomly chosen between 1 and 256 bytes
-// (including the leading 0x80), and the total length must be a multiple of
-// 64 bytes.
+// pad() pads to at least minLen bytes (must be a multiple of 64; 0 = align
+// to next 64-byte boundary).  The caller is responsible for choosing an
+// appropriate minimum: 256 for UDP anti-amplification, 0 for TCP.
 
-// pad applies ISO/IEC 7816-4 padding to the packet.  When isUDP is true the
-// padded length is at least minUDPQuestionSize (256 bytes) as required by the
-// DNSCrypt UDP profile; for TCP only the 64-byte alignment is enforced.
-func pad(packet []byte, isUDP bool) (padded []byte) {
+// pad applies ISO/IEC 7816-4 padding to the packet.  minLen is the minimum
+// total padded length; when zero it defaults to the next multiple of 64.
+// minLen must be a multiple of 64 (caller's responsibility).
+func pad(packet []byte, minLen int) (padded []byte) {
 	// Closest multiple of 64 >= (len(packet) + 1).
 	minSize := len(packet) + 1 + (64-(len(packet)+1)%64)%64
 
-	if isUDP && minUDPQuestionSize > minSize {
-		minSize = minUDPQuestionSize
+	if minLen > minSize {
+		minSize = minLen
 	}
 
 	packet = append(packet, 0x80)
@@ -28,6 +29,32 @@ func pad(packet []byte, isUDP bool) (padded []byte) {
 	}
 
 	return packet
+}
+
+// padTCP applies ISO/IEC 7816-4 padding with a randomly chosen length for
+// client queries over TCP, per §5.4.3 of draft-denis-dprive-dnscrypt-10.
+// The padding length is randomly selected from 1 to 256 bytes (including the
+// leading 0x80), and the total length is rounded up to a multiple of 64.
+func padTCP(packet []byte) (padded []byte) {
+	// Pick a random padding length between 1 and 256 bytes (incl. 0x80).
+	padLen := 1 + cryptoRandIntn(256)
+	packet = append(packet, 0x80)
+	for i := 1; i < padLen; i++ {
+		packet = append(packet, 0)
+	}
+	// Round up to multiple of 64.
+	for len(packet)&63 != 0 {
+		packet = append(packet, 0)
+	}
+	return packet
+}
+
+// cryptoRandIntn returns a cryptographic random integer in [0, n).
+func cryptoRandIntn(n int) int {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	// Simple rejection sampling; n <= 256 so bias is negligible.
+	return int(uint64(b[0])|uint64(b[1])<<8) % n //nolint:gosec // G115: n <= 256, result fits in int
 }
 
 // unpad removes ISO/IEC 7816-4 padding from the packet.

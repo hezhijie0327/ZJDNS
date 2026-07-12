@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"time"
 )
 
 // encryptedQuery handles encryption and decryption of DNSCrypt client queries.
@@ -57,6 +56,13 @@ type encryptedQuery struct {
 	// response uses the correct key.  For classical queries it is left
 	// zero — the encrypt path re-derives it from clientPk.
 	sharedKey [SharedKeySize]byte
+
+	// minQueryLen is the minimum padded query length for UDP.  Must be a
+	// multiple of 64.  Per §5.4.2, escalated by 64 on each TC response.
+	minQueryLen int
+
+	// isTCP indicates the query will be sent over TCP (§5.4.3 random padding).
+	isTCP bool
 }
 
 // encrypt encrypts the DNS query packet and returns the wire-format query
@@ -66,9 +72,11 @@ func (q *encryptedQuery) encrypt(
 	sharedKey [SharedKeySize]byte,
 ) (query []byte, clientNonce Nonce, err error) {
 	// Only generate a fresh nonce if the caller didn't pre-set one.
+	// The client nonce (first 12 bytes) is fully random, per §7.2 of
+	// draft-denis-dprive-dnscrypt-10: clients SHOULD NOT include
+	// unencrypted timestamps or other stable client state in nonce values.
 	if q.nonce == ([24]byte{}) {
-		binary.BigEndian.PutUint64(q.nonce[:8], uint64(time.Now().UnixNano()))
-		_, _ = rand.Read(q.nonce[8:12])
+		_, _ = rand.Read(q.nonce[:NonceSize/2])
 	}
 
 	if q.esVersion.IsPQ() {
@@ -79,7 +87,12 @@ func (q *encryptedQuery) encrypt(
 	query = append(query, q.clientPk[:]...)
 	query = append(query, q.nonce[:NonceSize/2]...)
 
-	padded := pad(packet, true) // client queries are always UDP
+	var padded []byte
+	if q.isTCP {
+		padded = padTCP(packet)
+	} else {
+		padded = pad(packet, q.minQueryLen)
+	}
 	clientNonce = q.nonce
 
 	switch q.esVersion {
@@ -103,7 +116,16 @@ func (q *encryptedQuery) encryptPQ(
 
 	// Resumed query: carry the ticket, derive the per-query key.
 	if len(q.pqTicket) > 0 {
-		padded := pqPad(packet, pqMinPaddingResumed)
+		var padded []byte
+		if q.isTCP {
+			padded = padTCP(packet)
+		} else {
+			floor := pqMinPaddingResumed
+			if q.minQueryLen > floor {
+				floor = q.minQueryLen
+			}
+			padded = pqPad(packet, floor)
+		}
 		ct := xchachaSeal(nil, clientNonce[:], padded, sharedKey[:])
 		query = append(query, PQResumeMagic[:]...)
 		var tl [2]byte

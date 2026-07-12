@@ -3,9 +3,9 @@ package client
 import (
 	"context"
 	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -28,6 +28,10 @@ type dnscryptState struct {
 	clientMagic   [serverdnscrypt.ClientMagicSize]byte
 	esVersion     serverdnscrypt.CryptoConstruction
 	expires       time.Time
+
+	// minQueryLen is the minimum padded query length for UDP.  Per §5.4.2 of
+	// draft-denis-dprive-dnscrypt-10, escalated by 64 on each TC response.
+	minQueryLen int
 
 	// PQ fields — only set when the server offers a PQ certificate.
 	pqPublicKey    []byte
@@ -61,6 +65,8 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		ESVersion:   state.esVersion,
 		ClientMagic: state.clientMagic,
 		ClientPk:    state.publicKey,
+		MinQueryLen: state.minQueryLen,
+		IsTCP:       useTCP,
 	}
 	if state.esVersion.IsPQ() {
 		q.PQCertContext = state.pqCertContext
@@ -152,6 +158,16 @@ func (c *Client) executeDNSCrypt(ctx context.Context, msg *dns.Msg, server *conf
 		return nil, fmt.Errorf("unpacking dnscrypt response: %w", err)
 	}
 
+	// §5.4.2: Escalate min-query-len by 64 on truncated UDP responses so
+	// the next query is more likely to avoid fragmentation.
+	if response.Truncated && !useTCP {
+		const maxQueryLen = 4096
+		if state.minQueryLen+64 <= maxQueryLen {
+			state.minQueryLen += 64
+			log.Debugf("UPSTREAM: DNSCrypt min-query-len escalated to %d after TC", state.minQueryLen)
+		}
+	}
+
 	return response, nil
 }
 
@@ -184,12 +200,13 @@ func prepareAndEncryptQuery(state *dnscryptState, q *serverdnscrypt.EncryptedQue
 	return serverdnscrypt.EncryptQuery(q, packet, sharedKey)
 }
 
-// newClientNonce generates a fresh 24-byte client nonce with a timestamp
-// prefix and random suffix, matching the generation in encryptedQuery.encrypt.
+// newClientNonce generates a fresh 24-byte client nonce with fully random
+// bytes in the client-chosen half, per §7.2 of draft-denis-dprive-dnscrypt-10:
+// clients SHOULD NOT include unencrypted timestamps or other stable client
+// state in nonce values.
 func newClientNonce() serverdnscrypt.Nonce {
 	var n serverdnscrypt.Nonce
-	binary.BigEndian.PutUint64(n[:8], uint64(time.Now().UnixNano()))
-	_, _ = rand.Read(n[8:12])
+	_, _ = rand.Read(n[:serverdnscrypt.NonceSize/2])
 	return n
 }
 
@@ -257,10 +274,10 @@ func (c *Client) getDNSCryptState(
 		providerName += "."
 	}
 
-	// Fetch the certificate via a plain DNS TXT query over UDP.  The
-	// DNSCrypt server responds to unencrypted UDP queries on the DNSCrypt
-	// port (e.g. 8443) with the certificate.  TCP cert queries are not
-	// universally supported (e.g. Quad9 requires UDP).
+	// Fetch the certificate via a plain DNS TXT query.  UDP is tried first;
+	// if the response has the TC flag set (e.g. the PQ certificate set is too
+	// large for the unpadded request), the query is retried over TCP per
+	// §10.3 of draft-denis-dprive-dnscrypt-10.
 	certQuery := &dns.Msg{}
 	certQuery.RecursionDesired = true
 	txtRR := new(dns.TXT)
@@ -271,34 +288,9 @@ func (c *Client) getDNSCryptState(
 		return nil, fmt.Errorf("packing cert query: %w", err)
 	}
 
-	// Dial UDP — DNS over UDP has no length prefixing.
-	rawConn, dialErr := net.Dial("udp", addr)
-	if dialErr != nil {
-		return nil, fmt.Errorf("fetching dnscrypt cert from %s: dial: %w", addr, dialErr)
-	}
-	defer func() { _ = rawConn.Close() }()
-
-	deadline, ok := ctx.Deadline()
-	if ok {
-		_ = rawConn.SetDeadline(deadline)
-	}
-
-	_, err = rawConn.Write(certQuery.Data)
+	resp, err := fetchCert(ctx, addr, certQuery.Data)
 	if err != nil {
-		return nil, fmt.Errorf("fetching dnscrypt cert from %s: write: %w", addr, err)
-	}
-
-	respBuf := make([]byte, config.DefaultDNSCryptResponseBuffer)
-	n, err := rawConn.Read(respBuf)
-	if err != nil {
-		return nil, fmt.Errorf("fetching dnscrypt cert from %s: read: %w", addr, err)
-	}
-
-	resp := &dns.Msg{}
-	resp.Data = respBuf[:n]
-	err = resp.Unpack()
-	if err != nil {
-		return nil, fmt.Errorf("fetching dnscrypt cert from %s: unpack: %w", addr, err)
+		return nil, fmt.Errorf("fetching dnscrypt cert from %s: %w", addr, err)
 	}
 
 	if resp.Rcode != dns.RcodeSuccess {
@@ -333,6 +325,7 @@ func (c *Client) getDNSCryptState(
 		clientMagic:   cert.ClientMagic,
 		esVersion:     esVersion,
 		expires:       time.Now().Add(config.DefaultDNSCryptCertCacheTTL),
+		minQueryLen:   256,
 	}
 
 	if esVersion.IsPQ() && len(cert.PqPublicKey) > 0 {
@@ -407,4 +400,102 @@ func (c *Client) warmUpDNSCrypt(ctx context.Context, server *config.UpstreamServ
 		return
 	}
 	_, _ = c.getDNSCryptState(ctx, addr, providerName, publicKey, server)
+}
+
+// fetchCert sends a plain DNS query to addr and returns the unpacked response.
+// UDP is tried first; if the response has the TC flag set, the query is
+// retried over TCP per §10.3 of draft-denis-dprive-dnscrypt-10.
+func fetchCert(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
+	// Try UDP first.
+	resp, err := fetchCertOverUDP(ctx, addr, query)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Truncated {
+		return resp, nil
+	}
+
+	// TC set — retry over TCP.
+	log.Debugf("UPSTREAM: DNSCrypt cert response truncated, retrying over TCP")
+	tcpResp, tcpErr := fetchCertOverTCP(ctx, addr, query)
+	if tcpErr != nil {
+		// If TCP fails, return the truncated UDP response so the caller
+		// can still extract classical certificates from it.
+		log.Debugf("UPSTREAM: DNSCrypt cert TCP retry failed: %v", tcpErr)
+		return resp, nil
+	}
+	return tcpResp, nil
+}
+
+// fetchCertOverUDP sends a single UDP DNS query and returns the unpacked response.
+func fetchCertOverUDP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
+	conn, err := net.Dial("udp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("dial udp: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+
+	if _, err := conn.Write(query); err != nil {
+		return nil, fmt.Errorf("write: %w", err)
+	}
+
+	buf := make([]byte, config.DefaultDNSCryptResponseBuffer)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+
+	resp := &dns.Msg{}
+	resp.Data = buf[:n]
+	if err := resp.Unpack(); err != nil {
+		return nil, fmt.Errorf("unpack: %w", err)
+	}
+	return resp, nil
+}
+
+// fetchCertOverTCP sends a DNS query over TCP (2-byte length prefix) and
+// returns the unpacked response.
+func fetchCertOverTCP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("dial tcp: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+
+	// TCP DNS: 2-byte big-endian length prefix.
+	frame := make([]byte, 2+len(query))
+	frame[0] = byte(len(query) >> 8) //nolint:gosec // G115: DNS query bounded by MaxMsgSize (65535)
+	frame[1] = byte(len(query))      //nolint:gosec // G115: DNS query bounded by MaxMsgSize (65535)
+	copy(frame[2:], query)
+	if _, err := conn.Write(frame); err != nil {
+		return nil, fmt.Errorf("write: %w", err)
+	}
+
+	respLen := make([]byte, 2)
+	if _, err := io.ReadFull(conn, respLen); err != nil {
+		return nil, fmt.Errorf("read length: %w", err)
+	}
+	packetLen := int(respLen[0])<<8 | int(respLen[1])
+	if packetLen > dns.MaxMsgSize {
+		return nil, fmt.Errorf("response too large: %d", packetLen)
+	}
+	buf := make([]byte, packetLen)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+
+	resp := &dns.Msg{}
+	resp.Data = buf
+	if err := resp.Unpack(); err != nil {
+		return nil, fmt.Errorf("unpack: %w", err)
+	}
+	return resp, nil
 }

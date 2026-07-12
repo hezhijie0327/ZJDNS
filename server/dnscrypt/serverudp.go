@@ -105,6 +105,21 @@ func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAdd
 			log.Debugf("DNSCRYPT: handshake failed: %v", err)
 			return
 		}
+		// §10.3 anti-amplification: over UDP, a certificate response MUST NOT
+		// be larger than the request.  If it is, set the TC flag to prompt the
+		// client to retry over TCP.
+		if len(reply) > len(b) {
+			truncated := &dns.Msg{}
+			truncated.Data = reply
+			if unpackErr := truncated.Unpack(); unpackErr == nil {
+				truncated.Truncated = true
+				truncated.Answer = nil
+				if packErr := truncated.Pack(); packErr == nil {
+					reply = truncated.Data
+				}
+			}
+			log.Debugf("DNSCRYPT: UDP cert response (%d bytes) exceeds request (%d bytes) — returning TC", len(reply), len(b))
+		}
 		_, _ = udpConn.WriteToUDP(reply, addr)
 		log.Debugf("DNSCRYPT: UDP handshake response sent to %s", addr)
 		return

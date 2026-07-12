@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"time"
 )
 
 // encryptedResponse handles encryption and decryption of DNSCrypt server
@@ -42,8 +41,9 @@ func (r *encryptedResponse) encrypt(
 	sharedKey [SharedKeySize]byte,
 	isUDP bool,
 ) (response []byte, err error) {
-	_, _ = rand.Read(r.nonce[12:16])
-	binary.BigEndian.PutUint64(r.nonce[16:NonceSize], uint64(time.Now().UnixNano()))
+	// The resolver nonce (bytes 12-23) is fully random, per §7.2 of
+	// draft-denis-dprive-dnscrypt-10.
+	_, _ = rand.Read(r.nonce[NonceSize/2:])
 
 	response = append(response, ResolverMagic...)
 	response = append(response, r.nonce[:]...)
@@ -62,7 +62,13 @@ func (r *encryptedResponse) encrypt(
 		packet = paddedPayload
 	}
 
-	padded := pad(packet, isUDP)
+	// UDP responses get a 256-byte minimum to match client expectations;
+	// TCP responses only align to 64 bytes.
+	respMinLen := 0
+	if isUDP {
+		respMinLen = minUDPQuestionSize
+	}
+	padded := pad(packet, respMinLen)
 	serverNonce := r.nonce
 
 	switch r.esVersion {

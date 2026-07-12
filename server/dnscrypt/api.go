@@ -22,6 +22,17 @@ type EncryptedQuery struct {
 	// who need the nonce before encryption (e.g. to derive a resumed
 	// PQ shared key) must set this field.
 	ClientNonce Nonce
+
+	// MinQueryLen is the minimum padded query length for UDP queries.  It
+	// must be a multiple of 64.  Per §5.4.2 of draft-denis-dprive-dnscrypt-10,
+	// clients escalate this by 64 bytes on each truncated response to reduce
+	// fragmentation risk.  Zero means use the default (256).
+	MinQueryLen int
+
+	// IsTCP indicates the query will be sent over TCP.  When true, padding
+	// uses the random-length TCP profile (§5.4.3) instead of the UDP
+	// anti-amplification minimum.
+	IsTCP bool
 }
 
 // EncryptedResponse wraps the encrypted response parameters for client use.
@@ -40,6 +51,8 @@ func EncryptQuery(q *EncryptedQuery, packet []byte, sharedKey [SharedKeySize]byt
 		clientMagic: q.ClientMagic,
 		clientPk:    q.ClientPk,
 		nonce:       q.ClientNonce,
+		minQueryLen: q.MinQueryLen,
+		isTCP:       q.IsTCP,
 	}
 	if q.ESVersion.IsPQ() {
 		eq.pqCiphertext = q.PQCiphertext

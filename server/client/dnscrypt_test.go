@@ -253,6 +253,8 @@ func TestDNSCryptTXT(t *testing.T) {
 func TestDNSCryptCertHandshake(t *testing.T) {
 	// Verify the server responds to a plain (unencrypted) TXT cert query
 	// on its DNSCrypt port — this is the first step every client performs.
+	// Uses the same fetchCert flow as getDNSCryptState, which handles TC
+	// via TCP fallback (§10.3).
 	addr, _ := startTestDNSCryptServer(t)
 
 	msg := &dns.Msg{}
@@ -260,30 +262,15 @@ func TestDNSCryptCertHandshake(t *testing.T) {
 	q := &dns.TXT{Hdr: dns.Header{Name: "2.dnscrypt-cert.example.com.", Class: dns.ClassINET}}
 	msg.Question = []dns.RR{q}
 
-	// Plain UDP DNS query (no encryption) to the DNSCrypt port.
 	if err := msg.Pack(); err != nil {
 		t.Fatalf("pack: %v", err)
 	}
-	conn, err := net.Dial("udp", addr)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err := conn.Write(msg.Data); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
 
-	resp := &dns.Msg{}
-	resp.Data = buf[:n]
-	err = resp.Unpack()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := fetchCert(ctx, addr, msg.Data)
 	if err != nil {
-		t.Fatalf("unpack: %v", err)
+		t.Fatalf("fetchCert: %v", err)
 	}
 	if len(resp.Answer) == 0 {
 		t.Fatal("cert TXT query returned no answers")
