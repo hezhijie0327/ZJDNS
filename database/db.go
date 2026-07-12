@@ -55,7 +55,6 @@ type DB struct {
 
 	// Zone prepared statements
 	StmtZoneExact  *sql.Stmt
-	StmtZoneWild   *sql.Stmt
 	StmtZoneInsert *sql.Stmt
 }
 
@@ -141,7 +140,7 @@ func (db *DB) Close() error {
 	for _, stmt := range []*sql.Stmt{
 		db.StmtGetEntry, db.StmtInsertLog, db.StmtHitCounter,
 		db.StmtInsertLatency, db.StmtGetLastProbe, db.StmtEnsureEntry,
-		db.StmtZoneExact, db.StmtZoneWild, db.StmtZoneInsert,
+		db.StmtZoneExact, db.StmtZoneInsert,
 		db.StmtRuleSetInsert,
 		db.StmtInfraGet, db.StmtInfraUpsert,
 	} {

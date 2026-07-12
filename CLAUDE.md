@@ -247,7 +247,7 @@ zjdns/
 ├── database/                                  ← Unified SQLite DB: connection, schema, migration
 │   ├── db.go                                  ←   DB struct, Open, Close
 │   ├── schema.go                              ←   10 tables in one migration
-│   ├── stmts.go                               ←   12 prepared statements (6 cache + 3 zone + 1 ruleset + 2 infra)
+│   ├── stmts.go                               ←   11 prepared statements (6 cache + 2 zone + 1 ruleset + 2 infra)
 │   ├── migration.go                           ←   Incremental schema migrations
 │   └── migrations/                            ←   Archived migration SQL files
 ├── cache/                                     ← Store interface, DNS response cache (wraps *database.DB)
@@ -393,8 +393,8 @@ Top layer (wiring):
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
 | `DB` | `database` | Unified SQLite DB: goroutine-safe `*sql.DB`, schema migration, 12 prepared stmts, SQLExec/SQLQueryRow/SQLQuery for consumer interfaces | Connection pool with WAL mode |
 | `Options` | `database` | SQLite PRAGMA config: `MMapSizeMB`, `CacheSizeMB` | |
-| `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
-| `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
+| `Store` | `cache` | Interface: Get/Set(int64)/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
+| `Entry` | `cache` | Cached DNS response: ID, Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `Handler` | `server/handler` | DNS query processing pipeline; owns `BackgroundConfig`, `LatencyProber` |
 | `BackgroundConfig` | `server/handler` | Groups RefreshGroup/RefreshCtx/Ctx lifecycle params |
@@ -461,7 +461,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
 - **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
-- **Zone rules**: SQLite-backed composite-key lookup on `(QNAME, QTYPE, QCLASS)` in the unified database. Zone config wraps `rules` + `bypass_tags` in a `ZoneConfig` struct. Each zone entry returns ANSWER + AUTHORITY + ADDITIONAL + RCODE. Inline rules via JSON `name`, `rcode`, `answer`, `authority`, `additional`, `match` (ruleset tags). Type/Class use IANA uint16 numbers (1=A, 28=AAAA, 16=TXT). Zone-file import via `file` field: domain headers (`.domain` / `*.wild`) with optional `rcode=N` and `match=tag`, record lines in `TYPE CONTENT [TTL] [key=value ...]` format. Wildcard `*.domain.com` supported in both inline `name` and file — matches via O(labels) suffix walk. `bypass_tags` skips all zone rules for clients matching the given CIDR tags (e.g. gateway devices). `DynamicContent` rules (`zjdns.stats`, `zjdns.db.clear*`) are called at query time. Zone responses bypass cache.
+- **Zone rules**: SQLite-backed WITHOUT ROWID lookup; PK `(is_wildcard, qname, qtype, qclass, match_tags)` clusters exact and wildcard queries into a single B-tree traversal. on `(QNAME, QTYPE, QCLASS)` in the unified database. Zone config wraps `rules` + `bypass_tags` in a `ZoneConfig` struct. Each zone entry returns ANSWER + AUTHORITY + ADDITIONAL + RCODE. Inline rules via JSON `name`, `rcode`, `answer`, `authority`, `additional`, `match` (ruleset tags). Type/Class use IANA uint16 numbers (1=A, 28=AAAA, 16=TXT). Zone-file import via `file` field: domain headers (`.domain` / `*.wild`) with optional `rcode=N` and `match=tag`, record lines in `TYPE CONTENT [TTL] [key=value ...]` format. Wildcard `*.domain.com` supported in both inline `name` and file — matches via single batched IN query (ORDER BY length(qname) DESC for correct specificity priority). `bypass_tags` skips all zone rules for clients matching the given CIDR tags (e.g. gateway devices). `DynamicContent` rules (`zjdns.stats`, `zjdns.db.clear*`) are called at query time. Zone responses bypass cache.
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns). Similarly, `handler.Question` is a type alias of `resolver.Question` to avoid duplicate struct definitions.
 - **request_log ring buffer**: Append-only request journal replaces the old `hit_counters` table. `RecordRequest()` does a single INSERT — no conflict detection, no read-before-write. Stats are aggregated via SQL over rows with `id > cleared_before`; FlushDB("stats") resets the threshold without touching log rows.
 - **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtInsertLog`, `stmtInsertLatency`, `stmtGetLastProbe`) at initialization time to avoid per-call SQL compilation overhead.
@@ -483,7 +483,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Error wrapping**: Always use `%w` in `fmt.Errorf` when wrapping errors that callers may check with `errors.Is`/`errors.As`. Use `%v` only for informational logging.
 - **Protocol logging**: The `protocol` column in request_log stores the transport identifier as a string (`udp`/`tcp`/`dot`/`doq`/`doh`/`doh3`/`dnscrypt`/`dnscrypt-tcp`), enabling simple GROUP BY queries for protocol-level analytics.
 - **Handler Question alias**: `handler.Question` is a type alias (`type Question = resolver.Question`), eliminating redundant struct conversions between handler and resolver layers.
-- **RecordRequest hot-path**: `RecordRequest()` does a single append-only INSERT — no transaction, no writeMu, no conflict resolution.
+- **RecordRequest hot-path**: `RecordRequest()` does a single append-only INSERT — no transaction, no writeMu, no conflict resolution. When `EntryID > 0` (pre-resolved by `Get()` or `Set()`), `EnsureEntry` is skipped — the redundant SELECT on the hot path is eliminated.
 - **ip_latency independence**: Latency data is not tied to cache entries — all domains sharing the same IP reuse the same row. Rows with `last_probe_time` older than `DefaultStaleMaxAge` (30 days) are cleaned up during eviction alongside stale cache entries.
 - **Zero-allocation label validation**: `IsValidDomainLabels` uses `strings.IndexByte` scanning instead of `strings.Split` to avoid per-query allocation on the hot path.
 - **processRR fast path**: When `value == 0 && !isElapsed && includeDNSSEC`, `processRR` returns the original RR without cloning — common on cache-miss serve paths (50+ allocs saved per response).
@@ -514,7 +514,6 @@ CREATE TABLE entries (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 );
-CREATE INDEX idx_entries_expires ON entries(expires_at);
 CREATE INDEX idx_entries_expires_ts ON entries(expires_at, timestamp);
 CREATE INDEX idx_entries_timestamp ON entries(timestamp);
 
@@ -579,6 +578,7 @@ CREATE INDEX idx_ip_latency_probe ON ip_latency(last_probe_time);
 
 ```sql
 CREATE TABLE zone_entries (
+    is_wildcard INTEGER NOT NULL DEFAULT 0,
     qname      TEXT NOT NULL,
     qtype      INTEGER NOT NULL DEFAULT 0,
     qclass     INTEGER NOT NULL DEFAULT 0,
@@ -587,15 +587,14 @@ CREATE TABLE zone_entries (
     authority  BLOB,               -- zstd-compressed authority RRs
     additional BLOB,               -- zstd-compressed additional RRs
     match_tags TEXT NOT NULL DEFAULT '',
-    is_wildcard INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (qname, qtype, qclass, is_wildcard, match_tags)
-);
+    PRIMARY KEY (is_wildcard, qname, qtype, qclass, match_tags)
+) WITHOUT ROWID;
 
 ```
 
 **Key patterns**:
-- **DNS response cache**: `qtype` = original query type, records in original wire order. All entries are cacheable. `Get()` decompresses + `Msg.Unpack()` — cache hit ~0.5ms.
-- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol+rcode, no row bloat). Miss/stale/zone/error insert into `request_log` with entry_id FK — qname retrieved by JOINing entries for debugging. `ensureEntry()` creates lightweight stubs for zone/error paths so every row has a valid FK.
+- **DNS response cache**: `qtype` = original query type, records in original wire order. All entries are cacheable. `Get()` decompresses + `Msg.Unpack()` — cache hit ~0.5ms. `Get()` returns the entry `ID` so `RecordRequest` can skip `EnsureEntry`; `Set()` returns the new `entryID` for the same purpose on the miss path.
+- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol+rcode, no row bloat). Miss/stale/zone/error insert into `request_log` with entry_id FK — qname retrieved by JOINing entries for debugging. `EnsureEntry()` creates lightweight stubs for zone/error paths when no pre-resolved `EntryID` is available; hit/stale/miss paths skip it via the `EntryID` fast path.
 - **Stats aggregation**: `Stats()` UNION ALLs `entry_hit_counters` + `request_log` for rcode distribution, and combines both tables for protocol counts. `FlushDB("stats")` truncates `entry_hit_counters` and resets the `stats_meta` threshold — request_log rows survive.
 - **Log bounded by cache**: `request_log.entry_id` and `entry_hit_counters.entry_id` both use `ON DELETE CASCADE` — when entries are evicted, all associated rows go with them. No separate ring-buffer needed.
 - **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `ProbeNSAddrs` and stored in ip_latency (keyed by IP only); `sortAnswerByLatency` reorders records at `Get()` time.

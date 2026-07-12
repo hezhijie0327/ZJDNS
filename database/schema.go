@@ -58,7 +58,6 @@ func (db *DB) migrate() error {
 			UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_entries_expires ON entries(expires_at);
 		CREATE INDEX IF NOT EXISTS idx_entries_expires_ts ON entries(expires_at, timestamp);
 		CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
 
@@ -167,6 +166,7 @@ func (db *DB) migrate() error {
 		-- answer/authority/additional store zstd-compressed wire-format RR sets.
 
 		CREATE TABLE IF NOT EXISTS zone_entries (
+			is_wildcard INTEGER NOT NULL DEFAULT 0,
 			qname      TEXT NOT NULL,
 			qtype      INTEGER NOT NULL DEFAULT 0,
 			qclass     INTEGER NOT NULL DEFAULT 0,
@@ -175,9 +175,8 @@ func (db *DB) migrate() error {
 			authority  BLOB,               -- zstd-compressed authority RRs
 			additional BLOB,               -- zstd-compressed additional RRs
 			match_tags TEXT NOT NULL DEFAULT '',
-			is_wildcard INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (qname, qtype, qclass, is_wildcard, match_tags)
-		);
+			PRIMARY KEY (is_wildcard, qname, qtype, qclass, match_tags)
+		) WITHOUT ROWID;
 	`)
 	if err != nil {
 		return err

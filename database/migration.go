@@ -29,11 +29,45 @@ var migrations = []migration{
 	{"3.2.1", "add performance indexes and drop redundant idx_zone_qname", migrateV3_2_1},
 	{"3.2.13", "rebuild zone_entries PK with is_wildcard", migrateV3_2_13},
 	{"3.2.17", "drop nsec_chain table", migrateV3_2_17},
+	{"3.2.19", "drop redundant idx_entries_expires", migrateV3_2_19},
+	{"3.2.20", "rebuild zone_entries WITHOUT ROWID with is_wildcard-first PK", migrateV3_2_20},
 }
 
 func migrateV3_2_17(db *DB) error {
 	_, err := db.SQ.Exec("DROP TABLE IF EXISTS nsec_chain")
 	return err
+}
+
+func migrateV3_2_19(db *DB) error {
+	// idx_entries_expires_ts(expires_at, timestamp) covers all queries that
+	// idx_entries_expires(expires_at) could serve, since expires_at is the
+	// leading column. Drop the redundant index to reduce write overhead.
+	_, err := db.SQ.Exec("DROP INDEX IF EXISTS idx_entries_expires")
+	return err
+}
+
+func migrateV3_2_20(db *DB) error {
+	_, err := db.SQ.Exec(`
+		CREATE TABLE IF NOT EXISTS zone_entries_new (
+			is_wildcard INTEGER NOT NULL DEFAULT 0,
+			qname      TEXT NOT NULL,
+			qtype      INTEGER NOT NULL DEFAULT 0,
+			qclass     INTEGER NOT NULL DEFAULT 0,
+			rcode      INTEGER NOT NULL DEFAULT 0,
+			answer     BLOB,
+			authority  BLOB,
+			additional BLOB,
+			match_tags TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (is_wildcard, qname, qtype, qclass, match_tags)
+		) WITHOUT ROWID;
+		INSERT INTO zone_entries_new SELECT is_wildcard, qname, qtype, qclass, rcode, answer, authority, additional, match_tags FROM zone_entries;
+		DROP TABLE zone_entries;
+		ALTER TABLE zone_entries_new RENAME TO zone_entries;
+	`)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func migrateV3_2_13(db *DB) error {

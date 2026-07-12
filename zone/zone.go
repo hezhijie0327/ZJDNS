@@ -205,9 +205,9 @@ func (e *Evaluator) insertRow(tx *sql.Tx, qname string, qtype, qclass uint16, rc
 	}
 	_, err := tx.Exec(
 		`INSERT OR REPLACE INTO zone_entries
-		 (qname, qtype, qclass, rcode, answer, authority, additional, match_tags, is_wildcard)
+		 (is_wildcard, qname, qtype, qclass, rcode, answer, authority, additional, match_tags)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		qname, qtype, qclass, rcode, answer, authority, additional, matchTags, w,
+		w, qname, qtype, qclass, rcode, answer, authority, additional, matchTags,
 	)
 	return err
 }
@@ -249,26 +249,10 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 		return r
 	}
 
-	// 4. Wildcard suffix walk.
-	rest := qname
-	for {
-		idx := strings.IndexByte(rest, '.')
-		if idx < 0 {
-			break
-		}
-		rest = rest[idx+1:]
-		if rest == "" {
-			break
-		}
-		if r := e.query(e.db.StmtZoneWild, rest, qtype, qclass, matchedTags, loadedAt); r.Matched {
-			return r
-		}
-		if r := e.query(e.db.StmtZoneWild, rest, 0, 0, matchedTags, loadedAt); r.Matched {
-			return r
-		}
-	}
-
-	return Result{Rcode: dns.RcodeSuccess}
+	// 4. Wildcard suffix batch — single IN query replaces N per-label queries.
+	// ORDER BY length(qname) DESC, qtype DESC ensures the most specific
+	// suffix and the concrete qtype match (over qtype=0 sentinel) win.
+	return e.queryWildcardBatch(qname, qtype, qclass, matchedTags, loadedAt)
 }
 
 func (e *Evaluator) query(stmt *sql.Stmt, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
@@ -302,6 +286,78 @@ func (e *Evaluator) query(stmt *sql.Stmt, qname string, qtype, qclass uint16, ma
 		}
 	}
 
+	return Result{Rcode: dns.RcodeSuccess}
+}
+
+// queryWildcardBatch collects all suffix candidates from qname, issues a single
+// IN query ordered by specificity, and returns the first tag-matching row.
+// Replaces the per-label N-query loop (2 per suffix level) with one SQL query.
+func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
+	// Collect suffix candidates (e.g. "b.c.example.com", "c.example.com", "example.com").
+	suffixes := make([]string, 0, 8)
+	rest := qname
+	for {
+		idx := strings.IndexByte(rest, '.')
+		if idx < 0 {
+			break
+		}
+		rest = rest[idx+1:]
+		if rest == "" {
+			break
+		}
+		suffixes = append(suffixes, rest)
+	}
+	if len(suffixes) == 0 {
+		return Result{Rcode: dns.RcodeSuccess}
+	}
+
+	// Build: SELECT ... WHERE is_wildcard = 1 AND qname IN (?,...) AND
+	//        ((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0))
+	//        ORDER BY length(qname) DESC, qtype DESC
+	var buf strings.Builder
+	buf.WriteString("SELECT qname, rcode, answer, authority, additional, match_tags FROM zone_entries WHERE is_wildcard = 1 AND qname IN (")
+	for i := range suffixes {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteByte('?')
+	}
+	buf.WriteString(") AND ((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0)) ORDER BY length(qname) DESC, qtype DESC")
+
+	args := make([]any, len(suffixes)+2)
+	for i, s := range suffixes {
+		args[i] = s
+	}
+	args[len(suffixes)] = qtype
+	args[len(suffixes)+1] = qclass
+
+	rows, err := e.db.SQ.Query(buf.String(), args...)
+	if err != nil {
+		return Result{Rcode: dns.RcodeSuccess}
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var matchedQname string
+		var rcode int
+		var answerBlob, authBlob, addlBlob []byte
+		var tagsText string
+		if err := rows.Scan(&matchedQname, &rcode, &answerBlob, &authBlob, &addlBlob, &tagsText); err != nil {
+			continue
+		}
+		if tagsText != "" && !matchTagsOK(parseMatchTagsText(tagsText), matchedTags) {
+			continue
+		}
+		return Result{
+			Domain:     matchedQname,
+			Matched:    true,
+			Rcode:      rcode,
+			Answer:     unpackRRs(answerBlob),
+			Authority:  unpackRRs(authBlob),
+			Additional: unpackRRs(addlBlob),
+			CreatedAt:  loadedAt,
+		}
+	}
 	return Result{Rcode: dns.RcodeSuccess}
 }
 

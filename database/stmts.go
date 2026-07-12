@@ -56,22 +56,14 @@ func (db *DB) prepareStatements() error {
 	db.StmtZoneExact, err = db.SQ.Prepare(
 		`SELECT rcode, answer, authority, additional, match_tags
 		 FROM zone_entries
-		 WHERE qname = ? AND qtype = ? AND qclass = ? AND is_wildcard = 0`,
-	)
-	if err != nil {
-		return err
-	}
-	db.StmtZoneWild, err = db.SQ.Prepare(
-		`SELECT rcode, answer, authority, additional, match_tags
-		 FROM zone_entries
-		 WHERE qname = ? AND qtype = ? AND qclass = ? AND is_wildcard = 1`,
+		 WHERE is_wildcard = 0 AND qname = ? AND qtype = ? AND qclass = ?`,
 	)
 	if err != nil {
 		return err
 	}
 	db.StmtZoneInsert, err = db.SQ.Prepare(
 		`INSERT OR REPLACE INTO zone_entries
-		 (qname, qtype, qclass, rcode, answer, authority, additional, match_tags, is_wildcard)
+		 (is_wildcard, qname, qtype, qclass, rcode, answer, authority, additional, match_tags)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
