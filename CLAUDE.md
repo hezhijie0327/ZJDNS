@@ -247,7 +247,7 @@ zjdns/
 ├── database/                                  ← Unified SQLite DB: connection, schema, migration
 │   ├── db.go                                  ←   DB struct, Open, Close
 │   ├── schema.go                              ←   10 tables in one migration
-│   ├── stmts.go                               ←   11 prepared statements (6 cache + 2 zone + 1 ruleset + 2 infra)
+│   ├── stmts.go                               ←   12 prepared statements (7 cache + 2 zone + 1 ruleset + 2 infra)
 │   ├── migration.go                           ←   Incremental schema migrations
 │   └── migrations/                            ←   Archived migration SQL files
 ├── cache/                                     ← Store interface, DNS response cache (wraps *database.DB)
@@ -463,7 +463,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
 - **Zone rules**: SQLite-backed WITHOUT ROWID lookup; PK `(is_wildcard, qname, qtype, qclass, match_tags)` clusters exact and wildcard queries into a single B-tree traversal. on `(QNAME, QTYPE, QCLASS)` in the unified database. Zone config wraps `rules` + `bypass_tags` in a `ZoneConfig` struct. Each zone entry returns ANSWER + AUTHORITY + ADDITIONAL + RCODE. Inline rules via JSON `name`, `rcode`, `answer`, `authority`, `additional`, `match` (ruleset tags). Type/Class use IANA uint16 numbers (1=A, 28=AAAA, 16=TXT). Zone-file import via `file` field: domain headers (`.domain` / `*.wild`) with optional `rcode=N` and `match=tag`, record lines in `TYPE CONTENT [TTL] [key=value ...]` format. Wildcard `*.domain.com` supported in both inline `name` and file — matches via single batched IN query (ORDER BY length(qname) DESC for correct specificity priority). `bypass_tags` skips all zone rules for clients matching the given CIDR tags (e.g. gateway devices). `DynamicContent` rules (`zjdns.stats`, `zjdns.db.clear*`) are called at query time. Zone responses bypass cache.
 - **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns). Similarly, `handler.Question` is a type alias of `resolver.Question` to avoid duplicate struct definitions.
-- **request_log ring buffer**: Append-only request journal replaces the old `hit_counters` table. `RecordRequest()` does a single INSERT — no conflict detection, no read-before-write. Stats are aggregated via SQL over rows with `id > cleared_before`; FlushDB("stats") resets the threshold without touching log rows.
+- **request_log denormalized**: qname/qtype/qclass stored directly in each row, eliminating the JOIN with entries for debugging queries. `entry_id` is nullable — zone/error/badcookie paths leave it NULL instead of creating stub entries. `entry_hit_counters` still uses `entry_id` FK with ON DELETE CASCADE for automatic cleanup on eviction. `RecordRequest()` does a single INSERT/UPSERT — no transaction, no writeMu, no conflict resolution. Stats are aggregated via SQL over rows with `id > cleared_before`.
 - **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtInsertLog`, `stmtInsertLatency`, `stmtGetLastProbe`) at initialization time to avoid per-call SQL compilation overhead.
 - **CLI package in cmd/zjdns/cli**: `ParseFlags()` dispatches to feature files: `parse.go` (flags + dispatch), `generate.go` (example + DNSCrypt config generation), `sql.go` (SQL runner), `dnsstamp.go` (stamp decode/encode).
 - **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
@@ -523,7 +523,10 @@ CREATE INDEX idx_entries_timestamp ON entries(timestamp);
 CREATE TABLE request_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp       INTEGER NOT NULL,
-    entry_id        INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    qname           TEXT NOT NULL DEFAULT '',
+    qtype           INTEGER NOT NULL DEFAULT 0,
+    qclass          INTEGER NOT NULL DEFAULT 1,
+    entry_id        INTEGER,              -- NULL for zone/error paths (no cache entry)
     protocol        TEXT NOT NULL,
     result          TEXT NOT NULL,
     response_time_ms INTEGER NOT NULL DEFAULT 0,
@@ -534,7 +537,6 @@ CREATE TABLE request_log (
     dnssec_status   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_request_log_ts ON request_log(timestamp);
-CREATE INDEX idx_request_log_entry ON request_log(entry_id);
 
 -- Hit counters: aggregated per-entry+protocol+rcode. Each cache hit upserts
 -- here instead of inserting into request_log, avoiding per-hit row bloat.
@@ -594,16 +596,16 @@ CREATE TABLE zone_entries (
 
 **Key patterns**:
 - **DNS response cache**: `qtype` = original query type, records in original wire order. All entries are cacheable. `Get()` decompresses + `Msg.Unpack()` — cache hit ~0.5ms. `Get()` returns the entry `ID` so `RecordRequest` can skip `EnsureEntry`; `Set()` returns the new `entryID` for the same purpose on the miss path.
-- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol+rcode, no row bloat). Miss/stale/zone/error insert into `request_log` with entry_id FK — qname retrieved by JOINing entries for debugging. `EnsureEntry()` creates lightweight stubs for zone/error paths when no pre-resolved `EntryID` is available; hit/stale/miss paths skip it via the `EntryID` fast path.
+- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol+rcode, no row bloat, still FK to entries for cascade cleanup). Miss/stale/zone/error insert into `request_log` with qname/qtype/qclass stored directly (denormalized) so no JOIN is needed for debugging. `entry_id` is nullable — zone/error/badcookie paths set it to NULL instead of creating stub entries. `EnsureEntry()` is a lightweight read-only fallback for hit-path RecordRequest calls without a pre-resolved `EntryID`.
 - **Stats aggregation**: `Stats()` UNION ALLs `entry_hit_counters` + `request_log` for rcode distribution, and combines both tables for protocol counts. `FlushDB("stats")` truncates `entry_hit_counters` and resets the `stats_meta` threshold — request_log rows survive.
-- **Log bounded by cache**: `request_log.entry_id` and `entry_hit_counters.entry_id` both use `ON DELETE CASCADE` — when entries are evicted, all associated rows go with them. No separate ring-buffer needed.
+- **Log bounded by time**: `request_log.entry_id` is a plain nullable INTEGER (not a FK — denormalized in v3.2.21 so zone/error paths can log without a cache entry). Rows are cleaned up via timestamp-based eviction (30 days) alongside `ip_latency` and `infra_cache`. Only `entry_hit_counters.entry_id` has `ON DELETE CASCADE`.
 - **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `ProbeNSAddrs` and stored in ip_latency (keyed by IP only); `sortAnswerByLatency` reorders records at `Get()` time.
 - **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
 - **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
 - **IP latency**: Per-IP keyed (`rdata_ip`). A single `INSERT OR REPLACE` writes `latency_ms`, `qtype` (inferred from IP format), and `last_probe_time` (via `unixepoch()`). `Prober.Start()` and `ProbeNSAddrs()` check `GetLatencyLastProbe` per-IP — if every IP in the answer was probed within `DefaultLatencyProbeMinInterval` (60s), the probe is skipped. All domains sharing the same CDN IP reuse the same latency row.
-- **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map`. Also prunes `ip_latency` rows with `last_probe_time` older than `defaultStaleMaxAge` (30 days). Entry count is synced from `SELECT COUNT(*)` before eviction to correct drift from INSERT OR REPLACE.
-- **Dynamic queries + FlushDB**: `Store.Stats()` returns `[]string` with 8 TXT records grouped by theme (overview, success, errors, rcodes, anomalies, plain, encrypted, DNSSEC), queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency` (`FlushDB(target)`, per-table). `FlushDB("stats")` only resets the stats_meta threshold — request_log rows survive. Wired via zone `DynamicContent` in `server.New()` before `LoadRules()`.
-- **Analytics**: request_log single-table queries — e.g. `SELECT server, COUNT(*) FROM request_log GROUP BY server` for requests per upstream, `SELECT qname, COUNT(*) FROM request_log WHERE result='error' GROUP BY qname` for failure analysis. No JOIN needed.
+- **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map` and `entry_hit_counters`. Also prunes stale rows from `ip_latency`, `request_log`, and `infra_cache` (all use the same 30-day `defaultStaleMaxAge` cutoff, batched in a single Exec). Entry count is synced from `SELECT COUNT(*)` before eviction to correct drift from INSERT OR REPLACE.
+- **Dynamic queries + FlushDB**: `Store.Stats()` returns `[]string` with 8 TXT records grouped by theme (overview, success, errors, rcodes, anomalies, plain, encrypted, DNSSEC), queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency/infra` (`FlushDB(target)`, per-table). `FlushDB("stats")` only resets the stats_meta threshold — request_log rows survive. Wired via zone `DynamicContent` in `server.New()` before `LoadRules()`.
+- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol+rcode, no row bloat, still FK to entries for cascade cleanup). Miss/stale/zone/error insert into `request_log` with qname/qtype/qclass stored directly (denormalized) so no JOIN is needed for debugging. `entry_id` is nullable — zone/error/badcookie paths set it to NULL instead of creating stub entries. `EnsureEntry()` is a lightweight read-only fallback for hit-path RecordRequest calls without a pre-resolved `EntryID`.
 
 ## CI/CD
 

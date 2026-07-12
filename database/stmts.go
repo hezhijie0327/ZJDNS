@@ -13,9 +13,9 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 	db.StmtInsertLog, err = db.SQ.Prepare(
-		`INSERT INTO request_log (timestamp, entry_id, protocol, result,
+		`INSERT INTO request_log (timestamp, qname, qtype, qclass, entry_id, protocol, result,
 			response_time_ms, rcode, server, hijack, fallback, dnssec_status)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
 	)
 	if err != nil {
 		return err
@@ -43,6 +43,8 @@ func (db *DB) prepareStatements() error {
 	if err != nil {
 		return err
 	}
+	// EnsureEntry fallback — only triggered when RecordRequest has no pre-resolved EntryID
+	// (zone/error/badcookie paths in production, plus test helpers).
 	db.StmtEnsureEntry, err = db.SQ.Prepare(
 		`SELECT id FROM entries
 		 WHERE qname = ? AND qtype = ? AND qclass = ?

@@ -274,13 +274,14 @@ func TestRecordRequest_Hit(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	entryID := mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
 	// Cache hit via UDP
 	mc.RecordRequest(&RequestRecord{
 		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		ECS: nil, DNSSECOK: false,
 		Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
+		EntryID: entryID,
 	})
 
 	var protocol string
@@ -304,18 +305,19 @@ func TestRecordRequest_Stale(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	entryID := mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
 	// Stale serve via TCP
 	mc.RecordRequest(&RequestRecord{
 		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		ECS: nil, DNSSECOK: false,
 		Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess,
+		EntryID: entryID,
 	})
 
 	var protocol, result string
 	err := mc.db.SQ.QueryRow(
-		"SELECT rl.protocol, rl.result FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='example.com'",
+		"SELECT protocol, result FROM request_log WHERE qname='example.com'",
 	).Scan(&protocol, &result)
 	if err != nil {
 		t.Fatalf("request_log query: %v", err)
@@ -333,11 +335,11 @@ func TestRecordRequest_MultipleResults(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	entryID := mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
-	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doh", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess, EntryID: entryID})
+	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess, EntryID: entryID})
+	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doh", Result: "hit", Rcode: dns.RcodeSuccess, EntryID: entryID})
 
 	var udpHits, dohHits int64
 	err := mc.db.SQ.QueryRow(
@@ -365,7 +367,7 @@ func TestRecordRequest_Zone(t *testing.T) {
 
 	var count int64
 	err := mc.db.SQ.QueryRow(
-		"SELECT COUNT(*) FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='blocked.com' AND rl.result='zone'",
+		"SELECT COUNT(*) FROM request_log WHERE qname='blocked.com' AND result='zone'",
 	).Scan(&count)
 	if err != nil {
 		t.Fatalf("request_log query: %v", err)
@@ -547,7 +549,7 @@ func TestRecordRequest_Error(t *testing.T) {
 	var rcode, respTime int
 	var server string
 	err := mc.db.SQ.QueryRow(
-		"SELECT rl.protocol, rl.result, rl.rcode, rl.response_time_ms, rl.server FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='error.example.com'",
+		"SELECT protocol, result, rcode, response_time_ms, server FROM request_log WHERE qname='error.example.com'",
 	).Scan(&protocol, &result, &rcode, &respTime, &server)
 	if err != nil {
 		t.Fatalf("request_log query: %v", err)
@@ -673,7 +675,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 
 	// ── Phase 4: Verify request_log has error record ────────────────────────
 	var errCount int64
-	_ = mc.db.SQ.QueryRow("SELECT COUNT(*) FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='error.example.com' AND rl.result='error'").Scan(&errCount)
+	_ = mc.db.SQ.QueryRow("SELECT COUNT(*) FROM request_log WHERE qname='error.example.com' AND result='error'").Scan(&errCount)
 	if errCount != 1 {
 		t.Errorf("error log count = %d, want 1", errCount)
 	}
@@ -693,7 +695,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		 FROM entry_hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='www.example.com'`,
 	).Scan(&udpHits, &dohHits)
 	_ = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0) FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='www.example.com' AND rl.result='stale'`,
+		`SELECT COALESCE(COUNT(*), 0) FROM request_log WHERE qname='www.example.com' AND result='stale'`,
 	).Scan(&doqStale)
 	if err != nil {
 		t.Fatalf("request_log query: %v", err)
@@ -714,7 +716,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		 FROM entry_hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='github.com'`,
 	).Scan(&gitTCP)
 	_ = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0) FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='github.com' AND rl.result='stale'`,
+		`SELECT COALESCE(COUNT(*), 0) FROM request_log WHERE qname='github.com' AND result='stale'`,
 	).Scan(&gitStale)
 	if gitTCP != 1 {
 		t.Errorf("github.com tcp hit = %d, want 1", gitTCP)
@@ -784,7 +786,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	var rwCount int64
-	_ = mc.db.SQ.QueryRow(`SELECT COUNT(*) FROM request_log rl JOIN entries e ON rl.entry_id = e.id WHERE e.qname='zone.test' AND rl.result='zone'`).Scan(&rwCount)
+	_ = mc.db.SQ.QueryRow(`SELECT COUNT(*) FROM request_log WHERE qname='zone.test' AND result='zone'`).Scan(&rwCount)
 	if rwCount != 3 {
 		t.Errorf("zone_count = %d, want 3", rwCount)
 	}

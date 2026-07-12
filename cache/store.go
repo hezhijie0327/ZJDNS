@@ -326,22 +326,15 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Clean up latency rows not probed within staleMaxAge.
+	// Clean up stale rows from tables with no FK cascade to entries.
+	// All three use the same staleMaxAge cutoff — batched into a single Exec.
 	if _, err := tx.Exec(
-		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < unixepoch() - ?`,
-		defaultStaleMaxAge,
+		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < unixepoch() - ?;`+
+			`DELETE FROM request_log WHERE timestamp < unixepoch() - ?;`+
+			`DELETE FROM infra_cache WHERE MAX(last_success, last_timeout) > 0 AND MAX(last_success, last_timeout) < unixepoch() - ?`,
+		defaultStaleMaxAge, defaultStaleMaxAge, defaultStaleMaxAge,
 	); err != nil {
-		log.Debugf("CACHE: ip_latency cleanup failed (non-fatal): %v", err)
-	}
-
-	// Clean up old request_log rows to prevent unbounded growth.
-	// request_log rows for active entries are cleaned by ON DELETE CASCADE;
-	// this handles orphaned rows (e.g. from cleared cache entries).
-	if _, err := tx.Exec(
-		`DELETE FROM request_log WHERE timestamp < unixepoch() - ?`,
-		defaultStaleMaxAge,
-	); err != nil {
-		log.Debugf("CACHE: request_log cleanup failed (non-fatal): %v", err)
+		log.Debugf("CACHE: stale cleanup failed (non-fatal): %v", err)
 	}
 
 	// Two-phase eviction:

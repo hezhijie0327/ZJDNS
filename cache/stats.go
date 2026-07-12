@@ -15,27 +15,35 @@ import (
 )
 
 // RecordRequest logs a request outcome. Hit path upserts hit counters; miss/
-// stale/zone/error/blocked paths insert a log row with entry_id FK.
+// stale/zone/error/blocked paths insert a log row with qname/qtype/qclass stored
+// directly (denormalized) so no JOIN is needed for debugging queries. entry_id is
+// set when available (cache-backed paths); NULL otherwise.
 func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	if s.db.IsClosed() {
 		return
 	}
 
-	entryID := r.EntryID
-	if entryID <= 0 {
-		r.Qname = zdnsutil.NormalizeDomain(r.Qname)
-		ecsAddr, ecsPrefix := ecsParams(r.ECS)
-		dnssecInt := zdnsutil.BoolToInt(r.DNSSECOK)
-		entryID = s.db.EnsureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
-	}
+	r.Qname = zdnsutil.NormalizeDomain(r.Qname)
 
 	if r.Result == "hit" {
+		entryID := r.EntryID
+		if entryID <= 0 {
+			// Fallback: lookup entry by key (zone/error-in-hit-clothing, test helpers).
+			// Does NOT create stub entries.
+			ecsAddr, ecsPrefix := ecsParams(r.ECS)
+			dnssecInt := zdnsutil.BoolToInt(r.DNSSECOK)
+			entryID = s.db.EnsureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
+		}
 		_, _ = s.db.StmtHitCounter.Exec(entryID, r.Protocol, r.Rcode, r.ResponseTime)
 		return
 	}
 
+	entryID := r.EntryID
+	if entryID <= 0 {
+		entryID = 0 // sentinel for "no cache entry" → stored as 0 (NULL in DB)
+	}
 	_, _ = s.db.StmtInsertLog.Exec(
-		log.NowUnix(), entryID,
+		log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass), entryID,
 		r.Protocol, r.Result, r.ResponseTime, r.Rcode, r.Server,
 		zdnsutil.BoolToInt(r.Hijack), zdnsutil.BoolToInt(r.Fallback), r.DNSSECStatus,
 	)
@@ -51,7 +59,7 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	// avoids a per-row arithmetic expression and can use idx_entries_expires.
 	staleCutoff := log.NowUnix() - defaultStaleMaxAge
 	rows, err := s.db.SQ.Query(
-		`SELECT pm.name, pm.ttl, e.timestamp, MAX(e.timestamp + pm.ttl)
+		`SELECT pm.name, pm.ttl, e.timestamp, MAX(e.timestamp + pm.ttl), pm.entry_id
 		 FROM ptr_map pm
 		 JOIN entries e ON pm.entry_id = e.id
 		 WHERE pm.rdata_ip = ? AND e.expires_at >= ?
@@ -71,12 +79,14 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 		var rawTTL int
 		var ts int64
 		var dummy int64
-		if err := rows.Scan(&name, &rawTTL, &ts, &dummy); err != nil {
+		var entryID int64
+		if err := rows.Scan(&name, &rawTTL, &ts, &dummy, &entryID); err != nil {
 			continue
 		}
 		results = append(results, LookupResult{
-			Name: name,
-			TTL:  ttl.RemainingTTL(ts, rawTTL, uint32(config.DefaultStaleTTL)),
+			Name:    name,
+			TTL:     ttl.RemainingTTL(ts, rawTTL, uint32(config.DefaultStaleTTL)),
+			EntryID: entryID,
 		})
 	}
 	return results

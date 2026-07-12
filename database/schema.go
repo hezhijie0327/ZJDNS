@@ -29,13 +29,22 @@ func (db *DB) migrate() error {
 
 	//nolint:gosec // G202: DDL migration with constant schema version
 	_, err := db.SQ.Exec(`
-
 		-- ── Project version ───────────────────────────────────────────────────
 		-- Tracks the current project version. Base DDL starts at 0.0.0.
 		-- Pending migrations run in order via migration.go/runMigrations().
 
 		CREATE TABLE IF NOT EXISTS version (version TEXT NOT NULL);
 		INSERT OR IGNORE INTO version (rowid, version) VALUES (1, '` + Version + `');
+
+		-- ── Stats metadata ─────────────────────────────────────────────────────
+		-- Single row tracking the last request_log.id that was cleared by
+		-- FlushDB("stats"). Resetting stats is O(1): just UPDATE this row.
+
+		CREATE TABLE IF NOT EXISTS stats_meta (
+			id             INTEGER PRIMARY KEY CHECK (id = 1),
+			cleared_before INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT OR IGNORE INTO stats_meta (id, cleared_before) VALUES (1, 0);
 
 		-- ── DNS response cache ───────────────────────────────────────────────
 		-- Every row is a cacheable DNS response keyed by (qname, qtype, qclass,
@@ -74,29 +83,6 @@ func (db *DB) migrate() error {
 			PRIMARY KEY (rdata_ip, entry_id, name)
 		) WITHOUT ROWID;
 
-		-- ── Request journal ──────────────────────────────────────────────────
-		-- Append-only log of every non-hit query. Stats() aggregates from this
-		-- table; per-request debugging via qname/qtype/rcode/protocol. Survives
-		-- FlushDB("stats"). entry_id FK ensures rows are cleaned up when the
-		-- owning cache entry is evicted.
-
-		CREATE TABLE IF NOT EXISTS request_log (
-			id              INTEGER PRIMARY KEY AUTOINCREMENT,
-			timestamp       INTEGER NOT NULL,
-			entry_id        INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-			protocol        TEXT NOT NULL,
-			result          TEXT NOT NULL,
-			response_time_ms INTEGER NOT NULL DEFAULT 0,
-			rcode           INTEGER NOT NULL DEFAULT 0,
-			server          TEXT NOT NULL DEFAULT '',
-			hijack          INTEGER NOT NULL DEFAULT 0,
-			fallback        INTEGER NOT NULL DEFAULT 0,
-			dnssec_status   TEXT NOT NULL DEFAULT ''
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_request_log_ts ON request_log(timestamp);
-		CREATE INDEX IF NOT EXISTS idx_request_log_entry ON request_log(entry_id);
-
 		-- ── Hit counters ─────────────────────────────────────────────────────
 		-- Aggregated per-entry+protocol+rcode hit counts. Cache hits upsert
 		-- here instead of inserting into request_log to avoid row bloat.
@@ -111,15 +97,29 @@ func (db *DB) migrate() error {
 			PRIMARY KEY (entry_id, protocol, rcode)
 		) WITHOUT ROWID;
 
-			-- ── Stats metadata ───────────────────────────────────────────────────
-		-- Single row tracking the last request_log.id that was cleared by
-		-- FlushDB("stats"). Resetting stats is O(1): just UPDATE this row.
+		-- ── Request journal ──────────────────────────────────────────────────
+		-- Append-only log of every non-hit query. qname/qtype/qclass stored
+		-- directly (denormalized) — no JOIN needed for debugging. Survives
+		-- FlushDB("stats"). entry_id is NULL for zone/error/badcookie paths.
 
-		CREATE TABLE IF NOT EXISTS stats_meta (
-			id             INTEGER PRIMARY KEY CHECK (id = 1),
-			cleared_before INTEGER NOT NULL DEFAULT 0
+		CREATE TABLE IF NOT EXISTS request_log (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp       INTEGER NOT NULL,
+			qname           TEXT NOT NULL DEFAULT '',
+			qtype           INTEGER NOT NULL DEFAULT 0,
+			qclass          INTEGER NOT NULL DEFAULT 1,
+			entry_id        INTEGER,
+			protocol        TEXT NOT NULL,
+			result          TEXT NOT NULL,
+			response_time_ms INTEGER NOT NULL DEFAULT 0,
+			rcode           INTEGER NOT NULL DEFAULT 0,
+			server          TEXT NOT NULL DEFAULT '',
+			hijack          INTEGER NOT NULL DEFAULT 0,
+			fallback        INTEGER NOT NULL DEFAULT 0,
+			dnssec_status   TEXT NOT NULL DEFAULT ''
 		);
-		INSERT OR IGNORE INTO stats_meta (id, cleared_before) VALUES (1, 0);
+
+		CREATE INDEX IF NOT EXISTS idx_request_log_ts ON request_log(timestamp);
 
 		-- ── Per-IP latency ───────────────────────────────────────────────────
 		-- Keyed by rdata_ip only — latency is a property of the IP, not the
@@ -135,17 +135,6 @@ func (db *DB) migrate() error {
 		) WITHOUT ROWID;
 		CREATE INDEX IF NOT EXISTS idx_ip_latency_probe ON ip_latency(last_probe_time);
 
-		-- ── Ruleset entries ───────────────────────────────────────────────
-		-- Stores rule set entries loaded from config. IP entries are CIDR
-		-- strings; domain entries are TLD+1 keys for O(1) lookup.
-
-		CREATE TABLE IF NOT EXISTS ruleset_entries (
-			tag   TEXT NOT NULL,
-			type  TEXT NOT NULL,
-			value TEXT NOT NULL,
-			PRIMARY KEY (tag, type, value)
-		) WITHOUT ROWID;
-
 		-- ── Infrastructure cache ─────────────────────────────────────────────
 		-- Per-nameserver state: EDNS capability and timeout backoff.
 		-- Independent of cache entries — persists across evictions.
@@ -160,9 +149,21 @@ func (db *DB) migrate() error {
 			PRIMARY KEY (server_addr)
 		) WITHOUT ROWID;
 
+		-- ── Ruleset entries ───────────────────────────────────────────────
+		-- Stores rule set entries loaded from config. IP entries are CIDR
+		-- strings; domain entries are TLD+1 keys for O(1) lookup.
+
+		CREATE TABLE IF NOT EXISTS ruleset_entries (
+			tag   TEXT NOT NULL,
+			type  TEXT NOT NULL,
+			value TEXT NOT NULL,
+			PRIMARY KEY (tag, type, value)
+		) WITHOUT ROWID;
+
 		-- ── Zone rules ───────────────────────────────────────────────────────
-		-- Zone-file-style rule table queried via B-tree indexed composite-key
-		-- lookups (Evaluate). Rules are bulk-loaded at startup (LoadRules).
+		-- Zone-file-style rule table queried via WITHOUT ROWID B-tree clustered
+		-- on (is_wildcard, qname, qtype, qclass, match_tags). Exact lookups use
+		-- is_wildcard=0 prefix; wildcard batch IN uses is_wildcard=1 prefix.
 		-- answer/authority/additional store zstd-compressed wire-format RR sets.
 
 		CREATE TABLE IF NOT EXISTS zone_entries (

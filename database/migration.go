@@ -31,6 +31,7 @@ var migrations = []migration{
 	{"3.2.17", "drop nsec_chain table", migrateV3_2_17},
 	{"3.2.19", "drop redundant idx_entries_expires", migrateV3_2_19},
 	{"3.2.20", "rebuild zone_entries WITHOUT ROWID with is_wildcard-first PK", migrateV3_2_20},
+	{"3.2.21", "denormalize qname/qtype/qclass into request_log", migrateV3_2_21},
 }
 
 func migrateV3_2_17(db *DB) error {
@@ -63,6 +64,43 @@ func migrateV3_2_20(db *DB) error {
 		INSERT INTO zone_entries_new SELECT is_wildcard, qname, qtype, qclass, rcode, answer, authority, additional, match_tags FROM zone_entries;
 		DROP TABLE zone_entries;
 		ALTER TABLE zone_entries_new RENAME TO zone_entries;
+	`)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func migrateV3_2_21(db *DB) error {
+	_, err := db.SQ.Exec(`
+		CREATE TABLE IF NOT EXISTS request_log_new (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp       INTEGER NOT NULL,
+			qname           TEXT NOT NULL DEFAULT '',
+			qtype           INTEGER NOT NULL DEFAULT 0,
+			qclass          INTEGER NOT NULL DEFAULT 1,
+			entry_id        INTEGER,
+			protocol        TEXT NOT NULL,
+			result          TEXT NOT NULL,
+			response_time_ms INTEGER NOT NULL DEFAULT 0,
+			rcode           INTEGER NOT NULL DEFAULT 0,
+			server          TEXT NOT NULL DEFAULT '',
+			hijack          INTEGER NOT NULL DEFAULT 0,
+			fallback        INTEGER NOT NULL DEFAULT 0,
+			dnssec_status   TEXT NOT NULL DEFAULT ''
+		);
+		INSERT OR IGNORE INTO request_log_new
+			SELECT rl.id, rl.timestamp,
+				COALESCE(e.qname, ''), COALESCE(e.qtype, 0), COALESCE(e.qclass, 1),
+				rl.entry_id,
+				rl.protocol, rl.result, rl.response_time_ms, rl.rcode,
+				rl.server, rl.hijack, rl.fallback, rl.dnssec_status
+			FROM request_log rl
+			LEFT JOIN entries e ON rl.entry_id = e.id;
+		DROP TABLE request_log;
+		ALTER TABLE request_log_new RENAME TO request_log;
+		CREATE INDEX IF NOT EXISTS idx_request_log_ts ON request_log(timestamp);
+		DROP INDEX IF EXISTS idx_request_log_entry;
 	`)
 	if err != nil {
 		return err

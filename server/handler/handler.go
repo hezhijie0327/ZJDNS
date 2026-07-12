@@ -265,17 +265,22 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 	}
 
 	if question.Qtype == dns.TypePTR {
-		if ptrAnswer := h.lookupReversePTR(question); len(ptrAnswer) > 0 {
+		if ptrAnswer, entryIDs := h.lookupReversePTR(question); len(ptrAnswer) > 0 {
 			log.Debugf("PTR: cache hit for reverse lookup %s, found %d records", question.Name, len(ptrAnswer))
 			response := h.buildResponse(req)
 			response.Answer = ptrAnswer
 			ede := edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
 			h.applyEDNS(response, isSecureConnection, clientIP, ecsOpt, clientRequestedDNSSEC, cookieOpt, ede, edns.HasPaddingOption(req), tcpKeepaliveTimeout)
+			entryID := int64(0)
+			if len(entryIDs) > 0 {
+				entryID = entryIDs[0]
+			}
 			h.cache.RecordRequest(&cache.RequestRecord{
 				Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
 				ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
 				Protocol: requestProtocol, Result: "hit", Rcode: dns.RcodeSuccess,
 				ResponseTime: time.Since(startTime).Milliseconds(),
+				EntryID:      entryID,
 			})
 			responseMsg = response
 			return responseMsg
@@ -340,27 +345,29 @@ func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP 
 	return clientRequestedDNSSEC, ecsOpt, cookieOpt, nil
 }
 
-func (h *Handler) lookupReversePTR(question Question) []dns.RR {
+func (h *Handler) lookupReversePTR(question Question) (records []dns.RR, entryIDs []int64) {
 	ip := zdnsutil.ParseReverseDNSName(question.Name)
 	if ip == nil {
-		return nil
+		return nil, nil
 	}
 
 	if h.reverseCache == nil {
-		return nil
+		return nil, nil
 	}
 
 	results := h.reverseCache.ReverseLookup(ip.String())
 	if len(results) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	records := make([]dns.RR, 0, len(results))
+	records = make([]dns.RR, 0, len(results))
+	entryIDs = make([]int64, 0, len(results))
 	for _, result := range results {
 		records = append(records, zdnsutil.NewPTRRecord(question.Name, result.Name, result.TTL, question.Qclass))
+		entryIDs = append(entryIDs, result.EntryID)
 	}
 
-	return records
+	return records, entryIDs
 }
 
 // validateDNSQuery rejects queries with invalid domain names, label lengths,

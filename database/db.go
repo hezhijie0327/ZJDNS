@@ -43,7 +43,7 @@ type DB struct {
 	StmtHitCounter    *sql.Stmt
 	StmtInsertLatency *sql.Stmt
 	StmtGetLastProbe  *sql.Stmt
-	StmtEnsureEntry   *sql.Stmt
+	StmtEnsureEntry   *sql.Stmt // fallback for RecordRequest when EntryID <= 0
 
 	// RuleSet statements
 	StmtRuleSetInsert *sql.Stmt
@@ -189,46 +189,20 @@ func (db *DB) WriteLock() { db.writeMu.Lock() }
 // WriteUnlock releases the cache write serialization mutex.
 func (db *DB) WriteUnlock() { db.writeMu.Unlock() }
 
+// EnsureEntry returns the entry ID for the given cache key. Used as a
+// fallback by RecordRequest when no pre-resolved EntryID is available
+// (zone/error paths, tests). Unlike the old version, this does NOT create
+// stub entries — it returns 0 if no matching entry exists.
+func (db *DB) EnsureEntry(qname string, qtype, qclass int, ecsAddr string, ecsPrefix, dnssecInt int) int64 {
+	var id int64
+	_ = db.StmtEnsureEntry.QueryRow(
+		qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt,
+	).Scan(&id)
+	return id
+}
+
 // MaxEntries returns the maximum cache entries before eviction.
 func (db *DB) MaxEntries() int { return db.maxEntries }
 
 // IsClosed reports whether the database has been closed.
 func (db *DB) IsClosed() bool { return atomic.LoadInt32(&db.closed) != 0 }
-
-// EnsureEntry returns the entry ID for the given cache key, creating a
-// lightweight stub if one doesn't exist.
-func (db *DB) EnsureEntry(qname string, qtype, qclass int, ecsAddr string, ecsPrefix, dnssecInt int) int64 {
-	var id int64
-	err := db.StmtEnsureEntry.QueryRow(
-		qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt,
-	).Scan(&id)
-	if err == nil {
-		return id
-	}
-
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
-
-	err = db.StmtEnsureEntry.QueryRow(
-		qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt,
-	).Scan(&id)
-	if err == nil {
-		return id
-	}
-
-	now := log.NowUnix()
-	err = db.SQ.QueryRow(
-		`INSERT OR IGNORE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
-			timestamp, ttl, expires_at, validated, msg_wire)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-		 RETURNING id`,
-		qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt,
-		now, config.DefaultStaleTTL, now+int64(config.DefaultStaleTTL), 0,
-	).Scan(&id)
-	if err != nil {
-		_ = db.StmtEnsureEntry.QueryRow(
-			qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt,
-		).Scan(&id)
-	}
-	return id
-}

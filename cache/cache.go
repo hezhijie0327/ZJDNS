@@ -26,7 +26,7 @@ type RequestRecord struct {
 	Hijack       bool              // true if hijack was detected
 	Fallback     bool              // true if resolved via fallback upstream
 	DNSSECStatus string            // 'secure','insecure','bogus', or ''
-	EntryID      int64             // pre-resolved entry ID from Get(); 0 means resolve via EnsureEntry
+	EntryID      int64             // pre-resolved entry ID from Get()/Set(); 0 = no cache entry (zone/error)
 }
 
 // Store defines the cache storage interface.
@@ -57,8 +57,9 @@ type Entry struct {
 
 // LookupResult holds a PTR reverse-lookup result.
 type LookupResult struct {
-	Name string
-	TTL  uint32
+	Name    string
+	TTL     uint32
+	EntryID int64
 }
 
 // IsExpired reports whether the entry's TTL has elapsed.
