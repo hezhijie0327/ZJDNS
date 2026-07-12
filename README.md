@@ -41,6 +41,11 @@ go build -o zjdns ./cmd/zjdns
 
 # 执行 SQL 查询
 ./zjdns --sql cache.db "SELECT * FROM zone_entries"
+
+# 探测上游服务器能力
+./zjdns --probe --pipeline    tcp://8.8.8.8      # 测试 RFC 7766 查询流水线
+./zjdns --probe --conn-reuse  tls://1.1.1.1       # 测试 RFC 1035 连接复用
+./zjdns --probe --idle-timeout dot://1.1.1.1      # 测量服务器空闲超时
 ```
 
 ```bash

@@ -96,6 +96,11 @@ docker build -t zjdns .
 ./zjdns --dnsstamp --encode --proto doh \   # Encode fields to sdns:// stamp
     --stamp-addr 9.9.9.9 --provider-name dns.quad9.net:443 --path /dns-query
 
+# Probe upstream server capabilities
+./zjdns --probe --pipeline    tcp://8.8.8.8   # Test RFC 7766 query pipelining
+./zjdns --probe --conn-reuse  tls://1.1.1.1   # Test RFC 1035 connection reuse
+./zjdns --probe --idle-timeout dot://1.1.1.1  # Measure server idle timeout
+
 # Install pre-commit hook (auto fmt + lint on commit)
 sh scripts/install-hook.sh                 # Linux / macOS
 pwsh scripts/install-hook.ps1              # Windows PowerShell
