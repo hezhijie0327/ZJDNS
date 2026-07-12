@@ -21,11 +21,13 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 		return
 	}
 
-	r.Qname = zdnsutil.NormalizeDomain(r.Qname)
-	ecsAddr, ecsPrefix := ecsParams(r.ECS)
-	dnssecInt := zdnsutil.BoolToInt(r.DNSSECOK)
-
-	entryID := s.db.EnsureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
+	entryID := r.EntryID
+	if entryID <= 0 {
+		r.Qname = zdnsutil.NormalizeDomain(r.Qname)
+		ecsAddr, ecsPrefix := ecsParams(r.ECS)
+		dnssecInt := zdnsutil.BoolToInt(r.DNSSECOK)
+		entryID = s.db.EnsureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
+	}
 
 	if r.Result == "hit" {
 		_, _ = s.db.StmtHitCounter.Exec(entryID, r.Protocol, r.Rcode, r.ResponseTime)

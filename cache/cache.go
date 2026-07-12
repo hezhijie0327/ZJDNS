@@ -26,13 +26,14 @@ type RequestRecord struct {
 	Hijack       bool              // true if hijack was detected
 	Fallback     bool              // true if resolved via fallback upstream
 	DNSSECStatus string            // 'secure','insecure','bogus', or ''
+	EntryID      int64             // pre-resolved entry ID from Get(); 0 means resolve via EnsureEntry
 }
 
 // Store defines the cache storage interface.
 type Store interface {
 	Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool)
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
-		answer, authority, additional []dns.RR, validated bool)
+		answer, authority, additional []dns.RR, validated bool) int64
 	RecordRequest(r *RequestRecord)
 	UpdateLatency(ip string, latencyMS int)
 	LatencyLastProbe(ip string) (int64, bool)
@@ -45,6 +46,7 @@ type Store interface {
 
 // Entry holds a cached DNS response with timing metadata.
 type Entry struct {
+	ID         int64    `json:"id"`
 	Answer     []dns.RR `json:"answer"`
 	Authority  []dns.RR `json:"authority"`
 	Additional []dns.RR `json:"additional"`

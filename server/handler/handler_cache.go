@@ -221,6 +221,7 @@ func (h *Handler) processQueryError(req *dns.Msg, question Question, clientReque
 			ECS: ecsOpt, DNSSECOK: clientRequestedDNSSEC,
 			Protocol: requestProtocol, Result: "error", Rcode: dns.RcodeServerFailure,
 			ResponseTime: time.Since(startTime).Milliseconds(),
+			EntryID:      entry.ID,
 		})
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
@@ -302,9 +303,10 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 		}
 	}
 
+	var entryID int64
 	if cacheable {
 		log.Debugf("CACHE: populating cache for %s", question.Name)
-		h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, answer, authority, additional, validated)
+		entryID = h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, answer, authority, additional, validated)
 	}
 	h.cache.RecordRequest(&cache.RequestRecord{
 		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,
@@ -312,6 +314,7 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 		Protocol: requestProtocol, Result: "miss", ResponseTime: time.Since(startTime).Milliseconds(),
 		Rcode: dns.RcodeSuccess, Server: server, Hijack: hijack, Fallback: fallback,
 		DNSSECStatus: dnssecStatus,
+		EntryID:      entryID,
 	})
 	if h.prober != nil {
 		h.prober.Start(question.Name, question.Qtype, answer, authority, additional, validated, responseECS)

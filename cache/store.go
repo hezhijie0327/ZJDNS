@@ -89,6 +89,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	defer pool.DefaultMessagePool.Put(msg)
 
 	entry := &Entry{
+		ID:         id,
 		Answer:     msg.Answer,
 		Authority:  msg.Ns,
 		Additional: msg.Extra,
@@ -222,9 +223,9 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 // the lock so CPU-heavy steps can overlap across goroutines.
 func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 	answer, authority, additional []dns.RR, validated bool,
-) {
+) int64 {
 	if s.db.IsClosed() {
-		return
+		return 0
 	}
 
 	// ── Prep work (parallel-safe, outside writeMu) ──────────────────────────
@@ -249,7 +250,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	if err != nil {
 		s.db.WriteUnlock()
 		log.Warnf("CACHE: begin tx failed: %v", err)
-		return
+		return 0
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -265,7 +266,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	).Scan(&entryID); err != nil {
 		s.db.WriteUnlock()
 		log.Warnf("CACHE: insert entry failed: %v", err)
-		return
+		return 0
 	}
 
 	// Populate ptr_map for reverse (PTR) lookups.
@@ -276,7 +277,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	if err := tx.Commit(); err != nil {
 		s.db.WriteUnlock()
 		log.Warnf("CACHE: commit tx failed: %v", err)
-		return
+		return 0
 	}
 
 	s.db.AddEntryCount(1)
@@ -286,6 +287,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// from the DB via SELECT COUNT(*) before deciding whether to evict, so
 	// any TOCTOU drift from concurrent inserts is corrected.
 	s.evictIfNeeded()
+	return entryID
 }
 
 // ── Eviction ─────────────────────────────────────────────────────────────────
