@@ -48,6 +48,8 @@ gitlab.com/go-extension/ffdh v0.0.0-20251208192952-367b797915cb h1:ASbVB14sRJ47X
 gitlab.com/go-extension/ffdh v0.0.0-20251208192952-367b797915cb/go.mod h1:FIPqR8oVxs5FdpfbELmomLlweLihoAJ9P/+EMTsindY=
 gitlab.com/go-extension/hash v0.0.0-20250912170447-263d1d8375e4 h1:SMsGMMkGS9WBYrlbVsGyvky2InkWVhyPLRBwynzmxvI=
 gitlab.com/go-extension/hash v0.0.0-20250912170447-263d1d8375e4/go.mod h1:fgbJOB/r2jzfdhIdj6N0Hz6hahFqzSdU5TH1Hpoqq7c=
+gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f h1:PIH4MkzPmCHSQHpEBMLRDU2noqyQhwB+BrVmPKOFRCk=
+gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f/go.mod h1:JHhAUoCbSlqFIvdXNrExIRx+cbUygSSIix/n+Sy154w=
 gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5 h1:xQA0rfVPqW3G6dnb4qtgBdxr9XLu9vzDfdqKfLqGFXA=
 gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5/go.mod h1:nRmjyZOSF6N/6yuRl7ui9wKb1DjMX9ELGzOwELwWVSU=
 gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246 h1:XTZfR1rJjtphieZYO4VdVO4WjsDPOBuSPY9ryauAyyc=

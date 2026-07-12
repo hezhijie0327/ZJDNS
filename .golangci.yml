@@ -52,6 +52,8 @@ linters:
 
     importas:
       alias:
+        - pkg: gitlab.com/go-extension/http
+          alias: eHTTP
         - pkg: gitlab.com/go-extension/tls
           alias: eTLS
         - pkg: zjdns/internal/dnsutil

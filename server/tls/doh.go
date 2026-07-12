@@ -5,49 +5,33 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	stdlog "log"
 	"net"
 	"net/http"
 	"strings"
-	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
-	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/http3"
+	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
-	"golang.org/x/net/http2"
 )
 
-// http2LogWriter routes http2.Server errors to ZJDNS's internal/log,
-// detecting KTLS "bad record MAC" errors and suggesting kernel_rx=false.
-type http2LogWriter struct{}
-
-func (w http2LogWriter) Write(p []byte) (n int, err error) {
-	msg := strings.TrimSpace(string(p))
-	if strings.Contains(msg, "bad record MAC") {
-		log.Warnf("TLS: %s — try setting server.tls.ktls.kernel_rx=false to disable kernel RX offload", msg)
-	} else {
-		log.Warnf("TLS: %s", msg)
-	}
-	return len(p), nil
+// dohResponseWriter adapts an eHTTP.ResponseWriter to net/http.ResponseWriter
+// for bridging between the eHTTP server and the shared ServeHTTP handler.
+type dohResponseWriter struct {
+	w eHTTP.ResponseWriter
 }
+
+func (a *dohResponseWriter) Header() http.Header         { return http.Header(a.w.Header()) }
+func (a *dohResponseWriter) Write(b []byte) (int, error) { return a.w.Write(b) }
+func (a *dohResponseWriter) WriteHeader(code int)        { a.w.WriteHeader(code) }
 
 func (s *Server) startDOHServer(port string) error {
 	addrs, err := zdnsutil.ResolveBindAddrs("tcp", port)
 	if err != nil {
 		return fmt.Errorf("DoH address resolution: %w", err)
-	}
-
-	s.dohServer = new(http2.Server)
-	baseCfg := &http.Server{
-		ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
-		WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
-		IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
-		ErrorLog:          stdlog.New(http2LogWriter{}, "", 0),
 	}
 
 	for _, addr := range addrs {
@@ -64,114 +48,34 @@ func (s *Server) startDOHServer(port string) error {
 
 		httpsListener := eTLS.NewListener(rawListener, tlsConfig)
 		s.httpsListeners = append(s.httpsListeners, httpsListener)
+
+		// eHTTP server with native eTLS-aware HTTP/2 — the bundled h2
+		// detects eTLS connections from the listener automatically.
+		dohSrv := &eHTTP.Server{
+			Handler: eHTTP.HandlerFunc(func(w eHTTP.ResponseWriter, r *eHTTP.Request) {
+				s.ServeHTTP(&dohResponseWriter{w}, eHTTP.FromRequest(r))
+			}),
+			ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
+			WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
+			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
+		}
+		s.dohServers = append(s.dohServers, dohSrv)
+
 		log.Infof("TLS: DoH server started on %s", addr)
 
-		capturedDoH := httpsListener
+		capturedSrv := dohSrv
+		capturedListener := httpsListener
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH server")
-			for {
-				conn, err := capturedDoH.Accept()
-				if err != nil {
-					if s.ctx.Err() != nil {
-						return nil
-					}
-					log.Warnf("TLS: DoH Accept failed: %v (type=%T)", err, err)
-					time.Sleep(config.DefaultAcceptRetryDelay)
-					continue
-				}
-
-				log.Debugf("TLS: DoH TCP accepted from %s, TLS handshake pending", conn.RemoteAddr())
-
-				s.serverGroup.Go(func() error {
-					defer zdnsutil.HandlePanic("DoH connection handler")
-					log.Debugf("TLS: DoH starting HTTP/2 ServeConn for %s", conn.RemoteAddr())
-					s.dohServer.ServeConn(conn, &http2.ServeConnOpts{
-						Handler:    s,
-						BaseConfig: baseCfg,
-					})
+			if err := capturedSrv.Serve(capturedListener); err != nil && !errors.Is(err, eHTTP.ErrServerClosed) {
+				if s.ctx.Err() != nil {
 					return nil
-				})
-			}
-		})
-
-	}
-	return nil
-}
-
-func (s *Server) startDOH3Server(port string) error {
-	addrs, err := zdnsutil.ResolveBindAddrs("udp", port)
-	if err != nil {
-		return fmt.Errorf("DoH3 address resolution: %w", err)
-	}
-
-	s.h3Validator = newQUICAddrValidator()
-
-	tlsConfig := s.QUICTLSConfig().Clone()
-	tlsConfig.NextProtos = config.NextProtoDOH3
-
-	quicConfig := &quic.Config{
-		MaxIdleTimeout:        config.DefaultQUICServerIdleTimeout,
-		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
-		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
-		Allow0RTT:             true,
-		EnableDatagrams:       true,
-		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
-	}
-
-	s.h3Server = &http3.Server{Handler: s}
-
-	for _, addr := range addrs {
-		udpAddr, err := net.ResolveUDPAddr("udp", addr)
-		if err != nil {
-			return fmt.Errorf("resolve UDP address %s: %w", addr, err)
-		}
-
-		conn, err := net.ListenUDP("udp", udpAddr)
-		if err != nil {
-			return fmt.Errorf("UDP listen on %s: %w", addr, err)
-		}
-		s.h3Conns = append(s.h3Conns, conn)
-
-		transport := &quic.Transport{
-			Conn:                conn,
-			VerifySourceAddress: s.h3Validator.requiresValidation,
-		}
-		s.h3Transports = append(s.h3Transports, transport)
-
-		listener, err := transport.ListenEarly(tlsConfig, quicConfig)
-		if err != nil {
-			_ = conn.Close()
-			return fmt.Errorf("DoH3 listen on %s: %w", addr, err)
-		}
-		s.h3Listeners = append(s.h3Listeners, listener)
-
-		log.Infof("TLS: DoH3 server started on %s", addr)
-
-		capturedH3 := listener
-		s.serverGroup.Go(func() error {
-			defer zdnsutil.HandlePanic("DoH3 server")
-			for {
-				conn, err := capturedH3.Accept(s.ctx)
-				if err != nil {
-					if s.ctx.Err() != nil {
-						return nil
-					}
-					log.Errorf("TLS: DoH3 Accept error: %v", err)
-					time.Sleep(config.DefaultAcceptRetryDelay)
-					continue
 				}
-
-				s.serverGroup.Go(func() error {
-					defer zdnsutil.HandlePanic("DoH3 connection handler")
-					if err := s.h3Server.ServeQUICConn(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
-						log.Debugf("TLS: DoH3 connection error: %v", err)
-					}
-					return nil
-				})
+				log.Warnf("TLS: DoH Serve error: %v", err)
 			}
+			return nil
 		})
 	}
-
 	return nil
 }
 

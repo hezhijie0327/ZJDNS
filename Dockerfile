@@ -16,6 +16,7 @@ RUN \
     && go get -u github.com/klauspost/compress@master \
     && go get -u github.com/ncruces/go-sqlite3@main \
     && go get -u github.com/quic-go/quic-go@master \
+    && go get -u gitlab.com/go-extension/http@master \
     && go get -u gitlab.com/go-extension/tls@master \
     && go mod tidy \
     && BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC') \

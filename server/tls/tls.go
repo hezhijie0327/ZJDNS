@@ -23,8 +23,8 @@ import (
 	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
-	"golang.org/x/net/http2"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -76,7 +76,7 @@ type Server struct {
 	doqTransports  []*quic.Transport
 	doqListeners   []*quic.EarlyListener
 	doqValidator   *quicAddrValidator
-	dohServer      *http2.Server
+	dohServers     []*eHTTP.Server
 	h3Server       *http3.Server
 	httpsListeners []net.Listener
 	h3Conns        []*net.UDPConn
@@ -295,6 +295,13 @@ func (s *Server) Shutdown() error {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
 		_ = s.h3Server.Shutdown(ctx)
+	}
+	for _, srv := range s.dohServers {
+		if srv != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
+			_ = srv.Shutdown(ctx)
+			cancel()
+		}
 	}
 	for _, l := range s.httpsListeners {
 		if l != nil {

@@ -19,6 +19,7 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
+	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
@@ -44,7 +45,7 @@ type Client struct {
 	udpClient  *dns.Client
 	tcpClient  *dns.Client
 	tlsClient  *dns.Client
-	dohClient  *http.Client
+	dohClient  *eHTTP.Client
 	doh3Client *http.Client
 
 	dohTransportMu sync.RWMutex
@@ -93,7 +94,7 @@ func New() *Client {
 	tcpClient := &dns.Client{Transport: defaultTransport}
 	tlsClient := &dns.Client{Transport: defaultTransport}
 
-	dohTransport := &http.Transport{
+	dohTransport := &eHTTP.Transport{
 		MaxIdleConns:        config.DefaultMaxIdleConns,
 		MaxIdleConnsPerHost: config.DefaultMaxIdleConnsPerHost,
 		IdleConnTimeout:     config.DefaultHTTPIdleConnTimeout,
@@ -106,7 +107,7 @@ func New() *Client {
 		udpClient: udpClient,
 		tcpClient: tcpClient,
 		tlsClient: tlsClient,
-		dohClient: &http.Client{
+		dohClient: &eHTTP.Client{
 			Timeout:   config.DefaultDNSQueryTimeout,
 			Transport: dohTransport,
 		},
@@ -274,8 +275,8 @@ func (c *Client) Close() {
 
 	c.dohTransportMu.Lock()
 	for _, client := range c.dohTransports {
-		if t, ok := client.Transport.(*http.Transport); ok {
-			t.CloseIdleConnections()
+		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
+			ct.CloseIdleConnections()
 		}
 	}
 	c.dohTransports = nil

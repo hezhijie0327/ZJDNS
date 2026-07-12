@@ -112,7 +112,7 @@ sh scripts/bump-version.sh patch "short slug" --no-migration  # code-only bump
 
 Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible). Zero `golangci-lint` warnings required.
 
-Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/ncruces/go-sqlite3` (pure-Go SQLite, WASM-based), `github.com/cloudflare/circl` (X-Wing PQ/T hybrid KEM for DNSCrypt PQC).
+Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http drop-in replacement with native eTLS, used by DoH client/server), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/ncruces/go-sqlite3` (pure-Go SQLite, WASM-based), `github.com/cloudflare/circl` (X-Wing PQ/T hybrid KEM for DNSCrypt PQC).
 
 ## Coding Standards
 
@@ -300,7 +300,8 @@ zjdns/
     │   ├── dnssec_extract.go                  ←   Record extraction, canonical ordering, key caching
     │   ├── dnssec_nsec.go                     ←   NSEC/NSEC3 denial-of-existence validation
     │   └── hijack.go                          ←   DNS hijack detection
-    ├── tls/                                   ← TLS listeners (DoT, DoQ, DoH, DoH3)
+    ├── tls/
+    │   ├── tls.go, doh.go, doh3.go            ←   TLS listeners (DoT, DoQ, DoH, DoH3)
     ├── dnscrypt/
     │   ├── server.go                          ←   Server lifecycle, certificate TXT, handshake
     │   ├── server_crypto.go                   ←   encrypt/decrypt/encryptPQ/decryptPQResumed
@@ -442,6 +443,8 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## Notable Design Decisions
 
+- **DoH over `gitlab.com/go-extension/http` (eHTTP)**: DoH client and server use eHTTP (a drop-in `net/http` replacement with native eTLS) instead of `net/http` + `golang.org/x/net/http2`. **Client**: eHTTP's `Transport.TLSClientConfig` accepts `*eTLS.Config` directly — no custom `DialTLSContext` needed. **Server**: eHTTP's `http.Server.Serve(eTLSListener)` bundles HTTP/2 natively, auto-detecting eTLS connections via ALPN (`h2`). DoH3 continues using `net/http` + `github.com/quic-go/quic-go/http3` since KTLS does not apply to QUIC. The shared `ServeHTTP` handler uses `net/http` types for compatibility; eHTTP server bridges via a `dohResponseWriter` adapter + `eHTTP.FromRequest`.
+
 - **Unified database (`database/`)**: Ten SQLite tables in a single DB file with WAL mode + mmap (64MB default, 32MB page cache). `page_size=4096`; `journal_size_limit=mmap_size`; `wal_autocheckpoint=4096`; `synchronous=NORMAL`; connection pool (max 8 open / 4 idle). `msg_wire` BLOB is zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in one step (~0.5ms). `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based), goroutine-safe `*sql.DB`. See [DB Schema](#db-schema) below.
 
 - **Schema migration (`database/migration.go`)**: Incremental, idempotent migrations keyed by app version (e.g. `"3.1.0"`). `database.Version` is set from `main.Version` before `Open()`. The `version` table stores the last applied version as TEXT, always synced to `database.Version` after startup — the DB version always matches the running binary. Fresh installs start at `Version` (current app version) and skip all migrations (the base DDL already reflects the latest schema); already-current databases only sync the version row (no-op). `minSupportedVersion` defines a rolling window: when bumped, old migrations are removed from code and archived as `.sql` files in `database/migrations/` for manual application via `zjdns --sql <db> "$(cat migrations/X.X.X_xxx.sql)"`.
@@ -475,7 +478,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
 - **sdns:// stamp normalization**: `normalizeStamps()` in config resolves `sdns://` addresses at load time, auto-populating `protocol`, `address`, `server_name`, and `public_key` on `UpstreamServer`. Supports all 8 DNS stamp protocol types (Plain 0x00–ODoH Relay 0x85). DoH stamps are reconstructed to full `https://` URLs. Protocol can be omitted in config when using stamps.
 - **Stamp package (internal/stamp)**: Foundation-level, zero zjdns imports. `Parse()` handles all 8 protocol IDs with VLP hash encoding and uint64 LE properties. `String()` marshals back to `sdns://` for round-trip fidelity. Used by config normalization, DNSCrypt generation, and CLI dnsstamp command.
-- **eTLS alias**: Always use `eTLS` (not `cryptotls`) for `gitlab.com/go-extension/tls`. Used in `server/tls`, `server/client`, `config`.
+- **eHTTP / eTLS aliases**: Always use `eHTTP` for `gitlab.com/go-extension/http` and `eTLS` for `gitlab.com/go-extension/tls` (enforced by `importas` linter).
 - **Internal package aliases**: All `zjdns/internal/*` imports use standard `z`-prefixed aliases enforced by `importas` linter:
   - `zjdns/internal/dnsutil` → `zdnsutil`
   - `zjdns/internal/ipdetect` → `zipdetect`

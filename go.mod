@@ -8,6 +8,7 @@ require (
 	github.com/klauspost/compress v1.19.1-0.20260710073621-c0bbc84762b7
 	github.com/ncruces/go-sqlite3 v0.35.3-0.20260708233615-a627269d8f8a
 	github.com/quic-go/quic-go v0.60.1-0.20260711192402-3354ecf0bc6f
+	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.57.0

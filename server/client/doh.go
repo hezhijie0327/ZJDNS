@@ -11,6 +11,7 @@ import (
 	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
+	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
@@ -44,8 +45,8 @@ func (c *Client) executeDOH(ctx context.Context, msg *dns.Msg, server *config.Up
 		for i := 0; shouldRetryHTTP(err) && i < config.DefaultSecureTransportRetries; i++ {
 			c.dohTransportMu.Lock()
 			if old, ok := c.dohTransports[key]; ok && old == client {
-				if t, ok := old.Transport.(*http.Transport); ok {
-					t.CloseIdleConnections()
+				if ct, ok := old.Transport.(*eHTTP.CompatableTransport); ok {
+					ct.CloseIdleConnections()
 				}
 				delete(c.dohTransports, key)
 			}
@@ -63,8 +64,8 @@ func (c *Client) executeDOH(ctx context.Context, msg *dns.Msg, server *config.Up
 		// Clean up the failed transport so the next query starts fresh.
 		c.dohTransportMu.Lock()
 		if old, ok := c.dohTransports[key]; ok && old == client {
-			if t, ok := old.Transport.(*http.Transport); ok {
-				t.CloseIdleConnections()
+			if ct, ok := old.Transport.(*eHTTP.CompatableTransport); ok {
+				ct.CloseIdleConnections()
 			}
 			delete(c.dohTransports, key)
 		}
@@ -120,7 +121,7 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 
 	// Guard against concurrent Close() which sets dohTransports to nil.
 	if c.dohTransports == nil {
-		return c.dohClient
+		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{Transport: c.dohClient.Transport.(*eHTTP.Transport)}}
 	}
 
 	key := transportKey(host, serverName, skipVerify, proxyURL)
@@ -131,47 +132,48 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 	// Evict oldest entry when at capacity.
 	if len(c.dohTransports) >= config.DefaultTransportMax {
 		for k := range c.dohTransports {
-			if t, ok := c.dohTransports[k].Transport.(*http.Transport); ok {
-				t.CloseIdleConnections()
+			if ct, ok := c.dohTransports[k].Transport.(*eHTTP.CompatableTransport); ok {
+				ct.CloseIdleConnections()
 			}
 			delete(c.dohTransports, k)
 			break
 		}
 	}
 
-	transport := c.dohClient.Transport.(*http.Transport).Clone()
-	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		tcpConn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
-		if err != nil {
-			return nil, err
-		}
-		// Enable TCP keep-alive to detect dead connections and maintain NAT bindings.
-		if tc, ok := tcpConn.(*net.TCPConn); ok {
-			_ = tc.SetKeepAlive(true)
-			_ = tc.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
-		}
-		cfg := tlsConfig.Clone()
-		cfg.NextProtos = config.NextProtoDOH
-		cfg.ServerName = serverName
-		eTLSConn := eTLS.Client(tcpConn, cfg)
-		if err := eTLSConn.HandshakeContext(ctx); err != nil {
-			_ = tcpConn.Close()
-			return nil, err
-		}
-		return eTLSConn, nil
-	}
+	// Extension http's Transport uses eTLS natively — we set TLSClientConfig
+	// instead of wiring up DialTLSContext manually.
+	transport := c.dohClient.Transport.(*eHTTP.Transport).Clone()
+	tlsCfg := tlsConfig.Clone()
+	tlsCfg.NextProtos = config.NextProtoDOH
+	tlsCfg.ServerName = serverName
+	transport.TLSClientConfig = tlsCfg
 
-	// Route through SOCKS5 proxy when configured.
+	// Route through SOCKS5 proxy when configured. When no proxy, set up
+	// DialContext with TCP keep-alive to detect dead connections.
 	if proxyURL != "" {
 		proxyDialer := c.getProxyDialer(&config.UpstreamServer{Proxy: proxyURL})
 		if proxyDialer != nil {
 			transport.DialContext = proxyDialer.DialContext
 		}
+	} else {
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			if tc, ok := conn.(*net.TCPConn); ok {
+				_ = tc.SetKeepAlive(true)
+				_ = tc.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
+			}
+			return conn, nil
+		}
 	}
 
+	// Wrap in CompatibleTransport so the client exposes net/http.RoundTripper
+	// for the shared executeDOHHTTPRequest.
 	client := &http.Client{
 		Timeout:   c.dohClient.Timeout,
-		Transport: transport,
+		Transport: &eHTTP.CompatableTransport{Transport: transport},
 	}
 	c.dohTransports[key] = client
 	return client
