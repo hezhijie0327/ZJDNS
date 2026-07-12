@@ -142,7 +142,7 @@ func (db *DB) Close() error {
 		db.StmtGetEntry, db.StmtInsertLog, db.StmtHitCounter,
 		db.StmtInsertLatency, db.StmtGetLastProbe, db.StmtEnsureEntry,
 		db.StmtZoneExact, db.StmtZoneWild, db.StmtZoneInsert,
-		db.StmtRuleSetInsert, db.StmtRuleSetLoad,
+		db.StmtRuleSetInsert,
 		db.StmtInfraGet, db.StmtInfraUpsert,
 	} {
 		if stmt != nil {
@@ -171,10 +171,9 @@ func (db *DB) SQLQueryRow(query string, args ...any) *sql.Row {
 	return db.SQ.QueryRow(query, args...)
 }
 
-// LoadRuleSetEntries returns all rows from ruleset_entries for in-memory
-// engine rebuild.
-func (db *DB) LoadRuleSetEntries() (*sql.Rows, error) {
-	return db.StmtRuleSetLoad.Query()
+// SQLQuery executes a query and returns the *sql.Rows for iteration.
+func (db *DB) SQLQuery(query string, args ...any) (*sql.Rows, error) {
+	return db.SQ.Query(query, args...)
 }
 
 // Cache methods

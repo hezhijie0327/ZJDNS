@@ -81,7 +81,8 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 }
 
 // FlushDB truncates a single table: "stats" (resets stats_meta.cleared_before),
-// "cache" (entries), or "latency" (ip_latency).
+// "cache" (entries), "latency" (ip_latency), "infra" (infra_cache),
+// "zone" (zone_entries), or "ruleset" (ruleset_entries).
 func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	if s.db.IsClosed() {
 		return 0, errors.New("cache closed")
@@ -115,6 +116,12 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 		}
 	case "latency":
 		result, err = s.db.SQ.Exec(`DELETE FROM ip_latency`)
+	case "infra":
+		result, err = s.db.SQ.Exec(`DELETE FROM infra_cache`)
+	case "zone":
+		result, err = s.db.SQ.Exec(`DELETE FROM zone_entries`)
+	case "ruleset":
+		result, err = s.db.SQ.Exec(`DELETE FROM ruleset_entries`)
 	default:
 		return 0, fmt.Errorf("flushDB: unknown target %q", target)
 	}
@@ -127,7 +134,7 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 }
 
 // Clear truncates all tables: entries, request_log, entry_hit_counters, ip_latency,
-// and resets stats_meta.
+// infra_cache, and resets stats_meta.
 func (s *SQLiteCache) Clear() (int64, error) {
 	n1, err := s.FlushDB("cache")
 	if err != nil {
@@ -141,15 +148,19 @@ func (s *SQLiteCache) Clear() (int64, error) {
 	if err != nil {
 		return n1 + n2, err
 	}
+	n4, err := s.FlushDB("infra")
+	if err != nil {
+		return n1 + n2 + n3, err
+	}
 	// Clear request_log, entry_hit_counters, and reset stats_meta.
 	_, _ = s.db.SQ.Exec(`DELETE FROM entry_hit_counters`)
 	result, err := s.db.SQ.Exec(`DELETE FROM request_log`)
 	if err != nil {
-		return n1 + n2 + n3, fmt.Errorf("clear request_log: %w", err)
+		return n1 + n2 + n3 + n4, fmt.Errorf("clear request_log: %w", err)
 	}
-	n4, _ := result.RowsAffected()
+	n5, _ := result.RowsAffected()
 	_, _ = s.db.SQ.Exec(`UPDATE stats_meta SET cleared_before = 0 WHERE id = 1`)
-	return n1 + n2 + n3 + n4, nil
+	return n1 + n2 + n3 + n4 + n5, nil
 }
 
 // Stats returns aggregated cache statistics as formatted TXT records.

@@ -85,12 +85,6 @@ func (db *DB) prepareStatements() error {
 	if err != nil {
 		return err
 	}
-	db.StmtRuleSetLoad, err = db.SQ.Prepare(
-		`SELECT tag, type, value FROM ruleset_entries ORDER BY tag, type, value`,
-	)
-	if err != nil {
-		return err
-	}
 
 	// Infra cache statements.
 	db.StmtInfraGet, err = db.SQ.Prepare(

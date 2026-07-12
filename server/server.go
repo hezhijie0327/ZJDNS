@@ -128,6 +128,30 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				}
 				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
+		case config.DefaultProjectName + ".db.clear.infra":
+			cfg.Zone.Rules[i].DynamicContent = func() []string {
+				n, err := cacheStore.FlushDB("infra")
+				if err != nil {
+					return []string{fmt.Sprintf("error=%v", err)}
+				}
+				return []string{fmt.Sprintf("flushed=%d", n)}
+			}
+		case config.DefaultProjectName + ".db.clear.zone":
+			cfg.Zone.Rules[i].DynamicContent = func() []string {
+				n, err := cacheStore.FlushDB("zone")
+				if err != nil {
+					return []string{fmt.Sprintf("error=%v", err)}
+				}
+				return []string{fmt.Sprintf("flushed=%d", n)}
+			}
+		case config.DefaultProjectName + ".db.clear.ruleset":
+			cfg.Zone.Rules[i].DynamicContent = func() []string {
+				n, err := cacheStore.FlushDB("ruleset")
+				if err != nil {
+					return []string{fmt.Sprintf("error=%v", err)}
+				}
+				return []string{fmt.Sprintf("flushed=%d", n)}
+			}
 		}
 	}
 
@@ -143,8 +167,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	var rulesetEngine *ruleset.Engine
 	if len(cfg.RuleSet) > 0 {
-		rulesetEngine = ruleset.New()
-		if err := rulesetEngine.LoadRules(db, cfg.RuleSet); err != nil {
+		rulesetEngine = ruleset.New(db)
+		if err := rulesetEngine.LoadRules(cfg.RuleSet); err != nil {
 			cancel(fmt.Errorf("ruleset init: %w", err))
 			return nil, fmt.Errorf("ruleset init: %w", err)
 		}

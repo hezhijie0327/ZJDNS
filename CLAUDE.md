@@ -247,7 +247,7 @@ zjdns/
 ├── database/                                  ← Unified SQLite DB: connection, schema, migration
 │   ├── db.go                                  ←   DB struct, Open, Close
 │   ├── schema.go                              ←   10 tables in one migration
-│   ├── stmts.go                               ←   13 prepared statements (6 cache + 3 zone + 2 ruleset + 2 infra)
+│   ├── stmts.go                               ←   12 prepared statements (6 cache + 3 zone + 1 ruleset + 2 infra)
 │   ├── migration.go                           ←   Incremental schema migrations
 │   └── migrations/                            ←   Archived migration SQL files
 ├── cache/                                     ← Store interface, DNS response cache (wraps *database.DB)
@@ -358,7 +358,7 @@ Top layer (wiring):
 7. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
 8. `Resolver.Query()` — upstream (first-win) or recursive
 9. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
-10. `ruleset.Engine` — SQLite-backed tag matching (LoadRules → ruleset_entries → in-memory trie + map); upstream match filtering — filter A/AAAA; all filtered → REFUSED + EDE
+10. `ruleset.Engine` — SQLite-backed tag matching (domain TLD+1 lookup + CIDR via net.IPNet); upstream match filtering — filter A/AAAA; all filtered → REFUSED + EDE
 11. Cache population, latency probes, response with server cookie
 
 ### Query Routing (`server/resolver`)
@@ -391,7 +391,7 @@ Top layer (wiring):
 | `ECSConfig` | `config` | User-facing ECS subnet configuration (moved from edns) |
 | `ECSOption` | `config` | Parsed EDNS Client Subnet (edns has type alias: `type ECSOption = config.ECSOption`) |
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
-| `DB` | `database` | Unified SQLite DB: goroutine-safe `*sql.DB`, schema migration, 13 prepared stmts, SQLExec/SQLQueryRow/LoadRuleSetEntries for consumer interfaces | Connection pool with WAL mode |
+| `DB` | `database` | Unified SQLite DB: goroutine-safe `*sql.DB`, schema migration, 12 prepared stmts, SQLExec/SQLQueryRow/SQLQuery for consumer interfaces | Connection pool with WAL mode |
 | `Options` | `database` | SQLite PRAGMA config: `MMapSizeMB`, `CacheSizeMB` | |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
@@ -416,8 +416,8 @@ Top layer (wiring):
 | `Recursive` | `server/resolver` | Built-in recursive walk |
 | `CryptoValidator` | `server/security` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in `dnssec_nsec.go` |
 | `Guard` | `server/security` | Bundles CryptoValidator + Detector |
-| `Engine` | `ruleset` | CIDR + domain tag matching; `Match(qname,ip)`, `MatchIP`. `LoadRules` accepts `RuleSetStorage` interface (satisfied by `*database.DB`) |
-| `RuleSetStorage` | `ruleset` | Interface: SQLExec, SQLQueryRow, LoadRuleSetEntries — breaks domain→domain import cycle |
+| `Engine` | `ruleset` | SQLite-backed CIDR + domain tag matching; `Match(qname,ip)`, `MatchIP`. `LoadRules` accepts `RuleSetStorage` interface (satisfied by `*database.DB`) |
+| `RuleSetStorage` | `ruleset` | Interface: SQLExec, SQLQueryRow, SQLQuery — breaks domain→domain import cycle |
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |
 | `Prober` | `server/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
 | `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |

@@ -467,6 +467,9 @@ func addChaosRecord(cfg *ServerConfig) {
 		DefaultProjectName + ".db.clear.cache",
 		DefaultProjectName + ".db.clear.stats",
 		DefaultProjectName + ".db.clear.latency",
+		DefaultProjectName + ".db.clear.infra",
+		DefaultProjectName + ".db.clear.zone",
+		DefaultProjectName + ".db.clear.ruleset",
 	} {
 		cfg.Zone.Rules = append(cfg.Zone.Rules, ZoneRule{
 			Name:   name,
