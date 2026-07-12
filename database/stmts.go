@@ -78,24 +78,6 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 
-	// NSEC negative cache statements.
-	db.StmtNsecInsert, err = db.SQ.Prepare(
-		`INSERT OR REPLACE INTO nsec_chain
-		 (zone_name, owner_name, next_name, types, entry_id)
-		 VALUES (?, ?, ?, ?, ?)`,
-	)
-	if err != nil {
-		return err
-	}
-	db.StmtNsecLookup, err = db.SQ.Prepare(
-		`SELECT owner_name, next_name, types FROM nsec_chain
-		 WHERE zone_name = ?
-		 ORDER BY owner_name ASC`,
-	)
-	if err != nil {
-		return err
-	}
-
 	// RuleSet statements.
 	db.StmtRuleSetInsert, err = db.SQ.Prepare(
 		`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,

@@ -230,11 +230,6 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// ── Prep work (parallel-safe, outside writeMu) ──────────────────────────
 	now := log.NowUnix()
 	entryTTL := minTTL(answer, authority, additional)
-	if hasNSECOrNSEC3(authority) {
-		if capTTL := negativeTTLCap(authority); capTTL < entryTTL {
-			entryTTL = capTTL
-		}
-	}
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = zdnsutil.NormalizeDomain(qname)

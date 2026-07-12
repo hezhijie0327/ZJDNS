@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -220,13 +221,13 @@ func (c *Client) resolveDNSCryptStamp(server *config.UpstreamServer) (addr, prov
 	}
 
 	if addr == "" {
-		return "", "", nil, fmt.Errorf("address is empty") //nolint:revive // error strings are intentional and descriptive
+		return "", "", nil, errors.New("address is empty")
 	}
 	if providerName == "" {
-		return "", "", nil, fmt.Errorf("provider_name is required for non-stamp DNSCrypt servers") //nolint:revive // error strings are intentional and descriptive
+		return "", "", nil, errors.New("provider_name is required for non-stamp DNSCrypt servers")
 	}
 	if len(publicKey) == 0 {
-		return "", "", nil, fmt.Errorf("public_key is required for non-stamp DNSCrypt servers") //nolint:revive // error strings are intentional and descriptive
+		return "", "", nil, errors.New("public_key is required for non-stamp DNSCrypt servers")
 	}
 
 	return addr, providerName, publicKey, nil

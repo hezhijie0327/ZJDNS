@@ -25,8 +25,8 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		dnscryptCertTTL   string
 
 		// SQL
-		runSQL  bool
-		sqlRW   bool
+		runSQL bool
+		sqlRW  bool
 
 		// DNS stamp
 		runDNSStamp    bool

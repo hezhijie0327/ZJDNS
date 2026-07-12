@@ -28,6 +28,12 @@ var migrations = []migration{
 	{"3.2.0", "rebuild zone_entries with match_tags in PK", migrateV3_2_0},
 	{"3.2.1", "add performance indexes and drop redundant idx_zone_qname", migrateV3_2_1},
 	{"3.2.13", "rebuild zone_entries PK with is_wildcard", migrateV3_2_13},
+	{"3.2.17", "drop nsec_chain table", migrateV3_2_17},
+}
+
+func migrateV3_2_17(db *DB) error {
+	_, err := db.SQ.Exec("DROP TABLE IF EXISTS nsec_chain")
+	return err
 }
 
 func migrateV3_2_13(db *DB) error {

@@ -305,7 +305,6 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	if cacheable {
 		log.Debugf("CACHE: populating cache for %s", question.Name)
 		h.cache.Set(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, answer, authority, additional, validated)
-		h.cache.IndexNsecRecords(question.Name, question.Qtype, question.Qclass, ecsOpt, clientRequestedDNSSEC, validated, authority)
 	}
 	h.cache.RecordRequest(&cache.RequestRecord{
 		Qname: question.Name, Qtype: question.Qtype, Qclass: question.Qclass,

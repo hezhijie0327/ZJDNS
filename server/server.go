@@ -186,10 +186,10 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cidrMatcher = rulesetEngine
 	}
 	dnsResolver := resolver.New(resolver.Config{
-		Client:        queryClient,
-		Guard:         guard,
-		EDNS:          ednsHandler,
-		CIDRMatcher:   cidrMatcher,
+		Client:      queryClient,
+		Guard:       guard,
+		EDNS:        ednsHandler,
+		CIDRMatcher: cidrMatcher,
 		BuildMsg: func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
 			return h.BuildQueryMessage(q, ecs, rd, secure)
 		},

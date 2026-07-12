@@ -76,43 +76,6 @@ func minTTL(sections ...[]dns.RR) int {
 	return minT
 }
 
-func hasNSECOrNSEC3(authority []dns.RR) bool {
-	for _, rr := range authority {
-		if rr == nil {
-			continue
-		}
-		switch dns.RRToType(rr) {
-		case dns.TypeNSEC, dns.TypeNSEC3:
-			return true
-		}
-	}
-	return false
-}
-
-func negativeTTLCap(authority []dns.RR) int {
-	capTTL := config.DefaultMaxNegativeTTL
-	for _, rr := range authority {
-		if rr == nil {
-			continue
-		}
-		soa, ok := rr.(*dns.SOA)
-		if !ok {
-			continue
-		}
-		soaTTL := int(soa.Header().TTL)
-		soaMin := int(soa.Minttl)
-		soaBased := soaTTL
-		if soaMin < soaBased {
-			soaBased = soaMin
-		}
-		if soaBased < capTTL {
-			capTTL = soaBased
-		}
-		break
-	}
-	return capTTL
-}
-
 func ecsParams(ecs *config.ECSOption) (addr string, prefix int) {
 	if ecs == nil {
 		return "", 0

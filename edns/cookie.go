@@ -9,10 +9,9 @@ import (
 	"net"
 	"sync/atomic"
 	"time"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
-
-	"zjdns/internal/log"
 )
 
 // CookieOption holds the parsed client and server DNS Cookie values.

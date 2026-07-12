@@ -112,22 +112,6 @@ func (db *DB) migrate() error {
 			PRIMARY KEY (entry_id, protocol, rcode)
 		) WITHOUT ROWID;
 
-		-- ── NSEC negative cache ──────────────────────────────────────────────
-		-- Indexes NSEC/NSEC3 records from validated responses for aggressive
-		-- negative caching. Wire-format (label-prefixed) names sort in DNS
-		-- canonical order as binary. ON DELETE CASCADE auto-clears when the
-		-- parent cache entry is evicted.
-
-		CREATE TABLE IF NOT EXISTS nsec_chain (
-			zone_name  BLOB NOT NULL,
-			owner_name BLOB NOT NULL,
-			next_name  BLOB NOT NULL,
-			types      BLOB NOT NULL,
-			entry_id   INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-			PRIMARY KEY (zone_name, owner_name)
-		) WITHOUT ROWID;
-
-		
 			-- ── Stats metadata ───────────────────────────────────────────────────
 		-- Single row tracking the last request_log.id that was cleared by
 		-- FlushDB("stats"). Resetting stats is O(1): just UPDATE this row.

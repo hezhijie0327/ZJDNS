@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -109,11 +110,11 @@ func RunSQLRW(dbPath, query string) error {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() {
-		return fmt.Errorf("no input")
+		return errors.New("no input")
 	}
 	resp := strings.TrimSpace(scanner.Text())
 	if resp != "y" && resp != "Y" {
-		return fmt.Errorf("aborted")
+		return errors.New("aborted")
 	}
 
 	db, err := database.Open(dbPath, 0, database.Options{})

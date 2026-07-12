@@ -80,7 +80,6 @@ const (
 	DefaultDNS64Prefix                  = "64:ff9b::/96" // RFC 6052 §2.1 well-known prefix
 
 	DefaultDNSKeyCacheTTL           = 86400 // DNSKEY record cache TTL (seconds)
-	DefaultMaxNegativeTTL           = 10800 // RFC 2308 §5: max negative cache TTL (3 hours)
 	DefaultMaxNSEC3Iterations       = 150   // NSEC3 iteration cap (RFC 5155 §10.3)
 	DefaultQnameMinimiseCount       = 10    // RFC 9156 §2.3: max QNAME minimisation iterations
 	DefaultMinimiseOneLabel         = 4     // RFC 9156 §2.3: labels added one-at-a-time before proportional division

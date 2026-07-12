@@ -163,7 +163,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 - No duplicate constants in the same package.
 - Leaf packages that can't import `config` may use local `const` blocks with same naming convention.
 - **Code is canonical**: docs and comments must match the actual constant values. Verify, don't assume.
-- **RFC 2308/9156 defaults**: `DefaultMaxNegativeTTL = 10800`, `DefaultQnameMinimiseCount = 10`, `DefaultMinimiseOneLabel = 4`.
+- **RFC 9156 defaults**: `DefaultQnameMinimiseCount = 10`, `DefaultMinimiseOneLabel = 4`.
 
 ### Constructors
 
@@ -246,8 +246,8 @@ zjdns/
 ├── edns/                                      ← Handler, Cookie, EDE, padding (ECSOption alias → config)
 ├── database/                                  ← Unified SQLite DB: connection, schema, migration
 │   ├── db.go                                  ←   DB struct, Open, Close
-│   ├── schema.go                              ←   11 tables in one migration
-│   ├── stmts.go                               ←   15 prepared statements (6 cache + 3 zone + 2 NSEC + 2 ruleset + 2 infra)
+│   ├── schema.go                              ←   10 tables in one migration
+│   ├── stmts.go                               ←   13 prepared statements (6 cache + 3 zone + 2 ruleset + 2 infra)
 │   ├── migration.go                           ←   Incremental schema migrations
 │   └── migrations/                            ←   Archived migration SQL files
 ├── cache/                                     ← Store interface, DNS response cache (wraps *database.DB)
@@ -354,13 +354,12 @@ Top layer (wiring):
 3. `edns.Handler` — extract ECS, DNS Cookie
 4. Early DNS Cookie validation (RFC 7873/9018) — initial handshake (empty ServerCookie) allowed; short (1–15 bytes) → BADCOOKIE; 16 bytes → SipHash-2-4 cryptographic validation with timestamp check (expired >1h / future >5min → BADCOOKIE; valid → echo back; >30min → reissue)
 5. `cache.Store.Get()` — hit → serve (with ruleset tag filtering); miss → resolve
-6. **Aggressive NSEC negative cache** (RFC 8198) — after cache miss, `LookupNsecNeg` checks `nsec_chain` table; NSEC/NSEC3 covering qname → synthesize NXDOMAIN/NODATA locally, skip upstream
-7. **Pending request dedup** (`pending.go`): Same-key concurrent queries coalesce — only the first reaches the resolver; followers block and receive the identical result. Closes the cache-poisoning race window.
-8. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
-9. `Resolver.Query()` — upstream (first-win) or recursive
-10. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
-11. `ruleset.Engine` — SQLite-backed tag matching (LoadRules → ruleset_entries → in-memory trie + map); upstream match filtering — filter A/AAAA; all filtered → REFUSED + EDE
-12. Cache population, latency probes, response with server cookie
+6. **Pending request dedup** (`pending.go`): Same-key concurrent queries coalesce — only the first reaches the resolver; followers block and receive the identical result. Closes the cache-poisoning race window.
+7. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
+8. `Resolver.Query()` — upstream (first-win) or recursive
+9. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
+10. `ruleset.Engine` — SQLite-backed tag matching (LoadRules → ruleset_entries → in-memory trie + map); upstream match filtering — filter A/AAAA; all filtered → REFUSED + EDE
+11. Cache population, latency probes, response with server cookie
 
 ### Query Routing (`server/resolver`)
 - Upstream + fallback queried concurrently via `errgroup`; first NOERROR wins
@@ -392,7 +391,7 @@ Top layer (wiring):
 | `ECSConfig` | `config` | User-facing ECS subnet configuration (moved from edns) |
 | `ECSOption` | `config` | Parsed EDNS Client Subnet (edns has type alias: `type ECSOption = config.ECSOption`) |
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
-| `DB` | `database` | Unified SQLite DB: goroutine-safe `*sql.DB`, schema migration, 15 prepared stmts, SQLExec/SQLQueryRow/LoadRuleSetEntries for consumer interfaces | Connection pool with WAL mode |
+| `DB` | `database` | Unified SQLite DB: goroutine-safe `*sql.DB`, schema migration, 13 prepared stmts, SQLExec/SQLQueryRow/LoadRuleSetEntries for consumer interfaces | Connection pool with WAL mode |
 | `Options` | `database` | SQLite PRAGMA config: `MMapSizeMB`, `CacheSizeMB` | |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
@@ -495,7 +494,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## DB Schema
 
-The unified database (`database/`) contains eleven SQLite tables: (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The unified database (`database/`) contains ten SQLite tables: (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
 -- Pure DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr,

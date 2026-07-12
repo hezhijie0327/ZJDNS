@@ -45,10 +45,6 @@ type DB struct {
 	StmtGetLastProbe  *sql.Stmt
 	StmtEnsureEntry   *sql.Stmt
 
-	// NSEC negative cache statements
-	StmtNsecInsert *sql.Stmt
-	StmtNsecLookup *sql.Stmt
-
 	// RuleSet statements
 	StmtRuleSetInsert *sql.Stmt
 	StmtRuleSetLoad   *sql.Stmt
@@ -146,7 +142,6 @@ func (db *DB) Close() error {
 		db.StmtGetEntry, db.StmtInsertLog, db.StmtHitCounter,
 		db.StmtInsertLatency, db.StmtGetLastProbe, db.StmtEnsureEntry,
 		db.StmtZoneExact, db.StmtZoneWild, db.StmtZoneInsert,
-		db.StmtNsecInsert, db.StmtNsecLookup,
 		db.StmtRuleSetInsert, db.StmtRuleSetLoad,
 		db.StmtInfraGet, db.StmtInfraUpsert,
 	} {

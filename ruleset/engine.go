@@ -6,7 +6,6 @@ package ruleset
 
 import (
 	"database/sql"
-
 	"zjdns/config"
 	"zjdns/internal/log"
 )

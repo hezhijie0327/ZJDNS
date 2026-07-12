@@ -88,6 +88,17 @@ type Validator struct {
 	Hijack *security.Detector        // DNS hijack detection
 }
 
+// Config bundles the dependencies needed to construct a Resolver.
+type Config struct {
+	Client        *client.Client
+	Guard         *security.Guard
+	EDNS          *edns.Handler
+	CIDRMatcher   CIDRMatcher
+	BuildMsg      BuildQueryFunc
+	Cache         cache.Store
+	DNSSECEnforce bool
+}
+
 // concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
 // limits. concurrencyDiv2/3 are divisor constants used in the tier formulas:
 //
@@ -131,17 +142,6 @@ func (u *upstreamSet) list() []*config.UpstreamServer {
 
 func (u *upstreamSet) store(s []*config.UpstreamServer) {
 	u.servers.Store(&s)
-}
-
-// Config bundles the dependencies needed to construct a Resolver.
-type Config struct {
-	Client        *client.Client
-	Guard         *security.Guard
-	EDNS          *edns.Handler
-	CIDRMatcher   CIDRMatcher
-	BuildMsg      BuildQueryFunc
-	Cache         cache.Store
-	DNSSECEnforce bool
 }
 
 // New creates a new Resolver from the given Config.
