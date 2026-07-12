@@ -128,14 +128,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 				}
 				return []string{fmt.Sprintf("flushed=%d", n)}
 			}
-		case config.DefaultProjectName + ".db.clear.infra":
-			cfg.Zone.Rules[i].DynamicContent = func() []string {
-				n, err := cacheStore.FlushDB("infra")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
 		case config.DefaultProjectName + ".db.clear.zone":
 			cfg.Zone.Rules[i].DynamicContent = func() []string {
 				n, err := cacheStore.FlushDB("zone")

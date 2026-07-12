@@ -330,9 +330,8 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 	// All three use the same staleMaxAge cutoff — batched into a single Exec.
 	if _, err := tx.Exec(
 		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < unixepoch() - ?;`+
-			`DELETE FROM request_log WHERE timestamp < unixepoch() - ?;`+
-			`DELETE FROM infra_cache WHERE MAX(last_success, last_timeout) > 0 AND MAX(last_success, last_timeout) < unixepoch() - ?`,
-		defaultStaleMaxAge, defaultStaleMaxAge, defaultStaleMaxAge,
+			`DELETE FROM request_log WHERE timestamp < unixepoch() - ?`,
+		defaultStaleMaxAge, defaultStaleMaxAge,
 	); err != nil {
 		log.Debugf("CACHE: stale cleanup failed (non-fatal): %v", err)
 	}

@@ -32,6 +32,7 @@ var migrations = []migration{
 	{"3.2.19", "drop redundant idx_entries_expires", migrateV3_2_19},
 	{"3.2.20", "rebuild zone_entries WITHOUT ROWID with is_wildcard-first PK", migrateV3_2_20},
 	{"3.2.21", "denormalize qname/qtype/qclass into request_log", migrateV3_2_21},
+	{"3.2.22", "drop infra_cache table", migrateV3_2_22},
 }
 
 func migrateV3_2_17(db *DB) error {
@@ -106,6 +107,11 @@ func migrateV3_2_21(db *DB) error {
 		return err
 	}
 	return nil
+}
+
+func migrateV3_2_22(db *DB) error {
+	_, err := db.SQ.Exec("DROP TABLE IF EXISTS infra_cache")
+	return err
 }
 
 func migrateV3_2_13(db *DB) error {

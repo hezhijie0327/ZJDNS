@@ -65,31 +65,16 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			default:
 			}
 
-			// Check infra cache: skip servers in the penalty box,
-			// and use no-EDNS for servers known to reject it.
-			skip, noEDNS := r.checkInfraCache(nsAddr)
-			if skip {
-				log.Debugf("INFRA: skipping %s (timeout backoff)", nsAddr)
-				return nil
-			}
+			// Query each nameserver concurrently; first valid response wins.
 
-			var msg *dns.Msg
-			if noEDNS {
-				msg = pool.DefaultMessagePool.Get()
-				dnsutil.SetQuestion(msg, dnsutil.Fqdn(question.Name), question.Qtype)
-				msg.RecursionDesired = true
-			} else {
-				msg = r.resolver.buildMsg(question, ecs, true, false)
-				msg.UDPSize = pool.RecursiveUDPBufferSize // larger buffer for DNSSEC-signed referrals
-			}
+			msg := r.resolver.buildMsg(question, ecs, true, false)
+			msg.UDPSize = pool.RecursiveUDPBufferSize // larger buffer for DNSSEC-signed referrals
 			defer pool.DefaultMessagePool.Put(msg)
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 			defer subCancel()
 
-			start := time.Now()
 			result := r.resolver.client.ExecuteQuery(subCtx, msg, server)
-			dur := time.Since(start)
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
 
@@ -143,11 +128,9 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					return nil
 				}
 
-				r.updateInfraCache(nsAddr, nil, int(rcode), dur)
 				log.Debugf("RECURSION: ns=%s rcode=%s for %s %s", nsAddr, dns.RcodeToString[rcode], question.Name, dns.TypeToString[question.Qtype])
 				pool.DefaultMessagePool.Put(result.Response)
 			} else if result.Error != nil {
-				r.updateInfraCache(nsAddr, result.Error, 0, dur)
 				log.Debugf("RECURSION: ns=%s error=%v for %s %s", nsAddr, result.Error, question.Name, dns.TypeToString[question.Qtype])
 			}
 			return nil

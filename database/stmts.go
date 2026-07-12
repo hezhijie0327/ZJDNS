@@ -80,22 +80,5 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 
-	// Infra cache statements.
-	db.StmtInfraGet, err = db.SQ.Prepare(
-		`SELECT rtt_ms, edns_version, timeout_count, last_timeout, last_success
-		 FROM infra_cache WHERE server_addr = ?`,
-	)
-	if err != nil {
-		return err
-	}
-	db.StmtInfraUpsert, err = db.SQ.Prepare(
-		`INSERT OR REPLACE INTO infra_cache
-		 (server_addr, rtt_ms, edns_version, timeout_count, last_timeout, last_success)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-	)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }

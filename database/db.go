@@ -49,10 +49,6 @@ type DB struct {
 	StmtRuleSetInsert *sql.Stmt
 	StmtRuleSetLoad   *sql.Stmt
 
-	// Infra cache statements
-	StmtInfraGet    *sql.Stmt
-	StmtInfraUpsert *sql.Stmt
-
 	// Zone prepared statements
 	StmtZoneExact  *sql.Stmt
 	StmtZoneInsert *sql.Stmt
@@ -142,7 +138,6 @@ func (db *DB) Close() error {
 		db.StmtInsertLatency, db.StmtGetLastProbe, db.StmtEnsureEntry,
 		db.StmtZoneExact, db.StmtZoneInsert,
 		db.StmtRuleSetInsert,
-		db.StmtInfraGet, db.StmtInfraUpsert,
 	} {
 		if stmt != nil {
 			_ = stmt.Close()

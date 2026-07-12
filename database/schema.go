@@ -135,20 +135,6 @@ func (db *DB) migrate() error {
 		) WITHOUT ROWID;
 		CREATE INDEX IF NOT EXISTS idx_ip_latency_probe ON ip_latency(last_probe_time);
 
-		-- ── Infrastructure cache ─────────────────────────────────────────────
-		-- Per-nameserver state: EDNS capability and timeout backoff.
-		-- Independent of cache entries — persists across evictions.
-
-		CREATE TABLE IF NOT EXISTS infra_cache (
-			server_addr   TEXT NOT NULL,
-			rtt_ms        INTEGER NOT NULL DEFAULT 0,
-			edns_version  INTEGER NOT NULL DEFAULT 0,
-			timeout_count INTEGER NOT NULL DEFAULT 0,
-			last_timeout  INTEGER NOT NULL DEFAULT 0,
-			last_success  INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (server_addr)
-		) WITHOUT ROWID;
-
 		-- ── Ruleset entries ───────────────────────────────────────────────
 		-- Stores rule set entries loaded from config. IP entries are CIDR
 		-- strings; domain entries are TLD+1 keys for O(1) lookup.
