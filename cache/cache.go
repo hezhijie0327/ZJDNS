@@ -43,7 +43,7 @@ type Store interface {
 	Close() error
 
 	// Aggressive NSEC negative caching (RFC 8198).
-	IndexNsecRecords(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, authority []dns.RR)
+	IndexNsecRecords(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK, validated bool, authority []dns.RR)
 	LookupNsecNeg(qname string, qtype uint16) *NsecResult
 }
 

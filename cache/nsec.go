@@ -69,8 +69,11 @@ func toLower(s string) string {
 
 // IndexNsecRecords extracts NSEC/NSEC3 records from a validated response and
 // indexes them into nsec_chain.
-func (s *SQLiteCache) IndexNsecRecords(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool, authority []dns.RR) {
+func (s *SQLiteCache) IndexNsecRecords(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK, validated bool, authority []dns.RR) {
 	if s.db.IsClosed() {
+		return
+	}
+	if !validated {
 		return
 	}
 
@@ -87,11 +90,8 @@ func (s *SQLiteCache) IndexNsecRecords(qname string, qtype, qclass uint16, ecs *
 	entryID := s.db.EnsureEntry(qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssec)
 
 	for _, rr := range authority {
-		switch rec := rr.(type) {
-		case *dns.NSEC:
+		if rec, ok := rr.(*dns.NSEC); ok {
 			s.indexNsec(entryID, zoneWire, rec)
-		case *dns.NSEC3:
-			s.indexNsec3(entryID, zoneWire, rec)
 		}
 	}
 }
@@ -105,15 +105,6 @@ func (s *SQLiteCache) indexNsec(entryID int64, zoneWire []byte, nsec *dns.NSEC) 
 	}
 }
 
-func (s *SQLiteCache) indexNsec3(entryID int64, zoneWire []byte, nsec3 *dns.NSEC3) {
-	ownerWire := toWireName(nsec3.Header().Name)
-	nextWire := toWireName(nsec3.NextDomain)
-	types := marshalTypeBitmap(nsec3.TypeBitMap)
-	if _, err := s.db.StmtNsecInsert.Exec(zoneWire, ownerWire, nextWire, types, entryID); err != nil {
-		log.Debugf("NSEC: nsec3 insert failed for %s: %v", nsec3.Header().Name, err)
-	}
-}
-
 // LookupNsecNeg checks whether a query is covered by an NSEC/NSEC3 record
 // in the negative cache. Returns nil if no covering record is found.
 func (s *SQLiteCache) LookupNsecNeg(qname string, qtype uint16) *NsecResult {
@@ -122,6 +113,13 @@ func (s *SQLiteCache) LookupNsecNeg(qname string, qtype uint16) *NsecResult {
 	}
 
 	for zone := qname; zone != "."; zone = parentName(zone) {
+		// NSEC records from zone Z only prove non-existence of direct
+		// children of Z (exactly 1 label deeper). Skip zones where the
+		// qname is deeper — e.g. edu.cn NSEC records cannot prove
+		// non-existence of mirrors.cernet.edu.cn (a grandchild).
+		if labelDepth(qname)-labelDepth(zone) > 1 {
+			continue
+		}
 		rows, err := s.db.StmtNsecLookup.Query(toWireName(zone))
 		if err != nil {
 			return nil
@@ -205,6 +203,20 @@ func parentName(name string) string {
 		return "."
 	}
 	return n[dot+1:] + "."
+}
+
+// labelDepth returns the number of labels in a domain name.
+// "." returns 0, "cn." returns 1, "cernet.edu.cn." returns 3.
+func labelDepth(name string) int {
+	s := toLower(name)
+	if s == "." || s == "" {
+		return 0
+	}
+	s = strings.TrimSuffix(s, ".")
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, ".") + 1
 }
 
 // dnameCanonicalCompare compares two domain names in DNS canonical order

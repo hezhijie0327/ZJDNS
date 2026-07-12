@@ -3,6 +3,9 @@ package cache
 import (
 	"slices"
 	"testing"
+
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/rdata"
 )
 
 // parentWire strips the leftmost (original-first) label from a TLD-first
@@ -121,6 +124,110 @@ func TestMarshalTypeBitmap(t *testing.T) {
 		if decoded[i] != v {
 			t.Errorf("index %d: got %d, want %d", i, decoded[i], v)
 		}
+	}
+}
+
+func TestLookupNsecNeg_ParentZoneNotChildZone(t *testing.T) {
+	// Regression test: NSEC records from edu.cn zone should NOT prove
+	// non-existence of mirrors.cernet.edu.cn (a grandchild, not a direct child).
+	store := testStore()
+	defer func() { _ = store.Close() }()
+
+	// Index an NSEC record for edu.cn zone: cernet.edu.cn NSEC mail.edu.cn
+	soa := &dns.SOA{
+		Hdr: dns.Header{Name: "edu.cn.", Class: dns.ClassINET, TTL: 300},
+		SOA: rdata.SOA{
+			Ns: "ns1.edu.cn.", Mbox: "hostmaster.edu.cn.",
+			Serial: 1, Refresh: 3600, Retry: 900, Expire: 604800, Minttl: 86400,
+		},
+	}
+	authority := []dns.RR{
+		soa,
+		&dns.NSEC{
+			Hdr: dns.Header{Name: "cernet.edu.cn.", Class: dns.ClassINET, TTL: 300},
+			NSEC: rdata.NSEC{
+				NextDomain: "mail.edu.cn.",
+				TypeBitMap: []uint16{dns.TypeNS, dns.TypeRRSIG, dns.TypeNSEC},
+			},
+		},
+	}
+	store.IndexNsecRecords("nonexistent.edu.cn", dns.TypeA, dns.ClassINET, nil, true, true, authority)
+
+	// Lookup for mirrors.cernet.edu.cn — a grandchild of edu.cn, NOT a direct child.
+	// The edu.cn NSEC record covers direct children only, so LookupNsecNeg
+	// must return nil (no negative cache hit).
+	result := store.LookupNsecNeg("mirrors.cernet.edu.cn.", dns.TypeA)
+	if result != nil {
+		t.Fatalf("parent-zone NSEC should not cover grandchild: got rcode=%d", result.Rcode)
+	}
+}
+
+func TestLookupNsecNeg_SameZoneChild(t *testing.T) {
+	// NSEC records from cernet.edu.cn zone SHOULD prove non-existence of
+	// direct children of cernet.edu.cn.
+	store := testStore()
+	defer func() { _ = store.Close() }()
+
+	soa := &dns.SOA{
+		Hdr: dns.Header{Name: "cernet.edu.cn.", Class: dns.ClassINET, TTL: 300},
+		SOA: rdata.SOA{
+			Ns: "ns1.cernet.edu.cn.", Mbox: "hostmaster.cernet.edu.cn.",
+			Serial: 1, Refresh: 3600, Retry: 900, Expire: 604800, Minttl: 86400,
+		},
+	}
+	authority := []dns.RR{
+		soa,
+		&dns.NSEC{
+			Hdr: dns.Header{Name: "ftp.cernet.edu.cn.", Class: dns.ClassINET, TTL: 300},
+			NSEC: rdata.NSEC{
+				NextDomain: "www.cernet.edu.cn.",
+				TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC},
+			},
+		},
+	}
+	store.IndexNsecRecords("nonexistent.cernet.edu.cn", dns.TypeA, dns.ClassINET, nil, true, true, authority)
+
+	// mirrors.cernet.edu.cn falls between ftp and mail → should get NXDOMAIN
+	result := store.LookupNsecNeg("mirrors.cernet.edu.cn.", dns.TypeA)
+	if result == nil {
+		t.Fatal("same-zone NSEC should cover direct child: got nil")
+	}
+	if result.Rcode != dns.RcodeNameError {
+		t.Fatalf("expected NXDOMAIN, got rcode=%d", result.Rcode)
+	}
+}
+
+func TestLookupNsecNeg_ZoneApexNodata(t *testing.T) {
+	// NSEC record for the zone apex itself should prove NODATA.
+	store := testStore()
+	defer func() { _ = store.Close() }()
+
+	soa := &dns.SOA{
+		Hdr: dns.Header{Name: "cernet.edu.cn.", Class: dns.ClassINET, TTL: 300},
+		SOA: rdata.SOA{
+			Ns: "ns1.cernet.edu.cn.", Mbox: "hostmaster.cernet.edu.cn.",
+			Serial: 1, Refresh: 3600, Retry: 900, Expire: 604800, Minttl: 86400,
+		},
+	}
+	authority := []dns.RR{
+		soa,
+		&dns.NSEC{
+			Hdr: dns.Header{Name: "cernet.edu.cn.", Class: dns.ClassINET, TTL: 300},
+			NSEC: rdata.NSEC{
+				NextDomain: "ftp.cernet.edu.cn.",
+				TypeBitMap: []uint16{dns.TypeSOA, dns.TypeNS, dns.TypeRRSIG, dns.TypeNSEC},
+			},
+		},
+	}
+	store.IndexNsecRecords("cernet.edu.cn", dns.TypeAAAA, dns.ClassINET, nil, true, true, authority)
+
+	// Query for AAAA at zone apex — not in type bitmap → NODATA
+	result := store.LookupNsecNeg("cernet.edu.cn.", dns.TypeAAAA)
+	if result == nil {
+		t.Fatal("NSEC zone apex should give NODATA for missing type: got nil")
+	}
+	if result.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected NODATA (RcodeSuccess), got rcode=%d", result.Rcode)
 	}
 }
 
