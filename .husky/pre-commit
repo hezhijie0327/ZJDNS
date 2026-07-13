@@ -1,0 +1,1 @@
+cd server/dashboard && pnpm exec lint-staged

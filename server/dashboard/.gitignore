@@ -1,0 +1,3 @@
+node_modules/
+templates/*
+!templates/.gitkeep

@@ -4,12 +4,13 @@ import "time"
 
 // Network ports and paths.
 const (
-	DefaultDNSPort   = "53"
-	DefaultDOTPort   = "853"
-	DefaultDOHPort   = "443"
-	DefaultPprofPort = "6060"
-	DefaultQueryPath = "/dns-query"
-	DefaultPprofPath = "/debug/pprof/"
+	DefaultDNSPort       = "53"
+	DefaultDOTPort       = "853"
+	DefaultDOHPort       = "443"
+	DefaultPprofPort     = "6060"
+	DefaultDashboardPort = "3000"
+	DefaultQueryPath     = "/dns-query"
+	DefaultPprofPath     = "/debug/pprof/"
 )
 
 // Cache sizing, TTL, and serve-stale parameters.

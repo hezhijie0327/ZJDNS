@@ -21,6 +21,7 @@ import (
 	"zjdns/internal/pool"
 	"zjdns/ruleset"
 	"zjdns/server/client"
+	"zjdns/server/dashboard"
 	serverdnscrypt "zjdns/server/dnscrypt"
 	"zjdns/server/handler"
 	"zjdns/server/probe"
@@ -41,6 +42,7 @@ type Server struct {
 	guard           *security.Guard
 	tls             *tls.Server
 	dnscryptServer  *serverdnscrypt.Server
+	dashboardServer *dashboard.Server
 	pprofServer     *http.Server
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
@@ -250,7 +252,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.dnscryptServer = dnscryptSrv
 	}
 
-	// ── Observability: probes + pprof ─────────────────────────────────────
+	// ── Observability: dashboard + probes + pprof ─────────────────────────
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
 		prober := probe.New(
@@ -260,6 +262,29 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 			cfg.Server.Features.LatencyProbe,
 		)
 		h.SetProber(prober)
+	}
+
+	if cfg.Server.Dashboard.Port != "" {
+		authCfg := dashboard.AuthConfig{
+			Username: cfg.Server.Dashboard.Username,
+			Password: cfg.Server.Dashboard.Password,
+		}
+
+		var dashTLS *dashboard.TLSConfig
+		if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
+			dashTLS = &dashboard.TLSConfig{
+				CertFile:   cfg.Server.TLS.CertFile,
+				KeyFile:    cfg.Server.TLS.KeyFile,
+				SelfSigned: cfg.Server.TLS.SelfSigned,
+			}
+		}
+
+		dashSrv, err := dashboard.New(db, cfg.Server.Dashboard.Port, authCfg, dashTLS)
+		if err != nil {
+			log.Warnf("DASHBOARD: skipping — %v", err)
+		} else {
+			server.dashboardServer = dashSrv
+		}
 	}
 
 	if cfg.Server.Pprof != "" {
@@ -329,6 +354,12 @@ func (s *Server) Start() error {
 			}
 			<-ctx.Done()
 			return nil
+		})
+	}
+
+	if s.dashboardServer != nil {
+		g.Go(func() error {
+			return s.dashboardServer.Start(ctx)
 		})
 	}
 

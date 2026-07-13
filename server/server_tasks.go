@@ -176,6 +176,14 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
+	if s.dashboardServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
+		defer cancel()
+		if err := s.dashboardServer.Shutdown(ctx); err != nil {
+			log.Errorf("DASHBOARD: shutdown failed: %v", err)
+		}
+	}
+
 	if s.pprofServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()

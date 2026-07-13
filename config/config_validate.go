@@ -212,6 +212,11 @@ func validatePorts(cfg *ServerConfig) error {
 			return err
 		}
 	}
+	if cfg.Server.Dashboard.Port != "" {
+		if err := validatePort("server.dashboard.port", cfg.Server.Dashboard.Port); err != nil {
+			return err
+		}
+	}
 	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
 		if err := validatePort("server.tls.port", cfg.Server.TLS.Port); err != nil {
 			return err
@@ -230,6 +235,13 @@ func validatePorts(cfg *ServerConfig) error {
 				cfg.Server.Pprof, first, cfg.Server.Pprof, cfg.Server.Pprof)
 		}
 		seen[cfg.Server.Pprof] = "server.pprof"
+	}
+	if cfg.Server.Dashboard.Port != "" {
+		if first, ok := seen[cfg.Server.Dashboard.Port]; ok {
+			return fmt.Errorf("port conflict: server.dashboard=%s and %s=%s both use port %s",
+				cfg.Server.Dashboard.Port, first, cfg.Server.Dashboard.Port, cfg.Server.Dashboard.Port)
+		}
+		seen[cfg.Server.Dashboard.Port] = "server.dashboard.port"
 	}
 	if cfg.Server.TLS.Port != "" {
 		if first, ok := seen[cfg.Server.TLS.Port]; ok {

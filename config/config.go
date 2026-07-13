@@ -23,14 +23,23 @@ type ServerConfig struct {
 	RuleSet  []RuleSet        `json:"ruleset"`
 }
 
+// DashboardSettings holds the web dashboard port and optional credentials.
+// When Username and Password are both empty, authentication is disabled.
+type DashboardSettings struct {
+	Port     string `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 // ServerSettings contains the server runtime settings and feature flags.
 type ServerSettings struct {
-	Port     string           `json:"port"`
-	Pprof    string           `json:"pprof"`
-	LogLevel string           `json:"log_level"`
-	TLS      TLSSettings      `json:"tls"`
-	DNSCrypt DNSCryptSettings `json:"dnscrypt"`
-	Features FeatureFlags     `json:"features"`
+	Port      string            `json:"port"`
+	Pprof     string            `json:"pprof"`
+	Dashboard DashboardSettings `json:"dashboard,omitzero"`
+	LogLevel  string            `json:"log_level"`
+	TLS       TLSSettings       `json:"tls"`
+	DNSCrypt  DNSCryptSettings  `json:"dnscrypt"`
+	Features  FeatureFlags      `json:"features"`
 }
 
 // DNSCryptSettings configures the DNSCrypt v2 encrypted DNS listener.
@@ -45,7 +54,7 @@ type DNSCryptSettings struct {
 	CertTTL      string `json:"cert_ttl,omitzero"` // "30d", "720h", "86400s", "86400"; empty defaults to 365 days
 }
 
-// TLSSettings configures TLS listener ports, certificates, and HTTPS settings.
+// TLSSettings configures TLS listeners.
 type TLSSettings struct {
 	Port       string        `json:"port"`
 	CertFile   string        `json:"cert_file"`

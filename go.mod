@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	codeberg.org/miekg/dns v0.6.84-0.20260707082657-ca97d3392f5f
 	github.com/cloudflare/circl v1.6.4
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/klauspost/compress v1.19.1-0.20260710073621-c0bbc84762b7
 	github.com/ncruces/go-sqlite3 v0.35.3-0.20260708233615-a627269d8f8a
 	github.com/quic-go/quic-go v0.60.1-0.20260711192402-3354ecf0bc6f
