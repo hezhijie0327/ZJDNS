@@ -10,8 +10,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/cloudflare/circl/dh/x25519"
 	"golang.org/x/crypto/chacha20"
-	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/poly1305" //nolint:staticcheck // SA1019: Required for custom XChaCha20-Poly1305 construction per DNSCrypt v2 spec
 )
 
@@ -33,26 +33,16 @@ var (
 )
 
 // xchachaSharedKey computes a shared secret using X25519 followed by HChaCha20.
-func xchachaSharedKey(
-	secretKey [curve25519.ScalarSize]byte,
-	publicKey [curve25519.PointSize]byte,
-) (sharedKey [xchachaKeySize]byte, err error) {
-	sk, err := curve25519.X25519(secretKey[:], publicKey[:])
-	if err != nil {
-		return sharedKey, fmt.Errorf("computing x25519: %w", err)
-	}
-
-	c := byte(0)
-	for i := range xchachaKeySize {
-		sharedKey[i] = sk[i]
-		c |= sk[i]
-	}
-	if c == 0 {
+func xchachaSharedKey(secretKey, publicKey [x25519.Size]byte) (sharedKey [xchachaKeySize]byte, err error) {
+	var shared x25519.Key
+	sk := x25519.Key(secretKey)
+	pk := x25519.Key(publicKey)
+	if !x25519.Shared(&shared, &sk, &pk) {
 		return sharedKey, errWeakPublicKey
 	}
 
 	var nonce [16]byte
-	hRes, err := chacha20.HChaCha20(sharedKey[:], nonce[:])
+	hRes, err := chacha20.HChaCha20(shared[:], nonce[:])
 	if err != nil {
 		return [xchachaKeySize]byte{}, fmt.Errorf("computing hchacha20: %w", err)
 	}

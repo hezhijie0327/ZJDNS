@@ -2,11 +2,12 @@ package dnscrypt
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"encoding"
 	"encoding/binary"
 	"fmt"
 	"time"
+
+	"github.com/cloudflare/circl/sign/ed25519"
 )
 
 // Certificate is a DNSCrypt server certificate containing the resolver's
@@ -22,7 +23,7 @@ type Certificate struct {
 
 	// Signature is a 64-byte Ed25519 signature over the signed portion of the
 	// certificate (resolver-pk || client-magic || serial || ts-start || ts-end).
-	Signature [ed25519.SignatureSize]byte
+	Signature [64]byte
 
 	// ResolverPk is the resolver's short-term X25519 public key (32 bytes).
 	// For PQ certificates this is zero-filled — the key material is in PqPublicKey.
@@ -167,7 +168,7 @@ func (c *Certificate) MarshalBinary() (serialized []byte, err error) {
 	copy(serialized[certMagicOff:certMagicOff+certMagicLen], CertMagic[:])
 	binary.BigEndian.PutUint16(serialized[certESVersionOff:certESVersionOff+2], uint16(c.ESVersion))
 	copy(serialized[certMinorOff:certMinorOff+2], []byte{0, 0})
-	copy(serialized[certSigOff:certSigOff+certSigLen], c.Signature[:ed25519.SignatureSize])
+	copy(serialized[certSigOff:certSigOff+certSigLen], c.Signature[:])
 	c.writeSigned(serialized[certSignedOff:])
 	return serialized, nil
 }
@@ -178,7 +179,7 @@ func (c *Certificate) marshalPQ() ([]byte, error) {
 	copy(serialized[certMagicOff:certMagicOff+certMagicLen], CertMagic[:])
 	binary.BigEndian.PutUint16(serialized[certESVersionOff:certESVersionOff+2], uint16(c.ESVersion))
 	copy(serialized[certMinorOff:certMinorOff+2], []byte{0, 0})
-	copy(serialized[certSigOff:certSigOff+certSigLen], c.Signature[:ed25519.SignatureSize])
+	copy(serialized[certSigOff:certSigOff+certSigLen], c.Signature[:])
 	c.writeSigned(serialized[certSignedOff:])
 	return serialized, nil
 }

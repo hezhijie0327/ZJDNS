@@ -1,7 +1,6 @@
 package dnscrypt
 
 import (
-	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,7 +12,8 @@ import (
 	"zjdns/config"
 	zstamp "zjdns/internal/stamp"
 
-	"golang.org/x/crypto/curve25519"
+	"github.com/cloudflare/circl/dh/x25519"
+	"github.com/cloudflare/circl/sign/ed25519"
 )
 
 // ResolverConfig holds the DNSCrypt resolver configuration including keys and
@@ -209,10 +209,11 @@ func HexDecodeKey(str string) ([]byte, error) {
 
 // generateRandomKeyPair generates a new X25519 keypair.
 func generateRandomKeyPair() (secretKey, publicKey [KeySize]byte) {
-	secretKey = [KeySize]byte{}
-	publicKey = [KeySize]byte{}
-	_, _ = rand.Read(secretKey[:])
-	curve25519.ScalarBaseMult(&publicKey, &secretKey)
+	var sk, pk x25519.Key
+	_, _ = rand.Read(sk[:])
+	x25519.KeyGen(&pk, &sk)
+	secretKey = [KeySize]byte(sk)
+	publicKey = [KeySize]byte(pk)
 	return secretKey, publicKey
 }
 

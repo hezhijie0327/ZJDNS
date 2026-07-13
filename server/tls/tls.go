@@ -5,7 +5,6 @@ package tls
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	stdtls "crypto/tls"
 	"crypto/x509"
@@ -21,6 +20,7 @@ import (
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
+	"github.com/cloudflare/circl/ecc/p384"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	eHTTP "gitlab.com/go-extension/http"
@@ -384,12 +384,12 @@ func (s *Server) displayCertificateInfo(cert *eTLS.Certificate) {
 }
 
 func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
-	caPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	caPrivKey, err := ecdsa.GenerateKey(p384.P384(), rand.Reader)
 	if err != nil {
 		return eTLS.Certificate{}, fmt.Errorf("generate CA EC key: %w", err)
 	}
 
-	serverPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	serverPrivKey, err := ecdsa.GenerateKey(p384.P384(), rand.Reader)
 	if err != nil {
 		return eTLS.Certificate{}, fmt.Errorf("generate server EC key: %w", err)
 	}
