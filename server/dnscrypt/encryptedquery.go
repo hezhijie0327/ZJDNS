@@ -120,10 +120,7 @@ func (q *encryptedQuery) encryptPQ(
 		if q.isTCP {
 			padded = padTCP(packet)
 		} else {
-			floor := pqMinPaddingResumed
-			if q.minQueryLen > floor {
-				floor = q.minQueryLen
-			}
+			floor := max(q.minQueryLen, pqMinPaddingResumed)
 			padded = pqPad(packet, floor)
 		}
 		ct := xchachaSeal(nil, clientNonce[:], padded, sharedKey[:])

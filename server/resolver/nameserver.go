@@ -36,10 +36,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	resultChan := make(chan *dns.Msg, 1)
 	g, queryCtx := errgroup.WithContext(queryCtx)
-	limit := len(nameservers)
-	if limit > config.DefaultMaxConcurrentNS {
-		limit = config.DefaultMaxConcurrentNS
-	}
+	limit := min(len(nameservers), config.DefaultMaxConcurrentNS)
 	g.SetLimit(limit)
 
 	var activeConnections atomic.Int32

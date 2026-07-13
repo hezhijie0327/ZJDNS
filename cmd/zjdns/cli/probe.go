@@ -173,7 +173,7 @@ func probePipeline(addr string) error {
 
 	// Generate random domain names so each query reaches the authoritative path.
 	domains := make([]string, probePipelineNumQueries)
-	for i := 0; i < probePipelineNumQueries; i++ {
+	for i := range probePipelineNumQueries {
 		var b [8]byte
 		_, _ = rand.Read(b[:])
 		domains[i] = fmt.Sprintf("www.%x.com.", b)
@@ -239,7 +239,7 @@ func probeConnReuse(addr string) error {
 
 	fmt.Printf("Probing %s for RFC 1035 connection reuse...\n\n", addr)
 
-	for i := 0; i < probeConnReuseNumQueries; i++ {
+	for i := range probeConnReuseNumQueries {
 		_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout))
 		q := newQuery("www.cloudflare.com.", uint16(i))
 		if err := writeDNSMsg(conn, q); err != nil {

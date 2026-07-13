@@ -68,7 +68,7 @@ func TestPendingProbes_ConcurrentSameKey(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			<-allSpawned
@@ -113,15 +113,13 @@ func TestPendingProbes_MultipleFollowers(t *testing.T) {
 	var rejected atomic.Int32
 
 	var wg sync.WaitGroup
-	for i := 0; i < numFollowers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numFollowers {
+		wg.Go(func() {
 			entered.Add(1)
 			if !pp.Start(key) {
 				rejected.Add(1)
 			}
-		}()
+		})
 	}
 
 	for entered.Load() < int32(numFollowers) || rejected.Load() < int32(numFollowers) {
@@ -233,7 +231,7 @@ func TestTryStartNSProbe_ConcurrentSameKey(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			<-allSpawned

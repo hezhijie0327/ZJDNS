@@ -18,7 +18,7 @@ import (
 type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
 	Upstream []UpstreamServer `json:"upstream"`
-	Fallback []UpstreamServer `json:"fallback,omitempty"`
+	Fallback []UpstreamServer `json:"fallback,omitzero"`
 	Zone     ZoneConfig       `json:"zone"`
 	RuleSet  []RuleSet        `json:"ruleset"`
 }
@@ -29,20 +29,20 @@ type ServerSettings struct {
 	Pprof    string           `json:"pprof"`
 	LogLevel string           `json:"log_level"`
 	TLS      TLSSettings      `json:"tls"`
-	DNSCrypt DNSCryptSettings `json:"dnscrypt,omitempty"`
+	DNSCrypt DNSCryptSettings `json:"dnscrypt"`
 	Features FeatureFlags     `json:"features"`
 }
 
 // DNSCryptSettings configures the DNSCrypt v2 encrypted DNS listener.
 type DNSCryptSettings struct {
-	Port         string `json:"port"`               // default "8443"
-	ProviderName string `json:"provider_name"`      // e.g. "2.dnscrypt-cert.example.com"
-	PrivateKey   string `json:"private_key"`        // Ed25519 private key (hex, optional)
-	PublicKey    string `json:"public_key"`         // Ed25519 public key (hex, optional)
-	ResolverSk   string `json:"resolver_sk"`        // X25519 secret or X-Wing seed (hex, optional; key type determined by es_version)
-	ResolverPk   string `json:"resolver_pk"`        // X25519 public or X-Wing public (hex, optional; key type determined by es_version)
-	ESVersion    string `json:"es_version"`         // "xwingpq" (default) or "xchacha20poly1305"
-	CertTTL      string `json:"cert_ttl,omitempty"` // "30d", "720h", "86400s", "86400"; empty defaults to 365 days
+	Port         string `json:"port"`              // default "8443"
+	ProviderName string `json:"provider_name"`     // e.g. "2.dnscrypt-cert.example.com"
+	PrivateKey   string `json:"private_key"`       // Ed25519 private key (hex, optional)
+	PublicKey    string `json:"public_key"`        // Ed25519 public key (hex, optional)
+	ResolverSk   string `json:"resolver_sk"`       // X25519 secret or X-Wing seed (hex, optional; key type determined by es_version)
+	ResolverPk   string `json:"resolver_pk"`       // X25519 public or X-Wing public (hex, optional; key type determined by es_version)
+	ESVersion    string `json:"es_version"`        // "xwingpq" (default) or "xchacha20poly1305"
+	CertTTL      string `json:"cert_ttl,omitzero"` // "30d", "720h", "86400s", "86400"; empty defaults to 365 days
 }
 
 // TLSSettings configures TLS listener ports, certificates, and HTTPS settings.
@@ -52,7 +52,7 @@ type TLSSettings struct {
 	KeyFile    string        `json:"key_file"`
 	SelfSigned bool          `json:"self_signed"`
 	HTTPS      HTTPSSettings `json:"https"`
-	KTLS       *KTLSSettings `json:"ktls,omitempty"`
+	KTLS       *KTLSSettings `json:"ktls,omitzero"`
 }
 
 // HTTPSSettings configures the HTTPS (DoH/DoH3) listener port and endpoint.
@@ -71,18 +71,18 @@ type KTLSSettings struct {
 // database, cache, latency probes, and stats.
 type FeatureFlags struct {
 	HijackProtection bool               `json:"hijack_protection"`
-	DNSSECEnforce    bool               `json:"dnssec_enforce,omitempty"`
-	DDR              DDRSettings        `json:"ddr,omitempty"`
-	ECS              ECSConfig          `json:"ecs_subnet,omitempty"`
-	Database         DatabaseSettings   `json:"database,omitempty"`
-	Cache            CacheSettings      `json:"cache,omitempty"`
-	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitempty"`
-	DNS64            *DNS64Config       `json:"dns64,omitempty"`
+	DNSSECEnforce    bool               `json:"dnssec_enforce,omitzero"`
+	DDR              DDRSettings        `json:"ddr"`
+	ECS              ECSConfig          `json:"ecs_subnet"`
+	Database         DatabaseSettings   `json:"database"`
+	Cache            CacheSettings      `json:"cache"`
+	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitzero"`
+	DNS64            *DNS64Config       `json:"dns64,omitzero"`
 }
 
 // DNS64Config holds settings for DNS64 (RFC 6147) AAAA synthesis.
 type DNS64Config struct {
-	Prefix string `json:"prefix,omitempty"` // e.g. "64:ff9b::/96", defaults to RFC 6052 well-known
+	Prefix string `json:"prefix,omitzero"` // e.g. "64:ff9b::/96", defaults to RFC 6052 well-known
 }
 
 // DDRSettings configures Discovery of Designated Resolvers (DDR) advertisement.
@@ -94,15 +94,15 @@ type DDRSettings struct {
 
 // DatabaseSettings configures the shared SQLite database backing cache and zone.
 type DatabaseSettings struct {
-	DBPath      string `json:"db_path,omitempty"`       // database file path
-	MMapSizeMB  int    `json:"mmap_size_mb,omitempty"`  // SQLite mmap_size PRAGMA
-	CacheSizeMB int    `json:"cache_size_mb,omitempty"` // SQLite cache_size PRAGMA
+	DBPath      string `json:"db_path,omitzero"`       // database file path
+	MMapSizeMB  int    `json:"mmap_size_mb,omitzero"`  // SQLite mmap_size PRAGMA
+	CacheSizeMB int    `json:"cache_size_mb,omitzero"` // SQLite cache_size PRAGMA
 }
 
 // CacheSettings configures DNS response cache size and stale serving.
 type CacheSettings struct {
-	MaxEntries  int  `json:"max_entries,omitempty"`
-	PreferStale bool `json:"prefer_stale,omitempty"`
+	MaxEntries  int  `json:"max_entries,omitzero"`
+	PreferStale bool `json:"prefer_stale,omitzero"`
 }
 
 // UpstreamServer defines a single upstream DNS server with address, protocol,
@@ -110,31 +110,31 @@ type CacheSettings struct {
 type UpstreamServer struct {
 	Address       string   `json:"address"`
 	Protocol      string   `json:"protocol"`
-	ServerName    string   `json:"server_name,omitempty"`
-	SkipTLSVerify bool     `json:"skip_tls_verify,omitempty"`
-	NoCache       bool     `json:"no_cache,omitempty"`
-	Match         []string `json:"match,omitempty"`
-	Proxy         string   `json:"proxy,omitempty"`      // socks5://[user:pass@]host:port
-	PublicKey     string   `json:"public_key,omitempty"` // DNSCrypt resolver public key (hex); provider name uses server_name
+	ServerName    string   `json:"server_name,omitzero"`
+	SkipTLSVerify bool     `json:"skip_tls_verify,omitzero"`
+	NoCache       bool     `json:"no_cache,omitzero"`
+	Match         []string `json:"match,omitzero"`
+	Proxy         string   `json:"proxy,omitzero"`      // socks5://[user:pass@]host:port
+	PublicKey     string   `json:"public_key,omitzero"` // DNSCrypt resolver public key (hex); provider name uses server_name
 }
 
 // ZoneConfig wraps zone rules and global zone settings.
 type ZoneConfig struct {
 	Rules      []ZoneRule `json:"rules"`
-	BypassTags []string   `json:"bypass_tags,omitempty"` // tags that skip all zone rules
+	BypassTags []string   `json:"bypass_tags,omitzero"` // tags that skip all zone rules
 }
 
 // ZoneRule defines a DNS zone rule for constructing synthetic responses.
 // Matches on (QNAME, QTYPE, QCLASS) and returns ANSWER + AUTHORITY +
 // ADDITIONAL + RCODE.  Client filtering uses CIDR match tags.
 type ZoneRule struct {
-	Name       string       `json:"name"`                 // domain or *.domain
-	File       string       `json:"file,omitempty"`       // CSV import path
-	Match      []string     `json:"match,omitempty"`      // CIDR tags (mirrors UpstreamServer.Match)
-	Rcode      int          `json:"rcode,omitempty"`      // response code (0 = NOERROR)
-	Answer     []ZoneRecord `json:"answer,omitempty"`     // ANSWER section RRs
-	Authority  []ZoneRecord `json:"authority,omitempty"`  // AUTHORITY section RRs
-	Additional []ZoneRecord `json:"additional,omitempty"` // ADDITIONAL section RRs
+	Name       string       `json:"name"`                // domain or *.domain
+	File       string       `json:"file,omitzero"`       // CSV import path
+	Match      []string     `json:"match,omitzero"`      // CIDR tags (mirrors UpstreamServer.Match)
+	Rcode      int          `json:"rcode,omitzero"`      // response code (0 = NOERROR)
+	Answer     []ZoneRecord `json:"answer,omitzero"`     // ANSWER section RRs
+	Authority  []ZoneRecord `json:"authority,omitzero"`  // AUTHORITY section RRs
+	Additional []ZoneRecord `json:"additional,omitzero"` // ADDITIONAL section RRs
 
 	NormalizedName   string          `json:"-"`
 	CachedAnswer     []dns.RR        `json:"-"`
@@ -147,10 +147,10 @@ type ZoneRule struct {
 // Type and Class are numeric (IANA-registered values), enabling zero-allocation
 // lookup and forward compatibility with new DNS types.
 type ZoneRecord struct {
-	Name    string `json:"name,omitempty"`
-	Type    uint16 `json:"type"`            // dns.TypeA=1, dns.TypeAAAA=28, ...
-	Class   uint16 `json:"class,omitempty"` // default dns.ClassINET=1
-	TTL     uint32 `json:"ttl,omitempty"`
+	Name    string `json:"name,omitzero"`
+	Type    uint16 `json:"type"`           // dns.TypeA=1, dns.TypeAAAA=28, ...
+	Class   uint16 `json:"class,omitzero"` // default dns.ClassINET=1
+	TTL     uint32 `json:"ttl,omitzero"`
 	Content string `json:"content"`
 }
 
@@ -158,17 +158,17 @@ type ZoneRecord struct {
 // query domain (suffix), or both. Files contain one entry per line (# comments).
 type RuleSet struct {
 	Tag  string   `json:"tag"`
-	Type string   `json:"type"`           // "ip" or "domain"
-	Rule []string `json:"rule,omitempty"` // inline entries
-	File string   `json:"file,omitempty"` // file with one entry per line
+	Type string   `json:"type"`          // "ip" or "domain"
+	Rule []string `json:"rule,omitzero"` // inline entries
+	File string   `json:"file,omitzero"` // file with one entry per line
 }
 
 // LatencyProbeStep defines a single latency probe step with protocol, port,
 // and timeout.
 type LatencyProbeStep struct {
 	Protocol string `json:"protocol"`
-	Port     int    `json:"port,omitempty"`
-	Timeout  int    `json:"timeout,omitempty"`
+	Port     int    `json:"port,omitzero"`
+	Timeout  int    `json:"timeout,omitzero"`
 }
 
 // IsEnabled reports whether DNSCrypt is configured.  An empty DNSCryptSettings

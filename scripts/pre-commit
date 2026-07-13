@@ -8,16 +8,17 @@
 
 set -e
 
-echo "==> golangci-lint fmt..."
-
 # Remember which files were already staged (C=copy, A=add, M=modified).
 staged=$(git diff --cached --name-only --diff-filter=ACM)
 
+echo "==> go fix..."
+go fix ./...
+
+echo "==> golangci-lint fmt..."
 golangci-lint fmt ./...
 
-# Re-stage only files that were in the original staged set AND were
-# modified by golangci-lint fmt. Unstaged files touched by fmt are
-# left in the working tree — the user can review and add them separately.
+# Re-stage staged files modified by go fix or golangci-lint fmt.
+# Unstaged files touched by either stay in the working tree for review.
 if [ -n "$staged" ]; then
 	for f in $staged; do
 		if [ -f "$f" ] && ! git diff --quiet -- "$f"; then

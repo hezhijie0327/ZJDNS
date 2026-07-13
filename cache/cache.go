@@ -111,11 +111,8 @@ func processRR(rr dns.RR, value int64, isElapsed, includeDNSSEC bool) dns.RR {
 		return nil
 	}
 	if isElapsed {
-		remaining := int64(newRR.Header().TTL) - value
-		if remaining < 0 {
-			remaining = 0
-		}
-		newRR.Header().TTL = uint32(remaining)
+		remaining := max(int64(newRR.Header().TTL)-value, 0)
+		newRR.Header().TTL = uint32(remaining) //nolint:gosec // G115: DNS TTL subtraction — protocol-bounded uint32
 	} else if value > 0 {
 		newRR.Header().TTL = uint32(value) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 	}

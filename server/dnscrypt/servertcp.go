@@ -48,8 +48,6 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 	s.wg.Add(1)
 	defer s.wg.Done()
 
-	log.Infof("DNSCRYPT: entering TCP listening loop on %s", listener.Addr())
-
 	for s.isStarted() {
 		select {
 		case <-ctx.Done():
@@ -74,9 +72,7 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 		s.tcpConns[conn] = struct{}{}
 		s.mu.Unlock()
 
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			defer zdnsutil.HandlePanic("DNSCrypt TCP handler")
 			defer func() {
 				_ = conn.Close()
@@ -85,7 +81,7 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 				s.mu.Unlock()
 			}()
 			s.handleTCPConnection(ctx, conn)
-		}()
+		})
 	}
 }
 

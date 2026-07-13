@@ -185,7 +185,7 @@ func TestDNSCryptMultiQuery(t *testing.T) {
 	c := New()
 	server := &config.UpstreamServer{Address: stamp, Protocol: config.ProtoDNSCrypt}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		resp, err := c.executeDNSCrypt(ctx, newQuery("example.com."), server, false)
 		cancel()

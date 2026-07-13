@@ -308,10 +308,7 @@ func (s *Server) buildCertTXT() []string {
 	const maxChunk = 255
 	var chunks []string
 	for i := 0; i < len(escaped); i += maxChunk {
-		end := i + maxChunk
-		if end > len(escaped) {
-			end = len(escaped)
-		}
+		end := min(i+maxChunk, len(escaped))
 		chunks = append(chunks, string(escaped[i:end]))
 	}
 	return chunks

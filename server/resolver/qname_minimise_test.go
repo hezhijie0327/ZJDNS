@@ -93,7 +93,7 @@ func TestMinimiseQNAME_DeepDomain(t *testing.T) {
 
 func TestLabelsToAdd_EarlySteps(t *testing.T) {
 	// First MINIMISE_ONE_LAB steps should each add 1 label
-	for s := 0; s < config.DefaultMinimiseOneLabel; s++ {
+	for s := range config.DefaultMinimiseOneLabel {
 		got := labelsToAdd("a.b.c.example.com.", ".", s,
 			config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
 		if got != 1 {

@@ -17,11 +17,7 @@ import (
 // minLen must be a multiple of 64 (caller's responsibility).
 func pad(packet []byte, minLen int) (padded []byte) {
 	// Closest multiple of 64 >= (len(packet) + 1).
-	minSize := len(packet) + 1 + (64-(len(packet)+1)%64)%64
-
-	if minLen > minSize {
-		minSize = minLen
-	}
+	minSize := max(minLen, len(packet)+1+(64-(len(packet)+1)%64)%64)
 
 	packet = append(packet, 0x80)
 	for len(packet) < minSize {

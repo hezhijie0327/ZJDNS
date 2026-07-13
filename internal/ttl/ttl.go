@@ -28,11 +28,8 @@ func RemainingTTL(timestamp int64, ttlSeconds int, staleTTL uint32) uint32 {
 	}
 	// Cyclical stale countdown: staleTTL - (timeSinceExpiry % staleTTL).
 	timeSinceExpiry := -remaining
-	cycleRemaining := int64(staleTTL) - (timeSinceExpiry % int64(staleTTL))
-	if cycleRemaining < 1 {
-		cycleRemaining = 1
-	}
-	return uint32(cycleRemaining)
+	cycleRemaining := max(int64(staleTTL)-(timeSinceExpiry%int64(staleTTL)), 1)
+	return uint32(cycleRemaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 }
 
 // CanServeExpired reports whether the expired entry is within the maxAge

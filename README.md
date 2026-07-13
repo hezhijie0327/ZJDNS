@@ -9,12 +9,12 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.2.24-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.2.25-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
-高性能递归 DNS 服务器，支持 SQLite 缓存、DNSSEC、DNSCrypt/DoT/DoQ/DoH/DoH3 全协议、DNSCrypt 后量子密码学 (X-Wing KEM) 及 KTLS 内核卸载。
+高性能递归 DNS 服务器，内置 DNS 劫持/投毒防护、SQLite 缓存、DNSSEC、全协议加密传输 (DNSCrypt/DoT/DoQ/DoH/DoH3)、DNSCrypt 后量子密码学 (X-Wing KEM) 及 KTLS 内核卸载。
 
 ## 快速开始
 
@@ -425,18 +425,20 @@ GROUP BY hc.protocol, hc.rcode ORDER BY hits DESC;
 
 | 库 | 用途 |
 |---|------|
-| [miekg/dns](https://codeberg.org/miekg/dns) | dnsv2, DNS 协议编解码、UDP/TCP 传输 |
+| [miekg/dns](https://codeberg.org/miekg/dns) | DNSv2、DNS 协议编解码、UDP/TCP 传输 |
 | [quic-go/quic-go](https://github.com/quic-go/quic-go) | QUIC 传输层（DoQ / DoH3） |
 | [go-extension/http](https://gitlab.com/go-extension/http) | DoH 客户端/服务端（`net/http` 替代，原生 eTLS + KTLS） |
 | [go-extension/tls](https://gitlab.com/go-extension/tls) | eTLS（`crypto/tls` 替代，KTLS 内核卸载） |
-| [ncruces/go-sqlite3](https://github.com/ncruces/go-sqlite3) | 纯 Go SQLite（WASM 编译，无 CGo） |
-| [klauspost/compress](https://github.com/klauspost/compress) | zstd 压缩（DNS 响应 wire format） |
-| [cloudflare/circl](https://github.com/cloudflare/circl) | 后量子密码学（X-Wing KEM，DNSCrypt PQC） |
+| [ncruces/go-sqlite3](https://github.com/ncruces/go-sqlite3) | 纯 Go SQLite（WASM 编译，无 CGo，统一数据库引擎） |
+| [klauspost/compress](https://github.com/klauspost/compress) | zstd 压缩（缓存响应 + Zone 记录 wire format） |
+| [golang.org/x/crypto](https://pkg.go.dev/golang.org/x/crypto) | ChaCha20-Poly1305 AEAD、HKDF 密钥派生（DNSCrypt 自定义构造） |
+| [golang.org/x/sync](https://pkg.go.dev/golang.org/x/sync) | errgroup 并发编排（服务器 goroutine 生命周期管理） |
+| [cloudflare/circl](https://github.com/cloudflare/circl) | Ed25519 签名、X25519 密钥交换、P-384 椭圆曲线（常时运算，低阶点验证）、后量子 X-Wing KEM（DNSCrypt PQC） |
 
 ## 开发
 
 ```bash
-golangci-lint run && golangci-lint fmt   # 零警告，gofumpt 格式化
+go fix ./... && golangci-lint run && golangci-lint fmt  # 零警告，gofumpt 格式化
 sh scripts/bump-version.sh patch "description"  # 版本升级 + 迁移 SQL
 sh scripts/bump-version.sh patch "desc" --no-migration  # 纯代码升级
 go test ./... -short
