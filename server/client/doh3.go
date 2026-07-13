@@ -79,7 +79,7 @@ func (c *Client) executeDOH3(ctx context.Context, msg *dns.Msg, server *config.U
 	// This handles the case where the server closed the idle connection AND
 	// rejects 0-RTT, requiring a fresh full handshake.
 	if isCached {
-		for i := 0; i < config.DefaultSecureTransportRetries; i++ {
+		for range config.DefaultSecureTransportRetries {
 			if !isQUICRetryable(err) {
 				break
 			}

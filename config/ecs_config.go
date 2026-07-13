@@ -25,7 +25,7 @@ type ECSConfig struct {
 	IPv4          string
 	IPv6          string
 	PreferIPv4    bool
-	AutoDetectURL string `json:"auto_detect_url,omitempty"` // optional custom URL for auto-detection
+	AutoDetectURL string `json:"auto_detect_url,omitzero"` // optional custom URL for auto-detection
 }
 
 // ECSModeAuto is the sentinel value for auto-detection of ECS subnets.
@@ -138,10 +138,10 @@ func (c *ECSConfig) UnmarshalJSON(data []byte) error {
 // MarshalJSON implements json.Marshaler for ECSConfig.
 func (c ECSConfig) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		IPv4          string `json:"ipv4,omitempty"`
-		IPv6          string `json:"ipv6,omitempty"`
-		PreferIPv4    bool   `json:"prefer_ipv4,omitempty"`
-		AutoDetectURL string `json:"auto_detect_url,omitempty"`
+		IPv4          string `json:"ipv4,omitzero"`
+		IPv6          string `json:"ipv6,omitzero"`
+		PreferIPv4    bool   `json:"prefer_ipv4,omitzero"`
+		AutoDetectURL string `json:"auto_detect_url,omitzero"`
 	}{
 		IPv4:          c.IPv4,
 		IPv6:          c.IPv6,

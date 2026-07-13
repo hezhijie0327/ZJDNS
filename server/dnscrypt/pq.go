@@ -172,10 +172,7 @@ func pqPad(packet []byte, floor int) []byte {
 	padded := make([]byte, len(packet), len(packet)+64)
 	copy(padded, packet)
 	padded = append(padded, 0x80)
-	target := (len(padded) + 63) &^ 63
-	if target < floor {
-		target = floor
-	}
+	target := max((len(padded)+63)&^63, floor)
 	for len(padded) < target {
 		padded = append(padded, 0)
 	}

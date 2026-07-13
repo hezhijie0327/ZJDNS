@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 8. User instructions always override this file.
 9. Commit incrementally — every batch of related changes should be committed
    with a descriptive message. Present changes for review before committing.
-10. Run `golangci-lint run && golangci-lint fmt` before committing. Zero warnings required.
+10. Run `go fix ./... && golangci-lint run && golangci-lint fmt` before committing. Zero warnings required.
     - No global linter excludes — all suppressions are inline `//nolint:NAME // reason`
     - Declaration order enforced by `decorder`: `type → const → var → func` in every file
     - Every nolint comment must include the linter name and a concrete reason
@@ -81,7 +81,7 @@ go test -bench=. -short ./...
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s .
 
 # Lint (pre-commit hook runs this automatically)
-golangci-lint run && golangci-lint fmt
+go fix ./... && golangci-lint run && golangci-lint fmt
 
 # Docker
 docker build -t zjdns .
@@ -101,7 +101,7 @@ docker build -t zjdns .
 ./zjdns --probe --conn-reuse  tls://1.1.1.1   # Test RFC 1035 connection reuse
 ./zjdns --probe --idle-timeout dot://1.1.1.1  # Measure server idle timeout
 
-# Install pre-commit hook (auto fmt + lint on commit)
+# Install pre-commit hook (auto fix + fmt + lint on commit)
 sh scripts/install-hook.sh                 # Linux / macOS
 pwsh scripts/install-hook.ps1              # Windows PowerShell
 

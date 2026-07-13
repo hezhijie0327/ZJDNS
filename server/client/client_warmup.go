@@ -113,14 +113,12 @@ func (c *Client) WarmUpConnections(servers []config.UpstreamServer) {
 			continue
 		}
 		s := server
-		c.warmWg.Add(1)
-		go func() {
-			defer c.warmWg.Done()
+		c.warmWg.Go(func() {
 			defer zdnsutil.HandlePanic("connection pre-warm")
 			warmCtx, cancel := context.WithTimeout(context.Background(), c.timeout)
 			defer cancel()
 			c.warmUpConnection(warmCtx, &s, protocol)
-		}()
+		})
 	}
 }
 

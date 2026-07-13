@@ -56,8 +56,6 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 	s.wg.Add(1)
 	defer s.wg.Done()
 
-	log.Infof("DNSCRYPT: entering UDP listening loop on %s", udpConn.LocalAddr())
-
 	buf := make([]byte, dns.MaxMsgSize)
 
 	for s.isStarted() {
@@ -88,12 +86,10 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 		packet := make([]byte, n)
 		copy(packet, buf[:n])
 
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			defer zdnsutil.HandlePanic("DNSCrypt UDP handler")
 			s.handleUDPPacket(ctx, packet, addr, udpConn)
-		}()
+		})
 	}
 }
 

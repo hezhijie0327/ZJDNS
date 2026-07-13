@@ -34,10 +34,10 @@ type ConfigBlock struct {
 	ProviderName string `json:"provider_name"`
 	PublicKey    string `json:"public_key"`
 	PrivateKey   string `json:"private_key"`
-	ResolverSk   string `json:"resolver_sk,omitempty"`
-	ResolverPk   string `json:"resolver_pk,omitempty"`
+	ResolverSk   string `json:"resolver_sk,omitzero"`
+	ResolverPk   string `json:"resolver_pk,omitzero"`
 	ESVersion    string `json:"es_version"`
-	CertTTL      string `json:"cert_ttl,omitempty"`
+	CertTTL      string `json:"cert_ttl,omitzero"`
 }
 
 // FullConfig is a complete ZJDNS configuration including both server-side

@@ -132,7 +132,7 @@ func TestResolveBindAddrs_Format(t *testing.T) {
 }
 
 func TestTryBind_RandomPort(t *testing.T) {
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		err := TryBind("tcp", ":0")
 		if err != nil {
 			t.Fatalf("TryBind :0 iteration %d: %v", i, err)

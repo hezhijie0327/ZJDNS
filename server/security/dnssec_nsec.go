@@ -5,6 +5,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"zjdns/config"
 
@@ -60,12 +61,7 @@ func matchesNSECDenial(nsec *dns.NSEC, normalizedQname string, qtype uint16, den
 		if owner != normalizedQname {
 			return false
 		}
-		for _, t := range nsec.TypeBitMap {
-			if t == qtype {
-				return false
-			}
-		}
-		return true
+		return !slices.Contains(nsec.TypeBitMap, qtype)
 	}
 	return false
 }
@@ -119,12 +115,7 @@ func matchesNSEC3Denial(nsec3 *dns.NSEC3, hashedQname string, qtype uint16, deni
 		if owner != hashedQname {
 			return false
 		}
-		for _, t := range nsec3.TypeBitMap {
-			if t == qtype {
-				return false
-			}
-		}
-		return true
+		return !slices.Contains(nsec3.TypeBitMap, qtype)
 	}
 	return false
 }

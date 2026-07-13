@@ -38,10 +38,9 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 		return
 	}
 
-	entryID := r.EntryID
-	if entryID <= 0 {
-		entryID = 0 // sentinel for "no cache entry" → stored as 0 (NULL in DB)
-	}
+	entryID := max(r.EntryID,
+		// sentinel for "no cache entry" → stored as 0 (NULL in DB)
+		0)
 	_, _ = s.db.StmtInsertLog.Exec(
 		log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass), entryID,
 		r.Protocol, r.Result, r.ResponseTime, r.Rcode, r.Server,

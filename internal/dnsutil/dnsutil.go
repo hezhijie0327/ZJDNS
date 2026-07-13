@@ -100,8 +100,8 @@ func ParseReverseDNSName(name string) net.IP {
 	fqdn := strings.TrimSuffix(dnsutil.Fqdn(name), ".")
 	lower := strings.ToLower(fqdn)
 
-	if strings.HasSuffix(lower, ".in-addr.arpa") {
-		octets := strings.Split(strings.TrimSuffix(strings.TrimSuffix(lower, ".in-addr.arpa"), "."), ".")
+	if before, ok := strings.CutSuffix(lower, ".in-addr.arpa"); ok {
+		octets := strings.Split(strings.TrimSuffix(before, "."), ".")
 		if len(octets) != 4 {
 			return nil
 		}
@@ -111,8 +111,8 @@ func ParseReverseDNSName(name string) net.IP {
 		return net.ParseIP(strings.Join(octets, "."))
 	}
 
-	if strings.HasSuffix(lower, ".ip6.arpa") {
-		nibbles := strings.Split(strings.TrimSuffix(strings.TrimSuffix(lower, ".ip6.arpa"), "."), ".")
+	if before, ok := strings.CutSuffix(lower, ".ip6.arpa"); ok {
+		nibbles := strings.Split(strings.TrimSuffix(before, "."), ".")
 		if len(nibbles) != 32 {
 			return nil
 		}

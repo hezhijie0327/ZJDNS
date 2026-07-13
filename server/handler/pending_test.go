@@ -31,9 +31,7 @@ func TestPendingRequests_LeaderAndFollower(t *testing.T) {
 	followerJoined := make(chan struct{})
 	var followerResult *resolver.QueryResult
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		// Signal that we're about to call Join.  The leader waits
 		// for this before Done() so the follower definitely finds
 		// the pending key.
@@ -43,7 +41,7 @@ func TestPendingRequests_LeaderAndFollower(t *testing.T) {
 			t.Error("expected follower (follower=true)")
 		}
 		followerResult = r
-	}()
+	})
 
 	<-followerJoined // follower goroutine is about to call Join()
 	time.Sleep(time.Millisecond)
@@ -78,17 +76,15 @@ func TestPendingRequests_MultipleFollowers(t *testing.T) {
 	var received atomic.Int32
 	var entered atomic.Int32
 
-	for i := 0; i < numFollowers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numFollowers {
+		wg.Go(func() {
 			entered.Add(1) // about to block in Join()
 			_, f := pr.Join(qname, qtype, qclass, nil, false)
 			if !f {
 				t.Error("expected follower")
 			}
 			received.Add(1)
-		}()
+		})
 	}
 
 	// Ensure all followers get a chance to enter Join() before Done().
@@ -181,7 +177,7 @@ func TestPendingRequests_ConcurrentSameKey(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			<-allSpawned
@@ -232,14 +228,12 @@ func TestPendingRequests_NilECSAndZeroECSAreSameKey(t *testing.T) {
 
 	// Follower runs in a goroutine because it blocks until Done().
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, f := pr.Join("example.com.", dns.TypeA, qclass, zeroECS, false)
 		if !f {
 			t.Error("expected follower for zero-value ECS (same key as nil ECS)")
 		}
-	}()
+	})
 
 	time.Sleep(time.Millisecond)
 	pr.Done("example.com.", dns.TypeA, qclass, nilECS, false, &resolver.QueryResult{Server: "done"})
@@ -327,7 +321,7 @@ func TestPendingRefreshes_ConcurrentSameKey(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			<-allSpawned
@@ -372,15 +366,13 @@ func TestPendingRefreshes_MultipleFollowers(t *testing.T) {
 	var rejected atomic.Int32
 
 	var wg sync.WaitGroup
-	for i := 0; i < numFollowers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numFollowers {
+		wg.Go(func() {
 			entered.Add(1)
 			if !pr.Start(key) {
 				rejected.Add(1)
 			}
-		}()
+		})
 	}
 
 	for entered.Load() < int32(numFollowers) || rejected.Load() < int32(numFollowers) {
