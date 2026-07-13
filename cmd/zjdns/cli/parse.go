@@ -4,6 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
+
+	"codeberg.org/miekg/dns"
 )
 
 // ParseFlags parses command-line arguments and handles special commands.
@@ -46,6 +49,14 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		probePipeline  bool
 		probeConnReuse bool
 		probeIdleTO    bool
+
+		// DNS lookup
+		runDNSLookup      bool
+		dnsLookupType     string
+		dnsLookupClass    string
+		dnsLookupInsecure bool
+		dnsLookupJSON     bool
+		dnsLookupDNSSEC   bool
 	)
 
 	fs := flag.NewFlagSet(osArgs[0], flag.ContinueOnError)
@@ -77,6 +88,18 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.BoolVar(&probeConnReuse, "conn-reuse", false, "Test RFC 1035 connection reuse (with --probe)")
 	fs.BoolVar(&probeIdleTO, "idle-timeout", false, "Measure server idle timeout (with --probe)")
 
+	// DNS lookup
+	fs.BoolVar(&runDNSLookup, "dnslookup", false, "DNS lookup tool (like dig, supports all protocols)")
+	fs.StringVar(&dnsLookupType, "type", "A", "Query type for --dnslookup (A, AAAA, TXT, MX, ...)")
+	fs.StringVar(&dnsLookupType, "t", "A", "Query type for --dnslookup (short)")
+	fs.StringVar(&dnsLookupClass, "class", "IN", "Query class for --dnslookup")
+	fs.StringVar(&dnsLookupClass, "c", "IN", "Query class for --dnslookup (short)")
+	fs.BoolVar(&dnsLookupInsecure, "insecure", false, "Skip TLS certificate verification for --dnslookup")
+	fs.BoolVar(&dnsLookupInsecure, "k", false, "Skip TLS certificate verification for --dnslookup (short)")
+	fs.BoolVar(&dnsLookupJSON, "json", false, "JSON output for --dnslookup")
+	fs.BoolVar(&dnsLookupJSON, "j", false, "JSON output for --dnslookup (short)")
+	fs.BoolVar(&dnsLookupDNSSEC, "dnssec", false, "Set DNSSEC OK bit for --dnslookup")
+
 	// DNS stamp encode
 	fs.StringVar(&stampProto, "proto", "", "Stamp protocol: plain, dnscrypt, doh, dot, doq, odoh-target, dnscrypt-relay, odoh-relay")
 	fs.StringVar(&stampAddr, "stamp-addr", "", "Server address for stamp encode (host:port)")
@@ -102,6 +125,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "  %s --probe --pipeline    tcp://host:port  # Test RFC 7766 query pipelining\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --conn-reuse  tcp://host:port  # Test RFC 1035 connection reuse\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --idle-timeout tcp://host:port  # Measure server idle timeout\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --dnslookup [flags] <domain> <server>  # DNS lookup (dig-like)\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "\n")
 	}
 
@@ -162,6 +186,34 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		}
 		if err := runProbe(probeType, args[0]); err != nil {
 			fmt.Fprintf(os.Stderr, "probe: %v\n", err)
+		}
+		return "", true
+	}
+
+	// --dnslookup
+	if runDNSLookup {
+		args := fs.Args()
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "Usage: %s --dnslookup [flags] <domain> <server>\n", fs.Name())
+			fmt.Fprintf(os.Stderr, "  Server supports URL schemes: (plain), tcp://, tls://, quic://, https://, h3://, sdns://\n")
+			return "", true
+		}
+		domain := args[0]
+		serverURL := args[1]
+
+		qtype := dns.StringToType[strings.ToUpper(dnsLookupType)]
+		if qtype == 0 {
+			fmt.Fprintf(os.Stderr, "dnslookup: unknown query type %q\n", dnsLookupType)
+			return "", true
+		}
+		qclass := dns.StringToClass[strings.ToUpper(dnsLookupClass)]
+		if qclass == 0 {
+			fmt.Fprintf(os.Stderr, "dnslookup: unknown query class %q\n", dnsLookupClass)
+			return "", true
+		}
+
+		if err := execDNSLookup(serverURL, domain, qtype, qclass, dnsLookupInsecure, dnsLookupDNSSEC, dnsLookupJSON); err != nil {
+			fmt.Fprintf(os.Stderr, "dnslookup: %v\n", err)
 		}
 		return "", true
 	}
