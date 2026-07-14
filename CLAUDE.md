@@ -723,29 +723,38 @@ Normal domains should show `tcp=false` throughout; blocked domains should show h
 
 ### TLCP (国密) Test
 
-DNSPod's `sm2.doh.pub` certificate (`*.doh.pub`, signed by DNSPod TLS SM2 CA G2 → TrustAsia Global SM2 Root CA G2) expired 2024-06-06 — requires `skip_tls_verify: true`.
+**External upstream** (DNSPod cert expired 2024-06-06, requires `skip_tls_verify`):
 
 ```json
 {
-  "server": {
-    "port": "53535",
-    "log_level": "debug:UPSTREAM",
-    "features": { "hijack_protection": false, "cache": { "max_entries": 0 } }
-  },
+  "server": { "port": "53535", "features": { "hijack_protection": false, "cache": { "max_entries": 0 } } },
   "upstream": [
-    {
-      "address": "https://sm2.doh.pub/dns-query",
-      "protocol": "doh-tlcp",
-      "server_name": "sm2.doh.pub",
-      "skip_tls_verify": true
-    }
+    { "address": "https://sm2.doh.pub/dns-query", "protocol": "doh-tlcp", "server_name": "sm2.doh.pub", "skip_tls_verify": true }
   ]
 }
 ```
 
+**Self-hosted TLCP server** (self-signed SM2 certs, DoT + DoH):
+
+```json
+{
+  "server": {
+    "port": "55353",
+    "tlcp": { "port": "8530", "self_signed": true, "https": { "port": "4430", "endpoint": "/dns-query" } },
+    "features": { "hijack_protection": false, "cache": { "max_entries": 0 } }
+  },
+  "upstream": [ { "address": "builtin_recursive" } ]
+}
+```
+
+**ZJDNS ↔ ZJDNS TLCP loopback test:**
+
 ```bash
-dig @127.0.0.1 -p 53535 www.baidu.com A +short
-# Should return: www.a.shifen.com. / 180.101.49.44 / 180.101.51.73
+# Server (TLCP DoT + DoH on 8530/4430)
+./zjdns -config tlcp_srv.json &
+# Client → TLCP DoH to server
+./zjdns -config <(echo '{"server":{"port":"55454"},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"doh-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
+dig @127.0.0.1 -p 55454 www.baidu.com A +short
 ```
 
 ## KTLS Tuning

@@ -25,12 +25,13 @@ type ServerConfig struct {
 
 // ServerSettings contains the server runtime settings and feature flags.
 type ServerSettings struct {
-	Port     string           `json:"port"`
-	Pprof    string           `json:"pprof"`
-	LogLevel string           `json:"log_level"`
-	TLS      TLSSettings      `json:"tls"`
-	DNSCrypt DNSCryptSettings `json:"dnscrypt"`
-	Features FeatureFlags     `json:"features"`
+	Port     string               `json:"port"`
+	Pprof    string               `json:"pprof"`
+	LogLevel string               `json:"log_level"`
+	TLS      TLSSettings          `json:"tls"`
+	DNSCrypt DNSCryptSettings     `json:"dnscrypt"`
+	TLCP     TLCPListenerSettings `json:"tlcp"`
+	Features FeatureFlags         `json:"features"`
 }
 
 // DNSCryptSettings configures the DNSCrypt v2 encrypted DNS listener.
@@ -62,6 +63,19 @@ type HTTPSSettings struct {
 type KTLSSettings struct {
 	KernelTX bool `json:"kernel_tx"` // kernel TLS TX offload (default false)
 	KernelRX bool `json:"kernel_rx"` // kernel TLS RX offload (default false)
+}
+
+// TLCPListenerSettings configures the TLCP (国密 SSL, GB/T 38636-2020) server
+// listener.  TLCP requires two SM2 certificate pairs — one for signing and one
+// for key exchange.  When SelfSigned is true, both pairs are auto-generated.
+type TLCPListenerSettings struct {
+	Port         string        `json:"port"`                    // TLCP DoT port
+	SignCertFile string        `json:"sign_cert_file,omitzero"` // SM2 signing certificate
+	SignKeyFile  string        `json:"sign_key_file,omitzero"`  // SM2 signing private key
+	EncCertFile  string        `json:"enc_cert_file,omitzero"`  // SM2 encryption certificate
+	EncKeyFile   string        `json:"enc_key_file,omitzero"`   // SM2 encryption private key
+	SelfSigned   bool          `json:"self_signed,omitzero"`    // auto-generate SM2 certs
+	HTTPS        HTTPSSettings `json:"https,omitzero"`          // TLCP DoH port + endpoint
 }
 
 // FeatureFlags enables optional features: hijack protection, DDR, ECS,
@@ -172,6 +186,11 @@ type LatencyProbeStep struct {
 // block means DNSCrypt is disabled.
 func (d *DNSCryptSettings) IsEnabled() bool {
 	return d.ProviderName != "" || d.PublicKey != "" || d.PrivateKey != ""
+}
+
+// IsEnabled reports whether the TLCP listener is configured.
+func (t *TLCPListenerSettings) IsEnabled() bool {
+	return t.SelfSigned || (t.SignCertFile != "" && t.SignKeyFile != "" && t.EncCertFile != "" && t.EncKeyFile != "")
 }
 
 // IsRecursive reports whether the upstream server is the built-in recursive

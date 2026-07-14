@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.3.0-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.3.1-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -175,28 +175,41 @@ modprobe tls
 
 ### 国密 TLCP
 
-基于 `Trisia/gotlcp` (纯 Go 实现，GB/T 38636-2020) 支持通过 TLCP 连接国密 DNS 上游服务器。新增 `tlcp`（DoT）和 `doh-tlcp`（DoH）两种协议。
+基于 `Trisia/gotlcp` (纯 Go 实现，GB/T 38636-2020) 支持 TLCP 传输层加密。客户端支持 `tlcp`（DoT）和 `doh-tlcp`（DoH）两种上游协议；服务端支持独立 TLCP 监听器，同时提供 DoT 和 DoH 服务。
 
 > **注意**：DNSPod 的 `sm2.doh.pub` 证书（`*.doh.pub`，签发链：DNSPod TLS SM2 CA G2 → TrustAsia Global SM2 Root CA G2）已于 **2024-06-06** 过期，测试时需 `skip_tls_verify: true`。
+
+**服务端配置**（独立于 TLS，需要 SM2 双证书）：
+
+```json
+{
+  "server": {
+    "tlcp": {
+      "port": "8530",
+      "self_signed": true,
+      "https": { "port": "4430", "endpoint": "/dns-query" }
+    }
+  }
+}
+```
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `port` | `"8530"` | TLCP DoT 监听端口 |
+| `sign_cert_file` / `sign_key_file` | — | SM2 签名证书和私钥 |
+| `enc_cert_file` / `enc_key_file` | — | SM2 加密证书和私钥 |
+| `self_signed` | `false` | 自动生成 SM2 自签名双证书 |
+| `https.port` | `"4430"` | TLCP DoH 监听端口（为空则不启用） |
+| `https.endpoint` | `"/dns-query"` | DoH HTTP 路径 |
+
+**客户端配置**：
 
 ```json
 {
   "upstream": [
-    {
-      "address": "https://sm2.doh.pub/dns-query",
-      "protocol": "doh-tlcp",
-      "server_name": "sm2.doh.pub",
-      "skip_tls_verify": true
-    }
+    { "address": "https://127.0.0.1:4430/dns-query", "protocol": "doh-tlcp", "server_name": "ZJDNS TLCP", "skip_tls_verify": true }
   ]
 }
-```
-
-```bash
-# TLCP DoH 上游测试
-./zjdns --config tlcp_test.json &
-dig @127.0.0.1 -p 53535 www.baidu.com A +short
-# → www.a.shifen.com. / 180.101.49.44 / 180.101.51.73
 ```
 
 TLCP 密码套件（默认全部启用）：`ECC_SM4_GCM_SM3`、`ECC_SM4_CBC_SM3`、`ECDHE_SM4_GCM_SM3`、`ECDHE_SM4_CBC_SM3`，密钥交换曲线 SM2。

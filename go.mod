@@ -3,8 +3,10 @@ module zjdns
 go 1.26.4
 
 require (
-	codeberg.org/miekg/dns v0.6.84-0.20260707082657-ca97d3392f5f
+	codeberg.org/miekg/dns v0.6.84
+	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
 	github.com/cloudflare/circl v1.6.4
+	github.com/emmansun/gmsm v0.44.0
 	github.com/klauspost/compress v1.19.1-0.20260710073621-c0bbc84762b7
 	github.com/ncruces/go-sqlite3 v0.35.3-0.20260708233615-a627269d8f8a
 	github.com/pjbgf/sha1cd v0.6.1-0.20260701134543-795854be75e9
@@ -17,13 +19,11 @@ require (
 )
 
 require (
-	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033 // indirect
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
-	github.com/emmansun/gmsm v0.44.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect

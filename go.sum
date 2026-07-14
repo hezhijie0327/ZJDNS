@@ -1,5 +1,5 @@
-codeberg.org/miekg/dns v0.6.84-0.20260707082657-ca97d3392f5f h1:+M7EMn7Zzv3kOkW0yeF5kCdv7zE2aJU41MvwskYiEio=
-codeberg.org/miekg/dns v0.6.84-0.20260707082657-ca97d3392f5f/go.mod h1:58Y3ZTg6Z5ZEm/ZAAwHehbZfrD4u5mE4RByHoPEMyKk=
+codeberg.org/miekg/dns v0.6.84 h1:KdGkekztQgb/g+TE2NIj+JM1OrSmhelDzPP5XEPV7eY=
+codeberg.org/miekg/dns v0.6.84/go.mod h1:58Y3ZTg6Z5ZEm/ZAAwHehbZfrD4u5mE4RByHoPEMyKk=
 gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033 h1:7vaosC7vbU88UxB439sfDKC4zkw/IAsm5BehQ/hHqsk=
 gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033/go.mod h1:H536xhflfRmKXO4uU9TlvZ/gQl3q2ptQJVH7NhmoXQQ=
 github.com/RyuaNerin/go-krypto v1.3.0 h1:smavTzSMAx8iuVlGb4pEwl9MD2qicqMzuXR2QWp2/Pg=

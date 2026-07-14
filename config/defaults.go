@@ -188,6 +188,12 @@ const (
 	DefaultDNSCryptKeyOverlap       = 1 * time.Hour
 )
 
+// TLCP (国密 SSL) protocol defaults.
+const (
+	DefaultTLCPPort    = "8530" // TLCP DoT listener port
+	DefaultTLCPDOHPort = "4430" // TLCP DoH listener port
+)
+
 // ALPN protocol identifiers for secure DNS transports.
 var (
 	NextProtoDOT  = []string{"dot"} // RFC 7858: DNS-over-TLS

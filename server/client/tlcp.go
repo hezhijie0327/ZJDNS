@@ -2,10 +2,10 @@ package client
 
 import (
 	"context"
+	"io"
 	"net"
 	"zjdns/config"
 	"zjdns/internal/log"
-	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 	"gitee.com/Trisia/gotlcp/tlcp"
@@ -57,16 +57,11 @@ func (c *Client) exchangeOverTLCP(ctx context.Context, msg *dns.Msg, addr string
 		return nil, err
 	}
 	defer func() { _ = tlcpConn.Close() }()
-	if _, err := msg.WriteTo(tlcpConn); err != nil {
+	if err := writeTCPMsg(tlcpConn, msg); err != nil {
 		return nil, err
 	}
-	response := pool.DefaultMessagePool.Get()
-	if _, err := response.ReadFrom(tlcpConn); err != nil {
-		pool.DefaultMessagePool.Put(response)
-		return nil, err
-	}
-	if err := response.Unpack(); err != nil {
-		pool.DefaultMessagePool.Put(response)
+	response, err := readTCPMsg(tlcpConn)
+	if err != nil {
 		return nil, err
 	}
 	return response, nil
@@ -82,4 +77,37 @@ func (c *Client) executeTLCP(ctx context.Context, msg *dns.Msg, server *config.U
 		log.Debugf("UPSTREAM: TLCP query to %s failed: %v", server.Address, err)
 	}
 	return response, err
+}
+
+// writeTCPMsg writes a DNS message with a 2-byte big-endian length prefix.
+func writeTCPMsg(conn net.Conn, msg *dns.Msg) error {
+	if err := msg.Pack(); err != nil {
+		return err
+	}
+	length := uint16(len(msg.Data))                    //nolint:gosec // G115: DNS TCP message — protocol-bounded uint16
+	prefix := [2]byte{byte(length >> 8), byte(length)} //nolint:gosec // G115: DNS wire format — protocol-bounded byte
+	if _, err := conn.Write(prefix[:]); err != nil {
+		return err
+	}
+	_, err := conn.Write(msg.Data)
+	return err
+}
+
+// readTCPMsg reads a DNS message prefixed with a 2-byte big-endian length.
+func readTCPMsg(conn net.Conn) (*dns.Msg, error) {
+	var prefix [2]byte
+	if _, err := io.ReadFull(conn, prefix[:]); err != nil {
+		return nil, err
+	}
+	length := int(prefix[0])<<8 | int(prefix[1])
+	buf := make([]byte, length)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return nil, err
+	}
+	msg := new(dns.Msg)
+	msg.Data = buf
+	if err := msg.Unpack(); err != nil {
+		return nil, err
+	}
+	return msg, nil
 }

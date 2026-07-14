@@ -26,6 +26,7 @@ import (
 	"zjdns/server/probe"
 	"zjdns/server/resolver"
 	"zjdns/server/security"
+	servertlcp "zjdns/server/tlcp"
 	"zjdns/server/tls"
 	"zjdns/zone"
 
@@ -41,6 +42,7 @@ type Server struct {
 	guard           *security.Guard
 	tls             *tls.Server
 	dnscryptServer  *serverdnscrypt.Server
+	tlcpServer      *servertlcp.Server
 	pprofServer     *http.Server
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
@@ -247,6 +249,16 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.dnscryptServer = dnscryptSrv
 	}
 
+	if cfg.Server.TLCP.IsEnabled() && cfg.Server.TLCP.Port != "" {
+		tlcpCfg := &cfg.Server.TLCP
+		tlcpSrv, err := servertlcp.New(tlcpCfg)
+		if err != nil {
+			cancel(fmt.Errorf("TLCP server init: %w", err))
+			return nil, fmt.Errorf("TLCP server init: %w", err)
+		}
+		server.tlcpServer = tlcpSrv
+	}
+
 	// ── Observability: probes + pprof ─────────────────────────────────────
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
@@ -397,6 +409,18 @@ func (s *Server) Start() error {
 				return fmt.Errorf("DNSCrypt startup: %w", err)
 			}
 			<-ctx.Done()
+			return nil
+		})
+	}
+
+	if s.tlcpServer != nil {
+		g.Go(func() error {
+			defer zdnsutil.HandlePanic("TLCP server")
+			if err := s.tlcpServer.Start(s); err != nil {
+				return fmt.Errorf("TLCP startup: %w", err)
+			}
+			<-ctx.Done()
+			_ = s.tlcpServer.Shutdown()
 			return nil
 		})
 	}

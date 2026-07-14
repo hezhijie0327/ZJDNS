@@ -12,6 +12,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
+	"gitee.com/Trisia/gotlcp/tlcp"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
@@ -64,6 +65,10 @@ func validateConfig(cfg *ServerConfig) error {
 	}
 
 	if err := validateTLSCertConfig(cfg); err != nil {
+		return err
+	}
+
+	if err := validateTLCPCertConfig(cfg); err != nil {
 		return err
 	}
 	return nil
@@ -141,7 +146,7 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 				// sdns:// string is not a valid host:port or URL.
 			} else if _, _, err := net.SplitHostPort(server.Address); err != nil {
 				if protocol == ProtoHTTP || protocol == ProtoHTTP3 ||
-					protocol == ProtoDOH || protocol == ProtoDOH3 {
+					protocol == ProtoDOH || protocol == ProtoDOH3 || protocol == ProtoDOH_TLCP {
 					if _, err := url.Parse(server.Address); err != nil {
 						return fmt.Errorf("upstream server %d address invalid: %w", i, err)
 					}
@@ -257,6 +262,26 @@ func validatePorts(cfg *ServerConfig) error {
 		}
 		seen[port] = "server.dnscrypt.port"
 	}
+	if cfg.Server.TLCP.IsEnabled() {
+		if cfg.Server.TLCP.Port != "" {
+			if err := validatePort("server.tlcp.port", cfg.Server.TLCP.Port); err != nil {
+				return err
+			}
+			if first, ok := seen[cfg.Server.TLCP.Port]; ok {
+				return fmt.Errorf("port conflict: server.tlcp.port=%s and %s=%s both use port %s",
+					cfg.Server.TLCP.Port, first, cfg.Server.TLCP.Port, cfg.Server.TLCP.Port)
+			}
+		}
+		if cfg.Server.TLCP.HTTPS.Port != "" {
+			if err := validatePort("server.tlcp.https.port", cfg.Server.TLCP.HTTPS.Port); err != nil {
+				return err
+			}
+			if first, ok := seen[cfg.Server.TLCP.HTTPS.Port]; ok {
+				return fmt.Errorf("port conflict: server.tlcp.https.port=%s and %s=%s both use port %s",
+					cfg.Server.TLCP.HTTPS.Port, first, cfg.Server.TLCP.HTTPS.Port, cfg.Server.TLCP.HTTPS.Port)
+			}
+		}
+	}
 	return nil
 }
 
@@ -319,6 +344,48 @@ func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 		return validateProbePort(index, ProtoHTTP3, &step.Port, DefaultProbePortHTTPS)
 	default:
 		return fmt.Errorf("latency_probe step %d: unsupported protocol %s", index, step.Protocol)
+	}
+	return nil
+}
+
+func validateTLCPCertConfig(cfg *ServerConfig) error {
+	t := &cfg.Server.TLCP
+	if !t.IsEnabled() {
+		return nil
+	}
+	if t.SelfSigned {
+		return nil
+	}
+	if !zdnsutil.IsValidFilePath(t.SignCertFile) {
+		return fmt.Errorf("config: tlcp sign cert file not found: %s", t.SignCertFile)
+	}
+	if !zdnsutil.IsValidFilePath(t.SignKeyFile) {
+		return fmt.Errorf("config: tlcp sign key file not found: %s", t.SignKeyFile)
+	}
+	if !zdnsutil.IsValidFilePath(t.EncCertFile) {
+		return fmt.Errorf("config: tlcp enc cert file not found: %s", t.EncCertFile)
+	}
+	if !zdnsutil.IsValidFilePath(t.EncKeyFile) {
+		return fmt.Errorf("config: tlcp enc key file not found: %s", t.EncKeyFile)
+	}
+	if info, err := os.Stat(t.SignKeyFile); err == nil {
+		if info.Mode().Perm()&GroupOtherPermMask != 0 {
+			log.Warnf("CONFIG: TLCP sign key file has insecure permissions (%04o). Consider 'chmod 600 %s'",
+				info.Mode().Perm(), t.SignKeyFile)
+		}
+	}
+	if info, err := os.Stat(t.EncKeyFile); err == nil {
+		if info.Mode().Perm()&GroupOtherPermMask != 0 {
+			log.Warnf("CONFIG: TLCP enc key file has insecure permissions (%04o). Consider 'chmod 600 %s'",
+				info.Mode().Perm(), t.EncKeyFile)
+		}
+	}
+	// Verify certificates are loadable.
+	if _, err := tlcp.LoadX509KeyPair(t.SignCertFile, t.SignKeyFile); err != nil {
+		return fmt.Errorf("config: load tlcp sign certificate: %w", err)
+	}
+	if _, err := tlcp.LoadX509KeyPair(t.EncCertFile, t.EncKeyFile); err != nil {
+		return fmt.Errorf("config: load tlcp enc certificate: %w", err)
 	}
 	return nil
 }
