@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Server) startDOHServer() error {
-	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.cfg.HTTPS.Port)
+	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.dohPort)
 	if err != nil {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}
@@ -55,7 +55,7 @@ func (s *Server) startDOHServer() error {
 }
 
 func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
-	endpoint := s.cfg.HTTPS.Endpoint
+	endpoint := s.dohEndpoint
 	if endpoint == "" {
 		endpoint = config.DefaultQueryPath
 	}

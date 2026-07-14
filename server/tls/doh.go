@@ -94,8 +94,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(expectedPath, "/") {
 		expectedPath = "/" + expectedPath
 	}
+	expectedPath3 := s.cfg.HTTP3Endpoint
+	if expectedPath3 == "" {
+		expectedPath3 = config.DefaultQueryPath
+	}
+	if !strings.HasPrefix(expectedPath3, "/") {
+		expectedPath3 = "/" + expectedPath3
+	}
 
-	if r.URL.Path != expectedPath {
+	if r.URL.Path != expectedPath && r.URL.Path != expectedPath3 {
 		http.NotFound(w, r)
 		return
 	}

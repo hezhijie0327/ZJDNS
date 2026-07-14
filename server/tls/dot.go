@@ -19,7 +19,7 @@ import (
 )
 
 func (s *Server) startDOTServer() error {
-	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.cfg.Port)
+	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.cfg.TLSPort)
 	if err != nil {
 		return fmt.Errorf("DoT address resolution: %w", err)
 	}

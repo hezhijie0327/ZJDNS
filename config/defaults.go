@@ -178,14 +178,14 @@ const (
 
 // DNSCrypt v2 protocol defaults.
 const (
-	DefaultDNSCryptPort             = "8443"
-	DefaultDNSCryptCertTTL          = 24 * time.Hour
-	DefaultDNSCryptUDPSize          = 4096
-	DefaultDNSCryptCertCacheTTL     = 1 * time.Hour
-	DefaultDNSCryptReadTimeout      = 2 * time.Second
-	DefaultDNSCryptResponseBuffer   = 4096
-	DefaultDNSCryptPQTicketLifetime = 600 * time.Second
-	DefaultDNSCryptKeyOverlap       = 1 * time.Hour
+	DefaultDNSCryptPort                = "8443"
+	DefaultDNSCryptCertificateTTL      = 24 * time.Hour
+	DefaultDNSCryptUDPSize             = 4096
+	DefaultDNSCryptCertificateCacheTTL = 1 * time.Hour
+	DefaultDNSCryptReadTimeout         = 2 * time.Second
+	DefaultDNSCryptResponseBuffer      = 4096
+	DefaultDNSCryptPQTicketLifetime    = 600 * time.Second
+	DefaultDNSCryptKeyOverlap          = 1 * time.Hour
 )
 
 // TLCP (国密 SSL) protocol defaults.

@@ -10,7 +10,7 @@ import (
 func TestLoadConfig_DefaultPortsApplied(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	content := `{"server": {"port": "53", "tls": {"port": "853"}}, "upstream": [{"address": "8.8.8.8:53", "protocol": "udp"}]}`
+	content := `{"server": {"protocol": {"udp": "53", "tls": "853"}, "certificate": {"domain": "test.example.com"}}, "upstream": [{"address": "8.8.8.8:53", "protocol": "udp"}]}`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -19,10 +19,9 @@ func TestLoadConfig_DefaultPortsApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.Server.TLS.Port != "853" {
-		t.Errorf("TLS port = %q, want 853", cfg.Server.TLS.Port)
+	if cfg.Server.Protocol.TLS != "853" {
+		t.Errorf("TLS port = %q, want 853", cfg.Server.Protocol.TLS)
 	}
-	// HTTPS port is optional; defaults only applied by NewDefaultServerConfig, not LoadConfig
 }
 
 func TestLoadConfig_FileNotFound(t *testing.T) {
@@ -52,9 +51,13 @@ func TestLoadConfig_MissingServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := LoadConfig(path)
-	if err == nil {
-		t.Error("expected error for missing server port")
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	// Empty config should load successfully with no listeners enabled.
+	if cfg.Server.Protocol.UDP != "" {
+		t.Error("expected empty protocol config")
 	}
 }
 

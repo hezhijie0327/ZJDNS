@@ -56,15 +56,13 @@ func startTestDNSCryptServerWithVersion(t *testing.T, esVersionStr string) (addr
 	port := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
 
-	cfg := &config.DNSCryptSettings{
-		Port:         strconv.Itoa(port),
-		ProviderName: rc.ProviderName,
-		PublicKey:    rc.PublicKey,
-		PrivateKey:   rc.PrivateKey,
-		ESVersion:    esVersionStr,
+	certificateCfg := &config.DNSCryptCertificate{
+		PublicKey:  rc.PublicKey,
+		PrivateKey: rc.PrivateKey,
+		ESVersion:  esVersionStr,
 	}
 
-	srv, err := serverdnscrypt.New(cfg)
+	srv, err := serverdnscrypt.New(certificateCfg, strconv.Itoa(port), rc.ProviderName)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -248,7 +246,7 @@ func TestDNSCryptTXT(t *testing.T) {
 	}
 }
 
-func TestDNSCryptCertHandshake(t *testing.T) {
+func TestDNSCryptCertificateHandshake(t *testing.T) {
 	// Verify the server responds to a plain (unencrypted) TXT cert query
 	// on its DNSCrypt port — this is the first step every client performs.
 	// Uses the same fetchCert flow as getDNSCryptState, which handles TC

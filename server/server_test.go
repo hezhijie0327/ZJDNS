@@ -12,7 +12,7 @@ func TestEmptyPortDisablesPlainDNS(t *testing.T) {
 		},
 	}
 	// No port set — plain DNS should be skipped without error.
-	cfg.Server.Port = ""
+	cfg.Server.Protocol.UDP = ""
 
 	srv, err := New(cfg)
 	if err != nil {
@@ -38,7 +38,7 @@ func TestPortSetAllowsPlainDNS(t *testing.T) {
 			{Address: "builtin_recursive"},
 		},
 	}
-	cfg.Server.Port = "15353"
+	cfg.Server.Protocol.UDP = "15353"
 
 	srv, err := New(cfg)
 	if err != nil {

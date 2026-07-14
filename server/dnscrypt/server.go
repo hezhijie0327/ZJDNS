@@ -36,17 +36,19 @@ type keyEntry struct {
 type Server struct {
 	keys []keyEntry // [current, previous, ...], newest first
 
-	handler      DNSHandler
-	cfg          *config.DNSCryptSettings
-	udpConns     []*net.UDPConn
-	tcpListeners []net.Listener
-	esVersion    CryptoConstruction
-	wg           *sync.WaitGroup
-	tcpConns     map[net.Conn]struct{}
-	mu           sync.RWMutex
-	started      bool
-	ctx          context.Context
-	cancel       context.CancelCauseFunc
+	handler        DNSHandler
+	port           string
+	providerName   string
+	certificateCfg *config.DNSCryptCertificate
+	udpConns       []*net.UDPConn
+	tcpListeners   []net.Listener
+	esVersion      CryptoConstruction
+	wg             *sync.WaitGroup
+	tcpConns       map[net.Conn]struct{}
+	mu             sync.RWMutex
+	started        bool
+	ctx            context.Context
+	cancel         context.CancelCauseFunc
 
 	// signingSK is the Ed25519 provider identity key.  It stays fixed across
 	// resolver-key rotations — the sdns:// stamp encodes only this key.
@@ -63,13 +65,14 @@ type Server struct {
 }
 
 // New creates a new DNSCrypt Server from the given configuration.
-func New(cfg *config.DNSCryptSettings) (*Server, error) {
-	esVersion, err := ParseESVersion(cfg.ESVersion)
+// port is the listener port, providerName is auto-derived as "2.dnscrypt-cert.<ddr.domain>".
+func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) (*Server, error) {
+	esVersion, err := ParseESVersion(certificateCfg.ESVersion)
 	if err != nil {
 		return nil, fmt.Errorf("parsing es_version: %w", err)
 	}
 
-	rc, err := buildResolverConfig(cfg, esVersion)
+	rc, err := buildResolverConfig(certificateCfg, providerName, esVersion)
 	if err != nil {
 		return nil, fmt.Errorf("building resolver config: %w", err)
 	}
@@ -85,8 +88,8 @@ func New(cfg *config.DNSCryptSettings) (*Server, error) {
 		return nil, fmt.Errorf("creating certificate: %w", err)
 	}
 
-	if cfg.Port == "" {
-		cfg.Port = config.DefaultDNSCryptPort
+	if port == "" {
+		port = config.DefaultDNSCryptPort
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 
@@ -97,15 +100,17 @@ func New(cfg *config.DNSCryptSettings) (*Server, error) {
 	}
 
 	s := &Server{
-		keys:      []keyEntry{entry},
-		cfg:       cfg,
-		tcpConns:  make(map[net.Conn]struct{}),
-		wg:        &sync.WaitGroup{},
-		ctx:       ctx,
-		cancel:    cancel,
-		signingSK: signingSK,
-		esVersion: esVersion,
-		rotateCh:  make(chan struct{}),
+		keys:           []keyEntry{entry},
+		port:           port,
+		providerName:   providerName,
+		certificateCfg: certificateCfg,
+		tcpConns:       make(map[net.Conn]struct{}),
+		wg:             &sync.WaitGroup{},
+		ctx:            ctx,
+		cancel:         cancel,
+		signingSK:      signingSK,
+		esVersion:      esVersion,
+		rotateCh:       make(chan struct{}),
 	}
 
 	// Derive ticket key from the Ed25519 signing key for PQ resumption.
@@ -123,11 +128,11 @@ func New(cfg *config.DNSCryptSettings) (*Server, error) {
 	return s, nil
 }
 
-func buildResolverConfig(cfg *config.DNSCryptSettings, esVersion CryptoConstruction) (ResolverConfig, error) {
+func buildResolverConfig(certificateCfg *config.DNSCryptCertificate, providerName string, esVersion CryptoConstruction) (ResolverConfig, error) {
 	rc := ResolverConfig{
-		ProviderName: cfg.ProviderName,
-		PublicKey:    cfg.PublicKey,
-		PrivateKey:   cfg.PrivateKey,
+		ProviderName: providerName,
+		PublicKey:    certificateCfg.PublicKey,
+		PrivateKey:   certificateCfg.PrivateKey,
 		ESVersion:    esVersion,
 	}
 
@@ -172,7 +177,7 @@ func (s *Server) Start(handler DNSHandler) error {
 	s.handler = handler
 	s.started = true
 
-	udpAddrs, err := zdnsutil.ResolveBindAddrs("udp", s.cfg.Port)
+	udpAddrs, err := zdnsutil.ResolveBindAddrs("udp", s.port)
 	if err != nil {
 		return fmt.Errorf("resolving UDP bind addresses: %w", err)
 	}
@@ -190,7 +195,7 @@ func (s *Server) Start(handler DNSHandler) error {
 		log.Infof("DNSCRYPT: Listening on UDP %s", conn.LocalAddr())
 	}
 
-	tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.cfg.Port)
+	tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.port)
 	if err != nil {
 		for _, c := range s.udpConns {
 			_ = c.Close()
@@ -223,7 +228,7 @@ func (s *Server) Start(handler DNSHandler) error {
 		log.Infof("DNSCRYPT: Listening on TCP %s", listener.Addr())
 	}
 
-	log.Infof("DNSCRYPT: Provider: %s", s.cfg.ProviderName)
+	log.Infof("DNSCRYPT: Provider: %s", s.providerName)
 
 	// Start background key rotation goroutine.
 	go s.rotationLoop()
@@ -233,7 +238,7 @@ func (s *Server) Start(handler DNSHandler) error {
 
 // rotationLoop periodically rotates the resolver short-term keys.
 func (s *Server) rotationLoop() {
-	ticker := time.NewTicker(config.DefaultDNSCryptCertTTL)
+	ticker := time.NewTicker(config.DefaultDNSCryptCertificateTTL)
 	defer ticker.Stop()
 	for {
 		select {
@@ -356,7 +361,7 @@ func (s *Server) rotateKeys() {
 	s.keys = append([]keyEntry{entry}, s.keys...)
 
 	// Purge expired keys.
-	cutoff := time.Now().Add(-(config.DefaultDNSCryptCertTTL + config.DefaultDNSCryptKeyOverlap))
+	cutoff := time.Now().Add(-(config.DefaultDNSCryptCertificateTTL + config.DefaultDNSCryptKeyOverlap))
 	n := 0
 	for _, k := range s.keys {
 		if k.createdAt.After(cutoff) {
@@ -372,7 +377,7 @@ func (s *Server) rotateKeys() {
 // generateNewCert creates a signed certificate with fresh resolver keys.
 func (s *Server) generateNewCert() (*Certificate, error) {
 	rc := ResolverConfig{
-		ProviderName: s.cfg.ProviderName,
+		ProviderName: s.providerName,
 		ESVersion:    s.esVersion,
 	}
 	rc.PublicKey = hexEncodeKey(s.signingSK.Public().(ed25519.PublicKey))
@@ -430,7 +435,7 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 	}
 
 	q := m.Question[0]
-	providerName := dnsutil.Fqdn(s.cfg.ProviderName)
+	providerName := dnsutil.Fqdn(s.providerName)
 
 	qName := dnsutil.Fqdn(q.Header().Name)
 	if dns.RRToType(q) != dns.TypeTXT || qName != providerName {

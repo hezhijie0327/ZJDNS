@@ -64,11 +64,15 @@ func validateConfig(cfg *ServerConfig) error {
 		return err
 	}
 
-	if err := validateTLSCertConfig(cfg); err != nil {
+	if err := validateTLSCertificateConfig(cfg); err != nil {
 		return err
 	}
 
-	if err := validateTLCPCertConfig(cfg); err != nil {
+	if err := validateTLCPCertificateConfig(cfg); err != nil {
+		return err
+	}
+
+	if err := validateCertDomain(cfg); err != nil {
 		return err
 	}
 	return nil
@@ -210,107 +214,99 @@ func validateCache(cfg *ServerConfig) error {
 }
 
 func validatePorts(cfg *ServerConfig) error {
-	if err := validatePort("server.port", cfg.Server.Port); err != nil {
-		return err
+	proto := &cfg.Server.Protocol
+
+	// Validate all non-empty ports.
+	for _, p := range []struct{ field, value string }{
+		{"server.protocol.udp", proto.UDP},
+		{"server.protocol.tcp", proto.TCP},
+		{"server.protocol.tls", proto.TLS},
+		{"server.protocol.quic", proto.QUIC},
+		{"server.protocol.https.port", proto.HTTPS.Port},
+		{"server.protocol.http3.port", proto.HTTP3.Port},
+		{"server.protocol.tlcp", proto.TLCP},
+		{"server.protocol.http_tlcp.port", proto.HTTPTLCP.Port},
+		{"server.protocol.dnscrypt", proto.DNSCrypt},
+	} {
+		if p.value != "" {
+			if err := validatePort(p.field, p.value); err != nil {
+				return err
+			}
+		}
 	}
 	if cfg.Server.Pprof != "" {
 		if err := validatePort("server.pprof", cfg.Server.Pprof); err != nil {
 			return err
 		}
 	}
-	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
-		if err := validatePort("server.tls.port", cfg.Server.TLS.Port); err != nil {
+
+	// Detect port conflicts across all configured protocols.
+	seen := map[string]string{}
+	addPort := func(field, value string) error {
+		if value == "" {
+			return nil
+		}
+		if first, ok := seen[value]; ok {
+			return fmt.Errorf("port conflict: %s=%s and %s=%s both use port %s",
+				field, value, first, value, value)
+		}
+		seen[value] = field
+		return nil
+	}
+	for _, p := range []struct{ field, value string }{
+		{"server.protocol.udp", proto.UDP},
+		{"server.protocol.tcp", proto.TCP},
+		{"server.protocol.tls", proto.TLS},
+		{"server.protocol.quic", proto.QUIC},
+		{"server.protocol.https.port", proto.HTTPS.Port},
+		{"server.protocol.http3.port", proto.HTTP3.Port},
+		{"server.protocol.tlcp", proto.TLCP},
+		{"server.protocol.http_tlcp.port", proto.HTTPTLCP.Port},
+		{"server.protocol.dnscrypt", proto.DNSCrypt},
+		{"server.pprof", cfg.Server.Pprof},
+	} {
+		if err := addPort(p.field, p.value); err != nil {
 			return err
-		}
-		if cfg.Server.TLS.HTTPS.Port != "" {
-			if err := validatePort("server.tls.https.port", cfg.Server.TLS.HTTPS.Port); err != nil {
-				return err
-			}
-		}
-	}
-	// Detect port conflicts: DNS port must not overlap with TLS/HTTPS/pprof/DNSCrypt.
-	seen := map[string]string{cfg.Server.Port: "server.port"}
-	if cfg.Server.Pprof != "" {
-		if first, ok := seen[cfg.Server.Pprof]; ok {
-			return fmt.Errorf("port conflict: server.pprof=%s and %s=%s both use port %s",
-				cfg.Server.Pprof, first, cfg.Server.Pprof, cfg.Server.Pprof)
-		}
-		seen[cfg.Server.Pprof] = "server.pprof"
-	}
-	if cfg.Server.TLS.Port != "" {
-		if first, ok := seen[cfg.Server.TLS.Port]; ok {
-			return fmt.Errorf("port conflict: server.tls.port=%s and %s=%s both use port %s",
-				cfg.Server.TLS.Port, first, cfg.Server.TLS.Port, cfg.Server.TLS.Port)
-		}
-		seen[cfg.Server.TLS.Port] = "server.tls.port"
-	}
-	if cfg.Server.TLS.HTTPS.Port != "" {
-		if first, ok := seen[cfg.Server.TLS.HTTPS.Port]; ok {
-			return fmt.Errorf("port conflict: server.tls.https.port=%s and %s=%s both use port %s",
-				cfg.Server.TLS.HTTPS.Port, first, cfg.Server.TLS.HTTPS.Port, cfg.Server.TLS.HTTPS.Port)
-		}
-		seen[cfg.Server.TLS.HTTPS.Port] = "server.tls.https.port"
-	}
-	if cfg.Server.DNSCrypt.IsEnabled() {
-		port := cfg.Server.DNSCrypt.Port
-		if port == "" {
-			port = DefaultDNSCryptPort
-		}
-		if first, ok := seen[port]; ok {
-			return fmt.Errorf("port conflict: server.dnscrypt.port=%s and %s=%s both use port %s",
-				port, first, port, port)
-		}
-		seen[port] = "server.dnscrypt.port"
-	}
-	if cfg.Server.TLCP.IsEnabled() {
-		if cfg.Server.TLCP.Port != "" {
-			if err := validatePort("server.tlcp.port", cfg.Server.TLCP.Port); err != nil {
-				return err
-			}
-			if first, ok := seen[cfg.Server.TLCP.Port]; ok {
-				return fmt.Errorf("port conflict: server.tlcp.port=%s and %s=%s both use port %s",
-					cfg.Server.TLCP.Port, first, cfg.Server.TLCP.Port, cfg.Server.TLCP.Port)
-			}
-		}
-		if cfg.Server.TLCP.HTTPS.Port != "" {
-			if err := validatePort("server.tlcp.https.port", cfg.Server.TLCP.HTTPS.Port); err != nil {
-				return err
-			}
-			if first, ok := seen[cfg.Server.TLCP.HTTPS.Port]; ok {
-				return fmt.Errorf("port conflict: server.tlcp.https.port=%s and %s=%s both use port %s",
-					cfg.Server.TLCP.HTTPS.Port, first, cfg.Server.TLCP.HTTPS.Port, cfg.Server.TLCP.HTTPS.Port)
-			}
 		}
 	}
 	return nil
 }
 
-func validateTLSCertConfig(cfg *ServerConfig) error {
-	if cfg.Server.TLS.SelfSigned && (cfg.Server.TLS.CertFile != "" || cfg.Server.TLS.KeyFile != "") {
+func validateTLSCertificateConfig(cfg *ServerConfig) error {
+	tlsCert := &cfg.Server.Certificate.TLS
+	if !tlsCert.IsEnabled() {
+		return nil
+	}
+
+	// Only require cert validation if at least one TLS-based protocol is enabled.
+	proto := &cfg.Server.Protocol
+	tlsEnabled := proto.TLS != "" || proto.QUIC != "" || proto.HTTPS.Port != "" || proto.HTTP3.Port != ""
+	if !tlsEnabled {
+		return nil
+	}
+
+	if tlsCert.SelfSigned && (tlsCert.CertFile != "" || tlsCert.KeyFile != "") {
 		log.Warnf("CONFIG: TLS: Self-signed enabled, ignoring cert/key files")
 		return nil
 	}
 
-	if cfg.Server.TLS.CertFile == "" && cfg.Server.TLS.KeyFile == "" {
-		return nil
+	if tlsCert.CertFile == "" || tlsCert.KeyFile == "" {
+		return errors.New("config: certificate.tls.cert_file and certificate.tls.key_file must be configured together, or enable self_signed")
 	}
-	if cfg.Server.TLS.CertFile == "" || cfg.Server.TLS.KeyFile == "" {
-		return errors.New("config: cert and key files must be configured together")
+	if !zdnsutil.IsValidFilePath(tlsCert.CertFile) {
+		return fmt.Errorf("config: TLS cert file not found: %s", tlsCert.CertFile)
 	}
-	if !zdnsutil.IsValidFilePath(cfg.Server.TLS.CertFile) {
-		return fmt.Errorf("config: cert file not found: %s", cfg.Server.TLS.CertFile)
+	if !zdnsutil.IsValidFilePath(tlsCert.KeyFile) {
+		return fmt.Errorf("config: TLS key file not found: %s", tlsCert.KeyFile)
 	}
-	if !zdnsutil.IsValidFilePath(cfg.Server.TLS.KeyFile) {
-		return fmt.Errorf("config: key file not found: %s", cfg.Server.TLS.KeyFile)
-	}
-	if info, err := os.Stat(cfg.Server.TLS.KeyFile); err == nil {
+	if info, err := os.Stat(tlsCert.KeyFile); err == nil {
 		if info.Mode().Perm()&GroupOtherPermMask != 0 {
 			log.Warnf("CONFIG: TLS key file has insecure permissions (%04o). Consider 'chmod 600 %s'",
-				info.Mode().Perm(), cfg.Server.TLS.KeyFile)
+				info.Mode().Perm(), tlsCert.KeyFile)
 		}
 	}
-	if _, err := eTLS.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile); err != nil {
-		return fmt.Errorf("config: load certificate: %w", err)
+	if _, err := eTLS.LoadX509KeyPair(tlsCert.CertFile, tlsCert.KeyFile); err != nil {
+		return fmt.Errorf("config: load TLS certificate: %w", err)
 	}
 	return nil
 }
@@ -348,44 +344,68 @@ func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 	return nil
 }
 
-func validateTLCPCertConfig(cfg *ServerConfig) error {
-	t := &cfg.Server.TLCP
-	if !t.IsEnabled() {
+func validateTLCPCertificateConfig(cfg *ServerConfig) error {
+	tlcpCert := &cfg.Server.Certificate.TLCP
+	if !tlcpCert.IsEnabled() {
 		return nil
 	}
-	if t.SelfSigned {
+
+	// Only require cert validation if at least one TLCP protocol is enabled.
+	proto := &cfg.Server.Protocol
+	tlcpEnabled := proto.TLCP != "" || proto.HTTPTLCP.Port != ""
+	if !tlcpEnabled {
 		return nil
 	}
-	if !zdnsutil.IsValidFilePath(t.SignCertFile) {
-		return fmt.Errorf("config: tlcp sign cert file not found: %s", t.SignCertFile)
+
+	if tlcpCert.SelfSigned {
+		return nil
 	}
-	if !zdnsutil.IsValidFilePath(t.SignKeyFile) {
-		return fmt.Errorf("config: tlcp sign key file not found: %s", t.SignKeyFile)
+	if !zdnsutil.IsValidFilePath(tlcpCert.SignCertFile) {
+		return fmt.Errorf("config: TLCP sign cert file not found: %s", tlcpCert.SignCertFile)
 	}
-	if !zdnsutil.IsValidFilePath(t.EncCertFile) {
-		return fmt.Errorf("config: tlcp enc cert file not found: %s", t.EncCertFile)
+	if !zdnsutil.IsValidFilePath(tlcpCert.SignKeyFile) {
+		return fmt.Errorf("config: TLCP sign key file not found: %s", tlcpCert.SignKeyFile)
 	}
-	if !zdnsutil.IsValidFilePath(t.EncKeyFile) {
-		return fmt.Errorf("config: tlcp enc key file not found: %s", t.EncKeyFile)
+	if !zdnsutil.IsValidFilePath(tlcpCert.EncCertFile) {
+		return fmt.Errorf("config: TLCP enc cert file not found: %s", tlcpCert.EncCertFile)
 	}
-	if info, err := os.Stat(t.SignKeyFile); err == nil {
+	if !zdnsutil.IsValidFilePath(tlcpCert.EncKeyFile) {
+		return fmt.Errorf("config: TLCP enc key file not found: %s", tlcpCert.EncKeyFile)
+	}
+	if info, err := os.Stat(tlcpCert.SignKeyFile); err == nil {
 		if info.Mode().Perm()&GroupOtherPermMask != 0 {
 			log.Warnf("CONFIG: TLCP sign key file has insecure permissions (%04o). Consider 'chmod 600 %s'",
-				info.Mode().Perm(), t.SignKeyFile)
+				info.Mode().Perm(), tlcpCert.SignKeyFile)
 		}
 	}
-	if info, err := os.Stat(t.EncKeyFile); err == nil {
+	if info, err := os.Stat(tlcpCert.EncKeyFile); err == nil {
 		if info.Mode().Perm()&GroupOtherPermMask != 0 {
 			log.Warnf("CONFIG: TLCP enc key file has insecure permissions (%04o). Consider 'chmod 600 %s'",
-				info.Mode().Perm(), t.EncKeyFile)
+				info.Mode().Perm(), tlcpCert.EncKeyFile)
 		}
 	}
 	// Verify certificates are loadable.
-	if _, err := tlcp.LoadX509KeyPair(t.SignCertFile, t.SignKeyFile); err != nil {
-		return fmt.Errorf("config: load tlcp sign certificate: %w", err)
+	if _, err := tlcp.LoadX509KeyPair(tlcpCert.SignCertFile, tlcpCert.SignKeyFile); err != nil {
+		return fmt.Errorf("config: load TLCP sign certificate: %w", err)
 	}
-	if _, err := tlcp.LoadX509KeyPair(t.EncCertFile, t.EncKeyFile); err != nil {
-		return fmt.Errorf("config: load tlcp enc certificate: %w", err)
+	if _, err := tlcp.LoadX509KeyPair(tlcpCert.EncCertFile, tlcpCert.EncKeyFile); err != nil {
+		return fmt.Errorf("config: load TLCP enc certificate: %w", err)
+	}
+	return nil
+}
+
+func validateCertDomain(cfg *ServerConfig) error {
+	proto := &cfg.Server.Protocol
+	cert := &cfg.Server.Certificate
+
+	needsDomain := proto.TLS != "" || proto.QUIC != "" || proto.HTTPS.Port != "" || proto.HTTP3.Port != "" ||
+		proto.TLCP != "" || proto.HTTPTLCP.Port != "" || proto.DNSCrypt != ""
+	if !needsDomain {
+		return nil
+	}
+
+	if cert.Domain == "" {
+		return errors.New("config: certificate.domain is required when secure protocols (tls/quic/https/http3/tlcp/http_tlcp/dnscrypt) are enabled")
 	}
 	return nil
 }

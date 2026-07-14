@@ -29,7 +29,9 @@ type DNSHandler interface {
 
 // Server manages TLCP-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
-	cfg          *config.TLCPListenerSettings
+	dotPort      string
+	dohPort      string
+	dohEndpoint  string
 	handler      DNSHandler
 	tlcpConfig   *tlcp.Config
 	ctx          context.Context
@@ -40,22 +42,23 @@ type Server struct {
 }
 
 // New creates a TLCP Server, loading or generating SM2 certificate pairs.
-func New(cfg *config.TLCPListenerSettings) (*Server, error) {
+// dotPort, dohPort, dohEndpoint come from the protocol config section.
+func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint string) (*Server, error) {
 	var signCert, encCert tlcp.Certificate
 	var err error
 
-	if cfg.SelfSigned {
+	if certificateCfg.SelfSigned {
 		signCert, encCert, err = generateSelfSignedSMCerts()
 		if err != nil {
 			return nil, fmt.Errorf("generate self-signed SM2 certificates: %w", err)
 		}
 		log.Infof("TLCP: Using self-signed SM2 certificates")
 	} else {
-		signCert, err = tlcp.LoadX509KeyPair(cfg.SignCertFile, cfg.SignKeyFile)
+		signCert, err = tlcp.LoadX509KeyPair(certificateCfg.SignCertFile, certificateCfg.SignKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load tlcp sign certificate: %w", err)
 		}
-		encCert, err = tlcp.LoadX509KeyPair(cfg.EncCertFile, cfg.EncKeyFile)
+		encCert, err = tlcp.LoadX509KeyPair(certificateCfg.EncCertFile, certificateCfg.EncKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load tlcp enc certificate: %w", err)
 		}
@@ -70,10 +73,12 @@ func New(cfg *config.TLCPListenerSettings) (*Server, error) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 
 	s := &Server{
-		cfg:        cfg,
-		tlcpConfig: tlcpConfig,
-		ctx:        ctx,
-		cancel:     cancel,
+		dotPort:     dotPort,
+		dohPort:     dohPort,
+		dohEndpoint: dohEndpoint,
+		tlcpConfig:  tlcpConfig,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 
 	return s, nil
@@ -84,13 +89,13 @@ func New(cfg *config.TLCPListenerSettings) (*Server, error) {
 func (s *Server) Start(handler DNSHandler) error {
 	s.handler = handler
 
-	if s.cfg.Port != "" {
+	if s.dotPort != "" {
 		if err := s.startDOTServer(); err != nil {
 			return fmt.Errorf("TLCP DoT startup: %w", err)
 		}
 	}
 
-	if s.cfg.HTTPS.Port != "" {
+	if s.dohPort != "" {
 		if err := s.startDOHServer(); err != nil {
 			return fmt.Errorf("TLCP DoH startup: %w", err)
 		}

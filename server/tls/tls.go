@@ -45,9 +45,12 @@ type KTLSSettings struct {
 // Config holds the configuration for the TLS server including ports,
 // certificate paths, and endpoint settings.
 type Config struct {
-	Port          string
-	HTTPSPort     string
+	TLSPort       string // DoT
+	QUICPort      string // DoQ
+	HTTPSPort     string // DoH
+	HTTP3Port     string // DoH3
 	HTTPSEndpoint string
+	HTTP3Endpoint string
 	SelfSigned    bool
 	CertFile      string
 	KeyFile       string
@@ -199,25 +202,28 @@ func (s *Server) QUICTLSConfig() *stdtls.Config {
 }
 
 // Start launches all secure DNS protocol listeners (DoT, DoQ, DoH, DoH3) and
-// blocks until all servers have exited or an error occurs.
-func (s *Server) Start(httpsPort string) error {
+// blocks until all servers have exited or an error occurs.  Each protocol is
+// independently controlled by its port in Config.
+func (s *Server) Start() error {
 	errChan := make(chan error, 1)
 
 	g, ctx := errgroup.WithContext(s.ctx)
 
-	if httpsPort != "" {
+	if s.cfg.HTTPSPort != "" {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH server")
-			if err := s.startDOHServer(httpsPort); err != nil {
+			if err := s.startDOHServer(s.cfg.HTTPSPort); err != nil {
 				return fmt.Errorf("DoH startup: %w", err)
 			}
 			<-ctx.Done()
 			return nil
 		})
+	}
 
+	if s.cfg.HTTP3Port != "" {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH3 server")
-			if err := s.startDOH3Server(httpsPort); err != nil {
+			if err := s.startDOH3Server(s.cfg.HTTP3Port); err != nil {
 				return fmt.Errorf("DoH3 startup: %w", err)
 			}
 			<-ctx.Done()
@@ -225,7 +231,7 @@ func (s *Server) Start(httpsPort string) error {
 		})
 	}
 
-	if s.cfg.Port != "" {
+	if s.cfg.TLSPort != "" {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("DoT server")
 			if err := s.startDOTServer(); err != nil {
@@ -234,7 +240,9 @@ func (s *Server) Start(httpsPort string) error {
 			<-ctx.Done()
 			return nil
 		})
+	}
 
+	if s.cfg.QUICPort != "" {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("DoQ server")
 			if err := s.startDOQServer(); err != nil {

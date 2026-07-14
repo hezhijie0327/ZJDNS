@@ -192,8 +192,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	// ── Outbound: query client ────────────────────────────────────────────
 
 	queryClient := client.New()
-	if cfg.Server.TLS.KTLS != nil {
-		queryClient.SetKTLS(cfg.Server.TLS.KTLS.KernelTX, cfg.Server.TLS.KTLS.KernelRX)
+	if cfg.Server.Features.KTLS != nil {
+		queryClient.SetKTLS(cfg.Server.Features.KTLS.KernelTX, cfg.Server.Features.KTLS.KernelRX)
 	}
 	server.queryClient = queryClient
 
@@ -226,10 +226,21 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	// ── Transport listeners ───────────────────────────────────────────────
 
-	if cfg.Server.TLS.SelfSigned || (cfg.Server.TLS.CertFile != "" && cfg.Server.TLS.KeyFile != "") {
-		tlsCfg := tls.Config{Port: cfg.Server.TLS.Port, HTTPSPort: cfg.Server.TLS.HTTPS.Port, HTTPSEndpoint: cfg.Server.TLS.HTTPS.Endpoint, SelfSigned: cfg.Server.TLS.SelfSigned, CertFile: cfg.Server.TLS.CertFile, KeyFile: cfg.Server.TLS.KeyFile, Domain: cfg.Server.Features.DDR.Domain}
-		if cfg.Server.TLS.KTLS != nil {
-			tlsCfg.KTLS = &tls.KTLSSettings{KernelTX: cfg.Server.TLS.KTLS.KernelTX, KernelRX: cfg.Server.TLS.KTLS.KernelRX}
+	if cfg.Server.Certificate.TLS.IsEnabled() {
+		tlsCfg := tls.Config{
+			TLSPort:       cfg.Server.Protocol.TLS,
+			QUICPort:      cfg.Server.Protocol.QUIC,
+			HTTPSPort:     cfg.Server.Protocol.HTTPS.Port,
+			HTTP3Port:     cfg.Server.Protocol.HTTP3.Port,
+			HTTPSEndpoint: cfg.Server.Protocol.HTTPS.Endpoint,
+			HTTP3Endpoint: cfg.Server.Protocol.HTTP3.Endpoint,
+			SelfSigned:    cfg.Server.Certificate.TLS.SelfSigned,
+			CertFile:      cfg.Server.Certificate.TLS.CertFile,
+			KeyFile:       cfg.Server.Certificate.TLS.KeyFile,
+			Domain:        cfg.Server.Certificate.Domain,
+		}
+		if cfg.Server.Features.KTLS != nil {
+			tlsCfg.KTLS = &tls.KTLSSettings{KernelTX: cfg.Server.Features.KTLS.KernelTX, KernelRX: cfg.Server.Features.KTLS.KernelRX}
 		}
 		tlsSrv, err := tls.New(h, &tlsCfg, config.DefaultBackgroundTimeout)
 		if err != nil {
@@ -239,9 +250,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.tls = tlsSrv
 	}
 
-	if cfg.Server.DNSCrypt.IsEnabled() && cfg.Server.DNSCrypt.Port != "" {
-		dnscryptCfg := &cfg.Server.DNSCrypt
-		dnscryptSrv, err := serverdnscrypt.New(dnscryptCfg)
+	if cfg.Server.Protocol.DNSCrypt != "" {
+		providerName := cfg.Server.Certificate.DNSCrypt.ProviderName(cfg.Server.Certificate.Domain)
+		dnscryptSrv, err := serverdnscrypt.New(&cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
 		if err != nil {
 			cancel(fmt.Errorf("DNSCrypt server init: %w", err))
 			return nil, fmt.Errorf("DNSCrypt server init: %w", err)
@@ -249,9 +260,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.dnscryptServer = dnscryptSrv
 	}
 
-	if cfg.Server.TLCP.IsEnabled() && cfg.Server.TLCP.Port != "" {
-		tlcpCfg := &cfg.Server.TLCP
-		tlcpSrv, err := servertlcp.New(tlcpCfg)
+	if cfg.Server.Certificate.TLCP.IsEnabled() && (cfg.Server.Protocol.TLCP != "" || cfg.Server.Protocol.HTTPTLCP.Port != "") {
+		tlcpSrv, err := servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint)
 		if err != nil {
 			cancel(fmt.Errorf("TLCP server init: %w", err))
 			return nil, fmt.Errorf("TLCP server init: %w", err)
@@ -325,8 +335,8 @@ func (s *Server) Start() error {
 		})
 	}
 
-	if s.config.Server.Port != "" {
-		udpAddrs, err := zdnsutil.ResolveBindAddrs(config.ProtoUDP, s.config.Server.Port)
+	if s.config.Server.Protocol.UDP != "" {
+		udpAddrs, err := zdnsutil.ResolveBindAddrs(config.ProtoUDP, s.config.Server.Protocol.UDP)
 		if err != nil {
 			return fmt.Errorf("UDP address resolution: %w", err)
 		}
@@ -356,7 +366,7 @@ func (s *Server) Start() error {
 			})
 		}
 
-		tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.config.Server.Port)
+		tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.config.Server.Protocol.TCP)
 		if err != nil {
 			return fmt.Errorf("TCP address resolution: %w", err)
 		}
@@ -392,8 +402,7 @@ func (s *Server) Start() error {
 	if s.tls != nil {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("Secure DNS server")
-			httpsPort := s.config.Server.TLS.HTTPS.Port
-			err := s.tls.Start(httpsPort)
+			err := s.tls.Start()
 			if err != nil {
 				return fmt.Errorf("secure DNS startup: %w", err)
 			}
@@ -483,8 +492,8 @@ func (s *Server) displayInfo() {
 	if s.tls != nil {
 		if runtime.GOOS == "linux" {
 			ktlsTX, ktlsRX := false, false
-			if s.config.Server.TLS.KTLS != nil {
-				ktlsTX, ktlsRX = s.config.Server.TLS.KTLS.KernelTX, s.config.Server.TLS.KTLS.KernelRX
+			if s.config.Server.Features.KTLS != nil {
+				ktlsTX, ktlsRX = s.config.Server.Features.KTLS.KernelTX, s.config.Server.Features.KTLS.KernelRX
 			}
 			if _, err := os.Stat("/sys/module/tls"); err == nil {
 				log.Infof("TLS: kTLS available, TX=%t RX=%t", ktlsTX, ktlsRX)

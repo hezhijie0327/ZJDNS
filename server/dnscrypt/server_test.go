@@ -7,13 +7,11 @@ import (
 )
 
 func TestKeyRotation(t *testing.T) {
-	cfg := &config.DNSCryptSettings{
-		Port:         "0", // Don't bind
-		ProviderName: "2.dnscrypt-cert.example.com",
-		ESVersion:    "xwingpq",
+	certificateCfg := &config.DNSCryptCertificate{
+		ESVersion: "xwingpq",
 	}
 
-	srv, err := New(cfg)
+	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -53,7 +51,7 @@ func TestKeyRotation(t *testing.T) {
 	}
 
 	// Simulate another rotation — should purge the oldest entry after overlap.
-	srv.keys[0].createdAt = time.Now().Add(-config.DefaultDNSCryptCertTTL - config.DefaultDNSCryptKeyOverlap - time.Hour)
+	srv.keys[0].createdAt = time.Now().Add(-config.DefaultDNSCryptCertificateTTL - config.DefaultDNSCryptKeyOverlap - time.Hour)
 	srv.rotateKeys()
 	if len(srv.keys) < 2 {
 		t.Errorf("after purge rotation: want >= 2 keys, got %d", len(srv.keys))
@@ -61,13 +59,11 @@ func TestKeyRotation(t *testing.T) {
 }
 
 func TestKeyRotationClassical(t *testing.T) {
-	cfg := &config.DNSCryptSettings{
-		Port:         "0",
-		ProviderName: "2.dnscrypt-cert.example.com",
-		ESVersion:    "xchacha20poly1305",
+	certificateCfg := &config.DNSCryptCertificate{
+		ESVersion: "xchacha20poly1305",
 	}
 
-	srv, err := New(cfg)
+	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -89,13 +85,11 @@ func TestKeyRotationClassical(t *testing.T) {
 }
 
 func TestAllCertTXTServesAllActiveCerts(t *testing.T) {
-	cfg := &config.DNSCryptSettings{
-		Port:         "0",
-		ProviderName: "2.dnscrypt-cert.example.com",
-		ESVersion:    "xwingpq",
+	certificateCfg := &config.DNSCryptCertificate{
+		ESVersion: "xwingpq",
 	}
 
-	srv, err := New(cfg)
+	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

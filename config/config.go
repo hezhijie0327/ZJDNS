@@ -17,78 +17,99 @@ import (
 // ServerConfig is the top-level configuration structure for the DNS server.
 type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
-	Upstream []UpstreamServer `json:"upstream"`
+	Upstream []UpstreamServer `json:"upstream,omitzero"`
 	Fallback []UpstreamServer `json:"fallback,omitzero"`
-	Zone     ZoneConfig       `json:"zone"`
-	RuleSet  []RuleSet        `json:"ruleset"`
+	Zone     ZoneConfig       `json:"zone,omitzero"`
+	RuleSet  []RuleSet        `json:"ruleset,omitzero"`
 }
 
 // ServerSettings contains the server runtime settings and feature flags.
 type ServerSettings struct {
-	Port     string               `json:"port"`
-	Pprof    string               `json:"pprof"`
-	LogLevel string               `json:"log_level"`
-	TLS      TLSSettings          `json:"tls"`
-	DNSCrypt DNSCryptSettings     `json:"dnscrypt"`
-	TLCP     TLCPListenerSettings `json:"tlcp"`
-	Features FeatureFlags         `json:"features"`
+	Pprof       string              `json:"pprof,omitzero"`
+	LogLevel    string              `json:"log_level,omitzero"`
+	Protocol    ProtocolSettings    `json:"protocol,omitzero"`
+	Certificate CertificateSettings `json:"certificate,omitzero"`
+	Features    FeatureFlags        `json:"features,omitzero"`
 }
 
-// DNSCryptSettings configures the DNSCrypt v2 encrypted DNS listener.
-type DNSCryptSettings struct {
-	Port         string `json:"port"`          // default "8443"
-	ProviderName string `json:"provider_name"` // e.g. "2.dnscrypt-cert.example.com"
-	PrivateKey   string `json:"private_key"`   // Ed25519 private key (hex, optional — auto-generated if empty)
-	PublicKey    string `json:"public_key"`    // Ed25519 public key (hex, optional — auto-generated if empty)
-	ESVersion    string `json:"es_version"`    // "xwingpq" (default) or "xchacha20poly1305"
+// ProtocolSettings holds the port and endpoint configuration for every DNS
+// transport protocol that the server can listen on.  A protocol is enabled when
+// its field is non-empty; an empty/omitted field means the listener is skipped.
+type ProtocolSettings struct {
+	UDP      string        `json:"udp,omitzero"`
+	TCP      string        `json:"tcp,omitzero"`
+	TLS      string        `json:"tls,omitzero"`
+	QUIC     string        `json:"quic,omitzero"`
+	HTTPS    HTTPSEndpoint `json:"https,omitzero"`
+	HTTP3    HTTPSEndpoint `json:"http3,omitzero"`
+	TLCP     string        `json:"tlcp,omitzero"`
+	HTTPTLCP HTTPSEndpoint `json:"http_tlcp,omitzero"`
+	DNSCrypt string        `json:"dnscrypt,omitzero"`
 }
 
-// TLSSettings configures TLS listener ports, certificates, and HTTPS settings.
-type TLSSettings struct {
-	Port       string        `json:"port"`
-	CertFile   string        `json:"cert_file"`
-	KeyFile    string        `json:"key_file"`
-	SelfSigned bool          `json:"self_signed"`
-	HTTPS      HTTPSSettings `json:"https"`
-	KTLS       *KTLSSettings `json:"ktls,omitzero"`
+// HTTPSEndpoint holds the port and HTTP endpoint path for HTTP-based DNS
+// transports (DoH, DoH3, TLCP DoH).
+type HTTPSEndpoint struct {
+	Port     string `json:"port,omitzero"`
+	Endpoint string `json:"endpoint,omitzero"`
 }
 
-// HTTPSSettings configures the HTTPS (DoH/DoH3) listener port and endpoint.
-type HTTPSSettings struct {
-	Port     string `json:"port"`
-	Endpoint string `json:"endpoint"`
+// CertificateSettings holds the unified TLS, TLCP, and DNSCrypt certificate and key
+// material for server listeners.  Domain is the server identity (e.g. SNI
+// hostname), used for self-signed cert generation and DNSCrypt provider name
+// derivation.
+type CertificateSettings struct {
+	Domain   string              `json:"domain"`
+	TLS      TLSCertificate      `json:"tls,omitzero"`
+	TLCP     TLCPCertificate     `json:"tlcp,omitzero"`
+	DNSCrypt DNSCryptCertificate `json:"dnscrypt,omitzero"`
+}
+
+// TLSCertificate holds the X.509 certificate configuration for TLS-based listeners
+// (DoT, DoQ, DoH, DoH3).
+type TLSCertificate struct {
+	CertFile   string `json:"cert_file,omitzero"`
+	KeyFile    string `json:"key_file,omitzero"`
+	SelfSigned bool   `json:"self_signed,omitzero"`
+}
+
+// TLCPCertificate holds the SM2 certificate configuration for TLCP listeners
+// (TLCP DoT and TLCP DoH).  TLCP requires two certificate pairs: one for
+// signing and one for key exchange.
+type TLCPCertificate struct {
+	SignCertFile string `json:"sign_cert_file,omitzero"`
+	SignKeyFile  string `json:"sign_key_file,omitzero"`
+	EncCertFile  string `json:"enc_cert_file,omitzero"`
+	EncKeyFile   string `json:"enc_key_file,omitzero"`
+	SelfSigned   bool   `json:"self_signed,omitzero"`
+}
+
+// DNSCryptCertificate holds the DNSCrypt v2 identity keys.  The provider name is
+// auto-derived from certificate.domain as "2.dnscrypt-cert.<domain>".
+type DNSCryptCertificate struct {
+	PrivateKey string `json:"private_key,omitzero"` // Ed25519 private key (hex, optional — auto-generated if empty)
+	PublicKey  string `json:"public_key,omitzero"`  // Ed25519 public key (hex, optional — auto-generated if empty)
+	ESVersion  string `json:"es_version,omitzero"`  // "xwingpq" (default) or "xchacha20poly1305"
+}
+
+// FeatureFlags enables optional features: hijack protection, KTLS, DDR, ECS,
+// database, cache, latency probes, and stats.
+type FeatureFlags struct {
+	KTLS             *KTLSSettings      `json:"ktls,omitzero"`
+	HijackProtection bool               `json:"hijack_protection,omitzero"`
+	DNSSECEnforce    bool               `json:"dnssec_enforce,omitzero"`
+	DDR              DDRSettings        `json:"ddr,omitzero"`
+	ECS              ECSConfig          `json:"ecs_subnet,omitzero"`
+	Database         DatabaseSettings   `json:"database,omitzero"`
+	Cache            CacheSettings      `json:"cache,omitzero"`
+	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitzero"`
+	DNS64            *DNS64Config       `json:"dns64,omitzero"`
 }
 
 // KTLSSettings configures kernel TLS offload for DoT/DoH server listeners.
 type KTLSSettings struct {
-	KernelTX bool `json:"kernel_tx"` // kernel TLS TX offload (default false)
-	KernelRX bool `json:"kernel_rx"` // kernel TLS RX offload (default false)
-}
-
-// TLCPListenerSettings configures the TLCP (国密 SSL, GB/T 38636-2020) server
-// listener.  TLCP requires two SM2 certificate pairs — one for signing and one
-// for key exchange.  When SelfSigned is true, both pairs are auto-generated.
-type TLCPListenerSettings struct {
-	Port         string        `json:"port"`                    // TLCP DoT port
-	SignCertFile string        `json:"sign_cert_file,omitzero"` // SM2 signing certificate
-	SignKeyFile  string        `json:"sign_key_file,omitzero"`  // SM2 signing private key
-	EncCertFile  string        `json:"enc_cert_file,omitzero"`  // SM2 encryption certificate
-	EncKeyFile   string        `json:"enc_key_file,omitzero"`   // SM2 encryption private key
-	SelfSigned   bool          `json:"self_signed,omitzero"`    // auto-generate SM2 certs
-	HTTPS        HTTPSSettings `json:"https,omitzero"`          // TLCP DoH port + endpoint
-}
-
-// FeatureFlags enables optional features: hijack protection, DDR, ECS,
-// database, cache, latency probes, and stats.
-type FeatureFlags struct {
-	HijackProtection bool               `json:"hijack_protection"`
-	DNSSECEnforce    bool               `json:"dnssec_enforce,omitzero"`
-	DDR              DDRSettings        `json:"ddr"`
-	ECS              ECSConfig          `json:"ecs_subnet"`
-	Database         DatabaseSettings   `json:"database"`
-	Cache            CacheSettings      `json:"cache"`
-	LatencyProbe     []LatencyProbeStep `json:"latency_probe,omitzero"`
-	DNS64            *DNS64Config       `json:"dns64,omitzero"`
+	KernelTX bool `json:"kernel_tx,omitzero"`
+	KernelRX bool `json:"kernel_rx,omitzero"`
 }
 
 // DNS64Config holds settings for DNS64 (RFC 6147) AAAA synthesis.
@@ -97,10 +118,10 @@ type DNS64Config struct {
 }
 
 // DDRSettings configures Discovery of Designated Resolvers (DDR) advertisement.
+// The server domain is in certificate.domain.
 type DDRSettings struct {
-	Domain string `json:"domain"`
-	IPv4   string `json:"ipv4"`
-	IPv6   string `json:"ipv6"`
+	IPv4 string `json:"ipv4,omitzero"`
+	IPv6 string `json:"ipv6,omitzero"`
 }
 
 // DatabaseSettings configures the shared SQLite database backing cache and zone.
@@ -125,27 +146,27 @@ type UpstreamServer struct {
 	SkipTLSVerify bool     `json:"skip_tls_verify,omitzero"`
 	NoCache       bool     `json:"no_cache,omitzero"`
 	Match         []string `json:"match,omitzero"`
-	Proxy         string   `json:"proxy,omitzero"`      // socks5://[user:pass@]host:port
-	PublicKey     string   `json:"public_key,omitzero"` // DNSCrypt resolver public key (hex); provider name uses server_name
+	Proxy         string   `json:"proxy,omitzero"`
+	PublicKey     string   `json:"public_key,omitzero"`
 }
 
 // ZoneConfig wraps zone rules and global zone settings.
 type ZoneConfig struct {
 	Rules      []ZoneRule `json:"rules"`
-	BypassTags []string   `json:"bypass_tags,omitzero"` // tags that skip all zone rules
+	BypassTags []string   `json:"bypass_tags,omitzero"`
 }
 
 // ZoneRule defines a DNS zone rule for constructing synthetic responses.
 // Matches on (QNAME, QTYPE, QCLASS) and returns ANSWER + AUTHORITY +
 // ADDITIONAL + RCODE.  Client filtering uses CIDR match tags.
 type ZoneRule struct {
-	Name       string       `json:"name"`                // domain or *.domain
-	File       string       `json:"file,omitzero"`       // CSV import path
-	Match      []string     `json:"match,omitzero"`      // CIDR tags (mirrors UpstreamServer.Match)
-	Rcode      int          `json:"rcode,omitzero"`      // response code (0 = NOERROR)
-	Answer     []ZoneRecord `json:"answer,omitzero"`     // ANSWER section RRs
-	Authority  []ZoneRecord `json:"authority,omitzero"`  // AUTHORITY section RRs
-	Additional []ZoneRecord `json:"additional,omitzero"` // ADDITIONAL section RRs
+	Name       string       `json:"name"`
+	File       string       `json:"file,omitzero"`
+	Match      []string     `json:"match,omitzero"`
+	Rcode      int          `json:"rcode,omitzero"`
+	Answer     []ZoneRecord `json:"answer,omitzero"`
+	Authority  []ZoneRecord `json:"authority,omitzero"`
+	Additional []ZoneRecord `json:"additional,omitzero"`
 
 	NormalizedName   string          `json:"-"`
 	CachedAnswer     []dns.RR        `json:"-"`
@@ -159,8 +180,8 @@ type ZoneRule struct {
 // lookup and forward compatibility with new DNS types.
 type ZoneRecord struct {
 	Name    string `json:"name,omitzero"`
-	Type    uint16 `json:"type"`           // dns.TypeA=1, dns.TypeAAAA=28, ...
-	Class   uint16 `json:"class,omitzero"` // default dns.ClassINET=1
+	Type    uint16 `json:"type"`
+	Class   uint16 `json:"class,omitzero"`
 	TTL     uint32 `json:"ttl,omitzero"`
 	Content string `json:"content"`
 }
@@ -169,9 +190,9 @@ type ZoneRecord struct {
 // query domain (suffix), or both. Files contain one entry per line (# comments).
 type RuleSet struct {
 	Tag  string   `json:"tag"`
-	Type string   `json:"type"`          // "ip" or "domain"
-	Rule []string `json:"rule,omitzero"` // inline entries
-	File string   `json:"file,omitzero"` // file with one entry per line
+	Type string   `json:"type"`
+	Rule []string `json:"rule,omitzero"`
+	File string   `json:"file,omitzero"`
 }
 
 // LatencyProbeStep defines a single latency probe step with protocol, port,
@@ -182,15 +203,30 @@ type LatencyProbeStep struct {
 	Timeout  int    `json:"timeout,omitzero"`
 }
 
-// IsEnabled reports whether DNSCrypt is configured.  An empty DNSCryptSettings
-// block means DNSCrypt is disabled.
-func (d *DNSCryptSettings) IsEnabled() bool {
-	return d.ProviderName != "" || d.PublicKey != "" || d.PrivateKey != ""
+// DNSCryptV2Prefix is the provider name prefix for DNSCrypt v2 certificates.
+const DNSCryptV2Prefix = "2.dnscrypt-cert."
+
+// IsEnabled reports whether DNSCrypt identity keys are configured.  Keys are
+// auto-generated when empty, so this is always true when the dnscrypt cert
+// block is present in config.
+func (d *DNSCryptCertificate) IsEnabled() bool {
+	return d.PublicKey != "" || d.PrivateKey != ""
 }
 
-// IsEnabled reports whether the TLCP listener is configured.
-func (t *TLCPListenerSettings) IsEnabled() bool {
+// ProviderName returns the DNSCrypt v2 provider name derived from the DDR
+// domain (e.g. "2.dnscrypt-cert.example.com").
+func (d *DNSCryptCertificate) ProviderName(domain string) string {
+	return DNSCryptV2Prefix + domain
+}
+
+// IsEnabled reports whether the TLCP certificate material is configured.
+func (t *TLCPCertificate) IsEnabled() bool {
 	return t.SelfSigned || (t.SignCertFile != "" && t.SignKeyFile != "" && t.EncCertFile != "" && t.EncKeyFile != "")
+}
+
+// IsEnabled reports whether the TLS certificate material is configured.
+func (t *TLSCertificate) IsEnabled() bool {
+	return t.SelfSigned || (t.CertFile != "" && t.KeyFile != "")
 }
 
 // IsRecursive reports whether the upstream server is the built-in recursive
@@ -250,13 +286,15 @@ func NewDefaultServerConfig() *ServerConfig {
 	cfg := &ServerConfig{}
 	cfg.Server.LogLevel = log.DefaultLevel
 
-	cfg.Server.Port = DefaultDNSPort
+	cfg.Server.Protocol.UDP = DefaultDNSPort
+	cfg.Server.Protocol.TCP = DefaultDNSPort
+	cfg.Server.Protocol.TLS = DefaultDOTPort
+	cfg.Server.Protocol.QUIC = DefaultDOTPort
+	cfg.Server.Protocol.HTTPS = HTTPSEndpoint{Port: DefaultDOHPort, Endpoint: DefaultQueryPath}
+	cfg.Server.Protocol.HTTP3 = HTTPSEndpoint{Port: DefaultDOHPort, Endpoint: DefaultQueryPath}
 
-	cfg.Server.TLS.Port = DefaultDOTPort
-	cfg.Server.TLS.HTTPS.Port = DefaultDOHPort
-	cfg.Server.TLS.HTTPS.Endpoint = DefaultQueryPath
-
-	cfg.Server.Features.DDR = DDRSettings{Domain: "dns.example.com", IPv4: "127.0.0.1", IPv6: "::1"}
+	cfg.Server.Certificate.Domain = "dns.example.com"
+	cfg.Server.Features.DDR = DDRSettings{IPv4: "127.0.0.1", IPv6: "::1"}
 	cfg.Server.Features.ECS = ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.DNSSECEnforce = true
 	cfg.Server.Features.HijackProtection = true
@@ -383,23 +421,23 @@ func hexEncodePublicKey(b []byte) string {
 
 func shouldEnableDDR(cfg *ServerConfig) bool {
 	ddr := cfg.Server.Features.DDR
-	return ddr.Domain != "" &&
+	return cfg.Server.Certificate.Domain != "" &&
 		(ddr.IPv4 != "" || ddr.IPv6 != "")
 }
 
 func addDDRRecords(cfg *ServerConfig) {
 	ddr := cfg.Server.Features.DDR
+	domain := strings.TrimSuffix(cfg.Server.Certificate.Domain, ".")
 
-	if strings.ContainsAny(ddr.Domain, " \"") || strings.ContainsAny(ddr.IPv4, " \"") || strings.ContainsAny(ddr.IPv6, " \"") {
+	if strings.ContainsAny(domain, " \"") || strings.ContainsAny(ddr.IPv4, " \"") || strings.ContainsAny(ddr.IPv6, " \"") {
 		log.Warnf("CONFIG: DDR domain/IP contains unsafe characters, DDR records will not be added")
 		return
 	}
-	if ddr.Domain == "" {
+	if domain == "" {
 		log.Warnf("CONFIG: DDR domain is empty, DDR records will not be added")
 		return
 	}
-	domain := strings.TrimSuffix(ddr.Domain, ".")
-	endpoint := cfg.Server.TLS.HTTPS.Endpoint
+	endpoint := cfg.Server.Protocol.HTTPS.Endpoint
 	if endpoint == "" {
 		endpoint = DefaultQueryPath
 	}
@@ -421,14 +459,22 @@ func addDDRRecords(cfg *ServerConfig) {
 	}
 
 	ddrNames := []string{"_dns.resolver.arpa", "_dns." + domain}
-	if cfg.Server.Port != "" && cfg.Server.Port != DefaultDNSPort {
-		ddrNames = append(ddrNames, "_"+cfg.Server.Port+"._dns."+domain)
+	if cfg.Server.Protocol.UDP != "" && cfg.Server.Protocol.UDP != DefaultDNSPort {
+		ddrNames = append(ddrNames, "_"+cfg.Server.Protocol.UDP+"._dns."+domain)
 	}
 
 	// Build zone SVCB records.
+	dohPort := cfg.Server.Protocol.HTTPS.Port
+	if dohPort == "" {
+		dohPort = cfg.Server.Protocol.HTTP3.Port
+	}
+	dotPort := cfg.Server.Protocol.TLS
+	if dotPort == "" {
+		dotPort = cfg.Server.Protocol.QUIC
+	}
 	zoneServiceRecords := make([]ZoneRecord, 2)
-	zoneServiceRecords[0] = ZoneRecord{Type: dns.TypeSVCB, Content: "1 . alpn=h3,h2 port=" + cfg.Server.TLS.HTTPS.Port + " " + dohPath}
-	zoneServiceRecords[1] = ZoneRecord{Type: dns.TypeSVCB, Content: "2 . alpn=doq,dot port=" + cfg.Server.TLS.Port}
+	zoneServiceRecords[0] = ZoneRecord{Type: dns.TypeSVCB, Content: "1 . alpn=h3,h2 port=" + dohPort + " " + dohPath}
+	zoneServiceRecords[1] = ZoneRecord{Type: dns.TypeSVCB, Content: "2 . alpn=doq,dot port=" + dotPort}
 	var zoneAdditional []ZoneRecord
 	if ddr.IPv4 != "" {
 		for i := range zoneServiceRecords {

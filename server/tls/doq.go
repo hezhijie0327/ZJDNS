@@ -19,7 +19,7 @@ import (
 )
 
 func (s *Server) startDOQServer() error {
-	addrs, err := zdnsutil.ResolveBindAddrs("udp", s.cfg.Port)
+	addrs, err := zdnsutil.ResolveBindAddrs("udp", s.cfg.QUICPort)
 	if err != nil {
 		return fmt.Errorf("DoQ address resolution: %w", err)
 	}

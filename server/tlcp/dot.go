@@ -31,7 +31,7 @@ func (k *tcpKeepAliveListener) Accept() (net.Conn, error) {
 }
 
 func (s *Server) startDOTServer() error {
-	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.cfg.Port)
+	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.dotPort)
 	if err != nil {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}

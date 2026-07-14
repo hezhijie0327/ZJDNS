@@ -168,7 +168,7 @@ func BenchmarkShuffleSlice(b *testing.B) {
 func BenchmarkBuildQueryMessage(b *testing.B) {
 	disableLogging()
 	h, _ := edns.NewHandler(config.ECSConfig{})
-	cfg := &config.ServerConfig{Server: config.ServerSettings{Port: "5353", TLS: config.TLSSettings{Port: "853"}}}
+	cfg := &config.ServerConfig{Server: config.ServerSettings{Protocol: config.ProtocolSettings{UDP: "5353", TCP: "5353", TLS: "853"}}}
 	srv, err := server.New(cfg)
 	if err != nil {
 		b.Fatalf("server.New: %v", err)
@@ -234,9 +234,8 @@ func buildBenchServer(b *testing.B) *server.Server {
 
 	cfg := &config.ServerConfig{
 		Server: config.ServerSettings{
-			Port:     "15353",
 			LogLevel: "error",
-			TLS:      config.TLSSettings{Port: "853"},
+			Protocol: config.ProtocolSettings{UDP: "15353", TCP: "15353", TLS: "853"},
 			Features: config.FeatureFlags{
 				HijackProtection: false,
 				DNSSECEnforce:    false,
@@ -319,9 +318,8 @@ func BenchmarkServerStartup(b *testing.B) {
 	disableLogging()
 	cfg := &config.ServerConfig{
 		Server: config.ServerSettings{
-			Port:     "0", // ephemeral port
 			LogLevel: "error",
-			TLS:      config.TLSSettings{Port: "853"},
+			Protocol: config.ProtocolSettings{UDP: "0", TCP: "0", TLS: "853"},
 			Features: config.FeatureFlags{HijackProtection: false},
 		},
 	}

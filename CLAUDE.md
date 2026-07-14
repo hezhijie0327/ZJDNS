@@ -408,7 +408,12 @@ Top layer (wiring):
 | `Server` | `server/tls` | TLS listeners (DoT, DoQ, DoH, DoH3) |
 | `Server` | `server/dnscrypt` | DNSCrypt v2 lifecycle: UDP+TCP listeners, cert TXT handshake, query encrypt/decrypt, PQ KEM + ticket resumption |
 | `Certificate` | `server/dnscrypt` | DNSCrypt server certificate: Ed25519 signature, X25519 short-term key (classical) or X-Wing PQ public key (1216B) with ClientMagic + PqCertContext |
-| `DNSCryptSettings` | `config` | DNSCrypt server config: Ed25519 identity keys (optional, auto-generated), provider name, ES version (xwingpq/xchacha20poly1305), port. Resolver encryption keys are auto-generated and rotated every 24h. |
+| `ProtocolSettings` | `config` | Per-protocol port/endpoint config. A protocol is enabled when its field is non-empty. Contains `UDP`, `TCP`, `TLS` (DoT), `QUIC` (DoQ), `HTTPS` (DoH), `HTTP3` (DoH3), `TLCP` (TLCP DoT), `HTTPTLCP` (TLCP DoH), `DNSCrypt`. |
+| `HTTPSEndpoint` | `config` | Port + endpoint path for HTTP-based transports (DoH, DoH3, TLCP DoH). |
+| `CertSettings` | `config` | Unified cert config: `Domain` (server identity), `TLS` (TLSCertificate), `TLCP` (TLCPCertificate), `DNSCrypt` (DNSCryptCertificate). |
+| `TLSCertificate` | `config` | TLS certificate: `CertFile`, `KeyFile`, `SelfSigned`. |
+| `TLCPCertificate` | `config` | TLCP SM2 certificate pairs: `SignCertFile`/`SignKeyFile`, `EncCertFile`/`EncKeyFile`, `SelfSigned`. |
+| `DNSCryptCertificate` | `config` | DNSCrypt v2 identity keys: `PrivateKey`, `PublicKey`, `ESVersion`. Provider name auto-derived as `2.dnscrypt-cert.<cert.domain>`. Resolver encryption keys are auto-generated and rotated every 24h. |
 | `EncryptedQuery` / `EncryptedResponse` | `server/dnscrypt` | Public API types for client-side query encryption and response decryption. EncryptedQuery carries ClientNonce for pre-generated nonces (resumed PQ). EncryptedResponse exposes PQControl for ticket extraction. |
 | `CryptoConstruction` | `server/dnscrypt` | Enum: XWingPQ (0x0003, default), XChacha20Poly1305 (0x0002). XSalsa20 (0x0001) is removed — deprecated by dnscrypt-proxy. |
 | `ResolverConfig` | `server/dnscrypt` | Internal config builder: provider name, Ed25519 signing keys, X25519/X-Wing resolver keys, ES version. Methods: `NewCert()`, `CreateStamp()`. |
@@ -463,7 +468,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
   - **Wire formats** — Classical query: `<client-magic>(8) <client-pk>(32) <nonce/2>(12) <encrypted>`. PQ initial: `<client-magic>(8) <xwing-ct>(1120) <nonce/2>(12) <encrypted>`. PQ resumed: `<PQResumeMagic>(8) <ticket-len>(2) <ticket>(N) <nonce/2>(12) <encrypted>`. Response: `<resolver-magic>(8) <nonce>(24) <encrypted>`. PQ responses always carry a 2-byte control-length prefix after decryption: initial responses have `<len>(2) <PQDR magic>(4) <version>(1) <lifetime>(4) <ticket-len>(2) <ticket>(N)`; resumed responses have `<len>=0x0000` with no control block. The prefix is always present so the client can locate the DNS payload without misinterpreting header bytes as control length — format aligned with dnscrypt-proxy.
   - **Certificate layout** — Classical (124B): `CertMagic(4) + ESVersion(2) + Minor(2) + Sig(64) + ResolverPk(32) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4)`. PQ (1320B): same header, then `PqPublicKey(1216) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4) + Extensions(12)`. ClientMagic for PQ is SHA-256(PqPublicKey)[:8]. PqCertContext binds the shared key to the exact certificate bytes (HKDF info = "DNSCrypt-PQ-v1" + es-version + minor + resolver-pk + client-magic + serial + ts-start + ts-end + extensions).
   - **Ticket resumption**: After a successful initial PQ query, the server issues a resumption ticket sealed with XChacha20-Poly1305 under a server-wide `ticketKey` (SHA-256 of the Ed25519 signing key). The ticket plaintext encodes `PQESVersion(2) + ClientMagic(8) + ResumeSecret(32) + Expiry(8)`. The client stores `(ticket, resumeSecret, expiry)` in `dnscryptState` and uses them for subsequent queries, deriving per-query keys via `pqResumedSharedKey(resumeSecret, clientMagic, clientNonce/2, ticket)` — avoiding expensive X-Wing KEM operations.
-  - **Config generator** (`generate.go`): `GenerateDNSCryptConfig()` outputs a single valid JSON config file with `server.dnscrypt` block + one `upstream` entry (sdns:// stamp, protocol auto-detected by normalizeStamps). Called directly from `cmd/zjdns/cli/generate.go` — no hook indirection. `CreateStamp` delegates to `zstamp.Stamp.String()`. Key exports: `ParseStamp()` (wraps `zstamp.Parse`), `HexDecodeKey()`, `GenerateEd25519Keypair()`. Internal helpers: `hexEncodeKey/hexDecodeKey`, `generateRandomKeyPair`, `GenerateResolverConfig`.
+  - **Config generator** (`generate.go`): `GenerateDNSCryptConfig()` outputs a single valid JSON config file with `certificate.dnscrypt` + `protocol.dnscrypt` + one `upstream` entry (sdns:// stamp, protocol auto-detected by normalizeStamps). Called directly from `cmd/zjdns/cli/generate.go` — no hook indirection. `CreateStamp` delegates to `zstamp.Stamp.String()`. Key exports: `ParseStamp()` (wraps `zstamp.Parse`), `HexDecodeKey()`, `GenerateEd25519Keypair()`. Internal helpers: `hexEncodeKey/hexDecodeKey`, `generateRandomKeyPair`, `GenerateResolverConfig`.
   - **Tests** (`server/client/dnscrypt_test.go`): 9 e2e tests covering UDP/TCP, XWingPQ/XChacha20, A/AAAA/TXT/cert query types, multi-query state reuse (ticket resumption), unreachable error path, and UDP→TCP fallback. Each test boots an ephemeral DNSCrypt server on a random port with auto-generated PQ or classical keys via `startTestDNSCryptServer`.
 - **DNSSEC**: IANA root KSK trust anchors (key tags 20326 + 38696). `dnssec_enforce: true` → SERVFAIL on bogus; `false` → pass through without AD.
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
@@ -626,8 +631,11 @@ GitHub Actions (`.github/workflows/main.yml`) builds multi-arch Docker images (l
 ```json
 {
   "server": {
-    "port": "15353",
     "log_level": "debug",
+    "protocol": {
+      "udp": "15353",
+      "tcp": "15353"
+    },
     "features": {
       "hijack_protection": true,
       "dnssec_enforce": true,
@@ -727,7 +735,7 @@ Normal domains should show `tcp=false` throughout; blocked domains should show h
 
 ```json
 {
-  "server": { "port": "53535", "features": { "hijack_protection": false, "cache": { "max_entries": 0 } } },
+  "server": { "protocol": { "udp": "53535", "tcp": "53535" }, "features": { "hijack_protection": false, "cache": { "max_entries": 0 } } },
   "upstream": [
     { "address": "https://sm2.doh.pub/dns-query", "protocol": "doh-tlcp", "server_name": "sm2.doh.pub", "skip_tls_verify": true }
   ]
@@ -739,8 +747,8 @@ Normal domains should show `tcp=false` throughout; blocked domains should show h
 ```json
 {
   "server": {
-    "port": "55353",
-    "tlcp": { "port": "8530", "self_signed": true, "https": { "port": "4430", "endpoint": "/dns-query" } },
+    "protocol": { "udp": "55353", "tcp": "55353", "tlcp": "8530", "http_tlcp": { "port": "4430", "endpoint": "/dns-query" } },
+    "certificate": { "domain": "tlcp.local", "tlcp": { "self_signed": true } },
     "features": { "hijack_protection": false, "cache": { "max_entries": 0 } }
   },
   "upstream": [ { "address": "builtin_recursive" } ]
@@ -753,16 +761,18 @@ Normal domains should show `tcp=false` throughout; blocked domains should show h
 # Server (TLCP DoT + DoH on 8530/4430)
 ./zjdns -config tlcp_srv.json &
 # Client → TLCP DoH to server
-./zjdns -config <(echo '{"server":{"port":"55454"},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"doh-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
+./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454","tcp":"55454"}},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"doh-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
 ```
 
 ## KTLS Tuning
 
+KTLS is configured under `features.ktls`. Both `kernel_tx` and `kernel_rx` default to `false` (KTLS is opt-in).
+
 If `"local error: tls: bad record MAC"` appears, disable kernel RX offload:
 
 ```json
-{ "server": { "tls": { "ktls": { "kernel_rx": false } } } }
+{ "server": { "features": { "ktls": { "kernel_rx": false } } } }
 ```
 
 Both `kernel_tx` and `kernel_rx` default to `false` (KTLS is opt-in).

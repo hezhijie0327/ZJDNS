@@ -13,29 +13,33 @@ import (
 func generateExampleConfig() string {
 	cfg := config.NewDefaultServerConfig()
 
+	// ── server ──────────────────────────────────────────────────────────────
+
 	cfg.Server.Pprof = config.DefaultPprofPort
 	cfg.Server.LogLevel = log.DefaultLevel
 
-	cfg.Server.TLS.CertFile = "/path/to/cert.pem"
-	cfg.Server.TLS.KeyFile = "/path/to/key.pem"
+	cfg.Server.Protocol.DNSCrypt = config.DefaultDNSCryptPort
 
-	cfg.Server.TLS.KTLS = &config.KTLSSettings{KernelTX: true}
-
-	cfg.Server.DNSCrypt = config.DNSCryptSettings{
-		Port:         config.DefaultDNSCryptPort,
-		ProviderName: "2.dnscrypt-cert.example.com",
-		PublicKey:    "1A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
-		PrivateKey:   "34E2546B6F4C1FCE695E0C62DD3D74D39CEA52C70A283E7615EF4B67F82178D51A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
-		ESVersion:    "xwingpq",
+	cfg.Server.Certificate.Domain = "dns.example.com"
+	cfg.Server.Certificate.TLS = config.TLSCertificate{
+		SelfSigned: true,
+	}
+	cfg.Server.Certificate.DNSCrypt = config.DNSCryptCertificate{
+		PublicKey:  "1A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
+		PrivateKey: "34E2546B6F4C1FCE695E0C62DD3D74D39CEA52C70A283E7615EF4B67F82178D51A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
+		ESVersion:  "xwingpq",
 	}
 
-	cfg.Server.Features.Database.DBPath = "cache.db"
-	cfg.Server.Features.Database.MMapSizeMB = config.DefaultCacheMMapSizeMB
-	cfg.Server.Features.Database.CacheSizeMB = config.DefaultCacheCacheSizeMB
-
-	cfg.Server.Features.Cache.MaxEntries = config.DefaultMaxCacheEntries
-	cfg.Server.Features.Cache.PreferStale = true
-
+	cfg.Server.Features.KTLS = &config.KTLSSettings{KernelTX: true}
+	cfg.Server.Features.Database = config.DatabaseSettings{
+		DBPath:      "cache.db",
+		MMapSizeMB:  config.DefaultCacheMMapSizeMB,
+		CacheSizeMB: config.DefaultCacheCacheSizeMB,
+	}
+	cfg.Server.Features.Cache = config.CacheSettings{
+		MaxEntries:  config.DefaultMaxCacheEntries,
+		PreferStale: true,
+	}
 	cfg.Server.Features.ECS = config.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []config.LatencyProbeStep{
 		{Protocol: config.ProtoPing, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
@@ -46,6 +50,9 @@ func generateExampleConfig() string {
 		{Protocol: config.ProtoHTTP, Port: config.DefaultProbePortHTTPS, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
 		{Protocol: config.ProtoHTTP3, Port: config.DefaultProbePortHTTPS, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
 	}
+
+	// ── upstream / fallback ─────────────────────────────────────────────────
+
 	cfg.Upstream = []config.UpstreamServer{
 		{Address: "223.5.5.5:53", Protocol: config.ProtoTCP, Proxy: "socks5://127.0.0.1:1080"},
 		{Address: "223.6.6.6:53", Protocol: config.ProtoUDP},
@@ -63,6 +70,8 @@ func generateExampleConfig() string {
 		{Address: "sdns://AQcAAAAAAAAAEjk0LjE0MC4xNC4xNDA6NTQ0MyC16ETWuDo-PhJo62gfvqcN48X6aNvWiBQdvy7AZrLa-iUyLmRuc2NyeXB0LnVuZmlsdGVyZWQubnMxLmFkZ3VhcmQuY29t"},
 		{Address: "149.112.112.9:53", Protocol: config.ProtoUDP, NoCache: true},
 	}
+
+	// ── zone / ruleset ──────────────────────────────────────────────────────
 
 	cfg.Zone.BypassTags = []string{"gateway"}
 

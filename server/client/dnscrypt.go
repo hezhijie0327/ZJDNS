@@ -309,7 +309,7 @@ func (c *Client) getDNSCryptState(
 	}
 
 	// Parse and verify the certificate.
-	cert, err := parseDNSCryptCert(resp.Answer, publicKey, providerName)
+	cert, err := parseDNSCryptCertificate(resp.Answer, publicKey, providerName)
 	if err != nil {
 		return nil, fmt.Errorf("parsing dnscrypt cert: %w", err)
 	}
@@ -335,7 +335,7 @@ func (c *Client) getDNSCryptState(
 		serverPK:      publicKey,
 		clientMagic:   cert.ClientMagic,
 		esVersion:     esVersion,
-		expires:       time.Now().Add(config.DefaultDNSCryptCertCacheTTL),
+		expires:       time.Now().Add(config.DefaultDNSCryptCertificateCacheTTL),
 		minQueryLen:   256,
 	}
 
@@ -357,11 +357,11 @@ func (c *Client) getDNSCryptState(
 	return state, nil
 }
 
-// parseDNSCryptCert parses the certificate from DNS TXT answer records and
+// parseDNSCryptCertificate parses the certificate from DNS TXT answer records and
 // verifies its signature.  It prefers PQ certificates (es-version 0x0003) over
 // classical ones when both are available (matching the dnscrypt-proxy
 // behaviour).
-func parseDNSCryptCert(
+func parseDNSCryptCertificate(
 	answer []dns.RR,
 	serverPK []byte,
 	providerName string,

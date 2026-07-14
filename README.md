@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.3.1-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.3.2-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -163,7 +163,7 @@ modprobe tls
 ```
 
 ```json
-{ "server": { "tls": { "ktls": { "kernel_tx": true, "kernel_rx": false } } } }
+{ "server": { "features": { "ktls": { "kernel_tx": true, "kernel_rx": false } } } }
 ```
 
 | 字段 | 默认 | 说明 |
@@ -184,22 +184,21 @@ modprobe tls
 ```json
 {
   "server": {
-    "tlcp": {
-      "port": "8530",
-      "self_signed": true,
-      "https": { "port": "4430", "endpoint": "/dns-query" }
-    }
+    "protocol": { "tlcp": "8530", "http_tlcp": { "port": "4430" } },
+    "certificate": { "domain": "example.com", "tlcp": { "self_signed": true } }
   }
 }
 ```
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
-| `port` | `"8530"` | TLCP DoT 监听端口 |
-| `sign_cert_file` / `sign_key_file` | — | SM2 签名证书和私钥 |
-| `enc_cert_file` / `enc_key_file` | — | SM2 加密证书和私钥 |
-| `self_signed` | `false` | 自动生成 SM2 自签名双证书 |
-| `https.port` | `"4430"` | TLCP DoH 监听端口（为空则不启用） |
+| `protocol.tlcp` | `""` | TLCP DoT 端口（为空则不启用） |
+| `protocol.http_tlcp.port` | `""` | TLCP DoH 端口 |
+| `protocol.http_tlcp.endpoint` | `"/dns-query"` | TLCP DoH 路径 |
+| `certificate.tlcp.sign_cert_file` / `sign_key_file` | — | SM2 签名证书和私钥 |
+| `certificate.tlcp.enc_cert_file` / `enc_key_file` | — | SM2 加密证书和私钥 |
+| `certificate.tlcp.self_signed` | `false` | 自动生成 SM2 自签名双证书 |
+| `certificate.domain` | — | **必填**（安全协议启用时），服务器域名 |
 | `https.endpoint` | `"/dns-query"` | DoH HTTP 路径 |
 
 **客户端配置**：
@@ -276,13 +275,20 @@ TLCP 密码套件（默认全部启用）：`ECC_SM4_GCM_SM3`、`ECC_SM4_CBC_SM3
 ```json
 {
   "server": {
-    "port": "53",
     "log_level": "info",
-    "tls": { "port": "853", "self_signed": true },
-    "dnscrypt": {
-      "port": "8443",
-      "provider_name": "2.dnscrypt-cert.example.com",
-      "es_version": "xwingpq"
+    "protocol": {
+      "udp": "53",
+      "tcp": "53",
+      "tls": "853",
+      "quic": "853",
+      "https": { "port": "443" },
+      "http3": { "port": "443" },
+      "dnscrypt": "8443"
+    },
+    "certificate": {
+      "domain": "example.com",
+      "tls": { "self_signed": true },
+      "dnscrypt": { "es_version": "xwingpq" }
     },
     "features": {
       "hijack_protection": true,

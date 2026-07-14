@@ -27,13 +27,9 @@ type ResolverConfig struct {
 	ESVersion    CryptoConstruction
 }
 
-// ConfigBlock holds the DNSCrypt server settings.
-type ConfigBlock struct {
-	Port         string `json:"port"`
-	ProviderName string `json:"provider_name"`
-	PublicKey    string `json:"public_key"`
-	PrivateKey   string `json:"private_key"`
-	ESVersion    string `json:"es_version"`
+// CertificateBlock holds the DNSCrypt certificate settings for generated config.
+type CertificateBlock struct {
+	DNSCrypt config.DNSCryptCertificate `json:"dnscrypt"`
 }
 
 // FullConfig is a complete ZJDNS configuration including both server-side
@@ -41,15 +37,11 @@ type ConfigBlock struct {
 // single valid JSON config file.
 type FullConfig struct {
 	Server struct {
-		DNSCrypt ConfigBlock `json:"dnscrypt"`
+		Protocol    config.ProtocolSettings `json:"protocol"`
+		Certificate CertificateBlock        `json:"certificate"`
 	} `json:"server"`
 	Upstream []config.UpstreamServer `json:"upstream"`
 }
-
-const (
-	// DNSCryptV2Prefix is the provider name prefix for DNSCrypt v2.
-	DNSCryptV2Prefix = "2.dnscrypt-cert."
-)
 
 // GenerateResolverConfig generates a new resolver configuration.  If
 // privateKey is nil, a new Ed25519 keypair is generated.  For classical
@@ -59,8 +51,8 @@ func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey, 
 	cfg := ResolverConfig{
 		ESVersion: esVersion,
 	}
-	if !strings.HasPrefix(providerName, DNSCryptV2Prefix) {
-		providerName = DNSCryptV2Prefix + providerName
+	if !strings.HasPrefix(providerName, config.DNSCryptV2Prefix) {
+		providerName = config.DNSCryptV2Prefix + providerName
 	}
 	cfg.ProviderName = providerName
 	if privateKey == nil {
@@ -92,7 +84,7 @@ func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey, 
 func (rc *ResolverConfig) NewCert() (cert *Certificate, err error) {
 	cert = &Certificate{
 		Serial:    nowUnix32(),
-		NotAfter:  nowUnix32() + uint32(config.DefaultDNSCryptCertTTL/time.Second),
+		NotAfter:  nowUnix32() + uint32(config.DefaultDNSCryptCertificateTTL/time.Second),
 		NotBefore: nowUnix32(),
 		ESVersion: rc.ESVersion,
 	}
@@ -218,9 +210,9 @@ func GenerateEd25519Keypair() (publicKey, privateKey []byte, err error) {
 }
 
 // GenerateDNSCryptConfig generates a complete ZJDNS JSON configuration for
-// the given provider name and address.  The output includes two upstream
-// entries: an sdns:// stamp (for dnscrypt-proxy / ZJDNS client) and a
-// regular address+public_key entry (for explicit configuration).
+// the given provider name and address.  The output includes the server-side
+// DNSCrypt cert + protocol config and a client-side upstream entry with the
+// sdns:// stamp.
 func GenerateDNSCryptConfig(provider, addr, esVersion string) (string, error) {
 	if provider == "" {
 		return "", errors.New("provider name is required (-provider <name>)")
@@ -247,12 +239,11 @@ func GenerateDNSCryptConfig(provider, addr, esVersion string) (string, error) {
 	port := addr[strings.LastIndex(addr, ":")+1:]
 
 	cfg := &FullConfig{}
-	cfg.Server.DNSCrypt = ConfigBlock{
-		Port:         port,
-		ProviderName: rc.ProviderName,
-		PublicKey:    rc.PublicKey,
-		PrivateKey:   rc.PrivateKey,
-		ESVersion:    esVersion,
+	cfg.Server.Protocol.DNSCrypt = port
+	cfg.Server.Certificate.DNSCrypt = config.DNSCryptCertificate{
+		PublicKey:  rc.PublicKey,
+		PrivateKey: rc.PrivateKey,
+		ESVersion:  esVersion,
 	}
 	cfg.Upstream = []config.UpstreamServer{
 		{Address: stamp},
