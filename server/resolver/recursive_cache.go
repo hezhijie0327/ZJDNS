@@ -34,9 +34,9 @@ func addrsFromRRs(records []dns.RR) []string {
 func rrToAddr(r dns.RR) string {
 	switch r := r.(type) {
 	case *dns.A:
-		return net.JoinHostPort(r.A.String(), config.DefaultDNSPort)
+		return net.JoinHostPort(r.A.String(), config.DefaultUDPPort)
 	case *dns.AAAA:
-		return net.JoinHostPort(r.AAAA.String(), config.DefaultDNSPort)
+		return net.JoinHostPort(r.AAAA.String(), config.DefaultUDPPort)
 	}
 	return ""
 }

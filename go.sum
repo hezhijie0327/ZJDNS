@@ -30,6 +30,12 @@ github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 h1:td8kMW1bWwzc7NnlzPjQV4GbDNLk
 github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303/go.mod h1:o8gr9w/50fXA5TDskg6bNUjvqmFfw4KaXth4q+yDSjg=
 github.com/ncruces/julianday v1.0.0 h1:fH0OKwa7NWvniGQtxdJRxAgkBMolni2BjDHaWTxqt7M=
 github.com/ncruces/julianday v1.0.0/go.mod h1:Dusn2KvZrrovOMJuOt0TNXL6tB7U2E8kvza5fFc9G7g=
+github.com/pion/dtls/v3 v3.1.3-0.20260713182031-e1fb308f9f85 h1:dDDuA1eLjC8CxYHjjJeShByWC1OD8MamOc2LDiRbalk=
+github.com/pion/dtls/v3 v3.1.3-0.20260713182031-e1fb308f9f85/go.mod h1:gz1K4jg6c+fq86oQMH4pilpCEOEPwmEr2jY+VcF/mkU=
+github.com/pion/logging v0.2.4 h1:tTew+7cmQ+Mc1pTBLKH2puKsOvhm32dROumOZ655zB8=
+github.com/pion/logging v0.2.4/go.mod h1:DffhXTKYdNZU+KtJ5pyQDjvOAh/GsNSyv1lbkFbe3so=
+github.com/pion/transport/v4 v4.0.2 h1:ifYlPqNwsy6aKQ9y8yzxXlHae5431ZrH2avkD/Rn6Tk=
+github.com/pion/transport/v4 v4.0.2/go.mod h1:06hFI+jCFcok2X2MekVufNZ/uzNZXivGBPfviSVcjgM=
 github.com/pjbgf/sha1cd v0.6.1-0.20260701134543-795854be75e9 h1:8auoHPCkgHJGvZKvfQo28701D76nmHUuLOBgN0WPS+g=
 github.com/pjbgf/sha1cd v0.6.1-0.20260701134543-795854be75e9/go.mod h1:a3VhvIqPThq8oy6+du+gH4VTurYTVaW7HIV3FIFcYvM=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

@@ -44,6 +44,7 @@ type ProtocolSettings struct {
 	HTTP3    HTTPSEndpoint `json:"http3,omitzero"`
 	TLCP     string        `json:"tlcp,omitzero"`
 	HTTPTLCP HTTPSEndpoint `json:"http_tlcp,omitzero"`
+	DTLS     string        `json:"dtls,omitzero"`
 	DNSCrypt string        `json:"dnscrypt,omitzero"`
 }
 
@@ -286,12 +287,12 @@ func NewDefaultServerConfig() *ServerConfig {
 	cfg := &ServerConfig{}
 	cfg.Server.LogLevel = log.DefaultLevel
 
-	cfg.Server.Protocol.UDP = DefaultDNSPort
-	cfg.Server.Protocol.TCP = DefaultDNSPort
-	cfg.Server.Protocol.TLS = DefaultDOTPort
-	cfg.Server.Protocol.QUIC = DefaultDOTPort
-	cfg.Server.Protocol.HTTPS = HTTPSEndpoint{Port: DefaultDOHPort, Endpoint: DefaultQueryPath}
-	cfg.Server.Protocol.HTTP3 = HTTPSEndpoint{Port: DefaultDOHPort, Endpoint: DefaultQueryPath}
+	cfg.Server.Protocol.UDP = DefaultUDPPort
+	cfg.Server.Protocol.TCP = DefaultTCPPort
+	cfg.Server.Protocol.TLS = DefaultTLSPort
+	cfg.Server.Protocol.QUIC = DefaultQUICPort
+	cfg.Server.Protocol.HTTPS = HTTPSEndpoint{Port: DefaultHTTPSPort, Endpoint: DefaultQueryPath}
+	cfg.Server.Protocol.HTTP3 = HTTPSEndpoint{Port: DefaultHTTP3Port, Endpoint: DefaultQueryPath}
 
 	cfg.Server.Certificate.Domain = "dns.example.com"
 	cfg.Server.Features.DDR = DDRSettings{IPv4: "127.0.0.1", IPv6: "::1"}
@@ -459,7 +460,7 @@ func addDDRRecords(cfg *ServerConfig) {
 	}
 
 	ddrNames := []string{"_dns.resolver.arpa", "_dns." + domain}
-	if cfg.Server.Protocol.UDP != "" && cfg.Server.Protocol.UDP != DefaultDNSPort {
+	if cfg.Server.Protocol.UDP != "" && cfg.Server.Protocol.UDP != DefaultUDPPort {
 		ddrNames = append(ddrNames, "_"+cfg.Server.Protocol.UDP+"._dns."+domain)
 	}
 

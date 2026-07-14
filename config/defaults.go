@@ -2,12 +2,23 @@ package config
 
 import "time"
 
-// Network ports and paths.
+// Listener ports and paths.
 const (
-	DefaultDNSPort   = "53"
-	DefaultDOTPort   = "853"
-	DefaultDOHPort   = "443"
+	DefaultUDPPort   = "53"   // plain DNS UDP
+	DefaultTCPPort   = "53"   // plain DNS TCP
+	DefaultTLSPort   = "853"  // DoT
+	DefaultQUICPort  = "853"  // DoQ
+	DefaultHTTPSPort = "443"  // DoH
+	DefaultHTTP3Port = "443"  // DoH3
+	DefaultDTLSPort  = "8532" // DTLS (RFC 8094)
+
+	DefaultDNSCryptPort = "8443"
+
+	DefaultTLCPPort    = "8530" // TLCP DoT
+	DefaultTLCPDOHPort = "4430" // TLCP DoH
+
 	DefaultPprofPort = "6060"
+
 	DefaultQueryPath = "/dns-query"
 	DefaultPprofPath = "/debug/pprof/"
 )
@@ -59,6 +70,7 @@ const (
 	DefaultHTTPServerIdleTimeout   = 60 * time.Second  // HTTP keep-alive idle
 	DefaultHTTPServerWriteTimeout  = 10 * time.Second  // HTTP response write
 	DefaultHTTPReadHeaderTimeout   = 5 * time.Second   // HTTP header read (Slowloris protection)
+	DefaultDTLSIdleTimeout         = 30 * time.Second  // DTLS idle timeout (RFC 8094 §3.3)
 )
 
 // Intervals, delays, and retry windows for background maintenance.
@@ -174,11 +186,11 @@ const (
 	ProtoDNSCryptTCP = "dnscrypt-tcp" // DNSCrypt v2 encrypted DNS (TCP)
 	ProtoTLCP        = "tlcp"         // DoT over TLCP (GB/T 38636-2020)
 	ProtoDOH_TLCP    = "doh-tlcp"     // DoH over TLCP
+	ProtoDTLS        = "dtls"         // DNS-over-DTLS (RFC 8094)
 )
 
 // DNSCrypt v2 protocol defaults.
 const (
-	DefaultDNSCryptPort                = "8443"
 	DefaultDNSCryptCertificateTTL      = 24 * time.Hour
 	DefaultDNSCryptUDPSize             = 4096
 	DefaultDNSCryptCertificateCacheTTL = 1 * time.Hour
@@ -188,18 +200,13 @@ const (
 	DefaultDNSCryptKeyOverlap          = 1 * time.Hour
 )
 
-// TLCP (国密 SSL) protocol defaults.
-const (
-	DefaultTLCPPort    = "8530" // TLCP DoT listener port
-	DefaultTLCPDOHPort = "4430" // TLCP DoH listener port
-)
-
 // ALPN protocol identifiers for secure DNS transports.
 var (
 	NextProtoDOT  = []string{"dot"} // RFC 7858: DNS-over-TLS
 	NextProtoDOH  = []string{"h2"}  // RFC 8484: DNS-over-HTTPS (HTTP/2)
 	NextProtoDOQ  = []string{"doq"} // RFC 9250: DNS-over-QUIC
 	NextProtoDOH3 = []string{"h3"}  // DNS-over-HTTP/3
+	NextProtoDTLS = []string{"dot"} // RFC 8094: DNS-over-DTLS (same ALPN as DoT)
 )
 
 // DefaultProjectName is the default application name, used in CHAOS records

@@ -127,7 +127,6 @@ func (s *Server) Shutdown() error {
 			zdnsutil.CloseWithLog(l, "TLCP DoH listener", "TLCP")
 		}
 	}
-
 	log.Infof("TLCP: TLCP server shut down")
 	return nil
 }

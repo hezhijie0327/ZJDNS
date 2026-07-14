@@ -263,7 +263,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 					}
 					nsKey := dnsutil.Fqdn(rrec.Header().Name)
 					nsGlue[nsKey] = append(nsGlue[nsKey], rrec)
-					nextNS = append(nextNS, net.JoinHostPort(ip, config.DefaultDNSPort))
+					nextNS = append(nextNS, net.JoinHostPort(ip, config.DefaultUDPPort))
 				}
 			}
 		}

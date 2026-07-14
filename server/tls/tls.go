@@ -47,6 +47,7 @@ type KTLSSettings struct {
 type Config struct {
 	TLSPort       string // DoT
 	QUICPort      string // DoQ
+	DTLSPort      string // DTLS (RFC 8094)
 	HTTPSPort     string // DoH
 	HTTP3Port     string // DoH3
 	HTTPSEndpoint string
@@ -86,6 +87,8 @@ type Server struct {
 	h3Transports   []*quic.Transport
 	h3Listeners    []*quic.EarlyListener
 	h3Validator    *quicAddrValidator
+	stdCert        stdtls.Certificate // for DTLS server
+	dtlsListeners  []net.Listener
 }
 
 // debugListener wraps a net.Listener to log every raw TCP connection before
@@ -184,6 +187,7 @@ func New(handler DNSHandler, cfg *Config, operationTimeout time.Duration) (*Serv
 		tlsConfig:     tlsConfig,
 		baseTLSConfig: baseConfig,
 		quicTLSConfig: baseQUICConfig,
+		stdCert:       sCert,
 		ctx:           ctx,
 		cancel:        cancel,
 		serverGroup:   serverGroup,
@@ -247,6 +251,17 @@ func (s *Server) Start() error {
 			defer zdnsutil.HandlePanic("DoQ server")
 			if err := s.startDOQServer(); err != nil {
 				return fmt.Errorf("DoQ startup: %w", err)
+			}
+			<-ctx.Done()
+			return nil
+		})
+	}
+
+	if s.cfg.DTLSPort != "" {
+		g.Go(func() error {
+			defer zdnsutil.HandlePanic("DTLS server")
+			if err := s.startDTLSServer(); err != nil {
+				return fmt.Errorf("DTLS startup: %w", err)
 			}
 			<-ctx.Done()
 			return nil
@@ -335,6 +350,11 @@ func (s *Server) Shutdown() error {
 	}
 	if s.h3Validator != nil {
 		s.h3Validator.close()
+	}
+	for _, l := range s.dtlsListeners {
+		if l != nil {
+			zdnsutil.CloseWithLog(l, "DTLS listener", "TLS")
+		}
 	}
 
 	if err := s.serverGroup.Wait(); err != nil {

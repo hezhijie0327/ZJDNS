@@ -177,7 +177,7 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 			return
 		}
 		if parsedURL.Port() == "" {
-			parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
+			parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTPSPort)
 		}
 		key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 		tlsConfig := c.eTLSClientConfig(server)
@@ -191,7 +191,7 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 			return
 		}
 		if parsedURL.Port() == "" {
-			parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
+			parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTPSPort)
 		}
 		key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 		tlsConfig := c.stdTLSConfig(server)

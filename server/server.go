@@ -230,6 +230,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		tlsCfg := tls.Config{
 			TLSPort:       cfg.Server.Protocol.TLS,
 			QUICPort:      cfg.Server.Protocol.QUIC,
+			DTLSPort:      cfg.Server.Protocol.DTLS,
 			HTTPSPort:     cfg.Server.Protocol.HTTPS.Port,
 			HTTP3Port:     cfg.Server.Protocol.HTTP3.Port,
 			HTTPSEndpoint: cfg.Server.Protocol.HTTPS.Endpoint,

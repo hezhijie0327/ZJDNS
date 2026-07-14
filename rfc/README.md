@@ -28,6 +28,7 @@ The DNSCrypt draft was downloaded from the IETF archive.
 | rfc7830.txt | The EDNS(0) Padding Option |
 | rfc7858.txt | Specification for DNS over Transport Layer Security (TLS) |
 | rfc7871.txt | Client Subnet in DNS Queries |
+| rfc8094.txt | DNS over Datagram Transport Layer Security (DTLS) |
 | rfc8310.txt | Usage Profiles for DNS over TLS and DNS over DTLS |
 | rfc8467.txt | Padding Policies for Extension Mechanisms for DNS (EDNS(0)) |
 | rfc8484.txt | DNS Queries over HTTPS (DoH) |

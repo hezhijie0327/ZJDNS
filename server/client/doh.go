@@ -22,7 +22,7 @@ func (c *Client) executeDOH(ctx context.Context, msg *dns.Msg, server *config.Up
 	}
 
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
+		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTPSPort)
 	}
 
 	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)

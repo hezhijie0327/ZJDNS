@@ -382,13 +382,13 @@ func buildSOCKS5Request(cmd byte, host string, port int) []byte {
 	return buf
 }
 
-// splitHostPort is like net.SplitHostPort but uses DefaultDNSPort when no port.
+// splitHostPort is like net.SplitHostPort but uses DefaultUDPPort when no port.
 func splitHostPort(addr string) (host string, port int, err error) {
 	h, p, err := net.SplitHostPort(addr)
 	if err != nil {
 		// Try adding default DNS port
 		h = addr
-		p = config.DefaultDNSPort
+		p = config.DefaultUDPPort
 	}
 	port, err = strconv.Atoi(p)
 	if err != nil {

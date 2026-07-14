@@ -21,7 +21,7 @@ func (c *Client) executeDOH_TLCP(ctx context.Context, msg *dns.Msg, server *conf
 		return nil, fmt.Errorf("parse URL: %w", err)
 	}
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
+		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultTLCPDOHPort)
 	}
 
 	tlcpCfg := tlcpConfig.Clone()

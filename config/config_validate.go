@@ -135,6 +135,7 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 		ProtoHTTP3: true, ProtoDOH3: true,
 		ProtoTLSTCP: true, ProtoDNSCrypt: true, ProtoDNSCryptTCP: true,
 		ProtoTLCP: true, ProtoDOH_TLCP: true,
+		ProtoDTLS: true,
 	}
 
 	for i, server := range cfg.Upstream {
@@ -226,6 +227,7 @@ func validatePorts(cfg *ServerConfig) error {
 		{"server.protocol.http3.port", proto.HTTP3.Port},
 		{"server.protocol.tlcp", proto.TLCP},
 		{"server.protocol.http_tlcp.port", proto.HTTPTLCP.Port},
+		{"server.protocol.dtls", proto.DTLS},
 		{"server.protocol.dnscrypt", proto.DNSCrypt},
 	} {
 		if p.value != "" {
@@ -256,6 +258,7 @@ func validatePorts(cfg *ServerConfig) error {
 		{"server.protocol.http3.port", proto.HTTP3.Port, "udp"},
 		{"server.protocol.tlcp", proto.TLCP, "tcp"},
 		{"server.protocol.http_tlcp.port", proto.HTTPTLCP.Port, "tcp"},
+		{"server.protocol.dtls", proto.DTLS, "udp"},
 		{"server.protocol.dnscrypt", proto.DNSCrypt, "udp"},
 		{"server.pprof", cfg.Server.Pprof, "tcp"},
 	}
@@ -408,13 +411,13 @@ func validateCertDomain(cfg *ServerConfig) error {
 	cert := &cfg.Server.Certificate
 
 	needsDomain := proto.TLS != "" || proto.QUIC != "" || proto.HTTPS.Port != "" || proto.HTTP3.Port != "" ||
-		proto.TLCP != "" || proto.HTTPTLCP.Port != "" || proto.DNSCrypt != ""
+		proto.TLCP != "" || proto.HTTPTLCP.Port != "" || proto.DTLS != "" || proto.DNSCrypt != ""
 	if !needsDomain {
 		return nil
 	}
 
 	if cert.Domain == "" {
-		return errors.New("config: certificate.domain is required when secure protocols (tls/quic/https/http3/tlcp/http_tlcp/dnscrypt) are enabled")
+		return errors.New("config: certificate.domain is required when secure protocols (tls/quic/https/http3/tlcp/http_tlcp/dtls/dnscrypt) are enabled")
 	}
 	return nil
 }

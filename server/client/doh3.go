@@ -59,7 +59,7 @@ func (c *Client) executeDOH3(ctx context.Context, msg *dns.Msg, server *config.U
 	}
 
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultDOHPort)
+		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTP3Port)
 	}
 
 	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)

@@ -9,6 +9,7 @@ require (
 	github.com/emmansun/gmsm v0.44.0
 	github.com/klauspost/compress v1.19.1-0.20260710073621-c0bbc84762b7
 	github.com/ncruces/go-sqlite3 v0.35.3-0.20260708233615-a627269d8f8a
+	github.com/pion/dtls/v3 v3.1.3-0.20260713182031-e1fb308f9f85
 	github.com/pjbgf/sha1cd v0.6.1-0.20260701134543-795854be75e9
 	github.com/quic-go/quic-go v0.60.1-0.20260711192402-3354ecf0bc6f
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
@@ -27,6 +28,8 @@ require (
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
+	github.com/pion/logging v0.2.4 // indirect
+	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pmorjan/kmod v1.1.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect

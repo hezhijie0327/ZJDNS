@@ -254,6 +254,8 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		return c.executeDOH3(ctx, msg, server, c.stdTLSConfig(server))
 	case config.ProtoTLCP:
 		return c.executeTLCP(ctx, msg, server, c.tlcpClientConfig(server))
+	case config.ProtoDTLS:
+		return c.executeDTLS(ctx, msg, server)
 	case config.ProtoDOH_TLCP:
 		return c.executeDOH_TLCP(ctx, msg, server, c.tlcpClientConfig(server))
 	default:
