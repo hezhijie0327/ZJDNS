@@ -240,34 +240,43 @@ func validatePorts(cfg *ServerConfig) error {
 		}
 	}
 
-	// Detect port conflicts across all configured protocols.
-	seen := map[string]string{}
-	addPort := func(field, value string) error {
-		if value == "" {
-			return nil
-		}
-		if first, ok := seen[value]; ok {
-			return fmt.Errorf("port conflict: %s=%s and %s=%s both use port %s",
-				field, value, first, value, value)
-		}
-		seen[value] = field
-		return nil
+	// Detect port conflicts.  TCP and UDP ports are tracked separately —
+	// e.g. UDP:53 and TCP:53 can coexist, but TLS:853 and TCP:853 cannot.
+	type portEntry struct {
+		field     string
+		value     string
+		transport string // "tcp" or "udp"
 	}
-	for _, p := range []struct{ field, value string }{
-		{"server.protocol.udp", proto.UDP},
-		{"server.protocol.tcp", proto.TCP},
-		{"server.protocol.tls", proto.TLS},
-		{"server.protocol.quic", proto.QUIC},
-		{"server.protocol.https.port", proto.HTTPS.Port},
-		{"server.protocol.http3.port", proto.HTTP3.Port},
-		{"server.protocol.tlcp", proto.TLCP},
-		{"server.protocol.http_tlcp.port", proto.HTTPTLCP.Port},
-		{"server.protocol.dnscrypt", proto.DNSCrypt},
-		{"server.pprof", cfg.Server.Pprof},
-	} {
-		if err := addPort(p.field, p.value); err != nil {
-			return err
+	entries := []portEntry{
+		{"server.protocol.udp", proto.UDP, "udp"},
+		{"server.protocol.tcp", proto.TCP, "tcp"},
+		{"server.protocol.tls", proto.TLS, "tcp"},
+		{"server.protocol.quic", proto.QUIC, "udp"},
+		{"server.protocol.https.port", proto.HTTPS.Port, "tcp"},
+		{"server.protocol.http3.port", proto.HTTP3.Port, "udp"},
+		{"server.protocol.tlcp", proto.TLCP, "tcp"},
+		{"server.protocol.http_tlcp.port", proto.HTTPTLCP.Port, "tcp"},
+		{"server.protocol.dnscrypt", proto.DNSCrypt, "udp"},
+		{"server.pprof", cfg.Server.Pprof, "tcp"},
+	}
+
+	tcpSeen := map[string]string{}
+	udpSeen := map[string]string{}
+	for _, e := range entries {
+		if e.value == "" {
+			continue
 		}
+		var seen map[string]string
+		if e.transport == "udp" {
+			seen = udpSeen
+		} else {
+			seen = tcpSeen
+		}
+		if first, ok := seen[e.value]; ok {
+			return fmt.Errorf("port conflict: %s=%s and %s=%s both use %s port %s",
+				e.field, e.value, first, e.value, e.transport, e.value)
+		}
+		seen[e.value] = e.field
 	}
 	return nil
 }
