@@ -237,11 +237,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.tls = tlsSrv
 	}
 
-	if cfg.Server.DNSCrypt.IsEnabled() {
+	if cfg.Server.DNSCrypt.IsEnabled() && cfg.Server.DNSCrypt.Port != "" {
 		dnscryptCfg := &cfg.Server.DNSCrypt
-		if dnscryptCfg.Port == "" {
-			dnscryptCfg.Port = config.DefaultDNSCryptPort
-		}
 		dnscryptSrv, err := serverdnscrypt.New(dnscryptCfg)
 		if err != nil {
 			cancel(fmt.Errorf("DNSCrypt server init: %w", err))
@@ -302,36 +299,6 @@ func (s *Server) Start() error {
 
 	g, ctx := errgroup.WithContext(serverCtx)
 
-	udpAddrs, err := zdnsutil.ResolveBindAddrs(config.ProtoUDP, s.config.Server.Port)
-	if err != nil {
-		return fmt.Errorf("UDP address resolution: %w", err)
-	}
-	for _, addr := range udpAddrs {
-
-		srv := &dns.Server{
-			Addr:    addr,
-			Net:     config.ProtoUDP,
-			Handler: dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
-			UDPSize: pool.UDPBufferSize,
-		}
-		s.udpServers = append(s.udpServers, srv)
-		g.Go(func() error {
-			defer zdnsutil.HandlePanic("UDP server")
-			log.Infof("SERVER: UDP server started on %s", addr)
-			err := srv.ListenAndServe()
-			if err != nil {
-				select {
-				case <-ctx.Done():
-					return nil
-				default:
-					return fmt.Errorf("UDP startup on %s: %w", addr, err)
-				}
-			}
-			<-ctx.Done()
-			return nil
-		})
-	}
-
 	if s.pprofServer != nil {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("pprof server")
@@ -346,36 +313,68 @@ func (s *Server) Start() error {
 		})
 	}
 
-	tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.config.Server.Port)
-	if err != nil {
-		return fmt.Errorf("TCP address resolution: %w", err)
-	}
-	for _, addr := range tcpAddrs {
-		listener, err := net.Listen("tcp", addr)
+	if s.config.Server.Port != "" {
+		udpAddrs, err := zdnsutil.ResolveBindAddrs(config.ProtoUDP, s.config.Server.Port)
 		if err != nil {
-			return fmt.Errorf("TCP listen on %s: %w", addr, err)
+			return fmt.Errorf("UDP address resolution: %w", err)
+		}
+		for _, addr := range udpAddrs {
+
+			srv := &dns.Server{
+				Addr:    addr,
+				Net:     config.ProtoUDP,
+				Handler: dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
+				UDPSize: pool.UDPBufferSize,
+			}
+			s.udpServers = append(s.udpServers, srv)
+			g.Go(func() error {
+				defer zdnsutil.HandlePanic("UDP server")
+				log.Infof("SERVER: UDP server started on %s", addr)
+				err := srv.ListenAndServe()
+				if err != nil {
+					select {
+					case <-ctx.Done():
+						return nil
+					default:
+						return fmt.Errorf("UDP startup on %s: %w", addr, err)
+					}
+				}
+				<-ctx.Done()
+				return nil
+			})
 		}
 
-		srv := &dns.Server{
-			Listener: &tls.TCPKeepAliveListener{Listener: listener},
-			Handler:  dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
+		tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.config.Server.Port)
+		if err != nil {
+			return fmt.Errorf("TCP address resolution: %w", err)
 		}
-		s.tcpServers = append(s.tcpServers, srv)
-		g.Go(func() error {
-			defer zdnsutil.HandlePanic("TCP server")
-			log.Infof("SERVER: TCP server started on %s", addr)
-			err := srv.ListenAndServe()
+		for _, addr := range tcpAddrs {
+			listener, err := net.Listen("tcp", addr)
 			if err != nil {
-				select {
-				case <-ctx.Done():
-					return nil
-				default:
-					return fmt.Errorf("TCP startup on %s: %w", addr, err)
-				}
+				return fmt.Errorf("TCP listen on %s: %w", addr, err)
 			}
-			<-ctx.Done()
-			return nil
-		})
+
+			srv := &dns.Server{
+				Listener: &tls.TCPKeepAliveListener{Listener: listener},
+				Handler:  dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
+			}
+			s.tcpServers = append(s.tcpServers, srv)
+			g.Go(func() error {
+				defer zdnsutil.HandlePanic("TCP server")
+				log.Infof("SERVER: TCP server started on %s", addr)
+				err := srv.ListenAndServe()
+				if err != nil {
+					select {
+					case <-ctx.Done():
+						return nil
+					default:
+						return fmt.Errorf("TCP startup on %s: %w", addr, err)
+					}
+				}
+				<-ctx.Done()
+				return nil
+			})
+		}
 	}
 
 	if s.tls != nil {

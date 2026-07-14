@@ -225,23 +225,25 @@ func (s *Server) Start(httpsPort string) error {
 		})
 	}
 
-	g.Go(func() error {
-		defer zdnsutil.HandlePanic("DoT server")
-		if err := s.startDOTServer(); err != nil {
-			return fmt.Errorf("DoT startup: %w", err)
-		}
-		<-ctx.Done()
-		return nil
-	})
+	if s.cfg.Port != "" {
+		g.Go(func() error {
+			defer zdnsutil.HandlePanic("DoT server")
+			if err := s.startDOTServer(); err != nil {
+				return fmt.Errorf("DoT startup: %w", err)
+			}
+			<-ctx.Done()
+			return nil
+		})
 
-	g.Go(func() error {
-		defer zdnsutil.HandlePanic("DoQ server")
-		if err := s.startDOQServer(); err != nil {
-			return fmt.Errorf("DoQ startup: %w", err)
-		}
-		<-ctx.Done()
-		return nil
-	})
+		g.Go(func() error {
+			defer zdnsutil.HandlePanic("DoQ server")
+			if err := s.startDOQServer(); err != nil {
+				return fmt.Errorf("DoQ startup: %w", err)
+			}
+			<-ctx.Done()
+			return nil
+		})
+	}
 
 	go func() {
 		defer zdnsutil.HandlePanic("TLS server coordinator")

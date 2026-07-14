@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.2.27-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.2.28-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -32,7 +32,7 @@ go build -o zjdns ./cmd/zjdns
 ./zjdns --generate-config
 
 # 生成 DNSCrypt 密钥及配置（输出完整 JSON，可直接用作配置文件）
-./zjdns --generate-config --dnscrypt --provider example.com [--addr <host:port>] [--es-version xwingpq|xchacha20poly1305] [--cert-ttl 30d]
+./zjdns --generate-config --dnscrypt --provider example.com [--addr <host:port>] [--es-version xwingpq|xchacha20poly1305]
 
 # DNS Stamp 工具
 ./zjdns --dnsstamp --decode "sdns://..."          # 将 sdns:// 戳记解码为上游 JSON 配置
