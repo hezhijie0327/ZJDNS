@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.2.25-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.2.26-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -420,6 +420,7 @@ GROUP BY hc.protocol, hc.rcode ORDER BY hits DESC;
 | [9250](https://www.rfc-editor.org/info/rfc9250) | DNS over QUIC | DoQ 协议映射 |
 | [9461](https://www.rfc-editor.org/info/rfc9461) / [9462](https://www.rfc-editor.org/info/rfc9462) | SVCB / DDR | 加密解析器自动发现 |
 | [draft-denis-dprive-dnscrypt-10](https://datatracker.ietf.org/doc/html/draft-denis-dprive-dnscrypt-10) | DNSCrypt v2 | XChacha20 AEAD + X-Wing PQ KEM |
+| [draft-denis-dns-stamps-02](https://datatracker.ietf.org/doc/html/draft-denis-dns-stamps-02) | DNS Stamp | sdns:// 戳记编解码，8 种协议类型 |
 
 ## 关键依赖
 

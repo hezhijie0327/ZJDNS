@@ -226,6 +226,7 @@ func (q *encryptedQuery) decryptPQInitial(query, serverPrivateKey []byte) (packe
 	// Decapsulate X-Wing to get KEM shared secret.
 	kemSS := pqDecapsulate(ct, serverPrivateKey)
 	sharedKey := pqDeriveSharedKey(kemSS, q.clientMagic, q.pqCertContext, ct)
+	q.sharedKey = sharedKey
 
 	packet, err = q.decryptPayload(encrypted, sharedKey)
 	if err != nil {

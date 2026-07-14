@@ -34,12 +34,13 @@ type dnscryptState struct {
 	minQueryLen int
 
 	// PQ fields — only set when the server offers a PQ certificate.
-	pqPublicKey    []byte
-	pqCertContext  []byte
-	pqPrivateKey   []byte // X-Wing seed (32 bytes)
-	pqTicket       []byte
-	pqResumeSecret [serverdnscrypt.SharedKeySize]byte
-	pqTicketExpiry time.Time
+	pqPublicKey       []byte
+	pqCertContext     []byte
+	pqTicket          []byte
+	pqResumeSecret    [serverdnscrypt.SharedKeySize]byte
+	pqTicketExpiry    time.Time
+	pqCiphertext      []byte
+	pqEncapsulatedKey [serverdnscrypt.SharedKeySize]byte
 }
 
 // executeDNSCrypt sends an encrypted DNS query to a DNSCrypt resolver.
@@ -189,6 +190,14 @@ func prepareAndEncryptQuery(state *dnscryptState, q *serverdnscrypt.EncryptedQue
 		return serverdnscrypt.EncryptQuery(q, packet, sharedKey)
 	}
 
+	// Try cached encapsulation first to avoid expensive X-Wing KEM on every
+	// query. The cache is valid until the state expires (cert re-fetch).
+	if len(state.pqCiphertext) > 0 {
+		state.sharedKey = state.pqEncapsulatedKey
+		q.PQCiphertext = state.pqCiphertext
+		return serverdnscrypt.EncryptQuery(q, packet, state.sharedKey)
+	}
+
 	// Fresh PQ query: encapsulate X-Wing.
 	kemSS, ct, encapErr := serverdnscrypt.PQEncapsulate(state.pqPublicKey)
 	if encapErr != nil {
@@ -196,6 +205,8 @@ func prepareAndEncryptQuery(state *dnscryptState, q *serverdnscrypt.EncryptedQue
 	}
 	sharedKey := serverdnscrypt.PQDeriveSharedKey(kemSS, state.clientMagic, state.pqCertContext, ct)
 	state.sharedKey = sharedKey
+	state.pqCiphertext = ct
+	state.pqEncapsulatedKey = sharedKey
 	q.PQCiphertext = ct
 	return serverdnscrypt.EncryptQuery(q, packet, sharedKey)
 }
@@ -331,13 +342,6 @@ func (c *Client) getDNSCryptState(
 	if esVersion.IsPQ() && len(cert.PqPublicKey) > 0 {
 		state.pqPublicKey = cert.PqPublicKey
 		state.pqCertContext = cert.PqCertContext
-		// Generate X-Wing keypair for this client.
-		pqPK, pqSK, pqErr := serverdnscrypt.PQGenKeyPair()
-		if pqErr != nil {
-			return nil, fmt.Errorf("generating X-Wing keypair: %w", pqErr)
-		}
-		state.pqPrivateKey = pqSK
-		_ = pqPK // The public key is never sent directly; ciphertext embeds it
 	}
 
 	c.dnscryptCacheMu.Lock()

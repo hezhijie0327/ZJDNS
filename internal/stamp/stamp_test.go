@@ -614,7 +614,8 @@ func TestParseDNSCryptRelay(t *testing.T) {
 	}
 }
 
-func TestParseDNSCryptRelayDefaultPort(t *testing.T) {
+func TestParseDNSCryptRelayRequiresPort(t *testing.T) {
+	// §4.7.2: port specification is mandatory for relay stamps.
 	addr := []byte("1.2.3.4")
 
 	binary := []byte{0x81}
@@ -623,12 +624,9 @@ func TestParseDNSCryptRelayDefaultPort(t *testing.T) {
 
 	stampStr := encodeTestStamp(t, binary)
 
-	s, err := Parse(stampStr)
-	if err != nil {
-		t.Fatalf("Parse() error: %v", err)
-	}
-	if s.Address != "1.2.3.4:443" {
-		t.Errorf("Address = %q, want %q", s.Address, "1.2.3.4:443")
+	_, err := Parse(stampStr)
+	if err == nil {
+		t.Fatal("expected error for relay stamp without port, got nil")
 	}
 }
 

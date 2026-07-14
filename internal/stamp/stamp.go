@@ -174,8 +174,11 @@ func (s *Stamp) parseDNSCrypt(bin []byte) error {
 		return errors.New("stamp: DNSCrypt address must be an IP address")
 	}
 
-	// Public key.
+	// Public key — MUST be exactly 32 bytes per §4.2.3.
 	length = int(bin[pos])
+	if length != 32 {
+		return errors.New("stamp: DNSCrypt public key must be exactly 32 bytes")
+	}
 	if 1+length >= binLen-pos {
 		return errors.New("stamp: invalid DNSCrypt stamp")
 	}
@@ -369,6 +372,8 @@ func (s *Stamp) parseODoHTarget(bin []byte) error {
 
 // parseDNSCryptRelay parses a DNSCrypt Relay stamp payload (protocol 0x81).
 // Format: [addr_len:1][addr]  (no properties field)
+//
+// Per §4.7.2, port specification is mandatory for relay stamps.
 func (s *Stamp) parseDNSCryptRelay(bin []byte) error {
 	binLen := len(bin)
 	pos := 1 // relay stamps have no properties — skip only proto byte
@@ -381,14 +386,12 @@ func (s *Stamp) parseDNSCryptRelay(bin []byte) error {
 	s.Address = string(bin[pos : pos+length])
 	pos += length
 
-	// Auto-append default port if missing.
 	colIndex := strings.LastIndex(s.Address, ":")
 	if bracketIndex := strings.LastIndex(s.Address, "]"); colIndex < bracketIndex {
 		colIndex = -1
 	}
 	if colIndex < 0 {
-		colIndex = len(s.Address)
-		s.Address = fmt.Sprintf("%s:%d", s.Address, DefaultPort)
+		return errors.New("stamp: DNSCrypt relay address must include a port")
 	}
 	if colIndex >= len(s.Address)-1 {
 		return errors.New("stamp: empty port")

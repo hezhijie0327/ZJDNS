@@ -38,9 +38,15 @@ func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedRespons
 	var sharedKey [SharedKeySize]byte
 
 	if len(q.pqCiphertext) > 0 {
-		// Initial query: decapsulate X-Wing to get shared secret, derive key.
-		kemSS := pqDecapsulate(q.pqCiphertext, s.cert.PqPrivateKey)
-		sharedKey = pqDeriveSharedKey(kemSS, q.clientMagic, s.cert.PqCertContext, q.pqCiphertext)
+		// Reuse the shared key from decrypt when available — the client
+		// reuses encapsulations and decryptPQInitial has already derived
+		// it from the same (ct, serverPrivateKey) pair.
+		if q.sharedKey != [SharedKeySize]byte{} {
+			sharedKey = q.sharedKey
+		} else {
+			kemSS := pqDecapsulate(q.pqCiphertext, s.cert.PqPrivateKey)
+			sharedKey = pqDeriveSharedKey(kemSS, q.clientMagic, s.cert.PqCertContext, q.pqCiphertext)
+		}
 
 		// Issue a resumption ticket.
 		resumeSecret := pqResumeSecret(sharedKey, q.clientMagic, q.nonce[:NonceSize/2])
