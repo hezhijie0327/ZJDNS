@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.2.28-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.2.29-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -434,6 +434,7 @@ GROUP BY hc.protocol, hc.rcode ORDER BY hits DESC;
 | [golang.org/x/crypto](https://pkg.go.dev/golang.org/x/crypto) | ChaCha20-Poly1305 AEAD、HKDF 密钥派生（DNSCrypt 自定义构造） |
 | [golang.org/x/sync](https://pkg.go.dev/golang.org/x/sync) | errgroup 并发编排（服务器 goroutine 生命周期管理） |
 | [cloudflare/circl](https://github.com/cloudflare/circl) | Ed25519 签名、X25519 密钥交换、P-384 椭圆曲线（常时运算，低阶点验证）、后量子 X-Wing KEM（DNSCrypt PQC） |
+| [pjbgf/sha1cd](https://github.com/pjbgf/sha1cd) | SHA-1 带碰撞检测（NSEC3 哈希，RFC 5155） |
 
 ## 开发
 

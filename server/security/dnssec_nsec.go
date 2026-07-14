@@ -1,7 +1,6 @@
 package security
 
 import (
-	"crypto/sha1" //nolint:gosec // G505: SHA1 for NSEC3 per RFC 5155
 	"encoding/base32"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
+	"github.com/pjbgf/sha1cd"
 )
 
 // verifyNSEC checks whether any NSEC record in the slice cryptographically
@@ -154,7 +154,7 @@ func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) s
 	wire = append(wire, 0) // root label
 
 	// Build initial input: salt || wire_format_name.
-	h := sha1.New() //nolint:gosec // G401: SHA1 for NSEC3 per RFC 5155
+	h := sha1cd.New()
 	h.Write(saltBytes)
 	h.Write(wire)
 	hash := h.Sum(nil)

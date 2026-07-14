@@ -7,6 +7,7 @@ require (
 	github.com/cloudflare/circl v1.6.4
 	github.com/klauspost/compress v1.19.1-0.20260710073621-c0bbc84762b7
 	github.com/ncruces/go-sqlite3 v0.35.3-0.20260708233615-a627269d8f8a
+	github.com/pjbgf/sha1cd v0.6.1-0.20260701134543-795854be75e9
 	github.com/quic-go/quic-go v0.60.1-0.20260711192402-3354ecf0bc6f
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246
@@ -22,6 +23,7 @@ require (
 	github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
 	github.com/emmansun/gmsm v0.44.0 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/pmorjan/kmod v1.1.1 // indirect
