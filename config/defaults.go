@@ -172,6 +172,8 @@ const (
 	ProtoTLSTCP      = "tcp-tls"      // dns.Client.Net for TLS-wrapped TCP
 	ProtoDNSCrypt    = "dnscrypt"     // DNSCrypt v2 encrypted DNS (UDP)
 	ProtoDNSCryptTCP = "dnscrypt-tcp" // DNSCrypt v2 encrypted DNS (TCP)
+	ProtoTLCP        = "tlcp"         // DoT over TLCP (GB/T 38636-2020)
+	ProtoDOH_TLCP    = "doh-tlcp"     // DoH over TLCP
 )
 
 // DNSCrypt v2 protocol defaults.

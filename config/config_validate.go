@@ -125,6 +125,7 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 		ProtoHTTP: true, ProtoDOH: true,
 		ProtoHTTP3: true, ProtoDOH3: true,
 		ProtoTLSTCP: true, ProtoDNSCrypt: true, ProtoDNSCryptTCP: true,
+		ProtoTLCP: true, ProtoDOH_TLCP: true,
 	}
 
 	for i, server := range cfg.Upstream {

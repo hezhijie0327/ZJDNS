@@ -112,7 +112,7 @@ sh scripts/bump-version.sh patch "short slug" --no-migration  # code-only bump
 
 Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible). Zero `golangci-lint` warnings required.
 
-Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http drop-in replacement with native eTLS, used by DoH client/server), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/ncruces/go-sqlite3` (pure-Go SQLite, WASM-based), `github.com/cloudflare/circl` (X-Wing PQ/T hybrid KEM for DNSCrypt PQC), `github.com/pjbgf/sha1cd` (SHA-1 with counter-cryptanalysis for NSEC3).
+Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http drop-in replacement with native eTLS, used by DoH client/server), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/ncruces/go-sqlite3` (pure-Go SQLite, WASM-based), `github.com/cloudflare/circl` (X-Wing PQ/T hybrid KEM for DNSCrypt PQC), `github.com/pjbgf/sha1cd` (SHA-1 with counter-cryptanalysis for NSEC3), `gitee.com/Trisia/gotlcp` (TLCP GB/T 38636-2020 protocol stack — SM2/SM3/SM4, pure Go).
 
 ## Coding Standards
 
@@ -412,7 +412,7 @@ Top layer (wiring):
 | `EncryptedQuery` / `EncryptedResponse` | `server/dnscrypt` | Public API types for client-side query encryption and response decryption. EncryptedQuery carries ClientNonce for pre-generated nonces (resumed PQ). EncryptedResponse exposes PQControl for ticket extraction. |
 | `CryptoConstruction` | `server/dnscrypt` | Enum: XWingPQ (0x0003, default), XChacha20Poly1305 (0x0002). XSalsa20 (0x0001) is removed — deprecated by dnscrypt-proxy. |
 | `ResolverConfig` | `server/dnscrypt` | Internal config builder: provider name, Ed25519 signing keys, X25519/X-Wing resolver keys, ES version. Methods: `NewCert()`, `CreateStamp()`. |
-| `Client` | `server/client` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5/DNSCrypt-UDP+TCP). `dnscryptState` caches per-upstream resolver state (sharedKey, secretKey/publicKey, PQ ticket + resumeSecret, expiry). |
+| `Client` | `server/client` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/SOCKS5/DNSCrypt-UDP+TCP/TLCP/DoH-TLCP). `dnscryptState` caches per-upstream resolver state (sharedKey, secretKey/publicKey, PQ ticket + resumeSecret, expiry). TLCP uses `tlcpClientConfig` / `dialTLCPConn` (analogous to `eTLSClientConfig` / `dialTLSConn`) and `executeDOH_TLCP` with custom `http.Transport.DialTLSContext`. |
 | `SOCKS5Dialer` | `server/client` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
 | `Conn` / `Pool` | `server/client/pool` | RFC 7766 pipelined TCP/DoT |
 | `QUICPool` / `QUICConn` | `server/client/pool` | QUIC connection pool |
@@ -451,7 +451,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and zone (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
 - **EDNS buffer sizing**: Dual-size strategy — standard upstream queries use 1232 bytes (DNS Flag Day 2020) while recursive (root/TLD) queries use 4096 bytes (`RecursiveUDPBufferSize`) to avoid UDP truncation on DNSSEC-signed root zone referrals (~1400 bytes). Applied in `queryNameserversConcurrent` after `buildMsg` and in `probeTLDForHijack`.
 - **EDNS padding and DNSCrypt**: EDNS padding (128B request / 468B response blocks) is applied only when `isSecureConnection` is true — that means DoT, DoQ, DoH, and DoH3. Plain UDP/TCP and DNSCrypt responses never get EDNS padding. DNSCrypt already encrypts at the transport layer and has its own ISO 7816-4 padding (to 64-byte boundaries), making TLS-record-length-based traffic analysis mitigation unnecessary. The outbound side (`upstream.go:72`) also excludes `ProtoDNSCrypt`/`ProtoDNSCryptTCP` from the `isSecure` set so EDNS padding is never added to outbound DNSCrypt queries either.
-- **Per-interface binding** (`internal/dnsutil/bind.go`): All listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, DNSCrypt, pprof) bind per-interface IP instead of wildcard. `TryBind` pre-checks each address; unavailable ones are skipped with a WARN log. When another process occupies a port on a specific interface (e.g. warp-svc on 100.96.0.21:53), ZJDNS binds to remaining free IPs without conflict.
+- **Per-interface binding** (`internal/dnsutil/bind.go`): All listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, DNSCrypt, TLCP, pprof) bind per-interface IP instead of wildcard. `TryBind` pre-checks each address; unavailable ones are skipped with a WARN log. When another process occupies a port on a specific interface (e.g. warp-svc on 100.96.0.21:53), ZJDNS binds to remaining free IPs without conflict.
 - **TCP fallback guard**: `needsTCPFallback` now skips TCP retry when the context is already cancelled (errgroup first-win pattern), eliminating misleading "UDP truncated/failed → TCP fallback → operation was canceled" log chains.
 - **QNAME minimisation (RFC 9156)**: Enabled by default for all recursive resolutions at depth 0. Internal infrastructure queries (NS address resolution) use full QNAME. Minimisation steps tracked per-resolution; after DefaultQnameMinimiseCount (10) steps, all remaining labels are exposed. QTYPE=A is used to hide original QTYPE except for DS/NSEC/NSEC3 parent-side types. When a minimised query returns answer records whose owner names don't match the original QNAME (CNAME for the minimised name, not the target), the resolver retries with the full QNAME per RFC 9156 §2.3.
 - **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read fields after `Put()`. Double-zeroing removed: `Put` zeroes, `Get` trusts.
@@ -489,7 +489,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
   - `zjdns/internal/stamp` → `zstamp`
   - `zjdns/internal/ttl` → `zttl`
 - **Error wrapping**: Always use `%w` in `fmt.Errorf` when wrapping errors that callers may check with `errors.Is`/`errors.As`. Use `%v` only for informational logging.
-- **Protocol logging**: The `protocol` column in request_log stores the transport identifier as a string (`udp`/`tcp`/`dot`/`doq`/`doh`/`doh3`/`dnscrypt`/`dnscrypt-tcp`), enabling simple GROUP BY queries for protocol-level analytics.
+- **Protocol logging**: The `protocol` column in request_log stores the transport identifier as a string (`udp`/`tcp`/`dot`/`doq`/`doh`/`doh3`/`dnscrypt`/`dnscrypt-tcp`/`tlcp`/`doh-tlcp`), enabling simple GROUP BY queries for protocol-level analytics.
 - **Handler Question alias**: `handler.Question` is a type alias (`type Question = resolver.Question`), eliminating redundant struct conversions between handler and resolver layers.
 - **RecordRequest hot-path**: `RecordRequest()` does a single append-only INSERT — no transaction, no writeMu, no conflict resolution. When `EntryID > 0` (pre-resolved by `Get()` or `Set()`), `EnsureEntry` is skipped — the redundant SELECT on the hot path is eliminated.
 - **ip_latency independence**: Latency data is not tied to cache entries — all domains sharing the same IP reuse the same row. Rows with `last_probe_time` older than `DefaultStaleMaxAge` (30 days) are cleaned up during eviction alongside stale cache entries.
@@ -720,6 +720,33 @@ dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short          # entries remains, al
 
 Verify hijack detection from logs: `grep -E "hijack probe detected|hijack detected|rejecting hijacked|tcp=true" /tmp/zjdns.log`
 Normal domains should show `tcp=false` throughout; blocked domains should show hijack detection + `tcp=true` restart.
+
+### TLCP (国密) Test
+
+DNSPod's `sm2.doh.pub` certificate (`*.doh.pub`, signed by DNSPod TLS SM2 CA G2 → TrustAsia Global SM2 Root CA G2) expired 2024-06-06 — requires `skip_tls_verify: true`.
+
+```json
+{
+  "server": {
+    "port": "53535",
+    "log_level": "debug:UPSTREAM",
+    "features": { "hijack_protection": false, "cache": { "max_entries": 0 } }
+  },
+  "upstream": [
+    {
+      "address": "https://sm2.doh.pub/dns-query",
+      "protocol": "doh-tlcp",
+      "server_name": "sm2.doh.pub",
+      "skip_tls_verify": true
+    }
+  ]
+}
+```
+
+```bash
+dig @127.0.0.1 -p 53535 www.baidu.com A +short
+# Should return: www.a.shifen.com. / 180.101.49.44 / 180.101.51.73
+```
 
 ## KTLS Tuning
 

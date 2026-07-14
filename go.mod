@@ -17,6 +17,7 @@ require (
 )
 
 require (
+	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033 // indirect
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect

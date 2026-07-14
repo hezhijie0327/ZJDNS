@@ -252,6 +252,10 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		return c.executeDOH(ctx, msg, server, c.eTLSClientConfig(server))
 	case config.ProtoDOH3, config.ProtoHTTP3:
 		return c.executeDOH3(ctx, msg, server, c.stdTLSConfig(server))
+	case config.ProtoTLCP:
+		return c.executeTLCP(ctx, msg, server, c.tlcpClientConfig(server))
+	case config.ProtoDOH_TLCP:
+		return c.executeDOH_TLCP(ctx, msg, server, c.tlcpClientConfig(server))
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}

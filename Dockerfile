@@ -12,6 +12,7 @@ ENV \
 RUN \
     wget "https://curl.se/ca/cacert.pem" \
     && go get -u codeberg.org/miekg/dns@main \
+    && go get -u gitee.com/Trisia/gotlcp@main \
     && go get -u github.com/cloudflare/circl@main \
     && go get -u github.com/klauspost/compress@master \
     && go get -u github.com/ncruces/go-sqlite3@main \
