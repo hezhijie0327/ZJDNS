@@ -112,7 +112,7 @@ sh scripts/bump-version.sh patch "short slug" --no-migration  # code-only bump
 
 Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible). Zero `golangci-lint` warnings required.
 
-Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http drop-in replacement with native eTLS, used by DoH client/server), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+ — DNS-over-DTLS server/client), `github.com/ncruces/go-sqlite3` (pure-Go SQLite, WASM-based), `github.com/cloudflare/circl` (X-Wing PQ/T hybrid KEM for DNSCrypt PQC), `github.com/pjbgf/sha1cd` (SHA-1 with counter-cryptanalysis for NSEC3), `gitee.com/Trisia/gotlcp` (TLCP GB/T 38636-2020 protocol stack — SM2/SM3/SM4, pure Go).
+Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http drop-in replacement with native eTLS, used by DoH client/server), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+ — DNS-over-DTLS server/client), `github.com/ncruces/go-sqlite3` (pure-Go SQLite, WASM-based), `github.com/cloudflare/circl` (X-Wing PQ/T hybrid KEM for DNSCrypt PQC), `github.com/pjbgf/sha1cd` (SHA-1 with counter-cryptanalysis for NSEC3), `gitee.com/Trisia/gotlcp` (TLCP GB/T 38636-2020 + DTLCP GM/T 0128-2023 protocol stack — SM2/SM3/SM4, pure Go).
 
 ## Coding Standards
 
@@ -281,7 +281,7 @@ zjdns/
     ├── client/
     │   ├── client.go                          ←   Client struct, New, ExecuteQuery, Close
     │   ├── client_warmup.go                   ←   WarmUpConnections, QUIC/proxy config caching
-    │   ├── dnscrypt.go, tcp.go, dot.go        ←   Protocol-specific exchanges
+    │   ├── dnscrypt.go, tcp.go, dot.go, dtlcp.go ← Protocol-specific exchanges
     │   ├── doq.go, doh.go, doh3.go            ←   QUIC/HTTP-based protocols
     │   ├── ktls.go, socks5.go, socks5_*.go    ←   KTLS offload, SOCKS5 proxy
     │   └── pool/                              ←   RFC 7766 pipelined TCP + QUIC connection pools
@@ -301,7 +301,11 @@ zjdns/
     │   ├── dnssec_nsec.go                     ←   NSEC/NSEC3 denial-of-existence validation
     │   └── hijack.go                          ←   DNS hijack detection
     ├── tls/
-    │   ├── tls.go, doh.go, doh3.go            ←   TLS listeners (DoT, DoQ, DoH, DoH3)
+    │   ├── tls.go, doh.go, doh3.go, dtls.go   ←   TLS listeners (DoT, DoQ, DoH, DoH3, DTLS)
+    ├── tlcp/
+    │   ├── server.go                           ←   TLCP/DTLCP server lifecycle, SM2 cert loading
+    │   ├── dot.go, doh.go                      ←   TLCP DoT and DoH listeners
+    │   └── dtlcp.go                            ←   DTLCP (GM/T 0128-2023) listener
     ├── dnscrypt/
     │   ├── server.go                          ←   Server lifecycle, certificate TXT, handshake
     │   ├── server_crypto.go                   ←   encrypt/decrypt/encryptPQ/decryptPQResumed
@@ -340,6 +344,7 @@ Layer 4 (server sub-packages — import domain + internal, never server/ parent)
   server/probe → config, edns, dnsutil, internal/latency, log
   server/resolver → cache, config, edns, dnsutil, log, pool, server/client, server/security
   server/tls → config, dnsutil, log, pool
+  server/tlcp → config, dnsutil, log, pool
   server/dnscrypt → config, dnsutil, log, pool
   server/handler → cache, config, edns, dnsutil, log, pool, zone, server/resolver
 
@@ -405,10 +410,11 @@ Top layer (wiring):
 | `Handler` | `server/handler` | DNS query processing pipeline; owns `BackgroundConfig`, `LatencyProber` |
 | `BackgroundConfig` | `server/handler` | Groups RefreshGroup/RefreshCtx/Ctx lifecycle params |
 | `LatencyProber` | `server/handler` | Interface: Start(qname, qtype, answer, ...) — latency-probes A/AAAA records and updates latency_ms |
-| `Server` | `server/tls` | TLS listeners (DoT, DoQ, DoH, DoH3) |
+| `Server` | `server/tls` | TLS listeners (DoT, DoQ, DoH, DoH3, DTLS) |
+| `Server` | `server/tlcp` | TLCP/DTLCP listeners: DoT and DoH over TLCP (TCP), DTLCP (GM/T 0128-2023). Uses SM2 dual certificates. |
 | `Server` | `server/dnscrypt` | DNSCrypt v2 lifecycle: UDP+TCP listeners, cert TXT handshake, query encrypt/decrypt, PQ KEM + ticket resumption |
 | `Certificate` | `server/dnscrypt` | DNSCrypt server certificate: Ed25519 signature, X25519 short-term key (classical) or X-Wing PQ public key (1216B) with ClientMagic + PqCertContext |
-| `ProtocolSettings` | `config` | Per-protocol port/endpoint config. A protocol is enabled when its field is non-empty. Contains `UDP`, `TCP`, `TLS` (DoT), `QUIC` (DoQ), `HTTPS` (DoH), `HTTP3` (DoH3), `TLCP` (TLCP DoT), `HTTPTLCP` (TLCP DoH), `DTLS` (RFC 8094, UDP port), `DNSCrypt`. |
+| `ProtocolSettings` | `config` | Per-protocol port/endpoint config. A protocol is enabled when its field is non-empty. Contains `UDP`, `TCP`, `TLS` (DoT), `QUIC` (DoQ), `HTTPS` (DoH), `HTTP3` (DoH3), `TLCP` (TLCP DoT), `HTTPTLCP` (TLCP DoH), `DTLS` (RFC 8094, UDP port), `DTLCP` (GM/T 0128-2023, UDP port), `DNSCrypt`. |
 | `HTTPSEndpoint` | `config` | Port + endpoint path for HTTP-based transports (DoH, DoH3, TLCP DoH). |
 | `CertSettings` | `config` | Unified cert config: `Domain` (server identity), `TLS` (TLSCertificate), `TLCP` (TLCPCertificate), `DNSCrypt` (DNSCryptCertificate). |
 | `TLSCertificate` | `config` | TLS certificate: `CertFile`, `KeyFile`, `SelfSigned`. |
@@ -417,7 +423,7 @@ Top layer (wiring):
 | `EncryptedQuery` / `EncryptedResponse` | `server/dnscrypt` | Public API types for client-side query encryption and response decryption. EncryptedQuery carries ClientNonce for pre-generated nonces (resumed PQ). EncryptedResponse exposes PQControl for ticket extraction. |
 | `CryptoConstruction` | `server/dnscrypt` | Enum: XWingPQ (0x0003, default), XChacha20Poly1305 (0x0002). XSalsa20 (0x0001) is removed — deprecated by dnscrypt-proxy. |
 | `ResolverConfig` | `server/dnscrypt` | Internal config builder: provider name, Ed25519 signing keys, X25519/X-Wing resolver keys, ES version. Methods: `NewCert()`, `CreateStamp()`. |
-| `Client` | `server/client` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/SOCKS5/DNSCrypt-UDP+TCP/TLCP/DoH-TLCP). `dnscryptState` caches per-upstream resolver state (sharedKey, secretKey/publicKey, PQ ticket + resumeSecret, expiry). TLCP uses `tlcpClientConfig` / `dialTLCPConn` (analogous to `eTLSClientConfig` / `dialTLSConn`) and `executeDOH_TLCP` with custom `http.Transport.DialTLSContext`. DTLS uses `pion/dtls` for UDP-based TLS transport (RFC 8094). |
+| `Client` | `server/client` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/DTLCP/SOCKS5/DNSCrypt-UDP+TCP/TLCP/DoH-TLCP). `dnscryptState` caches per-upstream resolver state (sharedKey, secretKey/publicKey, PQ ticket + resumeSecret, expiry). TLCP uses `tlcpClientConfig` / `dialTLCPConn` (analogous to `eTLSClientConfig` / `dialTLSConn`) and `executeDOH_TLCP` with custom `http.Transport.DialTLSContext`. DTLS uses `pion/dtls` for UDP-based TLS transport (RFC 8094). DTLCP uses `gitee.com/Trisia/gotlcp/dtlcp` with `net.ListenPacket` + `dtlcp.Client` (not `dtlcp.Dial` — creates connected socket incompatible with internal `WriteTo`). |
 | `SOCKS5Dialer` | `server/client` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
 | `Conn` / `Pool` | `server/client/pool` | RFC 7766 pipelined TCP/DoT |
 | `QUICPool` / `QUICConn` | `server/client/pool` | QUIC connection pool |
@@ -456,7 +462,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and zone (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
 - **EDNS buffer sizing**: Dual-size strategy — standard upstream queries use 1232 bytes (DNS Flag Day 2020) while recursive (root/TLD) queries use 4096 bytes (`RecursiveUDPBufferSize`) to avoid UDP truncation on DNSSEC-signed root zone referrals (~1400 bytes). Applied in `queryNameserversConcurrent` after `buildMsg` and in `probeTLDForHijack`.
 - **EDNS padding and DNSCrypt**: EDNS padding (128B request / 468B response blocks) is applied only when `isSecureConnection` is true — that means DoT, DoQ, DoH, and DoH3. Plain UDP/TCP and DNSCrypt responses never get EDNS padding. DNSCrypt already encrypts at the transport layer and has its own ISO 7816-4 padding (to 64-byte boundaries), making TLS-record-length-based traffic analysis mitigation unnecessary. The outbound side (`upstream.go:72`) also excludes `ProtoDNSCrypt`/`ProtoDNSCryptTCP` from the `isSecure` set so EDNS padding is never added to outbound DNSCrypt queries either.
-- **Per-interface binding** (`internal/dnsutil/bind.go`): All listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, DNSCrypt, TLCP, pprof) bind per-interface IP instead of wildcard. `TryBind` pre-checks each address; unavailable ones are skipped with a WARN log. When another process occupies a port on a specific interface (e.g. warp-svc on 100.96.0.21:53), ZJDNS binds to remaining free IPs without conflict.
+- **Per-interface binding** (`internal/dnsutil/bind.go`): All listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, DTLS, DTLCP, DNSCrypt, TLCP, pprof) bind per-interface IP instead of wildcard. `TryBind` pre-checks each address; unavailable ones are skipped with a WARN log. When another process occupies a port on a specific interface (e.g. warp-svc on 100.96.0.21:53), ZJDNS binds to remaining free IPs without conflict.
 - **TCP fallback guard**: `needsTCPFallback` now skips TCP retry when the context is already cancelled (errgroup first-win pattern), eliminating misleading "UDP truncated/failed → TCP fallback → operation was canceled" log chains.
 - **QNAME minimisation (RFC 9156)**: Enabled by default for all recursive resolutions at depth 0. Internal infrastructure queries (NS address resolution) use full QNAME. Minimisation steps tracked per-resolution; after DefaultQnameMinimiseCount (10) steps, all remaining labels are exposed. QTYPE=A is used to hide original QTYPE except for DS/NSEC/NSEC3 parent-side types. When a minimised query returns answer records whose owner names don't match the original QNAME (CNAME for the minimised name, not the target), the resolver retries with the full QNAME per RFC 9156 §2.3.
 - **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read fields after `Put()`. Double-zeroing removed: `Put` zeroes, `Get` trusts.
@@ -470,6 +476,26 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
   - **Ticket resumption**: After a successful initial PQ query, the server issues a resumption ticket sealed with XChacha20-Poly1305 under a server-wide `ticketKey` (SHA-256 of the Ed25519 signing key). The ticket plaintext encodes `PQESVersion(2) + ClientMagic(8) + ResumeSecret(32) + Expiry(8)`. The client stores `(ticket, resumeSecret, expiry)` in `dnscryptState` and uses them for subsequent queries, deriving per-query keys via `pqResumedSharedKey(resumeSecret, clientMagic, clientNonce/2, ticket)` — avoiding expensive X-Wing KEM operations.
   - **Config generator** (`generate.go`): `GenerateDNSCryptConfig()` outputs a single valid JSON config file with `certificate.dnscrypt` + `protocol.dnscrypt` + one `upstream` entry (sdns:// stamp, protocol auto-detected by normalizeStamps). Called directly from `cmd/zjdns/cli/generate.go` — no hook indirection. `CreateStamp` delegates to `zstamp.Stamp.String()`. Key exports: `ParseStamp()` (wraps `zstamp.Parse`), `HexDecodeKey()`, `GenerateEd25519Keypair()`. Internal helpers: `hexEncodeKey/hexDecodeKey`, `generateRandomKeyPair`, `GenerateResolverConfig`.
   - **Tests** (`server/client/dnscrypt_test.go`): 9 e2e tests covering UDP/TCP, XWingPQ/XChacha20, A/AAAA/TXT/cert query types, multi-query state reuse (ticket resumption), unreachable error path, and UDP→TCP fallback. Each test boots an ephemeral DNSCrypt server on a random port with auto-generated PQ or classical keys via `startTestDNSCryptServer`.
+- **DTLCP** (`server/tlcp/dtlcp.go` + `server/client/dtlcp.go`): DNS-over-DTLCP (GM/T 0128-2023). Reuses the same SM2 certificate pair as TLCP DoT/DoH. Wire format is identical to DTLS (RFC 8094): 2-byte big-endian length prefix + DNS payload.
+
+  **Library bugs (gotlcp — both primary APIs broken for UDP):**
+  - `dtlcp.Listen("udp", ...)` calls `net.Listen("udp", ...)` which Go does not support (error: "unexpected address type"). All official DTLCP examples fail at runtime.
+  - `dtlcp.Dial("udp", ...)` uses `net.Dial` which returns a connected `*net.UDPConn`; the library internally calls `WriteTo` which Go forbids on connected sockets (error: "use of WriteTo with pre-connected connection").
+
+  **Adapter functions (drop-in replacement when upstream fixes APIs):**
+  - `acceptDTLCP(udpConn, firstPacket, remoteAddr, cfg)` in `server/tlcp/dtlcp.go` — feeds pre-read ClientHello through `dtlcp.Server` + handshake. **TODO: replace with `dtlcp.Listen` + Accept.**
+  - `dialDTLCP(ctx, network, addr, cfg)` in `server/client/dtlcp.go` — creates unconnected socket, wraps via `dtlcp.Client`, runs `HandshakeContext`. **TODO: replace with `dtlcp.Dial`.**
+
+  **Server implementation:**
+  - `net.ListenUDP` creates the socket; a custom `dtlcpListener` buffers the first datagram per client so the DTLCP handshake can consume it via `acceptDTLCP`.
+  - `bufferedPacketConn.Close()` is a no-op — `dtlcp.Conn.Close()` would otherwise close the shared UDP socket.
+  - **Synchronous connection handling**: gotlcp shares a single `*net.UDPConn` across all `dtlcp.Conn` instances. Concurrent reads cause packet stealing (one Conn consumes another packets) and `SetReadDeadline` on one Conn interferes with the Accept loop. Until gotlcp provides per-connection socket isolation (like pion/dtls), only one connection is served at a time.
+  - Session resumption: `SessionCache: dtlcp.NewLRUSessionCache(128)`.
+
+  **Client implementation:**
+  - `dialDTLCP()` works around the `dtlcp.Dial` connected-socket bug using `net.ListenPacket("udp", ":0")` + `dtlcp.Client()` + `HandshakeContext()`.
+  - No connection pooling (same as DTLS client).
+  - Windows: IPv4 localhost (127.0.0.1) DTLCP handshake is unreliable — use [::1] for loopback tests on Windows.
 - **DNSSEC**: IANA root KSK trust anchors (key tags 20326 + 38696). `dnssec_enforce: true` → SERVFAIL on bogus; `false` → pass through without AD.
 - **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
 - **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.
@@ -494,7 +520,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
   - `zjdns/internal/stamp` → `zstamp`
   - `zjdns/internal/ttl` → `zttl`
 - **Error wrapping**: Always use `%w` in `fmt.Errorf` when wrapping errors that callers may check with `errors.Is`/`errors.As`. Use `%v` only for informational logging.
-- **Protocol logging**: The `protocol` column in request_log stores the transport identifier as a string (`udp`/`tcp`/`dot`/`doq`/`doh`/`doh3`/`dnscrypt`/`dnscrypt-tcp`/`tlcp`/`doh-tlcp`), enabling simple GROUP BY queries for protocol-level analytics.
+- **Protocol logging**: The `protocol` column in request_log stores the transport identifier as a string (`udp`/`tcp`/`dot`/`doq`/`doh`/`doh3`/`dnscrypt`/`dnscrypt-tcp`/`tlcp`/`doh-tlcp`/`dtls`/`dtlcp`), enabling simple GROUP BY queries for protocol-level analytics.
 - **Handler Question alias**: `handler.Question` is a type alias (`type Question = resolver.Question`), eliminating redundant struct conversions between handler and resolver layers.
 - **RecordRequest hot-path**: `RecordRequest()` does a single append-only INSERT — no transaction, no writeMu, no conflict resolution. When `EntryID > 0` (pre-resolved by `Get()` or `Set()`), `EnsureEntry` is skipped — the redundant SELECT on the hot path is eliminated.
 - **ip_latency independence**: Latency data is not tied to cache entries — all domains sharing the same IP reuse the same row. Rows with `last_probe_time` older than `DefaultStaleMaxAge` (30 days) are cleaned up during eviction alongside stale cache entries.
@@ -762,6 +788,16 @@ Normal domains should show `tcp=false` throughout; blocked domains should show h
 ./zjdns -config tlcp_srv.json &
 # Client → TLCP DoH to server
 ./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454","tcp":"55454"}},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"doh-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
+dig @127.0.0.1 -p 55454 www.baidu.com A +short
+```
+
+**ZJDNS ↔ ZJDNS DTLCP loopback test:**
+
+```bash
+# Server (DTLCP on 8542)
+./zjdns -config <(echo '{"server":{"protocol":{"dtlcp":"8542"},"certificate":{"domain":"dtlcp.local","tlcp":{"self_signed":true}},"features":{"hijack_protection":false,"cache":{"max_entries":0}}},"upstream":[{"address":"builtin_recursive"}]}') &
+# Client → DTLCP to server (use [::1] on Windows — IPv4 localhost handshake is unreliable)
+./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454","tcp":"55454"}},"upstream":[{"address":"127.0.0.1:8542","protocol":"dtlcp","server_name":"dtlcp.local","skip_tls_verify":true}]}') &
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
 ```
 

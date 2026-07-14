@@ -179,8 +179,8 @@ func (s *SQLiteCache) Stats() []string {
 
 	var avgMs float64
 	var total, hits, misses, stales, zones, errCount, blockedCount, badcookieCount int64
-	var hcUDP, hcTCP, hcDOT, hcDOQ, hcDOH, hcDOH3, hcDNSCrypt, hcDNSCryptTCP, hcTLCP, hcDoHTLCP int64
-	var rlUDP, rlTCP, rlDOT, rlDOQ, rlDOH, rlDOH3, rlDNSCrypt, rlDNSCryptTCP, rlTLCP, rlDoHTLCP int64
+	var hcUDP, hcTCP, hcDOT, hcDOQ, hcDOH, hcDOH3, hcDOD, hcDTLCP, hcDNSCrypt, hcDNSCryptTCP, hcTLCP, hcDoHTLCP int64
+	var rlUDP, rlTCP, rlDOT, rlDOQ, rlDOH, rlDOH3, rlDOD, rlDTLCP, rlDNSCrypt, rlDNSCryptTCP, rlTLCP, rlDoHTLCP int64
 	var hijack, fallback, totalMS, hitTotalMS int64
 	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
 	var secureCount, insecureCount, bogusCount int64
@@ -195,13 +195,15 @@ func (s *SQLiteCache) Stats() []string {
 			" COALESCE(SUM(CASE WHEN protocol='doq' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='doh' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='doh3' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dod' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dtlcp' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dnscrypt' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dnscrypt-tcp' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='tlcp' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='doh-tlcp' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(total_response_ms), 0)"+
 			" FROM entry_hit_counters",
-	).Scan(&hits, &hcUDP, &hcTCP, &hcDOT, &hcDOQ, &hcDOH, &hcDOH3, &hcDNSCrypt, &hcDNSCryptTCP, &hcTLCP, &hcDoHTLCP, &hitTotalMS)
+	).Scan(&hits, &hcUDP, &hcTCP, &hcDOT, &hcDOQ, &hcDOH, &hcDOH3, &hcDOD, &hcDTLCP, &hcDNSCrypt, &hcDNSCryptTCP, &hcTLCP, &hcDoHTLCP, &hitTotalMS)
 
 	// Detail rows from request_log since last stats clear.
 	_ = s.db.SQ.QueryRow(
@@ -218,6 +220,8 @@ func (s *SQLiteCache) Stats() []string {
 			" COALESCE(SUM(CASE WHEN protocol='doq' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='doh' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='doh3' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dod' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dtlcp' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dnscrypt' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dnscrypt-tcp' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='tlcp' THEN 1 ELSE 0 END), 0),"+
@@ -229,7 +233,7 @@ func (s *SQLiteCache) Stats() []string {
 	).Scan(
 		&total,
 		&misses, &stales, &zones, &errCount, &blockedCount, &badcookieCount,
-		&rlUDP, &rlTCP, &rlDOT, &rlDOQ, &rlDOH, &rlDOH3, &rlDNSCrypt, &rlDNSCryptTCP, &rlTLCP, &rlDoHTLCP,
+		&rlUDP, &rlTCP, &rlDOT, &rlDOQ, &rlDOH, &rlDOH3, &rlDOD, &rlDTLCP, &rlDNSCrypt, &rlDNSCryptTCP, &rlTLCP, &rlDoHTLCP,
 		&hijack, &fallback, &totalMS,
 	)
 
@@ -240,6 +244,8 @@ func (s *SQLiteCache) Stats() []string {
 	doq := hcDOQ + rlDOQ
 	doh := hcDOH + rlDOH
 	doh3 := hcDOH3 + rlDOH3
+	dod := hcDOD + rlDOD
+	dtlcp := hcDTLCP + rlDTLCP
 	dnscrypt := hcDNSCrypt + rlDNSCrypt
 	dnscryptTCP := hcDNSCryptTCP + rlDNSCryptTCP
 	tlcp := hcTLCP + rlTLCP
@@ -321,10 +327,10 @@ func (s *SQLiteCache) Stats() []string {
 			hijack, fallback),
 		fmt.Sprintf("udp=%d tcp=%d",
 			udp, tcp),
-		fmt.Sprintf("dot=%d doq=%d doh=%d doh3=%d",
-			dot, doq, doh, doh3),
-		fmt.Sprintf("dnscrypt=%d dnscrypt-tcp=%d tlcp=%d doh-tlcp=%d",
-			dnscrypt, dnscryptTCP, tlcp, dohTLCP),
+		fmt.Sprintf("dot=%d doq=%d doh=%d doh3=%d, dod=%d",
+			dot, doq, doh, doh3, dod),
+		fmt.Sprintf("dnscrypt=%d dnscrypt-tcp=%d tlcp=%d doh-tlcp=%d dtlcp=%d",
+			dnscrypt, dnscryptTCP, tlcp, dohTLCP, dtlcp),
 		fmt.Sprintf("secure=%d insecure=%d bogus=%d",
 			secureCount, insecureCount, bogusCount),
 	}

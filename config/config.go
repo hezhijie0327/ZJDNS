@@ -44,7 +44,8 @@ type ProtocolSettings struct {
 	HTTP3    HTTPSEndpoint `json:"http3,omitzero"`
 	TLCP     string        `json:"tlcp,omitzero"`
 	HTTPTLCP HTTPSEndpoint `json:"http_tlcp,omitzero"`
-	DTLS     string        `json:"dtls,omitzero"`
+	DTLS     string        `json:"dod,omitzero"`
+	DTLCP    string        `json:"dtlcp,omitzero"`
 	DNSCrypt string        `json:"dnscrypt,omitzero"`
 }
 

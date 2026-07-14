@@ -10,12 +10,13 @@ const (
 	DefaultQUICPort  = "853"  // DoQ
 	DefaultHTTPSPort = "443"  // DoH
 	DefaultHTTP3Port = "443"  // DoH3
-	DefaultDTLSPort  = "8532" // DTLS (RFC 8094)
+	DefaultDTLSPort  = "8853" // DoD (RFC 8094)
 
 	DefaultDNSCryptPort = "8443"
 
-	DefaultTLCPPort    = "8530" // TLCP DoT
-	DefaultTLCPDOHPort = "4430" // TLCP DoH
+	DefaultTLCPPort     = "9853" // TLCP (GB/T 38636-2020) DoT
+	DefaultHTTPTLCPPort = "9443" // TLCP (GB/T 38636-2020) DoH
+	DefaultDTLCPPort    = "9853" // DTLCP (GM/T 0128-2023) DoD
 
 	DefaultPprofPort = "6060"
 
@@ -186,7 +187,8 @@ const (
 	ProtoDNSCryptTCP = "dnscrypt-tcp" // DNSCrypt v2 encrypted DNS (TCP)
 	ProtoTLCP        = "tlcp"         // DoT over TLCP (GB/T 38636-2020)
 	ProtoDOH_TLCP    = "doh-tlcp"     // DoH over TLCP
-	ProtoDTLS        = "dtls"         // DNS-over-DTLS (RFC 8094)
+	ProtoDTLS        = "dod"          // DNS-over-DTLS (RFC 8094)
+	ProtoDTLCP       = "dtlcp"        // DNS-over-DTLCP (GM/T 0128-2023)
 )
 
 // DNSCrypt v2 protocol defaults.

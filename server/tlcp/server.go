@@ -17,6 +17,7 @@ import (
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
+	"gitee.com/Trisia/gotlcp/dtlcp"
 	"gitee.com/Trisia/gotlcp/tlcp"
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/smx509"
@@ -29,26 +30,30 @@ type DNSHandler interface {
 
 // Server manages TLCP-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
-	dotPort      string
-	dohPort      string
-	dohEndpoint  string
-	handler      DNSHandler
-	tlcpConfig   *tlcp.Config
-	ctx          context.Context
-	cancel       context.CancelCauseFunc
-	dotListeners []net.Listener
-	dohListeners []net.Listener
-	dohServers   []*http.Server
+	dotPort        string
+	dohPort        string
+	dohEndpoint    string
+	dtlcpPort      string
+	handler        DNSHandler
+	tlcpConfig     *tlcp.Config
+	dtlcpConfig    *dtlcp.Config
+	ctx            context.Context
+	cancel         context.CancelCauseFunc
+	dotListeners   []net.Listener
+	dohListeners   []net.Listener
+	dohServers     []*http.Server
+	dtlcpListeners []net.Listener
 }
 
 // New creates a TLCP Server, loading or generating SM2 certificate pairs.
-// dotPort, dohPort, dohEndpoint come from the protocol config section.
-func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint string) (*Server, error) {
+// dotPort, dohPort, dohEndpoint, and dtlcpPort come from the protocol config section.
+func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, dtlcpPort string) (*Server, error) {
 	var signCert, encCert tlcp.Certificate
+	var dtlcpSignCert, dtlcpEncCert dtlcp.Certificate
 	var err error
 
 	if certificateCfg.SelfSigned {
-		signCert, encCert, err = generateSelfSignedSMCerts()
+		signCert, encCert, dtlcpSignCert, dtlcpEncCert, err = generateSelfSignedSMCerts()
 		if err != nil {
 			return nil, fmt.Errorf("generate self-signed SM2 certificates: %w", err)
 		}
@@ -62,6 +67,14 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint s
 		if err != nil {
 			return nil, fmt.Errorf("load tlcp enc certificate: %w", err)
 		}
+		dtlcpSignCert, err = dtlcp.LoadX509KeyPair(certificateCfg.SignCertFile, certificateCfg.SignKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load dtlcp sign certificate: %w", err)
+		}
+		dtlcpEncCert, err = dtlcp.LoadX509KeyPair(certificateCfg.EncCertFile, certificateCfg.EncKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load dtlcp enc certificate: %w", err)
+		}
 		log.Debugf("TLCP: Using SM2 certificates from files")
 	}
 
@@ -70,13 +83,21 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint s
 		CurvePreferences: []tlcp.CurveID{tlcp.CurveSM2},
 	}
 
+	dtlcpConfig := &dtlcp.Config{
+		Certificates:     []dtlcp.Certificate{dtlcpSignCert, dtlcpEncCert},
+		CurvePreferences: []dtlcp.CurveID{dtlcp.CurveSM2},
+		SessionCache:     dtlcp.NewLRUSessionCache(128),
+	}
+
 	ctx, cancel := context.WithCancelCause(context.Background())
 
 	s := &Server{
 		dotPort:     dotPort,
 		dohPort:     dohPort,
 		dohEndpoint: dohEndpoint,
+		dtlcpPort:   dtlcpPort,
 		tlcpConfig:  tlcpConfig,
+		dtlcpConfig: dtlcpConfig,
 		ctx:         ctx,
 		cancel:      cancel,
 	}
@@ -98,6 +119,12 @@ func (s *Server) Start(handler DNSHandler) error {
 	if s.dohPort != "" {
 		if err := s.startDOHServer(); err != nil {
 			return fmt.Errorf("TLCP DoH startup: %w", err)
+		}
+	}
+
+	if s.dtlcpPort != "" {
+		if err := s.startDTLCPServer(); err != nil {
+			return fmt.Errorf("TLCP DTLCP startup: %w", err)
 		}
 	}
 
@@ -127,27 +154,32 @@ func (s *Server) Shutdown() error {
 			zdnsutil.CloseWithLog(l, "TLCP DoH listener", "TLCP")
 		}
 	}
+	for _, l := range s.dtlcpListeners {
+		if l != nil {
+			zdnsutil.CloseWithLog(l, "TLCP DTLCP listener", "TLCP")
+		}
+	}
 	log.Infof("TLCP: TLCP server shut down")
 	return nil
 }
 
 // generateSelfSignedSMCerts creates a self-signed SM2 CA and two server
-// certificates (signing + encryption) for TLCP use.
-func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, err error) {
+// certificates (signing + encryption) for both TLCP (TCP) and DTLCP (UDP) use.
+func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignCert, dtlcpEncCert dtlcp.Certificate, err error) {
 	caKey, err := sm2.GenerateKey(rand.Reader)
 	if err != nil {
 		err = fmt.Errorf("generate CA SM2 key: %w", err)
-		return signCert, encCert, err
+		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 	signKey, err := sm2.GenerateKey(rand.Reader)
 	if err != nil {
 		err = fmt.Errorf("generate sign SM2 key: %w", err)
-		return signCert, encCert, err
+		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 	encKey, err := sm2.GenerateKey(rand.Reader)
 	if err != nil {
 		err = fmt.Errorf("generate enc SM2 key: %w", err)
-		return signCert, encCert, err
+		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 
 	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
@@ -179,7 +211,7 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, err error)
 	caDER, err := smx509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
 	if err != nil {
 		err = fmt.Errorf("create CA cert: %w", err)
-		return signCert, encCert, err
+		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 	caCert, _ := smx509.ParseCertificate(caDER)
 
@@ -189,7 +221,7 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, err error)
 	signDER, err := smx509.CreateCertificate(rand.Reader, signTmpl, caCert, &signKey.PublicKey, caKey)
 	if err != nil {
 		err = fmt.Errorf("create sign cert: %w", err)
-		return signCert, encCert, err
+		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 
 	encSerial.Set(encSerial)
@@ -198,7 +230,7 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, err error)
 	encDER, err := smx509.CreateCertificate(rand.Reader, encTmpl, caCert, &encKey.PublicKey, caKey)
 	if err != nil {
 		err = fmt.Errorf("create enc cert: %w", err)
-		return signCert, encCert, err
+		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 
 	signCert = tlcp.Certificate{
@@ -209,5 +241,13 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, err error)
 		Certificate: [][]byte{encDER},
 		PrivateKey:  encKey,
 	}
-	return signCert, encCert, err
+	dtlcpSignCert = dtlcp.Certificate{
+		Certificate: [][]byte{signDER},
+		PrivateKey:  signKey,
+	}
+	dtlcpEncCert = dtlcp.Certificate{
+		Certificate: [][]byte{encDER},
+		PrivateKey:  encKey,
+	}
+	return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 }
