@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"time"
 	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
@@ -25,7 +26,8 @@ func (s *Server) encrypt(m *dns.Msg, q *encryptedQuery, isUDP bool) (encrypted [
 		return s.encryptPQ(packet, q, r, isUDP)
 	}
 
-	sharedKey, err := computeSharedKey(q.esVersion, &s.cert.ResolverSk, &q.clientPk)
+	curr := s.current()
+	sharedKey, err := computeSharedKey(q.esVersion, &curr.cert.ResolverSk, &q.clientPk)
 	if err != nil {
 		return nil, fmt.Errorf("computing shared key: %w", err)
 	}
@@ -36,6 +38,7 @@ func (s *Server) encrypt(m *dns.Msg, q *encryptedQuery, isUDP bool) (encrypted [
 // issues a resumption ticket in the response control block.
 func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedResponse, isUDP bool) ([]byte, error) {
 	var sharedKey [SharedKeySize]byte
+	curr := s.current()
 
 	if len(q.pqCiphertext) > 0 {
 		// Reuse the shared key from decrypt when available — the client
@@ -44,24 +47,24 @@ func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedRespons
 		if q.sharedKey != [SharedKeySize]byte{} {
 			sharedKey = q.sharedKey
 		} else {
-			kemSS := pqDecapsulate(q.pqCiphertext, s.cert.PqPrivateKey)
-			sharedKey = pqDeriveSharedKey(kemSS, q.clientMagic, s.cert.PqCertContext, q.pqCiphertext)
+			kemSS := pqDecapsulate(q.pqCiphertext, curr.cert.PqPrivateKey)
+			sharedKey = pqDeriveSharedKey(kemSS, q.clientMagic, curr.cert.PqCertContext, q.pqCiphertext)
 		}
 
 		// Issue a resumption ticket.
 		resumeSecret := pqResumeSecret(sharedKey, q.clientMagic, q.nonce[:NonceSize/2])
-		ticketExpiry := nowUnix32() + uint32(config.DefaultDNSCryptPQTicketLifetime)
+		ticketExpiry := nowUnix32() + uint32(config.DefaultDNSCryptPQTicketLifetime/time.Second)
 		peHash := profileExtensionHash()
 		plaintext := encodeTicketPlaintext(
-			resumeSecret, q.clientMagic, s.cert.Serial,
-			s.cert.NotAfter, ticketExpiry, peHash,
+			resumeSecret, q.clientMagic, curr.cert.Serial,
+			curr.cert.NotAfter, ticketExpiry, peHash,
 		)
 		var nonce [xchachaNonceSize]byte
 		if _, randErr := rand.Read(nonce[:]); randErr != nil {
 			return nil, fmt.Errorf("generating ticket nonce: %w", randErr)
 		}
 		sealed := pqSealTicket(&s.ticketKey, &s.ticketKeyID, &nonce, plaintext)
-		r.pqControl = pqBuildControlBlock(sealed, config.DefaultDNSCryptPQTicketLifetime)
+		r.pqControl = pqBuildControlBlock(sealed, uint32(config.DefaultDNSCryptPQTicketLifetime/time.Second))
 	} else {
 		// Resumed query: use the shared key derived during decrypt.
 		sharedKey = q.sharedKey
@@ -70,39 +73,50 @@ func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedRespons
 	return r.encrypt(packet, sharedKey, isUDP)
 }
 
+// decrypt tries to decrypt the query with the current key first, then falls
+// back to previous keys to handle rotation overlap (§8).
 func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err error) {
-	query = &encryptedQuery{
-		esVersion:   s.esVersion,
-		clientMagic: s.cert.ClientMagic,
-	}
-
-	// PQ resumed query: PQResumeMagic, ticket, nonce/2, encrypted.
+	// PQ resumed queries don't carry a client magic — try them first.
 	if s.esVersion.IsPQ() && len(b) >= PQResumeMagicLen && bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:]) {
 		return s.decryptPQResumed(b)
 	}
 
-	var decrypted []byte
-	if s.esVersion.IsPQ() {
-		query.pqCertContext = s.cert.PqCertContext
-		var resolverSk [KeySize]byte
-		copy(resolverSk[:], s.cert.PqPrivateKey)
-		decrypted, err = query.decrypt(b, resolverSk)
-	} else {
-		decrypted, err = query.decrypt(b, s.cert.ResolverSk)
+	// Try keys newest-first.
+	for i, k := range s.keys {
+		query = &encryptedQuery{
+			esVersion:   s.esVersion,
+			clientMagic: k.cert.ClientMagic,
+		}
+
+		var decrypted []byte
+		if s.esVersion.IsPQ() {
+			query.pqCertContext = k.cert.PqCertContext
+			var resolverSk [KeySize]byte
+			copy(resolverSk[:], k.cert.PqPrivateKey)
+			decrypted, err = query.decrypt(b, resolverSk)
+		} else {
+			decrypted, err = query.decrypt(b, k.cert.ResolverSk)
+		}
+		if err == nil {
+			msg = &dns.Msg{}
+			msg.Data = decrypted
+			err = msg.Unpack()
+			if err != nil {
+				return nil, nil, fmt.Errorf("unpacking dns message: %w", err)
+			}
+			return msg, query, nil
+		}
+		if i == 0 {
+			// Current key failed — log at debug, try previous.
+			logKey := fmt.Errorf("decrypting query: %w", err)
+			_ = logKey
+		}
 	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("decrypting query: %w", err)
-	}
-	msg = &dns.Msg{}
-	msg.Data = decrypted
-	err = msg.Unpack()
-	if err != nil {
-		return nil, nil, fmt.Errorf("unpacking dns message: %w", err)
-	}
-	return msg, query, nil
+	return nil, nil, fmt.Errorf("decrypting query: no matching key (tried %d)", len(s.keys))
 }
 
-// decryptPQResumed handles a resumed PQ query.
+// decryptPQResumed handles a resumed PQ query.  It tries each key entry's
+// certificate metadata (client magic, serial, NotAfter) to validate the ticket.
 func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *encryptedQuery, err error) {
 	ticket, nonceHalf, payloadOff, err := parsePQResumedHeader(b)
 	if err != nil {
@@ -120,20 +134,28 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *encryptedQuery
 	if ticketExpiry < nowUnix32() {
 		return nil, nil, ErrPQTicketExpired
 	}
+
 	peHash := profileExtensionHash()
-	if clientMagic != s.cert.ClientMagic ||
-		!bytes.Equal(ticketPlain[ticketPlaintextESOff:ticketPlaintextESOff+ticketPlaintextESLen], PQESVersion[:]) ||
-		binary.BigEndian.Uint32(ticketPlain[ticketPlaintextSerialOff:ticketPlaintextSerialOff+ticketPlaintextSerialLen]) != s.cert.Serial ||
-		binary.BigEndian.Uint32(ticketPlain[ticketPlaintextTSEndOff:ticketPlaintextTSEndOff+ticketPlaintextTSEndLen]) != s.cert.NotAfter ||
-		!bytes.Equal(ticketPlain[ticketPlaintextPEHashOff:ticketPlaintextPEHashOff+ticketPlaintextPEHashLen], peHash[:]) {
+	var matchedCert *Certificate
+	for _, k := range s.keys {
+		if clientMagic == k.cert.ClientMagic &&
+			bytes.Equal(ticketPlain[ticketPlaintextESOff:ticketPlaintextESOff+ticketPlaintextESLen], PQESVersion[:]) &&
+			binary.BigEndian.Uint32(ticketPlain[ticketPlaintextSerialOff:ticketPlaintextSerialOff+ticketPlaintextSerialLen]) == k.cert.Serial &&
+			binary.BigEndian.Uint32(ticketPlain[ticketPlaintextTSEndOff:ticketPlaintextTSEndOff+ticketPlaintextTSEndLen]) == k.cert.NotAfter &&
+			bytes.Equal(ticketPlain[ticketPlaintextPEHashOff:ticketPlaintextPEHashOff+ticketPlaintextPEHashLen], peHash[:]) {
+			matchedCert = k.cert
+			break
+		}
+	}
+	if matchedCert == nil {
 		return nil, nil, ErrPQInvalidTicket
 	}
 
-	sharedKey := pqResumedSharedKey(resumeSecret, s.cert.ClientMagic, nonceHalf, ticket)
+	sharedKey := pqResumedSharedKey(resumeSecret, matchedCert.ClientMagic, nonceHalf, ticket)
 
 	query = &encryptedQuery{
 		esVersion:   s.esVersion,
-		clientMagic: s.cert.ClientMagic,
+		clientMagic: matchedCert.ClientMagic,
 		sharedKey:   sharedKey,
 	}
 	copy(query.nonce[:NonceSize/2], nonceHalf)

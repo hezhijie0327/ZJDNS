@@ -35,14 +35,11 @@ type ServerSettings struct {
 
 // DNSCryptSettings configures the DNSCrypt v2 encrypted DNS listener.
 type DNSCryptSettings struct {
-	Port         string `json:"port"`              // default "8443"
-	ProviderName string `json:"provider_name"`     // e.g. "2.dnscrypt-cert.example.com"
-	PrivateKey   string `json:"private_key"`       // Ed25519 private key (hex, optional)
-	PublicKey    string `json:"public_key"`        // Ed25519 public key (hex, optional)
-	ResolverSk   string `json:"resolver_sk"`       // X25519 secret or X-Wing seed (hex, optional; key type determined by es_version)
-	ResolverPk   string `json:"resolver_pk"`       // X25519 public or X-Wing public (hex, optional; key type determined by es_version)
-	ESVersion    string `json:"es_version"`        // "xwingpq" (default) or "xchacha20poly1305"
-	CertTTL      string `json:"cert_ttl,omitzero"` // "30d", "720h", "86400s", "86400"; empty defaults to 365 days
+	Port         string `json:"port"`          // default "8443"
+	ProviderName string `json:"provider_name"` // e.g. "2.dnscrypt-cert.example.com"
+	PrivateKey   string `json:"private_key"`   // Ed25519 private key (hex, optional — auto-generated if empty)
+	PublicKey    string `json:"public_key"`    // Ed25519 public key (hex, optional — auto-generated if empty)
+	ESVersion    string `json:"es_version"`    // "xwingpq" (default) or "xchacha20poly1305"
 }
 
 // TLSSettings configures TLS listener ports, certificates, and HTTPS settings.

@@ -44,7 +44,7 @@ func startTestDNSCryptServerWithVersion(t *testing.T, esVersionStr string) (addr
 		esVersionStr = "xwingpq"
 	}
 	esVersion, _ := serverdnscrypt.ParseESVersion(esVersionStr)
-	rc, err := serverdnscrypt.GenerateResolverConfig("example.com", nil, esVersion, 0)
+	rc, err := serverdnscrypt.GenerateResolverConfig("example.com", nil, esVersion)
 	if err != nil {
 		t.Fatalf("GenerateResolverConfig: %v", err)
 	}
@@ -61,8 +61,6 @@ func startTestDNSCryptServerWithVersion(t *testing.T, esVersionStr string) (addr
 		ProviderName: rc.ProviderName,
 		PublicKey:    rc.PublicKey,
 		PrivateKey:   rc.PrivateKey,
-		ResolverSk:   rc.ResolverSk,
-		ResolverPk:   rc.ResolverPk,
 		ESVersion:    esVersionStr,
 	}
 

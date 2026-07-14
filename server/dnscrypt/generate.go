@@ -25,7 +25,6 @@ type ResolverConfig struct {
 	ResolverSk   string // X25519 secret or X-Wing seed (hex; determined by ESVersion)
 	ResolverPk   string // X25519 public or X-Wing public (hex; determined by ESVersion)
 	ESVersion    CryptoConstruction
-	CertTTL      time.Duration
 }
 
 // ConfigBlock holds the DNSCrypt server settings.
@@ -34,10 +33,7 @@ type ConfigBlock struct {
 	ProviderName string `json:"provider_name"`
 	PublicKey    string `json:"public_key"`
 	PrivateKey   string `json:"private_key"`
-	ResolverSk   string `json:"resolver_sk,omitzero"`
-	ResolverPk   string `json:"resolver_pk,omitzero"`
 	ESVersion    string `json:"es_version"`
-	CertTTL      string `json:"cert_ttl,omitzero"`
 }
 
 // FullConfig is a complete ZJDNS configuration including both server-side
@@ -59,10 +55,9 @@ const (
 // privateKey is nil, a new Ed25519 keypair is generated.  For classical
 // constructions an X25519 short-term keypair is generated; for PQ an X-Wing
 // keypair is generated instead.
-func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey, esVersion CryptoConstruction, ttl time.Duration) (ResolverConfig, error) {
+func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey, esVersion CryptoConstruction) (ResolverConfig, error) {
 	cfg := ResolverConfig{
 		ESVersion: esVersion,
-		CertTTL:   ttl,
 	}
 	if !strings.HasPrefix(providerName, DNSCryptV2Prefix) {
 		providerName = DNSCryptV2Prefix + providerName
@@ -95,13 +90,9 @@ func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey, 
 
 // NewCert generates a signed Certificate from the resolver configuration.
 func (rc *ResolverConfig) NewCert() (cert *Certificate, err error) {
-	ttl := rc.CertTTL
-	if ttl <= 0 {
-		ttl = config.DefaultDNSCryptCertTTL
-	}
 	cert = &Certificate{
 		Serial:    nowUnix32(),
-		NotAfter:  nowUnix32() + uint32(ttl/time.Second),
+		NotAfter:  nowUnix32() + uint32(config.DefaultDNSCryptCertTTL/time.Second),
 		NotBefore: nowUnix32(),
 		ESVersion: rc.ESVersion,
 	}
@@ -230,7 +221,7 @@ func GenerateEd25519Keypair() (publicKey, privateKey []byte, err error) {
 // the given provider name and address.  The output includes two upstream
 // entries: an sdns:// stamp (for dnscrypt-proxy / ZJDNS client) and a
 // regular address+public_key entry (for explicit configuration).
-func GenerateDNSCryptConfig(provider, addr, esVersion, certTTL string) (string, error) {
+func GenerateDNSCryptConfig(provider, addr, esVersion string) (string, error) {
 	if provider == "" {
 		return "", errors.New("provider name is required (-provider <name>)")
 	}
@@ -243,7 +234,7 @@ func GenerateDNSCryptConfig(provider, addr, esVersion, certTTL string) (string, 
 		return "", err
 	}
 
-	rc, err := GenerateResolverConfig(provider, nil, esVersionVal, parseCertTTL(certTTL))
+	rc, err := GenerateResolverConfig(provider, nil, esVersionVal)
 	if err != nil {
 		return "", fmt.Errorf("generating resolver config: %w", err)
 	}
@@ -261,10 +252,7 @@ func GenerateDNSCryptConfig(provider, addr, esVersion, certTTL string) (string, 
 		ProviderName: rc.ProviderName,
 		PublicKey:    rc.PublicKey,
 		PrivateKey:   rc.PrivateKey,
-		ResolverSk:   rc.ResolverSk,
-		ResolverPk:   rc.ResolverPk,
 		ESVersion:    esVersion,
-		CertTTL:      certTTL,
 	}
 	cfg.Upstream = []config.UpstreamServer{
 		{Address: stamp},

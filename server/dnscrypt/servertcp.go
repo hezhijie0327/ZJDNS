@@ -113,7 +113,7 @@ func (s *Server) handleTCPMsg(ctx context.Context, b []byte, conn net.Conn) erro
 	}
 
 	// Certificate handshake or encrypted query?
-	if !bytes.Equal(b[:ClientMagicSize], s.cert.ClientMagic[:]) && (!s.esVersion.IsPQ() || len(b) < PQResumeMagicLen || !bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:])) {
+	if !s.hasClientMagic(b[:ClientMagicSize]) && (!s.esVersion.IsPQ() || len(b) < PQResumeMagicLen || !bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:])) {
 		reply, err := s.handleHandshake(b)
 		if err != nil {
 			return fmt.Errorf("handshake: %w", err)
