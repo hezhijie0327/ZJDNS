@@ -180,7 +180,11 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	if zdnsutil.IsSecureProtocol(protocol) {
 		result.Response, result.Error = c.executeSecureQuery(queryCtx, msg, server, protocol)
 	} else {
-		result.Response, result.Error = c.executeTraditionalQuery(queryCtx, msg, server)
+		if protocol == config.ProtoTCP {
+			result.Response, result.Error = c.executeTCP(queryCtx, msg, server)
+		} else {
+			result.Response, result.Error = c.executeUDP(queryCtx, msg, server)
+		}
 
 		if c.needsTCPFallback(result, protocol) {
 			// Skip TCP fallback when the context is already cancelled — the
@@ -199,7 +203,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 			tcpServer := *server
 			tcpServer.Protocol = config.ProtoTCP
 
-			if tcpResp, tcpErr := c.executeTraditionalQuery(queryCtx, msg, &tcpServer); tcpErr == nil {
+			if tcpResp, tcpErr := c.executeTCP(queryCtx, msg, &tcpServer); tcpErr == nil {
 				result.Response = tcpResp
 				result.Error = nil
 				result.Protocol = config.ProtoTCP

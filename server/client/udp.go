@@ -1,0 +1,73 @@
+package client
+
+import (
+	"context"
+	"net"
+	"zjdns/config"
+	"zjdns/internal/pool"
+
+	"codeberg.org/miekg/dns"
+)
+
+func (c *Client) executeUDP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	proxyDialer := c.getProxyDialer(server)
+
+	if proxyDialer != nil {
+		return c.exchangeViaProxyUDP(ctx, msg, server.Address, proxyDialer)
+	}
+
+	response, _, err := c.udpClient.Exchange(ctx, msg, config.ProtoUDP, server.Address)
+	return response, err
+}
+
+// exchangeViaProxyUDP sends a DNS query over UDP through a SOCKS5 proxy
+// using UDP ASSOCIATE (RFC 1928 §6). Because DNS over UDP is a single
+// request-response exchange, we create a PacketConn, send one query, read
+// the reply, and close it.
+func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *SOCKS5Dialer) (*dns.Msg, error) {
+	pconn, err := proxyDialer.ListenPacket(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	remoteAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	err = msg.Pack()
+	packed := msg.Data
+	if err != nil {
+		return nil, err
+	}
+
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = pconn.SetDeadline(deadline)
+	}
+
+	if _, err := pconn.WriteTo(packed, remoteAddr); err != nil {
+		return nil, err
+	}
+
+	// Reuse a pooled buffer for the response read. Max DNS message size
+	// is 65535 bytes (dns.MaxMsgSize); the pool buffer is 8192 which covers
+	// the common case (~512–1232). Larger responses allocate.
+	respBuf := socks5ReadPool.Get().(*[]byte)
+	n, _, readErr := pconn.ReadFrom(*respBuf)
+	if readErr != nil {
+		socks5ReadPool.Put(respBuf)
+		return nil, readErr
+	}
+
+	response := pool.DefaultMessagePool.Get()
+	response.Data = (*respBuf)[:n]
+	if err := response.Unpack(); err != nil {
+		socks5ReadPool.Put(respBuf)
+		pool.DefaultMessagePool.Put(response)
+		return nil, err
+	}
+	socks5ReadPool.Put(respBuf)
+
+	response.ID = msg.ID
+	return response, nil
+}
