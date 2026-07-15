@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 	"zjdns/config"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 )
@@ -65,9 +66,11 @@ func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedRespons
 		}
 		sealed := pqSealTicket(&s.ticketKey, &s.ticketKeyID, &nonce, plaintext)
 		r.pqControl = pqBuildControlBlock(sealed, uint32(config.DefaultDNSCryptPQTicketLifetime/time.Second))
+		log.Debugf("DNSCRYPT: PQ ticket issued (expires in %ds)", config.DefaultDNSCryptPQTicketLifetime/time.Second)
 	} else {
 		// Resumed query: use the shared key derived during decrypt.
 		sharedKey = q.sharedKey
+		log.Debugf("DNSCRYPT: PQ resumed response")
 	}
 
 	return r.encrypt(packet, sharedKey, isUDP)
@@ -78,6 +81,7 @@ func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedRespons
 func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err error) {
 	// PQ resumed queries don't carry a client magic — try them first.
 	if len(b) >= PQResumeMagicLen && bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:]) {
+		log.Debugf("DNSCRYPT: PQ resumed query")
 		return s.decryptPQResumed(b)
 	}
 
@@ -90,6 +94,7 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err err
 	for _, k := range keysSnapshot {
 		// Try PQ ciphertext.
 		if bytes.Equal(b[:ClientMagicSize], k.pair.PQ.ClientMagic[:]) {
+			log.Debugf("DNSCRYPT: PQ initial query")
 			query = &encryptedQuery{
 				esVersion:     XWingPQ,
 				clientMagic:   k.pair.PQ.ClientMagic,
@@ -110,6 +115,7 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err err
 
 		// Try classical.
 		if bytes.Equal(b[:ClientMagicSize], k.pair.Classical.ClientMagic[:]) {
+			log.Debugf("DNSCRYPT: classical query")
 			query = &encryptedQuery{
 				esVersion:   XChacha20Poly1305,
 				clientMagic: k.pair.Classical.ClientMagic,

@@ -46,8 +46,6 @@ go build -o zjdns ./cmd/zjdns
 ./zjdns --probe --pipeline    tcp://8.8.8.8      # 测试 RFC 7766 查询流水线
 ./zjdns --probe --conn-reuse  tls://1.1.1.1       # 测试 RFC 1035 连接复用
 ./zjdns --probe --idle-timeout tls://1.1.1.1       # 测量服务器空闲超时
-./zjdns --probe --cert        tls://1.1.1.1        # 获取 TLS 证书链 (JSON)
-./zjdns --probe --cert        tlcp://host:port      # 获取 TLCP 证书链 (JSON)
 ```
 
 ```bash

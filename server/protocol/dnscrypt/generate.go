@@ -67,13 +67,14 @@ func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey) 
 	return cfg, nil
 }
 
-// NewCert generates a signed classical X25519-XChacha20Poly1305 certificate
-// from the resolver configuration.
-func (rc *ResolverConfig) NewCert() (cert *Certificate, err error) {
+// NewCert generates a signed classical X25519-XChacha20Poly1305 certificate.
+// serial and timestamps are provided by the caller to guarantee alignment with
+// the paired PQ cert.
+func (rc *ResolverConfig) NewCert(serial, notBefore, notAfter uint32) (cert *Certificate, err error) {
 	cert = &Certificate{
-		Serial:    nowUnix32(),
-		NotAfter:  nowUnix32() + uint32(config.DefaultDNSCryptCertificateTTL/time.Second),
-		NotBefore: nowUnix32(),
+		Serial:    serial,
+		NotAfter:  notAfter,
+		NotBefore: notBefore,
 		ESVersion: XChacha20Poly1305,
 	}
 
@@ -105,9 +106,9 @@ func (rc *ResolverConfig) NewCert() (cert *Certificate, err error) {
 }
 
 // NewPQCert generates a signed PQ X-Wing certificate deterministically derived
-// from the same X25519 seed as the classical cert.  Both certs share the same
-// Serial, NotBefore, and NotAfter when created via NewCertPair.
-func (rc *ResolverConfig) NewPQCert() (cert *Certificate, err error) {
+// from the same X25519 seed as the classical cert.  Serial and timestamps are
+// provided by the caller to guarantee alignment.
+func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *Certificate, err error) {
 	resolverSk, err := hexDecodeKey(rc.ResolverSk)
 	if err != nil {
 		return nil, fmt.Errorf("decoding resolver secret key: %w", err)
@@ -116,9 +117,9 @@ func (rc *ResolverConfig) NewPQCert() (cert *Certificate, err error) {
 	pk, sk := DerivePQKeys(resolverSk)
 
 	cert = &Certificate{
-		Serial:       nowUnix32(),
-		NotAfter:     nowUnix32() + uint32(config.DefaultDNSCryptCertificateTTL/time.Second),
-		NotBefore:    nowUnix32(),
+		Serial:       serial,
+		NotAfter:     notAfter,
+		NotBefore:    notBefore,
 		ESVersion:    XWingPQ,
 		PqPublicKey:  pk,
 		PqPrivateKey: sk,
@@ -142,18 +143,18 @@ func (rc *ResolverConfig) NewPQCert() (cert *Certificate, err error) {
 // NewCertPair generates both classical and PQ certificates for a single key
 // window.  Both certs share the same Serial, NotBefore, and NotAfter.
 func (rc *ResolverConfig) NewCertPair() (*CertPair, error) {
-	classical, err := rc.NewCert()
+	serial := nowUnix32()
+	notBefore := serial
+	notAfter := serial + uint32(config.DefaultDNSCryptCertificateTTL/time.Second)
+
+	classical, err := rc.NewCert(serial, notBefore, notAfter)
 	if err != nil {
 		return nil, fmt.Errorf("classical cert: %w", err)
 	}
-	pq, err := rc.NewPQCert()
+	pq, err := rc.NewPQCert(serial, notBefore, notAfter)
 	if err != nil {
 		return nil, fmt.Errorf("PQ cert: %w", err)
 	}
-	// Align serial and timestamps so both certs are a matched pair.
-	pq.Serial = classical.Serial
-	pq.NotBefore = classical.NotBefore
-	pq.NotAfter = classical.NotAfter
 	return &CertPair{Classical: classical, PQ: pq}, nil
 }
 
