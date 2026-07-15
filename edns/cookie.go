@@ -5,11 +5,11 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"math/bits"
 	"net"
 	"sync/atomic"
 	"time"
 	"zjdns/internal/log"
+	"zjdns/internal/siphash"
 
 	"codeberg.org/miekg/dns"
 )
@@ -214,7 +214,7 @@ func rfc9018MAC(key *[16]byte, clientCookie []byte, timestamp uint32, clientIP n
 	copy(buf[n:], ip) // 16 bytes
 
 	var mac [8]byte
-	sum := siphash24(key, buf[:n+16])
+	sum := siphash.Sum64(key, buf[:n+16])
 	binary.BigEndian.PutUint64(mac[:], sum)
 	return mac
 }
@@ -282,63 +282,6 @@ func (h *Handler) ParseCookie(msg *dns.Msg) *CookieOption {
 
 // ── SipHash-2-4 ───────────────────────────────────────────────────────────
 //
-// This is a self-contained implementation of SipHash-2-4 (64-bit output),
-// using the reference specification from https://131002.net/siphash/.
-// It is used exclusively for RFC 9018 DNS Cookie MAC computation.
-
-func siphash24(key *[16]byte, msg []byte) uint64 {
-	k0 := binary.LittleEndian.Uint64(key[0:8])
-	k1 := binary.LittleEndian.Uint64(key[8:16])
-
-	v0 := k0 ^ 0x736f6d6570736575
-	v1 := k1 ^ 0x646f72616e646f6d
-	v2 := k0 ^ 0x6c7967656e657261
-	v3 := k1 ^ 0x7465646279746573
-
-	b := uint64(len(msg)) << 56
-
-	for len(msg) >= 8 {
-		m := binary.LittleEndian.Uint64(msg)
-		v3 ^= m
-		sipRound(&v0, &v1, &v2, &v3)
-		sipRound(&v0, &v1, &v2, &v3)
-		v0 ^= m
-		msg = msg[8:]
-	}
-
-	var last uint64
-	for i := len(msg) - 1; i >= 0; i-- {
-		last |= uint64(msg[i]) << (i * 8)
-	}
-	last |= b
-
-	v3 ^= last
-	sipRound(&v0, &v1, &v2, &v3)
-	sipRound(&v0, &v1, &v2, &v3)
-	v0 ^= last
-
-	v2 ^= 0xff
-	sipRound(&v0, &v1, &v2, &v3)
-	sipRound(&v0, &v1, &v2, &v3)
-	sipRound(&v0, &v1, &v2, &v3)
-	sipRound(&v0, &v1, &v2, &v3)
-
-	return v0 ^ v1 ^ v2 ^ v3
-}
-
-func sipRound(v0, v1, v2, v3 *uint64) {
-	*v0 += *v1
-	*v2 += *v3
-	*v1 = bits.RotateLeft64(*v1, 13)
-	*v3 = bits.RotateLeft64(*v3, 16)
-	*v1 ^= *v0
-	*v3 ^= *v2
-	*v0 = bits.RotateLeft64(*v0, 32)
-	*v2 += *v1
-	*v0 += *v3
-	*v1 = bits.RotateLeft64(*v1, 17)
-	*v3 = bits.RotateLeft64(*v3, 21)
-	*v1 ^= *v2
-	*v3 ^= *v0
-	*v2 = bits.RotateLeft64(*v2, 32)
-}
+// SipHash-2-4 MAC computation is delegated to internal/siphash for
+// reuse and independent testability.  See RFC 9018 §4.4 for the MAC
+// construction used with DNS Cookies.
