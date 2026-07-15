@@ -23,7 +23,7 @@
 **读取路径（无锁）**: `current()`, `hasClientMagic()`, `decrypt()`, `decryptPQResumed()`
 **写入路径（有锁）**: `rotateKeys()` — `s.keys = append([]keyEntry{entry}, s.keys...)`
 **修复**: 所有读取路径加 `s.mu.RLock()`，或用 `atomic.Pointer[[]keyEntry]`。
-**状态**: ⏳ 待修复
+**状态**: ✅ 已修复 (a3021ab)
 
 ### C-2. `config` 包引入 DNS 库 + 运行时状态污染配置类型
 **文件**: `config/config.go:4-6, 155-169`
@@ -82,13 +82,13 @@
 **文件**: `internal/latency/httppool.go:83`
 **问题**: `Close()` 设置 `p.clients = nil`，但 `get()` 无 nil 保护，关闭后可能 panic。
 **修复**: `get()` 加 nil map 守卫。
-**状态**: ⏳ 待修复
+**状态**: ✅ 已修复 (a3021ab)
 
 ### H-8. TCP/QUIC 连接池 TOCTOU 连接泄漏
 **文件**: `server/upstream/pool/tcp.go:327-362`, `pool/quic.go:69-127`
 **问题**: `dialAndAdd` 释放锁拨号期间，`Shutdown()` 可清空池，新连接被加入空池永不关闭。
 **修复**: 重新获取锁后检查池关闭标志。
-**状态**: ⏳ 待修复
+**状态**: ✅ 已修复 (a3021ab)
 
 ### H-9. `upstream.Result` 有 4 个死字段
 **文件**: `server/upstream/client.go:31-42`
@@ -104,7 +104,7 @@
 **文件**: `server/protocol/dnscrypt/server.go:277-278`
 **问题**: 先交换 `s.wg` 再 `s.cancel()`，存在 goroutine 未被 join 的极窄窗口。
 **修复**: 先 cancel 再交换 wg。
-**状态**: ⏳ 待修复
+**状态**: ✅ 已修复 (a3021ab)
 
 ### M-2. DNS64 A 子查询绕过 Pending 去重
 **文件**: `server/handler/handler_cache.go:185-195`
@@ -164,13 +164,14 @@
 
 ## 重构路线图
 
-### 阶段 1：数据安全（当前执行中）
-- [ ] C-1: DNSCrypt `s.keys` 加读锁
-- [ ] H-7: HTTP pool nil map 守卫
-- [ ] H-8: TCP/QUIC pool TOCTOU 连接泄漏
-- [ ] H-9: 删除 `upstream.Result` 死字段
+### 阶段 1：数据安全 ✅ 已完成 (a3021ab)
+- [x] C-1: DNSCrypt `s.keys` 加读锁
+- [x] H-7: HTTP pool nil map 守卫
+- [x] H-8: TCP/QUIC pool TOCTOU 连接泄漏
+- [x] H-9: 删除 `upstream.Result` 死字段
+- [x] M-1: DNSCrypt WaitGroup 交换顺序
 
-### 阶段 2：解耦
+### 阶段 2：解耦（当前执行中）
 - [ ] C-2: config 移除 DNS 库依赖和运行时字段
 - [ ] C-3: 领域包接口倒置
 - [ ] H-1/H-2: Handler↔Resolver 循环 → 接口

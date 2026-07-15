@@ -28,6 +28,15 @@ import (
 // Question is a type alias for resolver.Question to avoid duplicate definitions.
 type Question = resolver.Question
 
+// Resolver is the interface for DNS query resolution, defined in the consumer
+// package so the handler depends on an abstraction rather than a concrete type.
+type Resolver interface {
+	Query(ctx context.Context, question Question, ecs *edns.ECSOption) *resolver.QueryResult
+	DNSSECEDECode() uint16
+	UpstreamEDEOption() *edns.EDEOption
+	UpstreamServers() []*config.UpstreamServer
+}
+
 // LatencyProber is the interface for latency-probing cache entries after
 // successful resolution.
 type LatencyProber interface {
@@ -47,7 +56,7 @@ type Handler struct {
 	edns               *edns.Handler
 	zoneEvaluator      *zone.Evaluator
 	tagMatcher         func(qname string, ip net.IP) map[string]bool // rule tag lookup for zone/upstream
-	resolver           *resolver.Resolver
+	resolver           Resolver
 	prober             LatencyProber
 	dns64              *dns64.Synthesizer
 	prefetchCooldown   map[string]int64
@@ -105,7 +114,7 @@ func New(
 }
 
 // SetResolver sets the resolver after construction (two-phase init).
-func (h *Handler) SetResolver(r *resolver.Resolver) { h.resolver = r }
+func (h *Handler) SetResolver(r Resolver) { h.resolver = r }
 
 // SetProber sets the latency prober after construction.
 func (h *Handler) SetProber(p LatencyProber) { h.prober = p }

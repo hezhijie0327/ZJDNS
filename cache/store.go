@@ -243,45 +243,45 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		msgWire = zdnsutil.Compress(msg.Data)
 	}
 
-	// ── Transaction (serialized via writeMu) ──────────────────────────────
-	s.db.WriteLock()
-
-	tx, err := s.db.SQ.Begin()
-	if err != nil {
-		s.db.WriteUnlock()
-		log.Warnf("CACHE: begin tx failed: %v", err)
-		return 0
-	}
-	defer func() { _ = tx.Rollback() }()
-
+	// ── Transaction (serialized via ExecWrite) ────────────────────────────
 	var entryID int64
-	if err := tx.QueryRow(
-		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
-			timestamp, ttl, expires_at, validated, msg_wire)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 RETURNING id`,
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
-		now, entryTTL, now+int64(entryTTL), zdnsutil.BoolToInt(validated),
-		msgWire,
-	).Scan(&entryID); err != nil {
-		s.db.WriteUnlock()
-		log.Warnf("CACHE: insert entry failed: %v", err)
+	err := s.db.ExecWrite(func() error {
+		tx, txErr := s.db.SQ.Begin()
+		if txErr != nil {
+			log.Warnf("CACHE: begin tx failed: %v", txErr)
+			return txErr
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		if txErr = tx.QueryRow(
+			`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
+				timestamp, ttl, expires_at, validated, msg_wire)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 RETURNING id`,
+			qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
+			now, entryTTL, now+int64(entryTTL), zdnsutil.BoolToInt(validated),
+			msgWire,
+		).Scan(&entryID); txErr != nil {
+			log.Warnf("CACHE: insert entry failed: %v", txErr)
+			return txErr
+		}
+
+		// Populate ptr_map for reverse (PTR) lookups.
+		insertPtrMap(tx, entryID, answer)
+		insertPtrMap(tx, entryID, authority)
+		insertPtrMap(tx, entryID, additional)
+
+		if txErr = tx.Commit(); txErr != nil {
+			log.Warnf("CACHE: commit tx failed: %v", txErr)
+			return txErr
+		}
+
+		s.db.AddEntryCount(1)
+		return nil
+	})
+	if err != nil {
 		return 0
 	}
-
-	// Populate ptr_map for reverse (PTR) lookups.
-	insertPtrMap(tx, entryID, answer)
-	insertPtrMap(tx, entryID, authority)
-	insertPtrMap(tx, entryID, additional)
-
-	if err := tx.Commit(); err != nil {
-		s.db.WriteUnlock()
-		log.Warnf("CACHE: commit tx failed: %v", err)
-		return 0
-	}
-
-	s.db.AddEntryCount(1)
-	s.db.WriteUnlock()
 
 	// Run eviction outside writeMu — evictIfNeeded re-syncs the entry count
 	// from the DB via SELECT COUNT(*) before deciding whether to evict, so

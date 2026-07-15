@@ -201,6 +201,15 @@ func (r *Resolver) Recursive() *Recursive {
 	return r.recursive
 }
 
+// DNSSECEDECode returns the DNSSEC EDE code from the recursive resolver,
+// or 0 if no recursive resolution was performed or no failure occurred.
+func (r *Resolver) DNSSECEDECode() uint16 {
+	if r == nil || r.recursive == nil {
+		return 0
+	}
+	return r.recursive.DNSSECEDECode()
+}
+
 // UpstreamEDEOption returns the EDE option parsed from the last upstream
 // response (any rcode). Returns nil when no EDE was present or the resolver
 // used recursive mode. Callers should pass this through to downstream clients

@@ -178,11 +178,13 @@ func (db *DB) AddEntryCount(delta int64) { db.entryCount.Add(delta) }
 // SetEntryCount atomically sets the entry counter to n.
 func (db *DB) SetEntryCount(n int64) { db.entryCount.Store(n) }
 
-// WriteLock acquires the cache write serialization mutex.
-func (db *DB) WriteLock() { db.writeMu.Lock() }
-
-// WriteUnlock releases the cache write serialization mutex.
-func (db *DB) WriteUnlock() { db.writeMu.Unlock() }
+// ExecWrite executes fn while holding the cache write serialization mutex,
+// ensuring that cache writes and evictions are serialized.
+func (db *DB) ExecWrite(fn func() error) error {
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	return fn()
+}
 
 // EnsureEntry returns the entry ID for the given cache key. Used as a
 // fallback by RecordRequest when no pre-resolved EntryID is available

@@ -232,8 +232,8 @@ func (h *Handler) processQueryError(req *dns.Msg, question Question, clientReque
 
 	edeCode := edns.EDECodeNetworkError
 	dnssecStatus := ""
-	if h.resolver != nil && h.resolver.Recursive() != nil && h.resolver.Recursive().DNSSECEDECode() != 0 {
-		edeCode = h.resolver.Recursive().DNSSECEDECode()
+	if h.resolver != nil && h.resolver.DNSSECEDECode() != 0 {
+		edeCode = h.resolver.DNSSECEDECode()
 		dnssecStatus = config.DNSSECStatusBogus
 
 		log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
@@ -283,7 +283,7 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	switch {
 	case validated:
 		dnssecStatus = config.DNSSECStatusSecure
-	case h.resolver != nil && h.resolver.Recursive() != nil && h.resolver.Recursive().DNSSECEDECode() != 0:
+	case h.resolver != nil && h.resolver.DNSSECEDECode() != 0:
 		dnssecStatus = config.DNSSECStatusBogus
 	default:
 		dnssecStatus = config.DNSSECStatusInsecure
@@ -328,8 +328,8 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	log.Debugf("CACHE: served response for %s ", question.Name)
 
 	var edeOpt *edns.EDEOption
-	if dnssecStatus == config.DNSSECStatusBogus && h.resolver != nil && h.resolver.Recursive() != nil {
-		if code := h.resolver.Recursive().DNSSECEDECode(); code != 0 {
+	if dnssecStatus == config.DNSSECStatusBogus && h.resolver != nil {
+		if code := h.resolver.DNSSECEDECode(); code != 0 {
 			edeOpt = edns.NewEDEOption(code, "")
 		}
 	}
