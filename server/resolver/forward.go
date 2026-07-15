@@ -69,7 +69,14 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 					return nil
 				}
 			} else {
-				isSecure := server.Protocol == config.ProtoTLS || server.Protocol == config.ProtoQUIC || server.Protocol == config.ProtoHTTP || server.Protocol == config.ProtoHTTP3
+				isSecure := server.Protocol == config.ProtoTLS ||
+					server.Protocol == config.ProtoQUIC ||
+					server.Protocol == config.ProtoHTTPS ||
+					server.Protocol == config.ProtoHTTP3 ||
+					server.Protocol == config.ProtoDTLS ||
+					server.Protocol == config.ProtoDTLCP ||
+					server.Protocol == config.ProtoTLCP ||
+					server.Protocol == config.ProtoHTTPTLCP
 				msg := r.buildMsg(question, ecs, true, isSecure)
 				queryResult := r.queryClient.ExecuteQuery(groupCtx, msg, server)
 				pool.DefaultMessagePool.Put(msg)

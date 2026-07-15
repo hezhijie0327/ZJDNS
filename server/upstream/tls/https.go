@@ -15,9 +15,9 @@ import (
 	eTLS "gitlab.com/go-extension/tls"
 )
 
-// ExecuteDOH performs a DNS-over-HTTPS query (HTTP/2), using cached
+// ExecuteHTTPS performs a DNS-over-HTTPS query (HTTP/2), using cached
 // transports with automatic retry on connection failure.
-func (c *Client) ExecuteDOH(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
@@ -35,7 +35,7 @@ func (c *Client) ExecuteDOH(ctx context.Context, msg *dns.Msg, server *config.Up
 		client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
 	}
 
-	resp, err := ExecuteDOHHTTPRequest(ctx, msg, parsedURL, client)
+	resp, err := ExecuteHTTPSRequest(ctx, msg, parsedURL, client)
 	if err == nil {
 		return resp, nil
 	}
@@ -52,7 +52,7 @@ func (c *Client) ExecuteDOH(ctx context.Context, msg *dns.Msg, server *config.Up
 			c.dohTransportMu.Unlock()
 
 			client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
-			resp, err = ExecuteDOHHTTPRequest(ctx, msg, parsedURL, client)
+			resp, err = ExecuteHTTPSRequest(ctx, msg, parsedURL, client)
 			if err == nil {
 				return resp, nil
 			}

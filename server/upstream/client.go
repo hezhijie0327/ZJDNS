@@ -11,14 +11,16 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/upstream/dnscrypt"
 	"zjdns/server/upstream/pool"
+	"zjdns/server/upstream/traditional"
+
+	zdnsutil "zjdns/internal/dnsutil"
+
 	socks5 "zjdns/server/upstream/socks5"
 	tlcpclient "zjdns/server/upstream/tlcp"
 	tlsclient "zjdns/server/upstream/tls"
-	"zjdns/server/upstream/traditional"
 
 	"codeberg.org/miekg/dns"
 	eHTTP "gitlab.com/go-extension/http"
@@ -205,18 +207,18 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		return c.tlsClient.ExecuteTLS(ctx, msg, server)
 	case config.ProtoQUIC:
 		return c.tlsClient.ExecuteQUIC(ctx, msg, server)
-	case config.ProtoHTTP:
-		return c.tlsClient.ExecuteDOH(ctx, msg, server)
+	case config.ProtoHTTPS:
+		return c.tlsClient.ExecuteHTTPS(ctx, msg, server)
 	case config.ProtoHTTP3:
-		return c.tlsClient.ExecuteDOH3(ctx, msg, server)
-	case config.ProtoTLCP:
-		return c.tlcpClient.ExecuteTLCP(ctx, msg, server)
+		return c.tlsClient.ExecuteHTTP3(ctx, msg, server)
 	case config.ProtoDTLS:
 		return c.tlsClient.ExecuteDTLS(ctx, msg, server)
+	case config.ProtoTLCP:
+		return c.tlcpClient.ExecuteTLCP(ctx, msg, server)
+	case config.ProtoHTTPTLCP:
+		return c.tlcpClient.ExecuteHTTPTLCP(ctx, msg, server)
 	case config.ProtoDTLCP:
 		return c.tlcpClient.ExecuteDTLCP(ctx, msg, server)
-	case config.ProtoHTTPTLCP:
-		return c.tlcpClient.ExecuteDOH_TLCP(ctx, msg, server)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}

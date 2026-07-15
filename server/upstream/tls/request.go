@@ -15,10 +15,10 @@ import (
 	"github.com/quic-go/quic-go/http3"
 )
 
-// ExecuteDOHHTTPRequest is the shared DoH/DoH3 request logic. Both ExecuteDOH
-// and ExecuteDOH3 differ only in which *http.Client they construct (HTTP/2 vs
+// ExecuteHTTPSRequest is the shared DoH/DoH3 request logic. Both ExecuteHTTPS
+// and ExecuteHTTP3 differ only in which *http.Client they construct (HTTP/2 vs
 // HTTP/3 transport); the HTTP request/response dance is identical.
-func ExecuteDOHHTTPRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient *http.Client) (*dns.Msg, error) {
+func ExecuteHTTPSRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient *http.Client) (*dns.Msg, error) {
 	originalID := msg.ID
 	msg.ID = 0
 

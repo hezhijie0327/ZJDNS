@@ -5,15 +5,15 @@ go 1.26.4
 require (
 	codeberg.org/miekg/dns v0.6.85-0.20260714190811-3e677f4a8837
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
-	github.com/cloudflare/circl v1.6.5-0.20260714202400-0c3c386bef65
+	github.com/cloudflare/circl v1.6.5-0.20260715143955-cc67cd18cc31
 	github.com/emmansun/gmsm v0.44.0
-	github.com/klauspost/compress v1.19.1-0.20260710073621-c0bbc84762b7
+	github.com/klauspost/compress v1.19.1-0.20260715101459-e29d4d389f0e
 	github.com/ncruces/go-sqlite3 v0.35.3-0.20260708233615-a627269d8f8a
 	github.com/pion/dtls/v3 v3.1.3-0.20260713182031-e1fb308f9f85
 	github.com/pjbgf/sha1cd v0.6.1-0.20260701134543-795854be75e9
 	github.com/quic-go/quic-go v0.60.1-0.20260714220524-8bc5d4f8428a
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
-	gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246
+	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0

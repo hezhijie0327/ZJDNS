@@ -50,9 +50,9 @@ func (h *http3Transport) Close() (err error) {
 	return h.baseTransport.Close()
 }
 
-// ExecuteDOH3 performs a DNS-over-HTTPS/3 query, using cached transports with
+// ExecuteHTTP3 performs a DNS-over-HTTPS/3 query, using cached transports with
 // automatic retry on connection failure.
-func (c *Client) ExecuteDOH3(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	tlsConfig := c.stdTLSConfig(server)
 
 	parsedURL, err := url.Parse(server.Address)
@@ -71,7 +71,7 @@ func (c *Client) ExecuteDOH3(ctx context.Context, msg *dns.Msg, server *config.U
 		client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 	}
 
-	resp, err := ExecuteDOHHTTPRequest(ctx, msg, parsedURL, client)
+	resp, err := ExecuteHTTPSRequest(ctx, msg, parsedURL, client)
 	if err == nil {
 		return resp, nil
 	}
@@ -96,7 +96,7 @@ func (c *Client) ExecuteDOH3(ctx context.Context, msg *dns.Msg, server *config.U
 			c.doh3TransportMu.Unlock()
 
 			client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
-			resp, err = ExecuteDOHHTTPRequest(ctx, msg, parsedURL, client)
+			resp, err = ExecuteHTTPSRequest(ctx, msg, parsedURL, client)
 			if err == nil {
 				return resp, nil
 			}

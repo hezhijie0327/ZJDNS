@@ -6,6 +6,7 @@ import (
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
+
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 )
 
@@ -46,8 +47,8 @@ func generateExampleConfig() string {
 		{Protocol: config.ProtoTCP, Port: config.DefaultProbePortHTTPS, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
 		{Protocol: config.ProtoTCP, Port: config.DefaultProbePortHTTP, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
 		{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
-		{Protocol: config.ProtoHTTPPlain, Port: config.DefaultProbePortHTTP, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
-		{Protocol: config.ProtoHTTP, Port: config.DefaultProbePortHTTPS, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
+		{Protocol: config.ProtoHTTP, Port: config.DefaultProbePortHTTP, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
+		{Protocol: config.ProtoHTTPS, Port: config.DefaultProbePortHTTPS, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
 		{Protocol: config.ProtoHTTP3, Port: config.DefaultProbePortHTTPS, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
 	}
 
@@ -58,7 +59,7 @@ func generateExampleConfig() string {
 		{Address: "223.6.6.6:53", Protocol: config.ProtoUDP},
 		{Address: "223.5.5.5:853", Protocol: config.ProtoTLS, ServerName: "dns.alidns.com"},
 		{Address: "223.6.6.6:853", Protocol: config.ProtoQUIC, ServerName: "dns.alidns.com", SkipTLSVerify: true},
-		{Address: "https://223.5.5.5:443/dns-query", Protocol: config.ProtoHTTP, ServerName: "dns.alidns.com", Match: []string{"corp-net"}},
+		{Address: "https://223.5.5.5:443/dns-query", Protocol: config.ProtoHTTPS, ServerName: "dns.alidns.com", Match: []string{"corp-net"}},
 		{Address: "https://223.6.6.6:443/dns-query", Protocol: config.ProtoHTTP3, ServerName: "dns.alidns.com", Match: []string{"!corp-net"}},
 		// DNS stamps — protocol auto-detected by normalizeStamps
 		{Address: "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0"},

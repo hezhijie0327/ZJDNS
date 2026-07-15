@@ -78,13 +78,13 @@ func probeAddress(ctx context.Context, ip net.IP, step config.LatencyProbeStep, 
 			port = config.DefaultProbePortDNS
 		}
 		return probeUDP(ctx, ip, port)
-	case config.ProtoHTTPPlain:
+	case config.ProtoHTTP:
 		port := step.Port
 		if port <= 0 {
 			port = config.DefaultProbePortHTTP
 		}
 		return probeHTTP(ctx, ip, port, false, false, httpPool)
-	case config.ProtoHTTP:
+	case config.ProtoHTTPS:
 		port := step.Port
 		if port <= 0 {
 			port = config.DefaultProbePortHTTPS

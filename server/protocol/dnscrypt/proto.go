@@ -122,12 +122,12 @@ var (
 // ParseESVersion parses an ESVersion string into a CryptoConstruction value.
 func ParseESVersion(s string) (CryptoConstruction, error) {
 	switch s {
-	case "xwingpq", "":
-		return XWingPQ, nil
-	case "xchacha20poly1305":
+	case "xchacha20poly1305", "":
 		return XChacha20Poly1305, nil
+	case "xwingpq":
+		return XWingPQ, nil
 	default:
-		return 0, fmt.Errorf("unsupported es_version: %q (supported: xwingpq, xchacha20poly1305)", s)
+		return 0, fmt.Errorf("unsupported es_version: %q (supported: xchacha20poly1305, xwingpq)", s)
 	}
 }
 

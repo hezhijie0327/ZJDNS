@@ -12,9 +12,9 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// ExecuteDOH_TLCP performs a DoH-over-TLCP query by creating an HTTP client
+// ExecuteHTTPTLCP performs a DoH-over-TLCP query by creating an HTTP client
 // whose DialTLSContext establishes TLCP connections instead of TLS connections.
-func (c *Client) ExecuteDOH_TLCP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
@@ -46,5 +46,5 @@ func (c *Client) ExecuteDOH_TLCP(ctx context.Context, msg *dns.Msg, server *conf
 	}
 	defer transport.CloseIdleConnections()
 
-	return tls.ExecuteDOHHTTPRequest(ctx, msg, parsedURL, client)
+	return tls.ExecuteHTTPSRequest(ctx, msg, parsedURL, client)
 }

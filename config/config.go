@@ -78,7 +78,7 @@ type TLCPCertificate struct {
 type DNSCryptCertificate struct {
 	PrivateKey string `json:"private_key,omitzero"` // Ed25519 private key (hex, optional — auto-generated if empty)
 	PublicKey  string `json:"public_key,omitzero"`  // Ed25519 public key (hex, optional — auto-generated if empty)
-	ESVersion  string `json:"es_version,omitzero"`  // "xwingpq" (default) or "xchacha20poly1305"
+	ESVersion  string `json:"es_version,omitzero"`  // "xchacha20poly1305" (default) or "xwingpq"
 }
 
 // FeatureFlags enables optional features: hijack protection, KTLS, DDR, ECS,

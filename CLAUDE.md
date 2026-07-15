@@ -284,7 +284,7 @@ Top layer (wiring):
 | `EncryptedQuery` / `EncryptedResponse` | `server/protocol/dnscrypt` | Public API types for client-side query encryption and response decryption. EncryptedQuery carries ClientNonce for pre-generated nonces (resumed PQ). EncryptedResponse exposes PQControl for ticket extraction. |
 | `CryptoConstruction` | `server/protocol/dnscrypt` | Enum: XWingPQ (0x0003, default), XChacha20Poly1305 (0x0002). XSalsa20 (0x0001) is removed — deprecated by dnscrypt-proxy. |
 | `ResolverConfig` | `server/protocol/dnscrypt` | Internal config builder: provider name, Ed25519 signing keys, X25519/X-Wing resolver keys, ES version. Methods: `NewCert()`, `CreateStamp()`. |
-| `Client` | `server/upstream` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/DTLCP/SOCKS5/DNSCrypt-UDP+TCP/TLCP/DoH-TLCP). `dnscryptState` caches per-upstream resolver state (sharedKey, secretKey/publicKey, PQ ticket + resumeSecret, expiry). TLCP uses `tlcpClientConfig` / `dialTLCPConn` (analogous to `eTLSClientConfig` / `dialTLSConn`) and `executeDOH_TLCP` with custom `http.Transport.DialTLSContext`. DTLS uses `pion/dtls` for UDP-based TLS transport (RFC 8094). DTLCP uses `gitee.com/Trisia/gotlcp/dtlcp` with `net.ListenPacket` + `dtlcp.Client` (not `dtlcp.Dial` — creates connected socket incompatible with internal `WriteTo`). |
+| `Client` | `server/upstream` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/DTLCP/SOCKS5/DNSCrypt-UDP+TCP/TLCP/DoH-TLCP). `dnscryptState` caches per-upstream resolver state (sharedKey, secretKey/publicKey, PQ ticket + resumeSecret, expiry). TLCP uses `tlcpClientConfig` / `dialTLCPConn` (analogous to `eTLSClientConfig` / `dialTLSConn`) and `ExecuteHTTPTLCP` with custom `http.Transport.DialTLSContext`. DTLS uses `pion/dtls` for UDP-based TLS transport (RFC 8094). DTLCP uses `gitee.com/Trisia/gotlcp/dtlcp` with `net.ListenPacket` + `dtlcp.Client` (not `dtlcp.Dial` — creates connected socket incompatible with internal `WriteTo`). |
 | `SOCKS5Dialer` | `server/upstream/socks5` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
 | `Conn` / `Pool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT |
 | `QUICPool` / `QUICConn` | `server/upstream/pool` | QUIC connection pool |
@@ -319,7 +319,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Unified SQLite DB** (`database/`): 10 tables, WAL + mmap, zstd-compressed wire format. `github.com/ncruces/go-sqlite3` (pure Go, no CGo). Schema migration keyed by app version with rolling `minSupportedVersion` window.
 - **Global TTL** (`internal/ttl`): Stateless functions shared by cache and zone. Stale TTL uses cyclical countdown for repeated background refresh chances.
 - **EDNS buffer sizing**: 1232B for upstream, 4096B for recursive (DNSSEC root zone referrals ~1400B).
-- **EDNS padding**: Only for secure transports (DoT/DoQ/DoH/DoH3). DNSCrypt has its own ISO 7816-4 padding.
+- **EDNS padding**: Only for secure transports (DoT/DoQ/DoH/DoH3/DTLS/DTLCP/TLCP/HTTPTLCP). DNSCrypt has its own ISO 7816-4 padding.
 - **Per-interface binding**: All listeners bind per-IP via `TryBind`; unavailable addresses are skipped with a warning.
 - **QNAME minimisation (RFC 9156)**: Enabled by default, 10-step limit, QTYPE=A hides original type, CNAME owner-name mismatch detection.
 - **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read after Put.

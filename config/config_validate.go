@@ -9,8 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"gitee.com/Trisia/gotlcp/tlcp"
 	eTLS "gitlab.com/go-extension/tls"
@@ -129,13 +130,27 @@ func validateRuleSets(cfg *ServerConfig) (map[string]bool, error) {
 
 func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) error {
 	validProtocols := map[string]bool{
-		ProtoUDP: true, ProtoTCP: true, ProtoTLS: true,
-		ProtoQUIC:   true,
-		ProtoHTTP:   true,
-		ProtoHTTP3:  true,
-		ProtoTLSTCP: true, ProtoDNSCrypt: true, ProtoDNSCryptTCP: true,
-		ProtoTLCP: true, ProtoHTTPTLCP: true,
-		ProtoDTLS: true, ProtoDTLCP: true,
+		// Plain DNS
+		ProtoUDP: true,
+		ProtoTCP: true,
+
+		// TLS-based
+		ProtoTLS:   true,
+		ProtoQUIC:  true,
+		ProtoHTTPS: true,
+		ProtoHTTP3: true,
+		ProtoDTLS:  true,
+
+		// DNSCrypt
+		ProtoDNSCrypt:    true,
+		ProtoDNSCryptTCP: true,
+
+		// TLCP-based (GB/T 38636-2020)
+		ProtoTLCP:     true,
+		ProtoHTTPTLCP: true,
+
+		// DTLS-based (GM/T 0128-2023)
+		ProtoDTLCP: true,
 	}
 
 	for i, server := range cfg.Upstream {
@@ -150,7 +165,7 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 				// Stamp addresses are parsed during normalization — the raw
 				// sdns:// string is not a valid host:port or URL.
 			} else if _, _, err := net.SplitHostPort(server.Address); err != nil {
-				if protocol == ProtoHTTP || protocol == ProtoHTTP3 ||
+				if protocol == ProtoHTTPS || protocol == ProtoHTTP3 ||
 					protocol == ProtoHTTPTLCP {
 					if _, err := url.Parse(server.Address); err != nil {
 						return fmt.Errorf("upstream server %d address invalid: %w", i, err)
@@ -348,10 +363,10 @@ func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 		return validateProbePort(index, ProtoTCP, &step.Port, DefaultProbePortHTTP)
 	case ProtoUDP:
 		return validateProbePort(index, ProtoUDP, &step.Port, DefaultProbePortDNS)
-	case ProtoHTTPPlain:
-		return validateProbePort(index, ProtoHTTPPlain, &step.Port, DefaultProbePortHTTP)
 	case ProtoHTTP:
-		return validateProbePort(index, ProtoHTTP, &step.Port, DefaultProbePortHTTPS)
+		return validateProbePort(index, ProtoHTTP, &step.Port, DefaultProbePortHTTP)
+	case ProtoHTTPS:
+		return validateProbePort(index, ProtoHTTPS, &step.Port, DefaultProbePortHTTPS)
 	case ProtoHTTP3:
 		return validateProbePort(index, ProtoHTTP3, &step.Port, DefaultProbePortHTTPS)
 	default:

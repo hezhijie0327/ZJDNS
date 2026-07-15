@@ -240,8 +240,8 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 	}
 }
 
-// WarmUpDOH pre-creates a DoH transport.
-func (c *Client) WarmUpDOH(ctx context.Context, server *config.UpstreamServer) {
+// WarmUpHTTPS pre-creates a DoH transport.
+func (c *Client) WarmUpHTTPS(ctx context.Context, server *config.UpstreamServer) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		log.Debugf("UPSTREAM: pre-warm DoH parse %s: %v", server.Address, err)
@@ -256,8 +256,8 @@ func (c *Client) WarmUpDOH(ctx context.Context, server *config.UpstreamServer) {
 	log.Debugf("UPSTREAM: pre-warmed DoH transport for %s (key=%s)", server.Address, key)
 }
 
-// WarmUpDOH3 pre-creates a DoH3 transport.
-func (c *Client) WarmUpDOH3(ctx context.Context, server *config.UpstreamServer) {
+// WarmUpHTTP3 pre-creates a DoH3 transport.
+func (c *Client) WarmUpHTTP3(ctx context.Context, server *config.UpstreamServer) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		log.Debugf("UPSTREAM: pre-warm DoH3 parse %s: %v", server.Address, err)

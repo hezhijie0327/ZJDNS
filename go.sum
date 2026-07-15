@@ -10,8 +10,8 @@ github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtn
 github.com/andybalholm/brotli v1.2.2/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/blang/semver/v4 v4.0.0 h1:1PFHFE6yCCTv8C1TeyNNarDzntLi7wMI5i/pzqYIsAM=
 github.com/blang/semver/v4 v4.0.0/go.mod h1:IbckMUScFkM3pff0VJDNKRiT6TG/YpiHIM2yvyW5YoQ=
-github.com/cloudflare/circl v1.6.5-0.20260714202400-0c3c386bef65 h1:lTdfQICCEFCVAy9RaJdmT4QVqh/xQF1onkbo2uyD2XQ=
-github.com/cloudflare/circl v1.6.5-0.20260714202400-0c3c386bef65/go.mod h1:hXgDtJNQzuzqkMP+ivC3kuKbnzkarivPcAd5ghtDdDc=
+github.com/cloudflare/circl v1.6.5-0.20260715143955-cc67cd18cc31 h1:cDOX1UPIIpKhVrSP6UP/2l92+pQCGOABTluHV42XFkQ=
+github.com/cloudflare/circl v1.6.5-0.20260715143955-cc67cd18cc31/go.mod h1:hXgDtJNQzuzqkMP+ivC3kuKbnzkarivPcAd5ghtDdDc=
 github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 h1:tLWBZgPg6TV67oe76W4p+aUQEWIa52wbcuiz8GFd3vo=
 github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488/go.mod h1:QKJhjoqUtBsXCAVEjw38mFqoi7DebT7kthcD7UzbnoA=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
@@ -20,8 +20,8 @@ github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d h1:CPqTNIigGwe
 github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d/go.mod h1:QX5ZVULjAfZJux/W62Y91HvCh9hyW6enAwcrrv/sLj0=
 github.com/emmansun/gmsm v0.44.0 h1:QAg/Xuha84+AUPFIe7T8Ly4S8z54+UPwpBnHS8Y8Ubc=
 github.com/emmansun/gmsm v0.44.0/go.mod h1:CHti5ihGbTOI0pCtdoC8HLjBxGFktH/ksbpsCgsCzkQ=
-github.com/klauspost/compress v1.19.1-0.20260710073621-c0bbc84762b7 h1:v6MC8pbdbJsbYI5VzThLReM26yZ0gShUil6F/Mv0Xpo=
-github.com/klauspost/compress v1.19.1-0.20260710073621-c0bbc84762b7/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
+github.com/klauspost/compress v1.19.1-0.20260715101459-e29d4d389f0e h1:jZJnMZpa87aNeuN3F0D6P32I4T8cg3nblC2YMTvVdsk=
+github.com/klauspost/compress v1.19.1-0.20260715101459-e29d4d389f0e/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/klauspost/cpuid/v2 v2.4.0 h1:S6Hrbc7+ywsr0r+RLapfGBHfyefhCTwEh3A0tV913Dw=
 github.com/klauspost/cpuid/v2 v2.4.0/go.mod h1:19jmZ9mjzoF//ddRSUsv0zfBTJWh3QJh9FNxZTMrGxU=
 github.com/ncruces/go-sqlite3 v0.35.3-0.20260708233615-a627269d8f8a h1:3Z/rLSRYhOPOSNkHMJ5JtxwbjogS6KyqO5e0foBTYe8=
@@ -64,8 +64,8 @@ gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f h1:PIH4MkzPmCHSQ
 gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f/go.mod h1:JHhAUoCbSlqFIvdXNrExIRx+cbUygSSIix/n+Sy154w=
 gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5 h1:xQA0rfVPqW3G6dnb4qtgBdxr9XLu9vzDfdqKfLqGFXA=
 gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5/go.mod h1:nRmjyZOSF6N/6yuRl7ui9wKb1DjMX9ELGzOwELwWVSU=
-gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246 h1:XTZfR1rJjtphieZYO4VdVO4WjsDPOBuSPY9ryauAyyc=
-gitlab.com/go-extension/tls v0.0.0-20260608100712-9d9c3c3bf246/go.mod h1:YDOE3Bcr2glufOLkR1iTOguApmrXdmJGTg5XuAij9bY=
+gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2 h1:Orv4U03bz63Im+83O5hvN5O6l4HsnySXJ8NSAmL/zQM=
+gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2/go.mod h1:YDOE3Bcr2glufOLkR1iTOguApmrXdmJGTg5XuAij9bY=
 gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891 h1:b45Hl2gyHbV6GANcg/7BSZ0A0JUjq/gBEq+OeJlAuM0=
 gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891/go.mod h1:Ywd71Frp71RHLytGD2PgcTyxX/nEpGcYh85CPFTz3Mg=
 go.uber.org/mock v0.6.0 h1:hyF9dfmbgIX5EfOdasqLsWD6xqpNZlXblLB/Dbnwv3Y=
