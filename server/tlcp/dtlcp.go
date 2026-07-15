@@ -2,9 +2,7 @@ package tlcp
 
 import (
 	"encoding/binary"
-	"errors"
 	"net"
-	"strings"
 	"sync"
 	"time"
 	"zjdns/config"
@@ -219,7 +217,7 @@ func (s *Server) handleDTLCPConnections(listener net.Listener) {
 			case <-s.ctx.Done():
 				return
 			default:
-				if isTemporaryError(err) {
+				if zdnsutil.IsTemporaryError(err) {
 					log.Debugf("TLCP: DTLCP accept temporary error: %v", err)
 					continue
 				}
@@ -258,7 +256,7 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 
 		n, err := conn.Read(buf)
 		if err != nil {
-			if !isTemporaryError(err) {
+			if !zdnsutil.IsTemporaryError(err) {
 				return
 			}
 			continue
@@ -305,18 +303,4 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 			return
 		}
 	}
-}
-
-// isTemporaryError returns true if the error is a temporary network error
-// (net.Error with Timeout() true) or contains "timeout"/"temporary" in its
-// message.
-func isTemporaryError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
-		return true
-	}
-	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
 }

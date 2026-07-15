@@ -3,7 +3,6 @@ package dnscrypt
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -60,7 +59,7 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 			if !s.isStarted() {
 				return
 			}
-			if isTemporaryNetError(err) {
+			if zdnsutil.IsTemporaryError(err) {
 				continue
 			}
 			log.Debugf("DNSCRYPT: TCP accept error: %v", err)
@@ -136,17 +135,4 @@ func (s *Server) handleTCPMsg(ctx context.Context, b []byte, conn net.Conn) erro
 		encrypt: s.encrypt,
 	}
 	return s.serveDNS(ctx, rw, m, config.ProtoDNSCryptTCP)
-}
-
-// isTemporaryNetError reports whether the error is a temporary network error
-// (timeout, temporary) that should be retried.
-func isTemporaryNetError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return netErr.Timeout()
-	}
-	return false
 }

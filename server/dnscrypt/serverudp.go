@@ -72,7 +72,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 			if !s.isStarted() {
 				return
 			}
-			if isTemporaryNetError(err) {
+			if zdnsutil.IsTemporaryError(err) {
 				continue
 			}
 			log.Debugf("DNSCRYPT: UDP read error: %v", err)

@@ -2,6 +2,7 @@
 package dnsutil
 
 import (
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -257,4 +258,18 @@ func LogTLSConnectionState(role, dir, addr string, version, cipherSuite uint16, 
 // producing an "ip:53" pair suitable for use as a nameserver address.
 func JoinDNSPort(ip string) string {
 	return net.JoinHostPort(ip, "53")
+}
+
+// IsTemporaryError reports whether err is a temporary network error (timeout)
+// or contains "timeout"/"temporary" in its message.  Used by accept loops and
+// connection handlers to distinguish transient failures from permanent ones.
+func IsTemporaryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
 }
