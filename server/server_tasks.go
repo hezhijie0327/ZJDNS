@@ -143,22 +143,7 @@ func (s *Server) shutdownServer() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 	defer shutdownCancel()
-	for _, srv := range s.udpServers {
-		if srv != nil {
-			srv.Shutdown(shutdownCtx)
-		}
-	}
-	if len(s.udpServers) > 0 {
-		log.Infof("SERVER: UDP server(s) shut down")
-	}
-	for _, srv := range s.tcpServers {
-		if srv != nil {
-			srv.Shutdown(shutdownCtx)
-		}
-	}
-	if len(s.tcpServers) > 0 {
-		log.Infof("SERVER: TCP server(s) shut down")
-	}
+	s.traditional.Shutdown(shutdownCtx)
 
 	if s.tls != nil {
 		if err := s.tls.Shutdown(); err != nil {

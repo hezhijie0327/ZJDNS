@@ -21,14 +21,9 @@ func TestEmptyPortDisablesPlainDNS(t *testing.T) {
 	if srv == nil {
 		t.Fatal("New() returned nil")
 	}
-	// New() doesn't start listeners, but Start() guards both UDP and TCP
-	// with `if s.config.Server.Port != ""`.  We verify the guard exists by
-	// confirming that udpServers and tcpServers start empty.
-	if len(srv.udpServers) != 0 {
-		t.Errorf("udpServers should be empty when port is empty, got %d", len(srv.udpServers))
-	}
-	if len(srv.tcpServers) != 0 {
-		t.Errorf("tcpServers should be empty when port is empty, got %d", len(srv.tcpServers))
+	// New() creates the traditional server even when no ports are configured.
+	if srv.traditional == nil {
+		t.Error("traditional server should not be nil")
 	}
 }
 

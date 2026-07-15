@@ -18,7 +18,6 @@ import (
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
-	"zjdns/internal/pool"
 	"zjdns/ruleset"
 	"zjdns/server/client"
 	serverdnscrypt "zjdns/server/dnscrypt"
@@ -28,6 +27,7 @@ import (
 	"zjdns/server/security"
 	servertlcp "zjdns/server/tlcp"
 	"zjdns/server/tls"
+	traditionalserver "zjdns/server/traditional"
 	"zjdns/zone"
 
 	"codeberg.org/miekg/dns"
@@ -43,14 +43,13 @@ type Server struct {
 	tls             *tls.Server
 	dnscryptServer  *serverdnscrypt.Server
 	tlcpServer      *servertlcp.Server
+	traditional     *traditionalserver.Server
 	pprofServer     *http.Server
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
 	shutdown        chan struct{}
 	backgroundGroup *errgroup.Group
 	backgroundCtx   context.Context
-	udpServers      []*dns.Server // per-address listeners
-	tcpServers      []*dns.Server // per-address listeners
 	tcpWriteMu      sync.Map
 	tcpSem          chan struct{} // bounds concurrent TCP query goroutines
 }
@@ -270,6 +269,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.tlcpServer = tlcpSrv
 	}
 
+	server.traditional = traditionalserver.New(cfg)
+
 	// ── Observability: probes + pprof ─────────────────────────────────────
 
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
@@ -336,68 +337,8 @@ func (s *Server) Start() error {
 		})
 	}
 
-	if s.config.Server.Protocol.UDP != "" {
-		udpAddrs, err := zdnsutil.ResolveBindAddrs(config.ProtoUDP, s.config.Server.Protocol.UDP)
-		if err != nil {
-			return fmt.Errorf("UDP address resolution: %w", err)
-		}
-		for _, addr := range udpAddrs {
-
-			srv := &dns.Server{
-				Addr:    addr,
-				Net:     config.ProtoUDP,
-				Handler: dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
-				UDPSize: pool.UDPBufferSize,
-			}
-			s.udpServers = append(s.udpServers, srv)
-			g.Go(func() error {
-				defer zdnsutil.HandlePanic("UDP server")
-				log.Infof("SERVER: UDP server started on %s", addr)
-				err := srv.ListenAndServe()
-				if err != nil {
-					select {
-					case <-ctx.Done():
-						return nil
-					default:
-						return fmt.Errorf("UDP startup on %s: %w", addr, err)
-					}
-				}
-				<-ctx.Done()
-				return nil
-			})
-		}
-
-		tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.config.Server.Protocol.TCP)
-		if err != nil {
-			return fmt.Errorf("TCP address resolution: %w", err)
-		}
-		for _, addr := range tcpAddrs {
-			listener, err := net.Listen("tcp", addr)
-			if err != nil {
-				return fmt.Errorf("TCP listen on %s: %w", addr, err)
-			}
-
-			srv := &dns.Server{
-				Listener: &tls.TCPKeepAliveListener{Listener: listener},
-				Handler:  dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
-			}
-			s.tcpServers = append(s.tcpServers, srv)
-			g.Go(func() error {
-				defer zdnsutil.HandlePanic("TCP server")
-				log.Infof("SERVER: TCP server started on %s", addr)
-				err := srv.ListenAndServe()
-				if err != nil {
-					select {
-					case <-ctx.Done():
-						return nil
-					default:
-						return fmt.Errorf("TCP startup on %s: %w", addr, err)
-					}
-				}
-				<-ctx.Done()
-				return nil
-			})
-		}
+	if err := s.traditional.Start(g, ctx, dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) })); err != nil {
+		return err
 	}
 
 	if s.tls != nil {
