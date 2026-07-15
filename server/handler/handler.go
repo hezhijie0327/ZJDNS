@@ -305,10 +305,9 @@ func (h *Handler) processDNSQuery(req *dns.Msg, clientIP net.IP, isSecureConnect
 // should be rejected with BADCOOKIE.
 func (h *Handler) parseEDNSAndCookie(req *dns.Msg, question *Question, clientIP net.IP, requestProtocol string, tcpKeepaliveTimeout uint16) (clientRequestedDNSSEC bool, ecsOpt *edns.ECSOption, cookieOpt *edns.CookieOption, reject *dns.Msg) {
 	// Force a full unpack so EDNS flags (DO bit, ECS) are available.
+	// edns handler is always set by the constructor — no nil check needed.
 	req.Options = 0
-	if h.edns != nil {
-		_ = req.Unpack()
-	}
+	_ = req.Unpack()
 
 	clientRequestedDNSSEC = req.Security
 	ecsOpt = h.edns.ParseFromDNS(req)
