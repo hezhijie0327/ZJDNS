@@ -1,10 +1,6 @@
 // Package config provides configuration types.
 package config
 
-import (
-	"codeberg.org/miekg/dns"
-)
-
 // ServerConfig is the top-level configuration structure for the DNS server.
 type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
@@ -161,11 +157,9 @@ type ZoneRule struct {
 	Authority  []ZoneRecord `json:"authority,omitzero"`
 	Additional []ZoneRecord `json:"additional,omitzero"`
 
-	NormalizedName   string          `json:"-"`
-	CachedAnswer     []dns.RR        `json:"-"`
-	CachedAuthority  []dns.RR        `json:"-"`
-	CachedAdditional []dns.RR        `json:"-"`
-	DynamicContent   func() []string `json:"-"`
+	// DynamicContent, when set, provides a function that returns TXT record
+	// values at query time (e.g. for stats / db clear operations).
+	DynamicContent func() []string `json:"-"`
 }
 
 // ZoneRecord defines a single DNS resource record for zone responses.
