@@ -81,8 +81,13 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err err
 		return s.decryptPQResumed(b)
 	}
 
+	// Snapshot keys under read lock — rotateKeys() writes under write lock.
+	s.mu.RLock()
+	keysSnapshot := s.keys
+	s.mu.RUnlock()
+
 	// Try keys newest-first.
-	for i, k := range s.keys {
+	for i, k := range keysSnapshot {
 		query = &encryptedQuery{
 			esVersion:   s.esVersion,
 			clientMagic: k.cert.ClientMagic,
@@ -112,7 +117,7 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err err
 			_ = logKey
 		}
 	}
-	return nil, nil, fmt.Errorf("decrypting query: no matching key (tried %d)", len(s.keys))
+	return nil, nil, fmt.Errorf("decrypting query: no matching key (tried %d)", len(keysSnapshot))
 }
 
 // decryptPQResumed handles a resumed PQ query.  It tries each key entry's
@@ -136,8 +141,14 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *encryptedQuery
 	}
 
 	peHash := profileExtensionHash()
+
+	// Snapshot keys under read lock — rotateKeys() writes under write lock.
+	s.mu.RLock()
+	keysSnapshot := s.keys
+	s.mu.RUnlock()
+
 	var matchedCert *Certificate
-	for _, k := range s.keys {
+	for _, k := range keysSnapshot {
 		if clientMagic == k.cert.ClientMagic &&
 			bytes.Equal(ticketPlain[ticketPlaintextESOff:ticketPlaintextESOff+ticketPlaintextESLen], PQESVersion[:]) &&
 			binary.BigEndian.Uint32(ticketPlain[ticketPlaintextSerialOff:ticketPlaintextSerialOff+ticketPlaintextSerialLen]) == k.cert.Serial &&

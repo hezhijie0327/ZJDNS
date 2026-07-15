@@ -50,6 +50,7 @@ type Pool struct {
 	dialing  map[string]int
 	maxConns int
 	maxPipe  int
+	closed   bool
 }
 
 const dnsIDMask = 0xFFFF // 16-bit DNS message ID space
@@ -335,6 +336,14 @@ func (p *Pool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc fu
 	if p.dialing[key] == 0 {
 		delete(p.dialing, key)
 	}
+	// Pool was shut down while we were dialing — discard the connection.
+	if p.closed {
+		p.mu.Unlock()
+		if dialErr == nil {
+			_ = conn.Close()
+		}
+		return nil, fmt.Errorf("client: pool shut down for %s", key)
+	}
 	if dialErr != nil {
 		p.mu.Unlock()
 		return nil, fmt.Errorf("client: dial %s: %w", key, dialErr)
@@ -385,6 +394,7 @@ func (p *Pool) replaceDead(key string, newConn *Conn) bool {
 func (p *Pool) Shutdown() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.closed = true
 	for key, conns := range p.conns {
 		for _, c := range conns {
 			c.close()

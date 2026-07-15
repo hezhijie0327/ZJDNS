@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
-	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/upstream/dnscrypt"
@@ -29,16 +28,12 @@ import (
 // Result holds the outcome of a single DNS query including response, timing,
 // and metadata.
 type Result struct {
-	Response   *dns.Msg
-	Answer     []dns.RR
-	Authority  []dns.RR
-	Additional []dns.RR
-	Server     string
-	Error      error
-	Duration   time.Duration
-	Protocol   string
-	Validated  bool
-	ECS        *edns.ECSOption
+	Response  *dns.Msg
+	Server    string
+	Error     error
+	Duration  time.Duration
+	Protocol  string
+	Validated bool
 }
 
 // Client manages outbound DNS queries across multiple transport protocols with

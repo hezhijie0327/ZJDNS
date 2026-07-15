@@ -28,6 +28,7 @@ type QUICPool struct {
 	conns    map[string][]*QUICConn
 	dialing  map[string]int
 	maxConns int
+	closed   bool
 }
 
 func (c *QUICConn) close() {
@@ -104,6 +105,15 @@ func (p *QUICPool) Acquire(ctx context.Context, key string, dialFunc func(contex
 		pc := &QUICConn{Conn: conn, addr: key}
 		p.mu.Lock()
 		p.dialing[key]--
+		// Pool was shut down while we were dialing — discard the connection.
+		if p.closed {
+			if p.dialing[key] == 0 {
+				delete(p.dialing, key)
+			}
+			p.mu.Unlock()
+			pc.close()
+			return nil, fmt.Errorf("client: pool shut down for %s", key)
+		}
 		if len(p.conns[key]) >= p.maxConns {
 			if p.dialing[key] == 0 {
 				delete(p.dialing, key)
@@ -131,6 +141,7 @@ func (p *QUICPool) Acquire(ctx context.Context, key string, dialFunc func(contex
 func (p *QUICPool) Shutdown() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.closed = true
 	for key, conns := range p.conns {
 		for _, pc := range conns {
 			pc.close()

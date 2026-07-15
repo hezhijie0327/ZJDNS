@@ -274,11 +274,18 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// fresh one for a potential future Start() call. Per-packet
 	// and per-connection goroutines Add/Done on the WaitGroup that
 	// was current when serveUDP/serveTCP spawned them.
-	prevWg := s.wg
-	s.wg = &sync.WaitGroup{}
+	// Cancel the context BEFORE swapping the WaitGroup so any in-flight
+	// handlers that haven't yet called wg.Add() see a cancelled context
+	// and return early, rather than joining a WaitGroup that will never
+	// be waited on.
 	s.mu.Unlock()
 
 	s.cancel(errors.New("dnscrypt server shutdown"))
+
+	s.mu.Lock()
+	prevWg := s.wg
+	s.wg = &sync.WaitGroup{}
+	s.mu.Unlock()
 
 	done := make(chan struct{})
 	go func() {
@@ -302,10 +309,16 @@ func (s *Server) isStarted() bool {
 }
 
 // current returns the newest key entry (the one used for encrypting responses).
-func (s *Server) current() keyEntry { return s.keys[0] }
+func (s *Server) current() keyEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.keys[0]
+}
 
 // hasClientMagic checks whether b matches any active cert's client magic.
 func (s *Server) hasClientMagic(b []byte) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for _, k := range s.keys {
 		if bytes.Equal(b, k.cert.ClientMagic[:]) {
 			return true
@@ -330,6 +343,8 @@ func buildCertTXTForCert(cert *Certificate) []string {
 // allCertTXT concatenates TXT chunks from all valid certificates so that
 // clients receive both the current and previous certs during a rotation.
 func (s *Server) allCertTXT() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var all []string
 	for _, k := range s.keys {
 		all = append(all, k.certTXT...)

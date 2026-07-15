@@ -2,6 +2,7 @@ package latency
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -23,6 +24,9 @@ const (
 	probeICMPDataSize    = 56   // ICMP echo data payload
 	probeICMPReadBufSize = 1500 // ICMP response read buffer
 )
+
+// errHTTPPoolClosed is returned when the HTTP client pool has been shut down.
+var errHTTPPoolClosed = errors.New("http client pool closed")
 
 // icmpBufPool reuses ICMP read buffers to avoid per-probe 1500-byte allocations.
 var icmpBufPool = sync.Pool{
@@ -249,6 +253,9 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool, 
 	req.Host = ip.String()
 
 	client := httpPool.get(port, useTLS, useHTTP3)
+	if client == nil {
+		return errHTTPPoolClosed
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

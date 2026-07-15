@@ -35,6 +35,9 @@ func (p *httpClientPool) get(port int, useTLS, useHTTP3 bool) *http.Client {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.clients == nil {
+		return nil
+	}
 	if c, ok := p.clients[key]; ok {
 		return c
 	}
