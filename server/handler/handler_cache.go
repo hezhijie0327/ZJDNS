@@ -140,11 +140,15 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 		}
 		return h.processCacheHit(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	case <-timer.C:
-		go func() {
+		// Track this background goroutine via cacheRefreshGroup so shutdown
+		// waits for it — prevents races with cache/prober Close.
+		h.cacheRefreshGroup.Go(func() error {
+			defer h.finishRefresh(question.Name, question.Qtype, question.Qclass, ecsOpt)
+			defer zdnsutil.HandlePanic("expired cache background refresh")
 			select {
 			case <-done:
 				if qr.Err != nil {
-					return
+					return nil
 				}
 				log.Debugf("CACHE: background refresh completed for slow expired query %s", question.Name)
 				if qr.Cacheable {
@@ -155,7 +159,8 @@ func (h *Handler) processExpiredCacheHit(req *dns.Msg, entry *cache.Entry, quest
 				}
 			case <-h.ctx.Done():
 			}
-		}()
+			return nil
+		})
 		return h.buildCacheResponse(req, entry, true, question, clientRequestedDNSSEC, ecsOpt, cookieOpt, clientIP, isSecureConnection, tcpKeepaliveTimeout)
 	}
 }
@@ -184,8 +189,17 @@ func (h *Handler) processCacheMiss(req *dns.Msg, question Question, ecsOpt *edns
 	// DNS64: if AAAA query returned no records, try synthesizing from A.
 	if h.dns64 != nil && question.Qtype == dns.TypeAAAA &&
 		qr.Err == nil && len(qr.Answer) == 0 {
-		aQuestion := Question{Name: question.Name, Qtype: dns.TypeA, Qclass: question.Qclass}
-		aqr := h.resolver.Query(h.ctx, aQuestion, ecsOpt)
+		var aqr *resolver.QueryResult
+		if h.pending != nil {
+			if shared, follower := h.pending.Join(question.Name, dns.TypeA, question.Qclass, ecsOpt, clientRequestedDNSSEC); follower {
+				aqr = shared
+			} else {
+				aqr = h.resolver.Query(h.ctx, Question{Name: question.Name, Qtype: dns.TypeA, Qclass: question.Qclass}, ecsOpt)
+				h.pending.Done(question.Name, dns.TypeA, question.Qclass, ecsOpt, clientRequestedDNSSEC, aqr)
+			}
+		} else {
+			aqr = h.resolver.Query(h.ctx, Question{Name: question.Name, Qtype: dns.TypeA, Qclass: question.Qclass}, ecsOpt)
+		}
 		if aqr.Err == nil && len(aqr.Answer) > 0 {
 			qr.Answer, qr.Authority, qr.Additional = h.dns64.Synthesize(
 				qr.Answer, qr.Authority, qr.Additional,
@@ -232,8 +246,8 @@ func (h *Handler) processQueryError(req *dns.Msg, question Question, clientReque
 
 	edeCode := edns.EDECodeNetworkError
 	dnssecStatus := ""
-	if h.resolver != nil && h.resolver.DNSSECEDECode() != 0 {
-		edeCode = h.resolver.DNSSECEDECode()
+	if code := h.resolver.DNSSECEDECode(); h.resolver != nil && code != 0 {
+		edeCode = code
 		dnssecStatus = config.DNSSECStatusBogus
 
 		log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
@@ -280,10 +294,12 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	msg := h.buildResponse(req)
 
 	var dnssecStatus string
+	var dnssecEDECode uint16
 	switch {
 	case validated:
 		dnssecStatus = config.DNSSECStatusSecure
 	case h.resolver != nil && h.resolver.DNSSECEDECode() != 0:
+		dnssecEDECode = h.resolver.DNSSECEDECode()
 		dnssecStatus = config.DNSSECStatusBogus
 	default:
 		dnssecStatus = config.DNSSECStatusInsecure
@@ -328,10 +344,8 @@ func (h *Handler) processQuerySuccess(req *dns.Msg, question Question, ecsOpt *e
 	log.Debugf("CACHE: served response for %s ", question.Name)
 
 	var edeOpt *edns.EDEOption
-	if dnssecStatus == config.DNSSECStatusBogus && h.resolver != nil {
-		if code := h.resolver.DNSSECEDECode(); code != 0 {
-			edeOpt = edns.NewEDEOption(code, "")
-		}
+	if dnssecEDECode != 0 {
+		edeOpt = edns.NewEDEOption(dnssecEDECode, "")
 	}
 	if edeOpt == nil && h.resolver != nil {
 		if upstreamEDE := h.resolver.UpstreamEDEOption(); upstreamEDE != nil {
