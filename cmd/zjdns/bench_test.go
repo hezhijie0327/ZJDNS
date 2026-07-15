@@ -159,7 +159,7 @@ func BenchmarkShuffleSlice(b *testing.B) {
 	}
 	b.ResetTimer()
 	for b.Loop() {
-		_ = resolver.ShuffleSlice(s)
+		resolver.ShuffleSlice(s)
 	}
 }
 

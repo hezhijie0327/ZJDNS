@@ -313,9 +313,9 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	}
 
 	allMu.Lock()
-	addresses := ShuffleSlice(allAddresses)
+	ShuffleSlice(allAddresses)
 	allMu.Unlock()
-	return addresses
+	return allAddresses
 }
 
 // isEqualFoldTrimDot compares two strings case-insensitively, ignoring a single

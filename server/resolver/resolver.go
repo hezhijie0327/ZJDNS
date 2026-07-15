@@ -65,7 +65,7 @@ type upstreamSet struct {
 // Resolver handles DNS query resolution by dispatching to upstream servers,
 // recursive resolution, or fallback servers as configured.
 type Resolver struct {
-	queryClient     *upstream.Client
+	queryClient     UpstreamClient
 	edns            *edns.Handler
 	crd             CIDRMatcher
 	buildMsg        BuildQueryFunc
@@ -89,9 +89,15 @@ type Validator struct {
 	Hijack *hijack.Detector        // DNS hijack detection
 }
 
+// UpstreamClient is the interface for sending DNS queries to upstream servers,
+// defined in the consumer package so the resolver depends on an abstraction.
+type UpstreamClient interface {
+	ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) *upstream.Result
+}
+
 // Config bundles the dependencies needed to construct a Resolver.
 type Config struct {
-	QueryClient   *upstream.Client
+	QueryClient   UpstreamClient
 	Crypto        *dnssec.CryptoValidator
 	Hijack        *hijack.Detector
 	EDNS          *edns.Handler
@@ -311,15 +317,14 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 // ShuffleSlice shuffles the input slice in-place using the Fisher-Yates
 // algorithm. The caller must own the slice exclusively — the backing array is
 // mutated.
-func ShuffleSlice[T any](slice []T) []T {
+func ShuffleSlice[T any](slice []T) {
 	if len(slice) <= 1 {
-		return slice
+		return
 	}
 	for i := len(slice) - 1; i > 0; i-- {
 		j := rand.IntN(i + 1) //nolint:gosec // G404: Fisher-Yates shuffle — not cryptographic
 		slice[i], slice[j] = slice[j], slice[i]
 	}
-	return slice
 }
 
 // concurrencyLimit returns an adaptive concurrency limit based on the number of
