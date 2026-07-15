@@ -181,22 +181,26 @@
 - [ ] H-5: upstream.Client → 策略模式
 
 ### 阶段 3：模块化
+- [x] M-7: 重命名误导性文件 (d8dd94d)
+- [x] L-8: ReverseLookup 运行类型断言移除 (1f080e8)
 - [ ] H-4: Resolver 消费者侧接口（dnssec/hijack/probe）
 - [ ] H-5: upstream.Client → 策略模式
-- [ ] M-6: 拆分大文件
-- [ ] M-7: 重命名误导性文件
+- [ ] M-6: 拆分大文件（645行 stamp_codec.go）
 
 ### 阶段 4：优化
+- [x] M-5: fallback goroutine 生命周期 (565bf2b)
+- [x] M-2: DNS64 去重 (565bf2b)
+- [x] L-2: DNSSECEDECode() 调用缓存 (565bf2b)
+- [x] L-6: SipHash 提取 (d8dd94d)
+- [x] L-8: ReverseLookup 类型断言移除 (1f080e8)
 - [x] L-1: ShuffleSlice 返回移除 (886608b)
 - [x] L-3: ToLower→ToUpper 往返 (523e732)
 - [x] L-4: import alias 一致性 (523e732)
 - [x] L-5: isEqualFoldTrimDot → domainNamesEqual (523e732)
 - [x] M-4: edns nil 守卫修复 (435fd4d)
-- [ ] M-2: DNS64 去重
-- [ ] M-3: SQL 热路径优化
-- [ ] M-5: fallback goroutine 生命周期
-- [ ] L-6: SipHash 提取
-- [ ] L-7, L-8, L-9: 剩余低优先级
+- [ ] M-3: SQL 热路径优化（微优化，SQLite 已缓存查询计划）
+- [ ] L-7: Question 类型别名（已评估保持，转换复杂度大于收益）
+- [ ] L-9: 冗余 cache 引用（已评估保持，handler/resolver 独立使用）
 
 ---
 

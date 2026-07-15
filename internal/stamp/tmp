@@ -1,0 +1,123 @@
+package stamp
+func (s *Stamp) String() string {
+	switch s.Proto {
+	case ProtoPlain:
+		return s.plainString()
+	case ProtoDNSCrypt:
+		return s.dnsCryptString()
+	case ProtoDOH:
+		return s.dohString()
+	case ProtoDOT:
+		return s.dotString()
+	case ProtoDOQ:
+		return s.doqString()
+	case ProtoODoHTarget:
+		return s.oDohTargetString()
+	case ProtoDNSCryptRelay:
+		return s.dnsCryptRelayString()
+	case ProtoODoHRelay:
+		return s.oDohRelayString()
+	default:
+		panic("unsupported protocol")
+	}
+}
+
+func newStampHeader(proto uint8, props uint64) []uint8 {
+	bin := make([]uint8, 0, 128)
+	bin = append(bin, proto)
+	var propsBytes [8]uint8
+	binary.LittleEndian.PutUint64(propsBytes[:], props)
+	bin = append(bin, propsBytes[:]...)
+	return bin
+}
+
+func (s *Stamp) plainString() string {
+	bin := newStampHeader(uint8(ProtoPlain), uint64(s.Props))
+	addr := stripDefaultPort(s.Address, DefaultDNSPort)
+	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []uint8(addr)...)
+	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
+}
+
+func (s *Stamp) dnsCryptString() string {
+	bin := newStampHeader(uint8(ProtoDNSCrypt), uint64(s.Props))
+	addr := stripDefaultPort(s.Address, DefaultPort)
+	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []uint8(addr)...)
+	bin = append(bin, uint8(len(s.PublicKey))) //nolint:gosec // G115: key size is 32
+	bin = append(bin, s.PublicKey...)
+	bin = append(bin, uint8(len(s.ProviderName))) //nolint:gosec // G115: name length bounded to 255
+	bin = append(bin, []uint8(s.ProviderName)...)
+	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
+}
+
+func (s *Stamp) dohString() string {
+	bin := newStampHeader(uint8(ProtoDOH), uint64(s.Props))
+	addr, providerName := encodeAddrAndHostname(s.Address, s.ProviderName, DefaultPort)
+	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []uint8(addr)...)
+	bin = appendHashes(bin, s.Hashes)
+	bin = append(bin, uint8(len(providerName))) //nolint:gosec // G115: name length bounded to 255
+	bin = append(bin, []uint8(providerName)...)
+	bin = append(bin, uint8(len(s.Path))) //nolint:gosec // G115: path length bounded to 255
+	bin = append(bin, []uint8(s.Path)...)
+	bin = appendBootstrapIPs(bin, s.BootstrapIPs)
+	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
+}
+
+func (s *Stamp) dotString() string {
+	bin := newStampHeader(uint8(ProtoDOT), uint64(s.Props))
+	addr, providerName := encodeAddrAndHostname(s.Address, s.ProviderName, DefaultDoTPort)
+	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []uint8(addr)...)
+	bin = appendHashes(bin, s.Hashes)
+	bin = append(bin, uint8(len(providerName))) //nolint:gosec // G115: name length bounded to 255
+	bin = append(bin, []uint8(providerName)...)
+	bin = appendBootstrapIPs(bin, s.BootstrapIPs)
+	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
+}
+
+func (s *Stamp) doqString() string {
+	bin := newStampHeader(uint8(ProtoDOQ), uint64(s.Props))
+	addr, providerName := encodeAddrAndHostname(s.Address, s.ProviderName, DefaultDoTPort)
+	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []uint8(addr)...)
+	bin = appendHashes(bin, s.Hashes)
+	bin = append(bin, uint8(len(providerName))) //nolint:gosec // G115: name length bounded to 255
+	bin = append(bin, []uint8(providerName)...)
+	bin = appendBootstrapIPs(bin, s.BootstrapIPs)
+	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
+}
+
+func (s *Stamp) oDohTargetString() string {
+	bin := newStampHeader(uint8(ProtoODoHTarget), uint64(s.Props))
+	providerName := stripDefaultPort(s.ProviderName, DefaultPort)
+	bin = append(bin, uint8(len(providerName))) //nolint:gosec // G115: name length bounded to 255
+	bin = append(bin, []uint8(providerName)...)
+	bin = append(bin, uint8(len(s.Path))) //nolint:gosec // G115: path length bounded to 255
+	bin = append(bin, []uint8(s.Path)...)
+	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
+}
+
+func (s *Stamp) dnsCryptRelayString() string {
+	bin := make([]uint8, 0, 32)
+	bin = append(bin, uint8(ProtoDNSCryptRelay)) //nolint:gosec // G115: proto byte
+	addr := stripDefaultPort(s.Address, DefaultPort)
+	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []uint8(addr)...)
+	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
+}
+
+func (s *Stamp) oDohRelayString() string {
+	bin := newStampHeader(uint8(ProtoODoHRelay), uint64(s.Props))
+	addr, providerName := encodeAddrAndHostname(s.Address, s.ProviderName, DefaultPort)
+	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []uint8(addr)...)
+	bin = appendHashes(bin, s.Hashes)
+	bin = append(bin, uint8(len(providerName))) //nolint:gosec // G115: name length bounded to 255
+	bin = append(bin, []uint8(providerName)...)
+	bin = append(bin, uint8(len(s.Path))) //nolint:gosec // G115: path length bounded to 255
+	bin = append(bin, []uint8(s.Path)...)
+	bin = appendBootstrapIPs(bin, s.BootstrapIPs)
+	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
+}
