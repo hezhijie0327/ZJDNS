@@ -1,0 +1,10 @@
+{
+  "server": {
+    "log_level": "info",
+    "protocol": { "udp": "11853" },
+    "features": { "cache": { "max_entries": 0 } }
+  },
+  "upstream": [
+    { "address": "9.9.9.9:8443", "protocol": "dnscrypt", "server_name": "2.dnscrypt-cert.quad9.net", "public_key": "67c847b8c87505d1863061063664366fda62f4637b33b9f0eba9e784834f0dc1" }
+  ]
+}

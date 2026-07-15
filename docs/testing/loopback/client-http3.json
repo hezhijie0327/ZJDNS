@@ -1,0 +1,9 @@
+{
+  "server": {
+    "log_level": "info",
+    "protocol": { "udp": "13953" }
+  },
+  "upstream": [
+    { "address": "https://127.0.0.1:10444/dns-query", "protocol": "http3", "server_name": "zjdns-test.local", "skip_tls_verify": true }
+  ]
+}

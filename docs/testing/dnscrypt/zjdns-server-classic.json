@@ -1,0 +1,25 @@
+{
+  "server": {
+    "log_level": "info",
+    "protocol": {
+      "udp": "12633",
+      "tcp": "12633",
+      "dnscrypt": "12444"
+    },
+    "certificate": {
+      "domain": "zjdns-test.local",
+      "dnscrypt": {
+        "private_key": "B89A078972DB3896CC62FEC06A9333B2275D7A5EDA03C0A2F19E94D633545ABB3DEA9122E8DFBAF4D2F7C1B87694DB49E35B2DDB43F841170C83EF1911FA4865",
+        "public_key": "3DEA9122E8DFBAF4D2F7C1B87694DB49E35B2DDB43F841170C83EF1911FA4865",
+        "es_version": "xchacha20poly1305"
+      }
+    },
+    "features": {
+      "hijack_protection": false,
+      "cache": { "max_entries": 1000 }
+    }
+  },
+  "upstream": [
+    { "address": "builtin_recursive" }
+  ]
+}

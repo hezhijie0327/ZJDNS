@@ -103,7 +103,7 @@ docker build -t zjdns .
 # Probe upstream server capabilities
 ./zjdns --probe --pipeline    tcp://8.8.8.8   # Test RFC 7766 query pipelining
 ./zjdns --probe --conn-reuse  tls://1.1.1.1   # Test RFC 1035 connection reuse
-./zjdns --probe --idle-timeout dot://1.1.1.1  # Measure server idle timeout
+./zjdns --probe --idle-timeout tls://1.1.1.1  # Measure server idle timeout
 
 # Install pre-commit hook (auto fix + fmt + lint on commit)
 sh scripts/install-hook.sh                 # Linux / macOS
@@ -155,7 +155,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 
 ## Architecture
 
-ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
+ZJDNS is a high-performance recursive DNS server supporting TLS, QUIC, HTTPS, HTTP3.
 All protocol implementations must follow their governing RFCs. Reference: [docs/architecture.md](docs/architecture.md).
 
 ### Project Structure

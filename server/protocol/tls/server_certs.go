@@ -2,6 +2,7 @@ package tls
 
 import (
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -11,19 +12,18 @@ import (
 	"time"
 	"zjdns/config"
 
-	"github.com/cloudflare/circl/ecc/p384"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
 // generateSelfSignedCert creates a self-signed ECC P-384 CA and a server
 // certificate for the given domain, suitable for DoT and DoH use.
 func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
-	caPrivKey, err := ecdsa.GenerateKey(p384.P384(), rand.Reader)
+	caPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return eTLS.Certificate{}, fmt.Errorf("generate CA EC key: %w", err)
 	}
 
-	serverPrivKey, err := ecdsa.GenerateKey(p384.P384(), rand.Reader)
+	serverPrivKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return eTLS.Certificate{}, fmt.Errorf("generate server EC key: %w", err)
 	}
@@ -42,8 +42,8 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 	caTemplate := x509.Certificate{
 		SerialNumber: caSerialNumber,
 		Subject: pkix.Name{
-			CommonName:   "ZJDNS ECC Domain Secure Site CA",
-			Organization: []string{"ZJDNS"},
+			CommonName:   config.DefaultProjectName + " ECC Self-Signed Secure DNS CA",
+			Organization: []string{config.DefaultProjectName},
 			Country:      []string{"CN"},
 		},
 		NotBefore:             time.Now(),

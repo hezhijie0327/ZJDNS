@@ -1,0 +1,17 @@
+{
+  "server": {
+    "log_level": "info",
+    "protocol": {
+      "udp": "12533",
+      "tcp": "12533"
+    },
+    "features": {
+      "hijack_protection": false,
+      "dnssec_enforce": true,
+      "cache": { "max_entries": 1000 }
+    }
+  },
+  "upstream": [
+    { "address": "builtin_recursive" }
+  ]
+}

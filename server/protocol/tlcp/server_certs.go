@@ -39,8 +39,12 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 	encSerial, _ := rand.Int(rand.Reader, serialLimit)
 
 	caTemplate := &smx509.Certificate{
-		SerialNumber:          caSerial,
-		Subject:               pkix.Name{CommonName: "ZJDNS TLCP CA"},
+		SerialNumber: caSerial,
+		Subject: pkix.Name{
+			CommonName:   config.DefaultProjectName + " SM2 Self-Signed Secure DNS CA",
+			Organization: []string{config.DefaultProjectName},
+			Country:      []string{"CN"},
+		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(config.DefaultCACertValidity),
 		KeyUsage:              smx509.KeyUsageDigitalSignature | smx509.KeyUsageCertSign,

@@ -43,7 +43,7 @@ func runProbe(probeType, addr string) error {
 	}
 }
 
-// dialProbeTarget parses a [tcp|tls|dot]://host:port address and returns
+// dialProbeTarget parses a [tcp|tls]://host:port address and returns
 // a connected net.Conn.  Default ports are 53 for TCP, 853 for TLS.
 func dialProbeTarget(addr string) (net.Conn, error) {
 	protocol, host, ok := strings.Cut(addr, "://")
@@ -64,7 +64,7 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 		host = tryAddPort(host, defaultTCPPort)
 		return net.Dial("tcp", host)
 
-	case "tls", "dot":
+	case "tls":
 		host = tryAddPort(host, defaultTLSPort)
 		serverName, _, _ := net.SplitHostPort(host)
 		tlsCfg := &eTLS.Config{
@@ -93,7 +93,7 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 		return tlsConn, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported protocol %q (supported: tcp, tls, dot)", protocol)
+		return nil, fmt.Errorf("unsupported protocol %q (supported: tcp, tls)", protocol)
 	}
 }
 

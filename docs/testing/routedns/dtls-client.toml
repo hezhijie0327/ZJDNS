@@ -1,0 +1,11 @@
+# RouteDNS DTLS client → ZJDNS DTLS server
+[listeners.local-udp]
+address = "127.0.0.1:12053"
+protocol = "udp"
+resolver = "zjdns-dtls"
+
+[resolvers.zjdns-dtls]
+address = "127.0.0.1:10434"
+protocol = "dtls"
+ca = "/tmp/zjdns-certs/cert.pem"
+bootstrap-address = "127.0.0.1"

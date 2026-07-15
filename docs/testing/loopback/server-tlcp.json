@@ -1,0 +1,21 @@
+{
+  "server": {
+    "log_level": "info",
+    "protocol": {
+      "tlcp": "10850",
+      "http_tlcp": { "port": "10440", "endpoint": "/dns-query" },
+      "dtlcp": "8542"
+    },
+    "certificate": {
+      "domain": "tlcp.local",
+      "tlcp": { "self_signed": true }
+    },
+    "features": {
+      "hijack_protection": false,
+      "cache": { "max_entries": 0 }
+    }
+  },
+  "upstream": [
+    { "address": "builtin_recursive" }
+  ]
+}

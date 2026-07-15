@@ -299,8 +299,10 @@ func validateTLSCertificateConfig(cfg *ServerConfig) error {
 		return nil
 	}
 
-	if tlsCert.SelfSigned && (tlsCert.CertFile != "" || tlsCert.KeyFile != "") {
-		log.Warnf("CONFIG: TLS: Self-signed enabled, ignoring cert/key files")
+	if tlsCert.SelfSigned {
+		if tlsCert.CertFile != "" || tlsCert.KeyFile != "" {
+			log.Warnf("CONFIG: TLS: Self-signed enabled, ignoring cert/key files")
+		}
 		return nil
 	}
 
