@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## HANDOVER.md
+
+When a multi-step task is interrupted, write progress to `HANDOVER.md` so the next session can pick up where you left off. Include: what was done, what remains, key decisions made, and the next concrete step. Delete the file when the task is complete.
+
 ## Guidelines
 
 1. Think before acting. Read existing files before writing code.
@@ -117,204 +121,61 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 ## Coding Standards
 
 ### Naming
+- PascalCase exported, camelCase unexported. Acronyms all-caps (`DNS`, `TLS`, `QUIC`, `DNSSEC`, `SOCKS5`, etc.) except as first word (`dnssecStatus`).
+- `Default` prefix reserved for value constants. `ErrXxx` / `errXxx` for sentinel errors.
+- Constructors: `New`/`NewXxx`. No `Get` prefix. Bool predicates: `IsXxx`/`HasXxx`. Conversions: `ToXxx`.
+- Avoid stutter: `cache.Entry` not `cache.CacheEntry`. Package-level functions over empty struct types.
 
-**General conventions:**
-- **PascalCase** for exported, **camelCase** for unexported. No `snake_case` identifiers. Applies to all declarations: `type`, `func`, `const`, `var`, struct fields, method receivers, parameters.
-- **Acronyms all-caps**: `DNS`, `TLS`, `QUIC`, `ECS`, `EDNS`, `EDE`, `CIDR`, `PTR`, `RCODE`, `DNSSEC`, `TCP`, `UDP`, `DOH`, `DOQ`, `DOT`, `SOCKS5`, `HTTP`, `HTTPS`, `IP`, `TTL`, `CNAME`, `DDR`, `KTLS`, `ALPN`. Plus DNS-specific: `NOERROR`, `FORMERR`, `SERVFAIL`, `NXDOMAIN`, `REFUSED`, `NOTIMP`, `NSEC`, `NSEC3`, `DNSKEY`, `RRSIG`, `KSK`, `ZSK`, `DS`, `TXT`, `PTR`, `ZONE`, `SEP`, `AFINET`, `PADDING`, `COOKIE`, `TLV`, `OPT`. Plus crypto: `SHA`, `HMAC`, `MAC`, `ECDSA`, `ED25519`, `JSON`, `URL`, `ID`.
-  - Exported: `DOHRequests`, `SOCKS5Dialer`, `RCODENOERROR`, `EDECodeNoZONEKeyBitSet`, `IsResponseValid`
-  - Unexported first word: `dnssecStatus`, `udpRequests` (acronym lowered as first word)
-  - Unexported later word: `lastDNSSECStatus`, `maxTCPConns`, `rcodeNOERROR` (acronym stays all-caps)
-- **`Default` prefix reserved for value constants**: `DefaultDNSQueryTimeout`, not `DefaultECSConfig` (that's a type — use `ECSConfig`).
-- **No `Mgr`/`Manager`/`Handler` suffixes** on field or variable names: the type already carries the semantics. `cache cache.Store`, not `cacheMgr cache.Store`.
-
-**Parameters:**
-- **camelCase**, short in narrow scopes, descriptive in exported functions.
-- **Single-letter convention**: the smaller the scope, the shorter the name.
-  - **Receivers**: always single letter, first letter of type. `(s *Server)`, `(c *Client)`.
-  - **Loop variables**: `for i, r := range records` — `i` for index, single letter for element.
-  - **Short-function params**: 1–2 letters acceptable when the function body fits on screen.
-  - **Longer scopes** (>20 lines): use descriptive names (`cacheKey`, `verifiedDNSKEYs`).
-- **No Hungarian notation**: no `iCount`, `strName`, `bEnabled`, `pConn`.
-  When renaming receivers with global regex, check for local vars / params / loop vars that share the target name first — rename those, then the receiver. `go build` immediately after; the compiler catches what regex misses.
-
-**Const / Var:**
-- **No `UPPER_SNAKE_CASE`**: Go uses PascalCase or camelCase for all identifiers. `DefaultDNSPort`, not `DEFAULT_DNS_PORT`.
-- **Sentinel errors**: `ErrXxx` for exported (`ErrCIDRFilterRefused`), `errXxx` for unexported (`errEmptyTag`).
-
-**Function/method naming:**
-- **No `Get` prefix on getters**: `RemainingTTL()` not `GetRemainingTTL()`. Plain noun for accessors.
-- **Constructors use `New` / `NewXxx`**: not `Build`, `Create`, `Init`, `Make`. Exception: `BuildXxx` for building derived values (strings, byte slices), not type instances.
-- **Boolean predicates use assertion prefixes**: `IsXxx`, `HasXxx`, `CanXxx`, `ShouldXxx`. `ValidateXxx` returning only `bool` → rename to `IsXxxValid`.
-- **Conversion methods**: `ToXxx()` not `AsXxx()` or `IntoXxx()`.
-- **Package-level functions over empty structs**: `type Foo struct{}` with methods → convert to functions.
-
-**Type naming:**
-- **Avoid stutter with package name**: `cache.CacheEntry` → `cache.Entry`, (removed) → `cidr.MatchInfo`.
-  **Idiomatic exceptions** (allowed): `server.Server`, `http.Server`, `handler.Handler`, `resolver.Resolver` — when the package is named after the primary type it exports.
-- **Unexported types also avoid stutter**: (removed) → `cidr.rule`.
-- **Conversion helpers use `as` prefix**: `asIPv4Net` (converts `*net.IPNet` → `*ipv4Net`). Not `toXxx`.
-
-### Performance (Hot Path)
-- **`log.NowUnix()` / `log.NowUnixNano()`** instead of `time.Now()` in cache TTL checks, DNSSEC RRSIG validation, last-access timestamps. `log.TimeCache` updates once per second via `atomic.Int64` (zero-alloc).
-- **Avoid `fmt.Sprintf` on the query path**: use `strings.Builder` for map keys, `strconv.Itoa` over `fmt.Sprint`.
-- **Zero-allocation trimming**: prefer sub-slicing (`s[:len(s)-1]`) over `strings.TrimSuffix` for single known bytes.
-- **`strings.EqualFold`** over `strings.ToLower` for case-insensitive comparison on the hot path.
-- **`slices.SortStableFunc`** over `sort.SliceStable` (generics avoid reflect-based closure dispatch).
-- **Hoist fixed-size allocations out of loops**: `var prefix [2]byte` on stack instead of `make([]byte, 2)` per frame.
-- **Pre-parse strings to uint16 at load time**: Type/Class strings parsed once in `LoadRules`, stored as `ParsedType`/`ParsedClass`.
-
-### Constants
-- All magic numbers must be named constants in `config/defaults.go` with a `Default` prefix.
-- No duplicate constants in the same package.
-- Leaf packages that can't import `config` may use local `const` blocks with same naming convention.
-- **Code is canonical**: docs and comments must match the actual constant values. Verify, don't assume.
-- **RFC 9156 defaults**: `DefaultQnameMinimiseCount = 10`, `DefaultMinimiseOneLabel = 4`.
-
-### Constructors
-
-- **Use `New` / `NewXxx`**: not `Build`, `Create`, `Init`, `Make`. Exception: `BuildXxx` for derived values (strings, byte slices), not type instances.
-- **Return concrete types, accept interfaces**: `func NewSQLiteCache() *SQLiteCache` (concrete), but parameters accept interfaces: `func Persist(store cache.Store)`.
-- **Group related params into config structs** when a constructor exceeds ~5 parameters. Use a `BackgroundConfig` or `Dependencies` struct rather than functional options unless options are truly optional.
-- **Two-phase initialization** is acceptable for circular dependencies: `New()` creates the object, `SetResolver()` / `SetProber()` inject dependencies that could not exist at construction time. Document the required call order.
-- **Package-level constructors with `sync.Once`**: infrastructure objects that must be a singleton use `sync.Once` inside the constructor so it is safe to call multiple times.
-
-### Interfaces
-
-- **Define interfaces in the consumer package**, not the producer. Example: `handler.LatencyProber` is defined in `server/handler`, satisfied implicitly by `*server/latency.Prober`.
-- **Use `any` not `interface{}`**: Go 1.18+.
+### Performance
+- `log.NowUnix()` instead of `time.Now()` on hot paths (zero-alloc, updates per-second).
+- `strings.Builder` over `fmt.Sprintf`; `strconv.Itoa` over `fmt.Sprint`; sub-slicing over `strings.TrimSuffix`.
+- `slices.SortStableFunc` over `sort.SliceStable`; `strings.EqualFold` over `strings.ToLower`.
+- Hoist allocations out of loops. Pre-parse strings to uint16 at load time.
 
 ### File Organization
+- One file per concern, split at ~500 lines. Declaration order: `type → const → var → func`.
+- `New*` constructors immediately follow their type. Methods grouped by receiver. `init()` after the `var` block it initializes.
+- All magic numbers as named constants in `config/defaults.go`. No duplicate constants per package.
 
-- **One file per logical concern** within a package. Split when a file exceeds ~500 lines.
-- **Message vs processing split**: `handler.go` (query pipeline) + `handler_cache.go` (cache hit/miss/refresh) + `message.go` (EDNS/response helpers).
-- **Main vs nsec split**: `dnssec_crypto.go` (RRSIG/DNSKEY/DS validation) + `dnssec_nsec.go` (NSEC/NSEC3 denial-of-existence, including `nsec3HashName` + `isDenialOfExistenceValid`).
-- **Protocol split**: `socks5.go` (types, handshake, shared helpers, `socks5Datagram` UDP header parse/write) + `socks5_tcp.go` (TCP CONNECT) + `socks5_udp.go` (UDP ASSOCIATE + PacketConn wrapper).
-- **Config split**: `config.go` (types, loading, defaults, DDR/Chaos, normalizeStamps) + `config_validate.go` (all validation functions).
-- **Do NOT split** when the split would require exporting internal helpers or when the split crosses 2–3 tightly coupled concerns (a 400-line file is fine).
-
-### File-Level Declaration Order
-
-All Go source files follow a fixed declaration order. Since Go allows forward
-references within a package, declarations are ordered by category, not by
-dependency:
-
-```
-type    (exported first, then unexported)
-const   (exported first, then unexported)
-var     (exported first, then unexported)
-func    (exported first, then unexported, methods grouped by receiver)
-```
-
-Within `func`: constructors (`New*`) immediately follow their type, exported
-methods before unexported, methods grouped by receiver type.  Package-level
-functions come after all methods.
-
-`init()` is placed right after the `var` block it initializes.
+### Constructors & Interfaces
+- Return concrete types, accept interfaces. Group >5 params into config structs.
+- Two-phase init for circular deps (`New()` then `SetXxx()`). `sync.Once` for singleton constructors.
+- Define interfaces in the consumer package, not the producer.
 
 ### Concurrency
+- Pointer receivers for structs with mutex/atomic fields.
+- `sync.Pool.Put()` zeroes state — never read after Put.
+- Every goroutine gets a context. Use `errgroup` for shared lifecycle.
 
-- **Pointer receivers** for any struct containing `sync.Mutex`, `sync.RWMutex`, or `atomic.*` fields.
-- **`sync.Pool.Put()` zeroes state**: never read fields from an object after `Put()` — the next `Get()` caller owns it. No linter catches this.
-- **Package-level mutable state** must use `sync.Once` or `atomic.Pointer` if read concurrently.
-- **`context.Context` propagation**: every goroutine must receive a context for cancellation. Use `errgroup` for managing groups of goroutines with shared lifecycle.
-
-### Anti-patterns (DO NOT introduce)
-- **No rate limiting** — accept all queries unconditionally.
-- **No per-IP connection limiting** — all listeners accept unlimited connections.
-- **No domain↔domain imports** (except `edns→config`) — domain packages must be independent.
-- **No `internal/`→domain imports** (except `internal/latency→config`) — internal layer stays below domain layer.
-- **No `server/` sub-package importing `server/` parent** — sub-packages are leaves below the wiring layer.
-- **No `Get` prefix** on accessors — `RemainingTTL()` not `GetRemainingTTL()`.
-- **No `Mgr`/`Manager`/`Handler` suffixes** on field or variable names.
-- **No Hungarian notation** (`iCount`, `strName`, `bEnabled`, `pConn`).
-- **No `snake_case` or `UPPER_SNAKE_CASE`** identifiers — use PascalCase/camelCase.
-- **No `Create`/`Build`/`Init`/`Make`** constructors — use `New`/`NewXxx`.
-- **No `ValidateXxx` returning only `bool`** — use `IsXxxValid`.
-- **No `Default` prefix on types or methods** — reserved for value constants.
-- **No `As`/`Into` conversion prefixes** — use `To` or package-level `asXxx` helpers.
-- **No `interface{}`** — use `any` (Go 1.18+).
-- **No copying of `sync.Mutex`/`atomic.*` values** — always use pointer receivers.
-- **No importing `edns` from `cache`** — cache uses `config.ECSOption` directly.
+### Anti-patterns
+- No rate limiting or per-IP connection limits. No `Get`/`Mgr`/`Manager`/`Handler` prefixes.
+- No Hungarian notation, no `snake_case`/`UPPER_SNAKE_CASE`. Use `any` not `interface{}`.
+- No `server/` sub-package importing `server/` parent. No domain↔domain imports (except `edns→config`).
+- No `internal/`→domain imports (except `internal/latency→config`).
 
 ## Architecture
 
 ZJDNS is a high-performance recursive DNS server supporting DoT, DoQ, DoH, DoH3.
+All protocol implementations must follow their governing RFCs. Reference: [docs/architecture.md](docs/architecture.md).
 
 ### Project Structure
 
 ```
 zjdns/
-├── cmd/zjdns/
-│   ├── main.go, banner.go, version.go, bench_test.go   ← binary entry point
-│   └── cli/                                  ← Flag parsing, config generation, DB analysis
-├── config/                                    ← ECSConfig, ECSOption, defaults, validation
-├── edns/                                      ← Handler, Cookie, EDE, padding (ECSOption alias → config)
-├── database/                                  ← Unified SQLite DB: connection, schema, migration
-│   ├── db.go                                  ←   DB struct, Open, Close
-│   ├── schema.go                              ←   10 tables in one migration
-│   ├── stmts.go                               ←   12 prepared statements (7 cache + 2 zone + 1 ruleset + 2 infra)
-│   ├── migration.go                           ←   Incremental schema migrations
-│   └── migrations/                            ←   Archived migration SQL files
-├── cache/                                     ← Store interface, DNS response cache (wraps *database.DB)
-│   ├── cache.go                               ←   Store interface, Entry, RequestRecord, ProcessRecords
-│   ├── store.go                               ←   SQLiteCache struct, New, Get, Set, eviction, latency sort
-│   ├── stats.go                               ←   RecordRequest, Stats, FlushDB, ReverseLookup
-│   └── helpers.go                             ←   insertPtrMap, TTL helpers, ecsParams
-├── ruleset/                                    ← IP + domain tag matching engine (defines RuleSetStorage interface)
-├── zone/                                      ← DNS zone rules (wraps *database.DB, same DB as cache)
-│   ├── zone.go                                ←   Evaluator, LoadRules, Evaluate, match tags
-│   ├── zone_parse.go                          ←   Zone file import + record parsing
-│   └── zone_wire.go                           ←   Wire encoding: packRRs, unpackRRs, buildRecord
-├── internal/
-│   ├── log/                                   ← Structured logging + IsDebug guard (zero internal deps)
-│   ├── pool/                                  ← sync.Pool allocators + QUIC error codes
-│   ├── ttl/                                   ← Stateless TTL functions (cache + zone)
-│   ├── dnsutil/                               ← DNS utilities: validation, PTR, panic recovery, zstd wire compression
-│   ├── ipdetect/                              ← Public IP auto-detection
-│   ├── latency/                               ← Unified probe engine (generic sorter)
-│   └── pending/                               ← Generic singleflight dedup group
+├── cmd/zjdns/          ← binary + CLI (flag parsing, config gen, SQL runner)
+├── config/             ← ECSConfig, ECSOption, defaults, validation
+├── edns/               ← EDNS handler, Cookie, EDE, padding
+├── database/           ← Unified SQLite DB (schema, migration, prepared stmts)
+├── cache/              ← DNS response cache (Store interface, SQLiteCache)
+├── ruleset/            ← CIDR + domain tag matching engine
+├── zone/               ← DNS zone rules (Evaluator, zone-file import)
+├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp
 └── server/
-    ├── server.go                              ← Lifecycle, wiring, listeners
-    ├── listen.go                              ← Protocol bridge (UDP/TCP dispatch → io.Copy)
-    ├── server_tasks.go                        ← Background tasks, shutdown
-    ├── handler/                               ← Query pipeline (handler + handler_cache + message + pending)
-    ├── client/
-    │   ├── client.go                          ←   Client struct, New, ExecuteQuery, Close
-    │   ├── client_warmup.go                   ←   WarmUpConnections, QUIC/proxy config caching
-    │   ├── dnscrypt.go, tcp.go, dot.go, dtlcp.go ← Protocol-specific exchanges
-    │   ├── doq.go, doh.go, doh3.go            ←   QUIC/HTTP-based protocols
-    │   ├── ktls.go, socks5.go, socks5_*.go    ←   KTLS offload, SOCKS5 proxy
-    │   └── pool/                              ←   RFC 7766 pipelined TCP + QUIC connection pools
-    ├── resolver/
-    │   ├── resolver.go, upstream.go           ←   Resolution entry points
-    │   ├── recursive.go                       ←   Core recursive walk (RFC 9156 QNAME minimisation)
-    │   ├── recursive_helpers.go               ←   7 recursive helper functions
-    │   ├── recursive_cache.go                 ←   Recursive DNS cache population
-    │   ├── dnssec_chain.go                    ←   DNSSEC trust chain state machine
-    │   ├── dnssec_chain_cut.go                ←   Zone cut detection and resolution
-    │   ├── nameserver.go                      ←   NS address resolution and sorting
-    │   └── qname_minimise.go                  ←   QNAME minimisation (RFC 9156)
-    ├── security/
-    │   ├── security.go                        ←   Guard: bundles CryptoValidator + Detector
-    │   ├── dnssec_crypto.go                   ←   CryptoValidator, RRSIG/DS/DNSKEY verification
-    │   ├── dnssec_extract.go                  ←   Record extraction, canonical ordering, key caching
-    │   ├── dnssec_nsec.go                     ←   NSEC/NSEC3 denial-of-existence validation
-    │   └── hijack.go                          ←   DNS hijack detection
-    ├── tls/
-    │   ├── tls.go, doh.go, doh3.go, dtls.go   ←   TLS listeners (DoT, DoQ, DoH, DoH3, DTLS)
-    ├── tlcp/
-    │   ├── server.go                           ←   TLCP/DTLCP server lifecycle, SM2 cert loading
-    │   ├── dot.go, doh.go                      ←   TLCP DoT and DoH listeners
-    │   └── dtlcp.go                            ←   DTLCP (GM/T 0128-2023) listener
-    ├── dnscrypt/
-    │   ├── server.go                          ←   Server lifecycle, certificate TXT, handshake
-    │   ├── server_crypto.go                   ←   encrypt/decrypt/encryptPQ/decryptPQResumed
-    │   ├── certificate.go                     ←   Certificate wire format and signing
-    │   ├── proto.go                           ←   Protocol constants, CryptoConstruction enum
-    │   ├── pq.go, encryption.go               ←   PQ KEM helpers, ISO 7816-4 padding
-    │   ├── generate.go                        ←   Key generation, sdns:// stamp, config output
-    │   └── ...
-    └── probe/                                 ← A/AAAA latency probing and record reordering
+    ├── server.go, bridge.go, server_tasks.go
+    ├── handler/        ← query pipeline
+    ├── protocol/       ← {traditional,tls,tlcp,dnscrypt} server listeners
+    ├── upstream/       ← {traditional,tls,tlcp,dnscrypt} outbound client + pool + socks5
+    └── resolver/       ← recursive walk + forward + dnssec/ + hijack/ + probe/
 ```
 
 ### Import Rules (strict layering, no cycles)
@@ -338,14 +199,14 @@ Layer 3 (domain packages — import config + internal/*, never each other):
   zone → config, database, dnsutil, log
 
 Layer 4 (server sub-packages — import domain + internal, never server/ parent):
-  server/security → cache, config, dnsutil, log
-  server/client → config, edns, dnsutil, log, pool
-  server/client/pool → config, dnsutil, log, pool
-  server/probe → config, edns, dnsutil, internal/latency, log
-  server/resolver → cache, config, edns, dnsutil, log, pool, server/client, server/security
-  server/tls → config, dnsutil, log, pool
-  server/tlcp → config, dnsutil, log, pool
-  server/dnscrypt → config, dnsutil, log, pool
+  server/resolver/dnssec → cache, config, dnsutil, log
+  server/upstream → config, edns, dnsutil, log, pool
+  server/upstream/pool → config, dnsutil, log, pool
+  server/resolver/probe → config, edns, dnsutil, internal/latency, log
+  server/resolver → cache, config, edns, dnsutil, log, pool, server/upstream, server/resolver/dnssec, server/resolver/hijack, server/resolver/probe
+  server/protocol/tls → config, dnsutil, log, pool
+  server/protocol/tlcp → config, dnsutil, log, pool
+  server/protocol/dnscrypt → config, dnsutil, log, pool
   server/handler → cache, config, edns, dnsutil, log, pool, zone, server/resolver
 
 Top layer (wiring):
@@ -389,7 +250,7 @@ Top layer (wiring):
 - Zone cut detection, lame delegation detection, glue record validation
 - `dsPresentButUnverified` flag distinguishes bogus delegation from true insecure
 
-### Connection Pools (`server/client/pool/`)
+### Connection Pools (`server/upstream/pool/`)
 - **TCP/DoT** (RFC 7766): Per-upstream multiplexed connections, out-of-order response matching by DNS message ID, fallback to single-shot on failure. `Pool.Acquire` delegates dial to `dialAndAdd`/`replaceDead` helpers.
 - **DoQ**: QUIC native stream multiplexing, up to 4 connections per upstream
 - Server-side DoT: reader→worker→writer three-stage pipeline
@@ -410,33 +271,33 @@ Top layer (wiring):
 | `Handler` | `server/handler` | DNS query processing pipeline; owns `BackgroundConfig`, `LatencyProber` |
 | `BackgroundConfig` | `server/handler` | Groups RefreshGroup/RefreshCtx/Ctx lifecycle params |
 | `LatencyProber` | `server/handler` | Interface: Start(qname, qtype, answer, ...) — latency-probes A/AAAA records and updates latency_ms |
-| `Server` | `server/tls` | TLS listeners (DoT, DoQ, DoH, DoH3, DTLS) |
-| `Server` | `server/tlcp` | TLCP/DTLCP listeners: DoT and DoH over TLCP (TCP), DTLCP (GM/T 0128-2023). Uses SM2 dual certificates. |
-| `Server` | `server/dnscrypt` | DNSCrypt v2 lifecycle: UDP+TCP listeners, cert TXT handshake, query encrypt/decrypt, PQ KEM + ticket resumption |
-| `Certificate` | `server/dnscrypt` | DNSCrypt server certificate: Ed25519 signature, X25519 short-term key (classical) or X-Wing PQ public key (1216B) with ClientMagic + PqCertContext |
+| `Server` | `server/protocol/tls` | TLS listeners (DoT, DoQ, DoH, DoH3, DTLS) |
+| `Server` | `server/protocol/tlcp` | TLCP/DTLCP listeners: DoT and DoH over TLCP (TCP), DTLCP (GM/T 0128-2023). Uses SM2 dual certificates. |
+| `Server` | `server/protocol/dnscrypt` | DNSCrypt v2 lifecycle: UDP+TCP listeners, cert TXT handshake, query encrypt/decrypt, PQ KEM + ticket resumption |
+| `Certificate` | `server/protocol/dnscrypt` | DNSCrypt server certificate: Ed25519 signature, X25519 short-term key (classical) or X-Wing PQ public key (1216B) with ClientMagic + PqCertContext |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint config. A protocol is enabled when its field is non-empty. Contains `UDP`, `TCP`, `TLS` (DoT), `QUIC` (DoQ), `HTTPS` (DoH), `HTTP3` (DoH3), `TLCP` (TLCP DoT), `HTTPTLCP` (TLCP DoH), `DTLS` (RFC 8094, UDP port), `DTLCP` (GM/T 0128-2023, UDP port), `DNSCrypt`. |
 | `HTTPSEndpoint` | `config` | Port + endpoint path for HTTP-based transports (DoH, DoH3, TLCP DoH). |
 | `CertSettings` | `config` | Unified cert config: `Domain` (server identity), `TLS` (TLSCertificate), `TLCP` (TLCPCertificate), `DNSCrypt` (DNSCryptCertificate). |
 | `TLSCertificate` | `config` | TLS certificate: `CertFile`, `KeyFile`, `SelfSigned`. |
 | `TLCPCertificate` | `config` | TLCP SM2 certificate pairs: `SignCertFile`/`SignKeyFile`, `EncCertFile`/`EncKeyFile`, `SelfSigned`. |
 | `DNSCryptCertificate` | `config` | DNSCrypt v2 identity keys: `PrivateKey`, `PublicKey`, `ESVersion`. Provider name auto-derived as `2.dnscrypt-cert.<cert.domain>`. Resolver encryption keys are auto-generated and rotated every 24h. |
-| `EncryptedQuery` / `EncryptedResponse` | `server/dnscrypt` | Public API types for client-side query encryption and response decryption. EncryptedQuery carries ClientNonce for pre-generated nonces (resumed PQ). EncryptedResponse exposes PQControl for ticket extraction. |
-| `CryptoConstruction` | `server/dnscrypt` | Enum: XWingPQ (0x0003, default), XChacha20Poly1305 (0x0002). XSalsa20 (0x0001) is removed — deprecated by dnscrypt-proxy. |
-| `ResolverConfig` | `server/dnscrypt` | Internal config builder: provider name, Ed25519 signing keys, X25519/X-Wing resolver keys, ES version. Methods: `NewCert()`, `CreateStamp()`. |
-| `Client` | `server/client` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/DTLCP/SOCKS5/DNSCrypt-UDP+TCP/TLCP/DoH-TLCP). `dnscryptState` caches per-upstream resolver state (sharedKey, secretKey/publicKey, PQ ticket + resumeSecret, expiry). TLCP uses `tlcpClientConfig` / `dialTLCPConn` (analogous to `eTLSClientConfig` / `dialTLSConn`) and `executeDOH_TLCP` with custom `http.Transport.DialTLSContext`. DTLS uses `pion/dtls` for UDP-based TLS transport (RFC 8094). DTLCP uses `gitee.com/Trisia/gotlcp/dtlcp` with `net.ListenPacket` + `dtlcp.Client` (not `dtlcp.Dial` — creates connected socket incompatible with internal `WriteTo`). |
-| `SOCKS5Dialer` | `server/client` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
-| `Conn` / `Pool` | `server/client/pool` | RFC 7766 pipelined TCP/DoT |
-| `QUICPool` / `QUICConn` | `server/client/pool` | QUIC connection pool |
+| `EncryptedQuery` / `EncryptedResponse` | `server/protocol/dnscrypt` | Public API types for client-side query encryption and response decryption. EncryptedQuery carries ClientNonce for pre-generated nonces (resumed PQ). EncryptedResponse exposes PQControl for ticket extraction. |
+| `CryptoConstruction` | `server/protocol/dnscrypt` | Enum: XWingPQ (0x0003, default), XChacha20Poly1305 (0x0002). XSalsa20 (0x0001) is removed — deprecated by dnscrypt-proxy. |
+| `ResolverConfig` | `server/protocol/dnscrypt` | Internal config builder: provider name, Ed25519 signing keys, X25519/X-Wing resolver keys, ES version. Methods: `NewCert()`, `CreateStamp()`. |
+| `Client` | `server/upstream` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/DTLCP/SOCKS5/DNSCrypt-UDP+TCP/TLCP/DoH-TLCP). `dnscryptState` caches per-upstream resolver state (sharedKey, secretKey/publicKey, PQ ticket + resumeSecret, expiry). TLCP uses `tlcpClientConfig` / `dialTLCPConn` (analogous to `eTLSClientConfig` / `dialTLSConn`) and `executeDOH_TLCP` with custom `http.Transport.DialTLSContext`. DTLS uses `pion/dtls` for UDP-based TLS transport (RFC 8094). DTLCP uses `gitee.com/Trisia/gotlcp/dtlcp` with `net.ListenPacket` + `dtlcp.Client` (not `dtlcp.Dial` — creates connected socket incompatible with internal `WriteTo`). |
+| `SOCKS5Dialer` | `server/upstream/socks5` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
+| `Conn` / `Pool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT |
+| `QUICPool` / `QUICConn` | `server/upstream/pool` | QUIC connection pool |
 | `Resolver` | `server/resolver` | Upstream + recursive resolution; constructed via `New(Config)` |
-| `Config` | `server/resolver` | Bundles Client, Guard, EDNS, CIDRMatcher, BuildMsg, Cache, DNSSECEnforce for `New()` |
+| `Config` | `server/resolver` | Bundles QueryClient, Crypto, Hijack, EDNS, CIDRMatcher, BuildMsg, Cache, DNSSECEnforce for `New()` |
 | `QueryResult` | `server/resolver` | Unified result struct — used throughout resolver and handler layers; `queryUpstream`, `Recursive.resolve`, and `CNAME.resolve` return it by value; handler uses `*QueryResult` directly (no duplicate struct) |
 | `Recursive` | `server/resolver` | Built-in recursive walk |
-| `CryptoValidator` | `server/security` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in `dnssec_nsec.go` |
-| `Guard` | `server/security` | Bundles CryptoValidator + Detector |
+| `CryptoValidator` | `server/resolver/dnssec` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in nsec.go |
+| `Detector` | `server/resolver/hijack` | DNS hijack detection; Verdict type + IsHijackedByTLD |
 | `Engine` | `ruleset` | SQLite-backed CIDR + domain tag matching; `Match(qname,ip)`, `MatchIP`. `LoadRules` accepts `RuleSetStorage` interface (satisfied by `*database.DB`) |
 | `RuleSetStorage` | `ruleset` | Interface: SQLExec, SQLQueryRow, SQLQuery — breaks domain→domain import cycle |
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |
-| `Prober` | `server/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
+| `Prober` | `server/resolver/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
 | `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |
 | `MessagePool` / `BufferPool` | `internal/pool` | sync.Pool allocators; also holds `QUICCode*` constants |
 | `JoinDNSPort` | `internal/dnsutil` | Utility: `ip` → `ip:53` (moved from config) |
@@ -454,352 +315,45 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## Notable Design Decisions
 
-- **DoH over `gitlab.com/go-extension/http` (eHTTP)**: DoH client and server use eHTTP (a drop-in `net/http` replacement with native eTLS) instead of `net/http` + `golang.org/x/net/http2`. **Client**: eHTTP's `Transport.TLSClientConfig` accepts `*eTLS.Config` directly — no custom `DialTLSContext` needed. **Server**: eHTTP's `http.Server.Serve(eTLSListener)` bundles HTTP/2 natively, auto-detecting eTLS connections via ALPN (`h2`). DoH3 continues using `net/http` + `github.com/quic-go/quic-go/http3` since KTLS does not apply to QUIC. The shared `ServeHTTP` handler uses `net/http` types for compatibility; eHTTP server bridges via a `dohResponseWriter` adapter + `eHTTP.FromRequest`.
-
-- **Unified database (`database/`)**: Ten SQLite tables in a single DB file with WAL mode + mmap (64MB default, 32MB page cache). `page_size=4096`; `journal_size_limit=mmap_size`; `wal_autocheckpoint=4096`; `synchronous=NORMAL`; connection pool (max 8 open / 4 idle). `msg_wire` BLOB is zstd-compressed `dns.Msg` wire format; `Get()` decompresses + `Unpack()` in one step (~0.5ms). `github.com/ncruces/go-sqlite3` (pure Go, no CGo, WASM-based), goroutine-safe `*sql.DB`. See [DB Schema](#db-schema) below.
-
-- **Schema migration (`database/migration.go`)**: Incremental, idempotent migrations keyed by app version (e.g. `"3.1.0"`). `database.Version` is set from `main.Version` before `Open()`. The `version` table stores the last applied version as TEXT, always synced to `database.Version` after startup — the DB version always matches the running binary. Fresh installs start at `Version` (current app version) and skip all migrations (the base DDL already reflects the latest schema); already-current databases only sync the version row (no-op). `minSupportedVersion` defines a rolling window: when bumped, old migrations are removed from code and archived as `.sql` files in `database/migrations/` for manual application via `zjdns --sql <db> "$(cat migrations/X.X.X_xxx.sql)"`.
-- **Global TTL manager** (`internal/ttl`): Stateless TTL functions used by both cache (`Entry` methods delegate) and zone (`DeductElapsedCyclical`). Stale TTL uses cyclical countdown (`staleTTL - (timeSinceExpiry % staleTTL)`) — resets every staleTTL window giving background refresh repeated chances. Fresh per-RR TTL uses `isElapsed=false, value=responseTTL` for stale (direct assignment) and `isElapsed=true, value=actual_elapsed` for fresh (subtraction).
-- **EDNS buffer sizing**: Dual-size strategy — standard upstream queries use 1232 bytes (DNS Flag Day 2020) while recursive (root/TLD) queries use 4096 bytes (`RecursiveUDPBufferSize`) to avoid UDP truncation on DNSSEC-signed root zone referrals (~1400 bytes). Applied in `queryNameserversConcurrent` after `buildMsg` and in `probeTLDForHijack`.
-- **EDNS padding and DNSCrypt**: EDNS padding (128B request / 468B response blocks) is applied only when `isSecureConnection` is true — that means DoT, DoQ, DoH, and DoH3. Plain UDP/TCP and DNSCrypt responses never get EDNS padding. DNSCrypt already encrypts at the transport layer and has its own ISO 7816-4 padding (to 64-byte boundaries), making TLS-record-length-based traffic analysis mitigation unnecessary. The outbound side (`upstream.go:72`) also excludes `ProtoDNSCrypt`/`ProtoDNSCryptTCP` from the `isSecure` set so EDNS padding is never added to outbound DNSCrypt queries either.
-- **Per-interface binding** (`internal/dnsutil/bind.go`): All listeners (UDP, TCP, DoT, DoQ, DoH, DoH3, DTLS, DTLCP, DNSCrypt, TLCP, pprof) bind per-interface IP instead of wildcard. `TryBind` pre-checks each address; unavailable ones are skipped with a WARN log. When another process occupies a port on a specific interface (e.g. warp-svc on 100.96.0.21:53), ZJDNS binds to remaining free IPs without conflict.
-- **TCP fallback guard**: `needsTCPFallback` now skips TCP retry when the context is already cancelled (errgroup first-win pattern), eliminating misleading "UDP truncated/failed → TCP fallback → operation was canceled" log chains.
-- **QNAME minimisation (RFC 9156)**: Enabled by default for all recursive resolutions at depth 0. Internal infrastructure queries (NS address resolution) use full QNAME. Minimisation steps tracked per-resolution; after DefaultQnameMinimiseCount (10) steps, all remaining labels are exposed. QTYPE=A is used to hide original QTYPE except for DS/NSEC/NSEC3 parent-side types. When a minimised query returns answer records whose owner names don't match the original QNAME (CNAME for the minimised name, not the target), the resolver retries with the full QNAME per RFC 9156 §2.3.
-- **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read fields after `Put()`. Double-zeroing removed: `Put` zeroes, `Get` trusts.
-- **KTLS**: `gitlab.com/go-extension/tls` with `KernelTX`/`KernelRX` (both default `false`, opt-in). Dual configs: eTLS for TCP, crypto/tls for QUIC. Silent fallback on non-Linux.
-- **SOCKS5**: Per-upstream optional proxy (RFC 1928/1929). TCP CONNECT (`socks5_tcp.go`) + UDP ASSOCIATE (`socks5_udp.go`). Full 9 reply codes with `repString()`; 5 sentinel errors (`ErrSOCKS5Version`, `ErrSOCKS5BadReply`, `ErrSOCKS5Auth`, `ErrSOCKS5NoAuth`, `ErrSOCKS5CmdRejected`) for `errors.Is` matching. VER + RSV byte checks in all reply paths (handshake, CONNECT, UDP ASSOCIATE). `socks5Datagram` struct with `parseDatagram()` and `writeDatagramHeader()` for UDP header handling. v2ray/xray compatibility: BND.PORT=0 / BND.ADDR=0.0.0.0 fall back to proxy's TCP address. `SafeURL()` redacts passwords.
-- **DNSCrypt v2** (`server/dnscrypt/`): Self-contained implementation with PQC support. Two crypto constructions: XWingPQ (default, X-Wing PQ/T hybrid KEM + XChacha20-Poly1305 AEAD) and XChacha20Poly1305 (X25519 key exchange + XChacha20-Poly1305 AEAD). XSalsa20 removed — deprecated by dnscrypt-proxy.
-  - **Server** (`server.go`): UDP+TCP listeners on independent port (default 8443). Ed25519 identity key auto-generated or from config; resolver encryption keys (X25519/X-Wing) always auto-generated. `keys []keyEntry` holds current + previous certs for rotation overlap. `rotateKeys()` generates fresh resolver keys every 24h, signed with the fixed Ed25519 identity — sdns:// stamps stay valid. `allCertTXT()` serves all active certs in the TXT handshake. `decrypt()` tries keys newest-first; `decryptPQResumed()` validates tickets against all active certs. `encryptPQ()` issues resumption tickets signed with the current cert. Rotation goroutine started/stopped with server lifecycle. Restart-safe: new keys on startup, old tickets naturally invalidated.
-  - **Client** (`server/client/dnscrypt.go`): Supports `dnscrypt` (UDP) and `dnscrypt-tcp` (TCP) protocols. `getDNSCryptState()` fetches the server certificate via a plain DNS TXT query to the DNSCrypt port, verifies the Ed25519 signature against the stamp's public key, auto-detects PQ certificates (es-version 0x0003), and computes/derives the shared key. PQ state includes `pqPublicKey`, `pqCertContext`, `pqTicket`, `pqResumeSecret`, and `pqTicketExpiry`. `prepareAndEncryptQuery()` tries resumed queries first (ticket-based, derives per-query key from resume secret + client nonce), then cached X-Wing encapsulation (new optimised fast path, `pqCiphertext`/`pqEncapsulatedKey`), falling back to fresh X-Wing encapsulation. After decrypting the response, `PQControl` is parsed via `PQParseControlBlock` and the ticket is stored for future queries. UDP→TCP fallback (matching dnscrypt-proxy): truncated responses (TC bit), UDP timeouts, and padding failures automatically retry over TCP; `dnscrypt-tcp` goes directly to TCP.
-  - **Wire formats** — Classical query: `<client-magic>(8) <client-pk>(32) <nonce/2>(12) <encrypted>`. PQ initial: `<client-magic>(8) <xwing-ct>(1120) <nonce/2>(12) <encrypted>`. PQ resumed: `<PQResumeMagic>(8) <ticket-len>(2) <ticket>(N) <nonce/2>(12) <encrypted>`. Response: `<resolver-magic>(8) <nonce>(24) <encrypted>`. PQ responses always carry a 2-byte control-length prefix after decryption: initial responses have `<len>(2) <PQDR magic>(4) <version>(1) <lifetime>(4) <ticket-len>(2) <ticket>(N)`; resumed responses have `<len>=0x0000` with no control block. The prefix is always present so the client can locate the DNS payload without misinterpreting header bytes as control length — format aligned with dnscrypt-proxy.
-  - **Certificate layout** — Classical (124B): `CertMagic(4) + ESVersion(2) + Minor(2) + Sig(64) + ResolverPk(32) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4)`. PQ (1320B): same header, then `PqPublicKey(1216) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4) + Extensions(12)`. ClientMagic for PQ is SHA-256(PqPublicKey)[:8]. PqCertContext binds the shared key to the exact certificate bytes (HKDF info = "DNSCrypt-PQ-v1" + es-version + minor + resolver-pk + client-magic + serial + ts-start + ts-end + extensions).
-  - **Ticket resumption**: After a successful initial PQ query, the server issues a resumption ticket sealed with XChacha20-Poly1305 under a server-wide `ticketKey` (SHA-256 of the Ed25519 signing key). The ticket plaintext encodes `PQESVersion(2) + ClientMagic(8) + ResumeSecret(32) + Expiry(8)`. The client stores `(ticket, resumeSecret, expiry)` in `dnscryptState` and uses them for subsequent queries, deriving per-query keys via `pqResumedSharedKey(resumeSecret, clientMagic, clientNonce/2, ticket)` — avoiding expensive X-Wing KEM operations.
-  - **Config generator** (`generate.go`): `GenerateDNSCryptConfig()` outputs a single valid JSON config file with `certificate.dnscrypt` + `protocol.dnscrypt` + one `upstream` entry (sdns:// stamp, protocol auto-detected by normalizeStamps). Called directly from `cmd/zjdns/cli/generate.go` — no hook indirection. `CreateStamp` delegates to `zstamp.Stamp.String()`. Key exports: `ParseStamp()` (wraps `zstamp.Parse`), `HexDecodeKey()`, `GenerateEd25519Keypair()`. Internal helpers: `hexEncodeKey/hexDecodeKey`, `generateRandomKeyPair`, `GenerateResolverConfig`.
-  - **Tests** (`server/client/dnscrypt_test.go`): 9 e2e tests covering UDP/TCP, XWingPQ/XChacha20, A/AAAA/TXT/cert query types, multi-query state reuse (ticket resumption), unreachable error path, and UDP→TCP fallback. Each test boots an ephemeral DNSCrypt server on a random port with auto-generated PQ or classical keys via `startTestDNSCryptServer`.
-- **DTLCP** (`server/tlcp/dtlcp.go` + `server/client/dtlcp.go`): DNS-over-DTLCP (GM/T 0128-2023). Reuses the same SM2 certificate pair as TLCP DoT/DoH. Wire format is identical to DTLS (RFC 8094): 2-byte big-endian length prefix + DNS payload.
-
-  **Library bugs (gotlcp — both primary APIs broken for UDP):**
-  - `dtlcp.Listen("udp", ...)` calls `net.Listen("udp", ...)` which Go does not support (error: "unexpected address type"). All official DTLCP examples fail at runtime.
-  - `dtlcp.Dial("udp", ...)` uses `net.Dial` which returns a connected `*net.UDPConn`; the library internally calls `WriteTo` which Go forbids on connected sockets (error: "use of WriteTo with pre-connected connection").
-
-  **Adapter functions (drop-in replacement when upstream fixes APIs):**
-  - `acceptDTLCP(udpConn, firstPacket, remoteAddr, cfg)` in `server/tlcp/dtlcp.go` — feeds pre-read ClientHello through `dtlcp.Server` + handshake. **TODO: replace with `dtlcp.Listen` + Accept.**
-  - `dialDTLCP(ctx, network, addr, cfg)` in `server/client/dtlcp.go` — creates unconnected socket, wraps via `dtlcp.Client`, runs `HandshakeContext`. **TODO: replace with `dtlcp.Dial`.**
-
-  **Server implementation:**
-  - `net.ListenUDP` creates the socket; a custom `dtlcpListener` buffers the first datagram per client so the DTLCP handshake can consume it via `acceptDTLCP`.
-  - `bufferedPacketConn.Close()` is a no-op — `dtlcp.Conn.Close()` would otherwise close the shared UDP socket.
-  - **Synchronous connection handling**: gotlcp shares a single `*net.UDPConn` across all `dtlcp.Conn` instances. Concurrent reads cause packet stealing (one Conn consumes another packets) and `SetReadDeadline` on one Conn interferes with the Accept loop. Until gotlcp provides per-connection socket isolation (like pion/dtls), only one connection is served at a time.
-  - Session resumption: `SessionCache: dtlcp.NewLRUSessionCache(128)`.
-
-  **Client implementation:**
-  - `dialDTLCP()` works around the `dtlcp.Dial` connected-socket bug using `net.ListenPacket("udp", ":0")` + `dtlcp.Client()` + `HandshakeContext()`.
-  - No connection pooling (same as DTLS client).
-  - Windows: IPv4 localhost (127.0.0.1) DTLCP handshake is unreliable — use [::1] for loopback tests on Windows.
-- **DNSSEC**: IANA root KSK trust anchors (key tags 20326 + 38696). `dnssec_enforce: true` → SERVFAIL on bogus; `false` → pass through without AD.
-- **EDE propagation**: DNSSEC EDE codes stored atomically on `Recursive.lastDNSSECEDECode`, read by `processQueryError` to avoid error-chain corruption from context cancellation.
-- **HandlePanic**: Recovers per-goroutine — a single connection panic terminates only that goroutine, not the server.
-- **Config self-sufficiency**: `ProjectName`/`Version` are package-level vars set by `main.go` before `LoadConfig()`.
-- **Zone rules**: SQLite-backed WITHOUT ROWID lookup; PK `(is_wildcard, qname, qtype, qclass, match_tags)` clusters exact and wildcard queries into a single B-tree traversal. on `(QNAME, QTYPE, QCLASS)` in the unified database. Zone config wraps `rules` + `bypass_tags` in a `ZoneConfig` struct. Each zone entry returns ANSWER + AUTHORITY + ADDITIONAL + RCODE. Inline rules via JSON `name`, `rcode`, `answer`, `authority`, `additional`, `match` (ruleset tags). Type/Class use IANA uint16 numbers (1=A, 28=AAAA, 16=TXT). Zone-file import via `file` field: domain headers (`.domain` / `*.wild`) with optional `rcode=N` and `match=tag`, record lines in `TYPE CONTENT [TTL] [key=value ...]` format. Wildcard `*.domain.com` supported in both inline `name` and file — matches via single batched IN query (ORDER BY length(qname) DESC for correct specificity priority). `bypass_tags` skips all zone rules for clients matching the given CIDR tags (e.g. gateway devices). `DynamicContent` rules (`zjdns.stats`, `zjdns.db.clear*`) are called at query time. Zone responses bypass cache.
-- **ECS types in config**: Both `ECSConfig` and `ECSOption` live in `config`. `edns` has a type alias (`type ECSOption = config.ECSOption`) for backward compatibility within the edns package. This breaks the `config→edns` import (config no longer imports edns). Similarly, `handler.Question` is a type alias of `resolver.Question` to avoid duplicate struct definitions.
-- **request_log denormalized**: qname/qtype/qclass stored directly in each row, eliminating the JOIN with entries for debugging queries. `entry_id` is nullable — zone/error/badcookie paths leave it NULL instead of creating stub entries. `entry_hit_counters` still uses `entry_id` FK with ON DELETE CASCADE for automatic cleanup on eviction. `RecordRequest()` does a single INSERT/UPSERT — no transaction, no writeMu, no conflict resolution. Stats are aggregated via SQL over rows with `id > cleared_before`.
-- **Prepared statements in hot path**: `SQLiteCache` pre-compiles hot-path SQL statements (`stmtGetEntry`, `stmtInsertLog`, `stmtInsertLatency`, `stmtGetLastProbe`) at initialization time to avoid per-call SQL compilation overhead.
-- **CLI package in cmd/zjdns/cli**: `ParseFlags()` dispatches to feature files: `parse.go` (flags + dispatch), `generate.go` (example + DNSCrypt config generation), `sql.go` (SQL runner), `dnsstamp.go` (stamp decode/encode).
-- **QUIC codes in internal/pool**: `QUICCodeNoError`/`InternalError`/`ProtocolError` live in `internal/pool` so both `server/client/pool` and `server/tls` can reference them without cross-dependency.
-- **JoinDNSPort in dnsutil**: Moved from `config` to `internal/dnsutil` — a general-purpose utility should not live in the config package.
-- **sdns:// stamp normalization**: `normalizeStamps()` in config resolves `sdns://` addresses at load time, auto-populating `protocol`, `address`, `server_name`, and `public_key` on `UpstreamServer`. Supports all 8 DNS stamp protocol types (Plain 0x00–ODoH Relay 0x85). DoH stamps are reconstructed to full `https://` URLs. Protocol can be omitted in config when using stamps.
-- **Stamp package (internal/stamp)**: Foundation-level, zero zjdns imports. `Parse()` handles all 8 protocol IDs with VLP hash encoding and uint64 LE properties. `String()` marshals back to `sdns://` for round-trip fidelity. Used by config normalization, DNSCrypt generation, and CLI dnsstamp command.
-- **eHTTP / eTLS aliases**: Always use `eHTTP` for `gitlab.com/go-extension/http` and `eTLS` for `gitlab.com/go-extension/tls` (enforced by `importas` linter).
-- **Internal package aliases**: All `zjdns/internal/*` imports use standard `z`-prefixed aliases enforced by `importas` linter:
-  - `zjdns/internal/dnsutil` → `zdnsutil`
-  - `zjdns/internal/ipdetect` → `zipdetect`
-  - `zjdns/internal/latency` → `zlatency`
-  - `zjdns/internal/log` → `zlog`
-  - `zjdns/internal/pending` → `zpending`
-  - `zjdns/internal/pool` → `zpool`
-  - `zjdns/internal/stamp` → `zstamp`
-  - `zjdns/internal/ttl` → `zttl`
-- **Error wrapping**: Always use `%w` in `fmt.Errorf` when wrapping errors that callers may check with `errors.Is`/`errors.As`. Use `%v` only for informational logging.
-- **Protocol logging**: The `protocol` column in request_log stores the transport identifier as a string (`udp`/`tcp`/`dot`/`doq`/`doh`/`doh3`/`dnscrypt`/`dnscrypt-tcp`/`tlcp`/`doh-tlcp`/`dtls`/`dtlcp`), enabling simple GROUP BY queries for protocol-level analytics.
-- **Handler Question alias**: `handler.Question` is a type alias (`type Question = resolver.Question`), eliminating redundant struct conversions between handler and resolver layers.
-- **RecordRequest hot-path**: `RecordRequest()` does a single append-only INSERT — no transaction, no writeMu, no conflict resolution. When `EntryID > 0` (pre-resolved by `Get()` or `Set()`), `EnsureEntry` is skipped — the redundant SELECT on the hot path is eliminated.
-- **ip_latency independence**: Latency data is not tied to cache entries — all domains sharing the same IP reuse the same row. Rows with `last_probe_time` older than `DefaultStaleMaxAge` (30 days) are cleaned up during eviction alongside stale cache entries.
-- **Zero-allocation label validation**: `IsValidDomainLabels` uses `strings.IndexByte` scanning instead of `strings.Split` to avoid per-query allocation on the hot path.
-- **processRR fast path**: When `value == 0 && !isElapsed && includeDNSSEC`, `processRR` returns the original RR without cloning — common on cache-miss serve paths (50+ allocs saved per response).
-- **Pending request deduplication** (`server/handler/pending.go`): `singleflight`-style coalescing of concurrent identical cache misses. Key mirrors the cache lookup key (qname + qtype + qclass + ECS + DNSSEC). Leaders send the upstream query; followers block on a channel until the leader completes, then receive the same `*QueryResult`. Always enabled — zero overhead on cache hits. Reduces upstream load under high concurrent miss rates and closes the concurrent-query cache-poisoning window.
-- **QueryResult unification**: The internal `result` and `terminalResult` structs (upstream + recursive helpers) are replaced by `QueryResult`, the same struct used at the public API boundary. `queryUpstream`, `Recursive.resolve`, and `CNAME.resolve` return `QueryResult` by value instead of 9–10 individual return values. This eliminates the `tooManyResultsChecker` lint and removes duplicate struct definitions.
-- **Upstream `no_cache` flag**: `UpstreamServer.NoCache` (JSON: `no_cache`, default `false`) controls whether responses from that upstream/fallback are written to cache. `QueryResult.Cacheable` carries this through the resolver→handler pipeline. `processUpstreamResponse` sets `Cacheable: !server.NoCache`; `handleRecursiveQuery` overrides after recursive resolution; recursive-internal paths default to `true`. Three `cache.Set()` sites in `handler_cache.go` are guarded by `if cacheable`. Useful for untrusted upstreams whose responses should not pollute the local cache.
-- **Gosec inline suppression**: No global gosec excludes in `.golangci.yml`. All suppressions are inline `//nolint:gosec // Gxxx: reason` at each call site. G115 (integer overflow) covers DNS wire format conversions (TTL uint32, port uint16, label byte) — all protocol-bounded. G404 (weak random) covers DNS message IDs and ICMP echo identifiers — not cryptographic. NSEC3 uses `github.com/pjbgf/sha1cd` (SHA-1 with collision detection) instead of `crypto/sha1` — no gosec suppression needed.
+- **eHTTP for DoH**: Client and server use `gitlab.com/go-extension/http` (drop-in `net/http` with native eTLS). DoH3 uses standard `net/http` + `quic-go/http3` — KTLS doesn't apply to QUIC.
+- **Unified SQLite DB** (`database/`): 10 tables, WAL + mmap, zstd-compressed wire format. `github.com/ncruces/go-sqlite3` (pure Go, no CGo). Schema migration keyed by app version with rolling `minSupportedVersion` window.
+- **Global TTL** (`internal/ttl`): Stateless functions shared by cache and zone. Stale TTL uses cyclical countdown for repeated background refresh chances.
+- **EDNS buffer sizing**: 1232B for upstream, 4096B for recursive (DNSSEC root zone referrals ~1400B).
+- **EDNS padding**: Only for secure transports (DoT/DoQ/DoH/DoH3). DNSCrypt has its own ISO 7816-4 padding.
+- **Per-interface binding**: All listeners bind per-IP via `TryBind`; unavailable addresses are skipped with a warning.
+- **QNAME minimisation (RFC 9156)**: Enabled by default, 10-step limit, QTYPE=A hides original type, CNAME owner-name mismatch detection.
+- **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read after Put.
+- **KTLS**: Opt-in via `kernel_tx`/`kernel_rx`, eTLS for TCP, crypto/tls for QUIC. Silent fallback on non-Linux.
+- **SOCKS5**: Per-upstream proxy, TCP CONNECT + UDP ASSOCIATE, 5 sentinel errors, v2ray/xray compat.
+- **DNSCrypt v2**: Full implementation with PQ support (X-Wing KEM + ticket resumption). Server auto-rotates keys every 24h, client caches PQ state per-upstream. See `server/protocol/dnscrypt/` and `server/upstream/dnscrypt/`.
+- **DTLCP**: GM/T 0128-2023. Works around gotlcp library bugs (connected-socket `WriteTo` ban, `Listen("udp")` unsupported).
+- **DNSSEC**: IANA root KSK trust anchors (20326 + 38696). `dnssec_enforce` → SERVFAIL on bogus.
+- **EDE propagation**: DNSSEC EDE codes stored atomically to survive context cancellation.
+- **Zone rules**: SQLite-backed WITHOUT ROWID, wildcard + exact match in one B-tree. Zone responses bypass cache.
+- **ECS types in config**: `config.ECSOption`, `edns.ECSOption` is a type alias. Same for `handler.Question = resolver.Question`.
+- **Pending request dedup**: Singleflight coalescing of concurrent identical cache misses. Leader resolves, followers wait for shared result.
+- **Upstream `no_cache` flag**: Per-server opt-out from cache population for untrusted upstreams.
+- **RecordRequest split**: Hits → `entry_hit_counters` (upsert), misses/errors → `request_log` (insert). Denormalized qname/qtype for debug queries.
+- **Prepared statements**: Hot-path SQL pre-compiled at init (entry get, log insert, latency upsert).
+- **sdns:// stamps**: `normalizeStamps()` resolves stamps at load time, 8 protocol types. `internal/stamp` is zero-dependency.
+- **eHTTP/eTLS aliases** enforced by `importas`. Internal packages use `z`-prefixed aliases (`zdnsutil`, `zlog`, etc.).
 
 ## DB Schema
 
-The unified database (`database/`) contains ten SQLite tables: (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
-
-```sql
--- Pure DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr,
--- ecs_prefix, dnssec_ok). Wire format is zstd-compressed in msg_wire.
-CREATE TABLE entries (
-    qname      TEXT NOT NULL,
-    qtype      INTEGER NOT NULL,
-    qclass     INTEGER NOT NULL DEFAULT 1,
-    ecs_addr   TEXT NOT NULL DEFAULT '',
-    ecs_prefix INTEGER NOT NULL DEFAULT 0,
-    dnssec_ok  INTEGER NOT NULL DEFAULT 0 CHECK (dnssec_ok IN (0, 1)),
-    timestamp  INTEGER NOT NULL,
-    ttl        INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL DEFAULT 0,
-    validated  INTEGER NOT NULL DEFAULT 0 CHECK (validated IN (0, 1)),
-    msg_wire   BLOB,
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
-);
-CREATE INDEX idx_entries_expires_ts ON entries(expires_at, timestamp);
-CREATE INDEX idx_entries_timestamp ON entries(timestamp);
-
--- Request journal: one row per miss/stale/zone/error query. qname/qtype
--- are retrieved by JOINing entries via entry_id. Hits are aggregated into
--- entry_hit_counters instead. Survives FlushDB("stats").
-CREATE TABLE request_log (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp       INTEGER NOT NULL,
-    qname           TEXT NOT NULL DEFAULT '',
-    qtype           INTEGER NOT NULL DEFAULT 0,
-    qclass          INTEGER NOT NULL DEFAULT 1,
-    entry_id        INTEGER,              -- NULL for zone/error paths (no cache entry)
-    protocol        TEXT NOT NULL,
-    result          TEXT NOT NULL,
-    response_time_ms INTEGER NOT NULL DEFAULT 0,
-    rcode           INTEGER NOT NULL DEFAULT 0,
-    server          TEXT NOT NULL DEFAULT '',
-    hijack          INTEGER NOT NULL DEFAULT 0,
-    fallback        INTEGER NOT NULL DEFAULT 0,
-    dnssec_status   TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX idx_request_log_ts ON request_log(timestamp);
-
--- Hit counters: aggregated per-entry+protocol+rcode. Each cache hit upserts
--- here instead of inserting into request_log, avoiding per-hit row bloat.
-CREATE TABLE entry_hit_counters (
-    entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-    protocol  TEXT NOT NULL,
-    rcode     INTEGER NOT NULL DEFAULT 0,
-    hit_count INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (entry_id, protocol, rcode)
-) WITHOUT ROWID;
-
--- Stats metadata: single row tracking the last request_log.id that was
--- "cleared" by FlushDB("stats"). Resetting stats is O(1): just UPDATE.
-CREATE TABLE stats_meta (
-    id             INTEGER PRIMARY KEY CHECK (id = 1),
-    cleared_before INTEGER NOT NULL DEFAULT 0
-);
-
--- Lightweight PTR reverse-lookup (IP → domain).
-CREATE TABLE ptr_map (
-    rdata_ip TEXT NOT NULL,
-    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-    name     TEXT NOT NULL,
-    ttl      INTEGER NOT NULL,
-    PRIMARY KEY (rdata_ip, entry_id, name)
-) WITHOUT ROWID;
-
--- Per-IP latency measurements. Keyed by rdata_ip only — all domains
--- sharing the same IP (CDN) reuse the same row.
-CREATE TABLE ip_latency (
-    rdata_ip        TEXT NOT NULL,
-    qtype           INTEGER NOT NULL DEFAULT 0,
-    latency_ms      INTEGER NOT NULL,
-    last_probe_time INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (rdata_ip)
-) WITHOUT ROWID;
-CREATE INDEX idx_ip_latency_probe ON ip_latency(last_probe_time);
-```
-
-**Zone entries table (same DB file, shared zstd compression):**
-
-```sql
-CREATE TABLE zone_entries (
-    is_wildcard INTEGER NOT NULL DEFAULT 0,
-    qname      TEXT NOT NULL,
-    qtype      INTEGER NOT NULL DEFAULT 0,
-    qclass     INTEGER NOT NULL DEFAULT 0,
-    rcode      INTEGER NOT NULL DEFAULT 0,
-    answer     BLOB,               -- zstd-compressed answer RRs
-    authority  BLOB,               -- zstd-compressed authority RRs
-    additional BLOB,               -- zstd-compressed additional RRs
-    match_tags TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (is_wildcard, qname, qtype, qclass, match_tags)
-) WITHOUT ROWID;
-
-```
-
-**Key patterns**:
-- **DNS response cache**: `qtype` = original query type, records in original wire order. All entries are cacheable. `Get()` decompresses + `Msg.Unpack()` — cache hit ~0.5ms. `Get()` returns the entry `ID` so `RecordRequest` can skip `EnsureEntry`; `Set()` returns the new `entryID` for the same purpose on the miss path.
-- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol+rcode, no row bloat, still FK to entries for cascade cleanup). Miss/stale/zone/error insert into `request_log` with qname/qtype/qclass stored directly (denormalized) so no JOIN is needed for debugging. `entry_id` is nullable — zone/error/badcookie paths set it to NULL instead of creating stub entries. `EnsureEntry()` is a lightweight read-only fallback for hit-path RecordRequest calls without a pre-resolved `EntryID`.
-- **Stats aggregation**: `Stats()` UNION ALLs `entry_hit_counters` + `request_log` for rcode distribution, and combines both tables for protocol counts. `FlushDB("stats")` truncates `entry_hit_counters` and resets the `stats_meta` threshold — request_log rows survive.
-- **Log bounded by time**: `request_log.entry_id` is a plain nullable INTEGER (not a FK — denormalized in v3.2.21 so zone/error paths can log without a cache entry). Rows are cleaned up via timestamp-based eviction (30 days) alongside `ip_latency`. Only `entry_hit_counters.entry_id` has `ON DELETE CASCADE`.
-- **NS latency cache**: NS/Root addresses are stored as regular TypeA/TypeAAAA entries. Latency is probed async via `ProbeNSAddrs` and stored in ip_latency (keyed by IP only); `sortAnswerByLatency` reorders records at `Get()` time.
-- **DNSKEY cache**: `qtype` = `dns.TypeDNSKEY`, validated=1
-- **PTR reverse lookup**: `SELECT DISTINCT pm.name, pm.ttl, e.timestamp FROM ptr_map pm JOIN entries e ON pm.entry_id = e.id WHERE pm.rdata_ip = ? AND e.expires_at + ? >= ?`
-- **IP latency**: Per-IP keyed (`rdata_ip`). A single `INSERT OR REPLACE` writes `latency_ms`, `qtype` (inferred from IP format), and `last_probe_time` (via `unixepoch()`). `Prober.Start()` and `ProbeNSAddrs()` check `GetLatencyLastProbe` per-IP — if every IP in the answer was probed within `DefaultLatencyProbeMinInterval` (60s), the probe is skipped. All domains sharing the same CDN IP reuse the same latency row.
-- **Eviction**: on `Set()` when count > maxEntries. Prefers entries past serve-stale age (`expires_at + staleMaxAge < now`), then oldest by timestamp. `ON DELETE CASCADE` cleans up `ptr_map` and `entry_hit_counters`. Also prunes stale rows from `ip_latency` and `request_log` (both use the same 30-day `defaultStaleMaxAge` cutoff, batched in a single Exec). Entry count is synced from `SELECT COUNT(*)` before eviction to correct drift from INSERT OR REPLACE.
-- **Dynamic queries + FlushDB**: `Store.Stats()` returns `[]string` with 8 TXT records grouped by theme (overview, success, errors, rcodes, anomalies, plain, encrypted, DNSSEC), queryable via `dig zjdns.stats CH TXT`. Write queries: `zjdns.db.clear` (`Clear()`, all tables), `zjdns.db.clear.cache/stats/latency/infra` (`FlushDB(target)`, per-table). `FlushDB("stats")` only resets the stats_meta threshold — request_log rows survive. Wired via zone `DynamicContent` in `server.New()` before `LoadRules()`.
-- **RecordRequest split**: Cache hits upsert `entry_hit_counters` (one row per entry+protocol+rcode, no row bloat, still FK to entries for cascade cleanup). Miss/stale/zone/error insert into `request_log` with qname/qtype/qclass stored directly (denormalized) so no JOIN is needed for debugging. `entry_id` is nullable — zone/error/badcookie paths set it to NULL instead of creating stub entries. `EnsureEntry()` is a lightweight read-only fallback for hit-path RecordRequest calls without a pre-resolved `EntryID`.
-
+See [docs/architecture.md](docs/architecture.md) for full schema SQL and key patterns. Summary:
+- `entries` — DNS response cache (zstd-compressed wire format)
+- `request_log` — miss/stale/zone/error query journal
+- `entry_hit_counters` — aggregated cache hit counters
+- `ptr_map` — IP→domain reverse lookup
+- `ip_latency` — per-IP latency measurements
+- `zone_entries` — zone rule responses (same DB file)
 ## CI/CD
 
 GitHub Actions (`.github/workflows/main.yml`) builds multi-arch Docker images (linux/amd64, linux/arm64) on a cron schedule (04:00/16:00 UTC+8 daily) and pushes to both GHCR and Docker Hub. Uses `docker/build-push-action` with digest-based multi-platform manifest merging. Also triggers on `workflow_dispatch`.
 
-## Debug Config
+## Debug Config & Testing
 
-`config.debug.json` (not committed):
-
-```json
-{
-  "server": {
-    "log_level": "debug",
-    "protocol": {
-      "udp": "15353",
-      "tcp": "15353"
-    },
-    "features": {
-      "hijack_protection": true,
-      "dnssec_enforce": true,
-      "cache": {
-        "max_entries": 10000,
-        "db_path": "cache.db"
-      },
-      "latency_probe": [
-        { "protocol": "ping", "timeout": 200 },
-        { "protocol": "tcp", "port": 443, "timeout": 200 }
-      ]
-    }
-  },
-  "upstream": [
-    { "address": "builtin_recursive" }
-  ]
-}
-```
-
-Port 15353 (non-privileged), pure recursive, cache enabled with latency probing, Debug log level. Start: `./zjdns -config config.debug.json`.
-
-### Test Domains
-
-**Should trigger hijack detection + TCP fallback (blocked by GFW):**
-```bash
-dig @127.0.0.1 -p 15353 www.google.com A +short
-dig @127.0.0.1 -p 15353 www.youtube.com A +short
-dig @127.0.0.1 -p 15353 www.facebook.com A +short
-dig @127.0.0.1 -p 15353 chatgpt.com A +short
-```
-
-**Should resolve normally without TCP fallback:**
-```bash
-dig @127.0.0.1 -p 15353 www.baidu.com A +short
-dig @127.0.0.1 -p 15353 dns.weixin.qq.com.cn A +short
-dig @127.0.0.1 -p 15353 updates.cdn-apple.com A +short
-```
-
-**DNSSEC validation tests (require `dnssec_enforce: true` in debug config):**
-```bash
-# Should fail DNSSEC (bogus signature / bad DS)
-dig @127.0.0.1 -p 15353 dnssec-failed.org A +short
-dig @127.0.0.1 -p 15353 badsign-a.test.dnssec-tools.org A +short
-dig @127.0.0.1 -p 15353 sigfail.ippacket.stream A +short
-
-# Should pass DNSSEC (valid chain)
-dig @127.0.0.1 -p 15353 sigok.ippacket.stream A +short
-```
-
-**EDNS FORMERR retry test:**
-```bash
-# Microsoft mail.protection.outlook.com rejects EDNS queries with FORMERR.
-# ZJDNS should retry without EDNS and still get the answer.
-dig @127.0.0.1 -p 15353 zhijie-online.mail.protection.outlook.com A +short
-```
-
-**QNAME minimisation CNAME corner case (RFC 9156 §2.3):**
-```bash
-# home.console.aliyun.com has a deep CNAME chain. The minimised query
-# 'console.aliyun.com. A' returns a CNAME for console.aliyun.com — NOT
-# home.console.aliyun.com. The resolver must detect the owner-name
-# mismatch, retry with the full QNAME, then follow the full CNAME chain.
-# Should return NOERROR with 15 answer records covering all CNAME hops.
-dig @127.0.0.1 -p 15353 home.console.aliyun.com A
-```
-
-**Stats coverage verification (all result types):**
-```bash
-# Zone: stats query itself triggers a zone rule
-dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
-
-# PTR reverse lookup: warm a cached entry first, then query its IP in reverse
-dig @127.0.0.1 -p 15353 www.baidu.com A +short > /dev/null
-dig @127.0.0.1 -p 15353 -x 180.101.49.44 +short
-
-# Verify all result types are logged (should show hit, miss, zone, error)
-./zjdns --sql cache.db "SELECT result, rcode, COUNT(*) FROM request_log GROUP BY result, rcode"
-
-# Verify DNSSEC distribution
-./zjdns --sql cache.db "SELECT dnssec_status, COUNT(*) FROM request_log GROUP BY dnssec_status"
-
-# Full stats (8 TXT records: overview, success, errors, rcodes, anomalies, plain, encrypted, DNSSEC)
-dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
-
-# Verify stats reset keeps request_log intact
-dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
-dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short          # entries remains, all counters zero
-./zjdns --sql cache.db "SELECT COUNT(*) FROM request_log" # log rows survive
-```
-
-Verify hijack detection from logs: `grep -E "hijack probe detected|hijack detected|rejecting hijacked|tcp=true" /tmp/zjdns.log`
-Normal domains should show `tcp=false` throughout; blocked domains should show hijack detection + `tcp=true` restart.
-
-### TLCP (国密) Test
-
-**External upstream** (DNSPod cert expired 2024-06-06, requires `skip_tls_verify`):
-
-```json
-{
-  "server": { "protocol": { "udp": "53535", "tcp": "53535" }, "features": { "hijack_protection": false, "cache": { "max_entries": 0 } } },
-  "upstream": [
-    { "address": "https://sm2.doh.pub/dns-query", "protocol": "doh-tlcp", "server_name": "sm2.doh.pub", "skip_tls_verify": true }
-  ]
-}
-```
-
-**Self-hosted TLCP server** (self-signed SM2 certs, DoT + DoH):
-
-```json
-{
-  "server": {
-    "protocol": { "udp": "55353", "tcp": "55353", "tlcp": "8530", "http_tlcp": { "port": "4430", "endpoint": "/dns-query" } },
-    "certificate": { "domain": "tlcp.local", "tlcp": { "self_signed": true } },
-    "features": { "hijack_protection": false, "cache": { "max_entries": 0 } }
-  },
-  "upstream": [ { "address": "builtin_recursive" } ]
-}
-```
-
-**ZJDNS ↔ ZJDNS TLCP loopback test:**
-
-```bash
-# Server (TLCP DoT + DoH on 8530/4430)
-./zjdns -config tlcp_srv.json &
-# Client → TLCP DoH to server
-./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454","tcp":"55454"}},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"doh-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
-dig @127.0.0.1 -p 55454 www.baidu.com A +short
-```
-
-**ZJDNS ↔ ZJDNS DTLCP loopback test:**
-
-```bash
-# Server (DTLCP on 8542)
-./zjdns -config <(echo '{"server":{"protocol":{"dtlcp":"8542"},"certificate":{"domain":"dtlcp.local","tlcp":{"self_signed":true}},"features":{"hijack_protection":false,"cache":{"max_entries":0}}},"upstream":[{"address":"builtin_recursive"}]}') &
-# Client → DTLCP to server (use [::1] on Windows — IPv4 localhost handshake is unreliable)
-./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454","tcp":"55454"}},"upstream":[{"address":"127.0.0.1:8542","protocol":"dtlcp","server_name":"dtlcp.local","skip_tls_verify":true}]}') &
-dig @127.0.0.1 -p 55454 www.baidu.com A +short
-```
+See [docs/testing.md](docs/testing.md) for debug config, test domains, and TLCP/DTLCP test commands.
 
 ## KTLS Tuning
 
@@ -810,5 +364,3 @@ If `"local error: tls: bad record MAC"` appears, disable kernel RX offload:
 ```json
 { "server": { "features": { "ktls": { "kernel_rx": false } } } }
 ```
-
-Both `kernel_tx` and `kernel_rx` default to `false` (KTLS is opt-in).

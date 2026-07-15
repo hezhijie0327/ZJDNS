@@ -12,8 +12,9 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
-	"zjdns/server/client"
-	"zjdns/server/security"
+	"zjdns/server/resolver/dnssec"
+	"zjdns/server/resolver/hijack"
+	"zjdns/server/upstream"
 
 	"codeberg.org/miekg/dns"
 )
@@ -64,7 +65,7 @@ type upstreamSet struct {
 // Resolver handles DNS query resolution by dispatching to upstream servers,
 // recursive resolution, or fallback servers as configured.
 type Resolver struct {
-	client          *client.Client
+	queryClient     *upstream.Client
 	edns            *edns.Handler
 	crd             CIDRMatcher
 	buildMsg        BuildQueryFunc
@@ -82,16 +83,17 @@ type Resolver struct {
 
 // Validator holds the DNSSEC and hijack detection components for response
 // validation. Lightweight record-presence checking is provided by the
-// package-level security.IsResponseValid function.
+// package-level dnssec.IsResponseValid function.
 type Validator struct {
-	Crypto *security.CryptoValidator // Full cryptographic DNSSEC validation
-	Hijack *security.Detector        // DNS hijack detection
+	Crypto *dnssec.CryptoValidator // Full cryptographic DNSSEC validation
+	Hijack *hijack.Detector        // DNS hijack detection
 }
 
 // Config bundles the dependencies needed to construct a Resolver.
 type Config struct {
-	Client        *client.Client
-	Guard         *security.Guard
+	QueryClient   *upstream.Client
+	Crypto        *dnssec.CryptoValidator
+	Hijack        *hijack.Detector
 	EDNS          *edns.Handler
 	CIDRMatcher   CIDRMatcher
 	BuildMsg      BuildQueryFunc
@@ -145,9 +147,9 @@ func (u *upstreamSet) store(s []*config.UpstreamServer) {
 }
 
 // New creates a new Resolver from the given Config.
-func New(cfg Config) *Resolver {
+func New(cfg *Config) *Resolver {
 	r := &Resolver{
-		client:        cfg.Client,
+		queryClient:   cfg.QueryClient,
 		edns:          cfg.EDNS,
 		crd:           cfg.CIDRMatcher,
 		buildMsg:      cfg.BuildMsg,
@@ -158,7 +160,7 @@ func New(cfg Config) *Resolver {
 	}
 	r.recursive = &Recursive{resolver: r, cache: cfg.Cache}
 	r.cname = &CNAME{resolver: r}
-	r.validator = &Validator{Crypto: cfg.Guard.Crypto, Hijack: cfg.Guard.Detector}
+	r.validator = &Validator{Crypto: cfg.Crypto, Hijack: cfg.Hijack}
 	return r
 }
 

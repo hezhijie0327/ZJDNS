@@ -11,8 +11,8 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	"zjdns/server/probe"
-	"zjdns/server/security"
+	"zjdns/server/resolver/hijack"
+	"zjdns/server/resolver/probe"
 
 	zdnsutil "zjdns/internal/dnsutil"
 
@@ -21,9 +21,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *security.Detector) (*dns.Msg, security.Verdict, error) {
+func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *hijack.Detector) (*dns.Msg, hijack.Verdict, error) {
 	if len(nameservers) == 0 {
-		return nil, security.VerdictClean, errors.New("no nameservers")
+		return nil, hijack.VerdictClean, errors.New("no nameservers")
 	}
 
 	// Create a child context with a deadline to bound per-batch query time.
@@ -71,7 +71,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 			defer subCancel()
 
-			result := r.resolver.client.ExecuteQuery(subCtx, msg, server)
+			result := r.resolver.queryClient.ExecuteQuery(subCtx, msg, server)
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
 
@@ -91,7 +91,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					// the result channel.
 					if detector != nil && detector.IsEnabled() {
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
-						if v == security.VerdictHijack {
+						if v == hijack.VerdictHijack {
 							log.Debugf("RECURSION: rejecting hijacked response from %s", nsAddr)
 							hijackRejected.Store(true)
 							pool.DefaultMessagePool.Put(result.Response)
@@ -151,9 +151,9 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	case <-ctx.Done():
 	}
 
-	verdict := security.VerdictClean
+	verdict := hijack.VerdictClean
 	if hijackRejected.Load() {
-		verdict = security.VerdictHijack
+		verdict = hijack.VerdictHijack
 	}
 
 	// Try a non-blocking read first.  After cancel(), a result was
@@ -333,7 +333,7 @@ func isEqualFoldTrimDot(a, b string) bool {
 
 // retryWithoutEDNS attempts a query without EDNS options and sends the result
 // to resultChan. Used as a FORMERR fallback per RFC 6891 §6.2.2.
-func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector *security.Detector, currentDomain, normalizedQname string, hijackRejected *atomic.Bool) {
+func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector *hijack.Detector, currentDomain, normalizedQname string, hijackRejected *atomic.Bool) {
 	log.Debugf("RECURSION: ns=%s FORMERR, retrying without EDNS for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
 
 	bareMsg := pool.DefaultMessagePool.Get()
@@ -343,7 +343,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 
 	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
 	defer retryCancel()
-	retryResult := r.resolver.client.ExecuteQuery(retryCtx, bareMsg, server)
+	retryResult := r.resolver.queryClient.ExecuteQuery(retryCtx, bareMsg, server)
 
 	if retryResult.Error != nil {
 		log.Debugf("RECURSION: ns=%s FORMERR retry error=%v for %s %s", nsAddr, retryResult.Error, question.Name, dns.TypeToString[question.Qtype])
@@ -363,7 +363,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	// Reject hijacked responses in FORMERR retry path as well.
 	if detector != nil && detector.IsEnabled() {
 		v := detector.Validate(currentDomain, normalizedQname, retryResult.Response)
-		if v == security.VerdictHijack {
+		if v == hijack.VerdictHijack {
 			log.Debugf("RECURSION: rejecting hijacked FORMERR retry from %s", nsAddr)
 			hijackRejected.Store(true)
 			pool.DefaultMessagePool.Put(retryResult.Response)

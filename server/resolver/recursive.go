@@ -12,8 +12,8 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	"zjdns/server/probe"
-	"zjdns/server/security"
+	"zjdns/server/resolver/hijack"
+	"zjdns/server/resolver/probe"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -110,11 +110,11 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "" {
 		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
-		if verdict == security.VerdictHijack {
+		if verdict == hijack.VerdictHijack {
 			hijackSeen = true
 		}
 		if err != nil {
-			if verdict == security.VerdictHijack && !forceTCP {
+			if verdict == hijack.VerdictHijack && !forceTCP {
 				qr := r.resolve(ctx, question, ecs, depth, true)
 				qr.Hijack = true
 				return qr
@@ -158,7 +158,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		// hijack, restart the ENTIRE resolution via TCP.  GFW cannot
 		// inject TCP responses, so all subsequent levels (including
 		// authoritative) are protected.
-		if verdict == security.VerdictHijack {
+		if verdict == hijack.VerdictHijack {
 			hijackSeen = true
 			if !forceTCP {
 				if response != nil {
@@ -345,7 +345,7 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 	probeCtx, probeCancel := context.WithTimeout(ctx, config.DefaultHijackProbeTimeout)
 	defer probeCancel()
 
-	result := r.resolver.client.ExecuteQuery(probeCtx, msg, server)
+	result := r.resolver.queryClient.ExecuteQuery(probeCtx, msg, server)
 	if result.Error != nil || result.Response == nil {
 		return false
 	}

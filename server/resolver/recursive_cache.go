@@ -6,7 +6,7 @@ import (
 	"strings"
 	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/server/probe"
+	"zjdns/server/resolver/probe"
 
 	"codeberg.org/miekg/dns"
 )

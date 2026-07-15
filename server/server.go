@@ -19,15 +19,16 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/ruleset"
-	"zjdns/server/client"
-	serverdnscrypt "zjdns/server/dnscrypt"
 	"zjdns/server/handler"
-	"zjdns/server/probe"
+	serverdnscrypt "zjdns/server/protocol/dnscrypt"
+	servertlcp "zjdns/server/protocol/tlcp"
+	"zjdns/server/protocol/tls"
+	traditionalserver "zjdns/server/protocol/traditional"
 	"zjdns/server/resolver"
-	"zjdns/server/security"
-	servertlcp "zjdns/server/tlcp"
-	"zjdns/server/tls"
-	traditionalserver "zjdns/server/traditional"
+	"zjdns/server/resolver/dnssec"
+	"zjdns/server/resolver/hijack"
+	"zjdns/server/resolver/probe"
+	"zjdns/server/upstream"
 	"zjdns/zone"
 
 	"codeberg.org/miekg/dns"
@@ -38,8 +39,7 @@ import (
 type Server struct {
 	config          *config.ServerConfig
 	handler         *handler.Handler
-	queryClient     *client.Client
-	guard           *security.Guard
+	queryClient     *upstream.Client
 	tls             *tls.Server
 	dnscryptServer  *serverdnscrypt.Server
 	tlcpServer      *servertlcp.Server
@@ -169,6 +169,10 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	// ── Core: handler + security ──────────────────────────────────────────
 
+	cryptoValidator := dnssec.NewCryptoValidator(cacheStore)
+	hijackDetector := &hijack.Detector{}
+	hijackDetector.Enable(cfg.Server.Features.HijackProtection)
+
 	h := handler.New(
 		cfg, cacheStore, ednsHandler, zoneEvaluator,
 		handler.BackgroundConfig{
@@ -185,12 +189,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		})
 	}
 
-	guard := security.New(cacheStore, cfg.Server.Features.HijackProtection)
-	server.guard = guard
-
 	// ── Outbound: query client ────────────────────────────────────────────
 
-	queryClient := client.New()
+	queryClient := upstream.New()
 	if cfg.Server.Features.KTLS != nil {
 		queryClient.SetKTLS(cfg.Server.Features.KTLS.KernelTX, cfg.Server.Features.KTLS.KernelRX)
 	}
@@ -202,9 +203,10 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	if rulesetEngine != nil {
 		cidrMatcher = rulesetEngine
 	}
-	dnsResolver := resolver.New(resolver.Config{
-		Client:      queryClient,
-		Guard:       guard,
+	dnsResolver := resolver.New(&resolver.Config{
+		QueryClient: queryClient,
+		Crypto:      cryptoValidator,
+		Hijack:      hijackDetector,
 		EDNS:        ednsHandler,
 		CIDRMatcher: cidrMatcher,
 		BuildMsg: func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {

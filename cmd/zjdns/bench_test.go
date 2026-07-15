@@ -16,7 +16,7 @@ import (
 	"zjdns/internal/pool"
 	"zjdns/server"
 	"zjdns/server/resolver"
-	"zjdns/server/security"
+	"zjdns/server/resolver/dnssec"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -100,7 +100,7 @@ func benchGenKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 
 func BenchmarkCryptoValidator_VerifyRRset(b *testing.B) {
 	disableLogging()
-	cv := security.NewCryptoValidator(nil)
+	cv := dnssec.NewCryptoValidator(nil)
 	zone := "bench.example.com"
 	ksk, priv := benchGenKey(zone, dns.FlagSEP|dns.FlagZONE)
 	a := &dns.A{
@@ -126,7 +126,7 @@ func BenchmarkCryptoValidator_VerifyRRset(b *testing.B) {
 
 func BenchmarkCryptoValidator_VerifyDelegationDS(b *testing.B) {
 	disableLogging()
-	cv := security.NewCryptoValidator(nil)
+	cv := dnssec.NewCryptoValidator(nil)
 	childZone := "child.bench.example.com"
 	ksk, _ := benchGenKey(childZone, dns.FlagSEP|dns.FlagZONE)
 	ds := ksk.ToDS(dns.SHA256)

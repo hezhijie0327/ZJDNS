@@ -6,7 +6,7 @@ import (
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
-	serverdnscrypt "zjdns/server/dnscrypt"
+	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 )
 
 // generateExampleConfig returns a complete example configuration as indented JSON.
