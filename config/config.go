@@ -78,7 +78,6 @@ type TLCPCertificate struct {
 type DNSCryptCertificate struct {
 	PrivateKey string `json:"private_key,omitzero"` // Ed25519 private key (hex, optional — auto-generated if empty)
 	PublicKey  string `json:"public_key,omitzero"`  // Ed25519 public key (hex, optional — auto-generated if empty)
-	ESVersion  string `json:"es_version,omitzero"`  // "xchacha20poly1305" (default) or "xwingpq"
 }
 
 // FeatureFlags enables optional features: hijack protection, KTLS, DDR, ECS,
@@ -130,13 +129,14 @@ type CacheSettings struct {
 // and optional matching.
 type UpstreamServer struct {
 	Address       string   `json:"address"`
-	Protocol      string   `json:"protocol"`
+	Protocol      string   `json:"protocol,omitzero"`
 	ServerName    string   `json:"server_name,omitzero"`
 	SkipTLSVerify bool     `json:"skip_tls_verify,omitzero"`
 	NoCache       bool     `json:"no_cache,omitzero"`
 	Match         []string `json:"match,omitzero"`
 	Proxy         string   `json:"proxy,omitzero"`
 	PublicKey     string   `json:"public_key,omitzero"`
+	PQDNSCrypt    *bool    `json:"pqdnscrypt,omitzero"` // prefer PQ DNSCrypt certs (default true)
 }
 
 // ZoneConfig wraps zone rules and global zone settings.

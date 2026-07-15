@@ -30,13 +30,9 @@ func (h *testDNSHandler) ServeDNS(req *dns.Msg, _ net.IP, _ bool, _ string) *dns
 	return reply
 }
 
-func startTestDNSCryptServerWithVersion(t *testing.T, esVersionStr string) (addr, stamp string) {
+func startTestDNSCryptServer(t *testing.T) (addr, stamp string) {
 	t.Helper()
-	if esVersionStr == "" {
-		esVersionStr = "xwingpq"
-	}
-	esVersion, _ := serverdnscrypt.ParseESVersion(esVersionStr)
-	rc, err := serverdnscrypt.GenerateResolverConfig("example.com", nil, esVersion)
+	rc, err := serverdnscrypt.GenerateResolverConfig("example.com", nil)
 	if err != nil {
 		t.Fatalf("GenerateResolverConfig: %v", err)
 	}
@@ -46,7 +42,7 @@ func startTestDNSCryptServerWithVersion(t *testing.T, esVersionStr string) (addr
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
-	cfg := &config.DNSCryptCertificate{PublicKey: rc.PublicKey, PrivateKey: rc.PrivateKey, ESVersion: esVersionStr}
+	cfg := &config.DNSCryptCertificate{PublicKey: rc.PublicKey, PrivateKey: rc.PrivateKey}
 	srv, err := serverdnscrypt.New(cfg, strconv.Itoa(port), rc.ProviderName)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -62,10 +58,6 @@ func startTestDNSCryptServerWithVersion(t *testing.T, esVersionStr string) (addr
 		t.Fatalf("CreateStamp: %v", err)
 	}
 	return addr, stamp
-}
-
-func startTestDNSCryptServer(t *testing.T) (addr, stamp string) {
-	return startTestDNSCryptServerWithVersion(t, "xwingpq")
 }
 
 func newQuery(name string) *dns.Msg {
@@ -126,15 +118,17 @@ func TestDNSCryptUnreachableUDP(t *testing.T) {
 	t.Logf("expected error: %v", err)
 }
 
-func TestDNSCryptXChacha20(t *testing.T) {
-	_, stamp := startTestDNSCryptServerWithVersion(t, "xchacha20poly1305")
+func TestDNSCryptClassical(t *testing.T) {
+	// Test classical XChacha20 mode by disabling PQ preference.
+	_, stamp := startTestDNSCryptServer(t)
 	c := New(nil)
-	server := &config.UpstreamServer{Address: stamp, Protocol: config.ProtoDNSCrypt}
+	pqFalse := false
+	server := &config.UpstreamServer{Address: stamp, Protocol: config.ProtoDNSCrypt, PQDNSCrypt: &pqFalse}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	resp, err := c.Execute(ctx, newQuery("example.com."), server, false)
 	if err != nil {
-		t.Fatalf("XChacha20 UDP: %v", err)
+		t.Fatalf("Classical UDP: %v", err)
 	}
 	if len(resp.Answer) != 1 {
 		t.Fatalf("want 1 answer, got %d", len(resp.Answer))

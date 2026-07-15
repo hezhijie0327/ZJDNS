@@ -13,6 +13,12 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// certPair holds the best PQ and classical certificates from a server.
+type certPair struct {
+	pq        *serverdnscrypt.Certificate
+	classical *serverdnscrypt.Certificate
+}
+
 // State caches per-upstream DNSCrypt resolver state.
 type State struct {
 	serverAddress string
@@ -119,12 +125,46 @@ func (c *Client) getState(
 		return nil, fmt.Errorf("parsing dnscrypt cert: %w", err)
 	}
 
-	esVersion := cert.ESVersion
+	// Prefer PQ by default (matching official dnscrypt-proxy).
+	// Set "pqdnscrypt": false to use classical XChacha20Poly1305 only.
+	preferPQ := true
+	if server.PQDNSCrypt != nil {
+		preferPQ = *server.PQDNSCrypt
+	}
+
+	return c.buildState(addr, providerName, publicKey, cert, preferPQ)
+}
+
+// buildState constructs a State from parsed certificates.  When preferPQ is
+// true and a PQ cert is available, the state uses PQ; otherwise classical.
+// The shared key is always derived from the classical cert's X25519 public key.
+func (c *Client) buildState(
+	addr, providerName string,
+	publicKey []byte,
+	cert *certPair,
+	preferPQ bool,
+) (*State, error) {
+	var esVersion serverdnscrypt.CryptoConstruction
+	var selectedCert *serverdnscrypt.Certificate
+	switch {
+	case preferPQ && cert.pq != nil:
+		esVersion = serverdnscrypt.XWingPQ
+		selectedCert = cert.pq
+	case cert.classical != nil:
+		esVersion = serverdnscrypt.XChacha20Poly1305
+		selectedCert = cert.classical
+	default:
+		return nil, fmt.Errorf("no valid dnscrypt certificate for %q", providerName)
+	}
+
 	var sharedKey [serverdnscrypt.SharedKeySize]byte
 	var secretKey, clientPK [serverdnscrypt.KeySize]byte
-	if !esVersion.IsPQ() {
+	var err error
+	if cert.classical != nil {
 		secretKey, clientPK = serverdnscrypt.GenerateKeyPairRaw()
-		sharedKey, err = serverdnscrypt.ComputeSharedKey(esVersion, &secretKey, &cert.ResolverPk)
+		sharedKey, err = serverdnscrypt.ComputeSharedKey(
+			serverdnscrypt.XChacha20Poly1305, &secretKey, &cert.classical.ResolverPk,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("computing shared key: %w", err)
 		}
@@ -136,17 +176,18 @@ func (c *Client) getState(
 		secretKey:     secretKey,
 		publicKey:     clientPK,
 		serverPK:      publicKey,
-		clientMagic:   cert.ClientMagic,
+		clientMagic:   selectedCert.ClientMagic,
 		esVersion:     esVersion,
 		expires:       time.Now().Add(config.DefaultDNSCryptCertificateCacheTTL),
 		minQueryLen:   256,
 	}
 
-	if esVersion.IsPQ() && len(cert.PqPublicKey) > 0 {
-		state.pqPublicKey = cert.PqPublicKey
-		state.pqCertContext = cert.PqCertContext
+	if esVersion.IsPQ() && len(cert.pq.PqPublicKey) > 0 {
+		state.pqPublicKey = cert.pq.PqPublicKey
+		state.pqCertContext = cert.pq.PqCertContext
 	}
 
+	cacheKey := addr + "|" + providerName
 	c.cacheMu.Lock()
 	c.cache[cacheKey] = state
 	if len(c.cache) > config.DefaultTransportMax {
@@ -160,15 +201,15 @@ func (c *Client) getState(
 	return state, nil
 }
 
-// parseCert parses and verifies a DNSCrypt certificate from DNS TXT answer
-// records.
+// parseCert parses and verifies DNSCrypt certificates from DNS TXT answer
+// records, returning the best PQ and classical certs separately.
 func parseCert(
 	answer []dns.RR,
 	serverPK []byte,
 	providerName string,
-) (*serverdnscrypt.Certificate, error) {
-	var bestCert *serverdnscrypt.Certificate
-	var bestSerial uint32
+) (*certPair, error) {
+	var bestPQ, bestClassical *serverdnscrypt.Certificate
+	var bestPQSerial, bestClSerial uint32
 	for _, rr := range answer {
 		txt, ok := rr.(*dns.TXT)
 		if !ok {
@@ -185,14 +226,20 @@ func parseCert(
 		if !cert.VerifySignature(serverPK) {
 			continue
 		}
-		if cert.Serial > bestSerial ||
-			(cert.Serial == bestSerial && cert.ESVersion.IsPQ() && (bestCert == nil || !bestCert.ESVersion.IsPQ())) {
-			bestCert = cert
-			bestSerial = cert.Serial
+		if cert.ESVersion.IsPQ() {
+			if bestPQ == nil || cert.Serial > bestPQSerial {
+				bestPQ = cert
+				bestPQSerial = cert.Serial
+			}
+		} else {
+			if bestClassical == nil || cert.Serial > bestClSerial {
+				bestClassical = cert
+				bestClSerial = cert.Serial
+			}
 		}
 	}
-	if bestCert == nil {
-		return nil, fmt.Errorf("no valid dnscrypt certificate for provider %q", providerName)
+	if bestPQ == nil && bestClassical == nil {
+		return nil, fmt.Errorf("no valid dnscrypt certificate for %q", providerName)
 	}
-	return bestCert, nil
+	return &certPair{pq: bestPQ, classical: bestClassical}, nil
 }

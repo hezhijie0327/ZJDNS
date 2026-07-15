@@ -28,7 +28,6 @@ func generateExampleConfig() string {
 	cfg.Server.Certificate.DNSCrypt = config.DNSCryptCertificate{
 		PublicKey:  "1A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
 		PrivateKey: "34E2546B6F4C1FCE695E0C62DD3D74D39CEA52C70A283E7615EF4B67F82178D51A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
-		ESVersion:  "xwingpq",
 	}
 
 	cfg.Server.Features.KTLS = &config.KTLSSettings{KernelTX: true}
@@ -109,6 +108,6 @@ func generateExampleConfig() string {
 }
 
 // generateDNSCryptConfig wraps the server/dnscrypt config generator for CLI use.
-func generateDNSCryptConfig(provider, addr, esVersion string) (string, error) {
-	return serverdnscrypt.GenerateDNSCryptConfig(provider, addr, esVersion)
+func generateDNSCryptConfig(provider, addr string) (string, error) {
+	return serverdnscrypt.GenerateDNSCryptConfig(provider, addr)
 }

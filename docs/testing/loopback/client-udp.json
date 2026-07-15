@@ -1,9 +1,0 @@
-{
-  "server": {
-    "log_level": "info",
-    "protocol": { "udp": "10553" }
-  },
-  "upstream": [
-    { "address": "127.0.0.1:10533", "protocol": "udp" }
-  ]
-}

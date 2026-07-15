@@ -1,6 +1,6 @@
 {
   "server": {
-    "log_level": "debug:SECURITY",
+    "log_level": "debug",
     "protocol": {
       "udp": "12633",
       "tcp": "12633"
@@ -11,7 +11,5 @@
       "cache": { "max_entries": 1000 }
     }
   },
-  "upstream": [
-    { "address": "builtin_recursive" }
-  ]
+  "upstream": [{ "address": "builtin_recursive" }]
 }

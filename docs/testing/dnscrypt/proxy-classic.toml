@@ -1,7 +1,0 @@
-server_names = ['zjdns-test']
-listen_addresses = ['127.0.0.1:13153']
-cache = false
-log_level = 2
-
-[static.'zjdns-test']
-stamp = 'sdns://AQAAAAAAAAAADzEyNy4wLjAuMToxMjQ0NCA96pEi6N-69NL3wbh2lNtJ41st20P4QRcMg-8ZEfpIZSAyLmRuc2NyeXB0LWNlcnQuempkbnMtdGVzdC5sb2NhbA'

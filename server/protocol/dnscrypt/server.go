@@ -25,10 +25,9 @@ type DNSHandler interface {
 	ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg
 }
 
-// keyEntry holds a resolver encryption key and its signed certificate.
+// keyEntry holds a pair of classical and PQ certificates for one key window.
 type keyEntry struct {
-	cert      *Certificate
-	certTXT   []string
+	pair      *CertPair
 	createdAt time.Time
 }
 
@@ -42,7 +41,6 @@ type Server struct {
 	certificateCfg *config.DNSCryptCertificate
 	udpConns       []*net.UDPConn
 	tcpListeners   []net.Listener
-	esVersion      CryptoConstruction
 	wg             *sync.WaitGroup
 	tcpConns       map[net.Conn]struct{}
 	mu             sync.RWMutex
@@ -67,12 +65,7 @@ type Server struct {
 // New creates a new DNSCrypt Server from the given configuration.
 // port is the listener port, providerName is auto-derived as "2.dnscrypt-cert.<ddr.domain>".
 func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) (*Server, error) {
-	esVersion, err := ParseESVersion(certificateCfg.ESVersion)
-	if err != nil {
-		return nil, fmt.Errorf("parsing es_version: %w", err)
-	}
-
-	rc, err := buildResolverConfig(certificateCfg, providerName, esVersion)
+	rc, err := buildResolverConfig(certificateCfg, providerName)
 	if err != nil {
 		return nil, fmt.Errorf("building resolver config: %w", err)
 	}
@@ -83,9 +76,9 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 		return nil, fmt.Errorf("decoding ed25519 private key: %w", err)
 	}
 
-	cert, err := rc.NewCert()
+	pair, err := rc.NewCertPair()
 	if err != nil {
-		return nil, fmt.Errorf("creating certificate: %w", err)
+		return nil, fmt.Errorf("creating certificate pair: %w", err)
 	}
 
 	if port == "" {
@@ -94,8 +87,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 	ctx, cancel := context.WithCancelCause(context.Background())
 
 	entry := keyEntry{
-		cert:      cert,
-		certTXT:   buildCertTXTForCert(cert),
+		pair:      pair,
 		createdAt: time.Now(),
 	}
 
@@ -109,13 +101,12 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 		ctx:            ctx,
 		cancel:         cancel,
 		signingSK:      signingSK,
-		esVersion:      esVersion,
 		rotateCh:       make(chan struct{}),
 	}
 
 	// Derive ticket key from the Ed25519 signing key for PQ resumption.
 	// Same derivation as the reference implementation (encrypted-dns-server).
-	if esVersion.IsPQ() {
+	{
 		input := make([]byte, 0, 25+len(signingSK))
 		input = append(input, "DNSCrypt-PQ-ticket-key-v1"...)
 		input = append(input, signingSK...)
@@ -124,16 +115,15 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 		s.ticketKeyID = [ticketKeyIDSize]byte{0x00, 0x00, 0x00, 0x01}
 	}
 
-	log.Debugf("DNSCRYPT: generated initial resolver key (serial=%d)", cert.Serial)
+	log.Debugf("DNSCRYPT: generated initial key pair (serial=%d)", pair.Classical.Serial)
 	return s, nil
 }
 
-func buildResolverConfig(certificateCfg *config.DNSCryptCertificate, providerName string, esVersion CryptoConstruction) (ResolverConfig, error) {
+func buildResolverConfig(certificateCfg *config.DNSCryptCertificate, providerName string) (ResolverConfig, error) {
 	rc := ResolverConfig{
 		ProviderName: providerName,
 		PublicKey:    certificateCfg.PublicKey,
 		PrivateKey:   certificateCfg.PrivateKey,
-		ESVersion:    esVersion,
 	}
 
 	if rc.PublicKey == "" || rc.PrivateKey == "" {
@@ -147,20 +137,10 @@ func buildResolverConfig(certificateCfg *config.DNSCryptCertificate, providerNam
 	}
 
 	// Resolver encryption keys are always auto-generated.  They are short-term
-	// keys rotated every 24h (§7.2); config values would be overwritten on the
-	// first rotation.
-	if esVersion.IsPQ() {
-		pk, sk, err := pqGenKeyPair()
-		if err != nil {
-			return rc, fmt.Errorf("generating X-Wing keypair: %w", err)
-		}
-		rc.ResolverPk = hexEncodeKey(pk)
-		rc.ResolverSk = hexEncodeKey(sk)
-	} else {
-		sk, pk := generateRandomKeyPair()
-		rc.ResolverSk = hexEncodeKey(sk[:])
-		rc.ResolverPk = hexEncodeKey(pk[:])
-	}
+	// keys rotated every 24h (§7.2); PQ keys are derived deterministically.
+	sk, pk := generateRandomKeyPair()
+	rc.ResolverSk = hexEncodeKey(sk[:])
+	rc.ResolverPk = hexEncodeKey(pk[:])
 
 	return rc, nil
 }
@@ -308,19 +288,23 @@ func (s *Server) isStarted() bool {
 	return s.started
 }
 
-// current returns the newest key entry (the one used for encrypting responses).
-func (s *Server) current() keyEntry {
+// current returns the newest key pair (the one used for encrypting responses).
+func (s *Server) current() *CertPair {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.keys[0]
+	return s.keys[0].pair
 }
 
-// hasClientMagic checks whether b matches any active cert's client magic.
+// hasClientMagic checks whether b matches any active cert's client magic
+// (checks both classical and PQ certs in every key window).
 func (s *Server) hasClientMagic(b []byte) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, k := range s.keys {
-		if bytes.Equal(b, k.cert.ClientMagic[:]) {
+		if bytes.Equal(b, k.pair.Classical.ClientMagic[:]) {
+			return true
+		}
+		if bytes.Equal(b, k.pair.PQ.ClientMagic[:]) {
 			return true
 		}
 	}
@@ -340,26 +324,14 @@ func buildCertTXTForCert(cert *Certificate) []string {
 	return chunks
 }
 
-// allCertTXT concatenates TXT chunks from all valid certificates so that
-// clients receive both the current and previous certs during a rotation.
-func (s *Server) allCertTXT() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var all []string
-	for _, k := range s.keys {
-		all = append(all, k.certTXT...)
-	}
-	return all
-}
-
 // rotateKeys generates a fresh resolver key pair, creates a new certificate
-// signed with the same Ed25519 identity key, and prepends it to the key list.
-// Entries older than key lifetime + overlap are purged.
+// pair signed with the same Ed25519 identity key, and prepends it to the key
+// list.  Entries older than key lifetime + overlap are purged.
 //
 // This is called periodically by the rotation goroutine to comply with the
 // ≤24h short-term key rotation requirement (§7.2 / §8).
 func (s *Server) rotateKeys() {
-	newCert, err := s.generateNewCert()
+	newPair, err := s.generateNewCertPair()
 	if err != nil {
 		log.Errorf("DNSCRYPT: key rotation failed: %v", err)
 		return
@@ -369,8 +341,7 @@ func (s *Server) rotateKeys() {
 	defer s.mu.Unlock()
 
 	entry := keyEntry{
-		cert:      newCert,
-		certTXT:   buildCertTXTForCert(newCert),
+		pair:      newPair,
 		createdAt: time.Now(),
 	}
 	s.keys = append([]keyEntry{entry}, s.keys...)
@@ -386,32 +357,23 @@ func (s *Server) rotateKeys() {
 	}
 	s.keys = s.keys[:n]
 
-	log.Debugf("DNSCRYPT: rotated resolver keys (serial=%d, active=%d)", newCert.Serial, len(s.keys))
+	log.Debugf("DNSCRYPT: rotated resolver keys (serial=%d, active=%d)", newPair.Classical.Serial, len(s.keys))
 }
 
-// generateNewCert creates a signed certificate with fresh resolver keys.
-func (s *Server) generateNewCert() (*Certificate, error) {
+// generateNewCertPair creates a signed classical+PQ certificate pair with
+// fresh X25519 resolver keys (PQ derived deterministically from them).
+func (s *Server) generateNewCertPair() (*CertPair, error) {
 	rc := ResolverConfig{
 		ProviderName: s.providerName,
-		ESVersion:    s.esVersion,
 	}
 	rc.PublicKey = hexEncodeKey(s.signingSK.Public().(ed25519.PublicKey))
 	rc.PrivateKey = hexEncodeKey(s.signingSK)
 
-	if s.esVersion.IsPQ() {
-		pk, sk, err := pqGenKeyPair()
-		if err != nil {
-			return nil, fmt.Errorf("generating X-Wing keypair: %w", err)
-		}
-		rc.ResolverPk = hexEncodeKey(pk)
-		rc.ResolverSk = hexEncodeKey(sk)
-	} else {
-		sk, pk := generateRandomKeyPair()
-		rc.ResolverSk = hexEncodeKey(sk[:])
-		rc.ResolverPk = hexEncodeKey(pk[:])
-	}
+	sk, pk := generateRandomKeyPair()
+	rc.ResolverSk = hexEncodeKey(sk[:])
+	rc.ResolverPk = hexEncodeKey(pk[:])
 
-	return rc.NewCert()
+	return rc.NewCertPair()
 }
 
 // escapeBackslash replaces each 0x5C byte with "\\" so that miekg/dns
@@ -458,17 +420,23 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 	}
 
 	reply := dnsutil.SetReply(new(dns.Msg), m)
-	txt := &dns.TXT{
-		Hdr: dns.Header{
-			Name:  q.Header().Name,
-			TTL:   60,
-			Class: dns.ClassINET,
-		},
-		TXT: rdata.TXT{
-			Txt: s.allCertTXT(),
-		},
+	s.mu.RLock()
+	for _, k := range s.keys {
+		for _, cert := range []*Certificate{k.pair.Classical, k.pair.PQ} {
+			txt := &dns.TXT{
+				Hdr: dns.Header{
+					Name:  q.Header().Name,
+					TTL:   config.DefaultTTL,
+					Class: dns.ClassINET,
+				},
+				TXT: rdata.TXT{
+					Txt: buildCertTXTForCert(cert),
+				},
+			}
+			reply.Answer = append(reply.Answer, txt)
+		}
 	}
-	reply.Answer = append(reply.Answer, txt)
+	s.mu.RUnlock()
 	reply.Authoritative = true
 	reply.RecursionAvailable = true
 

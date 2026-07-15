@@ -17,11 +17,10 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		showVersion    bool
 
 		// Generate config
-		generateConfig    bool
-		dnscrypt          bool
-		dnscryptProvider  string
-		dnscryptAddr      string
-		dnscryptESVersion string
+		generateConfig   bool
+		dnscrypt         bool
+		dnscryptProvider string
+		dnscryptAddr     string
 
 		// SQL
 		runSQL bool
@@ -58,7 +57,6 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.BoolVar(&dnscrypt, "dnscrypt", false, "Generate DNSCrypt configuration (with --generate-config)")
 	fs.StringVar(&dnscryptProvider, "provider", "", "Provider name for DNSCrypt config")
 	fs.StringVar(&dnscryptAddr, "addr", "127.0.0.1:8443", "Server address for DNSCrypt stamp")
-	fs.StringVar(&dnscryptESVersion, "es-version", "xwingpq", "Encryption algorithm (xwingpq or xchacha20poly1305)")
 
 	// SQL
 	fs.BoolVar(&runSQL, "sql", false, "Run SQL query against database")
@@ -92,7 +90,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "  %s                              # Start with default config\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --version                    # Show version information\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --generate-config            # Generate example config\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s --generate-config --dnscrypt --provider <name> [--addr <addr>] [--es-version <ver>]\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --generate-config --dnscrypt --provider <name> [--addr <addr>]\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --sql <db> <query> --rw       # Run read-write SQL (--rw before args)\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --sql <db> <query>            # Run read-only SQL query\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --decode <stamp>  # Decode an sdns:// stamp to upstream JSON\n", fs.Name())
@@ -127,7 +125,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	// --generate-config
 	if generateConfig {
 		if dnscrypt {
-			output, err := generateDNSCryptConfig(dnscryptProvider, dnscryptAddr, dnscryptESVersion)
+			output, err := generateDNSCryptConfig(dnscryptProvider, dnscryptAddr)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "generate-config: %v\n", err)
 			} else {

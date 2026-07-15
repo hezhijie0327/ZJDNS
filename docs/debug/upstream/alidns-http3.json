@@ -1,0 +1,13 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": { "udp": "13653" }
+  },
+  "upstream": [
+    {
+      "address": "https://dns.alidns.com/dns-query",
+      "protocol": "http3",
+      "server_name": "dns.alidns.com"
+    }
+  ]
+}

@@ -60,6 +60,14 @@ type Certificate struct {
 	PqCertContext []byte
 }
 
+// CertPair holds the classical and PQ certificates for a single key window.
+// Both certs share the same Serial, NotBefore, and NotAfter and are derived
+// from the same X25519 short-term key seed.
+type CertPair struct {
+	Classical *Certificate // ESVersion = XChacha20Poly1305 (124 bytes)
+	PQ        *Certificate // ESVersion = XWingPQ (1320 bytes)
+}
+
 // type checks
 
 // Certificate wire format offsets.  The certificate has a fixed-size header

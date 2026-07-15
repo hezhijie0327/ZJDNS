@@ -1,9 +1,0 @@
-{
-  "server": {
-    "log_level": "info",
-    "protocol": { "udp": "15553" }
-  },
-  "upstream": [
-    { "address": "https://sm2.doh.pub/dns-query", "protocol": "doh-tlcp", "server_name": "sm2.doh.pub", "skip_tls_verify": true }
-  ]
-}

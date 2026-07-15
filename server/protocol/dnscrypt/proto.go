@@ -119,18 +119,6 @@ var (
 	ErrPQTicketExpired      = errors.New("dnscrypt: PQ resumption ticket expired")
 )
 
-// ParseESVersion parses an ESVersion string into a CryptoConstruction value.
-func ParseESVersion(s string) (CryptoConstruction, error) {
-	switch s {
-	case "xchacha20poly1305", "":
-		return XChacha20Poly1305, nil
-	case "xwingpq":
-		return XWingPQ, nil
-	default:
-		return 0, fmt.Errorf("unsupported es_version: %q (supported: xchacha20poly1305, xwingpq)", s)
-	}
-}
-
 // IsPQ reports whether the CryptoConstruction uses post-quantum key exchange.
 func (c CryptoConstruction) IsPQ() bool {
 	return c == XWingPQ

@@ -156,7 +156,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/q
 ## Architecture
 
 ZJDNS is a high-performance recursive DNS server supporting TLS, QUIC, HTTPS, HTTP3.
-All protocol implementations must follow their governing RFCs. Reference: [docs/architecture.md](docs/architecture.md).
+All protocol implementations must follow their governing RFCs. Reference: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Project Structure
 
@@ -274,16 +274,17 @@ Top layer (wiring):
 | `Server` | `server/protocol/tls` | TLS listeners (DoT, DoQ, DoH, DoH3, DTLS) |
 | `Server` | `server/protocol/tlcp` | TLCP/DTLCP listeners: DoT and DoH over TLCP (TCP), DTLCP (GM/T 0128-2023). Uses SM2 dual certificates. |
 | `Server` | `server/protocol/dnscrypt` | DNSCrypt v2 lifecycle: UDP+TCP listeners, cert TXT handshake, query encrypt/decrypt, PQ KEM + ticket resumption |
-| `Certificate` | `server/protocol/dnscrypt` | DNSCrypt server certificate: Ed25519 signature, X25519 short-term key (classical) or X-Wing PQ public key (1216B) with ClientMagic + PqCertContext |
+| `Certificate` | `server/protocol/dnscrypt` | DNSCrypt server certificate: Ed25519 signature, X25519 short-term key (classical) or X-Wing PQ public key (1216B) with ClientMagic + PqCertContext. Each key window holds a CertPair (Classical + PQ). |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint config. A protocol is enabled when its field is non-empty. Contains `UDP`, `TCP`, `TLS` (DoT), `QUIC` (DoQ), `HTTPS` (DoH), `HTTP3` (DoH3), `TLCP` (TLCP DoT), `HTTPTLCP` (TLCP DoH), `DTLS` (RFC 8094, UDP port), `DTLCP` (GM/T 0128-2023, UDP port), `DNSCrypt`. |
 | `HTTPSEndpoint` | `config` | Port + endpoint path for HTTP-based transports (DoH, DoH3, TLCP DoH). |
 | `CertSettings` | `config` | Unified cert config: `Domain` (server identity), `TLS` (TLSCertificate), `TLCP` (TLCPCertificate), `DNSCrypt` (DNSCryptCertificate). |
 | `TLSCertificate` | `config` | TLS certificate: `CertFile`, `KeyFile`, `SelfSigned`. |
 | `TLCPCertificate` | `config` | TLCP SM2 certificate pairs: `SignCertFile`/`SignKeyFile`, `EncCertFile`/`EncKeyFile`, `SelfSigned`. |
-| `DNSCryptCertificate` | `config` | DNSCrypt v2 identity keys: `PrivateKey`, `PublicKey`, `ESVersion`. Provider name auto-derived as `2.dnscrypt-cert.<cert.domain>`. Resolver encryption keys are auto-generated and rotated every 24h. |
+| `DNSCryptCertificate` | `config` | DNSCrypt v2 identity keys: `PrivateKey`, `PublicKey`. Provider name auto-derived as `2.dnscrypt-cert.<cert.domain>`. Resolver encryption keys are auto-generated and rotated every 24h. Dual classical+PQ certs are always served. |
 | `EncryptedQuery` / `EncryptedResponse` | `server/protocol/dnscrypt` | Public API types for client-side query encryption and response decryption. EncryptedQuery carries ClientNonce for pre-generated nonces (resumed PQ). EncryptedResponse exposes PQControl for ticket extraction. |
-| `CryptoConstruction` | `server/protocol/dnscrypt` | Enum: XWingPQ (0x0003, default), XChacha20Poly1305 (0x0002). XSalsa20 (0x0001) is removed — deprecated by dnscrypt-proxy. |
-| `ResolverConfig` | `server/protocol/dnscrypt` | Internal config builder: provider name, Ed25519 signing keys, X25519/X-Wing resolver keys, ES version. Methods: `NewCert()`, `CreateStamp()`. |
+| `CryptoConstruction` | `server/protocol/dnscrypt` | Enum: XWingPQ (0x0003), XChacha20Poly1305 (0x0002). Both are always served per key window. XSalsa20 (0x0001) is removed — deprecated by dnscrypt-proxy. |
+| `ResolverConfig` | `server/protocol/dnscrypt` | Internal config builder: provider name, Ed25519 signing keys, X25519 resolver keys. PQ keys derived deterministically. Methods: `NewCert()`, `NewPQCert()`, `NewCertPair()`, `CreateStamp()`. |
+| `UpstreamServer` | `config` | Per-upstream config: `Address`, `Protocol`, `ServerName`, `SkipTLSVerify`, `NoCache`, `Match`, `Proxy`, `PublicKey`, `PQDNSCrypt` (`*bool`, default true — prefer PQ DNSCrypt certs, matching official dnscrypt-proxy). |
 | `Client` | `server/upstream` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/DTLCP/SOCKS5/DNSCrypt-UDP+TCP/TLCP/DoH-TLCP). `dnscryptState` caches per-upstream resolver state (sharedKey, secretKey/publicKey, PQ ticket + resumeSecret, expiry). TLCP uses `tlcpClientConfig` / `dialTLCPConn` (analogous to `eTLSClientConfig` / `dialTLSConn`) and `ExecuteHTTPTLCP` with custom `http.Transport.DialTLSContext`. DTLS uses `pion/dtls` for UDP-based TLS transport (RFC 8094). DTLCP uses `gitee.com/Trisia/gotlcp/dtlcp` with `net.ListenPacket` + `dtlcp.Client` (not `dtlcp.Dial` — creates connected socket incompatible with internal `WriteTo`). |
 | `SOCKS5Dialer` | `server/upstream/socks5` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
 | `Conn` / `Pool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT |
@@ -340,7 +341,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 ## DB Schema
 
-See [docs/architecture.md](docs/architecture.md) for full schema SQL and key patterns. Summary:
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full schema SQL and key patterns. Summary:
 - `entries` — DNS response cache (zstd-compressed wire format)
 - `request_log` — miss/stale/zone/error query journal
 - `entry_hit_counters` — aggregated cache hit counters
@@ -353,7 +354,7 @@ GitHub Actions (`.github/workflows/main.yml`) builds multi-arch Docker images (l
 
 ## Debug Config & Testing
 
-See [docs/testing.md](docs/testing.md) for debug config, test domains, and TLCP/DTLCP test commands.
+See [docs/debug/DEBUG.md](docs/debug/DEBUG.md) for debug config, test domains, and TLCP/DTLCP test commands.
 
 ## KTLS Tuning
 

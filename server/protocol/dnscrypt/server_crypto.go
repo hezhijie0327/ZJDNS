@@ -27,7 +27,7 @@ func (s *Server) encrypt(m *dns.Msg, q *encryptedQuery, isUDP bool) (encrypted [
 	}
 
 	curr := s.current()
-	sharedKey, err := computeSharedKey(q.esVersion, &curr.cert.ResolverSk, &q.clientPk)
+	sharedKey, err := computeSharedKey(XChacha20Poly1305, &curr.Classical.ResolverSk, &q.clientPk)
 	if err != nil {
 		return nil, fmt.Errorf("computing shared key: %w", err)
 	}
@@ -47,8 +47,8 @@ func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedRespons
 		if q.sharedKey != [SharedKeySize]byte{} {
 			sharedKey = q.sharedKey
 		} else {
-			kemSS := pqDecapsulate(q.pqCiphertext, curr.cert.PqPrivateKey)
-			sharedKey = pqDeriveSharedKey(kemSS, q.clientMagic, curr.cert.PqCertContext, q.pqCiphertext)
+			kemSS := pqDecapsulate(q.pqCiphertext, curr.PQ.PqPrivateKey)
+			sharedKey = pqDeriveSharedKey(kemSS, q.clientMagic, curr.PQ.PqCertContext, q.pqCiphertext)
 		}
 
 		// Issue a resumption ticket.
@@ -56,8 +56,8 @@ func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedRespons
 		ticketExpiry := nowUnix32() + uint32(config.DefaultDNSCryptPQTicketLifetime/time.Second)
 		peHash := profileExtensionHash()
 		plaintext := encodeTicketPlaintext(
-			resumeSecret, q.clientMagic, curr.cert.Serial,
-			curr.cert.NotAfter, ticketExpiry, peHash,
+			resumeSecret, q.clientMagic, curr.Classical.Serial,
+			curr.Classical.NotAfter, ticketExpiry, peHash,
 		)
 		var nonce [xchachaNonceSize]byte
 		if _, randErr := rand.Read(nonce[:]); randErr != nil {
@@ -73,11 +73,11 @@ func (s *Server) encryptPQ(packet []byte, q *encryptedQuery, r *encryptedRespons
 	return r.encrypt(packet, sharedKey, isUDP)
 }
 
-// decrypt tries to decrypt the query with the current key first, then falls
-// back to previous keys to handle rotation overlap (§8).
+// decrypt tries to decrypt the query: PQ resumed → PQ ciphertext → classical.
+// Keys are tried newest-first to handle rotation overlap (§8).
 func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err error) {
 	// PQ resumed queries don't carry a client magic — try them first.
-	if s.esVersion.IsPQ() && len(b) >= PQResumeMagicLen && bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:]) {
+	if len(b) >= PQResumeMagicLen && bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:]) {
 		return s.decryptPQResumed(b)
 	}
 
@@ -86,42 +86,50 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *encryptedQuery, err err
 	keysSnapshot := s.keys
 	s.mu.RUnlock()
 
-	// Try keys newest-first.
-	for i, k := range keysSnapshot {
-		query = &encryptedQuery{
-			esVersion:   s.esVersion,
-			clientMagic: k.cert.ClientMagic,
+	// Try each key pair newest-first: PQ first, then classical.
+	for _, k := range keysSnapshot {
+		// Try PQ ciphertext.
+		if bytes.Equal(b[:ClientMagicSize], k.pair.PQ.ClientMagic[:]) {
+			query = &encryptedQuery{
+				esVersion:     XWingPQ,
+				clientMagic:   k.pair.PQ.ClientMagic,
+				pqCertContext: k.pair.PQ.PqCertContext,
+			}
+			var resolverSk [KeySize]byte
+			copy(resolverSk[:], k.pair.PQ.PqPrivateKey)
+			decrypted, decErr := query.decrypt(b, resolverSk)
+			if decErr == nil {
+				msg = &dns.Msg{}
+				msg.Data = decrypted
+				if unpackErr := msg.Unpack(); unpackErr != nil {
+					return nil, nil, fmt.Errorf("unpacking dns message: %w", unpackErr)
+				}
+				return msg, query, nil
+			}
 		}
 
-		var decrypted []byte
-		if s.esVersion.IsPQ() {
-			query.pqCertContext = k.cert.PqCertContext
-			var resolverSk [KeySize]byte
-			copy(resolverSk[:], k.cert.PqPrivateKey)
-			decrypted, err = query.decrypt(b, resolverSk)
-		} else {
-			decrypted, err = query.decrypt(b, k.cert.ResolverSk)
-		}
-		if err == nil {
-			msg = &dns.Msg{}
-			msg.Data = decrypted
-			err = msg.Unpack()
-			if err != nil {
-				return nil, nil, fmt.Errorf("unpacking dns message: %w", err)
+		// Try classical.
+		if bytes.Equal(b[:ClientMagicSize], k.pair.Classical.ClientMagic[:]) {
+			query = &encryptedQuery{
+				esVersion:   XChacha20Poly1305,
+				clientMagic: k.pair.Classical.ClientMagic,
 			}
-			return msg, query, nil
-		}
-		if i == 0 {
-			// Current key failed — log at debug, try previous.
-			logKey := fmt.Errorf("decrypting query: %w", err)
-			_ = logKey
+			decrypted, decErr := query.decrypt(b, k.pair.Classical.ResolverSk)
+			if decErr == nil {
+				msg = &dns.Msg{}
+				msg.Data = decrypted
+				if unpackErr := msg.Unpack(); unpackErr != nil {
+					return nil, nil, fmt.Errorf("unpacking dns message: %w", unpackErr)
+				}
+				return msg, query, nil
+			}
 		}
 	}
-	return nil, nil, fmt.Errorf("decrypting query: no matching key (tried %d)", len(keysSnapshot))
+	return nil, nil, fmt.Errorf("decrypting query: no matching key (tried %d pairs)", len(keysSnapshot))
 }
 
-// decryptPQResumed handles a resumed PQ query.  It tries each key entry's
-// certificate metadata (client magic, serial, NotAfter) to validate the ticket.
+// decryptPQResumed handles a resumed PQ query.  It tries each key pair's
+// PQ certificate metadata (client magic, serial, NotAfter) to validate the ticket.
 func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *encryptedQuery, err error) {
 	ticket, nonceHalf, payloadOff, err := parsePQResumedHeader(b)
 	if err != nil {
@@ -147,26 +155,26 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *encryptedQuery
 	keysSnapshot := s.keys
 	s.mu.RUnlock()
 
-	var matchedCert *Certificate
+	var matchedPair *CertPair
 	for _, k := range keysSnapshot {
-		if clientMagic == k.cert.ClientMagic &&
+		if clientMagic == k.pair.PQ.ClientMagic &&
 			bytes.Equal(ticketPlain[ticketPlaintextESOff:ticketPlaintextESOff+ticketPlaintextESLen], PQESVersion[:]) &&
-			binary.BigEndian.Uint32(ticketPlain[ticketPlaintextSerialOff:ticketPlaintextSerialOff+ticketPlaintextSerialLen]) == k.cert.Serial &&
-			binary.BigEndian.Uint32(ticketPlain[ticketPlaintextTSEndOff:ticketPlaintextTSEndOff+ticketPlaintextTSEndLen]) == k.cert.NotAfter &&
+			binary.BigEndian.Uint32(ticketPlain[ticketPlaintextSerialOff:ticketPlaintextSerialOff+ticketPlaintextSerialLen]) == k.pair.Classical.Serial &&
+			binary.BigEndian.Uint32(ticketPlain[ticketPlaintextTSEndOff:ticketPlaintextTSEndOff+ticketPlaintextTSEndLen]) == k.pair.Classical.NotAfter &&
 			bytes.Equal(ticketPlain[ticketPlaintextPEHashOff:ticketPlaintextPEHashOff+ticketPlaintextPEHashLen], peHash[:]) {
-			matchedCert = k.cert
+			matchedPair = k.pair
 			break
 		}
 	}
-	if matchedCert == nil {
+	if matchedPair == nil {
 		return nil, nil, ErrPQInvalidTicket
 	}
 
-	sharedKey := pqResumedSharedKey(resumeSecret, matchedCert.ClientMagic, nonceHalf, ticket)
+	sharedKey := pqResumedSharedKey(resumeSecret, matchedPair.PQ.ClientMagic, nonceHalf, ticket)
 
 	query = &encryptedQuery{
-		esVersion:   s.esVersion,
-		clientMagic: matchedCert.ClientMagic,
+		esVersion:   XWingPQ,
+		clientMagic: matchedPair.PQ.ClientMagic,
 		sharedKey:   sharedKey,
 	}
 	copy(query.nonce[:NonceSize/2], nonceHalf)

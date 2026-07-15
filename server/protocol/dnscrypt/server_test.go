@@ -7,50 +7,66 @@ import (
 )
 
 func TestKeyRotation(t *testing.T) {
-	certificateCfg := &config.DNSCryptCertificate{
-		ESVersion: "xwingpq",
-	}
+	certificateCfg := &config.DNSCryptCertificate{}
 
 	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	// After startup: one key.
+	// After startup: one key pair.
 	if len(srv.keys) != 1 {
 		t.Fatalf("after New: want 1 key, got %d", len(srv.keys))
 	}
-	initialSerial := srv.current().cert.Serial
-	initialTXT := srv.allCertTXT()
+	initialSerial := srv.current().Classical.Serial
 
 	// Simulate a 24h rotation.
 	srv.rotateKeys()
 
-	// After rotation: two keys (current + previous).
+	// After rotation: two key pairs (current + previous).
 	if len(srv.keys) != 2 {
 		t.Fatalf("after rotateKeys: want 2 keys, got %d", len(srv.keys))
 	}
 
 	// Current has newer (higher) serial than previous.
-	curr := srv.current().cert
-	// Serial = unix timestamp — in tests they may land in the same second.
+	curr := srv.current().Classical
 	if curr.Serial < initialSerial {
 		t.Errorf("new serial (%d) should be >= old serial (%d)", curr.Serial, initialSerial)
 	}
 
-	// allCertTXT returns chunks from both certs.
-	afterTXT := srv.allCertTXT()
-	if len(afterTXT) <= len(initialTXT) {
-		t.Errorf("allCertTXT after rotation (%d chunks) should be > before (%d chunks)",
-			len(afterTXT), len(initialTXT))
+	// Verify both certs in each pair are non-nil.
+	if srv.keys[0].pair.Classical == nil || srv.keys[0].pair.PQ == nil {
+		t.Error("current pair has nil cert")
+	}
+	if srv.keys[1].pair.Classical == nil || srv.keys[1].pair.PQ == nil {
+		t.Error("previous pair has nil cert")
 	}
 
-	// Verify the previous entry's cert is still valid (NotAfter check).
-	if srv.keys[1].cert.NotAfter < uint32(time.Now().Unix()) { //nolint:gosec // G115: timestamp within int32 range until 2038
-		t.Error("previous cert NotAfter is in the past")
+	// Verify the previous entry's classical cert is still valid.
+	if srv.keys[1].pair.Classical.NotAfter < uint32(time.Now().Unix()) { //nolint:gosec // G115
+		t.Error("previous classical cert NotAfter is in the past")
+	}
+	// PQ cert must also be valid.
+	if srv.keys[1].pair.PQ.NotAfter < uint32(time.Now().Unix()) { //nolint:gosec // G115
+		t.Error("previous PQ cert NotAfter is in the past")
 	}
 
-	// Simulate another rotation — should purge the oldest entry after overlap.
+	// Classical cert has non-zero ResolverSk.
+	if srv.keys[0].pair.Classical.ResolverSk == [KeySize]byte{} {
+		t.Error("current classical cert has zero ResolverSk")
+	}
+
+	// PQ cert has non-zero PqPrivateKey.
+	if len(srv.keys[0].pair.PQ.PqPrivateKey) == 0 {
+		t.Error("current PQ cert has zero-length PqPrivateKey")
+	}
+
+	// Both certs in a pair share the same serial.
+	if srv.keys[0].pair.Classical.Serial != srv.keys[0].pair.PQ.Serial {
+		t.Error("classical and PQ certs in pair have different serials")
+	}
+
+	// Simulate purge: oldest entry should be removed after overlap period.
 	srv.keys[0].createdAt = time.Now().Add(-config.DefaultDNSCryptCertificateTTL - config.DefaultDNSCryptKeyOverlap - time.Hour)
 	srv.rotateKeys()
 	if len(srv.keys) < 2 {
@@ -58,51 +74,31 @@ func TestKeyRotation(t *testing.T) {
 	}
 }
 
-func TestKeyRotationClassical(t *testing.T) {
-	certificateCfg := &config.DNSCryptCertificate{
-		ESVersion: "xchacha20poly1305",
-	}
-
-	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if len(srv.keys) != 1 {
-		t.Fatalf("after New: want 1 key, got %d", len(srv.keys))
-	}
-
-	srv.rotateKeys()
-	if len(srv.keys) != 2 {
-		t.Fatalf("after rotateKeys: want 2 keys, got %d", len(srv.keys))
-	}
-	// Classical: ResolverSk must not be zero.
-	if srv.keys[0].cert.ResolverSk == [KeySize]byte{} {
-		t.Error("current classical cert has zero ResolverSk")
-	}
-	if srv.keys[1].cert.ResolverSk == [KeySize]byte{} {
-		t.Error("previous classical cert has zero ResolverSk")
-	}
-}
-
-func TestAllCertTXTServesAllActiveCerts(t *testing.T) {
-	certificateCfg := &config.DNSCryptCertificate{
-		ESVersion: "xwingpq",
-	}
+func TestCertPairTXT(t *testing.T) {
+	certificateCfg := &config.DNSCryptCertificate{}
 
 	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	chunksBefore := len(srv.allCertTXT())
-	srv.rotateKeys()
-	chunksAfter := len(srv.allCertTXT())
-
-	// PQ cert is 1320 bytes → 6 chunks per cert (1320 / 255 = 5.17 → 6).
-	if chunksBefore < 6 {
-		t.Errorf("single cert should be at least 6 TXT chunks, got %d", chunksBefore)
+	// Classical cert: 124 bytes — fits in 1 chunk.
+	classicalChunks := buildCertTXTForCert(srv.keys[0].pair.Classical)
+	if len(classicalChunks) != 1 {
+		t.Errorf("classical cert: want 1 TXT chunk, got %d", len(classicalChunks))
 	}
-	if chunksAfter < 12 {
-		t.Errorf("two certs should be at least 12 TXT chunks, got %d", chunksAfter)
+
+	// PQ cert: 1320 bytes — 6 chunks (1320 / 255 = 5.17 → 6).
+	pqChunks := buildCertTXTForCert(srv.keys[0].pair.PQ)
+	if len(pqChunks) < 5 {
+		t.Errorf("PQ cert: want >= 5 TXT chunks, got %d", len(pqChunks))
+	}
+
+	// Verify serial alignment across the pair.
+	if srv.keys[0].pair.Classical.Serial != srv.keys[0].pair.PQ.Serial {
+		t.Error("classical and PQ serial differ")
+	}
+	if srv.keys[0].pair.Classical.NotAfter != srv.keys[0].pair.PQ.NotAfter {
+		t.Error("classical and PQ NotAfter differ")
 	}
 }

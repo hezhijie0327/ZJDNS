@@ -1,9 +1,0 @@
-{
-  "server": {
-    "log_level": "info",
-    "protocol": { "udp": "10953" }
-  },
-  "upstream": [
-    { "address": "127.0.0.1:10784", "protocol": "quic", "server_name": "zjdns-test.local", "skip_tls_verify": true }
-  ]
-}

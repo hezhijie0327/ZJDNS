@@ -1,0 +1,14 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": { "udp": "14553" }
+  },
+  "upstream": [
+    {
+      "address": "127.0.0.1:8542",
+      "protocol": "dtlcp",
+      "server_name": "dtlcp.local",
+      "skip_tls_verify": true
+    }
+  ]
+}

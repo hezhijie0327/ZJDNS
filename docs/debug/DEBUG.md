@@ -3,7 +3,7 @@
 ## Directory Layout
 
 ```
-docs/testing/
+docs/debug/
 ├── testing.md              # this file
 ├── loopback/               # ZJDNS ↔ ZJDNS protocol loopback tests
 │   ├── server.json         # server: UDP/TCP/TLS/QUIC/HTTPS + DTLS + self-signed TLS
@@ -22,10 +22,10 @@ docs/testing/
 ├── routedns/               # ZJDNS ↔ RouteDNS tests
 │   └── dtls-client.toml    # RouteDNS DTLS client → ZJDNS DTLS server
 ├── dnscrypt/               # ZJDNS ↔ DNSCrypt-proxy tests
-│   ├── zjdns-server-pq.json        # ZJDNS DNSCrypt server (X-Wing PQ)
-│   ├── proxy-pq.toml               # DNSCrypt-proxy PQ client
-│   ├── zjdns-server-classic.json   # ZJDNS DNSCrypt server (XChaCha20)
-│   └── proxy-classic.toml          # DNSCrypt-proxy classic client
+│   ├── zjdns-server.json          # ZJDNS DNSCrypt server (dual-cert: classical + PQ)
+│   ├── proxy-pq.toml              # DNSCrypt-proxy client (pqdnscrypt=true, default)
+│   ├── 
+│   └── proxy-classic.toml         # DNSCrypt-proxy client (pqdnscrypt=false)
 └── upstream/               # ZJDNS → external upstream tests
     ├── alidns-tls.json      # AliDNS via TLS
     ├── alidns-https.json    # AliDNS via HTTPS
@@ -37,14 +37,19 @@ docs/testing/
 
 ## Prerequisites
 
+> [!IMPORTANT]
+> DNSCrypt-proxy and RouteDNS **must be built from source**.  Distribution packages
+> (Homebrew, etc.) may ship older versions that lack required features such as
+> `pqdnscrypt`.
+
 ```bash
 # Build ZJDNS
 go build -o /tmp/zjdns ./cmd/zjdns
 
-# Build RouteDNS (for DTLS test)
+# Build RouteDNS (for DTLS test) — must compile from source
 cd /path/to/routedns && go build -o /tmp/routedns ./cmd/routedns
 
-# Build DNSCrypt-proxy (for DNSCrypt test)
+# Build DNSCrypt-proxy (for DNSCrypt test) — must compile from source
 cd /path/to/dnscrypt-proxy/dnscrypt-proxy && go build -o /tmp/dnscrypt-proxy .
 ```
 
@@ -55,7 +60,7 @@ TLS certificates use the built-in `self_signed` feature — no external cert gen
 Start the server (UDP, TCP, TLS, QUIC, HTTPS):
 
 ```bash
-/tmp/zjdns -config docs/testing/loopback/server.json &
+/tmp/zjdns -config docs/debug/loopback/server.json &
 ```
 
 Test each client protocol:
@@ -70,13 +75,13 @@ dig @127.0.0.1 -p 10533 www.baidu.com A +short +tcp
 # Ports: udp=10553 tcp=10653 tls=10753 https=10853 quic=10953 http3=13953 dtls=14953
 
 # HTTP3 loopback
-/tmp/zjdns -config docs/testing/loopback/client-http3.json &
+/tmp/zjdns -config docs/debug/loopback/client-http3.json &
 sleep 2
 dig @127.0.0.1 -p 13953 www.baidu.com A +short
 pkill -f "client-http3"
 
 # DTLS loopback
-/tmp/zjdns -config docs/testing/loopback/client-dtls.json &
+/tmp/zjdns -config docs/debug/loopback/client-dtls.json &
 sleep 2
 dig @127.0.0.1 -p 14953 www.baidu.com A +short
 pkill -f "client-dtls"
@@ -87,7 +92,7 @@ pkill -f "client-dtls"
 验证 DNSSEC 强制验证（bogus → SERVFAIL，valid → NOERROR）：
 
 ```bash
-/tmp/zjdns -config docs/testing/loopback/server-dnssec.json &
+/tmp/zjdns -config docs/debug/loopback/server-dnssec.json &
 sleep 2
 
 # Bogus signature → SERVFAIL
@@ -106,7 +111,7 @@ pkill -f "server-dnssec"
 验证 GFW DNS 劫持检测和 TCP 回退：
 
 ```bash
-/tmp/zjdns -config docs/testing/loopback/server-hijack.json &
+/tmp/zjdns -config docs/debug/loopback/server-hijack.json &
 sleep 2
 
 # Domain known to be hijacked → should trigger TCP fallback
@@ -127,13 +132,13 @@ pkill -f "server-hijack"
 Start ZJDNS server with DTLS enabled:
 
 ```bash
-/tmp/zjdns -config docs/testing/loopback/server.json &
+/tmp/zjdns -config docs/debug/loopback/server.json &
 ```
 
 Start RouteDNS as DTLS client:
 
 ```bash
-/tmp/routedns docs/testing/routedns/dtls-client.toml &
+/tmp/routedns docs/debug/routedns/dtls-client.toml &
 ```
 
 Query through RouteDNS (UDP→DTLS→ZJDNS→recursive):
@@ -144,23 +149,42 @@ dig @127.0.0.1 -p 12053 www.baidu.com A +short
 
 ## DNSCrypt Tests (ZJDNS ↔ DNSCrypt-proxy)
 
-### Post-Quantum (X-Wing KEM)
+The server always serves both classical (XChacha20Poly1305) and post-quantum
+(X-Wing KEM) certificates simultaneously. The client chooses which to use.
+
+### Post-Quantum (pqdnscrypt=true, default)
 
 ```bash
-/tmp/zjdns -config docs/testing/dnscrypt/zjdns-server-pq.json &
-/tmp/dnscrypt-proxy -config docs/testing/dnscrypt/proxy-pq.toml &
+/tmp/zjdns -config docs/debug/dnscrypt/zjdns-server.json &
+/tmp/dnscrypt-proxy -config docs/debug/dnscrypt/proxy-pq.toml &
 sleep 4
 dig @127.0.0.1 -p 13053 www.baidu.com A +short
-# Expected: [zjdns-test] using the post-quantum X-Wing key exchange
+# Expected: uses X-Wing PQ key exchange
 ```
 
-### Classic (XChaCha20-Poly1305)
+### Classic (pqdnscrypt=false)
 
 ```bash
-/tmp/zjdns -config docs/testing/dnscrypt/zjdns-server-classic.json &
-/tmp/dnscrypt-proxy -config docs/testing/dnscrypt/proxy-classic.toml &
+/tmp/zjdns -config docs/debug/dnscrypt/zjdns-server.json &
+/tmp/dnscrypt-proxy -config docs/debug/dnscrypt/proxy-classic.toml &
 sleep 3
 dig @127.0.0.1 -p 13153 www.baidu.com A +short
+# Expected: uses XChacha20-Poly1305 (classical only)
+```
+
+### Loopback (ZJDNS ↔ ZJDNS)
+
+```bash
+# PQ preferred (default)
+/tmp/zjdns -config docs/debug/loopback/server.json &
+/tmp/zjdns -config docs/debug/loopback/client-dnscrypt.json &
+sleep 2
+dig @127.0.0.1 -p 12444 www.baidu.com A +short
+
+# Classical only
+/tmp/zjdns -config docs/debug/loopback/client-dnscrypt-classic.json &
+sleep 2
+dig @127.0.0.1 -p 12445 www.baidu.com A +short
 ```
 
 ## Upstream Protocol Tests
@@ -170,19 +194,19 @@ dig @127.0.0.1 -p 13153 www.baidu.com A +short
 ```bash
 # tls=11553  https=11653  quic=11753  http3=13653
 
-/tmp/zjdns -config docs/testing/upstream/alidns-tls.json &
+/tmp/zjdns -config docs/debug/upstream/alidns-tls.json &
 dig @127.0.0.1 -p 11553 www.baidu.com A +short
 pkill -f "alidns-tls"
 
-/tmp/zjdns -config docs/testing/upstream/alidns-https.json &
+/tmp/zjdns -config docs/debug/upstream/alidns-https.json &
 dig @127.0.0.1 -p 11653 www.baidu.com A +short
 pkill -f "alidns-https"
 
-/tmp/zjdns -config docs/testing/upstream/alidns-quic.json &
+/tmp/zjdns -config docs/debug/upstream/alidns-quic.json &
 dig @127.0.0.1 -p 11753 www.baidu.com A +short
 pkill -f "alidns-quic"
 
-/tmp/zjdns -config docs/testing/upstream/alidns-http3.json &
+/tmp/zjdns -config docs/debug/upstream/alidns-http3.json &
 dig @127.0.0.1 -p 13653 www.baidu.com A +short
 pkill -f "alidns-http3"
 ```
@@ -193,11 +217,11 @@ pkill -f "alidns-http3"
 
 ```bash
 # Start TLCP server (TLCP TLS + TLCP HTTPS with self-signed SM2 certs)
-/tmp/zjdns -config docs/testing/loopback/server-tlcp.json &
+/tmp/zjdns -config docs/debug/loopback/server-tlcp.json &
 sleep 2
 
 # TLCP HTTPS loopback client
-/tmp/zjdns -config docs/testing/loopback/client-http-tlcp.json &
+/tmp/zjdns -config docs/debug/loopback/client-http-tlcp.json &
 sleep 2
 dig @127.0.0.1 -p 13553 www.baidu.com A +short
 
@@ -209,10 +233,10 @@ pkill -f "server-tlcp\|client-http-tlcp"
 Uses the same server as TLCP (server-tlcp.json has DTLCP enabled alongside TLCP).
 
 ```bash
-/tmp/zjdns -config docs/testing/loopback/server-tlcp.json &
+/tmp/zjdns -config docs/debug/loopback/server-tlcp.json &
 sleep 2
 
-/tmp/zjdns -config docs/testing/loopback/client-dtlcp.json &
+/tmp/zjdns -config docs/debug/loopback/client-dtlcp.json &
 sleep 2
 dig @127.0.0.1 -p 14553 www.baidu.com A +short
 
@@ -222,7 +246,7 @@ pkill -f "server-tlcp\|client-dtlcp"
 ### DNSpod TLCP HTTPS (External Upstream)
 
 ```bash
-/tmp/zjdns -config docs/testing/upstream/dnspod-http-tlcp.json &
+/tmp/zjdns -config docs/debug/upstream/dnspod-http-tlcp.json &
 sleep 2
 dig @127.0.0.1 -p 15553 www.baidu.com A +short
 
@@ -232,7 +256,7 @@ pkill -f "dnspod-http-tlcp"
 ### Quad9 (DNSCrypt)
 
 ```bash
-/tmp/zjdns -config docs/testing/upstream/quad9-dnscrypt.json &
+/tmp/zjdns -config docs/debug/upstream/quad9-dnscrypt.json &
 sleep 4
 dig @127.0.0.1 -p 11853 www.baidu.com A +short +time=5
 ```

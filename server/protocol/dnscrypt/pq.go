@@ -107,6 +107,20 @@ func pqGenKeyPair() (publicKey, privateKey []byte, err error) {
 	return pk, sk, nil
 }
 
+// DerivePQKeys deterministically derives an X-Wing keypair from an X25519
+// secret key seed, matching the official encrypted-dns-server derivation:
+//
+//	pq_seed = SHA-256("DNSCrypt-PQ-seed-v1" || resolver_sk_seed)
+//	xwing_sk, xwing_pk = xwing.DeriveKeyPairPacked(pq_seed)
+func DerivePQKeys(classicalSk []byte) (pk, sk []byte) {
+	input := make([]byte, 0, 25+len(classicalSk))
+	input = append(input, "DNSCrypt-PQ-seed-v1"...)
+	input = append(input, classicalSk...)
+	seed := sha256.Sum256(input)
+	sk, pk = xwing.DeriveKeyPairPacked(seed[:])
+	return pk, sk
+}
+
 // ---------------------------------------------------------------------------
 // Ticket encryption (server-side)
 // ---------------------------------------------------------------------------

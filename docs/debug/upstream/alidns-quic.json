@@ -1,0 +1,14 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": { "udp": "11753" },
+    "features": { "cache": { "max_entries": 0 } }
+  },
+  "upstream": [
+    {
+      "address": "223.5.5.5:853",
+      "protocol": "quic",
+      "server_name": "dns.alidns.com"
+    }
+  ]
+}
