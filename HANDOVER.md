@@ -171,12 +171,14 @@
 - [x] H-9: 删除 `upstream.Result` 死字段
 - [x] M-1: DNSCrypt WaitGroup 交换顺序
 
-### 阶段 2：解耦（当前执行中）
+### 阶段 2：解耦（进行中）
+- [x] H-6: DB ExecWrite 封装 (2eda449)
+- [x] H-1/H-2: Handler resolver 接口 (2eda449)
+- [x] H-3: Resolver UpstreamClient 接口 (886608b)
 - [ ] C-2: config 移除 DNS 库依赖和运行时字段
 - [ ] C-3: 领域包接口倒置
-- [ ] H-1/H-2: Handler↔Resolver 循环 → 接口
-- [ ] H-3: Resolver 接受 UpstreamClient 接口
-- [ ] H-6: DB ExecWrite 封装
+- [ ] H-4: Resolver 消费者侧接口（dnssec/hijack/probe）
+- [ ] H-5: upstream.Client → 策略模式
 
 ### 阶段 3：模块化
 - [ ] H-4: Resolver 消费者侧接口（dnssec/hijack/probe）
@@ -185,10 +187,16 @@
 - [ ] M-7: 重命名误导性文件
 
 ### 阶段 4：优化
-- [ ] M-1: DNSCrypt WaitGroup 顺序
+- [x] L-1: ShuffleSlice 返回移除 (886608b)
+- [x] L-3: ToLower→ToUpper 往返 (523e732)
+- [x] L-4: import alias 一致性 (523e732)
+- [x] L-5: isEqualFoldTrimDot → domainNamesEqual (523e732)
+- [x] M-4: edns nil 守卫修复 (435fd4d)
 - [ ] M-2: DNS64 去重
 - [ ] M-3: SQL 热路径优化
-- [ ] L-1 ~ L-9: 低优先级清理
+- [ ] M-5: fallback goroutine 生命周期
+- [ ] L-6: SipHash 提取
+- [ ] L-7, L-8, L-9: 剩余低优先级
 
 ---
 
