@@ -23,7 +23,7 @@ import (
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 	servertlcp "zjdns/server/protocol/tlcp"
 	"zjdns/server/protocol/tls"
-	traditionalserver "zjdns/server/protocol/traditional"
+	servertraditional "zjdns/server/protocol/traditional"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/resolver/hijack"
@@ -43,7 +43,7 @@ type Server struct {
 	tls             *tls.Server
 	dnscryptServer  *serverdnscrypt.Server
 	tlcpServer      *servertlcp.Server
-	traditional     *traditionalserver.Server
+	traditional     *servertraditional.Server
 	pprofServer     *http.Server
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
@@ -271,7 +271,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.tlcpServer = tlcpSrv
 	}
 
-	server.traditional = traditionalserver.New(cfg)
+	server.traditional = servertraditional.New(cfg)
 
 	// ── Observability: probes + pprof ─────────────────────────────────────
 

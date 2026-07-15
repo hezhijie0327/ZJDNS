@@ -221,7 +221,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			default:
 			}
 
-			if isEqualFoldTrimDot(nsRecord.Ns, qname) {
+			if domainNamesEqual(nsRecord.Ns, qname) {
 				return nil
 			}
 
@@ -318,10 +318,10 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	return allAddresses
 }
 
-// isEqualFoldTrimDot compares two strings case-insensitively, ignoring a single
+// domainNamesEqual compares two strings case-insensitively, ignoring a single
 // trailing dot on either string. Uses sub-slicing (no allocation) instead of
 // strings.TrimSuffix (which allocates when the suffix is present).
-func isEqualFoldTrimDot(a, b string) bool {
+func domainNamesEqual(a, b string) bool {
 	if a != "" && a[len(a)-1] == '.' {
 		a = a[:len(a)-1]
 	}

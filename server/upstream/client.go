@@ -184,7 +184,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	}
 
 	result.Duration = time.Since(start)
-	result.Protocol = strings.ToUpper(protocol)
+	result.Protocol = strings.ToUpper(server.Protocol)
 
 	if result.Error != nil {
 		log.Debugf("UPSTREAM: query failed for %s via %s (%s) in %v, error=%v", qname, server.Address, result.Protocol, result.Duration, result.Error)
