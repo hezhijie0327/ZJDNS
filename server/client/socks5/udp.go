@@ -1,4 +1,4 @@
-package client
+package socks5
 
 import (
 	"context"
@@ -50,7 +50,7 @@ var socks5ReadBufPool = sync.Pool{
 //
 // The underlying TCP control connection stays alive; if the proxy closes it,
 // the next ListenPacket call re-establishes the relay automatically.
-func (d *SOCKS5Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error) {
+func (d *Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	// Fast path: read-lock to check if the relay is alive.
 	d.mu.RLock()
 	if d.ctrlConn != nil {
@@ -85,7 +85,7 @@ func (d *SOCKS5Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error)
 	return d.wrapPacketConn(), nil
 }
 
-func (d *SOCKS5Dialer) establishUDPRelay(ctx context.Context) error {
+func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	deadline, hasDeadline := ctx.Deadline()
 
 	dialer := net.Dialer{}
@@ -194,13 +194,13 @@ func (d *SOCKS5Dialer) establishUDPRelay(ctx context.Context) error {
 	return nil
 }
 
-func (d *SOCKS5Dialer) wrapPacketConn() net.PacketConn {
+func (d *Dialer) wrapPacketConn() net.PacketConn {
 	return &socks5PacketConn{
 		conn: d.udpConn,
 	}
 }
 
-func (d *SOCKS5Dialer) cleanupLocked() {
+func (d *Dialer) cleanupLocked() {
 	if d.ctrlConn != nil {
 		_ = d.ctrlConn.Close()
 		d.ctrlConn = nil
@@ -216,9 +216,9 @@ func (d *SOCKS5Dialer) cleanupLocked() {
 // DialUDP establishes a new UDP connection to targetAddr through the
 // SOCKS5 proxy — each call creates a fresh UDP ASSOCIATE and returns an
 // independent net.Conn.  Matches golang.org/x/net/proxy.Dialer.Dial("udp").
-func (d *SOCKS5Dialer) DialUDP(ctx context.Context, targetAddr string) (net.Conn, error) {
+func (d *Dialer) DialUDP(ctx context.Context, targetAddr string) (net.Conn, error) {
 	// Create a fresh, independent dialer so the relay is not shared.
-	fresh := &SOCKS5Dialer{
+	fresh := &Dialer{
 		proxyAddr: d.proxyAddr,
 		username:  d.username,
 		password:  d.password,

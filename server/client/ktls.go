@@ -6,6 +6,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/pool"
+	socks5 "zjdns/server/client/socks5"
 
 	"codeberg.org/miekg/dns"
 	eTLS "gitlab.com/go-extension/tls"
@@ -35,7 +36,7 @@ func (c *Client) eTLSClientConfig(server *config.UpstreamServer) *eTLS.Config {
 // dialTLSConn establishes a TCP connection (optionally proxied), performs a
 // TLS handshake over it, and returns the resulting TLS connection. Used by
 // both the pooled DoT path and the non-pooled fallback.
-func (c *Client) dialTLSConn(ctx context.Context, addr string, tlsConfig *eTLS.Config, proxyDialer *SOCKS5Dialer) (net.Conn, error) {
+func (c *Client) dialTLSConn(ctx context.Context, addr string, tlsConfig *eTLS.Config, proxyDialer *socks5.Dialer) (net.Conn, error) {
 	var tcpConn net.Conn
 	var err error
 	if proxyDialer != nil {
@@ -63,7 +64,7 @@ func (c *Client) dialTLSConn(ctx context.Context, addr string, tlsConfig *eTLS.C
 // exchangeOverTLS dials a TLS connection and performs a single DNS exchange.
 // Used as the non-pooled fallback for DoT — dns.Client.TLSConfig expects
 // *crypto/tls.Config, so we do the I/O manually with eTLS.
-func (c *Client) exchangeOverTLS(ctx context.Context, msg *dns.Msg, addr string, tlsConfig *eTLS.Config, proxyDialer *SOCKS5Dialer) (*dns.Msg, error) {
+func (c *Client) exchangeOverTLS(ctx context.Context, msg *dns.Msg, addr string, tlsConfig *eTLS.Config, proxyDialer *socks5.Dialer) (*dns.Msg, error) {
 	tlsConn, err := c.dialTLSConn(ctx, addr, tlsConfig, proxyDialer)
 	if err != nil {
 		return nil, err

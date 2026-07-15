@@ -1,4 +1,4 @@
-package client
+package socks5
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 
 // DialContext connects to targetAddr through the SOCKS5 proxy via TCP CONNECT.
 // The returned net.Conn is a raw TCP connection forwarded through the proxy.
-func (d *SOCKS5Dialer) DialContext(ctx context.Context, network, targetAddr string) (net.Conn, error) {
+func (d *Dialer) DialContext(ctx context.Context, network, targetAddr string) (net.Conn, error) {
 	if network != "tcp" {
 		return nil, fmt.Errorf("socks5: unsupported network %q (only tcp)", network)
 	}
@@ -52,7 +52,7 @@ func (d *SOCKS5Dialer) DialContext(ctx context.Context, network, targetAddr stri
 }
 
 // connect sends a CONNECT request and skips the bind address in the response.
-func (d *SOCKS5Dialer) connect(conn net.Conn, targetAddr string) error {
+func (d *Dialer) connect(conn net.Conn, targetAddr string) error {
 	host, port, err := splitHostPort(targetAddr)
 	if err != nil {
 		return err

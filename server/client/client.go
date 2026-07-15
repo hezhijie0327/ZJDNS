@@ -16,6 +16,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/client/pool"
+	socks5 "zjdns/server/client/socks5"
 
 	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
@@ -64,7 +65,7 @@ type Client struct {
 	tcpPool *pool.Pool
 	dotPool *pool.Pool
 
-	proxyDialers map[string]*SOCKS5Dialer
+	proxyDialers map[string]*socks5.Dialer
 	proxyMu      sync.Mutex
 
 	dnscryptCache   map[string]*dnscryptState
@@ -122,7 +123,7 @@ func New() *Client {
 		dnscryptCache:  make(map[string]*dnscryptState),
 		tcpPool:        pool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		dotPool:        pool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		proxyDialers:   make(map[string]*SOCKS5Dialer),
+		proxyDialers:   make(map[string]*socks5.Dialer),
 	}
 	return c
 }

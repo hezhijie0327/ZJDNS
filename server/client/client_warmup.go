@@ -10,6 +10,7 @@ import (
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
+	socks5 "zjdns/server/client/socks5"
 
 	"github.com/quic-go/quic-go"
 )
@@ -56,7 +57,7 @@ func (c *Client) resetQUICConfig(key string) {
 }
 
 // getProxyDialer returns a cached SOCKS5Dialer for the server's proxy URL.
-func (c *Client) getProxyDialer(server *config.UpstreamServer) *SOCKS5Dialer {
+func (c *Client) getProxyDialer(server *config.UpstreamServer) *socks5.Dialer {
 	if server.Proxy == "" {
 		return nil
 	}
@@ -82,7 +83,7 @@ func (c *Client) getProxyDialer(server *config.UpstreamServer) *SOCKS5Dialer {
 		}
 	}
 
-	d, err := NewSOCKS5Dialer(server.Proxy, c.timeout)
+	d, err := socks5.New(server.Proxy, c.timeout)
 	if err != nil {
 		log.Warnf("UPSTREAM: invalid proxy %s for %s: %v", d.SafeURL(), server.Address, err)
 		c.proxyDialers[server.Proxy] = nil

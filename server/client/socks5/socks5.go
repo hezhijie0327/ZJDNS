@@ -1,4 +1,4 @@
-package client
+package socks5
 
 import (
 	"context"
@@ -14,13 +14,13 @@ import (
 	"zjdns/config"
 )
 
-// SOCKS5Dialer provides TCP and UDP connections through a SOCKS5 proxy.
+// Dialer provides TCP and UDP connections through a SOCKS5 proxy.
 // It implements both RFC 1928 (SOCKS5) and RFC 1929 (Username/Password auth).
 //
-// A single SOCKS5Dialer reuses its UDP relay — the TCP control connection
+// A single Dialer reuses its UDP relay — the TCP control connection
 // stays alive as long as the relay is needed. If the control connection dies,
 // the next ListenPacket call re-establishes it transparently.
-type SOCKS5Dialer struct {
+type Dialer struct {
 	proxyAddr string // host:port of the SOCKS5 proxy
 	username  string // empty means no auth
 	password  string
@@ -37,9 +37,9 @@ type SOCKS5Dialer struct {
 // UDP datagram (RFC 1928 §7)
 // ---------------------------------------------------------------------------
 
-// socks5Datagram wraps a SOCKS5 UDP datagram header and payload.
+// datagram wraps a SOCKS5 UDP datagram header and payload.
 // Wire format: RSV(2) | FRAG(1) | ATYP(1) | DST.ADDR(var) | DST.PORT(2) | DATA
-type socks5Datagram struct {
+type datagram struct {
 	atyp    byte
 	dstAddr []byte // raw address (IP bytes or domain with length prefix)
 	dstPort uint16
@@ -105,10 +105,10 @@ var socks5WritePool = sync.Pool{
 	New: func() any { b := make([]byte, socks5WriteBufSize); return &b },
 }
 
-// socks5ReadPool reuses buffers for SOCKS5 UDP read path (exchangeViaProxyUDP).
+// ReadPool reuses buffers for SOCKS5 UDP read path (exchangeViaProxyUDP).
 // 8 KB covers the common DNS response size (~512–1232); larger responses
 // get a fresh buffer from ReadFrom's internal cache.
-var socks5ReadPool = sync.Pool{
+var ReadPool = sync.Pool{
 	New: func() any { b := make([]byte, socks5ReadBufSize); return &b },
 }
 
@@ -138,10 +138,10 @@ func repString(rep byte) string {
 	}
 }
 
-// NewSOCKS5Dialer parses a socks5://[user:pass@]host:port URL and returns
+// New parses a socks5://[user:pass@]host:port URL and returns
 // a ready-to-use dialer. The timeout is used for proxy connection and
 // negotiation.
-func NewSOCKS5Dialer(proxyURL string, timeout time.Duration) (*SOCKS5Dialer, error) {
+func New(proxyURL string, timeout time.Duration) (*Dialer, error) {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse proxy URL: %w", err)
@@ -159,7 +159,7 @@ func NewSOCKS5Dialer(proxyURL string, timeout time.Duration) (*SOCKS5Dialer, err
 		port = config.DefaultProxyPort
 	}
 
-	d := &SOCKS5Dialer{
+	d := &Dialer{
 		proxyAddr:  net.JoinHostPort(host, port),
 		timeout:    timeout,
 		ctrlClosed: make(chan struct{}),
@@ -172,7 +172,7 @@ func NewSOCKS5Dialer(proxyURL string, timeout time.Duration) (*SOCKS5Dialer, err
 }
 
 // SafeURL returns the proxy URL with password redacted for logging.
-func (d *SOCKS5Dialer) SafeURL() string {
+func (d *Dialer) SafeURL() string {
 	if d.password != "" {
 		return fmt.Sprintf("socks5://%s:***@%s", d.username, d.proxyAddr)
 	}
@@ -184,7 +184,7 @@ func (d *SOCKS5Dialer) SafeURL() string {
 
 // Close terminates the UDP relay control connection and releases resources.
 // Pending UDP operations will fail after Close.
-func (d *SOCKS5Dialer) Close() error {
+func (d *Dialer) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.cleanupLocked()
@@ -195,7 +195,7 @@ func (d *SOCKS5Dialer) Close() error {
 // Internal: handshake + auth
 // ---------------------------------------------------------------------------
 
-func (d *SOCKS5Dialer) handshake(conn net.Conn) error {
+func (d *Dialer) handshake(conn net.Conn) error {
 	// Build method list
 	var methods []byte
 	if d.username != "" {
@@ -230,7 +230,7 @@ func (d *SOCKS5Dialer) handshake(conn net.Conn) error {
 	}
 }
 
-func (d *SOCKS5Dialer) authUserPass(conn net.Conn) error {
+func (d *Dialer) authUserPass(conn net.Conn) error {
 	if len(d.username) > 255 || len(d.password) > 255 {
 		return errors.New("socks5: username or password exceeds 255 bytes")
 	}
@@ -263,7 +263,7 @@ func (d *SOCKS5Dialer) authUserPass(conn net.Conn) error {
 
 // parseDatagram parses a SOCKS5 UDP datagram from raw bytes.  Returns the
 // source address and any validation error (RSV, FRAG, truncation).
-func parseDatagram(b []byte) (*socks5Datagram, *net.UDPAddr, error) {
+func parseDatagram(b []byte) (*datagram, *net.UDPAddr, error) {
 	if len(b) < 10 {
 		return nil, nil, fmt.Errorf("datagram too short: %d bytes", len(b))
 	}
@@ -274,7 +274,7 @@ func parseDatagram(b []byte) (*socks5Datagram, *net.UDPAddr, error) {
 		return nil, nil, errors.New("fragmented UDP datagram not supported")
 	}
 
-	d := &socks5Datagram{atyp: b[3]}
+	d := &datagram{atyp: b[3]}
 
 	var headerLen int
 	switch d.atyp {

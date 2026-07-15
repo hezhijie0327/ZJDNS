@@ -11,6 +11,7 @@ import (
 	"os"
 	"sync"
 	"zjdns/config"
+	socks5 "zjdns/server/client/socks5"
 
 	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
@@ -157,7 +158,7 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 	quicCfg := c.getQUICConfig("doh3:"+key, tlsConfig.InsecureSkipVerify)
 
 	// Resolve proxy dialer once, outside the Dial closure.
-	var proxyDialer *SOCKS5Dialer
+	var proxyDialer *socks5.Dialer
 	if proxyURL != "" {
 		proxyDialer = c.getProxyDialer(&config.UpstreamServer{Proxy: proxyURL})
 	}

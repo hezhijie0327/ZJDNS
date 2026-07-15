@@ -1,4 +1,4 @@
-package client
+package socks5
 
 import (
 	"context"
@@ -15,7 +15,7 @@ const socks5TestProxy = "socks5://127.0.0.1:1080"
 func requireSOCKS5Proxy(t *testing.T, proxyURL string) {
 	t.Helper()
 	// Use the proxy host as the test address — the actual proxy URL may
-	// contain a scheme (socks5://) which is handled by SOCKS5Dialer.
+	// contain a scheme (socks5://) which is handled by Dialer.
 	conn, err := net.DialTimeout("tcp", "127.0.0.1:1080", 2*time.Second)
 	if err != nil {
 		t.Skipf("SOCKS5 proxy not available on %s: %v", proxyURL, err)
@@ -29,9 +29,9 @@ func TestSOCKS5TCPConnect(t *testing.T) {
 	proxyURL := socks5TestProxy
 	requireSOCKS5Proxy(t, proxyURL)
 
-	d, err := NewSOCKS5Dialer(proxyURL, 5*time.Second)
+	d, err := New(proxyURL, 5*time.Second)
 	if err != nil {
-		t.Fatalf("NewSOCKS5Dialer: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	defer func() { _ = d.Close() }()
 
@@ -68,9 +68,9 @@ func TestSOCKS5UDPAssociate(t *testing.T) {
 	proxyURL := socks5TestProxy
 	requireSOCKS5Proxy(t, proxyURL)
 
-	d, err := NewSOCKS5Dialer(proxyURL, 5*time.Second)
+	d, err := New(proxyURL, 5*time.Second)
 	if err != nil {
-		t.Fatalf("NewSOCKS5Dialer: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	defer func() { _ = d.Close() }()
 
@@ -119,20 +119,20 @@ func TestSOCKS5UDPAssociate(t *testing.T) {
 	t.Log("UDP ASSOCIATE test passed")
 }
 
-// TestSOCKS5DialerReuse verifies that the same proxy URL produces the same
+// TestDialerReuse verifies that the same proxy URL produces the same
 // dialer from the cache.
-func TestSOCKS5DialerReuse(t *testing.T) {
+func TestDialerReuse(t *testing.T) {
 	proxyURL := socks5TestProxy
 
-	d1, err := NewSOCKS5Dialer(proxyURL, 5*time.Second)
+	d1, err := New(proxyURL, 5*time.Second)
 	if err != nil {
-		t.Fatalf("NewSOCKS5Dialer(1): %v", err)
+		t.Fatalf("New(1): %v", err)
 	}
 	defer func() { _ = d1.Close() }()
 
-	d2, err := NewSOCKS5Dialer(proxyURL, 5*time.Second)
+	d2, err := New(proxyURL, 5*time.Second)
 	if err != nil {
-		t.Fatalf("NewSOCKS5Dialer(2): %v", err)
+		t.Fatalf("New(2): %v", err)
 	}
 	defer func() { _ = d2.Close() }()
 
@@ -155,7 +155,7 @@ func TestSOCKS5InvalidURL(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		_, err := NewSOCKS5Dialer(tt.url, 5*time.Second)
+		_, err := New(tt.url, 5*time.Second)
 		if err == nil {
 			t.Errorf("expected error for %q, got nil", tt.url)
 		} else {

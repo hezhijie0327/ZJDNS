@@ -5,6 +5,7 @@ import (
 	"net"
 	"zjdns/config"
 	"zjdns/internal/pool"
+	socks5 "zjdns/server/client/socks5"
 
 	"codeberg.org/miekg/dns"
 )
@@ -24,7 +25,7 @@ func (c *Client) executeUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 // using UDP ASSOCIATE (RFC 1928 §6). Because DNS over UDP is a single
 // request-response exchange, we create a PacketConn, send one query, read
 // the reply, and close it.
-func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *SOCKS5Dialer) (*dns.Msg, error) {
+func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *socks5.Dialer) (*dns.Msg, error) {
 	pconn, err := proxyDialer.ListenPacket(ctx)
 	if err != nil {
 		return nil, err
@@ -52,21 +53,21 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 	// Reuse a pooled buffer for the response read. Max DNS message size
 	// is 65535 bytes (dns.MaxMsgSize); the pool buffer is 8192 which covers
 	// the common case (~512–1232). Larger responses allocate.
-	respBuf := socks5ReadPool.Get().(*[]byte)
+	respBuf := socks5.ReadPool.Get().(*[]byte)
 	n, _, readErr := pconn.ReadFrom(*respBuf)
 	if readErr != nil {
-		socks5ReadPool.Put(respBuf)
+		socks5.ReadPool.Put(respBuf)
 		return nil, readErr
 	}
 
 	response := pool.DefaultMessagePool.Get()
 	response.Data = (*respBuf)[:n]
 	if err := response.Unpack(); err != nil {
-		socks5ReadPool.Put(respBuf)
+		socks5.ReadPool.Put(respBuf)
 		pool.DefaultMessagePool.Put(response)
 		return nil, err
 	}
-	socks5ReadPool.Put(respBuf)
+	socks5.ReadPool.Put(respBuf)
 
 	response.ID = msg.ID
 	return response, nil

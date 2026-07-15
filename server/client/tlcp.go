@@ -6,6 +6,7 @@ import (
 	"net"
 	"zjdns/config"
 	"zjdns/internal/log"
+	socks5 "zjdns/server/client/socks5"
 
 	"codeberg.org/miekg/dns"
 	"gitee.com/Trisia/gotlcp/tlcp"
@@ -26,7 +27,7 @@ func (c *Client) tlcpClientConfig(server *config.UpstreamServer) *tlcp.Config {
 
 // dialTLCPConn establishes a TCP connection (optionally proxied), performs a
 // TLCP handshake, and returns the resulting TLCP connection.
-func (c *Client) dialTLCPConn(ctx context.Context, addr string, tlcpConfig *tlcp.Config, proxyDialer *SOCKS5Dialer) (net.Conn, error) {
+func (c *Client) dialTLCPConn(ctx context.Context, addr string, tlcpConfig *tlcp.Config, proxyDialer *socks5.Dialer) (net.Conn, error) {
 	var tcpConn net.Conn
 	var err error
 	if proxyDialer != nil {
@@ -51,7 +52,7 @@ func (c *Client) dialTLCPConn(ctx context.Context, addr string, tlcpConfig *tlcp
 }
 
 // exchangeOverTLCP dials a TLCP connection and performs a single DNS exchange.
-func (c *Client) exchangeOverTLCP(ctx context.Context, msg *dns.Msg, addr string, tlcpConfig *tlcp.Config, proxyDialer *SOCKS5Dialer) (*dns.Msg, error) {
+func (c *Client) exchangeOverTLCP(ctx context.Context, msg *dns.Msg, addr string, tlcpConfig *tlcp.Config, proxyDialer *socks5.Dialer) (*dns.Msg, error) {
 	tlcpConn, err := c.dialTLCPConn(ctx, addr, tlcpConfig, proxyDialer)
 	if err != nil {
 		return nil, err

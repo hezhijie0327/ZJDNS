@@ -6,6 +6,7 @@ import (
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	socks5 "zjdns/server/client/socks5"
 
 	"codeberg.org/miekg/dns"
 )
@@ -46,7 +47,7 @@ func (c *Client) executeTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 
 // exchangeViaProxy sends a DNS query over TCP through a SOCKS5 proxy using
 // manual dial + dns.Conn exchange.
-func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *SOCKS5Dialer) (*dns.Msg, error) {
+func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *socks5.Dialer) (*dns.Msg, error) {
 	conn, err := proxyDialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
