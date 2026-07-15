@@ -25,7 +25,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Question is a type alias for resolver.Question to avoid duplicate definitions.
+// Question is a type alias for resolver.Question to avoid duplicate definitions
+// and conversion overhead at the handler↔resolver boundary.  The resolver owns the
+// canonical Question type; the handler reuses it via this alias.
 type Question = resolver.Question
 
 // Resolver is the interface for DNS query resolution, defined in the consumer
@@ -48,11 +50,8 @@ type LatencyProber interface {
 type Handler struct {
 	closed int32 // hot-path: checked on every query via atomic load
 
-	config       *config.ServerConfig
-	cache        cache.Store
-	reverseCache interface {
-		ReverseLookup(string) []cache.LookupResult
-	}
+	config             *config.ServerConfig
+	cache              cache.Store
 	edns               *edns.Handler
 	zoneEvaluator      *zone.Evaluator
 	tagMatcher         func(qname string, ip net.IP) map[string]bool // rule tag lookup for zone/upstream
@@ -97,9 +96,6 @@ func New(
 		cacheRefreshCtx:   bg.RefreshCtx,
 		ctx:               bg.Ctx,
 	}
-	h.reverseCache, _ = cacheStore.(interface {
-		ReverseLookup(string) []cache.LookupResult
-	})
 	// Initialize DNS64 synthesizer.
 	if cfg.Server.Features.DNS64 != nil && cfg.Server.Features.DNS64.Prefix != "" {
 		synth, err := dns64.New(cfg.Server.Features.DNS64.Prefix)
@@ -359,11 +355,7 @@ func (h *Handler) lookupReversePTR(question Question) (records []dns.RR, entryID
 		return nil, nil
 	}
 
-	if h.reverseCache == nil {
-		return nil, nil
-	}
-
-	results := h.reverseCache.ReverseLookup(ip.String())
+	results := h.cache.ReverseLookup(ip.String())
 	if len(results) == 0 {
 		return nil, nil
 	}
