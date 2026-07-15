@@ -1,4 +1,10 @@
 package stamp
+
+import (
+	"encoding/base64"
+	"encoding/binary"
+)
+
 func (s *Stamp) String() string {
 	switch s.Proto {
 	case ProtoPlain:
