@@ -58,10 +58,10 @@ func TestIsSecureProtocol(t *testing.T) {
 		{"quic", true},
 		{"https", true},
 		{"http3", true},
-		{"dot", true},
-		{"doq", true},
-		{"doh", true},
-		{"doh3", true},
+		{"tls", true},
+		{"quic", true},
+		{"https", true},
+		{"http3", true},
 		{"DoT", false}, // case-sensitive — callers normalize to lowercase first
 	}
 	for _, tc := range tests {

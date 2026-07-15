@@ -53,9 +53,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		clientIP = net.ParseIP(host)
 	}
 
-	protocol := config.ProtoDOH
+	protocol := config.ProtoHTTP
 	if strings.HasPrefix(r.Proto, "HTTP/3") {
-		protocol = config.ProtoDOH3
+		protocol = config.ProtoHTTP3
 	}
 	response := s.handler.ServeDNS(req, clientIP, true, protocol)
 	pool.DefaultMessagePool.Put(req)

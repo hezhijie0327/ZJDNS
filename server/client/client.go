@@ -244,13 +244,13 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 	}
 
 	switch protocol {
-	case config.ProtoDOT, config.ProtoTLS:
+	case config.ProtoTLS:
 		return c.executeTLS(ctx, msg, server, c.eTLSClientConfig(server))
-	case config.ProtoDOQ, config.ProtoQUIC:
+	case config.ProtoQUIC:
 		return c.executeQUIC(ctx, msg, server, c.stdTLSConfig(server))
-	case config.ProtoDOH, config.ProtoHTTP:
+	case config.ProtoHTTP:
 		return c.executeDOH(ctx, msg, server, c.eTLSClientConfig(server))
-	case config.ProtoDOH3, config.ProtoHTTP3:
+	case config.ProtoHTTP3:
 		return c.executeDOH3(ctx, msg, server, c.stdTLSConfig(server))
 	case config.ProtoTLCP:
 		return c.executeTLCP(ctx, msg, server, c.tlcpClientConfig(server))
@@ -258,7 +258,7 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		return c.executeDTLS(ctx, msg, server)
 	case config.ProtoDTLCP:
 		return c.executeDTLCP(ctx, msg, server)
-	case config.ProtoDOH_TLCP:
+	case config.ProtoHTTPTLCP:
 		return c.executeDOH_TLCP(ctx, msg, server, c.tlcpClientConfig(server))
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)

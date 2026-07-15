@@ -177,17 +177,12 @@ const (
 	ProtoICMP      = "icmp"
 	ProtoHTTPPlain = "http"
 
-	// User-facing protocol aliases (map to config file values).
-	ProtoDOT         = "dot"          // DoT user config alias
-	ProtoDOQ         = "doq"          // DoQ user config alias
-	ProtoDOH         = "doh"          // DoH user config alias
-	ProtoDOH3        = "doh3"         // DoH3 user config alias
 	ProtoTLSTCP      = "tcp-tls"      // dns.Client.Net for TLS-wrapped TCP
 	ProtoDNSCrypt    = "dnscrypt"     // DNSCrypt v2 encrypted DNS (UDP)
 	ProtoDNSCryptTCP = "dnscrypt-tcp" // DNSCrypt v2 encrypted DNS (TCP)
 	ProtoTLCP        = "tlcp"         // DoT over TLCP (GB/T 38636-2020)
-	ProtoDOH_TLCP    = "doh-tlcp"     // DoH over TLCP
-	ProtoDTLS        = "dod"          // DNS-over-DTLS (RFC 8094)
+	ProtoHTTPTLCP    = "http-tlcp"    // DoH over TLCP (matches config protocol.http_tlcp)
+	ProtoDTLS        = "dtls"         // DNS-over-DTLS (RFC 8094, matches config protocol.dod)
 	ProtoDTLCP       = "dtlcp"        // DNS-over-DTLCP (GM/T 0128-2023)
 )
 

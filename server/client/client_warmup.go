@@ -124,7 +124,7 @@ func (c *Client) WarmUpConnections(servers []config.UpstreamServer) {
 
 func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamServer, protocol string) {
 	switch protocol {
-	case config.ProtoDOT, config.ProtoTLS:
+	case config.ProtoTLS:
 		key := transportKey(server.Address, server.ServerName, server.SkipTLSVerify, server.Proxy)
 		proxyDialer := c.getProxyDialer(server)
 		dotConfig := c.eTLSClientConfig(server).Clone()
@@ -141,7 +141,7 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 			log.Debugf("UPSTREAM: pre-warmed DoT connection to %s", server.Address)
 		}
 
-	case config.ProtoDOQ, config.ProtoQUIC:
+	case config.ProtoQUIC:
 		poolKey := proxyPoolKey(server.Address, server.Proxy)
 		proxyDialer := c.getProxyDialer(server)
 		dialTLS := c.stdTLSConfig(server).Clone()
@@ -170,7 +170,7 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 			log.Debugf("UPSTREAM: pre-warmed DoQ connection to %s", server.Address)
 		}
 
-	case config.ProtoDOH, config.ProtoHTTP:
+	case config.ProtoHTTP:
 		parsedURL, err := url.Parse(server.Address)
 		if err != nil {
 			log.Debugf("UPSTREAM: pre-warm DoH parse %s: %v", server.Address, err)
@@ -184,7 +184,7 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 		c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
 		log.Debugf("UPSTREAM: pre-warmed DoH transport for %s (key=%s)", server.Address, key)
 
-	case config.ProtoDOH3, config.ProtoHTTP3:
+	case config.ProtoHTTP3:
 		parsedURL, err := url.Parse(server.Address)
 		if err != nil {
 			log.Debugf("UPSTREAM: pre-warm DoH3 parse %s: %v", server.Address, err)

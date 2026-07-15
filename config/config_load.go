@@ -149,11 +149,11 @@ func protocolMatchesStamp(userProto string, stampProto zstamp.StampProtoType) bo
 	case zstamp.ProtoDNSCrypt:
 		return userProto == ProtoDNSCrypt || userProto == ProtoDNSCryptTCP
 	case zstamp.ProtoDOH:
-		return userProto == ProtoDOH || userProto == ProtoHTTP
+		return userProto == ProtoHTTP
 	case zstamp.ProtoDOT:
-		return userProto == ProtoDOT || userProto == ProtoTLS
+		return userProto == ProtoTLS
 	case zstamp.ProtoDOQ:
-		return userProto == ProtoDOQ || userProto == ProtoQUIC
+		return userProto == ProtoQUIC
 	case zstamp.ProtoODoHTarget, zstamp.ProtoDNSCryptRelay, zstamp.ProtoODoHRelay:
 		// These stamp types have no direct config protocol — always accept.
 		return true

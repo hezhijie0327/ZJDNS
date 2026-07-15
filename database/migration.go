@@ -33,6 +33,7 @@ var migrations = []migration{
 	{"3.2.20", "rebuild zone_entries WITHOUT ROWID with is_wildcard-first PK", migrateV3_2_20},
 	{"3.2.21", "denormalize qname/qtype/qclass into request_log", migrateV3_2_21},
 	{"3.2.22", "drop infra_cache table", migrateV3_2_22},
+	{"3.3.5", "normalize protocol identifiers in request_log and entry_hit_counters", migrateV3_3_5},
 }
 
 func migrateV3_2_17(db *DB) error {
@@ -227,6 +228,30 @@ func (db *DB) runMigrations() error {
 			Version,
 		); err != nil {
 			return fmt.Errorf("update version to %s: %w", Version, err)
+		}
+	}
+	return nil
+}
+
+// migrateV3_3_5 normalizes protocol identifiers stored in request_log and
+// entry_hit_counters to match canonical config field names (dot->tls, doq->quic,
+// doh->https, doh3->http3, dod->dtls, doh-tlcp->http-tlcp). Each UPDATE is
+// idempotent — already-migrated rows are unaffected.
+func migrateV3_3_5(db *DB) error {
+	renames := [][2]string{
+		{"dot", "tls"},
+		{"doq", "quic"},
+		{"doh", "https"},
+		{"doh3", "http3"},
+		{"dod", "dtls"},
+		{"doh-tlcp", "http-tlcp"},
+	}
+	for _, r := range renames {
+		if _, err := db.SQ.Exec("UPDATE request_log SET protocol = ? WHERE protocol = ?", r[1], r[0]); err != nil {
+			return fmt.Errorf("update request_log protocol %s->%s: %w", r[0], r[1], err)
+		}
+		if _, err := db.SQ.Exec("UPDATE entry_hit_counters SET protocol = ? WHERE protocol = ?", r[1], r[0]); err != nil {
+			return fmt.Errorf("update entry_hit_counters protocol %s->%s: %w", r[0], r[1], err)
 		}
 	}
 	return nil

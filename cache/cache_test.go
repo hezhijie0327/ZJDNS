@@ -339,11 +339,11 @@ func TestRecordRequest_MultipleResults(t *testing.T) {
 
 	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess, EntryID: entryID})
 	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess, EntryID: entryID})
-	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doh", Result: "hit", Rcode: dns.RcodeSuccess, EntryID: entryID})
+	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "https", Result: "hit", Rcode: dns.RcodeSuccess, EntryID: entryID})
 
 	var udpHits, dohHits int64
 	err := mc.db.SQ.QueryRow(
-		"SELECT COALESCE(SUM(CASE WHEN protocol='udp' THEN hit_count ELSE 0 END), 0), COALESCE(SUM(CASE WHEN protocol='doh' THEN hit_count ELSE 0 END), 0) FROM entry_hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='example.com'",
+		"SELECT COALESCE(SUM(CASE WHEN protocol='udp' THEN hit_count ELSE 0 END), 0), COALESCE(SUM(CASE WHEN protocol='https' THEN hit_count ELSE 0 END), 0) FROM entry_hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='example.com'",
 	).Scan(&udpHits, &dohHits)
 	if err != nil {
 		t.Fatalf("hit_counters query: %v", err)
@@ -683,15 +683,15 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	// ── Phase 5: RecordRequest logs queries ────────────────────────────────
 	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doh", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "doq", Result: "stale", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "https", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "quic", Result: "stale", Rcode: dns.RcodeSuccess})
 	mc.RecordRequest(&RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
 	mc.RecordRequest(&RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess})
 
 	var udpHits, dohHits, doqStale int64
 	err = mc.db.SQ.QueryRow(
 		`SELECT COALESCE(SUM(CASE WHEN hc.protocol='udp' THEN hc.hit_count ELSE 0 END), 0),
-		        COALESCE(SUM(CASE WHEN hc.protocol='doh' THEN hc.hit_count ELSE 0 END), 0)
+		        COALESCE(SUM(CASE WHEN hc.protocol='https' THEN hc.hit_count ELSE 0 END), 0)
 		 FROM entry_hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='www.example.com'`,
 	).Scan(&udpHits, &dohHits)
 	_ = mc.db.SQ.QueryRow(

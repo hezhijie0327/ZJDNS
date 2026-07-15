@@ -129,12 +129,12 @@ func validateRuleSets(cfg *ServerConfig) (map[string]bool, error) {
 
 func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) error {
 	validProtocols := map[string]bool{
-		ProtoUDP: true, ProtoTCP: true, ProtoTLS: true, ProtoDOT: true,
-		ProtoQUIC: true, ProtoDOQ: true,
-		ProtoHTTP: true, ProtoDOH: true,
-		ProtoHTTP3: true, ProtoDOH3: true,
+		ProtoUDP: true, ProtoTCP: true, ProtoTLS: true,
+		ProtoQUIC:   true,
+		ProtoHTTP:   true,
+		ProtoHTTP3:  true,
 		ProtoTLSTCP: true, ProtoDNSCrypt: true, ProtoDNSCryptTCP: true,
-		ProtoTLCP: true, ProtoDOH_TLCP: true,
+		ProtoTLCP: true, ProtoHTTPTLCP: true,
 		ProtoDTLS: true, ProtoDTLCP: true,
 	}
 
@@ -151,7 +151,7 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 				// sdns:// string is not a valid host:port or URL.
 			} else if _, _, err := net.SplitHostPort(server.Address); err != nil {
 				if protocol == ProtoHTTP || protocol == ProtoHTTP3 ||
-					protocol == ProtoDOH || protocol == ProtoDOH3 || protocol == ProtoDOH_TLCP {
+					protocol == ProtoHTTPTLCP {
 					if _, err := url.Parse(server.Address); err != nil {
 						return fmt.Errorf("upstream server %d address invalid: %w", i, err)
 					}

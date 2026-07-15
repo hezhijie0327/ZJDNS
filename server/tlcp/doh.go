@@ -107,7 +107,7 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	clientIP := net.ParseIP(host)
 
-	resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoDOH_TLCP)
+	resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoHTTPTLCP)
 	if resp == nil {
 		return
 	}

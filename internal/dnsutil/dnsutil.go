@@ -68,7 +68,7 @@ func IsValidDomainLabels(domain string) bool {
 // internal package cannot import config for the Proto* constants.
 func IsSecureProtocol(protocol string) bool {
 	switch protocol {
-	case "tls", "dot", "quic", "doq", "https", "doh", "http3", "doh3", "tlcp", "doh-tlcp", "dod", "dtlcp":
+	case "tls", "quic", "https", "http3", "tlcp", "http-tlcp", "dtls", "dtlcp":
 		return true
 	default:
 		return false

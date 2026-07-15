@@ -179,8 +179,8 @@ func (s *SQLiteCache) Stats() []string {
 
 	var avgMs float64
 	var total, hits, misses, stales, zones, errCount, blockedCount, badcookieCount int64
-	var hcUDP, hcTCP, hcDOT, hcDOQ, hcDOH, hcDOH3, hcDOD, hcDTLCP, hcDNSCrypt, hcDNSCryptTCP, hcTLCP, hcDoHTLCP int64
-	var rlUDP, rlTCP, rlDOT, rlDOQ, rlDOH, rlDOH3, rlDOD, rlDTLCP, rlDNSCrypt, rlDNSCryptTCP, rlTLCP, rlDoHTLCP int64
+	var hcUDP, hcTCP, hcTLS, hcQUIC, hcHTTPS, hcHTTP3, hcDTLS, hcDTLCP, hcDNSCrypt, hcDNSCryptTCP, hcTLCP, hcHTTPTLCP int64
+	var rlUDP, rlTCP, rlTLS, rlQUIC, rlHTTPS, rlHTTP3, rlDTLS, rlDTLCP, rlDNSCrypt, rlDNSCryptTCP, rlTLCP, rlHTTPTLCP int64
 	var hijack, fallback, totalMS, hitTotalMS int64
 	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
 	var secureCount, insecureCount, bogusCount int64
@@ -191,19 +191,19 @@ func (s *SQLiteCache) Stats() []string {
 		"SELECT COALESCE(SUM(hit_count), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='udp' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='tcp' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dot' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='doq' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='doh' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='doh3' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dod' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='tls' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='quic' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='https' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='http3' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dtls' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dtlcp' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dnscrypt' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dnscrypt-tcp' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='tlcp' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='doh-tlcp' THEN hit_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='http-tlcp' THEN hit_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(total_response_ms), 0)"+
 			" FROM entry_hit_counters",
-	).Scan(&hits, &hcUDP, &hcTCP, &hcDOT, &hcDOQ, &hcDOH, &hcDOH3, &hcDOD, &hcDTLCP, &hcDNSCrypt, &hcDNSCryptTCP, &hcTLCP, &hcDoHTLCP, &hitTotalMS)
+	).Scan(&hits, &hcUDP, &hcTCP, &hcTLS, &hcQUIC, &hcHTTPS, &hcHTTP3, &hcDTLS, &hcDTLCP, &hcDNSCrypt, &hcDNSCryptTCP, &hcTLCP, &hcHTTPTLCP, &hitTotalMS)
 
 	// Detail rows from request_log since last stats clear.
 	_ = s.db.SQ.QueryRow(
@@ -216,16 +216,16 @@ func (s *SQLiteCache) Stats() []string {
 			" COALESCE(SUM(CASE WHEN result='badcookie' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='udp' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='tcp' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dot' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='doq' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='doh' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='doh3' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dod' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='tls' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='quic' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='https' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='http3' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dtls' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dtlcp' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dnscrypt' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='dnscrypt-tcp' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN protocol='tlcp' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='doh-tlcp' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='http-tlcp' THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN hijack THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN fallback THEN 1 ELSE 0 END), 0),"+
 			" COALESCE(SUM(response_time_ms), 0)"+
@@ -233,23 +233,23 @@ func (s *SQLiteCache) Stats() []string {
 	).Scan(
 		&total,
 		&misses, &stales, &zones, &errCount, &blockedCount, &badcookieCount,
-		&rlUDP, &rlTCP, &rlDOT, &rlDOQ, &rlDOH, &rlDOH3, &rlDOD, &rlDTLCP, &rlDNSCrypt, &rlDNSCryptTCP, &rlTLCP, &rlDoHTLCP,
+		&rlUDP, &rlTCP, &rlTLS, &rlQUIC, &rlHTTPS, &rlHTTP3, &rlDTLS, &rlDTLCP, &rlDNSCrypt, &rlDNSCryptTCP, &rlTLCP, &rlHTTPTLCP,
 		&hijack, &fallback, &totalMS,
 	)
 
 	total += hits
 	udp := hcUDP + rlUDP
 	tcp := hcTCP + rlTCP
-	dot := hcDOT + rlDOT
-	doq := hcDOQ + rlDOQ
-	doh := hcDOH + rlDOH
-	doh3 := hcDOH3 + rlDOH3
-	dod := hcDOD + rlDOD
+	tls := hcTLS + rlTLS
+	quic := hcQUIC + rlQUIC
+	https := hcHTTPS + rlHTTPS
+	http3 := hcHTTP3 + rlHTTP3
+	dtls := hcDTLS + rlDTLS
 	dtlcp := hcDTLCP + rlDTLCP
 	dnscrypt := hcDNSCrypt + rlDNSCrypt
 	dnscryptTCP := hcDNSCryptTCP + rlDNSCryptTCP
 	tlcp := hcTLCP + rlTLCP
-	dohTLCP := hcDoHTLCP + rlDoHTLCP
+	httpTLCP := hcHTTPTLCP + rlHTTPTLCP
 
 	// Average across all request types (hit + miss + stale + zone + error).
 	if total > 0 {
@@ -327,10 +327,10 @@ func (s *SQLiteCache) Stats() []string {
 			hijack, fallback),
 		fmt.Sprintf("udp=%d tcp=%d",
 			udp, tcp),
-		fmt.Sprintf("dot=%d doq=%d doh=%d doh3=%d, dod=%d",
-			dot, doq, doh, doh3, dod),
-		fmt.Sprintf("dnscrypt=%d dnscrypt-tcp=%d tlcp=%d doh-tlcp=%d dtlcp=%d",
-			dnscrypt, dnscryptTCP, tlcp, dohTLCP, dtlcp),
+		fmt.Sprintf("tls=%d quic=%d https=%d http3=%d, dtls=%d",
+			tls, quic, https, http3, dtls),
+		fmt.Sprintf("dnscrypt=%d dnscrypt-tcp=%d tlcp=%d http-tlcp=%d dtlcp=%d",
+			dnscrypt, dnscryptTCP, tlcp, httpTLCP, dtlcp),
 		fmt.Sprintf("secure=%d insecure=%d bogus=%d",
 			secureCount, insecureCount, bogusCount),
 	}

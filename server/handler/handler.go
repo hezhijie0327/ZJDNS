@@ -460,7 +460,7 @@ func (h *Handler) processZone(req *dns.Msg, question *Question, clientIP net.IP,
 // Returns 0 for protocols where TCP keepalive is not applicable (UDP, DoH, DoQ).
 func tcpKeepaliveTimeoutForProtocol(protocol string) uint16 {
 	switch protocol {
-	case config.ProtoTCP, config.ProtoDOT:
+	case config.ProtoTCP, config.ProtoTLS:
 		return uint16(config.DefaultEDNSTCPKeepaliveTimeout)
 	default:
 		return 0

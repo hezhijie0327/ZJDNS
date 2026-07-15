@@ -208,7 +208,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 				}
 			}()
 
-			response := s.handler.ServeDNS(query, ip, true, config.ProtoDOT)
+			response := s.handler.ServeDNS(query, ip, true, config.ProtoTLS)
 			if response == nil {
 				return
 			}
