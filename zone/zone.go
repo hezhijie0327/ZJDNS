@@ -426,7 +426,10 @@ func matchScore(entryTags []matchTag, matchedTags map[string]bool) int {
 		return 0 // untagged — lowest priority
 	}
 	if matchedTags == nil {
-		return -1 // no client tags but rule requires them → rejected
+		// nil means no tag matcher configured — treat as empty (any
+		// negated-only rule passes, positive rules fail). This keeps
+		// zone behaviour consistent whether or not a ruleset exists.
+		matchedTags = map[string]bool{}
 	}
 	score := 0
 	for _, mt := range entryTags {

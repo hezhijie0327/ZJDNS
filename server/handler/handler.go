@@ -398,12 +398,11 @@ func (h *Handler) processZone(req *dns.Msg, question *Question, clientIP net.IP,
 	if !h.zoneEvaluator.HasRules() {
 		return nil, false
 	}
-	log.Debugf("ZONE: evaluating rules for %s qtype=%s client=%s", question.Name, dns.TypeToString[question.Qtype], clientIP)
-
 	var matchedTags map[string]bool
 	if h.tagMatcher != nil {
 		matchedTags = h.tagMatcher(question.Name, clientIP)
 	}
+	log.Debugf("ZONE: evaluating rules for %s qtype=%s client=%s tags=%v", question.Name, dns.TypeToString[question.Qtype], clientIP, matchedTags)
 	if h.zoneEvaluator.Bypass(matchedTags) {
 		return nil, false
 	}

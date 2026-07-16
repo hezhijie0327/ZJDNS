@@ -8,22 +8,24 @@ When a multi-step task is interrupted, write progress to `HANDOVER.md` so the ne
 
 ## Guidelines
 
-1. Think before acting. Read existing files before writing code.
-2. Be concise in output but thorough in reasoning.
-3. Prefer editing over rewriting whole files.
-4. Do not re-read files you have already read.
-5. Test your code before declaring done.
-6. No sycophantic openers or closing fluff.
-7. Keep solutions simple and direct.
-8. User instructions always override this file.
-9. Commit incrementally — every batch of related changes should be committed
-   with a descriptive message. Present changes for review before committing.
-10. Run `go fix ./... && golangci-lint run && golangci-lint fmt` before committing. Zero warnings required.
+1. **RFC references:** Check `docs/rfc/` for the authoritative copy before searching the internet.
+   The project mirrors all referenced RFCs and drafts locally (see `docs/rfc/README.md`).
+3. Think before acting. Read existing files before writing code.
+4. Be concise in output but thorough in reasoning.
+5. Prefer editing over rewriting whole files.
+6. Do not re-read files you have already read.
+7. Test your code before declaring done.
+8. No sycophantic openers or closing fluff.
+9. Keep solutions simple and direct.
+10. User instructions always override this file.
+11. Commit incrementally — every batch of related changes should be committed
+    with a descriptive message. Present changes for review before committing.
+12. Run `go fix ./... && golangci-lint run && golangci-lint fmt` before committing. Zero warnings required.
     - No global linter excludes — all suppressions are inline `//nolint:NAME // reason`
     - Declaration order enforced by `decorder`: `type → const → var → func` in every file
     - Every nolint comment must include the linter name and a concrete reason
     - Formatter: `gofumpt` (stricter gofmt) — imports sorted alphabetically, no blank-line groups
-11. Don't waste time wrestling with indentation or formatting issues when editing
+13. Don't waste time wrestling with indentation or formatting issues when editing
     files (e.g. tab vs space mismatches in the Edit tool). Focus on the code
     logic — `golangci-lint fmt` will fix formatting. Use `sed` or `python3`
     freely when the Edit tool struggles with whitespace.

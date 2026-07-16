@@ -991,4 +991,115 @@ func TestEvaluator_MatchScore_Priority(t *testing.T) {
 	if result.Matched {
 		t.Error("untagged AAAA: should not match (no AAAA fallback rule)")
 	}
+
+	// ── nil matchedTags (no tag matcher) — should behave like empty map ─────
+	result = z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.Matched {
+		t.Fatal("nil-matchedTags A: expected match (fallback)")
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("nil-matchedTags A: answer len = %d, want 1", len(result.Answer))
+	}
+	a = result.Answer[0].(*dns.A)
+	if a.A.String() != "127.0.0.1" {
+		t.Errorf("nil-matchedTags A: A = %s, want 127.0.0.1 (fallback)", a.A.String())
+	}
+}
+
+// TestEvaluator_MatchTags_SubnetPriority reproduces the exact scenario from
+// demo.zone.txt: two subnets with fallback, verifying that a client from
+// subnet B gets subnet B's IP, not the fallback.
+//
+// Zone rules (all for vpn.zhijie.online, type A):
+//
+//	rule 1: match=!net_10_192_0_0,!net_10_192_32_0 → 127.0.0.1 (fallback)
+//	rule 2: match=net_10_192_0_0                   → 10.192.7.1  (subnet A)
+//	rule 3: match=net_10_192_32_0                  → 10.192.39.1 (subnet B)
+func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{
+			Name:  "vpn.zhijie.online",
+			Match: []string{"!net_10_192_0_0", "!net_10_192_32_0"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "127.0.0.1", TTL: 300},
+			},
+		},
+		{
+			Name:  "vpn.zhijie.online",
+			Match: []string{"net_10_192_0_0"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "10.192.7.1", TTL: 300},
+			},
+		},
+		{
+			Name:  "vpn.zhijie.online",
+			Match: []string{"net_10_192_32_0"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "10.192.39.1", TTL: 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// Client in subnet B (10.192.32.0/24) → should get 10.192.39.1.
+	result := z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, map[string]bool{"net_10_192_32_0": true})
+	if !result.Matched {
+		t.Fatal("subnet B client: expected match (this is the bug)")
+	}
+	if result.Rcode != dns.RcodeSuccess {
+		t.Errorf("subnet B client: rcode = %d, want NOERROR", result.Rcode)
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("subnet B client: answer len = %d, want 1", len(result.Answer))
+	}
+	a := result.Answer[0].(*dns.A)
+	if a.A.String() != "10.192.39.1" {
+		t.Errorf("subnet B client: A = %s, want 10.192.39.1 (got fallback: 127.0.0.1?)", a.A.String())
+	}
+
+	// Client in subnet A (10.192.0.0/19) → should get 10.192.7.1.
+	result = z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, map[string]bool{"net_10_192_0_0": true})
+	if !result.Matched {
+		t.Fatal("subnet A client: expected match")
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("subnet A client: answer len = %d, want 1", len(result.Answer))
+	}
+	a = result.Answer[0].(*dns.A)
+	if a.A.String() != "10.192.7.1" {
+		t.Errorf("subnet A client: A = %s, want 10.192.7.1", a.A.String())
+	}
+
+	// External client (no tags) → should get fallback 127.0.0.1.
+	result = z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if !result.Matched {
+		t.Fatal("external client: expected fallback match")
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("external client: answer len = %d, want 1", len(result.Answer))
+	}
+	a = result.Answer[0].(*dns.A)
+	if a.A.String() != "127.0.0.1" {
+		t.Errorf("external client: A = %s, want 127.0.0.1", a.A.String())
+	}
+
+	// External client (nil matchedTags) → should get fallback 127.0.0.1.
+	result = z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, nil)
+	if !result.Matched {
+		t.Fatal("nil-matchedTags client: expected fallback match")
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("nil-matchedTags client: answer len = %d, want 1", len(result.Answer))
+	}
+	a = result.Answer[0].(*dns.A)
+	if a.A.String() != "127.0.0.1" {
+		t.Errorf("nil-matchedTags client: A = %s, want 127.0.0.1", a.A.String())
+	}
 }
