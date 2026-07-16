@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.4.2-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.4.3-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -252,9 +252,9 @@ TLCP 密码套件（默认全部启用）：`ECC_SM4_GCM_SM3`、`ECC_SM4_CBC_SM3
 
 ### 可观测性
 
-- **运行时查询**：`dig zjdns.stats CH TXT` 缓存统计（8 条 TXT 记录：概览、成功、错误、响应码、异常、明文协议、加密协议、DNSSEC）
+- **运行时查询**：`dig zjdns.stats CH TXT` 缓存统计（10 条 TXT 记录：概览、缓存命中、异常、响应码、劫持/回退、明文协议、加密协议、DNSCrypt、TLCP、DNSSEC）
 - **缓存管理**：`dig zjdns.db.clear CH TXT` 全清 / `.db.clear.cache` 清缓存 / `.db.clear.stats` 清零统计 / `.db.clear.latency` 清延迟 / `.db.clear.zone` 清区域规则 / `.db.clear.ruleset` 清规则集，仅限本地回环
-- **组件级日志**：`log_level` 支持 `level:COMP1,COMP2` 语法（如 `debug:UPSTREAM,SECURITY`），20 个日志前缀
+- **组件级日志**：`log_level` 支持 `level:COMP1,COMP2` 语法（如 `debug:UPSTREAM,SECURITY`），23 个日志前缀
 - **CLI 分析工具**：`zjdns --sql <db> <query>` 只读查询（`PRAGMA query_only=ON`），加 `--rw` 读写（含确认提示）
 - **Schema 迁移**：增量版本号 `version`，老库自动升级；旧迁移导出 `.sql` 文件可手动执行
 - **pprof**：标准 Go 性能分析端点

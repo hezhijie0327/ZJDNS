@@ -175,6 +175,9 @@ func (db *DB) SQLQuery(query string, args ...any) (*sql.Rows, error) {
 // AddEntryCount atomically adds delta to the entry counter.
 func (db *DB) AddEntryCount(delta int64) { db.entryCount.Add(delta) }
 
+// EntryCount returns the current entry count.
+func (db *DB) EntryCount() int64 { return db.entryCount.Load() }
+
 // SetEntryCount atomically sets the entry counter to n.
 func (db *DB) SetEntryCount(n int64) { db.entryCount.Store(n) }
 
