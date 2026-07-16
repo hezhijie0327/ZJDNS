@@ -324,6 +324,15 @@ func buildCertTXTForCert(cert *Certificate) []string {
 	return chunks
 }
 
+// remainingTTL returns the seconds until this key's certificates expire, floored at 0.
+func (k keyEntry) remainingTTL() uint32 {
+	d := time.Until(k.createdAt.Add(config.DefaultDNSCryptCertificateTTL + config.DefaultDNSCryptKeyOverlap))
+	if d <= 0 {
+		return 0
+	}
+	return uint32(d.Seconds())
+}
+
 // rotateKeys generates a fresh resolver key pair, creates a new certificate
 // pair signed with the same Ed25519 identity key, and prepends it to the key
 // list.  Entries older than key lifetime + overlap are purged.
@@ -422,11 +431,12 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 	reply := dnsutil.SetReply(new(dns.Msg), m)
 	s.mu.RLock()
 	for _, k := range s.keys {
+		remainingTTL := k.remainingTTL()
 		for _, cert := range []*Certificate{k.pair.Classical, k.pair.PQ} {
 			txt := &dns.TXT{
 				Hdr: dns.Header{
 					Name:  q.Header().Name,
-					TTL:   config.DefaultTTL,
+					TTL:   remainingTTL,
 					Class: dns.ClassINET,
 				},
 				TXT: rdata.TXT{

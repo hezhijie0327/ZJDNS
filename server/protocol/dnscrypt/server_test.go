@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
+
+	"codeberg.org/miekg/dns"
 )
 
 func TestKeyRotation(t *testing.T) {
@@ -100,5 +102,122 @@ func TestCertPairTXT(t *testing.T) {
 	}
 	if srv.keys[0].pair.Classical.NotAfter != srv.keys[0].pair.PQ.NotAfter {
 		t.Error("classical and PQ NotAfter differ")
+	}
+}
+
+func TestHandshakeTTL(t *testing.T) {
+	certificateCfg := &config.DNSCryptCertificate{}
+
+	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Build a valid handshake TXT query.
+	m := new(dns.Msg)
+	txtRR := new(dns.TXT)
+	txtRR.Hdr = dns.Header{Name: "2.dnscrypt-cert.example.com.", Class: dns.ClassINET}
+	m.Question = []dns.RR{txtRR}
+	if err := m.Pack(); err != nil {
+		t.Fatalf("pack query: %v", err)
+	}
+	query := m.Data
+
+	certValiditySec := uint32((config.DefaultDNSCryptCertificateTTL + config.DefaultDNSCryptKeyOverlap).Seconds())
+
+	// Case 1: single fresh window → 2 certs (Classical + PQ), TTL ≈ 25h.
+	// Proves TTL is certificate-validity-based, not the old static DefaultTTL=10.
+	res, err := srv.handleHandshake(query)
+	if err != nil {
+		t.Fatalf("handleHandshake: %v", err)
+	}
+
+	reply := new(dns.Msg)
+	reply.Data = res
+	if err := reply.Unpack(); err != nil {
+		t.Fatalf("unpack reply: %v", err)
+	}
+	if len(reply.Answer) != 2 {
+		t.Fatalf("single window: want 2 answer records, got %d", len(reply.Answer))
+	}
+
+	for _, rr := range reply.Answer {
+		ttl := rr.Header().TTL
+		if ttl <= config.DefaultTTL {
+			t.Errorf("fresh key: TTL = %d; expected > %d (cert-validity-based, not static DefaultTTL)", ttl, config.DefaultTTL)
+		}
+		if ttl > certValiditySec {
+			t.Errorf("fresh key: TTL = %d; expected <= %d (certValidity)", ttl, certValiditySec)
+		}
+	}
+
+	// Case 2: rotate + age the old key to 23h → 4 certs (2 windows × 2 certs).
+	// New window TTL ≈ 25h, old window TTL ≈ 2h.
+	srv.rotateKeys()
+	srv.mu.Lock()
+	srv.keys[1].createdAt = time.Now().Add(-23 * time.Hour)
+	srv.mu.Unlock()
+
+	res, err = srv.handleHandshake(query)
+	if err != nil {
+		t.Fatalf("handleHandshake multi-window: %v", err)
+	}
+
+	reply = new(dns.Msg)
+	reply.Data = res
+	if err := reply.Unpack(); err != nil {
+		t.Fatalf("unpack reply multi-window: %v", err)
+	}
+
+	if len(reply.Answer) != 4 {
+		t.Fatalf("multi-window: want 4 answer records (2 windows × 2 certs), got %d", len(reply.Answer))
+	}
+
+	// First two records (keys[0]): Classical + PQ, fresh → ≈25h.
+	for i := range 2 {
+		ttl := reply.Answer[i].Header().TTL
+		if ttl <= config.DefaultTTL {
+			t.Errorf("multi-window fresh[%d]: TTL = %d; expected > %d", i, ttl, config.DefaultTTL)
+		}
+		if ttl > certValiditySec {
+			t.Errorf("multi-window fresh[%d]: TTL = %d; expected <= %d", i, ttl, certValiditySec)
+		}
+	}
+
+	// Last two records (keys[1]): Classical + PQ, aged 23h → ≈2h = 7200s.
+	for i := range 2 {
+		j := i + 2
+		ttl := reply.Answer[j].Header().TTL
+		if ttl < 7080 || ttl > 7320 {
+			t.Errorf("multi-window aged[%d]: TTL = %d; expected ~7200 (±120)", j, ttl)
+		}
+	}
+
+	// Case 3: old key > 25h → purged. Simulate by removing keys[1]:
+	// back to 2 certs from the single remaining window.
+	srv.mu.Lock()
+	srv.keys = srv.keys[:1]
+	srv.mu.Unlock()
+
+	res, err = srv.handleHandshake(query)
+	if err != nil {
+		t.Fatalf("handleHandshake after purge: %v", err)
+	}
+
+	reply = new(dns.Msg)
+	reply.Data = res
+	if err := reply.Unpack(); err != nil {
+		t.Fatalf("unpack reply after purge: %v", err)
+	}
+
+	if len(reply.Answer) != 2 {
+		t.Fatalf("after purge: want 2 answer records, got %d", len(reply.Answer))
+	}
+
+	for _, rr := range reply.Answer {
+		ttl := rr.Header().TTL
+		if ttl <= config.DefaultTTL || ttl > certValiditySec {
+			t.Errorf("after purge: TTL = %d; expected <= %d", ttl, certValiditySec)
+		}
 	}
 }
