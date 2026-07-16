@@ -537,7 +537,7 @@ go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X mai
 
 ## 调试
 
-端到端协议调试配置及文档见 [`docs/debug/`](docs/debug/TESTING.md)，覆盖场景：
+端到端协议调试配置及文档见 [`docs/debug/`](docs/debug/DEBUG.md)，覆盖场景：
 
 - **ZJDNS ↔ ZJDNS**：UDP / TCP / TLS / HTTPS / HTTP3 / QUIC / DTLS 回环
 - **ZJDNS ↔ RouteDNS**：DNS-over-DTLS (RFC 8094) 互操作
