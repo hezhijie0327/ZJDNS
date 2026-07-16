@@ -98,11 +98,11 @@ CREATE TABLE zone_entries (
 
 - **Cache hit path**: `Get()` decompresses zstd + `Msg.Unpack()` (~0.5ms). Returns entry `ID` so `RecordRequest` can skip `EnsureEntry`.
 - **RecordRequest split**: Hits → `entry_hit_counters` (upsert, no row bloat). Miss/stale/zone/error → `request_log` (denormalized qname/qtype, no JOIN needed). `entry_id` is nullable.
-- **Stats aggregation**: `Stats()` UNION ALLs `entry_hit_counters` + `request_log`. `FlushDB("stats")` only resets stats_meta threshold — request_log rows survive.
+- **Stats aggregation**: `Stats()` uses 2 single-scan queries with CASE expressions (rcode + dnssec distributions computed inline). `FlushDB("stats")` only resets stats_meta threshold — request_log rows survive.
 - **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. `ON DELETE CASCADE` for ptr_map + hit_counters. Also prunes stale ip_latency + request_log rows (30-day cutoff).
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
 - **IP latency**: Per-IP keyed. `INSERT OR REPLACE` writes latency_ms + last_probe_time. All domains sharing a CDN IP reuse the same row.
-- **Dynamic queries**: `Store.Stats()` returns 8 TXT records (overview, success, errors, rcodes, anomalies, plain, encrypted, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,latency,zone,ruleset}`.
+- **Dynamic queries**: `Store.Stats()` returns 10 TXT records (overview, hits, errors, rcodes, hijack/fallback, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,latency,zone,ruleset}`.
 
 ## DNSCrypt v2
 

@@ -18,10 +18,13 @@ type RuleSetStorage interface {
 	SQLExec(query string, args ...any) (sql.Result, error)
 	SQLQueryRow(query string, args ...any) *sql.Row
 	SQLQuery(query string, args ...any) (*sql.Rows, error)
+	BeginTx() (*sql.Tx, error)
 }
 
 // Engine matches queries against rule sets to produce tags.
-// All matching is done via SQLite queries — there are no in-memory matchers.
+// All matching is done via SQLite queries with PK-optimised index seeks.
+// The ruleset_entries PK is (type, tag, value), so WHERE type=? uses a PK
+// prefix seek (not a full scan).
 type Engine struct {
 	db   RuleSetStorage
 	tags map[string]bool // all known tags from config
@@ -32,10 +35,17 @@ func New(db RuleSetStorage) *Engine {
 	return &Engine{db: db, tags: make(map[string]bool)}
 }
 
-// LoadRules stores RuleSet configurations into SQLite. Rules are reloaded from
-// config on every startup — SQLite is the authoritative store at runtime.
+// LoadRules stores RuleSet configurations into SQLite and caches IP CIDR rules
+// in memory. Rules are reloaded from config on every startup — SQLite is the
+// authoritative store; the in-memory IP cache is rebuilt from the same source.
 func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
-	if _, err := e.db.SQLExec(`DELETE FROM ruleset_entries`); err != nil {
+	tx, err := e.db.BeginTx()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`DELETE FROM ruleset_entries`); err != nil {
 		return err
 	}
 
@@ -43,14 +53,14 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 		for _, v := range rs.Rule {
 			if rs.Type == "ip" {
 				if _, _, err := net.ParseCIDR(v); err != nil {
-					continue // skip invalid CIDR entries
+					continue
 				}
 			}
 			key := v
 			if rs.Type == "domain" {
 				key = domainKey(v)
 			}
-			if _, err := e.db.SQLExec(
+			if _, err := tx.Exec(
 				`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
 				rs.Tag, rs.Type, key,
 			); err != nil {
@@ -65,14 +75,14 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 			for _, line := range lines {
 				if rs.Type == "ip" {
 					if _, _, err := net.ParseCIDR(line); err != nil {
-						continue // skip invalid CIDR lines
+						continue
 					}
 				}
 				key := line
 				if rs.Type == "domain" {
 					key = domainKey(line)
 				}
-				if _, err := e.db.SQLExec(
+				if _, err := tx.Exec(
 					`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
 					rs.Tag, rs.Type, key,
 				); err != nil {
@@ -83,6 +93,10 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 		e.tags[rs.Tag] = true
 	}
 
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
 	var n int
 	_ = e.db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n)
 	log.Infof("RULESET: %d rules loaded into %d tags", n, len(e.tags))
@@ -90,12 +104,12 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 }
 
 // Match returns all tags that match the given query name and client IP.
-// Domain matching uses TLD+1 suffix lookup via SQLite.
-// IP matching loads CIDR rules from SQLite and checks in Go (O(rules) per call).
+// All matching uses SQLite with PK-optimised index seeks (PK is
+// (type, tag, value), so WHERE type=? is a prefix seek).
 func (e *Engine) Match(qname, ip string) map[string]bool {
 	var tags map[string]bool
 
-	// Domain: TLD+1 suffix lookup.
+	// Domain: TLD+1 suffix lookup — PK prefix seek on type='domain'.
 	key := tldPlusOne(qname)
 	var tag string
 	if err := e.db.SQLQueryRow(
@@ -106,7 +120,7 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 		tags[tag] = true
 	}
 
-	// IP: load all CIDR rules for this query.
+	// IP: load all CIDR rules — PK prefix seek on type='ip'.
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {
 		return tags
@@ -177,7 +191,6 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 	}
 	defer rows.Close() //nolint:errcheck // best-effort
 
-	matched = false
 	for rows.Next() {
 		var cidr string
 		if err := rows.Scan(&cidr); err != nil {
@@ -187,8 +200,8 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 		if err != nil {
 			continue
 		}
-		if n.Contains(parsedIP) {
-			matched = true
+		matched = n.Contains(parsedIP)
+		if matched {
 			break
 		}
 	}

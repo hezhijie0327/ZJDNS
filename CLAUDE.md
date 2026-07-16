@@ -296,7 +296,7 @@ Top layer (wiring):
 | `CryptoValidator` | `server/resolver/dnssec` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in nsec.go |
 | `Detector` | `server/resolver/hijack` | DNS hijack detection; Verdict type + IsHijackedByTLD |
 | `Engine` | `ruleset` | SQLite-backed CIDR + domain tag matching; `Match(qname,ip)`, `MatchIP`. `LoadRules` accepts `RuleSetStorage` interface (satisfied by `*database.DB`) |
-| `RuleSetStorage` | `ruleset` | Interface: SQLExec, SQLQueryRow, SQLQuery — breaks domain→domain import cycle |
+| `RuleSetStorage` | `ruleset` | Interface: SQLExec, SQLQueryRow, SQLQuery, BeginTx — breaks domain→domain import cycle |
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |
 | `Prober` | `server/resolver/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
 | `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |

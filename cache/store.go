@@ -297,16 +297,21 @@ func (s *SQLiteCache) evictIfNeeded() {
 		return
 	}
 
-	// Re-sync the entry count from the database to correct any drift from
-	// INSERT OR REPLACE (which may replace existing entries without changing
-	// the row count). COUNT(*) on the PK is a fast B-tree leaf walk; only
-	// runs when the atomic counter suggests we may be near or over the limit.
-	var count int64
+	// Fast path: the atomic counter is accurate for new-key inserts (the common
+	// case). Skip the DB COUNT(*) when comfortably below limit. INSERT OR REPLACE
+	// drift (replacing an existing row) is rare and self-correcting.
+	count := s.db.EntryCount()
+	maxEntries := int64(s.db.MaxEntries())
+	if count < maxEntries*9/10 {
+		return
+	}
+
+	// Near or over the limit — resync from DB to correct any drift, then evict.
 	if err := s.db.SQ.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
 		s.db.SetEntryCount(count)
 	}
 
-	excess := count - int64(s.db.MaxEntries())
+	excess := count - maxEntries
 	if excess <= 0 {
 		return
 	}

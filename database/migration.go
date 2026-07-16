@@ -34,6 +34,7 @@ var migrations = []migration{
 	{"3.2.21", "denormalize qname/qtype/qclass into request_log", migrateV3_2_21},
 	{"3.2.22", "drop infra_cache table", migrateV3_2_22},
 	{"3.3.5", "normalize protocol identifiers in request_log and entry_hit_counters", migrateV3_3_5},
+	{"3.4.6", "reorder ruleset_entries PK to (type, tag, value) for index-seek queries", migrateV3_4_6},
 }
 
 func migrateV3_2_17(db *DB) error {
@@ -237,6 +238,25 @@ func (db *DB) runMigrations() error {
 // entry_hit_counters to match canonical config field names (dot->tls, doq->quic,
 // doh->https, doh3->http3, dod->dtls, doh-tlcp->http-tlcp). Each UPDATE is
 // idempotent — already-migrated rows are unaffected.
+func migrateV3_4_6(db *DB) error {
+	// Rebuild ruleset_entries with PK (type, tag, value) so WHERE type=? uses
+	// a PK prefix seek instead of a full table scan. Add index for type+value
+	// domain lookups.
+	_, err := db.SQ.Exec(`
+		CREATE TABLE IF NOT EXISTS ruleset_entries_new (
+			tag   TEXT NOT NULL,
+			type  TEXT NOT NULL,
+			value TEXT NOT NULL,
+			PRIMARY KEY (type, tag, value)
+		) WITHOUT ROWID;
+		INSERT OR REPLACE INTO ruleset_entries_new SELECT tag, type, value FROM ruleset_entries;
+		DROP TABLE ruleset_entries;
+		ALTER TABLE ruleset_entries_new RENAME TO ruleset_entries;
+		CREATE INDEX IF NOT EXISTS idx_ruleset_type_value ON ruleset_entries(type, value);
+	`)
+	return err
+}
+
 func migrateV3_3_5(db *DB) error {
 	renames := [][2]string{
 		{"dot", "tls"},

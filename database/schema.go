@@ -137,14 +137,17 @@ func (db *DB) migrate() error {
 
 		-- ── Ruleset entries ───────────────────────────────────────────────
 		-- Stores rule set entries loaded from config. IP entries are CIDR
-		-- strings; domain entries are TLD+1 keys for O(1) lookup.
+		-- strings; domain entries are TLD+1 keys.  PK is ordered (type, tag,
+		-- value) so WHERE type='ip' / WHERE type='domain' AND tag=? use a PK
+		-- prefix seek instead of a full scan.
 
 		CREATE TABLE IF NOT EXISTS ruleset_entries (
 			tag   TEXT NOT NULL,
 			type  TEXT NOT NULL,
 			value TEXT NOT NULL,
-			PRIMARY KEY (tag, type, value)
+			PRIMARY KEY (type, tag, value)
 		) WITHOUT ROWID;
+		CREATE INDEX IF NOT EXISTS idx_ruleset_type_value ON ruleset_entries(type, value);
 
 		-- ── Zone rules ───────────────────────────────────────────────────────
 		-- Zone-file-style rule table queried via WITHOUT ROWID B-tree clustered

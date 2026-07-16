@@ -47,7 +47,6 @@ type DB struct {
 
 	// RuleSet statements
 	StmtRuleSetInsert *sql.Stmt
-	StmtRuleSetLoad   *sql.Stmt
 
 	// Zone prepared statements
 	StmtZoneExact  *sql.Stmt
@@ -180,6 +179,9 @@ func (db *DB) EntryCount() int64 { return db.entryCount.Load() }
 
 // SetEntryCount atomically sets the entry counter to n.
 func (db *DB) SetEntryCount(n int64) { db.entryCount.Store(n) }
+
+// BeginTx starts a new SQL transaction.
+func (db *DB) BeginTx() (*sql.Tx, error) { return db.SQ.Begin() }
 
 // ExecWrite executes fn while holding the cache write serialization mutex,
 // ensuring that cache writes and evictions are serialized.
