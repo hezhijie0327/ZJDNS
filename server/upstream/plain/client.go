@@ -1,5 +1,5 @@
-// Package traditional implements outbound DNS queries over plain UDP and TCP.
-package traditional
+// Package plain implements outbound DNS queries over plain UDP and TCP.
+package plain
 
 import (
 	"time"

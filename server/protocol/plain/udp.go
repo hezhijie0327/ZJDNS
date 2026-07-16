@@ -1,4 +1,4 @@
-package traditional
+package plain
 
 import (
 	"context"
@@ -30,7 +30,7 @@ func (s *Server) startUDP(g Group, ctx context.Context, handler dns.Handler) err
 		s.udpServers = append(s.udpServers, srv)
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("UDP server")
-			log.Infof("SERVER: UDP server started on %s", addr)
+			log.Infof("PLAIN: UDP server started on %s", addr)
 			err := srv.ListenAndServe()
 			if err != nil {
 				select {

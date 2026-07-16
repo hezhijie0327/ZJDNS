@@ -21,9 +21,9 @@ import (
 	"zjdns/ruleset"
 	"zjdns/server/handler"
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
+	serverplain "zjdns/server/protocol/plain"
 	servertlcp "zjdns/server/protocol/tlcp"
 	"zjdns/server/protocol/tls"
-	servertraditional "zjdns/server/protocol/traditional"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/resolver/hijack"
@@ -43,7 +43,7 @@ type Server struct {
 	tls             *tls.Server
 	dnscryptServer  *serverdnscrypt.Server
 	tlcpServer      *servertlcp.Server
-	traditional     *servertraditional.Server
+	plain           *serverplain.Server
 	pprofServer     *http.Server
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
@@ -271,7 +271,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		server.tlcpServer = tlcpSrv
 	}
 
-	server.traditional = servertraditional.New(cfg)
+	server.plain = serverplain.New(cfg)
 
 	// ── Observability: probes + pprof ─────────────────────────────────────
 
@@ -339,7 +339,7 @@ func (s *Server) Start() error {
 		})
 	}
 
-	if err := s.traditional.Start(g, ctx, dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) })); err != nil {
+	if err := s.plain.Start(g, ctx, dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) })); err != nil {
 		return err
 	}
 

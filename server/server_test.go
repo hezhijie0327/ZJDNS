@@ -21,9 +21,9 @@ func TestEmptyPortDisablesPlainDNS(t *testing.T) {
 	if srv == nil {
 		t.Fatal("New() returned nil")
 	}
-	// New() creates the traditional server even when no ports are configured.
-	if srv.traditional == nil {
-		t.Error("traditional server should not be nil")
+	// New() creates the plain DNS server even when no ports are configured.
+	if srv.plain == nil {
+		t.Error("plain server should not be nil")
 	}
 }
 

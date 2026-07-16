@@ -52,7 +52,7 @@ Write-Host "Bumped $VersionFile"
 # ── Bump README version badge ──────────────────────────────────────────────
 $Readme = "README.md"
 $readmeContent = Get-Content $Readme -Raw
-$readmeContent = $readmeContent -replace "Version-$Current-", "Version-$New-"
+$readmeContent = $readmeContent -replace "Version-\d+\.\d+\.\d+-", "Version-$New-"
 Set-Content $Readme $readmeContent -NoNewline
 Write-Host "Bumped $Readme"
 

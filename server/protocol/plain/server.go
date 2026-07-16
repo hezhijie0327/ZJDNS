@@ -1,5 +1,5 @@
-// Package traditional implements plain DNS over UDP and TCP listeners.
-package traditional
+// Package plain implements plain DNS over UDP and TCP listeners.
+package plain
 
 import (
 	"context"
@@ -43,7 +43,7 @@ func (s *Server) Shutdown(ctx context.Context) {
 		}
 	}
 	if len(s.udpServers) > 0 {
-		log.Infof("SERVER: UDP server(s) shut down")
+		log.Infof("PLAIN: UDP server(s) shut down")
 	}
 	for _, srv := range s.tcpServers {
 		if srv != nil {
@@ -51,6 +51,6 @@ func (s *Server) Shutdown(ctx context.Context) {
 		}
 	}
 	if len(s.tcpServers) > 0 {
-		log.Infof("SERVER: TCP server(s) shut down")
+		log.Infof("PLAIN: TCP server(s) shut down")
 	}
 }

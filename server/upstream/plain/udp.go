@@ -1,4 +1,4 @@
-package traditional
+package plain
 
 import (
 	"context"

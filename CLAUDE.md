@@ -173,8 +173,8 @@ zjdns/
 └── server/
     ├── server.go, bridge.go, server_tasks.go
     ├── handler/        ← query pipeline
-    ├── protocol/       ← {traditional,tls,tlcp,dnscrypt} server listeners
-    ├── upstream/       ← {traditional,tls,tlcp,dnscrypt} outbound client + pool + socks5
+    ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
+    ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + socks5
     └── resolver/       ← recursive walk + forward + dnssec/ + hijack/ + probe/
 ```
 
@@ -310,9 +310,9 @@ All logs use `zjdns/internal/log` (package-level `Logger` instance `Default`). D
 
 **Component filtering**: `log_level` supports `level:comp1,comp2` syntax (e.g. `"debug:UPSTREAM,RECURSION"`). Messages without a `PREFIX: ` pattern always pass through.
 
-**20 canonical prefixes**: `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `CIDR`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`.
+**23 canonical prefixes**: `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`.
 
-Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:` merged → `TLS:`. Hot-path logs are `Debug` only.
+Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:`/`DTLS:` merged → `TLS:`. `DTLCP:` merged → `TLCP:`. `UDP:`/`TCP:` merged → `PLAIN:`. Hot-path logs are `Debug` only.
 
 ## Notable Design Decisions
 

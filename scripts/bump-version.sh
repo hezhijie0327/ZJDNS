@@ -65,9 +65,9 @@ echo "Bumped $VERSION_FILE"
 # ── Bump README version badge ──────────────────────────────────────────────
 README="README.md"
 if [ "$(uname)" = "Darwin" ]; then
-    sed -i '' "s/Version-${CURRENT}-/Version-${NEW}-/" "$README"
+    sed -i '' "s/Version-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-/Version-${NEW}-/" "$README"
 else
-    sed -i "s/Version-${CURRENT}-/Version-${NEW}-/" "$README"
+    sed -i "s/Version-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-/Version-${NEW}-/" "$README"
 fi
 echo "Bumped $README"
 

@@ -143,7 +143,7 @@ func (s *Server) shutdownServer() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 	defer shutdownCancel()
-	s.traditional.Shutdown(shutdownCtx)
+	s.plain.Shutdown(shutdownCtx)
 
 	if s.tls != nil {
 		if err := s.tls.Shutdown(); err != nil {

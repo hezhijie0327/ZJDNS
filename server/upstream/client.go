@@ -13,8 +13,8 @@ import (
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/server/upstream/dnscrypt"
+	"zjdns/server/upstream/plain"
 	"zjdns/server/upstream/pool"
-	"zjdns/server/upstream/traditional"
 
 	zdnsutil "zjdns/internal/dnsutil"
 
@@ -41,11 +41,11 @@ type Result struct {
 // Client manages outbound DNS queries across multiple transport protocols with
 // pooling. Protocol-specific logic is delegated to sub-packages.
 type Client struct {
-	timeout     time.Duration
-	traditional *traditional.Client
-	tlsClient   *tlsclient.Client
-	tlcpClient  *tlcpclient.Client
-	dnscrypt    *dnscrypt.Client
+	timeout        time.Duration
+	plainClient    *plain.Client
+	tlsClient      *tlsclient.Client
+	tlcpClient     *tlcpclient.Client
+	dnscryptClient *dnscrypt.Client
 
 	proxyDialers map[string]*socks5.Dialer
 	proxyMu      sync.Mutex
@@ -96,10 +96,10 @@ func New() *Client {
 		proxyDialers: make(map[string]*socks5.Dialer),
 	}
 
-	c.traditional = traditional.New(udpClient, tcpClient, tcpPool, c.getProxyDialer, timeout)
+	c.plainClient = plain.New(udpClient, tcpClient, tcpPool, c.getProxyDialer, timeout)
 	c.tlsClient = tlsclient.New(tlsDNSClient, dohClient, doh3Client, dotPool, quicPool, sessionCache, c.getProxyDialer, timeout)
 	c.tlcpClient = tlcpclient.New(c.getProxyDialer, timeout)
-	c.dnscrypt = dnscrypt.New(c.getProxyDialer)
+	c.dnscryptClient = dnscrypt.New(c.getProxyDialer)
 
 	return c
 }
@@ -122,7 +122,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 
 	if protocol == config.ProtoDNSCrypt || protocol == config.ProtoDNSCryptTCP {
 		useTCP := protocol == config.ProtoDNSCryptTCP
-		result.Response, result.Error = c.dnscrypt.Execute(queryCtx, msg, server, useTCP)
+		result.Response, result.Error = c.dnscryptClient.Execute(queryCtx, msg, server, useTCP)
 
 		if !useTCP && result.Error == nil && result.Response != nil && result.Response.Truncated {
 			log.Debugf("UPSTREAM: DNSCrypt UDP response truncated for %s, falling back to TCP", qname)
@@ -134,7 +134,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 
 		if useTCP && protocol == config.ProtoDNSCrypt {
 			if queryCtx.Err() == nil {
-				result.Response, result.Error = c.dnscrypt.Execute(queryCtx, msg, server, true)
+				result.Response, result.Error = c.dnscryptClient.Execute(queryCtx, msg, server, true)
 				if result.Error == nil {
 					protocol = config.ProtoDNSCryptTCP
 					log.Debugf("UPSTREAM: DNSCrypt TCP fallback succeeded for %s", qname)
@@ -155,9 +155,9 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 		result.Response, result.Error = c.executeSecureQuery(queryCtx, msg, server, protocol)
 	} else {
 		if protocol == config.ProtoTCP {
-			result.Response, result.Error = c.traditional.ExecuteTCP(queryCtx, msg, server)
+			result.Response, result.Error = c.plainClient.ExecuteTCP(queryCtx, msg, server)
 		} else {
-			result.Response, result.Error = c.traditional.ExecuteUDP(queryCtx, msg, server)
+			result.Response, result.Error = c.plainClient.ExecuteUDP(queryCtx, msg, server)
 		}
 
 		if c.needsTCPFallback(result, protocol) {
@@ -174,7 +174,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 			tcpServer := *server
 			tcpServer.Protocol = config.ProtoTCP
 
-			if tcpResp, tcpErr := c.traditional.ExecuteTCP(queryCtx, msg, &tcpServer); tcpErr == nil {
+			if tcpResp, tcpErr := c.plainClient.ExecuteTCP(queryCtx, msg, &tcpServer); tcpErr == nil {
 				result.Response = tcpResp
 				result.Error = nil
 				result.Protocol = config.ProtoTCP
@@ -248,7 +248,7 @@ func (c *Client) Close() {
 	c.proxyDialers = nil
 	c.proxyMu.Unlock()
 
-	c.dnscrypt.Close()
+	c.dnscryptClient.Close()
 }
 
 // needsTCPFallback checks whether a UDP result should be retried over TCP.

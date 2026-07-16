@@ -1,4 +1,4 @@
-package traditional
+package plain
 
 import (
 	"context"
@@ -33,7 +33,7 @@ func (s *Server) startTCP(g Group, ctx context.Context, handler dns.Handler) err
 		s.tcpServers = append(s.tcpServers, srv)
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("TCP server")
-			log.Infof("SERVER: TCP server started on %s", addr)
+			log.Infof("PLAIN: TCP server started on %s", addr)
 			err := srv.ListenAndServe()
 			if err != nil {
 				select {
