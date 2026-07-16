@@ -262,6 +262,8 @@ func (e *Evaluator) query(stmt *sql.Stmt, qname string, qtype, qclass uint16, ma
 	}
 	defer func() { _ = rows.Close() }()
 
+	var bestScore int
+	var best Result
 	for rows.Next() {
 		var rcode int
 		var answerBlob, authBlob, addlBlob []byte
@@ -270,12 +272,16 @@ func (e *Evaluator) query(stmt *sql.Stmt, qname string, qtype, qclass uint16, ma
 			continue
 		}
 
-		// Check match tags before unpacking RRs.
-		if tagsText != "" && !matchTagsOK(parseMatchTagsText(tagsText), matchedTags) {
+		score := matchScore(parseMatchTagsText(tagsText), matchedTags)
+		if score < 0 {
 			continue
 		}
+		if score <= bestScore && best.Matched {
+			continue // not better than current best
+		}
 
-		return Result{
+		bestScore = score
+		best = Result{
 			Domain:     qname,
 			Matched:    true,
 			Rcode:      rcode,
@@ -286,7 +292,10 @@ func (e *Evaluator) query(stmt *sql.Stmt, qname string, qtype, qclass uint16, ma
 		}
 	}
 
-	return Result{Rcode: dns.RcodeSuccess}
+	if !best.Matched {
+		return Result{Rcode: dns.RcodeSuccess}
+	}
+	return best
 }
 
 // queryWildcardBatch collects all suffix candidates from qname, issues a single
@@ -337,6 +346,8 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 	}
 	defer func() { _ = rows.Close() }()
 
+	var bestScore int
+	var best Result
 	for rows.Next() {
 		var matchedQname string
 		var rcode int
@@ -345,10 +356,17 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 		if err := rows.Scan(&matchedQname, &rcode, &answerBlob, &authBlob, &addlBlob, &tagsText); err != nil {
 			continue
 		}
-		if tagsText != "" && !matchTagsOK(parseMatchTagsText(tagsText), matchedTags) {
+
+		score := matchScore(parseMatchTagsText(tagsText), matchedTags)
+		if score < 0 {
 			continue
 		}
-		return Result{
+		if score <= bestScore && best.Matched {
+			continue // not better than current best
+		}
+
+		bestScore = score
+		best = Result{
 			Domain:     matchedQname,
 			Matched:    true,
 			Rcode:      rcode,
@@ -358,7 +376,11 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 			CreatedAt:  loadedAt,
 		}
 	}
-	return Result{Rcode: dns.RcodeSuccess}
+
+	if !best.Matched {
+		return Result{Rcode: dns.RcodeSuccess}
+	}
+	return best
 }
 
 func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicEntry) Result {
@@ -395,26 +417,34 @@ func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicE
 	return result
 }
 
-func matchTagsOK(entryTags []matchTag, matchedTags map[string]bool) bool {
+// matchScore returns a match quality score: positive tag matches score 2,
+// satisfied negations score 1, untagged rules score 0. Returns -1 if the
+// rule is rejected (required positive tag missing, or negated tag present).
+// When multiple rules match a query, the highest-scoring rule wins.
+func matchScore(entryTags []matchTag, matchedTags map[string]bool) int {
 	if len(entryTags) == 0 {
-		return true
+		return 0 // untagged — lowest priority
 	}
 	if matchedTags == nil {
-		return false
+		return -1 // no client tags but rule requires them → rejected
 	}
+	score := 0
 	for _, mt := range entryTags {
-		matched, exists := matchedTags[mt.tag]
+		_, exists := matchedTags[mt.tag]
 		if !exists {
 			if mt.negate {
-				continue // negated tag not on client → satisfied
+				score++ // satisfied negation
+				continue
 			}
-			return false // required tag not on client → rejected
+			return -1 // required positive tag missing → rejected
 		}
-		if mt.negate == matched {
-			return false
+		// tag exists on client
+		if mt.negate {
+			return -1 // negated tag present → rejected
 		}
+		score += 2 // positive match
 	}
-	return true
+	return score
 }
 
 // ---------------------------------------------------------------------------

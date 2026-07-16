@@ -860,3 +860,135 @@ func TestEvaluator_TTLCyclical(t *testing.T) {
 		t.Errorf("deducted TTL = %d, want <= 300", rr.Header().TTL)
 	}
 }
+
+// TestEvaluator_MatchScore_Priority verifies that when multiple rules match the
+// same (qname, qtype), the rule with the highest matchScore wins — positive tag
+// matches (score 2) beat negated fallback tags (score 1).
+//
+// Rules:
+//  1. .svc.example.com match=!tag_a,!tag_b → 127.0.0.1 (fallback for external)
+//  2. .svc.example.com match=tag_a → 10.192.7.1   (subnet A)
+//  3. .svc.example.com match=tag_a rcode=3 → ""   (AAAA blocked, subnet A)
+//  4. .svc.example.com match=tag_b → 10.192.39.1  (subnet B)
+//  5. .svc.example.com match=tag_b rcode=3 → ""   (AAAA blocked, subnet B)
+func TestEvaluator_MatchScore_Priority(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{
+			Name:  "svc.example.com",
+			Match: []string{"!tag_a", "!tag_b"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "127.0.0.1", TTL: 300},
+			},
+		},
+		{
+			Name:  "svc.example.com",
+			Match: []string{"tag_a"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "10.192.7.1", TTL: 300},
+			},
+		},
+		{
+			Name:  "svc.example.com",
+			Rcode: dns.RcodeNameError,
+			Match: []string{"tag_a"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeAAAA},
+			},
+		},
+		{
+			Name:  "svc.example.com",
+			Match: []string{"tag_b"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeA, Content: "10.192.39.1", TTL: 300},
+			},
+		},
+		{
+			Name:  "svc.example.com",
+			Rcode: dns.RcodeNameError,
+			Match: []string{"tag_b"},
+			Answer: []config.ZoneRecord{
+				{Type: dns.TypeAAAA},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// ── Subnet A (tag_a) — A query → 10.192.7.1 ──────────────────────────
+	result := z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"tag_a": true})
+	if !result.Matched {
+		t.Fatal("tag_a A: expected match")
+	}
+	if result.Rcode != dns.RcodeSuccess {
+		t.Errorf("tag_a A: rcode = %d, want NOERROR", result.Rcode)
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("tag_a A: answer len = %d, want 1", len(result.Answer))
+	}
+	a := result.Answer[0].(*dns.A)
+	if a.A.String() != "10.192.7.1" {
+		t.Errorf("tag_a A: A = %s, want 10.192.7.1", a.A.String())
+	}
+
+	// ── Subnet A (tag_a) — AAAA query → NXDOMAIN ─────────────────────────
+	result = z.Evaluate("svc.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{"tag_a": true})
+	if !result.Matched {
+		t.Fatal("tag_a AAAA: expected match")
+	}
+	if result.Rcode != dns.RcodeNameError {
+		t.Errorf("tag_a AAAA: rcode = %d, want NXDOMAIN", result.Rcode)
+	}
+
+	// ── Subnet B (tag_b) — A query → 10.192.39.1 ──────────────────────────
+	result = z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"tag_b": true})
+	if !result.Matched {
+		t.Fatal("tag_b A: expected match")
+	}
+	if result.Rcode != dns.RcodeSuccess {
+		t.Errorf("tag_b A: rcode = %d, want NOERROR", result.Rcode)
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("tag_b A: answer len = %d, want 1", len(result.Answer))
+	}
+	a = result.Answer[0].(*dns.A)
+	if a.A.String() != "10.192.39.1" {
+		t.Errorf("tag_b A: A = %s, want 10.192.39.1", a.A.String())
+	}
+
+	// ── Subnet B (tag_b) — AAAA query → NXDOMAIN ─────────────────────────
+	result = z.Evaluate("svc.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{"tag_b": true})
+	if !result.Matched {
+		t.Fatal("tag_b AAAA: expected match")
+	}
+	if result.Rcode != dns.RcodeNameError {
+		t.Errorf("tag_b AAAA: rcode = %d, want NXDOMAIN", result.Rcode)
+	}
+
+	// ── No tags (external) — A query → 127.0.0.1 (fallback) ──────────────
+	result = z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if !result.Matched {
+		t.Fatal("untagged A: expected match")
+	}
+	if result.Rcode != dns.RcodeSuccess {
+		t.Errorf("untagged A: rcode = %d, want NOERROR", result.Rcode)
+	}
+	if len(result.Answer) != 1 {
+		t.Fatalf("untagged A: answer len = %d, want 1", len(result.Answer))
+	}
+	a = result.Answer[0].(*dns.A)
+	if a.A.String() != "127.0.0.1" {
+		t.Errorf("untagged A: A = %s, want 127.0.0.1", a.A.String())
+	}
+
+	// ── No tags (external) — AAAA query → no specific AAAA fallback, unmatched
+	result = z.Evaluate("svc.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{})
+	if result.Matched {
+		t.Error("untagged AAAA: should not match (no AAAA fallback rule)")
+	}
+}
