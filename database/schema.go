@@ -95,8 +95,10 @@ func (db *DB) migrate() error {
 			rcode             INTEGER NOT NULL DEFAULT 0,
 			hit_count         INTEGER NOT NULL DEFAULT 0,
 			total_response_ms INTEGER NOT NULL DEFAULT 0,
+			last_hit_time     INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (entry_id, protocol, rcode)
 		) WITHOUT ROWID;
+		CREATE INDEX IF NOT EXISTS idx_entry_hit_counters_last_hit ON entry_hit_counters(last_hit_time);
 
 		-- ── Request journal ──────────────────────────────────────────────────
 		-- Append-only log of every non-hit query. qname/qtype/qclass stored

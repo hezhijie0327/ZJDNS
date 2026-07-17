@@ -50,7 +50,7 @@ type StoreWriter interface {
 type StoreLifecycle interface {
 	FlushDB(target string) (int64, error)
 	Clear() (int64, error)
-	CleanupRequestLog(retentionSec int64) (int64, error)
+	PruneQueryJournal(retentionSec int64) (int64, error)
 	Stats() []string
 	Close() error
 }

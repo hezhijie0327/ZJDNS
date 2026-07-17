@@ -351,18 +351,55 @@ func (s *SQLiteCache) evictIfNeeded() {
 	}
 }
 
-// CleanupRequestLog removes request_log rows older than retentionSec (in seconds).
-// Runs periodically (every 6h) via the server background ticker to prevent
-// unbounded disk growth on busy servers.
-func (s *SQLiteCache) CleanupRequestLog(retentionSec int64) (int64, error) {
+// PruneQueryJournal removes request_log rows and entry_hit_counters older than
+// retentionSec (in seconds) and syncs stats_meta.cleared_before to the oldest
+// remaining request_log id.  Runs every 6h via the server background ticker.
+//
+// request_log deletion is batched (10000 rows per iteration) to avoid holding a
+// write transaction open for too long on busy servers with millions of stale rows.
+func (s *SQLiteCache) PruneQueryJournal(retentionSec int64) (int64, error) {
+	batchSize := int64(config.DefaultPruneBatchSize)
+
+	var totalDeleted int64
+	for {
+		result, err := s.db.SQ.Exec(
+			`DELETE FROM request_log WHERE rowid IN (`+
+				`SELECT rowid FROM request_log WHERE timestamp < unixepoch() - ? LIMIT ?`+
+				`)`, retentionSec, batchSize,
+		)
+		if err != nil {
+			return totalDeleted, fmt.Errorf("cleanup request_log: %w", err)
+		}
+		n, _ := result.RowsAffected()
+		totalDeleted += n
+		if n < batchSize {
+			break
+		}
+	}
+
+	// Sync cleared_before only when rows were actually removed.
+	if totalDeleted > 0 {
+		if _, err := s.db.SQ.Exec(
+			`UPDATE stats_meta SET cleared_before = COALESCE((SELECT MIN(id) FROM request_log), 0) WHERE id = 1`,
+		); err != nil {
+			return totalDeleted, fmt.Errorf("cleanup stats_meta: %w", err)
+		}
+	}
+
+	// Clean up hit counters that haven't been touched within the retention
+	// window — they belong to cache entries that no longer exist or are no
+	// longer being queried.
 	result, err := s.db.SQ.Exec(
-		`DELETE FROM request_log WHERE timestamp < unixepoch() - ?`, retentionSec,
+		`DELETE FROM entry_hit_counters WHERE last_hit_time < unixepoch() - ?`, retentionSec,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("cleanup request_log: %w", err)
+		log.Warnf("CACHE: cleanup entry_hit_counters: %v", err)
+	} else {
+		n, _ := result.RowsAffected()
+		totalDeleted += n
 	}
-	n, _ := result.RowsAffected()
-	return n, nil
+
+	return totalDeleted, nil
 }
 
 func (s *SQLiteCache) evictOldest(toEvict int64) {

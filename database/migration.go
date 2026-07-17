@@ -35,6 +35,7 @@ var migrations = []migration{
 	{"3.2.22", "drop infra_cache table", migrateV3_2_22},
 	{"3.3.5", "normalize protocol identifiers in request_log and entry_hit_counters", migrateV3_3_5},
 	{"3.4.6", "reorder ruleset_entries PK to (type, tag, value) for index-seek queries", migrateV3_4_6},
+	{"3.4.18", "add last_hit_time to entry_hit_counters for time-based cleanup", migrateV3_4_18},
 }
 
 func migrateV3_2_17(db *DB) error {
@@ -238,6 +239,25 @@ func (db *DB) runMigrations() error {
 // entry_hit_counters to match canonical config field names (dot->tls, doq->quic,
 // doh->https, doh3->http3, dod->dtls, doh-tlcp->http-tlcp). Each UPDATE is
 // idempotent — already-migrated rows are unaffected.
+func migrateV3_4_18(db *DB) error {
+	// Add last_hit_time to entry_hit_counters for time-based aging.
+	// Idempotent: ALTER TABLE ADD COLUMN is a no-op if column already exists
+	// (SQLite ignores duplicate column names in ALTER TABLE, but for safety
+	// we check via PRAGMA first).
+	var hasColumn bool
+	_ = db.SQ.QueryRow(
+		"SELECT COUNT(*) FROM pragma_table_info('entry_hit_counters') WHERE name='last_hit_time'",
+	).Scan(&hasColumn)
+	if !hasColumn {
+		if _, err := db.SQ.Exec(
+			`ALTER TABLE entry_hit_counters ADD COLUMN last_hit_time INTEGER NOT NULL DEFAULT 0`,
+		); err != nil {
+			return fmt.Errorf("add last_hit_time: %w", err)
+		}
+	}
+	return nil
+}
+
 func migrateV3_4_6(db *DB) error {
 	// Rebuild ruleset_entries with PK (type, tag, value) so WHERE type=? uses
 	// a PK prefix seek instead of a full table scan. Add index for type+value

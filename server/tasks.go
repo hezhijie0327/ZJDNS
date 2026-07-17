@@ -113,22 +113,22 @@ func (s *Server) startTCPWriteMuSweep() {
 	})
 }
 
-// startRequestLogCleanup periodically removes old request_log rows to prevent
-// unbounded disk growth on busy servers. Runs every 6 hours with a 7-day
-// retention window.
+// startRequestLogCleanup periodically removes old request_log rows and stale
+// entry_hit_counters to prevent unbounded disk growth. Runs every 6 hours with
+// a 7-day retention window.
 func (s *Server) startRequestLogCleanup() {
 	if s.handler == nil || s.handler.CacheStore() == nil {
 		return
 	}
 	s.runBackgroundTicker("request_log cleanup", 6*time.Hour, func() {
 		store := s.handler.CacheStore()
-		n, err := store.CleanupRequestLog(config.DefaultRequestLogRetention)
+		n, err := store.PruneQueryJournal(config.DefaultQueryJournalRetention)
 		if err != nil {
 			log.Warnf("CACHE: request_log cleanup failed: %v", err)
 			return
 		}
 		if n > 0 {
-			log.Debugf("CACHE: cleaned up %d stale request_log rows", n)
+			log.Debugf("CACHE: cleaned up %d stale rows (querylog + counters), synced stats", n)
 		}
 	})
 }

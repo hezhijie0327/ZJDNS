@@ -21,11 +21,12 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 	db.StmtHitCounter, err = db.SQ.Prepare(
-		`INSERT INTO entry_hit_counters (entry_id, protocol, rcode, hit_count, total_response_ms)
-		 VALUES (?1, ?2, ?3, 1, ?4)
+		`INSERT INTO entry_hit_counters (entry_id, protocol, rcode, hit_count, total_response_ms, last_hit_time)
+		 VALUES (?1, ?2, ?3, 1, ?4, unixepoch())
 		 ON CONFLICT(entry_id, protocol, rcode) DO UPDATE
 		 SET hit_count = entry_hit_counters.hit_count + 1,
-		     total_response_ms = entry_hit_counters.total_response_ms + ?4`,
+		     total_response_ms = entry_hit_counters.total_response_ms + ?4,
+		     last_hit_time = unixepoch()`,
 	)
 	if err != nil {
 		return err

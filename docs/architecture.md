@@ -45,12 +45,15 @@ CREATE TABLE request_log (
 );
 CREATE INDEX idx_request_log_ts ON request_log(timestamp);
 
--- Hit counters: aggregated per-entry+protocol+rcode.
+-- Hit counters: aggregated per-entry+protocol+rcode.  last_hit_time enables
+-- time-based aging — PruneQueryJournal deletes counters untouched for >7 days.
 CREATE TABLE entry_hit_counters (
-    entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-    protocol  TEXT NOT NULL,
-    rcode     INTEGER NOT NULL DEFAULT 0,
-    hit_count INTEGER NOT NULL DEFAULT 0,
+    entry_id          INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    protocol          TEXT NOT NULL,
+    rcode             INTEGER NOT NULL DEFAULT 0,
+    hit_count         INTEGER NOT NULL DEFAULT 0,
+    total_response_ms INTEGER NOT NULL DEFAULT 0,
+    last_hit_time     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (entry_id, protocol, rcode)
 ) WITHOUT ROWID;
 
@@ -98,8 +101,8 @@ CREATE TABLE zone_entries (
 
 - **Cache hit path**: `Get()` decompresses zstd + `Msg.Unpack()` (~0.5ms). Returns entry `ID` so `RecordRequest` can skip `EnsureEntry`.
 - **RecordRequest split**: Hits → `entry_hit_counters` (upsert, no row bloat). Miss/stale/zone/error → `request_log` (denormalized qname/qtype, no JOIN needed). `entry_id` is nullable.
-- **Stats aggregation**: `Stats()` uses 2 single-scan queries with CASE expressions (rcode + dnssec distributions computed inline). `FlushDB("stats")` only resets stats_meta threshold — request_log rows survive.
-- **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. `ON DELETE CASCADE` for ptr_map + hit_counters. Also prunes stale ip_latency + request_log rows (30-day cutoff).
+- **Stats aggregation**: `Stats()` uses 2 single-scan queries with CASE expressions (rcode + dnssec distributions computed inline). `PruneQueryJournal` runs every 6h, deleting querylog rows + stale hit counters older than 7 days, then syncing `cleared_before` so stats reflect the same window.
+- **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. `ON DELETE CASCADE` for ptr_map + hit_counters. Stale ip_latency rows pruned during eviction. Query logs and counters aged out by `PruneQueryJournal` (7-day window).
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
 - **IP latency**: Per-IP keyed. `INSERT OR REPLACE` writes latency_ms + last_probe_time. All domains sharing a CDN IP reuse the same row.
 - **Dynamic queries**: `Store.Stats()` returns 10 TXT records (overview, hits, errors, rcodes, hijack/fallback, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,latency,zone,ruleset}`.
@@ -160,3 +163,10 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 - **Client** (`server/upstream/tlcp/dtlcp.go`): `net.ListenPacket` + `dtlcp.Client()` + `HandshakeContext()`. TODO: replace with `dtlcp.Dial`.
 - **Synchronous handling**: gotlcp shares one `*net.UDPConn` across all connections. Only one connection at a time until upstream provides per-connection isolation.
 - Windows: IPv4 localhost DTLCP handshake unreliable — use `[::1]`.
+- **Deadlock fix**: `dtlcpListener.Close()` collects connections under the lock, unlocks, THEN closes — `dtlcpConnWrapper.Close()` also acquires the same mutex.
+- **Goroutine tracking**: TLCP server now has `serverGroup` (errgroup) tracking lifecycle goroutines (DoT accept, DTLCP accept, DoH serve). Shutdown waits for all via `serverGroup.Wait()`.
+
+## Zone Rules (`zone/`)
+
+- **ZoneStorage interface**: `Evaluator` depends on `ZoneStorage` (not concrete `*database.DB`), following the same pattern as `ruleset.RuleSetStorage`. The interface provides `Exec`, `Begin`, `QueryZoneExact`, `QueryZoneWildcard`, and `Close`.
+- **Wildcard matching**: Batch IN query with fixed 16 placeholders via `StmtZoneWildcard` prepared statement — single query replaces the old per-label N-query loop.

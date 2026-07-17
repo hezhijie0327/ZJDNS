@@ -7,14 +7,16 @@ import "time"
 // =============================================================================
 
 const (
-	DefaultUDPPort      = "53"   // plain DNS UDP
-	DefaultTCPPort      = "53"   // plain DNS TCP
-	DefaultTLSPort      = "853"  // DoT (RFC 7858)
-	DefaultQUICPort     = "853"  // DoQ (RFC 9250)
-	DefaultHTTPSPort    = "443"  // DoH (RFC 8484)
-	DefaultHTTP3Port    = "443"  // DoH3
-	DefaultDTLSPort     = "8853" // DoD (RFC 8094)
-	DefaultDNSCryptPort = "8443"
+	DefaultUDPPort = "53" // plain DNS UDP
+	DefaultTCPPort = "53" // plain DNS TCP
+
+	DefaultDNSCryptPort = "8443" // DNSCrypt (draft-denis-dprive-dnscrypt-10)
+
+	DefaultTLSPort   = "853"  // DoT (RFC 7858)
+	DefaultQUICPort  = "853"  // DoQ (RFC 9250)
+	DefaultHTTPSPort = "443"  // DoH (RFC 8484)
+	DefaultHTTP3Port = "443"  // DoH3
+	DefaultDTLSPort  = "8853" // DoD (RFC 8094)
 
 	DefaultTLCPPort     = "9853" // TLCP (GB/T 38636-2020) DoT
 	DefaultHTTPTLCPPort = "9443" // TLCP (GB/T 38636-2020) DoH
@@ -37,7 +39,8 @@ const (
 	DefaultCacheMaxOpenConns = 4 // SQLite WAL: single writer, readers served concurrently
 	DefaultCacheMaxIdleConns = 2
 
-	DefaultRequestLogRetention = 7 * 24 * 3600 // 7 days in seconds — auto-cleanup window
+	DefaultQueryJournalRetention = 7 * 86400 // 7 days in seconds — auto-cleanup window
+	DefaultPruneBatchSize        = 10000     // rows per iteration during prune
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30
