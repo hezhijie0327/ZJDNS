@@ -18,6 +18,7 @@ func ResolveBindAddrs(network, port string) ([]string, error) {
 	}
 
 	var addrs []string
+	var skipped []string
 	for _, iface := range ifaces {
 		ips, err := iface.Addrs()
 		if err != nil {
@@ -30,11 +31,15 @@ func ResolveBindAddrs(network, port string) ([]string, error) {
 			}
 			addr := net.JoinHostPort(ipNet.IP.String(), port)
 			if err := TryBind(network, addr); err != nil {
-				log.Warnf("SERVER: skipping %s address %s: %v", network, addr, err)
+				skipped = append(skipped, addr)
 				continue
 			}
 			addrs = append(addrs, addr)
 		}
+	}
+
+	if len(skipped) > 0 {
+		log.Warnf("SERVER: skipping %d %s address(es): %v", len(skipped), network, skipped)
 	}
 
 	if len(addrs) == 0 {

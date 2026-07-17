@@ -36,6 +36,7 @@ func (s *Server) startDOTServer() error {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}
 
+	log.Infof("TLCP: DoT server started on %v (TLCP)", addrs)
 	for _, addr := range addrs {
 		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -48,7 +49,6 @@ func (s *Server) startDOTServer() error {
 		tlcpListener := tlcp.NewListener(&tcpKeepAliveListener{Listener: rawListener}, tlcpCfg)
 
 		s.dotListeners = append(s.dotListeners, tlcpListener)
-		log.Infof("TLCP: DoT server started on %s (TLCP)", addr)
 
 		s.serverGroup.Go(func() error {
 			s.serveDOT(tlcpListener)

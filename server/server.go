@@ -427,35 +427,52 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) displayInfo() {
-	servers := s.handler.UpstreamServers()
-	if len(servers) == 0 {
+	up := s.handler.UpstreamServers()
+	fb := s.handler.FallbackServers()
+
+	if len(up) == 0 && len(fb) == 0 {
 		log.Infof("RECURSION: Recursive mode")
 		return
 	}
-	for _, server := range servers {
-		if server.IsRecursive() {
-			info := "Upstream server: " + server.Address
-			if len(server.Match) > 0 {
-				info += fmt.Sprintf(" [CIDR match: %v]", server.Match)
-			}
-			log.Infof("UPSTREAM: %s", info)
-		} else {
-			protocol := strings.ToUpper(server.Protocol)
-			if protocol == "" {
-				protocol = "UDP"
-			}
-			serverInfo := fmt.Sprintf("%s (%s)", server.Address, protocol)
-			if server.SkipTLSVerify && zdnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) {
-				serverInfo += " [Skip TLS verification]"
-			}
-			if len(server.Match) > 0 {
-				serverInfo += fmt.Sprintf(" [CIDR match: %v]", server.Match)
-			}
-			log.Infof("UPSTREAM: Upstream server: %s", serverInfo)
-		}
-	}
-	log.Infof("UPSTREAM: Upstream mode: total %d servers", len(servers))
 
+	for _, server := range up {
+		s.logServer("UPSTREAM", server)
+	}
+	if len(fb) > 0 {
+		for _, server := range fb {
+			s.logServer("FALLBACK", server)
+		}
+		log.Infof("UPSTREAM: %d upstream + %d fallback servers", len(up), len(fb))
+	} else {
+		log.Infof("UPSTREAM: %d servers", len(up))
+	}
+	s.displayExtras()
+}
+
+func (s *Server) logServer(role string, server *config.UpstreamServer) {
+	if server.IsRecursive() {
+		info := server.Address
+		if len(server.Match) > 0 {
+			info += fmt.Sprintf(" [CIDR match: %v]", server.Match)
+		}
+		log.Infof("%s: %s", role, info)
+		return
+	}
+	protocol := strings.ToUpper(server.Protocol)
+	if protocol == "" {
+		protocol = "UDP"
+	}
+	info := fmt.Sprintf("%s (%s)", server.Address, protocol)
+	if server.SkipTLSVerify && zdnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) {
+		info += " [Skip TLS verification]"
+	}
+	if len(server.Match) > 0 {
+		info += fmt.Sprintf(" [CIDR match: %v]", server.Match)
+	}
+	log.Infof("%s: %s", role, info)
+}
+
+func (s *Server) displayExtras() {
 	if s.pprofServer != nil {
 		log.Infof("PPROF: pprof server enabled on: %s, via: %s", s.config.Server.Pprof, config.DefaultPprofPath)
 	}

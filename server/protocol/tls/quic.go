@@ -38,6 +38,7 @@ func (s *Server) startDOQServer() error {
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 	}
 
+	log.Infof("TLS: DoQ server started on %v", addrs)
 	for _, addr := range addrs {
 		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
@@ -62,8 +63,6 @@ func (s *Server) startDOQServer() error {
 			return fmt.Errorf("DoQ listen on %s: %w", addr, err)
 		}
 		s.doqListeners = append(s.doqListeners, listener)
-
-		log.Infof("TLS: DoQ server started on %s", addr)
 
 		capturedDoQ := listener
 		s.serverGroup.Go(func() error {

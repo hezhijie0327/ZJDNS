@@ -21,6 +21,7 @@ func (s *Server) startDOHServer() error {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}
 
+	log.Infof("TLCP: DoH server started on %v (TLCP HTTP/1.1)", addrs)
 	for _, addr := range addrs {
 		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -42,7 +43,6 @@ func (s *Server) startDOHServer() error {
 			TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		}
 		s.dohServers = append(s.dohServers, dohSrv)
-		log.Infof("TLCP: DoH server started on %s (TLCP HTTP/1.1)", addr)
 
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("TLCP DoH server")

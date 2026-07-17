@@ -19,6 +19,7 @@ func (s *Server) startTCP(g Group, ctx context.Context, handler dns.Handler) err
 	if err != nil {
 		return fmt.Errorf("TCP address resolution: %w", err)
 	}
+	log.Infof("PLAIN: TCP server started on %v", addrs)
 	for _, addr := range addrs {
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -32,7 +33,6 @@ func (s *Server) startTCP(g Group, ctx context.Context, handler dns.Handler) err
 		s.tcpServers = append(s.tcpServers, srv)
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("TCP server")
-			log.Infof("PLAIN: TCP server started on %s", addr)
 			err := srv.ListenAndServe()
 			if err != nil {
 				select {

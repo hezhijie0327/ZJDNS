@@ -233,6 +233,11 @@ func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 	return r.upstream.list()
 }
 
+// FallbackServers returns the current list of fallback servers.
+func (r *Resolver) FallbackServers() []*config.UpstreamServer {
+	return r.fallback.list()
+}
+
 // Query resolves a DNS question by querying upstream servers, falling back to
 // recursive resolution if no upstream is configured.
 //

@@ -34,6 +34,7 @@ func (s *Server) startDOHServer(port string) error {
 		return fmt.Errorf("DoH address resolution: %w", err)
 	}
 
+	log.Infof("TLS: DoH server started on %v", addrs)
 	for _, addr := range addrs {
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -60,8 +61,6 @@ func (s *Server) startDOHServer(port string) error {
 			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
 		}
 		s.dohServers = append(s.dohServers, dohSrv)
-
-		log.Infof("TLS: DoH server started on %s", addr)
 
 		capturedSrv := dohSrv
 		capturedListener := httpsListener

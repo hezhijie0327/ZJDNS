@@ -20,6 +20,7 @@ func (s *Server) startUDP(g Group, ctx context.Context, handler dns.Handler) err
 	if err != nil {
 		return fmt.Errorf("UDP address resolution: %w", err)
 	}
+	log.Infof("PLAIN: UDP server started on %v", addrs)
 	for _, addr := range addrs {
 		srv := &dns.Server{
 			Addr:    addr,
@@ -30,7 +31,6 @@ func (s *Server) startUDP(g Group, ctx context.Context, handler dns.Handler) err
 		s.udpServers = append(s.udpServers, srv)
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("UDP server")
-			log.Infof("PLAIN: UDP server started on %s", addr)
 			err := srv.ListenAndServe()
 			if err != nil {
 				select {

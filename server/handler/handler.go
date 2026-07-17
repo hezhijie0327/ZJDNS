@@ -31,6 +31,7 @@ type Resolver interface {
 	DNSSECEDECode() uint16
 	UpstreamEDEOption() *edns.EDEOption
 	UpstreamServers() []*config.UpstreamServer
+	FallbackServers() []*config.UpstreamServer
 }
 
 // LatencyProber is the interface for latency-probing cache entries.
@@ -96,6 +97,9 @@ func (h *Handler) CacheRefreshGroup() *errgroup.Group { return h.cacheRefreshGro
 
 // UpstreamServers returns the configured upstream servers.
 func (h *Handler) UpstreamServers() []*config.UpstreamServer { return h.resolver.UpstreamServers() }
+
+// FallbackServers returns the configured fallback servers.
+func (h *Handler) FallbackServers() []*config.UpstreamServer { return h.resolver.FallbackServers() }
 
 // ── Query entry point ────────────────────────────────────────────────────
 

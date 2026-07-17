@@ -36,6 +36,7 @@ func (s *Server) startDOH3Server(port string) error {
 
 	s.h3Server = &http3.Server{Handler: s}
 
+	log.Infof("TLS: DoH3 server started on %v", addrs)
 	for _, addr := range addrs {
 		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
@@ -60,8 +61,6 @@ func (s *Server) startDOH3Server(port string) error {
 			return fmt.Errorf("DoH3 listen on %s: %w", addr, err)
 		}
 		s.h3Listeners = append(s.h3Listeners, listener)
-
-		log.Infof("TLS: DoH3 server started on %s", addr)
 
 		capturedH3 := listener
 		s.serverGroup.Go(func() error {

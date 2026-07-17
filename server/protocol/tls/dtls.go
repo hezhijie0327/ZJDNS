@@ -19,6 +19,7 @@ func (s *Server) startDTLSServer() error {
 		return err
 	}
 
+	log.Infof("TLS: DTLS server started on %v", addrs)
 	for _, addr := range addrs {
 		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
@@ -37,7 +38,6 @@ func (s *Server) startDTLSServer() error {
 			s.handleDTLSConnections(listener)
 			return nil
 		})
-		log.Infof("TLS: DTLS server started on %s", addr)
 	}
 	return nil
 }

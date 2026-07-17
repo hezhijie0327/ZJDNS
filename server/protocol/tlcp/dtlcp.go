@@ -189,6 +189,7 @@ func (s *Server) startDTLCPServer() error {
 		return err
 	}
 
+	log.Infof("TLCP: DTLCP server started on %v", addrs)
 	for _, addr := range addrs {
 		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
@@ -206,7 +207,6 @@ func (s *Server) startDTLCPServer() error {
 			s.handleDTLCPConnections(listener)
 			return nil
 		})
-		log.Infof("TLCP: DTLCP server started on %s", addr)
 	}
 	return nil
 }
