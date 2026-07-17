@@ -1,5 +1,5 @@
-codeberg.org/miekg/dns v0.6.85-0.20260714190811-3e677f4a8837 h1:gcbpPT2dROJ9HOg642j1E0UHeJSU04VmSsKDjqbgVWc=
-codeberg.org/miekg/dns v0.6.85-0.20260714190811-3e677f4a8837/go.mod h1:58Y3ZTg6Z5ZEm/ZAAwHehbZfrD4u5mE4RByHoPEMyKk=
+codeberg.org/miekg/dns v0.6.85-0.20260717174944-31e499a0741e h1:jJHr3+pvnUuhkHJotV1DhFvbeB7BoHJ6kDruyoVz3zc=
+codeberg.org/miekg/dns v0.6.85-0.20260717174944-31e499a0741e/go.mod h1:58Y3ZTg6Z5ZEm/ZAAwHehbZfrD4u5mE4RByHoPEMyKk=
 gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033 h1:7vaosC7vbU88UxB439sfDKC4zkw/IAsm5BehQ/hHqsk=
 gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033/go.mod h1:H536xhflfRmKXO4uU9TlvZ/gQl3q2ptQJVH7NhmoXQQ=
 github.com/RyuaNerin/go-krypto v1.3.0 h1:smavTzSMAx8iuVlGb4pEwl9MD2qicqMzuXR2QWp2/Pg=
@@ -10,8 +10,8 @@ github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtn
 github.com/andybalholm/brotli v1.2.2/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/blang/semver/v4 v4.0.0 h1:1PFHFE6yCCTv8C1TeyNNarDzntLi7wMI5i/pzqYIsAM=
 github.com/blang/semver/v4 v4.0.0/go.mod h1:IbckMUScFkM3pff0VJDNKRiT6TG/YpiHIM2yvyW5YoQ=
-github.com/cloudflare/circl v1.6.5-0.20260715161633-6302ca89789d h1:coFvdEpb1eDro2AyIhiAvHd2wNhLYJBBEtvn2043uw8=
-github.com/cloudflare/circl v1.6.5-0.20260715161633-6302ca89789d/go.mod h1:h5LNyxAc5nTue9DS5jT+48en2PSDYt3zdGnz5OstK6c=
+github.com/cloudflare/circl v1.6.5-0.20260717194027-4ee951981b5f h1:gY/48hV2imKDA4Ct+u5TMo0hZH+2ERIhMsI6q6mSYQI=
+github.com/cloudflare/circl v1.6.5-0.20260717194027-4ee951981b5f/go.mod h1:h5LNyxAc5nTue9DS5jT+48en2PSDYt3zdGnz5OstK6c=
 github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 h1:tLWBZgPg6TV67oe76W4p+aUQEWIa52wbcuiz8GFd3vo=
 github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488/go.mod h1:QKJhjoqUtBsXCAVEjw38mFqoi7DebT7kthcD7UzbnoA=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=

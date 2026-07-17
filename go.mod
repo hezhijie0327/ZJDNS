@@ -3,9 +3,9 @@ module zjdns
 go 1.26.4
 
 require (
-	codeberg.org/miekg/dns v0.6.85-0.20260714190811-3e677f4a8837
+	codeberg.org/miekg/dns v0.6.85-0.20260717174944-31e499a0741e
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
-	github.com/cloudflare/circl v1.6.5-0.20260715161633-6302ca89789d
+	github.com/cloudflare/circl v1.6.5-0.20260717194027-4ee951981b5f
 	github.com/emmansun/gmsm v0.44.0
 	github.com/klauspost/compress v1.19.1-0.20260717091032-9960386c5845
 	github.com/ncruces/go-sqlite3 v0.35.3-0.20260717032608-e5bb5cc6c401

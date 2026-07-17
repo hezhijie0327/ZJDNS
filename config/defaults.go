@@ -205,8 +205,6 @@ const (
 	DNSSECStatusInsecure = "insecure"
 	DNSSECStatusBogus    = "bogus"
 
-	DOHContentType = "application/dns-message" // RFC 8484
-
 	ProtoUDP   = "udp"
 	ProtoTCP   = "tcp"
 	ProtoTLS   = "tls"

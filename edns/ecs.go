@@ -8,6 +8,7 @@ import (
 	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // ECSOption is an alias for config.ECSOption, kept here for compatibility
@@ -19,11 +20,6 @@ const (
 	DefaultECSv4Len = 24
 	DefaultECSv6Len = 64
 	DefaultECSScope = 0
-)
-
-const (
-	ianaAFINET  = uint16(1)
-	ianaAFINET6 = uint16(2)
 )
 
 // ParseFromDNS extracts the ECS option from a DNS message's OPT record.
@@ -148,14 +144,14 @@ func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 	}
 	if _, ipNet, err := net.ParseCIDR(subnet); err == nil {
 		prefix, _ := ipNet.Mask.Size()
-		family := ianaAFINET
+		family := uint16(dnsutil.IPv4Family)
 		if ipNet.IP.To4() == nil {
-			family = ianaAFINET6
+			family = uint16(dnsutil.IPv6Family)
 		}
-		if forceIPv6 && family == ianaAFINET {
+		if forceIPv6 && family == dnsutil.IPv4Family {
 			return nil, fmt.Errorf("expected IPv6 ECS value, got IPv4: %s", subnet)
 		}
-		if !forceIPv6 && family == ianaAFINET6 {
+		if !forceIPv6 && family == dnsutil.IPv6Family {
 			return nil, fmt.Errorf("expected IPv4 ECS value, got IPv6: %s", subnet)
 		}
 		ecs := &ECSOption{Family: family, SourcePrefix: uint8(prefix), ScopePrefix: DefaultECSScope, Address: ipNet.IP} //nolint:gosec // G115: CIDR prefix — 0-128 fits uint8
@@ -172,10 +168,10 @@ func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 	if !forceIPv6 && ip.To4() == nil {
 		return nil, fmt.Errorf("expected IPv4 ECS value, got IPv6: %s", subnet)
 	}
-	family := ianaAFINET
+	family := uint16(dnsutil.IPv4Family)
 	prefix := uint8(DefaultECSv4Len)
 	if ip.To4() == nil {
-		family = ianaAFINET6
+		family = uint16(dnsutil.IPv6Family)
 		prefix = DefaultECSv6Len
 	}
 	ecs := &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}
@@ -196,10 +192,10 @@ func (h *Handler) detectVia(forceIPv6, allowFallback bool) *ECSOption {
 	if ip == nil {
 		return nil
 	}
-	family := ianaAFINET
+	family := uint16(dnsutil.IPv4Family)
 	prefix := uint8(DefaultECSv4Len)
 	if ip.To4() == nil {
-		family = ianaAFINET6
+		family = uint16(dnsutil.IPv6Family)
 		prefix = DefaultECSv6Len
 	}
 	ecs := &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}

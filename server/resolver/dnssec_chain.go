@@ -240,7 +240,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 		validated, err := crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
 		if err != nil {
 			log.Debugf("SECURITY: answer RRSIG verification failed for %s: %v", question.Name, err)
-			chain.lastEDECode = edns.EDECodeDNSSECBogus
+			chain.lastEDECode = dns.ExtendedErrorDNSBogus
 			if r.isZoneCut(response, currentDomain) {
 				log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
 				chain.zoneCutDetected = true
@@ -248,7 +248,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 			return false
 		}
 		if !validated {
-			chain.lastEDECode = edns.EDECodeRRSIGsMissing
+			chain.lastEDECode = dns.ExtendedErrorRRSIGsMissing
 		}
 		return validated
 	}
@@ -258,7 +258,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
 	if err != nil {
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", currentDomain, err)
-		chain.lastEDECode = edns.EDECodeDNSKEYMissing
+		chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
 		return false
 	}
 	defer pool.DefaultMessage.Put(dnskeyResp)
@@ -266,7 +266,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	dnskeyRecords := dnssec.FindDNSKEYs(dnskeyResp.Answer)
 	if len(dnskeyRecords) == 0 {
 		log.Debugf("SECURITY: no DNSKEY records found for %s", currentDomain)
-		chain.lastEDECode = edns.EDECodeDNSKEYMissing
+		chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
 		return false
 	}
 
@@ -281,11 +281,11 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 			log.Debugf("SECURITY: verified %s DNSKEY via DS from parent", currentDomain)
 		} else {
 			log.Debugf("SECURITY: DS→DNSKEY mismatch for %s: %v (bogus delegation)", currentDomain, err)
-			chain.lastEDECode = edns.EDECodeDNSSECBogus
+			chain.lastEDECode = dns.ExtendedErrorDNSBogus
 			return false
 		}
 	case chain.dsPresentButUnverified:
-		chain.lastEDECode = edns.EDECodeDNSSECBogus
+		chain.lastEDECode = dns.ExtendedErrorDNSBogus
 		return false
 	case currentDomain == config.DNSRootZone:
 		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
@@ -293,13 +293,13 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 			log.Debugf("SECURITY: self-verified root DNSKEY")
 		} else {
 			log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
-			chain.lastEDECode = edns.EDECodeDNSKEYMissing
+			chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
 			return false
 		}
 	}
 
 	if !keysVerified {
-		chain.lastEDECode = edns.EDECodeDNSKEYMissing
+		chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
 		return false
 	}
 
@@ -309,14 +309,14 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	validated, err := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
 	if err != nil {
 		log.Debugf("SECURITY: answer RRSIG verification failed for %s: %v", question.Name, err)
-		chain.lastEDECode = edns.EDECodeDNSSECBogus
+		chain.lastEDECode = dns.ExtendedErrorDNSBogus
 		if r.isZoneCut(response, currentDomain) {
 			log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
 			chain.zoneCutDetected = true
 			return false
 		}
 	} else if !validated {
-		chain.lastEDECode = edns.EDECodeRRSIGsMissing
+		chain.lastEDECode = dns.ExtendedErrorRRSIGsMissing
 	}
 	return validated
 }

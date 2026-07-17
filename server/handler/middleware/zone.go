@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"zjdns/cache"
-	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
 	"zjdns/server/handler"
@@ -70,7 +69,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
 				response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)
 			}
-			qctx.EDE = edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorForgedAnswer, ExtraText: ""}
 			qctx.Res = response
 			return nil
 		}
@@ -84,7 +83,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
 			response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)
 			response.Rcode = dns.RcodeSuccess
-			qctx.EDE = edns.NewEDEOption(edns.EDECodeForgedAnswer, "")
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorForgedAnswer, ExtraText: ""}
 			qctx.Res = response
 			log.Debugf("RESULT: %s %s | rcode=NOERROR (zone), answer=%d", qname, dns.TypeToString[qtype], len(zoneResult.Answer))
 			return nil

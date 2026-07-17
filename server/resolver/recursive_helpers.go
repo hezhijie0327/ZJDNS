@@ -84,7 +84,7 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 	if len(response.Answer) == 0 && !response.Authoritative {
 		log.Debugf("RECURSION: lame delegation detected for %s — NS records point to same zone but response is not authoritative", currentDomain)
 		pool.DefaultMessage.Put(response)
-		r.lastDNSSECEDECode.Store(uint64(edns.EDECodeNoReachableAuthority))
+		r.lastDNSSECEDECode.Store(uint64(dns.ExtendedErrorNoReachableAuthority))
 		return &QueryResult{
 			Cacheable: true,
 			Server:    config.RecursiveIndicator, ECS: ecsResponse,

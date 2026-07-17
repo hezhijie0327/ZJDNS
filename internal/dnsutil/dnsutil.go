@@ -23,9 +23,6 @@ const (
 	defaultPanicStackBufSize = 8192
 )
 
-// MaxLabelLength is the maximum length of a single DNS label per RFC 1035 §2.3.4.
-const MaxLabelLength = 63
-
 var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 
 // TrimTrailingDot removes a single trailing dot from a DNS name using sub-slicing
@@ -43,30 +40,6 @@ func TrimTrailingDot(s string) string {
 // allocation on the hot path.
 func NormalizeDomain(domain string) string {
 	return strings.ToLower(TrimTrailingDot(domain))
-}
-
-// IsValidDomainLabels checks that each label in the domain name does not exceed
-// the RFC 1035 maximum of 63 bytes. Returns true if all labels are valid.
-func IsValidDomainLabels(domain string) bool {
-	// Strip trailing dot(s) without allocation (sub-slicing).
-	if domain != "" && domain[len(domain)-1] == '.' {
-		domain = domain[:len(domain)-1]
-	}
-	if domain == "" {
-		return true // root zone
-	}
-	// Scan labels without allocating a string slice.
-	for domain != "" {
-		dot := strings.IndexByte(domain, '.')
-		if dot < 0 {
-			return len(domain) <= MaxLabelLength
-		}
-		if dot > MaxLabelLength {
-			return false
-		}
-		domain = domain[dot+1:]
-	}
-	return true
 }
 
 // IsSecureProtocol reports whether the protocol is a secure DNS transport.
@@ -103,41 +76,17 @@ func HandlePanic(operation string) {
 }
 
 // ParseReverseDNSName parses a reverse DNS name (in-addr.arpa or ip6.arpa)
-// into a net.IP.
+// into a net.IP.  Delegates to the library's dnsutil.AddrReverse and converts
+// the netip.Addr result.
 func ParseReverseDNSName(name string) net.IP {
-	fqdn := TrimTrailingDot(dnsutil.Fqdn(name))
-	lower := strings.ToLower(fqdn)
-
-	if before, ok := strings.CutSuffix(lower, ".in-addr.arpa"); ok {
-		octets := strings.Split(TrimTrailingDot(before), ".")
-		if len(octets) != 4 {
-			return nil
-		}
-		for i, j := 0, len(octets)-1; i < j; i, j = i+1, j-1 {
-			octets[i], octets[j] = octets[j], octets[i]
-		}
-		return net.ParseIP(strings.Join(octets, "."))
+	if !dnsutil.IsFqdn(name) {
+		name = dnsutil.Fqdn(name)
 	}
-
-	if before, ok := strings.CutSuffix(lower, ".ip6.arpa"); ok {
-		nibbles := strings.Split(TrimTrailingDot(before), ".")
-		if len(nibbles) != 32 {
-			return nil
-		}
-		for i, j := 0, len(nibbles)-1; i < j; i, j = i+1, j-1 {
-			nibbles[i], nibbles[j] = nibbles[j], nibbles[i]
-		}
-		var builder strings.Builder
-		for i, nibble := range nibbles {
-			builder.WriteString(nibble)
-			if i%4 == 3 && i != len(nibbles)-1 {
-				builder.WriteByte(':')
-			}
-		}
-		return net.ParseIP(builder.String())
+	addr := dnsutil.AddrReverse(name)
+	if !addr.IsValid() {
+		return nil
 	}
-
-	return nil
+	return net.IP(addr.AsSlice())
 }
 
 // NewPTRRecord returns a DNS PTR record.

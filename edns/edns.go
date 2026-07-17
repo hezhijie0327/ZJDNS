@@ -83,7 +83,7 @@ func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 // for responses (RFC 8467). clientWantsPadding, parsed via HasPaddingOption,
 // lets the client opt out via +nopadding / +noalignment. tcpKeepaliveTimeout,
 // in 100ms units (RFC 7828), is only included in TCP-server responses.
-func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *EDEOption, isRequest, clientWantsPadding bool, tcpKeepaliveTimeout uint16) {
+func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *dns.EDE, isRequest, clientWantsPadding bool, tcpKeepaliveTimeout uint16) {
 	if h == nil || msg == nil {
 		return
 	}
@@ -123,7 +123,7 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 	if isRequest {
 		paddingBlockSize = config.DefaultPaddingRequestBlockSize
 	}
-	paddingBytes = addPaddingV2(msg, isSecureConnection, paddingBlockSize, clientWantsPadding)
+	paddingBytes = addPadding(msg, isSecureConnection, paddingBlockSize, clientWantsPadding)
 
 	log.Debugf("EDNS: built OPT secure=%t ecs=%t cookie=%t ede=%t keepalive=%d padding=%d bytes block=%d req=%t wantPad=%t",
 		isSecureConnection, ecs != nil, cookieStr != "", ede != nil, tcpKeepaliveTimeout, paddingBytes, paddingBlockSize, isRequest, clientWantsPadding)

@@ -8,13 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnshttp"
 )
-
-// DOHContentType is the MIME type for DNS-over-HTTPS requests (RFC 8484).
-const DOHContentType = "application/dns-message"
 
 // ExecuteDoHRequest sends a DNS query via DoH GET and returns the response.
 // It is shared by the TLS and TLCP upstream clients.  The httpMethod parameter
@@ -30,7 +27,9 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 		return nil, fmt.Errorf("pack: %w", err)
 	}
 
-	// Build the DoH GET URL manually with strings.Builder.
+	// Build the DoH GET URL manually — dnshttp.NewRequest appends /dns-query
+	// unconditionally, but ZJDNS URLs already include the full path.  Also
+	// dnshttp.NewRequest only supports GET/POST, not GET0RTT (HTTP/3).
 	encLen := base64.RawURLEncoding.EncodedLen(len(buf))
 	var urlBuf strings.Builder
 	urlBuf.Grow(len(u.Scheme) + 3 + len(u.Host) + len(u.Path) + 5 + encLen)
@@ -47,7 +46,7 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	httpReq.Header.Set("Accept", DOHContentType)
+	httpReq.Header.Set("Accept", dnshttp.MimeType)
 	httpReq.Header.Set("User-Agent", "")
 
 	httpResp, err := httpClient.Do(httpReq)
@@ -62,22 +61,39 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 		return nil, fmt.Errorf("HTTP status: %d", httpResp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(httpResp.Body, dns.MaxMsgSize))
+	// Use LimitReader to cap response body size, then delegate to the library.
+	httpResp.Body = io.NopCloser(io.LimitReader(httpResp.Body, dns.MaxMsgSize))
+
+	response, err := dnshttp.Response(httpResp)
 	if err != nil {
 		msg.ID = originalID
-		return nil, fmt.Errorf("read body: %w", err)
-	}
-
-	response := pool.DefaultMessage.Get()
-	response.Data = body
-	if err := response.Unpack(); err != nil {
-		msg.ID = originalID
-		pool.DefaultMessage.Put(response)
-		return nil, fmt.Errorf("unpack: %w", err)
+		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
 	msg.ID = originalID
 	response.ID = originalID
 
 	return response, nil
+}
+
+// ServerDOHMsgAccept is a drop-in for dnshttp.MsgAcceptFunc that accepts
+// non-zero DNS message IDs.  The library default rejects queries with non-zero
+// IDs (designed for proxy/forwarder use per RFC 8484 §7), but real DNS clients
+// always generate legitimate IDs — rejecting them would break server-side DoH.
+func ServerDOHMsgAccept(m *dns.Msg) dns.MsgAcceptAction {
+	if m.Response {
+		return dns.MsgIgnore
+	}
+	if _, ok := dns.OpcodeToString[m.Opcode]; !ok {
+		return dns.MsgRejectNotImplemented
+	}
+	if len(m.Question) != 1 {
+		return dns.MsgReject
+	}
+	for _, o := range m.Pseudo {
+		if _, ok := o.(*dns.TCPKEEPALIVE); ok {
+			return dns.MsgReject
+		}
+	}
+	return dns.MsgAccept
 }

@@ -61,6 +61,10 @@ Do NOT add a migration. The base DDL in `DB.migrate()` runs on every startup —
 sh scripts/bump-version.sh patch "short-slug" --no-migration
 ```
 
+**Always amend the version bump into the feature commit** — never commit it separately.
+Use `git reset --soft HEAD~2 && git commit` (or `git commit --amend` if already one commit).
+This keeps the version bump and the code change as a single atomic commit.
+
 ## Build & Test
 
 ```bash

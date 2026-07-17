@@ -29,8 +29,8 @@ type QueryContext struct {
 	ClientRequestedDNSSEC bool            // DNSSEC OK (DO) bit from the request
 	ECSOpt                *edns.ECSOption // parsed EDNS Client Subnet (nil if absent)
 	CookieOpt             *edns.CookieOption
-	ClientWantsPadding    bool            // true if the request included EDNS padding option
-	EDE                   *edns.EDEOption // EDE code set by error-producing middlewares
+	ClientWantsPadding    bool     // true if the request included EDNS padding option
+	EDE                   *dns.EDE // EDE code set by error-producing middlewares
 
 	// ── Zone match: populated by Zone ──
 

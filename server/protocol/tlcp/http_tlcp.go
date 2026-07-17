@@ -2,16 +2,14 @@ package tlcp
 
 import (
 	"crypto/tls"
-	"encoding/base64"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
-	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnshttp"
 	"gitee.com/Trisia/gotlcp/tlcp"
 )
 
@@ -20,6 +18,8 @@ func (s *Server) startDOHServer() error {
 	if err != nil {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}
+
+	dnshttp.MsgAcceptFunc = zdnsutil.ServerDOHMsgAccept
 
 	log.Infof("TLCP: DoH server started on %v (TLCP HTTP/1.1)", addrs)
 	for _, addr := range addrs {
@@ -66,42 +66,9 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := new(dns.Msg)
-
-	switch r.Method {
-	case http.MethodGet:
-		dnsParam := r.URL.Query().Get("dns")
-		if dnsParam == "" {
-			http.Error(w, "missing dns parameter", http.StatusBadRequest)
-			return
-		}
-		raw, err := base64.RawURLEncoding.DecodeString(dnsParam)
-		if err != nil {
-			http.Error(w, "invalid dns parameter", http.StatusBadRequest)
-			return
-		}
-		msg.Data = raw
-		if err := msg.Unpack(); err != nil {
-			http.Error(w, "invalid dns message", http.StatusBadRequest)
-			return
-		}
-	case http.MethodPost:
-		if r.Header.Get("Content-Type") != config.DOHContentType {
-			http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
-			return
-		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "read body error", http.StatusBadRequest)
-			return
-		}
-		msg.Data = body
-		if err := msg.Unpack(); err != nil {
-			http.Error(w, "invalid dns message", http.StatusBadRequest)
-			return
-		}
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	msg, err := dnshttp.Request(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -119,6 +86,6 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", config.DOHContentType)
+	w.Header().Set("Content-Type", dnshttp.MimeType)
 	_, _ = w.Write(resp.Data) //nolint:gosec // G705: DNS wire format bytes, not HTML
 }

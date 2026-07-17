@@ -161,7 +161,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	matchedKey, dsMatchErr := crypto.VerifyDelegationDS(verifiedDS, dnskeyRecords)
 	if dsMatchErr != nil {
 		log.Debugf("SECURITY: zone cut — DS→DNSKEY mismatch for %s: %v", childZone, dsMatchErr)
-		chain.lastEDECode = edns.EDECodeDNSSECBogus
+		chain.lastEDECode = dns.ExtendedErrorDNSBogus
 		return false, nil
 	}
 	log.Debugf("SECURITY: zone cut — verified DNSKEY for %s (key_tag=%d)", childZone, matchedKey.KeyTag())
@@ -171,11 +171,11 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	validated, valErr := crypto.IsResponseValid(response, childZone, dnskeyRecords)
 	if valErr != nil {
 		log.Debugf("SECURITY: zone cut — answer RRSIG verification failed for %s: %v", question.Name, valErr)
-		chain.lastEDECode = edns.EDECodeDNSSECBogus
+		chain.lastEDECode = dns.ExtendedErrorDNSBogus
 		return false, nil
 	}
 	if !validated {
-		chain.lastEDECode = edns.EDECodeRRSIGsMissing
+		chain.lastEDECode = dns.ExtendedErrorRRSIGsMissing
 		return false, nil
 	}
 	return true, nil

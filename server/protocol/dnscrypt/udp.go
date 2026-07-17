@@ -12,6 +12,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
@@ -108,8 +109,7 @@ func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAdd
 			truncated := &dns.Msg{}
 			truncated.Data = reply
 			if unpackErr := truncated.Unpack(); unpackErr == nil {
-				truncated.Truncated = true
-				truncated.Answer = nil
+				dnsutil.Truncate(truncated)
 				if packErr := truncated.Pack(); packErr == nil {
 					reply = truncated.Data
 				}

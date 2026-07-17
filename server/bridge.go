@@ -113,6 +113,19 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			pool.DefaultMessage.Put(response)
 			return
 		}
+
+		// RFC 2181 §9: if the response exceeds the client's EDNS buffer,
+		// truncate and set TC so the client retries over TCP.
+		udpSize := max(req.UDPSize, dns.MinMsgSize)
+		if response.Len() > int(udpSize) {
+			dnsutil.Truncate(response)
+			if err := response.Pack(); err != nil {
+				log.Debugf("SERVER: UDP truncate pack error for %s: %v", w.RemoteAddr().String(), err)
+				pool.DefaultMessage.Put(response)
+				return
+			}
+		}
+
 		if _, err := io.Copy(w, response); err != nil {
 			log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
 		}

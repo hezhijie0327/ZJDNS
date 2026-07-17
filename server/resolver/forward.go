@@ -144,10 +144,13 @@ func captureUpstreamEDE(r *Resolver, resp *dns.Msg, serverAddr string) {
 	if resp == nil {
 		return
 	}
-	if ede := r.edns.ParseEDE(resp); ede != nil {
-		r.lastUpstreamEDE.Store(ede)
-		log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
-			ede.InfoCode, edns.EDECodeString(ede.InfoCode), serverAddr, dns.RcodeToString[resp.Rcode])
+	for _, rr := range resp.Pseudo {
+		if ede, ok := rr.(*dns.EDE); ok {
+			r.lastUpstreamEDE.Store(ede)
+			log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
+				ede.InfoCode, dns.ExtendedErrorToString[ede.InfoCode], serverAddr, dns.RcodeToString[resp.Rcode])
+			break
+		}
 	}
 }
 

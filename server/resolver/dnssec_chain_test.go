@@ -198,15 +198,15 @@ func TestIsZoneCut_ConsolidatedWithGetZoneCutSigner(t *testing.T) {
 func TestDnssecChain_EDECodeNotOverwritten(t *testing.T) {
 	chain := &dnssecChain{}
 
-	chain.lastEDECode = edns.EDECodeDNSSECBogus
+	chain.lastEDECode = dns.ExtendedErrorDNSBogus
 
-	if chain.lastEDECode != edns.EDECodeDNSSECBogus {
-		t.Errorf("EDE code should be DNSSECBogus (%d), got %d", edns.EDECodeDNSSECBogus, chain.lastEDECode)
+	if chain.lastEDECode != dns.ExtendedErrorDNSBogus {
+		t.Errorf("EDE code should be DNSSECBogus (%d), got %d", dns.ExtendedErrorDNSBogus, chain.lastEDECode)
 	}
 
 	chain.lastEDECode = 0
-	chain.lastEDECode = edns.EDECodeRRSIGsMissing
-	if chain.lastEDECode != edns.EDECodeRRSIGsMissing {
+	chain.lastEDECode = dns.ExtendedErrorRRSIGsMissing
+	if chain.lastEDECode != dns.ExtendedErrorRRSIGsMissing {
 		t.Errorf("EDE code should be RRSIGsMissing when no error but not validated")
 	}
 }

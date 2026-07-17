@@ -54,6 +54,13 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qctx.Res = m.buildResponse(qctx, entry, false)
 			qctx.CacheServed = true
 
+			m.store.RecordRequest(&cache.RequestRecord{
+				Qname: qname, Qtype: qtype, Qclass: qclass,
+				ECS: ecsOpt, DNSSECOK: dnssecOK,
+				Protocol: qctx.Protocol, Result: "hit", Rcode: dns.RcodeSuccess,
+				EntryID: entry.ID,
+			})
+
 			// Prefetch if TTL is below threshold.
 			if !m.closed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) &&
 				m.prefetchCooldown != nil && m.prefetchCooldown.ShouldStart(qname, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) &&
@@ -83,12 +90,24 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 						return m.refreshCacheEntry(qctx, qname, qtype, qclass, ecsOpt)
 					})
 				}
+				m.store.RecordRequest(&cache.RequestRecord{
+					Qname: qname, Qtype: qtype, Qclass: qclass,
+					ECS: ecsOpt, DNSSECOK: dnssecOK,
+					Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
+					EntryID: entry.ID,
+				})
 				return nil
 			}
 
 			// Default: try a quick foreground refresh, fall back to stale.
 			refreshed := !m.closed() && m.tryStartRefresh(qname, qtype, qclass, ecsOpt)
 			if !refreshed {
+				m.store.RecordRequest(&cache.RequestRecord{
+					Qname: qname, Qtype: qtype, Qclass: qclass,
+					ECS: ecsOpt, DNSSECOK: dnssecOK,
+					Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
+					EntryID: entry.ID,
+				})
 				return nil
 			}
 
@@ -136,6 +155,12 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 		}
 	case <-timer.C:
 		// Stale response stays in qctx.Res.  Background refresh continues.
+		m.store.RecordRequest(&cache.RequestRecord{
+			Qname: qname, Qtype: qtype, Qclass: qclass,
+			ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
+			Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
+			EntryID: entry.ID,
+		})
 		m.refreshGroup.Go(func() error {
 			defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
 			select {
@@ -157,7 +182,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 func (m *CacheLookup) buildResponse(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
 	msg := handler.BuildCacheEntryResponse(qctx.Req, entry, qctx.ClientRequestedDNSSEC, isExpired)
 	if isExpired {
-		qctx.EDE = edns.NewEDEOption(edns.EDECodeStaleAnswer, "")
+		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorStaleAnswer, ExtraText: ""}
 	}
 	return msg
 }

@@ -75,8 +75,8 @@ type Resolver struct {
 	cname           *CNAME
 	validator       *Validator
 	DNSSECEnforce   bool
-	lastUpstreamEDE atomic.Pointer[edns.EDEOption] // EDE from upstream response for passthrough
-	cache           cache.Store                    // DNS response cache for NS A/AAAA lookups
+	lastUpstreamEDE atomic.Pointer[dns.EDE] // EDE from upstream response for passthrough
+	cache           cache.Store             // DNS response cache for NS A/AAAA lookups
 
 	recursiveProxyURL string // proxy for recursive mode (from builtin_recursive upstream)
 }
@@ -136,8 +136,8 @@ func (e *DNSSECError) Error() string {
 // handlers to keep EDE construction in one place.
 func dnssecEDEError(edeCode uint64) *DNSSECError {
 	return &DNSSECError{
-		EDECode: uint16(edeCode),                                                                                              //nolint:gosec // G115: EDE code — protocol-bounded uint16
-		Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), edns.EDECodeString(uint16(edeCode))), //nolint:gosec // G115: EDE code — protocol-bounded uint16
+		EDECode: uint16(edeCode),                                                                                                     //nolint:gosec // G115: EDE code — protocol-bounded uint16
+		Message: fmt.Sprintf("upstream rejected response (EDE %d: %s)", uint16(edeCode), dns.ExtendedErrorToString[uint16(edeCode)]), //nolint:gosec // G115: EDE code — protocol-bounded uint16
 	}
 }
 
@@ -221,7 +221,7 @@ func (r *Resolver) DNSSECEDECode() uint16 {
 // response (any rcode). Returns nil when no EDE was present or the resolver
 // used recursive mode. Callers should pass this through to downstream clients
 // so upstream DNSSEC bogus and other diagnostic EDE codes are not dropped.
-func (r *Resolver) UpstreamEDEOption() *edns.EDEOption {
+func (r *Resolver) UpstreamEDEOption() *dns.EDE {
 	if r == nil {
 		return nil
 	}

@@ -3,8 +3,6 @@ package middleware
 import (
 	"context"
 	"zjdns/config"
-	"zjdns/edns"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/pool"
 	"zjdns/server/handler"
 
@@ -35,7 +33,7 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qtype != dns.TypeANY &&
 			qtype != dns.TypeAXFR &&
 			qtype != dns.TypeIXFR &&
-			zdnsutil.IsValidDomainLabels(qname) {
+			dnsutil.IsName(qname) {
 			return next.ServeDNS(ctx, qctx)
 		}
 
@@ -44,10 +42,10 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		dnsutil.SetReply(msg, qctx.Req)
 		msg.Rcode = dns.RcodeRefused
 
-		if len(qname) > config.MaxDomainLength || !zdnsutil.IsValidDomainLabels(qname) {
-			qctx.EDE = edns.NewEDEOption(edns.EDECodeInvalidData, "")
+		if len(qname) > config.MaxDomainLength || !dnsutil.IsName(qname) {
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorInvalidData, ExtraText: ""}
 		} else {
-			qctx.EDE = edns.NewEDEOption(edns.EDECodeNotSupported, "")
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorNotSupported, ExtraText: ""}
 		}
 		qctx.Res = msg
 		return nil

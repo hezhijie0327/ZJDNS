@@ -25,7 +25,7 @@ func HasPaddingOption(req *dns.Msg) bool {
 	return true // No EDNS: legacy client, pad by default
 }
 
-func addPaddingV2(msg *dns.Msg, isSecureConnection bool, blockSize int, clientWantsPadding bool) int {
+func addPadding(msg *dns.Msg, isSecureConnection bool, blockSize int, clientWantsPadding bool) int {
 	if !isSecureConnection || !clientWantsPadding {
 		return 0
 	}

@@ -126,12 +126,12 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 
 	// Set EDE from DNSSEC or upstream.
 	if dnssecEDECode != 0 {
-		qctx.EDE = edns.NewEDEOption(dnssecEDECode, "")
+		qctx.EDE = &dns.EDE{InfoCode: dnssecEDECode, ExtraText: ""}
 	}
 	if qctx.EDE == nil && m.resolver != nil {
 		if upstreamEDE := m.resolver.UpstreamEDEOption(); upstreamEDE != nil {
 			qctx.EDE = upstreamEDE
-			log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", upstreamEDE.InfoCode, edns.EDECodeString(upstreamEDE.InfoCode))
+			log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", upstreamEDE.InfoCode, dns.ExtendedErrorToString[upstreamEDE.InfoCode])
 		}
 	}
 
@@ -166,7 +166,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	msg := handler.BuildResponseMsg(qctx.Req)
 	msg.Rcode = dns.RcodeServerFailure
 
-	edeCode := edns.EDECodeNetworkError
+	edeCode := dns.ExtendedErrorNetworkError
 	dnssecStatus := ""
 	if code := m.resolver.DNSSECEDECode(); m.resolver != nil && code != 0 {
 		edeCode = code
@@ -189,7 +189,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 		DNSSECStatus: dnssecStatus,
 	})
 
-	qctx.EDE = edns.NewEDEOption(edeCode, "")
+	qctx.EDE = &dns.EDE{InfoCode: edeCode, ExtraText: ""}
 	return msg
 }
 
@@ -206,7 +206,7 @@ func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 	msg := handler.BuildResponseMsg(qctx.Req)
 	msg.Rcode = dns.RcodeRefused
 
-	qctx.EDE = edns.NewEDEOption(edns.EDECodeBlocked, "")
+	qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorBlocked, ExtraText: ""}
 
 	m.store.RecordRequest(&cache.RequestRecord{
 		Qname: qname, Qtype: qtype, Qclass: qclass,
@@ -221,7 +221,7 @@ func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 func (m *CacheStore) buildFromCacheEntry(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
 	msg := handler.BuildCacheEntryResponse(qctx.Req, entry, qctx.ClientRequestedDNSSEC, isExpired)
 	if isExpired {
-		qctx.EDE = edns.NewEDEOption(edns.EDECodeStaleAnswer, "")
+		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorStaleAnswer, ExtraText: ""}
 	}
 
 	return msg

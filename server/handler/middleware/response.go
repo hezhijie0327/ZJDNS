@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"net"
-	"strings"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
@@ -102,21 +101,21 @@ func (m *Response) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.
 }
 
 func (m *Response) restoreDomain(msg *dns.Msg, currentName, originalName string) {
-	if msg == nil || strings.EqualFold(currentName, originalName) {
+	if msg == nil || dns.EqualName(currentName, originalName) {
 		return
 	}
 	for _, rr := range msg.Answer {
-		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
+		if rr != nil && dns.EqualName(rr.Header().Name, currentName) {
 			rr.Header().Name = originalName
 		}
 	}
 	for _, rr := range msg.Ns {
-		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
+		if rr != nil && dns.EqualName(rr.Header().Name, currentName) {
 			rr.Header().Name = originalName
 		}
 	}
 	for _, rr := range msg.Extra {
-		if rr != nil && strings.EqualFold(rr.Header().Name, currentName) {
+		if rr != nil && dns.EqualName(rr.Header().Name, currentName) {
 			rr.Header().Name = originalName
 		}
 	}

@@ -53,7 +53,7 @@ type EDNSHandler interface {
 	ParseFromDNS(req *dns.Msg) *edns.ECSOption
 	ParseCookie(req *dns.Msg) *edns.CookieOption
 	ECSForQType(qtype uint16) *edns.ECSOption
-	ApplyToMessage(msg *dns.Msg, ecs *edns.ECSOption, isSecure bool, cookieStr string, ede *edns.EDEOption, isRequest, wantsPadding bool, tcpKeepalive uint16)
+	ApplyToMessage(msg *dns.Msg, ecs *edns.ECSOption, isSecure bool, cookieStr string, ede *dns.EDE, isRequest, wantsPadding bool, tcpKeepalive uint16)
 	GenerateServerCookie(clientIP net.IP, clientCookie []byte) []byte
 	IsServerCookieValid(clientIP net.IP, clientCookie, serverCookie []byte) edns.CookieValStatus
 }

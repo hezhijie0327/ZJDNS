@@ -1,10 +1,8 @@
 package tls
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -14,6 +12,7 @@ import (
 	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnshttp"
 	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 )
@@ -33,6 +32,10 @@ func (s *Server) startDOHServer(port string) error {
 	if err != nil {
 		return fmt.Errorf("DoH address resolution: %w", err)
 	}
+
+	// dnshttp.DefaultMsgAcceptFunc rejects non-zero DNS IDs, but server-side
+	// DoH queries from real clients always have non-zero IDs.
+	dnshttp.MsgAcceptFunc = zdnsutil.ServerDOHMsgAccept
 
 	log.Infof("TLS: DoH server started on %v", addrs)
 	for _, addr := range addrs {
@@ -117,7 +120,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		clientIP = net.ParseIP(host)
 	}
 
-	protocol := config.ProtoHTTP
+	protocol := config.ProtoHTTPS
 	if strings.HasPrefix(r.Proto, "HTTP/3") {
 		protocol = config.ProtoHTTP3
 	}
@@ -133,43 +136,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (msg *dns.Msg, statusCode int) {
-	var buf []byte
-	var err error
-
-	switch r.Method {
-	case http.MethodGet:
+	// Validate GET request size before delegating to the library parser.
+	if r.Method == http.MethodGet {
 		dnsParam := r.URL.Query().Get("dns")
 		if dnsParam == "" || len(dnsParam) > config.DefaultDOHMaxRequestSize {
 			return nil, http.StatusBadRequest
 		}
-		buf, err = base64.RawURLEncoding.DecodeString(dnsParam)
-		if err != nil {
-			return nil, http.StatusBadRequest
-		}
-
-	case http.MethodPost:
-		if r.Header.Get("Content-Type") != config.DOHContentType {
-			return nil, http.StatusUnsupportedMediaType
-		}
+	}
+	if r.Method == http.MethodPost {
 		r.Body = http.MaxBytesReader(w, r.Body, config.DefaultDOHMaxRequestSize)
-		buf, err = io.ReadAll(r.Body)
-		defer func() { _ = r.Body.Close() }()
-		if err != nil {
-			return nil, http.StatusBadRequest
-		}
-
-	default:
-		return nil, http.StatusMethodNotAllowed
 	}
 
-	if len(buf) == 0 {
-		return nil, http.StatusBadRequest
-	}
-
-	req := pool.DefaultMessage.Get()
-	req.Data = buf
-	if err := req.Unpack(); err != nil {
-		pool.DefaultMessage.Put(req)
+	req, err := dnshttp.Request(r)
+	if err != nil {
 		return nil, http.StatusBadRequest
 	}
 
@@ -189,7 +168,7 @@ func (s *Server) respondDOH(w http.ResponseWriter, response *dns.Msg) error {
 		return fmt.Errorf("pack response: %w", err)
 	}
 
-	w.Header().Set("Content-Type", config.DOHContentType)
+	w.Header().Set("Content-Type", dnshttp.MimeType)
 	w.Header().Set("Cache-Control", "max-age=0")
 	n, err := w.Write(bytes) //nolint:gosec // G705: DNS wire format, not user-facing HTML
 	if n != len(bytes) {

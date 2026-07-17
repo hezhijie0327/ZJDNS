@@ -7,24 +7,17 @@ import (
 	"net"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// normalize truncates the DNS response if needed for the protocol.
+// normalize truncates the DNS response if it exceeds the client's EDNS buffer
+// size.  Following RFC 2181 §9, truncated responses must have TC=1 and empty
+// Answer/Ns/Extra sections — the client MUST retry over TCP.
 func normalize(proto string, req, res *dns.Msg) {
 	size := dnsSize(proto, req)
 	size -= EDNSSize
-
-	// Truncate by removing answer records until the message fits.
-	for len(res.Answer) > 0 && res.Len() > size {
-		res.Answer = res.Answer[:len(res.Answer)-1]
-	}
-	if len(res.Answer) == 0 && res.Len() > size {
-		res.Truncated = true
-	}
-
-	// For UDP: remove all answer records when truncated as a safety measure.
-	if res.Truncated && proto == "udp" {
-		res.Answer = nil
+	if res.Len() > size {
+		dnsutil.Truncate(res)
 	}
 }
 

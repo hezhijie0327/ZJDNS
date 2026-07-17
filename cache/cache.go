@@ -17,7 +17,7 @@ type RequestRecord struct {
 	Qclass       uint16
 	ECS          *config.ECSOption // for resolving entry_id FK; nil if none
 	DNSSECOK     bool              // for resolving entry_id FK
-	Protocol     string            // 'udp','tcp','dot','doq','doh','doh3'
+	Protocol     string            // 'udp','tcp','tls','quic','https','http3','dtls','dnscrypt','dnscrypt-tcp','tlcp','http-tlcp','dtlcp'
 	Result       string            // 'hit','miss','stale','zone','error'
 	ResponseTime int64             // milliseconds
 	Rcode        int               // DNS response code
