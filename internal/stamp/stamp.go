@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -71,18 +72,6 @@ const (
 	DefaultDoTPort = 853
 	DefaultDNSPort = 53
 )
-
-// KnownProtocols is the set of protocol IDs this package can parse.
-var KnownProtocols = map[StampProtoType]bool{
-	ProtoPlain:         true,
-	ProtoDNSCrypt:      true,
-	ProtoDOH:           true,
-	ProtoDOT:           true,
-	ProtoDOQ:           true,
-	ProtoODoHTarget:    true,
-	ProtoDNSCryptRelay: true,
-	ProtoODoHRelay:     true,
-}
 
 // Common errors returned by Parse.
 var (
@@ -222,9 +211,25 @@ func ProtoToConfig(stampProto StampProtoType) string {
 	}
 }
 
-// IsKnownProtocol reports whether proto is a recognised stamp protocol ID.
-func IsKnownProtocol(proto StampProtoType) bool {
-	return KnownProtocols[proto]
+// BuildDoHURL constructs the full https:// URL from the stamp's DoH fields.
+// Address supplies host:port; ProviderName optionally overrides the host;
+// Path provides the HTTP endpoint (defaults to /dns-query).
+func (s *Stamp) BuildDoHURL() string {
+	host, port, err := net.SplitHostPort(s.Address)
+	if err != nil {
+		return "https://" + s.Address + "/dns-query"
+	}
+	if s.ProviderName != "" {
+		host = s.ProviderName
+	}
+	path := s.Path
+	if path == "" {
+		path = "/dns-query"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return "https://" + net.JoinHostPort(host, port) + path
 }
 
 // String encodes the stamp back to an sdns:// URI.

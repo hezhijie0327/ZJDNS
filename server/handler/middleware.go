@@ -1,10 +1,15 @@
-// Package handler provides the DNS query processing pipeline: cache lookup,
+// Package types provides the DNS query processing pipeline: cache lookup,
 // zone evaluation, upstream/recursive resolution, and DNSSEC validation.
 package handler
 
 import (
 	"context"
 	"errors"
+	"net"
+	"zjdns/edns"
+	"zjdns/zone"
+
+	"codeberg.org/miekg/dns"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,11 +31,30 @@ type QueryHandler interface {
 // QueryHandlerFunc adapts a plain function to the QueryHandler interface.
 type QueryHandlerFunc func(ctx context.Context, qctx *QueryContext) error
 
+// ZoneEvaluator is the subset of *zone.Evaluator used by the middleware
+// chain, defined in the consumer package per the project's interface discipline.
+type ZoneEvaluator interface {
+	HasRules() bool
+	Bypass(matchedTags map[string]bool) bool
+	Evaluate(qname string, qtype, qclass uint16, matchedTags map[string]bool) zone.Result
+}
+
 // Middleware wraps a QueryHandler, returning a new QueryHandler that adds
 // pre- or post-processing logic.  Implementations should delegate to
 // next.ServeDNS when they choose not to short-circuit.
 type Middleware interface {
 	Wrap(next QueryHandler) QueryHandler
+}
+
+// EDNSHandler is the subset of *edns.Handler used by the middleware chain,
+// defined in the consumer package per the project's interface discipline.
+type EDNSHandler interface {
+	ParseFromDNS(req *dns.Msg) *edns.ECSOption
+	ParseCookie(req *dns.Msg) *edns.CookieOption
+	ECSForQType(qtype uint16) *edns.ECSOption
+	ApplyToMessage(msg *dns.Msg, ecs *edns.ECSOption, isSecure bool, cookieStr string, ede *edns.EDEOption, isRequest, wantsPadding bool, tcpKeepalive uint16)
+	GenerateServerCookie(clientIP net.IP, clientCookie []byte) []byte
+	IsServerCookieValid(clientIP net.IP, clientCookie, serverCookie []byte) edns.CookieValStatus
 }
 
 // ---------------------------------------------------------------------------

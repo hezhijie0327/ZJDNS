@@ -1,15 +1,14 @@
-package handler
+package middleware
 
 import (
 	"context"
 	"net"
 	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/edns"
 	"zjdns/internal/dns64"
 	"zjdns/internal/pending"
+	"zjdns/server/handler"
 	"zjdns/server/resolver"
-	"zjdns/zone"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -21,15 +20,15 @@ type Dependencies struct {
 	// Core
 	Config        *config.ServerConfig
 	Cache         cache.Store
-	EDNS          *edns.Handler
-	ZoneEvaluator *zone.Evaluator
+	EDNS          handler.EDNSHandler
+	ZoneEvaluator handler.ZoneEvaluator
 	TagMatcher    func(qname string, ip net.IP) map[string]bool
 
 	// Resolution
-	Resolver     Resolver
-	Prober       LatencyProber
-	PendingReqs  *PendingRequests
-	PendingRefrs *pending.Group[pendingKey]
+	Resolver     handler.Resolver
+	Prober       handler.LatencyProber
+	PendingReqs  *handler.PendingRequests
+	PendingRefrs *pending.Group[handler.PendingKey]
 
 	// Optional features
 	DNS64         *dns64.Synthesizer
@@ -40,11 +39,11 @@ type Dependencies struct {
 	RefreshGroup     *errgroup.Group
 	RefreshCtx       context.Context
 	Ctx              context.Context
-	PrefetchCooldown *PrefetchCooldown
+	PrefetchCooldown *handler.PrefetchCooldown
 }
 
 // AssembleChain builds the middleware chain from the given dependencies.
-// The returned QueryHandler is the outermost wrapper; calling ServeDNS on it
+// The returned handler.QueryHandler is the outermost wrapper; calling ServeDNS on it
 // runs the full pipeline.
 //
 // Execution order (outermost → innermost):
@@ -59,10 +58,10 @@ type Dependencies struct {
 //	RulesetMiddleware       — CIDR-based A/AAAA filtering
 //	DNS64Middleware         — AAAA synthesis
 //	ResolutionMiddleware    — terminal: upstream / recursive resolution
-func AssembleChain(deps *Dependencies) QueryHandler {
+func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	// Innermost: no-op terminal.  ResolutionMiddleware is the real terminal —
 	// it ignores next and never calls this stub.
-	var h QueryHandler = QueryHandlerFunc(func(_ context.Context, _ *QueryContext) error {
+	var h handler.QueryHandler = handler.QueryHandlerFunc(func(_ context.Context, _ *handler.QueryContext) error {
 		return nil
 	})
 

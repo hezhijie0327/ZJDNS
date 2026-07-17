@@ -241,13 +241,13 @@ func TestPendingRequests_NilECSAndZeroECSAreSameKey(t *testing.T) {
 }
 
 func TestPendingRefreshes_LeaderAndFollower(t *testing.T) {
-	pr := pending.NewGroup[pendingKey]()
+	pr := pending.NewGroup[PendingKey]()
 
 	qname := "example.com."
 	qtype := dns.TypeA
 	qclass := uint16(dns.ClassINET)
 
-	key := buildPendingKey(qname, qtype, qclass, nil, false)
+	key := BuildPendingKey(qname, qtype, qclass, nil, false)
 
 	// Leader.
 	if !pr.Start(key) {
@@ -270,11 +270,11 @@ func TestPendingRefreshes_LeaderAndFollower(t *testing.T) {
 }
 
 func TestPendingRefreshes_DifferentKeys(t *testing.T) {
-	pr := pending.NewGroup[pendingKey]()
+	pr := pending.NewGroup[PendingKey]()
 
-	keyA := buildPendingKey("example.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
-	keyAAAA := buildPendingKey("example.com.", dns.TypeAAAA, uint16(dns.ClassINET), nil, false)
-	keyOther := buildPendingKey("other.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
+	keyA := BuildPendingKey("example.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
+	keyAAAA := BuildPendingKey("example.com.", dns.TypeAAAA, uint16(dns.ClassINET), nil, false)
+	keyOther := BuildPendingKey("other.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
 
 	if !pr.Start(keyA) {
 		t.Fatal("expected leader for type A")
@@ -292,11 +292,11 @@ func TestPendingRefreshes_DifferentKeys(t *testing.T) {
 }
 
 func TestPendingRefreshes_ECSVariation(t *testing.T) {
-	pr := pending.NewGroup[pendingKey]()
+	pr := pending.NewGroup[PendingKey]()
 	qclass := uint16(dns.ClassINET)
 
-	ecsKey := buildPendingKey("example.com.", dns.TypeA, qclass, &edns.ECSOption{Address: nil, SourcePrefix: 24}, false)
-	nilKey := buildPendingKey("example.com.", dns.TypeA, qclass, nil, false)
+	ecsKey := BuildPendingKey("example.com.", dns.TypeA, qclass, &edns.ECSOption{Address: nil, SourcePrefix: 24}, false)
+	nilKey := BuildPendingKey("example.com.", dns.TypeA, qclass, nil, false)
 
 	if !pr.Start(ecsKey) {
 		t.Fatal("expected leader for ECS")
@@ -310,8 +310,8 @@ func TestPendingRefreshes_ECSVariation(t *testing.T) {
 }
 
 func TestPendingRefreshes_ConcurrentSameKey(t *testing.T) {
-	pr := pending.NewGroup[pendingKey]()
-	key := buildPendingKey("concurrent.example.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
+	pr := pending.NewGroup[PendingKey]()
+	key := BuildPendingKey("concurrent.example.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
 
 	const goroutines = 50
 	var entered atomic.Int32
@@ -354,8 +354,8 @@ func TestPendingRefreshes_ConcurrentSameKey(t *testing.T) {
 }
 
 func TestPendingRefreshes_MultipleFollowers(t *testing.T) {
-	pr := pending.NewGroup[pendingKey]()
-	key := buildPendingKey("example.com.", dns.TypeAAAA, uint16(dns.ClassINET), nil, false)
+	pr := pending.NewGroup[PendingKey]()
+	key := BuildPendingKey("example.com.", dns.TypeAAAA, uint16(dns.ClassINET), nil, false)
 
 	if !pr.Start(key) {
 		t.Fatal("expected leader")
@@ -388,16 +388,16 @@ func TestPendingRefreshes_MultipleFollowers(t *testing.T) {
 }
 
 func TestPendingRefreshes_DoneWithoutStart(t *testing.T) {
-	pr := pending.NewGroup[pendingKey]()
-	pr.Done(buildPendingKey("no-such-key.", dns.TypeA, uint16(dns.ClassINET), nil, false))
+	pr := pending.NewGroup[PendingKey]()
+	pr.Done(BuildPendingKey("no-such-key.", dns.TypeA, uint16(dns.ClassINET), nil, false))
 }
 
 func TestPendingRefreshes_DNSSECKeyIsolation(t *testing.T) {
-	pr := pending.NewGroup[pendingKey]()
+	pr := pending.NewGroup[PendingKey]()
 	qclass := uint16(dns.ClassINET)
 
-	keyWithDNSSEC := buildPendingKey("example.com.", dns.TypeA, qclass, nil, true)
-	keyWithoutDNSSEC := buildPendingKey("example.com.", dns.TypeA, qclass, nil, false)
+	keyWithDNSSEC := BuildPendingKey("example.com.", dns.TypeA, qclass, nil, true)
+	keyWithoutDNSSEC := BuildPendingKey("example.com.", dns.TypeA, qclass, nil, false)
 
 	if !pr.Start(keyWithDNSSEC) {
 		t.Fatal("expected leader for dnssecOK=true")
@@ -412,8 +412,8 @@ func TestPendingRefreshes_DNSSECKeyIsolation(t *testing.T) {
 }
 
 func TestPendingRefreshes_LeaderDoneFollowerCanProceed(t *testing.T) {
-	pr := pending.NewGroup[pendingKey]()
-	key := buildPendingKey("test.example.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
+	pr := pending.NewGroup[PendingKey]()
+	key := BuildPendingKey("test.example.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
 
 	if !pr.Start(key) {
 		t.Fatal("expected leader")

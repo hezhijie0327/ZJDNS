@@ -1,4 +1,4 @@
-package handler
+package middleware
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
-	"zjdns/zone"
+	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
 )
@@ -17,14 +17,14 @@ import (
 // (NXDOMAIN, REFUSED, or NOERROR with records).  If no rule matches,
 // it delegates to the next handler.
 type ZoneMiddleware struct {
-	evaluator  *zone.Evaluator
+	evaluator  handler.ZoneEvaluator
 	tagMatcher func(qname string, ip net.IP) map[string]bool
 	cache      cache.Store
 }
 
 // Wrap implements Middleware.
-func (m *ZoneMiddleware) Wrap(next QueryHandler) QueryHandler {
-	return QueryHandlerFunc(func(ctx context.Context, qctx *QueryContext) error {
+func (m *ZoneMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		if !m.evaluator.HasRules() {
 			return next.ServeDNS(ctx, qctx)
 		}
@@ -63,7 +63,7 @@ func (m *ZoneMiddleware) Wrap(next QueryHandler) QueryHandler {
 		// Non-success rcode → build error response.
 		if zoneResult.Rcode != dns.RcodeSuccess {
 			log.Debugf("RESULT: %s %s | rcode=%s, blocked by zone rule", qname, dns.TypeToString[qtype], dns.RcodeToString[uint16(zoneResult.Rcode)]) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
-			response := buildResponseMsg(qctx.Req)
+			response := handler.BuildResponseMsg(qctx.Req)
 			response.Rcode = uint16(zoneResult.Rcode) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 			if len(zoneResult.Authority) > 0 || len(zoneResult.Additional) > 0 {
 				elapsed := ttl.Elapsed(zoneResult.CreatedAt)
@@ -79,7 +79,7 @@ func (m *ZoneMiddleware) Wrap(next QueryHandler) QueryHandler {
 		hasRecords := len(zoneResult.Answer) > 0 || len(zoneResult.Authority) > 0 || len(zoneResult.Additional) > 0
 		if hasRecords {
 			elapsed := ttl.Elapsed(zoneResult.CreatedAt)
-			response := buildResponseMsg(qctx.Req)
+			response := handler.BuildResponseMsg(qctx.Req)
 			response.Answer = ttl.DeductElapsedCyclical(zoneResult.Answer, elapsed)
 			response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
 			response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)

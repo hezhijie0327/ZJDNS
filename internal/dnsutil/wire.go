@@ -42,6 +42,15 @@ func Decompress(data []byte) ([]byte, error) {
 	return zstdDecoder.DecodeAll(data, nil)
 }
 
+// DecompressTo decompresses data with zstd, using dst as the output buffer
+// when it has enough capacity (avoids allocation on the hot path, P3).
+func DecompressTo(data, dst []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	return zstdDecoder.DecodeAll(data, dst[:0])
+}
+
 // BoolToInt converts a bool to 0 or 1 for SQLite INTEGER columns.
 func BoolToInt(b bool) int {
 	if b {

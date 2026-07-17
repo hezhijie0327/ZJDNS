@@ -22,14 +22,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// TCPKeepAliveListener wraps a net.Listener to enable TCP keep-alive on every
-// accepted connection. This ensures both server-side and client-side keep-alive
-// are active, preventing unilateral connection teardown by intermediate NAT or
-// firewall state timeouts.
-type TCPKeepAliveListener struct {
-	net.Listener
-}
-
 // KTLSSettings configures kernel TLS offload for DoT/DoH server listeners.
 type KTLSSettings struct {
 	KernelTX bool // kernel TLS TX offload (default false)
@@ -97,18 +89,6 @@ const (
 	// TLSConnBufferSize is the buffer size for TLS connection readers.
 	TLSConnBufferSize = 4096
 )
-
-func (k *TCPKeepAliveListener) Accept() (net.Conn, error) {
-	conn, err := k.Listener.Accept()
-	if err != nil {
-		return nil, err
-	}
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetKeepAlive(true)
-		_ = tcpConn.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
-	}
-	return conn, nil
-}
 
 func (d *debugListener) Accept() (net.Conn, error) {
 	conn, err := d.Listener.Accept()

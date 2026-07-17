@@ -134,6 +134,16 @@ func addrToNetip(ip net.IP) netip.Addr {
 	return addr
 }
 
+// GenerateServerCookie delegates to CookieGenerator.
+func (h *Handler) GenerateServerCookie(clientIP net.IP, clientCookie []byte) []byte {
+	return h.CookieGenerator.GenerateServerCookie(clientIP, clientCookie)
+}
+
+// IsServerCookieValid delegates to CookieGenerator.
+func (h *Handler) IsServerCookieValid(clientIP net.IP, clientCookie, serverCookie []byte) CookieValStatus {
+	return h.CookieGenerator.IsServerCookieValid(clientIP, clientCookie, serverCookie)
+}
+
 // netipToIP converts a netip.Addr back to net.IP for ECSOption compatibility.
 func netipToIP(addr netip.Addr) net.IP {
 	if !addr.IsValid() {

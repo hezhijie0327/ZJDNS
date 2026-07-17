@@ -22,12 +22,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Question is a type alias for resolver.Question to avoid duplicate definitions
-// and conversion overhead at the handler↔resolver boundary.
+// Question is a type alias for resolver.Question.
 type Question = resolver.Question
 
-// Resolver is the interface for DNS query resolution, defined in the consumer
-// package so the handler depends on an abstraction rather than a concrete type.
+// Resolver is the interface for DNS query resolution.
 type Resolver interface {
 	Query(ctx context.Context, question Question, ecs *edns.ECSOption) *resolver.QueryResult
 	DNSSECEDECode() uint16
@@ -35,8 +33,7 @@ type Resolver interface {
 	UpstreamServers() []*config.UpstreamServer
 }
 
-// LatencyProber is the interface for latency-probing cache entries after
-// successful resolution.
+// LatencyProber is the interface for latency-probing cache entries.
 type LatencyProber interface {
 	Start(qname string, qtype uint16, answer, authority, additional []dns.RR, validated bool, ecs *edns.ECSOption)
 	Close()
@@ -114,7 +111,7 @@ func (h *Handler) UpstreamServers() []*config.UpstreamServer { return h.resolver
 // It creates a QueryContext and delegates to the middleware chain.
 func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg {
 	if atomic.LoadInt32(&h.closed) != 0 {
-		msg := buildResponseMsg(req)
+		msg := BuildResponseMsg(req)
 		msg.Rcode = dns.RcodeServerFailure
 		return msg
 	}
@@ -156,7 +153,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	}
 
 	if err != nil && qctx.Res == nil {
-		msg := buildResponseMsg(req)
+		msg := BuildResponseMsg(req)
 		msg.Rcode = dns.RcodeServerFailure
 		h.cache.RecordRequest(&cache.RequestRecord{
 			Result: "error", Protocol: protocol, Rcode: dns.RcodeServerFailure,

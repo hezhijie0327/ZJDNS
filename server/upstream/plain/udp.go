@@ -56,6 +56,7 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 	respBuf := socks5.ReadPool.Get().(*[]byte)
 	n, _, readErr := pconn.ReadFrom(*respBuf)
 	if readErr != nil {
+		clear(*respBuf)
 		socks5.ReadPool.Put(respBuf)
 		return nil, readErr
 	}
@@ -63,10 +64,12 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 	response := pool.DefaultMessagePool.Get()
 	response.Data = (*respBuf)[:n]
 	if err := response.Unpack(); err != nil {
+		clear(*respBuf)
 		socks5.ReadPool.Put(respBuf)
 		pool.DefaultMessagePool.Put(response)
 		return nil, err
 	}
+	clear(*respBuf)
 	socks5.ReadPool.Put(respBuf)
 
 	response.ID = msg.ID

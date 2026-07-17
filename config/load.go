@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -120,7 +119,7 @@ func resolveStamp(server *UpstreamServer, index int, category string) error {
 	// Address: for DoH, reconstruct the full URL from stamp fields.
 	switch s.Proto {
 	case zstamp.ProtoDOH:
-		server.Address = buildDOHURL(s)
+		server.Address = s.BuildDoHURL()
 	default:
 		server.Address = s.Address
 	}
@@ -160,27 +159,6 @@ func protocolMatchesStamp(userProto string, stampProto zstamp.StampProtoType) bo
 	default:
 		return false
 	}
-}
-
-// buildDOHURL constructs the full DoH URL from a stamp's fields.
-// Stamp address is host:port; host_name is SNI; path is the HTTP endpoint.
-func buildDOHURL(s *zstamp.Stamp) string {
-	host, port, err := net.SplitHostPort(s.Address)
-	if err != nil {
-		// Fallback: use address as-is (shouldn't happen for valid stamps).
-		return "https://" + s.Address + "/dns-query"
-	}
-	if s.ProviderName != "" {
-		host = s.ProviderName
-	}
-	path := s.Path
-	if path == "" {
-		path = "/dns-query"
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return "https://" + net.JoinHostPort(host, port) + path
 }
 
 // hexEncodePublicKey encodes a DNSCrypt Ed25519 public key as an uppercase hex

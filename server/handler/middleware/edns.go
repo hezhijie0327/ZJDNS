@@ -1,4 +1,4 @@
-package handler
+package middleware
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
 )
@@ -14,13 +15,13 @@ import (
 // incoming request and validates the DNS Cookie per RFC 7873.  Invalid
 // cookies receive a BADCOOKIE response.
 type EDNSMiddleware struct {
-	edns   *edns.Handler
+	edns   handler.EDNSHandler
 	config *config.ServerConfig
 }
 
 // Wrap implements Middleware.
-func (m *EDNSMiddleware) Wrap(next QueryHandler) QueryHandler {
-	return QueryHandlerFunc(func(ctx context.Context, qctx *QueryContext) error {
+func (m *EDNSMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		req := qctx.Req
 
 		// Force a full unpack so EDNS flags are available.
@@ -42,7 +43,7 @@ func (m *EDNSMiddleware) Wrap(next QueryHandler) QueryHandler {
 
 		// RFC 7873: Full server cookie (16 bytes) → cryptographic validation.
 		if cookieOpt != nil && len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen {
-			status := m.edns.CookieGenerator.IsServerCookieValid(qctx.ClientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
+			status := m.edns.IsServerCookieValid(qctx.ClientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
 			if status == edns.CookieExpired || status == edns.CookieFuture || status == edns.CookieInvalid {
 				log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", status, qctx.ClientIP)
 				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt)
@@ -60,10 +61,10 @@ func (m *EDNSMiddleware) Wrap(next QueryHandler) QueryHandler {
 }
 
 func (m *EDNSMiddleware) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *edns.CookieOption) *dns.Msg {
-	msg := buildResponseMsg(req)
+	msg := handler.BuildResponseMsg(req)
 	msg.Rcode = dns.RcodeFormatError
 
-	serverCookie := m.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+	serverCookie := m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 	cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 
 	ecsOpt := m.edns.ParseFromDNS(req)

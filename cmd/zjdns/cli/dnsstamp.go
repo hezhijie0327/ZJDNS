@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"zjdns/config"
 	zstamp "zjdns/internal/stamp"
 )
@@ -26,7 +25,7 @@ func RunDNSStampDecode(stampStr string) error {
 	// normalization logic in config.normalizeStamps.
 	switch s.Proto {
 	case zstamp.ProtoDOH:
-		entry.Address = dohURLFromStamp(s)
+		entry.Address = s.BuildDoHURL()
 	case zstamp.ProtoODoHTarget:
 		// ODoH target has no address — provider name + path only.
 		entry.ServerName = s.ProviderName
@@ -113,22 +112,4 @@ func parseProto(s string) (zstamp.StampProtoType, error) {
 	default:
 		return 0, fmt.Errorf("unknown protocol %q (use: plain, dnscrypt, doh, dot, doq, odoh-target, dnscrypt-relay, odoh-relay)", s)
 	}
-}
-
-// dohURLFromStamp reconstructs the full https:// URL from a DoH stamp's fields.
-func dohURLFromStamp(s *zstamp.Stamp) string {
-	host := s.ProviderName
-	if host == "" {
-		host = s.Address
-	}
-	// Ensure the host portion has a port. ProviderName typically includes it
-	// (e.g. "dns9.quad9.net:443"), but if not, default to 443.
-	if _, _, err := net.SplitHostPort(host); err != nil {
-		host = net.JoinHostPort(host, "443")
-	}
-	path := s.Path
-	if path == "" {
-		path = "/dns-query"
-	}
-	return "https://" + host + path
 }

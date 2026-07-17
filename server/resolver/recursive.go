@@ -3,7 +3,6 @@ package resolver
 import (
 	"context"
 	"fmt"
-	"net"
 	"strings"
 	"sync/atomic"
 	"zjdns/cache"
@@ -13,7 +12,6 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/resolver/hijack"
-	"zjdns/server/resolver/probe"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -219,101 +217,24 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		parentDomain := currentDomain
 		currentDomain = bestMatch + "."
 
-		// Try cache first for all NS names — latency-sorted records
-		// from previous resolutions (or restarted snapshots) skip the
-		// glue extraction + inline probe entirely.
-		var nextNS []string
-		var nextNSSource string // "cache" or "glue" or "resolution"
-		if r.cache != nil {
-			for _, ns := range bestNSRecords {
-				nsName := dnsutil.Fqdn(ns.Ns)
-				cached := r.lookupNSAddrsFromCache(nsName, nil)
-				if len(cached) > 0 {
-					nextNS = append(nextNS, cached...)
-					// Log per-NS latency ranking (fastest first) so
-					// operators can verify the probe is working.
-					if len(cached) > 1 && log.Default.Level() >= log.Debug {
-						rankParts := make([]string, 0, len(cached))
-						for i, addr := range cached {
-							rankParts = append(rankParts, fmt.Sprintf("#%d=%s", i+1, addr))
-						}
-						log.Debugf("RECURSION: NS %s cached (sorted): %s", nsName, strings.Join(rankParts, " "))
-					}
-				}
-			}
-			if len(nextNS) > 0 {
-				nextNSSource = "cache"
-			}
+		// Resolve NS addresses for the next delegation level.
+		nsResult := r.resolveNextNameservers(ctx, bestNSRecords, response, qname, parentDomain, depth, forceTCP)
+
+		if len(nsResult.addrs) > 0 {
+			log.Debugf("RECURSION: zone=%s, %d NS names -> %d addresses (source=%s): %v",
+				currentDomain, len(bestNSRecords), len(nsResult.addrs), nsResult.source, nsResult.addrs)
 		}
 
-		// Fall back to glue records when cache doesn't cover all NS names.
-		nsGlue := make(map[string][]dns.RR) // NS name → A/AAAA glue records
-		if len(nextNS) == 0 {
-			for _, ns := range bestNSRecords {
-				for _, rrec := range response.Extra {
-					ip, ok := extractGlueIP(rrec, ns.Ns)
-					if !ok {
-						continue
-					}
-					// Validate glue name is within the parent zone.
-					rrecName := zdnsutil.NormalizeDomain(rrec.Header().Name)
-					parDom := zdnsutil.NormalizeDomain(parentDomain)
-					if rrecName != parDom && !strings.HasSuffix(rrecName, "."+parDom) && parDom != "" {
-						continue
-					}
-					nsKey := dnsutil.Fqdn(rrec.Header().Name)
-					nsGlue[nsKey] = append(nsGlue[nsKey], rrec)
-					nextNS = append(nextNS, net.JoinHostPort(ip, config.DefaultUDPPort))
-				}
-			}
-		}
-
-		// Use glue records directly when available; only fall back to
-		// independent NS resolution when the delegation has no glue.
-		if len(nextNS) == 0 {
-			nextNS = r.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
-			if len(nextNS) > 0 {
-				nextNSSource = "resolution"
-			}
-		} else if nextNSSource == "" {
-			nextNSSource = "glue"
-		}
-
-		// Log the addresses being used for this delegation step so operators
-		// can verify latency ordering. The first address is queried first
-		// (within the concurrency limit); with first-win semantics, faster
-		// servers win races.
-		if len(nextNS) > 0 {
-			log.Debugf("RECURSION: zone=%s, %d NS names → %d addresses (source=%s): %v",
-				currentDomain, len(bestNSRecords), len(nextNS), nextNSSource, nextNS)
-		}
-
-		if len(nextNS) == 0 {
+		if len(nsResult.addrs) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessagePool.Put(response)
 			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.RecursiveIndicator}
 		}
 
-		// Cache A/AAAA glue records per NS name immediately so
-		// future queries hit warm cache. A background latency probe
-		// will reorder them later — the current query uses addresses
-		// as-is to avoid blocking the resolution pipeline.
-		if r.cache != nil && len(nsGlue) > 0 {
-			for nsName, records := range nsGlue {
-				if len(records) > 0 {
-					qtype := dns.RRToType(records[0])
-					r.cache.Set(nsName, qtype, dns.ClassINET, nil, false, records, nil, nil, false)
-				}
-			}
-			// Fire background latency probe for each NS name in the glue.
-			for _, records := range nsGlue {
-				addrs := addrsFromRRs(records)
-				go probe.ProbeNSAddrs(r.cache, addrs)
-			}
-		}
+		r.cacheGlueRecords(nsResult.glue)
 
 		pool.DefaultMessagePool.Put(response)
-		nameservers = nextNS
+		nameservers = nsResult.addrs
 		// Save TLD servers after updating. Used for the
 		// full-QNAME hijack probe at the authoritative step.
 		if labelCount(currentDomain) == 1 {

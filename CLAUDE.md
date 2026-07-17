@@ -173,8 +173,9 @@ zjdns/
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp
 └── server/
-    ├── server.go, bridge.go, server_tasks.go
-    ├── handler/        ← query pipeline
+    ├── server.go, bridge.go, init.go, tasks.go
+    ├── handler/        ← query pipeline adapter + shared types
+    │   └── middleware/ ← 10 composable middleware implementations + AssembleChain
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + socks5
     └── resolver/       ← recursive walk + forward + dnssec/ + hijack/ + probe/
@@ -209,10 +210,11 @@ Layer 4 (server sub-packages — import domain + internal, never server/ parent)
   server/protocol/tls → config, dnsutil, log, pool
   server/protocol/tlcp → config, dnsutil, log, pool
   server/protocol/dnscrypt → config, dnsutil, log, pool
-  server/handler → cache, config, edns, dnsutil, log, pool, zone, server/resolver (middleware chain + QueryContext)
+  server/handler → cache, config, edns, dnsutil, log, pool, zone, server/resolver
+  server/handler/middleware → cache, config, edns, dnsutil, log, pool, zone, server/handler, server/resolver
 
 Top layer (wiring):
-  server → all domain + all server sub-packages
+  server → all domain + all server sub-packages (including handler/middleware)
   cmd/zjdns → cmd/zjdns/cli, config, log, server
 ```
 

@@ -51,6 +51,8 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			msg.Rcode = dns.RcodeServerFailure
 			if err := msg.Pack(); err != nil {
 				log.Debugf("SERVER: TCP SERVFAIL pack error for %s: %v", addr, err)
+				pool.DefaultMessagePool.Put(msg)
+				return
 			}
 			if _, err := io.Copy(w, msg); err != nil {
 				log.Debugf("SERVER: TCP SERVFAIL write error for %s: %v", addr, err)
@@ -74,6 +76,15 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			response := s.handler.ServeDNS(req, zdnsutil.ClientIP(w), false, config.ProtoTCP)
 			if response != nil {
 				entry.lastAccess.Store(log.NowUnixNano())
+
+				// Pack before acquiring writeMu — keeps the lock
+				// critical section I/O-only and brief (P2).
+				if err := response.Pack(); err != nil {
+					log.Debugf("SERVER: TCP pack error for %s: %v", addr, err)
+					pool.DefaultMessagePool.Put(response)
+					return
+				}
+
 				writeTimer := time.NewTimer(config.DefaultDNSQueryTimeout)
 				select {
 				case entry.writeMu <- struct{}{}:
@@ -84,9 +95,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 					pool.DefaultMessagePool.Put(response)
 					return
 				}
-				if err := response.Pack(); err != nil {
-					log.Debugf("SERVER: TCP pack error for %s: %v", addr, err)
-				} else if _, err := io.Copy(w, response); err != nil {
+				if _, err := io.Copy(w, response); err != nil {
 					log.Debugf("SERVER: TCP write error for %s: %v", addr, err)
 				}
 				pool.DefaultMessagePool.Put(response)
@@ -101,7 +110,10 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	if response != nil {
 		if err := response.Pack(); err != nil {
 			log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
-		} else if _, err := io.Copy(w, response); err != nil {
+			pool.DefaultMessagePool.Put(response)
+			return
+		}
+		if _, err := io.Copy(w, response); err != nil {
 			log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
 		}
 		pool.DefaultMessagePool.Put(response)

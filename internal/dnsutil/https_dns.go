@@ -1,4 +1,4 @@
-package tls
+package dnsutil
 
 import (
 	"context"
@@ -8,17 +8,18 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"zjdns/config"
 	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
-	"github.com/quic-go/quic-go/http3"
 )
 
-// ExecuteHTTPSRequest is the shared DoH/DoH3 request logic. Both ExecuteHTTPS
-// and ExecuteHTTP3 differ only in which *http.Client they construct (HTTP/2 vs
-// HTTP/3 transport); the HTTP request/response dance is identical.
-func ExecuteHTTPSRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient *http.Client) (*dns.Msg, error) {
+// DOHContentType is the MIME type for DNS-over-HTTPS requests (RFC 8484).
+const DOHContentType = "application/dns-message"
+
+// ExecuteDoHRequest sends a DNS query via DoH GET and returns the response.
+// It is shared by the TLS and TLCP upstream clients.  The httpMethod parameter
+// allows callers to use GET (HTTP/2) or GET0RTT (HTTP/3).
+func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient *http.Client, httpMethod string) (*dns.Msg, error) {
 	originalID := msg.ID
 	msg.ID = 0
 
@@ -40,17 +41,13 @@ func ExecuteHTTPSRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClie
 	urlBuf.WriteString("?dns=")
 	urlBuf.WriteString(base64.RawURLEncoding.EncodeToString(buf))
 
-	method := http.MethodGet
-	if _, ok := httpClient.Transport.(*http3Transport); ok {
-		method = http3.MethodGet0RTT
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, method, urlBuf.String(), http.NoBody)
+	httpReq, err := http.NewRequestWithContext(ctx, httpMethod, urlBuf.String(), http.NoBody)
 	if err != nil {
 		msg.ID = originalID
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	httpReq.Header.Set("Accept", config.DOHContentType)
+	httpReq.Header.Set("Accept", DOHContentType)
 	httpReq.Header.Set("User-Agent", "")
 
 	httpResp, err := httpClient.Do(httpReq)

@@ -22,15 +22,15 @@ import (
 // identical queries.
 type PendingRequests struct {
 	mu   sync.Mutex
-	sets map[pendingKey]*pendingCall
+	sets map[PendingKey]*pendingCall
 }
 
 // --- Unexported types ---
 
-// pendingKey is a pre-computed cache key for deduplicating concurrent identical
+// PendingKey is a pre-computed cache key for deduplicating concurrent identical
 // queries.  It mirrors the cache lookup key (qname, qtype, qclass, ecs_addr,
 // ecs_prefix, dnssec_ok).
-type pendingKey struct {
+type PendingKey struct {
 	qname     string
 	qtype     uint16
 	qclass    uint16
@@ -49,14 +49,14 @@ type pendingCall struct {
 // NewPendingRequests creates a PendingRequests ready for use.
 func NewPendingRequests() *PendingRequests {
 	return &PendingRequests{
-		sets: make(map[pendingKey]*pendingCall),
+		sets: make(map[PendingKey]*pendingCall),
 	}
 }
 
 // NewRefreshGroup creates a pending group for cache refresh dedup.
 // Exported for use by server.New() during chain assembly.
-func NewRefreshGroup() *pending.Group[pendingKey] {
-	return pending.NewGroup[pendingKey]()
+func NewRefreshGroup() *pending.Group[PendingKey] {
+	return pending.NewGroup[PendingKey]()
 }
 
 // --- Exported methods ---
@@ -67,7 +67,7 @@ func NewRefreshGroup() *pending.Group[pendingKey] {
 // with the result after the upstream query completes, and Join returns
 // follower=false.
 func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) (*resolver.QueryResult, bool) {
-	key := buildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
+	key := BuildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
 
 	p.mu.Lock()
 	call, loaded := p.sets[key]
@@ -96,7 +96,7 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 // Done stores the result and wakes all waiting followers.  Must only be
 // called by the leader (i.e. after Join returned follower=false).
 func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool, result *resolver.QueryResult) {
-	key := buildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
+	key := BuildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
 
 	p.mu.Lock()
 	call, ok := p.sets[key]
@@ -113,14 +113,14 @@ func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.
 
 // --- Unexported helpers ---
 
-// buildPendingKey constructs a pendingKey from the given parameters.
-func buildPendingKey(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) pendingKey {
+// BuildPendingKey constructs a PendingKey from the given parameters.
+func BuildPendingKey(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) PendingKey {
 	ecsAddr, ecsPrefix := "", uint8(0)
 	if ecsOpt != nil && ecsOpt.Address != nil {
 		ecsAddr = ecsOpt.Address.String()
 		ecsPrefix = ecsOpt.SourcePrefix
 	}
-	return pendingKey{
+	return PendingKey{
 		qname:     qname,
 		qtype:     qtype,
 		qclass:    qclass,

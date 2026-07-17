@@ -82,3 +82,17 @@ func ecsParams(ecs *config.ECSOption) (addr string, prefix int) {
 	}
 	return ecs.Address.String(), int(ecs.SourcePrefix)
 }
+
+// stripOPT removes EDNS OPT pseudo-records (TypeOPT) from a slice of RRs.
+// These carry transport-layer padding which has no semantic value but can
+// occupy up to 468 bytes per encrypted response.
+func stripOPT(rrs []dns.RR) []dns.RR {
+	n := 0
+	for _, rr := range rrs {
+		if dns.RRToType(rr) != dns.TypeOPT {
+			rrs[n] = rr
+			n++
+		}
+	}
+	return rrs[:n]
+}

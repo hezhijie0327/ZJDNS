@@ -21,6 +21,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/ruleset"
 	"zjdns/server/handler"
+	"zjdns/server/handler/middleware"
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 	serverplain "zjdns/server/protocol/plain"
 	servertlcp "zjdns/server/protocol/tlcp"
@@ -93,61 +94,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("EDNS handler init: %w", err)
 	}
 
-	// Wire up DynamicContent for zone rules.
-	for i := range cfg.Zone.Rules {
-		switch cfg.Zone.Rules[i].Name {
-		case config.DefaultProjectName + ".stats":
-			cfg.Zone.Rules[i].DynamicContent = cacheStore.Stats
-		case config.DefaultProjectName + ".db.clear":
-			cfg.Zone.Rules[i].DynamicContent = func() []string {
-				n, err := cacheStore.Clear()
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
-		case config.DefaultProjectName + ".db.clear.cache":
-			cfg.Zone.Rules[i].DynamicContent = func() []string {
-				n, err := cacheStore.FlushDB("cache")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
-		case config.DefaultProjectName + ".db.clear.stats":
-			cfg.Zone.Rules[i].DynamicContent = func() []string {
-				n, err := cacheStore.FlushDB("stats")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("reset=%d", n)}
-			}
-		case config.DefaultProjectName + ".db.clear.latency":
-			cfg.Zone.Rules[i].DynamicContent = func() []string {
-				n, err := cacheStore.FlushDB("latency")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
-		case config.DefaultProjectName + ".db.clear.zone":
-			cfg.Zone.Rules[i].DynamicContent = func() []string {
-				n, err := cacheStore.FlushDB("zone")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
-		case config.DefaultProjectName + ".db.clear.ruleset":
-			cfg.Zone.Rules[i].DynamicContent = func() []string {
-				n, err := cacheStore.FlushDB("ruleset")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
-		}
-	}
+	wireZoneDynamicContent(cacheStore, cfg.Zone.Rules)
 
 	if len(cfg.Zone.Rules) > 0 {
 		if err := zoneEvaluator.LoadRules(cfg.Zone.Rules); err != nil {
@@ -188,19 +135,10 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	if rulesetEngine != nil {
 		cidrMatcher = rulesetEngine
 	}
-	dnsResolver := resolver.New(&resolver.Config{
-		QueryClient: queryClient,
-		Crypto:      cryptoValidator,
-		Hijack:      hijackDetector,
-		EDNS:        ednsHandler,
-		CIDRMatcher: cidrMatcher,
-		BuildMsg: func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
+	dnsResolver := initResolver(cfg, queryClient, cryptoValidator, hijackDetector, ednsHandler, cidrMatcher, cacheStore,
+		func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
 			return handler.BuildQueryMsg(ednsHandler, q, ecs, rd, secure)
-		},
-		Cache:         cacheStore,
-		DNSSECEnforce: cfg.Server.Features.DNSSECEnforce,
-	})
-	dnsResolver.ConfigureServers(cfg.Upstream, cfg.Fallback)
+		})
 
 	if len(cfg.Upstream) > 0 || len(cfg.Fallback) > 0 {
 		allServers := make([]config.UpstreamServer, 0, len(cfg.Upstream)+len(cfg.Fallback))
@@ -224,7 +162,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	prefetchCooldown := handler.NewPrefetchCooldown()
 
-	deps := &handler.Dependencies{
+	deps := &middleware.Dependencies{
 		Config:           cfg,
 		Cache:            cacheStore,
 		EDNS:             ednsHandler,
@@ -260,7 +198,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		log.Infof("DNS64: enabled with prefix %s", synth.Prefix())
 	}
 
-	chain := handler.AssembleChain(deps)
+	chain := middleware.AssembleChain(deps)
 
 	h := handler.NewHandler(
 		chain, ednsHandler, cacheStore, prober, dnsResolver,

@@ -1,4 +1,4 @@
-package handler
+package middleware
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
-	"zjdns/internal/ttl"
+	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
@@ -20,13 +20,13 @@ import (
 // On resolution errors it attempts a stale-cache fallback.
 type CacheStoreMiddleware struct {
 	store    cache.Store
-	prober   LatencyProber
-	resolver Resolver
+	prober   handler.LatencyProber
+	resolver handler.Resolver
 }
 
 // Wrap implements Middleware.
-func (m *CacheStoreMiddleware) Wrap(next QueryHandler) QueryHandler {
-	return QueryHandlerFunc(func(ctx context.Context, qctx *QueryContext) error {
+func (m *CacheStoreMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		err := next.ServeDNS(ctx, qctx)
 
 		// Already handled by cache lookup or zone match — nothing to do.
@@ -53,7 +53,7 @@ func (m *CacheStoreMiddleware) Wrap(next QueryHandler) QueryHandler {
 	})
 }
 
-func (m *CacheStoreMiddleware) buildSuccess(qctx *QueryContext) *dns.Msg {
+func (m *CacheStoreMiddleware) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
 	qd := qctx.Req.Question[0]
 	qname := qd.Header().Name
@@ -64,7 +64,7 @@ func (m *CacheStoreMiddleware) buildSuccess(qctx *QueryContext) *dns.Msg {
 	validated := qr.Validated
 	cacheable := qr.Cacheable
 
-	msg := buildResponseMsg(qctx.Req)
+	msg := handler.BuildResponseMsg(qctx.Req)
 
 	// Determine DNSSEC status and EDE code.
 	var dnssecStatus string
@@ -90,7 +90,7 @@ func (m *CacheStoreMiddleware) buildSuccess(qctx *QueryContext) *dns.Msg {
 			Family:       ecsOpt.Family,
 			SourcePrefix: ecsOpt.SourcePrefix,
 			ScopePrefix:  ecsOpt.ScopePrefix,
-			Address:      copyIP(ecsOpt.Address),
+			Address:      handler.CopyIP(ecsOpt.Address),
 		}
 	}
 
@@ -137,7 +137,7 @@ func (m *CacheStoreMiddleware) buildSuccess(qctx *QueryContext) *dns.Msg {
 	return msg
 }
 
-func (m *CacheStoreMiddleware) buildError(qctx *QueryContext) *dns.Msg {
+func (m *CacheStoreMiddleware) buildError(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
 	qd := qctx.Req.Question[0]
 	qname := qd.Header().Name
@@ -162,7 +162,7 @@ func (m *CacheStoreMiddleware) buildError(qctx *QueryContext) *dns.Msg {
 
 	log.Debugf("RESULT: %s %s | rcode=SERVFAIL, no stale cache available", qname, dns.TypeToString[qtype])
 
-	msg := buildResponseMsg(qctx.Req)
+	msg := handler.BuildResponseMsg(qctx.Req)
 	msg.Rcode = dns.RcodeServerFailure
 
 	edeCode := edns.EDECodeNetworkError
@@ -192,7 +192,7 @@ func (m *CacheStoreMiddleware) buildError(qctx *QueryContext) *dns.Msg {
 	return msg
 }
 
-func (m *CacheStoreMiddleware) buildCIDRRefused(qctx *QueryContext) *dns.Msg {
+func (m *CacheStoreMiddleware) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 	qd := qctx.Req.Question[0]
 	qname := qd.Header().Name
 	qtype := dns.RRToType(qd)
@@ -202,7 +202,7 @@ func (m *CacheStoreMiddleware) buildCIDRRefused(qctx *QueryContext) *dns.Msg {
 
 	log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", qname, dns.TypeToString[qtype])
 
-	msg := buildResponseMsg(qctx.Req)
+	msg := handler.BuildResponseMsg(qctx.Req)
 	msg.Rcode = dns.RcodeRefused
 
 	qctx.EDE = edns.NewEDEOption(edns.EDECodeBlocked, "")
@@ -217,27 +217,8 @@ func (m *CacheStoreMiddleware) buildCIDRRefused(qctx *QueryContext) *dns.Msg {
 	return msg
 }
 
-func (m *CacheStoreMiddleware) buildFromCacheEntry(qctx *QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
-	msg := buildResponseMsg(qctx.Req)
-	dnssecOK := qctx.ClientRequestedDNSSEC
-
-	if isExpired {
-		responseTTL := entry.RemainingTTL()
-		msg.Answer = cache.ProcessRecords(entry.Answer, int64(responseTTL), false, dnssecOK)
-		msg.Ns = cache.ProcessRecords(entry.Authority, int64(responseTTL), false, dnssecOK)
-		msg.Extra = cache.ProcessRecords(entry.Additional, int64(responseTTL), false, dnssecOK)
-	} else {
-		elapsed := ttl.Elapsed(entry.Timestamp)
-		msg.Answer = cache.ProcessRecords(entry.Answer, elapsed, true, dnssecOK)
-		msg.Ns = cache.ProcessRecords(entry.Authority, elapsed, true, dnssecOK)
-		msg.Extra = cache.ProcessRecords(entry.Additional, elapsed, true, dnssecOK)
-	}
-
-	if entry.Validated {
-		msg.AuthenticatedData = true
-	}
-
-	// EDE for stale answers.
+func (m *CacheStoreMiddleware) buildFromCacheEntry(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
+	msg := handler.BuildCacheEntryResponse(qctx.Req, entry, qctx.ClientRequestedDNSSEC, isExpired)
 	if isExpired {
 		qctx.EDE = edns.NewEDEOption(edns.EDECodeStaleAnswer, "")
 	}

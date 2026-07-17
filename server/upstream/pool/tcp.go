@@ -182,7 +182,7 @@ func (c *Conn) readLoop() {
 			return
 		}
 		msgLen := binary.BigEndian.Uint16(lengthBuf)
-		if msgLen == 0 || int(msgLen) > zpool.SecureBufferSize-zdnsutil.DNSFramePrefixLen {
+		if msgLen == 0 {
 			log.Debugf("TCPPOOL: invalid message length %d from %s", msgLen, c.addr)
 			return
 		}
@@ -285,7 +285,17 @@ func (p *Pool) Acquire(ctx context.Context, key, dialAddr string, dialFunc func(
 	p.mu.Lock()
 	conns := p.conns[key]
 
+	// When no connections exist yet, skip the allocation and scan entirely.
+	if len(conns) == 0 {
+		if p.dialing[key] < p.maxConns {
+			return p.dialAndAdd(ctx, key, dialAddr, dialFunc)
+		}
+		p.mu.Unlock()
+		return nil, fmt.Errorf("client: no available connection to %s", key)
+	}
+
 	// Single pass: filter dead connections and find a non-full candidate.
+	// Pool sizes are small (DefaultMaxConns=4) so the allocation is negligible.
 	liveConns := make([]*Conn, 0, len(conns))
 	var leastLoaded *Conn
 	leastCount := math.MaxInt

@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"zjdns/config"
 	"zjdns/database"
@@ -27,7 +27,20 @@ type SQLiteCache struct {
 const (
 	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
 	maxLatencyLookupIPs = 64 // cap IN-clause IPs to bound SQL compilation overhead
+	decompressBufCap    = 4096
+
+	// ipLatencyQuery is a fixed 64-placeholder statement — SQLite reuses
+	// the compiled query plan across all lookupIPLatencies calls (P4).
+	ipLatencyQuery = "SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (" +
+		"?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?," +
+		"?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 )
+
+// decompressBufPool reuses byte slices for zstd decompression on the
+// cache-hit hot path, reducing GC pressure (P3).
+var decompressBufPool = sync.Pool{
+	New: func() any { b := make([]byte, decompressBufCap); return &b },
+}
 
 // New creates a cache backed by the given database. The caller is responsible
 // for opening the database via database.Open() before calling New.
@@ -73,11 +86,17 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 
 	// Decompress and unpack the wire format into a dns.Msg.
-	wire, err := zdnsutil.Decompress(msgWire)
+	// Use a pooled buffer as the decompression destination to reduce
+	// per-cache-hit heap allocations (P3).  The buffer is returned to
+	// the pool after entry fields are extracted and msg.Data is cleared.
+	dbuf := decompressBufPool.Get().(*[]byte)
+	wire, err := zdnsutil.DecompressTo(msgWire, *dbuf)
 	if err != nil {
+		decompressBufPool.Put(dbuf)
 		log.Warnf("CACHE: decompress wire for entry %d: %v", id, err)
 		return nil, false, false
 	}
+	defer decompressBufPool.Put(dbuf) // runs after msg.Put (LIFO: msg.Data nil'd first)
 
 	msg := pool.DefaultMessagePool.Get()
 	msg.Data = wire
@@ -183,23 +202,18 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 		ips = ips[:maxLatencyLookupIPs]
 	}
 
-	// Build WHERE rdata_ip IN (?,?,...)
-	var buf strings.Builder
-	buf.WriteString("SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (")
-	for i := range ips {
-		if i > 0 {
-			buf.WriteByte(',')
+	// Always pass maxLatencyLookupIPs args so SQLite can reuse the compiled
+	// query plan.  Unused slots are padded with empty string (never matches).
+	args := make([]any, maxLatencyLookupIPs)
+	for i := range maxLatencyLookupIPs {
+		if i < len(ips) {
+			args[i] = ips[i]
+		} else {
+			args[i] = ""
 		}
-		buf.WriteByte('?')
-	}
-	buf.WriteByte(')')
-
-	args := make([]any, len(ips))
-	for i, ip := range ips {
-		args[i] = ip
 	}
 
-	rows, err := s.db.SQ.Query(buf.String(), args...)
+	rows, err := s.db.SQ.Query(ipLatencyQuery, args...)
 	if err != nil {
 		return nil
 	}
@@ -235,6 +249,11 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = zdnsutil.NormalizeDomain(qname)
 	dnssecInt := zdnsutil.BoolToInt(dnssecOK)
+
+	// Strip EDNS OPT pseudo-record from additional before caching,
+	// since padding and other EDNS options have no semantic value and
+	// waste storage space (up to 468 bytes per encrypted response).
+	additional = stripOPT(additional)
 
 	// Pack wire format and compress.
 	msg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}

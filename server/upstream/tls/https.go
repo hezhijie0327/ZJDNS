@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	eHTTP "gitlab.com/go-extension/http"
@@ -35,7 +36,7 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 		client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
 	}
 
-	resp, err := ExecuteHTTPSRequest(ctx, msg, parsedURL, client)
+	resp, err := zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http.MethodGet)
 	if err == nil {
 		return resp, nil
 	}
@@ -52,7 +53,7 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 			c.dohTransportMu.Unlock()
 
 			client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
-			resp, err = ExecuteHTTPSRequest(ctx, msg, parsedURL, client)
+			resp, err = zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http.MethodGet)
 			if err == nil {
 				return resp, nil
 			}

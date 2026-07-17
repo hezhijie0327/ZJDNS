@@ -11,6 +11,7 @@ import (
 	"os"
 	"sync"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -71,7 +72,7 @@ func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.
 		client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 	}
 
-	resp, err := ExecuteHTTPSRequest(ctx, msg, parsedURL, client)
+	resp, err := zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http3.MethodGet0RTT)
 	if err == nil {
 		return resp, nil
 	}
@@ -96,7 +97,7 @@ func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.
 			c.doh3TransportMu.Unlock()
 
 			client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
-			resp, err = ExecuteHTTPSRequest(ctx, msg, parsedURL, client)
+			resp, err = zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http3.MethodGet0RTT)
 			if err == nil {
 				return resp, nil
 			}

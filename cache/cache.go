@@ -29,19 +29,37 @@ type RequestRecord struct {
 	EntryID      int64             // pre-resolved entry ID from Get()/Set(); 0 = no cache entry (zone/error)
 }
 
-// Store defines the cache storage interface.
-type Store interface {
+// StoreReader is the read-only subset of Store.  Consumers that only need
+// cache lookups should depend on this interface rather than the full Store.
+type StoreReader interface {
 	Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool)
+	LatencyLastProbe(ip string) (int64, bool)
+	ReverseLookup(ip string) []LookupResult
+}
+
+// StoreWriter is the write subset of Store.  Consumers that only need to
+// populate cache entries or record metrics should depend on this interface.
+type StoreWriter interface {
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 		answer, authority, additional []dns.RR, validated bool) int64
 	RecordRequest(r *RequestRecord)
 	UpdateLatency(ip string, latencyMS int)
-	LatencyLastProbe(ip string) (int64, bool)
-	ReverseLookup(ip string) []LookupResult
+}
+
+// StoreManager is the lifecycle subset of Store (housekeeping + shutdown).
+type StoreManager interface {
 	FlushDB(target string) (int64, error)
 	Clear() (int64, error)
 	Stats() []string
 	Close() error
+}
+
+// Store defines the full cache storage interface, composed from its role
+// interfaces so consumers can depend on only the methods they need (C5).
+type Store interface {
+	StoreReader
+	StoreWriter
+	StoreManager
 }
 
 // Entry holds a cached DNS response with timing metadata.

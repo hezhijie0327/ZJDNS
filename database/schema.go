@@ -82,6 +82,7 @@ func (db *DB) migrate() error {
 			ttl      INTEGER NOT NULL,
 			PRIMARY KEY (rdata_ip, entry_id, name)
 		) WITHOUT ROWID;
+		CREATE INDEX IF NOT EXISTS idx_ptr_map_entry_id ON ptr_map(entry_id);
 
 		-- ── Hit counters ─────────────────────────────────────────────────────
 		-- Aggregated per-entry+protocol+rcode hit counts. Cache hits upsert
@@ -147,7 +148,6 @@ func (db *DB) migrate() error {
 			value TEXT NOT NULL,
 			PRIMARY KEY (type, tag, value)
 		) WITHOUT ROWID;
-		CREATE INDEX IF NOT EXISTS idx_ruleset_type_value ON ruleset_entries(type, value);
 
 		-- ── Zone rules ───────────────────────────────────────────────────────
 		-- Zone-file-style rule table queried via WITHOUT ROWID B-tree clustered

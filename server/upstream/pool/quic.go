@@ -150,16 +150,25 @@ func (p *QUICPool) Shutdown() {
 	}
 }
 
-// Put returns a QUIC connection to the pool for reuse.
+// Put returns a QUIC connection to the pool for reuse.  If the connection
+// is already pooled (same *quic.Conn pointer), it is silently discarded to
+// prevent duplicate entries from exceeding maxConns.
 func (p *QUICPool) Put(key string, conn *quic.Conn) {
-	pc := &QUICConn{Conn: conn, addr: key}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// Dedup: if this connection is already in the pool, drop it.
+	for _, existing := range p.conns[key] {
+		if existing.Conn == conn {
+			return
+		}
+	}
+
 	if len(p.conns[key]) >= p.maxConns {
-		pc.close()
+		_ = conn.CloseWithError(0, "pool full")
 		return
 	}
-	p.conns[key] = append(p.conns[key], pc)
+	p.conns[key] = append(p.conns[key], &QUICConn{Conn: conn, addr: key})
 }
 
 // Remove closes and removes a QUIC connection from the pool.

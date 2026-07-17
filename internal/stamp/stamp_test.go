@@ -439,21 +439,6 @@ func TestProtoToConfig(t *testing.T) {
 	}
 }
 
-func TestIsKnownProtocol(t *testing.T) {
-	if !IsKnownProtocol(ProtoPlain) {
-		t.Error("ProtoPlain should be known")
-	}
-	if !IsKnownProtocol(ProtoODoHTarget) {
-		t.Error("ProtoODoHTarget should be known")
-	}
-	if !IsKnownProtocol(ProtoDNSCryptRelay) {
-		t.Error("ProtoDNSCryptRelay should be known")
-	}
-	if IsKnownProtocol(StampProtoType(0xFF)) {
-		t.Error("0xFF should not be known")
-	}
-}
-
 // ============================================================================
 // Real-world stamps: all protocols parse successfully
 // ============================================================================

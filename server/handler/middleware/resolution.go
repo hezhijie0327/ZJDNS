@@ -1,31 +1,32 @@
-package handler
+package middleware
 
 import (
 	"context"
 	"zjdns/internal/log"
+	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
 )
 
 // ResolutionMiddleware is the terminal handler.  It performs upstream or
 // recursive DNS resolution via the Resolver interface, with singleflight
-// deduplication of concurrent identical queries (PendingRequests).
+// deduplication of concurrent identical queries (handler.PendingRequests).
 //
 // ResolutionMiddleware is the innermost middleware — it ignores the next
 // handler and always produces a resolution result.
 type ResolutionMiddleware struct {
-	resolver Resolver
-	pending  *PendingRequests
+	resolver handler.Resolver
+	pending  *handler.PendingRequests
 }
 
 // Wrap implements Middleware.  The next handler is ignored — this middleware
 // is terminal.
-func (m *ResolutionMiddleware) Wrap(next QueryHandler) QueryHandler {
-	return QueryHandlerFunc(func(ctx context.Context, qctx *QueryContext) error {
+func (m *ResolutionMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Guard against nil resolver.
 		if m.resolver == nil {
 			log.Warnf("RESOLVER: resolver not set — returning SERVFAIL")
-			msg := buildResponseMsg(qctx.Req)
+			msg := handler.BuildResponseMsg(qctx.Req)
 			msg.Rcode = dns.RcodeServerFailure
 			qctx.Res = msg
 			return nil
@@ -38,7 +39,7 @@ func (m *ResolutionMiddleware) Wrap(next QueryHandler) QueryHandler {
 		ecsOpt := qctx.ECSOpt
 		dnssecOK := qctx.ClientRequestedDNSSEC
 
-		question := Question{Name: qname, Qtype: qtype, Qclass: qclass}
+		question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 
 		// Singleflight dedup: if another goroutine is already resolving the
 		// same query, wait for its result.
@@ -53,13 +54,16 @@ func (m *ResolutionMiddleware) Wrap(next QueryHandler) QueryHandler {
 			}
 		}
 
+		// Ensure Done is always called — even on panic — so the pending
+		// map entry is cleaned up and followers are unblocked.
+		if m.pending != nil {
+			defer func() {
+				m.pending.Done(qname, qtype, qclass, ecsOpt, dnssecOK, qctx.ResolutionResult)
+			}()
+		}
+
 		log.Debugf("RESOLVER: resolving %s %s", qname, dns.TypeToString[qtype])
 		qr := m.resolver.Query(ctx, question, ecsOpt)
-
-		// Notify followers.
-		if m.pending != nil {
-			m.pending.Done(qname, qtype, qclass, ecsOpt, dnssecOK, qr)
-		}
 
 		qctx.ResolutionResult = qr
 		qctx.Resolved = true

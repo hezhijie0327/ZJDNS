@@ -1,10 +1,11 @@
-package handler
+package middleware
 
 import (
 	"context"
 	"zjdns/cache"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
 )
@@ -18,8 +19,8 @@ type PTRMiddleware struct {
 }
 
 // Wrap implements Middleware.
-func (m *PTRMiddleware) Wrap(next QueryHandler) QueryHandler {
-	return QueryHandlerFunc(func(ctx context.Context, qctx *QueryContext) error {
+func (m *PTRMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Only run on cache miss.
 		if qctx.CacheHit {
 			return next.ServeDNS(ctx, qctx)
@@ -49,7 +50,7 @@ func (m *PTRMiddleware) Wrap(next QueryHandler) QueryHandler {
 			records = append(records, zdnsutil.NewPTRRecord(qname, result.Name, result.TTL, qclass))
 		}
 
-		response := buildResponseMsg(qctx.Req)
+		response := handler.BuildResponseMsg(qctx.Req)
 		response.Answer = records
 		response.Rcode = dns.RcodeSuccess
 		qctx.Res = response

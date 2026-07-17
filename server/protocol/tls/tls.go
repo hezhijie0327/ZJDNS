@@ -30,7 +30,7 @@ func (s *Server) startDOTServer() error {
 			return fmt.Errorf("TCP listen on %s: %w", addr, err)
 		}
 
-		rawListener := &debugListener{Listener: &TCPKeepAliveListener{Listener: listener}, name: "DoT"}
+		rawListener := &debugListener{Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener}, name: "DoT"}
 
 		dotTLSConfig := s.tlsConfig.Clone()
 		dotTLSConfig.NextProtos = config.NextProtoDOT

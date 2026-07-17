@@ -6,7 +6,6 @@ import (
 	"net"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
-	"zjdns/server/protocol/tls"
 
 	"codeberg.org/miekg/dns"
 )
@@ -27,7 +26,7 @@ func (s *Server) startTCP(g Group, ctx context.Context, handler dns.Handler) err
 		}
 
 		srv := &dns.Server{
-			Listener: &tls.TCPKeepAliveListener{Listener: listener},
+			Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener},
 			Handler:  handler,
 		}
 		s.tcpServers = append(s.tcpServers, srv)

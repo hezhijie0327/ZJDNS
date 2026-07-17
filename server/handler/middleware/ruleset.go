@@ -1,7 +1,8 @@
-package handler
+package middleware
 
 import (
 	"context"
+	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
@@ -18,8 +19,8 @@ type RulesetMiddleware struct {
 }
 
 // Wrap implements Middleware.
-func (m *RulesetMiddleware) Wrap(next QueryHandler) QueryHandler {
-	return QueryHandlerFunc(func(ctx context.Context, qctx *QueryContext) error {
+func (m *RulesetMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Let the inner chain (DNS64 → Resolution) complete first.
 		err := next.ServeDNS(ctx, qctx)
 

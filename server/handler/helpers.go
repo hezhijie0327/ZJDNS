@@ -2,16 +2,18 @@ package handler
 
 import (
 	"net"
+	"zjdns/cache"
 	"zjdns/internal/pool"
+	"zjdns/internal/ttl"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// buildResponseMsg creates a basic DNS response message from a request.
+// BuildResponseMsg creates a basic DNS response message from a request.
 // It sets the QR bit, copies the question section, and fills in
 // Authoritative=false and RecursionAvailable=true.
-func buildResponseMsg(req *dns.Msg) *dns.Msg {
+func BuildResponseMsg(req *dns.Msg) *dns.Msg {
 	msg := pool.DefaultMessagePool.Get()
 
 	if req != nil && len(req.Question) > 0 {
@@ -26,8 +28,33 @@ func buildResponseMsg(req *dns.Msg) *dns.Msg {
 	return msg
 }
 
+// buildCacheEntryResponse builds a DNS response from a cache entry, applying
+// TTL deduction for fresh entries or cyclical stale-TTL for expired entries.
+// When isExpired is true, the caller should set qctx.EDE after calling.
+func BuildCacheEntryResponse(req *dns.Msg, entry *cache.Entry, dnssecOK, isExpired bool) *dns.Msg {
+	msg := BuildResponseMsg(req)
+
+	if isExpired {
+		responseTTL := entry.RemainingTTL()
+		msg.Answer = cache.ProcessRecords(entry.Answer, int64(responseTTL), false, dnssecOK)
+		msg.Ns = cache.ProcessRecords(entry.Authority, int64(responseTTL), false, dnssecOK)
+		msg.Extra = cache.ProcessRecords(entry.Additional, int64(responseTTL), false, dnssecOK)
+	} else {
+		elapsed := ttl.Elapsed(entry.Timestamp)
+		msg.Answer = cache.ProcessRecords(entry.Answer, elapsed, true, dnssecOK)
+		msg.Ns = cache.ProcessRecords(entry.Authority, elapsed, true, dnssecOK)
+		msg.Extra = cache.ProcessRecords(entry.Additional, elapsed, true, dnssecOK)
+	}
+
+	if entry.Validated {
+		msg.AuthenticatedData = true
+	}
+
+	return msg
+}
+
 // copyIP returns a deep copy of ip, allocating a new backing array.
-func copyIP(ip net.IP) net.IP {
+func CopyIP(ip net.IP) net.IP {
 	if ip == nil {
 		return nil
 	}

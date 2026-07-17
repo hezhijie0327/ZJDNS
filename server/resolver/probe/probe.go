@@ -173,7 +173,7 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, answer []dns
 // ProbeNSAddrs probes the given "ip:port" addresses and stores latency values
 // in ip_latency. Does NOT write cache entries — the caller is responsible for
 // that. Used by the resolver for NS/Root addresses.
-func ProbeNSAddrs(cache CacheSetter, addrs []string) {
+func ProbeNSAddrs(ctx context.Context, cache CacheSetter, addrs []string) {
 	if cache == nil || len(addrs) <= 1 {
 		return
 	}
@@ -218,7 +218,7 @@ func ProbeNSAddrs(cache CacheSetter, addrs []string) {
 
 	prober := latency.New(defaultNSProbeSteps(), nil)
 	defer prober.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultNSProbeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, config.DefaultNSProbeTimeout)
 	defer cancel()
 	_, latencies := prober.ProbeIPsLatency(ctx, needProbe)
 	if len(latencies) == 0 {

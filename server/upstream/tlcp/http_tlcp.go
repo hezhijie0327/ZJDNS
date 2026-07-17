@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"zjdns/config"
-	"zjdns/server/upstream/tls"
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 )
@@ -46,5 +46,5 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 	}
 	defer transport.CloseIdleConnections()
 
-	return tls.ExecuteHTTPSRequest(ctx, msg, parsedURL, client)
+	return zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http.MethodGet)
 }

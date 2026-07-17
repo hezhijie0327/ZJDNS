@@ -1,4 +1,4 @@
-package handler
+package middleware
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pending"
-	"zjdns/internal/ttl"
+	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
@@ -23,17 +23,17 @@ import (
 type CacheLookupMiddleware struct {
 	store            cache.Store
 	closed           func() bool
-	prefetchCooldown *PrefetchCooldown
-	pendingRefreshes *pending.Group[pendingKey]
+	prefetchCooldown *handler.PrefetchCooldown
+	pendingRefreshes *pending.Group[handler.PendingKey]
 	refreshGroup     *errgroup.Group
 	refreshCtx       context.Context
 	preferStale      bool
-	resolver         Resolver
+	resolver         handler.Resolver
 }
 
 // Wrap implements Middleware.
-func (m *CacheLookupMiddleware) Wrap(next QueryHandler) QueryHandler {
-	return QueryHandlerFunc(func(ctx context.Context, qctx *QueryContext) error {
+func (m *CacheLookupMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		qd := qctx.Req.Question[0]
 		qname := qd.Header().Name
 		qtype := dns.RRToType(qd)
@@ -100,14 +100,14 @@ func (m *CacheLookupMiddleware) Wrap(next QueryHandler) QueryHandler {
 	})
 }
 
-func (m *CacheLookupMiddleware) serveExpiredWithRefresh(ctx context.Context, qctx *QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, entry *cache.Entry) error {
+func (m *CacheLookupMiddleware) serveExpiredWithRefresh(ctx context.Context, qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, entry *cache.Entry) error {
 	done := make(chan struct{})
 	var qr *resolver.QueryResult
 
 	go func() {
 		defer close(done)
 		defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
-		question := Question{Name: qname, Qtype: qtype, Qclass: qclass}
+		question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 		qr = m.resolver.Query(m.refreshCtx, question, ecsOpt)
 	}()
 
@@ -119,7 +119,7 @@ func (m *CacheLookupMiddleware) serveExpiredWithRefresh(ctx context.Context, qct
 		if qr != nil && qr.Err == nil {
 			// Refresh completed — rebuild response with fresh data.
 			// qctx.Res already has stale response; replace with fresh.
-			msg := buildResponseMsg(qctx.Req)
+			msg := handler.BuildResponseMsg(qctx.Req)
 			dnssecOK := qctx.ClientRequestedDNSSEC
 			msg.Answer = cache.ProcessRecords(qr.Answer, 0, false, dnssecOK)
 			msg.Ns = cache.ProcessRecords(qr.Authority, 0, false, dnssecOK)
@@ -150,34 +150,18 @@ func (m *CacheLookupMiddleware) serveExpiredWithRefresh(ctx context.Context, qct
 	return nil
 }
 
-func (m *CacheLookupMiddleware) buildResponse(qctx *QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
-	msg := buildResponseMsg(qctx.Req)
-	dnssecOK := qctx.ClientRequestedDNSSEC
-
+func (m *CacheLookupMiddleware) buildResponse(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
+	msg := handler.BuildCacheEntryResponse(qctx.Req, entry, qctx.ClientRequestedDNSSEC, isExpired)
 	if isExpired {
-		responseTTL := entry.RemainingTTL()
-		msg.Answer = cache.ProcessRecords(entry.Answer, int64(responseTTL), false, dnssecOK)
-		msg.Ns = cache.ProcessRecords(entry.Authority, int64(responseTTL), false, dnssecOK)
-		msg.Extra = cache.ProcessRecords(entry.Additional, int64(responseTTL), false, dnssecOK)
 		qctx.EDE = edns.NewEDEOption(edns.EDECodeStaleAnswer, "")
-	} else {
-		elapsed := ttl.Elapsed(entry.Timestamp)
-		msg.Answer = cache.ProcessRecords(entry.Answer, elapsed, true, dnssecOK)
-		msg.Ns = cache.ProcessRecords(entry.Authority, elapsed, true, dnssecOK)
-		msg.Extra = cache.ProcessRecords(entry.Additional, elapsed, true, dnssecOK)
 	}
-
-	if entry.Validated {
-		msg.AuthenticatedData = true
-	}
-
 	return msg
 }
 
 // refreshCacheEntry performs a full resolution cycle and updates the cache.
 // Used for background prefetch and stale-entry refresh.
-func (m *CacheLookupMiddleware) refreshCacheEntry(qctx *QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption) error {
-	question := Question{Name: qname, Qtype: qtype, Qclass: qclass}
+func (m *CacheLookupMiddleware) refreshCacheEntry(qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption) error {
+	question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 	qr := m.resolver.Query(m.refreshCtx, question, ecsOpt)
 	if qr.Err != nil {
 		return qr.Err
@@ -192,7 +176,7 @@ func (m *CacheLookupMiddleware) tryStartRefresh(qname string, qtype, qclass uint
 	if m.pendingRefreshes == nil {
 		return true
 	}
-	key := buildPendingKey(qname, qtype, qclass, ecs, false)
+	key := handler.BuildPendingKey(qname, qtype, qclass, ecs, false)
 	if !m.pendingRefreshes.Start(key) {
 		log.Debugf("CACHE: refresh skipped for %s — already in flight", qname)
 		return false
@@ -204,6 +188,6 @@ func (m *CacheLookupMiddleware) finishRefresh(qname string, qtype, qclass uint16
 	if m.pendingRefreshes == nil {
 		return
 	}
-	key := buildPendingKey(qname, qtype, qclass, ecs, false)
+	key := handler.BuildPendingKey(qname, qtype, qclass, ecs, false)
 	m.pendingRefreshes.Done(key)
 }

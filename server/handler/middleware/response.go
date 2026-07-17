@@ -1,4 +1,4 @@
-package handler
+package middleware
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
 )
@@ -16,12 +17,12 @@ import (
 // restores the original qname if it was rewritten by a zone rule.
 // It always runs — for short-circuited and freshly resolved responses alike.
 type ResponseMiddleware struct {
-	edns *edns.Handler
+	edns handler.EDNSHandler
 }
 
 // Wrap implements Middleware.
-func (m *ResponseMiddleware) Wrap(next QueryHandler) QueryHandler {
-	return QueryHandlerFunc(func(ctx context.Context, qctx *QueryContext) error {
+func (m *ResponseMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		err := next.ServeDNS(ctx, qctx)
 
 		if qctx.Res == nil {
@@ -33,7 +34,7 @@ func (m *ResponseMiddleware) Wrap(next QueryHandler) QueryHandler {
 	})
 }
 
-func (m *ResponseMiddleware) finalizeResponse(qctx *QueryContext) {
+func (m *ResponseMiddleware) finalizeResponse(qctx *handler.QueryContext) {
 	msg := qctx.Res
 	req := qctx.Req
 
@@ -68,7 +69,7 @@ func (m *ResponseMiddleware) finalizeResponse(qctx *QueryContext) {
 }
 
 func (m *ResponseMiddleware) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.IP) string {
-	if m.edns == nil || m.edns.CookieGenerator == nil || cookieOpt == nil {
+	if m.edns == nil || cookieOpt == nil {
 		return ""
 	}
 
@@ -83,15 +84,15 @@ func (m *ResponseMiddleware) generateCookieStr(cookieOpt *edns.CookieOption, cli
 
 	var serverCookie []byte
 	if len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen {
-		status := m.edns.CookieGenerator.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
+		status := m.edns.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
 		if status == edns.CookieValid {
 			serverCookie = cookieOpt.ServerCookie
 		} else {
 			log.Debugf("EDNS: server cookie status=%d for %s, renewing", status, clientIP)
-			serverCookie = m.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+			serverCookie = m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 		}
 	} else {
-		serverCookie = m.edns.CookieGenerator.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+		serverCookie = m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 	}
 
 	if serverCookie == nil {

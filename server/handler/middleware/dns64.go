@@ -1,9 +1,10 @@
-package handler
+package middleware
 
 import (
 	"context"
 	"zjdns/internal/dns64"
 	"zjdns/internal/log"
+	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
@@ -15,13 +16,13 @@ import (
 // checks if DNS64 synthesis is needed and performs a secondary A lookup.
 type DNS64Middleware struct {
 	synthesizer *dns64.Synthesizer
-	resolver    Resolver
-	pending     *PendingRequests
+	resolver    handler.Resolver
+	pending     *handler.PendingRequests
 }
 
 // Wrap implements Middleware.
-func (m *DNS64Middleware) Wrap(next QueryHandler) QueryHandler {
-	return QueryHandlerFunc(func(ctx context.Context, qctx *QueryContext) error {
+func (m *DNS64Middleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Let resolution complete first.
 		err := next.ServeDNS(ctx, qctx)
 
@@ -51,12 +52,12 @@ func (m *DNS64Middleware) Wrap(next QueryHandler) QueryHandler {
 			if shared, follower := m.pending.Join(qname, dns.TypeA, qclass, ecsOpt, dnssecOK); follower {
 				aqr = shared
 			} else {
-				aQuestion := Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}
+				aQuestion := handler.Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}
 				aqr = m.resolver.Query(ctx, aQuestion, ecsOpt)
 				m.pending.Done(qname, dns.TypeA, qclass, ecsOpt, dnssecOK, aqr)
 			}
 		} else {
-			aQuestion := Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}
+			aQuestion := handler.Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}
 			aqr = m.resolver.Query(ctx, aQuestion, ecsOpt)
 		}
 

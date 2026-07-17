@@ -1,4 +1,4 @@
-package handler
+package middleware
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/pool"
+	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -17,8 +18,8 @@ import (
 type ValidationMiddleware struct{}
 
 // Wrap implements Middleware.
-func (m *ValidationMiddleware) Wrap(next QueryHandler) QueryHandler {
-	return QueryHandlerFunc(func(ctx context.Context, qctx *QueryContext) error {
+func (m *ValidationMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		if qctx.Req == nil || len(qctx.Req.Question) == 0 {
 			msg := pool.DefaultMessagePool.Get()
 			msg.Rcode = dns.RcodeFormatError
