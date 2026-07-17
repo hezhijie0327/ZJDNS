@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -28,7 +29,7 @@ func (s *DNSStamp) parsePlainDNS(bin []byte) error {
 	}
 	if colIndex < 0 {
 		colIndex = len(s.Address)
-		s.Address = fmt.Sprintf("%s:%d", s.Address, DefaultDNSPort)
+		s.Address = net.JoinHostPort(s.Address, strconv.Itoa(DefaultDNSPort))
 	}
 	if colIndex >= len(s.Address)-1 {
 		return errors.New("stamp: empty port")
@@ -68,7 +69,7 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	}
 	if colIndex < 0 {
 		colIndex = len(s.Address)
-		s.Address = fmt.Sprintf("%s:%d", s.Address, DefaultPort)
+		s.Address = net.JoinHostPort(s.Address, strconv.Itoa(DefaultPort))
 	}
 	if colIndex >= len(s.Address)-1 {
 		return errors.New("stamp: empty port")

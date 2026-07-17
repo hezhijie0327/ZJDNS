@@ -38,7 +38,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		return nil, fmt.Errorf("resolving dnscrypt stamp: %w", err)
 	}
 
-	state, err := c.getState(ctx, stampAddr, providerName, publicKey, server)
+	state, err := c.state(ctx, stampAddr, providerName, publicKey, server)
 	if err != nil {
 		return nil, fmt.Errorf("dnscrypt resolver state: %w", err)
 	}
@@ -63,7 +63,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		return nil, fmt.Errorf("encrypting dnscrypt query: %w", err)
 	}
 
-	proxyDialer := c.getProxyDialer(server)
+	proxyDialer := c.proxyDialer(server)
 	network := "udp"
 	if useTCP {
 		network = "tcp"
@@ -154,12 +154,12 @@ func (c *Client) WarmUp(ctx context.Context, server *config.UpstreamServer) {
 	if err != nil {
 		return
 	}
-	_, _ = c.getState(ctx, addr, providerName, publicKey, server)
+	_, _ = c.state(ctx, addr, providerName, publicKey, server)
 }
 
-// getProxyDialer returns a cached SOCKS5Dialer for the server's proxy URL,
+// proxyDialer returns a cached SOCKS5Dialer for the server's proxy URL,
 // or nil when no proxy is configured or no proxy function is available.
-func (c *Client) getProxyDialer(server *config.UpstreamServer) *socks5.Dialer {
+func (c *Client) proxyDialer(server *config.UpstreamServer) *socks5.Dialer {
 	if c.getProxy == nil {
 		return nil
 	}

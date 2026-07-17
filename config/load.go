@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	zstamp "zjdns/internal/stamp"
 
@@ -185,7 +186,7 @@ func shouldEnableDDR(cfg *ServerConfig) bool {
 
 func addDDRRecords(cfg *ServerConfig) {
 	ddr := cfg.Server.Features.DDR
-	domain := strings.TrimSuffix(cfg.Server.Certificate.Domain, ".")
+	domain := zdnsutil.TrimTrailingDot(cfg.Server.Certificate.Domain)
 
 	if strings.ContainsAny(domain, " \"") || strings.ContainsAny(ddr.IPv4, " \"") || strings.ContainsAny(ddr.IPv6, " \"") {
 		log.Warnf("CONFIG: DDR domain/IP contains unsafe characters, DDR records will not be added")

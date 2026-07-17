@@ -46,10 +46,11 @@ type StoreWriter interface {
 	UpdateLatency(ip string, latencyMS int)
 }
 
-// StoreManager is the lifecycle subset of Store (housekeeping + shutdown).
-type StoreManager interface {
+// StoreLifecycle is the lifecycle subset of Store (housekeeping + shutdown).
+type StoreLifecycle interface {
 	FlushDB(target string) (int64, error)
 	Clear() (int64, error)
+	CleanupRequestLog(retentionSec int64) (int64, error)
 	Stats() []string
 	Close() error
 }
@@ -59,7 +60,7 @@ type StoreManager interface {
 type Store interface {
 	StoreReader
 	StoreWriter
-	StoreManager
+	StoreLifecycle
 }
 
 // Entry holds a cached DNS response with timing metadata.

@@ -105,6 +105,6 @@ func (r *Recursive) cacheGlueRecords(glue map[string][]dns.RR) {
 	}
 	for _, records := range glue {
 		addrs := addrsFromRRs(records)
-		go probe.ProbeNSAddrs(context.Background(), r.cache, addrs)
+		go probe.ProbeNSAddrs(r.ctx, r.cache, addrs)
 	}
 }

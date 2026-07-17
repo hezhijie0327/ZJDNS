@@ -10,8 +10,8 @@ import (
 	socks5 "zjdns/server/upstream/socks5"
 )
 
-// getProxyDialer returns a cached SOCKS5Dialer for the server's proxy URL.
-func (c *Client) getProxyDialer(server *config.UpstreamServer) *socks5.Dialer {
+// proxyDialer returns a cached SOCKS5Dialer for the server's proxy URL.
+func (c *Client) proxyDialer(server *config.UpstreamServer) *socks5.Dialer {
 	if server.Proxy == "" {
 		return nil
 	}

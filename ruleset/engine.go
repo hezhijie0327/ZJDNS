@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
 
@@ -235,14 +236,14 @@ func readDomainFile(path string) ([]string, error) {
 
 // domainKey normalizes a domain pattern to its TLD+1 key.
 func domainKey(p string) string {
-	p = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(p)), ".")
+	p = zdnsutil.TrimTrailingDot(strings.ToLower(strings.TrimSpace(p)))
 	p = strings.TrimPrefix(p, "*.")
 	return p
 }
 
 // tldPlusOne extracts the effective suffix for domain matching.
 func tldPlusOne(name string) string {
-	n := strings.TrimSuffix(strings.ToLower(name), ".")
+	n := zdnsutil.TrimTrailingDot(strings.ToLower(name))
 	last := strings.LastIndexByte(n, '.')
 	if last < 0 {
 		return n

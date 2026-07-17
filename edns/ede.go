@@ -13,7 +13,11 @@ type EDEOption struct {
 	ExtraText string
 }
 
-// EDE info codes as defined in RFC 8914.
+// EDE info codes as defined in RFC 8914.  All codes are declared for
+// reference even though only a subset are used in production — the full
+// table provides a single source of truth and costs zero at runtime.
+//
+//nolint:unused // RFC 8914 reference table
 const (
 	EDECodeOtherError                 uint16 = 0
 	EDECodeUnsupportedDNSKEYAlgorithm uint16 = 1

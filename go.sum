@@ -20,12 +20,12 @@ github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d h1:CPqTNIigGwe
 github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d/go.mod h1:QX5ZVULjAfZJux/W62Y91HvCh9hyW6enAwcrrv/sLj0=
 github.com/emmansun/gmsm v0.44.0 h1:QAg/Xuha84+AUPFIe7T8Ly4S8z54+UPwpBnHS8Y8Ubc=
 github.com/emmansun/gmsm v0.44.0/go.mod h1:CHti5ihGbTOI0pCtdoC8HLjBxGFktH/ksbpsCgsCzkQ=
-github.com/klauspost/compress v1.19.1-0.20260715101459-e29d4d389f0e h1:jZJnMZpa87aNeuN3F0D6P32I4T8cg3nblC2YMTvVdsk=
-github.com/klauspost/compress v1.19.1-0.20260715101459-e29d4d389f0e/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
+github.com/klauspost/compress v1.19.1-0.20260717091032-9960386c5845 h1:NxaOJBteR74ol9Wybj6Qu4pcXA/60lZgjTcXbGfn90w=
+github.com/klauspost/compress v1.19.1-0.20260717091032-9960386c5845/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/klauspost/cpuid/v2 v2.4.0 h1:S6Hrbc7+ywsr0r+RLapfGBHfyefhCTwEh3A0tV913Dw=
 github.com/klauspost/cpuid/v2 v2.4.0/go.mod h1:19jmZ9mjzoF//ddRSUsv0zfBTJWh3QJh9FNxZTMrGxU=
-github.com/ncruces/go-sqlite3 v0.35.3-0.20260708233615-a627269d8f8a h1:3Z/rLSRYhOPOSNkHMJ5JtxwbjogS6KyqO5e0foBTYe8=
-github.com/ncruces/go-sqlite3 v0.35.3-0.20260708233615-a627269d8f8a/go.mod h1:4k8YlXeLRn+Gf1VaXLl7Zbx4wp7+Gthf+32EA6y3FeI=
+github.com/ncruces/go-sqlite3 v0.35.3-0.20260717032608-e5bb5cc6c401 h1:oSg1sHhQ8+nI2CPdUJQ3cteqOr57vRQ4WSYdeX0zh+c=
+github.com/ncruces/go-sqlite3 v0.35.3-0.20260717032608-e5bb5cc6c401/go.mod h1:4k8YlXeLRn+Gf1VaXLl7Zbx4wp7+Gthf+32EA6y3FeI=
 github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 h1:td8kMW1bWwzc7NnlzPjQV4GbDNLkje8htGBfbZRaSh8=
 github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303/go.mod h1:o8gr9w/50fXA5TDskg6bNUjvqmFfw4KaXth4q+yDSjg=
 github.com/ncruces/julianday v1.0.0 h1:fH0OKwa7NWvniGQtxdJRxAgkBMolni2BjDHaWTxqt7M=

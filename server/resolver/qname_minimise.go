@@ -20,7 +20,7 @@ func minimiseQNAME(originalQname, currentZone string, labelsToAdd int) string {
 
 	// Root zone
 	if zone == "" {
-		labels := strings.Split(strings.TrimSuffix(orig, "."), ".")
+		labels := strings.Split(zdnsutil.TrimTrailingDot(orig), ".")
 		if labelsToAdd >= len(labels) {
 			return dnsutil.Fqdn(orig)
 		}

@@ -1,7 +1,6 @@
 package resolver
 
 import (
-	"context"
 	"net"
 	"net/netip"
 	"strings"
@@ -90,7 +89,7 @@ func (r *Recursive) getRootServers() []string {
 		if len(cached) == 0 {
 			// Cold start for this name: write + probe + read back.
 			cacheRootHint(r.cache, name, addrs)
-			go probe.ProbeNSAddrs(context.Background(), r.cache, addrs)
+			go probe.ProbeNSAddrs(r.ctx, r.cache, addrs)
 			cached = r.lookupNSAddrsFromCache(name, nil)
 		}
 		all = append(all, cached...)
@@ -131,7 +130,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 		if refreshEntry != nil {
 			refreshEntry()
 		}
-		go probe.ProbeNSAddrs(context.Background(), r.cache, addrs)
+		go probe.ProbeNSAddrs(r.ctx, r.cache, addrs)
 	}
 
 	return addrs

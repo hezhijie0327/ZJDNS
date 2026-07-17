@@ -4,6 +4,7 @@ import (
 	"strings"
 	"zjdns/cache"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 )
@@ -94,8 +95,8 @@ func findNSEC3(rrs []dns.RR) []*dns.NSEC3 {
 // canonicalCompare compares two domain names per DNS canonical ordering.
 // Returns -1 if a < b, 0 if equal, 1 if a > b.
 func canonicalCompare(a, b string) int {
-	a = strings.ToLower(strings.TrimSuffix(a, "."))
-	b = strings.ToLower(strings.TrimSuffix(b, "."))
+	a = zdnsutil.NormalizeDomain(a)
+	b = zdnsutil.NormalizeDomain(b)
 
 	if a == "" && b == "" {
 		return 0
@@ -155,7 +156,7 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 	if c == nil || c.cache == nil || len(keys) == 0 {
 		return
 	}
-	zone = strings.ToLower(strings.TrimSuffix(zone, "."))
+	zone = zdnsutil.NormalizeDomain(zone)
 
 	ttl := config.DefaultDNSKeyCacheTTL
 	for _, k := range keys {
@@ -177,7 +178,7 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	if c == nil || c.cache == nil {
 		return nil
 	}
-	zone = strings.ToLower(strings.TrimSuffix(zone, "."))
+	zone = zdnsutil.NormalizeDomain(zone)
 
 	cachedEntry, found, expired := c.cache.Get(zone, dns.TypeDNSKEY, dns.ClassINET, nil, false)
 	if !found || cachedEntry == nil || expired {

@@ -224,10 +224,33 @@ Top layer (wiring):
 ```
 
 **Key rules:**
-- Domain packages never import other domain packages (known exceptions: `edns→config`, `cache→database`, `zone→database`, `ruleset→database`).
+- Domain packages never import other domain packages (known exceptions: `edns→config`, `cache→database`, `cache→config`, `zone→database`, `zone→config`, `ruleset→database`, `ruleset→config`).
 - `internal/` packages never import domain packages (except `internal/latency→config`, which is stable because config is foundational).
-- `server/` sub-packages never import the `server/` parent.
+- `server/` sub-packages never import the `server/` parent (except `server/handler/middleware/→server/handler/` — this follows the standard Go pattern of concrete implementations in a sub-package importing interfaces from the parent, analogous to `net/http/httptest→net/http`).
 - No circular dependencies — the graph is a DAG enforced by the compiler.
+
+**Type aliases** (intentional coupling):
+  - `edns.ECSOption = config.ECSOption` — ECS is a config property that flows through the EDNS pipeline. A separate type would require conversion at every boundary with zero benefit.
+  - `server/handler.Question = server/resolver.Question` — the handler query pipeline delegates directly to the resolver. Adding a conversion layer would be pure indirection.
+
+**Known design decisions** (not defects):
+  - `edns.DNSHandler` interface is defined in the `edns` package (producer) rather than
+    the consumer packages. This is intentional — moving it to a consumer package would
+    create an import cycle (`server/protocol/dnscrypt → server/handler → server/resolver →
+    server/upstream → server/upstream/dnscrypt → server/protocol/dnscrypt`). The comment
+    at `edns/edns.go:19-21` documents this.
+  - `server/upstream/dnscrypt` imports `server/protocol/dnscrypt` (~24 shared symbols:
+    `Certificate`, `EncryptedQuery`, `EncryptedResponse`, crypto primitives). Both
+    packages need the same wire-format types and cryptographic operations. Extracting
+    a neutral `internal/dnscryptcrypto/` package is deferred to a dedicated refactoring.
+  - `internal/dnsutil` has a deliberately broad scope covering DNS domains (dnsutil.go),
+    zstd compression (wire.go), socket binding (bind.go), TCP keepalive (keepalive.go),
+    and DNS-over-HTTPS helpers (https_dns.go). Each file has a single concern at
+    ~50-100 lines — file-level separation is sufficient.
+  - Unexported `get*` methods in `server/upstream/tls/` (`getDOHClient`, `getDOH3Client`,
+    `getQUICConfig`) are intentional — the natural names are taken by struct fields
+    (`dohClient`, `doh3Client`).  The `get` prefix on unexported accessors is an
+    acceptable pattern in this context.
 
 ### Query Pipeline (Middleware Chain)
 

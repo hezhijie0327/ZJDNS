@@ -44,12 +44,13 @@ func (s *Server) startDOHServer() error {
 		s.dohServers = append(s.dohServers, dohSrv)
 		log.Infof("TLCP: DoH server started on %s (TLCP HTTP/1.1)", addr)
 
-		go func(srv *http.Server, l net.Listener) {
+		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("TLCP DoH server")
-			if err := srv.Serve(l); err != nil && err != http.ErrServerClosed {
+			if err := dohSrv.Serve(tlcpListener); err != nil && err != http.ErrServerClosed {
 				log.Errorf("TLCP: DoH serve error: %v", err)
 			}
-		}(dohSrv, tlcpListener)
+			return nil
+		})
 	}
 	return nil
 }

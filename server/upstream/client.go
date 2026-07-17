@@ -1,4 +1,4 @@
-// Package client implements outbound DNS query execution over UDP, TCP, DoT,
+// Package upstream implements outbound DNS query execution over UDP, TCP, DoT,
 // DoQ, DoH, DoH3, DNSCrypt, TLCP, and DTLCP with connection pooling.
 package upstream
 
@@ -101,10 +101,10 @@ func New() *Client {
 		proxyDialers: make(map[string]*socks5.Dialer),
 	}
 
-	c.plainClient = plain.New(udpClient, tcpClient, tcpPool, c.getProxyDialer, timeout)
-	c.tlsClient = tlsclient.New(tlsDNSClient, dohClient, doh3Client, dotPool, quicPool, sessionCache, c.getProxyDialer, timeout)
-	c.tlcpClient = tlcpclient.New(c.getProxyDialer, timeout)
-	c.dnscryptClient = dnscrypt.New(c.getProxyDialer)
+	c.plainClient = plain.New(udpClient, tcpClient, tcpPool, c.proxyDialer, timeout)
+	c.tlsClient = tlsclient.New(tlsDNSClient, dohClient, doh3Client, dotPool, quicPool, sessionCache, c.proxyDialer, timeout)
+	c.tlcpClient = tlcpclient.New(c.proxyDialer, timeout)
+	c.dnscryptClient = dnscrypt.New(c.proxyDialer)
 
 	return c
 }

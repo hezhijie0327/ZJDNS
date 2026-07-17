@@ -18,6 +18,7 @@ func (s *Server) startBackgroundTasks() {
 	s.startECSRefresh()
 	s.startPrefetchCooldownCleanup()
 	s.startTCPWriteMuSweep()
+	s.startRequestLogCleanup()
 	s.setupSignalHandling()
 }
 
@@ -42,7 +43,7 @@ func (s *Server) runBackgroundTicker(name string, interval time.Duration, fn fun
 
 // startCookieRotation rotates the DNS cookie secret on a fixed interval.
 func (s *Server) startCookieRotation() {
-	ednsH := s.handler.Edns()
+	ednsH := s.handler.EDNS()
 	if ednsH == nil || ednsH.CookieGenerator == nil {
 		return
 	}
@@ -54,7 +55,7 @@ func (s *Server) startCookieRotation() {
 
 // refreshECSOnce attempts a single ECS refresh and logs the result.
 func (s *Server) refreshECSOnce() {
-	ecsList, changed, err := s.handler.Edns().RefreshDefaultECS()
+	ecsList, changed, err := s.handler.EDNS().RefreshDefaultECS()
 	if err != nil {
 		log.Warnf("EDNS: default ECS refresh failed: %v", err)
 		return
@@ -71,7 +72,7 @@ func (s *Server) refreshECSOnce() {
 
 // startECSRefresh periodically refreshes the default EDNS Client Subnet value.
 func (s *Server) startECSRefresh() {
-	ednsH := s.handler.Edns()
+	ednsH := s.handler.EDNS()
 	if ednsH == nil || !ednsH.ShouldRefreshDefaultECS() {
 		return
 	}
@@ -94,7 +95,7 @@ func (s *Server) startECSRefresh() {
 // startPrefetchCooldownCleanup periodically evicts stale entries from the prefetch cooldown map.
 func (s *Server) startPrefetchCooldownCleanup() {
 	s.runBackgroundTicker("prefetch cooldown cleanup", config.DefaultPrefetchThrottleInterval*10, func() {
-		s.handler.CleanupPrefetchCooldown(log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds())
+		s.handler.PrefetchCooldown().Cleanup(log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds())
 	})
 }
 
@@ -109,6 +110,26 @@ func (s *Server) startTCPWriteMuSweep() {
 			}
 			return true
 		})
+	})
+}
+
+// startRequestLogCleanup periodically removes old request_log rows to prevent
+// unbounded disk growth on busy servers. Runs every 6 hours with a 7-day
+// retention window.
+func (s *Server) startRequestLogCleanup() {
+	if s.handler == nil || s.handler.CacheStore() == nil {
+		return
+	}
+	s.runBackgroundTicker("request_log cleanup", 6*time.Hour, func() {
+		store := s.handler.CacheStore()
+		n, err := store.CleanupRequestLog(config.DefaultRequestLogRetention)
+		if err != nil {
+			log.Warnf("CACHE: request_log cleanup failed: %v", err)
+			return
+		}
+		if n > 0 {
+			log.Debugf("CACHE: cleaned up %d stale request_log rows", n)
+		}
 	})
 }
 

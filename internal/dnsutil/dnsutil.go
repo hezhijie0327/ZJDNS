@@ -28,14 +28,21 @@ const MaxLabelLength = 63
 
 var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 
+// TrimTrailingDot removes a single trailing dot from a DNS name using sub-slicing
+// (zero-alloc) instead of strings.TrimSuffix (which allocates when the suffix is
+// present). Returns the input unchanged if it is empty or doesn't end with '.'.
+func TrimTrailingDot(s string) string {
+	if s != "" && s[len(s)-1] == '.' {
+		return s[:len(s)-1]
+	}
+	return s
+}
+
 // NormalizeDomain converts a domain name to lowercase and removes the trailing
 // dot. Uses sub-slicing (zero-alloc) instead of strings.TrimSuffix to avoid
 // allocation on the hot path.
 func NormalizeDomain(domain string) string {
-	if domain != "" && domain[len(domain)-1] == '.' {
-		domain = domain[:len(domain)-1]
-	}
-	return strings.ToLower(domain)
+	return strings.ToLower(TrimTrailingDot(domain))
 }
 
 // IsValidDomainLabels checks that each label in the domain name does not exceed
@@ -98,11 +105,11 @@ func HandlePanic(operation string) {
 // ParseReverseDNSName parses a reverse DNS name (in-addr.arpa or ip6.arpa)
 // into a net.IP.
 func ParseReverseDNSName(name string) net.IP {
-	fqdn := strings.TrimSuffix(dnsutil.Fqdn(name), ".")
+	fqdn := TrimTrailingDot(dnsutil.Fqdn(name))
 	lower := strings.ToLower(fqdn)
 
 	if before, ok := strings.CutSuffix(lower, ".in-addr.arpa"); ok {
-		octets := strings.Split(strings.TrimSuffix(before, "."), ".")
+		octets := strings.Split(TrimTrailingDot(before), ".")
 		if len(octets) != 4 {
 			return nil
 		}
@@ -113,7 +120,7 @@ func ParseReverseDNSName(name string) net.IP {
 	}
 
 	if before, ok := strings.CutSuffix(lower, ".ip6.arpa"); ok {
-		nibbles := strings.Split(strings.TrimSuffix(before, "."), ".")
+		nibbles := strings.Split(TrimTrailingDot(before), ".")
 		if len(nibbles) != 32 {
 			return nil
 		}

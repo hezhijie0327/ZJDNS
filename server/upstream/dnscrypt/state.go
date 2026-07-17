@@ -79,9 +79,9 @@ func (c *Client) resolveStamp(server *config.UpstreamServer) (addr, providerName
 	return addr, providerName, publicKey, nil
 }
 
-// getState fetches and caches the DNSCrypt certificate and shared key for the
+// state fetches and caches the DNSCrypt certificate and shared key for the
 // given resolver.
-func (c *Client) getState(
+func (c *Client) state(
 	ctx context.Context,
 	addr string,
 	providerName string,

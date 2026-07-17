@@ -3,6 +3,7 @@ package cache
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -28,12 +29,6 @@ const (
 	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
 	maxLatencyLookupIPs = 64 // cap IN-clause IPs to bound SQL compilation overhead
 	decompressBufCap    = 4096
-
-	// ipLatencyQuery is a fixed 64-placeholder statement — SQLite reuses
-	// the compiled query plan across all lookupIPLatencies calls (P4).
-	ipLatencyQuery = "SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (" +
-		"?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?," +
-		"?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 )
 
 // decompressBufPool reuses byte slices for zstd decompression on the
@@ -226,7 +221,7 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 		}
 	}
 
-	rows, err := s.db.SQ.Query(ipLatencyQuery, argsPtr[:]...)
+	rows, err := s.db.StmtIPLatency.Query(argsPtr[:]...)
 	if err != nil {
 		return nil
 	}
@@ -354,6 +349,20 @@ func (s *SQLiteCache) evictIfNeeded() {
 	if s.evictCount.Add(1)%10 == 0 {
 		_, _ = s.db.SQ.Exec("PRAGMA optimize")
 	}
+}
+
+// CleanupRequestLog removes request_log rows older than retentionSec (in seconds).
+// Runs periodically (every 6h) via the server background ticker to prevent
+// unbounded disk growth on busy servers.
+func (s *SQLiteCache) CleanupRequestLog(retentionSec int64) (int64, error) {
+	result, err := s.db.SQ.Exec(
+		`DELETE FROM request_log WHERE timestamp < unixepoch() - ?`, retentionSec,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup request_log: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	return n, nil
 }
 
 func (s *SQLiteCache) evictOldest(toEvict int64) {

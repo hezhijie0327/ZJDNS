@@ -50,7 +50,10 @@ func (s *Server) startDOTServer() error {
 		s.dotListeners = append(s.dotListeners, tlcpListener)
 		log.Infof("TLCP: DoT server started on %s (TLCP)", addr)
 
-		go s.serveDOT(tlcpListener)
+		s.serverGroup.Go(func() error {
+			s.serveDOT(tlcpListener)
+			return nil
+		})
 	}
 	return nil
 }

@@ -46,7 +46,11 @@ type DB struct {
 	StmtEnsureEntry   *sql.Stmt // fallback for RecordRequest when EntryID <= 0
 
 	// Zone prepared statements
-	StmtZoneExact *sql.Stmt
+	StmtZoneExact    *sql.Stmt
+	StmtZoneWildcard *sql.Stmt
+
+	// Latency prepared statements
+	StmtIPLatency *sql.Stmt
 }
 
 const dsnParams = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
@@ -199,6 +203,24 @@ func (db *DB) EnsureEntry(qname string, qtype, qclass int, ecsAddr string, ecsPr
 
 // MaxEntries returns the maximum cache entries before eviction.
 func (db *DB) MaxEntries() int { return db.maxEntries }
+
+// QueryZoneExact runs the exact-match zone query via StmtZoneExact.
+// Satisfies zone.ZoneStorage.
+func (db *DB) QueryZoneExact(qname string, qtype, qclass int) (*sql.Rows, error) {
+	return db.StmtZoneExact.Query(qname, qtype, qclass)
+}
+
+// QueryZoneWildcard runs the wildcard-batch zone query via StmtZoneWildcard.
+// Satisfies zone.ZoneStorage.
+func (db *DB) QueryZoneWildcard(args []any) (*sql.Rows, error) {
+	return db.StmtZoneWildcard.Query(args...)
+}
+
+// Begin starts a new SQL transaction. Satisfies zone.ZoneStorage.
+func (db *DB) Begin() (*sql.Tx, error) { return db.SQ.Begin() }
+
+// Exec executes a SQL statement. Satisfies zone.ZoneStorage.
+func (db *DB) Exec(query string, args ...any) (sql.Result, error) { return db.SQ.Exec(query, args...) }
 
 // IsClosed reports whether the database has been closed.
 func (db *DB) IsClosed() bool { return atomic.LoadInt32(&db.closed) != 0 }

@@ -7,7 +7,6 @@ import (
 	"net"
 	"slices"
 	"strings"
-	"time"
 	"zjdns/config"
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -46,6 +45,8 @@ type probeKey struct {
 // It is deliberately global — NS latency probing is naturally cross-query
 // (the same authoritative nameservers serve many domains), so sharing a
 // single singleflight group across all Prober instances is correct behaviour.
+//
+//nolint:gochecknoglobals // cross-query singleflight: intentional global
 var nsPending = pending.NewGroup[string]()
 
 // New creates a new Prober with the given cache setter, background group
@@ -101,7 +102,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 
 	// Skip if all IPs in the answer were recently probed. Each IP is checked
 	// individually — CDN IPs shared across domains are deduped globally.
-	now := time.Now().Unix()
+	now := log.NowUnix()
 	allRecent := true
 	for _, rr := range answer {
 		ip, ok := zdnsutil.ExtractIPString(rr)
@@ -200,7 +201,7 @@ func ProbeNSAddrs(ctx context.Context, cache CacheSetter, addrs []string) {
 	}
 
 	// Skip IPs that were recently probed.
-	now := time.Now().Unix()
+	now := log.NowUnix()
 	needProbe := make([]net.IP, 0, len(ips))
 	for _, ip := range ips {
 		lastProbe, ok := cache.LatencyLastProbe(ip.String())

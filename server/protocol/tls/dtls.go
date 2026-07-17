@@ -33,7 +33,10 @@ func (s *Server) startDTLSServer() error {
 		}
 
 		s.dtlsListeners = append(s.dtlsListeners, listener)
-		go s.handleDTLSConnections(listener)
+		s.serverGroup.Go(func() error {
+			s.handleDTLSConnections(listener)
+			return nil
+		})
 		log.Infof("TLS: DTLS server started on %s", addr)
 	}
 	return nil

@@ -28,6 +28,7 @@ type Recursive struct {
 	resolver          *Resolver
 	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
 	cache             cache.Store
+	ctx               context.Context // lifecycle context for background probes
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the

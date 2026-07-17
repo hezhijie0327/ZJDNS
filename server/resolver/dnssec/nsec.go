@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -145,7 +146,7 @@ func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) s
 	}
 	// Normalize: lowercase, fully qualified, wire-format label encoding.
 	name = strings.ToLower(dnsutil.Fqdn(name))
-	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
+	labels := strings.Split(zdnsutil.TrimTrailingDot(name), ".")
 	var wire []byte
 	for _, label := range labels {
 		wire = append(wire, byte(len(label))) //nolint:gosec // G115: NSEC3 hash iteration — protocol-bounded byte

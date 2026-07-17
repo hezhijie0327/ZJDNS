@@ -64,5 +64,27 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 
+	db.StmtZoneWildcard, err = db.SQ.Prepare(
+		`SELECT qname, rcode, answer, authority, additional, match_tags
+		 FROM zone_entries WHERE is_wildcard = 1 AND qname IN (
+		 ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 AND ((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0))
+		 ORDER BY length(qname) DESC, qtype DESC`,
+	)
+	if err != nil {
+		return err
+	}
+
+	// ipLatencyQuery uses 64 fixed placeholders so SQLite reuses the
+	// compiled query plan across all lookupIPLatencies calls.
+	db.StmtIPLatency, err = db.SQ.Prepare(
+		`SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (` +
+			`?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` +
+			`?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }

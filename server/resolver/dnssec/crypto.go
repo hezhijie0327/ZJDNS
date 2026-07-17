@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"zjdns/cache"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -266,9 +267,9 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 		if !groupValidated {
 			crossZone := true
 			for _, sig := range sigs {
-				signer := strings.ToLower(strings.TrimSuffix(sig.SignerName, "."))
+				signer := zdnsutil.NormalizeDomain(sig.SignerName)
 				for _, key := range verifiedDNSKEYs {
-					keyZone := strings.ToLower(strings.TrimSuffix(key.Header().Name, "."))
+					keyZone := zdnsutil.NormalizeDomain(key.Header().Name)
 					if signer == keyZone || strings.HasSuffix(signer, "."+keyZone) {
 						crossZone = false
 						break

@@ -34,8 +34,10 @@ const (
 	DefaultMaxCacheEntries   = 10000
 	DefaultCacheMMapSizeMB   = 64
 	DefaultCacheCacheSizeMB  = 32
-	DefaultCacheMaxOpenConns = 8
-	DefaultCacheMaxIdleConns = 4
+	DefaultCacheMaxOpenConns = 4 // SQLite WAL: single writer, readers served concurrently
+	DefaultCacheMaxIdleConns = 2
+
+	DefaultRequestLogRetention = 7 * 24 * 3600 // 7 days in seconds — auto-cleanup window
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30

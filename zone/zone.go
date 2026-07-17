@@ -47,9 +47,20 @@ type dynamicEntry struct {
 	configs []config.ZoneRecord
 }
 
-// Evaluator manages zone rules backed by a SQLite database.
+// ZoneStorage is the interface for zone rule storage, following the same
+// pattern as ruleset.RuleSetStorage.  It allows zone.Evaluator to depend on
+// an abstraction rather than the concrete *database.DB type.
+type ZoneStorage interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	Begin() (*sql.Tx, error)
+	QueryZoneExact(qname string, qtype, qclass int) (*sql.Rows, error)
+	QueryZoneWildcard(args []any) (*sql.Rows, error)
+	Close() error
+}
+
+// Evaluator manages zone rules backed by a ZoneStorage implementation.
 type Evaluator struct {
-	db         *database.DB
+	db         ZoneStorage
 	loadedAt   atomic.Int64
 	ruleCount  atomic.Int64
 	dynamics   map[string]*dynamicEntry // qname → dynamic content
@@ -68,14 +79,6 @@ const wildcardPrefix = "*."
 // SQL statement uses a fixed placeholder count so SQLite can reuse the compiled
 // query plan across calls (P4).
 const maxWildcardLabels = 16
-
-// wildcardBatchQuery is a fixed-placeholder variant of the wildcard IN query.
-// Unused suffix slots are padded with empty string (never matches qname).
-var wildcardBatchQuery = "SELECT qname, rcode, answer, authority, additional, match_tags " +
-	"FROM zone_entries WHERE is_wildcard = 1 AND qname IN (" +
-	"?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" +
-	" AND ((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0)) " +
-	"ORDER BY length(qname) DESC, qtype DESC"
 
 // New creates an Evaluator backed by the given database.
 // The caller is responsible for opening the database via database.Open()
@@ -123,13 +126,13 @@ func (e *Evaluator) Bypass(matchedTags map[string]bool) bool {
 
 // LoadRules validates and loads zone rules into the SQLite database.
 func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
-	if _, err := e.db.SQ.Exec(`DELETE FROM zone_entries`); err != nil {
+	if _, err := e.db.Exec(`DELETE FROM zone_entries`); err != nil {
 		return fmt.Errorf("zone: clear: %w", err)
 	}
 	// Clear dynamic content registrations.
 	e.dynamics = make(map[string]*dynamicEntry)
 
-	tx, err := e.db.SQ.Begin()
+	tx, err := e.db.Begin()
 	if err != nil {
 		return fmt.Errorf("zone: begin tx: %w", err)
 	}
@@ -254,12 +257,12 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	loadedAt := e.loadedAt.Load()
 
 	// 2. Exact composite key lookup.
-	if r := e.query(e.db.StmtZoneExact, qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
+	if r := e.queryExact(qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
 		return r
 	}
 
 	// 3. Sentinel key (rcode-only rules).
-	if r := e.query(e.db.StmtZoneExact, qname, 0, 0, matchedTags, loadedAt); r.Matched {
+	if r := e.queryExact(qname, 0, 0, matchedTags, loadedAt); r.Matched {
 		return r
 	}
 
@@ -269,8 +272,8 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	return e.queryWildcardBatch(qname, qtype, qclass, matchedTags, loadedAt)
 }
 
-func (e *Evaluator) query(stmt *sql.Stmt, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
-	rows, err := stmt.Query(qname, qtype, qclass)
+func (e *Evaluator) queryExact(qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
+	rows, err := e.db.QueryZoneExact(qname, int(qtype), int(qclass))
 	if err != nil {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
@@ -350,7 +353,7 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 	args[maxWildcardLabels] = qtype
 	args[maxWildcardLabels+1] = qclass
 
-	rows, err := e.db.SQ.Query(wildcardBatchQuery, args...)
+	rows, err := e.db.QueryZoneWildcard(args)
 	if err != nil {
 		return Result{Rcode: dns.RcodeSuccess}
 	}

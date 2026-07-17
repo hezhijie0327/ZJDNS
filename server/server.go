@@ -188,7 +188,7 @@ func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream
 	return initResolver(cfg, queryClient, cryptoValidator, hijackDetector, ednsH, cidrMatcher, cacheStore,
 		func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
 			return handler.BuildQueryMsg(ednsH, q, ecs, rd, secure)
-		})
+		}, s.backgroundCtx)
 }
 
 // warmUpConnections pre-establishes transport connections to all configured
@@ -428,33 +428,33 @@ func (s *Server) Start() error {
 
 func (s *Server) displayInfo() {
 	servers := s.handler.UpstreamServers()
-	if len(servers) > 0 {
-		for _, server := range servers {
-			if server.IsRecursive() {
-				info := "Upstream server: " + server.Address
-				if len(server.Match) > 0 {
-					info += fmt.Sprintf(" [CIDR match: %v]", server.Match)
-				}
-				log.Infof("UPSTREAM: %s", info)
-			} else {
-				protocol := strings.ToUpper(server.Protocol)
-				if protocol == "" {
-					protocol = "UDP"
-				}
-				serverInfo := fmt.Sprintf("%s (%s)", server.Address, protocol)
-				if server.SkipTLSVerify && zdnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) {
-					serverInfo += " [Skip TLS verification]"
-				}
-				if len(server.Match) > 0 {
-					serverInfo += fmt.Sprintf(" [CIDR match: %v]", server.Match)
-				}
-				log.Infof("UPSTREAM: Upstream server: %s", serverInfo)
-			}
-		}
-		log.Infof("UPSTREAM: Upstream mode: total %d servers", len(servers))
-	} else {
+	if len(servers) == 0 {
 		log.Infof("RECURSION: Recursive mode")
+		return
 	}
+	for _, server := range servers {
+		if server.IsRecursive() {
+			info := "Upstream server: " + server.Address
+			if len(server.Match) > 0 {
+				info += fmt.Sprintf(" [CIDR match: %v]", server.Match)
+			}
+			log.Infof("UPSTREAM: %s", info)
+		} else {
+			protocol := strings.ToUpper(server.Protocol)
+			if protocol == "" {
+				protocol = "UDP"
+			}
+			serverInfo := fmt.Sprintf("%s (%s)", server.Address, protocol)
+			if server.SkipTLSVerify && zdnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) {
+				serverInfo += " [Skip TLS verification]"
+			}
+			if len(server.Match) > 0 {
+				serverInfo += fmt.Sprintf(" [CIDR match: %v]", server.Match)
+			}
+			log.Infof("UPSTREAM: Upstream server: %s", serverInfo)
+		}
+	}
+	log.Infof("UPSTREAM: Upstream mode: total %d servers", len(servers))
 
 	if s.pprofServer != nil {
 		log.Infof("PPROF: pprof server enabled on: %s, via: %s", s.config.Server.Pprof, config.DefaultPprofPath)

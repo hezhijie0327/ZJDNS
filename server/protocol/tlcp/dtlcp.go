@@ -75,15 +75,24 @@ func (l *dtlcpListener) Accept() (net.Conn, error) {
 
 func (l *dtlcpListener) Close() error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if l.closed {
+		l.mu.Unlock()
 		return nil
 	}
 	l.closed = true
+	// Collect active connections under the lock, then unlock before closing.
+	// dtlcpConnWrapper.Close() acquires parent.mu — holding it here would
+	// cause a self-deadlock.
+	active := make([]*dtlcp.Conn, 0, len(l.active))
 	for _, conn := range l.active {
-		_ = conn.Close()
+		active = append(active, conn)
 	}
 	l.active = nil
+	l.mu.Unlock()
+
+	for _, conn := range active {
+		_ = conn.Close()
+	}
 	return l.udpConn.Close()
 }
 
@@ -193,7 +202,10 @@ func (s *Server) startDTLCPServer() error {
 
 		listener := newDTLCPListener(udpConn, s.dtlcpConfig)
 		s.dtlcpListeners = append(s.dtlcpListeners, listener)
-		go s.handleDTLCPConnections(listener)
+		s.serverGroup.Go(func() error {
+			s.handleDTLCPConnections(listener)
+			return nil
+		})
 		log.Infof("TLCP: DTLCP server started on %s", addr)
 	}
 	return nil

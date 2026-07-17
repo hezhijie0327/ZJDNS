@@ -1,5 +1,6 @@
-// Package types provides the DNS query processing pipeline: cache lookup,
-// zone evaluation, upstream/recursive resolution, and DNSSEC validation.
+// Package handler provides the DNS query processing pipeline: query context,
+// middleware interfaces, and the central Handler that dispatches queries
+// through the assembled middleware chain.
 package handler
 
 import (

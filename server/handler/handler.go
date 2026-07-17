@@ -80,7 +80,7 @@ func (h *Handler) MarkClosed() { atomic.StoreInt32(&h.closed, 1) }
 // ── Accessors ────────────────────────────────────────────────────────────
 
 // Edns returns the EDNS handler.
-func (h *Handler) Edns() *edns.Handler { return h.edns }
+func (h *Handler) EDNS() *edns.Handler { return h.edns }
 
 // CacheStore returns the cache store.
 func (h *Handler) CacheStore() cache.Store { return h.cache }
@@ -90,14 +90,6 @@ func (h *Handler) Prober() LatencyProber { return h.prober }
 
 // PrefetchCooldown returns the prefetch cooldown tracker.
 func (h *Handler) PrefetchCooldown() *PrefetchCooldown { return h.prefetchCooldown }
-
-// CleanupPrefetchCooldown removes entries from the prefetch cooldown map
-// that have aged past the cooldown window.
-//
-// Deprecated: use h.PrefetchCooldown().Cleanup(now, cooldownNanos) directly.
-func (h *Handler) CleanupPrefetchCooldown(now, cooldownNanos int64) {
-	h.prefetchCooldown.Cleanup(now, cooldownNanos)
-}
 
 // CacheRefreshGroup returns the errgroup for cache refresh goroutines.
 func (h *Handler) CacheRefreshGroup() *errgroup.Group { return h.cacheRefreshGroup }

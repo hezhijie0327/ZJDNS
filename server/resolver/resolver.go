@@ -105,6 +105,7 @@ type Config struct {
 	BuildMsg      BuildQueryFunc
 	Cache         cache.Store
 	DNSSECEnforce bool
+	Ctx           context.Context // lifecycle context propagated to Recursive for probes
 }
 
 // concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
@@ -164,7 +165,7 @@ func New(cfg *Config) *Resolver {
 		fallback:      &upstreamSet{},
 		cache:         cfg.Cache,
 	}
-	r.recursive = &Recursive{resolver: r, cache: cfg.Cache}
+	r.recursive = &Recursive{resolver: r, cache: cfg.Cache, ctx: cfg.Ctx}
 	r.cname = &CNAME{resolver: r}
 	r.validator = &Validator{Crypto: cfg.Crypto, Hijack: cfg.Hijack}
 	return r

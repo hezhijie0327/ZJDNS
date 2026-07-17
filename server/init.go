@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"zjdns/cache"
 	"zjdns/config"
@@ -25,6 +26,7 @@ func initResolver(
 	cidrMatcher resolver.CIDRMatcher,
 	cacheStore cache.Store,
 	buildMsg func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg,
+	backgroundCtx context.Context,
 ) *resolver.Resolver {
 	r := resolver.New(&resolver.Config{
 		QueryClient:   queryClient,
@@ -35,9 +37,22 @@ func initResolver(
 		BuildMsg:      buildMsg,
 		Cache:         cacheStore,
 		DNSSECEnforce: cfg.Server.Features.DNSSECEnforce,
+		Ctx:           backgroundCtx,
 	})
 	r.ConfigureServers(cfg.Upstream, cfg.Fallback)
 	return r
+}
+
+// makeFlushFunc returns a closure that calls op() and formats the result as a
+// single-element []string suitable for DynamicContent in CHAOS zone rules.
+func makeFlushFunc(op func() (int64, error), verb string) func() []string {
+	return func() []string {
+		n, err := op()
+		if err != nil {
+			return []string{fmt.Sprintf("error=%v", err)}
+		}
+		return []string{fmt.Sprintf("%s=%d", verb, n)}
+	}
 }
 
 // wireZoneDynamicContent assigns dynamic content functions to zone rules that
@@ -48,53 +63,17 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule) {
 		case config.DefaultProjectName + ".stats":
 			rules[i].DynamicContent = store.Stats
 		case config.DefaultProjectName + ".db.clear":
-			rules[i].DynamicContent = func() []string {
-				n, err := store.Clear()
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
+			rules[i].DynamicContent = makeFlushFunc(store.Clear, "flushed")
 		case config.DefaultProjectName + ".db.clear.cache":
-			rules[i].DynamicContent = func() []string {
-				n, err := store.FlushDB("cache")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("cache") }, "flushed")
 		case config.DefaultProjectName + ".db.clear.stats":
-			rules[i].DynamicContent = func() []string {
-				n, err := store.FlushDB("stats")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("reset=%d", n)}
-			}
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("stats") }, "reset")
 		case config.DefaultProjectName + ".db.clear.latency":
-			rules[i].DynamicContent = func() []string {
-				n, err := store.FlushDB("latency")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("latency") }, "flushed")
 		case config.DefaultProjectName + ".db.clear.zone":
-			rules[i].DynamicContent = func() []string {
-				n, err := store.FlushDB("zone")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("zone") }, "flushed")
 		case config.DefaultProjectName + ".db.clear.ruleset":
-			rules[i].DynamicContent = func() []string {
-				n, err := store.FlushDB("ruleset")
-				if err != nil {
-					return []string{fmt.Sprintf("error=%v", err)}
-				}
-				return []string{fmt.Sprintf("flushed=%d", n)}
-			}
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("ruleset") }, "flushed")
 		}
 	}
 }

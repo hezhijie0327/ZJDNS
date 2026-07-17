@@ -15,6 +15,7 @@ import (
 
 	"gitee.com/Trisia/gotlcp/dtlcp"
 	"gitee.com/Trisia/gotlcp/tlcp"
+	"golang.org/x/sync/errgroup"
 )
 
 // Server manages TLCP-based secure DNS protocol listeners and their lifecycle.
@@ -32,6 +33,8 @@ type Server struct {
 	dohListeners   []net.Listener
 	dohServers     []*http.Server
 	dtlcpListeners []net.Listener
+	serverGroup    *errgroup.Group
+	serverCtx      context.Context
 }
 
 // New creates a TLCP Server, loading or generating SM2 certificate pairs.
@@ -79,6 +82,8 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
+	serverGroup, serverCtx := errgroup.WithContext(ctx)
+	serverGroup.SetLimit(config.DefaultServerGoroutineLimit)
 
 	s := &Server{
 		dotPort:     dotPort,
@@ -89,6 +94,8 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 		dtlcpConfig: dtlcpConfig,
 		ctx:         ctx,
 		cancel:      cancel,
+		serverGroup: serverGroup,
+		serverCtx:   serverCtx,
 	}
 
 	return s, nil
@@ -147,6 +154,9 @@ func (s *Server) Shutdown() error {
 		if l != nil {
 			zdnsutil.CloseWithLog(l, "TLCP DTLCP listener", "TLCP")
 		}
+	}
+	if err := s.serverGroup.Wait(); err != nil {
+		log.Errorf("TLCP: server goroutines finished with error: %v", err)
 	}
 	log.Infof("TLCP: TLCP server shut down")
 	return nil
