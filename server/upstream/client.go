@@ -56,6 +56,11 @@ type Client struct {
 // New creates a Client with default timeouts, transport pools, and session
 // caches. Sub-clients for each protocol family are created and wired with
 // shared resources (proxy dialers, connection pools).
+//
+// The zero-parameter constructor is intentional: all transport configuration
+// comes from config.UpstreamServer at query time (per-server TLS verification,
+// protocol selection, proxy).  The pools and caches created here are shared
+// across all upstream servers for efficiency.
 func New() *Client {
 	defaultTransport := &dns.Transport{
 		Dialer: &net.Dialer{

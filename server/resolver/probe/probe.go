@@ -43,6 +43,9 @@ type probeKey struct {
 }
 
 // nsPending deduplicates concurrent ProbeNSAddrs calls by sorted IP set.
+// It is deliberately global — NS latency probing is naturally cross-query
+// (the same authoritative nameservers serve many domains), so sharing a
+// single singleflight group across all Prober instances is correct behaviour.
 var nsPending = pending.NewGroup[string]()
 
 // New creates a new Prober with the given cache setter, background group

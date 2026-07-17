@@ -66,6 +66,11 @@ func NewDefaultServerConfig() *ServerConfig {
 	cfg.Server.Protocol.QUIC = DefaultQUICPort
 	cfg.Server.Protocol.HTTPS = HTTPSEndpoint{Port: DefaultHTTPSPort, Endpoint: DefaultQueryPath}
 	cfg.Server.Protocol.HTTP3 = HTTPSEndpoint{Port: DefaultHTTP3Port, Endpoint: DefaultQueryPath}
+	cfg.Server.Protocol.DTLS = DefaultDTLSPort
+	cfg.Server.Protocol.DNSCrypt = DefaultDNSCryptPort
+	cfg.Server.Protocol.TLCP = DefaultTLCPPort
+	cfg.Server.Protocol.HTTPTLCP = HTTPSEndpoint{Port: DefaultHTTPTLCPPort, Endpoint: DefaultQueryPath}
+	cfg.Server.Protocol.DTLCP = DefaultDTLCPPort
 
 	cfg.Server.Certificate.Domain = "dns.example.com"
 	cfg.Server.Features.DDR = DDRSettings{IPv4: "127.0.0.1", IPv6: "::1"}

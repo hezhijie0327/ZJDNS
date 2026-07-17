@@ -308,6 +308,8 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 		if !c.IsFull() {
 			p.conns[key] = liveConns
 			p.mu.Unlock()
+			// TOCTOU: readLoop may close c after Unlock.  Benign — Exchange
+			// detects it via closed.Load() and the caller retries.
 			return c, nil
 		}
 		if inFlight < leastCount {
@@ -396,7 +398,11 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 
 // replaceDead replaces a dead connection in the pool with a new one. Returns
 // true if a replacement was made. Must be called with p.mu held.
+//
 // NOTE: drops p.mu during c.close() to avoid ABBA deadlock with Conn.mu.
+// Between Unlock and re-Lock, Shutdown may concurrently close the new
+// connection.  This is a benign race — the caller gets a dead connection,
+// Exchange detects it via closed.Load(), and the upper layer retries.
 func (p *ConnPool) replaceDead(key string, newConn *Conn) bool {
 	for i, c := range p.conns[key] {
 		if !c.IsDead() {

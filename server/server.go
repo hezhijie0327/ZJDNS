@@ -1,4 +1,5 @@
-// Package server implements the core DNS server, coordinating query processing, protocol listeners, and lifecycle.
+// Package server provides the core DNS server: lifecycle management,
+// dependency wiring, and background task scheduling.
 package server
 
 import (
@@ -7,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof" //nolint:gosec // G108: profiling endpoint is opt-in // register pprof handlers on http.DefaultServeMux
 	"os"
 	"runtime"
 	"strings"
@@ -17,14 +17,10 @@ import (
 	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/internal/dns64"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/ruleset"
 	"zjdns/server/handler"
 	"zjdns/server/handler/middleware"
-	serverdnscrypt "zjdns/server/protocol/dnscrypt"
-	serverplain "zjdns/server/protocol/plain"
-	servertlcp "zjdns/server/protocol/tlcp"
 	"zjdns/server/protocol/tls"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
@@ -35,34 +31,44 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
+
+	zdnsutil "zjdns/internal/dnsutil"
+
+	serverdnscrypt "zjdns/server/protocol/dnscrypt"
+	serverplain "zjdns/server/protocol/plain"
+	servertlcp "zjdns/server/protocol/tlcp"
 )
 
-// Server is the core DNS server handling lifecycle, protocol listeners, and background tasks.
+// Server orchestrates the DNS server lifecycle: dependency wiring, protocol
+// listener startup/shutdown, and background task scheduling.
 type Server struct {
-	config          *config.ServerConfig
-	handler         *handler.Handler
-	queryClient     *upstream.Client
+	config      *config.ServerConfig
+	handler     *handler.Handler
+	queryClient *upstream.Client
+
 	tls             *tls.Server
-	dnscryptServer  *serverdnscrypt.Server
 	tlcpServer      *servertlcp.Server
+	dnscryptServer  *serverdnscrypt.Server
 	plain           *serverplain.Server
 	pprofServer     *http.Server
+	shutdown        chan struct{}
+	tcpSem          chan struct{}
+	tcpWriteMu      sync.Map
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
-	shutdown        chan struct{}
 	backgroundGroup *errgroup.Group
 	backgroundCtx   context.Context
-	tcpWriteMu      sync.Map
-	tcpSem          chan struct{} // bounds concurrent TCP query goroutines
 }
 
-// New creates and initializes a Server from the given configuration.
+// New creates a fully-wired Server from the given configuration.  Database
+// setup, cache, zone rules, the resolver, the middleware chain, and all
+// protocol listeners are constructed and connected.
 func New(cfg *config.ServerConfig) (*Server, error) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 	cacheRefreshGroup, cacheRefreshCtx := errgroup.WithContext(ctx)
 
-	server := &Server{
+	s := &Server{
 		config:          cfg,
 		ctx:             ctx,
 		cancel:          cancel,
@@ -72,33 +78,73 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		tcpSem:          make(chan struct{}, config.DefaultServerGoroutineLimit),
 	}
 
-	// ── Foundation: database ──────────────────────────────────────────────
+	db, err := s.initDatabase(cfg)
+	if err != nil {
+		cancel(err)
+		return nil, fmt.Errorf("database init: %w", err)
+	}
 
-	db, err := database.Open(
+	cacheStore := cache.New(db)
+	zoneEvaluator := zone.New(db)
+
+	ednsH, err := s.initEDNS(cfg)
+	if err != nil {
+		cancel(err)
+		return nil, fmt.Errorf("EDNS handler init: %w", err)
+	}
+
+	rulesetEngine, err := s.initZoneAndRulesets(cfg, cacheStore, zoneEvaluator, db)
+	if err != nil {
+		cancel(err)
+		return nil, err
+	}
+
+	queryClient := s.initQueryClient(cfg)
+
+	dnsResolver := s.initDNSResolver(cfg, queryClient, ednsH, cacheStore, rulesetEngine)
+
+	s.warmUpConnections(cfg, queryClient)
+
+	h := s.initHandler(cfg, cacheStore, ednsH, zoneEvaluator, dnsResolver, rulesetEngine, cacheRefreshGroup, cacheRefreshCtx, backgroundCtx)
+
+	s.handler = h
+
+	if err := s.initProtocolListeners(cfg, h); err != nil {
+		cancel(err)
+		return nil, err
+	}
+
+	s.initPprof(cfg)
+
+	s.startBackgroundTasks()
+
+	return s, nil
+}
+
+// initDatabase opens the SQLite database with configured pragmas.
+func (s *Server) initDatabase(cfg *config.ServerConfig) (*database.DB, error) {
+	return database.Open(
 		cfg.Server.Features.Database.DBPath,
 		cfg.Server.Features.Cache.MaxEntries,
 		database.Options{
 			MMapSizeMB:  cfg.Server.Features.Database.MMapSizeMB,
 			CacheSizeMB: cfg.Server.Features.Database.CacheSizeMB,
 		})
-	if err != nil {
-		cancel(fmt.Errorf("database init: %w", err))
-		return nil, fmt.Errorf("database init: %w", err)
-	}
-	cacheStore := cache.New(db)
-	zoneEvaluator := zone.New(db)
+}
 
-	ednsHandler, err := edns.NewHandler(cfg.Server.Features.ECS)
-	if err != nil {
-		cancel(fmt.Errorf("EDNS handler init: %w", err))
-		return nil, fmt.Errorf("EDNS handler init: %w", err)
-	}
+// initEDNS creates the EDNS handler and auto-detects ECS subnets.
+func (s *Server) initEDNS(cfg *config.ServerConfig) (*edns.Handler, error) {
+	return edns.NewHandler(cfg.Server.Features.ECS)
+}
 
+// initZoneAndRulesets loads zone-file rules and CIDR/domain matching rulesets
+// from config.  Returns the ruleset engine (nil if none configured) and any
+// fatal error from loading.
+func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.Store, zoneEvaluator *zone.Evaluator, db *database.DB) (*ruleset.Engine, error) {
 	wireZoneDynamicContent(cacheStore, cfg.Zone.Rules)
 
 	if len(cfg.Zone.Rules) > 0 {
 		if err := zoneEvaluator.LoadRules(cfg.Zone.Rules); err != nil {
-			cancel(fmt.Errorf("load zone rules: %w", err))
 			return nil, fmt.Errorf("load zone rules: %w", err)
 		}
 		if len(cfg.Zone.BypassTags) > 0 {
@@ -106,75 +152,85 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}
 
-	var rulesetEngine *ruleset.Engine
+	var engine *ruleset.Engine
 	if len(cfg.RuleSet) > 0 {
-		rulesetEngine = ruleset.New(db)
-		if err := rulesetEngine.LoadRules(cfg.RuleSet); err != nil {
-			cancel(fmt.Errorf("ruleset init: %w", err))
-			return nil, fmt.Errorf("ruleset init: %w", err)
+		engine = ruleset.New(db)
+		if err := engine.LoadRules(cfg.RuleSet); err != nil {
+			return nil, fmt.Errorf("load ruleset: %w", err)
 		}
 	}
+	return engine, nil
+}
 
-	// ── Core: security ────────────────────────────────────────────────────
+// initQueryClient creates the upstream query client with transport pools
+// and optional KTLS offload.
+func (s *Server) initQueryClient(cfg *config.ServerConfig) *upstream.Client {
+	client := upstream.New()
+	if cfg.Server.Features.KTLS != nil {
+		client.SetKTLS(cfg.Server.Features.KTLS.KernelTX, cfg.Server.Features.KTLS.KernelRX)
+	}
+	s.queryClient = client
+	return client
+}
 
+// initDNSResolver wires together the recursive/forward resolver, security
+// validators, and CIDR matcher.
+func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream.Client, ednsH *edns.Handler, cacheStore cache.Store, rulesetEngine *ruleset.Engine) *resolver.Resolver {
 	cryptoValidator := dnssec.NewCryptoValidator(cacheStore)
 	hijackDetector := &hijack.Detector{}
 	hijackDetector.Enable(cfg.Server.Features.HijackProtection)
-
-	// ── Outbound: query client ────────────────────────────────────────────
-
-	queryClient := upstream.New()
-	if cfg.Server.Features.KTLS != nil {
-		queryClient.SetKTLS(cfg.Server.Features.KTLS.KernelTX, cfg.Server.Features.KTLS.KernelRX)
-	}
-	server.queryClient = queryClient
-
-	// ── Resolution: resolver + upstream config (created before handler) ───
 
 	var cidrMatcher resolver.CIDRMatcher
 	if rulesetEngine != nil {
 		cidrMatcher = rulesetEngine
 	}
-	dnsResolver := initResolver(cfg, queryClient, cryptoValidator, hijackDetector, ednsHandler, cidrMatcher, cacheStore,
+
+	return initResolver(cfg, queryClient, cryptoValidator, hijackDetector, ednsH, cidrMatcher, cacheStore,
 		func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
-			return handler.BuildQueryMsg(ednsHandler, q, ecs, rd, secure)
+			return handler.BuildQueryMsg(ednsH, q, ecs, rd, secure)
 		})
+}
 
-	if len(cfg.Upstream) > 0 || len(cfg.Fallback) > 0 {
-		allServers := make([]config.UpstreamServer, 0, len(cfg.Upstream)+len(cfg.Fallback))
-		allServers = append(allServers, cfg.Upstream...)
-		allServers = append(allServers, cfg.Fallback...)
-		server.queryClient.WarmUpConnections(allServers)
+// warmUpConnections pre-establishes transport connections to all configured
+// secure upstream servers.
+func (s *Server) warmUpConnections(cfg *config.ServerConfig, queryClient *upstream.Client) {
+	if len(cfg.Upstream) == 0 && len(cfg.Fallback) == 0 {
+		return
 	}
+	allServers := make([]config.UpstreamServer, 0, len(cfg.Upstream)+len(cfg.Fallback))
+	allServers = append(allServers, cfg.Upstream...)
+	allServers = append(allServers, cfg.Fallback...)
+	queryClient.WarmUpConnections(allServers)
+}
 
-	// ── Middleware chain assembly ─────────────────────────────────────────
-
-	// Latency prober — created before handler so it can be injected.
+// initHandler builds the middleware chain and returns the assembled handler.
+func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, ednsH *edns.Handler, zoneEvaluator *zone.Evaluator, dnsResolver *resolver.Resolver, rulesetEngine *ruleset.Engine, cacheRefreshGroup *errgroup.Group, cacheRefreshCtx, backgroundCtx context.Context) *handler.Handler {
 	var prober handler.LatencyProber
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
 		prober = probe.New(
 			cacheStore,
-			func(fn func() error) { server.backgroundGroup.Go(fn) },
+			func(fn func() error) { s.backgroundGroup.Go(fn) },
 			backgroundCtx,
 			cfg.Server.Features.LatencyProbe,
 		)
 	}
 
 	prefetchCooldown := handler.NewPrefetchCooldown()
+	ctx := s.ctx
 
 	deps := &middleware.Dependencies{
 		Config:           cfg,
 		Cache:            cacheStore,
-		EDNS:             ednsHandler,
-		ZoneEvaluator:    zoneEvaluator,
+		EDNS:             ednsH,
+		ZoneEvaluator:    zoneEvaluator, // set below
 		TagMatcher:       nil,
 		Resolver:         dnsResolver,
 		Prober:           prober,
 		PendingReqs:      handler.NewPendingRequests(),
 		PendingRefrs:     handler.NewRefreshGroup(),
-		DNS64:            nil, // set below if enabled
-		RulesetEngine:    cidrMatcher,
-		Closed:           func() bool { return false }, // updated after handler creation
+		DNS64:            nil,
+		RulesetEngine:    nil,
+		Closed:           func() bool { return false },
 		RefreshGroup:     cacheRefreshGroup,
 		RefreshCtx:       cacheRefreshCtx,
 		Ctx:              ctx,
@@ -182,6 +238,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	if rulesetEngine != nil {
+		deps.RulesetEngine = rulesetEngine
 		deps.TagMatcher = func(qname string, ip net.IP) map[string]bool {
 			return rulesetEngine.Match(qname, ip.String())
 		}
@@ -201,16 +258,18 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	chain := middleware.AssembleChain(deps)
 
 	h := handler.NewHandler(
-		chain, ednsHandler, cacheStore, prober, dnsResolver,
+		chain, ednsH, cacheStore, prober, dnsResolver,
 		cacheRefreshGroup, prefetchCooldown, ctx,
 	)
-	server.handler = h
-
-	// Wire the closed-check callback after handler is created.
 	deps.Closed = h.IsClosed
 
-	// ── Transport listeners ───────────────────────────────────────────────
+	return h
+}
 
+// initProtocolListeners creates and wires all protocol servers (TLS, TLCP,
+// DNSCrypt, Plain) into the Server struct.  Errors are non-fatal — the
+// server starts with the protocols that initialised successfully.
+func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Handler) error {
 	if cfg.Server.Certificate.TLS.IsEnabled() {
 		tlsCfg := tls.Config{
 			TLSPort:       cfg.Server.Protocol.TLS,
@@ -230,53 +289,47 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 		tlsSrv, err := tls.New(h, &tlsCfg, config.DefaultBackgroundTimeout)
 		if err != nil {
-			cancel(fmt.Errorf("TLS server init: %w", err))
-			return nil, fmt.Errorf("TLS server init: %w", err)
+			return fmt.Errorf("TLS server init: %w", err)
 		}
-		server.tls = tlsSrv
+		s.tls = tlsSrv
 	}
 
 	if cfg.Server.Protocol.DNSCrypt != "" {
 		providerName := cfg.Server.Certificate.DNSCrypt.ProviderName(cfg.Server.Certificate.Domain)
 		dnscryptSrv, err := serverdnscrypt.New(&cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
 		if err != nil {
-			cancel(fmt.Errorf("DNSCrypt server init: %w", err))
-			return nil, fmt.Errorf("DNSCrypt server init: %w", err)
+			return fmt.Errorf("DNSCrypt server init: %w", err)
 		}
-		server.dnscryptServer = dnscryptSrv
+		s.dnscryptServer = dnscryptSrv
 	}
 
 	if cfg.Server.Certificate.TLCP.IsEnabled() && (cfg.Server.Protocol.TLCP != "" || cfg.Server.Protocol.HTTPTLCP.Port != "" || cfg.Server.Protocol.DTLCP != "") {
 		tlcpSrv, err := servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP)
 		if err != nil {
-			cancel(fmt.Errorf("TLCP server init: %w", err))
-			return nil, fmt.Errorf("TLCP server init: %w", err)
+			return fmt.Errorf("TLCP server init: %w", err)
 		}
-		server.tlcpServer = tlcpSrv
+		s.tlcpServer = tlcpSrv
 	}
 
-	server.plain = serverplain.New(cfg)
+	s.plain = serverplain.New(cfg)
+	return nil
+}
 
-	// ── Observability: pprof ──────────────────────────────────────────────
-
-	if cfg.Server.Pprof != "" {
-		if err := zdnsutil.TryBind("tcp", "127.0.0.1:"+cfg.Server.Pprof); err != nil {
-			log.Warnf("PPROF: skipping — address 127.0.0.1:%s is unavailable: %v", cfg.Server.Pprof, err)
-		} else {
-			server.pprofServer = &http.Server{
-				Addr:              "127.0.0.1:" + cfg.Server.Pprof,
-				ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
-				ReadTimeout:       0,
-				IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
-			}
-		}
+// initPprof starts the optional pprof HTTP listener on 127.0.0.1.
+func (s *Server) initPprof(cfg *config.ServerConfig) {
+	if cfg.Server.Pprof == "" {
+		return
 	}
-
-	// ── Background tasks ──────────────────────────────────────────────────
-
-	server.startBackgroundTasks()
-
-	return server, nil
+	if err := zdnsutil.TryBind("tcp", "127.0.0.1:"+cfg.Server.Pprof); err != nil {
+		log.Warnf("PPROF: skipping — 127.0.0.1:%s unavailable: %v", cfg.Server.Pprof, err)
+		return
+	}
+	s.pprofServer = &http.Server{
+		Addr:              "127.0.0.1:" + cfg.Server.Pprof,
+		ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
+		ReadTimeout:       0,
+		IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
+	}
 }
 
 // ServeDNS delegates to the query handler. Required by server/tls.DNSHandler

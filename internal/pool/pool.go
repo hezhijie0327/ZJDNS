@@ -43,10 +43,14 @@ const (
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 )
 
-// DefaultMessage is the package-level default Message.
+// DefaultMessage is the package-level default message pool, shared across the
+// entire server for maximum reuse.  Package-level globals are intentional here:
+// a sync.Pool is mechanically a shared free-list; splitting it into per-package
+// instances would fragment the pool and increase allocations.
 var DefaultMessage = NewMessage()
 
-// DefaultBuffer is the package-level default Buffer.
+// DefaultBuffer is the package-level default byte-slice pool.  See the
+// DefaultMessage comment for the rationale behind global pools.
 var DefaultBuffer = NewBuffer(SecureBufferSize, defaultBufferSize)
 
 // NewMessage creates a new Message.
