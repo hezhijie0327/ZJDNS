@@ -353,7 +353,7 @@ func (s *SQLiteCache) LatencyLastProbe(ip string) (int64, bool) {
 		return 0, false
 	}
 	var ts int64
-	if err := s.db.StmtGetLastProbe.QueryRow(ip).Scan(&ts); err != nil || ts == 0 {
+	if err := s.db.StmtLastProbe.QueryRow(ip).Scan(&ts); err != nil || ts == 0 {
 		return 0, false
 	}
 	return ts, true

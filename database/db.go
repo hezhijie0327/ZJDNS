@@ -38,19 +38,15 @@ type DB struct {
 	writeMu    sync.Mutex
 
 	// Cache prepared statements
-	StmtGetEntry      *sql.Stmt
+	StmtEntry         *sql.Stmt
 	StmtInsertLog     *sql.Stmt
 	StmtHitCounter    *sql.Stmt
 	StmtInsertLatency *sql.Stmt
-	StmtGetLastProbe  *sql.Stmt
+	StmtLastProbe     *sql.Stmt
 	StmtEnsureEntry   *sql.Stmt // fallback for RecordRequest when EntryID <= 0
 
-	// RuleSet statements
-	StmtRuleSetInsert *sql.Stmt
-
 	// Zone prepared statements
-	StmtZoneExact  *sql.Stmt
-	StmtZoneInsert *sql.Stmt
+	StmtZoneExact *sql.Stmt
 }
 
 const dsnParams = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
@@ -133,10 +129,8 @@ func (db *DB) Close() error {
 		return nil
 	}
 	for _, stmt := range []*sql.Stmt{
-		db.StmtGetEntry, db.StmtInsertLog, db.StmtHitCounter,
-		db.StmtInsertLatency, db.StmtGetLastProbe, db.StmtEnsureEntry,
-		db.StmtZoneExact, db.StmtZoneInsert,
-		db.StmtRuleSetInsert,
+		db.StmtEntry, db.StmtInsertLog, db.StmtHitCounter,
+		db.StmtInsertLatency, db.StmtLastProbe, db.StmtEnsureEntry,
 	} {
 		if stmt != nil {
 			_ = stmt.Close()

@@ -42,6 +42,13 @@ var decompressBufPool = sync.Pool{
 	New: func() any { b := make([]byte, decompressBufCap); return &b },
 }
 
+// latencyArgsPool reuses [64]any arrays for the batched latency lookup query.
+// The fixed-size array is reused across calls so the per-Get() heap allocation
+// is eliminated.
+var latencyArgsPool = sync.Pool{
+	New: func() any { return new([maxLatencyLookupIPs]any) },
+}
+
 // New creates a cache backed by the given database. The caller is responsible
 // for opening the database via database.Open() before calling New.
 func New(db *database.DB) *SQLiteCache {
@@ -70,7 +77,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	var entryTTL int
 	var validated int
 	var msgWire []byte
-	err := s.db.StmtGetEntry.QueryRow(
+	err := s.db.StmtEntry.QueryRow(
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, zdnsutil.BoolToInt(dnssecOK),
 	).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -96,16 +103,20 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		log.Warnf("CACHE: decompress wire for entry %d: %v", id, err)
 		return nil, false, false
 	}
-	defer decompressBufPool.Put(dbuf) // runs after msg.Put (LIFO: msg.Data nil'd first)
+	defer decompressBufPool.Put(dbuf) // runs after msg.Put (LIFO ensures msg.Data is nil'd first)
 
-	msg := pool.DefaultMessagePool.Get()
+	msg := pool.DefaultMessage.Get()
+	// Safety: msg.Data aliases the decompression buffer.  The LIFO defer
+	// chain guarantees msg.Put (which zeroes Data) runs before dbuf is
+	// returned to decompressBufPool.  Do not insert new logic between
+	// the msg.Get and this line without understanding the ordering.
 	msg.Data = wire
 	if err := msg.Unpack(); err != nil {
-		pool.DefaultMessagePool.Put(msg)
+		pool.DefaultMessage.Put(msg)
 		log.Warnf("CACHE: unpack wire for entry %d: %v", id, err)
 		return nil, false, false
 	}
-	defer pool.DefaultMessagePool.Put(msg)
+	defer pool.DefaultMessage.Put(msg)
 
 	entry := &Entry{
 		ID:         id,
@@ -130,24 +141,30 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 // latency (fastest first), keeping non-A/AAAA records (CNAME, etc.) at the
 // front in their original wire-format order. Latency is per-IP — all domains
 // sharing the same IP reuse the same row. Idempotent when ≤1 A/AAAA.
+//
+// Uses a single pass over entry.Answer to separate A/AAAA from non-A/AAAA
+// records and collect IPs simultaneously, halving the iteration overhead.
 func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 	if len(entry.Answer) <= 1 {
 		return
 	}
 
-	// Fast check: count A/AAAA records and collect their IPs in one pass.
-	aCount := 0
+	// Single pass: separate A/AAAA from non-A/AAAA and collect IPs.
+	aRecs := make([]dns.RR, 0, len(entry.Answer))
+	other := make([]dns.RR, 0, len(entry.Answer))
 	ips := make([]string, 0, len(entry.Answer))
 	for _, rr := range entry.Answer {
 		switch rr.(type) {
 		case *dns.A, *dns.AAAA:
-			aCount++
+			aRecs = append(aRecs, rr)
 			if ip, ok := zdnsutil.ExtractIPString(rr); ok {
 				ips = append(ips, ip)
 			}
+		default:
+			other = append(other, rr)
 		}
 	}
-	if aCount <= 1 {
+	if len(aRecs) <= 1 {
 		return
 	}
 
@@ -156,18 +173,6 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 	latencies := s.lookupIPLatencies(ips)
 	if len(latencies) == 0 {
 		return
-	}
-
-	// Separate A/AAAA from non-A/AAAA (CNAME, etc.).
-	var aRecs []dns.RR
-	var other []dns.RR
-	for _, rr := range entry.Answer {
-		switch rr.(type) {
-		case *dns.A, *dns.AAAA:
-			aRecs = append(aRecs, rr)
-		default:
-			other = append(other, rr)
-		}
 	}
 
 	// Sort A/AAAA: probed first (fastest → slowest), unprobed last.
@@ -188,6 +193,7 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 		}
 	})
 
+	// Build result in-place: other records first, then sorted A/AAAA.
 	result := make([]dns.RR, 0, len(entry.Answer))
 	result = append(result, other...)
 	result = append(result, aRecs...)
@@ -202,18 +208,25 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 		ips = ips[:maxLatencyLookupIPs]
 	}
 
-	// Always pass maxLatencyLookupIPs args so SQLite can reuse the compiled
-	// query plan.  Unused slots are padded with empty string (never matches).
-	args := make([]any, maxLatencyLookupIPs)
+	// Reuse a pooled fixed-size array so the []any argument slice for the
+	// SQLite batch query costs zero heap allocations on the hot path.
+	// Unused slots are padded with empty string (never matches).
+	argsPtr := latencyArgsPool.Get().(*[maxLatencyLookupIPs]any)
+	defer func() {
+		for i := range maxLatencyLookupIPs {
+			argsPtr[i] = nil
+		}
+		latencyArgsPool.Put(argsPtr)
+	}()
 	for i := range maxLatencyLookupIPs {
 		if i < len(ips) {
-			args[i] = ips[i]
+			argsPtr[i] = ips[i]
 		} else {
-			args[i] = ""
+			argsPtr[i] = ""
 		}
 	}
 
-	rows, err := s.db.SQ.Query(ipLatencyQuery, args...)
+	rows, err := s.db.SQ.Query(ipLatencyQuery, argsPtr[:]...)
 	if err != nil {
 		return nil
 	}
@@ -404,4 +417,48 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 	}
 	s.db.AddEntryCount(-phase1)
 	log.Debugf("CACHE: evicted %d entries (all serve-stale, max=%d)", phase1, s.db.MaxEntries())
+}
+
+// ── Set-path helpers ──────────────────────────────────────────────────────
+
+// minTTL returns the smallest positive TTL across all RR sections, falling
+// back to DefaultTTL when no TTLs are found.
+func minTTL(sections ...[]dns.RR) int {
+	minT := -1
+	for _, rrs := range sections {
+		for _, rr := range rrs {
+			if rr != nil {
+				if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
+					minT = t
+				}
+			}
+		}
+	}
+	if minT <= 0 {
+		return config.DefaultTTL
+	}
+	return minT
+}
+
+// ecsParams extracts the normalised ECS address and source prefix for use as
+// cache lookup/store key columns.
+func ecsParams(ecs *config.ECSOption) (addr string, prefix int) {
+	if ecs == nil {
+		return "", 0
+	}
+	return ecs.Address.String(), int(ecs.SourcePrefix)
+}
+
+// stripOPT removes EDNS OPT pseudo-records (TypeOPT) from an RR slice in-place.
+// These carry transport-layer padding which has no semantic value but can
+// occupy up to 468 bytes per encrypted response.
+func stripOPT(rrs []dns.RR) []dns.RR {
+	n := 0
+	for _, rr := range rrs {
+		if dns.RRToType(rr) != dns.TypeOPT {
+			rrs[n] = rr
+			n++
+		}
+	}
+	return rrs[:n]
 }

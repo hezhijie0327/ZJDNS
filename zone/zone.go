@@ -63,6 +63,20 @@ type Evaluator struct {
 // wildcardPrefix marks a domain as a wildcard rule.
 const wildcardPrefix = "*."
 
+// maxWildcardLabels caps the number of suffix candidates in a wildcard batch
+// query.  DNS hostnames have at most 127 labels; 16 is a practical bound.  The
+// SQL statement uses a fixed placeholder count so SQLite can reuse the compiled
+// query plan across calls (P4).
+const maxWildcardLabels = 16
+
+// wildcardBatchQuery is a fixed-placeholder variant of the wildcard IN query.
+// Unused suffix slots are padded with empty string (never matches qname).
+var wildcardBatchQuery = "SELECT qname, rcode, answer, authority, additional, match_tags " +
+	"FROM zone_entries WHERE is_wildcard = 1 AND qname IN (" +
+	"?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" +
+	" AND ((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0)) " +
+	"ORDER BY length(qname) DESC, qtype DESC"
+
 // New creates an Evaluator backed by the given database.
 // The caller is responsible for opening the database via database.Open()
 // before calling New.
@@ -320,27 +334,23 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 
-	// Build: SELECT ... WHERE is_wildcard = 1 AND qname IN (?,...) AND
-	//        ((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0))
-	//        ORDER BY length(qname) DESC, qtype DESC
-	var buf strings.Builder
-	buf.WriteString("SELECT qname, rcode, answer, authority, additional, match_tags FROM zone_entries WHERE is_wildcard = 1 AND qname IN (")
-	for i := range suffixes {
-		if i > 0 {
-			buf.WriteByte(',')
+	// Cap at maxWildcardLabels and pad with empty strings so SQLite can
+	// reuse the compiled query plan across calls with different suffix counts.
+	if len(suffixes) > maxWildcardLabels {
+		suffixes = suffixes[:maxWildcardLabels]
+	}
+	args := make([]any, maxWildcardLabels+2)
+	for i := range maxWildcardLabels {
+		if i < len(suffixes) {
+			args[i] = suffixes[i]
+		} else {
+			args[i] = ""
 		}
-		buf.WriteByte('?')
 	}
-	buf.WriteString(") AND ((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0)) ORDER BY length(qname) DESC, qtype DESC")
+	args[maxWildcardLabels] = qtype
+	args[maxWildcardLabels+1] = qclass
 
-	args := make([]any, len(suffixes)+2)
-	for i, s := range suffixes {
-		args[i] = s
-	}
-	args[len(suffixes)] = qtype
-	args[len(suffixes)+1] = qclass
-
-	rows, err := e.db.SQ.Query(buf.String(), args...)
+	rows, err := e.db.SQ.Query(wildcardBatchQuery, args...)
 	if err != nil {
 		return Result{Rcode: dns.RcodeSuccess}
 	}

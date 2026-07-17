@@ -12,16 +12,16 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// ValidationMiddleware rejects malformed DNS queries (domain too long,
+// Validation rejects malformed DNS queries (domain too long,
 // invalid labels, ANY/AXFR/IXFR query types) before any other processing.
 // Invalid queries receive a REFUSED response with an EDE error code.
-type ValidationMiddleware struct{}
+type Validation struct{}
 
 // Wrap implements Middleware.
-func (m *ValidationMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		if qctx.Req == nil || len(qctx.Req.Question) == 0 {
-			msg := pool.DefaultMessagePool.Get()
+			msg := pool.DefaultMessage.Get()
 			msg.Rcode = dns.RcodeFormatError
 			qctx.Res = msg
 			return nil
@@ -40,7 +40,7 @@ func (m *ValidationMiddleware) Wrap(next handler.QueryHandler) handler.QueryHand
 		}
 
 		// Build REFUSED response with EDE.
-		msg := pool.DefaultMessagePool.Get()
+		msg := pool.DefaultMessage.Get()
 		dnsutil.SetReply(msg, qctx.Req)
 		msg.Rcode = dns.RcodeRefused
 

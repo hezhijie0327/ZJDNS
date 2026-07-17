@@ -4,7 +4,7 @@ func (db *DB) prepareStatements() error {
 	var err error
 
 	// Cache statements.
-	db.StmtGetEntry, err = db.SQ.Prepare(
+	db.StmtEntry, err = db.SQ.Prepare(
 		`SELECT id, timestamp, ttl, validated, msg_wire FROM entries
 		 WHERE qname = ? AND qtype = ? AND qclass = ?
 		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
@@ -37,7 +37,7 @@ func (db *DB) prepareStatements() error {
 	if err != nil {
 		return err
 	}
-	db.StmtGetLastProbe, err = db.SQ.Prepare(
+	db.StmtLastProbe, err = db.SQ.Prepare(
 		`SELECT last_probe_time FROM ip_latency WHERE rdata_ip = ?`,
 	)
 	if err != nil {
@@ -59,22 +59,6 @@ func (db *DB) prepareStatements() error {
 		`SELECT rcode, answer, authority, additional, match_tags
 		 FROM zone_entries
 		 WHERE is_wildcard = 0 AND qname = ? AND qtype = ? AND qclass = ?`,
-	)
-	if err != nil {
-		return err
-	}
-	db.StmtZoneInsert, err = db.SQ.Prepare(
-		`INSERT OR REPLACE INTO zone_entries
-		 (is_wildcard, qname, qtype, qclass, rcode, answer, authority, additional, match_tags)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-	)
-	if err != nil {
-		return err
-	}
-
-	// RuleSet statements.
-	db.StmtRuleSetInsert, err = db.SQ.Prepare(
-		`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
 	)
 	if err != nil {
 		return err

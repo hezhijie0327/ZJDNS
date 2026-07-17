@@ -79,7 +79,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 					server.Protocol == config.ProtoHTTPTLCP
 				msg := r.buildMsg(question, ecs, true, isSecure)
 				queryResult := r.queryClient.ExecuteQuery(groupCtx, msg, server)
-				pool.DefaultMessagePool.Put(msg)
+				pool.DefaultMessage.Put(msg)
 
 				if queryResult.Error == nil && queryResult.Response != nil {
 					if handled := r.processUpstreamResponse(queryResult, server, question, resultChan, &nxdomainResult, &activeConnections, cancel, groupCtx); handled {
@@ -156,6 +156,25 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 		return records, false
 	}
 
+	// Pre-filter tags: keep only those that have CIDR rules so we call
+	// HasIPTag once per tag instead of once per record per tag.
+	type tagKey struct {
+		raw    string
+		name   string
+		negate bool
+	}
+	ipTags := make([]tagKey, 0, len(matchTags))
+	for _, t := range matchTags {
+		negate := t != "" && t[0] == '!'
+		name := t
+		if negate {
+			name = t[1:]
+		}
+		if r.crd.HasIPTag(name) {
+			ipTags = append(ipTags, tagKey{raw: t, name: name, negate: negate})
+		}
+	}
+
 	filtered := make([]dns.RR, 0, len(records))
 	for _, rr := range records {
 		var ip net.IP
@@ -171,16 +190,10 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 
 		accepted := false
 		hasIPTag := false
-		for _, matchTag := range matchTags {
-			tagName := matchTag
-			if tagName != "" && tagName[0] == '!' {
-				tagName = tagName[1:]
-			}
-			if !r.crd.HasIPTag(tagName) {
-				continue
-			}
+		ipStr := ip.String()
+		for _, t := range ipTags {
 			hasIPTag = true
-			matched, exists := r.crd.MatchIP(ip.String(), matchTag)
+			matched, exists := r.crd.MatchIP(ipStr, t.raw)
 			if !exists {
 				return nil, true
 			}
@@ -218,7 +231,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		if len(server.Match) > 0 {
 			filteredAnswer, shouldRefuse := r.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
 			if shouldRefuse {
-				pool.DefaultMessagePool.Put(queryResult.Response)
+				pool.DefaultMessage.Put(queryResult.Response)
 				return false // errgroup will detect ErrCIDRFilterRefused
 			}
 			queryResult.Response.Answer = filteredAnswer
@@ -235,10 +248,10 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 				log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
 			}
 			cancel(errors.New("successful result"))
-			pool.DefaultMessagePool.Put(queryResult.Response)
+			pool.DefaultMessage.Put(queryResult.Response)
 			return true
 		case <-groupCtx.Done():
-			pool.DefaultMessagePool.Put(queryResult.Response)
+			pool.DefaultMessage.Put(queryResult.Response)
 			return true
 		}
 	case dns.RcodeNameError:
@@ -251,9 +264,9 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			ECS:        r.edns.ParseFromDNS(queryResult.Response),
 			Server:     serverDesc,
 		})
-		pool.DefaultMessagePool.Put(queryResult.Response)
+		pool.DefaultMessage.Put(queryResult.Response)
 	default:
-		pool.DefaultMessagePool.Put(queryResult.Response)
+		pool.DefaultMessage.Put(queryResult.Response)
 	}
 	return false
 }

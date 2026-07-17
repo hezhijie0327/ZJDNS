@@ -24,7 +24,7 @@ type QueryContext struct {
 	IsSecure bool     // true for encrypted transports (DoT, DoQ, DoH, DNSCrypt, TLCP, DTLS)
 	Protocol string   // config.ProtoUDP, config.ProtoTCP, config.ProtoTLS, etc.
 
-	// ── EDNS state: populated by EDNSMiddleware ──
+	// ── EDNS state: populated by EDNS ──
 
 	ClientRequestedDNSSEC bool            // DNSSEC OK (DO) bit from the request
 	ECSOpt                *edns.ECSOption // parsed EDNS Client Subnet (nil if absent)
@@ -32,28 +32,28 @@ type QueryContext struct {
 	ClientWantsPadding    bool            // true if the request included EDNS padding option
 	EDE                   *edns.EDEOption // EDE code set by error-producing middlewares
 
-	// ── Zone match: populated by ZoneMiddleware ──
+	// ── Zone match: populated by Zone ──
 
 	ZoneMatched bool         // true when a zone rule matched
 	ZoneResult  *zone.Result // non-nil when ZoneMatched
 
-	// ── Cache state: populated by CacheLookupMiddleware ──
+	// ── Cache state: populated by CacheLookup ──
 
 	CacheHit     bool         // true when cache.Get found an entry (fresh or expired)
 	CacheEntry   *cache.Entry // the entry returned by cache.Get (nil if miss)
 	CacheIsStale bool         // true when the cached entry has expired
 	CacheServed  bool         // true when the response was built from cache (for logging)
 
-	// ── Resolution: populated by ResolutionMiddleware ──
+	// ── Resolution: populated by Resolution ──
 
 	ResolutionResult *resolver.QueryResult // set after resolver.Query completes
-	Resolved         bool                  // true after ResolutionMiddleware ran
+	Resolved         bool                  // true after Resolution ran
 	ResolutionError  bool                  // true when resolver.Query returned an error
 
 	// ── Post-resolution transforms ──
 
-	DNS64Applied bool // true when DNS64Middleware synthesised AAAA records
-	CIDRFiltered bool // true when RulesetMiddleware filtered A/AAAA records
+	DNS64Applied bool // true when DNS64 synthesised AAAA records
+	CIDRFiltered bool // true when Ruleset filtered A/AAAA records
 
 	// ── Response: built stepwise through the chain ──
 

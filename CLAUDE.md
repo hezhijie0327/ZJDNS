@@ -185,28 +185,33 @@ zjdns/
 
 ```
 Foundation (zero zjdns imports):
-  internal/log, internal/pool, internal/ipdetect, internal/stamp
+  internal/log, internal/pool, internal/ipdetect, internal/stamp,
+  internal/dns64, internal/pending, internal/siphash
 
 Layer 1 (import only foundation):
   internal/dnsutil → log
 
 Layer 2 (import domain foundation):
-  config → dnsutil, log              (ECS types live here; edns aliases config.ECSOption)
+  config → dnsutil, log, internal/stamp (ECS types live here; edns aliases config.ECSOption)
   internal/latency → config, dnsutil, log
 
 Layer 3 (domain packages — import config + internal/*, never each other):
   database → config, dnsutil, log        (owns SQLite infrastructure)
-  edns → config, ipdetect, log, pool      (only domain→domain edge allowed)
-  cache → config, database, dnsutil, log, pool
-  ruleset → config
+  edns → config, ipdetect, log, pool, internal/siphash  (only domain→domain edge allowed)
+  cache → config, database, dnsutil, log, pool, internal/ttl
+  ruleset → config, database             (RuleSetStorage interface avoids cycle)
   zone → config, database, dnsutil, log
 
 Layer 4 (server sub-packages — import domain + internal, never server/ parent):
   server/resolver/dnssec → cache, config, dnsutil, log
   server/upstream → config, edns, dnsutil, log, pool
+  server/upstream/dnscrypt → config, dnsutil, log, pool, server/protocol/dnscrypt // interop types shared between client and server
   server/upstream/pool → config, dnsutil, log, pool
+  server/upstream/tls → config, dnsutil, log, pool
   server/resolver/probe → config, edns, dnsutil, internal/latency, log
   server/resolver → cache, config, edns, dnsutil, log, pool, server/upstream, server/resolver/dnssec, server/resolver/hijack, server/resolver/probe
+  server/handler → cache, config, edns, dnsutil, log, pool, internal/pending, internal/ttl, zone, server/resolver
+  server/handler/middleware → cache, config, edns, dnsutil, log, pool, internal/dns64, internal/pending, internal/ttl, server/handler, server/resolver
   server/protocol/tls → config, dnsutil, log, pool
   server/protocol/tlcp → config, dnsutil, log, pool
   server/protocol/dnscrypt → config, dnsutil, log, pool
@@ -219,7 +224,7 @@ Top layer (wiring):
 ```
 
 **Key rules:**
-- Domain packages never import other domain packages (sole exception: `edns→config`).
+- Domain packages never import other domain packages (known exceptions: `edns→config`, `cache→database`, `zone→database`, `ruleset→database`).
 - `internal/` packages never import domain packages (except `internal/latency→config`, which is stable because config is foundational).
 - `server/` sub-packages never import the `server/` parent.
 - No circular dependencies — the graph is a DAG enforced by the compiler.
@@ -301,7 +306,7 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `Client` | `server/upstream` | Outbound queries (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/DTLCP/SOCKS5/DNSCrypt-UDP+TCP/TLCP/DoH-TLCP). `dnscryptState` caches per-upstream resolver state (sharedKey, secretKey/publicKey, PQ ticket + resumeSecret, expiry). TLCP uses `tlcpClientConfig` / `dialTLCPConn` (analogous to `eTLSClientConfig` / `dialTLSConn`) and `ExecuteHTTPTLCP` with custom `http.Transport.DialTLSContext`. DTLS uses `pion/dtls` for UDP-based TLS transport (RFC 8094). DTLCP uses `gitee.com/Trisia/gotlcp/dtlcp` with `net.ListenPacket` + `dtlcp.Client` (not `dtlcp.Dial` — creates connected socket incompatible with internal `WriteTo`). |
 | `SOCKS5Dialer` | `server/upstream/socks5` | SOCKS5 proxy (RFC 1928/1929, TCP CONNECT + UDP ASSOCIATE) |
 | `Conn` / `Pool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT |
-| `QUICPool` / `QUICConn` | `server/upstream/pool` | QUIC connection pool |
+| `QUIC` / `QUICConn` | `server/upstream/pool` | QUIC connection pool |
 | `Resolver` | `server/resolver` | Upstream + recursive resolution; constructed via `New(Config)` |
 | `Config` | `server/resolver` | Bundles QueryClient, Crypto, Hijack, EDNS, CIDRMatcher, BuildMsg, Cache, DNSSECEnforce for `New()` |
 | `QueryResult` | `server/resolver` | Unified result struct — used throughout resolver and handler layers; `queryUpstream`, `Recursive.resolve`, and `CNAME.resolve` return it by value; handler uses `*QueryResult` directly (no duplicate struct) |
@@ -313,7 +318,7 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |
 | `Prober` | `server/resolver/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
 | `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |
-| `MessagePool` / `BufferPool` | `internal/pool` | sync.Pool allocators; also holds `QUICCode*` constants |
+| `Message` / `Buffer` | `internal/pool` | sync.Pool allocators; also holds `QUICCode*` constants |
 | `JoinDNSPort` | `internal/dnsutil` | Utility: `ip` → `ip:53` (moved from config) |
 | `Stamp` / `StampProtoType` | `internal/stamp` | sdns:// stamp parser/encoder: 8 protocol types, VLP hashes, bootstrap IPs. `Parse()` + `String()` round-trip. |
 
@@ -336,7 +341,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **EDNS padding**: Only for secure transports (DoT/DoQ/DoH/DoH3/DTLS/DTLCP/TLCP/HTTPTLCP). DNSCrypt has its own ISO 7816-4 padding.
 - **Per-interface binding**: All listeners bind per-IP via `TryBind`; unavailable addresses are skipped with a warning.
 - **QNAME minimisation (RFC 9156)**: Enabled by default, 10-step limit, QTYPE=A hides original type, CNAME owner-name mismatch detection.
-- **Pool discipline**: `MessagePool.Put()` zeroes the struct — never read after Put.
+- **Pool discipline**: `Message.Put()` zeroes the struct — never read after Put.
 - **KTLS**: Opt-in via `kernel_tx`/`kernel_rx`, eTLS for TCP, crypto/tls for QUIC. Silent fallback on non-Linux.
 - **SOCKS5**: Per-upstream proxy, TCP CONNECT + UDP ASSOCIATE, 5 sentinel errors, v2ray/xray compat.
 - **DNSCrypt v2**: Full implementation with PQ support (X-Wing KEM + ticket resumption). Server auto-rotates keys every 24h, client caches PQ state per-upstream. See `server/protocol/dnscrypt/` and `server/upstream/dnscrypt/`.

@@ -2,7 +2,6 @@ package cache
 
 import (
 	"database/sql"
-	"zjdns/config"
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -10,8 +9,9 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
+// insertPtrMap inserts reverse-lookup entries into ptr_map for a cache entry.
+// Deduplicates by (rdata_ip, name) — the same IP can appear across multiple
+// sections in a single response.
 func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
 	type rec struct {
 		name    string
@@ -57,42 +57,4 @@ func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
 	if _, err := tx.Exec(stmt, args...); err != nil {
 		log.Warnf("CACHE: insert ptr_map failed: %v", err)
 	}
-}
-
-func minTTL(sections ...[]dns.RR) int {
-	minT := -1
-	for _, rrs := range sections {
-		for _, rr := range rrs {
-			if rr != nil {
-				if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
-					minT = t
-				}
-			}
-		}
-	}
-	if minT <= 0 {
-		return config.DefaultTTL
-	}
-	return minT
-}
-
-func ecsParams(ecs *config.ECSOption) (addr string, prefix int) {
-	if ecs == nil {
-		return "", 0
-	}
-	return ecs.Address.String(), int(ecs.SourcePrefix)
-}
-
-// stripOPT removes EDNS OPT pseudo-records (TypeOPT) from a slice of RRs.
-// These carry transport-layer padding which has no semantic value but can
-// occupy up to 468 bytes per encrypted response.
-func stripOPT(rrs []dns.RR) []dns.RR {
-	n := 0
-	for _, rr := range rrs {
-		if dns.RRToType(rr) != dns.TypeOPT {
-			rrs[n] = rr
-			n++
-		}
-	}
-	return rrs[:n]
 }

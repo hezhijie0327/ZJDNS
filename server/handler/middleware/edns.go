@@ -11,16 +11,16 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// EDNSMiddleware parses EDNS options (ECS, Cookie, DNSSEC OK) from the
+// EDNS parses EDNS options (ECS, Cookie, DNSSEC OK) from the
 // incoming request and validates the DNS Cookie per RFC 7873.  Invalid
 // cookies receive a BADCOOKIE response.
-type EDNSMiddleware struct {
+type EDNS struct {
 	edns   handler.EDNSHandler
 	config *config.ServerConfig
 }
 
 // Wrap implements Middleware.
-func (m *EDNSMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		req := qctx.Req
 
@@ -60,7 +60,7 @@ func (m *EDNSMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	})
 }
 
-func (m *EDNSMiddleware) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *edns.CookieOption) *dns.Msg {
+func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *edns.CookieOption) *dns.Msg {
 	msg := handler.BuildResponseMsg(req)
 	msg.Rcode = dns.RcodeFormatError
 

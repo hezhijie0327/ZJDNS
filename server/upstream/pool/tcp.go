@@ -44,7 +44,7 @@ type Conn struct {
 }
 
 // Pool manages a set of pipelined TCP connections per upstream server key.
-type Pool struct {
+type ConnPool struct {
 	mu       sync.Mutex
 	conns    map[string][]*Conn
 	dialing  map[string]int
@@ -108,8 +108,8 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		return nil, fmt.Errorf("client: pack: %w", err)
 	}
 
-	poolBuf := zpool.DefaultBufferPool.Get()
-	defer zpool.DefaultBufferPool.Put(poolBuf)
+	poolBuf := zpool.DefaultBuffer.Get()
+	defer zpool.DefaultBuffer.Put(poolBuf)
 	writeBuf := poolBuf
 	if len(poolBuf) < zdnsutil.DNSFramePrefixLen+len(msgData) {
 		writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+len(msgData))
@@ -137,7 +137,7 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		select {
 		case orphan := <-resultCh:
 			if orphan != nil {
-				zpool.DefaultMessagePool.Put(orphan)
+				zpool.DefaultMessage.Put(orphan)
 			}
 		default:
 		}
@@ -187,7 +187,7 @@ func (c *Conn) readLoop() {
 			return
 		}
 
-		bodyBuf := zpool.DefaultBufferPool.Get()
+		bodyBuf := zpool.DefaultBuffer.Get()
 		var body []byte
 		pooled := int(msgLen) <= len(bodyBuf)
 		if pooled {
@@ -197,27 +197,27 @@ func (c *Conn) readLoop() {
 		}
 		if _, err := io.ReadFull(c.conn, body); err != nil {
 			if pooled {
-				zpool.DefaultBufferPool.Put(bodyBuf)
+				zpool.DefaultBuffer.Put(bodyBuf)
 			}
 			log.Debugf("TCPPOOL: read body error from %s: %v", c.addr, err)
 			return
 		}
 
-		resp := zpool.DefaultMessagePool.Get()
+		resp := zpool.DefaultMessage.Get()
 		resp.Data = body
 		if err := resp.Unpack(); err != nil {
 			if pooled {
-				zpool.DefaultBufferPool.Put(bodyBuf)
+				zpool.DefaultBuffer.Put(bodyBuf)
 			}
 			log.Debugf("TCPPOOL: unpack error from %s: %v", c.addr, err)
-			zpool.DefaultMessagePool.Put(resp)
+			zpool.DefaultMessage.Put(resp)
 			continue
 		}
 		// Detach resp.Data from the pooled buffer before returning it,
 		// otherwise the message carries a dangling pointer to zeroed memory.
 		resp.Data = nil
 		if pooled {
-			zpool.DefaultBufferPool.Put(bodyBuf)
+			zpool.DefaultBuffer.Put(bodyBuf)
 		}
 
 		c.mu.RLock()
@@ -227,10 +227,10 @@ func (c *Conn) readLoop() {
 			select {
 			case pq.resultCh <- resp:
 			default:
-				zpool.DefaultMessagePool.Put(resp)
+				zpool.DefaultMessage.Put(resp)
 			}
 		} else {
-			zpool.DefaultMessagePool.Put(resp)
+			zpool.DefaultMessage.Put(resp)
 		}
 	}
 }
@@ -265,14 +265,14 @@ func (c *Conn) IsDead() bool {
 }
 
 // NewPool creates a Pool with the specified connection and in-flight limits.
-func NewPool(maxConns, maxPipe int) *Pool {
+func NewConnPool(maxConns, maxPipe int) *ConnPool {
 	if maxConns <= 0 {
 		maxConns = config.DefaultMaxConns
 	}
 	if maxPipe <= 0 {
 		maxPipe = config.DefaultMaxPipe
 	}
-	return &Pool{
+	return &ConnPool{
 		conns:    make(map[string][]*Conn),
 		dialing:  make(map[string]int),
 		maxConns: maxConns,
@@ -281,7 +281,7 @@ func NewPool(maxConns, maxPipe int) *Pool {
 }
 
 // Acquire gets a reusable pipelined connection, dialing a new one if needed.
-func (p *Pool) Acquire(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*Conn, error) {
+func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*Conn, error) {
 	p.mu.Lock()
 	conns := p.conns[key]
 
@@ -332,10 +332,24 @@ func (p *Pool) Acquire(ctx context.Context, key, dialAddr string, dialFunc func(
 	return nil, fmt.Errorf("client: no available connection to %s", key)
 }
 
+// WarmUp dials a new connection and adds it to the pool without returning it.
+// This is used to pre-establish connections (e.g. TLS handshakes) so the first
+// real query doesn't pay the dial latency.  If the pool is at capacity a dead
+// connection is replaced; if none are dead the connection is discarded.
+func (p *ConnPool) WarmUp(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) error {
+	p.mu.Lock()
+	if len(p.conns[key]) >= p.maxConns && p.dialing[key] >= p.maxConns {
+		p.mu.Unlock()
+		return nil // pool already full, don't bother
+	}
+	_, err := p.dialAndAdd(ctx, key, dialAddr, dialFunc)
+	return err
+}
+
 // dialAndAdd dials a new connection and adds it to the pool. Returns the new
 // connection or the least-loaded existing one if the pool filled during dial.
 // Must be called with p.mu held; releases and re-acquires the lock during dial.
-func (p *Pool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*Conn, error) {
+func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*Conn, error) {
 	p.dialing[key]++
 	p.mu.Unlock()
 
@@ -383,7 +397,7 @@ func (p *Pool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc fu
 // replaceDead replaces a dead connection in the pool with a new one. Returns
 // true if a replacement was made. Must be called with p.mu held.
 // NOTE: drops p.mu during c.close() to avoid ABBA deadlock with Conn.mu.
-func (p *Pool) replaceDead(key string, newConn *Conn) bool {
+func (p *ConnPool) replaceDead(key string, newConn *Conn) bool {
 	for i, c := range p.conns[key] {
 		if !c.IsDead() {
 			continue
@@ -401,7 +415,7 @@ func (p *Pool) replaceDead(key string, newConn *Conn) bool {
 
 // Shutdown closes all pooled connections and clears the pool. It is safe to
 // call multiple times.
-func (p *Pool) Shutdown() {
+func (p *ConnPool) Shutdown() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed = true
@@ -414,7 +428,7 @@ func (p *Pool) Shutdown() {
 }
 
 // Remove closes and removes a pipelined connection from the pool.
-func (p *Pool) Remove(target *Conn) {
+func (p *ConnPool) Remove(target *Conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	conns := p.conns[target.addr]

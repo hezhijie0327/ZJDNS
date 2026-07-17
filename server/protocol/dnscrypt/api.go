@@ -1,10 +1,26 @@
+// Package dnscrypt implements the DNSCrypt v2 protocol (draft-denis-dprive-dnscrypt).
+//
+// This package provides the full DNSCrypt protocol stack for both server-side
+// (listener, certificate management, key rotation) and client-side (query
+// encryption, response decryption) use.  The public API defined in this file
+// is consumed by:
+//
+//   - server/upstream/dnscrypt — upstream client, uses crypto primitives
+//   - server/server.go — server lifecycle (New, Start, Shutdown)
+//   - cmd/zjdns/cli — sdns:// stamp configuration generator
+//
+// The dependency server/upstream/dnscrypt → server/protocol/dnscrypt is
+// intentional: the protocol package acts as the canonical source of truth
+// for DNSCrypt wire-format types, cryptographic constructions, and interop
+// helpers shared between client and server.
 package dnscrypt
 
 import (
 	"net"
 )
 
-// Public API for use by external packages (e.g., server/upstream).
+// Public API — types and functions consumed by server/upstream/dnscrypt and
+// other external packages.
 
 // EncryptedQuery wraps the encrypted query parameters for client use.
 type EncryptedQuery struct {

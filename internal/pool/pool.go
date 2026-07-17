@@ -8,13 +8,13 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// MessagePool is a pooled allocator for dns.Msg values.
-type MessagePool struct {
+// Message is a pooled allocator for dns.Msg values.
+type Message struct {
 	pool sync.Pool
 }
 
-// BufferPool is a pooled allocator for byte slices.
-type BufferPool struct {
+// Buffer is a pooled allocator for byte slices.
+type Buffer struct {
 	pool sync.Pool
 	size int
 }
@@ -28,7 +28,7 @@ const (
 	UDPBufferSize          = 1232
 	RecursiveUDPBufferSize = 4096
 	SecureBufferSize       = 8192
-	defaultBufferPoolSize  = 256
+	defaultBufferSize      = 256
 )
 
 // QUIC application error codes shared across client and server packages.
@@ -43,15 +43,15 @@ const (
 	QUICCodeProtocolError quic.ApplicationErrorCode = 2
 )
 
-// DefaultMessagePool is the package-level default MessagePool.
-var DefaultMessagePool = NewMessagePool()
+// DefaultMessage is the package-level default Message.
+var DefaultMessage = NewMessage()
 
-// DefaultBufferPool is the package-level default BufferPool.
-var DefaultBufferPool = NewBufferPool(SecureBufferSize, defaultBufferPoolSize)
+// DefaultBuffer is the package-level default Buffer.
+var DefaultBuffer = NewBuffer(SecureBufferSize, defaultBufferSize)
 
-// NewMessagePool creates a new MessagePool.
-func NewMessagePool() *MessagePool {
-	return &MessagePool{
+// NewMessage creates a new Message.
+func NewMessage() *Message {
+	return &Message{
 		pool: sync.Pool{
 			New: func() any {
 				return &dns.Msg{}
@@ -63,23 +63,23 @@ func NewMessagePool() *MessagePool {
 // Get acquires a dns.Msg from the pool. The message is already zeroed by Put(),
 // so callers that need a clean slate are covered; callers that pre-populate
 // fields before use can rely on the zero state.
-func (m *MessagePool) Get() *dns.Msg {
+func (m *Message) Get() *dns.Msg {
 	return m.pool.Get().(*dns.Msg)
 }
 
 // Put returns a dns.Msg to the pool.
-func (m *MessagePool) Put(msg *dns.Msg) {
+func (m *Message) Put(msg *dns.Msg) {
 	if msg != nil {
 		*msg = dns.Msg{}
 		m.pool.Put(msg)
 	}
 }
 
-// NewBufferPool creates a new BufferPool pre-populated with the given number
+// NewBuffer creates a new Buffer pre-populated with the given number
 // of buffers. Buffers are stored as *[]byte pointers to avoid interface-boxing
 // allocations on every Put (see staticcheck SA6002).
-func NewBufferPool(size, poolSize int) *BufferPool {
-	bufPool := &BufferPool{
+func NewBuffer(size, poolSize int) *Buffer {
+	bufPool := &Buffer{
 		size: size,
 		pool: sync.Pool{
 			New: func() any {
@@ -96,7 +96,7 @@ func NewBufferPool(size, poolSize int) *BufferPool {
 }
 
 // Get acquires a byte slice from the pool.
-func (b *BufferPool) Get() []byte {
+func (b *Buffer) Get() []byte {
 	bufPtr := b.pool.Get()
 	if bufPtr == nil {
 		b := make([]byte, b.size)
@@ -107,7 +107,7 @@ func (b *BufferPool) Get() []byte {
 
 // Put returns a byte slice to the pool. The slice is normalized to full
 // capacity before clearing to ensure the next Get returns the full buffer.
-func (b *BufferPool) Put(buf []byte) {
+func (b *Buffer) Put(buf []byte) {
 	if buf != nil && cap(buf) >= b.size {
 		buf = buf[:cap(buf)]
 		clear(buf[:cap(buf)])

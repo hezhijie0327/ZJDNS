@@ -46,18 +46,18 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		select {
 		case entry.capacity <- struct{}{}:
 		default:
-			msg := pool.DefaultMessagePool.Get()
+			msg := pool.DefaultMessage.Get()
 			dnsutil.SetReply(msg, req)
 			msg.Rcode = dns.RcodeServerFailure
 			if err := msg.Pack(); err != nil {
 				log.Debugf("SERVER: TCP SERVFAIL pack error for %s: %v", addr, err)
-				pool.DefaultMessagePool.Put(msg)
+				pool.DefaultMessage.Put(msg)
 				return
 			}
 			if _, err := io.Copy(w, msg); err != nil {
 				log.Debugf("SERVER: TCP SERVFAIL write error for %s: %v", addr, err)
 			}
-			pool.DefaultMessagePool.Put(msg)
+			pool.DefaultMessage.Put(msg)
 			return
 		}
 
@@ -81,7 +81,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				// critical section I/O-only and brief (P2).
 				if err := response.Pack(); err != nil {
 					log.Debugf("SERVER: TCP pack error for %s: %v", addr, err)
-					pool.DefaultMessagePool.Put(response)
+					pool.DefaultMessage.Put(response)
 					return
 				}
 
@@ -92,13 +92,13 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 					defer func() { <-entry.writeMu }()
 				case <-writeTimer.C:
 					log.Debugf("SERVER: TCP write lock timeout for %s", addr)
-					pool.DefaultMessagePool.Put(response)
+					pool.DefaultMessage.Put(response)
 					return
 				}
 				if _, err := io.Copy(w, response); err != nil {
 					log.Debugf("SERVER: TCP write error for %s: %v", addr, err)
 				}
-				pool.DefaultMessagePool.Put(response)
+				pool.DefaultMessage.Put(response)
 			}
 		}()
 		return
@@ -110,13 +110,13 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	if response != nil {
 		if err := response.Pack(); err != nil {
 			log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
-			pool.DefaultMessagePool.Put(response)
+			pool.DefaultMessage.Put(response)
 			return
 		}
 		if _, err := io.Copy(w, response); err != nil {
 			log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
 		}
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 	}
 }
 

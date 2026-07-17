@@ -87,9 +87,9 @@ func New() *Client {
 
 	timeout := config.DefaultDNSQueryTimeout
 	sessionCache := eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize)
-	tcpPool := pool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe)
-	dotPool := pool.NewPool(config.DefaultMaxConns, config.DefaultMaxPipe)
-	quicPool := pool.NewQUICPool(config.DefaultMaxConns)
+	tcpPool := pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe)
+	dotPool := pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe)
+	quicPool := pool.NewQUIC(config.DefaultMaxConns)
 
 	c := &Client{
 		timeout:      timeout,

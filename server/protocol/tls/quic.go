@@ -161,8 +161,8 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 
 func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	defer zdnsutil.HandlePanic("DoQ stream handler")
-	buf := pool.DefaultBufferPool.Get()
-	defer pool.DefaultBufferPool.Put(buf)
+	buf := pool.DefaultBuffer.Get()
+	defer pool.DefaultBuffer.Put(buf)
 
 	_, err := io.ReadFull(stream, buf[:zdnsutil.DNSFramePrefixLen])
 	if err != nil {
@@ -187,23 +187,23 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	req := pool.DefaultMessagePool.Get()
+	req := pool.DefaultMessage.Get()
 	req.Data = body
 	if err := req.Unpack(); err != nil {
 		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "invalid DNS message")
-		pool.DefaultMessagePool.Put(req)
+		pool.DefaultMessage.Put(req)
 		return
 	}
 
 	clientIP := secureClientIP(conn)
 	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
-	pool.DefaultMessagePool.Put(req)
+	pool.DefaultMessage.Put(req)
 
 	if err := s.respondQUIC(stream, response); err != nil {
 		log.Debugf("TLS: DoQ response failed: %v", err)
 	}
 	if response != nil {
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 	}
 }
 
@@ -218,8 +218,8 @@ func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 		return fmt.Errorf("pack response: %w", err)
 	}
 
-	buf := pool.DefaultBufferPool.Get()
-	defer pool.DefaultBufferPool.Put(buf)
+	buf := pool.DefaultBuffer.Get()
+	defer pool.DefaultBuffer.Put(buf)
 
 	writeBuf := buf
 	if len(buf) < zdnsutil.DNSFramePrefixLen+len(respBuf) {

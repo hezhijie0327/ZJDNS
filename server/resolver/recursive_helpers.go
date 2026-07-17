@@ -40,11 +40,11 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 
 	if len(bestNSRecords) == 0 {
 		if qnameMinimise && !strings.EqualFold(queryName, qname) {
-			pool.DefaultMessagePool.Put(response)
+			pool.DefaultMessage.Put(response)
 			return "", nil, true, nil
 		}
 		nsSlice, extraSlice := response.Ns, response.Extra
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 		return "", nil, false, &QueryResult{
 			Cacheable: true,
 			Answer:    nil, Authority: nsSlice, Additional: extraSlice,
@@ -83,7 +83,7 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 	}
 	if len(response.Answer) == 0 && !response.Authoritative {
 		log.Debugf("RECURSION: lame delegation detected for %s — NS records point to same zone but response is not authoritative", currentDomain)
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 		r.lastDNSSECEDECode.Store(uint64(edns.EDECodeNoReachableAuthority))
 		return &QueryResult{
 			Cacheable: true,
@@ -92,7 +92,7 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 		}
 	}
 	nsSlice, extraSlice := response.Ns, response.Extra
-	pool.DefaultMessagePool.Put(response)
+	pool.DefaultMessage.Put(response)
 	return &QueryResult{
 		Cacheable: true,
 		Authority: nsSlice, Additional: extraSlice,

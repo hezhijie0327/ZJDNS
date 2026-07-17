@@ -7,7 +7,7 @@ import (
 )
 
 func TestMessagePool_GetPut(t *testing.T) {
-	mp := NewMessagePool()
+	mp := NewMessage()
 	msg := mp.Get()
 	if msg == nil {
 		t.Fatal("Get returned nil")
@@ -31,25 +31,25 @@ func TestMessagePool_GetPut(t *testing.T) {
 }
 
 func TestMessagePool_PutNil(t *testing.T) {
-	mp := NewMessagePool()
+	mp := NewMessage()
 	mp.Put(nil) // must not panic
 }
 
-func TestDefaultMessagePool(t *testing.T) {
-	msg := DefaultMessagePool.Get()
+func TestDefaultMessage(t *testing.T) {
+	msg := DefaultMessage.Get()
 	if msg == nil {
-		t.Fatal("DefaultMessagePool.Get returned nil")
+		t.Fatal("DefaultMessage.Get returned nil")
 	}
-	DefaultMessagePool.Put(msg)
+	DefaultMessage.Put(msg)
 
-	msg2 := DefaultMessagePool.Get()
+	msg2 := DefaultMessage.Get()
 	if msg2 == nil {
-		t.Fatal("DefaultMessagePool.Get returned nil after Put")
+		t.Fatal("DefaultMessage.Get returned nil after Put")
 	}
 }
 
 func TestBufferPool_Get(t *testing.T) {
-	bp := NewBufferPool(512, 4)
+	bp := NewBuffer(512, 4)
 	buf := bp.Get()
 	if len(buf) != 512 {
 		t.Errorf("buffer length = %d, want 512", len(buf))
@@ -60,7 +60,7 @@ func TestBufferPool_Get(t *testing.T) {
 }
 
 func TestBufferPool_PutAndReuse(t *testing.T) {
-	bp := NewBufferPool(256, 4)
+	bp := NewBuffer(256, 4)
 	buf1 := bp.Get()
 	_ = copy(buf1, "hello")
 
@@ -72,7 +72,7 @@ func TestBufferPool_PutAndReuse(t *testing.T) {
 }
 
 func TestBufferPool_PutSmallBuffer(t *testing.T) {
-	bp := NewBufferPool(512, 4)
+	bp := NewBuffer(512, 4)
 	small := make([]byte, 128)
 	bp.Put(small) // too small, should be discarded
 	// Just verify no panic
@@ -83,12 +83,12 @@ func TestBufferPool_PutSmallBuffer(t *testing.T) {
 }
 
 func TestBufferPool_PutNil(t *testing.T) {
-	bp := NewBufferPool(256, 4)
+	bp := NewBuffer(256, 4)
 	bp.Put(nil) // must not panic
 }
 
 func TestBufferPool_PrePopulated(t *testing.T) {
-	bp := NewBufferPool(1024, 8)
+	bp := NewBuffer(1024, 8)
 	// First 8 Gets should come from the prepopulated pool
 	for i := range 8 {
 		buf := bp.Get()
@@ -100,7 +100,7 @@ func TestBufferPool_PrePopulated(t *testing.T) {
 }
 
 func BenchmarkMessagePool_GetPut(b *testing.B) {
-	mp := NewMessagePool()
+	mp := NewMessage()
 	b.ResetTimer()
 	for b.Loop() {
 		msg := mp.Get()
@@ -109,7 +109,7 @@ func BenchmarkMessagePool_GetPut(b *testing.B) {
 }
 
 func BenchmarkBufferPool_GetPut(b *testing.B) {
-	bp := NewBufferPool(SecureBufferSize, 16)
+	bp := NewBuffer(SecureBufferSize, 16)
 	b.ResetTimer()
 	for b.Loop() {
 		buf := bp.Get()
@@ -118,7 +118,7 @@ func BenchmarkBufferPool_GetPut(b *testing.B) {
 }
 
 func TestBufferPool_DrainAndRefill(t *testing.T) {
-	bp := NewBufferPool(512, 2)
+	bp := NewBuffer(512, 2)
 	// Drain the 2 prepopulated + a few more
 	bufs := make([][]byte, 10)
 	for i := range bufs {
@@ -138,17 +138,17 @@ func TestBufferPool_DrainAndRefill(t *testing.T) {
 	}
 }
 
-func TestDefaultBufferPool(t *testing.T) {
-	buf := DefaultBufferPool.Get()
+func TestDefaultBuffer(t *testing.T) {
+	buf := DefaultBuffer.Get()
 	if len(buf) != SecureBufferSize {
-		t.Errorf("DefaultBufferPool buffer len=%d, want %d", len(buf), SecureBufferSize)
+		t.Errorf("DefaultBuffer buffer len=%d, want %d", len(buf), SecureBufferSize)
 	}
-	DefaultBufferPool.Put(buf)
+	DefaultBuffer.Put(buf)
 }
 
-func BenchmarkDefaultMessagePool_GetPut(b *testing.B) {
+func BenchmarkDefaultMessage_GetPut(b *testing.B) {
 	for b.Loop() {
-		msg := DefaultMessagePool.Get()
-		DefaultMessagePool.Put(msg)
+		msg := DefaultMessage.Get()
+		DefaultMessage.Put(msg)
 	}
 }

@@ -122,8 +122,8 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 		return nil, fmt.Errorf("pack: %w", err)
 	}
 
-	buf := pool.DefaultBufferPool.Get()
-	defer pool.DefaultBufferPool.Put(buf)
+	buf := pool.DefaultBuffer.Get()
+	defer pool.DefaultBuffer.Put(buf)
 
 	writeBuf := buf
 	if len(buf) < zdnsutil.DNSFramePrefixLen+len(msgData) {
@@ -138,8 +138,8 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	respBuf := pool.DefaultBufferPool.Get()
-	defer pool.DefaultBufferPool.Put(respBuf)
+	respBuf := pool.DefaultBuffer.Get()
+	defer pool.DefaultBuffer.Put(respBuf)
 
 	if _, err := io.ReadFull(stream, respBuf[:zdnsutil.DNSFramePrefixLen]); err != nil {
 		msg.ID = originalID
@@ -163,11 +163,11 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 		return nil, fmt.Errorf("read message body: %w", err)
 	}
 
-	response := pool.DefaultMessagePool.Get()
+	response := pool.DefaultMessage.Get()
 	response.Data = body
 	if err := response.Unpack(); err != nil {
 		msg.ID = originalID
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
 

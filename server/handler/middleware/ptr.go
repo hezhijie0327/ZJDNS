@@ -10,16 +10,16 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// PTRMiddleware intercepts PTR-type reverse-lookup queries on cache miss
+// PTR intercepts PTR-type reverse-lookup queries on cache miss
 // and attempts to answer them from the ptr_map table.  If a match is found
 // it short-circuits with a forged PTR response; otherwise it delegates to
 // the next handler.
-type PTRMiddleware struct {
+type PTR struct {
 	store cache.Store
 }
 
 // Wrap implements Middleware.
-func (m *PTRMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+func (m *PTR) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Only run on cache miss.
 		if qctx.CacheHit {

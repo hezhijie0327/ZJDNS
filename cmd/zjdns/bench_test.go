@@ -30,7 +30,7 @@ func disableLogging() { log.Default.SetLevel(log.Error) }
 
 func BenchmarkPoolMessageGetPut(b *testing.B) {
 	disableLogging()
-	mp := pool.NewMessagePool()
+	mp := pool.NewMessage()
 	b.ResetTimer()
 	for b.Loop() {
 		msg := mp.Get()
@@ -40,7 +40,7 @@ func BenchmarkPoolMessageGetPut(b *testing.B) {
 
 func BenchmarkPoolBufferGetPut(b *testing.B) {
 	disableLogging()
-	bp := pool.NewBufferPool(pool.SecureBufferSize, 256)
+	bp := pool.NewBuffer(pool.SecureBufferSize, 256)
 	b.ResetTimer()
 	for b.Loop() {
 		buf := bp.Get()
@@ -281,7 +281,7 @@ func BenchmarkServerProcessQuery(b *testing.B) {
 		for pb.Next() {
 			resp := srv.ServeDNS(req.Copy(), clientIP, false, "UDP")
 			if resp != nil {
-				pool.DefaultMessagePool.Put(resp)
+				pool.DefaultMessage.Put(resp)
 			}
 		}
 	})
@@ -305,7 +305,7 @@ func BenchmarkServerProcessQuery_Cold(b *testing.B) {
 		for pb.Next() {
 			resp := srv.ServeDNS(req.Copy(), clientIP, false, "UDP")
 			if resp != nil {
-				pool.DefaultMessagePool.Put(resp)
+				pool.DefaultMessage.Put(resp)
 			}
 		}
 	})

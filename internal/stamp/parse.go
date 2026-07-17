@@ -1,5 +1,5 @@
-// Package stamp implements DNS Stamp (sdns://) parsing for all major DNS
-// protocols as defined by the DNSCrypt project's DNS Stamp specification.
+// Package stamp implements DNS DNSStamp (sdns://) parsing for all major DNS
+// protocols as defined by the DNSCrypt project's DNS DNSStamp specification.
 package stamp
 
 import (
@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-func (s *Stamp) parsePlainDNS(bin []byte) error {
+func (s *DNSStamp) parsePlainDNS(bin []byte) error {
 	binLen := len(bin)
 	pos := 9 // skip proto(1) + props(8)
 
@@ -48,7 +48,7 @@ func (s *Stamp) parsePlainDNS(bin []byte) error {
 
 // parseDNSCrypt parses a DNSCrypt stamp payload (protocol 0x01).
 // Format: [addr_len:1][addr][pk_len:1][pk][prov_len:1][prov]
-func (s *Stamp) parseDNSCrypt(bin []byte) error {
+func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	binLen := len(bin)
 	pos := 9 // skip proto(1) + props(8)
 
@@ -111,7 +111,7 @@ func (s *Stamp) parseDNSCrypt(bin []byte) error {
 
 // parseDoH parses a DNS-over-HTTPS stamp payload (protocol 0x02).
 // Format: [addr_len:1][addr][hashes:VLP][host_len:1][host][path_len:1][path][bootstrap:VLP]
-func (s *Stamp) parseDoH(bin []byte) error {
+func (s *DNSStamp) parseDoH(bin []byte) error {
 	binLen := len(bin)
 	pos := 9
 
@@ -179,7 +179,7 @@ func (s *Stamp) parseDoH(bin []byte) error {
 
 // parseDoT parses a DNS-over-TLS stamp payload (protocol 0x03).
 // Format: [addr_len:1][addr][hashes:VLP][host_len:1][host][bootstrap:VLP]
-func (s *Stamp) parseDoT(bin []byte) error {
+func (s *DNSStamp) parseDoT(bin []byte) error {
 	binLen := len(bin)
 	pos := 9
 
@@ -238,14 +238,14 @@ func (s *Stamp) parseDoT(bin []byte) error {
 
 // parseDoQ parses a DNS-over-QUIC stamp payload (protocol 0x04).
 // Format: [addr_len:1][addr][hashes:VLP][host_len:1][host][bootstrap:VLP]
-func (s *Stamp) parseDoQ(bin []byte) error {
+func (s *DNSStamp) parseDoQ(bin []byte) error {
 	// DoQ shares the same format as DoT.
 	return s.parseDoT(bin)
 }
 
 // parseODoHTarget parses an Oblivious DoH Target stamp payload (protocol 0x05).
 // Format: [host_len:1][host][path_len:1][path]
-func (s *Stamp) parseODoHTarget(bin []byte) error {
+func (s *DNSStamp) parseODoHTarget(bin []byte) error {
 	binLen := len(bin)
 	pos := 9
 
@@ -281,7 +281,7 @@ func (s *Stamp) parseODoHTarget(bin []byte) error {
 // Format: [addr_len:1][addr]  (no properties field)
 //
 // Per §4.7.2, port specification is mandatory for relay stamps.
-func (s *Stamp) parseDNSCryptRelay(bin []byte) error {
+func (s *DNSStamp) parseDNSCryptRelay(bin []byte) error {
 	binLen := len(bin)
 	pos := 1 // relay stamps have no properties — skip only proto byte
 
@@ -318,7 +318,7 @@ func (s *Stamp) parseDNSCryptRelay(bin []byte) error {
 
 // parseODoHRelay parses an Oblivious DoH Relay stamp payload (protocol 0x85).
 // Format: [addr_len:1][addr][hashes:VLP][host_len:1][host][path_len:1][path][bootstrap:VLP]
-func (s *Stamp) parseODoHRelay(bin []byte) error {
+func (s *DNSStamp) parseODoHRelay(bin []byte) error {
 	binLen := len(bin)
 	pos := 9
 

@@ -7,6 +7,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
@@ -14,18 +15,18 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// CacheStoreMiddleware wraps the inner chain and handles all post-resolution
+// CacheStore wraps the inner chain and handles all post-resolution
 // processing: building the DNS response from the resolution result, writing
 // to the cache, recording request statistics, and triggering latency probes.
 // On resolution errors it attempts a stale-cache fallback.
-type CacheStoreMiddleware struct {
+type CacheStore struct {
 	store    cache.Store
 	prober   handler.LatencyProber
 	resolver handler.Resolver
 }
 
 // Wrap implements Middleware.
-func (m *CacheStoreMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+func (m *CacheStore) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		err := next.ServeDNS(ctx, qctx)
 
@@ -53,7 +54,7 @@ func (m *CacheStoreMiddleware) Wrap(next handler.QueryHandler) handler.QueryHand
 	})
 }
 
-func (m *CacheStoreMiddleware) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
+func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
 	qd := qctx.Req.Question[0]
 	qname := qd.Header().Name
@@ -90,7 +91,7 @@ func (m *CacheStoreMiddleware) buildSuccess(qctx *handler.QueryContext) *dns.Msg
 			Family:       ecsOpt.Family,
 			SourcePrefix: ecsOpt.SourcePrefix,
 			ScopePrefix:  ecsOpt.ScopePrefix,
-			Address:      handler.CopyIP(ecsOpt.Address),
+			Address:      zdnsutil.CopyIP(ecsOpt.Address),
 		}
 	}
 
@@ -137,7 +138,7 @@ func (m *CacheStoreMiddleware) buildSuccess(qctx *handler.QueryContext) *dns.Msg
 	return msg
 }
 
-func (m *CacheStoreMiddleware) buildError(qctx *handler.QueryContext) *dns.Msg {
+func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
 	qd := qctx.Req.Question[0]
 	qname := qd.Header().Name
@@ -192,7 +193,7 @@ func (m *CacheStoreMiddleware) buildError(qctx *handler.QueryContext) *dns.Msg {
 	return msg
 }
 
-func (m *CacheStoreMiddleware) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
+func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 	qd := qctx.Req.Question[0]
 	qname := qd.Header().Name
 	qtype := dns.RRToType(qd)
@@ -217,7 +218,7 @@ func (m *CacheStoreMiddleware) buildCIDRRefused(qctx *handler.QueryContext) *dns
 	return msg
 }
 
-func (m *CacheStoreMiddleware) buildFromCacheEntry(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
+func (m *CacheStore) buildFromCacheEntry(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
 	msg := handler.BuildCacheEntryResponse(qctx.Req, entry, qctx.ClientRequestedDNSSEC, isExpired)
 	if isExpired {
 		qctx.EDE = edns.NewEDEOption(edns.EDECodeStaleAnswer, "")

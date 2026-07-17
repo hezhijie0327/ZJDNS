@@ -160,18 +160,18 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 		}
 
 		if !server.IsRecursive() {
-			isStamp := strings.HasPrefix(server.Address, "sdns://")
-			if isStamp {
-				// Stamp addresses are parsed during normalization — the raw
-				// sdns:// string is not a valid host:port or URL.
-			} else if _, _, err := net.SplitHostPort(server.Address); err != nil {
-				if protocol == ProtoHTTPS || protocol == ProtoHTTP3 ||
-					protocol == ProtoHTTPTLCP {
-					if _, err := url.Parse(server.Address); err != nil {
+			// Stamp addresses are parsed during normalization — the raw
+			// sdns:// string is not a valid host:port or URL.
+			if !strings.HasPrefix(server.Address, "sdns://") {
+				if _, _, err := net.SplitHostPort(server.Address); err != nil {
+					if protocol == ProtoHTTPS || protocol == ProtoHTTP3 ||
+						protocol == ProtoHTTPTLCP {
+						if _, err := url.Parse(server.Address); err != nil {
+							return fmt.Errorf("upstream server %d address invalid: %w", i, err)
+						}
+					} else {
 						return fmt.Errorf("upstream server %d address invalid: %w", i, err)
 					}
-				} else {
-					return fmt.Errorf("upstream server %d address invalid: %w", i, err)
 				}
 			}
 		}

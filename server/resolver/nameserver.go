@@ -66,7 +66,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 			msg := r.resolver.buildMsg(question, ecs, true, false)
 			msg.UDPSize = pool.RecursiveUDPBufferSize // larger buffer for DNSSEC-signed referrals
-			defer pool.DefaultMessagePool.Put(msg)
+			defer pool.DefaultMessage.Put(msg)
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 			defer subCancel()
@@ -81,7 +81,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 				if rcode == dns.RcodeNameError && len(result.Response.Answer) > 0 {
 					log.Debugf("RECURSION: rejecting malformed NXDOMAIN+answer from %s (hijack)", nsAddr)
 					hijackRejected.Store(true)
-					pool.DefaultMessagePool.Put(result.Response)
+					pool.DefaultMessage.Put(result.Response)
 					return nil
 				}
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
@@ -94,7 +94,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 						if v == hijack.VerdictHijack {
 							log.Debugf("RECURSION: rejecting hijacked response from %s", nsAddr)
 							hijackRejected.Store(true)
-							pool.DefaultMessagePool.Put(result.Response)
+							pool.DefaultMessage.Put(result.Response)
 							return nil
 						}
 					}
@@ -111,7 +111,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 						cancel()
 						return nil
 					case <-queryCtx.Done():
-						pool.DefaultMessagePool.Put(result.Response)
+						pool.DefaultMessage.Put(result.Response)
 						return queryCtx.Err()
 					}
 				}
@@ -120,13 +120,13 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 				// mail.protection.outlook.com) reject all EDNS queries with FORMERR.
 				// Retry once without EDNS to recover (RFC 6891 §6.2.2).
 				if rcode == dns.RcodeFormatError {
-					pool.DefaultMessagePool.Put(result.Response)
+					pool.DefaultMessage.Put(result.Response)
 					r.retryWithoutEDNS(queryCtx, resultChan, cancel, server, question, nsAddr, detector, currentDomain, normalizedQname, &hijackRejected)
 					return nil
 				}
 
 				log.Debugf("RECURSION: ns=%s rcode=%s for %s %s", nsAddr, dns.RcodeToString[rcode], question.Name, dns.TypeToString[question.Qtype])
-				pool.DefaultMessagePool.Put(result.Response)
+				pool.DefaultMessage.Put(result.Response)
 			} else if result.Error != nil {
 				log.Debugf("RECURSION: ns=%s error=%v for %s %s", nsAddr, result.Error, question.Name, dns.TypeToString[question.Qtype])
 			}
@@ -295,7 +295,9 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 		})
 	}
 
-	_ = g.Wait()
+	if err := g.Wait(); err != nil {
+		log.Debugf("RECURSION: NS address resolution errgroup: %v", err)
+	}
 
 	// Fire background latency probes. Merge A+AAAA per NS name
 	// so each probe call gets both address families.
@@ -336,8 +338,8 @@ func domainNamesEqual(a, b string) bool {
 func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector *hijack.Detector, currentDomain, normalizedQname string, hijackRejected *atomic.Bool) {
 	log.Debugf("RECURSION: ns=%s FORMERR, retrying without EDNS for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
 
-	bareMsg := pool.DefaultMessagePool.Get()
-	defer pool.DefaultMessagePool.Put(bareMsg)
+	bareMsg := pool.DefaultMessage.Get()
+	defer pool.DefaultMessage.Put(bareMsg)
 	dnsutil.SetQuestion(bareMsg, dnsutil.Fqdn(question.Name), question.Qtype)
 	bareMsg.RecursionDesired = true
 
@@ -356,7 +358,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	retryRcode := retryResult.Response.Rcode
 	if retryRcode != dns.RcodeSuccess && retryRcode != dns.RcodeNameError {
 		log.Debugf("RECURSION: ns=%s FORMERR retry rcode=%s for %s %s", nsAddr, dns.RcodeToString[retryRcode], question.Name, dns.TypeToString[question.Qtype])
-		pool.DefaultMessagePool.Put(retryResult.Response)
+		pool.DefaultMessage.Put(retryResult.Response)
 		return
 	}
 
@@ -366,7 +368,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 		if v == hijack.VerdictHijack {
 			log.Debugf("RECURSION: rejecting hijacked FORMERR retry from %s", nsAddr)
 			hijackRejected.Store(true)
-			pool.DefaultMessagePool.Put(retryResult.Response)
+			pool.DefaultMessage.Put(retryResult.Response)
 			return
 		}
 	}
@@ -375,7 +377,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	case resultChan <- retryResult.Response:
 		cancel()
 	case <-ctx.Done():
-		pool.DefaultMessagePool.Put(retryResult.Response)
+		pool.DefaultMessage.Put(retryResult.Response)
 	}
 }
 

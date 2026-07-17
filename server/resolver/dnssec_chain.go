@@ -149,7 +149,7 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", zone, err)
 		return
 	}
-	defer pool.DefaultMessagePool.Put(dnskeyResp)
+	defer pool.DefaultMessage.Put(dnskeyResp)
 
 	dnskeyRecords := dnssec.FindDNSKEYs(dnskeyResp.Answer)
 	if len(dnskeyRecords) == 0 {
@@ -261,7 +261,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 		chain.lastEDECode = edns.EDECodeDNSKEYMissing
 		return false
 	}
-	defer pool.DefaultMessagePool.Put(dnskeyResp)
+	defer pool.DefaultMessage.Put(dnskeyResp)
 
 	dnskeyRecords := dnssec.FindDNSKEYs(dnskeyResp.Answer)
 	if len(dnskeyRecords) == 0 {

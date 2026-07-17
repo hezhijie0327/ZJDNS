@@ -17,9 +17,9 @@ import (
 // Dialer provides TCP and UDP connections through a SOCKS5 proxy.
 // It implements both RFC 1928 (SOCKS5) and RFC 1929 (Username/Password auth).
 //
-// A single Dialer reuses its UDP relay — the TCP control connection
-// stays alive as long as the relay is needed. If the control connection dies,
-// the next ListenPacket call re-establishes it transparently.
+// TCP connections are multiplexed over a single Dialer.  UDP connections
+// (ListenPacket, DialUDP) each create an independent UDP ASSOCIATE relay
+// so that closing one caller's connection does not affect others.
 type Dialer struct {
 	proxyAddr string // host:port of the SOCKS5 proxy
 	username  string // empty means no auth

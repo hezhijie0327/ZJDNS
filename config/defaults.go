@@ -7,14 +7,12 @@ import "time"
 // =============================================================================
 
 const (
-	DefaultUDPPort   = "53"   // plain DNS UDP
-	DefaultTCPPort   = "53"   // plain DNS TCP
-	DefaultTLSPort   = "853"  // DoT (RFC 7858)
-	DefaultQUICPort  = "853"  // DoQ (RFC 9250)
-	DefaultHTTPSPort = "443"  // DoH (RFC 8484)
-	DefaultHTTP3Port = "443"  // DoH3
-	DefaultDTLSPort  = "8853" // DoD (RFC 8094)
-
+	DefaultUDPPort      = "53"  // plain DNS UDP
+	DefaultTCPPort      = "53"  // plain DNS TCP
+	DefaultTLSPort      = "853" // DoT (RFC 7858)
+	DefaultQUICPort     = "853" // DoQ (RFC 9250)
+	DefaultHTTPSPort    = "443" // DoH (RFC 8484)
+	DefaultHTTP3Port    = "443" // DoH3
 	DefaultDNSCryptPort = "8443"
 
 	DefaultTLCPPort     = "9853" // TLCP (GB/T 38636-2020) DoT
@@ -212,7 +210,6 @@ const (
 	ProtoICMP  = "icmp"
 	ProtoHTTP  = "http"
 
-	ProtoTLSTCP      = "tcp-tls"      // dns.Client.Net for TLS-wrapped TCP
 	ProtoDNSCrypt    = "dnscrypt"     // DNSCrypt v2 encrypted DNS (UDP)
 	ProtoDNSCryptTCP = "dnscrypt-tcp" // DNSCrypt v2 encrypted DNS (TCP)
 	ProtoTLCP        = "tlcp"         // DoT over TLCP (GB/T 38636-2020)

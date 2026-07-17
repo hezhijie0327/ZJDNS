@@ -122,7 +122,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.RecursiveIndicator, Hijack: hijackSeen}
 	}
 
@@ -160,7 +160,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			hijackSeen = true
 			if !forceTCP {
 				if response != nil {
-					pool.DefaultMessagePool.Put(response)
+					pool.DefaultMessage.Put(response)
 				}
 				qr := r.resolve(ctx, question, ecs, depth, true)
 				qr.Hijack = true
@@ -180,7 +180,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		validated := cryptoValidated
 
 		if r.shouldRetryMinimisedQname(queryQuestion.Name, qname, qnameMinimise, response, normalizedQname) {
-			pool.DefaultMessagePool.Put(response)
+			pool.DefaultMessage.Put(response)
 			minimiseSteps = config.DefaultQnameMinimiseCount
 			continue
 		}
@@ -227,13 +227,13 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 		if len(nsResult.addrs) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
-			pool.DefaultMessagePool.Put(response)
+			pool.DefaultMessage.Put(response)
 			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.RecursiveIndicator}
 		}
 
 		r.cacheGlueRecords(nsResult.glue)
 
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 		nameservers = nsResult.addrs
 		// Save TLD servers after updating. Used for the
 		// full-QNAME hijack probe at the authoritative step.
@@ -251,8 +251,8 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 		return false
 	}
 
-	msg := pool.DefaultMessagePool.Get()
-	defer pool.DefaultMessagePool.Put(msg)
+	msg := pool.DefaultMessage.Get()
+	defer pool.DefaultMessage.Put(msg)
 	dnsutil.SetQuestion(msg, dnsutil.Fqdn(qname), dns.TypeA)
 	msg.RecursionDesired = false
 	msg.UDPSize = pool.RecursiveUDPBufferSize
@@ -270,7 +270,7 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 	if result.Error != nil || result.Response == nil {
 		return false
 	}
-	defer pool.DefaultMessagePool.Put(result.Response)
+	defer pool.DefaultMessage.Put(result.Response)
 
 	if detector.IsHijackedByTLD(result.Response, qname) {
 		log.Debugf("RECURSION: hijack probe detected A/AAAA for %s from TLD server %s, forcing TCP",

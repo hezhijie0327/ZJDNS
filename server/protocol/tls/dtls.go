@@ -115,16 +115,16 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 			continue
 		}
 
-		query := pool.DefaultMessagePool.Get()
+		query := pool.DefaultMessage.Get()
 		query.Data = buf[2 : 2+msgLen]
 		if err := query.Unpack(); err != nil {
 			log.Debugf("TLS: DTLS unpack error: %v", err)
-			pool.DefaultMessagePool.Put(query)
+			pool.DefaultMessage.Put(query)
 			continue
 		}
 
 		response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLS)
-		pool.DefaultMessagePool.Put(query)
+		pool.DefaultMessage.Put(query)
 
 		if err := response.Pack(); err != nil {
 			log.Debugf("TLS: DTLS pack error: %v", err)

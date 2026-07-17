@@ -164,7 +164,7 @@ func (rc *ResolverConfig) CreateStamp(addr string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("decoding public key: %w", err)
 	}
-	s := &zstamp.Stamp{
+	s := &zstamp.DNSStamp{
 		Proto:        zstamp.ProtoDNSCrypt,
 		Address:      addr,
 		ProviderName: rc.ProviderName,

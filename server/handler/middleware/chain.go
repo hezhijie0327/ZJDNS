@@ -48,47 +48,47 @@ type Dependencies struct {
 //
 // Execution order (outermost → innermost):
 //
-//	ResponseMiddleware      — EDNS / cookie / EDE application
-//	CacheStoreMiddleware    — cache write + request logging + latency probe
-//	ValidationMiddleware    — domain length / label / ANY-AXFR-IXFR
-//	ZoneMiddleware          — zone rule evaluation (short-circuit on match)
-//	EDNSMiddleware          — ECS + cookie parsing
-//	CacheLookupMiddleware   — cache lookup (short-circuit on hit)
-//	PTRMiddleware           — reverse PTR from cache (cache-miss only)
-//	RulesetMiddleware       — CIDR-based A/AAAA filtering
-//	DNS64Middleware         — AAAA synthesis
-//	ResolutionMiddleware    — terminal: upstream / recursive resolution
+//	Response      — EDNS / cookie / EDE application
+//	CacheStore    — cache write + request logging + latency probe
+//	Validation    — domain length / label / ANY-AXFR-IXFR
+//	Zone          — zone rule evaluation (short-circuit on match)
+//	EDNS          — ECS + cookie parsing
+//	CacheLookup   — cache lookup (short-circuit on hit)
+//	PTR           — reverse PTR from cache (cache-miss only)
+//	Ruleset       — CIDR-based A/AAAA filtering
+//	DNS64         — AAAA synthesis
+//	Resolution    — terminal: upstream / recursive resolution
 func AssembleChain(deps *Dependencies) handler.QueryHandler {
-	// Innermost: no-op terminal.  ResolutionMiddleware is the real terminal —
+	// Innermost: no-op terminal.  Resolution is the real terminal —
 	// it ignores next and never calls this stub.
 	var h handler.QueryHandler = handler.QueryHandlerFunc(func(_ context.Context, _ *handler.QueryContext) error {
 		return nil
 	})
 
-	// Wrap the terminal handler with ResolutionMiddleware.
-	h = (&ResolutionMiddleware{
+	// Wrap the terminal handler with Resolution.
+	h = (&Resolution{
 		resolver: deps.Resolver,
 		pending:  deps.PendingReqs,
 	}).Wrap(h)
 
 	// Post-resolution transforms: wrap resolution from inside out so they
-	// execute after ResolutionMiddleware returns.
+	// execute after Resolution returns.
 	if deps.DNS64 != nil {
-		h = (&DNS64Middleware{
+		h = (&DNS64{
 			synthesizer: deps.DNS64,
 			resolver:    deps.Resolver,
 			pending:     deps.PendingReqs,
 		}).Wrap(h)
 	}
 	if deps.RulesetEngine != nil {
-		h = (&RulesetMiddleware{cidrMatcher: deps.RulesetEngine}).Wrap(h)
+		h = (&Ruleset{cidrMatcher: deps.RulesetEngine}).Wrap(h)
 	}
 
 	// PTR reverse lookup only fires on cache miss.
-	h = (&PTRMiddleware{store: deps.Cache}).Wrap(h)
+	h = (&PTR{store: deps.Cache}).Wrap(h)
 
 	// Cache lookup: short-circuits on fresh/stale hit.
-	h = (&CacheLookupMiddleware{
+	h = (&CacheLookup{
 		store:            deps.Cache,
 		closed:           deps.Closed,
 		prefetchCooldown: deps.PrefetchCooldown,
@@ -100,14 +100,14 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	}).Wrap(h)
 
 	// EDNS parsing + cookie validation.
-	h = (&EDNSMiddleware{
+	h = (&EDNS{
 		edns:   deps.EDNS,
 		config: deps.Config,
 	}).Wrap(h)
 
 	// Zone rule evaluation (short-circuit on match).
 	if deps.ZoneEvaluator.HasRules() {
-		h = (&ZoneMiddleware{
+		h = (&Zone{
 			evaluator:  deps.ZoneEvaluator,
 			tagMatcher: deps.TagMatcher,
 			cache:      deps.Cache,
@@ -115,17 +115,17 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	}
 
 	// Request validation — reject malformed queries early.
-	h = (&ValidationMiddleware{}).Wrap(h)
+	h = (&Validation{}).Wrap(h)
 
 	// Cache storage: runs after resolution, writes to cache + starts probes.
-	h = (&CacheStoreMiddleware{
+	h = (&CacheStore{
 		store:    deps.Cache,
 		prober:   deps.Prober,
 		resolver: deps.Resolver,
 	}).Wrap(h)
 
 	// Response finalization: always runs, applies EDNS + restores domain.
-	h = (&ResponseMiddleware{edns: deps.EDNS}).Wrap(h)
+	h = (&Response{edns: deps.EDNS}).Wrap(h)
 
 	return h
 }

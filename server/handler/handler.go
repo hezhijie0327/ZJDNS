@@ -91,12 +91,12 @@ func (h *Handler) Prober() LatencyProber { return h.prober }
 // PrefetchCooldown returns the prefetch cooldown tracker.
 func (h *Handler) PrefetchCooldown() *PrefetchCooldown { return h.prefetchCooldown }
 
-// CleanupPrefetchCooldown removes stale entries from the prefetch cooldown
-// map.  Entries with timestamp < now are evicted.
+// CleanupPrefetchCooldown removes entries from the prefetch cooldown map
+// that have aged past the cooldown window.
 //
-// Deprecated: use h.PrefetchCooldown().Cleanup(now) directly.
-func (h *Handler) CleanupPrefetchCooldown(now int64) {
-	h.prefetchCooldown.Cleanup(now)
+// Deprecated: use h.PrefetchCooldown().Cleanup(now, cooldownNanos) directly.
+func (h *Handler) CleanupPrefetchCooldown(now, cooldownNanos int64) {
+	h.prefetchCooldown.Cleanup(now, cooldownNanos)
 }
 
 // CacheRefreshGroup returns the errgroup for cache refresh goroutines.
@@ -117,7 +117,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	}
 
 	if req == nil || len(req.Question) == 0 {
-		msg := pool.DefaultMessagePool.Get()
+		msg := pool.DefaultMessage.Get()
 		if req != nil {
 			dnsutil.SetReply(msg, req)
 		} else {
@@ -148,7 +148,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	err := h.chain.ServeDNS(h.ctx, qctx)
 
 	if errors.Is(err, ErrDrop) || qctx.Dropped {
-		pool.DefaultMessagePool.Put(req)
+		pool.DefaultMessage.Put(req)
 		return nil
 	}
 
@@ -178,7 +178,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 // It is a standalone function (not a method) so it can be used before the
 // Handler is created.
 func BuildQueryMsg(ednsH *edns.Handler, question Question, ecs *edns.ECSOption, recursionDesired, isSecureConnection bool) *dns.Msg {
-	msg := pool.DefaultMessagePool.Get()
+	msg := pool.DefaultMessage.Get()
 
 	dnsutil.SetQuestion(msg, dnsutil.Fqdn(question.Name), question.Qtype)
 	msg.RecursionDesired = recursionDesired

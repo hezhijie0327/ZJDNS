@@ -63,13 +63,13 @@ func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string
 	if _, err := msg.WriteTo(conn); err != nil {
 		return nil, err
 	}
-	response := pool.DefaultMessagePool.Get()
+	response := pool.DefaultMessage.Get()
 	if _, err := response.ReadFrom(conn); err != nil {
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 		return nil, err
 	}
 	if err := response.Unpack(); err != nil {
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 		return nil, err
 	}
 	response.ID = msg.ID

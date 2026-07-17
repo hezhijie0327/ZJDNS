@@ -64,7 +64,7 @@ func RunDNSStampEncode(protoStr, addr, providerName, publicKeyHex, path string, 
 		return fmt.Errorf("--stamp-addr is required for protocol %q", protoStr)
 	}
 
-	s := &zstamp.Stamp{
+	s := &zstamp.DNSStamp{
 		Proto:        proto,
 		Address:      addr,
 		ProviderName: providerName,
@@ -91,7 +91,7 @@ func RunDNSStampEncode(protoStr, addr, providerName, publicKeyHex, path string, 
 	return nil
 }
 
-func parseProto(s string) (zstamp.StampProtoType, error) {
+func parseProto(s string) (zstamp.ProtoType, error) {
 	switch s {
 	case "plain":
 		return zstamp.ProtoPlain, nil

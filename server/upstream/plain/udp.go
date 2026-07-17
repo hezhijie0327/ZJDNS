@@ -61,12 +61,12 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 		return nil, readErr
 	}
 
-	response := pool.DefaultMessagePool.Get()
+	response := pool.DefaultMessage.Get()
 	response.Data = (*respBuf)[:n]
 	if err := response.Unpack(); err != nil {
 		clear(*respBuf)
 		socks5.ReadPool.Put(respBuf)
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 		return nil, err
 	}
 	clear(*respBuf)

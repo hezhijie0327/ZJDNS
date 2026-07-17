@@ -94,7 +94,7 @@ func (s *Server) startECSRefresh() {
 // startPrefetchCooldownCleanup periodically evicts stale entries from the prefetch cooldown map.
 func (s *Server) startPrefetchCooldownCleanup() {
 	s.runBackgroundTicker("prefetch cooldown cleanup", config.DefaultPrefetchThrottleInterval*10, func() {
-		s.handler.CleanupPrefetchCooldown(log.NowUnixNano())
+		s.handler.CleanupPrefetchCooldown(log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds())
 	})
 }
 

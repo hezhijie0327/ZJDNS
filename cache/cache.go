@@ -148,6 +148,12 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed, includeDNSSEC bool) []
 	if value == 0 && !isElapsed && includeDNSSEC {
 		return rrs
 	}
+	// Fast path: no TTL adjustment, DNSSEC filtering requested but no
+	// DNSSEC records present — return original slice unchanged (common on
+	// cache-hit and non-DNSSEC upstream responses).
+	if value == 0 && !isElapsed && !includeDNSSEC && !hasDNSSECRecords(rrs) {
+		return rrs
+	}
 	result := make([]dns.RR, 0, len(rrs))
 	for _, rr := range rrs {
 		if nr := processRR(rr, value, isElapsed, includeDNSSEC); nr != nil {
@@ -155,4 +161,16 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed, includeDNSSEC bool) []
 		}
 	}
 	return result
+}
+
+// hasDNSSECRecords checks whether the slice contains any DNSSEC record types
+// that would be filtered by ProcessRecords when includeDNSSEC is false.
+func hasDNSSECRecords(rrs []dns.RR) bool {
+	for _, rr := range rrs {
+		switch rr.(type) {
+		case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
+			return true
+		}
+	}
+	return false
 }

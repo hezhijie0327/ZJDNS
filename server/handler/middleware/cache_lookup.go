@@ -15,12 +15,12 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// CacheLookupMiddleware checks the response cache before the resolver runs.
+// CacheLookup checks the response cache before the resolver runs.
 // Three outcomes:
 //   - Fresh hit: builds the response and short-circuits.
 //   - Expired but can serve stale: serves stale, triggers background refresh.
 //   - Miss or expired-and-cannot-serve: sets CacheEntry and delegates to next.
-type CacheLookupMiddleware struct {
+type CacheLookup struct {
 	store            cache.Store
 	closed           func() bool
 	prefetchCooldown *handler.PrefetchCooldown
@@ -32,7 +32,7 @@ type CacheLookupMiddleware struct {
 }
 
 // Wrap implements Middleware.
-func (m *CacheLookupMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		qd := qctx.Req.Question[0]
 		qname := qd.Header().Name
@@ -100,7 +100,7 @@ func (m *CacheLookupMiddleware) Wrap(next handler.QueryHandler) handler.QueryHan
 	})
 }
 
-func (m *CacheLookupMiddleware) serveExpiredWithRefresh(ctx context.Context, qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, entry *cache.Entry) error {
+func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, entry *cache.Entry) error {
 	done := make(chan struct{})
 	var qr *resolver.QueryResult
 
@@ -150,7 +150,7 @@ func (m *CacheLookupMiddleware) serveExpiredWithRefresh(ctx context.Context, qct
 	return nil
 }
 
-func (m *CacheLookupMiddleware) buildResponse(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
+func (m *CacheLookup) buildResponse(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
 	msg := handler.BuildCacheEntryResponse(qctx.Req, entry, qctx.ClientRequestedDNSSEC, isExpired)
 	if isExpired {
 		qctx.EDE = edns.NewEDEOption(edns.EDECodeStaleAnswer, "")
@@ -160,7 +160,7 @@ func (m *CacheLookupMiddleware) buildResponse(qctx *handler.QueryContext, entry 
 
 // refreshCacheEntry performs a full resolution cycle and updates the cache.
 // Used for background prefetch and stale-entry refresh.
-func (m *CacheLookupMiddleware) refreshCacheEntry(qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption) error {
+func (m *CacheLookup) refreshCacheEntry(qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption) error {
 	question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 	qr := m.resolver.Query(m.refreshCtx, question, ecsOpt)
 	if qr.Err != nil {
@@ -172,7 +172,7 @@ func (m *CacheLookupMiddleware) refreshCacheEntry(qctx *handler.QueryContext, qn
 	return nil
 }
 
-func (m *CacheLookupMiddleware) tryStartRefresh(qname string, qtype, qclass uint16, ecs *edns.ECSOption) bool {
+func (m *CacheLookup) tryStartRefresh(qname string, qtype, qclass uint16, ecs *edns.ECSOption) bool {
 	if m.pendingRefreshes == nil {
 		return true
 	}
@@ -184,7 +184,7 @@ func (m *CacheLookupMiddleware) tryStartRefresh(qname string, qtype, qclass uint
 	return true
 }
 
-func (m *CacheLookupMiddleware) finishRefresh(qname string, qtype, qclass uint16, ecs *edns.ECSOption) {
+func (m *CacheLookup) finishRefresh(qname string, qtype, qclass uint16, ecs *edns.ECSOption) {
 	if m.pendingRefreshes == nil {
 		return
 	}

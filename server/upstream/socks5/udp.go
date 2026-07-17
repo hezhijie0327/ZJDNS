@@ -21,6 +21,7 @@ import (
 
 type socks5PacketConn struct {
 	conn *net.UDPConn
+	done func() // called on Close to tear down the relay
 }
 
 // ---------------------------------------------------------------------------
@@ -45,44 +46,27 @@ var socks5ReadBufPool = sync.Pool{
 // ListenPacket returns a net.PacketConn that sends and receives UDP datagrams
 // through the SOCKS5 proxy's UDP relay (RFC 1928 §6).
 //
-// The returned PacketConn wraps SOCKS5 UDP headers transparently — callers
-// use WriteTo/ReadFrom with the real target address, not the relay address.
+// Each call establishes its own independent UDP relay (TCP control connection +
+// UDP ASSOCIATE).  This avoids the shared-socket problem where one caller's
+// Close() would break every other concurrent caller using the same proxy.
 //
-// The underlying TCP control connection stays alive; if the proxy closes it,
-// the next ListenPacket call re-establishes the relay automatically.
+// For callers that need a net.Conn instead (e.g. DNSCrypt), use DialUDP which
+// returns a socks5UDPConn with Read/Write semantics.
 func (d *Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error) {
-	// Fast path: read-lock to check if the relay is alive.
-	d.mu.RLock()
-	if d.ctrlConn != nil {
-		select {
-		case <-d.ctrlClosed:
-			// Relay died — fall through to slow path.
-		default:
-			pc := d.wrapPacketConn()
-			d.mu.RUnlock()
-			return pc, nil
-		}
+	// Create a fresh, independent dialer so the relay is not shared.
+	fresh := &Dialer{
+		proxyAddr: d.proxyAddr,
+		username:  d.username,
+		password:  d.password,
+		timeout:   d.timeout,
 	}
-	d.mu.RUnlock()
-
-	// Slow path: take write lock and (re-)establish the relay.
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	// Double-check: another goroutine might have established while we waited.
-	if d.ctrlConn != nil {
-		select {
-		case <-d.ctrlClosed:
-			d.cleanupLocked()
-		default:
-			return d.wrapPacketConn(), nil
-		}
-	}
-
-	if err := d.establishUDPRelay(ctx); err != nil {
+	if err := fresh.establishUDPRelay(ctx); err != nil {
 		return nil, err
 	}
-	return d.wrapPacketConn(), nil
+	return &socks5PacketConn{
+		conn: fresh.udpConn,
+		done: func() { _ = fresh.Close() },
+	}, nil
 }
 
 func (d *Dialer) establishUDPRelay(ctx context.Context) error {
@@ -194,12 +178,6 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	return nil
 }
 
-func (d *Dialer) wrapPacketConn() net.PacketConn {
-	return &socks5PacketConn{
-		conn: d.udpConn,
-	}
-}
-
 func (d *Dialer) cleanupLocked() {
 	if d.ctrlConn != nil {
 		_ = d.ctrlConn.Close()
@@ -297,9 +275,7 @@ func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	return nw - headerLen, nil
 }
 
-func (c *socks5PacketConn) Close() error {
-	return c.conn.Close()
-}
+func (c *socks5PacketConn) Close() error { c.done(); return nil }
 
 func (c *socks5PacketConn) LocalAddr() net.Addr {
 	return c.conn.LocalAddr()

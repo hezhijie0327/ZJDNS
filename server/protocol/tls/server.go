@@ -11,10 +11,10 @@ import (
 	"net"
 	"time"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
-	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	eHTTP "gitlab.com/go-extension/http"
@@ -45,15 +45,10 @@ type Config struct {
 	KTLS          *KTLSSettings
 }
 
-// DNSHandler is the interface for processing incoming DNS queries.
-type DNSHandler interface {
-	ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg
-}
-
 // Server manages TLS-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
 	cfg            *Config
-	handler        DNSHandler
+	handler        edns.DNSHandler
 	tlsConfig      *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
 	baseTLSConfig  *eTLS.Config   // base config for per-listener GetConfigForClient clones
 	quicTLSConfig  *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
@@ -102,7 +97,7 @@ func (d *debugListener) Accept() (net.Conn, error) {
 
 // New creates a new TLS Server with the given DNS handler and configuration,
 // loading or generating the TLS certificate as specified.
-func New(handler DNSHandler, cfg *Config, operationTimeout time.Duration) (*Server, error) {
+func New(dnsHandler edns.DNSHandler, cfg *Config, operationTimeout time.Duration) (*Server, error) {
 	var eCert eTLS.Certificate
 	var sCert stdtls.Certificate
 	var err error
@@ -157,7 +152,7 @@ func New(handler DNSHandler, cfg *Config, operationTimeout time.Duration) (*Serv
 
 	s := &Server{
 		cfg:           cfg,
-		handler:       handler,
+		handler:       dnsHandler,
 		tlsConfig:     tlsConfig,
 		baseTLSConfig: baseConfig,
 		quicTLSConfig: baseQUICConfig,

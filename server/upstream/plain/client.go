@@ -14,13 +14,13 @@ import (
 type Client struct {
 	udpClient *dns.Client
 	tcpClient *dns.Client
-	tcpPool   *pool.Pool
+	tcpPool   *pool.ConnPool
 	getProxy  func(*config.UpstreamServer) *socks5.Dialer
 	timeout   time.Duration
 }
 
 // New creates a Client for plain UDP and TCP DNS queries.
-func New(udpClient, tcpClient *dns.Client, tcpPool *pool.Pool, getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Duration) *Client {
+func New(udpClient, tcpClient *dns.Client, tcpPool *pool.ConnPool, getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Duration) *Client {
 	return &Client{
 		udpClient: udpClient,
 		tcpClient: tcpClient,

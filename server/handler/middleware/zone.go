@@ -12,18 +12,18 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// ZoneMiddleware evaluates zone rules against the incoming query.
+// Zone evaluates zone rules against the incoming query.
 // If a rule matches it short-circuits with a synthetic response
 // (NXDOMAIN, REFUSED, or NOERROR with records).  If no rule matches,
 // it delegates to the next handler.
-type ZoneMiddleware struct {
+type Zone struct {
 	evaluator  handler.ZoneEvaluator
 	tagMatcher func(qname string, ip net.IP) map[string]bool
 	cache      cache.Store
 }
 
 // Wrap implements Middleware.
-func (m *ZoneMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		if !m.evaluator.HasRules() {
 			return next.ServeDNS(ctx, qctx)

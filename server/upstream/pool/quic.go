@@ -22,8 +22,8 @@ type QUICConn struct {
 	closeOnce sync.Once
 }
 
-// QUICPool manages a set of QUIC connections per upstream server key.
-type QUICPool struct {
+// QUIC manages a set of QUIC connections per upstream server key.
+type QUIC struct {
 	mu       sync.Mutex
 	conns    map[string][]*QUICConn
 	dialing  map[string]int
@@ -54,12 +54,12 @@ func (c *QUICConn) isDead() bool {
 	}
 }
 
-// NewQUICPool creates a QUICPool with the specified maximum connections.
-func NewQUICPool(maxConns int) *QUICPool {
+// NewQUIC creates a QUIC with the specified maximum connections.
+func NewQUIC(maxConns int) *QUIC {
 	if maxConns <= 0 {
 		maxConns = config.DefaultMaxConns
 	}
-	return &QUICPool{
+	return &QUIC{
 		conns:    make(map[string][]*QUICConn),
 		dialing:  make(map[string]int),
 		maxConns: maxConns,
@@ -67,17 +67,27 @@ func NewQUICPool(maxConns int) *QUICPool {
 }
 
 // Acquire gets a reusable QUIC connection, dialing a new one if needed.
-func (p *QUICPool) Acquire(ctx context.Context, key string, dialFunc func(context.Context, string) (*quic.Conn, error)) (*QUICConn, error) {
+func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Context, string) (*quic.Conn, error)) (*QUICConn, error) {
+	// Snapshot the connection list under the lock, then evaluate liveness
+	// outside it.  isDead() does a non-blocking channel select on
+	// Context().Done() — cheap, but unnecessary to keep the pool-wide
+	// mutex held during it.
 	p.mu.Lock()
-
 	conns := p.conns[key]
-	live := make([]*QUICConn, 0, len(conns))
-	for _, pc := range conns {
-		if pc.isDead() {
-			continue
+	all := make([]*QUICConn, len(conns))
+	copy(all, conns)
+	p.mu.Unlock()
+
+	// Filter dead connections outside the lock.
+	live := all[:0]
+	for _, pc := range all {
+		if !pc.isDead() {
+			live = append(live, pc)
 		}
-		live = append(live, pc)
 	}
+
+	// Update the stored live list under the lock.
+	p.mu.Lock()
 	p.conns[key] = live
 
 	if len(live) > 0 {
@@ -136,9 +146,17 @@ func (p *QUICPool) Acquire(ctx context.Context, key string, dialFunc func(contex
 	return nil, fmt.Errorf("client: no available connection to %s", key)
 }
 
+// WarmUp dials a new QUIC connection and adds it to the pool without returning
+// it.  This pre-establishes the QUIC handshake so the first real query avoids
+// the dial latency.  If the pool is full the connection is discarded.
+func (p *QUIC) WarmUp(ctx context.Context, key string, dialFunc func(context.Context, string) (*quic.Conn, error)) error {
+	_, err := p.Acquire(ctx, key, dialFunc)
+	return err
+}
+
 // Shutdown closes all pooled QUIC connections and clears the pool. It is safe
 // to call multiple times.
-func (p *QUICPool) Shutdown() {
+func (p *QUIC) Shutdown() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed = true
@@ -153,7 +171,7 @@ func (p *QUICPool) Shutdown() {
 // Put returns a QUIC connection to the pool for reuse.  If the connection
 // is already pooled (same *quic.Conn pointer), it is silently discarded to
 // prevent duplicate entries from exceeding maxConns.
-func (p *QUICPool) Put(key string, conn *quic.Conn) {
+func (p *QUIC) Put(key string, conn *quic.Conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -172,7 +190,7 @@ func (p *QUICPool) Put(key string, conn *quic.Conn) {
 }
 
 // Remove closes and removes a QUIC connection from the pool.
-func (p *QUICPool) Remove(pc *QUICConn) {
+func (p *QUIC) Remove(pc *QUICConn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	conns := p.conns[pc.addr]

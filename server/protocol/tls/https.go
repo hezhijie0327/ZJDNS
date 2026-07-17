@@ -123,13 +123,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		protocol = config.ProtoHTTP3
 	}
 	response := s.handler.ServeDNS(req, clientIP, true, protocol)
-	pool.DefaultMessagePool.Put(req)
+	pool.DefaultMessage.Put(req)
 
 	if err := s.respondDOH(w, response); err != nil {
 		log.Errorf("TLS: DoH response failed: %v", err)
 	}
 	if response != nil {
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 	}
 }
 
@@ -167,10 +167,10 @@ func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (msg *d
 		return nil, http.StatusBadRequest
 	}
 
-	req := pool.DefaultMessagePool.Get()
+	req := pool.DefaultMessage.Get()
 	req.Data = buf
 	if err := req.Unpack(); err != nil {
-		pool.DefaultMessagePool.Put(req)
+		pool.DefaultMessage.Put(req)
 		return nil, http.StatusBadRequest
 	}
 

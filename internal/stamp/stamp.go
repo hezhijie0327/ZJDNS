@@ -1,5 +1,5 @@
-// Package stamp implements DNS Stamp (sdns://) parsing for all major DNS
-// protocols as defined by the DNSCrypt project's DNS Stamp specification.
+// Package stamp implements DNS DNSStamp (sdns://) parsing for all major DNS
+// protocols as defined by the DNSCrypt project's DNS DNSStamp specification.
 //
 // Supported protocol IDs:
 //
@@ -24,17 +24,17 @@ import (
 	"strings"
 )
 
-// StampProtoType identifies the DNS protocol encoded in a stamp.
-type StampProtoType uint8
+// ProtoType identifies the DNS protocol encoded in a stamp.
+type ProtoType uint8
 
 // ServerInformalProperties is a bitmask of informal server properties
 // (DNSSEC, NoLog, NoFilter) encoded as a uint64 in the stamp.
 type ServerInformalProperties uint64
 
-// Stamp holds the decoded fields of an sdns:// stamp, following the
+// DNSStamp holds the decoded fields of an sdns:// stamp, following the
 // go-dnsstamps reference implementation.
-type Stamp struct {
-	Proto        StampProtoType           // Protocol identifier
+type DNSStamp struct {
+	Proto        ProtoType                // Protocol identifier
 	Address      string                   // Server address as host:port
 	ProviderName string                   // TLS SNI (DoT/DoQ/DoH), DNSCrypt provider name, or ODoH target host
 	Props        ServerInformalProperties // Bitmask of PropDNSSEC | PropNoLog | PropNoFilter
@@ -44,16 +44,16 @@ type Stamp struct {
 	BootstrapIPs []string                 // Optional bootstrap IP addresses (VLP-encoded)
 }
 
-// Protocol identifiers from the DNS Stamp specification.
+// Protocol identifiers from the DNS DNSStamp specification.
 const (
-	ProtoPlain         = StampProtoType(0x00)
-	ProtoDNSCrypt      = StampProtoType(0x01)
-	ProtoDOH           = StampProtoType(0x02)
-	ProtoDOT           = StampProtoType(0x03)
-	ProtoDOQ           = StampProtoType(0x04)
-	ProtoODoHTarget    = StampProtoType(0x05)
-	ProtoDNSCryptRelay = StampProtoType(0x81)
-	ProtoODoHRelay     = StampProtoType(0x85)
+	ProtoPlain         = ProtoType(0x00)
+	ProtoDNSCrypt      = ProtoType(0x01)
+	ProtoDOH           = ProtoType(0x02)
+	ProtoDOT           = ProtoType(0x03)
+	ProtoDOQ           = ProtoType(0x04)
+	ProtoODoHTarget    = ProtoType(0x05)
+	ProtoDNSCryptRelay = ProtoType(0x81)
+	ProtoODoHRelay     = ProtoType(0x85)
 )
 
 // Property bitmask flags.
@@ -63,7 +63,7 @@ const (
 	PropNoFilter = ServerInformalProperties(1) << 2
 )
 
-// Stamp prefix used in all sdns:// URIs.
+// DNSStamp prefix used in all sdns:// URIs.
 const stampPrefix = "sdns://"
 
 // Default ports for protocols that omit the port in stamps.
@@ -89,7 +89,7 @@ var (
 
 // parsePlainDNS parses a Plain DNS stamp payload (protocol 0x00).
 // Format: [addr_len:1][addr]
-func Parse(stampStr string) (*Stamp, error) {
+func Parse(stampStr string) (*DNSStamp, error) {
 	if !strings.HasPrefix(stampStr, stampPrefix) {
 		return nil, ErrNotAStamp
 	}
@@ -103,12 +103,12 @@ func Parse(stampStr string) (*Stamp, error) {
 		return nil, ErrTooShort
 	}
 
-	proto := StampProtoType(bin[0])
-	var s *Stamp
+	proto := ProtoType(bin[0])
+	var s *DNSStamp
 
 	switch proto {
 	case ProtoPlain:
-		s = &Stamp{Proto: proto}
+		s = &DNSStamp{Proto: proto}
 		if len(bin) < 1+8+1+1 { // proto + props + addrLen(1) + minAddr(1)
 			return nil, ErrTooShort
 		}
@@ -117,7 +117,7 @@ func Parse(stampStr string) (*Stamp, error) {
 			return nil, err
 		}
 	case ProtoDNSCrypt:
-		s = &Stamp{Proto: proto}
+		s = &DNSStamp{Proto: proto}
 		if len(bin) < 66 {
 			return nil, ErrTooShort
 		}
@@ -126,7 +126,7 @@ func Parse(stampStr string) (*Stamp, error) {
 			return nil, err
 		}
 	case ProtoDOH:
-		s = &Stamp{Proto: proto}
+		s = &DNSStamp{Proto: proto}
 		if len(bin) < 15 {
 			return nil, ErrTooShort
 		}
@@ -135,7 +135,7 @@ func Parse(stampStr string) (*Stamp, error) {
 			return nil, err
 		}
 	case ProtoDOT:
-		s = &Stamp{Proto: proto}
+		s = &DNSStamp{Proto: proto}
 		if len(bin) < 13 {
 			return nil, ErrTooShort
 		}
@@ -144,7 +144,7 @@ func Parse(stampStr string) (*Stamp, error) {
 			return nil, err
 		}
 	case ProtoDOQ:
-		s = &Stamp{Proto: proto}
+		s = &DNSStamp{Proto: proto}
 		if len(bin) < 13 {
 			return nil, ErrTooShort
 		}
@@ -153,7 +153,7 @@ func Parse(stampStr string) (*Stamp, error) {
 			return nil, err
 		}
 	case ProtoODoHTarget:
-		s = &Stamp{Proto: proto}
+		s = &DNSStamp{Proto: proto}
 		if len(bin) < 12 {
 			return nil, ErrTooShort
 		}
@@ -162,7 +162,7 @@ func Parse(stampStr string) (*Stamp, error) {
 			return nil, err
 		}
 	case ProtoDNSCryptRelay:
-		s = &Stamp{Proto: proto}
+		s = &DNSStamp{Proto: proto}
 		if len(bin) < 9 {
 			return nil, ErrTooShort
 		}
@@ -170,7 +170,7 @@ func Parse(stampStr string) (*Stamp, error) {
 			return nil, err
 		}
 	case ProtoODoHRelay:
-		s = &Stamp{Proto: proto}
+		s = &DNSStamp{Proto: proto}
 		if len(bin) < 13 {
 			return nil, ErrTooShort
 		}
@@ -188,7 +188,7 @@ func Parse(stampStr string) (*Stamp, error) {
 // ProtoToConfig maps a stamp protocol ID to the corresponding config protocol
 // string. Returns "" for protocol types that have no direct config mapping
 // (relays, ODoH target).
-func ProtoToConfig(stampProto StampProtoType) string {
+func ProtoToConfig(stampProto ProtoType) string {
 	switch stampProto {
 	case ProtoPlain:
 		return "udp"
@@ -214,7 +214,7 @@ func ProtoToConfig(stampProto StampProtoType) string {
 // BuildDoHURL constructs the full https:// URL from the stamp's DoH fields.
 // Address supplies host:port; ProviderName optionally overrides the host;
 // Path provides the HTTP endpoint (defaults to /dns-query).
-func (s *Stamp) BuildDoHURL() string {
+func (s *DNSStamp) BuildDoHURL() string {
 	host, port, err := net.SplitHostPort(s.Address)
 	if err != nil {
 		return "https://" + s.Address + "/dns-query"

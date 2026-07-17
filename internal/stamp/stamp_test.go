@@ -417,7 +417,7 @@ func TestParseTooShort(t *testing.T) {
 
 func TestProtoToConfig(t *testing.T) {
 	tests := []struct {
-		proto StampProtoType
+		proto ProtoType
 		want  string
 	}{
 		{ProtoPlain, "udp"},
@@ -428,7 +428,7 @@ func TestProtoToConfig(t *testing.T) {
 		{ProtoODoHTarget, "odoh"},
 		{ProtoDNSCryptRelay, "dnscrypt-relay"},
 		{ProtoODoHRelay, "odoh-relay"},
-		{StampProtoType(0xFF), ""},
+		{ProtoType(0xFF), ""},
 	}
 
 	for _, tt := range tests {

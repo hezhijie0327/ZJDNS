@@ -30,8 +30,8 @@ type Client struct {
 	dohClient  *eHTTP.Client
 	doh3Client *http.Client
 
-	dotPool  *pool.Pool
-	quicPool *pool.QUICPool
+	dotPool  *pool.ConnPool
+	quicPool *pool.QUIC
 
 	sessionCache eTLS.ClientSessionCache
 
@@ -55,8 +55,8 @@ func New(
 	tlsClient *dns.Client,
 	dohClient *eHTTP.Client,
 	doh3Client *http.Client,
-	dotPool *pool.Pool,
-	quicPool *pool.QUICPool,
+	dotPool *pool.ConnPool,
+	quicPool *pool.QUIC,
 	sessionCache eTLS.ClientSessionCache,
 	getProxy func(*config.UpstreamServer) *socks5.Dialer,
 	timeout time.Duration,
@@ -194,14 +194,12 @@ func (c *Client) WarmUpTLS(ctx context.Context, server *config.UpstreamServer) {
 	dotConfig := c.eTLSClientConfig(server).Clone()
 	dotConfig.NextProtos = config.NextProtoDOT
 	if c.dotPool != nil {
-		pc, err := c.dotPool.Acquire(ctx, key, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+		if err := c.dotPool.WarmUp(ctx, key, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			return c.dialTLSConn(dialCtx, addr, dotConfig, proxyDialer)
-		})
-		if err != nil {
+		}); err != nil {
 			log.Debugf("UPSTREAM: pre-warm DoT to %s: %v", server.Address, err)
 			return
 		}
-		_ = pc
 		log.Debugf("UPSTREAM: pre-warmed DoT connection to %s", server.Address)
 	}
 }
@@ -216,7 +214,7 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 	dialTLS := c.stdTLSConfig(server).Clone()
 	dialTLS.NextProtos = config.NextProtoDOQ
 	if c.quicPool != nil {
-		_, err := c.quicPool.Acquire(ctx, poolKey, func(dialCtx context.Context, addr string) (*quic.Conn, error) {
+		if err := c.quicPool.WarmUp(ctx, poolKey, func(dialCtx context.Context, addr string) (*quic.Conn, error) {
 			timeoutCtx, cancel := context.WithTimeout(dialCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
 			if proxyDialer != nil {
@@ -231,8 +229,7 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 				return quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig("doq:"+addr, dialTLS.InsecureSkipVerify))
 			}
 			return quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig("doq:"+addr, dialTLS.InsecureSkipVerify))
-		})
-		if err != nil {
+		}); err != nil {
 			log.Debugf("UPSTREAM: pre-warm DoQ to %s: %v", server.Address, err)
 			return
 		}
@@ -241,7 +238,7 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 }
 
 // WarmUpHTTPS pre-creates a DoH transport.
-func (c *Client) WarmUpHTTPS(ctx context.Context, server *config.UpstreamServer) {
+func (c *Client) WarmUpHTTPS(_ context.Context, server *config.UpstreamServer) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		log.Debugf("UPSTREAM: pre-warm DoH parse %s: %v", server.Address, err)
@@ -257,7 +254,7 @@ func (c *Client) WarmUpHTTPS(ctx context.Context, server *config.UpstreamServer)
 }
 
 // WarmUpHTTP3 pre-creates a DoH3 transport.
-func (c *Client) WarmUpHTTP3(ctx context.Context, server *config.UpstreamServer) {
+func (c *Client) WarmUpHTTP3(_ context.Context, server *config.UpstreamServer) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		log.Debugf("UPSTREAM: pre-warm DoH3 parse %s: %v", server.Address, err)

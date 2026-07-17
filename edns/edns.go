@@ -15,6 +15,14 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// DNSHandler is the interface protocol listeners use to dispatch incoming
+// DNS queries.  Defined here (rather than in server/handler) to avoid an
+// import cycle: server/protocol/dnscrypt → server/handler → server/resolver
+// → server/upstream → server/upstream/dnscrypt → server/protocol/dnscrypt.
+type DNSHandler interface {
+	ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg
+}
+
 // Handler manages EDNS(0) options for outgoing DNS queries and response
 // parsing.
 type Handler struct {

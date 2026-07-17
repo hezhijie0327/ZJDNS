@@ -12,16 +12,16 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// ResponseMiddleware is the outermost middleware.  It applies EDNS options
+// Response is the outermost middleware.  It applies EDNS options
 // (ECS, Cookie, EDE, padding, TCP keepalive) to the final response and
 // restores the original qname if it was rewritten by a zone rule.
 // It always runs — for short-circuited and freshly resolved responses alike.
-type ResponseMiddleware struct {
+type Response struct {
 	edns handler.EDNSHandler
 }
 
 // Wrap implements Middleware.
-func (m *ResponseMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		err := next.ServeDNS(ctx, qctx)
 
@@ -34,11 +34,11 @@ func (m *ResponseMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandle
 	})
 }
 
-func (m *ResponseMiddleware) finalizeResponse(qctx *handler.QueryContext) {
+func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 	msg := qctx.Res
 	req := qctx.Req
 
-	// Parse ECS if EDNSMiddleware didn't run (early short-circuit).
+	// Parse ECS if EDNS didn't run (early short-circuit).
 	ecsOpt := qctx.ECSOpt
 	if ecsOpt == nil {
 		ecsOpt = m.edns.ParseFromDNS(req)
@@ -68,7 +68,7 @@ func (m *ResponseMiddleware) finalizeResponse(qctx *handler.QueryContext) {
 	}
 }
 
-func (m *ResponseMiddleware) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.IP) string {
+func (m *Response) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.IP) string {
 	if m.edns == nil || cookieOpt == nil {
 		return ""
 	}
@@ -101,7 +101,7 @@ func (m *ResponseMiddleware) generateCookieStr(cookieOpt *edns.CookieOption, cli
 	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 }
 
-func (m *ResponseMiddleware) restoreDomain(msg *dns.Msg, currentName, originalName string) {
+func (m *Response) restoreDomain(msg *dns.Msg, currentName, originalName string) {
 	if msg == nil || strings.EqualFold(currentName, originalName) {
 		return
 	}

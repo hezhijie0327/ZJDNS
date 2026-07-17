@@ -9,18 +9,13 @@ import (
 	"net"
 	"net/http"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
-	"codeberg.org/miekg/dns"
 	"gitee.com/Trisia/gotlcp/dtlcp"
 	"gitee.com/Trisia/gotlcp/tlcp"
 )
-
-// DNSHandler is the interface for processing incoming DNS queries.
-type DNSHandler interface {
-	ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg
-}
 
 // Server manages TLCP-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
@@ -28,7 +23,7 @@ type Server struct {
 	dohPort        string
 	dohEndpoint    string
 	dtlcpPort      string
-	handler        DNSHandler
+	handler        edns.DNSHandler
 	tlcpConfig     *tlcp.Config
 	dtlcpConfig    *dtlcp.Config
 	ctx            context.Context
@@ -101,8 +96,8 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 
 // Start launches all TLCP protocol listeners and blocks until all servers have
 // exited or an error occurs.
-func (s *Server) Start(handler DNSHandler) error {
-	s.handler = handler
+func (s *Server) Start(dnsHandler edns.DNSHandler) error {
+	s.handler = dnsHandler
 
 	if s.dotPort != "" {
 		if err := s.startDOTServer(); err != nil {

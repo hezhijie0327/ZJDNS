@@ -7,6 +7,7 @@ package ruleset
 import (
 	"database/sql"
 	"net"
+	"os"
 	"strings"
 	"zjdns/config"
 	"zjdns/internal/log"
@@ -35,9 +36,8 @@ func New(db RuleSetStorage) *Engine {
 	return &Engine{db: db, tags: make(map[string]bool)}
 }
 
-// LoadRules stores RuleSet configurations into SQLite and caches IP CIDR rules
-// in memory. Rules are reloaded from config on every startup — SQLite is the
-// authoritative store; the in-memory IP cache is rebuilt from the same source.
+// LoadRules stores RuleSet configurations into SQLite.  Rules are reloaded
+// from config on every startup — SQLite is the authoritative store.
 func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 	tx, err := e.db.BeginTx()
 	if err != nil {
@@ -51,19 +51,7 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 
 	for _, rs := range rulesets {
 		for _, v := range rs.Rule {
-			if rs.Type == "ip" {
-				if _, _, err := net.ParseCIDR(v); err != nil {
-					continue
-				}
-			}
-			key := v
-			if rs.Type == "domain" {
-				key = domainKey(v)
-			}
-			if _, err := tx.Exec(
-				`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
-				rs.Tag, rs.Type, key,
-			); err != nil {
+			if err := insertRule(tx, rs.Tag, rs.Type, v); err != nil {
 				return err
 			}
 		}
@@ -73,19 +61,7 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 				return err
 			}
 			for _, line := range lines {
-				if rs.Type == "ip" {
-					if _, _, err := net.ParseCIDR(line); err != nil {
-						continue
-					}
-				}
-				key := line
-				if rs.Type == "domain" {
-					key = domainKey(line)
-				}
-				if _, err := tx.Exec(
-					`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
-					rs.Tag, rs.Type, key,
-				); err != nil {
+				if err := insertRule(tx, rs.Tag, rs.Type, line); err != nil {
 					return err
 				}
 			}
@@ -104,12 +80,10 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 }
 
 // Match returns all tags that match the given query name and client IP.
-// All matching uses SQLite with PK-optimised index seeks (PK is
-// (type, tag, value), so WHERE type=? is a prefix seek).
 func (e *Engine) Match(qname, ip string) map[string]bool {
 	var tags map[string]bool
 
-	// Domain: TLD+1 suffix lookup — PK prefix seek on type='domain'.
+	// Domain: TLD+1 suffix lookup.
 	key := tldPlusOne(qname)
 	var tag string
 	if err := e.db.SQLQueryRow(
@@ -120,7 +94,7 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 		tags[tag] = true
 	}
 
-	// IP: load all CIDR rules — PK prefix seek on type='ip'.
+	// IP: load all CIDR rules.
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {
 		return tags
@@ -174,7 +148,7 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 		return false, false
 	}
 	if !e.HasIPTag(tag) {
-		return false, true // tag exists but has no IP rules
+		return false, true
 	}
 
 	parsedIP := net.ParseIP(ip)
@@ -213,8 +187,33 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Domain helpers (kept from original domain.go — no longer a separate type)
+// Helpers
 // ---------------------------------------------------------------------------
+
+// insertRule validates and inserts a single ruleset entry into a transaction.
+// For IP rules it validates the CIDR; for domain rules it normalises to a
+// TLD+1 key before insertion.
+func insertRule(tx *sql.Tx, tag, typ, value string) error {
+	if typ == "ip" {
+		if _, _, err := net.ParseCIDR(value); err != nil {
+			return nil //nolint:nilerr // invalid CIDRs are skipped, same as original continue
+		}
+	}
+	key := value
+	if typ == "domain" {
+		key = domainKey(value)
+	}
+	_, err := tx.Exec(
+		`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
+		tag, typ, key,
+	)
+	return err
+}
+
+// readFile reads a file from disk.  The path comes from config, not user input.
+func readFile(path string) ([]byte, error) {
+	return os.ReadFile(path) //nolint:gosec // G304: path from config, not user input
+}
 
 // readDomainFile reads a line-delimited domain file, skipping comments.
 func readDomainFile(path string) ([]string, error) {

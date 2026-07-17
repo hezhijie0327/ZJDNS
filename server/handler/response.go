@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"net"
 	"zjdns/cache"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
@@ -14,7 +13,7 @@ import (
 // It sets the QR bit, copies the question section, and fills in
 // Authoritative=false and RecursionAvailable=true.
 func BuildResponseMsg(req *dns.Msg) *dns.Msg {
-	msg := pool.DefaultMessagePool.Get()
+	msg := pool.DefaultMessage.Get()
 
 	if req != nil && len(req.Question) > 0 {
 		dnsutil.SetReply(msg, req)
@@ -28,7 +27,7 @@ func BuildResponseMsg(req *dns.Msg) *dns.Msg {
 	return msg
 }
 
-// buildCacheEntryResponse builds a DNS response from a cache entry, applying
+// BuildCacheEntryResponse builds a DNS response from a cache entry, applying
 // TTL deduction for fresh entries or cyclical stale-TTL for expired entries.
 // When isExpired is true, the caller should set qctx.EDE after calling.
 func BuildCacheEntryResponse(req *dns.Msg, entry *cache.Entry, dnssecOK, isExpired bool) *dns.Msg {
@@ -51,12 +50,4 @@ func BuildCacheEntryResponse(req *dns.Msg, entry *cache.Entry, dnssecOK, isExpir
 	}
 
 	return msg
-}
-
-// copyIP returns a deep copy of ip, allocating a new backing array.
-func CopyIP(ip net.IP) net.IP {
-	if ip == nil {
-		return nil
-	}
-	return append(net.IP(nil), ip...)
 }

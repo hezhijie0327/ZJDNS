@@ -10,18 +10,18 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// DNS64Middleware synthesises AAAA records from A-record answers when the
+// DNS64 synthesises AAAA records from A-record answers when the
 // original AAAA query returned no answer records and DNS64 is configured.
 // It wraps the Resolution middleware — after resolution completes, it
 // checks if DNS64 synthesis is needed and performs a secondary A lookup.
-type DNS64Middleware struct {
+type DNS64 struct {
 	synthesizer *dns64.Synthesizer
 	resolver    handler.Resolver
 	pending     *handler.PendingRequests
 }
 
 // Wrap implements Middleware.
-func (m *DNS64Middleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Let resolution complete first.
 		err := next.ServeDNS(ctx, qctx)

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
+	"zjdns/edns"
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -19,11 +20,6 @@ import (
 	"codeberg.org/miekg/dns/rdata"
 	"github.com/cloudflare/circl/sign/ed25519"
 )
-
-// DNSHandler is the interface for processing decrypted DNS queries.
-type DNSHandler interface {
-	ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg
-}
 
 // keyEntry holds a pair of classical and PQ certificates for one key window.
 type keyEntry struct {
@@ -35,7 +31,7 @@ type keyEntry struct {
 type Server struct {
 	keys []keyEntry // [current, previous, ...], newest first
 
-	handler        DNSHandler
+	handler        edns.DNSHandler
 	port           string
 	providerName   string
 	certificateCfg *config.DNSCryptCertificate
@@ -146,7 +142,7 @@ func buildResolverConfig(certificateCfg *config.DNSCryptCertificate, providerNam
 }
 
 // Start begins listening for DNSCrypt queries on UDP and TCP.
-func (s *Server) Start(handler DNSHandler) error {
+func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -154,7 +150,7 @@ func (s *Server) Start(handler DNSHandler) error {
 		return ErrServerAlreadyStarted
 	}
 
-	s.handler = handler
+	s.handler = dnsHandler
 	s.started = true
 
 	udpAddrs, err := zdnsutil.ResolveBindAddrs("udp", s.port)

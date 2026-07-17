@@ -141,7 +141,7 @@ func resolveStamp(server *UpstreamServer, index int, category string) error {
 
 // protocolMatchesStamp checks whether the user-specified protocol string is
 // compatible with the stamp's protocol ID.
-func protocolMatchesStamp(userProto string, stampProto zstamp.StampProtoType) bool {
+func protocolMatchesStamp(userProto string, stampProto zstamp.ProtoType) bool {
 	switch stampProto {
 	case zstamp.ProtoPlain:
 		return userProto == ProtoUDP || userProto == ProtoTCP

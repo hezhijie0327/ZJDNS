@@ -77,13 +77,13 @@ func (c *Client) exchangeOverTLS(ctx context.Context, msg *dns.Msg, addr string,
 	if _, err := msg.WriteTo(tlsConn); err != nil {
 		return nil, err
 	}
-	response := pool.DefaultMessagePool.Get()
+	response := pool.DefaultMessage.Get()
 	if _, err := response.ReadFrom(tlsConn); err != nil {
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 		return nil, err
 	}
 	if err := response.Unpack(); err != nil {
-		pool.DefaultMessagePool.Put(response)
+		pool.DefaultMessage.Put(response)
 		return nil, err
 	}
 	return response, nil

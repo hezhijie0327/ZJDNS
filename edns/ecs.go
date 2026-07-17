@@ -46,17 +46,6 @@ func (h *Handler) ParseFromDNS(msg *dns.Msg) *ECSOption {
 	return nil
 }
 
-// DefaultECS returns the default ECS option, preferring IPv4 over IPv6.
-func (h *Handler) DefaultECS() *ECSOption {
-	if h == nil {
-		return nil
-	}
-	if ecs := h.defaultECSIPv4.Load(); ecs != nil {
-		return ecs
-	}
-	return h.defaultECSIPv6.Load()
-}
-
 // ECSForQType returns the default ECS option appropriate for the given
 // query type.
 func (h *Handler) ECSForQType(qtype uint16) *ECSOption {

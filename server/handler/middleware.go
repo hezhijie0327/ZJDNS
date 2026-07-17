@@ -42,7 +42,7 @@ type ZoneEvaluator interface {
 // Middleware wraps a QueryHandler, returning a new QueryHandler that adds
 // pre- or post-processing logic.  Implementations should delegate to
 // next.ServeDNS when they choose not to short-circuit.
-type Middleware interface {
+type Wrapper interface {
 	Wrap(next QueryHandler) QueryHandler
 }
 

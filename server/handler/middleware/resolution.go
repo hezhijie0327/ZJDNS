@@ -8,20 +8,20 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// ResolutionMiddleware is the terminal handler.  It performs upstream or
+// Resolution is the terminal handler.  It performs upstream or
 // recursive DNS resolution via the Resolver interface, with singleflight
 // deduplication of concurrent identical queries (handler.PendingRequests).
 //
-// ResolutionMiddleware is the innermost middleware — it ignores the next
+// Resolution is the innermost middleware — it ignores the next
 // handler and always produces a resolution result.
-type ResolutionMiddleware struct {
+type Resolution struct {
 	resolver handler.Resolver
 	pending  *handler.PendingRequests
 }
 
 // Wrap implements Middleware.  The next handler is ignored — this middleware
 // is terminal.
-func (m *ResolutionMiddleware) Wrap(next handler.QueryHandler) handler.QueryHandler {
+func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Guard against nil resolver.
 		if m.resolver == nil {

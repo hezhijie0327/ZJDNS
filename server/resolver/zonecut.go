@@ -103,7 +103,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	if dsErr != nil {
 		return false, fmt.Errorf("DS query for %s failed: %w", childZone, dsErr)
 	}
-	defer pool.DefaultMessagePool.Put(dsResp)
+	defer pool.DefaultMessage.Put(dsResp)
 
 	dsRecords := dnssec.FindDS(dsResp.Answer)
 	dsRecords = append(dsRecords, dnssec.FindDS(dsResp.Ns)...)
@@ -151,7 +151,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	if dnskeyErr != nil {
 		return false, fmt.Errorf("DNSKEY query for %s failed: %w", childZone, dnskeyErr)
 	}
-	defer pool.DefaultMessagePool.Put(dnskeyResp)
+	defer pool.DefaultMessage.Put(dnskeyResp)
 
 	dnskeyRecords := dnssec.FindDNSKEYs(dnskeyResp.Answer)
 	if len(dnskeyRecords) == 0 {

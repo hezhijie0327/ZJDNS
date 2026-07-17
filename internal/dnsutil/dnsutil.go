@@ -273,3 +273,11 @@ func IsTemporaryError(err error) bool {
 	}
 	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
 }
+
+// CopyIP returns a deep copy of ip, allocating a new backing array.
+func CopyIP(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
+	}
+	return append(net.IP(nil), ip...)
+}

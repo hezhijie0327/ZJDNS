@@ -109,7 +109,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		for task := range writeCh {
 			_ = tlsConn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
 			_, err := tlsConn.Write(task.data)
-			pool.DefaultBufferPool.Put(task.data)
+			pool.DefaultBuffer.Put(task.data)
 			if err != nil {
 				log.Debugf("TLS: write error: %v", err)
 				connCancel()
@@ -155,7 +155,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			return
 		}
 
-		buf := pool.DefaultBufferPool.Get()
+		buf := pool.DefaultBuffer.Get()
 		msgBuf := buf
 		if cap(msgBuf) < int(msgLength) {
 			msgBuf = make([]byte, msgLength)
@@ -164,15 +164,15 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		}
 		_, err = io.ReadFull(reader, msgBuf)
 		if err != nil {
-			pool.DefaultBufferPool.Put(buf)
+			pool.DefaultBuffer.Put(buf)
 			return
 		}
 
-		req := pool.DefaultMessagePool.Get()
+		req := pool.DefaultMessage.Get()
 		req.Data = msgBuf
 		if err := req.Unpack(); err != nil {
-			pool.DefaultMessagePool.Put(req)
-			pool.DefaultBufferPool.Put(buf)
+			pool.DefaultMessage.Put(req)
+			pool.DefaultBuffer.Put(buf)
 			continue
 		}
 		// buf must NOT be returned to the pool here: req.Data points into it
@@ -191,8 +191,8 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		select {
 		case workerCap <- struct{}{}:
 		case <-connCtx.Done():
-			pool.DefaultMessagePool.Put(req)
-			pool.DefaultBufferPool.Put(buf)
+			pool.DefaultMessage.Put(req)
+			pool.DefaultBuffer.Put(buf)
 			return
 		}
 
@@ -201,10 +201,10 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			defer func() { <-workerCap }()
 			defer zdnsutil.HandlePanic("DoT query worker")
 			defer wg.Done()
-			defer pool.DefaultMessagePool.Put(query)
+			defer pool.DefaultMessage.Put(query)
 			defer func() {
 				if isPooled {
-					pool.DefaultBufferPool.Put(pooledBuf)
+					pool.DefaultBuffer.Put(pooledBuf)
 				}
 			}()
 
@@ -212,7 +212,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			if response == nil {
 				return
 			}
-			defer pool.DefaultMessagePool.Put(response)
+			defer pool.DefaultMessage.Put(response)
 
 			err := response.Pack()
 			respBuf := response.Data
@@ -221,7 +221,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 				return
 			}
 
-			poolBuf := pool.DefaultBufferPool.Get()
+			poolBuf := pool.DefaultBuffer.Get()
 			// Record whether poolBuf was large enough BEFORE any Put call,
 			// so the error path does not read metadata of a buffer that
 			// may already be reused by another goroutine.
@@ -231,7 +231,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 				writeBuf = poolBuf[:zdnsutil.DNSFramePrefixLen+len(respBuf)]
 			} else {
 				writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+len(respBuf))
-				pool.DefaultBufferPool.Put(poolBuf)
+				pool.DefaultBuffer.Put(poolBuf)
 			}
 			binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
 			copy(writeBuf[zdnsutil.DNSFramePrefixLen:], respBuf)
@@ -240,7 +240,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			case writeCh <- writeTask{data: writeBuf}:
 			case <-connCtx.Done():
 				if poolBufOK {
-					pool.DefaultBufferPool.Put(writeBuf)
+					pool.DefaultBuffer.Put(writeBuf)
 				}
 				// else: poolBuf was already returned, and writeBuf is a
 				// separately allocated slice that will be GC'd.
