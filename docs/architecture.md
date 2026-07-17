@@ -26,42 +26,39 @@ CREATE TABLE entries (
 CREATE INDEX idx_entries_expires_ts ON entries(expires_at, timestamp);
 CREATE INDEX idx_entries_timestamp ON entries(timestamp);
 
--- Request journal: one row per miss/stale/zone/error.
-CREATE TABLE request_log (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp       INTEGER NOT NULL,
-    qname           TEXT NOT NULL DEFAULT '',
-    qtype           INTEGER NOT NULL DEFAULT 0,
-    qclass          INTEGER NOT NULL DEFAULT 1,
-    entry_id        INTEGER,              -- NULL for zone/error paths
-    protocol        TEXT NOT NULL,
-    result          TEXT NOT NULL,
-    response_time_ms INTEGER NOT NULL DEFAULT 0,
-    rcode           INTEGER NOT NULL DEFAULT 0,
-    server          TEXT NOT NULL DEFAULT '',
-    hijack          INTEGER NOT NULL DEFAULT 0,
-    fallback        INTEGER NOT NULL DEFAULT 0,
-    dnssec_status   TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX idx_request_log_ts ON request_log(timestamp);
-
--- Hit counters: aggregated per-entry+protocol+rcode.  last_hit_time enables
--- time-based aging — PruneQueryJournal deletes counters untouched for >7 days.
-CREATE TABLE entry_hit_counters (
-    entry_id          INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-    protocol          TEXT NOT NULL,
-    rcode             INTEGER NOT NULL DEFAULT 0,
-    hit_count         INTEGER NOT NULL DEFAULT 0,
-    total_response_ms INTEGER NOT NULL DEFAULT 0,
-    last_hit_time     INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (entry_id, protocol, rcode)
+-- Query statistics: per-day aggregated counters for all results.  Auto-pruned
+-- by config.DefaultQueryJournalRetention.  Stats() reads this single table.
+CREATE TABLE query_stats (
+    stat_day    INTEGER NOT NULL,   -- unixepoch() / 86400
+    result      TEXT NOT NULL,      -- 'hit','miss','stale','zone','error','blocked','badcookie'
+    protocol    TEXT NOT NULL,
+    rcode       INTEGER NOT NULL DEFAULT 0,
+    dnssec      TEXT NOT NULL DEFAULT '',  -- 'secure','insecure','bogus','' for hits
+    hijack      INTEGER NOT NULL DEFAULT 0,
+    fallback    INTEGER NOT NULL DEFAULT 0,
+    query_count INTEGER NOT NULL DEFAULT 0,
+    total_ms    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (stat_day, result, protocol, rcode, dnssec, hijack, fallback)
 ) WITHOUT ROWID;
 
--- Stats metadata: tracks last cleared request_log.id.
-CREATE TABLE stats_meta (
-    id             INTEGER PRIMARY KEY CHECK (id = 1),
-    cleared_before INTEGER NOT NULL DEFAULT 0
+-- Query log: per-event audit trail for non-hit queries.  qname/qtype/qclass
+-- stored directly (denormalized) — no JOIN needed for debugging.
+CREATE TABLE query_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   INTEGER NOT NULL,
+    qname       TEXT NOT NULL DEFAULT '',
+    qtype       INTEGER NOT NULL DEFAULT 0,
+    qclass      INTEGER NOT NULL DEFAULT 1,
+    protocol    TEXT NOT NULL,
+    result      TEXT NOT NULL,
+    rcode       INTEGER NOT NULL DEFAULT 0,
+    response_ms INTEGER NOT NULL DEFAULT 0,
+    server      TEXT NOT NULL DEFAULT '',
+    hijack      INTEGER NOT NULL DEFAULT 0,
+    fallback    INTEGER NOT NULL DEFAULT 0,
+    dnssec      TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX idx_query_log_ts ON query_log(timestamp);
 
 -- PTR reverse-lookup (IP → domain).
 CREATE TABLE ptr_map (
@@ -99,13 +96,14 @@ CREATE TABLE zone_entries (
 
 ### Key Patterns
 
-- **Cache hit path**: `Get()` decompresses zstd + `Msg.Unpack()` (~0.5ms). Returns entry `ID` so `RecordRequest` can skip `EnsureEntry`.
-- **RecordRequest split**: Hits → `entry_hit_counters` (upsert, no row bloat). Miss/stale/zone/error → `request_log` (denormalized qname/qtype, no JOIN needed). `entry_id` is nullable.
-- **Stats aggregation**: `Stats()` uses 2 single-scan queries with CASE expressions (rcode + dnssec distributions computed inline). `PruneQueryJournal` runs every 6h, deleting querylog rows + stale hit counters older than 7 days, then syncing `cleared_before` so stats reflect the same window.
-- **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. `ON DELETE CASCADE` for ptr_map + hit_counters. Stale ip_latency rows pruned during eviction. Query logs and counters aged out by `PruneQueryJournal` (7-day window).
+- **Cache hit path**: `Get()` decompresses zstd + `Msg.Unpack()` (~0.5ms).
+- **RecordRequest**: All results → `query_stats` (per-day upsert, ~500 row sliding window). Non-hit events also → `query_log` (audit trail with denormalized qname/qtype/qclass, no JOIN needed).
+- **Stats aggregation**: `Stats()` uses a single scan of `query_stats` with CASE expressions (result + protocol + rcode + dnssec + hijack + fallback distributions computed inline). ~500 rows regardless of query volume.
+- **Pruning**: `PruneQueryJournal` runs at `config.DefaultPruneInterval`, deleting `query_stats` rows past `config.DefaultQueryJournalRetention` (PK prefix seek) and `query_log` rows via batched delete (`config.DefaultPruneBatchSize` rows per iteration, using `idx_query_log_ts`). Fallback cleanup via `config.DefaultStaleMaxAge` in `evictOldest`.
+- **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. `ON DELETE CASCADE` for ptr_map. Stale ip_latency + query_log rows pruned during eviction.
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
 - **IP latency**: Per-IP keyed. `INSERT OR REPLACE` writes latency_ms + last_probe_time. All domains sharing a CDN IP reuse the same row.
-- **Dynamic queries**: `Store.Stats()` returns 10 TXT records (overview, hits, errors, rcodes, hijack/fallback, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,latency,zone,ruleset}`.
+- **Dynamic queries**: `Store.Stats()` returns 10 TXT records (overview, hits, errors, rcodes, hijack/fallback, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,querylog,latency,zone,ruleset}`.
 
 ## DNSCrypt v2
 

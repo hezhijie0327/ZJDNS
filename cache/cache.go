@@ -8,10 +8,9 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// RequestRecord captures per-request metadata. Cache hits are upserted into
-// entry_hit_counters; non-hit results (miss/stale/zone/error) insert a row
-// into request_log, providing an audit trail for debugging and the data
-// source for Stats() aggregation.
+// RequestRecord captures per-request metadata. Every request upserts into
+// query_stats (per-day aggregated counters). Non-hit results also insert a
+// row into query_log for the audit trail.
 type RequestRecord struct {
 	Qname        string // normalized FQDN
 	Qtype        uint16

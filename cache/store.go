@@ -351,52 +351,43 @@ func (s *SQLiteCache) evictIfNeeded() {
 	}
 }
 
-// PruneQueryJournal removes request_log rows and entry_hit_counters older than
-// retentionSec (in seconds) and syncs stats_meta.cleared_before to the oldest
-// remaining request_log id.  Runs every 6h via the server background ticker.
+// PruneQueryJournal removes query_stats rows with stat_day older than the
+// retention window (config.DefaultQueryJournalRetention) and query_log rows
+// with timestamp older than retentionSec.  Called periodically via the server
+// background ticker (config.DefaultPruneInterval).
 //
-// request_log deletion is batched (10000 rows per iteration) to avoid holding a
-// write transaction open for too long on busy servers with millions of stale rows.
+// query_stats uses the PK prefix (stat_day is the leading column) for efficient
+// range deletion.  query_log deletion is batched (config.DefaultPruneBatchSize
+// rows per iteration) to avoid holding a write transaction open too long on
+// busy servers.
 func (s *SQLiteCache) PruneQueryJournal(retentionSec int64) (int64, error) {
 	batchSize := int64(config.DefaultPruneBatchSize)
+	dayCutoff := log.NowUnix()/86400 - retentionSec/86400
 
+	// query_stats: single DELETE using PK prefix seek (stat_day is leading column).
 	var totalDeleted int64
+	qsResult, err := s.db.SQ.Exec(`DELETE FROM query_stats WHERE stat_day < ?`, dayCutoff)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup query_stats: %w", err)
+	}
+	qsN, _ := qsResult.RowsAffected()
+	totalDeleted += qsN
+
+	// query_log: batched DELETE to avoid long write transactions under heavy load.
 	for {
 		result, err := s.db.SQ.Exec(
-			`DELETE FROM request_log WHERE rowid IN (`+
-				`SELECT rowid FROM request_log WHERE timestamp < unixepoch() - ? LIMIT ?`+
+			`DELETE FROM query_log WHERE rowid IN (`+
+				`SELECT rowid FROM query_log WHERE timestamp < unixepoch() - ? LIMIT ?`+
 				`)`, retentionSec, batchSize,
 		)
 		if err != nil {
-			return totalDeleted, fmt.Errorf("cleanup request_log: %w", err)
+			return totalDeleted, fmt.Errorf("cleanup query_log: %w", err)
 		}
 		n, _ := result.RowsAffected()
 		totalDeleted += n
 		if n < batchSize {
 			break
 		}
-	}
-
-	// Sync cleared_before only when rows were actually removed.
-	if totalDeleted > 0 {
-		if _, err := s.db.SQ.Exec(
-			`UPDATE stats_meta SET cleared_before = COALESCE((SELECT MIN(id) FROM request_log), 0) WHERE id = 1`,
-		); err != nil {
-			return totalDeleted, fmt.Errorf("cleanup stats_meta: %w", err)
-		}
-	}
-
-	// Clean up hit counters that haven't been touched within the retention
-	// window — they belong to cache entries that no longer exist or are no
-	// longer being queried.
-	result, err := s.db.SQ.Exec(
-		`DELETE FROM entry_hit_counters WHERE last_hit_time < unixepoch() - ?`, retentionSec,
-	)
-	if err != nil {
-		log.Warnf("CACHE: cleanup entry_hit_counters: %v", err)
-	} else {
-		n, _ := result.RowsAffected()
-		totalDeleted += n
 	}
 
 	return totalDeleted, nil
@@ -413,7 +404,7 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 	// All three use the same staleMaxAge cutoff — batched into a single Exec.
 	if _, err := tx.Exec(
 		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < unixepoch() - ?;`+
-			`DELETE FROM request_log WHERE timestamp < unixepoch() - ?`,
+			`DELETE FROM query_log WHERE timestamp < unixepoch() - ?`,
 		defaultStaleMaxAge, defaultStaleMaxAge,
 	); err != nil {
 		log.Debugf("CACHE: stale cleanup failed (non-fatal): %v", err)

@@ -18,7 +18,7 @@ func (s *Server) startBackgroundTasks() {
 	s.startECSRefresh()
 	s.startPrefetchCooldownCleanup()
 	s.startTCPWriteMuSweep()
-	s.startRequestLogCleanup()
+	s.startQueryJournalCleanup()
 	s.setupSignalHandling()
 }
 
@@ -113,22 +113,22 @@ func (s *Server) startTCPWriteMuSweep() {
 	})
 }
 
-// startRequestLogCleanup periodically removes old request_log rows and stale
-// entry_hit_counters to prevent unbounded disk growth. Runs every 6 hours with
-// a 7-day retention window.
-func (s *Server) startRequestLogCleanup() {
+// startQueryJournalCleanup periodically removes stale query_stats and query_log
+// rows to prevent unbounded disk growth.  Interval and retention are controlled
+// by config.DefaultPruneInterval and config.DefaultQueryJournalRetention.
+func (s *Server) startQueryJournalCleanup() {
 	if s.handler == nil || s.handler.CacheStore() == nil {
 		return
 	}
-	s.runBackgroundTicker("request_log cleanup", 6*time.Hour, func() {
+	s.runBackgroundTicker("query journal cleanup", config.DefaultPruneInterval, func() {
 		store := s.handler.CacheStore()
 		n, err := store.PruneQueryJournal(config.DefaultQueryJournalRetention)
 		if err != nil {
-			log.Warnf("CACHE: request_log cleanup failed: %v", err)
+			log.Warnf("CACHE: query journal cleanup failed: %v", err)
 			return
 		}
 		if n > 0 {
-			log.Debugf("CACHE: cleaned up %d stale rows (querylog + counters), synced stats", n)
+			log.Debugf("CACHE: cleaned up %d stale rows (query_stats + query_log)", n)
 		}
 	})
 }

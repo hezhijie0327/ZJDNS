@@ -36,6 +36,7 @@ var migrations = []migration{
 	{"3.3.5", "normalize protocol identifiers in request_log and entry_hit_counters", migrateV3_3_5},
 	{"3.4.6", "reorder ruleset_entries PK to (type, tag, value) for index-seek queries", migrateV3_4_6},
 	{"3.4.18", "add last_hit_time to entry_hit_counters for time-based cleanup", migrateV3_4_18},
+	{"3.4.19", "query-stats-sliding-window", migrateV3_4_19},
 }
 
 func migrateV3_2_17(db *DB) error {
@@ -230,6 +231,22 @@ func (db *DB) runMigrations() error {
 			Version,
 		); err != nil {
 			return fmt.Errorf("update version to %s: %w", Version, err)
+		}
+	}
+	return nil
+}
+
+// migrateV3_4_19 drops the old stats tables (entry_hit_counters, request_log,
+// stats_meta). The new tables (query_stats, query_log) are created by the base
+// DDL which runs before migrations on every startup.
+func migrateV3_4_19(db *DB) error {
+	for _, sql := range []string{
+		`DROP TABLE IF EXISTS entry_hit_counters`,
+		`DROP TABLE IF EXISTS request_log`,
+		`DROP TABLE IF EXISTS stats_meta`,
+	} {
+		if _, err := db.SQ.Exec(sql); err != nil {
+			return err
 		}
 	}
 	return nil

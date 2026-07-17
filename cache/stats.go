@@ -14,10 +14,10 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// RecordRequest logs a request outcome. Hit path upserts hit counters; miss/
-// stale/zone/error/blocked paths insert a log row with qname/qtype/qclass stored
-// directly (denormalized) so no JOIN is needed for debugging queries. entry_id is
-// set when available (cache-backed paths); NULL otherwise.
+// RecordRequest logs a request outcome. Every request upserts a row into
+// query_stats (per-day aggregated counters). Non-hit results (miss/stale/zone/
+// error/blocked/badcookie) also insert a row into query_log for the audit trail.
+// Hits are only in query_stats — they don't need per-event detail.
 func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	if s.db.IsClosed() {
 		return
@@ -25,27 +25,17 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 
 	r.Qname = zdnsutil.NormalizeDomain(r.Qname)
 
-	if r.Result == "hit" {
-		entryID := r.EntryID
-		if entryID <= 0 {
-			// Fallback: lookup entry by key (zone/error-in-hit-clothing, test helpers).
-			// Does NOT create stub entries.
-			ecsAddr, ecsPrefix := ecsParams(r.ECS)
-			dnssecInt := zdnsutil.BoolToInt(r.DNSSECOK)
-			entryID = s.db.EnsureEntry(r.Qname, int(r.Qtype), int(r.Qclass), ecsAddr, ecsPrefix, dnssecInt)
-		}
-		_, _ = s.db.StmtHitCounter.Exec(entryID, r.Protocol, r.Rcode, r.ResponseTime)
-		return
-	}
+	// Always upsert into query_stats.
+	_, _ = s.db.StmtQueryStats.Exec(r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, zdnsutil.BoolToInt(r.Hijack), zdnsutil.BoolToInt(r.Fallback), r.ResponseTime)
 
-	entryID := max(r.EntryID,
-		// sentinel for "no cache entry" → stored as 0 (NULL in DB)
-		0)
-	_, _ = s.db.StmtInsertLog.Exec(
-		log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass), entryID,
-		r.Protocol, r.Result, r.ResponseTime, r.Rcode, r.Server,
-		zdnsutil.BoolToInt(r.Hijack), zdnsutil.BoolToInt(r.Fallback), r.DNSSECStatus,
-	)
+	// Non-hit results also go into query_log for the audit trail.
+	if r.Result != "hit" {
+		_, _ = s.db.StmtQueryLog.Exec(
+			log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
+			r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
+			zdnsutil.BoolToInt(r.Hijack), zdnsutil.BoolToInt(r.Fallback), r.DNSSECStatus,
+		)
+	}
 }
 
 // ReverseLookup returns all cached domain names mapped to the given IP address.
@@ -91,7 +81,7 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	return results
 }
 
-// FlushDB truncates a single table: "stats" (resets stats_meta.cleared_before),
+// FlushDB truncates a single table: "stats" (query_stats), "querylog" (query_log),
 // "cache" (entries), "latency" (ip_latency),
 // "zone" (zone_entries), or "ruleset" (ruleset_entries).
 func (s *SQLiteCache) FlushDB(target string) (int64, error) {
@@ -102,23 +92,14 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	var err error
 	switch target {
 	case "stats":
-		var tx *sql.Tx
-		tx, err = s.db.SQ.Begin()
-		if err != nil {
-			return 0, fmt.Errorf("flushDB stats begin tx: %w", err)
-		}
-		defer func() { _ = tx.Rollback() }()
-		if _, err = tx.Exec(`DELETE FROM entry_hit_counters`); err != nil {
-			return 0, fmt.Errorf("flushDB stats: %w", err)
-		}
-		result, err = tx.Exec(
-			`UPDATE stats_meta SET cleared_before = (SELECT COALESCE(MAX(id), 0) FROM request_log) WHERE id = 1`,
-		)
+		result, err = s.db.SQ.Exec(`DELETE FROM query_stats`)
 		if err != nil {
 			return 0, fmt.Errorf("flushDB stats: %w", err)
 		}
-		if err = tx.Commit(); err != nil {
-			return 0, fmt.Errorf("flushDB stats commit: %w", err)
+	case "querylog":
+		result, err = s.db.SQ.Exec(`DELETE FROM query_log`)
+		if err != nil {
+			return 0, fmt.Errorf("flushDB querylog: %w", err)
 		}
 	case "cache":
 		result, err = s.db.SQ.Exec(`DELETE FROM entries`)
@@ -142,8 +123,7 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	return n, nil
 }
 
-// Clear truncates all tables: entries, request_log, entry_hit_counters, ip_latency,
-// and resets stats_meta.
+// Clear truncates all tables: entries, query_stats, query_log, ip_latency.
 func (s *SQLiteCache) Clear() (int64, error) {
 	n1, err := s.FlushDB("cache")
 	if err != nil {
@@ -153,27 +133,22 @@ func (s *SQLiteCache) Clear() (int64, error) {
 	if err != nil {
 		return n1, err
 	}
-	n3, err := s.FlushDB("latency")
+	n3, err := s.FlushDB("querylog")
 	if err != nil {
 		return n1 + n2, err
 	}
-	// Clear request_log, entry_hit_counters, and reset stats_meta.
-	_, _ = s.db.SQ.Exec(`DELETE FROM entry_hit_counters`)
-	result, err := s.db.SQ.Exec(`DELETE FROM request_log`)
+	n4, err := s.FlushDB("latency")
 	if err != nil {
-		return n1 + n2 + n3, fmt.Errorf("clear request_log: %w", err)
+		return n1 + n2 + n3, err
 	}
-	n4, _ := result.RowsAffected()
-	_, _ = s.db.SQ.Exec(`UPDATE stats_meta SET cleared_before = 0 WHERE id = 1`)
 	return n1 + n2 + n3 + n4, nil
 }
 
 // Stats returns aggregated cache statistics as formatted TXT records.
 //
-// Uses two SQL queries (down from five): one scan of entry_hit_counters and one
-// scan of request_log. Rcode and DNSSEC distributions are computed as extra CASE
-// columns in the same scans, eliminating the old standalone UNION ALL and GROUP BY
-// queries that re-scanned both tables.
+// Uses a single scan of query_stats — the per-day aggregated table.  query_stats
+// is bounded at ~500 rows (DefaultQueryJournalRetention × ~72 combinations/day), so Stats() is O(1)
+// regardless of query volume.
 func (s *SQLiteCache) Stats() []string {
 	if s.db.IsClosed() {
 		return nil
@@ -181,127 +156,67 @@ func (s *SQLiteCache) Stats() []string {
 
 	entries := s.db.EntryCount()
 
-	var avgMs float64
 	var total, hits, misses, stales, zones, errCount, blockedCount, badcookieCount int64
-	var hcUDP, hcTCP, hcTLS, hcQUIC, hcHTTPS, hcHTTP3, hcDTLS, hcDNSCrypt, hcDNSCryptTCP, hcTLCP, hcHTTPTLCP, hcDTLCP int64
-	var rlUDP, rlTCP, rlTLS, rlQUIC, rlHTTPS, rlHTTP3, rlDTLS, rlDNSCrypt, rlDNSCryptTCP, rlTLCP, rlHTTPTLCP, rlDTLCP int64
-	var hijack, fallback, totalMS, hitTotalMS int64
-	var hcNoerr, hcFormerr, hcServfail, hcNxdomain, hcNotimp, hcRefused, hcOther int64
-	var rlNoerr, rlFormerr, rlServfail, rlNxdomain, rlNotimp, rlRefused, rlOther int64
-	var secureCount, insecureCount, bogusCount int64
+	var udp, tcp, tls, quic, https, http3, dtls, dnscrypt, dnscryptTCP, tlcp, httpTLCP, dtlcp int64
+	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
+	var secureCount, insecureCount, bogusCount, hijack, fallback int64
+	var totalMS int64
 
-	// Query 1: single scan of entry_hit_counters — protocol breakdown + rcode distribution + totals.
+	// Single scan of query_stats — result+protocol+rcode breakdown + totals.
 	_ = s.db.SQ.QueryRow(
-		"SELECT COALESCE(SUM(hit_count), 0),"+
-			// protocol breakdown
-			" COALESCE(SUM(CASE WHEN protocol='udp' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='tcp' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='tls' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='quic' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='https' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='http3' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dtls' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dnscrypt' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dnscrypt-tcp' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='tlcp' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='http-tlcp' THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dtlcp' THEN hit_count ELSE 0 END), 0),"+
-			// rcode distribution (was a separate UNION ALL query)
-			" COALESCE(SUM(CASE WHEN rcode=0 THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=1 THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=2 THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=3 THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=4 THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=5 THEN hit_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode NOT IN (0,1,2,3,4,5) THEN hit_count ELSE 0 END), 0),"+
-			// total response time
-			" COALESCE(SUM(total_response_ms), 0)"+
-			" FROM entry_hit_counters",
-	).Scan(&hits,
-		&hcUDP, &hcTCP, &hcTLS, &hcQUIC, &hcHTTPS, &hcHTTP3, &hcDTLS, &hcDNSCrypt, &hcDNSCryptTCP, &hcTLCP, &hcHTTPTLCP, &hcDTLCP,
-		&hcNoerr, &hcFormerr, &hcServfail, &hcNxdomain, &hcNotimp, &hcRefused, &hcOther,
-		&hitTotalMS,
-	)
-
-	// Query 2: single scan of request_log — result+protocol breakdown + rcode + DNSSEC + misc.
-	_ = s.db.SQ.QueryRow(
-		"SELECT COUNT(*),"+
+		"SELECT COALESCE(SUM(query_count), 0),"+
 			// result breakdown
-			" COALESCE(SUM(CASE WHEN result='miss' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='stale' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='zone' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='error' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='blocked' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='badcookie' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='hit' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='miss' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='stale' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='zone' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='error' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='blocked' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN result='badcookie' THEN query_count ELSE 0 END), 0),"+
 			// protocol breakdown
-			" COALESCE(SUM(CASE WHEN protocol='udp' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='tcp' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='tls' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='quic' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='https' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='http3' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dtls' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dnscrypt' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dnscrypt-tcp' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='tlcp' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='http-tlcp' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dtlcp' THEN 1 ELSE 0 END), 0),"+
-			// rcode distribution (was a separate UNION ALL query)
-			" COALESCE(SUM(CASE WHEN rcode=0 THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=1 THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=2 THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=3 THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=4 THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=5 THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode NOT IN (0,1,2,3,4,5) THEN 1 ELSE 0 END), 0),"+
-			// DNSSEC status (was a separate GROUP BY query)
-			" COALESCE(SUM(CASE WHEN dnssec_status='"+config.DNSSECStatusSecure+"' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN dnssec_status='"+config.DNSSECStatusInsecure+"' THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN dnssec_status='"+config.DNSSECStatusBogus+"' THEN 1 ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='udp' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='tcp' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='tls' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='quic' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='https' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='http3' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dtls' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dnscrypt' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dnscrypt-tcp' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='tlcp' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='http-tlcp' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN protocol='dtlcp' THEN query_count ELSE 0 END), 0),"+
+			// rcode distribution
+			" COALESCE(SUM(CASE WHEN rcode=0 THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN rcode=1 THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN rcode=2 THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN rcode=3 THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN rcode=4 THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN rcode=5 THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN rcode NOT IN (0,1,2,3,4,5) THEN query_count ELSE 0 END), 0),"+
+			// DNSSEC (non-hit only; hits always have dnssec='')
+			" COALESCE(SUM(CASE WHEN dnssec='"+config.DNSSECStatusSecure+"' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN dnssec='"+config.DNSSECStatusInsecure+"' THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN dnssec='"+config.DNSSECStatusBogus+"' THEN query_count ELSE 0 END), 0),"+
 			// misc
-			" COALESCE(SUM(CASE WHEN hijack THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN fallback THEN 1 ELSE 0 END), 0),"+
-			" COALESCE(SUM(response_time_ms), 0)"+
-			" FROM request_log WHERE id > (SELECT cleared_before FROM stats_meta)",
+			" COALESCE(SUM(CASE WHEN hijack THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN fallback THEN query_count ELSE 0 END), 0),"+
+			// total response time
+			" COALESCE(SUM(total_ms), 0)"+
+			" FROM query_stats",
 	).Scan(
 		&total,
-		&misses, &stales, &zones, &errCount, &blockedCount, &badcookieCount,
-		&rlUDP, &rlTCP, &rlTLS, &rlQUIC, &rlHTTPS, &rlHTTP3, &rlDTLS, &rlDNSCrypt, &rlDNSCryptTCP, &rlTLCP, &rlHTTPTLCP, &rlDTLCP,
-		&rlNoerr, &rlFormerr, &rlServfail, &rlNxdomain, &rlNotimp, &rlRefused, &rlOther,
+		&hits, &misses, &stales, &zones, &errCount, &blockedCount, &badcookieCount,
+		&udp, &tcp, &tls, &quic, &https, &http3, &dtls, &dnscrypt, &dnscryptTCP, &tlcp, &httpTLCP, &dtlcp,
+		&noerr, &formerr, &servfail, &nxdomain, &notimp, &refused, &other,
 		&secureCount, &insecureCount, &bogusCount,
-		&hijack, &fallback, &totalMS,
+		&hijack, &fallback,
+		&totalMS,
 	)
 
-	total += hits
-
-	udp := hcUDP + rlUDP
-	tcp := hcTCP + rlTCP
-
-	tls := hcTLS + rlTLS
-	quic := hcQUIC + rlQUIC
-	https := hcHTTPS + rlHTTPS
-	http3 := hcHTTP3 + rlHTTP3
-	dtls := hcDTLS + rlDTLS
-
-	dnscrypt := hcDNSCrypt + rlDNSCrypt
-	dnscryptTCP := hcDNSCryptTCP + rlDNSCryptTCP
-
-	tlcp := hcTLCP + rlTLCP
-	httpTLCP := hcHTTPTLCP + rlHTTPTLCP
-	dtlcp := hcDTLCP + rlDTLCP
-
-	// Rcode sums — combine hit counters and request log.
-	noerr := hcNoerr + rlNoerr
-	formerr := hcFormerr + rlFormerr
-	servfail := hcServfail + rlServfail
-	nxdomain := hcNxdomain + rlNxdomain
-	notimp := hcNotimp + rlNotimp
-	refused := hcRefused + rlRefused
-	other := hcOther + rlOther
-
-	// Average across all request types (hit + miss + stale + zone + error).
+	var avgMs float64
 	if total > 0 {
-		avgMs = float64(totalMS+hitTotalMS) / float64(total)
+		avgMs = float64(totalMS) / float64(total)
 	}
 
 	return []string{
@@ -313,16 +228,16 @@ func (s *SQLiteCache) Stats() []string {
 			errCount, blockedCount, badcookieCount),
 		fmt.Sprintf("noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d",
 			noerr, formerr, servfail, nxdomain, notimp, refused, other),
-		fmt.Sprintf("hijack=%d fallback=%d",
-			hijack, fallback),
 		fmt.Sprintf("udp=%d tcp=%d",
 			udp, tcp),
-		fmt.Sprintf("tls=%d quic=%d https=%d http3=%d, dtls=%d",
+		fmt.Sprintf("tls=%d quic=%d https=%d http3=%d dtls=%d",
 			tls, quic, https, http3, dtls),
 		fmt.Sprintf("dnscrypt=%d dnscrypt-tcp=%d",
 			dnscrypt, dnscryptTCP),
 		fmt.Sprintf("tlcp=%d http-tlcp=%d dtlcp=%d",
 			tlcp, httpTLCP, dtlcp),
+		fmt.Sprintf("hijack=%d fallback=%d",
+			hijack, fallback),
 		fmt.Sprintf("secure=%d insecure=%d bogus=%d",
 			secureCount, insecureCount, bogusCount),
 	}

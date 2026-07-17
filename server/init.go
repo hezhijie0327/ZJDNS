@@ -68,6 +68,8 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule) {
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("cache") }, "flushed")
 		case config.DefaultProjectName + ".db.clear.stats":
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("stats") }, "reset")
+		case config.DefaultProjectName + ".db.clear.querylog":
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("querylog") }, "flushed")
 		case config.DefaultProjectName + ".db.clear.latency":
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("latency") }, "flushed")
 		case config.DefaultProjectName + ".db.clear.zone":

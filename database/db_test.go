@@ -68,11 +68,11 @@ func TestPreparedStatements(t *testing.T) {
 	if db.StmtEntry == nil {
 		t.Error("StmtEntry is nil")
 	}
-	if db.StmtInsertLog == nil {
-		t.Error("StmtInsertLog is nil")
+	if db.StmtQueryLog == nil {
+		t.Error("StmtQueryLog is nil")
 	}
-	if db.StmtHitCounter == nil {
-		t.Error("StmtHitCounter is nil")
+	if db.StmtQueryStats == nil {
+		t.Error("StmtQueryStats is nil")
 	}
 	if db.StmtInsertLatency == nil {
 		t.Error("StmtInsertLatency is nil")
@@ -80,9 +80,7 @@ func TestPreparedStatements(t *testing.T) {
 	if db.StmtLastProbe == nil {
 		t.Error("StmtLastProbe is nil")
 	}
-	if db.StmtEnsureEntry == nil {
-		t.Error("StmtEnsureEntry is nil")
-	}
+
 	if db.StmtZoneExact == nil {
 		t.Error("StmtZoneExact is nil")
 	}
@@ -111,19 +109,6 @@ func TestEntryCount(t *testing.T) {
 	db.SetEntryCount(10)
 	if db.EntryCount() != 10 {
 		t.Errorf("EntryCount after SetEntryCount(10) = %d, want 10", db.EntryCount())
-	}
-}
-
-func TestEnsureEntry_NotFound(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
-	if err != nil {
-		t.Fatalf("Open error: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	id := db.EnsureEntry("example.com", 1, 1, "", 0, 0)
-	if id != 0 {
-		t.Errorf("EnsureEntry for non-existent entry = %d, want 0", id)
 	}
 }
 

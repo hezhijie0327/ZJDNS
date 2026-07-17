@@ -39,8 +39,9 @@ const (
 	DefaultCacheMaxOpenConns = 4 // SQLite WAL: single writer, readers served concurrently
 	DefaultCacheMaxIdleConns = 2
 
-	DefaultQueryJournalRetention = 7 * 86400 // 7 days in seconds — auto-cleanup window
-	DefaultPruneBatchSize        = 10000     // rows per iteration during prune
+	DefaultQueryJournalRetention = 3 * 86400     // seconds — auto-cleanup window for query_stats + query_log
+	DefaultPruneInterval         = 1 * time.Hour // interval between PruneQueryJournal runs
+	DefaultPruneBatchSize        = 10000         // rows per iteration during prune
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30

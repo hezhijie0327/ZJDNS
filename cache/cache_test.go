@@ -267,7 +267,7 @@ func TestSet_Get_NSAddrTXT(t *testing.T) {
 	}
 }
 
-// ── RecordRequest (request_log table) ──────────────────────────────────────
+// ── RecordRequest (query_stats + query_log) ──────────────────────────────
 
 func TestRecordRequest_Hit(t *testing.T) {
 	mc := testStore()
@@ -287,16 +287,16 @@ func TestRecordRequest_Hit(t *testing.T) {
 	var protocol string
 	var hitCount int64
 	err := mc.db.SQ.QueryRow(
-		"SELECT hc.protocol, hc.hit_count FROM entry_hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='example.com'",
+		"SELECT protocol, query_count FROM query_stats WHERE result='hit'",
 	).Scan(&protocol, &hitCount)
 	if err != nil {
-		t.Fatalf("hit_counters query: %v", err)
+		t.Fatalf("query_counters query: %v", err)
 	}
 	if protocol != "udp" {
 		t.Errorf("protocol = %s, want udp", protocol)
 	}
 	if hitCount != 1 {
-		t.Errorf("hit_count = %d, want 1", hitCount)
+		t.Errorf("query_count = %d, want 1", hitCount)
 	}
 }
 
@@ -317,10 +317,10 @@ func TestRecordRequest_Stale(t *testing.T) {
 
 	var protocol, result string
 	err := mc.db.SQ.QueryRow(
-		"SELECT protocol, result FROM request_log WHERE qname='example.com'",
+		"SELECT protocol, result FROM query_log WHERE qname='example.com'",
 	).Scan(&protocol, &result)
 	if err != nil {
-		t.Fatalf("request_log query: %v", err)
+		t.Fatalf("query_log query: %v", err)
 	}
 	if protocol != "tcp" {
 		t.Errorf("protocol = %s, want tcp", protocol)
@@ -343,10 +343,10 @@ func TestRecordRequest_MultipleResults(t *testing.T) {
 
 	var udpHits, dohHits int64
 	err := mc.db.SQ.QueryRow(
-		"SELECT COALESCE(SUM(CASE WHEN protocol='udp' THEN hit_count ELSE 0 END), 0), COALESCE(SUM(CASE WHEN protocol='https' THEN hit_count ELSE 0 END), 0) FROM entry_hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='example.com'",
+		"SELECT COALESCE(SUM(CASE WHEN protocol='udp' THEN query_count ELSE 0 END), 0), COALESCE(SUM(CASE WHEN protocol='https' THEN query_count ELSE 0 END), 0) FROM query_stats WHERE result='hit'",
 	).Scan(&udpHits, &dohHits)
 	if err != nil {
-		t.Fatalf("hit_counters query: %v", err)
+		t.Fatalf("query_counters query: %v", err)
 	}
 	if udpHits != 2 {
 		t.Errorf("udp hits = %d, want 2", udpHits)
@@ -367,10 +367,10 @@ func TestRecordRequest_Zone(t *testing.T) {
 
 	var count int64
 	err := mc.db.SQ.QueryRow(
-		"SELECT COUNT(*) FROM request_log WHERE qname='blocked.com' AND result='zone'",
+		"SELECT COUNT(*) FROM query_log WHERE qname='blocked.com' AND result='zone'",
 	).Scan(&count)
 	if err != nil {
-		t.Fatalf("request_log query: %v", err)
+		t.Fatalf("query_log query: %v", err)
 	}
 	if count != 2 {
 		t.Errorf("zone count = %d, want 2", count)
@@ -549,10 +549,10 @@ func TestRecordRequest_Error(t *testing.T) {
 	var rcode, respTime int
 	var server string
 	err := mc.db.SQ.QueryRow(
-		"SELECT protocol, result, rcode, response_time_ms, server FROM request_log WHERE qname='error.example.com'",
+		"SELECT protocol, result, rcode, response_ms, server FROM query_log WHERE qname='error.example.com'",
 	).Scan(&protocol, &result, &rcode, &respTime, &server)
 	if err != nil {
-		t.Fatalf("request_log query: %v", err)
+		t.Fatalf("query_log query: %v", err)
 	}
 	if result != "error" {
 		t.Errorf("result = %s, want error", result)
@@ -673,9 +673,9 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		t.Errorf("authority count = %d, want 2 (SOA+NSEC)", len(entry.Authority))
 	}
 
-	// ── Phase 4: Verify request_log has error record ────────────────────────
+	// ── Phase 4: Verify query_log has error record ────────────────────────
 	var errCount int64
-	_ = mc.db.SQ.QueryRow("SELECT COUNT(*) FROM request_log WHERE qname='error.example.com' AND result='error'").Scan(&errCount)
+	_ = mc.db.SQ.QueryRow("SELECT COUNT(*) FROM query_log WHERE qname='error.example.com' AND result='error'").Scan(&errCount)
 	if errCount != 1 {
 		t.Errorf("error log count = %d, want 1", errCount)
 	}
@@ -690,15 +690,15 @@ func TestE2E_FullLifecycle(t *testing.T) {
 
 	var udpHits, dohHits, doqStale int64
 	err = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(SUM(CASE WHEN hc.protocol='udp' THEN hc.hit_count ELSE 0 END), 0),
-		        COALESCE(SUM(CASE WHEN hc.protocol='https' THEN hc.hit_count ELSE 0 END), 0)
-		 FROM entry_hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='www.example.com'`,
+		`SELECT COALESCE(SUM(CASE WHEN protocol='udp' THEN query_count ELSE 0 END), 0),
+		        COALESCE(SUM(CASE WHEN protocol='https' THEN query_count ELSE 0 END), 0)
+		 FROM query_stats WHERE result='hit'`,
 	).Scan(&udpHits, &dohHits)
 	_ = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0) FROM request_log WHERE qname='www.example.com' AND result='stale'`,
+		`SELECT COALESCE(COUNT(*), 0) FROM query_log WHERE qname='www.example.com' AND result='stale'`,
 	).Scan(&doqStale)
 	if err != nil {
-		t.Fatalf("request_log query: %v", err)
+		t.Fatalf("query_log query: %v", err)
 	}
 	if udpHits != 2 {
 		t.Errorf("udp hits = %d, want 2", udpHits)
@@ -712,11 +712,11 @@ func TestE2E_FullLifecycle(t *testing.T) {
 
 	var gitTCP, gitStale int64
 	_ = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(SUM(CASE WHEN hc.protocol='tcp' THEN hc.hit_count ELSE 0 END), 0)
-		 FROM entry_hit_counters hc JOIN entries e ON hc.entry_id = e.id WHERE e.qname='github.com'`,
+		`SELECT COALESCE(SUM(CASE WHEN protocol='tcp' THEN query_count ELSE 0 END), 0)
+		 FROM query_stats WHERE result='hit'`,
 	).Scan(&gitTCP)
 	_ = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0) FROM request_log WHERE qname='github.com' AND result='stale'`,
+		`SELECT COALESCE(COUNT(*), 0) FROM query_log WHERE qname='github.com' AND result='stale'`,
 	).Scan(&gitStale)
 	if gitTCP != 1 {
 		t.Errorf("github.com tcp hit = %d, want 1", gitTCP)
@@ -786,7 +786,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	var rwCount int64
-	_ = mc.db.SQ.QueryRow(`SELECT COUNT(*) FROM request_log WHERE qname='zone.test' AND result='zone'`).Scan(&rwCount)
+	_ = mc.db.SQ.QueryRow(`SELECT COUNT(*) FROM query_log WHERE qname='zone.test' AND result='zone'`).Scan(&rwCount)
 	if rwCount != 3 {
 		t.Errorf("zone_count = %d, want 3", rwCount)
 	}
@@ -930,7 +930,7 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 	var total, udp, tcp int64
 	mc.RecordRequest(&RequestRecord{Qname: "host-00.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, ECS: nil, DNSSECOK: false, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 	mc.RecordRequest(&RequestRecord{Qname: "host-01.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, ECS: nil, DNSSECOK: false, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
-	_ = mc.db.SQ.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN protocol='udp' THEN hit_count ELSE 0 END),0), COALESCE(SUM(CASE WHEN protocol='tcp' THEN hit_count ELSE 0 END),0) FROM entry_hit_counters`).Scan(&total, &udp, &tcp)
+	_ = mc.db.SQ.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN protocol='udp' THEN query_count ELSE 0 END),0), COALESCE(SUM(CASE WHEN protocol='tcp' THEN query_count ELSE 0 END),0) FROM query_stats WHERE result='hit'`).Scan(&total, &udp, &tcp)
 	if total != 2 {
 		t.Errorf("total hit counter rows = %d, want 2", total)
 	}

@@ -12,21 +12,20 @@ func (db *DB) prepareStatements() error {
 	if err != nil {
 		return err
 	}
-	db.StmtInsertLog, err = db.SQ.Prepare(
-		`INSERT INTO request_log (timestamp, qname, qtype, qclass, entry_id, protocol, result,
-			response_time_ms, rcode, server, hijack, fallback, dnssec_status)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
+	db.StmtQueryLog, err = db.SQ.Prepare(
+		`INSERT INTO query_log (timestamp, qname, qtype, qclass, protocol, result,
+			rcode, response_ms, server, hijack, fallback, dnssec)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
 	)
 	if err != nil {
 		return err
 	}
-	db.StmtHitCounter, err = db.SQ.Prepare(
-		`INSERT INTO entry_hit_counters (entry_id, protocol, rcode, hit_count, total_response_ms, last_hit_time)
-		 VALUES (?1, ?2, ?3, 1, ?4, unixepoch())
-		 ON CONFLICT(entry_id, protocol, rcode) DO UPDATE
-		 SET hit_count = entry_hit_counters.hit_count + 1,
-		     total_response_ms = entry_hit_counters.total_response_ms + ?4,
-		     last_hit_time = unixepoch()`,
+	db.StmtQueryStats, err = db.SQ.Prepare(
+		`INSERT INTO query_stats (stat_day, result, protocol, rcode, dnssec, hijack, fallback, query_count, total_ms)
+		 VALUES (unixepoch() / 86400, ?1, ?2, ?3, ?4, ?5, ?6, 1, ?7)
+		 ON CONFLICT(stat_day, result, protocol, rcode, dnssec, hijack, fallback) DO UPDATE
+		 SET query_count = query_stats.query_count + 1,
+		     total_ms = query_stats.total_ms + ?7`,
 	)
 	if err != nil {
 		return err
@@ -44,17 +43,6 @@ func (db *DB) prepareStatements() error {
 	if err != nil {
 		return err
 	}
-	// EnsureEntry fallback — only triggered when RecordRequest has no pre-resolved EntryID
-	// (zone/error/badcookie paths in production, plus test helpers).
-	db.StmtEnsureEntry, err = db.SQ.Prepare(
-		`SELECT id FROM entries
-		 WHERE qname = ? AND qtype = ? AND qclass = ?
-		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
-	)
-	if err != nil {
-		return err
-	}
-
 	// Zone statements.
 	db.StmtZoneExact, err = db.SQ.Prepare(
 		`SELECT rcode, answer, authority, additional, match_tags

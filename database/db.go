@@ -39,11 +39,10 @@ type DB struct {
 
 	// Cache prepared statements
 	StmtEntry         *sql.Stmt
-	StmtInsertLog     *sql.Stmt
-	StmtHitCounter    *sql.Stmt
+	StmtQueryLog      *sql.Stmt
+	StmtQueryStats    *sql.Stmt
 	StmtInsertLatency *sql.Stmt
 	StmtLastProbe     *sql.Stmt
-	StmtEnsureEntry   *sql.Stmt // fallback for RecordRequest when EntryID <= 0
 
 	// Zone prepared statements
 	StmtZoneExact    *sql.Stmt
@@ -133,8 +132,8 @@ func (db *DB) Close() error {
 		return nil
 	}
 	for _, stmt := range []*sql.Stmt{
-		db.StmtEntry, db.StmtInsertLog, db.StmtHitCounter,
-		db.StmtInsertLatency, db.StmtLastProbe, db.StmtEnsureEntry,
+		db.StmtEntry, db.StmtQueryLog, db.StmtQueryStats,
+		db.StmtInsertLatency, db.StmtLastProbe,
 	} {
 		if stmt != nil {
 			_ = stmt.Close()
@@ -187,18 +186,6 @@ func (db *DB) ExecWrite(fn func() error) error {
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 	return fn()
-}
-
-// EnsureEntry returns the entry ID for the given cache key. Used as a
-// fallback by RecordRequest when no pre-resolved EntryID is available
-// (zone/error paths, tests). Unlike the old version, this does NOT create
-// stub entries — it returns 0 if no matching entry exists.
-func (db *DB) EnsureEntry(qname string, qtype, qclass int, ecsAddr string, ecsPrefix, dnssecInt int) int64 {
-	var id int64
-	_ = db.StmtEnsureEntry.QueryRow(
-		qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt,
-	).Scan(&id)
-	return id
 }
 
 // MaxEntries returns the maximum cache entries before eviction.

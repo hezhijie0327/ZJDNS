@@ -303,7 +303,7 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `Handler` | `edns` | EDNS option parsing/construction, ECS, Cookie, EDE, Padding |
 | `DB` | `database` | Unified SQLite DB: goroutine-safe `*sql.DB`, schema migration, 12 prepared stmts, SQLExec/SQLQueryRow/SQLQuery for consumer interfaces | Connection pool with WAL mode |
 | `Options` | `database` | SQLite PRAGMA config: `MMapSizeMB`, `CacheSizeMB` | |
-| `Store` | `cache` | Interface: Get/Set(int64)/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
+| `Store` | `cache` | Interface: Get/Set(int64)/RecordRequest/ReverseLookup/FlushDB/Clear/PruneQueryJournal/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
 | `Entry` | `cache` | Cached DNS response: ID, Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `Handler` | `server/handler` | Thin adapter: creates `QueryContext`, delegates to middleware chain via `ServeDNS` |
@@ -375,8 +375,8 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **ECS types in config**: `config.ECSOption`, `edns.ECSOption` is a type alias. Same for `handler.Question = resolver.Question`.
 - **Pending request dedup**: Singleflight coalescing of concurrent identical cache misses in `ResolutionMiddleware`. Leader resolves, followers wait for shared result.
 - **Upstream `no_cache` flag**: Per-server opt-out from cache population for untrusted upstreams.
-- **RecordRequest split**: Hits → `entry_hit_counters` (upsert), misses/errors → `request_log` (insert). Denormalized qname/qtype for debug queries.
-- **Prepared statements**: Hot-path SQL pre-compiled at init (entry get, log insert, latency upsert).
+- **RecordRequest split**: All results → `query_stats` (per-day upsert, ~500 row sliding window). Non-hit events also → `query_log` (audit trail). Denormalized qname/qtype for debug queries.
+- **Prepared statements**: Hot-path SQL pre-compiled at init (entry get, query stats upsert, query log insert, latency upsert).
 - **sdns:// stamps**: `normalizeStamps()` resolves stamps at load time, 8 protocol types. `internal/stamp` is zero-dependency.
 - **eHTTP/eTLS aliases** enforced by `importas`. Internal packages use `z`-prefixed aliases (`zdnsutil`, `zlog`, etc.).
 
@@ -384,8 +384,8 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full schema SQL and key patterns. Summary:
 - `entries` — DNS response cache (zstd-compressed wire format)
-- `request_log` — miss/stale/zone/error query journal
-- `entry_hit_counters` — aggregated cache hit counters
+- `query_stats` — per-day aggregated stats (sliding window via DefaultQueryJournalRetention)
+- `query_log` — per-event audit journal for non-hit queries
 - `ptr_map` — IP→domain reverse lookup
 - `ip_latency` — per-IP latency measurements
 - `zone_entries` — zone rule responses (same DB file)
