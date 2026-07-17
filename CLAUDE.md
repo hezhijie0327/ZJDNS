@@ -209,7 +209,7 @@ Layer 4 (server sub-packages — import domain + internal, never server/ parent)
   server/protocol/tls → config, dnsutil, log, pool
   server/protocol/tlcp → config, dnsutil, log, pool
   server/protocol/dnscrypt → config, dnsutil, log, pool
-  server/handler → cache, config, edns, dnsutil, log, pool, zone, server/resolver
+  server/handler → cache, config, edns, dnsutil, log, pool, zone, server/resolver (middleware chain + QueryContext)
 
 Top layer (wiring):
   server → all domain + all server sub-packages
@@ -222,18 +222,24 @@ Top layer (wiring):
 - `server/` sub-packages never import the `server/` parent.
 - No circular dependencies — the graph is a DAG enforced by the compiler.
 
-### Query Pipeline (`server/handler/handler.go:processDNSQuery`)
-1. Request validation (domain/label length, ANY/AXFR/IXFR rejection)
-2. `zone.Evaluator.Evaluate()` — synthetic response if zone rule matches
-3. `edns.Handler` — extract ECS, DNS Cookie
-4. Early DNS Cookie validation (RFC 7873/9018) — initial handshake (empty ServerCookie) allowed; short (1–15 bytes) → BADCOOKIE; 16 bytes → SipHash-2-4 cryptographic validation with timestamp check (expired >1h / future >5min → BADCOOKIE; valid → echo back; >30min → reissue)
-5. `cache.Store.Get()` — hit → serve (with ruleset tag filtering); miss → resolve
-6. **Pending request dedup** (`pending.go`): Same-key concurrent queries coalesce — only the first reaches the resolver; followers block and receive the identical result. Closes the cache-poisoning race window.
-7. **DNS64** (RFC 6147) — after AAAA returns NODATA, issue A sub-query and synthesize AAAA records via `dns64.Synthesizer.MapAddr`
-8. `Resolver.Query()` — upstream (first-win) or recursive
-9. `Guard` — DNSSEC validation + hijack detection (UDP→TCP fallback)
-10. `ruleset.Engine` — SQLite-backed tag matching (domain TLD+1 lookup + CIDR via net.IPNet); upstream match filtering — filter A/AAAA; all filtered → REFUSED + EDE
-11. Cache population, latency probes, response with server cookie
+### Query Pipeline (Middleware Chain)
+
+Queries flow through a composable middleware chain assembled once at startup in `server/handler/chain.go:AssembleChain`. Each middleware wraps the next; any layer may short-circuit by setting `qctx.Res`.
+
+Execution order (outermost → innermost):
+
+1. `ResponseMiddleware` — EDNS / Cookie / EDE finalisation, domain restoration
+2. `CacheStoreMiddleware` — cache write, request logging, latency probe; stale fallback on error
+3. `ValidationMiddleware` — domain length / label / ANY-AXFR-IXFR rejection
+4. `ZoneMiddleware` — zone rule evaluation, synthetic response on match
+5. `EDNSMiddleware` — ECS parsing, DNS Cookie validation (RFC 7873/9018)
+6. `CacheLookupMiddleware` — cache lookup: fresh→serve, stale→serve+refresh, miss→delegate
+7. `PTRMiddleware` — reverse PTR lookup from cache (cache-miss only)
+8. `RulesetMiddleware` — CIDR-based A/AAAA record filtering
+9. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
+10. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive resolution with singleflight dedup
+
+All layers share a mutable `QueryContext` that carries request/response state, EDNS options, cache metadata, and coordination flags.
 
 ### Query Routing (`server/resolver`)
 - Upstream + fallback queried concurrently via `errgroup`; first NOERROR wins
@@ -270,8 +276,11 @@ Top layer (wiring):
 | `Store` | `cache` | Interface: Get/Set(int64)/RecordRequest/ReverseLookup/FlushDB/Clear/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
 | `Entry` | `cache` | Cached DNS response: ID, Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
-| `Handler` | `server/handler` | DNS query processing pipeline; owns `BackgroundConfig`, `LatencyProber` |
-| `BackgroundConfig` | `server/handler` | Groups RefreshGroup/RefreshCtx/Ctx lifecycle params |
+| `Handler` | `server/handler` | Thin adapter: creates `QueryContext`, delegates to middleware chain via `ServeDNS` |
+| `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` — each middleware and the terminal resolver implement this |
+| `Middleware` | `server/handler` | Interface: `Wrap(next QueryHandler) QueryHandler` — composable onion-skin chain |
+| `QueryContext` | `server/handler` | Mutable struct carrying all request state through the chain |
+| `Dependencies` | `server/handler` | DI bundle for `AssembleChain` — resolver, cache, edns, zone, prober, lifecycle |
 | `LatencyProber` | `server/handler` | Interface: Start(qname, qtype, answer, ...) — latency-probes A/AAAA records and updates latency_ms |
 | `Server` | `server/protocol/tls` | TLS listeners (DoT, DoQ, DoH, DoH3, DTLS) |
 | `Server` | `server/protocol/tlcp` | TLCP/DTLCP listeners: DoT and DoH over TLCP (TCP), DTLCP (GM/T 0128-2023). Uses SM2 dual certificates. |
@@ -334,7 +343,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **EDE propagation**: DNSSEC EDE codes stored atomically to survive context cancellation.
 - **Zone rules**: SQLite-backed WITHOUT ROWID, wildcard + exact match in one B-tree. Zone responses bypass cache.
 - **ECS types in config**: `config.ECSOption`, `edns.ECSOption` is a type alias. Same for `handler.Question = resolver.Question`.
-- **Pending request dedup**: Singleflight coalescing of concurrent identical cache misses. Leader resolves, followers wait for shared result.
+- **Pending request dedup**: Singleflight coalescing of concurrent identical cache misses in `ResolutionMiddleware`. Leader resolves, followers wait for shared result.
 - **Upstream `no_cache` flag**: Per-server opt-out from cache population for untrusted upstreams.
 - **RecordRequest split**: Hits → `entry_hit_counters` (upsert), misses/errors → `request_log` (insert). Denormalized qname/qtype for debug queries.
 - **Prepared statements**: Hot-path SQL pre-compiled at init (entry get, log insert, latency upsert).

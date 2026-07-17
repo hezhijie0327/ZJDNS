@@ -16,6 +16,7 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/edns"
+	"zjdns/internal/dns64"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/ruleset"
@@ -167,27 +168,11 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}
 
-	// ── Core: handler + security ──────────────────────────────────────────
+	// ── Core: security ────────────────────────────────────────────────────
 
 	cryptoValidator := dnssec.NewCryptoValidator(cacheStore)
 	hijackDetector := &hijack.Detector{}
 	hijackDetector.Enable(cfg.Server.Features.HijackProtection)
-
-	h := handler.New(
-		cfg, cacheStore, ednsHandler, zoneEvaluator,
-		handler.BackgroundConfig{
-			RefreshGroup: cacheRefreshGroup,
-			RefreshCtx:   cacheRefreshCtx,
-			Ctx:          ctx,
-		},
-	)
-	server.handler = h
-
-	if rulesetEngine != nil {
-		h.SetTagMatcher(func(qname string, ip net.IP) map[string]bool {
-			return rulesetEngine.Match(qname, ip.String())
-		})
-	}
 
 	// ── Outbound: query client ────────────────────────────────────────────
 
@@ -197,7 +182,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 	server.queryClient = queryClient
 
-	// ── Resolution: resolver + upstream config ────────────────────────────
+	// ── Resolution: resolver + upstream config (created before handler) ───
 
 	var cidrMatcher resolver.CIDRMatcher
 	if rulesetEngine != nil {
@@ -210,13 +195,12 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		EDNS:        ednsHandler,
 		CIDRMatcher: cidrMatcher,
 		BuildMsg: func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
-			return h.BuildQueryMessage(q, ecs, rd, secure)
+			return handler.BuildQueryMsg(ednsHandler, q, ecs, rd, secure)
 		},
 		Cache:         cacheStore,
 		DNSSECEnforce: cfg.Server.Features.DNSSECEnforce,
 	})
 	dnsResolver.ConfigureServers(cfg.Upstream, cfg.Fallback)
-	h.SetResolver(dnsResolver)
 
 	if len(cfg.Upstream) > 0 || len(cfg.Fallback) > 0 {
 		allServers := make([]config.UpstreamServer, 0, len(cfg.Upstream)+len(cfg.Fallback))
@@ -224,6 +208,68 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		allServers = append(allServers, cfg.Fallback...)
 		server.queryClient.WarmUpConnections(allServers)
 	}
+
+	// ── Middleware chain assembly ─────────────────────────────────────────
+
+	// Latency prober — created before handler so it can be injected.
+	var prober handler.LatencyProber
+	if len(cfg.Server.Features.LatencyProbe) > 0 {
+		prober = probe.New(
+			cacheStore,
+			func(fn func() error) { server.backgroundGroup.Go(fn) },
+			backgroundCtx,
+			cfg.Server.Features.LatencyProbe,
+		)
+	}
+
+	prefetchCooldown := handler.NewPrefetchCooldown()
+
+	deps := &handler.Dependencies{
+		Config:           cfg,
+		Cache:            cacheStore,
+		EDNS:             ednsHandler,
+		ZoneEvaluator:    zoneEvaluator,
+		TagMatcher:       nil,
+		Resolver:         dnsResolver,
+		Prober:           prober,
+		PendingReqs:      handler.NewPendingRequests(),
+		PendingRefrs:     handler.NewRefreshGroup(),
+		DNS64:            nil, // set below if enabled
+		RulesetEngine:    cidrMatcher,
+		Closed:           func() bool { return false }, // updated after handler creation
+		RefreshGroup:     cacheRefreshGroup,
+		RefreshCtx:       cacheRefreshCtx,
+		Ctx:              ctx,
+		PrefetchCooldown: prefetchCooldown,
+	}
+
+	if rulesetEngine != nil {
+		deps.TagMatcher = func(qname string, ip net.IP) map[string]bool {
+			return rulesetEngine.Match(qname, ip.String())
+		}
+	}
+
+	// DNS64 synthesizer.
+	if cfg.Server.Features.DNS64 != nil && cfg.Server.Features.DNS64.Prefix != "" {
+		synth, err := dns64.New(cfg.Server.Features.DNS64.Prefix)
+		if err != nil {
+			log.Warnf("DNS64: %v, using default prefix", err)
+			synth, _ = dns64.New(config.DefaultDNS64Prefix)
+		}
+		deps.DNS64 = synth
+		log.Infof("DNS64: enabled with prefix %s", synth.Prefix())
+	}
+
+	chain := handler.AssembleChain(deps)
+
+	h := handler.NewHandler(
+		chain, ednsHandler, cacheStore, prober, dnsResolver,
+		cacheRefreshGroup, prefetchCooldown, ctx,
+	)
+	server.handler = h
+
+	// Wire the closed-check callback after handler is created.
+	deps.Closed = h.IsClosed
 
 	// ── Transport listeners ───────────────────────────────────────────────
 
@@ -273,17 +319,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	server.plain = serverplain.New(cfg)
 
-	// ── Observability: probes + pprof ─────────────────────────────────────
-
-	if len(cfg.Server.Features.LatencyProbe) > 0 {
-		prober := probe.New(
-			cacheStore,
-			func(fn func() error) { server.backgroundGroup.Go(fn) },
-			backgroundCtx,
-			cfg.Server.Features.LatencyProbe,
-		)
-		h.SetProber(prober)
-	}
+	// ── Observability: pprof ──────────────────────────────────────────────
 
 	if cfg.Server.Pprof != "" {
 		if err := zdnsutil.TryBind("tcp", "127.0.0.1:"+cfg.Server.Pprof); err != nil {

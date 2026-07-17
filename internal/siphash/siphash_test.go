@@ -6,6 +6,63 @@ import (
 	"testing"
 )
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+// testRNG is a simple deterministic PRNG for repeatable random tests
+// (SplitMix64).
+type testRNG struct{ state uint64 }
+
+// ---------------------------------------------------------------------------
+// Test vectors
+// ---------------------------------------------------------------------------
+
+var (
+	zeroKey = [16]byte{}
+	refKey  = [16]byte{
+		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+		0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+	}
+)
+
+// golden tests from dchest/siphash.
+var golden = []struct {
+	key  *[16]byte
+	msg  []byte
+	want uint64
+}{
+	{&zeroKey, []byte{}, 0x1e924b9d737700d7},
+	{&zeroKey, []byte("Hello world"), 0xc9e8a3021f3822d9},
+	{&zeroKey, []byte("12345678123"), 0xf95d77ccdb0649f},
+	{&zeroKey, make([]byte, 8), 0xe849e8bb6ffe2567},
+	{&zeroKey, make([]byte, 1535), 0xe74d1c0ab64b2afa},
+	{
+		&refKey,
+		[]byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e},
+		0xa129ca6149be45e5,
+	},
+}
+
+// goldenRef is the SipHash reference implementation test vectors (LE byte order).
+// Key = 00 01 02 ... 0f. Messages: empty, {00}, {00,01}, ..., {00..3e}.
+// Each [8]byte is the LE encoding of the uint64 hash.
+var goldenRef = [][]byte{
+	{0x31, 0x0e, 0x0e, 0xdd, 0x47, 0xdb, 0x6f, 0x72}, // len=0
+	{0xfd, 0x67, 0xdc, 0x93, 0xc5, 0x39, 0xf8, 0x74}, // len=1
+	{0x5a, 0x4f, 0xa9, 0xd9, 0x09, 0x80, 0x6c, 0x0d}, // len=2
+	{0x2d, 0x7e, 0xfb, 0xd7, 0x96, 0x66, 0x67, 0x85}, // len=3
+	{0xb7, 0x87, 0x71, 0x27, 0xe0, 0x94, 0x27, 0xcf}, // len=4
+	{0x8d, 0xa6, 0x99, 0xcd, 0x64, 0x55, 0x76, 0x18}, // len=5
+	{0xce, 0xe3, 0xfe, 0x58, 0x6e, 0x46, 0xc9, 0xcb}, // len=6
+	{0x37, 0xd1, 0x01, 0x8b, 0xf5, 0x00, 0x02, 0xab}, // len=7
+	{0x62, 0x24, 0x93, 0x9a, 0x79, 0xf5, 0xf5, 0x93}, // len=8
+}
+
+// ---------------------------------------------------------------------------
+// Reference implementation (test oracle)
+// ---------------------------------------------------------------------------
+
 // referenceSum64 is the previous implementation, kept as a test oracle.
 func referenceSum64(key *[16]byte, msg []byte) uint64 {
 	k0 := binary.LittleEndian.Uint64(key[0:8])
@@ -64,52 +121,29 @@ func sipRoundRef(v0, v1, v2, v3 *uint64) {
 	*v2 = bits.RotateLeft64(*v2, 32)
 }
 
-var (
-	zeroKey = [16]byte{}
-	refKey  = [16]byte{
-		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-		0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-	}
-)
-
-// golden tests from dchest/siphash.
-var golden = []struct {
-	key  *[16]byte
-	msg  []byte
-	want uint64
-}{
-	{&zeroKey, []byte{}, 0x1e924b9d737700d7},
-	{&zeroKey, []byte("Hello world"), 0xc9e8a3021f3822d9},
-	{&zeroKey, []byte("12345678123"), 0xf95d77ccdb0649f},
-	{&zeroKey, make([]byte, 8), 0xe849e8bb6ffe2567},
-	{&zeroKey, make([]byte, 1535), 0xe74d1c0ab64b2afa},
-	{
-		&refKey,
-		[]byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e},
-		0xa129ca6149be45e5,
-	},
-}
-
-// goldenRef is the SipHash reference implementation test vectors (LE byte order).
-// Key = 00 01 02 ... 0f. Messages: empty, {00}, {00,01}, ..., {00..3e}.
-// Each [8]byte is the LE encoding of the uint64 hash.
-var goldenRef = [][]byte{
-	{0x31, 0x0e, 0x0e, 0xdd, 0x47, 0xdb, 0x6f, 0x72}, // len=0
-	{0xfd, 0x67, 0xdc, 0x93, 0xc5, 0x39, 0xf8, 0x74}, // len=1
-	{0x5a, 0x4f, 0xa9, 0xd9, 0x09, 0x80, 0x6c, 0x0d}, // len=2
-	{0x2d, 0x7e, 0xfb, 0xd7, 0x96, 0x66, 0x67, 0x85}, // len=3
-	{0xb7, 0x87, 0x71, 0x27, 0xe0, 0x94, 0x27, 0xcf}, // len=4
-	{0x8d, 0xa6, 0x99, 0xcd, 0x64, 0x55, 0x76, 0x18}, // len=5
-	{0xce, 0xe3, 0xfe, 0x58, 0x6e, 0x46, 0xc9, 0xcb}, // len=6
-	{0x37, 0xd1, 0x01, 0x8b, 0xf5, 0x00, 0x02, 0xab}, // len=7
-	{0x62, 0x24, 0x93, 0x9a, 0x79, 0xf5, 0xf5, 0x93}, // len=8
-}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 // toUint64LE converts 8 bytes (little-endian) to uint64.
 func toUint64LE(b []byte) uint64 {
 	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
 		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
 }
+
+func newTestRNG(seed uint64) *testRNG { return &testRNG{state: seed} }
+
+func (r *testRNG) Uint64() uint64 {
+	r.state += 0x9e3779b97f4a7c15
+	z := r.state
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	return z ^ (z >> 31)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 func TestVectors_Golden(t *testing.T) {
 	for i, g := range golden {
@@ -146,15 +180,15 @@ func TestHash_MatchesSum64(t *testing.T) {
 
 func TestEquivalence_Random(t *testing.T) {
 	rng := newTestRNG(0x9e3779b97f4a7c15)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		var key [16]byte
 		for j := range key {
-			key[j] = byte(rng.Uint64())
+			key[j] = byte(rng.Uint64()) //nolint:gosec // test-only: truncation to byte is intentional
 		}
 		msgLen := int(rng.Uint64() % 256)
 		msg := make([]byte, msgLen)
 		for j := range msg {
-			msg[j] = byte(rng.Uint64())
+			msg[j] = byte(rng.Uint64()) //nolint:gosec // test-only: truncation to byte is intentional
 		}
 
 		got := Sum64(&key, msg)
@@ -183,18 +217,24 @@ func TestCrossCheck_dchest(t *testing.T) {
 	}
 }
 
-// Simple deterministic PRNG for repeatable random tests (SplitMix64).
-type testRNG struct{ state uint64 }
-
-func newTestRNG(seed uint64) *testRNG { return &testRNG{state: seed} }
-
-func (r *testRNG) Uint64() uint64 {
-	r.state += 0x9e3779b97f4a7c15
-	z := r.state
-	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
-	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
-	return z ^ (z >> 31)
+func TestHexDecode(t *testing.T) {
+	// Sanity: verify toUint64LE is consistent with encoding/binary.
+	for i := range 10 {
+		key := make([]byte, 16)
+		for j := range key {
+			key[j] = byte(i + j)
+		}
+		a := binary.LittleEndian.Uint64(key[0:8])
+		b := toUint64LE(key[0:8])
+		if a != b {
+			t.Errorf("toUint64LE mismatch at %d: %016x != %016x", i, a, b)
+		}
+	}
 }
+
+// ---------------------------------------------------------------------------
+// Benchmarks
+// ---------------------------------------------------------------------------
 
 func BenchmarkSum64_8(b *testing.B)    { benchSum64(b, 8) }
 func BenchmarkSum64_64(b *testing.B)   { benchSum64(b, 64) }
@@ -208,20 +248,5 @@ func benchSum64(b *testing.B, size int) {
 	b.ResetTimer()
 	for range b.N {
 		_ = Sum64(&key, msg)
-	}
-}
-
-func TestHexDecode(t *testing.T) {
-	// Sanity: verify toUint64LE is consistent with encoding/binary.
-	for i := range 10 {
-		key := make([]byte, 16)
-		for j := range key {
-			key[j] = byte(i + j)
-		}
-		a := binary.LittleEndian.Uint64(key[0:8])
-		b := toUint64LE(key[0:8])
-		if a != b {
-			t.Errorf("toUint64LE mismatch at %d: %016x != %016x", i, a, b)
-		}
 	}
 }

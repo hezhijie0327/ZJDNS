@@ -6,6 +6,7 @@ import (
 	"time"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/internal/pending"
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
@@ -50,6 +51,12 @@ func NewPendingRequests() *PendingRequests {
 	return &PendingRequests{
 		sets: make(map[pendingKey]*pendingCall),
 	}
+}
+
+// NewRefreshGroup creates a pending group for cache refresh dedup.
+// Exported for use by server.New() during chain assembly.
+func NewRefreshGroup() *pending.Group[pendingKey] {
+	return pending.NewGroup[pendingKey]()
 }
 
 // --- Exported methods ---
