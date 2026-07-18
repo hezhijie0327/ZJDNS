@@ -1,8 +1,8 @@
-package dnscrypt
+package dnscryptcrypto
 
 // unpackTxtString unpacks a DNS TXT record value back into the original
 // binary certificate bytes.
-func unpackTxtString(s string) (msg []byte) {
+func UnpackTxtString(s string) (msg []byte) {
 	bs := []byte(s)
 	msg = make([]byte, 0, len(bs))
 	for i := 0; i < len(bs); i++ {

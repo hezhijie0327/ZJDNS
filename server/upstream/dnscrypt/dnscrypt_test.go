@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
+	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 
 	"codeberg.org/miekg/dns"
@@ -223,7 +224,7 @@ func TestDNSCryptCertificateHandshake(t *testing.T) {
 	if len(txt.Txt) == 0 {
 		t.Fatal("cert TXT record is empty")
 	}
-	certBytes := serverdnscrypt.UnpackTxtString(strings.Join(txt.Txt, ""))
+	certBytes := dnscryptcrypto.UnpackTxtString(strings.Join(txt.Txt, ""))
 	if len(certBytes) < 124 {
 		t.Fatalf("cert too short: %d bytes", len(certBytes))
 	}

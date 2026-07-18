@@ -7,6 +7,7 @@ import (
 	"net"
 	"time"
 	"zjdns/config"
+	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -17,8 +18,8 @@ import (
 type tcpResponseWriter struct {
 	conn    net.Conn
 	req     *dns.Msg
-	query   *encryptedQuery
-	encrypt func(m *dns.Msg, q *encryptedQuery, isUDP bool) ([]byte, error)
+	query   *dnscryptcrypto.EncryptedQuery
+	encrypt func(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP bool) ([]byte, error)
 }
 
 const (
@@ -31,12 +32,12 @@ func (w *tcpResponseWriter) LocalAddr() net.Addr  { return w.conn.LocalAddr() }
 func (w *tcpResponseWriter) RemoteAddr() net.Addr { return w.conn.RemoteAddr() }
 
 func (w *tcpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
-	normalize("tcp", w.req, m)
+	dnscryptcrypto.Normalize("tcp", w.req, m)
 	res, err := w.encrypt(m, w.query, false)
 	if err != nil {
 		return fmt.Errorf("encrypting response: %w", err)
 	}
-	return writePrefixed(res, w.conn)
+	return dnscryptcrypto.WritePrefixed(res, w.conn)
 }
 
 // serveTCP listens for and handles DNSCrypt TCP connections.  It blocks until
@@ -91,7 +92,7 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 
-	b, err := readPrefixed(conn)
+	b, err := dnscryptcrypto.ReadPrefixed(conn)
 	if err != nil {
 		if !s.isStarted() {
 			return
@@ -107,18 +108,18 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 
 // handleTCPMsg processes a single TCP-framed message.
 func (s *Server) handleTCPMsg(ctx context.Context, b []byte, conn net.Conn) error {
-	if len(b) < minDNSPacketSize {
-		return ErrTooShort
+	if len(b) < dnscryptcrypto.MinDNSPacketSize {
+		return dnscryptcrypto.ErrTooShort
 	}
 
-	// Certificate handshake or encrypted query?
-	if !s.hasClientMagic(b[:ClientMagicSize]) && !bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:]) {
+	// dnscryptcrypto.Certificate handshake or encrypted query?
+	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
 		reply, err := s.handleHandshake(b)
 		if err != nil {
 			return fmt.Errorf("handshake: %w", err)
 		}
 		log.Debugf("DNSCRYPT: TCP handshake response sent to %s", conn.RemoteAddr())
-		return writePrefixed(reply, conn)
+		return dnscryptcrypto.WritePrefixed(reply, conn)
 	}
 
 	// Decrypt the query.

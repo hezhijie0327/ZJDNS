@@ -7,27 +7,27 @@ import (
 	"strings"
 	"time"
 	"zjdns/config"
+	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	zstamp "zjdns/internal/stamp"
-	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 
 	"codeberg.org/miekg/dns"
 )
 
 // certPair holds the best PQ and classical certificates from a server.
 type certPair struct {
-	pq        *serverdnscrypt.Certificate
-	classical *serverdnscrypt.Certificate
+	pq        *dnscryptcrypto.Certificate
+	classical *dnscryptcrypto.Certificate
 }
 
 // State caches per-upstream DNSCrypt resolver state.
 type State struct {
 	serverAddress string
-	sharedKey     [serverdnscrypt.SharedKeySize]byte
-	secretKey     [serverdnscrypt.KeySize]byte
-	publicKey     [serverdnscrypt.KeySize]byte
+	sharedKey     [dnscryptcrypto.SharedKeySize]byte
+	secretKey     [dnscryptcrypto.KeySize]byte
+	publicKey     [dnscryptcrypto.KeySize]byte
 	serverPK      []byte
-	clientMagic   [serverdnscrypt.ClientMagicSize]byte
-	esVersion     serverdnscrypt.CryptoConstruction
+	clientMagic   [dnscryptcrypto.ClientMagicSize]byte
+	esVersion     dnscryptcrypto.CryptoConstruction
 	expires       time.Time
 
 	minQueryLen int
@@ -36,10 +36,10 @@ type State struct {
 	pqPublicKey       []byte
 	pqCertContext     []byte
 	pqTicket          []byte
-	pqResumeSecret    [serverdnscrypt.SharedKeySize]byte
+	pqResumeSecret    [dnscryptcrypto.SharedKeySize]byte
 	pqTicketExpiry    time.Time
 	pqCiphertext      []byte
-	pqEncapsulatedKey [serverdnscrypt.SharedKeySize]byte
+	pqEncapsulatedKey [dnscryptcrypto.SharedKeySize]byte
 }
 
 // resolveStamp extracts the server address, provider name, and public key from
@@ -60,7 +60,7 @@ func (c *Client) resolveStamp(server *config.UpstreamServer) (addr, providerName
 	providerName = server.ServerName
 	if server.PublicKey != "" {
 		var pkErr error
-		publicKey, pkErr = serverdnscrypt.HexDecodeKey(server.PublicKey)
+		publicKey, pkErr = dnscryptcrypto.HexDecodeKey(server.PublicKey)
 		if pkErr != nil {
 			return "", "", nil, fmt.Errorf("decoding public key: %w", pkErr)
 		}
@@ -144,26 +144,26 @@ func (c *Client) buildState(
 	cert *certPair,
 	preferPQ bool,
 ) (*State, error) {
-	var esVersion serverdnscrypt.CryptoConstruction
-	var selectedCert *serverdnscrypt.Certificate
+	var esVersion dnscryptcrypto.CryptoConstruction
+	var selectedCert *dnscryptcrypto.Certificate
 	switch {
 	case preferPQ && cert.pq != nil:
-		esVersion = serverdnscrypt.XWingPQ
+		esVersion = dnscryptcrypto.XWingPQ
 		selectedCert = cert.pq
 	case cert.classical != nil:
-		esVersion = serverdnscrypt.XChacha20Poly1305
+		esVersion = dnscryptcrypto.XChacha20Poly1305
 		selectedCert = cert.classical
 	default:
 		return nil, fmt.Errorf("no valid dnscrypt certificate for %q", providerName)
 	}
 
-	var sharedKey [serverdnscrypt.SharedKeySize]byte
-	var secretKey, clientPK [serverdnscrypt.KeySize]byte
+	var sharedKey [dnscryptcrypto.SharedKeySize]byte
+	var secretKey, clientPK [dnscryptcrypto.KeySize]byte
 	var err error
 	if cert.classical != nil {
-		secretKey, clientPK = serverdnscrypt.GenerateKeyPairRaw()
-		sharedKey, err = serverdnscrypt.ComputeSharedKey(
-			serverdnscrypt.XChacha20Poly1305, &secretKey, &cert.classical.ResolverPk,
+		secretKey, clientPK = dnscryptcrypto.GenerateKeyPairRaw()
+		sharedKey, err = dnscryptcrypto.ComputeSharedKey(
+			dnscryptcrypto.XChacha20Poly1305, &secretKey, &cert.classical.ResolverPk,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("computing shared key: %w", err)
@@ -208,7 +208,7 @@ func parseCert(
 	serverPK []byte,
 	providerName string,
 ) (*certPair, error) {
-	var bestPQ, bestClassical *serverdnscrypt.Certificate
+	var bestPQ, bestClassical *dnscryptcrypto.Certificate
 	var bestPQSerial, bestClSerial uint32
 	for _, rr := range answer {
 		txt, ok := rr.(*dns.TXT)
@@ -216,8 +216,8 @@ func parseCert(
 			continue
 		}
 		certStr := strings.Join(txt.Txt, "")
-		cert := &serverdnscrypt.Certificate{}
-		if err := cert.UnmarshalBinary(serverdnscrypt.UnpackTxtString(certStr)); err != nil {
+		cert := &dnscryptcrypto.Certificate{}
+		if err := cert.UnmarshalBinary(dnscryptcrypto.UnpackTxtString(certStr)); err != nil {
 			continue
 		}
 		if !cert.IsDateValid() {

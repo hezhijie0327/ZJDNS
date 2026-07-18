@@ -4,7 +4,7 @@
 // X-Wing PQ/T hybrid KEM authenticated encryption.
 //
 // See https://dnscrypt.info/protocol for the protocol specification.
-package dnscrypt
+package dnscryptcrypto
 
 import (
 	"errors"
@@ -18,13 +18,13 @@ type Nonce = [NonceSize]byte
 type CryptoConstruction uint16
 
 const (
-	// minUDPQuestionSize is the minimum padded query size for UDP.  It must be
+	// MinUDPQuestionSize is the minimum padded query size for UDP.  It must be
 	// a multiple of 64 bytes.  Some servers (e.g. Quad9) reject smaller padded
 	// queries.
-	minUDPQuestionSize = 256
+	MinUDPQuestionSize = 256
 
-	// minDNSPacketSize is the minimum possible DNS packet size.
-	minDNSPacketSize = 12 + 5
+	// MinDNSPacketSize is the minimum possible DNS packet size.
+	MinDNSPacketSize = 12 + 5
 
 	// KeySize is the size of X25519 public and secret keys in bytes.
 	KeySize = 32

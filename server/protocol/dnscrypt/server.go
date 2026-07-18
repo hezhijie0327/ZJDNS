@@ -11,6 +11,7 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
+	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -23,7 +24,7 @@ import (
 
 // keyEntry holds a pair of classical and PQ certificates for one key window.
 type keyEntry struct {
-	pair      *CertPair
+	pair      *dnscryptcrypto.CertPair
 	createdAt time.Time
 }
 
@@ -51,8 +52,8 @@ type Server struct {
 	// ticketKey / ticketKeyID seal PQ resumption tickets.  They are
 	// derived from the Ed25519 signing key and stay fixed across rotations
 	// so that tickets survive a key rotation.
-	ticketKey   [xchachaKeySize]byte
-	ticketKeyID [ticketKeyIDSize]byte
+	ticketKey   [dnscryptcrypto.XchachaKeySize]byte
+	ticketKeyID [dnscryptcrypto.TicketKeyIDSize]byte
 
 	// Rotation goroutine control.
 	rotateCh chan struct{} // closed when rotation goroutine should stop
@@ -67,7 +68,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 	}
 
 	// Extract the Ed25519 signing key — it's the long-term provider identity.
-	signingSK, err := hexDecodeKey(rc.PrivateKey)
+	signingSK, err := dnscryptcrypto.HexDecodeKey(rc.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("decoding ed25519 private key: %w", err)
 	}
@@ -108,7 +109,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 		input = append(input, signingSK...)
 		h := sha256.Sum256(input)
 		copy(s.ticketKey[:], h[:])
-		s.ticketKeyID = [ticketKeyIDSize]byte{0x00, 0x00, 0x00, 0x01}
+		s.ticketKeyID = [dnscryptcrypto.TicketKeyIDSize]byte{0x00, 0x00, 0x00, 0x01}
 	}
 
 	log.Debugf("DNSCRYPT: generated initial key pair (serial=%d)", pair.Classical.Serial)
@@ -123,20 +124,20 @@ func buildResolverConfig(certificateCfg *config.DNSCryptCertificate, providerNam
 	}
 
 	if rc.PublicKey == "" || rc.PrivateKey == "" {
-		pub, priv, err := GenerateEd25519Keypair()
+		pub, priv, err := dnscryptcrypto.GenerateEd25519Keypair()
 		if err != nil {
 			return rc, fmt.Errorf("generating ed25519 keypair: %w", err)
 		}
-		rc.PublicKey = hexEncodeKey(pub)
-		rc.PrivateKey = hexEncodeKey(priv)
+		rc.PublicKey = dnscryptcrypto.HexEncodeKey(pub)
+		rc.PrivateKey = dnscryptcrypto.HexEncodeKey(priv)
 		log.Warnf("DNSCRYPT: Ed25519 keypair auto-generated — save these keys for persistence")
 	}
 
 	// Resolver encryption keys are always auto-generated.  They are short-term
 	// keys rotated every 24h (§7.2); PQ keys are derived deterministically.
-	sk, pk := generateRandomKeyPair()
-	rc.ResolverSk = hexEncodeKey(sk[:])
-	rc.ResolverPk = hexEncodeKey(pk[:])
+	sk, pk := dnscryptcrypto.GenerateRandomKeyPair()
+	rc.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])
+	rc.ResolverPk = dnscryptcrypto.HexEncodeKey(pk[:])
 
 	return rc, nil
 }
@@ -147,7 +148,7 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	defer s.mu.Unlock()
 
 	if s.started {
-		return ErrServerAlreadyStarted
+		return dnscryptcrypto.ErrServerAlreadyStarted
 	}
 
 	s.handler = dnsHandler
@@ -231,7 +232,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.started {
 		s.mu.Unlock()
-		return ErrServerNotStarted
+		return dnscryptcrypto.ErrServerNotStarted
 	}
 	s.started = false
 
@@ -285,7 +286,7 @@ func (s *Server) isStarted() bool {
 }
 
 // current returns the newest key pair (the one used for encrypting responses).
-func (s *Server) current() *CertPair {
+func (s *Server) current() *dnscryptcrypto.CertPair {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.keys[0].pair
@@ -308,7 +309,7 @@ func (s *Server) hasClientMagic(b []byte) bool {
 }
 
 // buildCertTXTForCert serialises a single certificate into TXT chunks.
-func buildCertTXTForCert(cert *Certificate) []string {
+func buildCertTXTForCert(cert *dnscryptcrypto.Certificate) []string {
 	certBytes, _ := cert.MarshalBinary()
 	escaped := escapeBackslash(certBytes)
 	const maxChunk = 255
@@ -367,16 +368,16 @@ func (s *Server) rotateKeys() {
 
 // generateNewCertPair creates a signed classical+PQ certificate pair with
 // fresh X25519 resolver keys (PQ derived deterministically from them).
-func (s *Server) generateNewCertPair() (*CertPair, error) {
+func (s *Server) generateNewCertPair() (*dnscryptcrypto.CertPair, error) {
 	rc := ResolverConfig{
 		ProviderName: s.providerName,
 	}
-	rc.PublicKey = hexEncodeKey(s.signingSK.Public().(ed25519.PublicKey))
-	rc.PrivateKey = hexEncodeKey(s.signingSK)
+	rc.PublicKey = dnscryptcrypto.HexEncodeKey(s.signingSK.Public().(ed25519.PublicKey))
+	rc.PrivateKey = dnscryptcrypto.HexEncodeKey(s.signingSK)
 
-	sk, pk := generateRandomKeyPair()
-	rc.ResolverSk = hexEncodeKey(sk[:])
-	rc.ResolverPk = hexEncodeKey(pk[:])
+	sk, pk := dnscryptcrypto.GenerateRandomKeyPair()
+	rc.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])
+	rc.ResolverPk = dnscryptcrypto.HexEncodeKey(pk[:])
 
 	return rc.NewCertPair()
 }
@@ -413,7 +414,7 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 	}
 
 	if len(m.Question) != 1 || m.Response {
-		return nil, ErrInvalidQuery
+		return nil, dnscryptcrypto.ErrInvalidQuery
 	}
 
 	q := m.Question[0]
@@ -421,14 +422,14 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 
 	qName := dnsutil.Fqdn(q.Header().Name)
 	if dns.RRToType(q) != dns.TypeTXT || qName != providerName {
-		return nil, ErrInvalidQuery
+		return nil, dnscryptcrypto.ErrInvalidQuery
 	}
 
 	reply := dnsutil.SetReply(new(dns.Msg), m)
 	s.mu.RLock()
 	for _, k := range s.keys {
 		remainingTTL := k.remainingTTL()
-		for _, cert := range []*Certificate{k.pair.Classical, k.pair.PQ} {
+		for _, cert := range []*dnscryptcrypto.Certificate{k.pair.Classical, k.pair.PQ} {
 			txt := &dns.TXT{
 				Hdr: dns.Header{
 					Name:  q.Header().Name,
@@ -455,7 +456,7 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 
 func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, protocol string) error {
 	if m == nil || len(m.Question) != 1 || m.Response {
-		return ErrInvalidQuery
+		return dnscryptcrypto.ErrInvalidQuery
 	}
 	log.Debugf("DNSCRYPT: handling query for %s from %s", m.Question[0].Header().Name, rw.RemoteAddr())
 

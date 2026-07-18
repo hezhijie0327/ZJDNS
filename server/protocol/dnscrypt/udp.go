@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"time"
 	"zjdns/config"
+	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -29,15 +30,15 @@ type udpResponseWriter struct {
 	conn    *net.UDPConn
 	addr    *net.UDPAddr
 	req     *dns.Msg
-	query   *encryptedQuery
-	encrypt func(m *dns.Msg, q *encryptedQuery, isUDP bool) ([]byte, error)
+	query   *dnscryptcrypto.EncryptedQuery
+	encrypt func(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP bool) ([]byte, error)
 }
 
 func (w *udpResponseWriter) LocalAddr() net.Addr  { return w.conn.LocalAddr() }
 func (w *udpResponseWriter) RemoteAddr() net.Addr { return w.addr }
 
 func (w *udpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
-	normalize("udp", w.req, m)
+	dnscryptcrypto.Normalize("udp", w.req, m)
 	res, err := w.encrypt(m, w.query, true)
 	if err != nil {
 		return err
@@ -80,7 +81,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 			return
 		}
 
-		if n < minDNSPacketSize {
+		if n < dnscryptcrypto.MinDNSPacketSize {
 			continue
 		}
 
@@ -96,7 +97,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 
 // handleUDPPacket processes a single UDP datagram.
 func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAddr, udpConn *net.UDPConn) {
-	if !s.hasClientMagic(b[:ClientMagicSize]) && !bytes.Equal(b[:PQResumeMagicLen], PQResumeMagic[:]) {
+	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
 		reply, err := s.handleHandshake(b)
 		if err != nil {
 			log.Debugf("DNSCRYPT: handshake failed: %v", err)

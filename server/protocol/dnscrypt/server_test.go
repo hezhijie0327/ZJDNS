@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
+	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 
 	"codeberg.org/miekg/dns"
 )
@@ -54,7 +55,7 @@ func TestKeyRotation(t *testing.T) {
 	}
 
 	// Classical cert has non-zero ResolverSk.
-	if srv.keys[0].pair.Classical.ResolverSk == [KeySize]byte{} {
+	if srv.keys[0].pair.Classical.ResolverSk == [dnscryptcrypto.KeySize]byte{} {
 		t.Error("current classical cert has zero ResolverSk")
 	}
 

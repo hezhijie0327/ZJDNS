@@ -2,16 +2,15 @@ package dnscrypt
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"zjdns/config"
+	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	zstamp "zjdns/internal/stamp"
 
-	"github.com/cloudflare/circl/dh/x25519"
 	"github.com/cloudflare/circl/sign/ed25519"
 )
 
@@ -58,36 +57,36 @@ func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey) 
 			return cfg, fmt.Errorf("generating ed25519 key: %w", err)
 		}
 	}
-	cfg.PrivateKey = hexEncodeKey(privateKey)
-	cfg.PublicKey = hexEncodeKey(privateKey.Public().(ed25519.PublicKey))
+	cfg.PrivateKey = dnscryptcrypto.HexEncodeKey(privateKey)
+	cfg.PublicKey = dnscryptcrypto.HexEncodeKey(privateKey.Public().(ed25519.PublicKey))
 
-	sk, pk := generateRandomKeyPair()
-	cfg.ResolverSk = hexEncodeKey(sk[:])
-	cfg.ResolverPk = hexEncodeKey(pk[:])
+	sk, pk := dnscryptcrypto.GenerateRandomKeyPair()
+	cfg.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])
+	cfg.ResolverPk = dnscryptcrypto.HexEncodeKey(pk[:])
 	return cfg, nil
 }
 
 // NewCert generates a signed classical X25519-XChacha20Poly1305 certificate.
 // serial and timestamps are provided by the caller to guarantee alignment with
 // the paired PQ cert.
-func (rc *ResolverConfig) NewCert(serial, notBefore, notAfter uint32) (cert *Certificate, err error) {
-	cert = &Certificate{
+func (rc *ResolverConfig) NewCert(serial, notBefore, notAfter uint32) (cert *dnscryptcrypto.Certificate, err error) {
+	cert = &dnscryptcrypto.Certificate{
 		Serial:    serial,
 		NotAfter:  notAfter,
 		NotBefore: notBefore,
-		ESVersion: XChacha20Poly1305,
+		ESVersion: dnscryptcrypto.XChacha20Poly1305,
 	}
 
-	resolverPk, err := hexDecodeKey(rc.ResolverPk)
+	resolverPk, err := dnscryptcrypto.HexDecodeKey(rc.ResolverPk)
 	if err != nil {
 		return nil, fmt.Errorf("decoding resolver public key: %w", err)
 	}
-	resolverSk, err := hexDecodeKey(rc.ResolverSk)
+	resolverSk, err := dnscryptcrypto.HexDecodeKey(rc.ResolverSk)
 	if err != nil {
 		return nil, fmt.Errorf("decoding resolver secret key: %w", err)
 	}
-	if len(resolverPk) != KeySize || len(resolverSk) != KeySize {
-		sk, pk := generateRandomKeyPair()
+	if len(resolverPk) != dnscryptcrypto.KeySize || len(resolverSk) != dnscryptcrypto.KeySize {
+		sk, pk := dnscryptcrypto.GenerateRandomKeyPair()
 		resolverSk = sk[:]
 		resolverPk = pk[:]
 	}
@@ -95,9 +94,9 @@ func (rc *ResolverConfig) NewCert(serial, notBefore, notAfter uint32) (cert *Cer
 	copy(cert.ResolverSk[:], resolverSk)
 	// ClientMagic for classical certs is the first 8 bytes of the
 	// resolver public key (spec §5.5).
-	copy(cert.ClientMagic[:], resolverPk[:ClientMagicSize])
+	copy(cert.ClientMagic[:], resolverPk[:dnscryptcrypto.ClientMagicSize])
 
-	privateKey, err := hexDecodeKey(rc.PrivateKey)
+	privateKey, err := dnscryptcrypto.HexDecodeKey(rc.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("decoding private key: %w", err)
 	}
@@ -108,31 +107,31 @@ func (rc *ResolverConfig) NewCert(serial, notBefore, notAfter uint32) (cert *Cer
 // NewPQCert generates a signed PQ X-Wing certificate deterministically derived
 // from the same X25519 seed as the classical cert.  Serial and timestamps are
 // provided by the caller to guarantee alignment.
-func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *Certificate, err error) {
-	resolverSk, err := hexDecodeKey(rc.ResolverSk)
+func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *dnscryptcrypto.Certificate, err error) {
+	resolverSk, err := dnscryptcrypto.HexDecodeKey(rc.ResolverSk)
 	if err != nil {
 		return nil, fmt.Errorf("decoding resolver secret key: %w", err)
 	}
 
-	pk, sk := DerivePQKeys(resolverSk)
+	pk, sk := dnscryptcrypto.DerivePQKeys(resolverSk)
 
-	cert = &Certificate{
+	cert = &dnscryptcrypto.Certificate{
 		Serial:       serial,
 		NotAfter:     notAfter,
 		NotBefore:    notBefore,
-		ESVersion:    XWingPQ,
+		ESVersion:    dnscryptcrypto.XWingPQ,
 		PqPublicKey:  pk,
 		PqPrivateKey: sk,
 	}
 
 	// ClientMagic for PQ certs: bytes 72–79 of the X-Wing public key
 	// (matching the official encrypted-dns-server derivation).
-	copy(cert.ClientMagic[:], pk[72:72+ClientMagicSize])
+	copy(cert.ClientMagic[:], pk[72:72+dnscryptcrypto.ClientMagicSize])
 
 	binCert, _ := cert.MarshalBinary()
-	cert.PqCertContext = pqCertContext(binCert)
+	cert.PqCertContext = dnscryptcrypto.PQCertContext(binCert)
 
-	privateKey, err := hexDecodeKey(rc.PrivateKey)
+	privateKey, err := dnscryptcrypto.HexDecodeKey(rc.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("decoding private key: %w", err)
 	}
@@ -142,8 +141,8 @@ func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *C
 
 // NewCertPair generates both classical and PQ certificates for a single key
 // window.  Both certs share the same Serial, NotBefore, and NotAfter.
-func (rc *ResolverConfig) NewCertPair() (*CertPair, error) {
-	serial := nowUnix32()
+func (rc *ResolverConfig) NewCertPair() (*dnscryptcrypto.CertPair, error) {
+	serial := dnscryptcrypto.NowUnix32()
 	notBefore := serial
 	notAfter := serial + uint32(config.DefaultDNSCryptCertificateTTL/time.Second)
 
@@ -155,12 +154,12 @@ func (rc *ResolverConfig) NewCertPair() (*CertPair, error) {
 	if err != nil {
 		return nil, fmt.Errorf("PQ cert: %w", err)
 	}
-	return &CertPair{Classical: classical, PQ: pq}, nil
+	return &dnscryptcrypto.CertPair{Classical: classical, PQ: pq}, nil
 }
 
 // CreateStamp generates a DNS stamp (sdns://) string for this resolver config.
 func (rc *ResolverConfig) CreateStamp(addr string) (string, error) {
-	serverPK, err := hexDecodeKey(rc.PublicKey)
+	serverPK, err := dnscryptcrypto.HexDecodeKey(rc.PublicKey)
 	if err != nil {
 		return "", fmt.Errorf("decoding public key: %w", err)
 	}
@@ -185,41 +184,6 @@ func ParseStamp(stampStr string) (addr, providerName string, publicKey []byte, e
 		return "", "", nil, fmt.Errorf("stamp is not DNSCrypt (proto=%d)", s.Proto)
 	}
 	return s.Address, s.ProviderName, s.PublicKey, nil
-}
-
-// hexEncodeKey encodes a byte slice as an uppercase hex string.
-func hexEncodeKey(b []byte) (encoded string) {
-	return strings.ToUpper(hex.EncodeToString(b))
-}
-
-// hexDecodeKey decodes a hex-encoded string (with optional colon separators)
-// into a byte slice.
-func hexDecodeKey(str string) (decoded []byte, err error) {
-	return hex.DecodeString(strings.ReplaceAll(str, ":", ""))
-}
-
-// HexDecodeKey exported wrapper for hexDecodeKey.
-func HexDecodeKey(str string) ([]byte, error) {
-	return hexDecodeKey(str)
-}
-
-// generateRandomKeyPair generates a new X25519 keypair.
-func generateRandomKeyPair() (secretKey, publicKey [KeySize]byte) {
-	var sk, pk x25519.Key
-	_, _ = rand.Read(sk[:])
-	x25519.KeyGen(&pk, &sk)
-	secretKey = [KeySize]byte(sk)
-	publicKey = [KeySize]byte(pk)
-	return secretKey, publicKey
-}
-
-// GenerateEd25519Keypair generates a new Ed25519 keypair for provider signing.
-func GenerateEd25519Keypair() (publicKey, privateKey []byte, err error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generating ed25519 keypair: %w", err)
-	}
-	return pub, priv, nil
 }
 
 // GenerateDNSCryptConfig generates a complete ZJDNS JSON configuration for

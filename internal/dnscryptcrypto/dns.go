@@ -1,4 +1,4 @@
-package dnscrypt
+package dnscryptcrypto
 
 import (
 	"encoding/binary"
@@ -13,8 +13,8 @@ import (
 // normalize truncates the DNS response if it exceeds the client's EDNS buffer
 // size.  Following RFC 2181 §9, truncated responses must have TC=1 and empty
 // Answer/Ns/Extra sections — the client MUST retry over TCP.
-func normalize(proto string, req, res *dns.Msg) {
-	size := dnsSize(proto, req)
+func Normalize(proto string, req, res *dns.Msg) {
+	size := DNSSize(proto, req)
 	size -= EDNSSize
 	if res.Len() > size {
 		dnsutil.Truncate(res)
@@ -27,7 +27,7 @@ func normalize(proto string, req, res *dns.Msg) {
 // Unpack(), the OPT fields are merged back into the Msg header — Extra
 // typically does not contain an explicit OPT record.  We read UDPSize
 // first, falling back to the Extra scan for compatibility.
-func dnsSize(proto string, r *dns.Msg) int {
+func DNSSize(proto string, r *dns.Msg) int {
 	size := r.UDPSize
 	if size == 0 {
 		size = dns.MinMsgSize
@@ -48,7 +48,7 @@ func dnsSize(proto string, r *dns.Msg) int {
 }
 
 // readPrefixed reads a DNS message with a 2-byte length prefix.
-func readPrefixed(conn net.Conn) (b []byte, err error) {
+func ReadPrefixed(conn net.Conn) (b []byte, err error) {
 	l := make([]byte, 2)
 	_, err = io.ReadFull(conn, l)
 	if err != nil {
@@ -67,7 +67,7 @@ func readPrefixed(conn net.Conn) (b []byte, err error) {
 }
 
 // writePrefixed writes a DNS message with a 2-byte length prefix.
-func writePrefixed(b []byte, conn net.Conn) (err error) {
+func WritePrefixed(b []byte, conn net.Conn) (err error) {
 	l := make([]byte, 2)
 	binary.BigEndian.PutUint16(l, uint16(len(b))) //nolint:gosec // G115: DNS message length bounded by MaxMsgSize
 	_, err = (&net.Buffers{l, b}).WriteTo(conn)

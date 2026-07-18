@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
+	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
-	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -48,7 +48,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		return nil, fmt.Errorf("packing dns query: %w", err)
 	}
 
-	q := &serverdnscrypt.EncryptedQuery{
+	q := &dnscryptcrypto.EncryptedQuery{
 		ESVersion:   state.esVersion,
 		ClientMagic: state.clientMagic,
 		ClientPk:    state.publicKey,
@@ -91,10 +91,10 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 
 	var respPayload []byte
 	if useTCP {
-		if err := serverdnscrypt.WritePrefixed(encrypted, conn); err != nil {
+		if err := dnscryptcrypto.WritePrefixed(encrypted, conn); err != nil {
 			return nil, fmt.Errorf("writing dnscrypt TCP query: %w", err)
 		}
-		respPayload, err = serverdnscrypt.ReadPrefixed(conn)
+		respPayload, err = dnscryptcrypto.ReadPrefixed(conn)
 		if err != nil {
 			return nil, fmt.Errorf("reading dnscrypt TCP response: %w", err)
 		}
@@ -111,20 +111,20 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		respPayload = respBuf[:n]
 	}
 
-	resp := &serverdnscrypt.EncryptedResponse{
+	resp := &dnscryptcrypto.EncryptedResponse{
 		ESVersion: state.esVersion,
 	}
-	decrypted, err := serverdnscrypt.DecryptResponse(resp, respPayload, state.sharedKey, clientNonce)
+	decrypted, err := dnscryptcrypto.DecryptResponse(resp, respPayload, state.sharedKey, clientNonce)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting dnscrypt response: %w", err)
 	}
 
 	if len(resp.PQControl) > 0 {
-		ticket, lifetime, parseErr := serverdnscrypt.PQParseControlBlock(resp.PQControl)
+		ticket, lifetime, parseErr := dnscryptcrypto.PQParseControlBlock(resp.PQControl)
 		if parseErr == nil && len(ticket) > 0 {
 			state.pqTicket = ticket
 			state.pqTicketExpiry = time.Now().Add(time.Duration(lifetime) * time.Second)
-			state.pqResumeSecret = serverdnscrypt.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:serverdnscrypt.NonceSize/2])
+			state.pqResumeSecret = dnscryptcrypto.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:dnscryptcrypto.NonceSize/2])
 			log.Debugf("UPSTREAM: DNSCrypt PQ resumption ticket stored (expires in %ds)", lifetime)
 		}
 	}

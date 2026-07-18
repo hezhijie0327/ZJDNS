@@ -239,14 +239,13 @@ Top layer (wiring):
 
 **Known design decisions** (not defects):
   - `edns.DNSHandler` interface is defined in the `edns` package (producer) rather than
-    the consumer packages. This is intentional — moving it to a consumer package would
-    create an import cycle (`server/protocol/dnscrypt → server/handler → server/resolver →
-    server/upstream → server/upstream/dnscrypt → server/protocol/dnscrypt`). The comment
-    at `edns/edns.go:19-21` documents this.
-  - `server/upstream/dnscrypt` imports `server/protocol/dnscrypt` (~24 shared symbols:
-    `Certificate`, `EncryptedQuery`, `EncryptedResponse`, crypto primitives). Both
-    packages need the same wire-format types and cryptographic operations. Extracting
-    a neutral `internal/dnscryptcrypto/` package is deferred to a dedicated refactoring.
+    the consumer packages. This is intentional — it keeps protocol packages independent
+    of the handler/resolver graph. The comment at `edns/edns.go:19-21` documents this.
+  - `internal/dnscryptcrypto/` packages all DNSCrypt wire-format types and cryptographic
+    primitives shared between `server/protocol/dnscrypt/` (server) and
+    `server/upstream/dnscrypt/` (client). Neither imports the other — both import the
+    neutral foundation package. This resolves the former `server/upstream/dnscrypt →
+    server/protocol/dnscrypt` dependency.
   - `internal/dnsutil` has a deliberately broad scope covering DNS domains (dnsutil.go),
     zstd compression (wire.go), socket binding (bind.go), TCP keepalive (keepalive.go),
     and DNS-over-HTTPS helpers (https_dns.go). Each file has a single concern at

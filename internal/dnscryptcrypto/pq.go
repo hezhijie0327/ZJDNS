@@ -1,4 +1,4 @@
-package dnscrypt
+package dnscryptcrypto
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-func hkdfSha256(salt, ikm, info []byte, outLen int) ([]byte, error) {
+func HKDFSHA256(salt, ikm, info []byte, outLen int) ([]byte, error) {
 	r := hkdf.New(sha256.New, ikm, salt, info)
 	out := make([]byte, outLen)
 	if _, err := io.ReadFull(r, out); err != nil {
@@ -20,7 +20,7 @@ func hkdfSha256(salt, ikm, info []byte, outLen int) ([]byte, error) {
 	return out, nil
 }
 
-func pqProfileExtension() []byte {
+func PQProfileExtension() []byte {
 	ext := make([]byte, PQProfileExtSize)
 	copy(ext[0:3], "PQD")
 	ext[3] = 0x01
@@ -33,25 +33,25 @@ func pqProfileExtension() []byte {
 	return ext
 }
 
-func pqCertContext(binCert []byte) []byte {
+func PQCertContext(binCert []byte) []byte {
 	ctx := make([]byte, 0, 14+
 		2+2+ // es-version + minor
-		certPQPkLen+ClientMagicSize+
+		CertPQPkLen+ClientMagicSize+
 		4+4+4+ // serial + ts-start + ts-end
-		certPQExtLen)
+		CertPQExtLen)
 	ctx = append(ctx, "DNSCrypt-PQ-v1"...)
-	ctx = append(ctx, binCert[certESVersionOff:certESVersionOff+2]...)           // es-version
-	ctx = append(ctx, binCert[certMinorOff:certMinorOff+2]...)                   // protocol-minor-version
-	ctx = append(ctx, binCert[certPQPkOff:certPQPkOff+certPQPkLen]...)           // resolver-pk
-	ctx = append(ctx, binCert[certPQMagicOff:certPQMagicOff+ClientMagicSize]...) // client-magic
-	ctx = append(ctx, binCert[certPQSerialOff:certPQSerialOff+4]...)             // serial
-	ctx = append(ctx, binCert[certPQTSOff:certPQTSOff+4]...)                     // ts-start
-	ctx = append(ctx, binCert[certPQTEEnd:certPQTEEnd+4]...)                     // ts-end
-	ctx = append(ctx, binCert[certPQExtOff:certPQExtOff+certPQExtLen]...)        // extensions
+	ctx = append(ctx, binCert[CertESVersionOff:CertESVersionOff+2]...)           // es-version
+	ctx = append(ctx, binCert[CertMinorOff:CertMinorOff+2]...)                   // protocol-minor-version
+	ctx = append(ctx, binCert[CertPQPkOff:CertPQPkOff+CertPQPkLen]...)           // resolver-pk
+	ctx = append(ctx, binCert[CertPQMagicOff:CertPQMagicOff+ClientMagicSize]...) // client-magic
+	ctx = append(ctx, binCert[CertPQSerialOff:CertPQSerialOff+4]...)             // serial
+	ctx = append(ctx, binCert[CertPQTSOff:CertPQTSOff+4]...)                     // ts-start
+	ctx = append(ctx, binCert[CertPQTEEnd:CertPQTEEnd+4]...)                     // ts-end
+	ctx = append(ctx, binCert[CertPQExtOff:CertPQExtOff+CertPQExtLen]...)        // extensions
 	return ctx
 }
 
-func pqDeriveSharedKey(kemSS []byte, clientMagic [8]byte, certContext, ct []byte) [SharedKeySize]byte {
+func PQDeriveSharedKey(kemSS []byte, clientMagic [8]byte, certContext, ct []byte) [SharedKeySize]byte {
 	salt := make([]byte, 0, 10)
 	salt = append(salt, PQESVersion[0], PQESVersion[1])
 	salt = append(salt, clientMagic[:]...)
@@ -60,23 +60,23 @@ func pqDeriveSharedKey(kemSS []byte, clientMagic [8]byte, certContext, ct []byte
 	info = append(info, ct...)
 	var key [SharedKeySize]byte
 	// hkdfSha256 on SHA-256 cannot fail in practice.
-	hkdfOut, _ := hkdfSha256(salt, kemSS, info, SharedKeySize)
+	hkdfOut, _ := HKDFSHA256(salt, kemSS, info, SharedKeySize)
 	copy(key[:], hkdfOut)
 	return key
 }
 
-func pqResumeSecret(sharedKey [SharedKeySize]byte, clientMagic [8]byte, clientNonce []byte) [SharedKeySize]byte {
+func PQResumeSecret(sharedKey [SharedKeySize]byte, clientMagic [8]byte, clientNonce []byte) [SharedKeySize]byte {
 	salt := make([]byte, 0, 8+len(clientNonce))
 	salt = append(salt, clientMagic[:]...)
 	salt = append(salt, clientNonce...)
 	var out [SharedKeySize]byte
 	// hkdfSha256 on SHA-256 cannot fail in practice.
-	hkdfOut, _ := hkdfSha256(salt, sharedKey[:], []byte("DNSCrypt-PQ-resume-secret-v1"), SharedKeySize)
+	hkdfOut, _ := HKDFSHA256(salt, sharedKey[:], []byte("DNSCrypt-PQ-resume-secret-v1"), SharedKeySize)
 	copy(out[:], hkdfOut)
 	return out
 }
 
-func pqResumedSharedKey(resumeSecret [SharedKeySize]byte, clientMagic [8]byte, clientNonce, ticket []byte) [SharedKeySize]byte {
+func PQResumedSharedKey(resumeSecret [SharedKeySize]byte, clientMagic [8]byte, clientNonce, ticket []byte) [SharedKeySize]byte {
 	salt := make([]byte, 0, 8+len(clientNonce))
 	salt = append(salt, clientMagic[:]...)
 	salt = append(salt, clientNonce...)
@@ -86,20 +86,20 @@ func pqResumedSharedKey(resumeSecret [SharedKeySize]byte, clientMagic [8]byte, c
 	info = append(info, th[:]...)
 	var key [SharedKeySize]byte
 	// hkdfSha256 on SHA-256 cannot fail in practice.
-	hkdfOut, _ := hkdfSha256(salt, resumeSecret[:], info, SharedKeySize)
+	hkdfOut, _ := HKDFSHA256(salt, resumeSecret[:], info, SharedKeySize)
 	copy(key[:], hkdfOut)
 	return key
 }
 
-func pqEncapsulate(pk []byte) (kemSS, ct []byte, err error) {
+func PQEncapsulate(pk []byte) (kemSS, ct []byte, err error) {
 	return xwing.Encapsulate(pk, nil)
 }
 
-func pqDecapsulate(ct, sk []byte) (kemSS []byte) {
+func PQDecapsulate(ct, sk []byte) (kemSS []byte) {
 	return xwing.Decapsulate(ct, sk)
 }
 
-func pqGenKeyPair() (publicKey, privateKey []byte, err error) {
+func PQGenKeyPair() (publicKey, privateKey []byte, err error) {
 	sk, pk, err := xwing.GenerateKeyPairPacked(rand.Reader)
 	if err != nil {
 		return nil, nil, err
@@ -125,32 +125,32 @@ func DerivePQKeys(classicalSk []byte) (pk, sk []byte) {
 // Ticket encryption (server-side)
 // ---------------------------------------------------------------------------
 
-func pqSealTicket(key *[xchachaKeySize]byte, keyID *[ticketKeyIDSize]byte, nonce *[xchachaNonceSize]byte, plaintext []byte) []byte {
-	ct := xchachaSeal(nil, nonce[:], plaintext, key[:])
-	out := make([]byte, ticketKeyIDSize+xchachaNonceSize+len(ct))
-	copy(out[:ticketKeyIDSize], keyID[:])
-	copy(out[ticketKeyIDSize:ticketKeyIDSize+xchachaNonceSize], nonce[:])
-	copy(out[ticketKeyIDSize+xchachaNonceSize:], ct)
+func PQSealTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, nonce *[XchachaNonceSize]byte, plaintext []byte) []byte {
+	ct := XchachaSeal(nil, nonce[:], plaintext, key[:])
+	out := make([]byte, TicketKeyIDSize+XchachaNonceSize+len(ct))
+	copy(out[:TicketKeyIDSize], keyID[:])
+	copy(out[TicketKeyIDSize:TicketKeyIDSize+XchachaNonceSize], nonce[:])
+	copy(out[TicketKeyIDSize+XchachaNonceSize:], ct)
 	return out
 }
 
-func pqOpenTicket(key *[xchachaKeySize]byte, keyID *[ticketKeyIDSize]byte, ciphertext []byte) ([]byte, error) {
-	if len(ciphertext) < ticketKeyIDSize+xchachaNonceSize+TagSize {
+func PQOpenTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, ciphertext []byte) ([]byte, error) {
+	if len(ciphertext) < TicketKeyIDSize+XchachaNonceSize+TagSize {
 		return nil, ErrPQInvalidTicket
 	}
-	if !bytes.Equal(ciphertext[:ticketKeyIDSize], keyID[:]) {
+	if !bytes.Equal(ciphertext[:TicketKeyIDSize], keyID[:]) {
 		return nil, ErrPQInvalidTicket
 	}
-	var nonce [xchachaNonceSize]byte
-	copy(nonce[:], ciphertext[ticketKeyIDSize:ticketKeyIDSize+xchachaNonceSize])
-	return xchachaOpen(nil, nonce[:], ciphertext[ticketKeyIDSize+xchachaNonceSize:], key[:])
+	var nonce [XchachaNonceSize]byte
+	copy(nonce[:], ciphertext[TicketKeyIDSize:TicketKeyIDSize+XchachaNonceSize])
+	return XchachaOpen(nil, nonce[:], ciphertext[TicketKeyIDSize+XchachaNonceSize:], key[:])
 }
 
 // ---------------------------------------------------------------------------
 // Control block (response-side)
 // ---------------------------------------------------------------------------
 
-func pqBuildControlBlock(ticket []byte, lifetime uint32) []byte {
+func PQBuildControlBlock(ticket []byte, lifetime uint32) []byte {
 	blockLen := 4 + 1 + 4 + 2 + len(ticket)
 	buf := make([]byte, blockLen)
 	copy(buf[0:4], PQControlMagic[:])
@@ -161,7 +161,7 @@ func pqBuildControlBlock(ticket []byte, lifetime uint32) []byte {
 	return buf
 }
 
-func pqParseControlBlock(control []byte) (ticket []byte, lifetime uint32, err error) {
+func PQParseControlBlock(control []byte) (ticket []byte, lifetime uint32, err error) {
 	if len(control) < 11 {
 		return nil, 0, ErrPQInvalidTicket
 	}
@@ -182,7 +182,7 @@ func pqParseControlBlock(control []byte) (ticket []byte, lifetime uint32, err er
 // Padding
 // ---------------------------------------------------------------------------
 
-func pqPad(packet []byte, floor int) []byte {
+func PQPad(packet []byte, floor int) []byte {
 	padded := make([]byte, len(packet), len(packet)+64)
 	copy(padded, packet)
 	padded = append(padded, 0x80)
@@ -197,28 +197,28 @@ func pqPad(packet []byte, floor int) []byte {
 // Ticket plaintext encoding (server-side)
 // ---------------------------------------------------------------------------
 
-func profileExtensionHash() [32]byte {
-	return sha256.Sum256(pqProfileExtension())
+func ProfileExtensionHash() [32]byte {
+	return sha256.Sum256(PQProfileExtension())
 }
 
-func encodeTicketPlaintext(resumeSecret [SharedKeySize]byte, clientMagic [ClientMagicSize]byte, serial, tsEnd, expiry uint32, peHash [32]byte) []byte {
-	buf := make([]byte, ticketPlaintextSize)
-	copy(buf[ticketPlaintextSecretOff:ticketPlaintextSecretOff+ticketPlaintextSecretLen], resumeSecret[:])
-	copy(buf[ticketPlaintextESOff:ticketPlaintextESOff+ticketPlaintextESLen], PQESVersion[:])
-	copy(buf[ticketPlaintextMagicOff:ticketPlaintextMagicOff+ticketPlaintextMagicLen], clientMagic[:])
-	binary.BigEndian.PutUint32(buf[ticketPlaintextSerialOff:ticketPlaintextSerialOff+ticketPlaintextSerialLen], serial)
-	binary.BigEndian.PutUint32(buf[ticketPlaintextTSEndOff:ticketPlaintextTSEndOff+ticketPlaintextTSEndLen], tsEnd)
-	binary.BigEndian.PutUint32(buf[ticketPlaintextExpiryOff:ticketPlaintextExpiryOff+ticketPlaintextExpiryLen], expiry)
-	copy(buf[ticketPlaintextPEHashOff:ticketPlaintextPEHashOff+ticketPlaintextPEHashLen], peHash[:])
+func EncodeTicketPlaintext(resumeSecret [SharedKeySize]byte, clientMagic [ClientMagicSize]byte, serial, tsEnd, expiry uint32, peHash [32]byte) []byte {
+	buf := make([]byte, TicketPlaintextSize)
+	copy(buf[TicketPlaintextSecretOff:TicketPlaintextSecretOff+TicketPlaintextSecretLen], resumeSecret[:])
+	copy(buf[TicketPlaintextESOff:TicketPlaintextESOff+TicketPlaintextESLen], PQESVersion[:])
+	copy(buf[TicketPlaintextMagicOff:TicketPlaintextMagicOff+TicketPlaintextMagicLen], clientMagic[:])
+	binary.BigEndian.PutUint32(buf[TicketPlaintextSerialOff:TicketPlaintextSerialOff+TicketPlaintextSerialLen], serial)
+	binary.BigEndian.PutUint32(buf[TicketPlaintextTSEndOff:TicketPlaintextTSEndOff+TicketPlaintextTSEndLen], tsEnd)
+	binary.BigEndian.PutUint32(buf[TicketPlaintextExpiryOff:TicketPlaintextExpiryOff+TicketPlaintextExpiryLen], expiry)
+	copy(buf[TicketPlaintextPEHashOff:TicketPlaintextPEHashOff+TicketPlaintextPEHashLen], peHash[:])
 	return buf
 }
 
-func decodeTicketPlaintext(plaintext []byte) (clientMagic [ClientMagicSize]byte, resumeSecret [SharedKeySize]byte, ticketExpiry uint32, err error) {
-	if len(plaintext) < ticketPlaintextSize {
+func DecodeTicketPlaintext(plaintext []byte) (clientMagic [ClientMagicSize]byte, resumeSecret [SharedKeySize]byte, ticketExpiry uint32, err error) {
+	if len(plaintext) < TicketPlaintextSize {
 		return [ClientMagicSize]byte{}, [SharedKeySize]byte{}, 0, ErrPQInvalidTicket
 	}
-	copy(resumeSecret[:], plaintext[ticketPlaintextSecretOff:ticketPlaintextSecretOff+ticketPlaintextSecretLen])
-	copy(clientMagic[:], plaintext[ticketPlaintextMagicOff:ticketPlaintextMagicOff+ticketPlaintextMagicLen])
-	ticketExpiry = binary.BigEndian.Uint32(plaintext[ticketPlaintextExpiryOff : ticketPlaintextExpiryOff+ticketPlaintextExpiryLen])
+	copy(resumeSecret[:], plaintext[TicketPlaintextSecretOff:TicketPlaintextSecretOff+TicketPlaintextSecretLen])
+	copy(clientMagic[:], plaintext[TicketPlaintextMagicOff:TicketPlaintextMagicOff+TicketPlaintextMagicLen])
+	ticketExpiry = binary.BigEndian.Uint32(plaintext[TicketPlaintextExpiryOff : TicketPlaintextExpiryOff+TicketPlaintextExpiryLen])
 	return clientMagic, resumeSecret, ticketExpiry, nil
 }

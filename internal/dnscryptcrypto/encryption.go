@@ -1,4 +1,4 @@
-package dnscrypt
+package dnscryptcrypto
 
 import (
 	"crypto/rand"
@@ -8,14 +8,14 @@ import (
 // The padding starts with a byte valued 0x80 followed by a variable number
 // of NUL bytes.
 //
-// pad() pads to at least minLen bytes (must be a multiple of 64; 0 = align
+// Pad() pads to at least minLen bytes (must be a multiple of 64; 0 = align
 // to next 64-byte boundary).  The caller is responsible for choosing an
 // appropriate minimum: 256 for UDP anti-amplification, 0 for TCP.
 
 // pad applies ISO/IEC 7816-4 padding to the packet.  minLen is the minimum
 // total padded length; when zero it defaults to the next multiple of 64.
 // minLen must be a multiple of 64 (caller's responsibility).
-func pad(packet []byte, minLen int) (padded []byte) {
+func Pad(packet []byte, minLen int) (padded []byte) {
 	// Closest multiple of 64 >= (len(packet) + 1).
 	minSize := max(minLen, len(packet)+1+(64-(len(packet)+1)%64)%64)
 
@@ -31,9 +31,9 @@ func pad(packet []byte, minLen int) (padded []byte) {
 // client queries over TCP, per §5.4.3 of draft-denis-dprive-dnscrypt-10.
 // The padding length is randomly selected from 1 to 256 bytes (including the
 // leading 0x80), and the total length is rounded up to a multiple of 64.
-func padTCP(packet []byte) (padded []byte) {
+func PadTCP(packet []byte) (padded []byte) {
 	// Pick a random padding length between 1 and 256 bytes (incl. 0x80).
-	padLen := 1 + cryptoRandIntn(256)
+	padLen := 1 + CryptoRandIntn(256)
 	packet = append(packet, 0x80)
 	for i := 1; i < padLen; i++ {
 		packet = append(packet, 0)
@@ -46,7 +46,7 @@ func padTCP(packet []byte) (padded []byte) {
 }
 
 // cryptoRandIntn returns a cryptographic random integer in [0, n).
-func cryptoRandIntn(n int) int {
+func CryptoRandIntn(n int) int {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	// Simple rejection sampling; n <= 256 so bias is negligible.
@@ -54,14 +54,14 @@ func cryptoRandIntn(n int) int {
 }
 
 // unpad removes ISO/IEC 7816-4 padding from the packet.
-func unpad(packet []byte) (unpadded []byte, err error) {
+func UnPad(packet []byte) (unpadded []byte, err error) {
 	for i := len(packet); ; {
 		if i == 0 {
 			return nil, ErrInvalidPadding
 		}
 		i--
 		if packet[i] == 0x80 {
-			if i < minDNSPacketSize {
+			if i < MinDNSPacketSize {
 				return nil, ErrInvalidPadding
 			}
 			return packet[:i], nil
@@ -73,14 +73,14 @@ func unpad(packet []byte) (unpadded []byte, err error) {
 
 // computeSharedKey derives the shared secret key from the X25519 keypair using
 // the specified cryptographic construction.
-func computeSharedKey(
+func ComputeSharedKey(
 	cryptoConstruction CryptoConstruction,
 	secretKey *[KeySize]byte,
 	publicKey *[KeySize]byte,
 ) (sharedKey [SharedKeySize]byte, err error) {
 	switch cryptoConstruction {
 	case XChacha20Poly1305:
-		sk, err := xchachaSharedKey(*secretKey, *publicKey)
+		sk, err := XchachaSharedKey(*secretKey, *publicKey)
 		if err != nil {
 			return sharedKey, err
 		}

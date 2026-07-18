@@ -3,7 +3,7 @@
 // This file implements Seal, Open, and SharedKey using the XChaCha20-Poly1305
 // construction (X25519 key exchange + HChaCha20 key derivation + ChaCha20-Poly1305
 // AEAD).
-package dnscrypt
+package dnscryptcrypto
 
 import (
 	"crypto/subtle"
@@ -16,14 +16,14 @@ import (
 )
 
 const (
-	// xchachaKeySize is the size of the encryption key.
-	xchachaKeySize = chacha20.KeySize
+	// XchachaKeySize is the size of the encryption key.
+	XchachaKeySize = chacha20.KeySize
 
-	// xchachaNonceSize is the size of the XChaCha20 nonce.
-	xchachaNonceSize = chacha20.NonceSizeX
+	// XchachaNonceSize is the size of the XChaCha20 nonce.
+	XchachaNonceSize = chacha20.NonceSizeX
 
-	// xchachaBlockSize is the size of the cipher block.
-	xchachaBlockSize = 64
+	// XchachaBlockSize is the size of the cipher block.
+	XchachaBlockSize = 64
 )
 
 var (
@@ -33,7 +33,7 @@ var (
 )
 
 // xchachaSharedKey computes a shared secret using X25519 followed by HChaCha20.
-func xchachaSharedKey(secretKey, publicKey [x25519.Size]byte) (sharedKey [xchachaKeySize]byte, err error) {
+func XchachaSharedKey(secretKey, publicKey [x25519.Size]byte) (sharedKey [XchachaKeySize]byte, err error) {
 	var shared x25519.Key
 	sk := x25519.Key(secretKey)
 	pk := x25519.Key(publicKey)
@@ -44,41 +44,41 @@ func xchachaSharedKey(secretKey, publicKey [x25519.Size]byte) (sharedKey [xchach
 	var nonce [16]byte
 	hRes, err := chacha20.HChaCha20(shared[:], nonce[:])
 	if err != nil {
-		return [xchachaKeySize]byte{}, fmt.Errorf("computing hchacha20: %w", err)
+		return [XchachaKeySize]byte{}, fmt.Errorf("computing hchacha20: %w", err)
 	}
 
-	return [xchachaKeySize]byte(hRes), nil
+	return [XchachaKeySize]byte(hRes), nil
 }
 
 // xchachaSeal encrypts and authenticates message using XChaCha20-Poly1305,
-// appending the result to out.  nonce must be xchachaNonceSize bytes long.
-// key must be xchachaKeySize bytes long.
-func xchachaSeal(out, nonce, message, key []byte) (res []byte) {
-	if len(nonce) != xchachaNonceSize {
+// appending the result to out.  nonce must be XchachaNonceSize bytes long.
+// key must be XchachaKeySize bytes long.
+func XchachaSeal(out, nonce, message, key []byte) (res []byte) {
+	if len(nonce) != XchachaNonceSize {
 		panic("unsupported nonce size")
 	}
-	if len(key) != xchachaKeySize {
+	if len(key) != XchachaKeySize {
 		panic("unsupported key size")
 	}
 
-	var firstBlock [xchachaBlockSize]byte
+	var firstBlock [XchachaBlockSize]byte
 	cipher, err := chacha20.NewUnauthenticatedCipher(key, nonce)
 	if err != nil {
 		panic(err)
 	}
 	cipher.XORKeyStream(firstBlock[:], firstBlock[:])
-	var polyKey [xchachaKeySize]byte
-	copy(polyKey[:], firstBlock[:xchachaKeySize])
+	var polyKey [XchachaKeySize]byte
+	copy(polyKey[:], firstBlock[:XchachaKeySize])
 
-	res, out = sliceForAppend(out, poly1305.TagSize+len(message))
+	res, out = SliceForAppend(out, poly1305.TagSize+len(message))
 	firstMessageBlock := message
-	if len(firstMessageBlock) > (xchachaBlockSize - xchachaKeySize) {
-		firstMessageBlock = firstMessageBlock[:(xchachaBlockSize - xchachaKeySize)]
+	if len(firstMessageBlock) > (XchachaBlockSize - XchachaKeySize) {
+		firstMessageBlock = firstMessageBlock[:(XchachaBlockSize - XchachaKeySize)]
 	}
 	tagOut := out
 	out = out[poly1305.TagSize:]
 	for i, x := range firstMessageBlock {
-		out[i] = firstBlock[(xchachaBlockSize-xchachaKeySize)+i] ^ x //nolint:gosec // G602: Slice bounds checked by caller (headerLength check)
+		out[i] = firstBlock[(XchachaBlockSize-XchachaKeySize)+i] ^ x //nolint:gosec // G602: Slice bounds checked by caller (headerLength check)
 	}
 	message = message[len(firstMessageBlock):]
 	ciphertext := out
@@ -97,26 +97,26 @@ func xchachaSeal(out, nonce, message, key []byte) (res []byte) {
 }
 
 // xchachaOpen decrypts and authenticates a box using XChaCha20-Poly1305.
-// nonce must be xchachaNonceSize bytes, key must be xchachaKeySize bytes.
-func xchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
-	if len(nonce) != xchachaNonceSize {
+// nonce must be XchachaNonceSize bytes, key must be XchachaKeySize bytes.
+func XchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
+	if len(nonce) != XchachaNonceSize {
 		panic("unsupported nonce size")
 	}
-	if len(key) != xchachaKeySize {
+	if len(key) != XchachaKeySize {
 		panic("unsupported key size")
 	}
 	if len(ciphertext) < poly1305.TagSize {
 		return nil, errCipherTextTooShort
 	}
 
-	var firstBlock [xchachaBlockSize]byte
+	var firstBlock [XchachaBlockSize]byte
 	cipher, err := chacha20.NewUnauthenticatedCipher(key, nonce)
 	if err != nil {
 		panic(err)
 	}
 	cipher.XORKeyStream(firstBlock[:], firstBlock[:])
-	var polyKey [xchachaKeySize]byte
-	copy(polyKey[:], firstBlock[:xchachaKeySize])
+	var polyKey [XchachaKeySize]byte
+	copy(polyKey[:], firstBlock[:XchachaKeySize])
 
 	var tag [poly1305.TagSize]byte
 	msg := ciphertext[poly1305.TagSize:]
@@ -128,13 +128,13 @@ func xchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 		return nil, errCipherTextAuthenticationFail
 	}
 
-	res, out = sliceForAppend(out, len(msg))
+	res, out = SliceForAppend(out, len(msg))
 	firstMessageBlock := msg
-	if len(firstMessageBlock) > (xchachaBlockSize - xchachaKeySize) {
-		firstMessageBlock = firstMessageBlock[:(xchachaBlockSize - xchachaKeySize)]
+	if len(firstMessageBlock) > (XchachaBlockSize - XchachaKeySize) {
+		firstMessageBlock = firstMessageBlock[:(XchachaBlockSize - XchachaKeySize)]
 	}
 	for i, x := range firstMessageBlock {
-		out[i] = firstBlock[(xchachaBlockSize-xchachaKeySize)+i] ^ x //nolint:gosec // G602: Slice bounds checked by caller (headerLength check)
+		out[i] = firstBlock[(XchachaBlockSize-XchachaKeySize)+i] ^ x //nolint:gosec // G602: Slice bounds checked by caller (headerLength check)
 	}
 	msg = msg[len(firstMessageBlock):]
 	out = out[len(firstMessageBlock):]
@@ -147,7 +147,7 @@ func xchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 
 // sliceForAppend extends the input slice by n bytes and returns the extended
 // slice and the tail slice pointing to the appended region.
-func sliceForAppend(in []byte, n int) (head, tail []byte) {
+func SliceForAppend(in []byte, n int) (head, tail []byte) {
 	if total := len(in) + n; cap(in) >= total {
 		head = in[:total]
 	} else {

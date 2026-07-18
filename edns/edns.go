@@ -16,9 +16,10 @@ import (
 )
 
 // DNSHandler is the interface protocol listeners use to dispatch incoming
-// DNS queries.  Defined here (rather than in server/handler) to avoid an
-// import cycle: server/protocol/dnscrypt → server/handler → server/resolver
-// → server/upstream → server/upstream/dnscrypt → server/protocol/dnscrypt.
+// DNS queries.  Defined here (rather than in server/handler) to keep
+// protocol packages independent of the handler/resolver graph.  The
+// server/upstream/dnscrypt → server/protocol/dnscrypt edge has been removed
+// by extracting shared types into internal/dnscryptcrypto/.
 type DNSHandler interface {
 	ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg
 }
