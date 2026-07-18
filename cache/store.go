@@ -294,9 +294,15 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		}
 
 		// Populate ptr_map for reverse (PTR) lookups.
-		insertPtrMap(tx, entryID, answer)
-		insertPtrMap(tx, entryID, authority)
-		insertPtrMap(tx, entryID, additional)
+		if txErr := insertPtrMap(tx, entryID, answer); txErr != nil {
+			return txErr
+		}
+		if txErr := insertPtrMap(tx, entryID, authority); txErr != nil {
+			return txErr
+		}
+		if txErr := insertPtrMap(tx, entryID, additional); txErr != nil {
+			return txErr
+		}
 
 		if txErr = tx.Commit(); txErr != nil {
 			log.Warnf("CACHE: commit tx failed: %v", txErr)

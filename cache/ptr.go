@@ -12,7 +12,7 @@ import (
 // insertPtrMap inserts reverse-lookup entries into ptr_map for a cache entry.
 // Deduplicates by (rdata_ip, name) — the same IP can appear across multiple
 // sections in a single response.
-func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
+func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) error {
 	type rec struct {
 		name    string
 		ttl     int
@@ -32,7 +32,7 @@ func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
 		})
 	}
 	if len(recs) == 0 {
-		return
+		return nil
 	}
 
 	// Deduplicate by (rdata_ip, name) — same IP can appear in the same section.
@@ -56,5 +56,7 @@ func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) {
 		zdnsutil.JoinPlaceholders(placeholders, ",")
 	if _, err := tx.Exec(stmt, args...); err != nil {
 		log.Warnf("CACHE: insert ptr_map failed: %v", err)
+		return err
 	}
+	return nil
 }
