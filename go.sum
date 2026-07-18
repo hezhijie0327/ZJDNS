@@ -1,5 +1,5 @@
-codeberg.org/miekg/dns v0.6.85-0.20260717174944-31e499a0741e h1:jJHr3+pvnUuhkHJotV1DhFvbeB7BoHJ6kDruyoVz3zc=
-codeberg.org/miekg/dns v0.6.85-0.20260717174944-31e499a0741e/go.mod h1:58Y3ZTg6Z5ZEm/ZAAwHehbZfrD4u5mE4RByHoPEMyKk=
+codeberg.org/miekg/dns v0.6.85-0.20260719080845-1db1230d9666 h1:JBcdvUHpc+8H2LtipIdejV1goq5c+NwFaXN1zxA52mQ=
+codeberg.org/miekg/dns v0.6.85-0.20260719080845-1db1230d9666/go.mod h1:58Y3ZTg6Z5ZEm/ZAAwHehbZfrD4u5mE4RByHoPEMyKk=
 gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033 h1:7vaosC7vbU88UxB439sfDKC4zkw/IAsm5BehQ/hHqsk=
 gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033/go.mod h1:H536xhflfRmKXO4uU9TlvZ/gQl3q2ptQJVH7NhmoXQQ=
 github.com/RyuaNerin/go-krypto v1.3.0 h1:smavTzSMAx8iuVlGb4pEwl9MD2qicqMzuXR2QWp2/Pg=
@@ -10,8 +10,8 @@ github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtn
 github.com/andybalholm/brotli v1.2.2/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/blang/semver/v4 v4.0.0 h1:1PFHFE6yCCTv8C1TeyNNarDzntLi7wMI5i/pzqYIsAM=
 github.com/blang/semver/v4 v4.0.0/go.mod h1:IbckMUScFkM3pff0VJDNKRiT6TG/YpiHIM2yvyW5YoQ=
-github.com/cloudflare/circl v1.6.5-0.20260717194027-4ee951981b5f h1:gY/48hV2imKDA4Ct+u5TMo0hZH+2ERIhMsI6q6mSYQI=
-github.com/cloudflare/circl v1.6.5-0.20260717194027-4ee951981b5f/go.mod h1:h5LNyxAc5nTue9DS5jT+48en2PSDYt3zdGnz5OstK6c=
+github.com/cloudflare/circl v1.6.5-0.20260718163227-07dbe16881b2 h1:yXNFfTWHEYkFOGXATIkJXgiaucfEoC53tdLg2aEaPv4=
+github.com/cloudflare/circl v1.6.5-0.20260718163227-07dbe16881b2/go.mod h1:h5LNyxAc5nTue9DS5jT+48en2PSDYt3zdGnz5OstK6c=
 github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 h1:tLWBZgPg6TV67oe76W4p+aUQEWIa52wbcuiz8GFd3vo=
 github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488/go.mod h1:QKJhjoqUtBsXCAVEjw38mFqoi7DebT7kthcD7UzbnoA=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
@@ -46,8 +46,8 @@ github.com/quic-go/go-ossfuzz-seeds v0.1.0 h1:APacT+iIaNF6fd8AGEiN3bT/Jtkd2jz4v4
 github.com/quic-go/go-ossfuzz-seeds v0.1.0/go.mod h1:3IOHRbJIc+L6YKMwfDtJAM9Vj9k0YY4muhuyUYk5tbk=
 github.com/quic-go/qpack v0.6.0 h1:g7W+BMYynC1LbYLSqRt8PBg5Tgwxn214ZZR34VIOjz8=
 github.com/quic-go/qpack v0.6.0/go.mod h1:lUpLKChi8njB4ty2bFLX2x4gzDqXwUpaO1DP9qMDZII=
-github.com/quic-go/quic-go v0.60.1-0.20260714220524-8bc5d4f8428a h1:Re75VescoWKGmKjsvvYN8Czv6enoTVsql9eKoiWouWM=
-github.com/quic-go/quic-go v0.60.1-0.20260714220524-8bc5d4f8428a/go.mod h1:wpKpjmPpftl30sL6pFh7REVpjbcCVy4zt2vDyK1TuJk=
+github.com/quic-go/quic-go v0.60.1-0.20260718125107-fbfa1d5b9278 h1:0VWfBy0VcNEEPP0tmYzz0LroB4jMpJ2sijUujG7PznY=
+github.com/quic-go/quic-go v0.60.1-0.20260718125107-fbfa1d5b9278/go.mod h1:9So2anK4Tp22URSQq00k+Vo2PNkle96ycDPDHL4s9vs=
 github.com/rogpeppe/go-internal v1.15.0 h1:D0RCU5rMAp+SpgkiNdrjfJ+LX4J1M32V2NeCY7EJ6hc=
 github.com/rogpeppe/go-internal v1.15.0/go.mod h1:DrUVZyrJU+txYW5/1kwtXQSMFio52ZOxX7yM1VHvnxs=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=

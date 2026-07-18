@@ -242,7 +242,7 @@ func validatePorts(cfg *ServerConfig) error {
 		{"server.protocol.http3.port", proto.HTTP3.Port},
 		{"server.protocol.tlcp", proto.TLCP},
 		{"server.protocol.http_tlcp.port", proto.HTTPTLCP.Port},
-		{"server.protocol.dod", proto.DTLS},
+		{"server.protocol.dtls", proto.DTLS},
 		{"server.protocol.dtlcp", proto.DTLCP},
 		{"server.protocol.dnscrypt", proto.DNSCrypt},
 	} {
@@ -274,7 +274,7 @@ func validatePorts(cfg *ServerConfig) error {
 		{"server.protocol.http3.port", proto.HTTP3.Port, "udp"},
 		{"server.protocol.tlcp", proto.TLCP, "tcp"},
 		{"server.protocol.http_tlcp.port", proto.HTTPTLCP.Port, "tcp"},
-		{"server.protocol.dod", proto.DTLS, "udp"},
+		{"server.protocol.dtls", proto.DTLS, "udp"},
 		{"server.protocol.dtlcp", proto.DTLCP, "udp"},
 		{"server.protocol.dnscrypt", proto.DNSCrypt, "udp"},
 		{"server.pprof", cfg.Server.Pprof, "tcp"},
@@ -436,7 +436,7 @@ func validateCertDomain(cfg *ServerConfig) error {
 	}
 
 	if cert.Domain == "" {
-		return errors.New("config: certificate.domain is required when secure protocols (tls/quic/https/http3/tlcp/http_tlcp/dod/dtlcp/dnscrypt) are enabled")
+		return errors.New("config: certificate.domain is required when secure protocols (tls/quic/https/http3/tlcp/http_tlcp/dtls/dtlcp/dnscrypt) are enabled")
 	}
 	return nil
 }
