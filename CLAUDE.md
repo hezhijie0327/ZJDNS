@@ -122,7 +122,7 @@ sh scripts/bump-version.sh patch "short slug" --no-migration  # code-only bump
 
 Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible). Zero `golangci-lint` warnings required.
 
-Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http drop-in replacement with native eTLS, used by DoH client/server), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+ — DNS-over-DTLS server/client), `github.com/ncruces/go-sqlite3` (pure-Go SQLite, WASM-based), `github.com/cloudflare/circl` (X-Wing PQ/T hybrid KEM for DNSCrypt PQC), `github.com/pjbgf/sha1cd` (SHA-1 with counter-cryptanalysis for NSEC3), `gitee.com/Trisia/gotlcp` (TLCP GB/T 38636-2020 + DTLCP GM/T 0128-2023 protocol stack — SM2/SM3/SM4, pure Go).
+Key dependencies: `codeberg.org/miekg/dns` (DNS protocol), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http drop-in replacement with native eTLS, used by DoH client/server), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+ — DNS-over-DTLS server/client), `github.com/ncruces/go-sqlite3` (pure-Go SQLite, WASM-based), `github.com/cloudflare/circl` (X-Wing PQ/T hybrid KEM for DNSCrypt PQC), `gitee.com/Trisia/gotlcp` (TLCP GB/T 38636-2020 + DTLCP GM/T 0128-2023 protocol stack — SM2/SM3/SM4, pure Go).
 
 ## Coding Standards
 
@@ -345,7 +345,7 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `Prober` | `server/resolver/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
 | `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |
 | `Message` / `Buffer` | `internal/pool` | sync.Pool allocators; also holds `QUICCode*` constants |
-| `JoinDNSPort` | `internal/dnsutil` | Utility: `ip` → `ip:53` (moved from config) |
+| `DNSFramePrefixLen` | `internal/dnsutil` | 2-byte DNS TCP frame prefix length (RFC 1035 §4.2.2) |
 | `Stamp` / `StampProtoType` | `internal/stamp` | sdns:// stamp parser/encoder: 8 protocol types, VLP hashes, bootstrap IPs. `Parse()` + `String()` round-trip. |
 
 ## Logging

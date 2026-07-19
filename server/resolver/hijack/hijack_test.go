@@ -2,9 +2,7 @@ package hijack
 
 import (
 	"net/netip"
-	"strings"
 	"testing"
-	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -35,7 +33,9 @@ func newDetector() *Detector {
 
 // classifyRecord is a test helper that classifies a single record.
 func classifyRecord(d *Detector, rr dns.RR, zone, queryName string) Verdict {
-	answerName := zdnsutil.NormalizeDomain(rr.Header().Name)
+	answerName := dnsutil.Canonical(rr.Header().Name)
+	queryName = dnsutil.Canonical(queryName)
+	zone = dnsutil.Canonical(zone)
 	if answerName != queryName {
 		return VerdictClean
 	}
@@ -345,9 +345,9 @@ func TestClassifyRoot_GlueOK(t *testing.T) {
 
 func TestClassifyRoot_EmptyQuery(t *testing.T) {
 	d := newDetector()
-	v := d.classifyRoot("", dns.TypeA)
+	v := d.classifyRoot(".", dns.TypeA)
 	if v != VerdictClean {
-		t.Fatalf("empty query domain for root should be clean, got %s", v)
+		t.Fatalf("root query domain for root should be clean, got %s", v)
 	}
 }
 
@@ -437,14 +437,3 @@ func TestDetector_Enable(t *testing.T) {
 }
 
 // ── Domain normalization round-trip ────────────────────────────────────────────
-
-func TestDomainNormalization(t *testing.T) {
-	raw := "ns-cmn1.qq.com."
-	normalized := zdnsutil.NormalizeDomain(raw)
-	if normalized == "" {
-		t.Fatal("normalized domain should not be empty")
-	}
-	if strings.HasSuffix(normalized, ".") {
-		t.Fatal("normalized domain should not end with trailing dot")
-	}
-}

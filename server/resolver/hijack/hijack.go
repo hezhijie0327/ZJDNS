@@ -1,12 +1,11 @@
 package hijack
 
 import (
-	"strings"
 	"sync/atomic"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // Verdict classifies a DNS response from a server that claims authority for
@@ -75,7 +74,7 @@ func (d *Detector) Enable(enabled bool) {
 // Validate checks whether a DNS response from a server authoritative for zone
 // is legitimate for the given queryName.  Only the Answer section is inspected.
 //
-//	zone == ""        → root server
+//	zone == "."       → root server
 //	isTLD(zone)       → TLD server (e.g. "com", "cn")
 //	otherwise         → authoritative server
 func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
@@ -83,11 +82,11 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 		return VerdictClean
 	}
 
-	z := zdnsutil.NormalizeDomain(zone)
-	n := zdnsutil.NormalizeDomain(queryName)
+	z := dnsutil.Canonical(zone)
+	n := dnsutil.Canonical(queryName)
 
 	for _, rr := range response.Answer {
-		if zdnsutil.NormalizeDomain(rr.Header().Name) != n {
+		if dnsutil.Canonical(rr.Header().Name) != n {
 			continue
 		}
 		if v := d.classify(z, n, dns.RRToType(rr)); v != VerdictClean {
@@ -109,9 +108,9 @@ func (d *Detector) IsHijackedByTLD(response *dns.Msg, queryName string) bool {
 	if !d.enabled.Load() || response == nil {
 		return false
 	}
-	n := zdnsutil.NormalizeDomain(queryName)
+	n := dnsutil.Canonical(queryName)
 	for _, rr := range response.Answer {
-		if zdnsutil.NormalizeDomain(rr.Header().Name) != n {
+		if dnsutil.Canonical(rr.Header().Name) != n {
 			continue
 		}
 		switch dns.RRToType(rr) {
@@ -125,7 +124,7 @@ func (d *Detector) IsHijackedByTLD(response *dns.Msg, queryName string) bool {
 // classify returns the Verdict for a single RR that matches the query name.
 func (d *Detector) classify(zone, name string, rrtype uint16) Verdict {
 	switch {
-	case zone == "":
+	case zone == ".":
 		return d.classifyRoot(name, rrtype)
 	case d.isTLD(zone):
 		return d.classifyTLD(zone, name)
@@ -154,7 +153,7 @@ func (d *Detector) classifyRoot(name string, rrtype uint16) Verdict {
 		return VerdictClean
 	}
 
-	if name != "" {
+	if name != "." {
 		return VerdictHijack
 	}
 	return VerdictClean
@@ -174,9 +173,9 @@ func (d *Detector) isRootServerGlue(domain string, rrType uint16) bool {
 	if rrType != dns.TypeA && rrType != dns.TypeAAAA {
 		return false
 	}
-	return strings.HasSuffix(domain, "."+rootServersDomain) || domain == rootServersDomain
+	return dnsutil.IsBelow(dnsutil.Fqdn(rootServersDomain), dnsutil.Fqdn(domain))
 }
 
 func (d *Detector) isTLD(domain string) bool {
-	return domain != "" && !strings.Contains(domain, ".")
+	return domain != "" && dnsutil.Labels(domain) == 1
 }

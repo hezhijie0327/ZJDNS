@@ -1,17 +1,13 @@
 package dnssec
 
 import (
-	"encoding/base32"
-	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
 	"zjdns/config"
-	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"github.com/pjbgf/sha1cd"
 )
 
 // verifyNSEC checks whether any NSEC record in the slice cryptographically
@@ -122,53 +118,18 @@ func matchesNSEC3Denial(nsec3 *dns.NSEC3, hashedQname string, qtype uint16, deni
 }
 
 // nsec3HashName hashes a domain name using the NSEC3 parameters specified in the
-// record (algorithm, iterations, salt) per RFC 5155 §5. It returns the
-// base32hex-encoded hash without padding as a lowercase string.
-// Iterations are capped at config.DefaultMaxNSEC3Iterations to prevent DoS attacks.
+// record (algorithm, iterations, salt) per RFC 5155 §5. Delegates to the
+// library's dnsutil.NSEC3Name which implements the correct H(name || salt)
+// ordering. Iterations are capped at config.DefaultMaxNSEC3Iterations to
+// prevent DoS attacks.
 func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) string {
-	// RFC 5155 §5 mandates SHA-1 (algorithm 1) for NSEC3 hashing.
 	if hashAlg != dns.SHA1 {
 		return ""
 	}
 	if iterations > config.DefaultMaxNSEC3Iterations {
 		iterations = config.DefaultMaxNSEC3Iterations
 	}
-	// Decode salt from hex presentation format (RFC 5155 §3.1.4).
-	// The miekg/dns library stores NSEC3 salt as an uppercase hex string.
-	// An empty salt is represented as "-" (RFC 5155 §3.1.4).
-	var saltBytes []byte
-	if salt != "" && salt != "-" {
-		var err error
-		saltBytes, err = hex.DecodeString(salt)
-		if err != nil {
-			return ""
-		}
-	}
-	// Normalize: lowercase, fully qualified, wire-format label encoding.
-	name = strings.ToLower(dnsutil.Fqdn(name))
-	labels := strings.Split(zdnsutil.TrimTrailingDot(name), ".")
-	var wire []byte
-	for _, label := range labels {
-		wire = append(wire, byte(len(label))) //nolint:gosec // G115: NSEC3 hash iteration — protocol-bounded byte
-		wire = append(wire, label...)
-	}
-	wire = append(wire, 0) // root label
-
-	// Build initial input: salt || wire_format_name.
-	h := sha1cd.New()
-	h.Write(saltBytes)
-	h.Write(wire)
-	hash := h.Sum(nil)
-
-	// Additional iterations: H(salt || previous_hash).
-	for i := uint16(0); i < iterations; i++ {
-		h.Reset()
-		h.Write(saltBytes)
-		h.Write(hash)
-		hash = h.Sum(nil)
-	}
-
-	return strings.ToLower(base32.HexEncoding.WithPadding(base32.NoPadding).EncodeToString(hash))
+	return dnsutil.NSEC3Name(name, salt, iterations)
 }
 
 // isDenialOfExistenceValid verifies signed NSEC/NSEC3 records against the

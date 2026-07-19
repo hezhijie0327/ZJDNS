@@ -5,11 +5,12 @@ import (
 	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// ── labelCount ──────────────────────────────────────────────────────────────
+// ── Labels ──────────────────────────────────────────────────────────────────
 
-func TestLabelCount(t *testing.T) {
+func TestLabels(t *testing.T) {
 	tests := []struct {
 		name string
 		want int
@@ -21,9 +22,9 @@ func TestLabelCount(t *testing.T) {
 		{"com.", 1},
 	}
 	for _, tt := range tests {
-		got := labelCount(tt.name)
+		got := dnsutil.Labels(tt.name)
 		if got != tt.want {
-			t.Errorf("labelCount(%q) = %d, want %d", tt.name, got, tt.want)
+			t.Errorf("Labels(%q) = %d, want %d", tt.name, got, tt.want)
 		}
 	}
 }
@@ -106,7 +107,7 @@ func TestLabelsToAdd_BeyondMax(t *testing.T) {
 	// After minimisationCount steps, expose all remaining labels
 	got := labelsToAdd("a.b.c.d.e.f.example.com.", ".", config.DefaultQnameMinimiseCount,
 		config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
-	want := labelCount("a.b.c.d.e.f.example.com.")
+	want := dnsutil.Labels("a.b.c.d.e.f.example.com.")
 	if got != want {
 		t.Errorf("labelsToAdd beyond max: got %d, want %d", got, want)
 	}

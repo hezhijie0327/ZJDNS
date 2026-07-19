@@ -317,7 +317,7 @@ func TestRecordRequest_Stale(t *testing.T) {
 
 	var protocol, result string
 	err := mc.db.SQ.QueryRow(
-		"SELECT protocol, result FROM query_log WHERE qname='example.com'",
+		"SELECT protocol, result FROM query_log WHERE qname='example.com.'",
 	).Scan(&protocol, &result)
 	if err != nil {
 		t.Fatalf("query_log query: %v", err)
@@ -367,7 +367,7 @@ func TestRecordRequest_Zone(t *testing.T) {
 
 	var count int64
 	err := mc.db.SQ.QueryRow(
-		"SELECT COUNT(*) FROM query_log WHERE qname='blocked.com' AND result='zone'",
+		"SELECT COUNT(*) FROM query_log WHERE qname='blocked.com.' AND result='zone'",
 	).Scan(&count)
 	if err != nil {
 		t.Fatalf("query_log query: %v", err)
@@ -476,7 +476,7 @@ func TestSet_RoundTrip(t *testing.T) {
 	var validated int
 	var msgWire []byte
 	err := mc.db.SQ.QueryRow(
-		"SELECT e.validated, e.msg_wire FROM entries e WHERE e.qname='meta.example.com' AND e.qtype=1",
+		"SELECT e.validated, e.msg_wire FROM entries e WHERE e.qname='meta.example.com.' AND e.qtype=1",
 	).Scan(&validated, &msgWire)
 	if err != nil {
 		t.Fatalf("entries query: %v", err)
@@ -549,7 +549,7 @@ func TestRecordRequest_Error(t *testing.T) {
 	var rcode, respTime int
 	var server string
 	err := mc.db.SQ.QueryRow(
-		"SELECT protocol, result, rcode, response_ms, server FROM query_log WHERE qname='error.example.com'",
+		"SELECT protocol, result, rcode, response_ms, server FROM query_log WHERE qname='error.example.com.'",
 	).Scan(&protocol, &result, &rcode, &respTime, &server)
 	if err != nil {
 		t.Fatalf("query_log query: %v", err)
@@ -675,7 +675,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 
 	// ── Phase 4: Verify query_log has error record ────────────────────────
 	var errCount int64
-	_ = mc.db.SQ.QueryRow("SELECT COUNT(*) FROM query_log WHERE qname='error.example.com' AND result='error'").Scan(&errCount)
+	_ = mc.db.SQ.QueryRow("SELECT COUNT(*) FROM query_log WHERE qname='error.example.com.' AND result='error'").Scan(&errCount)
 	if errCount != 1 {
 		t.Errorf("error log count = %d, want 1", errCount)
 	}
@@ -695,7 +695,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		 FROM query_stats WHERE result='hit'`,
 	).Scan(&udpHits, &dohHits)
 	_ = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0) FROM query_log WHERE qname='www.example.com' AND result='stale'`,
+		`SELECT COALESCE(COUNT(*), 0) FROM query_log WHERE qname='www.example.com.' AND result='stale'`,
 	).Scan(&doqStale)
 	if err != nil {
 		t.Fatalf("query_log query: %v", err)
@@ -716,7 +716,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		 FROM query_stats WHERE result='hit'`,
 	).Scan(&gitTCP)
 	_ = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0) FROM query_log WHERE qname='github.com' AND result='stale'`,
+		`SELECT COALESCE(COUNT(*), 0) FROM query_log WHERE qname='github.com.' AND result='stale'`,
 	).Scan(&gitStale)
 	if gitTCP != 1 {
 		t.Errorf("github.com tcp hit = %d, want 1", gitTCP)
@@ -786,7 +786,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	var rwCount int64
-	_ = mc.db.SQ.QueryRow(`SELECT COUNT(*) FROM query_log WHERE qname='zone.test' AND result='zone'`).Scan(&rwCount)
+	_ = mc.db.SQ.QueryRow(`SELECT COUNT(*) FROM query_log WHERE qname='zone.test.' AND result='zone'`).Scan(&rwCount)
 	if rwCount != 3 {
 		t.Errorf("zone_count = %d, want 3", rwCount)
 	}

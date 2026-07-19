@@ -6,11 +6,11 @@ import (
 	"strings"
 	"zjdns/config"
 	"zjdns/edns"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // collectBestNSMatch collects NS records from a DNS response's Authority and
@@ -24,9 +24,8 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 
 	for _, rrec := range allRRSections {
 		if ns, ok := rrec.(*dns.NS); ok {
-			nsName := zdnsutil.NormalizeDomain(rrec.Header().Name)
-			isMatch := normalizedQname == nsName ||
-				(nsName != "" && strings.HasSuffix(normalizedQname, "."+nsName))
+			nsName := dnsutil.Canonical(rrec.Header().Name)
+			isMatch := dnsutil.IsBelow(dnsutil.Fqdn(nsName), dnsutil.Fqdn(normalizedQname))
 			if isMatch && len(nsName) >= len(bestMatch) {
 				if len(nsName) > len(bestMatch) {
 					bestMatch = nsName
@@ -77,8 +76,8 @@ func (r *Recursive) applyQnameMinimisation(question Question, qname, currentDoma
 // to the same zone but the response is not authoritative (AA flag not set).
 // Returns a terminal result for the caller to return, or nil if not lame.
 func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMatch string, validated bool, ecsResponse *edns.ECSOption) *QueryResult {
-	currentDomainNormalized := zdnsutil.NormalizeDomain(currentDomain)
-	if bestMatch != currentDomainNormalized || currentDomainNormalized == "" {
+	currentDomainNormalized := dnsutil.Canonical(currentDomain)
+	if bestMatch != currentDomainNormalized || currentDomainNormalized == "." {
 		return nil
 	}
 	if len(response.Answer) == 0 && !response.Authoritative {
@@ -126,7 +125,7 @@ func (r *Recursive) shouldRetryMinimisedQname(queryName, qname string, qnameMini
 		return false
 	}
 	for _, rr := range response.Answer {
-		if rr != nil && strings.EqualFold(zdnsutil.NormalizeDomain(rr.Header().Name), normalizedQname) {
+		if rr != nil && strings.EqualFold(dnsutil.Canonical(rr.Header().Name), normalizedQname) {
 			return false
 		}
 	}

@@ -10,7 +10,6 @@ require (
 	github.com/klauspost/compress v1.19.1-0.20260717091032-9960386c5845
 	github.com/ncruces/go-sqlite3 v0.35.3-0.20260717032608-e5bb5cc6c401
 	github.com/pion/dtls/v3 v3.1.3-0.20260713182031-e1fb308f9f85
-	github.com/pjbgf/sha1cd v0.6.1-0.20260701134543-795854be75e9
 	github.com/quic-go/quic-go v0.60.1-0.20260718125107-fbfa1d5b9278
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2
@@ -25,7 +24,6 @@ require (
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
-	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/pion/logging v0.2.4 // indirect

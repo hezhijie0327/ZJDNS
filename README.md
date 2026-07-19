@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.4.22-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.4.23-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -450,7 +450,7 @@ WHERE pm.rdata_ip = '104.20.23.154' AND e.expires_at + 2592000 >= unixepoch();
 
 -- 某域名的请求历史（审计日志）
 SELECT timestamp, protocol, result, rcode, response_ms, server, hijack
-FROM query_log WHERE qname = 'www.google.com'
+FROM query_log WHERE qname = 'www.google.com.'
 ORDER BY timestamp DESC LIMIT 20;
 
 -- 某域名的缓存命中统计（按协议/rcode 聚合）
@@ -500,10 +500,9 @@ GROUP BY protocol, rcode ORDER BY hits DESC;
 | [golang.org/x/crypto](https://pkg.go.dev/golang.org/x/crypto) | ChaCha20-Poly1305 AEAD、HKDF 密钥派生（DNSCrypt 自定义构造） |
 | [golang.org/x/sync](https://pkg.go.dev/golang.org/x/sync) | errgroup 并发编排（服务器 goroutine 生命周期管理） |
 | [klauspost/compress](https://github.com/klauspost/compress) | zstd 压缩（缓存响应 + Zone 记录 wire format） |
-| [miekg/dns](https://codeberg.org/miekg/dns) | DNS 协议编解码、UDP/TCP 传输 |
+| [miekg/dns](https://codeberg.org/miekg/dns) | DNS 协议编解码、UDP/TCP 传输、NSEC3 哈希、规范排序、标签遍历等原语 |
 | [ncruces/go-sqlite3](https://github.com/ncruces/go-sqlite3) | 纯 Go SQLite（WASM 编译，无 CGo，统一数据库引擎） |
 | [pion/dtls](https://github.com/pion/dtls) | DTLS 1.2+ 传输层（DNS-over-DTLS，RFC 8094） |
-| [pjbgf/sha1cd](https://github.com/pjbgf/sha1cd) | SHA-1 带碰撞检测（NSEC3 哈希，RFC 5155） |
 | [quic-go/quic-go](https://github.com/quic-go/quic-go) | QUIC 传输层（QUIC / HTTP3） |
 | [Trisia/gotlcp](https://gitee.com/Trisia/gotlcp) | TLCP (GB/T 38636-2020) 协议栈（国密 SM2/SM3/SM4，纯 Go） |
 

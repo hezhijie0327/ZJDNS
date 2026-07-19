@@ -12,6 +12,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // RecordRequest logs a request outcome. Every request upserts a row into
@@ -23,7 +24,7 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 		return
 	}
 
-	r.Qname = zdnsutil.NormalizeDomain(r.Qname)
+	r.Qname = dnsutil.Canonical(r.Qname)
 
 	// Always upsert into query_stats.
 	_, _ = s.db.StmtQueryStats.Exec(r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, zdnsutil.BoolToInt(r.Hijack), zdnsutil.BoolToInt(r.Fallback), r.ResponseTime)

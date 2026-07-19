@@ -15,9 +15,8 @@ import (
 	"zjdns/database"
 	"zjdns/internal/log"
 
-	zdnsutil "zjdns/internal/dnsutil"
-
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -178,7 +177,7 @@ func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 	}
 
 	// Dynamic content: store function in Go map.
-	normalizedName := zdnsutil.NormalizeDomain(rule.Name)
+	normalizedName := dnsutil.Canonical(rule.Name)
 
 	if rule.DynamicContent != nil {
 		e.dynamics[normalizedName] = &dynamicEntry{fn: rule.DynamicContent, configs: rule.Answer}
@@ -247,7 +246,7 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 
-	qname = zdnsutil.NormalizeDomain(qname)
+	qname = dnsutil.Canonical(qname)
 
 	// 1. Check dynamic content (Go map, not SQL).
 	if de, ok := e.dynamics[qname]; ok {

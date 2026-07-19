@@ -12,7 +12,6 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/resolver"
@@ -160,11 +159,11 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	if qctx.Res != nil && log.IsDebug() {
 		qname := req.Question[0].Header().Name
 		qtype := dns.RRToType(req.Question[0])
-		log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t%s",
+		log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t\n%s",
 			qname, dns.TypeToString[qtype], dns.RcodeToString[qctx.Res.Rcode],
 			time.Since(qctx.StartTime).Truncate(time.Microsecond), len(qctx.Res.Answer), len(qctx.Res.Ns),
 			len(qctx.Res.Extra), qctx.Res.AuthenticatedData,
-			zdnsutil.FormatRecords(qctx.Res.Answer, qctx.Res.Ns, qctx.Res.Extra))
+			qctx.Res.String())
 	}
 
 	return qctx.Res

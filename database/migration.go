@@ -37,6 +37,7 @@ var migrations = []migration{
 	{"3.4.6", "reorder ruleset_entries PK to (type, tag, value) for index-seek queries", migrateV3_4_6},
 	{"3.4.18", "add last_hit_time to entry_hit_counters for time-based cleanup", migrateV3_4_18},
 	{"3.4.19", "query-stats-sliding-window", migrateV3_4_19},
+	{"3.4.24", "fqdn-canonical-form", migrateV3_4_24},
 }
 
 func migrateV3_2_17(db *DB) error {
@@ -309,6 +310,31 @@ func migrateV3_3_5(db *DB) error {
 		}
 		if _, err := db.SQ.Exec("UPDATE entry_hit_counters SET protocol = ? WHERE protocol = ?", r[1], r[0]); err != nil {
 			return fmt.Errorf("update entry_hit_counters protocol %s->%s: %w", r[0], r[1], err)
+		}
+	}
+	return nil
+}
+
+func migrateV3_4_24(db *DB) error {
+	// Canonical form switched from no-trailing-dot (NormalizeDomain) to
+	// FQDN with trailing dot (dnsutil.Canonical). Update all stored domain
+	// names that don't already end with '.'.
+	tables := []struct {
+		table string
+		col   string
+	}{
+		{"entries", "qname"},
+		{"query_log", "qname"},
+		{"ptr_map", "name"},
+		{"zone_entries", "qname"},
+	}
+	for _, t := range tables {
+		query := fmt.Sprintf( //nolint:gosec // G201: table and column names are hardcoded in the loop above
+			"UPDATE %s SET %s = %s || '.' WHERE %s != '' AND %s != '.' AND %s NOT LIKE '%%.'",
+			t.table, t.col, t.col, t.col, t.col, t.col,
+		)
+		if _, err := db.SQ.Exec(query); err != nil {
+			return fmt.Errorf("fqdn migration %s.%s: %w", t.table, t.col, err)
 		}
 	}
 	return nil

@@ -88,7 +88,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 
 	var ipRRCount int
 	for _, rr := range answer {
-		if zdnsutil.IsAOrAAAA(rr) {
+		if t := dns.RRToType(rr); t == dns.TypeA || t == dns.TypeAAAA {
 			ipRRCount++
 			if ipRRCount > 1 {
 				break

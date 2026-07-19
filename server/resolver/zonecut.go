@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/resolver/dnssec"
-
-	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -20,8 +17,8 @@ import (
 // from a different zone hierarchy than the given zone. These records need
 // independent DNSSEC validation via CNAME chain following.
 func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
-	normalized := zdnsutil.NormalizeDomain(zone)
-	if normalized == "" {
+	fqZone := dnsutil.Fqdn(zone)
+	if fqZone == "." {
 		return answer
 	}
 	allSigs := dnssec.CollectRRSIGs(answer, extra)
@@ -39,8 +36,7 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 		}
 		inZone := false
 		for _, sig := range sigs {
-			signer := zdnsutil.NormalizeDomain(sig.SignerName)
-			if signer == normalized || strings.HasSuffix(signer, "."+normalized) {
+			if dnsutil.IsBelow(fqZone, dnsutil.Fqdn(sig.SignerName)) {
 				inZone = true
 				break
 			}
@@ -59,8 +55,8 @@ func (r *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) st
 		return ""
 	}
 
-	normalizedCurrent := zdnsutil.NormalizeDomain(currentDomain)
-	if normalizedCurrent == "" {
+	fqCurrent := dnsutil.Fqdn(currentDomain)
+	if fqCurrent == "." {
 		return ""
 	}
 
@@ -69,9 +65,8 @@ func (r *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) st
 		if rrsig == nil {
 			continue
 		}
-		signerName := zdnsutil.NormalizeDomain(rrsig.SignerName)
-		if signerName != normalizedCurrent &&
-			strings.HasSuffix(signerName, "."+normalizedCurrent) {
+		signerName := dnsutil.Fqdn(rrsig.SignerName)
+		if !dns.EqualName(signerName, fqCurrent) && dnsutil.IsBelow(fqCurrent, signerName) {
 			return signerName
 		}
 	}

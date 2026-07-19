@@ -3,11 +3,11 @@ package middleware
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
@@ -91,7 +91,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 			Family:       ecsOpt.Family,
 			SourcePrefix: ecsOpt.SourcePrefix,
 			ScopePrefix:  ecsOpt.ScopePrefix,
-			Address:      zdnsutil.CopyIP(ecsOpt.Address),
+			Address:      slices.Clone(ecsOpt.Address),
 		}
 	}
 

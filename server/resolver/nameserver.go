@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	var activeConnections atomic.Int32
 	var hijackRejected atomic.Bool
-	normalizedQname := zdnsutil.NormalizeDomain(question.Name)
+	normalizedQname := dnsutil.Canonical(question.Name)
 
 	for _, ns := range nameservers {
 		nsAddr := ns
@@ -396,12 +397,12 @@ func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype 
 		switch a := rrec.(type) {
 		case *dns.A:
 			if qtype == dns.TypeA {
-				*nsAddrs = append(*nsAddrs, zdnsutil.JoinDNSPort(a.A.String()))
+				*nsAddrs = append(*nsAddrs, net.JoinHostPort(a.A.String(), "53"))
 				addrs = append(addrs, a.A.String())
 			}
 		case *dns.AAAA:
 			if qtype == dns.TypeAAAA {
-				*nsAddrs = append(*nsAddrs, zdnsutil.JoinDNSPort(a.AAAA.String()))
+				*nsAddrs = append(*nsAddrs, net.JoinHostPort(a.AAAA.String(), "53"))
 				addrs = append(addrs, a.AAAA.String())
 			}
 		}
@@ -410,7 +411,7 @@ func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype 
 	if qtype == dns.TypeA {
 		for _, rrec := range qr.Additional {
 			if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsName) {
-				*nsAddrs = append(*nsAddrs, zdnsutil.JoinDNSPort(aaaa.AAAA.String()))
+				*nsAddrs = append(*nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), "53"))
 			}
 		}
 	}

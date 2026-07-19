@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 	"zjdns/cache"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // CryptoValidator performs cryptographic DNSSEC validation using the
@@ -96,6 +96,11 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 	}
 	if dnskey == nil {
 		return ErrNoDNSKEY
+	}
+
+	// Validate the RRset structure before verification (RFC 2181).
+	if !dnsutil.IsRRset(rrset) {
+		return fmt.Errorf("%w: not a valid RRset (type/name/class mismatch)", ErrBogusSignature)
 	}
 
 	// Check the RRSIG validity period manually (RFC 4034 §3.1.5)
@@ -267,10 +272,10 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 		if !groupValidated {
 			crossZone := true
 			for _, sig := range sigs {
-				signer := zdnsutil.NormalizeDomain(sig.SignerName)
+				fqSigner := dnsutil.Fqdn(sig.SignerName)
 				for _, key := range verifiedDNSKEYs {
-					keyZone := zdnsutil.NormalizeDomain(key.Header().Name)
-					if signer == keyZone || strings.HasSuffix(signer, "."+keyZone) {
+					fqKeyZone := dnsutil.Fqdn(key.Header().Name)
+					if dnsutil.IsBelow(fqKeyZone, fqSigner) {
 						crossZone = false
 						break
 					}

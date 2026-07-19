@@ -16,6 +16,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // SQLiteCache is a DNS response cache backed by a SQLite database managed by
@@ -64,7 +65,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return nil, false, false
 	}
 
-	qname = zdnsutil.NormalizeDomain(qname)
+	qname = dnsutil.Canonical(qname)
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 
 	var id int64
@@ -171,6 +172,8 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 	}
 
 	// Sort A/AAAA: probed first (fastest → slowest), unprobed last.
+	// When latencies are equal (or both unprobed), fall back to
+	// canonical ordering (RFC 4034 §6) for deterministic results.
 	slices.SortStableFunc(aRecs, func(a, b dns.RR) int {
 		aIP, _ := zdnsutil.ExtractIPString(a)
 		bIP, _ := zdnsutil.ExtractIPString(b)
@@ -182,9 +185,12 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 		case !aOK && bOK:
 			return 1
 		case aOK && bOK:
-			return aLat - bLat
+			if aLat != bLat {
+				return aLat - bLat
+			}
+			return dns.Compare(a, b)
 		default:
-			return 0
+			return dns.Compare(a, b)
 		}
 	})
 
@@ -255,7 +261,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	entryTTL := minTTL(answer, authority, additional)
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
-	qname = zdnsutil.NormalizeDomain(qname)
+	qname = dnsutil.Canonical(qname)
 	dnssecInt := zdnsutil.BoolToInt(dnssecOK)
 
 	// Strip EDNS OPT pseudo-record from additional before caching,

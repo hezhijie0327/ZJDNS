@@ -87,8 +87,8 @@ func TestCollectBestNSMatch_FindsNS(t *testing.T) {
 	if termRes != nil {
 		t.Error("should not return terminal result")
 	}
-	if bestMatch != "example.com" {
-		t.Errorf("expected bestMatch=example.com, got %s", bestMatch)
+	if bestMatch != "example.com." {
+		t.Errorf("expected bestMatch=example.com., got %s", bestMatch)
 	}
 	if len(nsRecords) != 1 {
 		t.Errorf("expected 1 NS record, got %d", len(nsRecords))
@@ -106,8 +106,8 @@ func TestCollectBestNSMatch_LongestMatch(t *testing.T) {
 	bestMatch, nsRecords, _, _ := r.collectBestNSMatch(
 		resp, "www.example.com", "www.example.com.", "www.example.com.", false, false, nil,
 	)
-	if bestMatch != "example.com" {
-		t.Errorf("expected longest match example.com, got %s", bestMatch)
+	if bestMatch != "example.com." {
+		t.Errorf("expected longest match example.com., got %s", bestMatch)
 	}
 	if len(nsRecords) != 1 {
 		t.Errorf("expected 1 NS record (longest match only), got %d", len(nsRecords))
@@ -176,7 +176,7 @@ func TestCheckLameDelegation_LameDetected(t *testing.T) {
 			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
 		},
 	}
-	termRes := r.checkLameDelegation(resp, "example.com.", "example.com", false, nil)
+	termRes := r.checkLameDelegation(resp, "example.com.", "example.com.", false, nil)
 	if termRes == nil {
 		t.Fatal("should detect lame delegation")
 	}
@@ -193,7 +193,7 @@ func TestCheckLameDelegation_AuthoritativeNODATA(t *testing.T) {
 		},
 	}
 	resp.Authoritative = true
-	termRes := r.checkLameDelegation(resp, "example.com.", "example.com", true, nil)
+	termRes := r.checkLameDelegation(resp, "example.com.", "example.com.", true, nil)
 	if termRes == nil {
 		t.Fatal("should return terminal result for authoritative self-referral")
 	}

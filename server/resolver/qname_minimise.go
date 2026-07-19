@@ -1,9 +1,6 @@
 package resolver
 
 import (
-	"strings"
-	zdnsutil "zjdns/internal/dnsutil"
-
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 )
@@ -15,51 +12,50 @@ import (
 // When labelsToAdd exceeds the remaining labels, the full original QNAME is
 // returned (resolution has reached the target).
 func minimiseQNAME(originalQname, currentZone string, labelsToAdd int) string {
-	orig := zdnsutil.NormalizeDomain(originalQname)
-	zone := zdnsutil.NormalizeDomain(currentZone)
+	fqOrig := dnsutil.Fqdn(originalQname)
+	fqZone := dnsutil.Fqdn(currentZone)
 
-	// Root zone
-	if zone == "" {
-		labels := strings.Split(zdnsutil.TrimTrailingDot(orig), ".")
-		if labelsToAdd >= len(labels) {
-			return dnsutil.Fqdn(orig)
+	// Root zone or QNAME not below current zone
+	if currentZone == "." || currentZone == "" || !dnsutil.IsBelow(fqZone, fqOrig) {
+		origLabels := dnsutil.Labels(fqOrig)
+		if labelsToAdd >= origLabels {
+			return fqOrig
 		}
-		return dnsutil.Fqdn(strings.Join(labels[len(labels)-labelsToAdd:], "."))
+		// Take the rightmost labelsToAdd labels using Prev
+		offset := len(fqOrig)
+		for range labelsToAdd {
+			offset, _ = dnsutil.Prev(fqOrig, offset)
+		}
+		return fqOrig[offset:]
 	}
 
 	// QNAME equals the zone — reached the target
-	if orig == zone {
-		return dnsutil.Fqdn(orig)
+	if dnsutil.Labels(fqOrig) == dnsutil.Labels(fqZone) {
+		return fqOrig
 	}
 
-	// QNAME is not a subdomain of the current zone — return original
-	if !strings.HasSuffix(orig, "."+zone) {
-		return dnsutil.Fqdn(orig)
+	// Strip the zone suffix to get the remaining prefix
+	zoneLabels := dnsutil.Labels(fqZone)
+	offset := len(fqOrig)
+	for range zoneLabels {
+		offset, _ = dnsutil.Prev(fqOrig, offset)
 	}
-
-	remaining := orig[:len(orig)-len(zone)-1] // strip "." + zone
+	remaining := fqOrig[:offset]
 	if remaining == "" {
-		return dnsutil.Fqdn(orig)
+		return fqOrig
 	}
 
-	remainingLabels := strings.Split(remaining, ".")
-	if labelsToAdd >= len(remainingLabels) {
-		return dnsutil.Fqdn(orig) // reached the target
+	remainingLabels := dnsutil.Labels(dnsutil.Fqdn(remaining))
+	if labelsToAdd >= remainingLabels {
+		return fqOrig
 	}
 
-	// Take the rightmost 'labelsToAdd' labels from the remaining prefix
-	suffix := strings.Join(remainingLabels[len(remainingLabels)-labelsToAdd:], ".")
-	return dnsutil.Fqdn(suffix + "." + zone)
-}
-
-// labelCount returns the number of labels in a domain name. The root zone (".")
-// returns 0.
-func labelCount(name string) int {
-	norm := zdnsutil.NormalizeDomain(name)
-	if norm == "" {
-		return 0
+	// Take the rightmost labelsToAdd labels from the remaining prefix
+	suffixOffset := len(remaining)
+	for range labelsToAdd {
+		suffixOffset, _ = dnsutil.Prev(remaining, suffixOffset)
 	}
-	return strings.Count(norm, ".") + 1
+	return remaining[suffixOffset:] + fqZone
 }
 
 // labelsToAdd computes how many labels to add in this minimisation step.
@@ -67,8 +63,8 @@ func labelCount(name string) int {
 // for maximum privacy; after minimisationCount steps, all remaining labels
 // are exposed at once to bound the total number of queries.
 func labelsToAdd(originalQname, currentZone string, stepsTaken, minimisationCount, minimiseOneLabel int) int {
-	origLabels := labelCount(originalQname)
-	zoneLabels := labelCount(currentZone)
+	origLabels := dnsutil.Labels(dnsutil.Fqdn(originalQname))
+	zoneLabels := dnsutil.Labels(dnsutil.Fqdn(currentZone))
 	remainingLabels := origLabels - zoneLabels
 	if remainingLabels <= 0 {
 		return 0

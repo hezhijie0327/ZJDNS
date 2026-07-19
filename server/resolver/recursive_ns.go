@@ -6,7 +6,6 @@ import (
 	"net"
 	"strings"
 	"zjdns/config"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/resolver/probe"
 
@@ -65,9 +64,9 @@ func (r *Recursive) resolveNextNameservers(
 				if !ok {
 					continue
 				}
-				rrecName := zdnsutil.NormalizeDomain(rrec.Header().Name)
-				parDom := zdnsutil.NormalizeDomain(parentDomain)
-				if rrecName != parDom && !strings.HasSuffix(rrecName, "."+parDom) && parDom != "" {
+				fqRrecName := dnsutil.Fqdn(rrec.Header().Name)
+				fqParDom := dnsutil.Fqdn(parentDomain)
+				if !dnsutil.IsBelow(fqParDom, fqRrecName) && fqParDom != "." {
 					continue
 				}
 				nsKey := dnsutil.Fqdn(rrec.Header().Name)

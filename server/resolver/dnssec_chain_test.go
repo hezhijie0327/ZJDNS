@@ -9,7 +9,6 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/resolver/hijack"
@@ -117,7 +116,7 @@ func TestIsZoneCut_CrossZoneDelegation(t *testing.T) {
 		t.Error("isZoneCut should detect zone cut when RRSIG signer is subdomain of currentDomain")
 	}
 	signer := rr.getZoneCutSigner(msg, parentZone+".")
-	if signer != childZone {
+	if signer != childZone+"." {
 		t.Errorf("getZoneCutSigner should return child zone %q, got %q", childZone, signer)
 	}
 }
@@ -238,10 +237,10 @@ func TestLameDelegation_NonAuthoritativeSameZone(t *testing.T) {
 
 	if len(msg.Answer) == 0 && !msg.Authoritative {
 		currentDomain := dnsutil.Fqdn(zone)
-		normalizedCurrent := zdnsutil.NormalizeDomain(currentDomain)
+		normalizedCurrent := dnsutil.Canonical(currentDomain)
 		for _, rr := range msg.Ns {
 			if ns, ok := rr.(*dns.NS); ok {
-				nsName := zdnsutil.NormalizeDomain(ns.Hdr.Name)
+				nsName := dnsutil.Canonical(ns.Hdr.Name)
 				if nsName == normalizedCurrent {
 					t.Log("Correctly identified lame delegation pattern")
 					return
@@ -270,10 +269,10 @@ func TestLameDelegation_AuthoritativeNODATA(t *testing.T) {
 
 	if len(msg.Answer) == 0 && msg.Authoritative {
 		currentDomain := dnsutil.Fqdn(zone)
-		normalizedCurrent := zdnsutil.NormalizeDomain(currentDomain)
+		normalizedCurrent := dnsutil.Canonical(currentDomain)
 		for _, rr := range msg.Ns {
 			if ns, ok := rr.(*dns.NS); ok {
-				nsName := zdnsutil.NormalizeDomain(ns.Hdr.Name)
+				nsName := dnsutil.Canonical(ns.Hdr.Name)
 				if nsName == normalizedCurrent {
 					t.Log("Correctly identified authoritative NODATA (not lame)")
 					return

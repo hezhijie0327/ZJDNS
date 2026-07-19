@@ -17,7 +17,6 @@ RUN \
     && go get -u github.com/klauspost/compress@master \
     && go get -u github.com/ncruces/go-sqlite3@main \
     && go get -u github.com/pion/dtls/v3@main \
-    && go get -u github.com/pjbgf/sha1cd@main \
     && go get -u github.com/quic-go/quic-go@master \
     && go get -u gitlab.com/go-extension/http@master \
     && go get -u gitlab.com/go-extension/tls@master \
@@ -35,6 +34,6 @@ FROM scratch
 
 COPY --from=rebase_zjdns / /
 
-EXPOSE 53/tcp 53/udp 443/tcp 443/udp 853/tcp 853/udp
+EXPOSE 53/tcp 53/udp 443/tcp 443/udp 853/tcp 853/udp 8443/tcp 8443/udp 8853/udp 9853/tcp 9853/udp 9443/tcp 6060/tcp
 
 ENTRYPOINT ["/zjdns"]

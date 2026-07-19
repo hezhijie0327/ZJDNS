@@ -4,9 +4,9 @@ import (
 	"strings"
 	"zjdns/cache"
 	"zjdns/config"
-	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // Record extraction helpers.
@@ -92,44 +92,23 @@ func findNSEC3(rrs []dns.RR) []*dns.NSEC3 {
 
 // DNS canonical ordering (RFC 4034 §6.1).
 
-// canonicalCompare compares two domain names per DNS canonical ordering.
-// Returns -1 if a < b, 0 if equal, 1 if a > b.
+// canonicalCompare compares two domain names per DNS canonical ordering
+// (RFC 4034 §6.1). Returns -1 if a < b, 0 if equal, 1 if a > b.
 func canonicalCompare(a, b string) int {
-	a = zdnsutil.NormalizeDomain(a)
-	b = zdnsutil.NormalizeDomain(b)
+	a = dnsutil.Canonical(a)
+	b = dnsutil.Canonical(b)
 
-	if a == "" && b == "" {
-		return 0
-	}
-	if a == "" {
-		return -1
-	}
-	if b == "" {
-		return 1
-	}
-
-	la := strings.Split(a, ".")
-	lb := strings.Split(b, ".")
-
-	i, j := len(la)-1, len(lb)-1
-	for i >= 0 && j >= 0 {
-		if la[i] < lb[j] {
+	// dns.CompareName panics on the root zone "." — handle explicitly.
+	if a == "." || b == "." {
+		if a == b {
+			return 0
+		}
+		if a == "." {
 			return -1
 		}
-		if la[i] > lb[j] {
-			return 1
-		}
-		i--
-		j--
+		return 1
 	}
-
-	if i < 0 && j < 0 {
-		return 0
-	}
-	if i < 0 {
-		return -1
-	}
-	return 1
+	return dns.CompareName(a, b)
 }
 
 // isDomainInRange checks whether a domain falls within an NSEC coverage range.
@@ -156,7 +135,7 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 	if c == nil || c.cache == nil || len(keys) == 0 {
 		return
 	}
-	zone = zdnsutil.NormalizeDomain(zone)
+	zone = dnsutil.Canonical(zone)
 
 	ttl := config.DefaultDNSKeyCacheTTL
 	for _, k := range keys {
@@ -178,7 +157,7 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	if c == nil || c.cache == nil {
 		return nil
 	}
-	zone = zdnsutil.NormalizeDomain(zone)
+	zone = dnsutil.Canonical(zone)
 
 	cachedEntry, found, expired := c.cache.Get(zone, dns.TypeDNSKEY, dns.ClassINET, nil, false)
 	if !found || cachedEntry == nil || expired {

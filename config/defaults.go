@@ -205,22 +205,25 @@ const (
 	DNSSECStatusInsecure = "insecure"
 	DNSSECStatusBogus    = "bogus"
 
-	ProtoUDP   = "udp"
-	ProtoTCP   = "tcp"
+	ProtoPing = "ping"
+	ProtoICMP = "icmp"
+	ProtoHTTP = "http"
+
+	ProtoUDP = "udp"
+	ProtoTCP = "tcp"
+
 	ProtoTLS   = "tls"
 	ProtoQUIC  = "quic"
 	ProtoHTTPS = "https"
 	ProtoHTTP3 = "http3"
-	ProtoPing  = "ping"
-	ProtoICMP  = "icmp"
-	ProtoHTTP  = "http"
 
 	ProtoDNSCrypt    = "dnscrypt"     // DNSCrypt v2 encrypted DNS (UDP)
 	ProtoDNSCryptTCP = "dnscrypt-tcp" // DNSCrypt v2 encrypted DNS (TCP)
-	ProtoTLCP        = "tlcp"         // DoT over TLCP (GB/T 38636-2020)
-	ProtoHTTPTLCP    = "http-tlcp"    // DoH over TLCP (matches config protocol.http_tlcp)
-	ProtoDTLS        = "dtls"         // DNS-over-DTLS (RFC 8094, matches config protocol.dtls)
-	ProtoDTLCP       = "dtlcp"        // DNS-over-DTLCP (GM/T 0128-2023)
+
+	ProtoTLCP     = "tlcp"      // DoT over TLCP (GB/T 38636-2020)
+	ProtoHTTPTLCP = "http-tlcp" // DoH over TLCP (matches config protocol.http_tlcp)
+	ProtoDTLS     = "dtls"      // DNS-over-DTLS (RFC 8094, matches config protocol.dtls)
+	ProtoDTLCP    = "dtlcp"     // DNS-over-DTLCP (GM/T 0128-2023)
 )
 
 // =============================================================================

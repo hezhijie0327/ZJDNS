@@ -8,7 +8,6 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/resolver/hijack"
@@ -82,7 +81,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	question.Name = qname
 	nameservers := r.getRootServers()
 	currentDomain := "."
-	normalizedQname := zdnsutil.NormalizeDomain(qname)
+	normalizedQname := dnsutil.Canonical(qname)
 
 	// hijackSeen is set to true when any VerdictHijack is observed at any
 	// delegation level, including through internal TCP restarts.  The CNAME
@@ -107,7 +106,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	}
 
 	// Root-domain query (normalizedQname is empty for the root zone ".").
-	if normalizedQname == "" {
+	if normalizedQname == "." {
 		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
 		if verdict == hijack.VerdictHijack {
 			hijackSeen = true
@@ -216,7 +215,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		// the parent zone (the zone that published the delegation),
 		// not the delegated-to zone.
 		parentDomain := currentDomain
-		currentDomain = bestMatch + "."
+		currentDomain = bestMatch
 
 		// Resolve NS addresses for the next delegation level.
 		nsResult := r.resolveNextNameservers(ctx, bestNSRecords, response, qname, parentDomain, depth, forceTCP)
@@ -238,7 +237,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		nameservers = nsResult.addrs
 		// Save TLD servers after updating. Used for the
 		// full-QNAME hijack probe at the authoritative step.
-		if labelCount(currentDomain) == 1 {
+		if dnsutil.Labels(dnsutil.Fqdn(currentDomain)) == 1 {
 			tldServers = nameservers
 		}
 	}
@@ -300,7 +299,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		default:
 		}
 
-		currentName := zdnsutil.NormalizeDomain(currentQuestion.Name)
+		currentName := dnsutil.Canonical(currentQuestion.Name)
 		if visitedCNAMEs[currentName] {
 			log.Warnf("RECURSION: CNAME loop detected for %s", currentName)
 			return QueryResult{Cacheable: true, Err: fmt.Errorf("CNAME loop detected: %s", currentName)}
@@ -361,7 +360,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	}
 
 	if cnameDepth >= config.DefaultMaxCNAMEChain-1 {
-		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, zdnsutil.NormalizeDomain(question.Name))
+		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.Canonical(question.Name))
 	}
 	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Hijack: hijackOccurred}
 }

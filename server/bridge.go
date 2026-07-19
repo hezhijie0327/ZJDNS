@@ -73,7 +73,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				return
 			}
 
-			response := s.handler.ServeDNS(req, zdnsutil.ClientIP(w), false, config.ProtoTCP)
+			response := s.handler.ServeDNS(req, net.ParseIP(dnsutil.RemoteIP(w)), false, config.ProtoTCP)
 			if response != nil {
 				entry.lastAccess.Store(log.NowUnixNano())
 
@@ -104,7 +104,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	clientIP := zdnsutil.ClientIP(w)
+	clientIP := net.ParseIP(dnsutil.RemoteIP(w))
 
 	response := s.handler.ServeDNS(req, clientIP, false, detectRequestProtocol(w))
 	if response != nil {
