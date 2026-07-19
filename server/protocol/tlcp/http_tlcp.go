@@ -14,6 +14,14 @@ import (
 )
 
 func (s *Server) startDOHServer() error {
+	// Use external shared listener (port-sharing mode) if set.
+	// The shared.DoH serve loop handles both TLS and TLCP connections.
+	if s.extDoHListener != nil {
+		s.dohListeners = append(s.dohListeners, s.extDoHListener)
+		log.Debugf("TLCP: DoH using shared listener on %s", s.extDoHListener.Addr())
+		return nil
+	}
+
 	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.dohPort)
 	if err != nil {
 		return fmt.Errorf("resolve bind addrs: %w", err)

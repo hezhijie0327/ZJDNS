@@ -1,0 +1,21 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": {
+      "udp": "20533",
+      "tcp": "20533",
+      "tls": "20853",
+      "tlcp": "20853"
+    },
+    "certificate": {
+      "domain": "zjdns-test.local",
+      "tls": { "self_signed": true },
+      "tlcp": { "self_signed": true }
+    },
+    "features": {
+      "hijack_protection": false,
+      "cache": { "max_entries": 1000 }
+    }
+  },
+  "upstream": [{ "address": "builtin_recursive" }]
+}

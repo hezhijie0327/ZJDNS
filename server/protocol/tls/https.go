@@ -28,6 +28,14 @@ func (a *dohResponseWriter) Write(b []byte) (int, error) { return a.w.Write(b) }
 func (a *dohResponseWriter) WriteHeader(code int)        { a.w.WriteHeader(code) }
 
 func (s *Server) startDOHServer(port string) error {
+	// Use external shared listener (port-sharing mode) if set.
+	// The shared.DoH serve loop handles both TLS and TLCP connections.
+	if s.extDoHListener != nil {
+		s.httpsListeners = append(s.httpsListeners, s.extDoHListener)
+		log.Debugf("TLS: DoH using shared listener on %s", s.extDoHListener.Addr())
+		return nil
+	}
+
 	addrs, err := zdnsutil.ResolveBindAddrs("tcp", port)
 	if err != nil {
 		return fmt.Errorf("DoH address resolution: %w", err)

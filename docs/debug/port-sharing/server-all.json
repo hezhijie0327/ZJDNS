@@ -1,0 +1,32 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": {
+      "udp": "20533",
+      "tcp": "20533",
+      "tls": "20853",
+      "tlcp": "20853",
+      "https": { "port": "20443", "endpoint": "/dns-query" },
+      "http_tlcp": { "port": "20443", "endpoint": "/dns-query" },
+      "quic": "20854",
+      "dtls": "20854",
+      "dtlcp": "20854",
+      "dnscrypt": "20854",
+      "http3": { "port": "20445", "endpoint": "/dns-query" }
+    },
+    "certificate": {
+      "domain": "zjdns-test.local",
+      "tls": { "self_signed": true },
+      "tlcp": { "self_signed": true },
+      "dnscrypt": {
+        "private_key": "BC1F1237E602BAF1F302329495008EC8A662AC33444A191E3CC4A8B44583D3BE1498ACC39ABEA9A0102FA655DA6BE74084CEF4AFC9992E43FDAE364ED156DE53",
+        "public_key": "1498ACC39ABEA9A0102FA655DA6BE74084CEF4AFC9992E43FDAE364ED156DE53"
+      }
+    },
+    "features": {
+      "hijack_protection": false,
+      "cache": { "max_entries": 1000 }
+    }
+  },
+  "upstream": [{ "address": "builtin_recursive" }]
+}

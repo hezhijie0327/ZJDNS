@@ -31,6 +31,13 @@ func (k *tcpKeepAliveListener) Accept() (net.Conn, error) {
 }
 
 func (s *Server) startDOTServer() error {
+	// Use external shared listener (port-sharing mode) if set.
+	if s.extDoTListener != nil {
+		s.dotListeners = append(s.dotListeners, s.extDoTListener)
+		log.Debugf("TLCP: DoT using shared listener on %s", s.extDoTListener.Addr())
+		return nil
+	}
+
 	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.dotPort)
 	if err != nil {
 		return fmt.Errorf("resolve bind addrs: %w", err)

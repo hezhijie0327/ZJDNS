@@ -4,7 +4,7 @@
 
 ```
 docs/debug/
-├── testing.md              # this file
+├── DEBUG.md                 # this file
 ├── loopback/               # ZJDNS ↔ ZJDNS protocol loopback tests
 │   ├── server.json         # server: UDP/TCP/TLS/QUIC/HTTPS + DTLS + self-signed TLS
 │   ├── server-dnssec.json  # server: dnssec_enforce=true
@@ -19,12 +19,13 @@ docs/debug/
 │   ├── client-dtls.json    # client: DTLS → server
 │   ├── client-http-tlcp.json  # client: HTTP over TLCP → server
 │   └── client-dtlcp.json   # client: DTLCP → server
+├── port-sharing/           # ZJDNS port-sharing tests (per-protocol combination)
+│   └── README.md           # full test matrix + instructions
 ├── routedns/               # ZJDNS ↔ RouteDNS tests
 │   └── dtls-client.toml    # RouteDNS DTLS client → ZJDNS DTLS server
 ├── dnscrypt/               # ZJDNS ↔ DNSCrypt-proxy tests
 │   ├── zjdns-server.json          # ZJDNS DNSCrypt server (dual-cert: classical + PQ)
 │   ├── proxy-pq.toml              # DNSCrypt-proxy client (pqdnscrypt=true, default)
-│   ├── 
 │   └── proxy-classic.toml         # DNSCrypt-proxy client (pqdnscrypt=false)
 └── upstream/               # ZJDNS → external upstream tests
     ├── alidns-tls.json      # AliDNS via TLS
@@ -242,6 +243,13 @@ dig @127.0.0.1 -p 14553 www.baidu.com A +short
 
 pkill -f "server-tlcp\|client-dtlcp"
 ```
+
+## Port Sharing Tests
+
+See [`docs/debug/port-sharing/`](port-sharing/README.md) for a comprehensive port-sharing
+test matrix covering all protocol combinations (TLS+TLCP DoT, HTTPS+HTTP-TLCP DoH,
+DoH+DNSCrypt TCP, QUIC+DTLS±DTLCP±DNSCrypt demux, HTTP3+DNSCrypt, DTLS+DTLCP
+without QUIC).
 
 ### DNSpod TLCP HTTPS (External Upstream)
 

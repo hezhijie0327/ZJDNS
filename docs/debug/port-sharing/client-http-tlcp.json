@@ -1,0 +1,14 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": { "udp": "21556" }
+  },
+  "upstream": [
+    {
+      "address": "https://127.0.0.1:20443/dns-query",
+      "protocol": "http-tlcp",
+      "server_name": "zjdns-test.local",
+      "skip_tls_verify": true
+    }
+  ]
+}

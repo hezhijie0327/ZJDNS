@@ -19,6 +19,38 @@ import (
 )
 
 func (s *Server) startDOQServer() error {
+	// Use external shared PacketConn (port-sharing mode) if set.
+	if s.extDoQConn != nil {
+		s.doqValidator = newQUICAddrValidator()
+		quicTLSConfig := s.QUICTLSConfig().Clone()
+		quicTLSConfig.NextProtos = config.NextProtoDOQ
+		quicConfig := &quic.Config{
+			MaxIdleTimeout:        config.DefaultQUICServerIdleTimeout,
+			MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
+			MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
+			Allow0RTT:             true,
+			EnableDatagrams:       true,
+			KeepAlivePeriod:       config.DefaultQUICKeepAlive,
+		}
+		log.Debugf("TLS: DoQ using shared listener on %s", s.extDoQConn.LocalAddr())
+		transport := &quic.Transport{
+			Conn:                s.extDoQConn,
+			VerifySourceAddress: s.doqValidator.requiresValidation,
+		}
+		s.doqTransports = append(s.doqTransports, transport)
+		listener, err := transport.ListenEarly(quicTLSConfig, quicConfig)
+		if err != nil {
+			return fmt.Errorf("DoQ listen: %w", err)
+		}
+		s.doqListeners = append(s.doqListeners, listener)
+		s.serverGroup.Go(func() error {
+			defer zdnsutil.HandlePanic("DoQ server")
+			s.handleDOQConnections(listener)
+			return nil
+		})
+		return nil
+	}
+
 	addrs, err := zdnsutil.ResolveBindAddrs("udp", s.cfg.QUICPort)
 	if err != nil {
 		return fmt.Errorf("DoQ address resolution: %w", err)

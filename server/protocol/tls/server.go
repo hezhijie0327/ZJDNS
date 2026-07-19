@@ -70,6 +70,15 @@ type Server struct {
 	h3Validator    *quicAddrValidator
 	stdCert        stdtls.Certificate // for DTLS server
 	dtlsListeners  []net.Listener
+
+	// External listeners set by the port-sharing layer.
+	// When non-nil, startDOTServer / startDOHServer skip binding
+	// and use the provided listener instead.
+	extDoTListener  net.Listener
+	extDoHListener  net.Listener
+	extDTLSListener net.Listener
+	extDoQConn      net.PacketConn // external DoQ packet conn (port-sharing)
+	extDoH3Conn     net.PacketConn // external DoH3 packet conn (port-sharing)
 }
 
 // debugListener wraps a net.Listener to log every raw TCP connection before
@@ -84,6 +93,39 @@ const (
 	// TLSConnBufferSize is the buffer size for TLS connection readers.
 	TLSConnBufferSize = 4096
 )
+
+// SetExternalDoTListener injects a pre-created DoT listener, skipping the
+// normal bind-and-wrap path.  Used for port sharing (TLS + TLCP on :853).
+func (s *Server) SetExternalDoTListener(l net.Listener) { s.extDoTListener = l }
+
+// SetExternalDoHListener injects a pre-created DoH listener, skipping the
+// normal bind-and-wrap path.  Used for port sharing (HTTPS + TLCP DoH on :443).
+func (s *Server) SetExternalDoHListener(l net.Listener) { s.extDoHListener = l }
+
+// SetExternalDTLSListener injects a pre-created DTLS listener.  Used for
+// port sharing (DTLS + DTLCP on :853 UDP).
+func (s *Server) SetExternalDTLSListener(l net.Listener) { s.extDTLSListener = l }
+
+// SetExternalDoQConn injects a pre-created net.PacketConn for DoQ.  Used
+// for port sharing (DoQ + DTLS on :853 UDP).
+func (s *Server) SetExternalDoQConn(pconn net.PacketConn) { s.extDoQConn = pconn }
+
+// SetExternalDoH3Conn injects a pre-created net.PacketConn for DoH3.
+// Used for port sharing (DoH3 + DNSCrypt on :443 UDP).
+func (s *Server) SetExternalDoH3Conn(pconn net.PacketConn) { s.extDoH3Conn = pconn }
+
+// SharedTLSConfig returns a cloned TLS config for use by the port-sharing
+// shared listener.  alpn sets NextProtos (["dot"] for DoT, ["h2"] for DoH).
+// DTLSCert returns the DTLS certificate for use by the port-sharing
+// UDP listener.
+func (s *Server) DTLSCert() *stdtls.Certificate { return &s.stdCert }
+
+func (s *Server) SharedTLSConfig(alpn []string) *eTLS.Config {
+	cfg := s.baseTLSConfig.Clone()
+	cfg.NextProtos = alpn
+	cfg.GetConfigForClient = s.getConfigForClient(alpn)
+	return cfg
+}
 
 func (d *debugListener) Accept() (net.Conn, error) {
 	conn, err := d.Listener.Accept()

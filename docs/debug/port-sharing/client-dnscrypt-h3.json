@@ -1,0 +1,12 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": { "udp": "21567" }
+  },
+  "upstream": [
+    {
+      "address": "sdns://AQAAAAAAAAAADzEyNy4wLjAuMToyMDQ0NSAUmKzDmr6poBAvplXaa-dAhM70r8mZLkP9rjZO0VbeUyAyLmRuc2NyeXB0LWNlcnQuempkbnMtdGVzdC5sb2NhbA",
+      "protocol": "dnscrypt"
+    }
+  ]
+}

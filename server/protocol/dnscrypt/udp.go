@@ -97,7 +97,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 
 // handleUDPPacket processes a single UDP datagram.
 func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAddr, udpConn *net.UDPConn) {
-	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
+	if !s.HasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
 		reply, err := s.handleHandshake(b)
 		if err != nil {
 			log.Debugf("DNSCRYPT: handshake failed: %v", err)
@@ -152,4 +152,93 @@ func setUDPSocketOptions(conn *net.UDPConn) error {
 		return err4
 	}
 	return nil
+}
+
+// serveUDPOverPacketConn is like serveUDP but works with net.PacketConn
+// instead of *net.UDPConn.  Used by the port-sharing UDP demux.
+func (s *Server) serveUDPOverPacketConn(ctx context.Context, pconn net.PacketConn) {
+	defer zdnsutil.HandlePanic("DNSCrypt UDP shared server")
+
+	s.wg.Add(1)
+	defer s.wg.Done()
+
+	buf := make([]byte, dns.MaxMsgSize)
+
+	for s.isStarted() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		_ = pconn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+
+		n, raddr, err := pconn.ReadFrom(buf)
+		if err != nil {
+			if !s.isStarted() {
+				return
+			}
+			if zdnsutil.IsTemporaryError(err) {
+				continue
+			}
+			log.Debugf("DNSCRYPT: UDP shared read error: %v", err)
+			return
+		}
+
+		if n < dnscryptcrypto.MinDNSPacketSize {
+			continue
+		}
+
+		addr, ok := raddr.(*net.UDPAddr)
+		if !ok {
+			continue
+		}
+
+		packet := make([]byte, n)
+		copy(packet, buf[:n])
+
+		s.wg.Go(func() {
+			defer zdnsutil.HandlePanic("DNSCrypt UDP shared handler")
+			s.handleUDPPacketOverConn(ctx, packet, addr, pconn)
+		})
+	}
+}
+
+// handleUDPPacketOverConn is like handleUDPPacket but works with net.PacketConn.
+func (s *Server) handleUDPPacketOverConn(ctx context.Context, b []byte, addr *net.UDPAddr, pconn net.PacketConn) {
+	if !s.HasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
+		reply, err := s.handleHandshake(b)
+		if err != nil {
+			log.Debugf("DNSCRYPT: handshake failed: %v", err)
+			return
+		}
+		if len(reply) > len(b) {
+			truncated := &dns.Msg{}
+			truncated.Data = reply
+			if unpackErr := truncated.Unpack(); unpackErr == nil {
+				dnsutil.Truncate(truncated)
+				if packErr := truncated.Pack(); packErr == nil {
+					reply = truncated.Data
+				}
+			}
+			log.Debugf("DNSCRYPT: UDP cert response (%d bytes) exceeds request (%d bytes) — returning TC", len(reply), len(b))
+		}
+		_, _ = pconn.WriteTo(reply, addr)
+		log.Debugf("DNSCRYPT: UDP handshake response sent to %s", addr)
+		return
+	}
+
+	m, q, err := s.decrypt(b)
+	if err != nil {
+		log.Debugf("DNSCRYPT: failed to decrypt UDP query: %v", err)
+		return
+	}
+	log.Debugf("DNSCRYPT: decrypted UDP shared query from %s", addr)
+
+	resp, encErr := s.encrypt(m, q, true)
+	if encErr != nil {
+		log.Debugf("DNSCRYPT: encrypt UDP response error: %v", encErr)
+		return
+	}
+	_, _ = pconn.WriteTo(resp, addr)
 }

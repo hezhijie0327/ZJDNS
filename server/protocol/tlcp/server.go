@@ -35,6 +35,37 @@ type Server struct {
 	dtlcpListeners []net.Listener
 	serverGroup    *errgroup.Group
 	serverCtx      context.Context
+
+	// External listeners set by the port-sharing layer.
+	// When non-nil, startDOTServer / startDOHServer skip binding
+	// and use the provided listener instead.
+	extDoTListener   net.Listener
+	extDoHListener   net.Listener
+	extDTLCPListener net.Listener
+}
+
+// SetExternalDoTListener injects a pre-created DoT listener, skipping the
+// normal bind-and-wrap path.  Used for port sharing (TLS + TLCP on :853).
+func (s *Server) SetExternalDoTListener(l net.Listener) { s.extDoTListener = l }
+
+// SetExternalDoHListener injects a pre-created DoH listener, skipping the
+// normal bind-and-wrap path.  Used for port sharing (HTTPS + TLCP DoH on :443).
+func (s *Server) SetExternalDoHListener(l net.Listener) { s.extDoHListener = l }
+
+// SetExternalDTLCPListener injects a pre-created DTLCP listener.  Used for
+// port sharing (DTLS + DTLCP on :853 UDP).
+func (s *Server) SetExternalDTLCPListener(l net.Listener) { s.extDTLCPListener = l }
+
+// SharedTLCPConfig returns a cloned TLCP config for use by the port-sharing
+// shared listener.  alpn sets NextProtos (["dot"] for DoT, ["h2"] for DoH).
+// DTLCPConfig returns the DTLCP config for use by the port-sharing
+// UDP listener.
+func (s *Server) DTLCPConfig() *dtlcp.Config { return s.dtlcpConfig }
+
+func (s *Server) SharedTLCPConfig(alpn []string) *tlcp.Config {
+	cfg := s.tlcpConfig.Clone()
+	cfg.NextProtos = alpn
+	return cfg
 }
 
 // New creates a TLCP Server, loading or generating SM2 certificate pairs.

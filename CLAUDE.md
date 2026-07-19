@@ -181,6 +181,9 @@ zjdns/
     ├── handler/        ← query pipeline adapter + shared types
     │   └── middleware/ ← 10 composable middleware implementations + AssembleChain
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
+    │   └── shared/     ← port-sharing detection + demux (TLS/TLCP/QUIC/DTLS)
+    │       ├── tcp/    ← TCP shared listeners (TLS vs TLCP, DoH dispatch)
+    │       └── udp/    ← UDP demux (QUIC vs DTLS vs DNSCrypt)
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + socks5
     └── resolver/       ← recursive walk + forward + dnssec/ + hijack/ + probe/
 ```
@@ -372,6 +375,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **SOCKS5**: Per-upstream proxy, TCP CONNECT + UDP ASSOCIATE, 5 sentinel errors, v2ray/xray compat.
 - **DNSCrypt v2**: Full implementation with PQ support (X-Wing KEM + ticket resumption). Server auto-rotates keys every 24h, client caches PQ state per-upstream. See `server/protocol/dnscrypt/` and `server/upstream/dnscrypt/`.
 - **DTLCP**: GM/T 0128-2023. Works around gotlcp library bugs (connected-socket `WriteTo` ban, `Listen("udp")` unsupported).
+- **Port sharing**: When compatible protocols are configured on the same port, the `shared/` sub-packages auto-detect the protocol per-connection (TCP) or per-packet (UDP). Detection uses the TLS record layer header (major version 0x01=TLCP, 0x03=TLS, 0xFE=DTLS) and the QUIC Fixed Bit (RFC 9000). Supported combinations: TLS+TLCP on TCP:853, DoH+TLCP+DNSCrypt on TCP:443, DoQ+DTLS+DTLCP on UDP:853, DoH3+DNSCrypt on UDP:443. See `server/protocol/shared/`.
 - **DNSSEC**: IANA root KSK trust anchors (20326 + 38696). `dnssec_enforce` → SERVFAIL on bogus.
 - **EDE propagation**: DNSSEC EDE codes stored atomically to survive context cancellation.
 - **Zone rules**: SQLite-backed WITHOUT ROWID, wildcard + exact match in one B-tree. Zone responses bypass cache.

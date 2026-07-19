@@ -184,6 +184,13 @@ func (w *dtlcpConnWrapper) Close() error {
 // custom net.Listener that buffers the first datagram per client so the DTLCP
 // handshake can consume it.
 func (s *Server) startDTLCPServer() error {
+	// Use external shared listener (port-sharing mode) if set.
+	if s.extDTLCPListener != nil {
+		s.dtlcpListeners = append(s.dtlcpListeners, s.extDTLCPListener)
+		log.Debugf("TLCP: DTLCP using shared listener on %s", s.extDTLCPListener.Addr())
+		return nil
+	}
+
 	addrs, err := zdnsutil.ResolveBindAddrs("udp", s.dtlcpPort)
 	if err != nil {
 		return err

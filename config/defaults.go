@@ -12,15 +12,15 @@ const (
 
 	DefaultDNSCryptPort = "8443" // DNSCrypt (draft-denis-dprive-dnscrypt-10)
 
-	DefaultTLSPort   = "853"  // DoT (RFC 7858)
-	DefaultQUICPort  = "853"  // DoQ (RFC 9250)
-	DefaultHTTPSPort = "443"  // DoH (RFC 8484)
-	DefaultHTTP3Port = "443"  // DoH3
-	DefaultDTLSPort  = "8853" // DoD (RFC 8094)
+	DefaultTLSPort   = "853" // DoT (RFC 7858)
+	DefaultQUICPort  = "853" // DoQ (RFC 9250)
+	DefaultHTTPSPort = "443" // DoH (RFC 8484)
+	DefaultHTTP3Port = "443" // DoH3
+	DefaultDTLSPort  = "853" // DoD (RFC 8094 §3.3)
 
-	DefaultTLCPPort     = "9853" // TLCP (GB/T 38636-2020) DoT
-	DefaultHTTPTLCPPort = "9443" // TLCP (GB/T 38636-2020) DoH
-	DefaultDTLCPPort    = "9853" // DTLCP (GM/T 0128-2023) DoD
+	DefaultTLCPPort     = "853" // TLCP DoT (GB/T 38636-2020)
+	DefaultHTTPTLCPPort = "443" // TLCP DoH
+	DefaultDTLCPPort    = "853" // DTLCP (GM/T 0128-2023)
 
 	DefaultPprofPort = "6060"
 

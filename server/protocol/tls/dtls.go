@@ -14,6 +14,13 @@ import (
 
 // startDTLSServer binds UDP sockets and starts DTLS listeners for DNS-over-DTLS.
 func (s *Server) startDTLSServer() error {
+	// Use external shared listener (port-sharing mode) if set.
+	if s.extDTLSListener != nil {
+		s.dtlsListeners = append(s.dtlsListeners, s.extDTLSListener)
+		log.Debugf("TLS: DTLS using shared listener on %s", s.extDTLSListener.Addr())
+		return nil
+	}
+
 	addrs, err := zdnsutil.ResolveBindAddrs("udp", s.cfg.DTLSPort)
 	if err != nil {
 		return err

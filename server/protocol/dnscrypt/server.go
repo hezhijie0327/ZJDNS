@@ -38,6 +38,8 @@ type Server struct {
 	certificateCfg *config.DNSCryptCertificate
 	udpConns       []*net.UDPConn
 	tcpListeners   []net.Listener
+	extTCPListener net.Listener   // external shared TCP listener (port-sharing mode)
+	extUDPConn     net.PacketConn // external shared UDP conn (port-sharing mode)
 	wg             *sync.WaitGroup
 	tcpConns       map[net.Conn]struct{}
 	mu             sync.RWMutex
@@ -154,55 +156,68 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	s.handler = dnsHandler
 	s.started = true
 
-	udpAddrs, err := zdnsutil.ResolveBindAddrs("udp", s.port)
-	if err != nil {
-		return fmt.Errorf("resolving UDP bind addresses: %w", err)
-	}
-	log.Infof("DNSCRYPT: Listening on UDP %v", udpAddrs)
-	for _, addr := range udpAddrs {
-		uaddr, err := net.ResolveUDPAddr("udp", addr)
+	// Use external shared PacketConn (port-sharing mode) if set.
+	if s.extUDPConn != nil {
+		log.Debugf("DNSCRYPT: UDP using shared listener on %s", s.extUDPConn.LocalAddr())
+		go s.ServeUDPConn(s.ctx, s.extUDPConn)
+	} else {
+		udpAddrs, err := zdnsutil.ResolveBindAddrs("udp", s.port)
 		if err != nil {
-			return fmt.Errorf("resolving UDP address %s: %w", addr, err)
+			return fmt.Errorf("resolving UDP bind addresses: %w", err)
 		}
-		conn, err := net.ListenUDP("udp", uaddr)
-		if err != nil {
-			return fmt.Errorf("listening UDP on %s: %w", addr, err)
+		log.Infof("DNSCRYPT: Listening on UDP %v", udpAddrs)
+		for _, addr := range udpAddrs {
+			uaddr, err := net.ResolveUDPAddr("udp", addr)
+			if err != nil {
+				return fmt.Errorf("resolving UDP address %s: %w", addr, err)
+			}
+			conn, err := net.ListenUDP("udp", uaddr)
+			if err != nil {
+				return fmt.Errorf("listening UDP on %s: %w", addr, err)
+			}
+			s.udpConns = append(s.udpConns, conn)
+			go s.serveUDP(s.ctx, conn)
 		}
-		s.udpConns = append(s.udpConns, conn)
-		go s.serveUDP(s.ctx, conn)
 	}
 
-	tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.port)
-	if err != nil {
-		for _, c := range s.udpConns {
-			_ = c.Close()
-		}
-		return fmt.Errorf("resolving TCP bind addresses: %w", err)
-	}
-	log.Infof("DNSCRYPT: Listening on TCP %v", tcpAddrs)
-	for _, addr := range tcpAddrs {
-		tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	// Use external shared listener (port-sharing mode) if set.
+	if s.extTCPListener != nil {
+		s.tcpListeners = append(s.tcpListeners, s.extTCPListener)
+		log.Debugf("DNSCRYPT: TCP using shared listener on %s", s.extTCPListener.Addr())
+		go s.serveTCP(s.ctx, s.extTCPListener)
+	} else {
+		tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.port)
 		if err != nil {
 			for _, c := range s.udpConns {
 				_ = c.Close()
 			}
-			for _, l := range s.tcpListeners {
-				_ = l.Close()
-			}
-			return fmt.Errorf("resolving TCP address %s: %w", addr, err)
+			return fmt.Errorf("resolving TCP bind addresses: %w", err)
 		}
-		listener, err := net.ListenTCP("tcp", tcpAddr)
-		if err != nil {
-			for _, c := range s.udpConns {
-				_ = c.Close()
+		log.Infof("DNSCRYPT: Listening on TCP %v", tcpAddrs)
+		for _, addr := range tcpAddrs {
+			tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+			if err != nil {
+				for _, c := range s.udpConns {
+					_ = c.Close()
+				}
+				for _, l := range s.tcpListeners {
+					_ = l.Close()
+				}
+				return fmt.Errorf("resolving TCP address %s: %w", addr, err)
 			}
-			for _, l := range s.tcpListeners {
-				_ = l.Close()
+			listener, err := net.ListenTCP("tcp", tcpAddr)
+			if err != nil {
+				for _, c := range s.udpConns {
+					_ = c.Close()
+				}
+				for _, l := range s.tcpListeners {
+					_ = l.Close()
+				}
+				return fmt.Errorf("listening TCP on %s: %w", addr, err)
 			}
-			return fmt.Errorf("listening TCP on %s: %w", addr, err)
+			s.tcpListeners = append(s.tcpListeners, listener)
+			go s.serveTCP(s.ctx, listener)
 		}
-		s.tcpListeners = append(s.tcpListeners, listener)
-		go s.serveTCP(s.ctx, listener)
 	}
 
 	log.Infof("DNSCRYPT: Provider: %s", s.providerName)
@@ -225,6 +240,26 @@ func (s *Server) rotationLoop() {
 			return
 		}
 	}
+}
+
+// SetExternalTCPListener injects a pre-created TCP listener, skipping the
+// normal bind.  Used for port sharing (e.g. DNSCrypt + DoH on :443).
+func (s *Server) SetExternalTCPListener(l net.Listener) { s.extTCPListener = l }
+
+// SetExternalUDPConn injects a pre-created net.PacketConn for DNSCrypt UDP.
+// Used for port sharing (DoH3 + DNSCrypt on :443 UDP).
+func (s *Server) SetExternalUDPConn(pconn net.PacketConn) { s.extUDPConn = pconn }
+
+// HandleTCPConn handles a single raw TCP connection as a DNSCrypt connection.
+// Used by the port-sharing dispatch layer.
+// ServeUDPConn handles DNSCrypt UDP traffic from a net.PacketConn.
+// Used by the port-sharing demux layer (DoH3 + DNSCrypt on :443).
+func (s *Server) ServeUDPConn(ctx context.Context, pconn net.PacketConn) {
+	s.serveUDPOverPacketConn(ctx, pconn)
+}
+
+func (s *Server) HandleTCPConn(conn net.Conn) {
+	s.handleTCPConnection(s.ctx, conn)
 }
 
 // Shutdown gracefully stops the DNSCrypt server.
@@ -292,9 +327,18 @@ func (s *Server) current() *dnscryptcrypto.CertPair {
 	return s.keys[0].pair
 }
 
-// hasClientMagic checks whether b matches any active cert's client magic
+// IsDNSCryptPacket reports whether pkt is a DNSCrypt UDP packet by
+// checking the client magic.  Returns false for short packets.
+func (s *Server) IsDNSCryptPacket(pkt []byte) bool {
+	if len(pkt) < dnscryptcrypto.ClientMagicSize {
+		return false
+	}
+	return s.HasClientMagic(pkt[:dnscryptcrypto.ClientMagicSize])
+}
+
+// HasClientMagic checks whether b matches any active cert's client magic
 // (checks both classical and PQ certs in every key window).
-func (s *Server) hasClientMagic(b []byte) bool {
+func (s *Server) HasClientMagic(b []byte) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, k := range s.keys {

@@ -229,6 +229,7 @@ func validateCache(cfg *ServerConfig) error {
 	return nil
 }
 
+// validatePort checks that a port string is a valid numeric port in [1, 65535].
 func validatePorts(cfg *ServerConfig) error {
 	proto := &cfg.Server.Protocol
 
@@ -242,7 +243,7 @@ func validatePorts(cfg *ServerConfig) error {
 		{"server.protocol.http3.port", proto.HTTP3.Port},
 		{"server.protocol.tlcp", proto.TLCP},
 		{"server.protocol.http_tlcp.port", proto.HTTPTLCP.Port},
-		{"server.protocol.dod", proto.DTLS},
+		{"server.protocol.dtls", proto.DTLS},
 		{"server.protocol.dtlcp", proto.DTLCP},
 		{"server.protocol.dnscrypt", proto.DNSCrypt},
 	} {
@@ -274,7 +275,7 @@ func validatePorts(cfg *ServerConfig) error {
 		{"server.protocol.http3.port", proto.HTTP3.Port, "udp"},
 		{"server.protocol.tlcp", proto.TLCP, "tcp"},
 		{"server.protocol.http_tlcp.port", proto.HTTPTLCP.Port, "tcp"},
-		{"server.protocol.dod", proto.DTLS, "udp"},
+		{"server.protocol.dtls", proto.DTLS, "udp"},
 		{"server.protocol.dtlcp", proto.DTLCP, "udp"},
 		{"server.protocol.dnscrypt", proto.DNSCrypt, "udp"},
 		{"server.pprof", cfg.Server.Pprof, "tcp"},
@@ -293,8 +294,12 @@ func validatePorts(cfg *ServerConfig) error {
 			seen = tcpSeen
 		}
 		if first, ok := seen[e.value]; ok {
-			return fmt.Errorf("port conflict: %s=%s and %s=%s both use %s port %s",
-				e.field, e.value, first, e.value, e.transport, e.value)
+			// pprof must not share with DNS protocols.
+			if e.field == "server.pprof" || first == "server.pprof" {
+				return fmt.Errorf("port conflict: %s=%s and %s=%s both use %s port %s",
+					e.field, e.value, first, e.value, e.transport, e.value)
+			}
+			// All DNS protocols on the same transport can share a port.
 		}
 		seen[e.value] = e.field
 	}
@@ -436,7 +441,7 @@ func validateCertDomain(cfg *ServerConfig) error {
 	}
 
 	if cert.Domain == "" {
-		return errors.New("config: certificate.domain is required when secure protocols (tls/quic/https/http3/tlcp/http_tlcp/dod/dtlcp/dnscrypt) are enabled")
+		return errors.New("config: certificate.domain is required when secure protocols (tls/quic/https/http3/tlcp/http_tlcp/dtls/dtlcp/dnscrypt) are enabled")
 	}
 	return nil
 }

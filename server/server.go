@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	stdtls "crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"zjdns/ruleset"
 	"zjdns/server/handler"
 	"zjdns/server/handler/middleware"
+	"zjdns/server/protocol/shared"
 	"zjdns/server/protocol/tls"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
@@ -36,6 +38,9 @@ import (
 
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 	serverplain "zjdns/server/protocol/plain"
+
+	sharedtcp "zjdns/server/protocol/shared/tcp"
+	sharedupd "zjdns/server/protocol/shared/udp"
 	servertlcp "zjdns/server/protocol/tlcp"
 )
 
@@ -46,18 +51,22 @@ type Server struct {
 	handler     *handler.Handler
 	queryClient *upstream.Client
 
-	tls             *tls.Server
-	tlcpServer      *servertlcp.Server
-	dnscryptServer  *serverdnscrypt.Server
-	plain           *serverplain.Server
-	pprofServer     *http.Server
-	shutdown        chan struct{}
-	tcpSem          chan struct{}
-	tcpWriteMu      sync.Map
-	ctx             context.Context
-	cancel          context.CancelCauseFunc
-	backgroundGroup *errgroup.Group
-	backgroundCtx   context.Context
+	tls                 *tls.Server
+	tlcpServer          *servertlcp.Server
+	dnscryptServer      *serverdnscrypt.Server
+	plain               *serverplain.Server
+	pprofServer         *http.Server
+	sharedDoTListener   net.Listener        // shared TLS+TLCP DoT listener (nil if not sharing)
+	sharedDoHListener   net.Listener        // shared TLS+TLCP DoH listener (nil if not sharing)
+	sharedQuicConn      *net.UDPConn        // shared UDP socket for DoQ+DTLS demux
+	sharedUDTLSListener *sharedupd.Listener // shared DTLS+DTLCP UDP listener
+	shutdown            chan struct{}
+	tcpSem              chan struct{}
+	tcpWriteMu          sync.Map
+	ctx                 context.Context
+	cancel              context.CancelCauseFunc
+	backgroundGroup     *errgroup.Group
+	backgroundCtx       context.Context
 }
 
 // New creates a fully-wired Server from the given configuration.  Database
@@ -312,7 +321,275 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 	}
 
 	s.plain = serverplain.New(cfg)
+
+	// Port-sharing: for each TCP port, detect which protocols share it and
+	// create a shared listener that auto-detects the protocol per connection.
+	if s.tls != nil {
+		ports := collectSharedTCPPorts(cfg)
+		for _, port := range ports {
+			if err := s.createSharedTCPListener(cfg, port); err != nil {
+				return fmt.Errorf("shared TCP listener on port %s: %w", port, err)
+			}
+		}
+	}
+
+	// Port-sharing: for each UDP port, detect which protocols share it and
+	// create a shared listener (or demux) for that port.
+	if s.tls != nil {
+		ports := collectSharedUDPPorts(cfg)
+		for _, port := range ports {
+			if err := s.createSharedUDPListener(cfg, port); err != nil {
+				return fmt.Errorf("shared UDP listener on port %s: %w", port, err)
+			}
+		}
+	}
+
 	return nil
+}
+
+// collectSharedTCPPorts returns the set of TCP ports that have multiple
+// protocols configured (needing a shared listener).
+func collectSharedTCPPorts(cfg *config.ServerConfig) []string {
+	proto := &cfg.Server.Protocol
+	count := map[string]int{}
+	add := func(v string) {
+		if v != "" {
+			count[v]++
+		}
+	}
+	add(proto.TLS)
+	add(proto.TLCP)
+	add(proto.HTTPS.Port)
+	add(proto.HTTPTLCP.Port)
+	add(proto.DNSCrypt)
+	var ports []string
+	for p, n := range count {
+		if n > 1 {
+			ports = append(ports, p)
+		}
+	}
+	return ports
+}
+
+// createSharedTCPListener creates a shared TCP listener for a port with
+// all protocols that are configured on it.  TLS/TLCP connections get the
+// handshake; DNSCrypt gets raw conns via ServeDispatch.
+func (s *Server) createSharedTCPListener(cfg *config.ServerConfig, port string) error {
+	proto := &cfg.Server.Protocol
+	addrs, err := zdnsutil.ResolveBindAddrs("tcp", port)
+	if err != nil {
+		return fmt.Errorf("resolve bind addrs: %w", err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("no available addresses for TCP port %s", port)
+	}
+
+	rawListener, err := net.Listen("tcp", addrs[0])
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", addrs[0], err)
+	}
+
+	keepAliveListener := &zdnsutil.TCPKeepAliveListener{Listener: rawListener}
+
+	// Build protocol configs for this port.
+	var hasTLS, hasTLCP, hasDNSCrypt bool
+
+	// Determine which protocols share this port.
+	if proto.TLS == port {
+		hasTLS = true
+	}
+	if proto.TLCP == port {
+		hasTLCP = true
+	}
+	if proto.HTTPS.Port == port {
+		hasTLS = true
+	}
+	if proto.HTTPTLCP.Port == port {
+		hasTLCP = true
+	}
+	if proto.DNSCrypt == port && s.dnscryptServer != nil {
+		hasDNSCrypt = true
+	}
+
+	// Determine which ALPN protocols to advertise.
+	hasDoT := port == proto.TLS || port == proto.TLCP
+	hasDoH := port == proto.HTTPS.Port || port == proto.HTTPTLCP.Port
+	var alpn []string
+	switch {
+	case hasDoT && hasDoH:
+		alpn = []string{"dot", "h2"}
+	case hasDoT:
+		alpn = config.NextProtoDOT
+	default:
+		alpn = config.NextProtoDOH
+	}
+
+	var sharedListener net.Listener
+	switch {
+	case hasTLS && hasTLCP && s.tls != nil && s.tlcpServer != nil:
+		sharedListener = sharedtcp.NewListener(keepAliveListener,
+			s.tls.SharedTLSConfig(alpn), s.tlcpServer.SharedTLCPConfig(alpn))
+	case hasTLS && s.tls != nil:
+		sharedListener = sharedtcp.NewListener(keepAliveListener,
+			s.tls.SharedTLSConfig(alpn), nil)
+	case hasTLCP && s.tlcpServer != nil:
+		sharedListener = sharedtcp.NewListener(keepAliveListener, nil,
+			s.tlcpServer.SharedTLCPConfig(alpn))
+	default:
+		sharedListener = sharedtcp.NewListener(keepAliveListener, nil, nil)
+	}
+
+	// Wire up protocol servers to skip their own binds.
+	// When both DoT and DoH share the port, both listeners are set;
+	// ALPN negotiation at the TLS layer routes to the right handler.
+	if hasDoT {
+		if hasTLS && s.tls != nil {
+			s.tls.SetExternalDoTListener(sharedListener)
+		}
+		if hasTLCP && s.tlcpServer != nil {
+			s.tlcpServer.SetExternalDoTListener(sharedListener)
+		}
+		s.sharedDoTListener = sharedListener
+	}
+	if hasDoH {
+		if hasTLS && s.tls != nil {
+			s.tls.SetExternalDoHListener(sharedListener)
+		}
+		if hasTLCP && s.tlcpServer != nil {
+			s.tlcpServer.SetExternalDoHListener(sharedListener)
+		}
+		if hasDNSCrypt && s.dnscryptServer != nil {
+			s.dnscryptServer.SetExternalTCPListener(sharedListener)
+		}
+		s.sharedDoHListener = sharedListener
+	}
+
+	log.Infof("SERVER: Shared TCP listener on port %s", port)
+	return nil
+}
+
+// collectSharedUDPPorts returns the set of UDP ports that have multiple
+// protocols configured (needing a shared listener or demux).
+func collectSharedUDPPorts(cfg *config.ServerConfig) []string {
+	proto := &cfg.Server.Protocol
+	count := map[string]int{}
+	add := func(v string) {
+		if v != "" {
+			count[v]++
+		}
+	}
+	add(proto.QUIC)
+	add(proto.DTLS)
+	add(proto.DTLCP)
+	add(proto.HTTP3.Port)
+	add(proto.DNSCrypt)
+	var ports []string
+	for p, n := range count {
+		if n > 1 {
+			ports = append(ports, p)
+		}
+	}
+	return ports
+}
+
+// createSharedUDPListener creates a shared UDP listener or demux for a
+// port with all protocols that are configured on it.
+func (s *Server) createSharedUDPListener(cfg *config.ServerConfig, port string) error {
+	proto := &cfg.Server.Protocol
+	addrs, err := zdnsutil.ResolveBindAddrs("udp", port)
+	if err != nil {
+		return fmt.Errorf("resolve bind addrs: %w", err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("no available addresses for UDP port %s", port)
+	}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", addrs[0])
+	if err != nil {
+		return fmt.Errorf("resolve UDP addr %s: %w", addrs[0], err)
+	}
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return fmt.Errorf("listen UDP on %s: %w", addrs[0], err)
+	}
+
+	// Determine which protocols share this port.
+	hasQUIC := proto.QUIC == port
+	hasDTLS := proto.DTLS == port
+	hasDTLCP := proto.DTLCP == port && s.tlcpServer != nil
+	hasHTTP3 := proto.HTTP3.Port == port
+	hasDNSCrypt := proto.DNSCrypt == port && s.dnscryptServer != nil
+
+	// Case 1: QUIC shares with anything → use UDP demux.
+	if hasQUIC {
+		demux := sharedupd.NewDemux(conn)
+		quicConn := demux.PacketConn(shared.IsQUICPacket)
+		dtlsConn := demux.PacketConn(func(p []byte) bool {
+			return shared.ClassifyRecordHeader(p) == shared.VersionDTLS
+		})
+		dtlcpConn := demux.PacketConn(func(p []byte) bool {
+			return shared.ClassifyRecordHeader(p) == shared.VersionTLCP
+		})
+		var dnscryptConn net.PacketConn
+		if hasDNSCrypt && s.dnscryptServer != nil {
+			dnscryptConn = demux.PacketConn(s.dnscryptServer.IsDNSCryptPacket)
+		}
+		demux.Start()
+
+		if port == proto.QUIC {
+			s.tls.SetExternalDoQConn(quicConn)
+		}
+		if port == proto.HTTP3.Port {
+			s.tls.SetExternalDoH3Conn(quicConn)
+		}
+
+		if hasDTLS {
+			dtlsListener := sharedupd.NewListener(dtlsConn, s.tls.DTLSCert(), nil)
+			dtlsListener.Start()
+			s.sharedUDTLSListener = dtlsListener
+			s.tls.SetExternalDTLSListener(dtlsListener)
+		}
+		if hasDTLCP && s.tlcpServer != nil {
+			dtlcpListener := sharedupd.NewListener(dtlcpConn, nil, s.tlcpServer.DTLCPConfig())
+			dtlcpListener.Start()
+			if s.sharedUDTLSListener == nil {
+				s.sharedUDTLSListener = dtlcpListener
+			}
+			s.tlcpServer.SetExternalDTLCPListener(dtlcpListener)
+		}
+		if hasDNSCrypt && s.dnscryptServer != nil {
+			s.dnscryptServer.SetExternalUDPConn(dnscryptConn)
+		}
+
+		s.sharedQuicConn = conn
+		log.Infof("SERVER: Shared UDP listener on port %s", port)
+		return nil
+	}
+
+	// Case 2: DTLS + DTLCP without QUIC → SharedUDPListener.
+	if hasDTLS && hasDTLCP {
+		listener := sharedupd.NewListener(conn, s.tls.DTLSCert(), s.tlcpServer.DTLCPConfig())
+		listener.Start()
+		s.sharedUDTLSListener = listener
+		s.tls.SetExternalDTLSListener(listener)
+		s.tlcpServer.SetExternalDTLCPListener(listener)
+		log.Infof("SERVER: Shared UDP listener on port %s", port)
+		return nil
+	}
+
+	// Case 3: HTTP3 + DNSCrypt without QUIC on the DTLS port → UDP demux.
+	if hasHTTP3 && hasDNSCrypt {
+		demux := sharedupd.NewDemux(conn)
+		h3Conn := demux.PacketConn(shared.IsQUICPacket)
+		dnscryptConn := demux.PacketConn(func(p []byte) bool { return !shared.IsQUICPacket(p) })
+		demux.Start()
+		s.tls.SetExternalDoH3Conn(h3Conn)
+		s.dnscryptServer.SetExternalUDPConn(dnscryptConn)
+		log.Infof("SERVER: Shared UDP listener on port %s", port)
+		return nil
+	}
+
+	return fmt.Errorf("no sharing scenario for UDP port %s", port)
 }
 
 // initPprof starts the optional pprof HTTP listener on 127.0.0.1.
@@ -403,6 +680,67 @@ func (s *Server) Start() error {
 			_ = s.tlcpServer.Shutdown()
 			return nil
 		})
+	}
+
+	// Shared DoT listener (TLS + TLCP on same port).
+	if s.sharedDoTListener != nil {
+		capturedListener := s.sharedDoTListener
+		g.Go(func() error {
+			defer zdnsutil.HandlePanic("Shared DoT server")
+			sharedtcp.ServeDOT(capturedListener, s.handler, ctx)
+			return nil
+		})
+	}
+
+	// Shared DTLS + DTLCP UDP listener.
+	if s.sharedUDTLSListener != nil {
+		capturedListener := s.sharedUDTLSListener
+		g.Go(func() error {
+			defer zdnsutil.HandlePanic("Shared DTLS server")
+			sharedupd.ServeDTLS(capturedListener, s.handler, ctx)
+			return nil
+		})
+	}
+
+	// Shared DoH listener (TLS + TLCP on same port).
+	// When DNSCrypt also shares this port, use dispatch mode.
+	if s.sharedDoHListener != nil {
+		capturedListener := s.sharedDoHListener
+		proto := &s.config.Server.Protocol
+
+		if proto.DNSCrypt != "" && proto.DNSCrypt == proto.HTTPS.Port && s.dnscryptServer != nil {
+			// Three-way sharing: TLS → HTTP, TLCP → HTTP, raw → DNSCrypt
+			g.Go(func() error {
+				defer zdnsutil.HandlePanic("Shared dispatch server")
+				endpoint := proto.HTTPS.Endpoint
+				if endpoint == "" {
+					endpoint = config.DefaultQueryPath
+				}
+				httpSrv := &http.Server{
+					Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						sharedtcp.ServeDoHHTTP(w, r, s.handler, endpoint)
+					}),
+					ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
+					IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
+					TLSNextProto:      make(map[string]func(*http.Server, *stdtls.Conn, http.Handler)),
+				}
+				rawHandler := func(conn net.Conn) {
+					s.dnscryptServer.HandleTCPConn(conn)
+				}
+				sharedtcp.ServeDispatch(capturedListener, httpSrv, rawHandler, ctx)
+				return nil
+			})
+		} else {
+			// Standard two-way sharing: TLS + TLCP DoH only
+			endpoint := proto.HTTPS.Endpoint
+			g.Go(func() error {
+				defer zdnsutil.HandlePanic("Shared DoH server")
+				if err := sharedtcp.ServeDOH(capturedListener, s.handler, endpoint, ctx); err != nil {
+					return fmt.Errorf("shared DoH startup: %w", err)
+				}
+				return nil
+			})
+		}
 	}
 
 	go func() {

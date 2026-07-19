@@ -15,6 +15,54 @@ import (
 )
 
 func (s *Server) startDOH3Server(port string) error {
+	// Use external shared PacketConn (port-sharing mode) if set.
+	if s.extDoH3Conn != nil {
+		s.h3Validator = newQUICAddrValidator()
+		tlsConfig := s.QUICTLSConfig().Clone()
+		tlsConfig.NextProtos = config.NextProtoDOH3
+		quicConfig := &quic.Config{
+			MaxIdleTimeout:        config.DefaultQUICServerIdleTimeout,
+			MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
+			MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
+			Allow0RTT:             true,
+			EnableDatagrams:       true,
+			KeepAlivePeriod:       config.DefaultQUICKeepAlive,
+		}
+		s.h3Server = &http3.Server{Handler: s}
+		log.Debugf("TLS: DoH3 using shared listener on %s", s.extDoH3Conn.LocalAddr())
+		transport := &quic.Transport{
+			Conn:                s.extDoH3Conn,
+			VerifySourceAddress: s.h3Validator.requiresValidation,
+		}
+		s.h3Transports = append(s.h3Transports, transport)
+		listener, err := transport.ListenEarly(tlsConfig, quicConfig)
+		if err != nil {
+			return fmt.Errorf("DoH3 listen: %w", err)
+		}
+		s.h3Listeners = append(s.h3Listeners, listener)
+		s.serverGroup.Go(func() error {
+			defer zdnsutil.HandlePanic("DoH3 server")
+			for {
+				conn, err := listener.Accept(s.ctx)
+				if err != nil {
+					if s.ctx.Err() != nil {
+						return nil
+					}
+					log.Debugf("TLS: DoH3 accept error: %v", err)
+					return nil
+				}
+				s.serverGroup.Go(func() error {
+					defer zdnsutil.HandlePanic("DoH3 conn")
+					if err := s.h3Server.ServeQUICConn(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						log.Debugf("TLS: DoH3 serve error: %v", err)
+					}
+					return nil
+				})
+			}
+		})
+		return nil
+	}
+
 	addrs, err := zdnsutil.ResolveBindAddrs("udp", port)
 	if err != nil {
 		return fmt.Errorf("DoH3 address resolution: %w", err)

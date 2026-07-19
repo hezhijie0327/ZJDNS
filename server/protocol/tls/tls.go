@@ -19,6 +19,15 @@ import (
 )
 
 func (s *Server) startDOTServer() error {
+	// Use external shared listener (port-sharing mode) if set.
+	// The accept loop is handled by ServeDOT from the main server Start() —
+	// do NOT start a second accept loop here (race with TLCP).
+	if s.extDoTListener != nil {
+		s.dotListeners = append(s.dotListeners, s.extDoTListener)
+		log.Debugf("TLS: DoT using shared listener on %s", s.extDoTListener.Addr())
+		return nil
+	}
+
 	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.cfg.TLSPort)
 	if err != nil {
 		return fmt.Errorf("DoT address resolution: %w", err)
