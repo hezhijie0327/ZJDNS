@@ -345,6 +345,7 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `Prober` | `server/resolver/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
 | `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |
 | `Message` / `Buffer` | `internal/pool` | sync.Pool allocators; also holds `QUICCode*` constants |
+| `DownloadFile` / `ResolveDataFile` / `SetRootFilesDir` | `internal/dnsutil` | Root data file helpers: HTTP download with 30s timeout, path resolution (config dir → binary dir → download), shared root file directory setter |
 | `DNSFramePrefixLen` | `internal/dnsutil` | 2-byte DNS TCP frame prefix length (RFC 1035 §4.2.2) |
 | `Stamp` / `StampProtoType` | `internal/stamp` | sdns:// stamp parser/encoder: 8 protocol types, VLP hashes, bootstrap IPs. `Parse()` + `String()` round-trip. |
 
@@ -372,7 +373,8 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **SOCKS5**: Per-upstream proxy, TCP CONNECT + UDP ASSOCIATE, 5 sentinel errors, v2ray/xray compat.
 - **DNSCrypt v2**: Full implementation with PQ support (X-Wing KEM + ticket resumption). Server auto-rotates keys every 24h, client caches PQ state per-upstream. See `server/protocol/dnscrypt/` and `server/upstream/dnscrypt/`.
 - **DTLCP**: GM/T 0128-2023. Works around gotlcp library bugs (connected-socket `WriteTo` ban, `Listen("udp")` unsupported).
-- **DNSSEC**: IANA root KSK trust anchors (20326 + 38696). `dnssec_enforce` → SERVFAIL on bogus.
+- **DNSSEC**: Root trust anchors loaded from `root-anchors.xml` at startup when recursive mode is configured. File path resolved via `dnsutil.ResolveDataFile` (config dir → binary dir → auto-download from IANA). `dnssec_enforce` → SERVFAIL on bogus.
+- **Root hints**: Root server addresses loaded from `named.root` at startup when recursive mode is configured. File path resolved via `dnsutil.ResolveDataFile` (config dir → binary dir → auto-download from InterNIC). `sync.Once` as safety net for lazy fallback.
 - **EDE propagation**: DNSSEC EDE codes stored atomically to survive context cancellation.
 - **Zone rules**: SQLite-backed WITHOUT ROWID, wildcard + exact match in one B-tree. Zone responses bypass cache.
 - **ECS types in config**: `config.ECSOption`, `edns.ECSOption` is a type alias. Same for `handler.Question = resolver.Question`.

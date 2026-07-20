@@ -10,6 +10,8 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
+
+	zdnsutil "zjdns/internal/dnsutil"
 )
 
 // CryptoValidator performs cryptographic DNSSEC validation using the
@@ -26,15 +28,6 @@ type rrsetKey struct {
 	rrtype uint16
 }
 
-// IANA root zone KSK trust anchors, sourced from
-// https://data.iana.org/root-anchors/root-anchors.xml
-//
-// Key tag 20326 (RSASHA256) — valid since 2017-02-02
-// Key tag 38696 (RSASHA256) — valid since 2024-07-18 (successor)
-const rootTrustAnchor20326 = ". IN DNSKEY 257 3 8 AwEAAaz/tAm8yTn4Mfeh5eyI96WSVexTBAvkMgJzkKTOiW1vkIbzxeF3+/4RgWOq7HrxRixHlFlExOLAJr5emLvN7SWXgnLh4+B5xQlNVz8Og8kvArMtNROxVQuCaSnIDdD5LKyWbRd2n9WGe2R8PzgCmr3EgVLrjyBxWezF0jLHwVN8efS3rCj/EWgvIWgb9tarpVUDK/b58Da+sqqls3eNbuv7pr+eoZG+SrDK6nWeL3c6H5Apxz7LjVc1uTIdsIXxuOLYA4/ilBmSVIzuDWfdRUfhHdY6+cn8HFRm+2hM8AnXGXws9555KrUB5qihylGa8subX2Nn6UwNR1AkUTV74bU="
-
-const rootTrustAnchor38696 = ". IN DNSKEY 257 3 8 AwEAAa96jeuknZlaeSrvyAJj6ZHv28hhOKkx3rLGXVaC6rXTsDc449/cidltpkyGwCJNnOAlFNKF2jBosZBU5eeHspaQWOmOElZsjICMQMC3aeHbGiShvZsx4wMYSjH8e7Vrhbu6irwCzVBApESjbUdpWWmEnhathWu1jo+siFUiRAAxm9qyJNg/wOZqqzL/dL/q8PkcRU5oUKEpUge71M3ej2/7CPqpdVwuMoTvoB+ZOT4YeGyxMvHmbrxlFzGOHOijtzN+u1TQNatX2XBuzZNQ1K+s2CXkPIZo7s6JgZyvaBevYtxPvYLw4z9mR7K2vaF18UYH9Z9GNUUeayffKC73PYc="
-
 // Common DNSSEC-related errors.
 var (
 	ErrNoRRSIG        = errors.New("no RRSIG found for rrset")
@@ -44,48 +37,28 @@ var (
 	ErrBogusSignature = errors.New("bogus DNSSEC signature")
 )
 
-// NewCryptoValidator creates a CryptoValidator with the IANA root trust
-// anchors embedded. DNSSEC validation is always active. The cache store is
-// used to persist verified zone DNSKEYs, sharing the same memory budget and
-// eviction policy as DNS record cache entries.
+// NewCryptoValidator creates a CryptoValidator for DNSSEC validation. The
+// cache store is used to persist verified zone DNSKEYs. Call LoadTrustAnchors
+// to populate root trust anchors when recursive resolution is needed.
 func NewCryptoValidator(store cache.Store) *CryptoValidator {
-	val := &CryptoValidator{
-		cache: store,
-	}
-	val.loadRootTrustAnchors()
-	return val
+	return &CryptoValidator{cache: store}
 }
 
-func (c *CryptoValidator) loadRootTrustAnchors() {
-	rootAnchors := []string{rootTrustAnchor20326, rootTrustAnchor38696}
-	var keys []*dns.DNSKEY
-
-	for i, anchor := range rootAnchors {
-		rr, err := dns.New(anchor)
-		if err != nil {
-			log.Errorf("SECURITY: failed to parse root trust anchor %d: %v", i, err)
-			continue
-		}
-		dnskey, ok := rr.(*dns.DNSKEY)
-		if !ok {
-			log.Errorf("SECURITY: root trust anchor %d is not a DNSKEY record", i)
-			continue
-		}
-		if dnskey.Flags&dns.FlagSEP == 0 || dnskey.Flags&dns.FlagZONE == 0 {
-			log.Errorf("SECURITY: root trust anchor %d missing required DNSKEY flags (SEP/ZONE)", i)
-			continue
-		}
-		keys = append(keys, dnskey)
-		log.Debugf("SECURITY: loaded root trust anchor (key tag=%d, algorithm=%s)",
-			dnskey.KeyTag(), dns.AlgorithmToString[dnskey.Algorithm])
+// LoadTrustAnchors loads the IANA root trust anchors from file. Only needed
+// for recursive resolution; upstream-only deployments can skip this call.
+func (c *CryptoValidator) LoadTrustAnchors() {
+	path := zdnsutil.ResolveDataFile(trustAnchorFileName, trustAnchorURL)
+	if path == "" {
+		log.Errorf("SECURITY: cannot determine trust anchor path — no root trust anchors loaded")
+		return
 	}
-
-	if len(keys) == 0 {
-		log.Errorf("SECURITY: no valid root trust anchors loaded")
+	keys, err := loadTrustAnchorsFromFile(path)
+	if err != nil {
+		log.Errorf("SECURITY: failed to load root trust anchors from %s: %v", path, err)
 		return
 	}
 	c.rootKeys = keys
-	log.Infof("SECURITY: initialized with %d root trust anchor(s)", len(keys))
+	log.Infof("SECURITY: loaded %d root trust anchor(s) from %s", len(keys), path)
 }
 
 // VerifyRRset verifies an RRSIG over an RRset using the given DNSKEY.

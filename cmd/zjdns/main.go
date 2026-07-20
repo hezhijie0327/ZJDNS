@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"zjdns/cmd/zjdns/cli"
 	"zjdns/config"
 	"zjdns/database"
@@ -27,6 +28,10 @@ func main() {
 	if err != nil {
 		log.Errorf("CONFIG: Config load failed: %v", err)
 		os.Exit(1)
+	}
+
+	if configFile != "" {
+		server.SetRootFilesDir(filepath.Dir(configFile))
 	}
 
 	srv, err := server.New(cfg)

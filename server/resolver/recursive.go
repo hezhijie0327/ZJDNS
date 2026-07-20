@@ -39,25 +39,6 @@ type CNAME struct {
 	resolver *Resolver
 }
 
-// rootHints maps root server names to their addresses. Used as bootstrap
-// on cold start; once cached, getRootServers uses the normal NS lookup path
-// (lookupNSAddrsFromCache -> sortAnswerByLatency via ip_latency).
-var rootHints = map[string][]string{
-	"a.root-servers.net.": {"198.41.0.4:53", "[2001:503:ba3e::2:30]:53"},
-	"b.root-servers.net.": {"170.247.170.2:53", "[2801:1b8:10::b]:53"},
-	"c.root-servers.net.": {"192.33.4.12:53", "[2001:500:2::c]:53"},
-	"d.root-servers.net.": {"199.7.91.13:53", "[2001:500:2d::d]:53"},
-	"e.root-servers.net.": {"192.203.230.10:53", "[2001:500:a8::e]:53"},
-	"f.root-servers.net.": {"192.5.5.241:53", "[2001:500:2f::f]:53"},
-	"g.root-servers.net.": {"192.112.36.4:53", "[2001:500:12::d0d]:53"},
-	"h.root-servers.net.": {"198.97.190.53:53", "[2001:500:1::53]:53"},
-	"i.root-servers.net.": {"192.36.148.17:53", "[2001:7fe::53]:53"},
-	"j.root-servers.net.": {"192.58.128.30:53", "[2001:503:c27::2:30]:53"},
-	"k.root-servers.net.": {"193.0.14.129:53", "[2001:7fd::1]:53"},
-	"l.root-servers.net.": {"199.7.83.42:53", "[2001:500:9f::42]:53"},
-	"m.root-servers.net.": {"202.12.27.33:53", "[2001:dc3::35]:53"},
-}
-
 // DNSSECEDECode returns the last DNSSEC EDE code atomically.
 func (r *Recursive) DNSSECEDECode() uint16 {
 	return uint16(r.lastDNSSECEDECode.Load()) //nolint:gosec // G115: EDE code — protocol-bounded uint16

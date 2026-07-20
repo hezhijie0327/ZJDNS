@@ -173,10 +173,44 @@ func (s *Server) initQueryClient(cfg *config.ServerConfig) *upstream.Client {
 	return client
 }
 
+// SetRootFilesDir sets the directory where root data files (named.root,
+// root-anchors.xml) are looked up. Call before New() to place root files
+// alongside the config file instead of the binary.
+func SetRootFilesDir(dir string) {
+	zdnsutil.SetRootFilesDir(dir)
+}
+
+// isRecursiveMode reports whether any upstream or fallback server uses the
+// built-in recursive resolver, or whether no servers are configured (pure
+// recursive mode).
+func isRecursiveMode(cfg *config.ServerConfig) bool {
+	if len(cfg.Upstream) == 0 && len(cfg.Fallback) == 0 {
+		return true
+	}
+	for i := range cfg.Upstream {
+		if cfg.Upstream[i].IsRecursive() {
+			return true
+		}
+	}
+	for i := range cfg.Fallback {
+		if cfg.Fallback[i].IsRecursive() {
+			return true
+		}
+	}
+	return false
+}
+
 // initDNSResolver wires together the recursive/forward resolver, security
 // validators, and CIDR matcher.
 func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream.Client, ednsH *edns.Handler, cacheStore cache.Store, rulesetEngine *ruleset.Engine) *resolver.Resolver {
 	cryptoValidator := dnssec.NewCryptoValidator(cacheStore)
+
+	// Load root files only when recursive resolution is configured.
+	if isRecursiveMode(cfg) {
+		cryptoValidator.LoadTrustAnchors()
+		resolver.LoadRootHints()
+	}
+
 	hijackDetector := &hijack.Detector{}
 	hijackDetector.Enable(cfg.Server.Features.HijackProtection)
 
