@@ -28,6 +28,15 @@ func (s *Server) startDTLSServer() error {
 
 		listener, err := dtls.ListenWithOptions("udp", udpAddr,
 			dtls.WithCertificates(s.stdCert),
+			dtls.WithVerifyConnection(func(state *dtls.State) error {
+				zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+					Role:       "TLS",
+					Direction:  "DTLS handshake from",
+					RemoteAddr: "client",
+					Cipher:     dtls.CipherSuiteName(state.CipherSuiteID),
+				})
+				return nil
+			}),
 		)
 		if err != nil {
 			return err

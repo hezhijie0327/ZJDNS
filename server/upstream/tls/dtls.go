@@ -31,6 +31,15 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 	if tlsConfig.ServerName != "" {
 		dtlsOpts = append(dtlsOpts, dtls.WithServerName(tlsConfig.ServerName))
 	}
+	dtlsOpts = append(dtlsOpts, dtls.WithVerifyConnection(func(state *dtls.State) error {
+		zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+			Role:       "UPSTREAM",
+			Direction:  "DTLS negotiated for",
+			RemoteAddr: addr,
+			Cipher:     dtls.CipherSuiteName(state.CipherSuiteID),
+		})
+		return nil
+	}))
 
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {

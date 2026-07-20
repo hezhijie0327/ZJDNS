@@ -139,6 +139,17 @@ func New(dnsHandler edns.DNSHandler, cfg *Config, operationTimeout time.Duration
 		Certificates:     []stdtls.Certificate{sCert},
 		CurvePreferences: []stdtls.CurveID{},
 		MinVersion:       stdtls.VersionTLS13,
+		VerifyConnection: func(cs stdtls.ConnectionState) error {
+			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+				Role:       "TLS",
+				Direction:  "QUIC handshake from",
+				RemoteAddr: "client",
+				Version:    cs.Version,
+				Cipher:     stdtls.CipherSuiteName(cs.CipherSuite),
+				Group:      cs.CurveID.String(),
+			})
+			return nil
+		},
 	}
 
 	// tlsConfig is the default per-connection TLS config for DoT/DoH.
@@ -348,7 +359,14 @@ func (s *Server) getConfigForClient(nextProtos []string) func(*eTLS.ClientHelloI
 		cfg := s.baseTLSConfig.Clone()
 		cfg.NextProtos = nextProtos
 		cfg.VerifyConnection = func(cs eTLS.ConnectionState) error {
-			zdnsutil.LogTLSConnectionState("TLS", "handshake from", remoteAddr, cs.Version, cs.CipherSuite, cs.CurveID)
+			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+				Role:       "TLS",
+				Direction:  "handshake from",
+				RemoteAddr: remoteAddr,
+				Version:    cs.Version,
+				Cipher:     eTLS.CipherSuiteName(cs.CipherSuite),
+				Group:      cs.CurveID.String(),
+			})
 			return nil
 		}
 		return cfg, nil

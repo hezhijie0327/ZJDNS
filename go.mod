@@ -7,10 +7,10 @@ require (
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
 	github.com/cloudflare/circl v1.6.5-0.20260718163227-07dbe16881b2
 	github.com/emmansun/gmsm v0.44.0
-	github.com/klauspost/compress v1.19.1-0.20260717091032-9960386c5845
+	github.com/klauspost/compress v1.19.1
 	github.com/ncruces/go-sqlite3 v0.35.3-0.20260717032608-e5bb5cc6c401
 	github.com/pion/dtls/v3 v3.1.3-0.20260713182031-e1fb308f9f85
-	github.com/quic-go/quic-go v0.60.1-0.20260718125107-fbfa1d5b9278
+	github.com/quic-go/quic-go v0.60.1-0.20260720092053-4e52cbd14e03
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2
 	golang.org/x/crypto v0.54.0

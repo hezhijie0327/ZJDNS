@@ -126,7 +126,14 @@ func (c *Client) eTLSClientConfig(server *config.UpstreamServer) *eTLS.Config {
 		ServerName:         server.ServerName,
 		ClientSessionCache: c.sessionCache,
 		VerifyConnection: func(cs eTLS.ConnectionState) error {
-			zdnsutil.LogTLSConnectionState("UPSTREAM", "negotiated for", server.Address, cs.Version, cs.CipherSuite, cs.CurveID)
+			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+				Role:       "UPSTREAM",
+				Direction:  "negotiated for",
+				RemoteAddr: server.Address,
+				Version:    cs.Version,
+				Cipher:     eTLS.CipherSuiteName(cs.CipherSuite),
+				Group:      cs.CurveID.String(),
+			})
 			return nil
 		},
 	}
@@ -141,7 +148,14 @@ func (c *Client) stdTLSConfig(server *config.UpstreamServer) *tls.Config {
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         server.ServerName,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			zdnsutil.LogTLSConnectionState("UPSTREAM", "negotiated for", server.Address, cs.Version, cs.CipherSuite, cs.CurveID)
+			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+				Role:       "UPSTREAM",
+				Direction:  "negotiated for",
+				RemoteAddr: server.Address,
+				Version:    cs.Version,
+				Cipher:     tls.CipherSuiteName(cs.CipherSuite),
+				Group:      cs.CurveID.String(),
+			})
 			return nil
 		},
 	}

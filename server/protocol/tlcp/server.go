@@ -73,12 +73,38 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 	tlcpConfig := &tlcp.Config{
 		Certificates:     []tlcp.Certificate{signCert, encCert},
 		CurvePreferences: []tlcp.CurveID{tlcp.CurveSM2},
+		VerifyConnection: func(cs tlcp.ConnectionState) error {
+			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+				Role:       "TLCP",
+				Direction:  "handshake from",
+				RemoteAddr: "client",
+				Version:    cs.Version,
+				Cipher:     tlcp.CipherSuiteName(cs.CipherSuite),
+				Group:      "SM2",
+				Resumed:    cs.DidResume,
+				ALPN:       cs.NegotiatedProtocol,
+			})
+			return nil
+		},
 	}
 
 	dtlcpConfig := &dtlcp.Config{
 		Certificates:     []dtlcp.Certificate{dtlcpSignCert, dtlcpEncCert},
 		CurvePreferences: []dtlcp.CurveID{dtlcp.CurveSM2},
 		SessionCache:     dtlcp.NewLRUSessionCache(128),
+		VerifyConnection: func(cs dtlcp.ConnectionState) error {
+			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+				Role:       "TLCP",
+				Direction:  "DTLCP handshake from",
+				RemoteAddr: "client",
+				Version:    cs.Version,
+				Cipher:     dtlcp.CipherSuiteName(cs.CipherSuite),
+				Group:      "SM2",
+				Resumed:    cs.DidResume,
+				ALPN:       cs.NegotiatedProtocol,
+			})
+			return nil
+		},
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())

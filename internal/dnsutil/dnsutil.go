@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"zjdns/internal/log"
 
@@ -15,6 +16,19 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
 )
+
+// HandshakeInfo carries the negotiated parameters from a TLS, TLCP, DTLS, or
+// DTLCP handshake.  Zero-value fields are omitted from the log output.
+type HandshakeInfo struct {
+	Role       string // log prefix: "TLS", "TLCP", "UPSTREAM"
+	Direction  string // "handshake from" (server) or "negotiated for" (client)
+	RemoteAddr string // peer address, hostname, or "client"
+	Version    uint16 // protocol version codepoint (0 if unknown, e.g. DTLS)
+	Cipher     string // cipher suite name (e.g. "TLS_AES_256_GCM_SHA384", "ECC_SM4_GCM_SM3")
+	Group      string // key exchange group (e.g. "X25519", "SM2"; empty if N/A)
+	Resumed    bool   // session resumption (TLCP/DTLCP only)
+	ALPN       string // negotiated ALPN protocol (empty if none)
+}
 
 // DNSFramePrefixLen is the number of bytes used for the 2-byte DNS message
 // length prefix in TCP, DoT, and DoQ transports (RFC 1035 §4.2.2, RFC 9250).
@@ -134,16 +148,44 @@ func ExtractIPString(rr dns.RR) (string, bool) {
 	return "", false
 }
 
-// LogTLSConnectionState emits a debug-level log of the negotiated TLS version,
-// key exchange group, and cipher suite. It is shared by both the upstream client
-// (role="UPSTREAM", dir="negotiated for") and the server-side TLS listener
-// (role="TLS", dir="handshake from").
+// LogHandshake emits a debug-level log of the negotiated handshake parameters.
+// It is shared by server-side listeners (inbound) and upstream clients (outbound)
+// across all secure transports: TLS, DTLS, TLCP, and DTLCP.
 //
-// It accepts the individual fields to work with both crypto/tls.ConnectionState
-// and go-extension/tls.ConnectionState without type coupling.
-func LogTLSConnectionState(role, dir, addr string, version, cipherSuite uint16, curveID interface{ String() string }) {
-	log.Debugf("%s: TLS %s %s — version(codepoint)=0x%04X, group(name)=%s, cipher(codepoint)=0x%04X",
-		role, dir, addr, version, curveID, cipherSuite)
+// Called once per handshake — path is not hot, but we pre-size the buffer and
+// avoid strconv allocations to keep it cheap.
+func LogHandshake(info *HandshakeInfo) {
+	if !log.IsDebug() {
+		return
+	}
+	var buf strings.Builder
+	buf.Grow(128) // typical line ~100-140 bytes; avoid reallocation
+	buf.WriteString(info.Role)
+	buf.WriteString(": ")
+	buf.WriteString(info.Direction)
+	buf.WriteByte(' ')
+	buf.WriteString(info.RemoteAddr)
+	buf.WriteString(" —")
+	if info.Version != 0 {
+		buf.WriteString(" version=0x")
+		var vbuf [8]byte
+		s := strconv.AppendUint(vbuf[:0], uint64(info.Version), 16)
+		buf.Write(s)
+	}
+	buf.WriteString(" cipher=")
+	buf.WriteString(info.Cipher)
+	if info.Group != "" {
+		buf.WriteString(" group=")
+		buf.WriteString(info.Group)
+	}
+	if info.Resumed {
+		buf.WriteString(" resumed=true")
+	}
+	if info.ALPN != "" {
+		buf.WriteString(" alpn=")
+		buf.WriteString(info.ALPN)
+	}
+	log.Debugf("%s", buf.String())
 }
 
 // IsTemporaryError reports whether err is a temporary network error (timeout)

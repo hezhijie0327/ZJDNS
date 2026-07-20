@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
+	"zjdns/internal/log"
 )
 
 // prepareQuery handles both classical and PQ query encryption.
@@ -19,6 +20,7 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 		sharedKey := dnscryptcrypto.PQResumedSharedKey(state.pqResumeSecret, state.clientMagic, q.Nonce[:dnscryptcrypto.NonceSize/2], state.pqTicket)
 		state.sharedKey = sharedKey
 		q.PQTicket = state.pqTicket
+		log.Debugf("UPSTREAM: DNSCrypt PQ resumed query to %s", state.serverAddress)
 		return dnscryptcrypto.EncryptQuery(q, packet, sharedKey)
 	}
 
@@ -26,6 +28,7 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 	if len(state.pqCiphertext) > 0 {
 		state.sharedKey = state.pqEncapsulatedKey
 		q.PQCiphertext = state.pqCiphertext
+		log.Debugf("UPSTREAM: DNSCrypt PQ query (cached encapsulation) to %s", state.serverAddress)
 		return dnscryptcrypto.EncryptQuery(q, packet, state.sharedKey)
 	}
 
@@ -39,6 +42,7 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 	state.pqCiphertext = ct
 	state.pqEncapsulatedKey = sharedKey
 	q.PQCiphertext = ct
+	log.Debugf("UPSTREAM: DNSCrypt PQ query (fresh X-Wing encapsulation) to %s", state.serverAddress)
 	return dnscryptcrypto.EncryptQuery(q, packet, sharedKey)
 }
 

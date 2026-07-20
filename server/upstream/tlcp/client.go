@@ -5,6 +5,7 @@ package tlcp
 import (
 	"time"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"gitee.com/Trisia/gotlcp/dtlcp"
@@ -28,17 +29,45 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Dura
 
 // tlcpClientConfig builds a gotlcp/tlcp Config for upstream TLCP connections.
 func (c *Client) tlcpClientConfig(server *config.UpstreamServer) *tlcp.Config {
+	addr := server.Address // capture for the VerifyConnection closure
 	return &tlcp.Config{
 		CurvePreferences:   []tlcp.CurveID{tlcp.CurveSM2},
 		InsecureSkipVerify: server.SkipTLSVerify,
 		ServerName:         server.ServerName,
 		RootCAs:            smx509.NewCertPool(), // prevent fallback to system pool (cannot parse SM2 certs)
+		VerifyConnection: func(cs tlcp.ConnectionState) error {
+			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+				Role:       "UPSTREAM",
+				Direction:  "negotiated for",
+				RemoteAddr: addr,
+				Version:    cs.Version,
+				Cipher:     tlcp.CipherSuiteName(cs.CipherSuite),
+				Group:      "SM2",
+				Resumed:    cs.DidResume,
+				ALPN:       cs.NegotiatedProtocol,
+			})
+			return nil
+		},
 	}
 }
 
 // dtlcpClientConfig builds a dtlcp.Config for upstream DTLCP connections.
 func (c *Client) dtlcpClientConfig(server *config.UpstreamServer) *dtlcp.Config {
+	addr := server.Address // capture for the VerifyConnection closure
 	return &dtlcp.Config{
 		InsecureSkipVerify: server.SkipTLSVerify,
+		VerifyConnection: func(cs dtlcp.ConnectionState) error {
+			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+				Role:       "UPSTREAM",
+				Direction:  "DTLCP negotiated for",
+				RemoteAddr: addr,
+				Version:    cs.Version,
+				Cipher:     dtlcp.CipherSuiteName(cs.CipherSuite),
+				Group:      "SM2",
+				Resumed:    cs.DidResume,
+				ALPN:       cs.NegotiatedProtocol,
+			})
+			return nil
+		},
 	}
 }

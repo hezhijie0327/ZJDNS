@@ -8,6 +8,7 @@ import (
 	"time"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
+	"zjdns/internal/log"
 	zstamp "zjdns/internal/stamp"
 
 	"codeberg.org/miekg/dns"
@@ -150,9 +151,11 @@ func (c *Client) buildState(
 	case preferPQ && cert.pq != nil:
 		esVersion = dnscryptcrypto.XWingPQ
 		selectedCert = cert.pq
+		log.Debugf("UPSTREAM: DNSCrypt PQ selected for %s (serial=%d)", addr, selectedCert.Serial)
 	case cert.classical != nil:
 		esVersion = dnscryptcrypto.XChacha20Poly1305
 		selectedCert = cert.classical
+		log.Debugf("UPSTREAM: DNSCrypt classical selected for %s (serial=%d)", addr, selectedCert.Serial)
 	default:
 		return nil, fmt.Errorf("no valid dnscrypt certificate for %q", providerName)
 	}

@@ -447,6 +447,8 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 	reply.Authoritative = true
 	reply.RecursionAvailable = true
 
+	log.Debugf("DNSCRYPT: handshake response — %d cert window(s) (%d TXT records)", len(s.keys), len(reply.Answer))
+
 	err = reply.Pack()
 	if err != nil {
 		return nil, fmt.Errorf("packing handshake response: %w", err)
