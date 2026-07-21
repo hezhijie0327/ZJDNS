@@ -87,8 +87,38 @@ go test ./server/resolver/... -v
 go test ./server/resolver/... -run TestIsZoneCut -v
 
 # Benchmarks
-go test -bench=. -short ./...
-go test -bench=BenchmarkServerProcessQuery -benchtime=3s .
+
+## Organisation
+
+Benchmarks follow a two-tier layout:
+
+| Location | Purpose |
+|----------|---------|
+| Per-package `benchmark_test.go` | Unit-level: pure functions, zero external deps |
+| `cmd/zjdns/benchmark_test.go` | Integration-level: needs `server.New()`, full pipeline, network |
+
+Run levels:
+
+```bash
+go test -bench=. -short ./...                         # all benchmarks (fast)
+go test -bench=. -short -benchtime=500ms ./...        # longer for stable numbers
+go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
+```
+
+**98 benchmarks** across 14 files, covering all packages.
+Baseline: `docs/benchmark-baseline.txt` (Apple M4 Max, Go 1.26).
+
+Update baseline after significant changes:
+```bash
+go test -bench=. -short -benchtime=500ms ./... \
+  | grep '^Benchmark' | sort > docs/benchmark-baseline.txt
+```
+
+## Adding a benchmark
+
+- Pure-function micro-benchmarks → the package that owns the function
+- Anything needing `server.New()`, middleware chain, or DNS pipeline → `cmd/zjdns/`
+- No duplicate benchmarks — check both tiers before adding
 
 # Lint (pre-commit hook runs this automatically)
 go fix ./... && golangci-lint run && golangci-lint fmt

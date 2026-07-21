@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.4.26-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.4.27-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -516,6 +516,23 @@ go test ./... -short
 go test -bench=. -short ./...
 go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.CommitHash=$(git rev-parse --short HEAD)" -o zjdns ./cmd/zjdns
 ```
+
+### Benchmark
+
+98 个 benchmark 按两级组织：
+
+| 层级 | 位置 | 说明 |
+|------|------|------|
+| **单元级** | 各包内 `benchmark_test.go` | 纯函数、零依赖，与代码同目录 |
+| **集成级** | `cmd/zjdns/benchmark_test.go` | 需 `server.New()` 的全管线 QPS 测试 |
+
+```bash
+go test -bench=. -short ./...                              # 全部 benchmark
+go test -bench=. -short -benchtime=500ms ./...             # 稳定数据采样
+go test -bench=BenchmarkServerProcessQuery -benchtime=3s . # 集成 QPS
+```
+
+基准性能存档在 [`docs/benchmark-baseline.txt`](docs/benchmark-baseline.txt)（Apple M4 Max，Go 1.26）。
 
 ## 调试
 
