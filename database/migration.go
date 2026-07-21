@@ -133,7 +133,7 @@ func migrateV3_2_13(db *DB) error {
 			is_wildcard INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (qname, qtype, qclass, is_wildcard, match_tags)
 		);
-		INSERT OR IGNORE INTO zone_entries_new SELECT * FROM zone_entries;
+		INSERT OR IGNORE INTO zone_entries_new SELECT qname, qtype, qclass, rcode, answer, authority, additional, match_tags, is_wildcard FROM zone_entries;
 		DROP TABLE zone_entries;
 		ALTER TABLE zone_entries_new RENAME TO zone_entries;
 	`)
@@ -174,7 +174,7 @@ func migrateV3_2_0(db *DB) error {
 			is_wildcard INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (qname, qtype, qclass, match_tags)
 		);
-		INSERT OR REPLACE INTO zone_entries_new SELECT * FROM zone_entries;
+		INSERT OR REPLACE INTO zone_entries_new SELECT qname, qtype, qclass, rcode, answer, authority, additional, match_tags, is_wildcard FROM zone_entries;
 		DROP TABLE zone_entries;
 		ALTER TABLE zone_entries_new RENAME TO zone_entries;
 	`)

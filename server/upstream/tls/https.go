@@ -129,7 +129,9 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 		return client
 	}
 
-	if len(c.dohTransports) >= config.DefaultTransportMax {
+	if len(c.dohTransports) >= config.DefaultTransportMax*2 {
+		// Evict one entry when over threshold.  Under concurrent access the map
+		// may temporarily exceed the limit, which is acceptable.
 		for k := range c.dohTransports {
 			if ct, ok := c.dohTransports[k].Transport.(*eHTTP.CompatableTransport); ok {
 				ct.CloseIdleConnections()

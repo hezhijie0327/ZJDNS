@@ -16,24 +16,24 @@ func (s *DNSStamp) String() string {
 	case ProtoDNSCrypt:
 		return s.dnsCryptString()
 	case ProtoDOH:
-		return s.dohString()
+		return s.encodeSecure(ProtoDOH, DefaultHTTPSPort, false)
 	case ProtoDOT:
-		return s.dotString()
+		return s.encodeSecure(ProtoDOT, DefaultTLSPort, true)
 	case ProtoDOQ:
-		return s.doqString()
+		return s.encodeSecure(ProtoDOQ, DefaultTLSPort, true)
 	case ProtoODoHTarget:
 		return s.oDohTargetString()
 	case ProtoDNSCryptRelay:
 		return s.dnsCryptRelayString()
 	case ProtoODoHRelay:
-		return s.oDohRelayString()
+		return s.encodeSecure(ProtoODoHRelay, DefaultHTTPSPort, false)
 	default:
 		panic("unsupported protocol")
 	}
 }
 
-func newStampHeader(proto uint8, props uint64) []uint8 {
-	bin := make([]uint8, 0, 128)
+func newStampHeader(proto uint8, props uint64) []byte {
+	bin := make([]byte, 0, 128)
 	bin = append(bin, proto)
 	var propsBytes [8]uint8
 	binary.LittleEndian.PutUint64(propsBytes[:], props)
@@ -42,92 +42,58 @@ func newStampHeader(proto uint8, props uint64) []uint8 {
 }
 
 func (s *DNSStamp) plainString() string {
-	bin := newStampHeader(uint8(ProtoPlain), uint64(s.Props))
+	bin := newStampHeader(byte(ProtoPlain), uint64(s.Props))
 	addr := stripDefaultPort(s.Address, DefaultDNSPort)
-	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
-	bin = append(bin, []uint8(addr)...)
+	bin = append(bin, byte(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []byte(addr)...)
 	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
 }
 
 func (s *DNSStamp) dnsCryptString() string {
-	bin := newStampHeader(uint8(ProtoDNSCrypt), uint64(s.Props))
-	addr := stripDefaultPort(s.Address, DefaultPort)
-	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
-	bin = append(bin, []uint8(addr)...)
-	bin = append(bin, uint8(len(s.PublicKey))) //nolint:gosec // G115: key size is 32
+	bin := newStampHeader(byte(ProtoDNSCrypt), uint64(s.Props))
+	addr := stripDefaultPort(s.Address, DefaultHTTPSPort)
+	bin = append(bin, byte(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []byte(addr)...)
+	bin = append(bin, byte(len(s.PublicKey))) //nolint:gosec // G115: key size is 32
 	bin = append(bin, s.PublicKey...)
-	bin = append(bin, uint8(len(s.ProviderName))) //nolint:gosec // G115: name length bounded to 255
-	bin = append(bin, []uint8(s.ProviderName)...)
-	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
-}
-
-func (s *DNSStamp) dohString() string {
-	bin := newStampHeader(uint8(ProtoDOH), uint64(s.Props))
-	addr, providerName := encodeAddrAndHostname(s.Address, s.ProviderName, DefaultPort)
-	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
-	bin = append(bin, []uint8(addr)...)
-	bin = appendHashes(bin, s.Hashes)
-	bin = append(bin, uint8(len(providerName))) //nolint:gosec // G115: name length bounded to 255
-	bin = append(bin, []uint8(providerName)...)
-	bin = append(bin, uint8(len(s.Path))) //nolint:gosec // G115: path length bounded to 255
-	bin = append(bin, []uint8(s.Path)...)
-	bin = appendBootstrapIPs(bin, s.BootstrapIPs)
-	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
-}
-
-func (s *DNSStamp) dotString() string {
-	bin := newStampHeader(uint8(ProtoDOT), uint64(s.Props))
-	addr, providerName := encodeAddrAndHostname(s.Address, s.ProviderName, DefaultDoTPort)
-	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
-	bin = append(bin, []uint8(addr)...)
-	bin = appendHashes(bin, s.Hashes)
-	bin = append(bin, uint8(len(providerName))) //nolint:gosec // G115: name length bounded to 255
-	bin = append(bin, []uint8(providerName)...)
-	bin = appendBootstrapIPs(bin, s.BootstrapIPs)
-	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
-}
-
-func (s *DNSStamp) doqString() string {
-	bin := newStampHeader(uint8(ProtoDOQ), uint64(s.Props))
-	addr, providerName := encodeAddrAndHostname(s.Address, s.ProviderName, DefaultDoTPort)
-	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
-	bin = append(bin, []uint8(addr)...)
-	bin = appendHashes(bin, s.Hashes)
-	bin = append(bin, uint8(len(providerName))) //nolint:gosec // G115: name length bounded to 255
-	bin = append(bin, []uint8(providerName)...)
-	bin = appendBootstrapIPs(bin, s.BootstrapIPs)
+	bin = append(bin, byte(len(s.ProviderName))) //nolint:gosec // G115: name length bounded to 255
+	bin = append(bin, []byte(s.ProviderName)...)
 	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
 }
 
 func (s *DNSStamp) oDohTargetString() string {
-	bin := newStampHeader(uint8(ProtoODoHTarget), uint64(s.Props))
-	providerName := stripDefaultPort(s.ProviderName, DefaultPort)
-	bin = append(bin, uint8(len(providerName))) //nolint:gosec // G115: name length bounded to 255
-	bin = append(bin, []uint8(providerName)...)
-	bin = append(bin, uint8(len(s.Path))) //nolint:gosec // G115: path length bounded to 255
-	bin = append(bin, []uint8(s.Path)...)
+	bin := newStampHeader(byte(ProtoODoHTarget), uint64(s.Props))
+	providerName := stripDefaultPort(s.ProviderName, DefaultHTTPSPort)
+	bin = append(bin, byte(len(providerName))) //nolint:gosec // G115: name length bounded to 255
+	bin = append(bin, []byte(providerName)...)
+	bin = append(bin, byte(len(s.Path))) //nolint:gosec // G115: path length bounded to 255
+	bin = append(bin, []byte(s.Path)...)
 	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
 }
 
 func (s *DNSStamp) dnsCryptRelayString() string {
-	bin := make([]uint8, 0, 32)
-	bin = append(bin, uint8(ProtoDNSCryptRelay)) //nolint:gosec // G115: proto byte
-	addr := stripDefaultPort(s.Address, DefaultPort)
-	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
-	bin = append(bin, []uint8(addr)...)
+	bin := make([]byte, 0, 32)
+	bin = append(bin, byte(ProtoDNSCryptRelay)) //nolint:gosec // G115: proto byte
+	addr := stripDefaultPort(s.Address, DefaultHTTPSPort)
+	bin = append(bin, byte(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []byte(addr)...)
 	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
 }
 
-func (s *DNSStamp) oDohRelayString() string {
-	bin := newStampHeader(uint8(ProtoODoHRelay), uint64(s.Props))
-	addr, providerName := encodeAddrAndHostname(s.Address, s.ProviderName, DefaultPort)
-	bin = append(bin, uint8(len(addr))) //nolint:gosec // G115: address length bounded to 255
-	bin = append(bin, []uint8(addr)...)
+// encodeSecure encodes a secure-transport stamp with protocol proto and default
+// port.  skipPath omits the /dns-query path (used by DoT and DoQ).
+func (s *DNSStamp) encodeSecure(proto ProtoType, port int, skipPath bool) string {
+	bin := newStampHeader(byte(proto), uint64(s.Props))
+	addr, providerName := encodeAddrAndHostname(s.Address, s.ProviderName, port)
+	bin = append(bin, byte(len(addr))) //nolint:gosec // G115: address length bounded to 255
+	bin = append(bin, []byte(addr)...)
 	bin = appendHashes(bin, s.Hashes)
-	bin = append(bin, uint8(len(providerName))) //nolint:gosec // G115: name length bounded to 255
-	bin = append(bin, []uint8(providerName)...)
-	bin = append(bin, uint8(len(s.Path))) //nolint:gosec // G115: path length bounded to 255
-	bin = append(bin, []uint8(s.Path)...)
+	bin = append(bin, byte(len(providerName))) //nolint:gosec // G115: name length bounded to 255
+	bin = append(bin, []byte(providerName)...)
+	if !skipPath {
+		bin = append(bin, byte(len(s.Path))) //nolint:gosec // G115: path length bounded to 255
+		bin = append(bin, []byte(s.Path)...)
+	}
 	bin = appendBootstrapIPs(bin, s.BootstrapIPs)
 	return stampPrefix + base64.RawURLEncoding.EncodeToString(bin)
 }
@@ -148,7 +114,7 @@ func encodeAddrAndHostname(addr, hostname string, defaultPort int) (encodedAddr,
 	return addr, stripDefaultPort(hostname, defaultPort)
 }
 
-func appendHashes(bin []uint8, hashes [][]uint8) []uint8 {
+func appendHashes(bin []byte, hashes [][]byte) []byte {
 	if len(hashes) == 0 {
 		return append(bin, 0x00)
 	}
@@ -158,21 +124,21 @@ func appendHashes(bin []uint8, hashes [][]uint8) []uint8 {
 		if i < last {
 			vlen |= 0x80
 		}
-		bin = append(bin, uint8(vlen)) //nolint:gosec // G115: VLP length ≤ 127
+		bin = append(bin, byte(vlen)) //nolint:gosec // G115: VLP length ≤ 127
 		bin = append(bin, hash...)
 	}
 	return bin
 }
 
-func appendBootstrapIPs(bin []uint8, bootstrapIPs []string) []uint8 {
+func appendBootstrapIPs(bin []byte, bootstrapIPs []string) []byte {
 	last := len(bootstrapIPs) - 1
 	for i, bootstrapIP := range bootstrapIPs {
 		vlen := len(bootstrapIP)
 		if i < last {
 			vlen |= 0x80
 		}
-		bin = append(bin, uint8(vlen)) //nolint:gosec // G115: VLP length ≤ 127
-		bin = append(bin, []uint8(bootstrapIP)...)
+		bin = append(bin, byte(vlen)) //nolint:gosec // G115: VLP length ≤ 127
+		bin = append(bin, []byte(bootstrapIP)...)
 	}
 	return bin
 }

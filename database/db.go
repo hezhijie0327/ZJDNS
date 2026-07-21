@@ -6,7 +6,6 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"zjdns/config"
 	"zjdns/internal/log"
@@ -35,7 +34,6 @@ type DB struct {
 	// Cache subsystem
 	maxEntries int
 	entryCount atomic.Int64
-	writeMu    sync.Mutex
 
 	// Cache prepared statements
 	StmtEntry         *sql.Stmt
@@ -134,13 +132,16 @@ func (db *DB) Close() error {
 	for _, stmt := range []*sql.Stmt{
 		db.StmtEntry, db.StmtQueryLog, db.StmtQueryStats,
 		db.StmtInsertLatency, db.StmtLastProbe,
+		db.StmtZoneExact, db.StmtZoneWildcard, db.StmtIPLatency,
 	} {
 		if stmt != nil {
 			_ = stmt.Close()
 		}
 	}
 	if db.dbPath != "" {
-		_, _ = db.SQ.Exec("PRAGMA optimize")
+		if _, err := db.SQ.Exec("PRAGMA optimize"); err != nil {
+			log.Warnf("DB: PRAGMA optimize failed: %v", err)
+		}
 	}
 	if err := db.SQ.Close(); err != nil {
 		log.Errorf("DB: sqlite close failed: %v", err)
@@ -179,14 +180,6 @@ func (db *DB) SetEntryCount(n int64) { db.entryCount.Store(n) }
 
 // BeginTx starts a new SQL transaction.
 func (db *DB) BeginTx() (*sql.Tx, error) { return db.SQ.Begin() }
-
-// ExecWrite executes fn while holding the cache write serialization mutex,
-// ensuring that cache writes and evictions are serialized.
-func (db *DB) ExecWrite(fn func() error) error {
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
-	return fn()
-}
 
 // MaxEntries returns the maximum cache entries before eviction.
 func (db *DB) MaxEntries() int { return db.maxEntries }

@@ -27,7 +27,7 @@ func (c *Client) proxyDialer(server *config.UpstreamServer) *socks5.Dialer {
 		return d
 	}
 
-	if len(c.proxyDialers) >= config.DefaultTransportMax {
+	if len(c.proxyDialers) >= config.DefaultTransportMax*2 {
 		for k, d := range c.proxyDialers {
 			if d != nil {
 				_ = d.Close()

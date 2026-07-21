@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -169,12 +170,7 @@ func protocolMatchesStamp(userProto string, stampProto zstamp.ProtoType) bool {
 // hexEncodePublicKey encodes a DNSCrypt Ed25519 public key as an uppercase hex
 // string, matching the format used in server/dnscrypt for consistency.
 func hexEncodePublicKey(b []byte) string {
-	var sb strings.Builder
-	sb.Grow(len(b) * 2)
-	for _, v := range b {
-		fmt.Fprintf(&sb, "%02X", v)
-	}
-	return sb.String()
+	return hex.EncodeToString(b)
 }
 
 func shouldEnableDDR(cfg *ServerConfig) bool {

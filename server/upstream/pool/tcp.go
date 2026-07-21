@@ -124,6 +124,15 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		c.mu.Unlock()
 		return nil, fmt.Errorf("client: connection to %s closed before write", c.addr)
 	}
+	// Detect trackingID collision after wrap-around (every 65536 queries).
+	// Advance past any in-flight ID to avoid orphaning the old query.
+	origTrackingID := trackingID
+	for c.inflight[trackingID] != nil {
+		trackingID = uint16(c.nextID.Add(1) & dnsIDMask)
+	}
+	if trackingID != origTrackingID {
+		binary.BigEndian.PutUint16(writeBuf[zdnsutil.DNSFramePrefixLen:zdnsutil.DNSFramePrefixLen+2], trackingID)
+	}
 	c.inflight[trackingID] = &pending{resultCh: resultCh}
 	c.mu.Unlock()
 

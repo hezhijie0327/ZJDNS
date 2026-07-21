@@ -9,7 +9,6 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
-	"codeberg.org/miekg/dns"
 	"gitee.com/Trisia/gotlcp/tlcp"
 )
 
@@ -80,7 +79,7 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 	clientIP := clientIPFromAddr(conn.RemoteAddr())
 
 	for {
-		msg, err := readTCPMsg(conn)
+		msg, err := zdnsutil.ReadTCPMsg(conn)
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
 				log.Debugf("TLCP: DoT read error from %s: %v", clientIP, err)
@@ -93,44 +92,11 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 			return
 		}
 
-		if err := writeTCPMsg(conn, resp); err != nil {
+		if err := zdnsutil.WriteTCPMsg(conn, resp); err != nil {
 			log.Debugf("TLCP: DoT write error to %s: %v", clientIP, err)
 			return
 		}
 	}
-}
-
-// readTCPMsg reads a DNS message prefixed with a 2-byte big-endian length.
-func readTCPMsg(conn net.Conn) (*dns.Msg, error) {
-	var prefix [2]byte
-	if _, err := io.ReadFull(conn, prefix[:]); err != nil {
-		return nil, err
-	}
-	length := int(prefix[0])<<8 | int(prefix[1])
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(conn, buf); err != nil {
-		return nil, err
-	}
-	msg := new(dns.Msg)
-	msg.Data = buf
-	if err := msg.Unpack(); err != nil {
-		return nil, err
-	}
-	return msg, nil
-}
-
-// writeTCPMsg writes a DNS message prefixed with a 2-byte big-endian length.
-func writeTCPMsg(conn net.Conn, msg *dns.Msg) error {
-	if err := msg.Pack(); err != nil {
-		return err
-	}
-	length := uint16(len(msg.Data))                    //nolint:gosec // G115: DNS TCP message — protocol-bounded uint16
-	prefix := [2]byte{byte(length >> 8), byte(length)} //nolint:gosec // G115: DNS wire format — protocol-bounded byte
-	if _, err := conn.Write(prefix[:]); err != nil {
-		return err
-	}
-	_, err := conn.Write(msg.Data)
-	return err
 }
 
 // clientIPFromAddr extracts the IP address from a net.Addr.

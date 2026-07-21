@@ -76,7 +76,9 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 		return fmt.Errorf("%w: not a valid RRset (type/name/class mismatch)", ErrBogusSignature)
 	}
 
-	// Check the RRSIG validity period manually (RFC 4034 §3.1.5)
+	// Check the RRSIG validity period manually (RFC 4034 §3.1.5).
+	// miekg/dns RRSIG.Verify() also checks this, but the manual check
+	// provides a more descriptive error message with the inception/expiration times.
 	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 	if rrsig.Inception > now || rrsig.Expiration < now {
 		return fmt.Errorf("%w: RRSIG outside validity period (inception=%s, expiration=%s)",

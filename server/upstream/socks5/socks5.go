@@ -388,7 +388,7 @@ func splitHostPort(addr string) (host string, port int, err error) {
 	if err != nil {
 		// Try adding default DNS port
 		h = addr
-		p = config.DefaultUDPPort
+		p = config.DefaultUDPPort // DNS default; non-DNS proxy users should configure explicitly
 	}
 	port, err = strconv.Atoi(p)
 	if err != nil {

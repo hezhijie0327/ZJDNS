@@ -32,7 +32,7 @@ type Level int
 type Logger struct {
 	level           atomic.Int32
 	writer          io.Writer
-	colorMap        map[Level]string
+	colorMap        [4]string
 	componentFilter map[string]bool // nil = all enabled; non-nil = only listed components
 	mu              sync.RWMutex    // protects componentFilter
 }
@@ -82,13 +82,8 @@ var DefaultTimeCache = NewTimeCache()
 // NewLogger creates a new Logger with default settings.
 func NewLogger() *Logger {
 	m := &Logger{
-		writer: os.Stdout,
-		colorMap: map[Level]string{
-			Error: colorRed,
-			Warn:  colorYellow,
-			Info:  colorGreen,
-			Debug: colorCyan,
-		},
+		writer:   os.Stdout,
+		colorMap: [4]string{Error: colorRed, Warn: colorYellow, Info: colorGreen, Debug: colorCyan},
 	}
 	m.level.Store(int32(Info))
 	return m
@@ -230,8 +225,10 @@ func (m *Logger) Log(lvl Level, format string, args ...any) {
 
 	levelStr := levelNames[lvl]
 
-	color, ok := m.colorMap[lvl]
-	if !ok {
+	var color string
+	if int(lvl) < len(m.colorMap) {
+		color = m.colorMap[lvl]
+	} else {
 		color = colorReset
 	}
 

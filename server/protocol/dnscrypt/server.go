@@ -254,10 +254,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// Cancel the context BEFORE swapping the WaitGroup so any in-flight
 	// handlers that haven't yet called wg.Add() see a cancelled context
 	// and return early, rather than joining a WaitGroup that will never
-	// be waited on.
-	s.mu.Unlock()
-
+	// be waited on.  Cancel under s.mu to prevent a data race between
+	// Shutdown swapping s.wg and serveUDP/serveTCP reading s.wg.
 	s.cancel(errors.New("dnscrypt server shutdown"))
+	s.mu.Unlock()
 
 	s.mu.Lock()
 	prevWg := s.wg

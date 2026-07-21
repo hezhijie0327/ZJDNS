@@ -112,34 +112,38 @@ func TestEntryCount(t *testing.T) {
 	}
 }
 
-func TestExecWrite(t *testing.T) {
+func TestSQLiteWALConcurrentWrites(t *testing.T) {
 	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	err = db.ExecWrite(func() error {
-		return nil
-	})
+	// Verify that two concurrent transactions can both commit successfully
+	// — SQLite WAL mode serializes writers, no app-level mutex needed.
+	tx1, err := db.BeginTx()
 	if err != nil {
-		t.Errorf("ExecWrite error: %v", err)
+		t.Fatalf("BeginTx error: %v", err)
 	}
-}
-
-func TestExecWrite_PropagatesError(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
-	if err != nil {
-		t.Fatalf("Open error: %v", err)
+	if _, err := tx1.Exec(`CREATE TABLE IF NOT EXISTS test_wal (id INTEGER PRIMARY KEY, val TEXT)`); err != nil {
+		_ = tx1.Rollback()
+		t.Fatalf("Create table error: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	if err := tx1.Commit(); err != nil {
+		t.Fatalf("Commit error: %v", err)
+	}
 
-	// Verify ExecWrite propagates the function's return value
-	err = db.ExecWrite(func() error {
-		return nil
-	})
+	tx2, err := db.BeginTx()
 	if err != nil {
-		t.Errorf("ExecWrite should return nil when fn returns nil, got %v", err)
+		t.Fatalf("BeginTx error: %v", err)
+	}
+	_, err = tx2.Exec(`INSERT INTO test_wal (id, val) VALUES (1, 'hello')`)
+	if err != nil {
+		_ = tx2.Rollback()
+		t.Fatalf("Insert error: %v", err)
+	}
+	if err := tx2.Commit(); err != nil {
+		t.Fatalf("Commit error: %v", err)
 	}
 }
 

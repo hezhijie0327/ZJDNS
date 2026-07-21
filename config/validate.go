@@ -342,6 +342,9 @@ func validateTLSCertificateConfig(cfg *ServerConfig) error {
 	return nil
 }
 
+// validateProbePort validates and default-fills the port field.
+// NOTE: modifies *port as a side effect — this is intentional to keep
+// default-setting close to validation logic.
 func validateProbePort(index int, protocol string, port *int, defaultPort int) error {
 	if *port <= 0 {
 		*port = defaultPort

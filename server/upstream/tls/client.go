@@ -168,7 +168,9 @@ func (c *Client) getQUICConfig(key string, skipVerify bool) *quic.Config {
 	if cfg, ok := c.quicConfigs[key]; ok {
 		return cfg
 	}
-	if len(c.quicConfigs) >= config.DefaultTransportMax {
+	if len(c.quicConfigs) >= config.DefaultTransportMax*2 {
+		// Evict one entry when over threshold.  Under concurrent access the map
+		// may temporarily exceed the limit, which is acceptable.
 		for k := range c.quicConfigs {
 			delete(c.quicConfigs, k)
 			break

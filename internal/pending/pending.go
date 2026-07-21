@@ -17,13 +17,13 @@ import "sync"
 // The zero value is not usable; use NewGroup to create a valid Group.
 type Group[K comparable] struct {
 	mu   sync.Mutex
-	sets map[K]chan struct{}
+	sets map[K]struct{}
 }
 
 // NewGroup creates a Group ready for use.
 func NewGroup[K comparable]() *Group[K] {
 	return &Group[K]{
-		sets: make(map[K]chan struct{}),
+		sets: make(map[K]struct{}),
 	}
 }
 
@@ -37,7 +37,7 @@ func (g *Group[K]) Start(key K) bool {
 		g.mu.Unlock()
 		return false
 	}
-	g.sets[key] = make(chan struct{})
+	g.sets[key] = struct{}{}
 	g.mu.Unlock()
 	return true
 }
@@ -46,12 +46,6 @@ func (g *Group[K]) Start(key K) bool {
 // with a key that was never started (no-op).
 func (g *Group[K]) Done(key K) {
 	g.mu.Lock()
-	ch, ok := g.sets[key]
-	if !ok {
-		g.mu.Unlock()
-		return
-	}
 	delete(g.sets, key)
 	g.mu.Unlock()
-	close(ch)
 }

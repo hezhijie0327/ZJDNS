@@ -170,6 +170,7 @@ func (db *DB) migrate() error {
 	}
 
 	if db.dbPath != "" {
+		// Recompute SQLite statistics after schema initialisation.
 		if _, err := db.SQ.Exec("ANALYZE"); err != nil {
 			log.Warnf("DB: ANALYZE failed (non-fatal): %v", err)
 		}

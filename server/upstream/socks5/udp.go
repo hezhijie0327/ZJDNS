@@ -163,7 +163,8 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	d.udpConn = udpConn
 	d.relayAddr = relay
 
-	// Monitor the control connection. If the proxy closes it, the relay
+	// Monitor the control connection.  The goroutine exits when ctrlConn
+	// is closed (by cleanupLocked on Close or proxy-side close). If the proxy closes it, the relay
 	// becomes invalid — signal that so the next caller can re-establish.
 	go func() {
 		var buf [1]byte

@@ -20,8 +20,8 @@ func Pad(packet []byte, minLen int) (padded []byte) {
 	minSize := max(minLen, len(packet)+1+(64-(len(packet)+1)%64)%64)
 
 	packet = append(packet, 0x80)
-	for len(packet) < minSize {
-		packet = append(packet, 0)
+	if n := minSize - len(packet); n > 0 {
+		packet = append(packet, make([]byte, n)...)
 	}
 
 	return packet

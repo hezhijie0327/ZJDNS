@@ -2,6 +2,7 @@ package cache
 
 import (
 	"database/sql"
+	"zjdns/database"
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -53,7 +54,7 @@ func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) error {
 		args = append(args, r.rdataIP, entryID, r.name, r.ttl)
 	}
 	stmt := `INSERT OR REPLACE INTO ptr_map (rdata_ip, entry_id, name, ttl) VALUES ` + //nolint:gosec // G202: parameterized placeholders, no user input
-		zdnsutil.JoinPlaceholders(placeholders, ",")
+		database.JoinPlaceholders(placeholders, ",")
 	if _, err := tx.Exec(stmt, args...); err != nil {
 		log.Warnf("CACHE: insert ptr_map failed: %v", err)
 		return err

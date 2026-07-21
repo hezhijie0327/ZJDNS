@@ -68,9 +68,9 @@ const stampPrefix = "sdns://"
 
 // Default ports for protocols that omit the port in stamps.
 const (
-	DefaultPort    = 443
-	DefaultDoTPort = 853
-	DefaultDNSPort = 53
+	DefaultHTTPSPort = 443
+	DefaultTLSPort   = 853
+	DefaultDNSPort   = 53
 )
 
 // Common errors returned by Parse.
@@ -131,7 +131,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
-		if err := s.parseDoH(bin); err != nil {
+		if err := s.parseSecure(bin, "DoH", true, false); err != nil {
 			return nil, err
 		}
 	case ProtoDOT:
@@ -140,7 +140,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
-		if err := s.parseDoT(bin); err != nil {
+		if err := s.parseSecure(bin, "DoT", false, false); err != nil {
 			return nil, err
 		}
 	case ProtoDOQ:
@@ -149,7 +149,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
-		if err := s.parseDoQ(bin); err != nil {
+		if err := s.parseSecure(bin, "DoQ", false, false); err != nil {
 			return nil, err
 		}
 	case ProtoODoHTarget:
@@ -158,7 +158,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
-		if err := s.parseODoHTarget(bin); err != nil {
+		if err := s.parseSecure(bin, "ODoH target", true, true); err != nil {
 			return nil, err
 		}
 	case ProtoDNSCryptRelay:
@@ -175,7 +175,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
-		if err := s.parseODoHRelay(bin); err != nil {
+		if err := s.parseSecure(bin, "ODoH relay", true, false); err != nil {
 			return nil, err
 		}
 	default:

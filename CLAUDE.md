@@ -190,7 +190,7 @@ zjdns/
 ```
 Foundation (zero zjdns imports):
   internal/log, internal/pool, internal/ipdetect, internal/stamp,
-  internal/dns64, internal/pending, internal/siphash
+  internal/dns64, internal/pending, internal/siphash, internal/lrumap
 
 Layer 1 (import only foundation):
   internal/dnsutil → log
@@ -384,6 +384,13 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Prepared statements**: Hot-path SQL pre-compiled at init (entry get, query stats upsert, query log insert, latency upsert).
 - **sdns:// stamps**: `normalizeStamps()` resolves stamps at load time, 8 protocol types. `internal/stamp` is zero-dependency.
 - **eHTTP/eTLS aliases** enforced by `importas`. Internal packages use `z`-prefixed aliases (`zdnsutil`, `zlog`, etc.).
+- **TCP frame I/O**: `ReadTCPMsg`/`WriteTCPMsg` (RFC 1035 §4.2.2) in `internal/dnsutil/tcpframe.go` — shared by server and upstream TLCP/TLS stacks, replacing 2× duplicate ~35-line copies.
+- **SQL helpers in database**: `BoolToInt`/`JoinPlaceholders` moved from `internal/dnsutil/wire.go` to `database/sqlutil.go` — SQL utilities belong with the DB layer, not a DNS utility package.
+- **WAL-only write serialization**: `database.DB` no longer has a `writeMu sync.Mutex` or `ExecWrite` method. SQLite WAL mode serializes concurrent writers at the DB level, so application-level locking is redundant. Cache transactions use `db.SQ.Begin()` directly.
+- **Color map array**: `Logger.colorMap` is `[4]string` (indexed by `Level` iota) instead of `map[Level]string` — zero heap allocation per log-line color lookup.
+- **Pending group struct{}**: `internal/pending.Group` uses `map[K]struct{}` (not `map[K]chan struct{}`) — the channel was a sentinel that was never read, just allocated and closed. Switched to a plain marker value.
+- **Stamp encoder/parser shared backends**: `encodeSecure`/`parseSecure` unify the 5 near-identical DoH/DoT/DoQ/ODoH/ODoHRelay code paths (eliminating ~300 lines of duplication). Individual `dohString()` etc. still exist as one-line delegations for API stability.
+- **lrumap package**: Generic `Map[K, V]` in `internal/lrumap` provides a concurrent-safe bounded map with bulk eviction, intended to replace the ad-hoc single-entry eviction pattern used in 5 transport/dialer caches.
 
 ## DB Schema
 

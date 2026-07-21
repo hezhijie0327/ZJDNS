@@ -2,7 +2,6 @@ package dnscryptcrypto
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"io"
@@ -10,6 +9,11 @@ import (
 	"github.com/cloudflare/circl/kem/xwing"
 	"golang.org/x/crypto/hkdf"
 )
+
+// Pre-computed SHA-256 of the PQ profile extension bytes — deterministic.
+var cachedProfileExtensionHash = func() [32]byte {
+	return sha256.Sum256(PQProfileExtension())
+}()
 
 func HKDFSHA256(salt, ikm, info []byte, outLen int) ([]byte, error) {
 	r := hkdf.New(sha256.New, ikm, salt, info)
@@ -97,14 +101,6 @@ func PQEncapsulate(pk []byte) (kemSS, ct []byte, err error) {
 
 func PQDecapsulate(ct, sk []byte) (kemSS []byte) {
 	return xwing.Decapsulate(ct, sk)
-}
-
-func PQGenKeyPair() (publicKey, privateKey []byte, err error) {
-	sk, pk, err := xwing.GenerateKeyPairPacked(rand.Reader)
-	if err != nil {
-		return nil, nil, err
-	}
-	return pk, sk, nil
 }
 
 // DerivePQKeys deterministically derives an X-Wing keypair from an X25519
@@ -197,8 +193,11 @@ func PQPad(packet []byte, floor int) []byte {
 // Ticket plaintext encoding (server-side)
 // ---------------------------------------------------------------------------
 
+// ProfileExtensionHash returns SHA-256(PQProfileExtension()).
+// The result is computed once at init and cached — PQProfileExtension() returns
+// deterministic bytes, so the hash never changes.
 func ProfileExtensionHash() [32]byte {
-	return sha256.Sum256(PQProfileExtension())
+	return cachedProfileExtensionHash
 }
 
 func EncodeTicketPlaintext(resumeSecret [SharedKeySize]byte, clientMagic [ClientMagicSize]byte, serial, tsEnd, expiry uint32, peHash [32]byte) []byte {

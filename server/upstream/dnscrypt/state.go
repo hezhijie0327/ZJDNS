@@ -193,7 +193,9 @@ func (c *Client) buildState(
 	cacheKey := addr + "|" + providerName
 	c.cacheMu.Lock()
 	c.cache[cacheKey] = state
-	if len(c.cache) > config.DefaultTransportMax {
+	if len(c.cache) >= config.DefaultTransportMax*2 {
+		// Evict one entry when over threshold.  Under concurrent access the map
+		// may temporarily exceed the limit, which is acceptable.
 		for k := range c.cache {
 			delete(c.cache, k)
 			break

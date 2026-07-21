@@ -23,6 +23,10 @@ func (s *DNSStamp) parsePlainDNS(bin []byte) error {
 	pos += length
 
 	// Auto-append default DNS port if missing.
+	// colIndex tracks the position of the last colon for port detection.
+	// When no colon is found, colIndex is set to len(Address); the
+	// auto-append-default-port check (colIndex >= len-1) then correctly
+	// passes, treating the address as a bare host with implied default port.
 	colIndex := strings.LastIndex(s.Address, ":")
 	if bracketIndex := strings.LastIndex(s.Address, "]"); colIndex < bracketIndex {
 		colIndex = -1
@@ -69,7 +73,7 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	}
 	if colIndex < 0 {
 		colIndex = len(s.Address)
-		s.Address = net.JoinHostPort(s.Address, strconv.Itoa(DefaultPort))
+		s.Address = net.JoinHostPort(s.Address, strconv.Itoa(DefaultHTTPSPort))
 	}
 	if colIndex >= len(s.Address)-1 {
 		return errors.New("stamp: empty port")
@@ -110,57 +114,56 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	return nil
 }
 
-// parseDoH parses a DNS-over-HTTPS stamp payload (protocol 0x02).
-// Format: [addr_len:1][addr][hashes:VLP][host_len:1][host][path_len:1][path][bootstrap:VLP]
-func (s *DNSStamp) parseDoH(bin []byte) error {
+// parseSecure parses a secure-transport stamp payload.
+// skipAddr omits address/hash parsing (ODoH Target has no address field).
+func (s *DNSStamp) parseSecure(bin []byte, name string, hasPath, skipAddr bool) error {
 	binLen := len(bin)
 	pos := 9
 
-	// Address.
-	length := int(bin[pos])
-	if 1+length >= binLen-pos {
-		return errors.New("stamp: invalid DoH stamp")
-	}
-	pos++
-	s.Address = string(bin[pos : pos+length])
-	pos += length
-
-	// Hashes (VLP-encoded).
-	hashes, newPos, err := readVLP(bin, pos, binLen)
-	if err != nil {
-		return fmt.Errorf("stamp: DoH cert hashes: %w", err)
-	}
-	for _, h := range hashes {
-		if len(h) != 32 {
-			return errors.New("stamp: DoH certificate hash must be 32 bytes")
+	if !skipAddr {
+		length := int(bin[pos])
+		if 1+length >= binLen-pos {
+			return fmt.Errorf("stamp: invalid %s stamp", name)
 		}
-	}
-	s.Hashes = hashes
-	pos = newPos
+		pos++
+		s.Address = string(bin[pos : pos+length])
+		pos += length
 
-	// Provider name (SNI).
-	length = int(bin[pos])
-	if 1+length >= binLen-pos {
-		return errors.New("stamp: invalid DoH stamp")
+		hashes, newPos, err := readVLP(bin, pos, binLen)
+		if err != nil {
+			return fmt.Errorf("stamp: %s cert hashes: %w", name, err)
+		}
+		for _, h := range hashes {
+			if len(h) != 32 {
+				return fmt.Errorf("stamp: %s certificate hash must be 32 bytes", name)
+			}
+		}
+		s.Hashes = hashes
+		pos = newPos
+	}
+
+	length := int(bin[pos])
+	if 1+length > binLen-pos {
+		return fmt.Errorf("stamp: invalid %s stamp", name)
 	}
 	pos++
 	s.ProviderName = string(bin[pos : pos+length])
 	pos += length
 
-	// Path.
-	length = int(bin[pos])
-	if length >= binLen-pos {
-		return errors.New("stamp: invalid DoH stamp")
+	if hasPath {
+		length = int(bin[pos])
+		if length > binLen-pos {
+			return fmt.Errorf("stamp: invalid %s stamp", name)
+		}
+		pos++
+		s.Path = string(bin[pos : pos+length])
+		pos += length
 	}
-	pos++
-	s.Path = string(bin[pos : pos+length])
-	pos += length
 
-	// Optional bootstrap IPs (VLP-encoded).
-	if pos < binLen {
+	if !skipAddr && pos < binLen {
 		bootstrapIPs, bpPos, bpErr := readVLP(bin, pos, binLen)
 		if bpErr != nil {
-			return fmt.Errorf("stamp: DoH bootstrap IPs: %w", bpErr)
+			return fmt.Errorf("stamp: %s bootstrap IPs: %w", name, bpErr)
 		}
 		for _, ip := range bootstrapIPs {
 			s.BootstrapIPs = append(s.BootstrapIPs, string(ip))
@@ -172,116 +175,14 @@ func (s *DNSStamp) parseDoH(bin []byte) error {
 		return ErrTrailingGarbage
 	}
 
-	if err := validateAddrAndHostname(s.Address, s.ProviderName); err != nil {
-		return err
+	if !skipAddr {
+		if err := validateAddrAndHostname(s.Address, s.ProviderName); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-// parseDoT parses a DNS-over-TLS stamp payload (protocol 0x03).
-// Format: [addr_len:1][addr][hashes:VLP][host_len:1][host][bootstrap:VLP]
-func (s *DNSStamp) parseDoT(bin []byte) error {
-	binLen := len(bin)
-	pos := 9
-
-	// Address.
-	length := int(bin[pos])
-	if 1+length >= binLen-pos {
-		return errors.New("stamp: invalid DoT stamp")
-	}
-	pos++
-	s.Address = string(bin[pos : pos+length])
-	pos += length
-
-	// Hashes (VLP-encoded).
-	hashes, newPos, err := readVLP(bin, pos, binLen)
-	if err != nil {
-		return fmt.Errorf("stamp: DoT cert hashes: %w", err)
-	}
-	for _, h := range hashes {
-		if len(h) != 32 {
-			return errors.New("stamp: DoT certificate hash must be 32 bytes")
-		}
-	}
-	s.Hashes = hashes
-	pos = newPos
-
-	// Provider name (SNI).
-	length = int(bin[pos])
-	if length >= binLen-pos {
-		return errors.New("stamp: invalid DoT stamp")
-	}
-	pos++
-	s.ProviderName = string(bin[pos : pos+length])
-	pos += length
-
-	// Optional bootstrap IPs (VLP-encoded).
-	if pos < binLen {
-		bootstrapIPs, bpPos, bpErr := readVLP(bin, pos, binLen)
-		if bpErr != nil {
-			return fmt.Errorf("stamp: DoT bootstrap IPs: %w", bpErr)
-		}
-		for _, ip := range bootstrapIPs {
-			s.BootstrapIPs = append(s.BootstrapIPs, string(ip))
-		}
-		pos = bpPos
-	}
-
-	if pos != binLen {
-		return ErrTrailingGarbage
-	}
-
-	if err := validateAddrAndHostname(s.Address, s.ProviderName); err != nil {
-		return err
-	}
-	return nil
-}
-
-// parseDoQ parses a DNS-over-QUIC stamp payload (protocol 0x04).
-// Format: [addr_len:1][addr][hashes:VLP][host_len:1][host][bootstrap:VLP]
-func (s *DNSStamp) parseDoQ(bin []byte) error {
-	// DoQ shares the same format as DoT.
-	return s.parseDoT(bin)
-}
-
-// parseODoHTarget parses an Oblivious DoH Target stamp payload (protocol 0x05).
-// Format: [host_len:1][host][path_len:1][path]
-func (s *DNSStamp) parseODoHTarget(bin []byte) error {
-	binLen := len(bin)
-	pos := 9
-
-	// Provider name (target hostname).
-	length := int(bin[pos])
-	if 1+length >= binLen-pos {
-		return errors.New("stamp: invalid ODoH target stamp")
-	}
-	pos++
-	s.ProviderName = string(bin[pos : pos+length])
-	pos += length
-
-	// Path.
-	length = int(bin[pos])
-	if length >= binLen-pos {
-		return errors.New("stamp: invalid ODoH target stamp")
-	}
-	pos++
-	s.Path = string(bin[pos : pos+length])
-	pos += length
-
-	if pos != binLen {
-		return ErrTrailingGarbage
-	}
-
-	if _, err := stripAndValidatePort(s.ProviderName); err != nil {
-		return err
-	}
-	return nil
-}
-
-// parseDNSCryptRelay parses a DNSCrypt Relay stamp payload (protocol 0x81).
-// Format: [addr_len:1][addr]  (no properties field)
-//
-// Per §4.7.2, port specification is mandatory for relay stamps.
 func (s *DNSStamp) parseDNSCryptRelay(bin []byte) error {
 	binLen := len(bin)
 	pos := 1 // relay stamps have no properties — skip only proto byte
@@ -313,74 +214,6 @@ func (s *DNSStamp) parseDNSCryptRelay(bin []byte) error {
 	}
 	if pos != binLen {
 		return ErrTrailingGarbage
-	}
-	return nil
-}
-
-// parseODoHRelay parses an Oblivious DoH Relay stamp payload (protocol 0x85).
-// Format: [addr_len:1][addr][hashes:VLP][host_len:1][host][path_len:1][path][bootstrap:VLP]
-func (s *DNSStamp) parseODoHRelay(bin []byte) error {
-	binLen := len(bin)
-	pos := 9
-
-	// Address.
-	length := int(bin[pos])
-	if 1+length >= binLen-pos {
-		return errors.New("stamp: invalid ODoH relay stamp")
-	}
-	pos++
-	s.Address = string(bin[pos : pos+length])
-	pos += length
-
-	// Hashes (VLP-encoded).
-	hashes, newPos, err := readVLP(bin, pos, binLen)
-	if err != nil {
-		return fmt.Errorf("stamp: ODoH relay cert hashes: %w", err)
-	}
-	for _, h := range hashes {
-		if len(h) != 32 {
-			return errors.New("stamp: ODoH relay certificate hash must be 32 bytes")
-		}
-	}
-	s.Hashes = hashes
-	pos = newPos
-
-	// Provider name (SNI).
-	length = int(bin[pos])
-	if 1+length >= binLen-pos {
-		return errors.New("stamp: invalid ODoH relay stamp")
-	}
-	pos++
-	s.ProviderName = string(bin[pos : pos+length])
-	pos += length
-
-	// Path.
-	length = int(bin[pos])
-	if length >= binLen-pos {
-		return errors.New("stamp: invalid ODoH relay stamp")
-	}
-	pos++
-	s.Path = string(bin[pos : pos+length])
-	pos += length
-
-	// Optional bootstrap IPs (VLP-encoded).
-	if pos < binLen {
-		bootstrapIPs, bpPos, bpErr := readVLP(bin, pos, binLen)
-		if bpErr != nil {
-			return fmt.Errorf("stamp: ODoH relay bootstrap IPs: %w", bpErr)
-		}
-		for _, ip := range bootstrapIPs {
-			s.BootstrapIPs = append(s.BootstrapIPs, string(ip))
-		}
-		pos = bpPos
-	}
-
-	if pos != binLen {
-		return ErrTrailingGarbage
-	}
-
-	if err := validateAddrAndHostname(s.Address, s.ProviderName); err != nil {
-		return err
 	}
 	return nil
 }

@@ -74,7 +74,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	var validated int
 	var msgWire []byte
 	err := s.db.StmtEntry.QueryRow(
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, zdnsutil.BoolToInt(dnssecOK),
+		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, database.BoolToInt(dnssecOK),
 	).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, false
@@ -145,60 +145,52 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 		return
 	}
 
-	// Single pass: separate A/AAAA from non-A/AAAA and collect IPs.
-	aRecs := make([]dns.RR, 0, len(entry.Answer))
-	other := make([]dns.RR, 0, len(entry.Answer))
+	// Collect IPs from A/AAAA records in a single pass.
 	ips := make([]string, 0, len(entry.Answer))
 	for _, rr := range entry.Answer {
-		switch rr.(type) {
-		case *dns.A, *dns.AAAA:
-			aRecs = append(aRecs, rr)
-			if ip, ok := zdnsutil.ExtractIPString(rr); ok {
-				ips = append(ips, ip)
-			}
-		default:
-			other = append(other, rr)
+		if ip, ok := zdnsutil.ExtractIPString(rr); ok {
+			ips = append(ips, ip)
 		}
 	}
-	if len(aRecs) <= 1 {
+	if len(ips) <= 1 {
 		return
 	}
 
-	// Batch lookup: WHERE rdata_ip IN (?,?,...). Single query replaces N
-	// per-IP round-trips on the cache Get() hot path.
+	// Batch lookup: WHERE rdata_ip IN (?,?,...).
 	latencies := s.lookupIPLatencies(ips)
 	if len(latencies) == 0 {
 		return
 	}
 
-	// Sort A/AAAA: probed first (fastest → slowest), unprobed last.
-	// When latencies are equal (or both unprobed), fall back to
-	// canonical ordering (RFC 4034 §6) for deterministic results.
-	slices.SortStableFunc(aRecs, func(a, b dns.RR) int {
-		aIP, _ := zdnsutil.ExtractIPString(a)
-		bIP, _ := zdnsutil.ExtractIPString(b)
+	// In-place sort: non-A/AAAA before A/AAAA; A/AAAA sorted by latency.
+	// SortStableFunc avoids allocating temporary aRecs/other/result slices.
+	slices.SortStableFunc(entry.Answer, func(a, b dns.RR) int {
+		aIP, aIsAddr := zdnsutil.ExtractIPString(a)
+		bIP, bIsAddr := zdnsutil.ExtractIPString(b)
+		if aIsAddr != bIsAddr {
+			if !aIsAddr {
+				return -1
+			}
+			return 1
+		}
+		if !aIsAddr {
+			return 0
+		}
 		aLat, aOK := latencies[aIP]
 		bLat, bOK := latencies[bIP]
 		switch {
-		case aOK && !bOK:
-			return -1
-		case !aOK && bOK:
+		case aOK != bOK:
+			if aOK {
+				return -1
+			}
 			return 1
-		case aOK && bOK:
+		case aOK:
 			if aLat != bLat {
 				return aLat - bLat
 			}
-			return dns.Compare(a, b)
-		default:
-			return dns.Compare(a, b)
 		}
+		return dns.Compare(a, b)
 	})
-
-	// Build result in-place: other records first, then sorted A/AAAA.
-	result := make([]dns.RR, 0, len(entry.Answer))
-	result = append(result, other...)
-	result = append(result, aRecs...)
-	entry.Answer = result
 }
 
 // lookupIPLatencies fetches latencies for a batch of IPs in a single query.
@@ -245,10 +237,9 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 }
 
 // Set stores a DNS response in the cache. Wire format is zstd-compressed.
-// The transaction itself is serialized via writeMu to prevent SQLite
-// write-lock contention (WAL mode permits only one writer at a time);
-// prep work (TTL calculation, wire packing, zstd compression) runs outside
-// the lock so CPU-heavy steps can overlap across goroutines.
+// SQLite WAL mode serializes concurrent writers, so no app-level mutex is
+// needed.  Prep work (TTL calculation, wire packing, zstd compression) runs
+// outside the transaction so CPU-heavy steps can overlap across goroutines.
 func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 	answer, authority, additional []dns.RR, validated bool,
 ) int64 {
@@ -256,13 +247,13 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return 0
 	}
 
-	// ── Prep work (parallel-safe, outside writeMu) ──────────────────────────
+	// ── Prep work (parallel-safe) ─────────────────────────────────────────
 	now := log.NowUnix()
 	entryTTL := minTTL(answer, authority, additional)
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = dnsutil.Canonical(qname)
-	dnssecInt := zdnsutil.BoolToInt(dnssecOK)
+	dnssecInt := database.BoolToInt(dnssecOK)
 
 	// Strip EDNS OPT pseudo-record from additional before caching,
 	// since padding and other EDNS options have no semantic value and
@@ -276,14 +267,12 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		msgWire = zdnsutil.Compress(msg.Data)
 	}
 
-	// ── Transaction (serialized via ExecWrite) ────────────────────────────
+	// ── Transaction ──────────────────────────────────────────────────────
+	// SQLite WAL mode serializes writers, so no application-level mutex is
+	// needed for concurrent Set() calls.
 	var entryID int64
-	err := s.db.ExecWrite(func() error {
-		tx, txErr := s.db.SQ.Begin()
-		if txErr != nil {
-			log.Warnf("CACHE: begin tx failed: %v", txErr)
-			return txErr
-		}
+	tx, txErr := s.db.SQ.Begin()
+	if txErr == nil {
 		defer func() { _ = tx.Rollback() }()
 
 		if txErr = tx.QueryRow(
@@ -292,39 +281,36 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 RETURNING id`,
 			qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
-			now, entryTTL, now+int64(entryTTL), zdnsutil.BoolToInt(validated),
+			now, entryTTL, now+int64(entryTTL), database.BoolToInt(validated),
 			msgWire,
-		).Scan(&entryID); txErr != nil {
+		).Scan(&entryID); txErr == nil {
+
+			// Populate ptr_map for reverse (PTR) lookups.
+			if txErr = insertPtrMap(tx, entryID, answer); txErr == nil {
+				if txErr = insertPtrMap(tx, entryID, authority); txErr == nil {
+					txErr = insertPtrMap(tx, entryID, additional)
+				}
+			}
+
+			if txErr == nil {
+				if txErr = tx.Commit(); txErr == nil {
+					s.db.AddEntryCount(1)
+				} else {
+					log.Warnf("CACHE: commit tx failed: %v", txErr)
+				}
+			}
+		}
+		if txErr != nil && entryID == 0 {
 			log.Warnf("CACHE: insert entry failed: %v", txErr)
-			return txErr
 		}
-
-		// Populate ptr_map for reverse (PTR) lookups.
-		if txErr := insertPtrMap(tx, entryID, answer); txErr != nil {
-			return txErr
-		}
-		if txErr := insertPtrMap(tx, entryID, authority); txErr != nil {
-			return txErr
-		}
-		if txErr := insertPtrMap(tx, entryID, additional); txErr != nil {
-			return txErr
-		}
-
-		if txErr = tx.Commit(); txErr != nil {
-			log.Warnf("CACHE: commit tx failed: %v", txErr)
-			return txErr
-		}
-
-		s.db.AddEntryCount(1)
-		return nil
-	})
-	if err != nil {
+	}
+	if txErr != nil && entryID == 0 {
 		return 0
 	}
 
-	// Run eviction outside writeMu — evictIfNeeded re-syncs the entry count
-	// from the DB via SELECT COUNT(*) before deciding whether to evict, so
-	// any TOCTOU drift from concurrent inserts is corrected.
+	// evictIfNeeded re-syncs the entry count from the DB via SELECT COUNT(*)
+	// before deciding whether to evict, so any TOCTOU drift from concurrent
+	// inserts is corrected.
 	s.evictIfNeeded()
 	return entryID
 }

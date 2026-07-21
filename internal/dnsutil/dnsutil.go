@@ -104,6 +104,11 @@ func IsValidFilePath(path string) bool {
 	if err != nil {
 		return false
 	}
+	// Resolve symlinks before the prefix check to prevent symlink-based
+	// traversal attacks (e.g. /tmp/link -> /etc/passwd).
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
 
 	for _, prefix := range dangerousPrefixes {
 		if strings.HasPrefix(abs, prefix) {
@@ -123,6 +128,8 @@ func IsValidFilePath(path string) bool {
 
 // ExtractIP returns the IP address from an A or AAAA DNS record, or nil if the
 // record is neither type.
+// ExtractIP accepts any to also handle *dns.A and *dns.AAAA directly;
+// ExtractIPString below accepts dns.RR for type-safety at the call site.
 func ExtractIP(rr any) net.IP {
 	switch r := rr.(type) {
 	case *dns.A:

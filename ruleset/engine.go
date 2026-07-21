@@ -85,13 +85,21 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 
 	// Domain: TLD+1 suffix lookup.
 	key := tldPlusOne(qname)
-	var tag string
-	if err := e.db.SQLQueryRow(
-		"SELECT tag FROM ruleset_entries WHERE type='domain' AND value=? LIMIT 1",
+	domainRows, err := e.db.SQLQuery(
+		"SELECT tag FROM ruleset_entries WHERE type='domain' AND value=?",
 		key,
-	).Scan(&tag); err == nil && tag != "" {
-		tags = make(map[string]bool)
-		tags[tag] = true
+	)
+	if err == nil {
+		defer func() { _ = domainRows.Close() }()
+		for domainRows.Next() {
+			var tag string
+			if domainRows.Scan(&tag) == nil && tag != "" {
+				if tags == nil {
+					tags = make(map[string]bool)
+				}
+				tags[tag] = true
+			}
+		}
 	}
 
 	// IP: load all CIDR rules.
@@ -196,6 +204,7 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 func insertRule(tx *sql.Tx, tag, typ, value string) error {
 	if typ == "ip" {
 		if _, _, err := net.ParseCIDR(value); err != nil {
+			log.Warnf("RULESET: skipping invalid CIDR rule %s=%s: %v", tag, value, err)
 			return nil //nolint:nilerr // invalid CIDRs are skipped, same as original continue
 		}
 	}
@@ -210,14 +219,9 @@ func insertRule(tx *sql.Tx, tag, typ, value string) error {
 	return err
 }
 
-// readFile reads a file from disk.  The path comes from config, not user input.
-func readFile(path string) ([]byte, error) {
-	return os.ReadFile(path) //nolint:gosec // G304: path from config, not user input
-}
-
 // readDomainFile reads a line-delimited domain file, skipping comments.
 func readDomainFile(path string) ([]string, error) {
-	data, err := readFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path from trusted config file
 	if err != nil {
 		return nil, err
 	}

@@ -84,7 +84,7 @@ func (m *Response) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.
 	var serverCookie []byte
 	if len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen {
 		status := m.edns.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
-		if status == edns.CookieValid {
+		if status == edns.CookieValid || status == edns.CookieValidRenew {
 			serverCookie = cookieOpt.ServerCookie
 		} else {
 			log.Debugf("EDNS: server cookie status=%d for %s, renewing", status, clientIP)

@@ -311,7 +311,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			combined[nsName] = append(combined[nsName], addrsFromRRs(records)...)
 		}
 		for _, addrs := range combined {
-			go probe.ProbeNSAddrs(r.ctx, r.cache, addrs) //nolint:gosec // fire-and-forget probe with own timeout
+			go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
 		}
 	}
 

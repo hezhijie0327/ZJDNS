@@ -268,12 +268,16 @@ func (c *Certificate) unmarshalPQ(b []byte) error {
 }
 
 // Validate checks whether the certificate is valid (not expired, correct magic).
+// The classical XChacha20Poly1305 cert path validates only the date range;
+// X-Wing PQ certs additionally verify the public key length.
 func (c *Certificate) Validate() (err error) {
 	switch c.ESVersion {
 	case XWingPQ:
 		if len(c.PqPublicKey) != PQPublicKeySize {
 			return ErrESVersion
 		}
+	case XChacha20Poly1305:
+		// Valid — no additional structural checks needed.
 	default:
 		return ErrESVersion
 	}

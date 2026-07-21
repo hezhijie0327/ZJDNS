@@ -139,6 +139,9 @@ func processRR(rr dns.RR, value int64, isElapsed, includeDNSSEC bool) dns.RR {
 
 // ProcessRecords adjusts TTLs on resource records and optionally filters
 // DNSSEC record types.
+// ProcessRecords adjusts TTLs and filters records by DNSSEC status.
+// The returned slice shares backing arrays with the input — callers must
+// not mutate the returned records.
 func ProcessRecords(rrs []dns.RR, value int64, isElapsed, includeDNSSEC bool) []dns.RR {
 	if len(rrs) == 0 {
 		return nil

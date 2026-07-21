@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"net"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
-
-	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -27,14 +26,14 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	r.Qname = dnsutil.Canonical(r.Qname)
 
 	// Always upsert into query_stats.
-	_, _ = s.db.StmtQueryStats.Exec(r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, zdnsutil.BoolToInt(r.Hijack), zdnsutil.BoolToInt(r.Fallback), r.ResponseTime)
+	_, _ = s.db.StmtQueryStats.Exec(r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, database.BoolToInt(r.Hijack), database.BoolToInt(r.Fallback), r.ResponseTime)
 
 	// Non-hit results also go into query_log for the audit trail.
 	if r.Result != "hit" {
 		_, _ = s.db.StmtQueryLog.Exec(
 			log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
 			r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
-			zdnsutil.BoolToInt(r.Hijack), zdnsutil.BoolToInt(r.Fallback), r.DNSSECStatus,
+			database.BoolToInt(r.Hijack), database.BoolToInt(r.Fallback), r.DNSSECStatus,
 		)
 	}
 }
@@ -48,14 +47,21 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	// Precompute the serve-stale cutoff so the comparison e.expires_at >= ?
 	// avoids a per-row arithmetic expression and can use idx_entries_expires.
 	staleCutoff := log.NowUnix() - defaultStaleMaxAge
+	// Use a correlated subquery to pick the row with the latest expiry for each
+	// name, avoiding the non-deterministic GROUP BY on unaggregated columns.
 	rows, err := s.db.SQ.Query(
-		`SELECT pm.name, pm.ttl, e.timestamp, MAX(e.timestamp + pm.ttl), pm.entry_id
+		`SELECT pm.name, pm.ttl, e.timestamp, pm.entry_id
 		 FROM ptr_map pm
 		 JOIN entries e ON pm.entry_id = e.id
 		 WHERE pm.rdata_ip = ? AND e.expires_at >= ?
-		 GROUP BY pm.name
+		 AND (e.timestamp + pm.ttl) = (
+		     SELECT MAX(e2.timestamp + pm2.ttl)
+		     FROM ptr_map pm2
+		     JOIN entries e2 ON pm2.entry_id = e2.id
+		     WHERE pm2.name = pm.name AND pm2.rdata_ip = ?
+		 )
 		 ORDER BY pm.name`,
-		ip, staleCutoff,
+		ip, staleCutoff, ip,
 	)
 	if err != nil {
 		log.Warnf("CACHE: PTR lookup failed for %s: %v", ip, err)
@@ -68,9 +74,8 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 		var name string
 		var rawTTL int
 		var ts int64
-		var dummy int64
 		var entryID int64
-		if err := rows.Scan(&name, &rawTTL, &ts, &dummy, &entryID); err != nil {
+		if err := rows.Scan(&name, &rawTTL, &ts, &entryID); err != nil {
 			continue
 		}
 		results = append(results, LookupResult{

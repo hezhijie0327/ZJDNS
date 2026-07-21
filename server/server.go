@@ -379,7 +379,7 @@ func (s *Server) Start() error {
 	}
 
 	errChan := make(chan error, 1)
-	serverCtx, serverCancel := context.WithCancelCause(context.Background())
+	serverCtx, serverCancel := context.WithCancelCause(s.ctx)
 	defer serverCancel(errors.New("server startup completed"))
 
 	s.displayInfo()

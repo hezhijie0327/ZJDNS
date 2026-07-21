@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/resolver/probe"
 
@@ -104,6 +105,6 @@ func (r *Recursive) cacheGlueRecords(glue map[string][]dns.RR) {
 	}
 	for _, records := range glue {
 		addrs := addrsFromRRs(records)
-		go probe.ProbeNSAddrs(r.ctx, r.cache, addrs)
+		go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
 	}
 }

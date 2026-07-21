@@ -31,7 +31,9 @@ const (
 	defaultBufferSize      = 256
 )
 
-// QUIC application error codes shared across client and server packages.
+// QUIC application error codes (RFC 9000 §20) shared across client and
+// server packages.  Defined here because they are consumed by both
+// server/protocol/tls and server/upstream/tls.
 const (
 	// QUICCodeNoError is for normal connection closure.
 	QUICCodeNoError quic.ApplicationErrorCode = 0

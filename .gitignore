@@ -25,9 +25,6 @@ Thumbs.db
 *.snapshot
 *.snapshot.tmp
 
-# Local config (may contain secrets/proxy credentials)
-config.debug.json
-
 # Logs
 *.log
 
@@ -36,5 +33,7 @@ config.debug.json
 
 # Database
 *.db
-cache.db
-cache.db*
+
+# Root Files
+named.root
+root-anchors.xml

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"zjdns/config"
 	"zjdns/database"
@@ -58,6 +59,7 @@ type ZoneStorage interface {
 }
 
 // Evaluator manages zone rules backed by a ZoneStorage implementation.
+
 type Evaluator struct {
 	db         ZoneStorage
 	loadedAt   atomic.Int64
@@ -78,6 +80,8 @@ const wildcardPrefix = "*."
 // SQL statement uses a fixed placeholder count so SQLite can reuse the compiled
 // query plan across calls (P4).
 const maxWildcardLabels = 16
+
+var wildcardArgsPool = sync.Pool{New: func() any { a := make([]any, maxWildcardLabels+2); return &a }}
 
 // New creates an Evaluator backed by the given database.
 // The caller is responsible for opening the database via database.Open()
@@ -171,7 +175,7 @@ func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 	if rule.Name == "" {
 		return 0, errors.New("zone rule: name is required")
 	}
-	if len(rule.Name) > config.MaxDomainLength {
+	if len(rule.Name)+1 > config.MaxDomainLength {
 		log.Warnf("ZONE: rule name too long, skipping")
 		return 0, nil
 	}
@@ -341,7 +345,9 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 	if len(suffixes) > maxWildcardLabels {
 		suffixes = suffixes[:maxWildcardLabels]
 	}
-	args := make([]any, maxWildcardLabels+2)
+	argsPtr := wildcardArgsPool.Get().(*[]any)
+	args := (*argsPtr)[:maxWildcardLabels+2]
+	defer func() { wildcardArgsPool.Put(argsPtr) }()
 	for i := range maxWildcardLabels {
 		if i < len(suffixes) {
 			args[i] = suffixes[i]

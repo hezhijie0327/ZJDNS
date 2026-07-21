@@ -92,12 +92,16 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	}
 
 	go func() {
-		if err := g.Wait(); err != nil && errors.Is(err, ErrCIDRFilterRefused) {
-			// All successful answers were filtered by CIDR rules —
-			// propagate the specific error so callers can return REFUSED.
-			select {
-			case resultChan <- QueryResult{Err: ErrCIDRFilterRefused}:
-			default:
+		if err := g.Wait(); err != nil {
+			if errors.Is(err, ErrCIDRFilterRefused) {
+				// All successful answers were filtered by CIDR rules —
+				// propagate the specific error so callers can return REFUSED.
+				select {
+				case resultChan <- QueryResult{Err: ErrCIDRFilterRefused}:
+				default:
+				}
+			} else {
+				log.Warnf("UPSTREAM: errgroup for %s: %v", question.Name, err)
 			}
 		}
 		close(resultChan)
@@ -125,8 +129,23 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 		log.Debugf("UPSTREAM: all %d servers failed for %s", len(servers), question.Name)
 		return QueryResult{Err: errors.New("all upstream queries failed")}
 	case <-queryCtx.Done():
-		// When all goroutines finish, errgroup cancels the derived
-		// context, which can race with the channel-close goroutine.
+		// When processUpstreamResponse cancels queryCtx after sending
+		// a result to resultChan, the select can pick either branch.
+		// Drain any pending result from the buffered channel before
+		// falling back to the timeout/error path.
+		select {
+		case res, ok := <-resultChan:
+			if ok {
+				if errors.Is(res.Err, ErrCIDRFilterRefused) {
+					return QueryResult{Err: ErrCIDRFilterRefused}
+				}
+				if res.Server != "" {
+					res.Fallback = false
+					return res
+				}
+			}
+		default:
+		}
 		// Check for captured EDE codes here too so they are
 		// not lost to a "context canceled" error.
 		if opt := r.lastUpstreamEDE.Load(); opt != nil {
