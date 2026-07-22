@@ -119,10 +119,22 @@ type DatabaseSettings struct {
 	CacheSizeMB int    `json:"cache_size_mb,omitzero"` // SQLite cache_size PRAGMA
 }
 
-// CacheSettings configures DNS response cache size and stale serving.
+// CacheMemorySettings configures bounded in-memory caches that accelerate
+// hot-path lookups.  Each entry count is a hard cap (LRU eviction).  Set to 0
+// to disable the corresponding cache entirely.
+type CacheMemorySettings struct {
+	Zone    int `json:"zone_entries,omitzero"`    // zone exact-match (~0.4 KB/entry)
+	DNSL1   int `json:"dns_l1_entries,omitzero"`  // DNS hot-entry L1 (~0.8 KB/entry)
+	Latency int `json:"latency_entries,omitzero"` // IP latency lookup (~0.2 KB/entry)
+	Ruleset int `json:"ruleset_entries,omitzero"` // ruleset domain→tags (~0.4 KB/entry)
+}
+
+// CacheSettings configures DNS response cache size, stale serving, and bounded
+// memory caches for hot-path acceleration.
 type CacheSettings struct {
-	MaxEntries  int  `json:"max_entries,omitzero"`
-	PreferStale bool `json:"prefer_stale,omitzero"`
+	MaxEntries  int                 `json:"max_entries,omitzero"`
+	PreferStale bool                `json:"prefer_stale,omitzero"`
+	Memory      CacheMemorySettings `json:"memory,omitzero"`
 }
 
 // UpstreamServer defines a single upstream DNS server with address, protocol,

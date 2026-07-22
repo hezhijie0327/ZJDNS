@@ -91,7 +91,15 @@ func buildBenchServer(b *testing.B) *server.Server {
 			Features: config.FeatureFlags{
 				HijackProtection: false,
 				DNSSECEnforce:    false,
-				Cache:            config.CacheSettings{MaxEntries: config.DefaultMaxCacheEntries},
+				Cache: config.CacheSettings{
+					MaxEntries: config.DefaultMaxCacheEntries,
+					Memory: config.CacheMemorySettings{
+						Zone:    config.DefaultMemoryCacheZone,
+						DNSL1:   config.DefaultMemoryCacheDNSL1,
+						Latency: config.DefaultMemoryCacheLatency,
+						Ruleset: config.DefaultMemoryCacheRuleset,
+					},
+				},
 			},
 		},
 		Zone: config.ZoneConfig{Rules: []config.ZoneRule{

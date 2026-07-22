@@ -15,6 +15,7 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -30,6 +31,13 @@ type matchTag struct {
 	negate bool   // true if !tag
 }
 
+// exactKey is the cache key for exact-match zone rules without tag conditions.
+type exactKey struct {
+	qname  string
+	qtype  uint16
+	qclass uint16
+}
+
 // Result holds the outcome of a zone rule evaluation.
 type Result struct {
 	Domain     string
@@ -39,6 +47,8 @@ type Result struct {
 	Authority  []dns.RR
 	Additional []dns.RR
 	CreatedAt  int64 // LoadRules timestamp for TTL cycling
+
+	cachable bool // internal: true when the winning rule has no match_tags
 }
 
 // dynamicEntry holds a dynamic content function and its record configs.
@@ -66,6 +76,9 @@ type Evaluator struct {
 	ruleCount  atomic.Int64
 	dynamics   map[string]*dynamicEntry // qname → dynamic content
 	bypassTags map[string]struct{}      // tags that bypass all zone rules
+
+	exactCache    *lrumap.Map[exactKey, Result] // bounded memory cache for untagged exact matches
+	exactCacheCap int                           // capacity for cache recreation on reload
 }
 
 // ---------------------------------------------------------------------------
@@ -86,11 +99,16 @@ var wildcardArgsPool = sync.Pool{New: func() any { a := make([]any, maxWildcardL
 // New creates an Evaluator backed by the given database.
 // The caller is responsible for opening the database via database.Open()
 // before calling New.
-func New(db *database.DB) *Evaluator {
-	return &Evaluator{
+func New(db *database.DB, cacheEntries int) *Evaluator {
+	ev := &Evaluator{
 		db:       db,
 		dynamics: make(map[string]*dynamicEntry),
 	}
+	if cacheEntries > 0 {
+		ev.exactCache = lrumap.New[exactKey, Result](cacheEntries)
+		ev.exactCacheCap = cacheEntries
+	}
+	return ev
 }
 
 // Close releases SQLite resources.
@@ -132,8 +150,11 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	if _, err := e.db.Exec(`DELETE FROM zone_entries`); err != nil {
 		return fmt.Errorf("zone: clear: %w", err)
 	}
-	// Clear dynamic content registrations.
+	// Clear dynamic content registrations and memory cache.
 	e.dynamics = make(map[string]*dynamicEntry)
+	if e.exactCache != nil {
+		e.exactCache = lrumap.New[exactKey, Result](e.exactCacheCap)
+	}
 
 	tx, err := e.db.Begin()
 	if err != nil {
@@ -257,19 +278,33 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 		return e.evalDynamic(qname, qtype, qclass, de)
 	}
 
+	// 2. Check bounded memory cache for untagged exact matches.
+	if e.exactCache != nil && len(matchedTags) == 0 {
+		key := exactKey{qname, qtype, qclass}
+		if r, ok := e.exactCache.Get(key); ok {
+			return r
+		}
+	}
+
 	loadedAt := e.loadedAt.Load()
 
-	// 2. Exact composite key lookup.
+	// 3. Exact composite key lookup.
 	if r := e.queryExact(qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
+		if e.exactCache != nil && r.cachable && len(matchedTags) == 0 {
+			e.exactCache.Set(exactKey{qname, qtype, qclass}, r)
+		}
 		return r
 	}
 
-	// 3. Sentinel key (rcode-only rules).
+	// 4. Sentinel key (rcode-only rules).
 	if r := e.queryExact(qname, 0, 0, matchedTags, loadedAt); r.Matched {
+		if e.exactCache != nil && r.cachable && len(matchedTags) == 0 {
+			e.exactCache.Set(exactKey{qname, qtype, qclass}, r)
+		}
 		return r
 	}
 
-	// 4. Wildcard suffix batch — single IN query replaces N per-label queries.
+	// 5. Wildcard suffix batch — single IN query replaces N per-label queries.
 	// ORDER BY length(qname) DESC, qtype DESC ensures the most specific
 	// suffix and the concrete qtype match (over qtype=0 sentinel) win.
 	return e.queryWildcardBatch(qname, qtype, qclass, matchedTags, loadedAt)
@@ -309,6 +344,7 @@ func (e *Evaluator) queryExact(qname string, qtype, qclass uint16, matchedTags m
 			Authority:  unpackRRs(authBlob),
 			Additional: unpackRRs(addlBlob),
 			CreatedAt:  loadedAt,
+			cachable:   score == 0,
 		}
 	}
 
@@ -392,6 +428,7 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 			Authority:  unpackRRs(authBlob),
 			Additional: unpackRRs(addlBlob),
 			CreatedAt:  loadedAt,
+			cachable:   score == 0,
 		}
 	}
 

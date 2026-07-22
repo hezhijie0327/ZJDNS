@@ -10,6 +10,7 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
 
@@ -19,12 +20,24 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
+// dnsL1Key is the cache key for the DNS L1 memory cache.
+type dnsL1Key struct {
+	qname     string
+	qtype     uint16
+	qclass    uint16
+	ecsAddr   string
+	ecsPrefix int
+	dnssecOK  bool
+}
+
 // SQLiteCache is a DNS response cache backed by a SQLite database managed by
 // the database package. It implements the Store interface.
 type SQLiteCache struct {
 	db          *database.DB
 	evictCount  atomic.Int64
 	asyncWriter *AsyncStatsWriter
+	dnsL1       *lrumap.Map[dnsL1Key, *Entry] // bounded memory L1 for hot entries
+	latencyL1   *lrumap.Map[string, int]      // bounded memory cache for IP latency
 }
 
 const (
@@ -48,11 +61,18 @@ var latencyArgsPool = sync.Pool{
 
 // New creates a cache backed by the given database. The caller is responsible
 // for opening the database via database.Open() before calling New.
-func New(db *database.DB) *SQLiteCache {
-	return &SQLiteCache{
+func New(db *database.DB, dnsL1Entries, ipLatencyEntries int) *SQLiteCache {
+	c := &SQLiteCache{
 		db:          db,
 		asyncWriter: NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
 	}
+	if dnsL1Entries > 0 {
+		c.dnsL1 = lrumap.New[dnsL1Key, *Entry](dnsL1Entries)
+	}
+	if ipLatencyEntries > 0 {
+		c.latencyL1 = lrumap.New[string, int](ipLatencyEntries)
+	}
+	return c
 }
 
 // Close shuts down the async stats writer and then closes the database.
@@ -78,6 +98,26 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	qname = dnsutil.Canonical(qname)
 	ecsAddr, ecsPrefix := ecsParams(ecs)
+
+	// Check bounded memory L1 cache before hitting SQLite.
+	l1Key := dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}
+	if s.dnsL1 != nil {
+		if entry, ok := s.dnsL1.Get(l1Key); ok && entry != nil {
+			if !ttl.IsExpired(entry.Timestamp, entry.TTL) {
+				// Shallow-copy entry to re-sort by latest latency
+				// without mutating the cached *Entry.
+				if len(entry.Answer) > 1 {
+					e := *entry
+					e.Answer = make([]dns.RR, len(entry.Answer))
+					copy(e.Answer, entry.Answer)
+					s.sortAnswerByLatency(&e)
+					return &e, true, false
+				}
+				return entry, true, false
+			}
+			// Expired in L1 — fall through to SQLite.
+		}
+	}
 
 	var id int64
 	var ts int64
@@ -139,6 +179,11 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// fastest IP is returned first. Latency is per-IP — all domains
 	// sharing the same IP reuse the same row.
 	s.sortAnswerByLatency(entry)
+
+	// Populate L1 memory cache for future queries.
+	if s.dnsL1 != nil {
+		s.dnsL1.Set(l1Key, entry)
+	}
 
 	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
@@ -212,9 +257,24 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 		ips = ips[:maxLatencyLookupIPs]
 	}
 
-	// Reuse a pooled fixed-size array so the []any argument slice for the
-	// SQLite batch query costs zero heap allocations on the hot path.
-	// Unused slots are padded with empty string (never matches).
+	// Check bounded memory L1 cache first.
+	latencies := make(map[string]int, len(ips))
+	misses := ips
+	if s.latencyL1 != nil {
+		misses = nil
+		for _, ip := range ips {
+			if lat, ok := s.latencyL1.Get(ip); ok {
+				latencies[ip] = lat
+			} else {
+				misses = append(misses, ip)
+			}
+		}
+		if len(misses) == 0 {
+			return latencies
+		}
+	}
+
+	// Query SQLite for cache misses.
 	argsPtr := latencyArgsPool.Get().(*[maxLatencyLookupIPs]any)
 	defer func() {
 		for i := range maxLatencyLookupIPs {
@@ -223,8 +283,8 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 		latencyArgsPool.Put(argsPtr)
 	}()
 	for i := range maxLatencyLookupIPs {
-		if i < len(ips) {
-			argsPtr[i] = ips[i]
+		if i < len(misses) {
+			argsPtr[i] = misses[i]
 		} else {
 			argsPtr[i] = ""
 		}
@@ -232,16 +292,18 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 
 	rows, err := s.db.StmtIPLatency.Query(argsPtr[:]...)
 	if err != nil {
-		return nil
+		return latencies // return L1 hits even if SQLite fails
 	}
 	defer func() { _ = rows.Close() }()
 
-	latencies := make(map[string]int, len(ips))
 	for rows.Next() {
 		var ip string
 		var lat int
 		if err := rows.Scan(&ip, &lat); err == nil {
 			latencies[ip] = lat
+			if s.latencyL1 != nil {
+				s.latencyL1.Set(ip, lat)
+			}
 		}
 	}
 	return latencies
@@ -317,6 +379,20 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 	if txErr != nil && entryID == 0 {
 		return 0
+	}
+
+	// Populate L1 memory cache so subsequent Get() calls skip SQLite.
+	// No need to pre-sort here — L1 hit path re-sorts with latest latency.
+	if entryID != 0 && s.dnsL1 != nil {
+		s.dnsL1.Set(dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt != 0}, &Entry{
+			ID:         entryID,
+			Answer:     answer,
+			Authority:  authority,
+			Additional: additional,
+			Timestamp:  now,
+			TTL:        entryTTL,
+			Validated:  validated,
+		})
 	}
 
 	// evictIfNeeded re-syncs the entry count from the DB via SELECT COUNT(*)

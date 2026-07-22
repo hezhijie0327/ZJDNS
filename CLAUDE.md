@@ -339,6 +339,8 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `Store` | `cache` | Interface: Get/Set(int64)/RecordRequest/ReverseLookup/FlushDB/Clear/PruneQueryJournal/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
 | `Entry` | `cache` | Cached DNS response: ID, Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
 | `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → batched SQLite writes for query_stats + query_log. `Close()` is idempotent via `sync.Once`. |
+| `CacheMemorySettings` | `config` | Per-subsystem bounded memory cache sizes (`Zone`, `DNSL1`, `Latency`, `Ruleset`). 0 disables the cache. Nested under `CacheSettings.Memory`. |
+| `Map[K, V]` | `internal/lrumap` | Generic concurrent-safe bounded map with bulk eviction (to 80% at capacity). Used by all four memory caches. |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `Handler` | `server/handler` | Thin adapter: creates `QueryContext`, delegates to middleware chain via `ServeDNS` |
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` — each middleware and the terminal resolver implement this |
@@ -421,8 +423,9 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Color map array**: `Logger.colorMap` is `[4]string` (indexed by `Level` iota) instead of `map[Level]string` — zero heap allocation per log-line color lookup.
 - **Pending group struct{}**: `internal/pending.Group` uses `map[K]struct{}` (not `map[K]chan struct{}`) — the channel was a sentinel that was never read, just allocated and closed. Switched to a plain marker value.
 - **Stamp encoder/parser shared backends**: `encodeSecure`/`parseSecure` unify the 5 near-identical DoH/DoT/DoQ/ODoH/ODoHRelay code paths (eliminating ~300 lines of duplication). Individual `dohString()` etc. still exist as one-line delegations for API stability.
-- **lrumap package**: Generic `Map[K, V]` in `internal/lrumap` provides a concurrent-safe bounded map with bulk eviction, intended to replace the ad-hoc single-entry eviction pattern used in 5 transport/dialer caches.
+- **lrumap package**: Generic `Map[K, V]` in `internal/lrumap` provides a concurrent-safe bounded map with bulk eviction (to 80% at capacity). Used by all four bounded memory caches (zone, DNS L1, IP latency, ruleset) and transport/dialer caches.
 - **Async stats writer**: `cache/AsyncStatsWriter` offloads `RecordRequest` SQLite writes from the query hot path onto a background goroutine via a buffered channel. Non-blocking send (drop when full — best-effort stats). Batch flush (64 records or 100ms ticker). `Close()` is idempotent via `sync.Once`. Tests use `&SQLiteCache{db: db}` (nil asyncWriter) so `RecordRequest` falls back to synchronous SQLite writes.
+- **Bounded memory caches**: Four `lrumap.Map`-based L1 caches accelerate hot-path lookups while SQLite remains the authoritative data source. All are bounded (LRU bulk eviction at capacity), nil-safe (0 = disabled), and configurable via `CacheMemorySettings`. Zone caches exact-match rules without tag conditions (qname+qtype+qclass key, pre-unpacked RRs). DNS L1 caches hot `*Entry` pointers (qname+qtype+qclass+ecs+dnssec key, checked for expiry on hit). IP latency caches per-IP probe results. Ruleset caches domain→tag mappings by TLD+1 key. All caches reset on `LoadRules()` reload.
 
 ## DB Schema
 

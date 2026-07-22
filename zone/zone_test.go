@@ -16,7 +16,7 @@ func TestEvaluator_LoadRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	if z.HasRules() {
 		t.Error("new Evaluator should have no rules")
 	}
@@ -37,7 +37,7 @@ func TestEvaluator_Evaluate_Answer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "static.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -69,7 +69,7 @@ func TestEvaluator_Evaluate_NoMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -95,7 +95,7 @@ func TestEvaluator_Evaluate_NXDOMAIN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "blocked.com", Rcode: dns.RcodeNameError},
 	})
@@ -123,7 +123,7 @@ func TestEvaluator_Evaluate_AuthorityAndAdditional(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name: "test.example.com",
@@ -162,7 +162,7 @@ func TestEvaluator_Evaluate_MultipleTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name: "multi.example.com",
@@ -206,7 +206,7 @@ func TestEvaluator_Wildcard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "*.wild.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -238,7 +238,7 @@ func TestEvaluator_Wildcard_TypeFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "*.wild.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -258,7 +258,7 @@ func TestEvaluator_ExactWinsOverWildcard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "*.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "1.1.1.1", TTL: 300}}},
 		{Name: "specific.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "2.2.2.2", TTL: 300}}},
@@ -282,7 +282,7 @@ func TestEvaluator_NoRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if result.Matched {
 		t.Error("empty evaluator should not match")
@@ -294,7 +294,7 @@ func TestEvaluator_CreatedAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -313,7 +313,7 @@ func TestEvaluator_RcodeOnlyWithRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "mixed.example.com",
@@ -362,7 +362,7 @@ func TestEvaluator_FileImport_Basic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
@@ -400,7 +400,7 @@ func TestEvaluator_FileImport_Wildcard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
@@ -427,7 +427,7 @@ func TestEvaluator_FileImport_Comments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
@@ -454,7 +454,7 @@ func TestEvaluator_FileImport_AuthorityAndAdditional(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
@@ -484,7 +484,7 @@ func TestEvaluator_MatchTags_PositiveMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "vpn.example.com", Match: []string{"corp"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 		{Name: "vpn.example.com", Match: []string{"guest"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.2", TTL: 300}}},
@@ -525,7 +525,7 @@ func TestEvaluator_MatchTags_Negate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "vpn.example.com",
@@ -581,7 +581,7 @@ func TestEvaluator_MatchTags_MixedSameQType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "vpn.example.com",
@@ -672,7 +672,7 @@ func TestEvaluator_MatchTags_MultiAnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "internal.example.com",
@@ -717,7 +717,7 @@ func TestEvaluator_MatchTags_Wildcard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "*.corp.example.com",
@@ -766,7 +766,7 @@ func TestEvaluator_MatchTags_NoTagsMatchesAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "public.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "1.1.1.1", TTL: 300}}},
 	})
@@ -793,7 +793,7 @@ func TestEvaluator_Bypass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	z.SetBypassTags([]string{"gateway"})
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "vpn.example.com", Match: []string{"corp"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
@@ -833,7 +833,7 @@ func TestEvaluator_TTLCyclical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -876,7 +876,7 @@ func TestEvaluator_MatchScore_Priority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "svc.example.com",
@@ -1020,7 +1020,7 @@ func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db)
+	z := New(db, 0)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "vpn.zhijie.online",

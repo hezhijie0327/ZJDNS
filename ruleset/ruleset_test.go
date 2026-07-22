@@ -14,7 +14,7 @@ func testEngine(t *testing.T, rules []config.RuleSet) *Engine {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	e := New(db)
+	e := New(db, 0)
 	if err := e.LoadRules(rules); err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,13 @@
         "port": "443",
         "endpoint": "/dns-query"
       },
+      "tlcp": "9853",
+      "http_tlcp": {
+        "port": "9443",
+        "endpoint": "/dns-query"
+      },
+      "dtls": "8853",
+      "dtlcp": "9853",
       "dnscrypt": "8443"
     },
     "certificate": {

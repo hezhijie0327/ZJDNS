@@ -11,6 +11,7 @@ import (
 	"strings"
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 )
 
 // RuleSetStorage provides SQL operations needed by the ruleset engine.
@@ -27,13 +28,23 @@ type RuleSetStorage interface {
 // The ruleset_entries PK is (type, tag, value), so WHERE type=? uses a PK
 // prefix seek (not a full scan).
 type Engine struct {
-	db   RuleSetStorage
-	tags map[string]bool // all known tags from config
+	db            RuleSetStorage
+	tags          map[string]bool                      // all known tags from config
+	matchCache    *lrumap.Map[string, map[string]bool] // bounded memory cache for domain→tags
+	matchCacheCap int
 }
 
 // New creates an Engine backed by the given database.
-func New(db RuleSetStorage) *Engine {
-	return &Engine{db: db, tags: make(map[string]bool)}
+func New(db RuleSetStorage, cacheEntries int) *Engine {
+	e := &Engine{
+		db:   db,
+		tags: make(map[string]bool),
+	}
+	if cacheEntries > 0 {
+		e.matchCache = lrumap.New[string, map[string]bool](cacheEntries)
+		e.matchCacheCap = cacheEntries
+	}
+	return e
 }
 
 // LoadRules stores RuleSet configurations into SQLite.  Rules are reloaded
@@ -73,6 +84,11 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 		return err
 	}
 
+	// Reset memory cache on reload.
+	if e.matchCache != nil {
+		e.matchCache = lrumap.New[string, map[string]bool](e.matchCacheCap)
+	}
+
 	var n int
 	_ = e.db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n)
 	log.Infof("RULESET: %d rules loaded into %d tags", n, len(e.tags))
@@ -83,21 +99,38 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 func (e *Engine) Match(qname, ip string) map[string]bool {
 	var tags map[string]bool
 
-	// Domain: TLD+1 suffix lookup.
+	// Domain: TLD+1 suffix lookup (check bounded memory cache first).
 	key := tldPlusOne(qname)
-	domainRows, err := e.db.SQLQuery(
-		"SELECT tag FROM ruleset_entries WHERE type='domain' AND value=?",
-		key,
-	)
-	if err == nil {
-		defer func() { _ = domainRows.Close() }()
-		for domainRows.Next() {
-			var tag string
-			if domainRows.Scan(&tag) == nil && tag != "" {
-				if tags == nil {
-					tags = make(map[string]bool)
+	cached := false
+	if e.matchCache != nil {
+		if cachedTags, ok := e.matchCache.Get(key); ok {
+			tags = make(map[string]bool, len(cachedTags))
+			for t := range cachedTags {
+				tags[t] = true
+			}
+			cached = true
+		}
+	}
+	if !cached {
+		domainRows, err := e.db.SQLQuery(
+			"SELECT tag FROM ruleset_entries WHERE type='domain' AND value=?",
+			key,
+		)
+		if err == nil {
+			defer func() { _ = domainRows.Close() }()
+			domainTags := make(map[string]bool)
+			for domainRows.Next() {
+				var tag string
+				if domainRows.Scan(&tag) == nil && tag != "" {
+					if tags == nil {
+						tags = make(map[string]bool)
+					}
+					tags[tag] = true
+					domainTags[tag] = true
 				}
-				tags[tag] = true
+			}
+			if e.matchCache != nil && len(domainTags) > 0 {
+				e.matchCache.Set(key, domainTags)
 			}
 		}
 	}

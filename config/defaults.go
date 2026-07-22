@@ -39,6 +39,11 @@ const (
 	DefaultCacheMaxOpenConns = 4 // SQLite WAL: single writer, readers served concurrently
 	DefaultCacheMaxIdleConns = 2
 
+	DefaultMemoryCacheZone    = 10000 // bounded memory cache for zone exact-match rules (0 = disabled)
+	DefaultMemoryCacheDNSL1   = 10000 // bounded memory L1 cache for hot DNS entries (0 = disabled)
+	DefaultMemoryCacheLatency = 5000  // bounded memory cache for IP latency lookups (0 = disabled)
+	DefaultMemoryCacheRuleset = 5000  // bounded memory cache for ruleset domain matches (0 = disabled)
+
 	DefaultQueryJournalRetention = 3 * 86400     // seconds — auto-cleanup window for query_stats + query_log
 	DefaultPruneInterval         = 1 * time.Hour // interval between PruneQueryJournal runs
 	DefaultPruneBatchSize        = 10000         // rows per iteration during prune
