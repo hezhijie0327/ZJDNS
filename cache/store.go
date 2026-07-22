@@ -100,9 +100,9 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 
 	// Check bounded memory L1 cache before hitting SQLite.
-	l1Key := dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}
 	if s.dnsL1 != nil {
-		if entry, ok := s.dnsL1.Get(l1Key); ok && entry != nil {
+		l1Key := dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}
+		if entry, ok := s.dnsL1.Get(l1Key); ok {
 			if !ttl.IsExpired(entry.Timestamp, entry.TTL) {
 				// Shallow-copy entry to re-sort by latest latency
 				// without mutating the cached *Entry.
@@ -182,7 +182,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	// Populate L1 memory cache for future queries.
 	if s.dnsL1 != nil {
-		s.dnsL1.Set(l1Key, entry)
+		s.dnsL1.Set(dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}, entry)
 	}
 
 	isExpired := ttl.IsExpired(ts, entryTTL)
@@ -384,7 +384,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// Populate L1 memory cache so subsequent Get() calls skip SQLite.
 	// No need to pre-sort here — L1 hit path re-sorts with latest latency.
 	if entryID != 0 && s.dnsL1 != nil {
-		s.dnsL1.Set(dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt != 0}, &Entry{
+		s.dnsL1.Set(dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}, &Entry{
 			ID:         entryID,
 			Answer:     answer,
 			Authority:  authority,

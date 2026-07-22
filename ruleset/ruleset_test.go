@@ -148,3 +148,114 @@ func TestNew_InvalidPrefix(t *testing.T) {
 		t.Error("tag with only invalid CIDRs should have no IP matcher")
 	}
 }
+
+// ── Match Cache ────────────────────────────────────────────────────────────────
+
+func testEngineWithCache(t *testing.T, cacheEntries int, rules []config.RuleSet) *Engine {
+	t.Helper()
+	database.Version = "3.2.12"
+	db, err := database.Open(":memory:", 100, database.Options{MMapSizeMB: 1, CacheSizeMB: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	e := New(db, cacheEntries)
+	if err := e.LoadRules(rules); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestMatchCache_Hit(t *testing.T) {
+	e := testEngineWithCache(t, 100, []config.RuleSet{
+		{Tag: "google", Type: "domain", Rule: []string{"google.com"}},
+	})
+
+	if e.matchCache == nil {
+		t.Fatal("matchCache should be non-nil")
+	}
+
+	// First call: SQLite → populate cache.
+	tags := e.Match("www.google.com.", "1.2.3.4")
+	if !tags["google"] {
+		t.Fatal("first call: expected google tag")
+	}
+
+	// Second call: should hit cache (same TLD+1 key "google.com").
+	tags = e.Match("mail.google.com.", "1.2.3.4")
+	if !tags["google"] {
+		t.Fatal("second call (cache hit): expected google tag")
+	}
+}
+
+func TestMatchCache_DifferentTLD_Miss(t *testing.T) {
+	e := testEngineWithCache(t, 100, []config.RuleSet{
+		{Tag: "google", Type: "domain", Rule: []string{"google.com"}},
+		{Tag: "other", Type: "domain", Rule: []string{"example.com"}},
+	})
+
+	// Query google.com → populates cache for "google.com" TLD+1 key.
+	e.Match("www.google.com.", "1.2.3.4")
+
+	// Query example.com → different TLD+1 key, should miss cache and hit SQLite.
+	tags := e.Match("example.com.", "1.2.3.4")
+	if !tags["other"] {
+		t.Fatal("expected other tag for example.com")
+	}
+}
+
+func TestMatchCache_LoadRulesResets(t *testing.T) {
+	e := testEngineWithCache(t, 100, []config.RuleSet{
+		{Tag: "google", Type: "domain", Rule: []string{"google.com"}},
+	})
+
+	// Populate cache.
+	e.Match("www.google.com.", "1.2.3.4")
+	if e.matchCache.Len() == 0 {
+		t.Fatal("cache should be non-empty after query")
+	}
+
+	// Reload rules — cache should reset.
+	err := e.LoadRules([]config.RuleSet{
+		{Tag: "other", Type: "domain", Rule: []string{"example.com"}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+	if e.matchCache.Len() != 0 {
+		t.Errorf("cache should be empty after LoadRules, got %d entries", e.matchCache.Len())
+	}
+}
+
+func TestMatchCache_Disabled(t *testing.T) {
+	e := testEngineWithCache(t, 0, []config.RuleSet{
+		{Tag: "google", Type: "domain", Rule: []string{"google.com"}},
+	})
+
+	if e.matchCache != nil {
+		t.Error("matchCache should be nil when size=0")
+	}
+
+	// Should work via SQLite.
+	tags := e.Match("www.google.com.", "1.2.3.4")
+	if !tags["google"] {
+		t.Fatal("expected google tag with cache disabled")
+	}
+}
+
+func TestMatchCache_IPRulesNotCached(t *testing.T) {
+	e := testEngineWithCache(t, 100, []config.RuleSet{
+		{Tag: "corp", Type: "ip", Rule: []string{"10.0.0.0/8"}},
+	})
+
+	// IP-only rules should not populate the domain cache.
+	tags := e.Match("any.domain.", "10.1.2.3")
+	if !tags["corp"] {
+		t.Fatal("expected corp tag")
+	}
+
+	// Domain cache should still be empty (no domain rules to cache).
+	if e.matchCache.Len() != 0 {
+		t.Errorf("domain cache should be empty for IP-only rules, got %d entries", e.matchCache.Len())
+	}
+}

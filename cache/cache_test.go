@@ -937,6 +937,264 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 	}
 }
 
+// ── L1 Memory Cache ────────────────────────────────────────────────────────────
+
+func testStoreWithL1(dnsL1Size, latL1Size int) *SQLiteCache {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		panic(err)
+	}
+	return New(db, dnsL1Size, latL1Size)
+}
+
+func TestL1_DNS_Hit(t *testing.T) {
+	mc := testStoreWithL1(100, 0)
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+
+	// First Get: SQLite → populate L1.
+	_, found, expired := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found || expired {
+		t.Fatalf("first Get: found=%v expired=%v", found, expired)
+	}
+
+	// Second Get: should hit L1 (same answer).
+	entry2, found2, expired2 := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found2 || expired2 {
+		t.Fatalf("second Get (L1 hit): found=%v expired=%v", found2, expired2)
+	}
+	if len(entry2.Answer) != 1 {
+		t.Errorf("L1 hit answer count = %d, want 1", len(entry2.Answer))
+	}
+	if dns.RRToType(entry2.Answer[0]) != dns.TypeA {
+		t.Errorf("L1 hit record type = %d, want A", dns.RRToType(entry2.Answer[0]))
+	}
+}
+
+func TestL1_DNS_ECSScoping(t *testing.T) {
+	mc := testStoreWithL1(100, 0)
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	ecs := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("192.0.2.0").AsSlice()}
+
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs, false, []dns.RR{rr}, nil, nil, false)
+
+	// Prime L1 with ECS-specific entry.
+	mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs, false)
+
+	// Same ECS should hit L1.
+	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs, false)
+	if !found {
+		t.Error("L1 should hit with matching ECS")
+	}
+
+	// Different ECS should miss L1 (different key) and miss SQLite (not stored).
+	ecs2 := &config.ECSOption{Family: 1, SourcePrefix: 16, ScopePrefix: 0, Address: netParseIP("10.0.0.0").AsSlice()}
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs2, false)
+	if found {
+		t.Error("L1 should miss with different ECS")
+	}
+}
+
+func TestL1_DNS_DNSSECScoping(t *testing.T) {
+	mc := testStoreWithL1(100, 0)
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, true, []dns.RR{rr}, nil, nil, false)
+	mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, true) // prime L1
+
+	// DNSSEC=true should hit L1.
+	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, true)
+	if !found {
+		t.Error("L1 should hit with DNSSEC=true")
+	}
+
+	// DNSSEC=false should miss.
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if found {
+		t.Error("L1 should miss with DNSSEC=false when stored with DNSSEC=true")
+	}
+}
+
+func TestL1_DNS_ExpiredFallsThrough(t *testing.T) {
+	mc := testStoreWithL1(100, 0)
+	defer func() { _ = mc.Close() }()
+
+	// Insert an already-expired entry by using TTL=0 (floored to DefaultTTL, but we
+	// need a genuinely expired L1 entry).  We insert via Set, then manually set the
+	// L1 entry timestamp far in the past.
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+
+	// Manually modify the L1 entry's timestamp to simulate expiry.
+	key := dnsL1Key{qname: "example.com.", qtype: dns.TypeA, qclass: dns.ClassINET}
+	if mc.dnsL1 != nil {
+		if entry, ok := mc.dnsL1.Get(key); ok {
+			entry.Timestamp = 1 // Unix epoch — definitely expired
+		}
+	}
+
+	// Get should fall through to SQLite (still fresh there) and repopulate L1.
+	entry, found, expired := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("SQLite fallback should find entry")
+	}
+	if expired {
+		t.Error("SQLite entry should not be expired")
+	}
+	if len(entry.Answer) != 1 {
+		t.Errorf("answer count = %d, want 1", len(entry.Answer))
+	}
+}
+
+func TestL1_DNS_SetPopulatesL1(t *testing.T) {
+	mc := testStoreWithL1(100, 0)
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.A{Hdr: dns.Header{Name: "set-pop.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	mc.Set("set-pop.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true)
+
+	// L1 should have the entry directly from Set() — no SQLite round-trip needed.
+	key := dnsL1Key{qname: "set-pop.example.com.", qtype: dns.TypeA, qclass: dns.ClassINET}
+	if mc.dnsL1 == nil {
+		t.Fatal("dnsL1 should be non-nil")
+	}
+	entry, ok := mc.dnsL1.Get(key)
+	if !ok {
+		t.Fatal("L1 should contain entry after Set()")
+	}
+	if !entry.Validated {
+		t.Error("L1 entry Validated flag should be true")
+	}
+}
+
+func TestL1_DNS_MultipleAnswers_ReSortOnHit(t *testing.T) {
+	mc := testStoreWithL1(100, 0)
+	defer func() { _ = mc.Close() }()
+
+	a1 := &dns.A{Hdr: dns.Header{Name: "multi.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.1")}}
+	a2 := &dns.A{Hdr: dns.Header{Name: "multi.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.2")}}
+	mc.Set("multi.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+		[]dns.RR{a1, a2}, nil, nil, false)
+
+	// Prime L1.
+	mc.Get("multi.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+
+	// Store latency — 10.0.0.2 is faster.
+	mc.UpdateLatency("10.0.0.1", 100)
+	mc.UpdateLatency("10.0.0.2", 10)
+
+	// L1 hit should re-sort by latest latency: 10.0.0.2 first.
+	entry, found, _ := mc.Get("multi.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("L1 hit not found")
+	}
+	if len(entry.Answer) != 2 {
+		t.Fatalf("answer count = %d, want 2", len(entry.Answer))
+	}
+	ip1 := entry.Answer[0].(*dns.A).A.String()
+	ip2 := entry.Answer[1].(*dns.A).A.String()
+	if ip1 != "10.0.0.2" || ip2 != "10.0.0.1" {
+		t.Errorf("wrong order after L1 re-sort: [%s, %s], want [10.0.0.2, 10.0.0.1]", ip1, ip2)
+	}
+}
+
+func TestL1_DNS_Disabled(t *testing.T) {
+	// Zero L1 entries → cache disabled.
+	mc := testStoreWithL1(0, 0)
+	defer func() { _ = mc.Close() }()
+
+	if mc.dnsL1 != nil {
+		t.Error("dnsL1 should be nil when size=0")
+	}
+	if mc.latencyL1 != nil {
+		t.Error("latencyL1 should be nil when size=0")
+	}
+
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+
+	// Should work entirely via SQLite.
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("SQLite fallback should work when L1 disabled")
+	}
+	if len(entry.Answer) != 1 {
+		t.Errorf("answer count = %d, want 1", len(entry.Answer))
+	}
+}
+
+// ── Latency L1 Cache ───────────────────────────────────────────────────────────
+
+func TestL1_Latency_Hit(t *testing.T) {
+	mc := testStoreWithL1(0, 100)
+	defer func() { _ = mc.Close() }()
+
+	// Need 2+ A/AAAA records to trigger sortAnswerByLatency → lookupIPLatencies.
+	a1 := &dns.A{Hdr: dns.Header{Name: "lat.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("8.8.8.8")}}
+	a2 := &dns.A{Hdr: dns.Header{Name: "lat.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.1.1.1")}}
+	mc.Set("lat.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a1, a2}, nil, nil, false)
+
+	// Store latency in SQLite (does not populate latency L1 directly).
+	mc.UpdateLatency("8.8.8.8", 42)
+	mc.UpdateLatency("1.1.1.1", 15)
+
+	// Get() triggers sortAnswerByLatency → lookupIPLatencies → queries SQLite → populates latency L1.
+	entry, found, _ := mc.Get("lat.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	if len(entry.Answer) != 2 {
+		t.Fatalf("answer count = %d, want 2", len(entry.Answer))
+	}
+
+	// Latency L1 should now have the looked-up values.
+	if mc.latencyL1 == nil {
+		t.Fatal("latencyL1 should be non-nil")
+	}
+	lat, ok := mc.latencyL1.Get("8.8.8.8")
+	if !ok {
+		t.Error("latency L1 should contain 8.8.8.8 after lookupIPLatencies")
+	}
+	if lat != 42 {
+		t.Errorf("latency for 8.8.8.8 = %d, want 42", lat)
+	}
+	lat, ok = mc.latencyL1.Get("1.1.1.1")
+	if !ok {
+		t.Error("latency L1 should contain 1.1.1.1 after lookupIPLatencies")
+	}
+	if lat != 15 {
+		t.Errorf("latency for 1.1.1.1 = %d, want 15", lat)
+	}
+}
+
+func TestL1_Latency_Disabled(t *testing.T) {
+	mc := testStoreWithL1(100, 0) // DNS L1 on, latency L1 off
+	defer func() { _ = mc.Close() }()
+
+	if mc.latencyL1 != nil {
+		t.Error("latencyL1 should be nil when size=0")
+	}
+
+	rr := &dns.A{Hdr: dns.Header{Name: "lat.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("8.8.8.8")}}
+	mc.Set("lat.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	mc.UpdateLatency("8.8.8.8", 42)
+
+	// Should work via SQLite for latency lookup.
+	entry, found, _ := mc.Get("lat.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("entry not found when latency L1 disabled")
+	}
+	if len(entry.Answer) != 1 {
+		t.Errorf("answer count = %d, want 1", len(entry.Answer))
+	}
+}
+
 // ── Helper ────────────────────────────────────────────────────────────────────
 
 func netParseIP(s string) netip.Addr {
