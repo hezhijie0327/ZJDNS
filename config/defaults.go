@@ -130,6 +130,8 @@ const (
 	DefaultServerGoroutineLimit = 1024
 	DefaultMinConcurrencyLimit  = 8
 
+	DefaultAsyncStatsBufferSize = 64 // async stats writer channel capacity
+
 	DefaultTransportMax        = 64
 	DefaultTLSSessionCacheSize = 256
 	DefaultMaxIdleConns        = 100

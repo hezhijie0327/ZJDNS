@@ -14,21 +14,32 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// RecordRequest logs a request outcome. Every request upserts a row into
-// query_stats (per-day aggregated counters). Non-hit results (miss/stale/zone/
-// error/blocked/badcookie) also insert a row into query_log for the audit trail.
-// Hits are only in query_stats — they don't need per-event detail.
+// RecordRequest logs a request outcome asynchronously. The record is queued
+// into a background writer goroutine that upserts into query_stats (per-day
+// aggregated counters) and, for non-hit results, inserts a row into query_log
+// for the audit trail.  Hits are only in query_stats.
+//
+// When the async writer's channel is full the record is silently dropped —
+// stats are best-effort and must never block the query hot path.
+//
+// When the async writer is nil (e.g. in tests), RecordRequest falls back to
+// synchronous writes so callers can observe results immediately.
 func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
-	if s.db.IsClosed() {
+	if r == nil {
+		return
+	}
+	r.Qname = dnsutil.Canonical(r.Qname)
+	if s.asyncWriter != nil {
+		s.asyncWriter.Record(r)
 		return
 	}
 
-	r.Qname = dnsutil.Canonical(r.Qname)
-
-	// Always upsert into query_stats.
-	_, _ = s.db.StmtQueryStats.Exec(r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, database.BoolToInt(r.Hijack), database.BoolToInt(r.Fallback), r.ResponseTime)
-
-	// Non-hit results also go into query_log for the audit trail.
+	// Synchronous fallback when no async writer is configured.
+	if s.db.IsClosed() {
+		return
+	}
+	_, _ = s.db.StmtQueryStats.Exec(r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
+		database.BoolToInt(r.Hijack), database.BoolToInt(r.Fallback), r.ResponseTime)
 	if r.Result != "hit" {
 		_, _ = s.db.StmtQueryLog.Exec(
 			log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),

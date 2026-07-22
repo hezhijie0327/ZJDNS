@@ -22,7 +22,9 @@ func testStore() *SQLiteCache {
 	if err != nil {
 		panic(err)
 	}
-	return New(db)
+	// Don't use the async stats writer in tests — RecordRequest falls back to
+	// synchronous SQLite writes so callers can observe results immediately.
+	return &SQLiteCache{db: db}
 }
 
 // ── Get / Set ─────────────────────────────────────────────────────────────────
@@ -596,10 +598,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mc := New(db)
-	if err != nil {
-		t.Fatalf("NewSQLiteCache: %v", err)
-	}
+	mc := &SQLiteCache{db: db}
 	defer func() { _ = mc.Close() }()
 
 	// ── Phase 1: Insert varied DNS records ──────────────────────────────────
@@ -785,6 +784,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
+
 	var rwCount int64
 	_ = mc.db.SQ.QueryRow(`SELECT COUNT(*) FROM query_log WHERE qname='zone.test.' AND result='zone'`).Scan(&rwCount)
 	if rwCount != 3 {
@@ -891,10 +891,7 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mc := New(db)
-	if err != nil {
-		t.Fatalf("NewSQLiteCache: %v", err)
-	}
+	mc := &SQLiteCache{db: db}
 	defer func() { _ = mc.Close() }()
 
 	// Insert 50 realistic A-record responses (different domain names, multiple IPs).
@@ -930,6 +927,7 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 	var total, udp, tcp int64
 	mc.RecordRequest(&RequestRecord{Qname: "host-00.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, ECS: nil, DNSSECOK: false, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 	mc.RecordRequest(&RequestRecord{Qname: "host-01.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, ECS: nil, DNSSECOK: false, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
+
 	_ = mc.db.SQ.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN protocol='udp' THEN query_count ELSE 0 END),0), COALESCE(SUM(CASE WHEN protocol='tcp' THEN query_count ELSE 0 END),0) FROM query_stats WHERE result='hit'`).Scan(&total, &udp, &tcp)
 	if total != 2 {
 		t.Errorf("total hit counter rows = %d, want 2", total)

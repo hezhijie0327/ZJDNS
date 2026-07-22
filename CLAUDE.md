@@ -202,7 +202,7 @@ zjdns/
 ├── config/             ← ECSConfig, ECSOption, defaults, validation
 ├── edns/               ← EDNS handler, Cookie, EDE, padding
 ├── database/           ← Unified SQLite DB (schema, migration, prepared stmts)
-├── cache/              ← DNS response cache (Store interface, SQLiteCache)
+├── cache/              ← DNS response cache (Store interface, SQLiteCache, async stats writer)
 ├── ruleset/            ← CIDR + domain tag matching engine
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp
@@ -338,6 +338,7 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `Options` | `database` | SQLite PRAGMA config: `MMapSizeMB`, `CacheSizeMB` | |
 | `Store` | `cache` | Interface: Get/Set(int64)/RecordRequest/ReverseLookup/FlushDB/Clear/PruneQueryJournal/Stats/UpdateLatency/LatencyLastProbe/Close | Wraps `*database.DB` |
 | `Entry` | `cache` | Cached DNS response: ID, Answer/Authority/Additional ([]dns.RR), Timestamp, TTL, Validated |
+| `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → batched SQLite writes for query_stats + query_log. `Close()` is idempotent via `sync.Once`. |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `Handler` | `server/handler` | Thin adapter: creates `QueryContext`, delegates to middleware chain via `ServeDNS` |
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` — each middleware and the terminal resolver implement this |
@@ -421,6 +422,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` merged →
 - **Pending group struct{}**: `internal/pending.Group` uses `map[K]struct{}` (not `map[K]chan struct{}`) — the channel was a sentinel that was never read, just allocated and closed. Switched to a plain marker value.
 - **Stamp encoder/parser shared backends**: `encodeSecure`/`parseSecure` unify the 5 near-identical DoH/DoT/DoQ/ODoH/ODoHRelay code paths (eliminating ~300 lines of duplication). Individual `dohString()` etc. still exist as one-line delegations for API stability.
 - **lrumap package**: Generic `Map[K, V]` in `internal/lrumap` provides a concurrent-safe bounded map with bulk eviction, intended to replace the ad-hoc single-entry eviction pattern used in 5 transport/dialer caches.
+- **Async stats writer**: `cache/AsyncStatsWriter` offloads `RecordRequest` SQLite writes from the query hot path onto a background goroutine via a buffered channel. Non-blocking send (drop when full — best-effort stats). Batch flush (64 records or 100ms ticker). `Close()` is idempotent via `sync.Once`. Tests use `&SQLiteCache{db: db}` (nil asyncWriter) so `RecordRequest` falls back to synchronous SQLite writes.
 
 ## DB Schema
 

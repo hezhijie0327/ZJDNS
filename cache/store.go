@@ -22,8 +22,9 @@ import (
 // SQLiteCache is a DNS response cache backed by a SQLite database managed by
 // the database package. It implements the Store interface.
 type SQLiteCache struct {
-	db         *database.DB
-	evictCount atomic.Int64
+	db          *database.DB
+	evictCount  atomic.Int64
+	asyncWriter *AsyncStatsWriter
 }
 
 const (
@@ -48,12 +49,22 @@ var latencyArgsPool = sync.Pool{
 // New creates a cache backed by the given database. The caller is responsible
 // for opening the database via database.Open() before calling New.
 func New(db *database.DB) *SQLiteCache {
-	return &SQLiteCache{db: db}
+	return &SQLiteCache{
+		db:          db,
+		asyncWriter: NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
+	}
 }
 
-// Close closes the database.
+// Close shuts down the async stats writer and then closes the database.
 func (s *SQLiteCache) Close() error {
+	s.asyncWriter.Close()
 	return s.db.Close()
+}
+
+// Flush forces the async stats writer to write any buffered records immediately.
+// Primarily for tests that need to observe RecordRequest results synchronously.
+func (s *SQLiteCache) Flush() {
+	s.asyncWriter.Flush()
 }
 
 // ── Store interface ──────────────────────────────────────────────────────────
