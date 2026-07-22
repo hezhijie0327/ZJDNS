@@ -12,7 +12,7 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	"zjdns/server/resolver/hijack"
+	"zjdns/server/defense"
 	"zjdns/server/resolver/probe"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -22,14 +22,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *hijack.Detector) (*dns.Msg, hijack.Verdict, error) {
+func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *defense.Detector) (*dns.Msg, defense.Verdict, error) {
 	if len(nameservers) == 0 {
-		return nil, hijack.VerdictClean, errors.New("no nameservers")
+		return nil, defense.VerdictClean, errors.New("no nameservers")
 	}
 
-	// Create a child context with a deadline to bound per-batch query time.
-	// This prevents goroutines from lingering for the full recursive resolve
-	// timeout (30s) when upstream servers are slow or unresponsive.
 	deadlineCtx, deadlineCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
 	defer deadlineCancel()
 	queryCtx, cancel := context.WithCancel(deadlineCtx)
@@ -63,10 +60,8 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			default:
 			}
 
-			// Query each nameserver concurrently; first valid response wins.
-
 			msg := r.resolver.buildMsg(question, ecs, true, false)
-			msg.UDPSize = pool.RecursiveUDPBufferSize // larger buffer for DNSSEC-signed referrals
+			msg.UDPSize = pool.RecursiveUDPBufferSize
 			defer pool.DefaultMessage.Put(msg)
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
@@ -76,37 +71,23 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
 
-				// NXDOMAIN with answer records is a malformed response —
-				// the GFW injects fake A records (e.g. 1.1.1.1) into
-				// negative responses. Treat as hijack.
 				if rcode == dns.RcodeNameError && len(result.Response.Answer) > 0 {
-					log.Debugf("RECURSION: rejecting malformed NXDOMAIN+answer from %s (hijack)", nsAddr)
+					log.Debugf("RECURSION: rejecting malformed NXDOMAIN+answer — poison from %s", nsAddr)
 					hijackRejected.Store(true)
 					pool.DefaultMessage.Put(result.Response)
 					return nil
 				}
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-					// Validate every response against its zone.
-					// GFW-injected A/AAAA/NS records at root/TLD
-					// level are rejected before they can win
-					// the result channel.
 					if detector != nil && detector.IsEnabled() {
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
-						if v == hijack.VerdictHijack {
-							log.Debugf("RECURSION: rejecting hijacked response from %s", nsAddr)
+						if v == defense.VerdictHijack {
+							log.Debugf("RECURSION: rejecting poisoned response from %s", nsAddr)
 							hijackRejected.Store(true)
 							pool.DefaultMessage.Put(result.Response)
 							return nil
 						}
 					}
 
-					// Send to resultChan and cancel the
-					// parent context so queued goroutines
-					// exit before starting work.  Running
-					// goroutines past their initial Done
-					// check continue — their hijack
-					// validation is captured by the
-					// settle timer below.
 					select {
 					case resultChan <- result.Response:
 						cancel()
@@ -117,9 +98,6 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					}
 				}
 
-				// FORMERR fallback: some authoritative servers (e.g. Microsoft
-				// mail.protection.outlook.com) reject all EDNS queries with FORMERR.
-				// Retry once without EDNS to recover (RFC 6891 §6.2.2).
 				if rcode == dns.RcodeFormatError {
 					pool.DefaultMessage.Put(result.Response)
 					r.retryWithoutEDNS(queryCtx, resultChan, cancel, server, question, nsAddr, detector, currentDomain, normalizedQname, &hijackRejected)
@@ -135,55 +113,27 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		})
 	}
 
-	// Let in-flight goroutines settle before reading hijackRejected.
-	// cancel() may have fired via the resultChan path, stopping queued
-	// goroutines from starting.  Running goroutines past their initial
-	// Done check continue to completion — the hijack check needs a
-	// brief window to catch GFW-injected responses that arrive 1-2 ms
-	// behind legitimate ones.
-	//
-	// Use ctx (parent) instead of queryCtx so the settle window is
-	// always honoured — queryCtx is cancelled by the first clean
-	// response and would short-circuit the hijack detection window.
-	hijackTimer := time.NewTimer(config.DefaultHijackSettleTimeout)
-	defer hijackTimer.Stop()
+	settleTimer := time.NewTimer(config.DefaultHijackSettleTimeout)
+	defer settleTimer.Stop()
 	select {
-	case <-hijackTimer.C:
+	case <-settleTimer.C:
 	case <-ctx.Done():
 	}
 
-	verdict := hijack.VerdictClean
+	verdict := defense.VerdictClean
 	if hijackRejected.Load() {
-		verdict = hijack.VerdictHijack
+		verdict = defense.VerdictHijack
 	}
 
-	// Try a non-blocking read first.  After cancel(), a result was
-	// written to resultChan — it should be available immediately.
-	// Avoid racing with queryCtx.Done() in the select (when both are
-	// ready, Go's select picks randomly, potentially discarding the
-	// result in favour of a cancelled-context error).
+	// First response wins.
 	select {
-	case result := <-resultChan:
-		if result != nil {
-			return result, verdict, nil
-		}
-		log.Debugf("RECURSION: all %d nameservers failed for %s (zone=%s)", len(nameservers), question.Name, currentDomain)
-		return nil, verdict, errors.New("no successful response")
+	case resp := <-resultChan:
+		return resp, verdict, nil
 	default:
 	}
 
-	// No result yet — wait with the context deadline.
-	select {
-	case result := <-resultChan:
-		if result != nil {
-			return result, verdict, nil
-		}
-		log.Debugf("RECURSION: all %d nameservers failed for %s (zone=%s, deadline exceeded)", len(nameservers), question.Name, currentDomain)
-		return nil, verdict, errors.New("no successful response")
-	case <-queryCtx.Done():
-		log.Debugf("RECURSION: context cancelled while waiting for %s (zone=%s)", question.Name, currentDomain)
-		return nil, verdict, queryCtx.Err()
-	}
+	log.Debugf("RECURSION: all %d nameservers failed for %s (zone=%s)", len(nameservers), question.Name, currentDomain)
+	return nil, verdict, errors.New("no successful response")
 }
 
 func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords []*dns.NS, qname string, depth int, forceTCP bool) []string {
@@ -336,7 +286,7 @@ func domainNamesEqual(a, b string) bool {
 
 // retryWithoutEDNS attempts a query without EDNS options and sends the result
 // to resultChan. Used as a FORMERR fallback per RFC 6891 §6.2.2.
-func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector *hijack.Detector, currentDomain, normalizedQname string, hijackRejected *atomic.Bool) {
+func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector *defense.Detector, currentDomain, normalizedQname string, hijackRejected *atomic.Bool) {
 	log.Debugf("RECURSION: ns=%s FORMERR, retrying without EDNS for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
 
 	bareMsg := pool.DefaultMessage.Get()
@@ -366,8 +316,8 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	// Reject hijacked responses in FORMERR retry path as well.
 	if detector != nil && detector.IsEnabled() {
 		v := detector.Validate(currentDomain, normalizedQname, retryResult.Response)
-		if v == hijack.VerdictHijack {
-			log.Debugf("RECURSION: rejecting hijacked FORMERR retry from %s", nsAddr)
+		if v == defense.VerdictHijack {
+			log.Debugf("RECURSION: rejecting poisoned FORMERR retry from %s", nsAddr)
 			hijackRejected.Store(true)
 			pool.DefaultMessage.Put(retryResult.Response)
 			return

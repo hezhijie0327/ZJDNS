@@ -6,9 +6,9 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
+	"zjdns/server/defense"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
-	"zjdns/server/resolver/hijack"
 	"zjdns/server/upstream"
 
 	"codeberg.org/miekg/dns"
@@ -21,7 +21,7 @@ func initResolver(
 	cfg *config.ServerConfig,
 	queryClient *upstream.Client,
 	cryptoValidator *dnssec.CryptoValidator,
-	hijackDetector *hijack.Detector,
+	poisonDetector *defense.Detector,
 	ednsHandler *edns.Handler,
 	cidrMatcher resolver.CIDRMatcher,
 	cacheStore cache.Store,
@@ -31,13 +31,15 @@ func initResolver(
 	r := resolver.New(&resolver.Config{
 		QueryClient:   queryClient,
 		Crypto:        cryptoValidator,
-		Hijack:        hijackDetector,
+		Hijack:        poisonDetector,
 		EDNS:          ednsHandler,
 		CIDRMatcher:   cidrMatcher,
 		BuildMsg:      buildMsg,
 		Cache:         cacheStore,
 		DNSSECEnforce: cfg.Server.Features.DNSSECEnforce,
 		Ctx:           backgroundCtx,
+
+		SpoofguardEnabled: cfg.Server.Features.Defense.HasSpoofguard(),
 	})
 	r.ConfigureServers(cfg.Upstream, cfg.Fallback)
 	return r

@@ -210,9 +210,10 @@ zjdns/
     ├── server.go, bridge.go, init.go, tasks.go
     ├── handler/        ← query pipeline adapter + shared types
     │   └── middleware/ ← 10 composable middleware implementations + AssembleChain
+    ├── defense/        ← DNS anti-pollution (detection, tail, segmentation)
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + socks5
-    └── resolver/       ← recursive walk + forward + dnssec/ + hijack/ + probe/
+    └── resolver/       ← recursive walk + forward + dnssec/ + probe/
 ```
 
 ### Import Rules (strict layering, no cycles)
@@ -243,7 +244,7 @@ Layer 4 (server sub-packages — import domain + internal, never server/ parent)
   server/upstream/pool → config, dnsutil, log, pool
   server/upstream/tls → config, dnsutil, log, pool
   server/resolver/probe → config, edns, dnsutil, internal/latency, log
-  server/resolver → cache, config, edns, dnsutil, log, pool, server/upstream, server/resolver/dnssec, server/resolver/hijack, server/resolver/probe
+  server/resolver → cache, config, edns, dnsutil, log, pool, server/defense, server/upstream, server/resolver/dnssec, server/resolver/probe
   server/handler → cache, config, edns, dnsutil, log, pool, internal/pending, internal/ttl, zone, server/resolver
   server/handler/middleware → cache, config, edns, dnsutil, log, pool, internal/dns64, internal/pending, internal/ttl, server/handler, server/resolver
   server/protocol/tls → config, dnsutil, log, pool
@@ -371,7 +372,13 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `QueryResult` | `server/resolver` | Unified result struct — used throughout resolver and handler layers; `queryUpstream`, `Recursive.resolve`, and `CNAME.resolve` return it by value; handler uses `*QueryResult` directly (no duplicate struct) |
 | `Recursive` | `server/resolver` | Built-in recursive walk |
 | `CryptoValidator` | `server/resolver/dnssec` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in nsec.go |
-| `Detector` | `server/resolver/hijack` | DNS hijack detection; Verdict type + IsHijackedByTLD |
+| `Detector` | `server/defense` | DNS hijack detection; Verdict type + IsHijackedByTLD |
+| `WriteTCPMsgSegmented` | `server/defense` | TCP DNS message segmentation; first segment carries 2B prefix + 1B payload |
+| `CollectAndVote` | `server/defense` | Majority-consensus voting across DNS responses by semantic equivalence |
+| `LastResponse` | `server/defense` | Returns the chronologically last response (tail of stream = real answer) |
+| `DrainResponseChan` | `server/defense` | Non-blocking drain of all available messages from a channel |
+| `DefenseConfig` | `config` | Groups DNS defense mechanisms: Detection (bool), Tail (bool), Segmentation (bool) |
+| `Verdict` | `server/defense` | DNS hijack verdict: Clean / Hijack / Uncertain |
 | `Engine` | `ruleset` | SQLite-backed CIDR + domain tag matching; `Match(qname,ip)`, `MatchIP`. `LoadRules` accepts `RuleSetStorage` interface (satisfied by `*database.DB`) |
 | `RuleSetStorage` | `ruleset` | Interface: SQLExec, SQLQueryRow, SQLQuery, BeginTx — breaks domain→domain import cycle |
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |

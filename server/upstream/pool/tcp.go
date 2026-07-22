@@ -16,6 +16,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/server/defense"
 
 	"codeberg.org/miekg/dns"
 
@@ -41,6 +42,9 @@ type Conn struct {
 	closed    atomic.Bool
 	closeOnce sync.Once
 	done      chan struct{}
+
+	segmentSize  int           // 0 = no segmentation
+	segmentDelay time.Duration // inter-segment delay
 }
 
 // Pool manages a set of pipelined TCP connections per upstream server key.
@@ -51,11 +55,14 @@ type ConnPool struct {
 	maxConns int
 	maxPipe  int
 	closed   bool
+
+	segmentSize  int
+	segmentDelay time.Duration
 }
 
 const dnsIDMask = 0xFFFF // 16-bit DNS message ID space
 
-func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
+func newConn(addr string, conn net.Conn, maxPipe, segSize int, segDelay time.Duration) *Conn {
 	if maxPipe <= 0 {
 		maxPipe = config.DefaultMaxPipe
 	}
@@ -73,6 +80,9 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 		capacity: make(chan struct{}, maxPipe),
 		maxPipe:  int32(maxPipe),
 		done:     make(chan struct{}),
+
+		segmentSize:  segSize,
+		segmentDelay: segDelay,
 	}
 	c.nextID.Store(rand.Uint32()) //nolint:gosec // G404: DNS message ID — not cryptographic
 	go c.readLoop()
@@ -153,7 +163,7 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	}()
 
 	c.writeMu.Lock()
-	_, writeErr := c.conn.Write(writeBuf)
+	_, writeErr := defense.WriteTCPMsgSegmented(c.conn, writeBuf, c.segmentSize, c.segmentDelay)
 	c.writeMu.Unlock()
 	if writeErr != nil {
 		c.close()
@@ -273,6 +283,13 @@ func (c *Conn) IsDead() bool {
 	return c.closed.Load()
 }
 
+// SetSegmentation configures TCP DNS message segmentation for all connections
+// created by this pool. segSize=0 disables segmentation (normal Write).
+func (p *ConnPool) SetSegmentation(segSize int, delay time.Duration) {
+	p.segmentSize = segSize
+	p.segmentDelay = delay
+}
+
 // NewPool creates a Pool with the specified connection and in-flight limits.
 func NewConnPool(maxConns, maxPipe int) *ConnPool {
 	if maxConns <= 0 {
@@ -384,7 +401,7 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 		return nil, fmt.Errorf("client: dial %s: %w", key, dialErr)
 	}
 
-	c := newConn(key, conn, p.maxPipe)
+	c := newConn(key, conn, p.maxPipe, p.segmentSize, p.segmentDelay)
 
 	// Pool already at capacity — try replacing a dead connection.
 	if len(p.conns[key]) >= p.maxConns {

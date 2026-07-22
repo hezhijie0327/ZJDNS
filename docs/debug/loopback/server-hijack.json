@@ -6,7 +6,7 @@
       "tcp": "12633"
     },
     "features": {
-      "hijack_protection": true,
+      "defense": { "poisonguard": true },
       "dnssec_enforce": false,
       "cache": { "max_entries": 1000 }
     }

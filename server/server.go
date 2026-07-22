@@ -19,12 +19,12 @@ import (
 	"zjdns/internal/dns64"
 	"zjdns/internal/log"
 	"zjdns/ruleset"
+	"zjdns/server/defense"
 	"zjdns/server/handler"
 	"zjdns/server/handler/middleware"
 	"zjdns/server/protocol/tls"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
-	"zjdns/server/resolver/hijack"
 	"zjdns/server/resolver/probe"
 	"zjdns/server/upstream"
 	"zjdns/zone"
@@ -169,6 +169,7 @@ func (s *Server) initQueryClient(cfg *config.ServerConfig) *upstream.Client {
 	if cfg.Server.Features.KTLS != nil {
 		client.SetKTLS(cfg.Server.Features.KTLS.KernelTX, cfg.Server.Features.KTLS.KernelRX)
 	}
+	client.SetDefense(cfg.Server.Features.Defense)
 	s.queryClient = client
 	return client
 }
@@ -211,15 +212,15 @@ func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream
 		resolver.LoadRootHints()
 	}
 
-	hijackDetector := &hijack.Detector{}
-	hijackDetector.Enable(cfg.Server.Features.HijackProtection)
+	poisonDetector := &defense.Detector{}
+	poisonDetector.Enable(cfg.Server.Features.Defense.HasPoisonguard())
 
 	var cidrMatcher resolver.CIDRMatcher
 	if rulesetEngine != nil {
 		cidrMatcher = rulesetEngine
 	}
 
-	return initResolver(cfg, queryClient, cryptoValidator, hijackDetector, ednsH, cidrMatcher, cacheStore,
+	return initResolver(cfg, queryClient, cryptoValidator, poisonDetector, ednsH, cidrMatcher, cacheStore,
 		func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
 			return handler.BuildQueryMsg(ednsH, q, ecs, rd, secure)
 		}, s.backgroundCtx)
@@ -525,7 +526,13 @@ func (s *Server) displayExtras() {
 		}
 	}
 
-	if s.config.Server.Features.HijackProtection {
-		log.Infof("SECURITY: DNS hijacking prevention: enabled")
+	if s.config.Server.Features.Defense.HasPoisonguard() {
+		log.Infof("SECURITY: poisonguard (recursive poison detection): enabled")
+	}
+	if s.config.Server.Features.Defense.HasSpoofguard() {
+		log.Infof("SECURITY: spoofguard (UDP anti-spoofing): enabled")
+	}
+	if s.config.Server.Features.Defense.HasSplitguard() {
+		log.Infof("SECURITY: splitguard (TCP segmentation): enabled")
 	}
 }

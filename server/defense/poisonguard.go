@@ -1,4 +1,4 @@
-package hijack
+package defense
 
 import (
 	"sync/atomic"
@@ -91,7 +91,7 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 		}
 		if v := d.classify(z, n, dns.RRToType(rr)); v != VerdictClean {
 			if v == VerdictHijack {
-				log.Debugf("SECURITY: hijack detected from %s: %s record for '%s'",
+				log.Debugf("SECURITY: poison detected from %s: %s record for '%s'",
 					zone, dns.TypeToString[dns.RRToType(rr)], queryName)
 			}
 			return v
