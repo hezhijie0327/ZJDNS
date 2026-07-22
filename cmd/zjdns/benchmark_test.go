@@ -89,8 +89,7 @@ func buildBenchServer(b *testing.B) *server.Server {
 			LogLevel: "error",
 			Protocol: config.ProtocolSettings{UDP: "15353", TCP: "15353", TLS: "853"},
 			Features: config.FeatureFlags{
-				HijackProtection: false,
-				DNSSECEnforce:    false,
+				DNSSECEnforce: false,
 				Cache: config.CacheSettings{
 					MaxEntries: config.DefaultMaxCacheEntries,
 					Memory: config.CacheMemorySettings{
@@ -174,7 +173,7 @@ func BenchmarkServerStartup(b *testing.B) {
 		Server: config.ServerSettings{
 			LogLevel: "error",
 			Protocol: config.ProtocolSettings{UDP: "0", TCP: "0", TLS: "853"},
-			Features: config.FeatureFlags{HijackProtection: false},
+			Features: config.FeatureFlags{},
 		},
 	}
 	b.ResetTimer()

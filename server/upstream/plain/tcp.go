@@ -2,10 +2,12 @@ package plain
 
 import (
 	"context"
+	"encoding/binary"
 	"net"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/server/defense"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -60,9 +62,17 @@ func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string
 	}
 	defer func() { _ = conn.Close() }()
 
-	if _, err := msg.WriteTo(conn); err != nil {
+	// Pack and write with optional TCP segmentation.
+	if err := msg.Pack(); err != nil {
 		return nil, err
 	}
+	writeBuf := make([]byte, 2+len(msg.Data))
+	binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(msg.Data))) //nolint:gosec // G115: DNS length prefix
+	copy(writeBuf[2:], msg.Data)
+	if _, err := defense.WriteTCPMsgSegmented(conn, writeBuf, c.segmentSize, c.segmentDelay); err != nil {
+		return nil, err
+	}
+
 	response := pool.DefaultMessage.Get()
 	if _, err := response.ReadFrom(conn); err != nil {
 		pool.DefaultMessage.Put(response)

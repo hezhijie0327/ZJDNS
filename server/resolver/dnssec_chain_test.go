@@ -10,8 +10,8 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
-	"zjdns/server/resolver/hijack"
 	"zjdns/server/upstream"
 
 	"codeberg.org/miekg/dns"
@@ -77,7 +77,7 @@ func newTestRecursive() *Recursive {
 		buildMsg:    func(q Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg { return new(dns.Msg) },
 		validator: &Validator{
 			Crypto: dnssec.NewCryptoValidator(nil),
-			Hijack: &hijack.Detector{},
+			Hijack: &defense.Detector{},
 		},
 	}
 	return &Recursive{resolver: r}

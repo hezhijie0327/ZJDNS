@@ -14,7 +14,7 @@
       }
     },
     "features": {
-      "hijack_protection": false,
+      "defense": { "poisonguard": false },
       "cache": {
         "max_entries": 1000
       }

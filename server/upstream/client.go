@@ -234,6 +234,18 @@ func (c *Client) SetKTLS(tx, rx bool) {
 	c.tlsClient.SetKTLS(tx, rx)
 }
 
+// SetDefense configures anti-pollution mechanisms (CTCP segmentation) from the
+// defense config block.  Tail voting is configured via resolver.Config and does
+// not flow through here.
+func (c *Client) SetDefense(cfg *config.DefenseConfig) {
+	if cfg == nil {
+		return
+	}
+	if cfg.HasSplitguard() {
+		c.plainClient.SetSegmentation(config.DefaultSplitguardSize, config.DefaultSplitguardDelay)
+	}
+}
+
 // Close shuts down all pooled connections and transports.
 func (c *Client) Close() {
 	if c == nil {

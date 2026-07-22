@@ -38,7 +38,10 @@
       "ktls": {
         "kernel_tx": true
       },
-      "hijack_protection": true,
+      "defense": {
+        "poisonguard": true,
+        "splitguard": true
+      },
       "dnssec_enforce": true,
       "ddr": {
         "ipv4": "127.0.0.1",

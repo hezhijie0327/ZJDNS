@@ -107,6 +107,16 @@ const (
 )
 
 // =============================================================================
+// Defense — anti-pollution defaults.
+// =============================================================================
+
+const (
+	DefaultSpoofguardCollectWindow = 500 * time.Millisecond // response collection window
+	DefaultSplitguardSize          = 1                      // bytes per TCP segment
+	DefaultSplitguardDelay         = 0 * time.Millisecond   // inter-segment delay
+)
+
+// =============================================================================
 // Maintenance — intervals, delays, rotation periods, and retry windows.
 // =============================================================================
 

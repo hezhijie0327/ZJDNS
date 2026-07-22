@@ -12,8 +12,8 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
-	"zjdns/server/resolver/hijack"
 	"zjdns/server/upstream"
 
 	"codeberg.org/miekg/dns"
@@ -79,6 +79,9 @@ type Resolver struct {
 	cache           cache.Store             // DNS response cache for NS A/AAAA lookups
 
 	recursiveProxyURL string // proxy for recursive mode (from builtin_recursive upstream)
+
+	// Tail selection: UDP multi-read + LastResponse (upstream mode).
+	spoofEnabled bool
 }
 
 // Validator holds the DNSSEC and hijack detection components for response
@@ -86,7 +89,7 @@ type Resolver struct {
 // package-level dnssec.IsResponseValid function.
 type Validator struct {
 	Crypto *dnssec.CryptoValidator // Full cryptographic DNSSEC validation
-	Hijack *hijack.Detector        // DNS hijack detection
+	Hijack *defense.Detector       // DNS hijack detection
 }
 
 // UpstreamClient is the interface for sending DNS queries to upstream servers,
@@ -99,13 +102,16 @@ type UpstreamClient interface {
 type Config struct {
 	QueryClient   UpstreamClient
 	Crypto        *dnssec.CryptoValidator
-	Hijack        *hijack.Detector
+	Hijack        *defense.Detector
 	EDNS          *edns.Handler
 	CIDRMatcher   CIDRMatcher
 	BuildMsg      BuildQueryFunc
 	Cache         cache.Store
 	DNSSECEnforce bool
 	Ctx           context.Context // lifecycle context propagated to Recursive for probes
+
+	// Tail selection: UDP multi-read + LastResponse (upstream mode).
+	SpoofguardEnabled bool
 }
 
 // concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
@@ -164,8 +170,13 @@ func New(cfg *Config) *Resolver {
 		upstream:      &upstreamSet{},
 		fallback:      &upstreamSet{},
 		cache:         cfg.Cache,
+		spoofEnabled:  cfg.SpoofguardEnabled,
 	}
-	r.recursive = &Recursive{resolver: r, cache: cfg.Cache, ctx: cfg.Ctx}
+	r.recursive = &Recursive{
+		resolver: r,
+		cache:    cfg.Cache,
+		ctx:      cfg.Ctx,
+	}
 	r.cname = &CNAME{resolver: r}
 	r.validator = &Validator{Crypto: cfg.Crypto, Hijack: cfg.Hijack}
 	return r

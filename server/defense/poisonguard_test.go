@@ -1,4 +1,4 @@
-package hijack
+package defense
 
 import (
 	"net/netip"

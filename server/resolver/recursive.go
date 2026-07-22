@@ -10,7 +10,7 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	"zjdns/server/resolver/hijack"
+	"zjdns/server/defense"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -89,11 +89,11 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "." {
 		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
-		if verdict == hijack.VerdictHijack {
+		if verdict == defense.VerdictHijack {
 			hijackSeen = true
 		}
 		if err != nil {
-			if verdict == hijack.VerdictHijack && !forceTCP {
+			if verdict == defense.VerdictHijack && !forceTCP {
 				qr := r.resolve(ctx, question, ecs, depth, true)
 				qr.Hijack = true
 				return qr
@@ -137,7 +137,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		// hijack, restart the ENTIRE resolution via TCP.  GFW cannot
 		// inject TCP responses, so all subsequent levels (including
 		// authoritative) are protected.
-		if verdict == hijack.VerdictHijack {
+		if verdict == defense.VerdictHijack {
 			hijackSeen = true
 			if !forceTCP {
 				if response != nil {
@@ -254,7 +254,7 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 	defer pool.DefaultMessage.Put(result.Response)
 
 	if detector.IsHijackedByTLD(result.Response, qname) {
-		log.Debugf("RECURSION: hijack probe detected A/AAAA for %s from TLD server %s, forcing TCP",
+		log.Debugf("RECURSION: poison probe detected A/AAAA for %s from TLD server %s, forcing TCP",
 			qname, tldServers[0])
 		return true
 	}
